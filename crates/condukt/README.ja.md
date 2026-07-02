@@ -49,9 +49,17 @@ LLM 単体で大きな課題をオーケストレーションさせると、決�
 | `condukt worktree create/merge/remove/cleanup/list` | git ワークツリーのライフサイクル管理。「リポジトリ外のパス」と「1 ディレクトリ = 1 ブランチ」を強制する。 |
 | `condukt state init/set/show/gate/list` | 実行中のタスクステータスを永続化する。`gate` はすべてのタスクが検証済みで、ダーティ/未削除のワークツリーがなくなるまで非ゼロで終了する。`state set` は `--model`/`--cost` を受け付け、記録された結果に実モデルとコストを反映できる。`set --status verified` は下記の F→P 再現性ゲートも強制し、有効な Fail→Pass オラクルを持たない `fix`/`feature` タスクの verified 昇格を拒否する。 |
 | `condukt state check-oracle --run <id> --task <id>` | `fix`/`feature` タスクが有効な Fail→Pass 再現証明を持つかを判定する。対象タスク（`kind` が `fix`/`feature`）かつ `reproduction_tests` があるとき、そのタスクのワークツリー内で `tdd oracle --task <id>` を実行し、`{"required","valid_fp_oracle","fallback","transition","reason"}` を出力する。フェイルソフト: `tdd` が不在/到達不能・判定が読めない場合は `fallback:true`（従来ゲートへ縮退）を返し、panic も非ゼロ終了もしない。 |
-| `condukt state conflict-check/abandon/list-tasks/cancel/pause` | クロスセッションの安全性と実行の編集。`init` 前のファイル/ゴール競合検出、スタックした `running` タスクの `pending` への差し戻し（`--all-stuck`）、タスクの一覧/キャンセル、競合する実行の一時停止。 |
+| `condukt state check-criteria --run <id> --task <id>` | タスクの `done_criteria` に対し機械的ゲートを実行する。満たせば（または非機械的なら）exit 0、失敗すれば exit 1。JSON の `skip_verifier` は「純粋に機械的な基準が pass したとき」だけ true になり、スキルは LLM verifier を省略できる（振る舞い系の基準は常に `skip_verifier:false`）。 |
+| `condukt state conflict-check/abandon/list-tasks/cancel/pause/resume` | クロスセッションの安全性と実行の編集。`init` 前のファイル/ゴール競合検出、スタックした `running` タスクの `pending` への差し戻し（`--all-stuck`）、タスクの一覧/キャンセル、競合する実行の一時停止/再開。 |
 | `condukt state autonomy-check` | condukt が autonomous モードかを報告する（config `autonomous` + 環境変数 `CONDUKT_AUTONOMOUS`）。`{"autonomous":<bool>}` を出力し、autonomous なら exit 0、そうでなければ exit 1。これによりスキルは autonomous のときだけ人間ゲート（Phase 3 の合意など）を決定論的に縮退できる。既定は false（既存の `AskUserQuestion` はすべて発火＝後方互換）。 |
+| `condukt state worktree-mode-check` | condukt が single-worktree モードかを報告する（config `single_worktree` + 環境変数 `CONDUKT_SINGLE_WORKTREE`）。`{"single_worktree":<bool>}` を出力し、on なら exit 0 / off なら exit 1。有効時のみスキルは全タスクを main ツリーで実行する（選択的ステージング、タスク毎の worktree/merge なし）。 |
+| `condukt state checkpoint/rollback --run <id>` | autonomous 続行のための可逆性セーフティネット（charter #7）。`checkpoint` は run の状態＋各タスクのブランチ SHA を永続スナップショットしイベントを journal に記録、新しい seq を出力する。`rollback` はスナップショットした状態を復元し、各 worktree を記録した SHA へ best-effort で `git reset` する（`--to <seq>` で指定、既定は最新）。 |
+| `condukt state verifier-model --worker <model> [--suggested <model>]` | verifier モデルが worker モデルと決して一致しないよう解決する（共有ブラインドスポット対策）。異なる `--suggested` は尊重し、無ければ別ティアを選ぶ。選んだモデルを出力する。 |
 | `condukt consensus plan/vote` | マルチサンプル self-consistency（opt-in のコストガード）。`plan` はタスクを N 個の候補実装に fan-out すべきかを決める（exit 0 = fan-out、1 = 単一サンプル）。`vote` は N 個の verifier 判定を決定論的な多数決の勝者＋合意率に集計し、全 fail・同票・閾値未満の合意率のときは opus へエスカレーションする。 |
+| `condukt policy decide/answer/answers` | 中央集権的な **graded-autonomy ポリシー**: 決定の risk × reversibility × confidence を `auto`/`escalate`/`block` に写像する（exit code 契約: 0=auto, 2=escalate, 3=block, 1=不正入力）。`answer` は `auto` 判定のとき 1 問を非対話的に解決し（選択を journal に記録）、それ以外はフォールスルーして呼び出し側が実際の `AskUserQuestion` を出す。`answers` は auto 応答の監査証跡（人間に問わず self-answer した全質問）を出力する。 |
+| `condukt verify digest/runtime/launch` | 決定論的な verifier ステージのヘルパー（整形のみ。修正の判断は LLM worker に残る）。`digest` は生のテスト出力を構造化 `FailureDigest` に蒸留、`runtime` はターゲットのランタイム出力（exit code・panic/例外行・stderr/stdout の末尾）を蒸留し `--reflux` で pass/fail 判定、`launch` は blastguard 検証済みのエンベロープ内で実ターゲットを起動（破壊的な `--cmd` は fail-closed で拒否）しランタイム信号を reflux する（`--health-url` 指定時は exit を待たず HTTP 200 をポーリング）。すべて fail-soft（exit 0）。 |
+| `condukt replan handoff/stats` | 決定論的な reflux カスケードのヘルパー（分類/整形のみ。再分解の判断は LLM に残る）。`handoff` は失敗タスクの reflux 事実を `escalate_model` か `replan` に分類し、`replan` のときだけ interpreter に「新しい分解を作れ」と指示する handoff を組み立てる（`--run <id>` で決定を journal 記録）。`stats --run <id>` はそのログを directive 毎の件数に集計する。 |
+| `condukt pr create --title <t> [--execute]` | 外部ループの終端ステップ: `gh` CLI で PR を開く。`--execute` なしでは dry-run で実行される argv を出力するだけ。`/condukt` スキルは人間の GATED 承認後にのみ `--execute` を渡すため、autonomous 実行が独断で PR を開くことはない。gh 自身の認証を使う（API key 不要）。gh 不在/未認証なら local-commit-only に縮退し exit 0（fail-soft）。 |
 | `condukt state stats` | すべての実行（完了・未完了）を集計する: 完了率、タスク数、ステータス分布。ビフォーアフターのベンチマークとして有用。 |
 | `condukt state reconcile --run <id> [--dry-run]` | 対象ブランチがデフォルトブランチへマージ済み、または worktree ごと削除済みのタスクを自動的に `verified` へ昇格させる。手動の `state set` なしに、セッションクラッシュ後の古い状態を修正する。 |
 | `condukt state resume-context --run <id>` | 停止した実行をセッションをまたいで再開するために、保留中/失敗/完了タスクを JSON として出力する。 |
@@ -59,6 +67,7 @@ LLM 単体で大きな課題をオーケストレーションさせると、決�
 | `condukt state test --run <id>` | リポジトリルートからプロジェクトのテストスイートを実行し、終了コードを伝播する。優先順位は `[test].command` → 自動検出（`cargo test` / `npm test` / `pytest`、最後は `cargo test` にフォールバック）。`sh -c` 経由のためパイプ・クォート・環境変数展開が使える。 |
 | `condukt loop --module <server\|client\|e2e>` | 指定モジュールのテスト修正サイクルを 1 イテレーション実行し JSON を返す。`/condukt-loop` が修正ステップを挟んで繰り返す。 |
 | `condukt knowledge` | インタープリター/ワーカープロンプトへ注入するプロジェクト固有の規約/落とし穴を出力する（ソフト、無ければ空）。 |
+| `condukt editgate` | PostToolUse フック: worker が live worktree 内の Rust ファイルを Edit/Write した直後、**edit-time コンパイルゲート**がその編集でクレートが壊れたかを決定論的に判定する。本当に壊れた判定のときだけ `{"decision":"block","reason":<診断>}` を出力し、worker が同じターンで直せるようにする。それ以外はすべて fail-soft（何も出力せず exit 0）。 |
 | `condukt restore` | SessionStart フック: 未完了の実行や孤立した worktree を通知する。 |
 | `condukt statusline` | `statusLine` 設定用の 1 行実行進捗表示。 |
 | `condukt status [--all]` | open run とそのタスクを ASCII ツリーで表示する（`--all` でクローズ済み run も含む）。 |
@@ -120,6 +129,7 @@ default_branch = "main"
 max_parallel   = 4                        # 同時ワーカー数のアドバイザリーソフトキャップ
 shared_globs   = []                       # このグロブに触れるタスクを強制的に直列実行させる
 autonomous     = false                    # true にすると人間ゲート（Phase 3 の合意）を決定論的な既定へ縮退する
+single_worktree = false                   # true にすると全タスクを main ツリーで実行する（選択的ステージング、タスク毎の worktree/merge なし）
 
 # `condukt state test` が実行するコマンド（`sh -c` 経由、リポジトリルートから）。
 # 省略すると自動検出（cargo test / npm test / pytest）。
@@ -139,7 +149,7 @@ autonomous     = false                    # true にすると人間ゲート（P
 
 `shared_globs` は、何もハードコードせずにプロジェクト全体のファイルをワーカーから保護する仕組みだ。例: `["**/models.py", "**/migrations/**", "docs/glossary.md"]`。これに触れる並列タスクは警告とともに直列実行へ降格される。
 
-設定ファイルのキーはすべて実行時に環境変数で上書きできる（`CONDUKT_WORKTREE_BASE` / `CONDUKT_DEFAULT_BRANCH` / `CONDUKT_MAX_PARALLEL`）。`CONDUKT_CONSENSUS=1`/`true` はマルチサンプル self-consistency の fan-out を有効にし（`[consensus] enabled` を上書き。opt-in で既定 OFF）、`CONDUKT_AUTONOMOUS=1`/`true` は autonomous モードで実行する（人間ゲートを縮退。config `autonomous` を上書き。`state autonomy-check` が読む）。`CONDUKT_DISABLE=1` はフック専用のキルスイッチで、SessionStart/statusline フックを no-op にする（CI で有用）。
+設定ファイルのキーはすべて実行時に環境変数で上書きできる（`CONDUKT_WORKTREE_BASE` / `CONDUKT_DEFAULT_BRANCH` / `CONDUKT_MAX_PARALLEL`）。`CONDUKT_CONSENSUS=1`/`true` はマルチサンプル self-consistency の fan-out を有効にし（`[consensus] enabled` を上書き。opt-in で既定 OFF）、`CONDUKT_AUTONOMOUS=1`/`true` は autonomous モードで実行する（人間ゲートを縮退。config `autonomous` を上書き。`state autonomy-check` が読む）。`CONDUKT_SINGLE_WORKTREE=1`/`true` は全タスクを main ツリーで実行する（config `single_worktree` を上書き。`state worktree-mode-check` が読む）。`CONDUKT_STUCK_TTL_SECS`（既定 `1800`）は `running` タスクを stuck とみなす経過秒数で、`state abandon --all-stuck` の対象になる。`CONDUKT_DISABLE=1` はフック専用のキルスイッチで、SessionStart/statusline フックを no-op にする（CI で有用）。
 
 `condukt-loop` のサイクル定義（`config.toml` の `[loop]`）:
 

@@ -1,17 +1,17 @@
 ## north_star
-phase-6=着地済みだが休眠中の autonomy-safety 基盤を実行時に活性化＋実証する(build != validate を土台層へ)。autonomy epic(ideate→implement→verify→replan を人間0介入で完走)は phase 1-5 で達成。休眠コアのうち policy answer(c166700)・editgate PostToolUse hook(13ef48a) は活性化済み。残る休眠コア=checkpoint/rollback: CLI(state checkpoint/rollback)・auto-rollback 経路(main.rs で verified→failed 遷移時に latest_checkpoint へ自動復元, JournalKind::AutoRollback, fail-soft)・e2e(tests/checkpoint_cli.rs) はいずれも着地済み GREEN。だが SKILL.md がライフサイクルのどこでも state checkpoint を呼ばないため、実 run 中に checkpoint が一度も書かれず auto-rollback net は latest_checkpoint=None で常に no-op(=休眠)。phase-6 の次 ONE=SKILL の run ライフサイクル境界に state checkpoint を配線し、既にテスト済みの auto-rollback セーフティネットを実行時に機能させる(可逆な無人続行の土台)。可観測化・実証は Rust 決定論側、判断は LLM。subscription-native・LLM↔決定論分離・never-break-a-turn を崩さない。sandbox #1・code RAG #4・cross-task #7・外部ベンチ #10 は yardstick 参照のみ(parked 維持)。
+phase-7=無人 run で autonomy-safety 土台が統合動作することを実証する(build != validate の総仕上げ)。phase-6 で checkpoint/rollback(a7e0d40)・editgate(13ef48a)・policy answer(c166700) を個別に活性化し各々の e2e は green だが、これらが1本の run で同時に効き互いに干渉しないことは未実証。High 権威『devin-gap の能力追加はこの土台の上に載せる』の前提=土台が本当に無人で信頼できる、を固める capstone。実 condukt バイナリを隔離 HOME で駆動し、autonomy=on の1 run 内で policy auto-agree→checkpoint→editgate block→verified→後続 fail で auto-rollback 復元→replan directive が同一 run-state/journal を共有して連鎖することを assert。可観測化・実証は Rust 決定論側、判断は LLM。subscription-native・LLM↔決定論分離・never-break-a-turn を崩さない。sandbox #1・code RAG #4・cross-task #7・外部ベンチ #10 は yardstick 参照のみ(parked 維持、capstone 実証後に土台の上へ載せる候補)。
 
 ## definition_of_done
-- condukt SKILL.md が run ライフサイクル境界(タスクが verified に遷移した直後=auto-rollback の復元対象が生じる点、および Phase 4.5 ベースライン後の初期 checkpoint)で `condukt state checkpoint --run $RID` を呼ぶよう配線される(grep で SKILL に checkpoint 呼び出しが存在=休眠 write 側の活性化)
-- 実 condukt バイナリ駆動の e2e が green で『checkpoint 書き込み後、verified タスクの後続タスク fail→auto-rollback で直前 checkpoint へ run-state 復元＋journal に AutoRollback 記録』を実証(tests/checkpoint_cli.rs の verified_task_that_fails_auto_rolls_back_and_journals が非回帰で pass、必要なら SKILL 配線点を反映する assert を追補)
-- never-break-a-turn 不変を保持: checkpoint 書き込み失敗・restore 失敗はいずれも log+skip に縮退し turn を壊さない(restore_checkpoint の fail-soft 経路を assert)
-- condukt の fmt と clippy(-D warnings) clean、workspace 全 cargo test 非回帰で pass
+- 実 condukt バイナリを隔離 HOME で駆動する新規 capstone e2e fixture(既存の個別 e2e とは別ファイル)が green で、1 run 内で安全スタックが統合動作することを実証する: (a)autonomy-check=on で human gate が auto へ縮退、(b)checkpoint が書かれ auto-rollback の復元対象が生じる、(c)editgate が compile 破壊 stdin payload を block する(decision=block)、(d)verified タスクの後続 fail(verified->failed)で auto-rollback が直前 checkpoint へ run-state 復元し journal に AutoRollback を残す、の各段が同一 run-state/journal を共有し互いに干渉しないことを assert
+- never-break-a-turn 不変を run 全体で保持: 各段の IO/spawn 失敗はいずれも fail-soft に縮退し turn を壊さない(hook 系は exit 0・panic 非伝播)ことを assert
+- capstone は既存の個別 e2e(edit_gate_hook/checkpoint_cli/replan_recovery/policy)を置き換えず追加で共存し、workspace 全 test 非回帰
+- condukt fmt と clippy(-D warnings) clean、workspace 全 cargo test green
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-ゴール(phase-6: 休眠 autonomy-safety コアの実行時活性化)と現状の最大差分は checkpoint/rollback の write 側配線 1 点。CLI(state checkpoint/rollback)・auto-rollback 経路(main.rs:1421 verified→failed→latest_checkpoint 復元)・e2e(checkpoint_cli.rs 2 tests green) は着地済みだが、SKILL.md が run 中に state checkpoint を一度も呼ばないため checkpoint が書かれず auto-rollback net は latest_checkpoint=None で常に no-op。ONE=condukt SKILL.md の Phase 6(タスク verified 遷移直後)＋Phase 4.5(baseline 後の初期 checkpoint)に `condukt state checkpoint --run $RID` を配線し、既にテスト済みの auto-rollback セーフティネットを実行時に機能させる。editgate と同型(コア+e2e 着地済み→残りは配線のみ)で size は m ではなく s。
+ゴール(phase-7: 無人 run で安全スタックの統合動作を実証)と現状の最大差分は capstone e2e が存在しないこと。個別 e2e(edit_gate_hook/checkpoint_cli/replan_recovery/policy)は各機構を単独で緑にするが、autonomy=on の1 run 内で policy-auto→checkpoint→editgate block→verified→後続 fail で auto-rollback 復元→replan directive が同一 run-state/journal を共有して連鎖・互いに干渉しないことは誰も assert していない。ONE=実 condukt バイナリを隔離 HOME で駆動する新規 capstone e2e(tests/foundation_capstone_e2e.rs 等)を書き、統合動作を1本で実証する。既存 harness(env! CARGO_BIN_EXE_condukt・unique_dir・隔離 HOME)を流用。size m(新規 e2e 1ファイル・複数サブコマンド連鎖)。
 
 ## next_action
 

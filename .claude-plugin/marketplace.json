@@ -773,6 +773,32 @@
       }
     },
     {
+      "name": "overwatch",
+      "description": "Project-global cross-session execution ledger with dedup guard + PDO progress view. Manages claim registry with heartbeat-based liveness and skip-on-duplicate contract for distributed session coordination. SessionStart and Stop hooks surface current run state and progress aggregation (session/backlog/hypothesis/condukt run/compass gap in fail-soft view). Subscription-native (skill + hook + bundled Rust binary, no API key).",
+      "version": "0.1.0",
+      "category": "observability",
+      "keywords": [
+        "pdo",
+        "cross-session",
+        "progress",
+        "ledger",
+        "dedup",
+        "hotl",
+        "rust"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/overwatch",
+      "author": {
+        "name": "yukineko"
+      },
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/yukineko/claude-harnesses.git",
+        "path": "crates/overwatch",
+        "ref": "main"
+      }
+    },
+    {
       "name": "daily",
       "description": "Daily-once task runner for Claude Code: a SessionStart hook that runs registered shell tasks ([[task]] in ~/.daily/config.toml) at most once per calendar day and injects a summary of what ran. Skips while a /flow or /backlog driver is working (backlog lock), records each run to a JSONL report (a failed task still counts as run, no retry until tomorrow). With no tasks registered it runs a default security audit (cargo deny check). Register/inspect with `daily add` / `daily list` / `daily report`. Subscription-native (one hook + bundled Rust binary, no API key).",
       "version": "0.3.0",

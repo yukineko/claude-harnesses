@@ -340,6 +340,102 @@ pub fn aggregate_replan_stats(records: &[ReplanLogRecord]) -> ReplanStats {
     stats
 }
 
+// ── Run-policy decision log ─────────────────────────────────────────────────
+
+/// One recorded RUN-POLICY decision, appended as a JSONL record every time
+/// `condukt run-policy decide --run <RID>` computes a verdict. Purely an
+/// observability trail — it never feeds back into the decision itself.
+/// `verdict` is kept as a plain snake_case `String` (not the
+/// `run_policy::RunPolicyVerdict` enum) so loading a log with future/unknown
+/// verdict values never fails to parse (fail-soft: `aggregate_run_policy_stats`
+/// just ignores unknown values).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RunPolicyLogRecord {
+    /// "verify_only" | "escalate_docker" | "escalate_ship" | "ask_human".
+    pub verdict: String,
+    /// The decision reason that produced this verdict.
+    pub reason: String,
+    /// The canonical cheap-verify value the decision was computed from.
+    pub cheap_verify: String,
+    /// The canonical divergence value the decision was computed from.
+    pub divergence: String,
+    /// The canonical change-risk value the decision was computed from.
+    pub change_risk: String,
+    /// Unix timestamp (seconds) when this decision was recorded.
+    pub recorded_at: i64,
+}
+
+fn run_policy_log_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
+    project_dir(cfg, cwd).join(format!("{run_id}.run-policy-log.jsonl"))
+}
+
+/// Append one RUN-POLICY decision record to the run's JSONL log. Creates the
+/// project dir and file as needed; never truncates existing history.
+pub fn record_run_policy_decision(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+    record: &RunPolicyLogRecord,
+) -> Result<()> {
+    use std::io::Write;
+    let path = run_policy_log_path(cfg, cwd, run_id);
+    let dir = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("run-policy log path {} has no parent", path.display()))?;
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("creating state dir {}", dir.display()))?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("opening run-policy log {}", path.display()))?;
+    let line = serde_json::to_string(record).context("serializing run-policy log record")?;
+    writeln!(f, "{line}").with_context(|| format!("writing to {}", path.display()))?;
+    Ok(())
+}
+
+/// Load all RUN-POLICY decision records for a run. Missing file → empty vec.
+/// Fail-soft: malformed lines are skipped rather than erroring or panicking,
+/// mirroring `open_runs`/`all_runs`'s tolerance of unparseable state files.
+pub fn load_run_policy_records(cfg: &Config, cwd: &Path, run_id: &str) -> Vec<RunPolicyLogRecord> {
+    let path = run_policy_log_path(cfg, cwd, run_id);
+    let txt = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    txt.lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<RunPolicyLogRecord>(l).ok())
+        .collect()
+}
+
+/// Aggregate counts of RUN-POLICY decisions by verdict category. Used by
+/// `condukt run-policy stats`.
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+pub struct RunPolicyStats {
+    pub verify_only: usize,
+    pub escalate_docker: usize,
+    pub escalate_ship: usize,
+    pub ask_human: usize,
+}
+
+/// Pure function: classify each record's `verdict` string into the four known
+/// categories and count them. Unknown/garbage verdict values are ignored
+/// (never panics, never bumps an "other" bucket that doesn't exist).
+pub fn aggregate_run_policy_stats(records: &[RunPolicyLogRecord]) -> RunPolicyStats {
+    let mut stats = RunPolicyStats::default();
+    for r in records {
+        match r.verdict.as_str() {
+            "verify_only" => stats.verify_only += 1,
+            "escalate_docker" => stats.escalate_docker += 1,
+            "escalate_ship" => stats.escalate_ship += 1,
+            "ask_human" => stats.ask_human += 1,
+            _ => {}
+        }
+    }
+    stats
+}
+
 // ── Reconcile ─────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -2573,6 +2669,124 @@ mod tests {
         let tmp = make_tmp_dir("replan-log-missing");
         let cfg = make_test_cfg(&tmp);
         let loaded = load_replan_records(&cfg, &tmp, "no-such-run");
+        assert!(loaded.is_empty());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── Run-policy decision log ────────────────────────────────────────────
+
+    /// `aggregate_run_policy_stats` must classify each of the four verdict
+    /// categories into a distinct, correctly-counted bucket.
+    #[test]
+    fn aggregate_run_policy_stats_distinguishes_categories() {
+        let records = vec![
+            RunPolicyLogRecord {
+                verdict: "verify_only".into(),
+                reason: "r1".into(),
+                cheap_verify: "pass".into(),
+                divergence: "low".into(),
+                change_risk: "medium".into(),
+                recorded_at: 1,
+            },
+            RunPolicyLogRecord {
+                verdict: "escalate_docker".into(),
+                reason: "r2".into(),
+                cheap_verify: "pass".into(),
+                divergence: "high".into(),
+                change_risk: "low".into(),
+                recorded_at: 2,
+            },
+            RunPolicyLogRecord {
+                verdict: "escalate_ship".into(),
+                reason: "r3".into(),
+                cheap_verify: "pass".into(),
+                divergence: "low".into(),
+                change_risk: "low".into(),
+                recorded_at: 3,
+            },
+            RunPolicyLogRecord {
+                verdict: "ask_human".into(),
+                reason: "r4".into(),
+                cheap_verify: "unknown".into(),
+                divergence: "high".into(),
+                change_risk: "high".into(),
+                recorded_at: 4,
+            },
+        ];
+        let stats = aggregate_run_policy_stats(&records);
+        assert_eq!(stats.verify_only, 1);
+        assert_eq!(stats.escalate_docker, 1);
+        assert_eq!(stats.escalate_ship, 1);
+        assert_eq!(stats.ask_human, 1);
+    }
+
+    /// Unknown verdict strings must be ignored rather than panicking or
+    /// polluting a known bucket.
+    #[test]
+    fn aggregate_run_policy_stats_ignores_unknown_verdict() {
+        let records = vec![RunPolicyLogRecord {
+            verdict: "bogus".into(),
+            reason: "r".into(),
+            cheap_verify: "pass".into(),
+            divergence: "low".into(),
+            change_risk: "low".into(),
+            recorded_at: 1,
+        }];
+        let stats = aggregate_run_policy_stats(&records);
+        assert_eq!(stats, RunPolicyStats::default());
+    }
+
+    /// record_run_policy_decision → load_run_policy_records →
+    /// aggregate_run_policy_stats round-trips through the filesystem: multiple
+    /// appended records must all survive and aggregate to the expected counts.
+    #[test]
+    fn run_policy_log_record_and_load_roundtrip() {
+        let tmp = make_tmp_dir("run-policy-log-rt");
+        let cfg = make_test_cfg(&tmp);
+        let run_id = "run-run-policy-log";
+
+        let recs = [
+            ("verify_only", "reason a"),
+            ("escalate_docker", "reason b"),
+            ("escalate_docker", "reason c"),
+            ("escalate_ship", "reason d"),
+            ("ask_human", "reason e"),
+        ];
+        for (verdict, reason) in recs {
+            record_run_policy_decision(
+                &cfg,
+                &tmp,
+                run_id,
+                &RunPolicyLogRecord {
+                    verdict: verdict.into(),
+                    reason: reason.into(),
+                    cheap_verify: "pass".into(),
+                    divergence: "low".into(),
+                    change_risk: "low".into(),
+                    recorded_at: now_secs(),
+                },
+            )
+            .unwrap();
+        }
+
+        let loaded = load_run_policy_records(&cfg, &tmp, run_id);
+        assert_eq!(loaded.len(), 5, "all appended records must be loaded");
+
+        let stats = aggregate_run_policy_stats(&loaded);
+        assert_eq!(stats.verify_only, 1);
+        assert_eq!(stats.escalate_docker, 2);
+        assert_eq!(stats.escalate_ship, 1);
+        assert_eq!(stats.ask_human, 1);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A run with no log file must load as an empty vec, not error/panic.
+    #[test]
+    fn load_run_policy_records_missing_file_returns_empty() {
+        let tmp = make_tmp_dir("run-policy-log-missing");
+        let cfg = make_test_cfg(&tmp);
+        let loaded = load_run_policy_records(&cfg, &tmp, "no-such-run");
         assert!(loaded.is_empty());
         std::fs::remove_dir_all(&tmp).ok();
     }

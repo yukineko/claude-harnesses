@@ -539,6 +539,27 @@ worktree 隔離の枠内）。対象不在/起動不能/timeout/health 非200 �
 満たすかの**証拠**であって、他の done_criteria 照合（機械テスト等）を代替しない。runtime シグナルの整形は
 Rust 決定論側、修正判断のみ LLM worker に還流する。
 
+**RUN-POLICY ゲート（runtime/health 検証から docker 隔離再検証への昇格判定）**: 上記の
+`verify launch`（host 上の cheap verify）が runtime/health を参照する done_criteria に対して出した結果を
+「そのまま信じてよいか」「container で確認し直すべきか」「ship してよいか」「人間に聞くべきか」は語感で
+決めず、**バイナリに決定論的に解決させる**:
+```bash
+RP=$(condukt run-policy decide --cheap-verify <pass|fail|unknown> --divergence <low|medium|high> --change-risk <low|medium|high> --run "$RID")
+VERDICT=$(echo "$RP" | jq -r '.verdict')
+# escalate_docker -> `condukt verify launch --docker ...` で container 再検証してから ship/ask_human を再判断
+# escalate_ship   -> cheap verify で十分 + 安全: 進めてよい（実際の ship は Phase 8 で改めてユーザー承認）
+# verify_only     -> cheap verify で十分: docker は起動しない（hold のみ）
+# ask_human       -> 自動判断せず人間にエスカレーション（AskUserQuestion 等）。docker も ship も自動実行しない
+```
+`--cheap-verify` は直近の cheap verify（host 上の `verify launch` 等）の結果、`--divergence` は現在の
+runtime が本番環境からどれだけ乖離しているか、`--change-risk` はタスクの変更がどれだけリスキーかを
+呼び出し側（worker/verifier のコンテキスト）が判断して渡す。verdict は **advisory-deterministic**
+（バイナリは可能な選択肢を1つに絞るだけで、実行そのものは行わない）。`--docker` を実際に叩くのは
+`escalate_docker` のときだけ ── `verify_only`/`ask_human` で無条件に docker を起動しない。`--docker` 自体は
+既存どおり fail-soft（daemon 不在等は `note: "docker_unavailable"` で turn を壊さない）。`--run "$RID"` を
+渡すと判定が `<run>.run-policy-log.jsonl` に記録され、`condukt run-policy stats --run "$RID"` で
+verdict 別の集計が見られる（観測用途のみ・判定そのものにはフィードバックしない）。
+
 **F→P (Fail→Pass) 再現性ゲート (`kind: fix|feature` タスク限定)**: worker が `reproduction_tests` の
 red→green サイクル (`tdd` の RED/GREEN 証跡) を回し終えた後、**`verified` へ昇格させる前**に、その
 RED→GREEN が本物の Fail→Pass 遷移だったかを確認できる:

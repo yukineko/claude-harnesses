@@ -21,6 +21,7 @@ mod oracle;
 mod policy;
 mod pr;
 mod replan;
+mod run_policy;
 mod schedule;
 mod state;
 mod status;
@@ -97,6 +98,15 @@ enum Command {
     Replan {
         #[command(subcommand)]
         action: ReplanAction,
+    },
+    /// Deterministic RUN-POLICY gate: decide the next verify→docker→ship
+    /// pipeline stage from a cheap-verify result, production-divergence, and
+    /// change-risk (formatting/classification only; acting on the verdict —
+    /// actually launching a Docker re-verify or proceeding to ship — stays
+    /// the `/condukt` skill orchestration's job).
+    RunPolicy {
+        #[command(subcommand)]
+        action: RunPolicyAction,
     },
     /// Multi-sample self-consistency: plan an opt-in fan-out, or tally N verifier
     /// verdicts for one task into a majority winner + escalate-to-opus decision.
@@ -647,6 +657,43 @@ enum ReplanAction {
 }
 
 #[derive(Subcommand)]
+enum RunPolicyAction {
+    /// Decide the next verify→docker→ship pipeline stage from a cheap-verify
+    /// result, production-divergence, and change-risk. Prints pretty JSON
+    /// (`RunPolicyDecision`) on stdout, exit 0. Deterministic Rust decision
+    /// so Phase 6 of the `/condukt` skill can fold "docker or not?" into the
+    /// verify stage without an extra LLM turn; acting on the verdict (e.g.
+    /// actually invoking `condukt verify launch --docker`) stays the skill's
+    /// job.
+    Decide {
+        /// "pass" | "fail" | anything else (fail-softs to "unknown").
+        #[arg(long)]
+        cheap_verify: String,
+        /// "low" | "medium" | "high" (fail-softs to "high", the safest value).
+        #[arg(long)]
+        divergence: String,
+        /// "low" | "medium" | "high" (fail-softs to "high", the safest value).
+        #[arg(long)]
+        change_risk: String,
+        /// When set, append this decision as a JSONL record to the run's
+        /// run-policy decision log (`<run>.run-policy-log.jsonl`) for later
+        /// aggregation via `condukt run-policy stats --run <RID>`. Omitted =
+        /// no record is written (backward-compatible: stdout output is
+        /// unchanged either way).
+        #[arg(long)]
+        run: Option<String>,
+    },
+    /// Aggregate the run-policy decision log for a run into per-verdict counts
+    /// (`{verify_only, escalate_docker, escalate_ship, ask_human}`) and print
+    /// them as JSON. Reads records written by `run-policy decide --run <RID>`;
+    /// an empty/missing log yields all-zero counts (never errors).
+    Stats {
+        #[arg(long)]
+        run: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum PrAction {
     /// Prepare (dry-run) or, with --execute, open a PR via `gh pr create`.
     ///
@@ -908,6 +955,48 @@ fn run_user(cmd: Command) -> Result<()> {
             ReplanAction::Stats { run } => {
                 let records = state::load_replan_records(&cfg, &cwd, &run);
                 let stats = state::aggregate_replan_stats(&records);
+                println!("{}", serde_json::to_string_pretty(&stats)?);
+            }
+        },
+        Command::RunPolicy { action } => match action {
+            RunPolicyAction::Decide {
+                cheap_verify,
+                divergence,
+                change_risk,
+                run,
+            } => {
+                let decision =
+                    run_policy::decide_run_policy(&cheap_verify, &divergence, &change_risk);
+                // Structured observability record — a side effect on top of the
+                // (unchanged) stdout decision JSON below. Only written when the
+                // caller opts in via `--run` (backward-compatible: omitted =
+                // no record, matching the pre-existing stateless behavior).
+                if let Some(rid) = &run {
+                    let verdict_str = match decision.verdict {
+                        run_policy::RunPolicyVerdict::VerifyOnly => "verify_only",
+                        run_policy::RunPolicyVerdict::EscalateDocker => "escalate_docker",
+                        run_policy::RunPolicyVerdict::EscalateShip => "escalate_ship",
+                        run_policy::RunPolicyVerdict::AskHuman => "ask_human",
+                    };
+                    let record = state::RunPolicyLogRecord {
+                        verdict: verdict_str.to_string(),
+                        reason: decision.reason.clone(),
+                        cheap_verify: decision.cheap_verify.clone(),
+                        divergence: decision.divergence.clone(),
+                        change_risk: decision.change_risk.clone(),
+                        recorded_at: state::now_secs(),
+                    };
+                    // Fail-soft: a logging failure must never break the
+                    // run-policy decision's stdout contract.
+                    if let Err(e) = state::record_run_policy_decision(&cfg, &cwd, rid, &record) {
+                        eprintln!("condukt: warning: failed to record run-policy decision: {e}");
+                    }
+                }
+                println!("{}", serde_json::to_string_pretty(&decision)?);
+            }
+            RunPolicyAction::Stats { run } => {
+                let records = state::load_run_policy_records(&cfg, &cwd, &run);
+                let stats = state::aggregate_run_policy_stats(&records);
                 println!("{}", serde_json::to_string_pretty(&stats)?);
             }
         },

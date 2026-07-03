@@ -1,0 +1,7 @@
+{
+  "name": "daily-report",
+  "version": "0.1.0",
+  "description": "Generates a scannable daily work report (日報) by aggregating the day's git commits and the Obsidian session records that session-insights writes to the vault, then synthesizing them into a single narrative note written back to <vault>/daily/<date>.md. Read-mostly SOURCE-of-truth digest: git supplies what changed in this repo, the Obsidian records supply cross-project summaries/learnings/remaining tasks and cost/token numbers. Subscription-native (skill only, no binary, no API key).",
+  "author": { "name": "yukineko" },
+  "keywords": ["daily-report", "日報", "standup", "git", "obsidian", "digest", "session-insights", "report"]
+}

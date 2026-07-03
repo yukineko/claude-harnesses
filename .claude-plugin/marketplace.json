@@ -828,6 +828,33 @@
       }
     },
     {
+      "name": "daily-report",
+      "description": "Generates a scannable daily work report (日報) by aggregating the day's git commits and the Obsidian session records that session-insights writes to the vault, then synthesizing them into a single narrative note written back to <vault>/daily/<date>.md. git supplies what changed in this repo; the Obsidian records supply cross-project summaries/learnings/remaining tasks and cost/token numbers. Subscription-native (skill only, no binary, no API key).",
+      "version": "0.1.0",
+      "category": "reporting",
+      "keywords": [
+        "daily-report",
+        "日報",
+        "standup",
+        "git",
+        "obsidian",
+        "digest",
+        "session-insights",
+        "report"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/daily-report",
+      "author": {
+        "name": "yukineko"
+      },
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/yukineko/claude-harnesses.git",
+        "path": "crates/daily-report",
+        "ref": "main"
+      }
+    },
+    {
       "name": "trajectoryeval",
       "description": "Trajectory-match verifier for agent tool-call paths: condukt's online verifier checks a task's OUTPUT (done_criteria); trajectoryeval checks the PATH the worker took. `check` matches an actual ordered tool-call list against an expected trajectory spec (strict / unordered / subsequence) and reports {pass, missing, unexpected, out_of_order} with a 0/1/2 gate exit; `extract` streams a transcript into the ordered tool_use names. The path-side sibling of done-criteria verification (agentevals-style). Subscription-native (one bundled Rust binary, no API key).",
       "version": "0.1.0",

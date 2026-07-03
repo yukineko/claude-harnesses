@@ -2,8 +2,11 @@
 //!
 //! Hard invariant: this binary NEVER invokes a state-mutating git command
 //! (commit/merge/push/add/checkout/reset). It only *detects* and *reports*
-//! unshipped state; the only auto-runnable step is `scripts/rebuild-plugins.sh`
-//! via `ship check --run-safe`. See `tests/integration.rs::binary_never_mutates_git`.
+//! unshipped state; the two runnable steps are `scripts/rebuild-plugins.sh`
+//! via `ship check --run-safe` (binary swap into existing cache dirs) and
+//! `scripts/rollout-plugins.sh` via `ship rollout` (heavier, explicit: the
+//! `/plugin update` step — advances the installed version pointer). Neither
+//! touches git. See `tests/integration.rs::binary_never_mutates_git`.
 
 mod checklist;
 mod git;
@@ -37,6 +40,13 @@ enum Cmd {
     /// SessionEnd hook: print a reminder to stdout only if unshipped work
     /// exists. Always exits 0, even on malformed/empty stdin.
     SessionEnd,
+    /// Run `scripts/rollout-plugins.sh` — automates the `/plugin update` step
+    /// (creates the cache `<name>/<version>/` dir, repoints
+    /// `installed_plugins.json`, then rebuild+sync). A heavier, explicit
+    /// operation kept SEPARATE from `check --run-safe`: it mutates
+    /// `~/.claude/plugins/` state, never git. This is what fully clears
+    /// "stale plugin binaries" that `--run-safe` alone can't.
+    Rollout,
 }
 
 fn main() {
@@ -44,6 +54,7 @@ fn main() {
     match cli.command {
         Cmd::Check { run_safe } => check(run_safe),
         Cmd::SessionEnd => run_hook(session_end),
+        Cmd::Rollout => rollout(),
     }
 }
 
@@ -100,6 +111,16 @@ fn check(run_safe: bool) {
         println!();
         println!("remaining GATED items:");
         print!("{}", checklist::render_gated_remaining(&status));
+    }
+}
+
+fn rollout() {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let repo = resolve_repo_root(&cwd);
+
+    match checklist::rollout(&repo) {
+        Ok(summary) => print!("{summary}"),
+        Err(e) => eprintln!("[rollout] error: {e}"),
     }
 }
 

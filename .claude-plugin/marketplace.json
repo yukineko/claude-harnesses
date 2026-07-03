@@ -280,8 +280,8 @@
     },
     {
       "name": "ship",
-      "description": "Shipping-ritual nudge for Claude Code: deterministically detect unshipped state (uncommitted changes, unmerged condukt/* branches, leftover worktrees, unpushed commits, stale plugin binaries) and remind you to commit・merge・push・rebuild. A /ship skill and a fail-soft SessionEnd hook surface the checklist; only the plugin-rebuild step is auto-runnable — commit/merge/push stay human-gated. Subscription-native (no API key).",
-      "version": "0.1.0",
+      "description": "Shipping-ritual nudge for Claude Code: deterministically detect unshipped state (uncommitted changes, unmerged condukt/* branches, leftover worktrees, unpushed commits, stale plugin binaries) and remind you to commit・merge・push・rebuild・rollout. A /ship skill and a fail-soft SessionEnd hook surface the checklist; only the plugin-rebuild (`--run-safe`) and plugin-rollout (`ship rollout`, automates `/plugin update`) steps are auto-runnable — commit/merge/push stay human-gated. Subscription-native (no API key).",
+      "version": "0.1.1",
       "category": "workflow",
       "keywords": [
         "hooks",

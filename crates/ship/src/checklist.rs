@@ -2,8 +2,11 @@
 //!
 //! Hard invariant: nothing in this module (or anywhere else in this crate)
 //! ever invokes a state-mutating git command (commit/merge/push/add/checkout/
-//! reset). The only thing `run_safe` is allowed to execute is
-//! `scripts/rebuild-plugins.sh`. See `tests/integration.rs::binary_never_mutates_git`.
+//! reset). `run_safe` is allowed to execute `scripts/rebuild-plugins.sh`;
+//! `rollout` (a separate, explicit operation — not folded into `run_safe`)
+//! is allowed to execute `scripts/rollout-plugins.sh`. Neither script touches
+//! git; both only write into `~/.claude/plugins/`. See
+//! `tests/integration.rs::binary_never_mutates_git`.
 
 use std::path::Path;
 use std::process::Command;
@@ -86,7 +89,9 @@ pub fn render(status: &ShipStatus) -> String {
         out.push_str("  [x] no stale plugin binaries\n");
     } else {
         out.push_str(&format!(
-            "  [ ] stale plugin binaries: {} — run `scripts/rebuild-plugins.sh` (safe, auto-runnable)\n",
+            "  [ ] stale plugin binaries: {} — run `scripts/rebuild-plugins.sh` (safe, auto-runnable); \
+to fully clear staleness (advance the installed version pointer, i.e. the `/plugin update` step) run \
+`scripts/rollout-plugins.sh` / `ship rollout` (separate, explicit step)\n",
             status.stale_crates.join(", ")
         ));
     }
@@ -150,6 +155,48 @@ pub fn run_safe(repo: &Path) -> Result<String, String> {
     } else {
         summary.push_str(&format!(
             "[run-safe] scripts/rebuild-plugins.sh: FAILED (status: {})\n",
+            output.status
+        ));
+    }
+    if !stdout.trim().is_empty() {
+        summary.push_str(&format!("--- stdout ---\n{stdout}\n"));
+    }
+    if !stderr.trim().is_empty() {
+        summary.push_str(&format!("--- stderr ---\n{stderr}\n"));
+    }
+
+    Ok(summary)
+}
+
+/// Run the heavier, explicit rollout step: `scripts/rollout-plugins.sh`,
+/// resolved relative to `repo`. This is what fully clears stale plugin
+/// binaries — it advances the installed version pointer (the `/plugin
+/// update` step) by creating the cache `<name>/<version>/` dir and
+/// repointing `installed_plugins.json`, then runs rebuild-plugins.sh and
+/// each plugin's sync-plugin-assets.sh. It mutates only `~/.claude/plugins/`
+/// state, NEVER git — kept as a separate operation from `run_safe` (not
+/// folded into `--run-safe`) because it is a heavier, more consequential
+/// step than a binary swap into an existing cache dir.
+pub fn rollout(repo: &Path) -> Result<String, String> {
+    let script = repo.join("scripts").join("rollout-plugins.sh");
+    if !script.exists() {
+        return Err(format!("script not found: {}", script.display()));
+    }
+
+    let output = Command::new(&script)
+        .current_dir(repo)
+        .output()
+        .map_err(|e| format!("failed to run {}: {e}", script.display()))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let mut summary = String::new();
+    if output.status.success() {
+        summary.push_str("[rollout] scripts/rollout-plugins.sh: OK\n");
+    } else {
+        summary.push_str(&format!(
+            "[rollout] scripts/rollout-plugins.sh: FAILED (status: {})\n",
             output.status
         ));
     }
@@ -281,5 +328,23 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let result = run_safe(dir.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn rollout_errors_when_script_missing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let result = rollout(dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn render_mentions_rollout_for_stale_crates() {
+        let status = ShipStatus {
+            stale_crates: vec!["ship".to_string()],
+            ..Default::default()
+        };
+        let out = render(&status);
+        assert!(out.contains("rollout-plugins.sh"));
+        assert!(out.contains("ship rollout"));
     }
 }

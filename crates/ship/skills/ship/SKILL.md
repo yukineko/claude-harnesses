@@ -6,8 +6,9 @@ allowed-tools: Bash(ship:*)
 
 # /ship — shipping ritual
 
-The shipping ritual has four stages: `ship check` (diagnostic), `ship check --run-safe` (auto-rebuild), commit, merge, push.
-**Only the rebuild step is automatic. Commit, merge, and push REQUIRE explicit user approval — never auto-run them.**
+The shipping ritual has stages: `ship check` (diagnostic), `ship check --run-safe` (auto-rebuild),
+`ship rollout` (auto-rollout, as needed), commit, merge, push.
+**Only the rebuild and rollout steps are automatic. Commit, merge, and push REQUIRE explicit user approval — never auto-run them.**
 
 ## Stages
 
@@ -23,13 +24,31 @@ This prints a checklist of what must be done before the repo is clean. It does N
 
 ### 2. Auto-rebuild (safe): `ship check --run-safe`
 
-The ONLY automatic operation:
+An automatic operation:
 
 ```sh
 ship check --run-safe
 ```
 
-This runs `scripts/rebuild-plugins.sh` to rebuild the plugin cache from source. Nothing else is auto-executed.
+This runs `scripts/rebuild-plugins.sh` to rebuild the plugin cache from source — it swaps freshly built
+binaries into EXISTING cache version dirs. It CANNOT advance the installed version pointer (create a new
+`<name>/<version>/` dir or repoint `installed_plugins.json`), so if `ship check` still reports "stale plugin
+binaries" after `--run-safe`, that residual staleness needs the rollout step below.
+
+### 2b. Auto-rollout (heavier, explicit): `ship rollout`
+
+```sh
+ship rollout
+```
+
+This runs `scripts/rollout-plugins.sh`, which fully automates the `/plugin update` step for the local-directory
+`yukineko` marketplace: it creates the cache `<name>/<version>/` dir, repoints
+`~/.claude/plugins/installed_plugins.json` to it, then runs rebuild-plugins.sh + each plugin's
+`scripts/sync-plugin-assets.sh`. It is a **separate, explicit** step from `--run-safe` (not folded into it)
+because it is heavier and more consequential — it advances what version of a plugin is actually installed and
+running, not just the binary bits inside an existing cache dir. It is still not git-mutating: it only writes
+into `~/.claude/plugins/`. Use this to clear the residual "stale plugin binaries" that `--run-safe` alone
+cannot resolve.
 
 ### 3. Commit (GATED — requires user approval)
 
@@ -90,6 +109,11 @@ User: please rebuild
 /ship check --run-safe
 
 → runs scripts/rebuild-plugins.sh
+
+User: it's still showing stale plugin binaries, fully clear it
+/ship rollout
+
+→ runs scripts/rollout-plugins.sh (advances installed version pointer, then rebuild+sync)
 
 User: commit and push
 → Agent: "I can commit with the following. Approve?"

@@ -591,6 +591,137 @@ pub fn launch_server_and_probe(
     }
 }
 
+/// Build the argv (excluding the leading `docker`) for running `cmd` isolated
+/// inside `image`, with `workdir` bind-mounted at the same path and no network:
+/// `run --rm --network=none -v <workdir>:<workdir> -w <workdir> <image> sh -c
+/// <cmd>`. Pure and unit-testable — no spawn.
+fn docker_run_args(cmd: &str, image: &str, workdir: &str) -> Vec<String> {
+    vec![
+        "run".to_string(),
+        "--rm".to_string(),
+        "--network=none".to_string(),
+        "-v".to_string(),
+        format!("{workdir}:{workdir}"),
+        "-w".to_string(),
+        workdir.to_string(),
+        image.to_string(),
+        "sh".to_string(),
+        "-c".to_string(),
+        cmd.to_string(),
+    ]
+}
+
+/// True iff the `docker` CLI is present AND its daemon is reachable, checked
+/// by spawning `docker info` and inspecting the result. Fail-soft: a missing
+/// binary (spawn error) or a non-zero exit (daemon down / permission denied)
+/// both report `false` — never a panic.
+fn docker_available() -> bool {
+    match Command::new("docker")
+        .arg("info")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(status) => status.success(),
+        Err(_) => false,
+    }
+}
+
+/// Launch `cmd` isolated inside a Docker container and reflux its runtime
+/// signals through the same deterministic verdict path as
+/// [`launch_and_reflux`]. This is the container-backed sibling of that host
+/// launcher: same blastguard gate, same `wait_timeout` envelope, same
+/// [`distill_runtime`] shaping — only the spawn target differs (`docker run`
+/// instead of `sh -c`).
+///
+/// **never-break-a-turn**: every branch returns a fail-soft verdict (JSON);
+/// this function never `panic!`/`unwrap`/`expect`s on an external-input or
+/// absent-tool path.
+///
+/// - **blastguard `Deny`**: `cmd` is refused *fail-closed* and NEVER reaches
+///   docker (checked before the availability probe, so a flagged command
+///   cannot even trigger a `docker info` call).
+/// - **docker unavailable** (binary missing, or `docker info` exits non-zero
+///   — daemon down / permission denied): a fail-soft verdict with
+///   `note: "docker_unavailable"`. The command is NEVER run outside the
+///   container as a fallback.
+/// - **spawn failure** (docker binary vanished between the availability probe
+///   and spawn): a fail-soft failure verdict (`note = "spawn-error"`).
+/// - **timeout**: the container process is killed; fail-soft (`note =
+///   "timeout"`).
+/// - **normal exit**: the container's stdout/stderr/exit code are refluxed
+///   through [`runtime_reflux_verdict`], whose pass/fail predicate decides the
+///   verdict (exit 0 && no panic evidence ⇒ pass).
+pub fn launch_in_container(
+    cmd: &str,
+    timeout_secs: u64,
+    image: &str,
+    workdir: &str,
+) -> serde_json::Value {
+    // (a) blastguard gate — validate BEFORE even checking docker availability,
+    // reusing the same pure detector as the host launcher. A flagged command
+    // is refused fail-closed and never reaches docker.
+    let input = serde_json::json!({ "command": cmd });
+    if let blastguard::model::Decision::Deny(reason) =
+        blastguard::detect::detect("Bash", Some(&input))
+    {
+        let stderr = format!(
+            "[blastguard] launch command `{cmd}` refused before docker run (fail-closed) — {reason}"
+        );
+        return fail_soft_launch_verdict("", &stderr, None, "blastguard-denied");
+    }
+
+    // (b) Docker availability gate — binary present AND daemon reachable.
+    if !docker_available() {
+        let stderr = format!(
+            "docker unavailable (binary missing, daemon down, or permission denied); \
+             cmd `{cmd}` was NOT run"
+        );
+        return fail_soft_launch_verdict("", &stderr, None, "docker_unavailable");
+    }
+
+    // (c) Spawn `docker run ...`, piping both streams so we can capture them.
+    let timeout = timeout_secs.max(1);
+    let args = docker_run_args(cmd, image, workdir);
+    let mut child = match Command::new("docker")
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            // Fail-soft: docker could not even be started. No panic.
+            let stderr = format!("failed to spawn `docker {}`: {e}", args.join(" "));
+            return fail_soft_launch_verdict("", &stderr, None, "spawn-error");
+        }
+    };
+
+    // (d) wait with a timeout; a timed-out container is killed and reaped.
+    match child.wait_timeout(Duration::from_secs(timeout)) {
+        Ok(Some(status)) => {
+            // (e) normal exit — read both streams and reflux through the pure fn.
+            let (stdout, stderr) = read_child_streams(&mut child);
+            runtime_reflux_verdict(&stdout, &stderr, status.code())
+        }
+        Ok(None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let stderr =
+                format!("container launch of `{cmd}` timed out after {timeout}s and was killed");
+            fail_soft_launch_verdict("", &stderr, None, "timeout")
+        }
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let stderr = format!("failed to wait on container running `{cmd}`: {e}");
+            fail_soft_launch_verdict("", &stderr, None, "wait-error")
+        }
+    }
+}
+
 /// Known model tiers, cheapest → strongest.
 const TIERS: [&str; 3] = ["haiku", "sonnet", "opus"];
 
@@ -1589,5 +1720,124 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
             serde_json::json!("health-bad-url"),
             "bad URL should have note='health-bad-url': {v}"
         );
+    }
+
+    // ── Docker-isolated exec backend (phase-3 container launcher) ─────────
+
+    /// (a) UNIT: `docker_run_args` builds the exact expected argv for a sample
+    /// (cmd, image, workdir) — pure assert, no spawn.
+    #[test]
+    fn docker_run_args_builds_expected_argv() {
+        let args = docker_run_args("echo hi", "alpine:latest", "/work/dir");
+        assert_eq!(
+            args,
+            vec![
+                "run".to_string(),
+                "--rm".to_string(),
+                "--network=none".to_string(),
+                "-v".to_string(),
+                "/work/dir:/work/dir".to_string(),
+                "-w".to_string(),
+                "/work/dir".to_string(),
+                "alpine:latest".to_string(),
+                "sh".to_string(),
+                "-c".to_string(),
+                "echo hi".to_string(),
+            ],
+            "docker_run_args must build the exact expected argv: {args:?}"
+        );
+    }
+
+    /// (b) FAIL-SOFT: a blastguard-flagged command must be refused BEFORE even
+    /// probing docker availability — the benign leading segment must never
+    /// execute (proven by the surviving-absent sentinel), mirroring
+    /// `launch_refuses_destructive_command_without_spawning` for the host path.
+    #[test]
+    fn launch_in_container_refuses_destructive_command_without_spawning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sentinel = tmp.path().join("ran.txt");
+        let victim = tmp.path().join("victim");
+        let payload = format!("touch {} ; rm -rf {}", sentinel.display(), victim.display());
+        let workdir = tmp.path().display().to_string();
+        let v = launch_in_container(&payload, 5, "alpine:latest", &workdir);
+        assert_eq!(
+            v["passed"],
+            serde_json::json!(false),
+            "a refused command must not count as passed: {v}"
+        );
+        assert_eq!(v["note"], serde_json::json!("blastguard-denied"));
+        assert!(
+            !sentinel.exists(),
+            "the payload must NOT have run — sentinel would prove it executed"
+        );
+    }
+
+    /// (b) FAIL-SOFT: when docker is unavailable (binary missing, daemon down,
+    /// or permission denied — the case in this worker's env), `launch_in_container`
+    /// must return the `docker_unavailable` fail-soft verdict WITHOUT running the
+    /// command, rather than panicking or silently falling back to the host shell.
+    #[test]
+    fn launch_in_container_fails_soft_when_docker_unavailable() {
+        if docker_available() {
+            // Nothing to assert here in an environment where docker really is
+            // reachable — the availability-gated test below covers that path.
+            return;
+        }
+        let v = launch_in_container("echo hi", 5, "alpine:latest", "/tmp");
+        assert_eq!(
+            v["passed"],
+            serde_json::json!(false),
+            "docker-unavailable must fail soft: {v}"
+        );
+        assert_eq!(
+            v["note"],
+            serde_json::json!("docker_unavailable"),
+            "docker-unavailable must carry the docker_unavailable note: {v}"
+        );
+    }
+
+    /// (c) AVAILABILITY-GATED INTEGRATION: exercises the real container path
+    /// when docker is reachable, else falls back to asserting the fail-soft
+    /// verdict — so plain `cargo test` is GREEN whether or not docker is
+    /// reachable in the host running this test.
+    #[test]
+    fn launch_in_container_runs_real_container_when_available() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path().display().to_string();
+        if docker_available() {
+            let v = launch_in_container("true", 30, "alpine:latest", &workdir);
+            assert_eq!(
+                v["passed"],
+                serde_json::json!(true),
+                "a successful container run must pass: {v}"
+            );
+
+            let v2 = launch_in_container("exit 3", 30, "alpine:latest", &workdir);
+            assert_eq!(
+                v2["passed"],
+                serde_json::json!(false),
+                "a non-zero container exit must fail: {v2}"
+            );
+            let d = v2
+                .get("runtime_digest")
+                .expect("a runtime failure must carry a runtime_digest");
+            assert_eq!(
+                d["exit_code"],
+                serde_json::json!(3),
+                "the container exit code must be refluxed: {v2}"
+            );
+        } else {
+            let v = launch_in_container("true", 5, "alpine:latest", &workdir);
+            assert_eq!(
+                v["passed"],
+                serde_json::json!(false),
+                "without docker reachable, this must fail soft: {v}"
+            );
+            assert_eq!(
+                v["note"],
+                serde_json::json!("docker_unavailable"),
+                "without docker reachable, the note must be docker_unavailable: {v}"
+            );
+        }
     }
 }

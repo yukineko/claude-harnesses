@@ -596,6 +596,17 @@ enum VerifyAction {
         /// used when `--health-url` is set.
         #[arg(long, default_value_t = 30)]
         startup_timeout: u64,
+        /// Run `--cmd` inside an isolated Docker container (`docker run --rm
+        /// --network=none -v <cwd>:<cwd> -w <cwd> <image> sh -c <cmd>`) instead
+        /// of a bare `sh -c` on the host. Same blastguard gate applies BEFORE
+        /// spawn; if Docker itself is unavailable (binary missing / daemon
+        /// down), fails soft with `note: "docker_unavailable"` — the target is
+        /// never run outside the container as a fallback.
+        #[arg(long)]
+        docker: bool,
+        /// Docker image to run `--cmd` in when `--docker` is set.
+        #[arg(long, default_value = "alpine:latest")]
+        image: String,
     },
 }
 
@@ -826,14 +837,24 @@ fn run_user(cmd: Command) -> Result<()> {
                 timeout,
                 health_url,
                 startup_timeout,
+                docker,
+                image,
             } => {
-                // Fail-soft by contract: both launch paths never panic and always
-                // return a verdict, so we always print it and exit 0. With a
-                // health URL we probe a server for a 200; without one we keep the
-                // legacy exit-wait behavior.
-                let verdict = match health_url {
-                    Some(url) => verify::launch_server_and_probe(&cmd, &url, startup_timeout),
-                    None => verify::launch_and_reflux(&cmd, timeout),
+                // Fail-soft by contract: all launch paths never panic and always
+                // return a verdict, so we always print it and exit 0. With
+                // --docker we isolate the run inside a container; with a health
+                // URL we probe a server for a 200; otherwise we keep the legacy
+                // exit-wait behavior.
+                let verdict = if docker {
+                    let workdir = std::env::current_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| ".".to_string());
+                    verify::launch_in_container(&cmd, timeout, &image, &workdir)
+                } else {
+                    match health_url {
+                        Some(url) => verify::launch_server_and_probe(&cmd, &url, startup_timeout),
+                        None => verify::launch_and_reflux(&cmd, timeout),
+                    }
                 };
                 println!("{}", serde_json::to_string_pretty(&verdict)?);
             }

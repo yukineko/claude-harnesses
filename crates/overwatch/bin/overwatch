@@ -1,0 +1,25 @@
+#!/bin/sh
+# overwatch plugin launcher — selects the per-platform binary bundled in this dir.
+#
+# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/overwatch <sub>`; this dispatcher execs the
+# matching `overwatch-<os>-<arch>` build. If no build exists for the host platform
+# it exits 0 silently, so a missing binary never traps a turn.
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+binary="$root/overwatch-$os-$arch"
+if [ ! -x "$binary" ]; then
+  echo "overwatch: no bundled binary for $os-$arch ($binary)." >&2
+  exit 0
+fi
+exec "$binary" "$@"

@@ -1,0 +1,20 @@
+[package]
+rust-version.workspace = true
+license.workspace = true
+name = "overwatch"
+version = "0.1.0"
+edition = "2021"
+description = "Lease & event store for condukt task orchestration. Manages claim registry, heartbeat lifecycle, and runtime state."
+
+[[bin]]
+name = "overwatch"
+path = "src/main.rs"
+
+[dependencies]
+harness-core = { path = "../harness-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+dirs = "5"
+anyhow = { workspace = true }

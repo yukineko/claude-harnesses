@@ -46,7 +46,7 @@ pub fn begin(key: &str, title: &str, session: Option<&str>) -> Result<()> {
                 "heartbeat_at": holder.heartbeat_at,
             }
         });
-        println!("{}", skip_json.to_string());
+        println!("{skip_json}");
         std::process::exit(1);
     }
 

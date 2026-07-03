@@ -342,6 +342,14 @@ BASELINE_EXIT=$?
 - exit 非 0（既存失敗あり）: `/tmp/condukt-baseline.txt` の失敗テスト一覧を `baseline_failures` として workers に渡す。verifier はこのリストに含まれる失敗を「実装前から壊れていた」として除外して合否を判定する。
 - テストコマンドが未設定でエラーになる場合は無視して Phase 5 へ進む。
 
+**初期 checkpoint (auto-rollback の復元フロア)**: ベースライン取得の直後、実装で run-state が動く前に
+run の初期 checkpoint を1本書く。これが無いと後段の auto-rollback (Phase 6) は `latest_checkpoint=None`
+で常に no-op になる (＝休眠) ため、ここが安全ネットの起点になる。checkpoint 書き込みは fail-soft
+(失敗しても log されるだけでターンを壊さない) なので無条件に呼んでよい:
+```bash
+condukt state checkpoint --run "$RID" --label baseline   # 復元フロア: 実装前の run-state を snapshot
+```
+
 ### Phase 4.5.5 — Small-task fast path (省略可)
 
 **発動条件**: 以下のいずれかを満たす場合、Phase 5 の worktree 作成を省略して main で直接実装する:
@@ -353,6 +361,10 @@ BASELINE_EXIT=$?
 2. main 上で直接実装・`git add && git commit`
 3. `condukt state set --run $RID --task <t.id> --status done`
 4. Phase 6 (verifier) へ — Phase 7 の worktree merge/remove はスキップ
+
+fast-path でも checkpoint 配線は同じく効く: Phase 4.5 の初期 checkpoint (復元フロア) と、Phase 6 で
+各タスクが verified になった直後の checkpoint はここでも書かれる (fast-path は worktree を省くだけで
+Phase 6 の verified 遷移自体は通るため、auto-rollback の安全ネットは fast-path でも機能する)。
 
 **通常フローへの戻り条件**:
 - parallel タスクが 1 つでも存在する場合
@@ -645,6 +657,11 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
    condukt state set --run "$RID" --task "<t.id>" --status verified \
      --model <worker に使ったモデル> --cost "${GAUGE_COST:-0}"
    # fail 時も同様に --status failed --model <試したモデル> を残す (失敗も学習信号)
+   # タスクが verified になった直後に checkpoint を1本書く: これで「良好な run-state」が
+   # snapshot され、後続タスクが後で fail (verified→failed) したとき auto-rollback
+   # (main.rs の verified→failed 遷移) が直前のこの checkpoint へ復元できる。書かないと
+   # 復元対象が生じず安全ネットは休眠のまま。checkpoint は fail-soft なので無条件に呼ぶ。
+   condukt state checkpoint --run "$RID" --label "verified:<t.id>"
    ```
    `--model` を省略すると decomposition の `suggested_model` に、`--cost` 省略は 0.0 にフォールバック
    する (後方互換)。**per-sub-agent コストには gauge >= 0.3.0 (`gauge subagents`) が必要**、

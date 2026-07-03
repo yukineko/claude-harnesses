@@ -24,6 +24,14 @@
 - テストはクレート単位: `cargo test -p <crate>`。
 - CI ゲートは **fmt + clippy を強制**する。コミット前に `cargo fmt` と
   `cargo clippy -p <crate> --all-targets` を green にする。
+- **prompt-injection 防御ゲート（2本）** — prompt に load される資産と同梱バイナリの改竄を機械検出する:
+  - `python3 scripts/check-prompt-injection.py`（injectguard）— skills/agents/hooks/CLAUDE.md/.compass/docs
+    に隠蔽・検証バイパス・egress 文言が植わっていないか走査（防御 framing は除外）。ローカルは
+    `git config core.hooksPath .githooks` で pre-commit を有効化（速い advisory 層。CI の `injectguard` job が
+    非バイパスの本ゲート）。
+  - `python3 scripts/check-bin-reproducibility.py`（CI `bin-reproducibility` job）— 全 bin をソースから再ビルドし、
+    committed-only な悪性パターン文字列（source が生成しない焼き込み）を検出。生の committed-only 件数・size 差は
+    ビルド非決定性なので**判定に使わない**（悪性デルタのみ）。host triple のみ対象。
 
 ## プラグインを改修したときの反映（忘れやすい）
 

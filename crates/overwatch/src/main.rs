@@ -1,9 +1,9 @@
 mod aggregate;
 mod control;
-mod event;
+pub mod event;
 mod lease;
 mod render;
-mod store;
+pub mod store;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

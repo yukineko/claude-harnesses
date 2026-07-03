@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use unicode_normalization::UnicodeNormalization;
 
 /// The task status vocabulary — the single source of truth shared by the store
 /// (which sets these on add/done/fail/restore), the `--status` filter help, and
@@ -98,6 +99,33 @@ pub fn status_warning(status: Option<&str>) -> Option<String> {
 pub fn new_id(title: &str, now: i64) -> String {
     let input = format!("{}\x00{}", title, now);
     harness_core::hash::fnv1a32_hex(&input)
+}
+
+/// Normalize a title for content-hashing: trim → Unicode NFKC → lowercase →
+/// collapse any run of whitespace to a single space → strip leading/trailing
+/// punctuation. This makes trivially-different phrasings of the same task
+/// (extra spaces, casing, a trailing "!") collapse to the same normalized
+/// string, so [`hashkey`] collides on them.
+fn normalize_title(title: &str) -> String {
+    let nfkc: String = title.trim().nfkc().collect();
+    let lower = nfkc.to_lowercase();
+    let collapsed = lower.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed
+        .trim_matches(|c: char| !c.is_alphanumeric() && !c.is_whitespace())
+        .to_string()
+}
+
+/// Content key for cross-session dedup: a title+project fingerprint that is
+/// ROBUST to trivial phrasing differences (whitespace, case, punctuation),
+/// so the same underlying task always yields the same key regardless of who
+/// typed it or how. Uses the shared `harness_core::hash::fnv1a64` (64-bit
+/// FNV-1a), formatted as 16 lowercase hex digits. `\u{1f}` (unit separator)
+/// joins the normalized title and the raw project path so two different
+/// projects with the same title never collide.
+pub fn hashkey(title: &str, project: &str) -> String {
+    let norm_title = normalize_title(title);
+    let input = format!("{}\u{1f}{}", norm_title, project);
+    format!("{:016x}", harness_core::hash::fnv1a64(input.as_bytes()))
 }
 
 #[cfg(test)]
@@ -218,6 +246,38 @@ mod tests {
     fn new_id_differs_for_different_inputs() {
         assert_ne!(new_id("task-a", 100), new_id("task-b", 100));
         assert_ne!(new_id("task", 100), new_id("task", 101));
+    }
+
+    // --- hashkey (content key for cross-session dedup) ---
+
+    #[test]
+    fn hashkey_is_16_hex_chars() {
+        let h = hashkey("Fix login", "/repo");
+        assert_eq!(h.len(), 16);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn hashkey_normalizes_trivial_phrasing_differences() {
+        // Whitespace, casing, punctuation must not matter — same underlying
+        // task, same key.
+        assert_eq!(hashkey("Fix login", "/r"), hashkey("  fix   LOGIN! ", "/r"));
+    }
+
+    #[test]
+    fn hashkey_differs_across_projects() {
+        assert_ne!(
+            hashkey("Fix login", "/repo-a"),
+            hashkey("Fix login", "/repo-b")
+        );
+    }
+
+    #[test]
+    fn hashkey_differs_for_different_titles() {
+        assert_ne!(
+            hashkey("Fix login", "/repo"),
+            hashkey("Fix logout", "/repo")
+        );
     }
 
     // --- is_deferred tests ---

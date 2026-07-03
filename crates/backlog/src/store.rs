@@ -172,13 +172,19 @@ pub fn add(
     notes: &str,
     now: i64,
 ) -> Result<String> {
-    add_with_weight(path, title, project, tags, notes, 0.0, now)
+    add_with_weight(path, title, project, tags, notes, 0.0, false, now)
 }
 
 /// [`add`] に ordering weight を添えた版。weight は同一 priority 内の並び順を
 /// 降順で駆動する (高い weight ほど next/list で先に来る)。compass opportunity
 /// の weight をここへ供給すると、source 層のキュー順が opportunity の impact で
 /// 決まる。weight=0.0 は legacy 既定で、従来の (priority, created_at) 順を保つ。
+///
+/// `force`: skip the duplicate-content guard (see [`check_duplicate`]) even
+/// when an existing pending/failed task or a live cross-session claim already
+/// holds this title+project's [`crate::task::hashkey`]. CLI surfaces this as
+/// `backlog add --force`.
+#[allow(clippy::too_many_arguments)]
 pub fn add_with_weight(
     path: &Path,
     title: &str,
@@ -186,10 +192,14 @@ pub fn add_with_weight(
     tags: Vec<String>,
     notes: &str,
     weight: f64,
+    force: bool,
     now: i64,
 ) -> Result<String> {
     with_tasks_lock(path, || {
         let mut tasks = load(path)?;
+        if !force {
+            check_duplicate(&tasks, title, project)?;
+        }
         let id = new_id(title, now);
         let task = Task {
             id: id.clone(),
@@ -207,6 +217,52 @@ pub fn add_with_weight(
         save(path, &tasks)?;
         Ok(id)
     })
+}
+
+/// Reject an add whose content [`crate::task::hashkey`] is already held by
+/// EITHER (a) an existing task in `tasks` with status `pending` or `failed`
+/// (a `done` task with the same title does NOT block a re-add), OR (b) a live
+/// cross-session claim reported by `condukt state is-claimed --hashkey <h>`.
+///
+/// Fail-soft on (b): if the `condukt` binary is absent from PATH, or the
+/// command errors or exits with anything other than 0 (claimed) / 1 (not
+/// claimed), this is treated as "not claimed" — a missing or misbehaving
+/// `condukt` must never block `backlog add`.
+fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
+    let hk = crate::task::hashkey(title, project);
+
+    if tasks.iter().any(|t| {
+        crate::task::hashkey(&t.title, &t.project) == hk
+            && matches!(t.status.as_str(), STATUS_PENDING | STATUS_FAILED)
+    }) {
+        return Err(anyhow!(
+            "duplicate task rejected: an existing pending/failed task already has this content (hashkey {hk}); use --force to add anyway"
+        ));
+    }
+
+    if is_claimed_elsewhere(&hk) {
+        return Err(anyhow!(
+            "duplicate task rejected: hashkey {hk} is claimed by a live cross-session run; use --force to add anyway"
+        ));
+    }
+
+    Ok(())
+}
+
+/// Fail-soft check: does a live cross-session claim (from any `condukt` run)
+/// hold this hashkey? Shells out to `condukt state is-claimed --hashkey <h>`
+/// (exit 0 = claimed, exit 1 = not claimed). Any other outcome — `condukt`
+/// missing from PATH, spawn failure, unexpected exit code — is treated as
+/// "not claimed" so a stale or absent `condukt` never blocks `backlog add`.
+fn is_claimed_elsewhere(hashkey: &str) -> bool {
+    std::process::Command::new("condukt")
+        .arg("state")
+        .arg("is-claimed")
+        .arg("--hashkey")
+        .arg(hashkey)
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
 }
 
 /// pending/failed タスクを優先度順 (priority() 昇順、同優先度は created_at 昇順) で返す。
@@ -668,8 +724,17 @@ mod tests {
                 let added_title = added_title.clone();
                 handles.push(std::thread::spawn(move || {
                     barrier.wait();
-                    add_with_weight(path.as_path(), &added_title, "/repo", vec![], "", 0.0, 2000)
-                        .expect("add must not error");
+                    add_with_weight(
+                        path.as_path(),
+                        &added_title,
+                        "/repo",
+                        vec![],
+                        "",
+                        0.0,
+                        false,
+                        2000,
+                    )
+                    .expect("add must not error");
                 }));
             }
             for h in handles {
@@ -726,9 +791,39 @@ mod tests {
         let path = tmp_path();
         // Same priority (p1). Insertion/created_at order would put "First" ahead,
         // but the higher weight must win.
-        add_with_weight(&path, "Light", "/repo", vec!["p1".into()], "", 0.2, 100).unwrap();
-        add_with_weight(&path, "Heavy", "/repo", vec!["p1".into()], "", 0.9, 200).unwrap();
-        add_with_weight(&path, "Mid", "/repo", vec!["p1".into()], "", 0.5, 150).unwrap();
+        add_with_weight(
+            &path,
+            "Light",
+            "/repo",
+            vec!["p1".into()],
+            "",
+            0.2,
+            false,
+            100,
+        )
+        .unwrap();
+        add_with_weight(
+            &path,
+            "Heavy",
+            "/repo",
+            vec!["p1".into()],
+            "",
+            0.9,
+            false,
+            200,
+        )
+        .unwrap();
+        add_with_weight(
+            &path,
+            "Mid",
+            "/repo",
+            vec!["p1".into()],
+            "",
+            0.5,
+            false,
+            150,
+        )
+        .unwrap();
         let t = next(&path, None, None).unwrap().unwrap();
         assert_eq!(
             t.title, "Heavy",
@@ -740,8 +835,28 @@ mod tests {
     fn priority_dominates_weight() {
         let path = tmp_path();
         // A heavy p2 must still sit behind a light p0: priority is the primary key.
-        add_with_weight(&path, "Heavy p2", "/repo", vec!["p2".into()], "", 9.0, 100).unwrap();
-        add_with_weight(&path, "Light p0", "/repo", vec!["p0".into()], "", 0.1, 200).unwrap();
+        add_with_weight(
+            &path,
+            "Heavy p2",
+            "/repo",
+            vec!["p2".into()],
+            "",
+            9.0,
+            false,
+            100,
+        )
+        .unwrap();
+        add_with_weight(
+            &path,
+            "Light p0",
+            "/repo",
+            vec!["p0".into()],
+            "",
+            0.1,
+            false,
+            200,
+        )
+        .unwrap();
         let t = next(&path, None, None).unwrap().unwrap();
         assert_eq!(t.title, "Light p0");
     }
@@ -750,8 +865,28 @@ mod tests {
     fn equal_weight_falls_back_to_created_at() {
         let path = tmp_path();
         // Equal weight → the legacy FIFO (created_at asc) tie-break still applies.
-        add_with_weight(&path, "Newer", "/repo", vec!["p1".into()], "", 0.5, 200).unwrap();
-        add_with_weight(&path, "Older", "/repo", vec!["p1".into()], "", 0.5, 100).unwrap();
+        add_with_weight(
+            &path,
+            "Newer",
+            "/repo",
+            vec!["p1".into()],
+            "",
+            0.5,
+            false,
+            200,
+        )
+        .unwrap();
+        add_with_weight(
+            &path,
+            "Older",
+            "/repo",
+            vec!["p1".into()],
+            "",
+            0.5,
+            false,
+            100,
+        )
+        .unwrap();
         let t = next(&path, None, None).unwrap().unwrap();
         assert_eq!(t.title, "Older");
     }
@@ -760,8 +895,8 @@ mod tests {
     fn changing_weight_changes_next_pick() {
         // The load-bearing assertion: editing weight reorders the queue.
         let path = tmp_path();
-        add_with_weight(&path, "A", "/repo", vec!["p1".into()], "", 0.3, 100).unwrap();
-        add_with_weight(&path, "B", "/repo", vec!["p1".into()], "", 0.6, 200).unwrap();
+        add_with_weight(&path, "A", "/repo", vec!["p1".into()], "", 0.3, false, 100).unwrap();
+        add_with_weight(&path, "B", "/repo", vec!["p1".into()], "", 0.6, false, 200).unwrap();
         // Initially B (heavier) is next.
         assert_eq!(next(&path, None, None).unwrap().unwrap().title, "B");
 
@@ -781,13 +916,99 @@ mod tests {
     #[test]
     fn list_is_weight_ordered() {
         let path = tmp_path();
-        add_with_weight(&path, "Light", "/repo", vec!["p1".into()], "", 0.2, 100).unwrap();
-        add_with_weight(&path, "Heavy", "/repo", vec!["p1".into()], "", 0.9, 200).unwrap();
+        add_with_weight(
+            &path,
+            "Light",
+            "/repo",
+            vec!["p1".into()],
+            "",
+            0.2,
+            false,
+            100,
+        )
+        .unwrap();
+        add_with_weight(
+            &path,
+            "Heavy",
+            "/repo",
+            vec!["p1".into()],
+            "",
+            0.9,
+            false,
+            200,
+        )
+        .unwrap();
         let titles: Vec<String> = list(&path, None, None, Some("pending"))
             .unwrap()
             .into_iter()
             .map(|t| t.title)
             .collect();
         assert_eq!(titles, vec!["Heavy".to_string(), "Light".to_string()]);
+    }
+
+    // --- duplicate content guard (hashkey dedup on add) ---
+    //
+    // NB: `is_claimed_elsewhere` shells out to `condukt state is-claimed`. In
+    // this dev environment the installed `condukt` binary is a stale build
+    // that lacks the `is-claimed` subcommand and exits non-zero/non-one
+    // (clap "unrecognized subcommand" -> exit 2), which the fail-soft path
+    // correctly treats as "not claimed". These tests exercise the (a) local
+    // pending/failed guard, independent of whatever `condukt` happens to be
+    // on PATH.
+
+    #[test]
+    fn add_rejects_duplicate_pending_hashkey() {
+        let path = tmp_path();
+        add(&path, "Fix login", "/repo", vec![], "", 100).unwrap();
+        // Same content (trivially reworded) while the first is still pending.
+        let err = add_with_weight(
+            &path,
+            "  fix   LOGIN! ",
+            "/repo",
+            vec![],
+            "",
+            0.0,
+            false,
+            200,
+        )
+        .expect_err("duplicate pending task must be rejected");
+        assert!(err.to_string().contains("duplicate"), "got: {err}");
+        // Only the first task was persisted.
+        assert_eq!(load(&path).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn add_rejects_duplicate_failed_hashkey() {
+        let path = tmp_path();
+        let id = add(&path, "Fix login", "/repo", vec![], "", 100).unwrap();
+        mark_failed(&path, &id, Some("timeout")).unwrap();
+        let err = add(&path, "Fix login", "/repo", vec![], "", 200)
+            .expect_err("duplicate failed task must be rejected");
+        assert!(err.to_string().contains("duplicate"), "got: {err}");
+        assert_eq!(load(&path).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn add_force_bypasses_duplicate_guard() {
+        let path = tmp_path();
+        add(&path, "Fix login", "/repo", vec![], "", 100).unwrap();
+        let id = add_with_weight(&path, "Fix login", "/repo", vec![], "", 0.0, true, 200)
+            .expect("force must bypass the duplicate guard");
+        let tasks = load(&path).unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert!(tasks.iter().any(|t| t.id == id));
+    }
+
+    #[test]
+    fn add_does_not_block_on_done_duplicate() {
+        let path = tmp_path();
+        let id = add(&path, "Fix login", "/repo", vec![], "", 100).unwrap();
+        mark_done(&path, &id).unwrap();
+        // A done task with the same title/project must NOT block a re-add.
+        let new_id = add(&path, "Fix login", "/repo", vec![], "", 200)
+            .expect("a done duplicate must not block a new add");
+        let tasks = load(&path).unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert!(tasks.iter().any(|t| t.id == new_id));
     }
 }

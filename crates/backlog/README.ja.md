@@ -33,7 +33,7 @@ backlog はこの失敗モードを潰す。一度キューに積めば、
 
 | サブコマンド | 役割 |
 |---|---|
-| `add` | タスクを追加 (`--title`, `--project`, `--tag`, `--priority p0/p1/p2`, `--notes`, `--weight`) |
+| `add` | タスクを追加 (`--title`, `--project`, `--tag`, `--priority p0/p1/p2`, `--notes`, `--weight`, `--force`) |
 | `list` | タスク一覧。`--tag` / `--project` / `--status` で絞り込み |
 | `next` | 次の最高優先度の pending タスクを JSON で出力 |
 | `done <id>` | タスクを完了マーク |
@@ -68,5 +68,22 @@ backlog uninstall                                            # 再び除去す�
 ```
 
 > 補足: `backlog list` の status 語彙は `pending` であり `open` ではない。`list --status open` は何も表示しない。
+
+### 重複タスクの拒否 (content hashkey)
+
+`add` はタイトルと project から求めた **content hashkey** (`title` を trim → Unicode NFKC → 小文字化 →
+連続空白の1個への圧縮 → 前後の記号除去 したものと project を FNV-1a 64bit で畳み込んだ 16 桁 hex)
+で内容の重複を検出する。次のいずれかに該当する場合、`add` はエラーで拒否される (`done` の重複はブロックしない
+— 同じタイトルを再度積むことは正当なため):
+
+- 同じ hashkey を持つ既存タスクが `pending` または `failed` である。
+- `condukt` が PATH 上にあり、`condukt state is-claimed --hashkey <h>` が exit 0 (= 他セッションの
+  live なクレームが握っている) を返す。`condukt` が不在、または上記以外の理由でエラー/非0終了した場合は
+  fail-soft に倒し「クレームなし」として扱う (`condukt` の欠落や不調で `add` を失敗させない)。
+
+どちらの拒否も `backlog add --force` で意図的にバイパスできる。
+
+`backlog list --json` の各要素には `hashkey` フィールドが含まれる (title + project から計算、保存はされない)。
+`/flow` など上位 driver がこれを使って `condukt state is-claimed` によるゲートを追加コストなしに行える。
 
 同梱の `bin/backlog-*` バイナリがプラグインの出荷物なので、エンドユーザーは cargo も API キーも不要。skill や hook が依存する挙動を変えたら、ワークスペースをビルド（`cargo build --workspace --release`）して再コミットする。

@@ -47,6 +47,12 @@ enum Command {
         /// preserves the legacy (priority, created_at) order.
         #[arg(long, default_value_t = 0.0)]
         weight: f64,
+
+        /// Bypass the duplicate-content guard: add even when an existing
+        /// pending/failed task, or a live cross-session claim, already holds
+        /// this title+project's content hashkey.
+        #[arg(long)]
+        force: bool,
     },
 
     /// List tasks
@@ -186,6 +192,7 @@ fn run(cli: Cli) -> Result<()> {
             priority,
             notes,
             weight,
+            force,
         } => {
             // priority is a shortcut for adding a priority tag
             if let Some(p) = priority {
@@ -194,8 +201,16 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             let now = now_unix();
-            let id =
-                store::add_with_weight(&tasks_path, &title, &project, tags, &notes, weight, now)?;
+            let id = store::add_with_weight(
+                &tasks_path,
+                &title,
+                &project,
+                tags,
+                &notes,
+                weight,
+                force,
+                now,
+            )?;
             println!("added: {id}");
         }
 
@@ -222,8 +237,24 @@ fn run(cli: Cli) -> Result<()> {
             if as_json {
                 // Machine-readable array (consumed by autoflow). Each task keeps
                 // its real field names (notably `title` and `status`), so callers
-                // deserialize a subset and ignore the rest.
-                println!("{}", serde_json::to_string(&tasks)?);
+                // deserialize a subset and ignore the rest. `hashkey` is computed
+                // (not stored) so callers like `/flow` can gate on
+                // `condukt state is-claimed --hashkey <h>` without recomputing the
+                // normalization themselves.
+                let with_hashkey: Vec<serde_json::Value> = tasks
+                    .iter()
+                    .map(|t| {
+                        let mut v = serde_json::to_value(t).unwrap_or_default();
+                        if let Some(obj) = v.as_object_mut() {
+                            obj.insert(
+                                "hashkey".to_string(),
+                                serde_json::Value::String(task::hashkey(&t.title, &t.project)),
+                            );
+                        }
+                        v
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string(&with_hashkey)?);
             } else if tasks.is_empty() {
                 println!("no tasks");
             } else {

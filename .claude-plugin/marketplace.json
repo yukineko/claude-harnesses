@@ -57,7 +57,7 @@
     {
       "name": "backlog",
       "description": "Cross-project task queue with cycle-type tags for Claude Code: a /backlog skill that loops through open items (lock → pick → /condukt → done), a SessionStart hook that surfaces pending work at session open, and a backlog binary with list/next/done/fail/lock subcommands. Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "workflow",
       "keywords": [
         "backlog",
@@ -131,7 +131,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: an interpreter/worker/verifier skill plus a Rust binary that schedules tasks into parallel/serial batches by file-conflict analysis, manages the git-worktree lifecycle, tracks run state, and gates completion. Subscription-native (skill + agents + hook, no API key).",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -355,7 +355,7 @@
     {
       "name": "flow",
       "description": "Unified source→executor driver for Claude Code: a /flow skill that binds the task SOURCES (compass next-move + backlog queue) to the EXECUTOR (condukt, model-routed by fugu-router) in one HOTL loop — gate on compass freshness, pick the highest-priority task, hand it to condukt, verify, mark done, repeat. A SessionStart hook proposes /flow every session when open work exists (propose-then-confirm). Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "category": "orchestration",
       "keywords": [
         "flow",

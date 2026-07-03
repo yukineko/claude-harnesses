@@ -37,6 +37,7 @@
 | ctxrot | always-on | context 劣化ガード（検出・救済・復元・蒸留＋load/pin/drop 制御） |
 | curate | manual | fugu-router playbook を evalkit の versioned golden データセットへ昇格する |
 | daily | always-on | SessionStart で登録シェルタスクを 1 日 1 回だけ実行し所見を注入する |
+| daily-report | manual | git ログ＋session-insights の record ノートを日次1枚の日報に合成し Obsidian へ書き戻す skill（`daily` とは別物：あちらはタスク実行、こちらは日報生成） |
 | deepwiki | manual | リポ構造マップから `.deepwiki/*.md` アーキテクチャ wiki を自動生成する |
 | difflog | always-on | SessionStart で HEAD をスナップショット、SessionEnd で git diff サマリを記録する |
 | donegate | always-on | Stop で受け入れコマンドを実行し全 green まで完了を阻止する |

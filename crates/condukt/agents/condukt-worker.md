@@ -75,6 +75,34 @@ never-break-a-turn: cargo check や test がハング・無限ループしそう
   何も出さず編集を許可する。したがって **診断が出なかったこと (沈黙) はコードが正しい証明にはならない**。
   沈黙は「ゲートが判定を下せなかった/適用外だった」場合も含む。commit 前の `cargo check` (上記) は依然として必須。
 
+### サンドボックス実行 (opt-in) — build/test を隔離コンテナで走らせる
+
+サンドボックスが有効な環境 (config `[worker] sandbox_enabled = true`、または環境変数
+`CONDUKT_WORKER_SANDBOX=1`) では、**LLM 生成コードを走らせる build/test コマンドを、素の `Bash` で
+ホスト直実行せず** `condukt sandbox run` 経由で隔離コンテナ内で実行する:
+
+```sh
+condukt sandbox run --cmd 'cargo test -p <crate>' --timeout 300
+```
+
+- `condukt sandbox run` は config を読み、有効時のみ既存の docker exec backend
+  (`docker run --rm --network=none`、設定された image・`--memory`/`--cpus`/`--pids-limit`、CWD を
+  同一パスに read-write bind mount) でコマンドを実行し、runtime verdict JSON (`sandboxed` マーカー付き)
+  を stdout に出して **常に exit 0** で返す (never-break-a-turn)。
+- **network 隔離** (`--network=none`) と **fs 隔離** (コンテナは CWD の worktree だけを見る) と
+  **resource limit** が同時にかかる。
+- **docker 不在は fail-soft**: `note: "docker_unavailable"` の verdict を返すだけで、コマンドを
+  ホスト側にフォールバック実行しない。この場合は `status: blocked` で報告し `notes` に docker 不在を記す
+  (勝手にホスト直実行に切り替えない)。
+- **サンドボックス無効時 (既定) はこの経路を使わなくてよい**。従来どおり worktree 内で直接
+  `cargo check` / test を実行する (`condukt sandbox run` を呼んでも無効時はホスト実行にそのまま透過する)。
+- **注記**: `condukt sandbox run` は build/test の *実行* を隔離するもので、あなたの Edit/Write 自体を
+  コンテナ化するものではない (編集は従来どおり worktree 上で行う)。
+
+> リポジトリ資産 (この agents/*.md や skills 等) を編集した場合、稼働中 install への反映は
+> `crates/condukt/scripts/sync-plugin-assets.sh`、バイナリは `scripts/rebuild-plugins.sh` の
+> **別工程**であることに留意する (repo が唯一の正典。cache を手編集しない)。
+
 ## 行き詰まり (stuck) の自己検知と早期中断
 
 **無限ループが最悪の結果**なので、前進できないと判断したら早めに `blocked` または `needs-serial` を返すことを優先する。

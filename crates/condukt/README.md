@@ -132,6 +132,20 @@ single_worktree = false                   # when true, run all tasks in the main
 # enabled   = false
 # samples   = 3
 # threshold = 0.5
+
+# Opt-in worker sandboxing (OFF by default). When enabled, a worker's build/test
+# command run via `condukt sandbox run` executes inside the docker exec backend
+# (`docker run --rm --network=none`, the CWD bind-mounted read-write at the same
+# path) instead of directly on the host — giving network + filesystem isolation
+# plus optional resource limits. Docker-absent degrades to a fail-soft
+# `docker_unavailable` verdict (never a host fallback). Edits still happen on the
+# host worktree; only build/test EXECUTION is sandboxed.
+# [worker]
+# sandbox_enabled = false
+# docker_image    = "alpine:latest"
+# memory_limit    = "512m"   # docker --memory  (omit = no cap)
+# cpus            = "1.5"    # docker --cpus    (omit = no cap)
+# pids_limit      = 256      # docker --pids-limit (omit = no cap)
 ```
 
 `shared_globs` is how you keep workers off project-wide files without hardcoding
@@ -153,6 +167,8 @@ All config file keys can be overridden at runtime with environment variables.
 | `CONDUKT_AUTONOMOUS` | `false` | Set to `1`/`true` to run autonomously (degrades human gates; overrides config `autonomous`). Read by `state autonomy-check`. |
 | `CONDUKT_SINGLE_WORKTREE` | `false` | Set to `1`/`true` to run all tasks in the main tree (no per-task worktree/merge; overrides config `single_worktree`). Read by `state worktree-mode-check`. |
 | `CONDUKT_STUCK_TTL_SECS` | `1800` | Age (seconds) past which a `running` task is considered stuck and eligible for `state abandon --all-stuck`. |
+| `CONDUKT_WORKER_SANDBOX` | `false` | Set to `1`/`true` to run a worker's build/test through the sandboxed docker exec backend (overrides `[worker] sandbox_enabled`). Read by `sandbox run`. |
+| `CONDUKT_WORKER_SANDBOX_IMAGE` | _(unset)_ | Override the container image for sandboxed worker execution (overrides `[worker] docker_image`). |
 
 ### `condukt loop` — test-fix cycle
 

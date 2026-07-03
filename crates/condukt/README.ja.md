@@ -150,11 +150,25 @@ single_worktree = false                   # true にすると全タスクを mai
 # enabled   = false
 # samples   = 3
 # threshold = 0.5
+
+# opt-in のワーカーサンドボックス（既定 OFF）。有効にすると、ワーカーが
+# `condukt sandbox run` 経由で走らせる build/test コマンドが、ホスト直実行では
+# なく docker exec backend（`docker run --rm --network=none`、CWD を同一パスへ
+# read-write bind mount）内で実行される — network + fs 隔離に加え resource limit も
+# かかる。docker 不在は fail-soft の `docker_unavailable` verdict に縮退し、
+# ホストへフォールバック実行しない。編集自体はホストの worktree 上のまま。
+# 隔離されるのは build/test の *実行* だけ。
+# [worker]
+# sandbox_enabled = false
+# docker_image    = "alpine:latest"
+# memory_limit    = "512m"   # docker --memory  （省略 = 上限なし）
+# cpus            = "1.5"    # docker --cpus    （省略 = 上限なし）
+# pids_limit      = 256      # docker --pids-limit（省略 = 上限なし）
 ```
 
 `shared_globs` は、何もハードコードせずにプロジェクト全体のファイルをワーカーから保護する仕組みだ。例: `["**/models.py", "**/migrations/**", "docs/glossary.md"]`。これに触れる並列タスクは警告とともに直列実行へ降格される。
 
-設定ファイルのキーはすべて実行時に環境変数で上書きできる（`CONDUKT_WORKTREE_BASE` / `CONDUKT_DEFAULT_BRANCH` / `CONDUKT_MAX_PARALLEL`）。`CONDUKT_CONSENSUS=1`/`true` はマルチサンプル self-consistency の fan-out を有効にし（`[consensus] enabled` を上書き。opt-in で既定 OFF）、`CONDUKT_AUTONOMOUS=1`/`true` は autonomous モードで実行する（人間ゲートを縮退。config `autonomous` を上書き。`state autonomy-check` が読む）。`CONDUKT_SINGLE_WORKTREE=1`/`true` は全タスクを main ツリーで実行する（config `single_worktree` を上書き。`state worktree-mode-check` が読む）。`CONDUKT_STUCK_TTL_SECS`（既定 `1800`）は `running` タスクを stuck とみなす経過秒数で、`state abandon --all-stuck` の対象になる。`CONDUKT_DISABLE=1` はフック専用のキルスイッチで、SessionStart/statusline フックを no-op にする（CI で有用）。
+設定ファイルのキーはすべて実行時に環境変数で上書きできる（`CONDUKT_WORKTREE_BASE` / `CONDUKT_DEFAULT_BRANCH` / `CONDUKT_MAX_PARALLEL`）。`CONDUKT_CONSENSUS=1`/`true` はマルチサンプル self-consistency の fan-out を有効にし（`[consensus] enabled` を上書き。opt-in で既定 OFF）、`CONDUKT_AUTONOMOUS=1`/`true` は autonomous モードで実行する（人間ゲートを縮退。config `autonomous` を上書き。`state autonomy-check` が読む）。`CONDUKT_SINGLE_WORKTREE=1`/`true` は全タスクを main ツリーで実行する（config `single_worktree` を上書き。`state worktree-mode-check` が読む）。`CONDUKT_STUCK_TTL_SECS`（既定 `1800`）は `running` タスクを stuck とみなす経過秒数で、`state abandon --all-stuck` の対象になる。`CONDUKT_WORKER_SANDBOX=1`/`true` はワーカーの build/test をサンドボックス化した docker exec backend 経由で実行する（`[worker] sandbox_enabled` を上書き。`sandbox run` が読む）。`CONDUKT_WORKER_SANDBOX_IMAGE` はサンドボックス実行の image を上書きする（`[worker] docker_image` を上書き）。`CONDUKT_DISABLE=1` はフック専用のキルスイッチで、SessionStart/statusline フックを no-op にする（CI で有用）。
 
 `condukt-loop` のサイクル定義（`config.toml` の `[loop]`）:
 

@@ -187,6 +187,74 @@ pub fn decide_ci_action(conclusion: CiConclusion, gh_available: bool) -> CiVerdi
     }
 }
 
+/// Build the argv for `gh pr checks <pr> --json name,state,bucket` — the
+/// CI-status query the poll subcommand feeds through the injected runner into
+/// [`parse_ci_checks`]. Pure, deterministic, no side effects.
+///
+/// `pr` is the PR number or URL. The `--json` projection is chosen so the output
+/// is the JSON shape [`parse_ci_checks`] already recognizes (`state`/`bucket`
+/// fields), independent of `gh`'s human-readable plain-text formatting.
+pub fn build_ci_checks_args(pr: &str) -> Vec<String> {
+    vec![
+        "pr".to_string(),
+        "checks".to_string(),
+        pr.to_string(),
+        "--json".to_string(),
+        "name,state,bucket".to_string(),
+    ]
+}
+
+/// Fetch CI status through an injected command runner and map it to a
+/// [`CiVerdict`]. Pure with respect to `gh`: the runner is injected exactly like
+/// [`crate::pr::detect_gh`], so this is fully unit-testable without `gh`.
+///
+/// `run(argv)` returns:
+/// - `Some((_success, output))` — the process spawned; we parse `output` with
+///   [`parse_ci_checks`] and decide with `gh_available = true`. The exit status
+///   is intentionally ignored: `gh pr checks` signals CI *state* (fail/pending)
+///   through non-zero exit codes while still emitting the parseable status, so a
+///   non-zero exit is NOT an availability failure. Unrecognizable output (e.g. an
+///   auth-error blob) parses to [`CiConclusion::Unknown`] and therefore degrades.
+/// - `None` — the binary could not be spawned (gh absent); we decide with
+///   `gh_available = false`, which yields [`CiVerdict::DegradedLocalOnly`].
+///
+/// Never panics, never guesses `Merge` — fail-soft by construction.
+pub fn fetch_and_decide<R: Fn(&[&str]) -> Option<(bool, String)>>(
+    run: R,
+    argv: &[&str],
+) -> CiVerdict {
+    match run(argv) {
+        Some((_success, output)) => decide_ci_action(parse_ci_checks(&output), true),
+        None => decide_ci_action(CiConclusion::Unknown, false),
+    }
+}
+
+/// The single merge gate: a worktree merge is authorized ONLY when CI is green.
+/// Every other verdict (`Wait`, `Reenter`, `DegradedLocalOnly`) returns `false`,
+/// so the caller can never merge on a non-green path.
+pub fn should_merge(verdict: &CiVerdict) -> bool {
+    matches!(verdict, CiVerdict::Merge)
+}
+
+/// Poll CI via the injected runner, decide the verdict, and invoke `on_merge`
+/// EXCLUSIVELY when the verdict is [`CiVerdict::Merge`]. Returns the verdict.
+///
+/// This is the pure heart of the poll subcommand's merge gate: `run` is the sole
+/// gh dependency (injected) and `on_merge` is the sole side-effecting escape
+/// hatch, wired so it fires on — and only on — the green path. `Wait`, `Reenter`,
+/// and `DegradedLocalOnly` never call `on_merge`.
+pub fn poll_and_maybe_merge<R, M>(run: R, argv: &[&str], on_merge: M) -> CiVerdict
+where
+    R: Fn(&[&str]) -> Option<(bool, String)>,
+    M: FnOnce(),
+{
+    let verdict = fetch_and_decide(run, argv);
+    if should_merge(&verdict) {
+        on_merge();
+    }
+    verdict
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +417,123 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The gh-checks argv is exact and deterministic, and projects the JSON
+    /// shape `parse_ci_checks` recognizes.
+    #[test]
+    fn build_ci_checks_args_is_deterministic() {
+        assert_eq!(
+            build_ci_checks_args("42"),
+            vec![
+                "pr".to_string(),
+                "checks".to_string(),
+                "42".to_string(),
+                "--json".to_string(),
+                "name,state,bucket".to_string(),
+            ]
+        );
+    }
+
+    /// A stub runner returning all-green JSON drives `fetch_and_decide` to
+    /// `Merge` — the only verdict that authorizes a merge.
+    #[test]
+    fn fetch_and_decide_green_yields_merge() {
+        let run = |_argv: &[&str]| Some((true, JSON_ALL_SUCCESS.to_string()));
+        assert_eq!(
+            fetch_and_decide(run, &["pr", "checks", "1"]),
+            CiVerdict::Merge
+        );
+    }
+
+    /// A failing check drives `Reenter` — even though `gh pr checks` would exit
+    /// non-zero, the parseable output still classifies the failure.
+    #[test]
+    fn fetch_and_decide_failure_yields_reenter() {
+        let run = |_argv: &[&str]| Some((false, JSON_ONE_FAILURE.to_string()));
+        assert_eq!(
+            fetch_and_decide(run, &["pr", "checks", "1"]),
+            CiVerdict::Reenter
+        );
+    }
+
+    /// A still-running check drives `Wait` (gh would exit non-zero here too).
+    #[test]
+    fn fetch_and_decide_pending_yields_wait() {
+        let run = |_argv: &[&str]| Some((false, JSON_ONE_PENDING.to_string()));
+        assert_eq!(
+            fetch_and_decide(run, &["pr", "checks", "1"]),
+            CiVerdict::Wait
+        );
+    }
+
+    /// Fail-soft: gh absent (runner returns None) degrades — never `Merge`.
+    #[test]
+    fn fetch_and_decide_gh_absent_degrades() {
+        let run = |_argv: &[&str]| None;
+        let verdict = fetch_and_decide(run, &["pr", "checks", "1"]);
+        assert!(matches!(verdict, CiVerdict::DegradedLocalOnly { .. }));
+        assert_ne!(verdict, CiVerdict::Merge);
+    }
+
+    /// Fail-soft: gh spawned but emitted a blob carrying no recognizable status
+    /// token — parses to Unknown and degrades rather than guessing `Merge`.
+    #[test]
+    fn fetch_and_decide_unrecognized_output_degrades() {
+        let run = |_argv: &[&str]| Some((false, "no recognizable checks here".to_string()));
+        let verdict = fetch_and_decide(run, &["pr", "checks", "1"]);
+        assert!(matches!(verdict, CiVerdict::DegradedLocalOnly { .. }));
+        assert_ne!(verdict, CiVerdict::Merge);
+    }
+
+    /// `should_merge` is true for exactly one verdict.
+    #[test]
+    fn should_merge_only_for_merge() {
+        assert!(should_merge(&CiVerdict::Merge));
+        assert!(!should_merge(&CiVerdict::Wait));
+        assert!(!should_merge(&CiVerdict::Reenter));
+        assert!(!should_merge(&CiVerdict::DegradedLocalOnly {
+            reason: "x".to_string()
+        }));
+    }
+
+    /// The merge gate fires the `on_merge` callback ONLY on the green path.
+    /// A green stub triggers exactly one merge; every non-green stub triggers
+    /// zero. This is the executable proof that "Merge 以外では merge 経路に入らない".
+    #[test]
+    fn poll_and_maybe_merge_fires_only_on_green() {
+        use std::cell::Cell;
+
+        // Green ⇒ exactly one merge.
+        let merged = Cell::new(0u32);
+        let verdict = poll_and_maybe_merge(
+            |_| Some((true, JSON_ALL_SUCCESS.to_string())),
+            &["pr", "checks", "1"],
+            || merged.set(merged.get() + 1),
+        );
+        assert_eq!(verdict, CiVerdict::Merge);
+        assert_eq!(merged.get(), 1, "green must trigger exactly one merge");
+
+        // Every non-green outcome ⇒ zero merges.
+        for run_out in [
+            Some((false, JSON_ONE_FAILURE.to_string())), // Reenter
+            Some((false, JSON_ONE_PENDING.to_string())), // Wait
+            Some((false, "unparsable".to_string())),     // DegradedLocalOnly (Unknown)
+            None,                                        // DegradedLocalOnly (gh absent)
+        ] {
+            let merged = Cell::new(0u32);
+            let verdict = poll_and_maybe_merge(
+                |_| run_out.clone(),
+                &["pr", "checks", "1"],
+                || merged.set(merged.get() + 1),
+            );
+            assert_ne!(verdict, CiVerdict::Merge);
+            assert_eq!(
+                merged.get(),
+                0,
+                "non-green verdict {verdict:?} must NOT enter the merge path"
+            );
         }
     }
 }

@@ -72,6 +72,12 @@ pub struct Claim {
     pub claimed_at: i64,
     /// Last liveness refresh (unix seconds). Bumped on every (re)claim/heartbeat.
     pub heartbeat_at: i64,
+    /// Human-readable task title, for inspection / the execution-state view. Only
+    /// task-level claims carry it; file-level claims leave it `None`. Kept optional
+    /// (and skipped when absent) so existing file-claim JSON stays byte-identical
+    /// and old registries without the field still load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// A file that could not be claimed because a live holder from another run owns
@@ -94,8 +100,24 @@ pub struct ClaimOutcome {
     pub skipped: Vec<Skipped>,
 }
 
-/// The on-disk registry: file path/glob -> its live holder.
-pub type Registry = BTreeMap<String, Claim>;
+/// The on-disk registry: two parallel occupancy tables sharing one lock and one
+/// RMW cycle.
+///
+/// - `files`: file path/glob -> its live holder (the original PDO collision guard).
+///   Flattened to the top level so a pre-existing `claims.json` written as a bare
+///   `{ "<path>": {..} }` map still deserializes here unchanged (backward compat).
+/// - `task_claims`: task hashkey -> its live holder. Hashkeys are opaque strings
+///   supplied by callers (computed elsewhere); this module never derives them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Registry {
+    /// File path/glob -> live holder. Flattened for backward-compatible on-disk
+    /// layout with the original bare-map format.
+    #[serde(flatten)]
+    pub files: BTreeMap<String, Claim>,
+    /// Task hashkey -> live holder. Absent in old registries, so defaulted.
+    #[serde(default)]
+    pub task_claims: BTreeMap<String, Claim>,
+}
 
 /// `<state_dir>/<project-key>/claims.json` — beside the run-state files, so it is
 /// per-project and unrelated projects never share a registry.
@@ -105,6 +127,16 @@ fn registry_path(cfg: &Config, cwd: &Path) -> PathBuf {
         .join("claims.json")
 }
 
+/// `<state_dir>/<project-key>/execution-state.json` — the joined "who is running
+/// what" view, written beside `claims.json`.
+// Wired into the CLI by the follow-up task; used by tests today.
+#[allow(dead_code)]
+fn execution_state_path(cfg: &Config, cwd: &Path) -> PathBuf {
+    cfg.state_dir
+        .join(project_key(&repo_root(cwd)))
+        .join("execution-state.json")
+}
+
 /// Fail-soft load: a missing or corrupt registry is treated as empty rather than
 /// breaking the caller. (Corruption loses others' claims, but proceeding is safer
 /// than aborting a state transition — the worst case degrades to today's
@@ -112,16 +144,17 @@ fn registry_path(cfg: &Config, cwd: &Path) -> PathBuf {
 fn load(path: &Path) -> Registry {
     match std::fs::read_to_string(path) {
         Ok(txt) => serde_json::from_str(&txt).unwrap_or_default(),
-        Err(_) => Registry::new(),
+        Err(_) => Registry::default(),
     }
 }
 
-/// Atomic write (temp + rename), mirroring `RunState::save`.
-fn save(path: &Path, reg: &Registry) -> Result<()> {
+/// Atomic write (temp + rename), mirroring `RunState::save`. Generic so it serves
+/// both the registry and the derived execution-state view.
+fn save<T: Serialize>(path: &Path, val: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(reg)?;
+    let json = serde_json::to_string_pretty(val)?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, &json)?;
     std::fs::rename(&tmp, path)?;
@@ -145,7 +178,8 @@ fn is_stale(c: &Claim, now: i64, ttl: i64) -> bool {
 }
 
 fn reap(reg: &mut Registry, now: i64, ttl: i64) {
-    reg.retain(|_, c| !is_stale(c, now, ttl));
+    reg.files.retain(|_, c| !is_stale(c, now, ttl));
+    reg.task_claims.retain(|_, c| !is_stale(c, now, ttl));
 }
 
 fn ttl_secs(cfg: &Config) -> i64 {
@@ -176,6 +210,7 @@ pub fn claim_files(
         // Does any *other* run hold an overlapping claim? Clone the holder out so
         // the immutable borrow ends before we mutate `reg` below.
         let conflict = reg
+            .files
             .iter()
             .find(|(k, c)| {
                 c.run_id != run_id
@@ -195,8 +230,8 @@ pub fn claim_files(
 
         // Free, or already ours: (re)claim and refresh the heartbeat. Preserve the
         // original claimed_at if we already held this file.
-        let claimed_at = reg.get(f).map(|c| c.claimed_at).unwrap_or(now);
-        reg.insert(
+        let claimed_at = reg.files.get(f).map(|c| c.claimed_at).unwrap_or(now);
+        reg.files.insert(
             f.clone(),
             Claim {
                 run_id: run_id.to_string(),
@@ -204,6 +239,7 @@ pub fn claim_files(
                 pid: std::process::id(),
                 claimed_at,
                 heartbeat_at: now,
+                title: None,
             },
         );
         outcome.claimed.push(f.clone());
@@ -212,15 +248,80 @@ pub fn claim_files(
     Ok(outcome)
 }
 
-/// Release every file held by `run_id` (call on run completion / gate cleanup).
-/// Returns the number of files released.
+/// Claim `hashkeys` (opaque per-task identities computed by the caller) for
+/// `run_id`, hard-skipping any already held live by a *different* run. Symmetric to
+/// [`claim_files`] but keyed by exact hashkey rather than glob-aware file overlap,
+/// and running in the SAME reserved-key lock / RMW cycle. Reaps stale claims first.
+/// `title` is stored for the execution-state view; when `None` on a re-claim the
+/// previously recorded title is preserved. Returns the split of claimed vs skipped
+/// hashkeys (in [`ClaimOutcome`], where `Skipped::file` carries the hashkey).
+// Wired into the CLI by the follow-up task.
+#[allow(dead_code)]
+pub fn claim_tasks(
+    cfg: &Config,
+    cwd: &Path,
+    hashkeys: &[String],
+    run_id: &str,
+    session_id: Option<&str>,
+    now: i64,
+    title: Option<&str>,
+) -> Result<ClaimOutcome> {
+    let ttl = ttl_secs(cfg);
+    let path = registry_path(cfg, cwd);
+    let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
+    let mut reg = load(&path);
+    reap(&mut reg, now, ttl);
+
+    let mut outcome = ClaimOutcome::default();
+    for hk in hashkeys {
+        // After reaping, any remaining holder is live. A holder from another run is
+        // a hard skip; our own is a refresh.
+        if let Some(holder) = reg.task_claims.get(hk) {
+            if holder.run_id != run_id {
+                outcome.skipped.push(Skipped {
+                    file: hk.clone(),
+                    holder_run: holder.run_id.clone(),
+                    holder_pid: holder.pid,
+                    holder_session: holder.session_id.clone(),
+                });
+                continue;
+            }
+        }
+
+        // Free, or already ours: (re)claim and refresh. Preserve the original
+        // claimed_at and any prior title when the caller passes none.
+        let (claimed_at, prior_title) = reg
+            .task_claims
+            .get(hk)
+            .map(|c| (c.claimed_at, c.title.clone()))
+            .unwrap_or((now, None));
+        reg.task_claims.insert(
+            hk.clone(),
+            Claim {
+                run_id: run_id.to_string(),
+                session_id: session_id.map(str::to_string),
+                pid: std::process::id(),
+                claimed_at,
+                heartbeat_at: now,
+                title: title.map(str::to_string).or(prior_title),
+            },
+        );
+        outcome.claimed.push(hk.clone());
+    }
+    save(&path, &reg)?;
+    Ok(outcome)
+}
+
+/// Release every claim (files AND tasks) held by `run_id` (call on run completion
+/// / gate cleanup). Returns the total number of claims released.
 pub fn release_run(cfg: &Config, cwd: &Path, run_id: &str) -> Result<usize> {
     let path = registry_path(cfg, cwd);
     let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
     let mut reg = load(&path);
-    let before = reg.len();
-    reg.retain(|_, c| c.run_id != run_id);
-    let removed = before - reg.len();
+    let before = reg.files.len() + reg.task_claims.len();
+    reg.files.retain(|_, c| c.run_id != run_id);
+    reg.task_claims.retain(|_, c| c.run_id != run_id);
+    let removed = before - reg.files.len() - reg.task_claims.len();
     save(&path, &reg)?;
     Ok(removed)
 }
@@ -231,9 +332,26 @@ pub fn release_files(cfg: &Config, cwd: &Path, run_id: &str, files: &[String]) -
     let path = registry_path(cfg, cwd);
     let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
     let mut reg = load(&path);
-    let before = reg.len();
-    reg.retain(|k, c| !(c.run_id == run_id && files.contains(k)));
-    let removed = before - reg.len();
+    let before = reg.files.len();
+    reg.files
+        .retain(|k, c| !(c.run_id == run_id && files.contains(k)));
+    let removed = before - reg.files.len();
+    save(&path, &reg)?;
+    Ok(removed)
+}
+
+/// Release specific task `hashkeys` from the task-claim table (call when a task
+/// reaches a terminal status). Removes the entries regardless of which run holds
+/// them — the caller owns hashkey identity. Returns the count removed.
+// Wired into the CLI by the follow-up task.
+#[allow(dead_code)]
+pub fn release_tasks(cfg: &Config, cwd: &Path, hashkeys: &[String]) -> Result<usize> {
+    let path = registry_path(cfg, cwd);
+    let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
+    let mut reg = load(&path);
+    let before = reg.task_claims.len();
+    reg.task_claims.retain(|k, _| !hashkeys.contains(k));
+    let removed = before - reg.task_claims.len();
     save(&path, &reg)?;
     Ok(removed)
 }
@@ -248,7 +366,7 @@ pub fn heartbeat(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> Result<usi
     let mut reg = load(&path);
     reap(&mut reg, now, ttl);
     let mut n = 0;
-    for c in reg.values_mut() {
+    for c in reg.files.values_mut().chain(reg.task_claims.values_mut()) {
         if c.run_id == run_id {
             c.heartbeat_at = now;
             n += 1;
@@ -268,6 +386,138 @@ pub fn active_claims(cfg: &Config, cwd: &Path, now: i64) -> Result<Registry> {
     reap(&mut reg, now, ttl);
     save(&path, &reg)?;
     Ok(reg)
+}
+
+/// Who holds a task claim — the observability slice of a [`Claim`] for the
+/// execution-state view.
+#[allow(dead_code)] // consumed by the CLI wiring in the follow-up task
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimedBy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub run_id: String,
+    pub heartbeat_at: i64,
+}
+
+/// One row of the execution-state view: a live task claim joined against the
+/// project backlog. `backlog_id`/`status`/`project` are `None` when the backlog is
+/// unavailable or the claim's title matches no pending task (fail-soft join).
+#[allow(dead_code)] // consumed by the CLI wiring in the follow-up task
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionEntry {
+    pub hashkey: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backlog_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    pub claimed_by: ClaimedBy,
+}
+
+/// Coerce a backlog JSON `id` (string or number) into a display string.
+#[allow(dead_code)]
+fn json_id(v: Option<&serde_json::Value>) -> Option<String> {
+    match v {
+        Some(serde_json::Value::String(s)) => Some(s.clone()),
+        Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// Shell out to `backlog list --status pending --json` and return the pending
+/// tasks as a list of JSON objects. Fail-soft: a missing binary, non-zero exit, or
+/// unparseable output yields an empty list rather than an error (never panics).
+/// Accepts either a top-level array or a `{ "tasks": [..] }` envelope.
+#[allow(dead_code)]
+fn backlog_pending() -> Vec<serde_json::Value> {
+    let output = std::process::Command::new("backlog")
+        .args(["list", "--status", "pending", "--json"])
+        .output();
+    let stdout = match output {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => return Vec::new(),
+    };
+    match serde_json::from_slice::<serde_json::Value>(&stdout) {
+        Ok(serde_json::Value::Array(a)) => a,
+        Ok(serde_json::Value::Object(mut m)) => m
+            .remove("tasks")
+            .and_then(|t| match t {
+                serde_json::Value::Array(a) => Some(a),
+                _ => None,
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// Pure JOIN of live task claims against backlog pending tasks, keyed on title
+/// (the one field a claim and a backlog row share here — hashkeys are opaque to
+/// the backlog). Split out from [`write_execution_state`] so it is testable without
+/// the external `backlog` binary. Deterministic ordering (task_claims is a BTreeMap).
+#[allow(dead_code)]
+fn join_execution_state(
+    task_claims: &BTreeMap<String, Claim>,
+    pending: &[serde_json::Value],
+) -> Vec<ExecutionEntry> {
+    // Index pending tasks by title for the join.
+    let mut by_title: BTreeMap<&str, &serde_json::Value> = BTreeMap::new();
+    for t in pending {
+        if let Some(title) = t.get("title").and_then(|v| v.as_str()) {
+            by_title.insert(title, t);
+        }
+    }
+    task_claims
+        .iter()
+        .map(|(hashkey, claim)| {
+            let matched = claim
+                .title
+                .as_deref()
+                .and_then(|t| by_title.get(t).copied());
+            ExecutionEntry {
+                hashkey: hashkey.clone(),
+                backlog_id: matched.and_then(|t| json_id(t.get("id"))),
+                title: claim.title.clone(),
+                project: matched
+                    .and_then(|t| t.get("project"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                status: matched
+                    .and_then(|t| t.get("status"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                claimed_by: ClaimedBy {
+                    session_id: claim.session_id.clone(),
+                    run_id: claim.run_id.clone(),
+                    heartbeat_at: claim.heartbeat_at,
+                },
+            }
+        })
+        .collect()
+}
+
+/// Aggregate the live task claims into `execution-state.json` (beside
+/// `claims.json`): reap stale claims, JOIN the survivors against the backlog's
+/// pending tasks, and atomically write the rows. Fail-soft on the backlog (see
+/// [`backlog_pending`]) — the claims we hold are always written, with
+/// `backlog_id`/`status`/`project` left absent when unjoinable. Returns the rows
+/// written.
+// Wired into the CLI by the follow-up task.
+#[allow(dead_code)]
+pub fn write_execution_state(cfg: &Config, cwd: &Path, now: i64) -> Result<Vec<ExecutionEntry>> {
+    let ttl = ttl_secs(cfg);
+    let path = registry_path(cfg, cwd);
+    let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
+    let mut reg = load(&path);
+    reap(&mut reg, now, ttl);
+    save(&path, &reg)?;
+
+    let pending = backlog_pending();
+    let entries = join_execution_state(&reg.task_claims, &pending);
+    save(&execution_state_path(cfg, cwd), &entries)?;
+    Ok(entries)
 }
 
 #[cfg(test)]
@@ -326,8 +576,8 @@ mod tests {
         assert!(out.skipped.is_empty());
         // Persisted and visible.
         let live = active_claims(&cfg, &tmp, 100).unwrap();
-        assert_eq!(live.len(), 1);
-        assert_eq!(live["src/a.rs"].run_id, "runA");
+        assert_eq!(live.files.len(), 1);
+        assert_eq!(live.files["src/a.rs"].run_id, "runA");
     }
 
     #[test]
@@ -342,7 +592,7 @@ mod tests {
         assert_eq!(out.skipped[0].holder_run, "runA");
         // The file is still owned by runA.
         let live = active_claims(&cfg, &tmp, 102).unwrap();
-        assert_eq!(live["src/a.rs"].run_id, "runA");
+        assert_eq!(live.files["src/a.rs"].run_id, "runA");
     }
 
     #[test]
@@ -382,8 +632,8 @@ mod tests {
         let out = claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 200).unwrap();
         assert_eq!(out.claimed, vec!["src/a.rs".to_string()]);
         let live = active_claims(&cfg, &tmp, 200).unwrap();
-        assert_eq!(live["src/a.rs"].claimed_at, 100);
-        assert_eq!(live["src/a.rs"].heartbeat_at, 200);
+        assert_eq!(live.files["src/a.rs"].claimed_at, 100);
+        assert_eq!(live.files["src/a.rs"].heartbeat_at, 200);
     }
 
     #[test]
@@ -413,7 +663,7 @@ mod tests {
         .unwrap();
         let n = release_run(&cfg, &tmp, "runA").unwrap();
         assert_eq!(n, 2);
-        assert!(active_claims(&cfg, &tmp, 101).unwrap().is_empty());
+        assert!(active_claims(&cfg, &tmp, 101).unwrap().files.is_empty());
     }
 
     #[test]
@@ -423,8 +673,8 @@ mod tests {
         // A claim whose heartbeat is far in the past — the holding session died
         // without releasing. The pid is irrelevant to liveness (condukt is
         // ephemeral); staleness is decided purely by the heartbeat age.
-        let mut reg = Registry::new();
-        reg.insert(
+        let mut reg = Registry::default();
+        reg.files.insert(
             "src/a.rs".to_string(),
             Claim {
                 run_id: "ghost".into(),
@@ -432,6 +682,7 @@ mod tests {
                 pid: std::process::id(),
                 claimed_at: 0,
                 heartbeat_at: 0,
+                title: None,
             },
         );
         save(&registry_path(&cfg, &tmp), &reg).unwrap();
@@ -449,8 +700,8 @@ mod tests {
         // Hand-write a claim from a pid that is certainly not this process, but
         // with a fresh heartbeat: it must be RETAINED (pid is not a liveness
         // signal — the ephemeral-CLI reality).
-        let mut reg = Registry::new();
-        reg.insert(
+        let mut reg = Registry::default();
+        reg.files.insert(
             "src/a.rs".to_string(),
             Claim {
                 run_id: "other".into(),
@@ -458,6 +709,7 @@ mod tests {
                 pid: 424242,
                 claimed_at: 100,
                 heartbeat_at: 100,
+                title: None,
             },
         );
         save(&registry_path(&cfg, &tmp), &reg).unwrap();
@@ -492,5 +744,214 @@ mod tests {
         // Fail-soft: claim still succeeds (registry read as empty).
         let out = claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
         assert_eq!(out.claimed, vec!["src/a.rs".to_string()]);
+    }
+
+    // ---- task-level claims ------------------------------------------------
+
+    #[test]
+    fn task_claim_succeeds_and_persists_with_title() {
+        let tmp = make_tmp_dir("task-first");
+        let cfg = make_cfg(&tmp);
+        let out = claim_tasks(
+            &cfg,
+            &tmp,
+            &files(&["hk-1"]),
+            "runA",
+            Some("sessA"),
+            100,
+            Some("do the thing"),
+        )
+        .unwrap();
+        assert_eq!(out.claimed, vec!["hk-1".to_string()]);
+        assert!(out.skipped.is_empty());
+        let live = active_claims(&cfg, &tmp, 100).unwrap();
+        assert_eq!(live.task_claims["hk-1"].run_id, "runA");
+        assert_eq!(
+            live.task_claims["hk-1"].title.as_deref(),
+            Some("do the thing")
+        );
+        // Task claims live in their own table, not the file table.
+        assert!(live.files.is_empty());
+    }
+
+    #[test]
+    fn same_task_held_by_another_live_run_is_skipped() {
+        let tmp = make_tmp_dir("task-conflict");
+        let cfg = make_cfg(&tmp);
+        claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runA", None, 100, None).unwrap();
+        let out = claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runB", None, 101, None).unwrap();
+        assert!(out.claimed.is_empty());
+        assert_eq!(out.skipped.len(), 1);
+        assert_eq!(out.skipped[0].file, "hk-1");
+        assert_eq!(out.skipped[0].holder_run, "runA");
+        // Still owned by runA.
+        let live = active_claims(&cfg, &tmp, 102).unwrap();
+        assert_eq!(live.task_claims["hk-1"].run_id, "runA");
+    }
+
+    #[test]
+    fn stale_task_claim_is_reaped_on_load_and_reclaimable() {
+        let tmp = make_tmp_dir("task-stale");
+        let cfg = make_cfg(&tmp);
+        let mut reg = Registry::default();
+        reg.task_claims.insert(
+            "hk-1".to_string(),
+            Claim {
+                run_id: "ghost".into(),
+                session_id: Some("dead".into()),
+                pid: std::process::id(),
+                claimed_at: 0,
+                heartbeat_at: 0,
+                title: Some("stale task".into()),
+            },
+        );
+        save(&registry_path(&cfg, &tmp), &reg).unwrap();
+        // now past the TTL of the heartbeat → reaped, so a live run can take it.
+        let now = cfg.stuck_ttl_secs as i64 + 1;
+        let out = claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runB", None, now, None).unwrap();
+        assert_eq!(out.claimed, vec!["hk-1".to_string()]);
+        assert!(out.skipped.is_empty());
+        let live = active_claims(&cfg, &tmp, now).unwrap();
+        assert_eq!(live.task_claims["hk-1"].run_id, "runB");
+    }
+
+    #[test]
+    fn release_tasks_frees_the_hashkey() {
+        let tmp = make_tmp_dir("task-release");
+        let cfg = make_cfg(&tmp);
+        claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runA", None, 100, None).unwrap();
+        let n = release_tasks(&cfg, &tmp, &files(&["hk-1"])).unwrap();
+        assert_eq!(n, 1);
+        // Now runB can take it.
+        let out = claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runB", None, 101, None).unwrap();
+        assert_eq!(out.claimed, vec!["hk-1".to_string()]);
+    }
+
+    #[test]
+    fn release_run_drops_both_file_and_task_claims() {
+        let tmp = make_tmp_dir("task-release-run");
+        let cfg = make_cfg(&tmp);
+        claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 100).unwrap();
+        claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runA", None, 100, None).unwrap();
+        let n = release_run(&cfg, &tmp, "runA").unwrap();
+        assert_eq!(n, 2, "one file + one task claim released");
+        let live = active_claims(&cfg, &tmp, 101).unwrap();
+        assert!(live.files.is_empty());
+        assert!(live.task_claims.is_empty());
+    }
+
+    #[test]
+    fn heartbeat_refreshes_both_file_and_task_claims() {
+        let tmp = make_tmp_dir("task-hb");
+        let cfg = make_cfg(&tmp);
+        claim_files(&cfg, &tmp, "runA", None, &files(&["src/a.rs"]), 0).unwrap();
+        claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runA", None, 0, None).unwrap();
+        let n = heartbeat(&cfg, &tmp, "runA", 500).unwrap();
+        assert_eq!(n, 2, "both the file and the task claim refreshed");
+        let live = active_claims(&cfg, &tmp, 500).unwrap();
+        assert_eq!(live.files["src/a.rs"].heartbeat_at, 500);
+        assert_eq!(live.task_claims["hk-1"].heartbeat_at, 500);
+    }
+
+    // ---- execution-state view --------------------------------------------
+
+    #[test]
+    fn execution_join_emits_status_and_claimed_by() {
+        // Pure join: a claim whose title matches a pending backlog row gets enriched.
+        let mut task_claims = BTreeMap::new();
+        task_claims.insert(
+            "hk-1".to_string(),
+            Claim {
+                run_id: "runA".into(),
+                session_id: Some("sessA".into()),
+                pid: 1,
+                claimed_at: 10,
+                heartbeat_at: 42,
+                title: Some("wire the CLI".into()),
+            },
+        );
+        // An unmatched claim (no backlog row) must still appear, with null backlog.
+        task_claims.insert(
+            "hk-2".to_string(),
+            Claim {
+                run_id: "runB".into(),
+                session_id: None,
+                pid: 2,
+                claimed_at: 10,
+                heartbeat_at: 43,
+                title: Some("orphan task".into()),
+            },
+        );
+        let pending = vec![serde_json::json!({
+            "id": 77,
+            "title": "wire the CLI",
+            "status": "pending",
+            "project": "condukt",
+        })];
+        let rows = join_execution_state(&task_claims, &pending);
+        assert_eq!(rows.len(), 2);
+        // BTreeMap order → hk-1 first.
+        let r0 = &rows[0];
+        assert_eq!(r0.hashkey, "hk-1");
+        assert_eq!(r0.backlog_id.as_deref(), Some("77"));
+        assert_eq!(r0.status.as_deref(), Some("pending"));
+        assert_eq!(r0.project.as_deref(), Some("condukt"));
+        assert_eq!(r0.title.as_deref(), Some("wire the CLI"));
+        assert_eq!(r0.claimed_by.run_id, "runA");
+        assert_eq!(r0.claimed_by.session_id.as_deref(), Some("sessA"));
+        assert_eq!(r0.claimed_by.heartbeat_at, 42);
+        // Unmatched row: claim data present, backlog fields absent.
+        let r1 = &rows[1];
+        assert_eq!(r1.hashkey, "hk-2");
+        assert!(r1.backlog_id.is_none());
+        assert!(r1.status.is_none());
+        assert_eq!(r1.claimed_by.run_id, "runB");
+    }
+
+    #[test]
+    fn write_execution_state_is_fail_soft_without_backlog() {
+        // With no `backlog` binary on PATH the join yields null backlog fields, but
+        // the held claims are still written and returned.
+        let tmp = make_tmp_dir("exec-failsoft");
+        let cfg = make_cfg(&tmp);
+        claim_tasks(
+            &cfg,
+            &tmp,
+            &files(&["hk-1"]),
+            "runA",
+            Some("sessA"),
+            100,
+            Some("a task"),
+        )
+        .unwrap();
+        let rows = write_execution_state(&cfg, &tmp, 100).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].hashkey, "hk-1");
+        assert_eq!(rows[0].claimed_by.run_id, "runA");
+        assert_eq!(rows[0].title.as_deref(), Some("a task"));
+        // The file was written beside claims.json and round-trips.
+        let path = execution_state_path(&cfg, &tmp);
+        let txt = std::fs::read_to_string(&path).unwrap();
+        let parsed: Vec<ExecutionEntry> = serde_json::from_str(&txt).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].hashkey, "hk-1");
+    }
+
+    #[test]
+    fn old_bare_map_claims_json_still_loads() {
+        // Backward compat: a pre-task-claims registry was a bare file->claim map.
+        // The flattened `files` field must absorb it.
+        let tmp = make_tmp_dir("backcompat");
+        let cfg = make_cfg(&tmp);
+        let path = registry_path(&cfg, &tmp);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            br#"{"src/a.rs":{"run_id":"runA","pid":1,"claimed_at":5,"heartbeat_at":5}}"#,
+        )
+        .unwrap();
+        let live = active_claims(&cfg, &tmp, 6).unwrap();
+        assert_eq!(live.files["src/a.rs"].run_id, "runA");
+        assert!(live.task_claims.is_empty());
     }
 }

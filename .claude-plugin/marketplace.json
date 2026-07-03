@@ -774,15 +774,17 @@
     },
     {
       "name": "daily",
-      "description": "Daily-once task runner for Claude Code: a SessionStart hook that runs a security audit (cargo deny check advisories/bans/sources/licenses) at most once per calendar day and feeds findings back into the session. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.0",
+      "description": "Daily-once task runner for Claude Code: a SessionStart hook that runs registered shell tasks ([[task]] in ~/.daily/config.toml) at most once per calendar day and injects a summary of what ran. With no tasks registered it runs a default security audit (cargo deny check). Register/inspect with `daily add` / `daily list`. Subscription-native (one hook + bundled Rust binary, no API key).",
+      "version": "0.2.0",
       "category": "security",
       "keywords": [
         "hooks",
         "session",
+        "daily",
+        "tasks",
+        "scheduler",
         "security",
         "cargo-deny",
-        "audit",
         "rust"
       ],
       "license": "MIT",

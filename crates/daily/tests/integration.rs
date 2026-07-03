@@ -75,3 +75,67 @@ fn session_start_malformed_stdin_exits_0() {
     let (code, _stdout) = run_with_home(&home, &["session-start"], "not json");
     assert_eq!(code, 0, "malformed stdin must not break the turn");
 }
+
+#[test]
+fn add_then_list_shows_registered_task() {
+    let home = temp_home("add");
+    // No config yet → list shows the built-in default security task.
+    let (code, out) = run_with_home(&home, &["list"], "");
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("security"),
+        "default should be security: {out}"
+    );
+
+    // Register a task; it must land in ~/.daily/config.toml.
+    let (code, out) = run_with_home(
+        &home,
+        &["add", "--name", "notes", "--command", "echo sync"],
+        "",
+    );
+    assert_eq!(code, 0);
+    assert!(out.contains("registered task 'notes'"), "got: {out}");
+
+    // list now shows the registered task (and no longer the default).
+    let (code, out) = run_with_home(&home, &["list"], "");
+    assert_eq!(code, 0);
+    assert!(out.contains("notes"), "got: {out}");
+    assert!(out.contains("echo sync"), "got: {out}");
+    assert!(out.contains("pending today"), "not run yet: {out}");
+}
+
+#[test]
+fn add_rejects_duplicate_name() {
+    let home = temp_home("dup");
+    let (code, _) = run_with_home(&home, &["add", "--name", "x", "--command", "true"], "");
+    assert_eq!(code, 0);
+    // Second add with the same name must fail (non-zero) — one state key per name.
+    let (code, _) = run_with_home(&home, &["add", "--name", "x", "--command", "false"], "");
+    assert_ne!(code, 0, "duplicate task name must be rejected");
+}
+
+#[test]
+fn session_start_runs_registered_task_once_per_day() {
+    let home = temp_home("once");
+    // Register a task that always succeeds and creates a marker file.
+    let marker = home.join("ran.marker");
+    let cmd = format!("touch {}", marker.display());
+    let (code, _) = run_with_home(&home, &["add", "--name", "toucher", "--command", &cmd], "");
+    assert_eq!(code, 0);
+
+    let payload = format!(
+        r#"{{"hook_event_name":"SessionStart","cwd":"{}"}}"#,
+        home.display()
+    );
+    let (code, out) = run_with_home(&home, &["session-start"], &payload);
+    assert_eq!(code, 0);
+    assert!(marker.exists(), "task should have run");
+    assert!(out.contains("toucher (ok)"), "summary injected: {out}");
+
+    // Second session same day: guard skips it → no summary, marker unchanged.
+    std::fs::remove_file(&marker).ok();
+    let (code, out) = run_with_home(&home, &["session-start"], &payload);
+    assert_eq!(code, 0);
+    assert!(!marker.exists(), "must not run twice the same day");
+    assert!(out.trim().is_empty(), "nothing ran → silent: {out}");
+}

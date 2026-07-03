@@ -56,6 +56,18 @@
   minor/major で判断）。
 - これは「今動けばいい」を禁じ、後の drift・古い版配布を根絶するための**徹底順守ルール**。
 
+**強制ゲート（2つを両方、commit 前・push 前・CI で回す）:**
+
+```sh
+python3 scripts/check-plugin-versions.py            # lockstep: 3ファイルの version が一致するか（exit 1 で drift）
+python3 scripts/check-version-bumped.py             # bump-on-change: base(既定 HEAD)から変更のある plugin が bump 済みか
+python3 scripts/check-version-bumped.py --base origin/main   # CI/push前は pushed ref と比較
+```
+
+`check-version-bumped.py` は `crates/<name>/` に差分がある plugin の plugin.json version が
+base より**厳密に上がっている**ことを要求し、上がっていなければ exit 1 で該当 plugin と変更ファイルを
+表示する（新規 plugin は base に無いので OK）。**「変更したのに未 bump」を機械的に止めるゲート**。
+
 - 正典3ファイル（バイナリ付きプラグイン）: `crates/<name>/Cargo.toml` の `[package].version` /
   `crates/<name>/.claude-plugin/plugin.json` の `version` / `.claude-plugin/marketplace.json` の
   当該エントリ `version`。**skill-only プラグイン**（Cargo.toml 無し。例: `scout`）は

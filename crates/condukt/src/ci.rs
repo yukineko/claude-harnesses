@@ -139,6 +139,54 @@ fn classify(statuses: &[String]) -> CiConclusion {
     CiConclusion::Unknown
 }
 
+/// The deterministic next action [`decide_ci_action`] maps a [`CiConclusion`]
+/// (plus whether `gh` could actually be queried) onto. This is the control-flow
+/// verdict the orchestrator acts on — no LLM, no IO, no clock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CiVerdict {
+    /// CI is still running/queued — keep polling, do not merge yet.
+    Wait,
+    /// CI reported a failure — re-enter the worker to fix it.
+    Reenter,
+    /// CI is green — safe to merge.
+    Merge,
+    /// Fail-soft: `gh` was unavailable or the CI status could not be
+    /// determined, so we fall back to local-only behavior (mirrors
+    /// [`crate::pr::PrOutcome::DegradedLocalOnly`]). Carries a human-readable
+    /// reason. Never panics, never guesses `Merge`.
+    DegradedLocalOnly { reason: String },
+}
+
+/// Deterministic state machine: map a [`CiConclusion`] onto the next
+/// [`CiVerdict`]. Pure — no IO, no clock, no panic, no LLM.
+///
+/// `gh_available` reflects whether the `gh` CI-status query could be run and
+/// captured at all (gh present + authed + command succeeded). When it is
+/// `false`, the `conclusion` is meaningless and we degrade to
+/// [`CiVerdict::DegradedLocalOnly`] regardless of its value.
+///
+/// Mapping (when `gh_available`):
+/// - [`CiConclusion::Pending`] ⇒ [`CiVerdict::Wait`]
+/// - [`CiConclusion::Failure`] ⇒ [`CiVerdict::Reenter`]
+/// - [`CiConclusion::Success`] ⇒ [`CiVerdict::Merge`]
+/// - [`CiConclusion::Unknown`] ⇒ [`CiVerdict::DegradedLocalOnly`] (conservative:
+///   we never treat an unrecognized status as a green light to merge).
+pub fn decide_ci_action(conclusion: CiConclusion, gh_available: bool) -> CiVerdict {
+    if !gh_available {
+        return CiVerdict::DegradedLocalOnly {
+            reason: "gh CI status unavailable (gh absent, unauthed, or query failed)".to_string(),
+        };
+    }
+    match conclusion {
+        CiConclusion::Pending => CiVerdict::Wait,
+        CiConclusion::Failure => CiVerdict::Reenter,
+        CiConclusion::Success => CiVerdict::Merge,
+        CiConclusion::Unknown => CiVerdict::DegradedLocalOnly {
+            reason: "CI conclusion could not be determined from gh output".to_string(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +272,82 @@ mod tests {
                     first,
                     "parse_ci_checks must be deterministic for input: {input:?}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn pending_yields_wait() {
+        assert_eq!(
+            decide_ci_action(CiConclusion::Pending, true),
+            CiVerdict::Wait
+        );
+    }
+
+    #[test]
+    fn failure_yields_reenter() {
+        assert_eq!(
+            decide_ci_action(CiConclusion::Failure, true),
+            CiVerdict::Reenter
+        );
+    }
+
+    #[test]
+    fn success_yields_merge() {
+        assert_eq!(
+            decide_ci_action(CiConclusion::Success, true),
+            CiVerdict::Merge
+        );
+    }
+
+    /// Fail-soft: gh unavailable ⇒ DegradedLocalOnly regardless of conclusion,
+    /// and never a `Merge`.
+    #[test]
+    fn gh_unavailable_yields_degraded_local_only() {
+        for conclusion in [
+            CiConclusion::Success,
+            CiConclusion::Failure,
+            CiConclusion::Pending,
+            CiConclusion::Unknown,
+        ] {
+            let verdict = decide_ci_action(conclusion, false);
+            assert!(
+                matches!(verdict, CiVerdict::DegradedLocalOnly { .. }),
+                "gh-unavailable must degrade, got {verdict:?} for {conclusion:?}"
+            );
+            assert_ne!(verdict, CiVerdict::Merge);
+        }
+    }
+
+    /// Conservative fallback: an Unknown conclusion (even with gh available)
+    /// never greenlights a merge — it degrades.
+    #[test]
+    fn unknown_conclusion_degrades_not_merges() {
+        assert!(matches!(
+            decide_ci_action(CiConclusion::Unknown, true),
+            CiVerdict::DegradedLocalOnly { .. }
+        ));
+    }
+
+    /// Determinism proof: same (conclusion, gh_available) input always maps to
+    /// the same verdict.
+    #[test]
+    fn decide_ci_action_is_deterministic() {
+        for gh_available in [true, false] {
+            for conclusion in [
+                CiConclusion::Success,
+                CiConclusion::Failure,
+                CiConclusion::Pending,
+                CiConclusion::Unknown,
+            ] {
+                let first = decide_ci_action(conclusion, gh_available);
+                for _ in 0..5 {
+                    assert_eq!(
+                        decide_ci_action(conclusion, gh_available),
+                        first,
+                        "decide_ci_action must be deterministic for ({conclusion:?}, {gh_available})"
+                    );
+                }
             }
         }
     }

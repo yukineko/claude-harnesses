@@ -108,6 +108,15 @@ enum Command {
         #[command(subcommand)]
         action: RunPolicyAction,
     },
+    /// Opt-in worker sandboxing: run a worker's build/test command through the
+    /// docker exec backend (network + filesystem + resource isolation) when
+    /// `[worker] sandbox_enabled` / `CONDUKT_WORKER_SANDBOX` is set, otherwise run
+    /// it unchanged on the host. Fail-soft: docker-absent degrades to the
+    /// `docker_unavailable` verdict (never a host fallback) and always exits 0.
+    Sandbox {
+        #[command(subcommand)]
+        action: SandboxAction,
+    },
     /// Multi-sample self-consistency: plan an opt-in fan-out, or tally N verifier
     /// verdicts for one task into a majority winner + escalate-to-opus decision.
     Consensus {
@@ -621,6 +630,28 @@ enum VerifyAction {
 }
 
 #[derive(Subcommand)]
+enum SandboxAction {
+    /// Run `--cmd` under worker sandboxing when enabled by config
+    /// (`[worker] sandbox_enabled` / `CONDUKT_WORKER_SANDBOX`): the command runs
+    /// inside `docker run --rm --network=none` with the configured image and
+    /// optional resource limits (`--memory`/`--cpus`/`--pids-limit`), the CWD
+    /// bind-mounted read-write at the same path (filesystem confined to the
+    /// worktree). When sandboxing is OFF (the default) the command runs
+    /// unchanged on the host through the same reflux verdict path — the
+    /// container path is never started. Prints the runtime verdict JSON with a
+    /// `sandboxed` marker and ALWAYS exits 0 (fail-soft; docker-absent yields
+    /// `note: "docker_unavailable"`, never a host fallback of the container run).
+    Run {
+        /// The build/test command to run (via `sh -c`). Required.
+        #[arg(long)]
+        cmd: String,
+        /// Timeout in seconds before the process is killed (fail-soft).
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+    },
+}
+
+#[derive(Subcommand)]
 enum ReplanAction {
     /// Classify a failing task's reflux facts (JSON on stdin or --file:
     /// `{"reason":...,"failed_tests":...,"diff":...,"model_tier":...,
@@ -896,7 +927,16 @@ fn run_user(cmd: Command) -> Result<()> {
                     let workdir = std::env::current_dir()
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|_| ".".to_string());
-                    verify::launch_in_container(&cmd, timeout, &image, &workdir)
+                    // `verify launch --docker` keeps the network-only argv
+                    // (no resource/fs hardening) — worker sandboxing wires its
+                    // own limits via `condukt sandbox run`.
+                    verify::launch_in_container(
+                        &cmd,
+                        timeout,
+                        &image,
+                        &workdir,
+                        &verify::SandboxLimits::default(),
+                    )
                 } else {
                     match health_url {
                         Some(url) => verify::launch_server_and_probe(&cmd, &url, startup_timeout),
@@ -956,6 +996,42 @@ fn run_user(cmd: Command) -> Result<()> {
                 let records = state::load_replan_records(&cfg, &cwd, &run);
                 let stats = state::aggregate_replan_stats(&records);
                 println!("{}", serde_json::to_string_pretty(&stats)?);
+            }
+        },
+        Command::Sandbox { action } => match action {
+            SandboxAction::Run { cmd, timeout } => {
+                let cfg = Config::load();
+                let workdir = std::env::current_dir()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| ".".to_string());
+                // never-break-a-turn: both branches return a verdict JSON and
+                // exit 0. When sandboxing is enabled we route through the docker
+                // exec backend with the configured image + resource limits;
+                // otherwise the command runs unchanged on the host (the
+                // container path is never started when disabled).
+                let mut verdict = if cfg.worker_sandbox_enabled {
+                    let limits = verify::SandboxLimits {
+                        memory: cfg.worker_sandbox_memory.clone(),
+                        cpus: cfg.worker_sandbox_cpus.clone(),
+                        pids_limit: cfg.worker_sandbox_pids_limit,
+                        read_only: false,
+                    };
+                    let image = cfg
+                        .worker_sandbox_image
+                        .clone()
+                        .unwrap_or_else(|| "alpine:latest".to_string());
+                    verify::launch_in_container(&cmd, timeout, &image, &workdir, &limits)
+                } else {
+                    verify::launch_and_reflux(&cmd, timeout)
+                };
+                // Observability: record which path was taken on the verdict.
+                if let serde_json::Value::Object(ref mut m) = verdict {
+                    m.insert(
+                        "sandboxed".to_string(),
+                        serde_json::Value::Bool(cfg.worker_sandbox_enabled),
+                    );
+                }
+                println!("{}", serde_json::to_string_pretty(&verdict)?);
             }
         },
         Command::RunPolicy { action } => match action {

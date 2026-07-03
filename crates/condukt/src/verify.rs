@@ -697,6 +697,7 @@ pub fn launch_in_container(
     timeout_secs: u64,
     image: &str,
     workdir: &str,
+    limits: &SandboxLimits,
 ) -> serde_json::Value {
     // (a) blastguard gate — validate BEFORE even checking docker availability,
     // reusing the same pure detector as the host launcher. A flagged command
@@ -722,7 +723,7 @@ pub fn launch_in_container(
 
     // (c) Spawn `docker run ...`, piping both streams so we can capture them.
     let timeout = timeout_secs.max(1);
-    let args = docker_run_args(cmd, image, workdir, &SandboxLimits::default());
+    let args = docker_run_args(cmd, image, workdir, limits);
     let mut child = match Command::new("docker")
         .args(&args)
         .stdin(Stdio::null())
@@ -1914,7 +1915,13 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
         let victim = tmp.path().join("victim");
         let payload = format!("touch {} ; rm -rf {}", sentinel.display(), victim.display());
         let workdir = tmp.path().display().to_string();
-        let v = launch_in_container(&payload, 5, "alpine:latest", &workdir);
+        let v = launch_in_container(
+            &payload,
+            5,
+            "alpine:latest",
+            &workdir,
+            &SandboxLimits::default(),
+        );
         assert_eq!(
             v["passed"],
             serde_json::json!(false),
@@ -1938,7 +1945,13 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
             // reachable — the availability-gated test below covers that path.
             return;
         }
-        let v = launch_in_container("echo hi", 5, "alpine:latest", "/tmp");
+        let v = launch_in_container(
+            "echo hi",
+            5,
+            "alpine:latest",
+            "/tmp",
+            &SandboxLimits::default(),
+        );
         assert_eq!(
             v["passed"],
             serde_json::json!(false),
@@ -1960,14 +1973,26 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path().display().to_string();
         if docker_available() {
-            let v = launch_in_container("true", 30, "alpine:latest", &workdir);
+            let v = launch_in_container(
+                "true",
+                30,
+                "alpine:latest",
+                &workdir,
+                &SandboxLimits::default(),
+            );
             assert_eq!(
                 v["passed"],
                 serde_json::json!(true),
                 "a successful container run must pass: {v}"
             );
 
-            let v2 = launch_in_container("exit 3", 30, "alpine:latest", &workdir);
+            let v2 = launch_in_container(
+                "exit 3",
+                30,
+                "alpine:latest",
+                &workdir,
+                &SandboxLimits::default(),
+            );
             assert_eq!(
                 v2["passed"],
                 serde_json::json!(false),
@@ -1982,7 +2007,13 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
                 "the container exit code must be refluxed: {v2}"
             );
         } else {
-            let v = launch_in_container("true", 5, "alpine:latest", &workdir);
+            let v = launch_in_container(
+                "true",
+                5,
+                "alpine:latest",
+                &workdir,
+                &SandboxLimits::default(),
+            );
             assert_eq!(
                 v["passed"],
                 serde_json::json!(false),

@@ -633,17 +633,31 @@ verdict を `hypothesis ... --evidence` の観測値の一部として書き戻�
 #### カスケードエスカレーション (失敗タスクのリトライ全般をここで管理)
 verifier が fail したら、**同じターン内で**以下を実行して再投入する:
 1. タスクを `failed` に set。
-2. `failure_context` を組み立てる（replan_count は、このタスクでこれまで replan した回数。初回は 0）:
+2. `failure_context` を組み立てる（replan_count は、このタスクでこれまで replan した回数。初回は 0）。
+   **`reason` / `failed_tests` / `diff` は untrusted な実行結果**（verifier の自由記述・テスト出力・
+   worker の commit message を含む git diff）なので、**手作業の文字列補間で JSON に差し込まない**
+   ——ダブルクォートやバックスラッシュを含むと JSON が破断し `condukt replan handoff` が parse error に
+   なってリトライ機構ごと停止する（実行結果経由 injection の DoS 面）。**必ず機械エスケープして組む**。
+   組み上がる JSON の形（値はすべてエスケープ済み）:
    ```json
    { "reason": "<verifier.reason>", "failed_tests": "<失敗テスト出力>", "diff": "<git diff HEAD 2>/dev/null || git show HEAD>", "replan_count": <このタスクの replan 回数> }
    ```
 3. **model を上げる前に**、`condukt replan handoff` で「同じタスク形のままモデルを上げてリトライ」か
    「replan（別アプローチ・別スコープで再分解）」か「replan 上限超過で fail-soft ユーザーエスカレーション」かを
    決定論的に判定する（判定ロジックそのものはバイナリ側 `classify_failure` + replan cap に固定されており、
-   プロンプトの語感でドリフトしない）:
+   プロンプトの語感でドリフトしない）。**untrusted な各値は変数に置き、`jq -n --arg` で機械エスケープして
+   JSON を組む**（`printf`/文字列補間で値を直接埋めない）:
    ```bash
-   REPLAN=$(printf '%s' "{\"reason\":\"<verifier.reason>\",\"failed_tests\":\"<失敗テスト出力>\",\"diff\":\"<git diff>\",\"model_tier\":\"<今回使ったモデル>\",\"done_criteria\":\"<task.done_criteria>\",\"task_summary\":\"<task.title>\",\"replan_count\":<replan_count>}" \
-     | condukt replan handoff)
+   # untrusted な実行結果は必ず変数経由（クォート済み）で渡し、jq が JSON エスケープする。
+   R="<verifier.reason>"; FT="<失敗テスト出力>"; D="$(git diff HEAD 2>/dev/null || git show HEAD)"
+   MT="<今回使ったモデル>"; DC="<task.done_criteria>"; TS="<task.title>"; RC=<replan_count>
+   PAYLOAD=$(jq -n --arg reason "$R" --arg failed_tests "$FT" --arg diff "$D" \
+                   --arg model_tier "$MT" --arg done_criteria "$DC" --arg task_summary "$TS" \
+                   --argjson replan_count "$RC" \
+       '{reason:$reason,failed_tests:$failed_tests,diff:$diff,model_tier:$model_tier,done_criteria:$done_criteria,task_summary:$task_summary,replan_count:$replan_count}')
+   # jq 不在環境向けフォールバック（python3 が JSON エスケープする。値は環境変数で渡し補間しない）:
+   #   PAYLOAD=$(R="$R" FT="$FT" D="$D" MT="$MT" DC="$DC" TS="$TS" RC="$RC" python3 -c 'import json,os; print(json.dumps({"reason":os.environ["R"],"failed_tests":os.environ["FT"],"diff":os.environ["D"],"model_tier":os.environ["MT"],"done_criteria":os.environ["DC"],"task_summary":os.environ["TS"],"replan_count":int(os.environ["RC"])}))')
+   REPLAN=$(printf '%s' "$PAYLOAD" | condukt replan handoff)
    DIRECTIVE=$(echo "$REPLAN" | jq -r '.directive')
    ```
 4. `DIRECTIVE` で 3 値分岐する:

@@ -12,6 +12,9 @@
 #   2. cargo build --release --workspace --bins
 #   3. copy target/release/<name> over every matching <name>-<os>-<arch> in the
 #      live plugin cache   (and, with --stage-repo, the committed crates/*/bin/)
+#   4. copy each plugin's hooks/ manifest config (e.g. hooks.json — NOT compiled
+#      hook binaries, which step 3 already covers) from crates/<name>/hooks/ into
+#      the matching live cache hooks/ dir, so hook config edits also take effect.
 #
 # Only the HOST platform's binaries are touched. macOS binaries must be built on
 # a Mac (see scripts/build-plugin-bin.sh for the cross/single-crate staging tool).
@@ -89,14 +92,64 @@ else
 fi
 echo
 
+# --- plugin name -> crate dir lookup (for hooks/ manifest sync below) ------
+# The cache plugin dirname (from plugin.json's "name") does not always match
+# the crates/ directory name (e.g. crates/run-book/ ships plugin "runbook"),
+# so resolve via plugin.json rather than assuming they're equal.
+plugin_names=() plugin_dirs=()
+shopt -s nullglob
+for pj in "$REPO"/crates/*/.claude-plugin/plugin.json; do
+  pname=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pj" | head -1)
+  [ -n "$pname" ] || continue
+  plugin_names+=("$pname")
+  plugin_dirs+=("$(dirname "$(dirname "$pj")")")
+done
+shopt -u nullglob
+
+cratedir_for() {
+  local want="$1" i
+  for i in "${!plugin_names[@]}"; do
+    if [ "${plugin_names[$i]}" = "$want" ]; then
+      echo "${plugin_dirs[$i]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # --- refresh ---------------------------------------------------------------
-updated_cache=0 updated_repo=0 missing="" checked=0
+updated_cache=0 updated_repo=0 updated_hooks=0 missing="" checked=0
 shopt -s nullglob
 for binfile in "$CACHE"/*/*/bin/*-"$SUF"; do
   checked=$((checked+1))
   base=$(basename "$binfile")     # e.g. condukt-<os>-<arch>
   binname=${base%-$SUF}           # e.g. condukt
   src="$REL/$binname"
+
+  # 0) hooks/ manifest config (e.g. hooks.json) — repo -> live cache. Only the
+  #    JSON manifest, not the compiled hook binary (handled below). Runs
+  #    regardless of whether the release binary was built this run, since it
+  #    doesn't depend on the build step.
+  version_dir="$(dirname "$(dirname "$binfile")")"   # $CACHE/<plugin-name>/<version>
+  plugin_name="$(basename "$(dirname "$version_dir")")"
+  if cratedir="$(cratedir_for "$plugin_name")" && [ -d "$cratedir/hooks" ]; then
+    cache_hooks_dir="$version_dir/hooks"
+    for cfg in "$cratedir"/hooks/*.json; do
+      cfgname=$(basename "$cfg")
+      target="$cache_hooks_dir/$cfgname"
+      if [ ! -f "$target" ] || ! cmp -s "$cfg" "$target"; then
+        if [ $dry = 1 ]; then
+          echo "hooks  would update $plugin_name/hooks/$cfgname"
+        else
+          mkdir -p "$cache_hooks_dir"
+          cp -f "$cfg" "$target"
+          echo "hooks  updated $plugin_name/hooks/$cfgname"
+        fi
+        updated_hooks=$((updated_hooks+1))
+      fi
+    done
+  fi
+
   if [ ! -x "$src" ]; then
     missing="$missing $binname"
     continue
@@ -128,7 +181,7 @@ done
 shopt -u nullglob
 
 echo "---"
-echo "cache bins scanned: $checked | cache updated: $updated_cache$([ $stage_repo = 1 ] && echo " | repo bin updated: $updated_repo")"
+echo "cache bins scanned: $checked | cache updated: $updated_cache$([ $stage_repo = 1 ] && echo " | repo bin updated: $updated_repo") | hooks config updated: $updated_hooks"
 if [ -n "$missing" ]; then
   echo "WARNING: no release artifact for:$missing" >&2
   echo "(these cache plugins had a $SUF binary but no matching target/release/<name> — a non-workspace or renamed bin?)" >&2

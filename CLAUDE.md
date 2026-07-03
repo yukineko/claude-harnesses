@@ -43,6 +43,19 @@
 **バグ**として扱う（「今は動く」で放置しない）。ズレると sync-plugin-assets.sh が version から
 キャッシュ dir を誤解決し、**古い版がユーザーに配布される**。
 
+### 変更したら必ず version を上げる（**禁忌ルール**）
+
+- **あるプラグインの中身（コード・hooks・skills・agents 等いずれか）を1行でも触ったら、その
+  プラグインの version を最低でも micro（patch, `x.y.Z` の Z）上げる。** 触ったのに据え置きは
+  **禁忌**。
+- version を上げるときは **必ず3ファイル同時**: `crates/<name>/Cargo.toml` の `[package].version`
+  ／ `crates/<name>/.claude-plugin/plugin.json` の `version` ／ `.claude-plugin/marketplace.json`
+  の当該エントリ `version`（skill-only プラグインは Cargo.toml が無いので後者2つ）。
+- 言い換え: **「何か変更したのに plugin version と marketplace version が変わっていない」状態を
+  commit してはならない。** 変更の大小を問わず、最低 micro を必ず上げる（意味的に大きければ
+  minor/major で判断）。
+- これは「今動けばいい」を禁じ、後の drift・古い版配布を根絶するための**徹底順守ルール**。
+
 - 正典3ファイル（バイナリ付きプラグイン）: `crates/<name>/Cargo.toml` の `[package].version` /
   `crates/<name>/.claude-plugin/plugin.json` の `version` / `.claude-plugin/marketplace.json` の
   当該エントリ `version`。**skill-only プラグイン**（Cargo.toml 無し。例: `scout`）は

@@ -8,6 +8,7 @@
 //! completion. Hooks (restore/statusline) never break a turn — they exit 0.
 
 mod checkpoint;
+mod claim;
 mod config;
 mod consensus;
 mod editgate;
@@ -263,6 +264,37 @@ enum StateAction {
         #[arg(long)]
         run: String,
     },
+    /// Claim files for a run in the cross-session registry (PDO collision guard).
+    /// With --file, claims those paths/globs; without, claims every touched_file
+    /// in the run's decomposition. Prints a ClaimOutcome JSON. Exits 1 if any file
+    /// was skipped because a live holder from another run owns it (hard skip).
+    Claim {
+        #[arg(long)]
+        run: String,
+        /// Session id of the owning Claude session (defaults to $CLAUDE_CODE_SESSION_ID).
+        #[arg(long)]
+        session: Option<String>,
+        /// Specific file/glob to claim (repeatable). Omit to claim the run's
+        /// whole decomposition footprint.
+        #[arg(long)]
+        file: Vec<String>,
+    },
+    /// Release files a run holds in the claim registry. With --file, releases just
+    /// those; without, releases every file held by the run.
+    Release {
+        #[arg(long)]
+        run: String,
+        #[arg(long)]
+        file: Vec<String>,
+    },
+    /// Refresh the heartbeat of every file a run holds (keep-alive so a live-but-
+    /// quiet session is not reaped). Prints the number of claims refreshed.
+    Heartbeat {
+        #[arg(long)]
+        run: String,
+    },
+    /// Print the live claim registry (stale entries reaped) as JSON.
+    Claims,
     /// Record completed runs' outcomes to fugu-router (the learning signal).
     /// Deterministic, idempotent: only settled, not-yet-recorded runs are emitted,
     /// and each run is marked so repeated firings (e.g. the Stop hook) never
@@ -1325,6 +1357,44 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             let mut rs = state::RunState::load(cfg, cwd, &run)?;
             let st: state::Status = status.parse()?;
 
+            // Cross-session claim guard (PDO collision): before marking a task
+            // RUNNING, claim the files it will touch. If a live holder from
+            // ANOTHER run owns any of them, hard-skip — its work is already in
+            // flight elsewhere, so we must not process it again. Non-conflicting
+            // files are still claimed so sibling tasks proceed (partial progress).
+            // Fail-soft: a task with no declared touched_files is not guarded.
+            if st == state::Status::Running {
+                let files = task_files(cfg, cwd, &run, &task);
+                if !files.is_empty() {
+                    let session = session_id_from_env();
+                    let out = claim::claim_files(
+                        cfg,
+                        cwd,
+                        &run,
+                        session.as_deref(),
+                        &files,
+                        state::now_secs(),
+                    )?;
+                    if !out.skipped.is_empty() {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "skipped": true,
+                                "run": run,
+                                "task": task,
+                                "conflicts": out.skipped,
+                            }))?
+                        );
+                        eprintln!(
+                            "condukt: task '{task}' skipped — {} file(s) already \
+                             claimed by a live run",
+                            out.skipped.len()
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
+
             // F→P oracle completion gate: before promoting a task to
             // `verified`, ask `tdd oracle` (via `oracle::check_oracle`)
             // whether it carries a valid Fail→Pass reproduction proof. This
@@ -1439,10 +1509,60 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                     );
                 }
             }
+            // Claim upkeep (PDO): release this task's files once it reaches a
+            // terminal state (its work is done — free them for other sessions),
+            // and refresh the run's remaining claims so a live-but-quiet session
+            // is not reaped mid-run. Both are fail-soft — never break the update.
+            if matches!(
+                st,
+                state::Status::Verified | state::Status::Failed | state::Status::Cancelled
+            ) {
+                let files = task_files(cfg, cwd, &run, &task);
+                if !files.is_empty() {
+                    let _ = claim::release_files(cfg, cwd, &run, &files);
+                }
+            }
+            let _ = claim::heartbeat(cfg, cwd, &run, state::now_secs());
         }
         StateAction::Show { run } => {
             let rs = state::RunState::load(cfg, cwd, &run)?;
             println!("{}", serde_json::to_string_pretty(&rs)?);
+        }
+        StateAction::Claim { run, session, file } => {
+            let files = if file.is_empty() {
+                decomposition_files(cfg, cwd, &run)
+            } else {
+                file
+            };
+            let session = session.or_else(session_id_from_env);
+            let out = claim::claim_files(
+                cfg,
+                cwd,
+                &run,
+                session.as_deref(),
+                &files,
+                state::now_secs(),
+            )?;
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            if !out.skipped.is_empty() {
+                std::process::exit(1);
+            }
+        }
+        StateAction::Release { run, file } => {
+            let n = if file.is_empty() {
+                claim::release_run(cfg, cwd, &run)?
+            } else {
+                claim::release_files(cfg, cwd, &run, &file)?
+            };
+            eprintln!("released {n} claim(s) for run '{run}'");
+        }
+        StateAction::Heartbeat { run } => {
+            let n = claim::heartbeat(cfg, cwd, &run, state::now_secs())?;
+            eprintln!("refreshed {n} claim(s) for run '{run}'");
+        }
+        StateAction::Claims => {
+            let live = claim::active_claims(cfg, cwd, state::now_secs())?;
+            println!("{}", serde_json::to_string_pretty(&live)?);
         }
         StateAction::RecordRun { run, all } => {
             record_runs(cfg, cwd, run, all)?;
@@ -1825,6 +1945,46 @@ fn checkpoint_project_dir(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| cwd.to_path_buf())
+}
+
+/// The owning Claude session id from the environment, if set — recorded on
+/// claims so `state claims` can attribute a lease to a session.
+fn session_id_from_env() -> Option<String> {
+    std::env::var("CLAUDE_CODE_SESSION_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+/// All `touched_files` across a run's decomposition (deduped). Fail-soft: an empty
+/// vec when the decomposition is missing or unparseable, so claim/release degrade
+/// to no-ops rather than erroring.
+fn decomposition_files(cfg: &Config, cwd: &Path, run_id: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(raw) = state::load_decomposition(cfg, cwd, run_id) {
+        if let Ok(dec) = serde_json::from_str::<model::Decomposition>(&raw) {
+            for t in &dec.tasks {
+                for f in &t.touched_files {
+                    if !out.contains(f) {
+                        out.push(f.clone());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The `touched_files` of one task in a run's decomposition. Fail-soft: empty when
+/// the decomposition or the task can't be found.
+fn task_files(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> Vec<String> {
+    if let Ok(raw) = state::load_decomposition(cfg, cwd, run_id) {
+        if let Ok(dec) = serde_json::from_str::<model::Decomposition>(&raw) {
+            if let Some(t) = dec.tasks.iter().find(|t| t.id == task_id) {
+                return t.touched_files.clone();
+            }
+        }
+    }
+    Vec::new()
 }
 
 /// Snapshot each task's current branch tip SHA (best-effort): tasks with no

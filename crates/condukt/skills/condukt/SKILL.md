@@ -388,6 +388,14 @@ condukt state worktree-mode-check   # exit 0 + {"single_worktree":true} → 単�
 バッチ内の各タスク `t` について:
 1. `WP=$(condukt worktree create --topic <t.id> --branch condukt/<t.id>)`
 2. `condukt state set --run $RID --task <t.id> --status running --worktree "$WP" --branch condukt/<t.id>`
+   **クロスセッション claim ゲート (PDO 衝突防止)**: `--status running` はこのタスクの `touched_files` を
+   `<state>/<project>/claims.json` に自動占有する。**別 session の live な run が同じファイルを占有中**なら、
+   この `state set` は skip JSON (`{"skipped":true,"conflicts":[...]}`) を stdout に出して **exit 1** し、
+   タスクは running にならない (＝「すでに処理中なら処理しない」)。その場合は **worktree を破棄してこのタスクを
+   スキップ**し (blocked ではない — 別 session が処理中なだけ)、残りのバッチを続ける (部分進行)。exit 0 なら
+   占有成功。占有はタスクが terminal (verified/failed/cancelled) になると自動解放され、実行中は各 `state set`
+   が heartbeat を更新するので live な session は reap されない。単発の手動占有/確認は
+   `condukt state claim/release/heartbeat/claims` を使う。
 3. `Task` で `condukt-worker` 相当を起動 (model=`t.suggested_model`)。下表のフィールドを渡す。
    **Task の `description` は必ず `"<t.id>: <task.title>"` 形式にする** (例 `"t1: add --cost flag"`)。
    これがサブエージェントの `.meta.json` に記録され、Phase 6 が `gauge subagents` で per-task コストを

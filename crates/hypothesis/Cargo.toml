@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "hypothesis"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "PDO hypothesis lifecycle management for Claude Code — create, validate, and track discovery hypotheses."
 

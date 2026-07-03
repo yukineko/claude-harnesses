@@ -579,7 +579,7 @@
     {
       "name": "session-insights",
       "description": "Per-session work metrics for Claude Code: PostToolUse + Stop hooks roll up tool calls, turns, files touched, a size class (XS–XL) and a work category per session, viewable with `session-insights report` and optionally logged as a dated note to an Obsidian vault. Inspired by Devin Session Insights. Subscription-native (two hooks + bundled Rust binary, no API key).",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -752,7 +752,7 @@
     {
       "name": "hypothesis",
       "description": "PDO hypothesis lifecycle management for Claude Code: a /hypothesis skill plus create/validate/list/reject subcommands and a SessionStart hook to create, validate, and track discovery hypotheses aligned with compass goals. Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "planning",
       "keywords": [
         "pdo",

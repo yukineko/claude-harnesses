@@ -14,6 +14,14 @@
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/condukt state record-run --all", "timeout": 15 }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/condukt editgate", "timeout": 15 }
+        ]
+      }
     ]
   }
 }

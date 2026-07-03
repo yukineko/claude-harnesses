@@ -1,0 +1,72 @@
+# claude-harnesses — リポジトリ指針
+
+`yukineko` の Claude Code ハーネス一家を単一ソースで管理する Cargo ワークスペース・モノレポ。
+各 `crates/<name>/` は Rust クレートかつ Claude Code プラグイン（`.claude-plugin/plugin.json` +
+`hooks/` + 同梱 `bin/` + `skills/`）。共通基盤は `crates/harness-core`（ビルド時ライブラリ。各
+プラグインバイナリに静的に焼き込まれる）。
+
+## context 読み込み戦略（重要 — 盲目的に crate を探索しない）
+
+このリポジトリは 39 クレートある。全体を毎回読むと context を浪費するので、**必要な層だけを
+オンデマンドで**読む:
+
+1. **まず [`docs/GLOSSARY.md`](docs/GLOSSARY.md) を読む** — 全クレートの一言早見表＋頻出ドメイン用語
+   （harness / hook / SKILL / worktree / gate / source↔executor / PDO / HOTL / autonomy gate /
+   fail-soft など）。「どの crate が何をするか」はここで解決する。1 枚（約 80 行）で全体像がつかめる。
+2. **特定 crate を触るときだけ** その `crates/<name>/README.ja.md`（詳細）と `src/` を読む。
+   GLOSSARY で当たりをつけてから深掘りする。
+3. 横断テーマは `docs/` の該当ファイルへ（下記「さらに読む」）。
+4. **重い探索・横断検索は sub-agent 経由**にして main context を汚さない。
+
+## ビルド / テスト / ゲート
+
+- ツールチェーンは **rustup 経由**。cargo コマンドの前に `. "$HOME/.cargo/env"` を通す。
+- テストはクレート単位: `cargo test -p <crate>`。
+- CI ゲートは **fmt + clippy を強制**する。コミット前に `cargo fmt` と
+  `cargo clippy -p <crate> --all-targets` を green にする。
+
+## プラグインを改修したときの反映（忘れやすい）
+
+`crates/<name>/` が唯一の正典。`/plugin install` はここを
+`~/.claude/plugins/cache/<owner>/<name>/<version>/` に**プレーンコピー**する（git 外）。稼働中の
+ハーネスはキャッシュ側を読むので、**repo をビルドしただけでは何も反映されない**:
+
+- バイナリを反映: `scripts/rebuild-plugins.sh`（`--no-clean` で増分）— target のバイナリを live
+  キャッシュへ swap する。
+- テキスト資産（skills/agents/hooks）を反映: `crates/<name>/scripts/sync-plugin-assets.sh`
+  （`--check` で drift 検出）。
+- **キャッシュを手編集しない**（git 外で黙って乖離する）。必ず repo を編集 → 上記で同期。
+
+## バージョン整合（**絶対厳守** — 「今動けばいい」は後で壊れる）
+
+各プラグインの version は **3つの正典で常に lockstep** でなければならない。片方だけ上げた状態は
+**バグ**として扱う（「今は動く」で放置しない）。ズレると sync-plugin-assets.sh が version から
+キャッシュ dir を誤解決し、**古い版がユーザーに配布される**。
+
+- 正典3ファイル（バイナリ付きプラグイン）: `crates/<name>/Cargo.toml` の `[package].version` /
+  `crates/<name>/.claude-plugin/plugin.json` の `version` / `.claude-plugin/marketplace.json` の
+  当該エントリ `version`。**skill-only プラグイン**（Cargo.toml 無し。例: `scout`）は
+  plugin.json + marketplace.json の2つ。
+- 正典の向き: **`Cargo.toml == plugin.json` が真**。`marketplace.json` は取り残されやすい（laggard）。
+  version を上げるときは **必ず3ファイル同時**に上げる。marketplace.json だけ手で上げ忘れない。
+- **すべてのタイミングで徹底チェック**（version を触る commit、rebuild 前、push 前）。
+  自動チェッカで機械的に確認する:
+
+  ```sh
+  python3 scripts/check-plugin-versions.py   # exit 0 = 全整合 / exit 1 = drift（該当プラグインを表示）
+  ```
+
+- **rebuild は version を上げない**（別工程）。`rebuild-plugins.sh` は正典の version をそのまま
+  コンパイルして live cache へ swap するだけ。version bump は 3ファイル編集という別の意図的操作。
+- **cache の version dir が古い**（例: source は 0.7.0 だが `cache/.../<plugin>/0.6.0/` のまま）のは
+  `/plugin update`（ユーザー UI 操作）未実行が原因。rebuild-plugins.sh は既存 dir にバイナリを
+  swap するのでコードは動くが、正式ロールアウトは `/plugin update` → rebuild → sync-plugin-assets.sh
+  の順。
+
+## さらに読む（docs/）
+
+- `docs/GLOSSARY.md` — クレート・用語早見表（**最初に読む**）
+- `docs/OVERVIEW.md` / `docs/USAGE.md` — 全体像と使い方
+- `docs/context-optimization.md` / `docs/context-optimization-flow.md` — context 節約の設計
+- `docs/plugin-dependency-graph.md` / `docs/plugin-activation-scopes.md` — プラグイン間依存・起動スコープ
+- `docs/AGENTIC-CODING-GUIDE.md` — エージェント実装ガイド

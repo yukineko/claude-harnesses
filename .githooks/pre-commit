@@ -1,0 +1,43 @@
+#!/bin/sh
+# Versioned pre-commit hook. Enable once per clone with:
+#
+#     git config core.hooksPath .githooks
+#
+# This is the FAST, ADVISORY layer: it runs injectguard (the prompt-asset
+# injection scanner) locally before a commit lands, so a planted concealment /
+# egress instruction is caught at the moment of introduction — cheapest to fix.
+# It is intentionally bypassable (`git commit --no-verify`); the enforced,
+# non-bypassable copy of this check is the `injectguard` CI job, which blocks
+# merge regardless of local hook setup. The binary-reproducibility gate is
+# CI-only (it rebuilds from source — too slow for a pre-commit hook).
+#
+# The hook never blocks on infrastructure problems: a missing python or scanner
+# fails soft (warn + allow), so it degrades to the CI gate rather than wedging
+# local commits.
+
+set -u
+
+REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+SCANNER="$REPO/scripts/check-prompt-injection.py"
+
+[ -f "$SCANNER" ] || exit 0
+command -v python3 >/dev/null 2>&1 || {
+    echo "injectguard: python3 not found; skipping local scan (CI still enforces)" >&2
+    exit 0
+}
+
+if python3 "$SCANNER"; then
+    exit 0
+fi
+
+cat >&2 <<'EOF'
+
+injectguard: a suspicious instruction was found in a committed prompt asset
+(see file:line above). If this is a real planted injection, remove it. If it is
+legitimate defensive text, frame it under a prompt-injection / untrusted heading
+or add a defense marker nearby so the scanner recognises it as data, not attack.
+
+To commit anyway (not recommended — the injectguard CI job will still block the
+merge): git commit --no-verify
+EOF
+exit 1

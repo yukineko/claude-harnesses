@@ -1,0 +1,56 @@
+name: injectguard
+
+# Prompt-injection gate for the committed prompt assets. The harness feeds skill
+# bodies, sub-agent definitions, hook manifests, CLAUDE.md, the compass charter
+# and docs straight into an agent's prompt, so a concealment / verification-
+# bypass / egress instruction planted in any of them would be read as an
+# instruction, not as data. This makes the scanner a merge-blocking check. The
+# local pre-commit hook (.githooks/pre-commit) is the fast advisory layer; this
+# CI job is the enforced, non-bypassable one. Self-contained stdlib Python.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/*/skills/**'
+      - 'crates/*/agents/*.md'
+      - 'crates/*/hooks/hooks.json'
+      - 'CLAUDE.md'
+      - '.compass/**'
+      - 'docs/**'
+      - '.claude/**'
+      - 'scripts/check-prompt-injection.py'
+      - 'scripts/test_check_prompt_injection.py'
+      - '.github/workflows/injectguard.yml'
+  pull_request:
+    paths:
+      - 'crates/*/skills/**'
+      - 'crates/*/agents/*.md'
+      - 'crates/*/hooks/hooks.json'
+      - 'CLAUDE.md'
+      - '.compass/**'
+      - 'docs/**'
+      - '.claude/**'
+      - 'scripts/check-prompt-injection.py'
+      - 'scripts/test_check_prompt_injection.py'
+      - '.github/workflows/injectguard.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: injectguard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Unit-test the scanner
+        run: python3 scripts/test_check_prompt_injection.py
+      - name: Scan prompt assets for planted injection
+        run: python3 scripts/check-prompt-injection.py

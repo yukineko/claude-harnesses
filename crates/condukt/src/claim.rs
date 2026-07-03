@@ -29,8 +29,10 @@
 //!   batch proceeds (partial progress).
 //! - **Heartbeat**: a session refreshes `heartbeat_at` while it works (the "keep
 //!   writing to a file" part), so a live-but-quiet holder is not reaped.
-//! - **Stale reap**: a claim whose owner pid is gone, or whose heartbeat is older
-//!   than the stuck-TTL, is reaped so a dead session never blocks others forever.
+//! - **Stale reap**: a claim whose heartbeat is older than the stuck-TTL is
+//!   reaped so a dead session never blocks others forever. Liveness is anchored
+//!   to the heartbeat, NOT the recorded pid — the condukt CLI is ephemeral, so a
+//!   pid check would read every claim as dead on the next invocation.
 //!
 //! # Concurrency & safety
 //!

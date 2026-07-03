@@ -58,7 +58,46 @@ The deterministic "ran today?" logic lives in the shared
 
 | Hook | Event | What it does |
 |---|---|---|
-| **`daily session-start`** | `SessionStart` (startup/resume/clear) | for each registered task not yet run today, runs it, stamps `mark_done()`, and injects a summary of what ran. Always exits 0. |
+| **`daily session-start`** | `SessionStart` (startup/resume/clear) | if no driver is working, for each registered task not yet run today, runs it, stamps `mark_done()`, records it to the report, and injects a summary. Always exits 0. |
+
+## Don't-interfere-while-working gate
+
+`daily` should run maintenance during downtime, not while you're mid-task. Before
+running anything, the hook checks whether a `/flow` or `/backlog` **driver is actively
+holding the backlog lock** (via `backlog lock status`):
+
+- **A live driver holds the lock** → skip silently. Tasks stay `pending today` and run at
+  the next session that starts while no driver is working.
+- **Lock is free, or held by a dead (stale) process** → run normally (a crashed driver
+  never wedges `daily`).
+- **`backlog` isn't installed** → fail-open: no driver framework means no driver, so run.
+
+Set `skip_when_driver_active = false` to always run regardless.
+
+## A failed task still counts as "ran"
+
+Each task's daily gate is stamped **after it runs, regardless of exit code** — a failed
+task counts as "ran today" and will not retry until tomorrow. The failure isn't lost: it
+is recorded in the report (and surfaced in the session summary) instead of blocking or
+looping.
+
+## Report
+
+Every task run is appended as one JSON line to `~/.daily/reports.jsonl`
+(`{date, at, task, status, code, detail}`, `status` ∈ `ok`/`fail`/`error`). Inspect it
+with `daily report`:
+
+```sh
+daily report                 # today's runs
+daily report --date 2026-07-01
+daily report --last 20       # the 20 most recent entries across all days
+```
+
+```
+daily report — 2026-07-03
+  ✓ security         [10:31:04] ok
+  ✗ deploy-check     [10:31:05] fail exit 1: error[…]: advisory …
+```
 
 ## Configuration
 
@@ -66,7 +105,8 @@ The deterministic "ran today?" logic lives in the shared
 security task):
 
 ```toml
-enabled = true            # set to false to disable all daily tasks
+enabled = true                   # set to false to disable all daily tasks
+skip_when_driver_active = true   # skip while a /flow or /backlog driver holds the lock (default true)
 
 [[task]]
 name = "security"         # unique name; also the once-per-day state key
@@ -102,8 +142,9 @@ a duplicate name.
 
 | Subcommand | Purpose |
 |---|---|
-| `daily session-start` | SessionStart hook: run each registered task not yet run today |
+| `daily session-start` | SessionStart hook: run each registered task not yet run today (skips if a driver is working) |
 | `daily list` | show registered tasks + whether each already ran today |
+| `daily report [--date <d>] [--last <n>]` | show the results report of past runs (today by default) |
 | `daily add --name <n> --command <c> [--dir <d>]` | register a new daily task in `~/.daily/config.toml` |
 | `daily install` | (not yet implemented) — add the hook to `~/.claude/settings.json` manually |
 

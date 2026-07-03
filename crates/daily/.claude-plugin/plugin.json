@@ -1,7 +1,7 @@
 {
   "name": "daily",
-  "version": "0.2.0",
-  "description": "Daily-once task runner for Claude Code: a SessionStart hook that runs registered shell tasks ([[task]] in ~/.daily/config.toml) at most once per calendar day and injects a summary of what ran. With no tasks registered it runs a default security audit (cargo deny check). Register/inspect tasks with `daily add` / `daily list`; set enabled=false to disable. Subscription-native (one hook + bundled Rust binary, no API key).",
+  "version": "0.3.0",
+  "description": "Daily-once task runner for Claude Code: a SessionStart hook that runs registered shell tasks ([[task]] in ~/.daily/config.toml) at most once per calendar day and injects a summary of what ran. Skips while a /flow or /backlog driver is working (backlog lock), records each run to a JSONL report, and a failed task still counts as run (no retry until tomorrow). With no tasks registered it runs a default security audit (cargo deny check). Register/inspect with `daily add` / `daily list` / `daily report`; set enabled=false to disable. Subscription-native (one hook + bundled Rust binary, no API key).",
   "author": { "name": "yukineko" },
-  "keywords": ["hooks", "session", "daily", "tasks", "scheduler", "security", "cargo-deny", "rust"]
+  "keywords": ["hooks", "session", "daily", "tasks", "scheduler", "report", "security", "cargo-deny", "rust"]
 }

@@ -114,9 +114,19 @@ fn add_rejects_duplicate_name() {
     assert_ne!(code, 0, "duplicate task name must be rejected");
 }
 
+/// Write a `~/.daily/config.toml` under `home` that disables the driver-skip
+/// gate, so session-start tests run tasks deterministically regardless of any
+/// ambient backlog lock on the test host.
+fn write_no_driver_skip_config(home: &Path) {
+    let dir = home.join(".daily");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.toml"), "skip_when_driver_active = false\n").unwrap();
+}
+
 #[test]
 fn session_start_runs_registered_task_once_per_day() {
     let home = temp_home("once");
+    write_no_driver_skip_config(&home);
     // Register a task that always succeeds and creates a marker file.
     let marker = home.join("ran.marker");
     let cmd = format!("touch {}", marker.display());
@@ -138,4 +148,54 @@ fn session_start_runs_registered_task_once_per_day() {
     assert_eq!(code, 0);
     assert!(!marker.exists(), "must not run twice the same day");
     assert!(out.trim().is_empty(), "nothing ran → silent: {out}");
+}
+
+#[test]
+fn session_start_writes_report_and_report_cmd_shows_it() {
+    let home = temp_home("report");
+    write_no_driver_skip_config(&home);
+    // One task that succeeds, one that fails — the report must capture both,
+    // and a failing task must still count as "ran" (not retried).
+    run_with_home(&home, &["add", "--name", "good", "--command", "true"], "");
+    run_with_home(&home, &["add", "--name", "bad", "--command", "exit 3"], "");
+
+    let payload = format!(
+        r#"{{"hook_event_name":"SessionStart","cwd":"{}"}}"#,
+        home.display()
+    );
+    let (code, _) = run_with_home(&home, &["session-start"], &payload);
+    assert_eq!(code, 0);
+
+    // The JSONL report file exists.
+    assert!(
+        home.join(".daily/reports.jsonl").exists(),
+        "report file should be written"
+    );
+
+    // `daily report` (today) shows both tasks with their status.
+    let (code, out) = run_with_home(&home, &["report"], "");
+    assert_eq!(code, 0);
+    assert!(out.contains("good"), "report shows ok task: {out}");
+    assert!(out.contains("bad"), "report shows failed task: {out}");
+    assert!(
+        out.contains("fail exit 3"),
+        "failure detail recorded: {out}"
+    );
+
+    // The failed task is marked done for the day (won't retry): a second
+    // session runs nothing.
+    let (code, out) = run_with_home(&home, &["session-start"], &payload);
+    assert_eq!(code, 0);
+    assert!(
+        out.trim().is_empty(),
+        "failed task must not retry today: {out}"
+    );
+}
+
+#[test]
+fn report_on_empty_history_is_graceful() {
+    let home = temp_home("emptyreport");
+    let (code, out) = run_with_home(&home, &["report"], "");
+    assert_eq!(code, 0);
+    assert!(out.contains("記録なし"), "got: {out}");
 }

@@ -18,7 +18,7 @@
 use clap::{Parser, Subcommand};
 use harness_core::daily::DailyGuard;
 use harness_core::hook::{read_stdin, run_hook, HookInput};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -40,6 +40,15 @@ enum Cmd {
     SessionStart,
     /// List registered tasks and whether each has already run today.
     List,
+    /// Show the results report of past daily-task runs.
+    Report {
+        /// Show a specific day (YYYY-MM-DD). Defaults to today.
+        #[arg(long)]
+        date: Option<String>,
+        /// Show the last N most recent entries instead of a single day.
+        #[arg(long)]
+        last: Option<usize>,
+    },
     /// Register a new daily task in ~/.daily/config.toml.
     Add {
         /// Unique task name (also the once-per-day state key).
@@ -61,6 +70,7 @@ fn main() {
     match cli.command {
         Cmd::SessionStart => session_start_cmd(),
         Cmd::List => list_cmd(),
+        Cmd::Report { date, last } => report_cmd(date.as_deref(), last),
         Cmd::Add { name, command, dir } => add_cmd(&name, &command, dir.as_deref()),
         Cmd::Install => {
             eprintln!("daily install: not yet implemented — add the hook manually to ~/.claude/settings.json");
@@ -86,6 +96,11 @@ struct Task {
 struct Config {
     #[serde(default = "default_true")]
     enabled: bool,
+    /// When true (default), skip the whole run if a `/flow`/`backlog` driver is
+    /// actively holding the backlog lock — daily tasks then run at the next
+    /// session that starts while no driver is working. Set false to always run.
+    #[serde(default = "default_true")]
+    skip_when_driver_active: bool,
     #[serde(default)]
     task: Vec<Task>,
 }
@@ -98,6 +113,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             enabled: true,
+            skip_when_driver_active: true,
             task: Vec::new(),
         }
     }
@@ -154,12 +170,25 @@ fn session_start_cmd() -> ! {
             return;
         }
 
+        // Don't interfere while a driver is working: if a /flow or /backlog
+        // driver actively holds the backlog lock, skip silently. Tasks stay
+        // "pending today" and run at the next session that starts idle. A dead
+        // (stale) lock does NOT count as active, so a crashed driver won't
+        // wedge daily forever.
+        if config.skip_when_driver_active && driver_active() {
+            return;
+        }
+
+        let now = chrono::Local::now();
+        let today = now.format("%Y-%m-%d").to_string();
+        let stamp = now.format("%Y-%m-%d %H:%M:%S").to_string();
         let state_dir = daily_state_dir();
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let cwd = input.cwd_or_current();
 
         // Run every task not yet run today, keyed independently. mark_done()
-        // runs regardless of outcome — one attempt per calendar day.
+        // runs regardless of outcome — one attempt per calendar day, so a
+        // FAILED task still counts as "ran today" (it won't retry until
+        // tomorrow); the failure is captured in the report instead.
         let mut results: Vec<(String, Outcome)> = Vec::new();
         for task in effective_tasks(&config) {
             let guard = DailyGuard::new(&state_dir, &task.name, &today);
@@ -168,6 +197,7 @@ fn session_start_cmd() -> ! {
             }
             let outcome = run_task(&task, &cwd);
             guard.mark_done().ok();
+            append_report(&ReportEntry::of(&today, &stamp, &task.name, &outcome));
             results.push((task.name, outcome));
         }
 
@@ -177,6 +207,36 @@ fn session_start_cmd() -> ! {
             println!("{}", json!({ "additionalContext": msg }));
         }
     })
+}
+
+// ─────────────────────────── driver detection ──────────────────────────────
+
+/// True if a `/flow` / `/backlog` driver is *actively* holding the backlog lock
+/// (soft dependency on the `backlog` binary). Fail-open: if `backlog` is absent
+/// or errors, we can't see a driver, so we report "not active" and run normally.
+fn driver_active() -> bool {
+    match Command::new("backlog").args(["lock", "status"]).output() {
+        Ok(out) if out.status.success() => {
+            driver_active_from_status(&String::from_utf8_lossy(&out.stdout))
+        }
+        _ => false,
+    }
+}
+
+/// Interpret `backlog lock status` stdout: `none` → free; a JSON object with a
+/// truthy `stale` field → dead holder (not active); any other JSON object → an
+/// active live holder.
+fn driver_active_from_status(stdout: &str) -> bool {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() || trimmed == "none" {
+        return false;
+    }
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(v) => !v.get("stale").and_then(|s| s.as_bool()).unwrap_or(false),
+        // Unparseable but non-"none" output: be conservative and treat it as a
+        // held lock (skip) rather than trampling a possibly-live driver.
+        Err(_) => true,
+    }
 }
 
 /// The result of attempting one registered task.
@@ -246,6 +306,154 @@ fn summary(results: &[(String, Outcome)]) -> Option<String> {
     let any_fail = results.iter().any(|(_, o)| !matches!(o, Outcome::Ok));
     let icon = if any_fail { "⚠️" } else { "📋" };
     Some(format!("{icon} daily: ran {}", parts.join(", ")))
+}
+
+// ─────────────────────────── report ────────────────────────────────────────
+
+/// One recorded task run, appended as a JSON line to `~/.daily/reports.jsonl`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct ReportEntry {
+    /// Calendar day the run belongs to (YYYY-MM-DD).
+    date: String,
+    /// Local timestamp of the run (YYYY-MM-DD HH:MM:SS).
+    at: String,
+    /// Task name.
+    task: String,
+    /// One of "ok" | "fail" | "error".
+    status: String,
+    /// Process exit code (present for ok/fail; absent for spawn errors).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    code: Option<i32>,
+    /// Brief detail for a failure/error (empty for ok).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    detail: String,
+}
+
+impl ReportEntry {
+    fn of(date: &str, at: &str, task: &str, outcome: &Outcome) -> Self {
+        let (status, code, detail) = match outcome {
+            Outcome::Ok => ("ok", None, String::new()),
+            Outcome::Failed { code, brief } => ("fail", *code, first_line(brief)),
+            Outcome::SpawnError(e) => ("error", None, first_line(e)),
+        };
+        ReportEntry {
+            date: date.to_string(),
+            at: at.to_string(),
+            task: task.to_string(),
+            status: status.to_string(),
+            code,
+            detail,
+        }
+    }
+
+    /// The status glyph used when rendering the report.
+    fn glyph(&self) -> &'static str {
+        match self.status.as_str() {
+            "ok" => "✓",
+            "fail" => "✗",
+            _ => "⚠",
+        }
+    }
+}
+
+fn reports_path() -> PathBuf {
+    daily_dir().join("reports.jsonl")
+}
+
+/// Append one entry as a JSON line. Fail-soft: any IO/serialize error is
+/// swallowed (a report write must never break a turn).
+fn append_report(entry: &ReportEntry) {
+    let path = reports_path();
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    let Ok(line) = serde_json::to_string(entry) else {
+        return;
+    };
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+/// Parse the JSONL report file into entries, skipping any malformed lines.
+fn parse_reports(text: &str) -> Vec<ReportEntry> {
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<ReportEntry>(l).ok())
+        .collect()
+}
+
+/// Render the report view. With `last = Some(n)`, show the n most recent
+/// entries across all days; otherwise show every entry for `date`.
+fn format_report(entries: &[ReportEntry], date: &str, last: Option<usize>) -> String {
+    let mut out = String::new();
+    match last {
+        Some(n) => {
+            let start = entries.len().saturating_sub(n);
+            let recent = &entries[start..];
+            if recent.is_empty() {
+                return "daily report — 記録なし".to_string();
+            }
+            out.push_str(&format!("daily report — 直近 {} 件\n", recent.len()));
+            for e in recent {
+                out.push_str(&render_entry_line(e, true));
+            }
+        }
+        None => {
+            let today: Vec<&ReportEntry> = entries.iter().filter(|e| e.date == date).collect();
+            if today.is_empty() {
+                return format!("daily report — {date}: 記録なし");
+            }
+            out.push_str(&format!("daily report — {date}\n"));
+            for e in today {
+                out.push_str(&render_entry_line(e, false));
+            }
+        }
+    }
+    out.trim_end().to_string()
+}
+
+/// One report line. `with_date` prefixes the day (for the cross-day --last view).
+fn render_entry_line(e: &ReportEntry, with_date: bool) -> String {
+    let status = match (e.status.as_str(), e.code) {
+        ("ok", _) => "ok".to_string(),
+        (_, Some(c)) => format!("{} exit {c}", e.status),
+        (_, None) => e.status.clone(),
+    };
+    let detail = if e.detail.is_empty() {
+        String::new()
+    } else {
+        format!(": {}", e.detail)
+    };
+    let prefix = if with_date {
+        format!("{} {}", e.date, e.at.split(' ').nth(1).unwrap_or(&e.at))
+    } else {
+        e.at.split(' ').nth(1).unwrap_or(&e.at).to_string()
+    };
+    format!(
+        "  {} {:<16} [{}] {}{}\n",
+        e.glyph(),
+        e.task,
+        prefix,
+        status,
+        detail
+    )
+}
+
+fn report_cmd(date: Option<&str>, last: Option<usize>) -> ! {
+    let text = std::fs::read_to_string(reports_path()).unwrap_or_default();
+    let entries = parse_reports(&text);
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let date = date.unwrap_or(&today);
+    println!("{}", format_report(&entries, date, last));
+    std::process::exit(0);
 }
 
 // ─────────────────────────── list / add ────────────────────────────────────
@@ -542,6 +750,121 @@ dir = \"/repo\"
     #[test]
     fn toml_escape_handles_quotes_and_backslashes() {
         assert_eq!(toml_escape(r#"a"b\c"#), r#"a\"b\\c"#);
+    }
+
+    #[test]
+    fn config_skip_when_driver_active_defaults_true() {
+        assert!(Config::default().skip_when_driver_active);
+        // Omitted in config → still defaults true.
+        let c = parse_config("[[task]]\nname = \"x\"\ncommand = \"true\"\n");
+        assert!(c.skip_when_driver_active);
+        // Explicitly disabled.
+        let c = parse_config("skip_when_driver_active = false\n");
+        assert!(!c.skip_when_driver_active);
+    }
+
+    #[test]
+    fn driver_active_reads_backlog_lock_status() {
+        // Free lock.
+        assert!(!driver_active_from_status("none"));
+        assert!(!driver_active_from_status("  none\n"));
+        assert!(!driver_active_from_status(""));
+        // A live (active) holder → JSON without a stale marker.
+        assert!(driver_active_from_status(
+            r#"{"pid":123,"session_id":"s","project":"/p"}"#
+        ));
+        // A dead (stale) holder → not active, daily may run.
+        assert!(!driver_active_from_status(
+            r#"{"pid":123,"session_id":"s","stale":true}"#
+        ));
+        // stale:false is still active.
+        assert!(driver_active_from_status(r#"{"pid":1,"stale":false}"#));
+        // Unparseable non-"none" → conservatively treated as held.
+        assert!(driver_active_from_status("garbage-but-not-none"));
+    }
+
+    #[test]
+    fn report_entry_captures_each_outcome() {
+        let ok = ReportEntry::of("2026-07-03", "2026-07-03 10:00:00", "sec", &Outcome::Ok);
+        assert_eq!(ok.status, "ok");
+        assert!(ok.detail.is_empty());
+        assert_eq!(ok.glyph(), "✓");
+
+        let fail = ReportEntry::of(
+            "2026-07-03",
+            "2026-07-03 10:00:00",
+            "sec",
+            &Outcome::Failed {
+                code: Some(2),
+                brief: "error: boom\nmore".to_string(),
+            },
+        );
+        assert_eq!(fail.status, "fail");
+        assert_eq!(fail.code, Some(2));
+        assert_eq!(fail.detail, "error: boom");
+        assert_eq!(fail.glyph(), "✗");
+
+        let err = ReportEntry::of(
+            "2026-07-03",
+            "2026-07-03 10:00:00",
+            "sec",
+            &Outcome::SpawnError("No such file".to_string()),
+        );
+        assert_eq!(err.status, "error");
+        assert_eq!(err.code, None);
+    }
+
+    #[test]
+    fn report_jsonl_round_trips() {
+        let e = ReportEntry::of("2026-07-03", "2026-07-03 10:00:00", "sec", &Outcome::Ok);
+        let line = serde_json::to_string(&e).unwrap();
+        let parsed = parse_reports(&format!("{line}\n\nnot json\n"));
+        assert_eq!(parsed.len(), 1, "malformed lines are skipped");
+        assert_eq!(parsed[0], e);
+    }
+
+    #[test]
+    fn format_report_by_day_filters_to_date() {
+        let entries = vec![
+            ReportEntry::of("2026-07-02", "2026-07-02 09:00:00", "a", &Outcome::Ok),
+            ReportEntry::of(
+                "2026-07-03",
+                "2026-07-03 10:00:00",
+                "b",
+                &Outcome::Failed {
+                    code: Some(1),
+                    brief: "nope".to_string(),
+                },
+            ),
+        ];
+        let out = format_report(&entries, "2026-07-03", None);
+        assert!(out.contains("2026-07-03"));
+        assert!(out.contains("b"));
+        assert!(out.contains("fail exit 1"));
+        assert!(!out.contains(" a "), "other day's task excluded: {out}");
+
+        // An empty day reports "記録なし".
+        let empty = format_report(&entries, "2026-07-01", None);
+        assert!(empty.contains("記録なし"));
+    }
+
+    #[test]
+    fn format_report_last_n_shows_recent_across_days() {
+        let entries: Vec<ReportEntry> = (0..5)
+            .map(|i| {
+                ReportEntry::of(
+                    "2026-07-03",
+                    &format!("2026-07-03 10:0{i}:00"),
+                    &format!("t{i}"),
+                    &Outcome::Ok,
+                )
+            })
+            .collect();
+        let out = format_report(&entries, "2026-07-03", Some(2));
+        assert!(out.contains("直近 2 件"));
+        assert!(out.contains("t4"));
+        assert!(out.contains("t3"));
+        assert!(!out.contains("t0"));
     }
 
     #[test]

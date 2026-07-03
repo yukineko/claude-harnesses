@@ -46,7 +46,37 @@
 
 | フック | イベント | 内容 |
 |---|---|---|
-| `daily session-start` | `SessionStart`（startup / resume / clear） | 有効かつ当日未実行の各登録タスクを実行し、`mark_done()` で日付を刻み、何を走らせたかの要約を注入する。常に exit 0。 |
+| `daily session-start` | `SessionStart`（startup / resume / clear） | driver が稼働していなければ、有効かつ当日未実行の各登録タスクを実行し、`mark_done()` で日付を刻み、レポートに記録し、要約を注入する。常に exit 0。 |
+
+### 作業中は邪魔しないゲート（driver-skip）
+
+`daily` は「作業していない時間（downtime）」にメンテナンスを回すためのもので、作業の最中に割り込むべきではない。そこでタスク実行の前に、`/flow` や `/backlog` の **driver が backlog ロックを生きたまま保持しているか**を `backlog lock status` で確認する。
+
+- **生きた driver がロック保持中** → 静かに skip。タスクは `pending today` のまま残り、**次に driver が居ないセッション開始時**に実行される。
+- **ロックが空 / 死んだ（stale）プロセスが保持** → 通常どおり実行（クラッシュした driver が `daily` を永久に塞がない）。
+- **`backlog` 未インストール** → fail-open: driver 基盤が無い＝driver 稼働なし＝実行する。
+
+`skip_when_driver_active = false` にすると常に実行する。
+
+### 失敗しても「実行した」扱い
+
+各タスクの日次ゲートは**実行後に exit code に関わらず刻まれる** — 失敗したタスクも「今日実行済み」となり、翌日まで再試行しない。失敗は失われず、代わりにレポート（とセッション要約）に記録される。
+
+### レポート
+
+タスク実行ごとに 1 行の JSON が `~/.daily/reports.jsonl` に追記される（`{date, at, task, status, code, detail}`、`status` ∈ `ok`/`fail`/`error`）。`daily report` で確認する。
+
+```sh
+daily report                 # 今日の実行結果
+daily report --date 2026-07-01
+daily report --last 20       # 全期間から直近 20 件
+```
+
+```
+daily report — 2026-07-03
+  ✓ security         [10:31:04] ok
+  ✗ deploy-check     [10:31:05] fail exit 1: error[…]: advisory …
+```
 
 ### タスクの登録
 
@@ -64,8 +94,9 @@ daily list     # 登録タスクと「今日実行済みか」を表示
 
 | サブコマンド | 目的 |
 |---|---|
-| `daily session-start` | SessionStart フック本体: 当日未実行の各登録タスクを実行する |
+| `daily session-start` | SessionStart フック本体: 当日未実行の各登録タスクを実行する（driver 稼働中は skip） |
 | `daily list` | 登録タスクと当日実行済みかを表示する |
+| `daily report [--date <d>] [--last <n>]` | 過去の実行結果レポートを表示する（既定は今日） |
 | `daily add --name <n> --command <c> [--dir <d>]` | `~/.daily/config.toml` に日次タスクを登録する |
 | `daily install` | （未実装）フックを `~/.claude/settings.json` に追加する。現状は手動配線が必要 |
 
@@ -84,7 +115,8 @@ daily list     # 登録タスクと「今日実行済みか」を表示
 `~/.daily/config.toml`（任意 — config が無ければ「有効＋デフォルト security タスク」として扱われる）:
 
 ```toml
-enabled = true            # false にすると全日次タスクを無効化
+enabled = true                   # false にすると全日次タスクを無効化
+skip_when_driver_active = true   # /flow・/backlog の driver がロック保持中なら skip（既定 true）
 
 [[task]]
 name = "security"         # 一意な名前（1 日 1 回の状態キーにもなる）

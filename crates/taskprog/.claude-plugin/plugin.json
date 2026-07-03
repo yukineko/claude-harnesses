@@ -1,6 +1,6 @@
 {
   "name": "taskprog",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Multi-session progress file for Claude Code. Injects .claude/progress.md at SessionStart so the agent knows what is pending; at Stop it prompts the agent to keep the file current. Enables seamless HOTL handoff across sessions.",
   "author": { "name": "yukineko" },
   "keywords": ["hooks", "progress", "session", "hotl", "handoff", "rust"]

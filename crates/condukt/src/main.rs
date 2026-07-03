@@ -295,6 +295,42 @@ enum StateAction {
     },
     /// Print the live claim registry (stale entries reaped) as JSON.
     Claims,
+    /// Claim tasks (by opaque hashkey) for a run in the cross-session task-claim
+    /// registry. Prints a ClaimOutcome JSON (Skipped::file carries the hashkey).
+    /// Exits 1 if any hashkey was skipped because a live holder from another run
+    /// owns it (hard skip — callers must not process that task).
+    ClaimTask {
+        #[arg(long)]
+        run: String,
+        /// Session id of the owning Claude session (defaults to $CLAUDE_CODE_SESSION_ID).
+        #[arg(long)]
+        session: Option<String>,
+        /// Human-readable task title, recorded for the execution-state view.
+        #[arg(long)]
+        title: Option<String>,
+        /// Opaque task hashkey to claim (repeatable, required).
+        #[arg(long)]
+        hashkey: Vec<String>,
+    },
+    /// Release task hashkeys from the task-claim registry (call when a task
+    /// reaches a terminal status). Prints the number of claims released.
+    ReleaseTask {
+        #[arg(long)]
+        run: String,
+        /// Opaque task hashkey to release (repeatable, required).
+        #[arg(long)]
+        hashkey: Vec<String>,
+    },
+    /// Exit 0 if a live claim (from any run) holds the given task hashkey, else
+    /// exit 1. Prints a small JSON `{hashkey, claimed, holder_run}` for humans,
+    /// but the exit code is the contract other tools should rely on.
+    IsClaimed {
+        #[arg(long)]
+        hashkey: String,
+    },
+    /// Join the live task-claim registry against the project backlog and write
+    /// `execution-state.json`. Prints the resulting rows as JSON.
+    ExecutionState,
     /// Record completed runs' outcomes to fugu-router (the learning signal).
     /// Deterministic, idempotent: only settled, not-yet-recorded runs are emitted,
     /// and each run is marked so repeated firings (e.g. the Stop hook) never
@@ -1563,6 +1599,49 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
         StateAction::Claims => {
             let live = claim::active_claims(cfg, cwd, state::now_secs())?;
             println!("{}", serde_json::to_string_pretty(&live)?);
+        }
+        StateAction::ClaimTask {
+            run,
+            session,
+            title,
+            hashkey,
+        } => {
+            let session = session.or_else(session_id_from_env);
+            let out = claim::claim_tasks(
+                cfg,
+                cwd,
+                &hashkey,
+                &run,
+                session.as_deref(),
+                state::now_secs(),
+                title.as_deref(),
+            )?;
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            if !out.skipped.is_empty() {
+                std::process::exit(1);
+            }
+        }
+        StateAction::ReleaseTask { run, hashkey } => {
+            let n = claim::release_tasks(cfg, cwd, &hashkey)?;
+            eprintln!("released {n} task claim(s) for run '{run}'");
+        }
+        StateAction::IsClaimed { hashkey } => {
+            let live = claim::active_claims(cfg, cwd, state::now_secs())?;
+            let holder = live.task_claims.get(&hashkey);
+            let claimed = holder.is_some();
+            let out = serde_json::json!({
+                "hashkey": hashkey,
+                "claimed": claimed,
+                "holder_run": holder.map(|c| c.run_id.clone()),
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            if !claimed {
+                std::process::exit(1);
+            }
+        }
+        StateAction::ExecutionState => {
+            let entries = claim::write_execution_state(cfg, cwd, state::now_secs())?;
+            println!("{}", serde_json::to_string_pretty(&entries)?);
         }
         StateAction::RecordRun { run, all } => {
             record_runs(cfg, cwd, run, all)?;

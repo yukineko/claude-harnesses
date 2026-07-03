@@ -591,15 +591,53 @@ pub fn launch_server_and_probe(
     }
 }
 
+/// Optional container hardening layered on top of the always-on
+/// `--network=none` network isolation. Every field means "no cap" when
+/// unset, so `SandboxLimits::default()` reproduces the legacy network-only
+/// argv byte-for-byte (backward compatible).
+#[derive(Debug, Default, Clone)]
+pub struct SandboxLimits {
+    /// `--memory` value (e.g. "512m"). None = no memory cap.
+    pub memory: Option<String>,
+    /// `--cpus` value (e.g. "1.5"). None = no cpu cap.
+    pub cpus: Option<String>,
+    /// `--pids-limit` value (e.g. 256). None = no pid cap.
+    pub pids_limit: Option<i64>,
+    /// When true, add `--read-only` (read-only container root fs). The
+    /// `-v <workdir>:<workdir>` bind mount stays read-write so the worker can
+    /// still edit/build inside its worktree — only the container root hardens.
+    pub read_only: bool,
+}
+
 /// Build the argv (excluding the leading `docker`) for running `cmd` isolated
 /// inside `image`, with `workdir` bind-mounted at the same path and no network:
-/// `run --rm --network=none -v <workdir>:<workdir> -w <workdir> <image> sh -c
-/// <cmd>`. Pure and unit-testable — no spawn.
-fn docker_run_args(cmd: &str, image: &str, workdir: &str) -> Vec<String> {
-    vec![
+/// `run --rm --network=none [hardening] -v <workdir>:<workdir> -w <workdir>
+/// <image> sh -c <cmd>`. Any `limits` flags are inserted between
+/// `--network=none` and the `-v` mount; with `SandboxLimits::default()` the
+/// result is byte-identical to the legacy network-only argv. Pure and
+/// unit-testable — no spawn.
+fn docker_run_args(cmd: &str, image: &str, workdir: &str, limits: &SandboxLimits) -> Vec<String> {
+    let mut args = vec![
         "run".to_string(),
         "--rm".to_string(),
         "--network=none".to_string(),
+    ];
+    if limits.read_only {
+        args.push("--read-only".to_string());
+    }
+    if let Some(m) = &limits.memory {
+        args.push("--memory".to_string());
+        args.push(m.clone());
+    }
+    if let Some(c) = &limits.cpus {
+        args.push("--cpus".to_string());
+        args.push(c.clone());
+    }
+    if let Some(p) = limits.pids_limit {
+        args.push("--pids-limit".to_string());
+        args.push(p.to_string());
+    }
+    args.extend([
         "-v".to_string(),
         format!("{workdir}:{workdir}"),
         "-w".to_string(),
@@ -608,7 +646,8 @@ fn docker_run_args(cmd: &str, image: &str, workdir: &str) -> Vec<String> {
         "sh".to_string(),
         "-c".to_string(),
         cmd.to_string(),
-    ]
+    ]);
+    args
 }
 
 /// True iff the `docker` CLI is present AND its daemon is reachable, checked
@@ -683,7 +722,7 @@ pub fn launch_in_container(
 
     // (c) Spawn `docker run ...`, piping both streams so we can capture them.
     let timeout = timeout_secs.max(1);
-    let args = docker_run_args(cmd, image, workdir);
+    let args = docker_run_args(cmd, image, workdir, &SandboxLimits::default());
     let mut child = match Command::new("docker")
         .args(&args)
         .stdin(Stdio::null())
@@ -1728,7 +1767,13 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
     /// (cmd, image, workdir) — pure assert, no spawn.
     #[test]
     fn docker_run_args_builds_expected_argv() {
-        let args = docker_run_args("echo hi", "alpine:latest", "/work/dir");
+        // No limits ⇒ byte-identical to the legacy network-only argv.
+        let args = docker_run_args(
+            "echo hi",
+            "alpine:latest",
+            "/work/dir",
+            &SandboxLimits::default(),
+        );
         assert_eq!(
             args,
             vec![
@@ -1745,6 +1790,116 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
                 "echo hi".to_string(),
             ],
             "docker_run_args must build the exact expected argv: {args:?}"
+        );
+    }
+
+    /// (a2) UNIT: an empty `SandboxLimits` is reported empty and yields argv
+    /// identical to the no-limits legacy form (backward-compat invariant).
+    #[test]
+    fn docker_run_args_default_limits_match_legacy() {
+        let lim = SandboxLimits::default();
+        let with = docker_run_args("x", "img", "/w", &lim);
+        // Same as a hand-built legacy argv (no hardening flags anywhere).
+        assert!(!with.iter().any(|a| a == "--memory"
+            || a == "--cpus"
+            || a == "--pids-limit"
+            || a == "--read-only"));
+        assert_eq!(with.first().map(String::as_str), Some("run"));
+        assert_eq!(with.get(2).map(String::as_str), Some("--network=none"));
+    }
+
+    /// (a3) UNIT: `--memory` only is inserted between `--network=none` and `-v`.
+    #[test]
+    fn docker_run_args_memory_only() {
+        let lim = SandboxLimits {
+            memory: Some("512m".to_string()),
+            ..Default::default()
+        };
+        let args = docker_run_args("cargo test", "rust:1", "/w", &lim);
+        let mi = args
+            .iter()
+            .position(|a| a == "--memory")
+            .expect("--memory present");
+        assert_eq!(args[mi + 1], "512m");
+        // still network-isolated, mount preserved
+        assert!(args.contains(&"--network=none".to_string()));
+        assert!(args.contains(&"/w:/w".to_string()));
+        assert!(!args
+            .iter()
+            .any(|a| a == "--cpus" || a == "--pids-limit" || a == "--read-only"));
+    }
+
+    /// (a4) UNIT: `--cpus` only.
+    #[test]
+    fn docker_run_args_cpus_only() {
+        let lim = SandboxLimits {
+            cpus: Some("1.5".to_string()),
+            ..Default::default()
+        };
+        let args = docker_run_args("x", "img", "/w", &lim);
+        let ci = args
+            .iter()
+            .position(|a| a == "--cpus")
+            .expect("--cpus present");
+        assert_eq!(args[ci + 1], "1.5");
+        assert!(!args.iter().any(|a| a == "--memory" || a == "--pids-limit"));
+    }
+
+    /// (a5) UNIT: `--pids-limit` only (numeric rendered as a string).
+    #[test]
+    fn docker_run_args_pids_only() {
+        let lim = SandboxLimits {
+            pids_limit: Some(256),
+            ..Default::default()
+        };
+        let args = docker_run_args("x", "img", "/w", &lim);
+        let pi = args
+            .iter()
+            .position(|a| a == "--pids-limit")
+            .expect("--pids-limit present");
+        assert_eq!(args[pi + 1], "256");
+    }
+
+    /// (a6) UNIT: `--read-only` flag with no value; mount stays read-write.
+    #[test]
+    fn docker_run_args_read_only_flag() {
+        let lim = SandboxLimits {
+            read_only: true,
+            ..Default::default()
+        };
+        let args = docker_run_args("x", "img", "/w", &lim);
+        assert!(args.contains(&"--read-only".to_string()));
+        // the workdir bind mount is still present and rw (no :ro suffix)
+        assert!(args.contains(&"/w:/w".to_string()));
+    }
+
+    /// (a7) UNIT: all limits together, in the documented order between
+    /// `--network=none` and `-v`.
+    #[test]
+    fn docker_run_args_all_limits_ordered() {
+        let lim = SandboxLimits {
+            memory: Some("256m".to_string()),
+            cpus: Some("2".to_string()),
+            pids_limit: Some(128),
+            read_only: true,
+        };
+        let args = docker_run_args("run it", "alpine", "/w", &lim);
+        let net = args.iter().position(|a| a == "--network=none").unwrap();
+        let vmount = args.iter().position(|a| a == "-v").unwrap();
+        for flag in ["--read-only", "--memory", "--cpus", "--pids-limit"] {
+            let idx = args
+                .iter()
+                .position(|a| a == flag)
+                .unwrap_or_else(|| panic!("{flag} present"));
+            assert!(
+                idx > net && idx < vmount,
+                "{flag} must sit between --network=none and -v"
+            );
+        }
+        // command still last three tokens
+        assert_eq!(
+            &args[args.len() - 3..],
+            &["sh".to_string(), "-c".to_string(), "run it".to_string()]
         );
     }
 

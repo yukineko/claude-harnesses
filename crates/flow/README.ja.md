@@ -35,7 +35,7 @@ LLM 単体にセッション全体を「自走」させると、課題の選定�
 
 - **盲目実行。** ゴールが陳腐・矛盾・抽象すぎる状態のままキューを流し始めると、的外れな一手を量産する。flow はループ前に compass ゲート（`compass gap`）を通し、charter が鮮明でない限り自動実行せず `/compass` での再オリエンテーションを促して停止する。
 - **source と executor の混線。** 「次に何をやるか」と「それをどう実装するか」を同じ判断に押し込むと、優先順位付けが実装の都合に引きずられる。flow は供給（compass/backlog/hypothesis）と実行（condukt）を直交させ、それぞれ独立したストアに保つ。
-- **二重ループ。** 複数セッションが同時に課題を流すと condukt run が衝突する。flow は backlog のロックを取得してクロスセッションで直列化し、別セッションが保持中なら待機・強制奪取・中止を問う。
+- **二重ループ。** 複数セッションが同時に課題を流すと condukt run が衝突する。flow は backlog のロックを取得してクロスセッションで直列化し、別セッションが保持中なら待機・強制奪取・中止を問う。さらに backlog item 単位でも `condukt state is-claimed`/`claim-task`/`release-task`/`heartbeat` を使い（`--run "flow-$CLAUDE_CODE_SESSION_ID"`）、同一タスクへの多重着手をピック時（claim-skip）と着手直前（TOCTOU ガード）の二段で防ぐ。
 - **build と validate の取り違え。** 仮説を「出荷した」だけで「検証済み」と扱うと、計測ループが閉じない。flow は出荷した仮説を `awaiting-measurement` に残し、次サイクルの measure step が観測値を添えて初めて validate/reject する（build ≠ validate）。
 - **止め時の喪失。** 連続失敗や予算超過に気づかず走り続けると無駄に消費する。flow は早期脱出条件を持ち、どの経路でもロック解放を必須にする。
 
@@ -56,10 +56,11 @@ skill `/flow` でループを起動する。
 0. 引数分岐 — 課題文があれば condukt に直行（1 件だけ実行）
 1. compass ゲート — charter が陳腐なら自動実行せず /compass を促して停止
 2. ロック取得 — backlog lock acquire（クロスセッション直列化）
-3. 実行ループ — 優先度順にピック → /condukt → 検証 → sink
+3. 実行ループ — 優先度順にピック（claim-skip ゲート）→ 着手前に claim（TOCTOU ガード）→ /condukt → 検証 → sink
        sink: backlog done / compass outcome（前進・不変・後退を記録）
              / hypothesis は出荷で awaiting-measurement、計測後に validate/reject（証拠必須）
              / fugu-router に record
+             / いずれも claim を release、ループ中は heartbeat で claim を live に保つ
 4. ロック解放 — source が尽きる/予算超過/中断で lock release + サマリ報告
 ```
 

@@ -170,8 +170,12 @@ backlog lock acquire --session-id <SESSION_ID> --project <CWD>
       backlog list --status pending --project "$PWD" --json   # 並び順どおりの JSON 配列
       ```
       先頭から最大 **N 件**（既定 N=condukt の `max_parallel`。無指定なら **4**）を候補バッチとする。
-      各件の `id` / `title` / `notes` を控える（sink で **id ごとに** `done`/`fail` するため必須）。
-      backlog が 1 件だけなら従来どおり単一課題として扱う（N=1）。
+      各件の `id` / `title` / `notes` / **`hashkey`** を控える（sink で **id ごとに** `done`/`fail` する、
+      および claim の解放に必須）。backlog が 1 件だけなら従来どおり単一課題として扱う（N=1）。
+      **claim-skip ゲート（多重着手の防止）**: 候補バッチの各 item について
+      `condukt state is-claimed --hashkey <hashkey>` を実行する。**exit 0（他セッションが既に claim 中）
+      → その item はスキップして次候補へ**（この機能の主目的＝クロスセッションでの二重着手防止）。
+      `condukt` が無い/失敗した場合は fail-soft（従来どおりピックを続行）。
    b. **コスト/危険ゲート（直列フォールバック）** — 次のどれかに該当する候補は**バッチから外して 1 件ずつ直列**に回す（安全側）:
       - budgetguard が予算逼迫を示す → バッチ幅を絞る（極端なら N=1＝従来の直列に縮退）。
       - notes から明らかに **相互依存**／同一領域・同一ファイルを触る／deploy・push（Gated 相当）を含むと読める。
@@ -214,6 +218,15 @@ backlog lock acquire --session-id <SESSION_ID> --project <CWD>
    compass discovery select --session-id "<SESSION_ID>" --title "<選んだタスクのタイトル>"
    ```
    - 失敗時は fail-soft（compass 欠如 / 呼び出し失敗時も続行）。
+
+8. **着手前に claim する（TOCTOU の最終ガード）** — 選んだタスク（バッチなら各 item）について:
+   ```bash
+   condukt state claim-task --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CODE_SESSION_ID" \
+     --title "<title>" --hashkey <hashkey>
+   ```
+   **exit 1（別セッションが直前に claim 済み＝スキップされた）→ その item は諦めて 3-1 に戻り次候補へ**
+   （3-1 の claim-skip ゲートと 3-2 の condukt 起動の間の隙間を塞ぐ最終ガード）。
+   `condukt` が無い/失敗した場合は fail-soft（従来どおり実行を続行）。
 
 #### 3-2. condukt で実行（fugu-router がモデル選択）
 
@@ -263,7 +276,23 @@ blocked/失敗の item は `fail`** と書き分ける（**部分成功をその
   - backlog 由来 → `backlog fail <id> --reason "<概要>"`、スキップして次へ（バッチなら**失敗した item だけ** fail、他は上記どおり done）。
   - ユーザーに失敗を通知するが、ループは続行。
 
+**claim の解放（成功/失敗どちらの sink でも必須）**: `backlog done`/`backlog fail` の直後（または中断時）に、
+その item の claim を解放する:
+```bash
+condukt state release-task --run "flow-$CLAUDE_CODE_SESSION_ID" --hashkey <hashkey>
+```
+他セッションが同じタスクを取れるようにするため。**バッチなら item ごとに release** する（6/a で控えた
+`hashkey` を使う）。`condukt` が無い/失敗した場合は fail-soft（release できなくても TTL で自動 reap されるため
+ループは続行する）。
+
 #### 3-4. ループ継続判定
+
+3-1 に戻る前に、保持中の claim を live に保つため定期的に heartbeat する:
+```bash
+condukt state heartbeat --run "flow-$CLAUDE_CODE_SESSION_ID"
+```
+（heartbeat が途切れた claim は TTL で自動 reap されるため、長時間のループでは各サイクルで呼ぶのが安全）。
+`condukt` が無い/失敗した場合は fail-soft（従来どおりループを続行）。
 
 3-1 に戻る。早期脱出条件（下記）に当たれば Step 4 へ。
 

@@ -8,6 +8,7 @@
 //! completion. Hooks (restore/statusline) never break a turn — they exit 0.
 
 mod checkpoint;
+mod ci;
 mod claim;
 mod config;
 mod consensus;

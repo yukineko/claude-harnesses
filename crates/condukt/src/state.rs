@@ -1451,6 +1451,11 @@ mod tests {
             consensus_samples: crate::consensus::DEFAULT_SAMPLES,
             consensus_threshold: crate::consensus::DEFAULT_THRESHOLD,
             single_worktree: false,
+            worker_sandbox_enabled: false,
+            worker_sandbox_image: None,
+            worker_sandbox_memory: None,
+            worker_sandbox_cpus: None,
+            worker_sandbox_pids_limit: None,
         }
     }
 

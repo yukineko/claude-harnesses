@@ -60,6 +60,22 @@ pub struct Config {
     /// fully backward compatible). Read by `condukt state worktree-mode-check`.
     /// Overridable via `CONDUKT_SINGLE_WORKTREE`.
     pub single_worktree: bool,
+    /// Opt-in worker sandboxing. When true, the /condukt skill routes a worker's
+    /// build/test commands through the existing docker exec backend
+    /// (`verify::launch_in_container`, `--network=none`) instead of running them
+    /// directly on the host, adding filesystem + resource isolation. OFF by
+    /// default (worker keeps host-direct execution — fully backward compatible).
+    /// Read by `condukt sandbox` wiring. Overridable via `CONDUKT_WORKER_SANDBOX`.
+    pub worker_sandbox_enabled: bool,
+    /// Container image used for sandboxed worker execution (None = the launch
+    /// backend's default image). Overridable via `CONDUKT_WORKER_SANDBOX_IMAGE`.
+    pub worker_sandbox_image: Option<String>,
+    /// `--memory` limit for the sandbox container (e.g. "512m"; None = no cap).
+    pub worker_sandbox_memory: Option<String>,
+    /// `--cpus` limit for the sandbox container (e.g. "1.5"; None = no cap).
+    pub worker_sandbox_cpus: Option<String>,
+    /// `--pids-limit` for the sandbox container (e.g. 256; None = no cap).
+    pub worker_sandbox_pids_limit: Option<i64>,
 }
 
 /// Which test-fix cycle sequence to use for a module type.
@@ -113,6 +129,15 @@ struct FileConsensusConfig {
 }
 
 #[derive(Default, Deserialize)]
+struct FileWorkerConfig {
+    sandbox_enabled: Option<bool>,
+    docker_image: Option<String>,
+    memory_limit: Option<String>,
+    cpus: Option<String>,
+    pids_limit: Option<i64>,
+}
+
+#[derive(Default, Deserialize)]
 struct FileConfig {
     worktree_base: Option<String>,
     default_branch: Option<String>,
@@ -126,6 +151,7 @@ struct FileConfig {
     loop_cfg: Option<FileLoopConfig>,
     consensus: Option<FileConsensusConfig>,
     single_worktree: Option<bool>,
+    worker: Option<FileWorkerConfig>,
 }
 
 /// Parse the `CONDUKT_AUTONOMOUS` env override. Accepts common truthy/falsy
@@ -164,6 +190,11 @@ impl Config {
             consensus_samples: crate::consensus::DEFAULT_SAMPLES,
             consensus_threshold: crate::consensus::DEFAULT_THRESHOLD,
             single_worktree: false,
+            worker_sandbox_enabled: false,
+            worker_sandbox_image: None,
+            worker_sandbox_memory: None,
+            worker_sandbox_cpus: None,
+            worker_sandbox_pids_limit: None,
         };
 
         if let Ok(txt) = std::fs::read_to_string(base.join("config.toml")) {
@@ -217,6 +248,23 @@ impl Config {
                 if let Some(v) = fc.single_worktree {
                     cfg.single_worktree = v;
                 }
+                if let Some(w) = fc.worker {
+                    if let Some(v) = w.sandbox_enabled {
+                        cfg.worker_sandbox_enabled = v;
+                    }
+                    if let Some(v) = w.docker_image {
+                        cfg.worker_sandbox_image = Some(v);
+                    }
+                    if let Some(v) = w.memory_limit {
+                        cfg.worker_sandbox_memory = Some(v);
+                    }
+                    if let Some(v) = w.cpus {
+                        cfg.worker_sandbox_cpus = Some(v);
+                    }
+                    if let Some(v) = w.pids_limit {
+                        cfg.worker_sandbox_pids_limit = Some(v);
+                    }
+                }
             }
         }
 
@@ -253,6 +301,18 @@ impl Config {
         if let Ok(v) = std::env::var("CONDUKT_SINGLE_WORKTREE") {
             if let Some(b) = parse_autonomous_env(&v) {
                 cfg.single_worktree = b;
+            }
+        }
+        // Reuses the generic truthy/falsy parser to force worker sandboxing from
+        // the environment, overriding config.toml.
+        if let Ok(v) = std::env::var("CONDUKT_WORKER_SANDBOX") {
+            if let Some(b) = parse_autonomous_env(&v) {
+                cfg.worker_sandbox_enabled = b;
+            }
+        }
+        if let Ok(v) = std::env::var("CONDUKT_WORKER_SANDBOX_IMAGE") {
+            if !v.trim().is_empty() {
+                cfg.worker_sandbox_image = Some(v);
             }
         }
         cfg
@@ -336,6 +396,41 @@ max_iters = 5
     fn single_worktree_defaults_none_when_absent() {
         let fc: FileConfig = toml::from_str("").expect("should parse");
         assert_eq!(fc.single_worktree, None);
+    }
+
+    #[test]
+    fn worker_config_parses_from_toml() {
+        let toml = r#"
+[worker]
+sandbox_enabled = true
+docker_image = "alpine:3.20"
+memory_limit = "512m"
+cpus = "1.5"
+pids_limit = 256
+"#;
+        let fc: FileConfig = toml::from_str(toml).expect("should parse");
+        let w = fc.worker.expect("worker section present");
+        assert_eq!(w.sandbox_enabled, Some(true));
+        assert_eq!(w.docker_image.as_deref(), Some("alpine:3.20"));
+        assert_eq!(w.memory_limit.as_deref(), Some("512m"));
+        assert_eq!(w.cpus.as_deref(), Some("1.5"));
+        assert_eq!(w.pids_limit, Some(256));
+    }
+
+    #[test]
+    fn worker_config_defaults_none_when_absent() {
+        let fc: FileConfig = toml::from_str("").expect("should parse");
+        assert!(fc.worker.is_none());
+    }
+
+    #[test]
+    fn worker_sandbox_env_uses_truthy_parser() {
+        // CONDUKT_WORKER_SANDBOX is resolved through the shared truthy/falsy
+        // parser (same mechanism as CONDUKT_AUTONOMOUS / CONDUKT_SINGLE_WORKTREE).
+        assert_eq!(parse_autonomous_env("1"), Some(true));
+        assert_eq!(parse_autonomous_env("on"), Some(true));
+        assert_eq!(parse_autonomous_env("off"), Some(false));
+        assert_eq!(parse_autonomous_env("maybe"), None);
     }
 
     #[test]

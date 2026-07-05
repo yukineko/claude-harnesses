@@ -232,14 +232,18 @@ fn gated_task_is_isolated_and_never_batched() {
 ///             two-stop invariant does not govern them; they are pinned here
 ///             only so a NEW prompt cannot sneak in unaudited.
 ///
-/// condukt SKILL (20): HDR x1 + PROSE x4 (invariant #1 now documents the
+/// condukt SKILL (21): HDR x1 + PROSE x4 (invariant #1 now documents the
 ///   policy-answer routing contract — auto self-answers / escalate re-Asks /
 ///   block refuses — spanning several lines, plus the Phase 3 heading) + DEGRADE
 ///   (Phase 3 agreement routed through `condukt policy answer` with
 ///   schedule-derived risk/confidence: auto skips the prompt, escalate/fallback
 ///   re-emits it; the confidence gate rides on it) + BLOCKED x1 (worker
 ///   `blocked` escalation) + GATED context (conflict-check safety stop x3) +
-///   HOTL (resume x2, issue discovery x2, open_questions x1, manual cancel x1).
+///   ESCALATE x1 (Phase 6 RUN-POLICY `ask_human` verdict: the deterministic gate
+///   defers to a human — naming `AskUserQuestion` as the channel — when there is
+///   no trustworthy automated signal; an invariant-compatible escalation of a
+///   genuine no-signal decision, NOT a new autonomous self-driving stop) + HOTL
+///   (resume x2, issue discovery x2, open_questions x1, manual cancel x1).
 /// flow SKILL (10): HDR x1 + PROSE (Step 0.5 documents the policy-answer routing
 ///   contract: the autonomy switch plus the exit 0/2/3 branches that name
 ///   `AskUserQuestion` on escalate/fallback) + DEGRADE (lock gate, 3-failure —
@@ -250,15 +254,24 @@ fn gated_task_is_isolated_and_never_batched() {
 ///   selection routed through `condukt policy answer`: auto adopts top-N,
 ///   escalate/fallback re-emits the multiSelect prompt; plus auto-handoff and
 ///   the hard-rule prose) — all skipped/answered under autonomy.
+/// overwatch SKILL (7): heading x1 + HOTL x5 (pause / resume / reassign / reap /
+///   end — each an "HOTL gate: 実行前に AskUserQuestion で確認" before a
+///   side-effecting control command) + PROSE x1 (summary line restating that all
+///   side-effect commands confirm via AskUserQuestion). overwatch is a manual
+///   cross-session control/monitoring surface (its `allowed-tools` has NO Task
+///   tool, so it cannot drive the scout/condukt/flow autonomy loop at all); these
+///   are out-of-loop human-control prompts, so the two-stop invariant does not
+///   govern them — pinned only so a NEW prompt cannot sneak in unaudited.
 /// compass SKILL (3): HDR (L5) + PROSE (L17) + HOTL (L52). compass is a human
 ///   reorientation layer, not part of the autonomy self-driving loop.
 /// tdd SKILL (1): HOTL (L39, optional confirmation while authoring a test).
 /// hypothesis add SKILL (1): HOTL (L14, prompt for a missing argument).
 const ASK_ALLOWLIST: &[(&str, usize)] = &[
     ("compass/skills/compass/SKILL.md", 3),
-    ("condukt/skills/condukt/SKILL.md", 20),
+    ("condukt/skills/condukt/SKILL.md", 21),
     ("flow/skills/flow/SKILL.md", 10),
     ("hypothesis/skills/add/SKILL.md", 1),
+    ("overwatch/skills/overwatch/SKILL.md", 7),
     ("scout/skills/scout/SKILL.md", 8),
     ("tdd/skills/tdd/SKILL.md", 1),
 ];

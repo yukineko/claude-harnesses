@@ -572,6 +572,27 @@ runtime が本番環境からどれだけ乖離しているか、`--change-risk`
 渡すと判定が `<run>.run-policy-log.jsonl` に記録され、`condukt run-policy stats --run "$RID"` で
 verdict 別の集計が見られる（観測用途のみ・判定そのものにはフィードバックしない）。
 
+**決定論的な in-code gate（`verify launch --run-policy` — 決定と実行を LLM を挟まず融合）**: 上の 2 段
+（`run-policy decide` で verdict を出し、LLM がそれを読んで別途 `verify launch --docker` を叩く）は
+決定は決定論だが**決定→実行の間に LLM が 1 手入る**。north_star（gate は LLM を挟まない）を満たすため、
+この配線を**バイナリ内部で決定論的に融合**した mode を使う ── これが DoD criterion 3 を満たす正典経路:
+```bash
+# decide_run_policy を内部で呼び、EscalateDocker のときだけ container launch を実行する（純加算 mode）。
+condukt verify launch --cmd '<起動/検証コマンド>' --run-policy \
+  --cheap-verify <pass|fail|unknown> --divergence <low|medium|high> --change-risk <low|medium|high> \
+  --run "$RID"
+# 出力 JSON: {verdict, reason, container_launched: bool, (EscalateDocker のとき) launch: <container verdict>}
+```
+`verify::run_policy_gate` が `decide_run_policy` の verdict を見て **EscalateDocker のときだけ**
+`launch_in_container` を呼ぶ（`VerifyOnly`/`EscalateShip`/`AskHuman` は container を起動しない＝
+`container_launched:false`）。決定と実行の間に LLM 判断は無い（`--docker` を LLM が条件付きで叩く上の
+2 段とは異なる）。docker 不在は既存どおり fail-soft（`note:"docker_unavailable"`・exit 0・host に
+フォールバックしない・turn を壊さない）。`--run "$RID"` を渡すと選ばれた verdict が
+`<run>.run-policy-log.jsonl` に記録され `run-policy stats` で可観測。既存の `verify launch`
+（`--docker`/`--health-url`/host 経路）は `--run-policy` 無指定で**完全後方互換**。
+上の 2 段（`run-policy decide` + 別途 `--docker`）は、gate が自動化しないステージ（ship 判断・
+ask_human エスカレーション等）を LLM/人間が扱うための補助経路として残る。
+
 **F→P (Fail→Pass) 再現性ゲート (`kind: fix|feature` タスク限定)**: worker が `reproduction_tests` の
 red→green サイクル (`tdd` の RED/GREEN 証跡) を回し終えた後、**`verified` へ昇格させる前**に、その
 RED→GREEN が本物の Fail→Pass 遷移だったかを確認できる:

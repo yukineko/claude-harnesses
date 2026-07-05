@@ -627,6 +627,30 @@ enum VerifyAction {
         /// Docker image to run `--cmd` in when `--docker` is set.
         #[arg(long, default_value = "alpine:latest")]
         image: String,
+        /// Purely-additive deterministic RUN-POLICY gate: instead of directly
+        /// launching, consult `decide_run_policy(cheap_verify, divergence,
+        /// change_risk)` and launch `--cmd` in a container ONLY on the
+        /// `EscalateDocker` verdict (the other verdicts never touch docker).
+        /// When unset (default) the existing `--docker`/`--health-url`/host
+        /// launch behavior is byte-for-byte unchanged.
+        #[arg(long)]
+        run_policy: bool,
+        /// Cheap-verify signal for `--run-policy` ("pass"|"fail"|else->unknown).
+        #[arg(long, default_value = "unknown")]
+        cheap_verify: Option<String>,
+        /// Production-divergence signal for `--run-policy`
+        /// ("low"|"medium"|"high", fail-softs to "high").
+        #[arg(long, default_value = "high")]
+        divergence: Option<String>,
+        /// Change-risk signal for `--run-policy`
+        /// ("low"|"medium"|"high", fail-softs to "high").
+        #[arg(long, default_value = "high")]
+        change_risk: Option<String>,
+        /// When set with `--run-policy`, append the chosen run-policy verdict as
+        /// a JSONL record to the run's run-policy decision log (same recording
+        /// path as `run-policy decide --run`). Omitted = no record is written.
+        #[arg(long)]
+        run: Option<String>,
     },
 }
 
@@ -943,13 +967,64 @@ fn run_user(cmd: Command) -> Result<()> {
                 startup_timeout,
                 docker,
                 image,
+                run_policy,
+                cheap_verify,
+                divergence,
+                change_risk,
+                run,
             } => {
                 // Fail-soft by contract: all launch paths never panic and always
-                // return a verdict, so we always print it and exit 0. With
-                // --docker we isolate the run inside a container; with a health
-                // URL we probe a server for a 200; otherwise we keep the legacy
-                // exit-wait behavior.
-                let verdict = if docker {
+                // return a verdict, so we always print it and exit 0.
+                let verdict = if run_policy {
+                    // Purely-additive deterministic RUN-POLICY gate. Takes
+                    // precedence only when --run-policy is set; consult
+                    // decide_run_policy and launch the container ONLY on the
+                    // EscalateDocker verdict (the launcher is injected so the
+                    // gate itself does no I/O; docker-absent still fails soft).
+                    let cv = cheap_verify.unwrap_or_else(|| "unknown".to_string());
+                    let dv = divergence.unwrap_or_else(|| "high".to_string());
+                    let cr = change_risk.unwrap_or_else(|| "high".to_string());
+                    let workdir = std::env::current_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| ".".to_string());
+                    let gate = verify::run_policy_gate(&cv, &dv, &cr, || {
+                        verify::launch_in_container(
+                            &cmd,
+                            timeout,
+                            &image,
+                            &workdir,
+                            &verify::SandboxLimits::default(),
+                        )
+                    });
+                    // Observability: when --run is given, record the chosen
+                    // run-policy verdict to the JSONL log, reusing the exact
+                    // recording path as `run-policy decide --run`. Fail-soft: a
+                    // logging failure must never break the stdout verdict.
+                    if let Some(rid) = &run {
+                        let decision = run_policy::decide_run_policy(&cv, &dv, &cr);
+                        let verdict_str = match decision.verdict {
+                            run_policy::RunPolicyVerdict::VerifyOnly => "verify_only",
+                            run_policy::RunPolicyVerdict::EscalateDocker => "escalate_docker",
+                            run_policy::RunPolicyVerdict::EscalateShip => "escalate_ship",
+                            run_policy::RunPolicyVerdict::AskHuman => "ask_human",
+                        };
+                        let record = state::RunPolicyLogRecord {
+                            verdict: verdict_str.to_string(),
+                            reason: decision.reason.clone(),
+                            cheap_verify: decision.cheap_verify.clone(),
+                            divergence: decision.divergence.clone(),
+                            change_risk: decision.change_risk.clone(),
+                            recorded_at: state::now_secs(),
+                        };
+                        if let Err(e) = state::record_run_policy_decision(&cfg, &cwd, rid, &record)
+                        {
+                            eprintln!(
+                                "condukt: warning: failed to record run-policy decision: {e}"
+                            );
+                        }
+                    }
+                    gate
+                } else if docker {
                     let workdir = std::env::current_dir()
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|_| ".".to_string());
@@ -964,6 +1039,8 @@ fn run_user(cmd: Command) -> Result<()> {
                         &verify::SandboxLimits::default(),
                     )
                 } else {
+                    // With a health URL we probe a server for a 200; otherwise we
+                    // keep the legacy exit-wait behavior.
                     match health_url {
                         Some(url) => verify::launch_server_and_probe(&cmd, &url, startup_timeout),
                         None => verify::launch_and_reflux(&cmd, timeout),

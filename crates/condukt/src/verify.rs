@@ -762,6 +762,64 @@ pub fn launch_in_container(
     }
 }
 
+/// Deterministic RUN-POLICY gate: consult [`crate::run_policy::decide_run_policy`]
+/// and invoke the injected container launcher ONLY on the `EscalateDocker`
+/// verdict. No LLM, no direct I/O beyond calling the injected launcher — the
+/// escalation DECISION is pure Rust, the actual container run is whatever the
+/// caller injects (in the CLI: [`launch_in_container`]).
+///
+/// This is the deterministic in-code consumer the `run_policy` module refers to:
+/// instead of the `/condukt` SKILL acting on the verdict via prose, the gate
+/// mechanically routes `EscalateDocker` (and only that verdict) to the container
+/// path. The other three verdicts (VerifyOnly / EscalateShip / AskHuman) NEVER
+/// touch the launcher.
+///
+/// Returns a `serde_json::Value` object carrying at least the run-policy
+/// `verdict` (snake_case), `reason`, `container_launched` (bool), and — only on
+/// `EscalateDocker` — the nested container `launch` verdict. Never panics.
+pub fn run_policy_gate<F>(
+    cheap_verify: &str,
+    divergence: &str,
+    change_risk: &str,
+    launch_container: F,
+) -> serde_json::Value
+where
+    F: FnOnce() -> serde_json::Value,
+{
+    let decision = crate::run_policy::decide_run_policy(cheap_verify, divergence, change_risk);
+    let verdict_str = match decision.verdict {
+        crate::run_policy::RunPolicyVerdict::VerifyOnly => "verify_only",
+        crate::run_policy::RunPolicyVerdict::EscalateDocker => "escalate_docker",
+        crate::run_policy::RunPolicyVerdict::EscalateShip => "escalate_ship",
+        crate::run_policy::RunPolicyVerdict::AskHuman => "ask_human",
+    };
+    let mut out = serde_json::json!({
+        "kind": "run_policy_gate",
+        "verdict": verdict_str,
+        "reason": decision.reason,
+        "cheap_verify": decision.cheap_verify,
+        "divergence": decision.divergence,
+        "change_risk": decision.change_risk,
+        "container_launched": false,
+    });
+    // ONLY EscalateDocker takes the container path. The launcher is injected, so
+    // this seam is unit-testable with a spy closure and needs no real docker.
+    if matches!(
+        decision.verdict,
+        crate::run_policy::RunPolicyVerdict::EscalateDocker
+    ) {
+        let launch = launch_container();
+        if let Some(obj) = out.as_object_mut() {
+            obj.insert(
+                "container_launched".to_string(),
+                serde_json::Value::Bool(true),
+            );
+            obj.insert("launch".to_string(), launch);
+        }
+    }
+    out
+}
+
 /// Known model tiers, cheapest → strongest.
 const TIERS: [&str; 3] = ["haiku", "sonnet", "opus"];
 
@@ -2025,5 +2083,90 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
                 "without docker reachable, the note must be docker_unavailable: {v}"
             );
         }
+    }
+}
+
+/// Spy-driven unit tests for the deterministic RUN-POLICY gate. The injected
+/// launcher records whether it was called (via an `AtomicBool`), so these prove
+/// the EscalateDocker-only routing WITHOUT any real docker.
+#[cfg(test)]
+mod run_policy_gate_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Run the gate with a spy launcher; returns `(verdict_json, launcher_called)`.
+    fn spy_gate(cv: &str, dv: &str, cr: &str) -> (serde_json::Value, bool) {
+        let called = AtomicBool::new(false);
+        let v = run_policy_gate(cv, dv, cr, || {
+            called.store(true, Ordering::SeqCst);
+            serde_json::json!({ "kind": "runtime", "passed": true, "note": "spy-launch" })
+        });
+        (v, called.load(Ordering::SeqCst))
+    }
+
+    /// EscalateDocker (cheap_verify=fail, divergence=high) invokes the launcher
+    /// and marks `container_launched:true` with the nested launch verdict.
+    #[test]
+    fn escalate_docker_invokes_container_launcher() {
+        let (v, called) = spy_gate("fail", "high", "low");
+        assert!(called, "EscalateDocker MUST invoke the container launcher");
+        assert_eq!(v["verdict"], serde_json::json!("escalate_docker"));
+        assert_eq!(v["container_launched"], serde_json::json!(true));
+        assert_eq!(
+            v["launch"]["note"],
+            serde_json::json!("spy-launch"),
+            "the injected launcher's verdict must be embedded: {v}"
+        );
+    }
+
+    /// The second EscalateDocker path (cheap_verify=pass, divergence=high) also
+    /// invokes the launcher.
+    #[test]
+    fn escalate_docker_pass_high_also_invokes_launcher() {
+        let (v, called) = spy_gate("pass", "high", "low");
+        assert!(called, "pass+high divergence -> EscalateDocker -> launch");
+        assert_eq!(v["verdict"], serde_json::json!("escalate_docker"));
+        assert_eq!(v["container_launched"], serde_json::json!(true));
+    }
+
+    /// VerifyOnly (pass/low/medium) does NOT invoke the launcher.
+    #[test]
+    fn verify_only_does_not_invoke_launcher() {
+        let (v, called) = spy_gate("pass", "low", "medium");
+        assert!(!called, "VerifyOnly must NOT invoke the launcher");
+        assert_eq!(v["verdict"], serde_json::json!("verify_only"));
+        assert_eq!(v["container_launched"], serde_json::json!(false));
+        assert!(
+            v.get("launch").is_none(),
+            "no container path -> no nested launch verdict: {v}"
+        );
+    }
+
+    /// EscalateShip (pass/low/low) does NOT invoke the launcher.
+    #[test]
+    fn escalate_ship_does_not_invoke_launcher() {
+        let (v, called) = spy_gate("pass", "low", "low");
+        assert!(!called, "EscalateShip must NOT invoke the launcher");
+        assert_eq!(v["verdict"], serde_json::json!("escalate_ship"));
+        assert_eq!(v["container_launched"], serde_json::json!(false));
+    }
+
+    /// AskHuman (fail/low/low) does NOT invoke the launcher.
+    #[test]
+    fn ask_human_does_not_invoke_launcher() {
+        let (v, called) = spy_gate("fail", "low", "low");
+        assert!(!called, "AskHuman must NOT invoke the launcher");
+        assert_eq!(v["verdict"], serde_json::json!("ask_human"));
+        assert_eq!(v["container_launched"], serde_json::json!(false));
+    }
+
+    /// Garbage inputs fail-soft (never panic) and, per the matrix, an
+    /// unrecognized cheap_verify -> AskHuman -> launcher NOT called.
+    #[test]
+    fn garbage_inputs_fail_soft_without_launch() {
+        let (v, called) = spy_gate("bogus", "\u{0}\t", "???");
+        assert!(!called, "unknown cheap_verify -> AskHuman -> no launch");
+        assert_eq!(v["verdict"], serde_json::json!("ask_human"));
+        assert_eq!(v["container_launched"], serde_json::json!(false));
     }
 }

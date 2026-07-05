@@ -9,10 +9,16 @@
 //! production-divergent behavior risks shipping on a false-positive cheap
 //! pass. This module is the deterministic core only: given the three graded
 //! signals it computes the next stage. No LLM call, no I/O, no clock — pure
-//! function of its arguments. How the resulting verdict is *acted on*
-//! (actually invoking `condukt verify launch --docker`, proceeding to the
-//! Phase 8 ship stage, or asking the human) is the `/condukt` SKILL
-//! orchestration's job, not this module's.
+//! function of its arguments (this purity guarantee is unchanged).
+//!
+//! Acting on the verdict has TWO consumers. (1) A deterministic in-code
+//! consumer, [`crate::verify::run_policy_gate`], mechanically routes the
+//! `EscalateDocker` verdict (and only that verdict) to a container launch via
+//! `condukt verify launch --run-policy` — no LLM, the escalation DECISION stays
+//! pure Rust and only the injected container run does I/O. (2) The `/condukt`
+//! SKILL orchestration may still act on the verdict for the stages the gate
+//! does not automate (proceeding to the Phase 8 ship stage, or asking the
+//! human). Either way this module stays the deterministic core only.
 //!
 //! The `condukt run-policy decide` CLI subcommand (see `main.rs`) exposes
 //! this to the `/condukt` skill's Phase 6, mirroring how `condukt replan

@@ -260,6 +260,36 @@ pub fn pivot_signal(outcomes: &[Outcome], threshold: usize) -> PivotSignal {
     }
 }
 
+/// Observed, deterministic facts about a completed move, from which a DEFAULT
+/// verdict is derived. This is an advisory default the LLM (skill) can still
+/// override via `compass outcome --verdict`; it never records anything itself.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutcomeFacts {
+    /// Net change in passing tests vs the baseline (may be negative).
+    pub tests_delta: i64,
+    /// Count of observed regressions (newly failing tests / broken invariants).
+    pub regressions: u64,
+    /// Whether this move closed the charter `current_gap` it was judged against.
+    pub gap_closed: bool,
+}
+
+/// Derive a deterministic DEFAULT [`Verdict`] from observed facts, mirroring the
+/// purity of [`pivot_signal`]. Documented rules (regressions dominate):
+/// `regressions > 0` => [`Verdict::Backward`]; else a positive test-delta or a
+/// closed gap (`tests_delta > 0 || gap_closed`) => [`Verdict::Forward`]; else
+/// [`Verdict::Unchanged`]. Advisory only — the skill can override via `--verdict`.
+#[allow(dead_code)]
+pub fn suggest_verdict(facts: &OutcomeFacts) -> Verdict {
+    if facts.regressions > 0 {
+        Verdict::Backward
+    } else if facts.tests_delta > 0 || facts.gap_closed {
+        Verdict::Forward
+    } else {
+        Verdict::Unchanged
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,6 +441,48 @@ mod tests {
         assert_eq!(sig.recommendation, Recommendation::Persevere);
         assert_eq!(sig.streak, 1);
         assert!(sig.reason.contains("last forward at seq 2"));
+    }
+
+    #[test]
+    fn suggest_verdict_regressions_dominate() {
+        // regressions > 0 => backward, even with a positive test-delta.
+        let facts = OutcomeFacts {
+            tests_delta: 5,
+            regressions: 1,
+            gap_closed: true,
+        };
+        assert_eq!(suggest_verdict(&facts), Verdict::Backward);
+    }
+
+    #[test]
+    fn suggest_verdict_positive_tests_delta_is_forward() {
+        let facts = OutcomeFacts {
+            tests_delta: 3,
+            regressions: 0,
+            gap_closed: false,
+        };
+        assert_eq!(suggest_verdict(&facts), Verdict::Forward);
+    }
+
+    #[test]
+    fn suggest_verdict_gap_closed_is_forward() {
+        // gap closed with a zero test-delta still reads as forward.
+        let facts = OutcomeFacts {
+            tests_delta: 0,
+            regressions: 0,
+            gap_closed: true,
+        };
+        assert_eq!(suggest_verdict(&facts), Verdict::Forward);
+    }
+
+    #[test]
+    fn suggest_verdict_all_zero_is_unchanged() {
+        let facts = OutcomeFacts {
+            tests_delta: 0,
+            regressions: 0,
+            gap_closed: false,
+        };
+        assert_eq!(suggest_verdict(&facts), Verdict::Unchanged);
     }
 
     #[test]

@@ -7,6 +7,7 @@
 //! dispatch but stubbed until later tasks (DESIGN §15-B implementation order).
 
 mod breadcrumb;
+mod c3screen;
 mod carve;
 mod charter;
 mod config;
@@ -81,6 +82,15 @@ enum Command {
     /// Pivot-or-persevere signal from the trailing outcome streak (§7).
     /// Prints `{"recommendation":"persevere"|"pivot","streak":N,"threshold":N,"reason":"…"}` and exits 0.
     PivotCheck,
+    /// Advisory deterministic screen for the C3 "observable DoD" gate: flag
+    /// charter `definition_of_done` items whose wording is vague/non-observable.
+    /// Prints `{"flagged":[{"index","item","reason"}...]}` (empty when no charter/
+    /// DoD). SUPPLEMENTS the skill's C3 judgment — never blocks.
+    C3Screen,
+    /// Advisory deterministic DEFAULT verdict for `compass outcome`, derived from
+    /// observed facts. Prints `{"suggested":"forward|unchanged|backward"}`. The
+    /// skill can still override via `outcome --verdict`.
+    SuggestVerdict(SuggestVerdictArgs),
 }
 
 #[derive(Args)]
@@ -135,6 +145,19 @@ struct OutcomeArgs {
     /// after trimming (build is not validation).
     #[arg(long, value_name = "STRING")]
     evidence: Vec<String>,
+}
+
+#[derive(Args)]
+struct SuggestVerdictArgs {
+    /// Net change in passing tests vs the baseline (may be negative).
+    #[arg(long, value_name = "N", allow_hyphen_values = true)]
+    tests_delta: i64,
+    /// Count of observed regressions (newly failing tests / broken invariants).
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    regressions: u64,
+    /// Whether this move closed the charter `current_gap` it was judged against.
+    #[arg(long)]
+    gap_closed: bool,
 }
 
 #[derive(Args)]
@@ -232,6 +255,8 @@ fn main() {
         Command::Opportunity(args) => opportunity_command(args),
         Command::Discovery(args) => discovery_command(args),
         Command::PivotCheck => pivot_check_command(),
+        Command::C3Screen => c3_screen_command(),
+        Command::SuggestVerdict(args) => suggest_verdict_command(args),
     };
     if let Err(e) = r {
         eprintln!("compass: {e}");
@@ -646,6 +671,36 @@ fn pivot_check_command() -> Result<()> {
         threshold = sig.threshold,
         reason = serde_json::to_string(&sig.reason).unwrap_or_else(|_| "\"\"".to_string()),
     );
+    Ok(())
+}
+
+/// C3 lexical screen (advisory): load the current charter's `definition_of_done`
+/// (tolerant — a missing/unparseable charter yields no items) and print the vague/
+/// non-observable items as `{"flagged":[{"index","item","reason"}...]}`. This
+/// SUPPLEMENTS the skill's C3 judgment; it is deterministic and never blocks.
+fn c3_screen_command() -> Result<()> {
+    let root = project_root();
+    let path = Charter::project_path(&root);
+    let dod = Charter::load(&path)
+        .map(|c| c.definition_of_done)
+        .unwrap_or_default();
+    let flagged = c3screen::c3_lexical_screen(&dod);
+    println!("{}", serde_json::json!({ "flagged": flagged }));
+    Ok(())
+}
+
+/// suggest-verdict (advisory): derive the deterministic DEFAULT verdict from the
+/// supplied observed facts and print `{"suggested":"forward|unchanged|backward"}`.
+/// The skill can still override this via `compass outcome --verdict`. Reuses the
+/// `Verdict` snake_case token mapping from `outcome`.
+fn suggest_verdict_command(args: SuggestVerdictArgs) -> Result<()> {
+    let facts = outcome::OutcomeFacts {
+        tests_delta: args.tests_delta,
+        regressions: args.regressions,
+        gap_closed: args.gap_closed,
+    };
+    let verdict = outcome::suggest_verdict(&facts);
+    println!("{}", serde_json::json!({ "suggested": verdict }));
     Ok(())
 }
 

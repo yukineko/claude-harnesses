@@ -186,6 +186,18 @@ fn single_redirect_target(seg: &str) -> Option<String> {
                 i += 1;
                 continue;
             }
+            // Not a redirect: the second char of a Rust return-type arrow `->`.
+            if prev == b'-' {
+                i += 1;
+                continue;
+            }
+            // Not a redirect: the close of an angle-bracket identifier
+            // placeholder like `<value>` / `<id>` / `<RID>` — a `>` reached by
+            // scanning back over identifier chars to an opening `<`.
+            if is_angle_placeholder_close(bytes, i) {
+                i += 1;
+                continue;
+            }
             // Single truncating redirect — read the target token.
             let mut j = i + 1;
             while j < bytes.len() && (bytes[j] as char).is_whitespace() {
@@ -209,6 +221,19 @@ fn single_redirect_target(seg: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+/// True when the `>` at `bytes[gt]` closes an angle-bracket identifier
+/// placeholder like `<value>` / `<id>` / `<RID>`: scan back over identifier
+/// chars (`[A-Za-z0-9_]`, at least one) and find an opening `<`. Such prose is a
+/// placeholder token, not a truncating redirect target.
+fn is_angle_placeholder_close(bytes: &[u8], gt: usize) -> bool {
+    let mut k = gt;
+    while k > 0 && (bytes[k - 1].is_ascii_alphanumeric() || bytes[k - 1] == b'_') {
+        k -= 1;
+    }
+    // Require ≥1 identifier char between the `<` and the `>`.
+    k < gt && k > 0 && bytes[k - 1] == b'<'
 }
 
 fn basename(tok: &str) -> &str {
@@ -621,6 +646,43 @@ mod tests {
         // The dangerous text lives inside an echo string, not as a command.
         assert_eq!(bash("echo 'rm -rf /'"), Decision::Allow);
         assert_eq!(bash("echo \"a > b\""), Decision::Allow);
+    }
+
+    // ---- Redirect false-positives: Rust arrows & angle-bracket placeholders ----
+    // Regression: descriptive prose containing a Rust return-type arrow (`->`)
+    // or an angle-bracket identifier placeholder (`<value>`) must not be read as
+    // a truncating `>` redirect (which would force-gate benign condukt tasks).
+    #[test]
+    fn benign_rust_arrow_is_not_a_redirect() {
+        assert_eq!(single_redirect_target("fn foo() -> Bar"), None);
+        assert_eq!(bash("implement fn parse() -> Result"), Decision::Allow);
+        assert_eq!(bash("map the input -> output pipeline"), Decision::Allow);
+    }
+
+    #[test]
+    fn benign_angle_bracket_placeholder_is_not_a_redirect() {
+        assert_eq!(single_redirect_target("pass --flag <value>"), None);
+        assert_eq!(bash("run with --flag <value>"), Decision::Allow);
+        assert_eq!(bash("tdd red --task <id> --cmd foo"), Decision::Allow);
+        assert_eq!(bash("emit {risk} for <RID>"), Decision::Allow);
+    }
+
+    #[test]
+    fn benign_lookalike_task_prose_is_low_and_reversible() {
+        // The end-to-end path the bug broke: classify() over a task's prose.
+        let a = crate::classify::classify("implement fn parse() -> Result and pass --flag <value>");
+        assert_eq!(a.risk, crate::classify::Risk::Low);
+        assert!(a.reversible);
+        assert!(!a.requires_gate());
+    }
+
+    #[test]
+    fn benign_fix_keeps_real_truncating_redirect_denied() {
+        // Guard the other direction: a genuine `> path` redirect stays denied.
+        assert!(bash("cat x > /etc/passwd").is_deny());
+        assert!(bash("echo x > existing").is_deny());
+        // Arrow/placeholder skip must not swallow a real redirect on the line.
+        assert!(bash("echo done -> nope; cat x > realfile").is_deny());
     }
 
     // ---- File operations ----

@@ -506,6 +506,19 @@ enum PolicyAction {
         /// How sure we are the decision is correct (low|medium|high).
         #[arg(long)]
         confidence: String,
+        /// Optional task title. Supplying any of --title/--files/--class opts
+        /// into the fugu-router *calibrated confidence* soft path: when
+        /// fugu-router is on PATH and returns a usable score, that overrides
+        /// --confidence. Absent these flags, the legacy path is byte-identical.
+        #[arg(long)]
+        title: Option<String>,
+        /// Optional touched files (repeatable or comma-separated) for the
+        /// calibrated-confidence path.
+        #[arg(long)]
+        files: Vec<String>,
+        /// Optional task class for the calibrated-confidence path.
+        #[arg(long)]
+        class: Option<String>,
     },
     /// Non-interactively answer one question using the graded-autonomy policy.
     /// On an `auto` verdict, prints `{"answered":true,"policy":"auto","chosen":
@@ -537,6 +550,19 @@ enum PolicyAction {
         /// Directory for the append-only decision log (default: the state dir).
         #[arg(long)]
         journal_dir: Option<PathBuf>,
+        /// Optional task title. Supplying any of --title/--files/--class opts
+        /// into the fugu-router *calibrated confidence* soft path (overrides
+        /// --confidence when fugu-router is present and returns a usable score).
+        /// Absent these flags, the legacy path is byte-identical.
+        #[arg(long)]
+        title: Option<String>,
+        /// Optional touched files (repeatable or comma-separated) for the
+        /// calibrated-confidence path.
+        #[arg(long)]
+        files: Vec<String>,
+        /// Optional task class for the calibrated-confidence path.
+        #[arg(long)]
+        class: Option<String>,
     },
     /// Print the auto-answer audit trail (JSONL): every question the policy
     /// self-answered without prompting a human. The review surface for
@@ -1257,15 +1283,81 @@ fn parse_policy_levels(
     }
 }
 
+/// Soft dependency: resolve a *calibrated* confidence [`policy::Level`] from
+/// fugu-router when task-identifying flags are supplied, else `None`.
+///
+/// This is the I/O boundary that keeps `policy::decide` / `Level::from_score`
+/// pure. The entire path is gated behind at least one of the new optional flags
+/// (`--title`/`--files`/`--class`): when none are supplied it returns `None`
+/// immediately with NO shell-out, so the legacy CLI invocation is byte-for-byte
+/// unchanged. When a flag IS supplied it shells out to `fugu-router confidence`
+/// (a sibling task adds that subcommand; it prints a single float in `[0,1]` to
+/// stdout when it has sufficient history), parses the float, and maps it through
+/// [`policy::Level::from_score`].
+///
+/// Wire contract for the sibling subcommand:
+/// `fugu-router confidence [--files <csv>] [--class <c>] <title text...>` — the
+/// title is a POSITIONAL argument (no `--title` flag), passed LAST after the
+/// flags. `--files` is comma-joined (fugu splits on `,`).
+///
+/// Every failure mode falls through to `None` (never a hard error), mirroring
+/// the `fugu_fingerprint` / `record_runs` soft-probe precedent:
+/// - fugu-router not on PATH → `Command::output` errors → `None`
+/// - non-zero exit (e.g. insufficient history) → `None`
+/// - empty / unparseable / non-finite stdout → `None`
+fn calibrated_confidence(
+    title: &Option<String>,
+    files: &[String],
+    class: &Option<String>,
+) -> Option<policy::Level> {
+    // Gate: no new flags → the calibrated path is entirely inert (no shell-out).
+    if title.is_none() && files.is_empty() && class.is_none() {
+        return None;
+    }
+    let mut cmd = std::process::Command::new("fugu-router");
+    cmd.arg("confidence");
+    if !files.is_empty() {
+        cmd.args(["--files", &files.join(",")]);
+    }
+    if let Some(c) = class {
+        cmd.args(["--class", c]);
+    }
+    // Title is a POSITIONAL argument (no --title flag), passed last after the
+    // flags so clap accepts it as the trailing free-form title text.
+    if let Some(t) = title {
+        cmd.arg(t);
+    }
+    let out = cmd.output().ok()?; // spawn failed (not on PATH) → soft-skip
+    if !out.status.success() {
+        return None; // error / insufficient history → fall back
+    }
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let score: f64 = raw.trim().parse().ok()?; // empty/unparseable → fall back
+    if !score.is_finite() {
+        return None; // NaN/±inf on stdout → fall back
+    }
+    Some(policy::Level::from_score(score))
+}
+
 fn run_policy(action: PolicyAction) -> ! {
     match action {
         PolicyAction::Decide {
             risk,
             reversible,
             confidence,
+            title,
+            files,
+            class,
         } => {
-            let (risk, reversible, confidence) =
+            let (risk, reversible, mut confidence) =
                 parse_policy_levels(&risk, &reversible, &confidence);
+            // Soft dependency: when the new task-identifying flags are supplied
+            // and fugu-router yields a usable calibrated score, it overrides the
+            // self-reported confidence. Absent the flags (legacy invocation)
+            // this is inert and confidence stays exactly as parsed.
+            if let Some(cal) = calibrated_confidence(&title, &files, &class) {
+                confidence = cal;
+            }
             let decision = policy::decide(risk, reversible, confidence);
             println!("{decision}");
             let code = match decision {
@@ -1283,9 +1375,17 @@ fn run_policy(action: PolicyAction) -> ! {
             options,
             recommend,
             journal_dir,
+            title,
+            files,
+            class,
         } => {
-            let (risk, reversible, confidence) =
+            let (risk, reversible, mut confidence) =
                 parse_policy_levels(&risk, &reversible, &confidence);
+            // Same soft-dependency override as `decide` (see there). Inert on
+            // the legacy invocation (no --title/--files/--class).
+            if let Some(cal) = calibrated_confidence(&title, &files, &class) {
+                confidence = cal;
+            }
             let decision = policy::decide(risk, reversible, confidence);
             let outcome = gatelog::answer_outcome(decision, &options, recommend);
             match &outcome {
@@ -2673,6 +2773,32 @@ fn read_stdin() -> String {
     let mut s = String::new();
     let _ = std::io::stdin().read_to_string(&mut s);
     s
+}
+
+#[cfg(test)]
+mod calibrated_confidence_tests {
+    use super::calibrated_confidence;
+
+    /// The legacy invocation supplies none of the new flags: the calibrated
+    /// path must be entirely inert (return `None`, no shell-out) so `decide`
+    /// keeps using the self-reported `--confidence`. This pins the hard
+    /// backward-compat gate without depending on fugu-router being present.
+    #[test]
+    fn no_new_flags_is_inert_and_falls_back() {
+        assert_eq!(calibrated_confidence(&None, &[], &None), None);
+    }
+
+    /// With a flag supplied but fugu-router absent (or its `confidence`
+    /// subcommand missing), the probe must fail-soft to `None` — never a hard
+    /// error — so the caller falls back to `--confidence`. In the test
+    /// environment fugu-router is not on PATH, so this exercises the soft-skip.
+    #[test]
+    fn flag_supplied_but_probe_unusable_falls_back() {
+        let title = Some("some task".to_string());
+        // Either fugu-router is absent (None) or it lacks the `confidence`
+        // subcommand / history (non-zero exit → None). Both yield None here.
+        assert_eq!(calibrated_confidence(&title, &[], &None), None);
+    }
 }
 
 #[cfg(test)]

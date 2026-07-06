@@ -767,6 +767,39 @@ enum VerifyAction {
         #[arg(long)]
         run: Option<String>,
     },
+    /// Deterministic baseline-exclusion verdict: read the baseline and current
+    /// files (each a captured test-output blob OR a bare newline-list of failing
+    /// test names), extract the failing-test-name sets via the same
+    /// `distill_failure` path, and print the set-difference regressions
+    /// (`current - baseline`) plus `passed` as pretty JSON on stdout. Pure and
+    /// deterministic — no LLM. The verifier consults this as the authoritative
+    /// regression decision instead of eyeballing the two lists.
+    Regressions {
+        /// File of the baseline (pre-change) failing tests — captured test
+        /// output or a newline list of names.
+        #[arg(long)]
+        baseline: PathBuf,
+        /// File of the current (post-change) failing tests — captured test
+        /// output or a newline list of names.
+        #[arg(long)]
+        current: PathBuf,
+    },
+    /// Derive verifier confidence (`high|medium|low`) from observed facts rather
+    /// than an LLM self-report, and print the bare token on stdout. Deterministic:
+    /// a check/repro ran + exited 0 + no regressions -> high; no check ran ->
+    /// low; anything in between -> medium. Flags are presence-style booleans.
+    Confidence {
+        /// A runnable check/repro existed and was actually executed.
+        #[arg(long)]
+        check_executed: bool,
+        /// The executed check/repro exited 0 (only meaningful with
+        /// `--check-executed`).
+        #[arg(long)]
+        exit_zero: bool,
+        /// No regressions relative to baseline (see `verify regressions`).
+        #[arg(long)]
+        no_regressions: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1212,6 +1245,30 @@ fn run_user(cmd: Command) -> Result<()> {
                     }
                 };
                 println!("{}", serde_json::to_string_pretty(&verdict)?);
+            }
+            VerifyAction::Regressions { baseline, current } => {
+                let baseline_raw = std::fs::read_to_string(&baseline)
+                    .with_context(|| format!("reading {}", baseline.display()))?;
+                let current_raw = std::fs::read_to_string(&current)
+                    .with_context(|| format!("reading {}", current.display()))?;
+                let baseline_set = verify::failing_name_set(&baseline_raw);
+                let current_set = verify::failing_name_set(&current_raw);
+                let regs = verify::regressions(&current_set, &baseline_set);
+                let passed = verify::regressions_passed(&current_set, &baseline_set);
+                let out = serde_json::json!({ "regressions": regs, "passed": passed });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            }
+            VerifyAction::Confidence {
+                check_executed,
+                exit_zero,
+                no_regressions,
+            } => {
+                let facts = verify::VerifyFacts {
+                    check_executed,
+                    check_exit_zero: exit_zero,
+                    no_regressions,
+                };
+                println!("{}", verify::derive_confidence(&facts).as_str());
             }
         },
         Command::Replan { action } => match action {

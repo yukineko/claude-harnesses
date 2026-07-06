@@ -14,6 +14,7 @@
 //!    is only *evidence handed to* the verifier, never a substitute for it. When
 //!    classification is ambiguous we fail toward RUNNING the verifier (safe side).
 
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::process::{Command, Stdio};
@@ -1072,9 +1073,212 @@ fn is_criteria_runner(tok: &str) -> bool {
     )
 }
 
+/// Deterministic set-difference of failing-test names: the tests that fail
+/// *now* but were **not** already failing at baseline (i.e. genuine regressions
+/// introduced by the change under verification).
+///
+/// Pure and deterministic: `BTreeSet` fixes a stable sort order, so the same
+/// inputs always yield the same `Vec` in the same order. A test that was already
+/// red at baseline and is still red is **not** a regression (it is pre-existing),
+/// and a baseline failure that disappears is likewise never a regression.
+///
+/// Input sets are typically built from [`distill_failure`]'s `failing_tests`
+/// (e.g. `current.failing_tests.iter().cloned().collect()`).
+pub fn regressions(
+    current_failing: &BTreeSet<String>,
+    baseline_failing: &BTreeSet<String>,
+) -> Vec<String> {
+    current_failing
+        .difference(baseline_failing)
+        .cloned()
+        .collect()
+}
+
+/// `true` iff there are no regressions relative to baseline (the verify gate's
+/// baseline-failure-excluded pass condition). Thin, deterministic companion to
+/// [`regressions`].
+pub fn regressions_passed(
+    current_failing: &BTreeSet<String>,
+    baseline_failing: &BTreeSet<String>,
+) -> bool {
+    regressions(current_failing, baseline_failing).is_empty()
+}
+
+/// Build the set of failing-test names from either a captured test-output blob
+/// OR a bare newline-list of names. Reuses [`distill_failure`]'s extraction
+/// (the same `test <name> ... FAILED` / `failures:` parsing); when that yields
+/// nothing — the input is a plain name list, not cargo output — each non-empty
+/// trimmed line is taken verbatim as a name. Pure and deterministic.
+pub fn failing_name_set(raw: &str) -> BTreeSet<String> {
+    let digest = distill_failure(raw);
+    if !digest.failing_tests.is_empty() {
+        return digest.failing_tests.into_iter().collect();
+    }
+    raw.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Verifier confidence, derived from *observed facts* rather than the LLM's
+/// free-text self-report. Its lowercase [`VerifierConfidence::as_str`] matches
+/// the existing string confidence vocabulary (`"high" | "medium" | "low"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifierConfidence {
+    High,
+    Medium,
+    Low,
+}
+
+impl VerifierConfidence {
+    /// The canonical lowercase token, aligned with the verifier's existing
+    /// `confidence` string field (`"high" | "medium" | "low"`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VerifierConfidence::High => "high",
+            VerifierConfidence::Medium => "medium",
+            VerifierConfidence::Low => "low",
+        }
+    }
+}
+
+/// The observed facts of a verification run, from which confidence is derived.
+/// Purely mechanical inputs — no LLM judgement — so [`derive_confidence`] is a
+/// deterministic function of what actually happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifyFacts {
+    /// A runnable check / repro command existed **and was actually executed**.
+    /// `false` means either none was available or it never ran (verification
+    /// then rests on free-text argument only).
+    pub check_executed: bool,
+    /// The executed check / repro exited `0`. Meaningful only when
+    /// `check_executed` is `true`.
+    pub check_exit_zero: bool,
+    /// No regressions relative to baseline (see [`regressions`]).
+    pub no_regressions: bool,
+}
+
+/// Derive verifier confidence from observed facts (a pure, deterministic
+/// front-stage that supplements — never replaces — the LLM verifier's own
+/// self-reported confidence).
+///
+/// - A runnable check/repro **ran, exited 0, and produced no regressions** →
+///   [`VerifierConfidence::High`].
+/// - **No runnable check/repro, or it never ran** (verification leans on
+///   free-text argument only) → [`VerifierConfidence::Low`].
+/// - Anything in between — it ran but failed or regressed —
+///   → [`VerifierConfidence::Medium`].
+pub fn derive_confidence(facts: &VerifyFacts) -> VerifierConfidence {
+    if !facts.check_executed {
+        return VerifierConfidence::Low;
+    }
+    if facts.check_exit_zero && facts.no_regressions {
+        return VerifierConfidence::High;
+    }
+    VerifierConfidence::Medium
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── t1: deterministic regression set-diff (baseline-failure exclusion) ──
+
+    fn nameset(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A newly-failing test (present in current, absent at baseline) is a
+    /// regression; the gate does not pass.
+    #[test]
+    fn regression_new_failure_is_flagged() {
+        let baseline = nameset(&["A"]);
+        let current = nameset(&["A", "B"]);
+        assert_eq!(regressions(&current, &baseline), vec!["B".to_string()]);
+        assert!(!regressions_passed(&current, &baseline));
+    }
+
+    /// No change in the failing set → no regressions, gate passes.
+    #[test]
+    fn regression_identical_sets_pass() {
+        let baseline = nameset(&["A"]);
+        let current = nameset(&["A"]);
+        assert!(regressions(&current, &baseline).is_empty());
+        assert!(regressions_passed(&current, &baseline));
+    }
+
+    /// A pre-existing baseline failure that clears is NOT a regression; the gate
+    /// still passes (baseline reds are excluded, never counted against current).
+    #[test]
+    fn regression_cleared_baseline_failure_is_not_regression() {
+        let baseline = nameset(&["A", "B"]);
+        let current = nameset(&["A"]);
+        assert!(regressions(&current, &baseline).is_empty());
+        assert!(regressions_passed(&current, &baseline));
+    }
+
+    /// Determinism: identical inputs yield identical, stably-sorted output.
+    #[test]
+    fn regression_output_is_deterministic_and_sorted() {
+        let baseline = nameset(&["x"]);
+        let current = nameset(&["c", "a", "x", "b"]);
+        let r1 = regressions(&current, &baseline);
+        let r2 = regressions(&current, &baseline);
+        assert_eq!(r1, r2);
+        assert_eq!(r1, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+    }
+
+    // ── t2: derive verifier confidence from observed facts ─────────────────
+
+    /// Ran a check, it exited 0, no regressions → High.
+    #[test]
+    fn confidence_high_when_ran_clean_and_no_regression() {
+        let facts = VerifyFacts {
+            check_executed: true,
+            check_exit_zero: true,
+            no_regressions: true,
+        };
+        assert_eq!(derive_confidence(&facts), VerifierConfidence::High);
+        assert_eq!(derive_confidence(&facts).as_str(), "high");
+    }
+
+    /// No runnable check executed (free-text argument only) → Low, regardless of
+    /// the other flags.
+    #[test]
+    fn confidence_low_when_no_check_executed() {
+        let facts = VerifyFacts {
+            check_executed: false,
+            check_exit_zero: true,
+            no_regressions: true,
+        };
+        assert_eq!(derive_confidence(&facts), VerifierConfidence::Low);
+        assert_eq!(derive_confidence(&facts).as_str(), "low");
+    }
+
+    /// Ran but a regression appeared → Medium (intermediate).
+    #[test]
+    fn confidence_medium_when_ran_but_regressed() {
+        let facts = VerifyFacts {
+            check_executed: true,
+            check_exit_zero: true,
+            no_regressions: false,
+        };
+        assert_eq!(derive_confidence(&facts), VerifierConfidence::Medium);
+        assert_eq!(derive_confidence(&facts).as_str(), "medium");
+    }
+
+    /// Ran but exited non-zero → Medium (intermediate), even with no regression
+    /// set computed.
+    #[test]
+    fn confidence_medium_when_ran_but_nonzero_exit() {
+        let facts = VerifyFacts {
+            check_executed: true,
+            check_exit_zero: false,
+            no_regressions: true,
+        };
+        assert_eq!(derive_confidence(&facts), VerifierConfidence::Medium);
+    }
 
     // ── Invariant 1: verifier model never equals worker model ──────────────
 

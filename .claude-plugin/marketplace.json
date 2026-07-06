@@ -131,7 +131,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: an interpreter/worker/verifier skill plus a Rust binary that schedules tasks into parallel/serial batches by file-conflict analysis, manages the git-worktree lifecycle, tracks run state, and gates completion. Subscription-native (skill + agents + hook, no API key).",
-      "version": "0.7.8",
+      "version": "0.7.9",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -382,7 +382,7 @@
     {
       "name": "fugu-router",
       "description": "fugu-style per-model routing for Claude Code orchestration. Learns from past task outcomes (which model passed verification, at what cost) and picks the cheapest Claude tier that historically clears similar work. Feeds condukt's suggested_model deterministically; records outcomes back to a local episode store. No API key, no embedding service — lexical k-NN over a JSONL store.",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "category": "orchestration",
       "keywords": [
         "routing",

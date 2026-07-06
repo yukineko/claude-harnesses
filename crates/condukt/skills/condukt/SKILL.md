@@ -286,6 +286,16 @@ condukt state autonomy-check   # autonomous なら exit 0 + {"autonomous":true}�
 のタスクは、`AskUserQuestion` の計画提示で明示的に強調し、done_criteria や scope の確認を促す。
 ユーザーが合意すれば通常通り進む (実装・検証のゲートは Phase 6 で行う)。
 
+**calibrated confidence override (自己申告 confidence の較正・soft 依存)**: `condukt policy decide` /
+`condukt policy answer` は、自己申告の `--confidence low|medium|high` に加えて任意の
+`--title` / `--files` / `--class` を受け付ける。これらが与えられ、かつ `fugu-router` が PATH 上にあり
+`fugu-router confidence [--files <csv>] [--class <c>] <title text...>` が過去実績から較正した
+`[0,1]` スコアを返すときは、そのスコアを `policy::Level::from_score`(純関数・閾値 `<0.34`→Low /
+`<0.67`→Medium / それ以上→High) で band に写して confidence 軸に採用する(自己申告の上書き)。
+fugu-router が不在・非0終了・空/不正な stdout、または新 flag 未指定のときは自己申告の
+`--confidence` にそのまま fall back する(後方互換: 新 flag 無しの従来呼び出しは byte 単位・exit code
+とも不変)。`policy::decide` 本体は純関数のまま(shell-out は main の I/O 層に隔離)。
+
 ### Phase 3.5 — 競合チェック (conflict check)
 
 `state init` の前に、同プロジェクトで実行中の他セッションと衝突しないかを確認する。

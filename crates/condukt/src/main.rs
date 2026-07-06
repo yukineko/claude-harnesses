@@ -9,6 +9,7 @@
 
 mod checkpoint;
 mod ci;
+mod circuit;
 mod claim;
 mod config;
 mod consensus;

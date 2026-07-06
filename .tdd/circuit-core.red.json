@@ -1,0 +1,9 @@
+{
+  "cmd": "cargo test -p condukt circuit",
+  "exit_code": 101,
+  "output_tail": "\nthread 'circuit::tests::idle_equal_to_ttl_trips' (15718323) panicked at crates/condukt/src/circuit.rs:137:9:\nassertion `left == right` failed\n  left: Continue\n right: Trip(Stall)\n\n---- circuit::tests::streak_beats_stall stdout ----\n\nthread 'circuit::tests::streak_beats_stall' (15718329) panicked at crates/condukt/src/circuit.rs:191:9:\nassertion `left == right` failed\n  left: Continue\n right: Trip(FailureStreak)\n\n---- circuit::tests::stall_trips stdout ----\n\nthread 'circuit::tests::stall_trips' (15718328) panicked at crates/condukt/src/circuit.rs:100:9:\nassertion `left == right` failed\n  left: Continue\n right: Trip(Stall)\n\n---- circuit::tests::streak_equal_to_cap_trips stdout ----\n\nthread 'circuit::tests::streak_equal_to_cap_trips' (15718331) panicked at crates/condukt/src/circuit.rs:121:9:\nassertion `left == right` failed\n  left: Continue\n right: Trip(FailureStreak)\n\n\nfailures:\n    circuit::tests::budget_beats_streak_and_stall\n    circuit::tests::budget_over_cap_trips\n    circuit::tests::failure_streak_trips\n    circuit::tests::idle_equal_to_ttl_trips\n    circuit::tests::stall_trips\n    circuit::tests::streak_beats_stall\n    circuit::tests::streak_equal_to_cap_trips\n\ntest result: FAILED. 7 passed; 7 failed; 0 ignored; 0 measured; 346 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `-p condukt --bin condukt`",
+  "passed": false,
+  "phase": "red",
+  "task": "circuit-core",
+  "ts": "2026-07-06T18:22:34.647839+09:00"
+}

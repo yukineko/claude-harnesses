@@ -1,0 +1,9 @@
+{
+  "cmd": "cargo test -p condukt circuit",
+  "exit_code": 0,
+  "passed": true,
+  "phase": "green",
+  "red_proof": "/Users/yuki/src/harness/.tdd/circuit-core.red.json",
+  "task": "circuit-core",
+  "ts": "2026-07-06T18:22:51.610637+09:00"
+}

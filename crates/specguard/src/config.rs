@@ -229,6 +229,52 @@ fn default_decisions_dir() -> String {
     "decisions".to_string()
 }
 
+/// Shell metacharacters that, in a NON-default `agent.command`, indicate an
+/// attempt to smuggle a shell command through the repo config. `agent.command`
+/// is passed to [`std::process::Command::new`] (see `agent.rs`) — there is no
+/// shell involved at the spawn site, so these characters are never legitimate in
+/// an executable name/path and their presence signals injection. See
+/// `SECURITY.md`.
+const AGENT_COMMAND_METACHARS: &[char] = &[';', '|', '&', '`', '\n', '\r', '<', '>'];
+
+/// Validate a repo-config-supplied agent command (the trust boundary between
+/// `specguard.toml` and process spawning).
+///
+/// The DEFAULT command (`claude`) is trusted unconditionally. Any NON-default
+/// command is rejected if it contains a shell metacharacter (`;`, `|`, `&`,
+/// backtick, `$(...)` command substitution, newline, or redirection), because
+/// such a value can only be an injection attempt: `agent.command` is spawned
+/// directly via `Command::new` with no shell, so a clean executable path never
+/// needs them.
+fn validate_agent_command(cfg: &AgentConfig) -> Result<()> {
+    // The built-in default is trusted unconditionally.
+    if cfg.command == AgentConfig::default().command {
+        return Ok(());
+    }
+    if let Some(c) = cfg
+        .command
+        .chars()
+        .find(|c| AGENT_COMMAND_METACHARS.contains(c))
+    {
+        anyhow::bail!(
+            "agent.command {:?} contains shell metacharacter {:?}; \
+             a non-default command is spawned directly (no shell) and must be a \
+             clean executable name/path (see SECURITY.md)",
+            cfg.command,
+            c
+        );
+    }
+    // `$(...)` command substitution (the `$` alone is harmless in a path).
+    if cfg.command.contains("$(") {
+        anyhow::bail!(
+            "agent.command {:?} contains `$(` command substitution; \
+             a non-default command must be a clean executable name/path (see SECURITY.md)",
+            cfg.command
+        );
+    }
+    Ok(())
+}
+
 impl Config {
     /// Load and validate a config from a TOML file.
     pub fn load(path: &Path) -> Result<Config> {
@@ -247,6 +293,7 @@ impl Config {
         if self.agent.command.trim().is_empty() {
             anyhow::bail!("agent.command must not be empty");
         }
+        validate_agent_command(&self.agent)?;
         if self.areas.is_empty() && self.invariants.is_empty() {
             anyhow::bail!("config defines no [[area]] and no [[invariant]]; nothing to audit");
         }
@@ -256,5 +303,76 @@ impl Config {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn agent(command: &str) -> AgentConfig {
+        AgentConfig {
+            command: command.to_string(),
+            args: vec![],
+        }
+    }
+
+    /// The default command (`claude`) is trusted unconditionally, and a clean
+    /// non-default command (letters/digits/dash/underscore/slash/dot/spaces) is
+    /// accepted.
+    #[test]
+    fn agent_command_accepts_default_and_clean() {
+        // Default is Ok even though args differ from the built-in default.
+        assert!(validate_agent_command(&AgentConfig::default()).is_ok());
+        assert!(validate_agent_command(&agent("claude")).is_ok());
+        // Clean non-default commands (paths, args-less binaries).
+        assert!(validate_agent_command(&agent("/usr/local/bin/claude-audit")).is_ok());
+        assert!(validate_agent_command(&agent("./tools/my_agent.sh")).is_ok());
+        assert!(validate_agent_command(&agent("uvx some-agent")).is_ok());
+    }
+
+    /// A non-default command carrying ANY required shell metacharacter
+    /// (`;`, `|`, `&`, backtick, `$(...)`) is rejected.
+    #[test]
+    fn agent_command_rejects_metachars() {
+        for bad in [
+            "claude; rm -rf /",
+            "claude | tee /tmp/x",
+            "claude & curl evil",
+            "echo `whoami`",
+            "echo $(whoami)",
+            "claude > /etc/passwd",
+            "claude\nrm -rf /",
+        ] {
+            assert!(
+                validate_agent_command(&agent(bad)).is_err(),
+                "expected rejection for {bad:?}"
+            );
+        }
+    }
+
+    /// A bad `agent.command` must make the whole config `validate` (and thus
+    /// `Config::load`) return an Err rather than reach the spawn sink.
+    #[test]
+    fn agent_command_rejection_fails_config_validate() {
+        let cfg = Config {
+            project: Project {
+                name: "p".to_string(),
+                root: ".".to_string(),
+            },
+            agent: agent("claude; rm -rf /"),
+            scope: ScopeConfig::default(),
+            output: OutputConfig::default(),
+            prompt: PromptConfig::default(),
+            decisions: DecisionsConfig::default(),
+            verify: VerifyConfig::default(),
+            areas: vec![Area {
+                name: "a".to_string(),
+                globs: vec!["src/**".to_string()],
+                canon: vec![],
+            }],
+            invariants: vec![],
+        };
+        assert!(cfg.validate().is_err());
     }
 }

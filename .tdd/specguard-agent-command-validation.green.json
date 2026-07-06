@@ -1,0 +1,9 @@
+{
+  "cmd": "cargo test -p specguard agent_command",
+  "exit_code": 0,
+  "passed": true,
+  "phase": "green",
+  "red_proof": "/Users/yuki/.condukt/worktrees/specguard-agent-command-validation/.tdd/specguard-agent-command-validation.red.json",
+  "task": "specguard-agent-command-validation",
+  "ts": "2026-07-06T18:52:03.113809+09:00"
+}

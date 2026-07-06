@@ -122,6 +122,16 @@ enum Command {
         #[command(subcommand)]
         action: CircuitAction,
     },
+    /// Deterministic GATE-EXEC decision: for a gated task, decide whether it may
+    /// auto-execute or must escalate. Classifies the task's action text (graded
+    /// risk + reversibility), reads the autonomy policy — all FAIL-SOFT — runs
+    /// the pure `decide_gate_exec` core, and EXITS NONZERO on escalate. On
+    /// auto-exec it checkpoints the run first (recoverable) then journals. A
+    /// caller does `if ! condukt gate check --run RID --task T; then escalate; fi`.
+    Gate {
+        #[command(subcommand)]
+        action: GateAction,
+    },
     /// Opt-in worker sandboxing: run a worker's build/test command through the
     /// docker exec backend (network + filesystem + resource isolation) when
     /// `[worker] sandbox_enabled` / `CONDUKT_WORKER_SANDBOX` is set, otherwise run
@@ -869,6 +879,27 @@ enum CircuitAction {
 }
 
 #[derive(Subcommand)]
+enum GateAction {
+    /// Decide whether a gated task auto-executes or escalates. Loads the run's
+    /// decomposition, classifies the task's action text (graded risk +
+    /// reversibility), derives whether the run policy is auto (autonomous mode,
+    /// the SAME predicate `state autonomy-check` uses) — all FAIL-SOFT — runs the
+    /// deterministic `decide_gate_exec` core, prints the verdict + gathered
+    /// signals as JSON, and journals the decision (fail-soft). On auto-exec it
+    /// checkpoints the run FIRST (so the action is recoverable) then exits 0; on
+    /// escalate it exits 1 so a caller can do
+    /// `if ! condukt gate check --run RID --task T; then escalate; fi`.
+    Check {
+        /// The run id whose decomposition holds the task.
+        #[arg(long)]
+        run: String,
+        /// The gated task id to decide.
+        #[arg(long)]
+        task: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum PrAction {
     /// Prepare (dry-run) or, with --execute, open a PR via `gh pr create`.
     ///
@@ -1316,6 +1347,15 @@ fn run_user(cmd: Command) -> Result<()> {
                     idle_ttl_secs,
                     budget_cap_usd,
                 );
+                std::process::exit(code);
+            }
+        },
+        Command::Gate { action } => match action {
+            GateAction::Check { run, task } => {
+                // The handler prints the verdict JSON, checkpoints + journals
+                // (fail-soft) and returns the exit code (0 = auto-exec, 1 =
+                // escalate). Exit directly so a caller can branch on the status.
+                let code = gate_exec::run_gate_check(&cfg, &cwd, &run, &task);
                 std::process::exit(code);
             }
         },
@@ -2566,18 +2606,10 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             println!("{chosen}");
         }
         StateAction::AutonomyCheck => {
-            // Delegate to the central policy engine instead of reading the raw
-            // bool: the autonomous flag supplies confidence on a routine
-            // (medium risk, medium reversibility) gate. Auto -> autonomous;
-            // anything else (Escalate) keeps the human in the loop. This
+            // Shared predicate (see `policy_is_autonomous`): delegate to the
+            // central policy engine instead of reading the raw bool. This
             // preserves the existing stdout bytes + exit contract exactly.
-            let confidence = if cfg.autonomous {
-                policy::Level::High
-            } else {
-                policy::Level::Low
-            };
-            let decision = policy::decide(policy::Level::Medium, policy::Level::Medium, confidence);
-            let autonomous = decision == policy::Decision::Auto;
+            let autonomous = policy_is_autonomous(cfg);
             println!("{{\"autonomous\":{autonomous}}}");
             if !autonomous {
                 std::process::exit(1);
@@ -2628,6 +2660,23 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
 /// The durable per-project state dir for a run's checkpoints/journal — the same
 /// dir the run-state and decomposition live in (derived via the public
 /// `decomposition_path` so we need no new state.rs API).
+/// Shared autonomy predicate consumed by BOTH `state autonomy-check` and `gate
+/// check`: delegate to the central policy engine rather than reading the raw
+/// `cfg.autonomous` bool. The autonomous flag supplies confidence on a routine
+/// (medium risk, medium reversibility) gate — an `Auto` verdict means
+/// autonomous; anything else (Escalate) keeps the human in the loop. Factoring
+/// it here guarantees the two subcommands stay in lockstep (non-autonomous mode
+/// always yields `false`, so every gated task still escalates as today).
+pub(crate) fn policy_is_autonomous(cfg: &Config) -> bool {
+    let confidence = if cfg.autonomous {
+        policy::Level::High
+    } else {
+        policy::Level::Low
+    };
+    policy::decide(policy::Level::Medium, policy::Level::Medium, confidence)
+        == policy::Decision::Auto
+}
+
 fn checkpoint_project_dir(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
     state::decomposition_path(cfg, cwd, run_id)
         .parent()
@@ -2677,7 +2726,7 @@ fn task_files(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> Vec<Stri
 
 /// Snapshot each task's current branch tip SHA (best-effort): tasks with no
 /// branch, or whose `git rev-parse` fails, are simply omitted — never aborts.
-fn capture_branch_shas(cwd: &Path, rs: &state::RunState) -> BTreeMap<String, String> {
+pub(crate) fn capture_branch_shas(cwd: &Path, rs: &state::RunState) -> BTreeMap<String, String> {
     let mut shas = BTreeMap::new();
     let repo = worktree::toplevel(cwd).ok();
     for t in &rs.tasks {

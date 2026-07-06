@@ -200,6 +200,75 @@ pub fn load_circuit_records(dir: &Path, run_id: &str) -> Vec<CircuitRecord> {
         .collect()
 }
 
+// ── Gate-exec verdict journal ───────────────────────────────────────────────
+//
+// `condukt gate check` appends one record per invocation here so the
+// auto-exec-vs-escalate history of gated tasks is observable. Same fail-soft
+// append-only JSONL pattern as the gate-decisions / circuit logs above (a
+// journaling failure must never change the command's exit code). Kept as plain
+// scalar fields so a log with future/unknown values still round-trips.
+
+/// One recorded gate-exec verdict — the append-only record written on every
+/// `condukt gate check --run RID --task TASKID`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GateExecRecord {
+    /// `"auto_exec"` or `"escalate"`.
+    pub verdict: String,
+    /// The gated task the decision was made for.
+    pub task: String,
+    /// The graded risk slug (`"low"`/`"medium"`/`"high"`), or `None` when the
+    /// signals could not be gathered (fail-soft escalate).
+    pub risk: Option<String>,
+    /// Whether the action was reversible, or `None` on a signal-gathering miss.
+    pub reversible: Option<bool>,
+    /// Whether the prevailing run policy was auto (autonomous mode).
+    pub policy_is_auto: bool,
+    /// Unix seconds when the verdict was recorded.
+    pub recorded_at: i64,
+}
+
+/// Path of the per-run gate-exec-verdict log (JSONL) inside `dir`. The run id is
+/// sanitised so a crafted id cannot escape `dir`.
+pub fn gate_exec_log_path(dir: &Path, run_id: &str) -> PathBuf {
+    dir.join(format!(
+        "{}.gate-exec-log.jsonl",
+        harness_core::store::safe_session(run_id)
+    ))
+}
+
+/// Append one gate-exec verdict to the run's log. Fail-soft: any IO/serialize
+/// error is swallowed so a journaling failure never changes the gate's exit
+/// code. Mirrors [`append_circuit`].
+pub fn append_gate_exec(dir: &Path, run_id: &str, entry: &GateExecRecord) {
+    use std::io::Write;
+    let Ok(line) = serde_json::to_string(entry) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(gate_exec_log_path(dir, run_id))
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+/// Load a run's gate-exec-verdict log in file order. Missing file → empty vec;
+/// corrupt lines are skipped — never panics. Mirrors [`load_circuit_records`].
+/// The read side of the append-only journal: exercised by tests and ready for a
+/// future `gate stats` aggregator; `append_gate_exec` is the live write path.
+#[allow(dead_code)]
+pub fn load_gate_exec_records(dir: &Path, run_id: &str) -> Vec<GateExecRecord> {
+    let Ok(text) = std::fs::read_to_string(gate_exec_log_path(dir, run_id)) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<GateExecRecord>(l).ok())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,6 +364,27 @@ mod tests {
         assert_eq!(got[0], rec);
         // a different run id has its own (still-empty) log
         assert!(load_circuit_records(dir.path(), "r2").is_empty());
+    }
+
+    #[test]
+    fn gate_exec_append_then_load_round_trips_and_missing_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_gate_exec_records(dir.path(), "r1").is_empty());
+        let rec = GateExecRecord {
+            verdict: "auto_exec".to_string(),
+            task: "t1".to_string(),
+            risk: Some("low".to_string()),
+            reversible: Some(true),
+            policy_is_auto: true,
+            recorded_at: 7,
+        };
+        append_gate_exec(dir.path(), "r1", &rec);
+        append_gate_exec(dir.path(), "r1", &rec);
+        let got = load_gate_exec_records(dir.path(), "r1");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0], rec);
+        // a different run id has its own (still-empty) log
+        assert!(load_gate_exec_records(dir.path(), "r2").is_empty());
     }
 
     #[test]

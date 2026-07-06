@@ -229,8 +229,10 @@ pub fn validate(dec: &Decomposition) -> Vec<String> {
 
 /// The haystack the risk classifier inspects for a task: its title,
 /// done-criteria, and touched files joined together, so a deploy/push signal in
-/// any of them trips the deterministic force-gate.
-fn task_action_text(t: &Task) -> String {
+/// any of them trips the deterministic force-gate. Shared with
+/// [`crate::gate_exec::run_gate_check`] so the gate-exec decision classifies the
+/// exact same action text this force-gate does (no duplicated join logic).
+pub(crate) fn task_action_text(t: &Task) -> String {
     let mut s = t.title.clone();
     if let Some(dc) = &t.done_criteria {
         s.push(' ');

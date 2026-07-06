@@ -15,12 +15,10 @@
 //! [`crate::circuit::decide_circuit`]): no filesystem, no `std::time`, no env,
 //! no LLM. Same inputs always yield the same output, and it never panics.
 
-// This pure core is not yet wired to a subcommand: the `condukt gate check`
-// consumer is the intentional downstream task (mirrors circuit.rs before it was
-// consumed).
-#![allow(dead_code)]
-
-use blastguard::classify::Risk;
+use crate::config::Config;
+use crate::state;
+use blastguard::classify::{classify, Risk, RiskAssessment};
+use std::path::Path;
 
 /// The two-state verdict emitted by [`decide_gate_exec`]: run the gated task
 /// autonomously, or escalate it to a human.
@@ -45,6 +43,103 @@ pub fn decide_gate_exec(risk: Risk, reversible: bool, policy_is_auto: bool) -> G
         GateExec::AutoExec
     } else {
         GateExec::Escalate
+    }
+}
+
+// ── signal gathering + the CLI handler (clock/FS/env live HERE, not the core) ─
+
+/// A stable lowercase slug for a graded risk (mirrors blastguard's own
+/// serde `rename_all = "lowercase"`), used for the JSON output + journal.
+fn risk_slug(risk: Risk) -> &'static str {
+    match risk {
+        Risk::Low => "low",
+        Risk::Medium => "medium",
+        Risk::High => "high",
+    }
+}
+
+/// Gather the `{risk, reversible}` signals for one gated task, FAIL-SOFT: an
+/// unloadable run, a missing/corrupt decomposition, or a task id that isn't in
+/// the decomposition yields `None` (which the caller degrades to Escalate).
+/// Never panics. Classifies the SAME action text the schedule force-gate does
+/// via [`crate::schedule::task_action_text`] — no duplicated join logic.
+fn gather_assessment(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+    task_id: &str,
+) -> Option<RiskAssessment> {
+    let raw = state::load_decomposition(cfg, cwd, run_id).ok()?;
+    let dec = serde_json::from_str::<crate::model::Decomposition>(&raw).ok()?;
+    let task = dec.tasks.iter().find(|t| t.id == task_id)?;
+    Some(classify(&crate::schedule::task_action_text(task)))
+}
+
+/// Handler for `condukt gate check --run RID --task TASKID`. Gathers the
+/// `{risk, reversible}` signals FAIL-SOFT (any gathering error degrades to
+/// Escalate and never panics), derives `policy_is_auto` from the SAME autonomy
+/// predicate `state autonomy-check` uses, runs the pure [`decide_gate_exec`]
+/// core, and prints the verdict + gathered signals as JSON on stdout.
+///
+/// On [`GateExec::AutoExec`] it FIRST writes a durable run checkpoint (so the
+/// action is recoverable), THEN appends the decision to the fail-soft
+/// append-only journal, THEN returns exit `0`. On [`GateExec::Escalate`] it
+/// appends the decision (fail-soft) and returns exit `1`, preserving the human
+/// stop so a caller can `if ! condukt gate check --run RID --task T; then
+/// escalate; fi`.
+pub fn run_gate_check(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> i32 {
+    let assessment = gather_assessment(cfg, cwd, run_id, task_id);
+    let policy_is_auto = crate::policy_is_autonomous(cfg);
+
+    // Fail-soft: a missing signal (assessment None) degrades to Escalate.
+    let verdict = match &assessment {
+        Some(a) => decide_gate_exec(a.risk, a.reversible, policy_is_auto),
+        None => GateExec::Escalate,
+    };
+    let verdict_str = match verdict {
+        GateExec::AutoExec => "auto_exec",
+        GateExec::Escalate => "escalate",
+    };
+    let risk = assessment.as_ref().map(|a| risk_slug(a.risk).to_string());
+    let reversible = assessment.as_ref().map(|a| a.reversible);
+
+    // Observable stdout JSON (verdict + every gathered signal + the task id).
+    let out = serde_json::json!({
+        "verdict": verdict_str,
+        "risk": risk,
+        "reversible": reversible,
+        "policy_is_auto": policy_is_auto,
+        "task": task_id,
+    });
+    println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+
+    let dir = state::project_state_dir(cfg, cwd);
+
+    // On AutoExec: checkpoint FIRST so the auto-executed action is recoverable,
+    // reusing the exact function `state checkpoint` calls. Fail-soft: an
+    // unloadable run or a checkpoint write error must not change the exit code.
+    if matches!(verdict, GateExec::AutoExec) {
+        if let Ok(rs) = state::RunState::load(cfg, cwd, run_id) {
+            let shas = crate::capture_branch_shas(cwd, &rs);
+            let _ = crate::checkpoint::write_checkpoint(&dir, run_id, &rs, "gate-exec", shas);
+        }
+    }
+
+    // Journal the decision to the append-only JSONL trail in BOTH cases —
+    // FAIL-SOFT (a journaling failure must never change the exit code).
+    let record = crate::gatelog::GateExecRecord {
+        verdict: verdict_str.to_string(),
+        task: task_id.to_string(),
+        risk,
+        reversible,
+        policy_is_auto,
+        recorded_at: state::now_secs(),
+    };
+    crate::gatelog::append_gate_exec(&dir, run_id, &record);
+
+    match verdict {
+        GateExec::AutoExec => 0,
+        GateExec::Escalate => 1,
     }
 }
 

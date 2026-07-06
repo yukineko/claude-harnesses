@@ -159,7 +159,7 @@
     {
       "name": "context-governor",
       "description": "A thin control layer around Claude Code's built-in compaction: pin + lossless-recall + retrieval + tool-hygiene, wired as a single hook-dispatch binary. Separates the three axes it touches — size (window occupancy), cost (recompute/cache), correctness (norm preservation) — and never writes its own lossy summarizer (compression is delegated to built-in compaction). Subscription-native (hooks + binary, no API key).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "context",
       "keywords": [
         "context",
@@ -603,7 +603,7 @@
     {
       "name": "specguard",
       "description": "仕様↔実装 整合監査ハーネスを Claude Code から subscription-native に実行する。各 shard を read-only な in-session subagent で監査し (nested claude --print なし)、決定的ハーネス (scope/render/parse/report) は specguard バイナリに委譲する。",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "category": "quality",
       "keywords": [
         "spec",

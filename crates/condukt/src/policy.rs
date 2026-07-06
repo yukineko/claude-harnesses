@@ -29,6 +29,42 @@ impl Level {
             Level::High => 2,
         }
     }
+
+    /// Bucket a continuous calibrated confidence score in `[0, 1]` into the
+    /// three-valued confidence [`Level`]. PURE: no I/O, total, never panics.
+    ///
+    /// This is the adapter that lets a *calibrated* confidence signal (e.g.
+    /// fugu-router's "history says this class of task passes" score) feed the
+    /// same `confidence` axis that `decide` consumes. Semantics are aligned
+    /// with `decide`'s score rule (`risk − reversibility − confidence`, where a
+    /// higher confidence *rank* pushes toward `Auto`): a HIGH calibrated score
+    /// (near 1.0 — "history says this passes") maps to [`Level::High`] so it
+    /// lowers the decision score toward `Auto`, and a LOW score (near 0.0) maps
+    /// to [`Level::Low`].
+    ///
+    /// Documented thresholds bucketing `[0, 1]`:
+    /// - `score < 0.34` → [`Level::Low`]
+    /// - `0.34 ≤ score < 0.67` → [`Level::Medium`]
+    /// - `score ≥ 0.67` → [`Level::High`]
+    ///
+    /// Out-of-range inputs are clamped into `[0, 1]` first (so `-5.0` → `Low`,
+    /// `2.0` → `High`). A non-finite score (`NaN`) is treated as the least
+    /// confident value, [`Level::Low`], rather than panicking.
+    pub fn from_score(score: f64) -> Level {
+        // NaN is unordered under comparisons; treat it as the safe (least
+        // confident) bucket so the mapping stays total and never surprises.
+        if score.is_nan() {
+            return Level::Low;
+        }
+        let s = score.clamp(0.0, 1.0);
+        if s < 0.34 {
+            Level::Low
+        } else if s < 0.67 {
+            Level::Medium
+        } else {
+            Level::High
+        }
+    }
 }
 
 /// Parse a level from a case-insensitive token. Accepts `low`, `medium`/`med`,
@@ -125,6 +161,53 @@ mod tests {
         assert_eq!(parse_level(""), None);
         assert_eq!(parse_level("critical"), None);
         assert_eq!(parse_level("2"), None);
+    }
+
+    #[test]
+    fn from_score_buckets_the_unit_interval_at_documented_thresholds() {
+        // Deep in each band.
+        assert_eq!(Level::from_score(0.0), Level::Low);
+        assert_eq!(Level::from_score(0.2), Level::Low);
+        assert_eq!(Level::from_score(0.5), Level::Medium);
+        assert_eq!(Level::from_score(0.9), Level::High);
+        assert_eq!(Level::from_score(1.0), Level::High);
+    }
+
+    #[test]
+    fn from_score_boundaries_are_pinned() {
+        // Low/Medium boundary at 0.34 (inclusive into Medium).
+        assert_eq!(Level::from_score(0.3399), Level::Low);
+        assert_eq!(Level::from_score(0.34), Level::Medium);
+        // Medium/High boundary at 0.67 (inclusive into High).
+        assert_eq!(Level::from_score(0.6699), Level::Medium);
+        assert_eq!(Level::from_score(0.67), Level::High);
+    }
+
+    #[test]
+    fn from_score_clamps_out_of_range_inputs() {
+        assert_eq!(Level::from_score(-5.0), Level::Low);
+        assert_eq!(Level::from_score(-0.0001), Level::Low);
+        assert_eq!(Level::from_score(1.0001), Level::High);
+        assert_eq!(Level::from_score(42.0), Level::High);
+    }
+
+    #[test]
+    fn from_score_nan_is_least_confident_not_a_panic() {
+        assert_eq!(Level::from_score(f64::NAN), Level::Low);
+    }
+
+    #[test]
+    fn from_score_high_score_drives_toward_auto_low_toward_escalate() {
+        // Anchors the semantic contract with `decide`: a HIGH calibrated score
+        // maps to Level::High which lowers the decision score toward Auto.
+        let hi = Level::from_score(0.95);
+        let lo = Level::from_score(0.05);
+        assert_eq!(hi, Level::High);
+        assert_eq!(lo, Level::Low);
+        // On the (Medium, Medium) baseline, a calibrated-High confidence Autos
+        // while calibrated-Low Escalates (mirrors `delegation_profile_*`).
+        assert_eq!(decide(Level::Medium, Level::Medium, hi), Decision::Auto);
+        assert_eq!(decide(Level::Medium, Level::Medium, lo), Decision::Escalate);
     }
 
     #[test]

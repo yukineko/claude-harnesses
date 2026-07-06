@@ -1,0 +1,9 @@
+{
+  "cmd": "cargo test -p fugu-router confidence",
+  "exit_code": 0,
+  "passed": true,
+  "phase": "green",
+  "red_proof": "/Users/yuki/.condukt/worktrees/fugu-router-confidence/.tdd/fugu-router-confidence.red.json",
+  "task": "fugu-router-confidence",
+  "ts": "2026-07-06T17:22:33.335012+09:00"
+}

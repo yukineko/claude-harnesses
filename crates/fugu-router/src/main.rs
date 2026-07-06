@@ -8,6 +8,7 @@
 //! set each task's `suggested_model`, and `record` to feed outcomes back.
 
 mod budget;
+mod confidence;
 mod config;
 mod decomp;
 mod fingerprint;
@@ -102,6 +103,18 @@ enum Command {
     },
     /// Suggest a model for a single free-text task.
     Suggest {
+        #[arg(long, default_value = "")]
+        files: String,
+        #[arg(long, default_value = "")]
+        class: String,
+        /// The task description (free text).
+        text: Vec<String>,
+    },
+    /// Print a calibrated confidence in [0,1] that a task like this one will
+    /// pass verification, derived from the historical k-NN pass-rate of
+    /// similar episodes (Brier-informed, no LLM). Deterministic: same store
+    /// state + same inputs => byte-identical output.
+    Confidence {
         #[arg(long, default_value = "")]
         files: String,
         #[arg(long, default_value = "")]
@@ -432,6 +445,22 @@ fn run_user(cmd: Command) -> Result<()> {
                 "worker={} verifier={} ({}, {} confidence)\n  {}",
                 d.worker_model, d.verifier_model, d.basis, d.confidence, d.rationale
             );
+            Ok(())
+        }
+        Command::Confidence { files, class, text } => {
+            let title = text.join(" ");
+            let f = split_files(&files);
+            let eps = store::load(&cfg.store_path());
+            let score = confidence::calibrated_confidence(
+                &title,
+                &f,
+                &class,
+                &eps,
+                cfg.k,
+                cfg.sim_threshold,
+                cfg.min_samples,
+            );
+            println!("{score:.4}");
             Ok(())
         }
         Command::Stats { json } => cmd_stats(&cfg, json),

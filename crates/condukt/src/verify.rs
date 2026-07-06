@@ -1106,6 +1106,66 @@ pub fn regressions_passed(
     regressions(current_failing, baseline_failing).is_empty()
 }
 
+/// Verifier confidence, derived from *observed facts* rather than the LLM's
+/// free-text self-report. Its lowercase [`VerifierConfidence::as_str`] matches
+/// the existing string confidence vocabulary (`"high" | "medium" | "low"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifierConfidence {
+    High,
+    Medium,
+    Low,
+}
+
+impl VerifierConfidence {
+    /// The canonical lowercase token, aligned with the verifier's existing
+    /// `confidence` string field (`"high" | "medium" | "low"`).
+    #[allow(dead_code)] // additive pure layer; wired into the verify gate separately.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VerifierConfidence::High => "high",
+            VerifierConfidence::Medium => "medium",
+            VerifierConfidence::Low => "low",
+        }
+    }
+}
+
+/// The observed facts of a verification run, from which confidence is derived.
+/// Purely mechanical inputs — no LLM judgement — so [`derive_confidence`] is a
+/// deterministic function of what actually happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifyFacts {
+    /// A runnable check / repro command existed **and was actually executed**.
+    /// `false` means either none was available or it never ran (verification
+    /// then rests on free-text argument only).
+    pub check_executed: bool,
+    /// The executed check / repro exited `0`. Meaningful only when
+    /// `check_executed` is `true`.
+    pub check_exit_zero: bool,
+    /// No regressions relative to baseline (see [`regressions`]).
+    pub no_regressions: bool,
+}
+
+/// Derive verifier confidence from observed facts (a pure, deterministic
+/// front-stage that supplements — never replaces — the LLM verifier's own
+/// self-reported confidence).
+///
+/// - A runnable check/repro **ran, exited 0, and produced no regressions** →
+///   [`VerifierConfidence::High`].
+/// - **No runnable check/repro, or it never ran** (verification leans on
+///   free-text argument only) → [`VerifierConfidence::Low`].
+/// - Anything in between — it ran but failed or regressed —
+///   → [`VerifierConfidence::Medium`].
+#[allow(dead_code)] // additive pure layer; wired into the verify gate separately.
+pub fn derive_confidence(facts: &VerifyFacts) -> VerifierConfidence {
+    if !facts.check_executed {
+        return VerifierConfidence::Low;
+    }
+    if facts.check_exit_zero && facts.no_regressions {
+        return VerifierConfidence::High;
+    }
+    VerifierConfidence::Medium
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1154,6 +1214,57 @@ mod tests {
         let r2 = regressions(&current, &baseline);
         assert_eq!(r1, r2);
         assert_eq!(r1, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+    }
+
+    // ── t2: derive verifier confidence from observed facts ─────────────────
+
+    /// Ran a check, it exited 0, no regressions → High.
+    #[test]
+    fn confidence_high_when_ran_clean_and_no_regression() {
+        let facts = VerifyFacts {
+            check_executed: true,
+            check_exit_zero: true,
+            no_regressions: true,
+        };
+        assert_eq!(derive_confidence(&facts), VerifierConfidence::High);
+        assert_eq!(derive_confidence(&facts).as_str(), "high");
+    }
+
+    /// No runnable check executed (free-text argument only) → Low, regardless of
+    /// the other flags.
+    #[test]
+    fn confidence_low_when_no_check_executed() {
+        let facts = VerifyFacts {
+            check_executed: false,
+            check_exit_zero: true,
+            no_regressions: true,
+        };
+        assert_eq!(derive_confidence(&facts), VerifierConfidence::Low);
+        assert_eq!(derive_confidence(&facts).as_str(), "low");
+    }
+
+    /// Ran but a regression appeared → Medium (intermediate).
+    #[test]
+    fn confidence_medium_when_ran_but_regressed() {
+        let facts = VerifyFacts {
+            check_executed: true,
+            check_exit_zero: true,
+            no_regressions: false,
+        };
+        assert_eq!(derive_confidence(&facts), VerifierConfidence::Medium);
+        assert_eq!(derive_confidence(&facts).as_str(), "medium");
+    }
+
+    /// Ran but exited non-zero → Medium (intermediate), even with no regression
+    /// set computed.
+    #[test]
+    fn confidence_medium_when_ran_but_nonzero_exit() {
+        let facts = VerifyFacts {
+            check_executed: true,
+            check_exit_zero: false,
+            no_regressions: true,
+        };
+        assert_eq!(derive_confidence(&facts), VerifierConfidence::Medium);
     }
 
     // ── Invariant 1: verifier model never equals worker model ──────────────

@@ -39,8 +39,31 @@
 `~/.claude/plugins/cache/<owner>/<name>/<version>/` に**プレーンコピー**する（git 外）。稼働中の
 ハーネスはキャッシュ側を読むので、**repo をビルドしただけでは何も反映されない**:
 
+### 「plugin 更新（`/plugin update` 相当）」を求められたら — `scripts/rollout-plugins.sh` を使う（正典・一発）
+
+**version を上げた／テキスト資産を変えたプラグインを稼働ハーネスへ反映するときは、手動 `cp` ではなく
+必ず `scripts/rollout-plugins.sh` を実行する。** このスクリプトは `/plugin update`（UI 専用操作）が
+directory marketplace `yukineko` に対してやる2操作 —(1) `crates/<name>/` を新しい
+`cache/yukineko/<name>/<version>/` **dir へコピー**、(2) `installed_plugins.json` の
+`<name>@yukineko` を新 dir へ **repoint** — を再現し、続けて `rebuild-plugins.sh`（バイナリ swap）と
+各 plugin の `sync-plugin-assets.sh`（skills/agents/hooks 同期）まで一括で走らせる。順序も保証する
+（version dir + registry pointer を rebuild より先に作る）。
+
+```sh
+python3 scripts/check-plugin-versions.py && python3 scripts/check-version-bumped.py   # 先に version 整合を確認
+scripts/rollout-plugins.sh --plugin <name> --dry-run   # 動作を確認（何も書かない）
+scripts/rollout-plugins.sh --plugin <name>             # 実反映（全 plugin なら無引数）
+```
+
+- 冪等（version 不変なら no-op）。`--force` で無変更でも再コピー、`--no-rebuild`/`--no-sync` で段階分け。
+- **手動 `cp` は禁止**: cache の binary/asset を手で上書きするだけだと **version dir が旧名のまま残り**
+  registry も更新されず、`sync-plugin-assets.sh` が version から dir を誤解決して**古い版が配布される**。
+- `/plugin update`（ユーザー UI 操作）は本スクリプトで完全代替できるので、手動 UI 操作は不要。
+
+低レベルの構成要素（通常は上の rollout 経由で十分。個別に叩くのは段階分けのときだけ）:
+
 - バイナリを反映: `scripts/rebuild-plugins.sh`（`--no-clean` で増分）— target のバイナリを live
-  キャッシュへ swap する。
+  キャッシュへ swap する（**既存 dir に swap するだけ。version dir は作らない**）。
 - テキスト資産（skills/agents/hooks）を反映: `crates/<name>/scripts/sync-plugin-assets.sh`
   （`--check` で drift 検出）。
 - **キャッシュを手編集しない**（git 外で黙って乖離する）。必ず repo を編集 → 上記で同期。

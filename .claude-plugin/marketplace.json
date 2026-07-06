@@ -107,7 +107,7 @@
     {
       "name": "compass",
       "description": "Goal re-grounding + next-move derivation upstream of condukt for Claude Code: when the goal goes fuzzy or you stall after finishing a chunk, it carves the project charter (north star + definition of done + current gap) through an interrogate loop, then routes only the right-sized next move into condukt while parking side-quests to taskprog. Subscription-native (SessionStart nudge + Stop breadcrumb hooks + /compass skill + bundled Rust binary, no API key).",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "category": "planning",
       "keywords": [
         "compass",
@@ -159,7 +159,7 @@
     {
       "name": "context-governor",
       "description": "A thin control layer around Claude Code's built-in compaction: pin + lossless-recall + retrieval + tool-hygiene, wired as a single hook-dispatch binary. Separates the three axes it touches — size (window occupancy), cost (recompute/cache), correctness (norm preservation) — and never writes its own lossy summarizer (compression is delegated to built-in compaction). Subscription-native (hooks + binary, no API key).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "context",
       "keywords": [
         "context",
@@ -183,7 +183,7 @@
     {
       "name": "ctxrot",
       "description": "Context-rot guard for Claude Code: detect, rescue, restore, distill, and CONTROL what loads into context (rule-based allow/deny gate + /ctx pin/drop/load + switchable carryover). Subscription-native (hooks + subagent + skill, no API key).",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "category": "context",
       "keywords": [
         "context",
@@ -603,7 +603,7 @@
     {
       "name": "specguard",
       "description": "仕様↔実装 整合監査ハーネスを Claude Code から subscription-native に実行する。各 shard を read-only な in-session subagent で監査し (nested claude --print なし)、決定的ハーネス (scope/render/parse/report) は specguard バイナリに委譲する。",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "category": "quality",
       "keywords": [
         "spec",

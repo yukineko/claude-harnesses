@@ -396,6 +396,7 @@ mod tests {
             reproduction_tests: None,
             confidence: None,
             kind: None,
+            checks: Vec::new(),
         }
     }
 

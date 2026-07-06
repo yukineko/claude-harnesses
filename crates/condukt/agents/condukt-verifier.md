@@ -29,6 +29,15 @@ tools: Read, Grep, Glob, Bash, WebFetch
   を実行し、その `{"regressions":[...],"passed":<bool>}` を回帰判定の**権威 (authoritative)** として使う
   (`passed:false` = 新規回帰あり = 実装起因の赤、`passed:true` = 新規回帰なし)。集合差分は決定論なので
   同入力なら常に同結果。サブコマンドが利用できない場合に限り、従来の目視比較にフォールバックする。
+- **タスクが `checks[]` 配列を宣言している場合は決定論オラクルを必ず使う**: `done_criteria` の prose を
+  目視判定する前に、タスク JSON (full Task か bare `{"checks":[...]}`) をファイルに保存して:
+  ```bash
+  condukt verify checks --file <task.json>   # 任意で --cwd <task の worktree>
+  ```
+  を実行し、その `{"all_passed":<bool>,"results":[{"cmd","passed","exit"}...]}` を **宣言された各 check の
+  合否の権威 (authoritative)** として使う (各 check は `sh -c` 実行、exit が `expect_exit` (既定 0) と一致し、
+  `expect_substring` があれば結合出力に含まれれば pass)。自由記述の判定は **宣言済み check がカバーしない
+  `done_criteria` にのみ**適用する。`all_passed:false` はその check 群の `pass=false` 根拠になる。
 - `done_criteria` が外部 API・ライブラリの仕様に依存している場合、`WebFetch` で公式ドキュメント・
   仕様書を参照して実装が仕様に準拠しているか照合してよい。公式ドキュメントと実装の不一致は
   `pass=false` の根拠になる。

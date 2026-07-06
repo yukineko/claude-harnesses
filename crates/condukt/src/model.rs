@@ -19,6 +19,22 @@ pub enum Class {
     Experiment,
 }
 
+/// A declared, deterministic verification check: a shell command plus the
+/// observable condition that means it passed. Lets the verifier run a machine
+/// oracle instead of judging `done_criteria` prose by eye. All fields permissive;
+/// a Task with no `checks` (the default) behaves exactly as before.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Check {
+    /// Shell command to run (via `sh -c`) from the task's cwd/worktree.
+    pub cmd: String,
+    /// Expected exit code. `None` means "expect 0".
+    #[serde(default)]
+    pub expect_exit: Option<i64>,
+    /// If set, the combined stdout+stderr must contain this substring.
+    #[serde(default)]
+    pub expect_substring: Option<String>,
+}
+
 /// One unit of work in a decomposition.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Task {
@@ -60,6 +76,12 @@ pub struct Task {
     /// Used to decide whether a fix/feature transition requires an FP oracle.
     #[serde(default)]
     pub kind: Option<String>,
+    /// Declared deterministic verification checks (see [`Check`]). Empty by
+    /// default; when present, the verifier can run them as a machine oracle
+    /// instead of eyeballing `done_criteria`. Engine passthrough — no scheduling
+    /// behavior changes.
+    #[serde(default)]
+    pub checks: Vec<Check>,
 }
 
 impl Task {
@@ -243,5 +265,35 @@ mod tests {
             serde_json::from_str(r#"{"goal":"g","tasks":[{"id":"x","class":"experiment"}]}"#)
                 .expect("decomposition with experiment class should parse");
         assert_eq!(dec.tasks[0].class, Class::Experiment);
+    }
+
+    #[test]
+    fn task_without_checks_defaults_empty() {
+        // Back-compat: decompositions emitted before `checks` existed must load
+        // and yield an empty vec.
+        let dec: Decomposition = serde_json::from_str(
+            r#"{"goal":"g","tasks":[{"id":"a","touched_files":["src/a.rs"]}]}"#,
+        )
+        .expect("decomposition without checks should parse");
+        assert_eq!(dec.tasks.len(), 1);
+        assert!(dec.tasks[0].checks.is_empty());
+    }
+
+    #[test]
+    fn task_with_checks_round_trips() {
+        let dec: Decomposition = serde_json::from_str(
+            r#"{"goal":"g","tasks":[{"id":"a","checks":[{"cmd":"cargo test -p x","expect_exit":0,"expect_substring":"ok"}]}]}"#,
+        )
+        .expect("decomposition with checks should parse");
+        assert_eq!(dec.tasks[0].checks.len(), 1);
+        let check = &dec.tasks[0].checks[0];
+        assert_eq!(check.cmd, "cargo test -p x");
+        assert_eq!(check.expect_exit, Some(0));
+        assert_eq!(check.expect_substring.as_deref(), Some("ok"));
+
+        // Round-trip: serialize then deserialize and compare structurally.
+        let json = serde_json::to_string(check).expect("check should serialize");
+        let back: Check = serde_json::from_str(&json).expect("check should deserialize");
+        assert_eq!(&back, check);
     }
 }

@@ -1179,6 +1179,94 @@ pub fn derive_confidence(facts: &VerifyFacts) -> VerifierConfidence {
     VerifierConfidence::Medium
 }
 
+// ── declared deterministic checks (machine oracle for done_criteria) ──────────
+
+/// Pure, deterministic pass/fail for one check given the OBSERVED result of
+/// running its command. Passes iff the exit code matches `expect_exit` (default
+/// 0) AND — when `expect_substring` is set — the combined output contains it.
+pub fn check_passed(
+    check: &crate::model::Check,
+    observed_exit: i64,
+    observed_output: &str,
+) -> bool {
+    let expected_exit = check.expect_exit.unwrap_or(0);
+    if observed_exit != expected_exit {
+        return false;
+    }
+    match check.expect_substring.as_deref() {
+        Some(needle) => observed_output.contains(needle),
+        None => true,
+    }
+}
+
+/// Aggregate verdict over a set of per-check results: `true` iff every result is
+/// `true`. An empty slice is a vacuous pass (`true`).
+pub fn checks_verdict(results: &[bool]) -> bool {
+    results.iter().all(|&r| r)
+}
+
+/// The outcome of running one declared check.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CheckResult {
+    /// The shell command that was run.
+    pub cmd: String,
+    /// Whether the observed exit/substring satisfied the check (see
+    /// [`check_passed`]).
+    pub passed: bool,
+    /// The observed process exit code (`-1` when the process was killed by a
+    /// signal and produced no code).
+    pub exit: i64,
+}
+
+/// The aggregate report of running a set of declared checks.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CheckReport {
+    /// `true` iff every check passed (see [`checks_verdict`]).
+    pub all_passed: bool,
+    /// Per-check results, in declaration order.
+    pub results: Vec<CheckResult>,
+}
+
+/// Execute one declared check: run its command via `sh -c` (mirroring the
+/// launch pattern elsewhere in this module), capture the exit code and combined
+/// stdout+stderr, and evaluate it with the pure [`check_passed`]. Fail-soft: a
+/// spawn error yields a non-passing result with `exit = -1` rather than panicking.
+pub fn run_check(check: &crate::model::Check, cwd: Option<&std::path::Path>) -> CheckResult {
+    let mut command = Command::new("sh");
+    command.arg("-c").arg(&check.cmd).stdin(Stdio::null());
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    match command.output() {
+        Ok(output) => {
+            let exit = output.status.code().map(i64::from).unwrap_or(-1);
+            let mut combined = output.stdout;
+            combined.extend_from_slice(&output.stderr);
+            let combined = String::from_utf8_lossy(&combined);
+            CheckResult {
+                cmd: check.cmd.clone(),
+                passed: check_passed(check, exit, &combined),
+                exit,
+            }
+        }
+        Err(_) => CheckResult {
+            cmd: check.cmd.clone(),
+            passed: false,
+            exit: -1,
+        },
+    }
+}
+
+/// Execute a set of declared checks in order and aggregate the verdict.
+pub fn run_checks(checks: &[crate::model::Check], cwd: Option<&std::path::Path>) -> CheckReport {
+    let results: Vec<CheckResult> = checks.iter().map(|c| run_check(c, cwd)).collect();
+    let all_passed = checks_verdict(&results.iter().map(|r| r.passed).collect::<Vec<_>>());
+    CheckReport {
+        all_passed,
+        results,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2372,5 +2460,82 @@ mod run_policy_gate_tests {
         assert!(!called, "unknown cheap_verify -> AskHuman -> no launch");
         assert_eq!(v["verdict"], serde_json::json!("ask_human"));
         assert_eq!(v["container_launched"], serde_json::json!(false));
+    }
+
+    // ── declared deterministic checks ────────────────────────────────────
+
+    use crate::model::Check;
+
+    fn check(cmd: &str, expect_exit: Option<i64>, expect_substring: Option<&str>) -> Check {
+        Check {
+            cmd: cmd.to_string(),
+            expect_exit,
+            expect_substring: expect_substring.map(str::to_string),
+        }
+    }
+
+    /// `check_passed` truth table: exit-only matching against the default (0)
+    /// and an explicit non-zero expectation.
+    #[test]
+    fn check_passed_exit_only() {
+        // default expect_exit = 0
+        assert!(check_passed(&check("x", None, None), 0, ""));
+        assert!(!check_passed(&check("x", None, None), 1, ""));
+        // explicit non-zero expectation
+        assert!(check_passed(&check("x", Some(2), None), 2, ""));
+        assert!(!check_passed(&check("x", Some(2), None), 0, ""));
+    }
+
+    /// `check_passed` substring condition (in addition to a matching exit).
+    #[test]
+    fn check_passed_substring() {
+        assert!(check_passed(
+            &check("x", None, Some("ok")),
+            0,
+            "all ok here"
+        ));
+        assert!(!check_passed(&check("x", None, Some("ok")), 0, "nope"));
+        // both conditions: exit matches but substring absent -> fail
+        assert!(!check_passed(
+            &check("x", Some(0), Some("ok")),
+            0,
+            "missing"
+        ));
+        // both conditions satisfied -> pass
+        assert!(check_passed(&check("x", Some(0), Some("ok")), 0, "ok!"));
+    }
+
+    /// `checks_verdict` aggregate: all-true -> true, any-false -> false,
+    /// empty -> vacuous true.
+    #[test]
+    fn checks_verdict_aggregate() {
+        assert!(checks_verdict(&[true, true, true]));
+        assert!(!checks_verdict(&[true, false, true]));
+        assert!(checks_verdict(&[]));
+    }
+
+    /// Executor smoke tests against trivial coreutils commands.
+    #[test]
+    fn run_check_executor_smoke() {
+        assert!(run_check(&check("true", None, None), None).passed);
+        assert!(!run_check(&check("false", None, None), None).passed);
+        assert!(run_check(&check("echo hello", None, Some("hello")), None).passed);
+        assert!(!run_check(&check("echo hello", None, Some("nope")), None).passed);
+    }
+
+    /// `run_checks` aggregates and reports each check in declaration order.
+    #[test]
+    fn run_checks_aggregates_report() {
+        let report = run_checks(
+            &[check("true", None, None), check("false", None, None)],
+            None,
+        );
+        assert!(!report.all_passed);
+        assert_eq!(report.results.len(), 2);
+        assert!(report.results[0].passed);
+        assert!(!report.results[1].passed);
+
+        let all_ok = run_checks(&[check("true", None, None)], None);
+        assert!(all_ok.all_passed);
     }
 }

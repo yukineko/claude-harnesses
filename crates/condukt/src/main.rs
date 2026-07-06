@@ -800,6 +800,21 @@ enum VerifyAction {
         #[arg(long)]
         no_regressions: bool,
     },
+    /// Run a task's declared deterministic `checks[]` as a machine oracle and
+    /// print `{"all_passed":bool,"results":[{"cmd","passed","exit"}...]}` as JSON
+    /// on stdout. Reads a JSON file (`--file`) that is either a full Task or a
+    /// bare `{"checks":[...]}` object; each check runs via `sh -c` and passes iff
+    /// its exit matches `expect_exit` (default 0) and — when set — its combined
+    /// output contains `expect_substring`. Pure/deterministic verdict; no LLM.
+    Checks {
+        /// JSON file: a full Task or a bare `{"checks":[...]}` object.
+        #[arg(long)]
+        file: PathBuf,
+        /// Directory to run each check from (the task's cwd/worktree). Defaults
+        /// to the current directory.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1269,6 +1284,21 @@ fn run_user(cmd: Command) -> Result<()> {
                     no_regressions,
                 };
                 println!("{}", verify::derive_confidence(&facts).as_str());
+            }
+            VerifyAction::Checks { file, cwd } => {
+                // Accept either a full Task or a bare `{"checks":[...]}` object:
+                // unknown fields are ignored, and `checks` defaults to empty.
+                #[derive(serde::Deserialize)]
+                struct ChecksHolder {
+                    #[serde(default)]
+                    checks: Vec<model::Check>,
+                }
+                let raw = std::fs::read_to_string(&file)
+                    .with_context(|| format!("reading {}", file.display()))?;
+                let holder: ChecksHolder =
+                    serde_json::from_str(&raw).context("parsing checks JSON")?;
+                let report = verify::run_checks(&holder.checks, cwd.as_deref());
+                println!("{}", serde_json::to_string_pretty(&report)?);
             }
         },
         Command::Replan { action } => match action {

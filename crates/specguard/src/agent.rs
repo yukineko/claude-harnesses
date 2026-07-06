@@ -129,6 +129,11 @@ fn run_shards_with(
 /// Run one agent process, feeding `prompt` on stdin. Spawn/exec failures are
 /// folded into an `AgentOutput { code: -1 }` so fan-out never aborts midway.
 fn run_one(cfg: &AgentConfig, repo_root: &std::path::Path, prompt: &str) -> AgentOutput {
+    // `cfg.command` originates from repo config (`specguard.toml`) and is spawned
+    // directly here with no shell. It is validated at load time
+    // (`config::validate_agent_command`): the default (`claude`) is trusted, and
+    // any non-default command containing shell metacharacters is rejected before
+    // reaching this sink. See SECURITY.md.
     let child = Command::new(&cfg.command)
         .args(&cfg.args)
         .current_dir(repo_root)

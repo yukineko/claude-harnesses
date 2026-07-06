@@ -23,7 +23,10 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    `AskUserQuestion` へ落とす。合意 (Phase 3) は schedule 由来の risk/confidence で graded 判定し、
    genuine な判断ゲート — resume 選択 (Phase 0)・`open_questions` (Phase 1)・conflict (Phase 3.5)・
    worker `blocked` (Phase 5) — は低 confidence/高 risk を与えて **escalate** に倒す (＝人に聞く)。
-   自答履歴は `condukt policy answers` で監査できる。
+   自答履歴は `condukt policy answers` で監査できる。**worker `blocked` と GATED 承認待ちは、インラインで
+   loop を止める代わりに durable async escalation channel (`condukt escalate add|list|resolve`) に enqueue
+   して out-of-band で解消できる**（HOTL: loop は残りのタスクを続行し、人間が後で `escalate resolve` で答えると
+   当該タスクを resume。Phase 5 参照。enqueue 失敗時のみ従来の即時報告に fail-soft）。
 2. **GATED は子に実行も承認もさせない** — deploy 等 `class:"gated"` のタスクは `condukt schedule`
    が `gated` に分離する。実装フェーズの対象外。承認はユーザーから main で得る。
 3. **共有ファイルは直列** — `condukt schedule` が `shared_globs` 設定と file 衝突解析で `serial` に
@@ -425,7 +428,13 @@ condukt state worktree-mode-check   # exit 0 + {"single_worktree":true} → 単�
 4. worker の返却 status を確認する:
    - `done`: `condukt state set --run $RID --task <t.id> --status done` し、**他の worker の完了を待たずにその場で Phase 6 の verifier を起動する**（パイプライン化）。
    - `needs-serial`: 分類ミス。worktree を破棄し、タスクを serial として main で直接実装して commit する。
-   - `blocked`: ユーザーにエスカレーションし、指示を仰ぐ (`AskUserQuestion` で報告する)。
+   - `blocked`: インラインの blocking な `AskUserQuestion` で loop を止める代わりに、**durable async escalation
+     channel に enqueue して先へ進む**（HOTL: 人間は out-of-band で答える）。`condukt escalate add --run $RID
+     --task <t.id> --question "<blocker>" --option "<A>" --option "<B>" --recommend <既定>` で質疑を永続化し
+     （id が返る）、**残りのバッチ/タスクを続行**する（部分進行）。人間が後で `condukt escalate list [--run $RID]`
+     で開いている質疑を見て `condukt escalate resolve --id <ID> --choice "<選択>"` で答えると、その回答を添えて
+     当該タスクを resume できる。`escalate` バイナリが無い等で enqueue に失敗したときのみ従来の即時報告に
+     fail-soft する。GATED タスクの承認待ちも同様にこの channel に enqueue してよい。
 
 バッチ内は 1 メッセージで複数 `Task` を同時発行して並列化する。worker が完了するたびに即 verifier を起動し、worker 完了の待ち合わせはしない（後続 worker が動いている間に先行タスクの検証が進む）。`serial` タスクは worktree に出さず main で順に実装し commit。
 

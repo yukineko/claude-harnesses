@@ -62,6 +62,30 @@ pub fn resolve_baseline(
     cfg.scope.fallback_ref.clone()
 }
 
+/// Pure guard: is `r` a git ref safe to hand to `git diff` as a positional
+/// argument? A hostile baseline (from `--baseline` or `SPECGUARD_BASELINE_REF`)
+/// must never reach git.
+///
+/// We accept only conventional ref characters (letters, digits, `_`, `-`, `/`,
+/// `.`, `~`, `^`) and reject empty/whitespace-only values, a leading `-` (which
+/// git would parse as an option, e.g. `--upload-pack=evil`), and any whitespace
+/// or shell metacharacter (`;`, `|`, `&`, `$`, backtick, `<`, `>`, newline,
+/// quotes, `*`, etc.).
+///
+/// Genuine range refs like `HEAD~3` or `main~1^2` and paths like `feature/x`
+/// remain valid.
+pub fn is_safe_ref(r: &str) -> bool {
+    let r = r.trim();
+    if r.is_empty() {
+        return false;
+    }
+    if r.starts_with('-') {
+        return false;
+    }
+    r.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '/' | '.' | '~' | '^'))
+}
+
 /// Label used when the audit falls all the way back to "every tracked file"
 /// (a young/shallow repo where neither baseline nor fallback ref resolves).
 pub const ALL_TRACKED: &str = "(all tracked files)";
@@ -218,6 +242,13 @@ pub fn resolve(
     last_ref: Option<&str>,
 ) -> Result<Scope> {
     let requested = resolve_baseline(cfg, override_ref, last_ref);
+    // Reject a hostile baseline (leading dash / whitespace / shell metacharacters)
+    // BEFORE it is handed to `git diff` as a positional argument.
+    if !is_safe_ref(&requested) {
+        anyhow::bail!(
+            "refusing unsafe baseline ref '{requested}': only [A-Za-z0-9_./~^-] are allowed and it must not start with '-'"
+        );
+    }
     let (changed_files, baseline, fell_back) =
         changed_files(repo_root, &requested, &cfg.scope.fallback_ref)?;
     let (in_scope, skipped_areas) = classify(&changed_files, &cfg.areas)?;
@@ -251,6 +282,28 @@ mod tests {
             globs: globs.iter().map(|s| s.to_string()).collect(),
             canon: canon.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn is_safe_ref_rejects_dash_and_metacharacters() {
+        // Leading-dash → git would parse it as an option (arg injection).
+        assert!(!is_safe_ref("--upload-pack=evil"));
+        assert!(!is_safe_ref("-anything"));
+        // Shell metacharacters / whitespace must be rejected.
+        assert!(!is_safe_ref("main; touch x"));
+        assert!(!is_safe_ref("main | cat"));
+        assert!(!is_safe_ref("a$b"));
+        assert!(!is_safe_ref("a`b`"));
+        assert!(!is_safe_ref("a b"));
+        assert!(!is_safe_ref(""));
+        assert!(!is_safe_ref("   "));
+        // Genuine refs and ranges stay valid.
+        assert!(is_safe_ref("main"));
+        assert!(is_safe_ref("HEAD~3"));
+        assert!(is_safe_ref("HEAD~20"));
+        assert!(is_safe_ref("feature/x"));
+        assert!(is_safe_ref("v1.2.3"));
+        assert!(is_safe_ref("main~1^2"));
     }
 
     #[test]

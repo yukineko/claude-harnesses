@@ -991,13 +991,36 @@ fn load_template(cfg: &Config, config_dir: &Path) -> Result<String> {
     }
 }
 
+/// Strict `YYYY-MM-DD` calendar-date shape: 4-digit year, 2-digit month,
+/// 2-digit day, hyphen-separated, ASCII digits only. This is a shape guard
+/// (not a semantic calendar check), enough to reject arbitrary/hostile env
+/// strings before they are echoed into the report as the run date.
+fn is_calendar_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.len() != 10 {
+        return false;
+    }
+    let digit = |i: usize| b[i].is_ascii_digit();
+    (0..4).all(digit)
+        && b[4] == b'-'
+        && digit(5)
+        && digit(6)
+        && b[7] == b'-'
+        && digit(8)
+        && digit(9)
+}
+
 fn resolve_date(cli_date: Option<String>) -> String {
     if let Some(d) = cli_date {
         return d;
     }
     if let Ok(d) = std::env::var("SPECGUARD_NOW") {
-        if !d.trim().is_empty() {
-            return d.trim().to_string();
+        let d = d.trim();
+        // Only honor SPECGUARD_NOW when it matches a strict calendar-date shape.
+        // Any other value (garbage, shell metacharacters, injection attempts) is
+        // ignored and we fall back to today's date rather than echoing it back.
+        if is_calendar_date(d) {
+            return d.to_string();
         }
     }
     chrono::Local::now().format("%Y-%m-%d").to_string()
@@ -1027,6 +1050,34 @@ mod tests {
         p.pop(); // up from crates/specguard → crates/
         p.pop(); // up from crates/ → workspace root
         p
+    }
+
+    // SPECGUARD_NOW is process-global; serialize the tests that touch it so a
+    // parallel test never observes a half-set value.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn resolve_date_ignores_non_date_env() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+        let hostile = "not-a-date; rm -rf /";
+        std::env::set_var("SPECGUARD_NOW", hostile);
+        let got = resolve_date(None);
+        std::env::remove_var("SPECGUARD_NOW");
+
+        // A garbage env value must NOT be echoed back; we fall back to today.
+        assert_ne!(got, hostile);
+        assert_eq!(got, today);
+    }
+
+    #[test]
+    fn resolve_date_honors_valid_env_date() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("SPECGUARD_NOW", "2026-07-07");
+        let got = resolve_date(None);
+        std::env::remove_var("SPECGUARD_NOW");
+        assert_eq!(got, "2026-07-07");
     }
 
     #[test]

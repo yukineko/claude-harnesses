@@ -27,8 +27,14 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    loop を止める代わりに durable async escalation channel (`condukt escalate add|list|resolve`) に enqueue
    して out-of-band で解消できる**（HOTL: loop は残りのタスクを続行し、人間が後で `escalate resolve` で答えると
    当該タスクを resume。Phase 5 参照。enqueue 失敗時のみ従来の即時報告に fail-soft）。
-2. **GATED は子に実行も承認もさせない** — deploy 等 `class:"gated"` のタスクは `condukt schedule`
-   が `gated` に分離する。実装フェーズの対象外。承認はユーザーから main で得る。
+2. **GATED は原則、子に実行も承認もさせない** — deploy 等の irreversible/high-risk な `class:"gated"`
+   タスクは `condukt schedule` が `gated` に分離する。実装フェーズの対象外。承認はユーザーから main で得る。
+   **例外 (remove-gate)**: autonomous モードに限り、その gated タスクを blastguard classify した結果が
+   **Low risk かつ reversible** の場合だけ、`condukt gate check --run RID --task TASKID` が policy=auto を
+   確認して **AutoExec (exit 0)** を返す。その1件だけは実行前 checkpoint と journal を取った上で承認レスに
+   実行してよい。irreversible または high-risk gated は同コマンドが必ず **Escalate (nonzero)** を返し、
+   従来どおり人間承認へ倒れる。非 autonomous モードでは policy_is_auto=false なので **全 gated が従来どおり
+   Escalate**(後方互換・挙動不変)。decision は append-only JSONL に journal 記録され後から可観測。
 3. **共有ファイルは直列** — `condukt schedule` が `shared_globs` 設定と file 衝突解析で `serial` に
    落とす。serial タスクは worktree に出さず main で順に実装する。
 4. **並列実装の子は専用 worktree、1 dir = 1 branch** — worktree は `condukt worktree create` が
@@ -276,7 +282,9 @@ condukt state autonomy-check   # autonomous なら exit 0 + {"autonomous":true}�
   ```
   auto で省略しても次は autonomy でも縮退させない（安全側の不変）:
   - `--dry-run` は autonomy でも**必ずここで停止**する（合意省略は「停止しない」ではない）。
-  - `class: "gated"` タスク (deploy/push 等) は autonomy でも実装・承認の対象外のまま (Phase 8 でユーザー承認)。
+  - `class: "gated"` タスク (deploy/push 等) は autonomy でも原則 実装・承認の対象外 (Phase 8 でユーザー承認)。
+    ただし **remove-gate の例外**: `condukt gate check` が Low risk かつ reversible と判定した gated タスクだけは
+    checkpoint+journal 付きで auto 実行しうる (irreversible/high-risk は必ず escalate)。
   - `confidence: low`/`medium` のタスクは合意を省略しても**ログに明示**し、後段の Phase 6 検証ゲートで担保する
     (なお上記ルールでは low-confidence を含む計画は escalate になり合意 Ask が出る)。
   自答・エスカレートの履歴は `condukt policy answers` で監査できる。
@@ -847,7 +855,10 @@ condukt state gate --run $RID      # exit 0 まで完了宣言しない
 - gate PASS で統合完了を報告 (タスク表 / 変更ファイル / 検証結果 / GATED の残提案)。
 
 ### Phase 8 — クローズ
-`commit`/`push` はユーザー指示時のみ。GATED タスク (deploy 等) はユーザー承認を得てから別途実行。
+`commit`/`push` はユーザー指示時のみ。GATED タスク (deploy 等) は原則ユーザー承認を得てから別途実行。
+ただし **remove-gate の例外**として、autonomous モードで `condukt gate check` が **Low risk かつ reversible** と
+判定した gated タスクだけは、checkpoint と journal を取った上で承認レスに auto 実行済みでありうる
+(irreversible/high-risk gated は必ず escalate されユーザー承認へ倒れる)。
 
 **仮説の計測リマインド (soft 依存)**: gate PASS は「実装が done_criteria を満たした (= 出荷した)」ことしか意味しない。
 PDO では出荷は検証 (validated learning) ではないので、**コードがマージされただけで仮説を validate しない**。

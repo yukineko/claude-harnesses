@@ -642,3 +642,143 @@ fn action_ledger_records_groom_inject_snapshot_and_rollup_sums() {
         _ => {}
     }
 }
+
+// ── Phase 2: ledger GC/rotation truncation → rollup round-trip (I6) ──────────
+
+/// End-to-end GC/rotation round-trip: append ~1000 rows across several
+/// sessions and event kinds through the *real* `Ledger::append` trigger — the
+/// same size-gated prune every hook append runs (`ledger.rs` ~lines 136-167,
+/// `file_could_exceed` + `prune_jsonl` ~lines 148-209) — so the production
+/// truncation path fires mid-test (not a hand-truncated file), then asserts
+/// `rollup` reports the exact post-truncation totals.
+///
+/// Truncation spec and why the asserted values are exact: `file_could_exceed`
+/// gates on file *size* with a conservative `MIN_ROW_BYTES = 16` floor, while
+/// this test's real JSONL rows are ~180+ bytes each, so the size gate trips
+/// (and `prune_jsonl` is invoked) well before the row *count* reaches `CAP`
+/// (at ~49 rows here, vs. `CAP = 300`, verified against the real emitted row
+/// shape). `prune_jsonl` itself is only a no-op while `rows <= max_rows`; once
+/// total rows first exceed `CAP`, that same append call's post-write prune
+/// rewrites the file to its LAST `CAP` lines. From then on every following
+/// append leaves the file at exactly `CAP` rows before the call and `CAP + 1`
+/// after the write, so the post-write prune fires again and re-converges it to
+/// `CAP` — deterministically, on every single append, all the way to the end
+/// of the loop. So the final on-disk ledger holds precisely the most recent
+/// `CAP` of the `TOTAL` appended rows, never a fuzzy "somewhere near the cap"
+/// range. The test computes the expected summary purely from its own
+/// in-memory record of what it appended (an independent ground truth, not a
+/// re-derivation of the production aggregation in `summarize_jsonl`) and
+/// asserts `rollup` matches it exactly.
+#[test]
+fn ledger_truncation_rollup_roundtrip() {
+    use context_governor::{rollup, Ledger, LedgerNode};
+    use std::collections::BTreeMap;
+
+    let _env = env_lock();
+
+    const CAP: usize = 300;
+    const TOTAL: usize = 1000;
+
+    let td = tempfile::tempdir().expect("state dir");
+    let state_dir = td.path().to_str().expect("utf-8 state dir").to_string();
+    let unique_cwd = td.path().join("ledger-truncation-proj");
+    let cwd = unique_cwd.to_str().expect("utf-8 cwd").to_string();
+    let session_id = format!("ledger-truncation-{}", std::process::id());
+
+    std::env::set_var("CONTEXT_GOVERNOR_STATE_DIR", &state_dir);
+    std::env::set_var("CLAUDE_CODE_SESSION_ID", &session_id);
+    std::env::set_var("CONTEXT_GOVERNOR_LEDGER_MAX_ROWS", CAP.to_string());
+
+    let ledger = Ledger::open(&cwd);
+
+    // Ground truth: (event_name, saved_tokens) for every row appended, in
+    // append order — independent of any production aggregation logic.
+    let mut appended: Vec<(&'static str, u64)> = Vec::with_capacity(TOTAL);
+
+    for i in 0..TOTAL {
+        // Vary the LedgerNode's own `session` tag and `hook` across several
+        // (fake) sessions/hooks, even though everything lands in one physical
+        // ledger.jsonl (CLAUDE_CODE_SESSION_ID is fixed for the process) — the
+        // scenario this test targets is many logical rows accumulating and
+        // getting GC'd, not multiple physical ledger files.
+        let session = format!("sess-{}", i % 3);
+        let hook = match i % 4 {
+            0 => "PostToolUse",
+            1 => "UserPromptSubmit",
+            2 => "PreCompact",
+            _ => "Stop",
+        };
+        let item = Some(ItemId(i as u64));
+
+        let (action, event_name, saved): (Action, &'static str, u64) = match i % 5 {
+            0 => {
+                let saved_tokens = (i % 13) as u32 + 1;
+                (
+                    Action::Groomed { saved_tokens },
+                    "groomed",
+                    saved_tokens as u64,
+                )
+            }
+            1 => (Action::Injected, "injected", 0),
+            2 => (Action::Pinned, "pinned", 0),
+            3 => (
+                Action::Snapshotted {
+                    to: StoreKey(i as u64),
+                },
+                "snapshotted",
+                0,
+            ),
+            _ => (
+                Action::Recalled {
+                    from: StoreKey(i as u64),
+                },
+                "recalled",
+                0,
+            ),
+        };
+
+        let node = LedgerNode {
+            session,
+            hook: hook.to_string(),
+            item,
+            action,
+            reason: "gc-rotation-roundtrip-test",
+        };
+        ledger.append(&node, 100 + i as u32);
+        appended.push((event_name, saved));
+    }
+
+    // Independent expected summary: per the doc comment above, the production
+    // truncation policy converges the file to the LAST `CAP` appended rows, so
+    // slice our ground truth the same way and aggregate it ourselves. (`TOTAL
+    // > CAP` by construction above, so the loop actually exercises truncation.)
+    let kept = &appended[TOTAL - CAP..];
+    let mut expected_total_saved_tokens: u64 = 0;
+    let mut expected_per_event: BTreeMap<String, u64> = BTreeMap::new();
+    for (event_name, saved) in kept {
+        expected_total_saved_tokens += saved;
+        *expected_per_event
+            .entry((*event_name).to_string())
+            .or_insert(0) += 1;
+    }
+
+    let summary = rollup(&cwd);
+
+    std::env::remove_var("CONTEXT_GOVERNOR_LEDGER_MAX_ROWS");
+    std::env::remove_var("CLAUDE_CODE_SESSION_ID");
+    std::env::remove_var("CONTEXT_GOVERNOR_STATE_DIR");
+
+    assert_eq!(
+        summary.rows,
+        CAP as u64,
+        "the real GC/rotation prune (not a hand-truncated file) must converge the ledger to exactly the cap"
+    );
+    assert_eq!(
+        summary.total_saved_tokens, expected_total_saved_tokens,
+        "post-truncation total_saved_tokens must equal the sum over the LAST {CAP} rows only, not all {TOTAL} appended"
+    );
+    assert_eq!(
+        summary.per_event, expected_per_event,
+        "post-truncation per_event counts must equal counts over the LAST {CAP} rows only, not all {TOTAL} appended"
+    );
+}

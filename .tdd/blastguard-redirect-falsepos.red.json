@@ -1,0 +1,9 @@
+{
+  "cmd": "cargo test -p blastguard benign",
+  "exit_code": 101,
+  "output_tail": "test detect::tests::benign_rust_arrow_is_not_a_redirect ... FAILED\ntest detect::tests::allows_benign_commands ... ok\ntest detect::tests::allows_benign_shell_wrappers ... ok\ntest classify::tests::benign_lookalikes_are_not_force_gated ... ok\ntest detect::tests::benign_lookalike_task_prose_is_low_and_reversible ... FAILED\ntest detect::tests::benign_fix_keeps_real_truncating_redirect_denied ... ok\n\nfailures:\n\n---- detect::tests::benign_angle_bracket_placeholder_is_not_a_redirect stdout ----\n\nthread 'detect::tests::benign_angle_bracket_placeholder_is_not_a_redirect' (16527449) panicked at crates/blastguard/src/detect.rs:639:9:\nassertion `left == right` failed\n  left: Some(\"\")\n right: None\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n---- detect::tests::benign_rust_arrow_is_not_a_redirect stdout ----\n\nthread 'detect::tests::benign_rust_arrow_is_not_a_redirect' (16527452) panicked at crates/blastguard/src/detect.rs:632:9:\nassertion `left == right` failed\n  left: Some(\"Bar\")\n right: None\n\n---- detect::tests::benign_lookalike_task_prose_is_low_and_reversible stdout ----\n\nthread 'detect::tests::benign_lookalike_task_prose_is_low_and_reversible' (16527451) panicked at crates/blastguard/src/detect.rs:649:9:\nassertion `left == right` failed\n  left: High\n right: Low\n\n\nfailures:\n    detect::tests::benign_angle_bracket_placeholder_is_not_a_redirect\n    detect::tests::benign_lookalike_task_prose_is_low_and_reversible\n    detect::tests::benign_rust_arrow_is_not_a_redirect\n\ntest result: FAILED. 4 passed; 3 failed; 0 ignored; 0 measured; 28 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `-p blastguard --lib`",
+  "passed": false,
+  "phase": "red",
+  "task": "blastguard-redirect-falsepos",
+  "ts": "2026-07-06T22:44:07.016079+09:00"
+}

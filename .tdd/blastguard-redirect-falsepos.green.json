@@ -1,0 +1,9 @@
+{
+  "cmd": "cargo test -p blastguard benign",
+  "exit_code": 0,
+  "passed": true,
+  "phase": "green",
+  "red_proof": "/Users/yuki/.condukt/worktrees/blastguard-redirect-falsepos/.tdd/blastguard-redirect-falsepos.red.json",
+  "task": "blastguard-redirect-falsepos",
+  "ts": "2026-07-06T22:44:34.990748+09:00"
+}

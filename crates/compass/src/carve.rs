@@ -41,7 +41,10 @@ pub fn save(root: &Path, state: &CarveState) -> Result<()> {
             .with_context(|| format!("creating {}", parent.display()))?;
     }
     let json = serde_json::to_string_pretty(state).context("serializing carve state")?;
-    std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))?;
+    // Write to a temp sibling then rename (mirror the outcomes store).
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).with_context(|| format!("renaming into {}", path.display()))?;
     Ok(())
 }
 

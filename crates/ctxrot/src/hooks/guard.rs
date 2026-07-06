@@ -259,7 +259,12 @@ fn check_context_budget(input: &HookInput, cfg: &Config) -> Option<(usize, Strin
         .unwrap_or(0);
 
     if band != last {
-        let _ = std::fs::write(&state_file, band.to_string());
+        // Write to a temp sibling then rename (mirror compass outcome/carve
+        // stores) so concurrent readers never see a truncated file.
+        let tmp = cfg.state_dir.join(format!("{safe}.band.tmp"));
+        if std::fs::write(&tmp, band.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, &state_file);
+        }
     }
 
     // Metrics: emit one trajectory sample per measured prompt (incl. band 0), so

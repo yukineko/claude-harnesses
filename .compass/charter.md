@@ -1,27 +1,18 @@
 ## north_star
-flow→condukt の self-driving loop を安全に自律化する arc。決定論ゲートが routine な人間 Yes/No を置き換え、safety invariant(irreversible・high-risk・pivot・worker blocked は人間に残す / never-break-a-turn / LLM↔決定論分離 / frozen autonomy_invariant audit)は不変に保つ。landed・validated 済み: policy engine(policy decide/answer)・calibrated confidence(fugu-router)・durable escalation channel(condukt escalate)・deterministic circuit-breaker(condukt circuit check)・autonomy-check スイッチ・graded risk×reversibility classifier(blastguard)+force-gate・remove-gate(reversible+low-risk gated の承認レス auto-exec)。arc の核ゲート群は完了。今の ONE = 自律 auto-exec 路の安全面硬化: routine gated が承認レス実行になった今、その state 書き込み面(機微ファイルの 0o600 権限・PID+temp_dir 命名の衝突耐性)と env 由来の path/ref 入力(traversal/メタ文字)を決定論的に検証・封じ、auto-exec が広げた事故面を塞ぐ。ship 閉ループと SWE-bench 計測は parked のまま。build≠validate をシステム段で閉じ、subscription-native を崩さない。Devin は yardstick であって目標ではない。
+harness の LLM 判断面のうち、実は機械判定可能（fixed rule / parse / 集合演算 / 数値閾値）な残渣を決定論バイナリに落とし、非決定性を排除する arc。判断=LLM / 決定論=バイナリの分離をさらに前進させ、build≠validate を検証段でより締める。安全 invariant（意味的正しさ・分解・novel design は LLM に残す / never-break-a-turn / 後方互換）は不変。監査で7候補を特定・ランク済み（#1 baseline set-diff, #2 構造化 checks, #3 confidence-from-facts, #4 scout score, #5 C3 語彙screen, #6 outcome 既定, #7 class overlap）。今の ONE = condukt Phase-6 検証の非決定性を排除する2スライス: (1) baseline-failure 除外を LLM 目視でなく current_failing−baseline の集合差分で決定論化(#1), (2) verifier confidence を fact 由来(checks/repro が実行され exit0 かつ回帰ゼロ→high / 未実行・free-text 論拠→low)に(#3)。どちらも condukt verify.rs 内・純関数・明確な F→P。残る候補(#2 #4 #5 #6 #7)は parked。subscription-native を崩さない。
 
 ## definition_of_done
-- 機微な状態ファイル(tracekit span・stuckguard state ほか)が 0o600 権限で作成され、作成後の file mode が 0o600 であることを test で assert する
-- temp ファイルの PID+temp_dir 命名(証拠 17 箇所)が tempfile のランダム命名に置換され、同一 PID 再利用や並行実行でファイル名が衝突しないことを test で実証する
-- env 由来の path/ref(SPECGUARD_NOW は YYYY-MM-DD 形式・SPECGUARD_BASELINE_REF は git rev-parse --verify・CONTEXT_GOVERNOR_STATE_DIR は絶対パス)が検証され、traversal やシェルメタ文字を含む値が拒否されることを test で実証する
-- 純加算で既存経路の後方互換を破らない。fmt と clippy(-D warnings) clean、affected crates の cargo test green、触れた各 plugin の version を3正典ファイルで lockstep bump
+- condukt に、パース済みテスト名の集合差分で回帰を出す決定論関数がある。regressions = current_failing − baseline_failing。既存 red がありかつ新規回帰なしなら passed=true、新規回帰ありなら passed=false を返す。この振る舞いを unit test で red→green 実証する
+- condukt に、verifier confidence を観測事実から導く決定論関数がある。checks/repro が実際に実行され exit0 かつ回帰ゼロなら high、検証が未実行または free-text 論拠に依存するなら low を返す。真偽表を unit test で実証する
+- 純加算で既存 verify 経路と LLM verifier を温存（決定論層を前段・補助として足すのみ、既存の出力・パスは不変）。fmt と clippy(-D warnings) clean、cargo test -p condukt green、condukt の version を3正典ファイル(Cargo.toml・plugin.json・marketplace.json)で lockstep bump
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-ゴール(自律 auto-exec 路の安全面が硬化)と現状の最大差分 = auto-exec 化で書き込み頻度が上がった state 面がまだ (1) 既定 umask 作成で world-readable の余地(tracekit span:50-54, stuckguard:181-184 ほか), (2) PID+temp_dir 命名で衝突/PID再利用の余地(17箇所, fugu-router fingerprint:73 ほか), (3) env 由来 path/ref が無検証で traversal/メタ文字混入の余地(specguard main:998-1002・scope:106, context-governor ledger:78-88)。差分を埋める = 機微ファイルを 0o600 作成 + tempfile ランダム命名 + env の date/ref/dir を決定論検証。純加算・後方互換・各 plugin version lockstep。size は disjoint crates 並列で s/m 相当だが GoalTooBig なら 0o600 と env 検証を別 move に分割。backlog 13f38dc6 + d889d391。
+ゴール(condukt Phase-6 検証の非決定性が排除された)と現状の最大差分 = 現状の verifier は (1) baseline-failure 除外を LLM が『実装前から壊れてた失敗リスト』と『今の失敗』を目視で突き合わせている(condukt-verifier.md, SKILL.md:375)→長い transcript 越しの目視で誤帰属(既存 red を回帰と誤認=誤fail / 新規 break を見逃し=誤pass)、(2) confidence(high/med/low)を LLM が自己申告(condukt-verifier.md:45-57)→当てずっぽうが opus-tier 再検証を無駄起動。差分を埋める = verify.rs に純関数を2本足す: (a) regressions=current_failing−baseline のテスト名集合差分で passed を決定論判定、(b) checks/repro が実行され exit0 かつ回帰ゼロ→high / 未実行・free-text 論拠→low の confidence 導出。既存 parse_test_result_failed/distill_failure を再利用。純加算・後方互換(既存 LLM verifier 経路は温存し前段・補助として足す)・condukt version 3正典 lockstep bump。size s×2、両者 verify.rs 内で近接するが独立関数=condukt schedule に委譲。#2 構造化checks/#4 scout score/#5 C3 screen/#6 outcome 既定/#7 class overlap は parked。
 
 ## next_action
-自律 auto-exec 路の安全面を硬化する: (a) 機微な状態ファイルを 0o600 で作成し PID+temp_dir 命名を tempfile 化(backlog 13f38dc6), (b) env 由来の path/ref 構成要素を検証(backlog d889d391)。両者は disjoint crates を触るので condukt が並列 schedule できる。
 
 ## parked
-- ship の閉ループ(PR作成→CI失敗→自動修正→green→merge。docker 実行でCI前ローカル検証してから)
-- SWE-bench Verified 計測基盤(docker 隔離を実行基盤として流用)
-- code RAG / cross-task 学習 / memory-tool API / multi-judge verify
-- context-governor 効率(token-reclaim truncate・per-turn 参照 dedup・groom を window-pressure aware)
-- PDO discovery 拡張(north-star input metrics・dual-track discovery・stale hypothesis cadence・experiment findings)
-- tree-sitter repo map / シンボル単位読み出し(xl)
-- run-policy ゲート本体・remove-gate は landed・validated 済み
 

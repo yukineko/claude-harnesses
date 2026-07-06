@@ -1,0 +1,9 @@
+{
+  "cmd": "cargo test -p condukt gate_exec",
+  "exit_code": 101,
+  "output_tail": "   Compiling condukt v0.7.12 (/Users/yuki/src/harness/crates/condukt)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.48s\n     Running unittests src/main.rs (target/debug/deps/condukt-e5eca5c2b536b82b)\n\nrunning 7 tests\ntest gate_exec::tests::gate_exec_high_not_reversible_auto_escalates ... ok\ntest gate_exec::tests::gate_exec_low_reversible_not_auto_escalates ... ok\ntest gate_exec::tests::gate_exec_medium_reversible_auto_escalates ... ok\ntest gate_exec::tests::gate_exec_high_reversible_auto_escalates ... ok\ntest gate_exec::tests::gate_exec_is_deterministic ... ok\ntest gate_exec::tests::gate_exec_low_not_reversible_escalates ... ok\ntest gate_exec::tests::gate_exec_low_reversible_auto_autoexecs ... FAILED\n\nfailures:\n\n---- gate_exec::tests::gate_exec_low_reversible_auto_autoexecs stdout ----\n\nthread 'gate_exec::tests::gate_exec_low_reversible_auto_autoexecs' (16400576) panicked at crates/condukt/src/gate_exec.rs:55:9:\nassertion `left == right` failed: the only safe corner (Low + reversible + auto) must auto-exec\n  left: Escalate\n right: AutoExec\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    gate_exec::tests::gate_exec_low_reversible_auto_autoexecs\n\ntest result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 367 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `-p condukt --bin condukt`",
+  "passed": false,
+  "phase": "red",
+  "task": "gate-exec-core",
+  "ts": "2026-07-06T22:10:26.096182+09:00"
+}

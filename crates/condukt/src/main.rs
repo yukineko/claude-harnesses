@@ -15,6 +15,7 @@ mod config;
 mod consensus;
 mod editgate;
 mod escalate;
+mod gate_exec;
 mod gatelog;
 mod hooks;
 mod install;

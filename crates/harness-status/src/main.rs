@@ -43,26 +43,19 @@ enum Command {
 }
 
 fn today() -> String {
-    // Read from env (testable) or derive from filesystem mtime as a poor-man's clock.
-    // Full date via shell timestamp file is a common pattern in subscription-native tools.
-    // We parse from the last_ts of the most recent session, or default to a static string.
+    // Read from env (testable) or derive the date directly from the system clock.
     // Production: callers can set HARNESS_DATE=YYYY-MM-DD for testing.
     if let Ok(d) = std::env::var("HARNESS_DATE") {
         return d;
     }
-    // Fall back to reading system date via file metadata on a temp file (WSL-friendly).
-    // This avoids chrono dependency while still being mostly correct.
-    let tmp = std::env::temp_dir().join(".harness-status-date");
-    let _ = std::fs::write(&tmp, b"");
-    if let Ok(meta) = std::fs::metadata(&tmp) {
-        if let Ok(modified) = meta.modified() {
-            if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
-                let secs = duration.as_secs();
-                let days = secs / 86400;
-                // Compute Gregorian date from days since epoch (1970-01-01).
-                return days_to_date(days);
-            }
-        }
+    // Derive the date from the system clock. This previously wrote an empty file at
+    // a FIXED, world-writable path (std::env::temp_dir()/.harness-status-date) and
+    // read back its mtime as a poor-man's clock — a predictable /tmp name is a
+    // symlink/TOCTOU surface. SystemTime::now() yields the same day with no
+    // filesystem access and no added dependency (still chrono-free).
+    if let Ok(duration) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        // Compute Gregorian date from days since epoch (1970-01-01).
+        return days_to_date(duration.as_secs() / 86400);
     }
     "unknown".to_string()
 }
@@ -267,5 +260,30 @@ mod tests {
         assert!(!is_leap(1900)); // divisible by 100, not 400
         assert!(is_leap(2024));
         assert!(!is_leap(2026));
+    }
+
+    #[test]
+    fn today_does_not_create_world_writable_tmp_file() {
+        // F->P: today() must not write to the FIXED, predictable /tmp path it used
+        // to use (std::env::temp_dir()/.harness-status-date) — a symlink/TOCTOU
+        // surface. Exercise the non-env clock path with HARNESS_DATE cleared and
+        // assert the legacy file is not (re)created, while today() still yields a
+        // well-formed YYYY-MM-DD date. Before the fix this file was created (RED).
+        let legacy = std::env::temp_dir().join(".harness-status-date");
+        let _ = std::fs::remove_file(&legacy);
+        let prev = std::env::var("HARNESS_DATE").ok();
+        std::env::remove_var("HARNESS_DATE");
+        let d = today();
+        match prev {
+            Some(v) => std::env::set_var("HARNESS_DATE", v),
+            None => std::env::remove_var("HARNESS_DATE"),
+        }
+        assert!(
+            !legacy.exists(),
+            "today() must not create the predictable /tmp clock file {legacy:?}"
+        );
+        assert_eq!(d.len(), 10, "date must be YYYY-MM-DD, got {d:?}");
+        assert_eq!(&d[4..5], "-");
+        assert_eq!(&d[7..8], "-");
     }
 }

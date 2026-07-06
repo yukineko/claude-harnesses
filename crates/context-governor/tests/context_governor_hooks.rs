@@ -245,6 +245,19 @@ fn injector_reads_reference_doc_from_env_and_injects() {
     // Serialise against every other env-mutating test in this crate.
     let _env = env_lock();
 
+    // Hermetic ledger state: pin CONTEXT_GOVERNOR_STATE_DIR to an isolated
+    // (absolute) tempdir and CLAUDE_CODE_SESSION_ID to a fixed test session.
+    // The injector's dedup read (`was_injected` → `resolve_state`) resolves the
+    // session from CLAUDE_CODE_SESSION_ID, so without this the test would read
+    // AND write the *real* session's ledger when run inside a live Claude Code
+    // session — deduping against prior runs (returning `{}`) and polluting the
+    // user's ledger with `reference-injection` rows.
+    let state = tempfile::tempdir().expect("state dir");
+    let prev_state = std::env::var_os("CONTEXT_GOVERNOR_STATE_DIR");
+    let prev_sid = std::env::var_os("CLAUDE_CODE_SESSION_ID");
+    std::env::set_var("CONTEXT_GOVERNOR_STATE_DIR", state.path());
+    std::env::set_var("CLAUDE_CODE_SESSION_ID", "injector-hermetic-test");
+
     let mut tmp = tempfile::NamedTempFile::new().expect("temp file");
     tmp.write_all(PHASE2_DOC.as_bytes()).expect("write doc");
     tmp.flush().expect("flush");
@@ -287,8 +300,16 @@ fn injector_reads_reference_doc_from_env_and_injects() {
         "ToC path must list reference sections; got: {json_toc}"
     );
 
-    // Clean up.
+    // Clean up: drop the reference doc and restore the isolated env vars.
     std::env::remove_var("CONTEXT_GOVERNOR_REFERENCE_DOC");
+    match prev_state {
+        Some(v) => std::env::set_var("CONTEXT_GOVERNOR_STATE_DIR", v),
+        None => std::env::remove_var("CONTEXT_GOVERNOR_STATE_DIR"),
+    }
+    match prev_sid {
+        Some(v) => std::env::set_var("CLAUDE_CODE_SESSION_ID", v),
+        None => std::env::remove_var("CLAUDE_CODE_SESSION_ID"),
+    }
 }
 
 // ── Phase 2: Guard / Rehydrator / Checkpointer end-to-end ─────────────────────

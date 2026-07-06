@@ -3010,13 +3010,59 @@ mod calibrated_confidence_tests {
 
     /// With a flag supplied but fugu-router absent (or its `confidence`
     /// subcommand missing), the probe must fail-soft to `None` — never a hard
-    /// error — so the caller falls back to `--confidence`. In the test
-    /// environment fugu-router is not on PATH, so this exercises the soft-skip.
+    /// error — so the caller falls back to `--confidence`.
+    ///
+    /// This is made HERMETIC by forcing `PATH` to exclude any directory that
+    /// actually contains a `fugu-router` executable, so the assertion holds
+    /// regardless of ambient machine state (e.g. a dev box where fugu-router
+    /// IS on PATH and its episode store has history would otherwise return
+    /// `Some(..)`, per `calibrated_confidence`'s shell-out above). Every
+    /// other directory (git, gh, tty, ...) stays resolvable, and the
+    /// original `PATH` is restored on drop (incl. on panic, since `Drop`
+    /// still runs during unwind) so no other concurrently-running test in
+    /// this binary observes the mutation.
     #[test]
     fn flag_supplied_but_probe_unusable_falls_back() {
+        /// RAII guard: temporarily overrides the process `PATH` env var,
+        /// restoring the original value on drop.
+        struct PathGuard {
+            original: Option<String>,
+        }
+        impl PathGuard {
+            fn install(filtered: &str) -> Self {
+                let original = std::env::var("PATH").ok();
+                // SAFETY: test-only, single-purpose mutation; always
+                // restored by `Drop::drop` below (incl. on panic/unwind).
+                unsafe { std::env::set_var("PATH", filtered) };
+                Self { original }
+            }
+        }
+        impl Drop for PathGuard {
+            fn drop(&mut self) {
+                match &self.original {
+                    // SAFETY: see `install` above — this only ever restores
+                    // the exact value that was captured before mutation.
+                    Some(v) => unsafe { std::env::set_var("PATH", v) },
+                    None => unsafe { std::env::remove_var("PATH") },
+                }
+            }
+        }
+
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let filtered: Vec<&str> = original_path
+            .split(sep)
+            .filter(|dir| !std::path::Path::new(dir).join("fugu-router").exists())
+            .collect();
+        let sep_str = sep.to_string();
+        let filtered_path = filtered.join(sep_str.as_str());
+
+        let _guard = PathGuard::install(&filtered_path);
+
         let title = Some("some task".to_string());
-        // Either fugu-router is absent (None) or it lacks the `confidence`
-        // subcommand / history (non-zero exit → None). Both yield None here.
+        // With fugu-router unresolvable on PATH, `Command::output()` fails
+        // to spawn → soft-skip → `None`, regardless of any ambient
+        // fugu-router install / episode history on the host.
         assert_eq!(calibrated_confidence(&title, &[], &None), None);
     }
 }

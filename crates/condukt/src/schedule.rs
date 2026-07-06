@@ -12,6 +12,7 @@
 //! same decomposition always yields the same schedule.
 
 use crate::model::{Batch, Class, Decomposition, Schedule, Task};
+use blastguard::classify::classify;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::collections::{HashMap, HashSet};
 
@@ -226,8 +227,26 @@ pub fn validate(dec: &Decomposition) -> Vec<String> {
     errs
 }
 
+/// The haystack the risk classifier inspects for a task: its title,
+/// done-criteria, and touched files joined together, so a deploy/push signal in
+/// any of them trips the deterministic force-gate.
+fn task_action_text(t: &Task) -> String {
+    let mut s = t.title.clone();
+    if let Some(dc) = &t.done_criteria {
+        s.push(' ');
+        s.push_str(dc);
+    }
+    for f in &t.touched_files {
+        s.push(' ');
+        s.push_str(f);
+    }
+    s
+}
+
 /// Compute the deterministic schedule. `shared_globs` come from config: any
-/// parallel task touching one is demoted to serial.
+/// parallel task touching one is demoted to serial. A high-risk irreversible
+/// action (deploy/push/release, per [`blastguard::classify`]) is force-gated
+/// regardless of its declared `class`.
 pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
     let mut sched = Schedule::default();
     let shared = build_globset(shared_globs);
@@ -237,6 +256,21 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
     let mut forced_serial: HashSet<String> = HashSet::new();
 
     for t in &dec.tasks {
+        // Deterministic force-gate (closes the LLM under-tag hole): a high-risk
+        // irreversible action — deploy / push / release — is quarantined under
+        // `gated` regardless of the LLM-declared `class`. blastguard's graded
+        // classifier is the single source of the risk/reversibility axes, so a
+        // deploy mislabelled `parallel` can never slip past the only outward gate.
+        if classify(&task_action_text(t)).requires_gate() {
+            gated.push(t.id.clone());
+            if !matches!(t.class, Class::Gated) {
+                sched.warnings.push(format!(
+                    "task '{}' force-gated: high-risk irreversible action (declared class {:?})",
+                    t.id, t.class
+                ));
+            }
+            continue;
+        }
         match t.class {
             Class::Gated => gated.push(t.id.clone()),
             Class::Experiment => {
@@ -366,6 +400,40 @@ mod tests {
         assert_eq!(s.batches.len(), 2);
         assert_eq!(s.batches[0].parallel, vec!["a"]);
         assert_eq!(s.batches[1].parallel, vec!["b"]);
+    }
+
+    #[test]
+    fn deploy_task_tagged_parallel_is_force_gated() {
+        // An upstream LLM mis-tags an outward-facing deploy as `parallel`. The
+        // deterministic classifier must still quarantine it under `gated` — the
+        // only outward gate — instead of letting it into a parallel batch.
+        let d = dec(vec![
+            task("safe", &["src/a.rs"], &[], Class::Parallel),
+            task("deploy-prod", &["release.sh"], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+
+        assert!(
+            s.gated.contains(&"deploy-prod".to_string()),
+            "a deploy task must be force-gated even when tagged parallel; gated={:?}",
+            s.gated,
+        );
+        let batched: Vec<&String> = s.batches.iter().flat_map(|b| b.parallel.iter()).collect();
+        assert!(
+            !batched.iter().any(|id| *id == "deploy-prod"),
+            "force-gated deploy task must NOT appear in a parallel batch; batched={batched:?}",
+        );
+        // A force-gate is surfaced as a warning (class was parallel, not gated).
+        assert!(
+            s.warnings.iter().any(|w| w.contains("deploy-prod")),
+            "force-gating must be announced in warnings; warnings={:?}",
+            s.warnings,
+        );
+        // The genuinely-benign parallel task is unaffected.
+        assert!(
+            batched.iter().any(|id| *id == "safe"),
+            "benign task must still batch; batched={batched:?}",
+        );
     }
 
     #[test]

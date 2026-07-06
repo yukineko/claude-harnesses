@@ -302,12 +302,49 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
     sched.gated = gated.clone();
     experiment.sort();
     sched.experiment = experiment.clone();
-    let excluded: HashSet<&str> = sched
+    let excluded: HashSet<String> = sched
         .gated
         .iter()
         .chain(sched.experiment.iter())
-        .map(|s| s.as_str())
+        .cloned()
         .collect();
+
+    // File-overlap is authoritative over the LLM-declared `class`. Two tasks
+    // that touch a conflicting file must not both ride the parallel-worktree
+    // track: greedy coloring already keeps them out of the same *batch*, but in
+    // per-task-worktree mode each parallel task gets its own branch cut from the
+    // same base commit and Phase-7 merges every branch — so two conflicting
+    // branches 3-way merge-conflict at the shared file (the merge is refused,
+    // stalling the run and forcing manual re-work). Demote every parallel-
+    // eligible task that `files_conflict` with another parallel-eligible task to
+    // serial, so the deterministic overlap fact — not the advisory label —
+    // decides parallel-vs-serial. Genuinely-disjoint tasks are untouched and
+    // still batch in parallel. Order-independent (a task is demoted iff it
+    // overlaps at least one peer), so the result set is deterministic; warnings
+    // are emitted in sorted id order for stable output.
+    let parallel_candidates: Vec<&Task> = dec
+        .tasks
+        .iter()
+        .filter(|t| !excluded.contains(t.id.as_str()) && !forced_serial.contains(t.id.as_str()))
+        .collect();
+    let mut overlap_demoted: Vec<String> = parallel_candidates
+        .iter()
+        .filter(|t| {
+            parallel_candidates
+                .iter()
+                .any(|o| o.id != t.id && files_conflict(&t.touched_files, &o.touched_files))
+        })
+        .map(|t| t.id.clone())
+        .collect();
+    overlap_demoted.sort();
+    for id in overlap_demoted {
+        if forced_serial.insert(id.clone()) {
+            sched.warnings.push(format!(
+                "task '{id}' file-overlaps another parallel task -> serial \
+                 (overlap is authoritative over class)"
+            ));
+        }
+    }
 
     let depth = compute_depths(dec);
 
@@ -382,14 +419,70 @@ mod tests {
     }
 
     #[test]
-    fn shared_file_forces_two_batches() {
-        // Both touch src/a.rs -> cannot share a batch.
+    fn shared_file_demotes_both_off_the_parallel_track() {
+        // Both touch src/a.rs. Coloring alone would split them into two batches
+        // yet leave both on the parallel-worktree track (two branches from one
+        // base -> Phase-7 merge conflict). Overlap is authoritative: both are
+        // demoted to serial and no parallel batch is produced.
         let d = dec(vec![
             task("a", &["src/a.rs"], &[], Class::Parallel),
             task("b", &["src/a.rs"], &[], Class::Parallel),
         ]);
         let s = schedule(&d, &[]);
-        assert_eq!(s.batches.len(), 2);
+        assert!(s.batches.is_empty());
+        assert_eq!(s.serial, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn overlapping_parallel_tasks_demoted_to_serial() {
+        // Two Class::Parallel tasks touch the SAME file. Greedy coloring alone
+        // keeps them out of one batch but leaves BOTH on the parallel-worktree
+        // track — each gets its own branch cut from the same base, and Phase-7
+        // merges every branch, so the second branch 3-way merge-conflicts at the
+        // shared file. Overlap is authoritative over the advisory `class` label:
+        // at least one (here both) is demoted to serial and a warning is emitted.
+        let d = dec(vec![
+            task("a", &["src/a.rs"], &[], Class::Parallel),
+            task("b", &["src/a.rs"], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+        // Neither conflicting task may sit on the parallel batches track.
+        let batched: Vec<&String> = s.batches.iter().flat_map(|b| b.parallel.iter()).collect();
+        assert!(
+            !batched.iter().any(|id| *id == "a" || *id == "b"),
+            "file-overlapping parallel tasks must NOT both batch; batched={batched:?}",
+        );
+        assert_eq!(s.serial, vec!["a", "b"]);
+        assert!(
+            s.warnings
+                .iter()
+                .any(|w| w.contains("'a'") && w.contains("overlap")),
+            "a demotion must be announced; warnings={:?}",
+            s.warnings,
+        );
+        assert!(
+            s.warnings
+                .iter()
+                .any(|w| w.contains("'b'") && w.contains("overlap")),
+            "b demotion must be announced; warnings={:?}",
+            s.warnings,
+        );
+    }
+
+    #[test]
+    fn overlap_demotion_spares_disjoint_parallel_tasks() {
+        // a & b overlap (both src/shared.rs) -> both serial. c is genuinely
+        // disjoint -> STILL batches in parallel. Overlap is authoritative
+        // WITHOUT over-serializing independent work (no regression).
+        let d = dec(vec![
+            task("a", &["src/shared.rs"], &[], Class::Parallel),
+            task("b", &["src/shared.rs"], &[], Class::Parallel),
+            task("c", &["src/c.rs"], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+        assert_eq!(s.serial, vec!["a", "b"]);
+        assert_eq!(s.batches.len(), 1);
+        assert_eq!(s.batches[0].parallel, vec!["c"]);
     }
 
     #[test]
@@ -467,13 +560,16 @@ mod tests {
 
     #[test]
     fn glob_touched_files_detected_as_conflict() {
-        // "src/*" overlaps "src/a.rs".
+        // "src/*" overlaps "src/a.rs" -> the two Parallel tasks conflict, so
+        // overlap-authoritative demotion puts BOTH on the serial track (not
+        // merely into separate parallel batches).
         let d = dec(vec![
             task("a", &["src/*"], &[], Class::Parallel),
             task("b", &["src/a.rs"], &[], Class::Parallel),
         ]);
         let s = schedule(&d, &[]);
-        assert_eq!(s.batches.len(), 2);
+        assert!(s.batches.is_empty());
+        assert_eq!(s.serial, vec!["a", "b"]);
     }
 
     #[test]

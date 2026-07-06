@@ -729,6 +729,14 @@ verifier が fail したら、**同じターン内で**以下を実行して再�
 **replan = 最大 1 回** (最初の replan が自身も失敗したら escalate_to_user に fail-soft)。
 opus で失敗した場合、または初回から opus を使っていた場合は即 escalate_to_user (それ以上上げられず、replan 上限も限定的)。
 
+**決定論の循環ブレーカー (cost・failure-streak・stall を1本に集約した停止ゲート)**: 上記のカスケード上限に加えて、
+自己駆動ループ (flow など) や再試行の各イテレーションは `condukt circuit check --run RID` を consult する。この 1
+コマンドが failure-streak のキャップ到達 (既定 3)・予算超過・no-progress TTL 超過 (既定 1800 秒) の 3 条件を決定論で
+判定し、どれかが成立すれば **nonzero で trip** する (人にも policy にも聞かない hard stop。continue なら exit 0)。
+trip 理由の slug と採取した信号は append-only JSONL に記録され後から可観測。信号採取はすべて fail-soft (run 未ロード・
+budgetguard 不在などは非 trip に縮退) で、`condukt` が無い/失敗する版では従来の散文フォールバックに落ちる。これにより
+「連続失敗 N 件で止める」という散文だった早期脱出が **1 つの決定論ゲート**に集約され、散文が唯一の停止機構ではなくなる。
+
 検証後、**結果を fugu-router に記録**して次回のルーティングを賢くする。記録は LLM が手で
 snippet を打つのではなく **condukt バイナリが決定論的に発火する** (発火漏れを物理的に無くす):
 

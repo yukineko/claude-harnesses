@@ -93,7 +93,7 @@ esac
 | **ロック競合**（Step 2・生きた保有者） | low | high | high | auto | **stand down**（報告して clean exit。`--force` 自動奪取はしない） |
 | **resume 選択**（複数候補） | low | high | high | auto | 3-1 の優先度 pick 規則の先頭 |
 | **pivot-check**（Step 4・`pivot`） | medium | high | low | **escalate** | —（genuine な戦略判断なので人に聞く。既定案＝継続/persevere） |
-| **連続失敗 3 件**（早期脱出） | low | high | high | auto | **clean stop**（ループを止め Step 4 へ） |
+| **循環ブレーカー trip**（早期脱出・`condukt circuit check`） | low | high | high | auto | **clean stop**（ループを止め Step 4 へ） |
 
 > pivot は **escalate（残す 質疑）**＝ streak 閾値超えは「戦略が効いていない」という genuine な判断材料なので人間に返す。
 > それ以外の routine なゲートは **auto** で自答され Yes/No は消える。verdict は `policy::decide`
@@ -294,6 +294,13 @@ condukt state heartbeat --run "flow-$CLAUDE_CODE_SESSION_ID"
 （heartbeat が途切れた claim は TTL で自動 reap されるため、長時間のループでは各サイクルで呼ぶのが安全）。
 `condukt` が無い/失敗した場合は fail-soft（従来どおりループを続行）。
 
+続けて **決定論の循環ブレーカー**を1本のコマンドで判定する（cost・failure-streak・stall を集約。詳細は「早期脱出」）:
+```bash
+condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID"   # trip なら nonzero、continue なら exit 0
+```
+**nonzero（trip）なら人にも policy にも聞かず即 Step 4 へ**（stop 理由 slug は JSONL に記録）。exit 0 なら 3-1 に戻る。
+`condukt` が無い/失敗する版では fail-soft で従来の散文フォールバック（下記早期脱出表）に落ちる。
+
 3-1 に戻る。早期脱出条件（下記）に当たれば Step 4 へ。
 
 ### Step 4 — ロック解放とサマリ
@@ -327,11 +334,19 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
 
 ## 早期脱出
 
+**決定論的な循環ブレーカー（cost・failure-streak・stall を1本のゲートに consolidate）**: ループの各イテレーション
+（3-4 の継続判定の一部）で `condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID"` を実行する。この 1 コマンドが
+**failure-streak がキャップ（既定 3）到達・予算超過・no-progress TTL（既定 1800 秒）超過**の3条件を決定論で判定し、
+どれかが成立すれば **nonzero で trip** する（成立しなければ exit 0＝continue）。trip を観測したら **人にも policy にも
+聞かず即 clean stop** して Step 4 へ（停止理由 slug は JSONL に記録され後から可観測）。信号採取はすべて fail-soft
+（run 未ロード・budgetguard 不在などは非 trip に縮退）で、`condukt` が無い/失敗する版では従来の下表フォールバックに落ちる。
+これで「連続失敗 3 件」という散文だった停止条件が **1つの決定論ゲート**に集約される（散文が唯一の停止機構ではなくなる）。
+
 | 状況 | 対応 |
 |---|---|
 | ユーザーが中断を指示 | 直ちに Step 4（ロック解放）へ |
-| 連続失敗が 3 件以上 | **Step 0.5 の policy-answer routing**（`--risk low --reversible high --confidence high` → 既定 verdict auto）: **auto** → `chosen`（clean stop）を採用しループを止め Step 4 へ（自答は監査ログに残る）／ **escalate・非自律・フォールバック** → `AskUserQuestion`「続行 / 中止」 |
-| budgetguard が予算超過を返す | ループ終了（Step 4）。残キューはそのまま次セッションへ |
+| 循環ブレーカーが trip（下記のとおり毎イテレーション `condukt circuit check --run RID` を実行し **nonzero**＝failure-streak がキャップ到達・予算超過・no-progress stall のいずれか） | **決定論的に clean stop**（ループを止め Step 4 へ。人にも policy にも聞かない hard stop。停止理由は verdict の JSONL に記録される）。非自律で追加確認を入れたい場合の**フォールバックのみ** `AskUserQuestion`「続行 / 中止」 |
+| budgetguard が予算超過を返す | ループ終了（Step 4）。残キューはそのまま次セッションへ（予算軸は上の circuit check にも consolidate 済み） |
 | compass ゲートが「再スコープが必要」を示す | ループを止め、`/compass` をユーザーに促す |
 | `backlog next` が予期しないエラー | 報告して Step 4 へ |
 
@@ -346,9 +361,11 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
 - **盲目実行しない**: compass ゲートが鮮明でない限り、自動でキューを流し始めない。
 - **ロック解放を絶対に飛ばさない**（早期脱出・エラー時も）。
 - **自律モードでは human gate を `condukt policy answer` に通す（Step 0.5）**: `autonomy-check` exit 0 のとき、
-  各ゲート（ロック競合 / resume 選択 / pivot / 連続失敗 3 件）を per-gate の risk×reversible×confidence で
+  各ゲート（ロック競合 / resume 選択 / pivot）を per-gate の risk×reversible×confidence で
   `policy answer` に掛け、**auto は自答（Ask 撤去・監査ログに追記）／ escalate は従来 Ask（残す 質疑）／ block は拒否**。
-  routine なゲート（ロック競合＝stand down、resume＝優先 pick 先頭、連続失敗＝clean stop）は auto で消え、
+  なお **failure-streak/予算/stall の早期脱出は policy answer ではなく決定論の `condukt circuit check` に集約**されており、
+  trip すれば人にも policy にも聞かず clean stop する（上記「早期脱出」）。routine なゲート（ロック競合＝stand down、
+  resume＝優先 pick 先頭、循環ブレーカー trip＝clean stop）は auto で消え、
   **pivot は escalate**（genuine な戦略判断）として残る。自律で残る停止は **(a) pivot** **(b) worker blocked**
   **(c) deploy/push の GATED 承認** **(d) budgetguard 早期脱出**、および policy が escalate/block を返したゲート。
   exit 1（既定・非自律）は**従来どおり全 Ask を維持**（後方互換）。存在しない版（exit 127）は非自律とみなす。

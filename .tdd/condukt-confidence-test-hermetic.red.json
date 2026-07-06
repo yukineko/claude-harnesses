@@ -1,9 +1,0 @@
-{
-  "cmd": "cargo test -p condukt flag_supplied",
-  "exit_code": 101,
-  "output_tail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running unittests src/main.rs (target/debug/deps/condukt-6853e4c060318f74)\n\nrunning 1 test\ntest calibrated_confidence_tests::flag_supplied_but_probe_unusable_falls_back ... FAILED\n\nfailures:\n\n---- calibrated_confidence_tests::flag_supplied_but_probe_unusable_falls_back stdout ----\n\nthread 'calibrated_confidence_tests::flag_supplied_but_probe_unusable_falls_back' (16516357) panicked at crates/condukt/src/main.rs:3020:9:\nassertion `left == right` failed\n  left: Some(High)\n right: None\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    calibrated_confidence_tests::flag_supplied_but_probe_unusable_falls_back\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 374 filtered out; finished in 0.02s\n\nerror: test failed, to rerun pass `-p condukt --bin condukt`",
-  "passed": false,
-  "phase": "red",
-  "task": "condukt-confidence-test-hermetic",
-  "ts": "2026-07-06T22:41:22.982192+09:00"
-}

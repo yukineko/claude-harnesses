@@ -1,9 +1,0 @@
-{
-  "cmd": "cargo test -p condukt flag_supplied",
-  "exit_code": 0,
-  "passed": true,
-  "phase": "green",
-  "red_proof": "/Users/yuki/.condukt/worktrees/condukt-confidence-test-hermetic/.tdd/condukt-confidence-test-hermetic.red.json",
-  "task": "condukt-confidence-test-hermetic",
-  "ts": "2026-07-06T22:44:14.473064+09:00"
-}

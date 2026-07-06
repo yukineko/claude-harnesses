@@ -176,13 +176,14 @@ fn log_event(cfg: &Config, session: &str, t: &Trip, count: u32, escalated: bool)
         "escalated": escalated,
         "detail": t.detail,
     });
-    if let (Ok(line), Ok(mut f)) = (
-        serde_json::to_string(&entry),
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path),
-    ) {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    if let (Ok(line), Ok(mut f)) = (serde_json::to_string(&entry), opts.open(&path)) {
         use std::io::Write;
         let _ = writeln!(f, "{line}");
     }
@@ -239,4 +240,47 @@ fn init(force: bool) -> anyhow::Result<()> {
     println!("wrote {}", path.display());
     println!("Run `stuckguard install` once to wire the PostToolUse hook.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn log_event_creates_file_with_0o600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "stuckguard-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let cfg = Config {
+            state_dir: dir.clone(),
+            ..Config::default()
+        };
+        let trip = Trip {
+            key: "repeat:test".to_string(),
+            kind: Kind::Repeat,
+            count: 3,
+            all_errored: false,
+            detail: "test detail".to_string(),
+        };
+
+        log_event(&cfg, "sess", &trip, 1, false);
+
+        let log_path = dir.join("log.jsonl");
+        let meta = std::fs::metadata(&log_path).expect("log file should exist");
+        let mode = meta.permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "expected mode 0o600, got {mode:o}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

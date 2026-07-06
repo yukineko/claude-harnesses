@@ -1,9 +1,0 @@
-{
-  "cmd": "cargo test -p condukt gate_exec",
-  "exit_code": 0,
-  "passed": true,
-  "phase": "green",
-  "red_proof": "/Users/yuki/src/harness/.tdd/gate-exec-core.red.json",
-  "task": "gate-exec-core",
-  "ts": "2026-07-06T22:10:58.774108+09:00"
-}

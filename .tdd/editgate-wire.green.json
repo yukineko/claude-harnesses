@@ -1,9 +1,0 @@
-{
-  "cmd": "cargo test -p condukt --test edit_gate_hook",
-  "exit_code": 0,
-  "passed": true,
-  "phase": "green",
-  "red_proof": "/Users/yuki/.condukt/worktrees/editgate-wire/.tdd/editgate-wire.red.json",
-  "task": "editgate-wire",
-  "ts": "2026-07-02T01:41:20.357704+09:00"
-}

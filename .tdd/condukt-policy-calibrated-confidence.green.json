@@ -1,9 +1,0 @@
-{
-  "cmd": "cargo test -p condukt --bin condukt policy",
-  "exit_code": 0,
-  "passed": true,
-  "phase": "green",
-  "red_proof": "/Users/yuki/.condukt/worktrees/condukt-policy-calibrated-confidence/.tdd/condukt-policy-calibrated-confidence.red.json",
-  "task": "condukt-policy-calibrated-confidence",
-  "ts": "2026-07-06T17:25:40.084764+09:00"
-}

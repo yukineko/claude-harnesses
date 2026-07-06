@@ -14,6 +14,7 @@ Cargo.lock.bak
 .claude/progress.md
 .compass/carve-state.json
 .compass/outcomes.json
+.tdd/
 
 # Python bytecode cache
 __pycache__/

@@ -1,9 +1,0 @@
-{
-  "cmd": "cargo test -p condukt --test edit_gate_hook",
-  "exit_code": 101,
-  "output_tail": "\n---- clean_edit_in_worktree_allows stdout ----\n\nthread 'clean_edit_in_worktree_allows' (10994923) panicked at crates/condukt/tests/edit_gate_hook.rs:207:5:\nassertion failed: out.status.success()\n\n---- edit_outside_any_worktree_allows stdout ----\n\nthread 'edit_outside_any_worktree_allows' (10994924) panicked at crates/condukt/tests/edit_gate_hook.rs:234:5:\nassertion failed: out.status.success()\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n---- empty_stdin_allows stdout ----\n\nthread 'empty_stdin_allows' (10994925) panicked at crates/condukt/tests/edit_gate_hook.rs:246:5:\nassertion failed: out.status.success()\n\n---- broken_edit_in_worktree_blocks stdout ----\n\nthread 'broken_edit_in_worktree_blocks' (10994922) panicked at crates/condukt/tests/edit_gate_hook.rs:176:5:\nhook must exit 0 (never break a turn); stderr: error: unrecognized subcommand 'editgate'\n\n  tip: a similar subcommand exists: 'state'\n\nUsage: condukt <COMMAND>\n\nFor more information, try '--help'.\n\n\n\nfailures:\n    broken_edit_in_worktree_blocks\n    clean_edit_in_worktree_allows\n    edit_outside_any_worktree_allows\n    empty_stdin_allows\n    non_rust_file_allows\n\ntest result: FAILED. 0 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s\n\nerror: test failed, to rerun pass `-p condukt --test edit_gate_hook`",
-  "passed": false,
-  "phase": "red",
-  "task": "editgate-wire",
-  "ts": "2026-07-02T01:38:41.901486+09:00"
-}

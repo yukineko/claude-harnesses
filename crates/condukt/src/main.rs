@@ -13,6 +13,7 @@ mod claim;
 mod config;
 mod consensus;
 mod editgate;
+mod escalate;
 mod gatelog;
 mod hooks;
 mod install;
@@ -169,6 +170,57 @@ enum Command {
         /// Failure count from the previous iteration (used for no-progress detection).
         #[arg(long)]
         prev_failures: Option<usize>,
+    },
+    /// Durable async escalation channel: enqueue / list / resolve out-of-band
+    /// questions in a per-project persistent store, so a blocked or GATED task
+    /// records "I need a human answer for X" and keeps going instead of blocking
+    /// inline on an AskUserQuestion. Backed by
+    /// `<state_dir>/<project-key>/escalations.json` (atomic writes, fail-soft).
+    Escalate {
+        #[command(subcommand)]
+        action: EscalateAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum EscalateAction {
+    /// Enqueue a new escalation and print the created record as JSON (its `id`
+    /// on the first line for easy capture, then the pretty record). Persists to
+    /// the durable per-project store.
+    Add {
+        /// The run this question belongs to.
+        #[arg(long)]
+        run: String,
+        /// The task within the run that is blocked on the answer.
+        #[arg(long)]
+        task: String,
+        /// The question being asked.
+        #[arg(long)]
+        question: String,
+        /// One offered option; repeat `--option` for each.
+        #[arg(long = "option")]
+        option: Vec<String>,
+        /// 0-based index of the recommended option.
+        #[arg(long, default_value_t = 0)]
+        recommend: usize,
+    },
+    /// List the still-OPEN (unresolved) escalations for a run. Human-readable by
+    /// default; `--json` prints the records as a JSON array.
+    List {
+        #[arg(long)]
+        run: String,
+        /// Emit JSON instead of the human-readable table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Resolve an escalation by id, recording the chosen option. The record stays
+    /// in the store (now resolved, with its answer) so the task can resume.
+    Resolve {
+        #[arg(long)]
+        id: String,
+        /// The chosen option (should be one of the recorded options).
+        #[arg(long)]
+        choice: String,
     },
 }
 
@@ -1249,6 +1301,7 @@ fn run_user(cmd: Command) -> Result<()> {
             }
         }
         Command::Policy { action } => run_policy(action),
+        Command::Escalate { action } => run_escalate(&cfg, &cwd, action)?,
         Command::Status { all } => status::render(&cfg, &cwd, all),
         // These are dispatched as hooks in main() (via run_hook, which exits and
         // never returns here). Reaching this arm would be an internal dispatch
@@ -1337,6 +1390,62 @@ fn calibrated_confidence(
         return None; // NaN/±inf on stdout → fall back
     }
     Some(policy::Level::from_score(score))
+}
+
+/// `condukt escalate add|list|resolve` — the durable async escalation channel.
+/// Deterministic store I/O; fail-soft (missing/corrupt store = empty). The
+/// created-at timestamp uses wall-clock seconds (observability only; it never
+/// feeds the deterministic record id).
+fn run_escalate(cfg: &Config, cwd: &Path, action: EscalateAction) -> Result<()> {
+    match action {
+        EscalateAction::Add {
+            run,
+            task,
+            question,
+            option,
+            recommend,
+        } => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let rec = escalate::add_escalation(
+                cfg, cwd, &run, &task, &question, &option, recommend, now,
+            )?;
+            // id on the first line for easy capture, then the full record.
+            println!("{}", rec.id);
+            println!("{}", serde_json::to_string_pretty(&rec)?);
+        }
+        EscalateAction::List { run, json } => {
+            let open = escalate::list_escalations(cfg, cwd, &run)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&open)?);
+            } else if open.is_empty() {
+                println!("No open escalations for run {run}.");
+            } else {
+                println!("Open escalations for run {run}:");
+                for e in &open {
+                    let rec = e
+                        .options
+                        .get(e.recommended)
+                        .map(|o| format!(" (recommend: {o})"))
+                        .unwrap_or_default();
+                    println!("  {}  [{}] {}{}", e.id, e.task, e.question, rec);
+                    println!("        options: {}", e.options.join(" | "));
+                }
+            }
+        }
+        EscalateAction::Resolve { id, choice } => {
+            match escalate::resolve_escalation(cfg, cwd, &id, &choice)? {
+                Some(rec) => println!("{}", serde_json::to_string_pretty(&rec)?),
+                None => {
+                    eprintln!("condukt: no escalation with id '{id}'");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn run_policy(action: PolicyAction) -> ! {

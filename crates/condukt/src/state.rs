@@ -25,6 +25,11 @@ pub enum Status {
     /// block the completion gate and causes the run to disappear from `state list`
     /// when all tasks reach a terminal state.
     Cancelled,
+    /// An experiment worktree that was discarded (removed without merging its
+    /// branch) via `worktree discard`. Terminal like Verified/Cancelled: it does
+    /// not block the completion gate — a discarded experiment resolves via the
+    /// learning artifact recorded in `TaskState.findings`, not as a failure.
+    Discarded,
 }
 
 impl std::str::FromStr for Status {
@@ -37,11 +42,30 @@ impl std::str::FromStr for Status {
             "failed" => Status::Failed,
             "verified" => Status::Verified,
             "cancelled" => Status::Cancelled,
+            "discarded" => Status::Discarded,
             other => {
-                bail!("unknown status '{other}' (pending|running|done|failed|verified|cancelled)")
+                bail!("unknown status '{other}' (pending|running|done|failed|verified|cancelled|discarded)")
             }
         })
     }
+}
+
+/// Structured record of what executing a task taught us, persisted onto the
+/// task record REGARDLESS of pass/fail so a failed or discarded (unmerged)
+/// experiment still records its learning. `summary` is a free-text note;
+/// `branch_sha`/`diff_stat` capture the code artifact of a discarded worktree
+/// (see `worktree discard`) so the learning survives the branch being deleted.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Findings {
+    /// Free-text summary of what was learned.
+    pub summary: String,
+    /// Branch tip SHA captured as a learning artifact before the branch was
+    /// force-deleted (e.g. by `worktree discard`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_sha: Option<String>,
+    /// `git diff --stat` summary captured before the worktree/branch was removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_stat: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -79,6 +103,12 @@ pub struct TaskState {
     /// `#[serde(default)]` keeps old run-state JSON parseable.
     #[serde(default)]
     pub fp_oracle_valid: Option<bool>,
+    /// Structured learning artifact for this task, persisted regardless of
+    /// pass/fail. Set by `state set --findings` and `worktree discard`. Kept
+    /// `Option` + serde-default/skip so existing run-state JSON still
+    /// deserializes and tasks without findings serialize unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub findings: Option<Findings>,
 }
 
 pub fn now_secs() -> i64 {
@@ -158,7 +188,12 @@ impl RunState {
         let done = self
             .tasks
             .iter()
-            .filter(|t| matches!(t.status, Status::Verified | Status::Cancelled))
+            .filter(|t| {
+                matches!(
+                    t.status,
+                    Status::Verified | Status::Cancelled | Status::Discarded
+                )
+            })
             .count();
         (done, self.tasks.len())
     }
@@ -475,7 +510,10 @@ pub fn reconcile_run(
     let mut changes = Vec::new();
 
     for t in run.tasks.iter_mut() {
-        if matches!(t.status, Status::Verified | Status::Cancelled) {
+        if matches!(
+            t.status,
+            Status::Verified | Status::Cancelled | Status::Discarded
+        ) {
             continue;
         }
 
@@ -546,6 +584,80 @@ pub fn reconcile_run(
     }
 
     Ok((run, changes))
+}
+
+// ── Discard an experiment worktree (resolve-by-learning) ──────────────────
+
+/// Discard an experiment task's worktree WITHOUT merging its branch: capture
+/// the branch SHA + `git diff --stat` as a learning artifact onto the task's
+/// `findings`, remove the worktree, force-delete the (unmerged) branch, and mark
+/// the task `Discarded` — a terminal status the completion gate accepts. A
+/// discarded experiment therefore resolves via learning, not as a failure.
+///
+/// Backend for `condukt worktree discard`. Serialized under the per-run state
+/// lock (load → capture → remove → mutate → save) like the other mutators.
+pub fn discard_experiment(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> Result<()> {
+    let _lock = crate::lock::RunLock::acquire(cfg, cwd, run_id);
+    let repo = crate::worktree::toplevel(cwd).unwrap_or_else(|_| repo_root(cwd));
+    let mut rs = RunState::load(cfg, cwd, run_id)?;
+
+    // Read the task's branch/worktree without holding a mutable borrow across
+    // the git calls below.
+    let (branch, worktree_path) = {
+        let t = rs
+            .tasks
+            .iter()
+            .find(|t| t.id == task_id)
+            .ok_or_else(|| anyhow::anyhow!("no task '{task_id}' in run '{run_id}'"))?;
+        (t.branch.clone(), t.worktree.clone())
+    };
+
+    // Capture the learning artifact BEFORE removing anything (once the branch is
+    // force-deleted its commits are unreferenced).
+    let branch_sha = branch
+        .as_deref()
+        .and_then(|b| crate::worktree::git(&repo, &["rev-parse", b]).ok())
+        .map(|s| s.trim().to_string());
+    let diff_stat = branch.as_deref().and_then(|b| {
+        crate::worktree::git(&repo, &["diff", "--stat", &cfg.default_branch, b]).ok()
+    });
+
+    // Remove the worktree and force-delete the (unmerged) branch.
+    if let Some(w) = &worktree_path {
+        let p = PathBuf::from(w);
+        crate::worktree::discard(&repo, &p, branch.as_deref())?;
+    } else if let Some(b) = &branch {
+        // No worktree recorded, but the branch still needs force-deleting.
+        crate::worktree::git(&repo, &["branch", "-D", b])
+            .with_context(|| format!("could not force-delete branch '{b}' during discard"))?;
+    }
+
+    // Record the artifact + mark the task resolved-by-learning.
+    let t = rs
+        .tasks
+        .iter_mut()
+        .find(|t| t.id == task_id)
+        .ok_or_else(|| anyhow::anyhow!("no task '{task_id}' in run '{run_id}'"))?;
+    let mut f = t.findings.take().unwrap_or_default();
+    if f.summary.trim().is_empty() {
+        f.summary = format!(
+            "discarded experiment worktree; branch '{}' removed without merging",
+            branch.as_deref().unwrap_or("?")
+        );
+    }
+    f.branch_sha = branch_sha;
+    f.diff_stat = diff_stat;
+    t.findings = Some(f);
+    t.status = Status::Discarded;
+    t.updated_at = Some(now_secs());
+    // The worktree is gone and the branch deleted — clear the now-dangling refs
+    // so the completion gate sees no leftover state.
+    t.worktree = None;
+    t.branch = None;
+    t.branch_sha = None;
+
+    rs.save(cfg, cwd)?;
+    Ok(())
 }
 
 // ── Stuck detection ───────────────────────────────────────────────────────
@@ -753,7 +865,10 @@ pub fn gate_reasons(cfg: &Config, cwd: &Path, run: &RunState) -> Vec<String> {
     let repo = repo_root(cwd);
 
     for t in &run.tasks {
-        if !matches!(t.status, Status::Verified | Status::Cancelled) {
+        if !matches!(
+            t.status,
+            Status::Verified | Status::Cancelled | Status::Discarded
+        ) {
             reasons.push(format!("task '{}' is {:?}, not verified", t.id, t.status));
         }
         // Defense-in-depth: a task marked verified but recorded with a real
@@ -841,7 +956,7 @@ pub fn records_for_run(
     let settled = run.tasks.iter().all(|t| {
         matches!(
             t.status,
-            Status::Verified | Status::Failed | Status::Cancelled
+            Status::Verified | Status::Failed | Status::Cancelled | Status::Discarded
         )
     });
     if !settled {
@@ -1234,7 +1349,7 @@ pub fn cross_run_conflicts(
         let all_settled = run.tasks.iter().all(|t| {
             matches!(
                 t.status,
-                Status::Verified | Status::Failed | Status::Cancelled
+                Status::Verified | Status::Failed | Status::Cancelled | Status::Discarded
             )
         });
         let is_active = !run.paused && !all_settled;
@@ -1308,6 +1423,7 @@ mod tests {
             "failed",
             "verified",
             "cancelled",
+            "discarded",
         ] {
             let st: Status = s.parse().unwrap();
             let json = serde_json::to_string(&st).unwrap();
@@ -1332,6 +1448,7 @@ mod tests {
                     cost_usd: None,
                     branch_sha: None,
                     fp_oracle_valid: None,
+                    findings: None,
                 },
                 TaskState {
                     id: "b".into(),
@@ -1343,6 +1460,7 @@ mod tests {
                     cost_usd: None,
                     branch_sha: None,
                     fp_oracle_valid: None,
+                    findings: None,
                 },
             ],
             paused: false,
@@ -1368,6 +1486,7 @@ mod tests {
                     cost_usd: None,
                     branch_sha: None,
                     fp_oracle_valid: None,
+                    findings: None,
                 },
                 TaskState {
                     id: "b".into(),
@@ -1379,6 +1498,7 @@ mod tests {
                     cost_usd: None,
                     branch_sha: None,
                     fp_oracle_valid: None,
+                    findings: None,
                 },
                 TaskState {
                     id: "c".into(),
@@ -1390,6 +1510,7 @@ mod tests {
                     cost_usd: None,
                     branch_sha: None,
                     fp_oracle_valid: None,
+                    findings: None,
                 },
             ],
             paused: false,
@@ -1467,6 +1588,159 @@ mod tests {
         }
     }
 
+    /// Minimal git repo with an initial commit on `main`. Returns the repo path.
+    fn init_git_repo(dir: &Path) {
+        use crate::worktree::git;
+        std::fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "-b", "main"]).unwrap();
+        git(dir, &["config", "user.email", "test@example.com"]).unwrap();
+        git(dir, &["config", "user.name", "Test"]).unwrap();
+        std::fs::write(dir.join("base.txt"), "base\n").unwrap();
+        git(dir, &["add", "."]).unwrap();
+        git(dir, &["commit", "-m", "init"]).unwrap();
+    }
+
+    /// F→P (T1): findings set on a task that is NOT verified (Failed) must
+    /// survive a save→reload round-trip. Before the `findings` field existed
+    /// this test could not even compile (RED); with it, the learning persists
+    /// regardless of pass/fail (GREEN).
+    #[test]
+    fn findings_persist_on_unverified_task() {
+        let tmp = make_tmp_dir("findings-persist");
+        let cfg = make_test_cfg(&tmp);
+        let t = TaskState {
+            id: "t1".into(),
+            status: Status::Failed,
+            findings: Some(Findings {
+                summary: "hypothesis X did not hold; approach Y is the path".into(),
+                branch_sha: Some("deadbeefcafe".into()),
+                diff_stat: Some("1 file changed, 3 insertions(+)".into()),
+            }),
+            ..Default::default()
+        };
+        let rs = RunState {
+            run_id: "run-findings".into(),
+            goal: "g".into(),
+            tasks: vec![t],
+            paused: false,
+            terminal_label: None,
+            recorded_at: None,
+        };
+        rs.save(&cfg, &tmp).unwrap();
+
+        let loaded = RunState::load(&cfg, &tmp, "run-findings").unwrap();
+        assert_eq!(loaded.tasks[0].status, Status::Failed);
+        let f = loaded.tasks[0]
+            .findings
+            .as_ref()
+            .expect("findings must survive reload on a Failed (unverified) task");
+        assert_eq!(
+            f.summary,
+            "hypothesis X did not hold; approach Y is the path"
+        );
+        assert_eq!(f.branch_sha.as_deref(), Some("deadbeefcafe"));
+        assert_eq!(
+            f.diff_stat.as_deref(),
+            Some("1 file changed, 3 insertions(+)")
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Backward-compat: a run-state JSON written before `findings` existed (no
+    /// `findings` key) must still deserialize, with `findings == None`.
+    #[test]
+    fn legacy_state_without_findings_deserializes() {
+        let json = r#"{
+            "run_id": "r-old",
+            "goal": "g",
+            "tasks": [{ "id": "t1", "status": "failed" }]
+        }"#;
+        let rs: RunState = serde_json::from_str(json).expect("legacy JSON must parse");
+        assert!(rs.tasks[0].findings.is_none());
+    }
+
+    /// F→P (T2): `discard_experiment` on a real experiment worktree/branch must
+    /// (a) remove the worktree and force-delete the unmerged branch, (b) record
+    /// the branch SHA + diff stat as a learning artifact, and (c) leave the done
+    /// gate passing (task marked Discarded, no dangling state). Before the
+    /// discard path existed this was impossible (RED); now it resolves the
+    /// experiment by learning (GREEN).
+    #[test]
+    fn discard_experiment_removes_branch_records_artifact_and_gates_green() {
+        use crate::worktree::git;
+        let tmp = make_tmp_dir("discard-exp");
+        let repo = tmp.join("repo");
+        init_git_repo(&repo);
+        // cfg: state under tmp, worktree_base kept separate (and non-existent) so
+        // the gate's orphan scan finds nothing after removal.
+        let cfg = make_test_cfg(&tmp);
+
+        // Create an experiment worktree on its own branch, with a diverging commit
+        // so the branch is genuinely unmerged.
+        let wt = tmp.join("exp-wt");
+        git(
+            &repo,
+            &["worktree", "add", wt.to_str().unwrap(), "-b", "condukt/exp"],
+        )
+        .unwrap();
+        std::fs::write(wt.join("probe.txt"), "spike result\n").unwrap();
+        git(&wt, &["add", "."]).unwrap();
+        git(&wt, &["commit", "-m", "spike"]).unwrap();
+        let expected_sha = git(&repo, &["rev-parse", "condukt/exp"]).unwrap();
+
+        // Seed run state referencing the worktree/branch.
+        let rs = RunState {
+            run_id: "run-exp".into(),
+            goal: "spike".into(),
+            tasks: vec![TaskState {
+                id: "exp".into(),
+                status: Status::Running,
+                worktree: Some(wt.to_string_lossy().to_string()),
+                branch: Some("condukt/exp".into()),
+                ..Default::default()
+            }],
+            paused: false,
+            terminal_label: None,
+            recorded_at: None,
+        };
+        rs.save(&cfg, &repo).unwrap();
+
+        // Discard.
+        discard_experiment(&cfg, &repo, "run-exp", "exp").unwrap();
+
+        // (a) worktree gone, branch force-deleted (unmerged).
+        assert!(!wt.exists(), "worktree dir must be removed");
+        let branches = git(&repo, &["branch", "--list", "condukt/exp"]).unwrap();
+        assert!(
+            branches.trim().is_empty(),
+            "unmerged branch must be force-deleted, got: {branches:?}"
+        );
+
+        // (b) artifact recorded.
+        let loaded = RunState::load(&cfg, &repo, "run-exp").unwrap();
+        let task = &loaded.tasks[0];
+        assert_eq!(task.status, Status::Discarded);
+        assert!(task.worktree.is_none() && task.branch.is_none());
+        let f = task
+            .findings
+            .as_ref()
+            .expect("findings recorded on discard");
+        assert_eq!(f.branch_sha.as_deref(), Some(expected_sha.as_str()));
+        assert!(
+            f.diff_stat.as_deref().map(|d| d.contains("probe.txt")) == Some(true),
+            "diff stat must mention the diverging file, got: {:?}",
+            f.diff_stat
+        );
+
+        // (c) done gate passes for the discarded experiment.
+        let reasons = gate_reasons(&cfg, &repo, &loaded);
+        assert!(
+            reasons.is_empty(),
+            "gate must pass for a discarded experiment, got: {reasons:?}"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
     #[test]
     fn save_is_atomic_no_tmp_left() {
         let tmp = make_tmp_dir("atomic-save");
@@ -1517,6 +1791,7 @@ mod tests {
                 cost_usd: None,
                 branch_sha: None,
                 fp_oracle_valid: None,
+                findings: None,
             }],
             paused: false,
             terminal_label: None,
@@ -1712,6 +1987,7 @@ mod tests {
                 cost_usd: None,
                 branch_sha: None,
                 fp_oracle_valid: None,
+                findings: None,
             }],
             paused: false,
             terminal_label: None,
@@ -1766,6 +2042,7 @@ mod tests {
             cost_usd: None,
             branch_sha: None,
             fp_oracle_valid: None,
+            findings: None,
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert_eq!(ids, vec!["stuck-task".to_string()]);
@@ -1787,6 +2064,7 @@ mod tests {
             cost_usd: None,
             branch_sha: None,
             fp_oracle_valid: None,
+            findings: None,
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert!(ids.is_empty(), "recent Running task must not be stuck");
@@ -1806,6 +2084,7 @@ mod tests {
             cost_usd: None,
             branch_sha: None,
             fp_oracle_valid: None,
+            findings: None,
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert!(
@@ -1832,6 +2111,7 @@ mod tests {
             cost_usd: None,
             branch_sha: None,
             fp_oracle_valid: None,
+            findings: None,
         }]);
         let t = run.tasks.iter_mut().find(|t| t.id == "t1").unwrap();
         t.status = Status::Pending;
@@ -1861,6 +2141,7 @@ mod tests {
             cost_usd: None,
             branch_sha: None,
             fp_oracle_valid: None,
+            findings: None,
         }]);
         let t = run.tasks.iter_mut().find(|t| t.id == "t-fail").unwrap();
         t.status = Status::Pending;
@@ -1889,6 +2170,7 @@ mod tests {
                 cost_usd: None,
                 branch_sha: None,
                 fp_oracle_valid: None,
+                findings: None,
             },
             TaskState {
                 id: "verified-task".into(),
@@ -1900,6 +2182,7 @@ mod tests {
                 cost_usd: None,
                 branch_sha: None,
                 fp_oracle_valid: None,
+                findings: None,
             },
         ]);
         for t in &run.tasks {
@@ -1929,6 +2212,7 @@ mod tests {
                 cost_usd: None,
                 branch_sha: None,
                 fp_oracle_valid: None,
+                findings: None,
             },
             TaskState {
                 id: "stuck-2".into(),
@@ -1940,6 +2224,7 @@ mod tests {
                 cost_usd: None,
                 branch_sha: None,
                 fp_oracle_valid: None,
+                findings: None,
             },
             TaskState {
                 id: "active".into(),
@@ -1951,6 +2236,7 @@ mod tests {
                 cost_usd: None,
                 branch_sha: None,
                 fp_oracle_valid: None,
+                findings: None,
             },
         ]);
 
@@ -1994,6 +2280,7 @@ mod tests {
             cost_usd: None,
             branch_sha: None,
             fp_oracle_valid: None,
+            findings: None,
         }]);
         let found = run.tasks.iter().find(|t| t.id == "no-such-task");
         assert!(found.is_none(), "non-existent task id must not be found");
@@ -2073,6 +2360,7 @@ mod tests {
                 cost_usd: None,
                 branch_sha: None,
                 fp_oracle_valid: None,
+                findings: None,
             },
             TaskState {
                 id: "done-old".into(),
@@ -2084,6 +2372,7 @@ mod tests {
                 cost_usd: None,
                 branch_sha: None,
                 fp_oracle_valid: None,
+                findings: None,
             },
             TaskState {
                 id: "verified-old".into(),
@@ -2095,6 +2384,7 @@ mod tests {
                 cost_usd: None,
                 branch_sha: None,
                 fp_oracle_valid: None,
+                findings: None,
             },
         ]);
         let ids = stuck_task_ids(&run, ttl);
@@ -2335,6 +2625,7 @@ mod tests {
             branch: Some(branch.into()),
             branch_sha: None,
             fp_oracle_valid: None,
+            findings: None,
             ..Default::default()
         };
         let ref_to_check = t_without_sha.branch_sha.as_deref().unwrap_or(branch);
@@ -2544,18 +2835,21 @@ mod tests {
                 id: "bad".into(),
                 status: Status::Verified,
                 fp_oracle_valid: Some(false),
+                findings: None,
                 ..Default::default()
             },
             TaskState {
                 id: "good".into(),
                 status: Status::Verified,
                 fp_oracle_valid: Some(true),
+                findings: None,
                 ..Default::default()
             },
             TaskState {
                 id: "legacy".into(),
                 status: Status::Verified,
                 fp_oracle_valid: None,
+                findings: None,
                 ..Default::default()
             },
         ]);

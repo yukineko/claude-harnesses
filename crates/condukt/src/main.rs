@@ -267,6 +267,16 @@ enum WtAction {
         #[arg(long)]
         branch: Option<String>,
     },
+    /// Discard an experiment task's worktree WITHOUT merging: record the branch
+    /// SHA + diff stat as a learning artifact onto the task's findings, remove
+    /// the worktree, force-delete the (unmerged) branch, and mark the task
+    /// `discarded` so the completion gate treats it as resolved-by-learning.
+    Discard {
+        #[arg(long)]
+        run: String,
+        #[arg(long)]
+        task: String,
+    },
     /// Report orphan worktrees under worktree_base (--remove to delete them).
     Cleanup {
         #[arg(long)]
@@ -352,6 +362,11 @@ enum StateAction {
         /// Observed USD cost of the task (recorded for fugu-router). Omitted → unchanged.
         #[arg(long)]
         cost: Option<f64>,
+        /// Free-text learning summary to record onto the task's `findings`.
+        /// Persists REGARDLESS of status (a failed/unmerged experiment still
+        /// records what was learned). Omitted → findings unchanged.
+        #[arg(long)]
+        findings: Option<String>,
     },
     /// Print a run's full state as JSON.
     Show {
@@ -1669,6 +1684,13 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                 );
             }
         }
+        WtAction::Discard { run, task } => {
+            state::discard_experiment(cfg, cwd, &run, &task)?;
+            eprintln!(
+                "condukt: discarded experiment task '{task}' in run '{run}' \
+                 (worktree removed, branch force-deleted, learning recorded in findings)"
+            );
+        }
         WtAction::Cleanup { remove } => {
             let orphans = worktree::orphans(&repo, &cfg.worktree_base)?;
             let _ = worktree::git(&repo, &["worktree", "prune"]);
@@ -2033,6 +2055,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             clear_branch,
             model,
             cost,
+            findings,
         } => {
             // Hold the per-run state lock across the entire load → oracle-gate →
             // mutate → save cycle so a concurrent session/worktree cannot lose
@@ -2145,6 +2168,15 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
             if cost.is_some() {
                 t.cost_usd = cost;
+            }
+            // Findings persist regardless of status (this whole handler runs for
+            // any status): a failed/pending/unmerged experiment still records
+            // what was learned. Preserve any existing artifact fields
+            // (branch_sha/diff_stat) and only replace the free-text summary.
+            if let Some(text) = findings {
+                let mut f = t.findings.take().unwrap_or_default();
+                f.summary = text;
+                t.findings = Some(f);
             }
             // None 上書き保護: --worktree/--branch が省略された場合は既存値を保持する。
             // 明示的にクリアしたい場合は --clear-worktree / --clear-branch を使う。
@@ -2418,7 +2450,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                     state::Status::Pending | state::Status::Running => pending.push(entry),
                     state::Status::Failed => failed.push(entry),
                     state::Status::Done => needs_verification.push(entry),
-                    state::Status::Verified | state::Status::Cancelled => verified_count += 1,
+                    state::Status::Verified
+                    | state::Status::Cancelled
+                    | state::Status::Discarded => verified_count += 1,
                 }
             }
 
@@ -3085,6 +3119,7 @@ mod state_set_tests {
                 model: None,
                 cost_usd: None,
                 fp_oracle_valid: None,
+                findings: None,
             }],
             paused: false,
             terminal_label: None,

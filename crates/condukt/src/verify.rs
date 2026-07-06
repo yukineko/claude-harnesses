@@ -14,6 +14,7 @@
 //!    is only *evidence handed to* the verifier, never a substitute for it. When
 //!    classification is ambiguous we fail toward RUNNING the verifier (safe side).
 
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::process::{Command, Stdio};
@@ -1072,9 +1073,88 @@ fn is_criteria_runner(tok: &str) -> bool {
     )
 }
 
+/// Deterministic set-difference of failing-test names: the tests that fail
+/// *now* but were **not** already failing at baseline (i.e. genuine regressions
+/// introduced by the change under verification).
+///
+/// Pure and deterministic: `BTreeSet` fixes a stable sort order, so the same
+/// inputs always yield the same `Vec` in the same order. A test that was already
+/// red at baseline and is still red is **not** a regression (it is pre-existing),
+/// and a baseline failure that disappears is likewise never a regression.
+///
+/// Input sets are typically built from [`distill_failure`]'s `failing_tests`
+/// (e.g. `current.failing_tests.iter().cloned().collect()`).
+#[allow(dead_code)] // additive pure layer; wired into the verify gate separately.
+pub fn regressions(
+    current_failing: &BTreeSet<String>,
+    baseline_failing: &BTreeSet<String>,
+) -> Vec<String> {
+    current_failing
+        .difference(baseline_failing)
+        .cloned()
+        .collect()
+}
+
+/// `true` iff there are no regressions relative to baseline (the verify gate's
+/// baseline-failure-excluded pass condition). Thin, deterministic companion to
+/// [`regressions`].
+#[allow(dead_code)] // additive pure layer; wired into the verify gate separately.
+pub fn regressions_passed(
+    current_failing: &BTreeSet<String>,
+    baseline_failing: &BTreeSet<String>,
+) -> bool {
+    regressions(current_failing, baseline_failing).is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── t1: deterministic regression set-diff (baseline-failure exclusion) ──
+
+    fn nameset(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A newly-failing test (present in current, absent at baseline) is a
+    /// regression; the gate does not pass.
+    #[test]
+    fn regression_new_failure_is_flagged() {
+        let baseline = nameset(&["A"]);
+        let current = nameset(&["A", "B"]);
+        assert_eq!(regressions(&current, &baseline), vec!["B".to_string()]);
+        assert!(!regressions_passed(&current, &baseline));
+    }
+
+    /// No change in the failing set → no regressions, gate passes.
+    #[test]
+    fn regression_identical_sets_pass() {
+        let baseline = nameset(&["A"]);
+        let current = nameset(&["A"]);
+        assert!(regressions(&current, &baseline).is_empty());
+        assert!(regressions_passed(&current, &baseline));
+    }
+
+    /// A pre-existing baseline failure that clears is NOT a regression; the gate
+    /// still passes (baseline reds are excluded, never counted against current).
+    #[test]
+    fn regression_cleared_baseline_failure_is_not_regression() {
+        let baseline = nameset(&["A", "B"]);
+        let current = nameset(&["A"]);
+        assert!(regressions(&current, &baseline).is_empty());
+        assert!(regressions_passed(&current, &baseline));
+    }
+
+    /// Determinism: identical inputs yield identical, stably-sorted output.
+    #[test]
+    fn regression_output_is_deterministic_and_sorted() {
+        let baseline = nameset(&["x"]);
+        let current = nameset(&["c", "a", "x", "b"]);
+        let r1 = regressions(&current, &baseline);
+        let r2 = regressions(&current, &baseline);
+        assert_eq!(r1, r2);
+        assert_eq!(r1, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+    }
 
     // ── Invariant 1: verifier model never equals worker model ──────────────
 

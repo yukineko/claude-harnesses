@@ -1084,7 +1084,6 @@ fn is_criteria_runner(tok: &str) -> bool {
 ///
 /// Input sets are typically built from [`distill_failure`]'s `failing_tests`
 /// (e.g. `current.failing_tests.iter().cloned().collect()`).
-#[allow(dead_code)] // additive pure layer; wired into the verify gate separately.
 pub fn regressions(
     current_failing: &BTreeSet<String>,
     baseline_failing: &BTreeSet<String>,
@@ -1098,12 +1097,28 @@ pub fn regressions(
 /// `true` iff there are no regressions relative to baseline (the verify gate's
 /// baseline-failure-excluded pass condition). Thin, deterministic companion to
 /// [`regressions`].
-#[allow(dead_code)] // additive pure layer; wired into the verify gate separately.
 pub fn regressions_passed(
     current_failing: &BTreeSet<String>,
     baseline_failing: &BTreeSet<String>,
 ) -> bool {
     regressions(current_failing, baseline_failing).is_empty()
+}
+
+/// Build the set of failing-test names from either a captured test-output blob
+/// OR a bare newline-list of names. Reuses [`distill_failure`]'s extraction
+/// (the same `test <name> ... FAILED` / `failures:` parsing); when that yields
+/// nothing — the input is a plain name list, not cargo output — each non-empty
+/// trimmed line is taken verbatim as a name. Pure and deterministic.
+pub fn failing_name_set(raw: &str) -> BTreeSet<String> {
+    let digest = distill_failure(raw);
+    if !digest.failing_tests.is_empty() {
+        return digest.failing_tests.into_iter().collect();
+    }
+    raw.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Verifier confidence, derived from *observed facts* rather than the LLM's
@@ -1119,7 +1134,6 @@ pub enum VerifierConfidence {
 impl VerifierConfidence {
     /// The canonical lowercase token, aligned with the verifier's existing
     /// `confidence` string field (`"high" | "medium" | "low"`).
-    #[allow(dead_code)] // additive pure layer; wired into the verify gate separately.
     pub fn as_str(self) -> &'static str {
         match self {
             VerifierConfidence::High => "high",
@@ -1155,7 +1169,6 @@ pub struct VerifyFacts {
 ///   free-text argument only) → [`VerifierConfidence::Low`].
 /// - Anything in between — it ran but failed or regressed —
 ///   → [`VerifierConfidence::Medium`].
-#[allow(dead_code)] // additive pure layer; wired into the verify gate separately.
 pub fn derive_confidence(facts: &VerifyFacts) -> VerifierConfidence {
     if !facts.check_executed {
         return VerifierConfidence::Low;

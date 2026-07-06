@@ -438,3 +438,162 @@ fn contract_b_state_roundtrip_gate_passes_when_all_verified() {
         "gate should announce completion on stderr, got: {gate_msg:?}",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Contract C — connected 3-binary chain (route → schedule → state → gate)
+//
+// Contracts A and B each pin a SINGLE hop in isolation. This test threads the
+// WHOLE pipeline: the output of `fugu-router route` is fed verbatim into BOTH
+// `condukt schedule` AND `condukt state init` (one routed artifact, reused), and
+// the run is driven to a passing gate using ONLY the task ids the SCHEDULER
+// emits. It pins the integration contract the isolated hops miss — that every
+// stage agrees on the same task set: routed JSON is a valid schedule *and* state
+// input, and the ids the scheduler batches/quarantines are exactly the ids state
+// tracks and the gate requires. A drift in any hop's task-set handling (a
+// dropped id, a renamed field, a bucket that silently loses a task) breaks this
+// even when each hop still passes its own isolated contract.
+// ---------------------------------------------------------------------------
+
+/// Every routed task id lands in exactly one schedule bucket — no drops, no
+/// extras. Union of `serial`, `gated`, and each batch's `parallel` list.
+fn scheduled_ids(sched: &serde_json::Value) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for key in ["serial", "gated"] {
+        if let Some(a) = sched[key].as_array() {
+            ids.extend(a.iter().filter_map(|v| v.as_str().map(String::from)));
+        }
+    }
+    if let Some(batches) = sched["batches"].as_array() {
+        for b in batches {
+            if let Some(par) = b["parallel"].as_array() {
+                ids.extend(par.iter().filter_map(|v| v.as_str().map(String::from)));
+            }
+        }
+    }
+    ids.sort_unstable();
+    ids
+}
+
+/// route → schedule → state init → gate, threaded through one routed artifact.
+///
+/// Stage 1 (`fugu-router route`) is the boundary where the LLM decomposition
+/// hands off to the deterministic layer; its stdout is persisted once as
+/// `routed.json` and every later stage consumes THAT file (not a fresh
+/// decomposition), so the test exercises the real inter-binary data flow.
+/// Asserts the routed task set survives the route→schedule hop exactly, that the
+/// same routed artifact initialises run-state, and that marking every
+/// SCHEDULER-emitted id verified drives the gate to pass. Fresh `$HOME` isolates
+/// all run-state; fail-soft skip if the bins are not built.
+#[test]
+fn contract_c_connected_chain_route_schedule_state_gate() {
+    let (Some(router), Some(condukt)) = (bin("fugu-router"), bin("condukt")) else {
+        eprintln!("SKIP contract_c_connected_chain: fugu-router/condukt not built");
+        return;
+    };
+    let tmp = TempDir::new().expect("tempdir");
+    let home = TempDir::new().expect("tempdir home");
+    let dpath = tmp.path().join("d.json");
+    let routed_path = tmp.path().join("routed.json");
+    std::fs::write(&dpath, decomposition_json().to_string()).expect("write d.json");
+
+    // Stage 1: route. Persist the routed artifact ONCE; it is the single source
+    // threaded through every later stage.
+    let route = Command::new(&router)
+        .args(["route", "--file"])
+        .arg(&dpath)
+        .current_dir(tmp.path())
+        .output()
+        .expect("spawn route");
+    assert!(
+        route.status.success(),
+        "route must exit 0; stderr={}",
+        String::from_utf8_lossy(&route.stderr),
+    );
+    std::fs::write(&routed_path, &route.stdout).expect("write routed.json");
+    let routed: serde_json::Value =
+        serde_json::from_slice(&route.stdout).expect("routed stdout is valid JSON");
+    let mut routed_ids: Vec<String> = routed["tasks"]
+        .as_array()
+        .expect("routed .tasks is an array")
+        .iter()
+        .map(|t| t["id"].as_str().expect("task id").to_string())
+        .collect();
+    routed_ids.sort_unstable();
+    assert_eq!(
+        routed_ids,
+        ["tgate", "tpar", "tser"],
+        "sanity: the three decomposition ids must survive routing",
+    );
+
+    // Stage 2: schedule consumes the SAME routed artifact. The full task set must
+    // survive the route→schedule hop — every routed id in exactly one bucket.
+    let sched_out = Command::new(&condukt)
+        .args(["schedule", "--file"])
+        .arg(&routed_path)
+        .output()
+        .expect("spawn condukt schedule");
+    assert!(
+        sched_out.status.success(),
+        "schedule must exit 0; stderr={}",
+        String::from_utf8_lossy(&sched_out.stderr),
+    );
+    let sched: serde_json::Value =
+        serde_json::from_slice(&sched_out.stdout).expect("schedule stdout is valid JSON");
+    let sched_ids = scheduled_ids(&sched);
+    assert_eq!(
+        sched_ids, routed_ids,
+        "route→schedule must preserve the exact task set (no dropped/extra ids); \
+         routed={routed_ids:?} scheduled={sched_ids:?}",
+    );
+
+    // Stage 3: state init consumes the SAME routed artifact (proving routed JSON
+    // is a valid STATE input, not only a schedule input).
+    let init = Command::new(&condukt)
+        .args(["state", "init", "--file"])
+        .arg(&routed_path)
+        .env("HOME", home.path())
+        .output()
+        .expect("spawn condukt state init");
+    assert!(
+        init.status.success(),
+        "state init must exit 0 on the routed artifact; stderr={}",
+        String::from_utf8_lossy(&init.stderr),
+    );
+    let init_stdout = String::from_utf8_lossy(&init.stdout);
+    let rid = init_stdout
+        .lines()
+        .map(str::trim)
+        .rev()
+        .find(|l| l.starts_with("run-"))
+        .expect("state init must print a run-... id")
+        .to_string();
+
+    // Stage 4: drive the run to completion using ONLY the ids the SCHEDULER
+    // emitted. If any hop disagreed on the id set, a `state set` (unknown task)
+    // or the final gate (an untracked/unverified task) would fail here.
+    for id in &sched_ids {
+        let set = Command::new(&condukt)
+            .args([
+                "state", "set", "--run", &rid, "--task", id, "--status", "verified",
+            ])
+            .env("HOME", home.path())
+            .output()
+            .expect("spawn condukt state set");
+        assert!(
+            set.status.success(),
+            "state set {id} verified must exit 0 (id came from the scheduler); stderr={}",
+            String::from_utf8_lossy(&set.stderr),
+        );
+    }
+    let gate = Command::new(&condukt)
+        .args(["state", "gate", "--run", &rid])
+        .env("HOME", home.path())
+        .output()
+        .expect("spawn condukt state gate");
+    assert!(
+        gate.status.success(),
+        "gate must PASS once every scheduler-emitted task is verified; stdout={} stderr={}",
+        String::from_utf8_lossy(&gate.stdout),
+        String::from_utf8_lossy(&gate.stderr),
+    );
+}

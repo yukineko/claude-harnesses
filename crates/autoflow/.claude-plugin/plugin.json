@@ -1,6 +1,6 @@
 {
   "name": "autoflow",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Session-end auto-flow gate: on Stop, prompt /record once, then loop /condukt until pending tasks are cleared (auto up to 4×, ask user from 5× onward). Subscription-native (one hook + bundled Rust binary, no API key).",
   "author": { "name": "yukineko" },
   "keywords": ["hooks", "session", "record", "condukt", "automation", "rust"]

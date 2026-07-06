@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "hypothesis"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "PDO hypothesis lifecycle management for Claude Code — create, validate, and track discovery hypotheses."
 
@@ -15,7 +15,7 @@ harness-core = { path = "../harness-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 

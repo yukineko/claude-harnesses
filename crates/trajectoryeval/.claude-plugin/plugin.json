@@ -1,6 +1,6 @@
 {
   "name": "trajectoryeval",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Trajectory-match verifier sibling: checks the PATH a worker took (its ordered tool-call sequence) against an expected trajectory spec, in strict/unordered/subsequence modes. Subscription-native (one bundled Rust binary, no API key).",
   "author": { "name": "yukineko" },
   "keywords": ["trajectory", "agentevals", "verifier", "llmops", "rust"]

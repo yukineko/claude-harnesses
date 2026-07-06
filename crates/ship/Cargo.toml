@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "ship"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "nudge the commit・merge・push・plugin-update shipping ritual; detect unshipped state; subscription-native"
 license = "MIT"
@@ -14,7 +14,7 @@ path = "src/main.rs"
 harness-core = { path = "../harness-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]

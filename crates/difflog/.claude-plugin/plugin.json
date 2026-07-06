@@ -1,6 +1,6 @@
 {
   "name": "difflog",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Session diff-log for Claude Code: snapshot HEAD at SessionStart, write a structured git diff summary (commits, stat, files changed, bounded diff body) at SessionEnd. A /difflog skill can generate a human-readable narrative from the log. Subscription-native (no API key).",
   "author": { "name": "yukineko" },
   "keywords": ["hooks", "diff", "session", "changelog", "git", "rust"]

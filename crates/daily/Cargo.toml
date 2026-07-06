@@ -1,6 +1,6 @@
 [package]
 name = "daily"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 rust-version.workspace = true
 description = "Daily-once task runner for Claude Code SessionStart: runs registered shell tasks at most once per calendar day, skips while a driver is working, and records a results report."
@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 harness-core = { path = "../harness-core" }
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

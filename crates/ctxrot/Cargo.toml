@@ -1,6 +1,6 @@
 [package]
 name = "ctxrot"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 # MSRV: `is_none_or` (store.rs/usage.rs) was stabilized in Rust 1.82.
 rust-version.workspace = true
@@ -19,7 +19,7 @@ toml = { workspace = true }
 regex = { workspace = true }
 dirs = "5"
 chrono = { workspace = true }
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 anyhow = { workspace = true }
 wait-timeout = "0.2"
 

@@ -1,6 +1,6 @@
 {
   "name": "backlog",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Cross-project task queue with cycle-type tags for Claude Code: a /backlog skill (thin alias to /flow for driver loop), a SessionStart hook that surfaces pending work at session open, and a backlog binary with list/next/done/fail/lock subcommands. The lock→pick→/condukt→done driver loop is consolidated in /flow. Subscription-native (skill + hook + bundled Rust binary, no API key).",
   "author": { "name": "yukineko" },
   "keywords": ["backlog", "queue", "task", "hooks", "rust", "condukt"]

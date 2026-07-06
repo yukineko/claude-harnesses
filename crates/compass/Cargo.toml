@@ -1,6 +1,6 @@
 [package]
 name = "compass"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 rust-version.workspace = true
 description = "Goal re-grounding + next-move derivation upstream of condukt; subscription-native."
@@ -15,7 +15,7 @@ harness-core = { path = "../harness-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]

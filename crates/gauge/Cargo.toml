@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "gauge"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "Local LLMOps telemetry for Claude Code. A Stop hook that reads each session's transcript and records token usage, tool calls, latency, and cost to a local store — then reports it. No API key, no data leaves the machine."
 license = "MIT"
@@ -16,6 +16,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 chrono = { workspace = true }
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 dirs = "5"
 anyhow = { workspace = true }

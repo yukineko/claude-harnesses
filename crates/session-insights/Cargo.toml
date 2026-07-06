@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "session-insights"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 description = "Per-session work metrics for Claude Code. PostToolUse + Stop hooks roll up tool calls, turns, files touched, a size class (XS–XL) and a work category per session, with an optional dated session log written to an Obsidian vault."
 license = "MIT"
@@ -16,7 +16,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 chrono = { workspace = true }
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 dirs = "5"
 anyhow = { workspace = true }
 

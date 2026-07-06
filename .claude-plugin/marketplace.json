@@ -9,7 +9,7 @@
     {
       "name": "beacon",
       "description": "Desktop & webhook notifications for Claude Code: Stop and Notification hooks that ping you (macOS/Linux desktop, Slack, generic webhook, or a custom command) when a turn finishes or Claude needs your input — so you can step away from long sessions. Subscription-native (two hooks + bundled Rust binary, no API key).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "notifications",
       "keywords": [
         "hooks",
@@ -57,7 +57,7 @@
     {
       "name": "backlog",
       "description": "Cross-project task queue with cycle-type tags for Claude Code: a /backlog skill that loops through open items (lock → pick → /condukt → done), a SessionStart hook that surfaces pending work at session open, and a backlog binary with list/next/done/fail/lock subcommands. Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "workflow",
       "keywords": [
         "backlog",
@@ -82,7 +82,7 @@
     {
       "name": "budgetguard",
       "description": "Real-time cost budget gate for Claude Code: on Stop, read the session transcript, compute USD cost, and block the turn when session or daily limits are exceeded — feeding the overage back so the agent winds down gracefully. Subscription-native (one Stop hook + bundled Rust binary, no API key).",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "category": "cost",
       "keywords": [
         "hooks",
@@ -107,7 +107,7 @@
     {
       "name": "compass",
       "description": "Goal re-grounding + next-move derivation upstream of condukt for Claude Code: when the goal goes fuzzy or you stall after finishing a chunk, it carves the project charter (north star + definition of done + current gap) through an interrogate loop, then routes only the right-sized next move into condukt while parking side-quests to taskprog. Subscription-native (SessionStart nudge + Stop breadcrumb hooks + /compass skill + bundled Rust binary, no API key).",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "category": "planning",
       "keywords": [
         "compass",
@@ -131,7 +131,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: an interpreter/worker/verifier skill plus a Rust binary that schedules tasks into parallel/serial batches by file-conflict analysis, manages the git-worktree lifecycle, tracks run state, and gates completion. Subscription-native (skill + agents + hook, no API key).",
-      "version": "0.7.11",
+      "version": "0.7.12",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -183,7 +183,7 @@
     {
       "name": "ctxrot",
       "description": "Context-rot guard for Claude Code: detect, rescue, restore, distill, and CONTROL what loads into context (rule-based allow/deny gate + /ctx pin/drop/load + switchable carryover). Subscription-native (hooks + subagent + skill, no API key).",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "category": "context",
       "keywords": [
         "context",
@@ -207,7 +207,7 @@
     {
       "name": "curate",
       "description": "Promote fugu-router playbooks into versioned golden eval datasets for evalkit: turn the append-only routing log into a curated, deduplicated holdout set. Mechanical acceptance criteria (`cargo test`, a backticked command) become runnable golden cases; the rest become drafts for a human to fill. The supply side of the offline eval loop. Subscription-native (one bundled Rust binary, no API key).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "quality",
       "keywords": [
         "eval",
@@ -232,7 +232,7 @@
     {
       "name": "deepwiki",
       "description": "Repository architecture wiki for Claude Code: a /deepwiki command that maps the repo with a bundled Rust scanner, has a subagent write & refresh hierarchical wiki pages (.deepwiki/*.md) with source links, and tracks freshness against git. Inspired by Devin Wiki. Subscription-native (binary + subagent + command, no API key).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "knowledge",
       "keywords": [
         "wiki",
@@ -256,7 +256,7 @@
     {
       "name": "difflog",
       "description": "Session diff-log for Claude Code: snapshot HEAD at SessionStart, write a structured git diff summary (commits, stat, files changed, bounded diff body) at SessionEnd. A /difflog skill can generate a human-readable narrative from the log. Subscription-native (no API key).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -281,7 +281,7 @@
     {
       "name": "ship",
       "description": "Shipping-ritual nudge for Claude Code: deterministically detect unshipped state (uncommitted changes, unmerged condukt/* branches, leftover worktrees, unpushed commits, stale plugin binaries) and remind you to commit・merge・push・rebuild・rollout. A /ship skill and a fail-soft SessionEnd hook surface the checklist; only the plugin-rebuild (`--run-safe`) and plugin-rollout (`ship rollout`, automates `/plugin update`) steps are auto-runnable — commit/merge/push stay human-gated. Subscription-native (no API key).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "workflow",
       "keywords": [
         "hooks",
@@ -306,7 +306,7 @@
     {
       "name": "donegate",
       "description": "Completion-verification gate for Claude Code: on Stop, run your acceptance commands as subprocesses and block the stop until every required check is green, feeding failures back for an auto-fix loop. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -330,7 +330,7 @@
     {
       "name": "evalkit",
       "description": "Offline golden-regression eval harness for Claude Code plugins: read golden *.jsonl cases (file-content or CLI-output assertions) and exit non-zero when a prompt edit or CLI contract regresses. The offline sibling of condukt's online verifier — runnable as a CI gate with no API key. Subscription-native (one bundled Rust binary).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "quality",
       "keywords": [
         "eval",
@@ -355,7 +355,7 @@
     {
       "name": "flow",
       "description": "Unified source→executor driver for Claude Code: a /flow skill that binds the task SOURCES (compass next-move + backlog queue) to the EXECUTOR (condukt, model-routed by fugu-router) in one HOTL loop — gate on compass freshness, pick the highest-priority task, hand it to condukt, verify, mark done, repeat. A SessionStart hook proposes /flow every session when open work exists (propose-then-confirm). Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "category": "orchestration",
       "keywords": [
         "flow",
@@ -382,7 +382,7 @@
     {
       "name": "fugu-router",
       "description": "fugu-style per-model routing for Claude Code orchestration. Learns from past task outcomes (which model passed verification, at what cost) and picks the cheapest Claude tier that historically clears similar work. Feeds condukt's suggested_model deterministically; records outcomes back to a local episode store. No API key, no embedding service — lexical k-NN over a JSONL store.",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "category": "orchestration",
       "keywords": [
         "routing",
@@ -408,7 +408,7 @@
     {
       "name": "gauge",
       "description": "Local LLMOps telemetry for Claude Code: a Stop hook that reads each session's transcript and records token usage, cache hits, tool calls, latency, and estimated cost to a local store — then `gauge report` rolls it up by project, model, and day. Observability for your own agent runs, subscription-native (one hook + bundled Rust binary, no API key, nothing leaves the machine).",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -434,7 +434,7 @@
     {
       "name": "harness-status",
       "description": "Unified HOTL status dashboard for Claude Code. A /status command runs a bundled Rust binary that aggregates budgetguard's spend ledger, gauge's session records (recent sessions + cost), and taskprog's progress file into one human-on-the-loop view. Subscription-native (binary + command, no API key, no hooks).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "observability",
       "keywords": [
         "status",
@@ -459,7 +459,7 @@
     {
       "name": "playbook",
       "description": "Project knowledge retrieval + injection for Claude Code: a UserPromptSubmit hook that pulls the curated atomic notes relevant to your prompt and injects them under a strict char budget, so conventions and gotchas resurface without re-typing. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "knowledge",
       "keywords": [
         "hooks",
@@ -507,7 +507,7 @@
     {
       "name": "reviewgate",
       "description": "Code-review gate for Claude Code: on Stop, review the diff before the agent can declare done. In inject mode it blocks the stop and injects a review rubric so the running agent self-reviews (no API key); in subprocess mode it runs an independent reviewer and surfaces only its findings. Subscription-native, bundled Rust binary.",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -531,7 +531,7 @@
     {
       "name": "runbook",
       "description": "Reusable procedure includes for Claude Code: a UserPromptSubmit hook that expands `!name` macros in your prompt into the matching repo-committed procedure (.runbook/<name>.md), so recurring workflows run the same way every time. Inspired by Devin Playbooks; distinct from knowledge injection. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "knowledge",
       "keywords": [
         "hooks",
@@ -555,7 +555,7 @@
     {
       "name": "schemaguard",
       "description": "Schema-validation gate for LLM structured outputs at source→executor boundaries: validate a JSON value against a named declared schema (condukt decomposition, fugu episode/playbook, scout measure), emit a structured error a caller uses to re-ask the model once, and count rejects so silent drops become observable (Guardrails-AI-lite). Subscription-native (one bundled Rust binary, no API key).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "quality",
       "keywords": [
         "schema",
@@ -579,7 +579,7 @@
     {
       "name": "session-insights",
       "description": "Per-session work metrics for Claude Code: PostToolUse + Stop hooks roll up tool calls, turns, files touched, a size class (XS–XL) and a work category per session, viewable with `session-insights report` and optionally logged as a dated note to an Obsidian vault. Inspired by Devin Session Insights. Subscription-native (two hooks + bundled Rust binary, no API key).",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -603,7 +603,7 @@
     {
       "name": "specguard",
       "description": "仕様↔実装 整合監査ハーネスを Claude Code から subscription-native に実行する。各 shard を read-only な in-session subagent で監査し (nested claude --print なし)、決定的ハーネス (scope/render/parse/report) は specguard バイナリに委譲する。",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "category": "quality",
       "keywords": [
         "spec",
@@ -629,7 +629,7 @@
     {
       "name": "stuckguard",
       "description": "Stuck-loop detector + escalation for Claude Code: a PostToolUse hook that spots repeated identical actions and edit thrash, then injects an escalating nudge to change approach or ask the user for help. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -653,7 +653,7 @@
     {
       "name": "taskprog",
       "description": "Multi-session progress file for Claude Code. Injects .claude/progress.md at SessionStart so the agent knows what is pending; at Stop it prompts the agent to keep the file current. Enables seamless HOTL handoff across sessions.",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "category": "workflow",
       "keywords": [
         "hooks",
@@ -678,7 +678,7 @@
     {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: a Stop hook that blocks the turn when implementation code lands without an accompanying test, plus a /tdd skill and red/green/verify subcommands that make test-first (RED before GREEN) a verifiable artifact. Subscription-native (one hook + skill + bundled Rust binary, no API key).",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "category": "quality",
       "keywords": [
         "tdd",
@@ -702,7 +702,7 @@
     {
       "name": "tracekit",
       "description": "Span-tree tracer for condukt runs: record one run's interpreter→worker→verifier phases as a parent-linked span tree (phase, model, ms, cost, status), render it with `tracekit trace <RID>`, and export OpenTelemetry GenAI-semconv JSON. Answers which phase of a failed run was slow/expensive/broke. Subscription-native (one bundled Rust binary, file-only, no network, no API key).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "observability",
       "keywords": [
         "observability",
@@ -727,7 +727,7 @@
     {
       "name": "autoflow",
       "description": "Session-end auto-flow gate for Claude Code: on Stop, prompt /record once, then loop /condukt until pending tasks are cleared (auto up to 4×, ask the user from 5× onward). Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "orchestration",
       "keywords": [
         "hooks",
@@ -752,7 +752,7 @@
     {
       "name": "hypothesis",
       "description": "PDO hypothesis lifecycle management for Claude Code: a /hypothesis skill plus create/validate/list/reject subcommands and a SessionStart hook to create, validate, and track discovery hypotheses aligned with compass goals. Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "planning",
       "keywords": [
         "pdo",
@@ -775,7 +775,7 @@
     {
       "name": "overwatch",
       "description": "Project-global cross-session execution ledger with dedup guard + PDO progress view. Manages claim registry with heartbeat-based liveness and skip-on-duplicate contract for distributed session coordination. SessionStart and Stop hooks surface current run state and progress aggregation (session/backlog/hypothesis/condukt run/compass gap in fail-soft view). Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "observability",
       "keywords": [
         "pdo",
@@ -801,7 +801,7 @@
     {
       "name": "daily",
       "description": "Daily-once task runner for Claude Code: a SessionStart hook that runs registered shell tasks ([[task]] in ~/.daily/config.toml) at most once per calendar day and injects a summary of what ran. Skips while a /flow or /backlog driver is working (backlog lock), records each run to a JSONL report (a failed task still counts as run, no retry until tomorrow). With no tasks registered it runs a default security audit (cargo deny check). Register/inspect with `daily add` / `daily list` / `daily report`. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "category": "security",
       "keywords": [
         "hooks",
@@ -883,7 +883,7 @@
     {
       "name": "trajectoryeval",
       "description": "Trajectory-match verifier for agent tool-call paths: condukt's online verifier checks a task's OUTPUT (done_criteria); trajectoryeval checks the PATH the worker took. `check` matches an actual ordered tool-call list against an expected trajectory spec (strict / unordered / subsequence) and reports {pass, missing, unexpected, out_of_order} with a 0/1/2 gate exit; `extract` streams a transcript into the ordered tool_use names. The path-side sibling of done-criteria verification (agentevals-style). Subscription-native (one bundled Rust binary, no API key).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "quality",
       "keywords": [
         "trajectory",
@@ -907,7 +907,7 @@
     {
       "name": "replaykit",
       "description": "Trace→golden replay regression harness: turns a tracekit-recorded condukt run into an evalkit golden case so a real run becomes a committed regression fixture. `extract` distils a run's spans.jsonl into a portable trajectory summary (ordered phase/model/status steps + an `expect` block pinning phase set / error count / cost); `promote` writes the fixture under evals/replay/fixtures and appends a dedup'd golden whose `cmd` re-runs `replaykit verify`; `verify` recomputes those aggregates from the steps and gates 0/1/2. The trace-side sibling of curate's playbook→golden. Subscription-native (one bundled Rust binary, file-only, no network, no API key).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "quality",
       "keywords": [
         "replay",
@@ -932,7 +932,7 @@
     {
       "name": "propguard",
       "description": "Property gate for Claude Code: on Stop, derive 3–5 semantic properties (invariants) from a task's done_criteria and check the generated code against them before the agent can declare done. In inject mode it blocks and injects a property checklist for the running agent to self-verify (no API key); in subprocess mode it runs an independent checker and counts per-property PASS/FAIL, blocking when fewer than a threshold hold. Goes beyond 'concrete tests pass'. Subscription-native, bundled Rust binary.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "quality",
       "keywords": [
         "hooks",

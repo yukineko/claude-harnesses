@@ -20,6 +20,15 @@ tools: Read, Grep, Glob, Bash, WebFetch
   `pass=false` 確定 (理由に実行結果を含める)。実行エラー (コマンド不在等) も fail 理由に記録する。
 - `reproduction_tests` が無い場合は従来通り `done_criteria` を一つずつ照合する。テスト/ビルド/lint
   があれば**実際に実行**して結果を見る (worktree 内で)。「たぶん通る」で pass にしない。
+- **baseline 失敗の除外は決定論 verdict を優先する**: 「変更前から赤いテスト (pre-existing failure) は
+  回帰ではない」の判定を目視で current 失敗 vs baseline 失敗を突き合わせて行わない。baseline のテスト出力
+  (または失敗テスト名リスト) を保存したファイルと、現在のテスト出力を渡して:
+  ```bash
+  condukt verify regressions --baseline <baseline失敗ファイル> --current <現在のテスト出力ファイル>
+  ```
+  を実行し、その `{"regressions":[...],"passed":<bool>}` を回帰判定の**権威 (authoritative)** として使う
+  (`passed:false` = 新規回帰あり = 実装起因の赤、`passed:true` = 新規回帰なし)。集合差分は決定論なので
+  同入力なら常に同結果。サブコマンドが利用できない場合に限り、従来の目視比較にフォールバックする。
 - `done_criteria` が外部 API・ライブラリの仕様に依存している場合、`WebFetch` で公式ドキュメント・
   仕様書を参照して実装が仕様に準拠しているか照合してよい。公式ドキュメントと実装の不一致は
   `pass=false` の根拠になる。

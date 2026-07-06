@@ -47,9 +47,14 @@ pub fn append(span: &Span) -> Result<PathBuf> {
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let path = spans_path(&span.run_id);
     let line = serde_json::to_string(span).context("serializing span")?;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
     writeln!(f, "{line}").with_context(|| format!("appending to {}", path.display()))?;
@@ -72,5 +77,44 @@ mod tests {
     fn sanitize_strips_path_separators() {
         assert_eq!(sanitize("a/b c:d"), "a_b_c_d");
         assert_eq!(sanitize("run-123_x"), "run-123_x");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn append_creates_store_file_with_owner_only_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let run_id = format!(
+            "tracekit-mode-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        );
+        let span = Span {
+            run_id: run_id.clone(),
+            span_id: "s1".to_string(),
+            parent_id: None,
+            name: "test".to_string(),
+            phase: "test".to_string(),
+            model: None,
+            task_id: None,
+            ms: 0,
+            cost_usd: None,
+            status: "ok".to_string(),
+            end_unix_ms: 0,
+        };
+
+        let path = append(&span).expect("append should succeed");
+        let mode = std::fs::metadata(&path)
+            .expect("reading metadata")
+            .permissions()
+            .mode();
+        // Clean up the real ~/.tracekit/<run_id> dir this test created, regardless
+        // of the assertion outcome below.
+        let _ = std::fs::remove_dir_all(run_dir(&run_id));
+
+        assert_eq!(mode & 0o777, 0o600);
     }
 }

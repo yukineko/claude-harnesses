@@ -11,6 +11,7 @@ fn status_icon(s: Status) -> &'static str {
         Status::Done => "•",
         Status::Pending => "○",
         Status::Cancelled => "⊘",
+        Status::Discarded => "⌫",
     }
 }
 
@@ -22,6 +23,7 @@ fn status_label(s: Status) -> &'static str {
         Status::Done => "done",
         Status::Pending => "pending",
         Status::Cancelled => "cancelled",
+        Status::Discarded => "discarded",
     }
 }
 

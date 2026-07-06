@@ -374,6 +374,7 @@ mod tests {
             model: None,
             cost_usd: None,
             fp_oracle_valid: None,
+            findings: None,
         }
     }
 

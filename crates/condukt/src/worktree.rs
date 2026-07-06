@@ -398,6 +398,36 @@ pub fn remove(repo: &Path, path: &Path, branch: Option<&str>) -> Result<Option<S
     Ok(None)
 }
 
+/// Discard the worktree at `path` (force-remove) and FORCE-DELETE its `branch`
+/// (`git branch -D`), dropping any unmerged commits.
+///
+/// Unlike [`remove`] (which uses `branch -d` and *preserves* an unmerged
+/// branch), `discard` intentionally throws the branch away: it is the
+/// disposal path for an experiment worktree whose value is the learning
+/// artifact, not the code. Callers MUST capture the branch SHA / diff before
+/// calling this — once the branch is `-D`'d the commits are unreferenced.
+///
+/// If the worktree dir is already gone we `worktree prune` first so the stale
+/// admin entry does not make `branch -D` refuse ("checked out").
+pub fn discard(repo: &Path, path: &Path, branch: Option<&str>) -> Result<()> {
+    let path_str = path.to_string_lossy().to_string();
+    if path.exists() {
+        if git(repo, &["worktree", "remove", &path_str]).is_err() {
+            git(repo, &["worktree", "remove", "--force", &path_str])
+                .with_context(|| format!("could not force-remove worktree {}", path.display()))?;
+        }
+    } else {
+        // Dir already removed out-of-band — drop the stale worktree registration
+        // so the branch is no longer considered checked out.
+        let _ = git(repo, &["worktree", "prune"]);
+    }
+    if let Some(b) = branch {
+        git(repo, &["branch", "-D", b])
+            .with_context(|| format!("could not force-delete branch '{b}' during discard"))?;
+    }
+    Ok(())
+}
+
 /// (path, branch) pairs for every registered worktree except the primary.
 pub fn list(repo: &Path) -> Result<Vec<(PathBuf, Option<String>)>> {
     let listing = git(repo, &["worktree", "list", "--porcelain"])?;

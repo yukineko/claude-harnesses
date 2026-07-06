@@ -1,9 +1,0 @@
-{
-  "cmd": "cargo test -p condukt escalate",
-  "exit_code": 0,
-  "passed": true,
-  "phase": "green",
-  "red_proof": "/Users/yuki/src/harness/.tdd/escalate-store-cli.red.json",
-  "task": "escalate-store-cli",
-  "ts": "2026-07-06T17:56:03.319195+09:00"
-}

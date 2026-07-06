@@ -123,7 +123,7 @@ fi
 # --- plan: one TSV row per plugin --------------------------------------------
 # name  version  src  target  needs_copy  needs_registry  mismatch  mpver  pjver  cur_version  cur_path
 plan() {
-  python3 - "$REPO" "$CACHE" "$OWNER" "$REGISTRY" "$force" "${only_plugins[@]}" <<'PY'
+  python3 - "$REPO" "$CACHE" "$OWNER" "$REGISTRY" "$force" ${only_plugins[@]+"${only_plugins[@]}"} <<'PY'
 import json, os, sys
 
 repo, cache, owner, registry_path, force = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5] == "1"

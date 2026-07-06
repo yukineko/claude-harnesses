@@ -128,6 +128,78 @@ pub fn load_decisions(dir: &Path) -> Vec<GateDecision> {
         .collect()
 }
 
+// ── Circuit-breaker verdict journal ─────────────────────────────────────────
+//
+// `condukt circuit check` appends one record per invocation here so the
+// stop-condition history is observable. Reuses the same fail-soft append-only
+// JSONL pattern as the gate-decisions log above (a journaling failure must
+// never change the command's exit code). Kept as plain scalar fields (verdict/
+// reason as strings) so a log with future/unknown values still round-trips.
+
+/// One recorded CIRCUIT-BREAKER verdict — the append-only record written on
+/// every `condukt circuit check --run RID`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CircuitRecord {
+    /// `"continue"` or `"trip"`.
+    pub verdict: String,
+    /// The reason slug (`CircuitReason::as_str`) when tripped, else `None`.
+    pub reason: Option<String>,
+    /// The gathered consecutive-failure streak.
+    pub streak: u32,
+    /// The streak cap the decision used (0 disables the streak axis).
+    pub streak_cap: u32,
+    /// Whether the budget signal was over its cap.
+    pub budget_over_cap: bool,
+    /// The gathered idle duration in seconds.
+    pub idle_secs: i64,
+    /// The idle TTL the decision used (0 disables the stall axis).
+    pub idle_ttl_secs: i64,
+    /// Unix seconds when the verdict was recorded.
+    pub recorded_at: i64,
+}
+
+/// Path of the per-run circuit-verdict log (JSONL) inside `dir`. The run id is
+/// sanitised so a crafted id cannot escape `dir`.
+pub fn circuit_log_path(dir: &Path, run_id: &str) -> PathBuf {
+    dir.join(format!(
+        "{}.circuit-log.jsonl",
+        harness_core::store::safe_session(run_id)
+    ))
+}
+
+/// Append one circuit verdict to the run's log. Fail-soft: any IO/serialize
+/// error is swallowed so a journaling failure never changes the gate's exit
+/// code. Mirrors [`append_decision`].
+pub fn append_circuit(dir: &Path, run_id: &str, entry: &CircuitRecord) {
+    use std::io::Write;
+    let Ok(line) = serde_json::to_string(entry) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(circuit_log_path(dir, run_id))
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+/// Load a run's circuit-verdict log in file order. Missing file → empty vec;
+/// corrupt lines are skipped — never panics. Mirrors [`load_decisions`]. The
+/// read side of the append-only journal: exercised by tests and ready for a
+/// future `circuit stats` aggregator; `append_circuit` is the live write path.
+#[allow(dead_code)]
+pub fn load_circuit_records(dir: &Path, run_id: &str) -> Vec<CircuitRecord> {
+    let Ok(text) = std::fs::read_to_string(circuit_log_path(dir, run_id)) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<CircuitRecord>(l).ok())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +272,29 @@ mod tests {
     fn missing_log_loads_empty() {
         let dir = tempfile::tempdir().unwrap();
         assert!(load_decisions(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn circuit_append_then_load_round_trips_and_missing_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_circuit_records(dir.path(), "r1").is_empty());
+        let rec = CircuitRecord {
+            verdict: "trip".to_string(),
+            reason: Some("failure_streak".to_string()),
+            streak: 3,
+            streak_cap: 3,
+            budget_over_cap: false,
+            idle_secs: 0,
+            idle_ttl_secs: 1800,
+            recorded_at: 42,
+        };
+        append_circuit(dir.path(), "r1", &rec);
+        append_circuit(dir.path(), "r1", &rec);
+        let got = load_circuit_records(dir.path(), "r1");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0], rec);
+        // a different run id has its own (still-empty) log
+        assert!(load_circuit_records(dir.path(), "r2").is_empty());
     }
 
     #[test]

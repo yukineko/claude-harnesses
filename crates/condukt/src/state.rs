@@ -114,6 +114,14 @@ fn project_dir(cfg: &Config, cwd: &Path) -> PathBuf {
     cfg.state_dir.join(project_key(&root))
 }
 
+/// The per-project state directory (`<state_dir>/<project-key>`). Exposed so
+/// sibling gates (e.g. `condukt circuit check`'s append-only verdict journal)
+/// can locate the same per-project location that run-state and the run-policy
+/// log already live under, without re-deriving the project key.
+pub fn project_state_dir(cfg: &Config, cwd: &Path) -> PathBuf {
+    project_dir(cfg, cwd)
+}
+
 fn run_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
     // `run_id` can come from the CLI (e.g. `condukt status <run_id>`); sanitise
     // it so a crafted id like `../../etc/x` cannot escape the project dir.

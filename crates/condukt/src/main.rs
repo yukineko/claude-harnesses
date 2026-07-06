@@ -111,6 +111,16 @@ enum Command {
         #[command(subcommand)]
         action: RunPolicyAction,
     },
+    /// Deterministic CIRCUIT-BREAKER stop-condition gate: gather the three
+    /// signals (consecutive-failure streak, budget-over-cap, idle/stall) for a
+    /// run — all FAIL-SOFT — run the pure `decide_circuit` core, print the
+    /// verdict + signals as JSON, journal it, and EXIT NONZERO when the breaker
+    /// trips. The flow/condukt loops consult this each iteration
+    /// (`if ! condukt circuit check --run RID; then stop; fi`).
+    Circuit {
+        #[command(subcommand)]
+        action: CircuitAction,
+    },
     /// Opt-in worker sandboxing: run a worker's build/test command through the
     /// docker exec backend (network + filesystem + resource isolation) when
     /// `[worker] sandbox_enabled` / `CONDUKT_WORKER_SANDBOX` is set, otherwise run
@@ -829,6 +839,35 @@ enum RunPolicyAction {
 }
 
 #[derive(Subcommand)]
+enum CircuitAction {
+    /// Gather the streak/budget/stall signals for a run (all FAIL-SOFT), run the
+    /// deterministic `decide_circuit` core, print the verdict + gathered signals
+    /// as JSON on stdout, append the same record to the run's append-only
+    /// circuit-verdict journal (fail-soft), and EXIT 1 when the breaker trips /
+    /// EXIT 0 to continue — so a loop can do
+    /// `if ! condukt circuit check --run RID; then stop; fi`.
+    Check {
+        /// The run id whose signals to gather.
+        #[arg(long)]
+        run: String,
+        /// Consecutive-failure cap (matches the retired "3 consecutive failures"
+        /// rule). 0 disables the streak axis.
+        #[arg(long, default_value_t = 3)]
+        streak_cap: u32,
+        /// Idle time-to-live in seconds before the stall axis trips (30 min,
+        /// aligning with the stuck-task TTL). 0 disables the stall axis.
+        #[arg(long, default_value_t = 1800)]
+        idle_ttl_secs: i64,
+        /// Optional daily-USD cap for the budget axis. When set (and > 0), the
+        /// gate reads budgetguard's on-disk day-usage ledger and trips if today's
+        /// spend is at/over this cap. Omitted → the budget axis is disabled
+        /// (fail-soft non-trip).
+        #[arg(long)]
+        budget_cap_usd: Option<f64>,
+    },
+}
+
+#[derive(Subcommand)]
 enum PrAction {
     /// Prepare (dry-run) or, with --execute, open a PR via `gh pr create`.
     ///
@@ -1256,6 +1295,27 @@ fn run_user(cmd: Command) -> Result<()> {
                 let records = state::load_run_policy_records(&cfg, &cwd, &run);
                 let stats = state::aggregate_run_policy_stats(&records);
                 println!("{}", serde_json::to_string_pretty(&stats)?);
+            }
+        },
+        Command::Circuit { action } => match action {
+            CircuitAction::Check {
+                run,
+                streak_cap,
+                idle_ttl_secs,
+                budget_cap_usd,
+            } => {
+                // The handler prints the verdict JSON + journals fail-soft and
+                // returns the exit code (0 = continue, 1 = trip). Exit directly
+                // so the loops can branch on the process status.
+                let code = circuit::run_circuit_check(
+                    &cfg,
+                    &cwd,
+                    &run,
+                    streak_cap,
+                    idle_ttl_secs,
+                    budget_cap_usd,
+                );
+                std::process::exit(code);
             }
         },
         Command::Consensus { action } => run_consensus(&cfg, action)?,

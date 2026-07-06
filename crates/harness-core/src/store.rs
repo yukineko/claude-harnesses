@@ -60,14 +60,18 @@ pub fn safe_session(id: &str) -> String {
 
 /// Base directory for the context-governor ledger state, shared by the
 /// context-governor *writer* and the session-insights *reader*. Resolves
-/// `CONTEXT_GOVERNOR_STATE_DIR` when set and non-empty, else
-/// `$HOME/.context-governor` (`./.context-governor` when `HOME` is unset/empty).
+/// `CONTEXT_GOVERNOR_STATE_DIR` when set, non-empty, and an **absolute path**,
+/// else `$HOME/.context-governor` (`./.context-governor` when `HOME` is
+/// unset/empty). A relative override is ignored rather than honored, since a
+/// relative path resolves differently depending on the caller's cwd, which
+/// would let the writer and reader silently drift onto different bases.
 ///
 /// Centralized here so the writer and reader can never drift on the base path.
 pub fn context_ledger_base() -> PathBuf {
     std::env::var("CONTEXT_GOVERNOR_STATE_DIR")
         .ok()
         .filter(|s| !s.is_empty())
+        .filter(|s| Path::new(s).is_absolute())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             let home = std::env::var("HOME")
@@ -934,6 +938,42 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Guards tests that mutate the process-global `CONTEXT_GOVERNOR_STATE_DIR`
+    /// env var so they never race each other (harness-core tests run in
+    /// parallel by default).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn context_ledger_base_only_honors_absolute_state_dir() {
+        const VAR: &str = "CONTEXT_GOVERNOR_STATE_DIR";
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var(VAR).ok();
+
+        // Relative path → must be ignored, falling back to the home-based default.
+        std::env::set_var(VAR, "relstate");
+        let base = context_ledger_base();
+        assert_ne!(
+            base,
+            PathBuf::from("relstate"),
+            "a relative CONTEXT_GOVERNOR_STATE_DIR must not be honored: {base:?}"
+        );
+        assert!(
+            base.ends_with(".context-governor"),
+            "relative override must fall back to the home-based default: {base:?}"
+        );
+
+        // Absolute path → honored as-is.
+        std::env::set_var(VAR, "/tmp/cg-abs-test");
+        let base = context_ledger_base();
+        assert_eq!(base, PathBuf::from("/tmp/cg-abs-test"));
+
+        // Restore whatever was there before this test (or remove it).
+        match prev {
+            Some(v) => std::env::set_var(VAR, v),
+            None => std::env::remove_var(VAR),
+        }
     }
 
     #[test]

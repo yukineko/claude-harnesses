@@ -281,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.20"
+version = "0.7.21"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -1372,7 +1372,7 @@ dependencies = [
 
 [[package]]
 name = "trajectoryeval"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",

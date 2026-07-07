@@ -210,12 +210,17 @@ DEEPWIKI_PAGES=$(ls .deepwiki/*.md 2>/dev/null | tr '\n' ' ' || true)
   { "id": "t1", "title": "...", "touched_files": ["path/or/glob", ...],
     "deps": ["他タスクid"], "class": "parallel|serial|gated",
     "suggested_model": "sonnet|opus|haiku", "done_criteria": "検証で確認する合格条件",
-    "confidence": "high|medium|low", "kind": "fix|feature|chore|..." }
+    "confidence": "high|medium|low", "kind": "fix|feature|chore|...",
+    "expected_trajectory": { "mode": "strict|unordered|subsequence",
+      "steps": [{ "tool": "Read|Edit|Bash|..." }] } }
 ]}
 ```
 `kind` は省略可 (バックワード互換: 無くても Decomposition はそのまま読み込める)。値が `fix` または
 `feature` (大小無視) のときだけ、Phase 6 で後述する F→P (Fail→Pass) 再現性ゲートの対象になる。
 `chore` やその他の値・未指定は対象外 (ゲートなし)。
+`expected_trajectory` も省略可 (無くても Decomposition はそのまま読み込める)。worker が辿るべき
+tool-call 順序 (`{mode: strict|unordered|subsequence, steps:[{tool}]}`) を宣言したタスクだけ、
+Phase 6 の「trajectory 検証」で `trajectoryeval` が出力検証と並行して経路面を照合する。
 `open_questions` 相当が出たら、この時点で `AskUserQuestion` を 1 回使って解消する。
 
 ### Phase 2 — 検証 + ルーティング + スケジュール (決定論)
@@ -682,13 +687,34 @@ pass なら `condukt state set --run $RID --task <id> --status verified`、fail 
 を持つときに限り、出力検証と**並行して** 経路面を `trajectoryeval` で照合する (tdd/specguard を経路面
 から補強。agentevals 相当)。`trajectoryeval` バイナリが無ければ丸ごと skip する (soft・Phase 6 を
 壊さない):
+`$EXPECTED_TRAJ` は decomposition の該当タスクから、`$WORKER_TRANSCRIPT` は Phase 6 の cost 採取
+(上記 `gauge subagents`) と**同じ description 相関**で見つけた worker sub-agent の transcript ファイル
+から、それぞれ導出する (どちらも手打ちしない — 空なら guard が自然に skip する):
 ```bash
-if command -v trajectoryeval >/dev/null 2>&1 && [ -n "$EXPECTED_TRAJ" ]; then
-  # worker の実軌跡を取る: worker は subagent なので、その agent transcript
-  # (transcript ディレクトリの agent-<id>.jsonl) を軌跡ソースに使う。
-  trajectoryeval extract --transcript "$WORKER_TRANSCRIPT" > /tmp/actual-traj.json 2>/dev/null || true
-  trajectoryeval check --expected "$EXPECTED_TRAJ" --actual /tmp/actual-traj.json --json
-  # exit 0=経路一致 / 1=逸脱 (out_of_order・missing・unexpected を verifier レポートに記録) / 2=照合不能
+# 1) タスク JSON から expected_trajectory を取り出す (無ければ空文字 -> guard が false になり skip)。
+EXPECTED_TRAJ_SPEC=$(jq -c '.expected_trajectory // empty' <<<"<task JSON>")
+
+if command -v trajectoryeval >/dev/null 2>&1 && [ -n "$EXPECTED_TRAJ_SPEC" ]; then
+  echo "$EXPECTED_TRAJ_SPEC" > /tmp/expected-traj.json
+  EXPECTED_TRAJ=/tmp/expected-traj.json
+
+  # 2) worker の実軌跡を取る: worker は subagent なので、その agent transcript
+  # (Phase 6 コスト採取と同じ description 相関で agent_id を引き、
+  # <session>/subagents/agent-<id>.jsonl を軌跡ソースに使う)。
+  SID="${CLAUDE_CODE_SESSION_ID:-}"
+  AGENT_ID=$(gauge subagents --json ${SID:+--session "$SID"} 2>/dev/null \
+    | jq -r --arg t "<t.id>" '[.[] | select(.description != null and (.description | startswith($t + ":")))] | last | .agent_id // empty' 2>/dev/null || true)
+  if [ -n "$AGENT_ID" ]; then
+    WORKER_TRANSCRIPT=$(find ~/.claude/projects -maxdepth 3 -type f -name "agent-${AGENT_ID}.jsonl" 2>/dev/null | head -1)
+  fi
+
+  if [ -n "$WORKER_TRANSCRIPT" ]; then
+    trajectoryeval extract --transcript "$WORKER_TRANSCRIPT" > /tmp/actual-traj.json 2>/dev/null || true
+    trajectoryeval check --expected "$EXPECTED_TRAJ" --actual /tmp/actual-traj.json --json
+    # exit 0=経路一致 / 1=逸脱 (out_of_order・missing・unexpected を verifier レポートに記録) / 2=照合不能
+  fi
+  # AGENT_ID/WORKER_TRANSCRIPT が引けない (subagents 未導入・古い gauge・inline-sidechain レイアウト
+  # 等) 場合はこのブロックを skip する — fail-soft (Phase 6 全体を壊さない)。
 fi
 ```
 経路逸脱 (exit 1) は **出力検証の pass/fail を上書きしない** — 出力が done_criteria を満たすなら

@@ -1,7 +1,7 @@
 {
   "name": "trajectoryeval",
-  "version": "0.1.1",
-  "description": "Trajectory-match verifier sibling: checks the PATH a worker took (its ordered tool-call sequence) against an expected trajectory spec, in strict/unordered/subsequence modes. Subscription-native (one bundled Rust binary, no API key).",
+  "version": "0.1.2",
+  "description": "Trajectory-match verifier sibling: checks the PATH a worker took (its ordered tool-call sequence) against an expected trajectory spec, in strict/unordered/subsequence modes. v0.1.2: e2e-tested `extract` → `check` pipeline (proves the real binary's actual-trajectory output feeds `check` byte-for-byte, no hand-written fixture in between), now wired live from condukt's Phase 6 `expected_trajectory` task field. Subscription-native (one bundled Rust binary, no API key).",
   "author": { "name": "yukineko" },
   "keywords": ["trajectory", "agentevals", "verifier", "llmops", "rust"]
 }

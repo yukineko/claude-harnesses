@@ -82,6 +82,15 @@ pub struct Task {
     /// behavior changes.
     #[serde(default)]
     pub checks: Vec<Check>,
+    /// Expected tool-call trajectory the worker should follow (the shape
+    /// `trajectoryeval` consumes: `{mode: "strict"|"unordered"|"subsequence",
+    /// steps: [{tool: "<ToolName>"}]}`). Free-form `serde_json::Value` and fully
+    /// permissive: the engine never validates or acts on its shape, only carries
+    /// it through so SKILL.md's Phase 6 can feed it to `trajectoryeval check`
+    /// alongside the extracted actual trajectory. Absent by default — existing
+    /// decompositions without it are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_trajectory: Option<serde_json::Value>,
 }
 
 impl Task {
@@ -295,5 +304,38 @@ mod tests {
         let json = serde_json::to_string(check).expect("check should serialize");
         let back: Check = serde_json::from_str(&json).expect("check should deserialize");
         assert_eq!(&back, check);
+    }
+
+    #[test]
+    fn task_without_expected_trajectory_defaults_none() {
+        // Back-compat: decompositions emitted before `expected_trajectory` existed
+        // must load, and the field defaults to None.
+        let dec: Decomposition = serde_json::from_str(
+            r#"{"goal":"g","tasks":[{"id":"a","touched_files":["src/a.rs"]}]}"#,
+        )
+        .expect("decomposition without expected_trajectory should parse");
+        assert_eq!(dec.tasks.len(), 1);
+        assert_eq!(dec.tasks[0].expected_trajectory, None);
+    }
+
+    #[test]
+    fn task_with_expected_trajectory_round_trips() {
+        let dec: Decomposition = serde_json::from_str(
+            r#"{"goal":"g","tasks":[{"id":"a","expected_trajectory":{"mode":"strict","steps":[{"tool":"Read"}]}}]}"#,
+        )
+        .expect("decomposition with expected_trajectory should parse");
+        let traj = dec.tasks[0]
+            .expected_trajectory
+            .as_ref()
+            .expect("expected_trajectory should be Some");
+        assert_eq!(
+            traj,
+            &serde_json::json!({"mode":"strict","steps":[{"tool":"Read"}]})
+        );
+
+        // Round-trip: serialize then deserialize and compare structurally.
+        let json = serde_json::to_string(&dec.tasks[0]).expect("task should serialize");
+        let back: Task = serde_json::from_str(&json).expect("task should deserialize");
+        assert_eq!(back.expected_trajectory, dec.tasks[0].expected_trajectory);
     }
 }

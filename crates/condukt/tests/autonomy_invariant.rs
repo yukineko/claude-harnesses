@@ -232,7 +232,7 @@ fn gated_task_is_isolated_and_never_batched() {
 ///             two-stop invariant does not govern them; they are pinned here
 ///             only so a NEW prompt cannot sneak in unaudited.
 ///
-/// condukt SKILL (21): HDR x1 + PROSE x4 (invariant #1 now documents the
+/// condukt SKILL (23): HDR x1 + PROSE x4 (invariant #1 now documents the
 ///   policy-answer routing contract — auto self-answers / escalate re-Asks /
 ///   block refuses — spanning several lines, plus the Phase 3 heading) + DEGRADE
 ///   (Phase 3 agreement routed through `condukt policy answer` with
@@ -243,7 +243,9 @@ fn gated_task_is_isolated_and_never_batched() {
 ///   defers to a human — naming `AskUserQuestion` as the channel — when there is
 ///   no trustworthy automated signal; an invariant-compatible escalation of a
 ///   genuine no-signal decision, NOT a new autonomous self-driving stop) + HOTL
-///   (resume x2, issue discovery x2, open_questions x1, manual cancel x1).
+///   (resume x2, issue discovery x2, open_questions x1, manual cancel x1, curate
+///   promote x2 — a manual "eval golden 化しますか?" confirmation before writing
+///   a verified run into the curate dataset; out-of-loop, not a self-driving stop).
 /// flow SKILL (10): HDR x1 + PROSE (Step 0.5 documents the policy-answer routing
 ///   contract: the autonomy switch plus the exit 0/2/3 branches that name
 ///   `AskUserQuestion` on escalate/fallback) + DEGRADE (lock gate, 3-failure —
@@ -268,7 +270,7 @@ fn gated_task_is_isolated_and_never_batched() {
 /// hypothesis add SKILL (1): HOTL (L14, prompt for a missing argument).
 const ASK_ALLOWLIST: &[(&str, usize)] = &[
     ("compass/skills/compass/SKILL.md", 3),
-    ("condukt/skills/condukt/SKILL.md", 21),
+    ("condukt/skills/condukt/SKILL.md", 23),
     ("flow/skills/flow/SKILL.md", 10),
     ("hypothesis/skills/add/SKILL.md", 1),
     ("overwatch/skills/overwatch/SKILL.md", 7),

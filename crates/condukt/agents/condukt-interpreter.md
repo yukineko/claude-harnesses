@@ -52,7 +52,11 @@ model: sonnet
       "suggested_model": "sonnet | opus | haiku",
       "confidence": "high | medium | low",
       "done_criteria": "検証で確認する合格条件 (具体的・観測可能に)",
-      "reproduction_tests": "worktree 内で実行して pass/fail を確認できるコマンド (省略可)"
+      "reproduction_tests": "worktree 内で実行して pass/fail を確認できるコマンド (省略可)",
+      "expected_trajectory": {
+        "mode": "strict | unordered | subsequence",
+        "steps": [{ "tool": "Read | Edit | Bash | ... (worker が呼ぶことを期待する tool 名)" }]
+      }
     }
   ]
 }
@@ -87,5 +91,10 @@ model: sonnet
     広がるリスクがある。`knowledge_context` が不足している場合も low にする。
   **low のタスクは `done_criteria` を特に明確・具体的に記述すること** (verifier が判定できない
   抽象的な条件は不可)。また `reproduction_tests` を省略しないよう努める。
+- `expected_trajectory` (省略可): worker が辿るべき tool-call 順序を宣言したいときだけ記入する
+  (`done_criteria` の出力面に対する経路面の検証。`trajectoryeval` が照合する)。
+  `mode` は `strict`(順序も厳格)/`unordered`(集合のみ)/`subsequence`(順序は守るが間に他 tool が
+  挟まってよい) から選び、`steps` は期待する tool 名の並び。TDD で「まずテストを読んでから実装する」
+  等、経路そのものが品質のシグナルになるタスクにのみ使う。不要なら省略してよい (デフォルトは検証なし)。
 
 スキーマに無いキーは足さない。`condukt validate` が通る JSON を返すこと。

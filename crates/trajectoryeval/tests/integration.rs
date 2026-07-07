@@ -96,6 +96,107 @@ fn check_deviating_trajectory_exits_one() {
     );
 }
 
+/// Write a minimal JSONL transcript fixture whose assistant message contains one
+/// `tool_use` block per name in `tools`, in order — matches the shape
+/// `extract::collect_from_content` understands (`message.content` array).
+fn write_transcript(path: &std::path::Path, tools: &[&str]) {
+    let blocks: Vec<serde_json::Value> = tools
+        .iter()
+        .map(|t| serde_json::json!({"type": "tool_use", "name": t, "input": {}}))
+        .collect();
+    let event = serde_json::json!({
+        "type": "assistant",
+        "message": { "content": blocks },
+    });
+    std::fs::write(path, format!("{}\n", event)).unwrap();
+}
+
+/// End-to-end: `extract` streams a real transcript into the actual-trajectory
+/// JSON, and THAT output (not a hand-written fixture) is fed into `check`. This
+/// is the real Phase-6 pipeline (`trajectoryeval extract | trajectoryeval check`)
+/// that the condukt SKILL.md trajectory block wires up.
+#[test]
+fn extract_then_check_pipeline_passes_on_matching_trajectory() {
+    let dir = unique_dir();
+    let transcript = dir.join("transcript.jsonl");
+    let expected = dir.join("expected.json");
+    let actual = dir.join("actual.json");
+
+    write_transcript(&transcript, &["Read", "Edit"]);
+    std::fs::write(
+        &expected,
+        r#"{"mode":"strict","steps":[{"tool":"Read"},{"tool":"Edit"}]}"#,
+    )
+    .unwrap();
+
+    // Step 1: extract the actual trajectory from the real transcript.
+    let (extract_code, extract_stdout) =
+        run(&["extract", "--transcript", transcript.to_str().unwrap()]);
+    assert_eq!(
+        extract_code, 0,
+        "extract must succeed on a valid transcript"
+    );
+    // extract's stdout is the actual-trajectory JSON array; write it straight to
+    // the file `check --actual` reads, exactly as the SKILL.md pipeline does.
+    std::fs::write(&actual, extract_stdout.trim()).unwrap();
+
+    // Step 2: feed the extracted trajectory into check.
+    let (check_code, check_stdout) = run(&[
+        "check",
+        "--expected",
+        expected.to_str().unwrap(),
+        "--actual",
+        actual.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        check_code, 0,
+        "a matching extracted trajectory passes with exit 0"
+    );
+    assert!(
+        check_stdout.contains("trajectory matched"),
+        "expected the pass report, got: {check_stdout}"
+    );
+}
+
+/// Same pipeline, but the transcript's real tool sequence deviates from the
+/// declared `expected_trajectory` — must exit 1, not 0.
+#[test]
+fn extract_then_check_pipeline_exits_one_on_deviating_trajectory() {
+    let dir = unique_dir();
+    let transcript = dir.join("transcript.jsonl");
+    let expected = dir.join("expected.json");
+    let actual = dir.join("actual.json");
+
+    // Worker only Read — never Edited — but the spec requires both.
+    write_transcript(&transcript, &["Read"]);
+    std::fs::write(
+        &expected,
+        r#"{"mode":"strict","steps":[{"tool":"Read"},{"tool":"Edit"}]}"#,
+    )
+    .unwrap();
+
+    let (extract_code, extract_stdout) =
+        run(&["extract", "--transcript", transcript.to_str().unwrap()]);
+    assert_eq!(
+        extract_code, 0,
+        "extract must succeed on a valid transcript"
+    );
+    std::fs::write(&actual, extract_stdout.trim()).unwrap();
+
+    let (check_code, check_stdout) = run(&[
+        "check",
+        "--expected",
+        expected.to_str().unwrap(),
+        "--actual",
+        actual.to_str().unwrap(),
+    ]);
+    assert_eq!(check_code, 1, "a deviating extracted trajectory exits 1");
+    assert!(
+        check_stdout.contains("trajectory deviated"),
+        "expected the fail report, got: {check_stdout}"
+    );
+}
+
 #[test]
 fn check_unreadable_input_exits_two() {
     // A missing expected-spec path is a harness error → exit 2.

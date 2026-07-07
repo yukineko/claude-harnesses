@@ -397,6 +397,7 @@ mod tests {
             confidence: None,
             kind: None,
             checks: Vec::new(),
+            expected_trajectory: None,
         }
     }
 

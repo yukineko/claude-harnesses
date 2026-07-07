@@ -131,7 +131,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: an interpreter/worker/verifier skill plus a Rust binary that schedules tasks into parallel/serial batches by file-conflict analysis, manages the git-worktree lifecycle, tracks run state, and gates completion. Subscription-native (skill + agents + hook, no API key).",
-      "version": "0.7.29",
+      "version": "0.7.30",
       "category": "orchestration",
       "keywords": [
         "orchestration",

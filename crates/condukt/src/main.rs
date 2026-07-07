@@ -337,6 +337,11 @@ enum LessonsAction {
         #[arg(long)]
         run: String,
     },
+    /// Aggregate the cross-project lessons store into a deterministic roll-up
+    /// (no run arg): `{total, by_kind, source_runs, recent}`. Makes the capture
+    /// rate (= distinct `source_runs`) machine-observable. Fail-soft: an empty
+    /// or absent store prints the zero shape and exits 0.
+    Stats,
 }
 
 #[derive(Subcommand)]
@@ -1505,6 +1510,14 @@ fn run_user(cmd: Command) -> Result<()> {
             LessonsAction::Harvest { run } => {
                 let facts = lessons::harvest(&cfg, &cwd, &run);
                 println!("{}", serde_json::to_string(&facts)?);
+            }
+            LessonsAction::Stats => {
+                // Read the machine-global lessons store (LESSONS_STORE_DIR honored
+                // by load()) and aggregate with the pure fn. load() returns [] for
+                // an absent/empty store → stats([]) is the zero shape → exit 0.
+                let all = harness_core::lessons::load();
+                let stats = harness_core::lessons::stats(&all);
+                println!("{}", serde_json::to_string(&stats)?);
             }
         },
         Command::Pr { action } => run_pr(&cfg, &cwd, action)?,

@@ -17,7 +17,7 @@
 //!     `fugu-router::rag`, whose small tokenizer is copied here so we take no
 //!     dependency on that plugin crate).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -292,6 +292,61 @@ pub fn search_default(query: &str, lessons: &[Lesson]) -> Vec<Match> {
     search(query, lessons, DEFAULT_K)
 }
 
+/// The kebab string a [`Kind`] serializes to — used as the `by_kind` map key so
+/// the JSON reads `"error-pattern"` / `"convention"` (mirrors the serde rename).
+fn kind_key(k: Kind) -> &'static str {
+    match k {
+        Kind::ErrorPattern => "error-pattern",
+        Kind::Convention => "convention",
+    }
+}
+
+/// How many recent task summaries [`stats`] surfaces (newest first).
+pub const RECENT_N: usize = 5;
+
+/// A deterministic roll-up of the lessons store, for capture-rate observability.
+///
+/// `by_kind` contains **only kinds that actually appear** (an empty store →
+/// `{}`, matching the fail-soft empty shape), so it serializes to a stable,
+/// present-keys-only object. `source_runs` is the count of *distinct*
+/// `source_run` values — i.e. **how many separate runs contributed a lesson**,
+/// which is exactly the capture rate this slice makes machine-observable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Stats {
+    pub total: usize,
+    pub by_kind: BTreeMap<String, usize>,
+    /// Distinct `source_run` count = capture rate (runs that produced a lesson).
+    pub source_runs: usize,
+    /// Up to [`RECENT_N`] most-recent `task_summary` strings, newest first.
+    pub recent: Vec<String>,
+}
+
+/// Deterministically aggregate a lessons slice (a **pure function — no AI, no
+/// IO**). An empty slice yields `Stats { total: 0, by_kind: {}, source_runs: 0,
+/// recent: [] }`, which is the same fail-soft shape a missing store produces
+/// (its [`load`] returns `[]`). Store order is append (insertion) order, so the
+/// tail is newest; `recent` is that tail reversed to newest-first.
+pub fn stats(lessons: &[Lesson]) -> Stats {
+    let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+    let mut source_runs: BTreeSet<&str> = BTreeSet::new();
+    for l in lessons {
+        *by_kind.entry(kind_key(l.kind).to_string()).or_insert(0) += 1;
+        source_runs.insert(l.source_run.as_str());
+    }
+    let recent: Vec<String> = lessons
+        .iter()
+        .rev()
+        .take(RECENT_N)
+        .map(|l| l.task_summary.clone())
+        .collect();
+    Stats {
+        total: lessons.len(),
+        by_kind,
+        source_runs: source_runs.len(),
+        recent,
+    }
+}
+
 #[cfg(test)]
 mod proptests {
     //! Property-based + no-panic floor for the lessons store's pure/near-pure
@@ -431,6 +486,88 @@ mod tests {
         assert!(j2.contains("\"kind\":\"convention\""), "{j2}");
         let b2: Lesson = serde_json::from_str(&j2).unwrap();
         assert_eq!(b2.kind, Kind::Convention);
+    }
+
+    #[test]
+    fn stats_empty_is_fail_soft_zero_shape() {
+        let s = stats(&[]);
+        assert_eq!(s.total, 0);
+        assert!(s.by_kind.is_empty(), "empty store → by_kind {{}}");
+        assert_eq!(s.source_runs, 0);
+        assert!(s.recent.is_empty());
+        // and it serializes to exactly the documented empty shape.
+        let j = serde_json::to_string(&s).unwrap();
+        assert_eq!(j, r#"{"total":0,"by_kind":{},"source_runs":0,"recent":[]}"#);
+    }
+
+    #[test]
+    fn stats_counts_total_by_kind_and_recent() {
+        let mut lessons = vec![
+            Lesson {
+                kind: Kind::ErrorPattern,
+                ..lesson("l1", "borrow checker fight", "clone it")
+            },
+            Lesson {
+                kind: Kind::Convention,
+                ..lesson("l2", "repo uses rustfmt", "run fmt")
+            },
+            Lesson {
+                kind: Kind::ErrorPattern,
+                ..lesson("l3", "lifetime mismatch", "add bound")
+            },
+        ];
+        // Give each a distinct source_run except l3, which shares l1's run.
+        lessons[0].source_run = "run-A".to_string();
+        lessons[1].source_run = "run-B".to_string();
+        lessons[2].source_run = "run-A".to_string();
+
+        let s = stats(&lessons);
+        assert_eq!(s.total, 3);
+        assert_eq!(s.by_kind.get("error-pattern"), Some(&2));
+        assert_eq!(s.by_kind.get("convention"), Some(&1));
+        // recent is newest-first (store order is append order → tail is newest).
+        assert_eq!(
+            s.recent,
+            vec![
+                "lifetime mismatch".to_string(),
+                "repo uses rustfmt".to_string(),
+                "borrow checker fight".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn stats_source_runs_is_distinct_run_count_the_capture_rate() {
+        // Capture rate = how many SEPARATE runs contributed a lesson. Five
+        // lessons drawn from three distinct runs → source_runs == 3, regardless
+        // of how many lessons each run produced.
+        let runs = ["r1", "r1", "r2", "r3", "r3"];
+        let lessons: Vec<Lesson> = runs
+            .iter()
+            .enumerate()
+            .map(|(i, r)| Lesson {
+                source_run: r.to_string(),
+                ..lesson(&format!("id{i}"), "summary", "text")
+            })
+            .collect();
+        let s = stats(&lessons);
+        assert_eq!(s.total, 5);
+        assert_eq!(
+            s.source_runs, 3,
+            "source_runs is the DISTINCT run count = capture rate"
+        );
+    }
+
+    #[test]
+    fn stats_recent_caps_at_recent_n_newest_first() {
+        let lessons: Vec<Lesson> = (0..RECENT_N + 3)
+            .map(|i| lesson(&format!("id{i}"), &format!("summary-{i}"), "t"))
+            .collect();
+        let s = stats(&lessons);
+        assert_eq!(s.recent.len(), RECENT_N, "recent is capped at RECENT_N");
+        // Newest first: last appended summary leads.
+        let last = RECENT_N + 3 - 1;
+        assert_eq!(s.recent[0], format!("summary-{last}"));
     }
 
     #[test]

@@ -2666,7 +2666,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 println!("{{\"mechanical\":false,\"behavioral\":false,\"skip_verifier\":false}}");
                 return Ok(());
             };
-            let cls = verify::classify_criteria(dc);
+            let cls = verify::classify_criteria(dc, t.is_behavioral, t.mechanical_check.as_ref());
             let run_dir = rs
                 .tasks
                 .iter()

@@ -224,17 +224,28 @@ Decomposition JSON を一時ファイルに書き:
 condukt validate --file <json>        # 不正なら理由を提示しユーザーに差し戻し
 ```
 
-**schema 事前検証 (soft 依存・任意)**: `schemaguard` バイナリが PATH 上にあれば、`condukt validate` の
-前段で interpreter 出力を宣言 schema にかけ、構造化エラーで**1 回だけ** interpreter に再生成させる
-(Guardrails 相当の re-ask)。silent drop を防ぎ reject 件数を可観測化する:
+**schema 事前検証 (soft 依存・present-when-mandatory)**: `schemaguard` バイナリが **未検出**なら
+fail-soft (従来どおり skip) で `condukt validate` にそのまま進む — 後方互換。
+`schemaguard` が **検出された場合は check 失敗を無視できない**: `condukt validate` の前段で
+interpreter 出力を宣言 schema にかけ、失敗したら構造化エラーを添えて **1 回だけ** interpreter に
+再生成させ (Guardrails 相当の re-ask)、その再生成物を **再度 check** する。再 check も失敗したら
+**そこで stop しユーザーへ差し戻す** (盲目実行して先の Phase へ進まない)。silent drop を防ぎ reject
+件数を可観測化する:
 ```bash
 if command -v schemaguard >/dev/null 2>&1; then
-  if ! schemaguard check --schema decomposition --file <json> >/dev/null; then
-    # 構造化 errors を interpreter に添えて 1 回だけ再生成させ、再度 check。
-    # なお不正なら停止しユーザーへ差し戻す（盲目実行しない）。
-    :
+  if ! errors=$(schemaguard check --schema decomposition --file <json> 2>&1 >/dev/null); then
+    # 1) 構造化 errors を interpreter に添えて 1 回だけ再生成させる。
+    <json>=$(condukt-interpreter regenerate --errors "$errors" --file <json>)
+    # 2) 再生成物を再度 check する。
+    if ! schemaguard check --schema decomposition --file <json> >/dev/null; then
+      # 3) 再 check も失敗 → stop してユーザーへ差し戻す (silent pass-through は禁止)。
+      echo "schemaguard: decomposition invalid after 1 regenerate attempt; stopping for user" >&2
+      exit 1
+    fi
   fi
+  # 再 check が通れば通常どおり続行 (以降の condukt validate へ)。
 fi
+# schemaguard 未導入 (command -v 失敗) の場合はこのブロック全体を素通りし、従来どおり fail-soft で継続する。
 ```
 
 ```

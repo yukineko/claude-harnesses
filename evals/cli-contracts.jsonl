@@ -4,3 +4,5 @@
 // exercises evalkit's own cmd path end-to-end (self-test).
 {"id":"evalkit-version-contract","describe":"evalkit --version prints a semver and exits 0","cmd":["evalkit","--version"],"assert":{"exit":0,"regex":["evalkit \\d+\\.\\d+\\.\\d+"]}}
 {"id":"evalkit-list-is-clean","describe":"evalkit run --help advertises the run subcommand","cmd":["evalkit","run","--help"],"assert":{"exit":0,"contains":["--bin-dir","--json","golden"]}}
+{"id":"schemaguard-version-contract","describe":"schemaguard --version prints a semver and exits 0","cmd":["schemaguard","--version"],"assert":{"exit":0,"regex":["schemaguard \\d+\\.\\d+\\.\\d+"]}}
+{"id":"schemaguard-check-help-contract","describe":"schemaguard check --help advertises the --schema flag used by the Phase 2 pre-check gate","cmd":["schemaguard","check","--help"],"assert":{"exit":0,"contains":["--schema","--file"]}}

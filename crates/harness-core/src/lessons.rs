@@ -89,7 +89,10 @@ const LOCK_RETRY_DELAY_MS: u64 = 5;
 /// removed on `Drop` — including during panic unwind — so the critical
 /// section it guards is never left permanently locked by anything short of a
 /// hard process kill.
-struct LockGuard {
+///
+/// `pub(crate)` so the sibling retrieval-event ledger ([`crate::retrieval`])
+/// reuses this one advisory-lock implementation instead of duplicating it.
+pub(crate) struct LockGuard {
     path: PathBuf,
 }
 
@@ -100,7 +103,7 @@ impl Drop for LockGuard {
 }
 
 /// The advisory lockfile path for a given store path: `<path>.lock`.
-fn lock_path_for(path: &Path) -> PathBuf {
+pub(crate) fn lock_path_for(path: &Path) -> PathBuf {
     let mut s = path.as_os_str().to_owned();
     s.push(".lock");
     PathBuf::from(s)
@@ -114,7 +117,10 @@ fn lock_path_for(path: &Path) -> PathBuf {
 /// `None` — never panics — if the lock can't be acquired within the retry
 /// budget or the lockfile can't be created for another reason (e.g. the
 /// parent dir is unwritable).
-fn acquire_lock(path: &Path) -> Option<LockGuard> {
+///
+/// `pub(crate)` so the sibling retrieval-event ledger ([`crate::retrieval`])
+/// serializes its append critical section with the same advisory lock.
+pub(crate) fn acquire_lock(path: &Path) -> Option<LockGuard> {
     let lock_path = lock_path_for(path);
     if let Some(parent) = lock_path.parent() {
         let _ = std::fs::create_dir_all(parent);

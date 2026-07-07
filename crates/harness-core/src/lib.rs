@@ -39,6 +39,7 @@ pub mod lessons;
 pub mod metrics;
 pub mod pricing;
 pub mod projkey;
+pub mod retrieval;
 pub mod scorer;
 pub mod session;
 pub mod shell;

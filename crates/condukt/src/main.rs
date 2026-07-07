@@ -338,10 +338,28 @@ enum LessonsAction {
         run: String,
     },
     /// Aggregate the cross-project lessons store into a deterministic roll-up
-    /// (no run arg): `{total, by_kind, source_runs, recent}`. Makes the capture
-    /// rate (= distinct `source_runs`) machine-observable. Fail-soft: an empty
-    /// or absent store prints the zero shape and exits 0.
+    /// (no run arg): `{total, by_kind, source_runs, recent, retrieval}`. Makes
+    /// the capture rate (= distinct `source_runs`) and the retrieval hit rate
+    /// (= `retrieval.hits` / `retrieval.total`) machine-observable. Fail-soft:
+    /// an empty or absent store prints the zero shape and exits 0.
     Stats,
+    /// Run the deterministic lexical lessons search for `query`, record the
+    /// retrieval (hit = search found ≥1 lesson) idempotently to the ledger
+    /// keyed by `run`, and emit the injection `lessons_context` JSON array
+    /// (the hit lessons, each with a `score`) on stdout — the same shape
+    /// `fugu-router lessons search` emits, so the SKILL Phase-1 injection is a
+    /// drop-in swap. Fail-soft: an empty/absent store or a zero-hit search
+    /// prints `[]` and exits 0. Idempotent by `run`: re-recording the same run
+    /// does not grow the ledger.
+    RecordRetrieval {
+        #[arg(long)]
+        run: String,
+        #[arg(long)]
+        query: String,
+        /// Search cutoff; defaults to the store's DEFAULT_K (3).
+        #[arg(long)]
+        k: Option<usize>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1517,7 +1535,61 @@ fn run_user(cmd: Command) -> Result<()> {
                 // an absent/empty store → stats([]) is the zero shape → exit 0.
                 let all = harness_core::lessons::load();
                 let stats = harness_core::lessons::stats(&all);
-                println!("{}", serde_json::to_string(&stats)?);
+                // Additive `retrieval` section (read-side hit-rate observability).
+                // `#[serde(flatten)]` keeps the existing capture keys in their
+                // original declaration order (total/by_kind/source_runs/recent)
+                // and appends `retrieval` — purely additive, byte-order-preserving
+                // for the existing fields (backward-compatible).
+                let events = harness_core::retrieval::load();
+                let retrieval = harness_core::retrieval::retrieval_stats(&events);
+                #[derive(serde::Serialize)]
+                struct StatsWithRetrieval {
+                    #[serde(flatten)]
+                    capture: harness_core::lessons::Stats,
+                    retrieval: harness_core::retrieval::RetrievalStats,
+                }
+                let out = StatsWithRetrieval {
+                    capture: stats,
+                    retrieval,
+                };
+                println!("{}", serde_json::to_string(&out)?);
+            }
+            LessonsAction::RecordRetrieval { run, query, k } => {
+                // Deterministic lexical search → idempotent ledger record →
+                // emit the injection context. All fail-soft: an empty/absent
+                // store or zero-hit search yields `[]` and exits 0.
+                let all = harness_core::lessons::load();
+                let kk = k.unwrap_or(harness_core::lessons::DEFAULT_K);
+                let hits = harness_core::lessons::search(&query, &all, kk);
+                let lesson_ids: Vec<String> = hits.iter().map(|m| m.lesson.id.clone()).collect();
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let event = harness_core::retrieval::RetrievalEvent {
+                    run_id: run,
+                    query_summary: query,
+                    hit: !hits.is_empty(),
+                    lesson_ids,
+                    k: kk,
+                    ts,
+                };
+                harness_core::retrieval::record(&event);
+                // Emit lessons_context: the hit lessons, each with a `score` —
+                // byte-shape-identical to `fugu-router lessons search` so the
+                // SKILL Phase-1 swap is drop-in.
+                let arr: Vec<serde_json::Value> = hits
+                    .iter()
+                    .map(|m| {
+                        let mut v = serde_json::to_value(&m.lesson)
+                            .unwrap_or_else(|_| serde_json::json!({}));
+                        if let Some(obj) = v.as_object_mut() {
+                            obj.insert("score".into(), serde_json::json!(m.score));
+                        }
+                        v
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&arr)?);
             }
         },
         Command::Pr { action } => run_pr(&cfg, &cwd, action)?,

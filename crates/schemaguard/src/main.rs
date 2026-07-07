@@ -11,15 +11,12 @@
 //!
 //! This is a plain CLI, not a lifecycle hook — do not wrap in `run_hook`.
 
-mod metrics;
-mod registry;
-mod schema;
-
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
+use schemaguard::{metrics, registry, schema};
 use serde_json::json;
 
 // ── CLI definition ────────────────────────────────────────────────────────────

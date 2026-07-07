@@ -131,7 +131,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: an interpreter/worker/verifier skill plus a Rust binary that schedules tasks into parallel/serial batches by file-conflict analysis, manages the git-worktree lifecycle, tracks run state, and gates completion. Subscription-native (skill + agents + hook, no API key).",
-      "version": "0.7.27",
+      "version": "0.7.28",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -555,7 +555,7 @@
     {
       "name": "schemaguard",
       "description": "Schema-validation gate for LLM structured outputs at source→executor boundaries: validate a JSON value against a named declared schema (condukt decomposition, fugu episode/playbook, scout measure), emit a structured error a caller uses to re-ask the model once, and count rejects so silent drops become observable (Guardrails-AI-lite). Subscription-native (one bundled Rust binary, no API key).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "quality",
       "keywords": [
         "schema",

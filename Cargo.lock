@@ -281,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.27"
+version = "0.7.28"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -291,6 +291,7 @@ dependencies = [
  "harness-core",
  "proptest",
  "regex",
+ "schemaguard",
  "serde",
  "serde_json",
  "tempfile",
@@ -1083,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "schemaguard"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",

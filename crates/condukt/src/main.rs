@@ -1321,6 +1321,7 @@ fn run_user(cmd: Command) -> Result<()> {
                     &input.done_criteria,
                     &input.task_summary,
                     input.replan_count,
+                    input.scope_mismatch,
                 );
                 // Structured observability record — a side effect on top of the
                 // (unchanged) stdout directive JSON below. Only written when the
@@ -1824,6 +1825,12 @@ enum ConsensusInput {
 /// fields this subcommand needs beyond the bare `failure_context`).
 /// `replan_count` tracks how many times this task has been replanned (default 0,
 /// backward-compatible).
+/// `scope_mismatch` is the authoritative structured signal (phase-5
+/// determinism fix): when the verifier's typed verdict carries a
+/// `scope_mismatch` boolean, it is threaded straight through to
+/// `replan::classify_failure` so the replan/escalate decision does not
+/// depend on how `reason`'s prose happens to be worded. Absent (`None`,
+/// the default) preserves the pre-existing prose-heuristic fallback.
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
 struct ReplanHandoffInput {
@@ -1834,6 +1841,7 @@ struct ReplanHandoffInput {
     done_criteria: String,
     task_summary: String,
     replan_count: usize,
+    scope_mismatch: Option<bool>,
 }
 
 /// Collapse a model tier string to its canonical keyword for the replan

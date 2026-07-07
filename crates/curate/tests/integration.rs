@@ -33,6 +33,62 @@ fn help_lists_real_subcommands() {
 }
 
 #[test]
+fn promote_writes_curated_golden_end_to_end() {
+    // Prove the write path end-to-end: seed a temp playbook store with one
+    // mechanical entry, run the real `curate promote` binary against a temp
+    // --root, and assert the golden file was actually written with the id.
+    let root = temp_root("promote");
+    let store = root.join("playbooks.jsonl");
+    std::fs::write(
+        &store,
+        // Seed shape read by seed::load: {ts, title, done_criteria}. The
+        // backticked command makes done_criteria mechanical → a runnable case.
+        "{\"ts\":100,\"title\":\"promote write path\",\"done_criteria\":\"`cargo test -p curate` passes\"}\n",
+    )
+    .expect("seed store");
+
+    let (code, _stdout, stderr) = run(&[
+        "promote",
+        "promote write path",
+        "--dataset",
+        "e2e",
+        "--store",
+        store.to_str().unwrap(),
+        "--root",
+        root.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "promote should exit 0; stderr: {stderr}");
+
+    let dataset = root.join("evals").join("curated").join("e2e.jsonl");
+    assert!(
+        dataset.exists(),
+        "curated golden should be written at {}",
+        dataset.display()
+    );
+    let text = std::fs::read_to_string(&dataset).expect("read curated dataset");
+    let line = text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .expect("one golden line");
+    let v: serde_json::Value = serde_json::from_str(line).expect("golden is valid JSON");
+    let id = v["id"].as_str().expect("golden has an id");
+    // id = slug(title) + short hash → stem is stable for a fixed title.
+    assert!(
+        id.starts_with("promote-write-path-"),
+        "unexpected golden id: {id}"
+    );
+    // Mechanical criterion → a runnable case (cmd + assert.exit 0), not a draft.
+    assert_eq!(
+        v["cmd"],
+        serde_json::json!(["cargo", "test", "-p", "curate"])
+    );
+    assert_eq!(v["assert"]["exit"], serde_json::json!(0));
+    assert!(v.get("draft").is_none(), "should be runnable, not a draft");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn candidates_on_missing_store_reports_none_and_exits_0() {
     // Read-only subcommand pointed at a store that doesn't exist: the source
     // prints "no playbooks found in <path>" to stderr and returns Ok(()).

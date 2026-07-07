@@ -49,6 +49,9 @@ condukt verifies a task ─▶ fugu-router record (playbook)
    evalkit run  ◀── evals/curated/*.jsonl ◀┘   (eval.yml gates every push)
 ```
 
-After `record`, condukt's Phase 6 can suggest `curate promote` to turn a fresh
-verified run into a regression golden. Subscription-native: one bundled Rust
-binary, no API key.
+After `record`, condukt's Phase 6 is HOTL-wired to `curate promote`: when a
+verified task's `done_criteria` is mechanical and `curate` is on PATH, the main
+loop asks **exactly one** confirmation ("promote this verified run to an eval
+golden?") and, only on an affirmative answer, actually shells out to
+`curate promote` — declining writes nothing. Subscription-native: one bundled
+Rust binary, no API key.

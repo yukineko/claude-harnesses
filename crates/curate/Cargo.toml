@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "curate"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Promote fugu-router playbooks into versioned golden eval datasets for evalkit. Turns the append-only routing log into a curated, deduplicated holdout set: mechanical acceptance criteria become runnable golden cases, the rest become drafts for a human to fill. The supply side of the offline eval loop."
 license = "MIT"

@@ -824,17 +824,26 @@ fi
 これにより run 完了後の `tracekit trace $RID` で段ごとの model/cost/status が見え、Phase 8 の
 `replaykit promote` がこの run を回帰 golden に固定できる (record→trace→replay→evalkit のループ)。
 
-**golden 化の提案 (soft 依存・任意)**: verified タスクの `done_criteria` が**機械的** (`cargo test`・
+**golden 化 (soft 依存・HOTL 1確認)**: verified タスクの `done_criteria` が**機械的** (`cargo test`・
 backtick で囲んだコマンド等) なら、その run を回帰 golden に固定できる。`curate` バイナリが
-PATH 上にあれば、ユーザーに次を**提案**する (自動実行はしない＝HOTL):
+PATH 上にあり、かつ done_criteria が機械的なとき**だけ**、main loop は golden 化を半自動で進める。
+ただし書き込みの手前で**必ずちょうど 1 回**だけ人間に確認する (HOTL — 提案 echo で終わらせず、
+承認が取れたら実際に shell-out する):
 ```bash
 if command -v curate >/dev/null 2>&1; then
-  echo "この verified run を eval golden 化するには: curate promote \"<task.title>\" --dataset <name>"
+  # done_criteria が機械的な verified タスクについてだけ、ちょうど 1 回 HOTL 確認する。
+  # AskUserQuestion で「この verified run を eval golden 化しますか？」を提示し、
+  #   - 肯定 (はい) → 下の curate promote を **実行**する (echo ではなく実 shell-out)
+  #   - 否定 (いいえ) → 何も書き込まない (no-op)
+  # 確認は 1 タスクにつき 1 回だけ。複数の verified タスクをまとめて 1 問にしてもよいが、
+  # 承認の粒度は「golden 化するか否か」の 1 回に保つ (HOTL 原則を崩さない)。
+  curate promote "<task.title>" --dataset <name>   # ← 肯定回答が取れた場合のみ実行
 fi
 ```
-`curate promote` は playbook を `evals/curated/<name>.jsonl` の evalkit golden に昇格させ
-(機械的なら実行可能ケース、それ以外は draft)、以後 `eval.yml` が回帰として検査する
-(fugu record → curate → evalkit のループを閉じる)。
+`AskUserQuestion` の 1 確認で肯定が返ったときに限り `curate promote "<task.title>" --dataset <name>`
+を実行する。否定なら書き込みは一切行わない。`curate promote` は playbook を
+`evals/curated/<name>.jsonl` の evalkit golden に昇格させ (機械的なら実行可能ケース、それ以外は draft)、
+以後 `eval.yml` が回帰として検査する (fugu record → curate → evalkit のループを閉じる)。
 
 ### Phase 7 — 完了ゲート + 統合
 ```

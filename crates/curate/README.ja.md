@@ -53,4 +53,4 @@ condukt がタスクを検証 ─▶ fugu-router record (playbook)
    evalkit run  ◀── evals/curated/*.jsonl ◀┘   (eval.yml が push ごとにゲート)
 ```
 
-record の後、condukt の Phase 6 が `curate promote` を提案して、検証済みの新鮮な実行を回帰 golden に変えられる。**サブスクリプションネイティブ**——バンドルされた単一の Rust バイナリで完結し、API キーは不要。
+record の後、condukt の Phase 6 は `curate promote` に **HOTL 連携**されている。verified タスクの `done_criteria` が機械的で、かつ `curate` が PATH 上にあるとき、main loop は**ちょうど 1 回**だけ「この verified run を eval golden 化しますか？」と確認し、**肯定回答が返ったときに限り**実際に `curate promote` を shell-out する（否定なら書き込みは一切行わない）。**サブスクリプションネイティブ**——バンドルされた単一の Rust バイナリで完結し、API キーは不要。

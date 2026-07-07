@@ -239,6 +239,99 @@ pub fn plan(
 }
 
 #[cfg(test)]
+mod proptests {
+    //! Property-based + no-panic floor for [`tally`]: order-independence
+    //! (permuting the verdicts never changes the decision), agreement-rate and
+    //! vote-count bounds, and totality over arbitrary verdicts + any threshold
+    //! (incl. NaN / out-of-range). The consensus decision is control-flow, so
+    //! these pin its determinism against generated input, not just examples.
+    use super::*;
+    use proptest::prelude::*;
+
+    fn any_verdict() -> impl Strategy<Value = Verdict> {
+        ("[a-z]{1,4}", any::<bool>(), prop::option::of("[a-z]{1,3}")).prop_map(
+            |(candidate, pass, group)| Verdict {
+                candidate,
+                pass,
+                group,
+            },
+        )
+    }
+
+    // The order-independent, decision-relevant projection of a Consensus. Two
+    // tallies over permutations of the same multiset must agree on all of these.
+    fn key(
+        c: &Consensus,
+    ) -> (
+        Option<String>,
+        Option<String>,
+        usize,
+        usize,
+        bool,
+        usize,
+        u64,
+    ) {
+        (
+            c.winner.clone(),
+            c.winning_group.clone(),
+            c.winning_votes,
+            c.n,
+            c.escalate,
+            c.passing,
+            c.agreement_rate.to_bits(),
+        )
+    }
+
+    proptest! {
+        // Order-independence: reversing or sorting the verdicts (both are
+        // permutations of the same multiset) never changes the decision.
+        #[test]
+        fn tally_is_order_independent(
+            verdicts in prop::collection::vec(any_verdict(), 0..12),
+            threshold in 0.0f64..=1.0,
+        ) {
+            let base = tally(&verdicts, threshold);
+
+            let mut rev = verdicts.clone();
+            rev.reverse();
+            prop_assert_eq!(key(&base), key(&tally(&rev, threshold)), "reverse changed decision");
+
+            let mut sorted = verdicts.clone();
+            sorted.sort_by(|a, b| a.candidate.cmp(&b.candidate));
+            prop_assert_eq!(key(&base), key(&tally(&sorted, threshold)), "sort changed decision");
+        }
+
+        // agreement_rate ∈ [0,1] and winning_votes ≤ n, for any threshold.
+        #[test]
+        fn tally_bounds_hold(
+            verdicts in prop::collection::vec(any_verdict(), 0..12),
+            threshold in proptest::num::f64::ANY,
+        ) {
+            let c = tally(&verdicts, threshold);
+            prop_assert!(
+                (0.0..=1.0).contains(&c.agreement_rate),
+                "agreement_rate {} out of [0,1]", c.agreement_rate
+            );
+            prop_assert!(c.winning_votes <= c.n, "winning_votes {} > n {}", c.winning_votes, c.n);
+            prop_assert!(c.passing <= c.n);
+        }
+
+        // Never panics on any verdicts + any threshold (incl. NaN / ±inf).
+        #[test]
+        fn tally_never_panics(
+            verdicts in prop::collection::vec(any_verdict(), 0..12),
+            threshold in proptest::num::f64::ANY,
+        ) {
+            let c = tally(&verdicts, threshold);
+            // An empty (or all-failing) tally must escalate with no winner.
+            if !verdicts.iter().any(|v| v.pass) {
+                prop_assert!(c.escalate && c.winner.is_none());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

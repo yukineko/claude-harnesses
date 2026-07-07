@@ -438,6 +438,76 @@ pub fn decide_replan(
 }
 
 #[cfg(test)]
+mod proptests {
+    //! Property-based + no-panic floor for [`classify_failure`]: the structured
+    //! `scope_mismatch` signal must be authoritative over free-text prose, the
+    //! top-tier rule must always replan, and the classifier must never panic on
+    //! arbitrary (incl. adversarial / huge) reflux strings. This is the
+    //! determinism guard for the injection-hardened control-flow decision.
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        // Never panics for ANY reflux strings + tier + signal, and always
+        // returns one of the two resolutions (totality).
+        #[test]
+        fn classify_is_total_and_never_panics(
+            reason in ".{0,80}",
+            failed in ".{0,40}",
+            tier in ".{0,20}",
+            sm in prop::option::of(any::<bool>()),
+        ) {
+            let c = classify_failure(&reason, &failed, &tier, sm);
+            prop_assert!(matches!(c.resolution, Resolution::Replan | Resolution::EscalateModel));
+        }
+
+        // Determinism: identical inputs always classify identically.
+        #[test]
+        fn classify_is_deterministic(
+            reason in ".{0,80}", failed in ".{0,40}", tier in ".{0,20}",
+            sm in prop::option::of(any::<bool>()),
+        ) {
+            let a = classify_failure(&reason, &failed, &tier, sm);
+            let b = classify_failure(&reason, &failed, &tier, sm);
+            prop_assert_eq!(a.resolution, b.resolution);
+        }
+
+        // Structured signal is AUTHORITATIVE over prose: scope_mismatch=Some(true)
+        // always yields Replan, no matter what `reason`/`tier` say.
+        #[test]
+        fn structured_scope_mismatch_true_forces_replan(
+            reason in ".{0,80}", failed in ".{0,40}", tier in ".{0,20}",
+        ) {
+            let c = classify_failure(&reason, &failed, &tier, Some(true));
+            prop_assert_eq!(c.resolution, Resolution::Replan);
+        }
+
+        // scope_mismatch=Some(false) on a non-top tier skips the prose heuristic
+        // entirely: even a `reason` string full of marker words cannot force a
+        // replan — it falls through to EscalateModel. (Uses a fixed non-top tier
+        // so the top-tier rule doesn't intercept.)
+        #[test]
+        fn structured_scope_mismatch_false_ignores_prose_on_non_top_tier(
+            reason in ".{0,80}", failed in ".{0,40}",
+        ) {
+            let c = classify_failure(&reason, &failed, "sonnet", Some(false));
+            prop_assert_eq!(c.resolution, Resolution::EscalateModel);
+        }
+    }
+
+    // Pathological-size no-panic floor.
+    #[test]
+    fn classify_no_panic_on_huge_reason() {
+        let big = "scope mismatch done_criteria ".repeat(100_000);
+        let c = classify_failure(&big, &big, "haiku", None);
+        assert!(matches!(
+            c.resolution,
+            Resolution::Replan | Resolution::EscalateModel
+        ));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

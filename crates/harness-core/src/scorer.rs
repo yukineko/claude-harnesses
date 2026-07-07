@@ -143,6 +143,106 @@ pub fn score(candidate: &Candidate) -> f64 {
 }
 
 #[cfg(test)]
+mod proptests {
+    //! Property-based + no-panic floor for the deterministic scorer. These pin
+    //! the invariants documented on [`score`] (clamp, finiteness, monotonicity)
+    //! against thousands of generated inputs — including pathological f64 values
+    //! (NaN / ±inf / far out-of-range) — so a regression can't quietly break
+    //! them the way a handful of example tests might miss.
+    use super::*;
+    use proptest::prelude::*;
+
+    fn any_severity() -> impl Strategy<Value = Severity> {
+        prop_oneof![
+            Just(Severity::Low),
+            Just(Severity::Medium),
+            Just(Severity::High),
+        ]
+    }
+    fn any_effort() -> impl Strategy<Value = Effort> {
+        prop_oneof![
+            Just(Effort::Xs),
+            Just(Effort::S),
+            Just(Effort::M),
+            Just(Effort::L),
+            Just(Effort::Xl),
+        ]
+    }
+    fn any_lens() -> impl Strategy<Value = Lens> {
+        prop_oneof![
+            Just(Lens::L1),
+            Just(Lens::L2),
+            Just(Lens::L3),
+            Just(Lens::L4),
+            Just(Lens::L5),
+        ]
+    }
+
+    proptest! {
+        // No-panic floor + defined output domain over ANY f64 goal_proximity,
+        // including NaN / ±inf / far out-of-range. A finite input must yield a
+        // finite, non-negative score; ±inf is clamped into [0,1] (also finite);
+        // NaN is the only value allowed to propagate (NaN in → NaN out), and it
+        // must NOT arise from any non-NaN input.
+        #[test]
+        fn score_never_panics_and_nan_only_from_nan(
+            sev in any_severity(), eff in any_effort(), lens in any_lens(),
+            gp in proptest::num::f64::ANY,
+        ) {
+            let s = score(&Candidate { severity: sev, effort: eff, lens, goal_proximity: gp });
+            if gp.is_nan() {
+                prop_assert!(s.is_nan(), "NaN goal_proximity should give NaN, got {s}");
+            } else {
+                // finite or ±inf: clamp defuses it into [0,1] → finite, ≥ 0.
+                prop_assert!(s.is_finite() && s >= 0.0, "gp={gp} gave non-finite/neg {s}");
+            }
+        }
+
+        // Clamp: any goal_proximity ≥ 1.0 scores identically to 1.0, and any
+        // ≤ 0.0 scores identically to 0.0 — out-of-range input is defused, not
+        // propagated.
+        #[test]
+        fn score_clamps_out_of_range_goal_proximity(
+            sev in any_severity(), eff in any_effort(), lens in any_lens(),
+            hi in 1.0f64..1e12, lo in -1e12f64..=0.0,
+        ) {
+            let c = |gp| Candidate { severity: sev, effort: eff, lens, goal_proximity: gp };
+            prop_assert_eq!(score(&c(hi)), score(&c(1.0)));
+            prop_assert_eq!(score(&c(lo)), score(&c(0.0)));
+        }
+
+        // Monotone non-decreasing in severity (all else fixed): a higher
+        // severity never lowers the score.
+        #[test]
+        fn score_monotone_nondecreasing_in_severity(
+            eff in any_effort(), lens in any_lens(), gp in 0.0f64..=1.0,
+        ) {
+            let c = |sev| Candidate { severity: sev, effort: eff, lens, goal_proximity: gp };
+            let lo = score(&c(Severity::Low));
+            let mid = score(&c(Severity::Medium));
+            let hi = score(&c(Severity::High));
+            prop_assert!(lo <= mid && mid <= hi, "sev not monotone: {lo} {mid} {hi}");
+        }
+
+        // Monotone non-increasing in effort (all else fixed): more effort never
+        // raises the score.
+        #[test]
+        fn score_monotone_nonincreasing_in_effort(
+            sev in any_severity(), lens in any_lens(), gp in 0.0f64..=1.0,
+        ) {
+            let c = |eff| Candidate { severity: sev, effort: eff, lens, goal_proximity: gp };
+            let order = [Effort::Xs, Effort::S, Effort::M, Effort::L, Effort::Xl];
+            for w in order.windows(2) {
+                prop_assert!(
+                    score(&c(w[0])) >= score(&c(w[1])),
+                    "effort not monotone at {:?}->{:?}", w[0], w[1]
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

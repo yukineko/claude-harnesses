@@ -281,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.26"
+version = "0.7.27"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -623,6 +623,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs",
+ "proptest",
  "regex",
  "serde",
  "serde_json",

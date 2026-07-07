@@ -293,6 +293,111 @@ pub fn search_default(query: &str, lessons: &[Lesson]) -> Vec<Match> {
 }
 
 #[cfg(test)]
+mod proptests {
+    //! Property-based + no-panic floor for the lessons store's pure/near-pure
+    //! surface: lexical `search` bounds (k-cap, Jaccard ∈ (0,1], sorted) over
+    //! arbitrary (incl. non-ASCII / pathological) text, and `append`
+    //! idempotency-by-id under generated duplicate keys. Guards the
+    //! never-break-a-turn contract: these must hold — and never panic — for any
+    //! input, not just the curated example cases below.
+    use super::*;
+    use proptest::prelude::*;
+
+    fn any_lesson() -> impl Strategy<Value = Lesson> {
+        ("[a-z0-9]{1,8}", ".{0,64}", ".{0,64}").prop_map(|(id, summary, text)| Lesson {
+            id,
+            kind: Kind::ErrorPattern,
+            task_summary: summary,
+            lesson_text: text,
+            source_run: "r".to_string(),
+            ts: 0,
+        })
+    }
+
+    proptest! {
+        // search never returns more than k matches, every score is a valid
+        // Jaccard value in (0.0, 1.0], and results are sorted by score
+        // descending — for arbitrary query/store/k (incl. weird Unicode text).
+        #[test]
+        fn search_respects_k_and_score_bounds(
+            query in ".{0,64}",
+            lessons in prop::collection::vec(any_lesson(), 0..24),
+            k in 0usize..8,
+        ) {
+            let matches = search(&query, &lessons, k);
+            prop_assert!(matches.len() <= k, "returned {} > k={k}", matches.len());
+            for m in &matches {
+                prop_assert!(
+                    m.score > 0.0 && m.score <= 1.0,
+                    "score {} out of (0,1]", m.score
+                );
+            }
+            for w in matches.windows(2) {
+                prop_assert!(w[0].score >= w[1].score, "not sorted desc");
+            }
+        }
+
+        // Empty query or k==0 always yields no matches, whatever the store is.
+        #[test]
+        fn search_empty_query_or_k0_is_empty(
+            lessons in prop::collection::vec(any_lesson(), 0..12),
+        ) {
+            prop_assert!(search("", &lessons, DEFAULT_K).is_empty());
+            prop_assert!(search("anything at all here", &lessons, 0).is_empty());
+        }
+
+        // Idempotency-by-id under concurrency-free append: appending a bag of
+        // lessons (with generated duplicate ids) leaves exactly the set of
+        // FIRST-seen ids, one line each — a re-append with a known id is a
+        // no-op, so the stored id set equals the deduped input id set.
+        #[test]
+        fn append_is_idempotent_by_id_over_arbitrary_bags(
+            bag in prop::collection::vec(any_lesson(), 0..20),
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("lessons.jsonl");
+            for l in &bag {
+                append_at(&path, l);
+            }
+            let stored = load_at(&path);
+            let mut expected: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+            for l in &bag {
+                expected.insert(l.id.clone());
+            }
+            let got: std::collections::BTreeSet<String> =
+                stored.iter().map(|l| l.id.clone()).collect();
+            prop_assert_eq!(got, expected);
+            // No duplicate lines: stored count equals the unique-id count.
+            prop_assert_eq!(stored.len(), bag.iter()
+                .map(|l| l.id.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len());
+        }
+    }
+
+    // Pathological-size no-panic floor: a multi-megabyte query and lesson must
+    // not panic or hang the tokenizer/Jaccard path.
+    #[test]
+    fn search_no_panic_on_huge_input() {
+        let big = "lorem ipsum dolor sit amet ".repeat(50_000);
+        let l = Lesson {
+            id: "big".to_string(),
+            kind: Kind::Convention,
+            task_summary: big.clone(),
+            lesson_text: String::new(),
+            source_run: "r".to_string(),
+            ts: 0,
+        };
+        let matches = search(&big, std::slice::from_ref(&l), DEFAULT_K);
+        // self-match: score is a valid Jaccard ≤ 1.0.
+        for m in &matches {
+            assert!(m.score <= 1.0);
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

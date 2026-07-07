@@ -141,6 +141,86 @@ pub fn decide(risk: Level, reversibility: Level, confidence: Level) -> Decision 
 }
 
 #[cfg(test)]
+mod proptests {
+    //! Property-based floor for [`decide`]: monotonicity and the irreversible
+    //! hard-stop, checked over the full generated Level space rather than the
+    //! curated example rows. `decide` is total over 27 inputs so these are
+    //! effectively exhaustive, but expressing them as properties documents the
+    //! contract and guards it against future edits to the scoring rule.
+    use super::*;
+    use proptest::prelude::*;
+
+    fn any_level() -> impl Strategy<Value = Level> {
+        prop_oneof![Just(Level::Low), Just(Level::Medium), Just(Level::High)]
+    }
+
+    // Restrictiveness order: Auto < Escalate < Block.
+    fn restrictiveness(d: Decision) -> i32 {
+        match d {
+            Decision::Auto => 0,
+            Decision::Escalate => 1,
+            Decision::Block => 2,
+        }
+    }
+
+    fn rank(l: Level) -> i32 {
+        match l {
+            Level::Low => 0,
+            Level::Medium => 1,
+            Level::High => 2,
+        }
+    }
+
+    proptest! {
+        // Raising risk never makes the decision LESS restrictive (others fixed).
+        #[test]
+        fn decide_monotone_nondecreasing_in_risk(
+            r1 in any_level(), r2 in any_level(), rev in any_level(), conf in any_level(),
+        ) {
+            let (lo, hi) = if rank(r1) <= rank(r2) { (r1, r2) } else { (r2, r1) };
+            prop_assert!(
+                restrictiveness(decide(lo, rev, conf)) <= restrictiveness(decide(hi, rev, conf)),
+                "risk monotonicity broken"
+            );
+        }
+
+        // LOWERING reversibility never makes the decision less restrictive: a
+        // harder-to-undo action is at least as gated (others fixed).
+        #[test]
+        fn decide_monotone_in_reversibility(
+            risk in any_level(), v1 in any_level(), v2 in any_level(), conf in any_level(),
+        ) {
+            let (lo, hi) = if rank(v1) <= rank(v2) { (v1, v2) } else { (v2, v1) };
+            // higher reversibility (hi) must be <= restrictive than lower (lo).
+            prop_assert!(
+                restrictiveness(decide(risk, hi, conf)) <= restrictiveness(decide(risk, lo, conf)),
+                "reversibility monotonicity broken"
+            );
+        }
+
+        // LOWERING confidence never makes the decision less restrictive.
+        #[test]
+        fn decide_monotone_in_confidence(
+            risk in any_level(), rev in any_level(), c1 in any_level(), c2 in any_level(),
+        ) {
+            let (lo, hi) = if rank(c1) <= rank(c2) { (c1, c2) } else { (c2, c1) };
+            prop_assert!(
+                restrictiveness(decide(risk, rev, hi)) <= restrictiveness(decide(risk, rev, lo)),
+                "confidence monotonicity broken"
+            );
+        }
+
+        // Hard stop: high risk AND irreversible is ALWAYS Block, whatever the
+        // confidence — you can never be sure enough to auto-run an irreversible
+        // catastrophe.
+        #[test]
+        fn decide_high_risk_irreversible_is_always_block(conf in any_level()) {
+            prop_assert_eq!(decide(Level::High, Level::Low, conf), Decision::Block);
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

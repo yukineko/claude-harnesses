@@ -16,7 +16,7 @@ Claude Code 向けの**シップ（出荷）リチュアル**。Rust 製。
 
 ```sh
 ship check             # 未出荷状態を表示（dirty git、古いプラグインキャッシュ）
-ship check --run-safe  # scripts/rebuild-plugins.sh を実行（安全：既存キャッシュ dir へのバイナリ差し替え）
+ship check --run-safe  # scripts/rebuild-plugins.sh --stage-repo を実行（安全：cache と committed crates/*/bin の両方を更新・git 不使用）
 ship rollout            # scripts/rollout-plugins.sh を実行（重い操作：/plugin update ステップを自動化）
 ship session-end       # SessionEnd hook（stdin の JSON を読み、未出荷ならリマインダーを表示）
 ```
@@ -45,7 +45,7 @@ skill は、コミット・マージ・プッシュが実行される前に、�
 ## GATED 不変式 — 重要
 
 - **コミット・マージ・プッシュ**: 決して自動実行しない。MUST 明示的なユーザー承認を得る。diff を表示し、「承認？」と尋ね、「了解」まで待つ。
-- **rebuild-plugins.sh**: `ship check --run-safe` 経由で自動実行可能（既存キャッシュ dir へのバイナリ差し替え）。
+- **rebuild-plugins.sh --stage-repo**: `ship check --run-safe` 経由で自動実行可能（cache と committed `crates/*/bin`（stale 判定が測る成果物）の両方を更新・ファイルコピーで git 不使用）。これが「stale plugin binaries」項目をクリアする。更新後の binary は GATED な commit が要る。
 - **rollout-plugins.sh**: `ship rollout` 経由で自動実行可能（重い・明示的な操作 — `/plugin update` の自動化）。
 
 ## インストール（プラグイン）

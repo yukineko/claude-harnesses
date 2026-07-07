@@ -16,7 +16,7 @@ Subscription-native: one Rust binary, one hook (SessionEnd), no API key.
 
 ```sh
 ship check             # print unshipped state (dirty git, stale plugin-cache)
-ship check --run-safe  # run scripts/rebuild-plugins.sh (SAFE: binary swap into existing cache dirs)
+ship check --run-safe  # run scripts/rebuild-plugins.sh --stage-repo (SAFE: refresh cache AND the committed crates/*/bin; never git)
 ship rollout            # run scripts/rollout-plugins.sh (heavier: automates the /plugin update step)
 ship session-end       # SessionEnd hook (reads hook JSON from stdin, prints reminder if unshipped)
 ```
@@ -45,7 +45,7 @@ visibility into what will be committed, merged, or pushed before any action is t
 ## GATED invariant — critical
 
 - **commit, merge, push**: NEVER auto-run. ALWAYS get explicit user approval first. Show diffs, ask "approve?", wait for "yes".
-- **rebuild-plugins.sh**: auto-runnable via `ship check --run-safe` (binary swap into existing cache dirs).
+- **rebuild-plugins.sh --stage-repo**: auto-runnable via `ship check --run-safe` (refreshes the cache AND the committed `crates/*/bin` binary — the artifact stale-detection measures; a file copy, never git). This is what clears a "stale plugin binaries" item; the refreshed binary then needs a GATED commit.
 - **rollout-plugins.sh**: auto-runnable via `ship rollout` (heavier, explicit — automates `/plugin update`).
 
 ## Install (plugin)

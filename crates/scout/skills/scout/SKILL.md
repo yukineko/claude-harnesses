@@ -137,8 +137,21 @@ L3 は「他プロジェクトが現にやっている」根拠の URL を必ず
 
 1. **重複排除** — 同じ施策を別レンズが挙げたら 1 件に畳み、`lens` を併記。
 2. **証拠フィルタ** — evidence の無い/弱い候補を落とす。
-3. **スコアリング** — 既定式 `(severity × goal への近さ) ÷ effort`。compass の `measuring_stick` があればそれを優先採用。
-   **セキュリティ(L2)・安全性(L5) は重みを上げる**（壊さない・安全側）。
+3. **スコアリング** — 算術ランキングは自分（LLM）で手計算せず、決定論バイナリ `compass score` に委ねる。
+   生き残った候補ごとに次を実行し、`goal_proximity` だけを見積もる（残りは自分で計算しない）:
+   ```bash
+   compass score --severity <candidate.severity> --effort <candidate.effort> \
+     --lens <candidate.primary lens> --goal-proximity <0.0-1.0>
+   ```
+   - `goal_proximity` は **LLM の意味判断**（この施策が compass の gap をどれだけ埋めるか／north_star に
+     どれだけ近づけるかを 0.0〜1.0 で見積もる）のみを担う。severity×proximity÷effort の算術は
+     もう手計算しない — それは決定論バイナリの仕事。
+   - 標準出力 `{"score": N}` の `score` で降順ソートし、ランキングを確定する。
+   - **セキュリティ(L2)・安全性(L5) の重み上げはスコアラー側に内蔵済み**（手動の注意書きは不要になった）。
+     L2/L5 レンズの候補は自動的に高スコアになるので、意図（壊さない・安全側を優先）は保たれる。
+   - **fail-soft**: `compass` バイナリが無い／非 0 終了／`score` サブコマンド未対応（旧 compass）の場合は、
+     従来どおり自分（LLM）で `(severity × goal への近さ) ÷ effort` を手計算し、
+     **セキュリティ(L2)・安全性(L5) は重みを上げる**手動判断にフォールバックする（後方互換・never break a turn）。
 4. **優先度付け** — `p0`(即対応) / `p1`(近いうち) / `p2`(いつか) のタグを付与。
 
 ### Phase 4 — 合意（AskUserQuestion / HOTL）

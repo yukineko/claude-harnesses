@@ -829,7 +829,7 @@
     {
       "name": "scout",
       "description": "Multi-lens project audit that generates actionable tasks (施策) for Claude Code: a /scout skill that gathers deterministic project state, fans out read-only sub-agents across five lenses (current issues, security, industry/peer-project practices via web search, missing measures, safety), then dedupes/scores findings into prioritized tasks, writes them to the backlog, and hands execution to /flow. Complements compass as a broad-reconnaissance SOURCE. Subscription-native (skill only, no binary, no API key).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "planning",
       "keywords": [
         "scout",

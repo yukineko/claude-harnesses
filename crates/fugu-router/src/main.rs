@@ -101,6 +101,14 @@ enum Command {
         #[command(subcommand)]
         action: ProceduresAction,
     },
+    /// Cross-project *lessons* store — durable, machine-scope carryovers
+    /// ("this error pattern means X", "this repo's convention is Y") that help
+    /// any future task on any project. Project-INDEPENDENT path (not keyed by
+    /// cwd/repo); the underlying store lives in harness-core::lessons.
+    Lessons {
+        #[command(subcommand)]
+        action: LessonsAction,
+    },
     /// Suggest a model for a single free-text task.
     Suggest {
         #[arg(long, default_value = "")]
@@ -190,6 +198,34 @@ enum ProceduresAction {
         /// Comma-separated file paths to boost similarity.
         #[arg(long, default_value = "")]
         files: String,
+        /// Number of results to return.
+        #[arg(long, default_value_t = 3)]
+        k: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum LessonsAction {
+    /// Append a distilled lesson (idempotent by content-derived id).
+    Add {
+        /// Lesson kind: error-pattern | convention.
+        #[arg(long, value_parser = ["error-pattern", "convention"])]
+        kind: String,
+        /// Short description of the task the lesson came from.
+        #[arg(long)]
+        task_summary: String,
+        /// The lesson itself (the carryover text).
+        #[arg(long)]
+        lesson_text: String,
+        /// Which run/session produced it (provenance).
+        #[arg(long, default_value = "")]
+        source_run: String,
+    },
+    /// Lexical top-K search over stored lessons (returns a JSON array).
+    Search {
+        /// Query text.
+        #[arg(long)]
+        query: String,
         /// Number of results to return.
         #[arg(long, default_value_t = 3)]
         k: usize,
@@ -435,6 +471,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 Ok(())
             }
         },
+        Command::Lessons { action } => cmd_lessons(action),
         Command::Suggest { files, class, text } => {
             let title = text.join(" ");
             let f = split_files(&files);
@@ -486,6 +523,78 @@ fn run_user(cmd: Command) -> Result<()> {
             Ok(())
         }
         Command::Prompt => unreachable!("handled in main"),
+    }
+}
+
+/// Handle `lessons add|search` over the project-INDEPENDENT lessons store.
+fn cmd_lessons(action: LessonsAction) -> Result<()> {
+    use harness_core::lessons::{self, Kind, Lesson};
+    use sha2::{Digest, Sha256};
+
+    match action {
+        LessonsAction::Add {
+            kind,
+            task_summary,
+            lesson_text,
+            source_run,
+        } => {
+            let kind = match kind.as_str() {
+                "error-pattern" => Kind::ErrorPattern,
+                "convention" => Kind::Convention,
+                other => {
+                    anyhow::bail!("unknown --kind {other:?} (expected error-pattern|convention)")
+                }
+            };
+            // Content-derived id so re-adding identical content is a true no-op
+            // (append is idempotent by id).
+            let mut hasher = Sha256::new();
+            hasher.update(kind_str(kind).as_bytes());
+            hasher.update([0]);
+            hasher.update(task_summary.as_bytes());
+            hasher.update([0]);
+            hasher.update(lesson_text.as_bytes());
+            let id = format!("{:x}", hasher.finalize())[..16].to_string();
+            let lesson = Lesson {
+                id: id.clone(),
+                kind,
+                task_summary,
+                lesson_text,
+                source_run,
+                ts: store::now_secs(),
+            };
+            lessons::append(&lesson);
+            eprintln!("lesson stored: {id}");
+            println!("{id}");
+            Ok(())
+        }
+        LessonsAction::Search { query, k } => {
+            // Fail-soft: an uninitialized/empty store, an empty query, or no
+            // overlap all yield an empty JSON array (exit 0, never an error).
+            let lessons = lessons::load();
+            let hits = lessons::search(&query, &lessons, k);
+            let arr: Vec<serde_json::Value> = hits
+                .iter()
+                .map(|m| {
+                    let mut v = serde_json::to_value(&m.lesson).unwrap_or_else(|_| json!({}));
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert("score".into(), json!(m.score));
+                    }
+                    v
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&arr)?);
+            Ok(())
+        }
+    }
+}
+
+/// Kebab-case string for a lesson kind (matches its serde representation), used
+/// to seed the content-derived id.
+fn kind_str(kind: harness_core::lessons::Kind) -> &'static str {
+    use harness_core::lessons::Kind;
+    match kind {
+        Kind::ErrorPattern => "error-pattern",
+        Kind::Convention => "convention",
     }
 }
 

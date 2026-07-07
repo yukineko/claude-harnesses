@@ -146,10 +146,17 @@ pub struct ReplanDirective {
 /// Collapse a model string to its canonical tier keyword when recognised
 /// (e.g. `"claude-opus-4"` → `"opus"`), else the trimmed lowercase string.
 /// Empty/garbage input collapses to an empty/garbage string, never panics.
+///
+/// Matching is token/word-boundary based, not substring: the model string is
+/// split on non-alphanumeric characters, and a tier is recognised only if one
+/// of the resulting tokens equals the tier keyword exactly. This avoids
+/// false positives like `"isonnet"` or `"opuscule"` spuriously collapsing to
+/// `"sonnet"`/`"opus"`.
 fn canonical_tier(model_tier: &str) -> String {
     let m = model_tier.trim().to_lowercase();
+    let tokens: Vec<&str> = m.split(|c: char| !c.is_alphanumeric()).collect();
     for t in TIERS {
-        if m.contains(t) {
+        if tokens.contains(&t) {
             return t.to_string();
         }
     }
@@ -447,7 +454,8 @@ mod tests {
     #[test]
     fn top_tier_recognised_from_full_model_string() {
         // Canonical-tier matching must recognise a full model id, not just the
-        // bare tier keyword (mirrors verify::canonical's `.contains(t)` policy).
+        // bare tier keyword (mirrors verify::canonical's token/word-boundary
+        // matching policy).
         let c = classify_failure("boom", "", "claude-opus-4-20250101", None);
         assert_eq!(c.resolution, Resolution::Replan);
     }
@@ -456,6 +464,38 @@ mod tests {
     fn top_tier_case_insensitive() {
         let c = classify_failure("boom", "", "OPUS", None);
         assert_eq!(c.resolution, Resolution::Replan);
+    }
+
+    // ── canonical_tier(): token/word-boundary tier matching, not substring ─
+
+    /// Every real model name (including tier-bearing suffixes/brackets) still
+    /// collapses to the expected tier after the word-boundary fix.
+    #[test]
+    fn canonical_tier_recognises_known_model_names() {
+        assert_eq!(canonical_tier("claude-haiku-4-5"), "haiku");
+        assert_eq!(canonical_tier("claude-sonnet-5"), "sonnet");
+        assert_eq!(canonical_tier("claude-opus-4-8"), "opus");
+        assert_eq!(canonical_tier("claude-opus-4-8[1m]"), "opus");
+        assert_eq!(canonical_tier("haiku"), "haiku");
+        assert_eq!(canonical_tier("sonnet"), "sonnet");
+        assert_eq!(canonical_tier("opus"), "opus");
+    }
+
+    /// Strings that contain a tier keyword as a substring but not as a
+    /// standalone token must NOT be misclassified as that tier; they fall
+    /// back to the trimmed lowercase whole string.
+    #[test]
+    fn canonical_tier_rejects_substring_false_positives() {
+        for m in ["xopusy", "opuscule", "supersonic", "isonnet"] {
+            let c = canonical_tier(m);
+            assert_eq!(c, m.to_lowercase(), "{m:?} must not collapse to a tier");
+            assert!(
+                !TIERS.contains(&c.as_str()),
+                "{m:?} incorrectly canonicalised to tier {c:?}"
+            );
+            // These must not be classified as top-tier either.
+            assert!(!is_top_tier(m), "{m:?} must not be treated as top tier");
+        }
     }
 
     // ── (b) scope / done_criteria mismatch → Replan ────────────────────────

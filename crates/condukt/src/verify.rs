@@ -863,10 +863,17 @@ const TIERS: [&str; 3] = ["haiku", "sonnet", "opus"];
 /// Collapse a model string to its canonical tier keyword when recognised
 /// (e.g. `"claude-sonnet-4"` → `"sonnet"`), else the trimmed lowercase string.
 /// Two models are "the same model" iff their canonical forms are equal.
+///
+/// Matching is token/word-boundary based, not substring: the model string is
+/// split on non-alphanumeric characters, and a tier is recognised only if one
+/// of the resulting tokens equals the tier keyword exactly. This avoids
+/// false positives like `"xopusy"` or `"supersonic"` spuriously collapsing to
+/// `"opus"`/`"sonnet"`.
 fn canonical(model: &str) -> String {
     let m = model.trim().to_lowercase();
+    let tokens: Vec<&str> = m.split(|c: char| !c.is_alphanumeric()).collect();
     for t in TIERS {
-        if m.contains(t) {
+        if tokens.contains(&t) {
             return t.to_string();
         }
     }
@@ -1486,6 +1493,36 @@ mod tests {
                     "verifier {v:?} must differ from worker {w:?} (suggested={s:?})"
                 );
             }
+        }
+    }
+
+    // ── canonical(): token/word-boundary tier matching, not substring ──────
+
+    /// Every real model name (including tier-bearing suffixes/brackets) still
+    /// collapses to the expected tier after the word-boundary fix.
+    #[test]
+    fn canonical_recognises_known_model_names() {
+        assert_eq!(canonical("claude-haiku-4-5"), "haiku");
+        assert_eq!(canonical("claude-sonnet-5"), "sonnet");
+        assert_eq!(canonical("claude-opus-4-8"), "opus");
+        assert_eq!(canonical("claude-opus-4-8[1m]"), "opus");
+        assert_eq!(canonical("haiku"), "haiku");
+        assert_eq!(canonical("sonnet"), "sonnet");
+        assert_eq!(canonical("opus"), "opus");
+    }
+
+    /// Strings that contain a tier keyword as a substring but not as a
+    /// standalone token must NOT be misclassified as that tier; they fall
+    /// back to the trimmed lowercase whole string.
+    #[test]
+    fn canonical_rejects_substring_false_positives() {
+        for m in ["xopusy", "opuscule", "supersonic", "isonnet"] {
+            let c = canonical(m);
+            assert_eq!(c, m.to_lowercase(), "{m:?} must not collapse to a tier");
+            assert!(
+                !TIERS.contains(&c.as_str()),
+                "{m:?} incorrectly canonicalised to tier {c:?}"
+            );
         }
     }
 

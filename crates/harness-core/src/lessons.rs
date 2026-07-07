@@ -175,6 +175,12 @@ pub struct Match {
     pub score: f64,
 }
 
+/// Default number of matches to return when a caller has no reason to pick a
+/// different `k`. Rust has no default arguments, so the spec's "default k=3" is
+/// expressed here as a named constant plus the `search_default` wrapper below;
+/// callers wanting another cutoff still pass `k` explicitly to `search`.
+pub const DEFAULT_K: usize = 3;
+
 /// Deterministic **lexical** top-K search over `lessons` for `query` (token
 /// Jaccard — no embeddings/vector DB). Returns at most `k` matches with a
 /// non-zero score, sorted by score descending (ties broken by id for a stable
@@ -204,6 +210,14 @@ pub fn search(query: &str, lessons: &[Lesson], k: usize) -> Vec<Match> {
     });
     scored.truncate(k);
     scored
+}
+
+/// Convenience wrapper around [`search`] using the spec's default cutoff
+/// [`DEFAULT_K`]. Equivalent to `search(query, lessons, DEFAULT_K)`; exists so
+/// the "default k=3" contract is reachable at the core API without every caller
+/// repeating the literal.
+pub fn search_default(query: &str, lessons: &[Lesson]) -> Vec<Match> {
+    search(query, lessons, DEFAULT_K)
 }
 
 #[cfg(test)]
@@ -290,6 +304,34 @@ mod tests {
             "an unrelated lesson must be dropped: {:?}",
             hits.iter().map(|m| m.lesson.id.clone()).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn search_default_caps_at_default_k() {
+        // The named constant must equal the spec's default of 3.
+        assert_eq!(DEFAULT_K, 3);
+
+        // More matching lessons than DEFAULT_K → the wrapper caps the result.
+        let lessons: Vec<Lesson> = (0..5)
+            .map(|i| {
+                lesson(
+                    &format!("l{i}"),
+                    "login authentication token",
+                    "session token",
+                )
+            })
+            .collect();
+        let hits = search_default("login authentication token", &lessons);
+        assert!(
+            hits.len() <= DEFAULT_K,
+            "search_default must return at most DEFAULT_K results, got {}",
+            hits.len()
+        );
+        assert_eq!(hits.len(), 3, "5 matching lessons capped to DEFAULT_K==3");
+
+        // And it agrees with an explicit search(.., DEFAULT_K) call.
+        let explicit = search("login authentication token", &lessons, DEFAULT_K);
+        assert_eq!(hits.len(), explicit.len());
     }
 
     #[test]

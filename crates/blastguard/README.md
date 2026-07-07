@@ -65,6 +65,15 @@ irreversible patterns before they run — deterministically, via a pure function
 holding the "never breaks a turn" invariant — and it favors reliably stopping the
 clearly dangerous over casting a wide net that gets in the way of ordinary work.
 
+## Also a library
+
+`src/lib.rs` exposes the same detection to other crates in this repo (pure, no
+I/O): specguard's forge runs an LLM-generated `test_cmd` through `detect::detect`
+before ever handing it to `sh -c`, and condukt's scheduler uses the graded
+`classify::classify` risk/reversibility assessor to force outward, irreversible
+actions (a deploy, `git push`, a release) through its GATED gate even when an
+upstream LLM mislabelled the task.
+
 ## Build
 
 The CLI surface is minimal: `--version` / `-V` and `--help` / `-h` short-circuit

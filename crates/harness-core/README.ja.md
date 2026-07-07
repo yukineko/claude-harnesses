@@ -25,6 +25,7 @@ harness-core は、harness のすべてのプラグインで**同一でなけれ
 | `spans` | Span モデルと防御的な JSONL ローダー（`~/.tracekit/<run_id>/spans.jsonl` のオンディスク契約） |
 | `session` | セッションごとの正典レコード（`<state_dir>/sessions/<id>.json`） |
 | `usage` / `transcript` | ストリーミング JSONL transcript リーダーと、モデルごとのトークン/使用量集計（transcript 全体を読み込まない） |
+| `estimate` | transcript → (usage, cost) の唯一の同梱推定器（`estimate_transcript_cost`。crate ルートに re-export）。`usage::aggregate` と `pricing::session_cost` を1回の呼び出しに束ねる——`gauge` / `budgetguard` / `session-insights` はいずれも独自の推定ロジックを持たず、これを共有利用する |
 | `metrics` | 追記専用 JSONL のメトリクス SINK、並列安全 |
 | `pricing` | モデル→USD のコスト表（cache read/write の倍率を含む） |
 | `ledger` | 日次の支出を永続化する台帳（`~/.budgetguard/state/ledger.json`） |
@@ -34,6 +35,7 @@ harness-core は、harness のすべてのプラグインで**同一でなけれ
 | `interrogate` | ドメイン非依存の、ゲート単位の interrogation 制御構造 |
 | `shell` | クロスプラットフォームなシェル起動の単一の正典 |
 | `trust` | プロジェクトローカル config のコマンド文字列を尊重するための workspace-trust ゲート |
+| `scorer` | 決定論的な優先度スコアラー（`score`。crate ルートに re-export）：`severity_weight × clamp(goal_proximity, 0.0, 1.0) ÷ effort_factor × lens_multiplier`。純粋関数で参照透過——clock も RNG も I/O も無い。`L2`/`L5`（scout の security/safety レンズ）は 1.0 超の乗数を持つ（「壊さない・安全側」） |
 
 ## どうして必要か
 

@@ -81,7 +81,7 @@ diff が *変化* すれば 1 ラウンド消費、`max_attempts`（既定 2）�
 ### プラグインとして（subscription、ビルド不要）
 
 ```
-/plugin marketplace add yukineko/propguard
+/plugin marketplace add yukineko/claude-harnesses
 /plugin install propguard@yukineko
 ```
 

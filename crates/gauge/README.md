@@ -38,6 +38,7 @@ As a Claude Code plugin, the bundled `bin/gauge` is invoked by `hooks/hooks.json
 ```sh
 cargo install --path .
 gauge install        # merges the Stop hook into ~/.claude/settings.json
+gauge uninstall      # removes it again
 ```
 
 ## Use

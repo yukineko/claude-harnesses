@@ -62,6 +62,21 @@ Mirrors the evalkit / schemaguard 0/1/2 gate policy:
 
 This is a plain CLI **gate**, not a lifecycle hook.
 
+## Wired into condukt (Phase 6)
+
+`trajectoryeval` is not just a standalone binary — condukt's task schema carries an
+optional `expected_trajectory: {mode, steps:[{tool}]}` field (see
+`crates/condukt/src/model.rs`), which condukt-interpreter may fill in when a task's
+correctness depends on *how* it's done, not just the output. When a task declares it,
+condukt's Phase 6 (`crates/condukt/skills/condukt/SKILL.md`) runs `extract` on the
+worker sub-agent's transcript and feeds the result into `check` **alongside** the
+normal output verification — a second, path-based verifier dimension. If the
+`trajectoryeval` binary isn't on `PATH`, or the task has no `expected_trajectory`, or
+the worker transcript can't be resolved, this step is skipped entirely (fail-soft; it
+never blocks Phase 6). A trajectory deviation (exit `1`) does **not** override the
+output verdict — a task whose output satisfies `done_criteria` still gets `verified`,
+with the deviation recorded as a `reason` for HOTL visibility.
+
 ## Example
 
 ```sh

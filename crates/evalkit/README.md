@@ -35,8 +35,10 @@ One JSON object per line (`//` lines and blanks are skipped). A case names one
 | `assert.exit` | expected exit code (`cmd` only) |
 | `assert.contains` / `not_contains` | substrings that must / must not appear |
 | `assert.regex` / `not_regex` | regexes that must / must not match |
+| `draft` | promotion draft awaiting a human-authored assertion; skipped at run time (never pass/fail) |
 
-A case has **exactly one** of `file` or `cmd`.
+A case has **exactly one** of `file` or `cmd` — except a `draft: true` case, which
+carries no subject yet and is exempt from that requirement.
 
 ## Usage
 
@@ -57,6 +59,9 @@ Exit codes — CI can tell a regression from a misconfigured path:
 
 `--bin-dir DIR` is prepended to `PATH` for `cmd` cases, so a just-built
 `target/release/<tool>` is exercised without installing it.
+
+A `draft` case is reported as `skip ... (draft — assertion pending)` and counted
+separately — it never contributes to the pass/fail exit code.
 
 ## Canary: replay the same goldens across two versions
 
@@ -92,6 +97,9 @@ Repo-root `evals/`:
 
 - `evals/skill-invariants.jsonl` — hard rules pinned in plugin `SKILL.md`s.
 - `evals/cli-contracts.jsonl` — CLI output/exit contracts.
+- `evals/replay/replayed.jsonl` — promoted condukt trajectory replays
+  (`cmd` cases asserting `replaykit verify` against fixtures under
+  `evals/replay/fixtures/`).
 
 Add a line whenever you codify a new invariant. The keystone of the LLMOps eval
 layer: future curation (`curate`) promotes high-signal fugu episodes/playbooks

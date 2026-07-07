@@ -1,6 +1,6 @@
 {
   "name": "compass",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Goal re-grounding + next-move derivation upstream of condukt; subscription-native.",
   "author": { "name": "yukineko" },
   "keywords": ["compass", "charter", "goal", "routing", "condukt"]

@@ -59,9 +59,13 @@ or more left → drop into the carve loop.
 |---|---|---|---|
 | **C1 existence** | charter.md exists with non-empty north_star/DoD | deterministic (binary) | absent → carve from scratch |
 | **C2 freshness** | charter hasn't drifted from reality | deterministic (binary) | drift → "is the goal still valid?" |
-| **C3 observable** | each DoD item is an observable pass/fail | LLM (skill) | vague → demand a measurable criterion |
+| **C3 observable** | each DoD item is an observable pass/fail | LLM (skill), + `compass c3-screen` lexical pre-flag | vague → demand a measurable criterion |
 | **C4 consistent** | north_star/DoD don't contradict recent work | LLM (skill) | contradiction → a human adjudicates ("did the thread move?") |
 | **C5 gradient-able** | the DoD is concrete enough to compute a gap | LLM (skill) | too abstract → demand concretion until one move can be drawn |
+
+`compass c3-screen` is an advisory deterministic lexical screen: it flags DoD items whose
+wording looks vague/non-observable as `{"flagged":[{"index","item","reason"}...]}`. It
+SUPPLEMENTS the skill's C3 judgment (never blocks, never replaces it).
 
 C2's deterministic floor (cheap, no LLM) flags "drift suspect" when any of: commits
 since the charter was last touched `> stale_commits`; wall-clock `> stale_days`;
@@ -149,6 +153,12 @@ The binary is thin and deterministic:
 | `compass pivot-check` | print the pivot-or-persevere signal from the trailing outcome streak as `{recommendation, streak, threshold, reason}` (always exits 0, for flow to gate on) |
 | `compass opportunity add --title <T> [--outcome <ref>] [--weight <f>]` | record a named bet (PDO OST) under the active outcome (charter `north_star` unless `--outcome` overrides) |
 | `compass opportunity list [--json] [--outcome <ref>]` | list the named bets under the active outcome; `--json` prints a JSON array |
+| `compass discovery record --title <T> [--session-id <ID>]` | append a discovery row for `<T>` under the given (or env-derived) session, for cross-session dedup; fail-soft, always exits 0 |
+| `compass discovery select [--fingerprint <FP>] [--title <T>]` | mark a discovered task `Selected` (fingerprint given verbatim, or derived from `--title`); fail-soft |
+| `compass discovery list [--json]` | list discovery rows; `--json` prints a JSON array (`[]` when empty); fail-soft, always exits 0 |
+| `compass c3-screen` | advisory deterministic screen for the C3 "observable DoD" gate: flags vague/non-observable `definition_of_done` items as `{"flagged":[{"index","item","reason"}...]}`; SUPPLEMENTS the skill's C3 judgment, never blocks |
+| `compass suggest-verdict --tests-delta <N> [--regressions <N>] [--gap-closed]` | advisory deterministic DEFAULT verdict for `compass outcome`, derived from observed facts; prints `{"suggested":"forward\|unchanged\|backward"}` (the skill can still override via `outcome --verdict`) |
+| `compass score --severity <high\|medium\|low> --effort <xs\|s\|m\|l\|xl> --lens <l1..l5> --goal-proximity <f64>` | deterministic priority score exposing the harness-core scorer — `(severity × goal_proximity) ÷ effort`, with L2/security and L5/safety lenses up-weighted 1.5× — so the scout skill can rank candidates without LLM hand-arithmetic; prints `{"score": f64}` |
 
 ## Configuration
 
@@ -232,7 +242,7 @@ a Mac.
 ## Plugin layout
 
 ```
-.claude-plugin/plugin.json     # plugin manifest (version 0.1.2)
+.claude-plugin/plugin.json     # plugin manifest (version 0.1.6)
 hooks/hooks.json               # SessionStart=nudge / Stop=breadcrumb → ${CLAUDE_PLUGIN_ROOT}/bin/compass
 skills/compass/SKILL.md        # the /compass skill (drives the carve loop)
 bin/compass                    # POSIX launcher → compass-<os>-<arch>

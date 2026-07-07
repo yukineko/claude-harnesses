@@ -48,7 +48,7 @@ oversized diff can never permanently trap the turn.
 ### As a plugin (subscription, no build)
 
 ```
-/plugin marketplace add yukineko/reviewgate
+/plugin marketplace add yukineko/claude-harnesses
 /plugin install reviewgate@yukineko
 ```
 

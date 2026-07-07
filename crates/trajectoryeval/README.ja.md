@@ -60,6 +60,20 @@ evalkit / schemaguard と同じ 0/1/2 ゲートポリシーに従う。
 | `1`  | 逸脱あり (missing / unexpected / 順序違反) |
 | `2`  | harness エラー (入力が読めない / パースできない) |
 
+## condukt への組み込み (Phase 6)
+
+`trajectoryeval` は単なるスタンドアロンバイナリではない — condukt のタスク schema は
+`expected_trajectory: {mode, steps:[{tool}]}` という省略可フィールドを持ち
+(`crates/condukt/src/model.rs`)、正しさが「何ができたか」だけでなく「どうやったか」に
+依存するタスクでは condukt-interpreter がこれを埋める。タスクがこれを持つ場合、condukt の
+Phase 6 (`crates/condukt/skills/condukt/SKILL.md`) は worker sub-agent の transcript に対して
+`extract` を実行し、その結果を通常の出力検証と**並行して** `check` に流し込む — 第2の、経路面の
+verifier 次元として機能する。`trajectoryeval` バイナリが `PATH` に無い場合・タスクに
+`expected_trajectory` が無い場合・worker の transcript が解決できない場合は、このステップは
+まるごと skip される (fail-soft・Phase 6 を壊さない)。経路の逸脱 (exit `1`) は出力の判定を
+**上書きしない** — 出力が `done_criteria` を満たせばそのタスクは `verified` のままとなり、
+逸脱は HOTL 可視化のため `reason` として記録される。
+
 ### 最小例
 
 ```sh

@@ -17,8 +17,8 @@ The `backlog` binary owns the queue and its exclusive run-lock:
 
 | Subcommand | What it does |
 |---|---|
-| `add` | Append a task (`--title`, `--project`, `--tag`, `--priority p0/p1/p2`, `--notes`, `--weight`) |
-| `list` | List tasks, filterable by `--tag` / `--project` / `--status` |
+| `add` | Append a task (`--title`, `--project`, `--tag`, `--priority p0/p1/p2`, `--notes`, `--weight`, `--force`) |
+| `list` | List tasks, filterable by `--tag` / `--project` / `--status` (vocabulary is `pending`/`done`/`failed` — not `open`, that's `hypothesis`'s vocabulary) |
 | `next` | Print the next highest-priority pending task as JSON |
 | `done <id>` | Mark a task done |
 | `fail <id>` | Mark a task failed (`--reason`); defers re-run by 2 days |
@@ -30,6 +30,13 @@ The `backlog` binary owns the queue and its exclusive run-lock:
 The lock is how concurrent sessions serialize: a `/flow` driver acquires it
 before draining the queue, and other sessions back off when `lock status`
 reports an active holder.
+
+The bundled `/backlog` skill is a thin entry point over queue/state
+operations (`list` / `next` / `done` / `fail` / `lock`), passed a subcommand as
+its argument. To drain the whole queue automatically, use **`/flow`** instead —
+it's the superset driver (lock acquire → pick item → `/condukt` → done/fail →
+lock release), also wired for the compass freshness gate, budgetguard, and
+fugu-router model selection.
 
 ## Why it exists
 
@@ -64,6 +71,27 @@ backlog uninstall           # remove it again
 
 `install`/`uninstall` accept `--dry-run` to print the resulting settings without
 writing.
+
+## Duplicate-task rejection (content hashkey)
+
+`add` derives a **content hashkey** from the title and project (title trimmed →
+Unicode NFKC → lowercased → runs of whitespace collapsed to one space →
+leading/trailing punctuation stripped, folded with `project` via 64-bit FNV-1a
+into a 16-hex-digit key) and rejects the add when either is true (`done` never
+blocks a re-add of the same title — requeuing the same work later is
+legitimate):
+
+- an existing `pending` or `failed` task already has that hashkey, or
+- `condukt` is on `PATH` and `condukt state is-claimed --hashkey <h>` exits 0
+  (another live session holds a claim on it). If `condukt` is missing or errors
+  for any other reason, this check fails soft to "no claim" — a missing/broken
+  `condukt` never fails the `add`.
+
+Either rejection can be bypassed intentionally with `backlog add --force`.
+
+Each element of `backlog list --json` carries a `hashkey` field (computed from
+title + project, not stored) so upstream drivers like `/flow` can gate on
+`condukt state is-claimed` for free.
 
 ## Build
 

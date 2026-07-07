@@ -27,8 +27,10 @@ evalkit は、ゴールデンとして固定した `*.jsonl` ケースを読み�
 | `assert.exit` | 期待する終了コード（`cmd` のみ） |
 | `assert.contains` / `not_contains` | 現れる／現れてはならない部分文字列 |
 | `assert.regex` / `not_regex` | マッチする／してはならない正規表現 |
+| `draft` | 人手のアサーションを待つ昇格ドラフト。実行時はスキップされる（pass/fail どちらにもならない） |
 
-1 ケースは `file` か `cmd` の**ちょうど一方**を持つ。
+1 ケースは `file` か `cmd` の**ちょうど一方**を持つ——ただし `draft: true` の
+ケースはまだ subject を持たないため、この要件を免除される。
 
 ## どうして必要か
 
@@ -57,6 +59,8 @@ evalkit list                                  # ケースを実行せず一覧�
 
 `--bin-dir DIR` は `cmd` ケースの解決時に `PATH` の先頭へ追加される。これにより、ビルドしたての `target/release/<tool>` をインストールせずに走らせられる。
 
+`draft` ケースは `skip ... (draft — assertion pending)` として報告され、別枠で集計される——pass/fail の終了コードには一切寄与しない。
+
 ### canary: 同じゴールデンを 2 バージョンで再生する
 
 `evalkit canary` は 2 つの `evalkit run --json` 出力を差分比較する。同じゴールデン集合を 2 つの地点（PR の base と head、旧 SKILL.md と新 SKILL.md）で再生し、プロンプト編集が挙動を変えたときに*どのゴールデンが動いたか*を見せる。
@@ -83,5 +87,8 @@ evalkit canary --baseline base.json --current head.json --fail-on-regression # p
 
 - `evals/skill-invariants.jsonl` — プラグイン `SKILL.md` に固定したハードルール。
 - `evals/cli-contracts.jsonl` — CLI の出力／終了コード契約。
+- `evals/replay/replayed.jsonl` — 昇格済みの condukt トラジェクトリ再生ケース
+  （`evals/replay/fixtures/` 配下のフィクスチャに対して `replaykit verify` を
+  アサートする `cmd` ケース）。
 
 新しい不変条件を成文化するたびに 1 行を足す。CI 配線は `.github/workflows/eval.yml` がワークスペースをビルドし、push/PR ごとに `evalkit run --bin-dir target/release` を回す。不変条件が落ちればマージ前にジョブが赤くなる。`/flow` のリリース前ゲートとして `evalkit run` を組み込むこともできる。

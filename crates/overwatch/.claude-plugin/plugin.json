@@ -1,6 +1,6 @@
 {
   "name": "overwatch",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Project-global cross-session execution ledger + dedup guard + PDO progress view. Manages claim registry with heartbeat-based liveness and skip-on-duplicate contract for distributed session coordination.",
   "author": { "name": "yukineko" },
   "keywords": ["pdo", "cross-session", "progress", "ledger", "dedup", "hotl", "rust"]

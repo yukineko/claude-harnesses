@@ -175,13 +175,13 @@ git add bin/ && git update-index --chmod=+x bin/daily bin/daily-*
 | Host | File | Status |
 |---|---|---|
 | macOS Apple Silicon | `bin/daily-darwin-arm64` | bundled |
-| Linux x86_64 | `bin/daily-linux-x86_64` | build with `scripts/build-plugin-bin.sh` on Linux |
-| macOS Intel | `bin/daily-darwin-x86_64` | built in CI on a macOS runner |
+| Linux x86_64 | `bin/daily-linux-x86_64` | bundled |
+| macOS Intel | `bin/daily-darwin-x86_64` | bundled |
 
 ## Plugin layout
 
 ```
-.claude-plugin/plugin.json     # plugin manifest (version 0.1.0)
+.claude-plugin/plugin.json     # plugin manifest
 hooks/hooks.json               # SessionStart=session-start → ${CLAUDE_PLUGIN_ROOT}/bin/daily
 bin/daily                      # POSIX launcher → daily-<os>-<arch>
 bin/daily-<os>-<arch>          # prebuilt binaries

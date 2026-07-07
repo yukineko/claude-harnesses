@@ -34,6 +34,7 @@ Claude Code プラグインとしては、バンドル済みの `bin/gauge` が 
 ```sh
 cargo install --path .
 gauge install        # Stop フックを ~/.claude/settings.json にマージする
+gauge uninstall      # 元に戻す
 ```
 
 集計・確認の主なサブコマンド:

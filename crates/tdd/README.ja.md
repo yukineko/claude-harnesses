@@ -38,6 +38,13 @@ harness の他のゲートに対する「test-first の兄弟」にあたる。`
 
 タスク ID を 1 つ決め（例: スラッグ `parse-csv`）、以降 `--task <id>` に使う。テストコマンドは `--cmd` 引数を優先し、無ければ `tdd.toml` の `test_cmd`（既定 `cargo test`）。`tdd red` がテストの失敗を確認できなければ「振る舞いをまだ試せていない」ので失敗テストを書き直す。`tdd green` は RED 証跡が無いと拒否する。
 
+`tdd oracle --task <id>` はタスクの証跡から RED→GREEN の遷移を分類し、JSON レポート
+（`{"transition":"fail_to_pass","valid_fp_oracle":true,…}`）を出力する。有効な
+Fail→Pass のときだけ exit 0（fail-soft: 証跡が無い/壊れている場合は panic せず
+`transition:"unknown"` を報告する）。`/tdd` skill 自体のフェーズには含まれず、`condukt` の
+Fail→Pass ゲート（`condukt state check-oracle`）が `fix`/`feature` タスクの RED/GREEN 証跡を
+決定論的に検証するために呼ぶ機械オラクルである。
+
 ### サブコマンド
 
 | サブコマンド | 目的 |
@@ -46,6 +53,7 @@ harness の他のゲートに対する「test-first の兄弟」にあたる。`
 | `tdd red --task <id> [--cmd ...]` | テストを実行し**失敗**を要求して RED 証跡を記録する。既に通っていれば拒否（test-first 不成立）。 |
 | `tdd green --task <id> [--cmd ...]` | 先行 RED 証跡を要求し、テストを実行して**成功**を要求し GREEN 証跡を記録する。 |
 | `tdd verify --task <id>` | RED と GREEN の両証跡が揃っていれば exit 0。 |
+| `tdd oracle --task <id>` | RED→GREEN の遷移を分類し JSON 判定を出力する（上記参照）。有効な Fail→Pass のときだけ exit 0。 |
 | `tdd status` | 解決された設定と、cwd に対してゲートが何をするかを表示する。 |
 | `tdd init` | スターター `./tdd.toml` を書き出す。 |
 | `tdd install` / `tdd uninstall` | `~/.claude/settings.json` に Stop hook をマージ／除去する（プラグインユーザーは不要）。 |

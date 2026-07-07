@@ -92,7 +92,7 @@ set `PROPGUARD_DISABLE=1`.
 ### As a plugin (subscription, no build)
 
 ```
-/plugin marketplace add yukineko/propguard
+/plugin marketplace add yukineko/claude-harnesses
 /plugin install propguard@yukineko
 ```
 

@@ -67,7 +67,9 @@ fugu-router record --title "<task title>" --files "<touched_files>" \
 
 ```
 fugu-router suggest --files src/auth/login.ts "fix login validation"  # 単発でモデルの当たりを見る
-fugu-router procedures search --file decomp.json  # 似た検証済みタスクの解き方を k-NN で引く
+fugu-router confidence --files src/auth/login.ts "fix login validation"  # [0,1] の較正済み合格確率
+fugu-router procedures search --query "fix login validation" --files a,b --k 3
+                                             # 似た検証済みタスクの解き方を k-NN で引く
 fugu-router stats [--json]                  # モデル別 pass率 / 平均コスト（HOTL 可視化）
 fugu-router label "add login" --verdict bad --by human   # 人間が実績を訂正（--latest も可）
 fugu-router fingerprint [--dir crates]      # SKILL.md コーパスのバージョンスタンプ
@@ -78,6 +80,11 @@ fugu-router init                            # fugu-router.toml を書き出す
 ```
 
 `procedures search` サブコマンドは、似た検証済みタスクが*どう解かれたか*を k-NN で引いて condukt の interpreter を seed する（独立した `playbook` プラグインの知識ノート注入とは別物。旧名 `playbook` は隠しエイリアスとして残る）。
+
+`confidence` サブコマンドは、`route`/`suggest` と同じ k-NN 近傍の類似度加重 pass率
+（`Episode::effective_pass` 経由なので `label` の人間判定も反映される）を `[0,1]` の一値で返す。
+近傍が `min_samples` 未満なら中立の prior `0.5` にフォールバックする（履歴不足はエラーではなく
+最大不確実な回答として扱う）。純粋関数・決定論（同じストア状態＋同じ入力→バイト同一の出力）で LLM は使わない。
 
 ### インストールと配線
 

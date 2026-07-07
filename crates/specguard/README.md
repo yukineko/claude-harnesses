@@ -27,10 +27,15 @@ There are two ways to run it, both sharing **the same `specguard` binary**:
 | read-only enforcement | `claude --print` **Bash-arg allowlist** (strong) | subagent **tool-name** restriction (weaker) |
 | Entry point | `specguard run` (cron, etc.) | `/specguard:run` (interactive / HOTL) |
 
-→ For the design and invariants see **[DESIGN.md](DESIGN.md)** /
+→ For specguard's own verification-gate design see
 **[DESIGN-VERIFY.md](DESIGN-VERIFY.md)** (Japanese); the canon for the audit
 policy (classification, verdict vocabulary, discipline) is
-`templates/audit-prompt.md`.
+`templates/audit-prompt.md`. **[DESIGN.md](DESIGN.md)** (+
+[DESIGN-INTAKE.md](DESIGN-INTAKE.md)) documents `specforge`, the
+generation-side sibling harness that lives in this same crate
+(`src/forge/`, binary `specforge`) and calls specguard back as its
+read-only accept-gate; it ships no `/specforge:*` slash commands yet, so it
+is not part of this plugin's surface below.
 
 ---
 

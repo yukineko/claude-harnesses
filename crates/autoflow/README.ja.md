@@ -2,7 +2,7 @@
 
 > 🌐 [English](README.md) ・ **日本語**
 
-セッション終了時の auto-flow ゲート — やり残しを抱えたままセッションが終わるのを防ぐ **Stop** フックと、backlog に未消化アイテムがあれば `/flow` を提案する **SessionStart** フックの 2 つ。
+セッション終了時の auto-flow ゲート — やり残しを抱えたままセッションが終わるのを防ぐ **Stop** フックと、backlog に未消化アイテムがあれば `/flow` を提案する **SessionStart** フックに加え、`/compact` を跨いでもループを継続させる **PreCompact** + **UserPromptSubmit** の組。
 
 ## 目的
 
@@ -20,7 +20,9 @@ autoflow は、ターンが終わったときに「まだ片付いていない�
 
 暴走防止として、ブロックは自動では 4 回までで、5 回目のプロンプト以降は続行前にユーザーへ確認する。compass はソフト依存であり、存在しない／パースできない場合は charter を新鮮とみなして処理を進める。また別の生きたセッションが backlog ロックを保持している間は autoflow は完全に撤退し、稼働中の `/flow` や `/backlog` driver を二重に駆動しない。
 
-サブスクリプションネイティブな設計で、2 つのフックと同梱の Rust バイナリだけで動き、**API キーは不要**、デーモンも不要。Stop フックは理由付きの `block` 判定を出すだけで、自身が作業を実行することはない。状態ファイルが無い場合や stdin が空の場合は exit 0 で抜けるため、ターンが壊されることはない。
+**PreCompact** では、このセッションが backlog ロックを保持しており（＝実際に `/flow` ループを駆動中）、ユーザーが opt-out（`resume_flow_on_compact = false`）していなければ、resume マーカーを書き込む — compaction 自体をブロックすることはない。続く **UserPromptSubmit** はそのマーカーを（あれば）消費し、「`/flow` を再開せよ」という指示を一度だけ注入する。マーカーが無い通常のターンでは常に黙る。
+
+サブスクリプションネイティブな設計で、4 つのフックと同梱の Rust バイナリだけで動き、**API キーは不要**、デーモンも不要。Stop フックは理由付きの `block` 判定を出すだけで、自身が作業を実行することはない。状態ファイルが無い場合や stdin が空の場合は exit 0 で抜けるため、ターンが壊されることはない。
 
 ## どうして必要か
 
@@ -30,16 +32,18 @@ autoflow は、ターンが終わったときに「まだ片付いていない�
 
 ## どう使うか
 
-プラグインマーケットプレイス経由でインストールすると、同梱の `hooks/hooks.json` が **Stop** と **SessionStart** の両フックを `${CLAUDE_PLUGIN_ROOT}/bin/autoflow` に自動配線する。ほかに設定は要らず、ゲートはデフォルトで有効。しきい値（最小ターン数・最小ツールイベント数・backlog プロンプトの最大回数）は config のデフォルト値から来る。
+プラグインマーケットプレイス経由でインストールすると、同梱の `hooks/hooks.json` が **Stop**・**SessionStart**・**PreCompact**・**UserPromptSubmit** の全フックを `${CLAUDE_PLUGIN_ROOT}/bin/autoflow` に自動配線する。ほかに設定は要らず、ゲートはデフォルトで有効。しきい値（最小ターン数・最小ツールイベント数・backlog プロンプトの最大回数・resume-flow-on-compact）は config のデフォルト値から来る。
 
 スタンドアロン（cargo）で使う場合:
 
 ```sh
 cargo install --path .
-autoflow stop           # Stop フック: record→condukt→backlog の状態機械を実行
-autoflow session-start  # SessionStart フック: backlog に未消化があれば /flow を提案
+autoflow stop            # Stop フック: record→condukt→backlog の状態機械を実行
+autoflow session-start   # SessionStart フック: backlog に未消化があれば /flow を提案
+autoflow pre-compact     # PreCompact フック: このセッションがロックを保持していれば resume マーカーを書く
+autoflow prompt-submit   # UserPromptSubmit フック: マーカーを消費して「/flow を再開」を一度だけ注入
 ```
 
-`autoflow stop` は stdin でフック JSON を読み、`block` 判定を出力する（または何も出力しない）。`autoflow session-start` は `additionalContext` の提案を出力する（または何も出力しない）。`AUTOFLOW_DISABLE=1` でゲートを無効化できる。
+`autoflow stop` は stdin でフック JSON を読み、`block` 判定を出力する（または何も出力しない）。`autoflow session-start` は `additionalContext` の提案を出力する（または何も出力しない）。`autoflow pre-compact` と `autoflow prompt-submit` は resume マーカーのゲートが成立しない限り黙る。`AUTOFLOW_DISABLE=1` でゲートを無効化できる。
 
 同梱の `bin/autoflow-*` バイナリがプラグインの出荷物であり、エンドユーザーは cargo も API キーも不要。フックが依存する挙動を変えたときは、ワークスペースをビルド（`cargo build --workspace --release`）して再コミットする。テストは `cargo test` で実行する。

@@ -28,6 +28,7 @@ binary, so the distributed `crates/<plugin>/bin/` never references
 | `spans` | Span model + defensive JSONL loader (`~/.tracekit/<run_id>/spans.jsonl` on-disk contract) |
 | `session` | Canonical per-session record (`<state_dir>/sessions/<id>.json`) |
 | `usage` / `transcript` | Streaming JSONL transcript reader + per-model token/usage aggregation (never loads a whole transcript) |
+| `estimate` | The one bundled transcript → (usage, cost) estimator (`estimate_transcript_cost`, re-exported at the crate root), folding `usage::aggregate` + `pricing::session_cost` into a single call — `gauge`, `budgetguard`, and `session-insights` all consume this instead of each hand-rolling the aggregate-then-price pair |
 | `metrics` | The append-only JSONL metrics SINK, parallel-safe |
 | `pricing` | Model→USD cost table incl. cache read/write multipliers |
 | `ledger` | Persistent daily spend ledger (`~/.budgetguard/state/ledger.json`) |
@@ -37,6 +38,7 @@ binary, so the distributed `crates/<plugin>/bin/` never references
 | `interrogate` | Domain-agnostic gate-by-gate interrogation control structure |
 | `shell` | Cross-platform shell invocation, single source of truth |
 | `trust` | Workspace-trust gate for honoring command strings from project-local config |
+| `scorer` | Deterministic priority scorer (`score`, re-exported at the crate root): `severity_weight × clamp(goal_proximity, 0.0, 1.0) ÷ effort_factor × lens_multiplier`. Pure and referentially transparent — no clock, no RNG, no I/O. `L2`/`L5` (scout's security/safety lenses) carry a >1.0 multiplier ("壊さない・安全側") |
 
 ## Install (plugin)
 

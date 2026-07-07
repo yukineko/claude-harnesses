@@ -33,12 +33,15 @@ curate candidates                       # list promotable playbooks (mech | draf
 curate promote "add login" --dataset auth   # → evals/curated/auth.jsonl
 curate promote --latest                 # the most recent playbook
 curate promote "x" --draft              # force a draft even if mechanical
+curate promote --latest --store /path/to/playbooks.jsonl  # override the playbook store
 ```
 
-Promotions append to `evals/curated/<name>.jsonl` (deduplicated by case id) under
-`--root` (default CWD). evalkit discovers `evals/` **recursively**, so a promoted
-case is picked up by `evalkit run` and the `eval.yml` CI gate with no config
-change.
+Both `candidates` and `promote` accept `--store` to override the playbook store
+path (default `~/.fugu-router/playbooks.jsonl`). Promotions append to
+`evals/curated/<name>.jsonl` (deduplicated by case id) under `--root` (default
+CWD), inside the `--evals-dir` (default `evals`). evalkit discovers `evals/`
+**recursively**, so a promoted case is picked up by `evalkit run` and the
+`eval.yml` CI gate with no config change.
 
 ## The loop it closes
 

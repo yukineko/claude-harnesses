@@ -45,6 +45,15 @@ blastguard はこの「破壊的だが不可逆な少数のパターン」だけ
 （panic の握り潰しは `harness_core::hook::run_hook` が保証する）。広く構えすぎて通常
 作業を妨げるより、明確に危険なものだけを確実に止めることを優先している。
 
+## ライブラリとしての再利用
+
+`src/lib.rs` は同じ検出ロジックを他クレートへも公開している（純粋関数・I/O なし）:
+specguard の forge は LLM が生成した `test_cmd` を `sh -c` に渡す前に
+`detect::detect` で検証し、condukt のスケジューラは段階的な
+`classify::classify`（risk / reversibility 判定）を使って、上流の LLM が
+誤ラベル付けした場合でも deploy・`git push`・release のような対外的で不可逆な
+アクションを GATED ゲートへ強制的に通す。
+
 ## どう使うか
 
 プラグインとして導入すれば、追加の起動操作は不要。slash command は持たず、

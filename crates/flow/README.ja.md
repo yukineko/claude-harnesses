@@ -54,6 +54,8 @@ skill `/flow` でループを起動する。
 
 ```
 0. 引数分岐 — 課題文があれば condukt に直行（1 件だけ実行）
+0.5. 自律ゲート — `condukt state autonomy-check`。自律モードなら各 human gate を
+     `condukt policy answer`（risk×reversible×confidence の graded 判定）に通す（下記参照）
 1. compass ゲート — charter が陳腐なら自動実行せず /compass を促して停止
 2. ロック取得 — backlog lock acquire（クロスセッション直列化）
 3. 実行ループ — 優先度順にピック（claim-skip ゲート）→ 着手前に claim（TOCTOU ガード）→ /condukt → 検証 → sink
@@ -61,10 +63,50 @@ skill `/flow` でループを起動する。
              / hypothesis は出荷で awaiting-measurement、計測後に validate/reject（証拠必須）
              / fugu-router に record
              / いずれも claim を release、ループ中は heartbeat で claim を live に保つ
-4. ロック解放 — source が尽きる/予算超過/中断で lock release + サマリ報告
+4. ロック解放 — source が尽きる/予算超過/中断で lock release + サマリ報告 + pivot-check
 ```
 
-早期脱出（ユーザー中断・連続失敗 3 件以上・予算超過・compass が再スコープを示す）に当たってもロック解放は必ず行う。
+### 自律ゲート（`condukt policy answer`）
+
+ループ中、本来ならユーザーに `AskUserQuestion` で確認する箇所はすべて、まず**グローバルな自律スイッチ**を通す。
+
+```bash
+condukt state autonomy-check   # exit 0 = 自律 / exit 1（既定）= 非自律
+```
+
+- **非自律（既定・exit 1、または `answer` サブコマンド未対応）** — 変更なし。後方互換で
+  以下のゲートは従来どおり全てユーザーに確認する。
+- **自律（exit 0）** — 各ゲートは固有の risk × reversibility × confidence を添えて
+  `condukt policy answer` に通され、決定論的な verdict を返す:
+  - **auto（exit 0）** — 推奨オプションを自答し、`gate-decisions.jsonl` に記録する
+    （`condukt policy answers` で後から監査可能）。**Ask しない**。
+  - **escalate（exit 2）** — 従来どおり `AskUserQuestion`（pivot 判断は必ずここに落ちる＝
+    genuine な戦略判断は人間に残す）。
+  - **block（exit 3）** — 誰にも聞かず拒否して停止する。
+  - それ以外（不正入力・`answer` 未対応）は安全側にフォールバックして escalate 扱い。
+
+| ゲート | 典型 verdict | auto 時の既定 |
+|---|---|---|
+| ロック競合（Step 2・生きた保有者） | auto | stand down（報告して clean exit。`--force` 自動奪取はしない） |
+| resume 選択（複数候補） | auto | 既存の優先度 pick 順 |
+| pivot-check（Step 4） | **escalate** | —（常に人間の判断） |
+| 循環ブレーカー trip（早期脱出） | auto | clean stop |
+
+自律モードでも、次の4つは常に人間で止まる: **(a)** worker blocked のエスカレーション、
+**(b)** deploy/push の GATED 承認、**(c)** pivot の判断、**(d)** `policy answer` 自体が
+escalate/block を返したゲート。
+
+早期脱出の詳細:
+
+| 状況 | 対応 |
+|---|---|
+| ユーザーが中断を指示 | 直ちに Step 4（ロック解放）へ |
+| 循環ブレーカーが trip（`condukt circuit check` が毎イテレーション failure-streak上限・予算超過・no-progress stall を判定） | 決定論的に clean stop（人にも policy にも聞かない hard stop）。非自律での追加確認は `AskUserQuestion` フォールバックのみ |
+| budgetguard が予算超過を返す | ループ終了（予算軸は上の circuit check にも統合済み） |
+| compass ゲートが再スコープを示す | ループを止め `/compass` を促す |
+| `backlog next` が予期しないエラー | 報告して Step 4 へ |
+
+いずれの早期脱出でもロック解放は必ず行う。
 
 ### SessionStart hook
 
@@ -116,7 +158,7 @@ git add bin/ && git update-index --chmod=+x bin/flow bin/flow-*
 ## プラグイン構成
 
 ```
-.claude-plugin/plugin.json     # プラグインマニフェスト（version 0.1.3）
+.claude-plugin/plugin.json     # プラグインマニフェスト（version 0.1.6）
 hooks/hooks.json               # SessionStart=propose → ${CLAUDE_PLUGIN_ROOT}/bin/flow
 skills/flow/SKILL.md           # /flow skill（source→executor ループを駆動）
 bin/flow                       # POSIX ランチャ → flow-<os>-<arch>

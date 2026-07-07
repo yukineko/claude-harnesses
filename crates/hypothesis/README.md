@@ -139,7 +139,7 @@ git add bin/ && git update-index --chmod=+x bin/hypothesis bin/hypothesis-*
 ## Plugin layout
 
 ```
-.claude-plugin/plugin.json     # plugin manifest (version 0.1.0)
+.claude-plugin/plugin.json     # plugin manifest (version 0.1.2)
 hooks/hooks.json               # SessionStart=session-start → ${CLAUDE_PLUGIN_ROOT}/bin/hypothesis
 skills/hypothesis/SKILL.md     # the /hypothesis skill (manage the lifecycle)
 skills/add/SKILL.md            # the /add skill (add a bet, link to a compass goal)

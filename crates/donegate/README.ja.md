@@ -47,6 +47,7 @@ CLI を手動で使う場合の典型的な流れ:
 cargo install --path .
 cd your/project
 donegate init          # スタックを自動検出してスターター donegate.toml を生成
+donegate trust         # このプロジェクトの donegate.toml を信頼する（プロジェクト設定は信頼ゲート付き）
 donegate install       # Stop フックを ~/.claude/settings.json にマージ（バックアップを取る）
 ```
 

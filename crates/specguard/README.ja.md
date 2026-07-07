@@ -21,6 +21,12 @@ templates/ ───────┼──▶ プロンプト描画 ──▶ age
 
 監査は 3 つの次元で行う (正典は `templates/audit-prompt.md` / `decisions-prompt.md`)。
 
+specguard 自体の検証ゲート設計は **[DESIGN-VERIFY.md](DESIGN-VERIFY.md)** を参照。
+**[DESIGN.md](DESIGN.md)**(+ [DESIGN-INTAKE.md](DESIGN-INTAKE.md))は同じ crate に同居する
+生成側の兄弟ハーネス `specforge`(`src/forge/`、バイナリ名 `specforge`)の設計であり、
+specguard を read-only の受け入れゲートとして呼び返す。`/specforge:*` のスラッシュコマンドは
+まだ無く、以下で説明する本プラグインの対象範囲には含まれない。
+
 - **D1 実装↔正典 drift**: 実装が正典からずれていないか (矛盾は誤読/コード違反/正典陳腐化に分類)。
 - **D2 仕様品質**: 正典 doc 自体の沈黙・矛盾・重複。
 - **D3 決定ログ鮮度・陳腐化**: 仕様変更の *理由* を canon commit に pin し、決定が今も成立するか照合 (`[decisions]` で有効化)。

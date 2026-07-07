@@ -6,9 +6,13 @@ hook that proposes `/flow` when the backlog has pending work. When a turn
 finishes, autoflow prompts `/record` once, then loops `/condukt` until the
 project's pending tasks are cleared, and finally drains the cross-project
 backlog. It blocks the Stop automatically up to 4× and, from the 5th prompt
-onward, asks the user before continuing so a stuck loop can't run away.
+onward, asks the user before continuing so a stuck loop can't run away. A
+**PreCompact** + **UserPromptSubmit** pair keeps that same loop alive across a
+`/compact`: PreCompact drops a resume marker when this session holds the
+backlog lock, and the next UserPromptSubmit consumes it to re-inject a
+"resume /flow" instruction exactly once.
 
-Subscription-native: two hooks plus a bundled Rust binary, **no API key**, no
+Subscription-native: four hooks plus a bundled Rust binary, **no API key**, no
 daemon. The Stop hook only ever emits a `block` decision with a reason — it
 never runs work itself, and a missing state file or empty stdin exits 0 so the
 turn is never broken.
@@ -36,6 +40,13 @@ and, when open items exist and the charter is fresh, injects a one-line `/flow`
 proposal as context; if the charter is stale it nudges `/compass` instead. With
 nothing pending it stays silent, so it never breaks a turn on session open.
 
+At **PreCompact**, if this session currently holds the backlog lock (i.e. a
+`/flow` loop is actually driving it) and the user hasn't opted out
+(`resume_flow_on_compact = false`), autoflow writes a resume marker — it never
+blocks compaction. The following **UserPromptSubmit** consumes that marker (if
+any) and injects a "resume `/flow`" instruction exactly once; every ordinary
+turn without a marker stays silent.
+
 ## Why it exists
 
 Long sessions tend to end with loose ends — a `/record` never taken, condukt
@@ -50,21 +61,25 @@ holds the lock.
 ## Install (plugin)
 
 Installed via the plugin marketplace, the bundled `hooks/hooks.json` wires the
-**Stop** and **SessionStart** hooks to `${CLAUDE_PLUGIN_ROOT}/bin/autoflow`
-automatically — nothing else to do. Thresholds (min turns, min tool events, max
-backlog prompts) come from config defaults; the gate is on by default.
+**Stop**, **SessionStart**, **PreCompact**, and **UserPromptSubmit** hooks to
+`${CLAUDE_PLUGIN_ROOT}/bin/autoflow` automatically — nothing else to do.
+Thresholds (min turns, min tool events, max backlog prompts,
+resume-flow-on-compact) come from config defaults; the gate is on by default.
 
 ## Standalone (cargo)
 
 ```sh
 cargo install --path .
-autoflow stop           # Stop hook: run the record→condukt→backlog state machine
-autoflow session-start  # SessionStart hook: propose /flow when backlog has pending items
+autoflow stop            # Stop hook: run the record→condukt→backlog state machine
+autoflow session-start   # SessionStart hook: propose /flow when backlog has pending items
+autoflow pre-compact     # PreCompact hook: drop a resume-flow marker if this session holds the lock
+autoflow prompt-submit   # UserPromptSubmit hook: consume the marker and re-inject "/flow を再開" once
 ```
 
 `autoflow stop` reads the hook JSON on stdin and prints a `block` decision (or
 nothing); `autoflow session-start` prints an `additionalContext` proposal (or
-nothing). `AUTOFLOW_DISABLE=1` silences the gate.
+nothing); `autoflow pre-compact` and `autoflow prompt-submit` are silent unless
+the resume-marker gate is met. `AUTOFLOW_DISABLE=1` silences the gate.
 
 ## Build
 

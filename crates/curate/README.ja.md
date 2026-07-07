@@ -35,12 +35,13 @@ curate candidates                            # 昇格可能な playbook を一�
 curate promote "add login" --dataset auth    # → evals/curated/auth.jsonl
 curate promote --latest                      # 直近に記録された playbook を昇格
 curate promote "x" --draft                   # 機械的でも強制的に draft にする
+curate promote --latest --store /path/to/playbooks.jsonl  # playbook ストアを明示指定
 ```
 
 主なサブコマンド:
 
-- `curate candidates` — playbook ストア（既定 `~/.fugu-router/playbooks.jsonl`）を読み、昇格可能なエントリを `mech`（自動でコマンド化できる）/ `draft` 別に一覧する。
-- `curate promote` — 1 件の playbook を golden データセットへ昇格する。`title` 部分一致（大文字小文字を無視・最新一致が優先）か `--latest` で選び、`--dataset <name>` で出力先 `evals/curated/<name>.jsonl` を決める。`--draft` で機械的でも draft 化、`--root` で出力先の基準ディレクトリ（既定 CWD）を指定する。
+- `curate candidates` — playbook ストア（既定 `~/.fugu-router/playbooks.jsonl`、`--store` で上書き可）を読み、昇格可能なエントリを `mech`（自動でコマンド化できる）/ `draft` 別に一覧する。
+- `curate promote` — 1 件の playbook を golden データセットへ昇格する。`title` 部分一致（大文字小文字を無視・最新一致が優先）か `--latest` で選び、`--dataset <name>` で出力先 `evals/curated/<name>.jsonl` を決める。`--draft` で機械的でも draft 化、`--root` で出力先の基準ディレクトリ（既定 CWD）、`--evals-dir`（既定 `evals`）で `curated/` を置くディレクトリ名、`--store` で読み込む playbook ストアのパスを指定する。
 
 昇格はケース id で重複排除しつつ `evals/curated/<name>.jsonl` に追記される。evalkit は `evals/` を**再帰的に**探索するため、昇格したケースは設定変更なしで `evalkit run` および `eval.yml` の CI ゲートに拾われる。
 

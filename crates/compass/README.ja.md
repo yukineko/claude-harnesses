@@ -83,6 +83,12 @@ evaluate ─► carve ループ ─► charter ─► gap ─► (condukt 分解
 | `compass pivot-check` | 直近 outcome ストリークから pivot/persevere シグナルを `{recommendation, streak, threshold, reason}` で出力（常に exit 0、flow の gate 用） |
 | `compass opportunity add --title <T> [--outcome <ref>] [--weight <f>]` | active outcome（既定は charter `north_star`）配下に named bet（PDO OST）を記録 |
 | `compass opportunity list [--json] [--outcome <ref>]` | active outcome 配下の named bet を一覧。`--json` は JSON 配列で出力 |
+| `compass discovery record --title <T> [--session-id <ID>]` | 指定（または env 由来）のセッション配下に discovery 行を追記（cross-session dedup 用）。fail-soft、常に exit 0 |
+| `compass discovery select [--fingerprint <FP>] [--title <T>]` | 発見済みタスクを `Selected` にする（fingerprint は verbatim か `--title` から導出）。fail-soft |
+| `compass discovery list [--json]` | discovery 行を一覧。`--json` は JSON 配列（空なら `[]`）。fail-soft、常に exit 0 |
+| `compass c3-screen` | C3「観測可能な DoD」ゲートの advisory 決定的スクリーン。曖昧/非観測可能な `definition_of_done` 項目を `{"flagged":[{"index","item","reason"}...]}` で出す。skill の C3 判定を補完するのみで、ブロックはしない |
+| `compass suggest-verdict --tests-delta <N> [--regressions <N>] [--gap-closed]` | `compass outcome` の advisory な決定的デフォルト verdict を観測事実から導出。`{"suggested":"forward\|unchanged\|backward"}` を出力（skill は `outcome --verdict` で上書き可） |
+| `compass score --severity <high\|medium\|low> --effort <xs\|s\|m\|l\|xl> --lens <l1..l5> --goal-proximity <f64>` | harness-core のスコアラーを公開した決定的優先度スコア — `(severity × goal_proximity) ÷ effort`、L2（security）/L5（safety）レンズは 1.5 倍で up-weight — scout skill が LLM の手計算なしで候補を順位付けできる。`{"score": f64}` を出力 |
 
 ### config（`.compass/config.toml`、すべて任意・既定値）
 

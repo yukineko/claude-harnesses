@@ -39,14 +39,15 @@ overwatch install
 ## コマンド
 
 ```sh
-overwatch begin --key <k>                    # キー <k> を排他的に claim する。別セッションが保持していれば exit 1
-overwatch status                             # プロジェクト全体の進捗: 有効な lease・イベント・セッション
-overwatch sessions                           # セッション一覧（live または dead）
+overwatch begin --key <k> --title <t> [--session <sid>]   # キー <k> を排他的に claim する。別セッションが live で保持していれば exit 1 + skip JSON
+overwatch run --key <k> [--note <text>]      # 保持中のリースにハートビート＋イベントを記録（キー未保持でも fail-soft）
+overwatch status [--json]                    # プロジェクト全体の進捗: 有効な lease・イベント・セッション
+overwatch sessions [--json]                  # セッション一覧（live または dead）
 overwatch pause --run <id>                   # run を一時停止（HOTL gate）
 overwatch resume --run <id>                  # 一時停止状態の run を再開（HOTL gate）
 overwatch reassign --key <k> --to <sid>    # lease の保有者を別セッションに再割当（HOTL gate）
-overwatch end --key <k>                      # キーの lease を明示的に解放（HOTL gate）
-overwatch reap [--ttl-secs <N>]             # dead lease（N 秒間ハートビート更新なし）を削除（HOTL gate）
+overwatch end --key <k> --status <s>         # キーの lease を解放し、終端 status を記録（HOTL gate）
+overwatch reap                               # dead lease（TTL 超過）を削除（HOTL gate）
 overwatch heartbeat --key <k>                # lease の TTL をリセット（lease を keep-alive）
 ```
 

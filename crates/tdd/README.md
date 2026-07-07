@@ -56,6 +56,14 @@ never trapped. Escape hatch: a one-line `.tdd-skip` file in the project root
 test-first); `tdd green` refuses without a prior RED proof. The test command
 comes from `--cmd`, else `tdd.toml`'s `test_cmd` (default `cargo test`).
 
+`tdd oracle --task <id>` classifies the task's RED→GREEN transition from its
+proofs and prints a JSON report (`{"transition":"fail_to_pass","valid_fp_oracle":true,…}`);
+it exits 0 only for a valid Fail→Pass oracle (fail-soft: a missing/corrupt
+proof reports `transition:"unknown"` rather than panicking). It isn't part of
+the `/tdd` skill's own phases — it's the machine oracle `condukt`'s Fail→Pass
+gate (`condukt state check-oracle`) calls to verify a `fix`/`feature` task's
+RED/GREEN proofs deterministically.
+
 ## Config & other subcommands
 
 `tdd` reads `./tdd.toml` (trusted projects only — its `test_cmd` is executed
@@ -73,7 +81,8 @@ verbatim), else `~/.tdd/config.toml`, else language-aware defaults. Common keys:
 `impl_globs` / `test_path_globs` / `test_markers` override the language-aware
 file/marker defaults. Other subcommands: `tdd status` (show the resolved config +
 what the gate would do), `tdd trust` (honor this project's `tdd.toml` `test_cmd`,
-untrusted by default), `tdd uninstall` (remove the Stop hook).
+untrusted by default), `tdd oracle --task <id>` (classify RED→GREEN and print
+a JSON verdict — see above), `tdd uninstall` (remove the Stop hook).
 
 ## Install
 

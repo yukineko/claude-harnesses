@@ -41,7 +41,7 @@ compass では拾えない複数の独立した施策が欲しいとき、ある
 | スコープ受領＋縮約 | 監査スコープを取り、規模（追跡ファイル数）に応じてレンズ数を決定論的に縮約（小 → L1/L5、中 → L1/L2/L4/L5、大 → 全 5）。コスト制御。 |
 | 決定論的レビュー | `git log` / `cargo test` / `compass gap` / `backlog list` / `cargo deny` などで事実を read-only 収集し、全 sub-agent に渡す。 |
 | 5 レンズ並列調査 | read-only sub-agent が逐語証拠つきの施策候補（JSON）を返す。 |
-| 統合 | 重複排除・証拠フィルタ・スコアリング（`(severity × goal への近さ) ÷ effort`、セキュリティ/安全性は重みを上げる）・`p0/p1/p2` タグ付与。 |
+| 統合 | 重複排除・証拠フィルタの後、スコアリングは決定論バイナリ `compass score` に委譲（LLM は候補ごとに `goal_proximity` だけを見積もり、`severity`/`effort`/`lens`/`goal_proximity` を渡してランキングさせる。L2/L5 の重み上げはスコアラー側に内蔵済み）。`compass score` が無い／未対応なら `(severity × goal への近さ) ÷ effort` の手計算にフォールバック。`p0/p1/p2` タグ付与。 |
 | 合意（HOTL） | 既定は `AskUserQuestion`（multiSelect）で backlog に積む施策をユーザーが選ぶ。autonomy ゲート: `condukt state autonomy-check` が autonomous を返したら選別 Ask を省き、スコア上位 N 件（既定 top 8、`p0`/`p1` 優先）を自動採用する。 |
 | 書き出し＋引き渡し | 承認施策を `backlog add`（`--tag scout`、証拠と完了条件を `--notes` に記録）し、`/flow` へ引き渡す。既定は propose-then-confirm、autonomous なら 1 件以上積んだときに `/flow` を自動起動する。 |
 

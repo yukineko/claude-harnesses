@@ -37,14 +37,15 @@ overwatch install
 ## Commands
 
 ```sh
-overwatch begin --key <k>                   # try to acquire exclusive lease on key <k>; exit 1 if held by another session
-overwatch status                            # show project-wide progress: active leases, events, sessions
-overwatch sessions                          # list all sessions (live or dead)
+overwatch begin --key <k> --title <t> [--session <sid>]   # try to acquire exclusive lease on key <k>; exit 1 + skip JSON if held by another live session
+overwatch run --key <k> [--note <text>]     # record a running heartbeat + event for a held lease (fail-soft if the key isn't held)
+overwatch status [--json]                   # show project-wide progress: active leases, events, sessions
+overwatch sessions [--json]                 # list all sessions (live or dead)
 overwatch pause --run <id>                  # pause a run (HOTL-gated)
 overwatch resume --run <id>                 # resume a paused run (HOTL-gated)
 overwatch reassign --key <k> --to <sid>    # reassign lease from current holder to <sid> (HOTL-gated)
-overwatch end --key <k>                     # explicitly release a lease (HOTL-gated)
-overwatch reap [--ttl-secs <N>]            # delete dead leases (no heartbeat for N secs) (HOTL-gated)
+overwatch end --key <k> --status <s>        # release a lease, recording its terminal status (HOTL-gated)
+overwatch reap                              # delete dead leases (no heartbeat within TTL) (HOTL-gated)
 overwatch heartbeat --key <k>               # reset the TTL for a key (keep the lease alive)
 ```
 

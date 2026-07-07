@@ -66,7 +66,9 @@ fugu-router route --file decomp.json [--report route.json]   # set suggested_mod
 fugu-router record --title "..." --files a,b --class parallel \
                    --model sonnet --status verified --cost 0.12   # feed an outcome
 fugu-router suggest --files src/auth/login.ts "fix login validation"  # one-off
-fugu-router procedures search --file decomp.json            # k-NN over how similar verified tasks were solved
+fugu-router confidence --files src/auth/login.ts "fix login validation"  # calibrated pass-probability in [0,1]
+fugu-router procedures search --query "fix login validation" --files a,b --k 3
+                                                             # k-NN over how similar verified tasks were solved
 fugu-router stats [--json]                                   # per-model pass-rate / avg cost
 fugu-router import --episodes /path/episodes.jsonl [--playbooks /path/playbooks.jsonl] [--dry-run]
                                                              # merge another machine's stores (content-hash dedup)
@@ -108,6 +110,19 @@ the version of the SKILL.md corpus that produced it (stored as
 edit that changes behaviour leaves the outcome unattributable to its cause; with
 it, outcomes can be stratified by skill version and `evalkit canary` can diff two
 versions' goldens.
+
+### `confidence` — calibrated pass-probability
+
+```bash
+fugu-router confidence --files src/auth/login.ts "fix login validation"
+```
+
+Prints a single number in `[0,1]`: the k-NN neighbourhood's similarity-weighted
+pass-rate (via `Episode::effective_pass`, so human `label`s count), the same
+retrieval `route`/`suggest` use. Falls back to the neutral prior `0.5` when
+there are fewer than `min_samples` neighbours — insufficient history is never
+an error, just a maximally-uncertain answer. Pure and deterministic: same
+store state + same inputs → byte-identical output, no LLM involved.
 
 ### `fingerprint` — version stamp for the SKILL.md corpus
 

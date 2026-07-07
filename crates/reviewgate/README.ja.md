@@ -48,7 +48,7 @@ reviewgate は、その「完了宣言の瞬間」をレビューのトリガー
 #### プラグインとして（サブスクリプション、ビルド不要）
 
 ```
-/plugin marketplace add yukineko/reviewgate
+/plugin marketplace add yukineko/claude-harnesses
 /plugin install reviewgate@yukineko
 ```
 

@@ -62,8 +62,11 @@ LLM 単体で大きな課題をオーケストレーションさせると、決�
 | `condukt state verifier-model --worker <model> [--suggested <model>]` | verifier モデルが worker モデルと決して一致しないよう解決する（共有ブラインドスポット対策）。異なる `--suggested` は尊重し、無ければ別ティアを選ぶ。選んだモデルを出力する。 |
 | `condukt consensus plan/vote` | マルチサンプル self-consistency（opt-in のコストガード）。`plan` はタスクを N 個の候補実装に fan-out すべきかを決める（exit 0 = fan-out、1 = 単一サンプル）。`vote` は N 個の verifier 判定を決定論的な多数決の勝者＋合意率に集計し、全 fail・同票・閾値未満の合意率のときは opus へエスカレーションする。 |
 | `condukt policy decide/answer/answers` | 中央集権的な **graded-autonomy ポリシー**: 決定の risk × reversibility × confidence を `auto`/`escalate`/`block` に写像する（exit code 契約: 0=auto, 2=escalate, 3=block, 1=不正入力）。`answer` は `auto` 判定のとき 1 問を非対話的に解決し（選択を journal に記録）、それ以外はフォールスルーして呼び出し側が実際の `AskUserQuestion` を出す。`answers` は auto 応答の監査証跡（人間に問わず self-answer した全質問）を出力する。 |
-| `condukt verify digest/runtime/launch` | 決定論的な verifier ステージのヘルパー（整形のみ。修正の判断は LLM worker に残る）。`digest` は生のテスト出力を構造化 `FailureDigest` に蒸留、`runtime` はターゲットのランタイム出力（exit code・panic/例外行・stderr/stdout の末尾）を蒸留し `--reflux` で pass/fail 判定、`launch` は blastguard 検証済みのエンベロープ内で実ターゲットを起動（破壊的な `--cmd` は fail-closed で拒否）しランタイム信号を reflux する（`--health-url` 指定時は exit を待たず HTTP 200 をポーリング）。`--docker`（既定 image `--image alpine:latest`）を付けると `--cmd` を `docker run --rm --network=none` の隔離コンテナ内で実行する（blastguard ゲートは docker 起動前に同様に適用、docker 自体が不在/デーモン不通なら `note:"docker_unavailable"` で fail-soft）。すべて fail-soft（exit 0）。 |
+| `condukt verify digest/runtime/launch/regressions/confidence/checks` | 決定論的な verifier ステージのヘルパー（整形のみ。修正の判断は LLM worker に残る）。`digest` は生のテスト出力を構造化 `FailureDigest` に蒸留、`runtime` はターゲットのランタイム出力（exit code・panic/例外行・stderr/stdout の末尾）を蒸留し `--reflux` で pass/fail 判定、`launch` は blastguard 検証済みのエンベロープ内で実ターゲットを起動（破壊的な `--cmd` は fail-closed で拒否）しランタイム信号を reflux する（`--health-url` 指定時は exit を待たず HTTP 200 をポーリング）。`--docker`（既定 image `--image alpine:latest`）を付けると `--cmd` を `docker run --rm --network=none` の隔離コンテナ内で実行する（blastguard ゲートは docker 起動前に同様に適用、docker 自体が不在/デーモン不通なら `note:"docker_unavailable"` で fail-soft）。`regressions --baseline <f> --current <f>` は2つの失敗テスト集合を純粋な集合差分（`current - baseline`）で比較し、verifier の回帰判定を目視でなく決定論化する。`confidence --check-executed --exit-zero --no-regressions` は LLM の自己申告ではなく観測事実から `high|medium|low` を導出する。`checks --file <task.json> [--cwd <dir>]` はタスクが宣言した `checks[]`（下記スキーマ参照）を機械オラクルとして実行し `{"all_passed":bool,"results":[...]}` を出力する。すべて fail-soft（exit 0）。 |
 | `condukt replan handoff/stats` | 決定論的な reflux カスケードのヘルパー（分類/整形のみ。再分解の判断は LLM に残る）。`handoff` は失敗タスクの reflux 事実を `escalate_model` か `replan` に分類し、`replan` のときだけ interpreter に「新しい分解を作れ」と指示する handoff を組み立てる（`--run <id>` で決定を journal 記録）。`stats --run <id>` はそのログを directive 毎の件数に集計する。 |
+| `condukt circuit check --run <id> [--streak-cap N] [--idle-ttl-secs S] [--budget-cap-usd C]` | 決定論的な CIRCUIT-BREAKER 停止条件ゲート: run の連続失敗ストリーク・idle/stall・(任意) 予算超過の3信号をすべて fail-soft に収集し、純粋な `decide_circuit` コアを実行、判定＋信号を JSON 出力して journal に記録し、breaker が作動したら非ゼロで終了する（`if ! condukt circuit check --run RID; then stop; fi`）。 |
+| `condukt gate check --run <id> --task <id>` | `gated` タスク向けの決定論的 GATE-EXEC 判定: アクション文（risk × reversibility）を分類し autonomy policy を読む（すべて fail-soft）。`decide_gate_exec` を実行して判定＋信号を JSON 出力し、auto-exec 前に run をチェックポイント（可逆にする）した上で、escalate なら非ゼロで終了する（`if ! condukt gate check --run RID --task T; then escalate; fi`）。 |
+| `condukt escalate add/list/resolve` | 永続的な非同期エスカレーションチャネル（`<state_dir>/<project>/escalations.json`、atomic write・fail-soft）。`add --run --task --question --option <o> [--recommend N]` は out-of-band な質問を登録し `id` を出力、`list --run [--json]` は run の未解決エスカレーションを表示、`resolve --id --choice` は選択した回答を記録し、ブロック/gated タスクがインラインの `AskUserQuestion` で止まらず再開できるようにする。 |
 | `condukt pr create --title <t> [--execute]` | 外部ループの終端ステップ: `gh` CLI で PR を開く。`--execute` なしでは dry-run で実行される argv を出力するだけ。`/condukt` スキルは人間の GATED 承認後にのみ `--execute` を渡すため、autonomous 実行が独断で PR を開くことはない。gh 自身の認証を使う（API key 不要）。gh 不在/未認証なら local-commit-only に縮退し exit 0（fail-soft）。 |
 | `condukt state stats` | すべての実行（完了・未完了）を集計する: 完了率、タスク数、ステータス分布。ビフォーアフターのベンチマークとして有用。 |
 | `condukt state reconcile --run <id> [--dry-run]` | 対象ブランチがデフォルトブランチへマージ済み、または worktree ごと削除済みのタスクを自動的に `verified` へ昇格させる。手動の `state set` なしに、セッションクラッシュ後の古い状態を修正する。 |
@@ -85,9 +88,21 @@ LLM 単体で大きな課題をオーケストレーションさせると、決�
   "tasks": [
   { "id": "t1", "title": "...", "touched_files": ["path/or/glob"],
     "deps": ["t0"], "class": "parallel|serial|gated", "kind": "fix|feature|chore",
-    "suggested_model": "sonnet|opus|haiku", "done_criteria": "observable pass condition" }
+    "suggested_model": "sonnet|opus|haiku", "done_criteria": "observable pass condition",
+    "checks": [{ "cmd": "cargo test -p x", "expect_exit": 0, "expect_substring": "ok" }],
+    "expected_trajectory": { "mode": "strict|unordered|subsequence", "steps": [{ "tool": "Read" }] } }
 ]}
 ```
+
+`checks` と `expected_trajectory` はどちらも任意で後方互換（`#[serde(default)]`。
+どちらも無いタスクは従来どおりに動く）。`checks[]` は verifier ステージが直接実行できる
+決定論的な機械オラクルコマンドを宣言する（`condukt verify checks --file <task.json>`）。
+LLM がそのコマンドの pass/fail を判定する必要がなくなる。`expected_trajectory` は worker が
+辿るべき tool-call の順序を宣言する。指定されていれば `/condukt` スキルの Phase 6 が worker の
+transcript をソフト依存の `trajectoryeval extract`/`check` に通し、既存の出力面のみの
+`done_criteria` 検証と並行して経路面を検証する（第2の独立した検証次元）。`expected_trajectory`
+が無い、または `trajectoryeval` バイナリが不在なら、このステップは丸ごと skip される
+（fail-soft・no-op）。
 
 `kind` は任意で後方互換（`#[serde(default)]`）。**F→P 再現性ゲート**の対象は `fix`
 と `feature`（大小文字非依存）だけで、そのタスクは「バグのあるツリーで fail・修正後の
@@ -201,8 +216,8 @@ max_iters      = 10   # 安全キャップ; スキルが強制する
 | `specguard` | gate 後、`specguard.toml` があれば spec-drift 監査。 |
 | `deepwiki` | アーキテクチャページを interpreter に注入し、gate 後に `deepwiki refresh`。 |
 | `tracekit` / `replaykit` | interpreter→worker→verifier の span を記録し、run を replay golden へ promote。 |
-| `trajectoryeval` | worker の tool-call 軌跡を `expected_trajectory` と照合（第2の verifier 次元）。 |
-| `curate` | 機械的な verified run を evalkit golden へ promote する提案。 |
+| `trajectoryeval` | Phase 6: transcript から worker の tool-call 軌跡を `extract` し、タスクの `expected_trajectory` と `check` で照合する（`done_criteria` と並ぶ第2の経路面 verifier 次元）。タスクに `expected_trajectory` が無い、またはバイナリ不在なら丸ごと skip。 |
+| `curate` | golden 化: `done_criteria` が機械的な `verified` タスクに対し、スキルが HOTL 確認（`AskUserQuestion`）を1回提示する。明示的に yes のときだけ `curate promote "<task.title>" --dataset <name>` を実行して evalkit golden へ promote し、否なら何も書き込まない。 |
 
 ## ライセンス
 

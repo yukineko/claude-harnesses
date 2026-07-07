@@ -42,8 +42,11 @@ hook (`restore`) and a Stop hook (`state record-run --all`).
 | `condukt knowledge` | emit project-specific conventions/pitfalls injected into the interpreter/worker prompt (soft; empty when none). |
 | `condukt consensus plan/vote` | multi-sample self-consistency (opt-in cost guard). `plan` decides whether a task should fan out into N candidate implementations (exit 0 = fan out, 1 = single sample); `vote` tallies N verifier verdicts into a deterministic majority winner + agreement rate, escalating to opus on all-fail, a tie, or agreement below threshold. |
 | `condukt policy decide/answer/answers` | central **graded-autonomy policy**: map a decision's risk × reversibility × confidence to `auto`/`escalate`/`block` via an exit-code contract (0=auto, 2=escalate, 3=block, 1=invalid). `answer` non-interactively resolves one question on an `auto` verdict (journaling the choice) and otherwise falls through so the caller runs a real `AskUserQuestion`; `answers` prints the auto-answer audit trail (every question self-answered without a human). `decide`/`answer` also accept optional `--title/--files/--class`: when given and `fugu-router` is on PATH, the self-reported `--confidence` is overridden by a calibrated `[0,1]` score from `fugu-router confidence` (historical pass-rate), mapped to a band via the pure `Level::from_score` (thresholds 0.34/0.67); absent fugu-router or the new flags, it falls back byte/exit-identically to the self-reported value. |
-| `condukt verify digest/runtime/launch` | deterministic verifier-stage helpers (formatting only; the fix DECISION stays with the LLM worker). `digest` distills raw test output into a structured `FailureDigest`; `runtime` distills a target's runtime output (exit code, panic/exception lines, stderr/stdout tails), `--reflux` for the pass/fail verdict; `launch` runs a real target inside the blastguard-validated envelope (`--cmd` refused fail-closed if destructive) and refluxes its runtime signals — with `--health-url` it polls a server for HTTP 200 instead of waiting for exit. All fail-soft (exit 0). |
+| `condukt verify digest/runtime/launch/regressions/confidence/checks` | deterministic verifier-stage helpers (formatting only; the fix DECISION stays with the LLM worker). `digest` distills raw test output into a structured `FailureDigest`; `runtime` distills a target's runtime output (exit code, panic/exception lines, stderr/stdout tails), `--reflux` for the pass/fail verdict; `launch` runs a real target inside the blastguard-validated envelope (`--cmd` refused fail-closed if destructive) and refluxes its runtime signals — with `--health-url` it polls a server for HTTP 200 instead of waiting for exit. `regressions --baseline <f> --current <f>` diffs two failing-test sets (pure set-difference — `current - baseline`) so the verifier's regression call is deterministic, not eyeballed. `confidence --check-executed --exit-zero --no-regressions` derives `high|medium|low` from those observed facts instead of an LLM self-report. `checks --file <task.json> [--cwd <dir>]` runs a task's declared `checks[]` (see the schema below) as a machine oracle and prints `{"all_passed":bool,"results":[...]}`. All fail-soft (exit 0). |
 | `condukt replan handoff/stats` | deterministic reflux-cascade helpers (classification/formatting only; the re-decomposition DECISION stays with the LLM). `handoff` classifies a failing task's reflux facts into `escalate_model` vs `replan` and, only on `replan`, builds a handoff instructing the interpreter to produce a NEW decomposition; `--run <id>` also journals the decision. `stats --run <id>` aggregates that log into per-directive counts. |
+| `condukt circuit check --run <id> [--streak-cap N] [--idle-ttl-secs S] [--budget-cap-usd C]` | deterministic CIRCUIT-BREAKER stop-condition gate: gathers a run's consecutive-failure streak, idle/stall, and (optional) budget-over-cap signals — all fail-soft — runs the pure `decide_circuit` core, prints the verdict + signals as JSON, journals it, and exits non-zero when the breaker trips, so a loop can do `if ! condukt circuit check --run RID; then stop; fi`. |
+| `condukt gate check --run <id> --task <id>` | deterministic GATE-EXEC decision for a `gated` task: classifies its action text (risk × reversibility) and reads the autonomy policy — all fail-soft — runs `decide_gate_exec`, prints the verdict + signals as JSON, checkpoints the run before auto-executing (so the action is recoverable), and exits non-zero on escalate, so a caller can do `if ! condukt gate check --run RID --task T; then escalate; fi`. |
+| `condukt escalate add/list/resolve` | durable async escalation channel (`<state_dir>/<project>/escalations.json`, atomic + fail-soft): `add --run --task --question --option <o> [--recommend N]` enqueues an out-of-band question and prints its `id`; `list --run [--json]` shows the still-open escalations for a run; `resolve --id --choice` records the chosen answer so a blocked/gated task can resume instead of stalling on an inline `AskUserQuestion`. |
 | `condukt pr create --title <t> [--execute]` | terminal external-loop step: open a PR via the `gh` CLI. Without `--execute` it dry-runs, printing the exact argv that WOULD run; the `/condukt` skill passes `--execute` ONLY after the human GATED approval, so autonomous runs never open a PR on their own. Uses gh's own auth (no API key); gh absent/unauthenticated degrades to local-commit-only and exits 0 (fail-soft). |
 | `condukt state stats` | aggregate all runs (complete and incomplete): completion rate, task count, status distribution — useful as a before/after benchmark. |
 | `condukt state reconcile --run <id> [--dry-run]` | auto-promote tasks to `verified` when their branch is already merged into the default branch or has been deleted with its worktree. Fixes stale state after a session crash without manual `state set` calls. |
@@ -63,9 +66,22 @@ Canonical definition: `agents/condukt-interpreter.md`.
   "tasks": [
   { "id": "t1", "title": "...", "touched_files": ["path/or/glob"],
     "deps": ["t0"], "class": "parallel|serial|gated", "kind": "fix|feature|chore",
-    "suggested_model": "sonnet|opus|haiku", "done_criteria": "observable pass condition" }
+    "suggested_model": "sonnet|opus|haiku", "done_criteria": "observable pass condition",
+    "checks": [{ "cmd": "cargo test -p x", "expect_exit": 0, "expect_substring": "ok" }],
+    "expected_trajectory": { "mode": "strict|unordered|subsequence", "steps": [{ "tool": "Read" }] } }
 ]}
 ```
+
+`checks` and `expected_trajectory` are both optional and backward-compatible
+(`#[serde(default)]`; a task with neither behaves exactly as before). `checks[]`
+declares deterministic machine-oracle commands the verifier stage can run
+directly (`condukt verify checks --file <task.json>`) instead of an LLM judging
+pass/fail for that command. `expected_trajectory` declares the tool-call order a
+worker is expected to follow; when present, Phase 6 of the `/condukt` skill feeds
+the worker's transcript through the soft-dependency `trajectoryeval extract`/`check`
+pair to verify the *path* alongside the existing output-only `done_criteria`
+check — a second, independent verification dimension. Absent `expected_trajectory`
+or an absent `trajectoryeval` binary skip this step entirely (fail-soft, no-op).
 
 `kind` is optional and backward-compatible (`#[serde(default)]`). Only `fix` and
 `feature` (case-insensitive) are in scope for the **F→P reproduction gate**: such a
@@ -248,8 +264,8 @@ never hard-requires any of them.
 | `specguard` | post-gate spec-drift audit when `specguard.toml` exists. |
 | `deepwiki` | inject architecture pages into the interpreter and `deepwiki refresh` after the gate. |
 | `tracekit` / `replaykit` | record interpreter→worker→verifier spans and promote the run to a replay golden. |
-| `trajectoryeval` | check a worker's tool-call trajectory against `expected_trajectory` (second verifier dimension). |
-| `curate` | offer to promote a mechanical verified run to an evalkit golden. |
+| `trajectoryeval` | Phase 6: `extract` a worker's tool-call trajectory from its transcript, then `check` it against a task's `expected_trajectory` — a second, path-level verifier dimension alongside `done_criteria`. Skipped entirely when the task has no `expected_trajectory` or the binary is absent. |
+| `curate` | golden-ification: on a `verified` task with mechanical `done_criteria`, the skill offers one HOTL confirm (`AskUserQuestion`) to promote the run to an evalkit golden; only on an explicit yes does it run `curate promote "<task.title>" --dataset <name>` — a decline writes nothing. |
 
 ## Constraints
 

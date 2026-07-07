@@ -23,7 +23,7 @@ sub-agents doing read-only investigation:
 | Scope + reduce | Take the audit scope; reduce lens count by scope size to control cost (small → L1/L5, large → all 5) |
 | Deterministic review | Collect facts read-only (`git log`, `cargo test`, `compass gap`, `backlog list`, `cargo deny`, …) |
 | 5-lens fan-out | Parallel read-only sub-agents return measure candidates with verbatim evidence |
-| Synthesize | Dedupe, evidence-filter, score `(severity × goal-proximity) ÷ effort`, tag `p0/p1/p2` |
+| Synthesize | Dedupe, evidence-filter, then score: the LLM estimates `goal_proximity` per candidate and hands `severity`/`effort`/`lens`/`goal_proximity` to the deterministic `compass score` binary, which ranks (L2/L5 weighted up internally); fail-soft to a hand-computed `(severity × goal-proximity) ÷ effort` if `compass score` is unavailable. Tag `p0/p1/p2` |
 | Agree (HOTL) | Default: `AskUserQuestion` (multiSelect) — the user picks which measures to queue. Autonomy-gated: if `condukt state autonomy-check` reports autonomous, the select prompt is skipped and the top-N (default top 8, `p0`/`p1` first) are auto-queued |
 | Write + hand off | `backlog add` each approved measure (`--tag scout`), then hand to `/flow`. Default: propose-then-confirm; autonomous: auto-launch `/flow` when at least one measure was queued |
 

@@ -48,33 +48,68 @@ The skill drives the loop; the binary only injects the SessionStart proposal dir
 
 ```
 0. 引数分岐 — 課題文があれば source 選択を飛ばして condukt に直行（1 件だけ実行）
+0.5. 自律ゲート — `condukt state autonomy-check`。自律モードなら各 human gate を
+     `condukt policy answer`（risk×reversible×confidence の graded 判定）に通す（下記参照）
 1. compass ゲート — `compass gap`。charter が陳腐なら自動実行せず /compass を促して停止
 2. ロック取得 — `backlog lock acquire`（クロスセッション直列化）
-3. 実行ループ — 優先度順にピック → /condukt → 検証 → sink
+3. 実行ループ — 優先度順にピック（claim-skip ゲート）→ 着手前に claim（TOCTOU ガード）→ /condukt → 検証 → sink
        ピック順: compass 主筋
                  → measure step（awaiting-measurement の仮説を計測して validate/reject で閉じる）
                  → `backlog`（複数 ready 課題は順列でなく 1 condukt run に束ね、並列/直列は condukt の
                     schedule.rs に委譲＝非衝突は並列・衝突/危険は自動で直列。sink は item ごと）
-                 → 新規 open 仮説（その仮説を検証する実験を build）
+                 → 新規 open 仮説（RAT ゲートで leap of faith があれば最小 de-risk 実験、無ければその仮説を検証する実験を build）
        成功 sink: backlog done
                  / compass は `compass outcome` で measuring_stick 判定（前進/不変/後退）を記録
                  / hypothesis は出荷で awaiting-measurement、計測後に validate/reject（証拠必須）
                  / fugu-router に record
+                 / いずれも claim を release、ループ中は heartbeat で claim を live に保つ
        失敗: backlog fail --reason …、スキップして次へ
-4. ロック解放 — source が尽きる/予算超過/中断で `backlog lock release` + サマリ報告
+4. ロック解放 — source が尽きる/予算超過/中断で `backlog lock release` + サマリ報告 + pivot-check
 ```
 
 **盲目実行しない**: compass ゲートが鮮明でない限り自動でキューを流し始めない。
 **ロック解放を絶対に飛ばさない**（早期脱出・エラー時も）。
 
+### Autonomy gate (`condukt policy answer`)
+
+Every point in the loop where the skill would otherwise stop to ask the user
+(`AskUserQuestion`) first passes through a **global autonomy switch**:
+
+```bash
+condukt state autonomy-check   # exit 0 = autonomous / exit 1 (default) = non-autonomous
+```
+
+- **Non-autonomous (default, exit 1, or the subcommand doesn't exist)** — unchanged,
+  full backward compatibility: every gate below still asks the user.
+- **Autonomous (exit 0)** — each gate is routed through `condukt policy answer` with its
+  own risk × reversibility × confidence, which returns a deterministic verdict:
+  - **auto (exit 0)** — self-answer the recommended option, log it to
+    `gate-decisions.jsonl` (auditable via `condukt policy answers`), and do **not** ask.
+  - **escalate (exit 2)** — fall back to the normal `AskUserQuestion` (this is where the
+    pivot decision always lands — a genuine strategy call stays human).
+  - **block (exit 3)** — refuse and stop, without asking anyone.
+  - anything else (bad input, missing `answer` subcommand) fails safe to `escalate`.
+
+| Gate | Typical verdict | What "auto" picks |
+|---|---|---|
+| Lock contention (Step 2, live holder) | auto | stand down (report and clean-exit; never force-steal) |
+| Resume pick (multiple candidates) | auto | the existing priority-pick order |
+| Pivot check (Step 4) | **escalate** | — (always a human call) |
+| Circuit-breaker trip (early exit) | auto | clean stop |
+
+Regardless of autonomy mode, four things always stop for a human: **(a)** a blocked
+worker escalation, **(b)** deploy/push's GATED approval, **(c)** the pivot decision, and
+**(d)** any gate where `policy answer` itself returns escalate/block.
+
 ### Early-exit conditions
 
 | 状況 | 対応 |
 |---|---|
-| ユーザーが中断を指示 | 直ちにロック解放へ |
-| 連続失敗が 3 件以上 | `AskUserQuestion` で続行 / 中止 |
-| budgetguard が予算超過を返す | ループ終了。残キューは次セッションへ |
+| ユーザーが中断を指示 | 直ちに Step 4（ロック解放）へ |
+| 循環ブレーカーが trip（`condukt circuit check` が毎イテレーション failure-streak上限・予算超過・no-progress stall を判定） | 決定論的に clean stop（人にも policy にも聞かない hard stop）。非自律での追加確認は `AskUserQuestion` フォールバックのみ |
+| budgetguard が予算超過を返す | ループ終了（予算軸は上の circuit check にも統合済み） |
 | compass ゲートが再スコープを示す | ループを止め `/compass` を促す |
+| `backlog next` が予期しないエラー | 報告して Step 4 へ |
 
 ## The hook
 
@@ -131,7 +166,7 @@ git add bin/ && git update-index --chmod=+x bin/flow bin/flow-*
 ## Plugin layout
 
 ```
-.claude-plugin/plugin.json     # plugin manifest (version 0.1.3)
+.claude-plugin/plugin.json     # plugin manifest (version 0.1.6)
 hooks/hooks.json               # SessionStart=propose → ${CLAUDE_PLUGIN_ROOT}/bin/flow
 skills/flow/SKILL.md           # the /flow skill (drives the source→executor loop)
 bin/flow                       # POSIX launcher → flow-<os>-<arch>

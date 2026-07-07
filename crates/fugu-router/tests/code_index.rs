@@ -142,3 +142,79 @@ fn build_then_search_round_trip_finds_indexed_symbol() {
         "an unrelated query must yield []: {stdout}"
     );
 }
+
+/// code-RAG slice-3: `build --if-stale` is a no-op on an unchanged tree and
+/// rebuilds when a `.rs` file changes.
+#[test]
+fn build_if_stale_noops_when_unchanged_and_rebuilds_on_change() {
+    let dir = seeded_repo("ifstale");
+    let root = dir.to_string_lossy().into_owned();
+    let index = dir.join(".fugu").join("code-index.jsonl");
+
+    // First --if-stale build: no prior meta → must rebuild.
+    let (code, stdout) = run(&["code-index", "build", "--if-stale", "--root", &root]);
+    assert_eq!(code, 0, "first if-stale build must exit 0: {stdout}");
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("build prints JSON");
+    assert_eq!(
+        v["rebuilt"],
+        serde_json::json!(true),
+        "first build (no meta) must rebuild: {stdout}"
+    );
+    let bytes_after_build = std::fs::read(&index).expect("index exists after build");
+
+    // Second --if-stale build with no changes: must be a no-op, and the index
+    // file bytes must be untouched.
+    let (code, stdout) = run(&["code-index", "build", "--if-stale", "--root", &root]);
+    assert_eq!(code, 0, "second if-stale build must exit 0: {stdout}");
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("build prints JSON");
+    assert_eq!(
+        v["rebuilt"],
+        serde_json::json!(false),
+        "unchanged tree must be a no-op: {stdout}"
+    );
+    let bytes_unchanged = std::fs::read(&index).expect("index still exists");
+    assert_eq!(
+        bytes_after_build, bytes_unchanged,
+        "a no-op must not rewrite the index file"
+    );
+
+    // Change a tracked .rs file → --if-stale must rebuild again.
+    std::fs::write(
+        dir.join("lib.rs"),
+        "pub fn extract_symbols(contents: &str) -> i32 {\n    1\n}\n\nstruct Widget {\n    id: i32,\n}\n\npub fn brand_new_fn() {}\n",
+    )
+    .expect("edit seeded source");
+    let (code, stdout) = run(&["code-index", "build", "--if-stale", "--root", &root]);
+    assert_eq!(code, 0, "post-edit if-stale build must exit 0: {stdout}");
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("build prints JSON");
+    assert_eq!(
+        v["rebuilt"],
+        serde_json::json!(true),
+        "an edited .rs file must trigger a rebuild: {stdout}"
+    );
+    assert_eq!(
+        v["symbols_indexed"],
+        serde_json::json!(3),
+        "the rebuilt index must include the newly-added fn: {stdout}"
+    );
+}
+
+/// Plain `build` (no `--if-stale`) always rebuilds and reports `rebuilt:true`
+/// (back-compat: the flagless path is unconditional).
+#[test]
+fn plain_build_always_rebuilds() {
+    let dir = seeded_repo("plainbuild");
+    let root = dir.to_string_lossy().into_owned();
+    for _ in 0..2 {
+        let (code, stdout) = run(&["code-index", "build", "--root", &root]);
+        assert_eq!(code, 0, "plain build must exit 0: {stdout}");
+        let v: serde_json::Value = serde_json::from_str(&stdout).expect("build prints JSON");
+        assert_eq!(
+            v["rebuilt"],
+            serde_json::json!(true),
+            "plain build must always rebuild: {stdout}"
+        );
+        assert_eq!(v["files_scanned"], serde_json::json!(1));
+        assert_eq!(v["symbols_indexed"], serde_json::json!(2));
+    }
+}

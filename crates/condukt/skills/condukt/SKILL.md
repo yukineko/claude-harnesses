@@ -233,10 +233,10 @@ untrusted 境界隔離は維持)。
 appetite):
 ```bash
 if command -v fugu-router >/dev/null 2>&1; then
-  # 索引 (<repo>/.fugu/code-index.jsonl) が未生成なら 1 度だけ build する (fail-soft)。
-  if [ ! -f .fugu/code-index.jsonl ]; then
-    fugu-router code-index build >/dev/null 2>&1 || true
-  fi
+  # 索引 (<repo>/.fugu/code-index.jsonl) を auto-refresh する (slice-3): source の .rs 集合が
+  # 変化していれば決定論 fingerprint (path+size+mtime・content 非読取り) で再 build、無変化なら
+  # no-op。file-existence gate ではないので worker 編集後も新鮮な index を読む (fail-soft)。
+  fugu-router code-index build --if-stale >/dev/null 2>&1 || true
   CODE_CONTEXT=$(fugu-router code-index search --query "<課題文の要約>" --k 10 2>/dev/null || true)
   # CODE_CONTEXT が "[]" 以外なら interpreter プロンプトに含める。lessons_context と同様、
   # これは決定論索引由来だが repo 全体の symbol なので境界マーカーで隔離し、

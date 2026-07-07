@@ -204,6 +204,13 @@ enum CodeIndexAction {
         /// Repo root to index (default: current directory).
         #[arg(long)]
         root: Option<PathBuf>,
+        /// Only rebuild when the source `.rs` set changed since the last
+        /// build (code-RAG slice-3). Compares a cheap deterministic
+        /// fingerprint (path+size+mtime, no content reads) against the sidecar
+        /// meta; a match is a no-op (`rebuilt:false`). Without this flag,
+        /// `build` always rebuilds (back-compat).
+        #[arg(long)]
+        if_stale: bool,
     },
     /// Lexical top-K search over a previously-built code index (returns a
     /// JSON array). An absent/empty index yields `[]` (fail-soft, exit 0).
@@ -555,7 +562,7 @@ fn run_user(cmd: Command) -> Result<()> {
             Ok(())
         }
         Command::CodeIndex { action } => match action {
-            CodeIndexAction::Build { root } => cmd_code_index_build(root),
+            CodeIndexAction::Build { root, if_stale } => cmd_code_index_build(root, if_stale),
             CodeIndexAction::Search { query, root, k } => cmd_code_index_search(query, root, k),
         },
         Command::Prompt => unreachable!("handled in main"),
@@ -573,14 +580,18 @@ fn code_index_path(root: &Path) -> PathBuf {
     root.join(".fugu").join("code-index.jsonl")
 }
 
-/// `code-index build [--root]`: enumerate git-tracked `.rs` files under
-/// `root` (via `git ls-files`, so untracked/ignored files are skipped
-/// deterministically the same way the rest of the repo treats "tracked"),
-/// extract symbols from each, and rebuild the index file wholesale.
-fn cmd_code_index_build(root: Option<PathBuf>) -> Result<()> {
-    use harness_core::code_index::{extract_symbols, write_index};
+/// Sidecar meta path next to the index (code-RAG slice-3). Holds the
+/// staleness fingerprint so `build --if-stale` can skip an unchanged rebuild
+/// without touching the pure Symbol-per-line `.jsonl` body.
+fn code_index_meta_path(root: &Path) -> PathBuf {
+    root.join(".fugu").join("code-index.meta.json")
+}
 
-    let root = root.unwrap_or_else(|| PathBuf::from("."));
+/// Enumerate git-tracked `.rs` files under `root` as repo-relative paths (via
+/// `git ls-files`, so untracked/ignored files are skipped deterministically
+/// the same way the rest of the repo treats "tracked"). Shared by the rebuild
+/// and the `--if-stale` fingerprint paths so both see the identical file set.
+fn code_index_rs_files(root: &Path) -> Result<Vec<String>> {
     let out = std::process::Command::new("git")
         .args(["-C", &root.to_string_lossy(), "ls-files"])
         .output()
@@ -592,16 +603,84 @@ fn cmd_code_index_build(root: Option<PathBuf>) -> Result<()> {
         String::from_utf8_lossy(&out.stderr)
     );
     let listing = String::from_utf8_lossy(&out.stdout);
+    Ok(listing
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && l.ends_with(".rs"))
+        .map(|l| l.to_string())
+        .collect())
+}
+
+/// Compute the cheap, deterministic staleness fingerprint over the current
+/// `.rs` set: `stat` each file for `(size, mtime-nanos)` and fold through
+/// `harness_core::code_index::fingerprint`. File *contents* are never read.
+/// An unreadable file contributes a `(path, 0, 0)` entry, so it still counts
+/// toward set membership (add/remove/rename shifts the fingerprint).
+fn code_index_fingerprint(root: &Path, rel_files: &[String]) -> String {
+    use std::time::UNIX_EPOCH;
+    let entries: Vec<(String, u64, i64)> = rel_files
+        .iter()
+        .map(|rel| {
+            let (size, mtime) = match std::fs::metadata(root.join(rel)) {
+                Ok(md) => {
+                    let mtime = md
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                        .map(|d| d.as_nanos() as i64)
+                        .unwrap_or(0);
+                    (md.len(), mtime)
+                }
+                Err(_) => (0, 0),
+            };
+            (rel.clone(), size, mtime)
+        })
+        .collect();
+    harness_core::code_index::fingerprint(&entries)
+}
+
+/// `code-index build [--root] [--if-stale]`: extract symbols from every
+/// git-tracked `.rs` file and rebuild the index wholesale.
+///
+/// With `--if-stale`, first compute the cheap fingerprint of the current `.rs`
+/// set; if it matches the sidecar meta from the last build **and** the index
+/// file still exists, skip the rebuild and report `rebuilt:false`. Otherwise
+/// (or without the flag) rebuild the index and refresh the sidecar meta,
+/// reporting `rebuilt:true`. Plain `build` (no flag) always rebuilds —
+/// back-compat.
+fn cmd_code_index_build(root: Option<PathBuf>, if_stale: bool) -> Result<()> {
+    use harness_core::code_index::{
+        extract_symbols, read_meta, write_index, write_meta, IndexMeta,
+    };
+
+    let root = root.unwrap_or_else(|| PathBuf::from("."));
+    let rel_files = code_index_rs_files(&root)?;
+    let fingerprint = code_index_fingerprint(&root, &rel_files);
+    let index_path = code_index_path(&root);
+    let meta_path = code_index_meta_path(&root);
+
+    // --if-stale fast path: unchanged source set → no-op (index untouched).
+    if if_stale {
+        if let Some(meta) = read_meta(&meta_path) {
+            if meta.fingerprint == fingerprint && index_path.exists() {
+                println!(
+                    "{}",
+                    json!({
+                        "rebuilt": false,
+                        "files_scanned": meta.files,
+                        "symbols_indexed": meta.symbols,
+                        "index_path": index_path.to_string_lossy(),
+                    })
+                );
+                return Ok(());
+            }
+        }
+    }
 
     let mut symbols = Vec::new();
     let mut files_scanned = 0usize;
-    for rel in listing.lines() {
-        let rel = rel.trim();
-        if rel.is_empty() || !rel.ends_with(".rs") {
-            continue;
-        }
-        let path = root.join(rel);
-        let Ok(contents) = std::fs::read_to_string(&path) else {
+    for rel in &rel_files {
+        let Ok(contents) = std::fs::read_to_string(root.join(rel)) else {
             // Fail-soft: an unreadable tracked file (deleted-but-staged,
             // binary misdetection, permissions) is skipped, not fatal.
             continue;
@@ -610,12 +689,20 @@ fn cmd_code_index_build(root: Option<PathBuf>) -> Result<()> {
         files_scanned += 1;
     }
 
-    let index_path = code_index_path(&root);
     write_index(&index_path, &symbols);
+    write_meta(
+        &meta_path,
+        &IndexMeta {
+            fingerprint,
+            files: files_scanned,
+            symbols: symbols.len(),
+        },
+    );
 
     println!(
         "{}",
         json!({
+            "rebuilt": true,
             "files_scanned": files_scanned,
             "symbols_indexed": symbols.len(),
             "index_path": index_path.to_string_lossy(),

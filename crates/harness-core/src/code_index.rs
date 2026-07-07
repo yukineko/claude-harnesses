@@ -19,7 +19,9 @@
 //! a small, well-commented string-based scanner, matching harness-core's
 //! existing "no heavy deps" convention (this module adds none).
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeSet;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -206,6 +208,77 @@ pub fn load_index(path: &Path) -> Vec<Symbol> {
     }
 
     symbols
+}
+
+/// A cheap, deterministic **staleness fingerprint** over a set of source-file
+/// stats — `(relative path, byte size, mtime)` tuples — used by code-RAG
+/// slice-3 to decide whether a full rebuild is needed. Properties:
+///
+///   * **Order-independent**: the entries are sorted internally, so the same
+///     file set yields the same fingerprint regardless of enumeration order
+///     (e.g. `git ls-files` ordering changes must not flip it).
+///   * **Deterministic across runs/processes**: folds the canonical byte
+///     stream through [`DefaultHasher`], whose keys are fixed (`new()` is *not*
+///     the randomized `RandomState` used by `HashMap`), so identical input
+///     always yields the same hex string. Equality is all we need for a
+///     staleness check — collision risk for "did the tree change" is
+///     negligible.
+///   * **Content-free (cheap)**: only `(size, mtime)` are consulted, never the
+///     file bytes — this is the fast pre-check that gates the expensive
+///     rebuild.
+///
+/// Never panics on any input (including empty).
+pub fn fingerprint(entries: &[(String, u64, i64)]) -> String {
+    let mut sorted: Vec<&(String, u64, i64)> = entries.iter().collect();
+    sorted.sort();
+
+    let mut hasher = DefaultHasher::new();
+    // Hash the count first so `[]` and `[("", 0, 0)]` can't collide.
+    sorted.len().hash(&mut hasher);
+    for (path, size, mtime) in sorted {
+        path.hash(&mut hasher);
+        size.hash(&mut hasher);
+        mtime.hash(&mut hasher);
+    }
+    format!("{:016x}", hasher.finish())
+}
+
+/// Sidecar metadata written next to the JSONL index (as
+/// `.fugu/code-index.meta.json`), recording the staleness [`fingerprint`] plus
+/// a small summary of the last build. Kept in a **separate** file so the
+/// `.jsonl` body stays a pure one-[`Symbol`]-per-line store and [`load_index`]
+/// is unchanged (the `--if-stale` build path reads this, the symbol readers
+/// never see it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexMeta {
+    /// The [`fingerprint`] of the source `.rs` set the index was last built
+    /// from.
+    pub fingerprint: String,
+    /// Number of files scanned into the last build.
+    pub files: usize,
+    /// Number of symbols the last build produced.
+    pub symbols: usize,
+}
+
+/// Write `meta` to `path` as a single JSON object. Fail-soft: creates the
+/// parent dir if needed; any IO/serialize error is silently dropped rather
+/// than panicking (mirrors [`write_index`]).
+pub fn write_meta(path: &Path, meta: &IndexMeta) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(json) = serde_json::to_string(meta) else {
+        return;
+    };
+    let _ = std::fs::write(path, json);
+}
+
+/// Read the sidecar metadata from `path`. Fail-soft: a missing or
+/// corrupt/unparseable file returns `None`, never panics (mirrors
+/// [`load_index`]'s tolerance).
+pub fn read_meta(path: &Path) -> Option<IndexMeta> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&contents).ok()
 }
 
 /// Default number of matches [`search`] callers reach for absent a reason to
@@ -485,5 +558,105 @@ macro_rules! my_macro {
         let loaded = load_index(&path);
         assert_eq!(loaded.len(), 1, "a second write must overwrite, not append");
         assert_eq!(loaded[0].name, "b");
+    }
+
+    // ---- code-RAG slice-3: staleness fingerprint + meta sidecar ----
+
+    #[test]
+    fn fingerprint_is_deterministic_and_order_independent() {
+        let a = vec![
+            ("src/a.rs".to_string(), 100, 111),
+            ("src/b.rs".to_string(), 200, 222),
+            ("src/c.rs".to_string(), 300, 333),
+        ];
+        // Same entries, shuffled order.
+        let b = vec![
+            ("src/c.rs".to_string(), 300, 333),
+            ("src/a.rs".to_string(), 100, 111),
+            ("src/b.rs".to_string(), 200, 222),
+        ];
+        assert_eq!(
+            fingerprint(&a),
+            fingerprint(&a),
+            "same input, same call twice"
+        );
+        assert_eq!(
+            fingerprint(&a),
+            fingerprint(&b),
+            "fingerprint must not depend on enumeration order"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_on_path_size_or_mtime_change() {
+        let base = vec![("src/a.rs".to_string(), 100, 111)];
+        let fp0 = fingerprint(&base);
+
+        // Path changed (rename / add / remove of the set member).
+        assert_ne!(
+            fp0,
+            fingerprint(&[("src/renamed.rs".to_string(), 100, 111)]),
+            "a path change must shift the fingerprint"
+        );
+        // Size changed (edit that changed length).
+        assert_ne!(
+            fp0,
+            fingerprint(&[("src/a.rs".to_string(), 101, 111)]),
+            "a size change must shift the fingerprint"
+        );
+        // mtime changed (edit re-saved).
+        assert_ne!(
+            fp0,
+            fingerprint(&[("src/a.rs".to_string(), 100, 999)]),
+            "an mtime change must shift the fingerprint"
+        );
+        // Adding a file changes the set.
+        assert_ne!(
+            fp0,
+            fingerprint(&[
+                ("src/a.rs".to_string(), 100, 111),
+                ("src/b.rs".to_string(), 0, 0),
+            ]),
+            "adding a file must shift the fingerprint"
+        );
+    }
+
+    #[test]
+    fn fingerprint_never_panics_on_edge_inputs() {
+        let _ = fingerprint(&[]);
+        let _ = fingerprint(&[(String::new(), 0, 0)]);
+        let _ = fingerprint(&[("x".repeat(100_000), u64::MAX, i64::MIN)]);
+        // Empty vs one zero-entry must differ (count is hashed).
+        assert_ne!(fingerprint(&[]), fingerprint(&[(String::new(), 0, 0)]));
+    }
+
+    #[test]
+    fn meta_write_then_read_round_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".fugu").join("code-index.meta.json");
+        let meta = IndexMeta {
+            fingerprint: "deadbeef".to_string(),
+            files: 42,
+            symbols: 314,
+        };
+        write_meta(&path, &meta);
+        assert_eq!(read_meta(&path), Some(meta));
+    }
+
+    #[test]
+    fn read_meta_is_fail_soft_missing_and_corrupt() {
+        assert_eq!(
+            read_meta(Path::new("/nonexistent/code-index.meta.json")),
+            None
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("code-index.meta.json");
+        std::fs::write(&path, "{ not valid json").unwrap();
+        assert_eq!(
+            read_meta(&path),
+            None,
+            "corrupt meta returns None, not panic"
+        );
     }
 }

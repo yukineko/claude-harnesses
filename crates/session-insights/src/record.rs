@@ -222,9 +222,16 @@ pub fn write_record(cfg: &Config, ctx: &RecordCtx) -> Option<PathBuf> {
     let slug = format!("{}-{}", slugify(ctx.project), short(ctx.session_id));
     let path = dir.join(format!("{}-{}.md", &ctx.date[..10], slug));
 
+    // A blank/whitespace-only file (no file at all, or an empty stub — e.g. an
+    // Obsidian unresolved-link placeholder, or a prior write that got
+    // interrupted) has no markers for `merge` to find. `replace_block` leaves
+    // text it can't find markers in untouched *by design* (so a model's
+    // deliberate restructuring isn't clobbered), but that same rule would
+    // otherwise persist emptiness forever: merge(empty) == empty, written back
+    // as 0 bytes on every call. Treat "nothing there" the same as "no file".
     let body = match std::fs::read_to_string(&path) {
-        Ok(existing) => merge(&existing, ctx),
-        Err(_) => skeleton(ctx),
+        Ok(existing) if !existing.trim().is_empty() => merge(&existing, ctx),
+        _ => skeleton(ctx),
     };
     std::fs::write(&path, body).ok()?;
     Some(path)
@@ -407,6 +414,61 @@ mod tests {
         let after = std::fs::read_to_string(&p2).unwrap();
         assert!(after.contains("PROSE-KEEP"));
         assert!(after.contains("- turns: 12"));
+
+        let _ = std::fs::remove_file(&tp);
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    /// Regression for the 0-byte note bug: if a blank stub file already sits at
+    /// the target path (e.g. an Obsidian unresolved-link placeholder, or any
+    /// prior empty write), `write_record` must not silently `merge` into it and
+    /// persist emptiness — it must fall back to the full skeleton, same as if
+    /// the file were absent.
+    #[test]
+    fn write_record_heals_a_preexisting_empty_file() {
+        let tp = write_transcript("heal-empty");
+        let vault = std::env::temp_dir().join(format!("si-vault-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&vault).unwrap();
+        let cfg = Config {
+            record: true,
+            obsidian_vault: vault.clone(),
+            ..Config::default()
+        };
+        let s = Session {
+            session_id: "abcdef1234567890".into(),
+            project: "harness".into(),
+            started_at: "2026-06-22T10:00:00Z".into(),
+            turns: 4,
+            tool_events: 7,
+            files: vec!["a".into(), "b".into(), "c".into()],
+            ..Session::default()
+        };
+
+        // Pre-create the exact target path as a 0-byte stub, as would happen
+        // before session-insights ever writes it.
+        let dir = cfg.obsidian_vault.join(&cfg.record_dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!(
+            "2026-06-22-{}-{}.md",
+            slugify(&s.project),
+            short(&s.session_id)
+        ));
+        std::fs::write(&path, "").unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+
+        let p = write_from_session(&cfg, &s, tp.to_str().unwrap(), 0).expect("write");
+        assert_eq!(p, path);
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(!body.is_empty(), "note must not stay empty");
+        for h in [
+            "# 2026-06-22 harness セッション記録",
+            "## 完了サマリ",
+            "## 数値サマリ",
+            "## コスト",
+        ] {
+            assert!(body.contains(h), "missing {h}\n{body}");
+        }
+        assert!(body.contains("- turns: 4"));
 
         let _ = std::fs::remove_file(&tp);
         let _ = std::fs::remove_dir_all(&vault);

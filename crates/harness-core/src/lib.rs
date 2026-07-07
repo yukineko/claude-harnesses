@@ -35,6 +35,7 @@ pub mod inject_metrics;
 pub mod install;
 pub mod interrogate;
 pub mod ledger;
+pub mod lessons;
 pub mod metrics;
 pub mod pricing;
 pub mod projkey;

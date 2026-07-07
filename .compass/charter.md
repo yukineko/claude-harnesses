@@ -1,16 +1,16 @@
 ## north_star
-harness の LLM 判断面のうち、実は機械判定可能（fixed rule / parse / 集合演算 / 数値閾値）な残渣を決定論バイナリに落とし、非決定性を排除する arc。判断=LLM / 決定論=バイナリの分離をさらに前進させ、build≠validate を検証段でより締める。安全 invariant（意味的正しさ・分解・novel design は LLM に残す / never-break-a-turn / 後方互換）は不変。監査で7候補を特定・ランク済み（#1 baseline set-diff, #2 構造化 checks, #3 confidence-from-facts, #4 scout score, #5 C3 語彙screen, #6 outcome 既定, #7 class overlap）。今の ONE = condukt Phase-6 検証の非決定性を排除する2スライス: (1) baseline-failure 除外を LLM 目視でなく current_failing−baseline の集合差分で決定論化(#1), (2) verifier confidence を fact 由来(checks/repro が実行され exit0 かつ回帰ゼロ→high / 未実行・free-text 論拠→low)に(#3)。どちらも condukt verify.rs 内・純関数・明確な F→P。残る候補(#2 #4 #5 #6 #7)は parked。subscription-native を崩さない。
+harness の LLM 判断面のうち実は機械判定可能な残渣を決定論バイナリへ落とす determinism-sweep arc の最終スライス。監査7候補のうち #1 baseline set-diff / #2 構造化checks / #3 confidence-from-facts / #5 C3語彙screen / #6 outcome既定 / #7 class overlap は landed 済み。残る唯一の候補 #4 = scout の施策スコアリングを LLM 手計算から決定論スコアラーへ落とし、arc を締める。今の ONE = scout Phase-3 の優先スコア `(severity × goal近接) ÷ effort`(L2/L5 重み付き)を LLM の目分量から harness-core の純関数へ移し、scout skill はその決定論スコアラーを呼んで順位付けする。LLM は evidence 判定・重複排除・意味判断に専念し、順位付け(算術)は binary。scout は skill-only(bin 無し)なのでスコアラーは harness-core に置き、scout が叩ける既存 bin 経由で露出する(host bin は condukt 分解で確定)。純加算・後方互換(既存 Phase-3 出力形は不変)・subscription-native を崩さない。安全 invariant(意味的正しさ・分解・novel design は LLM に残す / never-break-a-turn)は不変。これで determinism-sweep arc(7/7)を閉じる。
 
 ## definition_of_done
-- condukt に、パース済みテスト名の集合差分で回帰を出す決定論関数がある。regressions = current_failing − baseline_failing。既存 red がありかつ新規回帰なしなら passed=true、新規回帰ありなら passed=false を返す。この振る舞いを unit test で red→green 実証する
-- condukt に、verifier confidence を観測事実から導く決定論関数がある。checks/repro が実際に実行され exit0 かつ回帰ゼロなら high、検証が未実行または free-text 論拠に依存するなら low を返す。真偽表を unit test で実証する
-- 純加算で既存 verify 経路と LLM verifier を温存（決定論層を前段・補助として足すのみ、既存の出力・パスは不変）。fmt と clippy(-D warnings) clean、cargo test -p condukt green、condukt の version を3正典ファイル(Cargo.toml・plugin.json・marketplace.json)で lockstep bump
+- harness-core に、施策候補(severity[high|medium|low]・effort[xs..xl]・goal近接シグナル)から優先スコアを返す決定論純関数がある。同一入力→同一スコアで、スコア = severity重み × goal近接 ÷ effort係数、かつ L2(security)/L5(safety) レンズは重みを上げる、を固定ルールで算出する。順序と重み付けの真偽表を unit test で実証する(cargo test green)
+- scout SKILL.md の Phase-3『スコアリング』手順が、LLM の手計算でなくこの決定論スコアラー(harness-core 関数を露出する PATH 上の bin 経由)を呼んで候補を順位付けするよう書き換わる。LLM は evidence フィルタ・重複排除・優先度タグ付けの意味判断のみ担い、算術順位付けは binary に委譲する。既存 Phase-3 の出力形(backlog add へ渡す施策リスト)は温存する(純加算・後方互換)
+- 純加算で既存挙動を温存: fmt と clippy(-D warnings) clean、対象 crate の cargo test green、触った plugin を正典ファイルで lockstep micro bump(scout は skill-only なので plugin.json + marketplace.json の2ファイル、host bin を持つ plugin があれば Cargo.toml も含め3ファイル。harness-core は build-time lib なので bump 不要)
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-ゴール(condukt Phase-6 検証の非決定性が排除された)と現状の最大差分 = 現状の verifier は (1) baseline-failure 除外を LLM が『実装前から壊れてた失敗リスト』と『今の失敗』を目視で突き合わせている(condukt-verifier.md, SKILL.md:375)→長い transcript 越しの目視で誤帰属(既存 red を回帰と誤認=誤fail / 新規 break を見逃し=誤pass)、(2) confidence(high/med/low)を LLM が自己申告(condukt-verifier.md:45-57)→当てずっぽうが opus-tier 再検証を無駄起動。差分を埋める = verify.rs に純関数を2本足す: (a) regressions=current_failing−baseline のテスト名集合差分で passed を決定論判定、(b) checks/repro が実行され exit0 かつ回帰ゼロ→high / 未実行・free-text 論拠→low の confidence 導出。既存 parse_test_result_failed/distill_failure を再利用。純加算・後方互換(既存 LLM verifier 経路は温存し前段・補助として足す)・condukt version 3正典 lockstep bump。size s×2、両者 verify.rs 内で近接するが独立関数=condukt schedule に委譲。#2 構造化checks/#4 scout score/#5 C3 screen/#6 outcome 既定/#7 class overlap は parked。
+ゴール(scout の施策スコアリングが決定論スコアラー経由で LLM 目分量を排除)と現状の最大差分 = scout SKILL Phase-3 が優先スコア (severity × goal近接) ÷ effort を LLM の手計算で付けている(scout/SKILL.md Phase 3『スコアリング — 自分(main の LLM)で』) → 同一候補でも run ごとにブレる・L2/L5 重み付けが暗黙。差分を埋める = harness-core に severity/effort/goal近接→スコアの固定ルール純関数を1本足し(L2/L5 重み固定・真偽表 unit test)、scout skill はそれを露出する bin を呼んで順位付けする(LLM は evidence/重複排除/優先度タグの意味判断のみ)。純加算・後方互換・Phase-3 出力形不変。size s。determinism-sweep arc の最終(7/7)スライス。
 
 ## next_action
 

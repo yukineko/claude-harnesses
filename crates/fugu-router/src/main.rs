@@ -21,7 +21,7 @@ mod rng;
 mod semantic;
 mod store;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -185,6 +185,38 @@ enum Command {
         /// Directory to walk for SKILL.md files (default: current directory).
         #[arg(long)]
         dir: Option<PathBuf>,
+    },
+    /// Deterministic lexical code-symbol index (code-RAG slice-1): no
+    /// embeddings/external API, a per-repo JSONL index built from git-tracked
+    /// `.rs` files. The underlying scanner/store lives in
+    /// harness_core::code_index.
+    CodeIndex {
+        #[command(subcommand)]
+        action: CodeIndexAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum CodeIndexAction {
+    /// (Re)build the code index for a repo: enumerate git-tracked `.rs`
+    /// files under `--root`, extract symbols, and rebuild the index file.
+    Build {
+        /// Repo root to index (default: current directory).
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Lexical top-K search over a previously-built code index (returns a
+    /// JSON array). An absent/empty index yields `[]` (fail-soft, exit 0).
+    Search {
+        /// Query text.
+        #[arg(long)]
+        query: String,
+        /// Repo root whose index to search (default: current directory).
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Number of results to return.
+        #[arg(long, default_value_t = harness_core::code_index::DEFAULT_K)]
+        k: usize,
     },
 }
 
@@ -522,8 +554,97 @@ fn run_user(cmd: Command) -> Result<()> {
             println!("{fp}");
             Ok(())
         }
+        Command::CodeIndex { action } => match action {
+            CodeIndexAction::Build { root } => cmd_code_index_build(root),
+            CodeIndexAction::Search { query, root, k } => cmd_code_index_search(query, root, k),
+        },
         Command::Prompt => unreachable!("handled in main"),
     }
+}
+
+/// Path convention for the per-repo code index: `<root>/.fugu/code-index.jsonl`.
+/// Deliberately **per-repo** (not the machine-global `~/.fugu-router/...`
+/// episode-store convention) because a code index's symbols/file-paths are
+/// only meaningful relative to the repo they were extracted from — unlike
+/// routing episodes or lessons, which are cross-project by design. `.fugu/`
+/// sits alongside the repo (like `.git/`), namespaced under the plugin so it
+/// doesn't collide with other tools' dotfiles.
+fn code_index_path(root: &Path) -> PathBuf {
+    root.join(".fugu").join("code-index.jsonl")
+}
+
+/// `code-index build [--root]`: enumerate git-tracked `.rs` files under
+/// `root` (via `git ls-files`, so untracked/ignored files are skipped
+/// deterministically the same way the rest of the repo treats "tracked"),
+/// extract symbols from each, and rebuild the index file wholesale.
+fn cmd_code_index_build(root: Option<PathBuf>) -> Result<()> {
+    use harness_core::code_index::{extract_symbols, write_index};
+
+    let root = root.unwrap_or_else(|| PathBuf::from("."));
+    let out = std::process::Command::new("git")
+        .args(["-C", &root.to_string_lossy(), "ls-files"])
+        .output()
+        .with_context(|| format!("running git ls-files under {}", root.display()))?;
+    anyhow::ensure!(
+        out.status.success(),
+        "git ls-files failed under {}: {}",
+        root.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let listing = String::from_utf8_lossy(&out.stdout);
+
+    let mut symbols = Vec::new();
+    let mut files_scanned = 0usize;
+    for rel in listing.lines() {
+        let rel = rel.trim();
+        if rel.is_empty() || !rel.ends_with(".rs") {
+            continue;
+        }
+        let path = root.join(rel);
+        let Ok(contents) = std::fs::read_to_string(&path) else {
+            // Fail-soft: an unreadable tracked file (deleted-but-staged,
+            // binary misdetection, permissions) is skipped, not fatal.
+            continue;
+        };
+        symbols.extend(extract_symbols(&contents, rel));
+        files_scanned += 1;
+    }
+
+    let index_path = code_index_path(&root);
+    write_index(&index_path, &symbols);
+
+    println!(
+        "{}",
+        json!({
+            "files_scanned": files_scanned,
+            "symbols_indexed": symbols.len(),
+            "index_path": index_path.to_string_lossy(),
+        })
+    );
+    Ok(())
+}
+
+/// `code-index search --query <q> [--root] [--k]`: load the index for `root`
+/// and run the deterministic lexical search. Fail-soft: a missing/empty index
+/// yields `[]` and exit 0, never an error.
+fn cmd_code_index_search(query: String, root: Option<PathBuf>, k: usize) -> Result<()> {
+    use harness_core::code_index::{load_index, search};
+
+    let root = root.unwrap_or_else(|| PathBuf::from("."));
+    let symbols = load_index(&code_index_path(&root));
+    let hits = search(&symbols, &query, k);
+    let arr: Vec<serde_json::Value> = hits
+        .iter()
+        .map(|h| {
+            let mut v = serde_json::to_value(&h.symbol).unwrap_or_else(|_| json!({}));
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("score".into(), json!(h.score));
+            }
+            v
+        })
+        .collect();
+    println!("{}", serde_json::to_string_pretty(&arr)?);
+    Ok(())
 }
 
 /// Handle `lessons add|search` over the project-INDEPENDENT lessons store.

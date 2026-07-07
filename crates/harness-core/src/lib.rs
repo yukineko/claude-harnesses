@@ -22,6 +22,7 @@ compile_error!(
      never-break-a-turn (exit-0-on-error) invariant. Restore panic=\"unwind\"."
 );
 
+pub mod code_index;
 pub mod config;
 pub mod daily;
 pub mod discovery;

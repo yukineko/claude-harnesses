@@ -1882,6 +1882,23 @@ fn run_consensus(cfg: &Config, action: ConsensusAction) -> Result<()> {
                     .with_context(|| format!("reading {}", p.display()))?,
                 None => read_stdin(),
             };
+            // Schema-precheck the fresh LLM output before deserializing. The
+            // input is either a bare array of verdicts or an object wrapper
+            // carrying a `verdicts` array; the `verdict` schema describes a
+            // single verdict object, so validate element-wise.
+            if let Ok(raw_value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                match &raw_value {
+                    serde_json::Value::Array(items) => {
+                        schema_precheck_each(items, "verdict")?;
+                    }
+                    serde_json::Value::Object(map) => {
+                        if let Some(serde_json::Value::Array(items)) = map.get("verdicts") {
+                            schema_precheck_each(items, "verdict")?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
             let input: ConsensusInput =
                 serde_json::from_str(&raw).context("parsing consensus verdicts JSON")?;
             let (verdicts, json_threshold) = match input {
@@ -2095,6 +2112,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                     .with_context(|| format!("reading {}", p.display()))?,
                 None => read_stdin(),
             };
+            schema_precheck(&raw, "decomposition")?;
             let dec: model::Decomposition =
                 serde_json::from_str(&raw).context("parsing decomposition JSON")?;
             let errs = schedule::validate(&dec);
@@ -3107,6 +3125,58 @@ fn resolve_label() -> Option<String> {
     Some(format!("pid-{}", std::process::id()))
 }
 
+/// Validate raw LLM JSON against a named schemaguard schema BEFORE deserialize.
+/// On violations, return a deterministic, structured error enumerating them
+/// (so the caller re-asks rather than blindly executing / cryptically failing).
+/// Unknown schema name or unparseable JSON is left to the existing serde path
+/// (fail-soft: we only ADD a clearer error, never suppress a real one).
+fn schema_precheck(raw: &str, schema_name: &str) -> Result<()> {
+    let Some(schema) = schemaguard::registry::get(schema_name) else {
+        return Ok(());
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Ok(());
+    };
+    let violations = schemaguard::schema::validate(&value, &schema.fields, "");
+    render_schema_violations(schema_name, violations)
+}
+
+/// Validate each element of a slice of already-parsed JSON values against a
+/// named schema, aggregating violations across elements (path-prefixed with
+/// the element index) before bailing. Used for array-shaped LLM output (e.g.
+/// consensus verdicts) where `schema_precheck` operates on a single object.
+fn schema_precheck_each(values: &[serde_json::Value], schema_name: &str) -> Result<()> {
+    let Some(schema) = schemaguard::registry::get(schema_name) else {
+        return Ok(());
+    };
+    let mut violations = Vec::new();
+    for (i, v) in values.iter().enumerate() {
+        let mut sub = schemaguard::schema::validate(v, &schema.fields, &format!("[{i}]"));
+        violations.append(&mut sub);
+    }
+    render_schema_violations(schema_name, violations)
+}
+
+/// Shared bail-with-structured-violations rendering for the two precheck
+/// helpers above.
+fn render_schema_violations(
+    schema_name: &str,
+    violations: Vec<schemaguard::schema::Violation>,
+) -> Result<()> {
+    if !violations.is_empty() {
+        let lines: Vec<String> = violations
+            .iter()
+            .map(|v| format!("  - {}: {}", v.path, v.problem))
+            .collect();
+        bail!(
+            "invalid {schema_name} JSON ({} schema violation(s)) — re-ask required:\n{}",
+            violations.len(),
+            lines.join("\n")
+        );
+    }
+    Ok(())
+}
+
 fn read_decomposition(file: Option<PathBuf>) -> Result<model::Decomposition> {
     let raw = match file {
         Some(p) => {
@@ -3193,6 +3263,85 @@ mod calibrated_confidence_tests {
         // to spawn → soft-skip → `None`, regardless of any ambient
         // fugu-router install / episode history on the host.
         assert_eq!(calibrated_confidence(&title, &[], &None), None);
+    }
+}
+
+#[cfg(test)]
+mod schema_precheck_tests {
+    use super::{schema_precheck, schema_precheck_each};
+
+    /// A Decomposition JSON missing the required `tasks` field must be
+    /// rejected by `schema_precheck` with a structured, violation-listing
+    /// error — deterministically, in-process, before any `serde_json`
+    /// deserialize is attempted.
+    #[test]
+    fn decomposition_missing_tasks_is_rejected() {
+        let raw = r#"{"goal": "ship something"}"#;
+        let err = schema_precheck(raw, "decomposition").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("tasks") && msg.contains("re-ask required"),
+            "expected a tasks-missing violation, got: {msg}"
+        );
+    }
+
+    /// A Decomposition JSON missing the required `goal` field is likewise
+    /// rejected.
+    #[test]
+    fn decomposition_missing_goal_is_rejected() {
+        let raw = r#"{"tasks": []}"#;
+        let err = schema_precheck(raw, "decomposition").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("goal"),
+            "expected a goal-missing violation, got: {msg}"
+        );
+    }
+
+    /// A valid Decomposition passes the precheck (still deserializes fine
+    /// afterward via the existing serde_json path — additive, not
+    /// replacing).
+    #[test]
+    fn valid_decomposition_passes_precheck_and_still_deserializes() {
+        let raw = r#"{
+            "goal": "ship something",
+            "tasks": [
+                {"id": "t1", "title": "do it", "class": "serial", "done_criteria": "tests pass"}
+            ]
+        }"#;
+        assert!(schema_precheck(raw, "decomposition").is_ok());
+        let dec: crate::model::Decomposition = serde_json::from_str(raw).unwrap();
+        assert_eq!(dec.goal, "ship something");
+        assert_eq!(dec.tasks.len(), 1);
+    }
+
+    /// Unknown schema names are left to the existing serde path (fail-soft):
+    /// the precheck never invents a rejection for a schema it doesn't know.
+    #[test]
+    fn unknown_schema_name_is_inert() {
+        assert!(schema_precheck(r#"{"anything": true}"#, "no-such-schema").is_ok());
+    }
+
+    /// A verdict missing the required `pass` field is rejected when
+    /// precheck-ing an array of verdicts element-wise.
+    #[test]
+    fn verdict_array_missing_pass_is_rejected() {
+        let values: Vec<serde_json::Value> =
+            serde_json::from_str(r#"[{"candidate": "worker-a"}]"#).unwrap();
+        let err = schema_precheck_each(&values, "verdict").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("pass") && msg.contains("re-ask required"),
+            "expected a pass-missing violation, got: {msg}"
+        );
+    }
+
+    /// A valid array of verdicts passes the precheck.
+    #[test]
+    fn verdict_array_valid_passes() {
+        let values: Vec<serde_json::Value> =
+            serde_json::from_str(r#"[{"candidate": "worker-a", "pass": true}]"#).unwrap();
+        assert!(schema_precheck_each(&values, "verdict").is_ok());
     }
 }
 

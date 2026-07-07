@@ -7,6 +7,15 @@ use crate::schema::{Field, Schema, Ty};
 // ── static field slices ──────────────────────────────────────────────────────
 
 // decomposition → tasks items
+//
+// `required` here is deliberately kept in lockstep with condukt's
+// `model::Task` struct: only `id` lacks `#[serde(default)]` there (every
+// other field is `#[serde(default)]`, so absence deserializes to a default
+// rather than a serde error). Marking `title`/`class`/`done_criteria` as
+// schema-required here — while `model::Task` treats them as optional — would
+// make this precheck reject decompositions that condukt's own parser has
+// always accepted, breaking the "valid input is byte-identical" guarantee
+// once this schema is wired into condukt's parse boundary.
 static DECOMPOSITION_TASK_FIELDS: &[Field] = &[
     Field {
         name: "id",
@@ -18,21 +27,21 @@ static DECOMPOSITION_TASK_FIELDS: &[Field] = &[
     Field {
         name: "title",
         ty: Ty::String,
-        required: true,
+        required: false,
         enum_values: &[],
         items: &[],
     },
     Field {
         name: "class",
         ty: Ty::String,
-        required: true,
+        required: false,
         enum_values: &["parallel", "serial", "gated"],
         items: &[],
     },
     Field {
         name: "done_criteria",
         ty: Ty::String,
-        required: true,
+        required: false,
         enum_values: &[],
         items: &[],
     },
@@ -180,11 +189,42 @@ static SCOUT_MEASURE_FIELDS: &[Field] = &[
     },
 ];
 
+// verdict top-level fields — matches condukt's consensus::Verdict shape
+static VERDICT_FIELDS: &[Field] = &[
+    Field {
+        name: "candidate",
+        ty: Ty::String,
+        required: true,
+        enum_values: &[],
+        items: &[],
+    },
+    Field {
+        name: "pass",
+        ty: Ty::Bool,
+        required: true,
+        enum_values: &[],
+        items: &[],
+    },
+    Field {
+        name: "group",
+        ty: Ty::String,
+        required: false,
+        enum_values: &[],
+        items: &[],
+    },
+];
+
 // ── public API ───────────────────────────────────────────────────────────────
 
 /// All registered schema names in a stable order (used by `schemaguard list`).
 pub fn names() -> Vec<&'static str> {
-    vec!["decomposition", "episode", "playbook", "scout-measure"]
+    vec![
+        "decomposition",
+        "episode",
+        "playbook",
+        "scout-measure",
+        "verdict",
+    ]
 }
 
 /// Look up a schema by name. Returns `None` for unknown names.
@@ -205,6 +245,10 @@ pub fn get(name: &str) -> Option<Schema> {
         "scout-measure" => Some(Schema {
             name: "scout-measure".to_string(),
             fields: SCOUT_MEASURE_FIELDS.to_vec(),
+        }),
+        "verdict" => Some(Schema {
+            name: "verdict".to_string(),
+            fields: VERDICT_FIELDS.to_vec(),
         }),
         _ => None,
     }
@@ -245,13 +289,14 @@ mod tests {
     }
 
     #[test]
-    fn decomposition_missing_task_title() {
+    fn decomposition_missing_task_id() {
+        // `id` is the only truly required per-task field (matches condukt's
+        // `model::Task`, where every other field is `#[serde(default)]`).
         let schema = get("decomposition").unwrap();
         let v = json!({
             "goal": "Build a feature",
             "tasks": [
                 {
-                    "id": "t1",
                     "class": "serial",
                     "done_criteria": "done"
                 }
@@ -261,10 +306,24 @@ mod tests {
         assert!(
             violations
                 .iter()
-                .any(|vi| vi.path.contains("title") && vi.problem.contains("required")),
-            "expected title-missing violation, got {:?}",
+                .any(|vi| vi.path.contains("id") && vi.problem.contains("required")),
+            "expected id-missing violation, got {:?}",
             violations
         );
+    }
+
+    #[test]
+    fn decomposition_task_with_only_id_is_valid() {
+        // `title`/`class`/`done_criteria` are optional per-task fields —
+        // condukt's `model::Task` fills them with defaults when absent, so
+        // the schema must accept a task with only `id` present.
+        let schema = get("decomposition").unwrap();
+        let v = json!({
+            "goal": "Build a feature",
+            "tasks": [{"id": "t1"}]
+        });
+        let violations = validate(&v, &schema.fields, "");
+        assert!(violations.is_empty(), "got {:?}", violations);
     }
 
     #[test]
@@ -382,11 +441,61 @@ mod tests {
         );
     }
 
+    // ── verdict ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn verdict_valid() {
+        let schema = get("verdict").unwrap();
+        let v = json!({
+            "candidate": "worker-a",
+            "pass": true,
+            "group": "g1"
+        });
+        let violations = validate(&v, &schema.fields, "");
+        assert!(violations.is_empty(), "got {:?}", violations);
+    }
+
+    #[test]
+    fn verdict_missing_pass() {
+        let schema = get("verdict").unwrap();
+        let v = json!({"candidate": "worker-a"});
+        let violations = validate(&v, &schema.fields, "");
+        assert!(
+            violations
+                .iter()
+                .any(|vi| vi.path == "pass" && vi.problem.contains("required")),
+            "got {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn verdict_wrong_typed_pass() {
+        let schema = get("verdict").unwrap();
+        let v = json!({"candidate": "worker-a", "pass": "yes"});
+        let violations = validate(&v, &schema.fields, "");
+        assert!(
+            violations
+                .iter()
+                .any(|vi| vi.path == "pass" && vi.problem.contains("expected bool")),
+            "got {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn verdict_group_may_be_absent() {
+        let schema = get("verdict").unwrap();
+        let v = json!({"candidate": "worker-a", "pass": false});
+        let violations = validate(&v, &schema.fields, "");
+        assert!(violations.is_empty(), "got {:?}", violations);
+    }
+
     // ── names() / get() ────────────────────────────────────────────────────
 
     #[test]
-    fn names_returns_four_schemas() {
-        assert_eq!(names().len(), 4);
+    fn names_returns_five_schemas() {
+        assert_eq!(names().len(), 5);
     }
 
     #[test]

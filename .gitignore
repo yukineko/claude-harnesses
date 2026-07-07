@@ -16,6 +16,9 @@ Cargo.lock.bak
 .compass/outcomes.json
 .tdd/
 
+# deterministic code index (rebuildable from source via `fugu-router code-index build`)
+.fugu/
+
 # Python bytecode cache
 __pycache__/
 *.pyc

@@ -5,7 +5,7 @@
 //! crossing emits `{"additionalContext":"…"}` (advisory, no block). Harness
 //! errors always exit 0 and allow the stop.
 
-use harness_core::{pricing, usage};
+use harness_core::estimate_transcript_cost;
 use serde_json::json;
 
 use crate::config::Config;
@@ -30,9 +30,9 @@ pub fn evaluate(
     transcript_path: &str,
     today: &str,
 ) -> Option<GateResult> {
-    // Aggregate this session's transcript to compute USD cost.
-    let agg = usage::aggregate(transcript_path)?;
-    let session_usd = pricing::session_cost(agg.models.iter(), &cfg.price_overrides);
+    // Aggregate this session's transcript to compute USD cost, via the single
+    // shared transcript→cost estimator (usage::aggregate + pricing::session_cost).
+    let session_usd = estimate_transcript_cost(transcript_path, &cfg.price_overrides)?.cost_usd;
 
     // Update the daily ledger with this session's latest cost. Serialize the
     // whole load → record → save against other concurrent sessions so a

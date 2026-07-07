@@ -128,7 +128,11 @@ fn record_hook() {
     if !cfg.enabled {
         return;
     }
-    let Some(agg) = usage::aggregate(&input.transcript_path) else {
+    // Route the transcript through the single shared estimator so aggregation is
+    // sourced identically across gauge/budgetguard/session-insights. Only the
+    // aggregate is persisted here; the record's cost is priced on read.
+    let Some(est) = harness_core::estimate_transcript_cost(&input.transcript_path, &cfg.pricing)
+    else {
         return;
     };
 
@@ -136,7 +140,7 @@ fn record_hook() {
         input.session_id.clone(),
         input.project_name(),
         root.to_string_lossy().to_string(),
-        agg,
+        est.aggregate,
         cfg.track_tools,
         chrono::Local::now().to_rfc3339(),
     );
@@ -179,20 +183,12 @@ fn session_cmd(json: bool, session_id: Option<&str>) {
     };
 
     if json {
-        let cost_usd: f64 = rec
-            .models
-            .iter()
-            .map(|(m, u)| pricing::cost(m, u, &cfg.pricing))
-            .sum();
+        let cost_usd = pricing::session_cost(rec.models.iter(), &cfg.pricing);
         let agent_costs: std::collections::BTreeMap<String, serde_json::Value> = rec
             .agents
             .iter()
             .map(|(name, au)| {
-                let c: f64 = au
-                    .models
-                    .iter()
-                    .map(|(m, u)| pricing::cost(m, u, &cfg.pricing))
-                    .sum();
+                let c = pricing::session_cost(au.models.iter(), &cfg.pricing);
                 (
                     name.clone(),
                     serde_json::json!({"cost_usd": c, "turns": au.turns}),
@@ -212,11 +208,7 @@ fn session_cmd(json: bool, session_id: Option<&str>) {
         return;
     }
 
-    let cost: f64 = rec
-        .models
-        .iter()
-        .map(|(m, u)| pricing::cost(m, u, &cfg.pricing))
-        .sum();
+    let cost = pricing::session_cost(rec.models.iter(), &cfg.pricing);
 
     println!("session  {}", rec.session_id);
     println!("project  {} ({})", rec.project, rec.cwd);
@@ -322,12 +314,8 @@ fn subagents_cmd(json: bool, session_id: Option<&str>) {
         return;
     };
     let subs = usage::subagent_usage(&path.to_string_lossy());
-    let cost_of = |s: &usage::SubAgentUsage| -> f64 {
-        s.models
-            .iter()
-            .map(|(m, u)| pricing::cost(m, u, &cfg.pricing))
-            .sum()
-    };
+    let cost_of =
+        |s: &usage::SubAgentUsage| -> f64 { pricing::session_cost(s.models.iter(), &cfg.pricing) };
 
     if json {
         let arr: Vec<serde_json::Value> = subs
@@ -400,11 +388,7 @@ fn status() {
     let records = store::load_all(&cfg.state_dir);
     let total_cost: f64 = records
         .iter()
-        .flat_map(|r| {
-            r.models
-                .iter()
-                .map(|(m, u)| pricing::cost(m, u, &cfg.pricing))
-        })
+        .map(|r| pricing::session_cost(r.models.iter(), &cfg.pricing))
         .sum();
 
     println!("config:       {}", Config::config_source(&root).display());

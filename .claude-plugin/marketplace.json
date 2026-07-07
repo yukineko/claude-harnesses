@@ -82,7 +82,7 @@
     {
       "name": "budgetguard",
       "description": "Real-time cost budget gate for Claude Code: on Stop, read the session transcript, compute USD cost, and block the turn when session or daily limits are exceeded — feeding the overage back so the agent winds down gracefully. Subscription-native (one Stop hook + bundled Rust binary, no API key).",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "category": "cost",
       "keywords": [
         "hooks",
@@ -408,7 +408,7 @@
     {
       "name": "gauge",
       "description": "Local LLMOps telemetry for Claude Code: a Stop hook that reads each session's transcript and records token usage, cache hits, tool calls, latency, and estimated cost to a local store — then `gauge report` rolls it up by project, model, and day. Observability for your own agent runs, subscription-native (one hook + bundled Rust binary, no API key, nothing leaves the machine).",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -579,7 +579,7 @@
     {
       "name": "session-insights",
       "description": "Per-session work metrics for Claude Code: PostToolUse + Stop hooks roll up tool calls, turns, files touched, a size class (XS–XL) and a work category per session, viewable with `session-insights report` and optionally logged as a dated note to an Obsidian vault. Inspired by Devin Session Insights. Subscription-native (two hooks + bundled Rust binary, no API key).",
-      "version": "0.2.4",
+      "version": "0.2.5",
       "category": "observability",
       "keywords": [
         "hooks",

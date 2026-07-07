@@ -25,6 +25,7 @@ compile_error!(
 pub mod config;
 pub mod daily;
 pub mod discovery;
+pub mod estimate;
 pub mod gate;
 pub mod hash;
 pub mod hook;
@@ -44,3 +45,8 @@ pub mod store;
 pub mod transcript;
 pub mod trust;
 pub mod usage;
+
+// The one bundled transcript → (usage, cost) estimator, re-exported at the crate
+// root so consumers call a single API instead of pairing usage::aggregate with
+// pricing::session_cost by hand.
+pub use estimate::{estimate_transcript_cost, TranscriptCostEstimate};

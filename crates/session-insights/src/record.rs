@@ -14,10 +14,11 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use harness_core::estimate_transcript_cost;
 use harness_core::pricing::{self, PriceOverride};
 use harness_core::session;
 use harness_core::transcript;
-use harness_core::usage::{self, ModelUsage};
+use harness_core::usage::ModelUsage;
 
 use crate::config::Config;
 use crate::metrics::{short, Session};
@@ -65,7 +66,7 @@ fn session_models(ctx: &RecordCtx) -> Option<BTreeMap<String, ModelUsage>> {
             return Some(rec.models);
         }
     }
-    usage::aggregate(ctx.transcript_path).map(|agg| agg.models)
+    estimate_transcript_cost(ctx.transcript_path, ctx.overrides).map(|e| e.aggregate.models)
 }
 
 /// Resolve per-agent (main / sub-agent) token usage. Prefer gauge's canonical
@@ -79,8 +80,8 @@ fn session_agents(ctx: &RecordCtx) -> Option<BTreeMap<String, harness_core::usag
             return Some(rec.agents);
         }
     }
-    usage::aggregate(ctx.transcript_path)
-        .map(|agg| agg.agents)
+    estimate_transcript_cost(ctx.transcript_path, ctx.overrides)
+        .map(|e| e.aggregate.agents)
         .filter(|a| !a.is_empty())
 }
 

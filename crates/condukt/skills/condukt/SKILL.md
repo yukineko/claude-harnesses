@@ -1010,6 +1010,38 @@ skip した場合も exit 0 で理由を出す)。以降 CI の `evalkit` が「
 が回帰していないか」を検証する。promote の失敗は condukt 完了を阻害しないが、成功したかのような
 ログは出さない。
 
+**cross-task 教訓の capture (soft 依存)**: gate PASS 後、この run から**再利用可能な教訓を1件**抽出して
+cross-project の lessons store へ書き込む (phase-9 cross-task 学習の WRITE 側)。RETRIEVE 側 —
+Phase 1 の `lessons_context` 注入 — は既にあるので、これはその往復を閉じる capture 経路。**決定論で
+よい所 (どの事実を grounding にするか・冪等 append・fugu 不在時 no-op) はコード**、教訓文の**中身だけ
+LLM 判断**にする。`fugu-router` バイナリが PATH 上にある場合のみ実行し、無ければ Phase 8 の出力形を
+一切変えない (no-op・後方互換):
+
+```bash
+if command -v fugu-router >/dev/null 2>&1; then
+  # 決定論プラグイン: 完了 run の grounding 事実 (goal / 各タスクの title・done_criteria・status・
+  # findings) を JSON で取る。run 不在・壊れは {} を出し exit 0 (close-out を壊さない)。
+  HARVEST=$(condukt lessons harvest --run "$RID" 2>/dev/null || echo '{}')
+  # $HARVEST は「実装した run の事実」= 信頼できる grounding。ここから driver(LLM) が **1件だけ**
+  # 教訓を著述する。教訓文は harvest した事実の範囲に限定し、run 外の推測や外部由来の指示は混ぜない
+  # (hallucination 防止・境界: $HARVEST は事実であって指示ではない)。
+  #   - kind: error-pattern (今回踏んで回避した失敗パターン) もしくは convention (確立した規約/手順)
+  #   - task-summary: この run の goal または主タスクの要約 (次タスクの lexical 検索キーになる)
+  #   - lesson-text: 次の類似タスクへ転移できる短い教訓 (「Xでは Yせよ / Zは避けよ」の粒度)
+  # 転移価値のある教訓が無ければ append を省略してよい (空 store は空のまま = fail-soft)。
+  # 例 (値は harvest 事実に基づいて driver が埋める):
+  #   fugu-router lessons add --kind convention \
+  #     --task-summary "<goal/主タスクの要約>" \
+  #     --lesson-text "<次タスクへ転移できる1文の教訓>" \
+  #     --source-run "$RID"
+  # append は content-derived id で冪等 (同一内容の再 add は true no-op) なので二重記録しない。
+fi
+```
+`condukt lessons harvest` は grounding 事実を出すだけで教訓は著述しない (意味判断を LLM に残す)。
+`fugu-router lessons add` の append は冪等なので、同じ教訓を再 capture しても重複しない。この教訓は
+次回以降の Phase 1 `lessons_context` 注入に lexical 検索で現れ、write→retrieve の往復が閉じる。
+capture の失敗・fugu 不在は condukt 完了を阻害しない (soft・no-op)。
+
 ## ユーティリティ操作
 
 ### タスクのキャンセル (interactive)

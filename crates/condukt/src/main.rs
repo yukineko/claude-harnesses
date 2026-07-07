@@ -19,6 +19,7 @@ mod gate_exec;
 mod gatelog;
 mod hooks;
 mod install;
+mod lessons;
 mod lock;
 mod model;
 mod oracle;
@@ -158,6 +159,16 @@ enum Command {
     Uninstall,
     /// Print ~/.condukt/knowledge.md to stdout (empty output if absent).
     Knowledge,
+    /// Cross-task learning (WRITE/capture side): deterministically harvest a
+    /// completed run's grounding facts (goal, per-task title/done_criteria/
+    /// status, findings summaries) as JSON so the SKILL's Phase-8 close-out can
+    /// author ONE reusable lesson grounded in facts and append it via
+    /// `fugu-router lessons add`. Fail-soft: a missing/corrupt run prints `{}`
+    /// and exits 0 (never breaks the close-out turn).
+    Lessons {
+        #[command(subcommand)]
+        action: LessonsAction,
+    },
     /// Terminal external-loop step: open a PR via the gh CLI. Push/PR stays
     /// BEHIND the GATED human approval — the actual `gh pr create` runs ONLY with
     /// `--execute` (supplied by the /condukt skill after approval). Uses gh's own
@@ -313,6 +324,18 @@ enum ConsensusAction {
         /// Agreement threshold override (CLI > JSON > config > built-in default).
         #[arg(long)]
         threshold: Option<f64>,
+    },
+}
+
+#[derive(Subcommand)]
+enum LessonsAction {
+    /// Emit a completed run's grounding facts as JSON (goal, per-task
+    /// title/done_criteria/status, findings summaries). Deterministic plumbing
+    /// for the SKILL Phase-8 lesson-capture step; the lesson TEXT stays the
+    /// LLM's judgment. Fail-soft: a missing/corrupt run prints `{}` and exits 0.
+    Harvest {
+        #[arg(long)]
+        run: String,
     },
 }
 
@@ -1478,6 +1501,12 @@ fn run_user(cmd: Command) -> Result<()> {
                 print!("{}", std::fs::read_to_string(&path)?);
             }
         }
+        Command::Lessons { action } => match action {
+            LessonsAction::Harvest { run } => {
+                let facts = lessons::harvest(&cfg, &cwd, &run);
+                println!("{}", serde_json::to_string(&facts)?);
+            }
+        },
         Command::Pr { action } => run_pr(&cfg, &cwd, action)?,
         Command::Loop {
             module,

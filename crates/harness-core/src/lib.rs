@@ -38,6 +38,7 @@ pub mod ledger;
 pub mod metrics;
 pub mod pricing;
 pub mod projkey;
+pub mod scorer;
 pub mod session;
 pub mod shell;
 pub mod spans;
@@ -50,3 +51,7 @@ pub mod usage;
 // root so consumers call a single API instead of pairing usage::aggregate with
 // pricing::session_cost by hand.
 pub use estimate::{estimate_transcript_cost, TranscriptCostEstimate};
+// The deterministic priority scorer (compass ONE #4), re-exported at the crate
+// root so consumers call `harness_core::score(...)` directly instead of
+// reaching into the `scorer` module.
+pub use scorer::{score, Candidate, Effort, Lens, Severity};

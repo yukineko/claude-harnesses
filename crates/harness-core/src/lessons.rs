@@ -77,18 +77,90 @@ pub fn append(lesson: &Lesson) {
     append_at(&store_path(), lesson);
 }
 
+/// Max attempts and per-attempt backoff for acquiring the advisory lockfile
+/// (see [`acquire_lock`]). Sized so contention among a handful of concurrent
+/// same-machine harness processes resolves in well under a second, while a
+/// genuinely stuck lock still fails fast — fail-soft — rather than spinning
+/// forever (never-break-a-turn).
+const LOCK_MAX_ATTEMPTS: u32 = 200;
+const LOCK_RETRY_DELAY_MS: u64 = 5;
+
+/// RAII guard for the advisory lockfile: created once the lock is acquired,
+/// removed on `Drop` — including during panic unwind — so the critical
+/// section it guards is never left permanently locked by anything short of a
+/// hard process kill.
+struct LockGuard {
+    path: PathBuf,
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// The advisory lockfile path for a given store path: `<path>.lock`.
+fn lock_path_for(path: &Path) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(".lock");
+    PathBuf::from(s)
+}
+
+/// Acquire the advisory lockfile for `path`, spinning with a short backoff.
+/// `OpenOptions::create_new` is atomic at the filesystem level (it fails with
+/// `AlreadyExists` if the file is already there), so this serializes the
+/// read-check-append critical section across concurrent processes/threads
+/// without pulling in a new file-locking dependency. Fail-soft: returns
+/// `None` — never panics — if the lock can't be acquired within the retry
+/// budget or the lockfile can't be created for another reason (e.g. the
+/// parent dir is unwritable).
+fn acquire_lock(path: &Path) -> Option<LockGuard> {
+    let lock_path = lock_path_for(path);
+    if let Some(parent) = lock_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    for _ in 0..LOCK_MAX_ATTEMPTS {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(_) => return Some(LockGuard { path: lock_path }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                std::thread::sleep(std::time::Duration::from_millis(LOCK_RETRY_DELAY_MS));
+            }
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
 /// Internal: append to an explicit path. Used by `append` and by tests.
+///
+/// The read-check-append critical section (load → id-exists check → write)
+/// is guarded by an advisory lockfile (`<path>.lock`) so concurrent
+/// same-machine processes/threads appending to the same store can't
+/// interleave writes or race the idempotency check. Fail-soft throughout: if
+/// the lock can't be acquired within the retry budget, the lesson is silently
+/// dropped rather than risking a corrupt or duplicated write (append never
+/// panics).
 fn append_at(path: &Path, lesson: &Lesson) {
     use std::io::Write;
 
-    // Idempotency-by-key: skip if this id already exists (mirrors discovery's
-    // dedup precedent). Load is fail-soft, so a missing file reads as empty.
-    if load_at(path).iter().any(|l| l.id == lesson.id) {
-        return;
-    }
-
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
+    }
+
+    let Some(_guard) = acquire_lock(path) else {
+        return;
+    };
+
+    // Idempotency-by-key: skip if this id already exists (mirrors discovery's
+    // dedup precedent). Load is fail-soft, so a missing file reads as empty.
+    // Holding the lock across this check-then-write is what makes the
+    // idempotency guarantee hold under concurrency, not just single-threaded.
+    if load_at(path).iter().any(|l| l.id == lesson.id) {
+        return;
     }
 
     let Ok(mut file) = std::fs::OpenOptions::new()
@@ -279,6 +351,70 @@ mod tests {
         // A genuinely new id does append.
         append_at(&path, &lesson("other", "another lesson", "text"));
         assert_eq!(load_at(&path).len(), 2);
+    }
+
+    #[test]
+    fn append_is_atomic_under_concurrent_writers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("lessons.jsonl");
+
+        // 8 threads race to append: each writes its own unique id, and *all*
+        // of them also race to append the SAME "dup" id, so the idempotency
+        // check-then-write is genuinely contended, not just sequential.
+        let mut handles = Vec::new();
+        for i in 0..8 {
+            let path = path.clone();
+            handles.push(std::thread::spawn(move || {
+                append_at(&path, &lesson(&format!("unique-{i}"), "s", "t"));
+                append_at(&path, &lesson("dup", "dup summary", "dup text"));
+            }));
+        }
+        for h in handles {
+            h.join().expect("writer thread panicked");
+        }
+
+        // No line was torn/interleaved by concurrent writers: every raw line
+        // in the file must parse as valid JSON (load_at only counts
+        // successfully-parsed lines, so compare against the raw line count).
+        let raw = std::fs::read_to_string(&path).expect("read store");
+        let raw_lines = raw.lines().filter(|l| !l.trim().is_empty()).count();
+        let loaded = load_at(&path);
+        assert_eq!(
+            raw_lines,
+            loaded.len(),
+            "every raw line must parse as valid JSON under concurrent writers"
+        );
+
+        // Idempotency held under race: exactly one "dup", all 8 uniques
+        // present (no lost writes).
+        let mut ids: Vec<&str> = loaded.iter().map(|l| l.id.as_str()).collect();
+        ids.sort();
+        let dup_count = ids.iter().filter(|id| **id == "dup").count();
+        assert_eq!(
+            dup_count, 1,
+            "concurrent duplicate-id appends must collapse to exactly 1, got ids={ids:?}"
+        );
+        assert_eq!(
+            loaded.len(),
+            9,
+            "8 unique ids + 1 dup id = 9 total lines, got {}: {ids:?}",
+            loaded.len()
+        );
+        for i in 0..8 {
+            let want = format!("unique-{i}");
+            assert!(
+                ids.contains(&want.as_str()),
+                "no writer's id may be lost under concurrency: missing {want} in {ids:?}"
+            );
+        }
+
+        // The advisory lockfile must not be left behind once all writers are
+        // done (RAII guard released the lock every time, including on the
+        // early-return idempotency-skip path).
+        assert!(
+            !lock_path_for(&path).exists(),
+            "lockfile must be cleaned up after all appends complete"
+        );
     }
 
     #[test]

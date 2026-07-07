@@ -398,6 +398,8 @@ mod tests {
             kind: None,
             checks: Vec::new(),
             expected_trajectory: None,
+            is_behavioral: None,
+            mechanical_check: None,
         }
     }
 

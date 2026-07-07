@@ -35,6 +35,25 @@ pub struct Check {
     pub expect_substring: Option<String>,
 }
 
+/// A structured, deterministic verifier-skip mechanical check for a task's
+/// `done_criteria`. When present on a [`Task`], it is authoritative for
+/// `verify::classify_criteria`'s mechanical-command resolution, overriding
+/// prose-based regex/keyword extraction. Distinct from [`Check`] (which feeds
+/// `checks_verdict`/`run_checks`, the machine-oracle path): this struct is
+/// specifically the single skip-decision check tied to `done_criteria`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MechanicalCheck {
+    /// Shell command whose success is the mechanical skip evidence, e.g.
+    /// `"cargo test -p condukt"`.
+    pub cmd: String,
+    /// Expected exit code. `None` means "expect 0".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_exit: Option<i32>,
+    /// If set, the combined stdout+stderr must contain this substring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_substring: Option<String>,
+}
+
 /// One unit of work in a decomposition.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Task {
@@ -91,6 +110,22 @@ pub struct Task {
     /// decompositions without it are unaffected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_trajectory: Option<serde_json::Value>,
+    /// Interpreter-declared, authoritative fact: does this task's `done_criteria`
+    /// demand behavioral judgement (implementation/logic/design/correctness),
+    /// as opposed to a purely observable mechanical fact? When present, this
+    /// overrides `verify::criteria_is_behavioral`'s prose marker-scan — a
+    /// deterministic structured fact instead of substring-matching free text
+    /// (which drifts with wording and is an injection surface via
+    /// `done_criteria`). Absent by default: existing decompositions without it
+    /// fall back to the prose scan, byte-for-byte unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_behavioral: Option<bool>,
+    /// Interpreter-declared, authoritative mechanical verifier-skip check (see
+    /// [`MechanicalCheck`]). When present, overrides `verify::mechanical_cmd`'s
+    /// prose-based regex/keyword extraction. Absent by default: existing
+    /// decompositions without it fall back to extraction, unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanical_check: Option<MechanicalCheck>,
 }
 
 impl Task {
@@ -337,5 +372,46 @@ mod tests {
         let json = serde_json::to_string(&dec.tasks[0]).expect("task should serialize");
         let back: Task = serde_json::from_str(&json).expect("task should deserialize");
         assert_eq!(back.expected_trajectory, dec.tasks[0].expected_trajectory);
+    }
+
+    #[test]
+    fn task_without_is_behavioral_or_mechanical_check_defaults_none() {
+        // Back-compat: decompositions emitted before these fields existed must
+        // load and deserialize identically to before their addition.
+        let dec: Decomposition = serde_json::from_str(
+            r#"{"goal":"g","tasks":[{"id":"a","touched_files":["src/a.rs"]}]}"#,
+        )
+        .expect("decomposition without is_behavioral/mechanical_check should parse");
+        assert_eq!(dec.tasks.len(), 1);
+        assert_eq!(dec.tasks[0].is_behavioral, None);
+        assert_eq!(dec.tasks[0].mechanical_check, None);
+    }
+
+    #[test]
+    fn task_with_is_behavioral_is_populated() {
+        let dec: Decomposition =
+            serde_json::from_str(r#"{"goal":"g","tasks":[{"id":"a","is_behavioral":false}]}"#)
+                .expect("decomposition with is_behavioral should parse");
+        assert_eq!(dec.tasks[0].is_behavioral, Some(false));
+    }
+
+    #[test]
+    fn task_with_mechanical_check_round_trips() {
+        let dec: Decomposition = serde_json::from_str(
+            r#"{"goal":"g","tasks":[{"id":"a","mechanical_check":{"cmd":"cargo test -p x","expect_exit":0,"expect_substring":"ok"}}]}"#,
+        )
+        .expect("decomposition with mechanical_check should parse");
+        let mc = dec.tasks[0]
+            .mechanical_check
+            .as_ref()
+            .expect("mechanical_check should be Some");
+        assert_eq!(mc.cmd, "cargo test -p x");
+        assert_eq!(mc.expect_exit, Some(0));
+        assert_eq!(mc.expect_substring.as_deref(), Some("ok"));
+
+        // Round-trip: serialize then deserialize and compare structurally.
+        let json = serde_json::to_string(&dec.tasks[0]).expect("task should serialize");
+        let back: Task = serde_json::from_str(&json).expect("task should deserialize");
+        assert_eq!(back.mechanical_check, dec.tasks[0].mechanical_check);
     }
 }

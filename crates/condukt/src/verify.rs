@@ -954,9 +954,21 @@ const BEHAVIORAL_MARKERS: &[&str] = &[
     "稼働",
 ];
 
-/// True iff `done_criteria` carries any behavioral marker — i.e. it asks about
-/// *what the code does*, not merely an observable mechanical fact.
-pub fn criteria_is_behavioral(done_criteria: &str) -> bool {
+/// True iff `done_criteria` demands behavioral judgement (implementation /
+/// logic / design / correctness), rather than a purely observable mechanical
+/// fact.
+///
+/// `is_behavioral_hint` is the interpreter-declared, structured
+/// [`crate::model::Task::is_behavioral`] fact. When `Some(b)` it is
+/// authoritative and returned as-is — a deterministic fact instead of
+/// substring-matching free text (which drifts with wording and is an
+/// injection surface via `done_criteria`). Only when it is `None` do we fall
+/// back to the [`BEHAVIORAL_MARKERS`] prose scan (unchanged from before this
+/// hint existed).
+pub fn criteria_is_behavioral(done_criteria: &str, is_behavioral_hint: Option<bool>) -> bool {
+    if let Some(b) = is_behavioral_hint {
+        return b;
+    }
     let lower = done_criteria.to_lowercase();
     BEHAVIORAL_MARKERS
         .iter()
@@ -974,19 +986,48 @@ pub struct Classification {
     /// command exists AND the criteria carries no behavioral markers. Any
     /// ambiguity resolves to `false` (run the verifier — the safe side).
     pub skip_eligible: bool,
+    /// Expected exit code, carried through structurally from a
+    /// [`crate::model::MechanicalCheck`] hint when one was supplied. `None`
+    /// when no hint was given (prose extraction carries no expectation beyond
+    /// "exits 0", which callers already assume). Passthrough only today: no
+    /// runner in this crate enforces it yet, but it is exposed here so future
+    /// or external consumers of [`classify_criteria`] don't lose the fact.
+    #[allow(dead_code)]
+    pub expect_exit: Option<i32>,
+    /// Expected substring, carried through structurally from a
+    /// [`crate::model::MechanicalCheck`] hint when one was supplied.
+    /// Passthrough only today (see `expect_exit`).
+    #[allow(dead_code)]
+    pub expect_substring: Option<String>,
 }
 
 /// Classify a done_criteria: behavioral vs purely mechanical, and whether the
 /// verifier may be skipped. Behavioral criteria are never skip-eligible even
 /// when they embed a runnable command.
-pub fn classify_criteria(done_criteria: &str) -> Classification {
-    let behavioral = criteria_is_behavioral(done_criteria);
-    let mechanical_cmd = mechanical_cmd(done_criteria);
+///
+/// `is_behavioral_hint` / `mechanical_check_hint` are the interpreter-declared
+/// structured facts from the owning [`crate::model::Task`]
+/// (`is_behavioral` / `mechanical_check`). When present they are authoritative
+/// and override the corresponding prose heuristic; pass `None` for either to
+/// get the original prose-only behavior (byte-for-byte unchanged).
+pub fn classify_criteria(
+    done_criteria: &str,
+    is_behavioral_hint: Option<bool>,
+    mechanical_check_hint: Option<&crate::model::MechanicalCheck>,
+) -> Classification {
+    let behavioral = criteria_is_behavioral(done_criteria, is_behavioral_hint);
+    let mechanical_cmd = mechanical_cmd(done_criteria, mechanical_check_hint);
     let skip_eligible = !behavioral && mechanical_cmd.is_some();
+    let (expect_exit, expect_substring) = match mechanical_check_hint {
+        Some(check) => (check.expect_exit, check.expect_substring.clone()),
+        None => (None, None),
+    };
     Classification {
         behavioral,
         mechanical_cmd,
         skip_eligible,
+        expect_exit,
+        expect_substring,
     }
 }
 
@@ -1049,7 +1090,21 @@ pub fn mechanical_skip_verdict(
 /// checking. Returns `None` when no mechanical check can be derived (the LLM
 /// verifier is then required). This is intentionally about *runnability* only;
 /// [`classify_criteria`] layers the behavioral veto on top.
-pub fn mechanical_cmd(done_criteria: &str) -> Option<Vec<String>> {
+///
+/// `mechanical_check_hint` is the interpreter-declared, structured
+/// [`crate::model::Task::mechanical_check`] fact. When `Some`, its `cmd` is
+/// authoritative and returned as-is (split into argv) — the caller
+/// ([`classify_criteria`]) also threads through its `expect_exit` /
+/// `expect_substring` unchanged. Only when the hint is `None` do we fall back
+/// to the regex/keyword prose extraction below (unchanged from before this
+/// hint existed).
+pub fn mechanical_cmd(
+    done_criteria: &str,
+    mechanical_check_hint: Option<&crate::model::MechanicalCheck>,
+) -> Option<Vec<String>> {
+    if let Some(check) = mechanical_check_hint {
+        return Some(check.cmd.split_whitespace().map(String::from).collect());
+    }
     // Prefer an explicit backtick command: `cargo test -p condukt`
     if let Ok(re) = regex::Regex::new(r"`([^`]+)`") {
         for caps in re.captures_iter(done_criteria) {
@@ -1459,7 +1514,7 @@ mod tests {
     #[test]
     fn behavioral_criteria_never_skips_verifier() {
         let dc = "Implement the retry logic correctly; `cargo test -p condukt` passes";
-        let c = classify_criteria(dc);
+        let c = classify_criteria(dc, None, None);
         assert!(c.behavioral, "criteria must be classified behavioral");
         assert!(
             c.mechanical_cmd.is_some(),
@@ -1475,7 +1530,7 @@ mod tests {
     /// skip the verifier.
     #[test]
     fn purely_mechanical_criteria_is_skip_eligible() {
-        let c = classify_criteria("`cargo test -p condukt` exits 0");
+        let c = classify_criteria("`cargo test -p condukt` exits 0", None, None);
         assert!(!c.behavioral);
         assert_eq!(
             c.mechanical_cmd.as_deref(),
@@ -1487,7 +1542,7 @@ mod tests {
     /// No runnable command → not skip-eligible (verifier must run).
     #[test]
     fn non_runnable_criteria_is_not_skip_eligible() {
-        let c = classify_criteria("the README documents the new flag");
+        let c = classify_criteria("the README documents the new flag", None, None);
         assert!(c.mechanical_cmd.is_none());
         assert!(!c.skip_eligible);
     }
@@ -1504,6 +1559,8 @@ mod tests {
             behavioral: false,
             mechanical_cmd: None,
             skip_eligible: true,
+            expect_exit: None,
+            expect_substring: None,
         };
         // The runner must never be called when there is no command.
         let (verdict, gate_failed) = mechanical_skip_verdict(&cls, |_cmd| {
@@ -1532,6 +1589,8 @@ mod tests {
             behavioral: false,
             mechanical_cmd: Some(vec!["cargo".to_string(), "test".to_string()]),
             skip_eligible: true,
+            expect_exit: None,
+            expect_substring: None,
         };
         // Passing command → skip the verifier, gate not failed.
         let (v_pass, failed_pass) =
@@ -1647,6 +1706,8 @@ test result: FAILED. 1 passed; 1 failed; 0 ignored";
             behavioral: false,
             mechanical_cmd: Some(vec!["cargo".to_string(), "test".to_string()]),
             skip_eligible: true,
+            expect_exit: None,
+            expect_substring: None,
         };
         // Passing case: no failure_digest field (shape unchanged).
         let (v_pass, _) = mechanical_skip_verdict(&cls, |_c| (true, "all good".into()));
@@ -1986,7 +2047,7 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
     #[test]
     fn japanese_behavioral_marker_blocks_skip() {
         let dc = "リトライの振る舞いを実装する。`cargo test -p condukt` が通ること";
-        let c = classify_criteria(dc);
+        let c = classify_criteria(dc, None, None);
         assert!(c.behavioral);
         assert!(!c.skip_eligible);
     }
@@ -2004,7 +2065,7 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
             "実行時に例外を出さないこと。`pytest` が通る",
             "本番相当で稼働し続けること。`go test` が通る",
         ] {
-            let c = classify_criteria(dc);
+            let c = classify_criteria(dc, None, None);
             assert!(
                 c.behavioral,
                 "runtime/health criteria must be behavioral: {dc}"
@@ -2014,6 +2075,102 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
                 "runtime/health criteria must never skip the verifier even with an embedded command: {dc}"
             );
         }
+    }
+
+    // ── Structured Task facts override prose (determinism / anti-injection) ─
+
+    /// `is_behavioral_hint: Some(true)` is authoritative and overrides a
+    /// criteria string that carries NO behavioral markers.
+    #[test]
+    fn is_behavioral_hint_true_overrides_marker_scan() {
+        let dc = "the file exists on disk";
+        assert!(
+            !criteria_is_behavioral(dc, None),
+            "prose alone is not behavioral"
+        );
+        let c = classify_criteria(dc, Some(true), None);
+        assert!(c.behavioral, "Some(true) hint must be authoritative");
+        assert!(!c.skip_eligible);
+    }
+
+    /// `is_behavioral_hint: Some(false)` is authoritative and overrides a
+    /// criteria string that DOES carry behavioral markers.
+    #[test]
+    fn is_behavioral_hint_false_overrides_marker_scan() {
+        let dc = "implement the retry logic correctly";
+        assert!(
+            criteria_is_behavioral(dc, None),
+            "prose alone is behavioral"
+        );
+        let c = classify_criteria(dc, Some(false), None);
+        assert!(
+            !c.behavioral,
+            "Some(false) hint must be authoritative even over behavioral prose"
+        );
+    }
+
+    /// `is_behavioral_hint: None` reproduces the exact prose-scan verdict —
+    /// the regression guard that the hint is purely additive.
+    #[test]
+    fn is_behavioral_hint_none_matches_existing_marker_behavior() {
+        for dc in [
+            "implement the retry logic correctly",
+            "the file exists on disk",
+            "リトライの振る舞いを実装する",
+        ] {
+            assert_eq!(
+                criteria_is_behavioral(dc, None),
+                classify_criteria(dc, None, None).behavioral,
+                "None hint must match the direct prose-scan verdict for: {dc}"
+            );
+        }
+    }
+
+    /// `mechanical_check_hint: Some(..)` is authoritative: the cmd (split to
+    /// argv) and expect_exit/expect_substring pass through structurally,
+    /// unchanged, regardless of what (if anything) the done_criteria prose says.
+    #[test]
+    fn mechanical_check_hint_returns_structured_cmd_and_expect() {
+        let hint = crate::model::MechanicalCheck {
+            cmd: "cargo test -p condukt".to_string(),
+            expect_exit: Some(0),
+            expect_substring: Some("test result: ok".to_string()),
+        };
+        // Prose says nothing runnable at all — the hint must still resolve.
+        let c = classify_criteria("the README documents the new flag", None, Some(&hint));
+        assert_eq!(
+            c.mechanical_cmd.as_deref(),
+            Some(&["cargo", "test", "-p", "condukt"].map(String::from)[..]),
+            "hint cmd must be split into argv, structurally unchanged"
+        );
+        assert_eq!(c.expect_exit, Some(0));
+        assert_eq!(c.expect_substring.as_deref(), Some("test result: ok"));
+        assert!(
+            c.skip_eligible,
+            "a mechanical hint with no behavioral hint is skip-eligible"
+        );
+    }
+
+    /// `mechanical_check_hint: None` falls back to the existing regex/keyword
+    /// prose extraction — the regression guard that the hint is purely
+    /// additive and does not change unhinted behavior.
+    #[test]
+    fn mechanical_check_hint_none_falls_back_to_prose_extraction() {
+        let dc = "`cargo test -p condukt` exits 0";
+        let c = classify_criteria(dc, None, None);
+        assert_eq!(
+            c.mechanical_cmd.as_deref(),
+            Some(&["cargo", "test", "-p", "condukt"].map(String::from)[..]),
+            "None hint must match the direct prose-extraction verdict"
+        );
+        assert_eq!(
+            c.expect_exit, None,
+            "prose extraction carries no expect_exit"
+        );
+        assert_eq!(
+            c.expect_substring, None,
+            "prose extraction carries no expect_substring"
+        );
     }
 
     // ── Health probe with server launch (health-url 付き起動経路) ──────────

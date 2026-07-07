@@ -1,6 +1,6 @@
 {
   "name": "ship",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "nudges the commit・merge・push・plugin-update shipping ritual; detects unshipped git/plugin-cache state; subscription-native",
   "author": { "name": "yukineko" },
   "keywords": ["hooks", "git", "shipping", "session", "rust"]

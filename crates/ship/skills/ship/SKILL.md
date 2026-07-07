@@ -30,10 +30,13 @@ An automatic operation:
 ship check --run-safe
 ```
 
-This runs `scripts/rebuild-plugins.sh` to rebuild the plugin cache from source — it swaps freshly built
-binaries into EXISTING cache version dirs. It CANNOT advance the installed version pointer (create a new
-`<name>/<version>/` dir or repoint `installed_plugins.json`), so if `ship check` still reports "stale plugin
-binaries" after `--run-safe`, that residual staleness needs the rollout step below.
+This runs `scripts/rebuild-plugins.sh --stage-repo` to rebuild plugins from source. `--stage-repo` refreshes
+BOTH the live plugin cache (existing cache version dirs) AND the committed `crates/<name>/bin/` binary — the
+latter is exactly what the "stale plugin binaries" check measures (committed bin older than its `src/`), and
+what the directory marketplace ships to `/plugin install`. So `--run-safe` DOES clear the "stale plugin
+binaries" item: on re-detect it's gone, and the only residue is that the refreshed binary now shows up as an
+uncommitted change (its commit is GATED — step 3). The refresh is a plain file copy, never a git command, so
+ship's git invariant is preserved (it does dirty the working tree with the rebuilt binary).
 
 ### 2b. Auto-rollout (heavier, explicit): `ship rollout`
 
@@ -47,8 +50,11 @@ This runs `scripts/rollout-plugins.sh`, which fully automates the `/plugin updat
 `scripts/sync-plugin-assets.sh`. It is a **separate, explicit** step from `--run-safe` (not folded into it)
 because it is heavier and more consequential — it advances what version of a plugin is actually installed and
 running, not just the binary bits inside an existing cache dir. It is still not git-mutating: it only writes
-into `~/.claude/plugins/`. Use this to clear the residual "stale plugin binaries" that `--run-safe` alone
-cannot resolve.
+into `~/.claude/plugins/`. NOTE: rollout runs rebuild-plugins.sh WITHOUT `--stage-repo`, so it is cache-only
+w.r.t. the repo and does NOT touch the committed `crates/*/bin` binary — it therefore does NOT clear a "stale
+plugin binaries" item (that is committed-bin staleness, cleared by `--run-safe` in step 2 + a GATED commit).
+Use rollout when you need to advance the installed version pointer (the `/plugin update` step), not to fix
+stale committed binaries.
 
 ### 3. Commit (GATED — requires user approval)
 
@@ -108,12 +114,14 @@ On every SessionEnd, the ship hook runs `ship session-end` to remind you if ther
 User: please rebuild
 /ship check --run-safe
 
-→ runs scripts/rebuild-plugins.sh
+→ runs scripts/rebuild-plugins.sh --stage-repo (refreshes cache AND committed crates/*/bin)
+→ "stale plugin binaries" now clears; the refreshed binary shows as an uncommitted change (commit is GATED)
 
-User: it's still showing stale plugin binaries, fully clear it
+User: I also need the installed version pointer advanced (/plugin update)
 /ship rollout
 
-→ runs scripts/rollout-plugins.sh (advances installed version pointer, then rebuild+sync)
+→ runs scripts/rollout-plugins.sh (advances installed version pointer, then rebuild+sync;
+   cache-only w.r.t. the repo — does NOT itself clear committed-bin staleness)
 
 User: commit and push
 → Agent: "I can commit with the following. Approve?"

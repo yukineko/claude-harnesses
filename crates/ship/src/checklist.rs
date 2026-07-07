@@ -84,14 +84,16 @@ pub fn render(status: &ShipStatus) -> String {
         ));
     }
 
-    // stale crates -> the ONE auto-runnable step
+    // stale crates -> the committed bin is older than its src.
     if status.stale_crates.is_empty() {
         out.push_str("  [x] no stale plugin binaries\n");
     } else {
         out.push_str(&format!(
-            "  [ ] stale plugin binaries: {} — run `scripts/rebuild-plugins.sh` (safe, auto-runnable); \
-to fully clear staleness (advance the installed version pointer, i.e. the `/plugin update` step) run \
-`scripts/rollout-plugins.sh` / `ship rollout` (separate, explicit step)\n",
+            "  [ ] stale plugin binaries: {} — the committed crates/<name>/bin/ binary is older than \
+its src. Run `scripts/rebuild-plugins.sh --stage-repo` (safe, auto-runnable — writes files, never git) \
+to refresh the committed binary, then commit it ({GATED}). NOTE: plain `scripts/rebuild-plugins.sh` and \
+`scripts/rollout-plugins.sh` / `ship rollout` only swap the plugin *cache* and do NOT clear this \
+committed-binary staleness\n",
             status.stale_crates.join(", ")
         ));
     }
@@ -133,8 +135,17 @@ pub fn render_gated_remaining(status: &ShipStatus) -> String {
     out
 }
 
-/// Run the ONE auto-runnable safe step: `scripts/rebuild-plugins.sh`, resolved
-/// relative to `repo`. MUST NOT run any git command.
+/// Run the ONE auto-runnable safe step: `scripts/rebuild-plugins.sh --stage-repo`,
+/// resolved relative to `repo`. MUST NOT run any git command.
+///
+/// `--stage-repo` refreshes BOTH the live plugin cache AND the committed
+/// `crates/<name>/bin/` binary (a plain `cp`, never a git command — see
+/// `tests/integration.rs::binary_never_mutates_git`). The committed binary is
+/// what `stale_crates` measures and what the directory marketplace ships to
+/// `/plugin install`, so staging it is what actually clears a "stale plugin
+/// binaries" item. Side effect: this dirties the working tree with the
+/// refreshed binary, which then surfaces as an `uncommitted changes — commit
+/// (GATED)` item on re-detect (the commit itself stays human-gated).
 pub fn run_safe(repo: &Path) -> Result<String, String> {
     let script = repo.join("scripts").join("rebuild-plugins.sh");
     if !script.exists() {
@@ -142,6 +153,7 @@ pub fn run_safe(repo: &Path) -> Result<String, String> {
     }
 
     let output = Command::new(&script)
+        .arg("--stage-repo")
         .current_dir(repo)
         .output()
         .map_err(|e| format!("failed to run {}: {e}", script.display()))?;
@@ -151,10 +163,10 @@ pub fn run_safe(repo: &Path) -> Result<String, String> {
 
     let mut summary = String::new();
     if output.status.success() {
-        summary.push_str("[run-safe] scripts/rebuild-plugins.sh: OK\n");
+        summary.push_str("[run-safe] scripts/rebuild-plugins.sh --stage-repo: OK\n");
     } else {
         summary.push_str(&format!(
-            "[run-safe] scripts/rebuild-plugins.sh: FAILED (status: {})\n",
+            "[run-safe] scripts/rebuild-plugins.sh --stage-repo: FAILED (status: {})\n",
             output.status
         ));
     }
@@ -169,14 +181,18 @@ pub fn run_safe(repo: &Path) -> Result<String, String> {
 }
 
 /// Run the heavier, explicit rollout step: `scripts/rollout-plugins.sh`,
-/// resolved relative to `repo`. This is what fully clears stale plugin
-/// binaries — it advances the installed version pointer (the `/plugin
-/// update` step) by creating the cache `<name>/<version>/` dir and
-/// repointing `installed_plugins.json`, then runs rebuild-plugins.sh and
+/// resolved relative to `repo`. It advances the installed version pointer
+/// (the `/plugin update` step) by creating the cache `<name>/<version>/` dir
+/// and repointing `installed_plugins.json`, then runs rebuild-plugins.sh and
 /// each plugin's sync-plugin-assets.sh. It mutates only `~/.claude/plugins/`
 /// state, NEVER git — kept as a separate operation from `run_safe` (not
 /// folded into `--run-safe`) because it is a heavier, more consequential
 /// step than a binary swap into an existing cache dir.
+///
+/// NOTE: rollout does NOT stage the committed `crates/<name>/bin/` binary
+/// (it runs rebuild-plugins.sh without `--stage-repo`), so it does NOT clear
+/// a "stale plugin binaries" item — that is committed-binary staleness, which
+/// `check --run-safe` refreshes (`--stage-repo`) and a GATED commit finalizes.
 pub fn rollout(repo: &Path) -> Result<String, String> {
     let script = repo.join("scripts").join("rollout-plugins.sh");
     if !script.exists() {
@@ -285,6 +301,23 @@ mod tests {
     }
 
     #[test]
+    fn render_stale_remedy_stages_repo_and_gates_commit() {
+        // The stale item is committed-binary staleness: the honest remedy is
+        // `--stage-repo` (refresh the committed bin) + a GATED commit, NOT a
+        // cache-only rebuild/rollout.
+        let status = ShipStatus {
+            stale_crates: vec!["ship".to_string()],
+            ..Default::default()
+        };
+        let out = render(&status);
+        assert!(out.contains("--stage-repo"));
+        // the follow-up commit is gated
+        assert!(out.contains(GATED));
+        // and it must warn that cache-only paths do NOT clear it
+        assert!(out.contains("do NOT clear"));
+    }
+
+    #[test]
     fn session_end_reminder_none_for_all_clean() {
         let status = ShipStatus::default();
         assert!(session_end_reminder(&status).is_none());
@@ -338,7 +371,10 @@ mod tests {
     }
 
     #[test]
-    fn render_mentions_rollout_for_stale_crates() {
+    fn render_names_cache_only_paths_as_not_clearing_stale() {
+        // rollout / plain rebuild are named for stale crates, but explicitly
+        // as the cache-only paths that do NOT clear committed-binary staleness
+        // (so the user isn't misdirected to a remedy that can't work).
         let status = ShipStatus {
             stale_crates: vec!["ship".to_string()],
             ..Default::default()
@@ -346,5 +382,6 @@ mod tests {
         let out = render(&status);
         assert!(out.contains("rollout-plugins.sh"));
         assert!(out.contains("ship rollout"));
+        assert!(out.contains("do NOT clear"));
     }
 }

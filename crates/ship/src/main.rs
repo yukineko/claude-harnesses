@@ -2,11 +2,15 @@
 //!
 //! Hard invariant: this binary NEVER invokes a state-mutating git command
 //! (commit/merge/push/add/checkout/reset). It only *detects* and *reports*
-//! unshipped state; the two runnable steps are `scripts/rebuild-plugins.sh`
-//! via `ship check --run-safe` (binary swap into existing cache dirs) and
+//! unshipped state; the two runnable steps are `scripts/rebuild-plugins.sh
+//! --stage-repo` via `ship check --run-safe` (refreshes the committed
+//! `crates/*/bin` binary — what the marketplace ships and what stale-crate
+//! detection measures — plus the live cache; a plain `cp`, never git, so it
+//! dirties the working tree and a subsequent commit stays GATED) and
 //! `scripts/rollout-plugins.sh` via `ship rollout` (heavier, explicit: the
-//! `/plugin update` step — advances the installed version pointer). Neither
-//! touches git. See `tests/integration.rs::binary_never_mutates_git`.
+//! `/plugin update` step — advances the installed version pointer; cache-only,
+//! does NOT clear committed-binary staleness). Neither touches git. See
+//! `tests/integration.rs::binary_never_mutates_git`.
 
 mod checklist;
 mod git;
@@ -32,8 +36,12 @@ struct Cli {
 enum Cmd {
     /// Detect unshipped state and print a checklist.
     Check {
-        /// Also run the ONE safe/auto-runnable step (scripts/rebuild-plugins.sh),
-        /// then reprint the remaining GATED items. Never runs git.
+        /// Also run the ONE safe/auto-runnable step
+        /// (`scripts/rebuild-plugins.sh --stage-repo`, which refreshes the
+        /// committed `crates/*/bin` binary so stale-crate items actually
+        /// clear), then reprint the remaining GATED items. Never runs git,
+        /// but does dirty the working tree with the refreshed binary — the
+        /// follow-up commit stays GATED.
         #[arg(long)]
         run_safe: bool,
     },
@@ -44,8 +52,10 @@ enum Cmd {
     /// (creates the cache `<name>/<version>/` dir, repoints
     /// `installed_plugins.json`, then rebuild+sync). A heavier, explicit
     /// operation kept SEPARATE from `check --run-safe`: it mutates
-    /// `~/.claude/plugins/` state, never git. This is what fully clears
-    /// "stale plugin binaries" that `--run-safe` alone can't.
+    /// `~/.claude/plugins/` state, never git. It is cache-only and does NOT
+    /// stage the committed `crates/*/bin` binary, so it does NOT clear a
+    /// "stale plugin binaries" item — that is committed-binary staleness,
+    /// which `check --run-safe` (`--stage-repo`) + a GATED commit resolve.
     Rollout,
 }
 

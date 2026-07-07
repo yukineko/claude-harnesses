@@ -91,6 +91,10 @@ enum Command {
     /// observed facts. Prints `{"suggested":"forward|unchanged|backward"}`. The
     /// skill can still override via `outcome --verdict`.
     SuggestVerdict(SuggestVerdictArgs),
+    /// Deterministic priority score for a candidate (compass ONE #4), exposing
+    /// the harness-core scorer so the scout skill can rank candidates without
+    /// LLM hand-arithmetic. Prints `{"score": f64}`.
+    Score(ScoreArgs),
 }
 
 #[derive(Args)]
@@ -158,6 +162,23 @@ struct SuggestVerdictArgs {
     /// Whether this move closed the charter `current_gap` it was judged against.
     #[arg(long)]
     gap_closed: bool,
+}
+
+#[derive(Args)]
+struct ScoreArgs {
+    /// Candidate severity: `high` | `medium` | `low` (case-insensitive).
+    #[arg(long, value_name = "LEVEL")]
+    severity: String,
+    /// Candidate effort size: `xs` | `s` | `m` | `l` | `xl` (case-insensitive).
+    #[arg(long, value_name = "SIZE")]
+    effort: String,
+    /// Scout audit lens: `l1`..`l5` (case-insensitive).
+    #[arg(long, value_name = "LENS")]
+    lens: String,
+    /// Estimated goal proximity in `[0.0, 1.0]` (out-of-range is clamped by the
+    /// scorer, not rejected here).
+    #[arg(long, value_name = "F64", allow_hyphen_values = true)]
+    goal_proximity: f64,
 }
 
 #[derive(Args)]
@@ -257,6 +278,7 @@ fn main() {
         Command::PivotCheck => pivot_check_command(),
         Command::C3Screen => c3_screen_command(),
         Command::SuggestVerdict(args) => suggest_verdict_command(args),
+        Command::Score(args) => score_command(args),
     };
     if let Err(e) = r {
         eprintln!("compass: {e}");
@@ -701,6 +723,34 @@ fn suggest_verdict_command(args: SuggestVerdictArgs) -> Result<()> {
     };
     let verdict = outcome::suggest_verdict(&facts);
     println!("{}", serde_json::json!({ "suggested": verdict }));
+    Ok(())
+}
+
+/// score (compass ONE #4): parse the CLI's string args into the harness-core
+/// scorer enums, run the pure deterministic `harness_core::score`, and print
+/// `{"score": f64}`. Invalid enum labels are a hard usage error (non-zero exit
+/// via `main`'s error path) — unlike the advisory subcommands above, this one
+/// has no sensible default to fall back to.
+fn score_command(args: ScoreArgs) -> Result<()> {
+    let severity = harness_core::Severity::parse(&args.severity).with_context(|| {
+        format!(
+            "invalid --severity {:?} (expected high|medium|low)",
+            args.severity
+        )
+    })?;
+    let effort = harness_core::Effort::parse(&args.effort)
+        .with_context(|| format!("invalid --effort {:?} (expected xs|s|m|l|xl)", args.effort))?;
+    let lens = harness_core::Lens::parse(&args.lens)
+        .with_context(|| format!("invalid --lens {:?} (expected l1|l2|l3|l4|l5)", args.lens))?;
+
+    let candidate = harness_core::Candidate {
+        severity,
+        effort,
+        lens,
+        goal_proximity: args.goal_proximity,
+    };
+    let score = harness_core::score(&candidate);
+    println!("{}", serde_json::json!({ "score": score }));
     Ok(())
 }
 

@@ -933,18 +933,30 @@ wiki 更新の失敗は condukt 完了を阻害しない。
 golden へ昇格し、実 run を「commit 済み回帰 fixture」として固定する (curate の playbook→golden に
 対する trace→golden の対)。`replaykit` バイナリが PATH 上にあり、かつ tracekit がこの run を
 記録している (`~/.tracekit/<RID>/spans.jsonl` が存在する) 場合のみ実行する。トレースが無ければ
-silent no-op (tracekit 配線が入れば自動で発火する)。
+silent no-op (tracekit 配線が入れば自動で発火する)。**promote の成否は結果を握り潰さず観測可能に
+する** — 成功時は replaykit 自身が出す「何を追記したか (fixture id・golden 件数)」を含む1行を
+そのまま透過し、失敗時は「promote した」と偽らず non-fatal な注記のみ stderr に出す (condukt
+完了は阻害しない)。
 
 ```bash
 if command -v replaykit >/dev/null 2>&1 && test -f "$HOME/.tracekit/$RID/spans.jsonl"; then
-  replaykit promote --run "$RID" --root . --evals-dir evals --dataset replayed 2>/dev/null || true
-  echo "replaykit: trace を evals/replay の回帰 golden へ promote"
+  REPLAYKIT_OUT=$(replaykit promote --run "$RID" --root . --evals-dir evals --dataset replayed 2>&1)
+  REPLAYKIT_STATUS=$?
+  if [ "$REPLAYKIT_STATUS" -eq 0 ]; then
+    # 成功: replaykit 自身の出力 (promote 先 dataset・fixture パスを含む) をそのまま可観測ログにする。
+    echo "$REPLAYKIT_OUT"
+  else
+    # 失敗: fail-soft (exit させない) だが「promote した」とは絶対に言わない。
+    echo "replaykit: promote failed (non-fatal, exit $REPLAYKIT_STATUS) — golden は追加されていません: $REPLAYKIT_OUT" >&2
+  fi
 fi
 ```
 `promote` は `evals/replay/fixtures/<id>.json` (可搬な trajectory summary) を書き出し、`evalkit run`
-が拾う golden 行 (`cmd: replaykit verify <fixture>`) を id 重複排除しつつ append する。以降 CI の
-`evalkit` が「この run の phase 列・error 数・cost が回帰していないか」を検証する。promote の失敗は
-condukt 完了を阻害しない。
+が拾う golden 行 (`cmd: replaykit verify <fixture>`) を id 重複排除しつつ append し、成功時は
+`replaykit: promoted "<run>" → <dataset> (fixture <path>)` を stdout に出す (dedup で
+skip した場合も exit 0 で理由を出す)。以降 CI の `evalkit` が「この run の phase 列・error 数・cost
+が回帰していないか」を検証する。promote の失敗は condukt 完了を阻害しないが、成功したかのような
+ログは出さない。
 
 ## ユーティリティ操作
 

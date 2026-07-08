@@ -10,6 +10,7 @@
 //! no clock, no env — so tests are hermetic. Only [`download`] touches the
 //! network, and only when explicitly invoked.
 
+pub mod dashboard;
 pub mod download;
 pub mod loader;
 pub mod model;

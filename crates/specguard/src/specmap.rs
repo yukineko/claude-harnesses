@@ -206,6 +206,28 @@ impl MapEntry {
     }
 }
 
+/// Pure: does `entry` match the (case-insensitive substring) `query`? An
+/// empty/blank query matches every entry (the whole-map default). Otherwise the
+/// query is matched against the entry key, its spec_doc, any impl/test file
+/// path, and — for endpoint entries — the api route. This lets a consumer scope
+/// an operation to a specific command/crate/API by path or route (e.g.
+/// `drift-map`, `crates/specguard`, `/health`). No filesystem access.
+///
+/// This is the single source of truth for entry targeting, shared by
+/// `specguard audit --filter` and `specguard map list --filter`.
+pub fn entry_matches(entry: &MapEntry, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    let hay = |s: &str| s.to_lowercase().contains(&q);
+    hay(&entry.key)
+        || entry.spec_doc.as_deref().is_some_and(hay)
+        || entry.impl_files.iter().any(|p| hay(p))
+        || entry.test_files.iter().any(|p| hay(p))
+        || entry.api.as_ref().is_some_and(|a| hay(&a.route))
+}
+
 /// The persisted feature/endpoint map. Keyed by entry id, kept in a `BTreeMap`
 /// so serialization is deterministic (stable diffs).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -796,5 +818,61 @@ impl_files = [\"src/x.rs\"]
             vec!["tests/keep_test.rs".to_string()]
         );
         assert_eq!(map.last_synced, "r1");
+    }
+
+    // -- targeted filter (entry_matches) ------------------------------------
+
+    fn filter_entry(
+        key: &str,
+        spec_doc: Option<&str>,
+        impl_files: &[&str],
+        test_files: &[&str],
+    ) -> MapEntry {
+        MapEntry {
+            key: key.to_string(),
+            kind: EntryKind::Feature,
+            spec_doc: spec_doc.map(|s| s.to_string()),
+            status: Status::Tracked,
+            last_ref: None,
+            impl_files: impl_files.iter().map(|s| s.to_string()).collect(),
+            test_files: test_files.iter().map(|s| s.to_string()).collect(),
+            client_refs: vec![],
+            api: None,
+        }
+    }
+
+    #[test]
+    fn entry_matches_on_key_spec_paths_route_case_insensitive() {
+        let mut e = filter_entry(
+            "drift-map",
+            Some("docs/specs/DriftMap.md"),
+            &["crates/specguard/src/drift.rs"],
+            &["crates/specguard/tests/drift_test.rs"],
+        );
+        // Matches on the key (case-insensitive).
+        assert!(entry_matches(&e, "drift-map"));
+        assert!(entry_matches(&e, "DRIFT-MAP"));
+        // Matches on the spec_doc.
+        assert!(entry_matches(&e, "driftmap.md"));
+        // Matches on an impl path fragment.
+        assert!(entry_matches(&e, "crates/specguard"));
+        // Matches on a test path fragment.
+        assert!(entry_matches(&e, "drift_test"));
+        // Non-match.
+        assert!(!entry_matches(&e, "unrelated-feature"));
+
+        // Matches on the api route for an endpoint entry.
+        e.api = Some(ApiRef {
+            method: "GET".to_string(),
+            route: "/api/health".to_string(),
+        });
+        assert!(entry_matches(&e, "/health"));
+    }
+
+    #[test]
+    fn entry_matches_empty_query_matches_all() {
+        let e = filter_entry("anything", None, &["src/x.rs"], &[]);
+        assert!(entry_matches(&e, ""));
+        assert!(entry_matches(&e, "   "));
     }
 }

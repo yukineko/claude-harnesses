@@ -28,7 +28,7 @@
 
 use crate::config::Config;
 use crate::parse::MARKER;
-use crate::specmap::{MapEntry, SpecMap};
+use crate::specmap::{entry_matches, MapEntry, SpecMap};
 use serde::Serialize;
 use std::path::Path;
 
@@ -167,25 +167,6 @@ pub fn scan_map_filtered(map: &SpecMap, repo_root: &Path, filter: &str) -> Vec<S
         .filter(|e| entry_matches(e, filter))
         .flat_map(|e| structural_findings(e, exists))
         .collect()
-}
-
-/// Pure: does `entry` match the (case-insensitive substring) `query`? An
-/// empty/blank query matches every entry (the whole-map default). Otherwise the
-/// query is matched against the entry key, its spec_doc, any impl/test file
-/// path, and — for endpoint entries — the api route. This lets a user scope the
-/// audit to a specific command/crate/API by path or route (e.g. `drift-map`,
-/// `crates/specguard`, `/health`). No filesystem access.
-pub fn entry_matches(entry: &MapEntry, query: &str) -> bool {
-    let q = query.trim().to_lowercase();
-    if q.is_empty() {
-        return true;
-    }
-    let hay = |s: &str| s.to_lowercase().contains(&q);
-    hay(&entry.key)
-        || entry.spec_doc.as_deref().is_some_and(hay)
-        || entry.impl_files.iter().any(|p| hay(p))
-        || entry.test_files.iter().any(|p| hay(p))
-        || entry.api.as_ref().is_some_and(|a| hay(&a.route))
 }
 
 /// An entry is worth auditing when there is something to judge the correctness of
@@ -523,42 +504,7 @@ mod tests {
         assert!(shard0.get("prompt").is_some());
     }
 
-    // -- targeted filter (entry_matches) ------------------------------------
-
-    #[test]
-    fn entry_matches_on_key_spec_paths_route_case_insensitive() {
-        let mut e = entry(
-            "drift-map",
-            Some("docs/specs/DriftMap.md"),
-            &["crates/specguard/src/drift.rs"],
-            &["crates/specguard/tests/drift_test.rs"],
-        );
-        // Matches on the key (case-insensitive).
-        assert!(entry_matches(&e, "drift-map"));
-        assert!(entry_matches(&e, "DRIFT-MAP"));
-        // Matches on the spec_doc.
-        assert!(entry_matches(&e, "driftmap.md"));
-        // Matches on an impl path fragment.
-        assert!(entry_matches(&e, "crates/specguard"));
-        // Matches on a test path fragment.
-        assert!(entry_matches(&e, "drift_test"));
-        // Non-match.
-        assert!(!entry_matches(&e, "unrelated-feature"));
-
-        // Matches on the api route for an endpoint entry.
-        e.api = Some(crate::specmap::ApiRef {
-            method: "GET".to_string(),
-            route: "/api/health".to_string(),
-        });
-        assert!(entry_matches(&e, "/health"));
-    }
-
-    #[test]
-    fn entry_matches_empty_query_matches_all() {
-        let e = entry("anything", None, &["src/x.rs"], &[]);
-        assert!(entry_matches(&e, ""));
-        assert!(entry_matches(&e, "   "));
-    }
+    // -- targeted filter (entry_matches, relocated to specmap.rs) -----------
 
     #[test]
     fn build_envelope_filter_restricts_to_matching_entries() {

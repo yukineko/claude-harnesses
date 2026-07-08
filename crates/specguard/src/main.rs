@@ -200,6 +200,13 @@ enum MapAction {
         /// Emit the map as JSON instead of human-readable text.
         #[arg(long)]
         json: bool,
+        /// Restrict the listing to entries whose key, spec_doc, any impl/test
+        /// path, or api route contains this (case-insensitive) substring — to
+        /// scope to a specific command/crate/API (e.g. `--filter drift-map`,
+        /// `--filter crates/specguard`, `--filter /health`), sharing the same
+        /// targeting predicate as `audit --filter`. Omitted → whole map.
+        #[arg(long)]
+        filter: Option<String>,
     },
 }
 
@@ -1155,8 +1162,13 @@ fn run_map(cli: &Cli, l: &Loaded, paths: &report::Paths, action: &MapAction) -> 
     let spec_dir = &l.cfg.map.spec_doc_dir;
 
     match action {
-        MapAction::List { json } => {
+        MapAction::List { json, filter } => {
             let map = specmap::SpecMap::load(&map_path)?;
+            // Scope the listing through the shared entry-match predicate (the
+            // same one `audit --filter` uses). An absent/blank filter matches
+            // every entry, so the unfiltered listing is unchanged.
+            let filter = filter.as_deref().unwrap_or("");
+            let map = filter_map(&map, filter);
             if *json {
                 println!(
                     "{}",
@@ -1275,6 +1287,23 @@ fn run_audit(cli: &Cli, l: &Loaded, paths: &report::Paths, json: bool, filter: &
 }
 
 /// Human-readable dump of the map for `specguard map list`.
+/// A view of `map` keeping only the entries matching `filter` via the shared
+/// [`specmap::entry_matches`] predicate (an empty/blank filter keeps every
+/// entry, so the result equals the input). `last_synced` is preserved so the
+/// filtered listing still reports provenance. Used by `map list --filter` for
+/// both the human and `--json` output.
+fn filter_map(map: &specmap::SpecMap, filter: &str) -> specmap::SpecMap {
+    specmap::SpecMap {
+        last_synced: map.last_synced.clone(),
+        entries: map
+            .entries
+            .iter()
+            .filter(|(_, e)| specmap::entry_matches(e, filter))
+            .map(|(k, e)| (k.clone(), e.clone()))
+            .collect(),
+    }
+}
+
 fn print_map(map: &specmap::SpecMap, map_path: &Path) {
     if map.is_empty() {
         println!("specguard map: (empty) [{}]", map_path.display());
@@ -1616,6 +1645,44 @@ mod tests {
         let got = resolve_date(None);
         std::env::remove_var("SPECGUARD_NOW");
         assert_eq!(got, "2026-07-07");
+    }
+
+    #[test]
+    fn filter_map_narrows_to_matching_entries() {
+        use specmap::{EntryKind, MapEntry, SpecMap, Status};
+        fn feat(key: &str, impl_file: &str) -> MapEntry {
+            MapEntry {
+                key: key.to_string(),
+                kind: EntryKind::Feature,
+                spec_doc: None,
+                status: Status::Tracked,
+                last_ref: None,
+                impl_files: vec![impl_file.to_string()],
+                test_files: vec![],
+                client_refs: vec![],
+                api: None,
+            }
+        }
+        let mut map = SpecMap {
+            last_synced: "cafef00d".to_string(),
+            ..SpecMap::default()
+        };
+        map.entries
+            .insert("login".to_string(), feat("login", "src/login.rs"));
+        map.entries
+            .insert("logout".to_string(), feat("logout", "src/logout.rs"));
+
+        // Filter by a substring present in only one entry → only it remains.
+        let narrowed = filter_map(&map, "login");
+        assert_eq!(narrowed.entries.len(), 1);
+        assert!(narrowed.entries.contains_key("login"));
+        assert!(!narrowed.entries.contains_key("logout"));
+        // last_synced provenance is preserved in the filtered view.
+        assert_eq!(narrowed.last_synced, "cafef00d");
+
+        // An empty/blank filter is backward compatible: every entry is kept.
+        assert_eq!(filter_map(&map, "").entries.len(), 2);
+        assert_eq!(filter_map(&map, "   ").entries.len(), 2);
     }
 
     #[test]

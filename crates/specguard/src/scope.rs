@@ -6,9 +6,10 @@
 //! so the area-classification logic ([`classify`]) stays pure and unit-testable.
 
 use crate::config::{Area, Config};
+use crate::prompt::Shard;
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The resolved scope for one audit run.
@@ -263,6 +264,85 @@ pub fn resolve(
     })
 }
 
+/// The set of files backing one shard's audit — its "input": what the
+/// content-hash memoization ([`fingerprint_files`]) fingerprints, and what a
+/// future relevant-file map (t4) should reuse rather than re-deriving. An area
+/// shard's input is its area's canon files UNION its matched (changed)
+/// files; the invariants shard's is the union of every invariant's canon; the
+/// decisions shard's is its decision records UNION the in-scope canon they
+/// cross-reference (mirroring `prompt::render_decisions`'s in-scope-canon
+/// computation). Deduplicated and sorted so member order never affects the
+/// result.
+pub fn shard_input_files(cfg: &Config, scope: &Scope, shard: Shard) -> Vec<String> {
+    let mut files: Vec<String> = match shard {
+        Shard::Area(i) => {
+            let hit = &scope.in_scope[i];
+            let area = &cfg.areas[hit.area_index];
+            let mut v: Vec<String> = area
+                .canon
+                .iter()
+                .map(|c| canon_file(c).to_string())
+                .collect();
+            v.extend(hit.matched_files.iter().cloned());
+            v
+        }
+        Shard::Invariants => cfg
+            .invariants
+            .iter()
+            .flat_map(|inv| inv.canon.iter().map(|c| canon_file(c).to_string()))
+            .collect(),
+        Shard::Decisions => {
+            let mut v = scope.decision_files.clone();
+            for hit in &scope.in_scope {
+                v.extend(
+                    cfg.areas[hit.area_index]
+                        .canon
+                        .iter()
+                        .map(|c| canon_file(c).to_string()),
+                );
+            }
+            for inv in &cfg.invariants {
+                v.extend(inv.canon.iter().map(|c| canon_file(c).to_string()));
+            }
+            v
+        }
+    };
+    files.sort();
+    files.dedup();
+    files
+}
+
+/// Deterministic content fingerprint over a shard's input files (see
+/// [`shard_input_files`]): hashes path + current file bytes (relative to
+/// `repo_root`; an already-absolute entry, e.g. a decision record, is read
+/// as-is) in sorted order via the shared FNV-1a 64-bit hash (see
+/// `ratify::hash` for the same idiom over prompt templates) — deterministic,
+/// no network, and stable across releases (unlike `DefaultHasher`). A missing
+/// file hashes as present-with-empty-content, which still differs from that
+/// path never having been in the set at all (its name is part of the digest
+/// too). Used by the content-hash memoization that skips re-auditing a shard
+/// whose input hasn't changed since its last clean audit (see `main.rs`).
+pub fn fingerprint_files(repo_root: &Path, files: &[String]) -> String {
+    let mut sorted: Vec<String> = files.to_vec();
+    sorted.sort();
+    sorted.dedup();
+    let mut h = harness_core::hash::Fnv1a64::new();
+    for f in &sorted {
+        h.update(f.as_bytes());
+        h.update(&[0]);
+        let full = if Path::new(f).is_absolute() {
+            PathBuf::from(f)
+        } else {
+            repo_root.join(f)
+        };
+        if let Ok(bytes) = std::fs::read(&full) {
+            h.update(&bytes);
+        }
+        h.update(&[0]);
+    }
+    format!("{:016x}", h.finish())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,6 +460,141 @@ mod tests {
         assert_eq!(resolve_baseline(&cfg, None, Some("zzz")), "zzz");
         // then fallback
         assert_eq!(resolve_baseline(&cfg, None, None), "HEAD~20");
+    }
+
+    fn sample_cfg_with_canon() -> Config {
+        toml::from_str(
+            r#"
+            [project]
+            name = "x"
+            [[area]]
+            name = "logging"
+            globs = ["logging/**"]
+            canon = ["docs/logging.md:HMAC"]
+            [[invariant]]
+            name = "signing"
+            canon = ["docs/signing.md"]
+            "#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn shard_input_files_area_unions_canon_and_matched_deduped_sorted() {
+        let cfg = sample_cfg_with_canon();
+        let scope = Scope {
+            baseline: "abc".into(),
+            fell_back: false,
+            changed_files: vec![],
+            in_scope: vec![AreaHit {
+                area_index: 0,
+                matched_files: vec!["logging/sig.py".into(), "logging/vector.py".into()],
+                changed_canon: vec![],
+            }],
+            skipped_areas: vec![],
+            decision_files: vec![],
+        };
+        let files = shard_input_files(&cfg, &scope, Shard::Area(0));
+        // canon_file() strips the `:HMAC` section suffix.
+        assert_eq!(
+            files,
+            vec![
+                "docs/logging.md".to_string(),
+                "logging/sig.py".to_string(),
+                "logging/vector.py".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn shard_input_files_invariants_uses_invariant_canon() {
+        let cfg = sample_cfg_with_canon();
+        let scope = Scope {
+            baseline: "abc".into(),
+            fell_back: false,
+            changed_files: vec![],
+            in_scope: vec![],
+            skipped_areas: vec![],
+            decision_files: vec![],
+        };
+        let files = shard_input_files(&cfg, &scope, Shard::Invariants);
+        assert_eq!(files, vec!["docs/signing.md".to_string()]);
+    }
+
+    #[test]
+    fn shard_input_files_decisions_unions_records_and_inscope_canon() {
+        let cfg = sample_cfg_with_canon();
+        let scope = Scope {
+            baseline: "abc".into(),
+            fell_back: false,
+            changed_files: vec![],
+            in_scope: vec![AreaHit {
+                area_index: 0,
+                matched_files: vec![],
+                changed_canon: vec![],
+            }],
+            skipped_areas: vec![],
+            decision_files: vec!["/vault/decisions/x.md".into()],
+        };
+        let files = shard_input_files(&cfg, &scope, Shard::Decisions);
+        assert_eq!(
+            files,
+            vec![
+                "/vault/decisions/x.md".to_string(),
+                "docs/logging.md".to_string(),
+                "docs/signing.md".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn fingerprint_files_is_deterministic_and_order_independent() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.md"), "alpha").unwrap();
+        std::fs::write(tmp.path().join("b.md"), "beta").unwrap();
+        let f1 = fingerprint_files(tmp.path(), &["a.md".to_string(), "b.md".to_string()]);
+        let f2 = fingerprint_files(tmp.path(), &["b.md".to_string(), "a.md".to_string()]);
+        assert_eq!(f1, f2, "member order must not affect the fingerprint");
+        // Deterministic across repeated calls with the same input.
+        assert_eq!(
+            f1,
+            fingerprint_files(tmp.path(), &["a.md".to_string(), "b.md".to_string()])
+        );
+    }
+
+    /// (b) The re-audit path: changed input content -> the fingerprint differs.
+    #[test]
+    fn fingerprint_files_changes_when_content_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.md"), "alpha").unwrap();
+        let before = fingerprint_files(tmp.path(), &["a.md".to_string()]);
+        std::fs::write(tmp.path().join("a.md"), "alpha, changed").unwrap();
+        let after = fingerprint_files(tmp.path(), &["a.md".to_string()]);
+        assert_ne!(
+            before, after,
+            "content change must produce a different fingerprint"
+        );
+    }
+
+    /// (a) The skip path's underlying invariant: identical content on disk (no
+    /// edits between two calls) yields an identical fingerprint, which is what
+    /// lets the caller (main.rs) treat the shard as unchanged and skip it.
+    #[test]
+    fn fingerprint_files_unchanged_content_yields_same_fingerprint() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.md"), "alpha").unwrap();
+        let first = fingerprint_files(tmp.path(), &["a.md".to_string()]);
+        let second = fingerprint_files(tmp.path(), &["a.md".to_string()]);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn fingerprint_files_handles_missing_file_without_erroring() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No file written at all — must not panic/error, just fingerprint the
+        // path with empty content.
+        let fp = fingerprint_files(tmp.path(), &["missing.md".to_string()]);
+        assert_eq!(fp.len(), 16);
     }
 }
 

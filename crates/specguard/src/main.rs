@@ -287,6 +287,20 @@ fn run(cli: &Cli) -> Result<u8> {
         return Ok(code);
     }
 
+    // Content-hash memoization: a shard whose input files (its canon + matched
+    // files — see `scope::shard_input_files`) are byte-identical to the last
+    // clean (no-findings) audit is skipped outright: no agent call, synthesized
+    // as a clean result. First run (no stored fingerprints yet) has nothing to
+    // compare against, so every shard audits exactly as it did before this
+    // feature existed — backward-compatible by construction.
+    let fp_path = fingerprint_state_path(&paths);
+    let stored_fp = read_fingerprints(&fp_path);
+    let cache = classify_cache(&l.cfg, &scope, &shards, &l.repo_root, &stored_fp);
+    let cached_count = cache.iter().filter(|c| c.cached).count();
+    if cached_count > 0 {
+        println!("specguard: cached: {cached_count} shards skipped");
+    }
+
     if !shards.is_empty() {
         eprintln!(
             "specguard: auditing {} (baseline {}, {} shard(s): {} area(s) + {} invariant + {} decision)",
@@ -301,19 +315,165 @@ fn run(cli: &Cli) -> Result<u8> {
 
     let shard_prompts: Vec<agent::ShardPrompt> = shards
         .iter()
-        .map(|&sh| agent::ShardPrompt {
+        .zip(cache.iter())
+        .filter(|(_, c)| !c.cached)
+        .map(|(&sh, _)| agent::ShardPrompt {
             label: prompt::shard_label(&l.cfg, &scope, sh),
             prompt: prompt::render_shard(&l.template, &l.cfg, &scope, sh, &l.date),
         })
         .collect();
 
-    let outs = if shards.is_empty() {
+    let mut run_outs = if shard_prompts.is_empty() {
         Vec::new()
     } else {
         agent::run_shards(&l.cfg.agent, &l.repo_root, shard_prompts)
-    };
+    }
+    .into_iter();
+
+    // Rebuild in the ORIGINAL shard order: `finish`/`verify::apply` treat
+    // `shards` and `outs` as index-aligned (agent::run_shards preserves the
+    // dispatch order of `shard_prompts`, which itself preserves the relative
+    // order of the non-cached subset of `shards`).
+    let outs: Vec<agent::ShardOutput> = cache
+        .iter()
+        .map(|c| {
+            if c.cached {
+                cached_shard_output(&c.label)
+            } else {
+                run_outs
+                    .next()
+                    .expect("to-run shard count matches dispatched agent outputs")
+            }
+        })
+        .collect();
 
     finish(&l, &scope, &shards, &paths, outs)
+}
+
+/// Per-shard cache status for this run: whether its current content
+/// fingerprint (see [`scope::fingerprint_files`] over [`scope::shard_input_files`])
+/// matches what was stored from the last clean audit. Pure aside from reading
+/// file bytes off disk, so it's directly unit-testable without spawning any
+/// agent or CLI process (see the `tests` module: both the skip path, unchanged
+/// input, and the re-audit path, changed input).
+struct ShardCache {
+    label: String,
+    cached: bool,
+}
+
+fn classify_cache(
+    cfg: &Config,
+    scope: &scope::Scope,
+    shards: &[prompt::Shard],
+    repo_root: &Path,
+    stored: &std::collections::HashMap<String, String>,
+) -> Vec<ShardCache> {
+    shards
+        .iter()
+        .map(|&sh| {
+            let label = prompt::shard_label(cfg, scope, sh);
+            let files = scope::shard_input_files(cfg, scope, sh);
+            let fp = scope::fingerprint_files(repo_root, &files);
+            let cached = stored.get(&label) == Some(&fp);
+            ShardCache { label, cached }
+        })
+        .collect()
+}
+
+/// Synthesize a clean agent output for a cached (skipped) shard: a valid
+/// marker with `needs_user: no`, so it flows through `finish`'s
+/// parse/merge/sentinel logic exactly like a freshly-audited clean shard.
+fn cached_shard_output(label: &str) -> agent::ShardOutput {
+    agent::ShardOutput {
+        label: label.to_string(),
+        out: agent::AgentOutput {
+            stdout: format!(
+                "(cached — 入力 (canon + 変更ファイル) が前回の green 監査から変化していないためスキップ)\n\n{}\nneeds_user: no\nsummary: (cached; unchanged since last audit)\n",
+                parse::MARKER
+            ),
+            stderr: String::new(),
+            code: 0,
+        },
+    }
+}
+
+/// Path to the persisted per-shard content fingerprints — a sibling of
+/// `.last-ref` in the same report-state directory (no change to
+/// `report::Paths`/`report.rs`'s public surface needed).
+fn fingerprint_state_path(paths: &report::Paths) -> PathBuf {
+    paths.last_ref.with_file_name(".shard-fingerprints")
+}
+
+/// Read the persisted fingerprints (`label\tfingerprint` per line). Absent or
+/// unparseable file -> empty map, meaning nothing is cached (first run audits
+/// every shard exactly as it did before this feature existed).
+fn read_fingerprints(path: &Path) -> std::collections::HashMap<String, String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return std::collections::HashMap::new();
+    };
+    text.lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(label, fp)| (label.to_string(), fp.to_string()))
+        .collect()
+}
+
+/// Write the fingerprints back (sorted by label for a stable diff).
+fn write_fingerprints(path: &Path, map: &std::collections::HashMap<String, String>) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    let mut entries: Vec<(&String, &String)> = map.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    let body: String = entries
+        .iter()
+        .map(|(label, fp)| format!("{label}\t{fp}\n"))
+        .collect();
+    std::fs::write(path, body).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+/// Persist a fresh content fingerprint for each audited shard that came back
+/// clean (`needs_user == false`) this run — the memoization idiom: a green
+/// shard's fingerprint becomes the "last known good" input, so an unchanged
+/// re-run of `run` skips it outright next time (see [`classify_cache`] /
+/// [`cached_shard_output`]). A shard that still has findings has its stale
+/// entry dropped instead, so it keeps getting re-audited (never silently
+/// skipped) until it goes clean — mirroring the existing baseline-hold
+/// semantics for findings. `shards`/`parsed` are index-aligned: `verify::apply`
+/// only ever REPLACES entries in place (refute) or APPENDS extra completeness
+/// entries after them (never reorders/removes), so `zip` naturally covers
+/// exactly the original shards and ignores any appended completeness entries.
+fn persist_fingerprints(
+    l: &Loaded,
+    scope: &scope::Scope,
+    shards: &[prompt::Shard],
+    paths: &report::Paths,
+    parsed: &[(String, parse::Parsed)],
+) {
+    let fp_path = fingerprint_state_path(paths);
+    let mut stored = read_fingerprints(&fp_path);
+    let mut changed = false;
+    for (&sh, (label, p)) in shards.iter().zip(parsed.iter()) {
+        if p.needs_user {
+            if stored.remove(label).is_some() {
+                changed = true;
+            }
+            continue;
+        }
+        let files = scope::shard_input_files(&l.cfg, scope, sh);
+        let fp = scope::fingerprint_files(&l.repo_root, &files);
+        if stored.get(label) != Some(&fp) {
+            stored.insert(label.clone(), fp);
+            changed = true;
+        }
+    }
+    if changed {
+        if let Err(e) = write_fingerprints(&fp_path, &stored) {
+            eprintln!(
+                "specguard: WARN could not persist shard fingerprints ({e:#}); memoization skipped next run"
+            );
+        }
+    }
 }
 
 /// The ratification gate as a reusable guard. Returns `Ok(Some(EXIT_UNRATIFIED))`
@@ -444,6 +604,12 @@ fn finish(
     } else {
         parsed
     };
+
+    // Content-hash memoization: persist a fresh fingerprint for every shard
+    // that came back clean this run, so an unchanged re-run of `run` skips it
+    // (see `classify_cache` / `cached_shard_output`); a shard that still has
+    // findings has its stale entry dropped instead of re-persisted.
+    persist_fingerprints(l, scope, shards, paths, &parsed);
 
     let merged = merge_report(&l.cfg, scope, &l.date, &head, &parsed);
     report::write_report(paths, &merged)?;
@@ -1143,5 +1309,146 @@ mod tests {
         let result = ack(&paths, &repo_root(), false).unwrap();
         assert_eq!(result, EXIT_OK);
         assert!(!sentinel.exists(), "sentinel should have been removed");
+    }
+
+    // --- content-hash memoization (skip unchanged shards) ---
+
+    fn memo_cfg() -> Config {
+        toml::from_str(
+            r#"
+            [project]
+            name = "x"
+            [[area]]
+            name = "src"
+            globs = ["src/**"]
+            canon = ["spec.md"]
+            "#,
+        )
+        .unwrap()
+    }
+
+    fn memo_scope(matched: Vec<String>) -> scope::Scope {
+        scope::Scope {
+            baseline: "abc".into(),
+            fell_back: false,
+            changed_files: vec![],
+            in_scope: vec![scope::AreaHit {
+                area_index: 0,
+                matched_files: matched,
+                changed_canon: vec![],
+            }],
+            skipped_areas: vec![],
+            decision_files: vec![],
+        }
+    }
+
+    /// (a) The skip path: on a first run there is nothing stored yet (not
+    /// cached — identical to pre-memoization behavior); after persisting the
+    /// fingerprint a green audit would have recorded, an unchanged re-run
+    /// classifies the shard as cached.
+    #[test]
+    fn classify_cache_skip_path_unchanged_input_is_cached() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("spec.md"), "spec v1").unwrap();
+        std::fs::write(tmp.path().join("main.rs"), "fn main() {}").unwrap();
+        let cfg = memo_cfg();
+        let scope = memo_scope(vec!["main.rs".to_string()]);
+        let shards = vec![prompt::Shard::Area(0)];
+
+        let empty = std::collections::HashMap::new();
+        let first = classify_cache(&cfg, &scope, &shards, tmp.path(), &empty);
+        assert!(!first[0].cached, "first run has no stored fingerprint yet");
+
+        let mut stored = std::collections::HashMap::new();
+        let files = scope::shard_input_files(&cfg, &scope, prompt::Shard::Area(0));
+        stored.insert(
+            first[0].label.clone(),
+            scope::fingerprint_files(tmp.path(), &files),
+        );
+        let second = classify_cache(&cfg, &scope, &shards, tmp.path(), &stored);
+        assert!(
+            second[0].cached,
+            "unchanged input must be classified as cached"
+        );
+    }
+
+    /// (b) The re-audit path: the shard's implementation file changes ->
+    /// fingerprint diverges from the stored one -> NOT cached.
+    #[test]
+    fn classify_cache_reaudit_path_changed_input_is_not_cached() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("spec.md"), "spec v1").unwrap();
+        std::fs::write(tmp.path().join("main.rs"), "fn main() {}").unwrap();
+        let cfg = memo_cfg();
+        let scope = memo_scope(vec!["main.rs".to_string()]);
+        let shards = vec![prompt::Shard::Area(0)];
+
+        let mut stored = std::collections::HashMap::new();
+        let files = scope::shard_input_files(&cfg, &scope, prompt::Shard::Area(0));
+        let label = prompt::shard_label(&cfg, &scope, prompt::Shard::Area(0));
+        stored.insert(label, scope::fingerprint_files(tmp.path(), &files));
+
+        std::fs::write(tmp.path().join("main.rs"), "fn main() { /* changed */ }").unwrap();
+        let after = classify_cache(&cfg, &scope, &shards, tmp.path(), &stored);
+        assert!(!after[0].cached, "changed input must trigger a re-audit");
+    }
+
+    #[test]
+    fn fingerprints_roundtrip_through_read_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".shard-fingerprints");
+        let mut map = std::collections::HashMap::new();
+        map.insert("src".to_string(), "deadbeef".to_string());
+        map.insert("invariants".to_string(), "cafebabe".to_string());
+        write_fingerprints(&path, &map).unwrap();
+        assert_eq!(read_fingerprints(&path), map);
+    }
+
+    #[test]
+    fn read_fingerprints_missing_file_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".nope");
+        assert!(read_fingerprints(&path).is_empty());
+    }
+
+    /// `persist_fingerprints` records a shard that came back clean; a shard
+    /// still flagged `needs_user` has its (possibly stale) entry dropped
+    /// instead, so it keeps being re-audited rather than silently skipped.
+    #[test]
+    fn persist_fingerprints_only_records_clean_shards() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("spec.md"), "spec v1").unwrap();
+        std::fs::write(tmp.path().join("main.rs"), "fn main() {}").unwrap();
+        let cfg = memo_cfg();
+        let scope = memo_scope(vec!["main.rs".to_string()]);
+        let shards = vec![prompt::Shard::Area(0)];
+        let label = prompt::shard_label(&cfg, &scope, prompt::Shard::Area(0));
+
+        let l = Loaded {
+            cfg: cfg.clone(),
+            repo_root: tmp.path().to_path_buf(),
+            template: String::new(),
+            date: "2026-01-01".to_string(),
+        };
+        let paths = make_paths(tmp.path().join("sentinel.txt"));
+
+        let parsed = vec![(
+            label.clone(),
+            parse::parse("body\n<<<SPEC_AUDIT>>>\nneeds_user: no\nsummary: ok"),
+        )];
+        persist_fingerprints(&l, &scope, &shards, &paths, &parsed);
+        let stored = read_fingerprints(&fingerprint_state_path(&paths));
+        assert!(stored.contains_key(&label), "clean shard must be persisted");
+
+        let dirty = vec![(
+            label.clone(),
+            parse::parse("body\n<<<SPEC_AUDIT>>>\nneeds_user: yes\nsummary: drift"),
+        )];
+        persist_fingerprints(&l, &scope, &shards, &paths, &dirty);
+        let stored_after = read_fingerprints(&fingerprint_state_path(&paths));
+        assert!(
+            !stored_after.contains_key(&label),
+            "dirty shard's stale entry must be dropped"
+        );
     }
 }

@@ -12,6 +12,7 @@
 
 pub mod dashboard;
 pub mod download;
+pub mod harness;
 pub mod loader;
 pub mod model;
 pub mod scorer;

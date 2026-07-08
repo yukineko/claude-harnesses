@@ -1,0 +1,16 @@
+{
+  "instance_id": "demo__demo-1",
+  "candidate_patch": "diff --git a/demo/fix.py b/demo/fix.py\n--- a/demo/fix.py\n+++ b/demo/fix.py\n@@ -1 +1 @@\n-return 1\n+return right\n",
+  "fail_to_pass": ["demo/tests/test_fix.py::test_fix_a", "demo/tests/test_fix.py::test_fix_b"],
+  "pass_to_pass": ["demo/tests/test_guard.py::test_guard_x"],
+  "resolved_results": {
+    "demo/tests/test_fix.py::test_fix_a": true,
+    "demo/tests/test_fix.py::test_fix_b": true,
+    "demo/tests/test_guard.py::test_guard_x": true
+  },
+  "unresolved_results": {
+    "demo/tests/test_fix.py::test_fix_a": true,
+    "demo/tests/test_fix.py::test_fix_b": false,
+    "demo/tests/test_guard.py::test_guard_x": true
+  }
+}

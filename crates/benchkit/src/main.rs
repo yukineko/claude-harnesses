@@ -11,7 +11,9 @@ use std::process::exit;
 use clap::{Parser, Subcommand};
 
 use benchkit::download::{self, Outcome};
+use benchkit::harness::{self, PatchGenerator};
 use benchkit::loader;
+use benchkit::model::Instance;
 
 #[derive(Parser)]
 #[command(
@@ -40,6 +42,61 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Run one instance through the harness (setup -> generate -> test -> score).
+    ///
+    /// Without `--real` this is a **dry run**: it wires the pure harness with a
+    /// stub generator and empty results (no external effects). With `--real` it
+    /// dispatches to the explicitly-gated real path that shells out to git /
+    /// pytest — the only way that path is ever reached.
+    RunInstance {
+        /// Path to a JSONL file containing the instance(s).
+        path: PathBuf,
+        /// Instance id to run.
+        instance_id: String,
+        /// Run the REAL exec path (git clone + git apply + pytest; network + shell).
+        #[arg(long)]
+        real: bool,
+    },
+}
+
+/// CLI-side placeholder generator. The real model/LLM seam is not wired in this
+/// slice; this returns an empty candidate so the dry path exercises the
+/// plumbing, and the real path's [`harness::RealExecSource`] is what gates
+/// external effects.
+struct StubGenerator;
+
+impl PatchGenerator for StubGenerator {
+    fn generate(&self, _instance: &Instance) -> anyhow::Result<String> {
+        Ok(String::new())
+    }
+}
+
+/// Dry-run result source: yields no results, so scoring is fail-closed
+/// (unresolved). Used by `run-instance` without `--real`; performs no I/O.
+struct DrySource;
+
+impl harness::TestResultSource for DrySource {
+    fn results(
+        &self,
+        _instance: &Instance,
+        _candidate_patch: &str,
+    ) -> anyhow::Result<std::collections::BTreeMap<String, bool>> {
+        Ok(std::collections::BTreeMap::new())
+    }
+}
+
+/// Look up a single instance by id from a JSONL file.
+fn find_instance(path: &PathBuf, instance_id: &str) -> anyhow::Result<Instance> {
+    let instances = loader::load_instances(path)?;
+    instances
+        .into_iter()
+        .find(|i| i.instance_id == instance_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "instance id {instance_id:?} not found in {}",
+                path.display()
+            )
+        })
 }
 
 fn main() {
@@ -70,6 +127,41 @@ fn main() {
             Ok(Outcome::Fetched(p)) => {
                 println!("fetched: {}", p.display());
                 0
+            }
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                1
+            }
+        },
+        Command::RunInstance {
+            path,
+            instance_id,
+            real,
+        } => match find_instance(&path, &instance_id) {
+            Ok(instance) => {
+                let generator = StubGenerator;
+                let result = if real {
+                    // Explicitly-gated real path: shells out to git / pytest.
+                    harness::run_instance_real(&instance, &generator)
+                } else {
+                    // Dry path: pure harness, no external effects.
+                    harness::run_instance(&instance, &generator, &DrySource)
+                };
+                match result {
+                    Ok(verdict) => {
+                        println!(
+                            "{}: resolved={} ({} test results)",
+                            verdict.instance_id,
+                            verdict.resolved,
+                            verdict.results.len()
+                        );
+                        0
+                    }
+                    Err(e) => {
+                        eprintln!("error: {e:#}");
+                        1
+                    }
+                }
             }
             Err(e) => {
                 eprintln!("error: {e:#}");

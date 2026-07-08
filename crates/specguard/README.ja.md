@@ -153,6 +153,7 @@ claude --plugin-dir /path/to/specguard        # このセッションだけ読�
 | `/specguard:accept-prompt <理由>` | `accept-prompt` | prompt(メタ正典)を批准して pin |
 | `/specguard:decide <タイトル>` | `decide` | 決定ログ(ADR)を canon commit に pin して生成 |
 | `/specguard:drift-map [--baseline <ref>]` | `map build`/`map sync` + subagent | **書き込み側**。spec↔実装マッピングを保守し、仕様が無い entry には生成、drift は是正 (確信度が低ければ HOTL で確認) |
+| `/specguard:spec-audit [target] [--baseline <ref>]` | `audit --json --filter` + subagent + `ingest` | **read-only**。spec-map を scope 源に実装と仕様の**正しさ (correctness)** とカバレッジを監査。target で command/crate/API/e2e を絞れる。テスト追加等の是正は backlog/condukt/flow へ委譲 |
 
 ### サブコマンド (バイナリ)
 
@@ -211,6 +212,24 @@ specguard --config examples/aegis.toml run
   feature に属するか) は、テストコード・API/route 実装・クライアントの HTTP 呼び出し・仕様書記述の
   うち **entry ごとに最も安価な情報源**から読み、安価に解決できないものは Ask するか未解決のまま
   残す (探索コストを有界に保つ)。
+
+### `/specguard:spec-audit` (correctness 監査・read-only)
+
+spec-drift (`run` / `drift-map`) が「仕様と実装が **合っているか** = consistency」を見るのに対し、
+`/specguard:spec-audit` は「実装と仕様の **正しさ** = correctness」を見る **read-only** 監査。
+両者が互いに矛盾なく整合していても**両方とも間違っている**ケースを、spec-map ストアを scope 源に
+feature 単位で検出する。各 entry を read-only subagent が3次元で判定する: (a) 仕様そのものの健全性
+(矛盾・沈黙・曖昧・反証不能/誤った要件)、(b) 実装が仕様の意図を正しく実現しているか (実バグ・境界・
+セキュリティ・不変条件が実際に守られているか)、(c) テストが正しさを検証しているか (**カバレッジ**:
+決定的な `Untested` シグナル + 既存テストが仕様の振る舞いを実際に網羅しているかの adequacy 判定)。
+
+- **target で絞れる**: `/specguard:spec-audit <target>` の target は具体的な command・crate・API route・
+  自然言語で指定でき、`specguard audit --filter <query>` に解決される (例: `drift-map`、`crates/specguard`、
+  `/health`、**`e2e`**=`test_files` パスが `tests/e2e/...` の entry)。空なら全 map。クエリに対して map が
+  古い/未収録なら監査前に `specguard map sync`/`build` で再構築する。
+- **is-read-only + 委譲**: 監査自体は書き込まない (findings→report/sentinel、HOTL)。テスト追加などの
+  **是正は spec-audit 自身では行わず**、`backlog add` でタスクを積むか `/condukt`・`/flow` に渡して
+  executor 側で実装する (source→executor の分離)。
 
 ### 出力
 

@@ -147,6 +147,7 @@ machine-readable output.
 | `/specguard:accept-prompt <reason>` | `accept-prompt` | ratify & pin the prompt (meta-canon) |
 | `/specguard:decide <title>` | `decide` | scaffold a decision record (ADR) pinned to the canon commit |
 | `/specguard:drift-map [--baseline <ref>]` | `map build`/`map sync` + subagent | **Write side.** Maintain the spec↔impl mapping, author a spec for entries that lack one, and reconcile drift (asks a human via HOTL when the direction is unclear) |
+| `/specguard:spec-audit [target] [--baseline <ref>]` | `audit --json --filter` + subagent + `ingest` | **Read-only.** Audit the **correctness** of impl+spec (and coverage) using the spec-map as scope. `target` narrows to a command/crate/API/e2e; remediation (adding tests, fixes) is handed off to backlog/condukt/flow |
 
 ### Subcommands (binary)
 
@@ -195,6 +196,25 @@ Where `run` / `brief` are **read-only audits**, the `map` subcommand and the
   feature) is derived from the cheapest sufficient source per entry — test code, API/route impl, client
   HTTP calls, or spec-doc descriptions — and anything not cheaply resolvable is either asked or left
   `missing`, keeping search cost bounded.
+
+### `/specguard:spec-audit` (correctness audit, read-only)
+
+Where spec-drift (`run` / `drift-map`) checks whether spec and implementation **agree** (consistency),
+`/specguard:spec-audit` checks their **correctness** — is the implementation actually right and the spec
+itself sound — catching cases where the two are mutually consistent yet **both wrong**. It uses the
+spec-map store as scope (per feature). A read-only subagent judges each entry on three dimensions:
+(a) **spec soundness** (contradiction / silence / ambiguity / unfalsifiable or wrong requirements),
+(b) **implementation correctness** (real bugs, edge cases, security, invariants not actually upheld),
+and (c) **test adequacy / coverage** (the deterministic `Untested` signal plus whether existing tests
+actually exercise the spec's behaviors).
+
+- **Targeted**: `/specguard:spec-audit <target>` accepts a concrete command, crate, API route, or natural
+  language, resolved to `specguard audit --filter <query>` (e.g. `drift-map`, `crates/specguard`, `/health`,
+  or **`e2e`** → entries whose `test_files` are under `tests/e2e/...`). Empty = whole map. If the map is
+  stale/unmapped for the query, it is rebuilt (`specguard map sync`/`build`) before auditing.
+- **Read-only + handoff**: the audit writes nothing (findings → report/sentinel, HOTL). Remediation such as
+  **adding tests is NOT done by spec-audit itself** — it enqueues a `backlog add` task or hands off to
+  `/condukt` / `/flow` for the executor to implement (source→executor separation).
 
 ### Output
 

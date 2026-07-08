@@ -9,6 +9,11 @@ root = "."
 report_dir = "reports/spec-audit"
 sentinel = ".specguard-pending"
 
+# This repo does not use ADR-style decision records; disable the decisions
+# feature explicitly (empty dir = disabled; see config.rs / decision.rs).
+[decisions]
+dir = ""
+
 # condukt: task decomposition / worktree orchestrator
 [[area]]
 name = "condukt"

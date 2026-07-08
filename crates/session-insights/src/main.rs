@@ -19,7 +19,7 @@ use std::path::Path;
 
 use clap::{Parser, Subcommand};
 
-use harness_core::hook::{read_stdin, run_hook};
+use harness_core::hook::{read_stdin, read_stdin_if_piped, run_hook};
 
 use config::Config;
 use model::HookInput;
@@ -159,7 +159,7 @@ fn sessionend() {
     if Config::disabled_env() {
         return;
     }
-    let raw = read_stdin();
+    let raw = read_stdin_if_piped();
     let Some(input) = harness_core::hook::HookInput::parse(&raw) else {
         return;
     };

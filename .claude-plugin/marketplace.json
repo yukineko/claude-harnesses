@@ -256,7 +256,7 @@
     {
       "name": "difflog",
       "description": "Session diff-log for Claude Code: snapshot HEAD at SessionStart, write a structured git diff summary (commits, stat, files changed, bounded diff body) at SessionEnd. A /difflog skill can generate a human-readable narrative from the log. Subscription-native (no API key).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -281,7 +281,7 @@
     {
       "name": "ship",
       "description": "Shipping-ritual nudge for Claude Code: deterministically detect unshipped state (uncommitted changes, unmerged condukt/* branches, leftover worktrees, unpushed commits, stale plugin binaries) and remind you to commit・merge・push・rebuild・rollout. A /ship skill and a fail-soft SessionEnd hook surface the checklist; only the plugin-rebuild (`--run-safe`, now `--stage-repo` so it refreshes the committed binary that stale-detection measures) and plugin-rollout (`ship rollout`, automates `/plugin update`) steps are auto-runnable — commit/merge/push stay human-gated. Subscription-native (no API key).",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "category": "workflow",
       "keywords": [
         "hooks",
@@ -604,7 +604,7 @@
     {
       "name": "session-insights",
       "description": "Per-session work metrics for Claude Code: PostToolUse + Stop hooks roll up tool calls, turns, files touched, a size class (XS–XL) and a work category per session, viewable with `session-insights report` and optionally logged as a dated note to an Obsidian vault. Inspired by Devin Session Insights. Subscription-native (two hooks + bundled Rust binary, no API key).",
-      "version": "0.2.6",
+      "version": "0.2.7",
       "category": "observability",
       "keywords": [
         "hooks",

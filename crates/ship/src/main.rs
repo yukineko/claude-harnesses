@@ -135,7 +135,7 @@ fn rollout() {
 }
 
 fn session_end() {
-    let raw = harness_core::hook::read_stdin();
+    let raw = harness_core::hook::read_stdin_if_piped();
     let Some(input) = HookInput::parse(&raw) else {
         return;
     };
@@ -144,6 +144,10 @@ fn session_end() {
     let status = detect(&repo);
 
     if let Some(reminder) = checklist::session_end_reminder(&status) {
-        println!("{reminder}");
+        // Only surface the reminder on an interactive terminal; suppress in
+        // headless/programmatic contexts to avoid polluting stdout.
+        if !harness_core::hook::is_headless() {
+            println!("{reminder}");
+        }
     }
 }

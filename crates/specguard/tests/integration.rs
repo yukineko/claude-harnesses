@@ -77,6 +77,34 @@ fn run_specguard(repo: &Path, baseline: &str, sub: &[&str]) -> std::process::Out
         .expect("specguard runs")
 }
 
+/// Like [`run_specguard`] but with no `--baseline` override, so the CLI's own
+/// resolution precedence (override > `baseline_ref` > recorded ref >
+/// `fallback_ref`) runs for real — needed to exercise `map sync`'s baseline
+/// wiring, which `run_specguard`'s always-explicit `--baseline` bypasses.
+fn run_specguard_no_baseline(repo: &Path, sub: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_specguard"))
+        .current_dir(repo)
+        .args(["--config", "specguard.toml", "--date", "2026-01-01"])
+        .args(sub)
+        .output()
+        .expect("specguard runs")
+}
+
+/// The `last_ref` recorded for `key`'s entry in the map file, if any.
+fn entry_last_ref(map_toml: &str, key: &str) -> Option<String> {
+    let needle = format!("[entries.\"{key}\"]");
+    let start = map_toml.find(&needle)?;
+    let block_end = map_toml[start..]
+        .find("\n[entries.")
+        .map(|i| start + i)
+        .unwrap_or(map_toml.len());
+    map_toml[start..block_end].lines().find_map(|l| {
+        l.strip_prefix("last_ref = \"")
+            .and_then(|rest| rest.strip_suffix('"'))
+            .map(|s| s.to_string())
+    })
+}
+
 #[test]
 fn run_with_findings_writes_report_and_sentinel() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1372,4 +1400,94 @@ fn audit_only_project_never_asked_to_ratify_verify() {
     // Repeated runs stay green with no verify table present.
     assert!(run_specguard(repo, &base, &["run"]).status.success());
     assert!(run_specguard(repo, &base, &["run"]).status.success());
+}
+
+#[test]
+fn map_sync_anchors_on_map_last_synced_not_fallback_ref() {
+    // Regression: `map sync` must resolve its incremental baseline from the
+    // map's own persisted `last_synced` ref, not the unrelated `specguard run`
+    // audit `.last-ref` (which never exists for map-only usage and previously
+    // made `sync` silently fall back to `fallback_ref`, rescanning a window far
+    // wider than "since the map was last synced" and flagging untouched
+    // already-tracked files as `changed`).
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_repo(repo);
+    fs::write(
+        repo.join("specguard.toml"),
+        r#"
+[project]
+name = "Demo"
+root = "."
+
+[output]
+report_dir = "reports"
+sentinel = ".pending"
+
+[scope]
+fallback_ref = "HEAD~3"
+
+[[area]]
+name = "src"
+globs = ["src/**"]
+canon = ["docs/spec.md"]
+"#,
+    )
+    .unwrap();
+
+    fs::create_dir_all(repo.join("src")).unwrap();
+    for name in ["filler_a", "filler_b", "filler_c"] {
+        fs::write(repo.join(format!("src/{name}.rs")), "//\n").unwrap();
+        git(repo, &["add", "-A"]);
+        git(repo, &["commit", "-q", "-m", name]);
+    }
+
+    // `map build` at this HEAD: fallback_ref=HEAD~3 reaches back to the seed
+    // commit, so all three filler files are picked up and stamped with this
+    // HEAD as their `last_ref`.
+    let built = run_specguard_no_baseline(repo, &["map", "build"]);
+    assert!(
+        built.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let map_path = repo.join(".specguard/spec-map.toml");
+    let after_build = fs::read_to_string(&map_path).unwrap();
+    let build_ref =
+        entry_last_ref(&after_build, "src/filler_b.rs").expect("filler_b tracked after build");
+
+    // One more commit, then `map sync` with NO --baseline override — the exact
+    // path that only has the map's own `last_synced` to anchor on.
+    fs::write(repo.join("src/filler_d.rs"), "//\n").unwrap();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "filler_d"]);
+
+    let synced = run_specguard_no_baseline(repo, &["map", "sync"]);
+    assert!(
+        synced.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&synced.stderr)
+    );
+    let after_sync = fs::read_to_string(&map_path).unwrap();
+
+    // filler_b/filler_c were already synced as of `build_ref` and are untouched
+    // by the filler_d commit: a correctly-anchored sync (baseline = build_ref)
+    // must not re-touch them, so their `last_ref` stays exactly `build_ref`.
+    // With the bug (baseline falling back to HEAD~3 relative to the NEW HEAD),
+    // they fall inside the wider rescanned window and get bumped/re-flagged.
+    assert_eq!(
+        entry_last_ref(&after_sync, "src/filler_b.rs").as_deref(),
+        Some(build_ref.as_str()),
+        "filler_b must not be re-touched by a sync anchored on the map's own last_synced:\n{after_sync}"
+    );
+    assert_eq!(
+        entry_last_ref(&after_sync, "src/filler_c.rs").as_deref(),
+        Some(build_ref.as_str()),
+        "filler_c must not be re-touched by a sync anchored on the map's own last_synced:\n{after_sync}"
+    );
+    // filler_d is genuinely new since `build_ref` and must show up.
+    assert!(
+        after_sync.contains("[entries.\"src/filler_d.rs\"]"),
+        "filler_d (added since build_ref) must be tracked:\n{after_sync}"
+    );
 }

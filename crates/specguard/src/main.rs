@@ -313,7 +313,7 @@ fn run(cli: &Cli) -> Result<u8> {
     // `map` maintains the independent file→spec mapping store; it resolves the
     // baseline the same way the audit does but does no agent/scope work.
     if let Some(Command::Map { action }) = &cli.command {
-        return run_map(cli, &l, &paths, action);
+        return run_map(cli, &l, action);
     }
 
     // `audit` is the read-only, map-driven CORRECTNESS audit. It consumes the
@@ -1176,10 +1176,12 @@ fn decide(l: &Loaded, title: &str, force: bool) -> Result<u8> {
 
 /// Maintain the independent file→spec mapping store. `build` seeds the map from
 /// the full baseline window (create-if-absent + sync), `sync` reconciles it
-/// incrementally, and `list` prints it. All three resolve config + repo_root via
-/// the shared `load()`/`report::paths()` path like every other command, and the
-/// baseline the same way the audit does (see `scope::resolve_baseline`).
-fn run_map(cli: &Cli, l: &Loaded, paths: &report::Paths, action: &MapAction) -> Result<u8> {
+/// incrementally, and `list` prints it. `sync`'s incremental window is anchored
+/// on the map's own persisted `last_synced` ref — NOT the unrelated `specguard
+/// run` audit `.last-ref` (a separate baseline tracker that may not exist at
+/// all for map-only usage, which previously made `sync` silently fall back to
+/// `fallback_ref` and rescan a much wider window than "since last sync").
+fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
     let map_path = l.repo_root.join(&l.cfg.map.path);
     let spec_dir = &l.cfg.map.spec_doc_dir;
 
@@ -1206,22 +1208,22 @@ fn run_map(cli: &Cli, l: &Loaded, paths: &report::Paths, action: &MapAction) -> 
                 .baseline
                 .clone()
                 .or_else(|| std::env::var("SPECGUARD_BASELINE_REF").ok());
-            // `build` seeds from the full window (ignore the recorded last-ref so
-            // the whole `baseline_ref`/`fallback_ref` history reflects into a fresh
-            // map); `sync` uses the normal precedence including `.last-ref`.
-            let last_ref = match action {
-                MapAction::Build => None,
-                _ => report::read_last_ref(paths),
-            };
-            let baseline =
-                scope::resolve_baseline(&l.cfg, override_ref.as_deref(), last_ref.as_deref());
-            let head = scope::current_head(&l.repo_root).unwrap_or_else(|_| "HEAD".to_string());
-
             let exclude = specmap::compile_globs(&l.cfg.map.exclude)?;
             let mut map = match action {
                 MapAction::Build => specmap::SpecMap::load_or_init(&map_path)?,
                 _ => specmap::SpecMap::load(&map_path)?,
             };
+            // `build` seeds from the full window (ignore any recorded ref so the
+            // whole `baseline_ref`/`fallback_ref` history reflects into a fresh
+            // map); `sync` anchors on the map's own `last_synced` (the ref this
+            // exact map was last reconciled against), not the audit's `.last-ref`.
+            let last_ref = match action {
+                MapAction::Build => None,
+                _ => Some(map.last_synced.as_str()).filter(|r| !r.trim().is_empty()),
+            };
+            let baseline = scope::resolve_baseline(&l.cfg, override_ref.as_deref(), last_ref);
+            let head = scope::current_head(&l.repo_root).unwrap_or_else(|_| "HEAD".to_string());
+
             map.sync(&l.repo_root, &baseline, spec_dir, &head, &exclude)?;
             let pruned = map.prune_excluded(&exclude);
             map.save(&map_path)?;

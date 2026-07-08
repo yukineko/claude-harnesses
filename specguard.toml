@@ -36,6 +36,27 @@ exclude = [
     "**/fixtures/**",
     "**/*.json",
     "**/*.jsonl",
+    # committed compiled plugin binaries (repo-root and per-crate bin/) — generated artifacts, not spec-bearing
+    "bin/**",
+    "crates/*/bin/**",
+    # repo tooling / non-source that is not a spec-bearing feature
+    "Makefile",
+    "**/Makefile",
+    ".githooks/**",
+    ".gitignore",
+    "**/.gitignore",
+    # stale pre-monorepo root-level source paths (real source lives under crates/*/src)
+    "src/**",
+    "hooks/**",
+    "agents/**",
+    # shell scripts and per-crate build/sync scripts — tooling, not spec-bearing
+    "**/*.sh",
+    "**/scripts/**",
+    "install.sh",
+    # examples / eval harness scaffolds and root-level integration tests (not a crate feature)
+    "examples/**",
+    "eval/**",
+    "tests/**",
 ]
 
 # condukt: task decomposition / worktree orchestrator

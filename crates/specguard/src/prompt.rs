@@ -347,20 +347,29 @@ fn area_block_one(cfg: &Config, hit: &AreaHit) -> String {
     if hit.matched_files.is_empty() {
         out.push_str("- (実装側の変更なし)\n");
     }
+    // Per-shard character budget (approx-token proxy; `0` = disabled, the
+    // default, preserving prior unbounded-by-budget behavior). Even when
+    // disabled, the MAX_SAMPLE_FILES cap above still applies.
+    let budget = cfg.prompt.max_shard_chars;
+    let mut included = 0usize;
     for f in hit.matched_files.iter().take(MAX_SAMPLE_FILES) {
-        out.push_str(&format!("- `{f}`\n"));
+        let line = format!("- `{f}`\n");
+        if budget > 0 && included > 0 && out.len() + line.len() > budget {
+            // Budget reached: stop before this file, but always keep at
+            // least one file line so the shard is never emptied outright.
+            break;
+        }
+        out.push_str(&line);
+        included += 1;
     }
-    if hit.matched_files.len() > MAX_SAMPLE_FILES {
+    let omitted = hit.matched_files.len() - included;
+    if omitted > 0 {
         eprintln!(
-            "specguard: matched files for area '{}' truncated to {MAX_SAMPLE_FILES} (total {}; {} omitted)",
+            "specguard: matched files for area '{}' truncated to {included} (total {}; {omitted} omitted)",
             cfg.areas[hit.area_index].name,
             hit.matched_files.len(),
-            hit.matched_files.len() - MAX_SAMPLE_FILES
         );
-        out.push_str(&format!(
-            "- … ほか {} 件\n",
-            hit.matched_files.len() - MAX_SAMPLE_FILES
-        ));
+        out.push_str(&format!("- … ほか {omitted} 件\n"));
     }
     if !hit.changed_canon.is_empty() {
         out.push_str(
@@ -477,6 +486,61 @@ mod tests {
         assert_eq!(s.len(), 2); // one area + one invariant shard (no decisions)
         assert_eq!(shard_label(&cfg, &scope, s[0]), "logging");
         assert_eq!(shard_label(&cfg, &scope, s[1]), "invariants");
+    }
+
+    /// A synthetic large area shard (many changed files) that would exceed a
+    /// configured per-shard character budget has its file list truncated with
+    /// an explicit "N files omitted" note, mirroring the MAX_DECISIONS /
+    /// MAX_SAMPLE_FILES truncation idiom.
+    #[test]
+    fn area_shard_over_budget_truncates_file_list_with_omitted_note() {
+        let mut cfg = sample_cfg();
+        cfg.prompt.max_shard_chars = 200; // small budget, well under the full list
+        let mut scope = sample_scope();
+        scope.in_scope[0].matched_files = (0..50)
+            .map(|i| format!("logging/very/long/nested/path/to/file_{i:03}.py"))
+            .collect();
+        let out = render_shard(DEFAULT_TEMPLATE, &cfg, &scope, Shard::Area(0), "2026-06-17");
+        // Not every file made it in — the budget forced a cut.
+        assert!(
+            !out.contains("file_049.py"),
+            "budget should have truncated before the last file"
+        );
+        // ...and the cut left an explicit omitted-count note behind.
+        assert!(
+            out.contains("ほか") && out.contains("件"),
+            "expected an explicit omitted-files note, got: {out}"
+        );
+        // At least one file was still kept (the shard is never emptied).
+        assert!(out.contains("file_000.py"), "keeps at least one file");
+        assert!(!out.contains("{{"));
+    }
+
+    /// A small area shard whose rendered content stays under a configured
+    /// budget is unaffected — every changed file is still listed and no
+    /// omitted-files note is emitted.
+    #[test]
+    fn area_shard_under_budget_is_unchanged() {
+        let mut cfg = sample_cfg();
+        cfg.prompt.max_shard_chars = 100_000; // generous budget, nothing near it
+        let scope = sample_scope();
+        let out = render_shard(DEFAULT_TEMPLATE, &cfg, &scope, Shard::Area(0), "2026-06-17");
+        assert!(out.contains("logging/sig.py"));
+        assert!(!out.contains("ほか"), "no file should be omitted");
+        assert!(!out.contains("{{"));
+
+        // The default (budget disabled) renders byte-for-byte the same as the
+        // explicit generous budget, for inputs under the sample-file cap.
+        let default_cfg = sample_cfg();
+        assert_eq!(default_cfg.prompt.max_shard_chars, 0);
+        let out_default = render_shard(
+            DEFAULT_TEMPLATE,
+            &default_cfg,
+            &scope,
+            Shard::Area(0),
+            "2026-06-17",
+        );
+        assert_eq!(out, out_default);
     }
 
     #[test]

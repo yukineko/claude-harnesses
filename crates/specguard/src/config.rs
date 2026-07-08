@@ -148,6 +148,17 @@ pub struct PromptConfig {
     /// changed since (or was never) ratified via `specguard accept-prompt`.
     #[serde(default)]
     pub require_ratification: bool,
+    /// Approx per-shard token budget, expressed as a character count (chars are
+    /// a deterministic, dependency-free proxy for tokens). When a rendered area
+    /// shard's changed-file list would push the shard past this many
+    /// characters, the list is truncated with an explicit "N files omitted"
+    /// note — mirroring the existing `MAX_DECISIONS` / `MAX_SAMPLE_FILES`
+    /// truncation in `prompt.rs`. `0` (the field default, and what an omitted
+    /// `[prompt]` table or omitted key yields) disables the budget entirely,
+    /// so existing configs and behavior are unaffected until a project
+    /// explicitly opts in.
+    #[serde(default)]
+    pub max_shard_chars: usize,
 }
 
 /// Verification gates over the audit's findings (see DESIGN-VERIFY.md). Both

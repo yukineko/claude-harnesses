@@ -4,7 +4,7 @@
 //! Invariant (shared by every plugin): a hook must NEVER break the user's turn.
 //! On any error or panic we exit 0 and stay silent. `run_hook` enforces that.
 
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::panic::UnwindSafe;
 
 use serde::Deserialize;
@@ -158,6 +158,34 @@ pub fn read_stdin() -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
+/// True when stdout is NOT a terminal — i.e. the hook is running headless
+/// (CI / cron / a piped or captured session) rather than attached to an
+/// interactive TTY. When this is true, user-facing stdout reminders MUST be
+/// suppressed: printing to a captured/piped stdout would pollute programmatic
+/// or JSON output that a caller is parsing. This is the shared guard hooks use
+/// to stay silent in non-interactive contexts (never break a turn, never
+/// corrupt machine output). Pure: only inspects the stdout fd.
+pub fn is_headless() -> bool {
+    !std::io::stdout().is_terminal()
+}
+
+/// Read the hook's stdin payload only when it was actually piped in.
+///
+/// If stdin is an interactive terminal (no piped hook payload), returns
+/// `String::new()` immediately instead of calling [`read_stdin`], which would
+/// block on `read_to_end` waiting for a manual EOF. This matters for a
+/// SessionEnd (or any) hook that can fire in an interactive terminal where
+/// stdin has no EOF: blocking there would hang the turn. When stdin is piped
+/// (the normal Claude Code hook path), delegates to [`read_stdin`] to read the
+/// payload with the usual [`MAX_STDIN_BYTES`] cap. Pure: only inspects/reads
+/// the stdin fd.
+pub fn read_stdin_if_piped() -> String {
+    if std::io::stdin().is_terminal() {
+        return String::new();
+    }
+    read_stdin()
+}
+
 /// Run `f`, swallowing any panic. Returns `true` if `f` completed without
 /// panicking, `false` if it unwound. The testable core of `run_hook`.
 pub fn catch_silent<F: FnOnce() + UnwindSafe>(f: F) -> bool {
@@ -264,5 +292,22 @@ mod tests {
         std::panic::set_hook(prev);
         assert!(!panicked, "panicking handler returns false");
         assert!(ok, "clean handler returns true");
+    }
+
+    #[test]
+    fn headless_and_piped_guards_are_callable_and_pure() {
+        // Both guards must complete without panicking regardless of how the
+        // test harness wires stdout/stdin fds. We do NOT assert an exact bool
+        // for `is_headless()` (it depends on whether stdout is a terminal under
+        // the runner — captured, piped, or a real TTY), only that the call
+        // returns a bool. This keeps the test hermetic and non-flaky.
+        let headless: bool = is_headless();
+        let _ = headless;
+
+        // Under `cargo test` stdin is typically NOT a terminal, so this takes
+        // the piped path and reads (usually EOF → empty). It must not block on
+        // an interactive read and must return a String either way.
+        let payload: String = read_stdin_if_piped();
+        let _ = payload.len();
     }
 }

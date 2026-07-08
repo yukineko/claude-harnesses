@@ -14,6 +14,51 @@ sentinel = ".specguard-pending"
 [decisions]
 dir = ""
 
+# file→spec map store (`specguard map`). `exclude` lists repo-root-relative globs
+# for paths that are NOT spec-bearing features — manifests, lockfiles, plugin
+# descriptors, docs, prompt assets, CI/tooling, fixtures. `map build`/`sync` skip
+# them and `map prune` drops any already-seeded entry that matches, so a `changed`
+# status reflects genuine source/spec drift rather than config churn. Only real
+# source (`crates/*/src/**` etc.) and *.rs tests remain tracked.
+[map]
+exclude = [
+    "Cargo.lock",
+    "**/*.toml",
+    "**/.claude-plugin/**",
+    "**/*.md",
+    "**/templates/**",
+    "**/commands/**",
+    "scripts/**",
+    ".github/**",
+    "**/*.yml",
+    "**/*.yaml",
+    "**/*.py",
+    "**/fixtures/**",
+    "**/*.json",
+    "**/*.jsonl",
+    # committed compiled plugin binaries (repo-root and per-crate bin/) — generated artifacts, not spec-bearing
+    "bin/**",
+    "crates/*/bin/**",
+    # repo tooling / non-source that is not a spec-bearing feature
+    "Makefile",
+    "**/Makefile",
+    ".githooks/**",
+    ".gitignore",
+    "**/.gitignore",
+    # stale pre-monorepo root-level source paths (real source lives under crates/*/src)
+    "src/**",
+    "hooks/**",
+    "agents/**",
+    # shell scripts and per-crate build/sync scripts — tooling, not spec-bearing
+    "**/*.sh",
+    "**/scripts/**",
+    "install.sh",
+    # examples / eval harness scaffolds and root-level integration tests (not a crate feature)
+    "examples/**",
+    "eval/**",
+    "tests/**",
+]
+
 # condukt: task decomposition / worktree orchestrator
 [[area]]
 name = "condukt"

@@ -209,6 +209,16 @@ pub struct MapConfig {
     /// spec-doc path for a newly mapped source file.
     #[serde(default = "default_spec_doc_dir")]
     pub spec_doc_dir: String,
+    /// Repo-root-relative globs (`/`-separated) for paths that are NOT
+    /// spec-bearing — lockfiles, manifests, generated artifacts, docs, scripts,
+    /// fixtures. On `map build`/`sync` a changed path matching one of these is
+    /// never attributed as a new entry, and `map prune` (also run implicitly by
+    /// build/sync) removes any already-seeded entry whose key matches. Default
+    /// empty → prior behaviour (every changed file is tracked). Keeps the map
+    /// focused on real features/endpoints so `changed` reflects genuine spec
+    /// drift, not config churn.
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 impl Default for MapConfig {
@@ -216,6 +226,7 @@ impl Default for MapConfig {
         MapConfig {
             path: default_map_path(),
             spec_doc_dir: default_spec_doc_dir(),
+            exclude: Vec::new(),
         }
     }
 }

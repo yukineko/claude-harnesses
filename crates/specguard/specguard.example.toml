@@ -51,12 +51,31 @@ sentinel = ".specguard-pending"
 # map (source file -> spec-doc + status) is reusable by other features and is
 # NOT tied to the drift/audit workflow. `specguard map build|sync|list` manages
 # it; `sync` reflects `git log --name-status <baseline>..HEAD` into the map.
+# Resolve entries with `map set-spec <key|glob> <doc>` (attach a spec-doc + mark
+# tracked) or `map resolve <key|glob>` (mark tracked, no spec), and drop
+# non-spec-bearing entries with `map prune` (or automatically on build/sync).
 #
 # Path (relative to repo root) of the persisted map TOML.
 path = ".specguard/spec-map.toml"
 # Directory (relative to repo root) where spec-docs live; used to derive a
 # spec-doc path for a newly mapped source file.
 spec_doc_dir = "docs/specs"
+# Repo-root-relative globs for paths that are NOT spec-bearing features
+# (manifests, lockfiles, plugin descriptors, docs, prompt assets, CI/tooling,
+# fixtures). `map build`/`sync` never attribute a matching changed path, and
+# `map prune` removes any already-seeded entry whose key matches — so a `changed`
+# status reflects genuine source/spec drift, not config churn. Default empty
+# (track every changed file). Real *.rs source and tests stay tracked.
+exclude = [
+    "Cargo.lock",
+    "**/*.toml",
+    "**/.claude-plugin/**",
+    "**/*.md",
+    "scripts/**",
+    ".github/**",
+    "**/fixtures/**",
+    "**/*.json",
+]
 
 [decisions]
 # Directory of decision records (ADRs): the *why* behind canon changes, pinned

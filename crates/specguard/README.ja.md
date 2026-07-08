@@ -176,6 +176,9 @@ specguard accept-prompt -m "理由"  # prompt(メタ正典)を批准
 specguard map build                # spec-map ストアを作成(無ければ) + 全履歴窓で seed
 specguard map sync                 # baseline 以降の git 差分だけ増分反映 (A/M/R/D)
 specguard map list [--json]        # 現在の spec↔実装マッピングを表示
+specguard map set-spec <key|glob> <doc>  # 一致 entry に spec-doc を紐付け + tracked にする
+specguard map resolve <key|glob>   # 一致 entry を tracked にする (レビュー済み・spec 不要)
+specguard map prune                # [map].exclude 一致 entry を除去 (非 spec-bearing パス)
 specguard --baseline HEAD~5 run    # baseline を上書き
 specguard --config examples/aegis.toml run
 ```

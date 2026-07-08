@@ -9,6 +9,7 @@
 //! verbatim); this binary is the deterministic harness around it.
 
 mod agent;
+mod auditmap;
 mod config;
 mod decision;
 mod init;
@@ -159,6 +160,29 @@ enum Command {
         #[command(subcommand)]
         action: MapAction,
     },
+    /// Map-driven CORRECTNESS audit (read-only). Distinct from the drift audit:
+    /// drift checks whether spec and impl AGREE (consistency); `audit` checks
+    /// whether the implementation and the spec are actually RIGHT — spec
+    /// soundness, implementation correctness, and test adequacy — scoped by the
+    /// persisted spec-map store (`specmap.rs`). It emits deterministic structural
+    /// findings (undocumented / dangling reference / untested) plus per-entry LLM
+    /// audit shards; it fixes nothing (Human-on-the-loop). `--json` emits the
+    /// same envelope shape as `prompt --json` so the outputs can be fed back
+    /// through `specguard ingest`.
+    Audit {
+        /// Emit the machine-readable JSON envelope ({project, baseline, head,
+        /// date, marker, shards:[{label, prompt}]}) for the plugin to dispatch to
+        /// read-only subagents (then feed back via `ingest`), instead of the
+        /// human summary.
+        #[arg(long)]
+        json: bool,
+        /// Restrict the audit to entries whose key, spec_doc, any impl/test path,
+        /// or api route contains this (case-insensitive) substring — to scope to a
+        /// specific command/crate/API (e.g. `--filter drift-map`,
+        /// `--filter crates/specguard`, `--filter /health`). Omitted → whole map.
+        #[arg(long)]
+        filter: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -263,6 +287,13 @@ fn run(cli: &Cli) -> Result<u8> {
         return run_map(cli, &l, &paths, action);
     }
 
+    // `audit` is the read-only, map-driven CORRECTNESS audit. It consumes the
+    // spec-map store (not the git-diff scope) and resolves the baseline the same
+    // way the audit does, but does no agent work here — it emits shards/findings.
+    if let Some(Command::Audit { json, filter }) = &cli.command {
+        return run_audit(cli, &l, &paths, *json, filter.as_deref().unwrap_or(""));
+    }
+
     let last_ref = report::read_last_ref(&paths);
     let override_ref = cli
         .baseline
@@ -311,6 +342,7 @@ fn run(cli: &Cli) -> Result<u8> {
         | Some(Command::Decide { .. })
         | Some(Command::AcceptPrompt { .. })
         | Some(Command::Map { .. })
+        | Some(Command::Audit { .. })
         | Some(Command::TestAudit { .. }) => unreachable!("handled above"),
         Some(Command::Run) | None => {}
     }
@@ -1171,6 +1203,75 @@ fn run_map(cli: &Cli, l: &Loaded, paths: &report::Paths, action: &MapAction) -> 
             Ok(EXIT_OK)
         }
     }
+}
+
+/// Map-driven CORRECTNESS audit (read-only). Loads the persisted spec-map store
+/// (built by `map build`/`sync`), computes deterministic structural findings
+/// (undocumented / dangling reference / untested) and per-entry LLM audit
+/// shards, and either emits the machine-readable envelope (`--json`, same shape
+/// as `prompt --json`, ingest-compatible) or a human summary. It fixes nothing
+/// (Human-on-the-loop) and spawns no agent here — dispatch is the plugin's job.
+/// The baseline is resolved the same way the audit does (override > baseline_ref
+/// > recorded last-ref > fallback), purely for provenance in the envelope.
+fn run_audit(cli: &Cli, l: &Loaded, paths: &report::Paths, json: bool, filter: &str) -> Result<u8> {
+    let map_path = l.repo_root.join(&l.cfg.map.path);
+    let map = specmap::SpecMap::load(&map_path)?;
+
+    let override_ref = cli
+        .baseline
+        .clone()
+        .or_else(|| std::env::var("SPECGUARD_BASELINE_REF").ok());
+    let last_ref = report::read_last_ref(paths);
+    let baseline = scope::resolve_baseline(&l.cfg, override_ref.as_deref(), last_ref.as_deref());
+    let head = scope::current_head(&l.repo_root).unwrap_or_else(|_| "UNKNOWN".to_string());
+
+    let envelope = auditmap::build_envelope(
+        &l.cfg,
+        &map,
+        &l.repo_root,
+        &baseline,
+        &head,
+        &l.date,
+        filter,
+    );
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&envelope).context("serializing audit envelope JSON")?
+        );
+        return Ok(EXIT_OK);
+    }
+
+    // Human summary: the structural findings (deterministic, filter-scoped) + how
+    // many audit shards would be dispatched. Read-only; nothing is written.
+    let findings = auditmap::scan_map_filtered(&map, &l.repo_root, filter);
+    let scope_note = if filter.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" (filter: {})", filter.trim())
+    };
+    println!(
+        "specguard audit: {} entr{} mapped, {} audit shard(s), {} structural finding(s){} [{}]",
+        map.len(),
+        if map.len() == 1 { "y" } else { "ies" },
+        envelope.shards.len(),
+        findings.len(),
+        scope_note,
+        map_path.display()
+    );
+    if map.is_empty() {
+        println!(
+            "  (map is empty — run `specguard map build` first to populate spec↔impl↔test entries)"
+        );
+    }
+    for f in &findings {
+        println!("  [{}] {} — {}", f.kind.as_str(), f.key, f.detail);
+    }
+    if findings.is_empty() && !map.is_empty() {
+        println!("  (no structural gaps; run the shards for the correctness audit)");
+    }
+    Ok(EXIT_OK)
 }
 
 /// Human-readable dump of the map for `specguard map list`.

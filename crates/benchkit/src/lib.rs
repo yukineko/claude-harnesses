@@ -13,6 +13,7 @@
 pub mod download;
 pub mod loader;
 pub mod model;
+pub mod scorer;
 
 pub use loader::load_instances;
 pub use model::Instance;

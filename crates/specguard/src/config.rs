@@ -102,6 +102,17 @@ pub struct ScopeConfig {
     /// Baseline used on the very first run (no recorded ref yet).
     #[serde(default = "default_fallback_ref")]
     pub fallback_ref: String,
+    /// Budget guarding the final "audit everything" fallback tier of
+    /// `scope::changed_files` (reached when neither `baseline_ref` nor
+    /// `fallback_ref` resolves, e.g. a shallow clone or a bogus ref). When the
+    /// whole-tree file count exceeds this budget, `changed_files` returns an
+    /// explicit `Err` instead of silently handing the entire repo to the
+    /// agent. `0` (the field default, and what an omitted `[scope]` table or
+    /// omitted key yields) disables the budget entirely — the historical
+    /// behavior — so existing configs are unaffected until a project
+    /// explicitly opts in by setting a positive value.
+    #[serde(default)]
+    pub whole_tree_fallback_max_files: usize,
 }
 
 // Manual Default so an entirely-omitted `[scope]` table still yields a usable
@@ -112,6 +123,7 @@ impl Default for ScopeConfig {
         ScopeConfig {
             baseline_ref: String::new(),
             fallback_ref: default_fallback_ref(),
+            whole_tree_fallback_max_files: 0,
         }
     }
 }

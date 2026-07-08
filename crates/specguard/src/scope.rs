@@ -95,18 +95,26 @@ pub const ALL_TRACKED: &str = "(all tracked files)";
 /// young repo never hard-errors:
 ///   1. the requested `baseline` (`baseline..HEAD`),
 ///   2. the configured `fallback` ref,
-///   3. all tracked files (`git ls-tree HEAD`).
+///   3. all tracked files (`git ls-tree HEAD`) — "audit everything".
 ///
 /// Uses a two-dot diff (`baseline..HEAD`), i.e. "what HEAD changed relative to
 /// baseline" — NOT three-dot, which diffs from the merge-base and would miss
 /// changes that came in on the baseline side. Only committed state is audited;
 /// uncommitted working-tree edits are out of scope by design.
 ///
+/// `max_whole_tree_files` guards ONLY tier 3 (the normal git-diff tiers 1/2
+/// are already naturally scoped to what changed). `0` disables the guard
+/// (unlimited, the historical behavior). When tier 3 is reached and the
+/// tracked-file count exceeds a positive budget, this returns `Err` instead
+/// of silently handing the whole tree (e.g. 200k lines) to the audit agent —
+/// see [`crate::config::ScopeConfig::whole_tree_fallback_max_files`].
+///
 /// Returns (files, ref-actually-used, fell_back).
 pub fn changed_files(
     repo_root: &Path,
     baseline: &str,
     fallback: &str,
+    max_whole_tree_files: usize,
 ) -> Result<(Vec<String>, String, bool)> {
     if let Ok(files) = git_diff_names(repo_root, baseline) {
         return Ok((files, baseline.to_string(), false));
@@ -119,6 +127,18 @@ pub fn changed_files(
     let files = all_tracked_files(repo_root).with_context(|| {
         format!("could not resolve baseline '{baseline}' or fallback '{fallback}', and listing all tracked files failed")
     })?;
+    if max_whole_tree_files > 0 && files.len() > max_whole_tree_files {
+        anyhow::bail!(
+            "refusing whole-tree fallback audit: neither baseline '{baseline}' nor fallback \
+             '{fallback}' resolved, and the tracked tree has {} files, exceeding the \
+             scope.whole_tree_fallback_max_files budget of {max_whole_tree_files}. \
+             Raise `whole_tree_fallback_max_files` in `[scope]` (0 = unlimited) if a full-tree \
+             audit is intended, or narrow scope by fixing/recording a resolvable baseline ref \
+             (e.g. `--baseline` or `specguard`'s recorded last-ref) so the normal changed-files \
+             diff is used instead of auditing the whole tree.",
+            files.len()
+        );
+    }
     Ok((files, ALL_TRACKED.to_string(), true))
 }
 
@@ -250,8 +270,12 @@ pub fn resolve(
             "refusing unsafe baseline ref '{requested}': only [A-Za-z0-9_./~^-] are allowed and it must not start with '-'"
         );
     }
-    let (changed_files, baseline, fell_back) =
-        changed_files(repo_root, &requested, &cfg.scope.fallback_ref)?;
+    let (changed_files, baseline, fell_back) = changed_files(
+        repo_root,
+        &requested,
+        &cfg.scope.fallback_ref,
+        cfg.scope.whole_tree_fallback_max_files,
+    )?;
     let (in_scope, skipped_areas) = classify(&changed_files, &cfg.areas)?;
     let decision_files = crate::decision::list_files(repo_root, &cfg.decisions.dir);
     Ok(Scope {
@@ -595,6 +619,75 @@ mod tests {
         // path with empty content.
         let fp = fingerprint_files(tmp.path(), &["missing.md".to_string()]);
         assert_eq!(fp.len(), 16);
+    }
+
+    // -- whole-tree fallback budget guard -----------------------------------
+
+    fn test_git(repo: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    /// A young repo (one commit) with `n` tracked files, ready to exercise the
+    /// tier-3 "audit everything" fallback via a bogus baseline/fallback ref.
+    fn repo_with_n_tracked_files(n: usize) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        test_git(repo, &["init", "-q"]);
+        test_git(repo, &["config", "user.email", "t@t.t"]);
+        test_git(repo, &["config", "user.name", "t"]);
+        test_git(repo, &["config", "commit.gpgsign", "false"]);
+        for i in 0..n {
+            std::fs::write(repo.join(format!("f{i}.txt")), "x").unwrap();
+        }
+        test_git(repo, &["add", "-A"]);
+        test_git(repo, &["commit", "-q", "-m", "seed"]);
+        tmp
+    }
+
+    /// (a) Whole-tree fallback set exceeds the configured budget -> refused
+    /// with an `Err` naming the count and the budget (not silently audited).
+    #[test]
+    fn whole_tree_fallback_exceeding_budget_is_refused() {
+        let tmp = repo_with_n_tracked_files(5);
+        let err = changed_files(tmp.path(), "no-such-ref", "also-no-such-ref", 3)
+            .expect_err("5 tracked files must exceed a budget of 3");
+        let msg = err.to_string();
+        assert!(msg.contains('5'), "message should name the count: {msg}");
+        assert!(msg.contains('3'), "message should name the budget: {msg}");
+    }
+
+    /// (b) Within budget: proceeds exactly as today (falls back to all
+    /// tracked files, `fell_back = true`, `ALL_TRACKED` label).
+    #[test]
+    fn whole_tree_fallback_within_budget_proceeds_as_today() {
+        let tmp = repo_with_n_tracked_files(5);
+        let (files, baseline, fell_back) =
+            changed_files(tmp.path(), "no-such-ref", "also-no-such-ref", 10)
+                .expect("5 tracked files must fit within a budget of 10");
+        assert_eq!(files.len(), 5);
+        assert_eq!(baseline, ALL_TRACKED);
+        assert!(fell_back);
+    }
+
+    /// (b) Budget disabled (`0`, the field default) proceeds exactly as
+    /// today regardless of tree size — the historical, backward-compatible
+    /// behavior that `unresolvable_baseline_falls_back_to_all_tracked`
+    /// (tests/integration.rs) depends on.
+    #[test]
+    fn whole_tree_fallback_disabled_budget_proceeds_unbounded() {
+        let tmp = repo_with_n_tracked_files(50);
+        let (files, baseline, fell_back) =
+            changed_files(tmp.path(), "no-such-ref", "also-no-such-ref", 0)
+                .expect("budget 0 must never refuse");
+        assert_eq!(files.len(), 50);
+        assert_eq!(baseline, ALL_TRACKED);
+        assert!(fell_back);
     }
 }
 

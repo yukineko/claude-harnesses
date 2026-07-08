@@ -146,6 +146,7 @@ machine-readable output.
 | `/specguard:ack` | `ack` | clear a handled sentinel |
 | `/specguard:accept-prompt <reason>` | `accept-prompt` | ratify & pin the prompt (meta-canon) |
 | `/specguard:decide <title>` | `decide` | scaffold a decision record (ADR) pinned to the canon commit |
+| `/specguard:drift-map [--baseline <ref>]` | `map build`/`map sync` + subagent | **Write side.** Maintain the spec↔impl mapping, author a spec for entries that lack one, and reconcile drift (asks a human via HOTL when the direction is unclear) |
 
 ### Subcommands (binary)
 
@@ -165,9 +166,35 @@ specguard testaudit                # scan for tests implemented but not being ru
 specguard testaudit --json         # same, but emit machine-readable JSON ({findings:[{kind,file,name,reason}]})
 specguard decide "<title>"         # scaffold a decision record (ADR)
 specguard accept-prompt -m "reason"  # ratify the prompt (meta-canon)
+specguard map build                # create the spec-map store (if absent) + seed from the full history window
+specguard map sync                 # reflect only the git delta since the baseline (A/M/R/D)
+specguard map list [--json]        # print the current spec↔impl mapping
 specguard --baseline HEAD~5 run    # override the baseline
 specguard --config examples/aegis.toml run
 ```
+
+### The spec-map store + `/specguard:drift-map` (the write-side complement)
+
+Where `run` / `brief` are **read-only audits**, the `map` subcommand and the
+`/specguard:drift-map` command are the **write side** that grows the mapping and the specs:
+
+- **`specguard map`** maintains an **independent, reusable mapping store** (`.specguard/spec-map.toml`)
+  relating spec/feature ↔ implementation files ↔ tests ↔ API/URL. It is a deterministic skeleton
+  layer that reflects the `git log --name-status` delta (Added→new entry, Modified→`changed`,
+  Renamed→move, Deleted→detach/`missing`) and carries no drift-workflow logic — it is designed as a
+  **shared layer that a future `spec-audit` will also consume** (the command never reimplements the
+  map; it always delegates to `specguard map`). Each entry has `kind` (Feature|Endpoint), `spec_doc`,
+  `impl_files`, `test_files`, `client_refs`, and `api` ({method, route}).
+- **`/specguard:drift-map`** is the LLM orchestration that **consumes** that store: (1) keep the map
+  fresh via `map sync`, (2) reference each entry's spec under `docs/specs/`, (3) for entries with no
+  spec, read the impl + tests and author a spec body (overview / invariants / behavior), marked
+  `REVIEW-NEEDED` (optionally using the sibling generator `specforge`), and (4) for `changed` entries
+  whose spec and code diverge, **fix whichever side is wrong (the spec doc or the implementation).
+  When the correct direction is unclear or confidence is low, it does not silently pick — it asks a
+  human via `AskUserQuestion` (Human-on-the-loop).** Semantic attribution (which file belongs to which
+  feature) is derived from the cheapest sufficient source per entry — test code, API/route impl, client
+  HTTP calls, or spec-doc descriptions — and anything not cheaply resolvable is either asked or left
+  `missing`, keeping search cost bounded.
 
 ### Output
 

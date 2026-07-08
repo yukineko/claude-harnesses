@@ -152,6 +152,7 @@ claude --plugin-dir /path/to/specguard        # このセッションだけ読�
 | `/specguard:ack` | `ack` | 対応済み sentinel をクリア |
 | `/specguard:accept-prompt <理由>` | `accept-prompt` | prompt(メタ正典)を批准して pin |
 | `/specguard:decide <タイトル>` | `decide` | 決定ログ(ADR)を canon commit に pin して生成 |
+| `/specguard:drift-map [--baseline <ref>]` | `map build`/`map sync` + subagent | **書き込み側**。spec↔実装マッピングを保守し、仕様が無い entry には生成、drift は是正 (確信度が低ければ HOTL で確認) |
 
 ### サブコマンド (バイナリ)
 
@@ -171,6 +172,9 @@ specguard testaudit                # 実装済みだが実行されていない�
 specguard testaudit --json         # 同上を機械可読 JSON で出力
 specguard decide "<title>"         # 決定ログ(ADR)を生成
 specguard accept-prompt -m "理由"  # prompt(メタ正典)を批准
+specguard map build                # spec-map ストアを作成(無ければ) + 全履歴窓で seed
+specguard map sync                 # baseline 以降の git 差分だけ増分反映 (A/M/R/D)
+specguard map list [--json]        # 現在の spec↔実装マッピングを表示
 specguard --baseline HEAD~5 run    # baseline を上書き
 specguard --config examples/aegis.toml run
 ```
@@ -184,6 +188,29 @@ specguard --config examples/aegis.toml run
 `#[cfg(…)]` ブロック内のテスト、(c) どの親からも `mod` 宣言されていない `#[test]` を含む
 `.rs` ファイル、(d) workspace に取り込まれていない `tests/` 配下の統合テストファイルを報告する
 (= 実装したのに `cargo test` で実行されないテスト)。clean なら exit 0、findings ありなら exit 7。
+
+### spec-map ストア + `/specguard:drift-map` (書き込み側の補完)
+
+`run` / `brief` が **read-only の監査**なのに対し、`map` サブコマンドと
+`/specguard:drift-map` コマンドは **書き込み側**でマッピングと仕様を育てる:
+
+- **`specguard map`** は、spec/feature ↔ 実装ファイル ↔ テスト ↔ API/URL を関連付ける
+  **独立した再利用可能なマッピングストア** (`.specguard/spec-map.toml`) を保守する。
+  `git log --name-status` の差分を決定的に反映する (Added→新規 entry、Modified→`changed`、
+  Renamed→移動、Deleted→detach/`missing`) だけの skeleton レイヤで、drift ワークフローに
+  依存しない。**将来の `spec-audit` 等の別機能からも共有される独立レイヤ**として設計されている
+  (このコマンドはマップ実装を再実装せず、常に `specguard map` に委譲する)。各 entry は
+  `kind` (Feature|Endpoint) / `spec_doc` / `impl_files` / `test_files` / `client_refs` /
+  `api` ({method, route}) を持つ。
+- **`/specguard:drift-map`** はそのストアを **消費する** LLM オーケストレーションで、(1) `map sync`
+  でマッピングを保守し、(2) 各 entry の `docs/specs/` 仕様書を参照、(3) 仕様が無い entry は実装と
+  テストを読んで仕様本文 (概要・不変条件・振る舞い) を生成 (`REVIEW-NEEDED` マーク付き。必要なら
+  同 crate の生成系 `specforge` を活用)、(4) `changed` entry で仕様↔実装が **食い違えば誤っている側
+  (仕様書 or 実装) を是正**する。**どちらを正とするか確信が持てない場合は黙って決め打ちせず
+  `AskUserQuestion` で人間に確認する (Human-on-the-loop)。** 意味的な帰属付け (どのファイルがどの
+  feature に属するか) は、テストコード・API/route 実装・クライアントの HTTP 呼び出し・仕様書記述の
+  うち **entry ごとに最も安価な情報源**から読み、安価に解決できないものは Ask するか未解決のまま
+  残す (探索コストを有界に保つ)。
 
 ### 出力
 

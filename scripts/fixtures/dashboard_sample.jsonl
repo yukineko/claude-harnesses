@@ -1,0 +1,2 @@
+{"timestamp": 1700000000, "resolution_rate": 0.42, "instances": [{"instance_id": "django__django-1", "resolved": true}, {"instance_id": "flask__flask-2", "resolved": false}], "model": "opus", "cost": 1.23}
+{"timestamp": 1700086400, "resolution_rate": 0.45, "instances": [{"instance_id": "django__django-1", "resolved": true}, {"instance_id": "flask__flask-2", "resolved": true}], "model": "opus", "cost": 1.31}

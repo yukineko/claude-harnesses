@@ -1,0 +1,36 @@
+name: bench-regression
+
+# Manual-only resolution-rate regression gate for the benchkit SWE-bench
+# dashboard. It runs the stdlib-Python gate (scripts/check-bench-regression.py)
+# against a small CHECKED-IN dashboard JSONL fixture, comparing the latest run's
+# resolution_rate to the preceding entry and failing on an over-threshold drop.
+#
+# workflow_dispatch ONLY: this never builds or executes the real SWE-bench
+# harness and never runs the benchkit crate — it exercises the gate against the
+# committed fixture so the regression logic itself stays green. Wiring it to a
+# live dashboard is a deliberate manual action, not an on-push/PR check.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Unit-test the regression gate
+        run: python3 scripts/test_check_bench_regression.py
+      - name: Check resolution-rate regression against committed fixture
+        run: >-
+          python3 scripts/check-bench-regression.py
+          --dashboard scripts/fixtures/dashboard_sample.jsonl
+          --threshold 0.05

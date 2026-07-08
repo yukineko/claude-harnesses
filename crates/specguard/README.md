@@ -146,7 +146,7 @@ machine-readable output.
 | `/specguard:ack` | `ack` | clear a handled sentinel |
 | `/specguard:accept-prompt <reason>` | `accept-prompt` | ratify & pin the prompt (meta-canon) |
 | `/specguard:decide <title>` | `decide` | scaffold a decision record (ADR) pinned to the canon commit |
-| `/specguard:drift-map [--baseline <ref>]` | `map build`/`map sync` + subagent | **Write side.** Maintain the spec↔impl mapping, author a spec for entries that lack one, and reconcile drift (asks a human via HOTL when the direction is unclear) |
+| `/specguard:drift-map [target] [--baseline <ref>]` | `map sync`/`map list --filter` + subagent | **Write side.** Maintain the spec↔impl mapping, author missing specs, and reconcile drift (HOTL when unclear). `target` (command/crate/API/e2e/NL) narrows scope; after an adjustment it runs the tests and hands off to backlog/condukt/flow if they fail |
 | `/specguard:spec-audit [target] [--baseline <ref>]` | `audit --json --filter` + subagent + `ingest` | **Read-only.** Audit the **correctness** of impl+spec (and coverage) using the spec-map as scope. `target` narrows to a command/crate/API/e2e; remediation (adding tests, fixes) is handed off to backlog/condukt/flow |
 
 ### Subcommands (binary)

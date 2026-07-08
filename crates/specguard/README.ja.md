@@ -152,7 +152,7 @@ claude --plugin-dir /path/to/specguard        # このセッションだけ読�
 | `/specguard:ack` | `ack` | 対応済み sentinel をクリア |
 | `/specguard:accept-prompt <理由>` | `accept-prompt` | prompt(メタ正典)を批准して pin |
 | `/specguard:decide <タイトル>` | `decide` | 決定ログ(ADR)を canon commit に pin して生成 |
-| `/specguard:drift-map [--baseline <ref>]` | `map build`/`map sync` + subagent | **書き込み側**。spec↔実装マッピングを保守し、仕様が無い entry には生成、drift は是正 (確信度が低ければ HOTL で確認) |
+| `/specguard:drift-map [target] [--baseline <ref>]` | `map sync`/`map list --filter` + subagent | **書き込み側**。spec↔実装マッピングを保守し、仕様が無い entry には生成、drift は是正 (HOTL)。target(command/crate/API/e2e/自然言語)で対象を絞れる。是正後にテストを実行し、失敗なら backlog/condukt/flow へ委譲 |
 | `/specguard:spec-audit [target] [--baseline <ref>]` | `audit --json --filter` + subagent + `ingest` | **read-only**。spec-map を scope 源に実装と仕様の**正しさ (correctness)** とカバレッジを監査。target で command/crate/API/e2e を絞れる。テスト追加等の是正は backlog/condukt/flow へ委譲 |
 
 ### サブコマンド (バイナリ)

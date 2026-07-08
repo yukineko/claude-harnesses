@@ -208,6 +208,28 @@ enum MapAction {
         #[arg(long)]
         filter: Option<String>,
     },
+    /// Attach a spec-doc to matching entries and mark them `tracked` — the
+    /// resolution for mapped source files that now have an authored spec.
+    /// `selector` is an exact entry key or a glob (e.g. `crates/foo/src/**`), so
+    /// one crate-level spec-doc can resolve every per-file entry under it.
+    SetSpec {
+        /// Exact entry key or glob selecting the entries to attach the doc to.
+        selector: String,
+        /// Spec-doc path (repo-root-relative) to record on each matched entry.
+        doc: String,
+    },
+    /// Mark matching entries `tracked` (reviewed; no authored spec needed).
+    /// `selector` is an exact entry key or a glob. Use for entries whose
+    /// `changed` status has been reviewed and reflects no genuine spec drift.
+    Resolve {
+        /// Exact entry key or glob selecting the entries to mark tracked.
+        selector: String,
+    },
+    /// Remove entries whose key matches the configured `[map].exclude` globs —
+    /// the non-spec-bearing paths (lockfiles, manifests, generated artifacts,
+    /// docs). Idempotent. `build`/`sync` also apply exclusion, so this mainly
+    /// cleans a map seeded before `exclude` was configured.
+    Prune,
 }
 
 fn main() -> ExitCode {
@@ -1195,14 +1217,16 @@ fn run_map(cli: &Cli, l: &Loaded, paths: &report::Paths, action: &MapAction) -> 
                 scope::resolve_baseline(&l.cfg, override_ref.as_deref(), last_ref.as_deref());
             let head = scope::current_head(&l.repo_root).unwrap_or_else(|_| "HEAD".to_string());
 
+            let exclude = specmap::compile_globs(&l.cfg.map.exclude)?;
             let mut map = match action {
                 MapAction::Build => specmap::SpecMap::load_or_init(&map_path)?,
                 _ => specmap::SpecMap::load(&map_path)?,
             };
-            map.sync(&l.repo_root, &baseline, spec_dir, &head)?;
+            map.sync(&l.repo_root, &baseline, spec_dir, &head, &exclude)?;
+            let pruned = map.prune_excluded(&exclude);
             map.save(&map_path)?;
             println!(
-                "specguard map: {} -> {} ({} entr{}, baseline {})",
+                "specguard map: {} -> {} ({} entr{}, baseline {}{})",
                 match action {
                     MapAction::Build => "built",
                     _ => "synced",
@@ -1211,6 +1235,54 @@ fn run_map(cli: &Cli, l: &Loaded, paths: &report::Paths, action: &MapAction) -> 
                 map.len(),
                 if map.len() == 1 { "y" } else { "ies" },
                 baseline,
+                if pruned.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {} excluded pruned", pruned.len())
+                },
+            );
+            Ok(EXIT_OK)
+        }
+        MapAction::SetSpec { selector, doc } => {
+            let mut map = specmap::SpecMap::load(&map_path)?;
+            let touched = map.set_spec(selector, doc)?;
+            map.save(&map_path)?;
+            if touched.is_empty() {
+                println!("specguard map: no entry matched '{selector}' (nothing set)");
+            } else {
+                println!(
+                    "specguard map: set spec_doc={doc} + tracked on {} entr{} matching '{selector}'",
+                    touched.len(),
+                    if touched.len() == 1 { "y" } else { "ies" },
+                );
+            }
+            Ok(EXIT_OK)
+        }
+        MapAction::Resolve { selector } => {
+            let mut map = specmap::SpecMap::load(&map_path)?;
+            let touched = map.resolve(selector)?;
+            map.save(&map_path)?;
+            if touched.is_empty() {
+                println!("specguard map: no entry matched '{selector}' (nothing resolved)");
+            } else {
+                println!(
+                    "specguard map: marked {} entr{} tracked matching '{selector}'",
+                    touched.len(),
+                    if touched.len() == 1 { "y" } else { "ies" },
+                );
+            }
+            Ok(EXIT_OK)
+        }
+        MapAction::Prune => {
+            let exclude = specmap::compile_globs(&l.cfg.map.exclude)?;
+            let mut map = specmap::SpecMap::load(&map_path)?;
+            let pruned = map.prune_excluded(&exclude);
+            map.save(&map_path)?;
+            println!(
+                "specguard map: pruned {} excluded entr{} ({} remaining)",
+                pruned.len(),
+                if pruned.len() == 1 { "y" } else { "ies" },
+                map.len(),
             );
             Ok(EXIT_OK)
         }

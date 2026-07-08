@@ -14,6 +14,30 @@ sentinel = ".specguard-pending"
 [decisions]
 dir = ""
 
+# file→spec map store (`specguard map`). `exclude` lists repo-root-relative globs
+# for paths that are NOT spec-bearing features — manifests, lockfiles, plugin
+# descriptors, docs, prompt assets, CI/tooling, fixtures. `map build`/`sync` skip
+# them and `map prune` drops any already-seeded entry that matches, so a `changed`
+# status reflects genuine source/spec drift rather than config churn. Only real
+# source (`crates/*/src/**` etc.) and *.rs tests remain tracked.
+[map]
+exclude = [
+    "Cargo.lock",
+    "**/*.toml",
+    "**/.claude-plugin/**",
+    "**/*.md",
+    "**/templates/**",
+    "**/commands/**",
+    "scripts/**",
+    ".github/**",
+    "**/*.yml",
+    "**/*.yaml",
+    "**/*.py",
+    "**/fixtures/**",
+    "**/*.json",
+    "**/*.jsonl",
+]
+
 # condukt: task decomposition / worktree orchestrator
 [[area]]
 name = "condukt"

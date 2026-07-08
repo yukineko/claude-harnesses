@@ -45,6 +45,7 @@
 //!     [`SpecMap::sync`] is the thin git-invoking wrapper that glues them.
 
 use anyhow::{Context, Result};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -486,12 +487,99 @@ impl SpecMap {
         baseline: &str,
         spec_dir: &str,
         synced_ref: &str,
+        exclude: &GlobSet,
     ) -> Result<()> {
         let text = git_log_name_status(repo_root, baseline)?;
-        let changes = parse_name_status(&text);
+        let changes = filter_excluded(parse_name_status(&text), exclude);
         self.apply_changes(&changes, spec_dir, synced_ref);
         Ok(())
     }
+
+    /// Remove every entry whose key matches one of the `exclude` globs — the
+    /// non-spec-bearing paths (lockfiles, manifests, generated artifacts). Pure —
+    /// no I/O. Returns the removed keys (sorted, for deterministic reporting).
+    /// Combined with [`filter_excluded`] on `sync`, this drives the map to a
+    /// state where every remaining entry is a genuine feature/endpoint, so a
+    /// `changed` status reflects real spec drift rather than config churn.
+    pub fn prune_excluded(&mut self, exclude: &GlobSet) -> Vec<String> {
+        let removed: Vec<String> = self
+            .entries
+            .keys()
+            .filter(|k| exclude.is_match(k.as_str()))
+            .cloned()
+            .collect();
+        for k in &removed {
+            self.entries.remove(k);
+        }
+        removed
+    }
+
+    /// Attach `doc` as the `spec_doc` of every entry whose key matches
+    /// `selector` (an exact key or a glob such as `crates/foo/src/**`), marking
+    /// each `Tracked` — the resolution for a mapped source file that now has an
+    /// authored spec. Pure — no I/O. Returns the touched keys (sorted). Errors
+    /// only on an invalid glob; a valid selector that matches nothing returns an
+    /// empty vector (the caller decides whether that is worth reporting).
+    pub fn set_spec(&mut self, selector: &str, doc: &str) -> Result<Vec<String>> {
+        let set = compile_globs(std::slice::from_ref(&selector.to_string()))?;
+        let keys: Vec<String> = self
+            .entries
+            .keys()
+            .filter(|k| set.is_match(k.as_str()))
+            .cloned()
+            .collect();
+        for k in &keys {
+            if let Some(e) = self.entries.get_mut(k) {
+                e.spec_doc = Some(doc.to_string());
+                e.status = Status::Tracked;
+            }
+        }
+        Ok(keys)
+    }
+
+    /// Mark every entry whose key matches `selector` (exact key or glob) as
+    /// `Tracked` — the "reviewed, no spec drift" resolution for entries that
+    /// need no authored spec-doc. Pure — no I/O. Returns the touched keys.
+    /// Errors only on an invalid glob.
+    pub fn resolve(&mut self, selector: &str) -> Result<Vec<String>> {
+        let set = compile_globs(std::slice::from_ref(&selector.to_string()))?;
+        let keys: Vec<String> = self
+            .entries
+            .keys()
+            .filter(|k| set.is_match(k.as_str()))
+            .cloned()
+            .collect();
+        for k in &keys {
+            if let Some(e) = self.entries.get_mut(k) {
+                e.status = Status::Tracked;
+            }
+        }
+        Ok(keys)
+    }
+}
+
+/// Compile repo-root-relative globs into a [`GlobSet`]. An empty slice yields an
+/// empty set that matches nothing (so an unset `[map].exclude` preserves prior
+/// behaviour). Errors on an invalid glob pattern.
+pub fn compile_globs(globs: &[String]) -> Result<GlobSet> {
+    let mut builder = GlobSetBuilder::new();
+    for g in globs {
+        builder.add(Glob::new(g).with_context(|| format!("invalid map glob '{g}'"))?);
+    }
+    builder.build().context("building map glob set")
+}
+
+/// Drop `Added`/`Modified` changes whose path matches an `exclude` glob so they
+/// are never attributed as new map entries. `Renamed` and `Deleted` are kept so
+/// detach/cleanup of an existing entry still runs. Pure — no I/O.
+fn filter_excluded(changes: Vec<Change>, exclude: &GlobSet) -> Vec<Change> {
+    changes
+        .into_iter()
+        .filter(|c| match c {
+            Change::Added(p) | Change::Modified(p) => !exclude.is_match(p),
+            _ => true,
+        })
+        .collect()
 }
 
 /// `Some(ref)` for a non-empty git ref, else `None` (used for `last_ref`).
@@ -555,6 +643,123 @@ mod tests {
         assert!(path.exists(), "load_or_init should create the file");
         // Reloading the created file yields the same empty map.
         assert_eq!(SpecMap::load(&path).unwrap(), map);
+    }
+
+    /// Seed a map with per-path skeleton entries for the given added paths.
+    fn seeded(paths: &[&str]) -> SpecMap {
+        let mut map = SpecMap::default();
+        let changes: Vec<Change> = paths.iter().map(|p| Change::Added(p.to_string())).collect();
+        map.apply_changes(&changes, "docs/specs", "r1");
+        map
+    }
+
+    #[test]
+    fn compile_globs_empty_matches_nothing() {
+        let set = compile_globs(&[]).unwrap();
+        assert!(!set.is_match("anything/at/all.rs"));
+        assert!(!set.is_match("Cargo.lock"));
+    }
+
+    #[test]
+    fn compile_globs_rejects_invalid_pattern() {
+        assert!(compile_globs(&["a/[".to_string()]).is_err());
+    }
+
+    #[test]
+    fn filter_excluded_drops_added_modified_keeps_delete_rename() {
+        let set = compile_globs(&["**/Cargo.lock".to_string(), "**/*.toml".to_string()]).unwrap();
+        let changes = vec![
+            Change::Added("crates/foo/Cargo.lock".to_string()),
+            Change::Modified("crates/foo/src/lib.rs".to_string()),
+            Change::Deleted("crates/foo/Cargo.toml".to_string()),
+            Change::Renamed {
+                from: "a/old.rs".to_string(),
+                to: "a/new.rs".to_string(),
+            },
+        ];
+        let kept = filter_excluded(changes, &set);
+        // Cargo.lock (Added, excluded) dropped; lib.rs kept; Deleted + Renamed kept.
+        assert_eq!(kept.len(), 3);
+        assert!(kept
+            .iter()
+            .any(|c| matches!(c, Change::Modified(p) if p == "crates/foo/src/lib.rs")));
+        assert!(kept
+            .iter()
+            .any(|c| matches!(c, Change::Deleted(p) if p == "crates/foo/Cargo.toml")));
+        assert!(kept.iter().any(|c| matches!(c, Change::Renamed { .. })));
+    }
+
+    #[test]
+    fn prune_excluded_removes_matching_keys() {
+        let mut map = seeded(&[
+            "Cargo.lock",
+            ".claude-plugin/marketplace.json",
+            "crates/foo/src/lib.rs",
+        ]);
+        assert_eq!(map.len(), 3);
+        let set = compile_globs(&["Cargo.lock".to_string(), "**/*.json".to_string()]).unwrap();
+        let removed = map.prune_excluded(&set);
+        assert_eq!(removed.len(), 2);
+        assert_eq!(map.len(), 1);
+        assert!(map.entries.contains_key("crates/foo/src/lib.rs"));
+    }
+
+    #[test]
+    fn set_spec_attaches_doc_and_tracks_on_glob() {
+        let mut map = seeded(&[
+            "crates/benchkit/src/harness.rs",
+            "crates/benchkit/src/lib.rs",
+            "crates/benchkit/src/main.rs",
+            "crates/other/src/main.rs",
+        ]);
+        // Every seeded entry starts Changed with no spec_doc.
+        assert!(map
+            .entries
+            .values()
+            .all(|e| e.status == Status::Changed && e.spec_doc.is_none()));
+        let touched = map
+            .set_spec("crates/benchkit/src/**", "docs/specs/benchkit.md")
+            .unwrap();
+        assert_eq!(touched.len(), 3);
+        for k in &touched {
+            let e = &map.entries[k];
+            assert_eq!(e.spec_doc.as_deref(), Some("docs/specs/benchkit.md"));
+            assert_eq!(e.status, Status::Tracked);
+        }
+        // The unrelated crate is untouched.
+        let other = &map.entries["crates/other/src/main.rs"];
+        assert_eq!(other.status, Status::Changed);
+        assert!(other.spec_doc.is_none());
+    }
+
+    #[test]
+    fn set_spec_exact_key_matches_one() {
+        let mut map = seeded(&["crates/difflog/src/main.rs", "crates/ship/src/main.rs"]);
+        let touched = map
+            .set_spec("crates/difflog/src/main.rs", "docs/specs/difflog.md")
+            .unwrap();
+        assert_eq!(touched, vec!["crates/difflog/src/main.rs".to_string()]);
+        assert_eq!(
+            map.entries["crates/ship/src/main.rs"].status,
+            Status::Changed
+        );
+    }
+
+    #[test]
+    fn set_spec_no_match_is_empty() {
+        let mut map = seeded(&["crates/foo/src/lib.rs"]);
+        let touched = map.set_spec("crates/nope/**", "docs/specs/x.md").unwrap();
+        assert!(touched.is_empty());
+    }
+
+    #[test]
+    fn resolve_marks_tracked_without_spec() {
+        let mut map = seeded(&["a/b.rs", "a/c.rs", "d/e.rs"]);
+        let touched = map.resolve("a/**").unwrap();
+        assert_eq!(touched.len(), 2);
+        assert_eq!(map.entries["a/b.rs"].status, Status::Tracked);
+        assert!(map.entries["a/b.rs"].spec_doc.is_none());
+        assert_eq!(map.entries["d/e.rs"].status, Status::Changed);
     }
 
     #[test]

@@ -170,6 +170,9 @@ specguard accept-prompt -m "reason"  # ratify the prompt (meta-canon)
 specguard map build                # create the spec-map store (if absent) + seed from the full history window
 specguard map sync                 # reflect only the git delta since the baseline (A/M/R/D)
 specguard map list [--json]        # print the current spec↔impl mapping
+specguard map set-spec <key|glob> <doc>  # attach a spec-doc to matching entries + mark them tracked
+specguard map resolve <key|glob>   # mark matching entries tracked (reviewed; no spec needed)
+specguard map prune                # drop entries matching [map].exclude (non-spec-bearing paths)
 specguard --baseline HEAD~5 run    # override the baseline
 specguard --config examples/aegis.toml run
 ```

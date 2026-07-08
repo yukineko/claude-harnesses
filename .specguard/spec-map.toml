@@ -1,0 +1,131 @@
+last_synced = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+
+[entries."crates/benchkit/src/harness.rs"]
+key = "crates/benchkit/src/harness.rs"
+kind = "feature"
+spec_doc = "docs/specs/benchkit.md"
+status = "tracked"
+last_ref = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+impl_files = ["crates/benchkit/src/harness.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/benchkit/src/lib.rs"]
+key = "crates/benchkit/src/lib.rs"
+kind = "feature"
+spec_doc = "docs/specs/benchkit.md"
+status = "tracked"
+last_ref = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+impl_files = ["crates/benchkit/src/lib.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/benchkit/src/main.rs"]
+key = "crates/benchkit/src/main.rs"
+kind = "feature"
+spec_doc = "docs/specs/benchkit.md"
+status = "tracked"
+last_ref = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+impl_files = ["crates/benchkit/src/main.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/difflog/src/main.rs"]
+key = "crates/difflog/src/main.rs"
+kind = "feature"
+spec_doc = "docs/specs/difflog.md"
+status = "tracked"
+last_ref = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+impl_files = ["crates/difflog/src/main.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/harness-core/src/hook.rs"]
+key = "crates/harness-core/src/hook.rs"
+kind = "feature"
+spec_doc = "docs/specs/harness-core-hook.md"
+status = "tracked"
+last_ref = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+impl_files = ["crates/harness-core/src/hook.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/session-insights/src/main.rs"]
+key = "crates/session-insights/src/main.rs"
+kind = "feature"
+spec_doc = "docs/specs/session-insights.md"
+status = "tracked"
+last_ref = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+impl_files = ["crates/session-insights/src/main.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/ship/src/main.rs"]
+key = "crates/ship/src/main.rs"
+kind = "feature"
+spec_doc = "docs/specs/ship.md"
+status = "tracked"
+last_ref = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+impl_files = ["crates/ship/src/main.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/specguard/src/auditmap.rs"]
+key = "crates/specguard/src/auditmap.rs"
+kind = "feature"
+spec_doc = "docs/specs/specguard.md"
+status = "tracked"
+last_ref = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+impl_files = ["crates/specguard/src/auditmap.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/specguard/src/config.rs"]
+key = "crates/specguard/src/config.rs"
+kind = "feature"
+spec_doc = "docs/specs/specguard.md"
+status = "tracked"
+last_ref = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+impl_files = ["crates/specguard/src/config.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/specguard/src/main.rs"]
+key = "crates/specguard/src/main.rs"
+kind = "feature"
+spec_doc = "docs/specs/specguard.md"
+status = "tracked"
+last_ref = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+impl_files = ["crates/specguard/src/main.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/specguard/src/prompt.rs"]
+key = "crates/specguard/src/prompt.rs"
+kind = "feature"
+spec_doc = "docs/specs/specguard.md"
+status = "tracked"
+last_ref = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+impl_files = ["crates/specguard/src/prompt.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/specguard/src/scope.rs"]
+key = "crates/specguard/src/scope.rs"
+kind = "feature"
+spec_doc = "docs/specs/specguard.md"
+status = "tracked"
+last_ref = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+impl_files = ["crates/specguard/src/scope.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/specguard/src/specmap.rs"]
+key = "crates/specguard/src/specmap.rs"
+kind = "feature"
+spec_doc = "docs/specs/specguard.md"
+status = "tracked"
+last_ref = "a95e0b21418dd3ae680e1da273f88c6397ec9c2f"
+impl_files = ["crates/specguard/src/specmap.rs"]
+test_files = []
+client_refs = []

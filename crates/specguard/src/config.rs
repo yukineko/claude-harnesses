@@ -26,6 +26,8 @@ pub struct Config {
     pub decisions: DecisionsConfig,
     #[serde(default)]
     pub verify: VerifyConfig,
+    #[serde(default)]
+    pub map: MapConfig,
     /// Change-triggered audit areas. An area is in-scope when at least one
     /// changed file (since the baseline) matches one of its globs.
     #[serde(default, rename = "area")]
@@ -192,6 +194,32 @@ pub struct VerifyConfig {
     pub completeness: bool,
 }
 
+/// Configuration for the independent file→spec mapping store (see
+/// `specmap.rs`). Purely additive: an omitted `[map]` table (or omitted key)
+/// yields these defaults, so existing `specguard.toml` files keep parsing
+/// unchanged. This store is independent of the drift/audit workflow — these
+/// fields only say *where* the map lives and where spec-docs are derived from.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapConfig {
+    /// Path (relative to repo root) of the persisted file→spec map TOML.
+    #[serde(default = "default_map_path")]
+    pub path: String,
+    /// Directory (relative to repo root) where spec-docs live; used to derive a
+    /// spec-doc path for a newly mapped source file.
+    #[serde(default = "default_spec_doc_dir")]
+    pub spec_doc_dir: String,
+}
+
+impl Default for MapConfig {
+    fn default() -> Self {
+        MapConfig {
+            path: default_map_path(),
+            spec_doc_dir: default_spec_doc_dir(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DecisionsConfig {
@@ -262,6 +290,12 @@ fn default_sentinel() -> String {
 }
 fn default_decisions_dir() -> String {
     "decisions".to_string()
+}
+fn default_map_path() -> String {
+    crate::specmap::DEFAULT_MAP_PATH.to_string()
+}
+fn default_spec_doc_dir() -> String {
+    "docs/specs".to_string()
 }
 
 /// Shell metacharacters that, in a NON-default `agent.command`, indicate an
@@ -401,6 +435,7 @@ mod tests {
             prompt: PromptConfig::default(),
             decisions: DecisionsConfig::default(),
             verify: VerifyConfig::default(),
+            map: MapConfig::default(),
             areas: vec![Area {
                 name: "a".to_string(),
                 globs: vec!["src/**".to_string()],

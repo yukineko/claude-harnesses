@@ -46,6 +46,18 @@ report_dir = "reports/spec-audit"
 # Sentinel written when an audit finds something needing human review.
 sentinel = ".specguard-pending"
 
+[map]
+# The independent file->spec mapping store (see `specguard map`). This persisted
+# map (source file -> spec-doc + status) is reusable by other features and is
+# NOT tied to the drift/audit workflow. `specguard map build|sync|list` manages
+# it; `sync` reflects `git log --name-status <baseline>..HEAD` into the map.
+#
+# Path (relative to repo root) of the persisted map TOML.
+path = ".specguard/spec-map.toml"
+# Directory (relative to repo root) where spec-docs live; used to derive a
+# spec-doc path for a newly mapped source file.
+spec_doc_dir = "docs/specs"
+
 [decisions]
 # Directory of decision records (ADRs): the *why* behind canon changes, pinned
 # to a canon commit. `specguard decide "<title>"` scaffolds one here; the D3

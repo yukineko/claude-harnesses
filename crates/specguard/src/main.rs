@@ -17,6 +17,7 @@ mod prompt;
 mod ratify;
 mod report;
 mod scope;
+mod specmap;
 mod testaudit;
 mod verify;
 
@@ -151,6 +152,31 @@ enum Command {
         #[arg(short = 'm', long = "reason")]
         reason: String,
     },
+    /// Maintain the independent file→spec mapping store (see `specmap.rs`). This
+    /// persisted map (source file → spec-doc + status) is reusable by future
+    /// features (spec-audit, drift-map) and is NOT tied to the drift workflow.
+    Map {
+        #[command(subcommand)]
+        action: MapAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum MapAction {
+    /// Create the map if absent, then reconcile it against the full baseline
+    /// window (`baseline_ref` else `fallback_ref`, ignoring the recorded
+    /// `.last-ref`) — a from-scratch seed of the map.
+    Build,
+    /// Incrementally reconcile the existing map against the resolved baseline
+    /// (`--baseline`/env override > `baseline_ref` > recorded `.last-ref` >
+    /// `fallback_ref`), the same precedence the audit uses.
+    Sync,
+    /// Print the current map. `--json` emits the machine-readable store.
+    List {
+        /// Emit the map as JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -231,6 +257,12 @@ fn run(cli: &Cli) -> Result<u8> {
         return brief(&l, task, *prompt);
     }
 
+    // `map` maintains the independent file→spec mapping store; it resolves the
+    // baseline the same way the audit does but does no agent/scope work.
+    if let Some(Command::Map { action }) = &cli.command {
+        return run_map(cli, &l, &paths, action);
+    }
+
     let last_ref = report::read_last_ref(&paths);
     let override_ref = cli
         .baseline
@@ -278,6 +310,7 @@ fn run(cli: &Cli) -> Result<u8> {
         | Some(Command::Init { .. })
         | Some(Command::Decide { .. })
         | Some(Command::AcceptPrompt { .. })
+        | Some(Command::Map { .. })
         | Some(Command::TestAudit { .. }) => unreachable!("handled above"),
         Some(Command::Run) | None => {}
     }
@@ -1078,6 +1111,101 @@ fn decide(l: &Loaded, title: &str, force: bool) -> Result<u8> {
     println!("  canon commit に pin 済み (canon_commit: {head})");
     println!("  次: `canon:` に支配する canon ポインタ、`drivers:` に反証可能な理由、`review_when:` を記入");
     Ok(EXIT_OK)
+}
+
+/// Maintain the independent file→spec mapping store. `build` seeds the map from
+/// the full baseline window (create-if-absent + sync), `sync` reconciles it
+/// incrementally, and `list` prints it. All three resolve config + repo_root via
+/// the shared `load()`/`report::paths()` path like every other command, and the
+/// baseline the same way the audit does (see `scope::resolve_baseline`).
+fn run_map(cli: &Cli, l: &Loaded, paths: &report::Paths, action: &MapAction) -> Result<u8> {
+    let map_path = l.repo_root.join(&l.cfg.map.path);
+    let spec_dir = &l.cfg.map.spec_doc_dir;
+
+    match action {
+        MapAction::List { json } => {
+            let map = specmap::SpecMap::load(&map_path)?;
+            if *json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&map).context("serializing spec map JSON")?
+                );
+            } else {
+                print_map(&map, &map_path);
+            }
+            Ok(EXIT_OK)
+        }
+        MapAction::Build | MapAction::Sync => {
+            let override_ref = cli
+                .baseline
+                .clone()
+                .or_else(|| std::env::var("SPECGUARD_BASELINE_REF").ok());
+            // `build` seeds from the full window (ignore the recorded last-ref so
+            // the whole `baseline_ref`/`fallback_ref` history reflects into a fresh
+            // map); `sync` uses the normal precedence including `.last-ref`.
+            let last_ref = match action {
+                MapAction::Build => None,
+                _ => report::read_last_ref(paths),
+            };
+            let baseline =
+                scope::resolve_baseline(&l.cfg, override_ref.as_deref(), last_ref.as_deref());
+            let head = scope::current_head(&l.repo_root).unwrap_or_else(|_| "HEAD".to_string());
+
+            let mut map = match action {
+                MapAction::Build => specmap::SpecMap::load_or_init(&map_path)?,
+                _ => specmap::SpecMap::load(&map_path)?,
+            };
+            map.sync(&l.repo_root, &baseline, spec_dir, &head)?;
+            map.save(&map_path)?;
+            println!(
+                "specguard map: {} -> {} ({} entr{}, baseline {})",
+                match action {
+                    MapAction::Build => "built",
+                    _ => "synced",
+                },
+                map_path.display(),
+                map.len(),
+                if map.len() == 1 { "y" } else { "ies" },
+                baseline,
+            );
+            Ok(EXIT_OK)
+        }
+    }
+}
+
+/// Human-readable dump of the map for `specguard map list`.
+fn print_map(map: &specmap::SpecMap, map_path: &Path) {
+    if map.is_empty() {
+        println!("specguard map: (empty) [{}]", map_path.display());
+        return;
+    }
+    println!(
+        "specguard map: {} entr{} (last synced: {}) [{}]",
+        map.len(),
+        if map.len() == 1 { "y" } else { "ies" },
+        if map.last_synced.is_empty() {
+            "(never)"
+        } else {
+            &map.last_synced
+        },
+        map_path.display()
+    );
+    for (key, entry) in &map.entries {
+        let spec = entry.spec_doc.as_deref().unwrap_or("(no spec-doc)");
+        println!(
+            "  [{}] {} ({}) -> {} | impl:{} test:{} client:{}",
+            entry.status.as_str(),
+            key,
+            match entry.kind {
+                specmap::EntryKind::Feature => "feature",
+                specmap::EntryKind::Endpoint => "endpoint",
+            },
+            spec,
+            entry.impl_files.len(),
+            entry.test_files.len(),
+            entry.client_refs.len(),
+        );
+    }
 }
 
 /// Ratify the prompt templates (meta-canon): contract-check then pin the

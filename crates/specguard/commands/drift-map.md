@@ -1,6 +1,6 @@
 ---
 description: 独立した spec/feature ↔実装↔テスト↔API マッピング store (`specguard map`) を保守し、仕様書が無い entry には生成し、drift した entry は仕様と実装を突き合わせて是正する。書き込みを伴う (read-only な `/specguard:run` とは対照的)。
-argument-hint: "[--baseline <ref>]"
+argument-hint: "[target] [--baseline <ref>]"
 allowed-tools: Bash, Task, Read, Write, Edit, AskUserQuestion
 ---
 
@@ -14,7 +14,9 @@ allowed-tools: Bash, Task, Read, Write, Edit, AskUserQuestion
 専用の `/specguard:run` (仕様↔実装の監査のみで、判定を subagent に委譲し修正は
 一切しない) とは対照的です。混同しないでください。
 
-追加引数: `$ARGUMENTS` (例: `--baseline HEAD~10`)。空なら付けない。
+追加引数: `$ARGUMENTS` (例: `drift-map`、`crates/specguard`、`/health`、`e2e`、
+`--baseline HEAD~10`)。先頭のターゲットは手順 1.5 で `--filter` に解決する。
+`--baseline` 以外の部分が空ならターゲット無し (map 全体) として扱う。
 
 map store は **このコマンド専用ではありません**。`.specguard/spec-map.toml` は
 `specmap.rs` が定義する独立レイヤーで、将来の `spec-audit` など他の機能もこの
@@ -36,10 +38,35 @@ map store は **このコマンド専用ではありません**。`.specguard/sp
 Deleted→detach/`missing` を **決定的に** (LLM 判定なしで) 行います。このコマンド
 は skeleton を **再実装せず**、常にこのサブコマンドに委譲してください。
 
-続けて `specguard map list --json` を実行し、現在の entries を把握する。各
-entry は `key` / `kind` (Feature|Endpoint) / `spec_doc` / `status`
-(Tracked|Changed|Missing) / `last_ref` / `impl_files[]` / `test_files[]` /
-`client_refs[]` / `api` ({method, route}) を持つ。
+## 1.5 ターゲットを解決する ($ARGUMENTS → --filter、コスト有界)
+
+`$ARGUMENTS` からコマンドの対象 (target) と `--baseline` オプションを分離する。
+target 解決は `/specguard:spec-audit` と対称・コスト有界 (無際限な repo 探索を
+しない) にする:
+
+- **target が空** → filter なし (map 全体を対象、従来どおり)。
+- **target がそのまま検索キーとして使える** (コマンド名・crate パス・API route・
+  部分文字列など) → そのまま `--filter <target>` として次の手順に渡す。
+  - 例: コマンドを対象にする → `specguard map list --json --filter drift-map`
+  - 例: crate を対象にする → `specguard map list --json --filter crates/specguard`
+  - 例: API route を対象にする → `specguard map list --json --filter /health`
+  - 例: e2e テストを対象にする → `specguard map list --json --filter e2e`
+- **target が自然言語** (例: 「drift-map コマンドのマッピングを直して」) →
+  そこから語彙的なキー (lexical key) を抽出し (例: `drift-map`)、それを
+  `--filter` として使う。
+- **抽出した lexical filter が空/曖昧** な場合に限り、まず
+  `specguard map list --json` (filter なし) で全 entry の一覧を取得し、target
+  の意図に最も合致する entry を LLM で選び、そのキーで `--filter` を再指定して
+  絞り込む。**これ以上の開放的な repo 探索はしない**。
+
+以降 (仕様生成・drift 是正) は、この手順で絞り込んだ entry 集合だけを対象に
+進める。
+
+続けて `specguard map list --json --filter <resolved>` (filter が空なら
+`--filter` を省略) を実行し、対象 entries を把握する。各 entry は `key` /
+`kind` (Feature|Endpoint) / `spec_doc` / `status` (Tracked|Changed|Missing) /
+`last_ref` / `impl_files[]` / `test_files[]` / `client_refs[]` / `api`
+({method, route}) を持つ。
 
 ## 2. 各 entry の仕様書を参照する
 
@@ -78,6 +105,30 @@ entry は `key` / `kind` (Feature|Endpoint) / `spec_doc` / `status`
 - **どちらが正しい方向か判断がつかない、または確信度が低い場合は、絶対に
   黙って決め打ちしない。`AskUserQuestion` で人間に確認する (Human-on-the-loop)。**
   仕様と実装のどちらを正としてどう変更するかを問う質問を立てること。
+
+### 是正後の test 実行と executor ハンドオフ (書き込み後は必ず検証する)
+
+仕様または実装を `Edit` した **直後に**、その entry の影響範囲のテストを実行して
+検証する (例: この Rust リポジトリなら該当 crate を対象に
+`cargo test -p <crate>`。他プロジェクトではそのプロジェクトのテストコマンドを
+使う)。
+
+- **テストが PASS した場合** → 是正は検証済みとして、その旨をユーザーに報告する。
+- **テストが FAIL した場合** → その場で無際限に直し続けない。是正の残作業は
+  **executor にハンドオフ** する:
+
+  ```sh
+  backlog add --title "fix failing tests after drift adjustment: <entry key / 何が壊れたか>" --project "$PWD" --priority p1
+  ```
+
+  失敗したテストの文脈 (どのテスト・どのエラー) を backlog の説明に含め、
+  実際の是正には `/condukt` または `/flow` を回すようユーザーに案内する。
+  その entry のハンドオフが済んだら、同じ fix を繰り返しループせず次に進む。
+
+**原則**: drift-map はコスト有界な範囲で対象を絞った是正を行い、テストで検証する
+ところまでが責務。それでも直らない/深い是正が必要な場合は
+**source → executor 分離** に従い、実際の追加修正は condukt/backlog+flow
+(executor) に委ねる — drift-map がその場で永遠に直し続けることはしない。
 
 ## 多元的な帰属付け (semantic attribution)
 

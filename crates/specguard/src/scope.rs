@@ -215,8 +215,25 @@ fn canon_file(pointer: &str) -> &str {
 /// invariant on every run); non-`always` (diff-scoped) invariants only when
 /// the diff touched one of their `canon` paths. Mirrors [`classify`]'s
 /// canon-changed check for areas.
-fn invariant_in_scope(inv: &Invariant, changed: &std::collections::HashSet<&str>) -> bool {
+pub(crate) fn invariant_in_scope(
+    inv: &Invariant,
+    changed: &std::collections::HashSet<&str>,
+) -> bool {
     inv.always || inv.canon.iter().any(|c| changed.contains(canon_file(c)))
+}
+
+/// The invariants in scope for this run: `always` invariants unconditionally,
+/// plus non-`always` (diff-scoped) invariants whose canon the diff touched.
+/// Single source of truth for both [`shard_input_files`] (the invariants
+/// shard's content-hash input) and the prompt's invariants-shard emission /
+/// rendering ([`crate::prompt`]) so the two never drift.
+pub(crate) fn invariants_in_scope<'a>(cfg: &'a Config, scope: &Scope) -> Vec<&'a Invariant> {
+    let changed_set: std::collections::HashSet<&str> =
+        scope.changed_files.iter().map(|s| s.as_str()).collect();
+    cfg.invariants
+        .iter()
+        .filter(|inv| invariant_in_scope(inv, &changed_set))
+        .collect()
 }
 
 /// Pure: map changed files onto configured areas. Returns (in-scope hits,
@@ -321,15 +338,10 @@ pub fn shard_input_files(cfg: &Config, scope: &Scope, shard: Shard) -> Vec<Strin
             v.extend(hit.matched_files.iter().cloned());
             v
         }
-        Shard::Invariants => {
-            let changed_set: std::collections::HashSet<&str> =
-                scope.changed_files.iter().map(|s| s.as_str()).collect();
-            cfg.invariants
-                .iter()
-                .filter(|inv| invariant_in_scope(inv, &changed_set))
-                .flat_map(|inv| inv.canon.iter().map(|c| canon_file(c).to_string()))
-                .collect()
-        }
+        Shard::Invariants => invariants_in_scope(cfg, scope)
+            .into_iter()
+            .flat_map(|inv| inv.canon.iter().map(|c| canon_file(c).to_string()))
+            .collect(),
         Shard::Decisions => {
             let mut v = scope.decision_files.clone();
             for hit in &scope.in_scope {

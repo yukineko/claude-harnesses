@@ -170,7 +170,7 @@ pub enum Shard {
 /// decision records exist.
 pub fn shards(cfg: &Config, scope: &Scope) -> Vec<Shard> {
     let mut v: Vec<Shard> = (0..scope.in_scope.len()).map(Shard::Area).collect();
-    if !cfg.invariants.is_empty() {
+    if !crate::scope::invariants_in_scope(cfg, scope).is_empty() {
         v.push(Shard::Invariants);
     }
     if !scope.decision_files.is_empty() {
@@ -215,7 +215,7 @@ pub fn render_shard(
         Shard::Invariants => (
             "(この shard は不変条件のみを照合する。D1 領域監査は別 shard で実施する。)\n"
                 .to_string(),
-            invariants_block(cfg),
+            invariants_block_scoped(cfg, scope),
             shard_scope_summary(cfg, scope, None),
         ),
         Shard::Decisions => unreachable!("handled above"),
@@ -489,12 +489,31 @@ fn brief_areas_block(cfg: &Config) -> String {
     out
 }
 
+/// Render every configured invariant, unconditionally. Used only by
+/// [`render_brief`], which has no git scope (it runs before any change
+/// exists) and intentionally lists ALL invariants regardless of `always`.
 fn invariants_block(cfg: &Config) -> String {
-    if cfg.invariants.is_empty() {
+    render_invariants_list(cfg.invariants.iter().collect())
+}
+
+/// Diff-scope-aware invariant rendering for the audit's invariants shard:
+/// only invariants [`crate::scope::invariants_in_scope`] considers in scope
+/// (`always` ones unconditionally, plus non-`always` ones whose canon the
+/// diff touched) are rendered. With the default `always = true`, this
+/// renders identically to [`invariants_block`] (full backward compatibility).
+fn invariants_block_scoped(cfg: &Config, scope: &Scope) -> String {
+    render_invariants_list(crate::scope::invariants_in_scope(cfg, scope))
+}
+
+/// Shared renderer for a subset of invariants: `- **name**: desc` plus an
+/// optional `  - 正典: ...` line, or the "no invariants" placeholder when the
+/// subset is empty.
+fn render_invariants_list(invariants: Vec<&crate::config::Invariant>) -> String {
+    if invariants.is_empty() {
         return "(不変条件の定義なし)\n".to_string();
     }
     let mut out = String::new();
-    for inv in &cfg.invariants {
+    for inv in invariants {
         out.push_str(&format!("- **{}**", inv.name));
         if !inv.description.trim().is_empty() {
             out.push_str(&format!(": {}", inv.description));
@@ -803,5 +822,109 @@ mod tests {
         // Area canon is audited by the area shard, not here.
         assert!(out.contains("不変条件のみ"));
         assert!(!out.contains("{{"));
+    }
+
+    // -- diff-scoped invariant shard (complete 550d154b) --------------------
+
+    /// A config with one `always = true` invariant ("kept") and one
+    /// `always = false` invariant ("scoped") whose canon is `docs/scoped.md`.
+    fn cfg_with_scoped_invariant() -> Config {
+        toml::from_str(
+            r#"
+            [project]
+            name = "Demo"
+
+            [[invariant]]
+            name = "kept"
+            description = "always active"
+            canon = ["docs/kept.md"]
+            always = true
+
+            [[invariant]]
+            name = "scoped"
+            description = "diff-scoped only"
+            canon = ["docs/scoped.md"]
+            always = false
+            "#,
+        )
+        .unwrap()
+    }
+
+    fn scope_with_changed(changed_files: Vec<String>) -> Scope {
+        Scope {
+            baseline: "abc123".into(),
+            fell_back: false,
+            changed_files,
+            in_scope: vec![],
+            skipped_areas: vec![],
+            decision_files: vec![],
+        }
+    }
+
+    /// An `always = false` invariant whose canon the diff did NOT touch is
+    /// excluded from both shard emission and rendering.
+    #[test]
+    fn shards_omits_invariants_shard_when_only_non_always_invariant_untouched() {
+        let mut cfg = cfg_with_scoped_invariant();
+        cfg.invariants.retain(|i| i.name == "scoped"); // only the non-always one
+        let scope = scope_with_changed(vec!["unrelated/file.rs".to_string()]);
+        let s = shards(&cfg, &scope);
+        assert!(
+            !s.iter().any(|sh| matches!(sh, Shard::Invariants)),
+            "no invariants shard when the sole invariant is out of scope"
+        );
+    }
+
+    /// The same `always = false` invariant, but the diff DOES touch its
+    /// canon: the invariants shard is emitted, and its scoped rendering
+    /// includes the invariant.
+    #[test]
+    fn shards_includes_invariants_shard_and_renders_it_when_diff_touches_canon() {
+        let mut cfg = cfg_with_scoped_invariant();
+        cfg.invariants.retain(|i| i.name == "scoped");
+        let scope = scope_with_changed(vec!["docs/scoped.md".to_string()]);
+        let s = shards(&cfg, &scope);
+        assert!(
+            s.iter().any(|sh| matches!(sh, Shard::Invariants)),
+            "invariants shard must be emitted once its canon is touched"
+        );
+        let out = invariants_block_scoped(&cfg, &scope);
+        assert!(
+            out.contains("diff-scoped only"),
+            "renders the invariant: {out}"
+        );
+    }
+
+    /// `always = true` (the default) invariant is included even when the
+    /// diff never touches its canon at all — full backward compatibility.
+    #[test]
+    fn always_true_invariant_included_regardless_of_diff() {
+        let mut cfg = cfg_with_scoped_invariant();
+        cfg.invariants.retain(|i| i.name == "kept");
+        let scope = scope_with_changed(vec!["unrelated/file.rs".to_string()]);
+        let s = shards(&cfg, &scope);
+        assert!(
+            s.iter().any(|sh| matches!(sh, Shard::Invariants)),
+            "always=true invariant shard must be emitted regardless of diff"
+        );
+        let out = invariants_block_scoped(&cfg, &scope);
+        assert!(
+            out.contains("always active"),
+            "renders the invariant: {out}"
+        );
+    }
+
+    /// Mixed config: one `always = true` + one `always = false` untouched.
+    /// The scoped rendering includes only the always-true invariant.
+    #[test]
+    fn invariants_block_scoped_mixed_includes_only_in_scope() {
+        let cfg = cfg_with_scoped_invariant();
+        let scope = scope_with_changed(vec!["unrelated/file.rs".to_string()]);
+        let out = invariants_block_scoped(&cfg, &scope);
+        assert!(out.contains("always active"), "always=true included: {out}");
+        assert!(
+            !out.contains("diff-scoped only"),
+            "untouched always=false excluded: {out}"
+        );
     }
 }

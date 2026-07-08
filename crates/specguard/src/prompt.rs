@@ -84,6 +84,76 @@ pub fn missing_placeholders(template: &str, required: &[&'static str]) -> Vec<&'
 /// Maximum number of decision records listed in the D3 prompt.
 const MAX_DECISIONS: usize = 30;
 
+/// The signal an auditor emits in its report body to request a WIDER scope when
+/// the bounded relevant-file map (t4 Part A) was insufficient to complete the
+/// audit. Detected deterministically ([`signals_insufficient_context`]) so the
+/// harness can re-dispatch that one shard exactly once with a widened map
+/// (t4 Part B). Reuses the plain-token-in-body idiom of the existing marker
+/// mechanism rather than a new trailer field, so `parse.rs` is untouched.
+pub const NEEDS_WIDER_SCOPE_SIGNAL: &str = "<<<NEEDS_WIDER_SCOPE>>>";
+
+/// True when a shard's audit output signals insufficient context (it emitted
+/// [`NEEDS_WIDER_SCOPE_SIGNAL`]). Untrusted input: this is a fixed-token scan, so
+/// audited repo content cannot smuggle any behavior beyond "please widen once".
+pub fn signals_insufficient_context(text: &str) -> bool {
+    text.contains(NEEDS_WIDER_SCOPE_SIGNAL)
+}
+
+/// Render the bounded relevant-file map preamble (t4 Part A): the limited set of
+/// files most relevant to this shard, so the auditor reads them FIRST instead of
+/// broadly re-scanning the tree, plus the escalation contract (how to request a
+/// wider scope). Empty map -> empty string (the caller then renders exactly as
+/// today — the fugu-absent / feature-off fallback).
+fn relevant_map_block(map: &[String], widened: bool) -> String {
+    if map.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    out.push_str("# 参照ファイルマップ (relevant-file map)\n\n");
+    if widened {
+        out.push_str(
+            "このマップは既に **1 段階拡張済み** です (これが最終スコープ。これ以上の自動拡張はありません)。\n",
+        );
+    } else {
+        out.push_str(
+            "この shard に最も関連するファイルの **限定リスト** です。まずこの範囲を読み、必要に応じてのみ広げてください:\n",
+        );
+    }
+    for f in map {
+        out.push_str(&format!("- `{f}`\n"));
+    }
+    if !widened {
+        out.push_str(&format!(
+            "\nこの限定マップでは監査を完了できない (関連ファイルが欠けている) 場合は、レポート本文に\n`{NEEDS_WIDER_SCOPE_SIGNAL}` を単独行で 1 つ含めて、より広いスコープを要求してください。\nハーネスがこの shard を **1 回だけ** 拡張スコープで再監査します (無限拡張はしません)。\n",
+        ));
+    }
+    out.push('\n');
+    out
+}
+
+/// Like [`render_shard`], but prepends the bounded relevant-file map preamble so
+/// the auditor reads the limited high-signal set first (t4 Part A). An empty
+/// `map` (fugu-router absent / feature off) renders byte-for-byte identically to
+/// [`render_shard`] — the backward-compatible fallback. `widened` marks the ONE
+/// escalation re-dispatch (t4 Part B) so the preamble states it is final.
+pub fn render_shard_with_map(
+    template: &str,
+    cfg: &Config,
+    scope: &Scope,
+    shard: Shard,
+    date: &str,
+    map: &[String],
+    widened: bool,
+) -> String {
+    let base = render_shard(template, cfg, scope, shard, date);
+    let block = relevant_map_block(map, widened);
+    if block.is_empty() {
+        base
+    } else {
+        format!("{block}{base}")
+    }
+}
+
 /// One audit shard: a single in-scope area (index into `scope.in_scope`), the
 /// invariant set, or the decision-record audit (D3). Each shard is rendered into
 /// its own focused prompt and audited by a separate agent process (fresh
@@ -628,6 +698,93 @@ mod tests {
         assert!(out.contains(MARKER));
         assert!(!out.contains("{{"));
         assert!(missing_placeholders(COMPLETENESS_TEMPLATE, COMPLETENESS_PLACEHOLDERS).is_empty());
+    }
+
+    // -- relevant-file map + escalation signal (t4) -------------------------
+
+    #[test]
+    fn signals_insufficient_context_detects_token() {
+        assert!(signals_insufficient_context(
+            "body\n<<<NEEDS_WIDER_SCOPE>>>\nmore"
+        ));
+        assert!(!signals_insufficient_context("a normal clean audit body"));
+    }
+
+    /// Part A: with a non-empty map, the rendered shard carries a BOUNDED,
+    /// PRESENT relevant-file map preamble AND the escalation contract, on top of
+    /// the normal shard prompt.
+    #[test]
+    fn render_shard_with_map_includes_bounded_map_and_signal_instruction() {
+        let cfg = sample_cfg();
+        let scope = sample_scope();
+        let map = vec![
+            "logging/SPEC.md".to_string(),
+            "logging/sig.py".to_string(),
+            "src/related.rs".to_string(),
+        ];
+        let out = render_shard_with_map(
+            DEFAULT_TEMPLATE,
+            &cfg,
+            &scope,
+            Shard::Area(0),
+            "2026-06-17",
+            &map,
+            false,
+        );
+        assert!(out.contains("参照ファイルマップ"), "map header present");
+        for f in &map {
+            assert!(out.contains(f.as_str()), "map lists {f}");
+        }
+        // The escalation contract (how to request a wider scope) is stated.
+        assert!(out.contains(NEEDS_WIDER_SCOPE_SIGNAL));
+        // The underlying shard prompt is still fully rendered.
+        assert!(out.contains(MARKER));
+        assert!(!out.contains("{{"));
+    }
+
+    /// The widened (escalation) render marks the map as final and omits the
+    /// "request wider scope" invitation (no second escalation).
+    #[test]
+    fn render_shard_with_map_widened_marks_final_and_omits_request() {
+        let cfg = sample_cfg();
+        let scope = sample_scope();
+        let map = vec!["logging/SPEC.md".to_string(), "src/extra.rs".to_string()];
+        let out = render_shard_with_map(
+            DEFAULT_TEMPLATE,
+            &cfg,
+            &scope,
+            Shard::Area(0),
+            "2026-06-17",
+            &map,
+            true,
+        );
+        assert!(
+            out.contains("拡張済み"),
+            "states the map is already widened"
+        );
+        assert!(
+            !out.contains(NEEDS_WIDER_SCOPE_SIGNAL),
+            "widened pass must not invite another escalation"
+        );
+    }
+
+    /// Backward-compatible fallback: an EMPTY map renders byte-for-byte the same
+    /// as the plain `render_shard` (fugu-router absent / feature off).
+    #[test]
+    fn render_shard_with_empty_map_equals_plain_render() {
+        let cfg = sample_cfg();
+        let scope = sample_scope();
+        let plain = render_shard(DEFAULT_TEMPLATE, &cfg, &scope, Shard::Area(0), "2026-06-17");
+        let mapped = render_shard_with_map(
+            DEFAULT_TEMPLATE,
+            &cfg,
+            &scope,
+            Shard::Area(0),
+            "2026-06-17",
+            &[],
+            false,
+        );
+        assert_eq!(plain, mapped);
     }
 
     #[test]

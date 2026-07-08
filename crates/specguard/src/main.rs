@@ -319,7 +319,7 @@ fn run(cli: &Cli) -> Result<u8> {
         .filter(|(_, c)| !c.cached)
         .map(|(&sh, _)| agent::ShardPrompt {
             label: prompt::shard_label(&l.cfg, &scope, sh),
-            prompt: prompt::render_shard(&l.template, &l.cfg, &scope, sh, &l.date),
+            prompt: render_shard_prompt(&l, &scope, sh),
         })
         .collect();
 
@@ -347,7 +347,153 @@ fn run(cli: &Cli) -> Result<u8> {
         })
         .collect();
 
+    // Progressive scope escalation (t4 Part B): re-dispatch (exactly once) any
+    // area shard that signalled insufficient context, with a widened map. A
+    // no-op unless the feature is enabled and something was flagged.
+    let outs = escalate_outputs(&l, &scope, &shards, outs);
+
     finish(&l, &scope, &shards, &paths, outs)
+}
+
+/// True when the relevant-file map + escalation feature (t4) is opted in via
+/// `SPECGUARD_RELEVANT_MAP` (`1`/`true`/`yes`/`on`). Default OFF: with it unset
+/// the harness renders and dispatches exactly as it did before this feature
+/// existed, so every existing test/behavior is unchanged (and `fugu-router` is
+/// never invoked).
+fn relevant_map_enabled() -> bool {
+    matches!(
+        std::env::var("SPECGUARD_RELEVANT_MAP")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Render one shard's prompt, prepending the bounded relevant-file map for AREA
+/// shards when the feature is enabled (t4 Part A). Invariants/decisions shards,
+/// and the feature-off path, render exactly as `prompt::render_shard`.
+fn render_shard_prompt(l: &Loaded, scope: &scope::Scope, sh: prompt::Shard) -> String {
+    if relevant_map_enabled() {
+        if let prompt::Shard::Area(_) = sh {
+            let query = scope::shard_query(&l.cfg, scope, sh);
+            let map = scope::relevant_file_map(
+                &l.cfg,
+                scope,
+                sh,
+                &l.repo_root,
+                &query,
+                scope::CODE_INDEX_K,
+            );
+            return prompt::render_shard_with_map(
+                &l.template,
+                &l.cfg,
+                scope,
+                sh,
+                &l.date,
+                &map,
+                false,
+            );
+        }
+    }
+    prompt::render_shard(&l.template, &l.cfg, scope, sh, &l.date)
+}
+
+/// Area shards (indices into `shards`/`outs`) whose audit output signals
+/// insufficient context (t4 Part B). Only AREA shards are widenable — the
+/// invariants/decisions shards have no adjacent scope to expand — and only a
+/// clean-exit (code 0) shard is eligible (a crashed agent is handled by
+/// `finish`'s failure path instead).
+fn insufficient_context_shards(
+    shards: &[prompt::Shard],
+    outs: &[agent::ShardOutput],
+) -> Vec<usize> {
+    shards
+        .iter()
+        .zip(outs.iter())
+        .enumerate()
+        .filter(|(_, (sh, o))| {
+            matches!(sh, prompt::Shard::Area(_))
+                && o.out.code == 0
+                && prompt::signals_insufficient_context(&o.out.stdout)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Pure escalation core (dispatch injected → unit-testable): re-dispatch each
+/// `flagged` shard EXACTLY once with a widened prompt and replace its output in
+/// place; untouched shards keep their first-pass output. `widen` builds the
+/// re-dispatch prompt for a shard index; `run` dispatches the batch once (real
+/// agents in prod, a fake in tests). `run` is `FnOnce`, so a second escalation
+/// pass is structurally impossible.
+fn escalate_core(
+    mut outs: Vec<agent::ShardOutput>,
+    flagged: &[usize],
+    widen: impl Fn(usize) -> agent::ShardPrompt,
+    run: impl FnOnce(Vec<agent::ShardPrompt>) -> Vec<agent::ShardOutput>,
+) -> Vec<agent::ShardOutput> {
+    if flagged.is_empty() {
+        return outs;
+    }
+    let prompts: Vec<agent::ShardPrompt> = flagged.iter().map(|&i| widen(i)).collect();
+    let widened = run(prompts);
+    for (o, &i) in widened.into_iter().zip(flagged.iter()) {
+        outs[i] = o;
+    }
+    outs
+}
+
+/// Wire progressive escalation (t4 Part B) into a run: for any AREA shard whose
+/// first-pass output signalled insufficient context, re-render it with a WIDENED
+/// relevant-file map (a larger code-index `k`) and re-dispatch that one shard
+/// exactly once. Gated by the feature flag; a no-op when disabled or nothing was
+/// flagged, so today's behavior is unchanged.
+fn escalate_outputs(
+    l: &Loaded,
+    scope: &scope::Scope,
+    shards: &[prompt::Shard],
+    outs: Vec<agent::ShardOutput>,
+) -> Vec<agent::ShardOutput> {
+    if !relevant_map_enabled() {
+        return outs;
+    }
+    let flagged = insufficient_context_shards(shards, &outs);
+    if flagged.is_empty() {
+        return outs;
+    }
+    eprintln!(
+        "specguard: {} shard(s) signalled insufficient context; re-auditing once with a widened relevant-file map",
+        flagged.len()
+    );
+    let widen = |i: usize| -> agent::ShardPrompt {
+        let sh = shards[i];
+        let query = scope::shard_query(&l.cfg, scope, sh);
+        let map = scope::relevant_file_map(
+            &l.cfg,
+            scope,
+            sh,
+            &l.repo_root,
+            &query,
+            scope::CODE_INDEX_K_WIDENED,
+        );
+        agent::ShardPrompt {
+            label: prompt::shard_label(&l.cfg, scope, sh),
+            prompt: prompt::render_shard_with_map(
+                &l.template,
+                &l.cfg,
+                scope,
+                sh,
+                &l.date,
+                &map,
+                true,
+            ),
+        }
+    };
+    escalate_core(outs, &flagged, widen, |prompts| {
+        agent::run_shards(&l.cfg.agent, &l.repo_root, prompts)
+    })
 }
 
 /// Per-shard cache status for this run: whether its current content
@@ -691,7 +837,7 @@ fn emit_prompt_json(l: &Loaded, scope: &scope::Scope, shards: &[prompt::Shard]) 
         .iter()
         .map(|&sh| ShardJson {
             label: prompt::shard_label(&l.cfg, scope, sh),
-            prompt: prompt::render_shard(&l.template, &l.cfg, scope, sh, &l.date),
+            prompt: render_shard_prompt(l, scope, sh),
         })
         .collect();
     let env = PromptJson {
@@ -1037,10 +1183,7 @@ fn print_prompts(l: &Loaded, scope: &scope::Scope, shards: &[prompt::Shard]) {
             "===== shard: {} =====",
             prompt::shard_label(&l.cfg, scope, sh)
         );
-        print!(
-            "{}",
-            prompt::render_shard(&l.template, &l.cfg, scope, sh, &l.date)
-        );
+        print!("{}", render_shard_prompt(l, scope, sh));
     }
 }
 
@@ -1450,5 +1593,107 @@ mod tests {
             !stored_after.contains_key(&label),
             "dirty shard's stale entry must be dropped"
         );
+    }
+
+    // --- progressive scope escalation (t4 Part B) ---
+
+    fn shard_out(label: &str, stdout: &str, code: i32) -> agent::ShardOutput {
+        agent::ShardOutput {
+            label: label.to_string(),
+            out: agent::AgentOutput {
+                stdout: stdout.to_string(),
+                stderr: String::new(),
+                code,
+            },
+        }
+    }
+
+    /// Only AREA shards with a clean exit that emitted the signal are eligible:
+    /// an invariants shard emitting it, and a crashed area shard, are excluded.
+    #[test]
+    fn insufficient_context_shards_selects_only_clean_area_signals() {
+        let shards = vec![
+            prompt::Shard::Area(0),
+            prompt::Shard::Invariants,
+            prompt::Shard::Area(1),
+        ];
+        let sig = prompt::NEEDS_WIDER_SCOPE_SIGNAL;
+        let outs = vec![
+            shard_out("a0", &format!("need more\n{sig}\n"), 0), // eligible
+            shard_out("inv", sig, 0),                           // excluded: not an area
+            shard_out("a1", &format!("crashed {sig}"), 4),      // excluded: nonzero exit
+        ];
+        assert_eq!(insufficient_context_shards(&shards, &outs), vec![0]);
+
+        // A clean area shard with no signal flags nothing.
+        let clean = vec![
+            shard_out("a0", "all good", 0),
+            shard_out("inv", "ok", 0),
+            shard_out("a1", "ok", 0),
+        ];
+        assert!(insufficient_context_shards(&shards, &clean).is_empty());
+    }
+
+    /// The escalation core re-dispatches each flagged shard EXACTLY once (the
+    /// injected runner is `FnOnce` and asserts it was called with just the
+    /// flagged shard) and replaces only that shard's output.
+    #[test]
+    fn escalate_core_redispatches_flagged_once_and_replaces() {
+        let outs = vec![
+            shard_out("a0", "first-pass a0", 0),
+            shard_out("a1", "first-pass a1 (needs wider)", 0),
+            shard_out("a2", "first-pass a2", 0),
+        ];
+        let flagged = vec![1usize];
+
+        let widen = |i: usize| agent::ShardPrompt {
+            label: format!("widened:{i}"),
+            prompt: format!("WIDENED PROMPT for {i}"),
+        };
+
+        let calls = std::cell::Cell::new(0usize);
+        let run = |prompts: Vec<agent::ShardPrompt>| {
+            calls.set(calls.get() + 1);
+            // Exactly the flagged shard is re-dispatched, with the widened prompt.
+            assert_eq!(prompts.len(), 1);
+            assert_eq!(prompts[0].label, "widened:1");
+            assert!(prompts[0].prompt.contains("WIDENED PROMPT for 1"));
+            vec![shard_out("a1", "SECOND-PASS a1 widened", 0)]
+        };
+
+        let merged = escalate_core(outs, &flagged, widen, run);
+        assert_eq!(calls.get(), 1, "exactly one re-dispatch");
+        // Only the flagged shard's output was replaced.
+        assert_eq!(merged[0].out.stdout, "first-pass a0");
+        assert_eq!(merged[1].out.stdout, "SECOND-PASS a1 widened");
+        assert_eq!(merged[2].out.stdout, "first-pass a2");
+    }
+
+    /// No flagged shard -> the injected runner is never called and outputs pass
+    /// through untouched (the fully-sufficient / feature-quiet path).
+    #[test]
+    fn escalate_core_noop_when_nothing_flagged() {
+        let outs = vec![shard_out("a0", "ok", 0), shard_out("a1", "ok", 0)];
+        let run = |_: Vec<agent::ShardPrompt>| -> Vec<agent::ShardOutput> {
+            panic!("runner must not be called when nothing is flagged");
+        };
+        let merged = escalate_core(outs, &[], |_| unreachable!(), run);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].out.stdout, "ok");
+        assert_eq!(merged[1].out.stdout, "ok");
+    }
+
+    #[test]
+    fn relevant_map_enabled_reads_env() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("SPECGUARD_RELEVANT_MAP");
+        assert!(!relevant_map_enabled(), "default (unset) is off");
+        std::env::set_var("SPECGUARD_RELEVANT_MAP", "1");
+        assert!(relevant_map_enabled());
+        std::env::set_var("SPECGUARD_RELEVANT_MAP", "yes");
+        assert!(relevant_map_enabled());
+        std::env::set_var("SPECGUARD_RELEVANT_MAP", "0");
+        assert!(!relevant_map_enabled());
+        std::env::remove_var("SPECGUARD_RELEVANT_MAP");
     }
 }

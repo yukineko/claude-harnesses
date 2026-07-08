@@ -336,6 +336,158 @@ pub fn shard_input_files(cfg: &Config, scope: &Scope, shard: Shard) -> Vec<Strin
     files
 }
 
+/// Upper bound on the relevant-file map handed to an area shard (t4). A BOUNDED
+/// list keeps the auditor reading a limited, high-signal set first instead of
+/// broadly re-scanning the tree.
+pub const RELEVANT_MAP_MAX: usize = 24;
+
+/// Initial code-index `k` (top-K symbols) for the first pass of an area shard.
+pub const CODE_INDEX_K: usize = 8;
+
+/// Widened code-index `k` used on the ONE progressive-escalation re-dispatch of a
+/// shard that signalled insufficient context (t4 Part B).
+pub const CODE_INDEX_K_WIDENED: usize = 20;
+
+/// The `fugu-router` executable name — overridable via `SPECGUARD_FUGU_BIN` so
+/// tests can point the deterministic code-index shell-out at a stub (or a bogus
+/// path, to exercise the fail-soft "absent" path) without a real install.
+fn fugu_bin() -> String {
+    std::env::var("SPECGUARD_FUGU_BIN").unwrap_or_else(|_| "fugu-router".to_string())
+}
+
+/// The last path segment with any extension stripped — a cheap query term for
+/// the code index (e.g. `logging/signature.py` -> `signature`).
+fn stem(path: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.split('.').next().unwrap_or(name).to_string()
+}
+
+/// A deterministic code-index query for an area shard: the area name plus the
+/// stems of its canon and (a bounded prefix of) its changed files. Non-area
+/// shards get no query (the relevant-file map is an area-shard concept). Passed
+/// to `fugu-router code-index search` as a single `--query` argument (no shell).
+pub fn shard_query(cfg: &Config, scope: &Scope, shard: Shard) -> String {
+    match shard {
+        Shard::Area(i) => {
+            let hit = &scope.in_scope[i];
+            let area = &cfg.areas[hit.area_index];
+            let mut terms = vec![area.name.clone()];
+            for c in &area.canon {
+                terms.push(stem(canon_file(c)));
+            }
+            for f in hit.matched_files.iter().take(8) {
+                terms.push(stem(f));
+            }
+            terms.join(" ")
+        }
+        Shard::Invariants | Shard::Decisions => String::new(),
+    }
+}
+
+/// Shell out to the repo's deterministic code index (`fugu-router`) to enrich a
+/// shard's relevant-file map with the `.rs` symbol files most relevant to
+/// `query`. Runs `code-index build --if-stale` (idempotent, cheap when the `.rs`
+/// set is unchanged) then `code-index search --query <q> --k <k>`, parsing the
+/// JSON array of `{name,kind,file,line,signature,score}`.
+///
+/// The JSON is treated as UNTRUSTED DATA: only the `file` field is read, only
+/// `.rs` paths are kept, and nothing in it is ever executed or interpreted as an
+/// instruction. FAIL-SOFT by construction: a missing binary, a non-zero exit,
+/// non-UTF8/……invalid JSON, or an empty array all yield an empty vector, so the
+/// caller falls back to today's behavior (no enrichment).
+pub fn code_index_files(bin: &str, repo_root: &Path, query: &str, k: usize) -> Vec<String> {
+    if query.trim().is_empty() || k == 0 {
+        return Vec::new();
+    }
+    // Best-effort index refresh; ignore its outcome (search fail-softs on an
+    // absent/empty index anyway).
+    let _ = Command::new(bin)
+        .args(["code-index", "build", "--if-stale", "--root"])
+        .arg(repo_root)
+        .output();
+
+    let out = Command::new(bin)
+        .args(["code-index", "search", "--query"])
+        .arg(query)
+        .arg("--k")
+        .arg(k.to_string())
+        .arg("--root")
+        .arg(repo_root)
+        .output();
+    let Ok(out) = out else {
+        return Vec::new(); // binary absent / spawn failed -> fail-soft
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    parse_code_index_files(&stdout)
+}
+
+/// Pure JSON-array parse (split out for testing): extract the `.rs` `file` paths
+/// from a `fugu-router code-index search` payload, deduped in first-seen order.
+/// Any parse failure yields an empty vector (fail-soft — untrusted data).
+fn parse_code_index_files(stdout: &str) -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    struct Hit {
+        #[serde(default)]
+        file: String,
+    }
+    let Ok(hits) = serde_json::from_str::<Vec<Hit>>(stdout.trim()) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    hits.into_iter()
+        .map(|h| h.file)
+        .filter(|f| f.ends_with(".rs") && !f.trim().is_empty())
+        .filter(|f| seen.insert(f.clone()))
+        .collect()
+}
+
+/// Merge a shard's base input files with code-index extras into a BOUNDED,
+/// deterministic relevant-file map. Base files (the shard's own canon + changed
+/// files — always relevant) take priority; extras fill the remaining budget.
+/// Deduped and sorted so member/query order never affects the result; capped at
+/// `max` so the auditor's first-read set stays bounded.
+fn merge_relevant_map(base: Vec<String>, extra: Vec<String>, max: usize) -> Vec<String> {
+    let mut base = base;
+    base.sort();
+    base.dedup();
+    let mut out: Vec<String> = base.into_iter().take(max).collect();
+    let mut seen: std::collections::HashSet<String> = out.iter().cloned().collect();
+    let mut extra = extra;
+    extra.sort();
+    extra.dedup();
+    for f in extra {
+        if out.len() >= max {
+            break;
+        }
+        if seen.insert(f.clone()) {
+            out.push(f);
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The bounded relevant-file map for an area shard (t4 Part A): the shard's own
+/// input files ([`shard_input_files`]) enriched with the most-relevant `.rs`
+/// symbol files from the deterministic code index, capped at [`RELEVANT_MAP_MAX`].
+/// With `fugu-router` absent/erroring/returning `[]`, the enrichment is empty and
+/// the map degrades to the base set — never errors, no network.
+pub fn relevant_file_map(
+    cfg: &Config,
+    scope: &Scope,
+    shard: Shard,
+    repo_root: &Path,
+    query: &str,
+    k: usize,
+) -> Vec<String> {
+    let base = shard_input_files(cfg, scope, shard);
+    let extra = code_index_files(&fugu_bin(), repo_root, query, k);
+    merge_relevant_map(base, extra, RELEVANT_MAP_MAX)
+}
+
 /// Deterministic content fingerprint over a shard's input files (see
 /// [`shard_input_files`]): hashes path + current file bytes (relative to
 /// `repo_root`; an already-absolute entry, e.g. a decision record, is read
@@ -619,6 +771,162 @@ mod tests {
         // path with empty content.
         let fp = fingerprint_files(tmp.path(), &["missing.md".to_string()]);
         assert_eq!(fp.len(), 16);
+    }
+
+    // -- relevant-file map (t4 Part A) --------------------------------------
+
+    #[test]
+    fn parse_code_index_files_keeps_only_rs_deduped() {
+        let json = r#"[
+            {"name":"a","kind":"fn","file":"src/a.rs","line":1,"signature":"fn a()","score":0.9},
+            {"name":"b","kind":"fn","file":"src/b.rs","line":2,"signature":"fn b()","score":0.8},
+            {"name":"a2","kind":"fn","file":"src/a.rs","line":9,"signature":"fn a2()","score":0.5},
+            {"name":"doc","kind":"md","file":"docs/spec.md","line":1,"signature":"","score":0.4}
+        ]"#;
+        let files = parse_code_index_files(json);
+        // .md dropped, .rs kept in first-seen order, duplicate a.rs collapsed.
+        assert_eq!(files, vec!["src/a.rs".to_string(), "src/b.rs".to_string()]);
+    }
+
+    #[test]
+    fn parse_code_index_files_bad_json_or_empty_is_empty() {
+        assert!(parse_code_index_files("not json at all").is_empty());
+        assert!(parse_code_index_files("[]").is_empty());
+        assert!(parse_code_index_files("").is_empty());
+    }
+
+    /// A stub `fugu-router` (a shell script that prints a fixed JSON array) is
+    /// driven through `code_index_files`: only the `.rs` files come back.
+    #[test]
+    fn code_index_files_reads_stub_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stub = tmp.path().join("fugu-stub.sh");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\nprintf '%s' '[{\"file\":\"src/x.rs\",\"kind\":\"fn\"},{\"file\":\"docs/y.md\"}]'\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let files = code_index_files(stub.to_str().unwrap(), tmp.path(), "some query", 8);
+        assert_eq!(files, vec!["src/x.rs".to_string()]);
+    }
+
+    /// Fail-soft: an ABSENT fugu-router binary yields an empty enrichment (no
+    /// panic, no error) — this is the graceful fallback to today's behavior.
+    #[test]
+    fn code_index_files_absent_binary_falls_back_to_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let files = code_index_files("specguard-no-such-fugu-binary-xyz", tmp.path(), "query", 8);
+        assert!(files.is_empty(), "absent binary must fail-soft to empty");
+    }
+
+    #[test]
+    fn code_index_files_empty_query_short_circuits() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Even a working stub is never consulted for an empty query.
+        assert!(code_index_files("fugu-router", tmp.path(), "   ", 8).is_empty());
+        assert!(code_index_files("fugu-router", tmp.path(), "q", 0).is_empty());
+    }
+
+    #[test]
+    fn merge_relevant_map_is_bounded_sorted_deduped_base_first() {
+        // base has 3 files; extra adds more, some duplicating base, total > max.
+        let base: Vec<String> = vec!["b.rs".into(), "a.rs".into(), "a.rs".into()];
+        let extra: Vec<String> = (0..30).map(|i| format!("z{i:02}.rs")).collect();
+        let map = merge_relevant_map(base, extra, RELEVANT_MAP_MAX);
+        assert!(map.len() <= RELEVANT_MAP_MAX, "map must be bounded");
+        // Base files survive the truncation (they take priority over extras).
+        assert!(map.contains(&"a.rs".to_string()));
+        assert!(map.contains(&"b.rs".to_string()));
+        // Sorted + deduped.
+        let mut sorted = map.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(map, sorted, "map must be sorted and deduped");
+    }
+
+    #[test]
+    fn merge_relevant_map_no_extra_is_just_base() {
+        let base: Vec<String> = vec!["m.rs".into(), "k.rs".into()];
+        let map = merge_relevant_map(base, vec![], RELEVANT_MAP_MAX);
+        assert_eq!(map, vec!["k.rs".to_string(), "m.rs".to_string()]);
+    }
+
+    #[test]
+    fn shard_query_area_includes_name_and_stems() {
+        let cfg = sample_cfg_with_canon();
+        let scope = Scope {
+            baseline: "abc".into(),
+            fell_back: false,
+            changed_files: vec![],
+            in_scope: vec![AreaHit {
+                area_index: 0,
+                matched_files: vec!["logging/signature.py".into()],
+                changed_canon: vec![],
+            }],
+            skipped_areas: vec![],
+            decision_files: vec![],
+        };
+        let q = shard_query(&cfg, &scope, Shard::Area(0));
+        assert!(q.contains("logging"), "area name in query: {q}");
+        assert!(q.contains("signature"), "changed-file stem in query: {q}");
+        // Non-area shards have no query (map is an area-shard concept).
+        assert!(shard_query(&cfg, &scope, Shard::Invariants).is_empty());
+    }
+
+    /// End-to-end Part A: `relevant_file_map` is BOUNDED and PRESENT, containing
+    /// the shard's base input files plus stub code-index `.rs` extras.
+    #[test]
+    fn relevant_file_map_is_bounded_and_contains_base_plus_extras() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stub = tmp.path().join("fugu-stub.sh");
+        // Stub returns many .rs symbol files (more than the base) + a .md (dropped).
+        let mut arr = String::from("[");
+        for i in 0..30 {
+            if i > 0 {
+                arr.push(',');
+            }
+            arr.push_str(&format!("{{\"file\":\"src/gen_{i:02}.rs\"}}"));
+        }
+        arr.push_str(",{\"file\":\"docs/x.md\"}]");
+        std::fs::write(&stub, format!("#!/bin/sh\nprintf '%s' '{arr}'\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let cfg = sample_cfg_with_canon();
+        let scope = Scope {
+            baseline: "abc".into(),
+            fell_back: false,
+            changed_files: vec![],
+            in_scope: vec![AreaHit {
+                area_index: 0,
+                matched_files: vec!["logging/sig.py".into()],
+                changed_canon: vec![],
+            }],
+            skipped_areas: vec![],
+            decision_files: vec![],
+        };
+
+        std::env::set_var("SPECGUARD_FUGU_BIN", stub.to_str().unwrap());
+        let map = relevant_file_map(&cfg, &scope, Shard::Area(0), tmp.path(), "logging sig", 8);
+        std::env::remove_var("SPECGUARD_FUGU_BIN");
+
+        assert!(!map.is_empty(), "map must be present");
+        assert!(map.len() <= RELEVANT_MAP_MAX, "map must be bounded");
+        // Base files (canon + changed) survive.
+        assert!(map.contains(&"docs/logging.md".to_string()));
+        assert!(map.contains(&"logging/sig.py".to_string()));
+        // Enriched with code-index .rs extras.
+        assert!(map.iter().any(|f| f.starts_with("src/gen_")));
+        // The .md from the index was dropped by the .rs filter.
+        assert!(!map.contains(&"docs/x.md".to_string()));
     }
 
     // -- whole-tree fallback budget guard -----------------------------------

@@ -56,7 +56,12 @@ report と（人間レビューが要るときは）sentinel を書く。判定�
 - **`ingest [--from]`** — subagent が集めた per-shard 出力（JSON, stdin または `--from`）を label で shard に整列し
   （`read_ingest`）、agent を spawn せず `finish` の parse→report→sentinel パイプラインを回す。`run` と同じ exit code。
 - **`map build|sync|list|set-spec|resolve|prune`（`run_map`）** — 独立した spec↔impl↔test↔API マッピング store を保守。`build` は
-  full window から seed（`.last-ref` 無視）、`sync` は増分（audit と同じ baseline precedence）。`build`/`sync` はどちらも
+  full window から seed（既存 ref を無視し、`baseline_ref`/`fallback_ref` のみで解決）。`sync` は増分で、baseline precedence は
+  override > `baseline_ref` > **map 自身の `last_synced`**（前回この map が同期された ref）> `fallback_ref`。`specguard run`
+  監査の `.last-ref`（`reports/spec-audit/.last-ref`）とは無関係な別トラッカーであり、map 専用の運用では監査を一度も
+  走らせていなくても `sync` が正しく増分できる（以前は audit の `.last-ref` を誤って参照しており、audit 未実行だと常に
+  `fallback_ref` にフォールバックして "前回 sync 以降" より大幅に広いウィンドウを再スキャンし、変更のない既 tracked
+  ファイルまで `changed` と誤検知していた）。`build`/`sync` はどちらも
   `[map].exclude` グロブに一致する追加/変更パスを新規 entry として計上せず（`specmap::filter_excluded`。削除/リネームは
   既存 entry の掃除のため残す）、併せて既存の一致 entry を prune するので、config churn ではなく genuine な spec drift だけが
   `changed` に残る。`list [--json] [--filter]` は表示（`filter_map`＋`specmap::entry_matches` の共有述語）。

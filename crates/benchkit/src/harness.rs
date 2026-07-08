@@ -122,11 +122,10 @@ where
 /// follows the `download` house pattern of shelling out via
 /// [`std::process::Command`] rather than linking heavyweight libraries.
 ///
-/// This slice ships it as a **clearly-structured stub**: the stage boundaries
-/// (clone → checkout → apply test_patch → apply candidate → run each test set)
-/// are laid out and it shells out, but full pytest-result parsing lands in a
-/// later slice. The point of this task is the *gated separation*, not an
-/// end-to-end pytest run.
+/// The stage boundaries (clone → checkout → apply test_patch → apply candidate
+/// → run pytest → parse) are laid out and it shells out; pytest's terminal
+/// output is parsed by the pure [`parse_pytest_output`] helper into the same
+/// per-test boolean map the mock path returns, so scoring is shared.
 #[derive(Debug, Default)]
 pub struct RealExecSource {
     _private: (),
@@ -146,48 +145,159 @@ impl TestResultSource for RealExecSource {
         instance: &Instance,
         candidate_patch: &str,
     ) -> Result<BTreeMap<String, bool>> {
-        use std::process::Command;
+        use std::io::Write;
+        use std::process::{Command, Stdio};
 
         // Structured real path (gated — never reached from tests). Each step
-        // shells out via std::process::Command per the house pattern. Full
-        // pytest-result parsing is deferred to a later slice; here we lay out
-        // the pipeline and fail loudly rather than silently over-crediting.
+        // shells out via std::process::Command per the house pattern.
         let workdir = std::env::temp_dir().join(format!("benchkit-real-{}", instance.instance_id));
 
         // 1. clone the repo and check out the pinned base commit.
         let repo_url = format!("https://github.com/{}.git", instance.repo);
-        let _clone = Command::new("git")
+        let clone = Command::new("git")
             .args(["clone", "--quiet", &repo_url])
             .arg(&workdir)
             .status()
             .context("spawning git clone for the real exec path (is git installed?)")?;
+        if !clone.success() {
+            anyhow::bail!(
+                "git clone of {repo_url} failed for {} (exit {:?})",
+                instance.instance_id,
+                clone.code()
+            );
+        }
 
-        let _checkout = Command::new("git")
-            .args(["-C"])
+        let checkout = Command::new("git")
+            .arg("-C")
             .arg(&workdir)
             .args(["checkout", "--quiet", &instance.base_commit])
             .status()
             .context("spawning git checkout of base_commit")?;
+        if !checkout.success() {
+            anyhow::bail!(
+                "git checkout of base_commit {} failed for {} (exit {:?})",
+                instance.base_commit,
+                instance.instance_id,
+                checkout.code()
+            );
+        }
 
-        // 2. apply the gold test_patch, then the candidate patch, via git apply
-        //    (each diff is fed on stdin). Wired here; parsing deferred.
+        // 2. apply the gold test_patch, then the candidate patch, via
+        //    `git apply` (each diff is fed on stdin). Empty diffs are skipped.
         let diffs: [(&str, &str); 2] = [
             ("test_patch", instance.test_patch.as_str()),
             ("candidate", candidate_patch),
         ];
         for (label, diff) in diffs {
-            let _ = (label, diff, &workdir);
+            if diff.trim().is_empty() {
+                continue;
+            }
+            let mut child = Command::new("git")
+                .arg("-C")
+                .arg(&workdir)
+                .arg("apply")
+                .stdin(Stdio::piped())
+                .spawn()
+                .with_context(|| format!("spawning git apply for the {label} patch"))?;
+            child
+                .stdin
+                .take()
+                .context("git apply stdin unavailable")?
+                .write_all(diff.as_bytes())
+                .with_context(|| format!("writing the {label} diff to git apply"))?;
+            let status = child
+                .wait()
+                .with_context(|| format!("waiting on git apply for the {label} patch"))?;
+            if !status.success() {
+                anyhow::bail!(
+                    "git apply of the {label} patch failed for {} (exit {:?})",
+                    instance.instance_id,
+                    status.code()
+                );
+            }
         }
 
-        // 3. run pytest for FAIL_TO_PASS and PASS_TO_PASS, collecting results.
-        //    Deferred: parse pytest output into the per-test boolean map.
-        anyhow::bail!(
-            "real exec path for {} is gated and not yet fully implemented \
-             (git clone + git apply + pytest scaffolding is in place; \
-             pytest-result parsing lands in a later slice)",
-            instance.instance_id
-        )
+        // 3. run pytest over the union of the two named test sets, then parse
+        //    its terminal output into the per-test boolean map. `-rA` prints a
+        //    PASSED/FAILED/ERROR line per test in the short summary; `--tb=no
+        //    -q` keeps the output compact. Missing tests stay fail-closed via
+        //    the scorer (they simply never appear in the parsed map).
+        let mut targets: Vec<&str> = Vec::new();
+        targets.extend(instance.fail_to_pass.iter().map(String::as_str));
+        targets.extend(instance.pass_to_pass.iter().map(String::as_str));
+
+        let mut cmd = Command::new("python");
+        cmd.arg("-m")
+            .arg("pytest")
+            .arg("-rA")
+            .arg("--tb=no")
+            .arg("-q")
+            .current_dir(&workdir);
+        for t in &targets {
+            cmd.arg(t);
+        }
+        let output = cmd
+            .output()
+            .context("spawning pytest for the real exec path (is pytest installed?)")?;
+
+        let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+        combined.push('\n');
+        combined.push_str(&String::from_utf8_lossy(&output.stderr));
+
+        Ok(parse_pytest_output(&combined))
     }
+}
+
+/// Parse pytest terminal output into a per-test `id -> pass?` map.
+///
+/// Pure: no I/O, no network — a function of the captured output string only, so
+/// it is unit-tested directly against fixture strings (no pytest runs in tests).
+///
+/// Recognizes the short-summary lines pytest prints with `-rA`:
+///   * `PASSED <nodeid>`  → `true`
+///   * `FAILED <nodeid>`  → `false`
+///   * `ERROR <nodeid>`   → `false`  (collection / setup errors are failures)
+///
+/// A node id may carry a trailing ` - <reason>` on FAILED/ERROR lines; the
+/// reason is stripped so the key matches the plain `FAIL_TO_PASS` id. A test
+/// seen more than once resolves to `false` if *any* occurrence failed
+/// (fail-closed). Lines that are not status markers (progress dots, the summary
+/// counts line, collection-error banners, "no tests ran") are ignored — an
+/// all-error or no-tests run therefore yields no `true` entries, so the scorer
+/// treats every target as unresolved.
+pub fn parse_pytest_output(output: &str) -> BTreeMap<String, bool> {
+    let mut map: BTreeMap<String, bool> = BTreeMap::new();
+
+    for raw in output.lines() {
+        let line = raw.trim();
+        let (passed, rest) = if let Some(r) = line.strip_prefix("PASSED ") {
+            (true, r)
+        } else if let Some(r) = line.strip_prefix("FAILED ") {
+            (false, r)
+        } else if let Some(r) = line.strip_prefix("ERROR ") {
+            (false, r)
+        } else {
+            continue;
+        };
+
+        // The node id is the first whitespace-delimited token; FAILED/ERROR
+        // lines append ` - <reason>` which we drop.
+        let node = rest
+            .split_whitespace()
+            .next()
+            .map(|n| n.split(" - ").next().unwrap_or(n))
+            .unwrap_or("")
+            .trim();
+        if node.is_empty() {
+            continue;
+        }
+
+        map.entry(node.to_string())
+            .and_modify(|v| *v = *v && passed)
+            .or_insert(passed);
+    }
+
+    map
 }
 
 #[cfg(test)]
@@ -333,5 +443,129 @@ mod tests {
         // returned, proving generator -> source -> scorer wiring.
         assert_eq!(verdict.results, mock.resolved_results);
         assert!(verdict.resolved);
+    }
+
+    // ---- parse_pytest_output: the pure pytest-output parser ----------------
+    //
+    // These drive the parser against captured sample pytest output strings so
+    // no pytest runs in the test suite — the real exec path stays gated.
+
+    fn parsed(pairs: &[(&str, bool)]) -> BTreeMap<String, bool> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
+            .collect::<BTreeMap<String, bool>>()
+    }
+
+    #[test]
+    fn parse_all_pass() {
+        // `pytest -rA -q` short summary when every selected test passes.
+        let out = "\
+....                                                                     [100%]
+==================== PASSES ====================
+PASSED tests/test_core.py::test_alpha
+PASSED tests/test_core.py::test_beta
+PASSED tests/test_core.py::test_gamma
+PASSED tests/test_core.py::test_delta
+4 passed in 0.12s
+";
+        let got = parse_pytest_output(out);
+        assert_eq!(
+            got,
+            parsed(&[
+                ("tests/test_core.py::test_alpha", true),
+                ("tests/test_core.py::test_beta", true),
+                ("tests/test_core.py::test_gamma", true),
+                ("tests/test_core.py::test_delta", true),
+            ])
+        );
+    }
+
+    #[test]
+    fn parse_some_fail() {
+        // Mixed run: FAILED lines carry a trailing ` - <reason>` that must be
+        // stripped so the key equals the plain node id.
+        let out = "\
+.F.F                                                                     [100%]
+==================== short test summary info ====================
+PASSED tests/test_math.py::test_add
+FAILED tests/test_math.py::test_sub - AssertionError: 1 != 2
+PASSED tests/test_math.py::test_mul
+FAILED tests/test_math.py::test_div - ZeroDivisionError: division by zero
+2 failed, 2 passed in 0.20s
+";
+        let got = parse_pytest_output(out);
+        assert_eq!(
+            got,
+            parsed(&[
+                ("tests/test_math.py::test_add", true),
+                ("tests/test_math.py::test_sub", false),
+                ("tests/test_math.py::test_mul", true),
+                ("tests/test_math.py::test_div", false),
+            ])
+        );
+    }
+
+    #[test]
+    fn parse_collection_error() {
+        // A collection/import error emits ERROR lines (no PASSED). Every entry
+        // is a failure, so the scorer credits nothing.
+        let out = "\
+==================== ERRORS ====================
+ERROR tests/test_broken.py - ModuleNotFoundError: No module named 'widget'
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.05s
+";
+        let got = parse_pytest_output(out);
+        assert_eq!(got, parsed(&[("tests/test_broken.py", false)]));
+        assert!(
+            !got.values().any(|&v| v),
+            "no test may be credited on a collection error"
+        );
+    }
+
+    #[test]
+    fn parse_no_tests_ran() {
+        // Selector matched nothing: pytest prints "no tests ran" and no
+        // PASSED/FAILED markers — the parsed map is empty, so the scorer treats
+        // every target as unresolved (fail-closed).
+        let out = "\
+============================ no tests ran in 0.01s =============================
+ERROR: not found: tests/test_core.py::test_absent
+(no match in any of [<Module test_core.py>])
+";
+        let got = parse_pytest_output(out);
+        assert!(
+            got.is_empty(),
+            "no status markers -> empty map, got {got:?}"
+        );
+    }
+
+    #[test]
+    fn parse_ignores_noise_and_dedupes_fail_closed() {
+        // Progress dots, banners and summary counts are ignored. A node id seen
+        // both PASSED and FAILED resolves to false (any failure wins).
+        let out = "\
+collected 3 items
+tests/test_x.py ..F                                                      [100%]
+PASSED tests/test_x.py::test_flaky
+FAILED tests/test_x.py::test_flaky - AssertionError
+PASSED tests/test_x.py::test_stable
+1 failed, 2 passed in 0.03s
+";
+        let got = parse_pytest_output(out);
+        assert_eq!(
+            got,
+            parsed(&[
+                ("tests/test_x.py::test_flaky", false),
+                ("tests/test_x.py::test_stable", true),
+            ])
+        );
+    }
+
+    #[test]
+    fn parse_empty_output_is_empty_map() {
+        assert!(parse_pytest_output("").is_empty());
+        assert!(parse_pytest_output("\n\n   \n").is_empty());
     }
 }

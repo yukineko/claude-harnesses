@@ -1,11 +1,13 @@
 //! Change-triggered scope resolution.
 //!
-//! The audit only looks at areas touched since a baseline ref (plus invariants,
-//! which run every time). This keeps each run cheap and bounded instead of
-//! re-auditing the whole tree. Git interaction is isolated in [`changed_files`]
-//! so the area-classification logic ([`classify`]) stays pure and unit-testable.
+//! The audit only looks at areas touched since a baseline ref (plus invariants
+//! marked `always`, which run every time; non-`always` invariants are
+//! diff-scoped like areas — only in scope when the diff touches their
+//! canon). This keeps each run cheap and bounded instead of re-auditing the
+//! whole tree. Git interaction is isolated in [`changed_files`] so the
+//! area-classification logic ([`classify`]) stays pure and unit-testable.
 
-use crate::config::{Area, Config};
+use crate::config::{Area, Config, Invariant};
 use crate::prompt::Shard;
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
@@ -208,6 +210,32 @@ fn canon_file(pointer: &str) -> &str {
     pointer.split(':').next().unwrap_or(pointer).trim()
 }
 
+/// Whether an invariant belongs in this run's invariants shard: `always`
+/// invariants unconditionally (the default, preserving prior behavior — every
+/// invariant on every run); non-`always` (diff-scoped) invariants only when
+/// the diff touched one of their `canon` paths. Mirrors [`classify`]'s
+/// canon-changed check for areas.
+pub(crate) fn invariant_in_scope(
+    inv: &Invariant,
+    changed: &std::collections::HashSet<&str>,
+) -> bool {
+    inv.always || inv.canon.iter().any(|c| changed.contains(canon_file(c)))
+}
+
+/// The invariants in scope for this run: `always` invariants unconditionally,
+/// plus non-`always` (diff-scoped) invariants whose canon the diff touched.
+/// Single source of truth for both [`shard_input_files`] (the invariants
+/// shard's content-hash input) and the prompt's invariants-shard emission /
+/// rendering ([`crate::prompt`]) so the two never drift.
+pub(crate) fn invariants_in_scope<'a>(cfg: &'a Config, scope: &Scope) -> Vec<&'a Invariant> {
+    let changed_set: std::collections::HashSet<&str> =
+        scope.changed_files.iter().map(|s| s.as_str()).collect();
+    cfg.invariants
+        .iter()
+        .filter(|inv| invariant_in_scope(inv, &changed_set))
+        .collect()
+}
+
 /// Pure: map changed files onto configured areas. Returns (in-scope hits,
 /// skipped area names). An area is in scope iff a changed file matches its globs
 /// OR one of its canon pointers' files changed (so a pure-spec edit re-triggers
@@ -310,9 +338,8 @@ pub fn shard_input_files(cfg: &Config, scope: &Scope, shard: Shard) -> Vec<Strin
             v.extend(hit.matched_files.iter().cloned());
             v
         }
-        Shard::Invariants => cfg
-            .invariants
-            .iter()
+        Shard::Invariants => invariants_in_scope(cfg, scope)
+            .into_iter()
             .flat_map(|inv| inv.canon.iter().map(|c| canon_file(c).to_string()))
             .collect(),
         Shard::Decisions => {
@@ -680,6 +707,70 @@ mod tests {
                 "logging/vector.py".to_string(),
             ]
         );
+    }
+
+    /// A single-invariant config whose `always` flag is set by the caller —
+    /// used by the diff-scoped-invariant tests below.
+    fn cfg_with_invariant(always: bool) -> Config {
+        toml::from_str(&format!(
+            r#"
+            [project]
+            name = "x"
+            [[invariant]]
+            name = "scoped"
+            canon = ["docs/scoped.md"]
+            always = {always}
+            "#,
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn shard_input_files_invariant_always_true_included_even_when_diff_untouched() {
+        let cfg = cfg_with_invariant(true);
+        let scope = Scope {
+            baseline: "abc".into(),
+            fell_back: false,
+            changed_files: vec!["unrelated/file.rs".to_string()],
+            in_scope: vec![],
+            skipped_areas: vec![],
+            decision_files: vec![],
+        };
+        let files = shard_input_files(&cfg, &scope, Shard::Invariants);
+        assert_eq!(files, vec!["docs/scoped.md".to_string()]);
+    }
+
+    #[test]
+    fn shard_input_files_invariant_not_always_excluded_when_diff_untouched() {
+        let cfg = cfg_with_invariant(false);
+        let scope = Scope {
+            baseline: "abc".into(),
+            fell_back: false,
+            changed_files: vec!["unrelated/file.rs".to_string()],
+            in_scope: vec![],
+            skipped_areas: vec![],
+            decision_files: vec![],
+        };
+        let files = shard_input_files(&cfg, &scope, Shard::Invariants);
+        assert!(
+            files.is_empty(),
+            "always=false invariant whose canon was not touched must be excluded"
+        );
+    }
+
+    #[test]
+    fn shard_input_files_invariant_not_always_included_when_diff_touches_canon() {
+        let cfg = cfg_with_invariant(false);
+        let scope = Scope {
+            baseline: "abc".into(),
+            fell_back: false,
+            changed_files: vec!["docs/scoped.md".to_string()],
+            in_scope: vec![],
+            skipped_areas: vec![],
+            decision_files: vec![],
+        };
+        let files = shard_input_files(&cfg, &scope, Shard::Invariants);
+        assert_eq!(files, vec!["docs/scoped.md".to_string()]);
     }
 
     #[test]

@@ -234,6 +234,18 @@ pub struct Invariant {
     /// Canon pointers backing this invariant.
     #[serde(default)]
     pub canon: Vec<String>,
+    /// Whether this invariant is included in the invariants shard on EVERY
+    /// run regardless of diff (the default, preserving prior behavior), or
+    /// only when the diff touches one of its `canon` paths (`false` — a
+    /// diff-scoped invariant, cheaper for invariants whose relevance is
+    /// naturally tied to a specific area rather than the whole tree). See
+    /// `scope::shard_input_files`.
+    #[serde(default = "default_true")]
+    pub always: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_dot() -> String {

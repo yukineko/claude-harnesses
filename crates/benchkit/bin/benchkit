@@ -1,0 +1,26 @@
+#!/bin/sh
+# benchkit plugin launcher — selects the per-platform binary bundled in this dir.
+#
+# `${CLAUDE_PLUGIN_ROOT}/bin/benchkit <sub>` execs the matching
+# `benchkit-<os>-<arch>` build. benchkit is a manually-invoked eval CLI (not a
+# hook), so a missing binary for the host platform is a hard error (exit 127)
+# rather than a silent exit — the caller should know the bundle is incomplete.
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+binary="$root/benchkit-$os-$arch"
+if [ ! -x "$binary" ]; then
+  echo "benchkit: no bundled binary for $os-$arch ($binary). Build it with scripts/build-plugin-bin.sh benchkit (macOS builds must run on a Mac)." >&2
+  exit 127
+fi
+exec "$binary" "$@"

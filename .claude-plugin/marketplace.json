@@ -355,7 +355,7 @@
     {
       "name": "benchkit",
       "description": "External-benchmark (SWE-bench Verified) runner for Claude Code plugins: a typed SWE-bench Instance model, a deterministic fixture-based JSONL loader, and a gated `download` subcommand that shells out to `curl` (no HTTP crate) to fetch the Princeton NLP dataset only on explicit invocation. Subscription-native (one bundled Rust binary).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "quality",
       "keywords": [
         "benchmark",

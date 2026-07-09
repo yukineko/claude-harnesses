@@ -226,6 +226,7 @@ fn check_run(hook: Option<HookInput>) -> ! {
                 },
             );
             log_event(&cfg, &session, tag, &files, &properties, attempts);
+            emit_overwatch_violations(&root, &session, &properties);
             if interactive {
                 eprintln!("{reason}");
                 harness_core::hook_latency::record(
@@ -243,6 +244,33 @@ fn check_run(hook: Option<HookInput>) -> ! {
             );
             std::process::exit(0);
         }
+    }
+}
+
+/// Record a fleet-level overwatch violation for each failing PROP-* property
+/// on a Block decision. **Fail-soft**: this must never change the block
+/// reason, exit code, or `state::save` outcome, and must never panic — a
+/// broken/unwritable overwatch store is silently ignored (an `unwrap_or`
+/// wall keeps errors from propagating; there is no `?`/`unwrap`/`expect` in
+/// this path). Called only from the `Decision::Block` arm; `Decision::Allow`
+/// emits nothing.
+fn emit_overwatch_violations(root: &Path, session: &str, properties: &[&str]) {
+    let ts = overwatch::store::now();
+    let task_key = format!("propguard:{}", root.display());
+    for prop_id in properties {
+        let raw = overwatch::violation::RawViolation {
+            property_id: Some(prop_id),
+            ..Default::default()
+        };
+        let event = overwatch::violation::build_event(
+            overwatch::violation::ViolationSource::Propguard,
+            &raw,
+            task_key.clone(),
+            session.to_string(),
+            ts,
+            None,
+        );
+        let _ = overwatch::store::append_violation(root, &event);
     }
 }
 

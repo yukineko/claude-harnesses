@@ -159,3 +159,149 @@ fn status_is_read_only_and_exits_zero() {
     assert_eq!(code, 0);
     assert!(stdout.contains("threshold:"));
 }
+
+// ── overwatch fleet-violation emission (fail-soft, additive) ──────────────
+
+/// Read the overwatch violations.jsonl written under an isolated HOME, for a
+/// repo rooted at `home` (mirrors `overwatch::store::violations_path`).
+fn read_violations_jsonl(home: &Path) -> Vec<serde_json::Value> {
+    // project_key is derived from the repo root path; walk .overwatch/*/overwatch/violations.jsonl
+    let base = home.join(".overwatch");
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&base) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path().join("overwatch").join("violations.jsonl");
+        if let Ok(txt) = std::fs::read_to_string(&path) {
+            for line in txt.lines() {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                    found.push(v);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// A Block decision must append `propguard:<property-id>` signed violation(s)
+/// (one per failing PROP-* property) to the overwatch store (fleet-level
+/// correlated-error detection).
+#[test]
+fn block_appends_propguard_signed_violation() {
+    let home = temp_home();
+    git_init(&home);
+    std::fs::write(home.join("a.rs"), "fn f() { panic!() }\n").unwrap();
+    let payload = format!(r#"{{"session_id":"s-ov1","cwd":"{}"}}"#, home.display());
+    let (code, stdout) = run_in(
+        &home,
+        &["check"],
+        &payload,
+        &[(
+            "PROPGUARD_CRITERIA",
+            "idempotent; never panic; stable output schema",
+        )],
+    );
+    assert_eq!(code, 0);
+    assert!(stdout.contains("block"), "expected a block: {stdout}");
+
+    let violations = read_violations_jsonl(&home);
+    assert!(
+        !violations.is_empty(),
+        "expected at least one recorded overwatch violation"
+    );
+    assert!(
+        violations.iter().any(|v| {
+            v.get("source").and_then(|s| s.as_str()) == Some("propguard")
+                && v.get("signature")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.starts_with("propguard:"))
+                    .unwrap_or(false)
+        }),
+        "expected a propguard:<property-id> signature among {violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
+            .all(|v| v.get("session_id").and_then(|s| s.as_str()) == Some("s-ov1")),
+        "violation session_id must come from the hook input: {violations:?}"
+    );
+}
+
+/// The block decision/output (reason, decision JSON, exit code) must be
+/// byte-identical whether or not the overwatch emission path runs — emission
+/// is purely additive telemetry, never a mutation of the gate's own decision.
+#[test]
+fn block_decision_unchanged_with_and_without_overwatch_store() {
+    let payload_for = |home: &Path, session: &str| {
+        format!(r#"{{"session_id":"{session}","cwd":"{}"}}"#, home.display())
+    };
+
+    // Run A: normal HOME, overwatch store writable.
+    let home_a = temp_home();
+    git_init(&home_a);
+    std::fs::write(home_a.join("a.rs"), "fn f() { panic!() }\n").unwrap();
+    let (code_a, stdout_a) = run_in(
+        &home_a,
+        &["check"],
+        &payload_for(&home_a, "s-cmp"),
+        &[(
+            "PROPGUARD_CRITERIA",
+            "idempotent; never panic; stable output schema",
+        )],
+    );
+
+    // Run B: HOME's .overwatch path replaced with an unwritable file, so
+    // `append_violation`'s create_dir_all/open must fail — the block
+    // decision must still come out identically.
+    let home_b = temp_home();
+    git_init(&home_b);
+    std::fs::write(home_b.join("a.rs"), "fn f() { panic!() }\n").unwrap();
+    std::fs::write(home_b.join(".overwatch"), "not a directory").unwrap();
+    let (code_b, stdout_b) = run_in(
+        &home_b,
+        &["check"],
+        &payload_for(&home_b, "s-cmp"),
+        &[(
+            "PROPGUARD_CRITERIA",
+            "idempotent; never panic; stable output schema",
+        )],
+    );
+
+    assert_eq!(code_a, code_b);
+    assert_eq!(code_a, 0, "hook always exits 0 toward Claude");
+    assert_eq!(
+        stdout_a, stdout_b,
+        "block reason/decision JSON must be unaffected by overwatch emission"
+    );
+}
+
+/// When the overwatch store path is unwritable (a file sits where the
+/// directory should be), emission must be silently skipped: no panic, and
+/// the hook still exits 0 with the block decision intact.
+#[test]
+fn no_panic_when_overwatch_store_unwritable() {
+    let home = temp_home();
+    git_init(&home);
+    std::fs::write(home.join("a.rs"), "fn f() { panic!() }\n").unwrap();
+    // Pre-create `.overwatch` as a plain file so store writes underneath it fail.
+    std::fs::write(home.join(".overwatch"), "not a directory").unwrap();
+    let payload = format!(r#"{{"session_id":"s-ov2","cwd":"{}"}}"#, home.display());
+    let (code, stdout) = run_in(
+        &home,
+        &["check"],
+        &payload,
+        &[(
+            "PROPGUARD_CRITERIA",
+            "idempotent; never panic; stable output schema",
+        )],
+    );
+    assert_eq!(
+        code, 0,
+        "must not panic/crash when overwatch store is unwritable"
+    );
+    assert!(
+        stdout.contains("block"),
+        "block decision preserved: {stdout}"
+    );
+}

@@ -67,3 +67,52 @@ condukt Phase 6 から、タスクに `expected_trajectory` がある場合に f
 - **`match_traj`** — 純粋な軌跡マッチャコア。型（`Mode`/`Step`/`Spec`/`MatchResult`）と `evaluate`、
   3 モード関数（`strict`/`unordered`/`subsequence`）、順序違反抽出ヘルパ `lift_reordering`、
   不変式を担保する `MatchResult::finalize`。IO・panic なし。
+
+## リスク階層化 e2e 検証 (tier)
+
+> **REVIEW-NEEDED**: コードから逆算 (2026-07-09 セッション)。人間レビュー前は正典としない。
+
+### 概要
+
+`tier`（`tier.rs` + `main.rs` の `Command::Tier`）は trajectory マッチャとは別系統の、UI/e2e
+リグレッションをリスクで階層化して検証するサブコマンド。全フローを毎回同じ厳密さで見るのではなく、
+config 駆動の**業務クリティカル allowlist**（`core`）に載っているフローだけ毎回スナップショットを
+実際に diff し、それ以外（**non-core**）は存在チェックまたは低頻度サンプリングに留める。
+本リポジトリはデプロイされたランタイム UI を持たない dev tooling なので、常時利用可能な diff 手段は
+決定論的な**構造化データ比較**（正規化 shape の JSON 等価判定）であり、`screenshot`（perceptual-hash）は
+trait/enum 境界だけ用意された正直な**未実装 stub**。
+
+### 不変条件
+
+- **config 駆動 core allowlist** — `TierConfig.core` への完全一致メンバーシップだけが `Tier::Core` を
+  決める（`tier_of`）。allowlist が空なら全フローが `NonCore`。
+- **分類は純関数** — `TierConfig::tier_of` は IO・panic を持たず、同じ入力に対して同じ `Tier` を返す
+  （module doc: "a *pure function* of the allowlist"）。
+- **構造化データ diff は決定論で JSON-pointer 報告** — `DiffStrategy::StructuredData` の比較はオブジェクト
+  キー順を正規化（`BTreeMap` でユニオンをソート）した上で値・構造を比較し、差分箇所を JSON-pointer 風の
+  `paths`（ソート済み）として `DiffOutcome::Mismatch { paths }` に積む。配列は要素ごと再帰し、長さが違えば
+  `"{path}/len"` を追加する。
+- **screenshot/perceptual-hash は正直な stub 境界** — `DiffStrategy::Screenshot` を選んでも実比較はせず、
+  常に `DiffOutcome::Stubbed { strategy }` を返す。ロジックを変えずに後で実装を差し替えられるよう trait/enum
+  境界だけ切ってある（未実装であることを偽装しない）。
+- **非core サンプリングは seeded で無 clock** — `non_core_decision`/`seeded_sample` は `(flow_id, seed,
+  run_index)` を安定 FNV-1a ハッシュ（標準 `Hasher` は build 間で安定しないため不使用）に通して
+  `h % sample_one_in == 0` で判定する。クロックや unseeded randomness は一切使わず、同じ入力は常に同じ
+  判定になる（`seeded_sampling_is_reproducible` テストが保証）。
+
+### 振る舞い
+
+`trajectoryeval tier --config <config.json> --flow <id> [...]`（`cmd_tier`）:
+
+- `TierConfig`（`{core:[..], diff_strategy, sample_one_in}`）を読み込み、`cfg.tier_of(&flow)` で
+  core/non-core を判定する。config が読めない・パースできなければ exit 2。
+- **core フロー** — `--baseline`/`--snapshot`（JSON ファイルパス）が両方必須。欠けていれば exit 2。
+  両方読めたら `diff_snapshot(cfg.diff_strategy, baseline, snapshot)` で毎回実際に diff し、
+  `DiffOutcome::Match` なら pass（exit 0）、`Mismatch`/`Stubbed` は fail（exit 1）。
+- **non-core フロー** — `--exists`（既定 true）・`--seed`・`--run-index` から `non_core_decision` を呼ぶ。
+  `sample_one_in == 0`（既定）なら存在チェックのみ（`ExistsSkipped`）。`exists=false` は
+  `NonCoreDecision::Absent` で fail（exit 1）。`Absent` 以外（`ExistsSkipped`/`ExistsSampled`）は pass。
+- 結果は `TierVerdict { flow_id, tier, diff?, non_core?, pass }` として `--json` で構造化出力、既定は
+  `print_tier_report` の人間向けレポート（tier・diff outcome・mismatch paths・sampling 決定を表示）。
+  exit code は 0=pass／1=逸脱（mismatch・stub・absent）／2=config 読み込み・パース失敗、という
+  trajectoryeval 全体の 0/1/2 ゲートポリシーと同型。

@@ -108,3 +108,60 @@ report と（人間レビューが要るときは）sentinel を書く。判定�
   `load`/`load_or_init`/`save`/`sync`（`exclude: &GlobSet` を取り追加/変更を除外フィルタ）/`apply_changes`/`prune_excluded`/
   `set_spec`/`resolve`、`DEFAULT_MAP_PATH`=`.specguard/spec-map.toml`。意味的帰属（spec-doc 紐付け・drift 解決）は
   `set_spec`/`resolve` を通じ LLM 消費者が行い、store は決定論的に永続化・同期・除外のみ。
+
+## 段階的 ratification トリアージ (graded ratify)
+
+> **REVIEW-NEEDED**: コードから逆算 (2026-07-09 セッション)。人間レビュー前は正典としない。
+
+### 概要
+
+`[prompt].require_ratification` の二値ゲート（drift ＝即人間）を和らげる追加ゲート。`[prompt].graded`
+（既定 false）を true にすると、drift した meta-canon テンプレートを `similarity.rs` の決定論的
+token-shingle Jaccard で既存の ratified コーパス（lock の `[corpus]`）と比較し、`graded_threshold`
+以上似ていれば（`precedented`）人間を介さず自動再批准、閾値未満（`novel`）なら従来どおり人間の
+`accept-prompt` に回す（`ratify::triage_drift`、呼び出し元は `main.rs` の `ratification_block`）。
+
+### 不変条件
+
+- **決定論・埋め込み/ネットワーク無し** — 類似度は `similarity::similarity`（正規化トークン列の
+  3-gram シングルを `BTreeSet` で集合演算する token-shingle Jaccard）のみで判定する。モデル呼び出し・
+  ネットワーク・乱数は一切介さない純関数（`similarity(a, b)` は `a`・`b` のバイト列にのみ依存）。
+- **純関数** — `similarity::{tokens, shingles, jaccard, similarity, best_similarity, triage}` は副作用
+  無し。`ratify::triage_drift` も `drifted` / `lock.corpus` / `now` / `threshold` のみに依存する純関数。
+- **既定 off で二値ゲート不変** — `[prompt].graded` の既定値は `false`。off のときは
+  `ratification_block` 内の graded 分岐そのものをスキップし、drift は必ず人間の `accept-prompt` に回る
+  （既存の二値挙動を厳密に保つ）。`graded_threshold` の既定値 `0.0` は `graded` が true のときしか参照
+  されず、`Config::validate` が `graded` true 時に `(0.0, 1.0]` の正値を要求するので、閾値を書き忘れて
+  グレーデッドゲートが全面素通りになることはない。
+- **threshold=1.0 で binary 互換** — `graded_threshold = 1.0` は「句読点/空白/大小文字だけの変更＝
+  token 完全一致」のみを precedented とし、実質的な編集は全て novel（＝人間へ）になる。これは二値ゲートの
+  「意味のある drift は必ず人間」と同一の挙動（`triage_threshold_one_is_binary_backward_compat` /
+  `threshold_one_is_backward_compatible_binary` で固定）。
+- **空コーパス・旧 lock は novel** — `best_similarity` は空コーパスに対し常に `0.0` を返す。ratify
+  していないテンプレートスロットや graded ゲート導入前に書かれた旧 lock は `[corpus]` の当該フィールドが
+  空文字列のままなので、比較対象が無く必ず `Novel` に倒れ、二値ゲートの fallback を保つ
+  （`empty_precedent_is_always_novel`）。
+- **1件でも novel なら全体を人間へ** — `triage_drift` は drift した全テンプレートを個別に判定し、
+  1つでも `Novel` があれば `Triage::Novel(novel_names)` を返して全体を人間経路に引き戻す
+  （`Triage::Precedented` は「drift した全テンプレートが precedented」のときのみ）。ある policy が
+  precedented だからといって隣接する novel な policy を黙って素通りさせない
+  （`one_novel_among_precedented_pulls_whole_change_to_human`）。
+
+### 振る舞い
+
+`ratification_block`（`main.rs`）は `require_ratification` 下で drift を検出すると、`graded` が on
+なら人間に回す前に `ratify::triage_drift(&drift, &lock.corpus, &current_texts, graded_threshold)` を
+呼ぶ。
+
+- **`Triage::Precedented`** — 現在の HEAD・テンプレート本文（アクティブでない verify gate のスロットは
+  空にクリア）・機械生成の reason（`"auto-ratified (graded): precedented change to {drift}
+  (similarity >= {threshold})"`）で `ratify::write_lock` を呼び、lock を再pin してそのまま監査を続行する
+  （`EXIT_UNRATIFIED` を返さない）。stderr には auto-ratify した旨を出す。
+- **`Triage::Novel(novel)`** — novel と判定されたテンプレート名を stderr に列挙し（類似度が閾値未満で
+  人間の批准が必要な旨のメッセージ付き）、`EXIT_UNRATIFIED` を返して監査を拒否する（二値ゲートと同じ
+  失敗経路）。
+- ratified テンプレート本文は `ratify::write_lock` が lock ファイル（`.specguard-prompt.lock`）の
+  `[corpus]` テーブル（`audit`/`decisions`/`refute`/`completeness`、`toml_str` でエスケープ）に永続化し、
+  次回 drift 判定時の precedent として `triage_drift` から読み戻される。`accept-prompt`（人間の明示的
+  batch）も同じ `write_lock` を通るため、graded gate の precedent corpus は「人間が最後に批准した本文」
+  と「graded gate が auto-ratify で再pinした本文」の両方で更新され続ける。

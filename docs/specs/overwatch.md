@@ -79,3 +79,92 @@ CLI は `clap` の `Command` enum（`main.rs`）で定義。ledger/lease 系は�
 - **`control`** — 制御面。純 argv ビルダ（`pause_cmd`/`resume_cmd`）、fail-soft 実行（`run_fail_soft`）、
   監査追記（`record_control_event`）、`pause`/`resume`/`reassign`。HOTL 承認は skill 側。
 - **`lib`** — テスト・他クレート向けに `event`/`store` を re-export する薄い公開面。
+
+## fleet 相関エラー検知 (violation signatures)
+
+> **REVIEW-NEEDED**: コードから逆算 (2026-07-09 セッション)。人間レビュー前は正典としない。
+
+**概要**: `violation.rs` は blastguard（破壊的コマンド拒否）/ propguard（PROP-* 失敗）/ specguard（spec drift
+検出）/ mutategate（mutant kill 失敗）由来の gate 違反を、正規化した**署名（signature）**付きで記録する
+append-only なレジストリである。同じ種類の失敗は、発生した task/session に依らず同じ署名に畳み込まれる。
+
+**不変条件**:
+- **正規化は純関数** — `normalize_signature(source, &RawViolation)` は `<source>:<discriminator>[:<discriminator2>]`
+  形式の安定した文字列を返す純関数。大小文字・空白差は `norm`（trim + lowercase + space→`-`）で吸収し、
+  同一失敗が表記ゆれで別署名に分裂しない。`ViolationSource::{Blastguard,Propguard,Specguard,Mutategate}`
+  ごとに discriminator の由来フィールド（`rule_id`/`property_id`/`drift_kind`+`symbol`/`mutation_operator`）
+  が異なるが、`RawViolation` 経由で単一の正規化関数に集約される。
+- **時刻は注入される** — `detect_recurrence`/`systemic_issues` は `now: i64` を引数で受け取り、内部で
+  wall-clock を読まない。ウィンドウ判定は `now - ev.ts > policy.window_secs`（未来イベント `ev.ts > now`
+  も除外）。呼び出し側（`violation_cli::recurrence_report`）が `store::now()` を一度だけ読んで渡す。
+- **systemic 昇格は「閾値到達 AND 複数 task/session に跨る」の両方が必要** — `detect_recurrence` の
+  `is_systemic` は `occurrences >= policy.threshold && (distinct_tasks > 1 || distinct_sessions > 1)`。
+  単一 task が同じ違反を何度リトライしても `distinct_tasks == 1 && distinct_sessions == 1` である限り
+  systemic とはならない（ローカルなリトライループと fleet 規模の相関エラーを区別するための不変条件）。
+
+**振る舞い**:
+- **`record-violation --source --discriminator [--symbol] --task [--session] [--detail]`** —
+  `parse_source` で source token をパースし、`violation_cli::record` が `RawViolation` を組み立てて
+  `violation::build_event`（`normalize_signature` を内部で呼ぶ）で `ViolationEvent` を生成、
+  `store::append_violation` で project-wide ledger へ追記する。`session` 省略時は `resolve_session_id`
+  が `--session` → env `CLAUDE_CODE_SESSION_ID` → `pid-<pid>` の順で解決（`lease.rs` と同じパターン）。
+  `{"recorded":true,"signature":...}` を標準出力に出す。
+- **`violations [--json] [--threshold] [--window-secs]`** — `resolve_policy` で `RecurrencePolicy`
+  （既定 `threshold=3`, `window_secs=86400`＝24h）を組み立て、`violation_cli::print_recurrence` が
+  全署名の再帰統計（occurrences/distinct_tasks/distinct_sessions/first_seen/last_seen/is_systemic）を
+  人間可読（`[SYSTEMIC]`/`[isolated]` マーカー付き）または JSON で表示する。
+- **`escalations [--json] [--threshold] [--window-secs]`** — 同じ `recurrence_report` を計算した上で
+  `is_systemic` な署名だけに絞り込んで表示する（`violation_cli::print_escalations`）。ウィンドウ内で
+  同一署名が閾値回数以上、かつ複数の distinct task/session にまたがって再発したときに初めて
+  ここへ現れる。
+
+## canary 段階展開 (canary rollout)
+
+> **REVIEW-NEEDED**: コードから逆算 (2026-07-09 セッション)。人間レビュー前は正典としない。
+
+**概要**: `canary.rs` は `scripts/rollout-plugins.sh --canary` が使う段階的ロールアウトの決定論的コアである。
+プラグイン集合をステージへ分割し、fleet 相関エラー検知（violation-rate）を健全性シグナルとして
+`Proceed`/`Rollback` を判定し、ロールバック時に何を復元すべきかを計算する。3つとも純粋データ生成のみで、
+実際の rollout・レジストリ書き換えは一切実行しない。
+
+**不変条件**:
+- **plan/health-gate/rollback-plan はすべて純関数** — `plan_stages_by_size`/`plan_stages_by_count`/
+  `decide_from_count`/`evaluate_health_gate`/`compute_rollback_plan` はいずれも I/O・乱数・wall-clock を
+  持たず、同一入力から同一出力を返す（テスト `stage_planning_is_deterministic`/
+  `evaluate_health_gate_is_deterministic_under_injected_time`/`compute_rollback_plan_is_deterministic`
+  で担保）。`stage_size`/`stage_count` に 0 を渡しても panic せず 1 に丸めて最も保守的なカナリア
+  （1 プラグイン/ステージ）に縮退する。
+- **health-gate の `now` は注入パラメータ** — `evaluate_health_gate`/`evaluate_health_gate_systemic`は
+  `now: i64` を引数として受け取り、内部で wall-clock を読まない。item-B（violation.rs）と同じ
+  ウィンドウ規約（`ev.ts <= now && now - ev.ts <= window_secs`、`violations_in_window`）を再利用する。
+  CLI 層 (`canary_cli::gate`) のみが `now_override.unwrap_or_else(store::now)` で一度だけ現在時刻を
+  読み、それ以降は明示引数として渡す。
+- **rollback plan は「復元先を記述する純データ」であり、コア自身はロールバックを実行しない** —
+  `compute_rollback_plan` は `PriorInstallState`（stage 適用前のレジストリ状態）と `CanaryTarget`
+  （stage が実際に動かした先）を plugin 名で突き合わせ、`RollbackPlan`（`PluginRollbackTarget` の列。
+  `prior_version`/`restore_install_path`/`canary_version`/`is_new` を含む）を返すだけで、ファイルシステムや
+  `installed_plugins.json` には一切触れない。新規導入プラグイン（prior state が無い）は `is_new: true` と
+  なり、復元先が無いことを明示する（`RollbackPlan::all_new`）。
+
+**振る舞い**:
+- **`canary-plan --plugins [--stage-size | --stage-count]`** — `parse_plugin_list` でカンマ/空白区切りを
+  正規化した後、`stage_size` 指定があれば `plan_stages_by_size`、無く `stage_count` があれば
+  `plan_stages_by_count`、両方省略なら `plan_stages_by_size(&list, 1)`（最も保守的な既定値）で
+  `StagePlan` を組み立てて JSON 出力する。`stage_size` と `stage_count` が両方指定された場合は
+  `stage_size` が優先される。
+- **`canary-gate [--observed-violations] [--threshold] [--window-secs] [--systemic] [--now]`** —
+  2つの入力モードを持つ。(1) `--observed-violations` 指定時は完全に純粋な経路で
+  `decide_from_count` へ直接渡す。(2) 省略時は cwd の item-B violation レジストリ
+  （`store::read_violations`）を読み、`--now` があればそれを、無ければ `store::now()` を `now` として
+  `evaluate_health_gate`（`--systemic` 指定時は `evaluate_health_gate_systemic`。孤立した一過性ノイズを
+  除き、systemic に昇格した署名の件数のみを閾値と比較する）で判定する。違反率が閾値を超えたら
+  `GateDecision::Rollback`、以下なら `Proceed`。判定結果は JSON で出力され、`main.rs` は rollback 判定時
+  `std::process::exit(3)` でシェル側に非ゼロ終了として伝える。
+- **`canary-rollback-plan --stage-index --prior --canary-targets`** — `prior`/`canary-targets` に
+  シェル側が `installed_plugins.json` から読んだ JSON 配列（`PriorInstallState`/`CanaryTarget`）を渡すと
+  `compute_rollback_plan` を呼んで `RollbackPlan` を JSON 出力する。
+- **実際のロールアウト実行は shell 側の opt-in フラグ経由** — `scripts/rollout-plugins.sh` は既定では
+  `--canary` フラグ無しで従来通り動作し、`--canary`（+ `--canary-stage-size`/`--canary-threshold`）を
+  明示的に渡したときのみ、上記3サブコマンドの出力を使って段階的ロールアウト・health-gate 判定・
+  ロールバックを実際に実行する。つまり overwatch の Rust コアは計画・判定のみを行い、副作用
+  （プラグインの実配布・レジストリ書き換え）は一切持たない。

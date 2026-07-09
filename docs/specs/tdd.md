@@ -92,3 +92,46 @@ RED だったか・RED→GREEN になったか）は `tdd` バイナリと Stop 
 - **`install`** — Stop hook の settings.json マージ/除去（`harness_core::install` 委譲、idempotent）。
 - **`state`** — セッション attempt counter。`harness_core::gate::state` の `bump`/`reset` 再エクスポート。
 - **`model`** — `harness_core::hook::HookInput`（`parse`/`cwd_or_current`/`session_key`）の再エクスポート。
+
+## テスト作成者と実装者の分離 (strict separation)
+
+> **REVIEW-NEEDED**: コードから逆算 (2026-07-09 セッション)。人間レビュー前は正典としない。
+
+### 概要
+
+`strict_separation` は「RED（テスト記述）と GREEN（実装）を同一エージェント/セッションが
+両方担ってはならない」を機械検証するオプトイン機能である。同一主体が誤った実装とそれに
+帳尻を合わせた誤ったテストを両方書く reward hacking を防ぐのが狙いで、`condukt` の
+`resolve_verifier_model`/`same_model`（verifier モデルは worker モデルと同一であってはならない）
+と同じ形の不変条件を、モデルではなく「作成者 identity」に対して課す。
+
+### 不変条件
+
+- **opt-in・既定 off で後方互換** — `Config::strict_separation`（`config.rs`）は既定 `false`。
+  `tdd.toml` の `[behavior]` 等で `strict_separation = true` を明示しない限り、`green()` は
+  identity チェックを一切行わず、既存の RED/GREEN フローと完全互換のまま動く。
+- **純関数の gate** — 判定本体 `proof::judge_separation(strict, test_author, impl_author)` は
+  git もファイル I/O も行わない純関数で、`(strict_flag, test_author, impl_author)` の3値だけから
+  `Result<()>` を返す。比較は `canonical_author`（`trim` + `to_lowercase`）を介するため、大文字小文字や
+  前後空白の違いは「同一」とみなされる。
+- **fail-closed: strict 時は同一 identity または identity 欠落で拒否** — `strict == true` のとき:
+  - `test_author`/`impl_author` のどちらかが `None` または空文字なら拒否（separation を検証できない
+    以上、安全側に倒す）。
+  - 両方存在し、正規化後に等しければ拒否。
+  - 両方存在し、正規化後に異なれば許可。
+  - `strict == false` のときは常に許可（identity の有無を問わない）。
+
+### 振る舞い
+
+- **RED 段が `--author` を記録する** — `tdd red --task <id> [--cmd] [--author <identity>]`。
+  `proof::red` は渡された `author`（省略可）をそのままテスト実行前後の判定には使わず、
+  `<task>.red.json` の `author` フィールドへ記録するだけ（RED 自体の合否判定に author は関与しない）。
+- **GREEN 段で strict 有効時に RED author と impl author を照合する** — `tdd green --task <id> [--cmd]
+  [--author <identity>]`。`proof::green` は `cfg.strict_separation` が真のとき、まずテストコマンドを
+  実行する前に、対応する RED 証跡ファイルから `read_author`（fail-soft: 欠落・破損時は `None`）で
+  `test_author` を読み出し、`judge_separation(true, test_author, author)` を呼ぶ。
+- **同一なら拒否、異なれば許可。判定はテスト実行/GREEN 生成より前に fail する** —
+  `judge_separation` が `Err` を返すと `green()` はその場で早期リターンし、テストコマンドの実行にも
+  `<task>.green.json` の書き込みにも進まない。つまり同一 identity での GREEN 試行は、テストの
+  pass/fail に関わらず、実行前の gate 段階で確実に止まる。異なる identity（または `strict_separation`
+  が off）であれば、以降は既存どおり `judge_green`（RED あり・pass 必須）を経て GREEN 証跡が書かれる。

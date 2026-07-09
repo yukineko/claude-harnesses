@@ -205,7 +205,10 @@ specguard --config examples/aegis.toml run
   依存しない。**将来の `spec-audit` 等の別機能からも共有される独立レイヤ**として設計されている
   (このコマンドはマップ実装を再実装せず、常に `specguard map` に委譲する)。各 entry は
   `kind` (Feature|Endpoint) / `spec_doc` / `impl_files` / `test_files` / `client_refs` /
-  `api` ({method, route}) を持つ。
+  `api` ({method, route}) を持つ。全履歴での `map build` は削除済みソースを復活させない:
+  `git log --name-status` は新しいコミットから逆時系列で出力されるため、変更は
+  oldest→newest の順に畳み込まれ (last-writer-wins)、新しいコミットで削除されたパスは
+  ダングリング entry として残らない。
 - **`/specguard:drift-map`** はそのストアを **消費する** LLM オーケストレーションで、(1) `map sync`
   でマッピングを保守し、(2) 各 entry の `docs/specs/` 仕様書を参照、(3) 仕様が無い entry は実装と
   テストを読んで仕様本文 (概要・不変条件・振る舞い) を生成 (`REVIEW-NEEDED` マーク付き。必要なら
@@ -259,7 +262,11 @@ baseline は **ack 連動で前進**する。クリーンに監査できた回�
   `graded` + `graded_threshold` (段階的トリアージ: 既定 OFF で従来の二値ゲート。ON にすると、
   批准済みテンプレートに決定論的類似度 (token-shingle Jaccard) が `graded_threshold` 以上の
   *precedented* な変更は自動批准し、*novel* な逸脱のみ人間の `accept-prompt` に回す。類似度は
-  seed-free な純関数で LLM/network を使わないため再現可能。`1.0` で従来の二値挙動に一致)
+  seed-free な純関数で LLM/network を使わないため再現可能。`1.0` で従来の二値挙動に一致)。
+  この類似度スコアには **polarity guard** が併走する: 同義語展開 + 正準バケットへの畳み込み
+  (token-set 類似度) により、approve/deny・permit/forbid・human/auto などの同義語がそれぞれ
+  同じバケットへ収束し、**バケットをまたぐ反転だけ**が意味の逆転として `Novel` 扱いになる。
+  字面上の類似度がどれだけ高くても、この極性反転は閾値によらず常に人間へエスカレーションされる
 - `[[area]]` (複数) … `name` / `globs` / `canon`。**globs にマッチする変更があれば in-scope**
 - `[[invariant]]` (複数) … `name` / `description` / `canon`。**毎回チェック**
 - `[verify]` … 検証ゲート (既定 OFF)。`enabled` = 反証 (偽陽性除去) / `completeness` =

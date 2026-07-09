@@ -72,6 +72,7 @@ LLM 単体で大きな課題をオーケストレーションさせると、決�
 | `condukt state reconcile --run <id> [--dry-run]` | 対象ブランチがデフォルトブランチへマージ済み、または worktree ごと削除済みのタスクを自動的に `verified` へ昇格させる。手動の `state set` なしに、セッションクラッシュ後の古い状態を修正する。 |
 | `condukt state resume-context --run <id>` | 停止した実行をセッションをまたいで再開するために、保留中/失敗/完了タスクを JSON として出力する。 |
 | `condukt state record-run --all` | fugu-router 向けに実行結果を決定論的に記録する（Stop フックが発火、`recorded_at` で冪等、fugu-router 不在ならソフトに no-op）。 |
+| `condukt learning-signal` | replan ログの `replan_count` × 検索台帳の `hit` フラグを `run_id` 単位で突き合わせ、`mean_replan_reduction_ratio = 1 - (mean_hit / mean_miss)` を算出する — cross-task 学習の決定論的な計測面（フェイルソフト、グループが空か `mean_miss == 0` のときは `ratio` が `null`）。 |
 | `condukt state test --run <id>` | リポジトリルートからプロジェクトのテストスイートを実行し、終了コードを伝播する。優先順位は `[test].command` → 自動検出（`cargo test` / `npm test` / `pytest`、最後は `cargo test` にフォールバック）。`sh -c` 経由のためパイプ・クォート・環境変数展開が使える。 |
 | `condukt loop --module <server\|client\|e2e>` | 指定モジュールのテスト修正サイクルを 1 イテレーション実行し JSON を返す。`/condukt-loop` が修正ステップを挟んで繰り返す。 |
 | `condukt knowledge` | インタープリター/ワーカープロンプトへ注入するプロジェクト固有の規約/落とし穴を出力する（ソフト、無ければ空）。 |
@@ -112,6 +113,14 @@ transcript をソフト依存の `trajectoryeval extract`/`check` に通し、�
 「done_criteria の文字列が一致した」ではなく「再現が実際に赤から緑へ反転した」ことを意味
 する。この経路はすべてフェイルソフトで、`tdd` 不在・`reproduction_tests` なし・`fix`/
 `feature` 以外のタスクでは従来の done_criteria チェックへ縮退する。
+
+**cross-task lessons のライフサイクル。** lesson は `stuckguard` がエスカレーションした
+とき（繰り返しのスタックパターンが閾値を超えたとき）に書き込まれる。`condukt replan
+handoff` は決定論的な字句検索で最も一致する過去の lesson を1件だけ取得し、マッチスコアが
+閾値を超えたときだけ、それを `--- UNTRUSTED PRIOR-LESSON ---` の境界マーカーで囲んで
+replan handoff に注入する（`replan.rs`）——あくまで参考情報であり指示ではなく、
+`done_criteria`/スコープを上書きすることはない。`condukt learning-signal`（前述）は
+この同じ lessons フローに対する読み取り専用の計測レイヤーである。
 
 ### インストール
 

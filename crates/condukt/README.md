@@ -39,6 +39,7 @@ hook (`restore`) and a Stop hook (`state record-run --all`).
 | `condukt state checkpoint/rollback --run <id>` | the reversibility safety net for autonomous proceeding (charter #7). `checkpoint` durably snapshots a run's state + each task's branch SHA and journals the event, printing the new seq; `rollback` restores a snapshotted state and best-effort `git reset`s each worktree to its recorded SHA (`--to <seq>` picks a checkpoint; default: latest). |
 | `condukt state verifier-model --worker <model> [--suggested <model>]` | resolve the verifier model so it never equals the worker model (shared blind-spot guard). Honours a distinct `--suggested`; otherwise picks a distinct tier. Prints the chosen model. |
 | `condukt state record-run --run <id> \| --all` | deterministically record settled tasks to fugu-router (fired by the Stop hook; idempotent via per-run `recorded_at`; soft no-op when fugu-router is absent). |
+| `condukt learning-signal` | compute `mean_replan_reduction_ratio = 1 - (mean_hit / mean_miss)` by joining the replan-log's `replan_count` × the retrieval ledger's `hit` flag per `run_id` — the deterministic measurement surface for cross-task learning (fail-soft, `ratio` is `null` when a group is empty or `mean_miss == 0`). |
 | `condukt knowledge` | emit project-specific conventions/pitfalls injected into the interpreter/worker prompt (soft; empty when none). |
 | `condukt consensus plan/vote` | multi-sample self-consistency (opt-in cost guard). `plan` decides whether a task should fan out into N candidate implementations (exit 0 = fan out, 1 = single sample); `vote` tallies N verifier verdicts into a deterministic majority winner + agreement rate, escalating to opus on all-fail, a tie, or agreement below threshold. |
 | `condukt policy decide/answer/answers` | central **graded-autonomy policy**: map a decision's risk × reversibility × confidence to `auto`/`escalate`/`block` via an exit-code contract (0=auto, 2=escalate, 3=block, 1=invalid). `answer` non-interactively resolves one question on an `auto` verdict (journaling the choice) and otherwise falls through so the caller runs a real `AskUserQuestion`; `answers` prints the auto-answer audit trail (every question self-answered without a human). `decide`/`answer` also accept optional `--title/--files/--class`: when given and `fugu-router` is on PATH, the self-reported `--confidence` is overridden by a calibrated `[0,1]` score from `fugu-router confidence` (historical pass-rate), mapped to a band via the pure `Level::from_score` (thresholds 0.34/0.67); absent fugu-router or the new flags, it falls back byte/exit-identically to the self-reported value. |
@@ -92,6 +93,15 @@ promotion unless the transition is a valid Fail→Pass — so "done" means *the
 reproduction actually flipped from red to green*, not just that the criteria text
 matched. The whole path is fail-soft: with `tdd` absent, no `reproduction_tests`,
 or a non-`fix`/`feature` task, the gate degrades to the legacy done-criteria check.
+
+**Cross-task lessons lifecycle.** A lesson is written when `stuckguard` escalates
+(a recurring stuck pattern crosses its threshold); `condukt replan handoff`
+retrieves the single best-matching past lesson via a deterministic lexical
+search and, only above a match-score floor, injects it into the replan handoff
+wrapped in an `--- UNTRUSTED PRIOR-LESSON ---` boundary marker (`replan.rs`) —
+reference material, not an instruction, and never able to override
+`done_criteria`/scope. `condukt learning-signal` (above) is the read-only
+measurement layer over that same lessons flow.
 
 ## Install
 

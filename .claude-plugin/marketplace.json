@@ -107,7 +107,7 @@
     {
       "name": "compass",
       "description": "Goal re-grounding + next-move derivation upstream of condukt for Claude Code: when the goal goes fuzzy or you stall after finishing a chunk, it carves the project charter (north star + definition of done + current gap) through an interrogate loop, then routes only the right-sized next move into condukt while parking side-quests to taskprog. Subscription-native (SessionStart nudge + Stop breadcrumb hooks + /compass skill + bundled Rust binary, no API key).",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "category": "planning",
       "keywords": [
         "compass",
@@ -433,7 +433,7 @@
     {
       "name": "gauge",
       "description": "Local LLMOps telemetry for Claude Code: a Stop hook that reads each session's transcript and records token usage, cache hits, tool calls, latency, and estimated cost to a local store — then `gauge report` rolls it up by project, model, and day. Observability for your own agent runs, subscription-native (one hook + bundled Rust binary, no API key, nothing leaves the machine).",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -580,7 +580,7 @@
     {
       "name": "schemaguard",
       "description": "Schema-validation gate for LLM structured outputs at source→executor boundaries: validate a JSON value against a named declared schema (condukt decomposition, fugu episode/playbook, scout measure), emit a structured error a caller uses to re-ask the model once, and count rejects so silent drops become observable (Guardrails-AI-lite). Subscription-native (one bundled Rust binary, no API key).",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "category": "quality",
       "keywords": [
         "schema",
@@ -628,7 +628,7 @@
     {
       "name": "specguard",
       "description": "仕様↔実装 整合監査ハーネスを Claude Code から subscription-native に実行する。各 shard を read-only な in-session subagent で監査し (nested claude --print なし)、決定的ハーネス (scope/render/parse/report) は specguard バイナリに委譲する。",
-      "version": "0.2.15",
+      "version": "0.2.16",
       "category": "quality",
       "keywords": [
         "spec",
@@ -654,7 +654,7 @@
     {
       "name": "stuckguard",
       "description": "Stuck-loop detector + escalation for Claude Code: a PostToolUse hook that spots repeated identical actions and edit thrash, then injects an escalating nudge to change approach or ask the user for help. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -800,7 +800,7 @@
     {
       "name": "overwatch",
       "description": "Project-global cross-session execution ledger with dedup guard + PDO progress view. Manages claim registry with heartbeat-based liveness and skip-on-duplicate contract for distributed session coordination. SessionStart and Stop hooks surface current run state and progress aggregation (session/backlog/hypothesis/condukt run/compass gap in fail-soft view). Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "category": "observability",
       "keywords": [
         "pdo",

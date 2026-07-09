@@ -107,6 +107,31 @@ ttl_secs = 300                              # ハートビート TTL（既定: 5
 - `<project-key>`: プロジェクト名由来（例: `claude-harnesses`）。
 - Lease は full reaper を超えて persist **しない**。セッション有効期間の ephemeral レコード。
 
+## fleet 単位の相関エラー検知（gate 違反 signature の再発検知）
+
+`overwatch` は project-wide の実行/lease レジストリに加えて、gate 違反イベント（blastguard denial・
+propguard PROP failure・specguard drift finding・mutategate kill failure）を **正規化した
+signature** 付きで記録し、同一 signature が複数タスク/セッションにまたがって時間窓内に N 件以上
+再発したら **systemic issue** としてエスカレーションする。
+
+```sh
+overwatch record-violation --source blastguard --discriminator rm-rf --task <key> [--symbol <sym>] [--detail <text>]
+overwatch violations [--json] [--threshold N] [--window-secs S]     # 全 signature の再発状況
+overwatch escalations [--json] [--threshold N] [--window-secs S]    # systemic と判定された signature のみ
+```
+
+- **signature 正規化**（`violation::normalize_signature`）は純粋関数。同種の失敗（例:
+  blastguard の同一 rule、propguard の同一 PROP、mutategate の同一 mutation operator、specguard の
+  同一 drift kind + symbol）は、大文字小文字・空白の違いを問わず同じ signature になる。
+- **再発検知**（`violation::detect_recurrence`）も時刻を引数で受け取る純粋関数（`Date.now()` を
+  内部で読まない）。既定ポリシーは 24 時間窓・3 件以上。`RecurrencePolicy { threshold, window_secs }`
+  で両方とも設定可能。
+- **systemic 判定**は「閾値以上」かつ「複数タスク or 複数セッションにまたがる」の両方を要求する。
+  単一タスクが同じゲートに何度もリトライして失敗するのは systemic ではなく local retry loop として
+  区別する。
+- 保存先は既存の project-wide registry と同じ `<base>/<project-key>/overwatch/` 配下の
+  `violations.jsonl`（events.jsonl とは別ストリーム、append-only）。
+
 ## PDO（Pending Data Object）との関連
 
 overwatch は、pending な仮説と awaiting-measurement な状態を集約し、**progress view** として公開する（`status` 出力）。各 lease キーは、pending な特定の作業（仮説版、設計変種、測定対象）をエンコードする。レジストリを照会することで、セッションは「前セッションが未完了のまま残した作業は何か」を学習し、それを引き継ぐか、再割当するか、reap するかを判断できる。

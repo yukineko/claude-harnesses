@@ -1,4 +1,6 @@
 mod aggregate;
+pub mod canary;
+mod canary_cli;
 mod control;
 pub mod event;
 mod lease;
@@ -121,6 +123,59 @@ enum Command {
         #[arg(long)]
         window_secs: Option<i64>,
     },
+    /// Deterministically split a plugin set into ordered canary stages and
+    /// print the plan as JSON. Pure planning only — executes no rollout.
+    CanaryPlan {
+        /// Ordered plugin set (comma/space separated), in rollout order.
+        #[arg(long)]
+        plugins: String,
+        /// Max plugins per stage (default 1 = most conservative canary).
+        /// Takes precedence over --stage-count if both are given.
+        #[arg(long)]
+        stage_size: Option<usize>,
+        /// Exactly this many stages (remainder distributed up front).
+        #[arg(long)]
+        stage_count: Option<usize>,
+    },
+    /// Evaluate the canary health gate against the item-B violation registry
+    /// (or a supplied observed count) and print a PROCEED/ROLLBACK verdict as
+    /// JSON. Deterministic: `now` is explicit, no wall-clock on the decision
+    /// path. Exits non-zero when a rollback is advised, so callers can branch.
+    CanaryGate {
+        /// Raw observed violation count (pure mode; no clock, no store read).
+        /// When omitted, the project's violation registry is read instead.
+        #[arg(long)]
+        observed_violations: Option<usize>,
+        /// Max tolerated violations within the window before rollback.
+        #[arg(long, default_value_t = 2)]
+        threshold: usize,
+        /// Sliding window in seconds (registry mode only).
+        #[arg(long, default_value_t = 900)]
+        window_secs: i64,
+        /// Count only *systemic* recurring signatures (registry mode) rather
+        /// than raw violations, so isolated one-offs don't trip a rollback.
+        #[arg(long)]
+        systemic: bool,
+        /// Inject `now` (unix secs) for reproducible registry-mode evaluation.
+        #[arg(long)]
+        now: Option<i64>,
+    },
+    /// Compute a canary rollback plan (what to restore) as JSON, from prior
+    /// install state + canary targets passed as inline JSON. Pure data only —
+    /// re-points nothing; the shell acts on it under its opt-in flag.
+    CanaryRollbackPlan {
+        /// Stage index this rollback plan applies to.
+        #[arg(long, default_value_t = 0)]
+        stage_index: usize,
+        /// JSON array of prior install state (name/prior_version/
+        /// prior_install_path) captured before the stage.
+        #[arg(long)]
+        prior: String,
+        /// JSON array of canary targets (name/canary_version/
+        /// canary_install_path) the stage moved plugins to.
+        #[arg(long)]
+        canary_targets: String,
+    },
 }
 
 /// Parse a `--source` CLI value into a [`ViolationSource`], erroring clearly
@@ -212,6 +267,36 @@ fn main() -> Result<()> {
         } => {
             let policy = resolve_policy(threshold, window_secs);
             violation_cli::print_escalations(policy, json)?;
+        }
+        Command::CanaryPlan {
+            plugins,
+            stage_size,
+            stage_count,
+        } => {
+            canary_cli::plan(&plugins, stage_size, stage_count)?;
+        }
+        Command::CanaryGate {
+            observed_violations,
+            threshold,
+            window_secs,
+            systemic,
+            now,
+        } => {
+            let rollback =
+                canary_cli::gate(observed_violations, threshold, window_secs, systemic, now)?;
+            if rollback {
+                // Non-zero exit signals "rollback advised" to the shell so it
+                // can branch without parsing JSON, while the JSON verdict is
+                // still emitted for logging/inspection.
+                std::process::exit(3);
+            }
+        }
+        Command::CanaryRollbackPlan {
+            stage_index,
+            prior,
+            canary_targets,
+        } => {
+            canary_cli::rollback_plan(stage_index, &prior, &canary_targets)?;
         }
     }
     Ok(())

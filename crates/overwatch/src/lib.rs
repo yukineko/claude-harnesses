@@ -2,6 +2,7 @@
 //!
 //! Re-exports the public API for use by tests and other crates.
 
+pub mod canary;
 pub mod event;
 pub mod store;
 pub mod violation;

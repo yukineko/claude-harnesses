@@ -30,11 +30,27 @@
 #   scripts/rollout-plugins.sh --no-rebuild      # copy + registry only, skip rebuild
 #   scripts/rollout-plugins.sh --no-sync         # copy + registry only, skip asset sync
 #
+# CANARY (opt-in — default behavior is UNCHANGED without --canary)
+#   scripts/rollout-plugins.sh --canary                     # staged rollout
+#   scripts/rollout-plugins.sh --canary --canary-stage-size 2
+#   scripts/rollout-plugins.sh --canary --canary-threshold 3
+#   With --canary, the plugin set is split into ordered STAGES (via
+#   `overwatch canary-plan`). Each stage is copied+repointed, then BETWEEN
+#   stages the item-B violation registry is checked via `overwatch
+#   canary-gate`; if the violation rate spikes past --canary-threshold the
+#   stage is AUTO-ROLLED-BACK (prior version dir re-pointed) and the rollout
+#   halts. Without --canary none of this runs and the script behaves exactly
+#   as it always has. Combine with --dry-run to preview the staged plan +
+#   rollback plan and mutate nothing.
+#
 # ENV
 #   CLAUDE_PLUGIN_CACHE     owner-scoped plugin cache root
 #                           (default: ~/.claude/plugins/cache/yukineko)
 #   CLAUDE_PLUGIN_REGISTRY  path to installed_plugins.json
 #                           (default: ~/.claude/plugins/installed_plugins.json)
+#   OVERWATCH_BIN           path to the overwatch binary used for canary
+#                           planning/gating (default: auto-detect on PATH,
+#                           then target/{release,debug}/overwatch)
 #
 # SAFETY
 #   - Idempotent: re-running with no version change is a no-op.
@@ -56,9 +72,10 @@ CACHE="${CLAUDE_PLUGIN_CACHE:-$HOME/.claude/plugins/cache/yukineko}"
 REGISTRY="${CLAUDE_PLUGIN_REGISTRY:-$HOME/.claude/plugins/installed_plugins.json}"
 MARKETPLACE="$REPO/.claude-plugin/marketplace.json"
 
-usage() { sed -n '2,45p' "$0"; }
+usage() { sed -n '2,60p' "$0"; }
 
 dry=0 force=0 no_rebuild=0 no_sync=0
+canary=0 canary_stage_size=1 canary_threshold=2
 declare -a only_plugins=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -68,10 +85,33 @@ while [ $# -gt 0 ]; do
                   only_plugins+=("$2"); shift 2 ;;
     --no-rebuild) no_rebuild=1; shift ;;
     --no-sync)    no_sync=1; shift ;;
+    --canary)     canary=1; shift ;;
+    --canary-stage-size)
+                  [ $# -ge 2 ] || { echo "--canary-stage-size requires N" >&2; exit 2; }
+                  canary_stage_size="$2"; shift 2 ;;
+    --canary-threshold)
+                  [ $# -ge 2 ] || { echo "--canary-threshold requires N" >&2; exit 2; }
+                  canary_threshold="$2"; shift 2 ;;
     -h|--help)    usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+
+# --- locate the overwatch binary (canary planning/gating) --------------------
+# Only needed for --canary. Prefer an explicit override, then PATH, then a
+# freshly built target binary. Deterministic core lives in overwatch.
+resolve_overwatch_bin() {
+  if [ -n "${OVERWATCH_BIN:-}" ] && [ -x "${OVERWATCH_BIN}" ]; then
+    echo "$OVERWATCH_BIN"; return 0
+  fi
+  if command -v overwatch >/dev/null 2>&1; then
+    command -v overwatch; return 0
+  fi
+  for cand in "$REPO/target/release/overwatch" "$REPO/target/debug/overwatch"; do
+    [ -x "$cand" ] && { echo "$cand"; return 0; }
+  done
+  return 1
+}
 
 if [ ! -f "$MARKETPLACE" ]; then
   echo "marketplace file not found: $MARKETPLACE" >&2
@@ -89,6 +129,7 @@ echo "repo:        $REPO"
 echo "cache:       $CACHE"
 echo "registry:    $REGISTRY"
 echo "dry-run:     $([ $dry = 1 ] && echo yes || echo no)   force: $([ $force = 1 ] && echo yes || echo no)   no-rebuild: $([ $no_rebuild = 1 ] && echo yes || echo no)   no-sync: $([ $no_sync = 1 ] && echo yes || echo no)"
+[ "$canary" = 1 ] && echo "canary:      yes   stage-size: $canary_stage_size   threshold: $canary_threshold"
 [ "${#only_plugins[@]}" -gt 0 ] && echo "plugins:     ${only_plugins[*]}"
 echo
 
@@ -291,7 +332,183 @@ print(f"registry patched: {registry_path}")
 PY
 }
 
-# --- run the plan --------------------------------------------------------------
+# --- capture the plan once (used by both the normal and canary paths) --------
+# One TSV row per plugin. Read into an array so the canary path can slice the
+# ordered plugin set into stages without re-running `plan`.
+declare -a PLAN_ROWS=()
+while IFS= read -r _row; do
+  [ -z "$_row" ] && continue
+  PLAN_ROWS+=("$_row")
+done < <(plan)
+
+# =============================================================================
+# CANARY STAGED ROLLOUT (opt-in) — only runs with --canary. This block is a
+# SELF-CONTAINED alternative to the normal single-pass path below; it never
+# runs unless --canary was given, so default behavior is byte-for-byte
+# unchanged. Under --dry-run it prints the staged plan + rollback plan and
+# mutates NOTHING. The real (non-dry-run) staged path exists so it's usable
+# later under manual approval, but is reachable ONLY via this explicit flag.
+# =============================================================================
+
+# Roll out ONE plugin row (copy + registry). Honors --dry-run. Echoes what it
+# did. Args: the TSV row fields as a single tab-delimited string.
+canary_apply_row() {
+  local row="$1"
+  IFS=$'\t' read -r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path <<<"$row"
+  local srcdir="$REPO/$src"
+  [ -d "$srcdir" ] || { echo "WARN: source dir missing for $name: $srcdir — skipping" >&2; return 0; }
+
+  if [ "$needs_copy" = "1" ] || [ "$force" = 1 ]; then
+    if [ "$dry" = 1 ]; then
+      echo "  [dry-run] would copy $srcdir/ -> $target/"
+    else
+      copy_plugin_dir "$srcdir" "$target"
+      echo "  copied $name -> $target"
+    fi
+  fi
+  if [ "$needs_registry" = "1" ] || [ "$force" = 1 ]; then
+    if [ "$dry" = 1 ]; then
+      registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --dry-run "$name" "$version" "$target" | sed 's/^/  /'
+    else
+      registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "$name" "$version" "$target" | sed 's/^/  /'
+    fi
+  fi
+}
+
+run_canary() {
+  local ow
+  if ! ow="$(resolve_overwatch_bin)"; then
+    echo "canary: overwatch binary not found (set OVERWATCH_BIN, or build it: cargo build -p overwatch)" >&2
+    echo "        refusing to run a staged rollout without the deterministic canary core" >&2
+    exit 1
+  fi
+  echo "canary: using overwatch binary: $ow"
+
+  # Ordered plugin list + per-plugin JSON for prior-state / canary-target.
+  local -a ordered_names=()
+  declare -A row_by_name=()
+  local prior_json="[" canary_json="[" first=1
+  local r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path
+  for r in "${PLAN_ROWS[@]}"; do
+    IFS=$'\t' read -r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path <<<"$r"
+    [ -z "$name" ] && continue
+    ordered_names+=("$name")
+    row_by_name["$name"]="$r"
+    [ "$first" = 1 ] || { prior_json+=","; canary_json+=","; }
+    first=0
+    # prior state = what's live NOW (cur_*) before the canary moves it.
+    local pv="null" pp="null"
+    [ -n "$cur_version" ] && pv="\"$cur_version\""
+    [ -n "$cur_path" ] && pp="\"$cur_path\""
+    prior_json+="{\"name\":\"$name\",\"prior_version\":$pv,\"prior_install_path\":$pp}"
+    canary_json+="{\"name\":\"$name\",\"canary_version\":\"$version\",\"canary_install_path\":\"$target\"}"
+  done
+  prior_json+="]"; canary_json+="]"
+
+  if [ "${#ordered_names[@]}" -eq 0 ]; then
+    echo "canary: no plugins to roll out"
+    return 0
+  fi
+
+  # 1. Ask overwatch to split the ordered set into stages (deterministic).
+  local plan_json
+  plan_json="$("$ow" canary-plan --plugins "$(IFS=,; echo "${ordered_names[*]}")" --stage-size "$canary_stage_size")"
+  echo "=== canary stage plan ==="
+  echo "$plan_json"
+
+  # 2. Ask overwatch what a rollback of the whole set would restore (as data).
+  echo "=== canary rollback plan (data only — not executed) ==="
+  "$ow" canary-rollback-plan --stage-index 0 --prior "$prior_json" --canary-targets "$canary_json"
+
+  # Number of stages from the plan JSON.
+  local nstages
+  nstages="$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)["stages"]))' <<<"$plan_json")"
+  echo
+  echo "canary: $nstages stage(s), stage-size=$canary_stage_size, threshold=$canary_threshold"
+
+  # 3. Walk stages: apply → health-gate → (proceed | rollback + halt).
+  local s
+  for (( s=0; s<nstages; s++ )); do
+    local stage_names
+    stage_names="$(python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["stages"]['"$s"']["plugins"]))' <<<"$plan_json")"
+    echo
+    echo "--- stage $s: $stage_names ---"
+    local pn
+    for pn in $stage_names; do
+      canary_apply_row "${row_by_name[$pn]}"
+    done
+
+    # Health gate BETWEEN stages (skip the check after the final stage).
+    if [ "$s" -lt "$((nstages - 1))" ]; then
+      echo "  health-gate: checking violation rate (threshold=$canary_threshold)..."
+      if [ "$dry" = 1 ]; then
+        # Dry-run: observe 0 violations (nothing was really applied) so the
+        # gate deterministically PROCEEDs and we exercise the full plan.
+        "$ow" canary-gate --observed-violations 0 --threshold "$canary_threshold" | sed 's/^/  /' || true
+        echo "  [dry-run] gate would PROCEED (no live violations observed)"
+      else
+        # Real path: consult the item-B violation registry for the cwd project.
+        local gate_out gate_rc=0
+        gate_out="$("$ow" canary-gate --threshold "$canary_threshold")" || gate_rc=$?
+        echo "$gate_out" | sed 's/^/  /'
+        if [ "$gate_rc" -ne 0 ]; then
+          echo "  health-gate: ROLLBACK — violation rate spiked; rolling back stage $s and halting" >&2
+          # Re-point the just-applied stage back to its prior version dir.
+          local prior_line="[" cj="[" pf=1
+          for pn in $stage_names; do
+            IFS=$'\t' read -r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path <<<"${row_by_name[$pn]}"
+            [ "$pf" = 1 ] || { prior_line+=","; cj+=","; }
+            pf=0
+            local pv="null" pp="null"
+            [ -n "$cur_version" ] && pv="\"$cur_version\""
+            [ -n "$cur_path" ] && pp="\"$cur_path\""
+            prior_line+="{\"name\":\"$name\",\"prior_version\":$pv,\"prior_install_path\":$pp}"
+            cj+="{\"name\":\"$name\",\"canary_version\":\"$version\",\"canary_install_path\":\"$target\"}"
+          done
+          prior_line+="]"; cj+="]"
+          local rbplan
+          rbplan="$("$ow" canary-rollback-plan --stage-index "$s" --prior "$prior_line" --canary-targets "$cj")"
+          echo "  rollback plan for stage $s:"
+          echo "$rbplan" | sed 's/^/    /'
+          # Execute the rollback: re-point registry to each prior install path.
+          for pn in $stage_names; do
+            local rv rp
+            rv="$(python3 -c 'import json,sys
+p=json.load(sys.stdin)
+for t in p["targets"]:
+  if t["name"]=="'"$pn"'" and not t["is_new"]:
+    print(t.get("prior_version") or "")' <<<"$rbplan")"
+            rp="$(python3 -c 'import json,sys
+p=json.load(sys.stdin)
+for t in p["targets"]:
+  if t["name"]=="'"$pn"'" and not t["is_new"]:
+    print(t.get("restore_install_path") or "")' <<<"$rbplan")"
+            if [ -n "$rv" ] && [ -n "$rp" ]; then
+              registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "$pn" "$rv" "$rp" | sed 's/^/    /'
+            else
+              echo "    $pn: newly introduced by canary — nothing to restore (left as-is)" >&2
+            fi
+          done
+          echo "canary: HALTED at stage $s after auto-rollback." >&2
+          exit 4
+        fi
+        echo "  health-gate: PROCEED"
+      fi
+    fi
+  done
+
+  echo
+  echo "canary: all $nstages stage(s) completed."
+}
+
+if [ "$canary" = 1 ]; then
+  run_canary
+  echo
+  echo "done (canary)."
+  exit 0
+fi
+
+# --- run the plan (default, non-canary path — UNCHANGED) ---------------------
 declare -a reg_args=()
 declare -a synced_plugins=()
 any_reg_change=0

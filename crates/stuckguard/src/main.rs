@@ -109,6 +109,9 @@ fn watch() {
             let count = st.record_nudge(&t.key, seq);
             let escalated = count >= cfg.escalate_after;
             log_event(&cfg, &session, t, count, escalated);
+            if escalated {
+                record_lesson(&session, t, count);
+            }
             emitted = Some(message(t, escalated, count));
         }
     }
@@ -187,6 +190,78 @@ fn log_event(cfg: &Config, session: &str, t: &Trip, count: u32, escalated: bool)
         use std::io::Write;
         let _ = writeln!(f, "{line}");
     }
+}
+
+/// On escalation, distill the stuck pattern into a short, transferable
+/// error-pattern lesson and append it to the cross-project lessons store
+/// (`harness_core::lessons`) so `fugu-router lessons search` can surface it
+/// on future tasks. Called ONLY when `escalated == true` — the non-escalating
+/// nudge path never writes a lesson.
+///
+/// Fail-soft end to end: `lessons::append` is already void/fail-soft (a
+/// corrupt/unwritable store silently drops the write), and every input used
+/// to build the `Lesson` here is a plain, already-validated string/number —
+/// nothing here can panic, so a stuck escalation can never break the hook.
+fn record_lesson(session: &str, t: &Trip, count: u32) {
+    use harness_core::lessons::{self, Kind as LessonKind, Lesson};
+    use sha2::{Digest, Sha256};
+
+    let kind_label = match t.kind {
+        Kind::Repeat => "repeat",
+        Kind::Oscillation => "oscillation",
+    };
+
+    let task_summary = format!("stuck pattern ({kind_label}): {}", t.detail);
+    let lesson_text = match t.kind {
+        Kind::Repeat if t.all_errored => format!(
+            "When the same action ({}) fails and is repeated {} times in a row, \
+             stop retrying it verbatim — the approach itself is wrong. Change strategy \
+             (inspect the actual error, try a different tool/method, or ask the user) \
+             instead of repeating the identical failing call.",
+            t.detail, t.count
+        ),
+        Kind::Repeat => format!(
+            "When the same action ({}) is repeated {} times without making progress, \
+             stop and reassess: repeating an identical call rarely converges. Try a \
+             different approach or escalate to the user with what was tried and why it \
+             didn't work.",
+            t.detail, t.count
+        ),
+        Kind::Oscillation => format!(
+            "When edits to the same file ({}) keep undoing each other ({} reversals), \
+             stop alternating between the two states — that's a sign of an unclear root \
+             cause or a design conflict. Step back, diagnose why the fix keeps regressing, \
+             or ask the user for direction instead of continuing to flip-flop.",
+            t.detail, t.count
+        ),
+    };
+
+    // Content-derived id (mirrors `fugu-router lessons add`): re-escalating on
+    // the exact same pattern text is idempotent rather than growing the store
+    // unboundedly across repeated sessions.
+    let mut hasher = Sha256::new();
+    hasher.update(b"error-pattern");
+    hasher.update([0]);
+    hasher.update(task_summary.as_bytes());
+    hasher.update([0]);
+    hasher.update(lesson_text.as_bytes());
+    let id = format!("{:x}", hasher.finalize())[..16].to_string();
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let lesson = Lesson {
+        id,
+        kind: LessonKind::ErrorPattern,
+        task_summary,
+        lesson_text,
+        source_run: format!("stuckguard:{session}:{}", t.key),
+        ts,
+    };
+    let _ = count; // reserved for future use (e.g. escalation tier in the text)
+    lessons::append(&lesson);
 }
 
 fn status() {

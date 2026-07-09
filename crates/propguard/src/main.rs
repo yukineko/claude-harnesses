@@ -30,7 +30,8 @@ mod install;
 mod model;
 mod state;
 
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use harness_core::hook::read_stdin;
@@ -39,6 +40,21 @@ use serde_json::json;
 use config::{Config, Mode};
 use gate::Decision;
 use model::HookInput;
+
+/// Explicit override for propguard's own session-state directory, read once
+/// per invocation. `harness_core::config::home()` (via `dirs::home_dir()`)
+/// resolves the real profile directory on Windows through
+/// `SHGetKnownFolderPath`, ignoring a `HOME` env override — so tests (and any
+/// caller that needs to pin state under an isolated directory) can set
+/// `PROPGUARD_STATE_DIR` to bypass `home()` resolution entirely rather than
+/// relying on it honoring `HOME`. Unset/empty is a no-op (default
+/// `cfg.state_dir` from `Config::load` stands).
+fn state_dir_override() -> Option<PathBuf> {
+    std::env::var("PROPGUARD_STATE_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+}
 
 #[derive(Parser)]
 #[command(
@@ -151,7 +167,10 @@ fn check_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
-    let cfg = Config::load(&root);
+    let mut cfg = Config::load(&root);
+    if let Some(dir) = state_dir_override() {
+        cfg.state_dir = dir;
+    }
     if !cfg.enabled {
         if interactive {
             eprintln!("propguard: disabled in config");
@@ -250,11 +269,39 @@ fn check_run(hook: Option<HookInput>) -> ! {
 /// Record a fleet-level overwatch violation for each failing PROP-* property
 /// on a Block decision. **Fail-soft**: this must never change the block
 /// reason, exit code, or `state::save` outcome, and must never panic — a
-/// broken/unwritable overwatch store is silently ignored (an `unwrap_or`
-/// wall keeps errors from propagating; there is no `?`/`unwrap`/`expect` in
-/// this path). Called only from the `Decision::Block` arm; `Decision::Allow`
-/// emits nothing.
+/// broken/unwritable overwatch store is silently ignored (there is no
+/// `?`/`unwrap`/`expect` in this path). Called only from the `Decision::Block`
+/// arm; `Decision::Allow` emits nothing.
+///
+/// Resolves the violations.jsonl path and opens it **once** for the whole
+/// batch of 3–5 properties, instead of calling `overwatch::store::append_violation`
+/// per property: that helper independently re-derives the storage path (a
+/// `.git`-ancestor walk + `canonicalize`) and re-opens the file on every call,
+/// which is redundant I/O repeated 3–5x on this synchronous, blocking Stop
+/// hook path. The set of recorded violations (and their JSON shape) is
+/// unchanged — only the path resolution and file handle are shared across
+/// the loop.
 fn emit_overwatch_violations(root: &Path, session: &str, properties: &[&str]) {
+    if properties.is_empty() {
+        return;
+    }
+
+    let Ok(path) = overwatch::store::violations_path(root) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    else {
+        return;
+    };
+
     let ts = overwatch::store::now();
     let task_key = format!("propguard:{}", root.display());
     for prop_id in properties {
@@ -270,8 +317,14 @@ fn emit_overwatch_violations(root: &Path, session: &str, properties: &[&str]) {
             ts,
             None,
         );
+        // `build_event` already drops un-bucketable signatures (returns
+        // `None`), matching the guard `overwatch::store::append_violation`
+        // applies before writing — so every event reaching here is the same
+        // one that helper would have persisted.
         if let Some(event) = event {
-            let _ = overwatch::store::append_violation(root, &event);
+            if let Ok(json) = serde_json::to_string(&event) {
+                let _ = writeln!(file, "{json}");
+            }
         }
     }
 }
@@ -299,7 +352,10 @@ fn log_event(
 
 fn status() {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
+    let mut cfg = Config::load(&root);
+    if let Some(dir) = state_dir_override() {
+        cfg.state_dir = dir;
+    }
     let src = if Config::project_path(&root).exists() {
         Config::project_path(&root)
     } else if Config::home_path().exists() {

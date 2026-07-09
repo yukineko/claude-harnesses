@@ -18,14 +18,39 @@ fn temp_home() -> PathBuf {
     dir
 }
 
+/// Build the Stop-hook stdin JSON payload through a real JSON encoder rather
+/// than hand-formatting a string literal. `format!(r#"{{"cwd":"{}"}}"#, ...)`
+/// embeds the path's raw bytes unescaped — on Windows a `cwd` containing `\`
+/// corrupts the JSON, `HookInput::parse` returns `None`, and the session key
+/// then collapses onto the shared `_local` bucket (see
+/// `harness_core::hook::HookInput::session_key`), silently merging distinct
+/// test sessions' state. `serde_json::json!` guarantees valid, correctly
+/// escaped JSON regardless of the path's separator style or byte content.
+fn hook_payload(session: &str, cwd: &Path) -> String {
+    serde_json::json!({
+        "session_id": session,
+        "cwd": cwd.to_string_lossy(),
+    })
+    .to_string()
+}
+
 /// Run `propguard <args>` with `payload` on stdin in an isolated HOME/CWD.
 /// Returns (exit_code, stdout).
+///
+/// `PROPGUARD_STATE_DIR` explicitly pins propguard's own session-state
+/// directory under `dir` (in addition to the `HOME` override). Belt and
+/// suspenders: `harness_core::config::home()` resolves via `dirs::home_dir()`,
+/// which on Windows ignores a `HOME` env override and resolves the real
+/// profile via `SHGetKnownFolderPath` — an explicit state-dir override keeps
+/// these tests from ever writing under the real home directory regardless of
+/// that platform quirk.
 fn run_in(dir: &Path, args: &[&str], payload: &str, extra_env: &[(&str, &str)]) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_propguard");
     let mut cmd = Command::new(bin);
     cmd.args(args)
         .current_dir(dir)
         .env("HOME", dir)
+        .env("PROPGUARD_STATE_DIR", dir.join(".propguard-state"))
         .env_remove("PROPGUARD_CRITERIA")
         .env_remove("PROPGUARD_DISABLE");
     for (k, v) in extra_env {
@@ -86,7 +111,7 @@ fn no_criteria_allows_the_stop() {
     git_init(&home);
     // create a changed file so it's not the "no code" path either
     std::fs::write(home.join("a.rs"), "fn main() {}\n").unwrap();
-    let payload = format!(r#"{{"session_id":"s1","cwd":"{}"}}"#, home.display());
+    let payload = hook_payload("s1", &home);
     let (code, stdout) = run_in(&home, &["check"], &payload, &[]);
     assert_eq!(code, 0, "hook must always exit 0 toward Claude");
     assert!(
@@ -102,7 +127,7 @@ fn with_criteria_inject_blocks_first_stop_but_exits_zero() {
     let home = temp_home();
     git_init(&home);
     std::fs::write(home.join("a.rs"), "fn f() { panic!() }\n").unwrap();
-    let payload = format!(r#"{{"session_id":"s2","cwd":"{}"}}"#, home.display());
+    let payload = hook_payload("s2", &home);
     let (code, stdout) = run_in(
         &home,
         &["check"],
@@ -129,7 +154,7 @@ fn disable_env_allows() {
     let home = temp_home();
     git_init(&home);
     std::fs::write(home.join("a.rs"), "fn f() {}\n").unwrap();
-    let payload = format!(r#"{{"session_id":"s3","cwd":"{}"}}"#, home.display());
+    let payload = hook_payload("s3", &home);
     let (code, stdout) = run_in(
         &home,
         &["check"],
@@ -192,7 +217,7 @@ fn block_appends_propguard_signed_violation() {
     let home = temp_home();
     git_init(&home);
     std::fs::write(home.join("a.rs"), "fn f() { panic!() }\n").unwrap();
-    let payload = format!(r#"{{"session_id":"s-ov1","cwd":"{}"}}"#, home.display());
+    let payload = hook_payload("s-ov1", &home);
     let (code, stdout) = run_in(
         &home,
         &["check"],
@@ -233,9 +258,7 @@ fn block_appends_propguard_signed_violation() {
 /// is purely additive telemetry, never a mutation of the gate's own decision.
 #[test]
 fn block_decision_unchanged_with_and_without_overwatch_store() {
-    let payload_for = |home: &Path, session: &str| {
-        format!(r#"{{"session_id":"{session}","cwd":"{}"}}"#, home.display())
-    };
+    let payload_for = |home: &Path, session: &str| hook_payload(session, home);
 
     // Run A: normal HOME, overwatch store writable.
     let home_a = temp_home();
@@ -286,7 +309,7 @@ fn no_panic_when_overwatch_store_unwritable() {
     std::fs::write(home.join("a.rs"), "fn f() { panic!() }\n").unwrap();
     // Pre-create `.overwatch` as a plain file so store writes underneath it fail.
     std::fs::write(home.join(".overwatch"), "not a directory").unwrap();
-    let payload = format!(r#"{{"session_id":"s-ov2","cwd":"{}"}}"#, home.display());
+    let payload = hook_payload("s-ov2", &home);
     let (code, stdout) = run_in(
         &home,
         &["check"],
@@ -303,5 +326,37 @@ fn no_panic_when_overwatch_store_unwritable() {
     assert!(
         stdout.contains("block"),
         "block decision preserved: {stdout}"
+    );
+}
+
+// ── regression: hook-payload JSON escaping (docs/review-redesign-implementation-items.md #2) ──
+
+/// Regression for this test harness's own payload construction, not the
+/// binary: hand-formatting `format!(r#"{{"cwd":"{}"}}"#, path)` embeds the
+/// path unescaped. A Windows-style `cwd` (containing `\`) then breaks the
+/// JSON, `HookInput::parse` returns `None`, and every such run's session
+/// silently collapses onto the shared `_local` state bucket. Building the
+/// payload through `serde_json::json!` (as `hook_payload` now does) instead
+/// guarantees valid, correctly escaped JSON for any path content, on any
+/// platform — this is checked directly here (no process spawn needed) so it
+/// can't regress even on a platform whose paths never contain backslashes.
+#[test]
+fn payload_json_is_valid_even_for_windows_style_paths() {
+    let windows_like_cwd = r"C:\Users\dev\project";
+
+    let payload = hook_payload("s-esc", Path::new(windows_like_cwd));
+    let parsed: serde_json::Value = serde_json::from_str(&payload)
+        .expect("hook_payload must always produce valid JSON, even for backslash-heavy paths");
+    assert_eq!(parsed["session_id"], "s-esc");
+    assert_eq!(parsed["cwd"], windows_like_cwd);
+
+    // Sanity check that this regression test is not vacuous: the naive
+    // hand-formatted string this file used to build really is broken JSON
+    // for a backslash path.
+    let naive = format!(r#"{{"session_id":"s-esc","cwd":"{}"}}"#, windows_like_cwd);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&naive).is_err(),
+        "sanity: an unescaped backslash path must indeed break hand-formatted JSON, \
+         or this regression test no longer demonstrates anything"
     );
 }

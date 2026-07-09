@@ -33,73 +33,122 @@ use std::collections::{BTreeMap, BTreeSet};
 /// / obligation / routing decision, so a change to their multiset is treated as
 /// semantically load-bearing regardless of how high the lexical similarity is.
 ///
-/// The set is deliberately conservative and closed (no stemming/synonyms): it
-/// covers (a) negation & quantifier-authority words (never/always/no/not/none/
-/// unless), (b) allow-vs-deny authorization verbs (allow/allowed/deny/denied/
-/// permit/forbid/reject/approve/approved), (c) the human-vs-machine routing axis
-/// (human/auto/manual), (d) obligation modality (must/require/required/mandatory/
-/// optional), and (e) the match-vs-contradict audit verdicts (matches/contradict/
-/// contradicts). Tokens are compared in the same normalized token space as the
-/// shingles (lowercased, alphanumeric runs), so hyphenated forms like
-/// "auto-approve" normalize to the tokens "auto" and "approve" — both of which
-/// are in the set — and are caught.
-const POLARITY_TOKENS: &[&str] = &[
+/// Each entry is `(surface_token, canonical_bucket)`. Distinct surface tokens
+/// that mean the same polarity thing (e.g. "greenlight" and "approve") map to
+/// the SAME `canonical_bucket`, so swapping one synonym for another inside the
+/// same axis still perturbs the signature multiset — closing the synonym-bypass
+/// gap where an out-of-set word slipped past a closed exact-token set. The table
+/// stays a curated, deterministic, finite list: NO stemming engine, NO
+/// embedding, NO fuzzy match — every entry is an explicit literal pair.
+///
+/// Covers (a) negation & quantifier-authority words (never/always/no/not/none/
+/// unless), (b) allow-vs-deny authorization verbs and their synonyms
+/// (allow/permit/enable vs deny/reject/block/forbid/refuse/skip, plus
+/// approve/greenlight/accept/authorize/sign-off vs forbid/disable/prohibit),
+/// (c) the human-vs-machine routing axis and its synonyms
+/// (human/manual/person/reviewer vs auto/automatic/automated/machine), (d)
+/// obligation modality (must/require/required/mandatory/optional), and (e) the
+/// match-vs-contradict audit verdicts (matches/contradict/contradicts). Tokens
+/// are compared in the same normalized token space as the shingles (lowercased,
+/// alphanumeric runs), so hyphenated forms like "auto-approve" or "sign-off"
+/// normalize to separate word tokens — both of which are in the table — and are
+/// caught.
+const POLARITY_TOKENS: &[(&str, &str)] = &[
     // Negation & authority quantifiers.
-    "never",
-    "always",
-    "no",
-    "not",
-    "none",
-    "unless",
-    "without",
-    // Authorization verbs (allow vs deny axis).
-    "allow",
-    "allowed",
-    "allows",
-    "deny",
-    "denied",
-    "denies",
-    "permit",
-    "permitted",
-    "forbid",
-    "forbidden",
-    "prohibit",
-    "prohibited",
-    "reject",
-    "rejected",
-    "approve",
-    "approved",
-    "approves",
-    "approval",
+    ("never", "never"),
+    ("always", "always"),
+    ("no", "no"),
+    ("not", "not"),
+    ("none", "none"),
+    ("unless", "unless"),
+    ("without", "without"),
+    // Authorization verbs: allow-axis (allow vs deny).
+    ("allow", "allow"),
+    ("allowed", "allow"),
+    ("allows", "allow"),
+    ("permit", "allow"),
+    ("permits", "allow"),
+    ("permitted", "allow"),
+    ("enable", "allow"),
+    ("enabled", "allow"),
+    ("enables", "allow"),
+    ("deny", "deny"),
+    ("denied", "deny"),
+    ("denies", "deny"),
+    ("reject", "deny"),
+    ("rejected", "deny"),
+    ("rejects", "deny"),
+    ("refuse", "deny"),
+    ("refused", "deny"),
+    ("refuses", "deny"),
+    ("block", "deny"),
+    ("blocked", "deny"),
+    ("blocks", "deny"),
+    ("skip", "deny"),
+    ("skipped", "deny"),
+    ("skips", "deny"),
+    ("forbid", "forbid"),
+    ("forbidden", "forbid"),
+    ("forbids", "forbid"),
+    ("prohibit", "forbid"),
+    ("prohibited", "forbid"),
+    ("prohibits", "forbid"),
+    ("disable", "forbid"),
+    ("disabled", "forbid"),
+    ("disables", "forbid"),
+    ("approve", "approve"),
+    ("approved", "approve"),
+    ("approves", "approve"),
+    ("approval", "approve"),
+    ("greenlight", "approve"),
+    ("greenlit", "approve"),
+    ("accept", "approve"),
+    ("accepted", "approve"),
+    ("accepts", "approve"),
+    ("authorize", "approve"),
+    ("authorized", "approve"),
+    ("authorizes", "approve"),
+    ("sign", "approve"),
+    ("signoff", "approve"),
     // Human-vs-machine routing axis.
-    "human",
-    "auto",
-    "manual",
-    "manually",
-    "automatically",
+    ("human", "human"),
+    ("manual", "human"),
+    ("manually", "human"),
+    ("person", "human"),
+    ("reviewer", "human"),
+    ("auto", "auto"),
+    ("automatic", "auto"),
+    ("automatically", "auto"),
+    ("automated", "auto"),
+    ("machine", "auto"),
     // Obligation modality.
-    "must",
-    "require",
-    "required",
-    "requires",
-    "mandatory",
-    "optional",
-    "should",
+    ("must", "must"),
+    ("require", "require"),
+    ("required", "require"),
+    ("requires", "require"),
+    ("mandatory", "require"),
+    ("optional", "optional"),
+    ("should", "should"),
     // Audit verdict axis (match vs contradict).
-    "matches",
-    "match",
-    "contradict",
-    "contradicts",
-    "contradiction",
+    ("matches", "match"),
+    ("match", "match"),
+    ("contradict", "contradict"),
+    ("contradicts", "contradict"),
+    ("contradiction", "contradict"),
 ];
 
-/// The multiset (token → count) of polarity tokens in `s`, in the same normalized
-/// token space as [`shingles`]. Deterministic (a `BTreeMap`), seed-free, and a
-/// pure function of the text. Two texts with an identical polarity multiset are
-/// "polarity-equivalent"; any add / remove / flip of a polarity token changes the
-/// multiset and is therefore detected.
+/// The multiset (canonical bucket → count) of polarity tokens in `s`, in the
+/// same normalized token space as [`shingles`]. Deterministic (a `BTreeMap`),
+/// seed-free, and a pure function of the text. Distinct surface synonyms that
+/// share a bucket (see [`POLARITY_TOKENS`]) collapse to the same key, so a
+/// synonym substitution (e.g. "approve" -> "greenlight") is invisible to the
+/// signature exactly like a same-word repeat would be — while an actual
+/// polarity axis flip (e.g. "approve" bucket -> "deny" bucket) still changes
+/// the multiset and is detected. Two texts with an identical signature are
+/// "polarity-equivalent"; any add / remove / flip of a polarity bucket changes
+/// the multiset and is therefore detected.
 fn polarity_signature(s: &str) -> BTreeMap<&'static str, usize> {
-    let present: BTreeSet<&'static str> = POLARITY_TOKENS.iter().copied().collect();
+    let present: BTreeMap<&'static str, &'static str> = POLARITY_TOKENS.iter().copied().collect();
     let mut sig = BTreeMap::new();
     for tok in tokens(s) {
         if let Some(&canon) = present.get(tok.as_str()) {
@@ -570,5 +619,124 @@ mod tests {
         let corpus = vec![ratified.to_string()];
         assert!(polarity_preserved(benign, ratified));
         assert_eq!(triage(benign, &corpus, THRESHOLD), Verdict::Precedented);
+    }
+
+    /// A within-bucket synonym swap (no axis flip) preserves the polarity
+    /// signature: "greenlight" collapses to the same bucket as "approve", so
+    /// this is a legitimate benign reword, not a bypass.
+    #[test]
+    fn synonym_swap_within_same_bucket_preserves_polarity() {
+        assert!(polarity_preserved(
+            "the reviewer will approve the change",
+            "the reviewer will greenlight the change"
+        ));
+        assert!(polarity_preserved(
+            "route it to a human for review",
+            "route it to a reviewer for review"
+        ));
+        assert!(polarity_preserved(
+            "the policy must deny the request",
+            "the policy must reject the request"
+        ));
+    }
+
+    /// Regression for the synonym-bypass hole: an inversion that swaps to an
+    /// OUT-OF-THE-ORIGINAL-SET synonym on the opposite polarity axis (e.g.
+    /// "human" -> "greenlight" is not an axis flip by itself, but a genuine
+    /// axis synonym like "deny" -> "permit" or "human" -> "machine" IS) must
+    /// still be caught now that the widened table maps synonyms to their axis
+    /// bucket, closing the gap where only the exact original word was covered.
+    #[test]
+    fn synonym_based_axis_flip_detected() {
+        // "human" -> "machine": both map into the human/auto axis via synonyms,
+        // but land in DIFFERENT buckets ("human" vs "auto") so this is a real flip.
+        assert!(!polarity_preserved(
+            "route it to a human for explicit consent",
+            "route it to a machine for explicit consent"
+        ));
+        // "deny" -> "permit": permit is a synonym of allow, opposite axis of deny.
+        assert!(!polarity_preserved(
+            "the policy must deny the request",
+            "the policy must permit the request"
+        ));
+        // "approve" -> "skip" (skip is a deny-axis synonym).
+        assert!(!polarity_preserved(
+            "the auditor will approve the change",
+            "the auditor will skip the change"
+        ));
+    }
+
+    /// The full end-to-end regression: a synonym-based inversion embedded in a
+    /// realistic-length template (so lexical Jaccard stays high, mirroring the
+    /// adversarial probe above) routes to Novel at the shipped default
+    /// threshold even though NEITHER word is literally the same as the other —
+    /// closing the bypass an independent review flagged (out-of-set synonym
+    /// slips past a closed exact-token set).
+    #[test]
+    fn synonym_inversion_routes_to_novel_at_shipped_threshold() {
+        const THRESHOLD: f64 = 0.85;
+
+        struct Case {
+            ratified: &'static str,
+            flipped: &'static str,
+            what: &'static str,
+        }
+        let cases = [
+            Case {
+                ratified: "when a novel policy edit is detected during a gated run the \
+                           auditor consults the ratification lock and finds no matching \
+                           precedent so it must route the decision to a human before it \
+                           pins the new meta canon version into the ratification lock \
+                           file together with the recorded reason for the audit trail",
+                flipped: "when a novel policy edit is detected during a gated run the \
+                          auditor consults the ratification lock and finds no matching \
+                          precedent so it must route the decision to a greenlight before it \
+                          pins the new meta canon version into the ratification lock \
+                          file together with the recorded reason for the audit trail",
+                what: "human -> greenlight (out-of-set synonym of approve)",
+            },
+            Case {
+                ratified: "the change triggered audit reads the canon pointers for the \
+                           changed area and then must deny any implementation change that \
+                           drifts from the ratified canon and quote the violated rule \
+                           verbatim so the operator can read the precise divergence and \
+                           decide whether to accept it or send the finding back for repair",
+                flipped: "the change triggered audit reads the canon pointers for the \
+                          changed area and then must permit any implementation change that \
+                          drifts from the ratified canon and quote the violated rule \
+                          verbatim so the operator can read the precise divergence and \
+                          decide whether to accept it or send the finding back for repair",
+                what: "deny -> permit (out-of-set synonym of allow)",
+            },
+            Case {
+                ratified: "for the sampled slice of the changed area the auditor should \
+                           always ask a reviewer to approve every implementation that \
+                           matches the ratified specification for that area before the \
+                           finding is merged into the report at the end of the audit run",
+                flipped: "for the sampled slice of the changed area the auditor should \
+                          always ask a reviewer to skip every implementation that \
+                          matches the ratified specification for that area before the \
+                          finding is merged into the report at the end of the audit run",
+                what: "approve -> skip (out-of-set synonym of deny)",
+            },
+        ];
+
+        for c in &cases {
+            let corpus = vec![c.ratified.to_string()];
+            let sim = best_similarity(c.flipped, &corpus);
+            assert!(
+                sim >= THRESHOLD,
+                "{}: expected a high (>= {THRESHOLD}) lexical similarity that WOULD \
+                 have auto-ratified without the polarity guard, got {sim}",
+                c.what
+            );
+            assert_eq!(
+                triage(c.flipped, &corpus, THRESHOLD),
+                Verdict::Novel,
+                "{}: synonym-based polarity flip must route to a human (Novel) despite \
+                 similarity {sim}",
+                c.what
+            );
+        }
     }
 }

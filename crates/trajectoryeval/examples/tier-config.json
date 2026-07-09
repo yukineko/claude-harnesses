@@ -1,0 +1,5 @@
+{
+  "core": ["checkout", "payment", "signup"],
+  "diff_strategy": "structured_data",
+  "sample_one_in": 20
+}

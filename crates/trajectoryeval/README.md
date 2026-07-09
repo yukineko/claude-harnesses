@@ -56,6 +56,22 @@ The CLI reports the core/non-core classification and the diff (match/mismatch)
 result, or the non-core existence/sampling decision, as a human report or with
 `--json`.
 
+- **exit codes**: `0` pass, `1` a real deviation (mismatch, or existence check
+  failed), `2` harness error (unreadable/unparseable input), `3`
+  **needs-human** — a core flow used an unimplemented diff strategy (currently
+  `screenshot`), so no automated verdict could be rendered. `3` is deliberately
+  distinct from `1`: an unimplemented strategy is a missing capability, not a
+  real regression, and must not silently gate every run red.
+
+- a runnable example config ships at
+  [`examples/tier-config.json`](examples/tier-config.json):
+  ```sh
+  trajectoryeval tier --config examples/tier-config.json --flow checkout \
+    --baseline base.json --snapshot snap.json     # core flow → real diff
+  trajectoryeval tier --config examples/tier-config.json --flow settings \
+    --exists true --seed 42 --run-index 3          # non-core → existence/sampling
+  ```
+
 - **expected** spec JSON:
   ```json
   { "mode": "strict",

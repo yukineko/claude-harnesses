@@ -97,6 +97,10 @@ pub enum DiffOutcome {
 
 impl DiffOutcome {
     /// True only for a real, passing match. Stubs and mismatches are not a pass.
+    ///
+    /// Used by [`TierVerdict::verdict_for_diff`] (the tri-state classifier) and
+    /// directly by callers that only care about the binary "did the structured
+    /// diff match" question without the `NeedsHuman` distinction.
     pub fn is_match(&self) -> bool {
         matches!(self, DiffOutcome::Match)
     }
@@ -256,6 +260,36 @@ fn fnv1a(flow_id: &str, seed: u64, run_index: u64) -> u64 {
 
 // ── top-level verdict ───────────────────────────────────────────────────────────
 
+/// The overall tri-state result of a [`TierVerdict`], for gate exit-code purposes.
+///
+/// `NeedsHuman` is distinct from `Fail` on purpose: a core flow configured with
+/// an unimplemented diff strategy (e.g. `screenshot`) is *not* a real, verified
+/// diff failure — it is "this strategy cannot render a verdict yet". Collapsing
+/// that into `Fail` would silently gate every run of that flow red forever,
+/// masquerading a missing capability as a real regression. `NeedsHuman` gets its
+/// own exit code (3) so callers can distinguish "the diff actually mismatched"
+/// from "no automated verdict is possible here — a human must look".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// The flow verified cleanly this run.
+    Pass,
+    /// A real, actionable deviation (mismatch, or existence check failed).
+    Fail,
+    /// No automated verdict was possible (e.g. an unimplemented diff strategy
+    /// stub) — needs a human, not an automatic pass or fail.
+    NeedsHuman,
+}
+
+impl Verdict {
+    /// True only for [`Verdict::Pass`]. Used by callers (the CLI's exit-code
+    /// mapping) that just need the binary "is this a clean pass" question
+    /// without branching on `Fail` vs `NeedsHuman`.
+    pub fn is_pass(&self) -> bool {
+        matches!(self, Verdict::Pass)
+    }
+}
+
 /// The full risk-tiered verdict for one flow on one run — what the CLI reports.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TierVerdict {
@@ -267,8 +301,34 @@ pub struct TierVerdict {
     /// Present for non-core flows: the existence/sampling decision.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub non_core: Option<NonCoreDecision>,
-    /// Overall pass/fail for gate exit-code purposes.
-    pub pass: bool,
+    /// Overall tri-state result for gate exit-code purposes. Replaces a plain
+    /// bool so an unimplemented diff strategy can be reported as `NeedsHuman`
+    /// rather than masquerading as a hard `Fail`.
+    pub verdict: Verdict,
+}
+
+impl TierVerdict {
+    /// Derive the tri-state [`Verdict`] for a core flow's [`DiffOutcome`].
+    ///
+    /// `Stubbed` (an unimplemented diff strategy, e.g. `screenshot`) is
+    /// deliberately **not** `Fail` — see [`Verdict::NeedsHuman`]'s doc comment.
+    pub fn verdict_for_diff(diff: &DiffOutcome) -> Verdict {
+        match diff {
+            DiffOutcome::Stubbed { .. } => Verdict::NeedsHuman,
+            _ if diff.is_match() => Verdict::Pass,
+            _ => Verdict::Fail,
+        }
+    }
+
+    /// Derive the tri-state [`Verdict`] for a non-core flow's
+    /// [`NonCoreDecision`]. Non-core decisions are always fully automatable
+    /// (existence check / seeded sampling), so this never yields `NeedsHuman`.
+    pub fn verdict_for_non_core(decision: &NonCoreDecision) -> Verdict {
+        match decision {
+            NonCoreDecision::Absent => Verdict::Fail,
+            NonCoreDecision::ExistsSkipped | NonCoreDecision::ExistsSampled => Verdict::Pass,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -431,5 +491,95 @@ mod tests {
             strategy: DiffStrategy::Screenshot
         }
         .is_match());
+    }
+
+    // ── seeded sampling: the RATE is pinned, not just non-constancy ─────────
+    //
+    // `seeded_sampling_varies_by_run_index` above only proves the sampler isn't
+    // a constant. That alone would NOT catch a mutation like changing the
+    // `h % n == 0` selector to `h % n < n / 2` (which turns a 1-in-N sampler
+    // into a ~50% sampler) — both still "vary". This test runs many run_index
+    // values through the seeded sampler and asserts the OBSERVED sampled
+    // fraction is close to the intended `1/n`, within a statistical tolerance,
+    // so a rate-changing mutation is caught.
+    #[test]
+    fn seeded_sampling_rate_is_approximately_one_in_n() {
+        fn observed_fraction(n: u64, trials: u64) -> f64 {
+            let sampled = (0..trials)
+                .filter(|i| seeded_sample("checkout-flow", 1234, *i, n))
+                .count();
+            sampled as f64 / trials as f64
+        }
+
+        // n=20 → expect ~5% sampled. A `h % n < n/2` mutation would yield ~50%,
+        // which is 10x outside this tolerance band.
+        let n = 20u64;
+        let trials = 20_000u64;
+        let expected = 1.0 / n as f64;
+        let observed = observed_fraction(n, trials);
+        let tolerance = expected * 0.5; // allow +/-50% relative slack, still << 10x
+        assert!(
+            (observed - expected).abs() <= tolerance,
+            "observed sampled fraction {observed:.4} too far from expected 1/{n}={expected:.4} \
+             (tolerance ±{tolerance:.4}) — sampling rate looks wrong, not just non-constant"
+        );
+
+        // Same check at a different N to rule out a coincidence at N=20.
+        let n2 = 8u64;
+        let expected2 = 1.0 / n2 as f64;
+        let observed2 = observed_fraction(n2, trials);
+        let tolerance2 = expected2 * 0.5;
+        assert!(
+            (observed2 - expected2).abs() <= tolerance2,
+            "observed sampled fraction {observed2:.4} too far from expected 1/{n2}={expected2:.4} \
+             (tolerance ±{tolerance2:.4})"
+        );
+    }
+
+    // ── tri-state Verdict derivation ─────────────────────────────────────────
+    #[test]
+    fn verdict_for_diff_match_is_pass() {
+        assert_eq!(
+            TierVerdict::verdict_for_diff(&DiffOutcome::Match),
+            Verdict::Pass
+        );
+    }
+
+    #[test]
+    fn verdict_for_diff_mismatch_is_fail() {
+        assert_eq!(
+            TierVerdict::verdict_for_diff(&DiffOutcome::Mismatch {
+                paths: vec!["/a".to_string()]
+            }),
+            Verdict::Fail
+        );
+    }
+
+    #[test]
+    fn verdict_for_diff_stubbed_is_needs_human_not_fail() {
+        // The core fix under test: a screenshot-strategy core flow must NOT
+        // masquerade as a hard diff failure. It gets its own tri-state verdict.
+        let v = TierVerdict::verdict_for_diff(&DiffOutcome::Stubbed {
+            strategy: DiffStrategy::Screenshot,
+        });
+        assert_eq!(v, Verdict::NeedsHuman);
+        assert_ne!(v, Verdict::Fail);
+        assert!(!v.is_pass());
+    }
+
+    #[test]
+    fn verdict_for_non_core_never_needs_human() {
+        assert_eq!(
+            TierVerdict::verdict_for_non_core(&NonCoreDecision::Absent),
+            Verdict::Fail
+        );
+        assert_eq!(
+            TierVerdict::verdict_for_non_core(&NonCoreDecision::ExistsSkipped),
+            Verdict::Pass
+        );
+        assert_eq!(
+            TierVerdict::verdict_for_non_core(&NonCoreDecision::ExistsSampled),
+            Verdict::Pass
+        );
     }
 }

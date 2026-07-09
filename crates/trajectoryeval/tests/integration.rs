@@ -214,3 +214,187 @@ fn check_unreadable_input_exits_two() {
     ]);
     assert_eq!(code, 2, "unreadable input is a harness error (exit 2)");
 }
+
+// ── `tier` subcommand: end-to-end via the real committed example config ────────
+//
+// These drive the actual `tier` CLI subcommand (built args, real process, real
+// exit code + stdout) against the real, committed
+// `examples/tier-config.json` allowlist — not a synthetic one-off fixture — so
+// the shipped example is itself exercised by the test suite.
+
+/// Absolute path to the crate's committed example tier config.
+fn example_tier_config() -> String {
+    // CARGO_MANIFEST_DIR is the trajectoryeval crate root at compile time.
+    concat!(env!("CARGO_MANIFEST_DIR"), "/examples/tier-config.json").to_string()
+}
+
+#[test]
+fn tier_core_flow_matching_snapshot_passes_exit_zero() {
+    let dir = unique_dir();
+    let baseline = dir.join("baseline.json");
+    let snapshot = dir.join("snapshot.json");
+    std::fs::write(&baseline, r#"{"total": 42, "items": ["a", "b"]}"#).unwrap();
+    std::fs::write(&snapshot, r#"{"items": ["a", "b"], "total": 42}"#).unwrap();
+
+    let (code, stdout) = run(&[
+        "tier",
+        "--config",
+        &example_tier_config(),
+        // "checkout" is on the committed example's core allowlist.
+        "--flow",
+        "checkout",
+        "--baseline",
+        baseline.to_str().unwrap(),
+        "--snapshot",
+        snapshot.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "matching core-flow diff passes with exit 0");
+    assert!(stdout.contains("tier: core"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("diff: match"),
+        "expected a match report, got: {stdout}"
+    );
+    assert!(stdout.contains("result: pass"), "stdout: {stdout}");
+}
+
+#[test]
+fn tier_core_flow_mismatched_snapshot_exits_one() {
+    let dir = unique_dir();
+    let baseline = dir.join("baseline.json");
+    let snapshot = dir.join("snapshot.json");
+    std::fs::write(&baseline, r#"{"total": 42}"#).unwrap();
+    std::fs::write(&snapshot, r#"{"total": 99}"#).unwrap();
+
+    let (code, stdout) = run(&[
+        "tier",
+        "--config",
+        &example_tier_config(),
+        // "payment" is also on the committed example's core allowlist.
+        "--flow",
+        "payment",
+        "--baseline",
+        baseline.to_str().unwrap(),
+        "--snapshot",
+        snapshot.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1, "a real core-flow mismatch is a deviation (exit 1)");
+    assert!(
+        stdout.contains("MISMATCH"),
+        "expected a mismatch report, got: {stdout}"
+    );
+    assert!(stdout.contains("result: fail"), "stdout: {stdout}");
+}
+
+#[test]
+fn tier_non_core_existing_flow_passes_exit_zero() {
+    let (code, stdout) = run(&[
+        "tier",
+        "--config",
+        &example_tier_config(),
+        // "settings" is NOT on the example's core allowlist → non-core path.
+        "--flow",
+        "settings",
+        "--exists",
+        "true",
+        "--seed",
+        "42",
+        "--run-index",
+        "1",
+    ]);
+    assert_eq!(code, 0, "a present non-core flow passes with exit 0");
+    assert!(stdout.contains("tier: non-core"), "stdout: {stdout}");
+    assert!(stdout.contains("result: pass"), "stdout: {stdout}");
+}
+
+#[test]
+fn tier_non_core_absent_flow_exits_one() {
+    let (code, stdout) = run(&[
+        "tier",
+        "--config",
+        &example_tier_config(),
+        "--flow",
+        "settings",
+        "--exists",
+        "false",
+    ]);
+    assert_eq!(
+        code, 1,
+        "a non-core flow that fails its existence check exits 1"
+    );
+    assert!(stdout.contains("ABSENT"), "stdout: {stdout}");
+    assert!(stdout.contains("result: fail"), "stdout: {stdout}");
+}
+
+#[test]
+fn tier_core_flow_screenshot_stub_is_needs_human_not_silently_red() {
+    // A core flow configured with the (stub) screenshot diff strategy must NOT
+    // masquerade as a hard diff failure — it gets its own distinct exit code
+    // (3) and an explicit "needs-human" label, not exit 1 / "fail".
+    let dir = unique_dir();
+    let config = dir.join("screenshot-tier-config.json");
+    let baseline = dir.join("baseline.json");
+    let snapshot = dir.join("snapshot.json");
+    std::fs::write(
+        &config,
+        r#"{"core": ["checkout"], "diff_strategy": "screenshot", "sample_one_in": 0}"#,
+    )
+    .unwrap();
+    std::fs::write(&baseline, r#"{"a": 1}"#).unwrap();
+    std::fs::write(&snapshot, r#"{"a": 1}"#).unwrap();
+
+    let (code, stdout) = run(&[
+        "tier",
+        "--config",
+        config.to_str().unwrap(),
+        "--flow",
+        "checkout",
+        "--baseline",
+        baseline.to_str().unwrap(),
+        "--snapshot",
+        snapshot.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        code, 3,
+        "an unimplemented (screenshot) diff strategy must NOT exit 1 (hard fail); \
+         it gets its own needs-human exit code, got stdout: {stdout}"
+    );
+    assert_ne!(code, 1, "must not masquerade as a real diff failure");
+    assert!(
+        stdout.contains("NEEDS-HUMAN"),
+        "expected an explicit needs-human label, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("result: needs-human"),
+        "expected the result line to say needs-human, not fail, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("result: fail"),
+        "must not be reported as a plain fail, got: {stdout}"
+    );
+}
+
+#[test]
+fn tier_json_output_reports_verdict_field() {
+    let dir = unique_dir();
+    let baseline = dir.join("baseline.json");
+    let snapshot = dir.join("snapshot.json");
+    std::fs::write(&baseline, r#"{"a": 1}"#).unwrap();
+    std::fs::write(&snapshot, r#"{"a": 1}"#).unwrap();
+
+    let (code, stdout) = run(&[
+        "tier",
+        "--config",
+        &example_tier_config(),
+        "--flow",
+        "checkout",
+        "--baseline",
+        baseline.to_str().unwrap(),
+        "--snapshot",
+        snapshot.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON output");
+    assert_eq!(v["verdict"], "pass");
+    assert_eq!(v["tier"], "core");
+}

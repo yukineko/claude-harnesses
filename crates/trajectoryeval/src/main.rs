@@ -9,6 +9,8 @@
 //!   0  — trajectory matched the spec (pass)
 //!   1  — a deviation (missing / unexpected / out-of-order steps)
 //!   2  — harness error (unreadable or unparseable input)
+//!   3  — `tier` only: NEEDS-HUMAN (e.g. an unimplemented diff strategy stub —
+//!        no automated verdict is possible; distinct from a real deviation)
 //!
 //! This is a plain CLI gate, NOT a lifecycle hook — do not wrap in `run_hook`;
 //! let real errors surface as exit 2.
@@ -25,6 +27,7 @@ use clap::{Parser, Subcommand};
 use match_traj::{evaluate, MatchResult, Spec};
 use tier::{
     diff_snapshot, non_core_decision, DiffOutcome, NonCoreDecision, Tier, TierConfig, TierVerdict,
+    Verdict,
 };
 
 #[derive(Parser)]
@@ -216,6 +219,19 @@ fn read_json(path: &std::path::Path, what: &str) -> Result<serde_json::Value, i3
     }
 }
 
+/// Map a [`Verdict`] to its CLI exit code: 0 = pass, 1 = fail, 3 = needs-human.
+/// (2 is reserved for harness errors — see the module-level exit-code table.)
+fn exit_code_for(v: Verdict) -> i32 {
+    if v.is_pass() {
+        return 0;
+    }
+    match v {
+        Verdict::Pass => unreachable!("is_pass() already handled above"),
+        Verdict::Fail => 1,
+        Verdict::NeedsHuman => 3,
+    }
+}
+
 fn cmd_tier(args: TierArgs) -> i32 {
     // Read + parse the tier config.
     let cfg_raw = match std::fs::read_to_string(&args.config) {
@@ -261,16 +277,17 @@ fn cmd_tier(args: TierArgs) -> i32 {
                 Err(c) => return c,
             };
             let diff = diff_snapshot(cfg.diff_strategy, &baseline, &snapshot);
-            let pass = diff.is_match();
+            let verdict = TierVerdict::verdict_for_diff(&diff);
+            let code = exit_code_for(verdict);
             (
                 TierVerdict {
                     flow_id: args.flow.clone(),
                     tier,
                     diff: Some(diff),
                     non_core: None,
-                    pass,
+                    verdict,
                 },
-                if pass { 0 } else { 1 },
+                code,
             )
         }
         Tier::NonCore => {
@@ -282,16 +299,17 @@ fn cmd_tier(args: TierArgs) -> i32 {
                 args.run_index,
             );
             // Absent (existence check failed) is a deviation; present is a pass.
-            let pass = !matches!(decision, NonCoreDecision::Absent);
+            let verdict = TierVerdict::verdict_for_non_core(&decision);
+            let code = exit_code_for(verdict);
             (
                 TierVerdict {
                     flow_id: args.flow.clone(),
                     tier,
                     diff: None,
                     non_core: Some(decision),
-                    pass,
+                    verdict,
                 },
-                if pass { 0 } else { 1 },
+                code,
             )
         }
     };
@@ -317,7 +335,9 @@ fn print_tier_report(v: &TierVerdict) {
                 println!("  diff: MISMATCH at {}", paths.join(", "));
             }
             DiffOutcome::Stubbed { .. } => {
-                println!("  diff: screenshot/perceptual-hash strategy is a stub (not implemented)");
+                println!(
+                    "  diff: NEEDS-HUMAN — screenshot/perceptual-hash strategy is not implemented (not a diff failure)"
+                );
             }
         }
     }
@@ -330,7 +350,12 @@ fn print_tier_report(v: &TierVerdict) {
             NonCoreDecision::ExistsSampled => println!("  existence: present (sampled this run)"),
         }
     }
-    println!("  result: {}", if v.pass { "pass" } else { "fail" });
+    let result = match v.verdict {
+        Verdict::Pass => "pass",
+        Verdict::Fail => "fail",
+        Verdict::NeedsHuman => "needs-human",
+    };
+    println!("  result: {}", result);
 }
 
 // ── entry point ───────────────────────────────────────────────────────────────

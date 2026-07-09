@@ -423,8 +423,20 @@ impl SpecMap {
     ///   * `D` (deleted) → detach the path from its owning entry; if that leaves
     ///     the entry with no impl/test files it is marked `Missing`, else
     ///     `Changed`. A delete of an unmapped file is a no-op.
+    ///
+    /// **Ordering.** `changes` is expected in the order `git log --name-status`
+    /// emits it — **reverse-chronological** (newest commit first). To land each
+    /// path in its *final* state (last-writer-wins by real commit time), the
+    /// events are folded in **true chronological order** by iterating the slice
+    /// back-to-front. Without this, a full-history build would apply a recent
+    /// `D` (delete) *before* an older `A` (add) of the same path, and the add
+    /// would resurrect the deleted path as a dangling entry. Reversing makes the
+    /// newest commit win, so a path deleted in the newest commit correctly ends
+    /// up with no live entry regardless of the log's reverse order.
     pub fn apply_changes(&mut self, changes: &[Change], _spec_dir: &str, synced_ref: &str) {
-        for change in changes {
+        // git emits newest→oldest; fold oldest→newest so the most recent event
+        // for each path is the last writer.
+        for change in changes.iter().rev() {
             match change {
                 Change::Added(p) | Change::Modified(p) => self.attribute_path(p, synced_ref),
                 Change::Renamed { from, to } => {
@@ -1023,6 +1035,85 @@ impl_files = [\"src/x.rs\"]
             vec!["tests/keep_test.rs".to_string()]
         );
         assert_eq!(map.last_synced, "r1");
+    }
+
+    // -- full-history ordering (reverse-chronological log) -------------------
+
+    #[test]
+    fn full_history_add_then_delete_leaves_no_live_entry() {
+        // Simulate a full-history `git log --name-status` build: git emits
+        // newest→oldest, so a path Added long ago and Deleted in a RECENT commit
+        // appears as [Deleted (newer), Added (older)] in the log. After the fix
+        // the delete (newest) wins and the path must NOT linger as a dangling
+        // entry.
+        let mut map = SpecMap::default();
+        let changes = vec![
+            // newest commit first (git order): the path was deleted last.
+            Change::Deleted("gauge/src/pricing.rs".to_string()),
+            // older commit: the path was originally added.
+            Change::Added("gauge/src/pricing.rs".to_string()),
+        ];
+        map.apply_changes(&changes, "docs/specs", "head");
+
+        // The only skeleton entry is keyed by the path; after add-then-delete
+        // (chronologically) it must hold no impl/test files → orphaned/Missing,
+        // never a live impl_files entry that would dangle in the map.
+        let e = &map.entries["gauge/src/pricing.rs"];
+        assert!(
+            e.is_orphaned(),
+            "deleted-in-newest-commit path must not retain impl/test files, got impl={:?} test={:?}",
+            e.impl_files,
+            e.test_files
+        );
+        assert_eq!(e.status, Status::Missing);
+    }
+
+    #[test]
+    fn full_history_delete_then_readd_keeps_live_entry() {
+        // The reverse case: a path Deleted in an OLDER commit and re-Added in a
+        // RECENT commit appears as [Added (newer), Deleted (older)] in git order.
+        // The add (newest) wins → the path is present with a live impl entry.
+        let mut map = SpecMap::default();
+        let changes = vec![
+            // newest commit first: the path was re-added last.
+            Change::Added("src/resurrected.rs".to_string()),
+            // older commit: the path had been deleted.
+            Change::Deleted("src/resurrected.rs".to_string()),
+        ];
+        map.apply_changes(&changes, "docs/specs", "head");
+
+        let e = &map.entries["src/resurrected.rs"];
+        assert_eq!(e.impl_files, vec!["src/resurrected.rs".to_string()]);
+        assert_eq!(e.status, Status::Changed);
+        assert!(!e.is_orphaned());
+    }
+
+    #[test]
+    fn full_history_add_then_rename_resolves_to_final_path() {
+        // Rename case under reverse-chronological order: a path is Added (older)
+        // then Renamed away (newer). git order = [Renamed (newer), Added (older)].
+        // Chronologically the add lands first, then the rename detaches `from`
+        // and attributes `to`, so only the destination path holds a live entry.
+        let mut map = SpecMap::default();
+        let changes = vec![
+            // newest commit first: the rename.
+            Change::Renamed {
+                from: "src/old_name.rs".to_string(),
+                to: "src/new_name.rs".to_string(),
+            },
+            // older commit: original add of the source path.
+            Change::Added("src/old_name.rs".to_string()),
+        ];
+        map.apply_changes(&changes, "docs/specs", "head");
+
+        // Source entry emptied by the rename → Missing/orphaned.
+        let old = &map.entries["src/old_name.rs"];
+        assert!(old.is_orphaned());
+        assert_eq!(old.status, Status::Missing);
+        // Destination path carries the live impl entry.
+        let new = &map.entries["src/new_name.rs"];
+        assert_eq!(new.impl_files, vec!["src/new_name.rs".to_string()]);
+        assert_eq!(new.status, Status::Changed);
     }
 
     // -- targeted filter (entry_matches) ------------------------------------

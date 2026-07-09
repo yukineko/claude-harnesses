@@ -353,4 +353,12 @@ proof_dir = ".tdd"
 # impl_globs = ["**/*.rs", "**/*.py", "**/*.ts"]
 # test_path_globs = ["**/tests/**", "**/test_*.py", "**/*.spec.*"]
 # test_markers = ['#\[\s*test', '\bdef\s+test_', '\bfunc\s+Test\w']
+
+# Opt-in: `tdd green` fail-closed rejects if the RED (test-authoring) identity
+# equals the GREEN (implementation) identity. Identity defaults to
+# CLAUDE_CODE_SESSION_ID when `--author` is omitted from `tdd red`/`tdd green`
+# (not just an honor-system string) — but a single agent can still defeat this
+# by passing two different --author overrides; this is HOTL, not a hard
+# security boundary. See the /tdd skill for details.
+# strict_separation = false
 "#;

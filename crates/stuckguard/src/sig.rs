@@ -4,6 +4,7 @@
 //! processes) — we only need collision-equality, not crypto.
 
 use std::collections::hash_map::DefaultHasher;
+use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,13 @@ pub struct Event {
     pub tool: String,
     /// Normalized signature: identical actions share it.
     pub sig: String,
+    /// Token bag derived from the same normalized body that produced `sig`
+    /// (whitespace-split, deduplicated). Used for near-repeat detection via
+    /// Jaccard similarity when two events share the same `tool` but hash to
+    /// different `sig`s. `#[serde(default)]` so events persisted by older
+    /// stuckguard builds (before this field existed) still deserialize.
+    #[serde(default)]
+    pub tokens: BTreeSet<String>,
     /// For edit-like tools, the target file (for thrash detection).
     #[serde(default)]
     pub file: Option<String>,
@@ -53,6 +61,18 @@ fn norm(s: &str) -> String {
 
 fn field<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(Value::as_str)
+}
+
+/// Split the same normalized body used to compute `sig` into a deduplicated
+/// token bag (whitespace-split on the raw body, plus the `\u{1}` field
+/// separators used to join multi-field signatures like Edit's
+/// `file\u{1}old\u{1}new`). Pure/deterministic — no embeddings, no RAG. Used
+/// for Jaccard-similarity near-repeat detection.
+fn tokenize(body: &str) -> BTreeSet<String> {
+    body.split(|c: char| c.is_whitespace() || c == '\u{1}')
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Build an Event (minus `seq`) from a tool call. `None` for tools we can't
@@ -107,6 +127,7 @@ pub fn build(tool: &str, input: Option<&Value>, response: Option<&Value>) -> Opt
         seq: 0,
         tool: tool.to_string(),
         sig: format!("{tool}:{:016x}", hash(&sig_body)),
+        tokens: tokenize(&sig_body),
         file,
         old_h,
         new_h,

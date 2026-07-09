@@ -19,6 +19,13 @@ pub struct Config {
     pub window: usize,
     /// Same normalized (tool, input) this many times in the window ⇒ nudge.
     pub repeat_threshold: usize,
+    /// Jaccard token-bag similarity (in `[0, 1]`) above which two calls of
+    /// the SAME tool count as a "near-repeat" even when their exact `sig`
+    /// differs. `1.0` (the default) means only byte-identical signatures
+    /// count — i.e. behavior is unchanged unless an operator opts in by
+    /// lowering this below `1.0`. Deterministic pure token-set overlap, no
+    /// RAG/embeddings.
+    pub similarity_threshold: f64,
     /// Revert/thrash reversals on one file in the window ⇒ nudge.
     pub oscillation_threshold: usize,
     /// Don't re-nudge the same pattern within this many new events.
@@ -35,6 +42,7 @@ struct FileConfig {
     enabled: Option<bool>,
     window: Option<usize>,
     repeat_threshold: Option<usize>,
+    similarity_threshold: Option<f64>,
     oscillation_threshold: Option<usize>,
     cooldown_events: Option<u64>,
     escalate_after: Option<u32>,
@@ -53,6 +61,10 @@ impl Default for Config {
             enabled: true,
             window: 12,
             repeat_threshold: 3,
+            // 1.0 = only byte-identical sigs count as a repeat, i.e. current
+            // (pre-similarity-detection) behavior, unchanged unless an
+            // operator opts in via config.
+            similarity_threshold: 1.0,
             oscillation_threshold: 2,
             cooldown_events: 6,
             escalate_after: 2,
@@ -94,6 +106,9 @@ impl Config {
                     if let Some(v) = fc.repeat_threshold {
                         cfg.repeat_threshold = v;
                     }
+                    if let Some(v) = fc.similarity_threshold {
+                        cfg.similarity_threshold = v;
+                    }
                     if let Some(v) = fc.oscillation_threshold {
                         cfg.oscillation_threshold = v;
                     }
@@ -115,6 +130,7 @@ impl Config {
         // sanitize
         cfg.window = cfg.window.max(2);
         cfg.repeat_threshold = cfg.repeat_threshold.max(2);
+        cfg.similarity_threshold = cfg.similarity_threshold.clamp(0.0, 1.0);
         cfg.oscillation_threshold = cfg.oscillation_threshold.max(1);
         cfg.escalate_after = cfg.escalate_after.max(1);
         cfg

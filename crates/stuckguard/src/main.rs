@@ -322,6 +322,7 @@ fn status() {
     println!("enabled:               {}", cfg.enabled);
     println!("window:                {}", cfg.window);
     println!("repeat_threshold:      {}", cfg.repeat_threshold);
+    println!("similarity_threshold:  {}", cfg.similarity_threshold);
     println!("oscillation_threshold: {}", cfg.oscillation_threshold);
     println!("cooldown_events:       {}", cfg.cooldown_events);
     println!("escalate_after:        {}", cfg.escalate_after);
@@ -338,6 +339,9 @@ const STARTER: &str = r#"# stuckguard.toml — stuck-loop detector + escalation 
 enabled = true
 window = 12                 # recent tool events kept per session and inspected
 repeat_threshold = 3        # same normalized (tool, input) N times -> nudge
+# similarity_threshold = 1.0  # Jaccard token-bag overlap [0,1] for near-repeat detection;
+                             # 1.0 (default) = exact-match only (unchanged behavior);
+                             # lower it (e.g. 0.8) to also catch near-identical repeated calls
 oscillation_threshold = 2   # edit revert-thrash reversals on one file -> nudge
 cooldown_events = 6         # don't re-nudge the same pattern within N events
 escalate_after = 2          # after N nudges for a pattern, escalate to "ask the user"

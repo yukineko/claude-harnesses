@@ -44,8 +44,45 @@ pub fn detect(window: &[Event], cfg: &Config) -> Option<Trip> {
     repeat(window, cur, cfg)
 }
 
+/// Jaccard similarity of two token sets: `|A ∩ B| / |A ∪ B|`, in `[0, 1]`.
+/// Two empty sets are defined as fully similar (`1.0`) — mirrors "both sigs
+/// are the same trivial/empty body".
+fn jaccard(a: &std::collections::BTreeSet<String>, b: &std::collections::BTreeSet<String>) -> f64 {
+    if a.is_empty() && b.is_empty() {
+        return 1.0;
+    }
+    let intersection = a.intersection(b).count();
+    let union = a.union(b).count();
+    if union == 0 {
+        0.0
+    } else {
+        intersection as f64 / union as f64
+    }
+}
+
+/// True when `e` counts as a repeat of `cur`: either byte-identical `sig`, or
+/// (when `cfg.similarity_threshold < 1.0`) same tool with token-bag Jaccard
+/// overlap at or above the configured threshold. At the default
+/// `similarity_threshold == 1.0` this reduces to exact-match only — the
+/// pre-existing behavior — because two non-identical sigs can't reach a
+/// full 1.0 Jaccard score unless their token bags are literally equal (in
+/// which case `sig` would already match, since `sig` is a hash of the same
+/// normalized body `tokens` is derived from).
+fn is_repeat_of(e: &Event, cur: &Event, cfg: &Config) -> bool {
+    if e.sig == cur.sig {
+        return true;
+    }
+    if cfg.similarity_threshold >= 1.0 {
+        return false;
+    }
+    e.tool == cur.tool && jaccard(&e.tokens, &cur.tokens) >= cfg.similarity_threshold
+}
+
 fn repeat(window: &[Event], cur: &Event, cfg: &Config) -> Option<Trip> {
-    let same: Vec<&Event> = window.iter().filter(|e| e.sig == cur.sig).collect();
+    let same: Vec<&Event> = window
+        .iter()
+        .filter(|e| is_repeat_of(e, cur, cfg))
+        .collect();
     if same.len() < cfg.repeat_threshold {
         return None;
     }
@@ -163,6 +200,118 @@ mod tests {
         ];
         let t = detect(&w, &cfg()).expect("should trip");
         assert_eq!(t.kind, Kind::Oscillation);
+    }
+
+    #[test]
+    fn near_repeat_detected_when_threshold_set() {
+        // Same tool, high token overlap (only one differing token: the
+        // trailing test-name filter), but NOT byte-identical -> different
+        // exact `sig`. With a similarity_threshold below the actual
+        // overlap, these should count as a repeat.
+        let mut c = cfg();
+        // Pairwise Jaccard for these three commands is 4/6 ≈ 0.667 (4 shared
+        // tokens: cargo/test/-p/stuckguard, 2 differing: the trailing name).
+        c.similarity_threshold = 0.6;
+        let w: Vec<Event> = vec![
+            ev(
+                0,
+                "Bash",
+                json!({"command": "cargo test -p stuckguard foo"}),
+            ),
+            ev(
+                1,
+                "Bash",
+                json!({"command": "cargo test -p stuckguard bar"}),
+            ),
+            ev(
+                2,
+                "Bash",
+                json!({"command": "cargo test -p stuckguard baz"}),
+            ),
+        ];
+        // Sanity: these are NOT exact-sig matches (near-repeat only).
+        assert_ne!(w[0].sig, w[1].sig);
+        assert_ne!(w[1].sig, w[2].sig);
+
+        let t = detect(&w, &c).expect("near-repeat should trip when threshold is set");
+        assert_eq!(t.kind, Kind::Repeat);
+        assert_eq!(t.count, 3);
+
+        // Same window, unset (default) threshold -> exact-match only, so no
+        // trip since no two of these three are byte-identical.
+        assert!(
+            detect(&w, &cfg()).is_none(),
+            "default threshold must not detect near-repeats"
+        );
+    }
+
+    #[test]
+    fn near_repeat_not_detected_below_threshold() {
+        // Same tool, but token overlap is low (mostly disjoint commands).
+        // Even with a similarity_threshold set, overlap must stay below it.
+        let mut c = cfg();
+        c.similarity_threshold = 0.9;
+        let w: Vec<Event> = vec![
+            ev(
+                0,
+                "Bash",
+                json!({"command": "cargo test -p stuckguard foo"}),
+            ),
+            ev(
+                1,
+                "Bash",
+                json!({"command": "cargo test -p stuckguard bar"}),
+            ),
+            ev(
+                2,
+                "Bash",
+                json!({"command": "cargo test -p stuckguard baz"}),
+            ),
+        ];
+        // These three share 4 of 5 tokens each pairwise -> Jaccard = 4/6 ≈ 0.67,
+        // below the 0.9 threshold, so no near-repeat should trip.
+        assert!(detect(&w, &c).is_none());
+    }
+
+    #[test]
+    fn similarity_threshold_one_matches_default_exact_behavior() {
+        // Explicitly setting similarity_threshold = 1.0 must reproduce the
+        // exact same detect() outcome as the (equivalent) default config,
+        // for both an exact-repeat window and a near-but-not-exact window.
+        let mut c = cfg();
+        c.similarity_threshold = 1.0;
+        assert_eq!(
+            c.similarity_threshold,
+            Config::default().similarity_threshold
+        );
+
+        let exact_cmd = json!({"command": "cargo test"});
+        let exact_w: Vec<Event> = (0..3).map(|i| ev(i, "Bash", exact_cmd.clone())).collect();
+        assert!(detect(&exact_w, &c).is_some());
+        assert!(detect(&exact_w, &cfg()).is_some());
+
+        let near_w: Vec<Event> = vec![
+            ev(
+                0,
+                "Bash",
+                json!({"command": "cargo test -p stuckguard foo"}),
+            ),
+            ev(
+                1,
+                "Bash",
+                json!({"command": "cargo test -p stuckguard bar"}),
+            ),
+            ev(
+                2,
+                "Bash",
+                json!({"command": "cargo test -p stuckguard baz"}),
+            ),
+        ];
+        assert_eq!(
+            detect(&near_w, &c).is_some(),
+            detect(&near_w, &cfg()).is_some()
+        );
+        assert!(detect(&near_w, &c).is_none());
     }
 
     #[test]

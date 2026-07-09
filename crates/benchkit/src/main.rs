@@ -69,8 +69,18 @@ enum Command {
         /// JSONL of gate-passed changes (one GatePassedChange per line).
         changes: PathBuf,
         /// Optional JSONL of stricter-audit verdicts (one AuditResult per line).
-        #[arg(long)]
+        /// This is the *modeled* input path (backward-compat / testing): it
+        /// replays hand-authored verdicts. Mutually exclusive with
+        /// `--from-violations`.
+        #[arg(long, conflicts_with = "from_violations")]
         audits: Option<PathBuf>,
+        /// Source the misses from the **real** overwatch violation stream
+        /// instead of a modeled `--audits` file: cross-reference the gate-passed
+        /// changes against actually-recorded gate violations (a change that
+        /// passed the auto-gates but later appears as a violation is a miss the
+        /// gates let through). This is the real, deterministic audit source.
+        #[arg(long)]
+        from_violations: bool,
         /// Fraction of the population to sample, in [0.0, 1.0] (default 0.1).
         #[arg(long, default_value_t = 0.1)]
         fraction: f64,
@@ -196,10 +206,21 @@ fn main() {
         Command::AuditSample {
             changes,
             audits,
+            from_violations,
             fraction,
             seed,
             json,
-        } => auditsample::execute(&changes, audits.as_deref(), fraction, seed, json),
+        } => {
+            if from_violations {
+                // REAL audit source: derive misses from overwatch's recorded
+                // violation stream, keyed to the current project by cwd.
+                let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                auditsample::execute_from_violations(&changes, &cwd, fraction, seed, json)
+            } else {
+                // Modeled input path (backward-compat / testing).
+                auditsample::execute(&changes, audits.as_deref(), fraction, seed, json)
+            }
+        }
     };
     exit(code);
 }

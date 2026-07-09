@@ -14,9 +14,28 @@
 //!      threshold, which are **never auto-applied**: they land on a ratify queue
 //!      for a human to accept or reject.
 //!
+//! There are two ways to source the audit verdicts:
+//!
+//!   1. **Modeled input** (`--audits <file>`): a JSONL of [`AuditResult`] rows
+//!      supplied by the caller. Kept for backward-compat and unit testing — but
+//!      it audits *nothing* on its own, it just replays a hand-authored verdict.
+//!   2. **Real cross-reference** (`--from-violations`): the audit is derived
+//!      from **actual data**. overwatch's four gates (blastguard / propguard /
+//!      specguard / mutategate) now emit real [`ViolationEvent`]s into a per-
+//!      project store whenever a violation is later detected. A change that
+//!      passed all auto-gates but *subsequently* shows up in that violation
+//!      stream (matched by a stable key — its `change_id` against the
+//!      violation's `task_key`) is, by definition, a **miss the gates let
+//!      through**. Deriving [`AuditResult`]s from those matches makes the audit
+//!      real (it reads observed violations, not a modeled file), deterministic
+//!      (a pure cross-reference, no LLM), and closes the loop from the gates'
+//!      emitted violations (B) back into calibration (A).
+//!
 //! Design invariants (this is a gate/tooling binary, so it must be hermetic):
-//!   * **No LLM in the decision path.** The audit result is *structured input*
-//!     the loop consumes; modeling a real adversarial reviewer is out of scope.
+//!   * **No LLM in the decision path.** The audit verdict is either structured
+//!     input the loop consumes, or a deterministic cross-reference of the
+//!     recorded violation stream. Modeling a real adversarial reviewer is out of
+//!     scope; the real path substitutes *observed* violations for a reviewer.
 //!   * **Deterministic sampling.** Sampling is driven by a caller-supplied
 //!     `seed` and a splitmix64 PRNG — never `Date.now()` / unseeded rand — so a
 //!     given (population, fraction, seed) always yields the same sample. That is
@@ -29,6 +48,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use overwatch::violation::{ViolationEvent, ViolationSource};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -220,6 +240,78 @@ pub fn route_feedback(audits: &[AuditResult]) -> Feedback {
     }
 }
 
+/// Map an overwatch [`ViolationSource`] to the gate name this loop uses in its
+/// threshold-adjustment proposals. Kept as an explicit match (not a `Debug`
+/// derive) so the wire name is stable and reviewed.
+fn gate_name(source: ViolationSource) -> &'static str {
+    match source {
+        ViolationSource::Blastguard => "blastguard",
+        ViolationSource::Propguard => "propguard",
+        ViolationSource::Specguard => "specguard",
+        ViolationSource::Mutategate => "mutategate",
+    }
+}
+
+/// Derive audit verdicts from the **real** violation stream by cross-referencing
+/// the auto-gate-passed population against recorded [`ViolationEvent`]s.
+///
+/// This is the heart of the *real* audit source. A change that passed all
+/// auto-gates but later appears in the violation stream — matched by a stable
+/// key: the change's [`GatePassedChange::change_id`] equals the violation's
+/// [`ViolationEvent::task_key`] — is a **miss** the gates let through. For each
+/// such match this emits an [`AuditResult`] with `miss = true`, attributing the
+/// responsible `gate` (from the violation's [`ViolationSource`]) and an
+/// `invariant_hint` (the violation's normalized `signature`, which names the
+/// property/rule that was breached). Changes with **no** matching violation are
+/// **not** misses and produce no verdict (the caller treats an absent verdict as
+/// "clean").
+///
+/// When one change matches multiple violations (e.g. it later breached two
+/// different gates) each match yields its own verdict, so every responsible gate
+/// is fed back. Verdicts are returned sorted by `(change_id, gate, invariant)`
+/// for a deterministic, diffable result.
+///
+/// Pure: a total function of its two inputs. No I/O, no clock, no env — the I/O
+/// (reading the violation store) happens in [`execute_from_violations`].
+pub fn derive_misses_from_violations(
+    changes: &[GatePassedChange],
+    violations: &[ViolationEvent],
+) -> Vec<AuditResult> {
+    use std::collections::BTreeSet;
+
+    // The set of change ids that passed auto-gates — the only keys a violation
+    // can be a "gate let it through" miss against.
+    let passed: BTreeSet<&str> = changes.iter().map(|c| c.change_id.as_str()).collect();
+
+    let mut out: Vec<AuditResult> = violations
+        .iter()
+        .filter(|v| passed.contains(v.task_key.as_str()))
+        .map(|v| AuditResult {
+            change_id: v.task_key.clone(),
+            miss: true,
+            gate: gate_name(v.source).to_string(),
+            invariant_hint: v.signature.clone(),
+        })
+        .collect();
+
+    // Deterministic, diffable order; also de-dupe identical (change,gate,sig)
+    // matches so a repeated violation event doesn't double-count one miss.
+    out.sort_by(|a, b| {
+        (
+            a.change_id.as_str(),
+            a.gate.as_str(),
+            a.invariant_hint.as_str(),
+        )
+            .cmp(&(
+                b.change_id.as_str(),
+                b.gate.as_str(),
+                b.invariant_hint.as_str(),
+            ))
+    });
+    out.dedup();
+    out
+}
+
 /// Load a JSONL file of [`GatePassedChange`] rows (one per line), preserving
 /// file order. Blank lines are skipped; a malformed line reports the file and
 /// 1-based line number. Deterministic: no network, no clock, no env.
@@ -301,6 +393,67 @@ pub fn execute(
             }
         },
     };
+
+    if json_out {
+        report_json(population.len(), &sampled, feedback.as_ref());
+    } else {
+        report_human(population.len(), &sampled, feedback.as_ref());
+    }
+    0
+}
+
+/// End-to-end calibration loop over the **real** violation stream.
+///
+/// Reads the gate-passed population from disk, draws the same deterministic
+/// seeded sample as [`execute`], then — instead of loading a modeled audits
+/// file — reads the *actual* recorded violations via
+/// [`overwatch::store::read_violations`] and derives the misses by
+/// cross-reference ([`derive_misses_from_violations`]). Only the derived
+/// verdicts whose `change_id` is in the sample are routed through the two
+/// feedback paths, exactly as the modeled path does. Returns the process exit
+/// code: `2` on any I/O / parse error, else `0`.
+///
+/// This is what makes the audit real: the misses come from observed gate
+/// violations (data the four gates emitted), not from a hand-authored file.
+/// Nothing here mutates a gate config — the threshold proposals still land on
+/// the ratify queue for a human. `cwd` locates the per-project violation store.
+pub fn execute_from_violations(
+    changes_path: &Path,
+    cwd: &Path,
+    fraction: f64,
+    seed: u64,
+    json_out: bool,
+) -> i32 {
+    let population = match load_changes(changes_path) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("benchkit auditsample: {e:#}");
+            return 2;
+        }
+    };
+    let sampled = sample(&population, fraction, seed);
+
+    // The REAL audit source: cross-reference the population against the
+    // observed violation stream. A gate-passed change that later shows up as a
+    // violation is a miss the gates let through.
+    let violations = match overwatch::store::read_violations(cwd) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("benchkit auditsample: reading violation stream: {e:#}");
+            return 2;
+        }
+    };
+    let derived = derive_misses_from_violations(&population, &violations);
+
+    // Route only the verdicts for changes we actually sampled (same discipline
+    // as the modeled path — never act on a change we did not sample).
+    let in_sample: std::collections::BTreeSet<&str> =
+        sampled.iter().map(|c| c.change_id.as_str()).collect();
+    let scoped: Vec<AuditResult> = derived
+        .into_iter()
+        .filter(|a| in_sample.contains(a.change_id.as_str()))
+        .collect();
+    let feedback = Some(route_feedback(&scoped));
 
     if json_out {
         report_json(population.len(), &sampled, feedback.as_ref());
@@ -517,15 +670,173 @@ mod tests {
 
     #[test]
     fn ratify_queue_never_auto_applies() {
-        // The routing surface only ever *proposes*; there is no apply path here.
-        // This test documents the invariant by asserting the queue is data, not
-        // an effect: routing the same audits twice is idempotent and side-effect
-        // free.
+        // The ratify queue is a *proposal* surface: nothing in this crate may
+        // apply a threshold, mutate a gate config, or otherwise turn a proposal
+        // into an effect. Idempotence alone (the old assertion) is vacuous — it
+        // would stay green even if an auto-apply path were bolted on. So this
+        // test proves the safety property *structurally*: it scans this module's
+        // own source for any code path that would write back to a gate config or
+        // mutate a threshold, and fails if one exists. If someone later adds an
+        // `apply_threshold(...)` / config-write call, THIS test goes red.
+        let src = include_str!("auditsample.rs");
+        // Strip the test module so our own assertion strings don't self-trip.
+        let non_test = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("source has a non-test prefix");
+
+        // Any of these tokens appearing in the non-test code would indicate an
+        // apply / mutation path. Their ABSENCE is the guarantee.
+        let forbidden = [
+            "fn apply",
+            "apply_threshold",
+            "set_threshold",
+            "write_config",
+            "fs::write",
+            "OpenOptions",
+            "save_",
+        ];
+        for needle in forbidden {
+            assert!(
+                !non_test.contains(needle),
+                "ratify queue must never auto-apply: found forbidden mutation token {needle:?} \
+                 in auditsample non-test code — the ratify queue must stay a human-only step"
+            );
+        }
+
+        // And the positive behavioural guarantee: routing only ever produces
+        // data (proposals), and doing it twice is side-effect free.
         let audits = vec![audit("c1", true, "blastguard", "reversible")];
         let a = route_feedback(&audits);
         let b = route_feedback(&audits);
         assert_eq!(a.ratify_queue, b.ratify_queue);
         assert_eq!(a.ratify_queue.len(), 1);
+    }
+
+    fn violation(source: ViolationSource, sig: &str, task_key: &str) -> ViolationEvent {
+        ViolationEvent {
+            source,
+            signature: sig.to_string(),
+            task_key: task_key.to_string(),
+            session_id: "s1".to_string(),
+            ts: 1000,
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn real_audit_cross_reference_match_is_miss_nonmatch_ignored() {
+        // The REAL audit source: a gate-passed change whose change_id matches a
+        // recorded violation's task_key is a miss the gates let through; a
+        // gate-passed change with NO matching violation is not a miss.
+        let changes = vec![
+            change("c001", &["mutategate"]),
+            change("c002", &["propguard"]),
+            change("c003", &["blastguard"]),
+        ];
+        let violations = vec![
+            // Matches c001 -> a miss, attributed to mutategate.
+            violation(
+                ViolationSource::Mutategate,
+                "mutategate:arithmetic-op-swap",
+                "c001",
+            ),
+            // Matches c003 -> a miss, attributed to blastguard.
+            violation(ViolationSource::Blastguard, "blastguard:rm-rf", "c003"),
+            // task_key "c999" is NOT in the gate-passed population -> ignored.
+            violation(ViolationSource::Specguard, "specguard:drift:x", "c999"),
+        ];
+
+        let derived = derive_misses_from_violations(&changes, &violations);
+
+        // Exactly the two matching changes become misses; c002 (no violation)
+        // and c999 (not gate-passed) contribute nothing.
+        assert_eq!(derived.len(), 2);
+        assert!(derived.iter().all(|a| a.miss));
+        assert_eq!(
+            derived,
+            vec![
+                AuditResult {
+                    change_id: "c001".to_string(),
+                    miss: true,
+                    gate: "mutategate".to_string(),
+                    invariant_hint: "mutategate:arithmetic-op-swap".to_string(),
+                },
+                AuditResult {
+                    change_id: "c003".to_string(),
+                    miss: true,
+                    gate: "blastguard".to_string(),
+                    invariant_hint: "blastguard:rm-rf".to_string(),
+                },
+            ]
+        );
+
+        // And the derived misses feed BOTH feedback paths.
+        let fb = route_feedback(&derived);
+        assert_eq!(fb.invariant_candidates.len(), 2);
+        assert_eq!(fb.ratify_queue.len(), 2); // one per responsible gate
+    }
+
+    #[test]
+    fn real_audit_no_matching_violation_yields_no_misses() {
+        let changes = vec![
+            change("c001", &["mutategate"]),
+            change("c002", &["propguard"]),
+        ];
+        // Violation for a task that never passed the gates here -> not a miss.
+        let violations = vec![violation(
+            ViolationSource::Propguard,
+            "propguard:prop-003",
+            "unrelated-task",
+        )];
+        let derived = derive_misses_from_violations(&changes, &violations);
+        assert!(derived.is_empty());
+        let fb = route_feedback(&derived);
+        assert!(fb.invariant_candidates.is_empty());
+        assert!(fb.ratify_queue.is_empty());
+    }
+
+    #[test]
+    fn real_audit_dedupes_repeated_violation_for_same_change() {
+        // The same (change, gate, signature) recorded twice must not
+        // double-count into two misses.
+        let changes = vec![change("c001", &["mutategate"])];
+        let violations = vec![
+            violation(ViolationSource::Mutategate, "mutategate:op", "c001"),
+            violation(ViolationSource::Mutategate, "mutategate:op", "c001"),
+        ];
+        let derived = derive_misses_from_violations(&changes, &violations);
+        assert_eq!(derived.len(), 1);
+    }
+
+    #[test]
+    fn execute_from_violations_reads_real_store_and_routes() {
+        // End-to-end over the real path: seed the overwatch violation store for
+        // a temp project, then confirm execute_from_violations reads it, derives
+        // a miss by cross-reference, and returns 0.
+        let cwd = tempfile::tempdir().unwrap();
+        // A gate-passed change that we will also record a violation against.
+        let changes_path = cwd.path().join("changes.jsonl");
+        std::fs::write(
+            &changes_path,
+            "{\"change_id\":\"c001\",\"gates\":[\"mutategate\"]}\n",
+        )
+        .unwrap();
+
+        // Record a REAL violation whose task_key matches the change.
+        let ev = violation(ViolationSource::Mutategate, "mutategate:op-swap", "c001");
+        overwatch::store::append_violation(cwd.path(), &ev).unwrap();
+
+        // Sanity: the store now has the event (proves we read real data).
+        let read_back = overwatch::store::read_violations(cwd.path()).unwrap();
+        assert_eq!(read_back.len(), 1);
+        assert_eq!(read_back[0].task_key, "c001");
+
+        // fraction 1.0 samples the whole population, so the miss is in-sample.
+        assert_eq!(
+            execute_from_violations(&changes_path, cwd.path(), 1.0, 0, true),
+            0
+        );
     }
 
     #[test]

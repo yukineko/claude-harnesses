@@ -51,6 +51,10 @@ enum Command {
         /// Test command (defaults to config `test_cmd`).
         #[arg(long)]
         cmd: Option<String>,
+        /// Identity (agent/session id) authoring the test. Recorded into the RED
+        /// proof; compared against `tdd green --author` under `strict_separation`.
+        #[arg(long)]
+        author: Option<String>,
     },
     /// Require a RED proof, run the tests, require them to PASS; record GREEN.
     Green {
@@ -58,6 +62,11 @@ enum Command {
         task: String,
         #[arg(long)]
         cmd: Option<String>,
+        /// Identity (agent/session id) authoring the implementation. Under
+        /// `strict_separation` this must differ from the RED proof's `--author`,
+        /// else `tdd green` is rejected (fail-closed).
+        #[arg(long)]
+        author: Option<String>,
     },
     /// Exit 0 iff both RED and GREEN proofs exist for the task.
     Verify {
@@ -103,8 +112,8 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::Gate => gate_command(),
-        Command::Red { task, cmd } => proof_command(&task, &cmd, true),
-        Command::Green { task, cmd } => proof_command(&task, &cmd, false),
+        Command::Red { task, cmd, author } => proof_command(&task, &cmd, &author, true),
+        Command::Green { task, cmd, author } => proof_command(&task, &cmd, &author, false),
         Command::Verify { task } => verify_command(&task),
         Command::Oracle { task } => oracle_command(&task),
         Command::Init { force } => exit_on_err(init(force)),
@@ -202,14 +211,15 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 }
 
 /// `tdd red` / `tdd green`. Manual CLI: non-zero exit signals the skill that the
-/// phase precondition (must-fail / must-pass) was not met.
-fn proof_command(task: &str, cmd: &Option<String>, is_red: bool) -> ! {
+/// phase precondition (must-fail / must-pass, or — under `strict_separation` —
+/// distinct test/impl authorship) was not met.
+fn proof_command(task: &str, cmd: &Option<String>, author: &Option<String>, is_red: bool) -> ! {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
     let r = if is_red {
-        proof::red(&root, &cfg, task, cmd)
+        proof::red(&root, &cfg, task, cmd, author)
     } else {
-        proof::green(&root, &cfg, task, cmd)
+        proof::green(&root, &cfg, task, cmd, author)
     };
     match r {
         Ok(()) => std::process::exit(0),
@@ -282,6 +292,7 @@ fn status() {
     println!("test_cmd:      {}", cfg.test_cmd);
     println!("proof_dir:     {}", cfg.proof_dir);
     println!("state_dir:     {}", cfg.state_dir.display());
+    println!("strict_separation: {}", cfg.strict_separation);
     println!();
     let verdict = gate::evaluate(&cfg, &root);
     println!("{}", gate::human_report(&verdict, &cfg));

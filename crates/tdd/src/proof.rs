@@ -61,6 +61,54 @@ fn judge_green(passed: bool, has_red: bool) -> Result<()> {
     Ok(())
 }
 
+/// Canonicalize an author identity for comparison: trimmed + lowercased, so
+/// `"Agent-A"` and `" agent-a "` are recognised as the same identity. Mirrors
+/// `condukt::verify::canonical` used for the worker/verifier-model invariant.
+fn canonical_author(id: &str) -> String {
+    id.trim().to_lowercase()
+}
+
+/// Pure gate: strict test/impl author separation (opt-in, fail-closed under
+/// strict mode). Mirrors condukt's `resolve_verifier_model`/`same_model`
+/// invariant that the verifier model must never equal the worker model — here
+/// the RED (test-authoring) identity must never equal the GREEN
+/// (implementation) identity, so one agent can't write a wrong implementation
+/// and a matching wrong test (reward hacking).
+///
+/// - `strict == false` (default): always allowed, regardless of identities —
+///   fully backward compatible.
+/// - `strict == true`: allowed iff both identities are present and differ
+///   (case-insensitive, trimmed). Missing/empty identities are also rejected
+///   under strict mode, since separation can't be verified without them.
+pub fn judge_separation(
+    strict: bool,
+    test_author: Option<&str>,
+    impl_author: Option<&str>,
+) -> Result<()> {
+    if !strict {
+        return Ok(());
+    }
+    let test_author = test_author.map(str::trim).filter(|s| !s.is_empty());
+    let impl_author = impl_author.map(str::trim).filter(|s| !s.is_empty());
+    let (Some(test_author), Some(impl_author)) = (test_author, impl_author) else {
+        bail!(
+            "strict_separation is enabled but the test-author and/or impl-author identity is \
+             missing — pass `--author <id>` to both `tdd red` and `tdd green` so separation can \
+             be verified."
+        );
+    };
+    if canonical_author(test_author) == canonical_author(impl_author) {
+        bail!(
+            "strict_separation: the RED (test-author=\"{test_author}\") and GREEN \
+             (impl-author=\"{impl_author}\") identities are the same — the same agent must not \
+             both write the failing test and its implementation (this defeats test-first and \
+             enables reward hacking). Have a different agent/session run `tdd green`, or disable \
+             strict_separation if this is intentional."
+        );
+    }
+    Ok(())
+}
+
 fn write_artifact(path: &Path, value: &serde_json::Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -77,7 +125,17 @@ fn resolve_cmd<'a>(cmd: &'a Option<String>, cfg: &'a Config) -> &'a str {
 }
 
 /// `tdd red`: run the tests, require failure, record the RED proof.
-pub fn red(root: &Path, cfg: &Config, task: &str, cmd: &Option<String>) -> Result<()> {
+///
+/// `author` is an optional identity (agent/session id) for the test-authoring
+/// step, recorded into the proof so a later `tdd green --author <id>` can be
+/// checked against it under `strict_separation` (see [`judge_separation`]).
+pub fn red(
+    root: &Path,
+    cfg: &Config,
+    task: &str,
+    cmd: &Option<String>,
+    author: &Option<String>,
+) -> Result<()> {
     let cmdline = resolve_cmd(cmd, cfg);
     let tmp = cfg.state_dir.join("tmp");
     let out = runner::run_cmd(
@@ -99,6 +157,7 @@ pub fn red(root: &Path, cfg: &Config, task: &str, cmd: &Option<String>) -> Resul
             "exit_code": out.exit_code,
             "ts": chrono::Local::now().to_rfc3339(),
             "output_tail": out.output_tail,
+            "author": author,
         }),
     )?;
     println!(
@@ -109,10 +168,38 @@ pub fn red(root: &Path, cfg: &Config, task: &str, cmd: &Option<String>) -> Resul
     Ok(())
 }
 
+/// Fail-soft read of a proof artifact's `author` field (`None` if missing,
+/// unreadable, corrupt, or the field is absent/not a string).
+fn read_author(root: &Path, cfg: &Config, task: &str, kind: &str) -> Option<String> {
+    let path = artifact_path(root, cfg, task, kind);
+    let text = std::fs::read_to_string(&path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    value
+        .get("author")?
+        .as_str()
+        .map(std::string::ToString::to_string)
+}
+
 /// `tdd green`: require a RED proof, run the tests, require success, record GREEN.
-pub fn green(root: &Path, cfg: &Config, task: &str, cmd: &Option<String>) -> Result<()> {
+///
+/// `author` is an optional identity for the implementation step. Under
+/// `cfg.strict_separation` it is compared against the RED proof's recorded
+/// author and rejected (fail-closed) if they are the same identity — see
+/// [`judge_separation`]. When `strict_separation` is off (the default) this
+/// check is skipped entirely, so behaviour is unchanged.
+pub fn green(
+    root: &Path,
+    cfg: &Config,
+    task: &str,
+    cmd: &Option<String>,
+    author: &Option<String>,
+) -> Result<()> {
     let red_path = artifact_path(root, cfg, task, "red");
     let has_red = red_path.exists();
+    if cfg.strict_separation {
+        let test_author = read_author(root, cfg, task, "red");
+        judge_separation(true, test_author.as_deref(), author.as_deref())?;
+    }
     let cmdline = resolve_cmd(cmd, cfg);
     let tmp = cfg.state_dir.join("tmp");
     let out = runner::run_cmd(
@@ -134,6 +221,7 @@ pub fn green(root: &Path, cfg: &Config, task: &str, cmd: &Option<String>) -> Res
             "exit_code": out.exit_code,
             "ts": chrono::Local::now().to_rfc3339(),
             "red_proof": red_path.display().to_string(),
+            "author": author,
         }),
     )?;
     println!(
@@ -190,6 +278,110 @@ mod tests {
         assert!(judge_green(true, true).is_ok());
         assert!(judge_green(true, false).is_err()); // no RED proof
         assert!(judge_green(false, true).is_err()); // still failing
+    }
+
+    // ── strict test/impl author separation (Item C) ─────────────────────────
+    //
+    // Pure gate over (test_author, impl_author, strict_flag) — no LLM in the
+    // decision path, mirroring condukt's verifier-model≠worker-model
+    // invariant (`resolve_verifier_model`/`same_model`).
+
+    #[test]
+    fn separation_allows_when_not_strict_regardless_of_identity() {
+        // Backward compatible: strict mode is opt-in. Even identical (or
+        // missing) identities are allowed when `strict` is false.
+        assert!(judge_separation(false, Some("agent-a"), Some("agent-a")).is_ok());
+        assert!(judge_separation(false, None, None).is_ok());
+    }
+
+    #[test]
+    fn separation_rejects_same_identity_under_strict_mode() {
+        assert!(judge_separation(true, Some("agent-a"), Some("agent-a")).is_err());
+        // Case-insensitive / whitespace-insensitive identity comparison.
+        assert!(judge_separation(true, Some("Agent-A"), Some(" agent-a ")).is_err());
+    }
+
+    #[test]
+    fn separation_allows_different_identity_under_strict_mode() {
+        assert!(judge_separation(true, Some("agent-a"), Some("agent-b")).is_ok());
+    }
+
+    #[test]
+    fn separation_rejects_missing_identity_under_strict_mode() {
+        // Can't verify separation without both identities — fail-closed.
+        assert!(judge_separation(true, None, Some("agent-b")).is_err());
+        assert!(judge_separation(true, Some("agent-a"), None).is_err());
+        assert!(judge_separation(true, None, None).is_err());
+        assert!(judge_separation(true, Some(""), Some("agent-b")).is_err());
+    }
+
+    #[test]
+    fn green_rejects_same_author_end_to_end_under_strict_mode() {
+        // Exercises the real `green()` wiring: a RED proof recorded with
+        // author "agent-a", then `green()` called with the SAME author under
+        // strict_separation must be rejected — even before the test command
+        // itself would run (fail-closed, checked first).
+        let base = std::env::temp_dir().join(format!("tdd-sep-same-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let cfg = Config {
+            proof_dir: ".tdd".to_string(),
+            strict_separation: true,
+            ..Config::default()
+        };
+        write_artifact(
+            &artifact_path(&base, &cfg, "t1", "red"),
+            &json!({"passed": false, "author": "agent-a"}),
+        )
+        .unwrap();
+
+        let err = green(
+            &base,
+            &cfg,
+            "t1",
+            &Some("true".to_string()),
+            &Some("agent-a".to_string()),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("strict_separation"),
+            "expected a strict_separation rejection, got: {err}"
+        );
+        // No GREEN proof should have been written since the gate rejected
+        // before the test command ran.
+        assert!(!artifact_path(&base, &cfg, "t1", "green").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn green_allows_different_author_end_to_end_under_strict_mode() {
+        let base = std::env::temp_dir().join(format!("tdd-sep-diff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let cfg = Config {
+            proof_dir: ".tdd".to_string(),
+            strict_separation: true,
+            ..Config::default()
+        };
+        write_artifact(
+            &artifact_path(&base, &cfg, "t1", "red"),
+            &json!({"passed": false, "author": "agent-a"}),
+        )
+        .unwrap();
+
+        // "true" always exits 0, satisfying judge_green's pass requirement.
+        green(
+            &base,
+            &cfg,
+            "t1",
+            &Some("true".to_string()),
+            &Some("agent-b".to_string()),
+        )
+        .unwrap();
+        assert!(artifact_path(&base, &cfg, "t1", "green").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

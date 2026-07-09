@@ -50,8 +50,8 @@ Fail→Pass ゲート（`condukt state check-oracle`）が `fix`/`feature` タ�
 | サブコマンド | 目的 |
 |---|---|
 | `tdd gate` | Stop hook 本体。実装が追加されテストが無いとき停止をブロックする。Claude へは常に exit 0 で返し（停止のブロックは exit code ではなく出力 JSON の `decision` フィールドで行う）、手動 CLI でのみ exit 1 を返す。 |
-| `tdd red --task <id> [--cmd ...]` | テストを実行し**失敗**を要求して RED 証跡を記録する。既に通っていれば拒否（test-first 不成立）。 |
-| `tdd green --task <id> [--cmd ...]` | 先行 RED 証跡を要求し、テストを実行して**成功**を要求し GREEN 証跡を記録する。 |
+| `tdd red --task <id> [--cmd ...] [--author <id>]` | テストを実行し**失敗**を要求して RED 証跡を記録する。既に通っていれば拒否（test-first 不成立）。`--author` は任意で、テスト作成者の identity を証跡に記録する（`strict_separation` で使う）。 |
+| `tdd green --task <id> [--cmd ...] [--author <id>]` | 先行 RED 証跡を要求し、テストを実行して**成功**を要求し GREEN 証跡を記録する。`strict_separation = true` のとき、`--author` の identity が RED 証跡の author と同一なら拒否する（fail-closed）。 |
 | `tdd verify --task <id>` | RED と GREEN の両証跡が揃っていれば exit 0。 |
 | `tdd oracle --task <id>` | RED→GREEN の遷移を分類し JSON 判定を出力する（上記参照）。有効な Fail→Pass のときだけ exit 0。 |
 | `tdd status` | 解決された設定と、cwd に対してゲートが何をするかを表示する。 |
@@ -70,8 +70,20 @@ reset_after_secs = 600      # アイドルがこの秒数を超えると試行�
 min_added_impl_lines = 1    # 追加実装行がこの行数に達したらテストを要求
 test_cmd = "cargo test"     # `tdd red` / `tdd green` の既定テストコマンド
 proof_dir = ".tdd"          # RED/GREEN 証跡の書き出し先
+strict_separation = false   # true でテスト作成者≠実装者を強制（下記）
 # impl_globs / test_path_globs / test_markers で言語別の既定を上書き可能
 ```
+
+### strict モード: テスト生成者と実装者の分離（opt-in）
+
+`condukt` の verifier-model ≠ worker-model 不変条件と同じ発想を `tdd` の RED→GREEN に持ち込む。
+`tdd.toml` で `strict_separation = true` にすると、`tdd green --task <id> --author <impl-id>` は
+先行する RED 証跡（`tdd red --task <id> --author <test-id>` で記録された author）と `--author` の
+identity を比較し、**同一なら fail-closed で拒否**する（同じ agent が「間違った実装」と「それに
+帳尻を合わせた間違ったテスト」の両方を書く reward hacking を防ぐ）。identity は大小文字・前後空白を
+無視して比較する。片方でも `--author` が無い状態で strict モードを使うと（比較できないため）拒否
+される。既定（`strict_separation` 未設定 or `false`）では従来どおり `--author` は完全に任意で、
+比較は行われない（後方互換）。
 
 ### インストール
 

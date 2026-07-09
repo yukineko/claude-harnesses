@@ -7,6 +7,7 @@
 
 pub mod classify;
 pub mod detect;
+pub mod diffrisk;
 pub mod exclude;
 pub mod hookio;
 pub mod model;

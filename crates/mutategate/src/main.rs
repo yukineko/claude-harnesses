@@ -13,12 +13,12 @@
 //!   * `1`  — kill-rate below threshold, or no viable mutants (gate failed).
 //!   * `2`  — usage/IO/parse error (could not evaluate the gate at all).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
 
-use mutategate::{evaluate, parse_outcomes};
+use mutategate::{evaluate, parse_outcomes, GateOutcome};
 
 /// Default minimum kill-rate. 0.80 mirrors the practical robustness bar used by
 /// established mutation tools (e.g. PIT) and the Meta ACH line of work: below it,
@@ -108,6 +108,81 @@ fn main() -> ExitCode {
         ExitCode::SUCCESS
     } else {
         eprintln!("  FAIL: {}", outcome.reason);
+        emit_violation(&outcome, &cli.outcomes);
         ExitCode::from(1)
+    }
+}
+
+/// Deterministic, non-empty reason-class token identifying *why* the gate
+/// failed. `MutationSummary` carries only aggregate counts (no per-mutant
+/// operator), so unlike blastguard/propguard the discriminator here cannot
+/// be a specific rule/property id — it is the class of failure reason
+/// instead. Kept in sync with the two `passed: false` arms of
+/// [`mutategate::evaluate`].
+fn failure_reason_class(outcome: &GateOutcome) -> &'static str {
+    if outcome.kill_rate.is_none() {
+        "no-viable-mutants"
+    } else {
+        "below-threshold"
+    }
+}
+
+/// Record a fleet-level violation for a FAILed gate, fail-soft: never
+/// changes the gate's exit code or stdout/stderr, and never panics when the
+/// overwatch store is unwritable (e.g. sandboxed/read-only HOME, missing
+/// repo root). A PASS never calls this, so a PASS emits nothing.
+fn emit_violation(outcome: &GateOutcome, outcomes_path: &Path) {
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let discriminator = failure_reason_class(outcome);
+    let raw = overwatch::violation::RawViolation {
+        mutation_operator: Some(discriminator),
+        ..Default::default()
+    };
+
+    let session_id = std::env::var("CLAUDE_CODE_SESSION_ID")
+        .unwrap_or_else(|_| format!("pid-{}", std::process::id()));
+    let task_key = outcomes_path.display().to_string();
+    let now = overwatch::store::now();
+
+    let event = overwatch::violation::build_event(
+        overwatch::violation::ViolationSource::Mutategate,
+        &raw,
+        task_key,
+        session_id,
+        now,
+        Some(outcome.reason.clone()),
+    );
+
+    // Best-effort: any store I/O failure is swallowed, not surfaced.
+    let _ = overwatch::store::append_violation(&cwd, &event);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(kill_rate: Option<f64>) -> GateOutcome {
+        GateOutcome {
+            summary: mutategate::MutationSummary::default(),
+            kill_rate,
+            threshold: 0.80,
+            passed: false,
+            reason: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn failure_reason_class_is_nonempty_and_deterministic() {
+        assert_eq!(failure_reason_class(&outcome(None)), "no-viable-mutants");
+        assert_eq!(failure_reason_class(&outcome(Some(0.5))), "below-threshold");
+        // Repeated calls on equivalent input must agree (deterministic).
+        assert_eq!(
+            failure_reason_class(&outcome(Some(0.5))),
+            failure_reason_class(&outcome(Some(0.5)))
+        );
     }
 }

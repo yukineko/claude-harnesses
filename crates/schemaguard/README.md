@@ -19,9 +19,36 @@ on its exit code.
 | `metrics` | Print reject counts per schema (`--json` for machine-readable) | `0` |
 | `list` | List known schema names | `0` |
 
-On a violation, `errors[]` carries `{path, problem}` entries — the re-ask
-contract the producer feeds back to the model. Both parse failures and field
-violations are recorded as rejects.
+### Verdict schema (`check` output)
+
+`check` always prints a single JSON verdict object on stdout. There are two
+shapes, keyed on how far validation got:
+
+- **Valid or field-invalid** (JSON parsed, schema resolved):
+
+  ```json
+  { "valid": true|false, "schema": "<name>", "errors": [ { "path": "a.b", "problem": "..." } ] }
+  ```
+
+  `errors[]` is empty when `valid` is `true`. When `valid` is `false` each entry
+  is `{path, problem}` — a JSON-path into the payload plus a human-readable
+  problem — and this is the re-ask contract the producer feeds back to the model.
+
+- **Input failure** (unreadable stdin/file or unparseable JSON): no per-field
+  detail is available, so the verdict is
+
+  ```json
+  { "valid": false, "error": "<message>" }
+  ```
+
+  Note the singular `error` (a string) rather than the plural `errors` array.
+
+An **unknown schema** is reported earlier, before any input is read: a plain
+message goes to stderr (not a JSON verdict on stdout) and the process exits `2`.
+
+Exit codes: `0` (`valid:true`), `1` (`valid:false` with `errors[]`), `2` (input
+failure `{valid:false, error}` on stdout, or unknown schema on stderr). Both
+parse failures and field violations are counted as rejects in `metrics`.
 
 Declared schemas: `decomposition`, `episode`, `playbook`, `scout-measure`
 (see `schemaguard list`).

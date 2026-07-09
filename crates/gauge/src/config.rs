@@ -9,8 +9,9 @@ use serde::Deserialize;
 /// A per-model price override (USD per 1M input/output tokens). `pattern` is
 /// matched as a substring against the model id; the first match wins.
 ///
-/// Defined in `harness_core::pricing`; re-exported here so gauge's call sites
-/// (`config::PriceOverride`) are unchanged.
+/// Re-export shim, not the real impl: the pricing type and its matching logic
+/// live in `harness_core::pricing`. Re-exported here only so gauge's existing
+/// call sites (`config::PriceOverride`) keep working — edit it in harness-core.
 pub use harness_core::pricing::PriceOverride;
 
 #[derive(Debug, Clone)]

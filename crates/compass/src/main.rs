@@ -1,10 +1,11 @@
 //! compass — goal re-grounding + next-move derivation upstream of condukt.
 //!
 //! A thin, subscription-native orchestrator (DESIGN §2): the binary keeps state
-//! and renders deterministic context; the LLM (skill) does the judging. This is
-//! the **scaffold** — only `charter` (show/parse) and config loading have real
-//! behavior. `nudge` / `breadcrumb` / `gap` / `route` are wired into the
-//! dispatch but stubbed until later tasks (DESIGN §15-B implementation order).
+//! and renders deterministic context; the LLM (skill) does the judging. The
+//! subcommands are all implemented — `charter` (show/parse), config loading,
+//! plus `nudge` / `breadcrumb` / `gap` / `route` and the carve floor
+//! (`evaluate` / `apply`) are each wired into the dispatch with real behavior
+//! (DESIGN §15-B implementation order, now complete).
 
 mod breadcrumb;
 mod c3screen;

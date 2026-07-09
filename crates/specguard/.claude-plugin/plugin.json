@@ -1,6 +1,6 @@
 {
   "name": "specguard",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "description": "仕様↔実装 整合監査ハーネスを Claude Code から subscription-native に実行する。各 shard を read-only な in-session subagent で監査し (nested claude --print なし)、決定的ハーネス (scope/render/parse/report) は specguard バイナリに委譲する。",
   "author": {
     "name": "yukineko"

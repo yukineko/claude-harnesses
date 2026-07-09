@@ -17,7 +17,8 @@
 
 use crate::config::Config;
 use crate::state;
-use blastguard::classify::{classify, Risk, RiskAssessment};
+use blastguard::classify::{classify_change, Risk, RiskAssessment};
+use blastguard::diffrisk::SensitiveConfig;
 use std::path::Path;
 
 /// The two-state verdict emitted by [`decide_gate_exec`]: run the gated task
@@ -72,7 +73,19 @@ fn gather_assessment(
     let raw = state::load_decomposition(cfg, cwd, run_id).ok()?;
     let dec = serde_json::from_str::<crate::model::Decomposition>(&raw).ok()?;
     let task = dec.tasks.iter().find(|t| t.id == task_id)?;
-    Some(classify(&crate::schedule::task_action_text(task)))
+    // BOUNDED SCOPE: at gate-check time there is no diff yet (the task hasn't
+    // executed), so we only wire the sensitive-path glob signal (which needs
+    // only `paths`) via `classify_change`. The public-symbol-diff signal
+    // legitimately cannot fire here (empty diff_text) and simply won't —
+    // matching classify_change's documented additive/backward-compatible
+    // behavior. `touched_files` is condukt's own task field, so this is free.
+    let sensitive = SensitiveConfig::default();
+    Some(classify_change(
+        &crate::schedule::task_action_text(task),
+        &task.touched_files,
+        "",
+        &sensitive,
+    ))
 }
 
 /// Handler for `condukt gate check --run RID --task TASKID`. Gathers the

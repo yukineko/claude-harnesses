@@ -238,10 +238,18 @@ pub fn classify(text: &str) -> RiskAssessment {
 /// diff-level semantic risk — configurable sensitive-path globs and
 /// public/exported-symbol changes (see [`crate::diffrisk`]) — into ONE
 /// [`RiskAssessment`]. Both signals ride the same `requires_gate` escalation
-/// condukt's `gate check` already consults, so a change that touches an
-/// auth/payment/PII path or an exported API surface is force-gated exactly
-/// like a mislabelled `git push`, without callers needing a second parallel
-/// risk path.
+/// axis, so a change that touches an auth/payment/PII path or an exported API
+/// surface is force-gated exactly like a mislabelled `git push`, without
+/// callers needing a second parallel risk path.
+///
+/// condukt's gate wires this in at two sites — [`crate`]'s consumer is
+/// condukt's `schedule::schedule` force-gate and `gate_exec::gather_assessment`
+/// (both `crates/condukt/src`) — but only for the **sensitive-path** signal:
+/// neither site has a diff at the time it classifies (schedule-time /
+/// pre-execution), so `diff_text` is passed empty and the public-symbol-diff
+/// signal does not fire there. A future diff-aware call site (e.g. post-
+/// implementation, pre-merge) would additionally light up the public-symbol
+/// signal by passing real `diff_text`.
 ///
 /// `text` is the free-text action description ([`classify`]'s existing
 /// input — title + done-criteria + touched files, unchanged from today).

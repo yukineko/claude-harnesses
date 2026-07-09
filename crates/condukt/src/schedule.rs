@@ -12,7 +12,8 @@
 //! same decomposition always yields the same schedule.
 
 use crate::model::{Batch, Class, Decomposition, Schedule, Task};
-use blastguard::classify::classify;
+use blastguard::classify::{classify_change, Risk};
+use blastguard::diffrisk::SensitiveConfig;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::collections::{HashMap, HashSet};
 
@@ -248,10 +249,26 @@ pub(crate) fn task_action_text(t: &Task) -> String {
 /// Compute the deterministic schedule. `shared_globs` come from config: any
 /// parallel task touching one is demoted to serial. A high-risk irreversible
 /// action (deploy/push/release, per [`blastguard::classify`]) is force-gated
-/// regardless of its declared `class`.
+/// regardless of its declared `class`. Additionally, a task whose
+/// `touched_files` hit a configured sensitive-path glob (auth/payment/PII,
+/// see [`blastguard::diffrisk::SensitiveConfig`]) is force-gated too, via
+/// [`blastguard::classify::classify_change`]. BOUNDED SCOPE: pre-execution
+/// there is no diff yet, so only the sensitive-path signal (which needs only
+/// `paths`) can fire here — the public-symbol-diff signal needs a real diff
+/// and is out of scope for this (schedule-time) call site.
+///
+/// NOTE on the gate predicate: [`blastguard::classify::RiskAssessment::requires_gate`]
+/// is `High && !reversible`, but [`blastguard::diffrisk::classify_diff`]
+/// deliberately always reports `reversible: true` for path/diff-derived
+/// signals (a human can still revert the commit — see its doc comment), so a
+/// sensitive-path hit alone tops out at `Medium`/reversible and can never
+/// trip `requires_gate()` on its own. We therefore force-gate on
+/// `requires_gate() || risk >= Risk::Medium`, which is exactly the "review
+/// required" OR that `classify_diff`'s doc comment anticipates callers add.
 pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
     let mut sched = Schedule::default();
     let shared = build_globset(shared_globs);
+    let sensitive = SensitiveConfig::default();
 
     let mut gated: Vec<String> = Vec::new();
     let mut experiment: Vec<String> = Vec::new();
@@ -259,11 +276,14 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
 
     for t in &dec.tasks {
         // Deterministic force-gate (closes the LLM under-tag hole): a high-risk
-        // irreversible action — deploy / push / release — is quarantined under
-        // `gated` regardless of the LLM-declared `class`. blastguard's graded
+        // irreversible action — deploy / push / release, OR a change touching a
+        // sensitive path (auth/payment/PII) — is quarantined under `gated`
+        // regardless of the LLM-declared `class`. blastguard's graded
         // classifier is the single source of the risk/reversibility axes, so a
-        // deploy mislabelled `parallel` can never slip past the only outward gate.
-        if classify(&task_action_text(t)).requires_gate() {
+        // deploy mislabelled `parallel` can never slip past the only outward
+        // gate, and neither can a sensitive-path change.
+        let assessment = classify_change(&task_action_text(t), &t.touched_files, "", &sensitive);
+        if assessment.requires_gate() || assessment.risk >= Risk::Medium {
             gated.push(t.id.clone());
             if !matches!(t.class, Class::Gated) {
                 sched.warnings.push(format!(
@@ -529,6 +549,46 @@ mod tests {
             s.warnings,
         );
         // The genuinely-benign parallel task is unaffected.
+        assert!(
+            batched.iter().any(|id| *id == "safe"),
+            "benign task must still batch; batched={batched:?}",
+        );
+    }
+
+    #[test]
+    fn sensitive_path_task_tagged_parallel_is_force_gated() {
+        // A task whose touched_files hit a sensitive-path glob (auth/**) must be
+        // force-gated via classify_change's sensitive-path signal, exactly like a
+        // mislabelled deploy — even though nothing in its title/done-criteria
+        // text looks like a deploy/push action.
+        let d = dec(vec![
+            task("safe", &["src/a.rs"], &[], Class::Parallel),
+            task("touch-auth", &["src/auth/login.rs"], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+
+        assert!(
+            s.gated.contains(&"touch-auth".to_string()),
+            "a task touching a sensitive path must be force-gated even when tagged parallel; gated={:?}",
+            s.gated,
+        );
+        let batched: Vec<&String> = s.batches.iter().flat_map(|b| b.parallel.iter()).collect();
+        assert!(
+            !batched.iter().any(|id| *id == "touch-auth"),
+            "force-gated sensitive-path task must NOT appear in a parallel batch; batched={batched:?}",
+        );
+        assert!(
+            s.warnings.iter().any(|w| w.contains("touch-auth")),
+            "force-gating must be announced in warnings; warnings={:?}",
+            s.warnings,
+        );
+        // The genuinely non-sensitive parallel task is unaffected — additive,
+        // not over-gating unrelated tasks.
+        assert!(
+            !s.gated.contains(&"safe".to_string()),
+            "non-sensitive task must NOT be gated; gated={:?}",
+            s.gated,
+        );
         assert!(
             batched.iter().any(|id| *id == "safe"),
             "benign task must still batch; batched={batched:?}",

@@ -33,7 +33,7 @@
 | blastguard | always-on | Bash/ファイル操作の破壊的コマンドを PreToolUse で deny する（機微パス glob／公開シンボル変更の diff リスクも RiskAssessment に合流） |
 | budgetguard | always-on | Stop でセッション/日次のコスト上限を監視し超過ターンを阻止する |
 | compass | always-on | condukt 上流のゴール再接地＋次の一手導出（subscription-native） |
-| condukt | always-on | interpreter/researcher/worker/verifier + Rust binary の決定論オーケストレーションエンジン |
+| condukt | always-on | interpreter/researcher/worker/verifier + Rust binary の決定論オーケストレーションエンジン（cross-task lessons ライフサイクル＋`learning-signal` 計測集計を内蔵） |
 | context-governor | always-on | 組込みコンパクションの薄い制御層（pin + lossless-recall + retrieval + tool-hygiene） |
 | ctxrot | always-on | context 劣化ガード（検出・救済・復元・蒸留＋load/pin/drop 制御） |
 | curate | manual | fugu-router playbook を evalkit の versioned golden データセットへ昇格する |
@@ -59,8 +59,8 @@
 | scout | manual | 5レンズ並列監査で施策を生成し backlog へ積んで /flow へ渡す SOURCE |
 | session-insights | always-on | セッション単位でツール/ターン/ファイル/サイズ・カテゴリを集計、Obsidian 記録も可 |
 | ship | event-scoped | commit・merge・push・plugin-update の出荷儀式を促す（未出荷状態を検出・subscription-native） |
-| specguard | always-on | 仕様↔実装の整合を監査する read-only ハーネス（subscription-native） |
-| stuckguard | always-on | PostToolUse で反復操作・編集スラッシュを検知しエスカレーションする |
+| specguard | always-on | 仕様↔実装の整合を監査する read-only ハーネス（subscription-native）＋ polarity synonym guard の段階的 ratification ＋ spec-map ストア |
+| stuckguard | always-on | PostToolUse で反復操作・編集スラッシュを検知しエスカレーションする（Jaccard near-repeat ＋ progress-score 3信号 stall advisory ＋ escalation 時の lesson write/retrieve） |
 | taskprog | always-on | `.claude/progress.md` をセッション間で同期し HOTL ハンドオフを支援する |
 | tdd | always-on | Stop でテストなし実装を阻止するテストファースト・ゲート（RED before GREEN） |
 | tracekit | manual | condukt run を span 木として記録・描画し OTel GenAI-semconv JSON を export するトレーサ |

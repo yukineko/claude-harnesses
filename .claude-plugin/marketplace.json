@@ -131,7 +131,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: an interpreter/worker/verifier skill plus a Rust binary that schedules tasks into parallel/serial batches by file-conflict analysis, manages the git-worktree lifecycle, tracks run state, and gates completion. Subscription-native (skill + agents + hook, no API key).",
-      "version": "0.7.37",
+      "version": "0.7.38",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -628,7 +628,7 @@
     {
       "name": "specguard",
       "description": "仕様↔実装 整合監査ハーネスを Claude Code から subscription-native に実行する。各 shard を read-only な in-session subagent で監査し (nested claude --print なし)、決定的ハーネス (scope/render/parse/report) は specguard バイナリに委譲する。",
-      "version": "0.2.16",
+      "version": "0.2.17",
       "category": "quality",
       "keywords": [
         "spec",
@@ -654,7 +654,7 @@
     {
       "name": "stuckguard",
       "description": "Stuck-loop detector + escalation for Claude Code: a PostToolUse hook that spots repeated identical actions and edit thrash, then injects an escalating nudge to change approach or ask the user for help. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "category": "quality",
       "keywords": [
         "hooks",

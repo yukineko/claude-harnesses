@@ -10,6 +10,7 @@ use std::process::exit;
 
 use clap::{Parser, Subcommand};
 
+use benchkit::auditsample;
 use benchkit::download::{self, Outcome};
 use benchkit::harness::{self, PatchGenerator};
 use benchkit::loader;
@@ -56,6 +57,30 @@ enum Command {
         /// Run the REAL exec path (git clone + git apply + pytest; network + shell).
         #[arg(long)]
         real: bool,
+    },
+    /// Post-hoc sampling calibration loop over auto-gate-passed changes.
+    ///
+    /// Reads a JSONL of changes that passed only via auto-gates, draws a
+    /// deterministic seeded sample, and (when audit verdicts are supplied)
+    /// routes the misses into two feedback paths: new-invariant candidates and
+    /// a threshold-adjustment ratify queue (never auto-applied). Pure and
+    /// hermetic — no LLM in the decision path, no clock in the sampling.
+    AuditSample {
+        /// JSONL of gate-passed changes (one GatePassedChange per line).
+        changes: PathBuf,
+        /// Optional JSONL of stricter-audit verdicts (one AuditResult per line).
+        #[arg(long)]
+        audits: Option<PathBuf>,
+        /// Fraction of the population to sample, in [0.0, 1.0] (default 0.1).
+        #[arg(long, default_value_t = 0.1)]
+        fraction: f64,
+        /// PRNG seed for reproducible sampling (deterministic; required for
+        /// hermetic runs — never derived from the clock).
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        /// Emit a machine-readable JSON report instead of the human summary.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -168,6 +193,13 @@ fn main() {
                 1
             }
         },
+        Command::AuditSample {
+            changes,
+            audits,
+            fraction,
+            seed,
+            json,
+        } => auditsample::execute(&changes, audits.as_deref(), fraction, seed, json),
     };
     exit(code);
 }

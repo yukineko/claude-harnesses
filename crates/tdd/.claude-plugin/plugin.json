@@ -1,6 +1,6 @@
 {
   "name": "tdd",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Test-first gate for Claude Code: a Stop hook that blocks the turn when implementation code lands without an accompanying test, plus a /tdd skill and red/green/verify subcommands that make test-first (RED before GREEN) a verifiable artifact. Subscription-native (one hook + skill + bundled Rust binary, no API key).",
   "author": { "name": "yukineko" },
   "keywords": ["tdd", "tests", "test-first", "hooks", "rust"]

@@ -262,6 +262,18 @@ pub fn green(
 ) -> Result<()> {
     let red_path = artifact_path(root, cfg, task, "red");
     let has_red = red_path.exists();
+    // Check RED-proof existence FIRST, before the strict_separation identity
+    // check: otherwise a `tdd green --author X` run *without* a prior `tdd
+    // red` gets misdiagnosed as "identity is missing" (there's no RED
+    // artifact to read an author from) instead of the correct "no RED proof
+    // found" — even though `--author` was passed correctly. This mirrors the
+    // same early bail `judge_green` performs, just moved ahead of the
+    // identity check so the more fundamental precondition is reported first.
+    // `strict_separation`'s own job — rejecting a RED proof that *does*
+    // exist but has a missing/matching author identity — is unchanged below.
+    if !has_red {
+        bail!("no RED proof found — run `tdd red --task <id>` before implementing.");
+    }
     let author = resolve_author(author);
     if cfg.strict_separation {
         let test_author = read_author(root, cfg, task, "red");
@@ -641,6 +653,87 @@ mod tests {
             Some(v) => std::env::set_var("CLAUDE_CODE_SESSION_ID", v),
             None => std::env::remove_var("CLAUDE_CODE_SESSION_ID"),
         }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ── finding 9: RED-proof existence must be checked before the
+    // strict_separation identity check ──────────────────────────────────────
+    //
+    // Regression coverage for the ordering bug: `tdd green --author X` run
+    // without a prior `tdd red` must report "no RED proof found", not the
+    // misleading "identity is missing" (even though `--author` was passed).
+
+    #[test]
+    fn green_reports_missing_red_proof_not_identity_error_when_red_absent() {
+        // (a) No RED proof at all + `--author` given + strict_separation on:
+        // must fail with the RED-proof-not-found message, never the identity
+        // error (the author WAS supplied correctly).
+        let base = std::env::temp_dir().join(format!("tdd-finding9-nored-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let cfg = Config {
+            proof_dir: ".tdd".to_string(),
+            strict_separation: true,
+            ..Config::default()
+        };
+
+        let err = green(
+            &base,
+            &cfg,
+            "t1",
+            &Some("true".to_string()),
+            &Some("agent-a".to_string()),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no RED proof found"),
+            "expected 'no RED proof found', got: {msg}"
+        );
+        assert!(
+            !msg.contains("identity"),
+            "must not misreport as an identity error when the real cause is a missing RED proof, got: {msg}"
+        );
+        assert!(!artifact_path(&base, &cfg, "t1", "green").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn green_still_reports_identity_error_when_red_exists_but_author_mismatched() {
+        // (b) RED proof DOES exist but the author identity is missing/mismatched:
+        // strict_separation's own job is unchanged — it must still fail with
+        // the identity error (not the RED-proof-not-found message).
+        let base =
+            std::env::temp_dir().join(format!("tdd-finding9-mismatch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let cfg = Config {
+            proof_dir: ".tdd".to_string(),
+            strict_separation: true,
+            ..Config::default()
+        };
+        write_artifact(
+            &artifact_path(&base, &cfg, "t1", "red"),
+            &json!({"passed": false, "author": "agent-a"}),
+        )
+        .unwrap();
+
+        let err = green(
+            &base,
+            &cfg,
+            "t1",
+            &Some("true".to_string()),
+            &Some("agent-a".to_string()),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("strict_separation"),
+            "expected a strict_separation identity rejection, got: {msg}"
+        );
+        assert!(!artifact_path(&base, &cfg, "t1", "green").exists());
+
         let _ = std::fs::remove_dir_all(&base);
     }
 

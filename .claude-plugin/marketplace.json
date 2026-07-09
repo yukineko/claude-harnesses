@@ -628,7 +628,7 @@
     {
       "name": "specguard",
       "description": "仕様↔実装 整合監査ハーネスを Claude Code から subscription-native に実行する。各 shard を read-only な in-session subagent で監査し (nested claude --print なし)、決定的ハーネス (scope/render/parse/report) は specguard バイナリに委譲する。",
-      "version": "0.2.14",
+      "version": "0.2.15",
       "category": "quality",
       "keywords": [
         "spec",
@@ -654,7 +654,7 @@
     {
       "name": "stuckguard",
       "description": "Stuck-loop detector + escalation for Claude Code: a PostToolUse hook that spots repeated identical actions and edit thrash, then injects an escalating nudge to change approach or ask the user for help. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "category": "quality",
       "keywords": [
         "hooks",

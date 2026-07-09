@@ -24,6 +24,13 @@ pub struct Trip {
     pub all_errored: bool,
     /// Human detail for the message (command/file).
     pub detail: String,
+    /// Normalized error signature shared by the repeated/failing events, when
+    /// available (`Kind::Repeat` with `all_errored`, and every one of those
+    /// events agrees on the same digest). Lets the lesson written on
+    /// escalation be keyed on the *error class* rather than only on the
+    /// free-text detail, so a recurring error class can retrieve its past
+    /// lesson even if the surrounding command text drifts slightly.
+    pub error_digest: Option<String>,
 }
 
 /// Inspect the window (whose last element is the just-recorded event) and return
@@ -43,12 +50,28 @@ fn repeat(window: &[Event], cur: &Event, cfg: &Config) -> Option<Trip> {
         return None;
     }
     let all_errored = same.iter().all(|e| e.error);
+    // Only surface an error_digest when every occurrence in the run agrees on
+    // the same normalized error signature — a mix of digests (or any missing
+    // one) means the events aren't clearly the same error class, so leave it
+    // None rather than pick an arbitrary one.
+    let error_digest = if all_errored {
+        let mut digests = same.iter().map(|e| e.failed_test_digest.as_deref());
+        let first = digests.next().flatten();
+        if first.is_some() && digests.all(|d| d == first) {
+            first.map(str::to_string)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     Some(Trip {
         key: format!("repeat:{}", cur.sig),
         kind: Kind::Repeat,
         count: same.len(),
         all_errored,
         detail: format!("{} を {} 回", cur.tool, same.len()),
+        error_digest,
     })
 }
 
@@ -82,6 +105,7 @@ fn oscillation(window: &[Event], cur: &Event, cfg: &Config) -> Option<Trip> {
         count: reversals,
         all_errored: false,
         detail: file.clone(),
+        error_digest: None,
     })
 }
 

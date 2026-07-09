@@ -173,6 +173,13 @@ fn message(t: &Trip, escalated: bool, count: u32) -> String {
 /// message. Closes the write→retrieve loop: `record_lesson` writes on
 /// escalation, this reads on the next one.
 ///
+/// When the trip carries a normalized `error_digest` (a recurring *error
+/// class*, independent of volatile details like line numbers/paths), the
+/// query is built as `"{digest} {detail}"` — the same shape `record_lesson`
+/// writes into `task_summary` — so a recurring error class ranks its own past
+/// lesson first via the digest token, while `detail` still provides a
+/// fallback signal when no past escalation shares the exact digest.
+///
 /// Fail-soft end to end: `lessons::load` never panics (missing/corrupt store
 /// → empty Vec) and `lessons::search` never panics (empty store/query/no
 /// overlap → empty Vec), so an empty store, no match, or an unreadable store
@@ -180,8 +187,21 @@ fn message(t: &Trip, escalated: bool, count: u32) -> String {
 /// to the no-retrieval case.
 fn retrieve_lesson(t: &Trip) -> Option<String> {
     let loaded = harness_core::lessons::load();
-    let hits = harness_core::lessons::search(&t.detail, &loaded, 1);
+    let query = lesson_query(t);
+    let hits = harness_core::lessons::search(&query, &loaded, 1);
     hits.into_iter().next().map(|m| m.lesson.lesson_text)
+}
+
+/// Build the lexical search/index text for a trip: the error-class digest
+/// (when known) prefixed onto the human-readable detail. Shared by
+/// `retrieve_lesson` (query) and `record_lesson` (`task_summary`) so a
+/// recurring error class's escalation writes and later lookups key on the
+/// exact same token.
+fn lesson_query(t: &Trip) -> String {
+    match &t.error_digest {
+        Some(digest) => format!("{digest} {}", t.detail),
+        None => t.detail.clone(),
+    }
 }
 
 fn log_event(cfg: &Config, session: &str, t: &Trip, count: u32, escalated: bool) {
@@ -235,7 +255,7 @@ fn record_lesson(session: &str, t: &Trip, count: u32) {
         Kind::Oscillation => "oscillation",
     };
 
-    let task_summary = format!("stuck pattern ({kind_label}): {}", t.detail);
+    let task_summary = format!("stuck pattern ({kind_label}): {}", lesson_query(t));
     let lesson_text = match t.kind {
         Kind::Repeat if t.all_errored => format!(
             "When the same action ({}) fails and is repeated {} times in a row, \
@@ -371,6 +391,7 @@ mod tests {
             count: 3,
             all_errored: false,
             detail: "test detail".to_string(),
+            error_digest: None,
         };
 
         log_event(&cfg, "sess", &trip, 1, false);
@@ -395,6 +416,7 @@ mod tests {
             count: 3,
             all_errored: true,
             detail: detail.to_string(),
+            error_digest: None,
         }
     }
 
@@ -545,5 +567,84 @@ mod tests {
                 "non-escalation path must never surface a lesson: {msg}"
             );
         });
+    }
+
+    /// Build a repeat Trip carrying an `error_digest`, mirroring what
+    /// `detect::repeat` produces when every occurrence in the window agrees
+    /// on the same normalized error signature.
+    fn repeat_trip_with_digest(detail: &str, digest: &str) -> Trip {
+        Trip {
+            error_digest: Some(digest.to_string()),
+            ..repeat_trip(detail)
+        }
+    }
+
+    #[test]
+    fn record_lesson_folds_error_digest_into_task_summary() {
+        with_isolated_lessons_store(|_dir| {
+            use harness_core::lessons;
+
+            let trip = repeat_trip_with_digest("cargo test failing repeatedly", "abc123deadbeef");
+            record_lesson("sess-a", &trip, 2);
+
+            let loaded = lessons::load();
+            assert_eq!(loaded.len(), 1);
+            assert!(
+                loaded[0].task_summary.contains("abc123deadbeef"),
+                "task_summary must carry the error digest as a searchable token: {}",
+                loaded[0].task_summary
+            );
+        });
+    }
+
+    #[test]
+    fn recurring_error_class_retrieves_its_own_past_lesson_via_digest() {
+        with_isolated_lessons_store(|_dir| {
+            // First escalation for this error class: writes a lesson keyed
+            // (in part) on the error digest.
+            let digest = "feed1234cafef00d";
+            let first = repeat_trip_with_digest("cargo test", digest);
+            record_lesson("sess-1", &first, 2);
+
+            // A second, later escalation for the *same error class* — the
+            // command text differs slightly (simulating drift in `detail`)
+            // but the normalized error digest is identical — must retrieve
+            // the lesson the first escalation wrote.
+            let second = repeat_trip_with_digest("cargo test --lib", digest);
+            let msg = message(&second, true, 2);
+            assert!(
+                msg.contains("past lesson:"),
+                "same error digest must retrieve the previously recorded lesson: {msg}"
+            );
+        });
+    }
+
+    #[test]
+    fn different_error_digest_does_not_cross_retrieve() {
+        with_isolated_lessons_store(|_dir| {
+            let a = repeat_trip_with_digest("cargo test", "digestaaaaaaaaaa");
+            record_lesson("sess-1", &a, 2);
+
+            // A different detail AND a different digest — an unrelated error
+            // class must not spuriously retrieve `a`'s lesson.
+            let b = repeat_trip_with_digest("totally unrelated npm build", "digestbbbbbbbbbb");
+            let msg = message(&b, true, 2);
+            assert!(
+                !msg.contains("past lesson:"),
+                "an unrelated error class must not retrieve another class's lesson: {msg}"
+            );
+        });
+    }
+
+    #[test]
+    fn lesson_query_without_digest_falls_back_to_detail_only() {
+        let trip = repeat_trip("plain detail, no digest");
+        assert_eq!(lesson_query(&trip), "plain detail, no digest");
+    }
+
+    #[test]
+    fn lesson_query_with_digest_prefixes_digest_onto_detail() {
+        let trip = repeat_trip_with_digest("plain detail", "digest0000000001");
+        assert_eq!(lesson_query(&trip), "digest0000000001 plain detail");
     }
 }

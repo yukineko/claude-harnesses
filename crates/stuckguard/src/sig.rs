@@ -28,6 +28,15 @@ pub struct Event {
     /// Best-effort: did the tool response look like a failure?
     #[serde(default)]
     pub error: bool,
+    /// Stable hash of the NORMALIZED error text, present only when `error` is
+    /// true. Volatile parts (line numbers, absolute paths, addresses/temp
+    /// values, timestamps) are stripped before hashing so the *same class* of
+    /// error collides to the same digest even when the raw text differs in
+    /// those details — this is the key a recurring error class is looked up
+    /// by in the cross-project lessons store. `None` for non-error events and
+    /// for older persisted events (backward-compatible via serde default).
+    #[serde(default)]
+    pub failed_test_digest: Option<String>,
 }
 
 fn hash(s: &str) -> u64 {
@@ -87,6 +96,13 @@ pub fn build(tool: &str, input: Option<&Value>, response: Option<&Value>) -> Opt
         _ => serde_json::to_string(&inp).unwrap_or_default(),
     };
 
+    let error = response.map(looks_error).unwrap_or(false);
+    let failed_test_digest = if error {
+        response.map(|r| error_digest(&error_text(r)))
+    } else {
+        None
+    };
+
     Some(Event {
         seq: 0,
         tool: tool.to_string(),
@@ -94,7 +110,8 @@ pub fn build(tool: &str, input: Option<&Value>, response: Option<&Value>) -> Opt
         file,
         old_h,
         new_h,
-        error: response.map(looks_error).unwrap_or(false),
+        error,
+        failed_test_digest,
     })
 }
 
@@ -119,10 +136,95 @@ fn looks_error(resp: &Value) -> bool {
     }
 }
 
+/// Best-effort extraction of the human-readable error text from a tool
+/// response, so it can be normalized and hashed into a `failed_test_digest`.
+/// Looks at the fields tool responses actually use for failure text
+/// (`error`, `message`, `stderr`, `output`, `content`), falling back to the
+/// whole response blob so no error is left un-digested just because its
+/// shape doesn't match a known field.
+fn error_text(resp: &Value) -> String {
+    match resp {
+        Value::Object(m) => {
+            for key in ["error", "message", "stderr", "output", "content"] {
+                if let Some(v) = m.get(key) {
+                    match v {
+                        Value::String(s) if !s.is_empty() => return s.clone(),
+                        Value::Array(_) | Value::Object(_) => {
+                            let s = serde_json::to_string(v).unwrap_or_default();
+                            if !s.is_empty() && s != "null" {
+                                return s;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            serde_json::to_string(resp).unwrap_or_default()
+        }
+        _ => serde_json::to_string(resp).unwrap_or_default(),
+    }
+}
+
+/// Strip the volatile parts of an error message (absolute filesystem paths,
+/// line/column numbers, hex addresses/temp-value-like tokens, ISO-ish
+/// timestamps, and other bare numbers) so that two error strings from the
+/// *same class* of failure — differing only in those details — normalize to
+/// identical text. Deterministic and pure: same input always yields the same
+/// output. Order matters: paths are collapsed first (so digits embedded in a
+/// path don't get half-stripped by the numeric pass), then remaining numeric
+/// tokens (line numbers, timestamps, hex addresses, temp values) are
+/// collapsed, then whitespace is normalized.
+fn normalize_error_text(s: &str) -> String {
+    use std::sync::OnceLock;
+
+    // Absolute-ish paths: a run starting with `/` (or `\`, for completeness)
+    // followed by path-segment characters, e.g. `/home/user/proj/src/f.rs`
+    // or `/tmp/foo-12345/bar`.
+    static PATH_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let path_re = PATH_RE.get_or_init(|| regex::Regex::new(r"[/\\][A-Za-z0-9_.\-/\\]+").unwrap());
+
+    // Any run of digits (with optional embedded `:`, `-`, `.`, or hex `a-f`
+    // after a `0x` prefix) — covers line numbers, column numbers, addresses
+    // (`0x7f3a…`), timestamps (`12:34:56`, `2026-07-09`), and generic temp
+    // values/offsets.
+    static NUM_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let num_re =
+        NUM_RE.get_or_init(|| regex::Regex::new(r"0[xX][0-9a-fA-F]+|\d[\d:._\-]*\d|\d").unwrap());
+
+    let no_paths = path_re.replace_all(s, "<PATH>");
+    let no_nums = num_re.replace_all(&no_paths, "<NUM>");
+    norm(&no_nums)
+}
+
+/// Deterministic hash of the normalized error text — the `failed_test_digest`
+/// value. Same class of error (post-normalization) → same digest; a
+/// different error → a different digest.
+fn error_digest(raw: &str) -> String {
+    format!("{:016x}", hash(&normalize_error_text(raw)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn event_without_failed_test_digest_field_deserializes_as_none() {
+        // Simulates a persisted Event written by an older stuckguard build,
+        // before `failed_test_digest` existed — the field must be absent
+        // from the JSON and deserialization must still succeed, defaulting
+        // to None (serde `#[serde(default)]`).
+        let old_json = r#"{
+            "seq": 1,
+            "tool": "Bash",
+            "sig": "Bash:0000000000000001",
+            "error": true
+        }"#;
+        let e: Event = serde_json::from_str(old_json).expect("old-shape Event must still parse");
+        assert_eq!(e.failed_test_digest, None);
+        assert!(e.error);
+        assert_eq!(e.file, None);
+    }
 
     #[test]
     fn bash_normalizes_whitespace() {
@@ -153,5 +255,101 @@ mod tests {
         )
         .unwrap();
         assert!(e.error);
+    }
+
+    #[test]
+    fn non_error_event_has_no_digest() {
+        let e = build(
+            "Bash",
+            Some(&json!({"command": "cargo test"})),
+            Some(&json!({"exit_code": 0})),
+        )
+        .unwrap();
+        assert!(!e.error);
+        assert_eq!(e.failed_test_digest, None);
+
+        // Even with no response at all.
+        let e2 = build("Bash", Some(&json!({"command": "cargo test"})), None).unwrap();
+        assert!(!e2.error);
+        assert_eq!(e2.failed_test_digest, None);
+    }
+
+    #[test]
+    fn error_event_has_digest() {
+        let e = build(
+            "Bash",
+            Some(&json!({"command": "cargo test"})),
+            Some(&json!({
+                "exit_code": 1,
+                "stderr": "thread 'main' panicked at src/main.rs:42:5:\nassertion failed"
+            })),
+        )
+        .unwrap();
+        assert!(e.error);
+        assert!(e.failed_test_digest.is_some());
+    }
+
+    #[test]
+    fn same_class_error_differing_only_in_volatile_details_has_same_digest() {
+        // Same panic class, different line number and different absolute path.
+        let a = build(
+            "Bash",
+            Some(&json!({"command": "cargo test"})),
+            Some(&json!({
+                "exit_code": 1,
+                "stderr": "thread 'main' panicked at /home/alice/proj/src/main.rs:42:5:\nassertion `left == right` failed"
+            })),
+        )
+        .unwrap();
+        let b = build(
+            "Bash",
+            Some(&json!({"command": "cargo test"})),
+            Some(&json!({
+                "exit_code": 1,
+                "stderr": "thread 'main' panicked at /home/bob/other/src/main.rs:917:12:\nassertion `left == right` failed"
+            })),
+        )
+        .unwrap();
+        assert_eq!(
+            a.failed_test_digest, b.failed_test_digest,
+            "same error class (differing only in path/line number) must hash equal"
+        );
+
+        // A genuinely different error class must hash differently.
+        let c = build(
+            "Bash",
+            Some(&json!({"command": "cargo test"})),
+            Some(&json!({
+                "exit_code": 1,
+                "stderr": "error[E0308]: mismatched types"
+            })),
+        )
+        .unwrap();
+        assert_ne!(
+            a.failed_test_digest, c.failed_test_digest,
+            "a genuinely different error must hash differently"
+        );
+    }
+
+    #[test]
+    fn normalize_error_text_absorbs_line_numbers_and_paths_and_temp_values() {
+        // Two superficially-different-but-same-class raw strings: different
+        // line/column numbers, different absolute paths (different users /
+        // tmp dirs), different hex address, different timestamp — must
+        // normalize to byte-identical text.
+        let a = "panic at /home/alice/repo/src/lib.rs:10:3 (addr 0x7f3a1b2c) at 2026-07-09T12:00:00Z during teardown";
+        let b = "panic at /home/bob/otherrepo/src/lib.rs:284:19 (addr 0x55ffee00) at 2026-01-01T00:00:00Z during teardown";
+        let na = normalize_error_text(a);
+        let nb = normalize_error_text(b);
+        assert_eq!(
+            na, nb,
+            "normalization must absorb line/path/addr/timestamp variation:\na={na}\nb={nb}"
+        );
+        assert_eq!(error_digest(a), error_digest(b));
+
+        // Sanity: the normalized text still contains the stable words
+        // (only the volatile path/line/addr/timestamp tokens are stripped).
+        assert!(na.contains("panic at"));
+        assert!(na.contains("during teardown"));
     }
 }

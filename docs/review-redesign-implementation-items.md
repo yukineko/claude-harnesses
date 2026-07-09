@@ -176,6 +176,15 @@ general-purpose agent によるリポジトリ監査結果（2026-07-09 時点�
 verify、recall優先）でレビューを実施。20件の候補のうち18件がCONFIRMED、1件PLAUSIBLE、1件REFUTED。
 severity順に記載する。**このセクションは次の実装セッションへの修正 TODO として扱ってよい。**
 
+> **✅ 実装完了（2026-07-10、コミット `deed6d4..114f1ae`）** — 下記 CONFIRMED/PLAUSIBLE 17件
+> （1〜17）を全て修正済み。REFUTED 1件（harness-core `jaccard` 共有化）は対象外のまま。クレート単位で
+> 束ねて condukt 直列実行し、各件を別モデル verifier で検証（finding 1 の polarity swap 検出・finding 5 の
+> near-repeat key 安定性・finding 10 の overwatch guard 冗長性は独立に反証テストで裏取り）。触った6クレート
+> （specguard 0.2.18 / propguard 0.1.4 / stuckguard 0.1.9 / blastguard 0.1.7 / tdd 0.1.8 /
+> trajectoryeval 0.1.6）は version を3ファイル lockstep bump。rollout-plugins.sh（3,4,14,17）は source-only
+> 修正（実デプロイ未実行）。finding 8 は condukt 本体への配線をスコープ外とし、コメント＋単体テストで
+> 「現実的な到達点」を固定。全 crate で fmt/clippy/test green、version 整合ゲート exit 0。
+
 ### 最優先（正しさ・セキュリティ）
 
 1. **【CRITICAL】specguard の graded ratification gate が2箇所同時swapでバイパスされる**

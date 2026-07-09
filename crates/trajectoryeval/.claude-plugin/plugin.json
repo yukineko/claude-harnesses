@@ -1,7 +1,7 @@
 {
   "name": "trajectoryeval",
-  "version": "0.1.4",
-  "description": "Trajectory-match verifier sibling: checks the PATH a worker took (its ordered tool-call sequence) against an expected trajectory spec, in strict/unordered/subsequence modes. v0.1.4: adds risk-tiered e2e verification (`tier` subcommand) — a config-driven core allowlist where core flows get an every-run deterministic structured-data snapshot diff (perceptual-hash/screenshot behind a documented stub boundary) and non-core flows get an existence check or seeded low-frequency sampling. Subscription-native (one bundled Rust binary, no API key).",
+  "version": "0.1.5",
+  "description": "Trajectory-match verifier sibling: checks the PATH a worker took (its ordered tool-call sequence) against an expected trajectory spec, in strict/unordered/subsequence modes. v0.1.5: `tier` subcommand is now e2e-tested end-to-end via a committed example core-flow allowlist (examples/tier-config.json); seeded 1-in-N non-core sampling has a rate-pinning test (catches subtler mutations than mere non-constancy); a core flow using the unimplemented `screenshot` diff strategy now yields an explicit tri-state `needs-human` verdict (distinct exit code 3) instead of silently masquerading as a hard diff failure. v0.1.4: adds risk-tiered e2e verification (`tier` subcommand) — a config-driven core allowlist where core flows get an every-run deterministic structured-data snapshot diff (perceptual-hash/screenshot behind a documented stub boundary) and non-core flows get an existence check or seeded low-frequency sampling. Subscription-native (one bundled Rust binary, no API key).",
   "author": { "name": "yukineko" },
   "keywords": ["trajectory", "agentevals", "verifier", "llmops", "rust"]
 }

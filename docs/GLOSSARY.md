@@ -29,7 +29,8 @@
 | autoflow | always-on | Stop で `/record`→`/condukt` を回すセッション終了オートフローゲート |
 | backlog | manual | クロスプロジェクト・タスクキュー（`/backlog` skill + SessionStart 通知 + binary） |
 | beacon | always-on | ターン完了・入力待ちをデスクトップ/Slack/webhook 通知する |
-| blastguard | always-on | Bash/ファイル操作の破壊的コマンドを PreToolUse で deny する |
+| benchkit | manual | ベンチ回帰＋SWE-bench ランナー。auto-gate 通過変更を無作為抽出し厳格監査へ回す事後サンプリング較正ループ（auditsample）を含む |
+| blastguard | always-on | Bash/ファイル操作の破壊的コマンドを PreToolUse で deny する（機微パス glob／公開シンボル変更の diff リスクも RiskAssessment に合流） |
 | budgetguard | always-on | Stop でセッション/日次のコスト上限を監視し超過ターンを阻止する |
 | compass | always-on | condukt 上流のゴール再接地＋次の一手導出（subscription-native） |
 | condukt | always-on | interpreter/researcher/worker/verifier + Rust binary の決定論オーケストレーションエンジン |

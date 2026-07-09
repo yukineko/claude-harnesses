@@ -33,7 +33,7 @@
     {
       "name": "blastguard",
       "description": "Destructive-operation guard for Claude Code: a PreToolUse hook that denies project-wrecking Bash commands and file operations (recursive/wildcard rm, git reset --hard, git clean -fd, single-> truncating overwrites, truncate/shred/mkfs/dd of=, recursive chmod/chown, find -delete) before they run, while exempting repo config files (.claude/**, *.toml, *.yaml/yml, *.lock, package.json, .config/**). Subscription-native (one PreToolUse hook + bundled Rust binary, no API key).",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "category": "security",
       "keywords": [
         "hooks",
@@ -355,7 +355,7 @@
     {
       "name": "benchkit",
       "description": "External-benchmark (SWE-bench Verified) runner for Claude Code plugins: a typed SWE-bench Instance model, a deterministic fixture-based JSONL loader, and a gated `download` subcommand that shells out to `curl` (no HTTP crate) to fetch the Princeton NLP dataset only on explicit invocation. Subscription-native (one bundled Rust binary).",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "category": "quality",
       "keywords": [
         "benchmark",
@@ -628,7 +628,7 @@
     {
       "name": "specguard",
       "description": "仕様↔実装 整合監査ハーネスを Claude Code から subscription-native に実行する。各 shard を read-only な in-session subagent で監査し (nested claude --print なし)、決定的ハーネス (scope/render/parse/report) は specguard バイナリに委譲する。",
-      "version": "0.2.11",
+      "version": "0.2.12",
       "category": "quality",
       "keywords": [
         "spec",
@@ -703,7 +703,7 @@
     {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: a Stop hook that blocks the turn when implementation code lands without an accompanying test, plus a /tdd skill and red/green/verify subcommands that make test-first (RED before GREEN) a verifiable artifact. Subscription-native (one hook + skill + bundled Rust binary, no API key).",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "category": "quality",
       "keywords": [
         "tdd",
@@ -800,7 +800,7 @@
     {
       "name": "overwatch",
       "description": "Project-global cross-session execution ledger with dedup guard + PDO progress view. Manages claim registry with heartbeat-based liveness and skip-on-duplicate contract for distributed session coordination. SessionStart and Stop hooks surface current run state and progress aggregation (session/backlog/hypothesis/condukt run/compass gap in fail-soft view). Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "category": "observability",
       "keywords": [
         "pdo",
@@ -908,7 +908,7 @@
     {
       "name": "trajectoryeval",
       "description": "Trajectory-match verifier for agent tool-call paths: condukt's online verifier checks a task's OUTPUT (done_criteria); trajectoryeval checks the PATH the worker took. `check` matches an actual ordered tool-call list against an expected trajectory spec (strict / unordered / subsequence) and reports {pass, missing, unexpected, out_of_order} with a 0/1/2 gate exit; `extract` streams a transcript into the ordered tool_use names. The path-side sibling of done-criteria verification (agentevals-style). Subscription-native (one bundled Rust binary, no API key).",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "category": "quality",
       "keywords": [
         "trajectory",

@@ -130,9 +130,22 @@ pub fn changes_public_symbol(diff_text: &str) -> bool {
             return false;
         }
         let _ = marker;
-        MARKERS
-            .iter()
-            .any(|m| body.starts_with(m) || body.starts_with(&format!("pub(crate) {m}")))
+        MARKERS.iter().any(|m| {
+            if body.starts_with(m) {
+                return true;
+            }
+            // `pub(crate)`-qualified variant of the same marker. Every entry
+            // in MARKERS starts with the literal `"pub "` keyword, so the
+            // real Rust source spelling is obtained by replacing that
+            // leading `"pub "` with `"pub(crate) "` (e.g. `"pub fn "` ->
+            // `"pub(crate) fn "`), NOT by prepending `"pub(crate) "` in
+            // front of the already-`"pub "`-prefixed marker (that used to
+            // build the non-existent string `"pub(crate) pub fn "`, which
+            // never matches any real source line — see finding 6 in
+            // docs/review-redesign-implementation-items.md).
+            let pub_crate_variant = m.replacen("pub ", "pub(crate) ", 1);
+            body.starts_with(&pub_crate_variant)
+        })
     })
 }
 
@@ -154,6 +167,29 @@ pub fn changes_public_symbol(diff_text: &str) -> bool {
 /// Additive only: never LOWERS a risk tier. Callers combine this with
 /// [`crate::classify::classify`] on the action text and take the
 /// higher-risk verdict (see [`crate::classify::classify_change`]).
+///
+/// ## Known limitation: `diff_text` is empty on the only in-workspace
+/// production call sites (finding 8, `docs/review-redesign-implementation-`
+/// `items.md`)
+///
+/// The two production callers of this function in the workspace —
+/// `condukt::gate_exec::gather_assessment` and `condukt::schedule::schedule`
+/// — both pass `diff_text = ""`. This is *intentional*, not an oversight:
+/// both call sites run at a pre-execution stage (force-gate / schedule-time
+/// risk classification) where the command has not run yet, so no actual
+/// diff exists to inspect — there is nothing to line-scan for `pub`/
+/// `pub(crate)` markers at that point in the pipeline. `changes_public_symbol`
+/// therefore always evaluates `false` on those paths today, and the
+/// `public_api` signal below only ever fires when a *caller downstream of an
+/// actual diff* (e.g. a future post-hoc/post-execution review pass, or any
+/// caller — in this crate's own tests, or a future integration — that has a
+/// real unified diff in hand) invokes `classify_diff` with non-empty
+/// `diff_text`. That is the realistic point at which item D (generalized
+/// risk scoring for public-API changes) is reachable and correct; see the
+/// unit tests below (`public_symbol_alone_raises_to_medium`,
+/// `both_signals_compound_to_high`, `pub_crate_*`) which pin this behavior
+/// with real diff text. Wiring an actual diff into the two schedule-time
+/// call sites is a separate, condukt-side change and out of scope here.
 pub fn classify_diff(
     paths: &[String],
     diff_text: &str,
@@ -269,5 +305,58 @@ mod tests {
         );
         assert_eq!(a.risk, Risk::High);
         assert!(a.reversible);
+    }
+
+    // -- finding 6: pub(crate) needle regression coverage --------------------
+
+    #[test]
+    fn pub_crate_fn_addition_detected() {
+        let diff = "-fn helper() {}\n+pub(crate) fn helper() {}\n";
+        assert!(changes_public_symbol(diff));
+    }
+
+    #[test]
+    fn pub_crate_fn_removal_detected() {
+        let diff = "-pub(crate) fn helper() {}\n+fn helper() {}\n";
+        assert!(changes_public_symbol(diff));
+    }
+
+    #[test]
+    fn pub_crate_struct_and_enum_and_trait_detected() {
+        assert!(changes_public_symbol("+pub(crate) struct Foo { x: i32 }"));
+        assert!(changes_public_symbol("+pub(crate) enum Bar { A, B }"));
+        assert!(changes_public_symbol("-pub(crate) trait Baz {}"));
+    }
+
+    #[test]
+    fn pub_crate_async_fn_detected() {
+        assert!(changes_public_symbol("+pub(crate) async fn fetch() {}"));
+    }
+
+    #[test]
+    fn pub_crate_alone_raises_diff_to_medium() {
+        // Regression for finding 6: before the fix, the needle built the
+        // non-existent string "pub(crate) pub fn " and never matched real
+        // `pub(crate) fn` source lines, so this diff-only change was
+        // silently scored Low instead of Medium.
+        let cfg = SensitiveConfig::default();
+        let a = classify_diff(
+            &["src/lib.rs".to_string()],
+            "+pub(crate) fn internal_api() {}",
+            &cfg,
+        );
+        assert_eq!(a.risk, Risk::Medium);
+        assert!(a.reversible);
+    }
+
+    #[test]
+    fn malformed_pub_crate_needle_does_not_falsely_match() {
+        // The old (buggy) needle was "pub(crate) pub fn " — assert real
+        // source using the correct spelling doesn't require that broken
+        // prefix, i.e. this line must be detected without the redundant
+        // "pub " duplication ever being present in real source.
+        let diff = "+pub(crate) fn only_one_pub_keyword() {}\n";
+        assert!(!diff.contains("pub(crate) pub"));
+        assert!(changes_public_symbol(diff));
     }
 }

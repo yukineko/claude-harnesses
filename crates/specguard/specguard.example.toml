@@ -96,6 +96,21 @@ template = ""
 # (which contract-checks the template, then pins its fingerprint + canon commit +
 # reason to .specguard-prompt.lock). Commit that lock file.
 require_ratification = false
+# Graded (staged) triage for the ratification gate (additive; no effect unless
+# require_ratification = true). Off => the historical BINARY gate: any drift from
+# the ratified prompt demands a fresh human accept-prompt. On => a drifted
+# template that is PRECEDENTED — deterministically close (token-shingle Jaccard
+# >= graded_threshold) to the text a human already ratified — is AUTO-ratified
+# (the lock is silently re-pinned) and the run proceeds; only NOVEL / large
+# deviations still route to a human. The similarity is a pure, seed-free function
+# (no model, no network), so the precedented-vs-novel decision is reproducible.
+graded = false
+# Similarity threshold in (0.0, 1.0] consulted only when graded = true. A drifted
+# template whose best similarity to its ratified precedent is >= this value is
+# precedented. 1.0 reproduces the binary gate (only a punctuation/whitespace-
+# identical change is precedented). 0.85 is a pragmatic starting point. Required
+# to be > 0.0 when graded is on, so an omitted value cannot wave everything through.
+graded_threshold = 0.85
 
 [verify]
 # Verification gates over the audit's findings (DESIGN-VERIFY.md). Both default

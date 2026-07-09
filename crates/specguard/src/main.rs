@@ -18,6 +18,7 @@ mod prompt;
 mod ratify;
 mod report;
 mod scope;
+mod similarity;
 mod specmap;
 mod testaudit;
 mod verify;
@@ -740,6 +741,65 @@ fn ratification_block(l: &Loaded) -> Result<Option<u8>> {
                 l.cfg.verify.completeness,
             );
             if !drift.is_empty() {
+                // Graded (staged) triage: a drifted template that is precedented
+                // (deterministically close to its ratified precedent) is auto-
+                // ratified; only novel/large deviations still require a human. When
+                // graded is off this whole block is skipped and the binary gate
+                // stands (drift -> human).
+                if l.cfg.prompt.graded {
+                    let texts = current_texts(l);
+                    match ratify::triage_drift(
+                        &drift,
+                        &lock.corpus,
+                        &texts,
+                        l.cfg.prompt.graded_threshold,
+                    ) {
+                        ratify::Triage::Precedented => {
+                            // Re-pin the lock to the precedented change: an
+                            // auto-ratify records the new texts as the fresh
+                            // precedent, with a machine-authored reason. Only the
+                            // live policy surface is pinned (mirrors accept_prompt).
+                            let head = scope::current_head(&l.repo_root)
+                                .unwrap_or_else(|_| "UNKNOWN".to_string());
+                            let mut re_h = hashes;
+                            let mut re_t = texts;
+                            if !l.cfg.verify.enabled {
+                                re_h.refute = String::new();
+                                re_t.refute = String::new();
+                            }
+                            if !l.cfg.verify.completeness {
+                                re_h.completeness = String::new();
+                                re_t.completeness = String::new();
+                            }
+                            let reason = format!(
+                                "auto-ratified (graded): precedented change to {} (similarity >= {})",
+                                drift.join(", "),
+                                l.cfg.prompt.graded_threshold
+                            );
+                            ratify::write_lock(
+                                &l.repo_root,
+                                &re_h,
+                                &re_t,
+                                &head,
+                                &l.date,
+                                &reason,
+                            )?;
+                            eprintln!(
+                                "specguard: prompt (メタ正典) の変更を自動批准 (graded, precedented): {}",
+                                drift.join(", ")
+                            );
+                            return Ok(None);
+                        }
+                        ratify::Triage::Novel(novel) => {
+                            eprintln!(
+                                "specguard: prompt (メタ正典) に novel な未批准変更があります: {}\n  (graded: 類似度 < {} のため人間の批准が必要)\n  内容を確認し、合意できるなら `specguard accept-prompt -m \"理由\"` で再批准してください。",
+                                novel.join(", "),
+                                l.cfg.prompt.graded_threshold
+                            );
+                            return Ok(Some(EXIT_UNRATIFIED));
+                        }
+                    }
+                }
                 eprintln!(
                     "specguard: prompt (メタ正典) に未批准の変更があります: {}\n  内容を確認し、合意できるなら `specguard accept-prompt -m \"理由\"` で再批准してください。",
                     drift.join(", ")
@@ -1472,7 +1532,16 @@ fn accept_prompt(l: &Loaded, reason: &str) -> Result<u8> {
     if !l.cfg.verify.completeness {
         hashes.completeness = String::new();
     }
-    let path = ratify::write_lock(&l.repo_root, &hashes, &head, &l.date, reason)?;
+    // Pin the ratified texts (graded-gate precedent corpus) for exactly the same
+    // live surface as the hashes — an inactive gate contributes no precedent.
+    let mut texts = current_texts(l);
+    if !l.cfg.verify.enabled {
+        texts.refute = String::new();
+    }
+    if !l.cfg.verify.completeness {
+        texts.completeness = String::new();
+    }
+    let path = ratify::write_lock(&l.repo_root, &hashes, &texts, &head, &l.date, reason)?;
     println!(
         "specguard: prompt (メタ正典) を批准した -> {}",
         path.display()
@@ -1498,6 +1567,19 @@ fn current_hashes(l: &Loaded) -> ratify::TemplateHashes {
         decisions: ratify::hash(prompt::DECISIONS_TEMPLATE),
         refute: ratify::hash(prompt::REFUTE_TEMPLATE),
         completeness: ratify::hash(prompt::COMPLETENESS_TEMPLATE),
+    }
+}
+
+/// The full texts of all four prompt templates (meta-canon) as they stand now.
+/// Parallel to [`current_hashes`]; the graded gate ([`ratify::triage_drift`])
+/// measures these against the lock's recorded corpus, and `accept_prompt` records
+/// them as the new precedent.
+fn current_texts(l: &Loaded) -> ratify::TemplateTexts {
+    ratify::TemplateTexts {
+        audit: l.template.clone(),
+        decisions: prompt::DECISIONS_TEMPLATE.to_string(),
+        refute: prompt::REFUTE_TEMPLATE.to_string(),
+        completeness: prompt::COMPLETENESS_TEMPLATE.to_string(),
     }
 }
 

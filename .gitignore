@@ -22,3 +22,6 @@ Cargo.lock.bak
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# crate-local runtime progress artifacts (taskprog etc.) — never track
+crates/*/.claude/

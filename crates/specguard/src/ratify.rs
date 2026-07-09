@@ -456,6 +456,35 @@ mod tests {
     }
 
     #[test]
+    fn polarity_flip_routes_to_human_through_graded_gate() {
+        // End-to-end through triage_drift at the shipped default threshold (0.85):
+        // a single-token semantic inversion of the ratified audit policy must be
+        // Novel (human) even though its lexical Jaccard sits above 0.85, closing
+        // the graded auto-ratify bypass. The precedent is realistic-length so the
+        // one-token flip stays lexically high.
+        let ratified = "for the sampled slice of the changed area the auditor should \
+                        flag every implementation that contradicts the ratified \
+                        specification for that area and then route the finding over to a \
+                        reviewer whenever the audit is uncertain of the rule rather than \
+                        silently dropping it from the merged report at the end of the run";
+        let corpus = corpus(ratified, "", "", "");
+        // contradicts -> matches: inverts the audit verdict.
+        let flipped = ratified.replace("contradicts", "matches");
+        let now = texts(&flipped, "", "", "");
+        assert_eq!(
+            triage_drift(&["audit-prompt"], &corpus, &now, 0.85),
+            Triage::Novel(vec!["audit-prompt"])
+        );
+        // A benign punctuation/whitespace reflow (polarity unchanged) still
+        // auto-ratifies at the same threshold.
+        let reflow = texts(&format!("{ratified}."), "", "", "");
+        assert_eq!(
+            triage_drift(&["audit-prompt"], &corpus, &reflow, 0.85),
+            Triage::Precedented
+        );
+    }
+
+    #[test]
     fn triage_drift_is_deterministic() {
         let corpus = corpus(RATIFIED_AUDIT, "", "", "");
         let now = texts(

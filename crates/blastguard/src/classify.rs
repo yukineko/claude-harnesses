@@ -12,10 +12,14 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::detect;
+use crate::diffrisk::{self, SensitiveConfig};
 
 /// How much blast radius an action carries. Serialises lowercase
 /// (`"low"`/`"medium"`/`"high"`) so callers can emit `{risk, reversible}`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+///
+/// Ordered `Low < Medium < High` so callers (e.g. [`classify_change`]) can
+/// merge multiple risk signals by taking the max tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Risk {
     Low,
@@ -37,6 +41,19 @@ impl RiskAssessment {
     /// A mis-tagged deploy still trips this, which is the whole point.
     pub fn requires_gate(&self) -> bool {
         matches!(self.risk, Risk::High) && !self.reversible
+    }
+
+    /// Merge two assessments of the same planned action into one: the higher
+    /// risk tier wins, and the result is reversible only if BOTH inputs are
+    /// (an irreversible signal from either source must not be diluted away).
+    /// This is how command-text classification and diff-level semantic
+    /// classification ride the same [`RiskAssessment`]/`requires_gate` axis
+    /// instead of two parallel paths.
+    pub fn merge(self, other: RiskAssessment) -> RiskAssessment {
+        RiskAssessment {
+            risk: self.risk.max(other.risk),
+            reversible: self.reversible && other.reversible,
+        }
     }
 }
 
@@ -217,6 +234,33 @@ pub fn classify(text: &str) -> RiskAssessment {
     }
 }
 
+/// Generalized classification: merge command-text risk ([`classify`]) with
+/// diff-level semantic risk — configurable sensitive-path globs and
+/// public/exported-symbol changes (see [`crate::diffrisk`]) — into ONE
+/// [`RiskAssessment`]. Both signals ride the same `requires_gate` escalation
+/// condukt's `gate check` already consults, so a change that touches an
+/// auth/payment/PII path or an exported API surface is force-gated exactly
+/// like a mislabelled `git push`, without callers needing a second parallel
+/// risk path.
+///
+/// `text` is the free-text action description ([`classify`]'s existing
+/// input — title + done-criteria + touched files, unchanged from today).
+/// `paths` are the changed files (may overlap with what's embedded in
+/// `text`; kept separate so callers with a real diff/file list don't need to
+/// serialize it into prose). `diff_text` is optional unified-diff content
+/// (empty string if unavailable — the public-symbol signal simply won't
+/// fire, matching backward-compatible/additive behavior).
+pub fn classify_change(
+    text: &str,
+    paths: &[String],
+    diff_text: &str,
+    sensitive: &SensitiveConfig,
+) -> RiskAssessment {
+    let command = classify(text);
+    let diff = diffrisk::classify_diff(paths, diff_text, sensitive);
+    command.merge(diff)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,5 +419,76 @@ mod tests {
         let json = serde_json::to_value(classify("git push origin main")).unwrap();
         assert_eq!(json["risk"], "high");
         assert_eq!(json["reversible"], false);
+    }
+
+    #[test]
+    fn merge_takes_higher_risk_tier() {
+        let low = RiskAssessment {
+            risk: Risk::Low,
+            reversible: true,
+        };
+        let medium = RiskAssessment {
+            risk: Risk::Medium,
+            reversible: true,
+        };
+        let merged = low.clone().merge(medium.clone());
+        assert_eq!(merged.risk, Risk::Medium);
+        assert_eq!(medium.merge(low).risk, Risk::Medium);
+    }
+
+    #[test]
+    fn merge_reversible_only_if_both_reversible() {
+        let reversible = RiskAssessment {
+            risk: Risk::Low,
+            reversible: true,
+        };
+        let irreversible = RiskAssessment {
+            risk: Risk::Low,
+            reversible: false,
+        };
+        assert!(!reversible.merge(irreversible).reversible);
+    }
+
+    #[test]
+    fn classify_change_baseline_matches_command_only_classification() {
+        // No sensitive path, no public-symbol diff → identical to classify().
+        let cfg = SensitiveConfig::default();
+        let text = "refactor the parser";
+        let a = classify_change(text, &["src/parser.rs".to_string()], "", &cfg);
+        assert_eq!(a, classify(text));
+    }
+
+    #[test]
+    fn classify_change_sensitive_path_raises_risk_over_baseline() {
+        let cfg = SensitiveConfig::default();
+        let text = "add a login retry limit";
+        let baseline = classify(text);
+        let a = classify_change(text, &["src/auth/login.rs".to_string()], "", &cfg);
+        assert!(a.risk > baseline.risk, "sensitive path must raise risk");
+    }
+
+    #[test]
+    fn classify_change_public_symbol_raises_risk_over_baseline() {
+        let cfg = SensitiveConfig::default();
+        let text = "add a helper function";
+        let baseline = classify(text);
+        let a = classify_change(
+            text,
+            &["src/lib.rs".to_string()],
+            "+pub fn new_helper() {}",
+            &cfg,
+        );
+        assert!(a.risk > baseline.risk, "public API change must raise risk");
+    }
+
+    #[test]
+    fn classify_change_still_force_gates_deploy_text_regardless_of_diff_signals() {
+        // The existing destructive/deploy precedence is untouched: merge only
+        // ever raises risk, never masks the pre-existing High+irreversible verdict.
+        let cfg = SensitiveConfig::default();
+        let a = classify_change("git push origin main", &["README.md".to_string()], "", &cfg);
+        assert_eq!(a.risk, Risk::High);
+        assert!(!a.reversible);
+        assert!(a.requires_gate());
     }
 }

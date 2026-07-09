@@ -102,8 +102,24 @@ fn repeat(window: &[Event], cur: &Event, cfg: &Config) -> Option<Trip> {
     } else {
         None
     };
+    // Stable cluster key: the OLDEST matched event's sig, not `cur.sig`.
+    // `window.iter()` is chronological, so `same[0]` (the first match found
+    // by the filter above) is the earliest event in the cluster. For
+    // exact-repeat mode every member of `same` shares the identical `sig`
+    // anyway, so this is a no-op there. For near-repeat mode
+    // (`cfg.similarity_threshold < 1.0`) `cur.sig` is (by construction)
+    // different on every call, so keying on it made `record_nudge` reset its
+    // per-key count back to 1 every single time — `escalate_after` was never
+    // reachable (finding 5). Keying on the cluster's oldest member instead
+    // gives a representative that stays stable across successive calls (as
+    // long as it remains inside the window and keeps matching the current
+    // event), so the nudge count actually accumulates.
+    let key_sig = same
+        .first()
+        .map(|e| e.sig.as_str())
+        .unwrap_or(cur.sig.as_str());
     Some(Trip {
-        key: format!("repeat:{}", cur.sig),
+        key: format!("repeat:{key_sig}"),
         kind: Kind::Repeat,
         count: same.len(),
         all_errored,
@@ -238,7 +254,7 @@ mod tests {
     }
 
     fn ev(seq: u64, tool: &str, input: serde_json::Value) -> Event {
-        let mut e = build(tool, Some(&input), None).unwrap();
+        let mut e = build(tool, Some(&input), None, true).unwrap();
         e.seq = seq;
         e
     }
@@ -395,6 +411,73 @@ mod tests {
         assert!(detect(&near_w, &c).is_none());
     }
 
+    /// finding 5: `Trip::key` used to be `format!("repeat:{}", cur.sig)` — the
+    /// signature of the JUST-recorded event. Near-repeat matches are (by
+    /// definition, since `similarity_threshold < 1.0`) never byte-identical,
+    /// so `cur.sig` is different on every single call. Because
+    /// `record_nudge` keys its per-pattern counter off `Trip::key`, that made
+    /// the counter reset to 1 on every call — `escalate_after` could never be
+    /// reached for a near-repeat pattern. This drives a realistic sequence
+    /// of near-repeat (never byte-identical) events through the same
+    /// detect()+record_nudge() loop `watch()` uses and asserts the nudge
+    /// count actually climbs to `escalate_after` (i.e. escalation actually
+    /// fires) instead of staying pinned at 1 forever. Before the finding-5
+    /// fix this test fails (RED): the count would be 1 after every trip and
+    /// `escalated` would never become true.
+    #[test]
+    fn near_repeat_escalates_after_repeated_nudges() {
+        let mut c = cfg();
+        c.similarity_threshold = 0.6;
+        c.repeat_threshold = 3;
+        c.escalate_after = 2;
+        c.cooldown_events = 0; // never suppress a repeat trip via cooldown
+
+        let mut st = crate::state::SessionState::default();
+        let cmds = [
+            "cargo test -p stuckguard foo",
+            "cargo test -p stuckguard bar",
+            "cargo test -p stuckguard baz",
+            "cargo test -p stuckguard qux",
+            "cargo test -p stuckguard zap",
+        ];
+
+        let mut escalated = false;
+        let mut last_count = 0u32;
+        let mut last_key: Option<String> = None;
+        for (i, cmd) in cmds.iter().enumerate() {
+            let e = ev(i as u64, "Bash", json!({"command": cmd}));
+            let seq = st.push(e, c.window);
+            if let Some(t) = detect(&st.events, &c) {
+                if let Some(prev_key) = &last_key {
+                    // Once the cluster has formed, the key must stay STABLE
+                    // across calls — this is exactly what the finding-5 fix
+                    // provides (and what `cur.sig`-keying broke).
+                    if t.count >= c.repeat_threshold && last_count > 0 {
+                        assert_eq!(
+                            &t.key, prev_key,
+                            "near-repeat cluster key must stay stable across calls once formed"
+                        );
+                    }
+                }
+                last_key = Some(t.key.clone());
+                if !st.in_cooldown(&t.key, seq, c.cooldown_events) {
+                    last_count = st.record_nudge(&t.key, seq);
+                    if last_count >= c.escalate_after {
+                        escalated = true;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            escalated,
+            "near-repeat pattern must eventually escalate (nudge count reaching \
+             escalate_after={}); last observed count={last_count} — finding 5 regression \
+             would keep this pinned at 1 forever",
+            c.escalate_after
+        );
+    }
+
     #[test]
     fn distinct_edits_do_not_trip() {
         let w = vec![
@@ -423,7 +506,7 @@ mod tests {
         input: serde_json::Value,
         response: serde_json::Value,
     ) -> Event {
-        let mut e = build(tool, Some(&input), Some(&response)).unwrap();
+        let mut e = build(tool, Some(&input), Some(&response), true).unwrap();
         e.seq = seq;
         e
     }

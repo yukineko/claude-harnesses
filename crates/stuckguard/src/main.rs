@@ -93,6 +93,7 @@ fn watch() {
         &input.tool_name,
         input.tool_input.as_ref(),
         input.tool_response.as_ref(),
+        cfg.similarity_threshold < 1.0,
     ) else {
         return;
     };
@@ -114,7 +115,7 @@ fn watch() {
             // never echoes back the lesson it is about to record itself.
             emitted = Some(message(t, escalated, count));
             if escalated {
-                record_lesson(&session, t, count);
+                record_lesson(&session, t);
             }
         }
     } else if cfg.progress_advisory_enabled {
@@ -286,7 +287,7 @@ fn log_event(cfg: &Config, session: &str, t: &Trip, count: u32, escalated: bool)
 /// corrupt/unwritable store silently drops the write), and every input used
 /// to build the `Lesson` here is a plain, already-validated string/number —
 /// nothing here can panic, so a stuck escalation can never break the hook.
-fn record_lesson(session: &str, t: &Trip, count: u32) {
+fn record_lesson(session: &str, t: &Trip) {
     use harness_core::lessons::{self, Kind as LessonKind, Lesson};
     use sha2::{Digest, Sha256};
 
@@ -344,7 +345,6 @@ fn record_lesson(session: &str, t: &Trip, count: u32) {
         source_run: format!("stuckguard:{session}:{}", t.key),
         ts,
     };
-    let _ = count; // reserved for future use (e.g. escalation tier in the text)
     lessons::append(&lesson);
 }
 
@@ -647,7 +647,7 @@ mod tests {
             use harness_core::lessons;
 
             let trip = repeat_trip_with_digest("cargo test failing repeatedly", "abc123deadbeef");
-            record_lesson("sess-a", &trip, 2);
+            record_lesson("sess-a", &trip);
 
             let loaded = lessons::load();
             assert_eq!(loaded.len(), 1);
@@ -666,7 +666,7 @@ mod tests {
             // (in part) on the error digest.
             let digest = "feed1234cafef00d";
             let first = repeat_trip_with_digest("cargo test", digest);
-            record_lesson("sess-1", &first, 2);
+            record_lesson("sess-1", &first);
 
             // A second, later escalation for the *same error class* — the
             // command text differs slightly (simulating drift in `detail`)
@@ -685,7 +685,7 @@ mod tests {
     fn different_error_digest_does_not_cross_retrieve() {
         with_isolated_lessons_store(|_dir| {
             let a = repeat_trip_with_digest("cargo test", "digestaaaaaaaaaa");
-            record_lesson("sess-1", &a, 2);
+            record_lesson("sess-1", &a);
 
             // A different detail AND a different digest — an unrelated error
             // class must not spuriously retrieve `a`'s lesson.
@@ -713,7 +713,7 @@ mod tests {
     // --- progress advisory (3-signal stall detection) ---
 
     fn ev(seq: u64, tool: &str, input: serde_json::Value) -> crate::sig::Event {
-        let mut e = sig::build(tool, Some(&input), None).unwrap();
+        let mut e = sig::build(tool, Some(&input), None, false).unwrap();
         e.seq = seq;
         e
     }
@@ -724,7 +724,7 @@ mod tests {
         input: serde_json::Value,
         response: serde_json::Value,
     ) -> crate::sig::Event {
-        let mut e = sig::build(tool, Some(&input), Some(&response)).unwrap();
+        let mut e = sig::build(tool, Some(&input), Some(&response), false).unwrap();
         e.seq = seq;
         e
     }

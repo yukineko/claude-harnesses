@@ -77,7 +77,22 @@ fn tokenize(body: &str) -> BTreeSet<String> {
 
 /// Build an Event (minus `seq`) from a tool call. `None` for tools we can't
 /// signature (no name).
-pub fn build(tool: &str, input: Option<&Value>, response: Option<&Value>) -> Option<Event> {
+///
+/// `near_repeat_enabled` should be `cfg.similarity_threshold < 1.0` at the
+/// call site. Near-repeat detection is the only consumer of `tokens`
+/// (`detect::is_repeat_of` never inspects it once `similarity_threshold >=
+/// 1.0`, returning `false` before touching the token bag), so at the default
+/// (disabled) setting there is no need to pay the tokenize cost — nor to
+/// persist a token bag nobody reads into the per-session state file — on
+/// every single tool call. When `false`, `tokens` is left empty and `sig`
+/// (used by exact-repeat detection) is computed exactly as before, so
+/// default behavior is unchanged.
+pub fn build(
+    tool: &str,
+    input: Option<&Value>,
+    response: Option<&Value>,
+    near_repeat_enabled: bool,
+) -> Option<Event> {
     if tool.trim().is_empty() {
         return None;
     }
@@ -123,11 +138,20 @@ pub fn build(tool: &str, input: Option<&Value>, response: Option<&Value>) -> Opt
         None
     };
 
+    // Early-exit branch (finding 16): skip the tokenize pass — and therefore
+    // the extra bytes that would otherwise be persisted per event in the
+    // session state file — whenever near-repeat detection is disabled.
+    let tokens = if near_repeat_enabled {
+        tokenize(&sig_body)
+    } else {
+        BTreeSet::new()
+    };
+
     Some(Event {
         seq: 0,
         tool: tool.to_string(),
         sig: format!("{tool}:{:016x}", hash(&sig_body)),
-        tokens: tokenize(&sig_body),
+        tokens,
         file,
         old_h,
         new_h,
@@ -249,8 +273,8 @@ mod tests {
 
     #[test]
     fn bash_normalizes_whitespace() {
-        let a = build("Bash", Some(&json!({"command": "cargo  test"})), None).unwrap();
-        let b = build("Bash", Some(&json!({"command": "cargo test"})), None).unwrap();
+        let a = build("Bash", Some(&json!({"command": "cargo  test"})), None, true).unwrap();
+        let b = build("Bash", Some(&json!({"command": "cargo test"})), None, true).unwrap();
         assert_eq!(a.sig, b.sig);
     }
 
@@ -260,6 +284,7 @@ mod tests {
             "Edit",
             Some(&json!({"file_path": "a.rs", "old_string": "A", "new_string": "B"})),
             None,
+            true,
         )
         .unwrap();
         assert_eq!(e.file.as_deref(), Some("a.rs"));
@@ -273,6 +298,7 @@ mod tests {
             "Bash",
             Some(&json!({"command": "x"})),
             Some(&json!({"exit_code": 1})),
+            true,
         )
         .unwrap();
         assert!(e.error);
@@ -284,13 +310,14 @@ mod tests {
             "Bash",
             Some(&json!({"command": "cargo test"})),
             Some(&json!({"exit_code": 0})),
+            true,
         )
         .unwrap();
         assert!(!e.error);
         assert_eq!(e.failed_test_digest, None);
 
         // Even with no response at all.
-        let e2 = build("Bash", Some(&json!({"command": "cargo test"})), None).unwrap();
+        let e2 = build("Bash", Some(&json!({"command": "cargo test"})), None, true).unwrap();
         assert!(!e2.error);
         assert_eq!(e2.failed_test_digest, None);
     }
@@ -304,6 +331,7 @@ mod tests {
                 "exit_code": 1,
                 "stderr": "thread 'main' panicked at src/main.rs:42:5:\nassertion failed"
             })),
+            true,
         )
         .unwrap();
         assert!(e.error);
@@ -320,6 +348,7 @@ mod tests {
                 "exit_code": 1,
                 "stderr": "thread 'main' panicked at /home/alice/proj/src/main.rs:42:5:\nassertion `left == right` failed"
             })),
+            true,
         )
         .unwrap();
         let b = build(
@@ -329,6 +358,7 @@ mod tests {
                 "exit_code": 1,
                 "stderr": "thread 'main' panicked at /home/bob/other/src/main.rs:917:12:\nassertion `left == right` failed"
             })),
+            true,
         )
         .unwrap();
         assert_eq!(
@@ -344,6 +374,7 @@ mod tests {
                 "exit_code": 1,
                 "stderr": "error[E0308]: mismatched types"
             })),
+            true,
         )
         .unwrap();
         assert_ne!(
@@ -372,5 +403,50 @@ mod tests {
         // (only the volatile path/line/addr/timestamp tokens are stripped).
         assert!(na.contains("panic at"));
         assert!(na.contains("during teardown"));
+    }
+
+    #[test]
+    fn tokenize_skipped_when_near_repeat_disabled() {
+        // finding 16: at the default (near-repeat disabled) setting, `tokens`
+        // must stay empty — the tokenize pass (and the bytes it would add to
+        // the persisted session state) is only paid when near-repeat
+        // detection is actually enabled.
+        let e = build(
+            "Bash",
+            Some(&json!({"command": "cargo test -p stuckguard foo"})),
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(
+            e.tokens.is_empty(),
+            "tokens must be empty when near_repeat_enabled is false: {:?}",
+            e.tokens
+        );
+        // `sig` (exact-repeat detection) must be computed exactly the same
+        // regardless of the near-repeat flag.
+        let e_enabled = build(
+            "Bash",
+            Some(&json!({"command": "cargo test -p stuckguard foo"})),
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(e.sig, e_enabled.sig);
+    }
+
+    #[test]
+    fn tokenize_populated_when_near_repeat_enabled() {
+        let e = build(
+            "Bash",
+            Some(&json!({"command": "cargo test -p stuckguard foo"})),
+            None,
+            true,
+        )
+        .unwrap();
+        assert!(
+            !e.tokens.is_empty(),
+            "tokens must be populated when near_repeat_enabled is true"
+        );
     }
 }

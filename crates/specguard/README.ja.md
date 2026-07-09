@@ -255,7 +255,11 @@ baseline は **ack 連動で前進**する。クリーンに監査できた回�
   任意のエージェント CLI に差し替え可 (プロンプトを stdin、レポートを stdout)
 - `[scope]` … `baseline_ref` / `fallback_ref` (両方解決不能なら全 tracked file を監査)
 - `[output]` … `report_dir` / `sentinel`
-- `[prompt]` … `template` (省略時は埋め込み既定) / `require_ratification` (批准ゲート)
+- `[prompt]` … `template` (省略時は埋め込み既定) / `require_ratification` (批准ゲート) /
+  `graded` + `graded_threshold` (段階的トリアージ: 既定 OFF で従来の二値ゲート。ON にすると、
+  批准済みテンプレートに決定論的類似度 (token-shingle Jaccard) が `graded_threshold` 以上の
+  *precedented* な変更は自動批准し、*novel* な逸脱のみ人間の `accept-prompt` に回す。類似度は
+  seed-free な純関数で LLM/network を使わないため再現可能。`1.0` で従来の二値挙動に一致)
 - `[[area]]` (複数) … `name` / `globs` / `canon`。**globs にマッチする変更があれば in-scope**
 - `[[invariant]]` (複数) … `name` / `description` / `canon`。**毎回チェック**
 - `[verify]` … 検証ゲート (既定 OFF)。`enabled` = 反証 (偽陽性除去) / `completeness` =

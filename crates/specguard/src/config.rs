@@ -162,6 +162,27 @@ pub struct PromptConfig {
     /// changed since (or was never) ratified via `specguard accept-prompt`.
     #[serde(default)]
     pub require_ratification: bool,
+    /// Graded (staged) triage for the ratification gate. When off (the default),
+    /// `require_ratification` is the historical **binary** gate: any drift from the
+    /// ratified prompt demands a fresh human `accept-prompt`. When on, a drifted
+    /// template that is *precedented* — deterministically close (token-shingle
+    /// Jaccard `>= graded_threshold`) to the text a human already ratified — is
+    /// **auto-ratified** (the lock is silently re-pinned) and the run proceeds;
+    /// only *novel* / large deviations still route to a human. Purely additive:
+    /// omitting `[prompt]` or this key preserves the binary behavior. Has no effect
+    /// unless `require_ratification` is also true.
+    #[serde(default)]
+    pub graded: bool,
+    /// Similarity threshold in `[0.0, 1.0]` for the graded gate: a drifted template
+    /// whose best similarity to its ratified precedent is `>=` this value is
+    /// treated as precedented (auto-ratify). `1.0` is the backward-compatible
+    /// setting (only a punctuation/whitespace-identical change is precedented, i.e.
+    /// no meaningful drift). `0.0` (the field default) is only ever consulted when
+    /// `graded` is on; `Config::validate` requires a positive value there so a
+    /// silently-omitted threshold cannot make the graded gate wave everything
+    /// through. A pragmatic default in configs is `0.85`.
+    #[serde(default)]
+    pub graded_threshold: f64,
     /// Approx per-shard token budget, expressed as a character count (chars are
     /// a deterministic, dependency-free proxy for tokens). When a rendered area
     /// shard's changed-file list would push the shard past this many
@@ -374,6 +395,15 @@ impl Config {
             anyhow::bail!("agent.command must not be empty");
         }
         validate_agent_command(&self.agent)?;
+        if self.prompt.graded {
+            let t = self.prompt.graded_threshold;
+            if !(t.is_finite() && t > 0.0 && t <= 1.0) {
+                anyhow::bail!(
+                    "prompt.graded_threshold must be in (0.0, 1.0] when prompt.graded is true \
+                     (got {t}); e.g. 0.85. 1.0 reproduces the binary gate."
+                );
+            }
+        }
         if self.areas.is_empty() && self.invariants.is_empty() {
             anyhow::bail!("config defines no [[area]] and no [[invariant]]; nothing to audit");
         }
@@ -455,5 +485,59 @@ mod tests {
             invariants: vec![],
         };
         assert!(cfg.validate().is_err());
+    }
+
+    fn cfg_with_prompt(prompt: PromptConfig) -> Config {
+        Config {
+            project: Project {
+                name: "p".to_string(),
+                root: ".".to_string(),
+            },
+            agent: AgentConfig::default(),
+            scope: ScopeConfig::default(),
+            output: OutputConfig::default(),
+            prompt,
+            decisions: DecisionsConfig::default(),
+            verify: VerifyConfig::default(),
+            map: MapConfig::default(),
+            areas: vec![Area {
+                name: "a".to_string(),
+                globs: vec!["src/**".to_string()],
+                canon: vec![],
+            }],
+            invariants: vec![],
+        }
+    }
+
+    /// Graded off (default): threshold is not consulted, so validate passes even
+    /// with the default 0.0 threshold — the binary gate is fully backward compat.
+    #[test]
+    fn graded_off_ignores_threshold() {
+        let cfg = cfg_with_prompt(PromptConfig::default());
+        assert!(!cfg.prompt.graded);
+        assert_eq!(cfg.prompt.graded_threshold, 0.0);
+        assert!(cfg.validate().is_ok());
+    }
+
+    /// Graded on requires a threshold in (0.0, 1.0]; a silently-omitted (0.0) or
+    /// out-of-range threshold is rejected so the gate cannot wave everything
+    /// through by accident.
+    #[test]
+    fn graded_on_requires_valid_threshold() {
+        for (t, ok) in [
+            (0.0, false),
+            (0.85, true),
+            (1.0, true),
+            (1.5, false),
+            (-0.1, false),
+        ] {
+            let cfg = cfg_with_prompt(PromptConfig {
+                require_ratification: true,
+                graded: true,
+                graded_threshold: t,
+                ..PromptConfig::default()
+            });
+            assert_eq!(cfg.validate().is_ok(), ok, "threshold {t} expected ok={ok}");
+        }
     }
 }

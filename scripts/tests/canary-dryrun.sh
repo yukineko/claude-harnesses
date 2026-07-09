@@ -108,6 +108,19 @@ pass "dry-run reported would-copy actions (no real copy)"
 grep -q "done (canary)" <<<"$OUT" || fail "canary path did not complete"
 pass "canary path completed"
 
+# --- assertion: a SUCCESSFUL canary reaches rebuild + sync (finding 4) --------
+# The canary path used to copy + repoint the registry and then exit 0 without
+# ever running rebuild-plugins.sh / sync-plugin-assets.sh, silently leaving the
+# harness on stale binaries. A full-stage (no rollback) dry-run must now show
+# it reaches both stages. Under --dry-run these only PRINT (nothing is really
+# rebuilt/synced — the mutation guards below still hold).
+grep -q "would run: scripts/rebuild-plugins.sh" <<<"$OUT" \
+  || fail "successful canary did not reach the rebuild stage (finding 4 regression)"
+pass "canary reaches the rebuild stage (finding 4)"
+grep -Eq "would run:.*sync-plugin-assets.sh|sync: no plugin ships" <<<"$OUT" \
+  || fail "successful canary did not reach the asset-sync stage (finding 4 regression)"
+pass "canary reaches the asset-sync stage (finding 4)"
+
 # --- assertions (b): NOTHING mutated -----------------------------------------
 REG_AFTER_SUM="$(sha256sum "$TEST_REGISTRY" | awk '{print $1}')"
 REG_AFTER_MTIME="$(stat -c %Y "$TEST_REGISTRY")"

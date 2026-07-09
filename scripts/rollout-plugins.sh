@@ -357,6 +357,84 @@ else:
 PY
 }
 
+# --- build prior/canary state JSON from plan rows (proper escaping, one place) -
+# Takes plan TSV rows as ARGV (one arg per row — NOT stdin, because the `<<'PY'`
+# heredoc already occupies python3's stdin, matching how plan()/registry_patch()
+# pass their inputs) and emits TWO lines, both built via json.dumps (so a
+# Windows-style path with backslashes, or any name/path containing a quote, is
+# correctly escaped and can never corrupt the JSON — the finding-3 fix). Line 1
+# = the `prior` array (state live NOW, before the canary moves it); line 2 =
+# the `canary` array (target version/path). Both the initial canary plan and
+# the rollback path use this single helper (the finding-14 dedup) so there is
+# exactly one JSON-construction site for each shape.
+build_state_json() {
+  python3 - "$@" <<'PY'
+import json, sys
+prior, canary = [], []
+for line in sys.argv[1:]:
+    if not line:
+        continue
+    f = line.split("\t")
+    # plan() row order: name version src target needs_copy needs_registry
+    #                   mismatch mpver pjver cur_version cur_path
+    name, version, target = f[0], f[1], f[3]
+    cur_version, cur_path = f[9], f[10]
+    prior.append({"name": name,
+                  "prior_version": cur_version or None,
+                  "prior_install_path": cur_path or None})
+    canary.append({"name": name,
+                   "canary_version": version,
+                   "canary_install_path": target})
+print(json.dumps(prior))
+print(json.dumps(canary))
+PY
+}
+
+# --- rebuild + asset sync (shared by the normal AND canary success paths) -----
+# Extracted so a successful --canary rollout also swaps in freshly built
+# binaries and refreshes skills/hooks/agents — the finding-4 fix (the canary
+# path used to copy + repoint the registry and then exit 0 without ever
+# rebuilding or syncing, silently leaving the running harness on stale
+# binaries). Honors --no-rebuild / --no-sync / --dry-run exactly like the
+# normal path. Args: zero or more "name:srcdir" entries for plugins that ship
+# scripts/sync-plugin-assets.sh.
+run_rebuild_and_sync() {
+  echo
+  if [ "$no_rebuild" = 1 ]; then
+    echo "rebuild: skipped (--no-rebuild)"
+  elif [ "$dry" = 1 ]; then
+    echo "[dry-run] would run: scripts/rebuild-plugins.sh --no-clean (CLAUDE_PLUGIN_CACHE=$CACHE)"
+  else
+    echo ">>> scripts/rebuild-plugins.sh --no-clean"
+    CLAUDE_PLUGIN_CACHE="$CACHE" bash "$REPO/scripts/rebuild-plugins.sh" --no-clean
+  fi
+  echo
+
+  # sync-plugin-assets.sh's own CLAUDE_PLUGIN_CACHE default is the *owner-less*
+  # cache root (it globs */<name>/<version>); pass the parent of our
+  # owner-scoped $CACHE so it resolves the same dir whether or not the caller
+  # overrode CLAUDE_PLUGIN_CACHE.
+  local sync_cache_root; sync_cache_root="$(dirname "$CACHE")"
+  if [ "$no_sync" = 1 ]; then
+    echo "sync: skipped (--no-sync)"
+  elif [ "$#" -eq 0 ]; then
+    echo "sync: no plugin ships scripts/sync-plugin-assets.sh"
+  else
+    local entry pname pdir
+    for entry in "$@"; do
+      pname="${entry%%:*}"
+      pdir="${entry#*:}"
+      if [ "$dry" = 1 ]; then
+        echo "[dry-run] would run: $pdir/scripts/sync-plugin-assets.sh (for $pname)"
+      else
+        echo ">>> $pname: scripts/sync-plugin-assets.sh"
+        CLAUDE_PLUGIN_CACHE="$sync_cache_root" bash "$pdir/scripts/sync-plugin-assets.sh"
+      fi
+    done
+  fi
+  echo
+}
+
 # --- capture the plan once (used by both the normal and canary paths) --------
 # One TSV row per plugin. Read into an array so the canary path can slice the
 # ordered plugin set into stages without re-running `plan`.
@@ -375,9 +453,12 @@ done < <(plan)
 # later under manual approval, but is reachable ONLY via this explicit flag.
 # =============================================================================
 
-# Roll out ONE plugin row (copy + registry). Honors --dry-run. Echoes what it
-# did. Args: the TSV row fields as a single tab-delimited string.
-canary_apply_row() {
+# Copy ONE plugin row into its cache version dir (no registry write — the
+# registry update for a whole stage is batched into a single registry_patch
+# call by the caller, the finding-17 fix, so we don't spawn one python3
+# subprocess per plugin). Honors --dry-run. Echoes what it did. Args: the TSV
+# row fields as a single tab-delimited string.
+canary_copy_row() {
   local row="$1"
   IFS=$'\t' read -r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path <<<"$row"
   local srcdir="$REPO/$src"
@@ -391,13 +472,6 @@ canary_apply_row() {
       echo "  copied $name -> $target"
     fi
   fi
-  if [ "$needs_registry" = "1" ] || [ "$force" = 1 ]; then
-    if [ "$dry" = 1 ]; then
-      registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --dry-run "$name" "$version" "$target" | sed 's/^/  /'
-    else
-      registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "$name" "$version" "$target" | sed 's/^/  /'
-    fi
-  fi
 }
 
 run_canary() {
@@ -409,31 +483,28 @@ run_canary() {
   fi
   echo "canary: using overwatch binary: $ow"
 
-  # Ordered plugin list + per-plugin JSON for prior-state / canary-target.
+  # Ordered plugin list + a name->row index for stage slicing.
   local -a ordered_names=()
   declare -A row_by_name=()
-  local prior_json="[" canary_json="[" first=1
   local r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path
   for r in "${PLAN_ROWS[@]}"; do
     IFS=$'\t' read -r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path <<<"$r"
     [ -z "$name" ] && continue
     ordered_names+=("$name")
     row_by_name["$name"]="$r"
-    [ "$first" = 1 ] || { prior_json+=","; canary_json+=","; }
-    first=0
-    # prior state = what's live NOW (cur_*) before the canary moves it.
-    local pv="null" pp="null"
-    [ -n "$cur_version" ] && pv="\"$cur_version\""
-    [ -n "$cur_path" ] && pp="\"$cur_path\""
-    prior_json+="{\"name\":\"$name\",\"prior_version\":$pv,\"prior_install_path\":$pp}"
-    canary_json+="{\"name\":\"$name\",\"canary_version\":\"$version\",\"canary_install_path\":\"$target\"}"
   done
-  prior_json+="]"; canary_json+="]"
 
   if [ "${#ordered_names[@]}" -eq 0 ]; then
     echo "canary: no plugins to roll out"
     return 0
   fi
+
+  # prior-state / canary-target JSON, built once via json.dumps (finding-3
+  # escaping + finding-14 single construction site). Rows go via argv.
+  local state_json prior_json canary_json
+  state_json="$(build_state_json "${PLAN_ROWS[@]}")"
+  prior_json="$(sed -n '1p' <<<"$state_json")"
+  canary_json="$(sed -n '2p' <<<"$state_json")"
 
   # 1. Ask overwatch to split the ordered set into stages (deterministic).
   local plan_json
@@ -459,9 +530,24 @@ run_canary() {
     echo
     echo "--- stage $s: $stage_names ---"
     local pn
+    # Copy each plugin in the stage, then batch the whole stage's registry
+    # update into ONE registry_patch call (finding-17: no per-plugin python3
+    # subprocess spawn).
+    local -a stage_reg_args=()
     for pn in $stage_names; do
-      canary_apply_row "${row_by_name[$pn]}"
+      canary_copy_row "${row_by_name[$pn]}"
+      IFS=$'\t' read -r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path <<<"${row_by_name[$pn]}"
+      if [ "$needs_registry" = "1" ] || [ "$force" = 1 ]; then
+        stage_reg_args+=("$name" "$version" "$target")
+      fi
     done
+    if [ "${#stage_reg_args[@]}" -gt 0 ]; then
+      if [ "$dry" = 1 ]; then
+        registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --dry-run "${stage_reg_args[@]}" | sed 's/^/  /'
+      else
+        registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "${stage_reg_args[@]}" | sed 's/^/  /'
+      fi
+    fi
 
     # Health gate BETWEEN stages (skip the check after the final stage).
     if [ "$s" -lt "$((nstages - 1))" ]; then
@@ -479,18 +565,18 @@ run_canary() {
         if [ "$gate_rc" -ne 0 ]; then
           echo "  health-gate: ROLLBACK — violation rate spiked; rolling back stage $s and halting" >&2
           # Re-point the just-applied stage back to its prior version dir.
-          local prior_line="[" cj="[" pf=1
+          # Build the prior/canary JSON for this stage through the SAME
+          # json.dumps helper as the main path (finding-3 escaping +
+          # finding-14 dedup). Rows go via argv.
+          local pn
+          local -a stage_rows=()
           for pn in $stage_names; do
-            IFS=$'\t' read -r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path <<<"${row_by_name[$pn]}"
-            [ "$pf" = 1 ] || { prior_line+=","; cj+=","; }
-            pf=0
-            local pv="null" pp="null"
-            [ -n "$cur_version" ] && pv="\"$cur_version\""
-            [ -n "$cur_path" ] && pp="\"$cur_path\""
-            prior_line+="{\"name\":\"$name\",\"prior_version\":$pv,\"prior_install_path\":$pp}"
-            cj+="{\"name\":\"$name\",\"canary_version\":\"$version\",\"canary_install_path\":\"$target\"}"
+            stage_rows+=("${row_by_name[$pn]}")
           done
-          prior_line+="]"; cj+="]"
+          local stage_state prior_line cj
+          stage_state="$(build_state_json "${stage_rows[@]}")"
+          prior_line="$(sed -n '1p' <<<"$stage_state")"
+          cj="$(sed -n '2p' <<<"$stage_state")"
           local rbplan
           rbplan="$("$ow" canary-rollback-plan --stage-index "$s" --prior "$prior_line" --canary-targets "$cj")"
           echo "  rollback plan for stage $s:"
@@ -499,18 +585,24 @@ run_canary() {
           # NOTE: the plugin name is passed via argv (sys.argv[1] inside
           # rollback_target_lookup), never string-interpolated into the
           # Python source, so a name containing a quote or other special
-          # char cannot break out of (or inject into) the literal.
+          # char cannot break out of (or inject into) the literal. The
+          # restores for the whole stage are batched into ONE registry_patch
+          # call (finding-17).
+          local -a rb_reg_args=()
           for pn in $stage_names; do
             local rv rp lookup_out
             lookup_out="$(rollback_target_lookup "$rbplan" "$pn")"
             rv="$(sed -n '1p' <<<"$lookup_out")"
             rp="$(sed -n '2p' <<<"$lookup_out")"
             if [ -n "$rv" ] && [ -n "$rp" ]; then
-              registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "$pn" "$rv" "$rp" | sed 's/^/    /'
+              rb_reg_args+=("$pn" "$rv" "$rp")
             else
               echo "    $pn: newly introduced by canary — nothing to restore (left as-is)" >&2
             fi
           done
+          if [ "${#rb_reg_args[@]}" -gt 0 ]; then
+            registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "${rb_reg_args[@]}" | sed 's/^/    /'
+          fi
           echo "canary: HALTED at stage $s after auto-rollback." >&2
           exit 4
         fi
@@ -521,6 +613,21 @@ run_canary() {
 
   echo
   echo "canary: all $nstages stage(s) completed."
+
+  # All stages completed without a rollback halt (the rollback branch exits 4
+  # before reaching here), so finish the rollout exactly like the normal path:
+  # swap in freshly built binaries and refresh skills/hooks/agents. Without
+  # this the canary path would leave the running harness on stale binaries
+  # (finding 4). Build the sync list from the rolled-out plugins that ship a
+  # sync script (mirrors the normal path).
+  local -a canary_synced=()
+  local pn2 sname sver ssrc rest srcdir2
+  for pn2 in "${ordered_names[@]}"; do
+    IFS=$'\t' read -r sname sver ssrc rest <<<"${row_by_name[$pn2]}"
+    srcdir2="$REPO/$ssrc"
+    [ -f "$srcdir2/scripts/sync-plugin-assets.sh" ] && canary_synced+=("$sname:$srcdir2")
+  done
+  run_rebuild_and_sync ${canary_synced[@]+"${canary_synced[@]}"}
 }
 
 if [ "$canary" = 1 ]; then
@@ -591,41 +698,8 @@ if [ "$any_reg_change" = 1 ]; then
 else
   echo "registry: no changes needed"
 fi
-echo
 
-# --- rebuild: swap freshly built binaries into the (now-existing) cache dirs --
-if [ "$no_rebuild" = 1 ]; then
-  echo "rebuild: skipped (--no-rebuild)"
-elif [ "$dry" = 1 ]; then
-  echo "[dry-run] would run: scripts/rebuild-plugins.sh --no-clean (CLAUDE_PLUGIN_CACHE=$CACHE)"
-else
-  echo ">>> scripts/rebuild-plugins.sh --no-clean"
-  CLAUDE_PLUGIN_CACHE="$CACHE" bash "$REPO/scripts/rebuild-plugins.sh" --no-clean
-fi
-echo
+# --- rebuild + asset sync (shared with the canary success path) --------------
+run_rebuild_and_sync ${synced_plugins[@]+"${synced_plugins[@]}"}
 
-# --- sync: refresh skills/hooks/agents for plugins that ship a sync script ---
-# sync-plugin-assets.sh's own CLAUDE_PLUGIN_CACHE default is the *owner-less*
-# cache root (it globs */<name>/<version>); pass the parent of our
-# owner-scoped $CACHE so it resolves the same dir whether or not the caller
-# overrode CLAUDE_PLUGIN_CACHE.
-SYNC_CACHE_ROOT="$(dirname "$CACHE")"
-if [ "$no_sync" = 1 ]; then
-  echo "sync: skipped (--no-sync)"
-elif [ "${#synced_plugins[@]}" -eq 0 ]; then
-  echo "sync: no plugin ships scripts/sync-plugin-assets.sh"
-else
-  for entry in "${synced_plugins[@]}"; do
-    pname="${entry%%:*}"
-    pdir="${entry#*:}"
-    if [ "$dry" = 1 ]; then
-      echo "[dry-run] would run: $pdir/scripts/sync-plugin-assets.sh (for $pname)"
-    else
-      echo ">>> $pname: scripts/sync-plugin-assets.sh"
-      CLAUDE_PLUGIN_CACHE="$SYNC_CACHE_ROOT" bash "$pdir/scripts/sync-plugin-assets.sh"
-    fi
-  done
-fi
-
-echo
 echo "done."

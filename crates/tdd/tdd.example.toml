@@ -12,6 +12,14 @@ min_added_impl_lines = 1    # need a test once this many impl lines are added
 test_cmd = "cargo test"     # default for `tdd red` / `tdd green`
 proof_dir = ".tdd"          # where RED/GREEN proofs are written
 
+# Strict test/impl author separation (opt-in, default false). When true, `tdd
+# green` fail-closed rejects if the identity passed to `tdd red --author <id>`
+# equals the identity passed to `tdd green --author <id>` — the same agent
+# must not both write the failing test and its implementation. Requires both
+# calls to pass --author; missing identities are also rejected under strict
+# mode.
+# strict_separation = false
+
 # Override the language-aware defaults if needed:
 # impl_globs = ["**/*.rs", "**/*.py", "**/*.ts", "**/*.go"]
 # test_path_globs = ["**/tests/**", "**/test_*.py", "**/*.spec.*", "**/*_test.go"]

@@ -40,6 +40,13 @@ pub struct Config {
     /// Block only when at least this many implementation lines were *added*
     /// without test evidence. 1 = any new impl line needs a test.
     pub min_added_impl_lines: usize,
+    /// Strict test/impl author separation (opt-in, default off — backward
+    /// compatible). Mirrors condukt's verifier-model≠worker-model invariant:
+    /// when true, `tdd green` fail-closed rejects if the RED (test-authoring)
+    /// identity equals the GREEN (implementation) identity, preventing a single
+    /// agent from writing both a wrong implementation and a matching wrong test
+    /// (reward hacking). See `proof::judge_separation`.
+    pub strict_separation: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -56,6 +63,7 @@ struct FileConfig {
     test_path_globs: Option<Vec<String>>,
     test_markers: Option<Vec<String>>,
     min_added_impl_lines: Option<usize>,
+    strict_separation: Option<bool>,
 }
 
 /// The `~/.tdd` base directory. Thin wrapper over the shared primitive.
@@ -146,6 +154,7 @@ impl Default for Config {
             test_path_globs: default_test_path_globs(),
             test_markers: default_test_markers(),
             min_added_impl_lines: 1,
+            strict_separation: false,
         }
     }
 }
@@ -224,6 +233,9 @@ impl Config {
                     }
                     if let Some(v) = fc.min_added_impl_lines {
                         cfg.min_added_impl_lines = v;
+                    }
+                    if let Some(v) = fc.strict_separation {
+                        cfg.strict_separation = v;
                     }
                 }
             }

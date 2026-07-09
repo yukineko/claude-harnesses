@@ -15,6 +15,7 @@
 
 mod extract;
 mod match_traj;
+mod tier;
 
 use std::path::PathBuf;
 use std::process::exit;
@@ -22,6 +23,9 @@ use std::process::exit;
 use clap::{Parser, Subcommand};
 
 use match_traj::{evaluate, MatchResult, Spec};
+use tier::{
+    diff_snapshot, non_core_decision, DiffOutcome, NonCoreDecision, Tier, TierConfig, TierVerdict,
+};
 
 #[derive(Parser)]
 #[command(
@@ -40,6 +44,8 @@ enum Command {
     Check(CheckArgs),
     /// Stream a transcript and print its ordered tool_use names as a JSON array.
     Extract(ExtractArgs),
+    /// Risk-tiered e2e verification: classify a flow core/non-core and diff it.
+    Tier(TierArgs),
 }
 
 #[derive(clap::Args)]
@@ -60,6 +66,35 @@ struct ExtractArgs {
     /// Path to the JSONL transcript to stream.
     #[arg(long)]
     transcript: PathBuf,
+}
+
+#[derive(clap::Args)]
+struct TierArgs {
+    /// Path to the tier config JSON ({core:[..], diff_strategy, sample_one_in}).
+    #[arg(long)]
+    config: PathBuf,
+    /// The flow id to classify and verify.
+    #[arg(long)]
+    flow: String,
+    /// Core flows: baseline snapshot JSON to diff against (required for core).
+    #[arg(long)]
+    baseline: Option<PathBuf>,
+    /// Core flows: this run's captured snapshot JSON to diff.
+    #[arg(long)]
+    snapshot: Option<PathBuf>,
+    /// Non-core flows: whether the flow exists (existence check). Takes an
+    /// explicit bool, e.g. `--exists true` / `--exists false`. Defaults true.
+    #[arg(long, action = clap::ArgAction::Set, default_value_t = true)]
+    exists: bool,
+    /// Non-core sampling seed (deterministic, seedable — no unseeded randomness).
+    #[arg(long, default_value_t = 0)]
+    seed: u64,
+    /// Non-core sampling run index (which run this is, for seeded 1-in-N sampling).
+    #[arg(long, default_value_t = 0)]
+    run_index: u64,
+    /// Emit the serialized TierVerdict as JSON instead of a human report.
+    #[arg(long)]
+    json: bool,
 }
 
 // ── command handlers ──────────────────────────────────────────────────────────
@@ -154,6 +189,150 @@ fn cmd_extract(args: ExtractArgs) -> i32 {
     }
 }
 
+fn read_json(path: &std::path::Path, what: &str) -> Result<serde_json::Value, i32> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "trajectoryeval: cannot read {} {}: {}",
+                what,
+                path.display(),
+                e
+            );
+            return Err(2);
+        }
+    };
+    match serde_json::from_str(&raw) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            eprintln!(
+                "trajectoryeval: invalid {} JSON in {}: {}",
+                what,
+                path.display(),
+                e
+            );
+            Err(2)
+        }
+    }
+}
+
+fn cmd_tier(args: TierArgs) -> i32 {
+    // Read + parse the tier config.
+    let cfg_raw = match std::fs::read_to_string(&args.config) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "trajectoryeval: cannot read tier config {}: {}",
+                args.config.display(),
+                e
+            );
+            return 2;
+        }
+    };
+    let cfg: TierConfig = match serde_json::from_str(&cfg_raw) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("trajectoryeval: invalid tier config JSON: {}", e);
+            return 2;
+        }
+    };
+
+    let tier = cfg.tier_of(&args.flow);
+
+    let (verdict, code) = match tier {
+        Tier::Core => {
+            // Core flows: capture-and-diff every run. Baseline + snapshot required.
+            let (baseline, snapshot) = match (&args.baseline, &args.snapshot) {
+                (Some(b), Some(s)) => (b, s),
+                _ => {
+                    eprintln!(
+                        "trajectoryeval: core flow '{}' requires --baseline and --snapshot",
+                        args.flow
+                    );
+                    return 2;
+                }
+            };
+            let baseline = match read_json(baseline, "baseline") {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let snapshot = match read_json(snapshot, "snapshot") {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let diff = diff_snapshot(cfg.diff_strategy, &baseline, &snapshot);
+            let pass = diff.is_match();
+            (
+                TierVerdict {
+                    flow_id: args.flow.clone(),
+                    tier,
+                    diff: Some(diff),
+                    non_core: None,
+                    pass,
+                },
+                if pass { 0 } else { 1 },
+            )
+        }
+        Tier::NonCore => {
+            let decision = non_core_decision(
+                &args.flow,
+                args.exists,
+                cfg.sample_one_in,
+                args.seed,
+                args.run_index,
+            );
+            // Absent (existence check failed) is a deviation; present is a pass.
+            let pass = !matches!(decision, NonCoreDecision::Absent);
+            (
+                TierVerdict {
+                    flow_id: args.flow.clone(),
+                    tier,
+                    diff: None,
+                    non_core: Some(decision),
+                    pass,
+                },
+                if pass { 0 } else { 1 },
+            )
+        }
+    };
+
+    if args.json {
+        println!("{}", serde_json::to_string(&verdict).unwrap());
+    } else {
+        print_tier_report(&verdict);
+    }
+    code
+}
+
+fn print_tier_report(v: &TierVerdict) {
+    let tier = match v.tier {
+        Tier::Core => "core",
+        Tier::NonCore => "non-core",
+    };
+    println!("flow '{}' — tier: {}", v.flow_id, tier);
+    if let Some(diff) = &v.diff {
+        match diff {
+            DiffOutcome::Match => println!("  diff: match (snapshot equals baseline)"),
+            DiffOutcome::Mismatch { paths } => {
+                println!("  diff: MISMATCH at {}", paths.join(", "));
+            }
+            DiffOutcome::Stubbed { .. } => {
+                println!("  diff: screenshot/perceptual-hash strategy is a stub (not implemented)");
+            }
+        }
+    }
+    if let Some(nc) = &v.non_core {
+        match nc {
+            NonCoreDecision::Absent => println!("  existence: ABSENT (flow not present)"),
+            NonCoreDecision::ExistsSkipped => {
+                println!("  existence: present (not sampled this run)")
+            }
+            NonCoreDecision::ExistsSampled => println!("  existence: present (sampled this run)"),
+        }
+    }
+    println!("  result: {}", if v.pass { "pass" } else { "fail" });
+}
+
 // ── entry point ───────────────────────────────────────────────────────────────
 
 fn main() {
@@ -161,6 +340,7 @@ fn main() {
     let code = match cli.command {
         Command::Check(args) => cmd_check(args),
         Command::Extract(args) => cmd_extract(args),
+        Command::Tier(args) => cmd_tier(args),
     };
     exit(code);
 }

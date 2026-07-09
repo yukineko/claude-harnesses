@@ -18,6 +18,44 @@ Compares an actual ordered tool sequence against an expected spec and reports
 `{ pass, missing, unexpected, out_of_order }` (human report, or `--json` for the
 serialized result).
 
+### `trajectoryeval tier --config <cfg.json> --flow <id> [...]`
+
+**Risk-tiered e2e verification.** A config-driven "core" flow allowlist
+classifies a flow as **core** (business-critical) or **non-core** and applies
+tier-appropriate verification. Classification, diff, and sampling are all
+deterministic pure functions (no LLM, no network, no clock).
+
+- **config** JSON:
+  ```json
+  { "core": ["checkout", "payment"],
+    "diff_strategy": "structured_data",
+    "sample_one_in": 20 }
+  ```
+  `core` = the allowlist (exact-match). `diff_strategy` defaults to
+  `structured_data`. `sample_one_in` = sample non-core flows `1 in N` runs
+  (0 disables sampling → existence check only).
+
+- **core** flows: capture a snapshot and actually **diff** it every run
+  (`--baseline <base.json> --snapshot <snap.json>`). Because this repo has NO
+  deployed runtime UI, the primary always-available mechanism is a deterministic
+  **structured-data comparison** (normalized-shape JSON equality: object key
+  order is normalized/ignored, values and structure must match). Differences are
+  reported as JSON-pointer paths. A **perceptual-hash / screenshot** comparison
+  (`diff_strategy: "screenshot"`) is provided behind a trait/enum boundary but is
+  an honest **stub** (not implemented) — selecting it returns
+  `DiffOutcome::Stubbed` so a real implementation can be dropped in later without
+  changing the tiering logic.
+
+- **non-core** flows: a lightweight **existence check** (à la specguard
+  spec-audit — `--exists true|false`, default true) plus, when
+  `sample_one_in > 0`, a deterministic **seeded low-frequency sampling** decision
+  keyed by `(flow_id, --seed, --run-index)` (seedable, no unseeded randomness) —
+  same inputs always yield the same decision.
+
+The CLI reports the core/non-core classification and the diff (match/mismatch)
+result, or the non-core existence/sampling decision, as a human report or with
+`--json`.
+
 - **expected** spec JSON:
   ```json
   { "mode": "strict",

@@ -158,7 +158,9 @@ fn emit_violation(outcome: &GateOutcome, outcomes_path: &Path) {
     );
 
     // Best-effort: any store I/O failure is swallowed, not surfaced.
-    let _ = overwatch::store::append_violation(&cwd, &event);
+    if let Some(event) = event {
+        let _ = overwatch::store::append_violation(&cwd, &event);
+    }
 }
 
 #[cfg(test)]

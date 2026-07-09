@@ -1473,7 +1473,9 @@ fn emit_audit_violations(repo_root: &Path, findings: &[auditmap::StructuralFindi
             Some(f.detail.clone()),
         );
         // Fail-soft: an unwritable store must not affect the audit at all.
-        let _ = overwatch::store::append_violation(repo_root, &event);
+        if let Some(event) = event {
+            let _ = overwatch::store::append_violation(repo_root, &event);
+        }
     }
 }
 

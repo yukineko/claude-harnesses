@@ -270,7 +270,9 @@ fn emit_overwatch_violations(root: &Path, session: &str, properties: &[&str]) {
             ts,
             None,
         );
-        let _ = overwatch::store::append_violation(root, &event);
+        if let Some(event) = event {
+            let _ = overwatch::store::append_violation(root, &event);
+        }
     }
 }
 

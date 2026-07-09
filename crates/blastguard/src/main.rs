@@ -85,5 +85,7 @@ fn record_violation(input: &HookInput, reason: &str) {
         Some(reason.to_string()),
     );
     let cwd = input.cwd_or_current();
-    let _ = overwatch::store::append_violation(&cwd, &event);
+    if let Some(event) = event {
+        let _ = overwatch::store::append_violation(&cwd, &event);
+    }
 }

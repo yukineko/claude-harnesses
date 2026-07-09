@@ -1,5 +1,6 @@
 /// Event store and lease storage backend.
 use crate::event::LifecycleEvent;
+use crate::violation::ViolationEvent;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -45,6 +46,14 @@ pub fn leases_path(cwd: &Path) -> Result<PathBuf> {
 /// Path to the events.jsonl file (append-only).
 pub fn events_path(cwd: &Path) -> Result<PathBuf> {
     Ok(storage_root(cwd)?.join("events.jsonl"))
+}
+
+/// Path to the violations.jsonl file (append-only, gate-violation events for
+/// fleet-level correlated-error detection). Kept as a separate stream from
+/// events.jsonl since violations are a distinct signal (cross-task recurrence
+/// aggregation) from the lease lifecycle log.
+pub fn violations_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("violations.jsonl"))
 }
 
 /// Fail-soft load: a missing or corrupt leases.json is treated as an empty registry.
@@ -93,6 +102,43 @@ pub fn read_events(cwd: &Path) -> Result<Vec<LifecycleEvent>> {
             for line in txt.lines() {
                 if !line.is_empty() {
                     if let Ok(event) = serde_json::from_str::<LifecycleEvent>(line) {
+                        events.push(event);
+                    }
+                }
+            }
+            Ok(events)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Append a gate-violation event to the violations.jsonl file (one JSON line
+/// per event), for fleet-level correlated-error detection.
+pub fn append_violation(cwd: &Path, event: &ViolationEvent) -> Result<()> {
+    let path = violations_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string(event)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?
+        .write_all(format!("{}\n", json).as_bytes())?;
+    Ok(())
+}
+
+/// Read all gate-violation events from violations.jsonl. Returns an empty
+/// vec if the file doesn't exist or is empty (fail-soft, same contract as
+/// `read_events`).
+pub fn read_violations(cwd: &Path) -> Result<Vec<ViolationEvent>> {
+    let path = violations_path(cwd)?;
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => {
+            let mut events = Vec::new();
+            for line in txt.lines() {
+                if !line.is_empty() {
+                    if let Ok(event) = serde_json::from_str::<ViolationEvent>(line) {
                         events.push(event);
                     }
                 }

@@ -34,6 +34,25 @@ Claude Code のトランスクリプトを**1 行ずつ**ストリーム処理�
 
 実際のツール列を期待 spec と照合し、`{ pass, missing, unexpected, out_of_order }` を報告する(人間向けレポート、または `--json` でシリアライズ結果)。
 
+#### `trajectoryeval tier --config <cfg.json> --flow <id> [...]`
+
+**リスク階層化された e2e 検証。** 設定駆動の「コア」フロー allowlist で、フローを **core**(ビジネスクリティカル)か **non-core** に分類し、階層に応じた検証を行う。分類・diff・サンプリングはいずれも決定論的な純関数(LLM・ネットワーク・時計に依存しない)。
+
+- **config** JSON:
+  ```json
+  { "core": ["checkout", "payment"],
+    "diff_strategy": "structured_data",
+    "sample_one_in": 20 }
+  ```
+  `core` = コア allowlist(exact-match)。`diff_strategy` の既定は `structured_data`。`sample_one_in` = non-core フローを `1 in N` 回だけ深くサンプルする率(0 で無効=存在チェックのみ)。
+
+- **core フロー**: 毎回スナップショットを取得して実際に **diff** する。`--baseline <base.json> --snapshot <snap.json>` を渡す。このリポジトリはデプロイ済みランタイム UI を持たないため、常時利用可能な一次メカニズムは決定論的な **構造化データ照合**(正規化された shape の JSON 等価性。オブジェクトのキー順は正規化され無視、値・構造は一致必須)。差異があれば差分位置を JSON ポインタで列挙する。
+  - **perceptual-hash / screenshot** 比較は `diff_strategy: "screenshot"` として trait/enum 境界の背後に用意してあるが、これは**正直な stub**(未実装)で、選ぶと `DiffOutcome::Stubbed` を返すだけ。後から実装を差し込めるよう境界だけ切ってある。
+
+- **non-core フロー**: 軽量な **存在チェック**(specguard spec-audit 流の「そのフローが在るか」)。`--exists true|false`(既定 true)。さらに `sample_one_in > 0` なら、`(flow_id, --seed, --run-index)` を鍵にした **決定論的な低頻度サンプリング**(seedable。unseeded な乱数は使わない)で、その run が深いサンプル対象かを決める。同じ入力なら常に同じ判定。
+
+CLI はフローの core/non-core 分類と diff(match/mismatch)結果、または non-core の存在/サンプリング判定を、人間向けレポートまたは `--json` で報告する。
+
 - **expected** spec の JSON:
   ```json
   { "mode": "strict",

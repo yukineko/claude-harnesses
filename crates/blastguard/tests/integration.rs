@@ -23,6 +23,27 @@ fn run(payload: &str) -> (i32, String) {
     )
 }
 
+#[allow(dead_code)]
+fn run_with_env(payload: &str, envs: &[(&str, &str)]) -> (i32, String) {
+    let bin = env!("CARGO_BIN_EXE_blastguard");
+    let mut cmd = Command::new(bin);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().expect("binary spawns");
+    if let Some(mut child_stdin) = child.stdin.take() {
+        let _ = child_stdin.write_all(payload.as_bytes());
+    }
+    let out = child.wait_with_output().expect("binary runs");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
 #[test]
 fn bash_rm_rf_is_denied() {
     let payload = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}"#;

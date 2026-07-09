@@ -11,3 +11,4 @@ pub mod diffrisk;
 pub mod exclude;
 pub mod hookio;
 pub mod model;
+pub mod rule_id;

@@ -1381,6 +1381,19 @@ fn run_audit(cli: &Cli, l: &Loaded, paths: &report::Paths, json: bool, filter: &
         filter,
     );
 
+    // The deterministic, filter-scoped structural findings. Computed once here so
+    // both the `--json` and human paths emit the same fleet violations before
+    // returning.
+    let findings = auditmap::scan_map_filtered(&map, &l.repo_root, filter);
+
+    // Fleet-level correlated-error signal: record each structural finding as an
+    // overwatch violation so recurring spec/impl drift across tasks/sessions can
+    // be escalated as systemic. STRICTLY FAIL-SOFT — this must never change the
+    // audit's exit code, its report/envelope contents, or the finding set, and
+    // must never panic if the store is unwritable. A clean (no-findings) run
+    // emits nothing.
+    emit_audit_violations(&l.repo_root, &findings);
+
     if json {
         println!(
             "{}",
@@ -1391,7 +1404,6 @@ fn run_audit(cli: &Cli, l: &Loaded, paths: &report::Paths, json: bool, filter: &
 
     // Human summary: the structural findings (deterministic, filter-scoped) + how
     // many audit shards would be dispatched. Read-only; nothing is written.
-    let findings = auditmap::scan_map_filtered(&map, &l.repo_root, filter);
     let scope_note = if filter.trim().is_empty() {
         String::new()
     } else {
@@ -1418,6 +1430,51 @@ fn run_audit(cli: &Cli, l: &Loaded, paths: &report::Paths, json: bool, filter: &
         println!("  (no structural gaps; run the shards for the correctness audit)");
     }
     Ok(EXIT_OK)
+}
+
+/// Emit one overwatch fleet-violation per structural finding, FAIL-SOFT.
+///
+/// For each [`auditmap::StructuralFinding`] we build a
+/// [`overwatch::violation::ViolationEvent`] with `source = Specguard`,
+/// `drift_kind = finding.kind` (the stable token from
+/// [`auditmap::StructuralKind::as_str`]) and `symbol = finding.key` (the spec/impl
+/// map-entry key). The signature that overwatch normalizes therefore reads
+/// `specguard:<kind>:<symbol>` — stable across tasks/sessions so recurrence can be
+/// aggregated. `task_key` is a stable per-entry key (`<kind>:<symbol>`),
+/// `session_id` comes from `CLAUDE_CODE_SESSION_ID` (empty when unset), and the
+/// timestamp is [`overwatch::store::now`].
+///
+/// This is a pure side-signal for fleet correlation: it MUST NOT change the audit
+/// exit code, the report/envelope contents, or the finding set, and MUST NOT
+/// panic. `append_violation` returning `Err` (e.g. an unwritable store) is
+/// silently ignored — the audit proceeds unchanged. A clean (empty `findings`)
+/// run emits nothing.
+fn emit_audit_violations(repo_root: &Path, findings: &[auditmap::StructuralFinding]) {
+    if findings.is_empty() {
+        return;
+    }
+    let session_id = std::env::var("CLAUDE_CODE_SESSION_ID").unwrap_or_default();
+    let ts = overwatch::store::now();
+    for f in findings {
+        let kind = f.kind.as_str();
+        let symbol = f.key.as_str();
+        let task_key = format!("{kind}:{symbol}");
+        let raw = overwatch::violation::RawViolation {
+            drift_kind: Some(kind),
+            symbol: Some(symbol),
+            ..Default::default()
+        };
+        let event = overwatch::violation::build_event(
+            overwatch::violation::ViolationSource::Specguard,
+            &raw,
+            task_key,
+            session_id.clone(),
+            ts,
+            Some(f.detail.clone()),
+        );
+        // Fail-soft: an unwritable store must not affect the audit at all.
+        let _ = overwatch::store::append_violation(repo_root, &event);
+    }
 }
 
 /// Human-readable dump of the map for `specguard map list`.
@@ -1801,6 +1858,104 @@ mod tests {
         let got = resolve_date(None);
         std::env::remove_var("SPECGUARD_NOW");
         assert_eq!(got, "2026-07-07");
+    }
+
+    // -- overwatch fleet-violation emission (fail-soft side signal) ----------
+
+    fn finding(kind: auditmap::StructuralKind, key: &str) -> auditmap::StructuralFinding {
+        auditmap::StructuralFinding {
+            key: key.to_string(),
+            kind,
+            detail: "detail".to_string(),
+        }
+    }
+
+    // Run `body` with HOME pointed at `home`, serialized against the shared
+    // env-mutation lock (HOME is process-global, like SPECGUARD_NOW).
+    fn with_home<R>(home: &Path, body: impl FnOnce() -> R) -> R {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        let out = body();
+        match prev {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        out
+    }
+
+    #[test]
+    fn emit_audit_violations_appends_signed_violation_per_finding() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        let findings = vec![
+            finding(auditmap::StructuralKind::Undocumented, "crate::foo::Bar"),
+            finding(auditmap::StructuralKind::Untested, "crate::baz::Qux"),
+        ];
+
+        let events = with_home(tmp.path(), || {
+            std::env::set_var("CLAUDE_CODE_SESSION_ID", "sess-123");
+            emit_audit_violations(&repo, &findings);
+            std::env::remove_var("CLAUDE_CODE_SESSION_ID");
+            overwatch::store::read_violations(&repo).unwrap()
+        });
+
+        assert_eq!(events.len(), 2);
+        // Signature shape: specguard:<kind>:<symbol> (lowercased by overwatch).
+        let sigs: Vec<&str> = events.iter().map(|e| e.signature.as_str()).collect();
+        assert!(sigs.contains(&"specguard:undocumented:crate::foo::bar"));
+        assert!(sigs.contains(&"specguard:untested:crate::baz::qux"));
+        for e in &events {
+            assert_eq!(e.source, overwatch::violation::ViolationSource::Specguard);
+            assert_eq!(e.session_id, "sess-123");
+        }
+    }
+
+    #[test]
+    fn emit_audit_violations_clean_run_emits_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        let events = with_home(tmp.path(), || {
+            emit_audit_violations(&repo, &[]);
+            overwatch::store::read_violations(&repo).unwrap()
+        });
+        assert!(
+            events.is_empty(),
+            "a no-findings run must emit no violation"
+        );
+    }
+
+    #[test]
+    fn emit_audit_violations_does_not_change_audit_outputs() {
+        // The emit is a pure side signal: given the SAME findings slice before and
+        // after, the finding set the caller uses is untouched (we pass by &ref and
+        // never mutate), and the function returns () — it cannot alter exit codes.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let findings = vec![finding(auditmap::StructuralKind::Undocumented, "a::b")];
+        let before = findings.clone();
+        with_home(tmp.path(), || emit_audit_violations(&repo, &findings));
+        assert_eq!(findings, before, "findings set must be unchanged by emit");
+    }
+
+    #[test]
+    fn emit_audit_violations_fail_soft_when_store_unwritable() {
+        // Point HOME at a *file* so `~/.overwatch/...` can never be created:
+        // create_dir_all under a non-directory path fails, append_violation
+        // returns Err, and emit must swallow it without panicking.
+        let tmp = tempfile::tempdir().unwrap();
+        let home_file = tmp.path().join("home-is-a-file");
+        std::fs::write(&home_file, b"not a dir").unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let findings = vec![finding(auditmap::StructuralKind::Untested, "x::y")];
+        // Must NOT panic.
+        with_home(&home_file, || emit_audit_violations(&repo, &findings));
     }
 
     #[test]

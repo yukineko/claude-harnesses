@@ -10,16 +10,16 @@ Claude Code 向けの、**プロジェクト全体の実行レジストリ**。R
 - **Stop** フックで、status ビューをリフレッシュし、人間がレビューできるようにする。
 - いずれかのセッションが `overwatch begin --key <k>` を呼べば、原子的にそのキーを claim する。別セッションが既に live lease を保持していれば、リクエストは reject される。
 - **Dedup 契約**: exit 1 + skip JSON = 「別セッションが保持中」→ 呼び出し元は **決して先に進んではいけない**。
-- Liveness はハートビート TTL で管理。dead lease（N 秒間ハートビート更新なし）は手動で reap するか自動 expire できる。
+- Liveness はハートビート TTL で管理。dead lease（1800 秒 / 30 分ハートビート更新なし）は `overwatch reap` で手動 reap する（HOTL gate）。自動 expire はしない。
 
 単一 Rust バイナリと 2 つのフック（SessionStart + Stop）だけで動き、サブスクリプションネイティブである。追加の API key も要らない。
 
 ## 管理対象
 
-プロジェクトごと、`<base>/<project-key>/overwatch/` に以下を置く：
+プロジェクトごと、`~/.overwatch/<project-key>/overwatch/` に以下を置く：
 
 ```
-leases.json              # 現在の lease スナップショット: { "key": { "holder": "session-id", "updated_at": "...", ... } }
+leases.json              # 現在の lease スナップショット: { "<key>": { "key", "title", "session_id", "run_id", "claimed_at", "heartbeat_at" } }
 events.jsonl             # append-only イベント ログ
 ```
 
@@ -33,8 +33,11 @@ events.jsonl             # append-only イベント ログ
 
 ```sh
 cargo install --path .
-overwatch install
 ```
+
+`overwatch install` というステップは存在しない。プラグインは同梱バイナリを配布し、
+レジストリ／ストアは初回利用時に遅延生成される。インストールは単なるコピーであり、
+実行すべきセットアップコマンドはない。
 
 ## コマンド
 
@@ -76,22 +79,20 @@ overwatch begin --key "hypothesis-v2.3"
 
 ## Liveness と TTL
 
-各 lease は `updated_at` タイムスタンプと設定可能なハートビート TTL（既定: 5 分）を持つ。
+各 lease は `heartbeat_at`（および `claimed_at`）タイムスタンプを持つ。staleness の判定は
+**固定**のハートビート TTL **1800 秒（30 分）**（`store::LEASE_TTL_SECS`）に対して行う。
+TTL はコンパイル時定数であり、設定変更はできない。
 
-- セッションが `overwatch begin` を呼ぶ → タイムスタンプが記録され、lease が取得される。
-- セッションが活動中（定期的に `overwatch heartbeat --key <k>` を呼ぶ）→ TTL がリセットされ、lease は有効。
-- セッションが crash・hang・異常終了に陥る → ハートビート更新が止まり、タイムスタンプが陳腐化。
-- TTL が切れると、`overwatch reap` で dead lease を削除でき、キーが再利用可能になる。
+- セッションが `overwatch begin` を呼ぶ → `claimed_at`／`heartbeat_at` が記録され、lease が取得される。
+- セッションが活動中（定期的に `overwatch heartbeat --key <k>` を呼ぶ）→ `heartbeat_at` が更新され、lease は有効。
+- セッションが crash・hang・異常終了に陥る → ハートビート更新が止まり、`heartbeat_at` が陳腐化。
+- `now - heartbeat_at > 1800s` になると、`overwatch reap` で dead lease を削除でき、キーが再利用可能になる。
 
-## 設定（`overwatch.toml`）
+## ストレージ
 
-```toml
-enabled = true
-# base = "~/.local/share/claude-harnesses"  # 既定: ~/.local/share/claude-harnesses
-ttl_secs = 300                              # ハートビート TTL（既定: 5 分）
-```
-
-セッション単位で無効化したいときは `OVERWATCH_DISABLED=1` を指定する。
+状態はリポジトリごとに `~/.overwatch/<project-key>/overwatch/`（`leases.json` +
+`events.jsonl`）に保存される。設定ファイルや TTL の調整ノブは存在せず、上記の挙動が
+現在バイナリが実装している唯一のものである。
 
 ## ストレージ構成
 

@@ -8,16 +8,16 @@ A distributed multi-session system requires coordination. overwatch keeps a sing
 - On **Stop** it refreshes the status view for the human to review.
 - Any session can call `overwatch begin --key <k>` to atomically claim a key; if another session already holds a live lease, the request is denied.
 - Dedup contract: **exit 1 + skip JSON** = "another session has this"; caller must NOT proceed.
-- Liveness is heartbeat-TTL; dead leases (no heartbeat for N seconds) can be manually reaped or auto-expired.
+- Liveness is heartbeat-TTL; dead leases (no heartbeat for 1800s / 30 min) are reaped on demand via `overwatch reap` (HOTL-gated).
 
 Subscription-native: one Rust binary, two hooks (SessionStart + Stop), no API key.
 
 ## What it manages
 
-A per-project registry at `<base>/<project-key>/overwatch/`:
+A per-project registry at `~/.overwatch/<project-key>/overwatch/`:
 
 ```
-leases.json              # current lease snapshot: { "key": { "holder": "session-id", "updated_at": "...", ... } }
+leases.json              # current lease snapshot: { "<key>": { "key", "title", "session_id", "run_id", "claimed_at", "heartbeat_at" } }
 events.jsonl             # append-only event log
 ```
 
@@ -31,8 +31,11 @@ events.jsonl             # append-only event log
 
 ```sh
 cargo install --path .
-overwatch install
 ```
+
+There is no `overwatch install` step: the plugin ships a bundled binary and the
+registry/store is created lazily on first use. Installing is a plain copy — no
+setup command to run.
 
 ## Commands
 
@@ -74,23 +77,20 @@ All side-effect commands (pause/resume/reassign/end/reap) are gated by AskUserQu
 
 ## Liveness & TTL
 
-Each lease has a `updated_at` timestamp and a configurable heartbeat TTL (default: 5 minutes).
+Each lease carries a `heartbeat_at` timestamp (plus `claimed_at`). Staleness is
+judged against a **fixed** heartbeat TTL of **1800 seconds (30 minutes)** —
+`store::LEASE_TTL_SECS`. The TTL is a compile-time constant, not configurable.
 
-- A session calls `overwatch begin` → timestamp recorded, lease acquired.
-- Session keeps the lease alive by calling `overwatch heartbeat --key <k>` periodically.
-- If heartbeat updates stop (session crashed, hung, or disconnected), the timestamp stales.
-- When TTL expires, `overwatch reap` can delete the dead lease, freeing the key.
+- A session calls `overwatch begin` → `claimed_at`/`heartbeat_at` recorded, lease acquired.
+- Session keeps the lease alive by calling `overwatch heartbeat --key <k>` periodically (refreshes `heartbeat_at`).
+- If heartbeat updates stop (session crashed, hung, or disconnected), `heartbeat_at` stales.
+- Once `now - heartbeat_at > 1800s`, `overwatch reap` can delete the dead lease, freeing the key.
 
-## Config
+## Storage
 
-```toml
-# overwatch.toml (in project root or per-session override)
-enabled = true
-# base = "~/.local/share/claude-harnesses"  # default storage location
-ttl_secs = 300                              # heartbeat TTL (default: 5 minutes)
-```
-
-Disable per-session with `OVERWATCH_DISABLED=1`.
+State lives under `~/.overwatch/<project-key>/overwatch/` (`leases.json` +
+`events.jsonl`), keyed per repository. There is no config file and no TTL knob;
+the only behaviors above are the ones the binary implements today.
 
 ## Storage layout
 

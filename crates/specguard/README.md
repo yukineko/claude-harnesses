@@ -188,7 +188,10 @@ Where `run` / `brief` are **read-only audits**, the `map` subcommand and the
   Renamed→move, Deleted→detach/`missing`) and carries no drift-workflow logic — it is designed as a
   **shared layer that a future `spec-audit` will also consume** (the command never reimplements the
   map; it always delegates to `specguard map`). Each entry has `kind` (Feature|Endpoint), `spec_doc`,
-  `impl_files`, `test_files`, `client_refs`, and `api` ({method, route}).
+  `impl_files`, `test_files`, `client_refs`, and `api` ({method, route}). A full-history `map build`
+  no longer resurrects deleted sources: because `git log --name-status` emits reverse-chronological
+  (newest commit first), changes are folded oldest→newest (last-writer-wins), so a path deleted in a
+  newer commit correctly leaves no dangling entry.
 - **`/specguard:drift-map`** is the LLM orchestration that **consumes** that store: (1) keep the map
   fresh via `map sync`, (2) reference each entry's spec under `docs/specs/`, (3) for entries with no
   spec, read the impl + tests and author a spec body (overview / invariants / behavior), marked
@@ -245,7 +248,16 @@ of the next run's diff and go undetected).
   files are audited)
 - `[output]` … `report_dir` / `sentinel`
 - `[prompt]` … `template` (embedded default if omitted) / `require_ratification`
-  (the ratification gate)
+  (the ratification gate) / `graded` + `graded_threshold` (graded triage: default
+  OFF keeps the classic binary gate; when ON, a changed template whose
+  token-shingle Jaccard similarity to an already-ratified precedent is `>=
+  graded_threshold` auto-ratifies, reserving human `accept-prompt` for large
+  deviations. A **polarity guard** rides alongside the similarity score: it
+  applies synonym expansion and canonical-bucket folding (e.g. approve/deny,
+  permit/forbid, human/auto all collapse to the same bucket as their synonyms)
+  to detect meaning inversion, so only a genuine cross-bucket polarity flip
+  forces `Novel` even when the lexical similarity stays high — that inversion
+  always escalates to a human regardless of the threshold)
 - `[[area]]` (repeatable) … `name` / `globs` / `canon`. **In-scope when a change
   matches `globs`**
 - `[[invariant]]` (repeatable) … `name` / `description` / `canon`. **Checked

@@ -11,6 +11,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
+/// Guards every test in this file that mutates the process-global
+/// `LESSONS_STORE_DIR` env var directly (as opposed to passing it only to a
+/// spawned child via `Command::env`, which is race-free). Integration tests
+/// run in parallel threads within one process by default, so a raw
+/// `set_var`/`remove_var` window here could otherwise leak into a sibling
+/// test's child-process spawn and corrupt its store path.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn temp_home() -> PathBuf {
     let n = COUNTER.fetch_add(1, Ordering::SeqCst);
     let dir = std::env::temp_dir().join(format!("stuckguard-it-{}-{}", std::process::id(), n));
@@ -233,20 +241,24 @@ fn escalation_appends_exactly_one_error_pattern_lesson() {
     // directly (mirrors how `record_lesson` builds a `Lesson`) and confirm
     // idempotency-by-id holds, which is the same contract `harness_core::lessons`
     // already guarantees.
-    std::env::set_var("LESSONS_STORE_DIR", &lessons_dir);
-    let before = harness_core::lessons::load().len();
-    let lesson = harness_core::lessons::Lesson {
-        id: "idempotency-probe".to_string(),
-        kind: harness_core::lessons::Kind::ErrorPattern,
-        task_summary: "stuck pattern (repeat): probe".to_string(),
-        lesson_text: "probe text".to_string(),
-        source_run: "stuckguard:probe".to_string(),
-        ts: 0,
+    let (before, after) = {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("LESSONS_STORE_DIR", &lessons_dir);
+        let before = harness_core::lessons::load().len();
+        let lesson = harness_core::lessons::Lesson {
+            id: "idempotency-probe".to_string(),
+            kind: harness_core::lessons::Kind::ErrorPattern,
+            task_summary: "stuck pattern (repeat): probe".to_string(),
+            lesson_text: "probe text".to_string(),
+            source_run: "stuckguard:probe".to_string(),
+            ts: 0,
+        };
+        harness_core::lessons::append(&lesson);
+        harness_core::lessons::append(&lesson);
+        let after = harness_core::lessons::load().len();
+        std::env::remove_var("LESSONS_STORE_DIR");
+        (before, after)
     };
-    harness_core::lessons::append(&lesson);
-    harness_core::lessons::append(&lesson);
-    let after = harness_core::lessons::load().len();
-    std::env::remove_var("LESSONS_STORE_DIR");
     assert_eq!(
         after,
         before + 1,
@@ -304,6 +316,186 @@ fn non_escalating_nudge_appends_no_lesson() {
         count_lessons(&lessons_dir),
         0,
         "a non-escalating nudge must append zero lessons"
+    );
+}
+
+// --- lessons-store RETRIEVE-on-escalation ----------------------------------
+//
+// The write side (above) records a lesson on escalation; these tests cover
+// the retrieve side: escalating again with a relevant lesson already in the
+// store must surface its `lesson_text` in the escalation message, while an
+// empty/irrelevant or unreadable store must leave the message unchanged
+// (fail-soft, byte-identical to the no-retrieval case).
+
+#[test]
+fn escalation_surfaces_a_relevant_seeded_lesson() {
+    let home = temp_home();
+    let lessons_dir = temp_home();
+    let session = "sess-retrieve";
+
+    // Seed a relevant lesson directly into the isolated store before any
+    // stuckguard run. The trip's `detail` for a Bash repeat is the generic
+    // "{tool} を {count} 回" string (not the literal command text), so the
+    // seeded lesson's text must overlap on THAT — same shape `record_lesson`
+    // itself would have distilled from a prior escalation of this pattern.
+    {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("LESSONS_STORE_DIR", &lessons_dir);
+        harness_core::lessons::append(&harness_core::lessons::Lesson {
+            id: "seeded-bash-repeat-lesson".to_string(),
+            kind: harness_core::lessons::Kind::ErrorPattern,
+            task_summary: "stuck pattern (repeat): Bash を 2 回".to_string(),
+            lesson_text: "when Bash を 2 回 repeats, stop and inspect the real failure instead"
+                .to_string(),
+            source_run: "stuckguard:prior-session:repeat:bash".to_string(),
+            ts: 1,
+        });
+        std::env::remove_var("LESSONS_STORE_DIR");
+    }
+
+    // 1st Bash call: records the event only.
+    let (c1, out1) = run_with_lessons(
+        &home,
+        &lessons_dir,
+        &["watch"],
+        &bash_payload(session, "cargo test"),
+    );
+    assert_eq!(c1, 0);
+    assert!(out1.trim().is_empty(), "first call trips nothing: {out1}");
+
+    // 2nd identical Bash call: trips AND escalates (repeat_threshold=2,
+    // escalate_after=1) — the escalation message must now surface the
+    // seeded lesson's text.
+    let (c2, out2) = run_with_lessons(
+        &home,
+        &lessons_dir,
+        &["watch"],
+        &bash_payload(session, "cargo test"),
+    );
+    assert_eq!(c2, 0, "PostToolUse hook must always exit 0");
+    assert!(
+        out2.contains("🛑"),
+        "2nd identical call must escalate, got: {out2}"
+    );
+    assert!(
+        out2.contains("when Bash を 2 回 repeats, stop and inspect the real failure instead"),
+        "escalation message must surface the retrieved lesson_text, got: {out2}"
+    );
+    assert!(
+        out2.contains("past lesson:"),
+        "escalation message must include a 'past lesson:' line, got: {out2}"
+    );
+}
+
+#[test]
+fn escalation_with_empty_or_irrelevant_store_is_byte_identical_to_no_retrieval() {
+    let home_a = temp_home();
+    let lessons_dir_a = temp_home();
+    let session_a = "sess-empty-store";
+
+    // Baseline: escalate against a completely empty lessons store.
+    let _ = run_with_lessons(
+        &home_a,
+        &lessons_dir_a,
+        &["watch"],
+        &bash_payload(session_a, "cargo build"),
+    );
+    let (_, baseline_msg) = run_with_lessons(
+        &home_a,
+        &lessons_dir_a,
+        &["watch"],
+        &bash_payload(session_a, "cargo build"),
+    );
+    assert!(
+        baseline_msg.contains("🛑"),
+        "baseline run must escalate: {baseline_msg}"
+    );
+    assert!(!baseline_msg.contains("past lesson:"));
+
+    // Same scenario, but the store now holds a lesson about a wholly
+    // unrelated topic — must not match and must produce the identical
+    // escalation message.
+    let home_b = temp_home();
+    let lessons_dir_b = temp_home();
+    let session_b = "sess-irrelevant-store";
+
+    {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("LESSONS_STORE_DIR", &lessons_dir_b);
+        harness_core::lessons::append(&harness_core::lessons::Lesson {
+            id: "unrelated-billing-lesson".to_string(),
+            kind: harness_core::lessons::Kind::Convention,
+            task_summary: "repo uses semantic versioning for releases".to_string(),
+            lesson_text: "bump the minor version on every feature release".to_string(),
+            source_run: "run-unrelated".to_string(),
+            ts: 1,
+        });
+        std::env::remove_var("LESSONS_STORE_DIR");
+    }
+
+    let _ = run_with_lessons(
+        &home_b,
+        &lessons_dir_b,
+        &["watch"],
+        &bash_payload(session_b, "cargo build"),
+    );
+    let (_, irrelevant_msg) = run_with_lessons(
+        &home_b,
+        &lessons_dir_b,
+        &["watch"],
+        &bash_payload(session_b, "cargo build"),
+    );
+    assert!(
+        irrelevant_msg.contains("🛑"),
+        "second run must escalate: {irrelevant_msg}"
+    );
+
+    assert_eq!(
+        baseline_msg, irrelevant_msg,
+        "an irrelevant lesson in the store must leave the escalation message byte-identical \
+         to the empty-store case"
+    );
+    assert!(!irrelevant_msg.contains("past lesson:"));
+}
+
+#[test]
+fn escalation_with_unreadable_lessons_store_never_panics_on_retrieval() {
+    // Point LESSONS_STORE_DIR at a path whose PARENT is a regular file (same
+    // trick as the write-side unwritable test), so any attempt to descend
+    // into it to load lessons.jsonl fails rather than reading normally. The
+    // retrieval must degrade to "no lesson found", never panic, and the hook
+    // must still exit 0 and still escalate.
+    let home = temp_home();
+    let blocker = temp_home();
+    std::fs::write(blocker.join("not-a-dir"), b"x").expect("write blocker file");
+    let unreadable_lessons_dir = blocker.join("not-a-dir").join("lessons-store");
+    let session = "sess-unreadable-retrieve";
+
+    let (c1, _) = run_with_lessons(
+        &home,
+        &unreadable_lessons_dir,
+        &["watch"],
+        &bash_payload(session, "cargo test"),
+    );
+    assert_eq!(c1, 0, "hook must exit 0 even with an unreadable store");
+
+    let (c2, out2) = run_with_lessons(
+        &home,
+        &unreadable_lessons_dir,
+        &["watch"],
+        &bash_payload(session, "cargo test"),
+    );
+    assert_eq!(
+        c2, 0,
+        "escalation over an unreadable lessons store must not panic/break the hook"
+    );
+    assert!(
+        out2.contains("🛑"),
+        "escalation message must still be emitted: {out2}"
+    );
+    assert!(
+        !out2.contains("past lesson:"),
+        "unreadable store must degrade to no-retrieval, not panic: {out2}"
     );
 }
 

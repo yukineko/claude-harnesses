@@ -40,7 +40,8 @@ fn violations_persist_and_round_trip_through_store() {
             "session-1".to_string(),
             1_000,
             Some("denied: rm -rf /tmp/x".to_string()),
-        ),
+        )
+        .unwrap(),
         violation::build_event(
             ViolationSource::Blastguard,
             &RawViolation {
@@ -51,7 +52,8 @@ fn violations_persist_and_round_trip_through_store() {
             "session-2".to_string(),
             2_000,
             None,
-        ),
+        )
+        .unwrap(),
         violation::build_event(
             ViolationSource::Blastguard,
             &RawViolation {
@@ -62,7 +64,8 @@ fn violations_persist_and_round_trip_through_store() {
             "session-3".to_string(),
             3_000,
             None,
-        ),
+        )
+        .unwrap(),
         // A one-off propguard failure that should NOT be flagged systemic.
         violation::build_event(
             ViolationSource::Propguard,
@@ -74,7 +77,8 @@ fn violations_persist_and_round_trip_through_store() {
             "session-1".to_string(),
             1_500,
             None,
-        ),
+        )
+        .unwrap(),
     ];
 
     // Append each event as a JSON line (mirrors store::append_violation).
@@ -150,7 +154,8 @@ fn recurrence_window_excludes_stale_events_deterministically() {
             "session-x".to_string(),
             0, // far in the past
             None,
-        ),
+        )
+        .unwrap(),
         violation::build_event(
             ViolationSource::Mutategate,
             &RawViolation {
@@ -161,7 +166,8 @@ fn recurrence_window_excludes_stale_events_deterministically() {
             "session-y".to_string(),
             9_950,
             None,
-        ),
+        )
+        .unwrap(),
         violation::build_event(
             ViolationSource::Mutategate,
             &RawViolation {
@@ -172,7 +178,8 @@ fn recurrence_window_excludes_stale_events_deterministically() {
             "session-z".to_string(),
             9_990,
             None,
-        ),
+        )
+        .unwrap(),
     ];
 
     let policy = RecurrencePolicy {
@@ -212,7 +219,8 @@ fn specguard_signatures_distinguish_by_symbol() {
             "session-1".to_string(),
             100,
             None,
-        ),
+        )
+        .unwrap(),
         violation::build_event(
             ViolationSource::Specguard,
             &RawViolation {
@@ -224,7 +232,8 @@ fn specguard_signatures_distinguish_by_symbol() {
             "session-2".to_string(),
             200,
             None,
-        ),
+        )
+        .unwrap(),
     ];
 
     assert_ne!(events[0].signature, events[1].signature);

@@ -104,32 +104,54 @@ pub struct RawViolation<'a> {
 /// Signature shape: `<source>:<discriminator>[:<discriminator2>]`, all
 /// lowercased and whitespace-trimmed so cosmetic differences (case, stray
 /// spaces) don't fragment what is really the same recurring failure.
-pub fn normalize_signature(source: ViolationSource, raw: &RawViolation) -> String {
-    let norm = |s: &str| s.trim().to_lowercase().replace(' ', "-");
+///
+/// **Empty / whitespace-only / missing discriminator is rejected** (`None`),
+/// rather than folded into a bare `<source>:unknown` bucket. Correlated-error
+/// detection escalates a signature to "systemic" once it recurs across
+/// distinct tasks; a catch-all `unknown` bucket would merge *unrelated*
+/// failures that merely happen to lack a discriminator into one signature and
+/// falsely flag them as a systemic pattern. Since a missing discriminator by
+/// definition carries no information to distinguish one failure from another,
+/// the only safe options are (a) drop it or (b) invent a colliding sentinel;
+/// we drop it. Callers that receive `None` must not persist the event (see
+/// [`build_event`] / `store::append_violation`, which fail-soft skip it).
+pub fn normalize_signature(source: ViolationSource, raw: &RawViolation) -> Option<String> {
+    // Normalize a field, treating empty/whitespace-only as absent (`None`)
+    // so a present-but-blank discriminator is handled the same as a missing
+    // one instead of producing a bare `<source>:` bucket.
+    let norm = |s: &str| {
+        let n = s.trim().to_lowercase().replace(' ', "-");
+        if n.is_empty() {
+            None
+        } else {
+            Some(n)
+        }
+    };
 
     let discriminator = match source {
-        ViolationSource::Blastguard => raw.rule_id.map(norm).unwrap_or_else(|| "unknown".into()),
-        ViolationSource::Propguard => raw
-            .property_id
-            .map(norm)
-            .unwrap_or_else(|| "unknown".into()),
+        ViolationSource::Blastguard => raw.rule_id.and_then(norm)?,
+        ViolationSource::Propguard => raw.property_id.and_then(norm)?,
         ViolationSource::Specguard => {
-            let kind = raw.drift_kind.map(norm).unwrap_or_else(|| "unknown".into());
-            match raw.symbol.map(norm) {
+            // The drift kind is the required discriminator; the symbol is an
+            // optional refinement. A missing/blank kind is not bucketable.
+            let kind = raw.drift_kind.and_then(norm)?;
+            match raw.symbol.and_then(norm) {
                 Some(sym) => format!("{kind}:{sym}"),
                 None => kind,
             }
         }
-        ViolationSource::Mutategate => raw
-            .mutation_operator
-            .map(norm)
-            .unwrap_or_else(|| "unknown".into()),
+        ViolationSource::Mutategate => raw.mutation_operator.and_then(norm)?,
     };
 
-    format!("{}:{}", source.token(), discriminator)
+    Some(format!("{}:{}", source.token(), discriminator))
 }
 
 /// Build a [`ViolationEvent`] from raw fields, normalizing the signature.
+///
+/// Returns `None` when the raw violation has no usable discriminator (empty /
+/// whitespace-only / missing): such an event cannot be correlated with
+/// anything and must not be recorded, so callers fail-soft skip it rather than
+/// pollute the ledger with an `unknown` bucket that merges unrelated failures.
 #[allow(clippy::too_many_arguments)]
 pub fn build_event(
     source: ViolationSource,
@@ -138,15 +160,15 @@ pub fn build_event(
     session_id: String,
     ts: i64,
     detail: Option<String>,
-) -> ViolationEvent {
-    ViolationEvent {
+) -> Option<ViolationEvent> {
+    Some(ViolationEvent {
         source,
-        signature: normalize_signature(source, raw),
+        signature: normalize_signature(source, raw)?,
         task_key,
         session_id,
         ts,
         detail,
-    }
+    })
 }
 
 /// Recurrence detection configuration. Both fields are intentionally
@@ -309,7 +331,7 @@ mod tests {
         let a = normalize_signature(ViolationSource::Blastguard, &raw_blastguard("rm-rf"));
         let b = normalize_signature(ViolationSource::Blastguard, &raw_blastguard("rm-rf"));
         assert_eq!(a, b);
-        assert_eq!(a, "blastguard:rm-rf");
+        assert_eq!(a.as_deref(), Some("blastguard:rm-rf"));
     }
 
     #[test]
@@ -317,7 +339,7 @@ mod tests {
         let a = normalize_signature(ViolationSource::Propguard, &raw_propguard("PROP-003"));
         let b = normalize_signature(ViolationSource::Propguard, &raw_propguard(" prop-003 "));
         assert_eq!(a, b);
-        assert_eq!(a, "propguard:prop-003");
+        assert_eq!(a.as_deref(), Some("propguard:prop-003"));
     }
 
     #[test]
@@ -333,7 +355,10 @@ mod tests {
             ViolationSource::Specguard,
             &raw_specguard("spec-without-impl", "crate::foo::Bar"),
         );
-        assert_eq!(sig, "specguard:spec-without-impl:crate::foo::bar");
+        assert_eq!(
+            sig.as_deref(),
+            Some("specguard:spec-without-impl:crate::foo::bar")
+        );
     }
 
     #[test]
@@ -342,13 +367,76 @@ mod tests {
             ViolationSource::Mutategate,
             &raw_mutategate("arithmetic-op-swap"),
         );
-        assert_eq!(sig, "mutategate:arithmetic-op-swap");
+        assert_eq!(sig.as_deref(), Some("mutategate:arithmetic-op-swap"));
     }
 
     #[test]
-    fn normalize_signature_missing_field_falls_back_to_unknown() {
-        let sig = normalize_signature(ViolationSource::Blastguard, &RawViolation::default());
-        assert_eq!(sig, "blastguard:unknown");
+    fn normalize_signature_missing_discriminator_is_rejected() {
+        // A wholly-missing discriminator is not bucketable: it must be
+        // dropped (`None`), not folded into a catch-all `<source>:unknown`
+        // bucket that would merge unrelated failures into a false systemic
+        // signature.
+        assert_eq!(
+            normalize_signature(ViolationSource::Blastguard, &RawViolation::default()),
+            None
+        );
+    }
+
+    #[test]
+    fn normalize_signature_empty_and_whitespace_discriminator_are_rejected() {
+        // Present-but-blank is treated the same as absent.
+        assert_eq!(
+            normalize_signature(ViolationSource::Propguard, &raw_propguard("")),
+            None
+        );
+        assert_eq!(
+            normalize_signature(ViolationSource::Mutategate, &raw_mutategate("   ")),
+            None
+        );
+        // Specguard: a symbol is present but the required drift kind is blank
+        // -> still rejected (kind is the mandatory discriminator).
+        assert_eq!(
+            normalize_signature(
+                ViolationSource::Specguard,
+                &raw_specguard("  ", "crate::foo")
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn empty_discriminator_inputs_do_not_collide_into_one_signature() {
+        // Two genuinely-different empty-discriminator inputs (different
+        // sources, different blank raw fields) must NOT collapse into a single
+        // shared `<source>:unknown` signature that merges unrelated failures.
+        // Under the reject-and-drop contract they both normalize to `None`,
+        // so neither is recorded and there is no shared bucket to correlate
+        // them — proving the false-systemic collision is gone.
+        let a = normalize_signature(ViolationSource::Blastguard, &raw_blastguard(""));
+        let b = normalize_signature(ViolationSource::Propguard, &raw_propguard("   "));
+        assert_eq!(a, None);
+        assert_eq!(b, None);
+
+        // And via the build path: an un-bucketable raw yields no event to
+        // persist, so unrelated blanks never land in the same ledger bucket.
+        let ea = build_event(
+            ViolationSource::Blastguard,
+            &raw_blastguard(""),
+            "task-a".to_string(),
+            "session-a".to_string(),
+            1,
+            Some("disk full".to_string()),
+        );
+        let eb = build_event(
+            ViolationSource::Propguard,
+            &raw_propguard("   "),
+            "task-b".to_string(),
+            "session-b".to_string(),
+            2,
+            Some("timeout".to_string()),
+        );
+        assert!(ea.is_none());
+        assert!(eb.is_none());
     }
 
     #[test]
@@ -374,7 +462,8 @@ mod tests {
             "session-a".to_string(),
             1000,
             Some("denied rm -rf /".to_string()),
-        );
+        )
+        .expect("well-formed discriminator builds an event");
         assert_eq!(ev.signature, "blastguard:rm-rf");
         assert_eq!(ev.task_key, "task-1");
     }

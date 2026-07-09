@@ -59,14 +59,27 @@ pub fn record(
         },
     };
 
-    let event = violation::build_event(
+    // An empty / whitespace-only / missing discriminator is not bucketable:
+    // recording it under a catch-all `<source>:unknown` signature would merge
+    // unrelated failures into one false "systemic" pattern. Fail-soft skip it
+    // (report `recorded: false`) instead of polluting the ledger.
+    let Some(event) = violation::build_event(
         source,
         &raw,
         task_key.to_string(),
         session_id,
         now,
         detail.map(str::to_string),
-    );
+    ) else {
+        println!(
+            "{}",
+            serde_json::json!({
+                "recorded": false,
+                "reason": "empty-or-missing-discriminator",
+            })
+        );
+        return Ok(());
+    };
 
     println!(
         "{}",

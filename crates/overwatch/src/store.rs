@@ -112,9 +112,36 @@ pub fn read_events(cwd: &Path) -> Result<Vec<LifecycleEvent>> {
     }
 }
 
+/// A signature is bucketable (safe to correlate on) only if it has a
+/// non-empty discriminator after the `<source>:` prefix. An empty tail (or an
+/// empty/whitespace-only signature) is a catch-all that would merge unrelated
+/// failures, so it is rejected.
+fn signature_is_bucketable(signature: &str) -> bool {
+    match signature.split_once(':') {
+        // `<source>:<discriminator>` — discriminator must be non-blank.
+        Some((source, discriminator)) => {
+            !source.trim().is_empty() && !discriminator.trim().is_empty()
+        }
+        // No `:` at all is malformed / not a real signature.
+        None => false,
+    }
+}
+
 /// Append a gate-violation event to the violations.jsonl file (one JSON line
 /// per event), for fleet-level correlated-error detection.
+///
+/// An event whose signature has no discriminator (shape `<source>:` with an
+/// empty tail, or an empty/whitespace-only signature) is **not** persisted:
+/// such a signature carries no information to distinguish one failure from
+/// another, so recording it would merge unrelated failures into one bucket and
+/// falsely flag them as systemic. This is a fail-soft backstop — the normal
+/// path via `violation::build_event` already drops un-bucketable events
+/// (returns `None`) before reaching here — but it guards any caller that
+/// hand-builds a `ViolationEvent`. Returns `Ok(())` without writing (skip).
 pub fn append_violation(cwd: &Path, event: &ViolationEvent) -> Result<()> {
+    if !signature_is_bucketable(&event.signature) {
+        return Ok(());
+    }
     let path = violations_path(cwd)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -185,6 +212,21 @@ pub fn init() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signature_bucketable_rejects_empty_discriminator() {
+        assert!(signature_is_bucketable("blastguard:rm-rf"));
+        assert!(signature_is_bucketable(
+            "specguard:spec-without-impl:crate::foo"
+        ));
+        // Empty / blank discriminator -> not bucketable.
+        assert!(!signature_is_bucketable("blastguard:"));
+        assert!(!signature_is_bucketable("blastguard:   "));
+        // Empty / malformed signature -> not bucketable.
+        assert!(!signature_is_bucketable(""));
+        assert!(!signature_is_bucketable("blastguard"));
+        assert!(!signature_is_bucketable(":rm-rf"));
+    }
 
     #[test]
     fn is_held_by_other_detects_different_session() {

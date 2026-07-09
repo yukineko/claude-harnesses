@@ -169,3 +169,141 @@ general-purpose agent によるリポジトリ監査結果（2026-07-09 時点�
 - 稼働ハーネスへの反映は手動 `cp` 禁止。`scripts/rollout-plugins.sh` を使う。
 - 新規/変更 crate は `cargo fmt` + `cargo clippy -p <crate> --all-targets` を green にすること。
 - `docs/GLOSSARY.md` に新規クレートの一言説明を追記すること。
+
+## 実装レビュー結果（2026-07-09、コミット範囲 `9c70015..HEAD`）
+
+別セッションによる実装がmainにマージされた後、`/code-review`（high effort、8観点 finder × 1票
+verify、recall優先）でレビューを実施。20件の候補のうち18件がCONFIRMED、1件PLAUSIBLE、1件REFUTED。
+severity順に記載する。**このセクションは次の実装セッションへの修正 TODO として扱ってよい。**
+
+### 最優先（正しさ・セキュリティ）
+
+1. **【CRITICAL】specguard の graded ratification gate が2箇所同時swapでバイパスされる**
+   `crates/specguard/src/similarity.rs:150` — `polarity_signature()` はテキスト全体を1つの
+   flat multiset に集約するため、2つの節（例: 「Xをhuman reviewなしでallow」「Yをhuman review
+   なしでdeny」）の間で allow/deny を入れ替えると、バケットごとの出現数が変化せず
+   `polarity_preserved()` が `true` を返し続ける。検証エージェントが実際にこのケースを
+   Python で再現し、`jaccard(ratified, flipped) = 1.0`（44/44 shingle完全一致）を確認、
+   既定閾値 0.85 を優に超えて `Verdict::Precedented`（人間レビュー省略）に分類されることを
+   確定した。既存の adversarial テスト（`zzz_adversarial_probe_polarity_flips_route_to_human`
+   等）は単一トークンの flip しかカバーしておらず、二箇所同時swapは無防備。
+   **これは項目3（spec層トリアージ）の根幹——「novelなspecは人間へ」という保証そのものを
+   破る欠陥なので最優先で塞ぐこと。**
+
+2. **【HIGH】propguard の統合テストが不正JSONにより実ホームディレクトリを汚染する**
+   `crates/propguard/tests/integration.rs:195`（他5箇所）— `format!(r#"{{"cwd":"{}"}}"#,
+   home.display())` がWindowsのバックスラッシュパスをエスケープせずJSON文字列へ埋め込み、
+   `HookInput::parse` が不正JSONとして`None`を返す→セッションキーが共有`_local`バケットに
+   collapse。さらに `harness_core::config::home()` がWindowsではHOME環境変数を無視し
+   `SHGetKnownFolderPath` で実ホームを解決するため、テストの `HOME` オーバーライドが効かない。
+   検証エージェントが実際に `cargo test -p propguard --test integration` を実行し
+   3/10テストが失敗（`propguard: allow (already-verified)`）、実ホーム配下に
+   `~/.propguard/state/sessions/_local.json` 等の残留ファイルが生成されることまで確認済み。
+
+3. **【HIGH】rollout-plugins.sh の canary JSON構築がWindowsパスで壊れる**
+   `scripts/rollout-plugins.sh:429`（と490-491, 496）— `os.path.join` の結果（Windows上では
+   バックスラッシュ区切り）をエスケープなしでJSON文字列リテラルへ直接展開。検証エージェントが
+   このマシン上で実際に `json.decoder.JSONDecodeError` を再現。`set -euo pipefail` 下で
+   ガードなしに呼ばれるため、rollback処理中にこれが起きるとcanaryバージョンが live のまま
+   rollbackが中断される。
+
+4. **【HIGH】`--canary`（非dry-run）が rebuild/sync を一度も呼ばずexitする**
+   `scripts/rollout-plugins.sh:526` — `run_canary()` はコピー＋registry repointのみ行い、
+   `rebuild-plugins.sh`/`sync-plugin-assets.sh` を一切呼ばずに `exit 0` する。`--no-rebuild`/
+   `--no-sync` フラグはパースされるがcanary経路では到達しないコードにしか効かず実質no-op。
+   結果、canaryロールアウトは「ソースを編集してversionを上げてcanary実行」しても
+   実行中ハーネスは古いバイナリ（`crates/<name>/bin/` にcommit済みの古いもの）を指し続ける。
+   `canary-dryrun.sh`/`canary-rollback.sh` いずれも「成功して全stage完走するcanary」を
+   検証しておらず、テストで検出できない穴になっている。
+
+5. **【HIGH】stuckguard の near-repeat エスカレーションが実質発火しない**
+   `crates/stuckguard/src/detect.rs:106` — `Trip::key` が `format!("repeat:{}", cur.sig)` と
+   「直近イベント自身の signature」になっているが、near-repeat（`similarity_threshold < 1.0`）
+   は定義上毎回異なる `sig` を生成するため `record_nudge` が毎回新規keyとして`count=1`に戻り、
+   `escalate_after` 到達（エスカレーション）に絶対到達しない。設計ドキュメント項目6
+   （fleet相関エラー検知）の前段として追加された類似度ベース検知が、実装上は無限に
+   nudgeするだけで一度もエスカレートしない状態。
+
+6. **【MEDIUM】blastguard の `pub(crate)` シンボル検出が壊れている**
+   `crates/blastguard/src/diffrisk.rs:135` — 検出ニードルが `format!("pub(crate) {m}")`
+   （`m`は既に`"pub fn "`等キーワード込み）となり `"pub(crate) pub fn "` という実コードに
+   存在しない文字列を生成。実際のソース `"pub(crate) fn "` にはマッチせず、
+   `pub(crate)` 修飾された公開API変更のリスクスコアが常に過小評価される。`pub(crate)`を
+   対象とするテストは1件も存在しない。
+
+7. **【MEDIUM】specguard の ratification lock が非atomic書き込み**
+   `crates/specguard/src/ratify.rs:103`（`write_lock`）— 今回のdiffでcorpusペイロードが
+   肥大化したにもかかわらず、`harness_core::store::save_bytes`（atomic tmp+rename、既に
+   5箇所で使用実績あり）を使わずplain `std::fs::write` のまま。クラッシュ・並行読み取り時に
+   破損した lock ファイルを生成しうる。specguardは既にharness-core依存かつ
+   `ratify.rs`自身が`harness_core::hash::fnv1a64`をimport済みなので、置き換えコストは低い。
+
+8. **【MEDIUM】項目D（一般化リスクスコアリング）の公開API検知が本番経路で到達不能**
+   `crates/blastguard/src/diffrisk.rs:107` — `classify_diff`の公開シンボル検知は実装・
+   単体テスト済みだが、ワークスペース内の本番呼び出し元は`condukt::gate_exec::
+   gather_assessment`と`condukt::schedule::schedule`の2箇所のみで、両方とも
+   `diff_text=""`（空文字列）を渡している。コード中のコメントで「事前段階ではdiffが
+   存在しないため意図的にスコープ外」と明記された既知の制限だが、公開API破壊の
+   自動検知という項目Dの目標は実質未達成のまま。
+
+9. **【LOW-MEDIUM】tdd の strict_separation エラーメッセージが誤誘導**
+   `crates/tdd/src/proof.rs:266` — `strict_separation`の識別子チェックが「REDプロダクト
+   自体が存在するか」のチェックより先に走るため、`tdd red`未実行のまま`tdd green
+   --author X`を叩くと、正しい「RED proofが見つからない」ではなく「identity is missing」
+   という誤ったエラーが出る（`--author`は正しく渡しているにもかかわらず）。
+
+### 中優先（reuse / simplification / efficiency）
+
+10. **propguard の Stop hook がproperty数分だけ冗長なファイルI/Oを行う**
+    `crates/propguard/src/main.rs:257` — `emit_overwatch_violations`が3-5個のpropertyごとに
+    `overwatch::store::append_violation`を呼び、各呼び出しが独立に`.git`探索の
+    ディレクトリツリー走査・`canonicalize`・ファイルopen/close をやり直す。同期的にブロックする
+    Stop hookパス上の冗長なレイテンシ。
+
+11. **trajectoryeval が harness-core の共有FNV-1aを再実装**
+    `crates/trajectoryeval/src/tier.rs:242` — `harness_core::hash::fnv1a64`
+    （「唯一の正典」と明記されたpublic関数）と定数まで同一のprivate `fn fnv1a`を独自実装。
+    trajectoryevalはharness-core未依存なので、依存追加が必要。
+
+12. **specguard の Corpus/TemplateHashes/TemplateTexts が同一形状で3重定義**
+    `crates/specguard/src/ratify.rs:61,75,86` — 4フィールド（audit/decisions/refute/
+    completeness）が全く同じ形の構造体3つ。新規テンプレート追加のたびに3箇所編集が必要。
+
+13. **specguard の「非activeゲートをマスクする」ロジックが3箇所に重複**
+    `crates/specguard/src/main.rs:766,1588,1597` — 同一のmasking規則が3回書かれている。
+    共有ヘルパー化はリスクが低い（各所で挙動差なしを確認済み）。
+
+14. **rollout-plugins.sh のJSON構築ロジックが2箇所で重複**
+    `scripts/rollout-plugins.sh:414` と `~485-493` — canaryの通常経路とrollback経路で
+    ほぼ同一のJSON構築コードが重複。
+
+15. **stuckguard の `record_lesson` に未使用の `count` パラメータ**
+    `crates/stuckguard/src/main.rs:289,347` — 「将来のescalation tier用」とコメントされて
+    いるが、`docs/`のどこにもこの計画は存在せず、導入コミット時点から投機的な死んだコード。
+
+16. **stuckguard が既定設定（similarity_threshold=1.0）でも毎回tokenizeする**
+    `crates/stuckguard/src/sig.rs:130` — near-repeat機能が既定オフでも、全tool-callイベント
+    に対し無条件でtokenize + state fileへの永続化コストが発生。
+
+17. **rollout-plugins.sh のcanary経路がregistry_patchをplugin数分呼ぶ**
+    `scripts/rollout-plugins.sh:398` — 通常経路は全plugin分をバッチして1回呼ぶのに対し、
+    canary経路はplugin毎に python3 subprocess を spawn（rollback時も同様）。severityは中程度
+    （手動・低頻度操作のため）。
+
+### 検証の結果REFUTEDだった候補
+
+- stuckguard/detect.rs と specguard/similarity.rs がそれぞれ独自に `jaccard()` を実装している
+  件（harness_core::lessons由来の3重実装、との指摘）— harness-core側の`jaccard`が**非pub**関数
+  であり実際には外部から呼び出せないため、「既存流用を怠った」という主張自体は成立しない。
+  ただし将来的に harness-core 側を `pub` にして共有化する価値はある（低優先）。
+
+### CLAUDE.md規約・削除された保証の監査
+
+- バージョン整合性（3ファイルlockstep）: 39プラグイン全て整合、違反なし
+  （`check-plugin-versions.py`/`check-version-bumped.py` ともにexit 0）。
+- specguardの二値ratifyゲート、tddのRED→GREEN保証、blastguard/conduktのrisk gateマージは
+  いずれも弱体化なし（除去された保証の監査で違反0件）。
+- item B/C/D/E（fleet相関エラー検知/テスト-実装分離/リスクスコアリング一般化/spec段階
+  トリアージ）は、doc が指示した既存機構（overwatch registry / condukt verifier-model /
+  blastguard RiskAssessment / specguard require_ratification）へ正しく接続されており、
+  disconnectedな並行実装にはなっていない（唯一の例外が上記8番の項目D半完成）。

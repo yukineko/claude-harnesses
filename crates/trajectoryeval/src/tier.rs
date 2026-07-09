@@ -239,23 +239,19 @@ pub fn seeded_sample(flow_id: &str, seed: u64, run_index: u64, n: u64) -> bool {
 
 /// A stable 64-bit FNV-1a hash over `flow_id` mixed with `seed` and `run_index`.
 /// Deterministic across builds and platforms.
+///
+/// Delegates to [`harness_core::hash::fnv1a64`] — the single canonical FNV-1a
+/// implementation — instead of re-deriving the algorithm/constants locally.
+/// `Fnv1a64::update`-ing the fields in sequence is byte-for-byte equivalent to
+/// a one-shot `fnv1a64` over their concatenation (see the harness-core module
+/// docs), so this yields the exact same hash values the prior private
+/// reimplementation produced.
 fn fnv1a(flow_id: &str, seed: u64, run_index: u64) -> u64 {
-    const OFFSET: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x00000100000001b3;
-    let mut h = OFFSET;
-    for b in flow_id.as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(PRIME);
-    }
-    for b in seed.to_le_bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(PRIME);
-    }
-    for b in run_index.to_le_bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(PRIME);
-    }
-    h
+    let mut h = harness_core::hash::Fnv1a64::new();
+    h.update(flow_id.as_bytes());
+    h.update(&seed.to_le_bytes());
+    h.update(&run_index.to_le_bytes());
+    h.finish()
 }
 
 // ── top-level verdict ───────────────────────────────────────────────────────────
@@ -481,6 +477,29 @@ mod tests {
     fn sample_one_in_one_always_samples() {
         assert!(seeded_sample("flow", 0, 0, 1));
         assert!(seeded_sample("flow", 123, 456, 1));
+    }
+
+    #[test]
+    fn fnv1a_matches_harness_core_canonical_over_concatenated_bytes() {
+        // `fnv1a` now delegates to `harness_core::hash::Fnv1a64` instead of a
+        // private reimplementation of the algorithm/constants (review-redesign
+        // finding 11). Pin that the delegation produces the exact same hash
+        // value the old private copy did: streaming `flow_id` bytes then the
+        // little-endian `seed`/`run_index` bytes through the canonical hasher
+        // must equal a one-shot `fnv1a64` over their concatenation (the
+        // harness-core module docs guarantee streaming == one-shot-over-
+        // concatenation), so tier-selection behavior is bit-for-bit unchanged.
+        let flow_id = "checkout-flow";
+        let seed = 1234u64;
+        let run_index = 42u64;
+
+        let mut concatenated = Vec::new();
+        concatenated.extend_from_slice(flow_id.as_bytes());
+        concatenated.extend_from_slice(&seed.to_le_bytes());
+        concatenated.extend_from_slice(&run_index.to_le_bytes());
+        let expected = harness_core::hash::fnv1a64(&concatenated);
+
+        assert_eq!(fnv1a(flow_id, seed, run_index), expected);
     }
 
     #[test]

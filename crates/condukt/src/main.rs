@@ -19,6 +19,7 @@ mod gate_exec;
 mod gatelog;
 mod hooks;
 mod install;
+mod learning_signal;
 mod lessons;
 mod lock;
 mod model;
@@ -169,6 +170,14 @@ enum Command {
         #[command(subcommand)]
         action: LessonsAction,
     },
+    /// Cross-task learning (MEASUREMENT side): deterministically aggregate the
+    /// retrieval ledger (`harness_core::retrieval`, hit/miss per run_id) against
+    /// per-run replan totals (`state::load_replan_records`) into
+    /// `mean_replan_reduction_ratio` — how much lower the mean replan count is
+    /// for runs where a lesson was injected vs runs where it wasn't. Purely
+    /// additive/read-only: never mutates either ledger. Fail-soft: an absent
+    /// store yields the zero shape (`ratio: null`, sample sizes 0) and exits 0.
+    LearningSignal,
     /// Terminal external-loop step: open a PR via the gh CLI. Push/PR stays
     /// BEHIND the GATED human approval — the actual `gh pr create` runs ONLY with
     /// `--execute` (supplied by the /condukt skill after approval). Uses gh's own
@@ -1592,6 +1601,27 @@ fn run_user(cmd: Command) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&arr)?);
             }
         },
+        Command::LearningSignal => {
+            let sig = learning_signal::compute(&cfg, &cwd);
+            #[derive(serde::Serialize)]
+            struct Out {
+                metric: &'static str,
+                ratio: Option<f64>,
+                numerator_mean: Option<f64>,
+                denominator_mean: Option<f64>,
+                hit_sample_size: usize,
+                miss_sample_size: usize,
+            }
+            let out = Out {
+                metric: "mean_replan_reduction_ratio",
+                ratio: sig.ratio,
+                numerator_mean: sig.numerator_mean,
+                denominator_mean: sig.denominator_mean,
+                hit_sample_size: sig.hit_sample_size,
+                miss_sample_size: sig.miss_sample_size,
+            };
+            println!("{}", serde_json::to_string(&out)?);
+        }
         Command::Pr { action } => run_pr(&cfg, &cwd, action)?,
         Command::Loop {
             module,

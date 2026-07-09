@@ -332,6 +332,31 @@ print(f"registry patched: {registry_path}")
 PY
 }
 
+# --- rollback target lookup (argv-safe, no string interpolation into Python) -
+# Given a `canary-rollback-plan` JSON blob and a plugin name, print the prior
+# version on line 1 and the restore install path on line 2 (both empty if the
+# plugin is not found or is_new). The plugin name is passed as sys.argv[1] —
+# NEVER interpolated into the Python source — so a name containing a quote,
+# backslash, or other special character cannot break out of (or inject code
+# into) the literal. This is the fix for the quote-injection bug where the
+# name used to be spliced directly into a `t["name"]=="..."` string literal.
+rollback_target_lookup() {
+  local rbplan_json="$1" name="$2"
+  RBPLAN_JSON_ENV="$rbplan_json" python3 - "$name" <<'PY'
+import json, os, sys
+name = sys.argv[1]
+p = json.loads(os.environ["RBPLAN_JSON_ENV"])
+for t in p.get("targets", []):
+    if t.get("name") == name and not t.get("is_new"):
+        print(t.get("prior_version") or "")
+        print(t.get("restore_install_path") or "")
+        break
+else:
+    print("")
+    print("")
+PY
+}
+
 # --- capture the plan once (used by both the normal and canary paths) --------
 # One TSV row per plugin. Read into an array so the canary path can slice the
 # ordered plugin set into stages without re-running `plan`.
@@ -471,18 +496,15 @@ run_canary() {
           echo "  rollback plan for stage $s:"
           echo "$rbplan" | sed 's/^/    /'
           # Execute the rollback: re-point registry to each prior install path.
+          # NOTE: the plugin name is passed via argv (sys.argv[1] inside
+          # rollback_target_lookup), never string-interpolated into the
+          # Python source, so a name containing a quote or other special
+          # char cannot break out of (or inject into) the literal.
           for pn in $stage_names; do
-            local rv rp
-            rv="$(python3 -c 'import json,sys
-p=json.load(sys.stdin)
-for t in p["targets"]:
-  if t["name"]=="'"$pn"'" and not t["is_new"]:
-    print(t.get("prior_version") or "")' <<<"$rbplan")"
-            rp="$(python3 -c 'import json,sys
-p=json.load(sys.stdin)
-for t in p["targets"]:
-  if t["name"]=="'"$pn"'" and not t["is_new"]:
-    print(t.get("restore_install_path") or "")' <<<"$rbplan")"
+            local rv rp lookup_out
+            lookup_out="$(rollback_target_lookup "$rbplan" "$pn")"
+            rv="$(sed -n '1p' <<<"$lookup_out")"
+            rp="$(sed -n '2p' <<<"$lookup_out")"
             if [ -n "$rv" ] && [ -n "$rp" ]; then
               registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "$pn" "$rv" "$rp" | sed 's/^/    /'
             else

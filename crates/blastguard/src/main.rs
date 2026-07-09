@@ -8,7 +8,7 @@
 //! 0. `harness_core::hook::run_hook` enforces the panic half of that invariant.
 
 use blastguard::model::Decision;
-use blastguard::{detect, hookio};
+use blastguard::{detect, hookio, rule_id};
 use harness_core::hook::{self, HookInput};
 use std::process::exit;
 
@@ -51,7 +51,39 @@ fn run() {
     };
     let decision = detect::detect(&input.tool_name, input.tool_input.as_ref());
     if let Decision::Deny(reason) = decision {
+        // Fail-soft fleet violation record for overwatch's cross-task
+        // correlated-error detection. This is purely additive telemetry: it
+        // must never change the deny decision, the printed JSON, or the exit
+        // code, and must not panic if the store is unwritable (e.g. HOME
+        // unset, disk full, permissions). Swallow any error.
+        record_violation(&input, &reason);
         println!("{}", hookio::deny_json(&reason));
     }
     // Allow → print nothing.
+}
+
+/// Best-effort: append a `ViolationEvent` for this denial to overwatch's
+/// project-scoped violations.jsonl. `reason` is free text (may embed a
+/// variable path/target) — `rule_id::rule_id` normalizes it to a stable
+/// discriminator before it becomes the violation signature.
+fn record_violation(input: &HookInput, reason: &str) {
+    let target = input.target();
+    let task_key = match &target {
+        Some(t) => format!("{}:{}", input.tool_name, t),
+        None => input.tool_name.clone(),
+    };
+    let raw = overwatch::violation::RawViolation {
+        rule_id: Some(rule_id::rule_id(reason)),
+        ..Default::default()
+    };
+    let event = overwatch::violation::build_event(
+        overwatch::violation::ViolationSource::Blastguard,
+        &raw,
+        task_key,
+        input.session_key(),
+        overwatch::store::now(),
+        Some(reason.to_string()),
+    );
+    let cwd = input.cwd_or_current();
+    let _ = overwatch::store::append_violation(&cwd, &event);
 }

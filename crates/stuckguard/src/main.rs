@@ -109,10 +109,13 @@ fn watch() {
             let count = st.record_nudge(&t.key, seq);
             let escalated = count >= cfg.escalate_after;
             log_event(&cfg, &session, t, count, escalated);
+            // Build the message (which retrieves any PRIOR lesson) before
+            // writing this escalation's own lesson, so a fresh escalation
+            // never echoes back the lesson it is about to record itself.
+            emitted = Some(message(t, escalated, count));
             if escalated {
                 record_lesson(&session, t, count);
             }
-            emitted = Some(message(t, escalated, count));
         }
     }
 
@@ -147,17 +150,38 @@ fn message(t: &Trip, escalated: bool, count: u32) -> String {
     };
 
     if escalated {
-        format!(
+        let mut out = format!(
             "{head}\n🛑 同じ試行を繰り返さないでください（通知 {count} 回目）。いったんツール呼び出しを止め、\
              (1) 何を試して何が失敗したか (2) 現在の仮説 (3) 判断に必要な情報 を簡潔に整理し、\
              **ユーザーに状況を報告して指示を仰いで**ください。"
-        )
+        );
+        if let Some(lesson_text) = retrieve_lesson(t) {
+            out.push_str(&format!("\n📚 past lesson: {lesson_text}"));
+        }
+        out
     } else {
         format!(
             "{head}\n一歩引いて前提を疑い、別アプローチを検討してください。根本原因が不明なまま同じ操作を繰り返さないこと。\
              抜け出せない場合はユーザーに状況を共有して指示を仰いでください。"
         )
     }
+}
+
+/// On escalation, look up whether the cross-project lessons store
+/// (`harness_core::lessons`) has a relevant past lesson for this stuck
+/// pattern, and if so return its `lesson_text` to append to the escalation
+/// message. Closes the write→retrieve loop: `record_lesson` writes on
+/// escalation, this reads on the next one.
+///
+/// Fail-soft end to end: `lessons::load` never panics (missing/corrupt store
+/// → empty Vec) and `lessons::search` never panics (empty store/query/no
+/// overlap → empty Vec), so an empty store, no match, or an unreadable store
+/// all fall through to `None` — the escalation message is then byte-identical
+/// to the no-retrieval case.
+fn retrieve_lesson(t: &Trip) -> Option<String> {
+    let loaded = harness_core::lessons::load();
+    let hits = harness_core::lessons::search(&t.detail, &loaded, 1);
+    hits.into_iter().next().map(|m| m.lesson.lesson_text)
 }
 
 fn log_event(cfg: &Config, session: &str, t: &Trip, count: u32, escalated: bool) {
@@ -357,5 +381,169 @@ mod tests {
         assert_eq!(mode, 0o600, "expected mode 0o600, got {mode:o}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Guards tests that mutate the process-global `LESSONS_STORE_DIR` env var
+    /// so they never race each other (this crate's tests run in parallel by
+    /// default). Mirrors the precedent in `harness_core::store`'s tests.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn repeat_trip(detail: &str) -> Trip {
+        Trip {
+            key: format!("repeat:{detail}"),
+            kind: Kind::Repeat,
+            count: 3,
+            all_errored: true,
+            detail: detail.to_string(),
+        }
+    }
+
+    /// Point `LESSONS_STORE_DIR` at a fresh isolated temp dir for the
+    /// duration of the closure, restoring the previous value afterward.
+    /// Never touches the real `~/.lessons` store.
+    fn with_isolated_lessons_store<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+        const VAR: &str = "LESSONS_STORE_DIR";
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var(VAR).ok();
+
+        let dir = std::env::temp_dir().join(format!(
+            "stuckguard-lessons-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var(VAR, &dir);
+
+        let result = f(&dir);
+
+        match prev {
+            Some(v) => std::env::set_var(VAR, v),
+            None => std::env::remove_var(VAR),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    #[test]
+    fn retrieve_lesson_appends_when_relevant_lesson_seeded() {
+        with_isolated_lessons_store(|_dir| {
+            use harness_core::lessons::{self, Kind as LessonKind, Lesson};
+
+            let lesson = Lesson {
+                id: "seed1".to_string(),
+                kind: LessonKind::ErrorPattern,
+                task_summary: "stuck pattern (repeat): cargo build retry loop".to_string(),
+                lesson_text: "stop retrying cargo build verbatim, inspect the real error"
+                    .to_string(),
+                source_run: "stuckguard:sess:repeat:x".to_string(),
+                ts: 1000,
+            };
+            lessons::append(&lesson);
+
+            let trip = repeat_trip("cargo build retry loop");
+            let msg = message(&trip, true, 2);
+            assert!(
+                msg.contains("stop retrying cargo build verbatim, inspect the real error"),
+                "escalation message must contain the retrieved lesson_text: {msg}"
+            );
+            assert!(
+                msg.contains("past lesson:"),
+                "expected a 'past lesson:' line: {msg}"
+            );
+        });
+    }
+
+    #[test]
+    fn retrieve_lesson_appends_nothing_when_store_empty_or_no_match() {
+        with_isolated_lessons_store(|_dir| {
+            let trip = repeat_trip("some totally unrelated pattern xyz");
+            let msg_empty_store = message(&trip, true, 2);
+
+            use harness_core::lessons::{self, Kind as LessonKind, Lesson};
+            lessons::append(&Lesson {
+                id: "unrelated".to_string(),
+                kind: LessonKind::Convention,
+                task_summary: "repo uses rustfmt".to_string(),
+                lesson_text: "always run cargo fmt before commit".to_string(),
+                source_run: "run-1".to_string(),
+                ts: 1000,
+            });
+            let msg_no_match = message(&trip, true, 2);
+
+            assert_eq!(
+                msg_empty_store, msg_no_match,
+                "no relevant lesson (empty store or no match) must not change the message"
+            );
+            assert!(
+                !msg_empty_store.contains("past lesson:"),
+                "message must be byte-identical to the no-retrieval case: {msg_empty_store}"
+            );
+        });
+    }
+
+    #[test]
+    fn retrieve_lesson_unreadable_store_never_panics() {
+        const VAR: &str = "LESSONS_STORE_DIR";
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var(VAR).ok();
+
+        // Point the store dir at a path that can't be a directory (a file in
+        // place of the expected dir), so any read attempt fails rather than
+        // returning a normal empty/missing result.
+        let bogus_parent = std::env::temp_dir().join(format!(
+            "stuckguard-lessons-bogus-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&bogus_parent, b"not a directory").unwrap();
+        // Use the file itself as the "store dir" — descending into it to read
+        // lessons.jsonl must fail, not panic.
+        std::env::set_var(VAR, &bogus_parent);
+
+        let trip = repeat_trip("unreadable store pattern");
+        let msg = message(&trip, true, 2);
+        assert!(
+            !msg.contains("past lesson:"),
+            "unreadable store must degrade to no-retrieval, not panic: {msg}"
+        );
+
+        match prev {
+            Some(v) => std::env::set_var(VAR, v),
+            None => std::env::remove_var(VAR),
+        }
+        let _ = std::fs::remove_file(&bogus_parent);
+    }
+
+    #[test]
+    fn non_escalated_message_never_retrieves_lesson() {
+        with_isolated_lessons_store(|_dir| {
+            use harness_core::lessons::{self, Kind as LessonKind, Lesson};
+
+            let trip = repeat_trip("non escalated pattern");
+            lessons::append(&Lesson {
+                id: "seed2".to_string(),
+                kind: LessonKind::ErrorPattern,
+                task_summary: "stuck pattern (repeat): non escalated pattern".to_string(),
+                lesson_text: "this must never show up on a non-escalated nudge".to_string(),
+                source_run: "run-2".to_string(),
+                ts: 1000,
+            });
+
+            let msg = message(&trip, false, 1);
+            assert!(
+                !msg.contains("past lesson:"),
+                "non-escalation path must never attempt retrieval: {msg}"
+            );
+            assert!(
+                !msg.contains("this must never show up"),
+                "non-escalation path must never surface a lesson: {msg}"
+            );
+        });
     }
 }

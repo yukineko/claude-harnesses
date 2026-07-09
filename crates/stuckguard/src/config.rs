@@ -35,6 +35,20 @@ pub struct Config {
     /// Tools excluded from detection entirely (e.g. TodoWrite bookkeeping).
     pub ignore_tools: Vec<String>,
     pub state_dir: PathBuf,
+    /// Enable the early, soft "progress may be stalling" advisory (a
+    /// 3-signal `progress_score` computed over the recent window,
+    /// independent of and lower-severity than the hard repeat/oscillation
+    /// escalation below). `false` by default — the advisory is opt-in, so
+    /// existing behavior is completely unchanged unless an operator turns it
+    /// on in config.
+    pub progress_advisory_enabled: bool,
+    /// Minimum window length before the advisory is even considered (avoids
+    /// judging "diversity"/"stability" on too few samples).
+    pub progress_min_window: usize,
+    /// `progress_score` (in `[0, 1]`, higher = more likely stalling) at or
+    /// above which the advisory fires. Conservative (high) by default so a
+    /// mildly repetitive-but-fine window doesn't trip it.
+    pub progress_score_threshold: f64,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -48,6 +62,9 @@ struct FileConfig {
     escalate_after: Option<u32>,
     ignore_tools: Option<Vec<String>>,
     state_dir: Option<String>,
+    progress_advisory_enabled: Option<bool>,
+    progress_min_window: Option<usize>,
+    progress_score_threshold: Option<f64>,
 }
 
 /// The `~/.stuckguard` base directory.
@@ -70,6 +87,13 @@ impl Default for Config {
             escalate_after: 2,
             ignore_tools: vec!["TodoWrite".to_string()],
             state_dir: base_dir().join("state"),
+            // Default-off: the advisory is a new, additional signal and must
+            // not change existing behavior unless an operator opts in.
+            progress_advisory_enabled: false,
+            progress_min_window: 6,
+            // Conservative: score must be quite high (near-certain stall
+            // signature across all 3 signals) before the advisory fires.
+            progress_score_threshold: 0.75,
         }
     }
 }
@@ -124,6 +148,15 @@ impl Config {
                     if let Some(v) = fc.state_dir {
                         cfg.state_dir = expand_tilde(&v);
                     }
+                    if let Some(v) = fc.progress_advisory_enabled {
+                        cfg.progress_advisory_enabled = v;
+                    }
+                    if let Some(v) = fc.progress_min_window {
+                        cfg.progress_min_window = v;
+                    }
+                    if let Some(v) = fc.progress_score_threshold {
+                        cfg.progress_score_threshold = v;
+                    }
                 }
             }
         }
@@ -133,6 +166,8 @@ impl Config {
         cfg.similarity_threshold = cfg.similarity_threshold.clamp(0.0, 1.0);
         cfg.oscillation_threshold = cfg.oscillation_threshold.max(1);
         cfg.escalate_after = cfg.escalate_after.max(1);
+        cfg.progress_min_window = cfg.progress_min_window.max(2);
+        cfg.progress_score_threshold = cfg.progress_score_threshold.clamp(0.0, 1.0);
         cfg
     }
 

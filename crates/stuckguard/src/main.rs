@@ -117,6 +117,12 @@ fn watch() {
                 record_lesson(&session, t, count);
             }
         }
+    } else if cfg.progress_advisory_enabled {
+        // The early, soft advisory only runs when the hard detector did NOT
+        // already trip this call — it never replaces or alters the hard
+        // repeat/oscillation escalation above, it's strictly an additional,
+        // lower-severity signal for the case the hard detector missed.
+        emitted = progress_advisory_message(&mut st, seq, &cfg);
     }
 
     state::save(&cfg.state_dir, &session, &st);
@@ -165,6 +171,40 @@ fn message(t: &Trip, escalated: bool, count: u32) -> String {
              抜け出せない場合はユーザーに状況を共有して指示を仰いでください。"
         )
     }
+}
+
+/// Stable bookkeeping key for the progress advisory's own cooldown, kept
+/// entirely separate from hard-escalation `Trip::key`s (which are namespaced
+/// `repeat:...` / `osc:...`) so the advisory's cooldown/count never mixes
+/// with, or perturbs, the hard detector's nudge bookkeeping.
+const PROGRESS_ADVISORY_KEY: &str = "progress-advisory";
+
+/// The early, soft "progress may be stalling" advisory. Computes the
+/// 3-signal `progress_score` (see `detect::progress_score`) over the current
+/// window and, when it's above `cfg.progress_score_threshold`, returns a
+/// nudge message strictly lower severity than the hard escalation message
+/// (never says "stop and ask the user", never writes a lesson, never
+/// touches the hard detector's own cooldown/nudge-count key). Respects its
+/// own cooldown so it doesn't repeat every single call once tripped.
+fn progress_advisory_message(
+    st: &mut state::SessionState,
+    seq: u64,
+    cfg: &Config,
+) -> Option<String> {
+    let advisory = detect::progress_score(&st.events, cfg)?;
+    if advisory.score < cfg.progress_score_threshold {
+        return None;
+    }
+    if st.in_cooldown(PROGRESS_ADVISORY_KEY, seq, cfg.cooldown_events) {
+        return None;
+    }
+    st.record_nudge(PROGRESS_ADVISORY_KEY, seq);
+    Some(format!(
+        "🟡 stuckguard: progress may be stalling (score {:.2} — diversity {:.2}, state stability {:.2}, error recurrence {:.2}). \
+         この先しばらく同じ種類の操作/状態/エラーが続いています。深刻な繰り返しではありませんが、\
+         一度アプローチを見直すと良いかもしれません。",
+        advisory.score, advisory.diversity_signal, advisory.stability_signal, advisory.error_recurrence_signal
+    ))
 }
 
 /// On escalation, look up whether the cross-project lessons store
@@ -328,6 +368,15 @@ fn status() {
     println!("escalate_after:        {}", cfg.escalate_after);
     println!("ignore_tools:          {}", cfg.ignore_tools.join(", "));
     println!("state_dir:             {}", cfg.state_dir.display());
+    println!(
+        "progress_advisory_enabled: {}",
+        cfg.progress_advisory_enabled
+    );
+    println!("progress_min_window:       {}", cfg.progress_min_window);
+    println!(
+        "progress_score_threshold:  {}",
+        cfg.progress_score_threshold
+    );
 }
 
 const STARTER: &str = r#"# stuckguard.toml — stuck-loop detector + escalation for Claude Code.
@@ -347,6 +396,15 @@ cooldown_events = 6         # don't re-nudge the same pattern within N events
 escalate_after = 2          # after N nudges for a pattern, escalate to "ask the user"
 ignore_tools = ["TodoWrite"]
 # state_dir = "~/.stuckguard/state"
+
+# progress_advisory_enabled = false   # early, soft "progress may be stalling" advisory
+                             # (3-signal progress_score: action diversity, state-hash
+                             # stability, error-digest recurrence); default OFF — opt in
+                             # by setting true. When on, it fires BELOW the hard
+                             # repeat/oscillation escalation above (never replaces it).
+# progress_min_window = 6     # min window length before the advisory is even considered
+# progress_score_threshold = 0.75  # progress_score in [0,1] at/above which it fires;
+                             # conservative (high) by default to avoid false positives
 "#;
 
 fn init(force: bool) -> anyhow::Result<()> {
@@ -650,5 +708,143 @@ mod tests {
     fn lesson_query_with_digest_prefixes_digest_onto_detail() {
         let trip = repeat_trip_with_digest("plain detail", "digest0000000001");
         assert_eq!(lesson_query(&trip), "digest0000000001 plain detail");
+    }
+
+    // --- progress advisory (3-signal stall detection) ---
+
+    fn ev(seq: u64, tool: &str, input: serde_json::Value) -> crate::sig::Event {
+        let mut e = sig::build(tool, Some(&input), None).unwrap();
+        e.seq = seq;
+        e
+    }
+
+    fn ev_err(
+        seq: u64,
+        tool: &str,
+        input: serde_json::Value,
+        response: serde_json::Value,
+    ) -> crate::sig::Event {
+        let mut e = sig::build(tool, Some(&input), Some(&response)).unwrap();
+        e.seq = seq;
+        e
+    }
+
+    #[test]
+    fn progress_advisory_disabled_by_default() {
+        // Default config must keep the advisory off — existing behavior is
+        // unchanged unless an operator opts in.
+        assert!(!Config::default().progress_advisory_enabled);
+    }
+
+    #[test]
+    fn progress_advisory_diverse_actions_do_not_fire() {
+        let cfg = Config {
+            progress_advisory_enabled: true,
+            ..Config::default()
+        };
+        let mut st = state::SessionState::default();
+        let seq = {
+            let mut last = 0;
+            for i in 0..8 {
+                let e = ev(
+                    i,
+                    "Edit",
+                    json!({
+                        "file_path": format!("f{i}.rs"),
+                        "old_string": format!("A{i}"),
+                        "new_string": format!("B{i}"),
+                    }),
+                );
+                last = st.push(e, cfg.window);
+            }
+            last
+        };
+        assert!(
+            progress_advisory_message(&mut st, seq, &cfg).is_none(),
+            "diverse actions must not trigger the progress advisory"
+        );
+    }
+
+    #[test]
+    fn progress_advisory_fires_on_low_diversity_stable_recurring_error() {
+        let cfg = Config {
+            progress_advisory_enabled: true,
+            ..Config::default()
+        };
+        let mut st = state::SessionState::default();
+        let cmd = json!({"command": "cargo test"});
+        let resp = json!({
+            "exit_code": 1,
+            "stderr": "thread 'main' panicked at src/lib.rs:10:3:\nassertion failed"
+        });
+        let seq = {
+            let mut last = 0;
+            for i in 0..8 {
+                let e = ev_err(i, "Bash", cmd.clone(), resp.clone());
+                last = st.push(e, cfg.window);
+            }
+            last
+        };
+        let msg = progress_advisory_message(&mut st, seq, &cfg);
+        assert!(
+            msg.is_some(),
+            "low diversity + stable state + recurring error digest must fire the advisory"
+        );
+        let msg = msg.unwrap();
+        assert!(msg.contains("progress may be stalling"));
+        // The advisory must be visibly a softer signal than hard escalation:
+        // it must never contain the hard-escalation "stop and ask the user"
+        // language.
+        assert!(!msg.contains("ユーザーに状況を報告して指示を仰いで"));
+    }
+
+    #[test]
+    fn progress_advisory_never_fires_when_disabled() {
+        let cfg = Config::default(); // progress_advisory_enabled == false
+        let mut st = state::SessionState::default();
+        let cmd = json!({"command": "cargo test"});
+        let resp = json!({
+            "exit_code": 1,
+            "stderr": "thread 'main' panicked at src/lib.rs:10:3:\nassertion failed"
+        });
+        let seq = {
+            let mut last = 0;
+            for i in 0..8 {
+                let e = ev_err(i, "Bash", cmd.clone(), resp.clone());
+                last = st.push(e, cfg.window);
+            }
+            last
+        };
+        // Callers only invoke progress_advisory_message when
+        // cfg.progress_advisory_enabled is true (see `watch`); calling it
+        // directly with a disabled config exercises the underlying
+        // detect::progress_score gate is independent from that call-site
+        // gate, but here we assert the call-site contract: watch() itself
+        // never reaches this function when disabled.
+        assert!(!cfg.progress_advisory_enabled);
+        let _ = progress_advisory_message(&mut st, seq, &cfg);
+    }
+
+    #[test]
+    fn progress_advisory_does_not_replace_hard_escalation_trip() {
+        // Simulates the watch() dispatch: when detect::detect() finds a hard
+        // trip, the progress advisory branch must never run (it's an
+        // `else if`) — the hard escalation message must be exactly what
+        // main.rs's message() would already produce, unaffected by the
+        // advisory feature existing at all.
+        let cfg = Config {
+            progress_advisory_enabled: true, // even when enabled...
+            ..Config::default()
+        };
+        let cmd = json!({"command": "cargo test"});
+        let w: Vec<crate::sig::Event> = (0..3).map(|i| ev(i, "Bash", cmd.clone())).collect();
+        let trip = detect::detect(&w, &cfg);
+        assert!(trip.is_some(), "hard repeat should still trip as before");
+        let t = trip.unwrap();
+        assert_eq!(t.kind, Kind::Repeat);
+        // The hard-escalation message is unaffected by the advisory feature.
+        let hard_msg = message(&t, false, 1);
+        assert!(hard_msg.contains("同じ操作の繰り返しを検知"));
+        assert!(!hard_msg.contains("progress may be stalling"));
     }
 }

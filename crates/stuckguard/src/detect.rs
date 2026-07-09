@@ -146,6 +146,87 @@ fn oscillation(window: &[Event], cur: &Event, cfg: &Config) -> Option<Trip> {
     })
 }
 
+/// The early, soft "progress may be stalling" advisory: a deterministic
+/// `progress_score` in `[0, 1]` (higher = more likely stalling) computed from
+/// three signals over the recent window, distinct from and always emitted
+/// (when it fires) BELOW the severity of the hard repeat/oscillation
+/// escalation above. No embeddings/RAG — reuses the same `sig`/`tokens`/
+/// `failed_test_digest` fields the hard detectors already compute.
+pub struct ProgressAdvisory {
+    /// Combined score in `[0, 1]`; higher = more likely stalling.
+    pub score: f64,
+    /// `1 - (distinct sigs / window len)`; high = low action diversity.
+    pub diversity_signal: f64,
+    /// Fraction of the window sharing the current event's `sig`; high = the
+    /// same state persists.
+    pub stability_signal: f64,
+    /// Fraction of *errored* events in the window that share the current
+    /// event's `failed_test_digest`; high = the same error keeps recurring.
+    pub error_recurrence_signal: f64,
+}
+
+/// Compute the 3-signal `progress_score` over `window` (whose last element is
+/// the just-recorded event), or `None` if the window is shorter than
+/// `cfg.progress_min_window` (too few samples to judge diversity/stability).
+///
+/// Signals (each in `[0, 1]`, higher = more "stalled"):
+/// - **action_diversity**: `1 - distinct_sigs / len` — low distinct-action
+///   ratio means the agent keeps doing the same handful of things.
+/// - **state-hash stability**: fraction of the window whose `sig` equals the
+///   current event's `sig` — high persistence of the identical action/state.
+/// - **error recurrence**: among errored events in the window, the fraction
+///   that share the current event's `failed_test_digest` (0 when the current
+///   event isn't an error, or there's no digest to compare).
+///
+/// `progress_score` is the unweighted mean of the three signals actually
+/// available and does not attempt to replace or preempt `detect()` — callers
+/// gate this behind `cfg.progress_advisory_enabled` and only surface it when
+/// the hard detector did NOT already trip, so it's strictly additive.
+pub fn progress_score(window: &[Event], cfg: &Config) -> Option<ProgressAdvisory> {
+    let cur = window.last()?;
+    if window.len() < cfg.progress_min_window {
+        return None;
+    }
+
+    let len = window.len() as f64;
+
+    // (a) action_diversity: distinct sig ratio over the window.
+    let distinct: std::collections::HashSet<&str> = window.iter().map(|e| e.sig.as_str()).collect();
+    let diversity_signal = 1.0 - (distinct.len() as f64 / len);
+
+    // (b) state-hash stability: how much of the window shares the CURRENT sig.
+    let same_sig = window.iter().filter(|e| e.sig == cur.sig).count();
+    let stability_signal = same_sig as f64 / len;
+
+    // (c) error recurrence: among errored events, how many share the
+    // current event's failed_test_digest. 0.0 when the current event has no
+    // digest (not an error, or an error we couldn't fingerprint).
+    let error_recurrence_signal = match &cur.failed_test_digest {
+        Some(digest) => {
+            let errored: Vec<&Event> = window.iter().filter(|e| e.error).collect();
+            if errored.is_empty() {
+                0.0
+            } else {
+                let matching = errored
+                    .iter()
+                    .filter(|e| e.failed_test_digest.as_deref() == Some(digest.as_str()))
+                    .count();
+                matching as f64 / errored.len() as f64
+            }
+        }
+        None => 0.0,
+    };
+
+    let score = (diversity_signal + stability_signal + error_recurrence_signal) / 3.0;
+
+    Some(ProgressAdvisory {
+        score,
+        diversity_signal,
+        stability_signal,
+        error_recurrence_signal,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +415,80 @@ mod tests {
             ),
         ];
         assert!(detect(&w, &cfg()).is_none());
+    }
+
+    fn ev_err(
+        seq: u64,
+        tool: &str,
+        input: serde_json::Value,
+        response: serde_json::Value,
+    ) -> Event {
+        let mut e = build(tool, Some(&input), Some(&response)).unwrap();
+        e.seq = seq;
+        e
+    }
+
+    #[test]
+    fn progress_score_none_when_window_below_min() {
+        let cmd = json!({"command": "cargo test"});
+        let w: Vec<Event> = (0..3).map(|i| ev(i, "Bash", cmd.clone())).collect();
+        let mut c = cfg();
+        c.progress_min_window = 6;
+        assert!(
+            progress_score(&w, &c).is_none(),
+            "window shorter than progress_min_window must yield None"
+        );
+    }
+
+    #[test]
+    fn diverse_actions_yield_low_progress_score() {
+        // Every action distinct (different file/content), no errors -> all 3
+        // signals should be low, so the combined score stays low.
+        let w: Vec<Event> = (0..8)
+            .map(|i| {
+                ev(
+                    i,
+                    "Edit",
+                    json!({
+                        "file_path": format!("f{i}.rs"),
+                        "old_string": format!("A{i}"),
+                        "new_string": format!("B{i}"),
+                    }),
+                )
+            })
+            .collect();
+        let c = cfg();
+        let advisory = progress_score(&w, &c).expect("window large enough to score");
+        assert!(
+            advisory.score < c.progress_score_threshold,
+            "diverse actions must NOT cross the advisory threshold: score={}",
+            advisory.score
+        );
+    }
+
+    #[test]
+    fn low_diversity_stable_state_recurring_error_yields_high_progress_score() {
+        // Same command repeated (low diversity, high stability) and every
+        // occurrence fails with the same normalized error class (high error
+        // recurrence) -> combined score should cross the conservative
+        // threshold.
+        let cmd = json!({"command": "cargo test"});
+        let resp = json!({
+            "exit_code": 1,
+            "stderr": "thread 'main' panicked at src/lib.rs:10:3:\nassertion failed"
+        });
+        let w: Vec<Event> = (0..8)
+            .map(|i| ev_err(i, "Bash", cmd.clone(), resp.clone()))
+            .collect();
+        let c = cfg();
+        let advisory = progress_score(&w, &c).expect("window large enough to score");
+        assert!(
+            advisory.score >= c.progress_score_threshold,
+            "low-diversity + stable + recurring-error window should cross the threshold: score={}",
+            advisory.score
+        );
+        assert!(advisory.diversity_signal > 0.5);
+        assert!(advisory.stability_signal > 0.5);
+        assert!(advisory.error_recurrence_signal > 0.5);
     }
 }

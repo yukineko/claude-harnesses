@@ -7,7 +7,7 @@
 //! "who audits the auditor" regress; the lock is the pinned record of it.
 
 use crate::similarity;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -53,12 +53,25 @@ pub struct Lock {
     pub corpus: Corpus,
 }
 
-/// The ratified template texts recorded in the lock (the precedent corpus for the
-/// graded gate). Each field mirrors a slot in [`TemplateHashes`]; a slot is empty
-/// when its policy was not part of the ratified surface (its gate was off) or the
-/// lock predates the graded gate.
+/// The four prompt-template slots (`audit` / `decisions` / `refute` /
+/// `completeness`) — the single shape shared by every per-template record in this
+/// module. It is reused (via the aliases below) as:
+///  - [`TemplateHashes`]: the templates' fingerprints (drives the cheap, exact
+///    binary drift check),
+///  - [`TemplateTexts`]: the templates' full texts (drives the graded gate's
+///    similarity triage), and
+///  - [`Corpus`]: the ratified texts recorded in the lock (the graded gate's
+///    precedent).
+///
+/// A slot is empty when its policy is not part of the live ratified surface (its
+/// verify gate is off) or the lock predates the graded gate; consent is scoped to
+/// the surface that is actually live. Collapsing the three formerly-identical
+/// structs into one means a new template slot is added in exactly one place. The
+/// serde field names (`audit`/`decisions`/`refute`/`completeness`, each
+/// `#[serde(default)]`) are the on-disk lock keys and are preserved verbatim, so
+/// this refactor is behavior-preserving for the `[corpus]` table.
 #[derive(Debug, Default, Deserialize)]
-pub struct Corpus {
+pub struct TemplateSlots {
     #[serde(default)]
     pub audit: String,
     #[serde(default)]
@@ -68,26 +81,31 @@ pub struct Corpus {
     #[serde(default)]
     pub completeness: String,
 }
+
+/// The ratified template texts recorded in the lock (the precedent corpus for the
+/// graded gate). See [`TemplateSlots`].
+pub type Corpus = TemplateSlots;
 
 /// The fingerprints of the four prompt templates (meta-canon) at ratification or
-/// check time. The verify hashes are empty when their gate is inactive — consent
-/// is scoped to the policy surface that is actually live.
-pub struct TemplateHashes {
-    pub audit: String,
-    pub decisions: String,
-    pub refute: String,
-    pub completeness: String,
-}
+/// check time. See [`TemplateSlots`].
+pub type TemplateHashes = TemplateSlots;
 
 /// The full texts of the four prompt templates (meta-canon) at ratification or
-/// check time. Parallel to [`TemplateHashes`]: hashes drive the (cheap, exact)
-/// binary drift check; texts drive the graded gate's similarity triage. A text is
-/// empty when its gate is inactive, mirroring the hash convention.
-pub struct TemplateTexts {
-    pub audit: String,
-    pub decisions: String,
-    pub refute: String,
-    pub completeness: String,
+/// check time. See [`TemplateSlots`].
+pub type TemplateTexts = TemplateSlots;
+
+/// Blank out the slots whose verification gate is inactive, so consent is pinned
+/// (and precedent recorded) only for the *live* policy surface — an off gate
+/// contributes neither a hash nor a text. Mirrors the activation rule in
+/// [`drifted`]. Shared by every ratify/accept path so the masking rule lives in
+/// one place rather than being re-spelled at each call site.
+pub fn mask_inactive(slots: &mut TemplateSlots, refute_active: bool, completeness_active: bool) {
+    if !refute_active {
+        slots.refute = String::new();
+    }
+    if !completeness_active {
+        slots.completeness = String::new();
+    }
 }
 
 /// Read the ratification lock, if present and parseable.
@@ -142,7 +160,15 @@ pub fn write_lock(
         toml_str(&texts.refute),
         toml_str(&texts.completeness),
     );
-    std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+    // Atomic tmp-write + rename (shared `harness_core::store` helper, already used
+    // across the tree): the corpus payload can be large, so a plain in-place write
+    // could expose a truncated / half-written lock to a concurrent reader or a
+    // crash. `save_bytes` is best-effort and panic-free, so verify the rename
+    // landed and surface a clear error if it did not.
+    harness_core::store::save_bytes(&path, body.as_bytes());
+    if !path.exists() {
+        anyhow::bail!("writing {}", path.display());
+    }
     Ok(path)
 }
 

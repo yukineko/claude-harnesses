@@ -763,14 +763,16 @@ fn ratification_block(l: &Loaded) -> Result<Option<u8>> {
                                 .unwrap_or_else(|_| "UNKNOWN".to_string());
                             let mut re_h = hashes;
                             let mut re_t = texts;
-                            if !l.cfg.verify.enabled {
-                                re_h.refute = String::new();
-                                re_t.refute = String::new();
-                            }
-                            if !l.cfg.verify.completeness {
-                                re_h.completeness = String::new();
-                                re_t.completeness = String::new();
-                            }
+                            ratify::mask_inactive(
+                                &mut re_h,
+                                l.cfg.verify.enabled,
+                                l.cfg.verify.completeness,
+                            );
+                            ratify::mask_inactive(
+                                &mut re_t,
+                                l.cfg.verify.enabled,
+                                l.cfg.verify.completeness,
+                            );
                             let reason = format!(
                                 "auto-ratified (graded): precedented change to {} (similarity >= {})",
                                 drift.join(", "),
@@ -1585,21 +1587,11 @@ fn accept_prompt(l: &Loaded, reason: &str) -> Result<u8> {
     // Pin only the live policy: a gate that is off leaves its slot empty, so
     // turning it on later registers as drift and demands a fresh ratification.
     let mut hashes = current_hashes(l);
-    if !l.cfg.verify.enabled {
-        hashes.refute = String::new();
-    }
-    if !l.cfg.verify.completeness {
-        hashes.completeness = String::new();
-    }
+    ratify::mask_inactive(&mut hashes, l.cfg.verify.enabled, l.cfg.verify.completeness);
     // Pin the ratified texts (graded-gate precedent corpus) for exactly the same
     // live surface as the hashes — an inactive gate contributes no precedent.
     let mut texts = current_texts(l);
-    if !l.cfg.verify.enabled {
-        texts.refute = String::new();
-    }
-    if !l.cfg.verify.completeness {
-        texts.completeness = String::new();
-    }
+    ratify::mask_inactive(&mut texts, l.cfg.verify.enabled, l.cfg.verify.completeness);
     let path = ratify::write_lock(&l.repo_root, &hashes, &texts, &head, &l.date, reason)?;
     println!(
         "specguard: prompt (メタ正典) を批准した -> {}",

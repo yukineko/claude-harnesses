@@ -137,22 +137,68 @@ const POLARITY_TOKENS: &[(&str, &str)] = &[
     ("contradiction", "contradict"),
 ];
 
-/// The multiset (canonical bucket → count) of polarity tokens in `s`, in the
-/// same normalized token space as [`shingles`]. Deterministic (a `BTreeMap`),
-/// seed-free, and a pure function of the text. Distinct surface synonyms that
-/// share a bucket (see [`POLARITY_TOKENS`]) collapse to the same key, so a
-/// synonym substitution (e.g. "approve" -> "greenlight") is invisible to the
-/// signature exactly like a same-word repeat would be — while an actual
-/// polarity axis flip (e.g. "approve" bucket -> "deny" bucket) still changes
-/// the multiset and is detected. Two texts with an identical signature are
-/// "polarity-equivalent"; any add / remove / flip of a polarity bucket changes
-/// the multiset and is therefore detected.
-fn polarity_signature(s: &str) -> BTreeMap<&'static str, usize> {
-    let present: BTreeMap<&'static str, &'static str> = POLARITY_TOKENS.iter().copied().collect();
-    let mut sig = BTreeMap::new();
+/// Maps each canonical polarity *bucket* to the semantic **axis** it belongs to.
+/// An axis groups the mutually-exclusive poles of one decision dimension so that
+/// swapping poles *within* an axis (e.g. `allow` ↔ `deny`) is order-sensitive
+/// while reordering tokens *across* different axes (e.g. `must` vs `human`) is
+/// not. That distinction is what lets [`polarity_signature`] catch a cross-clause
+/// pole swap which leaves the flat bucket multiset unchanged, without
+/// over-flagging a benign reflow that merely reorders unrelated-axis words.
+///
+/// Every bucket produced by [`POLARITY_TOKENS`] appears here; the axis label is
+/// otherwise the bucket itself (a defensive fallback in [`polarity_signature`]).
+const POLARITY_AXES: &[(&str, &str)] = &[
+    // Negation & quantifier-authority.
+    ("never", "neg"),
+    ("always", "neg"),
+    ("no", "neg"),
+    ("not", "neg"),
+    ("none", "neg"),
+    ("unless", "neg"),
+    ("without", "neg"),
+    // Authorization / permission (allow vs deny/forbid, approve).
+    ("allow", "authz"),
+    ("deny", "authz"),
+    ("forbid", "authz"),
+    ("approve", "authz"),
+    // Human-vs-machine routing.
+    ("human", "route"),
+    ("auto", "route"),
+    // Obligation modality.
+    ("must", "modal"),
+    ("require", "modal"),
+    ("optional", "modal"),
+    ("should", "modal"),
+    // Audit verdict (match vs contradict).
+    ("match", "audit"),
+    ("contradict", "audit"),
+];
+
+/// The polarity **signature** of `s`: for each semantic axis (see
+/// [`POLARITY_AXES`]), the *ordered sequence* of polarity buckets that appear on
+/// that axis, in text order. Deterministic (a `BTreeMap` keyed by axis, each value
+/// a text-ordered `Vec`), seed-free, and a pure function of the text.
+///
+/// Why per-axis ordered sequences rather than one flat bucket multiset (the
+/// previous design): a flat multiset is blind to a *cross-clause pole swap*. When
+/// one clause says "allow X" and another "deny Y", exchanging the two verbs to
+/// "deny X" / "allow Y" leaves the multiset `{allow:1, deny:1}` — and hence the
+/// lexical Jaccard — completely unchanged, so the single most dangerous edit
+/// (inverting which thing is allowed vs denied) auto-ratified, skipping the human.
+/// Recording the order of buckets *within each axis* makes that swap visible
+/// (`[allow, deny]` → `[deny, allow]`), while keeping *different* axes independent
+/// so a benign reflow that reorders unrelated words (e.g. "must … to a human" → "a
+/// human … must" — different axes, one bucket each) still compares equal.
+/// Within-bucket synonym substitutions collapse to the same bucket (via
+/// [`POLARITY_TOKENS`]) and remain invisible, exactly as before.
+fn polarity_signature(s: &str) -> BTreeMap<&'static str, Vec<&'static str>> {
+    let bucket_of: BTreeMap<&'static str, &'static str> = POLARITY_TOKENS.iter().copied().collect();
+    let axis_of: BTreeMap<&'static str, &'static str> = POLARITY_AXES.iter().copied().collect();
+    let mut sig: BTreeMap<&'static str, Vec<&'static str>> = BTreeMap::new();
     for tok in tokens(s) {
-        if let Some(&canon) = present.get(tok.as_str()) {
-            *sig.entry(canon).or_insert(0) += 1;
+        if let Some(&bucket) = bucket_of.get(tok.as_str()) {
+            let axis = axis_of.get(bucket).copied().unwrap_or(bucket);
+            sig.entry(axis).or_default().push(bucket);
         }
     }
     sig
@@ -601,6 +647,66 @@ mod tests {
                 c.what
             );
         }
+    }
+
+    /// Regression for the CRITICAL two-clause bypass (review finding 1): the
+    /// previous flat-multiset polarity signature was blind to a *cross-clause pole
+    /// swap*. Here one clause allows a benign edit and another denies a
+    /// substantive one; exchanging the two authorization verbs inverts WHICH edit
+    /// is waved through while leaving the polarity bucket multiset — and thus the
+    /// lexical Jaccard — unchanged. The per-axis ordered signature must route this
+    /// to a human (Novel) at the shipped default threshold even though the
+    /// similarity stays above it. Under the old flat multiset this auto-ratified.
+    #[test]
+    fn zzz_adversarial_probe_two_clause_pole_swap_routes_to_human() {
+        const THRESHOLD: f64 = 0.85; // the shipped default.
+
+        // A realistic-length precedent with TWO authorization clauses: it `allow`s
+        // a benign whitespace-only edit and separately `deny`s a substantive
+        // rewrite. Both clauses share the same "without a second human review"
+        // context so only the two verbs distinguish them.
+        let ratified = "when the graded ratification gate carefully evaluates a large \
+                        incoming batch of drifted meta canon template edits during a fully \
+                        gated production release run the deterministic triage logic will \
+                        allow the routine whitespace only reformatting change to merge into \
+                        the pinned meta canon corpus without requiring a second explicit \
+                        human review because that particular edit carries no real semantic \
+                        authority over the eventual outcome and the very same triage logic \
+                        will separately deny the substantive policy rewrite from merging \
+                        into that same pinned meta canon corpus without requiring a second \
+                        explicit human review because that particular rewrite clearly does \
+                        carry real semantic authority over the final audit outcome";
+        // Swap ONLY the two authorization verbs between the two clauses: the benign
+        // edit is now denied and the substantive one allowed. The {allow:1, deny:1}
+        // bucket multiset is unchanged, so the flat-multiset guard (and the
+        // Jaccard) stay put — precisely the bypass the per-axis order closes.
+        let flipped = ratified
+            .replace("will allow the routine", "will deny the routine")
+            .replace("will separately deny", "will separately allow");
+        let corpus = vec![ratified.to_string()];
+
+        let sim = best_similarity(&flipped, &corpus);
+        // The lexical similarity stays high — the two swapped single words barely
+        // perturb the shingle set of this long paragraph; the flat-multiset guard
+        // WOULD have auto-ratified it.
+        assert!(
+            sim >= THRESHOLD,
+            "expected a high (>= {THRESHOLD}) lexical similarity that WOULD have \
+             auto-ratified under the old flat-multiset guard, got {sim}"
+        );
+        // The flat bucket multiset is identical, so the OLD signature deemed the two
+        // texts polarity-equivalent. The per-axis ordered signature does not.
+        assert!(
+            !polarity_preserved(ratified, &flipped),
+            "the cross-clause allow<->deny swap must perturb the polarity signature"
+        );
+        // ...so the graded gate routes the inversion to a human.
+        assert_eq!(
+            triage(&flipped, &corpus, THRESHOLD),
+            Verdict::Novel,
+            "cross-clause allow<->deny swap must route to a human (Novel) despite \
+             similarity {sim}"
+        );
     }
 
     /// Positive companion to the probe: a genuine benign reflow / reword that

@@ -44,11 +44,15 @@ Phase 1 の API に対して、期待する振る舞いを表すテストを書�
 
 ### Phase 3 — RED を記録
 ```
-tdd red --task <id> [--cmd "<test cmd>"]
+tdd red --task <id> [--cmd "<test cmd>"] [--author <id>]
 ```
 - 成功(exit 0)= テストが落ちた = test-first 成立。`<proof_dir>/<id>.red.json` が書かれる。
 - 失敗(exit 1, "tests passed …")= テストが通ってしまった。**実装してはいけない**。
   振る舞いを実際に検証する失敗テストへ書き直して Phase 3 をやり直す。
+- **記録される identity**: `--author` を渡さない場合、証跡に記録される identity は
+  `CLAUDE_CODE_SESSION_ID`(未設定なら共有バケット `_local`)に自動で default する。
+  素の CLI 文字列を渡す honor-system には依存しない。`--author <id>` を明示すれば、それが
+  session id より優先される(上書き)。
 
 ### Phase 4 — 実装
 テストを GREEN にすることだけを目的に、スタブを実装で埋める。テストは変更しない
@@ -56,11 +60,28 @@ tdd red --task <id> [--cmd "<test cmd>"]
 
 ### Phase 5 — GREEN を記録
 ```
-tdd green --task <id> [--cmd "<test cmd>"]
+tdd green --task <id> [--cmd "<test cmd>"] [--author <id>]
 ```
 - RED 証跡が無ければ拒否される(Phase 3 を飛ばしていないか確認)。
 - テストがまだ落ちるなら Phase 4 に戻る。
 - 成功すると `<proof_dir>/<id>.green.json` が書かれる。
+- `--author` の扱いは Phase 3 と同じ(未指定なら `CLAUDE_CODE_SESSION_ID` default)。
+
+### strict_separation(opt-in — RED/GREEN の著者分離を強制する)
+
+`tdd.toml` で `strict_separation = true` にすると、`tdd green` は RED 証跡の identity と
+GREEN の identity が**同一なら拒否**する(fail-closed)。既定は `false`(既存動作と完全互換)。
+
+- **同一セッションが `--author` 無しで RED→GREEN を両方回す「よくあるケース」**は、
+  identity が同じ `CLAUDE_CODE_SESSION_ID` に default するため、strict モードで実際に
+  検知・拒否される(honor-system の裸文字列に依存しない)。
+- 別セッション/別エージェントに GREEN を担当させたい場合は、そのセッションで
+  `tdd green --task <id>` を実行するか、明示的に異なる `--author <id>` を渡す。
+- **残存する回避可能性(正直に明記)**: これは HOTL(human-on-the-loop)のための抑止であり、
+  暗号学的な認証ではない。`--author` を明示指定できる以上、1つのエージェントが意図的に
+  2つの異なる `--author` 文字列を使い分ければこのゲートは回避できる(`CLAUDE_CODE_SESSION_ID`
+  の偽装も同様)。ハードなセキュリティ境界ではなく、「同一エージェントが無自覚に
+  RED も GREEN も両方書いてしまう」典型ケースを引っかけるための決定論ゲート、という位置づけ。
 
 ### Phase 6 — 検証して完了
 ```

@@ -68,6 +68,59 @@ fn canonical_author(id: &str) -> String {
     id.trim().to_lowercase()
 }
 
+/// Bind the recorded identity to something real instead of an honor-system
+/// bare string: when `--author` is not explicitly given, default to the
+/// current Claude Code session id (`CLAUDE_CODE_SESSION_ID`), falling back to
+/// a stable, shared `"_local"` bucket when unset (matches
+/// `harness_core::hook::HookInput::session_key`'s convention for manual/CLI
+/// runs outside a hook). This makes the *common* case — the same agent/session
+/// runs both `tdd red` and `tdd green` — actually caught under
+/// `strict_separation`, rather than depending entirely on a caller-supplied
+/// `--author` string.
+///
+/// Residual limitation (document plainly, this is HOTL not a hard security
+/// boundary): a determined single agent can still defeat this by passing two
+/// *different* `--author` overrides explicitly (or by forging
+/// `CLAUDE_CODE_SESSION_ID`) — nothing here cryptographically authenticates
+/// the identity. `strict_separation` raises the bar for the common/accidental
+/// case; it is not a hard security boundary against a deliberately adversarial
+/// single agent.
+fn default_author() -> String {
+    default_author_from(std::env::var("CLAUDE_CODE_SESSION_ID").ok())
+}
+
+/// Testable core of [`default_author`]: given what
+/// `env::var("CLAUDE_CODE_SESSION_ID")` would have returned, resolve the
+/// default identity — trimmed session id, or the shared `"_local"` bucket
+/// when unset/blank. Split out so tests can exercise the fallback logic
+/// deterministically without mutating real process-global env state.
+fn default_author_from(session_id: Option<String>) -> String {
+    session_id
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "_local".to_string())
+}
+
+/// Resolve the identity to record for a RED/GREEN step: an explicit
+/// `--author` always wins; otherwise fall back to [`default_author`] (the
+/// session id, or `"_local"`). Never `None` — there is always *some* recorded
+/// identity now, even without `--author`.
+fn resolve_author(author: &Option<String>) -> String {
+    resolve_author_from(author, default_author)
+}
+
+/// Testable core of [`resolve_author`]: an explicit `--author` always wins;
+/// otherwise calls `default` (normally [`default_author`], overridable in
+/// tests) to resolve the fallback identity.
+fn resolve_author_from(author: &Option<String>, default: impl FnOnce() -> String) -> String {
+    author
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(std::string::ToString::to_string)
+        .unwrap_or_else(default)
+}
+
 /// Pure gate: strict test/impl author separation (opt-in, fail-closed under
 /// strict mode). Mirrors condukt's `resolve_verifier_model`/`same_model`
 /// invariant that the verifier model must never equal the worker model — here
@@ -79,7 +132,11 @@ fn canonical_author(id: &str) -> String {
 ///   fully backward compatible.
 /// - `strict == true`: allowed iff both identities are present and differ
 ///   (case-insensitive, trimmed). Missing/empty identities are also rejected
-///   under strict mode, since separation can't be verified without them.
+///   under strict mode, since separation can't be verified without them. In
+///   practice `green()` always resolves a non-empty identity via
+///   [`resolve_author`] (session id default), so this branch now only fires
+///   for a RED proof written *before* this identity-default existed (no
+///   `author` field at all) or when called directly with `None` (e.g. tests).
 pub fn judge_separation(
     strict: bool,
     test_author: Option<&str>,
@@ -129,6 +186,9 @@ fn resolve_cmd<'a>(cmd: &'a Option<String>, cfg: &'a Config) -> &'a str {
 /// `author` is an optional identity (agent/session id) for the test-authoring
 /// step, recorded into the proof so a later `tdd green --author <id>` can be
 /// checked against it under `strict_separation` (see [`judge_separation`]).
+/// When omitted, the recorded identity defaults to the current session id
+/// (see [`default_author`]) rather than being left empty — see
+/// [`resolve_author`].
 pub fn red(
     root: &Path,
     cfg: &Config,
@@ -147,6 +207,7 @@ pub fn red(
     );
     judge_red(out.passed)?;
     let path = artifact_path(root, cfg, task, "red");
+    let author = resolve_author(author);
     write_artifact(
         &path,
         &json!({
@@ -182,11 +243,16 @@ fn read_author(root: &Path, cfg: &Config, task: &str, kind: &str) -> Option<Stri
 
 /// `tdd green`: require a RED proof, run the tests, require success, record GREEN.
 ///
-/// `author` is an optional identity for the implementation step. Under
-/// `cfg.strict_separation` it is compared against the RED proof's recorded
-/// author and rejected (fail-closed) if they are the same identity — see
-/// [`judge_separation`]. When `strict_separation` is off (the default) this
-/// check is skipped entirely, so behaviour is unchanged.
+/// `author` is an optional identity for the implementation step. When
+/// omitted, it defaults to the current session id (see [`default_author`] /
+/// [`resolve_author`]) rather than being left empty — so the *common* case
+/// (the same agent/session runs both `red` and `green` without ever passing
+/// `--author`) is actually observable under `strict_separation`, instead of
+/// silently passing because no identity was recorded. Under
+/// `cfg.strict_separation` the resolved identity is compared against the RED
+/// proof's recorded author and rejected (fail-closed) if they are the same
+/// identity — see [`judge_separation`]. When `strict_separation` is off (the
+/// default) this check is skipped entirely, so behaviour is unchanged.
 pub fn green(
     root: &Path,
     cfg: &Config,
@@ -196,9 +262,10 @@ pub fn green(
 ) -> Result<()> {
     let red_path = artifact_path(root, cfg, task, "red");
     let has_red = red_path.exists();
+    let author = resolve_author(author);
     if cfg.strict_separation {
         let test_author = read_author(root, cfg, task, "red");
-        judge_separation(true, test_author.as_deref(), author.as_deref())?;
+        judge_separation(true, test_author.as_deref(), Some(&author))?;
     }
     let cmdline = resolve_cmd(cmd, cfg);
     let tmp = cfg.state_dir.join("tmp");
@@ -315,6 +382,86 @@ mod tests {
         assert!(judge_separation(true, Some(""), Some("agent-b")).is_err());
     }
 
+    // ── identity default (bind to something real; Item 1) ───────────────────
+    //
+    // Pure, deterministic — no real env mutation, so these are safe under
+    // test parallelism (see `default_author_from`/`resolve_author_from`).
+
+    #[test]
+    fn default_author_falls_back_to_local_bucket_when_session_id_unset() {
+        assert_eq!(default_author_from(None), "_local");
+        assert_eq!(default_author_from(Some("".to_string())), "_local");
+        assert_eq!(default_author_from(Some("   ".to_string())), "_local");
+    }
+
+    #[test]
+    fn default_author_uses_trimmed_session_id_when_set() {
+        assert_eq!(
+            default_author_from(Some("sess-123".to_string())),
+            "sess-123"
+        );
+        assert_eq!(
+            default_author_from(Some("  sess-123  ".to_string())),
+            "sess-123"
+        );
+    }
+
+    #[test]
+    fn resolve_author_prefers_explicit_author_over_default() {
+        // Explicit `--author` always wins, even if it differs from the
+        // session-id default — the override still works.
+        assert_eq!(
+            resolve_author_from(&Some("agent-a".to_string()), || "sess-xyz".to_string()),
+            "agent-a"
+        );
+    }
+
+    #[test]
+    fn resolve_author_falls_back_to_default_when_author_absent_or_blank() {
+        assert_eq!(
+            resolve_author_from(&None, || "sess-xyz".to_string()),
+            "sess-xyz"
+        );
+        assert_eq!(
+            resolve_author_from(&Some("   ".to_string()), || "sess-xyz".to_string()),
+            "sess-xyz"
+        );
+    }
+
+    #[test]
+    fn same_session_auto_id_rejected_under_strict_separation() {
+        // The identity-default gate's actual purpose: two `--author`-less
+        // calls from the *same* session (the common case — one agent runs
+        // both `tdd red` and `tdd green` without ever passing `--author`)
+        // resolve to the SAME identity, and must be rejected under strict
+        // separation — this is the "bind to something real" fix, not just an
+        // honor-system string.
+        let same_session = || "sess-same".to_string();
+        let red_author = resolve_author_from(&None, same_session);
+        let green_author = resolve_author_from(&None, same_session);
+        assert_eq!(red_author, green_author);
+        assert!(judge_separation(true, Some(&red_author), Some(&green_author)).is_err());
+    }
+
+    #[test]
+    fn distinct_session_auto_ids_allowed_under_strict_separation() {
+        let red_author = resolve_author_from(&None, || "sess-a".to_string());
+        let green_author = resolve_author_from(&None, || "sess-b".to_string());
+        assert_ne!(red_author, green_author);
+        assert!(judge_separation(true, Some(&red_author), Some(&green_author)).is_ok());
+    }
+
+    #[test]
+    fn default_off_unchanged_even_with_same_auto_session_id() {
+        // strict_separation is opt-in: with it off, same-session auto ids are
+        // still allowed (fully backward compatible with pre-existing
+        // behaviour/tests).
+        let same_session = || "sess-same".to_string();
+        let red_author = resolve_author_from(&None, same_session);
+        let green_author = resolve_author_from(&None, same_session);
+        assert!(judge_separation(false, Some(&red_author), Some(&green_author)).is_ok());
+    }
+
     #[test]
     fn green_rejects_same_author_end_to_end_under_strict_mode() {
         // Exercises the real `green()` wiring: a RED proof recorded with
@@ -381,6 +528,119 @@ mod tests {
         .unwrap();
         assert!(artifact_path(&base, &cfg, "t1", "green").exists());
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn green_honors_explicit_author_override_end_to_end_default_off() {
+        // Explicit `--author` override still works end-to-end even with
+        // strict_separation OFF (default-off unchanged): both red() and
+        // green() honor an explicit author and never touch CLAUDE_CODE_SESSION_ID.
+        let base = std::env::temp_dir().join(format!("tdd-sep-override-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let cfg = Config {
+            proof_dir: ".tdd".to_string(),
+            strict_separation: false,
+            ..Config::default()
+        };
+
+        // "false" always exits 1 → satisfies judge_red's must-fail requirement.
+        red(
+            &base,
+            &cfg,
+            "t1",
+            &Some("false".to_string()),
+            &Some("agent-a".to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            read_author(&base, &cfg, "t1", "red").as_deref(),
+            Some("agent-a")
+        );
+
+        green(
+            &base,
+            &cfg,
+            "t1",
+            &Some("true".to_string()),
+            &Some("agent-a".to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            read_author(&base, &cfg, "t1", "green").as_deref(),
+            Some("agent-a")
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn env_session_id_default_end_to_end_via_real_red_green() {
+        // Serialized in a SINGLE #[test] (mirrors config.rs's HOME-mutation
+        // test) because CLAUDE_CODE_SESSION_ID is process-global env state and
+        // `cargo test` runs tests in parallel by default.
+        //
+        // Exercises the real `red()`/`green()` wiring end-to-end with NO
+        // `--author` passed at all: the recorded identity must default to
+        // CLAUDE_CODE_SESSION_ID. Same session id for both RED and GREEN
+        // (the common "one agent, no --author" case) is rejected under
+        // strict_separation; a different session id for GREEN is allowed.
+        let base = std::env::temp_dir().join(format!("tdd-sep-env-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let cfg = Config {
+            proof_dir: ".tdd".to_string(),
+            strict_separation: true,
+            ..Config::default()
+        };
+
+        let saved = std::env::var("CLAUDE_CODE_SESSION_ID").ok();
+
+        // Same session for RED and GREEN → rejected (no --author given at all).
+        std::env::set_var("CLAUDE_CODE_SESSION_ID", "sess-same-e2e");
+        red(&base, &cfg, "t1", &Some("false".to_string()), &None).unwrap();
+        assert_eq!(
+            read_author(&base, &cfg, "t1", "red").as_deref(),
+            Some("sess-same-e2e")
+        );
+        let err = green(&base, &cfg, "t1", &Some("true".to_string()), &None).unwrap_err();
+        assert!(
+            err.to_string().contains("strict_separation"),
+            "expected same-session auto id to be rejected under strict_separation, got: {err}"
+        );
+        assert!(!artifact_path(&base, &cfg, "t1", "green").exists());
+
+        // Different session for GREEN → allowed.
+        std::env::set_var("CLAUDE_CODE_SESSION_ID", "sess-other-e2e");
+        green(&base, &cfg, "t1", &Some("true".to_string()), &None).unwrap();
+        assert_eq!(
+            read_author(&base, &cfg, "t1", "green").as_deref(),
+            Some("sess-other-e2e")
+        );
+
+        // Explicit --author override still works, taking priority over env.
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::env::set_var("CLAUDE_CODE_SESSION_ID", "sess-ignored");
+        red(
+            &base,
+            &cfg,
+            "t2",
+            &Some("false".to_string()),
+            &Some("explicit-author".to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            read_author(&base, &cfg, "t2", "red").as_deref(),
+            Some("explicit-author"),
+            "explicit --author must override the CLAUDE_CODE_SESSION_ID default"
+        );
+
+        match saved {
+            Some(v) => std::env::set_var("CLAUDE_CODE_SESSION_ID", v),
+            None => std::env::remove_var("CLAUDE_CODE_SESSION_ID"),
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 

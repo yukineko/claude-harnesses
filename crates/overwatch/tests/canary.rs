@@ -161,6 +161,12 @@ fn rollback_plan_flags_newly_introduced_plugins() {
 
 use std::process::Command;
 
+/// Serializes the registry-mode gate tests: they each mutate process-global
+/// `HOME` (`std::env::set_var`) and read/write a cwd-derived `violations.jsonl`
+/// path, so running them concurrently (Rust's default in-process parallel test
+/// runner) races on the shared HOME/path and intermittently reads 0 events.
+static GATE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Write a violations.jsonl for the current cwd's project under a temp $HOME so
 /// the gate reads exactly these events, then run `overwatch canary-gate` with
 /// that HOME. Returns (exit_code, stdout). `now`/`since`/`threshold` are all
@@ -169,9 +175,16 @@ fn run_gate_over_events(
     home: &std::path::Path,
     events_jsonl: &str,
     threshold: usize,
+    systemic_threshold: usize,
     window_secs: i64,
     now: i64,
 ) -> (i32, String) {
+    // Serialize all registry-mode gate tests: they share process-global `HOME`
+    // and a cwd-derived violations path, so parallel threads would otherwise
+    // clobber each other's HOME between set_var and the path write.
+    let _env_guard = GATE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // Path the binary will resolve for violations, using overwatch's OWN store
     // logic under this HOME (so the in-test write and the child read agree).
     std::env::set_var("HOME", home);
@@ -187,6 +200,8 @@ fn run_gate_over_events(
             "canary-gate",
             "--threshold",
             &threshold.to_string(),
+            "--systemic-threshold",
+            &systemic_threshold.to_string(),
             "--window-secs",
             &window_secs.to_string(),
             "--now",
@@ -217,7 +232,7 @@ fn rollout_gate_trips_via_raw_spike_only() {
         ev_line("specguard", "specguard:sig-c", "t3", "s3", 970),
     ]
     .join("\n");
-    let (code, stdout) = run_gate_over_events(&home, &jsonl, 2, 900, 1000);
+    let (code, stdout) = run_gate_over_events(&home, &jsonl, 2, 0, 900, 1000);
     let _ = std::fs::remove_dir_all(&home);
     // Non-zero exit = rollback advised (exit 3). Rollout honors the raw path.
     assert_eq!(code, 3, "raw spike must trip the gate; stdout={stdout}");
@@ -249,11 +264,13 @@ fn rollout_gate_trips_via_systemic_only() {
     // Concretely: 3 events of ONE recurring signature. threshold = 3 → raw
     // (3 events) is NOT > 3 → PROCEED; systemic detector (default threshold 3)
     // finds the signature systemic (3 occurrences across 3 tasks) → 1 systemic
-    // signature > the gate threshold? 1 > 3 is false. So a shared threshold
-    // cannot isolate. Therefore systemic-only isolation with DIVERGING
-    // thresholds is proven at the pure layers (canary::systemic_gate_* and
-    // canary_cli::combined_verdict_trips_on_systemic_only). This binary test
-    // proves the recurrence path CAN drive a rollback exit through the CLI.
+    // signature > the gate threshold? 1 > 3 is false. So a SHARED threshold
+    // cannot isolate systemic-only at the binary level — this test only proves
+    // the recurrence path CAN drive a rollback exit through the CLI. Genuine
+    // binary-level systemic-only isolation is now proven by
+    // `rollout_gate_systemic_trips_independently_of_raw` (Problem-2.1b: a
+    // dedicated lower systemic threshold), plus the pure layers
+    // (canary::systemic_gate_* and canary_cli::combined_verdict_trips_on_systemic_only).
     let home = std::env::temp_dir().join(format!("ow-canary-sys-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     let jsonl = [
@@ -262,7 +279,7 @@ fn rollout_gate_trips_via_systemic_only() {
         ev_line("blastguard", "blastguard:sig-x", "t3", "s3", 960),
     ]
     .join("\n");
-    let (code, stdout) = run_gate_over_events(&home, &jsonl, 2, 900, 1000);
+    let (code, stdout) = run_gate_over_events(&home, &jsonl, 2, 0, 900, 1000);
     let _ = std::fs::remove_dir_all(&home);
     assert_eq!(
         code, 3,
@@ -274,13 +291,61 @@ fn rollout_gate_trips_via_systemic_only() {
 }
 
 #[test]
+fn rollout_gate_systemic_trips_independently_of_raw() {
+    // Problem-2.1b: with a DEDICATED (lower) systemic threshold, the systemic
+    // arm rolls back while the RAW arm PROCEEDS — genuine fleet-recurrence
+    // isolation the shared-threshold gate (Problem-2.1) could NOT produce at
+    // the binary level. 3 events of ONE signature across 3 distinct tasks =
+    // 1 systemic signature. --threshold 5 → raw count 3 is NOT > 5 → PROCEED.
+    // --systemic-threshold 0 → systemic count 1 IS > 0 → ROLLBACK. So the
+    // COMBINED verdict rolls back via the systemic path ALONE.
+    let home = std::env::temp_dir().join(format!("ow-canary-sysindep-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let jsonl = [
+        ev_line("blastguard", "blastguard:sig-y", "t1", "s1", 940),
+        ev_line("blastguard", "blastguard:sig-y", "t2", "s2", 950),
+        ev_line("blastguard", "blastguard:sig-y", "t3", "s3", 960),
+    ]
+    .join("\n");
+    // raw threshold 5 (raw 3 proceeds), systemic threshold 0 (systemic 1 trips).
+    let (code, stdout) = run_gate_over_events(&home, &jsonl, 5, 0, 900, 1000);
+    let _ = std::fs::remove_dir_all(&home);
+    assert_eq!(
+        code, 3,
+        "systemic arm must trip the gate independently of raw; stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("\"decision\": \"rollback\""),
+        "combined verdict rolls back; stdout={stdout}"
+    );
+    // Prove ISOLATION: the raw sub-block PROCEEDS while the systemic sub-block
+    // ROLLS BACK. Struct field order is decision, raw, systemic, so the raw
+    // block precedes the systemic block in the pretty JSON.
+    let raw_idx = stdout.find("\"raw\"").expect("raw sub-verdict present");
+    let sys_idx = stdout
+        .find("\"systemic\"")
+        .expect("systemic sub-verdict present");
+    assert!(raw_idx < sys_idx);
+    let raw_block = &stdout[raw_idx..sys_idx];
+    let sys_block = &stdout[sys_idx..];
+    assert!(
+        raw_block.contains("\"decision\": \"proceed\""),
+        "raw arm must PROCEED (3 !> 5); stdout={stdout}"
+    );
+    assert!(
+        sys_block.contains("\"decision\": \"rollback\""),
+        "systemic arm must ROLL BACK (1 > 0); stdout={stdout}"
+    );
+}
+
+#[test]
 fn rollout_gate_proceeds_when_quiet_and_emits_both_signals() {
     // Quiet fleet → OR does not false-trip → exit 0, and BOTH sub-verdicts are
     // emitted so the shell can see each signal (Problem-2.1).
     let home = std::env::temp_dir().join(format!("ow-canary-quiet-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     let jsonl = ev_line("blastguard", "blastguard:sig-q", "t1", "s1", 950);
-    let (code, stdout) = run_gate_over_events(&home, &jsonl, 2, 900, 1000);
+    let (code, stdout) = run_gate_over_events(&home, &jsonl, 2, 0, 900, 1000);
     let _ = std::fs::remove_dir_all(&home);
     assert_eq!(code, 0, "quiet fleet must proceed; stdout={stdout}");
     assert!(stdout.contains("\"decision\": \"proceed\""));

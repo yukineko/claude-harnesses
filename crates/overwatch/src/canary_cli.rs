@@ -110,6 +110,7 @@ impl CombinedVerdict {
 pub fn gate(
     observed: Option<usize>,
     threshold: usize,
+    systemic_threshold: usize,
     window_secs: i64,
     systemic: bool,
     now_override: Option<i64>,
@@ -117,6 +118,19 @@ pub fn gate(
 ) -> Result<bool> {
     let policy = HealthGatePolicy {
         max_violations_in_window: threshold,
+        window_secs,
+    };
+    // Problem-2.1b: the systemic (fleet-recurrence) arm gets its OWN, typically
+    // lower, threshold so it can trip INDEPENDENTLY of the raw-spike count.
+    // With a threshold shared with the raw arm the systemic path was vacuous: a
+    // systemic signature requires >= recurrence.threshold occurrences across
+    // distinct tasks, so `systemic_count <= raw_count` always — systemic could
+    // never trip while raw stayed below the same bar. A dedicated threshold
+    // (default 0 = "any fleet-recurring signature since deploy trips") makes the
+    // OR in `CombinedVerdict` non-vacuous and realizes genuine fleet-recurrence
+    // protection.
+    let systemic_policy = HealthGatePolicy {
+        max_violations_in_window: systemic_threshold,
         window_secs,
     };
 
@@ -138,14 +152,15 @@ pub fn gate(
     if systemic {
         // Backward-compatible single-signal path (systemic only).
         let verdict =
-            canary::evaluate_health_gate_systemic(&events, now, recurrence, policy, since);
+            canary::evaluate_health_gate_systemic(&events, now, recurrence, systemic_policy, since);
         return print_verdict(&verdict);
     }
 
     // Default registry path (Problem-2.1): compute BOTH signals and OR them so
     // rollout honors a raw spike OR a fleet-recurrence (systemic) verdict.
     let raw = canary::evaluate_health_gate(&events, now, policy, since);
-    let sys = canary::evaluate_health_gate_systemic(&events, now, recurrence, policy, since);
+    let sys =
+        canary::evaluate_health_gate_systemic(&events, now, recurrence, systemic_policy, since);
     let combined = CombinedVerdict::from_parts(raw, sys);
     println!("{}", serde_json::to_string_pretty(&combined)?);
     Ok(combined.should_rollback())

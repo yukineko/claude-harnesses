@@ -110,7 +110,7 @@ is_gate_crate() {
 }
 
 dry=0 force=0 no_rebuild=0 no_sync=0
-canary=0 canary_stage_size=1 canary_threshold=2 no_canary=0
+canary=0 canary_stage_size=1 canary_threshold=2 canary_systemic_threshold=0 no_canary=0
 declare -a only_plugins=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -128,6 +128,9 @@ while [ $# -gt 0 ]; do
     --canary-threshold)
                   [ $# -ge 2 ] || { echo "--canary-threshold requires N" >&2; exit 2; }
                   canary_threshold="$2"; shift 2 ;;
+    --canary-systemic-threshold)
+                  [ $# -ge 2 ] || { echo "--canary-systemic-threshold requires N" >&2; exit 2; }
+                  canary_systemic_threshold="$2"; shift 2 ;;
     -h|--help)    usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -645,11 +648,15 @@ run_canary() {
         # BOTH a raw-spike AND a systemic (fleet-recurrence) sub-verdict and
         # exits non-zero if EITHER fires (Problem-2.1) — so this single check
         # already honors both signals; we do NOT pass --systemic (which would
-        # restrict to the single systemic-only path). --since anchors the count
-        # to this stage's deploy time (Problem-2.2). A gate-eval error must not
-        # crash the rollout: canary is observational, so on any non-rollback
-        # failure we treat it as "no spike observed" and PROCEED (fail-soft).
-        local -a gate_args=(canary-gate --threshold "$canary_threshold")
+        # restrict to the single systemic-only path). The systemic arm uses its
+        # OWN, lower threshold (Problem-2.1b: default 0 = any fleet-recurring
+        # signature trips) so fleet recurrence can advise rollback independently
+        # of the raw-spike count. --since anchors the count to this stage's
+        # deploy time (Problem-2.2). A gate-eval error must not crash the
+        # rollout: canary is observational, so on any non-rollback failure we
+        # treat it as "no spike observed" and PROCEED (fail-soft).
+        local -a gate_args=(canary-gate --threshold "$canary_threshold" \
+          --systemic-threshold "$canary_systemic_threshold")
         [ -n "$stage_deploy_ts" ] && gate_args+=(--since "$stage_deploy_ts")
         local gate_out gate_rc=0
         gate_out="$("$ow" "${gate_args[@]}")" || gate_rc=$?

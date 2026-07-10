@@ -155,6 +155,13 @@ enum Command {
         /// Max tolerated violations within the window before rollback.
         #[arg(long, default_value_t = 2)]
         threshold: usize,
+        /// Problem-2.1b: dedicated threshold for the SYSTEMIC (fleet-recurrence)
+        /// arm so it can trip INDEPENDENTLY of the raw-spike count (a systemic
+        /// signature needs >= recurrence.threshold occurrences, so it would
+        /// otherwise never fire below the shared raw threshold). Default 0 =
+        /// any fleet-recurring signature since deploy advises rollback.
+        #[arg(long, default_value_t = 0)]
+        systemic_threshold: usize,
         /// Sliding window in seconds (registry mode only).
         #[arg(long, default_value_t = 900)]
         window_secs: i64,
@@ -392,6 +399,7 @@ fn main() -> Result<()> {
         Command::CanaryGate {
             observed_violations,
             threshold,
+            systemic_threshold,
             window_secs,
             systemic,
             now,
@@ -400,6 +408,7 @@ fn main() -> Result<()> {
             let rollback = canary_cli::gate(
                 observed_violations,
                 threshold,
+                systemic_threshold,
                 window_secs,
                 systemic,
                 now,

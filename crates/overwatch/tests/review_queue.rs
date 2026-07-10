@@ -166,6 +166,87 @@ fn review_queue_merges_all_three_sources_time_ordered() {
 }
 
 #[test]
+fn review_queue_collapses_a_refound_finding_to_one_row() {
+    // The Continuous-Audit loop re-records a still-confirmed finding every round
+    // with the SAME finding-id. Through the real store round-trip, review-queue
+    // must surface ONE row (the newest), not one row per round.
+    let (home, work) = make_sandbox("dedup");
+
+    // Round 1 and round 2 record the same id F-9; the round-2 summary is revised.
+    run_ow(
+        &home,
+        &work,
+        &[
+            "record-finding",
+            "--finding-id",
+            "F-9",
+            "--source",
+            "continuous-audit",
+            "--severity",
+            "med",
+            "--summary",
+            "round-1 wording",
+        ],
+    );
+    run_ow(
+        &home,
+        &work,
+        &[
+            "record-finding",
+            "--finding-id",
+            "F-9",
+            "--source",
+            "continuous-audit",
+            "--severity",
+            "high",
+            "--summary",
+            "round-2 revised wording",
+        ],
+    );
+    // A DIFFERENT id must remain its own row.
+    run_ow(
+        &home,
+        &work,
+        &[
+            "record-finding",
+            "--finding-id",
+            "F-10",
+            "--source",
+            "continuous-audit",
+            "--summary",
+            "a distinct finding",
+        ],
+    );
+
+    let stdout = run_ow(&home, &work, &["review-queue", "--json"]);
+    let arr: Value = serde_json::from_str(&stdout).expect("parseable");
+    let rows = arr.as_array().unwrap();
+
+    let ai: Vec<&Value> = rows.iter().filter(|r| r["kind"] == "ai-finding").collect();
+    // F-9 (twice) collapses to one; F-10 stays → exactly two ai-finding rows.
+    assert_eq!(
+        ai.len(),
+        2,
+        "re-recorded finding must collapse; distinct id stays: {ai:?}"
+    );
+    let f9: Vec<&&Value> = ai.iter().filter(|r| r["identifier"] == "F-9").collect();
+    assert_eq!(f9.len(), 1, "F-9 recorded twice must be ONE row");
+    // The surfaced F-9 row reflects the newest (round-2) record.
+    assert!(
+        f9[0]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("round-2 revised wording"),
+        "the newest record must win: {}",
+        f9[0]["summary"]
+    );
+    assert!(
+        ai.iter().any(|r| r["identifier"] == "F-10"),
+        "distinct id F-10 must still appear"
+    );
+}
+
+#[test]
 fn review_queue_degrades_gracefully_when_a_source_is_empty() {
     // Only seed two of the three sources (NO ai-finding recorded — the arm with
     // no producer wired in production). The command must still succeed and

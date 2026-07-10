@@ -55,13 +55,44 @@ pub struct ReviewQueueEntry {
     pub identifier: String,
 }
 
+/// Deduplicate AI findings by `finding_id`, keeping only the **latest** (`ts`)
+/// record per id.
+///
+/// The Continuous-Audit loop re-records confirmed findings every round; a
+/// finding that persists across rounds is `record-finding`ed repeatedly with the
+/// same `finding_id`. Without this collapse the review queue would grow one row
+/// per round for the *same* finding, so an auto-populating loop becomes unusable
+/// noise. Keeping the newest record means the surfaced row reflects the finding's
+/// most recent state (severity/summary can be revised between rounds). On an
+/// exact `ts` tie the later record in `findings` wins ("last write wins" at the
+/// same instant), which is deterministic because the input slice order is stable
+/// (append order of `review_findings.jsonl`). Only the AI-findings stream is
+/// touched — the systemic and rollback streams never pass through here.
+fn dedup_findings(findings: &[ReviewFinding]) -> Vec<ReviewFinding> {
+    use std::collections::HashMap;
+    let mut best: HashMap<&str, ReviewFinding> = HashMap::new();
+    for f in findings {
+        match best.get(f.finding_id.as_str()) {
+            // Keep the existing record only if it is strictly newer; otherwise
+            // insert (new id) or replace (>= ts → newest, ties favour later input).
+            Some(existing) if existing.ts > f.ts => {}
+            _ => {
+                best.insert(f.finding_id.as_str(), f.clone());
+            }
+        }
+    }
+    best.into_values().collect()
+}
+
 /// Deterministically merge the three sources into one **newest-first** queue.
 ///
 /// * systemic violations are taken from `systemic` (already filtered to
 ///   `is_systemic` by the caller), keyed by signature and timestamped at
 ///   `last_seen`;
 /// * rollbacks are keyed by plugin and timestamped at their `ts`;
-/// * AI findings are keyed by `finding_id` and timestamped at their `ts`.
+/// * AI findings are keyed by `finding_id` and timestamped at their `ts`;
+///   findings sharing a `finding_id` are first collapsed to their newest record
+///   by [`dedup_findings`] so a finding recurring across audit rounds is ONE row.
 ///
 /// A missing/empty source simply contributes no rows. Ties on `ts` are broken
 /// deterministically by (kind, identifier) so the ordering is stable and
@@ -102,7 +133,7 @@ pub fn build_queue(
         });
     }
 
-    for f in findings {
+    for f in &dedup_findings(findings) {
         let sev = f
             .severity
             .as_deref()
@@ -277,5 +308,68 @@ mod tests {
         let q = build_queue(&[], &[rb("overwatch", 1)], &[]);
         let json = serde_json::to_string(&q).unwrap();
         assert!(json.contains("\"kind\":\"rollback\""));
+    }
+
+    // --- finding-id dedup (Continuous-Audit re-record collapse) -------------
+
+    /// A finding re-recorded across audit rounds (same `finding_id`) must
+    /// collapse to ONE row carrying its newest `ts`, regardless of input order.
+    #[test]
+    fn build_queue_dedups_findings_by_id_keeping_latest_ts() {
+        let old = finding("F-1", 100);
+        let new = finding("F-1", 200);
+
+        // Newest last, and newest first — both orders must yield one row @ 200.
+        for findings in [
+            vec![old.clone(), new.clone()],
+            vec![new.clone(), old.clone()],
+        ] {
+            let q = build_queue(&[], &[], &findings);
+            let ai: Vec<_> = q
+                .iter()
+                .filter(|r| r.kind == EntryKind::AiFinding)
+                .collect();
+            assert_eq!(ai.len(), 1, "same finding_id must collapse to one row");
+            assert_eq!(ai[0].ts, 200, "the surfaced row must carry the newest ts");
+            assert_eq!(ai[0].identifier, "F-1");
+        }
+    }
+
+    /// Distinct finding ids are NOT collapsed — each keeps its own row.
+    #[test]
+    fn build_queue_keeps_distinct_finding_ids() {
+        let findings = vec![
+            finding("F-1", 100),
+            finding("F-2", 100),
+            finding("F-3", 100),
+        ];
+        let q = build_queue(&[], &[], &findings);
+        let ai = q.iter().filter(|r| r.kind == EntryKind::AiFinding).count();
+        assert_eq!(ai, 3, "distinct ids must not be deduped");
+    }
+
+    /// Deduping the AI-findings stream must not touch the systemic/rollback
+    /// streams: those rows are unaffected in count and identity.
+    #[test]
+    fn dedup_does_not_disturb_other_streams() {
+        let systemic = vec![sig("blastguard:x", 10)];
+        let rollbacks = vec![rb("overwatch", 20)];
+        // Two records of the SAME finding id (collapse to 1) alongside the other
+        // two streams (which must each still contribute exactly one row).
+        let findings = vec![finding("F-1", 30), finding("F-1", 40)];
+        let q = build_queue(&systemic, &rollbacks, &findings);
+        assert_eq!(
+            q.iter().filter(|r| r.kind == EntryKind::Systemic).count(),
+            1
+        );
+        assert_eq!(
+            q.iter().filter(|r| r.kind == EntryKind::Rollback).count(),
+            1
+        );
+        assert_eq!(
+            q.iter().filter(|r| r.kind == EntryKind::AiFinding).count(),
+            1
+        );
+        assert_eq!(q.len(), 3);
     }
 }

@@ -46,7 +46,61 @@ pub struct Config {
     /// identity equals the GREEN (implementation) identity, preventing a single
     /// agent from writing both a wrong implementation and a matching wrong test
     /// (reward hacking). See `proof::judge_separation`.
+    ///
+    /// This is the **effective** value consumed by `proof::green`. It is
+    /// resolved from an explicit request (config file / CLI flag) layered over a
+    /// gate-crate-context default (see [`Config::resolve_strict_separation`] /
+    /// [`effective_strict_separation`]).
     pub strict_separation: bool,
+    /// Whether `strict_separation` was **explicitly** set by the loaded config
+    /// file (`Some(v)`), or left unspecified (`None`). Kept separate from the
+    /// effective `strict_separation` above so the default resolver can tell an
+    /// intentional opt-out apart from "never mentioned" and only apply the
+    /// gate-crate default-on in the latter case. See
+    /// [`Config::resolve_strict_separation`].
+    pub strict_separation_explicit: Option<bool>,
+}
+
+/// Defensive fleet gates that must not be handled loosely: for these crates,
+/// `strict_separation` (RED/GREEN author-diversity, fail-closed) defaults **on**
+/// when otherwise unspecified — the same safe-by-default stance as the rollout
+/// `--canary` requirement for these same gates. Kept as a plain constant array
+/// so the context predicate stays a pure, unit-testable function.
+pub const GATE_CRATES: &[&str] = &[
+    "blastguard",
+    "propguard",
+    "specguard",
+    "stuckguard",
+    "mutategate",
+];
+
+/// Pure predicate: is `path` inside one of the [`GATE_CRATES`] (i.e. does it
+/// contain a `crates/<gate-crate>/…` segment)? Side-effect free (no cwd/env
+/// reads) so it is deterministically unit-testable. Matches on path
+/// *components* rather than a substring so a bare gate name without the
+/// `crates/` parent does not false-positive.
+pub fn is_gate_crate_context(path: &Path) -> bool {
+    let comps: Vec<&str> = path
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    comps
+        .windows(2)
+        .any(|w| w[0] == "crates" && GATE_CRATES.contains(&w[1]))
+}
+
+/// Pure resolver for the effective `strict_separation` value, layering:
+/// **explicit specification > gate-crate-context default-on > global
+/// default-off**.
+///
+/// - `explicit = Some(v)`: an explicit config-file setting or CLI flag — always
+///   honored verbatim (so a gate crate can still be opted *out* with
+///   `--no-strict-separation`).
+/// - `explicit = None`: unspecified — default to `gate_context` (on inside a
+///   gate crate, off elsewhere — the latter preserves the pre-existing
+///   backward-compatible default-off behaviour for ordinary crates).
+pub fn effective_strict_separation(explicit: Option<bool>, gate_context: bool) -> bool {
+    explicit.unwrap_or(gate_context)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -155,6 +209,7 @@ impl Default for Config {
             test_markers: default_test_markers(),
             min_added_impl_lines: 1,
             strict_separation: false,
+            strict_separation_explicit: None,
         }
     }
 }
@@ -236,6 +291,7 @@ impl Config {
                     }
                     if let Some(v) = fc.strict_separation {
                         cfg.strict_separation = v;
+                        cfg.strict_separation_explicit = Some(v);
                     }
                 }
             }
@@ -260,6 +316,17 @@ impl Config {
         cfg
     }
 
+    /// Resolve the **effective** `strict_separation` for a working `root`,
+    /// layering (highest priority first): a CLI override (`cli_override`, e.g.
+    /// `--no-strict-separation` → `Some(false)`) > the config-file explicit
+    /// setting (`self.strict_separation_explicit`) > a gate-crate-context
+    /// default-on > the global default-off. Pure given its inputs (delegates to
+    /// [`is_gate_crate_context`] / [`effective_strict_separation`]).
+    pub fn resolve_strict_separation(&self, root: &Path, cli_override: Option<bool>) -> bool {
+        let explicit = cli_override.or(self.strict_separation_explicit);
+        effective_strict_separation(explicit, is_gate_crate_context(root))
+    }
+
     /// Globally disabled via env.
     pub fn disabled_env() -> bool {
         std::env::var("TDD_DISABLE")
@@ -280,6 +347,77 @@ mod tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    // ── gate-crate context detection (t2) ───────────────────────────────────
+    //
+    // Pure, deterministic path predicate — no cwd/env dependence. GATE_CRATES
+    // get strict_separation on by default (safe-by-default, mirrors the
+    // rollout --canary requirement for the same defensive gates).
+
+    #[test]
+    fn is_gate_crate_context_detects_gate_paths() {
+        // Any `crates/<gate-crate>/…` prefix in the path → gate context.
+        assert!(is_gate_crate_context(Path::new(
+            "/repo/crates/specguard/src/main.rs"
+        )));
+        assert!(is_gate_crate_context(Path::new("crates/blastguard")));
+        assert!(is_gate_crate_context(Path::new("/x/crates/propguard/y")));
+        assert!(is_gate_crate_context(Path::new(
+            "/x/crates/stuckguard/src/lib.rs"
+        )));
+        assert!(is_gate_crate_context(Path::new("crates/mutategate/mod.rs")));
+    }
+
+    #[test]
+    fn is_gate_crate_context_rejects_non_gate_paths() {
+        // A non-gate crate (like tdd itself) is NOT a gate context.
+        assert!(!is_gate_crate_context(Path::new(
+            "/repo/crates/tdd/src/main.rs"
+        )));
+        assert!(!is_gate_crate_context(Path::new("/repo/crates/condukt")));
+        assert!(!is_gate_crate_context(Path::new("/repo")));
+        assert!(!is_gate_crate_context(Path::new("crates")));
+        // "crates" substring absent from the crates/<gate> layout → false
+        // (a bare gate name without the `crates/` parent must not match).
+        assert!(!is_gate_crate_context(Path::new("/repo/specguard/src")));
+    }
+
+    #[test]
+    fn effective_strict_separation_hierarchy() {
+        // Explicit specification > gate-crate default-on > global default-off.
+        // gate context + unspecified → ON (safe by default)
+        assert!(effective_strict_separation(None, true));
+        // gate context + explicit off (e.g. --no-strict-separation) → OFF
+        assert!(!effective_strict_separation(Some(false), true));
+        // gate context + explicit on → ON
+        assert!(effective_strict_separation(Some(true), true));
+        // non-gate + unspecified → OFF (backward compatible)
+        assert!(!effective_strict_separation(None, false));
+        // non-gate + explicit on → ON (opt-in still works)
+        assert!(effective_strict_separation(Some(true), false));
+        // non-gate + explicit off → OFF
+        assert!(!effective_strict_separation(Some(false), false));
+    }
+
+    #[test]
+    fn config_resolve_strict_separation_uses_gate_context() {
+        // End-to-end resolution through the Config method: an unset config in a
+        // gate-crate dir resolves ON; a CLI --no override forces OFF even there;
+        // a non-gate dir stays OFF (unchanged default).
+        let cfg = Config::default(); // strict_separation_explicit = None
+        assert!(cfg.resolve_strict_separation(Path::new("/r/crates/specguard/src"), None));
+        assert!(!cfg.resolve_strict_separation(Path::new("/r/crates/specguard/src"), Some(false)));
+        assert!(!cfg.resolve_strict_separation(Path::new("/r/crates/tdd/src"), None));
+
+        // A config file that explicitly set strict_separation wins over gate ctx.
+        let cfg_off = Config {
+            strict_separation_explicit: Some(false),
+            ..Config::default()
+        };
+        assert!(!cfg_off.resolve_strict_separation(Path::new("/r/crates/specguard/src"), None));
+        // …but a CLI override still beats the config-file explicit.
+        assert!(cfg_off.resolve_strict_separation(Path::new("/r/crates/specguard/src"), Some(true)));
     }
 
     // Mutates the process-global HOME and HARNESS_TRUST_ALL env, so the whole

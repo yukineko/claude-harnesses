@@ -58,6 +58,7 @@ round ledger・収束メトリクスという**決定論は `scripts/continuous-
 - finder は**修正しない** (read-only)。指摘は `{severity: high|med|low, summary, file:line}` の形で返させる。
 - 「実在する問題だけ」を強制する (推測・スタイル論・LGTM の水増しを避ける)。
 - 見つからなければ空を返させる (0 件は正常 = 収束の証拠)。
+- **finder で使用するモデルを記録する** — Step 2 の model diversity チェックで必要。Task の実行結果から使用モデルを確認し、メモに記録しておく。
 
 ### Step 2 — refute-verifier (反証で篩う)
 
@@ -67,8 +68,16 @@ finder の各指摘を、**別の (finder とは独立した) `Task` verifier su
 
 - **CONFIRMED**: verifier がコードで再現/立証できた指摘。→ review-queue に載せる。
 - **REFUTED / PLAUSIBLE**: 立証できない・誤検出・文脈で無害。→ 捨てる (載せない)。
-- finder と verifier は**必ず別 subagent** (できれば別モデル) にする — 同一だと生成と検証が同じ盲点を共有する。
-- 高リスク指摘は verifier を複数立てて多数決にしてよい (refute 票が過半なら捨てる)。
+- **finder と verifier は必ず別 subagent を使用し、かつ異なるモデルを指定すること (MUST)**。
+  同一モデルペアだと生成と検証が同じ盲点を共有するため、必ず異なるモデルで実行する。
+  - 具体的な model diversity ルール：
+    - finder が `claude-3-5-sonnet` を使用した場合 → verifier は `claude-3-5-opus` または `claude-3-5-haiku` を指定。
+    - finder が `claude-3-5-opus` を使用した場合 → verifier は `claude-3-5-sonnet` または `claude-3-5-haiku` を指定。
+    - finder が `claude-3-5-haiku` を使用した場合 → verifier は `claude-3-5-sonnet` または `claude-3-5-opus` を指定。
+  - verifier の Task 起動時に、**finder で記録したモデルと異なるモデルを明示的に指定する**。
+    指定後、実際に同じモデルペアになっていないことを確認してから verifier を実行する。
+  - 同一モデルペアの実行は防止する（分析品質低下・盲点共有のため）。
+- 高リスク指摘は verifier を複数立てて多数決にしてよい。その場合も複数の verifier は異なるモデルを指定する。
 
 CONFIRMED subset を確定し、各件を `finding-id | severity | summary | file` に整形する。**finding-id は
 安定なキー**にする (例: `CA-<crate>-<連番>` や rule id)。同じ指摘が次ラウンドでも CONFIRMED なら

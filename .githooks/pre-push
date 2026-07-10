@@ -1,0 +1,82 @@
+#!/bin/sh
+# Versioned pre-push hook. Enable once per clone with:
+#
+#     git config core.hooksPath .githooks
+#
+# This is an ADVISORY-ONLY nudge: when a push includes changes under a GATE
+# crate (blastguard/propguard/specguard/stuckguard/mutategate — the fleet
+# defense gates), it prints a suggestion to run a Continuous-Audit round
+# (`scripts/continuous-audit.sh --dry-run`) before/after the push. It NEVER
+# blocks the push: this hook always exits 0, matching the fail-soft invariant
+# used by `.githooks/pre-commit` (injectguard) and the Continuous-Audit loop
+# itself (opt-in tooling, not an always-on gate).
+#
+# Formalizes the pre-push fragment sketched in
+# scripts/continuous-audit.cron.example into a real, installable hook.
+#
+# Manual test (no real push needed):
+#   printf 'refs/heads/main %s refs/heads/main %s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD~1)" \
+#     | bash .githooks/pre-push origin https://example.invalid/repo.git
+
+set -u
+
+REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$REPO" 2>/dev/null || exit 0
+
+GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|mutategate)/'
+
+# git invokes pre-push with zero-or-more "<local-ref> <local-sha> <remote-ref> <remote-sha>"
+# lines on stdin, one per updated ref. Collect the set of changed files across
+# all pushed ranges. If stdin gives us nothing usable (e.g. manual invocation
+# without piped refs), fall back to the @{push}..HEAD range, and finally to
+# just-in-case skip (never fail the push over inability to compute a diff).
+changed=""
+saw_ref=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "${local_sha:-}" ] && continue
+    saw_ref=1
+    # Deleting a ref (local_sha all zeros) has nothing to diff.
+    case "$local_sha" in
+        0000000000000000000000000000000000000000) continue ;;
+    esac
+    has_remote=0
+    if [ -n "${remote_sha:-}" ]; then
+        case "$remote_sha" in
+            0000000000000000000000000000000000000000) has_remote=0 ;;
+            *) git cat-file -e "$remote_sha" 2>/dev/null && has_remote=1 ;;
+        esac
+    fi
+    if [ "$has_remote" = "1" ]; then
+        diff_out="$(git diff --name-only "$remote_sha..$local_sha" -- 2>/dev/null)"
+    else
+        # No known remote tip (new branch / new ref) — diff against the
+        # local sha's parents isn't well-defined generically, so list files
+        # touched by the tip commit as a best-effort signal.
+        diff_out="$(git show --name-only --pretty=format: "$local_sha" 2>/dev/null)"
+    fi
+    changed="$changed
+$diff_out"
+done
+
+if [ "$saw_ref" = "0" ]; then
+    # No ref-update lines were readable from stdin at all (likely a manual/
+    # non-standard invocation, not a real git-invoked pre-push) — fall back
+    # to the range since the upstream tracking branch as a best-effort check.
+    changed="$(git diff --name-only '@{push}..HEAD' 2>/dev/null || true)"
+fi
+
+if printf '%s\n' "$changed" | grep -Eq "$GATE_PATTERN"; then
+    cat >&2 <<'EOF'
+
+continuous-audit: gate-crate changes detected in this push (blastguard/
+propguard/specguard/stuckguard/mutategate). Consider running a Continuous-
+Audit round before or after pushing:
+
+    scripts/continuous-audit.sh --dry-run
+
+This is advisory only — the push is not blocked.
+EOF
+fi
+
+exit 0

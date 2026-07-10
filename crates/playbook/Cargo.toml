@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "playbook"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Project knowledge retrieval + injection for Claude Code. A UserPromptSubmit hook that pulls the curated atomic notes relevant to your prompt and injects them (under a strict char budget), so conventions and gotchas resurface without you re-typing them."
 license = "MIT"

@@ -5,6 +5,7 @@
 //! context, so a project's conventions and gotchas resurface without the user
 //! re-typing them. The rest of the subcommands curate the store.
 
+mod classifier;
 mod config;
 mod install;
 mod model;
@@ -120,6 +121,24 @@ fn inject() {
     if !cfg.enabled {
         return;
     }
+
+    // Check for complex problems that warrant /flow routing.
+    if classifier::is_complex_problem(&input.prompt) {
+        let flow_guidance = format!(
+            "⚡複雑な問題として検出されました。問題記述を `/flow <problem>` に渡し、parallel/serial化スケジューリングを活用することをお勧めします:\n\n→ /flow {}\n",
+            input.prompt
+        );
+        harness_core::inject_metrics::record(
+            "playbook.flow-classifier",
+            &input.session_id,
+            &input.prompt,
+            flow_guidance.chars().count(),
+        );
+        println!("{flow_guidance}");
+        // Still try to inject playbook notes alongside the flow guidance.
+        // (Fail-soft: if notes are empty, we'll return below anyway.)
+    }
+
     let store = Store::new(&cfg);
     let notes = store.load_visible(&root);
     if notes.is_empty() {

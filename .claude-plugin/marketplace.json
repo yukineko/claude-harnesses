@@ -484,7 +484,7 @@
     {
       "name": "playbook",
       "description": "Project knowledge retrieval + injection for Claude Code: a UserPromptSubmit hook that pulls the curated atomic notes relevant to your prompt and injects them under a strict char budget, so conventions and gotchas resurface without re-typing. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "category": "knowledge",
       "keywords": [
         "hooks",

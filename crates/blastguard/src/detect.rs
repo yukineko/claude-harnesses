@@ -90,8 +90,11 @@ fn detect_bash(cmd: &str, depth: usize) -> Decision {
         return Decision::deny("fork bomb pattern detected");
     }
 
-    // 2. Single `>` truncating redirect (quote-aware, ignores >>, 2>, &>, >&).
-    if let Some(target) = single_redirect_target(cmd) {
+    // 2. Truncating `>` redirects (quote-aware, ignores >>, 2>, &>, >&). Scan
+    // *every* redirect on the line, not just the first: a safe early redirect
+    // (`> /dev/null`) must not blind the gate to a later truncating redirect in
+    // a subsequent `;`/`&&`/`|` segment.
+    for target in redirect_targets(cmd) {
         if !redirect_target_is_safe(&target) {
             return Decision::deny(format!(
                 "'> {target}' truncates and overwrites an existing file"
@@ -161,9 +164,20 @@ fn split_segments(cmd: &str) -> Vec<String> {
 
 /// Find the first single `>` redirect outside quotes and return its target
 /// token. Returns None for `>>`, `2>`, `&>`, `>&` and quoted `>`.
+#[cfg(test)]
 fn single_redirect_target(seg: &str) -> Option<String> {
+    redirect_targets(seg).into_iter().next()
+}
+
+/// Every single `>` truncating-redirect target on the line, in order, outside
+/// quotes. Skips `>>`, `2>`, `&>`, `>&`, quoted `>`, Rust arrows (`->`) and
+/// angle-bracket placeholders (`<value>`). Scanning the *whole* line (rather
+/// than pre-split segments) keeps the fd-dup context (`2>&1`, `>&2`) intact
+/// while still catching a truncating redirect in any later segment.
+fn redirect_targets(seg: &str) -> Vec<String> {
     let bytes = seg.as_bytes();
     let (mut in_s, mut in_d) = (false, false);
+    let mut targets = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         let c = bytes[i];
@@ -216,11 +230,13 @@ fn single_redirect_target(seg: &str) -> Option<String> {
                 }
                 j += 1;
             }
-            return Some(seg[start..j].to_string());
+            targets.push(seg[start..j].to_string());
+            i = j;
+            continue;
         }
         i += 1;
     }
-    None
+    targets
 }
 
 /// True when the `>` at `bytes[gt]` closes an angle-bracket identifier
@@ -399,6 +415,25 @@ fn analyze_segment(seg: &str, depth: usize) -> Decision {
     }
 }
 
+/// True when `tok` contains an unescaped shell glob metacharacter (`*`, `?`,
+/// `[`) — i.e. it is a wildcard pattern that can expand to many paths, not a
+/// single literal filename.
+fn has_glob_meta(tok: &str) -> bool {
+    let mut escaped = false;
+    for c in tok.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '*' | '?' | '[' => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 fn analyze_rm(rest: &[&str]) -> Decision {
     let recursive = rest
         .iter()
@@ -415,8 +450,15 @@ fn analyze_rm(rest: &[&str]) -> Decision {
         return Decision::Allow;
     }
 
-    // Destructive shape. Exempt only when every operand is a known config file.
-    if !operands.is_empty() && operands.iter().all(|o| exclude::is_config_file(o)) {
+    // Destructive shape. Exempt only when every operand is a known, *literal*
+    // config file. A wildcard operand (`*.toml`, `*.lock`) must never qualify:
+    // it self-matches the config globs and would otherwise re-open the gate for
+    // an unbounded wildcard delete.
+    if !operands.is_empty()
+        && operands
+            .iter()
+            .all(|o| !has_glob_meta(o) && exclude::is_config_file(o))
+    {
         return Decision::Allow;
     }
 
@@ -683,6 +725,25 @@ mod tests {
         assert!(bash("echo x > existing").is_deny());
         // Arrow/placeholder skip must not swallow a real redirect on the line.
         assert!(bash("echo done -> nope; cat x > realfile").is_deny());
+    }
+
+    // ---- Regression: fail-open defects (CA-blastguard-01 / -02) ----
+    #[test]
+    fn later_segment_truncating_redirect_is_denied() {
+        // CA-blastguard-01: a safe early redirect must not blind the gate to a
+        // later truncating redirect in a subsequent segment.
+        assert!(bash("cat notes.txt > important.txt").is_deny()); // control
+        assert!(bash("echo hi > /dev/null; cat notes.txt > important.txt").is_deny());
+    }
+
+    #[test]
+    fn wildcard_rm_is_not_config_exempt() {
+        // CA-blastguard-02: a wildcard operand must not self-match a config glob
+        // (`*.toml` matching the `*.toml` allow-glob) and slip past as exempt.
+        assert!(bash("rm -rf *.toml").is_deny());
+        assert!(bash("rm *.lock").is_deny());
+        // Control: a single literal config file stays exempt.
+        assert_eq!(bash("rm Cargo.toml"), Decision::Allow);
     }
 
     // ---- File operations ----

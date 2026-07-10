@@ -33,7 +33,7 @@
     {
       "name": "blastguard",
       "description": "Destructive-operation guard for Claude Code: a PreToolUse hook that denies project-wrecking Bash commands and file operations (recursive/wildcard rm, git reset --hard, git clean -fd, single-> truncating overwrites, truncate/shred/mkfs/dd of=, recursive chmod/chown, find -delete) before they run, while exempting repo config files (.claude/**, *.toml, *.yaml/yml, *.lock, package.json, .config/**). Subscription-native (one PreToolUse hook + bundled Rust binary, no API key).",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "category": "security",
       "keywords": [
         "hooks",
@@ -628,7 +628,7 @@
     {
       "name": "specguard",
       "description": "仕様↔実装 整合監査ハーネスを Claude Code から subscription-native に実行する。各 shard を read-only な in-session subagent で監査し (nested claude --print なし)、決定的ハーネス (scope/render/parse/report) は specguard バイナリに委譲する。",
-      "version": "0.2.21",
+      "version": "0.2.22",
       "category": "quality",
       "keywords": [
         "spec",
@@ -957,7 +957,7 @@
     {
       "name": "propguard",
       "description": "Property gate for Claude Code: on Stop, derive 3–5 semantic properties (invariants) from a task's done_criteria and check the generated code against them before the agent can declare done. In inject mode it blocks and injects a property checklist for the running agent to self-verify (no API key); in subprocess mode it runs an independent checker and counts per-property PASS/FAIL, blocking when fewer than a threshold hold. Goes beyond 'concrete tests pass'. Subscription-native, bundled Rust binary.",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "category": "quality",
       "keywords": [
         "hooks",

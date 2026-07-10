@@ -1,6 +1,6 @@
 {
   "name": "blastguard",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "A PreToolUse guard for Claude Code: inspects Bash commands and file operations and denies the project-destroying ones — recursive/wildcard rm, git reset --hard, git clean -fdx, truncate/shred/mkfs, dd of=, recursive chmod/chown, find -delete, and single-> overwrites — while exempting repo config files. Subscription-native (one hook + bundled Rust binary, no API key).",
   "author": { "name": "yukineko" },
   "keywords": ["hooks", "safety", "guard", "pretooluse", "rust"]

@@ -18,7 +18,29 @@
 /// Everything here is data + pure computation. Emission is fail-soft (see
 /// `store::append_audit_round` and `audit_round_cli::record`), matching
 /// overwatch's observational / never-break-a-turn invariant.
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Deserialize a round identifier from either a JSON string or a JSON number.
+///
+/// The `round` field is a `String` today, but legacy `audit_rounds.jsonl`
+/// records written when it was a `u64` stored it as a bare JSON number
+/// (`{"round":2,...}`). To keep those old ledgers readable, this deserializer
+/// accepts both shapes: a string is taken verbatim, and a number is rendered to
+/// its decimal string (so a legacy `2` reads back as `"2"`). Any other JSON
+/// type is rejected.
+fn de_round<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(deserializer)?;
+    match v {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        other => Err(serde::de::Error::custom(format!(
+            "audit round `round` must be a string or number, got {other}"
+        ))),
+    }
+}
 
 /// A single recorded Continuous-Audit round.
 ///
@@ -28,9 +50,18 @@ use serde::{Deserialize, Serialize};
 /// round's raw counts.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuditRound {
-    /// The round number (monotonic per audit campaign; caller-assigned). Rounds
-    /// need not be contiguous — metrics only rely on their recorded order.
-    pub round: u64,
+    /// The round identifier (caller-assigned; an opaque label such as an ISO
+    /// week `2026W28`, a date, or a sequence number). It is never used in
+    /// arithmetic — convergence relies only on recorded order and display uses
+    /// it verbatim — so it is a free-form `String`.
+    ///
+    /// Backward compatibility: rounds written before this field was a string
+    /// were stored as JSON numbers (`{"round":2,...}`). The custom
+    /// [`de_round`] deserializer accepts both a JSON string and a JSON number,
+    /// reading a legacy numeric `2` as the string `"2"`, so old ledgers keep
+    /// reading cleanly.
+    #[serde(deserialize_with = "de_round")]
+    pub round: String,
     /// The target crates this round reviewed (normalized: trimmed, de-duped,
     /// order-preserving).
     pub targets: Vec<String>,
@@ -50,7 +81,7 @@ impl AuditRound {
     /// Construct a round record. `targets` is normalized (trim, drop blanks,
     /// de-dup preserving first-seen order) so downstream reads are stable.
     pub fn new(
-        round: u64,
+        round: String,
         targets: &[String],
         new_findings: u64,
         confirmed: u64,
@@ -98,8 +129,9 @@ pub fn parse_targets(raw: &str) -> Vec<String> {
 /// the round's own closure-rate (regression tests ÷ confirmed for THAT round).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RoundMetric {
-    /// The round number.
-    pub round: u64,
+    /// The round identifier (opaque label, carried through verbatim from the
+    /// recorded [`AuditRound`]).
+    pub round: String,
     /// New findings surfaced this round (the decreasing-trend signal).
     pub new_findings: u64,
     /// Findings confirmed this round.
@@ -158,7 +190,7 @@ pub fn compute_metrics(rounds: &[AuditRound], window: usize) -> AuditMetrics {
         cum_confirmed = cum_confirmed.saturating_add(r.confirmed);
         cum_tests = cum_tests.saturating_add(r.regression_tests_added);
         per_round.push(RoundMetric {
-            round: r.round,
+            round: r.round.clone(),
             new_findings: r.new_findings,
             confirmed: r.confirmed,
             regression_tests_added: r.regression_tests_added,
@@ -211,7 +243,14 @@ mod tests {
     use super::*;
 
     fn round(n: u64, new: u64, confirmed: u64, tests: u64, ts: i64) -> AuditRound {
-        AuditRound::new(n, &["specguard".to_string()], new, confirmed, tests, ts)
+        AuditRound::new(
+            n.to_string(),
+            &["specguard".to_string()],
+            new,
+            confirmed,
+            tests,
+            ts,
+        )
     }
 
     #[test]
@@ -241,6 +280,42 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         let back: AuditRound = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
+    }
+
+    #[test]
+    fn round_serializes_as_string() {
+        // A string round-id (ISO week) survives a JSON round-trip verbatim.
+        let r = AuditRound::new(
+            "2026W28".to_string(),
+            &["specguard".to_string()],
+            1,
+            1,
+            1,
+            1000,
+        );
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(
+            json.contains("\"round\":\"2026W28\""),
+            "round must serialize as a JSON string: {json}"
+        );
+        let back: AuditRound = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.round, "2026W28");
+    }
+
+    #[test]
+    fn legacy_numeric_round_deserializes_as_string() {
+        // Records written before `round` became a String stored it as a bare
+        // JSON number. The backward-compat deserializer must read `{"round":2}`
+        // as the string "2" so old audit_rounds.jsonl ledgers stay readable.
+        let legacy = r#"{"round":2,"targets":["specguard"],"new_findings":3,"confirmed":2,"regression_tests_added":2,"ts":1000}"#;
+        let back: AuditRound = serde_json::from_str(legacy).unwrap();
+        assert_eq!(back.round, "2");
+        assert_eq!(back.targets, vec!["specguard".to_string()]);
+        assert_eq!(back.new_findings, 3);
+
+        // And it flows through compute_metrics carrying the stringified id.
+        let m = compute_metrics(&[back], DEFAULT_CONVERGENCE_WINDOW);
+        assert_eq!(m.rounds[0].round, "2");
     }
 
     #[test]

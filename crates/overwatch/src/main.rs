@@ -281,9 +281,10 @@ enum Command {
 enum AuditRoundAction {
     /// Append one Continuous-Audit round's metrics to the convergence ledger.
     Record {
-        /// The round number (monotonic per audit campaign; caller-assigned).
+        /// The round identifier (caller-assigned opaque label, e.g. an ISO
+        /// week `2026W28`, a date, or a sequence number).
         #[arg(long)]
-        round: u64,
+        round: String,
         /// The crate(s) this round reviewed (comma/space separated).
         #[arg(long)]
         target: String,

@@ -27,10 +27,10 @@
 # USAGE
 #   scripts/continuous-audit.sh --help
 #   scripts/continuous-audit.sh --dry-run                 # show plan, record nothing
-#   scripts/continuous-audit.sh --round 3                 # default gate-crate targets
-#   scripts/continuous-audit.sh --round 3 --target specguard,stuckguard \
+#   scripts/continuous-audit.sh --round 2026W28           # default gate-crate targets
+#   scripts/continuous-audit.sh --round 2026W28 --target specguard,stuckguard \
 #       --new-findings 2 --confirmed 1 --regression-tests-added 1 \
-#       --finding 'CA3-001|high|confirmed: unwrap in similarity path|crates/specguard/src/similarity.rs'
+#       --finding 'CA-2026W28-001|high|confirmed: unwrap in similarity path|crates/specguard/src/similarity.rs'
 #
 # --finding may be repeated; format is: id|severity|summary|file (file optional).
 # The COUNTS (--new-findings/--confirmed/--regression-tests-added) are recorded
@@ -106,7 +106,7 @@ else
 fi
 
 if [ -z "$ROUND" ]; then
-  echo "continuous-audit: --round <N> is required (or --dry-run to preview)" >&2
+  echo "continuous-audit: --round <round-id> is required (or --dry-run to preview)" >&2
   [ "$DRY_RUN" -eq 1 ] || exit 0
   ROUND="(dry-run)"
 fi

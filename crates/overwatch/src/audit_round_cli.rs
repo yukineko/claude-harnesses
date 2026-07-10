@@ -20,7 +20,7 @@ use anyhow::Result;
 /// Fail-soft: a store write error is reported to stderr but returns `Ok(())` so
 /// the caller (the audit loop) is never broken by logging.
 pub fn record(
-    round: u64,
+    round: String,
     target: &str,
     new_findings: u64,
     confirmed: u64,
@@ -44,7 +44,7 @@ pub fn record(
                 "{}",
                 serde_json::json!({
                     "recorded": true,
-                    "round": round,
+                    "round": record.round,
                     "targets": record.targets,
                     "new_findings": new_findings,
                     "confirmed": confirmed,

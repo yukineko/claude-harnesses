@@ -1,4 +1,5 @@
 /// Event store and lease storage backend.
+use crate::audit_round::AuditRound;
 use crate::event::LifecycleEvent;
 use crate::review_finding::ReviewFinding;
 use crate::rollback::RollbackEvent;
@@ -262,6 +263,53 @@ pub fn read_review_findings(cwd: &Path) -> Result<Vec<ReviewFinding>> {
                 }
             }
             Ok(findings)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Path to the audit_rounds.jsonl file (append-only, Continuous-Audit round
+/// metrics). Its own stream since a round record is a distinct signal from the
+/// findings/rollback/violation logs: it is the convergence ledger the
+/// Continuous-Audit loop reads back via `overwatch audit-metrics`.
+pub fn audit_rounds_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("audit_rounds.jsonl"))
+}
+
+/// Append a Continuous-Audit round record to audit_rounds.jsonl (one JSON line
+/// per round). Fail-soft by contract at the call site: recording a round must
+/// never break the audit loop.
+pub fn append_audit_round(cwd: &Path, round: &AuditRound) -> Result<()> {
+    let path = audit_rounds_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string(round)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?
+        .write_all(format!("{}\n", json).as_bytes())?;
+    Ok(())
+}
+
+/// Read all Continuous-Audit round records from audit_rounds.jsonl, in recorded
+/// (append) order. Returns an empty vec if the file doesn't exist or is empty
+/// (fail-soft, same contract as `read_events` / `read_rollbacks`). Corrupt
+/// lines are skipped rather than failing the whole read.
+pub fn read_audit_rounds(cwd: &Path) -> Result<Vec<AuditRound>> {
+    let path = audit_rounds_path(cwd)?;
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => {
+            let mut rounds = Vec::new();
+            for line in txt.lines() {
+                if !line.is_empty() {
+                    if let Ok(r) = serde_json::from_str::<AuditRound>(line) {
+                        rounds.push(r);
+                    }
+                }
+            }
+            Ok(rounds)
         }
         Err(_) => Ok(Vec::new()),
     }

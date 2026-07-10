@@ -1,4 +1,6 @@
 mod aggregate;
+pub mod audit_round;
+mod audit_round_cli;
 pub mod canary;
 mod canary_cli;
 mod control;
@@ -232,6 +234,24 @@ enum Command {
         #[arg(long)]
         file: Option<String>,
     },
+    /// Continuous-Audit round metrics ledger (2630b4c5). `record` appends one
+    /// round's counts to the convergence ledger that `audit-metrics` reads back.
+    AuditRound {
+        #[command(subcommand)]
+        action: AuditRoundAction,
+    },
+    /// Read the Continuous-Audit round ledger and print convergence metrics:
+    /// per-round new-findings trend, closure-rate (regression tests ÷
+    /// confirmed), and a `converging` flag. Fail-soft: an empty ledger prints a
+    /// zero-round report.
+    AuditMetrics {
+        #[arg(long)]
+        json: bool,
+        /// How many trailing rounds the `converging` check considers (default 3;
+        /// 0 = all rounds).
+        #[arg(long)]
+        window: Option<usize>,
+    },
     /// The unified human review surface: merge systemic gate violations, canary
     /// rollback events, and AI-review findings into ONE time-ordered list
     /// (newest-first), each row tagged with its source kind. Fail-soft: a
@@ -246,6 +266,29 @@ enum Command {
         /// Cap the number of rows shown (after newest-first ordering).
         #[arg(long)]
         limit: Option<usize>,
+    },
+}
+
+/// Actions under `overwatch audit-round`.
+#[derive(Subcommand)]
+enum AuditRoundAction {
+    /// Append one Continuous-Audit round's metrics to the convergence ledger.
+    Record {
+        /// The round number (monotonic per audit campaign; caller-assigned).
+        #[arg(long)]
+        round: u64,
+        /// The crate(s) this round reviewed (comma/space separated).
+        #[arg(long)]
+        target: String,
+        /// How many NEW findings the finder surfaced this round.
+        #[arg(long, default_value_t = 0)]
+        new_findings: u64,
+        /// How many findings the verifier CONFIRMED this round.
+        #[arg(long, default_value_t = 0)]
+        confirmed: u64,
+        /// How many confirmed findings were converted into regression tests.
+        #[arg(long, default_value_t = 0)]
+        regression_tests_added: u64,
     },
 }
 
@@ -407,6 +450,26 @@ fn main() -> Result<()> {
                 &summary,
                 file.as_deref(),
             )?;
+        }
+        Command::AuditRound { action } => match action {
+            AuditRoundAction::Record {
+                round,
+                target,
+                new_findings,
+                confirmed,
+                regression_tests_added,
+            } => {
+                audit_round_cli::record(
+                    round,
+                    &target,
+                    new_findings,
+                    confirmed,
+                    regression_tests_added,
+                )?;
+            }
+        },
+        Command::AuditMetrics { json, window } => {
+            audit_round_cli::metrics(json, window)?;
         }
         Command::ReviewQueue { json, since, limit } => {
             review_queue::run(json, since, limit)?;

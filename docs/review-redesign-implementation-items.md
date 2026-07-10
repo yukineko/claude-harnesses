@@ -544,23 +544,6 @@ item B/C/D/E（fleet相関エラー検知/テスト-実装分離/リスクスコ
 
 ### 再レビュー結果（2026-07-10、コミット範囲 `66eb9fb..HEAD` — 上記1-17番修正コミットの検証）
 
-> **✅ 再レビュー最優先 finding 1〜3 修正完了（2026-07-10）** — 下記の最優先3件を修正し、
-> 38f613c で追加された `#[ignore]` 付き回帰テストを緑にして `#[ignore]` を外し恒久回帰テストへ昇格。
-> **finding 1**（specguard polarity バイパス）: `similarity.rs` に *object-binding 再付着ガード*
-> （`object_bindings` — 各極性トークンを、それが支配する目的語ヘッドに束縛）を追加。目的語スワップ
-> (1a) と単発クロスaxisスワップ (1b) の両系統を検知しつつ、良性 reflow は許容（per-axis 署名一致時のみ
-> 束縛比較し、両テキストに現れる同一ヘッドの極性が食い違う場合だけ Novel）。
-> **finding 2**（write_lock の上書き失敗無音化）: `save_bytes` 後に書き込んだバイトを読み戻して一致検証し、
-> 上書き失敗を実 `Err` として伝播。**finding 3**（stuckguard near-repeat の window 境界退行）:
-> `Trip::key` を、退避で揺れる anchor event の sig ではなく、クラスタの window 不変な共有トークン core
-> （`cluster_core` = マッチ集合のトークン積集合）でキー化。全4テスト（1a/1b/2/3）緑、specguard 189 +
-> stuckguard 39+11 tests green、fmt/clippy クリーン。触った2クレートを 3ファイル lockstep bump
-> （specguard 0.2.19→0.2.20 / stuckguard 0.1.10→0.1.11）、version 整合ゲート exit 0。
-> **finding 4**（blastguard item D）は未対応のまま — condukt 側2呼び出し箇所が事前フェーズで空
-> `diff_text` を渡す配線問題で、実 diff を供給するには公開API risk 検査を worker 実装後（merge 前）の
-> フェーズへ移す condukt パイプライン改修が要る（別スコープ）。finding 5-7 は挙動バグでない重複/
-> デッドコードのため未対応（コードレビューで確認済み）。
-
 上記の修正コミット（deed6d4, 5c4fa53, ac6b256, 197f466, a364c07, aee08ba, 114f1ae, db37289）を
 1件ずつ検証。実際に`cargo test`/シェルスクリプトを実行して再現・反証した。8/8 finder + 6/6
 verifier完了、**7件がCONFIRMED（PLAUSIBLE/REFUTEDなし）**。大半（12/17項目）は正しく修正された

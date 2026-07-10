@@ -1,0 +1,39 @@
+# Continuous-Audit loop — OPT-IN cron/hook templates (backlog 2630b4c5)
+# ============================================================================
+# NOTHING here is auto-installed. Copy the fragment you want into your own
+# crontab / git hook. The Continuous-Audit loop is opt-in tooling, not an
+# always-on gate: it never blocks condukt/rollout and is fail-soft throughout.
+#
+# The finder->verifier adversarial review is LLM-driven and happens upstream;
+# `scripts/continuous-audit.sh` only RECORDS a round (confirmed findings ->
+# `overwatch review-queue`; round metrics -> `overwatch audit-metrics`).
+# ----------------------------------------------------------------------------
+
+# --- crontab fragment -------------------------------------------------------
+# Run `crontab -e` and add (adjust the repo path):
+#
+#   # Weekly adversarial audit round over the gate crates, Mondays at 04:00.
+#   # The round number is derived from the ISO year+week so it is monotonic.
+#   0 4 * * 1 cd /path/to/claude-harnesses && scripts/continuous-audit.sh --round "$(date +\%Y\%W)" >> "$HOME/.overwatch/continuous-audit.log" 2>&1
+
+# --- git pre-push hook fragment (.git/hooks/pre-push) -----------------------
+# Advisory only — it NEVER blocks the push (exit 0 always). Copy into
+# .git/hooks/pre-push and `chmod +x`:
+#
+#   #!/usr/bin/env bash
+#   # Nudge to run a Continuous-Audit round when a gate crate changed.
+#   changed=$(git diff --name-only '@{push}..HEAD' 2>/dev/null \
+#     | grep -E '^crates/(blastguard|propguard|specguard|stuckguard|mutategate)/' || true)
+#   if [ -n "$changed" ]; then
+#     echo "gate-crate changes detected — consider: scripts/continuous-audit.sh --dry-run" >&2
+#   fi
+#   exit 0
+
+# --- git post-merge hook fragment (.git/hooks/post-merge) -------------------
+# Same idea, triggered after a merge/pull touches gate crates. Advisory only.
+#
+#   #!/usr/bin/env bash
+#   changed=$(git diff --name-only 'ORIG_HEAD..HEAD' 2>/dev/null \
+#     | grep -E '^crates/(blastguard|propguard|specguard|stuckguard|mutategate)/' || true)
+#   [ -n "$changed" ] && echo "gate-crate changes merged — consider a Continuous-Audit round." >&2
+#   exit 0

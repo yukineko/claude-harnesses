@@ -78,6 +78,28 @@ fn is_repeat_of(e: &Event, cur: &Event, cfg: &Config) -> bool {
     e.tool == cur.tool && jaccard(&e.tokens, &cur.tokens) >= cfg.similarity_threshold
 }
 
+/// The shared token *core* of a matched near-repeat cluster: the intersection of
+/// every member's token bag, sorted (a `BTreeSet` iterates in order) for a
+/// deterministic, allocation-order-independent key. Volatile per-instance tokens
+/// (the parts that differ between near-repeat calls) fall out of the
+/// intersection, leaving only the stable family signature — so the key does not
+/// change as specific instances rotate through the bounded window. Empty when the
+/// members share no token (a fully drifting family) or when `same` is empty.
+fn cluster_core(same: &[&Event]) -> Vec<String> {
+    let mut iter = same.iter();
+    let Some(first) = iter.next() else {
+        return Vec::new();
+    };
+    let mut core: std::collections::BTreeSet<String> = first.tokens.clone();
+    for e in iter {
+        core = core.intersection(&e.tokens).cloned().collect();
+        if core.is_empty() {
+            break;
+        }
+    }
+    core.into_iter().collect()
+}
+
 fn repeat(window: &[Event], cur: &Event, cfg: &Config) -> Option<Trip> {
     let same: Vec<&Event> = window
         .iter()
@@ -102,22 +124,37 @@ fn repeat(window: &[Event], cur: &Event, cfg: &Config) -> Option<Trip> {
     } else {
         None
     };
-    // Stable cluster key: the OLDEST matched event's sig, not `cur.sig`.
-    // `window.iter()` is chronological, so `same[0]` (the first match found
-    // by the filter above) is the earliest event in the cluster. For
-    // exact-repeat mode every member of `same` shares the identical `sig`
-    // anyway, so this is a no-op there. For near-repeat mode
-    // (`cfg.similarity_threshold < 1.0`) `cur.sig` is (by construction)
-    // different on every call, so keying on it made `record_nudge` reset its
-    // per-key count back to 1 every single time — `escalate_after` was never
-    // reachable (finding 5). Keying on the cluster's oldest member instead
-    // gives a representative that stays stable across successive calls (as
-    // long as it remains inside the window and keeps matching the current
-    // event), so the nudge count actually accumulates.
-    let key_sig = same
-        .first()
-        .map(|e| e.sig.as_str())
-        .unwrap_or(cur.sig.as_str());
+    // Stable cluster key — must survive sliding-window eviction.
+    //
+    // Exact-repeat mode (`similarity_threshold >= 1.0`): every member of `same`
+    // shares the identical `sig`, so key on `cur.sig` (unique per pattern, stable
+    // for the whole loop). This preserves the historical `repeat:{sig}` behavior.
+    //
+    // Near-repeat mode (`similarity_threshold < 1.0`): the matched events are (by
+    // construction) never byte-identical, so `cur.sig` differs every call.
+    // Keying on the oldest matched member's sig (`same.first()`, the earlier
+    // finding-5 fix) only stayed stable while that anchor remained inside the
+    // bounded window: once a near-repeat loop runs longer than `cfg.window` — the
+    // very "stuck loop" stuckguard exists to catch — `SessionState::push` evicts
+    // the anchor, `same.first()` rolls to a new event, and `record_nudge` resets
+    // the per-key count to 1 so `escalate_after` is never reached (re-review
+    // finding 3). Key instead on the cluster's shared token *core* — the
+    // intersection of the matched events' token bags — which is invariant to
+    // which specific near-repeat instances currently populate the window (the
+    // volatile per-instance tokens fall out of the intersection), so the count
+    // accumulates across the whole loop.
+    let key_sig = if cfg.similarity_threshold >= 1.0 {
+        format!("sig:{}", cur.sig)
+    } else {
+        let core = cluster_core(&same);
+        if core.is_empty() {
+            // No shared token core (a drifting family): fall back to the tool so
+            // the key is at least stable per-tool rather than empty/colliding.
+            format!("tool:{}", cur.tool)
+        } else {
+            format!("core:{}", core.join(" "))
+        }
+    };
     Some(Trip {
         key: format!("repeat:{key_sig}"),
         kind: Kind::Repeat,
@@ -478,24 +515,21 @@ mod tests {
         );
     }
 
-    /// Re-review regression (2026-07-10, still open): the finding-5 fix only
-    /// keeps `Trip::key` stable while its anchor event (`same.first()`)
-    /// remains inside the bounded sliding window (`cfg.window`, default 12 —
-    /// eviction in `SessionState::push`). Once a near-repeat sequence runs
-    /// longer than the window — the primary "stuck loop" scenario stuckguard
-    /// exists to catch — each push evicts the anchor, `same.first()` rolls
-    /// forward to a new event every call, and the nudge count resets to 1
-    /// again, reproducing the original finding-5 bug for the tail of any
-    /// long-running loop. The max nudge count reachable within one window is
-    /// `window - repeat_threshold + 1` (10 at shipped defaults); this test
-    /// sets `escalate_after` one above that ceiling and drives the loop for
-    /// 30 calls (well past the window) to prove escalation still never
-    /// fires. See docs/review-redesign-implementation-items.md, re-review
-    /// finding 3.
+    /// Re-review regression (2026-07-10, FIXED): the finding-5 fix only kept
+    /// `Trip::key` stable while its anchor event (`same.first()`) remained
+    /// inside the bounded sliding window (`cfg.window`, default 12 — eviction in
+    /// `SessionState::push`). Once a near-repeat sequence ran longer than the
+    /// window — the primary "stuck loop" scenario stuckguard exists to catch —
+    /// each push evicted the anchor, `same.first()` rolled forward every call,
+    /// and the nudge count reset to 1, reproducing the original finding-5 bug
+    /// for the tail of any long-running loop. The max nudge count reachable
+    /// within one window is `window - repeat_threshold + 1` (10 at shipped
+    /// defaults); this test sets `escalate_after` one above that ceiling and
+    /// drives the loop for 30 calls (well past the window) to prove escalation
+    /// fires. `Trip::key` now keys on the cluster's window-invariant shared token
+    /// core ([`cluster_core`]) instead of an evictable anchor. See
+    /// docs/review-redesign-implementation-items.md, re-review finding 3.
     #[test]
-    #[ignore = "known bug: near-repeat escalation resets once the anchor event \
-                leaves the sliding window -- see \
-                docs/review-redesign-implementation-items.md re-review finding 3"]
     fn near_repeat_escalates_even_past_window_boundary() {
         let mut c = cfg();
         c.similarity_threshold = 0.6;

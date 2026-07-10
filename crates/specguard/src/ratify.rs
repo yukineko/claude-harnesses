@@ -163,13 +163,24 @@ pub fn write_lock(
     // Atomic tmp-write + rename (shared `harness_core::store` helper, already used
     // across the tree): the corpus payload can be large, so a plain in-place write
     // could expose a truncated / half-written lock to a concurrent reader or a
-    // crash. `save_bytes` is best-effort and panic-free, so verify the rename
-    // landed and surface a clear error if it did not.
+    // crash. `save_bytes` is best-effort and panic-free (Result-less): on a
+    // write/rename failure it silently returns. A bare `path.exists()` check only
+    // detects TOTAL absence, so on the common re-ratify path — where a stale (or
+    // wrong-typed) file already occupies `path` — a failed overwrite would report a
+    // false success. Read the bytes back and require them to equal what we intended
+    // to persist, so a write that never landed surfaces as a real error.
     harness_core::store::save_bytes(&path, body.as_bytes());
-    if !path.exists() {
-        anyhow::bail!("writing {}", path.display());
+    match std::fs::read(&path) {
+        Ok(got) if got == body.as_bytes() => Ok(path),
+        Ok(_) => anyhow::bail!(
+            "ratification lock {} was not updated (write did not land)",
+            path.display()
+        ),
+        Err(e) => {
+            Err(anyhow::Error::new(e)
+                .context(format!("writing ratification lock {}", path.display())))
+        }
     }
-    Ok(path)
 }
 
 /// Encode `s` as a TOML basic string (double-quoted, with the escapes TOML
@@ -525,22 +536,20 @@ mod tests {
         assert_eq!(a, b);
     }
 
-    /// Re-review regression (2026-07-10, still open): the atomic-write fix
+    /// Re-review regression (2026-07-10, FIXED): the atomic-write fix
     /// (finding 7) switched `write_lock` to `harness_core::store::save_bytes`
     /// — a `Result`-less, fail-soft writer that swallows internal I/O errors
-    /// — and infers success from `path.exists()` alone. That check only
+    /// — and inferred success from `path.exists()` alone. That check only
     /// detects TOTAL absence, not an overwrite failure: if the lock path is
     /// already occupied (the common re-ratify case) and the write can never
-    /// land, `path.exists()` stays `true` and `write_lock` reports `Ok` even
-    /// though the new content was never persisted. Reproduced deterministically
+    /// land, `path.exists()` stays `true` and `write_lock` reported `Ok` even
+    /// though the new content was never persisted. `write_lock` now reads the
+    /// bytes back and requires them to equal what it intended to write, so a
+    /// failed overwrite propagates as a real `Err`. Reproduced deterministically
     /// by pre-occupying the lock path with a directory, so the rename inside
-    /// `save_bytes` can never succeed. Pre-fix behavior (`std::fs::write(...)
-    /// .with_context(...)?`) propagated this as a real `Err`. See
+    /// `save_bytes` can never succeed. See
     /// docs/review-redesign-implementation-items.md, re-review finding 2.
     #[test]
-    #[ignore = "known bug: write_lock reports success when save_bytes silently \
-                fails to overwrite an existing lock path -- see \
-                docs/review-redesign-implementation-items.md re-review finding 2"]
     fn write_lock_reports_error_when_write_silently_fails() {
         let dir = std::env::temp_dir().join(format!(
             "specguard-ratify-write-fail-test-{}",

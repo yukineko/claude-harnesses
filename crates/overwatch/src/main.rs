@@ -1,6 +1,7 @@
 mod aggregate;
 pub mod audit_round;
 mod audit_round_cli;
+mod bridge;
 pub mod canary;
 mod canary_cli;
 mod control;
@@ -273,6 +274,13 @@ enum Command {
         /// Cap the number of rows shown (after newest-first ordering).
         #[arg(long)]
         limit: Option<usize>,
+        /// Bridge CONFIRMED AI findings to the backlog instead of rendering:
+        /// each not-yet-bridged finding-id is forwarded via `backlog add`
+        /// (idempotent on finding-id via `bridged_findings.jsonl`). Fail-soft:
+        /// a missing findings store / absent backlog / failed add is warned and
+        /// skipped; the command still succeeds.
+        #[arg(long = "to-backlog")]
+        to_backlog: bool,
     },
 }
 
@@ -481,8 +489,17 @@ fn main() -> Result<()> {
         Command::AuditMetrics { json, window } => {
             audit_round_cli::metrics(json, window)?;
         }
-        Command::ReviewQueue { json, since, limit } => {
-            review_queue::run(json, since, limit)?;
+        Command::ReviewQueue {
+            json,
+            since,
+            limit,
+            to_backlog,
+        } => {
+            if to_backlog {
+                bridge::to_backlog()?;
+            } else {
+                review_queue::run(json, since, limit)?;
+            }
         }
     }
     Ok(())

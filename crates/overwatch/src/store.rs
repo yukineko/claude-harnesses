@@ -268,6 +268,68 @@ pub fn read_review_findings(cwd: &Path) -> Result<Vec<ReviewFinding>> {
     }
 }
 
+/// One recorded bridge event: a finding-id that has already been forwarded to
+/// the backlog by `review-queue --to-backlog`. The stream is the idempotency
+/// key set — the backlog's own duplicate guard hashes on title+project, not on
+/// finding-id, so cross-round idempotency (the same finding re-recorded every
+/// audit round) is enforced here by finding-id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgedFinding {
+    /// The finding-id that was forwarded to the backlog.
+    pub finding_id: String,
+    /// Unix timestamp when the bridge happened.
+    pub ts: i64,
+}
+
+/// Path to the bridged_findings.jsonl file (append-only): the set of finding-ids
+/// already forwarded to the backlog, used to make `review-queue --to-backlog`
+/// idempotent across audit rounds.
+pub fn bridged_findings_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("bridged_findings.jsonl"))
+}
+
+/// Append a bridged-finding record to bridged_findings.jsonl (one JSON line
+/// each). Called after a successful `backlog add` so the finding is never
+/// forwarded twice.
+pub fn append_bridged_finding(cwd: &Path, finding_id: &str) -> Result<()> {
+    let path = bridged_findings_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let rec = BridgedFinding {
+        finding_id: finding_id.to_string(),
+        ts: now(),
+    };
+    let json = serde_json::to_string(&rec)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?
+        .write_all(format!("{}\n", json).as_bytes())?;
+    Ok(())
+}
+
+/// Read the set of already-bridged finding-ids from bridged_findings.jsonl.
+/// Returns an empty vec if the file doesn't exist or is empty (fail-soft, same
+/// contract as `read_review_findings`). Corrupt lines are skipped.
+pub fn read_bridged_findings(cwd: &Path) -> Result<Vec<String>> {
+    let path = bridged_findings_path(cwd)?;
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => {
+            let mut ids = Vec::new();
+            for line in txt.lines() {
+                if !line.is_empty() {
+                    if let Ok(r) = serde_json::from_str::<BridgedFinding>(line) {
+                        ids.push(r.finding_id);
+                    }
+                }
+            }
+            Ok(ids)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
 /// Path to the audit_rounds.jsonl file (append-only, Continuous-Audit round
 /// metrics). Its own stream since a round record is a distinct signal from the
 /// findings/rollback/violation logs: it is the convergence ledger the

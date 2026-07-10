@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "overwatch"
-version = "0.1.14"
+version = "0.1.15"
 edition = "2021"
 description = "Lease & event store for condukt task orchestration. Manages claim registry, heartbeat lifecycle, and runtime state."
 

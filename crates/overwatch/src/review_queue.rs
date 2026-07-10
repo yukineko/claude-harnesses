@@ -68,7 +68,7 @@ pub struct ReviewQueueEntry {
 /// same instant), which is deterministic because the input slice order is stable
 /// (append order of `review_findings.jsonl`). Only the AI-findings stream is
 /// touched — the systemic and rollback streams never pass through here.
-fn dedup_findings(findings: &[ReviewFinding]) -> Vec<ReviewFinding> {
+pub(crate) fn dedup_findings(findings: &[ReviewFinding]) -> Vec<ReviewFinding> {
     use std::collections::HashMap;
     let mut best: HashMap<&str, ReviewFinding> = HashMap::new();
     for f in findings {

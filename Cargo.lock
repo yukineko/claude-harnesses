@@ -294,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.38"
+version = "0.7.39"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -302,6 +302,7 @@ dependencies = [
  "clap",
  "globset",
  "harness-core",
+ "overwatch",
  "proptest",
  "regex",
  "schemaguard",

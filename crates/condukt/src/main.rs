@@ -13,6 +13,7 @@ mod circuit;
 mod claim;
 mod config;
 mod consensus;
+mod diffrisk_record;
 mod editgate;
 mod escalate;
 mod gate_exec;
@@ -2460,6 +2461,32 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 t.branch = branch;
             }
             rs.save(cfg, cwd)?;
+            // Post-execution diff-risk recording (finding 4 / WorkItem-A):
+            // when a worker's task first transitions to `done` (post-worker,
+            // pre-merge), diff its worktree against the base branch and feed the
+            // REAL diff to blastguard's classifier — the public-API signal that
+            // is dead at the pre-execution call sites (empty diff) finally has a
+            // real diff here. A High-risk verdict (public-API change on a
+            // sensitive path) is recorded to the overwatch violation registry.
+            // OBSERVATIONAL and fully fail-soft: it never changes the exit code
+            // or the schedule-time gated-task separation. Only fire on the
+            // Running/Pending→Done edge so a re-run of `set --status done` does
+            // not double-record.
+            if st == state::Status::Done && prior_status != state::Status::Done {
+                if let Some(t) = rs.tasks.iter().find(|t| t.id == task) {
+                    let paths = task_files(cfg, cwd, &run, &task);
+                    let session = session_id_from_env().unwrap_or_default();
+                    diffrisk_record::record_post_execution_diff_risk(
+                        cfg,
+                        cwd,
+                        &run,
+                        t,
+                        &paths,
+                        state::now_secs(),
+                        &session,
+                    );
+                }
+            }
             let (done, total) = rs.counts();
             eprintln!("run '{run}': {done}/{total} verified");
             // Auto-rollback (charter #7): a task that fails after having been

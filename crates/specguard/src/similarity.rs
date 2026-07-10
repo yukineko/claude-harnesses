@@ -389,6 +389,56 @@ pub enum Verdict {
     Novel,
 }
 
+/// Axes on which a *single template* carrying two or more polarity tokens is, by
+/// itself, sufficient grounds to force human review — the **Phase 1 deterministic
+/// backstop**. `authz` (allow/deny/forbid/approve) and `route` (human/auto) are
+/// the two axes that encode *who decides* and *what is permitted*; a template that
+/// mentions either axis twice is expressing a *relationship* between two
+/// authorization or routing decisions, which is exactly the shape the heuristic
+/// Phase 2 guards ([`polarity_preserved`] / [`object_bindings`]) must reason
+/// hardest about (cross-clause pole swaps, object reattachment).
+const BACKSTOP_AXES: &[&str] = &["authz", "route"];
+
+/// The per-axis polarity-token occurrence count at or above which the Phase 1
+/// backstop fires (2: a single template expressing *two* authz or *two* route
+/// decisions).
+const BACKSTOP_AXIS_COUNT: usize = 2;
+
+/// **Phase 1 deterministic backstop.** Returns `true` — forcing [`Verdict::Novel`]
+/// regardless of similarity or [`polarity_preserved`] — when *either* the
+/// candidate *or* its closest precedent carries [`BACKSTOP_AXIS_COUNT`] (2) or
+/// more polarity tokens on any single [`BACKSTOP_AXES`] axis.
+///
+/// This is a pure per-axis COUNT and deliberately depends on NO heuristic: it
+/// reuses [`polarity_signature`] (whose per-axis `Vec` length *is* that count) and
+/// nothing else. The design goal (re-review finding 1, see
+/// docs/review-redesign-implementation-items.md 問題1) is that the SAFETY of the
+/// graded gate must not rest on the *perfection* of the Phase 2 local-context
+/// heuristics: a manual enumeration of bypasses produced three successive novel
+/// variants (findings 1 / 1a / 1b), so a blunt non-heuristic count backstops the
+/// whole class. The two-clause verb swap (finding 1) and the object-phrase swap
+/// (finding 1a) both put two `authz` tokens in one template, so they land here and
+/// route to a human WITHOUT consulting [`object_bindings`] at all.
+///
+/// **Layering — Phase 1 does NOT subsume Phase 2 (multi-defense).** A cross-axis
+/// single-occurrence swap (finding 1b: one `authz` token and one `route`/`modal`
+/// token trading places) has an axis count of exactly 1 on every axis, so this
+/// backstop does NOT fire for it — its safety is carried entirely by the Phase 2
+/// [`object_bindings`] reattachment guard (kept green by
+/// `zzz_adversarial_probe_cross_axis_single_occurrence_swap_routes_to_human`).
+/// The two phases are complementary layers, not substitutes.
+fn backstop_forces_novel(candidate: &str, precedent: &str) -> bool {
+    for text in [candidate, precedent] {
+        let sig = polarity_signature(text);
+        for axis in BACKSTOP_AXES {
+            if sig.get(*axis).map_or(0, Vec::len) >= BACKSTOP_AXIS_COUNT {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Triage a changed template `candidate` against the ratified `corpus` at
 /// `threshold`.
 ///
@@ -420,6 +470,16 @@ pub fn triage(candidate: &str, corpus: &[String], threshold: f64) -> Verdict {
         // A precedent exists: precedented only if it clears the bar AND the
         // polarity signature is unchanged relative to that precedent.
         Some((precedent, sim)) => {
+            // Phase 1 deterministic backstop (heuristic-free): a template carrying
+            // two or more polarity tokens on the authz or route axis always routes
+            // to a human, regardless of similarity or the Phase 2
+            // `polarity_preserved` heuristics. This is layered ON TOP of — not a
+            // replacement for — `object_bindings`: finding 1b (a cross-axis
+            // single-occurrence swap) has count 1 per axis and is caught ONLY by
+            // Phase 2, so both defenses must remain. See `backstop_forces_novel`.
+            if backstop_forces_novel(candidate, precedent) {
+                return Verdict::Novel;
+            }
             if sim >= threshold && polarity_preserved(candidate, precedent) {
                 Verdict::Precedented
             } else {
@@ -443,6 +503,7 @@ pub fn triage(candidate: &str, corpus: &[String], threshold: f64) -> Verdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn identical_text_is_one() {
@@ -1036,6 +1097,155 @@ mod tests {
                 "{}: synonym-based polarity flip must route to a human (Novel) despite \
                  similarity {sim}",
                 c.what
+            );
+        }
+    }
+
+    // --- Phase 1 deterministic backstop (re-review finding 1, 問題1) -----------
+
+    /// Phase 1 deterministic backstop: a template carrying two or more polarity
+    /// tokens on the authz or route axis is forced to Novel by a pure per-axis
+    /// COUNT, with NO reliance on the Phase 2 [`object_bindings`] heuristic. This
+    /// proves finding 1 (two-clause verb swap) and finding 1a (object-phrase
+    /// swap) — both of which put TWO authz tokens in one template — route to a
+    /// human even if the local-context heuristic were absent. See
+    /// docs/review-redesign-implementation-items.md, re-review finding 1 / 問題1.
+    #[test]
+    fn phase1_backstop_forces_novel_on_two_axis_tokens_without_object_bindings() {
+        // Two authz tokens (allow + deny) in one template — the shape of finding
+        // 1 / 1a. The backstop predicate fires on the COUNT ALONE; object_bindings
+        // is not consulted.
+        let two_authz = "the triage logic will allow the whitespace change and \
+                         separately deny the substantive rewrite";
+        assert!(
+            backstop_forces_novel(two_authz, "an unrelated benign precedent template"),
+            "two authz tokens in the candidate must trip the Phase 1 backstop by count alone"
+        );
+        // Two route tokens (human + auto) in one template; here the *precedent*
+        // side trips it (the backstop inspects both texts).
+        let two_route = "route the benign edit to auto and the risky edit to a human";
+        assert!(
+            backstop_forces_novel("an unrelated benign precedent template", two_route),
+            "two route tokens in the precedent must trip the Phase 1 backstop by count alone"
+        );
+
+        // End-to-end via triage: even at a fully-permissive threshold (0.0) with a
+        // lexically IDENTICAL precedent (similarity 1.0, polarity trivially
+        // preserved), a two-authz template still routes to a human. WITHOUT the
+        // backstop this would auto-ratify (sim >= 0 && polarity_preserved holds).
+        let corpus = vec![two_authz.to_string()];
+        assert_eq!(
+            triage(two_authz, &corpus, 0.0),
+            Verdict::Novel,
+            "the Phase 1 backstop must override an otherwise-precedented match"
+        );
+    }
+
+    /// The Phase 1 backstop is deliberately blunt but must NOT over-block a
+    /// template that carries at most ONE authz/route token: a single
+    /// authorization or routing clause (count 1) stays eligible for auto-ratify,
+    /// so benign single-clause edits remain Precedented. (Complements the benign
+    /// reword / synonym tests, which also carry <= 1 token per backstop axis, and
+    /// documents why those keep auto-ratifying.)
+    #[test]
+    fn phase1_backstop_leaves_single_axis_clause_precedented() {
+        // One authz token (deny) only — backstop does not fire.
+        let one_authz = "the policy must deny the unreviewed request before merge";
+        assert!(!backstop_forces_novel(one_authz, one_authz));
+        let corpus = vec![one_authz.to_string()];
+        // A benign whitespace/reflow edit keeps polarity and stays Precedented.
+        let benign = "the policy must deny the unreviewed request, before merge";
+        assert_eq!(triage(benign, &corpus, 0.85), Verdict::Precedented);
+
+        // One route token (human) only — backstop does not fire either.
+        let one_route = "route the novel policy edit to a human for consent";
+        assert!(!backstop_forces_novel(one_route, one_route));
+    }
+
+    // Object nouns drawn for the fuzzer below; deliberately none is itself a
+    // polarity token (see POLARITY_TOKENS) so a random draw cannot perturb the
+    // per-axis token counts and change what is being tested.
+    const FUZZ_NOUNS: &[&str] = &[
+        "whitespace",
+        "rewrite",
+        "comment",
+        "indent",
+        "rename",
+        "import",
+        "typo",
+        "spacing",
+        "heading",
+        "refactor",
+    ];
+
+    proptest! {
+        /// Property (re-review finding 1, 問題1): no shuffle of clauses and no
+        /// cross-axis object exchange can produce a genuinely pole-INVERTED
+        /// template that the graded gate auto-ratifies. For every generated
+        /// inversion — same-axis (`allow`<->`deny`) OR cross-axis
+        /// (`require`<->`forbid`) — embedded in a long scaffold so the lexical
+        /// similarity stays in the dangerous `>= threshold` regime, `triage` must
+        /// return `Novel`. This machine-fuzzes the manual enumeration that
+        /// produced three successive bypasses (findings 1 / 1a / 1b): Phase 1 (the
+        /// count backstop) and Phase 2 (`object_bindings`) together must leave NO
+        /// inverted case `Precedented`, so a fourth hand-missed variant cannot
+        /// silently auto-ratify.
+        #[test]
+        fn fuzz_pole_inversion_never_auto_ratifies(
+            a_idx in 0..FUZZ_NOUNS.len(),
+            b_idx in 0..FUZZ_NOUNS.len(),
+            // Filler length variation: shuffles/pads the surrounding tokens
+            // (clause reordering) without touching the poles or objects.
+            pad in 0usize..6,
+            // Same-axis (both authz) or cross-axis (authz + modal) poles.
+            cross_axis in any::<bool>(),
+        ) {
+            prop_assume!(a_idx != b_idx);
+            const THRESHOLD: f64 = 0.85;
+            let obj_a = FUZZ_NOUNS[a_idx];
+            let obj_b = FUZZ_NOUNS[b_idx];
+            let filler = "meta canon template edit during a fully gated production release run "
+                .repeat(pad + 3);
+            // v1/v2 are the two clause verbs. Cross-axis pairs a modal (`require`)
+            // with an authz (`forbid`) — each a single occurrence, so the Phase 1
+            // count backstop does NOT fire and Phase 2 must carry it (finding 1b
+            // shape). Same-axis uses two authz verbs (finding 1 / 1a shape), which
+            // the backstop catches.
+            let (v1, v2) = if cross_axis {
+                ("require", "forbid")
+            } else {
+                ("allow", "deny")
+            };
+            let ratified = format!(
+                "{filler} the triage logic will {v1} the {obj_a} change and {filler} \
+                 will separately {v2} the {obj_b} rewrite {filler}"
+            );
+            // Genuine inversion: swap ONLY the two object nouns between the
+            // clauses; both verbs stay put, so the pole that governs each object is
+            // inverted while the token multiset is unchanged.
+            let flipped = format!(
+                "{filler} the triage logic will {v1} the {obj_b} change and {filler} \
+                 will separately {v2} the {obj_a} rewrite {filler}"
+            );
+            let corpus = vec![ratified.clone()];
+            let sim = similarity(&flipped, &ratified);
+            // The core safety property: a genuine pole inversion must NEVER
+            // auto-ratify, at any similarity. Because `Precedented` holds iff
+            // (!backstop AND sim >= threshold AND polarity_preserved), asserting
+            // `Novel` for every inverted input is *exactly* the DoD property — that
+            // the fuzzer generates no case where sim >= threshold and
+            // polarity_preserved is true yet the meaning is inverted. (We do not
+            // gate on sim >= threshold: identical repeated filler collapses in the
+            // shingle SET, so Jaccard is not guaranteed high — but the property is
+            // strictly stronger without that gate. Same-axis inversions trip the
+            // Phase 1 count backstop; cross-axis single-occurrence ones are caught
+            // by the Phase 2 object_bindings guard — both layers exercised here.)
+            prop_assert_eq!(
+                triage(&flipped, &corpus, THRESHOLD),
+                Verdict::Novel,
+                "pole inversion (cross_axis={}) must route to a human, sim={}",
+                cross_axis,
+                sim
             );
         }
     }

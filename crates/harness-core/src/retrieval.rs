@@ -69,8 +69,6 @@ pub fn record(event: &RetrievalEvent) {
 /// same-machine processes can't interleave writes or race the idempotency
 /// check. Fail-soft throughout.
 fn record_at(path: &Path, event: &RetrievalEvent) {
-    use std::io::Write;
-
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -85,19 +83,11 @@ fn record_at(path: &Path, event: &RetrievalEvent) {
         return;
     }
 
-    let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    else {
-        return;
-    };
-
     let Ok(json) = serde_json::to_string(event) else {
         return;
     };
-
-    let _ = writeln!(file, "{}", json);
+    // Single atomic append (body + '\n' in one write) — see issue #15.
+    crate::append::append_line(path, &json);
 }
 
 /// Load all retrieval events. Missing file → empty Vec, blank/corrupt lines

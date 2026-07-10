@@ -2,15 +2,15 @@
 //! plugin keeps its own rollup/summary types (which fields it aggregates), but
 //! the on-disk line schema and the parallel-safe append are defined once here.
 //!
-//! Each line is `{ts, session, event, ...extra}`, a single `O_APPEND` write well
-//! under PIPE_BUF (4096B), so parallel sessions appending to one file don't
-//! interleave. Writes are best-effort and never break a hook: all errors are
+//! Each line is `{ts, session, event, ...extra}`, appended via
+//! [`crate::append::append_line`] as a single atomic `O_APPEND` write well under
+//! PIPE_BUF (4096B), so parallel sessions appending to one file don't interleave
+//! (issue #15). Writes are best-effort and never break a hook: all errors are
 //! swallowed.
 //!
 //! NOTE: a cross-plugin `plugin` field + a shared aggregator are Phase D work;
 //! this keeps the existing per-plugin row schema unchanged.
 
-use std::io::Write;
 use std::path::Path;
 
 use serde_json::{json, Value};
@@ -37,16 +37,10 @@ pub fn emit(sink: &Path, session: &str, event: &str, extra: Value) {
     }
     let line = Value::Object(obj).to_string();
 
-    if let Some(parent) = sink.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(sink)
-    {
-        let _ = writeln!(f, "{line}");
-    }
+    // One record = one atomic write (body + '\n' in a single buffer). A prior
+    // `writeln!` split the newline into a second syscall, letting concurrent
+    // `O_APPEND` writers concatenate two JSON objects onto one line (issue #15).
+    crate::append::append_line(sink, &line);
 }
 
 #[cfg(test)]

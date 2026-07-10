@@ -67,15 +67,9 @@ pub fn append_jsonl(state_dir: &Path, entry: &serde_json::Value) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let (Ok(line), Ok(mut f)) = (
-        serde_json::to_string(entry),
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path),
-    ) {
-        use std::io::Write;
-        let _ = writeln!(f, "{line}");
+    if let Ok(line) = serde_json::to_string(entry) {
+        // Single atomic append (body + '\n' in one write) — see issue #15.
+        crate::append::append_line(&path, &line);
     }
 }
 

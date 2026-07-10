@@ -78,15 +78,9 @@ pub fn record_to(path: &Path, plugin: &str, session: &str, prompt: &str, chars: 
         session: session.to_string(),
         chars,
     };
-    if let (Ok(line), Ok(mut f)) = (
-        serde_json::to_string(&entry),
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path),
-    ) {
-        use std::io::Write;
-        let _ = writeln!(f, "{line}");
+    if let Ok(line) = serde_json::to_string(&entry) {
+        // Single atomic append (body + '\n' in one write) — see issue #15.
+        crate::append::append_line(path, &line);
     }
 }
 

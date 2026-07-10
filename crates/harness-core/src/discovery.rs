@@ -96,29 +96,17 @@ pub fn append(cwd: &Path, rec: &DiscoveryRecord) {
 
 /// Internal: append to an explicit path. Used by append() and by tests.
 fn append_at(path: &Path, rec: &DiscoveryRecord) {
-    use std::io::Write;
-
     // Ensure parent directory exists.
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    // Open or create the file in append mode.
-    let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    else {
-        return;
-    };
-
-    // Serialize the record and write as a single JSON line.
+    // Serialize the record and append it as one atomic JSON line.
     let Ok(json) = serde_json::to_string(rec) else {
         return;
     };
-
-    // Write JSON line + newline. Swallow any write error.
-    let _ = writeln!(file, "{}", json);
+    // Single atomic append (body + '\n' in one write) — see issue #15.
+    crate::append::append_line(path, &json);
 }
 
 /// Load all discovery records from the store, returning only those that parsed

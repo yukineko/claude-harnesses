@@ -70,9 +70,12 @@ CLI 引数は `clap` の `Cli` 構造体で定義（`main.rs`）:
 
 ### module 責務
 
-- **`main.rs`** — CLI（`clap::Cli`）・引数検証・ファイル IO・出力整形・exit code 写像のみを担う薄い
+- **`main.rs`** — CLI（`clap::Cli`）・引数検証・ファイル IO・出力整形・exit code 写像を担う薄い
   ドライバ。定数 `DEFAULT_MIN_KILL_RATE`(0.80)・`DEFAULT_OUTCOMES` を保持。スコアリングは持たず
-  `lib` に委譲する。
+  `lib` に委譲する。加えて gate 失敗時（kill-rate < 閾値 / viable ゼロ）に `emit_violation` で
+  overwatch の fleet violation レジストリへ1件記録する（他の防御ゲートと同じ観測パターン）。この記録は
+  **best-effort / fail-soft** — ストア書き込み失敗は握り潰し、gate の判定・exit code・出力整形には一切
+  影響しない（観測は判定を変えない不変条件）。
 - **`lib.rs`** — 純粋なパース／スコアリングコア。`MutationSummary`（`caught`/`missed`/`timeout`/`unviable`/
   `success`/`failure` のタリー、メソッド `viable`/`killed`/`kill_rate`）、`GateOutcome`（`summary`/
   `kill_rate`/`threshold`/`passed`/`reason`）、`parse_outcomes`（JSON テキスト→`MutationSummary`、

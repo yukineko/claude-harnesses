@@ -139,3 +139,20 @@ diff 分類を `RiskAssessment::merge` で統合し、condukt の `gate check` /
   従来どおり `classify` 側の tier-1/2 判定で `High`/irreversible/`requires_gate()` に force-gate
   される（`merge` は risk を上げる方向にのみ作用するため、diff 側が Low でも既存の force-gate は
   マスクされない）。
+
+## 安定 rule id（overwatch 署名の粒度確保）
+
+> **REVIEW-NEEDED**: コードから逆算 (2026-07-10 セッション)。人間レビュー前は正典としない。
+
+**概要**: `rule_id.rs` は `detect` が出す人間向けの自由文 deny 理由（一部は `format!` で可変の
+path/target を埋め込む。例: `"Write would replace {path} with empty content, wiping the file"`）を、
+埋め込み可変テキストに依存しない **小さく安定した rule id** へ写像する（`rule_id(reason: &str) ->
+&'static str`）。
+
+**不変条件**:
+- **自由文は overwatch の violation 署名には不適** — 同一種類の失敗が path/command 差で無数の distinct
+  署名に断片化してしまう。rule id を挟むことで overwatch の cross-task 再発検知が「同じ種類の denial」を
+  毎回同一署名として見る。
+- **マッチは `detect` の文言と lockstep の固定 prefix / 部分文字列判定** — `detect` の wording 変更が
+  ここへ反映されない場合、未認識の理由は既定 id へ落ちる（将来の文言変更で署名が静かに壊れないよう、
+  両者は意図的に同期して保守する）。

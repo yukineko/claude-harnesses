@@ -168,3 +168,51 @@ append-only なレジストリである。同じ種類の失敗は、発生し�
   明示的に渡したときのみ、上記3サブコマンドの出力を使って段階的ロールアウト・health-gate 判定・
   ロールバックを実際に実行する。つまり overwatch の Rust コアは計画・判定のみを行い、副作用
   （プラグインの実配布・レジストリ書き換え）は一切持たない。
+
+## Continuous-Audit / 統合レビューサーフェス (review-queue)
+
+> **REVIEW-NEEDED**: コードから逆算 (2026-07-10 セッション)。人間レビュー前は正典としない。
+
+**概要**: 従来別々だった3つの観測ストリーム — (1) systemic な gate 違反、(2) canary の rollback
+事象、(3) AI/敵対的レビューの CONFIRMED findings — を、`review_queue.rs` が **1本の時系列リスト**
+（新しい順）に統合する。指摘の永続化は `review_finding.rs`、ラウンド収束メトリクスは `audit_round.rs`
+が担う。3モジュールとも純粋データ＋純関数で、発見・反証という意味判断（LLM 駆動の finder→verifier）は
+コアの外（`/continuous-audit` skill + `scripts/continuous-audit.sh`）にあり、ここは決定論の記録・集計・
+統合表示だけを持つ。
+
+**不変条件**:
+- **`build_queue` は3スライス上の純関数** — `review_queue::build_queue` は systemic 署名再発
+  (`SignatureRecurrence`)・rollback 事象 (`RollbackEvent`)・AI findings (`ReviewFinding`) の3入力を
+  受け取り、各行に `kind` 判別子 (`systemic`/`rollback`/`ai-finding`) を付けて `ts` 降順（**newest-first**）で
+  マージする。I/O・wall-clock を持たない。
+- **fail-soft（観測系の never-break-a-turn 不変）** — CLI シェル (`review_queue::run`) は3ストアを
+  fail-soft に読む。いずれかのソースが欠落/空/破損でも、そのソースは何も寄与せず他のソースは表示され、
+  コマンド全体はエラーにしない。AI findings ストア (`review_findings.jsonl`) が未生成のときは
+  ai-finding 行が単に出ないだけ（graceful degrade）。
+- **AI findings は永続 append-only ストリーム。ingestion 口は `record-finding` の一点** —
+  `review_finding.rs` は overwatch のストレージ root 配下 `review_findings.jsonl` を定義する。書き込みは
+  `overwatch record-finding` のみが行い、finding TEXT を持たない reviewgate のゲートログとは独立。
+  review-queue は **finding-id で dedup** し、同一 id の再供給は重複行にならず最新状態へ畳まれる
+  （`/continuous-audit` が毎ラウンド同じ id を再利用しても1行に収束する前提）。
+- **audit-round ledger は per-round メトリクスの append-only 記録** — `audit_round.rs` はラウンドごとに
+  `{new_findings, confirmed, regression_tests_added}` を追記するだけで、finder/verifier は模さない。
+  ラウンド越しに読み戻すと収束シグナル（per-round new-findings が下降、closure-rate = 回帰テスト数 ÷
+  confirmed）が得られる。emission は fail-soft。
+
+**振る舞い**:
+- **`overwatch review-queue [--json] [--since <ts>] [--limit <n>]`** — 統合リストを人間可読
+  （`[systemic]`/`[rollback]`/`[ai-finding]` タグ付き・新しい順）または `kind` 判別子付き JSON 配列で
+  表示する。`--since`/`--limit` で窓を絞る。
+- **`overwatch record-finding --source <src> …`** — CONFIRMED な AI finding を1件
+  `review_findings.jsonl` へ追記する（review-queue の ai-finding アームの唯一の書き込み経路）。
+  `/continuous-audit` の CONFIRMED subset がここへ流れる。
+- **`overwatch audit-round record --round <n> --target <csv> [--new-findings N] [--confirmed N]
+  [--regression-tests-added N]`** — 1ラウンドのメトリクスを収束 ledger へ追記する。`--round` は
+  **単調増加の整数**（round number）であって日付/週番号ではない点に注意（`scripts/continuous-audit.sh`
+  から呼ばれる）。
+- **`overwatch audit-metrics [--json] [--window <n>]`** — ledger を読み戻し、per-round new-findings 推移・
+  closure-rate・`converging` フラグ（既定は末尾3ラウンドの下降判定）を印字する。`converging` は
+  successive round が **同一スコープ** を再監査したときのみ意味を持つ（スコープを広げた round では
+  new-findings 増加は退行ではない）。
+- **rollback 事象の記録口** — `scripts/rollout-plugins.sh` の canary auto-rollback 時に
+  `overwatch record-rollback` が `RollbackEvent` を追記する（fail-soft: 記録失敗はロールアウトを止めない）。

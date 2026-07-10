@@ -20,9 +20,11 @@ condukt Phase 6 から、タスクに `expected_trajectory` がある場合に f
 - **pass の定義は全モード共通** — `MatchResult::finalize` が `pass = missing.is_empty() &&
   unexpected.is_empty() && !out_of_order` を必ず再計算する。個別モードは `pass: false` で構築し finalize に
   委ねるため、`pass` フィールドを直接立てる経路は無い。
-- **0/1/2 ゲートポリシー** — exit code は evalkit/schemaguard と同型（`main.rs` doc）: `0`=pass、
+- **0/1/2 ゲートポリシー（+ `tier` のみ 3）** — exit code は evalkit/schemaguard と同型（`main.rs` doc）: `0`=pass、
   `1`=逸脱（missing/unexpected/out_of_order）、`2`=harness エラー（入力が読めない・パースできない）。
   `check` は `result.pass` で 0/1 を返し、spec/actual の read/parse 失敗はすべて `2`。`extract` の IO エラーも `2`。
+  **`tier` サブコマンドのみ追加で `3`=NEEDS-HUMAN** を返す（`Verdict::NeedsHuman` → `exit_code_for` が 3 に写像。
+  screenshot tier の stub 等、人間判断が要る tri-state のため。`0/1/2` の他コマンドとは異なる点に注意）。
 - **hook でラップしない** — `main` は `run_hook` を通さず、実エラーを exit 2 として素通しする（`main.rs` doc の明示ルール）。
 - **transcript を全部メモリに載せない** — `extract` は JSONL を `BufReader::lines()` で**1 行ずつストリーム**処理する
   （ハーネスのハード規約）。1 行が JSON として壊れていても・想定フィールドが欠けていても panic せず skip する

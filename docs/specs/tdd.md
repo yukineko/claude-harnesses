@@ -60,8 +60,8 @@ RED だったか・RED→GREEN になったか）は `tdd` バイナリと Stop 
 - **`oracle --task <id>`** — `proof::read_passed`（fail-soft: missing/corrupt/非 bool は `None`）で両 phase
   の `passed` を読み、`transition::oracle_report` を JSON 出力。有効な Fail→Pass のみ exit 0、他は exit 1。
   `/tdd` skill のフェーズ外の機械オラクルで、`condukt` の Fail→Pass ゲートが呼ぶ想定。
-- **`status`** — 解決済み config（source/enabled/max_attempts/min impl lines/test_cmd/proof_dir/state_dir）と
-  cwd に対する gate verdict（`gate::human_report`）を表示。
+- **`status`** — 解決済み config（source/enabled/max_attempts/min impl lines/test_cmd/proof_dir/state_dir/
+  strict_separation）と cwd に対する gate verdict（`gate::human_report`）を表示。
 - **`init [--force]`** — starter `./tdd.toml`（`STARTER_CONFIG`）を書く。既存かつ非 force で bail。
 - **`install`/`uninstall [--dry-run]`** — `~/.claude/settings.json` の Stop hook を idempotent に
   マージ/除去（`install::MARKERS`＝`"tdd gate"`/`"/tdd "`、`harness_core::install`）。プラグインユーザーは
@@ -126,6 +126,9 @@ RED だったか・RED→GREEN になったか）は `tdd` バイナリと Stop 
 - **RED 段が `--author` を記録する** — `tdd red --task <id> [--cmd] [--author <identity>]`。
   `proof::red` は渡された `author`（省略可）をそのままテスト実行前後の判定には使わず、
   `<task>.red.json` の `author` フィールドへ記録するだけ（RED 自体の合否判定に author は関与しない）。
+  `--author` 省略時は `resolve_author` が session id（`$CLAUDE_CODE_SESSION_ID` 等）へフォールバックし、
+  証跡には常に何らかの author が記録される（strict_separation の照合が author 欠落で常に拒否になるのを避け、
+  かつ「誰が RED を書いたか」を機械追跡可能に保つため）。GREEN 段の impl author も同じ `resolve_author` を経る。
 - **GREEN 段で strict 有効時に RED author と impl author を照合する** — `tdd green --task <id> [--cmd]
   [--author <identity>]`。`proof::green` は `cfg.strict_separation` が真のとき、まずテストコマンドを
   実行する前に、対応する RED 証跡ファイルから `read_author`（fail-soft: 欠落・破損時は `None`）で

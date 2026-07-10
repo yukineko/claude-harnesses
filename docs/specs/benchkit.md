@@ -4,7 +4,7 @@
 
 ## 概要
 
-`benchkit` は SWE-bench Verified 用のベンチマークランナー（skeleton slice）である。CLI は `clap` の 3 サブコマンド — `load`（JSONL split を型付き `Instance` に読み込み決定論的サマリを出力）、`download`（upstream データセットを `curl` でローカルキャッシュへ取得。唯一ネットワークに触れる経路）、`run-instance`（1 インスタンスを harness に通し `setup -> generate -> test -> score` する）— を提供する（`main.rs` の `Command` enum）。ライブラリは `model` / `loader` / `download` / `harness` / `scorer` / `dashboard` を公開する（`lib.rs`）。
+`benchkit` は SWE-bench Verified 用のベンチマークランナー（skeleton slice）である。CLI は `clap` の 3 サブコマンド — `load`（JSONL split を型付き `Instance` に読み込み決定論的サマリを出力）、`download`（upstream データセットを `curl` でローカルキャッシュへ取得。唯一ネットワークに触れる経路）、`run-instance`（1 インスタンスを harness に通し `setup -> generate -> test -> score` する）— に加え post-hoc 較正の `auditsample`（下記専用節）を提供する（`main.rs` の `Command` enum）。ライブラリは `model` / `loader` / `download` / `harness` / `scorer` / `dashboard` を公開する（`lib.rs`）。
 
 ## 不変条件
 
@@ -30,7 +30,7 @@
 
 ### 概要
 
-`propguard` / `specguard` / `mutategate` / `blastguard` などの auto-gate は、全部通れば即座に変更を land させるが、その gate 自体が「どれだけ効いているか」は誰も測っていない — 例えば mutategate の 0.80 のような閾値は固定の目安のままで、静かな劣化（silent decay）に気づけない。`auditsample`（`crates/benchkit/src/auditsample.rs`）はこのループを閉じるための post-hoc 較正機能で、`benchkit auditsample <changes.jsonl> [--audits <audits.jsonl>] [--fraction <f>] [--seed <u64>] [--json]` として CLI に生えている（`main.rs` の `Command::AuditSample`、既定 `fraction=0.1`・`seed=0`）。auto-gate だけを通って land した変更の母集団から決定論的にサンプルを抽出し、より厳格な監査（audit）に回した結果を、(a) propguard/specguard 向けの新規不変条件候補と (b) ratify queue 行きの閾値調整提案という 2 つの独立したフィードバック経路へ振り分ける。
+`propguard` / `specguard` / `mutategate` / `blastguard` などの auto-gate は、全部通れば即座に変更を land させるが、その gate 自体が「どれだけ効いているか」は誰も測っていない — 例えば mutategate の 0.80 のような閾値は固定の目安のままで、静かな劣化（silent decay）に気づけない。`auditsample`（`crates/benchkit/src/auditsample.rs`）はこのループを閉じるための post-hoc 較正機能で、`benchkit auditsample <changes.jsonl> [--audits <audits.jsonl>] [--from-violations] [--fraction <f>] [--seed <u64>] [--json]` として CLI に生えている（`main.rs` の `Command::AuditSample`、既定 `fraction=0.1`・`seed=0`）。監査結果の供給源は 2 経路で **排他**（`--audits` と `--from-violations` は `conflicts_with`）: (1) `--audits <audits.jsonl>` = 外部監査ファイルを渡すモデル経路、(2) `--from-violations` = cwd の overwatch violation ストアを実クロスリファレンスして miss を導出する実データ経路（`execute_from_violations` → `derive_misses_from_violations`）。auto-gate だけを通って land した変更の母集団から決定論的にサンプルを抽出し、より厳格な監査（audit）に回した結果を、(a) propguard/specguard 向けの新規不変条件候補と (b) ratify queue 行きの閾値調整提案という 2 つの独立したフィードバック経路へ振り分ける。
 
 ### 不変条件
 
@@ -44,7 +44,7 @@
 
 1. `benchkit auditsample <changes>` で `GatePassedChange`（`change_id` + 通過した `gates` の一覧）の JSONL を読み込む — auto-gate のみを通過した変更の母集団。
 2. `sample(population, fraction, seed)` が母集団から `round(fraction * n)` 件（`[0, n]` にクランプ）を決定論的に抽出し、`change_id` 順にソートして返す。`--audits` を渡さなければここで止まり、サンプル一覧（次に人間/より厳格な監査官が監査すべき変更）を人間可読 or `--json` で出力する。
-3. `--audits <audits.jsonl>` を渡すと、より厳格な audit の verdict（`AuditResult { change_id, miss, gate, invariant_hint }`）を読み込み、サンプルに入っている `change_id` のものだけへ絞り込んでから `route_feedback()` にかける。
+3. 監査結果を供給する 2 経路（排他）: **(a) `--audits <audits.jsonl>`** はより厳格な audit の verdict（`AuditResult { change_id, miss, gate, invariant_hint }`）を外部ファイルから読み込む。**(b) `--from-violations`** は cwd の overwatch violation ストアを実クロスリファレンスし、`derive_misses_from_violations` が violation から `AuditResult`（miss）を導出する（`execute_from_violations`）。いずれもサンプルに入っている `change_id` のものだけへ絞り込んでから `route_feedback()` にかける。
 4. `route_feedback()` は miss (`miss == true`) だけを見て 2 経路に振り分ける:
    - **(a) 新規不変条件候補** (`invariant_candidates`): `invariant_hint` が付いている miss ごとに `InvariantCandidate { change_id, invariant }` を生成 — propguard/specguard が拾うべき新しい機械検証可能な性質の提案。
    - **(b) 閾値調整提案 = ratify queue** (`ratify_queue`): `gate` が付いている miss を gate 単位で集約し `ThresholdProposal { gate, change_id, miss_count }` を生成 — 該当 gate の閾値を締める提案だが、**人間が ratify するまで一切適用されない**。

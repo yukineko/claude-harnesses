@@ -1,4 +1,4 @@
-last_synced = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_synced = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 
 [entries."crates/autoflow/src/backlog.rs"]
 key = "crates/autoflow/src/backlog.rs"
@@ -255,7 +255,7 @@ key = "crates/benchkit/src/auditsample.rs"
 kind = "feature"
 spec_doc = "docs/specs/benchkit.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/benchkit/src/auditsample.rs"]
 test_files = []
 client_refs = []
@@ -315,7 +315,7 @@ key = "crates/benchkit/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/benchkit.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/benchkit/src/main.rs"]
 test_files = []
 client_refs = []
@@ -355,7 +355,7 @@ key = "crates/blastguard/src/classify.rs"
 kind = "feature"
 spec_doc = "docs/specs/blastguard.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/blastguard/src/classify.rs"]
 test_files = []
 client_refs = []
@@ -375,7 +375,7 @@ key = "crates/blastguard/src/diffrisk.rs"
 kind = "feature"
 spec_doc = "docs/specs/blastguard.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/blastguard/src/diffrisk.rs"]
 test_files = []
 client_refs = []
@@ -405,7 +405,7 @@ key = "crates/blastguard/src/lib.rs"
 kind = "feature"
 spec_doc = "docs/specs/blastguard.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/blastguard/src/lib.rs"]
 test_files = []
 client_refs = []
@@ -415,7 +415,7 @@ key = "crates/blastguard/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/blastguard.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/blastguard/src/main.rs"]
 test_files = []
 client_refs = []
@@ -430,14 +430,33 @@ impl_files = ["crates/blastguard/src/model.rs"]
 test_files = []
 client_refs = []
 
+[entries."crates/blastguard/src/rule_id.rs"]
+key = "crates/blastguard/src/rule_id.rs"
+kind = "feature"
+spec_doc = "docs/specs/blastguard.md"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = ["crates/blastguard/src/rule_id.rs"]
+test_files = []
+client_refs = []
+
 [entries."crates/blastguard/tests/integration.rs"]
 key = "crates/blastguard/tests/integration.rs"
 kind = "feature"
 spec_doc = "docs/specs/blastguard.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
 test_files = ["crates/blastguard/tests/integration.rs"]
+client_refs = []
+
+[entries."crates/blastguard/tests/overwatch_violation.rs"]
+key = "crates/blastguard/tests/overwatch_violation.rs"
+kind = "feature"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = []
+test_files = ["crates/blastguard/tests/overwatch_violation.rs"]
 client_refs = []
 
 [entries."crates/budgetguard/src/config.rs"]
@@ -605,7 +624,7 @@ key = "crates/compass/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/compass.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/compass/src/main.rs"]
 test_files = []
 client_refs = []
@@ -720,6 +739,16 @@ impl_files = ["crates/condukt/src/consensus.rs"]
 test_files = []
 client_refs = []
 
+[entries."crates/condukt/src/diffrisk_record.rs"]
+key = "crates/condukt/src/diffrisk_record.rs"
+kind = "feature"
+spec_doc = "docs/specs/condukt.md"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = ["crates/condukt/src/diffrisk_record.rs"]
+test_files = []
+client_refs = []
+
 [entries."crates/condukt/src/editgate.rs"]
 key = "crates/condukt/src/editgate.rs"
 kind = "feature"
@@ -745,7 +774,7 @@ key = "crates/condukt/src/gate_exec.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/condukt/src/gate_exec.rs"]
 test_files = []
 client_refs = []
@@ -780,6 +809,16 @@ impl_files = ["crates/condukt/src/install.rs"]
 test_files = []
 client_refs = []
 
+[entries."crates/condukt/src/learning_signal.rs"]
+key = "crates/condukt/src/learning_signal.rs"
+kind = "feature"
+spec_doc = "docs/specs/condukt.md"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = ["crates/condukt/src/learning_signal.rs"]
+test_files = []
+client_refs = []
+
 [entries."crates/condukt/src/lessons.rs"]
 key = "crates/condukt/src/lessons.rs"
 kind = "feature"
@@ -805,7 +844,7 @@ key = "crates/condukt/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/condukt/src/main.rs"]
 test_files = []
 client_refs = []
@@ -855,7 +894,7 @@ key = "crates/condukt/src/replan.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/condukt/src/replan.rs"]
 test_files = []
 client_refs = []
@@ -875,7 +914,7 @@ key = "crates/condukt/src/schedule.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/condukt/src/schedule.rs"]
 test_files = []
 client_refs = []
@@ -968,6 +1007,15 @@ status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
 impl_files = []
 test_files = ["crates/condukt/tests/claim_registry_e2e.rs"]
+client_refs = []
+
+[entries."crates/condukt/tests/diffrisk_record_e2e.rs"]
+key = "crates/condukt/tests/diffrisk_record_e2e.rs"
+kind = "feature"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = []
+test_files = ["crates/condukt/tests/diffrisk_record_e2e.rs"]
 client_refs = []
 
 [entries."crates/condukt/tests/edit_gate_hook.rs"]
@@ -1835,7 +1883,7 @@ key = "crates/gauge/src/config.rs"
 kind = "feature"
 spec_doc = "docs/specs/gauge.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/gauge/src/config.rs"]
 test_files = []
 client_refs = []
@@ -1865,7 +1913,7 @@ key = "crates/gauge/src/model.rs"
 kind = "feature"
 spec_doc = "docs/specs/gauge.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/gauge/src/model.rs"]
 test_files = []
 client_refs = []
@@ -1898,6 +1946,16 @@ status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
 impl_files = []
 test_files = ["crates/gauge/tests/integration.rs"]
+client_refs = []
+
+[entries."crates/harness-core/src/append.rs"]
+key = "crates/harness-core/src/append.rs"
+kind = "feature"
+spec_doc = "docs/specs/harness-core.md"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = ["crates/harness-core/src/append.rs"]
+test_files = []
 client_refs = []
 
 [entries."crates/harness-core/src/code_index.rs"]
@@ -1935,7 +1993,7 @@ key = "crates/harness-core/src/discovery.rs"
 kind = "feature"
 spec_doc = "docs/specs/harness-core.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/harness-core/src/discovery.rs"]
 test_files = []
 client_refs = []
@@ -1965,7 +2023,7 @@ key = "crates/harness-core/src/gate/run.rs"
 kind = "feature"
 spec_doc = "docs/specs/harness-core.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/harness-core/src/gate/run.rs"]
 test_files = []
 client_refs = []
@@ -2015,7 +2073,7 @@ key = "crates/harness-core/src/hook_latency.rs"
 kind = "feature"
 spec_doc = "docs/specs/harness-core.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/harness-core/src/hook_latency.rs"]
 test_files = []
 client_refs = []
@@ -2035,7 +2093,7 @@ key = "crates/harness-core/src/inject_metrics.rs"
 kind = "feature"
 spec_doc = "docs/specs/harness-core.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/harness-core/src/inject_metrics.rs"]
 test_files = []
 client_refs = []
@@ -2085,7 +2143,7 @@ key = "crates/harness-core/src/lib.rs"
 kind = "feature"
 spec_doc = "docs/specs/harness-core.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/harness-core/src/lib.rs"]
 test_files = []
 client_refs = []
@@ -2095,7 +2153,7 @@ key = "crates/harness-core/src/metrics.rs"
 kind = "feature"
 spec_doc = "docs/specs/harness-core.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/harness-core/src/metrics.rs"]
 test_files = []
 client_refs = []
@@ -2125,7 +2183,7 @@ key = "crates/harness-core/src/retrieval.rs"
 kind = "feature"
 spec_doc = "docs/specs/harness-core.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/harness-core/src/retrieval.rs"]
 test_files = []
 client_refs = []
@@ -2425,9 +2483,18 @@ key = "crates/mutategate/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/mutategate.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/mutategate/src/main.rs"]
 test_files = []
+client_refs = []
+
+[entries."crates/mutategate/tests/overwatch_violation.rs"]
+key = "crates/mutategate/tests/overwatch_violation.rs"
+kind = "feature"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = []
+test_files = ["crates/mutategate/tests/overwatch_violation.rs"]
 client_refs = []
 
 [entries."crates/overwatch/src/aggregate.rs"]
@@ -2440,12 +2507,32 @@ impl_files = ["crates/overwatch/src/aggregate.rs"]
 test_files = []
 client_refs = []
 
+[entries."crates/overwatch/src/audit_round.rs"]
+key = "crates/overwatch/src/audit_round.rs"
+kind = "feature"
+spec_doc = "docs/specs/overwatch.md"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = ["crates/overwatch/src/audit_round.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/overwatch/src/audit_round_cli.rs"]
+key = "crates/overwatch/src/audit_round_cli.rs"
+kind = "feature"
+spec_doc = "docs/specs/overwatch.md"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = ["crates/overwatch/src/audit_round_cli.rs"]
+test_files = []
+client_refs = []
+
 [entries."crates/overwatch/src/canary.rs"]
 key = "crates/overwatch/src/canary.rs"
 kind = "feature"
 spec_doc = "docs/specs/overwatch.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/overwatch/src/canary.rs"]
 test_files = []
 client_refs = []
@@ -2455,7 +2542,7 @@ key = "crates/overwatch/src/canary_cli.rs"
 kind = "feature"
 spec_doc = "docs/specs/overwatch.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/overwatch/src/canary_cli.rs"]
 test_files = []
 client_refs = []
@@ -2495,7 +2582,7 @@ key = "crates/overwatch/src/lib.rs"
 kind = "feature"
 spec_doc = "docs/specs/overwatch.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/overwatch/src/lib.rs"]
 test_files = []
 client_refs = []
@@ -2505,7 +2592,7 @@ key = "crates/overwatch/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/overwatch.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/overwatch/src/main.rs"]
 test_files = []
 client_refs = []
@@ -2520,12 +2607,52 @@ impl_files = ["crates/overwatch/src/render.rs"]
 test_files = []
 client_refs = []
 
+[entries."crates/overwatch/src/review_finding.rs"]
+key = "crates/overwatch/src/review_finding.rs"
+kind = "feature"
+spec_doc = "docs/specs/overwatch.md"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = ["crates/overwatch/src/review_finding.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/overwatch/src/review_queue.rs"]
+key = "crates/overwatch/src/review_queue.rs"
+kind = "feature"
+spec_doc = "docs/specs/overwatch.md"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = ["crates/overwatch/src/review_queue.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/overwatch/src/rollback.rs"]
+key = "crates/overwatch/src/rollback.rs"
+kind = "feature"
+spec_doc = "docs/specs/overwatch.md"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = ["crates/overwatch/src/rollback.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/overwatch/src/rollback_cli.rs"]
+key = "crates/overwatch/src/rollback_cli.rs"
+kind = "feature"
+spec_doc = "docs/specs/overwatch.md"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = ["crates/overwatch/src/rollback_cli.rs"]
+test_files = []
+client_refs = []
+
 [entries."crates/overwatch/src/store.rs"]
 key = "crates/overwatch/src/store.rs"
 kind = "feature"
 spec_doc = "docs/specs/overwatch.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/overwatch/src/store.rs"]
 test_files = []
 client_refs = []
@@ -2535,7 +2662,7 @@ key = "crates/overwatch/src/violation.rs"
 kind = "feature"
 spec_doc = "docs/specs/overwatch.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/overwatch/src/violation.rs"]
 test_files = []
 client_refs = []
@@ -2545,7 +2672,7 @@ key = "crates/overwatch/src/violation_cli.rs"
 kind = "feature"
 spec_doc = "docs/specs/overwatch.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/overwatch/src/violation_cli.rs"]
 test_files = []
 client_refs = []
@@ -2560,13 +2687,31 @@ impl_files = []
 test_files = ["crates/overwatch/tests/aggregate.rs"]
 client_refs = []
 
+[entries."crates/overwatch/tests/audit_round.rs"]
+key = "crates/overwatch/tests/audit_round.rs"
+kind = "feature"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = []
+test_files = ["crates/overwatch/tests/audit_round.rs"]
+client_refs = []
+
 [entries."crates/overwatch/tests/canary.rs"]
 key = "crates/overwatch/tests/canary.rs"
 kind = "feature"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
 test_files = ["crates/overwatch/tests/canary.rs"]
+client_refs = []
+
+[entries."crates/overwatch/tests/continuous_audit_script.rs"]
+key = "crates/overwatch/tests/continuous_audit_script.rs"
+kind = "feature"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = []
+test_files = ["crates/overwatch/tests/continuous_audit_script.rs"]
 client_refs = []
 
 [entries."crates/overwatch/tests/lifecycle.rs"]
@@ -2579,11 +2724,29 @@ impl_files = []
 test_files = ["crates/overwatch/tests/lifecycle.rs"]
 client_refs = []
 
+[entries."crates/overwatch/tests/review_queue.rs"]
+key = "crates/overwatch/tests/review_queue.rs"
+kind = "feature"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = []
+test_files = ["crates/overwatch/tests/review_queue.rs"]
+client_refs = []
+
+[entries."crates/overwatch/tests/rollout_gate_crates.rs"]
+key = "crates/overwatch/tests/rollout_gate_crates.rs"
+kind = "feature"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = []
+test_files = ["crates/overwatch/tests/rollout_gate_crates.rs"]
+client_refs = []
+
 [entries."crates/overwatch/tests/violation.rs"]
 key = "crates/overwatch/tests/violation.rs"
 kind = "feature"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
 test_files = ["crates/overwatch/tests/violation.rs"]
 client_refs = []
@@ -2763,7 +2926,7 @@ key = "crates/propguard/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/propguard.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/propguard/src/main.rs"]
 test_files = []
 client_refs = []
@@ -2793,7 +2956,7 @@ key = "crates/propguard/tests/integration.rs"
 kind = "feature"
 spec_doc = "docs/specs/propguard.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
 test_files = ["crates/propguard/tests/integration.rs"]
 client_refs = []
@@ -3333,7 +3496,7 @@ key = "crates/specguard/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/specguard.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/specguard/src/main.rs"]
 test_files = []
 client_refs = []
@@ -3363,7 +3526,7 @@ key = "crates/specguard/src/ratify.rs"
 kind = "feature"
 spec_doc = "docs/specs/specguard.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/specguard/src/ratify.rs"]
 test_files = []
 client_refs = []
@@ -3393,7 +3556,7 @@ key = "crates/specguard/src/similarity.rs"
 kind = "feature"
 spec_doc = "docs/specs/specguard.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/specguard/src/similarity.rs"]
 test_files = []
 client_refs = []
@@ -3403,7 +3566,7 @@ key = "crates/specguard/src/specmap.rs"
 kind = "feature"
 spec_doc = "docs/specs/specguard.md"
 status = "tracked"
-last_ref = "a638d9b90e801312a655b12ceec7cb8f16990f44"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/specguard/src/specmap.rs"]
 test_files = []
 client_refs = []
@@ -3453,8 +3616,18 @@ key = "crates/stuckguard/src/config.rs"
 kind = "feature"
 spec_doc = "docs/specs/stuckguard.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/stuckguard/src/config.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/stuckguard/src/detect.rs"]
+key = "crates/stuckguard/src/detect.rs"
+kind = "feature"
+spec_doc = "docs/specs/stuckguard.md"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = ["crates/stuckguard/src/detect.rs"]
 test_files = []
 client_refs = []
 
@@ -3473,7 +3646,7 @@ key = "crates/stuckguard/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/stuckguard.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/stuckguard/src/main.rs"]
 test_files = []
 client_refs = []
@@ -3485,6 +3658,16 @@ spec_doc = "docs/specs/stuckguard.md"
 status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
 impl_files = ["crates/stuckguard/src/model.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/stuckguard/src/sig.rs"]
+key = "crates/stuckguard/src/sig.rs"
+kind = "feature"
+spec_doc = "docs/specs/stuckguard.md"
+status = "tracked"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
+impl_files = ["crates/stuckguard/src/sig.rs"]
 test_files = []
 client_refs = []
 
@@ -3503,7 +3686,7 @@ key = "crates/stuckguard/tests/integration.rs"
 kind = "feature"
 spec_doc = "docs/specs/stuckguard.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
 test_files = ["crates/stuckguard/tests/integration.rs"]
 client_refs = []
@@ -3613,7 +3796,7 @@ key = "crates/tdd/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/tdd.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/tdd/src/main.rs"]
 test_files = []
 client_refs = []
@@ -3633,7 +3816,7 @@ key = "crates/tdd/src/proof.rs"
 kind = "feature"
 spec_doc = "docs/specs/tdd.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/tdd/src/proof.rs"]
 test_files = []
 client_refs = []
@@ -3743,7 +3926,7 @@ key = "crates/trajectoryeval/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/trajectoryeval.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/trajectoryeval/src/main.rs"]
 test_files = []
 client_refs = []
@@ -3763,7 +3946,7 @@ key = "crates/trajectoryeval/src/tier.rs"
 kind = "feature"
 spec_doc = "docs/specs/trajectoryeval.md"
 status = "tracked"
-last_ref = "9eb57c9ec5f4165e7eca9c75218a4da301686680"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = ["crates/trajectoryeval/src/tier.rs"]
 test_files = []
 client_refs = []
@@ -3773,7 +3956,7 @@ key = "crates/trajectoryeval/tests/integration.rs"
 kind = "feature"
 spec_doc = "docs/specs/trajectoryeval.md"
 status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
 test_files = ["crates/trajectoryeval/tests/integration.rs"]
 client_refs = []

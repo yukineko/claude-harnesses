@@ -104,3 +104,20 @@
 - **`oracle` / `checkpoint` / `escalate` / `gatelog` / `lessons` / `pr` / `ci` / `lock` / `install` /
   `status` / `store` / `hooks`** — F→P オラクル判定・可逆スナップショット・非同期エスカレーション・decision
   journal・cross-task 学習 capture・gh PR・CI 連携・per-run ロック直列化・手動インストール・状態表示・入口。
+
+## cross-task 学習の計測と post-execution diff-risk
+
+> **REVIEW-NEEDED**: コードから逆算 (2026-07-10 セッション)。人間レビュー前は正典としない。
+
+- **`learning_signal`** — 「retrieved lesson の注入は本当に replan を減らすか？」を機械計測可能にする
+  **read-only な集計層**。既存の2台帳（`harness_core::retrieval` の run ごとの lessons ヒット有無、
+  `state::load_replan_records` の per-run replan 記録）をいずれも `run_id` キーで join し、
+  `LearningSignal`（lessons-hit 群と miss 群の replan 平均などの対比）を `aggregate`/`compute` で導く。
+  元台帳は書き換えず追加もしない（純粋な read-side）。CLI 入口は `condukt learning-signal`
+  （`Command::LearningSignal` → `learning_signal::compute`）。
+- **`diffrisk_record`** — 実行後（post-execution）に worktree の **実 diff** を blastguard の
+  public-API / 機微パス分類器（`blastguard::diffrisk::classify_diff`）へ通し、High-risk 判定を overwatch
+  violation レジストリへ記録する（finding 4 / WorkItem-A）。狙いは、本番で dead になっていた
+  public-API シグナル（`changes_public_symbol`）に実データ経路を与えること。タスクの実行完了報告時、
+  すなわち `state set --status done` ハンドラ（`main.rs`）から `record_post_execution_diff_risk` として
+  呼ばれる（実 diff が存在するのは実行後のこの時点のため。`schedule` は実行前の計画のみで実 diff を持たない）。

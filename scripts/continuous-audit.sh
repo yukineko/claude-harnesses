@@ -142,9 +142,13 @@ run_ow() {
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "--- DRY RUN: would record (nothing written) ---"
-  for f in "${FINDINGS[@]}"; do
-    echo "  overwatch record-finding  <- ${f}"
-  done
+  # Guard the expansion: under bash 3.2 + `set -u`, "${FINDINGS[@]}" on an empty
+  # array is an "unbound variable" error, so only iterate when non-empty.
+  if [ "${#FINDINGS[@]}" -gt 0 ]; then
+    for f in "${FINDINGS[@]}"; do
+      echo "  overwatch record-finding  <- ${f}"
+    done
+  fi
   echo "  overwatch audit-round record --round ${ROUND} --target ${TARGET} \\"
   echo "    --new-findings ${NEW_FINDINGS} --confirmed ${CONFIRMED} --regression-tests-added ${REGRESSION_TESTS_ADDED}"
   echo
@@ -154,14 +158,18 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 # --- record each CONFIRMED finding into the review-queue findings store ------
-for f in "${FINDINGS[@]}"; do
-  # format: id|severity|summary|file  (severity & file may be empty)
-  IFS='|' read -r fid fsev fsummary ffile <<<"$f"
-  args=(record-finding --finding-id "${fid:-CA-${ROUND}}" --source "continuous-audit" --summary "${fsummary:-confirmed finding}")
-  [ -n "${fsev:-}" ] && args+=(--severity "$fsev")
-  [ -n "${ffile:-}" ] && args+=(--file "$ffile")
-  run_ow "${args[@]}"
-done
+# Guard the expansion: under bash 3.2 + `set -u`, "${FINDINGS[@]}" on an empty
+# array is an "unbound variable" error, so only iterate when non-empty.
+if [ "${#FINDINGS[@]}" -gt 0 ]; then
+  for f in "${FINDINGS[@]}"; do
+    # format: id|severity|summary|file  (severity & file may be empty)
+    IFS='|' read -r fid fsev fsummary ffile <<<"$f"
+    args=(record-finding --finding-id "${fid:-CA-${ROUND}}" --source "continuous-audit" --summary "${fsummary:-confirmed finding}")
+    [ -n "${fsev:-}" ] && args+=(--severity "$fsev")
+    [ -n "${ffile:-}" ] && args+=(--file "$ffile")
+    run_ow "${args[@]}"
+  done
+fi
 
 # --- record the round metrics into the convergence ledger --------------------
 run_ow audit-round record \

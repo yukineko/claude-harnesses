@@ -197,10 +197,22 @@ pub fn decide_from_count(observed_violations: usize, policy: HealthGatePolicy) -
 /// Count how many violation events fall within `[now - window_secs, now]`.
 /// Future events (`ts > now`) and stale events are excluded — same windowing
 /// rule item-B recurrence uses. Pure; `now` is explicit.
-pub fn violations_in_window(events: &[ViolationEvent], now: i64, window_secs: i64) -> usize {
+///
+/// `since` anchors the count to the canary stage's deploy time (Problem-2.2):
+/// when `Some(anchor)`, any event with `ts < anchor` is excluded, so
+/// violations that predate the stage deploy are never misattributed to the
+/// canary. `None` imposes no lower bound (the original behavior — fully
+/// backward-compatible: existing callers pass `None`).
+pub fn violations_in_window(
+    events: &[ViolationEvent],
+    now: i64,
+    window_secs: i64,
+    since: Option<i64>,
+) -> usize {
     events
         .iter()
         .filter(|ev| ev.ts <= now && now - ev.ts <= window_secs)
+        .filter(|ev| since.is_none_or(|anchor| ev.ts >= anchor))
         .count()
 }
 
@@ -210,12 +222,18 @@ pub fn violations_in_window(events: &[ViolationEvent], now: i64, window_secs: i6
 /// it against the policy threshold. `now` is explicit — there is NO
 /// wall-clock read here, matching overwatch's item-B pattern, so the verdict
 /// is reproducible under a seeded/injected time.
+///
+/// `since` (Problem-2.2) is the stage-deploy anchor: when `Some(anchor)`,
+/// only violations at/after `anchor` are counted, so pre-deploy violations
+/// are not blamed on the canary stage. `None` = no lower bound (unchanged
+/// behavior for existing callers).
 pub fn evaluate_health_gate(
     events: &[ViolationEvent],
     now: i64,
     policy: HealthGatePolicy,
+    since: Option<i64>,
 ) -> HealthVerdict {
-    let observed = violations_in_window(events, now, policy.window_secs);
+    let observed = violations_in_window(events, now, policy.window_secs, since);
     decide_from_count(observed, policy)
 }
 
@@ -223,13 +241,29 @@ pub fn evaluate_health_gate(
 /// item-B [`RecurrencePolicy`]) rather than raw events, so isolated one-off
 /// noise doesn't trip a rollback. The gate threshold then applies to the
 /// number of distinct systemic signatures observed in the window.
+///
+/// `since` (Problem-2.2) is the stage-deploy anchor: events with `ts < since`
+/// are dropped BEFORE recurrence detection, so pre-deploy occurrences neither
+/// count toward — nor establish — a systemic signature attributed to the
+/// stage. `None` = no lower bound (unchanged behavior for existing callers).
 pub fn evaluate_health_gate_systemic(
     events: &[ViolationEvent],
     now: i64,
     recurrence: RecurrencePolicy,
     policy: HealthGatePolicy,
+    since: Option<i64>,
 ) -> HealthVerdict {
-    let systemic = detect_recurrence(events, now, recurrence)
+    // Anchor to the stage-deploy time first so pre-deploy events cannot form
+    // (or add to) a systemic signature that would be mis-blamed on the stage.
+    let anchored: Vec<ViolationEvent> = match since {
+        Some(anchor) => events
+            .iter()
+            .filter(|ev| ev.ts >= anchor)
+            .cloned()
+            .collect(),
+        None => events.to_vec(),
+    };
+    let systemic = detect_recurrence(&anchored, now, recurrence)
         .into_iter()
         .filter(|r| r.is_systemic)
         .count();
@@ -487,7 +521,66 @@ mod tests {
             viol("s", "t4", "se4", 5000), // future
         ];
         // now=1000, window=100 → in-window: ts in [900, 1000] → 950, 1000
-        assert_eq!(violations_in_window(&events, 1000, 100), 2);
+        assert_eq!(violations_in_window(&events, 1000, 100, None), 2);
+    }
+
+    #[test]
+    fn violations_in_window_since_excludes_pre_stage_and_counts_post_deploy() {
+        // Problem-2.2: `since` anchors counting to the stage-deploy time.
+        // Deploy happened at ts=940. A violation at ts=930 predates the deploy
+        // (must be EXCLUDED); a violation at ts=940 (== since) and ts=980 are
+        // at/after deploy (must be COUNTED). All three are within the raw
+        // window, so only the `since` anchor distinguishes them.
+        let events = vec![
+            viol("s", "pre", "se-pre", 930),   // pre-stage: ts < since → excluded
+            viol("s", "at", "se-at", 940),     // == since → counted (>= anchor)
+            viol("s", "post", "se-post", 980), // post-deploy → counted
+        ];
+        let since = Some(940);
+        // now=1000, window=900 → all three are within the raw window.
+        assert_eq!(violations_in_window(&events, 1000, 900, None), 3);
+        // With the deploy anchor, the pre-stage event is dropped → 2.
+        assert_eq!(violations_in_window(&events, 1000, 900, since), 2);
+    }
+
+    #[test]
+    fn evaluate_health_gate_since_anchor_excludes_pre_stage_violation() {
+        // End-to-end through the gate: a pre-stage spike that WOULD trip the
+        // gate without anchoring is correctly ignored once `since` anchors to
+        // the deploy time, while a genuine post-deploy spike still rolls back.
+        let policy = HealthGatePolicy {
+            max_violations_in_window: 2,
+            window_secs: 900,
+        };
+        // Three pre-stage violations (ts < 950) plus one post-deploy.
+        let events = vec![
+            viol("s", "t1", "se1", 910),
+            viol("s", "t2", "se2", 920),
+            viol("s", "t3", "se3", 930),
+            viol("s", "t4", "se4", 960), // post-deploy
+        ];
+        // Without anchoring: 4 in window > 2 → Rollback (the misattribution bug).
+        assert_eq!(
+            evaluate_health_gate(&events, 1000, policy, None).decision,
+            GateDecision::Rollback
+        );
+        // Anchored at the deploy time (950): only the ts=960 event counts → 1
+        // ≤ 2 → Proceed. Pre-stage violations are no longer blamed on the stage.
+        let v = evaluate_health_gate(&events, 1000, policy, Some(950));
+        assert_eq!(v.decision, GateDecision::Proceed);
+        assert_eq!(v.observed_violations, 1);
+
+        // A real post-deploy spike (3 events at/after 950) still rolls back.
+        let post_spike = vec![
+            viol("s", "t1", "se1", 910), // pre-stage, excluded by anchor
+            viol("s", "t5", "se5", 950),
+            viol("s", "t6", "se6", 960),
+            viol("s", "t7", "se7", 970),
+        ];
+        assert_eq!(
+            evaluate_health_gate(&post_spike, 1000, policy, Some(950)).decision,
+            GateDecision::Rollback
+        );
     }
 
     #[test]
@@ -497,7 +590,7 @@ mod tests {
             max_violations_in_window: 2,
             window_secs: 900,
         };
-        let v = evaluate_health_gate(&events, 1000, policy);
+        let v = evaluate_health_gate(&events, 1000, policy, None);
         assert_eq!(v.decision, GateDecision::Proceed);
         assert_eq!(v.observed_violations, 1);
     }
@@ -513,7 +606,7 @@ mod tests {
             max_violations_in_window: 2,
             window_secs: 900,
         };
-        let v = evaluate_health_gate(&events, 1000, policy);
+        let v = evaluate_health_gate(&events, 1000, policy, None);
         assert_eq!(v.decision, GateDecision::Rollback);
         assert_eq!(v.observed_violations, 3);
     }
@@ -531,11 +624,11 @@ mod tests {
             window_secs: 900,
         };
         assert_eq!(
-            evaluate_health_gate(&mk(3), 1000, policy).decision,
+            evaluate_health_gate(&mk(3), 1000, policy, None).decision,
             GateDecision::Proceed
         );
         assert_eq!(
-            evaluate_health_gate(&mk(4), 1000, policy).decision,
+            evaluate_health_gate(&mk(4), 1000, policy, None).decision,
             GateDecision::Rollback
         );
     }
@@ -544,8 +637,8 @@ mod tests {
     fn evaluate_health_gate_is_deterministic_under_injected_time() {
         let events = vec![viol("s", "t1", "se1", 900), viol("s", "t2", "se2", 950)];
         let policy = HealthGatePolicy::default();
-        let a = evaluate_health_gate(&events, 1000, policy);
-        let b = evaluate_health_gate(&events, 1000, policy);
+        let a = evaluate_health_gate(&events, 1000, policy, None);
+        let b = evaluate_health_gate(&events, 1000, policy, None);
         assert_eq!(a, b, "gate verdict must be pure/deterministic");
     }
 
@@ -567,7 +660,7 @@ mod tests {
         };
         // No signature is systemic → observed systemic = 0 → Proceed even
         // though threshold is 0 (0 > 0 is false).
-        let v = evaluate_health_gate_systemic(&events, 1000, recurrence, policy);
+        let v = evaluate_health_gate_systemic(&events, 1000, recurrence, policy, None);
         assert_eq!(v.decision, GateDecision::Proceed);
         assert_eq!(v.observed_violations, 0);
     }
@@ -588,7 +681,7 @@ mod tests {
             max_violations_in_window: 0,
             window_secs: 900,
         };
-        let v = evaluate_health_gate_systemic(&events, 1000, recurrence, policy);
+        let v = evaluate_health_gate_systemic(&events, 1000, recurrence, policy, None);
         assert_eq!(v.decision, GateDecision::Rollback);
         assert_eq!(v.observed_violations, 1);
     }

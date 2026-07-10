@@ -152,13 +152,20 @@ enum Command {
         /// Sliding window in seconds (registry mode only).
         #[arg(long, default_value_t = 900)]
         window_secs: i64,
-        /// Count only *systemic* recurring signatures (registry mode) rather
-        /// than raw violations, so isolated one-offs don't trip a rollback.
+        /// Count ONLY *systemic* recurring signatures (registry mode), the
+        /// backward-compatible single-signal path. When omitted, registry mode
+        /// emits BOTH a raw-spike and a systemic verdict and rolls back if
+        /// EITHER fires (Problem-2.1).
         #[arg(long)]
         systemic: bool,
         /// Inject `now` (unix secs) for reproducible registry-mode evaluation.
         #[arg(long)]
         now: Option<i64>,
+        /// Stage-deploy anchor (unix secs): in registry mode, exclude any
+        /// violation with `ts < since` so pre-deploy noise is not attributed
+        /// to the canary stage (Problem-2.2). Omit for no lower bound.
+        #[arg(long)]
+        since: Option<i64>,
     },
     /// Compute a canary rollback plan (what to restore) as JSON, from prior
     /// install state + canary targets passed as inline JSON. Pure data only —
@@ -281,9 +288,16 @@ fn main() -> Result<()> {
             window_secs,
             systemic,
             now,
+            since,
         } => {
-            let rollback =
-                canary_cli::gate(observed_violations, threshold, window_secs, systemic, now)?;
+            let rollback = canary_cli::gate(
+                observed_violations,
+                threshold,
+                window_secs,
+                systemic,
+                now,
+                since,
+            )?;
             if rollback {
                 // Non-zero exit signals "rollback advised" to the shell so it
                 // can branch without parsing JSON, while the JSON verdict is

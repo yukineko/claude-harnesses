@@ -189,12 +189,19 @@ echo ">>> running: rollout-plugins.sh --canary (non-dry-run, temp sandbox) — e
   HOME="$TEST_HOME" "$OW" record-violation --source blastguard --discriminator test-rule --task canary-rollback-test >/dev/null
 )
 
+# Pin the stage-deploy anchor (Problem-2.2 --since) to epoch 1 so the violation
+# recorded above — whose wall-clock ts is far in the future relative to 1 —
+# still falls at/after the anchor and is counted by the gate. Without this pin
+# the auto-captured deploy timestamp would (correctly) be LATER than the
+# just-recorded violation, excluding it as "pre-deploy"; pinning keeps this
+# test exercising the ROLLBACK branch deterministically.
 OUT="$(
   set +e
   OVERWATCH_BIN="$OW" \
   CLAUDE_PLUGIN_CACHE="$TEST_CACHE" \
   CLAUDE_PLUGIN_REGISTRY="$TEST_REGISTRY" \
   HOME="$TEST_HOME" \
+  OVERWATCH_CANARY_SINCE=1 \
   bash "$SCRIPT" --plugin "$PLUGIN_A" --plugin "$PLUGIN_B" --plugin "$PLUGIN_C" \
     --canary --canary-stage-size 2 --canary-threshold 0 --no-rebuild --no-sync 2>&1
   echo "RC=$?"

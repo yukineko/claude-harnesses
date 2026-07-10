@@ -30,18 +30,34 @@
 #   scripts/rollout-plugins.sh --no-rebuild      # copy + registry only, skip rebuild
 #   scripts/rollout-plugins.sh --no-sync         # copy + registry only, skip asset sync
 #
-# CANARY (opt-in — default behavior is UNCHANGED without --canary)
+# CANARY (opt-in for non-gate crates — default behavior is UNCHANGED without
+#         --canary; REQUIRED when the target set includes a GATE crate)
 #   scripts/rollout-plugins.sh --canary                     # staged rollout
 #   scripts/rollout-plugins.sh --canary --canary-stage-size 2
 #   scripts/rollout-plugins.sh --canary --canary-threshold 3
+#   scripts/rollout-plugins.sh --plugin specguard --canary  # gate crate: --canary required
+#   scripts/rollout-plugins.sh --plugin specguard --no-canary  # explicit override (escape hatch)
 #   With --canary, the plugin set is split into ordered STAGES (via
 #   `overwatch canary-plan`). Each stage is copied+repointed, then BETWEEN
 #   stages the item-B violation registry is checked via `overwatch
-#   canary-gate`; if the violation rate spikes past --canary-threshold the
-#   stage is AUTO-ROLLED-BACK (prior version dir re-pointed) and the rollout
-#   halts. Without --canary none of this runs and the script behaves exactly
-#   as it always has. Combine with --dry-run to preview the staged plan +
-#   rollback plan and mutate nothing.
+#   canary-gate`. The gate emits a COMBINED verdict carrying BOTH a raw-spike
+#   AND a systemic (fleet-recurrence) signal and rolls back if EITHER fires
+#   (Problem-2.1); the count is anchored to each stage's deploy time via
+#   --since so pre-deploy violations are not misattributed (Problem-2.2). On a
+#   rollback the just-applied stage is AUTO-ROLLED-BACK (prior version dir
+#   re-pointed) and the rollout halts. Without --canary none of this runs and
+#   the script behaves exactly as it always has for NON-gate crates. Combine
+#   with --dry-run to preview the staged plan + rollback plan and mutate
+#   nothing.
+#
+# GATE CRATES require a canary (Problem-2.3)
+#   The prompt-injection / spec / mutation DEFENSE gates (per docs/GLOSSARY.md:
+#   blastguard, propguard, specguard, stuckguard; also the non-plugin
+#   mutategate) guard the fleet, so rolling one out WITHOUT a canary is an
+#   ERROR. Pass --canary to stage it, or --no-canary to explicitly override.
+#   A rollout with no --plugin filter targets EVERY plugin (which includes gate
+#   crates), so it too requires --canary / --no-canary. Non-gate crates are
+#   unaffected — canary stays optional for them.
 #
 # ENV
 #   CLAUDE_PLUGIN_CACHE     owner-scoped plugin cache root
@@ -72,10 +88,29 @@ CACHE="${CLAUDE_PLUGIN_CACHE:-$HOME/.claude/plugins/cache/yukineko}"
 REGISTRY="${CLAUDE_PLUGIN_REGISTRY:-$HOME/.claude/plugins/installed_plugins.json}"
 MARKETPLACE="$REPO/.claude-plugin/marketplace.json"
 
-usage() { sed -n '2,60p' "$0"; }
+usage() { sed -n '2,80p' "$0"; }
+
+# --- GATE CRATES (Problem-2.3) ----------------------------------------------
+# The prompt-injection / spec / mutation DEFENSE gates, per docs/GLOSSARY.md
+# (the canonical source: crates classified/described as "gate" — blastguard,
+# propguard, specguard, stuckguard — plus the mutation-testing kill-rate gate
+# `mutategate`, which is a non-plugin here but listed for completeness). These
+# guard the fleet itself, so they MUST NOT roll out without a canary: when the
+# target set includes any of them, --canary becomes REQUIRED (omitting it is an
+# ERROR). `--no-canary` is the explicit escape hatch. Non-gate crates are
+# unaffected (canary stays optional).
+GATE_CRATES="blastguard propguard specguard stuckguard mutategate"
+
+is_gate_crate() {
+  local want="$1" g
+  for g in $GATE_CRATES; do
+    [ "$g" = "$want" ] && return 0
+  done
+  return 1
+}
 
 dry=0 force=0 no_rebuild=0 no_sync=0
-canary=0 canary_stage_size=1 canary_threshold=2
+canary=0 canary_stage_size=1 canary_threshold=2 no_canary=0
 declare -a only_plugins=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -86,6 +121,7 @@ while [ $# -gt 0 ]; do
     --no-rebuild) no_rebuild=1; shift ;;
     --no-sync)    no_sync=1; shift ;;
     --canary)     canary=1; shift ;;
+    --no-canary)  no_canary=1; shift ;;
     --canary-stage-size)
                   [ $# -ge 2 ] || { echo "--canary-stage-size requires N" >&2; exit 2; }
                   canary_stage_size="$2"; shift 2 ;;
@@ -130,6 +166,7 @@ echo "cache:       $CACHE"
 echo "registry:    $REGISTRY"
 echo "dry-run:     $([ $dry = 1 ] && echo yes || echo no)   force: $([ $force = 1 ] && echo yes || echo no)   no-rebuild: $([ $no_rebuild = 1 ] && echo yes || echo no)   no-sync: $([ $no_sync = 1 ] && echo yes || echo no)"
 [ "$canary" = 1 ] && echo "canary:      yes   stage-size: $canary_stage_size   threshold: $canary_threshold"
+[ "$no_canary" = 1 ] && echo "canary:      disabled (--no-canary override)"
 [ "${#only_plugins[@]}" -gt 0 ] && echo "plugins:     ${only_plugins[*]}"
 echo
 
@@ -159,6 +196,34 @@ if [ "${#only_plugins[@]}" -gt 0 ]; then
       exit 2
     fi
   done
+fi
+
+# --- Problem-2.3: mandatory --canary when the target set includes a gate crate
+# Determine the effective target set: the explicit --plugin list, or (when none
+# given) every marketplace plugin. If that set contains any GATE crate, refuse
+# to roll it out without a canary — unless --no-canary explicitly overrides.
+# This runs BEFORE any mutation (fail-closed), and --dry-run keeps working (the
+# check only gates the DECISION to require canary; it never itself mutates).
+declare -a target_names=()
+if [ "${#only_plugins[@]}" -gt 0 ]; then
+  target_names=("${only_plugins[@]}")
+else
+  while IFS= read -r _n; do
+    [ -n "$_n" ] && target_names+=("$_n")
+  done <<<"$all_names"
+fi
+declare -a targeted_gates=()
+for _t in ${target_names[@]+"${target_names[@]}"}; do
+  if is_gate_crate "$_t"; then
+    targeted_gates+=("$_t")
+  fi
+done
+if [ "${#targeted_gates[@]}" -gt 0 ] && [ "$canary" != 1 ] && [ "$no_canary" != 1 ]; then
+  echo "ERROR: refusing to roll out gate crate(s) without a canary: ${targeted_gates[*]}" >&2
+  echo "       Gate crates (prompt-injection / spec / mutation defenses) guard the fleet and" >&2
+  echo "       must be staged behind a canary health gate. Re-run with --canary to stage the" >&2
+  echo "       rollout, or --no-canary to explicitly override (escape hatch)." >&2
+  exit 2
 fi
 
 # --- plan: one TSV row per plugin --------------------------------------------
@@ -529,6 +594,23 @@ run_canary() {
     stage_names="$(python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["stages"]['"$s"']["plugins"]))' <<<"$plan_json")"
     echo
     echo "--- stage $s: $stage_names ---"
+    # Problem-2.2: capture the pre-stage DEPLOY timestamp (epoch seconds) BEFORE
+    # this stage is applied, and pass it to the health gate as --since so the
+    # gate only counts violations at/after the deploy. Violations that predate
+    # the stage are no longer misattributed to the canary. Fail-soft: if `date`
+    # is somehow unavailable, leave the anchor empty (gate falls back to no
+    # lower bound — exactly the pre-fix behavior), never crashing the rollout.
+    #
+    # OVERWATCH_CANARY_SINCE (advanced/testing hook): when set, PINS the deploy
+    # anchor to that epoch value instead of the wall clock, so a deterministic
+    # test can control which seeded violations fall at/after the anchor. Unset
+    # in normal operation (the auto-captured wall-clock deploy time is used).
+    local stage_deploy_ts=""
+    if [ -n "${OVERWATCH_CANARY_SINCE:-}" ]; then
+      stage_deploy_ts="$OVERWATCH_CANARY_SINCE"
+    else
+      stage_deploy_ts="$(date +%s 2>/dev/null || true)"
+    fi
     local pn
     # Copy each plugin in the stage, then batch the whole stage's registry
     # update into ONE registry_patch call (finding-17: no per-plugin python3
@@ -559,11 +641,29 @@ run_canary() {
         echo "  [dry-run] gate would PROCEED (no live violations observed)"
       else
         # Real path: consult the item-B violation registry for the cwd project.
+        # The gate (default registry mode) emits a COMBINED verdict carrying
+        # BOTH a raw-spike AND a systemic (fleet-recurrence) sub-verdict and
+        # exits non-zero if EITHER fires (Problem-2.1) — so this single check
+        # already honors both signals; we do NOT pass --systemic (which would
+        # restrict to the single systemic-only path). --since anchors the count
+        # to this stage's deploy time (Problem-2.2). A gate-eval error must not
+        # crash the rollout: canary is observational, so on any non-rollback
+        # failure we treat it as "no spike observed" and PROCEED (fail-soft).
+        local -a gate_args=(canary-gate --threshold "$canary_threshold")
+        [ -n "$stage_deploy_ts" ] && gate_args+=(--since "$stage_deploy_ts")
         local gate_out gate_rc=0
-        gate_out="$("$ow" canary-gate --threshold "$canary_threshold")" || gate_rc=$?
+        gate_out="$("$ow" "${gate_args[@]}")" || gate_rc=$?
         echo "$gate_out" | sed 's/^/  /'
+        # Exit 3 = rollback advised (raw OR systemic). Any OTHER non-zero code
+        # is a gate-eval error (bad args, unreadable store, etc.) — fail-soft:
+        # log and PROCEED rather than aborting the rollout on an observational
+        # check.
+        if [ "$gate_rc" -ne 0 ] && [ "$gate_rc" -ne 3 ]; then
+          echo "  health-gate: eval error (rc=$gate_rc) — treating as no-spike and PROCEEDING (fail-soft)" >&2
+          gate_rc=0
+        fi
         if [ "$gate_rc" -ne 0 ]; then
-          echo "  health-gate: ROLLBACK — violation rate spiked; rolling back stage $s and halting" >&2
+          echo "  health-gate: ROLLBACK — raw-spike or systemic recurrence detected; rolling back stage $s and halting" >&2
           # Re-point the just-applied stage back to its prior version dir.
           # Build the prior/canary JSON for this stage through the SAME
           # json.dumps helper as the main path (finding-3 escaping +

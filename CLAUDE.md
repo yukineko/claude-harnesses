@@ -53,9 +53,20 @@ directory marketplace `yukineko` に対してやる2操作 —(1) `crates/<name>
 python3 scripts/check-plugin-versions.py && python3 scripts/check-version-bumped.py   # 先に version 整合を確認
 scripts/rollout-plugins.sh --plugin <name> --dry-run   # 動作を確認（何も書かない）
 scripts/rollout-plugins.sh --plugin <name>             # 実反映（全 plugin なら無引数）
+
+# GATE クレート（防御ゲート: blastguard / propguard / specguard / stuckguard、
+# 非プラグインの mutategate も含む）は fleet を守るため、canary 無しの反映を
+# **拒否**する（Problem-2.3）。GATE クレートを対象にするときは --canary で段階
+# 反映し、各ステージ間で健全性ゲート（raw-spike または systemic recurrence の
+# いずれかで rollback）を通す。--plugin 無しの全 plugin 反映も GATE を含むため
+# --canary が必須（明示的に外すときのみ --no-canary）。
+scripts/rollout-plugins.sh --plugin specguard --canary --dry-run   # GATE クレート: 段階反映を確認
+scripts/rollout-plugins.sh --plugin specguard --canary             # GATE クレート: canary 経由で反映
 ```
 
 - 冪等（version 不変なら no-op）。`--force` で無変更でも再コピー、`--no-rebuild`/`--no-sync` で段階分け。
+- **GATE クレートは canary 必須**: canary 無しでの反映はエラーで止まる（fleet 防御ゲートを
+  無検証で入れ替えないための安全策）。`--no-canary` は明示的な例外指定としてのみ用いる。
 - **手動 `cp` は禁止**: cache の binary/asset を手で上書きするだけだと **version dir が旧名のまま残り**
   registry も更新されず、`sync-plugin-assets.sh` が version から dir を誤解決して**古い版が配布される**。
 - `/plugin update`（ユーザー UI 操作）は本スクリプトで完全代替できるので、手動 UI 操作は不要。

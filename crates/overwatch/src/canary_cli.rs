@@ -5,11 +5,12 @@
 /// mutation) — it only emits plans and verdicts as data for
 /// `scripts/rollout-plugins.sh` to act on under its explicit opt-in flag.
 use crate::canary::{
-    self, CanaryTarget, GateDecision, HealthGatePolicy, PriorInstallState, StagePlan,
+    self, CanaryTarget, GateDecision, HealthGatePolicy, HealthVerdict, PriorInstallState, StagePlan,
 };
 use crate::store;
 use crate::violation::RecurrencePolicy;
 use anyhow::Result;
+use serde::Serialize;
 
 /// Parse a comma/space-separated plugin list into an ordered Vec, dropping
 /// empty tokens (so trailing commas / stray whitespace are harmless).
@@ -45,6 +46,44 @@ fn print_verdict(verdict: &canary::HealthVerdict) -> Result<bool> {
     Ok(matches!(verdict.decision, GateDecision::Rollback))
 }
 
+/// A combined canary verdict carrying BOTH the raw-spike and the systemic
+/// (fleet-recurrence) signals plus their OR (Problem-2.1). Emitting both lets
+/// `scripts/rollout-plugins.sh` trip the gate if EITHER path fires, instead of
+/// only reacting to a raw spike. `decision` is the OR: `Rollback` iff either
+/// sub-verdict rolls back.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct CombinedVerdict {
+    /// The OR of `raw` and `systemic`: `Rollback` iff either advises rollback.
+    decision: GateDecision,
+    /// The raw-spike sub-verdict (windowed violation count vs threshold).
+    raw: HealthVerdict,
+    /// The systemic-recurrence sub-verdict (distinct systemic signatures vs
+    /// threshold).
+    systemic: HealthVerdict,
+}
+
+impl CombinedVerdict {
+    /// Combine a raw-spike and a systemic verdict into one, ORing their
+    /// decisions (Problem-2.1): the gate trips if EITHER sub-verdict rolls
+    /// back. Pure — no I/O — so the OR contract is unit-testable directly.
+    fn from_parts(raw: HealthVerdict, systemic: HealthVerdict) -> Self {
+        let decision = if raw.should_rollback() || systemic.should_rollback() {
+            GateDecision::Rollback
+        } else {
+            GateDecision::Proceed
+        };
+        CombinedVerdict {
+            decision,
+            raw,
+            systemic,
+        }
+    }
+
+    fn should_rollback(&self) -> bool {
+        matches!(self.decision, GateDecision::Rollback)
+    }
+}
+
 /// Evaluate the canary health gate.
 ///
 /// Two input modes, both deterministic:
@@ -56,6 +95,17 @@ fn print_verdict(verdict: &canary::HealthVerdict) -> Result<bool> {
 ///     `store::now()` but only for *reading recency* — it is still passed
 ///     explicitly into the pure decision function, never read inside it.
 ///
+/// `since` (Problem-2.2) anchors the registry-mode count to the stage-deploy
+/// time: only violations at/after `since` are counted, so pre-deploy noise is
+/// not blamed on the canary stage. `None` = no lower bound (unchanged).
+///
+/// Registry mode emits BOTH a raw-spike and a systemic verdict as a combined
+/// JSON (Problem-2.1) and rolls back if EITHER fires — UNLESS the caller
+/// explicitly requests only the systemic path via `systemic = true` (kept for
+/// backward compatibility with a single-signal caller). The `observed` pure
+/// path is unchanged (single verdict), since the shell only uses it for the
+/// deterministic dry-run.
+///
 /// Returns `Ok(true)` when a rollback is advised.
 pub fn gate(
     observed: Option<usize>,
@@ -63,6 +113,7 @@ pub fn gate(
     window_secs: i64,
     systemic: bool,
     now_override: Option<i64>,
+    since: Option<i64>,
 ) -> Result<bool> {
     let policy = HealthGatePolicy {
         max_violations_in_window: threshold,
@@ -79,17 +130,25 @@ pub fn gate(
     let cwd = std::env::current_dir()?;
     let now = now_override.unwrap_or_else(store::now);
     let events = store::read_violations(&cwd).unwrap_or_default();
-
-    let verdict = if systemic {
-        let recurrence = RecurrencePolicy {
-            window_secs,
-            ..RecurrencePolicy::default()
-        };
-        canary::evaluate_health_gate_systemic(&events, now, recurrence, policy)
-    } else {
-        canary::evaluate_health_gate(&events, now, policy)
+    let recurrence = RecurrencePolicy {
+        window_secs,
+        ..RecurrencePolicy::default()
     };
-    print_verdict(&verdict)
+
+    if systemic {
+        // Backward-compatible single-signal path (systemic only).
+        let verdict =
+            canary::evaluate_health_gate_systemic(&events, now, recurrence, policy, since);
+        return print_verdict(&verdict);
+    }
+
+    // Default registry path (Problem-2.1): compute BOTH signals and OR them so
+    // rollout honors a raw spike OR a fleet-recurrence (systemic) verdict.
+    let raw = canary::evaluate_health_gate(&events, now, policy, since);
+    let sys = canary::evaluate_health_gate_systemic(&events, now, recurrence, policy, since);
+    let combined = CombinedVerdict::from_parts(raw, sys);
+    println!("{}", serde_json::to_string_pretty(&combined)?);
+    Ok(combined.should_rollback())
 }
 
 /// Compute and print a rollback plan as JSON, given prior-install state and
@@ -127,5 +186,51 @@ mod tests {
     #[test]
     fn parse_plugin_list_empty_is_empty() {
         assert!(parse_plugin_list("   ,, ").is_empty());
+    }
+
+    fn verdict(decision: GateDecision, observed: usize) -> HealthVerdict {
+        HealthVerdict {
+            decision,
+            observed_violations: observed,
+            threshold: 2,
+            window_secs: 900,
+        }
+    }
+
+    #[test]
+    fn combined_verdict_proceeds_only_when_both_proceed() {
+        let c = CombinedVerdict::from_parts(
+            verdict(GateDecision::Proceed, 1),
+            verdict(GateDecision::Proceed, 0),
+        );
+        assert_eq!(c.decision, GateDecision::Proceed);
+        assert!(!c.should_rollback());
+    }
+
+    #[test]
+    fn combined_verdict_trips_on_raw_spike_only() {
+        // Problem-2.1: raw spike rolls back even though systemic proceeds.
+        let c = CombinedVerdict::from_parts(
+            verdict(GateDecision::Rollback, 5),
+            verdict(GateDecision::Proceed, 0),
+        );
+        assert_eq!(c.decision, GateDecision::Rollback);
+        assert!(c.should_rollback());
+        assert_eq!(c.raw.decision, GateDecision::Rollback);
+        assert_eq!(c.systemic.decision, GateDecision::Proceed);
+    }
+
+    #[test]
+    fn combined_verdict_trips_on_systemic_only() {
+        // Problem-2.1: fleet-recurrence rolls back even though raw proceeds —
+        // the signal the old rollout path ignored.
+        let c = CombinedVerdict::from_parts(
+            verdict(GateDecision::Proceed, 1),
+            verdict(GateDecision::Rollback, 3),
+        );
+        assert_eq!(c.decision, GateDecision::Rollback);
+        assert!(c.should_rollback());
+        assert_eq!(c.raw.decision, GateDecision::Proceed);
+        assert_eq!(c.systemic.decision, GateDecision::Rollback);
     }
 }

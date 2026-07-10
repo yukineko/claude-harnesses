@@ -47,12 +47,24 @@ fn judge_red(passed: bool) -> Result<()> {
     Ok(())
 }
 
-/// Decide whether a GREEN run is acceptable: a RED proof must exist and the
-/// tests MUST now pass.
-fn judge_green(passed: bool, has_red: bool) -> Result<()> {
+/// Decide whether a RED proof exists — the single canonical definition of the
+/// "no RED proof found" judgment. Shared by [`judge_green`] (the exhaustive
+/// GREEN-run judgment) and by `green()`'s own early check, which MUST run
+/// this same judgment *before* the `strict_separation` identity check (see
+/// the comment at that call site): calling through this one function keeps
+/// the error text and behaviour identical at both call sites instead of two
+/// independently maintained copies of the same bail.
+fn judge_has_red(has_red: bool) -> Result<()> {
     if !has_red {
         bail!("no RED proof found — run `tdd red --task <id>` before implementing.");
     }
+    Ok(())
+}
+
+/// Decide whether a GREEN run is acceptable: a RED proof must exist and the
+/// tests MUST now pass.
+fn judge_green(passed: bool, has_red: bool) -> Result<()> {
+    judge_has_red(has_red)?;
     if !passed {
         bail!(
             "tests still failing — keep implementing until they pass, then run `tdd green` again."
@@ -271,9 +283,11 @@ pub fn green(
     // identity check so the more fundamental precondition is reported first.
     // `strict_separation`'s own job — rejecting a RED proof that *does*
     // exist but has a missing/matching author identity — is unchanged below.
-    if !has_red {
-        bail!("no RED proof found — run `tdd red --task <id>` before implementing.");
-    }
+    //
+    // Delegates to `judge_has_red` (the same judgment `judge_green` applies
+    // later, once `passed` is known) rather than a second hand-rolled bail,
+    // so there is exactly one definition of "no RED proof found".
+    judge_has_red(has_red)?;
     let author = resolve_author(author);
     if cfg.strict_separation {
         let test_author = read_author(root, cfg, task, "red");

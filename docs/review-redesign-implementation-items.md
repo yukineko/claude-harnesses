@@ -64,7 +64,7 @@ Agentic Coding を行う前提に立つと、**人間によるコードレビュ
 | 1 | 機械的 invariant 層 | COVERED（ただし specguard 側に構造的欠陥あり） | `propguard`/`tdd`/`specguard`/`blastguard`。specguard の polarity gate 自体の欠陥は問題1参照。静的 call-graph 解析は依然未カバー。 |
 | 2 | リスクスコアリング | PARTIAL / 一部 IMPLEMENTED-BUT-DISCONNECTED | `blastguard::classify`（破壊的コマンド）と`diffrisk::classify_diff`（公開シンボル/機微パス）は実装済みだが、後者は本番経路で実 diff を渡されたことがなく到達不能。問題3参照。 |
 | 3 | spec 層の段階的トリアージ | PARTIAL | `specguard require_ratification` は 2 値ゲート。問題1の Phase 1（決定論的バックストップ）が段階化への足がかりになる。 |
-| 4 | 事後サンプリング較正 | PARTIAL | `benchkit`/`evalkit` の回帰検知はあるが、「auto-approved 変更の無作為抽出監査」ループそのものは未着手のまま。継続運用の原則の反復レビューは精神的に近いが対象が「gate 自身のコード」であり、item 4 本来の対象（ユーザーの変更）とは異なる点に注意——混同しないこと。 |
+| 4 | 事後サンプリング較正 | COVERED | `crates/benchkit/src/auditsample.rs` に実装済み：auto-gate（blastguard/propguard/specguard/mutategate）のみを通過した変更群から決定論的乱数サンプリングで抽出し、overwatch の violation stream と change_id/task_key で突合する「auto-approved 変更の無作為抽出監査」ループ。監査の見逃しは (a) 新invariant候補提案 と (b) 閾値調整提案（人間のratifyキュー行き・自動適用なし）の2経路にフィードバックされる。継続運用の原則の反復レビューは精神的に近いが対象が「gate 自身のコード」であり、item 4 本来の対象（ユーザーの変更）とは異なる点に注意——混同しないこと。 |
 | 5 | 実行時/blast-radius 検証 | **IMPLEMENTED**（接続に課題あり） | `overwatch::canary`（`b66b3c2`）で実装済み。問題2参照。 |
 | 6 | fleet 相関エラー検知 | **IMPLEMENTED**（接続に課題あり） | `overwatch::violation`（`bc50aef`）で実装済み。問題2参照。 |
 | 7 | 絞り込みエスカレーション | PARTIAL | `condukt gate check` の `Escalate` は機能するが、item 5/6 の出力と統合されていない。問題3の4番（review queue）参照。 |

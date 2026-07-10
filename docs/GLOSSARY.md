@@ -47,7 +47,7 @@
 | flow | always-on | source（compass/backlog）→executor（condukt）を 1 ループで束ねる統合 driver |
 | fugu-router | always-on | 検証実績から cheap-first でモデル選択する per-model ルーター |
 | gauge | always-on | Stop でトークン/コスト/ツール呼び出し/レイテンシをローカル計測する LLMOps テレメトリ |
-| harness-status | manual | HOTL 手動点検の統合ダッシュボード（CLI 専用・hook なし） |
+| harness-status | always-on (実質サイレント) | HOTL 手動点検の統合ダッシュボード（CLI 専用）＋hook binary 欠損時のみ警告する軽量 SessionStart hook 1本（健全時は無出力） |
 | hypothesis | always-on | PDO 仮説のライフサイクル管理（作成・検証・棄却・compass 紐づけ） |
 | overwatch | always-on | project-global 実行台帳＋cross-session 重複ガード（begin 同一 key で live 他 session を skip）＋PDO 進行管理ビュー（各session/backlog/hypothesis/condukt run/compass gap を fail-soft 集約）＋操作(pause/resume/reassign/reap) |
 | playbook | always-on | UserPromptSubmit で関連アトミックノートを予算内でコンテキスト注入する |

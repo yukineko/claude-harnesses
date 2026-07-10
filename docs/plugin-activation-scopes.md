@@ -76,16 +76,16 @@ ALWAYS-ON (25)
   taskprog  —  SessionStart, Stop
   tdd  —  Stop
 
-EVENT-SCOPED (0)
-  (none — every hook-registering plugin now touches an always-on event; beacon/gauge
-   moved to always-on when their Stop hook wiring was corrected)
+EVENT-SCOPED (1)
+  ship  —  SessionEnd
 
-MANUAL (10)
+MANUAL (11)
   backlog  —  skill (/backlog)
+  benchkit  —  CLI only
   curate  —  CLI only
+  daily-report  —  skill (/daily-report)
   deepwiki  —  agent
   evalkit  —  CLI only
-  harness-status  —  CLI only
   replaykit  —  CLI only
   schemaguard  —  CLI only
   scout  —  skill (/scout)
@@ -93,23 +93,35 @@ MANUAL (10)
   trajectoryeval  —  CLI only
 ```
 
-Counts: **always-on 25 · event-scoped 0 · manual 10 · total 35** (the two library
+Counts: **always-on 27 · event-scoped 1 · manual 11 · total 39** (the two library
 crates `harness-core` and `mutategate` are excluded — they have no plugin
-surface).
+surface). This table is illustrative and drifts as plugins are added; regenerate
+it with the commands above rather than trusting the numbers here verbatim.
 
-## Why harness-status stays manual
+Note `harness-status` is now listed under **Always-on** (it registers a
+`SessionStart` hook — see below), not Manual as in earlier revisions of this doc.
 
-`harness-status` is deliberately **Manual / CLI-only**. It would be trivial to add
-a `SessionStart` dashboard hook so the status view auto-injects at the start of
-every session — but that is exactly the wrong move. A `SessionStart` hook is an
-always-on event: it would grow the always-on injection/hook budget that ADR 0001
-and the `harness-status inject` / `harness-status hooks` monitors exist to *curb*.
-Making the very tool that measures the budget also *spend* the budget would be
-self-defeating.
+## Why harness-status registers one narrow SessionStart hook (and nothing louder)
 
-So `harness-status` stays the **unified manual HOTL inspection dashboard**. It is
-read-only, holds no hooks, and is run on demand — by a human, or via its
-`/status` skill — when you actually want to look:
+`harness-status` is still, first and foremost, the **manual HOTL inspection
+dashboard**: `harness-status` / `budget` / `sessions` / `progress` / `hooks` /
+`inject` / `plugins` / `hooks-health` all remain CLI-only, run on demand. It
+deliberately does **not** auto-inject the full dashboard every session — that
+would grow the always-on injection/hook budget that ADR 0001 and the
+`harness-status inject` / `harness-status hooks` monitors exist to *curb*, and
+would make the very tool that measures the budget also spend it.
+
+The one exception is `harness-status session-start` (wired via
+`hooks/hooks.json` on `SessionStart`): a hook-binary health check. It reads
+`~/.claude/settings.json`, and if any registered hook's `command` points at a
+binary that no longer exists on disk (a stale rollout, a pruned cache dir), it
+injects a short `additionalContext` warning. When every hook binary is present
+— the common case — it prints nothing at all, so it costs zero tokens on a
+healthy machine. This crosses the classifier's `SessionStart` line (any
+`SessionStart` hook is always-on by definition, regardless of how often it
+actually emits output), so `harness-status` now appears under **Always-on** in
+the table above — but its actual per-turn cost stays at the silent/no-op end of
+that bucket except when something is already broken and worth surfacing.
 
 - `harness-status` — full dashboard (budget + sessions + progress + hook latency + inject)
 - `harness-status budget` — today's spend
@@ -117,7 +129,6 @@ read-only, holds no hooks, and is run on demand — by a human, or via its
 - `harness-status progress` — current progress file
 - `harness-status hooks` — Stop-hook latency aggregation (budget monitor)
 - `harness-status inject` — UserPromptSubmit injection-size aggregation (budget monitor)
+- `harness-status hooks-health` — hook-binary health check (also run on demand)
+- `harness-status session-start` — the SessionStart hook entrypoint above
 - `harness-status plugins` — this activation-scope classification
-
-Its own activation scope is therefore **Manual**, on purpose, and it appears as
-such in the table above.

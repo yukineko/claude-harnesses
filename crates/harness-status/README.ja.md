@@ -14,15 +14,20 @@ harness の各プラグインはそれぞれ独自の状態ストアを持つ。
   `~/.gauge/store/sessions/` から読む。
 - **進捗ファイル (taskprog)**: カレントディレクトリの `.claude/progress.md` のプレビュー。
 
-**read-only** であり、書き込みは一切せず、他プラグインのストアを集約するだけである。hook も
-API キーも不要で、必要なときに手動で (または `/status` コマンドから) 実行する単一バイナリである。
+**read-only** であり、書き込みは一切せず、他プラグインのストアを集約するだけである。API キーは
+不要で、必要なときに手動で (または `/status` コマンドから) 実行する単一バイナリである。
 
-**活性化スコープ: 手動 (CLI 専用)、これは意図的である。** harness-status は統合された
-手動 human-on-the-loop 検査ダッシュボードである。**hook を一切登録しない** — `SessionStart`
-すら登録しない — のは、毎セッション自動でダッシュボードを注入すれば、まさにこのツール
+**活性化スコープ: 手動 (CLI 専用) ダッシュボード＋狭い可観測性 hook 1本。** harness-status は
+統合された手動 human-on-the-loop 検査ダッシュボードであり、汎用の `SessionStart` ダッシュボード
+hook は登録**しない** — 毎セッション自動でダッシュボード全体を注入すれば、まさにこのツール
 (`hooks` / `inject`) と [ADR 0001](../ctxrot/docs/adr/0001-cross-harness-injection-budget.md)
-が抑えようとしている always-on の注入/hook 予算を膨らませてしまうからである。3 つのスコープの
-分類体系と全プラグインの現在の分類については
+が抑えようとしている always-on の注入/hook 予算を膨らませてしまうからである。唯一の例外として、
+`SessionStart` hook (`hooks/hooks.json`) を 1 本だけ登録し、hook-binary health check
+(`harness-status session-start`) を実行して、登録済み hook の binary がディスク上に無い場合
+**のみ** `additionalContext` を注入する。サイレントに壊れた hook は人間が手動チェックしない限り
+気づけない類のものなので、手動 `/status` 実行任せにせず無条件で表面化させる。健全なとき
+(missing binary が無いとき) は無出力・無注入で完全にサイレントである — fail-soft, ターンを
+壊さない。3 つのスコープの分類体系と全プラグインの現在の分類については
 [`docs/plugin-activation-scopes.md`](../../docs/plugin-activation-scopes.md) を参照。
 
 ## 出力

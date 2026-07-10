@@ -1,7 +1,7 @@
 {
   "name": "harness-status",
-  "version": "0.1.2",
-  "description": "Unified HOTL status dashboard for Claude Code. A /status command runs a bundled Rust binary that aggregates budgetguard's spend ledger, gauge's session records (recent sessions + cost), and taskprog's progress file into one human-on-the-loop view. Subscription-native (binary + command, no API key, no hooks).",
+  "version": "0.1.4",
+  "description": "Unified HOTL status dashboard for Claude Code. A /status command runs a bundled Rust binary that aggregates budgetguard's spend ledger, gauge's session records (recent sessions + cost), and taskprog's progress file into one human-on-the-loop view. Subscription-native (binary + command, no API key). A lightweight SessionStart hook additionally warns (fail-soft, silent when healthy) if a registered hook's binary is missing from disk.",
   "author": { "name": "yukineko" },
   "keywords": ["status", "dashboard", "hotl", "budget", "cost", "rust"]
 }

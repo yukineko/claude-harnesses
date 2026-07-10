@@ -202,7 +202,7 @@ the DAG edges above). Sorted alphabetically.
 | flow | always-on | `SessionStart` hook; `/flow` skill | scout |
 | fugu-router | always-on | `UserPromptSubmit` hook; `/fugu-router` skill; `fugu-router` CLI | condukt, flow |
 | gauge | always-on | `Stop` hook; `gauge` CLI | condukt |
-| harness-status | manual | CLI only; `/status` skill | — (library / inspection dashboard) |
+| harness-status | always-on (silent unless unhealthy) | `SessionStart` hook (hook-binary health check, silent when healthy); CLI only; `/status` skill | — (library / inspection dashboard) |
 | hypothesis | always-on | `SessionStart` hook; `/hypothesis`, `/hypothesis:add` skills; `hypothesis` CLI | flow, condukt |
 | playbook | always-on | `UserPromptSubmit` hook | — (condukt's "playbook" search is fugu-router-mediated, **not** this plugin — see §4) |
 | precommit-audit | always-on | `Stop` hook | — |

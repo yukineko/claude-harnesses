@@ -1,6 +1,7 @@
 mod budget;
 mod display;
 mod hooks;
+mod hooks_health;
 mod inject;
 mod plugins;
 mod progress;
@@ -40,6 +41,11 @@ enum Command {
     Inject,
     /// Classify all plugins by activation scope
     Plugins,
+    /// Check registered hooks in ~/.claude/settings.json for missing binaries
+    HooksHealth,
+    /// SessionStart hook: warn (via additionalContext) only when a registered
+    /// hook binary is missing; silent otherwise. Never breaks the turn.
+    SessionStart,
 }
 
 fn today() -> String {
@@ -216,16 +222,71 @@ fn main() {
                 section("MANUAL", &r.manual);
             }
         }
+        Some(Command::HooksHealth) => {
+            let r = hooks_health::read();
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+            } else if !r.settings_found {
+                println!("[no settings.json found at {}]", r.settings_path);
+            } else if r.missing.is_empty() {
+                println!("[all registered hook binaries present]");
+            } else {
+                for m in &r.missing {
+                    println!(
+                        "⚠ missing hook binary: {} ({}): {}",
+                        m.event, m.binary_path, m.command
+                    );
+                }
+            }
+        }
+        Some(Command::SessionStart) => {
+            harness_core::hook::run_hook(|| {
+                // Read (and discard) stdin only if actually piped, mirroring the
+                // fail-soft, non-blocking pattern other plugins' SessionStart hooks
+                // use; this hook doesn't need the payload, just needs to be a good
+                // citizen w.r.t. stdin handling.
+                let _ = harness_core::hook::read_stdin_if_piped();
+                let r = hooks_health::read();
+                if !r.missing.is_empty() {
+                    let lines: Vec<String> = r
+                        .missing
+                        .iter()
+                        .map(|m| format!("  ⚠ {} ({}): {}", m.event, m.binary_path, m.command))
+                        .collect();
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "additionalContext": format!(
+                                "harness-status: {} 件の登録済みhookのbinaryが見つかりません（rollout未実行の可能性）:\n{}\n`harness-status hooks-health` で詳細確認、`scripts/rollout-plugins.sh` で反映してください。",
+                                r.missing.len(),
+                                lines.join("\n")
+                            )
+                        })
+                    );
+                }
+                // No missing binaries → stay silent (no output at all).
+            });
+        }
         None => {
             let b = budget::read(&today);
             let s = sessions::recent(cli.sessions);
             let p = progress::read(&cwd);
             let h = hooks::read();
             let i = inject::read();
+            let hh = hooks_health::read();
+            let report = display::StatusReport {
+                today: &today,
+                budget: &b,
+                sessions: &s,
+                progress: &p,
+                hooks: &h,
+                inject: &i,
+                hooks_health: &hh,
+            };
             if cli.json {
-                display::print_json(&today, &b, &s, &p, &h, &i);
+                display::print_json(&report);
             } else {
-                display::print_status(&today, &b, &s, &p, &h, &i, &cwd.to_string_lossy());
+                display::print_status(&report, &cwd.to_string_lossy());
             }
         }
     }

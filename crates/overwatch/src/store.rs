@@ -1,5 +1,7 @@
 /// Event store and lease storage backend.
 use crate::event::LifecycleEvent;
+use crate::review_finding::ReviewFinding;
+use crate::rollback::RollbackEvent;
 use crate::violation::ViolationEvent;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -171,6 +173,95 @@ pub fn read_violations(cwd: &Path) -> Result<Vec<ViolationEvent>> {
                 }
             }
             Ok(events)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Path to the rollbacks.jsonl file (append-only, canary rollback events).
+/// Kept as its own stream since a rollback is a distinct signal (a deploy-time
+/// health-gate action) from both the lease lifecycle log and the gate-violation
+/// ledger.
+pub fn rollbacks_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("rollbacks.jsonl"))
+}
+
+/// Append a canary rollback event to rollbacks.jsonl (one JSON line per event).
+/// Fail-soft by contract at the call site: emission must never break a rollout.
+pub fn append_rollback(cwd: &Path, event: &RollbackEvent) -> Result<()> {
+    let path = rollbacks_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string(event)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?
+        .write_all(format!("{}\n", json).as_bytes())?;
+    Ok(())
+}
+
+/// Read all canary rollback events from rollbacks.jsonl. Returns an empty vec
+/// if the file doesn't exist or is empty (fail-soft, same contract as
+/// `read_events` / `read_violations`).
+pub fn read_rollbacks(cwd: &Path) -> Result<Vec<RollbackEvent>> {
+    let path = rollbacks_path(cwd)?;
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => {
+            let mut events = Vec::new();
+            for line in txt.lines() {
+                if !line.is_empty() {
+                    if let Ok(event) = serde_json::from_str::<RollbackEvent>(line) {
+                        events.push(event);
+                    }
+                }
+            }
+            Ok(events)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Path to the review_findings.jsonl file (append-only, AI/adversarial review
+/// findings). Its own stream since a review finding is a distinct signal from
+/// violations/rollbacks; today there is no producer (see `review_finding.rs`),
+/// so this file is normally absent and reads fail-soft to empty.
+pub fn review_findings_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("review_findings.jsonl"))
+}
+
+/// Append an AI-review finding to review_findings.jsonl (one JSON line each).
+pub fn append_review_finding(cwd: &Path, finding: &ReviewFinding) -> Result<()> {
+    let path = review_findings_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string(finding)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?
+        .write_all(format!("{}\n", json).as_bytes())?;
+    Ok(())
+}
+
+/// Read all AI-review findings from review_findings.jsonl. Returns an empty vec
+/// if the file doesn't exist or is empty (fail-soft): with no producer wired
+/// yet, this is the normal case and the review-queue degrades gracefully.
+pub fn read_review_findings(cwd: &Path) -> Result<Vec<ReviewFinding>> {
+    let path = review_findings_path(cwd)?;
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => {
+            let mut findings = Vec::new();
+            for line in txt.lines() {
+                if !line.is_empty() {
+                    if let Ok(f) = serde_json::from_str::<ReviewFinding>(line) {
+                        findings.push(f);
+                    }
+                }
+            }
+            Ok(findings)
         }
         Err(_) => Ok(Vec::new()),
     }

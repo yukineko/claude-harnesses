@@ -4,5 +4,7 @@
 
 pub mod canary;
 pub mod event;
+pub mod review_finding;
+pub mod rollback;
 pub mod store;
 pub mod violation;

@@ -5,6 +5,10 @@ mod control;
 pub mod event;
 mod lease;
 mod render;
+pub mod review_finding;
+mod review_queue;
+pub mod rollback;
+mod rollback_cli;
 pub mod store;
 pub mod violation;
 mod violation_cli;
@@ -183,6 +187,66 @@ enum Command {
         #[arg(long)]
         canary_targets: String,
     },
+    /// Record a canary rollback event to the overwatch-readable rollback log,
+    /// so `review-queue` can surface it. Fail-soft: a store-write error is
+    /// reported but never breaks the caller (the rollout script). Called by
+    /// `scripts/rollout-plugins.sh` when the health gate executes a rollback.
+    RecordRollback {
+        /// The plugin that was rolled back.
+        #[arg(long)]
+        plugin: String,
+        /// The version restored TO (prior version). Omit for a plugin the
+        /// canary newly introduced (nothing to restore).
+        #[arg(long)]
+        from_version: Option<String>,
+        /// The canary version rolled back FROM.
+        #[arg(long)]
+        to_version: String,
+        /// The 0-based canary stage index the rollback halted at.
+        #[arg(long, default_value_t = 0)]
+        stage: usize,
+        /// Why the gate advised the rollback: raw | systemic.
+        #[arg(long, default_value = "raw")]
+        reason: String,
+        /// Optional free-text detail for the audit trail.
+        #[arg(long)]
+        detail: Option<String>,
+    },
+    /// Record an AI/adversarial review finding to the overwatch-readable
+    /// findings store (the defined ingestion point for the future
+    /// Continuous-Audit loop). `review-queue` reads these back.
+    RecordFinding {
+        /// Stable identifier for this finding.
+        #[arg(long)]
+        finding_id: String,
+        /// Which reviewer/tool produced it (e.g. reviewgate, auditmap).
+        #[arg(long)]
+        source: String,
+        /// Severity as reported (high/med/low), optional.
+        #[arg(long)]
+        severity: Option<String>,
+        /// Short human summary of the finding.
+        #[arg(long)]
+        summary: String,
+        /// Primary file the finding concerns, optional.
+        #[arg(long)]
+        file: Option<String>,
+    },
+    /// The unified human review surface: merge systemic gate violations, canary
+    /// rollback events, and AI-review findings into ONE time-ordered list
+    /// (newest-first), each row tagged with its source kind. Fail-soft: a
+    /// missing/empty source contributes nothing rather than erroring; the
+    /// other sources still render.
+    ReviewQueue {
+        #[arg(long)]
+        json: bool,
+        /// Only show entries with `ts >= since` (unix seconds).
+        #[arg(long)]
+        since: Option<i64>,
+        /// Cap the number of rows shown (after newest-first ordering).
+        #[arg(long)]
+        limit: Option<usize>,
+    },
 }
 
 /// Parse a `--source` CLI value into a [`ViolationSource`], erroring clearly
@@ -311,6 +375,41 @@ fn main() -> Result<()> {
             canary_targets,
         } => {
             canary_cli::rollback_plan(stage_index, &prior, &canary_targets)?;
+        }
+        Command::RecordRollback {
+            plugin,
+            from_version,
+            to_version,
+            stage,
+            reason,
+            detail,
+        } => {
+            rollback_cli::record(
+                &plugin,
+                from_version.as_deref(),
+                &to_version,
+                stage,
+                &reason,
+                detail.as_deref(),
+            )?;
+        }
+        Command::RecordFinding {
+            finding_id,
+            source,
+            severity,
+            summary,
+            file,
+        } => {
+            rollback_cli::record_finding(
+                &finding_id,
+                &source,
+                severity.as_deref(),
+                &summary,
+                file.as_deref(),
+            )?;
+        }
+        Command::ReviewQueue { json, since, limit } => {
+            review_queue::run(json, since, limit)?;
         }
     }
     Ok(())

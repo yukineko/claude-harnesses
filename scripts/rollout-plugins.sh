@@ -699,6 +699,22 @@ run_canary() {
             else
               echo "    $pn: newly introduced by canary — nothing to restore (left as-is)" >&2
             fi
+            # Fail-soft: record an observational rollback event so
+            # `overwatch review-queue` can surface it later. This never gates
+            # or alters the rollback itself — a record failure is swallowed
+            # (|| true) so the audit log can NEVER break a rollout. The canary
+            # (from) version this stage moved the plugin to is field 2 of the
+            # plugin's row; `rv` (may be empty for a newly-introduced plugin)
+            # is the prior version we restored to. The gate here counts raw
+            # violations (no --systemic on the canary-gate call), so reason=raw.
+            local canary_ver=""
+            IFS=$'\t' read -r _n canary_ver _rest <<<"${row_by_name[$pn]}"
+            local -a rb_ev_args=(record-rollback --plugin "$pn"
+              --to-version "$canary_ver" --stage "$s" --reason raw)
+            if [ -n "$rv" ]; then
+              rb_ev_args+=(--from-version "$rv")
+            fi
+            "$ow" "${rb_ev_args[@]}" >/dev/null 2>&1 || true
           done
           if [ "${#rb_reg_args[@]}" -gt 0 ]; then
             registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "${rb_reg_args[@]}" | sed 's/^/    /'

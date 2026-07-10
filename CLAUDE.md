@@ -130,6 +130,26 @@ base より**厳密に上がっている**ことを要求し、上がってい�
   swap するのでコードは動くが、正式ロールアウトは `/plugin update` → rebuild → sync-plugin-assets.sh
   の順。
 
+## 人間のレビュー窓口（統合レビューサーフェス）
+
+観測系の3ストリーム — (1) systemic な gate 違反（`overwatch violations --systemic`）、
+(2) canary health-gate のロールバック事象、(3) AI/敵対的レビューの指摘 — は従来別々だった。
+`overwatch review-queue` はこれらを **1本の時系列リスト**（新しい順）にまとめ、各行を
+`[systemic]` / `[rollback]` / `[ai-finding]` のタグで区別して見せる:
+
+```sh
+overwatch review-queue                 # 人間可読の統合リスト（新しい順）
+overwatch review-queue --json          # kind 判別子付きの構造化配列
+overwatch review-queue --since <ts> --limit <n>
+```
+
+- **fail-soft**: いずれかのソースが空/欠落でも他のソースは表示される（コマンド全体はエラーにしない）。
+  これは検証を省くための緩和ではなく、観測系が「ターンを壊さない」という overwatch の不変条件に沿う設計。
+- ロールバック事象は `scripts/rollout-plugins.sh` の canary auto-rollback 時に
+  `overwatch record-rollback` で追記される（fail-soft: 記録失敗はロールアウトを止めない）。
+- AI 指摘の永続ストア（`overwatch record-finding` の取り込み口）は Continuous-Audit ループ（別 backlog）が
+  埋めるまで通常は空で、その場合この行は出ない（graceful degrade）。
+
 ## さらに読む（docs/）
 
 - `docs/GLOSSARY.md` — クレート・用語早見表（**最初に読む**）

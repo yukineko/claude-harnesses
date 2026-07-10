@@ -800,7 +800,7 @@
     {
       "name": "overwatch",
       "description": "Project-global cross-session execution ledger with dedup guard + PDO progress view. Manages claim registry with heartbeat-based liveness and skip-on-duplicate contract for distributed session coordination. SessionStart and Stop hooks surface current run state and progress aggregation (session/backlog/hypothesis/condukt run/compass gap in fail-soft view). Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.8",
+      "version": "0.1.9",
       "category": "observability",
       "keywords": [
         "pdo",

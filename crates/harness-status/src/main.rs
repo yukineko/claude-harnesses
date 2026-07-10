@@ -1,6 +1,7 @@
 mod budget;
 mod display;
 mod hooks;
+mod hooks_health;
 mod inject;
 mod plugins;
 mod progress;
@@ -40,6 +41,8 @@ enum Command {
     Inject,
     /// Classify all plugins by activation scope
     Plugins,
+    /// Check registered hooks in ~/.claude/settings.json for missing binaries
+    HooksHealth,
 }
 
 fn today() -> String {
@@ -216,16 +219,43 @@ fn main() {
                 section("MANUAL", &r.manual);
             }
         }
+        Some(Command::HooksHealth) => {
+            let r = hooks_health::read();
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+            } else if !r.settings_found {
+                println!("[no settings.json found at {}]", r.settings_path);
+            } else if r.missing.is_empty() {
+                println!("[all registered hook binaries present]");
+            } else {
+                for m in &r.missing {
+                    println!(
+                        "⚠ missing hook binary: {} ({}): {}",
+                        m.event, m.binary_path, m.command
+                    );
+                }
+            }
+        }
         None => {
             let b = budget::read(&today);
             let s = sessions::recent(cli.sessions);
             let p = progress::read(&cwd);
             let h = hooks::read();
             let i = inject::read();
+            let hh = hooks_health::read();
+            let report = display::StatusReport {
+                today: &today,
+                budget: &b,
+                sessions: &s,
+                progress: &p,
+                hooks: &h,
+                inject: &i,
+                hooks_health: &hh,
+            };
             if cli.json {
-                display::print_json(&today, &b, &s, &p, &h, &i);
+                display::print_json(&report);
             } else {
-                display::print_status(&today, &b, &s, &p, &h, &i, &cwd.to_string_lossy());
+                display::print_status(&report, &cwd.to_string_lossy());
             }
         }
     }

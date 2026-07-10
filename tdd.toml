@@ -1,5 +1,5 @@
 # tdd config for this repo. `test_cmd` is executed verbatim by `tdd red`/`tdd green`
-# (project must be `tdd trust`ed). Scoped to the overwatch bridge integration test
-# for the finding->backlog bridge task (t3).
-test_cmd = "cargo test -p overwatch --test bridge_to_backlog"
+# (project must be `tdd trust`ed). Scoped to the overwatch crate for the
+# continuous-audit finder!=verifier model-diversity enforcement task (t1).
+test_cmd = "cargo test -p overwatch"
 enabled = true

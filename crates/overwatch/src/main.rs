@@ -305,6 +305,18 @@ enum AuditRoundAction {
         /// How many confirmed findings were converted into regression tests.
         #[arg(long, default_value_t = 0)]
         regression_tests_added: u64,
+        /// The model the FINDER stage used this round (optional). When BOTH
+        /// finder/verifier models are supplied and are the SAME model, the
+        /// `finder != verifier` MUST is violated and a high-severity warning
+        /// finding is recorded into the review queue (fail-soft; the round is
+        /// still recorded and the loop is never broken). Omit both for the
+        /// original, unchecked behavior.
+        #[arg(long)]
+        finder_model: Option<String>,
+        /// The model the VERIFIER stage used this round (optional; see
+        /// `--finder-model`).
+        #[arg(long)]
+        verifier_model: Option<String>,
     },
 }
 
@@ -476,6 +488,8 @@ fn main() -> Result<()> {
                 new_findings,
                 confirmed,
                 regression_tests_added,
+                finder_model,
+                verifier_model,
             } => {
                 audit_round_cli::record(
                     round,
@@ -483,6 +497,8 @@ fn main() -> Result<()> {
                     new_findings,
                     confirmed,
                     regression_tests_added,
+                    finder_model.as_deref(),
+                    verifier_model.as_deref(),
                 )?;
             }
         },

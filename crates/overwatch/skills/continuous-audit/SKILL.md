@@ -77,6 +77,11 @@ finder の各指摘を、**別の (finder とは独立した) `Task` verifier su
   - verifier の Task 起動時に、**finder で記録したモデルと異なるモデルを明示的に指定する**。
     指定後、実際に同じモデルペアになっていないことを確認してから verifier を実行する。
   - 同一モデルペアの実行は防止する（分析品質低下・盲点共有のため）。
+  - **この MUST は prose だけでなくコードで機械強制される**: Step 3 で finder/verifier のモデルを
+    `--finder-model` / `--verifier-model` として渡すと、overwatch が決定論的に `same_model` 判定を行い、
+    **同一モデルなら review-queue に high severity の警告 finding を1件記録する**（finding-id は round-id 由来で
+    冪等）。ハード fail ではなく fail-soft（round は記録され続け、ループは止まらない＝never-break-a-turn）だが、
+    review surface に MUST 違反が可視化される。**必ず両モデルを渡して自己申告を機械検証に晒すこと**。
 - 高リスク指摘は verifier を複数立てて多数決にしてよい。その場合も複数の verifier は異なるモデルを指定する。
 
 CONFIRMED subset を確定し、各件を `finding-id | severity | summary | file` に整形する。**finding-id は
@@ -93,6 +98,7 @@ scripts/continuous-audit.sh --round <round-id> --target <csv> \
   --new-findings <このラウンドで新規に出た件数> \
   --confirmed <CONFIRMED 件数> \
   --regression-tests-added <確定指摘を回帰テスト化した件数> \
+  --finder-model <finder が使ったモデル> --verifier-model <verifier が使ったモデル> \
   --finding '<id>|<severity>|<summary>|<file>'   # CONFIRMED ごとに1回。--finding は繰り返し可
 
 # プレビュー (何も書かない):
@@ -100,6 +106,10 @@ scripts/continuous-audit.sh --round <round-id> --dry-run
 ```
 
 - `--finding` の書式は `id|severity|summary|file` (severity と file は省略可)。CONFIRMED の数だけ繰り返す。
+- `--finder-model` / `--verifier-model` は Step 2 の model diversity MUST の**機械強制**入力。両方渡すと
+  overwatch が `same_model` で決定論判定し、同一なら review-queue に high の警告 finding を冪等記録する
+  (fail-soft・round は記録継続)。両省略時は従来どおりチェックしない（後方互換）が、**MUST を実効化するため
+  常に両モデルを渡すこと**。
 - `--new-findings` / `--confirmed` / `--regression-tests-added` は **round ledger にそのまま記録される件数**。
   `--finding` エントリは review-queue に流す CONFIRMED subset (件数入力とは独立)。
 - スクリプトは各 CONFIRMED を `overwatch record-finding --source continuous-audit …` で review-queue へ、

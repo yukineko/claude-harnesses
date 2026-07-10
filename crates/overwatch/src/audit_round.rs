@@ -115,6 +115,31 @@ pub fn normalize_targets(targets: &[String]) -> Vec<String> {
     seen
 }
 
+/// Canonicalize a model identifier for equality comparison: trim + ASCII
+/// lowercase. Deliberately light-touch (no tier collapsing) so a caller's
+/// exact model string is compared as-given, only normalized for surrounding
+/// whitespace and case.
+fn canonical_model(m: &str) -> String {
+    m.trim().to_ascii_lowercase()
+}
+
+/// True iff `finder` and `verifier` denote the SAME model (canonical compare:
+/// trim + ASCII-lowercase). This is the deterministic enforcement of the
+/// Continuous-Audit `finder != verifier` MUST — the finder and verifier stages
+/// must use different models so generation and verification do not share a
+/// blind spot (mirrors condukt's `verify::same_model` / `resolve_verifier_model`
+/// invariant). Pure and side-effect free.
+pub fn same_model(finder: &str, verifier: &str) -> bool {
+    canonical_model(finder) == canonical_model(verifier)
+}
+
+/// Deterministic finding-id for a finder==verifier model-collision warning,
+/// derived from the round id so re-recording the same round yields the SAME id
+/// (idempotent key). Pure and side-effect free.
+pub fn model_collision_finding_id(round: &str) -> String {
+    format!("audit-round-model-collision-{}", round.trim())
+}
+
 /// Parse a comma/whitespace-separated `--target` value into a normalized crate
 /// list. Accepts both `a,b,c` and `a b c` (and mixtures).
 pub fn parse_targets(raw: &str) -> Vec<String> {
@@ -251,6 +276,32 @@ mod tests {
             tests,
             ts,
         )
+    }
+
+    #[test]
+    fn finder_equals_verifier_is_rejected() {
+        // Same model (any case / whitespace variant) is a MUST violation.
+        assert!(same_model("opus", "opus"));
+        assert!(same_model("claude-3-5-sonnet", "claude-3-5-sonnet"));
+        assert!(same_model("  Opus  ", "opus"));
+        assert!(same_model("CLAUDE-3-5-HAIKU", "claude-3-5-haiku"));
+        // Distinct models pass the diversity requirement.
+        assert!(!same_model("claude-3-5-sonnet", "claude-3-5-opus"));
+        assert!(!same_model("opus", "haiku"));
+        assert!(!same_model("sonnet", "haiku"));
+    }
+
+    #[test]
+    fn model_collision_finding_id_is_derived_from_round() {
+        // Idempotent: same round id => same finding id (trimmed).
+        assert_eq!(
+            model_collision_finding_id("2026W28"),
+            "audit-round-model-collision-2026W28"
+        );
+        assert_eq!(
+            model_collision_finding_id("  2026W28  "),
+            model_collision_finding_id("2026W28")
+        );
     }
 
     #[test]

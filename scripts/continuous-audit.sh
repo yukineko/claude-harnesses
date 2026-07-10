@@ -38,6 +38,12 @@
 # to ingest into the review queue. (They are independent inputs — the human/LLM
 # review that produced them is upstream; this script only records.)
 #
+# --finder-model / --verifier-model (optional) record which model each stage
+# used. When BOTH are given and are the SAME model, overwatch DETERMINISTICALLY
+# enforces the finder!=verifier MUST (model diversity): a high-severity warning
+# finding is recorded into the review queue (fail-soft — the round is still
+# recorded and the loop is never broken). Omit both for the original behavior.
+#
 # --------------------------------------------------------------------------
 # OPT-IN AUTOMATION TEMPLATES (nothing below is installed by this script)
 #
@@ -67,6 +73,8 @@ TARGET="$DEFAULT_TARGETS"
 NEW_FINDINGS=0
 CONFIRMED=0
 REGRESSION_TESTS_ADDED=0
+FINDER_MODEL=""
+VERIFIER_MODEL=""
 DRY_RUN=0
 declare -a FINDINGS=()
 
@@ -84,6 +92,8 @@ while [ $# -gt 0 ]; do
     --new-findings) NEW_FINDINGS="${2:-0}"; shift 2 ;;
     --confirmed) CONFIRMED="${2:-0}"; shift 2 ;;
     --regression-tests-added) REGRESSION_TESTS_ADDED="${2:-0}"; shift 2 ;;
+    --finder-model) FINDER_MODEL="${2:-}"; shift 2 ;;
+    --verifier-model) VERIFIER_MODEL="${2:-}"; shift 2 ;;
     --finding) FINDINGS+=("${2:-}"); shift 2 ;;
     *) echo "unknown arg: $1" >&2; usage 2 ;;
   esac
@@ -150,7 +160,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     done
   fi
   echo "  overwatch audit-round record --round ${ROUND} --target ${TARGET} \\"
-  echo "    --new-findings ${NEW_FINDINGS} --confirmed ${CONFIRMED} --regression-tests-added ${REGRESSION_TESTS_ADDED}"
+  echo "    --new-findings ${NEW_FINDINGS} --confirmed ${CONFIRMED} --regression-tests-added ${REGRESSION_TESTS_ADDED}${FINDER_MODEL:+ --finder-model ${FINDER_MODEL}}${VERIFIER_MODEL:+ --verifier-model ${VERIFIER_MODEL}}"
   echo
   echo "--- current metrics (read-only) ---"
   run_ow audit-metrics
@@ -172,12 +182,19 @@ if [ "${#FINDINGS[@]}" -gt 0 ]; then
 fi
 
 # --- record the round metrics into the convergence ledger --------------------
-run_ow audit-round record \
-  --round "$ROUND" \
-  --target "$TARGET" \
-  --new-findings "$NEW_FINDINGS" \
-  --confirmed "$CONFIRMED" \
-  --regression-tests-added "$REGRESSION_TESTS_ADDED"
+# When both --finder-model and --verifier-model are supplied, they are forwarded
+# so overwatch can DETERMINISTICALLY enforce the finder!=verifier MUST (a same-
+# model pair records a high-severity warning finding; fail-soft, never aborts).
+# Omit both to keep the original, unchecked behavior (backward compatible).
+round_args=(audit-round record
+  --round "$ROUND"
+  --target "$TARGET"
+  --new-findings "$NEW_FINDINGS"
+  --confirmed "$CONFIRMED"
+  --regression-tests-added "$REGRESSION_TESTS_ADDED")
+[ -n "$FINDER_MODEL" ] && round_args+=(--finder-model "$FINDER_MODEL")
+[ -n "$VERIFIER_MODEL" ] && round_args+=(--verifier-model "$VERIFIER_MODEL")
+run_ow "${round_args[@]}"
 
 echo
 echo "--- convergence metrics after this round ---"

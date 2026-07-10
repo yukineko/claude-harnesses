@@ -39,7 +39,14 @@ GATE crates（blastguard/propguard/specguard/stuckguard/mutategate）に 1 ラ�
 - **対象**：GATE crates（`scripts/rollout-plugins.sh` の GATE_CRATES と同期）に限定。
 - **頻度**：gate 関連ファイルの変更時＋定期（`.githooks/pre-push` の advisory、cron 雛形は
   `scripts/continuous-audit.cron.example`）。
-- **モデル多様性（MUST）**：finder と verifier は必ず別モデル（生成と検証の盲点共有を防ぐ）。
+- **モデル多様性（MUST・機械強制）**：finder と verifier は必ず別モデル（生成と検証の盲点共有を防ぐ）。
+  この MUST は prose だけでなく**コードで決定論強制される**：`scripts/continuous-audit.sh`（および
+  `overwatch audit-round record`）に `--finder-model` / `--verifier-model` を渡すと overwatch が純関数
+  `same_model`（trim + ascii-lowercase の canonical 比較）で判定し、**同一モデルなら review-queue に
+  high severity の警告 finding を冪等記録**する（finding-id は round-id 由来）。fail-soft・非 fatal
+  （round は記録され続けループは止まらない＝never-break-a-turn）だが、MUST 違反が review surface に
+  可視化される。condukt の `verify::resolve_verifier_model`（verifier≠worker）と同じ「安全前提を実コード化」
+  の思想。両モデル省略時は従来どおりチェックしない（後方互換）。
 - **決定性への固定化（MUST）**：CONFIRMED は**必ず**その場で回帰テスト化して閉じる。これにより
   次ラウンドの探索は「まだテスト化されていない未知」に絞られ、new-findings は単調非増加に向かう。
 - **収束の監視**：`overwatch audit-metrics` の new-findings 時系列を追う。減らない crate は決定論

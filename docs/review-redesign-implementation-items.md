@@ -316,3 +316,127 @@ severity順に記載する。**このセクションは次の実装セッショ�
   トリアージ）は、doc が指示した既存機構（overwatch registry / condukt verifier-model /
   blastguard RiskAssessment / specguard require_ratification）へ正しく接続されており、
   disconnectedな並行実装にはなっていない（唯一の例外が上記8番の項目D半完成）。
+
+## 再レビュー結果（2026-07-10、コミット範囲 66eb9fb..HEAD — 上記1-17番修正コミットの検証）
+
+上記の修正コミット（deed6d4, 5c4fa53, ac6b256, 197f466, a364c07, aee08ba, 114f1ae, db37289）を
+1件ずつ検証。実際に `cargo test` / シェルスクリプトを実行して再現・反証した。**8/8 finder + 6/6
+verifier 完了、7件がCONFIRMED（PLAUSIBLE/REFUTEDなし）。** 大半（12/17項目）は正しく修正された
+ことを確認したが、4件は「修正が不完全」または「修正自体が新たな退行を生んだ」ことが判明した。
+
+### 最優先 — ゲートが実質バイパスされたまま、または新規退行
+
+1. **【重大】specguard polarityスワップ・バイパスは未クローズ（finding 1の修正が不十分）**
+   `crates/specguard/src/similarity.rs:150` — `POLARITY_AXES`によるper-axis順序トラッキングに
+   変更した`deed6d4`の修正は、同一axis内でのトークン位置スワップしか検知できていない。
+   一時テストを追加し `cargo test -p specguard --bin specguard` で実際に再現・確認した2系統の
+   バイパスが依然として通る:
+   - (a) 動詞は元のクローズ位置に残したまま目的語フレーズだけをallow/denyクローズ間でスワップ
+     → `sim=0.875`, `polarity_preserved=true`, `Verdict::Precedented`（人間レビュー不要のまま
+     自動ratify）
+   - (b) 出現数が各1回のmodal-axisトークン（例: `require`）とauthz-axisトークン（例: `forbid`）
+     を異なるクローズ間でスワップ → `sim=0.909`, `polarity_preserved=true`,
+     `Verdict::Precedented`
+   
+   根本原因は変わらず: `polarity_signature`はbucket/axisの識別と順序を追うだけで、トークンが
+   どのクローズ・目的語を修飾しているかへの束縛が一切ない。finding 1と同じクラスのゲートバイパス
+   が、別の具体的構成で依然として成立する。
+
+2. **【高】specguard の atomic-write修正（finding 7）が新規退行を導入 — 上書き失敗が無音化**
+   `crates/specguard/src/ratify.rs:168` — `write_lock`が`harness_core::store::save_bytes`
+   （`Result`を返さずfail-softに内部エラーを`let _ = ...`で握り潰す）を使うよう変更され、
+   成功判定を`path.exists()`のみに依存するようになった。既存のロックファイルを**再ratify**する
+   （＝一般的なケース）際に`save_bytes`が権限エラー・ディスク満杯等で書き込みに失敗しても、
+   古いファイルがそのまま残っているため`path.exists()`はtrueを返し続け、`write_lock`は
+   成功を報告する。修正前は`std::fs::write(...).with_context(...)?`で実I/Oエラーを上書き時も
+   含めて伝播していたため、これは修正前より悪化した挙動退行。
+
+3. **【高】stuckguard near-repeatエスカレーション（finding 5）はwindow境界を超えると原バグに回帰**
+   `crates/stuckguard/src/detect.rs:117` — `Trip::key`を`same.first()`（現ウィンドウ内で
+   最古の一致イベント）由来に変える修正は、そのアンカーイベントがウィンドウ内に留まっている
+   間だけ安定する。`SessionState::push`（`crates/stuckguard/src/state.rs:53-65`）はウィンドウ
+   （既定`window=12`）が埋まると最古イベントから追い出す。near-repeat系列がwindow長を超えて
+   継続する場合（＝stuckguard本来の検知対象である「長時間スタックしたループ」そのもの）、
+   push毎にアンカーが追い出され、`same.first()`が別sigのイベントへローリングし続けnudge countが
+   毎回1にリセットされる。到達可能な最大nudge count ≈ `window - repeat_threshold + 1`（既定値で
+   10）で、`escalate_after`に到達できないまま長いループの残り全体で検知不能になる。同梱の回帰
+   テストはevictionが起きない5イベントしか push しないため、この境界条件を捕捉していない。
+
+4. **【中】blastguard item D（finding 8）は実際には未修正 — コミット履歴が誤解を招く**
+   `crates/blastguard/src/diffrisk.rs:107` — public-API risk signalが本番で到達不能な問題
+   （condukt側2箇所が空`diff_text`しか渡さない）について、`197f466`はユニットテストと
+   「out of scope」と明記したdocコメントを追加しただけで、本番呼び出し側は無修正のまま。
+   `crates/condukt/src/gate_exec.rs:83-88`と`crates/condukt/src/schedule.rs:285`は現在も
+   両方とも文字通り`""`を渡しており、diffで変更なしを確認済み。コミット一覧だけを見ると
+   finding 8が解決済みに見えるが、実際にはpublic-APIリスクシグナルは本番経路で恒久的に
+   デッドのまま。
+
+### 軽微 — 新規重複・デッドコード（修正自体は正しく機能する）
+
+5. **tdd: `green()`の新規チェックが`judge_green()`内の既存チェックと重複**
+   `crates/tdd/src/proof.rs:274` — finding 9の修正（strict_separation前の`has_red`チェック
+   追加）は正しく機能するが、`judge_green()`（52-55行）内の同一チェックが唯一の本番経路
+   （291行から常に`has_red=true`後にのみ到達）でデッドコード化した。
+
+6. **propguard: `emit_overwatch_violations`が`overwatch::store::append_violation`をインライン
+   再実装**
+   `crates/propguard/src/main.rs:284` — finding 10のI/O削減修正自体は正しいが、
+   `append_violation`の書き込みシーケンスをprivateにインライン複製している。省略された
+   `signature_is_bucketable`ガードは上流の`normalize_signature`が既に保証しているため安全と
+   確認済み（正しさの問題ではなく保守性の問題）。
+
+7. **stuckguard: near-repeatキー導出のfallback節がデッドコード**
+   `crates/stuckguard/src/detect.rs:120` — `.unwrap_or(cur.sig.as_str())`は、`repeat_threshold`
+   が`Config::load`で最小2にクランプされ、かつ`same.len() < repeat_threshold`で早期returnする
+   ため到達不能。挙動リスクはないが、将来の読み手が実在するエッジケースの処理と誤読する
+   おそれがある。
+
+## 再レビュー最優先3件の検証テスト（2026-07-10、コミット未push）
+
+上記の最優先3件（specguard polarityバイパス finding 1、specguard 上書き失敗の無音化 finding 2、
+stuckguard window境界退行 finding 3）について、実際にバグを再現する回帰テストを追加した。いずれも
+`#[ignore = "known bug: ... 参照"]`付き（CIの通常`cargo test`はスキップ、`-- --ignored`で明示実行）。
+`cargo test -- --ignored <test名>`で実行すると**現時点で実際にFAILする**ことを確認済み（つまり
+バグの実在を機械的に証明している）。将来の修正時は、修正後にこれらのテストが緑になったことを
+確認したうえで`#[ignore]`属性を外し、恒久的な回帰テストへ昇格させること。
+
+1. **`crates/specguard/src/similarity.rs`
+   `zzz_adversarial_probe_object_phrase_swap_still_bypasses`**（finding 1(a) — 目的語スワップ）
+   — 動詞（allow/deny）はクローズ内の元位置に残したまま目的語フレーズだけを交換。
+   `sim>=0.85`かつ`polarity_preserved`がまだ`true`を返すこと（=バグ）を検証。実行結果:
+   `!polarity_preserved`のassertで実際にFAIL、バグを再現。
+2. **同ファイル `zzz_adversarial_probe_cross_axis_single_occurrence_swap_still_bypasses`**
+   （finding 1(b) — 異axis単発出現スワップ）— modal軸トークン（`require`）とauthz軸トークン
+   （`forbid`）を、それぞれ全体で1回しか出現しない状態で2クローズ間で交換。各軸のシーケンスは
+   単一要素のまま不変なので検知できない（=バグ）。実行結果: 同様に実際にFAIL。
+   構築時の注意点として、`sign`が`POLARITY_TOKENS`の`approve`バケット（authz軸）に既に
+   マップされているため、文中に迂闊に"sign off"を使うと意図せず追加のauthzトークンが混入し、
+   axisシーケンスが変化して正しく再現できなくなる（最初の試行でこれにより誤ってテストが
+   "ok"になった）。同様の理由で他のpolarity語彙（`POLARITY_TOKENS`の全リスト）を padding 文に
+   混入させないよう注意が必要。
+3. **`crates/specguard/src/ratify.rs`
+   `write_lock_reports_error_when_write_silently_fails`**（finding 2）— ロックパスをあらかじめ
+   ディレクトリで占有しておくと、`save_bytes`内部の`rename(&tmp, path)`が必ず失敗する
+   （既存ディレクトリへのrenameは失敗する）ため、書き込み失敗を決定論的かつクロスプラットフォーム
+   に再現できる。`write_lock`が`Err`を返すべき（望ましい挙動）ところ、実際には`path.exists()`が
+   `true`のまま（ディレクトリが存在しているだけ）なので`Ok`を返してしまう（=バグ）。実行結果:
+   `result.is_err()`のassertで実際にFAIL、バグを再現。
+4. **`crates/stuckguard/src/detect.rs`
+   `near_repeat_escalates_even_past_window_boundary`**（finding 3）— 既定`window=12`,
+   `repeat_threshold=3`に対し`escalate_after=11`（到達可能上限
+   `window - repeat_threshold + 1 = 10`の1つ上）に設定し、30回のnear-repeatループを流す。
+   本来（長時間スタックの検知という主用途では）エスカレーションすべきところ、`same.first()`
+   アンカーがウィンドウから追い出される度にキーがローリングしnudge countが毎回1にリセットされる
+   ため到達しない（=バグ）。実行結果: 実際にFAIL（`last observed count=1`）。
+
+**未テスト化の項目**（finding 4: blastguard item D、finding 5-7: 軽微な重複/デッドコード）—
+item Dはcondukt側2呼び出し箇所（`gate_exec.rs`/`schedule.rs`）が空`diff_text`を渡す実装詳細の
+確認であり、blastguard単体のユニットテストでは再現できず condukt 側の統合テストが必要
+（out of scope として見送り）。finding 5-7は挙動バグではなく重複/デッドコードの指摘のため、
+テストでの「検証」に馴染まない（コードレビューで直接確認済み）。
+
+**副作用として実施した規約対応**: テスト追加はcrateソースへの変更にあたるため、CLAUDE.mdの
+バージョンlockstepルールに従い `specguard` (0.2.18→0.2.19) と `stuckguard` (0.1.9→0.1.10) を
+3ファイル（Cargo.toml / plugin.json / marketplace.json）同時にmicro bumpし、
+`check-plugin-versions.py` / `check-version-bumped.py` の両ゲートがexit 0であることを確認済み。
+`cargo fmt` / `cargo clippy --all-targets` も両crateでクリーン。

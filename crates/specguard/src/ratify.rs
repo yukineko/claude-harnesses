@@ -525,6 +525,47 @@ mod tests {
         assert_eq!(a, b);
     }
 
+    /// Re-review regression (2026-07-10, still open): the atomic-write fix
+    /// (finding 7) switched `write_lock` to `harness_core::store::save_bytes`
+    /// — a `Result`-less, fail-soft writer that swallows internal I/O errors
+    /// — and infers success from `path.exists()` alone. That check only
+    /// detects TOTAL absence, not an overwrite failure: if the lock path is
+    /// already occupied (the common re-ratify case) and the write can never
+    /// land, `path.exists()` stays `true` and `write_lock` reports `Ok` even
+    /// though the new content was never persisted. Reproduced deterministically
+    /// by pre-occupying the lock path with a directory, so the rename inside
+    /// `save_bytes` can never succeed. Pre-fix behavior (`std::fs::write(...)
+    /// .with_context(...)?`) propagated this as a real `Err`. See
+    /// docs/review-redesign-implementation-items.md, re-review finding 2.
+    #[test]
+    #[ignore = "known bug: write_lock reports success when save_bytes silently \
+                fails to overwrite an existing lock path -- see \
+                docs/review-redesign-implementation-items.md re-review finding 2"]
+    fn write_lock_reports_error_when_write_silently_fails() {
+        let dir = std::env::temp_dir().join(format!(
+            "specguard-ratify-write-fail-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Pre-occupy the lock path with a directory: `save_bytes`'s internal
+        // `rename(&tmp, path)` can never succeed against an existing
+        // directory, so the write silently fails while the (directory) path
+        // keeps existing.
+        std::fs::create_dir_all(lock_path(&dir)).unwrap();
+
+        let h = hashes("ah", "dh", "", "");
+        let t = texts("audit body", "decisions body", "", "");
+        let result = write_lock(&dir, &h, &t, "deadbeef", "2026-07-10", "reason");
+
+        assert!(
+            result.is_err(),
+            "write_lock must propagate a write failure instead of reporting success \
+             merely because the (unwritten) target path still exists: got {result:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn lock_round_trips_corpus_with_special_chars() {
         // The corpus is written via toml_str and must survive parsing back even

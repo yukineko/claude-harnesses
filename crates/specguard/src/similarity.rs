@@ -772,6 +772,131 @@ mod tests {
         ));
     }
 
+    /// Re-review regression (2026-07-10, still open, variant a): the
+    /// per-axis ordered signature ([`POLARITY_AXES`]) binds a polarity token
+    /// to its *axis and position within that axis*, but never to the
+    /// clause/object it actually modifies. Swapping only the OBJECT phrases
+    /// between two same-axis clauses — leaving both verbs in their original
+    /// clause positions — inverts which edit is allowed vs denied while
+    /// leaving each axis's token *sequence* unchanged (`[allow, deny]` stays
+    /// `[allow, deny]`; only the surrounding non-polarity words move), so
+    /// `polarity_preserved` still reports `true` and the graded gate still
+    /// auto-ratifies the inversion. See
+    /// docs/review-redesign-implementation-items.md, re-review finding 1(a).
+    #[test]
+    #[ignore = "known bug: polarity guard does not bind a token to the \
+                clause/object it modifies -- see \
+                docs/review-redesign-implementation-items.md re-review finding 1"]
+    fn zzz_adversarial_probe_object_phrase_swap_still_bypasses() {
+        const THRESHOLD: f64 = 0.85;
+
+        let ratified = "when the graded ratification gate carefully evaluates a large \
+                        incoming batch of drifted meta canon template edits during a fully \
+                        gated production release run the deterministic triage logic will \
+                        allow the whitespace change to merge into the pinned meta canon \
+                        corpus without requiring a second explicit human review because \
+                        that particular edit carries no real semantic authority over the \
+                        eventual outcome and the very same triage logic will separately \
+                        deny the substantive rewrite from merging into that same pinned \
+                        meta canon corpus without requiring a second explicit human review \
+                        because that particular rewrite clearly does carry real semantic \
+                        authority over the final audit outcome of the whole release";
+        // Swap ONLY the two (short, same-length) object phrases between the
+        // clauses; both verbs ("allow", "deny") stay exactly where they
+        // were. The now-allowed edit is the substantive rewrite and the
+        // now-denied edit is the whitespace change -- the dangerous
+        // inversion -- yet the per-axis token sequence for the authz axis is
+        // untouched: still `[allow, deny]`.
+        let flipped = ratified
+            .replace(
+                "allow the whitespace change",
+                "allow the substantive rewrite",
+            )
+            .replace("deny the substantive rewrite", "deny the whitespace change");
+        let corpus = vec![ratified.to_string()];
+
+        let sim = best_similarity(&flipped, &corpus);
+        assert!(
+            sim >= THRESHOLD,
+            "expected a high (>= {THRESHOLD}) lexical similarity that WOULD have \
+             auto-ratified, got {sim}"
+        );
+        // Desired: the object-phrase swap must perturb the polarity
+        // signature (it inverts which edit is allowed vs denied) so the gate
+        // routes it to a human. Currently still `true` (the bug).
+        assert!(
+            !polarity_preserved(ratified, &flipped),
+            "the object-phrase swap must perturb the polarity signature even though \
+             each axis's token sequence is unchanged"
+        );
+        assert_eq!(
+            triage(&flipped, &corpus, THRESHOLD),
+            Verdict::Novel,
+            "object-phrase swap must route to a human (Novel) despite similarity {sim}"
+        );
+    }
+
+    /// Re-review regression (2026-07-10, still open, variant b): the
+    /// per-axis signature treats different axes as fully independent (by
+    /// design, so a benign reflow reordering unrelated-axis words compares
+    /// equal). When each of two DIFFERENT axes has only a single occurrence,
+    /// swapping their tokens across two clauses (e.g. a modal-axis `require`
+    /// and an authz-axis `forbid` trade places) changes neither axis's
+    /// *sequence* (each still has exactly one entry, in the same per-axis
+    /// order), so `polarity_preserved` still reports `true` even though the
+    /// swap inverts both clauses' meaning. See
+    /// docs/review-redesign-implementation-items.md, re-review finding 1(b).
+    #[test]
+    #[ignore = "known bug: polarity guard treats axes independently, so a \
+                single-occurrence cross-axis token swap is invisible -- see \
+                docs/review-redesign-implementation-items.md re-review finding 1"]
+    fn zzz_adversarial_probe_cross_axis_single_occurrence_swap_still_bypasses() {
+        const THRESHOLD: f64 = 0.85;
+
+        let ratified = "when the graded ratification gate evaluates a drifted meta canon \
+                        template during a fully gated production release run the policy \
+                        states plainly that a routine formatting change will require a \
+                        second explicit paper record from the release captain before it \
+                        merges into the pinned corpus and separately states that a \
+                        substantive rewrite affecting the audit trail is one the \
+                        automation will forbid from merging without any further delay \
+                        at all under the current threshold for the release";
+        // Swap the modal-axis token "require" (one occurrence in the whole
+        // text) with the authz-axis token "forbid" (also one occurrence)
+        // across the two clauses. Each axis still contributes exactly one
+        // bucket entry -- a single-element sequence is trivially "in the
+        // same order" both before and after -- so neither axis's recorded
+        // sequence changes, even though the swap inverts which clause
+        // demands a paper record vs blocks outright.
+        let flipped = ratified
+            .replace(
+                "will require a second explicit paper record",
+                "will forbid a second explicit paper record",
+            )
+            .replace("will forbid from merging", "will require from merging");
+        let corpus = vec![ratified.to_string()];
+
+        let sim = best_similarity(&flipped, &corpus);
+        assert!(
+            sim >= THRESHOLD,
+            "expected a high (>= {THRESHOLD}) lexical similarity that WOULD have \
+             auto-ratified, got {sim}"
+        );
+        // Desired: a cross-axis swap that inverts both clauses' polarity
+        // must perturb the signature. Currently still `true` (the bug),
+        // because each axis is checked independently and each still holds
+        // exactly one (unchanged-position) entry.
+        assert!(
+            !polarity_preserved(ratified, &flipped),
+            "the cross-axis single-occurrence swap must perturb the polarity signature"
+        );
+        assert_eq!(
+            triage(&flipped, &corpus, THRESHOLD),
+            Verdict::Novel,
+            "cross-axis swap must route to a human (Novel) despite similarity {sim}"
+        );
+    }
+
     /// The full end-to-end regression: a synonym-based inversion embedded in a
     /// realistic-length template (so lexical Jaccard stays high, mirroring the
     /// adversarial probe above) routes to Novel at the shipped default

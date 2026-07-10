@@ -478,6 +478,64 @@ mod tests {
         );
     }
 
+    /// Re-review regression (2026-07-10, still open): the finding-5 fix only
+    /// keeps `Trip::key` stable while its anchor event (`same.first()`)
+    /// remains inside the bounded sliding window (`cfg.window`, default 12 —
+    /// eviction in `SessionState::push`). Once a near-repeat sequence runs
+    /// longer than the window — the primary "stuck loop" scenario stuckguard
+    /// exists to catch — each push evicts the anchor, `same.first()` rolls
+    /// forward to a new event every call, and the nudge count resets to 1
+    /// again, reproducing the original finding-5 bug for the tail of any
+    /// long-running loop. The max nudge count reachable within one window is
+    /// `window - repeat_threshold + 1` (10 at shipped defaults); this test
+    /// sets `escalate_after` one above that ceiling and drives the loop for
+    /// 30 calls (well past the window) to prove escalation still never
+    /// fires. See docs/review-redesign-implementation-items.md, re-review
+    /// finding 3.
+    #[test]
+    #[ignore = "known bug: near-repeat escalation resets once the anchor event \
+                leaves the sliding window -- see \
+                docs/review-redesign-implementation-items.md re-review finding 3"]
+    fn near_repeat_escalates_even_past_window_boundary() {
+        let mut c = cfg();
+        c.similarity_threshold = 0.6;
+        c.repeat_threshold = 3;
+        c.cooldown_events = 0;
+        // One above the max nudge count reachable within a single window
+        // (window - repeat_threshold + 1 = 12 - 3 + 1 = 10): escalation can
+        // only fire here if the key survives window eviction.
+        c.escalate_after = 11;
+
+        let mut st = crate::state::SessionState::default();
+        let mut escalated = false;
+        let mut last_count = 0u32;
+        // 30 calls: well past the default window (12) -- a realistic length
+        // for a genuinely stuck, long-running loop.
+        for i in 0..30u64 {
+            let cmd = format!("cargo test -p stuckguard variant-{i}");
+            let e = ev(i, "Bash", json!({"command": cmd}));
+            let seq = st.push(e, c.window);
+            if let Some(t) = detect(&st.events, &c) {
+                if !st.in_cooldown(&t.key, seq, c.cooldown_events) {
+                    last_count = st.record_nudge(&t.key, seq);
+                    if last_count >= c.escalate_after {
+                        escalated = true;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            escalated,
+            "a near-repeat pattern that persists for 30 calls (well past the \
+             window={} boundary) must eventually escalate; last observed \
+             count={last_count} -- the anchor-eviction regression keeps \
+             resetting the nudge count before escalate_after={} is ever \
+             reached",
+            c.window, c.escalate_after
+        );
+    }
+
     #[test]
     fn distinct_edits_do_not_trip() {
         let w = vec![

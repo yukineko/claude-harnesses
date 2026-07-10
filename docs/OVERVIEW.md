@@ -210,7 +210,7 @@ Rust スキャナーがリポジトリ構造をマップし、`.deepwiki/*.md` �
 - **スキル**: `/deepwiki`
 
 #### harness-status
-HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge のセッション記録 + taskprog の progress.md を 1 画面に集約表示するほか、サブコマンドで観測面を切り出せる。意図的に **CLI 専用（hook なし）・read-only**。
+HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge のセッション記録 + taskprog の progress.md を 1 画面に集約表示するほか、サブコマンドで観測面を切り出せる。意図的に **CLI 専用・read-only**。加えて、登録済み hook の binary がディスク上に無いときだけ警告する軽量な `SessionStart` hook を1本持つ（健全時は無出力・fail-soft）。
 
 | サブコマンド | 表示 |
 |---|---|
@@ -219,9 +219,12 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
 | `progress` | 進捗ファイル（taskprog） |
 | `hooks` | Stop ゲートの遅延集計 |
 | `inject` | UserPromptSubmit 注入サイズ集計 |
+| `hooks-health` | 登録済み hook の binary 欠損チェック |
 | `plugins` | 全プラグインの activation-scope 分類（always-on / event-scoped / manual） |
+| `session-start` | SessionStart hook 本体（hooks-health を実行し、欠損があるときだけ `additionalContext` を注入） |
 
 - **スキル**: `/harness-status:status`（引数なしは budget/sessions/progress を集約）
+- **フック**: SessionStart（`harness-status session-start`；欠損 binary が無ければ無出力）
 
 #### daily
 「1 日 1 回だけ」走らせたいタスクを SessionStart で実行する daily-once ランナー。現状の唯一のタスクはセキュリティ監査（`cargo deny check advisories bans sources licenses`）。所見があれば非ブロッキングで `additionalContext` に注入し、クリーン／cargo-deny 未導入なら沈黙する。同日に既に走っていればスキップ（状態は `~/.daily/state/` に保存）。

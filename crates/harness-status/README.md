@@ -13,15 +13,23 @@ step in:
 - **Progress** (taskprog): the current `.claude/progress.md` preview.
 
 It is **read-only** — it never writes, only aggregates other plugins' stores. No
-hooks, no API key: a single binary you (or a `/status` command) run on demand.
+API key: a single binary you (or a `/status` command) run on demand.
 
-**Activation scope: manual (CLI-only), by design.** harness-status is the unified
-manual human-on-the-loop inspection dashboard. It registers **no hooks** — not
-even a `SessionStart` one — because auto-injecting a dashboard every session would
-grow the always-on injection/hook budget that this very tool (`hooks` / `inject`)
-and [ADR 0001](../ctxrot/docs/adr/0001-cross-harness-injection-budget.md) exist to
-curb. See [`docs/plugin-activation-scopes.md`](../../docs/plugin-activation-scopes.md)
-for the full three-scope taxonomy and the current classification of every plugin.
+**Activation scope: manual (CLI-only) dashboard, plus one narrow observability
+hook.** harness-status is the unified manual human-on-the-loop inspection
+dashboard, and does **not** register a general-purpose `SessionStart` dashboard
+hook — auto-injecting the full dashboard every session would grow the always-on
+injection/hook budget that this very tool (`hooks` / `inject`) and
+[ADR 0001](../ctxrot/docs/adr/0001-cross-harness-injection-budget.md) exist to
+curb. It registers exactly one lightweight exception: a `SessionStart` hook
+(`hooks/hooks.json`) that runs the hooks-binary health check
+(`harness-status session-start`) and injects `additionalContext` **only** when a
+registered hook's binary is missing from disk — a silently-broken hook is the
+kind of thing a human can't notice without checking, so it's surfaced
+unconditionally rather than left to a manual `/status` run. When healthy it is
+silent (no output, no injected context) — fail-soft, never blocks the turn. See
+[`docs/plugin-activation-scopes.md`](../../docs/plugin-activation-scopes.md) for
+the full three-scope taxonomy and the current classification of every plugin.
 
 ## Output
 

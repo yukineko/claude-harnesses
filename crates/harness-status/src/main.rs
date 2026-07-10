@@ -43,6 +43,9 @@ enum Command {
     Plugins,
     /// Check registered hooks in ~/.claude/settings.json for missing binaries
     HooksHealth,
+    /// SessionStart hook: warn (via additionalContext) only when a registered
+    /// hook binary is missing; silent otherwise. Never breaks the turn.
+    SessionStart,
 }
 
 fn today() -> String {
@@ -235,6 +238,34 @@ fn main() {
                     );
                 }
             }
+        }
+        Some(Command::SessionStart) => {
+            harness_core::hook::run_hook(|| {
+                // Read (and discard) stdin only if actually piped, mirroring the
+                // fail-soft, non-blocking pattern other plugins' SessionStart hooks
+                // use; this hook doesn't need the payload, just needs to be a good
+                // citizen w.r.t. stdin handling.
+                let _ = harness_core::hook::read_stdin_if_piped();
+                let r = hooks_health::read();
+                if !r.missing.is_empty() {
+                    let lines: Vec<String> = r
+                        .missing
+                        .iter()
+                        .map(|m| format!("  ⚠ {} ({}): {}", m.event, m.binary_path, m.command))
+                        .collect();
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "additionalContext": format!(
+                                "harness-status: {} 件の登録済みhookのbinaryが見つかりません（rollout未実行の可能性）:\n{}\n`harness-status hooks-health` で詳細確認、`scripts/rollout-plugins.sh` で反映してください。",
+                                r.missing.len(),
+                                lines.join("\n")
+                            )
+                        })
+                    );
+                }
+                // No missing binaries → stay silent (no output at all).
+            });
         }
         None => {
             let b = budget::read(&today);

@@ -76,13 +76,24 @@ pub struct MutationSummary {
     pub success: u64,
     /// A scenario whose harness itself failed. Tracked, excluded from scoring.
     pub failure: u64,
+    /// A scenario whose `summary` value we don't recognise (a forward-compat
+    /// state from a newer `cargo-mutants`, or a record with no `summary` at
+    /// all). Counted toward `viable()` but NOT toward `killed()` — i.e.
+    /// conservatively treated as a surviving mutant — so an unrecognised
+    /// state can never silently vanish from the denominator and inflate the
+    /// apparent kill-rate (CA-mutategate-01). Also surfaced in the gate's
+    /// `reason` text as a warning.
+    pub unknown: u64,
 }
 
 impl MutationSummary {
-    /// Mutants that carry signal about test strength: caught + missed + timeout.
-    /// Unviable mutants (they don't compile) and bookkeeping states are excluded.
+    /// Mutants that carry signal about test strength: caught + missed +
+    /// timeout + unknown. Unviable mutants (they don't compile) and pure
+    /// bookkeeping states (`success`, `failure`) are excluded. `unknown` is
+    /// included here — never dropped — so a summary state this crate doesn't
+    /// recognise still counts against the score instead of vanishing from it.
     pub fn viable(&self) -> u64 {
-        self.caught + self.missed + self.timeout
+        self.caught + self.missed + self.timeout + self.unknown
     }
 
     /// Mutants the tests killed: caught + timeout.
@@ -105,8 +116,11 @@ impl MutationSummary {
 
 /// Count mutant outcomes from raw `outcomes.json` text.
 ///
-/// Baseline scenarios are skipped. Unknown/absent `summary` values are ignored
-/// (forward-compatible with new `cargo-mutants` states).
+/// Baseline scenarios are skipped. Unknown/absent `summary` values are
+/// **tracked, not dropped**: they land in `unknown`, which counts toward the
+/// viable denominator but not toward killed, so a `cargo-mutants` state this
+/// crate doesn't recognise (e.g. a future new state, or a malformed record)
+/// can never silently inflate the apparent kill-rate (CA-mutategate-01).
 pub fn parse_outcomes(json: &str) -> anyhow::Result<MutationSummary> {
     let lab: RawLabOutcome = serde_json::from_str(json)?;
     let mut s = MutationSummary::default();
@@ -121,7 +135,7 @@ pub fn parse_outcomes(json: &str) -> anyhow::Result<MutationSummary> {
             Some("Unviable") => s.unviable += 1,
             Some("Success") => s.success += 1,
             Some("Failure") => s.failure += 1,
-            _ => {}
+            _ => s.unknown += 1,
         }
     }
     Ok(s)
@@ -147,16 +161,45 @@ pub struct GateOutcome {
     pub reason: String,
 }
 
+/// Render `a` and `b` (both percentages, e.g. `79.96`) with the fewest decimal
+/// places (starting at 1, matching the gate's usual `{:.1}%` display) that
+/// still tell them apart. Below-threshold fails are decided on the full-
+/// precision `f64`, but `{:.1}%` rounding can make two genuinely different
+/// values print identically (e.g. `79.96` and `80.0` both round to `80.0`),
+/// which reads as the self-contradictory "80.0% < 80.0%" next to a FAIL
+/// verdict (CA-mutategate-02, display-only — never changes the decision).
+fn distinguishing_pct_pair(a: f64, b: f64) -> (String, String) {
+    for precision in 1..=9 {
+        let sa = format!("{:.precision$}", a, precision = precision);
+        let sb = format!("{:.precision$}", b, precision = precision);
+        if sa != sb {
+            return (sa, sb);
+        }
+    }
+    (format!("{a:.9}"), format!("{b:.9}"))
+}
+
 /// Decide pass/fail for a tally against a minimum kill-rate.
 ///
 /// Fails when there are no viable mutants (nothing was measured) or when the
 /// kill-rate is below `threshold`. The comparison is `>=` with a tiny epsilon so
 /// hitting the threshold exactly passes.
 pub fn evaluate(summary: MutationSummary, threshold: f64) -> GateOutcome {
+    // Surface (never silently drop) any summary states this crate doesn't
+    // recognise — a detectable signal alongside the conservative denominator
+    // treatment in `MutationSummary::viable()` (CA-mutategate-01).
+    let unknown_note = if summary.unknown > 0 {
+        format!(
+            " [warning: {} mutant(s) had an unrecognised summary state — counted as not-killed, not dropped]",
+            summary.unknown
+        )
+    } else {
+        String::new()
+    };
     match summary.kill_rate() {
         None => GateOutcome {
             reason: format!(
-                "no viable mutants produced ({} unviable, {} caught, {} missed, {} timeout) — nothing to score",
+                "no viable mutants produced ({} unviable, {} caught, {} missed, {} timeout){unknown_note} — nothing to score",
                 summary.unviable, summary.caught, summary.missed, summary.timeout
             ),
             kill_rate: None,
@@ -166,20 +209,17 @@ pub fn evaluate(summary: MutationSummary, threshold: f64) -> GateOutcome {
         },
         Some(kr) => {
             let passed = kr + KILL_RATE_EPSILON >= threshold;
+            let (kr_s, th_s) = distinguishing_pct_pair(kr * 100.0, threshold * 100.0);
             let reason = if passed {
                 format!(
-                    "kill-rate {:.1}% >= {:.1}% ({} killed / {} viable; {} missed survived)",
-                    kr * 100.0,
-                    threshold * 100.0,
+                    "kill-rate {kr_s}% >= {th_s}% ({} killed / {} viable; {} missed survived){unknown_note}",
                     summary.killed(),
                     summary.viable(),
                     summary.missed,
                 )
             } else {
                 format!(
-                    "kill-rate {:.1}% < {:.1}% ({} missed mutant(s) survived out of {} viable) — tests too weak",
-                    kr * 100.0,
-                    threshold * 100.0,
+                    "kill-rate {kr_s}% < {th_s}% ({} missed mutant(s) survived out of {} viable) — tests too weak{unknown_note}",
                     summary.missed,
                     summary.viable(),
                 )
@@ -294,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_summary_states_are_ignored() {
+    fn unknown_summary_states_are_tracked_not_dropped() {
         let json = r#"{ "outcomes": [
             { "scenario": { "Mutant": {} }, "summary": "CaughtMutant" },
             { "scenario": { "Mutant": {} }, "summary": "SomeFutureState" },
@@ -302,11 +342,71 @@ mod tests {
         ] }"#;
         let s = parse_outcomes(json).unwrap();
         assert_eq!(s.caught, 1);
-        assert_eq!(s.viable(), 1);
+        // An unrecognised or absent `summary` must be tracked (CA-mutategate-01),
+        // not silently dropped: it still counts toward the viable denominator so
+        // it cannot inflate the apparent kill-rate.
+        assert_eq!(
+            s.unknown, 2,
+            "the unrecognised state and the missing-summary record must both be tracked"
+        );
+        assert_eq!(
+            s.viable(),
+            3,
+            "unknown-summary mutants must count toward viable, not vanish from it"
+        );
+    }
+
+    // ── CA-mutategate-01: an unrecognised `summary` value must not vanish from
+    //    the viable denominator — silently dropping it makes the apparent
+    //    kill-rate read higher than reality (fail-open). ─────────────────────
+    #[test]
+    fn unknown_summary_does_not_inflate_kill_rate() {
+        let json = r#"{ "outcomes": [
+            { "scenario": { "Mutant": {} }, "summary": "CaughtMutant" },
+            { "scenario": { "Mutant": {} }, "summary": "SomeFutureState" }
+        ] }"#;
+        let s = parse_outcomes(json).unwrap();
+        // Old (buggy) behaviour dropped the unknown record entirely, so
+        // viable() == 1 and kill_rate() == Some(1.0) — a falsely perfect score.
+        // The unknown mutant must count toward viable and NOT be counted killed,
+        // so the true (conservative) kill-rate is 1 killed / 2 viable = 0.5.
+        assert_eq!(s.viable(), 2);
+        assert_eq!(
+            s.kill_rate(),
+            Some(0.5),
+            "an unknown-state mutant must not be silently excluded from the \
+             denominator — that would inflate the apparent kill-rate"
+        );
     }
 
     #[test]
     fn malformed_json_is_an_error() {
         assert!(parse_outcomes("not json").is_err());
+    }
+
+    // ── CA-mutategate-02 (display-only): near the threshold, `{:.1}%`
+    //    rounding must never print a self-contradictory line like
+    //    "80.0% < 80.0%" — the decision is correct, only the text must not
+    //    contradict itself. ───────────────────────────────────────────────
+    #[test]
+    fn near_threshold_fail_message_is_not_self_contradictory() {
+        let s = MutationSummary {
+            caught: 7996,
+            missed: 2004,
+            timeout: 0,
+            unviable: 0,
+            success: 0,
+            failure: 0,
+            unknown: 0,
+        };
+        assert_eq!(s.kill_rate(), Some(0.7996));
+        let g = evaluate(s, 0.80);
+        assert!(!g.passed, "0.7996 must fail an 0.80 threshold");
+        assert!(
+            !g.reason.contains("80.0% < 80.0%"),
+            "reason shows identical numbers on both sides of '<', which \
+             contradicts the FAIL decision: {}",
+            g.reason
+        );
     }
 }

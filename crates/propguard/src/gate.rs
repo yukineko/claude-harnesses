@@ -307,16 +307,47 @@ pub fn decide_from_count(
                 Mode::Inject => hash,
                 Mode::Subprocess => String::new(),
             };
+            // Report only the properties that are actually violated (did not
+            // get an explicit PASS verdict) to overwatch's fleet-correlation
+            // signal — reporting every derived property, including ones the
+            // subprocess checker PASSed, would pollute that signal with
+            // non-violations (CA-propguard-01). This only changes which ids
+            // are recorded; the pass/block decision above is untouched.
+            let violated = unsatisfied_prop_ids(props, findings.as_deref());
             Decision::Block {
                 reason,
                 tag: "below-threshold",
                 files,
-                properties: prop_ids,
+                properties: violated,
                 attempts,
                 last_hash,
             }
         }
     }
+}
+
+/// Which property ids are actually violated (did not receive an explicit PASS
+/// verdict), for reporting to overwatch on a below-threshold block. In
+/// subprocess mode `findings` carries the checker's per-property `PROP <id>:
+/// PASS|FAIL` text; only ids that were NOT confirmed PASS on their own
+/// anchored verdict line are considered violated (CA-propguard-01). In inject
+/// mode there is no per-property verdict yet (satisfied is always 0 on the
+/// first pass), so every derived property is still open and all are reported.
+fn unsatisfied_prop_ids(props: &[Property], findings: Option<&str>) -> Vec<&'static str> {
+    let Some(out) = findings else {
+        return props.iter().map(|p| p.id).collect();
+    };
+    let lower = out.to_lowercase();
+    props
+        .iter()
+        .filter(|p| {
+            let id = p.id.to_lowercase();
+            !lower
+                .lines()
+                .any(|line| verdict_for_id(line, &id) == Some(true))
+        })
+        .map(|p| p.id)
+        .collect()
 }
 
 fn allow(tag: &'static str, st: &crate::state::SessionState) -> Decision {
@@ -954,6 +985,48 @@ mod tests {
             already_verified(&st, "HASH_INJECT"),
             "inject mode must trust the same diff after one block"
         );
+    }
+
+    // ── CA-propguard-01 (2026 audit round): a subprocess below-threshold Block
+    //    must report only the UNSATISFIED properties to overwatch, not every
+    //    derived property — PASSed properties polluting the fleet-correlation
+    //    signal is itself a defect distinct from the hash-arming bug above. ────
+    #[test]
+    fn below_threshold_block_reports_only_unsatisfied_properties() {
+        let cfg = Config {
+            mode: Mode::Subprocess,
+            ..Config::default()
+        };
+        let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
+        let outcome = CheckOutcome::Verified {
+            satisfied: 2,
+            findings: Some(
+                "PROP error-path: PASS\n\
+                 PROP output-schema: FAIL — schema changed\n\
+                 PROP determinism: PASS"
+                    .to_string(),
+            ),
+        };
+        let d = decide_from_count(
+            &cfg,
+            outcome,
+            &props,
+            3,
+            vec!["src/x.rs".to_string()],
+            "HASH".to_string(),
+            0,
+            "dc",
+        );
+        match d {
+            Decision::Block { properties, .. } => {
+                assert_eq!(
+                    properties,
+                    vec!["output-schema"],
+                    "PASSed properties must not be recorded as fleet violations"
+                );
+            }
+            Decision::Allow { .. } => panic!("below threshold must block"),
+        }
     }
 
     // ── CA-propguard-02: a property's verdict must be read from its OWN verdict

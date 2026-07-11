@@ -71,7 +71,7 @@ Agentic Coding を行う前提に立つと、**人間によるコードレビュ
 | 8 | AI 網羅的テスト生成 | COVERED | `tdd`（RED→GREEN 暗号学的証明）、`specguard testaudit`。変更なし。 |
 | 9 | mutation testing | COVERED | `mutategate`（`harness-core` 限定で pilot 中、拡大方針は文書化済み）。変更なし。 |
 | 10 | テスト著者と実装者の分離 | PARTIAL | `condukt state verifier-model` はあるが、`tdd` の RED→GREEN は同一 agent 逐次実行のまま。未着手（旧item C）。 |
-| 11 | リスク階層化 e2e 検証 | PARTIAL | `trajectoryeval`/`specguard spec-audit` はあるが visual diff/perceptual hash サンプリングは無し。未着手（旧item F）。 |
+| 11 | リスク階層化 e2e 検証 | COVERED（pixel pHash は範囲外） | tier フレームワーク＋fuzzy-threshold comparator（structured 出力の tolerance 比較→閾値超過のみ needs-human/exit3）は完了（backlog 64a4c9ee）。pixel/screenshot perceptual-hash は本リポジトリに描画 UI が無いため恒久的に out-of-scope（honest stub のまま）。 |
 | 12 | 守備範囲の絞り込み | COVERED | `propguard`/`mutategate` が意図的にスコープ限定。変更なし。 |
 
 ## 実装時の注意（リポジトリ規約）

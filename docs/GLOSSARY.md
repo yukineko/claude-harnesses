@@ -65,7 +65,7 @@
 | taskprog | always-on | `.claude/progress.md` をセッション間で同期し HOTL ハンドオフを支援する |
 | tdd | always-on | Stop でテストなし実装を阻止するテストファースト・ゲート（RED before GREEN） |
 | tracekit | manual | condukt run を span 木として記録・描画し OTel GenAI-semconv JSON を export するトレーサ |
-| trajectoryeval | manual | worker が辿った tool-call 経路を期待軌跡と照合する trajectory-match verifier |
+| trajectoryeval | manual | worker が辿った tool-call 経路を期待軌跡と照合する trajectory-match verifier。`tier` サブコマンドはリスク階層化 e2e 検証（core allowlist に載る core フローは毎回 structured-data/fuzzy diff、非 core は existence/seeded sampling）を持ち、fuzzy 閾値超過ドリフトは needs-human（exit3）にエスカレートする |
 
 ## 非プラグイン
 

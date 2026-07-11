@@ -194,8 +194,21 @@ fn redirect_targets(seg: &str) -> Vec<String> {
         if c == b'>' && !in_s && !in_d {
             let prev = if i > 0 { bytes[i - 1] } else { 0 };
             let next = *bytes.get(i + 1).unwrap_or(&0);
-            // Skip append `>>`, fd dup forms, and stderr/&> forms.
-            if next == b'>' || prev == b'>' || prev == b'&' || prev.is_ascii_digit() || next == b'&'
+            // An explicit-fd redirect whose fd is NOT stdout (`2>file`, `11>file`)
+            // is allowed; fd 1 (`1>file`) truncates stdout identically to bare
+            // `>file` and must be treated as a real truncating redirect. Read the
+            // WHOLE digit run before `>` (not just one byte) so multi-digit fds
+            // like `11>`/`21>` — which merely END in 1 — stay allowed. (`1>&2` is
+            // still skipped below by the `next == b'&'` fd-dup clause.)
+            let explicit_nonstdout_fd = prev.is_ascii_digit() && {
+                let mut s = i - 1;
+                while s > 0 && bytes[s - 1].is_ascii_digit() {
+                    s -= 1;
+                }
+                &bytes[s..i] != b"1"
+            };
+            // Skip append `>>`, fd dup forms, and stderr/other-fd forms.
+            if next == b'>' || prev == b'>' || prev == b'&' || explicit_nonstdout_fd || next == b'&'
             {
                 i += 1;
                 continue;
@@ -382,6 +395,7 @@ fn analyze_segment(seg: &str, depth: usize) -> Decision {
         "rm" => analyze_rm(rest),
         "git" => analyze_git(rest),
         "find" => analyze_find(rest),
+        "xargs" => analyze_xargs(rest, depth),
         "truncate" => Decision::deny("truncate can shrink a file to zero bytes"),
         "shred" => Decision::deny("shred destroys file contents irreversibly"),
         "dd" => {
@@ -443,7 +457,7 @@ fn analyze_rm(rest: &[&str]) -> Decision {
         .filter(|t| !t.starts_with('-'))
         .copied()
         .collect();
-    let wildcard = operands.iter().any(|o| o.contains('*'));
+    let wildcard = operands.iter().any(|o| has_glob_meta(o));
 
     if !recursive && !wildcard {
         // Single, non-recursive rm of named files — below the destructive bar.
@@ -528,6 +542,81 @@ fn analyze_find(rest: &[&str]) -> Decision {
         }
     }
     Decision::Allow
+}
+
+/// `xargs` runs a command assembled from its trailing args (after xargs's own
+/// option flags), appending the piped items. Without this branch a destructive
+/// payload (`find … | xargs rm -rf`, `xargs -I{} sh -c "rm -rf {}"`) fell through
+/// to the catch-all Allow arm. Re-analyse the inner command through `detect_bash`
+/// so it reuses the rm / shell-`-c` / find logic (and the recursion bound).
+fn analyze_xargs(rest: &[&str], depth: usize) -> Decision {
+    if depth >= MAX_SHELL_DEPTH {
+        return Decision::Allow;
+    }
+    match xargs_command_start(rest) {
+        Some(start) => {
+            let inner = rest[start..].join(" ");
+            if inner.trim().is_empty() {
+                Decision::Allow
+            } else {
+                detect_bash(&inner, depth + 1)
+            }
+        }
+        None => Decision::Allow,
+    }
+}
+
+/// Index in `rest` of the command word xargs will execute, skipping xargs's own
+/// option flags (and the separate-token value of a value-taking short flag).
+/// `--` ends option parsing. Returns None when no command word follows (xargs
+/// with only flags just echoes its input — nothing destructive to re-analyse).
+fn xargs_command_start(rest: &[&str]) -> Option<usize> {
+    // Value-taking xargs short flags whose value is the NEXT token when the flag
+    // is given standalone (`-I {}`, `-n 1`, BSD `-J %`). Bundled forms (`-I{}`,
+    // `-n1`, `-J%`) embed the value and consume only themselves. Covers both GNU
+    // (I i n L P s d E a) and BSD/macOS (J R S) — the default xargs on this host —
+    // because a MISSED value flag would misread its value as the command word and
+    // leak a destructive payload (`xargs -J % rm -rf %`) past re-analysis.
+    const VALUE_SHORT: &str = "IinLPsdEaJRS";
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        if t == "--" {
+            return if i + 1 < rest.len() {
+                Some(i + 1)
+            } else {
+                None
+            };
+        }
+        if let Some(stripped) = t.strip_prefix("--") {
+            // Long flag: value-taking ones consume the next token unless `=`-joined.
+            let takes = matches!(
+                stripped.split('=').next().unwrap_or(""),
+                "max-args"
+                    | "max-lines"
+                    | "max-procs"
+                    | "max-chars"
+                    | "delimiter"
+                    | "eof"
+                    | "arg-file"
+                    | "replace"
+                    | "process-slot-var"
+            );
+            i += if takes && !t.contains('=') { 2 } else { 1 };
+            continue;
+        }
+        if t.starts_with('-') && t.len() >= 2 {
+            // Short flag (bundle). A standalone value-taking flag (`-I`, `-n`)
+            // consumes the next token; a bundle that embeds the value (`-I{}`,
+            // `-n1`) or a boolean bundle (`-0rt`) consumes only itself.
+            let last = t.chars().last().unwrap();
+            let standalone_value = t.len() == 2 && VALUE_SHORT.contains(last);
+            i += if standalone_value { 2 } else { 1 };
+            continue;
+        }
+        return Some(i); // first non-flag token = the command word
+    }
+    None
 }
 
 #[cfg(test)]
@@ -744,6 +833,57 @@ mod tests {
         assert!(bash("rm *.lock").is_deny());
         // Control: a single literal config file stays exempt.
         assert_eq!(bash("rm Cargo.toml"), Decision::Allow);
+    }
+
+    // ---- Regression: round-2026W28 CONFIRMED fail-opens (CA-blastguard-01/02/03) ----
+    #[test]
+    fn explicit_stdout_fd_truncating_redirect_is_denied() {
+        // CA-blastguard-03: `1>file` is an explicit stdout truncating redirect,
+        // semantically identical to bare `>file` (denied) — must also be denied.
+        // Only stderr (`2>file`) and fd-dup (`2>&1`, `1>&2`) forms stay allowed.
+        assert!(bash("echo x 1> existing").is_deny());
+        assert!(bash("cat a 1>b.txt").is_deny());
+        // No regression: stderr redirect and fd-dup forms stay allowed.
+        assert_eq!(bash("cargo build 2> err.log"), Decision::Allow);
+        assert_eq!(bash("cargo test 2>&1"), Decision::Allow);
+        assert_eq!(bash("run 1>&2"), Decision::Allow);
+        // Multi-digit explicit fds are NOT stdout — only the fd number `1`
+        // truncates stdout. `11>`, `21>` (end in 1 but aren't fd 1) stay allowed;
+        // guards against reading just the single byte before `>`.
+        assert_eq!(bash("echo hi 11> file.txt"), Decision::Allow);
+        assert_eq!(bash("echo hi 21> out.txt"), Decision::Allow);
+        assert_eq!(bash("echo hi 10> out.txt"), Decision::Allow);
+    }
+
+    #[test]
+    fn rm_question_and_bracket_globs_are_denied() {
+        // CA-blastguard-02b: `?` and `[` globs expand to many files like `*` does,
+        // but the main wildcard check only looked for `*` (has_glob_meta existed,
+        // unused). They must be denied.
+        assert!(bash("rm ?.txt").is_deny());
+        assert!(bash("rm [0-9].txt").is_deny());
+        assert!(bash("rm file?").is_deny());
+        // Control: a literal filename (no glob metachar) stays allowed.
+        assert_eq!(bash("rm notes.txt"), Decision::Allow);
+    }
+
+    #[test]
+    fn xargs_destructive_payload_is_denied() {
+        // CA-blastguard-01: xargs runs a command assembled from its trailing args;
+        // a destructive payload was passed straight through (no xargs branch).
+        assert!(bash("find . | xargs rm -rf").is_deny());
+        assert!(bash("find . -type f | xargs -I{} sh -c \"rm -rf {}\"").is_deny());
+        assert!(bash("ls | xargs -n1 rm -rf").is_deny());
+        // BSD/macOS xargs `-J <replstr>` is value-taking too; its value token must
+        // not be mistaken for the command word (would leak the payload past re-analysis).
+        assert!(bash("find . | xargs -J % rm -rf %").is_deny());
+        assert!(bash("find . -type f | xargs -J % sh -c \"rm -rf %\"").is_deny());
+        // Controls: benign xargs payloads stay allowed (no false positive).
+        assert_eq!(
+            bash("find . -name '*.rs' | xargs grep todo"),
+            Decision::Allow
+        );
+        assert_eq!(bash("ls | xargs -n1 echo"), Decision::Allow);
     }
 
     // ---- File operations ----

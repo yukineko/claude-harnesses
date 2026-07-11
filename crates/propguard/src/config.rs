@@ -318,6 +318,12 @@ impl Config {
         if self.max_attempts == 0 {
             self.max_attempts = 1;
         }
+        if self.reset_after_secs <= 0 {
+            // A zero/negative reset window disables the idle-gap give-up
+            // reset, so a block loop could never be escaped that way. Floor
+            // it to the built-in default (CA-propguard-02).
+            self.reset_after_secs = Config::default().reset_after_secs;
+        }
         if self.min_changed_files == 0 {
             self.min_changed_files = 1;
         }
@@ -381,5 +387,36 @@ mod tests {
         };
         cfg.sanitize();
         assert!(cfg.min_properties <= cfg.max_properties);
+    }
+
+    // ── CA-propguard-02: a non-positive reset_after_secs must not survive
+    //    sanitize — it disables the give-up/reset escape hatch, so a block
+    //    loop could never be escaped by an idle gap. ─────────────────────────
+    #[test]
+    fn zero_reset_after_secs_falls_back_to_default() {
+        let mut cfg = Config {
+            reset_after_secs: 0,
+            ..Config::default()
+        };
+        cfg.sanitize();
+        assert_eq!(
+            cfg.reset_after_secs,
+            Config::default().reset_after_secs,
+            "a zero reset_after_secs must be floored to a sane default, not left disabling the reset"
+        );
+    }
+
+    #[test]
+    fn negative_reset_after_secs_falls_back_to_default() {
+        let mut cfg = Config {
+            reset_after_secs: -1,
+            ..Config::default()
+        };
+        cfg.sanitize();
+        assert_eq!(
+            cfg.reset_after_secs,
+            Config::default().reset_after_secs,
+            "a negative reset_after_secs must be floored to a sane default"
+        );
     }
 }

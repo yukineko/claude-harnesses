@@ -373,6 +373,87 @@ fn tier_core_flow_screenshot_stub_is_needs_human_not_silently_red() {
     );
 }
 
+/// Absolute path to the crate's committed fuzzy-hash example tier config
+/// (`diff_strategy: fuzzy_hash`, `threshold_permille: 250`, core: `["checkout"]`).
+fn example_tier_config_fuzzy() -> String {
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/tier-config-fuzzy.json"
+    )
+    .to_string()
+}
+
+#[test]
+fn tier_fuzzy_core_flow_drift_over_threshold_exits_three_needs_human() {
+    // 4 leaves, 2 differ → distance 500 permille, over the config's 250 threshold.
+    // This is the key fix under test: without wiring `fuzzy_diff` with the
+    // config's real threshold, a FuzzyHash strategy would route through
+    // `diff_snapshot`'s threshold-0 fallback and hard-fail (exit 1) instead.
+    let dir = unique_dir();
+    let baseline = dir.join("baseline.json");
+    let snapshot = dir.join("snapshot.json");
+    std::fs::write(&baseline, r#"{"a": 1, "b": 2, "c": 3, "d": 4}"#).unwrap();
+    std::fs::write(&snapshot, r#"{"a": 10, "b": 20, "c": 3, "d": 4}"#).unwrap();
+
+    let (code, stdout) = run(&[
+        "tier",
+        "--config",
+        &example_tier_config_fuzzy(),
+        "--flow",
+        "checkout",
+        "--baseline",
+        baseline.to_str().unwrap(),
+        "--snapshot",
+        snapshot.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        code, 3,
+        "drift beyond the configured threshold must exit 3 (needs-human), \
+         not 1 (hard fail), got stdout: {stdout}"
+    );
+    assert_ne!(code, 1, "must not masquerade as a real diff failure");
+    assert!(
+        stdout.to_lowercase().contains("needs human") || stdout.to_lowercase().contains("drift"),
+        "expected the report to mention needs-human/drift, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("result: needs-human"),
+        "expected the result line to say needs-human, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("MISMATCH"),
+        "drift-beyond-threshold must be distinguishable from an exact MISMATCH, got: {stdout}"
+    );
+}
+
+#[test]
+fn tier_fuzzy_core_flow_drift_under_threshold_exits_zero_clean_pass() {
+    // 4 leaves, 1 differs → distance 250 permille, exactly at the config's 250
+    // threshold (<=  is tolerated as a match) → clean pass, no human needed.
+    let dir = unique_dir();
+    let baseline = dir.join("baseline.json");
+    let snapshot = dir.join("snapshot.json");
+    std::fs::write(&baseline, r#"{"a": 1, "b": 2, "c": 3, "d": 4}"#).unwrap();
+    std::fs::write(&snapshot, r#"{"a": 10, "b": 2, "c": 3, "d": 4}"#).unwrap();
+
+    let (code, stdout) = run(&[
+        "tier",
+        "--config",
+        &example_tier_config_fuzzy(),
+        "--flow",
+        "checkout",
+        "--baseline",
+        baseline.to_str().unwrap(),
+        "--snapshot",
+        snapshot.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        code, 0,
+        "drift at/under the configured threshold must exit 0 (clean pass), got stdout: {stdout}"
+    );
+    assert!(stdout.contains("result: pass"), "stdout: {stdout}");
+}
+
 #[test]
 fn tier_json_output_reports_verdict_field() {
     let dir = unique_dir();

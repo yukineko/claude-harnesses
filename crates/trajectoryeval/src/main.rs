@@ -26,8 +26,8 @@ use clap::{Parser, Subcommand};
 
 use match_traj::{evaluate, MatchResult, Spec};
 use tier::{
-    diff_snapshot, non_core_decision, DiffOutcome, NonCoreDecision, Tier, TierConfig, TierVerdict,
-    Verdict,
+    diff_snapshot, fuzzy_diff, non_core_decision, DiffOutcome, DiffStrategy, NonCoreDecision, Tier,
+    TierConfig, TierVerdict, Verdict,
 };
 
 #[derive(Parser)]
@@ -276,7 +276,16 @@ fn cmd_tier(args: TierArgs) -> i32 {
                 Ok(v) => v,
                 Err(c) => return c,
             };
-            let diff = diff_snapshot(cfg.diff_strategy, &baseline, &snapshot);
+            // `diff_snapshot`'s FuzzyHash arm has no threshold parameter to
+            // thread through (its signature is fixed), so it can only defer to
+            // `fuzzy_diff` with a hardcoded zero tolerance purely for match
+            // exhaustiveness. A configured `threshold_permille` must go through
+            // `fuzzy_diff` directly here, or it would be silently ignored.
+            let diff = if cfg.diff_strategy == DiffStrategy::FuzzyHash {
+                fuzzy_diff(&baseline, &snapshot, cfg.threshold_permille)
+            } else {
+                diff_snapshot(cfg.diff_strategy, &baseline, &snapshot)
+            };
             let verdict = TierVerdict::verdict_for_diff(&diff);
             let code = exit_code_for(verdict);
             (
@@ -344,7 +353,7 @@ fn print_tier_report(v: &TierVerdict) {
                 paths,
             } => {
                 println!(
-                    "  diff: DRIFTED beyond threshold ({}‰) at {}",
+                    "  diff: drift beyond threshold — needs human (distance {}‰ at {})",
                     distance_permille,
                     paths.join(", ")
                 );

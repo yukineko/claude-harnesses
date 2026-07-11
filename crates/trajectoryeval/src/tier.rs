@@ -408,11 +408,15 @@ pub struct TierVerdict {
 impl TierVerdict {
     /// Derive the tri-state [`Verdict`] for a core flow's [`DiffOutcome`].
     ///
-    /// `Stubbed` (an unimplemented diff strategy, e.g. `screenshot`) is
-    /// deliberately **not** `Fail` — see [`Verdict::NeedsHuman`]'s doc comment.
+    /// `Stubbed` (an unimplemented diff strategy, e.g. `screenshot`) and
+    /// `DriftedBeyondThreshold` (a fuzzy-hash core flow whose drift exceeds its
+    /// configured [`TierConfig::threshold_permille`] tolerance) are deliberately
+    /// **not** `Fail` — see [`Verdict::NeedsHuman`]'s doc comment. Both are
+    /// distinct from an exact `Mismatch`, which is a real, actionable deviation.
     pub fn verdict_for_diff(diff: &DiffOutcome) -> Verdict {
         match diff {
             DiffOutcome::Stubbed { .. } => Verdict::NeedsHuman,
+            DiffOutcome::DriftedBeyondThreshold { .. } => Verdict::NeedsHuman,
             _ if diff.is_match() => Verdict::Pass,
             _ => Verdict::Fail,
         }
@@ -758,6 +762,21 @@ mod tests {
         // masquerade as a hard diff failure. It gets its own tri-state verdict.
         let v = TierVerdict::verdict_for_diff(&DiffOutcome::Stubbed {
             strategy: DiffStrategy::Screenshot,
+        });
+        assert_eq!(v, Verdict::NeedsHuman);
+        assert_ne!(v, Verdict::Fail);
+        assert!(!v.is_pass());
+    }
+
+    #[test]
+    fn verdict_for_diff_drifted_beyond_threshold_is_needs_human_not_fail() {
+        // A fuzzy-hash core flow whose drift exceeds the configured tolerance
+        // must NOT masquerade as a hard diff failure (like an exact Mismatch)
+        // and must NOT masquerade as a clean Pass. It gets the same tri-state
+        // NeedsHuman treatment as an unimplemented (Stubbed) strategy.
+        let v = TierVerdict::verdict_for_diff(&DiffOutcome::DriftedBeyondThreshold {
+            distance_permille: 500,
+            paths: vec!["/a".to_string()],
         });
         assert_eq!(v, Verdict::NeedsHuman);
         assert_ne!(v, Verdict::Fail);

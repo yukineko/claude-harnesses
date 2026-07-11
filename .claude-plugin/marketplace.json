@@ -654,7 +654,7 @@
     {
       "name": "stuckguard",
       "description": "Stuck-loop detector + escalation for Claude Code: a PostToolUse hook that spots repeated identical actions and edit thrash, then injects an escalating nudge to change approach or ask the user for help. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.11",
+      "version": "0.1.12",
       "category": "quality",
       "keywords": [
         "hooks",

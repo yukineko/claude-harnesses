@@ -12,6 +12,15 @@ use serde::Deserialize;
 // Re-exported so existing `crate::config::expand_tilde` call sites keep working.
 pub use harness_core::config::expand_tilde;
 
+/// Floor for `similarity_threshold` after sanitization. `0.0` is a degenerate
+/// value: `jaccard(..) >= 0.0` is trivially true for any two token bags, so
+/// the near-repeat filter would match every same-tool call regardless of
+/// actual overlap (nudge-on-every-action). A small positive floor keeps the
+/// near-repeat comparison meaningful (something must actually overlap) while
+/// still allowing operators to opt into an aggressive near-repeat match via a
+/// low threshold. Sanitization only — never panics.
+const MIN_SIMILARITY_THRESHOLD: f64 = 0.05;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub enabled: bool,
@@ -163,7 +172,9 @@ impl Config {
         // sanitize
         cfg.window = cfg.window.max(2);
         cfg.repeat_threshold = cfg.repeat_threshold.max(2);
-        cfg.similarity_threshold = cfg.similarity_threshold.clamp(0.0, 1.0);
+        cfg.similarity_threshold = cfg
+            .similarity_threshold
+            .clamp(MIN_SIMILARITY_THRESHOLD, 1.0);
         cfg.oscillation_threshold = cfg.oscillation_threshold.max(1);
         cfg.escalate_after = cfg.escalate_after.max(1);
         cfg.progress_min_window = cfg.progress_min_window.max(2);
@@ -179,5 +190,40 @@ impl Config {
 
     pub fn is_ignored(&self, tool: &str) -> bool {
         self.ignore_tools.iter().any(|t| t == tool)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CA-stuckguard-03 (p2 — threshold clamp has no floor): `load()`
+    /// sanitizes `similarity_threshold` with `.clamp(0.0, 1.0)`, so a config
+    /// of `0.0` sails straight through. At `0.0`, `jaccard(..) >=
+    /// similarity_threshold` is trivially true for ANY two token bags (jaccard
+    /// is always in `[0, 1]`), so `is_repeat_of`'s near-repeat branch matches
+    /// every same-tool call regardless of actual overlap — the near-repeat
+    /// filter degenerates into "same tool" and nudges on every action. Before
+    /// the fix this test fails (RED): a project config setting
+    /// `similarity_threshold = 0.0` comes out of `load()` unchanged at
+    /// `0.0`.
+    #[test]
+    fn similarity_threshold_floor_prevents_degenerate_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            Config::project_path(dir.path()),
+            "similarity_threshold = 0.0\n",
+        )
+        .unwrap();
+
+        let cfg = Config::load(dir.path());
+
+        assert!(
+            cfg.similarity_threshold > 0.0,
+            "similarity_threshold must be floored above 0.0 (0.0 makes jaccard >= \
+             threshold trivially true for every same-tool call, i.e. nudge-on-every-\
+             action); got {}",
+            cfg.similarity_threshold
+        );
     }
 }

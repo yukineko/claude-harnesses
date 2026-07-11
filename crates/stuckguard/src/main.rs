@@ -106,8 +106,29 @@ fn watch() {
     let mut emitted = None;
 
     if let Some(t) = &trip {
+        // Escalation counter.
+        //
+        // `Kind::Repeat`: driven by the persistent consecutive-trip STREAK in
+        // SessionState, NOT by the nudge count on `t.key`. A bounded-window
+        // content key necessarily drifts with the window (a wide/long drifting
+        // stuck loop never stabilizes its key, so a key-derived counter never
+        // climbs — CA-stuckguard-01 re-review), whereas the streak counts
+        // consecutive Repeat trips regardless of body width and resets on any
+        // gap. It is advanced OUTSIDE the cooldown gate so that cooldown (which
+        // only suppresses repeated *messages*) can't reset an ongoing run.
+        //
+        // `Kind::Oscillation`: unchanged — the `osc:{file}` key is already
+        // window-invariant, so its nudge count is a sound escalation counter.
+        let repeat_streak = match t.kind {
+            Kind::Repeat => Some(st.record_repeat_run(seq)),
+            Kind::Oscillation => None,
+        };
         if !st.in_cooldown(&t.key, seq, cfg.cooldown_events) {
-            let count = st.record_nudge(&t.key, seq);
+            // `record_nudge` still runs for its cooldown bookkeeping (last_seq)
+            // + message dedup; for Repeat the displayed/escalation count is the
+            // streak, for Oscillation it's the nudge count.
+            let nudge_count = st.record_nudge(&t.key, seq);
+            let count = repeat_streak.unwrap_or(nudge_count);
             let escalated = count >= cfg.escalate_after;
             log_event(&cfg, &session, t, count, escalated);
             // Build the message (which retrieves any PRIOR lesson) before

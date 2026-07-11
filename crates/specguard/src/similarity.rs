@@ -62,6 +62,36 @@ const POLARITY_TOKENS: &[(&str, &str)] = &[
     ("none", "none"),
     ("unless", "unless"),
     ("without", "without"),
+    // Apostrophe-FREE negation contractions. The apostrophe forms (`can't`,
+    // `isn't`, …) are handled upstream by `expand_negations` (they tokenize to
+    // stem+`t` and must be rewritten before tokenizing); but the same word typed
+    // WITHOUT an apostrophe (`cant`, `isnt`, …) tokenizes whole and would drop the
+    // negation entirely. These are WHOLE-TOKEN table entries — never substring
+    // rewrites — so a word merely containing the letters (`significant`, `wonton`,
+    // `vacant`, `decant`) is never mis-read as a negation. `cant`/`wont` are real
+    // English words in the general case, but in an authorization-inversion detector
+    // treating them as negations (a rare benign use is merely routed to a human) is
+    // the safe bias vs. auto-ratifying an inverted policy. All map to the `not`
+    // bucket (neg axis).
+    ("cant", "not"),
+    ("wont", "not"),
+    ("dont", "not"),
+    ("doesnt", "not"),
+    ("didnt", "not"),
+    ("isnt", "not"),
+    ("arent", "not"),
+    ("wasnt", "not"),
+    ("werent", "not"),
+    ("hasnt", "not"),
+    ("havent", "not"),
+    ("hadnt", "not"),
+    ("shouldnt", "not"),
+    ("wouldnt", "not"),
+    ("couldnt", "not"),
+    ("mustnt", "not"),
+    ("neednt", "not"),
+    ("shant", "not"),
+    ("aint", "not"),
     // Authorization verbs: allow-axis (allow vs deny).
     ("allow", "allow"),
     ("allowed", "allow"),
@@ -191,11 +221,34 @@ const POLARITY_AXES: &[(&str, &str)] = &[
 /// human … must" — different axes, one bucket each) still compares equal.
 /// Within-bucket synonym substitutions collapse to the same bucket (via
 /// [`POLARITY_TOKENS`]) and remain invisible, exactly as before.
+/// Expand English negation contractions so the negation survives tokenization on
+/// the **polarity path only** (the lexical shingle path is deliberately left
+/// untouched). [`tokens`] splits on every non-alphanumeric char, so `can't`
+/// tokenizes to `can` + `t` and `cannot` to a single unknown word — in both cases
+/// the negation vanishes and a polarity-inverting edit ("… is allowed" → "…
+/// isn't allowed", "… can override" → "… cannot override") auto-ratified past the
+/// human (CA-specguard-01). Rewrite `cannot` → `can not` and the `n't` suffix →
+/// ` not` so the existing `not` polarity token surfaces. Deterministic, allocation-
+/// only, no stemmer/lexicon — same finite-literal discipline as [`POLARITY_TOKENS`].
+/// Bare apostrophe-free spellings (`cant`, `wont`) are intentionally NOT expanded:
+/// they are ambiguous real words (a `wont` habit, insincere `cant`) and expanding
+/// them would risk false polarity flips against specguard's no-false-positive bias.
+fn expand_negations(s: &str) -> String {
+    s.to_lowercase()
+        // Fold curly/modifier/fullwidth apostrophes to ASCII so a smart-quoted
+        // `can't` (U+2019/U+02BC/U+2032/U+FF07, common in copy-pasted canon prose)
+        // expands the same as ASCII `can't`; otherwise it splits on the
+        // non-alphanumeric quote and the negation bypasses.
+        .replace(['\u{2019}', '\u{02BC}', '\u{2032}', '\u{FF07}'], "'")
+        .replace("cannot", "can not")
+        .replace("n't", " not")
+}
+
 fn polarity_signature(s: &str) -> BTreeMap<&'static str, Vec<&'static str>> {
     let bucket_of: BTreeMap<&'static str, &'static str> = POLARITY_TOKENS.iter().copied().collect();
     let axis_of: BTreeMap<&'static str, &'static str> = POLARITY_AXES.iter().copied().collect();
     let mut sig: BTreeMap<&'static str, Vec<&'static str>> = BTreeMap::new();
-    for tok in tokens(s) {
+    for tok in tokens(&expand_negations(s)) {
         if let Some(&bucket) = bucket_of.get(tok.as_str()) {
             let axis = axis_of.get(bucket).copied().unwrap_or(bucket);
             sig.entry(axis).or_default().push(bucket);
@@ -253,7 +306,7 @@ fn object_bindings(s: &str) -> BTreeMap<String, BTreeMap<&'static str, usize>> {
     // word — the noun a pole actually modifies (as object) or is governed by (as
     // subject).
     let is_head = |t: &str| !bucket_of.contains_key(t) && !stop.contains(t);
-    let toks = tokens(s);
+    let toks = tokens(&expand_negations(s));
     let mut out: BTreeMap<String, BTreeMap<&'static str, usize>> = BTreeMap::new();
     for (i, tok) in toks.iter().enumerate() {
         let Some(&bucket) = bucket_of.get(tok.as_str()) else {
@@ -922,6 +975,62 @@ mod tests {
         assert!(!polarity_preserved(
             "the auditor will approve the change",
             "the auditor will skip the change"
+        ));
+    }
+
+    /// CA-specguard-01 (round 2026W28, FIXED): a contracted negation flips the
+    /// authorization but the apostrophe-splitting tokenizer drops it — `can't`
+    /// tokenizes to `can`+`t`, `cannot` to a single unknown token — so the
+    /// negation never reached POLARITY_TOKENS and the inverted policy auto-
+    /// ratified without a human. Contractions are now expanded before the
+    /// polarity path so the `not` pole surfaces.
+    #[test]
+    fn contracted_negation_flip_detected() {
+        // `cannot` (no apostrophe): adds a negation the original lacked.
+        assert!(!polarity_preserved(
+            "reviewers can override the auto gate",
+            "reviewers cannot override the auto gate"
+        ));
+        // `isn't` -> "is not": inverts an allow into a deny.
+        assert!(!polarity_preserved(
+            "auto approval is allowed for routine edits",
+            "auto approval isn't allowed for routine edits"
+        ));
+        // `won't` / `doesn't`: same negation, different contraction spellings.
+        assert!(!polarity_preserved(
+            "the gate will auto approve the change",
+            "the gate won't auto approve the change"
+        ));
+        // Smart/curly apostrophe (U+2019) must expand the same as ASCII `'`.
+        assert!(!polarity_preserved(
+            "auto approval is allowed for routine edits",
+            "auto approval isn\u{2019}t allowed for routine edits"
+        ));
+        // Apostrophe-FREE contraction spellings (isnt/wont/cant/doesnt) — a
+        // one-character omission a sloppy or adversarial editor produces — must
+        // also flip. For an authorization-inversion detector, treating these as
+        // negations (a rare benign "wont"/"cant" is merely routed to a human) is
+        // the safe bias vs. auto-ratifying an inverted policy.
+        assert!(!polarity_preserved(
+            "reviewers can override the auto gate",
+            "reviewers cant override the auto gate"
+        ));
+        assert!(!polarity_preserved(
+            "the gate will auto approve the change",
+            "the gate wont auto approve the change"
+        ));
+        assert!(!polarity_preserved(
+            "auto approval is allowed for routine edits",
+            "auto approval isnt allowed for routine edits"
+        ));
+        // Substring safety: "significant" contains "cant" but is a whole word, so
+        // the whole-token table lookup must NOT register a spurious negation.
+        assert!(!polarity_signature("this significant change is approved").contains_key("neg"));
+        // Control: identical text with a contraction stays preserved (no spurious
+        // flip introduced by the expansion).
+        assert!(polarity_preserved(
+            "the agent cannot deploy without approval",
+            "the agent cannot deploy without approval"
         ));
     }
 

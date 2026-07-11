@@ -355,6 +355,29 @@ pub fn append_audit_round(cwd: &Path, round: &AuditRound) -> Result<()> {
     Ok(())
 }
 
+/// Rewrite audit_rounds.jsonl from `rounds` (one JSON line each, in the given
+/// order). This is the persistence half of the closure-feedback path
+/// (`audit-round close`): the caller reads the ledger, updates a round's
+/// `regression_tests_added` in memory via [`crate::audit_round::set_round_tests`],
+/// then calls this to write it back. Writes to a sibling temp file and renames so
+/// a crash mid-write cannot leave a truncated ledger. Fail-soft by contract at
+/// the call site (a write error is reported, never propagated to break a turn).
+pub fn rewrite_audit_rounds(cwd: &Path, rounds: &[AuditRound]) -> Result<()> {
+    let path = audit_rounds_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut buf = String::new();
+    for r in rounds {
+        buf.push_str(&serde_json::to_string(r)?);
+        buf.push('\n');
+    }
+    let tmp = path.with_extension("jsonl.tmp");
+    std::fs::write(&tmp, buf.as_bytes())?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
 /// Read all Continuous-Audit round records from audit_rounds.jsonl, in recorded
 /// (append) order. Returns an empty vec if the file doesn't exist or is empty
 /// (fail-soft, same contract as `read_events` / `read_rollbacks`). Corrupt

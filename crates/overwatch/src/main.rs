@@ -318,6 +318,21 @@ enum AuditRoundAction {
         #[arg(long)]
         verifier_model: Option<String>,
     },
+    /// Close a round: SET its regression_tests_added to `--tests` (the fix-side
+    /// feedback recorded AFTER confirmed findings are converted to regression
+    /// tests, which `record` cannot know at finding-time). Idempotent (SET, not
+    /// add); an unknown round-id leaves the ledger unchanged (fail-soft). When a
+    /// round-id is duplicated, the most-recently recorded match is closed.
+    Close {
+        /// The round identifier to close (the same id passed to `record`).
+        #[arg(long)]
+        round: String,
+        /// Regression tests locked in for this round's confirmed findings.
+        /// REQUIRED (no default): SET-not-add semantics mean a bare `close`
+        /// would otherwise silently reset a round's progress to 0.
+        #[arg(long)]
+        tests: u64,
+    },
 }
 
 /// Parse a `--source` CLI value into a [`ViolationSource`], erroring clearly
@@ -500,6 +515,9 @@ fn main() -> Result<()> {
                     finder_model.as_deref(),
                     verifier_model.as_deref(),
                 )?;
+            }
+            AuditRoundAction::Close { round, tests } => {
+                audit_round_cli::close(round, tests)?;
             }
         },
         Command::AuditMetrics { json, window } => {

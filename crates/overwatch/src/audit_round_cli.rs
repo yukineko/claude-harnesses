@@ -123,6 +123,54 @@ fn enforce_model_diversity(
     }
 }
 
+/// Close a Continuous-Audit round: SET its `regression_tests_added` to `tests`
+/// (the fix-side feedback the finder-time [`record`] cannot know, since the
+/// regression tests don't exist when a round is first recorded). Read-modify-write
+/// on the ledger: read all rounds, update the one matching `round` in memory via
+/// [`audit_round::set_round_tests`], write it back. After this, `audit-metrics`
+/// reports the round's honest `closure_rate` and the cumulative `converging`
+/// signal reflects the fixes actually landed.
+///
+/// Fail-soft (never-break-a-turn): an unknown round-id, or a store error, is
+/// reported (JSON on stdout + stderr note) but never panics. Idempotent: SETting
+/// the same `tests` twice is a no-op, so re-running a backfill does not
+/// double-count.
+pub fn close(round: String, tests: u64) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let rounds = store::read_audit_rounds(&cwd).unwrap_or_default();
+    let (updated, found) = audit_round::set_round_tests(&rounds, &round, tests);
+    if !found {
+        eprintln!(
+            "overwatch: WARNING audit-round close: no round matching id {round:?} (ledger unchanged)"
+        );
+        println!(
+            "{}",
+            serde_json::json!({ "closed": false, "reason": "round-not-found", "round": round })
+        );
+        return Ok(());
+    }
+    match store::rewrite_audit_rounds(&cwd, &updated) {
+        Ok(()) => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "closed": true,
+                    "round": round,
+                    "regression_tests_added": tests,
+                })
+            );
+        }
+        Err(e) => {
+            eprintln!("overwatch: WARNING could not rewrite audit rounds (continuing): {e}");
+            println!(
+                "{}",
+                serde_json::json!({ "closed": false, "reason": "store-write-failed", "round": round })
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Read the audit-round ledger and print convergence metrics. `window` bounds
 /// how many trailing rounds the `converging` check considers (default
 /// [`DEFAULT_CONVERGENCE_WINDOW`]). Fail-soft: a missing/empty ledger yields a

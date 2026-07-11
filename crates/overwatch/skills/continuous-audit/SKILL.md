@@ -119,9 +119,29 @@ scripts/continuous-audit.sh --round <round-id> --dry-run
 ### Step 4 — 回帰テスト化 (継続運用の原則)
 
 CONFIRMED のうち**挙動バグ**は、対象 crate に**回帰テストを追加して固定**する (決定性はテストに固定化する)。
-これは別タスク (backlog / condukt) に委譲してよいが、追加できた件数を Step 3 の
-`--regression-tests-added` に反映する。commit `38f613c` (re-review finding 1-3 の ignored 回帰テスト昇格) が
-「CONFIRMED → 回帰テスト」の POC。
+これは別タスク (backlog / condukt) に委譲してよいが、追加できた件数を記録する。commit `38f613c`
+(re-review finding 1-3 の ignored 回帰テスト昇格) が「CONFIRMED → 回帰テスト」の POC。
+
+> **回帰テストは通常ラウンド記録より後に landed する** (修正は backlog/condukt へ委譲される別タスク)。
+> Step 3 の `--regression-tests-added` は「そのラウンドと同時にテストまで締めた」件数だけを入れ、
+> **後から締めた分は Step 4.5 の closure で round に還元する** (record 時は 0 のままにしてよい)。
+
+### Step 4.5 — closure フィードバック (fix 側を収束シグナルに還元する)
+
+CONFIRMED を回帰テストで締めたら、その件数を**元のラウンドへ closure として書き戻す**。これをやらないと
+`audit-metrics` の `closure-rate` と `converging` は fix 側を見ないまま `0.00 / false` に張り付き、
+「fleet は硬化しているか?」というループ本来の問いに答えられない (build ≠ validate)。
+
+```sh
+# ラウンド <id> の confirmed findings を締めた回帰テスト件数 <N> を還元する。
+overwatch audit-round close --round <round-id> --tests <N>
+```
+
+- **SET(加算ではない)**: 同じ `<N>` で二度 close しても二重計上しない (冪等なので backfill を安全に再実行できる)。
+- **closure ≤ 1.0 に保つ**: `<N>` は「回帰テストで固定した confirmed findings の数」であって raw なテスト関数の
+  総数ではない (closure-rate = tests ÷ confirmed なので confirmed を超えると 1.0 を超えて不正になる)。
+- **未知 round-id は fail-soft**: ledger を変えずに `closed:false` を返す (turn を壊さない)。
+- 同じ round-id が重複記録されている場合は**最後に記録されたラウンド**が closure 対象になる。
 
 ### Step 5 — 結果確認と収束
 

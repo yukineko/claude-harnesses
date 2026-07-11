@@ -99,6 +99,41 @@ impl AuditRound {
     }
 }
 
+/// Close a Continuous-Audit round: return a copy of the ledger with the
+/// `regression_tests_added` of the round identified by `round_id` SET to
+/// `tests`, plus whether a matching round was found.
+///
+/// This is the fix-side feedback the finder-time `record` cannot supply: a round
+/// is recorded when the finder/verifier surface findings, at which point no
+/// regression tests exist yet (so `regression_tests_added` is necessarily 0).
+/// After the confirmed findings are locked in as tests, closing the round feeds
+/// that count back so `closure_rate` / `converging` stop lying.
+///
+/// Semantics:
+/// * **SET, not add** — applying the same `tests` twice yields an identical
+///   ledger (idempotent backfill, no double count).
+/// * **most-recent wins** — a round-id is expected to be unique, but the ledger
+///   is append-only and cannot forbid duplicates; when several rounds share the
+///   id the LAST (most-recently recorded) match is updated and earlier same-id
+///   rounds are left untouched (the common "close the round I just ran" case).
+/// * **fail-soft** — an unknown `round_id` returns the ledger unchanged with
+///   `found == false`; the caller reports it without erroring.
+///
+/// Pure and side-effect free (the caller persists the result via the store).
+pub fn set_round_tests(
+    rounds: &[AuditRound],
+    round_id: &str,
+    tests: u64,
+) -> (Vec<AuditRound>, bool) {
+    let key = round_id.trim();
+    let target = rounds.iter().rposition(|r| r.round.trim() == key);
+    let mut out = rounds.to_vec();
+    if let Some(i) = target {
+        out[i].regression_tests_added = tests;
+    }
+    (out, target.is_some())
+}
+
 /// Normalize a target list: trim each entry, drop blanks, de-dup preserving
 /// first-seen order. Deterministic and pure.
 pub fn normalize_targets(targets: &[String]) -> Vec<String> {
@@ -448,5 +483,59 @@ mod tests {
         assert!(m.rounds.is_empty());
         assert!(m.converging);
         assert_eq!(m.closure_rate, None);
+    }
+
+    #[test]
+    fn set_round_tests_updates_matching_round_and_metrics_reflect_it() {
+        // A round recorded at finding-time carries tests=0 (the fixes don't exist
+        // yet). Closing it with the fix-side count must flow into closure_rate.
+        let rounds = vec![round(1, 5, 5, 0, 10), round(2, 3, 3, 0, 20)];
+        let (out, found) = set_round_tests(&rounds, "2", 3);
+        assert!(found, "round id 2 exists");
+        assert_eq!(out[0].regression_tests_added, 0, "other rounds untouched");
+        assert_eq!(out[1].regression_tests_added, 3, "matching round SET");
+        // Observable layer: metrics now report honest closure for that round.
+        let m = compute_metrics(&out, DEFAULT_CONVERGENCE_WINDOW);
+        assert_eq!(m.rounds[1].closure_rate, Some(1.0)); // 3/3
+        assert_eq!(m.cumulative_regression_tests_added, 3);
+        assert_eq!(m.closure_rate, Some(3.0 / 8.0)); // (0+3)/(5+3)
+    }
+
+    #[test]
+    fn set_round_tests_is_idempotent_set_not_add() {
+        // SET (not +=) so backfilling the same round twice does NOT double-count.
+        let rounds = vec![round(1, 5, 5, 0, 10)];
+        let (once, f1) = set_round_tests(&rounds, "1", 5);
+        let (twice, f2) = set_round_tests(&once, "1", 5);
+        assert!(f1 && f2);
+        assert_eq!(once, twice);
+        assert_eq!(twice[0].regression_tests_added, 5);
+    }
+
+    #[test]
+    fn set_round_tests_unknown_id_is_noop_and_reports_not_found() {
+        // Fail-soft: an unknown round-id leaves the ledger untouched.
+        let rounds = vec![round(1, 5, 5, 0, 10)];
+        let (out, found) = set_round_tests(&rounds, "nope", 9);
+        assert!(!found);
+        assert_eq!(out, rounds);
+    }
+
+    #[test]
+    fn set_round_tests_duplicate_id_closes_most_recent() {
+        // Two rounds share id "2026W28" (confirmed 1 then 11). Closing the id
+        // targets the MOST RECENTLY recorded (last) match; the earlier is left 0
+        // so its closure never exceeds 1.0.
+        let a = AuditRound::new("2026W28".to_string(), &["s".to_string()], 1, 1, 0, 10);
+        let b = AuditRound::new("2026W28".to_string(), &["s".to_string()], 13, 11, 0, 20);
+        let (out, found) = set_round_tests(&[a, b], "2026W28", 11);
+        assert!(found);
+        assert_eq!(
+            out[0].regression_tests_added, 0,
+            "earlier same-id untouched"
+        );
+        assert_eq!(out[1].regression_tests_added, 11, "latest closed");
+        let m = compute_metrics(&out, DEFAULT_CONVERGENCE_WINDOW);
+        assert_eq!(m.rounds[1].closure_rate, Some(1.0)); // 11/11, not >1.0
     }
 }

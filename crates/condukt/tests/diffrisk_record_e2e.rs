@@ -197,6 +197,145 @@ fn done_transition_with_public_api_change_on_sensitive_path_records_violation() 
     let _ = git_out(&fx.repo, &["rev-parse", "HEAD"]); // sanity: repo is a real git tree
 }
 
+/// Seed a repo where a changed **public** symbol on a NON-sensitive path is
+/// referenced from `n_callers` distinct `.rs` files in the worktree, so only
+/// the caller blast-radius signal (not the sensitive-path base) escalates the
+/// diff to High. Returns the worktree path.
+///
+/// `api_rel` (the changed public symbol) is seeded on main as `pub fn old_api`
+/// and the branch renames it to `pub fn new_api` — both are "changed symbols".
+/// The caller files (seeded on main, so present in the worktree, UNCHANGED on
+/// the branch) each reference `old_api(` in call position, giving the removed
+/// symbol `old_api` a blast radius of `n_callers` sites.
+fn build_caller_heavy_worktree(fx: &Fixture, api_rel: &str, n_callers: usize) -> PathBuf {
+    let api = fx.repo.join(api_rel);
+    std::fs::create_dir_all(api.parent().unwrap()).unwrap();
+    std::fs::write(&api, "pub fn old_api(x: i32) {}\n").unwrap();
+
+    // Caller files on a NON-sensitive path, each calling `old_api(...)`.
+    let callers_dir = "crates/foo/src/callers";
+    for i in 0..n_callers {
+        let rel = format!("{callers_dir}/c{i}.rs");
+        let p = fx.repo.join(&rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, format!("fn uses_{i}() {{\n    old_api({i});\n}}\n")).unwrap();
+    }
+    run_git(&fx.repo, &["add", "-A"]);
+    run_git(&fx.repo, &["commit", "-q", "-m", "seed api + callers"]);
+
+    let wt = fx.base.join("wt-t1");
+    run_git(
+        &fx.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "condukt/t1",
+            wt.to_str().unwrap(),
+            "main",
+        ],
+    );
+    // Rename the public symbol (public-API change) on the NON-sensitive path.
+    // The caller files are left untouched, so `old_api` now has no declaration
+    // in the worktree yet is still referenced from `n_callers` sites.
+    std::fs::write(wt.join(api_rel), "pub fn new_api(x: i32, y: i32) {}\n").unwrap();
+    run_git(&wt, &["add", "-A"]);
+    run_git(
+        &wt,
+        &["commit", "-q", "-m", "rename pub api on non-sensitive path"],
+    );
+    wt
+}
+
+#[test]
+fn done_transition_with_caller_blast_radius_records_callgraph_violation() {
+    // A public-API change on a NON-sensitive path: base is Medium (public-API
+    // signal only, no sensitive path), so the ORIGINAL diffrisk-public-api rule
+    // does NOT fire. But the changed symbol is called from >= threshold (5)
+    // sites, so the CALLER blast-radius signal escalates the diff to High and a
+    // distinct `diffrisk-callgraph` violation is recorded.
+    let fx = Fixture::new("callgraph-fires");
+    let api_rel = "crates/foo/src/api.rs"; // NON-sensitive path
+    let decomp = format!(
+        r#"{{"goal":"g","tasks":[{{"id":"t1","title":"rename a public api","touched_files":["{api_rel}"],"deps":[],"class":"serial","done_criteria":"the api is renamed"}}]}}"#
+    );
+    let rid = fx.init_run(&decomp);
+    let wt = build_caller_heavy_worktree(&fx, api_rel, 5);
+
+    let out = fx.condukt(&[
+        "state",
+        "set",
+        "--run",
+        &rid,
+        "--task",
+        "t1",
+        "--status",
+        "done",
+        "--worktree",
+        wt.to_str().unwrap(),
+        "--branch",
+        "condukt/t1",
+    ]);
+    assert!(out.status.success(), "set done failed: {out:?}");
+
+    let ledger = fx
+        .violations()
+        .expect("a violations.jsonl must be written for a caller-heavy done task");
+    assert!(
+        ledger.contains("\"blastguard:diffrisk-callgraph\""),
+        "expected a blastguard diffrisk-callgraph violation signature; got: {ledger}"
+    );
+    // The base (sensitive-path) rule must NOT fire on this non-sensitive path.
+    assert!(
+        !ledger.contains("diffrisk-public-api"),
+        "the non-sensitive caller case must not record the base public-API rule; got: {ledger}"
+    );
+    assert!(
+        ledger.contains(&format!("{rid}/t1")),
+        "expected the task_key to scope run/task; got: {ledger}"
+    );
+}
+
+#[test]
+fn done_transition_public_api_change_with_zero_callers_records_nothing() {
+    // Same public-API change on a NON-sensitive path, but with NO callers in
+    // the worktree corpus: base is Medium and the caller signal is Low, so the
+    // diff never reaches High → nothing is recorded.
+    let fx = Fixture::new("callgraph-silent");
+    let api_rel = "crates/foo/src/api.rs"; // NON-sensitive path
+    let decomp = format!(
+        r#"{{"goal":"g","tasks":[{{"id":"t1","title":"rename a public api","touched_files":["{api_rel}"],"deps":[],"class":"serial","done_criteria":"the api is renamed"}}]}}"#
+    );
+    let rid = fx.init_run(&decomp);
+    // Zero callers: build the caller-heavy worktree with n_callers = 0.
+    let wt = build_caller_heavy_worktree(&fx, api_rel, 0);
+
+    let out = fx.condukt(&[
+        "state",
+        "set",
+        "--run",
+        &rid,
+        "--task",
+        "t1",
+        "--status",
+        "done",
+        "--worktree",
+        wt.to_str().unwrap(),
+        "--branch",
+        "condukt/t1",
+    ]);
+    assert!(out.status.success(), "set done failed: {out:?}");
+
+    // No High-risk verdict → no diffrisk signature of EITHER kind.
+    if let Some(ledger) = fx.violations() {
+        assert!(
+            !ledger.contains("diffrisk-callgraph") && !ledger.contains("diffrisk-public-api"),
+            "a caller-less public-API change on a non-sensitive path must not record a diffrisk violation; got: {ledger}"
+        );
+    }
+}
+
 #[test]
 fn done_transition_with_only_private_change_records_nothing() {
     // A change that touches NEITHER a public symbol NOR a sensitive path stays

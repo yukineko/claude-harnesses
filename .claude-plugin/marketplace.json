@@ -908,7 +908,7 @@
     {
       "name": "trajectoryeval",
       "description": "Trajectory-match verifier for agent tool-call paths: condukt's online verifier checks a task's OUTPUT (done_criteria); trajectoryeval checks the PATH the worker took. `check` matches an actual ordered tool-call list against an expected trajectory spec (strict / unordered / subsequence) and reports {pass, missing, unexpected, out_of_order} with a 0/1/2 gate exit; `extract` streams a transcript into the ordered tool_use names. The path-side sibling of done-criteria verification (agentevals-style). Subscription-native (one bundled Rust binary, no API key).",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "category": "quality",
       "keywords": [
         "trajectory",

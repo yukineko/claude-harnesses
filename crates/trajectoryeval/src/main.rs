@@ -339,6 +339,16 @@ fn print_tier_report(v: &TierVerdict) {
                     "  diff: NEEDS-HUMAN — screenshot/perceptual-hash strategy is not implemented (not a diff failure)"
                 );
             }
+            DiffOutcome::DriftedBeyondThreshold {
+                distance_permille,
+                paths,
+            } => {
+                println!(
+                    "  diff: DRIFTED beyond threshold ({}‰) at {}",
+                    distance_permille,
+                    paths.join(", ")
+                );
+            }
         }
     }
     if let Some(nc) = &v.non_core {

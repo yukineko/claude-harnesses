@@ -42,6 +42,10 @@ pub enum DiffStrategy {
     StructuredData,
     /// Perceptual-hash / screenshot comparison — a documented, unimplemented stub.
     Screenshot,
+    /// Tolerance-based structured-data comparison — see [`fuzzy_diff`]. Unlike
+    /// `StructuredData`, small drift (within [`TierConfig::threshold_permille`])
+    /// is tolerated as a match instead of any divergence being a hard mismatch.
+    FuzzyHash,
 }
 
 /// The risk-tiering config: the set of core (business-critical) flow ids, plus
@@ -58,6 +62,13 @@ pub struct TierConfig {
     /// existence check). Defaults to 0.
     #[serde(default)]
     pub sample_one_in: u64,
+    /// Tolerance for [`DiffStrategy::FuzzyHash`], as a distance in permille
+    /// (0..=1000; parts per thousand of differing leaves). A drift distance
+    /// `<= threshold_permille` is tolerated as a match; strictly greater
+    /// escalates to [`DiffOutcome::DriftedBeyondThreshold`]. Defaults to 0
+    /// (no tolerance — any drift escalates).
+    #[serde(default)]
+    pub threshold_permille: u32,
 }
 
 /// Which risk tier a flow falls into — a *pure function* of the allowlist.
@@ -93,6 +104,16 @@ pub enum DiffOutcome {
     Mismatch { paths: Vec<String> },
     /// The chosen strategy is an unimplemented stub (e.g. `screenshot`).
     Stubbed { strategy: DiffStrategy },
+    /// Snapshot diverged from the baseline by more than the configured
+    /// [`TierConfig::threshold_permille`] tolerance under [`fuzzy_diff`].
+    /// `distance_permille` is the measured drift (differing leaves / total
+    /// leaves, in parts per thousand); `paths` lists the differing JSON
+    /// pointer(s), sorted. Stored as `u32` (not `f64`) so this type keeps its
+    /// `Eq` derive.
+    DriftedBeyondThreshold {
+        distance_permille: u32,
+        paths: Vec<String>,
+    },
 }
 
 impl DiffOutcome {
@@ -130,6 +151,12 @@ pub fn diff_snapshot(
                 DiffOutcome::Mismatch { paths }
             }
         }
+        // `diff_snapshot` has no threshold parameter (its signature is fixed),
+        // so without a configured tolerance this defers to `fuzzy_diff` with
+        // zero tolerance — matching `TierConfig::threshold_permille`'s own
+        // default of 0. Callers that have a configured threshold should call
+        // `fuzzy_diff` directly with it instead of going through this path.
+        DiffStrategy::FuzzyHash => fuzzy_diff(baseline, snapshot, 0),
     }
 }
 
@@ -178,6 +205,81 @@ fn diff_value(
                     path.to_string()
                 });
             }
+        }
+    }
+}
+
+/// Count the "comparison units" (leaves) a full [`diff_value`] traversal of
+/// `(a, b)` would visit — scalars, missing-key/missing-index unions, and array
+/// length mismatches each count as one unit — regardless of whether they are
+/// equal. Mirrors `diff_value`'s traversal structure exactly, so the number of
+/// paths `diff_value` could ever push is always `<=` this count, which keeps
+/// [`fuzzy_diff`]'s permille distance well-defined and capped at 1000.
+fn count_leaves_pair(a: &serde_json::Value, b: &serde_json::Value) -> usize {
+    use serde_json::Value;
+    match (a, b) {
+        (Value::Object(oa), Value::Object(ob)) => {
+            let ma: BTreeMap<_, _> = oa.iter().collect();
+            let mb: BTreeMap<_, _> = ob.iter().collect();
+            let mut keys: Vec<&String> = ma.keys().chain(mb.keys()).copied().collect();
+            keys.sort();
+            keys.dedup();
+            keys.iter()
+                .map(|k| match (ma.get(*k), mb.get(*k)) {
+                    (Some(av), Some(bv)) => count_leaves_pair(av, bv),
+                    _ => 1,
+                })
+                .sum()
+        }
+        (Value::Array(aa), Value::Array(ab)) => {
+            let mut total = 0usize;
+            if aa.len() != ab.len() {
+                total += 1; // mirrors diff_value's single "/len" marker
+            }
+            let n = aa.len().min(ab.len());
+            for i in 0..n {
+                total += count_leaves_pair(&aa[i], &ab[i]);
+            }
+            total
+        }
+        _ => 1,
+    }
+}
+
+/// Tolerance-based structured comparison: like [`diff_snapshot`] with
+/// [`DiffStrategy::StructuredData`], but small drift is tolerated instead of
+/// any divergence being a hard mismatch.
+///
+/// Computes a deterministic `distance_permille` — `round(1000 * differing /
+/// total)` (differing leaf count over total leaf count, rounded half-up as
+/// integer arithmetic; 0 when `total` is 0) — and returns
+/// [`DiffOutcome::Match`] when `distance_permille <= threshold_permille`,
+/// else [`DiffOutcome::DriftedBeyondThreshold`] with the distance and the
+/// sorted list of differing JSON-pointer paths. Pure and deterministic: same
+/// inputs → same output, no clock, no randomness.
+pub fn fuzzy_diff(
+    baseline: &serde_json::Value,
+    snapshot: &serde_json::Value,
+    threshold_permille: u32,
+) -> DiffOutcome {
+    let mut paths = Vec::new();
+    diff_value("", baseline, snapshot, &mut paths);
+    paths.sort();
+
+    let total = count_leaves_pair(baseline, snapshot) as u64;
+    let differing = paths.len() as u64;
+    // Round-half-up integer division; `checked_div` naturally covers the
+    // `total == 0` case (distance is 0 when there is nothing to compare).
+    let distance_permille: u32 = ((1000 * differing) + total.checked_div(2).unwrap_or(0))
+        .checked_div(total)
+        .unwrap_or(0) as u32;
+
+    if distance_permille <= threshold_permille {
+        DiffOutcome::Match
+    } else {
+        DiffOutcome::DriftedBeyondThreshold {
+            distance_permille,
+            paths,
         }
     }
 }
@@ -553,6 +655,82 @@ mod tests {
             "observed sampled fraction {observed2:.4} too far from expected 1/{n2}={expected2:.4} \
              (tolerance ±{tolerance2:.4})"
         );
+    }
+
+    // ── fuzzy_diff: tolerance-based structured comparison ────────────────────
+    #[test]
+    fn fuzzy_diff_identical_is_match() {
+        let a = json!({"a": 1, "b": 2, "c": 3});
+        let b = json!({"a": 1, "b": 2, "c": 3});
+        assert_eq!(fuzzy_diff(&a, &b, 0), DiffOutcome::Match);
+    }
+
+    #[test]
+    fn fuzzy_diff_small_drift_under_threshold_is_match() {
+        // 10 leaves, 1 differs → distance 100 permille, well under 500.
+        let a = json!({
+            "a": 1, "b": 2, "c": 3, "d": 4, "e": 5,
+            "f": 6, "g": 7, "h": 8, "i": 9, "j": 10
+        });
+        let b = json!({
+            "a": 1, "b": 2, "c": 3, "d": 4, "e": 5,
+            "f": 6, "g": 7, "h": 8, "i": 9, "j": 999
+        });
+        assert_eq!(fuzzy_diff(&a, &b, 500), DiffOutcome::Match);
+    }
+
+    #[test]
+    fn fuzzy_diff_drift_over_threshold_reports_distance_and_paths() {
+        // 10 leaves, 9 differ → distance 900 permille, well over 100.
+        let a = json!({
+            "a": 1, "b": 2, "c": 3, "d": 4, "e": 5,
+            "f": 6, "g": 7, "h": 8, "i": 9, "j": 10
+        });
+        let b = json!({
+            "a": 1, "b": 20, "c": 30, "d": 40, "e": 50,
+            "f": 60, "g": 70, "h": 80, "i": 90, "j": 100
+        });
+        match fuzzy_diff(&a, &b, 100) {
+            DiffOutcome::DriftedBeyondThreshold {
+                distance_permille,
+                paths,
+            } => {
+                assert_eq!(distance_permille, 900);
+                assert_eq!(paths.len(), 9);
+                let mut sorted = paths.clone();
+                sorted.sort();
+                assert_eq!(paths, sorted, "paths must be sorted");
+            }
+            other => panic!("expected DriftedBeyondThreshold, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn fuzzy_diff_is_deterministic() {
+        let a = json!({"a": 1, "b": [1, 2, 3]});
+        let b = json!({"a": 2, "b": [1, 2, 3]});
+        assert_eq!(fuzzy_diff(&a, &b, 200), fuzzy_diff(&a, &b, 200));
+    }
+
+    #[test]
+    fn fuzzy_diff_boundary_distance_equal_threshold_is_match() {
+        // 10 leaves, 1 differs → distance exactly 100 permille.
+        let a = json!({
+            "a": 1, "b": 2, "c": 3, "d": 4, "e": 5,
+            "f": 6, "g": 7, "h": 8, "i": 9, "j": 10
+        });
+        let b = json!({
+            "a": 1, "b": 2, "c": 3, "d": 4, "e": 5,
+            "f": 6, "g": 7, "h": 8, "i": 9, "j": 999
+        });
+        // threshold_permille == distance_permille (100) must be Match, not drift.
+        assert_eq!(fuzzy_diff(&a, &b, 100), DiffOutcome::Match);
+    }
+
+    #[test]
+    fn fuzzy_hash_strategy_serializes_snake_case() {
+        let s = serde_json::to_string(&DiffStrategy::FuzzyHash).unwrap();
+        assert_eq!(s, "\"fuzzy_hash\"");
     }
 
     // ── tri-state Verdict derivation ─────────────────────────────────────────

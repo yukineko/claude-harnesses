@@ -3,12 +3,16 @@
 //!
 //! Seeds findings and dispositions via the REAL CLI (`record-finding` /
 //! `record-disposition`, mirroring `tests/review_queue.rs`) to prove the
-//! subcommands are wired end-to-end, then overwrites the resulting JSONL
-//! ledgers on disk with EXACT, controlled timestamps (the CLI stamps
-//! wall-clock `ts`/`resolved_ts`, which this test cannot control precisely)
-//! so the false-positive rate / agreement rate / median-latency assertions
-//! below are matched against genuinely hand-computed expected values, not a
-//! wall-clock-dependent range.
+//! subcommands are wired end-to-end, then patches ONLY the timestamp fields
+//! (`ts` / `resolved_ts`) of the resulting JSONL ledgers on disk to EXACT,
+//! controlled values (the CLI stamps wall-clock `ts`/`resolved_ts`, which
+//! this test cannot control precisely) so the false-positive rate /
+//! agreement rate / median-latency assertions below are matched against
+//! genuinely hand-computed expected values, not a wall-clock-dependent
+//! range. Every other CLI-serialized field (`finding_id`, `verdict`,
+//! `reviewer`, `source`, `summary`) is left exactly as the CLI wrote it, so
+//! these assertions also exercise `record-disposition`'s real field
+//! serialization end-to-end (not a test-authored stand-in).
 //!
 //! Before `record-disposition` / `review-metrics` existed, this test fails to
 //! even run (clap rejects the unrecognized subcommands with a non-zero exit,
@@ -90,6 +94,34 @@ fn find_file(dir: &Path, name: &str) -> PathBuf {
     found.unwrap_or_else(|| panic!("could not find {name} under {}", dir.display()))
 }
 
+/// Rewrite a JSONL ledger the CLI just wrote, patching ONLY `field` on each
+/// record (keyed by its `finding_id`) to the controlled value from
+/// `ts_by_id`, while leaving every other CLI-written field (finding_id,
+/// verdict, reviewer, source, summary, ...) exactly as the CLI serialized
+/// it. Every finding_id present in the file MUST appear in `ts_by_id` —
+/// `.unwrap()` on a missing id makes a typo fail loudly instead of silently
+/// skipping the patch.
+fn patch_ts_by_id(path: &Path, field: &str, ts_by_id: &[(&str, i64)]) {
+    let text = std::fs::read_to_string(path).unwrap();
+    let mut out = String::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut v: Value = serde_json::from_str(line).unwrap();
+        let id = v["finding_id"].as_str().unwrap().to_string();
+        let ts = ts_by_id
+            .iter()
+            .find(|(k, _)| *k == id)
+            .unwrap_or_else(|| panic!("no controlled {field} for finding_id {id}"))
+            .1;
+        v[field] = serde_json::json!(ts);
+        out.push_str(&v.to_string());
+        out.push('\n');
+    }
+    std::fs::write(path, out).unwrap();
+}
+
 #[test]
 fn review_metrics_computes_fp_rate_agreement_rate_and_median_latency() {
     let (home, work) = make_sandbox("core");
@@ -138,47 +170,26 @@ fn review_metrics_computes_fp_rate_agreement_rate_and_median_latency() {
         );
     }
 
-    // Overwrite the ledgers on disk with EXACT, controlled timestamps so the
-    // metric assertions below are hand-computable (the CLI itself stamps
-    // wall-clock ts, which this test does not control).
+    // Patch ONLY the timestamp fields on the CLI-written ledgers to EXACT,
+    // controlled values so the metric assertions below are hand-computable
+    // (the CLI itself stamps wall-clock ts, which this test does not
+    // control) — but keep every other CLI-serialized field (finding_id,
+    // verdict, reviewer, source, summary) intact, so the assertions below
+    // exercise `record-disposition`'s real field serialization end-to-end.
     let findings_path = find_file(&home, "review_findings.jsonl");
-    let findings_jsonl = [
-        (1000i64, "F-1"),
-        (2000i64, "F-2"),
-        (3000i64, "F-3"),
-        (4000i64, "F-4"),
-    ]
-    .iter()
-    .map(|(ts, id)| {
-        serde_json::json!({
-            "finding_id": id, "source": "reviewgate", "summary": "s", "ts": ts,
-        })
-        .to_string()
-    })
-    .collect::<Vec<_>>()
-    .join("\n")
-        + "\n";
-    std::fs::write(&findings_path, findings_jsonl).unwrap();
+    patch_ts_by_id(
+        &findings_path,
+        "ts",
+        &[("F-1", 1000), ("F-2", 2000), ("F-3", 3000), ("F-4", 4000)],
+    );
 
     let dispositions_path = find_file(&home, "dispositions.jsonl");
     // Hand-computed latencies (resolved_ts - finding ts): 10, 50, 100, 200.
-    let dispositions_jsonl = [
-        (1010i64, "F-1", "confirmed"),
-        (2050i64, "F-2", "confirmed"),
-        (3100i64, "F-3", "dismissed"),
-        (4200i64, "F-4", "false_positive"),
-    ]
-    .iter()
-    .map(|(resolved_ts, id, verdict)| {
-        serde_json::json!({
-            "finding_id": id, "verdict": verdict, "reviewer": "alice", "resolved_ts": resolved_ts,
-        })
-        .to_string()
-    })
-    .collect::<Vec<_>>()
-    .join("\n")
-        + "\n";
-    std::fs::write(&dispositions_path, dispositions_jsonl).unwrap();
+    patch_ts_by_id(
+        &dispositions_path,
+        "resolved_ts",
+        &[("F-1", 1010), ("F-2", 2050), ("F-3", 3100), ("F-4", 4200)],
+    );
 
     let metrics_out = run_ow(&home, &work, &["review-metrics", "--json"]);
     let m: Value = serde_json::from_str(&metrics_out).expect("review-metrics --json must parse");
@@ -282,12 +293,10 @@ fn median_latency_join_uses_earliest_ts_on_refound_finding() {
     );
     std::fs::write(&findings_path, findings_jsonl).unwrap();
 
+    // Patch ONLY resolved_ts on the CLI-written disposition, keeping the
+    // CLI-serialized finding_id/verdict/reviewer intact.
     let dispositions_path = find_file(&home, "dispositions.jsonl");
-    let dispositions_jsonl = format!(
-        "{}\n",
-        serde_json::json!({"finding_id": "F-refound", "verdict": "confirmed", "reviewer": "alice", "resolved_ts": 150}),
-    );
-    std::fs::write(&dispositions_path, dispositions_jsonl).unwrap();
+    patch_ts_by_id(&dispositions_path, "resolved_ts", &[("F-refound", 150)]);
 
     let metrics_out = run_ow(&home, &work, &["review-metrics", "--json"]);
     let m: Value = serde_json::from_str(&metrics_out).unwrap();

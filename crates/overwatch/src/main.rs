@@ -261,8 +261,9 @@ enum Command {
         window: Option<usize>,
     },
     /// The unified human review surface: merge systemic gate violations, canary
-    /// rollback events, and AI-review findings into ONE time-ordered list
-    /// (newest-first), each row tagged with its source kind. Fail-soft: a
+    /// rollback events, and AI-review findings into ONE risk-ordered list
+    /// (highest normalized severity first, newest-first within a severity
+    /// band), each row tagged with its source kind. Fail-soft: a
     /// missing/empty source contributes nothing rather than erroring; the
     /// other sources still render.
     ReviewQueue {
@@ -271,7 +272,8 @@ enum Command {
         /// Only show entries with `ts >= since` (unix seconds).
         #[arg(long)]
         since: Option<i64>,
-        /// Cap the number of rows shown (after newest-first ordering).
+        /// Cap the number of rows shown to the top-K riskiest (after
+        /// severity-first ordering); shed lower-risk rows are reported.
         #[arg(long)]
         limit: Option<usize>,
         /// Bridge CONFIRMED AI findings to the backlog instead of rendering:

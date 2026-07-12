@@ -1,7 +1,7 @@
 {
   "name": "overwatch",
-  "version": "0.1.17",
-  "description": "Project-global cross-session execution ledger + dedup guard + PDO progress view + fleet-level correlated gate-violation detection. Manages claim registry with heartbeat-based liveness, skip-on-duplicate contract for distributed session coordination, and normalized violation-signature recurrence/escalation across tasks and sessions.",
+  "version": "0.1.18",
+  "description": "v0.1.18: review-queue now risk-ranks by normalized severity (High-first) then recency, so a stale high-severity item is never buried/evicted below fresh low-severity noise; --limit yields the top-K riskiest and reports the deferred remainder. Project-global cross-session execution ledger + dedup guard + PDO progress view + fleet-level correlated gate-violation detection. Manages claim registry with heartbeat-based liveness, skip-on-duplicate contract for distributed session coordination, and normalized violation-signature recurrence/escalation across tasks and sessions.",
   "author": { "name": "yukineko" },
   "keywords": ["pdo", "cross-session", "progress", "ledger", "dedup", "hotl", "rust"]
 }

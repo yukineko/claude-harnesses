@@ -27,6 +27,7 @@ mod model;
 mod oracle;
 mod policy;
 mod pr;
+mod precedent;
 mod replan;
 mod review_brief;
 mod run_policy;
@@ -237,6 +238,63 @@ enum Command {
     Escalate {
         #[command(subcommand)]
         action: EscalateAction,
+    },
+    /// Precedent store for `review-brief`'s novelty/precedent downgrade
+    /// (Google LSC "reviewed-once-applied-broadly"): ratify a change's
+    /// declared shape (touched files + target symbols) as routine, list what
+    /// is ratified, or check whether a candidate shape matches. Backed by
+    /// `<state_dir>/<project-key>/precedents.json` (atomic writes, fail-soft).
+    Precedent {
+        #[command(subcommand)]
+        action: PrecedentAction,
+    },
+}
+
+/// Default Jaccard-similarity tolerance for `match_precedent` when no
+/// `--tolerance` override is given. Chosen conservatively (fairly strict,
+/// well above 0.5) so an ambiguous/near-miss shape does NOT silently
+/// downgrade review attention — the precedent mechanism should only fire on
+/// genuinely near-identical declared shapes.
+const DEFAULT_PRECEDENT_TOLERANCE: f64 = 0.8;
+
+#[derive(Subcommand)]
+enum PrecedentAction {
+    /// Ratify a declared shape (files + symbols) as a routine precedent:
+    /// computes its structural fingerprint, stamps `ratified_ts` from
+    /// wall-clock seconds (observability only), and persists it. Prints the
+    /// stored record as JSON.
+    Ratify {
+        /// Comma-separated list of declared touched files.
+        #[arg(long)]
+        files: String,
+        /// Comma-separated list of declared target symbols.
+        #[arg(long, default_value = "")]
+        symbols: String,
+        /// Free-text note describing what this precedent covers.
+        #[arg(long, default_value = "")]
+        note: String,
+    },
+    /// List all ratified precedents. Human-readable by default; `--json`
+    /// prints the records as a JSON array. Fail-soft: an empty/absent store
+    /// prints nothing (or `[]` for `--json`) and exits 0.
+    List {
+        /// Emit JSON instead of the human-readable table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check whether a candidate declared shape matches any ratified
+    /// precedent (debugging / F->P proof helper). Prints the match (or "no
+    /// match") as JSON; exits 0 either way.
+    Check {
+        /// Comma-separated list of candidate touched files.
+        #[arg(long)]
+        files: String,
+        /// Comma-separated list of candidate target symbols.
+        #[arg(long, default_value = "")]
+        symbols: String,
+        /// Jaccard-similarity tolerance override.
+        #[arg(long)]
+        tolerance: Option<f64>,
     },
 }
 
@@ -1667,6 +1725,7 @@ fn run_user(cmd: Command) -> Result<()> {
         }
         Command::Policy { action } => run_policy(action),
         Command::Escalate { action } => run_escalate(&cfg, &cwd, action)?,
+        Command::Precedent { action } => run_precedent(&cfg, &cwd, action)?,
         Command::Status { all } => status::render(&cfg, &cwd, all),
         Command::ReviewBrief { run, task, format } => {
             run_review_brief(&cfg, &cwd, &run, &task, &format)?
@@ -1804,6 +1863,10 @@ fn run_review_brief(
     // "touches sensitive path" driver matches the recorded diffrisk signal
     // for repo-specific gate-plugin surfaces (backlog 68b658e1).
     let sensitive_cfg = diffrisk_record::repo_sensitive_config();
+    // Fail-soft: an unreadable/absent precedent store simply means no
+    // precedent-downgrade signal is available (never a hard error for this
+    // read-only digest command) — empty store => identical brief to today.
+    let precedents = precedent::load_precedents(cfg, cwd);
 
     let brief = review_brief::build_review_brief(
         intent,
@@ -1812,6 +1875,8 @@ fn run_review_brief(
         &task.target_symbols,
         &violations,
         &sensitive_cfg,
+        &precedents,
+        DEFAULT_PRECEDENT_TOLERANCE,
     );
 
     match format {
@@ -1873,6 +1938,68 @@ fn run_escalate(cfg: &Config, cwd: &Path, action: EscalateAction) -> Result<()> 
                     std::process::exit(1);
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// Split a `--files`/`--symbols` comma-separated CLI flag into a `Vec<String>`,
+/// trimming whitespace and dropping empty entries (so `""`, `"a,,b"`, and
+/// `"a, b"` all behave sanely).
+fn parse_csv_list(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// `condukt precedent ratify|list|check` — the precedent store backing
+/// `review-brief`'s novelty/precedent downgrade. Deterministic store I/O;
+/// fail-soft (missing/corrupt store = empty). `ratify`'s timestamp uses the
+/// same wall-clock-seconds source as `escalate add` (observability only; the
+/// fingerprint/match logic never reads wall-clock).
+fn run_precedent(cfg: &Config, cwd: &Path, action: PrecedentAction) -> Result<()> {
+    match action {
+        PrecedentAction::Ratify {
+            files,
+            symbols,
+            note,
+        } => {
+            let files = parse_csv_list(&files);
+            let symbols = parse_csv_list(&symbols);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let rec = precedent::record_precedent(cfg, cwd, &files, &symbols, &note, now)?;
+            println!("{}", serde_json::to_string_pretty(&rec)?);
+        }
+        PrecedentAction::List { json } => {
+            let all = precedent::load_precedents(cfg, cwd);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&all)?);
+            } else if all.is_empty() {
+                println!("No ratified precedents.");
+            } else {
+                for p in &all {
+                    println!(
+                        "  {:016x}  files={:?} symbols={:?}  {}",
+                        p.fingerprint, p.files, p.symbols, p.note
+                    );
+                }
+            }
+        }
+        PrecedentAction::Check {
+            files,
+            symbols,
+            tolerance,
+        } => {
+            let files = parse_csv_list(&files);
+            let symbols = parse_csv_list(&symbols);
+            let tolerance = tolerance.unwrap_or(DEFAULT_PRECEDENT_TOLERANCE);
+            let all = precedent::load_precedents(cfg, cwd);
+            let m = precedent::match_precedent(&files, &symbols, &all, tolerance);
+            println!("{}", serde_json::to_string_pretty(&m)?);
         }
     }
     Ok(())

@@ -267,6 +267,82 @@ fn review_brief_missing_run_is_a_clean_error_not_a_panic() {
 }
 
 #[test]
+fn review_brief_downgrades_to_low_after_matching_ratified_precedent() {
+    // A routine, multi-file, non-sensitive, invariant-clean task would
+    // otherwise be Medium (declared touched_files.len() > 1). Ratify its
+    // EXACT declared shape as a precedent first, then assert review-brief
+    // downgrades it to `low` with a non-null `precedented` block.
+    let fx = Fixture::new("precedent");
+    let file_a = "crates/foo/src/a.rs";
+    let file_b = "crates/foo/src/b.rs";
+    let symbol = "helper";
+    let decomp = format!(
+        r#"{{"goal":"g","tasks":[{{"id":"t1","title":"routine multi-file refactor","touched_files":["{file_a}","{file_b}"],"target_symbols":["{symbol}"],"deps":[],"class":"serial","done_criteria":"done","kind":"chore"}}]}}"#
+    );
+    let rid = fx.init_run(&decomp);
+
+    // Before ratifying: the brief is Medium (no precedent to match).
+    let before = fx.condukt(&[
+        "review-brief",
+        "--run",
+        &rid,
+        "--task",
+        "t1",
+        "--format",
+        "json",
+    ]);
+    assert!(before.status.success(), "review-brief failed: {before:?}");
+    let before_val: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&before.stdout)).unwrap();
+    assert_eq!(before_val["risk_tier"], "medium");
+    assert!(before_val.get("precedented").is_none());
+
+    // Ratify the EXACT declared shape as a precedent.
+    let ratify = fx.condukt(&[
+        "precedent",
+        "ratify",
+        "--files",
+        &format!("{file_a},{file_b}"),
+        "--symbols",
+        symbol,
+        "--note",
+        "routine helper refactor",
+    ]);
+    assert!(
+        ratify.status.success(),
+        "precedent ratify failed: {ratify:?}"
+    );
+
+    // A separate `precedent list` call sees the ratified record.
+    let list = fx.condukt(&["precedent", "list", "--json"]);
+    assert!(list.status.success(), "precedent list failed: {list:?}");
+    let list_val: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&list.stdout)).unwrap();
+    assert_eq!(list_val.as_array().unwrap().len(), 1);
+
+    // After ratifying: review-brief for the matching task downgrades to low
+    // and carries a non-null precedented block.
+    let after = fx.condukt(&[
+        "review-brief",
+        "--run",
+        &rid,
+        "--task",
+        "t1",
+        "--format",
+        "json",
+    ]);
+    assert!(after.status.success(), "review-brief failed: {after:?}");
+    let after_val: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&after.stdout)).unwrap();
+    assert_eq!(after_val["risk_tier"], "low");
+    assert!(
+        !after_val["precedented"].is_null(),
+        "expected a non-null precedented block; got: {after_val}"
+    );
+    assert_eq!(after_val["precedented"]["similarity"], 1.0);
+}
+
+#[test]
 fn review_brief_missing_task_is_a_clean_error_not_a_panic() {
     let fx = Fixture::new("missing-task");
     let decomp = r#"{"goal":"g","tasks":[{"id":"t1","title":"a task","touched_files":[],"deps":[],"class":"serial","done_criteria":"done"}]}"#;

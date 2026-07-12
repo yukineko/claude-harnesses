@@ -20,6 +20,7 @@
 //! (`main.rs`) does the store reads and passes already-loaded data in, which
 //! keeps this module directly unit-testable.
 
+use crate::precedent::{match_precedent, Precedent, PrecedentMatch};
 use blastguard::diffrisk::SensitiveConfig;
 use overwatch::violation::{ViolationEvent, ViolationSource};
 use serde::Serialize;
@@ -97,6 +98,16 @@ pub struct ReviewBrief {
     /// files, then files implicated by a tripped invariant's detail text,
     /// then the remaining declared touched files — deduplicated, stable.
     pub look_here_first: Vec<String>,
+    /// The ratified precedent this task's declared shape matched, set ONLY
+    /// when that match ALSO triggered the tier downgrade to `Low` (see the
+    /// SAFETY INVARIANT on [`build_review_brief`] — a sensitive-path or
+    /// tripped-invariant change is never downgraded, so this stays `None`
+    /// for it even if its shape happens to match a precedent). Absent from
+    /// JSON output (`skip_serializing_if`) so an empty precedent store — or
+    /// today's callers, before this field existed — sees byte-identical
+    /// output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub precedented: Option<PrecedentMatch>,
 }
 
 /// Stable lowercase label for a [`ViolationSource`] (mirrors the private
@@ -120,6 +131,7 @@ fn source_label(source: ViolationSource) -> &'static str {
 /// (this function does the task_key filtering itself, so a caller does not
 /// need to pre-filter — and callers under test can hand in a mixed list to
 /// prove the filter excludes non-matching entries).
+#[allow(clippy::too_many_arguments)]
 pub fn build_review_brief(
     intent: Intent,
     task_key: &str,
@@ -127,6 +139,8 @@ pub fn build_review_brief(
     target_symbols: &[String],
     violations: &[ViolationEvent],
     sensitive_cfg: &SensitiveConfig,
+    precedents: &[Precedent],
+    tolerance: f64,
 ) -> ReviewBrief {
     // Tripped invariants: only events whose task_key matches THIS task,
     // deduplicated by (source, signature) so a repeated identical violation
@@ -165,13 +179,33 @@ pub fn build_review_brief(
         ));
     }
 
-    let risk_tier = if any_sensitive || !tripped_invariants.is_empty() {
+    let mut risk_tier = if any_sensitive || !tripped_invariants.is_empty() {
         RiskTier::High
     } else if touched_files.len() > 1 {
         RiskTier::Medium
     } else {
         RiskTier::Low
     };
+
+    // Precedent downgrade (Google LSC "reviewed-once-applied-broadly").
+    //
+    // SAFETY INVARIANT: only a ROUTINE change — no sensitive path touched AND
+    // no invariant tripped, so `risk_tier` here is Medium or Low, NEVER a
+    // driver-forced High — may be downgraded by a precedent match. A
+    // sensitive-path or tripped-invariant change is NEVER downgraded, even
+    // when its declared shape also matches a ratified precedent: a precedent
+    // must not hide a genuinely risky change from review.
+    let mut precedented: Option<PrecedentMatch> = None;
+    if !any_sensitive && tripped_invariants.is_empty() {
+        if let Some(m) = match_precedent(touched_files, target_symbols, precedents, tolerance) {
+            risk_tier = RiskTier::Low;
+            risk_drivers.push(format!(
+                "precedented: matches ratified precedent {:016x} (sim {:.2}) — spot-check only",
+                m.fingerprint, m.similarity
+            ));
+            precedented = Some(m);
+        }
+    }
 
     // look_here_first: sensitive files first, then files implicated by a
     // tripped invariant's detail/signature text (a real textual signal — no
@@ -215,6 +249,7 @@ pub fn build_review_brief(
         risk_drivers,
         tripped_invariants,
         look_here_first,
+        precedented,
     }
 }
 
@@ -296,6 +331,11 @@ pub fn to_markdown(brief: &ReviewBrief) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::precedent::structural_fingerprint;
+
+    /// Mirrors `main.rs::DEFAULT_PRECEDENT_TOLERANCE` (0.8) for tests that
+    /// don't specifically exercise the tolerance boundary.
+    const DEFAULT_TEST_TOLERANCE: f64 = 0.8;
 
     fn intent() -> Intent {
         Intent {
@@ -341,7 +381,16 @@ mod tests {
         let violations = vec![matching_violation("run-1/t1"), non_matching_violation()];
         let cfg = SensitiveConfig::default();
 
-        let brief = build_review_brief(intent(), "run-1/t1", &touched, &symbols, &violations, &cfg);
+        let brief = build_review_brief(
+            intent(),
+            "run-1/t1",
+            &touched,
+            &symbols,
+            &violations,
+            &cfg,
+            &[],
+            DEFAULT_TEST_TOLERANCE,
+        );
 
         // (a) intent fields present.
         assert_eq!(brief.intent.task_title, "wire the login endpoint");
@@ -398,11 +447,19 @@ mod tests {
             &[],
             &[],
             &cfg,
+            &[],
+            DEFAULT_TEST_TOLERANCE,
         );
         assert_eq!(brief.risk_tier, RiskTier::Low);
         assert!(brief.risk_drivers.is_empty());
         assert!(brief.tripped_invariants.is_empty());
         assert_eq!(brief.look_here_first, vec!["crates/foo/src/plain.rs"]);
+        // Backward-compat: with an empty precedent store, `precedented` is
+        // absent from JSON (not merely `null`) — a caller reading today's
+        // shape sees byte-identical output.
+        assert!(brief.precedented.is_none());
+        let json = serde_json::to_string(&brief).expect("serializable");
+        assert!(!json.contains("precedented"));
     }
 
     #[test]
@@ -430,6 +487,8 @@ mod tests {
             &[],
             &[],
             &cfg,
+            &[],
+            DEFAULT_TEST_TOLERANCE,
         );
         assert!(brief
             .risk_drivers
@@ -439,5 +498,166 @@ mod tests {
         // Consistency proof: blastguard's bare default would NOT flag hooks/.
         let hooks = "crates/bar/hooks/stop.sh".to_string();
         assert!(!SensitiveConfig::default().any_sensitive(std::slice::from_ref(&hooks)));
+    }
+
+    fn plain_intent() -> Intent {
+        Intent {
+            run_goal: "g".to_string(),
+            task_title: "t".to_string(),
+            done_criteria: None,
+            kind: None,
+        }
+    }
+
+    #[test]
+    fn routine_precedent_match_downgrades_medium_to_low() {
+        // A routine MULTI-FILE change (no sensitive path, no tripped
+        // invariant) would otherwise be Medium (touched_files.len() > 1).
+        let touched = vec![
+            "crates/foo/src/a.rs".to_string(),
+            "crates/foo/src/b.rs".to_string(),
+        ];
+        let symbols = vec!["helper".to_string()];
+        let cfg = SensitiveConfig::default();
+
+        // FAILS before the downgrade wiring: an empty precedent store cannot
+        // downgrade anything.
+        let brief_no_precedent = build_review_brief(
+            plain_intent(),
+            "run-1/t1",
+            &touched,
+            &symbols,
+            &[],
+            &cfg,
+            &[],
+            DEFAULT_TEST_TOLERANCE,
+        );
+        assert_eq!(brief_no_precedent.risk_tier, RiskTier::Medium);
+        assert!(brief_no_precedent.precedented.is_none());
+
+        // PASSES after: a ratified precedent with the IDENTICAL declared
+        // shape matches exactly, downgrading the tier to Low.
+        let precedent = crate::precedent::Precedent {
+            fingerprint: structural_fingerprint(&touched, &symbols),
+            files: touched.clone(),
+            symbols: symbols.clone(),
+            ratified_ts: 1,
+            note: "routine helper refactor".to_string(),
+        };
+        let brief = build_review_brief(
+            plain_intent(),
+            "run-1/t1",
+            &touched,
+            &symbols,
+            &[],
+            &cfg,
+            &[precedent],
+            DEFAULT_TEST_TOLERANCE,
+        );
+        assert_eq!(brief.risk_tier, RiskTier::Low);
+        let m = brief.precedented.expect("expected a precedent match");
+        assert_eq!(m.similarity, 1.0);
+        assert!(brief
+            .risk_drivers
+            .iter()
+            .any(|d| d.starts_with("precedented:")));
+    }
+
+    #[test]
+    fn sensitive_path_high_is_never_downgraded_even_with_a_precedent_match() {
+        // SAFETY INVARIANT: a sensitive-path change stays High even when its
+        // declared shape ALSO matches a ratified precedent exactly.
+        let touched = vec!["crates/bar/hooks/stop.sh".to_string()];
+        let symbols = vec!["run_hook".to_string()];
+        let cfg = crate::diffrisk_record::repo_sensitive_config();
+
+        let precedent = crate::precedent::Precedent {
+            fingerprint: structural_fingerprint(&touched, &symbols),
+            files: touched.clone(),
+            symbols: symbols.clone(),
+            ratified_ts: 1,
+            note: "should NOT apply".to_string(),
+        };
+        let brief = build_review_brief(
+            plain_intent(),
+            "run-1/t1",
+            &touched,
+            &symbols,
+            &[],
+            &cfg,
+            &[precedent],
+            DEFAULT_TEST_TOLERANCE,
+        );
+        assert_eq!(
+            brief.risk_tier,
+            RiskTier::High,
+            "a sensitive-path change must NEVER be downgraded by a precedent match"
+        );
+        assert!(
+            brief.precedented.is_none(),
+            "precedented is only set when the match actually drove a downgrade"
+        );
+        assert!(!brief
+            .risk_drivers
+            .iter()
+            .any(|d| d.starts_with("precedented:")));
+    }
+
+    #[test]
+    fn tripped_invariant_high_is_never_downgraded_even_with_a_precedent_match() {
+        // SAFETY INVARIANT, invariant-tripped variant: a tripped-invariant
+        // change stays High even when its declared shape ALSO matches a
+        // ratified precedent exactly.
+        let touched = vec!["crates/foo/src/plain.rs".to_string()];
+        let symbols = vec!["helper".to_string()];
+        let cfg = SensitiveConfig::default();
+        let violations = vec![matching_violation("run-1/t1")];
+
+        let precedent = crate::precedent::Precedent {
+            fingerprint: structural_fingerprint(&touched, &symbols),
+            files: touched.clone(),
+            symbols: symbols.clone(),
+            ratified_ts: 1,
+            note: "should NOT apply".to_string(),
+        };
+        let brief = build_review_brief(
+            plain_intent(),
+            "run-1/t1",
+            &touched,
+            &symbols,
+            &violations,
+            &cfg,
+            &[precedent],
+            DEFAULT_TEST_TOLERANCE,
+        );
+        assert_eq!(
+            brief.risk_tier,
+            RiskTier::High,
+            "a tripped-invariant change must NEVER be downgraded by a precedent match"
+        );
+        assert!(brief.precedented.is_none());
+    }
+
+    #[test]
+    fn empty_precedent_store_leaves_brief_identical_to_today() {
+        // Backward-compat: with NO precedents ratified, the brief's tier and
+        // risk_drivers are unaffected, and the JSON omits `precedented`
+        // entirely (not `"precedented":null`).
+        let touched = vec!["crates/foo/src/plain.rs".to_string()];
+        let cfg = SensitiveConfig::default();
+        let brief = build_review_brief(
+            plain_intent(),
+            "run-1/t1",
+            &touched,
+            &[],
+            &[],
+            &cfg,
+            &[],
+            DEFAULT_TEST_TOLERANCE,
+        );
+        assert_eq!(brief.risk_tier, RiskTier::Low);
+        assert!(brief.precedented.is_none());
+        let json = serde_json::to_string(&brief).unwrap();
+        assert!(!json.contains("precedented"));
     }
 }

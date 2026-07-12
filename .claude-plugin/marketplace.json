@@ -799,8 +799,8 @@
     },
     {
       "name": "overwatch",
-      "description": "Project-global cross-session execution ledger with dedup guard + PDO progress view. Manages claim registry with heartbeat-based liveness and skip-on-duplicate contract for distributed session coordination. SessionStart and Stop hooks surface current run state and progress aggregation (session/backlog/hypothesis/condukt run/compass gap in fail-soft view). Includes the /continuous-audit driver skill that runs an adversarial finder->verifier review round over the gate crates and auto-populates the unified review-queue (findings deduped by content fingerprint, not just id; repeated same-plugin rollbacks likewise collapse, each with an occurrences count). Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.20",
+      "description": "Project-global cross-session execution ledger with dedup guard + PDO progress view. Manages claim registry with heartbeat-based liveness and skip-on-duplicate contract for distributed session coordination. SessionStart and Stop hooks surface current run state and progress aggregation (session/backlog/hypothesis/condukt run/compass gap in fail-soft view). Includes the /continuous-audit driver skill that runs an adversarial finder->verifier review round over the gate crates and auto-populates the unified review-queue (findings deduped by content fingerprint, not just id; repeated same-plugin rollbacks likewise collapse, each with an occurrences count). New `record-disposition`/`review-metrics` close the loop with review-effectiveness measurement (false-positive rate, human-agreement rate, median resolution latency). Subscription-native (skill + hook + bundled Rust binary, no API key).",
+      "version": "0.1.21",
       "category": "observability",
       "keywords": [
         "pdo",

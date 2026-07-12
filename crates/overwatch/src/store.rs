@@ -1,5 +1,6 @@
 /// Event store and lease storage backend.
 use crate::audit_round::AuditRound;
+use crate::disposition::Disposition;
 use crate::event::LifecycleEvent;
 use crate::review_finding::ReviewFinding;
 use crate::rollback::RollbackEvent;
@@ -415,6 +416,52 @@ pub fn read_audit_rounds(cwd: &Path) -> Result<Vec<AuditRound>> {
                 }
             }
             Ok(rounds)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Path to the dispositions.jsonl file (append-only, human dispositions of
+/// AI/adversarial review findings — review-effectiveness measurement). Its
+/// own stream since a disposition is a distinct signal from the findings
+/// themselves (see `disposition.rs`); `overwatch review-metrics` reads it
+/// back joined against `review_findings.jsonl`.
+pub fn dispositions_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("dispositions.jsonl"))
+}
+
+/// Append a human disposition to dispositions.jsonl (one JSON line each).
+pub fn append_disposition(cwd: &Path, disposition: &Disposition) -> Result<()> {
+    let path = dispositions_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string(disposition)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?
+        .write_all(format!("{}\n", json).as_bytes())?;
+    Ok(())
+}
+
+/// Read all dispositions from dispositions.jsonl. Returns an empty vec if the
+/// file doesn't exist or is empty (fail-soft, same contract as
+/// `read_review_findings`). Corrupt lines are skipped rather than failing the
+/// whole read.
+pub fn read_dispositions(cwd: &Path) -> Result<Vec<Disposition>> {
+    let path = dispositions_path(cwd)?;
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => {
+            let mut dispositions = Vec::new();
+            for line in txt.lines() {
+                if !line.is_empty() {
+                    if let Ok(d) = serde_json::from_str::<Disposition>(line) {
+                        dispositions.push(d);
+                    }
+                }
+            }
+            Ok(dispositions)
         }
         Err(_) => Ok(Vec::new()),
     }

@@ -4,6 +4,7 @@
 
 pub mod audit_round;
 pub mod canary;
+pub mod disposition;
 pub mod event;
 pub mod review_finding;
 pub mod rollback;

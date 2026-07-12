@@ -5,6 +5,8 @@ mod bridge;
 pub mod canary;
 mod canary_cli;
 mod control;
+pub mod disposition;
+mod disposition_cli;
 pub mod event;
 mod lease;
 mod render;
@@ -259,6 +261,29 @@ enum Command {
         /// 0 = all rounds).
         #[arg(long)]
         window: Option<usize>,
+    },
+    /// Record a human disposition (confirmed|dismissed|false-positive) of an
+    /// AI/adversarial review finding (join key: `--finding-id`, resolved
+    /// against `record-finding`). `review-metrics` reads these back to
+    /// compute false-positive rate / agreement rate / median latency.
+    RecordDisposition {
+        /// The finding_id this disposition resolves (joins to `record-finding`).
+        #[arg(long = "finding-id")]
+        finding_id: String,
+        /// The human verdict: confirmed | dismissed | false-positive.
+        #[arg(long)]
+        verdict: String,
+        /// Free-text identifier of who resolved it.
+        #[arg(long)]
+        reviewer: String,
+    },
+    /// Read the disposition ledger (joined against the review-findings
+    /// store) and print review-effectiveness metrics: false-positive rate,
+    /// human-agreement rate, and median resolution latency. Fail-soft: an
+    /// empty ledger prints a zero/`n/a` report rather than erroring.
+    ReviewMetrics {
+        #[arg(long)]
+        json: bool,
     },
     /// The unified human review surface: merge systemic gate violations, canary
     /// rollback events, and AI-review findings into ONE risk-ordered list
@@ -524,6 +549,16 @@ fn main() -> Result<()> {
         },
         Command::AuditMetrics { json, window } => {
             audit_round_cli::metrics(json, window)?;
+        }
+        Command::RecordDisposition {
+            finding_id,
+            verdict,
+            reviewer,
+        } => {
+            disposition_cli::record(finding_id, &verdict, reviewer, store::now())?;
+        }
+        Command::ReviewMetrics { json } => {
+            disposition_cli::metrics(json)?;
         }
         Command::ReviewQueue {
             json,

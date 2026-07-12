@@ -350,6 +350,40 @@ fn unsatisfied_prop_ids(props: &[Property], findings: Option<&str>) -> Vec<&'sta
         .collect()
 }
 
+/// Pure mapper: escalate an isolated checker-outage give-up to a fail-closed
+/// `Block` when the outage is *systemic* (recurring across tasks/sessions),
+/// per the fleet-outage-vs-isolated-flake design. Any decision other than the
+/// `checker-error-giveup` `Allow` is returned unchanged for either flag value
+/// — this function only ever rewrites that one specific give-up, never any
+/// other Allow tag (e.g. `properties-satisfied`, `giveup`, `truncated-giveup`)
+/// and never an existing Block.
+///
+/// `systemic_outage == false` (the common, isolated case — a checker flaked
+/// on just this task/session) keeps the input `Allow` unchanged: propguard
+/// must never fail-halt the whole fleet over one task's transient checker
+/// error. Only a *confirmed fleet-wide* outage (the caller has already
+/// checked recurrence across distinct tasks/sessions) flips to `Block`.
+pub fn escalate_giveup_on_systemic(decision: Decision, systemic_outage: bool) -> Decision {
+    match decision {
+        Decision::Allow {
+            tag: "checker-error-giveup",
+            ..
+        } if systemic_outage => Decision::Block {
+            reason: "propguard: FLEET-WIDE checker outage confirmed (recurring across \
+                     multiple tasks/sessions) — holding the stop to avoid shipping \
+                     UNVERIFIED code. Fix checker_cmd (see `propguard status`) or set \
+                     PROPGUARD_DISABLE=1 to bypass."
+                .to_string(),
+            tag: "checker-outage-systemic",
+            files: vec![],
+            properties: vec![],
+            attempts: 0,
+            last_hash: String::new(),
+        },
+        other => other,
+    }
+}
+
 fn allow(tag: &'static str, st: &crate::state::SessionState) -> Decision {
     Decision::Allow {
         tag,
@@ -822,6 +856,88 @@ mod tests {
         match d {
             Decision::Allow { tag, .. } => assert_eq!(tag, "checker-error-giveup"),
             Decision::Block { .. } => panic!("must give up after max_attempts"),
+        }
+    }
+
+    // ── isolated vs systemic checker-outage escalation ─────────────────────
+
+    fn checker_error_giveup() -> Decision {
+        Decision::Allow {
+            tag: "checker-error-giveup",
+            attempts: 0,
+            last_hash: String::new(),
+        }
+    }
+
+    #[test]
+    fn escalate_giveup_isolated_stays_allow() {
+        // Not systemic: the isolated give-up case must pass through unchanged.
+        let d = escalate_giveup_on_systemic(checker_error_giveup(), false);
+        match d {
+            Decision::Allow { tag, .. } => assert_eq!(tag, "checker-error-giveup"),
+            Decision::Block { .. } => panic!("isolated give-up must stay Allow"),
+        }
+    }
+
+    #[test]
+    fn escalate_giveup_systemic_becomes_block() {
+        let d = escalate_giveup_on_systemic(checker_error_giveup(), true);
+        match d {
+            Decision::Block {
+                tag,
+                reason,
+                attempts,
+                last_hash,
+                files,
+                properties,
+            } => {
+                assert_eq!(tag, "checker-outage-systemic");
+                assert!(reason.contains("PROPGUARD_DISABLE"));
+                assert!(reason.to_lowercase().contains("fleet"));
+                assert_eq!(attempts, 0);
+                assert!(last_hash.is_empty());
+                assert!(files.is_empty());
+                assert!(properties.is_empty());
+            }
+            Decision::Allow { .. } => panic!("systemic outage must fail-closed to Block"),
+        }
+    }
+
+    #[test]
+    fn escalate_giveup_non_giveup_decision_passes_through_both_flags() {
+        // A normal Block (e.g. below-threshold) must not be touched by this
+        // mapper regardless of the systemic flag.
+        let block = || Decision::Block {
+            reason: "some other block".to_string(),
+            tag: "below-threshold",
+            files: vec![],
+            properties: vec![],
+            attempts: 1,
+            last_hash: String::new(),
+        };
+        match escalate_giveup_on_systemic(block(), true) {
+            Decision::Block { tag, .. } => assert_eq!(tag, "below-threshold"),
+            Decision::Allow { .. } => panic!("non-giveup decision must not be rewritten"),
+        }
+        match escalate_giveup_on_systemic(block(), false) {
+            Decision::Block { tag, .. } => assert_eq!(tag, "below-threshold"),
+            Decision::Allow { .. } => panic!("non-giveup decision must not be rewritten"),
+        }
+
+        // An Allow with a different tag (e.g. properties-satisfied) must not
+        // be rewritten either, even when systemic_outage is true.
+        let other_allow = || Decision::Allow {
+            tag: "properties-satisfied",
+            attempts: 0,
+            last_hash: "h".to_string(),
+        };
+        match escalate_giveup_on_systemic(other_allow(), true) {
+            Decision::Allow { tag, .. } => assert_eq!(tag, "properties-satisfied"),
+            Decision::Block { .. } => panic!("non-giveup Allow must not be rewritten"),
+        }
+        match escalate_giveup_on_systemic(other_allow(), false) {
+            Decision::Allow { tag, .. } => assert_eq!(tag, "properties-satisfied"),
+            Decision::Block { .. } => panic!("non-giveup Allow must not be rewritten"),
         }
     }
 

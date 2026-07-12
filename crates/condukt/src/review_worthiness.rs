@@ -235,19 +235,26 @@ pub fn has_rationale(commit_body: &str) -> bool {
 /// A change is task-linked iff its commit message contains a tracked-task
 /// token. Exactly two patterns count, matched case-insensitively:
 ///
-/// 1. A STANDALONE 8-hex-character id (this repo's backlog id shape, e.g.
-///    `c3dcbd6d`) — `\b[0-9a-f]{8}\b`. The word-boundary anchors mean a
-///    hex run of a DIFFERENT length (e.g. a 40-char git SHA) does NOT
-///    match, since there is no boundary between its 8th and 9th hex
-///    character.
-/// 2. The literal word `backlog` followed (after optional whitespace/`:`/
+/// 1. The literal word `backlog` followed (after optional whitespace/`:`/
 ///    `#`/`-`/`/`) by an alphanumeric id of at least 4 characters, e.g.
 ///    `backlog: c3dcbd6d`, `backlog #1234abcd`, `Backlog/task42`.
+/// 2. A `run-` prefix followed by exactly 8 digits, e.g. `run-20260713` (the
+///    date stem of a condukt run id such as `run-20260713-012935`). The
+///    8-digit anchor is deliberate: it matches a run-id date stem but NOT
+///    prose like `run-time` or `run-down`, since neither is 8 digits.
+///
+/// A BARE standalone 8-hex-character token (e.g. `c3dcbd6d`) is
+/// intentionally NOT treated as a task link, even though it is this repo's
+/// backlog id shape: it is lexically indistinguishable from an 8-char git
+/// short-SHA (`a1b2c3d4`, `deadbeef`), so a commit that only cites a SHA
+/// (e.g. "revert of a1b2c3d4") must not be mis-scored as task-linked. The
+/// same hex IS accepted when it carries explicit context, e.g.
+/// `(backlog c3dcbd6d)`.
 ///
 /// Pure (compiles a fresh, statically-correct regex per call — this is a
 /// low-frequency CLI-boundary check, not a hot loop).
 pub fn has_task_link(commit_message: &str) -> bool {
-    let re = regex::Regex::new(r"(?i)\b[0-9a-f]{8}\b|backlog[\s:#/-]*[0-9a-zA-Z]{4,}")
+    let re = regex::Regex::new(r"(?i)backlog[\s:#/-]*[0-9a-z]{4,}|\brun-[0-9]{8}")
         .expect("static task-link regex is valid");
     re.is_match(commit_message)
 }
@@ -397,8 +404,10 @@ mod tests {
     // --- has_task_link ---
 
     #[test]
-    fn has_task_link_present_for_standalone_8hex_id() {
-        assert!(has_task_link("fix(condukt): close gap (c3dcbd6d)"));
+    fn has_task_link_absent_for_bare_8hex_without_context() {
+        // A bare 8-hex token is indistinguishable from a git short-SHA, so
+        // it must NOT be treated as a task link without explicit context.
+        assert!(!has_task_link("fix(condukt): close gap (c3dcbd6d)"));
     }
 
     #[test]
@@ -418,5 +427,31 @@ mod tests {
         assert!(!has_task_link(
             "see commit 1234567890abcdef1234567890abcdef12345678"
         ));
+    }
+
+    #[test]
+    fn has_task_link_absent_for_bare_git_short_sha() {
+        // THE fix's RED->GREEN discriminator: a commit that only cites a
+        // git short-SHA must not be mis-scored as task-linked.
+        assert!(!has_task_link("revert of a1b2c3d4"));
+        assert!(!has_task_link("cherry-picked from deadbeef"));
+        assert!(!has_task_link("verifier-found in c3dcbd6d earlier"));
+    }
+
+    #[test]
+    fn has_task_link_present_for_backlog_context_on_same_hex() {
+        // The SAME hex that is rejected bare IS accepted with context.
+        assert!(has_task_link("(backlog c3dcbd6d)"));
+    }
+
+    #[test]
+    fn has_task_link_present_for_run_id() {
+        assert!(has_task_link("shipped in run-20260713-012935"));
+    }
+
+    #[test]
+    fn has_task_link_absent_for_run_word_prose() {
+        assert!(!has_task_link("a run-time optimization"));
+        assert!(!has_task_link("run-down of changes"));
     }
 }

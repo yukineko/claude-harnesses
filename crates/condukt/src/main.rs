@@ -30,6 +30,7 @@ mod pr;
 mod precedent;
 mod replan;
 mod review_brief;
+mod review_worthiness;
 mod run_policy;
 mod schedule;
 mod state;
@@ -247,6 +248,62 @@ enum Command {
     Precedent {
         #[command(subcommand)]
         action: PrecedentAction,
+    },
+    /// Deterministic review-WORTHINESS (review-COST) scoring — a signal
+    /// distinct from blastguard/diffrisk's blast-radius: how much human
+    /// review attention a change WARRANTS, judged from its own shape (size,
+    /// net deletion, missing rationale, absent task link). Feeds a future
+    /// review-budget allocator. Primary mode takes the signals directly as
+    /// flags (fully deterministic, no git needed); `--from-git` is an
+    /// optional fail-soft convenience that gathers them from a live repo.
+    ReviewWorthiness {
+        /// Number of files touched by the change.
+        #[arg(long, default_value_t = 0)]
+        files: u32,
+        /// Total inserted lines.
+        #[arg(long, default_value_t = 0)]
+        insertions: u64,
+        /// Total deleted lines.
+        #[arg(long, default_value_t = 0)]
+        deletions: u64,
+        /// The change carries a non-empty rationale (commit body).
+        #[arg(long, conflicts_with = "no_rationale")]
+        rationale: bool,
+        /// The change carries NO rationale. Mutually exclusive with
+        /// `--rationale`. Default (neither flag given): `false` (no
+        /// rationale) — a pessimistic default so an automated caller that
+        /// forgets to pass either flag gets the conservative (more
+        /// review-worthy) reading rather than a silently optimistic one.
+        #[arg(long, conflicts_with = "rationale")]
+        no_rationale: bool,
+        /// The change is linked to a tracked task/backlog id.
+        #[arg(long, conflicts_with = "no_task_link")]
+        task_link: bool,
+        /// The change is NOT linked to a tracked task/backlog id. Mutually
+        /// exclusive with `--task-link`. Default (neither flag given):
+        /// `false` (no task link) — same pessimistic-default rationale as
+        /// `--no-rationale`.
+        #[arg(long, conflicts_with = "task_link")]
+        no_task_link: bool,
+        /// Emit structured JSON (`{score, drivers, inputs}`) instead of the
+        /// human-readable default.
+        #[arg(long)]
+        json: bool,
+        /// Convenience mode: gather files/insertions/deletions from `git
+        /// diff --numstat <base> <head>` and rationale/task-link from `git
+        /// log --format=%B <base>..<head>` instead of reading `--files`/
+        /// `--insertions`/`--deletions`/`--rationale`/`--task-link`.
+        /// Fail-soft: any git failure degrades to zeros/false and still
+        /// prints a score, never errors. The flag-driven mode above (no
+        /// `--from-git`) is the tested, hermetic, primary contract.
+        #[arg(long)]
+        from_git: bool,
+        /// `--from-git` base ref. Default: `HEAD~1`.
+        #[arg(long, default_value = "HEAD~1")]
+        base: String,
+        /// `--from-git` head ref. Default: `HEAD`.
+        #[arg(long, default_value = "HEAD")]
+        head: String,
     },
 }
 
@@ -1730,6 +1787,21 @@ fn run_user(cmd: Command) -> Result<()> {
         Command::ReviewBrief { run, task, format } => {
             run_review_brief(&cfg, &cwd, &run, &task, &format)?
         }
+        Command::ReviewWorthiness {
+            files,
+            insertions,
+            deletions,
+            rationale,
+            no_rationale: _,
+            task_link,
+            no_task_link: _,
+            json,
+            from_git,
+            base,
+            head,
+        } => run_review_worthiness(
+            &cwd, files, insertions, deletions, rationale, task_link, json, from_git, &base, &head,
+        )?,
         // These are dispatched as hooks in main() (via run_hook, which exits and
         // never returns here). Reaching this arm would be an internal dispatch
         // bug; return a clean error instead of panicking the process.
@@ -1885,6 +1957,120 @@ fn run_review_brief(
         other => bail!("unknown --format '{other}' (expected md|json)"),
     }
     Ok(())
+}
+
+/// `condukt review-worthiness` — the review-worthiness (review-cost) CLI.
+///
+/// Primary mode (default, `--from-git` absent): builds
+/// [`review_worthiness::ReviewWorthinessInputs`] DIRECTLY from `--files`/
+/// `--insertions`/`--deletions`/`--rationale|--no-rationale`/
+/// `--task-link|--no-task-link`, calls the pure
+/// [`review_worthiness::score_review_worthiness`], and prints the result —
+/// hermetic, no git required, the tested contract.
+///
+/// Convenience mode (`--from-git`): all git shell-out lives HERE at the CLI
+/// boundary (never inside the pure module) and is entirely fail-soft — a
+/// missing git binary, a non-repo cwd, or an invalid ref degrades each
+/// signal to its zero/false default and this still prints a computable
+/// score, never a hard error.
+#[allow(clippy::too_many_arguments)]
+fn run_review_worthiness(
+    cwd: &Path,
+    files: u32,
+    insertions: u64,
+    deletions: u64,
+    rationale: bool,
+    task_link: bool,
+    json: bool,
+    from_git: bool,
+    base: &str,
+    head: &str,
+) -> Result<()> {
+    let inputs = if from_git {
+        gather_review_worthiness_inputs_from_git(cwd, base, head)
+    } else {
+        review_worthiness::ReviewWorthinessInputs {
+            files_changed: files,
+            insertions,
+            deletions,
+            has_rationale: rationale,
+            has_task_link: task_link,
+        }
+    };
+
+    let scored = review_worthiness::score_review_worthiness(&inputs);
+
+    if json {
+        let out = serde_json::json!({
+            "score": scored.score,
+            "drivers": scored.drivers,
+            "inputs": inputs,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("review-worthiness score: {}", scored.score);
+        if scored.drivers.is_empty() {
+            println!("(no penalty drivers)");
+        } else {
+            for d in &scored.drivers {
+                println!("  - {d}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Fail-soft `--from-git` gather: shells out to `git diff --numstat <base>
+/// <head>` (parsed by the pure [`review_worthiness::parse_numstat`]) and
+/// `git log --format=%B <base>..<head>` (split into summary/body for
+/// [`review_worthiness::has_rationale`]/[`review_worthiness::has_task_link`]).
+/// ANY git failure (not on PATH, non-zero exit, non-UTF8 output, invalid
+/// refs) degrades the corresponding signal to its zero/false default —
+/// never a hard error, mirroring `calibrated_confidence`'s soft-probe
+/// pattern.
+fn gather_review_worthiness_inputs_from_git(
+    cwd: &Path,
+    base: &str,
+    head: &str,
+) -> review_worthiness::ReviewWorthinessInputs {
+    let numstat_range = format!("{base}..{head}");
+    let numstat = std::process::Command::new("git")
+        .args(["diff", "--numstat", base, head])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let totals = review_worthiness::parse_numstat(&numstat);
+
+    let log = std::process::Command::new("git")
+        .args(["log", "--format=%B", &numstat_range])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    // `%B` is the raw commit message (summary + blank line + body) for each
+    // commit in range, concatenated. Treat the first line as the summary and
+    // everything after the first blank line as the "body" for the rationale
+    // check; the WHOLE log text (summary included) is searched for a
+    // task-link token.
+    let body: String = log
+        .split_once("\n\n")
+        .map(|(_, rest)| rest)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    review_worthiness::ReviewWorthinessInputs {
+        files_changed: totals.files_changed,
+        insertions: totals.insertions,
+        deletions: totals.deletions,
+        has_rationale: review_worthiness::has_rationale(&body),
+        has_task_link: review_worthiness::has_task_link(&log),
+    }
 }
 
 /// `condukt escalate add|list|resolve` — the durable async escalation channel.

@@ -95,7 +95,7 @@ fn run_in(cwd: &Path) -> Result<()> {
     let project = cwd.to_string_lossy().into_owned();
     let mut bridged_now = 0usize;
 
-    for f in &deduped {
+    for (f, _occurrences) in &deduped {
         if already.contains(&f.finding_id) {
             continue; // idempotent: already forwarded in a prior round.
         }

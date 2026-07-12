@@ -82,35 +82,155 @@ pub struct ReviewQueueEntry {
     /// The key identifier for this row: the violation signature, the rolled-back
     /// plugin, or the finding id — whatever most identifies the item.
     pub identifier: String,
+    /// How many raw source records collapsed into this row (noise-collapse:
+    /// repeated AI findings sharing a content fingerprint, or repeated
+    /// same-plugin rollback events). `1` when no collapsing happened.
+    /// Additive field: `#[serde(default)]` keeps old JSONL/fixtures reading
+    /// as `1` (systemic rows, and any row predating this field).
+    #[serde(default = "default_occurrences")]
+    pub occurrences: u32,
 }
 
-/// Deduplicate AI findings by `finding_id`, keeping only the **latest** (`ts`)
-/// record per id.
+/// Default for [`ReviewQueueEntry::occurrences`] on deserialize — back-compat
+/// for rows recorded before the field existed (and for streams, like
+/// systemic, that never collapse).
+fn default_occurrences() -> u32 {
+    1
+}
+
+/// Normalize a piece of finding text for fingerprint comparison: trim
+/// leading/trailing whitespace, lowercase (ASCII), and collapse internal
+/// whitespace runs to a single space. Pure and total (any `&str` in, a
+/// normalized `String` out) so two records that only differ by incidental
+/// formatting (casing, extra spaces) still fingerprint-match.
+fn normalize_for_fingerprint(s: &str) -> String {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+/// Content fingerprint for a [`ReviewFinding`]: `source` plus the normalized
+/// `file` (empty string when absent) and normalized `summary`, joined with a
+/// unit-separator (`\u{1f}`) so no legitimate field value can forge a
+/// collision by embedding the delimiter. There is no rule-id field on
+/// `ReviewFinding` — this is built only from real, existing fields.
+fn finding_fingerprint(f: &ReviewFinding) -> String {
+    let file = normalize_for_fingerprint(f.file.as_deref().unwrap_or(""));
+    let summary = normalize_for_fingerprint(&f.summary);
+    format!("{}\u{1f}{}\u{1f}{}", f.source, file, summary)
+}
+
+/// Deduplicate AI findings, collapsing two kinds of duplication:
 ///
-/// The Continuous-Audit loop re-records confirmed findings every round; a
-/// finding that persists across rounds is `record-finding`ed repeatedly with the
-/// same `finding_id`. Without this collapse the review queue would grow one row
-/// per round for the *same* finding, so an auto-populating loop becomes unusable
-/// noise. Keeping the newest record means the surfaced row reflects the finding's
-/// most recent state (severity/summary can be revised between rounds). On an
-/// exact `ts` tie the later record in `findings` wins ("last write wins" at the
-/// same instant), which is deterministic because the input slice order is stable
-/// (append order of `review_findings.jsonl`). Only the AI-findings stream is
-/// touched — the systemic and rollback streams never pass through here.
-pub(crate) fn dedup_findings(findings: &[ReviewFinding]) -> Vec<ReviewFinding> {
-    use std::collections::HashMap;
-    let mut best: HashMap<&str, ReviewFinding> = HashMap::new();
-    for f in findings {
-        match best.get(f.finding_id.as_str()) {
-            // Keep the existing record only if it is strictly newer; otherwise
-            // insert (new id) or replace (>= ts → newest, ties favour later input).
-            Some(existing) if existing.ts > f.ts => {}
-            _ => {
-                best.insert(f.finding_id.as_str(), f.clone());
+/// 1. **Same `finding_id`** — the Continuous-Audit loop re-records a still-
+///    confirmed finding every round with the same id (summary/severity may be
+///    revised between rounds); this is the original identity rule.
+/// 2. **Same content fingerprint** ([`finding_fingerprint`]: `source` +
+///    normalized `file` + normalized `summary`) — independent reports of the
+///    *same underlying issue* that happen to carry different `finding_id`s
+///    (e.g. two audit passes minting fresh ids for the same finding).
+///
+/// A record can join a group via *either* rule (id-match OR fingerprint-match,
+/// transitively) — implemented as a small union-find over the input indices so
+/// chained matches merge correctly. Each resulting group collapses to ONE
+/// representative record — the **newest** (`ts`); on an exact `ts` tie the
+/// later record in `findings` wins ("last write wins" at the same instant),
+/// deterministic because the input slice order is stable (append order of
+/// `review_findings.jsonl`) and iteration never depends on hash order — plus
+/// the group's **occurrence count** (how many raw records collapsed into it).
+/// Only the AI-findings stream is touched — the systemic and rollback streams
+/// never pass through here (rollbacks have their own same-plugin collapse in
+/// [`build_queue`]).
+pub(crate) fn dedup_findings(findings: &[ReviewFinding]) -> Vec<(ReviewFinding, u32)> {
+    let n = findings.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    // Union-find over indices 0..n, unioning i,j when they share either
+    // identity rule above.
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], x: usize) -> usize {
+        if parent[x] != x {
+            parent[x] = find(parent, parent[x]);
+        }
+        parent[x]
+    }
+    fn union(parent: &mut [usize], a: usize, b: usize) {
+        let ra = find(parent, a);
+        let rb = find(parent, b);
+        if ra != rb {
+            // Deterministic: always attach the higher root to the lower one.
+            if ra < rb {
+                parent[rb] = ra;
+            } else {
+                parent[ra] = rb;
             }
         }
     }
-    best.into_values().collect()
+
+    let fingerprints: Vec<String> = findings.iter().map(finding_fingerprint).collect();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if findings[i].finding_id == findings[j].finding_id
+                || fingerprints[i] == fingerprints[j]
+            {
+                union(&mut parent, i, j);
+            }
+        }
+    }
+
+    // Group indices by root. A BTreeMap keyed on the (deterministic) root
+    // index avoids any hash-order dependence; within each group, indices are
+    // pushed in ascending (i.e. input) order.
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..n {
+        let root = find(&mut parent, i);
+        groups.entry(root).or_default().push(i);
+    }
+
+    let mut out = Vec::with_capacity(groups.len());
+    for (_, idxs) in groups {
+        // Representative: newest ts; on a tie, the LATER index (later in the
+        // original input order) wins — mirrors the "last write wins" rule.
+        let mut best = idxs[0];
+        for &idx in &idxs[1..] {
+            if findings[idx].ts >= findings[best].ts {
+                best = idx;
+            }
+        }
+        out.push((findings[best].clone(), idxs.len() as u32));
+    }
+    out
+}
+
+/// Collapse repeated same-`plugin` [`RollbackEvent`]s into one representative
+/// row per plugin, mirroring [`dedup_findings`]'s noise-collapse for the
+/// rollback stream: a flapping canary that rolls the same plugin back
+/// repeatedly should surface as ONE row (with an occurrence count), not one
+/// row per event. Representative = newest `ts`; on a tie the later event in
+/// `rollbacks` wins (same determinism rule as the finding dedup). Grouped via
+/// a `BTreeMap<&str, _>` keyed on `plugin` so iteration never depends on hash
+/// order.
+fn collapse_rollbacks(rollbacks: &[RollbackEvent]) -> Vec<(RollbackEvent, u32)> {
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<&str, Vec<&RollbackEvent>> = BTreeMap::new();
+    for rb in rollbacks {
+        groups.entry(rb.plugin.as_str()).or_default().push(rb);
+    }
+    let mut out = Vec::with_capacity(groups.len());
+    for (_, events) in groups {
+        let mut best = events[0];
+        for &e in &events[1..] {
+            if e.ts >= best.ts {
+                best = e;
+            }
+        }
+        out.push((best.clone(), events.len() as u32));
+    }
+    out
 }
 
 /// Deterministically merge the three sources into one **severity-first**
@@ -122,11 +242,17 @@ pub(crate) fn dedup_findings(findings: &[ReviewFinding]) -> Vec<ReviewFinding> {
 ///   happening cross-task problem);
 /// * rollbacks are keyed by plugin, timestamped at their `ts`, and always
 ///   ranked `Severity::High` (a shipped regression the fleet caught);
-/// * AI findings are keyed by `finding_id`, timestamped at their `ts`, and
-///   ranked via [`normalize_severity`] on their free-text `severity` field
-///   (missing/unrecognized → `Severity::Medium`); findings sharing a
-///   `finding_id` are first collapsed to their newest record by
-///   [`dedup_findings`] so a finding recurring across audit rounds is ONE row.
+///   repeated same-plugin events are first collapsed to one row (newest
+///   representative + an `occurrences` count) by [`collapse_rollbacks`] so a
+///   flapping canary doesn't flood the queue;
+/// * AI findings are timestamped at their `ts` and ranked via
+///   [`normalize_severity`] on their free-text `severity` field
+///   (missing/unrecognized → `Severity::Medium`); findings sharing either a
+///   `finding_id` or a content fingerprint (source + normalized file +
+///   normalized summary) are first collapsed to their newest record — plus an
+///   `occurrences` count — by [`dedup_findings`], so a finding recurring
+///   across audit rounds, or reported independently under a different id, is
+///   ONE row.
 ///
 /// A missing/empty source simply contributes no rows. Ties on
 /// `(severity, ts)` are broken deterministically by (kind, identifier) so the
@@ -151,30 +277,39 @@ pub fn build_queue(
                 r.occurrences, r.distinct_tasks, r.distinct_sessions
             ),
             identifier: r.signature.clone(),
+            // Already a pre-aggregated recurrence count via `r.occurrences`
+            // (folded upstream by `detect_recurrence`); this stream never
+            // collapses further here.
+            occurrences: 1,
         });
     }
 
-    for rb in rollbacks {
+    for (rb, occurrences) in collapse_rollbacks(rollbacks) {
         let from = rb.from_version.as_deref().unwrap_or("(new)");
+        let mut summary = format!(
+            "canary rolled {} back {}->{} at stage {} (reason={})",
+            rb.plugin,
+            rb.to_version,
+            from,
+            rb.stage,
+            rb.reason.token()
+        );
+        if occurrences > 1 {
+            summary.push_str(&format!(" ({occurrences}x)"));
+        }
         rows.push(ReviewQueueEntry {
             kind: EntryKind::Rollback,
             // A canary rollback means a shipped regression was actually
             // caught by the fleet health-gate — always High.
             severity: Severity::High,
             ts: rb.ts,
-            summary: format!(
-                "canary rolled {} back {}->{} at stage {} (reason={})",
-                rb.plugin,
-                rb.to_version,
-                from,
-                rb.stage,
-                rb.reason.token()
-            ),
+            summary,
             identifier: rb.plugin.clone(),
+            occurrences,
         });
     }
 
-    for f in &dedup_findings(findings) {
+    for (f, occurrences) in dedup_findings(findings) {
         let severity = f
             .severity
             .as_deref()
@@ -185,12 +320,17 @@ pub fn build_queue(
             .as_deref()
             .map(|s| format!("[{s}] "))
             .unwrap_or_default();
+        let mut summary = format!("{}{} ({})", sev, f.summary, f.source);
+        if occurrences > 1 {
+            summary.push_str(&format!(" ({occurrences}x)"));
+        }
         rows.push(ReviewQueueEntry {
             kind: EntryKind::AiFinding,
             severity,
             ts: f.ts,
-            summary: format!("{}{} ({})", sev, f.summary, f.source),
+            summary,
             identifier: f.finding_id.clone(),
+            occurrences,
         });
     }
 
@@ -316,6 +456,20 @@ mod tests {
         )
     }
 
+    /// Like [`finding`] but with an explicit, distinct `summary` — used where
+    /// a test needs findings that must NOT fingerprint-collide (unlike
+    /// `finding`, which fixes the same summary/file/source for every call).
+    fn finding_with(id: &str, summary: &str, ts: i64) -> ReviewFinding {
+        ReviewFinding::new(
+            id.to_string(),
+            "reviewgate".to_string(),
+            Some("high".to_string()),
+            summary.to_string(),
+            Some("src/x.rs".to_string()),
+            ts,
+        )
+    }
+
     #[test]
     fn build_queue_merges_all_three_kinds_newest_first() {
         let systemic = vec![sig("blastguard:rm-rf", 100)];
@@ -399,17 +553,21 @@ mod tests {
         }
     }
 
-    /// Distinct finding ids are NOT collapsed — each keeps its own row.
+    /// Distinct finding ids with DISTINCT content are NOT collapsed — each
+    /// keeps its own row (they neither share an id nor a content fingerprint).
     #[test]
     fn build_queue_keeps_distinct_finding_ids() {
         let findings = vec![
-            finding("F-1", 100),
-            finding("F-2", 100),
-            finding("F-3", 100),
+            finding_with("F-1", "finding one", 100),
+            finding_with("F-2", "finding two", 100),
+            finding_with("F-3", "finding three", 100),
         ];
         let q = build_queue(&[], &[], &findings);
         let ai = q.iter().filter(|r| r.kind == EntryKind::AiFinding).count();
-        assert_eq!(ai, 3, "distinct ids must not be deduped");
+        assert_eq!(
+            ai, 3,
+            "distinct ids with distinct content must not be deduped"
+        );
     }
 
     // --- severity-first risk ranking (da04890b) ------------------------------
@@ -465,8 +623,11 @@ mod tests {
 
     #[test]
     fn same_severity_falls_back_to_newest_first() {
-        let old_high = finding("F-OLD", 100);
-        let new_high = finding("F-NEW", 200);
+        // Distinct content (not just distinct ids) so they don't
+        // fingerprint-collapse into one row — this test is about severity/ts
+        // tiebreak ordering between two genuinely distinct findings.
+        let old_high = finding_with("F-OLD", "old finding content", 100);
+        let new_high = finding_with("F-NEW", "new finding content", 200);
         let q = build_queue(&[], &[], &[old_high, new_high]);
         assert_eq!(q[0].identifier, "F-NEW");
         assert_eq!(q[1].identifier, "F-OLD");
@@ -537,5 +698,102 @@ mod tests {
             1
         );
         assert_eq!(q.len(), 3);
+    }
+
+    // --- fingerprint dedup + rollback collapse (occurrences) -----------------
+
+    /// Two findings with DIFFERENT `finding_id`s but the SAME
+    /// (source, file, summary) content must collapse to ONE row via the
+    /// content fingerprint, carrying `occurrences == 2`. This is the case the
+    /// old exact-`finding_id` dedup could not catch (RED on pre-change code:
+    /// it would keep both as separate rows).
+    #[test]
+    fn build_queue_collapses_same_fingerprint_across_distinct_ids() {
+        let a = ReviewFinding::new(
+            "F-A".to_string(),
+            "reviewgate".to_string(),
+            Some("high".to_string()),
+            "unchecked unwrap on user input".to_string(),
+            Some("src/foo.rs".to_string()),
+            100,
+        );
+        let b = ReviewFinding::new(
+            "F-B".to_string(),
+            "reviewgate".to_string(),
+            Some("high".to_string()),
+            "  Unchecked  UNWRAP on user input ".to_string(), // same after normalize
+            Some("src/foo.rs".to_string()),
+            200,
+        );
+        let q = build_queue(&[], &[], &[a, b]);
+        let ai: Vec<_> = q
+            .iter()
+            .filter(|r| r.kind == EntryKind::AiFinding)
+            .collect();
+        assert_eq!(
+            ai.len(),
+            1,
+            "same content fingerprint under different ids must collapse to one row"
+        );
+        assert_eq!(ai[0].occurrences, 2);
+        assert_eq!(
+            ai[0].ts, 200,
+            "the newest record must be the representative"
+        );
+        assert!(
+            ai[0].summary.contains("(2x)"),
+            "collapsed summary must surface the occurrence count: {}",
+            ai[0].summary
+        );
+    }
+
+    /// Two `RollbackEvent`s for the SAME plugin must collapse to ONE
+    /// `Rollback` row carrying `occurrences == 2`.
+    #[test]
+    fn build_queue_collapses_repeated_same_plugin_rollbacks() {
+        let rollbacks = vec![rb("overwatch", 10), rb("overwatch", 20)];
+        let q = build_queue(&[], &rollbacks, &[]);
+        let rb_rows: Vec<_> = q.iter().filter(|r| r.kind == EntryKind::Rollback).collect();
+        assert_eq!(
+            rb_rows.len(),
+            1,
+            "repeated same-plugin rollbacks must collapse to one row"
+        );
+        assert_eq!(rb_rows[0].occurrences, 2);
+        assert_eq!(
+            rb_rows[0].ts, 20,
+            "the newest event must be the representative"
+        );
+        assert!(
+            rb_rows[0].summary.contains("(2x)"),
+            "collapsed summary must surface the occurrence count: {}",
+            rb_rows[0].summary
+        );
+    }
+
+    /// Distinct-plugin rollbacks must NOT collapse into each other.
+    #[test]
+    fn build_queue_keeps_distinct_plugin_rollbacks_separate() {
+        let rollbacks = vec![rb("overwatch", 10), rb("condukt", 20)];
+        let q = build_queue(&[], &rollbacks, &[]);
+        let rb_rows = q.iter().filter(|r| r.kind == EntryKind::Rollback).count();
+        assert_eq!(rb_rows, 2, "distinct plugins must not be collapsed");
+    }
+
+    /// A row with no collapsing (fresh row, no duplicates) must default to
+    /// `occurrences == 1` and carry no `(Nx)` marker.
+    #[test]
+    fn occurrences_defaults_to_one_when_no_collapse_happened() {
+        let systemic = vec![sig("blastguard:x", 10)];
+        let rollbacks = vec![rb("overwatch", 20)];
+        let findings = vec![finding("F-1", 30)];
+        let q = build_queue(&systemic, &rollbacks, &findings);
+        for row in &q {
+            assert_eq!(
+                row.occurrences, 1,
+                "no-collapse rows must read occurrences=1"
+            );
+            assert!(!row.summary.contains("(1x)"), "no marker for a lone record");
+        }
     }
 }

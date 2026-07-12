@@ -113,6 +113,12 @@ fn derive_id(run: &str, task: &str, question: &str, prior_count: usize) -> Strin
 
 /// Enqueue a new escalation and persist it. Returns the stored record (with its
 /// derived id). Atomic write; fail-soft load.
+///
+/// Idempotent for OPEN duplicates: if an existing record with the same
+/// `(run, task, question)` is still unresolved, that record is returned
+/// unchanged instead of appending a new one (content-dedup backpressure). A
+/// RESOLVED match does not dedup — a re-ask after an answer still creates a
+/// new open record.
 #[allow(clippy::too_many_arguments)]
 pub fn add_escalation(
     cfg: &Config,
@@ -126,6 +132,21 @@ pub fn add_escalation(
 ) -> Result<Escalation> {
     let path = escalations_path(cfg, cwd);
     let mut reg = load(&path);
+
+    // Content-dedup backpressure: an identical (run, task, question) that is
+    // still OPEN is returned as-is rather than appended again, so a flood of
+    // repeated re-asks (e.g. under codegen retry storms) collapses onto a
+    // single durable record instead of piling up duplicates. A RESOLVED match
+    // does NOT dedup — a re-ask after an answer must create a fresh open
+    // record.
+    if let Some(existing) = reg
+        .escalations
+        .iter()
+        .find(|e| !e.resolved && e.run == run && e.task == task && e.question == question)
+    {
+        return Ok(existing.clone());
+    }
+
     let rec = Escalation {
         id: derive_id(run, task, question, reg.escalations.len()),
         run: run.to_string(),
@@ -350,5 +371,64 @@ mod tests {
             derive_id("runA", "t1", "Q", 0),
             derive_id("runA", "t1", "Q", 1)
         );
+    }
+
+    #[test]
+    fn add_dedups_identical_open_escalation() {
+        let tmp = make_tmp_dir("dedup-open");
+        let cfg = make_cfg(&tmp);
+        let first = add_escalation(
+            &cfg,
+            &tmp,
+            "runA",
+            "t1",
+            "Which approach?",
+            &opts(&["a", "b"]),
+            0,
+            1,
+        )
+        .unwrap();
+        // Same (run, task, question) re-enqueued while still OPEN must NOT
+        // create a second record — it must return the same record/id.
+        let second = add_escalation(
+            &cfg,
+            &tmp,
+            "runA",
+            "t1",
+            "Which approach?",
+            &opts(&["a", "b"]),
+            0,
+            2,
+        )
+        .unwrap();
+        assert_eq!(first.id, second.id);
+
+        let path = escalations_path(&cfg, &tmp);
+        let reg = load(&path);
+        assert_eq!(reg.escalations.len(), 1, "must not duplicate an open ask");
+    }
+
+    #[test]
+    fn add_creates_new_open_record_after_resolve() {
+        let tmp = make_tmp_dir("dedup-reask");
+        let cfg = make_cfg(&tmp);
+        let first =
+            add_escalation(&cfg, &tmp, "runA", "t1", "Q", &opts(&["a", "b"]), 0, 1).unwrap();
+        resolve_escalation(&cfg, &tmp, &first.id, "a").unwrap();
+
+        // Re-asking the same (run, task, question) after resolution must
+        // create a fresh OPEN record, not dedup against the resolved one.
+        let second =
+            add_escalation(&cfg, &tmp, "runA", "t1", "Q", &opts(&["a", "b"]), 0, 2).unwrap();
+        assert_ne!(first.id, second.id);
+        assert!(!second.resolved);
+
+        let path = escalations_path(&cfg, &tmp);
+        let reg = load(&path);
+        assert_eq!(reg.escalations.len(), 2, "resolved + new open");
+
+        let open = list_escalations(&cfg, &tmp, "runA").unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].id, second.id);
     }
 }

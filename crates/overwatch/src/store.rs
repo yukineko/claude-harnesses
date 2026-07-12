@@ -247,6 +247,26 @@ pub fn append_review_finding(cwd: &Path, finding: &ReviewFinding) -> Result<()> 
     Ok(())
 }
 
+/// Record one AI/adversarial review finding into the overwatch-readable store,
+/// stamping the current timestamp. Thin library entry point so an external
+/// crate (e.g. condukt's gate-exec escalate path — the first real producer of
+/// this stream) can record a finding by value without hand-constructing a
+/// [`ReviewFinding`] or reaching into private fields. Mirrors
+/// [`append_review_finding`]; callers that need fail-soft semantics (a
+/// recording failure must never change their own return value) should ignore
+/// the `Err` the way `append_review_finding` callers already do.
+pub fn record_finding(
+    cwd: &Path,
+    finding_id: String,
+    source: String,
+    severity: Option<String>,
+    summary: String,
+    file: Option<String>,
+) -> Result<()> {
+    let finding = ReviewFinding::new(finding_id, source, severity, summary, file, now());
+    append_review_finding(cwd, &finding)
+}
+
 /// Read all AI-review findings from review_findings.jsonl. Returns an empty vec
 /// if the file doesn't exist or is empty (fail-soft): with no producer wired
 /// yet, this is the normal case and the review-queue degrades gracefully.

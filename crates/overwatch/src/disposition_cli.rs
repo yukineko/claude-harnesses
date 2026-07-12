@@ -56,7 +56,10 @@ pub fn record(finding_id: String, verdict_str: &str, reviewer: String, now: i64)
 pub fn metrics(json: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let dispositions = store::read_dispositions(&cwd).unwrap_or_default();
-    let findings = store::read_review_findings(&cwd).unwrap_or_default();
+    // Full history (hot plus archive): `compact_review_findings` may have moved
+    // a resolved finding's record out of the hot store, but the latency join
+    // below still needs it — see `store::read_review_findings_all`.
+    let findings = store::read_review_findings_all(&cwd).unwrap_or_default();
 
     let total = dispositions.len();
     let fp_rate = disposition::false_positive_rate(&dispositions);

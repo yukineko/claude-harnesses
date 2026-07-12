@@ -311,6 +311,18 @@ enum Command {
         #[arg(long = "to-backlog")]
         to_backlog: bool,
     },
+    /// Compact the review-findings store: move every finding whose
+    /// finding_id has been resolved (bridged to the backlog, or
+    /// dispositioned by a human) out of the hot review_findings.jsonl into a
+    /// cold review_findings_archive.jsonl. Non-lossy (archive, never
+    /// delete): `review-metrics` keeps joining archived findings via the
+    /// combined hot-plus-archive history, while `review-queue` keeps reading
+    /// the hot file only (now bounded to OPEN items). Atomic (temp+rename)
+    /// and idempotent: a run with no newly-resolved findings is a no-op.
+    CompactFindings {
+        #[arg(long)]
+        json: bool,
+    },
     /// Companion to `review-queue`: surface the DENOMINATOR — the population
     /// of decisions condukt auto-approved (self-answered without a human,
     /// per `condukt policy answer`'s `gate-decisions.jsonl` journal) — as a
@@ -603,7 +615,37 @@ fn main() -> Result<()> {
         } => {
             run_auto_approved(json, since, sample, seed)?;
         }
+        Command::CompactFindings { json } => {
+            run_compact_findings(json)?;
+        }
     }
+    Ok(())
+}
+
+/// Handler for `overwatch compact-findings`: move resolved (bridged or
+/// dispositioned) review findings out of the hot review_findings.jsonl into
+/// the cold review_findings_archive.jsonl, keeping the hot file bounded to
+/// OPEN items while the review-metrics latency join reads hot plus archive
+/// (`store::read_review_findings_all`) so nothing regresses. See
+/// `store::compact_review_findings` for the pure/atomic core.
+fn run_compact_findings(json: bool) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let report = store::compact_review_findings(&cwd)?;
+
+    if json {
+        let out = serde_json::json!({
+            "open": report.open,
+            "archived": report.archived,
+            "already_archived": report.already_archived,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    println!(
+        "compacted: {} open, {} archived ({} already archived)",
+        report.open, report.archived, report.already_archived
+    );
     Ok(())
 }
 

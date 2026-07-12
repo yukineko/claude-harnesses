@@ -1798,7 +1798,12 @@ fn run_review_brief(
     // invariants can be surfaced (never a hard error for this read-only
     // digest command).
     let violations = overwatch::store::read_violations(cwd).unwrap_or_default();
-    let sensitive_cfg = blastguard::diffrisk::SensitiveConfig::default();
+    // Use the SAME repo-aware sensitive config the diff-risk recorder uses
+    // (diffrisk_record::repo_sensitive_config adds hooks/, .claude-plugin/,
+    // skills/ on top of blastguard's defaults), so the brief's own
+    // "touches sensitive path" driver matches the recorded diffrisk signal
+    // for repo-specific gate-plugin surfaces (backlog 68b658e1).
+    let sensitive_cfg = diffrisk_record::repo_sensitive_config();
 
     let brief = review_brief::build_review_brief(
         intent,

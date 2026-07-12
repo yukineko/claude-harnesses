@@ -404,4 +404,40 @@ mod tests {
         assert!(brief.tripped_invariants.is_empty());
         assert_eq!(brief.look_here_first, vec!["crates/foo/src/plain.rs"]);
     }
+
+    #[test]
+    fn repo_sensitive_config_raises_brief_driver_for_repo_specific_path() {
+        // Regression (backlog 68b658e1): the CLI now builds the brief with
+        // diffrisk_record::repo_sensitive_config() — the SAME config the
+        // diff-risk recorder uses — so a repo-specific gate/plugin surface
+        // like `hooks/` raises the brief's OWN "touches sensitive path"
+        // driver, matching the recorded diffrisk signal (previously the brief
+        // used only blastguard's bare defaults and missed these paths).
+        let cfg = crate::diffrisk_record::repo_sensitive_config();
+        let touched = vec![
+            "crates/foo/src/plain.rs".to_string(),
+            "crates/bar/hooks/stop.sh".to_string(),
+        ];
+        let brief = build_review_brief(
+            Intent {
+                run_goal: "g".to_string(),
+                task_title: "t".to_string(),
+                done_criteria: None,
+                kind: None,
+            },
+            "run-1/t1",
+            &touched,
+            &[],
+            &[],
+            &cfg,
+        );
+        assert!(brief
+            .risk_drivers
+            .iter()
+            .any(|d| d == "touches sensitive path"));
+        assert_eq!(brief.look_here_first[0], "crates/bar/hooks/stop.sh");
+        // Consistency proof: blastguard's bare default would NOT flag hooks/.
+        let hooks = "crates/bar/hooks/stop.sh".to_string();
+        assert!(!SensitiveConfig::default().any_sensitive(std::slice::from_ref(&hooks)));
+    }
 }

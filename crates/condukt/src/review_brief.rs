@@ -1,0 +1,407 @@
+//! `condukt review-brief`: a per-item, DETERMINISTIC reviewer digest composed
+//! from STATIC persisted signals only — no LLM, no runtime API call, no live
+//! git diff. It turns a run/task id into "here's what changed, why it's
+//! risky, look here first" for a human reviewer.
+//!
+//! Signals used (all real, already-persisted; nothing invented):
+//! - **Intent**: the run's `goal` ([`crate::state::RunState`]) plus the
+//!   task's `title` / `done_criteria` / `kind` from the decomposition
+//!   sidecar ([`crate::model::Task`]).
+//! - **Scope**: the task's DECLARED `touched_files` / `target_symbols`
+//!   (decomposition-level, not a recomputed live diff).
+//! - **Sensitive-path driver**: [`blastguard::diffrisk::SensitiveConfig`]
+//!   classifying each declared touched file.
+//! - **Tripped invariants**: [`overwatch::violation::ViolationEvent`]s whose
+//!   `task_key` matches this run/task (the same `"<run_id>/<task_id>"` key
+//!   format [`crate::diffrisk_record::record_post_execution_diff_risk`]
+//!   writes).
+//!
+//! The [`build_review_brief`] function is pure (no I/O): the CLI layer
+//! (`main.rs`) does the store reads and passes already-loaded data in, which
+//! keeps this module directly unit-testable.
+
+use blastguard::diffrisk::SensitiveConfig;
+use overwatch::violation::{ViolationEvent, ViolationSource};
+use serde::Serialize;
+use std::collections::BTreeSet;
+
+/// Grounding "why this task exists" facts, sourced from the run-state goal
+/// and the decomposition's per-task fields. Used both as the pure function's
+/// input and (verbatim) as the brief's `intent` field.
+#[derive(Debug, Clone, Serialize)]
+pub struct Intent {
+    /// The run's overall goal (`RunState::goal`).
+    pub run_goal: String,
+    /// The task's declared title.
+    pub task_title: String,
+    /// The task's declared `done_criteria`, if any.
+    pub done_criteria: Option<String>,
+    /// The task's declared `kind` (fix|feature|chore|...), if any.
+    pub kind: Option<String>,
+}
+
+/// One tripped invariant surfaced in the brief: a matched, deduplicated
+/// (source, signature) pair from the overwatch violation ledger, with its
+/// free-text detail carried through for human context.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TrippedInvariant {
+    /// Which gate/tool raised it (`blastguard`|`propguard`|`specguard`|`mutategate`).
+    pub source: String,
+    /// The normalized signature (`overwatch::violation::normalize_signature`).
+    pub signature: String,
+    /// Free-text detail, if the recorded event carried one.
+    pub detail: Option<String>,
+}
+
+/// A coarse, deterministically-derived risk tier. `High` whenever a
+/// sensitive path was touched OR any invariant tripped for this task;
+/// `Medium` when neither fired but the task's declared scope spans more than
+/// one file; `Low` otherwise (a single, non-sensitive, invariant-clean file).
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RiskTier {
+    Low,
+    Medium,
+    High,
+}
+
+impl std::fmt::Display for RiskTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            RiskTier::Low => "low",
+            RiskTier::Medium => "medium",
+            RiskTier::High => "high",
+        };
+        write!(f, "{s}")
+    }
+}
+
+/// The full reviewer digest for one run/task, composed entirely from static,
+/// already-persisted signals.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReviewBrief {
+    pub intent: Intent,
+    /// The task's DECLARED touched-files footprint (decomposition-level,
+    /// not a recomputed live diff).
+    pub touched_files: Vec<String>,
+    /// The task's DECLARED target symbols (decomposition-level).
+    pub target_symbols: Vec<String>,
+    pub risk_tier: RiskTier,
+    /// Human-readable risk drivers (at minimum "touches sensitive path" and
+    /// one entry per distinct tripped-invariant signature).
+    pub risk_drivers: Vec<String>,
+    /// Invariants tripped for THIS task (task_key-matched, deduplicated by
+    /// (source, signature)).
+    pub tripped_invariants: Vec<TrippedInvariant>,
+    /// Ordered file list a reviewer should look at first: sensitive-path
+    /// files, then files implicated by a tripped invariant's detail text,
+    /// then the remaining declared touched files — deduplicated, stable.
+    pub look_here_first: Vec<String>,
+}
+
+/// Stable lowercase label for a [`ViolationSource`] (mirrors the private
+/// `ViolationSource::token()` in overwatch, which is not `pub`).
+fn source_label(source: ViolationSource) -> &'static str {
+    match source {
+        ViolationSource::Blastguard => "blastguard",
+        ViolationSource::Propguard => "propguard",
+        ViolationSource::Specguard => "specguard",
+        ViolationSource::Mutategate => "mutategate",
+    }
+}
+
+/// Build a [`ReviewBrief`] from already-loaded, static inputs. Pure: no I/O,
+/// no wall-clock reads, no LLM call — the same inputs always produce the
+/// same brief.
+///
+/// `task_key` is the exact `"<run_id>/<task_id>"` string
+/// [`crate::diffrisk_record::record_post_execution_diff_risk`] writes to
+/// overwatch; `violations` is the FULL set the caller read from the ledger
+/// (this function does the task_key filtering itself, so a caller does not
+/// need to pre-filter — and callers under test can hand in a mixed list to
+/// prove the filter excludes non-matching entries).
+pub fn build_review_brief(
+    intent: Intent,
+    task_key: &str,
+    touched_files: &[String],
+    target_symbols: &[String],
+    violations: &[ViolationEvent],
+    sensitive_cfg: &SensitiveConfig,
+) -> ReviewBrief {
+    // Tripped invariants: only events whose task_key matches THIS task,
+    // deduplicated by (source, signature) so a repeated identical violation
+    // doesn't pad the list.
+    let mut tripped_invariants: Vec<TrippedInvariant> = Vec::new();
+    let mut seen_sigs: BTreeSet<(&'static str, String)> = BTreeSet::new();
+    for ev in violations.iter().filter(|ev| ev.task_key == task_key) {
+        let source = source_label(ev.source);
+        let key = (source, ev.signature.clone());
+        if seen_sigs.insert(key) {
+            tripped_invariants.push(TrippedInvariant {
+                source: source.to_string(),
+                signature: ev.signature.clone(),
+                detail: ev.detail.clone(),
+            });
+        }
+    }
+
+    // Sensitive-path classification: per-file, so ordering can put the
+    // sensitive file(s) first while preserving declared order among them.
+    let sensitive_files: Vec<String> = touched_files
+        .iter()
+        .filter(|f| sensitive_cfg.any_sensitive(std::slice::from_ref(*f)))
+        .cloned()
+        .collect();
+    let any_sensitive = !sensitive_files.is_empty();
+
+    let mut risk_drivers: Vec<String> = Vec::new();
+    if any_sensitive {
+        risk_drivers.push("touches sensitive path".to_string());
+    }
+    for ti in &tripped_invariants {
+        risk_drivers.push(format!(
+            "invariant tripped: {} (source: {})",
+            ti.signature, ti.source
+        ));
+    }
+
+    let risk_tier = if any_sensitive || !tripped_invariants.is_empty() {
+        RiskTier::High
+    } else if touched_files.len() > 1 {
+        RiskTier::Medium
+    } else {
+        RiskTier::Low
+    };
+
+    // look_here_first: sensitive files first, then files implicated by a
+    // tripped invariant's detail/signature text (a real textual signal — no
+    // invented file<->violation linkage table), then the rest in declared
+    // order. Deduplicated, stable.
+    let mut look_here_first: Vec<String> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+
+    for f in &sensitive_files {
+        if seen.insert(f.clone()) {
+            look_here_first.push(f.clone());
+        }
+    }
+    for f in touched_files {
+        if seen.contains(f) {
+            continue;
+        }
+        let implicated = tripped_invariants.iter().any(|ti| {
+            ti.signature.contains(f.as_str())
+                || ti
+                    .detail
+                    .as_deref()
+                    .map(|d| d.contains(f.as_str()))
+                    .unwrap_or(false)
+        });
+        if implicated && seen.insert(f.clone()) {
+            look_here_first.push(f.clone());
+        }
+    }
+    for f in touched_files {
+        if seen.insert(f.clone()) {
+            look_here_first.push(f.clone());
+        }
+    }
+
+    ReviewBrief {
+        intent,
+        touched_files: touched_files.to_vec(),
+        target_symbols: target_symbols.to_vec(),
+        risk_tier,
+        risk_drivers,
+        tripped_invariants,
+        look_here_first,
+    }
+}
+
+/// Render a [`ReviewBrief`] as a readable markdown digest.
+pub fn to_markdown(brief: &ReviewBrief) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("# Review Brief: {}\n\n", brief.intent.task_title));
+    out.push_str(
+        "_Honest-scope note: this digest is derived from DECLARED `touched_files` + \
+        persisted signals only (decomposition intent, blastguard sensitive-path \
+        classification, the overwatch violation ledger). Hunk-level \
+        enclosing-function resolution and live-diff recomputation are out of scope._\n\n",
+    );
+
+    out.push_str("## Intent\n");
+    out.push_str(&format!("- Run goal: {}\n", brief.intent.run_goal));
+    out.push_str(&format!("- Task: {}\n", brief.intent.task_title));
+    if let Some(dc) = &brief.intent.done_criteria {
+        out.push_str(&format!("- Done criteria: {dc}\n"));
+    }
+    if let Some(k) = &brief.intent.kind {
+        out.push_str(&format!("- Kind: {k}\n"));
+    }
+    out.push('\n');
+
+    out.push_str(&format!("## Risk: {}\n", brief.risk_tier));
+    if brief.risk_drivers.is_empty() {
+        out.push_str("- (no risk drivers)\n");
+    } else {
+        for d in &brief.risk_drivers {
+            out.push_str(&format!("- {d}\n"));
+        }
+    }
+    out.push('\n');
+
+    out.push_str("## Tripped invariants\n");
+    if brief.tripped_invariants.is_empty() {
+        out.push_str("- (none)\n");
+    } else {
+        for ti in &brief.tripped_invariants {
+            match &ti.detail {
+                Some(d) => out.push_str(&format!("- [{}] {}: {}\n", ti.source, ti.signature, d)),
+                None => out.push_str(&format!("- [{}] {}\n", ti.source, ti.signature)),
+            }
+        }
+    }
+    out.push('\n');
+
+    out.push_str("## Look here first\n");
+    if brief.look_here_first.is_empty() {
+        out.push_str("- (no touched files declared)\n");
+    } else {
+        for (i, f) in brief.look_here_first.iter().enumerate() {
+            out.push_str(&format!("{}. {}\n", i + 1, f));
+        }
+    }
+    out.push('\n');
+
+    out.push_str("## Touched files (declared)\n");
+    if brief.touched_files.is_empty() {
+        out.push_str("- (none declared)\n");
+    } else {
+        for f in &brief.touched_files {
+            out.push_str(&format!("- {f}\n"));
+        }
+    }
+
+    if !brief.target_symbols.is_empty() {
+        out.push('\n');
+        out.push_str("## Target symbols (declared)\n");
+        for s in &brief.target_symbols {
+            out.push_str(&format!("- {s}\n"));
+        }
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn intent() -> Intent {
+        Intent {
+            run_goal: "ship the payment flow".to_string(),
+            task_title: "wire the login endpoint".to_string(),
+            done_criteria: Some("auth/login.rs compiles and tests pass".to_string()),
+            kind: Some("feature".to_string()),
+        }
+    }
+
+    fn matching_violation(task_key: &str) -> ViolationEvent {
+        ViolationEvent {
+            source: ViolationSource::Blastguard,
+            signature: "blastguard:diffrisk-public-api".to_string(),
+            task_key: task_key.to_string(),
+            session_id: "s1".to_string(),
+            ts: 100,
+            detail: Some(
+                "post-execution diff-risk: public-API change on a sensitive path".to_string(),
+            ),
+        }
+    }
+
+    fn non_matching_violation() -> ViolationEvent {
+        ViolationEvent {
+            source: ViolationSource::Propguard,
+            signature: "propguard:prop-1".to_string(),
+            task_key: "run-other/t9".to_string(),
+            session_id: "s2".to_string(),
+            ts: 50,
+            detail: Some("unrelated failure".to_string()),
+        }
+    }
+
+    #[test]
+    fn build_review_brief_carries_intent_orders_sensitive_first_and_filters_by_task_key() {
+        let touched = vec![
+            "crates/foo/src/util.rs".to_string(),
+            "crates/foo/src/auth/login.rs".to_string(),
+            "crates/foo/src/helpers.rs".to_string(),
+        ];
+        let symbols = vec!["login".to_string()];
+        let violations = vec![matching_violation("run-1/t1"), non_matching_violation()];
+        let cfg = SensitiveConfig::default();
+
+        let brief = build_review_brief(intent(), "run-1/t1", &touched, &symbols, &violations, &cfg);
+
+        // (a) intent fields present.
+        assert_eq!(brief.intent.task_title, "wire the login endpoint");
+        assert_eq!(
+            brief.intent.done_criteria.as_deref(),
+            Some("auth/login.rs compiles and tests pass")
+        );
+        assert_eq!(brief.intent.kind.as_deref(), Some("feature"));
+
+        // (b) sensitive-path file ordered first.
+        assert_eq!(brief.look_here_first[0], "crates/foo/src/auth/login.rs");
+
+        // (c) only the task_key-matching violation is a tripped invariant.
+        assert_eq!(brief.tripped_invariants.len(), 1);
+        assert_eq!(
+            brief.tripped_invariants[0].signature,
+            "blastguard:diffrisk-public-api"
+        );
+        assert!(!brief
+            .tripped_invariants
+            .iter()
+            .any(|ti| ti.signature == "propguard:prop-1"));
+
+        assert_eq!(brief.risk_tier, RiskTier::High);
+        assert!(brief
+            .risk_drivers
+            .iter()
+            .any(|d| d == "touches sensitive path"));
+
+        // (d) markdown and JSON both carry the same logical content.
+        let md = to_markdown(&brief);
+        assert!(md.contains("wire the login endpoint"));
+        assert!(md.contains("crates/foo/src/auth/login.rs"));
+        assert!(md.contains("honest-scope") || md.to_lowercase().contains("honest-scope"));
+
+        let json = serde_json::to_string(&brief).expect("serializable");
+        assert!(json.contains("wire the login endpoint"));
+        assert!(json.contains("crates/foo/src/auth/login.rs"));
+    }
+
+    #[test]
+    fn build_review_brief_low_risk_when_no_sensitive_path_and_no_invariants() {
+        let touched = vec!["crates/foo/src/plain.rs".to_string()];
+        let cfg = SensitiveConfig::default();
+        let brief = build_review_brief(
+            Intent {
+                run_goal: "g".to_string(),
+                task_title: "t".to_string(),
+                done_criteria: None,
+                kind: None,
+            },
+            "run-1/t1",
+            &touched,
+            &[],
+            &[],
+            &cfg,
+        );
+        assert_eq!(brief.risk_tier, RiskTier::Low);
+        assert!(brief.risk_drivers.is_empty());
+        assert!(brief.tripped_invariants.is_empty());
+        assert_eq!(brief.look_here_first, vec!["crates/foo/src/plain.rs"]);
+    }
+}

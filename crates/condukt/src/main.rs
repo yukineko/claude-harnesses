@@ -28,6 +28,7 @@ mod oracle;
 mod policy;
 mod pr;
 mod replan;
+mod review_brief;
 mod run_policy;
 mod schedule;
 mod state;
@@ -193,6 +194,20 @@ enum Command {
         /// Include all runs, not just open ones.
         #[arg(long)]
         all: bool,
+    },
+    /// Deterministic per-item reviewer digest: compose a "here's what
+    /// changed, why it's risky, look here first" brief for one run/task from
+    /// STATIC persisted signals only (decomposition intent, blastguard
+    /// sensitive-path classification, the overwatch violation ledger) — no
+    /// LLM, no runtime API call, no live git diff.
+    ReviewBrief {
+        #[arg(long)]
+        run: String,
+        #[arg(long)]
+        task: String,
+        /// Output format: `md` (default) or `json`.
+        #[arg(long, default_value = "md")]
+        format: String,
     },
     /// Run one iteration of the test-fix cycle for the given module type.
     ///
@@ -1653,6 +1668,9 @@ fn run_user(cmd: Command) -> Result<()> {
         Command::Policy { action } => run_policy(action),
         Command::Escalate { action } => run_escalate(&cfg, &cwd, action)?,
         Command::Status { all } => status::render(&cfg, &cwd, all),
+        Command::ReviewBrief { run, task, format } => {
+            run_review_brief(&cfg, &cwd, &run, &task, &format)?
+        }
         // These are dispatched as hooks in main() (via run_hook, which exits and
         // never returns here). Reaching this arm would be an internal dispatch
         // bug; return a clean error instead of panicking the process.
@@ -1740,6 +1758,63 @@ fn calibrated_confidence(
         return None; // NaN/±inf on stdout → fall back
     }
     Some(policy::Level::from_score(score))
+}
+
+/// `condukt review-brief --run RID --task TID [--format md|json]` — the
+/// deterministic per-item reviewer digest. Reads run-state (for the run
+/// goal), the decomposition sidecar (for the task's title/done_criteria/
+/// kind/touched_files/target_symbols), and the overwatch violation ledger
+/// (for tripped invariants matched by task_key), then composes the pure
+/// [`review_brief::build_review_brief`] and prints it. A missing run/task/
+/// decomposition is a clear error + nonzero exit (via `?`/`bail!`), never a
+/// panic.
+fn run_review_brief(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+    task_id: &str,
+    format: &str,
+) -> Result<()> {
+    let run_state = state::RunState::load(cfg, cwd, run_id)
+        .with_context(|| format!("loading run '{run_id}'"))?;
+    let raw = state::load_decomposition(cfg, cwd, run_id)
+        .with_context(|| format!("loading decomposition for run '{run_id}'"))?;
+    let dec: model::Decomposition =
+        serde_json::from_str(&raw).context("parsing decomposition JSON")?;
+    let task = dec
+        .tasks
+        .iter()
+        .find(|t| t.id == task_id)
+        .ok_or_else(|| anyhow!("no task '{task_id}' in run '{run_id}' decomposition"))?;
+
+    let intent = review_brief::Intent {
+        run_goal: run_state.goal.clone(),
+        task_title: task.title.clone(),
+        done_criteria: task.done_criteria.clone(),
+        kind: task.kind.clone(),
+    };
+    let task_key = format!("{run_id}/{task_id}");
+    // Fail-soft: an unreadable/absent ledger simply means no tripped
+    // invariants can be surfaced (never a hard error for this read-only
+    // digest command).
+    let violations = overwatch::store::read_violations(cwd).unwrap_or_default();
+    let sensitive_cfg = blastguard::diffrisk::SensitiveConfig::default();
+
+    let brief = review_brief::build_review_brief(
+        intent,
+        &task_key,
+        &task.touched_files,
+        &task.target_symbols,
+        &violations,
+        &sensitive_cfg,
+    );
+
+    match format {
+        "json" => println!("{}", serde_json::to_string_pretty(&brief)?),
+        "md" => println!("{}", review_brief::to_markdown(&brief)),
+        other => bail!("unknown --format '{other}' (expected md|json)"),
+    }
+    Ok(())
 }
 
 /// `condukt escalate add|list|resolve` — the durable async escalation channel.

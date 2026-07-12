@@ -11,6 +11,7 @@
 /// slices ([`build_queue`]); the CLI shell ([`run`]) reads the stores fail-soft
 /// (a missing/empty source contributes nothing rather than erroring the whole
 /// command) and renders either a human-readable list or a JSON array.
+use crate::review_escalation::{self, ConduktEscalation};
 use crate::review_finding::ReviewFinding;
 use crate::rollback::RollbackEvent;
 use crate::store;
@@ -29,6 +30,10 @@ pub enum EntryKind {
     Rollback,
     /// An AI/adversarial review finding.
     AiFinding,
+    /// An open condukt durable escalation (a blocked/GATED task awaiting an
+    /// out-of-band human answer) — bridged in from condukt's
+    /// `escalations.json`, foreign-read by path (see `review_escalation.rs`).
+    Escalation,
 }
 
 impl EntryKind {
@@ -38,6 +43,7 @@ impl EntryKind {
             EntryKind::Systemic => "systemic",
             EntryKind::Rollback => "rollback",
             EntryKind::AiFinding => "ai-finding",
+            EntryKind::Escalation => "escalation",
         }
     }
 }
@@ -254,6 +260,16 @@ fn collapse_rollbacks(rollbacks: &[RollbackEvent]) -> Vec<(RollbackEvent, u32)> 
 ///   across audit rounds, or reported independently under a different id, is
 ///   ONE row.
 ///
+/// * condukt durable escalations (a task blocked awaiting an out-of-band
+///   human answer, bridged in fail-soft by path from condukt's
+///   `escalations.json` — see `review_escalation.rs`) are timestamped at
+///   `created_at`, keyed by their `id`, and always ranked `Severity::High` (a
+///   blocked/GATED task stalled on a human answer is a real, already-
+///   happening work stoppage — same rationale as the systemic and rollback
+///   streams). condukt's own `add_escalation` already dedups identical open
+///   asks upstream (content backpressure), so no further collapse happens
+///   here (`occurrences` is always `1`).
+///
 /// A missing/empty source simply contributes no rows. Ties on
 /// `(severity, ts)` are broken deterministically by (kind, identifier) so the
 /// ordering is stable and reproducible.
@@ -261,6 +277,7 @@ pub fn build_queue(
     systemic: &[SignatureRecurrence],
     rollbacks: &[RollbackEvent],
     findings: &[ReviewFinding],
+    escalations: &[ConduktEscalation],
 ) -> Vec<ReviewQueueEntry> {
     let mut rows: Vec<ReviewQueueEntry> = Vec::new();
 
@@ -334,6 +351,24 @@ pub fn build_queue(
         });
     }
 
+    for e in escalations {
+        rows.push(ReviewQueueEntry {
+            kind: EntryKind::Escalation,
+            // A blocked/GATED task stalled on a human answer is a real,
+            // already-happening work stoppage — always High.
+            severity: Severity::High,
+            ts: e.created_at,
+            summary: format!(
+                "awaiting human answer: {} (run {} task {})",
+                e.question, e.run, e.task
+            ),
+            identifier: e.id.clone(),
+            // condukt's add_escalation already dedups identical OPEN asks
+            // upstream (content backpressure); no further collapse here.
+            occurrences: 1,
+        });
+    }
+
     // Risk-first: highest severity leads, then newest-first within a
     // severity band, with a deterministic tiebreak so equal
     // (severity, timestamp) pairs don't reorder between runs. This replaces
@@ -375,7 +410,11 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<()> {
     // Source 3: AI-review findings (normally empty — no producer wired yet).
     let findings = store::read_review_findings(&cwd).unwrap_or_default();
 
-    let mut rows = build_queue(&systemic, &rollbacks, &findings);
+    // Source 4: condukt's durable escalation queue, foreign-read by path
+    // (fail-soft: absent condukt / no open escalations contributes nothing).
+    let escalations = review_escalation::read_open_escalations(&cwd);
+
+    let mut rows = build_queue(&systemic, &rollbacks, &findings, &escalations);
 
     if let Some(since_ts) = since {
         rows.retain(|r| r.ts >= since_ts);
@@ -396,7 +435,9 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<()> {
     }
 
     if rows.is_empty() {
-        println!("(review queue empty — no systemic violations, rollbacks, or findings)");
+        println!(
+            "(review queue empty — no systemic violations, rollbacks, findings, or escalations)"
+        );
         return Ok(());
     }
     for r in &rows {
@@ -470,13 +511,24 @@ mod tests {
         )
     }
 
+    fn esc(id: &str, run: &str, task: &str, question: &str, ts: i64) -> ConduktEscalation {
+        ConduktEscalation {
+            id: id.to_string(),
+            run: run.to_string(),
+            task: task.to_string(),
+            question: question.to_string(),
+            resolved: false,
+            created_at: ts,
+        }
+    }
+
     #[test]
     fn build_queue_merges_all_three_kinds_newest_first() {
         let systemic = vec![sig("blastguard:rm-rf", 100)];
         let rollbacks = vec![rb("overwatch", 300)];
         let findings = vec![finding("F-1", 200)];
 
-        let q = build_queue(&systemic, &rollbacks, &findings);
+        let q = build_queue(&systemic, &rollbacks, &findings, &[]);
         assert_eq!(q.len(), 3);
         // Newest-first: 300 (rollback), 200 (ai-finding), 100 (systemic).
         assert_eq!(q[0].kind, EntryKind::Rollback);
@@ -491,12 +543,12 @@ mod tests {
     fn build_queue_missing_sources_degrade_gracefully() {
         // Only rollbacks present (systemic + findings empty): must still return
         // the rollback rows, not error / not drop everything.
-        let q = build_queue(&[], &[rb("p", 10)], &[]);
+        let q = build_queue(&[], &[rb("p", 10)], &[], &[]);
         assert_eq!(q.len(), 1);
         assert_eq!(q[0].kind, EntryKind::Rollback);
 
         // All empty -> empty queue.
-        assert!(build_queue(&[], &[], &[]).is_empty());
+        assert!(build_queue(&[], &[], &[], &[]).is_empty());
     }
 
     #[test]
@@ -506,8 +558,8 @@ mod tests {
         let s = vec![sig("blastguard:x", 50)];
         let r = vec![rb("p", 50)];
         let f = vec![finding("F", 50)];
-        let q1 = build_queue(&s, &r, &f);
-        let q2 = build_queue(&s, &r, &f);
+        let q1 = build_queue(&s, &r, &f, &[]);
+        let q2 = build_queue(&s, &r, &f, &[]);
         assert_eq!(q1, q2);
         // tags sorted: "ai-finding" < "rollback" < "systemic"
         assert_eq!(q1[0].kind, EntryKind::AiFinding);
@@ -523,7 +575,7 @@ mod tests {
 
     #[test]
     fn review_queue_entry_carries_kind_discriminator_in_json() {
-        let q = build_queue(&[], &[rb("overwatch", 1)], &[]);
+        let q = build_queue(&[], &[rb("overwatch", 1)], &[], &[]);
         let json = serde_json::to_string(&q).unwrap();
         assert!(json.contains("\"kind\":\"rollback\""));
     }
@@ -542,7 +594,7 @@ mod tests {
             vec![old.clone(), new.clone()],
             vec![new.clone(), old.clone()],
         ] {
-            let q = build_queue(&[], &[], &findings);
+            let q = build_queue(&[], &[], &findings, &[]);
             let ai: Vec<_> = q
                 .iter()
                 .filter(|r| r.kind == EntryKind::AiFinding)
@@ -562,7 +614,7 @@ mod tests {
             finding_with("F-2", "finding two", 100),
             finding_with("F-3", "finding three", 100),
         ];
-        let q = build_queue(&[], &[], &findings);
+        let q = build_queue(&[], &[], &findings, &[]);
         let ai = q.iter().filter(|r| r.kind == EntryKind::AiFinding).count();
         assert_eq!(
             ai, 3,
@@ -613,7 +665,7 @@ mod tests {
             None,
             999, // new ts
         );
-        let q = build_queue(&[], &[], &[stale_high, fresh_low]);
+        let q = build_queue(&[], &[], &[stale_high, fresh_low], &[]);
         assert_eq!(q.len(), 2);
         assert_eq!(q[0].identifier, "F-STALE-HIGH", "stale-high must lead");
         assert_eq!(q[0].severity, Severity::High);
@@ -628,7 +680,7 @@ mod tests {
         // tiebreak ordering between two genuinely distinct findings.
         let old_high = finding_with("F-OLD", "old finding content", 100);
         let new_high = finding_with("F-NEW", "new finding content", 200);
-        let q = build_queue(&[], &[], &[old_high, new_high]);
+        let q = build_queue(&[], &[], &[old_high, new_high], &[]);
         assert_eq!(q[0].identifier, "F-NEW");
         assert_eq!(q[1].identifier, "F-OLD");
     }
@@ -637,7 +689,7 @@ mod tests {
     fn systemic_and_rollback_rows_default_to_high_severity() {
         let systemic = vec![sig("blastguard:x", 10)];
         let rollbacks = vec![rb("overwatch", 20)];
-        let q = build_queue(&systemic, &rollbacks, &[]);
+        let q = build_queue(&systemic, &rollbacks, &[], &[]);
         for row in &q {
             assert_eq!(
                 row.severity,
@@ -670,7 +722,7 @@ mod tests {
                 1000 + i,
             ));
         }
-        let mut q = build_queue(&[], &[], &findings);
+        let mut q = build_queue(&[], &[], &findings, &[]);
         q.truncate(1);
         assert_eq!(q[0].identifier, "F-HIGH");
     }
@@ -684,7 +736,7 @@ mod tests {
         // Two records of the SAME finding id (collapse to 1) alongside the other
         // two streams (which must each still contribute exactly one row).
         let findings = vec![finding("F-1", 30), finding("F-1", 40)];
-        let q = build_queue(&systemic, &rollbacks, &findings);
+        let q = build_queue(&systemic, &rollbacks, &findings, &[]);
         assert_eq!(
             q.iter().filter(|r| r.kind == EntryKind::Systemic).count(),
             1
@@ -725,7 +777,7 @@ mod tests {
             Some("src/foo.rs".to_string()),
             200,
         );
-        let q = build_queue(&[], &[], &[a, b]);
+        let q = build_queue(&[], &[], &[a, b], &[]);
         let ai: Vec<_> = q
             .iter()
             .filter(|r| r.kind == EntryKind::AiFinding)
@@ -752,7 +804,7 @@ mod tests {
     #[test]
     fn build_queue_collapses_repeated_same_plugin_rollbacks() {
         let rollbacks = vec![rb("overwatch", 10), rb("overwatch", 20)];
-        let q = build_queue(&[], &rollbacks, &[]);
+        let q = build_queue(&[], &rollbacks, &[], &[]);
         let rb_rows: Vec<_> = q.iter().filter(|r| r.kind == EntryKind::Rollback).collect();
         assert_eq!(
             rb_rows.len(),
@@ -775,7 +827,7 @@ mod tests {
     #[test]
     fn build_queue_keeps_distinct_plugin_rollbacks_separate() {
         let rollbacks = vec![rb("overwatch", 10), rb("condukt", 20)];
-        let q = build_queue(&[], &rollbacks, &[]);
+        let q = build_queue(&[], &rollbacks, &[], &[]);
         let rb_rows = q.iter().filter(|r| r.kind == EntryKind::Rollback).count();
         assert_eq!(rb_rows, 2, "distinct plugins must not be collapsed");
     }
@@ -787,7 +839,7 @@ mod tests {
         let systemic = vec![sig("blastguard:x", 10)];
         let rollbacks = vec![rb("overwatch", 20)];
         let findings = vec![finding("F-1", 30)];
-        let q = build_queue(&systemic, &rollbacks, &findings);
+        let q = build_queue(&systemic, &rollbacks, &findings, &[]);
         for row in &q {
             assert_eq!(
                 row.occurrences, 1,
@@ -795,5 +847,67 @@ mod tests {
             );
             assert!(!row.summary.contains("(1x)"), "no marker for a lone record");
         }
+    }
+
+    // --- condukt escalation bridge (EntryKind::Escalation) -------------------
+
+    /// RED->GREEN feature proof: a single OPEN condukt escalation must surface
+    /// as a High-severity `Escalation` row with the right ts/identifier, sorted
+    /// among the other High-severity rows per the usual (severity, ts, kind,
+    /// identifier) rule. This test fails to compile before `EntryKind::
+    /// Escalation` and `build_queue`'s 4th param exist, and passes after.
+    #[test]
+    fn build_queue_surfaces_one_open_escalation_as_high_severity_row() {
+        let systemic = vec![sig("blastguard:rm-rf", 100)];
+        let rollbacks = vec![rb("overwatch", 300)];
+        let escalations = vec![esc("esc-1", "runA", "t1", "Which approach?", 200)];
+
+        let q = build_queue(&systemic, &rollbacks, &[], &escalations);
+        assert_eq!(q.len(), 3);
+
+        let escalation_row = q
+            .iter()
+            .find(|r| r.kind == EntryKind::Escalation)
+            .expect("an Escalation row must be present");
+        assert_eq!(escalation_row.severity, Severity::High);
+        assert_eq!(escalation_row.ts, 200);
+        assert_eq!(escalation_row.identifier, "esc-1");
+        assert_eq!(escalation_row.occurrences, 1);
+        assert!(
+            escalation_row.summary.contains("Which approach?")
+                && escalation_row.summary.contains("runA")
+                && escalation_row.summary.contains("t1"),
+            "summary must name the question and its run/task context: {}",
+            escalation_row.summary
+        );
+
+        // Sort position: all three rows are High severity, so ts DESC decides
+        // (300 rollback, 200 escalation, 100 systemic).
+        assert_eq!(q[0].kind, EntryKind::Rollback);
+        assert_eq!(q[1].kind, EntryKind::Escalation);
+        assert_eq!(q[2].kind, EntryKind::Systemic);
+    }
+
+    /// Backward-compat: an existing 3-source scenario with `escalations = &[]`
+    /// must yield the exact same rows as before this source existed — an empty
+    /// escalation slice contributes nothing.
+    #[test]
+    fn build_queue_empty_escalations_is_backward_compatible() {
+        let systemic = vec![sig("blastguard:rm-rf", 100)];
+        let rollbacks = vec![rb("overwatch", 300)];
+        let findings = vec![finding("F-1", 200)];
+
+        let with_empty_escalations = build_queue(&systemic, &rollbacks, &findings, &[]);
+        assert_eq!(with_empty_escalations.len(), 3);
+        assert!(with_empty_escalations
+            .iter()
+            .all(|r| r.kind != EntryKind::Escalation));
+        // Identical to the pre-existing three-kind merge test's expectations.
+        assert_eq!(with_empty_escalations[0].kind, EntryKind::Rollback);
+        assert_eq!(with_empty_escalations[0].ts, 300);
+        assert_eq!(with_empty_escalations[1].kind, EntryKind::AiFinding);
+        assert_eq!(with_empty_escalations[1].ts, 200);
+        assert_eq!(with_empty_escalations[2].kind, EntryKind::Systemic);
+        assert_eq!(with_empty_escalations[2].ts, 100);
     }
 }

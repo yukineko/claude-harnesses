@@ -10,6 +10,7 @@ mod disposition_cli;
 pub mod event;
 mod lease;
 mod render;
+mod review_escalation;
 pub mod review_finding;
 mod review_queue;
 pub mod rollback;

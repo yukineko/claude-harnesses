@@ -12,6 +12,7 @@ mod lease;
 mod render;
 mod review_escalation;
 pub mod review_finding;
+mod review_gate_decisions;
 mod review_queue;
 pub mod rollback;
 mod rollback_cli;
@@ -310,6 +311,27 @@ enum Command {
         #[arg(long = "to-backlog")]
         to_backlog: bool,
     },
+    /// Companion to `review-queue`: surface the DENOMINATOR — the population
+    /// of decisions condukt auto-approved (self-answered without a human,
+    /// per `condukt policy answer`'s `gate-decisions.jsonl` journal) — as a
+    /// count plus a deterministic seeded sample, so a human can judge
+    /// whether spot-check sampling coverage is adequate. Fail-soft: a
+    /// missing/unreadable/corrupt journal contributes zero rows rather than
+    /// erroring.
+    AutoApproved {
+        #[arg(long)]
+        json: bool,
+        /// Only count/sample decisions with `created_at >= since` (absolute
+        /// unix seconds; no wall-clock in the pure core).
+        #[arg(long)]
+        since: Option<i64>,
+        /// How many records to sample from the (windowed) population.
+        #[arg(long, default_value_t = 5)]
+        sample: usize,
+        /// Seed for the deterministic sample draw.
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+    },
 }
 
 /// Actions under `overwatch audit-round`.
@@ -573,6 +595,56 @@ fn main() -> Result<()> {
                 review_queue::run(json, since, limit)?;
             }
         }
+        Command::AutoApproved {
+            json,
+            since,
+            sample,
+            seed,
+        } => {
+            run_auto_approved(json, since, sample, seed)?;
+        }
+    }
+    Ok(())
+}
+
+/// Handler for `overwatch auto-approved`: read condukt's auto-approved
+/// gate-decision journal (fail-soft), window it with `since`, and print the
+/// count plus a deterministic seeded sample — either as human-readable text
+/// or as JSON. See [`review_gate_decisions`] for the pure core this wraps.
+fn run_auto_approved(json: bool, since: Option<i64>, sample: usize, seed: u64) -> Result<()> {
+    let population = review_gate_decisions::read_auto_approved();
+    let filtered = review_gate_decisions::filter_since(&population, since);
+    let count = filtered.len();
+    let picked = review_gate_decisions::sample_auto_approved(&filtered, sample, seed);
+
+    if json {
+        let out = serde_json::json!({
+            "count": count,
+            "since": since,
+            "seed": seed,
+            "sample_size": picked.len(),
+            "sample": picked,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    match since {
+        Some(ts) => println!(
+            "auto-approved: {count} decision(s) passed a gate without human review since {ts}"
+        ),
+        None => println!("auto-approved: {count} decision(s) passed a gate without human review"),
+    }
+    if count == 0 {
+        println!("(no auto-approved decisions found)");
+        return Ok(());
+    }
+    println!("sample ({} of {count}, seed {seed}):", picked.len());
+    for d in &picked {
+        println!(
+            "  [{}] chosen={:?} question={:?}",
+            d.created_at, d.chosen, d.question
+        );
     }
     Ok(())
 }

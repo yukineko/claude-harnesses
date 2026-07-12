@@ -67,7 +67,7 @@ Agentic Coding を行う前提に立つと、**人間によるコードレビュ
 | 4 | 事後サンプリング較正 | COVERED | `crates/benchkit/src/auditsample.rs` に実装済み：auto-gate（blastguard/propguard/specguard/mutategate）のみを通過した変更群から決定論的乱数サンプリングで抽出し、overwatch の violation stream と change_id/task_key で突合する「auto-approved 変更の無作為抽出監査」ループ。監査の見逃しは (a) 新invariant候補提案 と (b) 閾値調整提案（人間のratifyキュー行き・自動適用なし）の2経路にフィードバックされる。継続運用の原則の反復レビューは精神的に近いが対象が「gate 自身のコード」であり、item 4 本来の対象（ユーザーの変更）とは異なる点に注意——混同しないこと。 |
 | 5 | 実行時/blast-radius 検証 | **IMPLEMENTED**（接続に課題あり） | `overwatch::canary`（`b66b3c2`）で実装済み。問題2参照。 |
 | 6 | fleet 相関エラー検知 | **IMPLEMENTED**（接続に課題あり） | `overwatch::violation`（`bc50aef`）で実装済み。問題2参照。 |
-| 7 | 絞り込みエスカレーション | PARTIAL | `condukt gate check` の `Escalate` は機能するが、item 5/6 の出力と統合されていない。問題3の4番（review queue）参照。 |
+| 7 | 絞り込みエスカレーション | **COVERED**（producer 配線済み） | `condukt gate check` の `Escalate` 判定が、`gate_exec::run_gate_check` から overwatch review-finding を library 経由で自動記録するようになった（`finding_id=gate-exec:{run}:{task}` で再チェックは1行に dedup、severity は risk 由来、fail-soft で既存の stdout/journal/exit は不変）。これで従来 producer 皆無だった risk-rank 済み review-queue の ai-finding stream が自動で埋まり、needs-human/gated verdict が洪水下でも人間に届く（backlog 33b4ef6e / condukt 0.7.41・overwatch 0.1.19）。escalate.json↔review-queue の橋渡しは別途 a92d3c72 で追跡。 |
 | 8 | AI 網羅的テスト生成 | COVERED | `tdd`（RED→GREEN 暗号学的証明）、`specguard testaudit`。変更なし。 |
 | 9 | mutation testing | COVERED | `mutategate`（`harness-core` 限定で pilot 中、拡大方針は文書化済み）。変更なし。 |
 | 10 | テスト著者と実装者の分離 | PARTIAL | `condukt state verifier-model` はあるが、`tdd` の RED→GREEN は同一 agent 逐次実行のまま。未着手（旧item C）。 |

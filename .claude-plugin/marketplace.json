@@ -131,7 +131,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: an interpreter/worker/verifier skill plus a Rust binary that schedules tasks into parallel/serial batches by file-conflict analysis, manages the git-worktree lifecycle, tracks run state, and gates completion. Subscription-native (skill + agents + hook, no API key).",
-      "version": "0.7.40",
+      "version": "0.7.41",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -800,7 +800,7 @@
     {
       "name": "overwatch",
       "description": "Project-global cross-session execution ledger with dedup guard + PDO progress view. Manages claim registry with heartbeat-based liveness and skip-on-duplicate contract for distributed session coordination. SessionStart and Stop hooks surface current run state and progress aggregation (session/backlog/hypothesis/condukt run/compass gap in fail-soft view). Includes the /continuous-audit driver skill that runs an adversarial finder->verifier review round over the gate crates and auto-populates the unified review-queue (findings deduped by id). Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.18",
+      "version": "0.1.19",
       "category": "observability",
       "keywords": [
         "pdo",

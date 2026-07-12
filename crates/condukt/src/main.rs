@@ -30,6 +30,7 @@ mod pr;
 mod precedent;
 mod replan;
 mod review_brief;
+mod review_order;
 mod review_worthiness;
 mod run_policy;
 mod schedule;
@@ -304,6 +305,40 @@ enum Command {
         /// `--from-git` head ref. Default: `HEAD`.
         #[arg(long, default_value = "HEAD")]
         head: String,
+    },
+    /// Deterministic review-ORDER pass: reorders a diff's hunks so a human
+    /// reviews top-to-bottom instead of git's flat VCS (alphabetical file)
+    /// order — clustering logically-connected hunks together and ordering
+    /// definitions before the hunks that reference them. A companion to
+    /// `review-worthiness` (which scores how much attention a change
+    /// warrants); this answers what ORDER to read it in.
+    ///
+    /// Primary mode: `--diff-file <path>` reads a unified diff from a file
+    /// (fully hermetic/tested contract). Convenience mode: `--from-git`
+    /// gathers the diff via `git diff <base> <head>` instead, fail-soft (a
+    /// git failure degrades to an empty diff / empty order, never errors).
+    /// Either mode then reads each changed file's CURRENT contents from cwd
+    /// (fail-soft: a missing/unreadable source file just yields no
+    /// dependency edges for that hunk).
+    ReviewOrder {
+        /// Read a unified diff from this file (the hermetic, tested mode).
+        #[arg(long)]
+        diff_file: Option<String>,
+        /// Convenience: gather the diff via `git diff <base> <head>` in cwd
+        /// instead of `--diff-file`. Fail-soft: any git failure degrades to
+        /// an empty diff.
+        #[arg(long)]
+        from_git: bool,
+        /// `--from-git` base ref. Default: `HEAD~1`.
+        #[arg(long, default_value = "HEAD~1")]
+        base: String,
+        /// `--from-git` head ref. Default: `HEAD`.
+        #[arg(long, default_value = "HEAD")]
+        head: String,
+        /// Emit structured JSON (`{clusters, hunks}`) instead of the
+        /// human-readable default.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1802,6 +1837,13 @@ fn run_user(cmd: Command) -> Result<()> {
         } => run_review_worthiness(
             &cwd, files, insertions, deletions, rationale, task_link, json, from_git, &base, &head,
         )?,
+        Command::ReviewOrder {
+            diff_file,
+            from_git,
+            base,
+            head,
+            json,
+        } => run_review_order(&cwd, diff_file, from_git, &base, &head, json)?,
         // These are dispatched as hooks in main() (via run_hook, which exits and
         // never returns here). Reaching this arm would be an internal dispatch
         // bug; return a clean error instead of panicking the process.
@@ -2071,6 +2113,136 @@ fn gather_review_worthiness_inputs_from_git(
         has_rationale: review_worthiness::has_rationale(&body),
         has_task_link: review_worthiness::has_task_link(&log),
     }
+}
+
+/// `condukt review-order` — the deterministic review-ORDER CLI.
+///
+/// Reads a unified diff (either `--diff-file <path>`, hermetic, or
+/// `--from-git`, a fail-soft convenience whose only git shell-out lives in
+/// [`gather_review_order_diff_from_git`]), parses it with
+/// [`review_order::parse_diff`], reads each changed file's CURRENT contents
+/// from `cwd` (fail-soft: a missing/unreadable source file simply
+/// contributes no symbols — that hunk still appears, just without
+/// dependency edges), attributes DEFINED symbols to hunks via
+/// [`harness_core::code_index::extract_symbols`] +
+/// [`review_order::hunk_containing`], builds the reference map via
+/// [`blastguard::callgraph::changed_symbol_names`] +
+/// [`blastguard::callgraph::enumerate_callers`], then runs the pure
+/// [`review_order::build_edges`] / [`review_order::order_hunks`] pipeline
+/// and prints the result.
+fn run_review_order(
+    cwd: &Path,
+    diff_file: Option<String>,
+    from_git: bool,
+    base: &str,
+    head: &str,
+    json: bool,
+) -> Result<()> {
+    let diff_text = if from_git {
+        gather_review_order_diff_from_git(cwd, base, head)
+    } else if let Some(path) = &diff_file {
+        std::fs::read_to_string(path).with_context(|| format!("reading diff file '{path}'"))?
+    } else {
+        bail!("condukt review-order: pass --diff-file PATH or --from-git");
+    };
+
+    let hunks = review_order::parse_diff(&diff_text);
+
+    // Read each changed file's CURRENT contents from cwd, fail-soft (a
+    // missing/unreadable file simply contributes no symbols for it).
+    let mut touched_files: BTreeMap<String, ()> = BTreeMap::new();
+    for h in &hunks {
+        if !h.file.is_empty() {
+            touched_files.insert(h.file.clone(), ());
+        }
+    }
+    let mut sources: Vec<(String, String)> = Vec::new();
+    for file in touched_files.keys() {
+        if let Ok(contents) = std::fs::read_to_string(cwd.join(file)) {
+            sources.push((file.clone(), contents));
+        }
+    }
+
+    // Attribute each defined symbol to the hunk whose new-side range
+    // contains its declaration line.
+    let mut defines_by_idx: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    for (file, contents) in &sources {
+        for sym in harness_core::code_index::extract_symbols(contents, file) {
+            if let Some(idx) = review_order::hunk_containing(&hunks, file, sym.line) {
+                defines_by_idx.entry(idx).or_default().push(sym.name);
+            }
+        }
+    }
+    let defines: Vec<(usize, Vec<String>)> = defines_by_idx
+        .into_iter()
+        .map(|(idx, mut names)| {
+            names.sort();
+            names.dedup();
+            (idx, names)
+        })
+        .collect();
+
+    // Build the reference map: for every symbol name changed in the diff,
+    // the (file, line) sites that reference it.
+    let changed_names = blastguard::callgraph::changed_symbol_names(&diff_text);
+    let callers = blastguard::callgraph::enumerate_callers(&changed_names, &sources);
+    let mut refs: BTreeMap<String, Vec<(String, usize)>> = BTreeMap::new();
+    for (name, sites) in callers {
+        let mut list: Vec<(String, usize)> = sites.into_iter().map(|c| (c.file, c.line)).collect();
+        list.sort();
+        list.dedup();
+        refs.insert(name, list);
+    }
+
+    let edges = review_order::build_edges(&hunks, &defines, &refs);
+    let ordered = review_order::order_hunks(&hunks, &edges, &defines);
+
+    if json {
+        let clusters = ordered.iter().map(|o| o.cluster).max().map_or(0, |m| m + 1);
+        let out = serde_json::json!({
+            "clusters": clusters,
+            "hunks": ordered,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        for o in &ordered {
+            if o.defines.is_empty() {
+                println!(
+                    "#{} [cluster {}] {}:{} ({} lines)",
+                    o.position, o.cluster, o.file, o.new_start, o.new_lines
+                );
+            } else {
+                println!(
+                    "#{} [cluster {}] {}:{} ({} lines) defines: {}",
+                    o.position,
+                    o.cluster,
+                    o.file,
+                    o.new_start,
+                    o.new_lines,
+                    o.defines.join(", ")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Fail-soft `--from-git` gather for `review-order`: shells out to `git diff
+/// <base> <head>` for the full unified diff text. ANY git failure (not on
+/// PATH, non-zero exit, non-UTF8 output, invalid refs, non-repo cwd)
+/// degrades to an empty diff string (which [`review_order::parse_diff`]
+/// turns into an empty hunk list, i.e. an empty order) — never a hard error,
+/// mirroring [`gather_review_worthiness_inputs_from_git`]'s soft-probe
+/// pattern.
+fn gather_review_order_diff_from_git(cwd: &Path, base: &str, head: &str) -> String {
+    std::process::Command::new("git")
+        .args(["diff", base, head])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
 }
 
 /// `condukt escalate add|list|resolve` — the durable async escalation channel.

@@ -281,7 +281,7 @@
     {
       "name": "ship",
       "description": "Shipping-ritual nudge for Claude Code: deterministically detect unshipped state (uncommitted changes, unmerged condukt/* branches, leftover worktrees, unpushed commits, stale plugin binaries) and remind you to commit・merge・push・rebuild・rollout. A /ship skill and a fail-soft SessionEnd hook surface the checklist; only the plugin-rebuild (`--run-safe`, now `--stage-repo` so it refreshes the committed binary that stale-detection measures) and plugin-rollout (`ship rollout`, automates `/plugin update`) steps are auto-runnable — commit/merge/push stay human-gated. Subscription-native (no API key).",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "category": "workflow",
       "keywords": [
         "hooks",
@@ -957,7 +957,7 @@
     {
       "name": "propguard",
       "description": "Property gate for Claude Code: on Stop, derive 3–5 semantic properties (invariants) from a task's done_criteria and check the generated code against them before the agent can declare done. In inject mode it blocks and injects a property checklist for the running agent to self-verify (no API key); in subprocess mode it runs an independent checker and counts per-property PASS/FAIL, blocking when fewer than a threshold hold. Goes beyond 'concrete tests pass'. Subscription-native, bundled Rust binary.",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "category": "quality",
       "keywords": [
         "hooks",

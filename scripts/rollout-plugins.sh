@@ -672,6 +672,23 @@ run_canary() {
         # deploy time (Problem-2.2). A gate-eval error must not crash the
         # rollout: canary is observational, so on any non-rollback failure we
         # treat it as "no spike observed" and PROCEED (fail-soft).
+        #
+        # KNOWN rc=2 cause (backlog 2a953ab5, root-caused 2026-07-13): "$ow" is
+        # resolved ONCE via resolve_overwatch_bin() at the top of this function,
+        # BEFORE any stage is applied, and the actual live-binary swap only
+        # happens in rebuild-plugins.sh AFTER all canary stages complete. If a
+        # rollout run is itself upgrading overwatch (bundled as a plain --plugin
+        # alongside the canary target, or overwatch is added to GATE_CRATES) AND
+        # that same commit also adds a new canary-gate CLI flag (e.g.
+        # --systemic-threshold in Problem-2.1b, 0a14284), every gate check in
+        # THIS run invokes the flag against the OLD, not-yet-swapped-in
+        # overwatch binary, which rejects it with a clap usage error (exit 2,
+        # "For more information, try '--help'."). This is 100% reproducible
+        # for every gate-checked stage in that one run, and NOT reproducible
+        # afterwards (a manual standalone re-run hits the freshly-swapped
+        # binary and succeeds) — a one-time self-referential bootstrap skew,
+        # not a flake. Harmless by design (fail-soft below treats it as
+        # "no spike" and proceeds); no functional fix applied.
         local -a gate_args=(canary-gate --threshold "$canary_threshold" \
           --systemic-threshold "$canary_systemic_threshold")
         [ -n "$stage_deploy_ts" ] && gate_args+=(--since "$stage_deploy_ts")

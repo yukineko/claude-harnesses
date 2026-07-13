@@ -109,6 +109,25 @@ pub struct TaskState {
     /// deserializes and tasks without findings serialize unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub findings: Option<Findings>,
+    /// The opaque per-task hashkey (the same identity used by the cross-session
+    /// task-claim registry, `claim.rs`). Two tasks in *different* runs sharing a
+    /// hashkey are the same backlog item — that is how `reconcile` detects a
+    /// cross-run duplicate completion (§4.6c). `None` for tasks written before
+    /// this field existed or tasks the caller never keyed; such tasks are simply
+    /// not considered for cross-run duplicate detection. Kept
+    /// `Option` + serde-default/skip so existing run-state JSON still
+    /// deserializes and unkeyed tasks serialize unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hashkey: Option<String>,
+    /// Unix timestamp (seconds) when this task's hashkey was claimed for this
+    /// run. Used by cross-run duplicate detection as the "since" anchor: another
+    /// run that completed the same hashkey *after* this timestamp is the
+    /// duplicate to escalate. `None` for tasks written before this field existed;
+    /// such tasks fail-soft to "no anchor" (treated as claimed at time 0, so any
+    /// later completion in another run still surfaces). Kept `Option` +
+    /// serde-default/skip for backward-compatible on-disk layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_at: Option<i64>,
 }
 
 pub fn now_secs() -> i64 {
@@ -584,6 +603,91 @@ pub fn reconcile_run(
     }
 
     Ok((run, changes))
+}
+
+// ── Cross-run duplicate-completion detection (§4.6c) ──────────────────────
+
+/// One detected cross-run duplicate: a hashkey that this run claimed but which
+/// one or more *other* runs also drove to `done`/`verified` after this run's
+/// claim. `runs` lists every run_id (this run first) that reached a terminal
+/// completion for the hashkey, so a human can pick which implementation to keep.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuplicateCompletion {
+    pub hashkey: String,
+    pub runs: Vec<String>,
+}
+
+/// A task counts as "completed" for duplicate detection when it reached a
+/// terminal SUCCESS state (`done` or `verified`). Cancelled/discarded are
+/// deliberate non-completions and are ignored, as are pending/running/failed.
+fn is_completion(status: Status) -> bool {
+    matches!(status, Status::Done | Status::Verified)
+}
+
+/// Detect hashkeys the target `run` claimed that some OTHER run_id also completed
+/// (`done`/`verified`) *after* this run's claim (§4.6c). This is the last-resort
+/// guard against a task being executed twice by two runs (clock skew, a `--force`
+/// double-claim, a reap racing a re-claim). It does not mutate anything: the
+/// caller escalates to a human (fail-closed) because which implementation to keep
+/// depends on test/diff quality a machine cannot judge.
+///
+/// Fail-soft: reading sibling run-state is tolerant (via [`all_runs`], which skips
+/// unparseable files); a run with no other runs, or whose tasks carry no hashkey,
+/// simply yields an empty result (the normal, no-duplicate case).
+pub fn detect_duplicate_completions(
+    cfg: &Config,
+    cwd: &Path,
+    run: &RunState,
+) -> Vec<DuplicateCompletion> {
+    // Index sibling runs' completed tasks by hashkey once. `all_runs` is
+    // fail-soft (unparseable state files are skipped), so a corrupt neighbour
+    // degrades to "no duplicate from that file" rather than erroring.
+    let siblings = all_runs(cfg, cwd);
+
+    let mut out = Vec::new();
+    for t in &run.tasks {
+        let hk = match &t.hashkey {
+            Some(h) if !h.is_empty() => h,
+            _ => continue, // unkeyed task: not eligible for cross-run detection
+        };
+        // Only detect a duplicate for a hashkey THIS run actually completed —
+        // an in-flight task racing another isn't yet a double-completion.
+        if !is_completion(t.status) {
+            continue;
+        }
+        // The "since" anchor: another run completing before we even claimed the
+        // hashkey is not a duplicate we caused. Missing claimed_at fails soft to
+        // 0 (any later completion still surfaces).
+        let since = t.claimed_at.unwrap_or(0);
+
+        let mut dup_runs = Vec::new();
+        for sib in &siblings {
+            if sib.run_id == run.run_id {
+                continue; // same run: not a CROSS-run duplicate
+            }
+            let completed_later = sib.tasks.iter().any(|st| {
+                st.hashkey.as_deref() == Some(hk.as_str())
+                    && is_completion(st.status)
+                    // updated_at records when the status last changed, i.e. the
+                    // completion time. Absent → treat as very old (i64::MIN) so
+                    // an undated sibling completion never counts as "later".
+                    && st.updated_at.unwrap_or(i64::MIN) > since
+            });
+            if completed_later && !dup_runs.contains(&sib.run_id) {
+                dup_runs.push(sib.run_id.clone());
+            }
+        }
+
+        if !dup_runs.is_empty() {
+            let mut runs = vec![run.run_id.clone()];
+            runs.extend(dup_runs);
+            out.push(DuplicateCompletion {
+                hashkey: hk.clone(),
+                runs,
+            });
+        }
+    }
+    out
 }
 
 // ── Discard an experiment worktree (resolve-by-learning) ──────────────────
@@ -1449,6 +1553,8 @@ mod tests {
                     branch_sha: None,
                     fp_oracle_valid: None,
                     findings: None,
+                    hashkey: None,
+                    claimed_at: None,
                 },
                 TaskState {
                     id: "b".into(),
@@ -1461,6 +1567,8 @@ mod tests {
                     branch_sha: None,
                     fp_oracle_valid: None,
                     findings: None,
+                    hashkey: None,
+                    claimed_at: None,
                 },
             ],
             paused: false,
@@ -1487,6 +1595,8 @@ mod tests {
                     branch_sha: None,
                     fp_oracle_valid: None,
                     findings: None,
+                    hashkey: None,
+                    claimed_at: None,
                 },
                 TaskState {
                     id: "b".into(),
@@ -1499,6 +1609,8 @@ mod tests {
                     branch_sha: None,
                     fp_oracle_valid: None,
                     findings: None,
+                    hashkey: None,
+                    claimed_at: None,
                 },
                 TaskState {
                     id: "c".into(),
@@ -1511,6 +1623,8 @@ mod tests {
                     branch_sha: None,
                     fp_oracle_valid: None,
                     findings: None,
+                    hashkey: None,
+                    claimed_at: None,
                 },
             ],
             paused: false,
@@ -1663,6 +1777,99 @@ mod tests {
         assert!(rs.tasks[0].findings.is_none());
     }
 
+    /// Helper: persist a run with one hashkeyed task at a given status/time.
+    fn save_run_with_task(
+        cfg: &Config,
+        cwd: &Path,
+        run_id: &str,
+        hashkey: &str,
+        status: Status,
+        claimed_at: i64,
+        updated_at: i64,
+    ) {
+        let rs = RunState {
+            run_id: run_id.into(),
+            goal: "g".into(),
+            tasks: vec![TaskState {
+                id: "t1".into(),
+                status,
+                hashkey: Some(hashkey.into()),
+                claimed_at: Some(claimed_at),
+                updated_at: Some(updated_at),
+                ..Default::default()
+            }],
+            paused: false,
+            terminal_label: None,
+            recorded_at: None,
+        };
+        rs.save(cfg, cwd).unwrap();
+    }
+
+    /// §4.6c: a second run completing the same hashkey AFTER this run's claim is
+    /// reported as a duplicate, listing both runs (this run first).
+    #[test]
+    fn detect_duplicate_completions_flags_cross_run_completion() {
+        let tmp = make_tmp_dir("dup-detect");
+        let cfg = make_test_cfg(&tmp);
+        // Other run completed hk-1 at t=200, after runA claimed it at t=100.
+        save_run_with_task(&cfg, &tmp, "runB", "hk-1", Status::Done, 120, 200);
+        save_run_with_task(&cfg, &tmp, "runA", "hk-1", Status::Verified, 100, 150);
+
+        let a = RunState::load(&cfg, &tmp, "runA").unwrap();
+        let dups = detect_duplicate_completions(&cfg, &tmp, &a);
+        assert_eq!(dups.len(), 1);
+        assert_eq!(dups[0].hashkey, "hk-1");
+        assert_eq!(dups[0].runs.first().map(String::as_str), Some("runA"));
+        assert!(dups[0].runs.iter().any(|r| r == "runB"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A sibling completion that happened BEFORE this run claimed the hashkey is
+    /// not a duplicate this run caused → not reported.
+    #[test]
+    fn detect_duplicate_completions_ignores_completion_before_claim() {
+        let tmp = make_tmp_dir("dup-before-claim");
+        let cfg = make_test_cfg(&tmp);
+        // runB completed at t=50, but runA only claimed at t=100 → not a dup.
+        save_run_with_task(&cfg, &tmp, "runB", "hk-1", Status::Verified, 10, 50);
+        save_run_with_task(&cfg, &tmp, "runA", "hk-1", Status::Verified, 100, 150);
+
+        let a = RunState::load(&cfg, &tmp, "runA").unwrap();
+        assert!(detect_duplicate_completions(&cfg, &tmp, &a).is_empty());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Unkeyed tasks (no hashkey) are never cross-correlated, and a run alone in
+    /// the project yields no duplicates (the normal, fail-soft case → exit 0).
+    #[test]
+    fn detect_duplicate_completions_none_when_unkeyed_or_solo() {
+        let tmp = make_tmp_dir("dup-solo");
+        let cfg = make_test_cfg(&tmp);
+        // Solo run, keyed but no sibling → no duplicate.
+        save_run_with_task(&cfg, &tmp, "runA", "hk-1", Status::Verified, 100, 150);
+        let a = RunState::load(&cfg, &tmp, "runA").unwrap();
+        assert!(detect_duplicate_completions(&cfg, &tmp, &a).is_empty());
+
+        // Add an unkeyed completed task in another run: must not match anything.
+        let rs = RunState {
+            run_id: "runB".into(),
+            goal: "g".into(),
+            tasks: vec![TaskState {
+                id: "t1".into(),
+                status: Status::Verified,
+                updated_at: Some(999),
+                ..Default::default()
+            }],
+            paused: false,
+            terminal_label: None,
+            recorded_at: None,
+        };
+        rs.save(&cfg, &tmp).unwrap();
+        let a = RunState::load(&cfg, &tmp, "runA").unwrap();
+        assert!(detect_duplicate_completions(&cfg, &tmp, &a).is_empty());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
     /// F→P (T2): `discard_experiment` on a real experiment worktree/branch must
     /// (a) remove the worktree and force-delete the unmerged branch, (b) record
     /// the branch SHA + diff stat as a learning artifact, and (c) leave the done
@@ -1796,6 +2003,8 @@ mod tests {
                 branch_sha: None,
                 fp_oracle_valid: None,
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
             }],
             paused: false,
             terminal_label: None,
@@ -1992,6 +2201,8 @@ mod tests {
                 branch_sha: None,
                 fp_oracle_valid: None,
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
             }],
             paused: false,
             terminal_label: None,
@@ -2047,6 +2258,8 @@ mod tests {
             branch_sha: None,
             fp_oracle_valid: None,
             findings: None,
+            hashkey: None,
+            claimed_at: None,
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert_eq!(ids, vec!["stuck-task".to_string()]);
@@ -2069,6 +2282,8 @@ mod tests {
             branch_sha: None,
             fp_oracle_valid: None,
             findings: None,
+            hashkey: None,
+            claimed_at: None,
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert!(ids.is_empty(), "recent Running task must not be stuck");
@@ -2089,6 +2304,8 @@ mod tests {
             branch_sha: None,
             fp_oracle_valid: None,
             findings: None,
+            hashkey: None,
+            claimed_at: None,
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert!(
@@ -2116,6 +2333,8 @@ mod tests {
             branch_sha: None,
             fp_oracle_valid: None,
             findings: None,
+            hashkey: None,
+            claimed_at: None,
         }]);
         let t = run.tasks.iter_mut().find(|t| t.id == "t1").unwrap();
         t.status = Status::Pending;
@@ -2146,6 +2365,8 @@ mod tests {
             branch_sha: None,
             fp_oracle_valid: None,
             findings: None,
+            hashkey: None,
+            claimed_at: None,
         }]);
         let t = run.tasks.iter_mut().find(|t| t.id == "t-fail").unwrap();
         t.status = Status::Pending;
@@ -2175,6 +2396,8 @@ mod tests {
                 branch_sha: None,
                 fp_oracle_valid: None,
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
             },
             TaskState {
                 id: "verified-task".into(),
@@ -2187,6 +2410,8 @@ mod tests {
                 branch_sha: None,
                 fp_oracle_valid: None,
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
             },
         ]);
         for t in &run.tasks {
@@ -2217,6 +2442,8 @@ mod tests {
                 branch_sha: None,
                 fp_oracle_valid: None,
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
             },
             TaskState {
                 id: "stuck-2".into(),
@@ -2229,6 +2456,8 @@ mod tests {
                 branch_sha: None,
                 fp_oracle_valid: None,
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
             },
             TaskState {
                 id: "active".into(),
@@ -2241,6 +2470,8 @@ mod tests {
                 branch_sha: None,
                 fp_oracle_valid: None,
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
             },
         ]);
 
@@ -2285,6 +2516,8 @@ mod tests {
             branch_sha: None,
             fp_oracle_valid: None,
             findings: None,
+            hashkey: None,
+            claimed_at: None,
         }]);
         let found = run.tasks.iter().find(|t| t.id == "no-such-task");
         assert!(found.is_none(), "non-existent task id must not be found");
@@ -2365,6 +2598,8 @@ mod tests {
                 branch_sha: None,
                 fp_oracle_valid: None,
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
             },
             TaskState {
                 id: "done-old".into(),
@@ -2377,6 +2612,8 @@ mod tests {
                 branch_sha: None,
                 fp_oracle_valid: None,
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
             },
             TaskState {
                 id: "verified-old".into(),
@@ -2389,6 +2626,8 @@ mod tests {
                 branch_sha: None,
                 fp_oracle_valid: None,
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
             },
         ]);
         let ids = stuck_task_ids(&run, ttl);
@@ -2630,6 +2869,8 @@ mod tests {
             branch_sha: None,
             fp_oracle_valid: None,
             findings: None,
+            hashkey: None,
+            claimed_at: None,
             ..Default::default()
         };
         let ref_to_check = t_without_sha.branch_sha.as_deref().unwrap_or(branch);
@@ -2840,6 +3081,8 @@ mod tests {
                 status: Status::Verified,
                 fp_oracle_valid: Some(false),
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
                 ..Default::default()
             },
             TaskState {
@@ -2847,6 +3090,8 @@ mod tests {
                 status: Status::Verified,
                 fp_oracle_valid: Some(true),
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
                 ..Default::default()
             },
             TaskState {
@@ -2854,6 +3099,8 @@ mod tests {
                 status: Status::Verified,
                 fp_oracle_valid: None,
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
                 ..Default::default()
             },
         ]);

@@ -3333,6 +3333,20 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
         }
         StateAction::Reconcile { run, dry_run } => {
             let rs = state::RunState::load(cfg, cwd, &run)?;
+            // §4.6c: before any auto-verify, check whether another run_id already
+            // completed one of this run's hashkeys after we claimed it. If so, we
+            // neither auto-merge nor auto-discard — the choice of which
+            // implementation to keep needs a human (fail-closed, exit 2/escalate).
+            let dups = state::detect_duplicate_completions(cfg, cwd, &rs);
+            if !dups.is_empty() {
+                let payload = serde_json::json!({ "duplicate_completion": dups });
+                println!("{}", serde_json::to_string(&payload)?);
+                eprintln!(
+                    "reconcile: {} cross-run duplicate completion(s) detected — escalating to human (no auto-merge/discard)",
+                    dups.len()
+                );
+                std::process::exit(2);
+            }
             let (updated, changes) = state::reconcile_run(cfg, cwd, rs, &cfg.default_branch)?;
             if changes.is_empty() {
                 eprintln!("reconcile: nothing to change for run '{run}'");
@@ -4242,6 +4256,8 @@ mod state_set_tests {
                 cost_usd: None,
                 fp_oracle_valid: None,
                 findings: None,
+                hashkey: None,
+                claimed_at: None,
             }],
             paused: false,
             terminal_label: None,

@@ -26,6 +26,17 @@ pub struct Lease {
     pub claimed_at: i64,
     /// Unix timestamp of last heartbeat (liveness signal).
     pub heartbeat_at: i64,
+    /// Files / globs this session is responsible for (PDO session anchor,
+    /// DESIGN §4.1). Empty = scope not yet fixed (investigation / carve loop);
+    /// such leases are excluded from scope-overlap checks. `#[serde(default)]`
+    /// keeps pre-existing leases.json (without this field) readable.
+    #[serde(default)]
+    pub scope: Vec<String>,
+    /// This session's definition of "done" (compass/condukt vocabulary). Used to
+    /// re-anchor the session's own memory (§4.3). `#[serde(default)]` keeps old
+    /// leases.json readable.
+    #[serde(default)]
+    pub done_criteria: Option<String>,
 }
 
 /// The registry of all active leases: key -> Lease.
@@ -695,6 +706,8 @@ mod tests {
                 run_id: "run-1".to_string(),
                 claimed_at: 100,
                 heartbeat_at: 100,
+                scope: Vec::new(),
+                done_criteria: None,
             },
         );
 
@@ -707,6 +720,41 @@ mod tests {
     }
 
     #[test]
+    fn lease_without_new_fields_deserializes_with_defaults() {
+        // A pre-existing leases.json entry (no scope / done_criteria) must still
+        // load — `#[serde(default)]` fills the PDO anchor fields.
+        let legacy = r#"{
+            "key": "k",
+            "title": "t",
+            "session_id": "s",
+            "run_id": "r",
+            "claimed_at": 1,
+            "heartbeat_at": 2
+        }"#;
+        let lease: Lease = serde_json::from_str(legacy).expect("legacy lease parses");
+        assert!(lease.scope.is_empty());
+        assert_eq!(lease.done_criteria, None);
+    }
+
+    #[test]
+    fn lease_with_anchor_fields_roundtrips() {
+        let lease = Lease {
+            key: "k".to_string(),
+            title: "t".to_string(),
+            session_id: "s".to_string(),
+            run_id: "r".to_string(),
+            claimed_at: 1,
+            heartbeat_at: 2,
+            scope: vec!["crates/overwatch/src/**".to_string()],
+            done_criteria: Some("all tests green".to_string()),
+        };
+        let json = serde_json::to_string(&lease).unwrap();
+        let back: Lease = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.scope, lease.scope);
+        assert_eq!(back.done_criteria, lease.done_criteria);
+    }
+
+    #[test]
     fn is_stale_detects_old_heartbeat() {
         let lease = Lease {
             key: "k".to_string(),
@@ -715,6 +763,8 @@ mod tests {
             run_id: "r".to_string(),
             claimed_at: 0,
             heartbeat_at: 100,
+            scope: Vec::new(),
+            done_criteria: None,
         };
 
         // Within TTL → not stale
@@ -735,6 +785,8 @@ mod tests {
                 run_id: "r1".to_string(),
                 claimed_at: 0,
                 heartbeat_at: 1000,
+                scope: Vec::new(),
+                done_criteria: None,
             },
         );
         leases.insert(
@@ -746,6 +798,8 @@ mod tests {
                 run_id: "r2".to_string(),
                 claimed_at: 0,
                 heartbeat_at: 0,
+                scope: Vec::new(),
+                done_criteria: None,
             },
         );
 

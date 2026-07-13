@@ -44,6 +44,14 @@ enum Command {
         title: String,
         #[arg(long)]
         session: Option<String>,
+        /// Comma-separated files/globs this session is responsible for (PDO
+        /// session anchor, §4.2). Omit when the scope is not yet fixed.
+        #[arg(long)]
+        scope: Option<String>,
+        /// This session's definition of "done" (re-anchored into the session's
+        /// memory, §4.3).
+        #[arg(long)]
+        done_criteria: Option<String>,
     },
     /// Run a task within a lease
     Run {
@@ -66,6 +74,13 @@ enum Command {
     },
     /// Reap expired leases
     Reap,
+    /// Show the live lease (PDO anchor) held by a session
+    Lease {
+        #[arg(long)]
+        session: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Show current status
     Status {
         #[arg(long)]
@@ -423,8 +438,21 @@ fn main() -> Result<()> {
             key,
             title,
             session,
+            scope,
+            done_criteria,
         } => {
-            lease::begin(&key, &title, session.as_deref())?;
+            // Split the comma-separated scope into non-empty trimmed globs.
+            let scope: Vec<String> = scope
+                .as_deref()
+                .map(|s| {
+                    s.split(',')
+                        .map(str::trim)
+                        .filter(|p| !p.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            lease::begin(&key, &title, session.as_deref(), scope, done_criteria)?;
         }
         Command::Run { key, note } => {
             lease::run(&key, note.as_deref())?;
@@ -437,6 +465,9 @@ fn main() -> Result<()> {
         }
         Command::Reap => {
             lease::reap()?;
+        }
+        Command::Lease { session, json } => {
+            lease::lease_for_session(&session, json)?;
         }
         Command::Status { json } => {
             render::status(json)?;

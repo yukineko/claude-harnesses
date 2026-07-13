@@ -376,6 +376,8 @@ mod tests {
                 run_id: "run-1".to_string(),
                 claimed_at: 1000,
                 heartbeat_at: 1900,
+                scope: Vec::new(),
+                done_criteria: None,
             },
         );
 
@@ -388,6 +390,8 @@ mod tests {
                 run_id: "run-1".to_string(),
                 claimed_at: 1000,
                 heartbeat_at: 1850,
+                scope: Vec::new(),
+                done_criteria: None,
             },
         );
 
@@ -413,6 +417,8 @@ mod tests {
                     run_id: "run-1".to_string(),
                     claimed_at: 1000,
                     heartbeat_at: 1900,
+                    scope: Vec::new(),
+                    done_criteria: None,
                 },
             );
         }
@@ -426,6 +432,8 @@ mod tests {
                 run_id: "run-2".to_string(),
                 claimed_at: 1000,
                 heartbeat_at: 1850,
+                scope: Vec::new(),
+                done_criteria: None,
             },
         );
 
@@ -449,6 +457,8 @@ mod tests {
                 run_id: "r1".to_string(),
                 claimed_at: 1000,
                 heartbeat_at: 1900,
+                scope: Vec::new(),
+                done_criteria: None,
             },
         );
 
@@ -461,6 +471,8 @@ mod tests {
                 run_id: "r1".to_string(),
                 claimed_at: 0,
                 heartbeat_at: 0,
+                scope: Vec::new(),
+                done_criteria: None,
             },
         );
 

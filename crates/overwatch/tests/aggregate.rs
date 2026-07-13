@@ -32,6 +32,8 @@ fn test_lease_registry_to_session_roster() {
             run_id: "run-1".to_string(),
             claimed_at: 1000,
             heartbeat_at: 1900, // recent
+            scope: Vec::new(),
+            done_criteria: None,
         },
     );
 
@@ -45,6 +47,8 @@ fn test_lease_registry_to_session_roster() {
             run_id: "run-1".to_string(),
             claimed_at: 1000,
             heartbeat_at: 1850, // recent
+            scope: Vec::new(),
+            done_criteria: None,
         },
     );
 
@@ -58,6 +62,8 @@ fn test_lease_registry_to_session_roster() {
             run_id: "run-2".to_string(),
             claimed_at: 1000,
             heartbeat_at: 1800, // still within TTL
+            scope: Vec::new(),
+            done_criteria: None,
         },
     );
 
@@ -71,6 +77,8 @@ fn test_lease_registry_to_session_roster() {
             run_id: "run-1".to_string(),
             claimed_at: 0,
             heartbeat_at: 0, // very stale
+            scope: Vec::new(),
+            done_criteria: None,
         },
     );
 
@@ -97,6 +105,8 @@ fn test_reap_stale_before_roster() {
             run_id: "r1".to_string(),
             claimed_at: 1000,
             heartbeat_at: 1900,
+            scope: Vec::new(),
+            done_criteria: None,
         },
     );
 
@@ -109,6 +119,8 @@ fn test_reap_stale_before_roster() {
             run_id: "r2".to_string(),
             claimed_at: 0,
             heartbeat_at: 0,
+            scope: Vec::new(),
+            done_criteria: None,
         },
     );
 
@@ -305,6 +317,8 @@ fn test_session_roster_live_count() {
                 run_id: "r1".to_string(),
                 claimed_at: 1000,
                 heartbeat_at: 1900,
+                scope: Vec::new(),
+                done_criteria: None,
             },
         );
     }
@@ -319,6 +333,8 @@ fn test_session_roster_live_count() {
             run_id: "r1".to_string(),
             claimed_at: 0,
             heartbeat_at: 0,
+            scope: Vec::new(),
+            done_criteria: None,
         },
     );
 
@@ -342,6 +358,8 @@ fn test_multiple_sessions_separate() {
             run_id: "run-1".to_string(),
             claimed_at: 100,
             heartbeat_at: 100,
+            scope: Vec::new(),
+            done_criteria: None,
         },
     );
 
@@ -354,6 +372,8 @@ fn test_multiple_sessions_separate() {
             run_id: "run-2".to_string(),
             claimed_at: 100,
             heartbeat_at: 100,
+            scope: Vec::new(),
+            done_criteria: None,
         },
     );
 
@@ -366,6 +386,8 @@ fn test_multiple_sessions_separate() {
             run_id: "run-1".to_string(),
             claimed_at: 100,
             heartbeat_at: 100,
+            scope: Vec::new(),
+            done_criteria: None,
         },
     );
 

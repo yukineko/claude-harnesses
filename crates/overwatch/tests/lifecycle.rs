@@ -42,6 +42,8 @@ fn cross_session_dedup_via_pure_functions() {
                 run_id: "run-a".to_string(),
                 claimed_at: now,
                 heartbeat_at: now,
+                scope: Vec::new(),
+                done_criteria: None,
             },
         );
         // Manually create the storage dir and save
@@ -117,6 +119,8 @@ fn cross_session_dedup_via_pure_functions() {
                 run_id: "run-b".to_string(),
                 claimed_at: now,
                 heartbeat_at: now,
+                scope: Vec::new(),
+                done_criteria: None,
             },
         );
         let json = serde_json::to_string_pretty(&leases).unwrap();
@@ -181,6 +185,8 @@ fn same_session_reclaim_is_idempotent() {
             run_id: "run-1".to_string(),
             claimed_at: now,
             heartbeat_at: now,
+            scope: Vec::new(),
+            done_criteria: None,
         },
     );
     let json = serde_json::to_string_pretty(&leases).unwrap();
@@ -212,6 +218,8 @@ fn same_session_reclaim_is_idempotent() {
             run_id: "run-1".to_string(),
             claimed_at,         // preserved
             heartbeat_at: now2, // updated
+            scope: Vec::new(),
+            done_criteria: None,
         },
     );
 

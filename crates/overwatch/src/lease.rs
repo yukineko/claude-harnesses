@@ -25,7 +25,17 @@ fn resolve_run_id() -> String {
 
 /// Begin a new lease for a task. If a live lease from another session already holds the key,
 /// print a skip JSON to stdout and exit with code 1.
-pub fn begin(key: &str, title: &str, session: Option<&str>) -> Result<()> {
+///
+/// `scope` (files/globs) and `done_criteria` are the PDO session-anchor fields
+/// (DESIGN §4.1/§4.2); both are optional so pre-existing callers that omit them
+/// keep working unchanged. An empty `scope` means "not yet fixed".
+pub fn begin(
+    key: &str,
+    title: &str,
+    session: Option<&str>,
+    scope: Vec<String>,
+    done_criteria: Option<String>,
+) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let session_id = resolve_session_id(session);
     let run_id = resolve_run_id();
@@ -63,6 +73,8 @@ pub fn begin(key: &str, title: &str, session: Option<&str>) -> Result<()> {
             run_id: run_id.clone(),
             claimed_at,
             heartbeat_at: now,
+            scope,
+            done_criteria,
         },
     );
 
@@ -180,6 +192,48 @@ pub fn heartbeat(key: &str) -> Result<()> {
     Ok(())
 }
 
+/// Look up the live lease held by `session_id` (PDO anchor read path, §4.3/§5.1).
+/// Stale leases are reaped first so only a live anchor is returned. If the
+/// session holds more than one lease, the most recently claimed one is returned
+/// (the session's current focus). Prints the lease as JSON when `json` is true,
+/// else a short human line; prints nothing and exits 1 when there is no live
+/// lease (fail-soft: callers treat a non-zero exit / empty output as "no anchor").
+pub fn lease_for_session(session_id: &str, json: bool) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let now = store::now();
+    let mut leases = store::load_leases(&cwd)?;
+    store::reap_stale(&mut leases, now);
+
+    match pick_session_lease(&leases, session_id) {
+        Some(lease) => {
+            if json {
+                println!("{}", serde_json::to_string(lease)?);
+            } else {
+                println!("{} — {}", lease.key, lease.title);
+            }
+            Ok(())
+        }
+        None => {
+            // No live anchor for this session: silent, non-zero exit (fail-soft).
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Pure selection of a session's current anchor from a registry: the
+/// most-recently-claimed lease held by `session_id` (its current focus), or
+/// `None` if the session holds no lease. Separated from I/O so it is unit
+/// testable.
+fn pick_session_lease<'a>(
+    leases: &'a store::LeaseRegistry,
+    session_id: &str,
+) -> Option<&'a store::Lease> {
+    leases
+        .values()
+        .filter(|l| l.session_id == session_id)
+        .max_by_key(|l| l.claimed_at)
+}
+
 /// Reap expired leases.
 pub fn reap() -> Result<()> {
     let cwd = std::env::current_dir()?;
@@ -222,5 +276,36 @@ mod tests {
     fn resolve_run_id_generates_default() {
         let id = resolve_run_id();
         assert!(id.starts_with("run-"));
+    }
+
+    fn lease_at(key: &str, session: &str, claimed_at: i64) -> store::Lease {
+        store::Lease {
+            key: key.to_string(),
+            title: format!("title-{key}"),
+            session_id: session.to_string(),
+            run_id: "r".to_string(),
+            claimed_at,
+            heartbeat_at: claimed_at,
+            scope: Vec::new(),
+            done_criteria: None,
+        }
+    }
+
+    #[test]
+    fn pick_session_lease_returns_most_recent_for_session() {
+        let mut leases = store::LeaseRegistry::new();
+        leases.insert("k1".into(), lease_at("k1", "sess-a", 100));
+        leases.insert("k2".into(), lease_at("k2", "sess-a", 300)); // newer
+        leases.insert("k3".into(), lease_at("k3", "sess-b", 999));
+
+        let got = pick_session_lease(&leases, "sess-a").expect("sess-a has a lease");
+        assert_eq!(got.key, "k2"); // most-recently-claimed of sess-a
+    }
+
+    #[test]
+    fn pick_session_lease_none_when_session_absent() {
+        let mut leases = store::LeaseRegistry::new();
+        leases.insert("k1".into(), lease_at("k1", "sess-a", 100));
+        assert!(pick_session_lease(&leases, "sess-x").is_none());
     }
 }

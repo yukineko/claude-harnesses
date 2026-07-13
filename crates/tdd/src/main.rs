@@ -67,6 +67,17 @@ enum Command {
         /// else `tdd green` is rejected (fail-closed).
         #[arg(long)]
         author: Option<String>,
+        /// Explicitly opt **out** of strict test/impl author separation for this
+        /// run — highest priority, overriding both the config file and the
+        /// gate-crate-context default-on. Use when a gate-crate `tdd green`
+        /// legitimately runs with a single identity.
+        #[arg(long, conflicts_with = "strict_separation")]
+        no_strict_separation: bool,
+        /// Explicitly opt **in** to strict test/impl author separation for this
+        /// run, regardless of context. Highest priority alongside
+        /// `--no-strict-separation` (mutually exclusive).
+        #[arg(long)]
+        strict_separation: bool,
     },
     /// Exit 0 iff both RED and GREEN proofs exist for the task.
     Verify {
@@ -112,8 +123,27 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::Gate => gate_command(),
-        Command::Red { task, cmd, author } => proof_command(&task, &cmd, &author, true),
-        Command::Green { task, cmd, author } => proof_command(&task, &cmd, &author, false),
+        Command::Red { task, cmd, author } => proof_command(&task, &cmd, &author, true, None),
+        Command::Green {
+            task,
+            cmd,
+            author,
+            no_strict_separation,
+            strict_separation,
+        } => {
+            // Tri-state CLI override for strict_separation: an explicit flag
+            // (either direction) is `Some(_)` and wins over config/gate-context;
+            // neither flag → `None` (defer to config file / gate-crate default).
+            // The two flags are mutually exclusive (clap `conflicts_with`).
+            let strict_override = if no_strict_separation {
+                Some(false)
+            } else if strict_separation {
+                Some(true)
+            } else {
+                None
+            };
+            proof_command(&task, &cmd, &author, false, strict_override)
+        }
         Command::Verify { task } => verify_command(&task),
         Command::Oracle { task } => oracle_command(&task),
         Command::Init { force } => exit_on_err(init(force)),
@@ -213,9 +243,20 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 /// `tdd red` / `tdd green`. Manual CLI: non-zero exit signals the skill that the
 /// phase precondition (must-fail / must-pass, or — under `strict_separation` —
 /// distinct test/impl authorship) was not met.
-fn proof_command(task: &str, cmd: &Option<String>, author: &Option<String>, is_red: bool) -> ! {
+fn proof_command(
+    task: &str,
+    cmd: &Option<String>,
+    author: &Option<String>,
+    is_red: bool,
+    strict_override: Option<bool>,
+) -> ! {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
+    let mut cfg = Config::load(&root);
+    // Resolve the effective strict_separation before `green` consumes it:
+    // explicit CLI/config > gate-crate-context default-on > global default-off.
+    // (`red` records the RED author but never checks separation, so this only
+    // affects `green`; resolving unconditionally keeps `cfg` consistent.)
+    cfg.strict_separation = cfg.resolve_strict_separation(&root, strict_override);
     let r = if is_red {
         proof::red(&root, &cfg, task, cmd, author)
     } else {
@@ -277,7 +318,9 @@ fn log_event(cfg: &Config, session: &str, verdict: &str, attempt: u32) {
 
 fn status() {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
+    let mut cfg = Config::load(&root);
+    // Reflect the same gate-crate-context resolution `tdd green` would apply.
+    cfg.strict_separation = cfg.resolve_strict_separation(&root, None);
     let src = if Config::project_path(&root).exists() {
         Config::project_path(&root)
     } else if Config::home_path().exists() {

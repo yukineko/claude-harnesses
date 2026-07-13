@@ -58,6 +58,7 @@ round ledger・収束メトリクスという**決定論は `scripts/continuous-
 - finder は**修正しない** (read-only)。指摘は `{severity: high|med|low, summary, file:line}` の形で返させる。
 - 「実在する問題だけ」を強制する (推測・スタイル論・LGTM の水増しを避ける)。
 - 見つからなければ空を返させる (0 件は正常 = 収束の証拠)。
+- **finder で使用するモデルを記録する** — Step 2 の model diversity チェックで必要。Task の実行結果から使用モデルを確認し、メモに記録しておく。
 
 ### Step 2 — refute-verifier (反証で篩う)
 
@@ -67,8 +68,21 @@ finder の各指摘を、**別の (finder とは独立した) `Task` verifier su
 
 - **CONFIRMED**: verifier がコードで再現/立証できた指摘。→ review-queue に載せる。
 - **REFUTED / PLAUSIBLE**: 立証できない・誤検出・文脈で無害。→ 捨てる (載せない)。
-- finder と verifier は**必ず別 subagent** (できれば別モデル) にする — 同一だと生成と検証が同じ盲点を共有する。
-- 高リスク指摘は verifier を複数立てて多数決にしてよい (refute 票が過半なら捨てる)。
+- **finder と verifier は必ず別 subagent を使用し、かつ異なるモデルを指定すること (MUST)**。
+  同一モデルペアだと生成と検証が同じ盲点を共有するため、必ず異なるモデルで実行する。
+  - 具体的な model diversity ルール：
+    - finder が `claude-3-5-sonnet` を使用した場合 → verifier は `claude-3-5-opus` または `claude-3-5-haiku` を指定。
+    - finder が `claude-3-5-opus` を使用した場合 → verifier は `claude-3-5-sonnet` または `claude-3-5-haiku` を指定。
+    - finder が `claude-3-5-haiku` を使用した場合 → verifier は `claude-3-5-sonnet` または `claude-3-5-opus` を指定。
+  - verifier の Task 起動時に、**finder で記録したモデルと異なるモデルを明示的に指定する**。
+    指定後、実際に同じモデルペアになっていないことを確認してから verifier を実行する。
+  - 同一モデルペアの実行は防止する（分析品質低下・盲点共有のため）。
+  - **この MUST は prose だけでなくコードで機械強制される**: Step 3 で finder/verifier のモデルを
+    `--finder-model` / `--verifier-model` として渡すと、overwatch が決定論的に `same_model` 判定を行い、
+    **同一モデルなら review-queue に high severity の警告 finding を1件記録する**（finding-id は round-id 由来で
+    冪等）。ハード fail ではなく fail-soft（round は記録され続け、ループは止まらない＝never-break-a-turn）だが、
+    review surface に MUST 違反が可視化される。**必ず両モデルを渡して自己申告を機械検証に晒すこと**。
+- 高リスク指摘は verifier を複数立てて多数決にしてよい。その場合も複数の verifier は異なるモデルを指定する。
 
 CONFIRMED subset を確定し、各件を `finding-id | severity | summary | file` に整形する。**finding-id は
 安定なキー**にする (例: `CA-<crate>-<連番>` や rule id)。同じ指摘が次ラウンドでも CONFIRMED なら
@@ -84,6 +98,7 @@ scripts/continuous-audit.sh --round <round-id> --target <csv> \
   --new-findings <このラウンドで新規に出た件数> \
   --confirmed <CONFIRMED 件数> \
   --regression-tests-added <確定指摘を回帰テスト化した件数> \
+  --finder-model <finder が使ったモデル> --verifier-model <verifier が使ったモデル> \
   --finding '<id>|<severity>|<summary>|<file>'   # CONFIRMED ごとに1回。--finding は繰り返し可
 
 # プレビュー (何も書かない):
@@ -91,6 +106,10 @@ scripts/continuous-audit.sh --round <round-id> --dry-run
 ```
 
 - `--finding` の書式は `id|severity|summary|file` (severity と file は省略可)。CONFIRMED の数だけ繰り返す。
+- `--finder-model` / `--verifier-model` は Step 2 の model diversity MUST の**機械強制**入力。両方渡すと
+  overwatch が `same_model` で決定論判定し、同一なら review-queue に high の警告 finding を冪等記録する
+  (fail-soft・round は記録継続)。両省略時は従来どおりチェックしない（後方互換）が、**MUST を実効化するため
+  常に両モデルを渡すこと**。
 - `--new-findings` / `--confirmed` / `--regression-tests-added` は **round ledger にそのまま記録される件数**。
   `--finding` エントリは review-queue に流す CONFIRMED subset (件数入力とは独立)。
 - スクリプトは各 CONFIRMED を `overwatch record-finding --source continuous-audit …` で review-queue へ、
@@ -100,9 +119,29 @@ scripts/continuous-audit.sh --round <round-id> --dry-run
 ### Step 4 — 回帰テスト化 (継続運用の原則)
 
 CONFIRMED のうち**挙動バグ**は、対象 crate に**回帰テストを追加して固定**する (決定性はテストに固定化する)。
-これは別タスク (backlog / condukt) に委譲してよいが、追加できた件数を Step 3 の
-`--regression-tests-added` に反映する。commit `38f613c` (re-review finding 1-3 の ignored 回帰テスト昇格) が
-「CONFIRMED → 回帰テスト」の POC。
+これは別タスク (backlog / condukt) に委譲してよいが、追加できた件数を記録する。commit `38f613c`
+(re-review finding 1-3 の ignored 回帰テスト昇格) が「CONFIRMED → 回帰テスト」の POC。
+
+> **回帰テストは通常ラウンド記録より後に landed する** (修正は backlog/condukt へ委譲される別タスク)。
+> Step 3 の `--regression-tests-added` は「そのラウンドと同時にテストまで締めた」件数だけを入れ、
+> **後から締めた分は Step 4.5 の closure で round に還元する** (record 時は 0 のままにしてよい)。
+
+### Step 4.5 — closure フィードバック (fix 側を収束シグナルに還元する)
+
+CONFIRMED を回帰テストで締めたら、その件数を**元のラウンドへ closure として書き戻す**。これをやらないと
+`audit-metrics` の `closure-rate` と `converging` は fix 側を見ないまま `0.00 / false` に張り付き、
+「fleet は硬化しているか?」というループ本来の問いに答えられない (build ≠ validate)。
+
+```sh
+# ラウンド <id> の confirmed findings を締めた回帰テスト件数 <N> を還元する。
+overwatch audit-round close --round <round-id> --tests <N>
+```
+
+- **SET(加算ではない)**: 同じ `<N>` で二度 close しても二重計上しない (冪等なので backfill を安全に再実行できる)。
+- **closure ≤ 1.0 に保つ**: `<N>` は「回帰テストで固定した confirmed findings の数」であって raw なテスト関数の
+  総数ではない (closure-rate = tests ÷ confirmed なので confirmed を超えると 1.0 を超えて不正になる)。
+- **未知 round-id は fail-soft**: ledger を変えずに `closed:false` を返す (turn を壊さない)。
+- 同じ round-id が重複記録されている場合は**最後に記録されたラウンド**が closure 対象になる。
 
 ### Step 5 — 結果確認と収束
 

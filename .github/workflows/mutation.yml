@@ -8,7 +8,10 @@ name: mutation
 #
 # SCOPE (deliberately narrow — see scripts/mutation-gate.sh):
 #   * ONE pilot crate only. Whole-workspace mutation is far too slow to gate on.
-#     Pilot: harness-core (shared pure-ish logic). Expand one crate at a time.
+#     Default pilot: harness-core (shared pure-ish logic). A second pilot,
+#     specguard, is available via workflow_dispatch (pilot=specguard) — it
+#     covers the polarity gate (src/similarity.rs), a GATE crate where mutation
+#     kill-rate signal matters most. Expand one crate at a time.
 #   * Overall job timeout bounds cost; cargo-mutants gets a per-mutant --timeout.
 #
 # TRIGGERS: this is intentionally NOT run on every PR (it is slow). It runs on

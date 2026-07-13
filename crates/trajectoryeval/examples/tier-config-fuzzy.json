@@ -1,0 +1,6 @@
+{
+  "core": ["checkout"],
+  "diff_strategy": "fuzzy_hash",
+  "sample_one_in": 0,
+  "threshold_permille": 250
+}

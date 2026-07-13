@@ -88,21 +88,22 @@ pass "--dry-run is side-effect free"
 
 echo
 echo "=== case 3: record path ingests finding + appends a round ==="
-run_ca --round 7 --target specguard,stuckguard \
+run_ca --round 2026W28 --target specguard,stuckguard \
     --new-findings 4 --confirmed 3 --regression-tests-added 3 \
     --finding 'R-007|high|confirmed real finding|crates/specguard/src/y.rs'
 [ "$RC" -eq 0 ] || fail "record run should exit 0 (got $RC)"
-grep -q "round 7 recorded" <<<"$OUT" || fail "record run should confirm the round was recorded"
+grep -q "round 2026W28 recorded" <<<"$OUT" || fail "record run should confirm the round was recorded"
 
 # The finding must surface in the review queue.
 QUEUE="$( run_ow review-queue --json )"
 grep -q "R-007" <<<"$QUEUE" || fail "confirmed finding R-007 must appear in review-queue"
 pass "confirmed finding reached the review queue"
 
-# The round must appear in the metrics ledger.
+# The round must appear in the metrics ledger. The round-id is a free-form
+# string (e.g. an ISO week), so the JSON reports it as a quoted string.
 METRICS="$( run_ow audit-metrics --json )"
-grep -q '"round": 7' <<<"$METRICS" || fail "round 7 must appear in audit-metrics"
-grep -q '"new_findings": 4' <<<"$METRICS" || fail "round 7 new_findings must be recorded"
+grep -q '"round": "2026W28"' <<<"$METRICS" || fail "round 2026W28 must appear in audit-metrics"
+grep -q '"new_findings": 4' <<<"$METRICS" || fail "round 2026W28 new_findings must be recorded"
 pass "round metrics reached the convergence ledger"
 
 echo

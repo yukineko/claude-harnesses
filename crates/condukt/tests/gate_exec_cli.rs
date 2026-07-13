@@ -68,6 +68,33 @@ impl Fixture {
     fn find_state_file(&self, suffix: &str) -> Option<PathBuf> {
         find_by_suffix(&self.state_dir, suffix)
     }
+
+    /// Path to overwatch's review_findings.jsonl for this fixture, computed
+    /// WITHOUT touching the parent test process's own `$HOME` (that would race
+    /// with other tests running in parallel in this binary). Mirrors
+    /// `overwatch::store`'s `storage_root`: `$HOME/.overwatch/<project-key>/overwatch/`.
+    /// `harness_core::projkey` is pure (no env), so this is safe to call in-process.
+    fn review_findings_path(&self) -> PathBuf {
+        let root = harness_core::projkey::repo_root(&self.repo);
+        let key = harness_core::projkey::project_key(&root);
+        self.home
+            .join(".overwatch")
+            .join(key)
+            .join("overwatch")
+            .join("review_findings.jsonl")
+    }
+
+    /// Read back all recorded review findings (empty vec if the file is absent).
+    fn review_findings(&self) -> Vec<overwatch::review_finding::ReviewFinding> {
+        match std::fs::read_to_string(self.review_findings_path()) {
+            Ok(txt) => txt
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| serde_json::from_str(l).expect("valid ReviewFinding JSON line"))
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
@@ -246,6 +273,127 @@ fn missing_task_fails_soft_to_escalate_nonzero() {
             .is_none(),
         "a fail-soft escalate must not checkpoint"
     );
+}
+
+// ── overwatch review-finding wiring (Escalate records, AutoExec doesn't) ──────
+
+#[test]
+fn escalate_records_exactly_one_review_finding() {
+    let fx = Fixture::new("escalate-finding");
+    let rid = fx.init_run(safe_decomp());
+
+    // No finding before the gate has ever run.
+    assert!(
+        fx.review_findings().is_empty(),
+        "no finding should exist before any gate check"
+    );
+
+    // autonomous OFF => Low+reversible still escalates (policy not auto).
+    let out = fx.condukt(&["gate", "check", "--run", &rid, "--task", "t1"], false);
+    assert_eq!(out.status.code(), Some(1), "escalate must exit 1");
+
+    let findings = fx.review_findings();
+    assert_eq!(
+        findings.len(),
+        1,
+        "escalate must record exactly one review finding: {findings:?}"
+    );
+    let f = &findings[0];
+    assert_eq!(f.finding_id, format!("gate-exec:{rid}:t1"));
+    assert_eq!(f.source, "condukt-gate");
+    assert_eq!(
+        f.severity.as_deref(),
+        Some("medium"),
+        "Low risk must map to medium severity: {f:?}"
+    );
+    assert!(
+        f.summary.contains("t1"),
+        "summary should name the gated task: {}",
+        f.summary
+    );
+}
+
+#[test]
+fn escalate_high_risk_records_high_severity_finding() {
+    let fx = Fixture::new("escalate-high-finding");
+    let rid = fx.init_run(risky_decomp());
+
+    // High-risk irreversible always escalates, even under autonomous ON.
+    let out = fx.condukt(&["gate", "check", "--run", &rid, "--task", "t1"], true);
+    assert_eq!(out.status.code(), Some(1), "escalate must exit 1");
+
+    let findings = fx.review_findings();
+    assert_eq!(
+        findings.len(),
+        1,
+        "expected exactly one finding: {findings:?}"
+    );
+    assert_eq!(
+        findings[0].severity.as_deref(),
+        Some("high"),
+        "High risk must map to high severity: {:?}",
+        findings[0]
+    );
+}
+
+#[test]
+fn autoexec_records_no_review_finding() {
+    let fx = Fixture::new("autoexec-no-finding");
+    let rid = fx.init_run(safe_decomp());
+
+    // Low+reversible+autonomous ON => auto-exec, no escalation at all.
+    let out = fx.condukt(&["gate", "check", "--run", &rid, "--task", "t1"], true);
+    assert_eq!(out.status.code(), Some(0), "auto-exec must exit 0");
+
+    assert!(
+        fx.review_findings().is_empty(),
+        "auto-exec must record NO review finding: {:?}",
+        fx.review_findings()
+    );
+}
+
+#[test]
+fn repeated_escalate_of_the_same_gate_collapses_to_one_finding_id() {
+    // Simulates codegen flood: the same (run, task) gate is re-checked multiple
+    // times. Each invocation appends a line to the findings stream, but they all
+    // share the SAME finding-id, so the review-queue (which dedups by
+    // finding_id, keeping the newest) collapses them to exactly one row.
+    let fx = Fixture::new("escalate-idempotent");
+    let rid = fx.init_run(safe_decomp());
+
+    for _ in 0..3 {
+        let out = fx.condukt(&["gate", "check", "--run", &rid, "--task", "t1"], false);
+        assert_eq!(out.status.code(), Some(1));
+    }
+
+    let findings = fx.review_findings();
+    assert_eq!(
+        findings.len(),
+        3,
+        "each invocation appends its own line to the raw stream: {findings:?}"
+    );
+
+    // Apply the SAME dedup contract `review-queue` uses (dedup by finding_id,
+    // keep latest ts) directly over the raw stream, without reaching into
+    // overwatch's private review_queue module.
+    let mut by_id: std::collections::BTreeMap<String, &overwatch::review_finding::ReviewFinding> =
+        std::collections::BTreeMap::new();
+    for f in &findings {
+        by_id
+            .entry(f.finding_id.clone())
+            .and_modify(|existing| {
+                if f.ts >= existing.ts {
+                    *existing = f;
+                }
+            })
+            .or_insert(f);
+    }
+    assert_eq!(
+        by_id.len(),
+        1,
+        "re-checking the same gate must collapse to ONE ai-finding row, not one per check: {by_id:?}"
+    );
+    assert!(by_id.contains_key(&format!("gate-exec:{rid}:t1")));
 }
 
 #[test]

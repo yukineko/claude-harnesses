@@ -5,6 +5,7 @@
 //! The binary (`src/main.rs`) is the PreToolUse hook; this lib exposes the same
 //! detection so callers don't reimplement it. Detection is pure (no I/O).
 
+pub mod callgraph;
 pub mod classify;
 pub mod detect;
 pub mod diffrisk;

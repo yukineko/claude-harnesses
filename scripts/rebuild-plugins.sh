@@ -94,8 +94,8 @@ echo
 
 # --- plugin name -> crate dir lookup (for hooks/ manifest sync below) ------
 # The cache plugin dirname (from plugin.json's "name") does not always match
-# the crates/ directory name (e.g. crates/run-book/ ships plugin "runbook"),
-# so resolve via plugin.json rather than assuming they're equal.
+# the crates/ directory name, so resolve via plugin.json rather than assuming
+# they're equal.
 plugin_names=() plugin_dirs=()
 shopt -s nullglob
 for pj in "$REPO"/crates/*/.claude-plugin/plugin.json; do
@@ -177,6 +177,51 @@ for binfile in "$CACHE"/*/*/bin/*-"$SUF"; do
       updated_repo=$((updated_repo+1))
     fi
   fi
+done
+shopt -u nullglob
+
+# --- seed host binary into a FRESH current-version dir ---------------------
+# A version-bumped rollout (scripts/rollout-plugins.sh) rsyncs crates/<name>/
+# into a brand-new cache/<plugin>/<newver>/ that ships only the launcher +
+# committed cross-platform bins — never the per-host <name>-$SUF binary (built
+# per host, not committed). The main loop above globs *existing* *-$SUF files, so
+# it never touches such a fresh dir; the live wrapper then execs a missing binary
+# and silently no-ops ("no bundled binary for $SUF") — the plugin looks deployed
+# but runs nothing. Seed the freshly-built host binary into the plugin's CURRENT
+# canonical-version dir when it is missing the host bin. Only the current version
+# dir is targeted (not stale inactive ones — seeding those would put the current
+# build under an old version number in a dir nothing execs).
+shopt -s nullglob
+for i in "${!plugin_names[@]}"; do
+  pname="${plugin_names[$i]}"
+  pj="${plugin_dirs[$i]}/.claude-plugin/plugin.json"
+  ver=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pj" | head -1)
+  [ -n "$ver" ] || continue
+  bindir="$CACHE/$pname/$ver/bin"
+  [ -d "$bindir" ] || continue          # current version not rolled out to cache yet
+  # bin name = the launcher (the bin/ entry with no -<os>-<arch> platform suffix)
+  binname=""
+  for f in "$bindir"/*; do
+    b=$(basename "$f")
+    case "$b" in
+      *-darwin-arm64|*-darwin-x86_64|*-linux-x86_64|*-linux-arm64|*-windows-x86_64|*-windows-arm64)
+        continue ;;
+    esac
+    binname="$b"; break
+  done
+  [ -n "$binname" ] || continue
+  hostbin="$bindir/$binname-$SUF"
+  [ -e "$hostbin" ] && continue         # host bin already present (main loop handled it)
+  src="$REL/$binname"
+  [ -x "$src" ] || continue             # only seed a plugin we actually built this run
+  checked=$((checked+1))
+  if [ $dry = 1 ]; then
+    echo "cache  would seed $binname-$SUF (fresh version dir $pname/$ver)"
+  else
+    cp -f "$src" "$hostbin"; chmod +x "$hostbin"
+    echo "cache  seeded $binname-$SUF (fresh version dir $pname/$ver)"
+  fi
+  updated_cache=$((updated_cache+1))
 done
 shopt -u nullglob
 

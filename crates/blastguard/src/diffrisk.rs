@@ -210,6 +210,78 @@ pub fn classify_diff(
     }
 }
 
+/// Caller-count threshold at/above which the blast-radius signal is graded
+/// [`Risk::High`]. Rationale: a change to a symbol referenced from **5 or more**
+/// distinct call sites has a wide blast radius — breaking it ripples across many
+/// callers, so the change deserves the same escalated review posture the base
+/// `sensitive-path` / `public-API` axes already grant to High-risk changes. The
+/// constant is deliberately small and fixed (deterministic, no config) so the
+/// signal is reproducible; any non-zero-but-below-threshold caller count still
+/// raises at least to [`Risk::Medium`] (some blast radius, but bounded).
+pub const HIGH_CALLER_THRESHOLD: usize = 5;
+
+/// Like [`classify_diff`], but folds in a **caller-blast-radius** signal derived
+/// from an already-enumerated caller map (see [`crate::callgraph::enumerate_callers`]).
+///
+/// This is purely **additive** over [`classify_diff`]: it starts from that base
+/// assessment and merges a blast-radius tier via the existing
+/// [`RiskAssessment::merge`] (max-risk semantics), so the caller signal can only
+/// **raise or hold** the tier — never lower it. `classify_diff`'s own signature
+/// and behavior are unchanged; existing callers keep compiling untouched.
+///
+/// ## Blast-radius signal
+///
+/// The changed symbols are [`crate::callgraph::changed_symbol_names`] of
+/// `diff_text`. Each changed symbol is looked up in `callers` and its enumerated
+/// [`CallSite`](crate::callgraph::CallSite) count summed across all changed
+/// symbols. That total maps to a tier:
+///
+///   - `>= HIGH_CALLER_THRESHOLD` call sites → [`Risk::High`] signal (wide blast
+///     radius: a widely-called symbol touches many downstream sites).
+///   - `>= 1` call site                      → [`Risk::Medium`] signal (some, but
+///     bounded, blast radius).
+///   - `0` call sites                         → [`Risk::Low`] signal (no observed
+///     callers → the base assessment is returned unchanged).
+///
+/// The signal's `reversible` is always `true`: a caller *count* is a blast-radius
+/// measure, not an irreversibility signal, so it must not spuriously flip
+/// `reversible` to `false` (which would wrongly force-gate a fully-undoable
+/// change). Irreversibility still flows only from the base assessment / command
+/// classification.
+pub fn classify_diff_with_callers(
+    paths: &[String],
+    diff_text: &str,
+    callers: &std::collections::BTreeMap<String, Vec<crate::callgraph::CallSite>>,
+    config: &SensitiveConfig,
+) -> RiskAssessment {
+    let base = classify_diff(paths, diff_text, config);
+
+    // Total enumerated caller sites across every symbol this diff changed.
+    let changed = crate::callgraph::changed_symbol_names(diff_text);
+    let total_callers: usize = changed
+        .iter()
+        .filter_map(|name| callers.get(name))
+        .map(|sites| sites.len())
+        .sum();
+
+    let signal_risk = if total_callers >= HIGH_CALLER_THRESHOLD {
+        Risk::High
+    } else if total_callers >= 1 {
+        Risk::Medium
+    } else {
+        Risk::Low
+    };
+
+    // Blast radius is not an irreversibility signal — keep the caller signal
+    // reversible so merge() never spuriously flips the result to non-reversible.
+    let signal = RiskAssessment {
+        risk: signal_risk,
+        reversible: true,
+    };
+
+    base.merge(signal)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,5 +430,123 @@ mod tests {
         let diff = "+pub(crate) fn only_one_pub_keyword() {}\n";
         assert!(!diff.contains("pub(crate) pub"));
         assert!(changes_public_symbol(diff));
+    }
+
+    // -- callgraph-signal-wire: caller-blast-radius signal --------------------
+
+    use std::collections::BTreeMap;
+
+    use crate::callgraph::CallSite;
+
+    /// Build a `callers` map with `n` synthetic call sites for `symbol`.
+    fn callers_for(symbol: &str, n: usize) -> BTreeMap<String, Vec<CallSite>> {
+        let mut map = BTreeMap::new();
+        let sites: Vec<CallSite> = (0..n)
+            .map(|i| CallSite {
+                file: format!("src/caller_{i}.rs"),
+                line: i + 1,
+                caller: format!("uses_{i}"),
+            })
+            .collect();
+        map.insert(symbol.to_string(), sites);
+        map
+    }
+
+    #[test]
+    fn many_callers_raise_tier_over_same_diff_with_empty_callers() {
+        // Same public-symbol diff scored two ways: with >= threshold callers it
+        // must land on a strictly HIGHER tier than with an empty caller map.
+        let cfg = SensitiveConfig::default();
+        let paths = ["src/lib.rs".to_string()];
+        let diff = "+pub fn new_api() {}";
+
+        let empty: BTreeMap<String, Vec<CallSite>> = BTreeMap::new();
+        let with_empty = classify_diff_with_callers(&paths, diff, &empty, &cfg);
+
+        let heavy = callers_for("new_api", HIGH_CALLER_THRESHOLD);
+        let with_heavy = classify_diff_with_callers(&paths, diff, &heavy, &cfg);
+
+        assert!(
+            with_heavy.risk > with_empty.risk,
+            "{HIGH_CALLER_THRESHOLD}+ callers must raise the tier: heavy={with_heavy:?} empty={with_empty:?}"
+        );
+        assert_eq!(with_heavy.risk, Risk::High);
+    }
+
+    #[test]
+    fn zero_callers_equal_base_classify_diff() {
+        // No callers → Low signal → merge is a no-op → identical to the base.
+        let cfg = SensitiveConfig::default();
+        let paths = ["src/lib.rs".to_string()];
+        let diff = "+pub fn new_api() {}";
+
+        let empty: BTreeMap<String, Vec<CallSite>> = BTreeMap::new();
+        let base = classify_diff(&paths, diff, &cfg);
+        let with_empty = classify_diff_with_callers(&paths, diff, &empty, &cfg);
+        assert_eq!(
+            with_empty, base,
+            "empty callers must equal the base assessment"
+        );
+
+        // Also: an unrelated caller entry (not for a changed symbol) is ignored.
+        let unrelated = callers_for("some_other_symbol", 42);
+        let with_unrelated = classify_diff_with_callers(&paths, diff, &unrelated, &cfg);
+        assert_eq!(
+            with_unrelated, base,
+            "callers of unchanged symbols must not count"
+        );
+    }
+
+    #[test]
+    fn caller_heavy_non_public_change_respects_base_monotonic_up() {
+        // A private-symbol change is base-Low (no sensitive path, no public API).
+        // Even a caller-heavy signal can only raise it — never below the base,
+        // and the signal itself is at most its own tier (monotonic-up only).
+        let cfg = SensitiveConfig::default();
+        let paths = ["src/parser.rs".to_string()];
+        let diff = "-fn helper() {}\n+fn helper() { changed }";
+
+        let base = classify_diff(&paths, diff, &cfg);
+        assert_eq!(base.risk, Risk::Low);
+
+        let heavy = callers_for("helper", HIGH_CALLER_THRESHOLD);
+        let out = classify_diff_with_callers(&paths, diff, &heavy, &cfg);
+
+        // Never lowered below the base; only raised by the additive signal.
+        assert!(out.risk >= base.risk, "must never downgrade the base tier");
+        assert_eq!(out.risk, Risk::High, "5+ callers => High signal");
+    }
+
+    #[test]
+    fn single_caller_raises_low_base_to_medium() {
+        // >= 1 (but < threshold) callers => Medium signal.
+        let cfg = SensitiveConfig::default();
+        let paths = ["src/parser.rs".to_string()];
+        let diff = "+fn helper() {}";
+
+        let base = classify_diff(&paths, diff, &cfg);
+        assert_eq!(base.risk, Risk::Low);
+
+        let one = callers_for("helper", 1);
+        let out = classify_diff_with_callers(&paths, diff, &one, &cfg);
+        assert_eq!(out.risk, Risk::Medium);
+    }
+
+    #[test]
+    fn caller_signal_never_spuriously_flips_reversible_false() {
+        // The caller signal is a blast-radius measure, not an irreversibility
+        // signal: no caller count may set reversible=false on its own.
+        let cfg = SensitiveConfig::default();
+        let paths = ["src/lib.rs".to_string()];
+        let diff = "+pub fn new_api() {}";
+
+        for n in [0usize, 1, HIGH_CALLER_THRESHOLD, HIGH_CALLER_THRESHOLD * 3] {
+            let callers = callers_for("new_api", n);
+            let out = classify_diff_with_callers(&paths, diff, &callers, &cfg);
+            assert!(
+                out.reversible,
+                "{n} callers must not flip reversible to false: {out:?}"
+            );
+        }
     }
 }

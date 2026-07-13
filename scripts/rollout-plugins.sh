@@ -542,6 +542,22 @@ canary_copy_row() {
   fi
 }
 
+# Look up a single PLAN_ROWS entry by plugin name (its first tab field) and echo
+# it verbatim. Replaces a bash-4 `declare -A` associative array so the canary
+# path also runs on macOS's default bash 3.2 (which lacks associative arrays).
+# PLAN_ROWS is small (<= plugin count) so a linear scan per lookup is cheap.
+row_for_name() {
+  local want="$1" r rn _rest
+  for r in "${PLAN_ROWS[@]}"; do
+    IFS=$'\t' read -r rn _rest <<<"$r"
+    if [ "$rn" = "$want" ]; then
+      printf '%s' "$r"
+      return 0
+    fi
+  done
+  return 1
+}
+
 run_canary() {
   local ow
   if ! ow="$(resolve_overwatch_bin)"; then
@@ -551,15 +567,14 @@ run_canary() {
   fi
   echo "canary: using overwatch binary: $ow"
 
-  # Ordered plugin list + a name->row index for stage slicing.
+  # Ordered plugin list for stage slicing; rows are looked up via row_for_name
+  # (name -> PLAN_ROWS entry), which keeps this bash-3.2 compatible.
   local -a ordered_names=()
-  declare -A row_by_name=()
   local r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path
   for r in "${PLAN_ROWS[@]}"; do
     IFS=$'\t' read -r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path <<<"$r"
     [ -z "$name" ] && continue
     ordered_names+=("$name")
-    row_by_name["$name"]="$r"
   done
 
   if [ "${#ordered_names[@]}" -eq 0 ]; then
@@ -620,8 +635,10 @@ run_canary() {
     # subprocess spawn).
     local -a stage_reg_args=()
     for pn in $stage_names; do
-      canary_copy_row "${row_by_name[$pn]}"
-      IFS=$'\t' read -r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path <<<"${row_by_name[$pn]}"
+      local pn_row
+      pn_row="$(row_for_name "$pn")"
+      canary_copy_row "$pn_row"
+      IFS=$'\t' read -r name version src target needs_copy needs_registry mismatch mpver pjver cur_version cur_path <<<"$pn_row"
       if [ "$needs_registry" = "1" ] || [ "$force" = 1 ]; then
         stage_reg_args+=("$name" "$version" "$target")
       fi
@@ -678,7 +695,7 @@ run_canary() {
           local pn
           local -a stage_rows=()
           for pn in $stage_names; do
-            stage_rows+=("${row_by_name[$pn]}")
+            stage_rows+=("$(row_for_name "$pn")")
           done
           local stage_state prior_line cj
           stage_state="$(build_state_json "${stage_rows[@]}")"
@@ -715,7 +732,7 @@ run_canary() {
             # is the prior version we restored to. The gate here counts raw
             # violations (no --systemic on the canary-gate call), so reason=raw.
             local canary_ver=""
-            IFS=$'\t' read -r _n canary_ver _rest <<<"${row_by_name[$pn]}"
+            IFS=$'\t' read -r _n canary_ver _rest <<<"$(row_for_name "$pn")"
             local -a rb_ev_args=(record-rollback --plugin "$pn"
               --to-version "$canary_ver" --stage "$s" --reason raw)
             if [ -n "$rv" ]; then
@@ -746,7 +763,7 @@ run_canary() {
   local -a canary_synced=()
   local pn2 sname sver ssrc rest srcdir2
   for pn2 in "${ordered_names[@]}"; do
-    IFS=$'\t' read -r sname sver ssrc rest <<<"${row_by_name[$pn2]}"
+    IFS=$'\t' read -r sname sver ssrc rest <<<"$(row_for_name "$pn2")"
     srcdir2="$REPO/$ssrc"
     [ -f "$srcdir2/scripts/sync-plugin-assets.sh" ] && canary_synced+=("$sname:$srcdir2")
   done

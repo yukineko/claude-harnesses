@@ -1,13 +1,18 @@
 mod aggregate;
 pub mod audit_round;
 mod audit_round_cli;
+mod bridge;
 pub mod canary;
 mod canary_cli;
 mod control;
+pub mod disposition;
+mod disposition_cli;
 pub mod event;
 mod lease;
 mod render;
+mod review_escalation;
 pub mod review_finding;
+mod review_gate_decisions;
 mod review_queue;
 pub mod rollback;
 mod rollback_cli;
@@ -259,9 +264,33 @@ enum Command {
         #[arg(long)]
         window: Option<usize>,
     },
+    /// Record a human disposition (confirmed|dismissed|false-positive) of an
+    /// AI/adversarial review finding (join key: `--finding-id`, resolved
+    /// against `record-finding`). `review-metrics` reads these back to
+    /// compute false-positive rate / agreement rate / median latency.
+    RecordDisposition {
+        /// The finding_id this disposition resolves (joins to `record-finding`).
+        #[arg(long = "finding-id")]
+        finding_id: String,
+        /// The human verdict: confirmed | dismissed | false-positive.
+        #[arg(long)]
+        verdict: String,
+        /// Free-text identifier of who resolved it.
+        #[arg(long)]
+        reviewer: String,
+    },
+    /// Read the disposition ledger (joined against the review-findings
+    /// store) and print review-effectiveness metrics: false-positive rate,
+    /// human-agreement rate, and median resolution latency. Fail-soft: an
+    /// empty ledger prints a zero/`n/a` report rather than erroring.
+    ReviewMetrics {
+        #[arg(long)]
+        json: bool,
+    },
     /// The unified human review surface: merge systemic gate violations, canary
-    /// rollback events, and AI-review findings into ONE time-ordered list
-    /// (newest-first), each row tagged with its source kind. Fail-soft: a
+    /// rollback events, and AI-review findings into ONE risk-ordered list
+    /// (highest normalized severity first, newest-first within a severity
+    /// band), each row tagged with its source kind. Fail-soft: a
     /// missing/empty source contributes nothing rather than erroring; the
     /// other sources still render.
     ReviewQueue {
@@ -270,9 +299,50 @@ enum Command {
         /// Only show entries with `ts >= since` (unix seconds).
         #[arg(long)]
         since: Option<i64>,
-        /// Cap the number of rows shown (after newest-first ordering).
+        /// Cap the number of rows shown to the top-K riskiest (after
+        /// severity-first ordering); shed lower-risk rows are reported.
         #[arg(long)]
         limit: Option<usize>,
+        /// Bridge CONFIRMED AI findings to the backlog instead of rendering:
+        /// each not-yet-bridged finding-id is forwarded via `backlog add`
+        /// (idempotent on finding-id via `bridged_findings.jsonl`). Fail-soft:
+        /// a missing findings store / absent backlog / failed add is warned and
+        /// skipped; the command still succeeds.
+        #[arg(long = "to-backlog")]
+        to_backlog: bool,
+    },
+    /// Compact the review-findings store: move every finding whose
+    /// finding_id has been resolved (bridged to the backlog, or
+    /// dispositioned by a human) out of the hot review_findings.jsonl into a
+    /// cold review_findings_archive.jsonl. Non-lossy (archive, never
+    /// delete): `review-metrics` keeps joining archived findings via the
+    /// combined hot-plus-archive history, while `review-queue` keeps reading
+    /// the hot file only (now bounded to OPEN items). Atomic (temp+rename)
+    /// and idempotent: a run with no newly-resolved findings is a no-op.
+    CompactFindings {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Companion to `review-queue`: surface the DENOMINATOR — the population
+    /// of decisions condukt auto-approved (self-answered without a human,
+    /// per `condukt policy answer`'s `gate-decisions.jsonl` journal) — as a
+    /// count plus a deterministic seeded sample, so a human can judge
+    /// whether spot-check sampling coverage is adequate. Fail-soft: a
+    /// missing/unreadable/corrupt journal contributes zero rows rather than
+    /// erroring.
+    AutoApproved {
+        #[arg(long)]
+        json: bool,
+        /// Only count/sample decisions with `created_at >= since` (absolute
+        /// unix seconds; no wall-clock in the pure core).
+        #[arg(long)]
+        since: Option<i64>,
+        /// How many records to sample from the (windowed) population.
+        #[arg(long, default_value_t = 5)]
+        sample: usize,
+        /// Seed for the deterministic sample draw.
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
     },
 }
 
@@ -281,9 +351,10 @@ enum Command {
 enum AuditRoundAction {
     /// Append one Continuous-Audit round's metrics to the convergence ledger.
     Record {
-        /// The round number (monotonic per audit campaign; caller-assigned).
+        /// The round identifier (caller-assigned opaque label, e.g. an ISO
+        /// week `2026W28`, a date, or a sequence number).
         #[arg(long)]
-        round: u64,
+        round: String,
         /// The crate(s) this round reviewed (comma/space separated).
         #[arg(long)]
         target: String,
@@ -296,6 +367,33 @@ enum AuditRoundAction {
         /// How many confirmed findings were converted into regression tests.
         #[arg(long, default_value_t = 0)]
         regression_tests_added: u64,
+        /// The model the FINDER stage used this round (optional). When BOTH
+        /// finder/verifier models are supplied and are the SAME model, the
+        /// `finder != verifier` MUST is violated and a high-severity warning
+        /// finding is recorded into the review queue (fail-soft; the round is
+        /// still recorded and the loop is never broken). Omit both for the
+        /// original, unchecked behavior.
+        #[arg(long)]
+        finder_model: Option<String>,
+        /// The model the VERIFIER stage used this round (optional; see
+        /// `--finder-model`).
+        #[arg(long)]
+        verifier_model: Option<String>,
+    },
+    /// Close a round: SET its regression_tests_added to `--tests` (the fix-side
+    /// feedback recorded AFTER confirmed findings are converted to regression
+    /// tests, which `record` cannot know at finding-time). Idempotent (SET, not
+    /// add); an unknown round-id leaves the ledger unchanged (fail-soft). When a
+    /// round-id is duplicated, the most-recently recorded match is closed.
+    Close {
+        /// The round identifier to close (the same id passed to `record`).
+        #[arg(long)]
+        round: String,
+        /// Regression tests locked in for this round's confirmed findings.
+        /// REQUIRED (no default): SET-not-add semantics mean a bare `close`
+        /// would otherwise silently reset a round's progress to 0.
+        #[arg(long)]
+        tests: u64,
     },
 }
 
@@ -467,6 +565,8 @@ fn main() -> Result<()> {
                 new_findings,
                 confirmed,
                 regression_tests_added,
+                finder_model,
+                verifier_model,
             } => {
                 audit_round_cli::record(
                     round,
@@ -474,15 +574,119 @@ fn main() -> Result<()> {
                     new_findings,
                     confirmed,
                     regression_tests_added,
+                    finder_model.as_deref(),
+                    verifier_model.as_deref(),
                 )?;
+            }
+            AuditRoundAction::Close { round, tests } => {
+                audit_round_cli::close(round, tests)?;
             }
         },
         Command::AuditMetrics { json, window } => {
             audit_round_cli::metrics(json, window)?;
         }
-        Command::ReviewQueue { json, since, limit } => {
-            review_queue::run(json, since, limit)?;
+        Command::RecordDisposition {
+            finding_id,
+            verdict,
+            reviewer,
+        } => {
+            disposition_cli::record(finding_id, &verdict, reviewer, store::now())?;
         }
+        Command::ReviewMetrics { json } => {
+            disposition_cli::metrics(json)?;
+        }
+        Command::ReviewQueue {
+            json,
+            since,
+            limit,
+            to_backlog,
+        } => {
+            if to_backlog {
+                bridge::to_backlog()?;
+            } else {
+                review_queue::run(json, since, limit)?;
+            }
+        }
+        Command::AutoApproved {
+            json,
+            since,
+            sample,
+            seed,
+        } => {
+            run_auto_approved(json, since, sample, seed)?;
+        }
+        Command::CompactFindings { json } => {
+            run_compact_findings(json)?;
+        }
+    }
+    Ok(())
+}
+
+/// Handler for `overwatch compact-findings`: move resolved (bridged or
+/// dispositioned) review findings out of the hot review_findings.jsonl into
+/// the cold review_findings_archive.jsonl, keeping the hot file bounded to
+/// OPEN items while the review-metrics latency join reads hot plus archive
+/// (`store::read_review_findings_all`) so nothing regresses. See
+/// `store::compact_review_findings` for the pure/atomic core.
+fn run_compact_findings(json: bool) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let report = store::compact_review_findings(&cwd)?;
+
+    if json {
+        let out = serde_json::json!({
+            "open": report.open,
+            "archived": report.archived,
+            "already_archived": report.already_archived,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    println!(
+        "compacted: {} open, {} archived ({} already archived)",
+        report.open, report.archived, report.already_archived
+    );
+    Ok(())
+}
+
+/// Handler for `overwatch auto-approved`: read condukt's auto-approved
+/// gate-decision journal (fail-soft), window it with `since`, and print the
+/// count plus a deterministic seeded sample — either as human-readable text
+/// or as JSON. See [`review_gate_decisions`] for the pure core this wraps.
+fn run_auto_approved(json: bool, since: Option<i64>, sample: usize, seed: u64) -> Result<()> {
+    let population = review_gate_decisions::read_auto_approved();
+    let filtered = review_gate_decisions::filter_since(&population, since);
+    let count = filtered.len();
+    let picked = review_gate_decisions::sample_auto_approved(&filtered, sample, seed);
+
+    if json {
+        let out = serde_json::json!({
+            "count": count,
+            "since": since,
+            "seed": seed,
+            "sample_size": picked.len(),
+            "sample": picked,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    match since {
+        Some(ts) => println!(
+            "auto-approved: {count} decision(s) passed a gate without human review since {ts}"
+        ),
+        None => println!("auto-approved: {count} decision(s) passed a gate without human review"),
+    }
+    if count == 0 {
+        println!("(no auto-approved decisions found)");
+        return Ok(());
+    }
+    println!("sample ({} of {count}, seed {seed}):", picked.len());
+    for d in &picked {
+        println!(
+            "  [{}] chosen={:?} question={:?}",
+            d.created_at, d.chosen, d.question
+        );
     }
     Ok(())
 }

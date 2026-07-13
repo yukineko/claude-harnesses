@@ -2,19 +2,34 @@
 
 use crate::budget::BudgetStatus;
 use crate::hooks::{sess8, HookLatencyReport};
+use crate::hooks_health::HooksHealthReport;
 use crate::inject::{key8, InjectReport};
 use crate::progress::ProgressStatus;
 use crate::sessions::SessionSummary;
 
-pub fn print_status(
-    today: &str,
-    budget: &BudgetStatus,
-    sessions: &[SessionSummary],
-    progress: &ProgressStatus,
-    hooks: &HookLatencyReport,
-    inject: &InjectReport,
-    cwd_display: &str,
-) {
+/// All the per-panel reports the default (no-subcommand) view aggregates,
+/// bundled into one struct so `print_status`/`print_json` take a manageable
+/// argument count regardless of how many panels harness-status grows.
+pub struct StatusReport<'a> {
+    pub today: &'a str,
+    pub budget: &'a BudgetStatus,
+    pub sessions: &'a [SessionSummary],
+    pub progress: &'a ProgressStatus,
+    pub hooks: &'a HookLatencyReport,
+    pub inject: &'a InjectReport,
+    pub hooks_health: &'a HooksHealthReport,
+}
+
+pub fn print_status(report: &StatusReport, cwd_display: &str) {
+    let StatusReport {
+        today,
+        budget,
+        sessions,
+        progress,
+        hooks,
+        inject,
+        hooks_health,
+    } = *report;
     println!("╔══════════════════════════════════════════════╗");
     println!("║         harness-status  ({today})         ║");
     println!("╚══════════════════════════════════════════════╝");
@@ -94,7 +109,7 @@ pub fn print_status(
     println!();
 
     // UserPromptSubmit injection size (ADR 0001 Phase 2): the five injectors
-    // (playbook/run-book/ctxrot/context-governor/fugu-router) record post-cap
+    // (playbook/runbook/ctxrot/context-governor/fugu-router) record post-cap
     // injected char size per turn; warn when the combined size exceeds budget.
     println!("── UserPromptSubmit injection (aggregate budget) ──");
     if inject.turns.is_empty() {
@@ -117,6 +132,26 @@ pub fn print_status(
         }
     }
     println!();
+
+    // Hook binary health: registered hooks in ~/.claude/settings.json whose
+    // command binary no longer exists on disk (stale rollout, pruned cache, …).
+    println!("── Hook binary health (settings.json) ────────────");
+    if !hooks_health.settings_found {
+        println!(
+            "  [no settings.json found at {}]",
+            hooks_health.settings_path
+        );
+    } else if hooks_health.missing.is_empty() {
+        println!("  all registered hook binaries present");
+    } else {
+        for m in &hooks_health.missing {
+            println!(
+                "  ⚠ MISSING BINARY  {} | {} | {}",
+                m.event, m.binary_path, m.command
+            );
+        }
+    }
+    println!();
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -127,21 +162,15 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-pub fn print_json(
-    today: &str,
-    budget: &BudgetStatus,
-    sessions: &[SessionSummary],
-    progress: &ProgressStatus,
-    hooks: &HookLatencyReport,
-    inject: &InjectReport,
-) {
+pub fn print_json(report: &StatusReport) {
     let out = serde_json::json!({
-        "date": today,
-        "budget": budget,
-        "recent_sessions": sessions,
-        "progress": progress,
-        "hook_latency": hooks,
-        "inject": inject,
+        "date": report.today,
+        "budget": report.budget,
+        "recent_sessions": report.sessions,
+        "progress": report.progress,
+        "hook_latency": report.hooks,
+        "inject": report.inject,
+        "hooks_health": report.hooks_health,
     });
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
 }

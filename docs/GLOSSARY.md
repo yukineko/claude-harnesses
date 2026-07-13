@@ -16,6 +16,7 @@
 - **HOTL（Human On The Loop）** — 人間が随時点検・介入する運用モデル。harness-status / taskprog がハンドオフを支援する。
 - **autonomy gate / switch** — 自律運転時に人間ゲートを縮退させる仕組み。condukt の `state autonomy-check` / env `CONDUKT_AUTONOMOUS` / config で切替。
 - **fail-soft（フェイルソフト）／ fail-closed** — 前提ツール不在時に安全側へ縮退して継続するのが fail-soft、閾値未満で確実に阻止するのが fail-closed。propguard は fail-closed、oracle は tdd 不在時に fail-soft。
+- **`.githooks/`** — `git config core.hooksPath .githooks` で有効化する versioned な git hooks。`pre-commit` は injectguard の advisory 事前チェック、`pre-push` は GATE_CRATES（blastguard/propguard/specguard/stuckguard/mutategate）への変更を検知して Continuous-Audit ラウンド実行（`scripts/continuous-audit.sh --dry-run`）を勧める。両方とも fail-soft（常に exit 0、push/commit を止めない）。
 - **F→P オラクル（再現性オラクル）** — condukt の完了ゲートが要求する有効な Fail→Pass 遷移（`condukt state check-oracle`）。これを伴わない fix/feature の verified 昇格を拒否する。
 - **subscription-native** — API キー不要で Claude Code サブスクリプション内で完結する設計（compass / ship / ctxrot / tdd 等）。
 - **activation scope（発火スコープ）** — プラグインをフック頻度で分類する軸。**always-on**（毎ターン級のイベントを持つ）/ **event-scoped**（低頻度イベントのみ）/ **manual**（フックなし・skill か CLI 起動）。`harness-status plugins` が自動分類する。
@@ -46,7 +47,7 @@
 | flow | always-on | source（compass/backlog）→executor（condukt）を 1 ループで束ねる統合 driver |
 | fugu-router | always-on | 検証実績から cheap-first でモデル選択する per-model ルーター |
 | gauge | always-on | Stop でトークン/コスト/ツール呼び出し/レイテンシをローカル計測する LLMOps テレメトリ |
-| harness-status | manual | HOTL 手動点検の統合ダッシュボード（CLI 専用・hook なし） |
+| harness-status | always-on (実質サイレント) | HOTL 手動点検の統合ダッシュボード（CLI 専用）＋hook binary 欠損時のみ警告する軽量 SessionStart hook 1本（健全時は無出力） |
 | hypothesis | always-on | PDO 仮説のライフサイクル管理（作成・検証・棄却・compass 紐づけ） |
 | overwatch | always-on | project-global 実行台帳＋cross-session 重複ガード（begin 同一 key で live 他 session を skip）＋PDO 進行管理ビュー（各session/backlog/hypothesis/condukt run/compass gap を fail-soft 集約）＋操作(pause/resume/reassign/reap) |
 | playbook | always-on | UserPromptSubmit で関連アトミックノートを予算内でコンテキスト注入する |
@@ -54,7 +55,7 @@
 | propguard | always-on | done_criteria から 3–5 個の意味的不変条件を導出し fail-closed で Stop を検証する |
 | replaykit | manual | tracekit の run trace を evalkit golden へ再生する回帰ハーネス |
 | reviewgate | always-on | Stop で diff をレビューし合格まで完了を阻止するコードレビューゲート |
-| run-book | always-on | UserPromptSubmit で `!name` マクロを repo 手順（`.runbook/<name>.md`）に展開する（plugin 名 runbook） |
+| runbook | always-on | UserPromptSubmit で `!name` マクロを repo 手順（`.runbook/<name>.md`）に展開する（plugin 名 runbook） |
 | schemaguard | manual | source→executor 境界で LLM 構造化出力を宣言 schema 検証し 1 回 re-ask するゲート |
 | scout | manual | 5レンズ並列監査で施策を生成し backlog へ積んで /flow へ渡す SOURCE |
 | session-insights | always-on | セッション単位でツール/ターン/ファイル/サイズ・カテゴリを集計、Obsidian 記録も可 |
@@ -64,7 +65,7 @@
 | taskprog | always-on | `.claude/progress.md` をセッション間で同期し HOTL ハンドオフを支援する |
 | tdd | always-on | Stop でテストなし実装を阻止するテストファースト・ゲート（RED before GREEN） |
 | tracekit | manual | condukt run を span 木として記録・描画し OTel GenAI-semconv JSON を export するトレーサ |
-| trajectoryeval | manual | worker が辿った tool-call 経路を期待軌跡と照合する trajectory-match verifier |
+| trajectoryeval | manual | worker が辿った tool-call 経路を期待軌跡と照合する trajectory-match verifier。`tier` サブコマンドはリスク階層化 e2e 検証（core allowlist に載る core フローは毎回 structured-data/fuzzy diff、非 core は existence/seeded sampling）を持ち、fuzzy 閾値超過ドリフトは needs-human（exit3）にエスカレートする |
 
 ## 非プラグイン
 

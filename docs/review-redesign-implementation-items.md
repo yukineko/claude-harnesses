@@ -61,17 +61,17 @@ Agentic Coding を行う前提に立つと、**人間によるコードレビュ
 
 | # | 項目 | 状態 | 根拠 / 参照 |
 |---|------|------|-------------|
-| 1 | 機械的 invariant 層 | COVERED（ただし specguard 側に構造的欠陥あり） | `propguard`/`tdd`/`specguard`/`blastguard`。specguard の polarity gate 自体の欠陥は問題1参照。静的 call-graph 解析は依然未カバー。 |
+| 1 | 機械的 invariant 層 | COVERED（ただし specguard 側に構造的欠陥あり） | `propguard`/`tdd`/`specguard`/`blastguard`。specguard の polarity gate 自体の欠陥は問題1参照。静的 call-graph 解析は `blastguard::callgraph`（決定論 caller 列挙）＋ `classify_diff_with_callers`（blast-radius シグナル）＋ condukt post-exec 配線（`diffrisk-callgraph` violation）で COVERED（backlog 4e710da1）。 |
 | 2 | リスクスコアリング | PARTIAL / 一部 IMPLEMENTED-BUT-DISCONNECTED | `blastguard::classify`（破壊的コマンド）と`diffrisk::classify_diff`（公開シンボル/機微パス）は実装済みだが、後者は本番経路で実 diff を渡されたことがなく到達不能。問題3参照。 |
 | 3 | spec 層の段階的トリアージ | PARTIAL | `specguard require_ratification` は 2 値ゲート。問題1の Phase 1（決定論的バックストップ）が段階化への足がかりになる。 |
-| 4 | 事後サンプリング較正 | PARTIAL | `benchkit`/`evalkit` の回帰検知はあるが、「auto-approved 変更の無作為抽出監査」ループそのものは未着手のまま。継続運用の原則の反復レビューは精神的に近いが対象が「gate 自身のコード」であり、item 4 本来の対象（ユーザーの変更）とは異なる点に注意——混同しないこと。 |
+| 4 | 事後サンプリング較正 | COVERED | `crates/benchkit/src/auditsample.rs` に実装済み：auto-gate（blastguard/propguard/specguard/mutategate）のみを通過した変更群から決定論的乱数サンプリングで抽出し、overwatch の violation stream と change_id/task_key で突合する「auto-approved 変更の無作為抽出監査」ループ。監査の見逃しは (a) 新invariant候補提案 と (b) 閾値調整提案（人間のratifyキュー行き・自動適用なし）の2経路にフィードバックされる。継続運用の原則の反復レビューは精神的に近いが対象が「gate 自身のコード」であり、item 4 本来の対象（ユーザーの変更）とは異なる点に注意——混同しないこと。 |
 | 5 | 実行時/blast-radius 検証 | **IMPLEMENTED**（接続に課題あり） | `overwatch::canary`（`b66b3c2`）で実装済み。問題2参照。 |
 | 6 | fleet 相関エラー検知 | **IMPLEMENTED**（接続に課題あり） | `overwatch::violation`（`bc50aef`）で実装済み。問題2参照。 |
-| 7 | 絞り込みエスカレーション | PARTIAL | `condukt gate check` の `Escalate` は機能するが、item 5/6 の出力と統合されていない。問題3の4番（review queue）参照。 |
+| 7 | 絞り込みエスカレーション | **COVERED**（producer 配線済み） | `condukt gate check` の `Escalate` 判定が、`gate_exec::run_gate_check` から overwatch review-finding を library 経由で自動記録するようになった（`finding_id=gate-exec:{run}:{task}` で再チェックは1行に dedup、severity は risk 由来、fail-soft で既存の stdout/journal/exit は不変）。これで従来 producer 皆無だった risk-rank 済み review-queue の ai-finding stream が自動で埋まり、needs-human/gated verdict が洪水下でも人間に届く（backlog 33b4ef6e / condukt 0.7.41・overwatch 0.1.19）。escalate.json↔review-queue の橋渡しは別途 a92d3c72 で追跡。 |
 | 8 | AI 網羅的テスト生成 | COVERED | `tdd`（RED→GREEN 暗号学的証明）、`specguard testaudit`。変更なし。 |
 | 9 | mutation testing | COVERED | `mutategate`（`harness-core` 限定で pilot 中、拡大方針は文書化済み）。変更なし。 |
 | 10 | テスト著者と実装者の分離 | PARTIAL | `condukt state verifier-model` はあるが、`tdd` の RED→GREEN は同一 agent 逐次実行のまま。未着手（旧item C）。 |
-| 11 | リスク階層化 e2e 検証 | PARTIAL | `trajectoryeval`/`specguard spec-audit` はあるが visual diff/perceptual hash サンプリングは無し。未着手（旧item F）。 |
+| 11 | リスク階層化 e2e 検証 | COVERED（pixel pHash は範囲外） | tier フレームワーク＋fuzzy-threshold comparator（structured 出力の tolerance 比較→閾値超過のみ needs-human/exit3）は完了（backlog 64a4c9ee）。pixel/screenshot perceptual-hash は本リポジトリに描画 UI が無いため恒久的に out-of-scope（honest stub のまま）。 |
 | 12 | 守備範囲の絞り込み | COVERED | `propguard`/`mutategate` が意図的にスコープ限定。変更なし。 |
 
 ## 実装時の注意（リポジトリ規約）

@@ -18,7 +18,29 @@
 /// Everything here is data + pure computation. Emission is fail-soft (see
 /// `store::append_audit_round` and `audit_round_cli::record`), matching
 /// overwatch's observational / never-break-a-turn invariant.
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Deserialize a round identifier from either a JSON string or a JSON number.
+///
+/// The `round` field is a `String` today, but legacy `audit_rounds.jsonl`
+/// records written when it was a `u64` stored it as a bare JSON number
+/// (`{"round":2,...}`). To keep those old ledgers readable, this deserializer
+/// accepts both shapes: a string is taken verbatim, and a number is rendered to
+/// its decimal string (so a legacy `2` reads back as `"2"`). Any other JSON
+/// type is rejected.
+fn de_round<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(deserializer)?;
+    match v {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        other => Err(serde::de::Error::custom(format!(
+            "audit round `round` must be a string or number, got {other}"
+        ))),
+    }
+}
 
 /// A single recorded Continuous-Audit round.
 ///
@@ -28,9 +50,18 @@ use serde::{Deserialize, Serialize};
 /// round's raw counts.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuditRound {
-    /// The round number (monotonic per audit campaign; caller-assigned). Rounds
-    /// need not be contiguous — metrics only rely on their recorded order.
-    pub round: u64,
+    /// The round identifier (caller-assigned; an opaque label such as an ISO
+    /// week `2026W28`, a date, or a sequence number). It is never used in
+    /// arithmetic — convergence relies only on recorded order and display uses
+    /// it verbatim — so it is a free-form `String`.
+    ///
+    /// Backward compatibility: rounds written before this field was a string
+    /// were stored as JSON numbers (`{"round":2,...}`). The custom
+    /// [`de_round`] deserializer accepts both a JSON string and a JSON number,
+    /// reading a legacy numeric `2` as the string `"2"`, so old ledgers keep
+    /// reading cleanly.
+    #[serde(deserialize_with = "de_round")]
+    pub round: String,
     /// The target crates this round reviewed (normalized: trimmed, de-duped,
     /// order-preserving).
     pub targets: Vec<String>,
@@ -50,7 +81,7 @@ impl AuditRound {
     /// Construct a round record. `targets` is normalized (trim, drop blanks,
     /// de-dup preserving first-seen order) so downstream reads are stable.
     pub fn new(
-        round: u64,
+        round: String,
         targets: &[String],
         new_findings: u64,
         confirmed: u64,
@@ -66,6 +97,41 @@ impl AuditRound {
             ts,
         }
     }
+}
+
+/// Close a Continuous-Audit round: return a copy of the ledger with the
+/// `regression_tests_added` of the round identified by `round_id` SET to
+/// `tests`, plus whether a matching round was found.
+///
+/// This is the fix-side feedback the finder-time `record` cannot supply: a round
+/// is recorded when the finder/verifier surface findings, at which point no
+/// regression tests exist yet (so `regression_tests_added` is necessarily 0).
+/// After the confirmed findings are locked in as tests, closing the round feeds
+/// that count back so `closure_rate` / `converging` stop lying.
+///
+/// Semantics:
+/// * **SET, not add** — applying the same `tests` twice yields an identical
+///   ledger (idempotent backfill, no double count).
+/// * **most-recent wins** — a round-id is expected to be unique, but the ledger
+///   is append-only and cannot forbid duplicates; when several rounds share the
+///   id the LAST (most-recently recorded) match is updated and earlier same-id
+///   rounds are left untouched (the common "close the round I just ran" case).
+/// * **fail-soft** — an unknown `round_id` returns the ledger unchanged with
+///   `found == false`; the caller reports it without erroring.
+///
+/// Pure and side-effect free (the caller persists the result via the store).
+pub fn set_round_tests(
+    rounds: &[AuditRound],
+    round_id: &str,
+    tests: u64,
+) -> (Vec<AuditRound>, bool) {
+    let key = round_id.trim();
+    let target = rounds.iter().rposition(|r| r.round.trim() == key);
+    let mut out = rounds.to_vec();
+    if let Some(i) = target {
+        out[i].regression_tests_added = tests;
+    }
+    (out, target.is_some())
 }
 
 /// Normalize a target list: trim each entry, drop blanks, de-dup preserving
@@ -84,6 +150,31 @@ pub fn normalize_targets(targets: &[String]) -> Vec<String> {
     seen
 }
 
+/// Canonicalize a model identifier for equality comparison: trim + ASCII
+/// lowercase. Deliberately light-touch (no tier collapsing) so a caller's
+/// exact model string is compared as-given, only normalized for surrounding
+/// whitespace and case.
+fn canonical_model(m: &str) -> String {
+    m.trim().to_ascii_lowercase()
+}
+
+/// True iff `finder` and `verifier` denote the SAME model (canonical compare:
+/// trim + ASCII-lowercase). This is the deterministic enforcement of the
+/// Continuous-Audit `finder != verifier` MUST — the finder and verifier stages
+/// must use different models so generation and verification do not share a
+/// blind spot (mirrors condukt's `verify::same_model` / `resolve_verifier_model`
+/// invariant). Pure and side-effect free.
+pub fn same_model(finder: &str, verifier: &str) -> bool {
+    canonical_model(finder) == canonical_model(verifier)
+}
+
+/// Deterministic finding-id for a finder==verifier model-collision warning,
+/// derived from the round id so re-recording the same round yields the SAME id
+/// (idempotent key). Pure and side-effect free.
+pub fn model_collision_finding_id(round: &str) -> String {
+    format!("audit-round-model-collision-{}", round.trim())
+}
+
 /// Parse a comma/whitespace-separated `--target` value into a normalized crate
 /// list. Accepts both `a,b,c` and `a b c` (and mixtures).
 pub fn parse_targets(raw: &str) -> Vec<String> {
@@ -98,8 +189,9 @@ pub fn parse_targets(raw: &str) -> Vec<String> {
 /// the round's own closure-rate (regression tests ÷ confirmed for THAT round).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RoundMetric {
-    /// The round number.
-    pub round: u64,
+    /// The round identifier (opaque label, carried through verbatim from the
+    /// recorded [`AuditRound`]).
+    pub round: String,
     /// New findings surfaced this round (the decreasing-trend signal).
     pub new_findings: u64,
     /// Findings confirmed this round.
@@ -158,7 +250,7 @@ pub fn compute_metrics(rounds: &[AuditRound], window: usize) -> AuditMetrics {
         cum_confirmed = cum_confirmed.saturating_add(r.confirmed);
         cum_tests = cum_tests.saturating_add(r.regression_tests_added);
         per_round.push(RoundMetric {
-            round: r.round,
+            round: r.round.clone(),
             new_findings: r.new_findings,
             confirmed: r.confirmed,
             regression_tests_added: r.regression_tests_added,
@@ -211,7 +303,40 @@ mod tests {
     use super::*;
 
     fn round(n: u64, new: u64, confirmed: u64, tests: u64, ts: i64) -> AuditRound {
-        AuditRound::new(n, &["specguard".to_string()], new, confirmed, tests, ts)
+        AuditRound::new(
+            n.to_string(),
+            &["specguard".to_string()],
+            new,
+            confirmed,
+            tests,
+            ts,
+        )
+    }
+
+    #[test]
+    fn finder_equals_verifier_is_rejected() {
+        // Same model (any case / whitespace variant) is a MUST violation.
+        assert!(same_model("opus", "opus"));
+        assert!(same_model("claude-3-5-sonnet", "claude-3-5-sonnet"));
+        assert!(same_model("  Opus  ", "opus"));
+        assert!(same_model("CLAUDE-3-5-HAIKU", "claude-3-5-haiku"));
+        // Distinct models pass the diversity requirement.
+        assert!(!same_model("claude-3-5-sonnet", "claude-3-5-opus"));
+        assert!(!same_model("opus", "haiku"));
+        assert!(!same_model("sonnet", "haiku"));
+    }
+
+    #[test]
+    fn model_collision_finding_id_is_derived_from_round() {
+        // Idempotent: same round id => same finding id (trimmed).
+        assert_eq!(
+            model_collision_finding_id("2026W28"),
+            "audit-round-model-collision-2026W28"
+        );
+        assert_eq!(
+            model_collision_finding_id("  2026W28  "),
+            model_collision_finding_id("2026W28")
+        );
     }
 
     #[test]
@@ -241,6 +366,42 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         let back: AuditRound = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
+    }
+
+    #[test]
+    fn round_serializes_as_string() {
+        // A string round-id (ISO week) survives a JSON round-trip verbatim.
+        let r = AuditRound::new(
+            "2026W28".to_string(),
+            &["specguard".to_string()],
+            1,
+            1,
+            1,
+            1000,
+        );
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(
+            json.contains("\"round\":\"2026W28\""),
+            "round must serialize as a JSON string: {json}"
+        );
+        let back: AuditRound = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.round, "2026W28");
+    }
+
+    #[test]
+    fn legacy_numeric_round_deserializes_as_string() {
+        // Records written before `round` became a String stored it as a bare
+        // JSON number. The backward-compat deserializer must read `{"round":2}`
+        // as the string "2" so old audit_rounds.jsonl ledgers stay readable.
+        let legacy = r#"{"round":2,"targets":["specguard"],"new_findings":3,"confirmed":2,"regression_tests_added":2,"ts":1000}"#;
+        let back: AuditRound = serde_json::from_str(legacy).unwrap();
+        assert_eq!(back.round, "2");
+        assert_eq!(back.targets, vec!["specguard".to_string()]);
+        assert_eq!(back.new_findings, 3);
+
+        // And it flows through compute_metrics carrying the stringified id.
+        let m = compute_metrics(&[back], DEFAULT_CONVERGENCE_WINDOW);
+        assert_eq!(m.rounds[0].round, "2");
     }
 
     #[test]
@@ -322,5 +483,59 @@ mod tests {
         assert!(m.rounds.is_empty());
         assert!(m.converging);
         assert_eq!(m.closure_rate, None);
+    }
+
+    #[test]
+    fn set_round_tests_updates_matching_round_and_metrics_reflect_it() {
+        // A round recorded at finding-time carries tests=0 (the fixes don't exist
+        // yet). Closing it with the fix-side count must flow into closure_rate.
+        let rounds = vec![round(1, 5, 5, 0, 10), round(2, 3, 3, 0, 20)];
+        let (out, found) = set_round_tests(&rounds, "2", 3);
+        assert!(found, "round id 2 exists");
+        assert_eq!(out[0].regression_tests_added, 0, "other rounds untouched");
+        assert_eq!(out[1].regression_tests_added, 3, "matching round SET");
+        // Observable layer: metrics now report honest closure for that round.
+        let m = compute_metrics(&out, DEFAULT_CONVERGENCE_WINDOW);
+        assert_eq!(m.rounds[1].closure_rate, Some(1.0)); // 3/3
+        assert_eq!(m.cumulative_regression_tests_added, 3);
+        assert_eq!(m.closure_rate, Some(3.0 / 8.0)); // (0+3)/(5+3)
+    }
+
+    #[test]
+    fn set_round_tests_is_idempotent_set_not_add() {
+        // SET (not +=) so backfilling the same round twice does NOT double-count.
+        let rounds = vec![round(1, 5, 5, 0, 10)];
+        let (once, f1) = set_round_tests(&rounds, "1", 5);
+        let (twice, f2) = set_round_tests(&once, "1", 5);
+        assert!(f1 && f2);
+        assert_eq!(once, twice);
+        assert_eq!(twice[0].regression_tests_added, 5);
+    }
+
+    #[test]
+    fn set_round_tests_unknown_id_is_noop_and_reports_not_found() {
+        // Fail-soft: an unknown round-id leaves the ledger untouched.
+        let rounds = vec![round(1, 5, 5, 0, 10)];
+        let (out, found) = set_round_tests(&rounds, "nope", 9);
+        assert!(!found);
+        assert_eq!(out, rounds);
+    }
+
+    #[test]
+    fn set_round_tests_duplicate_id_closes_most_recent() {
+        // Two rounds share id "2026W28" (confirmed 1 then 11). Closing the id
+        // targets the MOST RECENTLY recorded (last) match; the earlier is left 0
+        // so its closure never exceeds 1.0.
+        let a = AuditRound::new("2026W28".to_string(), &["s".to_string()], 1, 1, 0, 10);
+        let b = AuditRound::new("2026W28".to_string(), &["s".to_string()], 13, 11, 0, 20);
+        let (out, found) = set_round_tests(&[a, b], "2026W28", 11);
+        assert!(found);
+        assert_eq!(
+            out[0].regression_tests_added, 0,
+            "earlier same-id untouched"
+        );
+        assert_eq!(out[1].regression_tests_added, 11, "latest closed");
+        let m = compute_metrics(&out, DEFAULT_CONVERGENCE_WINDOW);
+        assert_eq!(m.rounds[1].closure_rate, Some(1.0)); // 11/11, not >1.0
     }
 }

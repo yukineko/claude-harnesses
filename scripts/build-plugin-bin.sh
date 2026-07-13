@@ -15,9 +15,9 @@ cd "$(dirname "$0")/.."
 
 plugin="${1:?usage: build-plugin-bin.sh <crate-dir> [rust-target] [bin-name]}"
 target="${2:-}"
-# The cargo package name can differ from the crate directory (e.g. crate dir
-# run-book → package runbook), so read it from the member manifest; `-p` and the
-# artifact name must use the package, while bin/ stays under the crate dir.
+# The cargo package name can differ from the crate directory, so read it from
+# the member manifest; `-p` and the artifact name must use the package, while
+# bin/ stays under the crate dir.
 # bin-name defaults to the package name.
 pkg="$(sed -n 's/^name[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "crates/$plugin/Cargo.toml" | head -n1)"
 pkg="${pkg:-$plugin}"

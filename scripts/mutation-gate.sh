@@ -14,12 +14,30 @@
 #     too slow to gate on; we start with a single small, pure-logic crate.
 #     Default pilot: `harness-core` (shared build-time logic; hash/pricing/spans
 #     are pure and well-suited to mutation). Override with PILOT=<crate>.
-#   * You can narrow further to specific files with MUTANTS_EXTRA="--file src/hash.rs"
-#     to keep a real run fast.
+#   * A second pilot, `specguard`, covers the polarity gate (src/similarity.rs)
+#     — a GATE crate whose polarity check has been the source of real bugs
+#     found in review, so it is the crate that most needs kill-rate signal.
+#     `specguard` is a large crate (~14k lines across main.rs + submodules), so
+#     the default MUTANTS_EXTRA for it narrows to src/similarity.rs (the pure,
+#     mutation-suited polarity logic) and skips one test
+#     (`ack_blocks_when_no_new_commits_since_raised`) that is a known false-flake
+#     under cargo-mutants: it reads the real git HEAD via `repo_root()`, but
+#     cargo-mutants builds/tests inside a copied scratch tree that is not a git
+#     checkout, so `scope::current_head` cannot resolve there. This is a test
+#     environment artifact of running outside the real repo, not a mutation
+#     finding — excluding it keeps the gate signal instead of flake.
+#   * You can narrow further to specific files with
+#     MUTANTS_EXTRA="--file crates/harness-core/src/hash.rs" to keep a real run
+#     fast. NOTE: `--file` globs are matched against paths relative to the repo
+#     root (this script always `cd`s there before invoking cargo-mutants), not
+#     relative to the pilot package's own directory.
+#     (See the `case "$PILOT"` block below for per-pilot defaults; an
+#     explicitly-set MUTANTS_EXTRA overrides the default entirely.)
 #
 # HOW TO EXPAND (future work):
-#   * Add crates one at a time to a PILOTS list once each holds >= threshold, so a
-#     newly-added crate cannot silently drag the gate down.
+#   * Add crates one at a time (extend the `case "$PILOT"` block below with a
+#     new default scope) once each holds >= threshold, so a newly-added crate
+#     cannot silently drag the gate down.
 #   * Raise MIN_KILL_RATE as suites harden. Track survivors from mutants.out/.
 #
 # THRESHOLD: MIN_KILL_RATE default 0.80. Rationale: 0.80 is the practical
@@ -34,13 +52,28 @@
 # USAGE:
 #   scripts/mutation-gate.sh                 # pilot=harness-core, threshold=0.80
 #   PILOT=difflog MIN_KILL_RATE=0.7 scripts/mutation-gate.sh
-#   MUTANTS_EXTRA="--file src/hash.rs" scripts/mutation-gate.sh
+#   PILOT=specguard scripts/mutation-gate.sh  # polarity gate (src/similarity.rs)
+#   MUTANTS_EXTRA="--file crates/harness-core/src/hash.rs" scripts/mutation-gate.sh
 set -euo pipefail
 
 PILOT="${PILOT:-harness-core}"
 MIN_KILL_RATE="${MIN_KILL_RATE:-0.80}"
 MUTANTS_TIMEOUT="${MUTANTS_TIMEOUT:-120}"
-MUTANTS_EXTRA="${MUTANTS_EXTRA:-}"
+
+# Per-pilot default scope, used only when the caller does not set MUTANTS_EXTRA.
+# specguard is large (~14k lines); narrow to the pure polarity logic
+# (src/similarity.rs) and skip the one known git-HEAD-dependent flaky test
+# (see comment above) so the gate measures mutation signal, not test-harness
+# artifacts of cargo-mutants' scratch-copy execution model.
+case "$PILOT" in
+  specguard)
+    default_mutants_extra="--file crates/specguard/src/similarity.rs --cargo-test-arg=-- --cargo-test-arg=--skip --cargo-test-arg=ack_blocks_when_no_new_commits_since_raised"
+    ;;
+  *)
+    default_mutants_extra=""
+    ;;
+esac
+MUTANTS_EXTRA="${MUTANTS_EXTRA:-$default_mutants_extra}"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"

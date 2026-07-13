@@ -1,7 +1,7 @@
 //! Cross-harness UserPromptSubmit injection-size ledger — ADR 0001 Phase 2.
 //!
 //! Five plugins inject `additionalContext` on every qualifying UserPromptSubmit
-//! (`playbook`, `run-book`, `ctxrot`, `context-governor`, `fugu-router`). Each has
+//! (`playbook`, `runbook`, `ctxrot`, `context-governor`, `fugu-router`). Each has
 //! its own per-injector char cap, but nobody watches the COMBINED per-turn size.
 //!
 //! The five hooks run as five separate processes with no cross-process channel.
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 pub struct InjectEntry {
     pub ts: String,       // rfc3339 local time
     pub turn_key: String, // stable hash of session + prompt
-    pub plugin: String,   // "playbook" | "run-book" | "ctxrot" | "context-governor" | "fugu-router"
+    pub plugin: String,   // "playbook" | "runbook" | "ctxrot" | "context-governor" | "fugu-router"
     pub session: String,
     pub chars: usize, // injected size in CHARS (not bytes) — CJK-safe accounting
 }
@@ -208,12 +208,12 @@ mod tests {
         assert!(!path.exists(), "parent dirs do not exist yet");
         record_to(&path, "playbook", "sess-a", "prompt", 120);
         record_to(&path, "ctxrot", "sess-a", "prompt", 0); // skipped
-        record_to(&path, "run-book", "sess-a", "prompt", 30);
+        record_to(&path, "runbook", "sess-a", "prompt", 30);
         let body = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = body.lines().collect();
         assert_eq!(lines.len(), 2, "chars==0 records nothing");
         assert!(lines[0].contains("\"playbook\"") && lines[0].contains("120"));
-        assert!(lines[1].contains("\"run-book\""));
+        assert!(lines[1].contains("\"runbook\""));
         let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
     }
 
@@ -254,7 +254,7 @@ mod tests {
             serde_json::to_string(&InjectEntry {
                 ts: "2026-06-01T11:00:05+09:00".into(),
                 turn_key: k2.clone(),
-                plugin: "run-book".into(),
+                plugin: "runbook".into(),
                 session: "s".into(),
                 chars: 300,
             })
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(agg[0].total_chars, 500);
         assert_eq!(
             agg[0].per_plugin,
-            vec![("ctxrot".to_string(), 200), ("run-book".to_string(), 300)]
+            vec![("ctxrot".to_string(), 200), ("runbook".to_string(), 300)]
         );
         assert_eq!(agg[0].latest_ts, "2026-06-01T11:00:05+09:00");
         // turn-1: repeated plugin summed.

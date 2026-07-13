@@ -43,7 +43,7 @@ LLM は「解釈・実装・判断」だけを担う。スケジューリング�
 | `pricing.rs` | Opus/Sonnet/Haiku/Fable の USD コスト推定テーブル |
 | `install.rs` | `~/.claude/settings.json` の load/backup/write |
 | `interrogate.rs` | ゴール/仕様精緻化の問答ループ（純粋関数） |
-| `inject.rs` | コンテキスト注入プラグイン（playbook / run-book）の共有基盤 |
+| `inject.rs` | コンテキスト注入プラグイン（playbook / runbook）の共有基盤 |
 
 ---
 
@@ -117,7 +117,7 @@ Claude Code 組込みコンパクションの薄い制御層。pin + lossless-re
 
 - **フック**: UserPromptSubmit
 
-#### run-book
+#### runbook
 プロンプト中の `!name` を `.runbook/<name>.md` の内容に展開して注入する。繰り返し使う手順をマクロ化する。
 
 - **フック**: UserPromptSubmit
@@ -153,6 +153,12 @@ Stop フックはエージェントがターンを終えようとする前に実
 
 #### mutategate
 mutation-testing の kill-rate ゲート（cargo-mutants の `outcomes.json` を parse→kill-rate 算出→閾値未満で非ゼロ終了）。テストが「実際に fault を捕捉できるか」を測る。**プラグインではなくワークスペース内製ツール**（`plugin.json` なし・hook なし・CLI 専用）。
+
+GATE_CRATES（blastguard / propguard / specguard / stuckguard / mutategate）を敵対的にレビューする
+Continuous-Audit ラウンド（overwatch の `/continuous-audit`）は opt-in の別ループで、常時ゲートでは
+ない。`git config core.hooksPath .githooks` を有効化していれば `.githooks/pre-push` が GATE_CRATES
+配下の変更 push を検知し `scripts/continuous-audit.sh --dry-run` を advisory で勧める（fail-soft、
+push は止めない）。cron 定期実行の雛形は `scripts/continuous-audit.cron.example`。
 
 #### budgetguard
 セッション・日次のコスト上限を設定し、超過すると Stop をブロックする。gauge の記録を読んでコストを計算する。
@@ -204,7 +210,7 @@ Rust スキャナーがリポジトリ構造をマップし、`.deepwiki/*.md` �
 - **スキル**: `/deepwiki`
 
 #### harness-status
-HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge のセッション記録 + taskprog の progress.md を 1 画面に集約表示するほか、サブコマンドで観測面を切り出せる。意図的に **CLI 専用（hook なし）・read-only**。
+HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge のセッション記録 + taskprog の progress.md を 1 画面に集約表示するほか、サブコマンドで観測面を切り出せる。意図的に **CLI 専用・read-only**。加えて、登録済み hook の binary がディスク上に無いときだけ警告する軽量な `SessionStart` hook を1本持つ（健全時は無出力・fail-soft）。
 
 | サブコマンド | 表示 |
 |---|---|
@@ -213,9 +219,12 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
 | `progress` | 進捗ファイル（taskprog） |
 | `hooks` | Stop ゲートの遅延集計 |
 | `inject` | UserPromptSubmit 注入サイズ集計 |
+| `hooks-health` | 登録済み hook の binary 欠損チェック |
 | `plugins` | 全プラグインの activation-scope 分類（always-on / event-scoped / manual） |
+| `session-start` | SessionStart hook 本体（hooks-health を実行し、欠損があるときだけ `additionalContext` を注入） |
 
 - **スキル**: `/harness-status:status`（引数なしは budget/sessions/progress を集約）
+- **フック**: SessionStart（`harness-status session-start`；欠損 binary が無ければ無出力）
 
 #### daily
 「1 日 1 回だけ」走らせたいタスクを SessionStart で実行する daily-once ランナー。現状の唯一のタスクはセキュリティ監査（`cargo deny check advisories bans sources licenses`）。所見があれば非ブロッキングで `additionalContext` に注入し、クリーン／cargo-deny 未導入なら沈黙する。同日に既に走っていればスキップ（状態は `~/.daily/state/` に保存）。
@@ -237,7 +246,7 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
   flow（source→executor を束ねるループ。SessionStart で /flow を提案）
       ↓ 課題文
   condukt（実行の背骨）
-      ├─ [前段] playbook / run-book / ctxrot / taskprog が context を整備
+      ├─ [前段] playbook / runbook / ctxrot / taskprog が context を整備
       ├─ [Phase 5 並列実装] fugu-router がモデルを選ぶ
       │    stuckguard / ctxrot / budgetguard / gauge が並走監視
       ├─ [Phase 6 検証] donegate / tdd / precommit-audit / reviewgate
@@ -255,7 +264,7 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
 | Hook | 発火タイミング | 主な登録プラグイン |
 |---|---|---|
 | SessionStart | セッション開始時 | autoflow, compass, condukt(restore), context-governor, ctxrot(restore), daily, difflog, flow(propose), hypothesis, specguard, taskprog |
-| UserPromptSubmit | プロンプト送信前 | context-governor, ctxrot(guard), fugu-router, playbook, run-book |
+| UserPromptSubmit | プロンプト送信前 | context-governor, ctxrot(guard), fugu-router, playbook, runbook |
 | PreToolUse | ツール実行前 | blastguard, ctxrot(preguard) |
 | PostToolUse | ツール実行後 | context-governor, ctxrot(toolguard), session-insights, stuckguard |
 | PreCompact | /compact 直前 | context-governor, ctxrot(rescue) |

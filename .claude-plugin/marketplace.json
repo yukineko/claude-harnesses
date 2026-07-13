@@ -33,7 +33,7 @@
     {
       "name": "blastguard",
       "description": "Destructive-operation guard for Claude Code: a PreToolUse hook that denies project-wrecking Bash commands and file operations (recursive/wildcard rm, git reset --hard, git clean -fd, single-> truncating overwrites, truncate/shred/mkfs/dd of=, recursive chmod/chown, find -delete) before they run, while exempting repo config files (.claude/**, *.toml, *.yaml/yml, *.lock, package.json, .config/**). Subscription-native (one PreToolUse hook + bundled Rust binary, no API key).",
-      "version": "0.1.7",
+      "version": "0.1.10",
       "category": "security",
       "keywords": [
         "hooks",
@@ -131,7 +131,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: an interpreter/worker/verifier skill plus a Rust binary that schedules tasks into parallel/serial batches by file-conflict analysis, manages the git-worktree lifecycle, tracks run state, and gates completion. Subscription-native (skill + agents + hook, no API key).",
-      "version": "0.7.39",
+      "version": "0.7.48",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -380,7 +380,7 @@
     {
       "name": "flow",
       "description": "Unified source→executor driver for Claude Code: a /flow skill that binds the task SOURCES (compass next-move + backlog queue) to the EXECUTOR (condukt, model-routed by fugu-router) in one HOTL loop — gate on compass freshness, pick the highest-priority task, hand it to condukt, verify, mark done, repeat. A SessionStart hook proposes /flow every session when open work exists (propose-then-confirm). Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "category": "orchestration",
       "keywords": [
         "flow",
@@ -458,8 +458,8 @@
     },
     {
       "name": "harness-status",
-      "description": "Unified HOTL status dashboard for Claude Code. A /status command runs a bundled Rust binary that aggregates budgetguard's spend ledger, gauge's session records (recent sessions + cost), and taskprog's progress file into one human-on-the-loop view. Subscription-native (binary + command, no API key, no hooks).",
-      "version": "0.1.2",
+      "description": "Unified HOTL status dashboard for Claude Code. A /status command runs a bundled Rust binary that aggregates budgetguard's spend ledger, gauge's session records (recent sessions + cost), and taskprog's progress file into one human-on-the-loop view. Subscription-native (binary + command, no API key). A lightweight SessionStart hook additionally warns (fail-soft, silent when healthy) if a registered hook's binary is missing from disk.",
+      "version": "0.1.5",
       "category": "observability",
       "keywords": [
         "status",
@@ -484,7 +484,7 @@
     {
       "name": "playbook",
       "description": "Project knowledge retrieval + injection for Claude Code: a UserPromptSubmit hook that pulls the curated atomic notes relevant to your prompt and injects them under a strict char budget, so conventions and gotchas resurface without re-typing. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "category": "knowledge",
       "keywords": [
         "hooks",
@@ -556,7 +556,7 @@
     {
       "name": "runbook",
       "description": "Reusable procedure includes for Claude Code: a UserPromptSubmit hook that expands `!name` macros in your prompt into the matching repo-committed procedure (.runbook/<name>.md), so recurring workflows run the same way every time. Inspired by Devin Playbooks; distinct from knowledge injection. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "knowledge",
       "keywords": [
         "hooks",
@@ -566,14 +566,14 @@
         "rust"
       ],
       "license": "MIT",
-      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/run-book",
+      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/runbook",
       "author": {
         "name": "yukineko"
       },
       "source": {
         "source": "git-subdir",
         "url": "https://github.com/yukineko/claude-harnesses.git",
-        "path": "crates/run-book",
+        "path": "crates/runbook",
         "ref": "main"
       }
     },
@@ -628,7 +628,7 @@
     {
       "name": "specguard",
       "description": "仕様↔実装 整合監査ハーネスを Claude Code から subscription-native に実行する。各 shard を read-only な in-session subagent で監査し (nested claude --print なし)、決定的ハーネス (scope/render/parse/report) は specguard バイナリに委譲する。",
-      "version": "0.2.21",
+      "version": "0.2.23",
       "category": "quality",
       "keywords": [
         "spec",
@@ -654,7 +654,7 @@
     {
       "name": "stuckguard",
       "description": "Stuck-loop detector + escalation for Claude Code: a PostToolUse hook that spots repeated identical actions and edit thrash, then injects an escalating nudge to change approach or ask the user for help. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.11",
+      "version": "0.1.12",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -703,7 +703,7 @@
     {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: a Stop hook that blocks the turn when implementation code lands without an accompanying test, plus a /tdd skill and red/green/verify subcommands that make test-first (RED before GREEN) a verifiable artifact. Subscription-native (one hook + skill + bundled Rust binary, no API key).",
-      "version": "0.1.8",
+      "version": "0.1.10",
       "category": "quality",
       "keywords": [
         "tdd",
@@ -799,8 +799,8 @@
     },
     {
       "name": "overwatch",
-      "description": "Project-global cross-session execution ledger with dedup guard + PDO progress view. Manages claim registry with heartbeat-based liveness and skip-on-duplicate contract for distributed session coordination. SessionStart and Stop hooks surface current run state and progress aggregation (session/backlog/hypothesis/condukt run/compass gap in fail-soft view). Includes the /continuous-audit driver skill that runs an adversarial finder->verifier review round over the gate crates and auto-populates the unified review-queue (findings deduped by id). Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.12",
+      "description": "Project-global cross-session execution ledger with dedup guard + PDO progress view. Manages claim registry with heartbeat-based liveness and skip-on-duplicate contract for distributed session coordination. SessionStart and Stop hooks surface current run state and progress aggregation (session/backlog/hypothesis/condukt run/compass gap in fail-soft view). Includes the /continuous-audit driver skill that runs an adversarial finder->verifier review round over the gate crates and auto-populates the unified review-queue (findings deduped by content fingerprint, not just id; repeated same-plugin rollbacks likewise collapse, each with an occurrences count). review-queue now also bridges condukt's durable escalation queue in fail-soft by path (`EntryKind::Escalation`, High severity) so blocked/GATED tasks awaiting a human answer show in the same unified pane. New `auto-approved` companion command surfaces the auto-approved (self-answered without a human) decision population from condukt's `gate-decisions.jsonl`, fail-soft by path, as a count plus a deterministic seeded sample, so sampling coverage of mass auto-approval stays auditable. `record-disposition`/`review-metrics` close the loop with review-effectiveness measurement (false-positive rate, human-agreement rate, median resolution latency); the integration tests now patch only the CLI-written ledgers' timestamp fields, keeping the CLI-serialized verdict/reviewer intact, so those assertions cover record-disposition's field serialization end-to-end. New `compact-findings` command performs non-lossy compaction/rotation of the append-only review_findings.jsonl hot store: resolved (bridged or dispositioned) findings are MOVED into a cold review_findings_archive.jsonl (atomic temp+rename, archive written before hot for crash-safety, idempotent) so review-queue's human-surface read stays bounded to OPEN items while review-metrics keeps joining archived findings via the combined hot-plus-archive history. Subscription-native (skill + hook + bundled Rust binary, no API key).",
+      "version": "0.1.25",
       "category": "observability",
       "keywords": [
         "pdo",
@@ -908,7 +908,7 @@
     {
       "name": "trajectoryeval",
       "description": "Trajectory-match verifier for agent tool-call paths: condukt's online verifier checks a task's OUTPUT (done_criteria); trajectoryeval checks the PATH the worker took. `check` matches an actual ordered tool-call list against an expected trajectory spec (strict / unordered / subsequence) and reports {pass, missing, unexpected, out_of_order} with a 0/1/2 gate exit; `extract` streams a transcript into the ordered tool_use names. The path-side sibling of done-criteria verification (agentevals-style). Subscription-native (one bundled Rust binary, no API key).",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "category": "quality",
       "keywords": [
         "trajectory",
@@ -957,7 +957,7 @@
     {
       "name": "propguard",
       "description": "Property gate for Claude Code: on Stop, derive 3–5 semantic properties (invariants) from a task's done_criteria and check the generated code against them before the agent can declare done. In inject mode it blocks and injects a property checklist for the running agent to self-verify (no API key); in subprocess mode it runs an independent checker and counts per-property PASS/FAIL, blocking when fewer than a threshold hold. Goes beyond 'concrete tests pass'. Subscription-native, bundled Rust binary.",
-      "version": "0.1.4",
+      "version": "0.1.7",
       "category": "quality",
       "keywords": [
         "hooks",

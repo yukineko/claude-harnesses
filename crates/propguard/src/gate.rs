@@ -44,6 +44,17 @@ pub fn below_threshold(satisfied: usize, threshold: usize) -> bool {
     satisfied < threshold
 }
 
+/// The `already-verified` shortcut predicate. It fires — letting the next stop
+/// through without re-running the check — **only** when a prior *passing* check
+/// recorded this exact `(diff, properties)` hash as `last_hash`. A below-threshold
+/// (genuinely failing) subprocess check records **no** passing hash (see
+/// [`decide_from_count`]), so an unfixed failing diff is never auto-allowed and is
+/// re-checked on the next round. Inject mode's documented "trust-after-one-block"
+/// still records the hash on its first block, so it converges as before.
+pub fn already_verified(st: &crate::state::SessionState, hash: &str) -> bool {
+    !st.last_hash.is_empty() && st.last_hash == hash
+}
+
 /// What the gate decided. `tag` is a short label for the JSONL log.
 pub enum Decision {
     Allow {
@@ -155,8 +166,10 @@ pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> D
 
     let hash = hash_props(&diff, &props);
 
-    // Same (diff, properties) we already forced a check of → already verified.
-    if !st.last_hash.is_empty() && st.last_hash == hash {
+    // Same (diff, properties) we already forced a *passing* check of → already
+    // verified. Only a PASS (or inject's trust-after-one-block) records the hash,
+    // so a below-threshold subprocess failure does NOT short-circuit here.
+    if already_verified(st, &hash) {
         return allow("already-verified", st);
     }
 
@@ -283,15 +296,91 @@ pub fn decide_from_count(
                 findings.as_deref(),
                 attempts,
             );
+            // Only record the hash as a "verified" marker when the block is
+            // inject mode's trust-after-one-block: the hook can't count, so the
+            // same diff is trusted next round. A subprocess check DID count and
+            // found the diff failing — recording it here would let the very next
+            // identical failing stop through via `already_verified` before
+            // max_attempts (CA-propguard-01). Leave it empty so the checker
+            // re-runs and blocks again until the properties are actually fixed.
+            let last_hash = match cfg.mode {
+                Mode::Inject => hash,
+                Mode::Subprocess => String::new(),
+            };
+            // Report only the properties that are actually violated (did not
+            // get an explicit PASS verdict) to overwatch's fleet-correlation
+            // signal — reporting every derived property, including ones the
+            // subprocess checker PASSed, would pollute that signal with
+            // non-violations (CA-propguard-01). This only changes which ids
+            // are recorded; the pass/block decision above is untouched.
+            let violated = unsatisfied_prop_ids(props, findings.as_deref());
             Decision::Block {
                 reason,
                 tag: "below-threshold",
                 files,
-                properties: prop_ids,
+                properties: violated,
                 attempts,
-                last_hash: hash,
+                last_hash,
             }
         }
+    }
+}
+
+/// Which property ids are actually violated (did not receive an explicit PASS
+/// verdict), for reporting to overwatch on a below-threshold block. In
+/// subprocess mode `findings` carries the checker's per-property `PROP <id>:
+/// PASS|FAIL` text; only ids that were NOT confirmed PASS on their own
+/// anchored verdict line are considered violated (CA-propguard-01). In inject
+/// mode there is no per-property verdict yet (satisfied is always 0 on the
+/// first pass), so every derived property is still open and all are reported.
+fn unsatisfied_prop_ids(props: &[Property], findings: Option<&str>) -> Vec<&'static str> {
+    let Some(out) = findings else {
+        return props.iter().map(|p| p.id).collect();
+    };
+    let lower = out.to_lowercase();
+    props
+        .iter()
+        .filter(|p| {
+            let id = p.id.to_lowercase();
+            !lower
+                .lines()
+                .any(|line| verdict_for_id(line, &id) == Some(true))
+        })
+        .map(|p| p.id)
+        .collect()
+}
+
+/// Pure mapper: escalate an isolated checker-outage give-up to a fail-closed
+/// `Block` when the outage is *systemic* (recurring across tasks/sessions),
+/// per the fleet-outage-vs-isolated-flake design. Any decision other than the
+/// `checker-error-giveup` `Allow` is returned unchanged for either flag value
+/// — this function only ever rewrites that one specific give-up, never any
+/// other Allow tag (e.g. `properties-satisfied`, `giveup`, `truncated-giveup`)
+/// and never an existing Block.
+///
+/// `systemic_outage == false` (the common, isolated case — a checker flaked
+/// on just this task/session) keeps the input `Allow` unchanged: propguard
+/// must never fail-halt the whole fleet over one task's transient checker
+/// error. Only a *confirmed fleet-wide* outage (the caller has already
+/// checked recurrence across distinct tasks/sessions) flips to `Block`.
+pub fn escalate_giveup_on_systemic(decision: Decision, systemic_outage: bool) -> Decision {
+    match decision {
+        Decision::Allow {
+            tag: "checker-error-giveup",
+            ..
+        } if systemic_outage => Decision::Block {
+            reason: "propguard: FLEET-WIDE checker outage confirmed (recurring across \
+                     multiple tasks/sessions) — holding the stop to avoid shipping \
+                     UNVERIFIED code. Fix checker_cmd (see `propguard status`) or set \
+                     PROPGUARD_DISABLE=1 to bypass."
+                .to_string(),
+            tag: "checker-outage-systemic",
+            files: vec![],
+            properties: vec![],
+            attempts: 0,
+            last_hash: String::new(),
+        },
+        other => other,
     }
 }
 
@@ -502,20 +591,51 @@ fn run_checker(cfg: &Config, criteria: &str, props: &[Property], diff: &str) -> 
     }
 }
 
+/// If `line` (already lowercased) is *this* property's own verdict line — i.e.
+/// it is anchored `PROP <id>[:…]` after trimming — return its verdict:
+/// `Some(true)` for PASS, `Some(false)` for FAIL/anything-not-PASS. Returns
+/// `None` when the line is not this property's verdict line (so a different
+/// property's explanation that merely mentions this id can never win).
+fn verdict_for_id(line: &str, id: &str) -> Option<bool> {
+    // Must start with the `prop` keyword (after leading whitespace).
+    let rest = line.trim_start().strip_prefix("prop")?;
+    // A separator (whitespace) must follow the keyword before the id.
+    if !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    // The id must be the next token, on a boundary (end, ':' or whitespace) so
+    // "determinism" does not match "determinism-foo".
+    let after = rest.trim_start().strip_prefix(id)?;
+    match after.chars().next() {
+        None => {}
+        Some(c) if c == ':' || c.is_whitespace() => {}
+        _ => return None,
+    }
+    // Read the verdict from this property's own line only. PASS iff it says
+    // "pass" and not "fail".
+    Some(line.contains("pass") && !line.contains("fail"))
+}
+
 /// Parse `PROP <id>: PASS|FAIL` lines. A property is counted satisfied only when
-/// its id is explicitly reported PASS. Output that mentions none of the derived
-/// property ids is unusable → Error (fail closed), never silently "all pass".
+/// its id is explicitly reported PASS on its OWN anchored verdict line. Output
+/// that mentions none of the derived property ids is unusable → Error (fail
+/// closed), never silently "all pass".
 pub fn parse_checker_output(out: &str, props: &[Property]) -> CheckOutcome {
     let lower = out.to_lowercase();
     let mut satisfied = 0usize;
     let mut seen_any = false;
     for p in props {
-        // Find a line naming this property id and read its PASS/FAIL verdict.
+        let id = p.id.to_lowercase();
+        // Find this property's OWN verdict line and read its PASS/FAIL. The line
+        // must be *anchored* to `PROP <id>` (after trimming), not merely mention
+        // the id somewhere: another property's PASS explanation can name this id
+        // in prose (e.g. "... this also confirms determinism holds ..."), and an
+        // unanchored substring match would let that PASS override this property's
+        // real FAIL verdict (CA-propguard-02).
         for line in lower.lines() {
-            if line.contains("prop") && line.contains(&p.id.to_lowercase()) {
+            if let Some(verdict) = verdict_for_id(line, &id) {
                 seen_any = true;
-                // PASS only if the verdict is PASS and not FAIL.
-                if line.contains("pass") && !line.contains("fail") {
+                if verdict {
                     satisfied += 1;
                 }
                 break;
@@ -739,6 +859,88 @@ mod tests {
         }
     }
 
+    // ── isolated vs systemic checker-outage escalation ─────────────────────
+
+    fn checker_error_giveup() -> Decision {
+        Decision::Allow {
+            tag: "checker-error-giveup",
+            attempts: 0,
+            last_hash: String::new(),
+        }
+    }
+
+    #[test]
+    fn escalate_giveup_isolated_stays_allow() {
+        // Not systemic: the isolated give-up case must pass through unchanged.
+        let d = escalate_giveup_on_systemic(checker_error_giveup(), false);
+        match d {
+            Decision::Allow { tag, .. } => assert_eq!(tag, "checker-error-giveup"),
+            Decision::Block { .. } => panic!("isolated give-up must stay Allow"),
+        }
+    }
+
+    #[test]
+    fn escalate_giveup_systemic_becomes_block() {
+        let d = escalate_giveup_on_systemic(checker_error_giveup(), true);
+        match d {
+            Decision::Block {
+                tag,
+                reason,
+                attempts,
+                last_hash,
+                files,
+                properties,
+            } => {
+                assert_eq!(tag, "checker-outage-systemic");
+                assert!(reason.contains("PROPGUARD_DISABLE"));
+                assert!(reason.to_lowercase().contains("fleet"));
+                assert_eq!(attempts, 0);
+                assert!(last_hash.is_empty());
+                assert!(files.is_empty());
+                assert!(properties.is_empty());
+            }
+            Decision::Allow { .. } => panic!("systemic outage must fail-closed to Block"),
+        }
+    }
+
+    #[test]
+    fn escalate_giveup_non_giveup_decision_passes_through_both_flags() {
+        // A normal Block (e.g. below-threshold) must not be touched by this
+        // mapper regardless of the systemic flag.
+        let block = || Decision::Block {
+            reason: "some other block".to_string(),
+            tag: "below-threshold",
+            files: vec![],
+            properties: vec![],
+            attempts: 1,
+            last_hash: String::new(),
+        };
+        match escalate_giveup_on_systemic(block(), true) {
+            Decision::Block { tag, .. } => assert_eq!(tag, "below-threshold"),
+            Decision::Allow { .. } => panic!("non-giveup decision must not be rewritten"),
+        }
+        match escalate_giveup_on_systemic(block(), false) {
+            Decision::Block { tag, .. } => assert_eq!(tag, "below-threshold"),
+            Decision::Allow { .. } => panic!("non-giveup decision must not be rewritten"),
+        }
+
+        // An Allow with a different tag (e.g. properties-satisfied) must not
+        // be rewritten either, even when systemic_outage is true.
+        let other_allow = || Decision::Allow {
+            tag: "properties-satisfied",
+            attempts: 0,
+            last_hash: "h".to_string(),
+        };
+        match escalate_giveup_on_systemic(other_allow(), true) {
+            Decision::Allow { tag, .. } => assert_eq!(tag, "properties-satisfied"),
+            Decision::Block { .. } => panic!("non-giveup Allow must not be rewritten"),
+        }
+        match escalate_giveup_on_systemic(other_allow(), false) {
+            Decision::Allow { tag, .. } => assert_eq!(tag, "properties-satisfied"),
+            Decision::Block { .. } => panic!("non-giveup Allow must not be rewritten"),
+        }
+    }
+
     // ── checker output parsing ─────────────────────────────────────────────
     #[test]
     fn parse_counts_only_explicit_pass() {
@@ -815,5 +1017,153 @@ mod tests {
         assert!(below_threshold(2, 3));
         assert!(!below_threshold(3, 3));
         assert!(!below_threshold(4, 3));
+    }
+
+    // ── CA-propguard-01: a failing subprocess check must NOT arm the
+    //    "already-verified" shortcut, so the next identical failing diff is
+    //    re-checked (fail-closed) rather than auto-allowed. ─────────────────────
+    fn state_with_hash(h: &str) -> crate::state::SessionState {
+        crate::state::SessionState {
+            attempts: 1,
+            last_hash: h.to_string(),
+            last_ts: now(),
+        }
+    }
+
+    /// Subprocess mode, below threshold: the Block must not record the diff hash
+    /// as a passing marker, so the SAME unfixed diff on the next round is NOT
+    /// short-circuited by `already_verified` and the checker re-runs.
+    #[test]
+    fn subprocess_block_does_not_arm_already_verified() {
+        let cfg = Config {
+            mode: Mode::Subprocess,
+            ..Config::default()
+        };
+        let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
+        // Round 1: checker says satisfied=1 (< threshold 3) => Block.
+        let d = decide_from_count(
+            &cfg,
+            CheckOutcome::Verified {
+                satisfied: 1,
+                findings: Some("PROP error-path: FAIL".to_string()),
+            },
+            &props,
+            3,
+            vec!["src/x.rs".to_string()],
+            "HASH_FAIL".to_string(),
+            0,
+            "dc",
+        );
+        let recorded = match d {
+            Decision::Block { tag, last_hash, .. } => {
+                assert_eq!(tag, "below-threshold");
+                last_hash
+            }
+            Decision::Allow { .. } => panic!("below threshold must block"),
+        };
+        // Round 2: persisted state carries whatever the Block recorded. The same
+        // unfixed diff (HASH_FAIL) must NOT be treated as already-verified.
+        let st = state_with_hash(&recorded);
+        assert!(
+            !already_verified(&st, "HASH_FAIL"),
+            "a failing subprocess check must not auto-allow the next identical diff"
+        );
+    }
+
+    /// Inject mode's documented "trust-after-one-block": the first (satisfied=0)
+    /// block DOES record the hash, so the same diff is trusted next round.
+    #[test]
+    fn inject_block_arms_trust_after_one_block() {
+        let cfg = Config {
+            mode: Mode::Inject,
+            ..Config::default()
+        };
+        let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
+        let d = decide_from_count(
+            &cfg,
+            CheckOutcome::Verified {
+                satisfied: 0,
+                findings: None,
+            },
+            &props,
+            3,
+            vec!["src/x.rs".to_string()],
+            "HASH_INJECT".to_string(),
+            0,
+            "dc",
+        );
+        let recorded = match d {
+            Decision::Block { last_hash, .. } => last_hash,
+            Decision::Allow { .. } => panic!("inject first pass must block"),
+        };
+        let st = state_with_hash(&recorded);
+        assert!(
+            already_verified(&st, "HASH_INJECT"),
+            "inject mode must trust the same diff after one block"
+        );
+    }
+
+    // ── CA-propguard-01 (2026 audit round): a subprocess below-threshold Block
+    //    must report only the UNSATISFIED properties to overwatch, not every
+    //    derived property — PASSed properties polluting the fleet-correlation
+    //    signal is itself a defect distinct from the hash-arming bug above. ────
+    #[test]
+    fn below_threshold_block_reports_only_unsatisfied_properties() {
+        let cfg = Config {
+            mode: Mode::Subprocess,
+            ..Config::default()
+        };
+        let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
+        let outcome = CheckOutcome::Verified {
+            satisfied: 2,
+            findings: Some(
+                "PROP error-path: PASS\n\
+                 PROP output-schema: FAIL — schema changed\n\
+                 PROP determinism: PASS"
+                    .to_string(),
+            ),
+        };
+        let d = decide_from_count(
+            &cfg,
+            outcome,
+            &props,
+            3,
+            vec!["src/x.rs".to_string()],
+            "HASH".to_string(),
+            0,
+            "dc",
+        );
+        match d {
+            Decision::Block { properties, .. } => {
+                assert_eq!(
+                    properties,
+                    vec!["output-schema"],
+                    "PASSed properties must not be recorded as fleet violations"
+                );
+            }
+            Decision::Allow { .. } => panic!("below threshold must block"),
+        }
+    }
+
+    // ── CA-propguard-02: a property's verdict must be read from its OWN verdict
+    //    line, not from another property's explanation that mentions its id. ─────
+    #[test]
+    fn parse_anchors_to_the_propertys_own_verdict_line() {
+        let props = props_by_ids(&["idempotence", "determinism", "output-schema"]);
+        let out = "\
+PROP idempotence: PASS — this also confirms determinism holds and output-schema is untouched\n\
+PROP determinism: FAIL — hidden RNG dependency\n\
+PROP output-schema: PASS";
+        match parse_checker_output(out, &props) {
+            CheckOutcome::Verified { satisfied, .. } => {
+                // idempotence PASS + output-schema PASS = 2; determinism is FAIL
+                // and must never be counted satisfied via line 1's mention.
+                assert_eq!(
+                    satisfied, 2,
+                    "determinism was reported FAIL and must not be counted satisfied"
+                );
+            }
+            CheckOutcome::Error(e) => panic!("should parse: {e}"),
+        }
     }
 }

@@ -1,20 +1,22 @@
 ## north_star
-review-redesign の最後の未接続=Continuous-Audit の finder→verifier→record→review-queue ループを実接続する。現状 scripts/continuous-audit.sh は決定論レコーダ止まりで、CONFIRMED findings は人間が手で --finding 指定しないと review-queue に載らない(自動供給ゼロ)。これを『駆動 SKILL が1ラウンド回すと gate crates への敵対的 finder→refute-verifier が CONFIRMED subset を出し、それが自動で review-queue に溜まる』状態にする。反復ラウンドで同一 finding が重複しない冪等性(dedup)まで含めて初めてループが実用になる(build≠validate)。
+Continuous-Audit の収束シグナルを正直にする: audit-metrics の closure-rate と converging フラグが、実際に landed した回帰テスト(fix 側)を反映するようにする。現状 audit_round は finding 時に regression_tests_added を記録する(必然的に 0=まだ fix が無い)うえ ledger は append-only なので、確認済み findings を締めた 17 以上の回帰テストが実在しても closure はゼロ・converging は false のまま=ループが自分の核心的問い『fleet は硬化しているか?』に答えられない。fix 側を ledger にフィードバックして収束シグナルを実測に一致させる。
 
 ## definition_of_done
-- 駆動 SKILL を新設する: crates/overwatch/skills/continuous-audit/SKILL.md が、gate crates(blastguard/propguard/specguard/stuckguard/mutategate)に対し1ラウンド(敵対的 finder→refute ベース verifier→CONFIRMED subset 抽出)を回し、各 CONFIRMED を scripts/continuous-audit.sh --finding 経由で record し audit-round も記録する手順を規定する。crates/overwatch/.claude-plugin/plugin.json の skills に登録され、.claude-plugin/marketplace.json の overwatch エントリにも反映される(grep で SKILL.md 存在 + 両 manifest 登録を確認)
-- record-finding を finding-id で冪等化する: 同一 finding-id を複数ラウンドで record しても overwatch review-queue には最新1行のみ出る。dedup は review_queue.rs の build_queue(または store 読み戻し)で finding-id キーに最新 ts を残す純関数として実装し、systemic/rollback ストリームには影響しない
-- 決定論テストを追加する: 同一 finding-id を2回 record→review-queue が1行に畳まれることを隔離ストアで assert。異なる id は畳まれないことも別ケースで検証。既存 continuous_audit_script.rs / review_queue テストは非回帰。fail-soft(ストア欠如/空/破損→空集合)不変条件を維持
-- overwatch を micro lockstep bump(現行→次)で3正典(crates/overwatch/Cargo.toml / .claude-plugin/plugin.json / .claude-plugin/marketplace.json の overwatch エントリ)同時。python3 scripts/check-plugin-versions.py と python3 scripts/check-version-bumped.py が green、cargo fmt と cargo clippy -p overwatch --all-targets が -D warnings で clean、cargo test -p overwatch green
-- 検証(build≠validate): 別モデルで独立に、dedup 不変条件(同一 id→1行・別 id→畳まない)・SKILL の finder→verifier→record 契約が scaffold の --finding/--round 引数と整合すること・fail-soft 後方互換(既存 systemic/rollback ストリーム不変)・全 gate green を再確認する。注意: この ONE は『ループを実接続し自動供給を成立させる』ところまで。converge(round 越しの new-findings 減少)の longitudinal 実証はデータ蓄積後の measure step(スコープ外)
+- closure フィードバック経路を追加する: overwatch の audit-round に、既存ラウンドの regression_tests_added を round-id で更新する決定論サブコマンド(close。--round と --tests を取る)を追加する。store の read-modify-write(該当ラウンドの record を読み、tests を加算または設定し、書き戻す純関数)で実装し、未知の round-id は明示エラーか no-op で fail-soft にする。観測可能条件: あるラウンドを tests ゼロで record したのち close で N に更新すると、audit-metrics がそのラウンドの closure-rate を N わる confirmed として表示する
+- 決定論テストを追加する(RED から GREEN): tests ゼロで append したラウンドを close で N に更新すると per-round と cumulative の closure-rate が反映されることを隔離ストアで assert する。冪等性(同一 close の再適用の扱い)・未知 round-id の fail-soft・既存の append と metrics の非回帰も別ケースで固定する
+- 駆動 SKILL に closure ステップを明記する: continuous-audit の SKILL に、CONFIRMED findings を回帰テストで締めた後にそのラウンドへ closure を記録する手順(発見から修正、そして closure までの動線)を追記する
+- 実測バックフィル: 既存 ledger の実ラウンドを実際の fix 側で締める。round 1(confirmed 5、本 gate 群を締めた回帰テスト)と round 2026W28(confirmed 11、本スレッドで blastguard・specguard・stuckguard・propguard・mutategate を締めた回帰テスト)を close し、audit-metrics が正のゼロ超 closure-rate と実態に即した converging を表示することを観測する
+- overwatch を micro で lockstep bump する(3つの version 正典を同時に)。version lockstep チェッカと bump-on-change チェッカが green、cargo fmt と cargo clippy(overwatch, all-targets)が warnings 拒否で clean、cargo test の overwatch が green。fail-soft と never-break-a-turn と後方互換を維持する
+- 検証(build は validate ではない): 別モデルで独立に closure 更新(round-id 一致・冪等・未知 round-id の fail-soft)と audit-metrics の closure と converging が実測に一致することを再確認し、観測した closure の数値を証拠として compass outcome に記録する
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-ゴール(Continuous-Audit ループが実接続され CONFIRMED findings が review-queue に自動供給される) − 現状 の最大差分: 決定論レコーダ(scripts/continuous-audit.sh)・record-finding store・review-queue 統合・audit-round ledger は全て landed 済みだが、(1)それらを回す駆動 SKILL が無く findings は手動 --finding 指定のみ=自動供給ゼロ、(2)review_queue.rs の build_queue に finding-id dedup が無く反復ラウンドで同一 finding が重複してループが実用にならない。最小 validate スライス(size m・純加算) = crates/overwatch/skills/continuous-audit/SKILL.md(gate crates への finder→refute-verifier→CONFIRMED→scaffold record を規定)を新設し両 manifest 登録、record-finding を finding-id で冪等化(build_queue で最新 ts を残す純関数)し、同一 id 2回→review-queue 1行を決定論テストで固定、overwatch を micro lockstep bump。これで自動供給が成立し converge の longitudinal 実証(measure step)へ橋渡しできる。
+ゴール(収束シグナルが fix 側を反映し closure と converging が実測に一致) から 現状 の最大差分: audit_round は finding 時に regression_tests_added を記録し(必然的に 0)、ledger は append-only なので、17 以上の回帰テストが確認済み findings を締めた後も closure はゼロ・converging は false のまま=ループが『硬化しているか』に答えられない構造的盲点。最小 validate スライス(size は s から m の純加算) = overwatch の audit-round に round-id 越しの closure 更新サブコマンド(store の read-modify-write と決定論テスト)を足し、駆動 SKILL に closure ステップを明記し、既存の 2 ラウンド(round1 は confirmed 5、round 2026W28 は confirmed 11)を実 fix 側でバックフィルして audit-metrics が honest な正の closure-rate と converging を出すことを観測、overwatch を micro で lockstep bump する。
 
 ## next_action
+overwatch の audit-round に close サブコマンド(--round と --tests を取り、該当ラウンドの regression_tests_added を read-modify-write で更新する純関数)を実装し、決定論テスト(RED から GREEN)を追加し、continuous-audit の SKILL に closure ステップを明記し、round1 と round 2026W28 をバックフィルして audit-metrics が honest な正の closure-rate と正しい converging を表示することを観測し、overwatch を 3 正典 lockstep で micro bump し、gates を green にして、compass outcome に観測値を記録する。
 
 ## parked
 

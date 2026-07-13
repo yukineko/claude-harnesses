@@ -6,8 +6,9 @@
 
 use std::io::{IsTerminal, Read};
 use std::panic::UnwindSafe;
+use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Context window statistics supplied by Claude Code on Stop / SubagentStop events.
@@ -219,9 +220,184 @@ pub fn run_hook<F: FnOnce() + UnwindSafe>(f: F) -> ! {
     std::process::exit(0);
 }
 
+/// A hook registered in `settings.json` whose command's binary could not be
+/// found on disk — surfaced for observability (e.g. a stale rollout, a
+/// re-build that never ran `rollout-plugins.sh`/`rebuild-plugins.sh`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MissingHookBinary {
+    /// The `hooks.<event>` key this hook group was registered under.
+    pub event: String,
+    /// The full `command` string as written in `settings.json`.
+    pub command: String,
+    /// The binary path extracted from `command` that does not exist.
+    pub binary_path: String,
+}
+
+/// Extract the binary path from a hook `command` string: the first
+/// whitespace-separated token, with a leading `${CLAUDE_PLUGIN_ROOT}` expanded
+/// via `plugin_root` (when supplied — the env var is only meaningful while
+/// Claude Code is actually invoking the hook, so a health-check run outside
+/// that context passes the plugin root in explicitly).
+///
+/// Returns `None` when there's nothing concrete to check: an empty command, or
+/// a `${CLAUDE_PLUGIN_ROOT}`-prefixed command with no `plugin_root` supplied
+/// (unresolvable — never guessed at, so callers never false-flag it as
+/// missing). Any *other* unexpanded `${VAR}` is returned as-is (rare/unknown
+/// shape; existence-checking it will correctly report it missing, since a
+/// literal `${...}` path segment never exists on disk).
+pub fn extract_binary_path(command: &str, plugin_root: Option<&str>) -> Option<String> {
+    let token = command.split_whitespace().next()?;
+    if token.is_empty() {
+        return None;
+    }
+    if let Some(rest) = token.strip_prefix("${CLAUDE_PLUGIN_ROOT}") {
+        let root = plugin_root?;
+        return Some(format!("{root}{rest}"));
+    }
+    Some(token.to_string())
+}
+
+/// True if `command`'s extracted binary path exists on disk. A command with no
+/// extractable/resolvable path (empty, malformed, or an unresolved
+/// `${CLAUDE_PLUGIN_ROOT}`) is treated as "exists" — i.e. not reported missing
+/// — since there's nothing concrete to check; this function only flags a
+/// *concrete, absent* path, never an unresolvable one (fail-soft: never turns
+/// an unrelated shell snippet or unresolved var into a false warning).
+fn binary_present(command: &str, plugin_root: Option<&str>) -> bool {
+    match extract_binary_path(command, plugin_root) {
+        Some(path) => Path::new(&path).exists(),
+        None => true,
+    }
+}
+
+/// Scan a parsed `settings.json` (as produced by [`crate::install::load_settings`])
+/// for hook groups whose command's binary path does not exist, and return them.
+/// `plugin_root`, when supplied, is substituted for a literal
+/// `${CLAUDE_PLUGIN_ROOT}` prefix in a command (health-check runs happen
+/// outside the env Claude Code sets, so callers that know the intended root —
+/// e.g. checking one plugin's own install — can pass it; a caller scanning the
+/// whole file across plugins generally can't, and those entries are silently
+/// skipped rather than false-flagged). Never panics: a malformed/non-object
+/// `settings` or a hook group missing expected fields is simply skipped.
+pub fn missing_hook_binaries(
+    settings: &Value,
+    plugin_root: Option<&str>,
+) -> Vec<MissingHookBinary> {
+    let mut out = Vec::new();
+    let Some(events) = settings.get("hooks").and_then(Value::as_object) else {
+        return out;
+    };
+    for (event, groups) in events {
+        let Some(groups) = groups.as_array() else {
+            continue;
+        };
+        for group in groups {
+            let Some(hooks) = group.get("hooks").and_then(Value::as_array) else {
+                continue;
+            };
+            for h in hooks {
+                let Some(command) = h.get("command").and_then(Value::as_str) else {
+                    continue;
+                };
+                if !binary_present(command, plugin_root) {
+                    if let Some(binary_path) = extract_binary_path(command, plugin_root) {
+                        out.push(MissingHookBinary {
+                            event: event.clone(),
+                            command: command.to_string(),
+                            binary_path,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn extract_binary_path_handles_plain_and_plugin_root_forms() {
+        assert_eq!(
+            extract_binary_path("/x/y/bin/daily session-start", None),
+            Some("/x/y/bin/daily".to_string())
+        );
+        assert_eq!(
+            extract_binary_path(
+                "${CLAUDE_PLUGIN_ROOT}/bin/daily session-start",
+                Some("/plugins/daily/0.1.0")
+            ),
+            Some("/plugins/daily/0.1.0/bin/daily".to_string())
+        );
+        // No plugin_root supplied: unresolvable, so no false-positive path.
+        assert_eq!(
+            extract_binary_path("${CLAUDE_PLUGIN_ROOT}/bin/daily", None),
+            None
+        );
+        assert_eq!(extract_binary_path("", None), None);
+        assert_eq!(extract_binary_path("   ", None), None);
+    }
+
+    #[test]
+    fn missing_hook_binaries_flags_absent_paths_and_skips_unresolvable() {
+        let missing_path = "/definitely/does/not/exist/bin/ghost";
+        assert!(!Path::new(missing_path).exists());
+        // A real, present binary path so the "exists" branch is also exercised.
+        let present_path = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let settings = json!({
+            "hooks": {
+                "SessionStart": [
+                    {"hooks": [
+                        {"type": "command", "command": format!("{missing_path} session-start")},
+                        {"type": "command", "command": format!("{present_path} watch")}
+                    ]}
+                ],
+                "PostToolUse": [
+                    {"hooks": [
+                        // Unresolvable ${VAR} with no plugin_root passed for this
+                        // scan — must NOT be false-flagged.
+                        {"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/other check"}
+                    ]}
+                ]
+            }
+        });
+
+        let missing = missing_hook_binaries(&settings, None);
+        assert_eq!(
+            missing.len(),
+            1,
+            "only the genuinely absent path is flagged: {missing:?}"
+        );
+        assert_eq!(missing[0].event, "SessionStart");
+        assert_eq!(missing[0].binary_path, missing_path);
+    }
+
+    #[test]
+    fn missing_hook_binaries_tolerates_malformed_and_empty_settings() {
+        assert!(missing_hook_binaries(&json!({}), None).is_empty());
+        assert!(missing_hook_binaries(&json!("not an object"), None).is_empty());
+        assert!(missing_hook_binaries(&json!({"hooks": "not an object"}), None).is_empty());
+        assert!(
+            missing_hook_binaries(&json!({"hooks": {"Stop": "not an array"}}), None).is_empty()
+        );
+        assert!(missing_hook_binaries(
+            &json!({"hooks": {"Stop": [{"hooks": "not an array"}]}}),
+            None
+        )
+        .is_empty());
+        assert!(missing_hook_binaries(
+            &json!({"hooks": {"Stop": [{"hooks": [{"type": "command"}]}]}}),
+            None
+        )
+        .is_empty());
+    }
 
     #[test]
     fn parse_absorbs_any_event_and_rejects_empty() {

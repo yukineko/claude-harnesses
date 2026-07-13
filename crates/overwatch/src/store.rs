@@ -1,12 +1,13 @@
 /// Event store and lease storage backend.
 use crate::audit_round::AuditRound;
+use crate::disposition::Disposition;
 use crate::event::LifecycleEvent;
 use crate::review_finding::ReviewFinding;
 use crate::rollback::RollbackEvent;
 use crate::violation::ViolationEvent;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -247,6 +248,26 @@ pub fn append_review_finding(cwd: &Path, finding: &ReviewFinding) -> Result<()> 
     Ok(())
 }
 
+/// Record one AI/adversarial review finding into the overwatch-readable store,
+/// stamping the current timestamp. Thin library entry point so an external
+/// crate (e.g. condukt's gate-exec escalate path — the first real producer of
+/// this stream) can record a finding by value without hand-constructing a
+/// [`ReviewFinding`] or reaching into private fields. Mirrors
+/// [`append_review_finding`]; callers that need fail-soft semantics (a
+/// recording failure must never change their own return value) should ignore
+/// the `Err` the way `append_review_finding` callers already do.
+pub fn record_finding(
+    cwd: &Path,
+    finding_id: String,
+    source: String,
+    severity: Option<String>,
+    summary: String,
+    file: Option<String>,
+) -> Result<()> {
+    let finding = ReviewFinding::new(finding_id, source, severity, summary, file, now());
+    append_review_finding(cwd, &finding)
+}
+
 /// Read all AI-review findings from review_findings.jsonl. Returns an empty vec
 /// if the file doesn't exist or is empty (fail-soft): with no producer wired
 /// yet, this is the normal case and the review-queue degrades gracefully.
@@ -263,6 +284,68 @@ pub fn read_review_findings(cwd: &Path) -> Result<Vec<ReviewFinding>> {
                 }
             }
             Ok(findings)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// One recorded bridge event: a finding-id that has already been forwarded to
+/// the backlog by `review-queue --to-backlog`. The stream is the idempotency
+/// key set — the backlog's own duplicate guard hashes on title+project, not on
+/// finding-id, so cross-round idempotency (the same finding re-recorded every
+/// audit round) is enforced here by finding-id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgedFinding {
+    /// The finding-id that was forwarded to the backlog.
+    pub finding_id: String,
+    /// Unix timestamp when the bridge happened.
+    pub ts: i64,
+}
+
+/// Path to the bridged_findings.jsonl file (append-only): the set of finding-ids
+/// already forwarded to the backlog, used to make `review-queue --to-backlog`
+/// idempotent across audit rounds.
+pub fn bridged_findings_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("bridged_findings.jsonl"))
+}
+
+/// Append a bridged-finding record to bridged_findings.jsonl (one JSON line
+/// each). Called after a successful `backlog add` so the finding is never
+/// forwarded twice.
+pub fn append_bridged_finding(cwd: &Path, finding_id: &str) -> Result<()> {
+    let path = bridged_findings_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let rec = BridgedFinding {
+        finding_id: finding_id.to_string(),
+        ts: now(),
+    };
+    let json = serde_json::to_string(&rec)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?
+        .write_all(format!("{}\n", json).as_bytes())?;
+    Ok(())
+}
+
+/// Read the set of already-bridged finding-ids from bridged_findings.jsonl.
+/// Returns an empty vec if the file doesn't exist or is empty (fail-soft, same
+/// contract as `read_review_findings`). Corrupt lines are skipped.
+pub fn read_bridged_findings(cwd: &Path) -> Result<Vec<String>> {
+    let path = bridged_findings_path(cwd)?;
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => {
+            let mut ids = Vec::new();
+            for line in txt.lines() {
+                if !line.is_empty() {
+                    if let Ok(r) = serde_json::from_str::<BridgedFinding>(line) {
+                        ids.push(r.finding_id);
+                    }
+                }
+            }
+            Ok(ids)
         }
         Err(_) => Ok(Vec::new()),
     }
@@ -293,6 +376,29 @@ pub fn append_audit_round(cwd: &Path, round: &AuditRound) -> Result<()> {
     Ok(())
 }
 
+/// Rewrite audit_rounds.jsonl from `rounds` (one JSON line each, in the given
+/// order). This is the persistence half of the closure-feedback path
+/// (`audit-round close`): the caller reads the ledger, updates a round's
+/// `regression_tests_added` in memory via [`crate::audit_round::set_round_tests`],
+/// then calls this to write it back. Writes to a sibling temp file and renames so
+/// a crash mid-write cannot leave a truncated ledger. Fail-soft by contract at
+/// the call site (a write error is reported, never propagated to break a turn).
+pub fn rewrite_audit_rounds(cwd: &Path, rounds: &[AuditRound]) -> Result<()> {
+    let path = audit_rounds_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut buf = String::new();
+    for r in rounds {
+        buf.push_str(&serde_json::to_string(r)?);
+        buf.push('\n');
+    }
+    let tmp = path.with_extension("jsonl.tmp");
+    std::fs::write(&tmp, buf.as_bytes())?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
 /// Read all Continuous-Audit round records from audit_rounds.jsonl, in recorded
 /// (append) order. Returns an empty vec if the file doesn't exist or is empty
 /// (fail-soft, same contract as `read_events` / `read_rollbacks`). Corrupt
@@ -313,6 +419,205 @@ pub fn read_audit_rounds(cwd: &Path) -> Result<Vec<AuditRound>> {
         }
         Err(_) => Ok(Vec::new()),
     }
+}
+
+/// Path to the dispositions.jsonl file (append-only, human dispositions of
+/// AI/adversarial review findings — review-effectiveness measurement). Its
+/// own stream since a disposition is a distinct signal from the findings
+/// themselves (see `disposition.rs`); `overwatch review-metrics` reads it
+/// back joined against `review_findings.jsonl`.
+pub fn dispositions_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("dispositions.jsonl"))
+}
+
+/// Append a human disposition to dispositions.jsonl (one JSON line each).
+pub fn append_disposition(cwd: &Path, disposition: &Disposition) -> Result<()> {
+    let path = dispositions_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string(disposition)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?
+        .write_all(format!("{}\n", json).as_bytes())?;
+    Ok(())
+}
+
+/// Read all dispositions from dispositions.jsonl. Returns an empty vec if the
+/// file doesn't exist or is empty (fail-soft, same contract as
+/// `read_review_findings`). Corrupt lines are skipped rather than failing the
+/// whole read.
+pub fn read_dispositions(cwd: &Path) -> Result<Vec<Disposition>> {
+    let path = dispositions_path(cwd)?;
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => {
+            let mut dispositions = Vec::new();
+            for line in txt.lines() {
+                if !line.is_empty() {
+                    if let Ok(d) = serde_json::from_str::<Disposition>(line) {
+                        dispositions.push(d);
+                    }
+                }
+            }
+            Ok(dispositions)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Path to the review_findings_archive.jsonl file (append-only, COLD store):
+/// where `compact_review_findings` moves resolved (bridged or dispositioned)
+/// records out of the hot `review_findings.jsonl`. Mirrors
+/// [`review_findings_path`]. Kept private since the only reader that needs
+/// the archive is [`read_review_findings_all`] / [`compact_review_findings`]
+/// in this module — `review_queue.rs` / `bridge.rs` intentionally keep
+/// reading the hot file only (the bounded-read win).
+fn review_findings_archive_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("review_findings_archive.jsonl"))
+}
+
+/// Read ALL AI-review findings across both the hot store and the cold
+/// archive (hot records first, then archive, each in its own on-disk/append
+/// order). This is the full-history view the review-metrics latency join
+/// needs (`disposition_cli::metrics`) so that compacting a resolved finding
+/// out of the hot file never orphans its disposition. Fail-soft, same
+/// contract as [`read_review_findings`]: a missing archive contributes
+/// nothing, corrupt lines are skipped.
+pub fn read_review_findings_all(cwd: &Path) -> Result<Vec<ReviewFinding>> {
+    let mut all = read_review_findings(cwd)?;
+    let archive_path = review_findings_archive_path(cwd)?;
+    if let Ok(txt) = std::fs::read_to_string(&archive_path) {
+        for line in txt.lines() {
+            if !line.is_empty() {
+                if let Ok(f) = serde_json::from_str::<ReviewFinding>(line) {
+                    all.push(f);
+                }
+            }
+        }
+    }
+    Ok(all)
+}
+
+/// Partition `findings` into `(open, archived)`: a record goes to `archived`
+/// iff its `finding_id` is a member of `resolved_ids`, else to `open`. BOTH
+/// partitions preserve the input (append) order of their surviving records
+/// — load-bearing, since `review_queue::dedup_findings` tie-breaks on append
+/// order among equal `ts`. Pure: no I/O, no clock, total (never panics),
+/// deterministic (same inputs -> identical output).
+pub fn partition_findings(
+    findings: &[ReviewFinding],
+    resolved_ids: &BTreeSet<String>,
+) -> (Vec<ReviewFinding>, Vec<ReviewFinding>) {
+    let mut open = Vec::new();
+    let mut archived = Vec::new();
+    for f in findings {
+        if resolved_ids.contains(&f.finding_id) {
+            archived.push(f.clone());
+        } else {
+            open.push(f.clone());
+        }
+    }
+    (open, archived)
+}
+
+/// Write `records` to `path` as one JSON line each (in the given order),
+/// via a sibling temp file + rename so a crash mid-write cannot leave a
+/// truncated file. Mirrors [`rewrite_audit_rounds`]'s atomic idiom, factored
+/// out here since [`compact_review_findings`] needs it for BOTH the archive
+/// and the hot rewrite.
+fn write_jsonl_atomic<T: Serialize>(path: &Path, records: &[T]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut buf = String::new();
+    for r in records {
+        buf.push_str(&serde_json::to_string(r)?);
+        buf.push('\n');
+    }
+    let tmp = path.with_extension("jsonl.tmp");
+    std::fs::write(&tmp, buf.as_bytes())?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Report of one `compact_review_findings` run.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompactionReport {
+    /// How many findings remain in the hot store after compaction (OPEN).
+    pub open: usize,
+    /// How many findings were newly moved to the archive this run.
+    pub archived: usize,
+    /// How many findings were ALREADY in the archive before this run.
+    pub already_archived: usize,
+}
+
+/// Compact the review-findings store: move every finding whose `finding_id`
+/// has been resolved (bridged to the backlog, per [`read_bridged_findings`],
+/// or dispositioned, per [`read_dispositions`]) out of the hot
+/// `review_findings.jsonl` into the cold `review_findings_archive.jsonl`.
+/// NON-LOSSY by design (see module docs / the brief): records are MOVED, not
+/// deleted, so [`read_review_findings_all`] (the review-metrics latency
+/// join) keeps seeing them after compaction.
+///
+/// Crash-safety ordering: the archive is rewritten FIRST, then the hot file.
+/// A crash between the two leaves the resolved records in BOTH files (safe —
+/// recoverable, and a re-run is idempotent since the hot file still holds
+/// them as "open" and gets re-partitioned identically). Both rewrites are
+/// atomic (temp file + rename), mirroring [`rewrite_audit_rounds`].
+///
+/// Fail-soft: a missing hot file is a no-op reporting all-zero counts (never
+/// creates files nor errors). Never panics.
+pub fn compact_review_findings(cwd: &Path) -> Result<CompactionReport> {
+    let hot_path = review_findings_path(cwd)?;
+    if !hot_path.exists() {
+        return Ok(CompactionReport {
+            open: 0,
+            archived: 0,
+            already_archived: 0,
+        });
+    }
+
+    let findings = read_review_findings(cwd)?;
+
+    let mut resolved_ids: BTreeSet<String> = read_bridged_findings(cwd)?.into_iter().collect();
+    for d in read_dispositions(cwd)? {
+        resolved_ids.insert(d.finding_id);
+    }
+
+    let (open, archived) = partition_findings(&findings, &resolved_ids);
+
+    let archive_path = review_findings_archive_path(cwd)?;
+    let existing_archive: Vec<ReviewFinding> = match std::fs::read_to_string(&archive_path) {
+        Ok(txt) => {
+            let mut v = Vec::new();
+            for line in txt.lines() {
+                if !line.is_empty() {
+                    if let Ok(f) = serde_json::from_str::<ReviewFinding>(line) {
+                        v.push(f);
+                    }
+                }
+            }
+            v
+        }
+        Err(_) => Vec::new(),
+    };
+    let already_archived = existing_archive.len();
+
+    let mut new_archive = existing_archive;
+    new_archive.extend(archived.iter().cloned());
+
+    // Archive FIRST (crash-safety: a crash before the hot rewrite leaves the
+    // resolved records recoverable in both files, and a re-run is idempotent).
+    write_jsonl_atomic(&archive_path, &new_archive)?;
+    write_jsonl_atomic(&hot_path, &open)?;
+
+    Ok(CompactionReport {
+        open: open.len(),
+        archived: archived.len(),
+        already_archived,
+    })
 }
 
 /// Check if a key is held by a live OTHER session (different session_id).
@@ -442,5 +747,134 @@ mod tests {
         assert!(leases.contains_key("fresh"));
         assert!(!leases.contains_key("stale"));
         assert_eq!(leases.len(), 1);
+    }
+
+    fn finding(id: &str, ts: i64) -> ReviewFinding {
+        ReviewFinding::new(
+            id.to_string(),
+            "reviewgate".to_string(),
+            None,
+            "s".to_string(),
+            None,
+            ts,
+        )
+    }
+
+    #[test]
+    fn partition_findings_resolved_goes_to_archived_open_stays() {
+        let findings = vec![finding("a", 1), finding("b", 2), finding("c", 3)];
+        let resolved: BTreeSet<String> = ["b".to_string()].into_iter().collect();
+        let (open, archived) = partition_findings(&findings, &resolved);
+        assert_eq!(open, vec![finding("a", 1), finding("c", 3)]);
+        assert_eq!(archived, vec![finding("b", 2)]);
+    }
+
+    #[test]
+    fn partition_findings_preserves_multiplicity_of_open_id() {
+        // A still-open id re-recorded across rounds must keep ALL of its
+        // occurrences in `open` (occurrence count preserved).
+        let findings = vec![finding("a", 1), finding("a", 2), finding("b", 3)];
+        let resolved: BTreeSet<String> = BTreeSet::new();
+        let (open, archived) = partition_findings(&findings, &resolved);
+        assert_eq!(
+            open,
+            vec![finding("a", 1), finding("a", 2), finding("b", 3)]
+        );
+        assert!(archived.is_empty());
+    }
+
+    #[test]
+    fn partition_findings_preserves_append_order_in_both_partitions() {
+        let findings = vec![
+            finding("z", 1),
+            finding("a", 2),
+            finding("y", 3),
+            finding("b", 4),
+        ];
+        let resolved: BTreeSet<String> = ["z".to_string(), "y".to_string()].into_iter().collect();
+        let (open, archived) = partition_findings(&findings, &resolved);
+        // Survivors keep their ORIGINAL relative (append) order, not the
+        // BTreeSet's lexicographic order.
+        assert_eq!(open, vec![finding("a", 2), finding("b", 4)]);
+        assert_eq!(archived, vec![finding("z", 1), finding("y", 3)]);
+    }
+
+    #[test]
+    fn partition_findings_resolved_id_absent_from_findings_is_noop() {
+        let findings = vec![finding("a", 1)];
+        let resolved: BTreeSet<String> = ["nonexistent".to_string()].into_iter().collect();
+        let (open, archived) = partition_findings(&findings, &resolved);
+        assert_eq!(open, vec![finding("a", 1)]);
+        assert!(archived.is_empty());
+    }
+
+    #[test]
+    fn partition_findings_empty_inputs() {
+        let (open, archived) = partition_findings(&[], &BTreeSet::new());
+        assert!(open.is_empty());
+        assert!(archived.is_empty());
+    }
+
+    #[test]
+    fn partition_findings_is_deterministic() {
+        let findings = vec![finding("a", 1), finding("b", 2), finding("c", 3)];
+        let resolved: BTreeSet<String> = ["a".to_string(), "c".to_string()].into_iter().collect();
+        let run1 = partition_findings(&findings, &resolved);
+        let run2 = partition_findings(&findings, &resolved);
+        assert_eq!(run1, run2);
+    }
+
+    // `storage_root` resolves under the REAL `$HOME` (via
+    // `harness_core::config::home`, which reads the `HOME` env var on
+    // unix), not under any caller-supplied `cwd`. So any unit test that
+    // exercises the file-backed store functions must sandbox `HOME` to a
+    // temp dir for its duration (never touch the developer's real
+    // `~/.overwatch`), serialized via this lock since env vars are
+    // process-global and `cargo test` runs threads within one process.
+    static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn read_review_findings_all_concatenates_archive_after_hot() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-store-test-all-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+
+        let hot = review_findings_path(&dir).unwrap();
+        std::fs::create_dir_all(hot.parent().unwrap()).unwrap();
+        std::fs::write(
+            &hot,
+            format!("{}\n", serde_json::to_string(&finding("a", 1)).unwrap()),
+        )
+        .unwrap();
+
+        // Missing archive => hot only.
+        let hot_only = read_review_findings_all(&dir).unwrap();
+        assert_eq!(hot_only, vec![finding("a", 1)]);
+
+        // Present archive (with a trailing corrupt line) => hot then archive,
+        // corrupt line skipped.
+        let archive = review_findings_archive_path(&dir).unwrap();
+        std::fs::write(
+            &archive,
+            format!(
+                "{}\nnot valid json\n",
+                serde_json::to_string(&finding("b", 2)).unwrap()
+            ),
+        )
+        .unwrap();
+        let combined = read_review_findings_all(&dir).unwrap();
+        assert_eq!(combined, vec![finding("a", 1), finding("b", 2)]);
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

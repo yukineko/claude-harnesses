@@ -17,7 +17,7 @@ include_global = true
 
 # The macro prefix and the meta-macro that injects the list of runbooks.
 prefix = "!"
-index_token = "runbooks"   # typing `!runbooks` injects the index
+index_token = "runbooks"   # typing `!runbooks` injects the index # audit-ignore: macro token name, not a secret/credential
 
 # Injection budget.
 max_chars = 12000          # total across all expanded macros in one prompt

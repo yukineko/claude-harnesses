@@ -196,6 +196,7 @@ fn check_run(hook: Option<HookInput>) -> ! {
 
     let prior = state::load(&cfg.state_dir, &session);
     let decision = gate::evaluate(&cfg, &root, &prior);
+    let decision = handle_checker_outage(decision, &root, &session);
 
     match decision {
         Decision::Allow {
@@ -264,6 +265,96 @@ fn check_run(hook: Option<HookInput>) -> ! {
             std::process::exit(0);
         }
     }
+}
+
+/// Isolated-vs-systemic checker-outage handling. A `checker-error-giveup`
+/// `Allow` (the checker itself failed repeatedly and propguard gave up
+/// bounded by `max_attempts`) previously left ZERO fleet signal and always
+/// shipped unverified. This now records the give-up as a fleet-correlatable
+/// occurrence, asks overwatch whether the `checker-outage` signature has
+/// become *systemic* (recurring across distinct tasks/sessions — not just
+/// this one task retrying), and — only if so — rewrites the decision to a
+/// fail-closed `Block` via [`gate::escalate_giveup_on_systemic`] plus a
+/// durable HIGH-severity human-review-queue escalation. Any other decision
+/// (including every other `Allow` tag and every `Block`) passes through
+/// completely unchanged.
+///
+/// **Fail-soft**: every overwatch call here is best-effort. If recording the
+/// occurrence, reading it back, or recording the finding fails for any
+/// reason, this falls back to treating the outage as isolated (the original
+/// `Allow` stands) — an overwatch outage must never itself flip propguard to
+/// fail-closed, and must never panic or change the isolated per-task
+/// give-up behavior.
+fn handle_checker_outage(decision: Decision, root: &Path, session: &str) -> Decision {
+    if !matches!(
+        &decision,
+        Decision::Allow {
+            tag: "checker-error-giveup",
+            ..
+        }
+    ) {
+        return decision;
+    }
+
+    let systemic = record_and_check_systemic_outage(root, session);
+    let decision = gate::escalate_giveup_on_systemic(decision, systemic);
+
+    if matches!(
+        &decision,
+        Decision::Block {
+            tag: "checker-outage-systemic",
+            ..
+        }
+    ) {
+        let _ = overwatch::store::record_finding(
+            root,
+            "propguard-checker-outage-systemic".to_string(),
+            "propguard".to_string(),
+            Some("high".to_string()),
+            "propguard's checker has failed repeatedly across multiple tasks/sessions \
+             (a fleet-wide outage, not an isolated flake) — propguard is now failing \
+             CLOSED (blocking stops) instead of shipping unverified code. Investigate \
+             checker_cmd health; see `propguard status`."
+                .to_string(),
+            None,
+        );
+    }
+
+    decision
+}
+
+/// Record this checker-outage occurrence to overwatch's violation stream
+/// under the synthetic property id `"checker-outage"` (give-ups previously
+/// recorded nothing, so the fleet had no signal at all), then query whether
+/// that signature has crossed overwatch's systemic-recurrence policy
+/// (occurrences >= threshold, spanning >1 distinct task or session — a
+/// single task retrying alone is never systemic). Fail-soft: any I/O error
+/// along the way returns `false` (treat as isolated) rather than propagating.
+fn record_and_check_systemic_outage(root: &Path, session: &str) -> bool {
+    let ts = overwatch::store::now();
+    let task_key = format!("propguard:{}", root.display());
+    let raw = overwatch::violation::RawViolation {
+        property_id: Some("checker-outage"),
+        ..Default::default()
+    };
+    if let Some(event) = overwatch::violation::build_event(
+        overwatch::violation::ViolationSource::Propguard,
+        &raw,
+        task_key,
+        session.to_string(),
+        ts,
+        None,
+    ) {
+        let _ = overwatch::store::append_violation(root, &event);
+    }
+
+    let Ok(events) = overwatch::store::read_violations(root) else {
+        return false;
+    };
+    let policy = overwatch::violation::RecurrencePolicy::default();
+    overwatch::violation::systemic_issues(&events, ts, policy)
+        .iter()
+        .any(|r| r.signature == "propguard:checker-outage")
 }
 
 /// Record a fleet-level overwatch violation for each failing PROP-* property

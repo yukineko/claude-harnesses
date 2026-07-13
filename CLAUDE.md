@@ -32,6 +32,11 @@
   - `python3 scripts/check-bin-reproducibility.py`（CI `bin-reproducibility` job）— 全 bin をソースから再ビルドし、
     committed-only な悪性パターン文字列（source が生成しない焼き込み）を検出。生の committed-only 件数・size 差は
     ビルド非決定性なので**判定に使わない**（悪性デルタのみ）。host triple のみ対象。
+- **Continuous-Audit 自動起動導線** — `git config core.hooksPath .githooks` を有効化していれば
+  `.githooks/pre-push` が GATE_CRATES（blastguard/propguard/specguard/stuckguard/mutategate）配下の
+  変更を検知し、`scripts/continuous-audit.sh --dry-run` を勧める advisory メッセージを出す
+  （pre-commit と同じ fail-soft 設計。push は絶対に止めない・常に exit 0）。cron 定期実行の雛形は
+  `scripts/continuous-audit.cron.example` を参照。
 
 ## プラグインを改修したときの反映（忘れやすい）
 

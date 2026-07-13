@@ -55,7 +55,7 @@ impl Default for Config {
             global_dir: base_dir().join("runbooks"),
             include_global: true,
             prefix: '!',
-            index_token: "runbooks".to_string(),
+            index_token: "runbooks".to_string(), // audit-ignore: macro token name, not a secret/credential
             max_chars: 12000,
             per_runbook_chars: 4000,
         }

@@ -27,7 +27,11 @@ mod model;
 mod oracle;
 mod policy;
 mod pr;
+mod precedent;
 mod replan;
+mod review_brief;
+mod review_order;
+mod review_worthiness;
 mod run_policy;
 mod schedule;
 mod state;
@@ -194,6 +198,20 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
+    /// Deterministic per-item reviewer digest: compose a "here's what
+    /// changed, why it's risky, look here first" brief for one run/task from
+    /// STATIC persisted signals only (decomposition intent, blastguard
+    /// sensitive-path classification, the overwatch violation ledger) — no
+    /// LLM, no runtime API call, no live git diff.
+    ReviewBrief {
+        #[arg(long)]
+        run: String,
+        #[arg(long)]
+        task: String,
+        /// Output format: `md` (default) or `json`.
+        #[arg(long, default_value = "md")]
+        format: String,
+    },
     /// Run one iteration of the test-fix cycle for the given module type.
     ///
     /// Executes build/deploy/test in the sequence appropriate for the module:
@@ -222,6 +240,153 @@ enum Command {
     Escalate {
         #[command(subcommand)]
         action: EscalateAction,
+    },
+    /// Precedent store for `review-brief`'s novelty/precedent downgrade
+    /// (Google LSC "reviewed-once-applied-broadly"): ratify a change's
+    /// declared shape (touched files + target symbols) as routine, list what
+    /// is ratified, or check whether a candidate shape matches. Backed by
+    /// `<state_dir>/<project-key>/precedents.json` (atomic writes, fail-soft).
+    Precedent {
+        #[command(subcommand)]
+        action: PrecedentAction,
+    },
+    /// Deterministic review-WORTHINESS (review-COST) scoring — a signal
+    /// distinct from blastguard/diffrisk's blast-radius: how much human
+    /// review attention a change WARRANTS, judged from its own shape (size,
+    /// net deletion, missing rationale, absent task link). Feeds a future
+    /// review-budget allocator. Primary mode takes the signals directly as
+    /// flags (fully deterministic, no git needed); `--from-git` is an
+    /// optional fail-soft convenience that gathers them from a live repo.
+    ReviewWorthiness {
+        /// Number of files touched by the change.
+        #[arg(long, default_value_t = 0)]
+        files: u32,
+        /// Total inserted lines.
+        #[arg(long, default_value_t = 0)]
+        insertions: u64,
+        /// Total deleted lines.
+        #[arg(long, default_value_t = 0)]
+        deletions: u64,
+        /// The change carries a non-empty rationale (commit body).
+        #[arg(long, conflicts_with = "no_rationale")]
+        rationale: bool,
+        /// The change carries NO rationale. Mutually exclusive with
+        /// `--rationale`. Default (neither flag given): `false` (no
+        /// rationale) — a pessimistic default so an automated caller that
+        /// forgets to pass either flag gets the conservative (more
+        /// review-worthy) reading rather than a silently optimistic one.
+        #[arg(long, conflicts_with = "rationale")]
+        no_rationale: bool,
+        /// The change is linked to a tracked task/backlog id.
+        #[arg(long, conflicts_with = "no_task_link")]
+        task_link: bool,
+        /// The change is NOT linked to a tracked task/backlog id. Mutually
+        /// exclusive with `--task-link`. Default (neither flag given):
+        /// `false` (no task link) — same pessimistic-default rationale as
+        /// `--no-rationale`.
+        #[arg(long, conflicts_with = "task_link")]
+        no_task_link: bool,
+        /// Emit structured JSON (`{score, drivers, inputs}`) instead of the
+        /// human-readable default.
+        #[arg(long)]
+        json: bool,
+        /// Convenience mode: gather files/insertions/deletions from `git
+        /// diff --numstat <base> <head>` and rationale/task-link from `git
+        /// log --format=%B <base>..<head>` instead of reading `--files`/
+        /// `--insertions`/`--deletions`/`--rationale`/`--task-link`.
+        /// Fail-soft: any git failure degrades to zeros/false and still
+        /// prints a score, never errors. The flag-driven mode above (no
+        /// `--from-git`) is the tested, hermetic, primary contract.
+        #[arg(long)]
+        from_git: bool,
+        /// `--from-git` base ref. Default: `HEAD~1`.
+        #[arg(long, default_value = "HEAD~1")]
+        base: String,
+        /// `--from-git` head ref. Default: `HEAD`.
+        #[arg(long, default_value = "HEAD")]
+        head: String,
+    },
+    /// Deterministic review-ORDER pass: reorders a diff's hunks so a human
+    /// reviews top-to-bottom instead of git's flat VCS (alphabetical file)
+    /// order — clustering logically-connected hunks together and ordering
+    /// definitions before the hunks that reference them. A companion to
+    /// `review-worthiness` (which scores how much attention a change
+    /// warrants); this answers what ORDER to read it in.
+    ///
+    /// Primary mode: `--diff-file <path>` reads a unified diff from a file
+    /// (fully hermetic/tested contract). Convenience mode: `--from-git`
+    /// gathers the diff via `git diff <base> <head>` instead, fail-soft (a
+    /// git failure degrades to an empty diff / empty order, never errors).
+    /// Either mode then reads each changed file's CURRENT contents from cwd
+    /// (fail-soft: a missing/unreadable source file just yields no
+    /// dependency edges for that hunk).
+    ReviewOrder {
+        /// Read a unified diff from this file (the hermetic, tested mode).
+        #[arg(long)]
+        diff_file: Option<String>,
+        /// Convenience: gather the diff via `git diff <base> <head>` in cwd
+        /// instead of `--diff-file`. Fail-soft: any git failure degrades to
+        /// an empty diff.
+        #[arg(long)]
+        from_git: bool,
+        /// `--from-git` base ref. Default: `HEAD~1`.
+        #[arg(long, default_value = "HEAD~1")]
+        base: String,
+        /// `--from-git` head ref. Default: `HEAD`.
+        #[arg(long, default_value = "HEAD")]
+        head: String,
+        /// Emit structured JSON (`{clusters, hunks}`) instead of the
+        /// human-readable default.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Default Jaccard-similarity tolerance for `match_precedent` when no
+/// `--tolerance` override is given. Chosen conservatively (fairly strict,
+/// well above 0.5) so an ambiguous/near-miss shape does NOT silently
+/// downgrade review attention — the precedent mechanism should only fire on
+/// genuinely near-identical declared shapes.
+const DEFAULT_PRECEDENT_TOLERANCE: f64 = 0.8;
+
+#[derive(Subcommand)]
+enum PrecedentAction {
+    /// Ratify a declared shape (files + symbols) as a routine precedent:
+    /// computes its structural fingerprint, stamps `ratified_ts` from
+    /// wall-clock seconds (observability only), and persists it. Prints the
+    /// stored record as JSON.
+    Ratify {
+        /// Comma-separated list of declared touched files.
+        #[arg(long)]
+        files: String,
+        /// Comma-separated list of declared target symbols.
+        #[arg(long, default_value = "")]
+        symbols: String,
+        /// Free-text note describing what this precedent covers.
+        #[arg(long, default_value = "")]
+        note: String,
+    },
+    /// List all ratified precedents. Human-readable by default; `--json`
+    /// prints the records as a JSON array. Fail-soft: an empty/absent store
+    /// prints nothing (or `[]` for `--json`) and exits 0.
+    List {
+        /// Emit JSON instead of the human-readable table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check whether a candidate declared shape matches any ratified
+    /// precedent (debugging / F->P proof helper). Prints the match (or "no
+    /// match") as JSON; exits 0 either way.
+    Check {
+        /// Comma-separated list of candidate touched files.
+        #[arg(long)]
+        files: String,
+        /// Comma-separated list of candidate target symbols.
+        #[arg(long, default_value = "")]
+        symbols: String,
+        /// Jaccard-similarity tolerance override.
+        #[arg(long)]
+        tolerance: Option<f64>,
     },
 }
 
@@ -1652,7 +1817,33 @@ fn run_user(cmd: Command) -> Result<()> {
         }
         Command::Policy { action } => run_policy(action),
         Command::Escalate { action } => run_escalate(&cfg, &cwd, action)?,
+        Command::Precedent { action } => run_precedent(&cfg, &cwd, action)?,
         Command::Status { all } => status::render(&cfg, &cwd, all),
+        Command::ReviewBrief { run, task, format } => {
+            run_review_brief(&cfg, &cwd, &run, &task, &format)?
+        }
+        Command::ReviewWorthiness {
+            files,
+            insertions,
+            deletions,
+            rationale,
+            no_rationale: _,
+            task_link,
+            no_task_link: _,
+            json,
+            from_git,
+            base,
+            head,
+        } => run_review_worthiness(
+            &cwd, files, insertions, deletions, rationale, task_link, json, from_git, &base, &head,
+        )?,
+        Command::ReviewOrder {
+            diff_file,
+            from_git,
+            base,
+            head,
+            json,
+        } => run_review_order(&cwd, diff_file, from_git, &base, &head, json)?,
         // These are dispatched as hooks in main() (via run_hook, which exits and
         // never returns here). Reaching this arm would be an internal dispatch
         // bug; return a clean error instead of panicking the process.
@@ -1742,6 +1933,318 @@ fn calibrated_confidence(
     Some(policy::Level::from_score(score))
 }
 
+/// `condukt review-brief --run RID --task TID [--format md|json]` — the
+/// deterministic per-item reviewer digest. Reads run-state (for the run
+/// goal), the decomposition sidecar (for the task's title/done_criteria/
+/// kind/touched_files/target_symbols), and the overwatch violation ledger
+/// (for tripped invariants matched by task_key), then composes the pure
+/// [`review_brief::build_review_brief`] and prints it. A missing run/task/
+/// decomposition is a clear error + nonzero exit (via `?`/`bail!`), never a
+/// panic.
+fn run_review_brief(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+    task_id: &str,
+    format: &str,
+) -> Result<()> {
+    let run_state = state::RunState::load(cfg, cwd, run_id)
+        .with_context(|| format!("loading run '{run_id}'"))?;
+    let raw = state::load_decomposition(cfg, cwd, run_id)
+        .with_context(|| format!("loading decomposition for run '{run_id}'"))?;
+    let dec: model::Decomposition =
+        serde_json::from_str(&raw).context("parsing decomposition JSON")?;
+    let task = dec
+        .tasks
+        .iter()
+        .find(|t| t.id == task_id)
+        .ok_or_else(|| anyhow!("no task '{task_id}' in run '{run_id}' decomposition"))?;
+
+    let intent = review_brief::Intent {
+        run_goal: run_state.goal.clone(),
+        task_title: task.title.clone(),
+        done_criteria: task.done_criteria.clone(),
+        kind: task.kind.clone(),
+    };
+    let task_key = format!("{run_id}/{task_id}");
+    // Fail-soft: an unreadable/absent ledger simply means no tripped
+    // invariants can be surfaced (never a hard error for this read-only
+    // digest command).
+    let violations = overwatch::store::read_violations(cwd).unwrap_or_default();
+    // Use the SAME repo-aware sensitive config the diff-risk recorder uses
+    // (diffrisk_record::repo_sensitive_config adds hooks/, .claude-plugin/,
+    // skills/ on top of blastguard's defaults), so the brief's own
+    // "touches sensitive path" driver matches the recorded diffrisk signal
+    // for repo-specific gate-plugin surfaces (backlog 68b658e1).
+    let sensitive_cfg = diffrisk_record::repo_sensitive_config();
+    // Fail-soft: an unreadable/absent precedent store simply means no
+    // precedent-downgrade signal is available (never a hard error for this
+    // read-only digest command) — empty store => identical brief to today.
+    let precedents = precedent::load_precedents(cfg, cwd);
+
+    let brief = review_brief::build_review_brief(
+        intent,
+        &task_key,
+        &task.touched_files,
+        &task.target_symbols,
+        &violations,
+        &sensitive_cfg,
+        &precedents,
+        DEFAULT_PRECEDENT_TOLERANCE,
+    );
+
+    match format {
+        "json" => println!("{}", serde_json::to_string_pretty(&brief)?),
+        "md" => println!("{}", review_brief::to_markdown(&brief)),
+        other => bail!("unknown --format '{other}' (expected md|json)"),
+    }
+    Ok(())
+}
+
+/// `condukt review-worthiness` — the review-worthiness (review-cost) CLI.
+///
+/// Primary mode (default, `--from-git` absent): builds
+/// [`review_worthiness::ReviewWorthinessInputs`] DIRECTLY from `--files`/
+/// `--insertions`/`--deletions`/`--rationale|--no-rationale`/
+/// `--task-link|--no-task-link`, calls the pure
+/// [`review_worthiness::score_review_worthiness`], and prints the result —
+/// hermetic, no git required, the tested contract.
+///
+/// Convenience mode (`--from-git`): all git shell-out lives HERE at the CLI
+/// boundary (never inside the pure module) and is entirely fail-soft — a
+/// missing git binary, a non-repo cwd, or an invalid ref degrades each
+/// signal to its zero/false default and this still prints a computable
+/// score, never a hard error.
+#[allow(clippy::too_many_arguments)]
+fn run_review_worthiness(
+    cwd: &Path,
+    files: u32,
+    insertions: u64,
+    deletions: u64,
+    rationale: bool,
+    task_link: bool,
+    json: bool,
+    from_git: bool,
+    base: &str,
+    head: &str,
+) -> Result<()> {
+    let inputs = if from_git {
+        gather_review_worthiness_inputs_from_git(cwd, base, head)
+    } else {
+        review_worthiness::ReviewWorthinessInputs {
+            files_changed: files,
+            insertions,
+            deletions,
+            has_rationale: rationale,
+            has_task_link: task_link,
+        }
+    };
+
+    let scored = review_worthiness::score_review_worthiness(&inputs);
+
+    if json {
+        let out = serde_json::json!({
+            "score": scored.score,
+            "drivers": scored.drivers,
+            "inputs": inputs,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("review-worthiness score: {}", scored.score);
+        if scored.drivers.is_empty() {
+            println!("(no penalty drivers)");
+        } else {
+            for d in &scored.drivers {
+                println!("  - {d}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Fail-soft `--from-git` gather: shells out to `git diff --numstat <base>
+/// <head>` (parsed by the pure [`review_worthiness::parse_numstat`]) and
+/// `git log --format=%B <base>..<head>` (split into summary/body for
+/// [`review_worthiness::has_rationale`]/[`review_worthiness::has_task_link`]).
+/// ANY git failure (not on PATH, non-zero exit, non-UTF8 output, invalid
+/// refs) degrades the corresponding signal to its zero/false default —
+/// never a hard error, mirroring `calibrated_confidence`'s soft-probe
+/// pattern.
+fn gather_review_worthiness_inputs_from_git(
+    cwd: &Path,
+    base: &str,
+    head: &str,
+) -> review_worthiness::ReviewWorthinessInputs {
+    let numstat_range = format!("{base}..{head}");
+    let numstat = std::process::Command::new("git")
+        .args(["diff", "--numstat", base, head])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let totals = review_worthiness::parse_numstat(&numstat);
+
+    let log = std::process::Command::new("git")
+        .args(["log", "--format=%B", &numstat_range])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    // `%B` is the raw commit message (summary + blank line + body) for each
+    // commit in range, concatenated. Treat the first line as the summary and
+    // everything after the first blank line as the "body" for the rationale
+    // check; the WHOLE log text (summary included) is searched for a
+    // task-link token.
+    let body: String = log
+        .split_once("\n\n")
+        .map(|(_, rest)| rest)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    review_worthiness::ReviewWorthinessInputs {
+        files_changed: totals.files_changed,
+        insertions: totals.insertions,
+        deletions: totals.deletions,
+        has_rationale: review_worthiness::has_rationale(&body),
+        has_task_link: review_worthiness::has_task_link(&log),
+    }
+}
+
+/// `condukt review-order` — the deterministic review-ORDER CLI.
+///
+/// Reads a unified diff (either `--diff-file <path>`, hermetic, or
+/// `--from-git`, a fail-soft convenience whose only git shell-out lives in
+/// [`gather_review_order_diff_from_git`]), parses it with
+/// [`review_order::parse_diff`], reads each changed file's CURRENT contents
+/// from `cwd` (fail-soft: a missing/unreadable source file simply
+/// contributes no symbols — that hunk still appears, just without
+/// dependency edges), attributes DEFINED symbols to hunks via
+/// [`harness_core::code_index::extract_symbols`] +
+/// [`review_order::hunk_containing`], builds the reference map via
+/// [`blastguard::callgraph::changed_symbol_names`] +
+/// [`blastguard::callgraph::enumerate_callers`], then runs the pure
+/// [`review_order::build_edges`] / [`review_order::order_hunks`] pipeline
+/// and prints the result.
+fn run_review_order(
+    cwd: &Path,
+    diff_file: Option<String>,
+    from_git: bool,
+    base: &str,
+    head: &str,
+    json: bool,
+) -> Result<()> {
+    let diff_text = if from_git {
+        gather_review_order_diff_from_git(cwd, base, head)
+    } else if let Some(path) = &diff_file {
+        std::fs::read_to_string(path).with_context(|| format!("reading diff file '{path}'"))?
+    } else {
+        bail!("condukt review-order: pass --diff-file PATH or --from-git");
+    };
+
+    let hunks = review_order::parse_diff(&diff_text);
+
+    // Read each changed file's CURRENT contents from cwd, fail-soft (a
+    // missing/unreadable file simply contributes no symbols for it).
+    let mut touched_files: BTreeMap<String, ()> = BTreeMap::new();
+    for h in &hunks {
+        if !h.file.is_empty() {
+            touched_files.insert(h.file.clone(), ());
+        }
+    }
+    let mut sources: Vec<(String, String)> = Vec::new();
+    for file in touched_files.keys() {
+        if let Ok(contents) = std::fs::read_to_string(cwd.join(file)) {
+            sources.push((file.clone(), contents));
+        }
+    }
+
+    // Attribute each defined symbol to the hunk whose new-side range
+    // contains its declaration line.
+    let mut defines_by_idx: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    for (file, contents) in &sources {
+        for sym in harness_core::code_index::extract_symbols(contents, file) {
+            if let Some(idx) = review_order::hunk_containing(&hunks, file, sym.line) {
+                defines_by_idx.entry(idx).or_default().push(sym.name);
+            }
+        }
+    }
+    let defines: Vec<(usize, Vec<String>)> = defines_by_idx
+        .into_iter()
+        .map(|(idx, mut names)| {
+            names.sort();
+            names.dedup();
+            (idx, names)
+        })
+        .collect();
+
+    // Build the reference map: for every symbol name changed in the diff,
+    // the (file, line) sites that reference it.
+    let changed_names = blastguard::callgraph::changed_symbol_names(&diff_text);
+    let callers = blastguard::callgraph::enumerate_callers(&changed_names, &sources);
+    let mut refs: BTreeMap<String, Vec<(String, usize)>> = BTreeMap::new();
+    for (name, sites) in callers {
+        let mut list: Vec<(String, usize)> = sites.into_iter().map(|c| (c.file, c.line)).collect();
+        list.sort();
+        list.dedup();
+        refs.insert(name, list);
+    }
+
+    let edges = review_order::build_edges(&hunks, &defines, &refs);
+    let ordered = review_order::order_hunks(&hunks, &edges, &defines);
+
+    if json {
+        let clusters = ordered.iter().map(|o| o.cluster).max().map_or(0, |m| m + 1);
+        let out = serde_json::json!({
+            "clusters": clusters,
+            "hunks": ordered,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        for o in &ordered {
+            if o.defines.is_empty() {
+                println!(
+                    "#{} [cluster {}] {}:{} ({} lines)",
+                    o.position, o.cluster, o.file, o.new_start, o.new_lines
+                );
+            } else {
+                println!(
+                    "#{} [cluster {}] {}:{} ({} lines) defines: {}",
+                    o.position,
+                    o.cluster,
+                    o.file,
+                    o.new_start,
+                    o.new_lines,
+                    o.defines.join(", ")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Fail-soft `--from-git` gather for `review-order`: shells out to `git diff
+/// <base> <head>` for the full unified diff text. ANY git failure (not on
+/// PATH, non-zero exit, non-UTF8 output, invalid refs, non-repo cwd)
+/// degrades to an empty diff string (which [`review_order::parse_diff`]
+/// turns into an empty hunk list, i.e. an empty order) — never a hard error,
+/// mirroring [`gather_review_worthiness_inputs_from_git`]'s soft-probe
+/// pattern.
+fn gather_review_order_diff_from_git(cwd: &Path, base: &str, head: &str) -> String {
+    std::process::Command::new("git")
+        .args(["diff", base, head])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
 /// `condukt escalate add|list|resolve` — the durable async escalation channel.
 /// Deterministic store I/O; fail-soft (missing/corrupt store = empty). The
 /// created-at timestamp uses wall-clock seconds (observability only; it never
@@ -1793,6 +2296,68 @@ fn run_escalate(cfg: &Config, cwd: &Path, action: EscalateAction) -> Result<()> 
                     std::process::exit(1);
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// Split a `--files`/`--symbols` comma-separated CLI flag into a `Vec<String>`,
+/// trimming whitespace and dropping empty entries (so `""`, `"a,,b"`, and
+/// `"a, b"` all behave sanely).
+fn parse_csv_list(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// `condukt precedent ratify|list|check` — the precedent store backing
+/// `review-brief`'s novelty/precedent downgrade. Deterministic store I/O;
+/// fail-soft (missing/corrupt store = empty). `ratify`'s timestamp uses the
+/// same wall-clock-seconds source as `escalate add` (observability only; the
+/// fingerprint/match logic never reads wall-clock).
+fn run_precedent(cfg: &Config, cwd: &Path, action: PrecedentAction) -> Result<()> {
+    match action {
+        PrecedentAction::Ratify {
+            files,
+            symbols,
+            note,
+        } => {
+            let files = parse_csv_list(&files);
+            let symbols = parse_csv_list(&symbols);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let rec = precedent::record_precedent(cfg, cwd, &files, &symbols, &note, now)?;
+            println!("{}", serde_json::to_string_pretty(&rec)?);
+        }
+        PrecedentAction::List { json } => {
+            let all = precedent::load_precedents(cfg, cwd);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&all)?);
+            } else if all.is_empty() {
+                println!("No ratified precedents.");
+            } else {
+                for p in &all {
+                    println!(
+                        "  {:016x}  files={:?} symbols={:?}  {}",
+                        p.fingerprint, p.files, p.symbols, p.note
+                    );
+                }
+            }
+        }
+        PrecedentAction::Check {
+            files,
+            symbols,
+            tolerance,
+        } => {
+            let files = parse_csv_list(&files);
+            let symbols = parse_csv_list(&symbols);
+            let tolerance = tolerance.unwrap_or(DEFAULT_PRECEDENT_TOLERANCE);
+            let all = precedent::load_precedents(cfg, cwd);
+            let m = precedent::match_precedent(&files, &symbols, &all, tolerance);
+            println!("{}", serde_json::to_string_pretty(&m)?);
         }
     }
     Ok(())

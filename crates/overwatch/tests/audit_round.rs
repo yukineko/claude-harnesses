@@ -148,6 +148,110 @@ fn audit_metrics_reports_decreasing_trend_and_closure_rate() {
 }
 
 #[test]
+fn same_finder_verifier_model_records_warning_finding_in_review_queue() {
+    // finder==verifier is a MUST violation (shared blind spot). Recording a
+    // round with the SAME finder/verifier model must deterministically surface a
+    // high-severity warning finding in the review queue (fail-soft: the round is
+    // still recorded, the loop is never broken).
+    let (home, work) = make_sandbox("same-model");
+
+    let out = run_ow(
+        &home,
+        &work,
+        &[
+            "audit-round",
+            "record",
+            "--round",
+            "2026W30",
+            "--target",
+            "specguard",
+            "--new-findings",
+            "1",
+            "--confirmed",
+            "1",
+            "--regression-tests-added",
+            "1",
+            "--finder-model",
+            "claude-3-5-sonnet",
+            "--verifier-model",
+            "claude-3-5-sonnet",
+        ],
+    );
+    // The round itself is still recorded (never-break-a-turn).
+    let rec: Value = serde_json::from_str(out.lines().next().unwrap_or("{}"))
+        .expect("audit-round record emits JSON");
+    assert_eq!(rec["recorded"], true, "the round must still be recorded");
+
+    // And a model-collision warning finding surfaces in the review queue.
+    let stdout = run_ow(&home, &work, &["review-queue", "--json"]);
+    let arr: Value = serde_json::from_str(&stdout).expect("review-queue --json parseable");
+    let rows = arr.as_array().expect("review-queue is an array");
+    let finding_row = rows
+        .iter()
+        .find(|r| {
+            r["kind"] == "ai-finding" && r["identifier"] == "audit-round-model-collision-2026W30"
+        })
+        .expect("a model-collision warning finding must appear in the review queue");
+    let summary = finding_row["summary"].as_str().unwrap();
+    assert!(
+        summary.contains("[high]"),
+        "model collision is high severity (review-queue prefixes [high]): {finding_row:?}"
+    );
+    assert!(
+        summary.contains("MUST"),
+        "finding summary should name the MUST violation: {finding_row:?}"
+    );
+}
+
+#[test]
+fn distinct_finder_verifier_model_records_no_collision_finding() {
+    // Distinct finder/verifier models satisfy the diversity MUST => NO warning
+    // finding. Backward-compat: omitting both model args also records nothing.
+    let (home, work) = make_sandbox("distinct-model");
+
+    run_ow(
+        &home,
+        &work,
+        &[
+            "audit-round",
+            "record",
+            "--round",
+            "2026W31",
+            "--target",
+            "specguard",
+            "--finder-model",
+            "claude-3-5-sonnet",
+            "--verifier-model",
+            "claude-3-5-opus",
+        ],
+    );
+    // A second round with NO model args at all (backward compatible).
+    run_ow(
+        &home,
+        &work,
+        &[
+            "audit-round",
+            "record",
+            "--round",
+            "2026W32",
+            "--target",
+            "specguard",
+        ],
+    );
+
+    let stdout = run_ow(&home, &work, &["review-queue", "--json"]);
+    let arr: Value = serde_json::from_str(&stdout).expect("review-queue --json parseable");
+    let rows = arr.as_array().expect("review-queue is an array");
+    assert!(
+        !rows.iter().any(|r| r["kind"] == "ai-finding"
+            && r["identifier"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("audit-round-model-collision-"))),
+        "distinct/omitted models must NOT record a collision finding: {rows:?}"
+    );
+}
+
+#[test]
 fn confirmed_finding_recorded_by_audit_loop_surfaces_in_review_queue() {
     // The other deterministic write path of a round: recording a CONFIRMED
     // finding. It must land in the findings store and surface in review-queue.

@@ -62,6 +62,36 @@ const POLARITY_TOKENS: &[(&str, &str)] = &[
     ("none", "none"),
     ("unless", "unless"),
     ("without", "without"),
+    // Apostrophe-FREE negation contractions. The apostrophe forms (`can't`,
+    // `isn't`, …) are handled upstream by `expand_negations` (they tokenize to
+    // stem+`t` and must be rewritten before tokenizing); but the same word typed
+    // WITHOUT an apostrophe (`cant`, `isnt`, …) tokenizes whole and would drop the
+    // negation entirely. These are WHOLE-TOKEN table entries — never substring
+    // rewrites — so a word merely containing the letters (`significant`, `wonton`,
+    // `vacant`, `decant`) is never mis-read as a negation. `cant`/`wont` are real
+    // English words in the general case, but in an authorization-inversion detector
+    // treating them as negations (a rare benign use is merely routed to a human) is
+    // the safe bias vs. auto-ratifying an inverted policy. All map to the `not`
+    // bucket (neg axis).
+    ("cant", "not"),
+    ("wont", "not"),
+    ("dont", "not"),
+    ("doesnt", "not"),
+    ("didnt", "not"),
+    ("isnt", "not"),
+    ("arent", "not"),
+    ("wasnt", "not"),
+    ("werent", "not"),
+    ("hasnt", "not"),
+    ("havent", "not"),
+    ("hadnt", "not"),
+    ("shouldnt", "not"),
+    ("wouldnt", "not"),
+    ("couldnt", "not"),
+    ("mustnt", "not"),
+    ("neednt", "not"),
+    ("shant", "not"),
+    ("aint", "not"),
     // Authorization verbs: allow-axis (allow vs deny).
     ("allow", "allow"),
     ("allowed", "allow"),
@@ -191,11 +221,34 @@ const POLARITY_AXES: &[(&str, &str)] = &[
 /// human … must" — different axes, one bucket each) still compares equal.
 /// Within-bucket synonym substitutions collapse to the same bucket (via
 /// [`POLARITY_TOKENS`]) and remain invisible, exactly as before.
+/// Expand English negation contractions so the negation survives tokenization on
+/// the **polarity path only** (the lexical shingle path is deliberately left
+/// untouched). [`tokens`] splits on every non-alphanumeric char, so `can't`
+/// tokenizes to `can` + `t` and `cannot` to a single unknown word — in both cases
+/// the negation vanishes and a polarity-inverting edit ("… is allowed" → "…
+/// isn't allowed", "… can override" → "… cannot override") auto-ratified past the
+/// human (CA-specguard-01). Rewrite `cannot` → `can not` and the `n't` suffix →
+/// ` not` so the existing `not` polarity token surfaces. Deterministic, allocation-
+/// only, no stemmer/lexicon — same finite-literal discipline as [`POLARITY_TOKENS`].
+/// Bare apostrophe-free spellings (`cant`, `wont`) are intentionally NOT expanded:
+/// they are ambiguous real words (a `wont` habit, insincere `cant`) and expanding
+/// them would risk false polarity flips against specguard's no-false-positive bias.
+fn expand_negations(s: &str) -> String {
+    s.to_lowercase()
+        // Fold curly/modifier/fullwidth apostrophes to ASCII so a smart-quoted
+        // `can't` (U+2019/U+02BC/U+2032/U+FF07, common in copy-pasted canon prose)
+        // expands the same as ASCII `can't`; otherwise it splits on the
+        // non-alphanumeric quote and the negation bypasses.
+        .replace(['\u{2019}', '\u{02BC}', '\u{2032}', '\u{FF07}'], "'")
+        .replace("cannot", "can not")
+        .replace("n't", " not")
+}
+
 fn polarity_signature(s: &str) -> BTreeMap<&'static str, Vec<&'static str>> {
     let bucket_of: BTreeMap<&'static str, &'static str> = POLARITY_TOKENS.iter().copied().collect();
     let axis_of: BTreeMap<&'static str, &'static str> = POLARITY_AXES.iter().copied().collect();
     let mut sig: BTreeMap<&'static str, Vec<&'static str>> = BTreeMap::new();
-    for tok in tokens(s) {
+    for tok in tokens(&expand_negations(s)) {
         if let Some(&bucket) = bucket_of.get(tok.as_str()) {
             let axis = axis_of.get(bucket).copied().unwrap_or(bucket);
             sig.entry(axis).or_default().push(bucket);
@@ -216,39 +269,56 @@ const OBJECT_STOPWORDS: &[&str] = &[
     "then", "so", "which", "who", "whom", "whose", "before", "after", "while", "during",
 ];
 
-/// For each polarity token in `s`, bind its canonical *bucket* to the **object
-/// head** it governs — the nearest following content token, skipping other
-/// polarity tokens and [`OBJECT_STOPWORDS`]. Returns `head -> {bucket -> count}`
-/// (deterministic `BTreeMap`s, seed-free, allocation-order-independent).
+/// For each polarity token in `s`, bind its canonical *bucket* to the local
+/// content tokens it governs — BOTH the **object head** after it (the nearest
+/// following content token) AND the **subject head** before it (the nearest
+/// preceding content token), each skipping other polarity tokens and
+/// [`OBJECT_STOPWORDS`]. Returns `head -> {bucket -> count}` (deterministic
+/// `BTreeMap`s, seed-free, allocation-order-independent).
 ///
-/// This closes the cross-clause / object-swap bypass the per-axis
-/// [`polarity_signature`] alone cannot see (re-review finding 1): the per-axis
-/// signature records only *that* an axis carries, say, an `allow` and a `deny` in
-/// some order — never *which object* each pole governs. Swapping the two object
-/// phrases between two same-axis clauses ("allow X … deny Y" → "allow Y … deny
-/// X"), or trading a single-occurrence token across two different axes, leaves
-/// every axis sequence unchanged yet inverts which thing is allowed vs denied.
-/// Keying each pole on the content token it governs makes that reattachment
-/// visible. It stays reflow-tolerant: an ordinary reword that changes the object
-/// word entirely simply yields a *different* head — and heads are compared only
-/// when the SAME head appears in both texts (see [`polarity_preserved`]) — so a
-/// benign edit is not flagged, while a preserved object phrase re-bound to the
-/// opposite pole is.
+/// This closes two bypasses the per-axis [`polarity_signature`] alone cannot see:
+///
+///  - **Object-swap** (re-review finding 1): the per-axis signature records only
+///    *that* an axis carries, say, an `allow` and a `deny` in some order — never
+///    *which object* each pole governs. Swapping the two object phrases between
+///    two same-axis clauses ("allow X … deny Y" → "allow Y … deny X"), or trading
+///    a single-occurrence token across two different axes, leaves every axis
+///    sequence unchanged yet inverts which thing is allowed vs denied. The forward
+///    object head makes that reattachment visible.
+///  - **Subject-swap** (CA-specguard-01): binding only the *forward* object head
+///    is blind to a pure SUBJECT swap — exchanging only the two clause subjects
+///    ("routine change *requires* …" / "substantive rewrite is *forbidden*" →
+///    "substantive rewrite *requires* …" / "routine change is *forbidden*") leaves
+///    every verb and every post-verb object untouched, so both the per-axis
+///    sequence and the forward bindings are unchanged while the authorization is
+///    inverted. Binding each pole to its *subject head* too makes the swapped
+///    subject re-attach to the opposite pole, tripping the guard.
+///
+/// It stays reflow-tolerant: an ordinary reword that changes the surrounding words
+/// entirely simply yields *different* heads — and heads are compared only when the
+/// SAME head appears in both texts (see [`polarity_preserved`]) — so a benign edit
+/// is not flagged, while a preserved subject/object phrase re-bound to the opposite
+/// pole is.
 fn object_bindings(s: &str) -> BTreeMap<String, BTreeMap<&'static str, usize>> {
     let bucket_of: BTreeMap<&'static str, &'static str> = POLARITY_TOKENS.iter().copied().collect();
     let stop: BTreeSet<&'static str> = OBJECT_STOPWORDS.iter().copied().collect();
-    let toks = tokens(s);
+    // A content head is any token that is neither a polarity token nor a function
+    // word — the noun a pole actually modifies (as object) or is governed by (as
+    // subject).
+    let is_head = |t: &str| !bucket_of.contains_key(t) && !stop.contains(t);
+    let toks = tokens(&expand_negations(s));
     let mut out: BTreeMap<String, BTreeMap<&'static str, usize>> = BTreeMap::new();
     for (i, tok) in toks.iter().enumerate() {
         let Some(&bucket) = bucket_of.get(tok.as_str()) else {
             continue;
         };
-        // The object head: the first following token that is neither a polarity
-        // token nor a function word — the noun the pole actually modifies.
-        if let Some(head) = toks[i + 1..]
-            .iter()
-            .find(|t| !bucket_of.contains_key(t.as_str()) && !stop.contains(t.as_str()))
-        {
+        // Object head: the nearest FOLLOWING content token (the noun the pole
+        // modifies). Subject head: the nearest PRECEDING content token (the clause
+        // subject the pole governs). Binding both closes the pure subject-swap
+        // bypass (CA-specguard-01) as well as the forward object-swap bypass.
+        let forward = toks[i + 1..].iter().find(|t| is_head(t.as_str()));
+        let backward = toks[..i].iter().rev().find(|t| is_head(t.as_str()));
+        for head in [forward, backward].into_iter().flatten() {
             *out.entry(head.clone())
                 .or_default()
                 .entry(bucket)
@@ -266,11 +336,12 @@ fn object_bindings(s: &str) -> BTreeMap<String, BTreeMap<&'static str, usize>> {
 /// Two independent checks, either failing forces `false`:
 ///  1. **per-axis signature** ([`polarity_signature`]) — catches an added,
 ///     removed or synonym-swapped pole and a same-axis pole reordering.
-///  2. **object bindings** ([`object_bindings`]) — catches a cross-clause object
-///     swap or a cross-axis single-occurrence swap that leaves every axis
-///     sequence unchanged but reattaches a governed object to the opposite pole
-///     (re-review finding 1). Only a head present in BOTH texts with a differing
-///     bucket multiset trips it, so a benign reword is tolerated.
+///  2. **object/subject bindings** ([`object_bindings`]) — catches a cross-clause
+///     object swap, a cross-axis single-occurrence swap, or a pure SUBJECT swap
+///     that leaves every axis sequence unchanged but reattaches a governed
+///     subject/object to the opposite pole (re-review finding 1 / CA-specguard-01).
+///     Only a head present in BOTH texts with a differing bucket multiset trips it,
+///     so a benign reword is tolerated.
 pub fn polarity_preserved(a: &str, b: &str) -> bool {
     if polarity_signature(a) != polarity_signature(b) {
         return false;
@@ -907,6 +978,62 @@ mod tests {
         ));
     }
 
+    /// CA-specguard-01 (round 2026W28, FIXED): a contracted negation flips the
+    /// authorization but the apostrophe-splitting tokenizer drops it — `can't`
+    /// tokenizes to `can`+`t`, `cannot` to a single unknown token — so the
+    /// negation never reached POLARITY_TOKENS and the inverted policy auto-
+    /// ratified without a human. Contractions are now expanded before the
+    /// polarity path so the `not` pole surfaces.
+    #[test]
+    fn contracted_negation_flip_detected() {
+        // `cannot` (no apostrophe): adds a negation the original lacked.
+        assert!(!polarity_preserved(
+            "reviewers can override the auto gate",
+            "reviewers cannot override the auto gate"
+        ));
+        // `isn't` -> "is not": inverts an allow into a deny.
+        assert!(!polarity_preserved(
+            "auto approval is allowed for routine edits",
+            "auto approval isn't allowed for routine edits"
+        ));
+        // `won't` / `doesn't`: same negation, different contraction spellings.
+        assert!(!polarity_preserved(
+            "the gate will auto approve the change",
+            "the gate won't auto approve the change"
+        ));
+        // Smart/curly apostrophe (U+2019) must expand the same as ASCII `'`.
+        assert!(!polarity_preserved(
+            "auto approval is allowed for routine edits",
+            "auto approval isn\u{2019}t allowed for routine edits"
+        ));
+        // Apostrophe-FREE contraction spellings (isnt/wont/cant/doesnt) — a
+        // one-character omission a sloppy or adversarial editor produces — must
+        // also flip. For an authorization-inversion detector, treating these as
+        // negations (a rare benign "wont"/"cant" is merely routed to a human) is
+        // the safe bias vs. auto-ratifying an inverted policy.
+        assert!(!polarity_preserved(
+            "reviewers can override the auto gate",
+            "reviewers cant override the auto gate"
+        ));
+        assert!(!polarity_preserved(
+            "the gate will auto approve the change",
+            "the gate wont auto approve the change"
+        ));
+        assert!(!polarity_preserved(
+            "auto approval is allowed for routine edits",
+            "auto approval isnt allowed for routine edits"
+        ));
+        // Substring safety: "significant" contains "cant" but is a whole word, so
+        // the whole-token table lookup must NOT register a spurious negation.
+        assert!(!polarity_signature("this significant change is approved").contains_key("neg"));
+        // Control: identical text with a contraction stays preserved (no spurious
+        // flip introduced by the expansion).
+        assert!(polarity_preserved(
+            "the agent cannot deploy without approval",
+            "the agent cannot deploy without approval"
+        ));
+    }
+
     /// Re-review regression (2026-07-10, FIXED): the per-axis ordered
     /// signature ([`POLARITY_AXES`]) binds a polarity token to its *axis and
     /// position within that axis*, but never to the clause/object it actually
@@ -1024,6 +1151,67 @@ mod tests {
             triage(&flipped, &corpus, THRESHOLD),
             Verdict::Novel,
             "cross-axis swap must route to a human (Novel) despite similarity {sim}"
+        );
+    }
+
+    /// Regression for CA-specguard-01 (the pure SUBJECT-swap bypass):
+    /// [`object_bindings`] previously bound each polarity token only to the object
+    /// head AFTER the verb (`toks[i+1..]`), never to the clause SUBJECT before it.
+    /// Swapping ONLY the two clause subjects between two clauses — leaving every
+    /// verb and all post-verb text untouched — inverts the authorization while
+    /// leaving the per-axis signature AND the forward object bindings identical.
+    /// The Phase-1 backstop does NOT fire (authz=1, route=0), so this auto-ratified
+    /// a reversed policy. Binding each pole to its subject head as well makes the
+    /// swap visible, routing it to a human. See CA-specguard-01.
+    #[test]
+    fn zzz_adversarial_probe_subject_phrase_swap_routes_to_human() {
+        const THRESHOLD: f64 = 0.85;
+
+        // Two clauses sharing the same tail context; only the SUBJECT distinguishes
+        // them. Clause A: the routine formatting change *requires* paperwork
+        // (lenient). Clause B: the substantive rewrite is *forbidden* (strict).
+        let ratified = "when the graded ratification gate evaluates a drifted meta canon \
+                        template during a fully gated production release run the ratification \
+                        policy states plainly that the routine formatting change will require \
+                        a second explicit paper record from the release captain before \
+                        merging into the pinned meta canon corpus and the policy separately \
+                        states that the substantive semantic rewrite will forbid the \
+                        unreviewed direct merge into that same pinned meta canon corpus \
+                        under the current threshold for this whole release";
+        // Swap ONLY the two clause subjects ("routine formatting change" <->
+        // "substantive semantic rewrite"); both verbs ("require", "forbid") and all
+        // post-verb text stay exactly where they were. Now the substantive rewrite
+        // merely REQUIRES paperwork (lenient) while the routine change is FORBIDDEN
+        // -- a dangerous authorization inversion -- yet each axis's token sequence
+        // (modal=[require], authz=[forbid]) and every forward object head is
+        // unchanged.
+        let flipped = ratified
+            .replace(
+                "the routine formatting change will require",
+                "the substantive semantic rewrite will require",
+            )
+            .replace(
+                "the substantive semantic rewrite will forbid",
+                "the routine formatting change will forbid",
+            );
+        let corpus = vec![ratified.to_string()];
+
+        let sim = best_similarity(&flipped, &corpus);
+        assert!(
+            sim >= THRESHOLD,
+            "expected a high (>= {THRESHOLD}) lexical similarity that WOULD have \
+             auto-ratified, got {sim}"
+        );
+        // The subject swap must perturb the polarity bindings even though each
+        // axis's token sequence and every forward object head is unchanged.
+        assert!(
+            !polarity_preserved(ratified, &flipped),
+            "the subject-phrase swap must perturb the polarity signature/bindings"
+        );
+        assert_eq!(
+            triage(&flipped, &corpus, THRESHOLD),
+            Verdict::Novel,
+            "subject-phrase swap must route to a human (Novel) despite similarity {sim}"
         );
     }
 

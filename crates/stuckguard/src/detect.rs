@@ -45,17 +45,23 @@ pub fn detect(window: &[Event], cfg: &Config) -> Option<Trip> {
 }
 
 /// Jaccard similarity of two token sets: `|A ∩ B| / |A ∪ B|`, in `[0, 1]`.
-/// Two empty sets are defined as fully similar (`1.0`) — mirrors "both sigs
-/// are the same trivial/empty body".
+/// Two empty sets are defined as NOT similar (`0.0`), not fully similar. A
+/// byte-identical trivial/empty body is already caught upstream by
+/// `is_repeat_of`'s `e.sig == cur.sig` short-circuit *before* `jaccard` is
+/// ever called, so by the time both token bags reach here empty, `sig` is
+/// already known to differ — i.e. these are two genuinely DIFFERENT actions
+/// (e.g. a Read with an empty `file_path` vs. one with a whitespace-only
+/// `file_path`) that merely both tokenize to nothing. Treating that as a
+/// perfect match (CA-stuckguard-02) produced spurious near-repeat nudges for
+/// non-normalizing tools like Read/Grep/Glob whenever their body tokenized
+/// empty; `0.0` (undefined overlap ⇒ no evidence of similarity) keeps real
+/// repeat detection for normal, non-empty bodies untouched.
 fn jaccard(a: &std::collections::BTreeSet<String>, b: &std::collections::BTreeSet<String>) -> f64 {
-    if a.is_empty() && b.is_empty() {
-        return 1.0;
-    }
-    let intersection = a.intersection(b).count();
     let union = a.union(b).count();
     if union == 0 {
         0.0
     } else {
+        let intersection = a.intersection(b).count();
         intersection as f64 / union as f64
     }
 }
@@ -76,28 +82,6 @@ fn is_repeat_of(e: &Event, cur: &Event, cfg: &Config) -> bool {
         return false;
     }
     e.tool == cur.tool && jaccard(&e.tokens, &cur.tokens) >= cfg.similarity_threshold
-}
-
-/// The shared token *core* of a matched near-repeat cluster: the intersection of
-/// every member's token bag, sorted (a `BTreeSet` iterates in order) for a
-/// deterministic, allocation-order-independent key. Volatile per-instance tokens
-/// (the parts that differ between near-repeat calls) fall out of the
-/// intersection, leaving only the stable family signature — so the key does not
-/// change as specific instances rotate through the bounded window. Empty when the
-/// members share no token (a fully drifting family) or when `same` is empty.
-fn cluster_core(same: &[&Event]) -> Vec<String> {
-    let mut iter = same.iter();
-    let Some(first) = iter.next() else {
-        return Vec::new();
-    };
-    let mut core: std::collections::BTreeSet<String> = first.tokens.clone();
-    for e in iter {
-        core = core.intersection(&e.tokens).cloned().collect();
-        if core.is_empty() {
-            break;
-        }
-    }
-    core.into_iter().collect()
 }
 
 fn repeat(window: &[Event], cur: &Event, cfg: &Config) -> Option<Trip> {
@@ -124,36 +108,27 @@ fn repeat(window: &[Event], cur: &Event, cfg: &Config) -> Option<Trip> {
     } else {
         None
     };
-    // Stable cluster key — must survive sliding-window eviction.
-    //
-    // Exact-repeat mode (`similarity_threshold >= 1.0`): every member of `same`
-    // shares the identical `sig`, so key on `cur.sig` (unique per pattern, stable
-    // for the whole loop). This preserves the historical `repeat:{sig}` behavior.
-    //
-    // Near-repeat mode (`similarity_threshold < 1.0`): the matched events are (by
-    // construction) never byte-identical, so `cur.sig` differs every call.
-    // Keying on the oldest matched member's sig (`same.first()`, the earlier
-    // finding-5 fix) only stayed stable while that anchor remained inside the
-    // bounded window: once a near-repeat loop runs longer than `cfg.window` — the
-    // very "stuck loop" stuckguard exists to catch — `SessionState::push` evicts
-    // the anchor, `same.first()` rolls to a new event, and `record_nudge` resets
-    // the per-key count to 1 so `escalate_after` is never reached (re-review
-    // finding 3). Key instead on the cluster's shared token *core* — the
-    // intersection of the matched events' token bags — which is invariant to
-    // which specific near-repeat instances currently populate the window (the
-    // volatile per-instance tokens fall out of the intersection), so the count
-    // accumulates across the whole loop.
+    // Cooldown / message-dedup key ONLY. Escalation is no longer driven by
+    // this key's nudge count — a bounded sliding-window content key
+    // necessarily drifts with the window (CA-stuckguard-01 re-review): a wide
+    // edited body's shared token core never stabilizes, so a `core:`-style key
+    // churns every call and never escalates; a `tool:` fallback stops churning
+    // but then pools temporally-separated same-tool incidents into one
+    // never-resetting counter. Escalation therefore comes from a persistent
+    // consecutive-trip STREAK held in `SessionState` (see
+    // `state::SessionState::record_repeat_run` and the `watch()` caller). This
+    // key only needs to be stable enough for short-term cooldown suppression:
+    //   - exact-repeat mode (`similarity_threshold >= 1.0`): every member of
+    //     `same` shares the identical `sig`, so key on `cur.sig` (the historical
+    //     `repeat:{sig}` behavior).
+    //   - near-repeat mode: near-repeat sigs differ every call, so a sig key
+    //     would defeat cooldown entirely — key on the tool, which groups the
+    //     near-repeat family for cooldown purposes without needing to be
+    //     window-invariant.
     let key_sig = if cfg.similarity_threshold >= 1.0 {
         format!("sig:{}", cur.sig)
     } else {
-        let core = cluster_core(&same);
-        if core.is_empty() {
-            // No shared token core (a drifting family): fall back to the tool so
-            // the key is at least stable per-tool rather than empty/colliding.
-            format!("tool:{}", cur.tool)
-        } else {
-            format!("core:{}", core.join(" "))
-        }
+        format!("tool:{}", cur.tool)
     };
     Some(Trip {
         key: format!("repeat:{key_sig}"),
@@ -379,6 +354,43 @@ mod tests {
         );
     }
 
+    /// CA-stuckguard-02 (p2 — jaccard empty-set degenerate near-repeat): the
+    /// `jaccard` "both empty -> 1.0" special case treats two DIFFERENT
+    /// signatures as a perfect near-repeat match whenever both tokenize to an
+    /// empty bag (e.g. Read with an empty vs. whitespace-only `file_path`).
+    /// The genuinely-identical-trivial-body case is already covered by
+    /// `is_repeat_of`'s `e.sig == cur.sig` short-circuit *before* jaccard is
+    /// even consulted, so by the time jaccard's empty/empty branch is
+    /// reached, `sig` is already known to differ — i.e. these are two
+    /// distinct actions that both happen to tokenize to nothing, not "the
+    /// same trivial body" the comment claimed. Before the fix this test
+    /// fails (RED): two different empty-token Read calls falsely count as a
+    /// near-repeat.
+    #[test]
+    fn empty_token_bodies_with_different_sig_are_not_near_repeats() {
+        let mut c = cfg();
+        c.similarity_threshold = 0.5;
+
+        let a = ev(0, "Read", json!({"file_path": ""}));
+        let b = ev(1, "Read", json!({"file_path": "\t"}));
+        assert_ne!(a.sig, b.sig, "sanity: bodies must differ");
+        assert!(a.tokens.is_empty(), "sanity: a tokenizes to empty");
+        assert!(b.tokens.is_empty(), "sanity: b tokenizes to empty");
+
+        assert!(
+            !is_repeat_of(&a, &b, &c),
+            "two different empty-token Read calls must not be treated as a near-repeat"
+        );
+
+        // Real repeat detection for normal (non-empty) bodies must be untouched.
+        let x = ev(2, "Bash", json!({"command": "cargo test foo"}));
+        let y = ev(3, "Bash", json!({"command": "cargo test foo"}));
+        assert!(
+            is_repeat_of(&x, &y, &c),
+            "identical non-empty bodies must still count as a repeat"
+        );
+    }
+
     #[test]
     fn near_repeat_not_detected_below_threshold() {
         // Same tool, but token overlap is low (mostly disjoint commands).
@@ -448,19 +460,35 @@ mod tests {
         assert!(detect(&near_w, &c).is_none());
     }
 
-    /// finding 5: `Trip::key` used to be `format!("repeat:{}", cur.sig)` — the
-    /// signature of the JUST-recorded event. Near-repeat matches are (by
-    /// definition, since `similarity_threshold < 1.0`) never byte-identical,
-    /// so `cur.sig` is different on every single call. Because
-    /// `record_nudge` keys its per-pattern counter off `Trip::key`, that made
-    /// the counter reset to 1 on every call — `escalate_after` could never be
-    /// reached for a near-repeat pattern. This drives a realistic sequence
-    /// of near-repeat (never byte-identical) events through the same
-    /// detect()+record_nudge() loop `watch()` uses and asserts the nudge
-    /// count actually climbs to `escalate_after` (i.e. escalation actually
-    /// fires) instead of staying pinned at 1 forever. Before the finding-5
-    /// fix this test fails (RED): the count would be 1 after every trip and
-    /// `escalated` would never become true.
+    /// Mirror the escalation-counter half of `watch()`: for `Kind::Repeat`
+    /// the counter is the persistent consecutive-trip STREAK (advanced on
+    /// every trip, independent of cooldown); for `Kind::Oscillation` it's the
+    /// `record_nudge` count. Returns `None` when the trip is in cooldown (no
+    /// message would be emitted this call). This keeps the escalation tests in
+    /// lockstep with the real `watch()` dispatch.
+    fn drive_escalation(
+        st: &mut crate::state::SessionState,
+        t: &Trip,
+        seq: u64,
+        cfg: &Config,
+    ) -> Option<u32> {
+        let repeat_streak = match t.kind {
+            Kind::Repeat => Some(st.record_repeat_run(seq)),
+            Kind::Oscillation => None,
+        };
+        if st.in_cooldown(&t.key, seq, cfg.cooldown_events) {
+            return None;
+        }
+        let nudge = st.record_nudge(&t.key, seq);
+        Some(repeat_streak.unwrap_or(nudge))
+    }
+
+    /// A run of near-repeat (never byte-identical) events must escalate once
+    /// the consecutive-trip streak reaches `escalate_after`. Escalation is
+    /// driven by the persistent streak (`record_repeat_run`), not by any
+    /// `Trip::key` nudge count — the historical finding-5 bug (keying on the
+    /// churning `cur.sig`) can't recur because the streak is independent of the
+    /// key entirely.
     #[test]
     fn near_repeat_escalates_after_repeated_nudges() {
         let mut c = cfg();
@@ -480,26 +508,13 @@ mod tests {
 
         let mut escalated = false;
         let mut last_count = 0u32;
-        let mut last_key: Option<String> = None;
         for (i, cmd) in cmds.iter().enumerate() {
             let e = ev(i as u64, "Bash", json!({"command": cmd}));
             let seq = st.push(e, c.window);
             if let Some(t) = detect(&st.events, &c) {
-                if let Some(prev_key) = &last_key {
-                    // Once the cluster has formed, the key must stay STABLE
-                    // across calls — this is exactly what the finding-5 fix
-                    // provides (and what `cur.sig`-keying broke).
-                    if t.count >= c.repeat_threshold && last_count > 0 {
-                        assert_eq!(
-                            &t.key, prev_key,
-                            "near-repeat cluster key must stay stable across calls once formed"
-                        );
-                    }
-                }
-                last_key = Some(t.key.clone());
-                if !st.in_cooldown(&t.key, seq, c.cooldown_events) {
-                    last_count = st.record_nudge(&t.key, seq);
-                    if last_count >= c.escalate_after {
+                if let Some(count) = drive_escalation(&mut st, &t, seq, &c) {
+                    last_count = count;
+                    if count >= c.escalate_after {
                         escalated = true;
                     }
                 }
@@ -508,36 +523,30 @@ mod tests {
 
         assert!(
             escalated,
-            "near-repeat pattern must eventually escalate (nudge count reaching \
-             escalate_after={}); last observed count={last_count} — finding 5 regression \
-             would keep this pinned at 1 forever",
+            "near-repeat pattern must eventually escalate (streak reaching \
+             escalate_after={}); last observed count={last_count}",
             c.escalate_after
         );
     }
 
-    /// Re-review regression (2026-07-10, FIXED): the finding-5 fix only kept
-    /// `Trip::key` stable while its anchor event (`same.first()`) remained
-    /// inside the bounded sliding window (`cfg.window`, default 12 — eviction in
-    /// `SessionState::push`). Once a near-repeat sequence ran longer than the
-    /// window — the primary "stuck loop" scenario stuckguard exists to catch —
-    /// each push evicted the anchor, `same.first()` rolled forward every call,
-    /// and the nudge count reset to 1, reproducing the original finding-5 bug
-    /// for the tail of any long-running loop. The max nudge count reachable
-    /// within one window is `window - repeat_threshold + 1` (10 at shipped
-    /// defaults); this test sets `escalate_after` one above that ceiling and
-    /// drives the loop for 30 calls (well past the window) to prove escalation
-    /// fires. `Trip::key` now keys on the cluster's window-invariant shared token
-    /// core ([`cluster_core`]) instead of an evictable anchor. See
-    /// docs/review-redesign-implementation-items.md, re-review finding 3.
+    /// Re-review regression (CA-stuckguard-01, FIXED via streak): a near-repeat
+    /// stuck loop that runs FAR longer than the sliding window (`cfg.window`,
+    /// default 12) must still escalate. Any window-content key drifts as events
+    /// are evicted, so no key-derived nudge count can be trusted to climb across
+    /// the window boundary; the persistent consecutive-trip streak
+    /// (`record_repeat_run`) is window-invariant by construction. This sets
+    /// `escalate_after` far above the single-window ceiling
+    /// (`window - repeat_threshold + 1`) and drives 30 calls to prove the streak
+    /// keeps climbing past eviction.
     #[test]
     fn near_repeat_escalates_even_past_window_boundary() {
         let mut c = cfg();
         c.similarity_threshold = 0.6;
         c.repeat_threshold = 3;
         c.cooldown_events = 0;
-        // One above the max nudge count reachable within a single window
+        // Far above the max count reachable from within a single window
         // (window - repeat_threshold + 1 = 12 - 3 + 1 = 10): escalation can
-        // only fire here if the key survives window eviction.
+        // only fire here if the counter survives window eviction.
         c.escalate_after = 11;
 
         let mut st = crate::state::SessionState::default();
@@ -550,9 +559,9 @@ mod tests {
             let e = ev(i, "Bash", json!({"command": cmd}));
             let seq = st.push(e, c.window);
             if let Some(t) = detect(&st.events, &c) {
-                if !st.in_cooldown(&t.key, seq, c.cooldown_events) {
-                    last_count = st.record_nudge(&t.key, seq);
-                    if last_count >= c.escalate_after {
+                if let Some(count) = drive_escalation(&mut st, &t, seq, &c) {
+                    last_count = count;
+                    if count >= c.escalate_after {
                         escalated = true;
                     }
                 }
@@ -563,10 +572,156 @@ mod tests {
             escalated,
             "a near-repeat pattern that persists for 30 calls (well past the \
              window={} boundary) must eventually escalate; last observed \
-             count={last_count} -- the anchor-eviction regression keeps \
-             resetting the nudge count before escalate_after={} is ever \
-             reached",
+             count={last_count} -- escalate_after={} is only reachable if the \
+             streak survives window eviction",
             c.window, c.escalate_after
+        );
+    }
+
+    /// CA-stuckguard-01 (p1, HIGH — escalation fail-open): a family of
+    /// DRIFTING near-repeats where each action is highly similar to its
+    /// immediate neighbor but drifts far enough over several steps that it is
+    /// no longer similar to an action from many steps back — so the window has
+    /// no single stable shared token core. Any content-derived key therefore
+    /// churns and never escalates; the persistent streak does. Each event here
+    /// is 4 sliding-window tokens (`tokN tokN+1 tokN+2 tokN+3`); adjacent steps
+    /// share 3 of 4 tokens (jaccard 0.6), 2-apart share 2 of 4 (jaccard 0.333)
+    /// — both above the 0.3 threshold, so `is_repeat_of` trips every step — but
+    /// nothing is shared across the whole run.
+    #[test]
+    fn drifting_near_repeat_family_still_escalates() {
+        let mut c = cfg();
+        c.similarity_threshold = 0.3;
+        c.repeat_threshold = 3;
+        c.escalate_after = 5;
+        c.cooldown_events = 0;
+
+        let mut st = crate::state::SessionState::default();
+        let mut escalated = false;
+        let mut last_count = 0u32;
+        for i in 0..20u64 {
+            let cmd = format!("tok{i} tok{} tok{} tok{}", i + 1, i + 2, i + 3);
+            let e = ev(i, "Bash", json!({"command": cmd}));
+            let seq = st.push(e, c.window);
+            if let Some(t) = detect(&st.events, &c) {
+                if let Some(count) = drive_escalation(&mut st, &t, seq, &c) {
+                    last_count = count;
+                    if count >= c.escalate_after {
+                        escalated = true;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            escalated,
+            "a drifting near-repeat family (each step similar to its neighbor \
+             but not to distant steps) must eventually escalate; last observed \
+             count={last_count} -- escalate_after={} unreachable if escalation \
+             is keyed on drifting window content instead of the streak",
+            c.escalate_after
+        );
+    }
+
+    /// CA-stuckguard-01 re-review, Finding 1 (critical residual fail-open): a
+    /// WIDE near-repeat body (token width >= `cfg.window`) that drifts one
+    /// token per step. Its shared-token intersection across the window never
+    /// EMPTIES — it just shifts — so a `core:`-style content key churns every
+    /// call and never triggers the old tool-name fallback, reproducing the
+    /// original never-escalate bug. The persistent streak (independent of body
+    /// width) fixes it. Mirrors the verifier's provided RED case, adapted to
+    /// drive escalation off the streak (the actual mechanism).
+    #[test]
+    fn wide_body_drift_exceeding_window_still_escalates() {
+        let mut c = cfg();
+        c.similarity_threshold = 0.3;
+        c.repeat_threshold = 3;
+        c.escalate_after = 5;
+        c.cooldown_events = 0;
+
+        let mut st = crate::state::SessionState::default();
+        let mut escalated = false;
+        let mut last_count = 0u32;
+        const L: u64 = 15; // >= cfg.window (12): body wider than the window
+        for i in 0..40u64 {
+            let body: Vec<String> = (0..L).map(|k| format!("tok{}", i + k)).collect();
+            let e = ev(i, "Bash", json!({"command": body.join(" ")}));
+            let seq = st.push(e, c.window);
+            if let Some(t) = detect(&st.events, &c) {
+                if let Some(count) = drive_escalation(&mut st, &t, seq, &c) {
+                    last_count = count;
+                    if count >= c.escalate_after {
+                        escalated = true;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            escalated,
+            "wide-body drift (token width >= window) must still escalate; last \
+             observed count={last_count} -- the window intersection never empties \
+             so a content key churns forever; only the width-independent streak \
+             reaches escalate_after={}",
+            c.escalate_after
+        );
+    }
+
+    /// CA-stuckguard-01 re-review, Finding 2 (over-aggregation): two SHORT
+    /// near-repeat runs separated by several unrelated (non-repeat) events must
+    /// NOT pool into a single escalation. Each run alone stays below
+    /// `escalate_after`; the intervening events create a seq gap that resets the
+    /// streak, so the second incident starts a fresh count rather than
+    /// continuing the first. A `tool:`-fallback content key (which never resets)
+    /// WOULD pool them and wrongly escalate — this asserts it does not.
+    #[test]
+    fn temporally_separated_repeat_incidents_do_not_pool() {
+        let mut c = cfg();
+        c.similarity_threshold = 0.3;
+        c.repeat_threshold = 3;
+        // Each 4-event run reaches a streak of 2 (trips on events 3 and 4);
+        // pooled that would be >= 3 and escalate. With the gap reset, neither
+        // run alone reaches 3.
+        c.escalate_after = 3;
+        c.cooldown_events = 0;
+
+        // Run 1 (4 near-repeats), then a GAP of distinct actions (no repeat
+        // trips -> seq advances without extending the run -> streak resets),
+        // then Run 2 (a second, temporally-separated near-repeat family).
+        let mut cmds: Vec<String> = Vec::new();
+        for _ in 0..4 {
+            cmds.push("alpha one two three".to_string());
+        }
+        for k in 0..4 {
+            cmds.push(format!("unrelated-{k} distinct-{k} solo-{k}"));
+        }
+        for _ in 0..4 {
+            cmds.push("beta four five six".to_string());
+        }
+
+        let mut st = crate::state::SessionState::default();
+        let mut escalated = false;
+        let mut max_count = 0u32;
+        for cmd in cmds {
+            let e = ev(0, "Bash", json!({"command": cmd}));
+            let seq = st.push(e, c.window);
+            if let Some(t) = detect(&st.events, &c) {
+                if let Some(count) = drive_escalation(&mut st, &t, seq, &c) {
+                    max_count = max_count.max(count);
+                    if count >= c.escalate_after {
+                        escalated = true;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            !escalated,
+            "two short, temporally-separated near-repeat incidents must NOT pool \
+             into one escalation; max streak observed={max_count} reached \
+             escalate_after={} -- a never-resetting content key would wrongly \
+             pool them",
+            c.escalate_after
         );
     }
 

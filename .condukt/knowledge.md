@@ -31,7 +31,7 @@
 | deepwiki | バイナリ+スキル | リポジトリ wiki 生成 |
 | harness-status | バイナリ | budget/sessions/progress 統合ダッシュボード |
 | taskprog | バイナリ | SessionStart/Stop: progress.md 注入 |
-| run-book | バイナリ | UserPromptSubmit: !macro 展開 |
+| runbook | バイナリ | UserPromptSubmit: !macro 展開 |
 
 ## harness-core の利用規則
 

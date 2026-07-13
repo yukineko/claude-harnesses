@@ -27,16 +27,22 @@
 # USAGE
 #   scripts/continuous-audit.sh --help
 #   scripts/continuous-audit.sh --dry-run                 # show plan, record nothing
-#   scripts/continuous-audit.sh --round 3                 # default gate-crate targets
-#   scripts/continuous-audit.sh --round 3 --target specguard,stuckguard \
+#   scripts/continuous-audit.sh --round 2026W28           # default gate-crate targets
+#   scripts/continuous-audit.sh --round 2026W28 --target specguard,stuckguard \
 #       --new-findings 2 --confirmed 1 --regression-tests-added 1 \
-#       --finding 'CA3-001|high|confirmed: unwrap in similarity path|crates/specguard/src/similarity.rs'
+#       --finding 'CA-2026W28-001|high|confirmed: unwrap in similarity path|crates/specguard/src/similarity.rs'
 #
 # --finding may be repeated; format is: id|severity|summary|file (file optional).
 # The COUNTS (--new-findings/--confirmed/--regression-tests-added) are recorded
 # verbatim into the round ledger; the --finding entries are the CONFIRMED subset
 # to ingest into the review queue. (They are independent inputs — the human/LLM
 # review that produced them is upstream; this script only records.)
+#
+# --finder-model / --verifier-model (optional) record which model each stage
+# used. When BOTH are given and are the SAME model, overwatch DETERMINISTICALLY
+# enforces the finder!=verifier MUST (model diversity): a high-severity warning
+# finding is recorded into the review queue (fail-soft — the round is still
+# recorded and the loop is never broken). Omit both for the original behavior.
 #
 # --------------------------------------------------------------------------
 # OPT-IN AUTOMATION TEMPLATES (nothing below is installed by this script)
@@ -67,6 +73,8 @@ TARGET="$DEFAULT_TARGETS"
 NEW_FINDINGS=0
 CONFIRMED=0
 REGRESSION_TESTS_ADDED=0
+FINDER_MODEL=""
+VERIFIER_MODEL=""
 DRY_RUN=0
 declare -a FINDINGS=()
 
@@ -84,6 +92,8 @@ while [ $# -gt 0 ]; do
     --new-findings) NEW_FINDINGS="${2:-0}"; shift 2 ;;
     --confirmed) CONFIRMED="${2:-0}"; shift 2 ;;
     --regression-tests-added) REGRESSION_TESTS_ADDED="${2:-0}"; shift 2 ;;
+    --finder-model) FINDER_MODEL="${2:-}"; shift 2 ;;
+    --verifier-model) VERIFIER_MODEL="${2:-}"; shift 2 ;;
     --finding) FINDINGS+=("${2:-}"); shift 2 ;;
     *) echo "unknown arg: $1" >&2; usage 2 ;;
   esac
@@ -106,7 +116,7 @@ else
 fi
 
 if [ -z "$ROUND" ]; then
-  echo "continuous-audit: --round <N> is required (or --dry-run to preview)" >&2
+  echo "continuous-audit: --round <round-id> is required (or --dry-run to preview)" >&2
   [ "$DRY_RUN" -eq 1 ] || exit 0
   ROUND="(dry-run)"
 fi
@@ -142,11 +152,15 @@ run_ow() {
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "--- DRY RUN: would record (nothing written) ---"
-  for f in "${FINDINGS[@]}"; do
-    echo "  overwatch record-finding  <- ${f}"
-  done
+  # Guard the expansion: under bash 3.2 + `set -u`, "${FINDINGS[@]}" on an empty
+  # array is an "unbound variable" error, so only iterate when non-empty.
+  if [ "${#FINDINGS[@]}" -gt 0 ]; then
+    for f in "${FINDINGS[@]}"; do
+      echo "  overwatch record-finding  <- ${f}"
+    done
+  fi
   echo "  overwatch audit-round record --round ${ROUND} --target ${TARGET} \\"
-  echo "    --new-findings ${NEW_FINDINGS} --confirmed ${CONFIRMED} --regression-tests-added ${REGRESSION_TESTS_ADDED}"
+  echo "    --new-findings ${NEW_FINDINGS} --confirmed ${CONFIRMED} --regression-tests-added ${REGRESSION_TESTS_ADDED}${FINDER_MODEL:+ --finder-model ${FINDER_MODEL}}${VERIFIER_MODEL:+ --verifier-model ${VERIFIER_MODEL}}"
   echo
   echo "--- current metrics (read-only) ---"
   run_ow audit-metrics
@@ -154,22 +168,33 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 # --- record each CONFIRMED finding into the review-queue findings store ------
-for f in "${FINDINGS[@]}"; do
-  # format: id|severity|summary|file  (severity & file may be empty)
-  IFS='|' read -r fid fsev fsummary ffile <<<"$f"
-  args=(record-finding --finding-id "${fid:-CA-${ROUND}}" --source "continuous-audit" --summary "${fsummary:-confirmed finding}")
-  [ -n "${fsev:-}" ] && args+=(--severity "$fsev")
-  [ -n "${ffile:-}" ] && args+=(--file "$ffile")
-  run_ow "${args[@]}"
-done
+# Guard the expansion: under bash 3.2 + `set -u`, "${FINDINGS[@]}" on an empty
+# array is an "unbound variable" error, so only iterate when non-empty.
+if [ "${#FINDINGS[@]}" -gt 0 ]; then
+  for f in "${FINDINGS[@]}"; do
+    # format: id|severity|summary|file  (severity & file may be empty)
+    IFS='|' read -r fid fsev fsummary ffile <<<"$f"
+    args=(record-finding --finding-id "${fid:-CA-${ROUND}}" --source "continuous-audit" --summary "${fsummary:-confirmed finding}")
+    [ -n "${fsev:-}" ] && args+=(--severity "$fsev")
+    [ -n "${ffile:-}" ] && args+=(--file "$ffile")
+    run_ow "${args[@]}"
+  done
+fi
 
 # --- record the round metrics into the convergence ledger --------------------
-run_ow audit-round record \
-  --round "$ROUND" \
-  --target "$TARGET" \
-  --new-findings "$NEW_FINDINGS" \
-  --confirmed "$CONFIRMED" \
-  --regression-tests-added "$REGRESSION_TESTS_ADDED"
+# When both --finder-model and --verifier-model are supplied, they are forwarded
+# so overwatch can DETERMINISTICALLY enforce the finder!=verifier MUST (a same-
+# model pair records a high-severity warning finding; fail-soft, never aborts).
+# Omit both to keep the original, unchecked behavior (backward compatible).
+round_args=(audit-round record
+  --round "$ROUND"
+  --target "$TARGET"
+  --new-findings "$NEW_FINDINGS"
+  --confirmed "$CONFIRMED"
+  --regression-tests-added "$REGRESSION_TESTS_ADDED")
+[ -n "$FINDER_MODEL" ] && round_args+=(--finder-model "$FINDER_MODEL")
+[ -n "$VERIFIER_MODEL" ] && round_args+=(--verifier-model "$VERIFIER_MODEL")
+run_ow "${round_args[@]}"
 
 echo
 echo "--- convergence metrics after this round ---"

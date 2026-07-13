@@ -1,6 +1,6 @@
 {
   "name": "runbook",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Reusable procedure includes for Claude Code: a UserPromptSubmit hook that expands `!name` macros in your prompt into the matching repo-committed procedure (.runbook/<name>.md), so recurring workflows run the same way every time. Inspired by Devin Playbooks; distinct from knowledge injection. Subscription-native (one hook + bundled Rust binary, no API key).",
   "author": { "name": "yukineko" },
   "keywords": ["hooks", "playbook", "procedure", "macro", "rust"]

@@ -10,6 +10,7 @@
 /// audit loop — an unwritable ledger is reported to stderr rather than
 /// propagated, matching overwatch's observational / never-break-a-turn invariant.
 use crate::audit_round::{self, AuditRound, DEFAULT_CONVERGENCE_WINDOW};
+use crate::review_finding::ReviewFinding;
 use crate::store;
 use anyhow::Result;
 
@@ -19,12 +20,25 @@ use anyhow::Result;
 /// `target` is a comma/space-separated crate list (normalized internally).
 /// Fail-soft: a store write error is reported to stderr but returns `Ok(())` so
 /// the caller (the audit loop) is never broken by logging.
+///
+/// `finder_model` / `verifier_model` are optional. When BOTH are supplied and
+/// denote the SAME model (canonical compare), the Continuous-Audit
+/// `finder != verifier` MUST is violated (generation and verification share a
+/// blind spot). This is enforced DETERMINISTICALLY here rather than left to
+/// SKILL.md prose: a high-severity warning finding (deterministic, round-derived
+/// id) is recorded into the review queue and a stderr warning is emitted. It is
+/// **never** a hard failure — the audit loop is never broken (never-break-a-turn),
+/// so a warning finding + the round record are preferred over aborting. When one
+/// or both model args are omitted, the check is skipped entirely (backward
+/// compatible: existing callers that pass no model args behave exactly as before).
 pub fn record(
-    round: u64,
+    round: String,
     target: &str,
     new_findings: u64,
     confirmed: u64,
     regression_tests_added: u64,
+    finder_model: Option<&str>,
+    verifier_model: Option<&str>,
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
@@ -44,7 +58,7 @@ pub fn record(
                 "{}",
                 serde_json::json!({
                     "recorded": true,
-                    "round": round,
+                    "round": record.round,
                     "targets": record.targets,
                     "new_findings": new_findings,
                     "confirmed": confirmed,
@@ -57,6 +71,100 @@ pub fn record(
             println!(
                 "{}",
                 serde_json::json!({ "recorded": false, "reason": "store-write-failed" })
+            );
+        }
+    }
+
+    // Deterministic finder != verifier model-diversity enforcement. Runs AFTER
+    // (and independently of) the round append so it fires even if the ledger
+    // write failed. Only checks when BOTH models were supplied (backward compat).
+    enforce_model_diversity(&cwd, &record.round, finder_model, verifier_model, now);
+
+    Ok(())
+}
+
+/// Enforce the `finder != verifier` MUST for a recorded round. When both models
+/// are present and canonically equal, record a high-severity warning finding
+/// (round-derived id, idempotent) into the review queue and warn on stderr.
+/// Fail-soft and non-fatal: a store-write failure is only logged; the audit loop
+/// is never broken.
+fn enforce_model_diversity(
+    cwd: &std::path::Path,
+    round: &str,
+    finder_model: Option<&str>,
+    verifier_model: Option<&str>,
+    now: i64,
+) {
+    let (Some(finder), Some(verifier)) = (finder_model, verifier_model) else {
+        return;
+    };
+    if !audit_round::same_model(finder, verifier) {
+        return;
+    }
+    let finding_id = audit_round::model_collision_finding_id(round);
+    let summary = format!(
+        "finder と verifier が同一モデル: MUST 違反 (finder={finder}, verifier={verifier}) — \
+         model diversity 要件 (生成と検証の盲点共有を防ぐ) を満たさない"
+    );
+    let finding = ReviewFinding::new(
+        finding_id.clone(),
+        "continuous-audit".to_string(),
+        Some("high".to_string()),
+        summary,
+        None,
+        now,
+    );
+    eprintln!(
+        "overwatch: WARNING finder と verifier が同一モデル ({finder}): MUST 違反 — \
+         review-queue に警告 finding ({finding_id}) を記録 (loop は継続 / fail-soft)"
+    );
+    if let Err(e) = store::append_review_finding(cwd, &finding) {
+        eprintln!("overwatch: WARNING could not record model-collision finding (continuing): {e}");
+    }
+}
+
+/// Close a Continuous-Audit round: SET its `regression_tests_added` to `tests`
+/// (the fix-side feedback the finder-time [`record`] cannot know, since the
+/// regression tests don't exist when a round is first recorded). Read-modify-write
+/// on the ledger: read all rounds, update the one matching `round` in memory via
+/// [`audit_round::set_round_tests`], write it back. After this, `audit-metrics`
+/// reports the round's honest `closure_rate` and the cumulative `converging`
+/// signal reflects the fixes actually landed.
+///
+/// Fail-soft (never-break-a-turn): an unknown round-id, or a store error, is
+/// reported (JSON on stdout + stderr note) but never panics. Idempotent: SETting
+/// the same `tests` twice is a no-op, so re-running a backfill does not
+/// double-count.
+pub fn close(round: String, tests: u64) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let rounds = store::read_audit_rounds(&cwd).unwrap_or_default();
+    let (updated, found) = audit_round::set_round_tests(&rounds, &round, tests);
+    if !found {
+        eprintln!(
+            "overwatch: WARNING audit-round close: no round matching id {round:?} (ledger unchanged)"
+        );
+        println!(
+            "{}",
+            serde_json::json!({ "closed": false, "reason": "round-not-found", "round": round })
+        );
+        return Ok(());
+    }
+    match store::rewrite_audit_rounds(&cwd, &updated) {
+        Ok(()) => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "closed": true,
+                    "round": round,
+                    "regression_tests_added": tests,
+                })
+            );
+        }
+        Err(e) => {
+            eprintln!("overwatch: WARNING could not rewrite audit rounds (continuing): {e}");
+            println!(
+                "{}",
+                serde_json::json!({ "closed": false, "reason": "store-write-failed", "round": round })
             );
         }
     }

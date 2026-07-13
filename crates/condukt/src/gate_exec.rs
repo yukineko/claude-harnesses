@@ -143,12 +143,45 @@ pub fn run_gate_check(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> 
     let record = crate::gatelog::GateExecRecord {
         verdict: verdict_str.to_string(),
         task: task_id.to_string(),
-        risk,
+        risk: risk.clone(),
         reversible,
         policy_is_auto,
         recorded_at: state::now_secs(),
     };
     crate::gatelog::append_gate_exec(&dir, run_id, &record);
+
+    // On Escalate ONLY: also record a durable overwatch review-finding so a
+    // needs-human verdict reaches `overwatch review-queue`'s ai-finding stream
+    // automatically (rather than only living in this run's local journal).
+    // The finding-id is keyed on (run_id, task_id) so re-checking the SAME gate
+    // under codegen flood collapses to one queue row (idempotent), not one row
+    // per invocation. FAIL-SOFT: a recording failure must never change the
+    // returned exit code, stdout, or the journal above — identical behavior
+    // whether or not the finding write succeeds.
+    if matches!(verdict, GateExec::Escalate) {
+        let finding_id = format!("gate-exec:{run_id}:{task_id}");
+        let severity = if risk.as_deref() == Some("high") {
+            "high"
+        } else {
+            "medium"
+        };
+        let summary = format!(
+            "gate-check escalated: task {task_id} risk={} reversible={} policy_is_auto={}",
+            risk.as_deref().unwrap_or("unknown"),
+            reversible
+                .map(|b| b.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            policy_is_auto,
+        );
+        let _ = overwatch::store::record_finding(
+            cwd,
+            finding_id,
+            "condukt-gate".to_string(),
+            Some(severity.to_string()),
+            summary,
+            None,
+        );
+    }
 
     match verdict {
         GateExec::AutoExec => 0,

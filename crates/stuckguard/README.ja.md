@@ -17,6 +17,10 @@ repeat 検出には**近似反復のマッチング**もある。`similarity_thr
 
 repeat/oscillation によるハードなエスカレーションのさらに手前には、任意（既定オフ）の**progress-score アドバイザリ**がある。`progress_advisory_enabled` で有効化すると、直近ウィンドウにおける 3 つのシグナル — アクションの多様性・状態ハッシュの安定性・エラーダイジェストの再発 — を組み合わせて `[0, 1]` の `progress_score` を算出し、ウィンドウが `progress_min_window` 件以上かつスコアが `progress_score_threshold` 以上になると、早期の「進捗が停滞しているかもしれない」というナッジを注入する。ハードなエスカレーションを置き換えたりブロックしたりすることはない。
 
+さらに最下位の任意アドバイザリとして、**scope-drift（スコープ逸脱）検知**（PDO session-anchor、DESIGN §4.4）がある。`scope_drift_enabled`（既定オフ = opt-in）で有効化すると、`watch` は現在セッションの live な overwatch lease（`overwatch lease --session <id> --json`）から宣言済み scope を読み、直近の連続する EDITED ファイル（Edit/Write。既存シグネチャの file_path で追跡）が `drift_threshold`（既定 3）回連続で scope の**外**に落ちたとき、「anchor を更新するか元のタスクに戻れ」という助言ナッジを出す。ハードなエスカレーションと progress アドバイザリとは**構造的に排他**（else-if チェーン）で、ハードトリップが常に優先し、scope-drift は最下位で両者の bookkeeping を一切乱さない。セッションが lease を持たない・scope が空・overwatch が無い場合は no-op（fail-soft）。助言のみでブロックしない。
+
+長い単一タスクが claim/lease を失効させて誤って reap/奪取されないよう、**heartbeat piggyback**（DESIGN §4.6b）も持つ。`heartbeat_piggyback_enabled`（既定オン = 安全機能）が有効なら、`watch` は PostToolUse のたびに（セッションの live lease から解決した）`condukt state heartbeat --run <rid>` と `overwatch heartbeat --key <k>` を発火し、タスク実行中も claim/lease を生かし続ける。live lease が無い・バイナリが無い場合は no-op（fail-soft）で、ナッジ経路を決してブロックしない。
+
 stuckguard が行うのは **助言の注入だけ**である。ツール呼び出しをブロックすることも、ターンを終了させることもできない。そのため誤検出のコストは余計な 1 行のコンテキストにとどまる。API キーは不要だ。
 
 ## どうして必要か
@@ -65,6 +69,9 @@ stuckguard status      # 解決済みの設定を表示する
 | `progress_advisory_enabled` | ハードな repeat/oscillation エスカレーションより手前で発火する、3 シグナルによる progress-score アドバイザリを有効化する | false |
 | `progress_min_window` | このアドバイザリが発火しうる最小のウィンドウ長 | 6 |
 | `progress_score_threshold` | アドバイザリが発火する `progress_score`（`[0, 1]`）のしきい値 | 0.75 |
+| `scope_drift_enabled` | 直近の編集がセッションの宣言済み anchor scope（overwatch lease）の外に落ちたときに発火する scope-drift アドバイザリを有効化する（§4.4。overwatch 必須、fail-soft） | false |
+| `drift_threshold` | scope-drift が発火するまでの連続 scope 外編集数（1 以上に floor、window に clamp） | 3 |
+| `heartbeat_piggyback_enabled` | PostToolUse ごとに condukt/overwatch の heartbeat を更新し claim/lease の失効・誤 reap を防ぐ（§4.6b。live lease が無ければ no-op） | true |
 
 サブスクリプションで完結し（フック 1 つ + 同梱の Rust バイナリ）、`ANTHROPIC_API_KEY` も追加インストールも不要である。
 

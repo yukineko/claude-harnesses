@@ -247,7 +247,8 @@ verified に昇格」するだけで、**同一 hashkey を複数 run_id が両�
 **対応**: `reconcile` に、実行対象 run とは別に「同一 hashkey を持つ他の run で、この run の
 `claimed_at` より後に done/verified になったタスクが無いか」を横断的に確認するステップを足す。
 見つかった場合は自動マージ・自動破棄のどちらもせず、`{"duplicate_completion": [{hashkey, runs:
-[run_id...]}]}` を出力して **exit code で異常系（例: exit 3）を返し、人間の選択（HOTL）を
+[run_id...]}]}` を出力して **exit 2（escalate＝needs human。condukt の exit code 慣例
+0=auto / 2=escalate / 3=block に一致。当初 exit 3 と記していたが実装で修正）を返し、人間の選択（HOTL）を
 要求する**——`condukt`/`propguard` が既に持つ「fail-closed でブロックし人間に選ばせる」設計
 方針をそのまま流用する。自動解決しない理由: どちらの実装を残すべきかは実行結果（テスト・diff の
 質）を見ないと判断できず、機械的な優先順位付け（先着順など）は往々にして間違った方を残す。
@@ -307,8 +308,9 @@ overwatch 自体の変更は無し。`overwatch heartbeat --key <k>` は既存�
 - **新規（§4.6c）**: `state reconcile --run <rid>` に、指定 run の hashkey 群それぞれについて
   「他の run_id が同じ hashkey を、この run の `claimed_at` より後に done/verified にしていないか」
   を横断確認するステップを追加。見つかったら `{"duplicate_completion": [{hashkey, runs:
-  [run_id...]}]}` を出力し `exit 3`（既存の needs-human エスカレーション exit code の慣例
-  ——`trajectoryeval tier` の fuzzy 閾値超過ドリフトと同じ扱い——を踏襲）。自動マージ・自動破棄は
+  [run_id...]}]}` を出力し `exit 2`（needs-human エスカレーションの exit code。condukt の慣例
+  0=auto / 2=escalate / 3=block に一致。当初 exit 3 と記していたが gatelog.rs の慣例に合わせ
+  実装で exit 2 に修正）。自動マージ・自動破棄は
   行わない。既存の「branch merge/削除済み → 自動 verified 昇格」パスは変更しない（重複が無い
   通常ケースは今まで通り）。
 
@@ -352,7 +354,7 @@ overwatch 自体の変更は無し。`overwatch heartbeat --key <k>` は既存�
       判定されない（`heartbeat_piggyback_enabled=true` のとき）。無効化時は从来どおり TTL 超過で
       stale になることも合わせて確認する（回帰）。
 - [ ] （§4.6c）同一 hashkey を2つの異なる run_id が done/verified にした状態を用意し、
-      `condukt state reconcile` が `duplicate_completion` を報告して exit 3 で終わる（どちらの
+      `condukt state reconcile` が `duplicate_completion` を報告して exit 2（escalate）で終わる（どちらの
       run も自動では変更されない）。重複が無い通常ケースでは従来どおり exit 0 で自動昇格する
       （回帰）。
 - [ ] 変更した各クレート（overwatch / flow / stuckguard / ctxrot / condukt）の version を
@@ -377,7 +379,10 @@ overwatch 自体の変更は無し。`overwatch heartbeat --key <k>` は既存�
 8. **Phase 8 — condukt reconcile の多重完了検出**（§4.6c）。単独で実装・テスト可能なため、
    他 phase と独立に着手してよい。
 
-各 phase は独立に PR 化。GATE_CRATES ではないため `--canary` 不要。
+各 phase は独立に PR 化。**注意: stuckguard は GATE_CRATES（blastguard/propguard/specguard/
+stuckguard/mutategate）なので、stuckguard を触る Phase 4・Phase 6 の rollout は `--canary` 必須**
+（CLAUDE.md の GATE クレート反映ルール）。overwatch/flow/ctxrot/condukt は非 GATE なので canary 不要。
+（当初「GATE_CRATES ではないため canary 不要」と記していたが誤り。stuckguard は GATE。）
 
 ---
 

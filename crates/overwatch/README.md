@@ -17,7 +17,7 @@ Subscription-native: one Rust binary, two hooks (SessionStart + Stop), no API ke
 A per-project registry at `~/.overwatch/<project-key>/overwatch/`:
 
 ```
-leases.json              # current lease snapshot: { "<key>": { "key", "title", "session_id", "run_id", "claimed_at", "heartbeat_at" } }
+leases.json              # current lease snapshot: { "<key>": { "key", "title", "session_id", "run_id", "claimed_at", "heartbeat_at", "scope", "done_criteria" } }
 events.jsonl             # append-only event log
 ```
 
@@ -40,7 +40,8 @@ setup command to run.
 ## Commands
 
 ```sh
-overwatch begin --key <k> --title <t> [--session <sid>]   # try to acquire exclusive lease on key <k>; exit 1 + skip JSON if held by another live session
+overwatch begin --key <k> --title <t> [--session <sid>] [--scope <csv>] [--done-criteria <text>]   # try to acquire exclusive lease on key <k>; exit 1 + skip JSON if held by another live session
+overwatch lease --session <sid> [--json]    # print the live lease (PDO anchor) held by a session; exit 1 (silent) if none
 overwatch run --key <k> [--note <text>]     # record a running heartbeat + event for a held lease (fail-soft if the key isn't held)
 overwatch status [--json]                   # show project-wide progress: active leases, events, sessions
 overwatch sessions [--json]                 # list all sessions (live or dead)
@@ -64,6 +65,55 @@ Returns:
 - **exit 1** + JSON `{ "skip": "reason", ... }`: Lease is held by another live session. Do NOT proceed.
 
 The caller's job is to check the exit code and skip if it's 1.
+
+## PDO session anchor (`--scope` / `--done-criteria`)
+
+A lease can carry two optional PDO-anchor fields that record what the session is
+responsible for and what "done" means for it. Both are `#[serde(default)]`, so
+existing `leases.json` files (written before these fields existed) still load
+unchanged:
+
+- `scope: Vec<String>` — files/globs this session owns (same vocabulary as
+  condukt's `touched_files`). Empty = not yet fixed (e.g. still investigating);
+  such leases are excluded from overlap detection to avoid false positives.
+- `done_criteria: Option<String>` — the session's definition of done.
+
+`overwatch begin` gained two optional flags to set them; omitting both keeps the
+exact prior behavior (and the exit-code contract is unchanged):
+
+```bash
+overwatch begin --key "hypothesis-v2.3" --title "cache the router table" \
+  --scope "crates/fugu-router/src/**,crates/condukt/src/schedule.rs" \
+  --done-criteria "all fugu-router tests green, no clippy warnings"
+```
+
+On a successful `begin` (exit 0) an advisory JSON summary is printed to stdout:
+
+```json
+{ "scope_overlap": [ { "key": "...", "title": "...", "scope": ["..."] } ],
+  "possible_duplicate": [ { "key": "...", "title": "...", "similarity": 0.72 } ] }
+```
+
+- `scope_overlap` lists other live leases (different key) whose scope overlaps
+  this one, via a coarse glob-prefix match. It is a **non-blocking early
+  warning** — scope overlap is not necessarily a conflict; condukt's Phase 3.5
+  `conflict-check` makes the precise call.
+- `possible_duplicate` lists other live leases whose title/done_criteria are
+  lexically similar (Jaccard ≥ threshold, default 0.6, override via
+  `OVERWATCH_DUP_THRESHOLD`), reusing `harness_core::lessons::text_similarity`.
+- Both default to empty arrays and **never change the exit code**.
+
+### Reading a session's anchor
+
+```bash
+overwatch lease --session <sid> [--json]
+```
+
+Prints the live lease (PDO anchor) held by `<sid>` — the most-recently-claimed
+one if the session holds several — or exits 1 silently if none. This is the read
+path for ctxrot's anchor re-injection (re-anchoring the session's title /
+done_criteria back into its context; see `docs/DESIGN-pdo-session-anchor.md`
+§4.3).
 
 ## Update with `/overwatch`
 

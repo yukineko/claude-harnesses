@@ -12,7 +12,7 @@ Claude Code 向けの **context-rot（コンテキスト腐敗）ガード**。R
 
 | サブコマンド | フック | 役割 |
 |---|---|---|
-| `ctxrot guard` | `UserPromptSubmit` | 大きな参照（巨大ローカルファイル / URL /「全文」キーワード）と **context バジェットの帯（窓の 50/75/90%）**を検知し、*最小限・条件付き*の助言だけを注入する。バジェット助言は帯をまたいだ時に一度だけ（助言自体が rot 源にならないよう）。**band ≥ 2（約 75%+）**では rescue ノートを先回りで書くので、手動 `/compact`（や `/clear`）が PreCompact を待たずに安全になる。 |
+| `ctxrot guard` | `UserPromptSubmit` | 大きな参照（巨大ローカルファイル / URL /「全文」キーワード）と **context バジェットの帯（窓の 50/75/90%）**を検知し、*最小限・条件付き*の助言だけを注入する。バジェット助言は帯をまたいだ時に一度だけ（助言自体が rot 源にならないよう）。**band ≥ 2（約 75%+）**では rescue ノートを先回りで書くので、手動 `/compact`（や `/clear`）が PreCompact を待たずに安全になる。**re-anchor は2トラック**: 決定事項/todo の re-anchor（band ≥ 2・8 プロンプトごと）に加え、別トラックの **PDO session-anchor** —— このセッションが overwatch の live lease を保持していれば（`overwatch lease --session $CLAUDE_CODE_SESSION_ID --json` で読む）、「あなたは今 *&lt;title&gt;* を担当中。done_criteria: …」の 1〜2 行を再浮上させる（scope の生 glob は注入しない）。band ≥ 1 から `anchor_reinject_every`（既定 12・決定事項トラックより疎で専用クールダウン）ごとに。lease 無し・overwatch 未導入・lease JSON parse 不能なら無音で no-op（fail-soft）。 |
 | `ctxrot rescue` | `PreCompact` | `/compact` の直前に直近 transcript をたどり、永続的な **rescue ノート**（決定事項・未消化 todo・触れたファイル・リンク・直近の生ターン）を書き出し、不可逆な圧縮で何も失わせない。決定論的・LLM 不使用。ファイル名にセッションタグ（`rescue-<session>-<ts>.md`）を持つ。既定では切り離した `claude -p` を fire-and-forget して非同期で LLM 品質に格上げする（`distill_on_compact`、圧縮はブロックしない）。 |
 | `ctxrot restore` | `SessionStart` | セッション開始時に **簡潔な carryover**（決定事項＋未消化 todo＋リンク）を注入する。*このセッション自身*のノート（セッションタグ照合）を優先し、並列セッションが同じプロジェクトディレクトリを共有する場合は兄弟セッションの carryover を掴まないよう制限する。ノート全文は決して注入しない。 |
 | `ctxrot preguard` | `PreToolUse` | **ロード前の予防ゲート。**（1）ルールベース——`load_deny` グロブに一致する `Read` はサイズに関係なく拒否、`load_allow` はサイズゲートを迂回。（2）サイズベース——`limit` 無しの *無制限* `Read` が `gate_file_bytes`（既定 **1MB**）以上だと実行可能な理由付きで拒否。優先順位は **deny → limit → allow → size**。通常のソース読みは触らないよう狭く設計。 |
@@ -86,7 +86,7 @@ cp -r skills/ctx ~/.claude/skills/
 
 ### 設定とストア
 
-設定は `~/.ctxrot/config.toml`（`ctxrot init` が作る）。主要項目は `store_dir`（Obsidian vault も指定可）/ `context_window`（**実窓ではなく「これ以下に抑えたい目標値」**——既定 200000 のまま使うこと。実 1M 窓に直すと帯が ~950K まで発火せず無効化する）/ `large_file_bytes`・`huge_tool_output_bytes`・`gate_file_bytes`（各種しきい値）/ `bands` / `load_deny`・`load_allow`（入口ゲートの恒久ルール）/ `restore_enabled`・`inject_*`（carryover 制御）/ `distill_on_compact`・`auto_distill_on_band`（圧縮時／トップ帯到達時の非同期 LLM 蒸留）/ `auto_compact_enabled`（既定 false）・`auto_compact_at_percentage`（既定 0.90。Stop フックの auto-compact 促し。ctxrot 自身のバジェットメーターに対して測る）など。
+設定は `~/.ctxrot/config.toml`（`ctxrot init` が作る）。主要項目は `store_dir`（Obsidian vault も指定可）/ `context_window`（**実窓ではなく「これ以下に抑えたい目標値」**——既定 200000 のまま使うこと。実 1M 窓に直すと帯が ~950K まで発火せず無効化する）/ `large_file_bytes`・`huge_tool_output_bytes`・`gate_file_bytes`（各種しきい値）/ `bands` / `load_deny`・`load_allow`（入口ゲートの恒久ルール）/ `restore_enabled`・`inject_*`（carryover 制御）/ `anchor_reinject_every`（既定 12。PDO session-anchor 再注入の頻度。live な overwatch lease を持つセッションで「今の担当（title + done_criteria）」を band ≥ 1 から N プロンプトごとに再浮上。決定事項 re-anchor とは別トラック・別クールダウン。lease 無し／overwatch 未導入なら無音）/ `distill_on_compact`・`auto_distill_on_band`（圧縮時／トップ帯到達時の非同期 LLM 蒸留）/ `auto_compact_enabled`（既定 false）・`auto_compact_at_percentage`（既定 0.90。Stop フックの auto-compact 促し。ctxrot 自身のバジェットメーターに対して測る）など。
 
 ノートは Obsidian 互換 markdown でプロジェクト単位に格納される（`<store_dir>/<project-basename>-<hash>/`）。`ctxrot note list` / `ctxrot note latest` / `ctxrot note dir` で確認する。
 

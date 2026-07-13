@@ -32,6 +32,27 @@ the window is at least `progress_min_window` long and the score reaches
 `progress_score_threshold`, it injects an early "progress may be stalling"
 nudge. It never replaces or blocks the hard escalation above.
 
+Below even that sits an optional, lowest-priority **scope-drift advisory** (PDO
+session-anchor, DESIGN §4.4), off by default via `scope_drift_enabled` (opt-in).
+When enabled, `watch` reads the current session's live overwatch lease
+(`overwatch lease --session <id> --json`) and, if the trailing run of
+consecutive *edited* files (Edit/Write, tracked via the existing signature's
+`file_path`) all fall **outside** the lease's declared scope for
+`drift_threshold` (default 3) consecutive edits, nudges to update the anchor or
+return to the task. It is structurally mutually exclusive (else-if chain) with
+the hard trip and the progress advisory — the hard trip always wins and
+scope-drift, being lowest priority, never perturbs their bookkeeping. It no-ops
+when the session holds no lease, the scope is empty, or overwatch is absent
+(fail-soft). Advisory only — never blocks.
+
+To keep a long single task from letting its claim/lease go stale and get falsely
+reaped or stolen, `watch` also does a **heartbeat piggyback** (DESIGN §4.6b),
+on by default via `heartbeat_piggyback_enabled` (a safety feature). On every
+PostToolUse it fires `condukt state heartbeat --run <rid>` and `overwatch
+heartbeat --key <k>` (resolved from the session's live lease). It no-ops without
+a live lease or if the binaries are absent (fail-soft) and never blocks the
+nudge path.
+
 ## How it works
 
 `stuckguard watch` is wired to the **PostToolUse** hook. On each tool call it:
@@ -84,6 +105,9 @@ See [`stuckguard.example.toml`](stuckguard.example.toml).
 | `progress_advisory_enabled` | enable the soft, 3-signal progress-score stall advisory (fires below the hard repeat/oscillation escalation) | false |
 | `progress_min_window` | minimum recent-window length before the advisory can fire | 6 |
 | `progress_score_threshold` | `progress_score` (`[0, 1]`) at or above which the advisory fires | 0.75 |
+| `scope_drift_enabled` | enable the scope-drift advisory: nudge when recent edits fall outside the session's declared anchor scope (overwatch lease) (§4.4; needs overwatch, fail-soft) | false |
+| `drift_threshold` | consecutive out-of-scope edits before scope-drift fires (floored to 1, clamped to window) | 3 |
+| `heartbeat_piggyback_enabled` | refresh the condukt/overwatch heartbeat on every PostToolUse so the claim/lease can't go stale and be falsely reaped (§4.6b; no-op without a live lease) | true |
 
 ## Relation to the other harnesses
 

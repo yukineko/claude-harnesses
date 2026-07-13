@@ -19,7 +19,7 @@ Claude Code 向けの、**プロジェクト全体の実行レジストリ**。R
 プロジェクトごと、`~/.overwatch/<project-key>/overwatch/` に以下を置く：
 
 ```
-leases.json              # 現在の lease スナップショット: { "<key>": { "key", "title", "session_id", "run_id", "claimed_at", "heartbeat_at" } }
+leases.json              # 現在の lease スナップショット: { "<key>": { "key", "title", "session_id", "run_id", "claimed_at", "heartbeat_at", "scope", "done_criteria" } }
 events.jsonl             # append-only イベント ログ
 ```
 
@@ -42,7 +42,8 @@ cargo install --path .
 ## コマンド
 
 ```sh
-overwatch begin --key <k> --title <t> [--session <sid>]   # キー <k> を排他的に claim する。別セッションが live で保持していれば exit 1 + skip JSON
+overwatch begin --key <k> --title <t> [--session <sid>] [--scope <csv>] [--done-criteria <text>]   # キー <k> を排他的に claim する。別セッションが live で保持していれば exit 1 + skip JSON
+overwatch lease --session <sid> [--json]     # そのセッションが保持中の live lease（PDO anchor）を表示。無ければ exit 1（無音）
 overwatch run --key <k> [--note <text>]      # 保持中のリースにハートビート＋イベントを記録（キー未保持でも fail-soft）
 overwatch status [--json]                    # プロジェクト全体の進捗: 有効な lease・イベント・セッション
 overwatch sessions [--json]                  # セッション一覧（live または dead）
@@ -66,6 +67,52 @@ overwatch begin --key "hypothesis-v2.3"
 - **exit 1** + JSON `{ "skip": "reason", ... }`: このキーについて、別の live セッションが lease を保持中。**決して先に進んではいけない**。
 
 呼び出し元の責務は、exit code を確認し、1 なら処理をスキップすることである。
+
+## PDO セッションアンカー（`--scope` / `--done-criteria`）
+
+lease は、そのセッションが「何を担当していて」「何をもって完了とするか」を記録する 2 つの
+任意 PDO-anchor フィールドを持てる。いずれも `#[serde(default)]` なので、これらが無かった頃に
+書かれた既存の `leases.json` もそのまま読める（後方互換）：
+
+- `scope: Vec<String>` — このセッションが担当するファイル/glob（condukt の `touched_files` と
+  同じ語彙）。空 = まだ確定していない（調査中など）を意味し、false positive を避けるため
+  overlap 検知の対象から除外される。
+- `done_criteria: Option<String>` — このセッションの「完了」の定義。
+
+`overwatch begin` に、これらを設定する 2 つの任意フラグを追加した。両方を省略すれば従来の挙動が
+そのまま維持される（exit code 契約も不変）：
+
+```bash
+overwatch begin --key "hypothesis-v2.3" --title "cache the router table" \
+  --scope "crates/fugu-router/src/**,crates/condukt/src/schedule.rs" \
+  --done-criteria "fugu-router のテスト全 green・clippy 警告なし"
+```
+
+`begin` 成功時（exit 0）、advisory な JSON サマリを stdout に出力する：
+
+```json
+{ "scope_overlap": [ { "key": "...", "title": "...", "scope": ["..."] } ],
+  "possible_duplicate": [ { "key": "...", "title": "...", "similarity": 0.72 } ] }
+```
+
+- `scope_overlap` は、この lease と scope が重なる別 key の live lease を、粗い glob-prefix
+  マッチで列挙する。**blocking しない早期警告**であり——scope の重なりは必ずしも衝突ではない
+  ——厳密な判定は condukt の Phase 3.5 `conflict-check` に委ねる。
+- `possible_duplicate` は、title/done_criteria が語彙的に類似する（Jaccard ≥ 閾値、既定 0.6、
+  環境変数 `OVERWATCH_DUP_THRESHOLD` で上書き可）別の live lease を、
+  `harness_core::lessons::text_similarity` を再利用して列挙する。
+- どちらも既定は空配列で、**exit code は決して変えない**。
+
+### セッションのアンカーを読む
+
+```bash
+overwatch lease --session <sid> [--json]
+```
+
+`<sid>` が保持中の live lease（PDO anchor）を——複数保持していれば最も直近に claim したものを
+——表示する。無ければ exit 1 で無音終了する。これは ctxrot の anchor 再注入（セッションの
+title / done_criteria を context に再注入する読み取り経路。`docs/DESIGN-pdo-session-anchor.md`
+§4.3 参照）のための read path である。
 
 ## `/overwatch` で制御する
 

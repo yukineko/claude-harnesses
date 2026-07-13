@@ -33,9 +33,15 @@ forge・condukt のスケジューラが再利用）。
   `detect::detect("Bash", …)` を再利用するため、binary の deny 集合と classifier の High/irreversible
   集合が乖離しない（同一検出器を共有）。
 - **偽陽性ゼロ・バイアス** — 曖昧な入力は allow。Rust の戻り型矢印 `->`（`prev == b'-'`）と山括弧
-  プレースホルダ `<value>`（`is_angle_placeholder_close`）は truncating redirect と誤認しない。
-  クォート内の破壊的テキスト（`echo 'rm -rf /'`）は実行されないので allow。opaque な `source
-  <file>` / `bash <script>`（`-c` 無し）は中身を検査できないため allow。
+  プレースホルダ `<value>` / `<run-id>`（`is_angle_placeholder_close`。hyphen を含む kebab-case
+  プレースホルダも placeholder と認識する）は truncating redirect と誤認しない。
+  クォート内の破壊的テキスト（`echo 'rm -rf /'`）は実行されないので allow。opaque な
+  `source <file>` / `bash <script>`（`-c` 無し）は中身を検査できないため allow。
+- **`>` スキャンは UTF-8 char 境界安全** — truncating redirect スキャナの whitespace/delimiter 判定は
+  ASCII バイトのみで行う（ASCII バイトは常に UTF-8 char 境界）。生バイトを `char` にキャストすると
+  多バイト文字の継続バイト（例: 頻 = `E9 A0 BB` の `0xA0`）を no-break space 等の whitespace と
+  誤読して char 境界の途中でスキャンを切り、`seg[start..j]` の slice で panic する。`>` に隣接する
+  日本語等の多バイトテキストを含むコマンドで classification が crash しないことを 5 本の回帰テストが固定。
 - **config ファイル除外** — `exclude::is_config_file`（`.claude/**`, `**/settings.local.json`,
   `**/package.json`, `*.toml`/`*.yaml`/`*.yml`/`*.lock`, `.config/**` 等の glob）に一致するパスは、
   破壊的な形（空内容 Write、再帰/ワイルドカード rm、truncating redirect target）でも allow。

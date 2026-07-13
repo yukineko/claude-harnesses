@@ -13,6 +13,7 @@
 - **source↔executor** — タスクを供給する側（compass の一手・backlog キュー・scout 施策・hypothesis）と実行する側（condukt）を分ける設計軸。flow がこの2層を1ループで束ねる。
 - **driver（ドライバ）** — source→executor を回す統合ループ層。`/flow` が現行のドライバ。
 - **PDO（Parallel Development Orchestration）** — 仮説駆動で並列に開発施策を回す枠組み。hypothesis がそのライフサイクル（作成・検証・棄却・出荷≠検証の追跡）を担う。
+- **PDO session anchor（セッションアンカー）** — 各セッションが「今どの PDO 単位を担当し（scope＝触るファイル/glob・done_criteria＝完了定義）」を保持する仕組み。overwatch の `Lease` に scope/done_criteria を持たせ、flow が pick 時に `overwatch begin --scope/--done-criteria` で登録（`overwatch status` に可視化）、ctxrot が guard で再注入（記憶喪失対策）、stuckguard が scope 逸脱を検知（drift 対策）＋heartbeat 便乗（誤 reap・奪取防止）、overwatch begin が scope_overlap/possible_duplicate を早期警告、condukt reconcile が二重完了を検知（exit 2）。設計は `docs/DESIGN-pdo-session-anchor.md`。
 - **HOTL（Human On The Loop）** — 人間が随時点検・介入する運用モデル。harness-status / taskprog がハンドオフを支援する。
 - **autonomy gate / switch** — 自律運転時に人間ゲートを縮退させる仕組み。condukt の `state autonomy-check` / env `CONDUKT_AUTONOMOUS` / config で切替。
 - **fail-soft（フェイルソフト）／ fail-closed** — 前提ツール不在時に安全側へ縮退して継続するのが fail-soft、閾値未満で確実に阻止するのが fail-closed。propguard は fail-closed、oracle は tdd 不在時に fail-soft。
@@ -49,7 +50,7 @@
 | gauge | always-on | Stop でトークン/コスト/ツール呼び出し/レイテンシをローカル計測する LLMOps テレメトリ |
 | harness-status | always-on (実質サイレント) | HOTL 手動点検の統合ダッシュボード（CLI 専用）＋hook binary 欠損時のみ警告する軽量 SessionStart hook 1本（健全時は無出力） |
 | hypothesis | always-on | PDO 仮説のライフサイクル管理（作成・検証・棄却・compass 紐づけ） |
-| overwatch | always-on | project-global 実行台帳＋cross-session 重複ガード（begin 同一 key で live 他 session を skip）＋PDO 進行管理ビュー（各session/backlog/hypothesis/condukt run/compass gap を fail-soft 集約）＋操作(pause/resume/reassign/reap) |
+| overwatch | always-on | project-global 実行台帳＋cross-session 重複ガード（begin 同一 key で live 他 session を skip）＋PDO 進行管理ビュー（各session/backlog/hypothesis/condukt run/compass gap を fail-soft 集約）＋操作(pause/resume/reassign/reap)＋PDO session anchor（Lease に scope/done_criteria、`begin --scope/--done-criteria`、`lease --session`、begin が scope_overlap/possible_duplicate を早期警告） |
 | playbook | always-on | UserPromptSubmit で関連アトミックノートを予算内でコンテキスト注入する |
 | precommit-audit | always-on | Stop で汎用＋プロジェクトルールを diff に照合し clean まで完了を阻止する |
 | propguard | always-on | done_criteria から 3–5 個の意味的不変条件を導出し fail-closed で Stop を検証する |

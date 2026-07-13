@@ -45,9 +45,23 @@ pause/resume/reassign の制御面は下流（condukt）へ委譲するが、人
 CLI は `clap` の `Command` enum（`main.rs`）で定義。ledger/lease 系はすべて `store::now()` と cwd から
 解決した `<base>/<project-key>/overwatch/` を土台にする。
 
-- **`begin --key --title [--session]`** — キーを排他 claim（上記 dedup 契約）。成功時は `Lease` を挿入し
-  `Started` イベントを追記。session_id は `--session` → env `CLAUDE_CODE_SESSION_ID` → `pid-<pid>` の順、
-  run_id は env `OVERWATCH_RUN_ID` → `run-<now>`（`lease::resolve_session_id`/`resolve_run_id`）。
+- **`begin --key --title [--session] [--scope <csv>] [--done-criteria <text>]`** — キーを排他 claim
+  （上記 dedup 契約）。成功時は `Lease` を挿入し `Started` イベントを追記。session_id は `--session` →
+  env `CLAUDE_CODE_SESSION_ID` → `pid-<pid>` の順、run_id は env `OVERWATCH_RUN_ID` → `run-<now>`
+  （`lease::resolve_session_id`/`resolve_run_id`）。`--scope` はカンマ区切りの files/globs（省略時は空 =
+  scope 未確定）、`--done-criteria` は完了定義を lease の PDO-anchor フィールドに格納する（§4.1）。
+  **成功時（exit 0）に advisory な success summary JSON を stdout へ出力する**（既存の exit code 契約
+  0=成功/1=同 key 保持中は不変）: `{"scope_overlap":[{key,title,scope}], "possible_duplicate":
+  [{key,title,similarity}]}`。`scope_overlap`（§4.5）は scope が重なる別 key の live lease を粗い
+  glob-prefix マッチで列挙する早期警告（非 blocking。厳密判定は condukt の conflict-check）。
+  `possible_duplicate`（§4.6a）は title/done_criteria が語彙的に類似する（Jaccard ≥ 閾値、既定 0.6、
+  env `OVERWATCH_DUP_THRESHOLD` で上書き可）別 lease を `harness_core::lessons::text_similarity` で
+  列挙する。両者とも既定は空配列で exit code を変えない。scope が空の lease は overlap 検知から除外
+  （false positive 回避）。
+- **`lease --session <id> [--json]`** — 指定 session が保持中の live lease（PDO anchor）を1件返す
+  （複数保持なら最も直近に claim したもの＝`pick_session_lease`）。無ければ exit 1 で無音終了する
+  （fail-soft）。§4.3 の ctxrot anchor 再注入の read path。`--json` で `Lease` を JSON、無指定なら
+  `<key> — <title>` を印字する。
 - **`run --key [--note]`** — 保持中 lease の `heartbeat_at` を更新し `Running` イベント（note を status に）を
   追記。**キー未保持でも fail-soft**（派生 id でイベントのみ記録）。
 - **`heartbeat --key`** — lease があれば TTL リセットし `{"refreshed":1}`、無ければ `{"refreshed":0}`。
@@ -64,14 +78,20 @@ CLI は `clap` の `Command` enum（`main.rs`）で定義。ledger/lease 系は�
 ## module 責務
 
 - **`store`** — lease 永続化・liveness 判定の中核。`Lease`（`key`/`title`/`session_id`/`run_id`/`claimed_at`/
-  `heartbeat_at`）、`LeaseRegistry`（`BTreeMap`）、`LEASE_TTL_SECS`(=1800, ハードコード)、`storage_root`
+  `heartbeat_at` に加え、PDO-anchor の `scope: Vec<String>`・`done_criteria: Option<String>` を
+  `#[serde(default)]` で保持——既存 `leases.json` と後方互換）、`LeaseRegistry`（`BTreeMap`）、
+  `LEASE_TTL_SECS`(=1800, ハードコード)、`storage_root`
   （`harness_core::{config::base_dir, projkey}` で解決）、`load_leases`/`save_leases`(原子)/`append_event`/
   `read_events`、`is_held_by_other`/`is_stale`/`reap_stale`/`now`。`init` は no-op プレースホルダ。
 - **`event`** — ライフサイクルモデル。`EventKind::{Started,Running,Ended}`（lowercase serde）と
   `LifecycleEvent`（`kind`/`key`/`title`/`session_id`/`run_id`/`ts`/optional `status`）＋ビルダ。制御専用の
   kind は無く、`control` は `Running` を流用する。
-- **`lease`** — lease ライフサイクルのコマンド実装（`begin`/`run`/`end`/`heartbeat`/`reap`）と
-  `resolve_session_id`/`resolve_run_id`。dedup 契約（exit 1 + skip JSON）の実行点。
+- **`lease`** — lease ライフサイクルのコマンド実装（`begin`/`run`/`end`/`heartbeat`/`reap`/`lease`）と
+  `resolve_session_id`/`resolve_run_id`。dedup 契約（exit 1 + skip JSON）の実行点。`begin` の PDO-anchor
+  advisory（`scope_overlap` の glob-prefix overlap＝`scopes_overlap`/`glob_prefix`、`possible_duplicate`
+  の fuzzy 近似重複＝`anchor_text` + `text_similarity`、閾値 `duplicate_threshold`＝既定
+  `POSSIBLE_DUPLICATE_THRESHOLD`(=0.6)、env `OVERWATCH_DUP_THRESHOLD` で上書き可）と、
+  `lease_for_session`/`pick_session_lease`（session の現在 anchor 選択）を含む。
 - **`aggregate`** — 状態射影。`ProgressView` とサブ構造（`SessionRoster`/`LeaseInfo`/`BacklogSummary`/
   `HypoBuckets`/`RunRow`）、純パーサ（`roster_from_leases`/`parse_backlog`/`bucket_hypotheses`/
   `parse_condukt_runs`）、fail-soft シェル（`shell_soft`）、`build`（infallible 集約）。

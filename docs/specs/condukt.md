@@ -62,7 +62,11 @@
 - **`worktree create|merge|remove|cleanup|list`** — git worktree ライフサイクル。
 - **`state init|set|show|gate|list|reconcile|resume-context|record-run|test|stats|…`** — 実行状態の永続化と
   完了ゲート。`set --status verified` は F→P ゲートを強制。`reconcile` はマージ済み/削除済みブランチを `verified`
-  へ昇格（stale 修復）。`record-run --all` は fugu-router 向けに outcome を冪等記録（Stop hook）。`test` は
+  へ昇格（stale 修復）。**その昇格の前に cross-run 重複完了を検出する（DESIGN §4.6c）**: この run が完了した
+  hashkey を、別 run_id が **この run の `claimed_at` より後に** 同じく done/verified にしていないか兄弟 run を
+  横断走査し、見つかれば何も変更せず `{"duplicate_completion":[{hashkey,runs:[run_id...]}]}` を出力して **exit 2**
+  （escalate = 人間/HOTL がどちらの実装を残すか選ぶ。exit code 契約 0=auto/2=escalate/3=block に従う）。重複が無い
+  通常パス（自動 verified・exit 0）は不変。`record-run --all` は fugu-router 向けに outcome を冪等記録（Stop hook）。`test` は
   `[test].command`→自動検出（cargo/npm/pytest）で `sh -c` 実行し exit code 伝播。
 - **`state check-oracle|check-criteria`** — F→P 再現証明の判定 / `done_criteria` の機械ゲート＋`skip_verifier`
   導出（振る舞い系は常に `skip_verifier:false`）。`verify::classify_criteria` は構造化 `is_behavioral`/
@@ -90,6 +94,10 @@
   `schedule`（force-gate → depth layering → greedy graph coloring）。file-overlap は `class` に対し権威。
 - **`state`** — 実行状態の永続化・完了ゲート・stale 修復。`RunState`/`Status`（`Pending`/`Running`/`Failed`/
   `Verified`/`Cancelled`/`Discarded`）・`gate_reasons`・`enforce_fp_gate`・reconcile/resume/record-run。最大 module。
+  `TaskState` は cross-run 相関のための per-task identity として `hashkey: Option<String>`（claim registry と同じ
+  opaque hashkey）と `claimed_at: Option<i64>`（占有した Unix 秒）を持つ（両方 `#[serde(default)]` で後方互換。
+  未キーのタスク・旧レイアウトは fail-soft）。`detect_duplicate_completions` がこの2フィールドで §4.6c の
+  重複完了検出を行う。
 - **`policy` / `gate_exec` / `circuit` / `run_policy`** — graded-autonomy の決定コア。純関数
   `decide`（Level×3→`Decision`）・`decide_gate_exec`・`decide_circuit`・`decide_run_policy` と、その周囲の
   fail-soft な信号収集＋exit-code emit（`run_gate_check`/`run_circuit_check`）。

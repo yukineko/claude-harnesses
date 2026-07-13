@@ -58,13 +58,25 @@ skill `/flow` でループを起動する。
      `condukt policy answer`（risk×reversible×confidence の graded 判定）に通す（下記参照）
 1. compass ゲート — charter が陳腐なら自動実行せず /compass を促して停止
 2. ロック取得 — backlog lock acquire（クロスセッション直列化）
-3. 実行ループ — 優先度順にピック（claim-skip ゲート）→ 着手前に claim（TOCTOU ガード）→ /condukt → 検証 → sink
+3. 実行ループ — 優先度順にピック（claim-skip ゲート）→ 着手前に claim（TOCTOU ガード）
+       → overwatch anchor 登録（overwatch begin）→ /condukt → 検証 → sink
        sink: backlog done / compass outcome（前進・不変・後退を記録）
              / hypothesis は出荷で awaiting-measurement、計測後に validate/reject（証拠必須）
              / fugu-router に record
              / いずれも claim を release、ループ中は heartbeat で claim を live に保つ
-4. ロック解放 — source が尽きる/予算超過/中断で lock release + サマリ報告 + pivot-check
+4. ロック解放 — source が尽きる/予算超過/中断で lock release + overwatch end + サマリ報告 + pivot-check
 ```
+
+### PDO session anchor（`overwatch begin`/`end`）
+
+Step 3-1 で課題文を組み立てた直後、**どの source を選んだか（compass 主筋 / measure step / backlog /
+open 仮説）に関わらず** `overwatch begin --key <pdo-unit-id> --title <title> [--scope <csv>]
+[--done-criteria <dc>]` を呼び、そのセッションの現在の責務を project-wide レジストリに登録する
+（`overwatch status` で可視。DESIGN §4.2）。これにより **condukt run を起こさない measure step でも**
+「今どのセッションが何を担当しているか」がレジストリに乗る。Step 4 で対応する
+`overwatch end --key <k> --status <done|abandoned>` を呼び anchor のライフサイクルを閉じる。
+バッチ（複数 backlog item）は item ごとに begin/end する。**fail-soft**: `overwatch` バイナリが
+無ければ両方 skip して続行する（既存の condukt/backlog/compass 欠落時と同じ方針＝turn を壊さない）。
 
 ### 自律ゲート（`condukt policy answer`）
 

@@ -15,7 +15,7 @@ error it exits 0 and stays silent.
 
 | Subcommand | Hook | What it does |
 |---|---|---|
-| `ctxrot guard` | `UserPromptSubmit` | Detects large refs (big local files / URLs / "全文" keywords) and **context-budget bands** (50/75/90% of the window). Injects *minimal, conditional* advice — only when something is relevant, and budget advice only once per band crossing (so the advice itself doesn't cause rot). At **band ≥ 2 (~75%+)** it also **preemptively writes a rescue note** (same format as below), so a manual `/compact` *or `/clear`* is safe without waiting for PreCompact. |
+| `ctxrot guard` | `UserPromptSubmit` | Detects large refs (big local files / URLs / "全文" keywords) and **context-budget bands** (50/75/90% of the window). Injects *minimal, conditional* advice — only when something is relevant, and budget advice only once per band crossing (so the advice itself doesn't cause rot). At **band ≥ 2 (~75%+)** it also **preemptively writes a rescue note** (same format as below), so a manual `/compact` *or `/clear`* is safe without waiting for PreCompact. Also carries **two re-anchor tracks**: the Decisions/todo re-anchor (band ≥ 2, every 8 prompts) and a separate **PDO session-anchor** — when this session holds a live `overwatch` lease (read via `overwatch lease --session $CLAUDE_CODE_SESSION_ID --json`), it re-surfaces a 1–2 line "you are responsible for *&lt;title&gt;*; done_criteria: …" reminder (raw scope globs are *not* injected) at band ≥ 1, once every `anchor_reinject_every` prompts (default 12, sparser than the Decisions track and on its own cooldown so the two never interfere). Silent no-op when the session holds no lease, overwatch is absent, or the lease JSON can't be parsed. |
 | `ctxrot rescue` | `PreCompact` | Right before `/compact`, streams the recent transcript and writes a durable **rescue note** (decisions, open todos, touched files, links, raw recent turns) so nothing is lost to lossy compaction. Deterministic, no LLM. The note filename carries a **session tag** (`rescue-<session>-<ts>.md`). Same writer also powers guard's preemptive rescue (labeled `trigger: band-NN%`). By default it *also* fire-and-forgets a detached `claude -p` async distill (`distill_on_compact`, feature ④) that upgrades the note to LLM quality without blocking compaction. |
 | `ctxrot restore` | `SessionStart` | At session start, injects a **compact carryover** (decisions + open todos + a link). It prefers *this* session's own note (matched by session tag); the cross-session fallback returns the latest note when the stream is unambiguous (≤1 session in the dir) but, when **parallel sessions** share one project dir (≥2 sessions), restricts to untagged/shared notes so it never grabs a sibling's carryover. Never the whole note. |
 | `ctxrot preguard` | `PreToolUse` | **Preventive gate, before the load.** Two layers: (1) **rule-based** — a `Read` matching a `load_deny` glob is denied *regardless of size* ("never load these"; holds even for a bounded slice by default), while a `load_allow` glob bypasses the size gate ("trusted, load whole"). (2) **size-based** — an *unbounded* `Read` (no `limit`) of a local file at/above `gate_file_bytes` (default **1MB**) is denied with an actionable reason. Precedence: **deny → limit → allow → size**. Narrow by design so normal source reads are untouched. |
@@ -180,6 +180,14 @@ bands = [0.50, 0.75, 0.90]
 reanchor_enabled = true         # re-surface decisions/todos near window end (anti lost-in-the-middle)
 reanchor_min_band = 2           # only at/above this band (≈75%)
 reanchor_every_prompts = 8      # at most once per N qualifying prompts
+
+anchor_reinject_every = 12      # PDO session-anchor re-inject (§4.3): a SEPARATE track from
+                                #   the Decisions re-anchor above. When this session holds a live
+                                #   `overwatch` lease (a PDO unit: title + done_criteria), re-surface
+                                #   "what am I working on" at most once per N qualifying prompts
+                                #   (band ≥ 1). Deliberately sparser than reanchor_every_prompts (the
+                                #   anchor is one unchanging fact, not growing project knowledge).
+                                #   No live lease / overwatch not installed → silent (fail-soft).
 
 keep_notes_per_project = 30     # `ctxrot note prune` keeps the newest N
 keep_distill_min = 10           # …but always protects the newest N distill notes

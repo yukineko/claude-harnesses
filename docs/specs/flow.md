@@ -32,6 +32,13 @@ flow バイナリはそれらの状態を一切持たない（新しい state st
   executor（condukt）は state ディレクトリが独立。`/flow` は backlog ロックを共有してクロスセッション直列化し
   `/backlog` と同時に走らない（`/flow` は `/backlog` の上位互換）。build ≠ validate（仕様は出荷で
   `awaiting-measurement`、計測後に validate/reject）。どの早期脱出経路でもロック解放を必須とする。
+- **PDO session anchor（skill 側・fail-soft）** — Step 3-1 で課題文を組み立てた直後、選んだ source 種別に
+  よらず `overwatch begin --key <pdo-unit-id> --title <title> [--scope <csv>] [--done-criteria <dc>]` を
+  呼び、セッションの現在の責務を project-wide レジストリ（`overwatch status`）に登録する（DESIGN §4.2）＝
+  condukt run を起こさない measure step でも anchor が立つ。Step 4 で対応する `overwatch end --key <k>
+  --status <done|abandoned>` を呼び anchor を閉じる（バッチは item ごとに begin/end）。両呼び出しは
+  fail-soft — `overwatch` バイナリ欠落・呼び出し失敗時は skip して続行し、turn を壊さない（既存の
+  condukt/backlog/compass 欠落時と同じ方針）。
 
 ## 振る舞い
 
@@ -57,8 +64,9 @@ flow バイナリはそれらの状態を一切持たない（新しい state st
   human gate を `condukt policy answer` に risk×reversibility×confidence を添えて通し、auto/escalate/block の
   決定論的 verdict に従う（pivot 判断・deploy/push GATED・worker blocked は常に人間で止まる）。
 - **Step 1〜4** — compass ゲート（charter 陳腐なら停止し `/compass` を促す）→ backlog ロック取得 →
-  優先度順ピック（claim-skip + TOCTOU claim）→ `/condukt` → 検証 → sink（backlog done / compass outcome /
-  hypothesis validate-reject / fugu-router record / claim release + heartbeat）→ ロック解放 + pivot-check。
+  優先度順ピック（claim-skip + TOCTOU claim）→ **`overwatch begin`（PDO anchor 登録・source 種別によらず）**
+  → `/condukt` → 検証 → sink（backlog done / compass outcome / hypothesis validate-reject / fugu-router
+  record / claim release + heartbeat）→ ロック解放 + **`overwatch end`（anchor 解放）** + pivot-check。
 
 ### module 責務
 
@@ -68,4 +76,4 @@ flow バイナリはそれらの状態を一切持たない（新しい state st
   `BacklogItem`（backlog JSON の最小デシリアライズ）、定数 `DIRECTIVE`（backlog 欠落時の静的英語
   フォールバック）で構成。専用モジュール分割は無い（scaffold ゆえ）。
 - **skill / hook（非 Rust 資産）** — 実質のロジックは `skills/flow/SKILL.md`（source→executor ループ）と
-  `hooks/hooks.json`（SessionStart→`flow propose`）に存在。plugin.json version は 0.1.7。
+  `hooks/hooks.json`（SessionStart→`flow propose`）に存在。plugin.json version は 0.1.9。

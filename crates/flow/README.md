@@ -52,7 +52,8 @@ The skill drives the loop; the binary only injects the SessionStart proposal dir
      `condukt policy answer`（risk×reversible×confidence の graded 判定）に通す（下記参照）
 1. compass ゲート — `compass gap`。charter が陳腐なら自動実行せず /compass を促して停止
 2. ロック取得 — `backlog lock acquire`（クロスセッション直列化）
-3. 実行ループ — 優先度順にピック（claim-skip ゲート）→ 着手前に claim（TOCTOU ガード）→ /condukt → 検証 → sink
+3. 実行ループ — 優先度順にピック（claim-skip ゲート）→ 着手前に claim（TOCTOU ガード）
+       → overwatch anchor 登録（overwatch begin）→ /condukt → 検証 → sink
        ピック順: compass 主筋
                  → measure step（awaiting-measurement の仮説を計測して validate/reject で閉じる）
                  → `backlog`（複数 ready 課題は順列でなく 1 condukt run に束ね、並列/直列は condukt の
@@ -64,11 +65,23 @@ The skill drives the loop; the binary only injects the SessionStart proposal dir
                  / fugu-router に record
                  / いずれも claim を release、ループ中は heartbeat で claim を live に保つ
        失敗: backlog fail --reason …、スキップして次へ
-4. ロック解放 — source が尽きる/予算超過/中断で `backlog lock release` + サマリ報告 + pivot-check
+4. ロック解放 — source が尽きる/予算超過/中断で `backlog lock release` + `overwatch end` + サマリ報告 + pivot-check
 ```
 
 **盲目実行しない**: compass ゲートが鮮明でない限り自動でキューを流し始めない。
 **ロック解放を絶対に飛ばさない**（早期脱出・エラー時も）。
+
+### PDO session anchor (`overwatch begin`/`end`)
+
+Right after building a task's text in Step 3-1 — **regardless of which source was chosen**
+(compass next move / measure step / backlog / open hypothesis) — flow calls
+`overwatch begin --key <pdo-unit-id> --title <title> [--scope <csv>] [--done-criteria <dc>]`
+so the session's current responsibility lands in the project-wide registry (visible via
+`overwatch status`; DESIGN §4.2). This anchors even a **measure step that starts no condukt
+run**. In Step 4 the matching `overwatch end --key <k> --status <done|abandoned>` closes the
+anchor's lifecycle. A batch (multiple backlog items) begins/ends per item. Both calls are
+**fail-soft**: if the `overwatch` binary is absent, flow skips them and continues — the same
+policy as the existing condukt/backlog/compass fail-soft.
 
 ### Autonomy gate (`condukt policy answer`)
 

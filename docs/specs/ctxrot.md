@@ -31,7 +31,7 @@ JSON を stdin から読む（`harness_core::hook::run_hook`）。フックは3�
   この予算メーターで判定し、生 `used_percentage` ではない（真の ~1M 窓でも正しく発火。0.5.0 で意味変更）。
 - **並列セッション安全** — note は `session_tag` 付き名で書かれ、restore/anchor は `latest_note_for_session` で
   自セッション自身のノートに前方一致で戻る。loadset は project_key ごと1ファイル。state
-  （`.band`/`.anchor`/`.compact-band`/`.distilled`）は `safe_session` で名前安全化。
+  （`.band`/`.anchor`/`.session_anchor`/`.compact-band`/`.distilled`）は `safe_session` で名前安全化。
 - **帯は escalate-only だが ratchet ではない** — 帯昇格・reanchor cadence・compact-band は同一帯で再発火せず、
   `/compact` で使用率が下がると緩められ再上昇で再発火する。stop は加えて `stop_hook_active` 再入ガードを持つ。
 - **distill contract** — restore が引き継ぐ見出し（`決定事項/Decisions`・`残課題/Open todos`）を欠くノートを
@@ -47,11 +47,17 @@ JSON を stdin から読む（`harness_core::hook::run_hook`）。フックは3�
 
 hook サブコマンド（hooks.json / `install` が配線する 6 フック）:
 
-- **`guard`（UserPromptSubmit）** — 4 ブロックを cap して注入: (1) `.distilled` marker を消費して蒸留結果を
+- **`guard`（UserPromptSubmit）** — 5 ブロックを cap して注入: (1) `.distilled` marker を消費して蒸留結果を
   一度だけ再注入（`/compact` 後の唯一の再注入路）、(2) 大きい参照検知（巨大ファイル・URL・「全文」系語）、
   (3) 予算帯 50/75/90% を帯またぎ時だけ escalate、(4) reanchor（`reanchor_min_band` 既定 2 以上・
-  `reanchor_every_prompts` 既定 8 ごと）で自セッションの Decisions/todos を末尾に再浮上。band ≥ 2 で先行 rescue
-  を書き、最上位帯で `spawn_for_band` の async distill を先回り起動。
+  `reanchor_every_prompts` 既定 8 ごと）で自セッションの Decisions/todos を末尾に再浮上、(5) **PDO session-anchor**
+  （§4.3・DESIGN-pdo-session-anchor.md）——決定事項 re-anchor とは**別トラック**で、`overwatch lease --session
+  $CLAUDE_CODE_SESSION_ID --json` で読んだ live lease があれば「今の担当（title + done_criteria の 1〜2 行要約。
+  scope の生 glob は注入しない）」を band ≥ 1 から `anchor_reinject_every`（既定 12。決定事項より疎）ごとに再浮上。
+  専用クールダウンファイル（`<safe>.session_anchor`）で決定事項トラックと干渉しない。lease 無し・overwatch 欠落・
+  JSON parse 不能なら無音 no-op（fail-soft）。両 anchor ブロックとも `Prio::Anchor` として `guard_inject_max_chars`
+  （既定 1200）の per-turn cap を共有する。band ≥ 2 で先行 rescue を書き、最上位帯で `spawn_for_band` の
+  async distill を先回り起動。
 - **`rescue`（PreCompact）** — `/compact` 直前に直近 transcript（60 ターン×1200 字）から決定/todo/ファイル/
   リンク/生ターンを抽出し `rescue-<tag>-<ts>.md` を書く。`band-NN%` 先行退避は `rescue_coalesce_secs`
   （既定 120）で coalesce するが `precompact`/auto はしない。続けて `spawn_detached` を fire-and-forget。
@@ -89,7 +95,9 @@ rescue/band から fire される detached worker。pre-compaction transcript �
 - **`config`** — `Config`／on-disk `FileConfig`／defaults／`~/.ctxrot/config.toml`／env override
   （`GUARD_*`・`CLAUDE_CONTEXT_WINDOW`・`CTXROT_*`）。`band_for`／`disabled()`／bands の sanitize。
 - **`hooks::guard`** — UserPromptSubmit 中核。`Prio`＋`cap_blocks`（injection cap）、`check_large_references`、
-  `check_context_budget`（帯昇格＋先行 rescue＋band distill）、`check_reanchor`、`check_distilled`、`safe_session`。
+  `check_context_budget`（帯昇格＋先行 rescue＋band distill）、`check_reanchor`、`check_session_anchor`
+  （§4.3 PDO anchor: `fetch_session_lease`／`render_session_anchor`／専用 `.session_anchor` クールダウン）、
+  `check_distilled`、`safe_session`。
 - **`hooks::rescue`** — PreCompact 決定論退避。`write`（coalesce）／`extract`／`render_note`。先行 rescue と共有。
 - **`hooks::restore`** — SessionStart carryover。`note_carryover`／`pinned_carryover`／`extract_section`
   （anchor/distill と共有）、distill contract の single source（`REQUIRED_SECTIONS`／`missing_sections` 他）。

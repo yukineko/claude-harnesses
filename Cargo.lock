@@ -188,7 +188,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -197,6 +197,7 @@ dependencies = [
  "harness-core",
  "serde",
  "serde_json",
+ "tempfile",
  "toml",
 ]
 

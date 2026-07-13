@@ -23,12 +23,70 @@ fn resolve_run_id() -> String {
     format!("run-{}", store::now())
 }
 
+/// Default Jaccard threshold above which two anchors are flagged as possible
+/// near-duplicates (§4.6a). Overridable via `OVERWATCH_DUP_THRESHOLD`.
+const POSSIBLE_DUPLICATE_THRESHOLD: f64 = 0.6;
+
+/// Resolve the near-duplicate threshold: env override if a valid `[0,1]` float,
+/// else the default.
+fn duplicate_threshold() -> f64 {
+    std::env::var("OVERWATCH_DUP_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|v| (0.0..=1.0).contains(v))
+        .unwrap_or(POSSIBLE_DUPLICATE_THRESHOLD)
+}
+
+/// The text an anchor is fuzzy-matched on: its title plus done_criteria.
+fn anchor_text(title: &str, done_criteria: Option<&str>) -> String {
+    match done_criteria {
+        Some(dc) => format!("{title} {dc}"),
+        None => title.to_string(),
+    }
+}
+
+/// Literal path prefix of a glob: the part before the first glob metacharacter,
+/// with any trailing `/` removed (e.g. `crates/overwatch/src/**` -> `crates/overwatch/src`).
+fn glob_prefix(g: &str) -> &str {
+    let end = g.find(['*', '?', '[']).unwrap_or(g.len());
+    g[..end].trim_end_matches('/')
+}
+
+/// Path-boundary-aware relation: true when `a` and `b` are the same path, or one
+/// is an ancestor directory of the other. Avoids false matches like `src/foo`
+/// vs `src/foobar` (checks that the boundary is a `/`).
+fn path_related(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    if short.is_empty() {
+        return true; // a bare glob (e.g. `**`) covers everything
+    }
+    long.starts_with(short) && long.as_bytes().get(short.len()) == Some(&b'/')
+}
+
+/// Coarse overlap of two glob scopes via their literal prefixes. Deliberately
+/// approximate: overwatch only raises an *early* warning (§4.5); condukt's
+/// conflict-check makes the precise call.
+fn scopes_overlap(a: &[String], b: &[String]) -> bool {
+    a.iter().any(|ga| {
+        b.iter()
+            .any(|gb| path_related(glob_prefix(ga), glob_prefix(gb)))
+    })
+}
+
 /// Begin a new lease for a task. If a live lease from another session already holds the key,
 /// print a skip JSON to stdout and exit with code 1.
 ///
 /// `scope` (files/globs) and `done_criteria` are the PDO session-anchor fields
 /// (DESIGN §4.1/§4.2); both are optional so pre-existing callers that omit them
 /// keep working unchanged. An empty `scope` means "not yet fixed".
+///
+/// On success prints a JSON summary to stdout (exit 0). It carries
+/// `scope_overlap` (§4.5): other live leases (different key) whose scope overlaps
+/// this one — a non-blocking early warning. Empty when nothing overlaps or when
+/// this lease has no scope.
 pub fn begin(
     key: &str,
     title: &str,
@@ -60,6 +118,38 @@ pub fn begin(
         std::process::exit(1);
     }
 
+    // Early scope-overlap warning (§4.5): other live leases (different key) whose
+    // scope overlaps this one. Skipped when this lease declares no scope. Purely
+    // advisory — never changes the exit code.
+    let scope_overlap: Vec<serde_json::Value> = if scope.is_empty() {
+        Vec::new()
+    } else {
+        leases
+            .values()
+            .filter(|l| l.key != key && !l.scope.is_empty() && scopes_overlap(&scope, &l.scope))
+            .map(|l| json!({ "key": l.key, "title": l.title, "scope": l.scope }))
+            .collect()
+    };
+
+    // Near-duplicate warning (§4.6a): other live leases (different key) whose
+    // title/done_criteria are lexically similar (Jaccard ≥ threshold) to this
+    // one. Advisory only — never changes the exit code. Reuses the shared
+    // harness-core tokenizer/Jaccard so semantics match lesson search.
+    let threshold = duplicate_threshold();
+    let this_text = anchor_text(title, done_criteria.as_deref());
+    let possible_duplicate: Vec<serde_json::Value> = leases
+        .values()
+        .filter(|l| l.key != key)
+        .filter_map(|l| {
+            let sim = harness_core::lessons::text_similarity(
+                &this_text,
+                &anchor_text(&l.title, l.done_criteria.as_deref()),
+            );
+            (sim >= threshold)
+                .then(|| json!({ "key": l.key, "title": l.title, "similarity": sim }))
+        })
+        .collect();
+
     // If same session already holds it, this is idempotent: just refresh
     // Otherwise insert new lease
     let claimed_at = leases.get(key).map(|l| l.claimed_at).unwrap_or(now);
@@ -85,6 +175,15 @@ pub fn begin(
 
     // Save updated leases
     store::save_leases(&cwd, &leases)?;
+
+    // Advisory success summary (exit 0). `scope_overlap` is the §4.5 early
+    // warning; `possible_duplicate` is the §4.6a near-duplicate warning. Both
+    // are advisory and default to empty arrays.
+    let summary = json!({
+        "scope_overlap": scope_overlap,
+        "possible_duplicate": possible_duplicate,
+    });
+    println!("{summary}");
 
     Ok(())
 }
@@ -307,5 +406,46 @@ mod tests {
         let mut leases = store::LeaseRegistry::new();
         leases.insert("k1".into(), lease_at("k1", "sess-a", 100));
         assert!(pick_session_lease(&leases, "sess-x").is_none());
+    }
+
+    #[test]
+    fn anchor_text_combines_title_and_done_criteria() {
+        assert_eq!(anchor_text("do X", Some("tests green")), "do X tests green");
+        assert_eq!(anchor_text("do X", None), "do X");
+    }
+
+    #[test]
+    fn duplicate_threshold_defaults_without_env() {
+        std::env::remove_var("OVERWATCH_DUP_THRESHOLD");
+        assert_eq!(duplicate_threshold(), POSSIBLE_DUPLICATE_THRESHOLD);
+    }
+
+    #[test]
+    fn glob_prefix_strips_metachars_and_trailing_slash() {
+        assert_eq!(glob_prefix("crates/overwatch/src/**"), "crates/overwatch/src");
+        assert_eq!(glob_prefix("crates/foo/bar.rs"), "crates/foo/bar.rs");
+        assert_eq!(glob_prefix("**"), "");
+        assert_eq!(glob_prefix("src/*.rs"), "src");
+    }
+
+    #[test]
+    fn scopes_overlap_matches_ancestor_and_exact_not_sibling() {
+        // glob dir vs a file inside it -> overlap
+        assert!(scopes_overlap(
+            &["crates/overwatch/src/**".into()],
+            &["crates/overwatch/src/store.rs".into()],
+        ));
+        // exact same path -> overlap
+        assert!(scopes_overlap(&["a/b.rs".into()], &["a/b.rs".into()]));
+        // sibling dirs sharing a string prefix but not a path boundary -> no overlap
+        assert!(!scopes_overlap(
+            &["crates/overwatch/**".into()],
+            &["crates/overwatchX/**".into()],
+        ));
+        // disjoint crates -> no overlap
+        assert!(!scopes_overlap(
+            &["crates/overwatch/**".into()],
+            &["crates/stuckguard/**".into()],
+        ));
     }
 }

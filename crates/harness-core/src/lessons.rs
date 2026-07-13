@@ -239,6 +239,16 @@ fn jaccard(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
     }
 }
 
+/// Lexical Jaccard token-overlap similarity of two free-text strings, in `[0,1]`.
+/// Reuses the same tokenizer (lowercase, alphanumeric, len ≥ 3, stopwords
+/// dropped) as lesson search, so callers get identical fuzzy-match semantics
+/// without depending on an embedding model. Two texts with no shared 3+ char
+/// tokens score 0.0; identical token sets score 1.0. Exposed for reuse by other
+/// crates (e.g. overwatch's near-duplicate anchor detection, §4.6a).
+pub fn text_similarity(a: &str, b: &str) -> f64 {
+    jaccard(&tokenize(a), &tokenize(b))
+}
+
 /// The lexical token set of a lesson: its task summary + lesson text combined,
 /// so a query matches either the "what task" or the "what learned" side.
 fn lesson_tokens(l: &Lesson) -> BTreeSet<String> {
@@ -461,6 +471,20 @@ mod proptests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_similarity_scores_overlap() {
+        // identical token content -> 1.0
+        assert_eq!(text_similarity("add scope field", "add scope field"), 1.0);
+        // no shared 3+ char tokens -> 0.0
+        assert_eq!(text_similarity("alpha bravo", "charlie delta"), 0.0);
+        // partial overlap -> strictly between 0 and 1
+        let s = text_similarity(
+            "implement overwatch lease scope",
+            "implement overwatch lease done_criteria",
+        );
+        assert!(s > 0.0 && s < 1.0, "partial overlap should be in (0,1): {s}");
+    }
 
     fn lesson(id: &str, summary: &str, text: &str) -> Lesson {
         Lesson {

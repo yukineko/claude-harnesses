@@ -7,6 +7,12 @@
 //! session state. A fake `backlog` executable on the child's PATH records each
 //! `add` so we can assert the bridge's shell-out contract deterministically,
 //! without building/running the real backlog binary.
+//!
+//! This whole test is unix-specific: it writes and `chmod +x`es a `#!/bin/sh`
+//! fake `backlog` and uses `PermissionsExt::set_mode`. Guard the entire test
+//! binary to `cfg(unix)` (repo convention; non-unix is off the WSL/Mac/Linux
+//! target). On non-unix this compiles to an empty test binary.
+#![cfg(unix)]
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;

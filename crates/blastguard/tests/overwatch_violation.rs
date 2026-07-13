@@ -104,6 +104,10 @@ fn allow_emits_no_violation() {
     );
 }
 
+// `PermissionsExt::set_mode` is unix-only; guard to match the repo convention
+// (specguard/scope.rs, harness-core/store.rs, stuckguard/main.rs, ...). Harmless
+// no-op elision on non-unix, which is off the WSL/Mac/Linux target anyway.
+#[cfg(unix)]
 #[test]
 fn deny_decision_is_byte_identical_regardless_of_store_writability() {
     // Writable HOME (emit succeeds).
@@ -134,6 +138,8 @@ fn deny_decision_is_byte_identical_regardless_of_store_writability() {
     assert!(stdout_u.contains(r#""permissionDecision":"deny""#));
 }
 
+// `PermissionsExt::set_mode` is unix-only (see note above).
+#[cfg(unix)]
 #[test]
 fn unwritable_store_does_not_panic_and_stays_exit_zero() {
     let home = tempdir();

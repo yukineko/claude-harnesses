@@ -7,6 +7,7 @@
 //! analysis, manage the git-worktree lifecycle, track run state, and gate
 //! completion. Hooks (restore/statusline) never break a turn — they exit 0.
 
+mod adversarial;
 mod checkpoint;
 mod ci;
 mod circuit;
@@ -153,6 +154,14 @@ enum Command {
     Consensus {
         #[command(subcommand)]
         action: ConsensusAction,
+    },
+    /// Adversarial refutation panel (verification-side fan-out): plan an opt-in
+    /// N-skeptic panel for a high-stakes completion, or adjudicate N skeptic
+    /// ballots for one artifact into a fail-closed block/escalate/pass decision.
+    /// Complements `consensus` (which fans out generation, not verification).
+    Adversarial {
+        #[command(subcommand)]
+        action: AdversarialAction,
     },
     /// Create ~/.condukt and a default config.toml.
     Init,
@@ -499,6 +508,45 @@ enum ConsensusAction {
         /// Agreement threshold override (CLI > JSON > config > built-in default).
         #[arg(long)]
         threshold: Option<f64>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdversarialAction {
+    /// Decide whether a completion warrants an adversarial panel. OPT-IN:
+    /// engaged by the env switch `CONDUKT_ADVERSARIAL` (1/true) OR by a
+    /// high-stakes change (any `--touched` path under a GATE crate:
+    /// blastguard/propguard/specguard/stuckguard/mutategate). Prints the plan
+    /// JSON and exits 0 when a panel is warranted (so the skill can branch on
+    /// the exit code, like `consensus plan` / `state autonomy-check`), 1 for the
+    /// ordinary single-verifier path.
+    Plan {
+        /// A changed path (repeatable). A path under `crates/<gate>/` forces the
+        /// panel even when the global switch is off.
+        #[arg(long = "touched")]
+        touched: Vec<String>,
+        /// Panel width override (clamped to [2, MAX_PANEL] when engaged).
+        #[arg(long)]
+        size: Option<usize>,
+    },
+    /// Adjudicate N independent skeptic ballots (JSON on stdin or --file) for the
+    /// SAME artifact into a fail-closed decision. Prints the decision JSON; exits
+    /// 0 when the artifact passes, 1 when the caller must NOT auto-accept (block
+    /// or escalate — the `outcome` field distinguishes them, so the skill can
+    /// tell this apart from a hard error).
+    ///
+    /// Input is either a bare array of ballots or an object
+    /// `{"votes":[...],"min_voters":2,"block_ratio":0.5}`. Each ballot is
+    /// `{"skeptic":"<id>","ballot":"refute|pass|abstain","reason":"<optional>"}`.
+    Adjudicate {
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Effective-voter floor override (below it the panel fails closed).
+        #[arg(long)]
+        min_voters: Option<usize>,
+        /// Refute-ratio block threshold override (inclusive; [0.0, 1.0]).
+        #[arg(long)]
+        block_ratio: Option<f64>,
     },
 }
 
@@ -1684,6 +1732,7 @@ fn run_user(cmd: Command) -> Result<()> {
             }
         },
         Command::Consensus { action } => run_consensus(&cfg, action)?,
+        Command::Adversarial { action } => run_adversarial(action)?,
         Command::Init => init(&cfg)?,
         Command::Install { dry_run } => {
             if dry_run {
@@ -2631,6 +2680,90 @@ fn run_consensus(cfg: &Config, action: ConsensusAction) -> Result<()> {
             // below threshold); 0 when a consensus winner is taken. Distinct JSON
             // on stdout lets the skill tell this apart from a hard error.
             if decision.escalate {
+                std::process::exit(1);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// JSON input for `adversarial adjudicate`: either a bare array of ballots, or an
+/// object that may also carry policy overrides.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum AdversarialInput {
+    Wrapped {
+        #[serde(default)]
+        votes: Vec<adversarial::Vote>,
+        #[serde(default)]
+        min_voters: Option<usize>,
+        #[serde(default)]
+        block_ratio: Option<f64>,
+    },
+    Bare(Vec<adversarial::Vote>),
+}
+
+fn run_adversarial(action: AdversarialAction) -> Result<()> {
+    match action {
+        AdversarialAction::Plan { touched, size } => {
+            // OPT-IN: the global switch is an env var (mirrors CONDUKT_CONSENSUS),
+            // and a change under any GATE crate forces the panel regardless.
+            let global_enabled = std::env::var("CONDUKT_ADVERSARIAL")
+                .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(false);
+            let high_stakes = adversarial::touches_gate_crate(&touched);
+            let plan = adversarial::plan(
+                global_enabled,
+                size.unwrap_or(adversarial::DEFAULT_PANEL),
+                &adversarial::Policy::default(),
+                high_stakes,
+            );
+            println!("{}", serde_json::to_string(&plan)?);
+            // Exit-code contract (mirrors `consensus plan`): 0 = convene a panel,
+            // 1 = ordinary single-verifier path. The skill branches on this.
+            if !plan.engaged {
+                std::process::exit(1);
+            }
+        }
+        AdversarialAction::Adjudicate {
+            file,
+            min_voters,
+            block_ratio,
+        } => {
+            let raw = match &file {
+                Some(p) => std::fs::read_to_string(p)
+                    .with_context(|| format!("reading {}", p.display()))?,
+                None => read_stdin(),
+            };
+            let input: AdversarialInput =
+                serde_json::from_str(&raw).context("parsing adversarial ballots JSON")?;
+            let (votes, json_min, json_ratio) = match input {
+                AdversarialInput::Wrapped {
+                    votes,
+                    min_voters,
+                    block_ratio,
+                } => (votes, min_voters, block_ratio),
+                AdversarialInput::Bare(v) => (v, None, None),
+            };
+            // Precedence: CLI flag > JSON field > built-in default.
+            let default = adversarial::Policy::default();
+            let policy = adversarial::Policy {
+                min_voters: min_voters.or(json_min).unwrap_or(default.min_voters),
+                block_ratio: block_ratio.or(json_ratio).unwrap_or(default.block_ratio),
+                escalate_on_dissent: default.escalate_on_dissent,
+            };
+            if !(0.0..=1.0).contains(&policy.block_ratio) {
+                bail!(
+                    "block_ratio must be within [0.0, 1.0], got {}",
+                    policy.block_ratio
+                );
+            }
+            let decision = adversarial::adjudicate(&votes, &policy);
+            println!("{}", serde_json::to_string_pretty(&decision)?);
+            // Exit 1 when the caller must NOT auto-accept (block or escalate); 0
+            // when the artifact passes. The `outcome` field tells block vs
+            // escalate apart, and distinct JSON separates this from a hard error.
+            if decision.block || decision.escalate {
                 std::process::exit(1);
             }
         }

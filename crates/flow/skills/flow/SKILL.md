@@ -2,7 +2,7 @@
 name: flow
 description: 課題の供給（compass の次の一手 / backlog のキュー）から解決手段の実行（condukt、fugu-router がモデル選択）までを1本のループで貫く統合 driver。source→executor を束ねる「フレームワーク層」。SessionStart で開いている仕事があれば自動で提案され（承認後に起動）、手動でも `/flow` で起動できる。判定（どの source を引くか・止め時）は LLM、状態維持・ロック・モデル選択は既存バイナリ（compass/backlog/condukt/fugu-router）が担う。
 argument-hint: "[任意: 直接の課題文。省略時は compass→backlog から自動でピック]"
-allowed-tools: Task, AskUserQuestion, Bash(backlog:*), Bash(compass:*), Bash(condukt:*), Bash(fugu-router:*), Bash(hypothesis:*), Bash(git:*), Read
+allowed-tools: Task, AskUserQuestion, Bash(backlog:*), Bash(compass:*), Bash(condukt:*), Bash(fugu-router:*), Bash(hypothesis:*), Bash(overwatch:*), Bash(git:*), Read
 ---
 
 # /flow — 統合 source→executor driver
@@ -228,13 +228,29 @@ backlog lock acquire --session-id <SESSION_ID> --project <CWD>
      衝突・共有リソースを触るものは直列に scheduleしてよい**」と condukt に明示する（分解時に item 境界を保てるよう、
      item 単位で done_criteria を切ってもらう）。**item id ↔ condukt タスク**の対応を控える（sink で id ごとに書き戻すため）。
      並列上限は condukt の `max_parallel`（既定 4）が実効的に効くので flow 側で待ち合わせ制御はしない。
-7. **選択を shared discovery store に記録**（未選択は `discovered` で次サイクルへ。バッチなら選んだ各 item を記録）:
+7. **overwatch に anchor を登録**（課題文を組み立てた直後、選んだ source 種別によらず必ず）— これにより
+   condukt run を起こさない measure step でも「今どのセッションが何を担当しているか」が project-wide
+   レジストリ（`overwatch status`）に乗る:
+   ```bash
+   overwatch begin --key "<pdo-unit-id>" --title "<task title>" \
+     --scope "<touched_files をカンマ区切り、不明なら省略>" \
+     --done-criteria "<done_criteria>"
+   ```
+   - `<pdo-unit-id>` は backlog なら `hashkey`、compass 主筋 / measure / hypothesis なら move / 仮説 ID など
+     その PDO 単位を一意に指す文字列。**この key は Step 4 の `overwatch end` で解放するため控えておく**。
+   - `--scope` は分かるなら condukt の `touched_files` と同じ語彙（カンマ区切り）で渡す。調査・carve ループ中など
+     scope が未確定なら**省略**する（空 scope は衝突検知の対象外）。
+   - **バッチ（複数 backlog item）なら item ごとに `overwatch begin` を呼ぶ**（key = 各 item の `hashkey`）。
+   - **fail-soft**: `overwatch` バイナリが無い / 呼び出し失敗時は skip して続行する（既存の
+     `backlog`/`condukt`/`compass` 欠落時と同じ方針＝turn を壊さない）。
+
+8. **選択を shared discovery store に記録**（未選択は `discovered` で次サイクルへ。バッチなら選んだ各 item を記録）:
    ```bash
    compass discovery select --session-id "<SESSION_ID>" --title "<選んだタスクのタイトル>"
    ```
    - 失敗時は fail-soft（compass 欠如 / 呼び出し失敗時も続行）。
 
-8. **着手前に claim する（TOCTOU の最終ガード）** — 選んだタスク（バッチなら各 item）について:
+9. **着手前に claim する（TOCTOU の最終ガード）** — 選んだタスク（バッチなら各 item）について:
    ```bash
    condukt state claim-task --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CODE_SESSION_ID" \
      --title "<title>" --hashkey <hashkey>
@@ -326,7 +342,19 @@ source が尽きた / ユーザー中断 / 予算超過のいずれかで:
 backlog lock release
 ```
 
-**早期脱出時もロック解放は必須**。最後に「処理件数・成功・失敗・残キュー・次に取り直した gap」を報告する。
+**早期脱出時もロック解放は必須**。
+
+**overwatch anchor の解放（Step 3-1 の 7 で登録した各 anchor のライフサイクルを閉じる）**: 3-1 で
+`overwatch begin` した各 `<pdo-unit-id>` について、対応する `end` を呼ぶ:
+```bash
+overwatch end --key "<pdo-unit-id>" --status "<done|abandoned>"
+```
+- `--status` は sink の結果を反映する（成功で閉じたなら `done`、失敗・未完で手放すなら `abandoned`）。
+- **バッチなら item ごとに `overwatch end`**（begin と同じ key＝各 item の `hashkey` を使う）。
+- **fail-soft**: `overwatch` バイナリが無い / 呼び出し失敗時は skip する（既存の backlog lock release /
+  claim 解放と同じ方針＝解放できなくても TTL で自動 reap されるため turn を壊さない）。
+
+最後に「処理件数・成功・失敗・残キュー・次に取り直した gap」を報告する。
 
 #### pivot-check（ループ終端の方向判断）
 

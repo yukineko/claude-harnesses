@@ -158,7 +158,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "globset",
  "harness-core",
@@ -295,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.50"
+version = "0.7.51"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -353,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -509,7 +509,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flow"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "clap",
  "serde",
@@ -824,7 +824,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "anyhow",
  "clap",
@@ -1238,7 +1238,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "stuckguard"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "chrono",

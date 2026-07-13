@@ -145,8 +145,7 @@ pub fn begin(
                 &this_text,
                 &anchor_text(&l.title, l.done_criteria.as_deref()),
             );
-            (sim >= threshold)
-                .then(|| json!({ "key": l.key, "title": l.title, "similarity": sim }))
+            (sim >= threshold).then(|| json!({ "key": l.key, "title": l.title, "similarity": sim }))
         })
         .collect();
 
@@ -422,7 +421,10 @@ mod tests {
 
     #[test]
     fn glob_prefix_strips_metachars_and_trailing_slash() {
-        assert_eq!(glob_prefix("crates/overwatch/src/**"), "crates/overwatch/src");
+        assert_eq!(
+            glob_prefix("crates/overwatch/src/**"),
+            "crates/overwatch/src"
+        );
         assert_eq!(glob_prefix("crates/foo/bar.rs"), "crates/foo/bar.rs");
         assert_eq!(glob_prefix("**"), "");
         assert_eq!(glob_prefix("src/*.rs"), "src");

@@ -483,7 +483,10 @@ mod tests {
             "implement overwatch lease scope",
             "implement overwatch lease done_criteria",
         );
-        assert!(s > 0.0 && s < 1.0, "partial overlap should be in (0,1): {s}");
+        assert!(
+            s > 0.0 && s < 1.0,
+            "partial overlap should be in (0,1): {s}"
+        );
     }
 
     fn lesson(id: &str, summary: &str, text: &str) -> Lesson {

@@ -181,11 +181,12 @@ append-only なレジストリである。同じ種類の失敗は、発生し�
 統合表示だけを持つ。
 
 **不変条件**:
-- **`build_queue` は3スライス上の純関数** — `review_queue::build_queue` は systemic 署名再発
-  (`SignatureRecurrence`)・rollback 事象 (`RollbackEvent`)・AI findings (`ReviewFinding`) の3入力を
-  受け取り、各行に `kind` 判別子 (`systemic`/`rollback`/`ai-finding`) を付けて `ts` 降順（**newest-first**）で
-  マージする。I/O・wall-clock を持たない。
-- **fail-soft（観測系の never-break-a-turn 不変）** — CLI シェル (`review_queue::run`) は3ストアを
+- **`build_queue` は複数スライス上の純関数** — `review_queue::build_queue` は systemic 署名再発
+  (`SignatureRecurrence`)・rollback 事象 (`RollbackEvent`)・AI findings (`ReviewFinding`)・condukt
+  escalations (`ConduktEscalation`) を入力に取り、各行に `EntryKind` 判別子
+  (`systemic`/`rollback`/`ai-finding`/`escalation`) を付けて `ts` 降順（**newest-first**）でマージする。
+  I/O・wall-clock を持たない。
+- **fail-soft（観測系の never-break-a-turn 不変）** — CLI シェル (`review_queue::run`) は各ストアを
   fail-soft に読む。いずれかのソースが欠落/空/破損でも、そのソースは何も寄与せず他のソースは表示され、
   コマンド全体はエラーにしない。AI findings ストア (`review_findings.jsonl`) が未生成のときは
   ai-finding 行が単に出ないだけ（graceful degrade）。
@@ -200,16 +201,20 @@ append-only なレジストリである。同じ種類の失敗は、発生し�
   confirmed）が得られる。emission は fail-soft。
 
 **振る舞い**:
-- **`overwatch review-queue [--json] [--since <ts>] [--limit <n>]`** — 統合リストを人間可読
-  （`[systemic]`/`[rollback]`/`[ai-finding]` タグ付き・新しい順）または `kind` 判別子付き JSON 配列で
-  表示する。`--since`/`--limit` で窓を絞る。
+- **`overwatch review-queue [--json] [--since <ts>] [--limit <n>] [--to-backlog]`** — 統合リストを人間可読
+  （`[systemic]`/`[rollback]`/`[ai-finding]`/`[escalation]` タグ付き・新しい順）または `kind` 判別子付き
+  JSON 配列で表示する。`--since`/`--limit` で窓を絞る。`--to-backlog` は CONFIRMED review findings を
+  backlog へ橋渡しする。
 - **`overwatch record-finding --source <src> …`** — CONFIRMED な AI finding を1件
   `review_findings.jsonl` へ追記する（review-queue の ai-finding アームの唯一の書き込み経路）。
   `/continuous-audit` の CONFIRMED subset がここへ流れる。
-- **`overwatch audit-round record --round <n> --target <csv> [--new-findings N] [--confirmed N]
+- **`overwatch audit-round record --round <id> --target <csv> [--new-findings N] [--confirmed N]
   [--regression-tests-added N]`** — 1ラウンドのメトリクスを収束 ledger へ追記する。`--round` は
-  **単調増加の整数**（round number）であって日付/週番号ではない点に注意（`scripts/continuous-audit.sh`
-  から呼ばれる）。
+  **任意の String 識別子**（round id。連番・日付・週番号いずれも可）で、`audit-round close --round <id>
+  --tests <n>` が後から同じ id のラウンドの `regression_tests_added` を確定できる（closure feedback）。
+- **`overwatch record-disposition` / `compact-findings` / `auto-approved`** — review-effectiveness の
+  補助口: finding の disposition（FP/agreement/latency メトリクス）記録、resolved finding の非破壊
+  ローテーション（review-queue の読み取りを open 項目に限定）、auto-approve 済み母集団の可視化。
 - **`overwatch audit-metrics [--json] [--window <n>]`** — ledger を読み戻し、per-round new-findings 推移・
   closure-rate・`converging` フラグ（既定は末尾3ラウンドの下降判定）を印字する。`converging` は
   successive round が **同一スコープ** を再監査したときのみ意味を持つ（スコープを広げた round では

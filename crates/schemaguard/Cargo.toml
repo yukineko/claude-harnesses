@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "schemaguard"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "Schema-validation gate for LLM structured outputs at source→executor boundaries: validates named declared schemas, emits structured errors for one re-ask, and counts rejects to metrics so silent drops become observable."
 license = "MIT"

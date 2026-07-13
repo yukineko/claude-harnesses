@@ -1,6 +1,6 @@
 {
   "name": "deepwiki",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Repository architecture wiki for Claude Code: a /deepwiki command that maps the repo with a bundled Rust scanner, has a subagent write & refresh hierarchical wiki pages (.deepwiki/*.md) with source links, and tracks freshness against git. Inspired by Devin Wiki. Subscription-native (binary + subagent + command, no API key).",
   "author": { "name": "yukineko" },
   "keywords": ["wiki", "documentation", "architecture", "subagent", "rust"]

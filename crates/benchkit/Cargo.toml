@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "benchkit"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "External-benchmark (SWE-bench Verified) runner skeleton for the harness monorepo: a typed SWE-bench Instance model, a deterministic fixture-based JSONL loader, and a gated `download` subcommand that shells out to `curl` (no HTTP crate) to fetch the Princeton NLP dataset only on explicit invocation. Subscription-native (one bundled Rust binary)."
 license = "MIT"

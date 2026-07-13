@@ -1,6 +1,6 @@
 {
   "name": "beacon",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Desktop & webhook notifications for Claude Code: Stop and Notification hooks that ping you (macOS/Linux desktop, Slack, generic webhook, or a custom command) when a turn finishes or Claude needs your input — so you can step away from long sessions. Subscription-native (two hooks + bundled Rust binary, no API key).",
   "author": { "name": "yukineko" },
   "keywords": ["hooks", "notifications", "slack", "desktop", "rust"]

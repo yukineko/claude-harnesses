@@ -17,7 +17,7 @@
 - **HOTL（Human On The Loop）** — 人間が随時点検・介入する運用モデル。harness-status / taskprog がハンドオフを支援する。
 - **autonomy gate / switch** — 自律運転時に人間ゲートを縮退させる仕組み。condukt の `state autonomy-check` / env `CONDUKT_AUTONOMOUS` / config で切替。
 - **fail-soft（フェイルソフト）／ fail-closed** — 前提ツール不在時に安全側へ縮退して継続するのが fail-soft、閾値未満で確実に阻止するのが fail-closed。propguard は fail-closed、oracle は tdd 不在時に fail-soft。
-- **`.githooks/`** — `git config core.hooksPath .githooks` で有効化する versioned な git hooks。`pre-commit` は injectguard の advisory 事前チェック、`pre-push` は GATE_CRATES（blastguard/propguard/specguard/stuckguard/mutategate）への変更を検知して Continuous-Audit ラウンド実行（`scripts/continuous-audit.sh --dry-run`）を勧める。両方とも fail-soft（常に exit 0、push/commit を止めない）。
+- **`.githooks/`** — `git config core.hooksPath .githooks` で有効化する versioned な git hooks。`pre-commit` は injectguard の advisory 事前チェック、`pre-push` は GATE_CRATES（blastguard/propguard/specguard/stuckguard/mutategate/overwatch）への変更を検知して Continuous-Audit ラウンド実行（`scripts/continuous-audit.sh --dry-run`）を勧める。両方とも fail-soft（常に exit 0、push/commit を止めない）。
 - **F→P オラクル（再現性オラクル）** — condukt の完了ゲートが要求する有効な Fail→Pass 遷移（`condukt state check-oracle`）。これを伴わない fix/feature の verified 昇格を拒否する。
 - **subscription-native** — API キー不要で Claude Code サブスクリプション内で完結する設計（compass / ship / ctxrot / tdd 等）。
 - **activation scope（発火スコープ）** — プラグインをフック頻度で分類する軸。**always-on**（毎ターン級のイベントを持つ）/ **event-scoped**（低頻度イベントのみ）/ **manual**（フックなし・skill か CLI 起動）。`harness-status plugins` が自動分類する。

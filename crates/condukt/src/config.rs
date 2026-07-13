@@ -49,6 +49,18 @@ pub struct Config {
     pub consensus_samples: usize,
     /// Agreement threshold below which a task escalates to opus. Defaults to 0.5.
     pub consensus_threshold: f64,
+    /// Adversarial refutation panel (verification-side fan-out; opt-in). When
+    /// true, `condukt adversarial plan` convenes N independent skeptics to refute
+    /// a completed high-stakes artifact, failing closed. OFF by default (N× the
+    /// verify cost). Overridable via `CONDUKT_ADVERSARIAL`. A GATE-crate-touching
+    /// change forces a panel even when this is off (`adversarial::touches_gate_crate`).
+    pub adversarial_enabled: bool,
+    /// Panel width when engaged. Defaults to 3; clamped to `adversarial::MAX_PANEL`.
+    pub adversarial_size: usize,
+    /// Effective-voter floor below which the panel fails closed. Defaults to 2.
+    pub adversarial_min_voters: usize,
+    /// Refute ratio at/above which the panel blocks (inclusive). Defaults to 0.5.
+    pub adversarial_block_ratio: f64,
     /// Single-worktree execution mode. When true, the /condukt skill runs ALL
     /// tasks in the main repo working tree instead of creating one isolated
     /// worktree+branch per parallel task. File-conflicting tasks still serialize
@@ -129,6 +141,14 @@ struct FileConsensusConfig {
 }
 
 #[derive(Default, Deserialize)]
+struct FileAdversarialConfig {
+    enabled: Option<bool>,
+    size: Option<usize>,
+    min_voters: Option<usize>,
+    block_ratio: Option<f64>,
+}
+
+#[derive(Default, Deserialize)]
 struct FileWorkerConfig {
     sandbox_enabled: Option<bool>,
     docker_image: Option<String>,
@@ -150,6 +170,7 @@ struct FileConfig {
     #[serde(rename = "loop")]
     loop_cfg: Option<FileLoopConfig>,
     consensus: Option<FileConsensusConfig>,
+    adversarial: Option<FileAdversarialConfig>,
     single_worktree: Option<bool>,
     worker: Option<FileWorkerConfig>,
 }
@@ -189,6 +210,10 @@ impl Config {
             consensus_enabled: false,
             consensus_samples: crate::consensus::DEFAULT_SAMPLES,
             consensus_threshold: crate::consensus::DEFAULT_THRESHOLD,
+            adversarial_enabled: false,
+            adversarial_size: crate::adversarial::DEFAULT_PANEL,
+            adversarial_min_voters: crate::adversarial::DEFAULT_MIN_VOTERS,
+            adversarial_block_ratio: crate::adversarial::DEFAULT_BLOCK_RATIO,
             single_worktree: false,
             worker_sandbox_enabled: false,
             worker_sandbox_image: None,
@@ -245,6 +270,20 @@ impl Config {
                         cfg.consensus_threshold = v;
                     }
                 }
+                if let Some(ac) = fc.adversarial {
+                    if let Some(v) = ac.enabled {
+                        cfg.adversarial_enabled = v;
+                    }
+                    if let Some(v) = ac.size {
+                        cfg.adversarial_size = v;
+                    }
+                    if let Some(v) = ac.min_voters {
+                        cfg.adversarial_min_voters = v;
+                    }
+                    if let Some(v) = ac.block_ratio {
+                        cfg.adversarial_block_ratio = v;
+                    }
+                }
                 if let Some(v) = fc.single_worktree {
                     cfg.single_worktree = v;
                 }
@@ -294,6 +333,13 @@ impl Config {
         if let Ok(v) = std::env::var("CONDUKT_CONSENSUS") {
             if let Some(b) = parse_autonomous_env(&v) {
                 cfg.consensus_enabled = b;
+            }
+        }
+        // Reuses the generic truthy/falsy parser to force the adversarial panel
+        // switch from the environment, overriding config.toml.
+        if let Ok(v) = std::env::var("CONDUKT_ADVERSARIAL") {
+            if let Some(b) = parse_autonomous_env(&v) {
+                cfg.adversarial_enabled = b;
             }
         }
         // Reuses the generic truthy/falsy parser to force single-worktree mode
@@ -384,6 +430,29 @@ max_iters = 5
     fn autonomous_defaults_none_when_absent() {
         let fc: FileConfig = toml::from_str("").expect("should parse");
         assert_eq!(fc.autonomous, None);
+    }
+
+    #[test]
+    fn adversarial_config_parses_from_toml() {
+        let toml = r#"
+[adversarial]
+enabled = true
+size = 4
+min_voters = 3
+block_ratio = 0.34
+"#;
+        let fc: FileConfig = toml::from_str(toml).expect("should parse");
+        let ac = fc.adversarial.expect("adversarial section present");
+        assert_eq!(ac.enabled, Some(true));
+        assert_eq!(ac.size, Some(4));
+        assert_eq!(ac.min_voters, Some(3));
+        assert_eq!(ac.block_ratio, Some(0.34));
+    }
+
+    #[test]
+    fn adversarial_config_defaults_none_when_absent() {
+        let fc: FileConfig = toml::from_str("").expect("should parse");
+        assert!(fc.adversarial.is_none());
     }
 
     #[test]

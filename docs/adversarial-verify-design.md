@@ -99,9 +99,10 @@ exit code 契約(consensus と同型): `adjudicate` は **pass=0 / block・escal
 
 - **live verify は一切変えていない**。既定 off の opt-in で、決定論核 + CLI + テストのみ。
   稼働中のゲート挙動は不変(高リスク変更を試作で不安定化させない)。
-- **config.rs 統合は未実施**。global switch は env `CONDUKT_ADVERSARIAL` のみ。採用時は
-  consensus と同じく `[adversarial]` config セクション(enabled/size/min_voters/block_ratio)へ
-  昇格するのが次段。
+- **config.rs 統合済み(2026-07-13)**。`[adversarial]` config セクション
+  (`enabled`/`size`/`min_voters`/`block_ratio`) と env `CONDUKT_ADVERSARIAL` を `Config::load`
+  で解決する(consensus と同型: env が config.toml を上書き)。`condukt adversarial plan/adjudicate`
+  は config 由来の switch と policy を使う(CLI flag > JSON > config > 既定)。既定は enabled=false。
 - **SKILL 配線は未実施**(上記「継ぎ目」)。決定論核が固まったので、次は Phase 6 での
   N-skeptic 起動を skill に足す。
 - 汎用化の余地: 現状 condukt-local。propguard/reviewgate からも使うなら `harness-core` へ

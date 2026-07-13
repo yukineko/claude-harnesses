@@ -1732,7 +1732,7 @@ fn run_user(cmd: Command) -> Result<()> {
             }
         },
         Command::Consensus { action } => run_consensus(&cfg, action)?,
-        Command::Adversarial { action } => run_adversarial(action)?,
+        Command::Adversarial { action } => run_adversarial(&cfg, action)?,
         Command::Init => init(&cfg)?,
         Command::Install { dry_run } => {
             if dry_run {
@@ -2703,19 +2703,28 @@ enum AdversarialInput {
     Bare(Vec<adversarial::Vote>),
 }
 
-fn run_adversarial(action: AdversarialAction) -> Result<()> {
+/// Build the adversarial [`adversarial::Policy`] from config knobs. The
+/// `escalate_on_dissent` behavior has no config field, so it comes from the
+/// built-in default.
+fn adversarial_policy(cfg: &Config) -> adversarial::Policy {
+    adversarial::Policy {
+        min_voters: cfg.adversarial_min_voters,
+        block_ratio: cfg.adversarial_block_ratio,
+        escalate_on_dissent: adversarial::Policy::default().escalate_on_dissent,
+    }
+}
+
+fn run_adversarial(cfg: &Config, action: AdversarialAction) -> Result<()> {
     match action {
         AdversarialAction::Plan { touched, size } => {
-            // OPT-IN: the global switch is an env var (mirrors CONDUKT_CONSENSUS),
-            // and a change under any GATE crate forces the panel regardless.
-            let global_enabled = std::env::var("CONDUKT_ADVERSARIAL")
-                .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
-                .unwrap_or(false);
+            // OPT-IN: the global switch comes from config.toml `[adversarial]
+            // enabled` / `CONDUKT_ADVERSARIAL` (resolved in Config::load); a
+            // change under any GATE crate forces the panel regardless.
             let high_stakes = adversarial::touches_gate_crate(&touched);
             let plan = adversarial::plan(
-                global_enabled,
-                size.unwrap_or(adversarial::DEFAULT_PANEL),
-                &adversarial::Policy::default(),
+                cfg.adversarial_enabled,
+                size.unwrap_or(cfg.adversarial_size),
+                &adversarial_policy(cfg),
                 high_stakes,
             );
             println!("{}", serde_json::to_string(&plan)?);
@@ -2745,12 +2754,12 @@ fn run_adversarial(action: AdversarialAction) -> Result<()> {
                 } => (votes, min_voters, block_ratio),
                 AdversarialInput::Bare(v) => (v, None, None),
             };
-            // Precedence: CLI flag > JSON field > built-in default.
-            let default = adversarial::Policy::default();
+            // Precedence: CLI flag > JSON field > config (`[adversarial]`) > default.
+            let base = adversarial_policy(cfg);
             let policy = adversarial::Policy {
-                min_voters: min_voters.or(json_min).unwrap_or(default.min_voters),
-                block_ratio: block_ratio.or(json_ratio).unwrap_or(default.block_ratio),
-                escalate_on_dissent: default.escalate_on_dissent,
+                min_voters: min_voters.or(json_min).unwrap_or(base.min_voters),
+                block_ratio: block_ratio.or(json_ratio).unwrap_or(base.block_ratio),
+                escalate_on_dissent: base.escalate_on_dissent,
             };
             if !(0.0..=1.0).contains(&policy.block_ratio) {
                 bail!(

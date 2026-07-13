@@ -49,6 +49,13 @@ pub struct Config {
     /// Re-anchor cadence: fire at most once per this many qualifying prompts, so
     /// the block never lands every turn (which would itself accrete rot).
     pub reanchor_every_prompts: u64,
+    /// PDO session-anchor re-inject cadence (§4.3): when this session holds a live
+    /// `overwatch` lease (a PDO unit: title + done_criteria), re-surface it at most
+    /// once per this many qualifying prompts (band ≥ 1). Deliberately SLOWER than
+    /// the Decisions re-anchor (the anchor is a single unchanging fact, not growing
+    /// project knowledge, so 8 would be excessive). A SEPARATE cooldown key from the
+    /// Decisions re-anchor so the two tracks never interfere. Default 12.
+    pub anchor_reinject_every: u64,
     /// GC (`ctxrot note prune`): keep at most this many newest notes per project.
     pub keep_notes_per_project: usize,
     /// GC: also protect the newest this-many `distill-*` notes even if they fall
@@ -158,6 +165,7 @@ struct FileConfig {
     reanchor_enabled: Option<bool>,
     reanchor_min_band: Option<usize>,
     reanchor_every_prompts: Option<u64>,
+    anchor_reinject_every: Option<u64>,
     keep_notes_per_project: Option<usize>,
     keep_distill_min: Option<usize>,
     rescue_coalesce_secs: Option<u64>,
@@ -217,6 +225,7 @@ impl Default for Config {
             reanchor_enabled: true,
             reanchor_min_band: 2,
             reanchor_every_prompts: 8,
+            anchor_reinject_every: 12,
             keep_notes_per_project: 30,
             keep_distill_min: 10,
             rescue_coalesce_secs: 120,
@@ -290,6 +299,9 @@ impl Config {
                 }
                 if let Some(v) = fc.reanchor_every_prompts {
                     cfg.reanchor_every_prompts = v;
+                }
+                if let Some(v) = fc.anchor_reinject_every {
+                    cfg.anchor_reinject_every = v;
                 }
                 if let Some(v) = fc.keep_notes_per_project {
                     cfg.keep_notes_per_project = v;
@@ -417,6 +429,11 @@ impl Config {
         }
         if cfg.reanchor_every_prompts == 0 {
             cfg.reanchor_every_prompts = 8;
+        }
+        // The PDO session-anchor re-inject cadence must be non-zero, else it would
+        // fire every qualifying prompt (the anchor is a stable fact, not per-turn).
+        if cfg.anchor_reinject_every == 0 {
+            cfg.anchor_reinject_every = 12;
         }
         // A zero/blank distill command or timeout would make the async distill a
         // silent no-op; fall back to sane defaults so opting in actually runs.

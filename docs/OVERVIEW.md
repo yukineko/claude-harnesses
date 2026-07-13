@@ -43,7 +43,7 @@ LLM は「解釈・実装・判断」だけを担う。スケジューリング�
 | `pricing.rs` | Opus/Sonnet/Haiku/Fable の USD コスト推定テーブル |
 | `install.rs` | `~/.claude/settings.json` の load/backup/write |
 | `interrogate.rs` | ゴール/仕様精緻化の問答ループ（純粋関数） |
-| `inject.rs` | コンテキスト注入プラグイン（playbook / run-book）の共有基盤 |
+| `inject.rs` | コンテキスト注入プラグイン（playbook / runbook）の共有基盤 |
 
 ---
 
@@ -117,7 +117,7 @@ Claude Code 組込みコンパクションの薄い制御層。pin + lossless-re
 
 - **フック**: UserPromptSubmit
 
-#### run-book
+#### runbook
 プロンプト中の `!name` を `.runbook/<name>.md` の内容に展開して注入する。繰り返し使う手順をマクロ化する。
 
 - **フック**: UserPromptSubmit
@@ -246,7 +246,7 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
   flow（source→executor を束ねるループ。SessionStart で /flow を提案）
       ↓ 課題文
   condukt（実行の背骨）
-      ├─ [前段] playbook / run-book / ctxrot / taskprog が context を整備
+      ├─ [前段] playbook / runbook / ctxrot / taskprog が context を整備
       ├─ [Phase 5 並列実装] fugu-router がモデルを選ぶ
       │    stuckguard / ctxrot / budgetguard / gauge が並走監視
       ├─ [Phase 6 検証] donegate / tdd / precommit-audit / reviewgate
@@ -264,7 +264,7 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
 | Hook | 発火タイミング | 主な登録プラグイン |
 |---|---|---|
 | SessionStart | セッション開始時 | autoflow, compass, condukt(restore), context-governor, ctxrot(restore), daily, difflog, flow(propose), hypothesis, specguard, taskprog |
-| UserPromptSubmit | プロンプト送信前 | context-governor, ctxrot(guard), fugu-router, playbook, run-book |
+| UserPromptSubmit | プロンプト送信前 | context-governor, ctxrot(guard), fugu-router, playbook, runbook |
 | PreToolUse | ツール実行前 | blastguard, ctxrot(preguard) |
 | PostToolUse | ツール実行後 | context-governor, ctxrot(toolguard), session-insights, stuckguard |
 | PreCompact | /compact 直前 | context-governor, ctxrot(rescue) |

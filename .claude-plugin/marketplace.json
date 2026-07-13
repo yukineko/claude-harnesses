@@ -183,7 +183,7 @@
     {
       "name": "ctxrot",
       "description": "Context-rot guard for Claude Code: detect, rescue, restore, distill, and CONTROL what loads into context (rule-based allow/deny gate + /ctx pin/drop/load + switchable carryover). Subscription-native (hooks + subagent + skill, no API key).",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "category": "context",
       "keywords": [
         "context",
@@ -459,7 +459,7 @@
     {
       "name": "harness-status",
       "description": "Unified HOTL status dashboard for Claude Code. A /status command runs a bundled Rust binary that aggregates budgetguard's spend ledger, gauge's session records (recent sessions + cost), and taskprog's progress file into one human-on-the-loop view. Subscription-native (binary + command, no API key). A lightweight SessionStart hook additionally warns (fail-soft, silent when healthy) if a registered hook's binary is missing from disk.",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "category": "observability",
       "keywords": [
         "status",
@@ -556,7 +556,7 @@
     {
       "name": "runbook",
       "description": "Reusable procedure includes for Claude Code: a UserPromptSubmit hook that expands `!name` macros in your prompt into the matching repo-committed procedure (.runbook/<name>.md), so recurring workflows run the same way every time. Inspired by Devin Playbooks; distinct from knowledge injection. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "knowledge",
       "keywords": [
         "hooks",
@@ -566,14 +566,14 @@
         "rust"
       ],
       "license": "MIT",
-      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/run-book",
+      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/runbook",
       "author": {
         "name": "yukineko"
       },
       "source": {
         "source": "git-subdir",
         "url": "https://github.com/yukineko/claude-harnesses.git",
-        "path": "crates/run-book",
+        "path": "crates/runbook",
         "ref": "main"
       }
     },

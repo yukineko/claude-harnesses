@@ -94,8 +94,8 @@ echo
 
 # --- plugin name -> crate dir lookup (for hooks/ manifest sync below) ------
 # The cache plugin dirname (from plugin.json's "name") does not always match
-# the crates/ directory name (e.g. crates/run-book/ ships plugin "runbook"),
-# so resolve via plugin.json rather than assuming they're equal.
+# the crates/ directory name, so resolve via plugin.json rather than assuming
+# they're equal.
 plugin_names=() plugin_dirs=()
 shopt -s nullglob
 for pj in "$REPO"/crates/*/.claude-plugin/plugin.json; do

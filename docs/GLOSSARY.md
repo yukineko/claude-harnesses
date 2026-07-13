@@ -55,7 +55,7 @@
 | propguard | always-on | done_criteria から 3–5 個の意味的不変条件を導出し fail-closed で Stop を検証する |
 | replaykit | manual | tracekit の run trace を evalkit golden へ再生する回帰ハーネス |
 | reviewgate | always-on | Stop で diff をレビューし合格まで完了を阻止するコードレビューゲート |
-| run-book | always-on | UserPromptSubmit で `!name` マクロを repo 手順（`.runbook/<name>.md`）に展開する（plugin 名 runbook） |
+| runbook | always-on | UserPromptSubmit で `!name` マクロを repo 手順（`.runbook/<name>.md`）に展開する（plugin 名 runbook） |
 | schemaguard | manual | source→executor 境界で LLM 構造化出力を宣言 schema 検証し 1 回 re-ask するゲート |
 | scout | manual | 5レンズ並列監査で施策を生成し backlog へ積んで /flow へ渡す SOURCE |
 | session-insights | always-on | セッション単位でツール/ターン/ファイル/サイズ・カテゴリを集計、Obsidian 記録も可 |

@@ -119,7 +119,7 @@ fn inject_hook() {
     if let Some(text) = inject::render(&exp, &books, &cfg) {
         // UserPromptSubmit: plain stdout is injected as additional context.
         harness_core::inject_metrics::record(
-            "run-book",
+            "runbook",
             &input.session_id,
             &input.prompt,
             text.chars().count(),

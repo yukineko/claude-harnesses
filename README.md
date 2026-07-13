@@ -49,7 +49,7 @@ Cargo ワークスペース・モノレポ。`yukineko` の Claude Code ハー�
 | propguard | プロパティゲート。`done_criteria` から 3-5 個の意味的不変条件を導出し、閾値未満なら fail-closed で Stop をブロックする（tdd の「具体テスト」に対する「不変条件」の相補） |
 | replaykit | tracekit が記録した condukt run trace を evalkit golden へ再生する回帰ハーネス。`extract` が run の spans.jsonl を可搬な trajectory summary（順序付き phase/model/status + 期待値 expect）へ蒸留、`promote` が fixture を `evals/replay/fixtures` に commit し `replaykit verify` を叩く golden を append、`verify` が steps から aggregate を再計算して expect と照合し 0/1/2 ゲート終了する。curate の playbook→golden に対する trace→golden の姉妹 |
 | reviewgate | Stop フックで diff をセルフレビュー/独立レビューし合格まで完了を阻止する |
-| run-book | UserPromptSubmit フックでプロンプト中の `!name` マクロを手順に展開する |
+| runbook | UserPromptSubmit フックでプロンプト中の `!name` マクロを手順に展開する |
 | schemaguard | source→executor 境界で LLM の構造化出力（condukt 分解 / fugu episode・playbook / scout 施策）を宣言 schema で検証し、違反時は構造化エラーで 1 回 re-ask、reject 件数をメトリクス計上して silent drop を観測可能にするゲート |
 | scout | プロジェクトを5レンズ（課題/セキュリティ/業界標準/不足施策/安全性）で並列監査し施策を生成、backlog に積んで /flow へ引き渡す SOURCE |
 | session-insights | ツール呼び出し・ターン数・ファイル数を集計し Obsidian vault に記録。クロスセッション backlog 管理も担う |

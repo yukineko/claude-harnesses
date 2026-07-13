@@ -109,7 +109,7 @@ pub fn print_status(report: &StatusReport, cwd_display: &str) {
     println!();
 
     // UserPromptSubmit injection size (ADR 0001 Phase 2): the five injectors
-    // (playbook/run-book/ctxrot/context-governor/fugu-router) record post-cap
+    // (playbook/runbook/ctxrot/context-governor/fugu-router) record post-cap
     // injected char size per turn; warn when the combined size exceeds budget.
     println!("── UserPromptSubmit injection (aggregate budget) ──");
     if inject.turns.is_empty() {

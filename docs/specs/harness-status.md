@@ -53,7 +53,7 @@ crate をスキャンし各プラグインを活性化スコープ（always-on /
 - **`hooks`** — 中央 ledger を session 単位に `aggregate` し、`total_ms > budget` の session に ⚠ を付す。
   重い 600s-timeout ゲート（display 上は donegate/reviewgate/propguard と表記）のみが記録する前提。
 - **`inject`** — 中央 ledger を turn（`turn_key = hash(session+prompt)`）単位に `aggregate` し、直近
-  `RECENT_TURNS`(5) を表示、`total_chars > budget` の turn に ⚠。注入元は 5 injector（playbook/run-book/
+  `RECENT_TURNS`(5) を表示、`total_chars > budget` の turn に ⚠。注入元は 5 injector（playbook/runbook/
   ctxrot/context-governor/fugu-router）を想定。
 - **`plugins`** — `find_repo_root`（`crates/` と `.claude-plugin/marketplace.json` を持つ祖先まで上る）から
   `report` を生成し ALWAYS-ON / EVENT-SCOPED / MANUAL の 3 群に分類・カウント表示。

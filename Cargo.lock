@@ -352,7 +352,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -649,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "harness-status"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1055,7 +1055,7 @@ dependencies = [
 
 [[package]]
 name = "runbook"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",

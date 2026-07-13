@@ -2938,74 +2938,74 @@ impl_files = []
 test_files = ["crates/reviewgate/tests/integration.rs"]
 client_refs = []
 
-[entries."crates/run-book/src/config.rs"]
-key = "crates/run-book/src/config.rs"
+[entries."crates/runbook/src/config.rs"]
+key = "crates/runbook/src/config.rs"
 kind = "feature"
-spec_doc = "docs/specs/run-book.md"
+spec_doc = "docs/specs/runbook.md"
 status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
-impl_files = ["crates/run-book/src/config.rs"]
+impl_files = ["crates/runbook/src/config.rs"]
 test_files = []
 client_refs = []
 
-[entries."crates/run-book/src/inject.rs"]
-key = "crates/run-book/src/inject.rs"
+[entries."crates/runbook/src/inject.rs"]
+key = "crates/runbook/src/inject.rs"
 kind = "feature"
-spec_doc = "docs/specs/run-book.md"
+spec_doc = "docs/specs/runbook.md"
 status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
-impl_files = ["crates/run-book/src/inject.rs"]
+impl_files = ["crates/runbook/src/inject.rs"]
 test_files = []
 client_refs = []
 
-[entries."crates/run-book/src/install.rs"]
-key = "crates/run-book/src/install.rs"
+[entries."crates/runbook/src/install.rs"]
+key = "crates/runbook/src/install.rs"
 kind = "feature"
-spec_doc = "docs/specs/run-book.md"
+spec_doc = "docs/specs/runbook.md"
 status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
-impl_files = ["crates/run-book/src/install.rs"]
+impl_files = ["crates/runbook/src/install.rs"]
 test_files = []
 client_refs = []
 
-[entries."crates/run-book/src/main.rs"]
-key = "crates/run-book/src/main.rs"
+[entries."crates/runbook/src/main.rs"]
+key = "crates/runbook/src/main.rs"
 kind = "feature"
-spec_doc = "docs/specs/run-book.md"
+spec_doc = "docs/specs/runbook.md"
 status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
-impl_files = ["crates/run-book/src/main.rs"]
+impl_files = ["crates/runbook/src/main.rs"]
 test_files = []
 client_refs = []
 
-[entries."crates/run-book/src/model.rs"]
-key = "crates/run-book/src/model.rs"
+[entries."crates/runbook/src/model.rs"]
+key = "crates/runbook/src/model.rs"
 kind = "feature"
-spec_doc = "docs/specs/run-book.md"
+spec_doc = "docs/specs/runbook.md"
 status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
-impl_files = ["crates/run-book/src/model.rs"]
+impl_files = ["crates/runbook/src/model.rs"]
 test_files = []
 client_refs = []
 
-[entries."crates/run-book/src/store.rs"]
-key = "crates/run-book/src/store.rs"
+[entries."crates/runbook/src/store.rs"]
+key = "crates/runbook/src/store.rs"
 kind = "feature"
-spec_doc = "docs/specs/run-book.md"
+spec_doc = "docs/specs/runbook.md"
 status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
-impl_files = ["crates/run-book/src/store.rs"]
+impl_files = ["crates/runbook/src/store.rs"]
 test_files = []
 client_refs = []
 
-[entries."crates/run-book/tests/integration.rs"]
-key = "crates/run-book/tests/integration.rs"
+[entries."crates/runbook/tests/integration.rs"]
+key = "crates/runbook/tests/integration.rs"
 kind = "feature"
-spec_doc = "docs/specs/run-book.md"
+spec_doc = "docs/specs/runbook.md"
 status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
 impl_files = []
-test_files = ["crates/run-book/tests/integration.rs"]
+test_files = ["crates/runbook/tests/integration.rs"]
 client_refs = []
 
 [entries."crates/schemaguard/src/lib.rs"]

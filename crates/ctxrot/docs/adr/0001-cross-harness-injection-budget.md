@@ -76,7 +76,7 @@ it.
 
 **Instrumented injectors (post-cap size).** Each injector records the CHAR count
 of the exact string it emits, at its emit site, after its own per-injector cap:
-`playbook`, `run-book`, `ctxrot` (guard), `context-governor`
+`playbook`, `runbook`, `ctxrot` (guard), `context-governor`
 (`additionalContext` on UserPromptSubmit), and `fugu-router`. Injection behavior
 is unchanged — only a side-effecting `record()` call was added before the
 existing emit.

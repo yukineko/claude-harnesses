@@ -1,6 +1,6 @@
 //! UserPromptSubmit injection-size panel (ADR 0001 Phase 2): read the central
 //! `inject-metrics.jsonl` ledger written by the five UserPromptSubmit injectors
-//! (playbook, run-book, ctxrot, context-governor, fugu-router), aggregate per
+//! (playbook, runbook, ctxrot, context-governor, fugu-router), aggregate per
 //! turn (keyed by `turn_key = hash(session + prompt)`), and flag any turn whose
 //! combined post-cap injected char size exceeds the aggregate budget.
 

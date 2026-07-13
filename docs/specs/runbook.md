@@ -1,6 +1,6 @@
 > **REVIEW-NEEDED** — この仕様は実装から逆算生成した draft。人間レビューまで正典として扱わない。
 
-# run-book 仕様
+# runbook 仕様
 
 ## 概要
 
@@ -46,7 +46,7 @@ Devin の Playbooks に着想を得ている。同 harness の `playbook`（*事
 - **`inject`（フック本体）** — `UserPromptSubmit` hook。stdin の `HookInput` を読み、`cwd_or_current` で
   root を解決 → `Config::load` → `Store::load_all` で全 runbook を読み → `inject::expand` で `!name` を
   解決 → `inject::render` が注入テキスト（`HEADER` + 各手順ブロック）を返せば stdout へ出力（=追加
-  コンテキストとして注入）。注入時は `harness_core::inject_metrics::record("run-book", …)` で計測を記録する。
+  コンテキストとして注入）。注入時は `harness_core::inject_metrics::record("runbook", …)` で計測を記録する。
 - **`list`** — project/global の全 runbook を `[scope] !macro — description` 形式で一覧。空なら作成方法を案内。
 - **`show <name>`** — `normalize_name` で正規化した key に一致する 1 手順の scope/path/body を表示。
   無ければ stderr へ案内して exit 1。

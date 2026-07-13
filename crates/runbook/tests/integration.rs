@@ -1,8 +1,7 @@
 //! End-to-end tests for the runbook binary.
 //!
-//! Bin name is `runbook` (crate is `run-book`). `inject` is the
-//! UserPromptSubmit hook (must always exit 0, never break a turn); `list` and
-//! `status` are read-only CLI subcommands.
+//! `inject` is the UserPromptSubmit hook (must always exit 0, never break a
+//! turn); `list` and `status` are read-only CLI subcommands.
 
 use std::io::Write;
 use std::path::PathBuf;

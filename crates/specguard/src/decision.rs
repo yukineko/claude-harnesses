@@ -27,39 +27,42 @@ pub fn resolve_dir(repo_root: &Path, dir: &str) -> Option<PathBuf> {
 }
 
 /// List decision record files (`*.md`) under the decisions dir, sorted. Returns
-/// absolute path strings the read-only agent can open. Empty if the feature is
-/// disabled or the dir is missing/unreadable.
-pub fn list_files(repo_root: &Path, dir: &str) -> Vec<String> {
+/// absolute path strings the read-only agent can open. `Ok(vec![])` when the
+/// feature is disabled or the dir is ABSENT (legitimately "no decision
+/// records"). Fails closed (`Err`) when the dir exists but is unreadable, or an
+/// individual entry can't be read: incomplete input must NOT masquerade as "no
+/// decisions" and silently skip the D3 audit shard → false-GREEN
+/// (CA-specguard-001).
+pub fn list_files(repo_root: &Path, dir: &str) -> Result<Vec<String>> {
     let Some(d) = resolve_dir(repo_root, dir) else {
-        return vec![];
+        return Ok(vec![]);
     };
     let entries = match std::fs::read_dir(&d) {
         Ok(e) => e,
+        // A MISSING dir legitimately means "no decision records". A dir that
+        // EXISTS but is unreadable is incomplete input, not "no decisions" →
+        // fail closed so the gate can't pass GREEN on a dir it never read.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
         Err(err) => {
-            eprintln!(
-                "specguard: cannot read decisions dir '{}': {err}",
-                d.display()
-            );
-            return vec![];
+            return Err(anyhow::Error::new(err)
+                .context(format!("cannot read decisions dir '{}'", d.display())));
         }
     };
-    let mut files: Vec<String> = entries
-        .filter_map(|e| match e {
-            Ok(de) => Some(de),
-            Err(err) => {
-                eprintln!(
-                    "specguard: skipping unreadable entry in '{}': {err}",
-                    d.display()
-                );
-                None
-            }
-        })
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "md"))
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect();
+    let mut files: Vec<String> = Vec::new();
+    for entry in entries {
+        // A per-entry error means the listing is INCOMPLETE. The old code
+        // dropped it (`filter_map(.. Err => None)`), so a decisions dir with an
+        // unreadable entry could collapse to an empty list and silently skip the
+        // D3 shard. Fail closed instead.
+        let de = entry
+            .with_context(|| format!("unreadable entry in decisions dir '{}'", d.display()))?;
+        let p = de.path();
+        if p.extension().is_some_and(|x| x == "md") {
+            files.push(p.to_string_lossy().into_owned());
+        }
+    }
     files.sort();
-    files
+    Ok(files)
 }
 
 /// Slugify a title for the record id. Unicode-aware so Japanese titles keep
@@ -145,5 +148,59 @@ mod tests {
     #[test]
     fn slug_keeps_unicode() {
         assert_eq!(slug("署名の単一経路"), "署名の単一経路");
+    }
+
+    #[test]
+    fn list_files_ok_and_empty_when_dir_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A decisions dir that does not exist is legit "no decision records".
+        let got = list_files(tmp.path(), "decisions").unwrap();
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn list_files_lists_md_sorted_ignoring_non_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("decisions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("b.md"), "x").unwrap();
+        std::fs::write(dir.join("a.md"), "x").unwrap();
+        std::fs::write(dir.join("note.txt"), "x").unwrap();
+        let got = list_files(tmp.path(), "decisions").unwrap();
+        assert_eq!(got.len(), 2, "only .md, sorted: {got:?}");
+        assert!(
+            got[0].ends_with("a.md") && got[1].ends_with("b.md"),
+            "{got:?}"
+        );
+    }
+
+    /// CA-specguard-001: a decisions dir that EXISTS but is unreadable must fail
+    /// closed (`Err`), not silently return an empty list — an empty list skips
+    /// the D3 audit shard → false-GREEN on incomplete input. Unix-only
+    /// (chmod-based unreadability); `#[cfg(unix)]` per repo convention.
+    #[cfg(unix)]
+    #[test]
+    fn list_files_fails_closed_on_unreadable_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("decisions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("x.md"), "x").unwrap();
+
+        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
+        perms.set_mode(0o000); // unreadable/unsearchable
+        std::fs::set_permissions(&dir, perms).unwrap();
+
+        let got = list_files(tmp.path(), "decisions");
+
+        // Restore perms so tempdir cleanup can remove it (before asserting).
+        let mut restore = std::fs::metadata(&dir).unwrap().permissions();
+        restore.set_mode(0o700);
+        let _ = std::fs::set_permissions(&dir, restore);
+
+        assert!(
+            got.is_err(),
+            "unreadable decisions dir must fail closed, got {got:?}"
+        );
     }
 }

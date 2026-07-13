@@ -179,6 +179,15 @@ impl Config {
         cfg.escalate_after = cfg.escalate_after.max(1);
         cfg.progress_min_window = cfg.progress_min_window.max(2);
         cfg.progress_score_threshold = cfg.progress_score_threshold.clamp(0.0, 1.0);
+        // Cross-field invariant (CA-stuckguard-002): the detectors only ever see
+        // the last `window` events (State::push caps the buffer at `window`), so
+        // a `repeat_threshold` or `progress_min_window` LARGER than `window` can
+        // never be reached — detection silently disables itself. The independent
+        // `.max(2)` floors above do not catch this. Clamp both down to `window`
+        // so a misconfig degrades to "trips once the window is full" (fail-safe:
+        // over-detect) instead of "never trips" (fail-open: under-detect).
+        cfg.repeat_threshold = cfg.repeat_threshold.min(cfg.window);
+        cfg.progress_min_window = cfg.progress_min_window.min(cfg.window);
         cfg
     }
 
@@ -196,6 +205,31 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CA-stuckguard-002: a `repeat_threshold` / `progress_min_window` larger
+    /// than `window` can never be reached (the detectors only ever see the last
+    /// `window` events), silently disabling detection. `load()` must clamp both
+    /// down to `window`. Before the fix this is RED: `repeat_threshold = 10`
+    /// with `window = 5` survives sanitize unchanged.
+    #[test]
+    fn cross_field_thresholds_clamped_to_window() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            Config::project_path(dir.path()),
+            "window = 5\nrepeat_threshold = 10\nprogress_min_window = 20\n",
+        )
+        .unwrap();
+        let cfg = Config::load(dir.path());
+        assert_eq!(cfg.window, 5);
+        assert_eq!(
+            cfg.repeat_threshold, 5,
+            "repeat_threshold must be clamped to window"
+        );
+        assert_eq!(
+            cfg.progress_min_window, 5,
+            "progress_min_window must be clamped to window"
+        );
+    }
 
     /// CA-stuckguard-03 (p2 — threshold clamp has no floor): `load()`
     /// sanitizes `similarity_threshold` with `.clamp(0.0, 1.0)`, so a config

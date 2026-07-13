@@ -305,7 +305,7 @@ pub fn resolve(
         cfg.scope.whole_tree_fallback_max_files,
     )?;
     let (in_scope, skipped_areas) = classify(&changed_files, &cfg.areas)?;
-    let decision_files = crate::decision::list_files(repo_root, &cfg.decisions.dir);
+    let decision_files = crate::decision::list_files(repo_root, &cfg.decisions.dir)?;
     Ok(Scope {
         baseline,
         fell_back,

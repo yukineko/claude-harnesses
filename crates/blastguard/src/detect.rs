@@ -318,6 +318,25 @@ fn is_shell(cmd: &str) -> bool {
     matches!(cmd, "sh" | "bash" | "zsh" | "ksh" | "dash")
 }
 
+/// Non-shell interpreters that run an inline program supplied as a string
+/// argument (e.g. `python3 -c "…"`, `perl -e "…"`). Like a shell's `-c`, this
+/// lets `find -exec <interp> -c "<payload>"` run an arbitrary destructive
+/// command per match, slipping past the literal `rm` token scan.
+fn is_code_interpreter(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "python" | "python2" | "python3" | "perl" | "ruby" | "node" | "nodejs" | "php" | "lua"
+    )
+}
+
+/// Inline-code eval flags for the interpreters in [`is_code_interpreter`]
+/// (`python -c`, `perl -e`/`-E`, `ruby -e`, `node -e`/`--eval`/`-p`, `php -r`).
+/// A script-file argument (no such flag) is deliberately NOT matched, so
+/// `find -exec python3 script.py` is left alone.
+fn is_inline_eval_flag(tok: &str) -> bool {
+    matches!(tok, "-c" | "-e" | "-E" | "-r" | "-p" | "--eval" | "--print")
+}
+
 /// Strip one layer of matching surrounding quotes from a reconstructed
 /// argument string. Tokenisation has already split on whitespace, so a quoted
 /// payload like `"rm -rf /"` arrives as `"rm -rf /"` — peel the wrapper so the
@@ -536,6 +555,14 @@ fn analyze_find(rest: &[&str]) -> Decision {
                     "find -exec on a shell can run an arbitrary destructive command per match",
                 );
             }
+            // A non-shell interpreter with an inline-eval flag (`python3 -c`,
+            // `perl -e`, `node -e`, …) is equally dangerous: the payload runs
+            // per match and slips past the literal `rm` scan below.
+            if is_code_interpreter(c) && rest[pos + 1..].iter().any(|t| is_inline_eval_flag(t)) {
+                return Decision::deny(
+                    "find -exec on a code interpreter with an inline-eval flag can run an arbitrary destructive command per match",
+                );
+            }
         }
         if rest.iter().any(|t| basename(t) == "rm") {
             return Decision::deny("find -exec rm removes every matching file");
@@ -691,6 +718,20 @@ mod tests {
         // find -exec/-execdir on a shell can run any destructive command.
         assert!(bash("find . -type f -exec sh -c 'rm -rf {}' ;").is_deny());
         assert!(bash("find . -execdir bash -c \"rm -rf .\" ;").is_deny());
+        // CA-blastguard-001: a NON-shell interpreter with an inline-eval flag
+        // (python -c, perl -e, node -e, …) is equally destructive per match and
+        // used to fall through to Allow (only sh-family shells were caught).
+        assert!(
+            bash("find . -type f -exec python3 -c \"import os; os.system('rm -rf /')\" ;")
+                .is_deny()
+        );
+        assert!(bash("find . -exec perl -e 'unlink glob \"*\"' ;").is_deny());
+        assert!(
+            bash("find . -execdir node -e \"require('fs').rmSync('/',{recursive:true})\" ;")
+                .is_deny()
+        );
+        // …but a plain script-file exec (no inline-eval flag) is NOT over-blocked.
+        assert_eq!(bash("find . -exec python3 script.py ;"), Decision::Allow);
         // A benign wrapper in front still resolves to the eval builtin.
         assert!(bash("sudo eval \"rm -rf /\"").is_deny());
         // Nested wrapping is caught up to the recursion bound.

@@ -36,23 +36,40 @@ fn run(root: &Path, args: &[&str]) -> Option<String> {
 
 /// Changed paths relative to the repo root: tracked changes vs HEAD, staged
 /// changes, and untracked-but-not-ignored files. `None` means "not a git repo".
+///
+/// Implemented as a single `git status --porcelain=v1 -z` spawn (instead of
+/// three separate `git diff` / `git diff --cached` / `git ls-files` calls).
+/// `-z` gives NUL-terminated, unquoted paths (avoiding the C-style quoting
+/// that plain `--porcelain` applies to paths with spaces/special chars), and
+/// porcelain v1's `XY PATH` records cover unstaged, staged, and untracked
+/// state in one pass. Renames/copies emit an extra NUL-separated "orig path"
+/// field ahead of the (new) path in the record stream; we keep only the new
+/// path, matching what `git diff --name-only` reports for a rename.
 pub fn changed_files(root: &Path) -> Option<Vec<String>> {
     if !is_git_repo(root) {
         return None;
     }
+    let raw = run(root, &["status", "--porcelain=v1", "-z"])?;
     let mut out = Vec::new();
-    for args in [
-        &["diff", "--name-only"][..],
-        &["diff", "--cached", "--name-only"][..],
-        &["ls-files", "--others", "--exclude-standard"][..],
-    ] {
-        if let Some(text) = run(root, args) {
-            for line in text.lines() {
-                let line = line.trim();
-                if !line.is_empty() {
-                    out.push(line.to_string());
-                }
-            }
+    let mut tokens = raw.split('\0').peekable();
+    while let Some(record) = tokens.next() {
+        if record.is_empty() {
+            continue;
+        }
+        // Record format: "XY PATH" (status codes are always 2 chars + space).
+        if record.len() < 3 {
+            continue;
+        }
+        let (status, path) = record.split_at(2);
+        let path = &path[1..]; // drop the single space separator
+                               // Renames/copies ('R'/'C' in either the staged-X or worktree-Y column)
+                               // carry an extra orig-path field as the *next* NUL-separated token;
+                               // consume and discard it so it isn't mistaken for the next record.
+        if status.contains('R') || status.contains('C') {
+            tokens.next();
+        }
+        if !path.is_empty() {
+            out.push(path.to_string());
         }
     }
     out.sort();
@@ -125,6 +142,36 @@ fn strip_diff_prefix(path: &str) -> String {
         .to_string()
 }
 
+/// Reference implementation kept ONLY for regression tests: reproduces the
+/// original 3-subprocess-spawn logic (`git diff --name-only`, `git diff
+/// --cached --name-only`, `git ls-files --others --exclude-standard`) that
+/// `changed_files` used before it was batched into a single `git status`
+/// call. Tests assert the batched path yields an identical set.
+#[cfg(test)]
+fn changed_files_legacy(root: &Path) -> Option<Vec<String>> {
+    if !is_git_repo(root) {
+        return None;
+    }
+    let mut out = Vec::new();
+    for args in [
+        &["diff", "--name-only"][..],
+        &["diff", "--cached", "--name-only"][..],
+        &["ls-files", "--others", "--exclude-standard"][..],
+    ] {
+        if let Some(text) = run(root, args) {
+            for line in text.lines() {
+                let line = line.trim();
+                if !line.is_empty() {
+                    out.push(line.to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,5 +196,223 @@ diff --git a/old.rs b/old.rs
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|l| l.file == "src/lib.rs"));
         assert!(out[0].text.contains("pub fn add"));
+    }
+
+    // --- changed_files batching regression: the single `git status
+    // --porcelain=v1 -z` spawn must yield the exact same set as the original
+    // 3-call (diff / diff --cached / ls-files --others) implementation,
+    // across modified, staged, untracked, renamed, deleted, and mixed
+    // staged+modified files. These need a real `git` binary and a scratch
+    // repo; skip gracefully (rather than fail) if `git` isn't runnable in
+    // the sandbox, matching this repo's convention of not hard-failing CI on
+    // missing external tooling.
+
+    fn git_available() -> bool {
+        Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    fn init_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempfile::tempdir");
+        let root = dir.path();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "t@t.com"][..],
+            &["config", "user.name", "t"][..],
+        ] {
+            let status = Command::new("git")
+                .current_dir(root)
+                .args(args)
+                .status()
+                .expect("git init/config");
+            assert!(status.success(), "git {args:?} should succeed");
+        }
+        dir
+    }
+
+    fn write(root: &Path, rel: &str, contents: &str) {
+        let p = root.join(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).expect("create_dir_all");
+        }
+        std::fs::write(p, contents).expect("write");
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .status()
+            .unwrap_or_else(|e| panic!("git {args:?} failed to spawn: {e}"));
+        assert!(status.success(), "git {args:?} should succeed");
+    }
+
+    /// Assert the batched `changed_files` matches the legacy 3-call
+    /// implementation, for whatever state the given repo is currently in.
+    fn assert_sets_match(root: &Path, scenario: &str) {
+        let batched = changed_files(root).unwrap_or_default();
+        let legacy = changed_files_legacy(root).unwrap_or_default();
+        assert_eq!(
+            batched, legacy,
+            "changed_files set diverged from legacy 3-call implementation in scenario: {scenario}"
+        );
+    }
+
+    #[test]
+    fn changed_files_matches_legacy_modified_staged_untracked() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let dir = init_repo();
+        let root = dir.path();
+
+        write(root, "a.txt", "hello\n");
+        write(root, "b.txt", "hello\n");
+        git(root, &["add", "a.txt", "b.txt"]);
+        git(root, &["commit", "-qm", "init"]);
+
+        // Working-tree modification (unstaged).
+        write(root, "a.txt", "hello\nmodified\n");
+        // Staged modification.
+        write(root, "b.txt", "hello\nstaged\n");
+        git(root, &["add", "b.txt"]);
+        // Untracked-but-not-ignored file.
+        write(root, "c.txt", "new\n");
+
+        assert_sets_match(root, "modified+staged+untracked");
+        let files = changed_files(root).unwrap();
+        assert_eq!(files, vec!["a.txt", "b.txt", "c.txt"]);
+    }
+
+    #[test]
+    fn changed_files_matches_legacy_staged_plus_further_modified() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let dir = init_repo();
+        let root = dir.path();
+
+        write(root, "d.txt", "base\n");
+        git(root, &["add", "d.txt"]);
+        git(root, &["commit", "-qm", "init"]);
+
+        // Stage a change, then modify again on top (status "MM").
+        write(root, "d.txt", "base\nstaged\n");
+        git(root, &["add", "d.txt"]);
+        write(root, "d.txt", "base\nstaged\nmodified-again\n");
+
+        assert_sets_match(root, "staged+modified (MM)");
+        let files = changed_files(root).unwrap();
+        assert_eq!(files, vec!["d.txt"]);
+    }
+
+    #[test]
+    fn changed_files_matches_legacy_renamed_staged() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let dir = init_repo();
+        let root = dir.path();
+
+        write(root, "old.txt", "content\n");
+        git(root, &["add", "old.txt"]);
+        git(root, &["commit", "-qm", "init"]);
+
+        git(root, &["mv", "old.txt", "new.txt"]);
+
+        assert_sets_match(root, "renamed (staged, pure)");
+        let files = changed_files(root).unwrap();
+        assert_eq!(files, vec!["new.txt"]);
+    }
+
+    #[test]
+    fn changed_files_matches_legacy_renamed_and_modified() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let dir = init_repo();
+        let root = dir.path();
+
+        write(root, "old.txt", "content\nmore\n");
+        git(root, &["add", "old.txt"]);
+        git(root, &["commit", "-qm", "init"]);
+
+        git(root, &["mv", "old.txt", "new.txt"]);
+        write(root, "new.txt", "content\nmore\nextra\n");
+
+        assert_sets_match(root, "renamed+modified (RM)");
+        let files = changed_files(root).unwrap();
+        assert_eq!(files, vec!["new.txt"]);
+    }
+
+    #[test]
+    fn changed_files_matches_legacy_deleted_unstaged_then_staged() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let dir = init_repo();
+        let root = dir.path();
+
+        write(root, "e.txt", "gone-soon\n");
+        write(root, "f.txt", "also-gone\n");
+        git(root, &["add", "e.txt", "f.txt"]);
+        git(root, &["commit", "-qm", "init"]);
+
+        // Unstaged deletion.
+        std::fs::remove_file(root.join("e.txt")).expect("remove_file");
+        assert_sets_match(root, "deleted (unstaged)");
+        let files = changed_files(root).unwrap();
+        assert_eq!(files, vec!["e.txt"]);
+
+        // Stage the deletion (f.txt was never touched, so it stays absent
+        // from the changed set).
+        git(root, &["add", "-A"]);
+        assert_sets_match(root, "deleted (staged)");
+        let files = changed_files(root).unwrap();
+        assert_eq!(files, vec!["e.txt"]);
+    }
+
+    #[test]
+    fn changed_files_matches_legacy_path_with_space() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let dir = init_repo();
+        let root = dir.path();
+
+        write(root, "base.txt", "base\n");
+        git(root, &["add", "base.txt"]);
+        git(root, &["commit", "-qm", "init"]);
+
+        write(root, "space file.txt", "untracked with space\n");
+
+        assert_sets_match(root, "untracked path with space");
+        let files = changed_files(root).unwrap();
+        assert_eq!(files, vec!["space file.txt"]);
+    }
+
+    #[test]
+    fn changed_files_matches_legacy_clean_repo() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let dir = init_repo();
+        let root = dir.path();
+        write(root, "only.txt", "content\n");
+        git(root, &["add", "only.txt"]);
+        git(root, &["commit", "-qm", "init"]);
+
+        assert_sets_match(root, "clean repo, no changes");
+        assert_eq!(changed_files(root).unwrap(), Vec::<String>::new());
     }
 }

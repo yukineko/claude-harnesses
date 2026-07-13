@@ -9,9 +9,11 @@
 //!   T2  context-budget bands (per-session, escalate-only): when real usage
 //!       crosses into a higher band, inject distill/offload advice ONCE.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use regex::Regex;
+use serde::Deserialize;
 
 use crate::config::Config;
 use harness_core::hook::HookInput;
@@ -56,6 +58,13 @@ pub fn run(input: &HookInput, cfg: &Config) -> Option<String> {
         blocks.push((prio, b));
     }
     if let Some(b) = check_reanchor(input, cfg) {
+        blocks.push((Prio::Anchor, b));
+    }
+    // PDO session-anchor (§4.3): a SEPARATE track from the Decisions re-anchor
+    // above. When this session holds a live overwatch lease, re-surface "what am I
+    // working on" (title + done_criteria) on its own, slower cadence. Supplemental,
+    // so it shares the Anchor drop-priority (dropped first under the cap).
+    if let Some(b) = check_session_anchor(input, cfg) {
         blocks.push((Prio::Anchor, b));
     }
 
@@ -530,6 +539,181 @@ fn check_reanchor(input: &HookInput, cfg: &Config) -> Option<String> {
     Some(out)
 }
 
+// ------------------------------------------------ PDO session anchor (§4.3)
+
+/// Hard ceiling for the session-anchor block (CJK-safe char count). The anchor is
+/// a single unchanging fact (title + done_criteria), so it stays tighter than the
+/// Decisions re-anchor — one or two lines, per the design's context-budget concern
+/// (§9: "anchor テキストは title + done_criteria の要約1〜2行に絞る").
+const SESSION_ANCHOR_CAP_CHARS: usize = 400;
+
+/// The subset of `overwatch`'s `Lease` this hook reads (`overwatch lease
+/// --session <id> --json`). Extra fields (key/session_id/scope/…) are ignored, so
+/// this stays forward-compatible with the full lease shape. `scope` is
+/// deliberately NOT re-injected — the design keeps raw glob lists out of context
+/// (§4.3 / §9), only the title + done_criteria summary is surfaced.
+#[derive(Debug, Deserialize)]
+struct SessionLease {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    done_criteria: Option<String>,
+}
+
+/// Render the anchor injection text from a live lease, or None when the lease
+/// carries no substance (no title and no done_criteria). Split out from the
+/// overwatch shell-out so the text logic is unit-testable without a real binary.
+fn render_session_anchor(lease: &SessionLease) -> Option<String> {
+    let title = lease.title.trim();
+    let done = lease.done_criteria.as_deref().map(str::trim).unwrap_or("");
+    if title.is_empty() && done.is_empty() {
+        return None;
+    }
+
+    let mut out = String::from("[ctxrot anchor] あなたは今このPDO単位を担当中");
+    if !title.is_empty() {
+        out.push_str(": ");
+        out.push_str(title);
+    }
+    out.push_str("。\n");
+    if !done.is_empty() {
+        // Collapse newlines so done_criteria stays a compact 1-line summary.
+        let done_1line = done.split_whitespace().collect::<Vec<_>>().join(" ");
+        out.push_str("done_criteria: ");
+        out.push_str(&done_1line);
+    }
+    Some(transcript::truncate_chars(
+        out.trim_end(),
+        SESSION_ANCHOR_CAP_CHARS,
+    ))
+}
+
+/// Locate the `overwatch` binary: PATH first, then the plugin cache (newest
+/// version). Mirrors autoflow's `find_compass_binary` fail-soft discovery. None
+/// when overwatch is not installed → the caller stays silent.
+fn find_overwatch_binary() -> Option<PathBuf> {
+    if Command::new("overwatch").arg("--version").output().is_ok() {
+        return Some(PathBuf::from("overwatch"));
+    }
+    let base = harness_core::config::home()
+        .join(".claude")
+        .join("plugins")
+        .join("cache")
+        .join("yukineko")
+        .join("overwatch");
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(&base)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path().join("bin").join("overwatch"))
+        .filter(|p| p.exists())
+        .collect();
+    candidates.sort();
+    candidates.pop()
+}
+
+/// Read the live lease for `session_id` via `overwatch lease --session <id>
+/// --json`. Returns None (silent) when overwatch is absent, exits non-zero (no
+/// lease), or emits unparseable JSON — every failure mode is fail-soft, never
+/// breaking the turn (§4.3). Split from `check_session_anchor` so the cadence /
+/// injection logic is testable without a real overwatch binary.
+fn fetch_session_lease(session_id: &str) -> Option<SessionLease> {
+    if session_id.is_empty() {
+        return None;
+    }
+    let binary = find_overwatch_binary()?;
+    let out = Command::new(&binary)
+        .args(["lease", "--session", session_id, "--json"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_session_lease(&out.stdout)
+}
+
+/// Parse `overwatch lease --session … --json` stdout into a [`SessionLease`].
+/// Split out for unit testing without a real overwatch binary. None on blank /
+/// unparseable output (fail-soft).
+fn parse_session_lease(stdout: &[u8]) -> Option<SessionLease> {
+    let s = std::str::from_utf8(stdout).ok()?.trim();
+    if s.is_empty() {
+        return None;
+    }
+    serde_json::from_str(s).ok()
+}
+
+/// PDO session-anchor re-inject (§4.3): a SEPARATE track from `check_reanchor`.
+/// The Decisions re-anchor re-surfaces growing project knowledge; this re-surfaces
+/// the ONE unchanging fact of "what is this session working on" (title +
+/// done_criteria of its live overwatch lease). Because that fact barely changes,
+/// the cadence is deliberately slower (`anchor_reinject_every`, default 12 vs the
+/// Decisions track's 8) and keyed on its OWN cooldown file
+/// (`<safe>.session_anchor`) so the two tracks never interfere.
+///
+/// Fires only when:
+///   * band ≥ 1 (any real usage; looser than the Decisions floor of 2, but still
+///     not on empty/tiny sessions),
+///   * at most once per `anchor_reinject_every` qualifying prompts, and
+///   * this session holds a live overwatch lease with substance.
+///
+/// No lease / overwatch absent / broken JSON → silent, cooldown untouched.
+fn check_session_anchor(input: &HookInput, cfg: &Config) -> Option<String> {
+    check_session_anchor_with(input, cfg, fetch_session_lease)
+}
+
+/// Testable core of [`check_session_anchor`]: the band gate, dedicated cooldown,
+/// and injection are exercised with an injected `fetch` closure so tests need no
+/// real overwatch binary (the production caller passes `fetch_session_lease`).
+fn check_session_anchor_with(
+    input: &HookInput,
+    cfg: &Config,
+    fetch: impl Fn(&str) -> Option<SessionLease>,
+) -> Option<String> {
+    if input.transcript_path.is_empty() {
+        return None;
+    }
+    let (est_tokens, _src) = transcript::estimate_tokens(&input.transcript_path)?;
+    let frac = est_tokens as f64 / cfg.context_window as f64;
+    let band = cfg.band_for(frac);
+    if band < 1 {
+        return None;
+    }
+
+    // Cadence gate on a DEDICATED cooldown file so it never collides with the
+    // Decisions re-anchor's `<safe>.anchor`. Counts down only on qualifying
+    // prompts; re-fireable after the window (never a one-way ratchet).
+    let _ = std::fs::create_dir_all(&cfg.state_dir);
+    let cooldown_file = cfg.state_dir.join(format!(
+        "{}.session_anchor",
+        safe_session(&input.session_id)
+    ));
+    let cooldown: u64 = std::fs::read_to_string(&cooldown_file)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    if cooldown > 0 {
+        let _ = std::fs::write(&cooldown_file, (cooldown - 1).to_string());
+        return None;
+    }
+
+    // No live lease (free session not tied to a PDO unit) → silent, leave cooldown
+    // at 0 so the anchor fires as soon as a lease appears.
+    let lease = fetch(&input.session_id)?;
+    let out = render_session_anchor(&lease)?;
+
+    // Armed: hold off for the next `anchor_reinject_every` qualifying prompts.
+    let _ = std::fs::write(&cooldown_file, cfg.anchor_reinject_every.to_string());
+
+    crate::metrics::emit(
+        cfg,
+        &input.session_id,
+        "session_anchor",
+        serde_json::json!({ "bytes": out.len(), "band": band }),
+    );
+
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -847,6 +1031,154 @@ mod tests {
         // Consumed: the marker is gone and a second prompt injects nothing.
         assert!(!crate::hooks::distill::marker_path(&cfg, session).exists());
         assert!(run(&input, &cfg).is_none(), "must fire exactly once");
+    }
+
+    // ------------------------------------------- PDO session anchor (§4.3)
+
+    /// A minimal cfg + high-band input so the session-anchor band gate (≥1) passes,
+    /// pointing at the ≈92% transcript fixture. No session note is written — the
+    /// PDO anchor is independent of the Decisions re-anchor's note substance.
+    fn session_anchor_fixture(
+        name: &str,
+        session: &str,
+    ) -> (Config, std::path::PathBuf, HookInput) {
+        let base = tempfile::Builder::new()
+            .prefix(&format!("ctxrot-sanchor-{name}-"))
+            .tempdir()
+            .expect("tempdir")
+            .keep();
+        let cwd = base.join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let cfg = Config {
+            state_dir: base.join("state"),
+            store_dir: base.join("store"),
+            anchor_reinject_every: 3,
+            metrics: false,
+            ..Config::default()
+        };
+        let input = HookInput {
+            session_id: session.into(),
+            transcript_path: "tests/fixtures/transcript.jsonl".into(), // ≈92% → band 3
+            cwd: cwd.to_string_lossy().into_owned(),
+            ..HookInput::default()
+        };
+        (cfg, base, input)
+    }
+
+    fn lease_with(title: &str, done: &str) -> SessionLease {
+        SessionLease {
+            title: title.to_string(),
+            done_criteria: if done.is_empty() {
+                None
+            } else {
+                Some(done.to_string())
+            },
+        }
+    }
+
+    #[test]
+    fn session_anchor_reinjects_when_lease_present() {
+        // (1) With a live lease, the qualifying prompt re-injects the anchor text
+        // (title + done_criteria), and respects its OWN slower cadence afterwards.
+        let (cfg, base, input) = session_anchor_fixture("present", "sess-lease");
+        let closure = |_: &str| {
+            Some(lease_with(
+                "issue-15 の JSONL append race を直す",
+                "6 sink を append_line に統一",
+            ))
+        };
+        let fetch = &closure;
+
+        let out = check_session_anchor_with(&input, &cfg, fetch)
+            .expect("anchor fires on first qualifying prompt with a live lease");
+        assert!(out.contains("[ctxrot anchor]"), "anchor tag: {out}");
+        assert!(out.contains("issue-15"), "title surfaced: {out}");
+        assert!(out.contains("done_criteria"), "done_criteria label: {out}");
+        assert!(
+            out.contains("append_line に統一"),
+            "done_criteria body: {out}"
+        );
+
+        // Dedicated cooldown of anchor_reinject_every (3) qualifying prompts.
+        assert!(check_session_anchor_with(&input, &cfg, fetch).is_none());
+        assert!(check_session_anchor_with(&input, &cfg, fetch).is_none());
+        assert!(check_session_anchor_with(&input, &cfg, fetch).is_none());
+        assert!(check_session_anchor_with(&input, &cfg, fetch)
+            .expect("re-fires after the cadence window")
+            .contains("[ctxrot anchor]"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn session_anchor_silent_without_lease() {
+        // (2) No live lease (free session) → nothing injected, and the cooldown is
+        // left untouched so the anchor fires the moment a lease later appears.
+        let (cfg, base, input) = session_anchor_fixture("nolease", "sess-free");
+        assert!(check_session_anchor_with(&input, &cfg, |_| None).is_none());
+        // A lease appearing next prompt fires immediately (cooldown not armed).
+        let fetch = |_: &str| Some(lease_with("後から立った lease", "done X"));
+        assert!(check_session_anchor_with(&input, &cfg, fetch)
+            .expect("fires as soon as a lease appears")
+            .contains("[ctxrot anchor]"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn session_anchor_and_decisions_reanchor_are_independent() {
+        // (3) Regression: the PDO anchor track must not perturb the existing
+        // Decisions re-anchor. Both fire on the same input from their own cooldown
+        // files; arming one leaves the other's cadence intact.
+        let (cfg, base, input) =
+            reanchor_fixture("indep", "sess-both", "- serde を採用", "- tests を書く");
+        // Decisions re-anchor (band≥2 / reanchor_every_prompts=3) still fires and is
+        // byte-for-byte the legacy block (no PDO text leaked in).
+        let dec = check_reanchor(&input, &cfg).expect("decisions anchor fires");
+        assert!(
+            dec.contains("直近の確定事項"),
+            "legacy decisions heading: {dec}"
+        );
+        assert!(
+            !dec.contains("担当中"),
+            "PDO anchor text must not leak into it"
+        );
+
+        // The PDO anchor fires from its OWN cooldown key (independent of the
+        // Decisions track just armed above).
+        let fetch = |_: &str| Some(lease_with("PDO タスクA", "done A"));
+        let pdo = check_session_anchor_with(&input, &cfg, fetch)
+            .expect("session anchor fires independently");
+        assert!(pdo.contains("担当中"));
+
+        // Arming the PDO anchor's cooldown does not re-arm/reset the Decisions
+        // track: the Decisions re-anchor still counts down on its own file.
+        assert!(
+            check_reanchor(&input, &cfg).is_none(),
+            "decisions still in its own cooldown"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn session_anchor_render_summarizes_title_and_done() {
+        let out = render_session_anchor(&lease_with("タスクT", "criteria が満たされる"))
+            .expect("substance present");
+        assert!(out.contains("担当中: タスクT"));
+        assert!(out.contains("done_criteria: criteria が満たされる"));
+        // Empty lease → nothing to surface.
+        assert!(render_session_anchor(&lease_with("", "")).is_none());
+    }
+
+    #[test]
+    fn session_anchor_parse_json() {
+        let l = parse_session_lease(
+            br#"{"key":"k","title":"T","session_id":"s","done_criteria":"D","scope":["a/**"]}"#,
+        )
+        .expect("parse");
+        assert_eq!(l.title, "T");
+        assert_eq!(l.done_criteria.as_deref(), Some("D"));
+        // Blank / broken → None (fail-soft).
+        assert!(parse_session_lease(b"").is_none());
+        assert!(parse_session_lease(b"not json").is_none());
     }
 
     #[test]

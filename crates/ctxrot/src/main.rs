@@ -906,6 +906,14 @@ reanchor_enabled = true
 reanchor_min_band = 2
 reanchor_every_prompts = 8
 
+# PDO session-anchor re-inject (§4.3): a SEPARATE track from the Decisions
+# re-anchor above. When this session holds a live `overwatch` lease (a PDO unit —
+# title + done_criteria), re-surface "what am I working on" at most once per this
+# many qualifying prompts (band ≥ 1). Deliberately slower than reanchor_every_prompts
+# (the anchor is one unchanging fact, not growing project knowledge). No live lease
+# / overwatch not installed → silent (fail-soft, never breaks the turn).
+anchor_reinject_every = 12
+
 # Note-store GC (`ctxrot note prune`): keep at most keep_notes_per_project newest
 # notes per project, but always protect the newest keep_distill_min distill notes
 # (higher value than rescues) even if they fall outside that window.

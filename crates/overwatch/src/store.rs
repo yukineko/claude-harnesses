@@ -52,6 +52,17 @@ pub fn events_path(cwd: &Path) -> Result<PathBuf> {
     Ok(storage_root(cwd)?.join("events.jsonl"))
 }
 
+/// Path to the status_cache.json file: a short-lived cache of the rendered
+/// `ProgressView` (see `aggregate::build_cached`), used to collapse the
+/// SessionStart+Stop hook double-scan (each `overwatch status` invocation
+/// otherwise re-spawns ~5 subprocesses). Its own file since it is a derived,
+/// disposable cache — not part of the append-only event/lease ledgers, and
+/// safe to delete or corrupt without losing any signal (a miss just falls
+/// back to a fresh `aggregate::build`).
+pub fn status_cache_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("status_cache.json"))
+}
+
 /// Path to the violations.jsonl file (append-only, gate-violation events for
 /// fleet-level correlated-error detection). Kept as a separate stream from
 /// events.jsonl since violations are a distinct signal (cross-task recurrence

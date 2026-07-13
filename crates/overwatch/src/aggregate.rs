@@ -37,8 +37,13 @@ pub struct BacklogSummary {
     pub done: usize,
     /// Total deferred items.
     pub deferred: usize,
-    /// Pending count per priority (e.g. {"P0": 5, "P1": 3}).
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    /// Pending count per priority (e.g. {"P0": 5, "P1": 3}). `default` pairs
+    /// with `skip_serializing_if` so a round-trip through JSON that omitted
+    /// this field (because it was empty) deserializes back to an empty map
+    /// instead of erroring on "missing field" — load-bearing for the status
+    /// cache (`build_cached`), which serializes/deserializes a `ProgressView`
+    /// (and therefore this struct) on every cache write/read.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pending_by_priority: BTreeMap<String, usize>,
 }
 
@@ -70,10 +75,19 @@ pub struct RunRow {
 }
 
 /// The aggregated progress view.
+///
+/// NOTE: every field pairs `skip_serializing_if` with `default` (where the
+/// type doesn't already deserialize a missing key as its default, i.e. every
+/// `Vec` field — `Option` fields get this for free from serde). This is
+/// load-bearing for `aggregate::build_cached`, which round-trips a whole
+/// `ProgressView` through JSON on every cache write/read: an empty `Vec`
+/// field is omitted on write (by `skip_serializing_if`), and without
+/// `default` a subsequent read would fail with "missing field" instead of
+/// reconstructing the empty `Vec`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProgressView {
     /// Overwatch ledger: per-session rosters of live leases.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sessions: Vec<SessionRoster>,
     /// Backlog summary.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -82,7 +96,7 @@ pub struct ProgressView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hypotheses: Option<HypoBuckets>,
     /// Condukt runs.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<RunRow>,
     /// Compass gap (north_star / current gap).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -259,6 +273,76 @@ pub fn build(cwd: &Path) -> ProgressView {
         let gap_str = gap.trim().to_string();
         if !gap_str.is_empty() {
             view.compass_gap = Some(gap_str);
+        }
+    }
+
+    view
+}
+
+/// TTL for the short-lived status cache, in seconds. `overwatch status` runs
+/// on BOTH SessionStart (of the next turn) and Stop (of the current turn);
+/// when those two fire close together this TTL collapses the second call's
+/// ~5 subprocess spawns + lease-store scan into a cache read. Chosen small
+/// enough that a stale render is never visible for more than a few seconds
+/// (observability is bounded-stale, never lost — a cold/expired cache always
+/// falls through to a full `build`).
+pub const STATUS_CACHE_TTL_SECS: i64 = 10;
+
+/// On-disk shape of the status cache: the rendered view plus the unix
+/// timestamp it was built at.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedView {
+    built_at: i64,
+    view: ProgressView,
+}
+
+/// Pure freshness check: is a cache entry built at `built_at` still usable at
+/// `now`, given `ttl_secs`? Factored out (no I/O) so the TTL boundary logic is
+/// directly unit-testable without touching the filesystem. Also guards
+/// against a clock-skew/corrupt timestamp in the future (`built_at > now`),
+/// which is treated as stale rather than trusted.
+fn cache_is_fresh(built_at: i64, now: i64, ttl_secs: i64) -> bool {
+    built_at <= now && now - built_at <= ttl_secs
+}
+
+/// Build the full ProgressView, reusing a short-lived on-disk cache when
+/// fresh (see `STATUS_CACHE_TTL_SECS`). Fail-soft in both directions: any
+/// cache read error (missing file, corrupt JSON) falls through to a fresh
+/// `build`, and any cache write error is silently ignored (the render already
+/// succeeded and must not be blocked by a failed cache write). A fresh build
+/// is always persisted back to the cache so the NEXT call (e.g. the paired
+/// SessionStart/Stop hook) can hit it.
+pub fn build_cached(cwd: &Path) -> ProgressView {
+    let now = store::now();
+
+    if let Ok(cache_path) = store::status_cache_path(cwd) {
+        if let Ok(txt) = std::fs::read_to_string(&cache_path) {
+            if let Ok(cached) = serde_json::from_str::<CachedView>(&txt) {
+                if cache_is_fresh(cached.built_at, now, STATUS_CACHE_TTL_SECS) {
+                    return cached.view;
+                }
+            }
+        }
+    }
+
+    let view = build(cwd);
+
+    if let Ok(cache_path) = store::status_cache_path(cwd) {
+        let cached = CachedView {
+            built_at: now,
+            view: view.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&cached) {
+            if let Some(parent) = cache_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            // Best-effort write via temp+rename (same atomic idiom as
+            // `store::save_leases`); any failure here is ignored since the
+            // render itself already succeeded.
+            let tmp = cache_path.with_extension("json.tmp");
+            if std::fs::write(&tmp, &json).is_ok() {
+                let _ = std::fs::rename(&tmp, &cache_path);
+            }
         }
     }
 
@@ -661,5 +745,193 @@ mod tests {
         let summary = parse_backlog(json);
         assert_eq!(summary.pending, 1);
         assert_eq!(summary.done, 1);
+    }
+
+    // -- status cache (cache_is_fresh / build_cached) --------------------
+
+    #[test]
+    fn test_cache_is_fresh_within_ttl() {
+        assert!(cache_is_fresh(1000, 1005, STATUS_CACHE_TTL_SECS));
+        // Exactly at the TTL boundary is still fresh (inclusive).
+        assert!(cache_is_fresh(
+            1000,
+            1000 + STATUS_CACHE_TTL_SECS,
+            STATUS_CACHE_TTL_SECS
+        ));
+    }
+
+    #[test]
+    fn test_cache_is_fresh_expired_past_ttl() {
+        assert!(!cache_is_fresh(
+            1000,
+            1000 + STATUS_CACHE_TTL_SECS + 1,
+            STATUS_CACHE_TTL_SECS
+        ));
+    }
+
+    #[test]
+    fn test_cache_is_fresh_rejects_future_built_at() {
+        // A `built_at` after `now` is clock-skew/corruption, not "fresh".
+        assert!(!cache_is_fresh(2000, 1000, STATUS_CACHE_TTL_SECS));
+    }
+
+    // `build_cached` and `store::status_cache_path` resolve under the real
+    // `$HOME` (via `harness_core::config::base_dir`), so these tests sandbox
+    // HOME the same way `store.rs`'s `read_review_findings_all_concatenates_*`
+    // test does, serialized via a lock since env vars are process-global and
+    // `cargo test` runs threads within one process.
+    static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct HomeSandbox {
+        prev_home: Option<std::ffi::OsString>,
+        dir: std::path::PathBuf,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl HomeSandbox {
+        fn new(tag: &str) -> Self {
+            let guard = HOME_ENV_LOCK.lock().unwrap();
+            let prev_home = std::env::var_os("HOME");
+            let dir = std::env::temp_dir().join(format!(
+                "overwatch-aggregate-test-{tag}-{}-{}",
+                std::process::id(),
+                store::now()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::env::set_var("HOME", &dir);
+            Self {
+                prev_home,
+                dir,
+                _guard: guard,
+            }
+        }
+    }
+
+    impl Drop for HomeSandbox {
+        fn drop(&mut self) {
+            match self.prev_home.take() {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            std::fs::remove_dir_all(&self.dir).ok();
+        }
+    }
+
+    #[test]
+    fn test_build_cached_reuses_fresh_cache_without_rebuilding() {
+        let sandbox = HomeSandbox::new("fresh-hit");
+        let cwd = sandbox.dir.clone();
+
+        // Seed a cache entry directly (bypassing `build`, which would spawn
+        // subprocesses) so we can assert the cache-hit path returns exactly
+        // what was cached, not a freshly-built (empty) view.
+        let cache_path = store::status_cache_path(&cwd).unwrap();
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        let backlog = BacklogSummary {
+            pending: 42,
+            ..Default::default()
+        };
+        let seeded = CachedView {
+            built_at: store::now(),
+            view: ProgressView {
+                backlog: Some(backlog),
+                ..Default::default()
+            },
+        };
+        std::fs::write(&cache_path, serde_json::to_string(&seeded).unwrap()).unwrap();
+
+        let view = build_cached(&cwd);
+        assert_eq!(view.backlog.unwrap().pending, 42);
+    }
+
+    #[test]
+    fn test_build_cached_expired_entry_falls_through_to_fresh_build() {
+        let sandbox = HomeSandbox::new("expired-miss");
+        let cwd = sandbox.dir.clone();
+
+        let cache_path = store::status_cache_path(&cwd).unwrap();
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        let stale_backlog = BacklogSummary {
+            pending: 999,
+            ..Default::default()
+        };
+        let expired = CachedView {
+            built_at: store::now() - STATUS_CACHE_TTL_SECS - 100,
+            view: ProgressView {
+                backlog: Some(stale_backlog),
+                ..Default::default()
+            },
+        };
+        std::fs::write(&cache_path, serde_json::to_string(&expired).unwrap()).unwrap();
+
+        // A fresh build (no `backlog`/`hypothesis`/`condukt`/`compass` binaries
+        // on PATH in this sandboxed env) must NOT return the expired 999
+        // value — it must re-derive from scratch (here, an empty/default
+        // backlog since the subprocess calls fail-soft to None).
+        let view = build_cached(&cwd);
+        assert_ne!(view.backlog.map(|b| b.pending), Some(999));
+    }
+
+    #[test]
+    fn test_build_cached_missing_cache_falls_back_to_full_build() {
+        let sandbox = HomeSandbox::new("cold-miss");
+        let cwd = sandbox.dir.clone();
+
+        // No cache file at all. Should not panic, should return a valid
+        // (fresh-built) view, and should persist a cache entry for next time.
+        let view = build_cached(&cwd);
+        assert!(view.sessions.is_empty());
+
+        let cache_path = store::status_cache_path(&cwd).unwrap();
+        assert!(
+            cache_path.exists(),
+            "build_cached should persist a cache entry after a fresh build"
+        );
+    }
+
+    #[test]
+    fn test_build_cached_corrupt_cache_falls_back_to_full_build() {
+        let sandbox = HomeSandbox::new("corrupt-miss");
+        let cwd = sandbox.dir.clone();
+
+        let cache_path = store::status_cache_path(&cwd).unwrap();
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        std::fs::write(&cache_path, "not valid json at all").unwrap();
+
+        // Must not panic on corrupt cache content; falls through to a fresh
+        // build (fail-soft).
+        let view = build_cached(&cwd);
+        assert!(view.sessions.is_empty());
+    }
+
+    #[test]
+    fn test_build_cached_second_call_within_ttl_hits_cache() {
+        let sandbox = HomeSandbox::new("roundtrip");
+        let cwd = sandbox.dir.clone();
+
+        // First call: cold miss, does a full build and persists the cache.
+        let first = build_cached(&cwd);
+
+        // Mutate the persisted cache's `view` in place to a sentinel value,
+        // simulating "time has NOT advanced past the TTL" — the second call
+        // must reuse this sentinel via the cache rather than rebuilding.
+        let cache_path = store::status_cache_path(&cwd).unwrap();
+        let txt = std::fs::read_to_string(&cache_path).unwrap();
+        let mut cached: CachedView = serde_json::from_str(&txt).unwrap();
+        let sentinel_backlog = BacklogSummary {
+            pending: 7,
+            ..Default::default()
+        };
+        cached.view.backlog = Some(sentinel_backlog);
+        std::fs::write(&cache_path, serde_json::to_string(&cached).unwrap()).unwrap();
+
+        let second = build_cached(&cwd);
+        assert_eq!(second.backlog.unwrap().pending, 7);
+        // Both calls ran in an empty sandbox with no leases registered, so
+        // the session roster is empty either way — assert that directly
+        // (SessionRoster doesn't derive PartialEq, so we can't compare the
+        // Vecs wholesale).
+        assert!(first.sessions.is_empty());
+        assert!(second.sessions.is_empty());
     }
 }

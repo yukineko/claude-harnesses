@@ -4,9 +4,14 @@ use anyhow::Result;
 use std::fmt::Write as _;
 
 /// Render the full human-readable progress report, or JSON if `json` is true.
+///
+/// Uses the short-lived status cache (`aggregate::build_cached`): this is the
+/// command wired to BOTH the SessionStart and Stop hooks (see
+/// `hooks/hooks.json`), so a fresh render's cache hit collapses the second
+/// hook invocation's ~5 subprocess spawns when the two fire close together.
 pub fn status(json: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let view = aggregate::build(&cwd);
+    let view = aggregate::build_cached(&cwd);
 
     if json {
         println!("{}", serde_json::to_string_pretty(&view)?);

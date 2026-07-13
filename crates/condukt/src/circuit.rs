@@ -379,6 +379,8 @@ mod tests {
             cost_usd: None,
             fp_oracle_valid: None,
             findings: None,
+            hashkey: None,
+            claimed_at: None,
         }
     }
 

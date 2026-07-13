@@ -54,7 +54,7 @@
 # git pre-push hook (.git/hooks/pre-push) — trigger a round when gate-crate
 # paths changed since the last push (opt-in; copy in manually):
 #   #!/usr/bin/env bash
-#   changed=$(git diff --name-only @{push}..HEAD 2>/dev/null | grep -E '^crates/(blastguard|propguard|specguard|stuckguard|mutategate)/' || true)
+#   changed=$(git diff --name-only @{push}..HEAD 2>/dev/null | grep -E '^crates/(blastguard|propguard|specguard|stuckguard|mutategate|overwatch)/' || true)
 #   if [ -n "$changed" ]; then
 #     echo "gate-crate changes detected — consider running scripts/continuous-audit.sh --dry-run" >&2
 #   fi
@@ -65,8 +65,11 @@ set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Default target set = the GLOSSARY gate crates (kept in sync with
-# scripts/rollout-plugins.sh GATE_CRATES).
-DEFAULT_TARGETS="blastguard,propguard,specguard,stuckguard,mutategate"
+# scripts/rollout-plugins.sh GATE_CRATES, which also includes `overwatch`:
+# it's the binary this loop itself calls to record findings/rounds, and the
+# canary health-gate depends on it too, so it gets the same audit coverage
+# as the crates it protects — backlog 50f94a60).
+DEFAULT_TARGETS="blastguard,propguard,specguard,stuckguard,mutategate,overwatch"
 
 ROUND=""
 TARGET="$DEFAULT_TARGETS"

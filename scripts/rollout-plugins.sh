@@ -99,7 +99,16 @@ usage() { sed -n '2,80p' "$0"; }
 # target set includes any of them, --canary becomes REQUIRED (omitting it is an
 # ERROR). `--no-canary` is the explicit escape hatch. Non-gate crates are
 # unaffected (canary stays optional).
-GATE_CRATES="blastguard propguard specguard stuckguard mutategate"
+#
+# `overwatch` is included even though it isn't itself a prompt-injection/spec/
+# mutation defense gate: it IS the binary this very script calls to compute
+# the canary health-gate decision (resolve_overwatch_bin, canary-gate below),
+# and it's also what scripts/continuous-audit.sh calls to record confirmed
+# findings. A broken overwatch rollout would silently remove the canary
+# rollback/health-gate safety net for the OTHER gate crates with no forcing
+# function to catch it (backlog 50f94a60) — so it gets the same canary
+# requirement as the crates it protects.
+GATE_CRATES="blastguard propguard specguard stuckguard mutategate overwatch"
 
 is_gate_crate() {
   local want="$1" g

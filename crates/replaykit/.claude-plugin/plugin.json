@@ -1,7 +1,16 @@
 {
   "name": "replaykit",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Trace→golden replay regression harness: convert tracekit-recorded condukt run traces into evalkit golden replay cases. The sibling of curate (playbook→golden) — three subcommands (extract/verify/promote) pin a run's phase set, error count, and cost as a portable, self-verifying snapshot so regressions surface as a failing golden. Subscription-native (one bundled Rust binary, no API key).",
-  "author": { "name": "yukineko" },
-  "keywords": ["replay", "regression", "golden", "trace", "llmops", "rust"]
+  "author": {
+    "name": "yukineko"
+  },
+  "keywords": [
+    "replay",
+    "regression",
+    "golden",
+    "trace",
+    "llmops",
+    "rust"
+  ]
 }

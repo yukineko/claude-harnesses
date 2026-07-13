@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "replaykit"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Trace→golden replay regression harness: distil tracekit-recorded condukt run traces into evalkit golden replay cases. The trajectory sibling of curate (playbook→golden). Pins a run's phase set, error count, and cost as a portable, self-verifying snapshot. Subscription-native (one bundled Rust binary, no API key)."
 license = "MIT"

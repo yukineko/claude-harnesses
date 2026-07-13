@@ -1,7 +1,16 @@
 {
   "name": "curate",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Promote fugu-router playbooks into versioned golden eval datasets for evalkit: turn the append-only routing log into a curated, deduplicated holdout set. Mechanical acceptance criteria (`cargo test`, a backticked command) become runnable golden cases; the rest become drafts for a human to fill. The supply side of the offline eval loop. Subscription-native (one bundled Rust binary, no API key).",
-  "author": { "name": "yukineko" },
-  "keywords": ["eval", "golden", "dataset", "curation", "llmops", "rust"]
+  "author": {
+    "name": "yukineko"
+  },
+  "keywords": [
+    "eval",
+    "golden",
+    "dataset",
+    "curation",
+    "llmops",
+    "rust"
+  ]
 }

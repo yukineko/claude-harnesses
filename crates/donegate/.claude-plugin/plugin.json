@@ -1,7 +1,15 @@
 {
   "name": "donegate",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Completion-verification gate for Claude Code: on Stop, run your acceptance commands as subprocesses and block the stop until every required check is green, feeding failures back for an auto-fix loop. Subscription-native (one hook + bundled Rust binary, no API key).",
-  "author": { "name": "yukineko" },
-  "keywords": ["hooks", "verification", "tests", "ci", "rust"]
+  "author": {
+    "name": "yukineko"
+  },
+  "keywords": [
+    "hooks",
+    "verification",
+    "tests",
+    "ci",
+    "rust"
+  ]
 }

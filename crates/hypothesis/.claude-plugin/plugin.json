@@ -1,7 +1,14 @@
 {
   "name": "hypothesis",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "PDO hypothesis lifecycle management — create, validate, and track discovery hypotheses aligned with compass goals.",
-  "author": { "name": "yukineko" },
-  "keywords": ["pdo", "hypothesis", "discovery", "compass"]
+  "author": {
+    "name": "yukineko"
+  },
+  "keywords": [
+    "pdo",
+    "hypothesis",
+    "discovery",
+    "compass"
+  ]
 }

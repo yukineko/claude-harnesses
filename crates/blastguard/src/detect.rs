@@ -121,13 +121,18 @@ fn redirect_target_is_safe(target: &str) -> bool {
 /// Quote-aware split of a command line into individual simple-command segments
 /// on `;`, newline, `&&`, `||`, `|`, `&`.
 fn split_segments(cmd: &str) -> Vec<String> {
-    let bytes = cmd.as_bytes();
+    // Iterate over `char`s, not raw bytes: casting a UTF-8 continuation byte
+    // `as char` yields a bogus Latin-1 scalar (e.g. 0xA0 → U+00A0), which both
+    // corrupts non-ASCII segments and can misfire operator/quote checks. All the
+    // operators we split on are ASCII, so char iteration preserves ASCII behavior
+    // exactly while keeping multi-byte text intact.
+    let chars: Vec<char> = cmd.chars().collect();
     let mut segs = Vec::new();
     let mut cur = String::new();
     let (mut in_s, mut in_d) = (false, false);
     let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i] as char;
+    while i < chars.len() {
+        let c = chars[i];
         if c == '\'' && !in_d {
             in_s = !in_s;
             cur.push(c);
@@ -142,8 +147,8 @@ fn split_segments(cmd: &str) -> Vec<String> {
         }
         if !in_s && !in_d {
             // Two-char operators.
-            if (c == '&' && bytes.get(i + 1) == Some(&b'&'))
-                || (c == '|' && bytes.get(i + 1) == Some(&b'|'))
+            if (c == '&' && chars.get(i + 1) == Some(&'&'))
+                || (c == '|' && chars.get(i + 1) == Some(&'|'))
             {
                 segs.push(std::mem::take(&mut cur));
                 i += 2;
@@ -226,18 +231,19 @@ fn redirect_targets(seg: &str) -> Vec<String> {
                 continue;
             }
             // Single truncating redirect — read the target token.
+            // Byte-scan the target token. Only ASCII bytes are treated as
+            // whitespace/delimiters: ASCII bytes are always UTF-8 char
+            // boundaries, so `seg[start..j]` never slices inside a multi-byte
+            // char. (Casting a continuation byte `as char` could read as
+            // U+00A0 no-break-space and break mid-character → panic.)
             let mut j = i + 1;
-            while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
                 j += 1;
             }
             let start = j;
             while j < bytes.len() {
                 let cj = bytes[j];
-                if (cj as char).is_whitespace()
-                    || cj == b';'
-                    || cj == b'|'
-                    || cj == b'&'
-                    || cj == b'>'
+                if cj.is_ascii_whitespace() || cj == b';' || cj == b'|' || cj == b'&' || cj == b'>'
                 {
                     break;
                 }
@@ -253,12 +259,18 @@ fn redirect_targets(seg: &str) -> Vec<String> {
 }
 
 /// True when the `>` at `bytes[gt]` closes an angle-bracket identifier
-/// placeholder like `<value>` / `<id>` / `<RID>`: scan back over identifier
-/// chars (`[A-Za-z0-9_]`, at least one) and find an opening `<`. Such prose is a
-/// placeholder token, not a truncating redirect target.
+/// placeholder like `<value>` / `<id>` / `<RID>` / `<run-id>`: scan back over
+/// identifier chars (`[A-Za-z0-9_-]`, at least one) and find an opening `<`.
+/// Such prose is a placeholder token, not a truncating redirect target. Hyphens
+/// are included because kebab-case placeholders (`<run-id>`, `<session-id>`,
+/// `<pdo-unit-id>`) are pervasive in this repo's prose; allowing them only
+/// matches when a real opening `<` is found, so genuine redirects like
+/// `foo-bar>file` (no preceding `<`) are still detected.
 fn is_angle_placeholder_close(bytes: &[u8], gt: usize) -> bool {
     let mut k = gt;
-    while k > 0 && (bytes[k - 1].is_ascii_alphanumeric() || bytes[k - 1] == b'_') {
+    while k > 0
+        && (bytes[k - 1].is_ascii_alphanumeric() || bytes[k - 1] == b'_' || bytes[k - 1] == b'-')
+    {
         k -= 1;
     }
     // Require ≥1 identifier char between the `<` and the `>`.
@@ -997,5 +1009,59 @@ mod tests {
             Decision::Allow
         );
         assert_eq!(detect("Write", Some(&json!({}))), Decision::Allow);
+    }
+
+    // ---- UTF-8 boundary safety (regression: multi-byte text must not panic) ----
+
+    #[test]
+    fn multibyte_after_redirect_marker_does_not_panic() {
+        // '頻' = U+983B = E9 A0 BB. Byte 0xA0, cast `as char`, is U+00A0
+        // (no-break space / whitespace) — the old byte-scan broke mid-char here
+        // and `seg[start..j]` panicked ("not a char boundary"). A `>` adjacent
+        // to Japanese prose (common in this repo's task text) must classify
+        // without crashing.
+        let _ = redirect_targets("band>=1・低頻度で再注入");
+        let _ = redirect_targets("値を >低頻度 に絞る");
+        let _ = bash("echo band>=1・低頻度で再注入");
+    }
+
+    #[test]
+    fn split_segments_preserves_multibyte_text() {
+        // Byte-as-char split used to mangle non-ASCII into Latin-1 mojibake.
+        let segs = split_segments("echo 低頻度 && ls 監査");
+        assert_eq!(segs.len(), 2);
+        assert!(segs[0].contains("低頻度"));
+        assert!(segs[1].contains("監査"));
+    }
+
+    #[test]
+    fn redirect_target_after_multibyte_is_extracted_intact() {
+        // A genuine truncating redirect whose target follows multi-byte text is
+        // still read, and the extracted token is valid UTF-8 (no mid-char cut).
+        assert_eq!(
+            single_redirect_target("低頻度 > out.txt"),
+            Some("out.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn kebab_case_angle_placeholder_is_not_a_redirect() {
+        // `<run-id>` / `<pdo-unit-id>` are placeholder prose, not redirects — the
+        // hyphen must not break placeholder recognition (regression: these were
+        // force-denied as `>` truncating redirects).
+        assert!(single_redirect_target("overwatch begin --key <pdo-unit-id> --title x").is_none());
+        assert!(single_redirect_target("condukt heartbeat --run <run-id>").is_none());
+        assert!(!bash("echo state --run <session-id> done").is_deny());
+    }
+
+    #[test]
+    fn hyphenated_real_redirect_still_detected() {
+        // A real truncating redirect with a hyphenated target (no preceding `<`)
+        // is still caught — allowing hyphens only matches true `<...>` pairs.
+        assert_eq!(
+            single_redirect_target("foo-bar > out-file.txt"),
+            Some("out-file.txt".to_string())
+        );
+        assert!(bash("cat x > important-data.txt").is_deny());
     }
 }

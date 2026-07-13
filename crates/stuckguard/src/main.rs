@@ -6,6 +6,7 @@
 //! grows into "stop and ask the user". It can only *advise* — never block a tool
 //! call or end a turn — so a false positive costs at most one extra line.
 
+mod anchor;
 mod config;
 mod detect;
 mod install;
@@ -99,6 +100,23 @@ fn watch() {
     };
 
     let session = input.session_key();
+
+    // PDO anchor side-channels (§4.4/§4.6b). Read the session's live anchor once
+    // if either feature is enabled; both degrade to a silent no-op when the
+    // session holds no lease or overwatch is absent.
+    let anchor = if cfg.heartbeat_piggyback_enabled || cfg.scope_drift_enabled {
+        anchor::fetch_session_anchor(&session)
+    } else {
+        None
+    };
+    // Keep the claim/lease alive on every tool call so a long single task is not
+    // falsely reaped and stolen (§4.6b). Side effect only — never blocks.
+    if cfg.heartbeat_piggyback_enabled {
+        if let Some(a) = &anchor {
+            anchor::heartbeat_piggyback(a);
+        }
+    }
+
     let mut st = state::load(&cfg.state_dir, &session);
     let seq = st.push(event, cfg.window);
 
@@ -145,6 +163,15 @@ fn watch() {
         // repeat/oscillation escalation above, it's strictly an additional,
         // lower-severity signal for the case the hard detector missed.
         emitted = progress_advisory_message(&mut st, seq, &cfg);
+    } else if cfg.scope_drift_enabled {
+        // PDO scope-drift advisory (§4.4): lowest priority, structurally
+        // mutually exclusive with the hard trip and the progress advisory above
+        // (else-if chain), so it never replaces or perturbs their bookkeeping.
+        // Only fires when the session holds an anchor with a non-empty scope.
+        if let Some(a) = &anchor {
+            emitted = anchor::scope_drift(&st.events, &a.scope, cfg.drift_threshold)
+                .map(|drifted| anchor::scope_drift_message(&a.scope, &drifted));
+        }
     }
 
     state::save(&cfg.state_dir, &session, &st);
@@ -398,6 +425,12 @@ fn status() {
         "progress_score_threshold:  {}",
         cfg.progress_score_threshold
     );
+    println!("scope_drift_enabled:       {}", cfg.scope_drift_enabled);
+    println!("drift_threshold:           {}", cfg.drift_threshold);
+    println!(
+        "heartbeat_piggyback_enabled: {}",
+        cfg.heartbeat_piggyback_enabled
+    );
 }
 
 const STARTER: &str = r#"# stuckguard.toml — stuck-loop detector + escalation for Claude Code.
@@ -426,6 +459,15 @@ ignore_tools = ["TodoWrite"]
 # progress_min_window = 6     # min window length before the advisory is even considered
 # progress_score_threshold = 0.75  # progress_score in [0,1] at/above which it fires;
                              # conservative (high) by default to avoid false positives
+
+# --- PDO session anchor (needs overwatch; both fail-soft to no-op) ---
+# scope_drift_enabled = false  # nudge when recent edits fall OUTSIDE the session's
+                             # declared anchor scope (overwatch lease). default OFF —
+                             # opt in; fires below the hard/progress advisories.
+# drift_threshold = 3          # consecutive out-of-scope edits before it fires
+# heartbeat_piggyback_enabled = true  # refresh condukt/overwatch heartbeat on every
+                             # tool call so a long task isn't falsely reaped and stolen
+                             # (§4.6b). default ON (safety); no-op without a live lease.
 "#;
 
 fn init(force: bool) -> anyhow::Result<()> {

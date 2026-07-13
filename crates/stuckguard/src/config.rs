@@ -58,6 +58,19 @@ pub struct Config {
     /// above which the advisory fires. Conservative (high) by default so a
     /// mildly repetitive-but-fine window doesn't trip it.
     pub progress_score_threshold: f64,
+    /// Enable the PDO scope-drift advisory (§4.4): nudge when recent edits fall
+    /// outside the session's declared anchor scope. `false` by default — opt-in
+    /// so existing behavior is unchanged until an operator turns it on and the
+    /// session actually holds an overwatch lease with a non-empty scope.
+    pub scope_drift_enabled: bool,
+    /// Consecutive out-of-scope edits before the scope-drift advisory fires.
+    pub drift_threshold: usize,
+    /// Piggyback a `condukt`/`overwatch` heartbeat on every PostToolUse (§4.6b),
+    /// so a long single task doesn't let its claim/lease go stale and get
+    /// reaped/stolen. `true` by default — this is a safety feature (prevents
+    /// task theft); disable only to opt out. No-op when the session holds no
+    /// lease or the binaries are absent (fail-soft).
+    pub heartbeat_piggyback_enabled: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -74,6 +87,9 @@ struct FileConfig {
     progress_advisory_enabled: Option<bool>,
     progress_min_window: Option<usize>,
     progress_score_threshold: Option<f64>,
+    scope_drift_enabled: Option<bool>,
+    drift_threshold: Option<usize>,
+    heartbeat_piggyback_enabled: Option<bool>,
 }
 
 /// The `~/.stuckguard` base directory.
@@ -103,6 +119,13 @@ impl Default for Config {
             // Conservative: score must be quite high (near-certain stall
             // signature across all 3 signals) before the advisory fires.
             progress_score_threshold: 0.75,
+            // Default-off: scope-drift is a new advisory, opt-in like the
+            // progress advisory.
+            scope_drift_enabled: false,
+            drift_threshold: 3,
+            // Default-on: heartbeat piggyback is a safety feature (anti-theft),
+            // no-op unless the session holds a lease.
+            heartbeat_piggyback_enabled: true,
         }
     }
 }
@@ -166,6 +189,15 @@ impl Config {
                     if let Some(v) = fc.progress_score_threshold {
                         cfg.progress_score_threshold = v;
                     }
+                    if let Some(v) = fc.scope_drift_enabled {
+                        cfg.scope_drift_enabled = v;
+                    }
+                    if let Some(v) = fc.drift_threshold {
+                        cfg.drift_threshold = v;
+                    }
+                    if let Some(v) = fc.heartbeat_piggyback_enabled {
+                        cfg.heartbeat_piggyback_enabled = v;
+                    }
                 }
             }
         }
@@ -179,6 +211,10 @@ impl Config {
         cfg.escalate_after = cfg.escalate_after.max(1);
         cfg.progress_min_window = cfg.progress_min_window.max(2);
         cfg.progress_score_threshold = cfg.progress_score_threshold.clamp(0.0, 1.0);
+        // A drift_threshold larger than the window can never be reached (same
+        // reasoning as repeat_threshold above), and 0 would fire on the first
+        // event. Floor at 1 and clamp down to the window (fail-safe).
+        cfg.drift_threshold = cfg.drift_threshold.max(1).min(cfg.window);
         // Cross-field invariant (CA-stuckguard-002): the detectors only ever see
         // the last `window` events (State::push caps the buffer at `window`), so
         // a `repeat_threshold` or `progress_min_window` LARGER than `window` can
@@ -229,6 +265,39 @@ mod tests {
             cfg.progress_min_window, 5,
             "progress_min_window must be clamped to window"
         );
+    }
+
+    /// PDO anchor defaults (§4.4/§4.6b): scope-drift is opt-in (off),
+    /// heartbeat piggyback is a safety default (on), drift_threshold = 3.
+    /// A bare project config (no anchor keys) must preserve these.
+    #[test]
+    fn pdo_anchor_defaults_are_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(Config::project_path(dir.path()), "enabled = true\n").unwrap();
+        let cfg = Config::load(dir.path());
+        assert!(!cfg.scope_drift_enabled, "scope_drift is opt-in (off)");
+        assert!(
+            cfg.heartbeat_piggyback_enabled,
+            "heartbeat piggyback defaults on"
+        );
+        assert_eq!(cfg.drift_threshold, 3);
+    }
+
+    /// drift_threshold must be floored to ≥1 and clamped to the window.
+    #[test]
+    fn drift_threshold_clamped_to_window_and_floored() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            Config::project_path(dir.path()),
+            "window = 5\ndrift_threshold = 99\n",
+        )
+        .unwrap();
+        let cfg = Config::load(dir.path());
+        assert_eq!(cfg.drift_threshold, 5, "clamped down to window");
+
+        std::fs::write(Config::project_path(dir.path()), "drift_threshold = 0\n").unwrap();
+        let cfg = Config::load(dir.path());
+        assert!(cfg.drift_threshold >= 1, "floored to at least 1");
     }
 
     /// CA-stuckguard-03 (p2 — threshold clamp has no floor): `load()`

@@ -98,33 +98,53 @@ fn enforce_model_diversity(
     verifier_model: Option<&str>,
     now: i64,
 ) {
-    let (Some(finder), Some(verifier)) = (finder_model, verifier_model) else {
+    let Some(finding) = model_collision_finding(round, finder_model, verifier_model, now) else {
         return;
     };
-    if !audit_round::same_model(finder, verifier) {
-        return;
+    // Safe: a finding is built ONLY when both models are present & non-empty.
+    let finder = finder_model.unwrap_or_default().trim();
+    eprintln!(
+        "overwatch: WARNING finder と verifier が同一モデル ({finder}): MUST 違反 — \
+         review-queue に警告 finding ({finding_id}) を記録 (loop は継続 / fail-soft)",
+        finding_id = finding.finding_id
+    );
+    if let Err(e) = store::append_review_finding(cwd, &finding) {
+        eprintln!("overwatch: WARNING could not record model-collision finding (continuing): {e}");
     }
+}
+
+/// Pure decision + builder for the finder==verifier model-collision finding:
+/// return `Some(finding)` iff [`audit_round::model_diversity_violation`] holds
+/// (both models present, non-empty, canonically equal), else `None`. Isolating
+/// the decision from the store side-effect makes the "same-model round is
+/// surfaced, distinct/missing-model round is NOT" contract directly testable
+/// without touching the review-findings ledger. The finding carries a
+/// round-derived (idempotent) id and `high` severity.
+fn model_collision_finding(
+    round: &str,
+    finder_model: Option<&str>,
+    verifier_model: Option<&str>,
+    now: i64,
+) -> Option<ReviewFinding> {
+    if !audit_round::model_diversity_violation(finder_model, verifier_model) {
+        return None;
+    }
+    let finder = finder_model.unwrap_or_default().trim();
+    let verifier = verifier_model.unwrap_or_default().trim();
     let finding_id = audit_round::model_collision_finding_id(round);
     let summary = format!(
         "finder と verifier が同一モデル: MUST 違反 (finder={finder}, verifier={verifier}) — \
          model diversity 要件 (生成と検証の盲点共有を防ぐ) を満たさない"
     );
-    let finding = ReviewFinding::new(
-        finding_id.clone(),
+    Some(ReviewFinding::new(
+        finding_id,
         "continuous-audit".to_string(),
         Some("high".to_string()),
         summary,
         None,
         None,
         now,
-    );
-    eprintln!(
-        "overwatch: WARNING finder と verifier が同一モデル ({finder}): MUST 違反 — \
-         review-queue に警告 finding ({finding_id}) を記録 (loop は継続 / fail-soft)"
-    );
-    if let Err(e) = store::append_review_finding(cwd, &finding) {
-        eprintln!("overwatch: WARNING could not record model-collision finding (continuing): {e}");
-    }
+    ))
 }
 
 /// Close a Continuous-Audit round: SET its `regression_tests_added` to `tests`
@@ -227,4 +247,60 @@ pub fn metrics(json: bool, window: Option<usize>) -> Result<()> {
         report.convergence_window, report.converging
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_surfaces_same_model_round_as_high_severity_finding() {
+        // A same-model round (finder == verifier) must NOT pass silently: the
+        // CLI decision builds a high-severity, round-derived finding.
+        let finding = model_collision_finding(
+            "2026W28",
+            Some("claude-opus-4-8"),
+            Some("claude-opus-4-8"),
+            42,
+        )
+        .expect("same-model round must surface a model-collision finding");
+        assert_eq!(
+            finding.finding_id,
+            audit_round::model_collision_finding_id("2026W28")
+        );
+        assert_eq!(finding.severity.as_deref(), Some("high"));
+        assert_eq!(finding.source, "continuous-audit");
+        assert!(
+            finding.summary.contains("MUST"),
+            "summary must name the MUST violation: {}",
+            finding.summary
+        );
+        assert_eq!(finding.ts, 42);
+
+        // Case / whitespace variants of the same model still surface.
+        assert!(
+            model_collision_finding("r", Some("  Opus "), Some("opus"), 1).is_some(),
+            "case/whitespace-different spellings of the same model must surface"
+        );
+    }
+
+    #[test]
+    fn cli_does_not_surface_distinct_or_missing_models() {
+        // Distinct models satisfy the diversity MUST => no finding.
+        assert!(model_collision_finding(
+            "r",
+            Some("claude-3-5-sonnet"),
+            Some("claude-3-5-opus"),
+            1
+        )
+        .is_none());
+        // A missing model field (None on either side) => no finding (backward
+        // compatible with callers that pass no model args).
+        assert!(model_collision_finding("r", None, Some("opus"), 1).is_none());
+        assert!(model_collision_finding("r", Some("opus"), None, 1).is_none());
+        assert!(model_collision_finding("r", None, None, 1).is_none());
+        // Empty / whitespace-only fields are "missing" => no FALSE finding.
+        assert!(model_collision_finding("r", Some(""), Some(""), 1).is_none());
+        assert!(model_collision_finding("r", Some("   "), Some("  "), 1).is_none());
+    }
 }

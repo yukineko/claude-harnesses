@@ -1183,6 +1183,127 @@ fn accept_prompt_refuses_contract_violating_template() {
     );
 }
 
+/// Ratify config with `[prompt].graded` on at `threshold`, template at
+/// `template_body`.
+fn write_graded_config(repo: &Path, template_body: &str, threshold: f64) {
+    fs::write(repo.join("tmpl.md"), template_body).unwrap();
+    let agent = "# clean\\n\\n<<<SPEC_AUDIT>>>\\nneeds_user: no\\nsummary: なし";
+    let script = format!("cat >/dev/null; printf '{agent}\\n'");
+    let cfg = format!(
+        r#"
+[project]
+name = "Demo"
+root = "."
+[agent]
+command = "bash"
+args = ["-c", {script:?}]
+[output]
+report_dir = "reports"
+sentinel = ".pending"
+[prompt]
+template = "tmpl.md"
+require_ratification = true
+graded = true
+graded_threshold = {threshold}
+[[area]]
+name = "src"
+globs = ["src/**"]
+"#,
+    );
+    fs::write(repo.join("specguard.toml"), cfg).unwrap();
+}
+
+#[test]
+fn graded_precedented_change_with_contract_violation_is_not_auto_ratified() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let base = init_repo(repo);
+    seed_src(repo);
+
+    // Ratify a valid template with graded triage on (low threshold so a small
+    // edit is judged precedented).
+    write_graded_config(repo, VALID_TMPL, 0.5);
+    assert!(
+        run_specguard(repo, &base, &["accept-prompt", "-m", "initial"])
+            .status
+            .success()
+    );
+    let lock_before = fs::read_to_string(repo.join(".specguard-prompt.lock")).unwrap();
+    assert!(run_specguard(repo, &base, &["run"]).status.success());
+    // Clear the report from the compliant first run so the later assertion
+    // proves the SECOND (blocked) run did not produce a fresh report.
+    let _ = fs::remove_file(repo.join("reports/2026-01-01.md"));
+
+    // Drift the template with a SMALL, textually-similar edit that nonetheless
+    // drops a required placeholder ({{MARKER}}) — a contract violation. Because
+    // the edit is tiny, deterministic similarity to the ratified precedent stays
+    // high, so the graded gate's own similarity/polarity triage alone would call
+    // this "precedented". The contract check must still refuse auto-ratify.
+    let contract_violating = VALID_TMPL.replace("{{MARKER}}\n", "");
+    fs::write(repo.join("tmpl.md"), &contract_violating).unwrap();
+
+    let out = run_specguard(repo, &base, &["run"]);
+    assert_eq!(
+        out.status.code(),
+        Some(5),
+        "precedented-but-contract-violating change must NOT auto-ratify (stderr: {})",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("MARKER"),
+        "names the missing placeholder: {stderr}"
+    );
+
+    // The lock must be untouched — write_lock was never called on this path.
+    let lock_after = fs::read_to_string(repo.join(".specguard-prompt.lock")).unwrap();
+    assert_eq!(
+        lock_before, lock_after,
+        "ratify lock must not change when the contract check refuses auto-ratify"
+    );
+    assert!(
+        !repo.join("reports/2026-01-01.md").exists(),
+        "audit must not run past the unratified gate"
+    );
+}
+
+#[test]
+fn graded_precedented_compliant_change_still_auto_ratifies() {
+    // Non-regression: a precedented change that DOES satisfy the contract must
+    // keep auto-ratifying exactly as before this fix.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let base = init_repo(repo);
+    seed_src(repo);
+
+    write_graded_config(repo, VALID_TMPL, 0.5);
+    assert!(
+        run_specguard(repo, &base, &["accept-prompt", "-m", "initial"])
+            .status
+            .success()
+    );
+    let lock_before = fs::read_to_string(repo.join(".specguard-prompt.lock")).unwrap();
+    assert!(run_specguard(repo, &base, &["run"]).status.success());
+
+    // Small, contract-preserving edit (adds a trailing comment) -> still
+    // precedented, and now compliant -> should auto-ratify and proceed.
+    let compliant_edit = format!("{VALID_TMPL}<!-- tweak -->\n");
+    fs::write(repo.join("tmpl.md"), &compliant_edit).unwrap();
+
+    let out = run_specguard(repo, &base, &["run"]);
+    assert!(
+        out.status.success(),
+        "compliant precedented change should still auto-ratify: stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lock_after = fs::read_to_string(repo.join(".specguard-prompt.lock")).unwrap();
+    assert_ne!(
+        lock_before, lock_after,
+        "auto-ratify should re-pin the lock to the new precedent"
+    );
+    assert!(repo.join("reports/2026-01-01.md").exists());
+}
+
 /// Ratify config with an extra `[verify]` table injected verbatim.
 fn write_ratify_config_with(repo: &Path, template_body: &str, verify_toml: &str) {
     fs::write(repo.join("tmpl.md"), template_body).unwrap();

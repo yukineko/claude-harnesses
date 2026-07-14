@@ -4,8 +4,8 @@
 #     git config core.hooksPath .githooks
 #
 # This is an ADVISORY-ONLY nudge: when a push includes changes under a GATE
-# crate (blastguard/propguard/specguard/stuckguard/mutategate — the fleet
-# defense gates), it prints a suggestion to run a Continuous-Audit round
+# crate (blastguard/propguard/specguard/stuckguard/mutategate/overwatch — the
+# fleet defense gates), it prints a suggestion to run a Continuous-Audit round
 # (`scripts/continuous-audit.sh --dry-run`) before/after the push. It NEVER
 # blocks the push: this hook always exits 0, matching the fail-soft invariant
 # used by `.githooks/pre-commit` (injectguard) and the Continuous-Audit loop
@@ -23,7 +23,7 @@ set -u
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 cd "$REPO" 2>/dev/null || exit 0
 
-GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|mutategate)/'
+GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|mutategate|overwatch)/'
 
 # git invokes pre-push with zero-or-more "<local-ref> <local-sha> <remote-ref> <remote-sha>"
 # lines on stdin, one per updated ref. Collect the set of changed files across
@@ -70,8 +70,8 @@ if printf '%s\n' "$changed" | grep -Eq "$GATE_PATTERN"; then
     cat >&2 <<'EOF'
 
 continuous-audit: gate-crate changes detected in this push (blastguard/
-propguard/specguard/stuckguard/mutategate). Consider running a Continuous-
-Audit round before or after pushing:
+propguard/specguard/stuckguard/mutategate/overwatch). Consider running a
+Continuous-Audit round before or after pushing:
 
     scripts/continuous-audit.sh --dry-run
 

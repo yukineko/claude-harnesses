@@ -33,7 +33,7 @@
     committed-only な悪性パターン文字列（source が生成しない焼き込み）を検出。生の committed-only 件数・size 差は
     ビルド非決定性なので**判定に使わない**（悪性デルタのみ）。host triple のみ対象。
 - **Continuous-Audit 自動起動導線** — `git config core.hooksPath .githooks` を有効化していれば
-  `.githooks/pre-push` が GATE_CRATES（blastguard/propguard/specguard/stuckguard/mutategate）配下の
+  `.githooks/pre-push` が GATE_CRATES（blastguard/propguard/specguard/stuckguard/mutategate/overwatch）配下の
   変更を検知し、`scripts/continuous-audit.sh --dry-run` を勧める advisory メッセージを出す
   （pre-commit と同じ fail-soft 設計。push は絶対に止めない・常に exit 0）。cron 定期実行の雛形は
   `scripts/continuous-audit.cron.example` を参照。
@@ -59,7 +59,7 @@ python3 scripts/check-plugin-versions.py && python3 scripts/check-version-bumped
 scripts/rollout-plugins.sh --plugin <name> --dry-run   # 動作を確認（何も書かない）
 scripts/rollout-plugins.sh --plugin <name>             # 実反映（全 plugin なら無引数）
 
-# GATE クレート（防御ゲート: blastguard / propguard / specguard / stuckguard、
+# GATE クレート（防御ゲート: blastguard / propguard / specguard / stuckguard / overwatch、
 # 非プラグインの mutategate も含む）は fleet を守るため、canary 無しの反映を
 # **拒否**する（Problem-2.3）。GATE クレートを対象にするときは --canary で段階
 # 反映し、各ステージ間で健全性ゲート（raw-spike または systemic recurrence の

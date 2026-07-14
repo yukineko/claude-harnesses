@@ -53,8 +53,8 @@ cat >"$TEST_REGISTRY" <<'JSON'
     "specguard@yukineko": [
       {"scope":"user","installPath":"/nonexistent/specguard/0.0.0","version":"0.0.0"}
     ],
-    "overwatch@yukineko": [
-      {"scope":"user","installPath":"/nonexistent/overwatch/0.0.0","version":"0.0.0"}
+    "session-insights@yukineko": [
+      {"scope":"user","installPath":"/nonexistent/session-insights/0.0.0","version":"0.0.0"}
     ]
   }
 }
@@ -106,13 +106,24 @@ pass "specguard with --no-canary override proceeds (escape hatch)"
 
 echo
 echo "=== case 4: NON-gate crate WITHOUT canary still works (dry-run) ==="
-run_rollout --plugin overwatch --dry-run
+run_rollout --plugin session-insights --dry-run
 echo "$OUT" | sed 's/^/    /'
 echo "(exit code: $RC)"
-[ "$RC" -eq 0 ] || fail "non-gate crate overwatch without canary should exit 0 (got $RC)"
+[ "$RC" -eq 0 ] || fail "non-gate crate session-insights without canary should exit 0 (got $RC)"
 grep -qi "refusing to roll out gate crate" <<<"$OUT" \
   && fail "non-gate crate must NOT trigger the gate-crate refusal"
-pass "non-gate crate (overwatch) without canary is unaffected"
+pass "non-gate crate (session-insights) without canary is unaffected"
+
+echo
+echo "=== case 5: overwatch is now a GATE crate WITHOUT canary must ERROR (non-zero) ==="
+run_rollout --plugin overwatch
+echo "$OUT" | sed 's/^/    /'
+echo "(exit code: $RC)"
+[ "$RC" -ne 0 ] || fail "gate crate overwatch without --canary should have exited non-zero"
+grep -qi "refusing to roll out gate crate" <<<"$OUT" \
+  || fail "expected a clear gate-crate refusal message"
+grep -q "overwatch" <<<"$OUT" || fail "refusal should name the offending gate crate"
+pass "overwatch without canary is rejected with a clear error (joined GATE_CRATES in 558f864)"
 
 # --- nothing was mutated (all cases used --dry-run or errored pre-mutation) ---
 REG_AFTER_SUM="$(sha256sum "$TEST_REGISTRY" | awk '{print $1}')"

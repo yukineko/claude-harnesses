@@ -1,6 +1,6 @@
 # FIX: GATE_CRATES の定義が参照箇所ごとにズレている（`overwatch` の扱い不一致）
 
-**状態**: 未修正（本ドキュメントは修正指示書）。発見経緯: `/continuous-audit` の監査対象選定を確認する過程で、実際に4箇所のソースを突き合わせて判明。
+**状態**: 修正済み（§4.1/4.2 の2箇所 + CLAUDE.md 記述 + scripts/tests/canary-gate-crates.sh case4 差し替えをコミット。§5 の sync-checker 新設は別タスクとして見送り、backlog に積んだ）。発見経緯: `/continuous-audit` の監査対象選定を確認する過程で、実際に4箇所のソースを突き合わせて判明。
 
 ## 1. 問題
 
@@ -75,12 +75,19 @@ CI もしくは `.githooks/pre-commit`（advisory 層）に配線するかは、
 
 ## 6. 受け入れ基準
 
-- [ ] `.githooks/pre-push` の `GATE_PATTERN` に `overwatch` が含まれる。
-- [ ] `.githooks/pre-push` のコメント中のクレート列挙も更新されている。
-- [ ] SKILL.md「対象 crate (既定)」節が6クレート（`overwatch` 込み）を正しく説明している。
+- [x] `.githooks/pre-push` の `GATE_PATTERN` に `overwatch` が含まれる。
+- [x] `.githooks/pre-push` のコメント中のクレート列挙も更新されている。
+- [x] SKILL.md「対象 crate (既定)」節が6クレート（`overwatch` 込み）を正しく説明している。
 - [ ] `scripts/check-gate-crates-sync.py`（新設）が4箇所すべてを比較し、現状（修正後）で green を返す。
+      → **見送り（別タスク）**: 今回は実際の drift（4箇所の不一致）の是正のみを右サイズの一手として実施。
+      再発防止の機械チェッカー新設は backlog に別項目として積んだ。
 - [ ] 上記チェッカーに、いずれか1箇所だけ crate を追加/削除したケースのユニットテスト（drift を検知して非0終了することを確認）がある。
-- [ ] 変更した plugin（該当すれば）の version が3ファイル lockstep で上がっている（`.githooks/pre-push` 自体は plugin 資産ではないため対象外、SKILL.md は `overwatch` plugin 内なので該当）。
+      → 同上、チェッカー本体と合わせて見送り。
+- [x] 変更した plugin（該当すれば）の version が3ファイル lockstep で上がっている（`.githooks/pre-push` 自体は plugin 資産ではないため対象外、SKILL.md は `overwatch` plugin 内なので該当）。overwatch 0.1.32→0.1.33。
+
+追加で当初のスコープに無かったが同時に是正した箇所:
+- [x] `CLAUDE.md`（36, 62行目）の GATE_CRATES 記述に `overwatch` を追加。
+- [x] `scripts/tests/canary-gate-crates.sh` の case4 が `overwatch`（現在は gate crate）を non-gate の例として誤用していたため、真の non-gate crate（`session-insights`）に差し替え、overwatch 自身が gate 扱いされることを確認する case5 を新設。
 
 ## 7. 非目標
 

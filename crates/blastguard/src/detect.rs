@@ -306,14 +306,59 @@ fn command_index(tokens: &[&str]) -> Option<usize> {
             i += 1;
             continue;
         }
-        match basename(t) {
+        let wrapper = basename(t);
+        match wrapper {
             "sudo" | "doas" | "nohup" | "env" | "command" | "time" | "nice" | "ionice" => {
                 i += 1;
+                // CA-blastguard-004: a wrapper's own flags (e.g. `sudo -u root`)
+                // must be skipped too, not just the wrapper word itself —
+                // otherwise the flag token is mistaken for the real command
+                // and the destructive command behind it never gets analysed.
+                while i < tokens.len() {
+                    let ft = tokens[i];
+                    if ft.is_empty() {
+                        i += 1;
+                        continue;
+                    }
+                    if ft == "--" {
+                        i += 1;
+                        break;
+                    }
+                    if !ft.starts_with('-') {
+                        break;
+                    }
+                    i += 1;
+                    if wrapper_flag_takes_value(wrapper, ft)
+                        && i < tokens.len()
+                        && !tokens[i].starts_with('-')
+                    {
+                        i += 1;
+                    }
+                }
             }
             _ => return Some(i),
         }
     }
     None
+}
+
+/// True if `flag` is a bare short option (e.g. `-u`, not the bundled `-n10`)
+/// that this wrapper takes a separate value token for, so that value must be
+/// skipped too before the real command can be found.
+fn wrapper_flag_takes_value(wrapper: &str, flag: &str) -> bool {
+    if flag.len() != 2 {
+        // Bundled short flags (`-n10`, `-c3`) and long flags already carry
+        // their value inline; only a bare 2-char short flag needs a lookahead.
+        return false;
+    }
+    let ch = flag.as_bytes()[1] as char;
+    match wrapper {
+        "sudo" | "doas" => matches!(ch, 'u' | 'g' | 'p' | 'h' | 'C' | 'D' | 'R' | 'T' | 'U'),
+        "env" => matches!(ch, 'u' | 'C' | 'S'),
+        "nice" => ch == 'n',
+        "ionice" => matches!(ch, 'c' | 'n' | 'p' | 't'),
+        _ => false,
+    }
 }
 
 fn is_short_flag(tok: &str) -> bool {
@@ -679,6 +724,15 @@ mod tests {
         assert!(bash("rm -f *").is_deny());
         assert!(bash("rm path/*").is_deny());
         assert!(bash("sudo rm -rf /var/data").is_deny());
+    }
+
+    // ---- Regression: CA-blastguard-004 (wrapper flag bypass) ----
+    #[test]
+    fn wrapper_flags_do_not_bypass_detection() {
+        assert!(bash("sudo -u root rm -rf /tmp/x").is_deny());
+        assert!(bash("nice -n10 rm -rf /tmp/x").is_deny());
+        assert!(bash("env -i rm -rf /tmp/x").is_deny());
+        assert!(bash("ionice -c3 rm -rf /tmp/x").is_deny());
     }
 
     #[test]

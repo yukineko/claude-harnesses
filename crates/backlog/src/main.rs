@@ -85,6 +85,14 @@ enum Command {
         /// Filter by project path
         #[arg(long)]
         project: Option<String>,
+
+        /// Atomically reserve the returned task (CA-backlog-001): marks it
+        /// `claimed` under the tasks-file lock in the same critical section
+        /// that selects it, so two concurrent `next --claim` callers cannot
+        /// both be handed the same pending task. Without this flag, `next`
+        /// keeps its pre-existing pure-read behavior (no lock, no mutation).
+        #[arg(long)]
+        claim: bool,
     },
 
     /// Mark a task as done
@@ -280,8 +288,16 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
 
-        Command::Next { tag, project } => {
-            let task = store::next(&tasks_path, tag.as_deref(), project.as_deref())?;
+        Command::Next {
+            tag,
+            project,
+            claim,
+        } => {
+            let task = if claim {
+                store::next_claim(&tasks_path, tag.as_deref(), project.as_deref())?
+            } else {
+                store::next(&tasks_path, tag.as_deref(), project.as_deref())?
+            };
             match task {
                 Some(t) => {
                     println!("{}", serde_json::to_string_pretty(&t)?);

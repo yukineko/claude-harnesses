@@ -755,6 +755,22 @@ fn ratification_block(l: &Loaded) -> Result<Option<u8>> {
                         l.cfg.prompt.graded_threshold,
                     ) {
                         ratify::Triage::Precedented => {
+                            // Similarity/polarity-based triage alone does not
+                            // guarantee contract compliance: `cfg.prompt.template`
+                            // is externally replaceable, so a change judged
+                            // "precedented" could still be missing required
+                            // placeholders. Run the same contract check
+                            // `accept_prompt` runs before EVER auto-ratifying;
+                            // a violation must not be waved through just because
+                            // it is textually similar to its precedent. Fall back
+                            // to the human path, same as `Triage::Novel`.
+                            let violations = contract_violations(l);
+                            if let Some(msg) = format_contract_violations(&violations) {
+                                eprintln!(
+                                    "specguard: prompt (メタ正典) の変更は precedented だが契約に矛盾 (必須 placeholder 不足) のため自動批准を拒否:\n{msg}\n  内容を確認し、合意できるなら `specguard accept-prompt -m \"理由\"` で批准してください。"
+                                );
+                                return Ok(Some(EXIT_UNRATIFIED));
+                            }
                             // Re-pin the lock to the precedented change: an
                             // auto-ratify records the new texts as the fresh
                             // precedent, with a machine-authored reason. Only the
@@ -1544,19 +1560,17 @@ fn print_map(map: &specmap::SpecMap, map_path: &Path) {
     }
 }
 
-/// Ratify the prompt templates (meta-canon): contract-check then pin the
-/// current version with a rationale. This is the consent ceremony — it confers
-/// canon authority on the prompt version, recorded against the canon commit.
-fn accept_prompt(l: &Loaded, reason: &str) -> Result<u8> {
-    if reason.trim().is_empty() {
-        anyhow::bail!("批准には理由が必要です (-m \"...\")");
-    }
-    // Contract judgment: the templates must not contradict the render/parse
-    // contract (required placeholders present). The policy/constitution part is
-    // the human's responsibility, recorded as the rationale. Verify templates are
-    // contract-checked only when their gate is active (consent is scoped to the
-    // live policy surface; see ratify::drifted).
-    let mut violations: Vec<(&str, Vec<&'static str>)> = vec![
+/// Contract judgment shared by every ratify path (human `accept_prompt` AND the
+/// graded auto-ratify branch of [`ratification_block`]): the templates must not
+/// contradict the render/parse contract (required placeholders present). The
+/// policy/constitution part is the human's responsibility, recorded as the
+/// rationale — this only checks the mechanical contract. Verify templates are
+/// contract-checked only when their gate is active (consent is scoped to the
+/// live policy surface; see [`ratify::drifted`]). Returns one entry per checked
+/// template with its (possibly empty) list of missing placeholders; the caller
+/// decides what "any non-empty" means for its path.
+fn contract_violations(l: &Loaded) -> Vec<(&'static str, Vec<&'static str>)> {
+    let mut violations: Vec<(&'static str, Vec<&'static str>)> = vec![
         (
             "audit-prompt",
             prompt::missing_placeholders(&l.template, prompt::AUDIT_PLACEHOLDERS),
@@ -1584,13 +1598,33 @@ fn accept_prompt(l: &Loaded, reason: &str) -> Result<u8> {
             ),
         ));
     }
-    if violations.iter().any(|(_, m)| !m.is_empty()) {
-        let mut msg = String::from("prompt が契約に矛盾 (必須 placeholder 不足); 批准を拒否:");
-        for (name, miss) in &violations {
-            if !miss.is_empty() {
-                msg.push_str(&format!("\n  {name}: {}", miss.join(", ")));
-            }
+    violations
+}
+
+/// Render `violations` (as returned by [`contract_violations`]) into the
+/// human-facing refusal message, or `None` if there are no violations.
+fn format_contract_violations(violations: &[(&'static str, Vec<&'static str>)]) -> Option<String> {
+    if !violations.iter().any(|(_, m)| !m.is_empty()) {
+        return None;
+    }
+    let mut msg = String::from("prompt が契約に矛盾 (必須 placeholder 不足); 批准を拒否:");
+    for (name, miss) in violations {
+        if !miss.is_empty() {
+            msg.push_str(&format!("\n  {name}: {}", miss.join(", ")));
         }
+    }
+    Some(msg)
+}
+
+/// Ratify the prompt templates (meta-canon): contract-check then pin the
+/// current version with a rationale. This is the consent ceremony — it confers
+/// canon authority on the prompt version, recorded against the canon commit.
+fn accept_prompt(l: &Loaded, reason: &str) -> Result<u8> {
+    if reason.trim().is_empty() {
+        anyhow::bail!("批准には理由が必要です (-m \"...\")");
+    }
+    let violations = contract_violations(l);
+    if let Some(msg) = format_contract_violations(&violations) {
         anyhow::bail!(msg);
     }
 

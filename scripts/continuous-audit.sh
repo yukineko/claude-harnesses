@@ -68,8 +68,12 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 # scripts/rollout-plugins.sh GATE_CRATES, which also includes `overwatch`:
 # it's the binary this loop itself calls to record findings/rounds, and the
 # canary health-gate depends on it too, so it gets the same audit coverage
-# as the crates it protects — backlog 50f94a60).
-DEFAULT_TARGETS="blastguard,propguard,specguard,stuckguard,mutategate,overwatch"
+# as the crates it protects) PLUS `backlog`, an audit-only addition: backlog
+# tasks pile up and rot if nothing reviews the crate that manages them, but
+# backlog itself gates nothing, so it is NOT a GATE crate (no canary
+# requirement on rollout, not in .githooks/pre-push's GATE_PATTERN). This is
+# a strict superset of GATE_CRATES — see scripts/check-gate-crates-sync.py.
+DEFAULT_TARGETS="blastguard,propguard,specguard,stuckguard,mutategate,overwatch,backlog"
 
 ROUND=""
 TARGET="$DEFAULT_TARGETS"

@@ -2,8 +2,11 @@
 """Unit tests for scripts/check-gate-crates-sync.py.
 
 Stdlib-only (`unittest`), no network. Exercises:
-  1. the real repo state (all 4 sources agree) -> exit 0.
-  2. a synthetic drift fixture (one source missing a crate) -> exit 1, detected.
+  1. the real repo state (all sources satisfy their required relation) -> exit 0.
+  2. the relation-based design: canonical/exact/superset/mirror, including the
+     "audit-only" crate (e.g. backlog) that continuous-audit.sh and the SKILL.md
+     doc may carry beyond the canonical GATE_CRATES set.
+  3. synthetic drift fixtures (one source violates its relation) -> exit 1, detected.
 """
 import importlib.util
 import os
@@ -20,41 +23,57 @@ _SPEC.loader.exec_module(cgcs)
 
 REPO_ROOT = _HERE.parent
 
+CANONICAL = "blastguard propguard specguard stuckguard mutategate overwatch"
+CANONICAL_SET = set(CANONICAL.split())
+
 
 def _write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 
 
-def _make_fixture_repo(tmp, *, drop_from="pre_push"):
-    """Build a tmp dir with all 4 sources, optionally dropping one crate from
-    the given source to simulate drift. `drop_from` in
-    {"none", "continuous_audit", "pre_push", "skill_md"}."""
-    canonical = "blastguard propguard specguard stuckguard mutategate overwatch"
-    ca_targets = "blastguard,propguard,specguard,stuckguard,mutategate,overwatch"
-    pre_push_pattern = "blastguard|propguard|specguard|stuckguard|mutategate|overwatch"
-    skill_csv = "blastguard,propguard,specguard,stuckguard,mutategate,overwatch"
+def _make_fixture_repo(
+    tmp,
+    *,
+    pre_push_extra=(),
+    pre_push_missing=(),
+    ca_extra=(),
+    ca_missing=(),
+    skill_extra=(),
+    skill_missing=(),
+):
+    """Build a tmp dir with all 4 sources. By default everything is exactly in
+    sync with CANONICAL. The `*_extra`/`*_missing` args perturb one source's
+    crate set relative to CANONICAL (for continuous-audit.sh/SKILL.md) so
+    callers can exercise the superset/mirror relations, not just exact match."""
 
-    if drop_from == "continuous_audit":
-        ca_targets = "blastguard,propguard,specguard,stuckguard,mutategate"
-    elif drop_from == "pre_push":
-        pre_push_pattern = "blastguard|propguard|specguard|stuckguard|mutategate"
-    elif drop_from == "skill_md":
-        skill_csv = "blastguard,propguard,specguard,stuckguard,mutategate"
+    def apply(base, extra, missing):
+        return (set(base) | set(extra)) - set(missing)
 
-    _write(tmp / "scripts" / "rollout-plugins.sh",
-           f'#!/bin/sh\nGATE_CRATES="{canonical}"\n')
-    _write(tmp / "scripts" / "continuous-audit.sh",
-           f'#!/bin/sh\nDEFAULT_TARGETS="{ca_targets}"\n')
-    _write(tmp / ".githooks" / "pre-push",
-           f"#!/bin/sh\nGATE_PATTERN='^crates/({pre_push_pattern})/'\n")
+    pre_push_set = apply(CANONICAL_SET, pre_push_extra, pre_push_missing)
+    ca_set = apply(CANONICAL_SET, ca_extra, ca_missing)
+    skill_set = apply(CANONICAL_SET, skill_extra, skill_missing)
+
+    _write(tmp / "scripts" / "rollout-plugins.sh", f'#!/bin/sh\nGATE_CRATES="{CANONICAL}"\n')
+    _write(
+        tmp / "scripts" / "continuous-audit.sh",
+        f'#!/bin/sh\nDEFAULT_TARGETS="{",".join(sorted(ca_set))}"\n',
+    )
+    _write(
+        tmp / ".githooks" / "pre-push",
+        f"#!/bin/sh\nGATE_PATTERN='^crates/({'|'.join(sorted(pre_push_set))})/'\n",
+    )
     _write(
         tmp / "crates" / "overwatch" / "skills" / "continuous-audit" / "SKILL.md",
         "## 対象 crate (既定)\n\n"
-        f"既定の target は fleet の **GATE crates**: `{skill_csv}`\n"
+        f"既定の target は fleet の **GATE crates**: `{','.join(sorted(skill_set))}`\n"
         "(同期の説明文)。`--target` で上書きできる。\n",
     )
     return tmp
+
+
+def _by_path(parsed):
+    return {rel_path: crates for rel_path, _mode, crates in parsed}
 
 
 class RealRepoState(unittest.TestCase):
@@ -77,44 +96,60 @@ class RealRepoState(unittest.TestCase):
 class DriftDetection(unittest.TestCase):
     def test_fully_synced_fixture_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
-            repo = _make_fixture_repo(Path(tmp), drop_from="none")
+            repo = _make_fixture_repo(Path(tmp))
             ok, canonical, _ = cgcs.check(repo=str(repo))
             self.assertTrue(ok)
-            self.assertEqual(
-                canonical,
-                {"blastguard", "propguard", "specguard", "stuckguard", "mutategate", "overwatch"},
+            self.assertEqual(canonical, CANONICAL_SET)
+
+    def test_audit_only_addition_in_superset_and_mirror_passes(self):
+        """continuous-audit.sh and SKILL.md both carry `backlog` beyond the
+        canonical GATE_CRATES set (superset + mirror satisfied); pre-push
+        stays GATE-crates-only (exact). This must PASS, not drift."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(
+                Path(tmp), ca_extra=("backlog",), skill_extra=("backlog",)
             )
+            ok, canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertTrue(ok, f"expected audit-only addition to pass: {parsed}")
+            by_path = _by_path(parsed)
+            self.assertIn("backlog", by_path["scripts/continuous-audit.sh"])
+            self.assertNotIn("backlog", by_path[".githooks/pre-push"])
 
     def test_pre_push_missing_a_crate_is_detected(self):
         with tempfile.TemporaryDirectory() as tmp:
-            repo = _make_fixture_repo(Path(tmp), drop_from="pre_push")
+            repo = _make_fixture_repo(Path(tmp), pre_push_missing=("overwatch",))
             ok, canonical, parsed = cgcs.check(repo=str(repo))
             self.assertFalse(ok)
-            by_path = dict(parsed)
+            by_path = _by_path(parsed)
             self.assertNotEqual(by_path[".githooks/pre-push"], canonical)
             self.assertNotIn("overwatch", by_path[".githooks/pre-push"])
 
-    def test_continuous_audit_missing_a_crate_is_detected(self):
+    def test_continuous_audit_missing_a_canonical_crate_is_detected(self):
+        """DEFAULT_TARGETS must be a superset of canonical; dropping a GATE
+        crate violates the superset relation even with no extra crates."""
         with tempfile.TemporaryDirectory() as tmp:
-            repo = _make_fixture_repo(Path(tmp), drop_from="continuous_audit")
+            repo = _make_fixture_repo(Path(tmp), ca_missing=("overwatch",))
             ok, canonical, parsed = cgcs.check(repo=str(repo))
             self.assertFalse(ok)
-            by_path = dict(parsed)
-            self.assertNotEqual(by_path["scripts/continuous-audit.sh"], canonical)
+            by_path = _by_path(parsed)
+            self.assertFalse(canonical <= by_path["scripts/continuous-audit.sh"])
 
-    def test_skill_md_missing_a_crate_is_detected(self):
+    def test_skill_md_diverging_from_continuous_audit_is_detected(self):
+        """SKILL.md must mirror continuous-audit.sh's DEFAULT_TARGETS exactly.
+        continuous-audit.sh gains `backlog` but SKILL.md doesn't -> drift."""
         with tempfile.TemporaryDirectory() as tmp:
-            repo = _make_fixture_repo(Path(tmp), drop_from="skill_md")
+            repo = _make_fixture_repo(Path(tmp), ca_extra=("backlog",))
             ok, canonical, parsed = cgcs.check(repo=str(repo))
             self.assertFalse(ok)
-            by_path = dict(parsed)
+            by_path = _by_path(parsed)
             self.assertNotEqual(
-                by_path["crates/overwatch/skills/continuous-audit/SKILL.md"], canonical
+                by_path["crates/overwatch/skills/continuous-audit/SKILL.md"],
+                by_path["scripts/continuous-audit.sh"],
             )
 
     def test_main_exits_one_on_drifted_fixture(self):
         with tempfile.TemporaryDirectory() as tmp:
-            repo = _make_fixture_repo(Path(tmp), drop_from="pre_push")
+            repo = _make_fixture_repo(Path(tmp), pre_push_missing=("overwatch",))
             cwd = os.getcwd()
             os.chdir(repo)
             try:

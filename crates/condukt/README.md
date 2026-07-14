@@ -42,6 +42,7 @@ hook (`restore`) and a Stop hook (`state record-run --all`).
 | `condukt learning-signal` | compute `mean_replan_reduction_ratio = 1 - (mean_hit / mean_miss)` by joining the replan-log's `replan_count` × the retrieval ledger's `hit` flag per `run_id` — the deterministic measurement surface for cross-task learning (fail-soft, `ratio` is `null` when a group is empty or `mean_miss == 0`). |
 | `condukt knowledge` | emit project-specific conventions/pitfalls injected into the interpreter/worker prompt (soft; empty when none). |
 | `condukt consensus plan/vote` | multi-sample self-consistency (opt-in cost guard). `plan` decides whether a task should fan out into N candidate implementations (exit 0 = fan out, 1 = single sample); `vote` tallies N verifier verdicts into a deterministic majority winner + agreement rate, escalating to opus on all-fail, a tie, or agreement below threshold. |
+| `condukt adversarial plan/adjudicate` | adversarial refutation panel (verification-side fan-out; opt-in cost guard, OFF by default). `plan --touched <path>...` decides whether a completed artifact warrants N independent skeptics (exit 0 = panel warranted, 1 = ordinary single-verifier path); engaged by `CONDUKT_ADVERSARIAL`/`[adversarial] enabled`, OR forced regardless of the switch when any `--touched` path is under a GATE crate (blastguard/propguard/specguard/stuckguard/mutategate). `adjudicate` takes N skeptic ballots (`refute\|pass\|abstain`, JSON on stdin or `--file`) for the same artifact and fails closed: exits 0 when it passes, 1 when the caller must not auto-accept (refute ratio at/above `block_ratio`, or fewer than `min_voters` effective ballots). |
 | `condukt policy decide/answer/answers` | central **graded-autonomy policy**: map a decision's risk × reversibility × confidence to `auto`/`escalate`/`block` via an exit-code contract (0=auto, 2=escalate, 3=block, 1=invalid). `answer` non-interactively resolves one question on an `auto` verdict (journaling the choice) and otherwise falls through so the caller runs a real `AskUserQuestion`; `answers` prints the auto-answer audit trail (every question self-answered without a human). `decide`/`answer` also accept optional `--title/--files/--class`: when given and `fugu-router` is on PATH, the self-reported `--confidence` is overridden by a calibrated `[0,1]` score from `fugu-router confidence` (historical pass-rate), mapped to a band via the pure `Level::from_score` (thresholds 0.34/0.67); absent fugu-router or the new flags, it falls back byte/exit-identically to the self-reported value. |
 | `condukt verify digest/runtime/launch/regressions/confidence/checks` | deterministic verifier-stage helpers (formatting only; the fix DECISION stays with the LLM worker). `digest` distills raw test output into a structured `FailureDigest`; `runtime` distills a target's runtime output (exit code, panic/exception lines, stderr/stdout tails), `--reflux` for the pass/fail verdict; `launch` runs a real target inside the blastguard-validated envelope (`--cmd` refused fail-closed if destructive) and refluxes its runtime signals — with `--health-url` it polls a server for HTTP 200 instead of waiting for exit. `regressions --baseline <f> --current <f>` diffs two failing-test sets (pure set-difference — `current - baseline`) so the verifier's regression call is deterministic, not eyeballed. `confidence --check-executed --exit-zero --no-regressions` derives `high|medium|low` from those observed facts instead of an LLM self-report. `checks --file <task.json> [--cwd <dir>]` runs a task's declared `checks[]` (see the schema below) as a machine oracle and prints `{"all_passed":bool,"results":[...]}`. All fail-soft (exit 0). |
 | `condukt replan handoff/stats` | deterministic reflux-cascade helpers (classification/formatting only; the re-decomposition DECISION stays with the LLM). `handoff` classifies a failing task's reflux facts into `escalate_model` vs `replan` and, only on `replan`, builds a handoff instructing the interpreter to produce a NEW decomposition; `--run <id>` also journals the decision. `stats --run <id>` aggregates that log into per-directive counts. |
@@ -159,6 +160,18 @@ single_worktree = false                   # when true, run all tasks in the main
 # samples   = 3
 # threshold = 0.5
 
+# Adversarial refutation panel (verification-side fan-out; OPT-IN, OFF by
+# default). When enabled, a completed high-stakes artifact is refuted by N
+# independent skeptics instead of a single verifier; a refute ratio at/above
+# block_ratio fails the artifact closed. A GATE-crate-touching change forces
+# the panel even when enabled = false. min_voters is the effective-voter floor
+# below which the panel fails closed (too few ballots to trust a verdict).
+# [adversarial]
+# enabled     = false
+# size        = 3
+# min_voters  = 2
+# block_ratio = 0.5
+
 # Opt-in worker sandboxing (OFF by default). When enabled, a worker's build/test
 # command run via `condukt sandbox run` executes inside the docker exec backend
 # (`docker run --rm --network=none`, the CWD bind-mounted read-write at the same
@@ -190,6 +203,7 @@ All config file keys can be overridden at runtime with environment variables.
 | `CONDUKT_MAX_PARALLEL` | `4` | Advisory soft cap on concurrent workers. |
 | `CONDUKT_DISABLE` | _(unset)_ | Set to `1` to make the SessionStart/statusline hooks no-op (useful in CI). |
 | `CONDUKT_CONSENSUS` | `false` | Set to `1`/`true` to enable multi-sample self-consistency fan-out (overrides `[consensus] enabled`). Opt-in cost guard; off by default. |
+| `CONDUKT_ADVERSARIAL` | `false` | Set to `1`/`true` to enable the adversarial refutation panel (overrides `[adversarial] enabled`). Opt-in cost guard; off by default. A GATE-crate-touching change forces the panel regardless of this switch. |
 | `CONDUKT_AUTONOMOUS` | `false` | Set to `1`/`true` to run autonomously (degrades human gates; overrides config `autonomous`). Read by `state autonomy-check`. |
 | `CONDUKT_SINGLE_WORKTREE` | `false` | Set to `1`/`true` to run all tasks in the main tree (no per-task worktree/merge; overrides config `single_worktree`). Read by `state worktree-mode-check`. |
 | `CONDUKT_STUCK_TTL_SECS` | `1800` | Age (seconds) past which a `running` task is considered stuck and eligible for `state abandon --all-stuck`. |

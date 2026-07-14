@@ -23,8 +23,9 @@ fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_overwatch")
 }
 
-/// Write a fake `backlog` script that appends the `--title` of each `add`
-/// invocation to `$FAKE_BACKLOG_LOG` (one line per add), then exits 0.
+/// Write a fake `backlog` script that appends `--title` and `--notes` of each
+/// `add` invocation to `$FAKE_BACKLOG_LOG` (one tab-separated line per add),
+/// then exits 0.
 fn write_fake_backlog(dir: &Path) -> PathBuf {
     fs::create_dir_all(dir).unwrap();
     let script = dir.join("backlog");
@@ -32,13 +33,15 @@ fn write_fake_backlog(dir: &Path) -> PathBuf {
 if [ "$1" = "add" ]; then
   shift
   title=""
+  notes=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --title) title="$2"; shift 2 ;;
+      --notes) notes="$2"; shift 2 ;;
       *) shift ;;
     esac
   done
-  printf '%s\n' "$title" >> "$FAKE_BACKLOG_LOG"
+  printf '%s\t%s\n' "$title" "$notes" >> "$FAKE_BACKLOG_LOG"
 fi
 exit 0
 "#;
@@ -55,6 +58,16 @@ fn add_count(log: &Path) -> usize {
         Ok(txt) => txt.lines().filter(|l| !l.is_empty()).count(),
         Err(_) => 0,
     }
+}
+
+/// Look up the `--notes` value recorded for the `add` invocation whose
+/// `--title` matches `title` (tab-separated log written by the fake backlog).
+fn notes_for(log: &Path, title: &str) -> Option<String> {
+    let txt = fs::read_to_string(log).ok()?;
+    txt.lines().find_map(|line| {
+        let (t, notes) = line.split_once('\t')?;
+        (t == title).then(|| notes.to_string())
+    })
 }
 
 /// Run the bridge over `project_dir` with HOME/PATH/log wired to the temp tree.
@@ -119,6 +132,7 @@ fn bridge_forwards_confirmed_findings_idempotently() {
             Some("high".into()),
             "unchecked unwrap in foo.rs".into(),
             Some("src/foo.rs".into()),
+            None,
             100,
         ),
     )
@@ -131,6 +145,7 @@ fn bridge_forwards_confirmed_findings_idempotently() {
             Some("high".into()),
             "unchecked unwrap in foo.rs (rerun)".into(),
             Some("src/foo.rs".into()),
+            None,
             200,
         ),
     )
@@ -143,6 +158,7 @@ fn bridge_forwards_confirmed_findings_idempotently() {
             Some("low".into()),
             "missing test coverage in bar.rs".into(),
             None,
+            Some("bar.rs:10 has no test covering the error branch".into()),
             150,
         ),
     )
@@ -159,6 +175,26 @@ fn bridge_forwards_confirmed_findings_idempotently() {
         add_count(&log),
         2,
         "same finding-id collapses to one; distinct id is its own => 2 adds"
+    );
+
+    // --- notes carry the triage signals: elapsed days, rationale (if any), --
+    // --- and a regression-test freshness verdict (fail-soft "no test" here) -
+    let f1_notes = notes_for(&log, "unchecked unwrap in foo.rs (rerun)")
+        .expect("F-1's backlog add must be logged");
+    assert!(
+        f1_notes.contains("confirmed:") && f1_notes.contains("日前"),
+        "notes must include elapsed days: {f1_notes}"
+    );
+    assert!(
+        f1_notes.contains("regression test: 該当テストなし"),
+        "no matching #[ignore] test exists under the temp project dir: {f1_notes}"
+    );
+
+    let f2_notes = notes_for(&log, "missing test coverage in bar.rs")
+        .expect("F-2's backlog add must be logged");
+    assert!(
+        f2_notes.contains("rationale: bar.rs:10 has no test covering the error branch"),
+        "notes must include the finding's rationale: {f2_notes}"
     );
 
     // Second bridge: everything already bridged => NO new adds (idempotent).

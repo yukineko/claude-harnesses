@@ -278,6 +278,7 @@ pub fn append_review_finding(cwd: &Path, finding: &ReviewFinding) -> Result<()> 
 /// [`append_review_finding`]; callers that need fail-soft semantics (a
 /// recording failure must never change their own return value) should ignore
 /// the `Err` the way `append_review_finding` callers already do.
+#[allow(clippy::too_many_arguments)]
 pub fn record_finding(
     cwd: &Path,
     finding_id: String,
@@ -285,8 +286,17 @@ pub fn record_finding(
     severity: Option<String>,
     summary: String,
     file: Option<String>,
+    rationale: Option<String>,
 ) -> Result<()> {
-    let finding = ReviewFinding::new(finding_id, source, severity, summary, file, now());
+    let finding = ReviewFinding::new(
+        finding_id,
+        source,
+        severity,
+        summary,
+        file,
+        rationale,
+        now(),
+    );
     append_review_finding(cwd, &finding)
 }
 
@@ -820,6 +830,7 @@ mod tests {
             "reviewgate".to_string(),
             None,
             "s".to_string(),
+            None,
             None,
             ts,
         )

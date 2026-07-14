@@ -34,18 +34,26 @@ pub struct ReviewFinding {
     /// The primary file the finding concerns, if known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
+    /// The verifier's rationale for confirming this finding (e.g. a file:line
+    /// quoted argument for why it's real). Added after the initial schema, so
+    /// `#[serde(default)]` lets pre-existing `review_findings.jsonl` rows
+    /// (which have no `rationale` key) keep deserializing without error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
     /// Unix timestamp when the finding was recorded.
     pub ts: i64,
 }
 
 impl ReviewFinding {
     /// Construct a review finding.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         finding_id: String,
         source: String,
         severity: Option<String>,
         summary: String,
         file: Option<String>,
+        rationale: Option<String>,
         ts: i64,
     ) -> Self {
         Self {
@@ -54,6 +62,7 @@ impl ReviewFinding {
             severity,
             summary,
             file,
+            rationale,
             ts,
         }
     }
@@ -71,6 +80,7 @@ mod tests {
             Some("high".to_string()),
             "unchecked unwrap in foo.rs".to_string(),
             Some("src/foo.rs".to_string()),
+            Some("foo.rs:42 unwraps a None returned by bar()".to_string()),
             1000,
         );
         let json = serde_json::to_string(&f).unwrap();
@@ -86,10 +96,23 @@ mod tests {
             None,
             "missing test coverage".to_string(),
             None,
+            None,
             5,
         );
         let json = serde_json::to_string(&f).unwrap();
         assert!(!json.contains("severity"));
         assert!(!json.contains("file"));
+        assert!(!json.contains("rationale"));
+    }
+
+    /// Pre-`rationale` rows (no `rationale` key at all) must still deserialize
+    /// — the whole point of `#[serde(default)]` on the new field.
+    #[test]
+    fn review_finding_reads_legacy_row_without_rationale_field() {
+        let legacy =
+            r#"{"finding_id":"F-003","source":"reviewgate","summary":"legacy row","ts":42}"#;
+        let f: ReviewFinding = serde_json::from_str(legacy).unwrap();
+        assert_eq!(f.finding_id, "F-003");
+        assert_eq!(f.rationale, None);
     }
 }

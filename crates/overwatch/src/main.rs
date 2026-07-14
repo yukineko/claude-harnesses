@@ -17,6 +17,7 @@ mod review_queue;
 pub mod rollback;
 mod rollback_cli;
 pub mod store;
+mod test_freshness;
 pub mod violation;
 mod violation_cli;
 
@@ -260,6 +261,10 @@ enum Command {
         /// Primary file the finding concerns, optional.
         #[arg(long)]
         file: Option<String>,
+        /// The verifier's rationale for confirming this finding (e.g. a
+        /// file:line quoted argument for why it's real), optional.
+        #[arg(long)]
+        rationale: Option<String>,
     },
     /// Continuous-Audit round metrics ledger (2630b4c5). `record` appends one
     /// round's counts to the convergence ledger that `audit-metrics` reads back.
@@ -580,6 +585,7 @@ fn main() -> Result<()> {
             severity,
             summary,
             file,
+            rationale,
         } => {
             rollback_cli::record_finding(
                 &finding_id,
@@ -587,6 +593,7 @@ fn main() -> Result<()> {
                 severity.as_deref(),
                 &summary,
                 file.as_deref(),
+                rationale.as_deref(),
             )?;
         }
         Command::AuditRound { action } => match action {

@@ -189,6 +189,7 @@ mod tests {
             None,
             "s".to_string(),
             None,
+            None,
             ts,
         )
     }

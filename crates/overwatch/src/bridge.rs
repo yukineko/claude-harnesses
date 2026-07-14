@@ -18,8 +18,10 @@
 /// skipped — the command as a whole always succeeds (exit 0). The existing
 /// `review-queue` (no flag) behaviour and the systemic/rollback streams are
 /// untouched.
+use crate::review_finding::ReviewFinding;
 use crate::review_queue;
 use crate::store;
+use crate::test_freshness::{self, TestFreshness};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::Path;
@@ -51,6 +53,47 @@ fn severity_to_priority(severity: Option<&str>) -> &'static str {
         Some(s) if s == "high" => "p1",
         _ => "p2",
     }
+}
+
+/// Build the backlog task notes for one finding: the original
+/// finding-id/file/severity line, plus advisory triage signals a human uses to
+/// decide fix-vs-wontfix — elapsed time since confirmation (a stale finding
+/// with no incident since is a deprioritize signal), the verifier's
+/// `rationale` if recorded, and a regression-test freshness check (if a
+/// matching `#[ignore]`d test could be reverse-looked-up and run). None of
+/// these change `to_backlog`'s dedup/idempotency logic — they only thicken the
+/// notes string.
+fn build_notes(f: &ReviewFinding, now: i64, freshness: Option<&TestFreshness>) -> String {
+    let mut notes = format!(
+        "finding-id:{} file:{} severity:{}",
+        f.finding_id,
+        f.file.as_deref().unwrap_or("(none)"),
+        f.severity.as_deref().unwrap_or("(none)"),
+    );
+
+    let elapsed_days = (now - f.ts).max(0) / 86_400;
+    notes.push_str(&format!(" | confirmed: {elapsed_days}日前"));
+
+    if let Some(rationale) = f.rationale.as_deref() {
+        notes.push_str(&format!(" | rationale: {rationale}"));
+    }
+
+    match freshness {
+        Some(TestFreshness::Failing { message }) => {
+            notes.push_str(&format!(" | regression test: FAIL: {message}"));
+        }
+        Some(TestFreshness::Passing) => {
+            notes.push_str(" | regression test: PASS（解消済みの可能性）");
+        }
+        // NotFound/ExecutionError and "no test looked up at all" are all
+        // inconclusive from the triage reader's perspective — fold them into
+        // one "no applicable test" line rather than surfacing internal states.
+        Some(TestFreshness::NotFound) | Some(TestFreshness::ExecutionError) | None => {
+            notes.push_str(" | regression test: 該当テストなし");
+        }
+    }
+
+    notes
 }
 
 /// Read the confirmed findings, forward each not-yet-bridged one to the backlog,
@@ -93,6 +136,7 @@ fn run_in(cwd: &Path) -> Result<()> {
     };
 
     let project = cwd.to_string_lossy().into_owned();
+    let now = store::now();
     let mut bridged_now = 0usize;
 
     for (f, _occurrences) in &deduped {
@@ -100,12 +144,16 @@ fn run_in(cwd: &Path) -> Result<()> {
             continue; // idempotent: already forwarded in a prior round.
         }
         let priority = severity_to_priority(f.severity.as_deref());
-        let notes = format!(
-            "finding-id:{} file:{} severity:{}",
-            f.finding_id,
-            f.file.as_deref().unwrap_or("(none)"),
-            f.severity.as_deref().unwrap_or("(none)"),
+        // Regression-test freshness (fail-soft): reverse-lookup a
+        // `#[ignore = "<finding-id>: ..."]` test and re-run it. Any failure to
+        // find/run one (no matching test, cargo/crate unavailable) just
+        // leaves `freshness` as `None`, folded into "no test" in the notes.
+        let freshness = test_freshness::find_ignored_test(&f.finding_id, cwd).map(
+            |(crate_name, _test_path, fn_name)| {
+                test_freshness::run_ignored_test(&crate_name, &fn_name)
+            },
         );
+        let notes = build_notes(f, now, freshness.as_ref());
 
         let status = std::process::Command::new(&backlog)
             .arg("add")
@@ -173,5 +221,71 @@ mod tests {
         std::env::set_var("OVERWATCH_BACKLOG_BIN", "/some/fake/backlog");
         assert_eq!(resolve_backlog_bin().as_deref(), Some("/some/fake/backlog"));
         std::env::remove_var("OVERWATCH_BACKLOG_BIN");
+    }
+
+    fn finding(rationale: Option<&str>, ts: i64) -> ReviewFinding {
+        ReviewFinding::new(
+            "F-1".to_string(),
+            "reviewgate".to_string(),
+            Some("high".to_string()),
+            "unchecked unwrap".to_string(),
+            Some("src/foo.rs".to_string()),
+            rationale.map(str::to_string),
+            ts,
+        )
+    }
+
+    #[test]
+    fn build_notes_includes_elapsed_days() {
+        let f = finding(None, 0);
+        let notes = build_notes(&f, 3 * 86_400, None);
+        assert!(notes.contains("confirmed: 3日前"), "notes: {notes}");
+    }
+
+    #[test]
+    fn build_notes_includes_rationale_when_present() {
+        let f = finding(Some("foo.rs:42 unwraps a None"), 0);
+        let notes = build_notes(&f, 0, None);
+        assert!(
+            notes.contains("rationale: foo.rs:42 unwraps a None"),
+            "notes: {notes}"
+        );
+    }
+
+    #[test]
+    fn build_notes_omits_rationale_when_absent() {
+        let f = finding(None, 0);
+        let notes = build_notes(&f, 0, None);
+        assert!(!notes.contains("rationale:"), "notes: {notes}");
+    }
+
+    #[test]
+    fn build_notes_reports_failing_regression_test() {
+        let f = finding(None, 0);
+        let freshness = TestFreshness::Failing {
+            message: "assertion failed".to_string(),
+        };
+        let notes = build_notes(&f, 0, Some(&freshness));
+        assert!(
+            notes.contains("regression test: FAIL: assertion failed"),
+            "notes: {notes}"
+        );
+    }
+
+    #[test]
+    fn build_notes_reports_passing_regression_test() {
+        let f = finding(None, 0);
+        let notes = build_notes(&f, 0, Some(&TestFreshness::Passing));
+        assert!(notes.contains("regression test: PASS"), "notes: {notes}");
+    }
+
+    #[test]
+    fn build_notes_reports_no_applicable_test_when_none_found() {
+        let f = finding(None, 0);
+        let notes = build_notes(&f, 0, None);
+        assert!(
+            notes.contains("regression test: 該当テストなし"),
+            "notes: {notes}"
+        );
     }
 }

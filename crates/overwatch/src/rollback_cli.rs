@@ -60,12 +60,14 @@ pub fn record(
 /// Record one AI-review finding into the overwatch-readable findings store.
 /// This is the defined ingestion point for the future Continuous-Audit loop
 /// (and for this crate's integration test). Fail-soft like `record`.
+#[allow(clippy::too_many_arguments)]
 pub fn record_finding(
     finding_id: &str,
     source: &str,
     severity: Option<&str>,
     summary: &str,
     file: Option<&str>,
+    rationale: Option<&str>,
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
@@ -75,6 +77,7 @@ pub fn record_finding(
         severity.map(str::to_string),
         summary.to_string(),
         file.map(str::to_string),
+        rationale.map(str::to_string),
         now,
     );
 

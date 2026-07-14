@@ -112,6 +112,7 @@ fn enforce_model_diversity(
         Some("high".to_string()),
         summary,
         None,
+        None,
         now,
     );
     eprintln!(

@@ -317,6 +317,7 @@ fn handle_checker_outage(decision: Decision, root: &Path, session: &str) -> Deci
              checker_cmd health; see `propguard status`."
                 .to_string(),
             None,
+            None,
         );
     }
 

@@ -493,6 +493,7 @@ mod tests {
             Some("high".to_string()),
             "a finding".to_string(),
             Some("src/x.rs".to_string()),
+            None,
             ts,
         )
     }
@@ -507,6 +508,7 @@ mod tests {
             Some("high".to_string()),
             summary.to_string(),
             Some("src/x.rs".to_string()),
+            None,
             ts,
         )
     }
@@ -655,6 +657,7 @@ mod tests {
             Some("high".to_string()),
             "stale but dangerous".to_string(),
             None,
+            None,
             100, // old ts
         );
         let fresh_low = ReviewFinding::new(
@@ -662,6 +665,7 @@ mod tests {
             "reviewgate".to_string(),
             Some("low".to_string()),
             "fresh but minor".to_string(),
+            None,
             None,
             999, // new ts
         );
@@ -710,6 +714,7 @@ mod tests {
             Some("high".to_string()),
             stale_high.summary.clone(),
             None,
+            None,
             10,
         )];
         for i in 0..5 {
@@ -718,6 +723,7 @@ mod tests {
                 "reviewgate".to_string(),
                 Some("low".to_string()),
                 "minor".to_string(),
+                None,
                 None,
                 1000 + i,
             ));
@@ -767,6 +773,7 @@ mod tests {
             Some("high".to_string()),
             "unchecked unwrap on user input".to_string(),
             Some("src/foo.rs".to_string()),
+            None,
             100,
         );
         let b = ReviewFinding::new(
@@ -775,6 +782,7 @@ mod tests {
             Some("high".to_string()),
             "  Unchecked  UNWRAP on user input ".to_string(), // same after normalize
             Some("src/foo.rs".to_string()),
+            None,
             200,
         );
         let q = build_queue(&[], &[], &[a, b], &[]);

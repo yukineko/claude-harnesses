@@ -180,6 +180,7 @@ pub fn run_gate_check(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> 
             Some(severity.to_string()),
             summary,
             None,
+            None,
         );
     }
 

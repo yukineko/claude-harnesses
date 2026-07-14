@@ -85,6 +85,23 @@ pub fn rule_id(reason: &str) -> &'static str {
         return "find-exec-rm";
     }
 
+    // CA-blastguard-010: code-interpreter inline-eval denials — both the
+    // find-exec/-ok-wrapped path (analyze_find) and the bare top-level
+    // command path (analyze_segment, CA-blastguard-006) — previously fell
+    // through to "unknown", defeating cross-task recurrence detection for
+    // this whole denial class. Both wordings share the "code interpreter"
+    // and "inline-eval flag" phrasing, so a single substring match on
+    // "interpreter" + "inline-eval flag" covers both without over-matching
+    // any other reason in this file.
+    if reason.contains("code interpreter") && reason.contains("inline-eval flag") {
+        return "code-interpreter-inline-eval";
+    }
+
+    // Bash: tee.
+    if reason.contains("tee without -a/--append truncates and overwrites") {
+        return "tee-truncate";
+    }
+
     "unknown"
 }
 
@@ -163,5 +180,26 @@ mod tests {
     #[test]
     fn unrecognized_reason_falls_back_to_unknown() {
         assert_eq!(rule_id("some brand new denial wording"), "unknown");
+    }
+
+    // ---- Regression: CA-blastguard-010 (interpreter-deny reasons normalized to "unknown") ----
+    #[test]
+    fn ca_blastguard_010_interpreter_deny_reasons_map_to_stable_rule_id() {
+        // Both the find-exec-wrapped path and the bare top-level path (added
+        // for CA-blastguard-006) must classify to the SAME distinct, stable
+        // rule id — not "unknown" — so cross-task recurrence detection sees
+        // the same signature for this whole denial class.
+        let wrapped = deny_reason(
+            "Bash",
+            json!({ "command": "find . -exec python3 -c \"import os; os.system('rm -rf /')\" \\;" }),
+        );
+        let bare = deny_reason(
+            "Bash",
+            json!({ "command": "python3 -c \"import os; os.system('rm -rf /')\"" }),
+        );
+        assert_ne!(rule_id(&wrapped), "unknown");
+        assert_ne!(rule_id(&bare), "unknown");
+        assert_eq!(rule_id(&wrapped), rule_id(&bare));
+        assert_eq!(rule_id(&wrapped), "code-interpreter-inline-eval");
     }
 }

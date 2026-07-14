@@ -379,19 +379,73 @@ fn is_shell(cmd: &str) -> bool {
 /// argument (e.g. `python3 -c "…"`, `perl -e "…"`). Like a shell's `-c`, this
 /// lets `find -exec <interp> -c "<payload>"` run an arbitrary destructive
 /// command per match, slipping past the literal `rm` token scan.
+///
+/// CA-blastguard-008: recognizes versioned basenames too (e.g. `python3.12`,
+/// `perl5.36`) by stripping a trailing `\d+(\.\d+)*` version suffix from the
+/// token before matching against the known unversioned stems. Without this, a
+/// versioned interpreter invocation (`find -exec python3.12 -c "…" \;`) slips
+/// past the check entirely.
 fn is_code_interpreter(cmd: &str) -> bool {
     matches!(
-        cmd,
+        strip_version_suffix(cmd),
         "python" | "python2" | "python3" | "perl" | "ruby" | "node" | "nodejs" | "php" | "lua"
     )
+}
+
+/// Strip a trailing version suffix (`\d+(\.\d+)*`, e.g. `3.12`, `5`, `2.7`)
+/// from a command basename, returning the bare stem (`python3.12` -> `python`,
+/// `perl5.36` -> `perl`). If there is no trailing digit run, returns `cmd`
+/// unchanged.
+fn strip_version_suffix(cmd: &str) -> &str {
+    let bytes = cmd.as_bytes();
+    let mut end = bytes.len();
+    loop {
+        // Find the start of a trailing digit run.
+        let mut start = end;
+        while start > 0 && bytes[start - 1].is_ascii_digit() {
+            start -= 1;
+        }
+        if start == end {
+            // No trailing digits at `end` — nothing more to strip.
+            break;
+        }
+        end = start;
+        // A `.` immediately before a digit run continues the version suffix
+        // (e.g. the `.12` in `python3.12`) — strip it too and keep looking.
+        if end > 0 && bytes[end - 1] == b'.' {
+            end -= 1;
+        } else {
+            break;
+        }
+    }
+    &cmd[..end]
 }
 
 /// Inline-code eval flags for the interpreters in [`is_code_interpreter`]
 /// (`python -c`, `perl -e`/`-E`, `ruby -e`, `node -e`/`--eval`/`-p`, `php -r`).
 /// A script-file argument (no such flag) is deliberately NOT matched, so
 /// `find -exec python3 script.py` is left alone.
+///
+/// CA-blastguard-007: also recognizes a combined/stacked short-flag token
+/// (e.g. `-ic`, python's `-i` interactive flag stacked with `-c`) that
+/// *contains* one of the single-character eval flags (`c`, `e`, `r`, `p`) as
+/// one of its bundled option letters. This is deliberately restricted to
+/// short-flag tokens (`-xyz`, not `--xyz`) so long flags like `--color` are
+/// never mistaken for an eval flag (avoiding false positives on unrelated
+/// long options that merely contain a letter `c`/`e`/`r`/`p`).
 fn is_inline_eval_flag(tok: &str) -> bool {
-    matches!(tok, "-c" | "-e" | "-E" | "-r" | "-p" | "--eval" | "--print")
+    if matches!(tok, "-c" | "-e" | "-E" | "-r" | "-p" | "--eval" | "--print") {
+        return true;
+    }
+    if is_short_flag(tok) {
+        // Bundled short flags, e.g. `-ic` = `-i` + `-c`. Match on the
+        // lowercase eval-flag letters only (`E` is intentionally excluded
+        // here as a bundled char: it is Ruby/Perl's `-E`, distinct enough
+        // from common bundles that we keep the stacked check to the
+        // clearly-common `-c`/`-e`/`-r`/`-p` letters to stay precise).
+        return tok[1..].chars().any(|c| matches!(c, 'c' | 'e' | 'r' | 'p'));
+    }
+    false
 }
 
 /// Strip one layer of matching surrounding quotes from a reconstructed
@@ -494,6 +548,28 @@ fn analyze_segment(seg: &str, depth: usize) -> Decision {
             } else {
                 Decision::Allow
             }
+        }
+        // CA-blastguard-009: `tee FILE` (no -a/--append) truncates/overwrites
+        // FILE identically to a `>` redirect. Append-mode tee is safe and
+        // stays Allow.
+        "tee" => {
+            if rest.iter().any(|t| *t == "-a" || *t == "--append") {
+                Decision::Allow
+            } else {
+                Decision::deny(
+                    "tee without -a/--append truncates and overwrites its target file(s)",
+                )
+            }
+        }
+        // CA-blastguard-006: a bare top-level command-interpreter invocation
+        // with an inline-eval flag (`python3 -c "…"`, no `find` wrapper) is
+        // just as dangerous as the same payload wrapped in `find -exec`/`-ok`
+        // (handled in analyze_find) — it can run an arbitrary destructive
+        // command. Deny it here too, not only inside the find-exec path.
+        cmd if is_code_interpreter(cmd) && rest.iter().any(|t| is_inline_eval_flag(t)) => {
+            Decision::deny(
+                "a code interpreter invoked with an inline-eval flag can run an arbitrary destructive command",
+            )
         }
         other => {
             if other.starts_with("mkfs") {
@@ -982,6 +1058,54 @@ mod tests {
         assert!(bash("rm file?").is_deny());
         // Control: a literal filename (no glob metachar) stays allowed.
         assert_eq!(bash("rm notes.txt"), Decision::Allow);
+    }
+
+    // ---- Regression: round-20260714b CONFIRMED findings (CA-blastguard-006..009) ----
+
+    #[test]
+    fn ca_blastguard_006_bare_top_level_interpreter_inline_eval_is_denied() {
+        // CA-blastguard-006: a bare top-level code-interpreter invocation with
+        // an inline-eval flag (no `find` wrapper) must be denied — the check
+        // used to exist only inside analyze_find's -exec/-ok handling.
+        assert!(bash("python3 -c \"import os; os.system('rm -rf /')\"").is_deny());
+        // Control: a plain script-file invocation (no inline-eval flag) stays
+        // allowed — no over-blocking.
+        assert_eq!(bash("python3 script.py"), Decision::Allow);
+    }
+
+    #[test]
+    fn ca_blastguard_007_stacked_short_flag_inline_eval_is_denied() {
+        // CA-blastguard-007: is_inline_eval_flag only matched exact tokens
+        // (-c, -e, …); a combined short flag like `-ic` (python's -i stacked
+        // with -c) must also be recognized as carrying an inline-eval flag.
+        assert!(bash("find . -exec python3 -ic \"import os; os.system('rm -rf /')\" \\;").is_deny());
+        // Control: an unrelated long flag containing 'c'/'e'/'r'/'p' letters
+        // (e.g. `--color`) must NOT be mistaken for a stacked eval flag.
+        assert_eq!(
+            bash("find . -exec grep --color todo {} \\;"),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn ca_blastguard_008_versioned_interpreter_basename_is_denied() {
+        // CA-blastguard-008: is_code_interpreter only matched exact unversioned
+        // basenames; a versioned binary like `python3.12` must also be
+        // recognized as a code interpreter.
+        assert!(bash("find . -exec python3.12 -c \"import os; os.system('rm -rf /')\" \\;").is_deny());
+        // Control: a plain script-file invocation with a versioned
+        // interpreter (no inline-eval flag) stays allowed.
+        assert_eq!(bash("find . -exec python3.12 script.py \\;"), Decision::Allow);
+    }
+
+    #[test]
+    fn ca_blastguard_009_tee_without_append_truncates_is_denied() {
+        // CA-blastguard-009: `tee FILE` (no -a) truncates/overwrites FILE
+        // identically to a `>` redirect — must be denied. `tee -a FILE`
+        // (append mode) is safe and stays allowed.
+        assert!(bash("echo x | tee important.txt").is_deny());
+        assert_eq!(bash("echo x | tee -a important.txt"), Decision::Allow);
+        assert_eq!(bash("echo x | tee --append important.txt"), Decision::Allow);
     }
 
     #[test]

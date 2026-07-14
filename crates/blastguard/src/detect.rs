@@ -691,6 +691,26 @@ fn analyze_git(rest: &[&str]) -> Decision {
                 Decision::deny("git restore discards working-tree changes")
             }
         }
+        "stash" => {
+            // `git stash clear` drops every stash entry and `git stash drop`
+            // drops one — both irreversibly delete stashed work, the same
+            // hazard class as the working-tree-discard forms above. Every
+            // other subcommand (list/show/push/save/pop/apply/branch and the
+            // bare `git stash` push) is non-destructive, so only the two
+            // discard forms are denied. The stash subcommand is the first
+            // non-flag token *after* the `stash` token.
+            let subcmd = rest
+                .iter()
+                .position(|t| !t.starts_with('-'))
+                .and_then(|p| rest[p + 1..].iter().find(|t| !t.starts_with('-')))
+                .map(|t| basename(t))
+                .unwrap_or("");
+            if subcmd == "clear" || subcmd == "drop" {
+                Decision::deny("git stash clear/drop irreversibly deletes stashed changes")
+            } else {
+                Decision::Allow
+            }
+        }
         _ => Decision::Allow,
     }
 }
@@ -848,6 +868,27 @@ mod tests {
         assert!(bash("git checkout -- .").is_deny());
         assert!(bash("git checkout --force").is_deny());
         assert!(bash("git checkout -f").is_deny());
+    }
+
+    #[test]
+    fn ca_blastguard_06_git_stash_discard_is_denied() {
+        // CA-blastguard-06: `git stash clear` drops every stash entry and
+        // `git stash drop` drops one — both irreversibly delete stashed work,
+        // the same hazard class as the already-denied working-tree-discard
+        // forms. analyze_git used to fall through to Allow for `stash`.
+        assert!(bash("git stash clear").is_deny());
+        assert!(bash("git stash drop").is_deny());
+        assert!(bash("git stash drop stash@{2}").is_deny());
+        // Non-destructive stash subcommands (and the bare `git stash` push)
+        // must stay allowed — the fix must not over-broaden.
+        assert_eq!(bash("git stash"), Decision::Allow);
+        assert_eq!(bash("git stash list"), Decision::Allow);
+        assert_eq!(bash("git stash push -m wip"), Decision::Allow);
+        assert_eq!(bash("git stash show"), Decision::Allow);
+        assert_eq!(bash("git stash pop"), Decision::Allow);
+        assert_eq!(bash("git stash apply"), Decision::Allow);
+        assert_eq!(bash("git stash save wip"), Decision::Allow);
+        assert_eq!(bash("git stash branch topic"), Decision::Allow);
     }
 
     #[test]

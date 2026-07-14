@@ -462,13 +462,24 @@ pub enum Verdict {
 
 /// Axes on which a *single template* carrying two or more polarity tokens is, by
 /// itself, sufficient grounds to force human review — the **Phase 1 deterministic
-/// backstop**. `authz` (allow/deny/forbid/approve) and `route` (human/auto) are
-/// the two axes that encode *who decides* and *what is permitted*; a template that
-/// mentions either axis twice is expressing a *relationship* between two
-/// authorization or routing decisions, which is exactly the shape the heuristic
-/// Phase 2 guards ([`polarity_preserved`] / [`object_bindings`]) must reason
-/// hardest about (cross-clause pole swaps, object reattachment).
-const BACKSTOP_AXES: &[&str] = &["authz", "route"];
+/// backstop**. `authz` (allow/deny/forbid/approve), `route` (human/auto) and `neg`
+/// (never/always/no/not/none/unless/without) are the axes that encode *who
+/// decides*, *what is permitted*, and *whether a decision is negated*; a template
+/// that mentions any of them twice is expressing a *relationship* between two
+/// authorization, routing or negation decisions, which is exactly the shape the
+/// heuristic Phase 2 guards ([`polarity_preserved`] / [`object_bindings`]) must
+/// reason hardest about (cross-clause pole swaps, object reattachment).
+///
+/// `neg` is included (CA-specguard-02) because a cross-clause object swap between
+/// an `always` clause and a `never` clause inverts which object is always- vs
+/// never-governed while leaving the axis token *sequence* unchanged — and the
+/// Phase 2 [`object_bindings`] heuristic is blind to it (CA-specguard-03 binds each
+/// neg pole to the *shared* verb it precedes, so the swapped object nouns never
+/// collide as a head; CA-specguard-04's intersection-only comparison then never
+/// sees a differing head). Just as the analogous authz object swap (re-review
+/// finding 1a) is caught here by count alone rather than by the Phase 2 heuristic,
+/// two neg poles in one template now route to a human regardless of that blind spot.
+const BACKSTOP_AXES: &[&str] = &["authz", "route", "neg"];
 
 /// The per-axis polarity-token occurrence count at or above which the Phase 1
 /// backstop fires (2: a single template expressing *two* authz or *two* route
@@ -1348,6 +1359,140 @@ mod tests {
         // One route token (human) only — backstop does not fire either.
         let one_route = "route the novel policy edit to a human for consent";
         assert!(!backstop_forces_novel(one_route, one_route));
+    }
+
+    // --- Negation-axis object swap (CA-specguard-02 / -03 / -04) --------------
+
+    /// A realistic-length meta-canon precedent with TWO negation-axis clauses:
+    /// the automation `always` merges the benign whitespace change and `never`
+    /// merges the substantive rewrite. The verb (`merge`) is a plain content word
+    /// (NOT a polarity token), so ONLY the negation axis carries two poles —
+    /// nothing lands on the authz/route axes.
+    const NEG_AXIS_RATIFIED: &str =
+        "when the graded ratification gate carefully evaluates a large incoming batch \
+         of drifted meta canon template edits during a fully gated production release \
+         run the deterministic triage policy will always merge the whitespace change \
+         into the pinned meta canon corpus because that particular edit carries little \
+         semantic weight over the eventual outcome and the very same triage policy will \
+         never merge the substantive rewrite into that same pinned meta canon corpus \
+         because that particular rewrite clearly does carry real semantic weight over \
+         the final audit outcome";
+
+    /// Regression for the cross-clause object-swap on the NEGATION axis
+    /// (CA-specguard-02 / -03 / -04, one underlying gap with three facets).
+    ///
+    /// Swapping ONLY the two object phrases between the `always` and `never`
+    /// clauses inverts which edit is always-merged vs never-merged — the
+    /// dangerous inversion — while leaving the lexical Jaccard high. This escaped
+    /// every layer before the fix:
+    ///  - CA-specguard-03: [`object_bindings`] binds each neg pole to the NEAREST
+    ///    content token, which is the *shared* verb `merge` (the object nouns sit
+    ///    one token further out), so the swapped objects never collide as a head.
+    ///  - CA-specguard-04: [`polarity_preserved`] only compares heads present in
+    ///    BOTH texts, and the shared heads (`merge`, `policy`) are identical, so
+    ///    the swap is invisible to the Phase-2 heuristic — `polarity_preserved`
+    ///    stays `true` (asserted below to document the residual Phase-2 blind spot).
+    ///  - CA-specguard-02: the `neg` axis was absent from [`BACKSTOP_AXES`], so the
+    ///    Phase-1 count backstop did NOT fire either, and the inverted policy
+    ///    auto-ratified WITHOUT a human.
+    ///
+    /// The coherent fix adds `neg` to [`BACKSTOP_AXES`]: a template expressing two
+    /// negation/quantifier decisions now routes to a human by COUNT ALONE — exactly
+    /// as an object-swap on the authz axis already does (re-review finding 1a) —
+    /// closing the whole class regardless of the Phase-2 heuristic's blind spot.
+    #[test]
+    fn neg_axis_object_swap_routes_to_human() {
+        const THRESHOLD: f64 = 0.85; // the shipped default.
+        let ratified = NEG_AXIS_RATIFIED;
+        let flipped = ratified
+            .replace(
+                "always merge the whitespace change",
+                "always merge the substantive rewrite",
+            )
+            .replace(
+                "never merge the substantive rewrite",
+                "never merge the whitespace change",
+            );
+        let corpus = vec![ratified.to_string()];
+
+        // The danger regime: the two swapped object phrases barely perturb the
+        // shingle set of this long paragraph, so the lexical similarity stays high
+        // and WOULD have auto-ratified on similarity alone.
+        let sim = best_similarity(&flipped, &corpus);
+        assert!(
+            sim >= THRESHOLD,
+            "expected a high (>= {THRESHOLD}) lexical similarity that WOULD have \
+             auto-ratified, got {sim}"
+        );
+
+        // CA-specguard-03 / -04 (documented residual Phase-2 blind spot): both neg
+        // poles bind only to the shared verb `merge` / subject `policy`, so the
+        // swapped object nouns never collide as a head and the Phase-2 heuristic
+        // still reports the two texts as polarity-equivalent.
+        assert!(
+            polarity_preserved(ratified, &flipped),
+            "documenting the Phase-2 blind spot: object_bindings binds the neg poles \
+             to the shared verb, so polarity_preserved cannot see the object swap"
+        );
+
+        // CA-specguard-02 (the fix): the neg axis is now a backstop axis, so two
+        // neg poles in one template trip the Phase-1 count backstop.
+        assert!(
+            backstop_forces_novel(&flipped, ratified),
+            "two negation-axis poles must trip the Phase-1 backstop by count alone"
+        );
+
+        // End-to-end: the inversion routes to a human despite the high similarity
+        // and the Phase-2 blind spot.
+        assert_eq!(
+            triage(&flipped, &corpus, THRESHOLD),
+            Verdict::Novel,
+            "neg-axis object swap must route to a human (Novel) despite similarity {sim}"
+        );
+    }
+
+    /// CA-specguard-02 unit: the Phase-1 count backstop now covers the `neg`
+    /// (always/never/no/not/…) axis, mirroring `authz`/`route`. A single template
+    /// expressing two negation/quantifier decisions is forced to Novel by COUNT
+    /// ALONE, with no reliance on the Phase-2 [`object_bindings`] heuristic.
+    #[test]
+    fn phase1_backstop_forces_novel_on_two_neg_tokens() {
+        // Two neg poles (always + never) in one template — the shape of the
+        // neg-axis object swap. The backstop fires on the count alone.
+        let two_neg = "the triage policy will always merge the whitespace change and \
+                       will never merge the substantive rewrite";
+        assert!(
+            backstop_forces_novel(two_neg, "an unrelated benign precedent template"),
+            "two neg poles in the candidate must trip the Phase 1 backstop by count alone"
+        );
+        // The precedent side also trips it (the backstop inspects both texts).
+        assert!(
+            backstop_forces_novel("an unrelated benign precedent template", two_neg),
+            "two neg poles in the precedent must trip the Phase 1 backstop by count alone"
+        );
+        // End-to-end via triage: even at a fully-permissive threshold (0.0) with a
+        // lexically IDENTICAL precedent (similarity 1.0, polarity trivially
+        // preserved), a two-neg template still routes to a human.
+        let corpus = vec![two_neg.to_string()];
+        assert_eq!(
+            triage(two_neg, &corpus, 0.0),
+            Verdict::Novel,
+            "the Phase 1 backstop must override an otherwise-precedented two-neg match"
+        );
+    }
+
+    /// The neg backstop must NOT over-block a template carrying at most ONE
+    /// negation pole: a single negation clause stays eligible for auto-ratify, so
+    /// benign single-negation edits remain Precedented.
+    #[test]
+    fn neg_backstop_leaves_single_neg_clause_precedented() {
+        // One neg token (never) only — backstop does not fire.
+        let one_neg = "the policy will never merge the unreviewed rewrite before audit";
+        assert!(!backstop_forces_novel(one_neg, one_neg));
+        let corpus = vec![one_neg.to_string()];
+        // A benign whitespace/reflow edit keeps polarity and stays Precedented.
+        let benign = "the policy will never merge the unreviewed rewrite, before audit";
+        assert_eq!(triage(benign, &corpus, 0.85), Verdict::Precedented);
     }
 
     // Object nouns drawn for the fuzzer below; deliberately none is itself a

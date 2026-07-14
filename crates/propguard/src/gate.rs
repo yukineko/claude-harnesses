@@ -31,6 +31,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 use globset::{Glob, GlobSetBuilder};
 use wait_timeout::ChildExt;
 
@@ -560,6 +563,22 @@ fn run_checker(cfg: &Config, criteria: &str, props: &[Property], diff: &str) -> 
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    // CA-propguard-004: when `checker_cmd` is shell-wrapped (contains shell
+    // metacharacters → `harness_core::shell::command` spawns `sh -c "..."` /
+    // `cmd /C "..."`), the direct child we get back is the *shell*, not the
+    // real checker. If the shell execs or backgrounds a grandchild (or a
+    // pipeline of several processes), killing only the direct child on
+    // timeout never reaches that real process — it can keep running (and
+    // keep the stdout pipe open, see CA-propguard-005) forever. Put the
+    // child in its own process group on Unix so the whole tree the shell
+    // spawned can be killed together via a single group-kill on timeout.
+    // Best-effort on platforms without process groups (Windows): we still
+    // kill the direct child; a grandchild there may survive, but we don't
+    // regress any existing guarantee (none existed before this fix either).
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+    }
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -586,23 +605,76 @@ fn run_checker(cfg: &Config, criteria: &str, props: &[Property], diff: &str) -> 
     let timeout = Duration::from_secs(cfg.checker_timeout_secs);
     match child.wait_timeout(timeout) {
         Ok(Some(status)) => {
-            let mut out = String::new();
-            if let Some(mut so) = child.stdout.take() {
-                use std::io::Read;
-                let _ = so.read_to_string(&mut out);
-            }
+            // CA-propguard-005: the *immediate* child (possibly the shell
+            // wrapper) having exited does not mean stdout's write end is
+            // closed — a backgrounded/detached grandchild can still hold the
+            // pipe's write end open, and a bare `read_to_string` here would
+            // then block indefinitely: a second hang vector `wait_timeout`
+            // above does nothing to bound. Do the read on its own thread and
+            // join it with the same timeout budget so this call can never
+            // hang past a reasonable bound even if the pipe stays open.
+            let out = read_stdout_bounded(child.stdout.take(), timeout);
             if !status.success() && out.trim().is_empty() {
                 return CheckOutcome::Error(format!("exit {:?}", status.code()));
             }
             parse_checker_output(&out, props)
         }
         Ok(None) => {
-            let _ = child.kill();
+            kill_checker_tree(&mut child);
             let _ = child.wait();
             CheckOutcome::Error("timed out".to_string())
         }
         Err(e) => CheckOutcome::Error(format!("wait: {e}")),
     }
+}
+
+/// Kill the checker's whole process tree on timeout, not just the direct
+/// child. On Unix, `run_checker` puts the child in its own process group
+/// (see `cmd.process_group(0)` above), so a negative-pid kill targets the
+/// group — the shell *and* whatever it exec'd/backgrounded — in one call.
+/// Falls back to killing just the direct child where that isn't available
+/// (non-Unix, or if the group id can't be determined), which is no worse
+/// than the pre-fix behavior.
+fn kill_checker_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        // SAFETY: `kill` is a plain libc syscall; passing a negative pid
+        // targets the process group whose id equals the child's pid (valid
+        // because we created that group via `process_group(0)` at spawn
+        // time). This is best-effort cleanup on a timeout path — any error
+        // (e.g. the group already gone) is intentionally ignored, mirroring
+        // the pre-existing `let _ = child.kill()` behavior it replaces.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    // Always also signal the direct child through the standard API: this is
+    // a harmless no-op if the group kill above already reaped it, and it is
+    // the only mechanism at all on non-Unix platforms.
+    let _ = child.kill();
+}
+
+/// Read `stdout` to completion, but never block past `timeout`: the read
+/// happens on a background thread and we join it with a bound instead of
+/// calling `read_to_string` inline. If the join times out (pipe still open
+/// because some lingering process holds the write end), we give up and
+/// return whatever was read so far instead of hanging — the thread itself
+/// is detached and leaked in that case, matching the fail-soft, bounded-call
+/// contract the rest of `run_checker` already has via `wait_timeout`.
+fn read_stdout_bounded(stdout: Option<std::process::ChildStdout>, timeout: Duration) -> String {
+    use std::sync::mpsc;
+    let Some(mut so) = stdout else {
+        return String::new();
+    };
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut out = String::new();
+        let _ = so.read_to_string(&mut out);
+        let _ = tx.send(out);
+    });
+    rx.recv_timeout(timeout).unwrap_or_default()
 }
 
 /// If `line` (already lowercased) is *this* property's own verdict line — i.e.
@@ -1033,6 +1105,102 @@ mod tests {
         // needed stdin at all), it must not be silently "all pass" via a
         // hang-then-succeed path; either shape is acceptable evidence the
         // call returned instead of hanging.
+        match outcome {
+            CheckOutcome::Error(_) | CheckOutcome::Verified { .. } => {}
+        }
+    }
+
+    // ── shell-wrapped timeout must kill the real grandchild (CA-propguard-004) ──
+    //
+    // When `checker_cmd` contains shell metacharacters, `build_command` runs it
+    // via `harness_core::shell::command` (`sh -c "..."`), so the direct child
+    // `run_checker` gets back is the *shell*, not the real checker. Before this
+    // fix, the timeout path only called `child.kill()` on that shell — a
+    // grandchild the shell backgrounds/execs never got signaled and could keep
+    // running after `run_checker` returned. Assert that a shell-wrapped
+    // checker_cmd which backgrounds a long-running child does not leave that
+    // child alive once the timeout has fired.
+    #[cfg(unix)]
+    #[test]
+    fn shell_wrapped_timeout_kills_the_real_backgrounded_checker() {
+        let marker = std::env::temp_dir().join(format!(
+            "propguard-ca004-marker-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&marker);
+
+        // `;` is a shell metacharacter, so this goes through the shell path.
+        // The backgrounded `sleep 30 &` is the real long-running checker
+        // process; it writes its pid to `marker` so the test can verify it
+        // is actually gone (not just that `run_checker` returned) after the
+        // timeout fires.
+        let cfg = Config {
+            checker_cmd: format!("sleep 30 & echo $! > {}; wait $!", marker.display()),
+            checker_timeout_secs: 1,
+            ..Config::default()
+        };
+        let props = props_by_ids(&["error-path"]);
+
+        let start = std::time::Instant::now();
+        let outcome = run_checker(&cfg, "dc", &props, "diff");
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "run_checker must be bounded by checker_timeout_secs even when shell-wrapped, took {elapsed:?}"
+        );
+        assert!(
+            matches!(outcome, CheckOutcome::Error(_)),
+            "a timed-out shell-wrapped checker must be reported as an Error"
+        );
+
+        // Give the OS a brief moment to actually reap the killed process
+        // before we check, then confirm the grandchild `sleep` is gone.
+        std::thread::sleep(Duration::from_millis(200));
+        if let Ok(pid_str) = std::fs::read_to_string(&marker) {
+            if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                // SAFETY: signal 0 is a pure existence/permission probe.
+                let alive = unsafe { libc::kill(pid, 0) == 0 };
+                assert!(
+                    !alive,
+                    "the backgrounded grandchild (pid {pid}) must be killed on timeout, not just the shell"
+                );
+            }
+        }
+        let _ = std::fs::remove_file(&marker);
+    }
+
+    // ── bounded stdout read after immediate-child exit (CA-propguard-005) ──
+    //
+    // After `wait_timeout` reports the immediate child has exited, reading
+    // its stdout must not be able to hang even if a lingering process still
+    // holds the pipe's write end open. This test shell-wraps a checker_cmd
+    // whose immediate process exits right away, but backgrounds a child that
+    // inherits the stdout fd and keeps it open well past `checker_timeout_secs`;
+    // without a bounded read this would hang `run_checker` indefinitely.
+    #[cfg(unix)]
+    #[test]
+    fn lingering_stdout_holder_does_not_hang_the_read() {
+        let cfg = Config {
+            // The immediate shell process exits promptly ("exit 0"), but a
+            // backgrounded subshell inherits the stdout fd and sleeps well
+            // beyond the timeout, keeping the pipe's write end open.
+            checker_cmd: "(sleep 5 &) ; exit 0".to_string(),
+            checker_timeout_secs: 1,
+            ..Config::default()
+        };
+        let props = props_by_ids(&["error-path"]);
+
+        let start = std::time::Instant::now();
+        let outcome = run_checker(&cfg, "dc", &props, "diff");
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "reading stdout after the immediate child exits must not hang past a reasonable \
+             bound even if a lingering process keeps the pipe open, took {elapsed:?}"
+        );
         match outcome {
             CheckOutcome::Error(_) | CheckOutcome::Verified { .. } => {}
         }

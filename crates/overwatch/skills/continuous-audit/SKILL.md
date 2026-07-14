@@ -83,6 +83,9 @@ finder の各指摘を、**別の (finder とは独立した) `Task` verifier su
     冪等）。ハード fail ではなく fail-soft（round は記録され続け、ループは止まらない＝never-break-a-turn）だが、
     review surface に MUST 違反が可視化される。**必ず両モデルを渡して自己申告を機械検証に晒すこと**。
 - 高リスク指摘は verifier を複数立てて多数決にしてよい。その場合も複数の verifier は異なるモデルを指定する。
+- verifier が **CONFIRMED** と判定した際は、その根拠 (file:line 引用込み・反証を退けた理由) を
+  `rationale` として保持しておく。Step 3 で `overwatch record-finding` の `--rationale` オプション
+  (省略可) にそのまま渡す。省略しても記録自体は成功する (後方互換) が、渡せる場合は必ず渡す。
 
 CONFIRMED subset を確定し、各件を `finding-id | severity | summary | file` に整形する。**finding-id は
 安定なキー**にする (例: `CA-<crate>-<連番>` や rule id)。同じ指摘が次ラウンドでも CONFIRMED なら
@@ -121,6 +124,11 @@ scripts/continuous-audit.sh --round <round-id> --dry-run
 CONFIRMED のうち**挙動バグ**は、対象 crate に**回帰テストを追加して固定**する (決定性はテストに固定化する)。
 これは別タスク (backlog / condukt) に委譲してよいが、追加できた件数を記録する。commit `38f613c`
 (re-review finding 1-3 の ignored 回帰テスト昇格) が「CONFIRMED → 回帰テスト」の POC。
+
+- **`#[ignore]` の理由文字列は必ず `<finding-id>: ` で始める** (構造化規約)。例:
+  `#[ignore = "CA-overwatch-001: re-review finding 1, see docs/..."]`。
+  従来は自由文言 (例: "...re-review finding 2") で運用していたが、finding-id と回帰テストを機械的に
+  逆引きできるようにするため、今後はこの規約に統一する。
 
 > **回帰テストは通常ラウンド記録より後に landed する** (修正は backlog/condukt へ委譲される別タスク)。
 > Step 3 の `--regression-tests-added` は「そのラウンドと同時にテストまで締めた」件数だけを入れ、

@@ -62,7 +62,10 @@ pub fn record(
                     "targets": record.targets,
                     "new_findings": new_findings,
                     "confirmed": confirmed,
-                    "regression_tests_added": regression_tests_added,
+                    // Report the STORED (clamped-to-confirmed) value, not the
+                    // raw CLI arg, so the printed output never claims a
+                    // regression_tests_added > confirmed (CA-overwatch-004).
+                    "regression_tests_added": record.regression_tests_added,
                 })
             );
         }

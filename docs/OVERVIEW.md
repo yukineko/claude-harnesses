@@ -44,6 +44,7 @@ LLM は「解釈・実装・判断」だけを担う。スケジューリング�
 | `install.rs` | `~/.claude/settings.json` の load/backup/write |
 | `interrogate.rs` | ゴール/仕様精緻化の問答ループ（純粋関数） |
 | `inject.rs` | コンテキスト注入プラグイン（playbook / runbook）の共有基盤 |
+| `lessons.rs` | 教訓テキストの正規化・類似度計算（`text_similarity`）。overwatch など他クレートから再利用される公開 API |
 
 ---
 

@@ -983,6 +983,12 @@ condukt state gate --run $RID      # exit 0 まで完了宣言しない
   condukt state reconcile --run $RID
   condukt state gate --run $RID    # 再チェック
   ```
+  - **reconcile が exit 2 で終了した場合**: 別の run が同じ hashkey を `$RID` の claim 後に
+    先に `done`/`verified` まで完了させていた（クロスラン重複）ということ。reconcile はこの場合
+    **auto-merge も auto-discard もしない**（どちらの実装を残すかは人間の判断が要る）。stdout に
+    `{"duplicate_completion":[{hashkey,runs:[run_id...]}]}` が印字されるので、これを読んで
+    **人間に escalate する**（`condukt state gate` の再チェックには進まない。重複した実装のどちらを
+    残すか決めてもらってから、選ばれなかった側の run/タスクを扱う）。
 - reconcile 後も FAIL が残る場合に限り、理由ごとに対処する:
   - `failed` タスク → Phase 6 のカスケードエスカレーションへ戻す
   - worktree 残置 → `condukt worktree cleanup --remove` で掃除

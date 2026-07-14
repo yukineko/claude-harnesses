@@ -130,8 +130,8 @@
     },
     {
       "name": "condukt",
-      "description": "Deterministic orchestration engine for Claude Code: an interpreter/worker/verifier skill plus a Rust binary that schedules tasks into parallel/serial batches by file-conflict analysis, manages the git-worktree lifecycle, tracks run state, and gates completion. v0.7.54: `gate_exec`'s escalate-finding call site follows overwatch's extended `record_finding`/`ReviewFinding.rationale` signature (no behavior change). Subscription-native (skill + agents + hook, no API key).",
-      "version": "0.7.54",
+      "description": "Deterministic orchestration engine for Claude Code: an interpreter/worker/verifier skill plus a Rust binary that schedules tasks into parallel/serial batches by file-conflict analysis, manages the git-worktree lifecycle, tracks run state, and gates completion. v0.7.55: docs-only — SKILL.md Phase 7 documents the `state reconcile` exit 2 (duplicate_completion) escalation branch. v0.7.54: `gate_exec`'s escalate-finding call site follows overwatch's extended `record_finding`/`ReviewFinding.rationale` signature (no behavior change). Subscription-native (skill + agents + hook, no API key).",
+      "version": "0.7.55",
       "category": "orchestration",
       "keywords": [
         "orchestration",

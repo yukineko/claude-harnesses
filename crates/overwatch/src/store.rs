@@ -383,6 +383,72 @@ pub fn read_bridged_findings(cwd: &Path) -> Result<Vec<String>> {
     }
 }
 
+/// One record in the bridged-entries ledger: a non-finding review-queue entry
+/// (systemic / rollback / escalation) that has already been forwarded to the
+/// backlog. Kept in a SEPARATE file from [`BridgedFinding`] on purpose — the
+/// finding ledger (`bridged_findings.jsonl`) doubles as the review-metrics
+/// "resolved finding-id" source (see [`compact_review_findings`]), so its
+/// entries must stay bare finding-ids. The other three streams get their own
+/// composite-key ledger here rather than polluting that one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgedEntry {
+    /// The idempotency key `<kind-tag>:<identifier>` that was forwarded.
+    pub key: String,
+    /// Unix timestamp when the bridge happened.
+    pub ts: i64,
+}
+
+/// Path to the bridged_entries.jsonl file (append-only): the set of composite
+/// `<kind-tag>:<identifier>` keys for non-finding review-queue entries already
+/// forwarded to the backlog, making that half of `review-queue --to-backlog`
+/// idempotent across runs. Distinct from [`bridged_findings_path`] so the
+/// finding-resolution logic that reads that file is unaffected.
+pub fn bridged_entries_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("bridged_entries.jsonl"))
+}
+
+/// Append a bridged-entry record to bridged_entries.jsonl (one JSON line each).
+/// Called after a successful `backlog add` for a non-finding stream so the
+/// entry is never forwarded twice.
+pub fn append_bridged_entry(cwd: &Path, key: &str) -> Result<()> {
+    let path = bridged_entries_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let rec = BridgedEntry {
+        key: key.to_string(),
+        ts: now(),
+    };
+    let json = serde_json::to_string(&rec)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?
+        .write_all(format!("{}\n", json).as_bytes())?;
+    Ok(())
+}
+
+/// Read the set of already-bridged non-finding entry keys from
+/// bridged_entries.jsonl. Empty vec if the file is absent/empty (fail-soft,
+/// same contract as [`read_bridged_findings`]). Corrupt lines are skipped.
+pub fn read_bridged_entries(cwd: &Path) -> Result<Vec<String>> {
+    let path = bridged_entries_path(cwd)?;
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => {
+            let mut keys = Vec::new();
+            for line in txt.lines() {
+                if !line.is_empty() {
+                    if let Ok(r) = serde_json::from_str::<BridgedEntry>(line) {
+                        keys.push(r.key);
+                    }
+                }
+            }
+            Ok(keys)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
 /// Path to the audit_rounds.jsonl file (append-only, Continuous-Audit round
 /// metrics). Its own stream since a round record is a distinct signal from the
 /// findings/rollback/violation logs: it is the convergence ledger the
@@ -946,6 +1012,49 @@ mod tests {
         .unwrap();
         let combined = read_review_findings_all(&dir).unwrap();
         assert_eq!(combined, vec![finding("a", 1), finding("b", 2)]);
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn bridged_entries_ledger_roundtrips_and_skips_corrupt_lines() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-store-test-entries-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+
+        // Missing ledger => empty (fail-soft).
+        assert!(read_bridged_entries(&dir).unwrap().is_empty());
+
+        // Append two keys, then a hand-written corrupt line that must be skipped.
+        append_bridged_entry(&dir, "rollback:overwatch").unwrap();
+        append_bridged_entry(&dir, "systemic:blastguard:rm-rf").unwrap();
+        let path = bridged_entries_path(&dir).unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"not valid json\n")
+            .unwrap();
+
+        let keys = read_bridged_entries(&dir).unwrap();
+        assert_eq!(
+            keys,
+            vec!["rollback:overwatch", "systemic:blastguard:rm-rf"]
+        );
+
+        // The entries ledger is a SEPARATE file from bridged_findings.jsonl, so
+        // it must not disturb the finding-resolution source.
+        assert!(read_bridged_findings(&dir).unwrap().is_empty());
 
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),

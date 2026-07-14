@@ -12,8 +12,11 @@
 #
 # The finder/verifier review itself is LLM-driven and is NOT performed by this
 # script. This script's DETERMINISTIC responsibility is to RECORD a round:
-#   * for each CONFIRMED finding -> `overwatch record-finding ...`
-#     (so it surfaces in `overwatch review-queue`), and
+#   * for each CONFIRMED finding -> `overwatch record-finding ...` (the durable
+#     findings-history/dedup ledger), then forward it to the backlog via
+#     `overwatch review-queue --to-backlog` (idempotent on finding-id) so the
+#     single actionable queue /flow drains never leaves an audit result
+#     unattended, and
 #   * once per round -> `overwatch audit-round record ...`
 #     (the convergence-metrics ledger read back by `overwatch audit-metrics`).
 # It then prints the finding list + `overwatch audit-metrics`.
@@ -122,6 +125,23 @@ else
   exit 0   # fail-soft: never hard-fail the caller
 fi
 
+# --- locate the backlog binary (findings sink) -------------------------------
+# The CONFIRMED findings are forwarded to the backlog (the single actionable
+# queue /flow drains) so an audit result is never left unattended. Resolve it
+# the same way overwatch does and export OVERWATCH_BACKLOG_BIN so the bridge
+# finds it even when `backlog` is not on PATH. Fail-soft: if none resolves the
+# bridge itself warns and skips (never aborts the loop).
+if [ -z "${OVERWATCH_BACKLOG_BIN:-}" ]; then
+  if command -v backlog >/dev/null 2>&1; then
+    OVERWATCH_BACKLOG_BIN="$(command -v backlog)"
+  elif [ -x "$REPO/target/release/backlog" ]; then
+    OVERWATCH_BACKLOG_BIN="$REPO/target/release/backlog"
+  elif [ -x "$REPO/target/debug/backlog" ]; then
+    OVERWATCH_BACKLOG_BIN="$REPO/target/debug/backlog"
+  fi
+fi
+export OVERWATCH_BACKLOG_BIN
+
 if [ -z "$ROUND" ]; then
   echo "continuous-audit: --round <round-id> is required (or --dry-run to preview)" >&2
   [ "$DRY_RUN" -eq 1 ] || exit 0
@@ -168,6 +188,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
   fi
   echo "  overwatch audit-round record --round ${ROUND} --target ${TARGET} \\"
   echo "    --new-findings ${NEW_FINDINGS} --confirmed ${CONFIRMED} --regression-tests-added ${REGRESSION_TESTS_ADDED}${FINDER_MODEL:+ --finder-model ${FINDER_MODEL}}${VERIFIER_MODEL:+ --verifier-model ${VERIFIER_MODEL}}"
+  echo "  overwatch review-queue --to-backlog   # forward each CONFIRMED finding to the backlog (idempotent on finding-id)"
   echo
   echo "--- current metrics (read-only) ---"
   run_ow audit-metrics
@@ -203,9 +224,19 @@ round_args=(audit-round record
 [ -n "$VERIFIER_MODEL" ] && round_args+=(--verifier-model "$VERIFIER_MODEL")
 run_ow "${round_args[@]}"
 
+# --- forward CONFIRMED findings to the backlog (single actionable queue) ------
+# This closes the discover->fix loop deterministically: every not-yet-bridged
+# finding-id becomes a `backlog add` (idempotent via bridged_findings.jsonl,
+# severity high->p0/med->p1/low->p2), so /flow can pick it up and it is never
+# left unattended. Fail-soft: a missing findings store / absent backlog is
+# warned and skipped inside the bridge (never aborts the loop).
+echo
+echo "--- forwarding CONFIRMED findings to backlog ---"
+run_ow review-queue --to-backlog
+
 echo
 echo "--- convergence metrics after this round ---"
 run_ow audit-metrics
 
 echo
-echo "PASS: round ${ROUND} recorded (findings -> review-queue, metrics -> audit ledger)."
+echo "PASS: round ${ROUND} recorded (findings -> backlog, metrics -> audit ledger)."

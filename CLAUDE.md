@@ -146,7 +146,10 @@ base より**厳密に上がっている**ことを要求し、上がってい�
 overwatch review-queue                 # 人間可読の統合リスト（新しい順）
 overwatch review-queue --json          # kind 判別子付きの構造化配列
 overwatch review-queue --since <ts> --limit <n>
+overwatch review-queue --to-backlog    # キュー全体を backlog に流し込む（discover→fix を閉じる）
 ```
+
+（`[escalation]` = condukt の blocked/GATED タスクが人間の回答待ちで滞留している事象も4本目のストリームとして統合表示される。）
 
 - **fail-soft**: いずれかのソースが空/欠落でも他のソースは表示される（コマンド全体はエラーにしない）。
   これは検証を省くための緩和ではなく、観測系が「ターンを壊さない」という overwatch の不変条件に沿う設計。
@@ -154,6 +157,11 @@ overwatch review-queue --since <ts> --limit <n>
   `overwatch record-rollback` で追記される（fail-soft: 記録失敗はロールアウトを止めない）。
 - AI 指摘の永続ストア（`overwatch record-finding` の取り込み口）は Continuous-Audit ループ（別 backlog）が
   埋めるまで通常は空で、その場合この行は出ない（graceful degrade）。
+- **`--to-backlog`（review-queue → backlog consolidation）**: レンダリングの代わりにキュー**全体**
+  （ai-finding / systemic / rollback / escalation の4種）を1件ずつ `backlog add` へ転送し、`/flow` が
+  自動修復できるようにする。冪等 — findings は `bridged_findings.jsonl`（bare finding-id。review-metrics の
+  「解消済み」判定源でもある）、他3ストリームは `bridged_entries.jsonl`（`<kind>:<identifier>`）で二重投入を防ぐ。
+  fail-soft: store 欠落 / backlog バイナリ不在 / `backlog add` 失敗はいずれも warn してスキップし、コマンドは常に成功する。
 
 ## さらに読む（docs/）
 

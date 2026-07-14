@@ -602,10 +602,16 @@ fn analyze_find(rest: &[&str]) -> Decision {
     if rest.contains(&"-delete") {
         return Decision::deny("find -delete removes every matching file");
     }
-    if let Some(pos) = rest.iter().position(|t| *t == "-exec" || *t == "-execdir") {
-        // The token right after -exec is the command run for each match.
+    if let Some(pos) = rest
+        .iter()
+        .position(|t| *t == "-exec" || *t == "-execdir" || *t == "-ok" || *t == "-okdir")
+    {
+        // The token right after -exec/-ok is the command run for each match.
         // A shell there (`find … -exec sh -c "rm …"`) can run any destructive
-        // command and slips past a literal `rm` scan.
+        // command and slips past a literal `rm` scan. -ok/-okdir are the
+        // interactive-confirmation twins of -exec/-execdir: they run the same
+        // arbitrary per-match command, just gated behind a y/n prompt first —
+        // that prompt does not make the payload any less destructive.
         if let Some(c) = rest.get(pos + 1).map(|t| basename(t)) {
             if is_shell(c) {
                 return Decision::deny(
@@ -761,6 +767,10 @@ mod tests {
         assert!(bash("find . -delete").is_deny());
         assert!(bash("find . -name '*.log' -delete").is_deny());
         assert!(bash("find . -type f -exec rm {} ;").is_deny());
+        // fix-blastguard-005: -ok/-okdir are the interactive-confirmation
+        // twins of -exec/-execdir (same arbitrary per-match command, just
+        // behind a y/n prompt) and must be denied the same way.
+        assert!(bash("find . -type f -okdir rm {} ;").is_deny());
     }
 
     #[test]

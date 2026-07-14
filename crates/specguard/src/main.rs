@@ -1191,7 +1191,18 @@ fn ack(paths: &report::Paths, repo_root: &std::path::Path, force: bool) -> Resul
     if !force && paths.sentinel.exists() {
         let content = std::fs::read_to_string(&paths.sentinel).unwrap_or_default();
         if let Some(raised_at) = report::sentinel_raised_at(&content) {
-            let current = scope::current_head(repo_root).unwrap_or_default();
+            // CA-specguard-003: current_head() errors (e.g. git unavailable) must
+            // not be swallowed into "" — has_new_commits("<hash>", "") reads as a
+            // genuine HEAD change and would let ack clear the sentinel without
+            // ever having verified a fix commit. Fail closed instead.
+            let current = match scope::current_head(repo_root) {
+                Ok(head) => head,
+                Err(e) => {
+                    eprintln!("specguard: HEAD を解決できないため安全側で ack を拒否 ({e})");
+                    eprintln!("  修正をコミットしてから `specguard ack` を実行するか、意図的に解除するなら `specguard ack --force`");
+                    return Ok(EXIT_NO_FIX_COMMIT);
+                }
+            };
             if !report::has_new_commits(&raised_at, &current) {
                 eprintln!(
                     "specguard: 修正コミットが見当たらない (raised_at: {raised_at}, HEAD: {current})"
@@ -2021,6 +2032,29 @@ mod tests {
         let result = ack(&paths, &repo_root(), false).unwrap();
         assert_eq!(result, EXIT_NO_FIX_COMMIT);
         assert!(sentinel.exists(), "sentinel should NOT have been removed");
+    }
+
+    #[test]
+    fn ack_blocks_when_current_head_errors() {
+        // CA-specguard-003 regression: repo_root points at a non-git directory,
+        // so scope::current_head() errors. ack must fail closed (deny, keep
+        // sentinel) rather than treating the error as a HEAD change.
+        let non_git_dir = tempfile::tempdir().unwrap();
+        let sentinel_dir = tempfile::tempdir().unwrap();
+        let sentinel = sentinel_dir.path().join("sentinel.txt");
+        std::fs::write(
+            &sentinel,
+            "date: 2026-06-26\nraised_at: 0000000000000000000000000000000000000000\n",
+        )
+        .unwrap();
+        let paths = make_paths(sentinel.clone());
+        assert!(scope::current_head(non_git_dir.path()).is_err());
+        let result = ack(&paths, non_git_dir.path(), false).unwrap();
+        assert_eq!(result, EXIT_NO_FIX_COMMIT);
+        assert!(
+            sentinel.exists(),
+            "sentinel should NOT have been removed when HEAD can't be resolved"
+        );
     }
 
     #[test]

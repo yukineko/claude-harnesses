@@ -112,6 +112,11 @@ impl AuditRound {
 /// Semantics:
 /// * **SET, not add** — applying the same `tests` twice yields an identical
 ///   ledger (idempotent backfill, no double count).
+/// * **clamped to `confirmed`** — `closure_rate` is documented to live in
+///   `[0,1]` (regression_tests_added / confirmed), so a `tests` value greater
+///   than the target round's `confirmed` count is clamped down to `confirmed`
+///   before being stored. This keeps the invariant true even when the caller
+///   (e.g. `overwatch audit-round close --tests`) passes an over-large count.
 /// * **most-recent wins** — a round-id is expected to be unique, but the ledger
 ///   is append-only and cannot forbid duplicates; when several rounds share the
 ///   id the LAST (most-recently recorded) match is updated and earlier same-id
@@ -129,7 +134,7 @@ pub fn set_round_tests(
     let target = rounds.iter().rposition(|r| r.round.trim() == key);
     let mut out = rounds.to_vec();
     if let Some(i) = target {
-        out[i].regression_tests_added = tests;
+        out[i].regression_tests_added = tests.min(out[i].confirmed);
     }
     (out, target.is_some())
 }
@@ -519,6 +524,37 @@ mod tests {
         let (out, found) = set_round_tests(&rounds, "nope", 9);
         assert!(!found);
         assert_eq!(out, rounds);
+    }
+
+    #[test]
+    fn set_round_tests_clamps_to_confirmed_so_closure_rate_never_exceeds_one() {
+        // Closing a round with tests > confirmed (e.g. a miscounted
+        // `overwatch audit-round close --tests`) must not push closure_rate
+        // above the documented [0,1] range: the stored count is clamped to
+        // the round's own `confirmed`.
+        let rounds = vec![round(1, 5, 5, 0, 10), round(2, 3, 2, 0, 20)];
+        let (out, found) = set_round_tests(&rounds, "2", 9);
+        assert!(found, "round id 2 exists");
+        assert_eq!(
+            out[1].regression_tests_added, 2,
+            "tests clamped down to confirmed (2), not stored as 9"
+        );
+        assert_eq!(out[0].regression_tests_added, 0, "other rounds untouched");
+
+        let m = compute_metrics(&out, DEFAULT_CONVERGENCE_WINDOW);
+        assert_eq!(
+            m.rounds[1].closure_rate,
+            Some(1.0),
+            "clamped to exactly 1.0"
+        );
+        assert!(
+            m.rounds[1].closure_rate.unwrap() <= 1.0,
+            "closure_rate must never exceed 1.0"
+        );
+        assert!(
+            m.closure_rate.unwrap() <= 1.0,
+            "overall closure_rate must never exceed 1.0"
+        );
     }
 
     #[test]

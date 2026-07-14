@@ -565,8 +565,22 @@ fn run_checker(cfg: &Config, criteria: &str, props: &[Property], diff: &str) -> 
         Ok(c) => c,
         Err(e) => return CheckOutcome::Error(format!("spawn: {e}")),
     };
+    // Write stdin from a background thread rather than inline. If the checker
+    // writes enough stdout before draining stdin (its stdout pipe fills up
+    // while our stdin pipe is also full), a synchronous write_all here would
+    // block forever *before* we ever reach `wait_timeout` below — meaning
+    // `cfg.checker_timeout_secs` would provide zero protection against that
+    // deadlock. Doing the write on its own thread lets the main thread reach
+    // `wait_timeout` immediately, so the overall call is always bounded by the
+    // configured timeout regardless of how the child interleaves its I/O. The
+    // thread is detached: if the child is killed on timeout, the write simply
+    // errors out (broken pipe) and the thread exits; nothing to join here
+    // since we don't want the join itself to be able to block.
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(prompt.as_bytes());
+        let prompt_bytes = prompt.into_bytes();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&prompt_bytes);
+        });
     }
 
     let timeout = Duration::from_secs(cfg.checker_timeout_secs);
@@ -975,6 +989,52 @@ mod tests {
         match run_checker(&cfg, "dc", &props, "diff") {
             CheckOutcome::Error(_) => {}
             CheckOutcome::Verified { .. } => panic!("an unspawnable checker must be an Error"),
+        }
+    }
+
+    // ── stdin/stdout deadlock regression (fix-propguard-003) ───────────────
+    //
+    // A checker that writes a lot of stdout *before* draining stdin can
+    // deadlock a caller that writes stdin synchronously on the main thread:
+    // both the child's stdout pipe and our stdin pipe fill up (~64KB OS pipe
+    // buffers) and neither side can make progress. Because that write used to
+    // happen before `wait_timeout`, `checker_timeout_secs` gave zero
+    // protection. This test uses a real "checker" that floods stdout without
+    // reading stdin at all, with a diff large enough to fill the stdin pipe
+    // buffer, and asserts `run_checker` still returns (as a timeout/error)
+    // within a small configured timeout instead of hanging indefinitely.
+    #[test]
+    fn checker_stdout_flood_without_draining_stdin_does_not_hang() {
+        // Print far more than a typical pipe buffer (~64KB) to stdout, then
+        // exit, *without* ever reading stdin. If stdin were written
+        // synchronously before wait_timeout, and the diff below is bigger
+        // than the stdin pipe buffer too, the parent would block on
+        // write_all while this child blocks on write (stdout full and
+        // un-drained) — a classic two-pipe deadlock.
+        let cfg = Config {
+            checker_cmd: "yes X | head -c 5000000".to_string(),
+            checker_timeout_secs: 2,
+            ..Config::default()
+        };
+        let props = props_by_ids(&["error-path"]);
+        // Bigger than a pipe buffer, so the old synchronous stdin write would
+        // itself block once the child's stdout side backs up.
+        let big_diff = "line of diff content\n".repeat(20_000);
+
+        let start = std::time::Instant::now();
+        let outcome = run_checker(&cfg, "dc", &props, &big_diff);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "run_checker must be bounded by checker_timeout_secs, took {elapsed:?}"
+        );
+        // Whatever the verdict (timeout error, or a fast exit that never
+        // needed stdin at all), it must not be silently "all pass" via a
+        // hang-then-succeed path; either shape is acceptable evidence the
+        // call returned instead of hanging.
+        match outcome {
+            CheckOutcome::Error(_) | CheckOutcome::Verified { .. } => {}
         }
     }
 

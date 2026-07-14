@@ -32,8 +32,8 @@
     },
     {
       "name": "blastguard",
-      "description": "Destructive-operation guard for Claude Code: a PreToolUse hook that denies project-wrecking Bash commands and file operations (recursive/wildcard rm, git reset --hard, git clean -fd, single-> truncating overwrites, truncate/shred/mkfs/dd of=, recursive chmod/chown, find -delete, find -ok/-okdir) before they run, while exempting repo config files (.claude/**, *.toml, *.yaml/yml, *.lock, package.json, .config/**). Subscription-native (one PreToolUse hook + bundled Rust binary, no API key).",
-      "version": "0.1.17",
+      "description": "Destructive-operation guard for Claude Code: a PreToolUse hook that denies project-wrecking Bash commands and file operations (recursive/wildcard rm, git reset --hard, git clean -fd, single-> truncating overwrites, truncate/shred/mkfs/dd of=, recursive chmod/chown, find -delete, find -ok/-okdir, bare top-level interpreter inline-eval, stacked/versioned interpreter flags, tee truncation) before they run, while exempting repo config files (.claude/**, *.toml, *.yaml/yml, *.lock, package.json, .config/**). Subscription-native (one PreToolUse hook + bundled Rust binary, no API key).",
+      "version": "0.1.18",
       "category": "security",
       "keywords": [
         "hooks",
@@ -57,7 +57,7 @@
     {
       "name": "backlog",
       "description": "Cross-project task queue with cycle-type tags for Claude Code: a /backlog skill that loops through open items (lock → pick → /condukt → done), a SessionStart hook that surfaces pending work at session open, and a backlog binary with list/next/done/fail/lock subcommands. Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "category": "workflow",
       "keywords": [
         "backlog",

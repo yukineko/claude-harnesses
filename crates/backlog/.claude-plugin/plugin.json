@@ -1,7 +1,7 @@
 {
   "name": "backlog",
-  "version": "0.1.5",
-  "description": "Cross-project task queue with cycle-type tags for Claude Code: a /backlog skill (thin alias to /flow for driver loop), a SessionStart hook that surfaces pending work at session open, and a backlog binary with list/next/done/fail/lock subcommands. The lock→pick→/condukt→done driver loop is consolidated in /flow. Subscription-native (skill + hook + bundled Rust binary, no API key).",
+  "version": "0.1.6",
+  "description": "v0.1.6: closed 2 CONFIRMED Continuous-Audit fail-opens (CA-backlog-001/002) — added an opt-in atomic `next --claim` so two concurrent claimers can no longer both win the same pending task, and bounded the `condukt state is-claimed` subprocess call to well under the tasks-file lock's stale-reap window so a hung subprocess can no longer cause a lost update. Cross-project task queue with cycle-type tags for Claude Code: a /backlog skill (thin alias to /flow for driver loop), a SessionStart hook that surfaces pending work at session open, and a backlog binary with list/next/done/fail/lock subcommands. The lock→pick→/condukt→done driver loop is consolidated in /flow. Subscription-native (skill + hook + bundled Rust binary, no API key).",
   "author": {
     "name": "yukineko"
   },

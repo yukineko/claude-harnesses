@@ -5,6 +5,17 @@ use std::time::Duration;
 
 use crate::task::{new_id, Task, STATUS_DONE, STATUS_FAILED, STATUS_PENDING};
 
+/// CA-backlog-001: the atomic-claim reservation status written by
+/// [`next_claim`]. Deliberately kept LOCAL to `store.rs` (not part of
+/// `task::STATUSES`/the shared `--status` vocabulary) since it's an internal,
+/// transient marker rather than a user-facing lifecycle state — a claimed
+/// task is expected to resolve to `done`/`failed` shortly after via the
+/// SAME id, or be reclaimed as stale (see [`CLAIM_STALE_SECS`]). It compares
+/// unequal to `STATUS_PENDING`/`STATUS_FAILED`, so `Task::is_pending()`
+/// correctly excludes a claimed task from `next`'s candidate pool without any
+/// change to `is_pending` itself.
+const STATUS_CLAIMED: &str = "claimed";
+
 /// TOML ファイル全体のラッパー。[[task]] 配列を保持する。
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct TasksFile {
@@ -249,26 +260,88 @@ fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
     Ok(())
 }
 
+/// CA-backlog-002: upper bound on how long [`is_claimed_elsewhere`] will wait
+/// for the `condukt state is-claimed` subprocess before giving up and treating
+/// it as "not claimed". This call runs INSIDE `with_tasks_lock`'s critical
+/// section (via `check_duplicate`), so an unbounded wait (the old
+/// `Command::output()`, which blocks until the child exits) lets a hung/slow
+/// `condukt` process hold the tasks-file lock indefinitely — well past
+/// [`TASKS_LOCK_STALE_SECS`] (5s), at which point a second process reaps the
+/// "stale" lock and steals it mid-critical-section, causing a lost update on
+/// tasks.toml. Bounding this well under that stale-reap window (an order of
+/// magnitude under 5s) means a hang here can never itself be the cause of a
+/// lock-steal: the call always gives up long before the lock could look stale.
+const IS_CLAIMED_TIMEOUT: Duration = Duration::from_millis(300);
+/// Poll interval while waiting for the subprocess to exit.
+const IS_CLAIMED_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
 /// Fail-soft check: does a live cross-session claim (from any `condukt` run)
 /// hold this hashkey? Shells out to `condukt state is-claimed --hashkey <h>`
 /// (exit 0 = claimed, exit 1 = not claimed). Any other outcome — `condukt`
-/// missing from PATH, spawn failure, unexpected exit code — is treated as
-/// "not claimed" so a stale or absent `condukt` never blocks `backlog add`.
+/// missing from PATH, spawn failure, unexpected exit code, OR the subprocess
+/// failing to exit within [`IS_CLAIMED_TIMEOUT`] (CA-backlog-002) — is treated
+/// as "not claimed" so a stale, absent, or hung `condukt` never blocks
+/// `backlog add`, and — critically — never holds the tasks-file lock past a
+/// bound well under the stale-reap window.
 fn is_claimed_elsewhere(hashkey: &str) -> bool {
-    std::process::Command::new("condukt")
+    let mut child = match std::process::Command::new("condukt")
         .arg("state")
         .arg("is-claimed")
         .arg("--hashkey")
         .arg(hashkey)
-        .output()
-        .map(|out| out.status.success())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    run_with_bounded_wait(&mut child, IS_CLAIMED_TIMEOUT, IS_CLAIMED_POLL_INTERVAL)
+        .map(|status| status.success())
         .unwrap_or(false)
+}
+
+/// Wait for `child` to exit, polling `try_wait` (non-blocking) instead of the
+/// blocking `wait()`/`output()`, so the caller can give up after `timeout`
+/// elapses. On timeout, best-effort `kill()` the child (so it doesn't linger
+/// as an orphan) and return `None` — the caller treats `None` as "unknown,
+/// fail open". Returns `Some(exit_status)` if the child exits within the
+/// budget.
+fn run_with_bounded_wait(
+    child: &mut std::process::Child,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> Option<std::process::ExitStatus> {
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait(); // reap so it doesn't become a zombie
+                    return None;
+                }
+                std::thread::sleep(poll_interval);
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 /// pending/failed タスクを優先度順 (priority() 昇順、同優先度は created_at 昇順) で返す。
 /// tag_filter: Some(tag) なら tags にそのタグを含むものだけ。
 /// project_filter: Some(project) ならプロジェクトが一致するものだけ (repo_root との比較)。
 /// defer_until が未来のタスク (is_deferred) はスキップする。
+///
+/// CA-backlog-001: this is a PURE READ — no lock, no mutation. It returns a
+/// clone of a task left in `pending`, so two concurrent callers can be handed
+/// the identical task before either acts on it. This is the pre-existing,
+/// still-supported default behavior for callers that layer their own
+/// external claim/dedup on top (e.g. `/flow`'s `condukt state claim-task`).
+/// Callers who need backlog itself to guarantee at most one claimant should
+/// use [`next_claim`] instead.
 pub fn next(
     path: &Path,
     tag_filter: Option<&str>,
@@ -276,6 +349,18 @@ pub fn next(
 ) -> Result<Option<Task>> {
     let now = now_unix();
     let tasks = load(path)?;
+    Ok(pick_next(&tasks, now, tag_filter, project_filter).map(|t| (*t).clone()))
+}
+
+/// Selects the single highest-priority eligible task from `tasks` (shared by
+/// [`next`] and [`next_claim`] so both use IDENTICAL candidate-selection and
+/// ordering logic).
+fn pick_next<'a>(
+    tasks: &'a [Task],
+    now: i64,
+    tag_filter: Option<&str>,
+    project_filter: Option<&str>,
+) -> Option<&'a Task> {
     let mut candidates: Vec<&Task> = tasks
         .iter()
         .filter(|t| t.is_pending())
@@ -291,7 +376,80 @@ pub fn next(
         .collect();
 
     candidates.sort_by(|a, b| queue_order(a, b));
-    Ok(candidates.first().map(|t| (*t).clone()))
+    candidates.into_iter().next()
+}
+
+/// CA-backlog-001: a claim older than this (by `updated_at`) is treated as
+/// abandoned (the claimant crashed or was killed before calling `done`/`fail`)
+/// and is eligible to be reclaimed by a fresh [`next_claim`] call, so a dead
+/// claimant never permanently removes a task from the queue.
+pub const CLAIM_STALE_SECS: i64 = 3600;
+
+/// Atomically select the next eligible task AND mark it `claimed` in the same
+/// tasks-file-lock critical section, so a second concurrent `next_claim` call
+/// — even one racing within the same window — cannot observe and return the
+/// same task before the first call's claim is persisted (CA-backlog-001).
+///
+/// This is opt-in (`backlog next --claim`); the plain [`next`] (no `--claim`)
+/// keeps its pre-existing pure-read behavior for existing callers, so this
+/// does not change default behavior in an incompatible way.
+///
+/// A `claimed` task is excluded from the candidate pool (`is_pending()` is
+/// false for `claimed`), UNLESS its claim is older than [`CLAIM_STALE_SECS`],
+/// in which case it is treated as eligible again (stale-claim reclaim) so a
+/// crashed claimer can't strand a task forever.
+///
+/// Returns the claimed task (with its in-memory `status` already updated to
+/// `claimed` to match what was persisted), or `None` if no eligible task
+/// exists.
+pub fn next_claim(
+    path: &Path,
+    tag_filter: Option<&str>,
+    project_filter: Option<&str>,
+) -> Result<Option<Task>> {
+    with_tasks_lock(path, || {
+        let now = now_unix();
+        let mut tasks = load(path)?;
+
+        // Build the pending-or-reclaimable-stale-claim candidate pool inline
+        // (can't reuse `pick_next`'s `is_pending()`-only filter as-is, since a
+        // fresh claim must NOT be reclaimable, only a stale one).
+        let winner_id = {
+            let mut candidates: Vec<&Task> = tasks
+                .iter()
+                .filter(|t| {
+                    t.is_pending()
+                        || (t.status == STATUS_CLAIMED
+                            && now.saturating_sub(t.updated_at) >= CLAIM_STALE_SECS)
+                })
+                .filter(|t| !t.is_deferred(now))
+                .filter(|t| match tag_filter {
+                    Some(tag) => t.tags.iter().any(|tg| tg == tag),
+                    None => true,
+                })
+                .filter(|t| match project_filter {
+                    Some(proj) => project_matches(&t.project, proj),
+                    None => true,
+                })
+                .collect();
+            candidates.sort_by(|a, b| queue_order(a, b));
+            candidates.first().map(|t| t.id.clone())
+        };
+
+        let Some(id) = winner_id else {
+            return Ok(None);
+        };
+
+        let task = tasks
+            .iter_mut()
+            .find(|t| t.id == id)
+            .expect("winner_id came from tasks");
+        task.status = STATUS_CLAIMED.to_string();
+        task.updated_at = now;
+        let claimed = task.clone();
+        save(path, &tasks)?;
+        Ok(Some(claimed))
+    })
 }
 
 /// The deterministic source-layer queue order:
@@ -1004,11 +1162,251 @@ mod tests {
         let path = tmp_path();
         let id = add(&path, "Fix login", "/repo", vec![], "", 100).unwrap();
         mark_done(&path, &id).unwrap();
-        // A done task with the same title/project must NOT block a re-add.
+        // A done task with the same title/project must NOT block a new add.
         let new_id = add(&path, "Fix login", "/repo", vec![], "", 200)
             .expect("a done duplicate must not block a new add");
         let tasks = load(&path).unwrap();
         assert_eq!(tasks.len(), 2);
         assert!(tasks.iter().any(|t| t.id == new_id));
+    }
+
+    // --- CA-backlog-001: next() is a pure read; next_claim() is atomic -----
+
+    /// F→P regression oracle for CA-backlog-001. `next()` is documented as a
+    /// pure read (no lock, no mutation): confirms two concurrent plain `next()`
+    /// calls against a SINGLE pending task both return that SAME task (proving
+    /// the vulnerability the finding describes still exists for the default,
+    /// backward-compatible path — `next` itself does not change).
+    #[test]
+    fn next_plain_is_unsynchronized_pure_read() {
+        let path = tmp_path();
+        let id = add(&path, "Only task", "/repo", vec![], "", 100).unwrap();
+
+        let a = next(&path, None, None).unwrap().unwrap();
+        let b = next(&path, None, None).unwrap().unwrap();
+        // Both reads see the same still-pending task — this is the documented
+        // (pre-existing, unchanged) behavior of the default `next`.
+        assert_eq!(a.id, id);
+        assert_eq!(b.id, id);
+        assert_eq!(a.status, "pending");
+        assert_eq!(b.status, "pending");
+    }
+
+    /// F→P regression oracle for CA-backlog-001 (the fix). Many threads race
+    /// `next_claim` against a SINGLE pending task concurrently. Atomicity
+    /// (claim happens inside the same tasks-file-lock critical section as
+    /// selection) must guarantee EXACTLY ONE of them observes the task as the
+    /// winner — never zero, never more than one. This is reliably RED
+    /// (multiple winners) against the old unsynchronized `next()`, and GREEN
+    /// against `next_claim()`.
+    #[test]
+    fn next_claim_concurrent_callers_never_double_claim() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+
+        for iter in 0..15 {
+            let path = tmp_path();
+            let id = add(&path, "Contended task", "/repo", vec![], "", 100).unwrap();
+
+            const N: usize = 16;
+            let barrier = Arc::new(Barrier::new(N));
+            let path = Arc::new(path);
+            let winners = Arc::new(AtomicUsize::new(0));
+
+            let mut handles = Vec::with_capacity(N);
+            for _ in 0..N {
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                let winners = Arc::clone(&winners);
+                let id = id.clone();
+                handles.push(std::thread::spawn(move || {
+                    barrier.wait();
+                    if let Ok(Some(t)) = next_claim(path.as_path(), None, None) {
+                        if t.id == id {
+                            winners.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                }));
+            }
+            for h in handles {
+                h.join().expect("thread join");
+            }
+
+            assert_eq!(
+                winners.load(Ordering::SeqCst),
+                1,
+                "iter {iter}: exactly one concurrent next_claim caller must win the single \
+                 pending task (CA-backlog-001); saw {} winners",
+                winners.load(Ordering::SeqCst)
+            );
+
+            // The task itself must now be persisted as claimed exactly once.
+            let tasks = load(path.as_path()).unwrap();
+            let claimed_count = tasks
+                .iter()
+                .filter(|t| t.id == id && t.status == "claimed")
+                .count();
+            assert_eq!(claimed_count, 1, "iter {iter}: task must end up claimed");
+        }
+    }
+
+    #[test]
+    fn next_claim_excludes_already_claimed_task() {
+        let path = tmp_path();
+        add(&path, "Task", "/repo", vec![], "", 100).unwrap();
+        let first = next_claim(&path, None, None).unwrap();
+        assert!(first.is_some());
+        assert_eq!(first.unwrap().status, "claimed");
+
+        // A second claim call must NOT re-offer the already-claimed task.
+        let second = next_claim(&path, None, None).unwrap();
+        assert!(
+            second.is_none(),
+            "a claimed task must not be handed out again"
+        );
+    }
+
+    #[test]
+    fn next_excludes_claimed_task_too() {
+        // Plain `next` also must not resurface a claimed task (claimed is not
+        // `is_pending()`), so `next` and `next_claim` agree on what's eligible.
+        let path = tmp_path();
+        add(&path, "Task", "/repo", vec![], "", 100).unwrap();
+        next_claim(&path, None, None).unwrap();
+        assert!(next(&path, None, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn next_claim_reclaims_stale_claim() {
+        let path = tmp_path();
+        let id = add(&path, "Task", "/repo", vec![], "", 100).unwrap();
+        next_claim(&path, None, None).unwrap();
+
+        // Force the claim to look old by rewriting updated_at directly.
+        let mut tasks = load(&path).unwrap();
+        tasks[0].updated_at = 100; // far in the past relative to `now_unix()`
+        save(&path, &tasks).unwrap();
+
+        // A stale claim (older than CLAIM_STALE_SECS) must be reclaimable.
+        let reclaimed = next_claim(&path, None, None).unwrap();
+        assert!(
+            reclaimed.is_some(),
+            "a stale claim must be reclaimable, not stuck forever"
+        );
+        assert_eq!(reclaimed.unwrap().id, id);
+    }
+
+    #[test]
+    fn next_claim_respects_filters_and_ordering() {
+        let path = tmp_path();
+        add(&path, "Low", "/repo", vec!["p2".into()], "", 100).unwrap();
+        add(&path, "High", "/repo", vec!["p0".into()], "", 200).unwrap();
+        let t = next_claim(&path, None, None).unwrap().unwrap();
+        assert_eq!(t.title, "High");
+    }
+
+    #[test]
+    fn next_claim_done_releases_and_completes() {
+        // A normal claim → done lifecycle still works: mark_done acts on the
+        // claimed task by id regardless of its current (claimed) status.
+        let path = tmp_path();
+        let id = add(&path, "Task", "/repo", vec![], "", 100).unwrap();
+        let claimed = next_claim(&path, None, None).unwrap().unwrap();
+        assert_eq!(claimed.id, id);
+        mark_done(&path, &id).unwrap();
+        let tasks = load(&path).unwrap();
+        assert_eq!(tasks[0].status, "done");
+    }
+
+    // --- CA-backlog-002: is_claimed_elsewhere must be bounded ---------------
+
+    /// F→P regression oracle for CA-backlog-002. Simulates a hung/slow
+    /// `condukt state is-claimed` subprocess (here, literally shelling out to a
+    /// process that sleeps far longer than IS_CLAIMED_TIMEOUT) via
+    /// `run_with_bounded_wait` directly, and asserts the bounded wait gives up
+    /// (returns `None`) well under `TASKS_LOCK_STALE_SECS` (5s) — proving the
+    /// call cannot itself hold the tasks-file lock's critical section past a
+    /// bound shorter than the stale-reap window.
+    #[test]
+    fn bounded_wait_gives_up_before_stale_reap_window() {
+        // A subprocess that sleeps far longer than both IS_CLAIMED_TIMEOUT and
+        // TASKS_LOCK_STALE_SECS, to prove the bound is enforced rather than
+        // incidentally fast.
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sleep 30");
+
+        let start = std::time::Instant::now();
+        let result = run_with_bounded_wait(
+            &mut child,
+            Duration::from_millis(300),
+            Duration::from_millis(5),
+        );
+        let elapsed = start.elapsed();
+
+        assert!(
+            result.is_none(),
+            "a hung subprocess must be treated as timed-out (None), not waited on forever"
+        );
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "CA-backlog-002: bounded wait took {elapsed:?}, must give up well under \
+             TASKS_LOCK_STALE_SECS ({TASKS_LOCK_STALE_SECS}s)"
+        );
+
+        // Best-effort reap: the child must have been killed, not left hanging.
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// End-to-end version of the same oracle through the real fail-soft
+    /// surface: `is_claimed_elsewhere` shells out to a `condukt` binary that,
+    /// in this test, we make resolve (via PATH override) to a slow/hanging
+    /// script instead of the real `condukt`. The call must return `false`
+    /// ("not claimed", fail-open per spec) within well under
+    /// `TASKS_LOCK_STALE_SECS`, never blocking on the hang.
+    #[test]
+    fn is_claimed_elsewhere_does_not_block_past_lock_stale_window_on_hang() {
+        let dir = tempfile::tempdir().expect("tmp dir");
+        let fake_condukt = dir.path().join("condukt");
+        std::fs::write(
+            &fake_condukt,
+            "#!/bin/sh\nsleep 30\nexit 0\n", // would report "claimed" if ever awaited
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&fake_condukt).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&fake_condukt, perms).unwrap();
+        }
+
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        // Prepend the fake `condukt` dir so it's found first.
+        let new_path = format!("{}:{}", dir.path().display(), old_path);
+        std::env::set_var("PATH", &new_path);
+
+        let start = std::time::Instant::now();
+        let claimed = is_claimed_elsewhere("deadbeefcafef00d");
+        let elapsed = start.elapsed();
+
+        std::env::set_var("PATH", old_path);
+
+        assert!(
+            !claimed,
+            "a hung condukt subprocess must fail-open to 'not claimed'"
+        );
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "CA-backlog-002: is_claimed_elsewhere took {elapsed:?} against a hung subprocess, \
+             must give up well under TASKS_LOCK_STALE_SECS ({TASKS_LOCK_STALE_SECS}s) so it \
+             cannot hold with_tasks_lock's critical section past the stale-reap window"
+        );
     }
 }

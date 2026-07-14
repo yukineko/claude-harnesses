@@ -1,7 +1,7 @@
 {
   "name": "propguard",
-  "version": "0.1.11",
-  "description": "v0.1.11: the systemic-outage finding call site follows overwatch's new `ReviewFinding.rationale`/`record_finding` signature (passes `None` — no behavior change, just keeps the call site compiling against the extended API). Property gate for Claude Code: on Stop, derive 3–5 semantic properties (invariants) from a task's done_criteria and check the generated code against them before the agent can declare done. In inject mode it blocks and injects a property checklist for the running agent to self-verify (no API key); in subprocess mode it runs an independent checker and counts per-property PASS/FAIL, blocking when fewer than a threshold hold. Goes beyond 'concrete tests pass'. Subscription-native, bundled Rust binary.",
+  "version": "0.1.12",
+  "description": "v0.1.12: fixed a hang in run_checker() where the stdin write to the checker process ran synchronously before wait_timeout, so a checker that flooded stdout before draining stdin could deadlock with zero protection from checker_timeout_secs; the write now happens on a background thread so wait_timeout always bounds the call. Property gate for Claude Code: on Stop, derive 3–5 semantic properties (invariants) from a task's done_criteria and check the generated code against them before the agent can declare done. In inject mode it blocks and injects a property checklist for the running agent to self-verify (no API key); in subprocess mode it runs an independent checker and counts per-property PASS/FAIL, blocking when fewer than a threshold hold. Goes beyond 'concrete tests pass'. Subscription-native, bundled Rust binary.",
   "author": {
     "name": "yukineko"
   },

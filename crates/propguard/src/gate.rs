@@ -238,7 +238,6 @@ pub fn decide_from_count(
     prior_attempts: u32,
     criteria: &str,
 ) -> Decision {
-    let prop_ids: Vec<&'static str> = props.iter().map(|p| p.id).collect();
     match outcome {
         CheckOutcome::Error(e) => {
             // Fail closed but bounded: block up to max_attempts, then give up
@@ -257,11 +256,17 @@ pub fn decide_from_count(
                     last_hash: String::new(),
                 };
             }
+            // The checker never ran, so NOTHING was evaluated. Report no
+            // per-property violations: attributing the full derived prop_ids
+            // here would pollute the property_id-keyed fleet-correlation store
+            // with unchecked ids counted as real per-property violations
+            // (CA-propguard-03). Mirrors the below-threshold path, which only
+            // reports ids actually established as violated.
             Decision::Block {
                 reason: checker_unavailable_reason(&e, attempts, cfg.max_attempts),
                 tag: "checker-unavailable",
                 files,
-                properties: prop_ids,
+                properties: Vec::new(),
                 attempts,
                 last_hash: String::new(),
             }
@@ -399,11 +404,10 @@ fn allow(tag: &'static str, st: &crate::state::SessionState) -> Decision {
 /// loudly — same shape as reviewgate's truncation guard.
 fn decide_truncated(
     cfg: &Config,
-    props: &[Property],
+    _props: &[Property],
     files: Vec<String>,
     prior_attempts: u32,
 ) -> Decision {
-    let prop_ids: Vec<&'static str> = props.iter().map(|p| p.id).collect();
     let attempts = prior_attempts + 1;
     if attempts > cfg.max_attempts {
         eprintln!(
@@ -419,11 +423,16 @@ fn decide_truncated(
             last_hash: String::new(),
         };
     }
+    // The truncated tail was never checked, so no property was actually
+    // evaluated as violated. Report no per-property violations: attributing
+    // the full derived prop_ids here would pollute the property_id-keyed
+    // fleet-correlation store the same way CA-propguard-03 does
+    // (CA-propguard-04).
     Decision::Block {
         reason: truncated_reason(cfg, &files, attempts, cfg.max_attempts),
         tag: "diff-truncated",
         files,
-        properties: prop_ids,
+        properties: Vec::new(),
         attempts,
         last_hash: String::new(),
     }
@@ -925,6 +934,40 @@ mod tests {
         }
     }
 
+    // ── CA-propguard-03: a checker-unavailable Block must NOT attribute
+    //    per-property violations. The checker never ran, so nothing was
+    //    actually evaluated; stuffing the full derived prop_ids into
+    //    `Block.properties` pollutes the property_id-keyed fleet-correlation
+    //    store with unchecked ids counted as real per-property violations. ────
+    #[test]
+    fn checker_unavailable_block_reports_no_property_violations() {
+        let cfg = cfg_default();
+        let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
+        let d = decide_from_count(
+            &cfg,
+            CheckOutcome::Error("spawn: boom".to_string()),
+            &props,
+            3,
+            vec!["src/x.rs".to_string()],
+            "h".to_string(),
+            0,
+            "dc",
+        );
+        match d {
+            Decision::Block {
+                tag, properties, ..
+            } => {
+                assert_eq!(tag, "checker-unavailable");
+                assert!(
+                    properties.is_empty(),
+                    "a checker-unavailable block evaluated no property — it must not \
+                     report any per-property violation to the correlation store, got {properties:?}"
+                );
+            }
+            Decision::Allow { .. } => panic!("checker error must block (fail-closed)"),
+        }
+    }
+
     #[test]
     fn checker_error_gives_up_after_max_attempts_but_never_traps() {
         let cfg = cfg_default();
@@ -1227,6 +1270,31 @@ mod tests {
         }
         let g = decide_truncated(&cfg, &props, vec!["src/x.rs".to_string()], cfg.max_attempts);
         assert!(matches!(g, Decision::Allow { tag, .. } if tag == "truncated-giveup"));
+    }
+
+    // ── CA-propguard-04: a diff-truncated Block must NOT attribute
+    //    per-property violations. The truncated tail was never checked, so no
+    //    property was actually evaluated as violated; reporting the full
+    //    prop_ids pollutes the property_id-keyed fleet-correlation store the
+    //    same way CA-propguard-03 does. ──────────────────────────────────────
+    #[test]
+    fn truncated_block_reports_no_property_violations() {
+        let cfg = cfg_default();
+        let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
+        let d = decide_truncated(&cfg, &props, vec!["src/x.rs".to_string()], 0);
+        match d {
+            Decision::Block {
+                tag, properties, ..
+            } => {
+                assert_eq!(tag, "diff-truncated");
+                assert!(
+                    properties.is_empty(),
+                    "a diff-truncated block checked nothing (the tail was dropped) — it must \
+                     not report any per-property violation to the correlation store, got {properties:?}"
+                );
+            }
+            Decision::Allow { .. } => panic!("a truncated diff must block"),
+        }
     }
 
     #[test]

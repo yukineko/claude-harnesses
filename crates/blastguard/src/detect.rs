@@ -90,7 +90,8 @@ fn detect_bash(cmd: &str, depth: usize) -> Decision {
         return Decision::deny("fork bomb pattern detected");
     }
 
-    // 2. Truncating `>` redirects (quote-aware, ignores >>, 2>, &>, >&). Scan
+    // 2. Truncating `>` redirects (quote-aware, ignores >>, &>>, 2>, >&; but
+    //    catches the combined stdout+stderr truncating form `&>`). Scan
     // *every* redirect on the line, not just the first: a safe early redirect
     // (`> /dev/null`) must not blind the gate to a later truncating redirect in
     // a subsequent `;`/`&&`/`|` segment.
@@ -168,14 +169,15 @@ fn split_segments(cmd: &str) -> Vec<String> {
 }
 
 /// Find the first single `>` redirect outside quotes and return its target
-/// token. Returns None for `>>`, `2>`, `&>`, `>&` and quoted `>`.
+/// token. Returns None for `>>`, `&>>`, `2>`, `>&` and quoted `>` (but `&>` —
+/// the combined stdout+stderr truncating form — yields its target).
 #[cfg(test)]
 fn single_redirect_target(seg: &str) -> Option<String> {
     redirect_targets(seg).into_iter().next()
 }
 
 /// Every single `>` truncating-redirect target on the line, in order, outside
-/// quotes. Skips `>>`, `2>`, `&>`, `>&`, quoted `>`, Rust arrows (`->`) and
+/// quotes. Skips `>>`, `&>>`, `2>`, `>&`, quoted `>`, Rust arrows (`->`) and
 /// angle-bracket placeholders (`<value>`). Scanning the *whole* line (rather
 /// than pre-split segments) keeps the fd-dup context (`2>&1`, `>&2`) intact
 /// while still catching a truncating redirect in any later segment.
@@ -213,8 +215,13 @@ fn redirect_targets(seg: &str) -> Vec<String> {
                 &bytes[s..i] != b"1"
             };
             // Skip append `>>`, fd dup forms, and stderr/other-fd forms.
-            if next == b'>' || prev == b'>' || prev == b'&' || explicit_nonstdout_fd || next == b'&'
-            {
+            // NOTE: `&>` (prev == `&`, single `>`) is NOT an fd-dup form — it is
+            // the combined stdout+stderr TRUNCATING redirect (`echo x &> f` /
+            // `&>f`), so it must fall through and be read as a real truncating
+            // target. Only the APPEND form `&>>` (caught here by `next == b'>'`)
+            // is non-truncating and stays skipped. (`2>&1`, `>&2` are still
+            // skipped via `next == b'&'`.)
+            if next == b'>' || prev == b'>' || explicit_nonstdout_fd || next == b'&' {
                 i += 1;
                 continue;
             }
@@ -670,6 +677,20 @@ fn analyze_git(rest: &[&str]) -> Decision {
             }
             Decision::Allow
         }
+        "restore" => {
+            // `git restore <path>` / `git restore .` overwrites the working tree
+            // from the index (or a source), discarding uncommitted changes — the
+            // same hazard as the already-denied `git checkout -- .` form.
+            // `git restore --staged <path>` (without `--worktree`) only unstages
+            // and leaves the working tree intact, so it stays allowed.
+            let staged = rest.contains(&"--staged") || has_short(rest, 'S');
+            let worktree = rest.contains(&"--worktree") || has_short(rest, 'W');
+            if staged && !worktree {
+                Decision::Allow
+            } else {
+                Decision::deny("git restore discards working-tree changes")
+            }
+        }
         _ => Decision::Allow,
     }
 }
@@ -830,6 +851,21 @@ mod tests {
     }
 
     #[test]
+    fn ca_blastguard_05_git_restore_working_tree_discard_is_denied() {
+        // CA-blastguard-05: `git restore` overwrites the working tree from the
+        // index/source, discarding uncommitted work — same hazard as the
+        // already-denied `git checkout -- .`. analyze_git used to fall through
+        // to Allow for `restore`.
+        assert!(bash("git restore .").is_deny());
+        assert!(bash("git restore src/main.rs").is_deny());
+        assert!(bash("git restore --worktree file").is_deny());
+        assert!(bash("git restore --staged --worktree file").is_deny());
+        // `git restore --staged <path>` only unstages; the working tree is left
+        // intact, so it stays allowed.
+        assert_eq!(bash("git restore --staged file"), Decision::Allow);
+    }
+
+    #[test]
     fn denies_truncate_shred_mkfs_dd_chmod_chown_find() {
         assert!(bash("truncate -s0 x").is_deny());
         assert!(bash("truncate -s 0 file").is_deny());
@@ -854,6 +890,21 @@ mod tests {
         assert!(bash("echo x > existing").is_deny());
         assert!(bash("cat a > b.txt").is_deny());
         assert!(bash(":(){ :|:& };:").is_deny());
+    }
+
+    #[test]
+    fn ca_blastguard_04_ampersand_gt_truncating_redirect_is_denied() {
+        // CA-blastguard-04: `&>` is the combined stdout+stderr TRUNCATING
+        // redirect — it overwrites the target file. The classifier used to skip
+        // it as an fd-dup form, bypassing the truncating-redirect DENY.
+        assert!(bash("echo x &> target").is_deny());
+        assert!(bash("echo x &>target").is_deny()); // no-space form
+        assert!(bash("cat a &> b.txt").is_deny());
+        // The APPEND form `&>>` does NOT truncate and stays allowed.
+        assert_eq!(bash("echo x &>> log.txt"), Decision::Allow);
+        // fd-dup forms remain unaffected.
+        assert_eq!(bash("cargo test 2>&1"), Decision::Allow);
+        assert_eq!(bash("make >&2"), Decision::Allow);
     }
 
     #[test]
@@ -1078,7 +1129,9 @@ mod tests {
         // CA-blastguard-007: is_inline_eval_flag only matched exact tokens
         // (-c, -e, …); a combined short flag like `-ic` (python's -i stacked
         // with -c) must also be recognized as carrying an inline-eval flag.
-        assert!(bash("find . -exec python3 -ic \"import os; os.system('rm -rf /')\" \\;").is_deny());
+        assert!(
+            bash("find . -exec python3 -ic \"import os; os.system('rm -rf /')\" \\;").is_deny()
+        );
         // Control: an unrelated long flag containing 'c'/'e'/'r'/'p' letters
         // (e.g. `--color`) must NOT be mistaken for a stacked eval flag.
         assert_eq!(
@@ -1092,10 +1145,15 @@ mod tests {
         // CA-blastguard-008: is_code_interpreter only matched exact unversioned
         // basenames; a versioned binary like `python3.12` must also be
         // recognized as a code interpreter.
-        assert!(bash("find . -exec python3.12 -c \"import os; os.system('rm -rf /')\" \\;").is_deny());
+        assert!(
+            bash("find . -exec python3.12 -c \"import os; os.system('rm -rf /')\" \\;").is_deny()
+        );
         // Control: a plain script-file invocation with a versioned
         // interpreter (no inline-eval flag) stays allowed.
-        assert_eq!(bash("find . -exec python3.12 script.py \\;"), Decision::Allow);
+        assert_eq!(
+            bash("find . -exec python3.12 script.py \\;"),
+            Decision::Allow
+        );
     }
 
     #[test]

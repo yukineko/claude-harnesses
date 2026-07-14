@@ -384,6 +384,16 @@ stuckguard/mutategate）なので、stuckguard を触る Phase 4・Phase 6 の r
 （CLAUDE.md の GATE クレート反映ルール）。overwatch/flow/ctxrot/condukt は非 GATE なので canary 不要。
 （当初「GATE_CRATES ではないため canary 不要」と記していたが誤り。stuckguard は GATE。）
 
+**continuous-audit との関係**: canary（段階反映＋health-gate）と continuous-audit
+（GATE_CRATES を敵対的にレビューする opt-in の別ループ、`overwatch /continuous-audit` /
+`scripts/continuous-audit.sh`）は別の仕組みである。`.githooks/pre-push` は GATE_CRATES 配下の
+差分を検知すると `continuous-audit.sh --dry-run` を advisory で勧める（fail-soft、push は
+止めない）ので、Phase 4・Phase 6 の PR を push する際は自然にこの advisory が出る想定。
+stuckguard に足す2つの検出器（scope drift・heartbeat 便乗）は、いずれも「advisory を出す/
+既存コマンドを1つ呼ぶ」だけの小さな追加で `watch` の中核ロジック（repeat/oscillation 検出）には
+触れないが、GATE_CRATE である以上 continuous-audit の敵対的レビューを一度は通す（canary の
+health-gate とは別に、ロジックの正しさそのものをレビューする）ことを推奨する。
+
 ---
 
 ## 9. リスク・トレードオフ

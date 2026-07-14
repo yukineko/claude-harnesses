@@ -1,7 +1,7 @@
 {
   "name": "blastguard",
-  "version": "0.1.16",
-  "description": "A PreToolUse guard for Claude Code: inspects Bash commands and file operations and denies the project-destroying ones — recursive/wildcard rm, git reset --hard, git clean -fdx, truncate/shred/mkfs, dd of=, recursive chmod/chown, find -delete, and single-> overwrites — while exempting repo config files. Subscription-native (one hook + bundled Rust binary, no API key).",
+  "version": "0.1.17",
+  "description": "v0.1.17: analyze_find() now also denies find's -ok/-okdir (the interactive-confirmation twins of -exec/-execdir; same arbitrary per-match command, just gated behind a y/n prompt, which doesn't make the payload any less destructive). A PreToolUse guard for Claude Code: inspects Bash commands and file operations and denies the project-destroying ones — recursive/wildcard rm, git reset --hard, git clean -fdx, truncate/shred/mkfs, dd of=, recursive chmod/chown, find -delete, and single-> overwrites — while exempting repo config files. Subscription-native (one hook + bundled Rust binary, no API key).",
   "author": {
     "name": "yukineko"
   },

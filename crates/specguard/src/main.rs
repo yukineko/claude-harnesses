@@ -846,7 +846,14 @@ fn finish(
     paths: &report::Paths,
     outs: Vec<agent::ShardOutput>,
 ) -> Result<u8> {
-    let head = scope::current_head(&l.repo_root).unwrap_or_else(|_| "UNKNOWN".to_string());
+    // CA-specguard-005: if current_head() errors here (e.g. git unavailable)
+    // while a sentinel is about to be RAISED, the fallback must be a value
+    // that `report::has_new_commits` can never satisfy without `--force` —
+    // NOT an arbitrary placeholder that would equal-check away as soon as
+    // git recovers and `ack` runs against a real HEAD. See
+    // `report::POISONED_RAISED_AT` for the fail-closed contract.
+    let head = scope::current_head(&l.repo_root)
+        .unwrap_or_else(|_| report::POISONED_RAISED_AT.to_string());
 
     // Nothing in scope and no invariants: record progress without an agent call.
     if shards.is_empty() {
@@ -2119,6 +2126,61 @@ mod tests {
         .unwrap();
         let paths = make_paths(sentinel.clone());
         let result = ack(&paths, &repo_root(), false).unwrap();
+        assert_eq!(result, EXIT_OK);
+        assert!(!sentinel.exists(), "sentinel should have been removed");
+    }
+
+    #[test]
+    fn ack_blocks_when_raised_at_poisoned_even_with_healthy_head() {
+        // CA-specguard-005 regression: simulate a sentinel that was RAISED at
+        // a moment when scope::current_head() errored (e.g. git unavailable),
+        // so `finish()` fell back to `report::POISONED_RAISED_AT` instead of a
+        // real hash (see main.rs `finish`). Later, git is healthy again and
+        // `ack` (no --force) resolves a perfectly normal current HEAD with
+        // zero fix commits made since the raise. Without the fix, a plain
+        // string inequality (`POISONED_RAISED_AT != <real head>`) would read
+        // as "a new commit happened" and let ack clear the sentinel for free
+        // — the exact ack-bypass this test guards against.
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("sentinel.txt");
+        std::fs::write(
+            &sentinel,
+            format!(
+                "date: 2026-07-14\nraised_at: {}\n",
+                report::POISONED_RAISED_AT
+            ),
+        )
+        .unwrap();
+        let paths = make_paths(sentinel.clone());
+        // repo_root() is a real, healthy git repo, so current_head() inside
+        // ack() resolves successfully to some real (non-poisoned) hash —
+        // exercising the "git recovered" scenario, not the CA-specguard-003
+        // (current_head errors during ack) path.
+        assert!(scope::current_head(&repo_root()).is_ok());
+        let result = ack(&paths, &repo_root(), false).unwrap();
+        assert_eq!(result, EXIT_NO_FIX_COMMIT);
+        assert!(
+            sentinel.exists(),
+            "sentinel raised with a poisoned raised_at must NOT be clearable \
+             by ack without --force, even once HEAD resolves normally again"
+        );
+    }
+
+    #[test]
+    fn ack_force_still_clears_poisoned_sentinel() {
+        // --force must remain the escape hatch regardless of raised_at value.
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("sentinel.txt");
+        std::fs::write(
+            &sentinel,
+            format!(
+                "date: 2026-07-14\nraised_at: {}\n",
+                report::POISONED_RAISED_AT
+            ),
+        )
+        .unwrap();
+        let paths = make_paths(sentinel.clone());
+        let result = ack(&paths, &repo_root(), true).unwrap();
         assert_eq!(result, EXIT_OK);
         assert!(!sentinel.exists(), "sentinel should have been removed");
     }

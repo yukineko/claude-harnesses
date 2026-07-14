@@ -56,10 +56,22 @@ pub fn sentinel_pending(paths: &Paths) -> bool {
     paths.sentinel.exists()
 }
 
+/// Sentinel marker for "current_head() could not be resolved at raise time"
+/// (e.g. `scope::current_head()` errored — git unavailable/corrupt worktree —
+/// while a finding was being raised). CA-specguard-005: this must NOT be a
+/// value that can equal-check itself away once git recovers. Unlike a real
+/// hash, [`has_new_commits`] treats this exact marker as *never* satisfiable
+/// (no ordinary HEAD, including this literal string again, counts as a "new
+/// commit" against it) — an ack without `--force` can never clear a sentinel
+/// raised with a poisoned `raised_at`, regardless of the current HEAD.
+pub const POISONED_RAISED_AT: &str = "UNRESOLVABLE-HEAD-AT-RAISE";
+
 /// Raise the sentinel (findings need human review). Mirrors the reference
 /// runner's format so existing SessionStart hooks can parse it.
 /// `raised_at` is the git HEAD at the time of the raise; `ack` uses it to
-/// verify a fix commit was made before clearing the sentinel.
+/// verify a fix commit was made before clearing the sentinel. If `raised_at`
+/// is [`POISONED_RAISED_AT`] (HEAD could not be resolved when raising), the
+/// sentinel can only ever be cleared with `--force` (see [`has_new_commits`]).
 pub fn write_sentinel(
     paths: &Paths,
     date: &str,
@@ -97,8 +109,19 @@ pub fn sentinel_raised_at(content: &str) -> Option<String> {
 
 /// True when `current_head` differs from `raised_at`, meaning at least one new
 /// commit was made after the sentinel was raised (i.e., a fix was committed).
+///
+/// CA-specguard-005: if `raised_at` is [`POISONED_RAISED_AT`] (HEAD could not
+/// be resolved when the sentinel was raised), there is no real commit to
+/// compare against, so this always reads as "no new commits" — even once git
+/// recovers and `current_head` resolves to some real, differing hash. A
+/// poisoned raise can only be cleared with `ack --force`, never by this
+/// automatic check.
 pub fn has_new_commits(raised_at: &str, current_head: &str) -> bool {
-    !raised_at.trim().is_empty() && raised_at.trim() != current_head.trim()
+    let raised_at = raised_at.trim();
+    if raised_at.is_empty() || raised_at == POISONED_RAISED_AT {
+        return false;
+    }
+    raised_at != current_head.trim()
 }
 
 #[cfg(test)]
@@ -185,6 +208,18 @@ mod tests {
     #[test]
     fn has_new_commits_false_when_raised_at_empty() {
         assert!(!has_new_commits("", "abc123"));
+    }
+
+    #[test]
+    fn has_new_commits_false_when_raised_at_poisoned() {
+        // CA-specguard-005: a sentinel raised while current_head() errored
+        // must never be clearable by the automatic "new commit" check, no
+        // matter what the (now-healthy) current HEAD resolves to.
+        assert!(!has_new_commits(POISONED_RAISED_AT, "abc123def"));
+        assert!(!has_new_commits(POISONED_RAISED_AT, "some-other-real-hash"));
+        // Even the degenerate case of the marker appearing as "current" HEAD
+        // (impossible in practice, but must not accidentally toggle true).
+        assert!(!has_new_commits(POISONED_RAISED_AT, POISONED_RAISED_AT));
     }
 
     #[test]

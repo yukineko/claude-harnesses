@@ -80,6 +80,16 @@ pub struct AuditRound {
 impl AuditRound {
     /// Construct a round record. `targets` is normalized (trim, drop blanks,
     /// de-dup preserving first-seen order) so downstream reads are stable.
+    ///
+    /// `regression_tests_added` is clamped to `confirmed` (same rule
+    /// [`set_round_tests`] applies on the close path) so the
+    /// `regression_tests_added <= confirmed` invariant — and therefore
+    /// `closure_rate <= 1.0` — holds for every `AuditRound` no matter which
+    /// CLI path (`record` or `close`) created/updated it. Without this clamp
+    /// here, `overwatch audit-round record --confirmed 1
+    /// --regression-tests-added 999` would persist an unclamped 999 and
+    /// `compute_metrics` would report a closure_rate far above the documented
+    /// `[0,1]` range (CA-overwatch-004).
     pub fn new(
         round: String,
         targets: &[String],
@@ -93,7 +103,7 @@ impl AuditRound {
             targets: normalize_targets(targets),
             new_findings,
             confirmed,
-            regression_tests_added,
+            regression_tests_added: regression_tests_added.min(confirmed),
             ts,
         }
     }
@@ -549,6 +559,45 @@ mod tests {
         );
         assert!(
             m.rounds[1].closure_rate.unwrap() <= 1.0,
+            "closure_rate must never exceed 1.0"
+        );
+        assert!(
+            m.closure_rate.unwrap() <= 1.0,
+            "overall closure_rate must never exceed 1.0"
+        );
+    }
+
+    #[test]
+    fn new_clamps_regression_tests_added_to_confirmed_ca_overwatch_004() {
+        // CA-overwatch-004: the RECORD path (`overwatch audit-round record
+        // --confirmed 1 --regression-tests-added 999`) constructs an
+        // AuditRound directly via `AuditRound::new`, which — unlike the
+        // separate CLOSE path (`set_round_tests`) — previously stored
+        // regression_tests_added VERBATIM with no clamp to confirmed. A
+        // record with confirmed=1, regression_tests_added=999 must persist
+        // regression_tests_added <= confirmed (here, clamped to 1), not 999,
+        // so closure_rate stays within the documented [0,1] range.
+        let r = AuditRound::new(
+            "2026W99".to_string(),
+            &["specguard".to_string()],
+            2,
+            1,
+            999,
+            10,
+        );
+        assert_eq!(
+            r.regression_tests_added, 1,
+            "regression_tests_added must be clamped to confirmed (1), not stored as 999"
+        );
+
+        let m = compute_metrics(std::slice::from_ref(&r), DEFAULT_CONVERGENCE_WINDOW);
+        assert_eq!(
+            m.rounds[0].closure_rate,
+            Some(1.0),
+            "clamped to exactly 1.0, not 999.0"
+        );
+        assert!(
+            m.rounds[0].closure_rate.unwrap() <= 1.0,
             "closure_rate must never exceed 1.0"
         );
         assert!(

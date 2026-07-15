@@ -2,7 +2,6 @@
 //! follow Claude Code's hook contract but are inert when the tool is run as a
 //! plain pre-commit-framework hook (no stdin JSON, no review artifact).
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Parsed subset of the Claude Code Stop-hook stdin payload.
@@ -102,16 +101,97 @@ pub fn write_audit_log(
         "changedCount": changed_count,
     });
     let path = root.join(audit_dir).join("audit-log.jsonl");
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     if let Ok(line) = serde_json::to_string(&entry) {
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-        {
-            let _ = writeln!(f, "{line}");
+        harness_core::append::append_line(&path, &line);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_audit_log_appends_one_parseable_json_line() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_audit_log(
+            dir.path(),
+            ".precommit-audit",
+            "check",
+            "pass",
+            0,
+            &[],
+            0,
+            3,
+            "2026-07-15T00:00:00Z",
+        );
+        let path = dir.path().join(".precommit-audit").join("audit-log.jsonl");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 1);
+        let v: serde_json::Value = serde_json::from_str(lines[0]).expect("one JSON object");
+        assert_eq!(v["verdict"], "pass");
+        assert_eq!(v["changedCount"], 3);
+    }
+
+    /// Regression guard: `write_audit_log` used to append via
+    /// `writeln!(f, "{line}")`, which splits the JSON body and the trailing
+    /// `\n` into two separate `write()` syscalls. Under concurrent
+    /// `O_APPEND` writers (e.g. parallel hook invocations racing on the same
+    /// audit log) that split lets two writers' bodies land back-to-back
+    /// before either newline arrives, concatenating two JSON objects onto
+    /// one physical line and corrupting the JSONL log. Routing through
+    /// `harness_core::append::append_line` (single `write_all` of body+`\n`)
+    /// must keep every record on its own parseable line even under heavy
+    /// concurrent writing.
+    #[test]
+    fn concurrent_write_audit_log_never_interleaves_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().to_path_buf();
+        let audit_dir = ".precommit-audit";
+
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 300;
+
+        std::thread::scope(|scope| {
+            for t in 0..THREADS {
+                let root = root.clone();
+                scope.spawn(move || {
+                    for i in 0..PER_THREAD {
+                        // Vary the category list length so payload size
+                        // varies too, exercising different write offsets.
+                        let categories: Vec<String> =
+                            (0..(i % 5)).map(|k| format!("cat-{t}-{k}")).collect();
+                        write_audit_log(
+                            &root,
+                            audit_dir,
+                            "check",
+                            "pass",
+                            i,
+                            &categories,
+                            0,
+                            i,
+                            "2026-07-15T00:00:00Z",
+                        );
+                    }
+                });
+            }
+        });
+
+        let path = root.join(audit_dir).join("audit-log.jsonl");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut count = 0usize;
+        for (n, l) in text.lines().enumerate() {
+            if l.is_empty() {
+                continue;
+            }
+            serde_json::from_str::<serde_json::Value>(l)
+                .unwrap_or_else(|e| panic!("line {n} is not a single JSON object: {e} — {l:.160}"));
+            count += 1;
         }
+        assert_eq!(
+            count,
+            THREADS * PER_THREAD,
+            "every write_audit_log call must survive as exactly one parseable line"
+        );
     }
 }

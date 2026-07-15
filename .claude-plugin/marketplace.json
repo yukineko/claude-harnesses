@@ -508,7 +508,7 @@
     {
       "name": "precommit-audit",
       "description": "Config-driven pre-commit static audit for Claude Code: a Stop hook that runs generic checks plus your project rules (from a TOML file) over the pending diff — shelling out to git and optional linters — and blocks the stop, feeding findings back to the agent until they're clean. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "category": "quality",
       "keywords": [
         "hooks",

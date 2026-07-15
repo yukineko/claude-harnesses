@@ -183,7 +183,7 @@
     {
       "name": "ctxrot",
       "description": "Context-rot guard for Claude Code: detect, rescue, restore, distill, and CONTROL what loads into context (rule-based allow/deny gate + /ctx pin/drop/load + switchable carryover). Subscription-native (hooks + subagent + skill, no API key).",
-      "version": "0.5.6",
+      "version": "0.5.7",
       "category": "context",
       "keywords": [
         "context",

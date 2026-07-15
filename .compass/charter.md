@@ -1,22 +1,19 @@
 ## north_star
-specguardが2026-07-13の仕様監査(reports/spec-audit/2026-07-13.md)で検出したneeds_user=yesの仕様ドリフト2件をdoc修正で解消し、specguard ackでsentinelを解除する。
+backlog 97ec7512: .compass/charter.md の未コミット変更をcommitするか破棄するか決める
 
 ## definition_of_done
-- crates/condukt/README.md のコマンド表に condukt adversarial の plan と vote サブコマンドの行を追加する
-- crates/condukt/README.md の設定例に adversarial セクション(enabled, size, min_voters, block_ratio)を追加する
-- crates/condukt/README.md の環境変数表に CONDUKT_ADVERSARIAL の行を追加する
-- crates/condukt/skills/condukt/SKILL.md の Phase 7 reconcile 手順に exit 2 (duplicate_completion 検知時のescalate)分岐の説明を追記する
-- docs/OVERVIEW.md の harness-core モジュール表に crates/harness-core/src/lessons.rs (text_similarity 関数)を追加する、または表が代表例のみである旨を明記する
-- specguard ack が成功し 未処理ドリフトの通知が解消される(specguard pending が警告なしを返す)
-- 修正はコミットのみ行い push や PR作成はしない
+- git log --oneline -- .compass/charter.md の既存18件超の慣行(docs(compass): re-carve charter — north_star = ... 形式)に従い、現在の未コミット差分をcommitする
+- backlog 97ec7512 を done にする
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-ゴール(specguardのneeds_user=yesドリフト2件をdoc修正で解消しackでsentinel解除)から現状(condukt README.mdにadversarial plan/vote行・configセクション例・CONDUKT_ADVERSARIAL環境変数行のいずれも未記載、SKILL.md Phase7にreconcileのexit2 duplicate_completion分岐の説明なし、docs/OVERVIEW.mdのharness-coreモジュール表にlessons.rs未掲載、sentinelは.specguard-pendingとして残存)への最大差分: condukt README.mdへの3箇所追記(コマンド表・config例・env var表)、SKILL.md Phase7への1箇所追記、docs/OVERVIEW.mdモジュール表への1行追加、その後specguard ackでsentinel解除、が主スライス。
+charter.mdは過去18回以上 re-carveのたびにcommitされてきた確立済み慣行があるため、今回も同様にcommitするのが一貫した扱い。破棄する理由(charterが誤っている等)は無い。
 
 ## next_action
+git commit -m "docs(compass): re-carve charter — north_star = 97ec7512 charter diff commit-or-discard"
 
 ## parked
+- backlog 942c7d0b: specguard.toml の area/invariant を AEGIS 全域に拡張する — harness plugin自体の実装ではなく別プロダクト(AEGIS)向けの設定作業のため、ユーザー指示によりスコープ外。backlogにはpendingのまま残す。
 

@@ -1,3 +1,5 @@
+#![deny(clippy::panic)]
+
 mod aggregate;
 pub mod audit_round;
 mod audit_round_cli;

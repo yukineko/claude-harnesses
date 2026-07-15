@@ -1,6 +1,7 @@
 //! Overwatch: project-global lease ledger and cross-session dedup.
 //!
 //! Re-exports the public API for use by tests and other crates.
+#![deny(clippy::panic)]
 
 pub mod audit_round;
 pub mod canary;

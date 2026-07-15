@@ -21,6 +21,7 @@
 //!   * a *checker* that itself fails → block (bounded) then give up loudly, so a
 //!     broken checker can never become a bypass.
 //!   * a genuine panic → swallowed to exit 0 by the never-break-a-turn guard.
+#![deny(clippy::panic)]
 
 mod config;
 mod derive;

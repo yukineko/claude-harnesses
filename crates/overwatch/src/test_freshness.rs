@@ -229,6 +229,7 @@ fn rust_source_files(root: &Path) -> Vec<PathBuf> {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
     use std::io::Write;

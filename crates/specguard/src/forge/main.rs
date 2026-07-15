@@ -14,6 +14,7 @@
 //! harness does NOT fabricate a draft — it raises a sentinel and pulls the human
 //! in. A draft becomes canon only via `ratify`, and worktrees merge only after
 //! `agree` — human consent at both boundaries; the middle is mechanical.
+#![deny(clippy::panic)]
 
 mod agent;
 mod config;

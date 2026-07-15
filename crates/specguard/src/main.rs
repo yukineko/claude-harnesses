@@ -7,6 +7,7 @@
 //!
 //! The judgment lives in the agent (it reads the live canon and quotes it
 //! verbatim); this binary is the deterministic harness around it.
+#![deny(clippy::panic)]
 
 mod agent;
 mod auditmap;
@@ -1858,6 +1859,7 @@ fn canonicalize(p: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
     use std::path::PathBuf;

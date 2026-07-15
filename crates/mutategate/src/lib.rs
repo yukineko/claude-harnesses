@@ -32,6 +32,7 @@
 //! mutant and is excluded from the score. We count directly from the `outcomes`
 //! array rather than trusting the top-level summary counts, so the score is
 //! reproducible from the raw records alone.
+#![deny(clippy::panic)]
 
 use serde::Deserialize;
 

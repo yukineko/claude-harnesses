@@ -5,6 +5,7 @@
 //! pattern (the same action on repeat, or edit thrash), injects a nudge that
 //! grows into "stop and ask the user". It can only *advise* — never block a tool
 //! call or end a turn — so a false positive costs at most one extra line.
+#![deny(clippy::panic)]
 
 mod anchor;
 mod config;

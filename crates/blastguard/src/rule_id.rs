@@ -106,6 +106,7 @@ pub fn rule_id(reason: &str) -> &'static str {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
     use crate::detect;

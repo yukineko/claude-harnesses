@@ -185,6 +185,7 @@ fn run_one(cfg: &AgentConfig, repo_root: &std::path::Path, prompt: &str) -> Agen
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};

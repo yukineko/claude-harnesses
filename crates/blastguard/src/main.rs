@@ -6,6 +6,7 @@
 //! function, and — only on a deny — print the single-line PreToolUse JSON. On
 //! empty/invalid input, an unmatched tool, or any panic we stay silent and exit
 //! 0. `harness_core::hook::run_hook` enforces the panic half of that invariant.
+#![deny(clippy::panic)]
 
 use blastguard::model::Decision;
 use blastguard::{detect, hookio, rule_id};

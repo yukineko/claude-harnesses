@@ -4,6 +4,7 @@
 //!
 //! The binary (`src/main.rs`) is the PreToolUse hook; this lib exposes the same
 //! detection so callers don't reimplement it. Detection is pure (no I/O).
+#![deny(clippy::panic)]
 
 pub mod callgraph;
 pub mod classify;

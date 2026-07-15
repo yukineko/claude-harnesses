@@ -826,7 +826,7 @@
     {
       "name": "daily",
       "description": "Daily-once task runner for Claude Code: a SessionStart hook that runs registered shell tasks ([[task]] in ~/.daily/config.toml) at most once per calendar day and injects a summary of what ran. Skips while a /flow or /backlog driver is working (backlog lock), records each run to a JSONL report (a failed task still counts as run, no retry until tomorrow). With no tasks registered it runs a default security audit (cargo deny check). Register/inspect with `daily add` / `daily list` / `daily report`. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "category": "security",
       "keywords": [
         "hooks",

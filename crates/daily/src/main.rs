@@ -16,6 +16,7 @@
 //! always exits 0 (never breaks a turn).
 
 use clap::{Parser, Subcommand};
+use harness_core::append::append_line;
 use harness_core::daily::DailyGuard;
 use harness_core::hook::{read_stdin, run_hook, HookInput};
 use serde::{Deserialize, Serialize};
@@ -396,22 +397,10 @@ fn reports_path() -> PathBuf {
 /// swallowed (a report write must never break a turn).
 fn append_report(entry: &ReportEntry) {
     let path = reports_path();
-    if let Some(parent) = path.parent() {
-        if std::fs::create_dir_all(parent).is_err() {
-            return;
-        }
-    }
     let Ok(line) = serde_json::to_string(entry) else {
         return;
     };
-    use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        let _ = writeln!(f, "{line}");
-    }
+    append_line(&path, &line);
 }
 
 /// Parse the JSONL report file into entries, skipping any malformed lines.

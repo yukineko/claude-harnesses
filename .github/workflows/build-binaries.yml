@@ -4,11 +4,14 @@ name: build & commit plugin binaries
 # back into crates/<plugin>/bin/. The committed per-platform binaries are what
 # `/plugin install` ships, so end users need neither cargo nor an API key.
 #
-#   * smoke  — build + test the whole workspace on Linux and macOS (the gate).
-#   * darwin — build every distributable plugin for both apple targets (macos-14).
-#   * linux  — build every distributable plugin for x86_64 linux (ubuntu).
-#   * commit — collect the artifacts and commit the refreshed bin/<name>-<os>-<arch>
-#              back to main (only on push-to-main / manual dispatch, never on PRs).
+#   * smoke      — build + test the whole workspace on Linux and macOS (the gate).
+#   * darwin     — build every distributable plugin for both apple targets (macos-14).
+#   * linux      — build every distributable plugin for x86_64 linux (ubuntu).
+#   * linux-arm64 — cross-build every distributable plugin for aarch64 linux, using
+#                   the gcc-aarch64-linux-gnu cross linker on an x86_64 ubuntu runner
+#                   (no QEMU/emulation — a linker-only cross-compile).
+#   * commit     — collect the artifacts and commit the refreshed bin/<name>-<os>-<arch>
+#                  back to main (only on push-to-main / manual dispatch, never on PRs).
 #
 # specguard (no committed bin/, dual-binary) and harness-core (a library) are not
 # distributed and are intentionally excluded from the binary matrix.
@@ -124,11 +127,46 @@ jobs:
           path: linux-bins.tar.gz
           retention-days: 1
 
+  linux-arm64:
+    name: linux binaries (arm64)
+    if: github.event_name != 'pull_request'
+    needs: smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+      # ubuntu-latest ships an x86_64 gcc only; the aarch64-linux-gnu cross
+      # toolchain provides the linker cargo needs to produce arm64 ELF
+      # binaries from this x86_64 runner (no QEMU/emulation required — this
+      # is a linker-only cross-compile, matching build-plugin-bin.sh's
+      # existing triple-normalization for aarch64-* -> arm64).
+      - name: Install aarch64 cross linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build linux binaries (arm64)
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          set -euo pipefail
+          for p in $PLUGINS; do
+            bash scripts/build-plugin-bin.sh "$p" aarch64-unknown-linux-gnu
+          done
+      - run: tar czf linux-arm64-bins.tar.gz crates/*/bin/*-linux-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64-bins
+          path: linux-arm64-bins.tar.gz
+          retention-days: 1
+
   commit:
     name: commit binaries
     # Only land binaries on main; never from a PR (can't/shouldn't push).
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: [darwin, linux]
+    needs: [darwin, linux, linux-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -146,6 +184,7 @@ jobs:
           set -euo pipefail
           tar xzf artifacts/darwin-bins/darwin-bins.tar.gz
           tar xzf artifacts/linux-bins/linux-bins.tar.gz
+          tar xzf artifacts/linux-arm64-bins/linux-arm64-bins.tar.gz
       # Generate SLSA build provenance for the exact binaries we are about to
       # commit (and that `/plugin install` ships). The attestation binds each
       # binary's sha256 digest to this workflow run as the builder, so a consumer

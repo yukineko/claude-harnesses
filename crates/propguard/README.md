@@ -114,3 +114,34 @@ project `propguard.toml` is honored only once the root is **trusted**
 
 `propguard status` shows the resolved config and the properties derived for the
 current task.
+
+### Checker subprocess timeout (`checker_timeout_secs`)
+
+In `subprocess` mode, `checker_cmd` runs as a real OS subprocess and is bounded
+by a timeout so a hung or slow checker can never trap the turn indefinitely:
+
+- **Default: 300 seconds.**
+- Configurable via the top-level `checker_timeout_secs` key in
+  `propguard.toml` (or `~/.propguard/config.toml`) — the same file as the
+  other subprocess-mode knobs (`checker_cmd`), not a separate `[check]`
+  section:
+
+  ```toml
+  # subprocess mode only:
+  checker_cmd = "claude -p"
+  checker_timeout_secs = 45   # override the 300s default
+  ```
+
+- A value of `0` (or an invalid/negative value that fails TOML parsing) is
+  sanitized back to the 300s default rather than disabling the timeout — the
+  timeout can never be turned into an unbounded wait.
+- **On timeout, propguard kills the checker's whole process tree**, not just
+  the immediate child: the checker is spawned in its own process group
+  (Unix), so a shell-wrapped `checker_cmd` (e.g. one containing `;`, `&&`, or
+  backgrounding a grandchild with `&`) is fully reaped via a single
+  group-kill — a backgrounded/exec'd descendant can't outlive the timeout and
+  keep running (or keep the stdout pipe open) after `run_checker` returns.
+  On non-Unix platforms, only the direct child can be killed (best-effort).
+- A timeout is reported as a checker `Error` (never silently "all pass") and
+  goes through the same fail-closed, bounded `max_attempts` give-up path as
+  any other checker failure (see "How it converges / stays safe" above).

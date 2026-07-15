@@ -419,4 +419,64 @@ mod tests {
             "a negative reset_after_secs must be floored to a sane default"
         );
     }
+
+    // ── checker_timeout_secs: default + user override propagation ──────────
+    //
+    // The checker subprocess timeout (README-documented) defaults to 300s and
+    // must be overridable via the `checker_timeout_secs` key in the resolved
+    // `propguard.toml` / `~/.propguard/config.toml`. These tests pin the
+    // default and confirm `Config::apply` (the function `Config::load` calls
+    // after parsing the on-disk `FileConfig`) actually propagates a
+    // user-supplied value onto `Config.checker_timeout_secs`, which is what
+    // `gate::run_checker` reads to bound the subprocess kill-on-timeout.
+    #[test]
+    fn checker_timeout_secs_defaults_to_300() {
+        assert_eq!(
+            Config::default().checker_timeout_secs,
+            300,
+            "README documents the default checker subprocess timeout as 300s"
+        );
+    }
+
+    #[test]
+    fn checker_timeout_secs_is_overridable_from_file_config() {
+        let mut cfg = Config::default();
+        let fc = FileConfig {
+            checker_timeout_secs: Some(45),
+            ..Default::default()
+        };
+        cfg.apply(fc);
+        assert_eq!(
+            cfg.checker_timeout_secs, 45,
+            "a user-supplied checker_timeout_secs must override the 300s default"
+        );
+    }
+
+    #[test]
+    fn checker_timeout_secs_survives_sanitize_when_nonzero() {
+        let mut cfg = Config {
+            checker_timeout_secs: 45,
+            ..Config::default()
+        };
+        cfg.sanitize();
+        assert_eq!(
+            cfg.checker_timeout_secs, 45,
+            "sanitize must not clobber a valid user-supplied timeout"
+        );
+    }
+
+    #[test]
+    fn checker_timeout_secs_load_from_toml_text_overrides_default() {
+        // Exercises the same `toml::from_str::<FileConfig>` + `apply` path that
+        // `Config::load` uses, without touching the filesystem/trust gate.
+        let text = "checker_timeout_secs = 45\n";
+        let fc: FileConfig = toml::from_str(text).expect("valid toml");
+        let mut cfg = Config::default();
+        cfg.apply(fc);
+        cfg.sanitize();
+        assert_eq!(
+            cfg.checker_timeout_secs, 45,
+            "checker_timeout_secs in propguard.toml must reach Config.checker_timeout_secs"
+        );
+    }
 }

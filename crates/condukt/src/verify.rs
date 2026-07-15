@@ -1599,10 +1599,25 @@ mod tests {
             expect_exit: None,
             expect_substring: None,
         };
-        // The runner must never be called when there is no command.
+        // The runner must never be called when there is no command. Rather than
+        // `panic!`-ing inside the closure (which would abort the whole test
+        // binary ungracefully instead of yielding a clean Err-shaped failure),
+        // record the invocation and log it, then assert on the flag below. This
+        // keeps the "must not be invoked" guarantee testable without ever
+        // panicking on this code path.
+        let invoked = std::cell::Cell::new(false);
         let (verdict, gate_failed) = mechanical_skip_verdict(&cls, |_cmd| {
-            panic!("runner must not be invoked when there is no mechanical command");
+            invoked.set(true);
+            eprintln!("error: runner must not be invoked when there is no mechanical command");
+            (
+                false,
+                "runner must not be invoked when there is no mechanical command".to_string(),
+            )
         });
+        assert!(
+            !invoked.get(),
+            "runner must not be invoked when there is no mechanical command"
+        );
         assert_eq!(
             verdict["skip_verifier"],
             serde_json::json!(false),

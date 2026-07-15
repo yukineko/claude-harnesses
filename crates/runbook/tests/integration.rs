@@ -87,3 +87,20 @@ fn inject_hook_survives_empty_stdin() {
     let (code, _stdout) = run(&["inject"], "");
     assert_eq!(code, 0, "fail-soft: empty stdin must never break the turn");
 }
+
+#[test]
+fn status_masks_index_token() {
+    // index_token is not a secret (see main.rs `mask_display` doc comment),
+    // but status() masks it anyway per explicit user instruction. Assert the
+    // masked form appears and the full plaintext default does not.
+    let (code, stdout) = run(&["status"], "");
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("!ru***"),
+        "expected masked index_token in status output, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("!runbooks"),
+        "index_token must not appear in plaintext in status output, got: {stdout}"
+    );
+}

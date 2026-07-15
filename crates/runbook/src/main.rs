@@ -251,6 +251,23 @@ fn init() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Mask a display value as `<first-2-chars>***` (or `***` if too short to
+/// leave a meaningful prefix).
+///
+/// `index_token` is *not* a secret/credential — it is just the macro trigger
+/// string used to fire `!<index_token>` (see `config::Config::index_token`,
+/// default `"runbooks"`). This masking exists solely because the user
+/// explicitly requested it for `status()` output; it is not a security
+/// control. Kept here as a single, reusable convention in case future status
+/// fields need the same consistent masking.
+fn mask_display(value: &str) -> String {
+    let mut chars = value.chars();
+    match (chars.next(), chars.next()) {
+        (Some(a), Some(b)) => format!("{a}{b}***"),
+        _ => "***".to_string(),
+    }
+}
+
 fn status() {
     let root = cwd();
     let (cfg, store) = load(&root);
@@ -265,11 +282,34 @@ fn status() {
     println!("config:            {}", src.display());
     println!("enabled:           {}", cfg.enabled);
     println!("prefix:            {}", cfg.prefix);
-    println!("index_token:       {}{}", cfg.prefix, cfg.index_token);
+    // index_token is not a secret (see mask_display's doc comment above); it
+    // is masked here only because the user explicitly asked for masked
+    // display in status() output.
+    println!(
+        "index_token:       {}{}",
+        cfg.prefix,
+        mask_display(&cfg.index_token)
+    );
     println!("project dir:       {}", store.project_dir.display());
     println!("global dir:        {}", store.global_dir.display());
     println!("include_global:    {}", cfg.include_global);
     println!("max_chars:         {}", cfg.max_chars);
     println!("per_runbook_chars: {}", cfg.per_runbook_chars);
     println!("runbooks visible:  {}", books.len());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mask_display;
+
+    #[test]
+    fn mask_display_keeps_first_two_chars_then_stars() {
+        assert_eq!(mask_display("runbooks"), "ru***");
+    }
+
+    #[test]
+    fn mask_display_handles_short_values() {
+        assert_eq!(mask_display("a"), "***");
+        assert_eq!(mask_display(""), "***");
+    }
 }

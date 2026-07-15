@@ -11,7 +11,11 @@ name: mutation
 #     Default pilot: harness-core (shared pure-ish logic). A second pilot,
 #     specguard, is available via workflow_dispatch (pilot=specguard) — it
 #     covers the polarity gate (src/similarity.rs), a GATE crate where mutation
-#     kill-rate signal matters most. Expand one crate at a time.
+#     kill-rate signal matters most. A third pilot, condukt, is available via
+#     workflow_dispatch (pilot=condukt) — it is the first NON-GATE crate added
+#     (not in GATE_CRATES: blastguard/propguard/specguard/stuckguard/mutategate/
+#     overwatch) and narrows to src/circuit.rs (circuit-breaker state machine).
+#     Expand one crate at a time.
 #   * Overall job timeout bounds cost; cargo-mutants gets a per-mutant --timeout.
 #
 # TRIGGERS: this is intentionally NOT run on every PR (it is slow). It runs on
@@ -22,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       pilot:
-        description: 'Pilot crate to mutate'
+        description: 'Pilot crate to mutate (harness-core | specguard | condukt)'
         default: 'harness-core'
         required: false
       min_kill_rate:

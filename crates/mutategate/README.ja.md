@@ -42,6 +42,7 @@ cargo run -p mutategate -- --outcomes mutants.out/outcomes.json --min-kill-rate 
 scripts/mutation-gate.sh
 PILOT=difflog MIN_KILL_RATE=0.70 scripts/mutation-gate.sh
 PILOT=specguard scripts/mutation-gate.sh   # GATE クレート: polarity ゲート (similarity.rs)
+PILOT=condukt scripts/mutation-gate.sh     # 非GATE クレート: サーキットブレーカーロジック (circuit.rs)
 ```
 
 Exit コード: `0` pass、`1` kill-rate が閾値未満（または生存可能な mutant が無い）、`2`
@@ -67,6 +68,16 @@ usage/IO/parse エラー。
   ビルド・テストするため `scope::current_head` が解決できずベースラインの時点で
   false-flake になる（mutation 由来の欠陥ではなく、cargo-mutants の実行モデルに
   起因するテスト環境依存）。
+- **パイロット3: `condukt`** — GATE_CRATES（blastguard/propguard/specguard/
+  stuckguard/mutategate/overwatch。`scripts/rollout-plugins.sh` 参照）以外で
+  初めて追加された非 GATE クレート。`condukt` はオーケストレーター本体で、
+  ワークスペース内で最もテスト密度が高い（36ファイル中29ファイルにテストがある）
+  ため、非 GATE の候補として適切と判断した。`condukt` 自体は極めて大きい
+  クレート（`main.rs` 等を含め合計 約25000 行）なので、
+  `scripts/mutation-gate.sh` は `PILOT=condukt` のとき既定で
+  `--file crates/condukt/src/circuit.rs` に絞り込む。`circuit.rs` はサーキット
+  ブレーカーの状態遷移ロジックで、ファイルシステム/プロセス I/O を持たない
+  純粋なロジックであり、既に20個のユニットテストでカバーされている。
 - `PILOT=<crate>` で任意のクレートに切り替えられる。`MUTANTS_EXTRA="--file <path>"`
   でさらに絞れば高速な実走ができる（`<path>` はこのスクリプトを実行する repo root
   からの相対パス。例: `crates/harness-core/src/hash.rs`）。
@@ -80,7 +91,8 @@ usage/IO/parse エラー。
 
 - クレートは 1 つずつ、それぞれが既に閾値をクリアしてから追加する。そうすれば新しい
   クレートがゲートを黙って引き下げることはない（`specguard` の追加はこの手順に従った:
-  `similarity.rs` に絞った状態でまず閾値超過を確認してから `case "$PILOT"` に追加した）。
+  `similarity.rs` に絞った状態でまず閾値超過を確認してから `case "$PILOT"` に追加した。
+  `condukt` の追加も同様に `circuit.rs` に絞って確認してから追加した）。
 - スイートが硬くなるにつれ `MIN_KILL_RATE` を引き上げる。生存した mutant は
   `target/mutants-<pilot>/mutants.out/missed.txt` で確認する。
 - `specguard` は現時点で `similarity.rs` のみに絞っている。他のファイル

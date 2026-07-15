@@ -26,6 +26,15 @@
 #     checkout, so `scope::current_head` cannot resolve there. This is a test
 #     environment artifact of running outside the real repo, not a mutation
 #     finding — excluding it keeps the gate signal instead of flake.
+#   * A third pilot, `condukt`, is the first NON-GATE crate added (it is not one
+#     of GATE_CRATES: blastguard/propguard/specguard/stuckguard/mutategate/
+#     overwatch — see scripts/rollout-plugins.sh). `condukt` is the orchestrator
+#     binary (~25k lines across main.rs + submodules) with the highest test
+#     density in the workspace (29/36 source files carry tests), so it is a good
+#     non-GATE candidate for kill-rate signal. Like specguard, it is far too
+#     large to mutate whole, so the default MUTANTS_EXTRA narrows to
+#     src/circuit.rs — the circuit-breaker state-machine logic, which is pure
+#     (no filesystem/process I/O) and already carries 20 unit tests.
 #   * You can narrow further to specific files with
 #     MUTANTS_EXTRA="--file crates/harness-core/src/hash.rs" to keep a real run
 #     fast. NOTE: `--file` globs are matched against paths relative to the repo
@@ -53,6 +62,7 @@
 #   scripts/mutation-gate.sh                 # pilot=harness-core, threshold=0.80
 #   PILOT=difflog MIN_KILL_RATE=0.7 scripts/mutation-gate.sh
 #   PILOT=specguard scripts/mutation-gate.sh  # polarity gate (src/similarity.rs)
+#   PILOT=condukt scripts/mutation-gate.sh    # circuit-breaker logic (src/circuit.rs)
 #   MUTANTS_EXTRA="--file crates/harness-core/src/hash.rs" scripts/mutation-gate.sh
 set -euo pipefail
 
@@ -68,6 +78,9 @@ MUTANTS_TIMEOUT="${MUTANTS_TIMEOUT:-120}"
 case "$PILOT" in
   specguard)
     default_mutants_extra="--file crates/specguard/src/similarity.rs --cargo-test-arg=-- --cargo-test-arg=--skip --cargo-test-arg=ack_blocks_when_no_new_commits_since_raised"
+    ;;
+  condukt)
+    default_mutants_extra="--file crates/condukt/src/circuit.rs"
     ;;
   *)
     default_mutants_extra=""

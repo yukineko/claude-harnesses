@@ -181,6 +181,11 @@ impl DefaultGroomer {
         // honor the capability constructor rather than asserting.
         let ev = Evictable::new(&item)?;
         let groomed = self.groom(ev, budget)?;
+        // `groom` only ever constructs `Value::String` (see `DefaultGroomer::groom`
+        // above), so this is infallible by construction today — but we still fall
+        // back to `""` rather than `.unwrap()`/`.expect()` so a future groomer
+        // implementation returning a non-string `Value` degrades to "no tokens
+        // saved" instead of panicking the hook process.
         let post_str = groomed.as_str().unwrap_or("");
         let post_tokens = est_tokens(post_str);
         let saved_tokens = pre_tokens.saturating_sub(post_tokens);

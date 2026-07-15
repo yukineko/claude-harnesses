@@ -1,0 +1,37 @@
+name: version-lockstep
+
+# Enforces the CLAUDE.md "バージョン整合" rules on every push/PR, not just when a
+# plugin.json happens to be touched: (1) check-plugin-versions.py verifies the
+# three canonical sources (Cargo.toml / plugin.json / marketplace.json) always
+# agree, and (2) check-version-bumped.py verifies any plugin touched vs the base
+# ref actually had its version bumped (the 禁忌 rule). Both are self-contained
+# stdlib Python — no third-party action. Runs unconditionally (no paths filter)
+# because drift can be introduced by editing crate source without touching the
+# manifests directly, and the bump gate must see every diff.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-lockstep-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Verify plugin version lockstep (Cargo.toml / plugin.json / marketplace.json)
+        run: python3 scripts/check-plugin-versions.py
+      - name: Verify changed plugins bumped their version vs origin/main
+        run: python3 scripts/check-version-bumped.py --base origin/main

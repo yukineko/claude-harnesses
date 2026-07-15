@@ -30,9 +30,14 @@
 #   scripts/continuous-audit.sh --round 2026W28           # default gate-crate targets
 #   scripts/continuous-audit.sh --round 2026W28 --target specguard,stuckguard \
 #       --new-findings 2 --confirmed 1 --regression-tests-added 1 \
-#       --finding 'CA-2026W28-001|high|confirmed: unwrap in similarity path|crates/specguard/src/similarity.rs'
+#       --finding 'CA-2026W28-001|high|confirmed: unwrap in similarity path|crates/specguard/src/similarity.rs|because src/similarity.rs:42 unwraps an untrusted score without a length check'
 #
-# --finding may be repeated; format is: id|severity|summary|file (file optional).
+# --finding may be repeated; format is: id|severity|summary|file|rationale
+# (file and rationale optional). rationale is the verifier's stated reason for
+# CONFIRMING the finding (e.g. a file:line-quoted argument) and is forwarded to
+# `overwatch record-finding --rationale <value>` when non-empty. The legacy
+# 4-field form (id|severity|summary|file) still works — rationale is simply
+# empty in that case (backward compatible).
 # The COUNTS (--new-findings/--confirmed/--regression-tests-added) are recorded
 # verbatim into the round ledger; the --finding entries are the CONFIRMED subset
 # to ingest into the review queue. (They are independent inputs — the human/LLM
@@ -86,7 +91,7 @@ DRY_RUN=0
 declare -a FINDINGS=()
 
 usage() {
-  sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,67p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -179,11 +184,12 @@ fi
 # array is an "unbound variable" error, so only iterate when non-empty.
 if [ "${#FINDINGS[@]}" -gt 0 ]; then
   for f in "${FINDINGS[@]}"; do
-    # format: id|severity|summary|file  (severity & file may be empty)
-    IFS='|' read -r fid fsev fsummary ffile <<<"$f"
+    # format: id|severity|summary|file|rationale  (severity, file & rationale may be empty)
+    IFS='|' read -r fid fsev fsummary ffile frationale <<<"$f"
     args=(record-finding --finding-id "${fid:-CA-${ROUND}}" --source "continuous-audit" --summary "${fsummary:-confirmed finding}")
     [ -n "${fsev:-}" ] && args+=(--severity "$fsev")
     [ -n "${ffile:-}" ] && args+=(--file "$ffile")
+    [ -n "${frationale:-}" ] && args+=(--rationale "$frationale")
     run_ow "${args[@]}"
   done
 fi

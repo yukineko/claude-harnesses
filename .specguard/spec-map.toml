@@ -453,6 +453,7 @@ client_refs = []
 [entries."crates/blastguard/tests/overwatch_violation.rs"]
 key = "crates/blastguard/tests/overwatch_violation.rs"
 kind = "feature"
+spec_doc = "docs/specs/blastguard.md"
 status = "tracked"
 last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
@@ -1012,6 +1013,7 @@ client_refs = []
 [entries."crates/condukt/tests/diffrisk_record_e2e.rs"]
 key = "crates/condukt/tests/diffrisk_record_e2e.rs"
 kind = "feature"
+spec_doc = "docs/specs/condukt.md"
 status = "tracked"
 last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
@@ -2491,6 +2493,7 @@ client_refs = []
 [entries."crates/mutategate/tests/overwatch_violation.rs"]
 key = "crates/mutategate/tests/overwatch_violation.rs"
 kind = "feature"
+spec_doc = "docs/specs/mutategate.md"
 status = "tracked"
 last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
@@ -2690,6 +2693,7 @@ client_refs = []
 [entries."crates/overwatch/tests/audit_round.rs"]
 key = "crates/overwatch/tests/audit_round.rs"
 kind = "feature"
+spec_doc = "docs/specs/overwatch.md"
 status = "tracked"
 last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
@@ -2699,6 +2703,7 @@ client_refs = []
 [entries."crates/overwatch/tests/canary.rs"]
 key = "crates/overwatch/tests/canary.rs"
 kind = "feature"
+spec_doc = "docs/specs/overwatch.md"
 status = "tracked"
 last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
@@ -2708,6 +2713,7 @@ client_refs = []
 [entries."crates/overwatch/tests/continuous_audit_script.rs"]
 key = "crates/overwatch/tests/continuous_audit_script.rs"
 kind = "feature"
+spec_doc = "docs/specs/overwatch.md"
 status = "tracked"
 last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
@@ -2727,6 +2733,7 @@ client_refs = []
 [entries."crates/overwatch/tests/review_queue.rs"]
 key = "crates/overwatch/tests/review_queue.rs"
 kind = "feature"
+spec_doc = "docs/specs/overwatch.md"
 status = "tracked"
 last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
@@ -2736,6 +2743,7 @@ client_refs = []
 [entries."crates/overwatch/tests/rollout_gate_crates.rs"]
 key = "crates/overwatch/tests/rollout_gate_crates.rs"
 kind = "feature"
+spec_doc = "docs/specs/overwatch.md"
 status = "tracked"
 last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []
@@ -2745,6 +2753,7 @@ client_refs = []
 [entries."crates/overwatch/tests/violation.rs"]
 key = "crates/overwatch/tests/violation.rs"
 kind = "feature"
+spec_doc = "docs/specs/overwatch.md"
 status = "tracked"
 last_ref = "0d81e7dc28241df17e7e41f2ad30c8f6633b7258"
 impl_files = []

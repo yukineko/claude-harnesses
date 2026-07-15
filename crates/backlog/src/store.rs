@@ -85,12 +85,28 @@ fn tasks_lock_path(path: &Path) -> PathBuf {
 
 /// A lockfile older than this (by mtime) is treated as abandoned by a crashed
 /// holder and reaped, so a dead holder never deadlocks the SessionStart hook.
-/// The critical section is a single load-modify-save (sub-millisecond), so a
-/// live holder is never falsely reaped.
-const TASKS_LOCK_STALE_SECS: u64 = 5;
-/// Bounded blocking-acquire budget: attempts × sleep ≈ 150ms worst case.
-const TASKS_LOCK_MAX_ATTEMPTS: u32 = 50;
-const TASKS_LOCK_SLEEP: Duration = Duration::from_millis(3);
+///
+/// CA-backlog-003: the critical section is USUALLY a single load-modify-save
+/// (sub-millisecond), but `add`/`add_with_weight` can additionally shell out
+/// to `condukt state is-claimed` via [`is_claimed_elsewhere`], which is bounded
+/// at [`IS_CLAIMED_TIMEOUT`] (300ms) but can legitimately take close to that
+/// long under load. The stale-reap window must stay a comfortable multiple
+/// (not just ~16x) of BOTH that bound AND the blocking-acquire retry budget
+/// below ([`TASKS_LOCK_MAX_ATTEMPTS`] × [`TASKS_LOCK_SLEEP`]), so a live
+/// holder legitimately taking the full `is_claimed` bound is never mistaken
+/// for a crashed one and reaped mid-critical-section by a waiting racer
+/// (which would cause a lost update on tasks.toml — the "stale-lock reap
+/// window race").
+const TASKS_LOCK_STALE_SECS: u64 = 10;
+/// Bounded blocking-acquire budget: attempts × sleep ≈ 2s worst case.
+///
+/// CA-backlog-003: must comfortably exceed [`IS_CLAIMED_TIMEOUT`] (300ms) —
+/// the longest a live holder can legitimately keep the lock — so a waiting
+/// racer never gives up on ACQUIRING while the current holder is still
+/// legitimately mid-critical-section, and never itself needs to treat that
+/// live holder's lockfile as stale to make progress.
+const TASKS_LOCK_MAX_ATTEMPTS: u32 = 400;
+const TASKS_LOCK_SLEEP: Duration = Duration::from_millis(5);
 
 /// RAII guard for the tasks-file-scoped advisory lock. Removes the lockfile on
 /// EVERY drop path — Ok return, Err return, or panic-unwind — so the lock is
@@ -260,17 +276,22 @@ fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
     Ok(())
 }
 
-/// CA-backlog-002: upper bound on how long [`is_claimed_elsewhere`] will wait
-/// for the `condukt state is-claimed` subprocess before giving up and treating
-/// it as "not claimed". This call runs INSIDE `with_tasks_lock`'s critical
-/// section (via `check_duplicate`), so an unbounded wait (the old
+/// CA-backlog-002/003: upper bound on how long [`is_claimed_elsewhere`] will
+/// wait for the `condukt state is-claimed` subprocess before giving up and
+/// treating it as "not claimed". This call runs INSIDE `with_tasks_lock`'s
+/// critical section (via `check_duplicate`), so an unbounded wait (the old
 /// `Command::output()`, which blocks until the child exits) lets a hung/slow
 /// `condukt` process hold the tasks-file lock indefinitely — well past
-/// [`TASKS_LOCK_STALE_SECS`] (5s), at which point a second process reaps the
+/// [`TASKS_LOCK_STALE_SECS`] (10s), at which point a second process reaps the
 /// "stale" lock and steals it mid-critical-section, causing a lost update on
-/// tasks.toml. Bounding this well under that stale-reap window (an order of
-/// magnitude under 5s) means a hang here can never itself be the cause of a
-/// lock-steal: the call always gives up long before the lock could look stale.
+/// tasks.toml. Bounding this well under that stale-reap window (over an order
+/// of magnitude under 10s) means a hang here can never itself be the cause of
+/// a lock-steal: the call always gives up long before the lock could look
+/// stale. Separately, [`TASKS_LOCK_MAX_ATTEMPTS`] × [`TASKS_LOCK_SLEEP`] (the
+/// blocking-acquire retry budget for a WAITING racer) is kept comfortably
+/// ABOVE this bound, so a racer never gives up waiting — and falls back to
+/// unprotected fail-soft execution — while the current holder is still
+/// legitimately inside this bound.
 const IS_CLAIMED_TIMEOUT: Duration = Duration::from_millis(300);
 /// Poll interval while waiting for the subprocess to exit.
 const IS_CLAIMED_POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -495,6 +516,14 @@ pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
 }
 
 /// id で特定のタスクを done に更新して保存。見つからなければエラー。
+///
+/// CA-backlog-003: idempotent — if the task is ALREADY `done` (e.g. a
+/// duplicate/retried call after a caller-side timeout or crash-and-restart
+/// racing with its own earlier completion), this is a no-op that returns
+/// `Ok(())` without touching `updated_at` again, rather than silently
+/// re-stamping the completion time. This makes at-least-once callers
+/// (retry-on-timeout, `/flow` re-driving a step after a partial failure) safe
+/// to call twice for the same id without side effects.
 pub fn mark_done(path: &Path, id: &str) -> Result<()> {
     with_tasks_lock(path, || {
         let mut tasks = load(path)?;
@@ -502,6 +531,10 @@ pub fn mark_done(path: &Path, id: &str) -> Result<()> {
             .iter_mut()
             .find(|t| t.id == id)
             .ok_or_else(|| anyhow!("task not found: {}", id))?;
+        if task.status == STATUS_DONE {
+            // Already done — idempotent no-op, nothing to persist.
+            return Ok(());
+        }
         task.status = STATUS_DONE.to_string();
         // updated_at はシステム時刻で更新（呼び出し元が now を持たないため現在時刻を使う）
         task.updated_at = now_unix();
@@ -511,6 +544,13 @@ pub fn mark_done(path: &Path, id: &str) -> Result<()> {
 
 /// id で特定のタスクを failed に更新。reason を notes に追記。
 /// defer_until を now + 172800 (2日) に設定してタスクを一時保留にする。
+///
+/// CA-backlog-003: idempotent — if the task is ALREADY `failed`, this is a
+/// no-op that returns `Ok(())` without re-appending `reason` to `notes` or
+/// pushing `defer_until` further into the future again, rather than letting a
+/// duplicate/retried call accumulate repeated notes or keep re-deferring the
+/// task. This makes at-least-once callers safe to call twice for the same id
+/// without side effects.
 pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
     with_tasks_lock(path, || {
         let mut tasks = load(path)?;
@@ -518,6 +558,10 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
             .iter_mut()
             .find(|t| t.id == id)
             .ok_or_else(|| anyhow!("task not found: {}", id))?;
+        if task.status == STATUS_FAILED {
+            // Already failed — idempotent no-op, nothing to persist.
+            return Ok(());
+        }
         task.status = STATUS_FAILED.to_string();
         if let Some(r) = reason {
             if task.notes.is_empty() {
@@ -706,6 +750,32 @@ mod tests {
         assert!(mark_done(&path, "nonexistent").is_err());
     }
 
+    /// CA-backlog-003: calling `mark_done` twice for the SAME id (e.g. a
+    /// retried call after a caller-side timeout, or `/flow` re-driving a step
+    /// after a partial failure) must be idempotent — the second call must
+    /// succeed as a no-op, not error, and must not re-stamp `updated_at`.
+    #[test]
+    fn mark_done_is_idempotent_on_repeat_call() {
+        let path = tmp_path();
+        let id = add(&path, "Task", "/repo", vec![], "", 100).unwrap();
+        mark_done(&path, &id).unwrap();
+        let updated_at_first = load(&path).unwrap()[0].updated_at;
+
+        // Second call for the same already-done id must succeed (not error)
+        // and must be a true no-op.
+        let result = mark_done(&path, &id);
+        assert!(
+            result.is_ok(),
+            "repeat mark_done on an already-done task must not error"
+        );
+        let tasks = load(&path).unwrap();
+        assert_eq!(tasks[0].status, "done");
+        assert_eq!(
+            tasks[0].updated_at, updated_at_first,
+            "repeat mark_done must not re-stamp updated_at (true no-op)"
+        );
+    }
+
     #[test]
     fn mark_failed_appends_reason() {
         let path = tmp_path();
@@ -715,6 +785,41 @@ mod tests {
         assert_eq!(tasks[0].status, "failed");
         assert!(tasks[0].notes.contains("timeout"));
         assert!(tasks[0].notes.contains("existing note"));
+    }
+
+    /// CA-backlog-003: calling `mark_failed` twice for the SAME id must be
+    /// idempotent — the second call must succeed as a no-op, must NOT
+    /// re-append `reason` to `notes` a second time, and must NOT push
+    /// `defer_until` further into the future again.
+    #[test]
+    fn mark_failed_is_idempotent_on_repeat_call() {
+        let path = tmp_path();
+        let id = add(&path, "Task", "/repo", vec![], "", 100).unwrap();
+        mark_failed(&path, &id, Some("timeout")).unwrap();
+        let after_first = load(&path).unwrap();
+        let notes_first = after_first[0].notes.clone();
+        let defer_first = after_first[0].defer_until;
+        let updated_at_first = after_first[0].updated_at;
+
+        let result = mark_failed(&path, &id, Some("timeout"));
+        assert!(
+            result.is_ok(),
+            "repeat mark_failed on an already-failed task must not error"
+        );
+        let tasks = load(&path).unwrap();
+        assert_eq!(tasks[0].status, "failed");
+        assert_eq!(
+            tasks[0].notes, notes_first,
+            "repeat mark_failed must not re-append reason (true no-op)"
+        );
+        assert_eq!(
+            tasks[0].defer_until, defer_first,
+            "repeat mark_failed must not push defer_until further out"
+        );
+        assert_eq!(
+            tasks[0].updated_at, updated_at_first,
+            "repeat mark_failed must not re-stamp updated_at (true no-op)"
+        );
     }
 
     #[test]
@@ -1250,6 +1355,158 @@ mod tests {
         }
     }
 
+    /// CA-backlog-003: stress test for the stale-lock reap-window race. Many
+    /// threads concurrently `add_with_weight` NEW tasks onto the SAME file
+    /// while many other threads concurrently `next_claim` from it, all
+    /// rendezvous'd at a barrier to maximize lock contention (so waiters queue
+    /// up behind whichever thread currently holds `with_tasks_lock`). If the
+    /// blocking-acquire retry budget is too small relative to how long a
+    /// legitimate holder can keep the lock (e.g. `add`'s `is_claimed_elsewhere`
+    /// subprocess bound), a waiting racer gives up and falls back to
+    /// unprotected fail-soft execution, or a stale-but-still-live lockfile
+    /// gets reaped mid-critical-section — either way causing a lost update
+    /// (dropped add, or two `next_claim` callers winning the same task).
+    /// Asserts: (a) every add is durably persisted (no lost update), (b) no
+    /// two `next_claim` winners ever claim the same task id, and (c) nothing
+    /// errors under contention (fail-soft, never breaks a caller).
+    #[test]
+    fn add_and_claim_no_lost_update_under_heavy_contention() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier, Mutex};
+
+        for iter in 0..8 {
+            let path = tmp_path();
+
+            // Seed several pending tasks for the claimers to race over.
+            const SEEDED: usize = 8;
+            let mut seed = Vec::new();
+            for i in 0..SEEDED {
+                seed.push(Task {
+                    id: format!("seed{iter}-{i}"),
+                    title: format!("seeded-{iter}-{i}"),
+                    project: "/repo".to_string(),
+                    tags: vec![],
+                    status: STATUS_PENDING.to_string(),
+                    notes: String::new(),
+                    created_at: 100,
+                    updated_at: 100,
+                    defer_until: None,
+                    weight: 0.0,
+                });
+            }
+            save(&path, &seed).unwrap();
+
+            const ADDERS: usize = 10;
+            const CLAIMERS: usize = 10;
+            let barrier = Arc::new(Barrier::new(ADDERS + CLAIMERS));
+            let path = Arc::new(path);
+            let winners: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let claim_errors = Arc::new(AtomicUsize::new(0));
+            let add_errors = Arc::new(AtomicUsize::new(0));
+
+            let mut handles = Vec::with_capacity(ADDERS + CLAIMERS);
+
+            for i in 0..ADDERS {
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                let add_errors = Arc::clone(&add_errors);
+                handles.push(std::thread::spawn(move || {
+                    barrier.wait();
+                    let title = format!("concurrent-add-{iter}-{i}");
+                    if add_with_weight(
+                        path.as_path(),
+                        &title,
+                        "/repo",
+                        vec![],
+                        "",
+                        0.0,
+                        false,
+                        2000 + i as i64,
+                    )
+                    .is_err()
+                    {
+                        add_errors.fetch_add(1, Ordering::SeqCst);
+                    }
+                }));
+            }
+
+            for _ in 0..CLAIMERS {
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                let winners = Arc::clone(&winners);
+                let claim_errors = Arc::clone(&claim_errors);
+                handles.push(std::thread::spawn(move || {
+                    barrier.wait();
+                    match next_claim(path.as_path(), None, None) {
+                        Ok(Some(t)) => winners.lock().unwrap().push(t.id),
+                        Ok(None) => {}
+                        Err(_) => {
+                            claim_errors.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                }));
+            }
+
+            for h in handles {
+                h.join().expect("thread join");
+            }
+
+            assert_eq!(
+                add_errors.load(Ordering::SeqCst),
+                0,
+                "iter {iter}: add_with_weight must never error under contention (fail-soft)"
+            );
+            assert_eq!(
+                claim_errors.load(Ordering::SeqCst),
+                0,
+                "iter {iter}: next_claim must never error under contention (fail-soft)"
+            );
+
+            let final_tasks = load(path.as_path()).unwrap();
+
+            // (a) No lost update: all ADDERS concurrently-added tasks survived.
+            for i in 0..ADDERS {
+                let title = format!("concurrent-add-{iter}-{i}");
+                assert!(
+                    final_tasks.iter().any(|t| t.title == title),
+                    "iter {iter}: concurrently-added task {title} was lost (lost-update race)"
+                );
+            }
+            assert_eq!(
+                final_tasks.len(),
+                SEEDED + ADDERS,
+                "iter {iter}: final task count must equal seeded + added, no task dropped"
+            );
+
+            // (b) No two next_claim winners ever won the SAME task id.
+            let winners = winners.lock().unwrap();
+            let mut sorted = winners.clone();
+            sorted.sort();
+            let mut deduped = sorted.clone();
+            deduped.dedup();
+            assert_eq!(
+                sorted.len(),
+                deduped.len(),
+                "iter {iter}: two next_claim callers won the same task id (lost-update race); \
+                 winners = {sorted:?}"
+            );
+
+            // Every winner must be persisted as `claimed` (not clobbered by a
+            // racing add's load-modify-save).
+            for winner_id in winners.iter() {
+                let status = final_tasks
+                    .iter()
+                    .find(|t| &t.id == winner_id)
+                    .map(|t| t.status.as_str());
+                assert_eq!(
+                    status,
+                    Some(STATUS_CLAIMED),
+                    "iter {iter}: claimed task {winner_id} must persist as claimed"
+                );
+            }
+        }
+    }
+
     #[test]
     fn next_claim_excludes_already_claimed_task() {
         let path = tmp_path();
@@ -1324,7 +1581,7 @@ mod tests {
     /// `condukt state is-claimed` subprocess (here, literally shelling out to a
     /// process that sleeps far longer than IS_CLAIMED_TIMEOUT) via
     /// `run_with_bounded_wait` directly, and asserts the bounded wait gives up
-    /// (returns `None`) well under `TASKS_LOCK_STALE_SECS` (5s) — proving the
+    /// (returns `None`) well under `TASKS_LOCK_STALE_SECS` (10s) — proving the
     /// call cannot itself hold the tasks-file lock's critical section past a
     /// bound shorter than the stale-reap window.
     #[test]

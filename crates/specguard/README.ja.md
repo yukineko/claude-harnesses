@@ -219,6 +219,29 @@ specguard --config examples/aegis.toml run
   うち **entry ごとに最も安価な情報源**から読み、安価に解決できないものは Ask するか未解決のまま
   残す (探索コストを有界に保つ)。
 
+#### spec-map を新鮮に保つ: `specguard map sync` の定期実行 (opt-in)
+
+`specguard map build` は一度きりの seed (全履歴窓) にすぎない。以後 `specguard map sync` を
+誰も実行しなければ、map はリポジトリの変化とともに黙って陳腐化していく (新規ファイルが
+未マップのまま、変更ファイルが `changed` にならない、削除ファイルが dangling entry として
+残る) — そして map が古いほど `/specguard:drift-map`/`/specguard:spec-audit` のスコープ精度が
+落ちる。`/specguard:drift-map` は都度 `map sync` を呼ぶが、それだけに頼ると map の鮮度は
+「最後に誰かがそのコマンドを実行したとき」止まりになってしまう。
+
+継続的に新鮮な状態を保つには、opt-in の雛形
+[`scripts/specguard-map-sync.cron.example`](../../scripts/specguard-map-sync.cron.example)
+(リポジトリルート) を自分の crontab か git hook (`post-merge`/`pre-push`) にコピーする。
+**自動インストールは一切されない** — 自分でフラグメントをコピーするまで何も走らない —
+また各フラグメントは advisory/fail-soft (sync が失敗しても次回実行まで map が古いままに
+なるだけで、push/merge や condukt/rollout を止めることはない)。
+
+組み込む前にコマンド自体を手元で確認できる:
+
+```sh
+specguard map sync --help
+cd crates/specguard && specguard map sync   # または: specguard map sync -c crates/specguard/specguard.toml
+```
+
 ### `/specguard:spec-audit` (correctness 監査・read-only)
 
 spec-drift (`run` / `drift-map`) が「仕様と実装が **合っているか** = consistency」を見るのに対し、

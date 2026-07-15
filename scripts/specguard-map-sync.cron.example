@@ -1,0 +1,70 @@
+# specguard map sync — OPT-IN cron/hook templates (backlog 8829cdad)
+# ============================================================================
+# NOTHING here is auto-installed. Copy the fragment you want into your own
+# crontab / git hook. This is opt-in tooling, not an always-on gate: it never
+# blocks condukt/rollout and is fail-soft throughout (a failed sync just means
+# the spec-map is stale until the next run/manual `specguard map sync`).
+#
+# Why: `specguard map` (`.specguard/spec-map.toml`) is a deterministic
+# spec<->impl mapping store consumed by `/specguard:drift-map` and
+# `/specguard:spec-audit`. `specguard map build` seeds it once from the full
+# history window, but the map only stays accurate if `specguard map sync`
+# keeps reconciling the git delta (Added/Modified/Renamed/Deleted) since the
+# last recorded baseline. Without periodic sync, the map drifts out of date
+# and downstream drift/audit scoping gets less precise (stale `impl_files`,
+# missing new files, dangling entries for deleted files).
+# ----------------------------------------------------------------------------
+
+# --- crontab fragment -------------------------------------------------------
+# Run `crontab -e` and add (adjust the repo path). `-c` points at the
+# specguard.toml that defines [project].root, so this can be run from any cwd:
+#
+#   # Daily spec-map sync for the specguard crate itself, at 03:30.
+#   30 3 * * * cd /path/to/claude-harnesses && specguard map sync -c crates/specguard/specguard.toml >> "$HOME/.specguard/map-sync.log" 2>&1
+#
+# Equivalently, running from inside the crate directory (config defaults to
+# ./specguard.toml) works the same way:
+#
+#   30 3 * * * cd /path/to/claude-harnesses/crates/specguard && specguard map sync >> "$HOME/.specguard/map-sync.log" 2>&1
+#
+# To run this for OTHER crates that also carry a specguard.toml + spec-map
+# (generalizing beyond crates/specguard), add one line per crate, each
+# pointing `-c` at that crate's own specguard.toml:
+#
+#   30 3 * * * cd /path/to/claude-harnesses && specguard map sync -c crates/<other-crate>/specguard.toml >> "$HOME/.specguard/map-sync.log" 2>&1
+
+# --- git post-merge hook fragment (.git/hooks/post-merge) -------------------
+# Advisory only — it never fails the merge (exit 0 always). Copy into
+# .git/hooks/post-merge and `chmod +x`. Syncs the map whenever a merge/pull
+# touches the specguard crate, so the map doesn't wait for the next cron tick.
+#
+#   #!/usr/bin/env bash
+#   changed=$(git diff --name-only 'ORIG_HEAD..HEAD' 2>/dev/null \
+#     | grep -E '^crates/specguard/' || true)
+#   if [ -n "$changed" ]; then
+#     specguard map sync -c crates/specguard/specguard.toml >> "$HOME/.specguard/map-sync.log" 2>&1 || true
+#   fi
+#   exit 0
+
+# --- git pre-push hook fragment (.git/hooks/pre-push) -----------------------
+# Advisory only — it NEVER blocks the push (exit 0 always). Copy into
+# .git/hooks/pre-push and `chmod +x`:
+#
+#   #!/usr/bin/env bash
+#   changed=$(git diff --name-only '@{push}..HEAD' 2>/dev/null \
+#     | grep -E '^crates/specguard/' || true)
+#   if [ -n "$changed" ]; then
+#     specguard map sync -c crates/specguard/specguard.toml >> "$HOME/.specguard/map-sync.log" 2>&1 || true
+#   fi
+#   exit 0
+
+# --- verifying the fragment before wiring it up -----------------------------
+# Dry-run the exact command by hand first (no cron/hook needed):
+#
+#   specguard map sync --help
+#   cd /path/to/claude-harnesses && specguard map sync -c crates/specguard/specguard.toml
+#
+# Then check the log / the store to confirm it actually reconciled:
+#
+#   tail "$HOME/.specguard/map-sync.log"
+#   specguard map list -c crates/specguard/specguard.toml --json | head

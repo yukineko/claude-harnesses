@@ -203,6 +203,30 @@ Where `run` / `brief` are **read-only audits**, the `map` subcommand and the
   HTTP calls, or spec-doc descriptions — and anything not cheaply resolvable is either asked or left
   `missing`, keeping search cost bounded.
 
+#### Keeping the spec-map fresh: periodic `specguard map sync` (opt-in)
+
+`specguard map build` is a one-shot seed (full history window). If nothing ever
+runs `specguard map sync` afterward, the map silently drifts out of date as the
+repo evolves (new files unmapped, changed files not marked `changed`, deleted
+files left dangling) — and `/specguard:drift-map`/`/specguard:spec-audit` scoping
+gets less precise the staler the map is. `/specguard:drift-map` does call
+`map sync` on demand, but relying on it alone means the map is only ever as
+fresh as the last time someone happened to run that command.
+
+To keep it fresh continuously, copy the opt-in template
+[`scripts/specguard-map-sync.cron.example`](../../scripts/specguard-map-sync.cron.example)
+(repo root) into your own crontab or a git hook (`post-merge`/`pre-push`). It is
+**not auto-installed** — nothing runs until you copy a fragment yourself — and
+every fragment is advisory/fail-soft (a failed sync just leaves the map stale
+until the next run; it never blocks a push/merge or condukt/rollout).
+
+Verify the command before wiring it up:
+
+```sh
+specguard map sync --help
+cd crates/specguard && specguard map sync   # or: specguard map sync -c crates/specguard/specguard.toml
+```
+
 ### `/specguard:spec-audit` (correctness audit, read-only)
 
 Where spec-drift (`run` / `drift-map`) checks whether spec and implementation **agree** (consistency),

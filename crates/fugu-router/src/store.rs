@@ -87,6 +87,14 @@ pub fn load(path: &Path) -> Vec<Episode> {
 }
 
 /// Append one episode as a JSON line, creating parent dirs as needed.
+///
+/// Writes the body and its trailing newline from a single buffer (one
+/// `write_all` call) rather than `writeln!` (which emits two separate
+/// `write()` syscalls on an unbuffered `File`). Under `O_APPEND`, two
+/// concurrent writers doing body-then-`\n` in two syscalls can interleave as
+/// `bodyA · bodyB · \nA · \nB`, corrupting the JSONL log (see
+/// `harness_core::append::append_line`, the canonical single-write pattern
+/// this mirrors to preserve the `io::Result` signature callers depend on).
 pub fn append(path: &Path, ep: &Episode) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -96,7 +104,11 @@ pub fn append(path: &Path, ep: &Episode) -> std::io::Result<()> {
         .append(true)
         .open(path)?;
     let line = serde_json::to_string(ep).unwrap_or_default();
-    writeln!(f, "{line}")
+    // Body + '\n' in ONE buffer → ONE write() syscall → atomic under O_APPEND.
+    let mut buf = String::with_capacity(line.len() + 1);
+    buf.push_str(&line);
+    buf.push('\n');
+    f.write_all(buf.as_bytes())
 }
 
 pub fn now_secs() -> u64 {
@@ -553,6 +565,76 @@ mod tests {
         let loaded = load(&path);
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].model, "sonnet");
+    }
+
+    /// Regression guard: concurrent `append()` calls (mirroring separate
+    /// subagent processes each with their own `O_APPEND` handle) must never
+    /// interleave a body and a trailing newline from two different writers
+    /// onto the same physical line. With the old `writeln!` (body then `\n`
+    /// as two syscalls) this could concatenate two JSON objects onto one
+    /// line; with the single-buffer `write_all` every line stays exactly one
+    /// parseable JSON object and the record count is exact.
+    #[test]
+    fn concurrent_append_never_interleaves_records() {
+        let dir = std::env::temp_dir().join(format!(
+            "fugu-router-concurrent-append-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("episodes.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 250;
+
+        std::thread::scope(|scope| {
+            for t in 0..THREADS {
+                let path = path.clone();
+                scope.spawn(move || {
+                    for i in 0..PER_THREAD {
+                        // Vary payload length so a torn write would land at
+                        // different offsets, not just a fixed boundary.
+                        let pad = "x".repeat(i % 64);
+                        let ep = Episode {
+                            ts: i as u64,
+                            title: format!("t{t}-i{i}-{pad}"),
+                            touched_files: vec![],
+                            class: "parallel".into(),
+                            model: "sonnet".into(),
+                            role: "worker".into(),
+                            pass: true,
+                            cost_usd: 0.0,
+                            human_label: None,
+                            labeled_by: None,
+                            skill_fingerprint: None,
+                        };
+                        append(&path, &ep).unwrap();
+                    }
+                });
+            }
+        });
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut count = 0usize;
+        for (n, l) in text.lines().enumerate() {
+            if l.is_empty() {
+                continue;
+            }
+            serde_json::from_str::<serde_json::Value>(l)
+                .unwrap_or_else(|e| panic!("line {n} is not a single JSON object: {e} — {l:.120}"));
+            count += 1;
+        }
+        assert_eq!(
+            count,
+            THREADS * PER_THREAD,
+            "every appended record must survive as exactly one parseable line"
+        );
+
+        // load() must also see every record, none merged or dropped.
+        let loaded = load(&path);
+        assert_eq!(loaded.len(), THREADS * PER_THREAD);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -4,21 +4,160 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use wait_timeout::ChildExt;
+
+/// Every `git` subprocess spawned by this module is bounded by this timeout.
+/// worktree lifecycle ops (add/remove/merge/status) are expected to be local
+/// and fast, but a hung `git` (lock contention, a stuck credential helper
+/// prompt, a network-mounted repo, corrupted pack, etc.) must not block a
+/// condukt run indefinitely. 45s is generous for any of the local ops this
+/// module performs while still bounding worst-case hangs.
+const GIT_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Output captured from a (possibly timed-out) git invocation.
+struct GitOutput {
+    status: Option<std::process::ExitStatus>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    timed_out: bool,
+}
+
+/// Spawn `git <args>` in `dir` and wait up to [`GIT_TIMEOUT`], capturing both
+/// streams. On timeout the child (and, on Unix, its process group) is killed
+/// so no orphaned `git` process is left running, and `timed_out` is set so
+/// callers can produce an actionable error instead of silently returning
+/// empty output.
+fn run_git_bounded(dir: &Path, args: &[&str]) -> Result<GitOutput> {
+    run_git_bounded_with(Path::new("git"), dir, args, GIT_TIMEOUT)
+}
+
+/// Same as [`run_git_bounded`] but with the git binary path and timeout as
+/// parameters, so tests can point it at a fake script (a stand-in for a
+/// hung/slow real `git`) with a short local timeout override — instead of
+/// mutating process-global state like `PATH` (which would race with the many
+/// other tests in this module that shell out to the real `git` concurrently
+/// under `cargo test`'s multi-threaded runner) or waiting out the full
+/// production [`GIT_TIMEOUT`].
+fn run_git_bounded_with(
+    git_bin: &Path,
+    dir: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<GitOutput> {
+    let mut cmd = Command::new(git_bin);
+    cmd.current_dir(dir)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to spawn git {:?}", args))?;
+
+    match child.wait_timeout(timeout) {
+        Ok(Some(status)) => {
+            let stdout = read_bounded(child.stdout.take(), timeout);
+            let stderr = read_bounded(child.stderr.take(), timeout);
+            Ok(GitOutput {
+                status: Some(status),
+                stdout,
+                stderr,
+                timed_out: false,
+            })
+        }
+        Ok(None) => {
+            kill_tree(&mut child);
+            let _ = child.wait();
+            Ok(GitOutput {
+                status: None,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                timed_out: true,
+            })
+        }
+        Err(e) => Err(anyhow!("failed to wait on git {:?}: {e}", args)),
+    }
+}
+
+/// Kill the whole process tree of a timed-out `git` call, not just the direct
+/// process, mirroring the same group-kill approach used elsewhere in this
+/// workspace (propguard::git, autoflow::compass) for hung subprocesses.
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        // SAFETY: plain libc syscall; negative pid targets the process group
+        // created via `process_group(0)` at spawn time. Best effort: any
+        // error is ignored, same as the plain `child.kill()` it supplements.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+}
+
+/// Bounded stream read: never block past `timeout` even if some lingering
+/// process keeps the pipe's write end open after the immediate child exits.
+fn read_bounded<R: std::io::Read + Send + 'static>(
+    stream: Option<R>,
+    timeout: Duration,
+) -> Vec<u8> {
+    use std::sync::mpsc;
+    let Some(mut s) = stream else {
+        return Vec::new();
+    };
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let _ = s.read_to_end(&mut out);
+        let _ = tx.send(out);
+    });
+    rx.recv_timeout(timeout).unwrap_or_default()
+}
 
 /// Run `git` with args in `dir`, returning trimmed stdout. On failure the error
 /// preserves git's exit status and BOTH output streams: git writes diagnostics
 /// to stderr but also to stdout (merge CONFLICT lines, `branch -d` refusals), so
 /// dropping either can hide the root cause. Callers add `.with_context()` to name
 /// the lifecycle op (create/merge/remove); the chain then reads
-/// "<op> failed: git [..] exited <code>: <stderr>/<stdout>".
+/// "<op> failed: git [..] exited <code>: <stderr>/<stdout>". Bounded by
+/// [`GIT_TIMEOUT`] — a hung git process is killed and reported as a timeout
+/// error rather than blocking forever.
 pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to spawn git {:?}", args))?;
-    if !out.status.success() {
+    git_output_to_result(run_git_bounded(dir, args)?, dir, args, GIT_TIMEOUT)
+}
+
+/// Shared formatting step for [`git`]: turn a (possibly timed-out) raw
+/// `GitOutput` into the same `Result<String>` shape, given the timeout that
+/// was actually used (so error messages/tests can use a short override
+/// instead of the hardcoded [`GIT_TIMEOUT`]).
+fn git_output_to_result(
+    out: GitOutput,
+    dir: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String> {
+    if out.timed_out {
+        bail!(
+            "git {:?} in {} timed out after {:?} and was killed",
+            args,
+            dir.display(),
+            timeout
+        );
+    }
+    let status = out
+        .status
+        .expect("status is Some when not timed_out (run_git_bounded invariant)");
+    if !status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let stdout = String::from_utf8_lossy(&out.stdout);
         let mut detail = stderr.trim().to_string();
@@ -39,7 +178,7 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
             "git {:?} in {} exited {}: {}",
             args,
             dir.display(),
-            out.status
+            status
                 .code()
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "signal".into()),
@@ -111,6 +250,32 @@ fn validate_branch(branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Canonicalize `path`, falling back to canonicalizing the nearest existing
+/// ancestor and rejoining the non-existent trailing components when `path`
+/// itself does not exist yet (the common case here: we are about to create a
+/// worktree dir that doesn't exist). Mirrors the same "canonicalize what
+/// exists, join the rest" shape used in `harness-core::store::write_note_named`
+/// so a raw (non-canonical) prefix — a symlinked temp dir, a WSL/DrvFs mount —
+/// can't make an identity/prefix check disagree with what git will actually see.
+fn canonicalize_prefix(path: &Path) -> PathBuf {
+    if let Ok(c) = path.canonicalize() {
+        return c;
+    }
+    // Walk up from `path` one component at a time until we find an ancestor
+    // that exists and can be canonicalized, then rejoin the non-existent
+    // trailing part (relative to that ancestor) onto the canonical form.
+    let mut ancestor = path.to_path_buf();
+    while ancestor.pop() {
+        if let Ok(canon_ancestor) = ancestor.canonicalize() {
+            let rel = path.strip_prefix(&ancestor).unwrap_or(Path::new(""));
+            return canon_ancestor.join(rel);
+        }
+    }
+    // No existing ancestor found at all (exhausted all components); fall
+    // back to the original, uncanonicalized path.
+    path.to_path_buf()
+}
+
 /// Create a worktree at `<worktree_base>/<topic>` on a new `branch`.
 /// Enforces: topic/branch are sanitized, path is outside the repo, and the
 /// branch isn't already checked out.
@@ -121,7 +286,19 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
     let repo_canon = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
     let path = worktree_base.join(topic);
 
-    if path.starts_with(&repo_canon) {
+    // Canonicalize `path`'s existing ancestor (the path itself does not exist
+    // yet — it's about to be created — so `path.canonicalize()` would fail)
+    // before the prefix check below. Without this, an un-canonical
+    // `worktree_base` (e.g. reached through a symlink, as on macOS
+    // `/tmp` -> `/private/tmp`, or a WSL/DrvFs mount) could make `path` look
+    // like it's outside `repo_canon` via `starts_with` even when it actually
+    // resolves inside the repo (TOCTOU-adjacent: the check and the later
+    // `git worktree add` could disagree on identity). We canonicalize the
+    // nearest existing ancestor and rejoin the non-existent suffix so the
+    // comparison is done on two canonical paths.
+    let path_canon = canonicalize_prefix(&path);
+
+    if path_canon.starts_with(&repo_canon) {
         bail!(
             "refusing to create worktree inside the repo ({}); set worktree_base outside it",
             path.display()
@@ -153,14 +330,28 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
 }
 
 /// Run a git command without bailing on non-zero exit; return (success, stdout, stderr).
+/// Bounded by [`GIT_TIMEOUT`] like [`git`]: a hung git process is killed and
+/// reported as a failed (non-success) result carrying a timeout message on
+/// stderr, rather than blocking forever.
 fn git_try(dir: &Path, args: &[&str]) -> Result<(bool, String, String)> {
-    let out = Command::new("git")
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to spawn git {:?}", args))?;
+    let out = run_git_bounded(dir, args)?;
+    if out.timed_out {
+        return Ok((
+            false,
+            String::new(),
+            format!(
+                "git {:?} in {} timed out after {:?} and was killed",
+                args,
+                dir.display(),
+                GIT_TIMEOUT
+            ),
+        ));
+    }
+    let status = out
+        .status
+        .expect("status is Some when not timed_out (run_git_bounded invariant)");
     Ok((
-        out.status.success(),
+        status.success(),
         String::from_utf8_lossy(&out.stdout).trim().to_string(),
         String::from_utf8_lossy(&out.stderr).trim().to_string(),
     ))
@@ -752,6 +943,189 @@ mod tests {
             !found.iter().any(|p| p.ends_with("registered")),
             "registered worktree should not be listed as orphan; got: {:?}",
             found
+        );
+    }
+
+    // ── git subprocess timeout ──────────────────────────────────────────────
+    //
+    // These tests replace the `git` binary the module shells out to (via a
+    // `PATH` override) with a fake hanging script, then drive `git()` through
+    // its real code path. Without the `wait_timeout` bound these would block
+    // for the test's `sleep` duration (or forever for a truly stuck process);
+    // with the bound, `git()` must return a timeout error promptly and not
+    // leave the child process running.
+
+    #[cfg(unix)]
+    fn write_hanging_fake_git(dir: &Path, sleep_secs: u64) -> PathBuf {
+        let path = dir.join("fake-git-hang.sh");
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\nsleep {sleep_secs}\necho fake-git-output\n"),
+        )
+        .expect("write fake git");
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).expect("chmod");
+        path
+    }
+
+    /// A `git` subprocess that hangs well past the configured timeout must
+    /// not block the caller forever: it must return a timeout error promptly
+    /// (a stand-in for a real hung git — e.g. lock contention or a stuck
+    /// credential prompt — that would otherwise wedge a condukt run).
+    ///
+    /// Drives `run_git_bounded_with` (the exact spawn/wait_timeout/kill code
+    /// path `git()` and `git_try()` both use, via `run_git_bounded`) pointed
+    /// at a fake script with a short local timeout override, rather than
+    /// mutating process-global `PATH` (which would race with the many other
+    /// tests in this module that shell out to the real `git` concurrently
+    /// under `cargo test`'s multi-threaded runner) or waiting out the full
+    /// production `GIT_TIMEOUT` (45s).
+    #[cfg(unix)]
+    #[test]
+    fn git_hung_subprocess_times_out_instead_of_hanging_forever() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Sleep far longer than the short local timeout below; the timeout
+        // must cut this short well before it would ever complete on its own.
+        let fake_git = write_hanging_fake_git(tmp.path(), 30);
+
+        let cwd = tmp.path().join("cwd");
+        fs::create_dir_all(&cwd).unwrap();
+
+        let short_timeout = Duration::from_millis(300);
+        let start = std::time::Instant::now();
+        let out = run_git_bounded_with(
+            &fake_git,
+            &cwd,
+            &["rev-parse", "--show-toplevel"],
+            short_timeout,
+        )
+        .expect("run_git_bounded_with itself should not error on timeout");
+        let elapsed = start.elapsed();
+
+        assert!(
+            out.timed_out,
+            "a hung git subprocess must be reported as timed_out, not fabricate success"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "run_git_bounded_with must return promptly on timeout (local override 300ms; \
+             production GIT_TIMEOUT is 45s), took {elapsed:?}"
+        );
+    }
+
+    /// A fast (non-hung) git invocation still returns its real output and is
+    /// not spuriously treated as timed out.
+    #[cfg(unix)]
+    #[test]
+    fn git_fast_subprocess_returns_output_without_timing_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fake_git = write_hanging_fake_git(tmp.path(), 0);
+        let cwd = tmp.path().join("cwd");
+        fs::create_dir_all(&cwd).unwrap();
+
+        let out = run_git_bounded_with(&fake_git, &cwd, &["status"], Duration::from_secs(3))
+            .expect("bounded run itself ok");
+        assert!(
+            !out.timed_out,
+            "a fast subprocess must not be treated as timed out"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "fake-git-output"
+        );
+    }
+
+    /// The public `git()` wrapper's error-formatting step must turn a
+    /// timed-out `GitOutput` into a named timeout error message (not a
+    /// bare/empty error), so callers' `.with_context()` chains stay
+    /// debuggable. Drives the real `git_output_to_result` formatting step
+    /// with a real timed-out `GitOutput` (produced via the fake hanging
+    /// binary + a short local timeout), rather than only asserting on a
+    /// hand-formatted string.
+    #[cfg(unix)]
+    #[test]
+    fn git_public_wrapper_reports_named_timeout_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fake_git = write_hanging_fake_git(tmp.path(), 30);
+        let cwd = tmp.path().join("cwd");
+        fs::create_dir_all(&cwd).unwrap();
+
+        let short_timeout = Duration::from_millis(300);
+        let args: &[&str] = &["status"];
+        let out = run_git_bounded_with(&fake_git, &cwd, args, short_timeout)
+            .expect("bounded run itself should not error");
+        assert!(out.timed_out, "expected the fake git call to time out");
+
+        let result = git_output_to_result(out, &cwd, args, short_timeout);
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("timed out") || err.contains("timeout"),
+            "error should name the timeout as the cause, got: {err}"
+        );
+        assert!(
+            err.contains("status"),
+            "error should name the git subcommand, got: {err}"
+        );
+    }
+
+    // ── path canonicalization before the "outside the repo" check ──────────
+
+    /// `canonicalize_prefix` on an existing path is equivalent to plain
+    /// `canonicalize()`.
+    #[test]
+    fn canonicalize_prefix_existing_path_matches_canonicalize() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        assert_eq!(canonicalize_prefix(&sub), sub.canonicalize().unwrap());
+    }
+
+    /// `canonicalize_prefix` on a path whose leaf components don't exist yet
+    /// (the common case for a not-yet-created worktree dir) resolves the
+    /// existing ancestor and rejoins the non-existent suffix, rather than
+    /// returning the raw uncanonicalized path.
+    #[test]
+    fn canonicalize_prefix_nonexistent_leaf_resolves_existing_ancestor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir_all(&base).unwrap();
+        let target = base.join("not-yet-created").join("topic");
+        assert!(!target.exists());
+
+        let resolved = canonicalize_prefix(&target);
+        let expected = base.canonicalize().unwrap().join("not-yet-created/topic");
+        assert_eq!(resolved, expected);
+    }
+
+    /// `create()` must refuse a worktree whose canonical path resolves inside
+    /// the repo even when the *raw* `worktree_base` path used to construct it
+    /// is not itself in canonical form (e.g. contains a symlink hop, or an
+    /// extra `.`/redundant separator that `Path::starts_with` would treat as
+    /// a different prefix than the repo's canonical root). This exercises the
+    /// worktree.rs:121-124-area canonicalize fix: comparing a canonical
+    /// `path` against `repo_canon`, not the raw `path` against `repo_canon`.
+    #[cfg(unix)]
+    #[test]
+    fn create_rejects_worktree_inside_repo_via_noncanonical_base() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+
+        // A symlink that points *into* the repo. Using it as `worktree_base`
+        // means the raw (non-canonical) path looks like it's outside the
+        // repo (different leading component), but its canonical form
+        // resolves inside the repo.
+        let link = tmp.path().join("repo-alias");
+        std::os::unix::fs::symlink(&repo, &link).unwrap();
+
+        let err = create(&repo, &link, "nested-topic", "condukt/x").unwrap_err();
+        assert!(
+            err.to_string().contains("inside the repo"),
+            "worktree_base reached via a symlink into the repo must still be \
+             rejected as 'inside the repo', got: {err}"
         );
     }
 }

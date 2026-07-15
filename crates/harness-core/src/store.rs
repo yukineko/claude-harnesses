@@ -940,6 +940,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Exercises the `canonical_dir` fallback at the top of the escape check
+    /// (`dir.canonicalize().unwrap_or(dir.clone())`): when the project dir
+    /// cannot be canonicalized (here: it was removed out from under us right
+    /// after `write_note_named` created it, simulating a DrvFs/WSL-style
+    /// mount or a race where the dir briefly doesn't resolve), the function
+    /// must fall back to the raw `dir` rather than panicking or silently
+    /// treating every write as an escape.
+    #[cfg(unix)]
+    #[test]
+    fn write_note_named_canonicalize_dir_fallback_does_not_panic() {
+        let (store, root) = temp_store("canon-dir-fallback");
+        let cwd = Path::new("/some/other-project");
+
+        let project_dir = store.project_dir(cwd);
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        // Replace the project dir with a dangling symlink so
+        // `project_dir.canonicalize()` fails (ENOENT via the broken symlink)
+        // even though the parent directory structure still exists — this is
+        // the shape of failure the `unwrap_or(dir.clone())` fallback guards
+        // against (canonicalize() erroring on a real, resolvable-by-path but
+        // not resolvable-by-canonicalize directory reference).
+        std::fs::remove_dir_all(&project_dir).unwrap();
+        let dangling_target = root.join("does-not-exist-target");
+        std::os::unix::fs::symlink(&dangling_target, &project_dir).unwrap();
+        assert!(
+            project_dir.canonicalize().is_err(),
+            "test setup: project_dir must fail to canonicalize (dangling symlink)"
+        );
+
+        // write_note_named must not panic; it either errors cleanly or
+        // succeeds with a path that is still inside `root` (the fallback
+        // path must not let a write escape just because canonicalize failed).
+        let result = store.write_note_named(cwd, "fallback-note", "body");
+        match result {
+            Ok(path) => {
+                assert!(
+                    path.starts_with(&root) || path.starts_with(&project_dir),
+                    "fallback path must stay under the project dir/root, got {path:?}"
+                );
+            }
+            Err(e) => {
+                // A clean IO error (e.g. can't create/write through the
+                // dangling symlink) is an acceptable outcome — the important
+                // invariant is "no panic, no escape", not "must succeed".
+                let _ = e;
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Guards tests that mutate the process-global `CONTEXT_GOVERNOR_STATE_DIR`
     /// env var so they never race each other (harness-core tests run in
     /// parallel by default).

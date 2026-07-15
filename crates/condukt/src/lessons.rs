@@ -199,6 +199,11 @@ mod tests {
         assert_eq!(v.as_object().unwrap().len(), 0, "empty object {{}}");
     }
 
+    /// Guards tests that mutate the process-global `LESSONS_STORE_DIR` env var
+    /// so they never race each other (condukt tests run in parallel by
+    /// default; mirrors the precedent in `replan::tests::ENV_LOCK`).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// DoD round-trip: the deterministic harvest facts drive an idempotent
     /// append into the cross-project store that lexical search then retrieves —
     /// and a second, byte-identical append (same content-derived id) is a true
@@ -209,6 +214,7 @@ mod tests {
     fn harvest_facts_drive_idempotent_append_that_search_retrieves() {
         use harness_core::lessons::{self, Kind, Lesson};
 
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         let cwd = tmp.path();
         let cfg = make_test_cfg(cwd);

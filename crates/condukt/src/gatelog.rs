@@ -102,18 +102,11 @@ pub fn decisions_path(dir: &Path) -> PathBuf {
 /// is atomic on POSIX for our line sizes). Mirrors
 /// [`crate::checkpoint::append_journal`].
 pub fn append_decision(dir: &Path, entry: &GateDecision) {
-    use std::io::Write;
     let Ok(line) = serde_json::to_string(entry) else {
         return;
     };
     let _ = std::fs::create_dir_all(dir);
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(decisions_path(dir))
-    {
-        let _ = writeln!(f, "{line}");
-    }
+    harness_core::append::append_line(&decisions_path(dir), &line);
 }
 
 /// Load the decision log in file order. A missing file yields an empty vec and
@@ -171,18 +164,11 @@ pub fn circuit_log_path(dir: &Path, run_id: &str) -> PathBuf {
 /// error is swallowed so a journaling failure never changes the gate's exit
 /// code. Mirrors [`append_decision`].
 pub fn append_circuit(dir: &Path, run_id: &str, entry: &CircuitRecord) {
-    use std::io::Write;
     let Ok(line) = serde_json::to_string(entry) else {
         return;
     };
     let _ = std::fs::create_dir_all(dir);
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(circuit_log_path(dir, run_id))
-    {
-        let _ = writeln!(f, "{line}");
-    }
+    harness_core::append::append_line(&circuit_log_path(dir, run_id), &line);
 }
 
 /// Load a run's circuit-verdict log in file order. Missing file → empty vec;
@@ -240,18 +226,11 @@ pub fn gate_exec_log_path(dir: &Path, run_id: &str) -> PathBuf {
 /// error is swallowed so a journaling failure never changes the gate's exit
 /// code. Mirrors [`append_circuit`].
 pub fn append_gate_exec(dir: &Path, run_id: &str, entry: &GateExecRecord) {
-    use std::io::Write;
     let Ok(line) = serde_json::to_string(entry) else {
         return;
     };
     let _ = std::fs::create_dir_all(dir);
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(gate_exec_log_path(dir, run_id))
-    {
-        let _ = writeln!(f, "{line}");
-    }
+    harness_core::append::append_line(&gate_exec_log_path(dir, run_id), &line);
 }
 
 /// Load a run's gate-exec-verdict log in file order. Missing file → empty vec;
@@ -411,5 +390,51 @@ mod tests {
         append_decision(dir.path(), &good);
         let got = load_decisions(dir.path());
         assert_eq!(got.len(), 2, "the corrupt middle line must be skipped");
+    }
+
+    /// Regression test for issue #15: concurrent appends via append_decision
+    /// must never interleave records. With atomic single-write (body+'\n' in one
+    /// buffer), every line parses as exactly one JSON object.
+    #[test]
+    fn concurrent_decision_appends_never_interleave() {
+        let dir = tempfile::tempdir().unwrap();
+
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 100;
+
+        std::thread::scope(|scope| {
+            for t in 0..THREADS {
+                let dir = dir.path().to_path_buf();
+                scope.spawn(move || {
+                    for i in 0..PER_THREAD {
+                        let decision = GateDecision {
+                            question: format!("q{}_{}", t, i),
+                            options: vec!["a".to_string(), "b".to_string()],
+                            recommend_index: 0,
+                            chosen: "a".to_string(),
+                            policy: "auto".to_string(),
+                            created_at: (t * 1000 + i) as i64,
+                        };
+                        append_decision(&dir, &decision);
+                    }
+                });
+            }
+        });
+
+        let text = std::fs::read_to_string(decisions_path(dir.path())).unwrap();
+        let mut count = 0usize;
+        for (n, l) in text.lines().enumerate() {
+            if l.is_empty() {
+                continue;
+            }
+            serde_json::from_str::<GateDecision>(l)
+                .unwrap_or_else(|e| panic!("line {n} is not a single JSON object: {e} — {l:.120}"));
+            count += 1;
+        }
+        assert_eq!(
+            count,
+            THREADS * PER_THREAD,
+            "every appended decision must survive as exactly one parseable line"
+        );
     }
 }

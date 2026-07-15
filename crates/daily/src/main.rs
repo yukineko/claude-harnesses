@@ -250,15 +250,47 @@ enum Outcome {
     SpawnError(String),
 }
 
+/// Resolve `task.dir` against `cwd` (the session/project root) and verify it
+/// does not escape that root before it is ever handed to `Command::current_dir`.
+///
+/// `task.dir` comes from `~/.daily/config.toml`, a file a user edits by hand —
+/// but a malformed or maliciously-crafted entry (e.g. `../../etc`) must not be
+/// able to point a subprocess's working directory outside the project root.
+/// We `canonicalize()` both the root and the candidate dir (resolving `..`,
+/// symlinks, and relative segments) and require the candidate to be the root
+/// or a descendant of it. Any failure (missing dir, canonicalize error,
+/// escape) falls back to `cwd` itself rather than trusting the raw path.
+fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> PathBuf {
+    let Some(raw) = task_dir else {
+        return cwd.to_path_buf();
+    };
+
+    let candidate = if Path::new(raw).is_absolute() {
+        PathBuf::from(raw)
+    } else {
+        cwd.join(raw)
+    };
+
+    let root_canon = match cwd.canonicalize() {
+        Ok(p) => p,
+        // Can't establish a trusted root at all — refuse the override and
+        // fall back to the (uncanonicalized) cwd rather than the candidate.
+        Err(_) => return cwd.to_path_buf(),
+    };
+
+    match candidate.canonicalize() {
+        Ok(candidate_canon) if candidate_canon.starts_with(&root_canon) => candidate_canon,
+        // Either the dir doesn't exist, canonicalize failed, or it resolved
+        // outside the project root (e.g. `../../etc`) — reject and fall back.
+        _ => root_canon,
+    }
+}
+
 /// Run one task via `sh -c`, in its `dir` (or the session cwd), with
 /// `$CARGO_HOME/bin` prepended to PATH so cargo subcommands resolve even when
 /// `~/.cargo/bin` isn't on the ambient PATH.
 fn run_task(task: &Task, cwd: &Path) -> Outcome {
-    let dir = task
-        .dir
-        .as_ref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| cwd.to_path_buf());
+    let dir = resolve_task_dir(task.dir.as_deref(), cwd);
 
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(&task.command).current_dir(&dir);
@@ -879,5 +911,49 @@ dir = \"/repo\"
         // Marking a done must not affect b (independent keys).
         assert!(!a.should_run());
         assert!(b.should_run());
+    }
+
+    #[test]
+    fn resolve_task_dir_defaults_to_cwd_when_unset() {
+        let root = tempfile::tempdir().unwrap();
+        let resolved = resolve_task_dir(None, root.path());
+        assert_eq!(resolved, root.path().canonicalize().unwrap());
+    }
+
+    #[test]
+    fn resolve_task_dir_accepts_subdir_within_root() {
+        let root = tempfile::tempdir().unwrap();
+        let sub = root.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let resolved = resolve_task_dir(Some("sub"), root.path());
+        assert_eq!(resolved, sub.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn resolve_task_dir_rejects_parent_traversal_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let root_canon = root.path().canonicalize().unwrap();
+        // e.g. `../../etc` — escapes the project root via `..` traversal.
+        let resolved = resolve_task_dir(Some("../../etc"), root.path());
+        // Rejected: falls back to the (canonicalized) root, never `/etc`.
+        assert_eq!(resolved, root_canon);
+        assert!(!resolved.ends_with("etc"));
+    }
+
+    #[test]
+    fn resolve_task_dir_rejects_absolute_escape_outside_root() {
+        let root = tempfile::tempdir().unwrap();
+        let root_canon = root.path().canonicalize().unwrap();
+        // An absolute path outside the root must also be rejected.
+        let resolved = resolve_task_dir(Some("/etc"), root.path());
+        assert_eq!(resolved, root_canon);
+    }
+
+    #[test]
+    fn resolve_task_dir_rejects_nonexistent_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let root_canon = root.path().canonicalize().unwrap();
+        let resolved = resolve_task_dir(Some("does-not-exist"), root.path());
+        assert_eq!(resolved, root_canon);
     }
 }

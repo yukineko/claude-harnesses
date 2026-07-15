@@ -159,9 +159,6 @@ fn log_event(cfg: &Config, note: &Note, sent: &[&str]) {
         return;
     }
     let path = cfg.state_dir.join("log.jsonl");
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     let entry = json!({
         "ts": chrono::Local::now().to_rfc3339(),
         "event": note.event,
@@ -169,15 +166,11 @@ fn log_event(cfg: &Config, note: &Note, sent: &[&str]) {
         "title": note.title,
         "channels": sent,
     });
-    if let (Ok(line), Ok(mut f)) = (
-        serde_json::to_string(&entry),
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path),
-    ) {
-        use std::io::Write;
-        let _ = writeln!(f, "{line}");
+    if let Ok(line) = serde_json::to_string(&entry) {
+        // Use harness_core::append::append_line to write as a single atomic
+        // write() syscall, preventing concurrent O_APPEND interleaving under
+        // parallel beacon notifications. See crates/harness-core/src/append.rs.
+        harness_core::append::append_line(&path, &line);
     }
 }
 
@@ -290,4 +283,74 @@ fn init(force: bool) -> anyhow::Result<()> {
     println!("wrote {}", path.display());
     println!("Run `beacon test` to check delivery, then `beacon install` to wire the hooks.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test for concurrent log_event appends. With the old writeln!
+    /// pattern (body + '\n' as two syscalls), concurrent O_APPEND writes could
+    /// interleave, concatenating two JSONL records onto one line. With
+    /// append_line (single write() syscall), all records must survive as
+    /// individually parseable JSON objects.
+    #[test]
+    fn concurrent_log_events_never_interleave_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("log.jsonl");
+
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 100;
+
+        // Simulate concurrent beacon notifications by spawning threads
+        // that call log_event in parallel with varying payload sizes.
+        std::thread::scope(|scope| {
+            for t in 0..THREADS {
+                let log_path = log_path.clone();
+                scope.spawn(move || {
+                    let cfg = Config {
+                        enabled: true,
+                        on_stop: true,
+                        on_notification: true,
+                        include_snippet: false,
+                        snippet_chars: 160,
+                        desktop: false,
+                        sound: None,
+                        slack_webhook: None,
+                        webhook: None,
+                        command: None,
+                        log: true,
+                        state_dir: log_path.parent().unwrap().to_path_buf(),
+                    };
+                    for i in 0..PER_THREAD {
+                        let note = Note {
+                            event: "test",
+                            title: format!("test {t}-{i}"),
+                            body: "x".repeat(i % 64),
+                            project: format!("proj-{t}"),
+                        };
+                        let sent = vec!["ch1"];
+                        log_event(&cfg, &note, &sent);
+                    }
+                });
+            }
+        });
+
+        // Verify every line is a complete JSON object (no interleaving).
+        let text = std::fs::read_to_string(&log_path).expect("read log");
+        let mut count = 0usize;
+        for (n, l) in text.lines().enumerate() {
+            if l.is_empty() {
+                continue;
+            }
+            serde_json::from_str::<serde_json::Value>(l)
+                .unwrap_or_else(|e| panic!("line {n} is not valid JSON: {e} — {l:.120}"));
+            count += 1;
+        }
+        assert_eq!(
+            count,
+            THREADS * PER_THREAD,
+            "all {count} appended records must survive as individually parseable JSON lines"
+        );
+    }
 }

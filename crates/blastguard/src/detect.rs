@@ -642,12 +642,58 @@ fn analyze_rm(rest: &[&str]) -> Decision {
     }
 }
 
+/// Index in `rest` of the git subcommand token, skipping git's global options
+/// AND the separate-token value of a value-taking global option. Without this,
+/// a naive "first non-dash token" scan lands on the VALUE of a value-taking
+/// global option (`git -C DIR reset --hard`, `git -c user.name=x clean -fd`,
+/// `git --git-dir PATH checkout --force`), misreads it as the subcommand, and
+/// every git deny falls through to Allow — a fail-open bypass (CA-blastguard-07).
+/// Mirrors `xargs_command_start`: `--` ends option parsing, a value-taking
+/// global option in *separate* form consumes the next token too. Returns None
+/// when no subcommand token follows (bare `git`/only global flags — nothing to
+/// analyse).
+fn git_subcommand_index(rest: &[&str]) -> Option<usize> {
+    // Global options whose value is the NEXT token when given in *separate*
+    // form (`-C DIR`, `-c k=v`, `--git-dir PATH`). Stuck/`=`-joined forms
+    // (`-C/path`, `--git-dir=path`) embed the value and consume only themselves,
+    // so they are handled by the generic "other `-`-prefixed token" arm below.
+    const VALUE_SEPARATE: &[&str] = &[
+        "-C",
+        "-c",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--super-prefix",
+        "--config-env",
+    ];
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        if t == "--" {
+            // `--` ends option parsing: the next token is the subcommand.
+            return if i + 1 < rest.len() {
+                Some(i + 1)
+            } else {
+                None
+            };
+        }
+        if !t.starts_with('-') {
+            return Some(i); // first non-flag token = the subcommand
+        }
+        // A value-taking global option in separate form consumes the next token
+        // too; any other `-`-prefixed token (stuck/`=`-joined/boolean) is self-
+        // contained.
+        i += if VALUE_SEPARATE.contains(&t) { 2 } else { 1 };
+    }
+    None
+}
+
 fn analyze_git(rest: &[&str]) -> Decision {
-    let sub = rest
-        .iter()
-        .find(|t| !t.starts_with('-'))
-        .map(|t| basename(t))
-        .unwrap_or("");
+    let idx = match git_subcommand_index(rest) {
+        Some(i) => i,
+        None => return Decision::Allow,
+    };
+    let sub = basename(rest[idx]);
     match sub {
         "clean" => {
             let has_f = has_short(rest, 'f') || rest.contains(&"--force");
@@ -698,11 +744,12 @@ fn analyze_git(rest: &[&str]) -> Decision {
             // other subcommand (list/show/push/save/pop/apply/branch and the
             // bare `git stash` push) is non-destructive, so only the two
             // discard forms are denied. The stash subcommand is the first
-            // non-flag token *after* the `stash` token.
-            let subcmd = rest
+            // non-flag token *after* the resolved `stash` token (`idx`) — not a
+            // fresh naive scan, which under a global prefix would land on the
+            // prefix value (`git -C DIR stash clear`).
+            let subcmd = rest[idx + 1..]
                 .iter()
-                .position(|t| !t.starts_with('-'))
-                .and_then(|p| rest[p + 1..].iter().find(|t| !t.starts_with('-')))
+                .find(|t| !t.starts_with('-'))
                 .map(|t| basename(t))
                 .unwrap_or("");
             if subcmd == "clear" || subcmd == "drop" {
@@ -868,6 +915,29 @@ mod tests {
         assert!(bash("git checkout -- .").is_deny());
         assert!(bash("git checkout --force").is_deny());
         assert!(bash("git checkout -f").is_deny());
+    }
+
+    #[test]
+    fn ca_blastguard_07_git_global_option_prefix_still_fires_deny() {
+        // CA-blastguard-07: git global options that take a SEPARATE-token value
+        // (`-C DIR`, `-c k=v`, `--git-dir PATH`, …) place a non-dash value token
+        // right after the option. A naive "first non-dash token" scan misread
+        // that value as the subcommand, so every git deny fell through to Allow
+        // (fail-open). git_subcommand_index now skips the prefix + its value.
+        assert!(bash("git -C DIR reset --hard").is_deny());
+        assert!(bash("git -c user.name=x clean -fd").is_deny());
+        assert!(bash("git --git-dir PATH checkout --force").is_deny());
+        // The stash arm derived its sub-subcommand from a fresh naive scan with
+        // the same blindness — resolve it relative to the subcommand index.
+        assert!(bash("git -C DIR stash clear").is_deny());
+        // Non-value flags and other global-option spellings must still resolve
+        // the subcommand correctly (no over- or under-broadening).
+        assert!(bash("git --work-tree PATH clean -fdx").is_deny());
+        assert!(bash("git --git-dir=PATH reset --hard").is_deny());
+        assert!(bash("git -C DIR -c k=v reset --hard").is_deny());
+        // Global-prefixed but non-destructive subcommands stay allowed.
+        assert_eq!(bash("git -C DIR status"), Decision::Allow);
+        assert_eq!(bash("git -C DIR stash list"), Decision::Allow);
     }
 
     #[test]

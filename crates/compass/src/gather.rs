@@ -14,15 +14,23 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::Result;
 use harness_core::interrogate::{Authority, Bundle, Fragment};
+use wait_timeout::ChildExt;
 
 use crate::charter::Charter;
 use crate::config::Config;
 
 /// How many recent commit subjects to pull into the bundle.
 const RECENT_COMMITS: usize = 30;
+
+/// Hard timeout for any `git` subprocess spawned from this module. A repo on a
+/// network mount, a huge history, or a lock contention shouldn't be able to
+/// hang the hook turn — fail-soft to `None` instead (gather is best-effort by
+/// design; see module docs).
+const GIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Build the gather [`Bundle`] for `repo_root`. Never errors on a missing
 /// source; the `Result` is reserved for genuinely unexpected failures (none of
@@ -189,24 +197,77 @@ fn collect_md(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 }
 
 /// Run `git <args>` in `repo_root`, returning trimmed stdout on success.
-/// Returns `None` for any failure (non-git dir, missing git, non-zero exit) so
-/// callers can treat git as an optional source.
+/// Returns `None` for any failure (non-git dir, missing git, non-zero exit, or
+/// timeout) so callers can treat git as an optional source.
 fn git_stdout(repo_root: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(args)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo_root).args(args);
+    run_bounded(cmd, GIT_TIMEOUT)
+}
+
+/// Spawn `cmd`, wait up to `timeout` for it to finish, and return its stdout
+/// on success. Fail-soft on every edge case: spawn failure, non-zero exit, or
+/// timeout (in which case the child is killed) all return `None` rather than
+/// panicking or propagating an error. This keeps gathering from ever hanging a
+/// hook turn.
+fn run_bounded(mut cmd: Command, timeout: Duration) -> Option<String> {
+    use std::process::Stdio;
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().ok()?;
+    match child.wait_timeout(timeout) {
+        Ok(Some(status)) => {
+            if !status.success() {
+                return None;
+            }
+            let mut out = Vec::new();
+            if let Some(mut s) = child.stdout.take() {
+                use std::io::Read;
+                let _ = s.read_to_end(&mut out);
+            }
+            Some(String::from_utf8_lossy(&out).to_string())
+        }
+        Ok(None) => {
+            // Timed out: kill the child so it doesn't linger, then bail.
+            let _ = child.kill();
+            let _ = child.wait();
+            None
+        }
+        Err(_) => None,
     }
-    Some(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A deliberately slow "command" (sleeps longer than the timeout) to
+    /// verify `run_bounded` actually kills and returns `None` on timeout,
+    /// rather than blocking the test (and, in production, the hook turn).
+    #[cfg(unix)]
+    #[test]
+    fn run_bounded_times_out_on_slow_command_and_returns_none() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5"); // much longer than the timeout below.
+        let start = std::time::Instant::now();
+        let result = run_bounded(cmd, Duration::from_millis(200));
+        let elapsed = start.elapsed();
+        assert!(result.is_none(), "timed-out command must yield None");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "run_bounded should return promptly after timeout, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn run_bounded_returns_stdout_on_fast_command() {
+        let mut cmd = Command::new("echo");
+        cmd.arg("hello");
+        let result = run_bounded(cmd, Duration::from_secs(5));
+        assert_eq!(
+            result.map(|s| s.trim().to_string()),
+            Some("hello".to_string())
+        );
+    }
 
     #[test]
     fn gather_tolerates_non_git_dir() {

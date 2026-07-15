@@ -12,8 +12,16 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
+use wait_timeout::ChildExt;
+
 use crate::charter::Charter;
 use crate::config::Config;
+
+/// Hard timeout for any `git` subprocess spawned from this module. A repo on a
+/// network mount, a huge history, or a lock contention shouldn't be able to
+/// hang the hook turn — fail-soft to `None` instead (DESIGN: deterministic
+/// signals must never block).
+const GIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Result of the C2 deterministic floor. `reasons` is empty iff `!stale`.
 #[derive(Debug, Clone, Default)]
@@ -245,23 +253,83 @@ fn is_cjk(ch: char) -> bool {
 }
 
 /// Run `git <args>` in `repo_root`, returning trimmed stdout on success, or
-/// `None` for any failure (non-git, missing git, non-zero exit).
+/// `None` for any failure (non-git, missing git, non-zero exit, or timeout).
 fn git_stdout(repo_root: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(args)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo_root).args(args);
+    run_bounded(cmd, GIT_TIMEOUT)
+}
+
+/// Spawn `cmd`, wait up to `timeout` for it to finish, and return its stdout
+/// on success. Fail-soft on every edge case: spawn failure, non-zero exit, or
+/// timeout (in which case the child is killed) all return `None` rather than
+/// panicking or propagating an error. This keeps deterministic-signal
+/// gathering from ever hanging a hook turn.
+fn run_bounded(mut cmd: Command, timeout: Duration) -> Option<String> {
+    use std::process::Stdio;
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().ok()?;
+    match child.wait_timeout(timeout) {
+        Ok(Some(status)) => {
+            if !status.success() {
+                return None;
+            }
+            let mut out = Vec::new();
+            if let Some(mut s) = child.stdout.take() {
+                use std::io::Read;
+                let _ = s.read_to_end(&mut out);
+            }
+            Some(String::from_utf8_lossy(&out).to_string())
+        }
+        Ok(None) => {
+            // Timed out: kill the child so it doesn't linger, then bail.
+            let _ = child.kill();
+            let _ = child.wait();
+            None
+        }
+        Err(_) => None,
     }
-    Some(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A deliberately slow "command" (sleeps longer than the timeout) to
+    /// verify `run_bounded` actually kills and returns `None` on timeout,
+    /// rather than blocking the test (and, in production, the hook turn).
+    #[cfg(unix)]
+    #[test]
+    fn run_bounded_times_out_on_slow_command_and_returns_none() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5"); // much longer than the timeout below.
+        let start = std::time::Instant::now();
+        let result = run_bounded(cmd, Duration::from_millis(200));
+        let elapsed = start.elapsed();
+        assert!(result.is_none(), "timed-out command must yield None");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "run_bounded should return promptly after timeout, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn run_bounded_returns_stdout_on_fast_command() {
+        let mut cmd = Command::new("echo");
+        cmd.arg("hello");
+        let result = run_bounded(cmd, Duration::from_secs(5));
+        assert_eq!(
+            result.map(|s| s.trim().to_string()),
+            Some("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn git_stdout_returns_none_for_nonexistent_repo() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Not a git repo: rev-parse should fail (non-zero exit) => None.
+        assert!(git_stdout(dir.path(), &["rev-parse", "--git-dir"]).is_none());
+    }
 
     #[test]
     fn dod_missing_path_trips_when_check_enabled() {

@@ -107,7 +107,7 @@
     {
       "name": "compass",
       "description": "Goal re-grounding + next-move derivation upstream of condukt for Claude Code: when the goal goes fuzzy or you stall after finishing a chunk, it carves the project charter (north star + definition of done + current gap) through an interrogate loop, then routes only the right-sized next move into condukt while parking side-quests to taskprog. Subscription-native (SessionStart nudge + Stop breadcrumb hooks + /compass skill + bundled Rust binary, no API key).",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "category": "planning",
       "keywords": [
         "compass",

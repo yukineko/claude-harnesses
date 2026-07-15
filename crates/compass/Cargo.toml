@@ -1,6 +1,6 @@
 [package]
 name = "compass"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2021"
 rust-version.workspace = true
 description = "Goal re-grounding + next-move derivation upstream of condukt; subscription-native."
@@ -17,6 +17,7 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
+wait-timeout = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }

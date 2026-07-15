@@ -752,7 +752,7 @@
     {
       "name": "autoflow",
       "description": "Session-end auto-flow gate for Claude Code: on Stop, prompt /record once, then loop /condukt until pending tasks are cleared (auto up to 4×, ask the user from 5× onward). Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "category": "orchestration",
       "keywords": [
         "hooks",

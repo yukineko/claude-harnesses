@@ -247,13 +247,60 @@ fn check_large_references(prompt: &str, cwd: &Path, cfg: &Config) -> Option<Stri
 
 // ----------------------------------------------------------------- T2
 
+/// Rough per-prompt token estimate used ONLY as a last-resort fallback when no
+/// transcript is available yet (short-lived sessions where a hook fires before
+/// Claude Code has written any transcript file — e.g. very early PreToolUse/
+/// UserPromptSubmit calls). Mirrors the same bytes/4 heuristic
+/// `transcript::estimate_tokens` falls back to when a transcript has no
+/// `usage` block, so the two estimates stay on a comparable scale.
+fn estimate_tokens_from_prompt(prompt: &str) -> u64 {
+    (prompt.len() as u64) / 4
+}
+
 /// Returns `(band, advice text)` so the caller can prioritise the danger band as
 /// a safety block under the injection cap. None when no escalation fires.
+///
+/// Regression note (backlog 5f245804): this used to `return None` immediately
+/// whenever `transcript_path` was empty/unreadable, which meant NO `budget`
+/// metrics event was ever emitted for short-lived sessions — `metrics::peak`
+/// then reported a bogus ~0% because `SessionStat::peak_tokens` only rolls up
+/// from `budget` events. Now we still emit a `budget` sample (least-confidence
+/// `src: "prompt-fallback"`) using a rough estimate from the prompt text, so the
+/// session's token trajectory is observable even before a transcript exists.
+/// Escalation advice still requires a real transcript-derived estimate (the
+/// prompt-only estimate is too rough to safely gate `/compact` advice on).
 fn check_context_budget(input: &HookInput, cfg: &Config) -> Option<(usize, String)> {
-    if input.transcript_path.is_empty() {
-        return None;
-    }
-    let (est_tokens, _src) = transcript::estimate_tokens(&input.transcript_path)?;
+    let transcript_est = if input.transcript_path.is_empty() {
+        None
+    } else {
+        transcript::estimate_tokens(&input.transcript_path)
+    };
+
+    let (est_tokens, _src) = match transcript_est {
+        Some(v) => v,
+        None => {
+            // No transcript yet (or unreadable): still record a coarse sample so
+            // the session isn't invisible to metrics, but never escalate advice
+            // off of it — return after emitting.
+            let est_tokens = estimate_tokens_from_prompt(&input.prompt);
+            let frac = est_tokens as f64 / cfg.context_window as f64;
+            let band = cfg.band_for(frac);
+            crate::metrics::emit(
+                cfg,
+                &input.session_id,
+                "budget",
+                serde_json::json!({
+                    "est_tokens": est_tokens,
+                    "frac": (frac * 1000.0).round() / 1000.0,
+                    "band": band,
+                    "band_prev": band,
+                    "crossed": false,
+                    "src": "prompt-fallback",
+                }),
+            );
+            return None;
+        }
+    };
     let frac = est_tokens as f64 / cfg.context_window as f64;
     let band = cfg.band_for(frac);
 
@@ -799,6 +846,51 @@ mod tests {
 
         // Escalate-only: the same band does not re-fire (so it won't re-rescue every turn).
         assert!(check_context_budget(&input, &cfg).is_none());
+    }
+
+    #[test]
+    fn short_session_without_transcript_still_records_budget_metric() {
+        // Regression (backlog 5f245804): a short-lived session where the hook
+        // fires before Claude Code has written any transcript file (empty
+        // `transcript_path`) used to `return None` immediately, WITHOUT emitting
+        // a `budget` metrics event — so `metrics::summarize`/`peak` reported a
+        // bogus ~0% for that session forever (peak_tokens only rolls up from
+        // `budget` events). Now a coarse prompt-based estimate is recorded
+        // instead, so the session is observable even pre-transcript.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base = tmp.path();
+        let cwd = base.join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let cfg = Config {
+            state_dir: base.join("state"),
+            store_dir: base.join("store"),
+            ..Config::default()
+        };
+        let input = HookInput {
+            session_id: "sess-short".into(),
+            transcript_path: String::new(), // not yet written
+            prompt: "x".repeat(4000),       // ~1000 tokens at the bytes/4 heuristic
+            cwd: cwd.to_string_lossy().into_owned(),
+            ..HookInput::default()
+        };
+
+        // No transcript → no escalation advice (never gate /compact advice off a
+        // rough prompt-only estimate), but the call must still side-effect a
+        // metrics sample.
+        assert!(check_context_budget(&input, &cfg).is_none());
+
+        let stats = crate::metrics::summarize(&cfg);
+        let s = stats
+            .iter()
+            .find(|s| s.session == "sess-short")
+            .expect("a budget sample must be recorded even without a transcript");
+        assert!(
+            s.peak_tokens > 0,
+            "peak_tokens must reflect the prompt-fallback estimate, not stay stuck at 0: {}",
+            s.peak_tokens
+        );
+        assert_eq!(s.peak_tokens, 1000, "4000 bytes / 4 == 1000 est tokens");
     }
 
     /// Build a temp cfg + cwd and a session note carrying the given Decisions /

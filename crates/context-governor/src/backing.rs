@@ -256,10 +256,21 @@ mod tests {
             let key = store.put(&original);
             let back = store.recall(&key).expect("recall after put");
             assert_eq!(back, original, "lossless round-trip for {lane:?}");
-            // Body text must be byte-identical.
+            // Body text must be byte-identical. Assert on the shape via a bool
+            // flag rather than `panic!`-ing in the unexpected-variant arm, so a
+            // regression here yields a normal assertion failure (clean, message
+            // carries context) instead of an ad hoc panic in test code.
+            let both_inline = matches!(
+                (&back.body, &original.body),
+                (ItemBody::Inline(_), ItemBody::Inline(_))
+            );
+            assert!(
+                both_inline,
+                "expected inline bodies, got {back:?} / {original:?}"
+            );
             match (&back.body, &original.body) {
                 (ItemBody::Inline(a), ItemBody::Inline(b)) => assert_eq!(a, b),
-                _ => panic!("expected inline bodies"),
+                _ => unreachable!("shape already asserted above"),
             }
         }
     }
@@ -271,9 +282,14 @@ mod tests {
         let key = store.put(&original);
         let back = store.recall(&key).expect("recall after put");
         assert_eq!(back, original);
+        // Assert the shape via a bool flag rather than `panic!`-ing in the
+        // unexpected-variant arm, so a regression yields a normal assertion
+        // failure instead of an ad hoc panic in test code.
+        let is_ref = matches!(back.body, ItemBody::Ref(_));
+        assert!(is_ref, "expected Ref body, got {:?}", back.body);
         match back.body {
             ItemBody::Ref(k) => assert_eq!(k, StoreKey(0xdead_beef)),
-            _ => panic!("expected Ref body"),
+            _ => unreachable!("shape already asserted above"),
         }
     }
 
@@ -301,6 +317,15 @@ mod tests {
 
         let snap = store.recall(&SNAPSHOT_KEY).expect("recall snapshot");
         assert_eq!(snap.lane, Lane::Verbatim);
+        // Assert the shape via a bool flag rather than `panic!`-ing in the
+        // unexpected-variant arm, so a regression yields a normal assertion
+        // failure instead of an ad hoc panic in test code.
+        let is_inline = matches!(snap.body, ItemBody::Inline(_));
+        assert!(
+            is_inline,
+            "snapshot body must be Inline, got {:?}",
+            snap.body
+        );
         match snap.body {
             ItemBody::Inline(s) => {
                 assert!(!s.is_empty(), "excerpt must be non-empty");
@@ -309,7 +334,7 @@ mod tests {
                     "excerpt should carry the turn text: {s}"
                 );
             }
-            _ => panic!("snapshot body must be Inline"),
+            _ => unreachable!("shape already asserted above"),
         }
     }
 

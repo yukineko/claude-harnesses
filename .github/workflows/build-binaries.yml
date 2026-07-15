@@ -62,6 +62,15 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo build --workspace --release
+      # Explicit, named build of every binary crates/integration-tests/tests/e2e.rs
+      # shells out to. `cargo build --workspace --release` above already covers
+      # this, but this step keeps the e2e binary prerequisite legible and
+      # independently correct even if the workspace build step above were ever
+      # narrowed. GitHub Actions sets `CI=true` for every job, so if a required
+      # binary is somehow still missing after this step, `bin()` in e2e.rs
+      # panics (see crates/integration-tests/tests/e2e.rs) instead of silently
+      # skipping the test.
+      - run: cargo build --release -p flow -p backlog -p fugu-router -p condukt
       - run: cargo test  --workspace
 
   darwin:

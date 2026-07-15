@@ -4,10 +4,15 @@
 //! in how `flow` shells out to `backlog`, or how `fugu-router route` /
 //! `condukt schedule` / `condukt state` shape their I/O, breaks a test here.
 //!
-//! Fail-soft binary discovery: if a required sibling binary has not been built,
-//! the test prints a skip note and returns green (see [`bin`]). Build the bins
-//! first (`cargo build -p flow -p backlog -p fugu-router -p condukt`) for the
-//! tests to actually exercise the contract instead of skipping.
+//! Binary discovery ([`bin`]): if a required sibling binary has not been
+//! built, local (non-CI) runs print a skip note and return green — a
+//! convenience so `cargo test -p integration-tests` doesn't force a full
+//! workspace build during iteration. In CI (`CI` env var set, as GitHub
+//! Actions and most CI providers do), a missing binary is instead a hard
+//! `panic!` failure — see [`skip_or_panic`] — so a broken build step can never
+//! silently downgrade this suite to a no-op in the gate. Build
+//! the bins first (`cargo build -p flow -p backlog -p fugu-router -p condukt`)
+//! for the tests to actually exercise the contract instead of skipping.
 //!
 //! Isolation: every test uses `tempfile::TempDir` for both the project dir and
 //! (where a binary persists state under `$HOME`) a fresh `$HOME`, so nothing
@@ -23,9 +28,10 @@ use tempfile::TempDir;
 /// Looks under `<target>/release/<name>` first, then `<target>/debug/<name>`,
 /// returning the first that exists. When `CARGO_TARGET_DIR` is unset the target
 /// dir is derived from this crate's manifest dir (`.../crates/integration-tests`)
-/// joined with `../../target`. Returns `None` if the binary is not built — every
-/// test treats `None` as "skip", never a failure, so the suite stays green on a
-/// machine where the bins aren't compiled.
+/// joined with `../../target`. Returns `None` if the binary is not built.
+///
+/// `None` is only ever treated as "skip" OUTSIDE CI (see [`skip_or_panic`]) —
+/// in CI a missing binary is a hard failure, never a silent skip.
 fn bin(name: &str) -> Option<PathBuf> {
     let target = match std::env::var_os("CARGO_TARGET_DIR") {
         Some(dir) => PathBuf::from(dir),
@@ -38,6 +44,33 @@ fn bin(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// True when running under a CI provider.
+///
+/// Checks the `CI` environment variable, the de-facto convention GitHub
+/// Actions (and most other CI providers) set to `"true"` for every job. Any
+/// non-empty value counts as "in CI" — we only care that *some* CI marker is
+/// present, not its exact spelling.
+fn is_ci() -> bool {
+    std::env::var_os("CI").is_some_and(|v| !v.is_empty())
+}
+
+/// Handle a missing-binary condition for a test: fail hard in CI, skip locally.
+///
+/// In CI (`is_ci()`), a missing binary means the build step that is supposed to
+/// produce it is broken or missing — that must fail the gate, never silently
+/// downgrade to a skip. Locally, missing binaries are a normal part of
+/// iterating on a single crate, so we print a skip note and let the caller
+/// `return` early (green).
+///
+/// `test_name` and `msg` are only used for the message; call this then `return`
+/// from the test when it does not panic.
+fn skip_or_panic(test_name: &str, msg: &str) {
+    if is_ci() {
+        panic!("{test_name}: {msg} (CI must build all required binaries before running e2e tests)");
+    }
+    eprintln!("SKIP {test_name}: {msg}");
 }
 
 /// The directory that holds the built binaries (parent of a resolved binary).
@@ -76,7 +109,10 @@ fn path_with(dir: &std::path::Path) -> std::ffi::OsString {
 #[test]
 fn contract_a_empty_project_is_silent() {
     let (Some(flow), Some(dir)) = (bin("flow"), bin_dir()) else {
-        eprintln!("SKIP contract_a_empty_project_is_silent: flow binary not built");
+        skip_or_panic(
+            "contract_a_empty_project_is_silent",
+            "flow binary not built",
+        );
         return;
     };
     let proj = TempDir::new().expect("tempdir proj");
@@ -112,7 +148,10 @@ fn contract_a_empty_project_is_silent() {
 #[test]
 fn contract_a_pending_item_is_announced() {
     let (Some(flow), Some(backlog), Some(dir)) = (bin("flow"), bin("backlog"), bin_dir()) else {
-        eprintln!("SKIP contract_a_pending_item_is_announced: flow/backlog binary not built");
+        skip_or_panic(
+            "contract_a_pending_item_is_announced",
+            "flow/backlog binary not built",
+        );
         return;
     };
     let proj = TempDir::new().expect("tempdir proj");
@@ -211,7 +250,10 @@ fn decomposition_json() -> serde_json::Value {
 #[test]
 fn contract_b_route_preserves_ids_and_models() {
     let Some(router) = bin("fugu-router") else {
-        eprintln!("SKIP contract_b_route_preserves_ids_and_models: fugu-router not built");
+        skip_or_panic(
+            "contract_b_route_preserves_ids_and_models",
+            "fugu-router not built",
+        );
         return;
     };
     let tmp = TempDir::new().expect("tempdir");
@@ -271,7 +313,10 @@ fn contract_b_route_preserves_ids_and_models() {
 #[test]
 fn contract_b_schedule_routes_classes() {
     let (Some(router), Some(condukt)) = (bin("fugu-router"), bin("condukt")) else {
-        eprintln!("SKIP contract_b_schedule_routes_classes: fugu-router/condukt not built");
+        skip_or_panic(
+            "contract_b_schedule_routes_classes",
+            "fugu-router/condukt not built",
+        );
         return;
     };
     let tmp = TempDir::new().expect("tempdir");
@@ -367,7 +412,7 @@ fn contract_b_schedule_routes_classes() {
 #[test]
 fn contract_b_state_roundtrip_gate_passes_when_all_verified() {
     let Some(condukt) = bin("condukt") else {
-        eprintln!("SKIP contract_b_state_roundtrip: condukt not built");
+        skip_or_panic("contract_b_state_roundtrip", "condukt not built");
         return;
     };
     let tmp = TempDir::new().expect("tempdir");
@@ -487,7 +532,10 @@ fn scheduled_ids(sched: &serde_json::Value) -> Vec<String> {
 #[test]
 fn contract_c_connected_chain_route_schedule_state_gate() {
     let (Some(router), Some(condukt)) = (bin("fugu-router"), bin("condukt")) else {
-        eprintln!("SKIP contract_c_connected_chain: fugu-router/condukt not built");
+        skip_or_panic(
+            "contract_c_connected_chain",
+            "fugu-router/condukt not built",
+        );
         return;
     };
     let tmp = TempDir::new().expect("tempdir");

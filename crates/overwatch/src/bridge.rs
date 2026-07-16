@@ -178,27 +178,6 @@ fn build_notes(f: &ReviewFinding, now: i64, freshness: Option<&TestFreshness>) -
     notes
 }
 
-/// Stable content fingerprint for a finding, kept **in lockstep** with
-/// [`review_queue::finding_fingerprint`] (the same key that
-/// [`review_queue::dedup_findings`] groups duplicates on): `source` plus the
-/// normalized `file`/`summary`, joined with a unit-separator so no field value
-/// can forge a collision. This is the finding's *stable* identity — unlike the
-/// dedup **representative id**, which rotates to the newest record's
-/// `finding_id` each round. The to-backlog idempotency check keys on this
-/// signature so a recurring finding surfacing under a fresh representative id is
-/// still recognized as already-bridged (CA-overwatch-01).
-fn finding_fingerprint(f: &ReviewFinding) -> String {
-    fn normalize(s: &str) -> String {
-        s.split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .to_ascii_lowercase()
-    }
-    let file = normalize(f.file.as_deref().unwrap_or(""));
-    let summary = normalize(&f.summary);
-    format!("{}\u{1f}{}\u{1f}{}", f.source, file, summary)
-}
-
 /// Pure planner: given the deduped representative findings, the raw finding
 /// records, and the already-bridged ledger (bare finding-ids — also the
 /// review-metrics "resolved" source), decide which representatives still need a
@@ -224,14 +203,14 @@ fn plan_finding_bridges<'a>(
     let bridged_fingerprints: HashSet<String> = raw_findings
         .iter()
         .filter(|f| already.contains(&f.finding_id))
-        .map(finding_fingerprint)
+        .map(review_queue::finding_fingerprint)
         .collect();
 
     deduped
         .iter()
         .filter(|(f, _)| {
             !already.contains(&f.finding_id)
-                && !bridged_fingerprints.contains(&finding_fingerprint(f))
+                && !bridged_fingerprints.contains(&review_queue::finding_fingerprint(f))
         })
         .map(|(f, _)| f)
         .collect()

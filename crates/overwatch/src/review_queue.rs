@@ -121,7 +121,7 @@ fn normalize_for_fingerprint(s: &str) -> String {
 /// unit-separator (`\u{1f}`) so no legitimate field value can forge a
 /// collision by embedding the delimiter. There is no rule-id field on
 /// `ReviewFinding` — this is built only from real, existing fields.
-fn finding_fingerprint(f: &ReviewFinding) -> String {
+pub(crate) fn finding_fingerprint(f: &ReviewFinding) -> String {
     let file = normalize_for_fingerprint(f.file.as_deref().unwrap_or(""));
     let summary = normalize_for_fingerprint(&f.summary);
     format!("{}\u{1f}{}\u{1f}{}", f.source, file, summary)
@@ -522,6 +522,30 @@ mod tests {
             resolved: false,
             created_at: ts,
         }
+    }
+
+    /// Pin the exact bytes of [`finding_fingerprint`] so any future change to
+    /// the normalization (whitespace collapse, trim, ascii-lowercase) or the
+    /// unit-separator join is caught. This is the shared key both the dedup
+    /// grouping and the to-backlog idempotency contract (CA-overwatch-01) rely
+    /// on; drifting it silently would break already-bridged recognition.
+    #[test]
+    fn finding_fingerprint_bytes_are_pinned() {
+        let sample = ReviewFinding::new(
+            "f-1".to_string(),
+            "reviewgate".to_string(),
+            Some("high".to_string()),
+            // mixed case + collapsible internal whitespace (spaces + a tab)
+            "  Duplicate\tHelper   Across   Modules  ".to_string(),
+            // irregular surrounding whitespace + mixed case
+            Some("  Crates/Foo.rs  ".to_string()),
+            None,
+            42,
+        );
+        // source + US + normalized(file) + US + normalized(summary), where
+        // normalize = collapse whitespace to single spaces, trim, ascii-lowercase.
+        let expected = "reviewgate\u{1f}crates/foo.rs\u{1f}duplicate helper across modules";
+        assert_eq!(finding_fingerprint(&sample), expected);
     }
 
     #[test]

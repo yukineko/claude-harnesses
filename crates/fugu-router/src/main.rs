@@ -22,11 +22,14 @@ mod semantic;
 mod store;
 
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use harness_core::hook::{read_stdin, run_hook, HookInput};
 use serde_json::json;
+use wait_timeout::ChildExt;
 
 #[derive(Parser)]
 #[command(
@@ -932,31 +935,71 @@ fn cmd_import(
     Ok(())
 }
 
+/// Timeout for the slow, network-bound git operations (pull/clone/push).
+const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
+/// Timeout for the fast, local-only git operations (status/add/diff/commit).
+const GIT_LOCAL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Run `git <args>` bounded by `timeout`: kills (and reaps) the child on
+/// expiry rather than letting a hung/network-stalled git subprocess wedge
+/// `cmd_sync` indefinitely. Fail-soft in the sense that a timeout is reported
+/// as a normal `Err` (not a panic) the same way a non-zero exit would be.
+fn run_git_with_timeout(args: &[&str], timeout: Duration) -> Result<std::process::Output> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(args);
+    spawn_and_wait_timeout(cmd, timeout).with_context(|| format!("running git {args:?}"))
+}
+
+/// Spawn `cmd` and wait at most `timeout` for it to finish, killing (and
+/// reaping) it on expiry. Generic over the command so the timeout/kill path
+/// is testable without a real `git` binary.
+fn spawn_and_wait_timeout(
+    mut cmd: std::process::Command,
+    timeout: Duration,
+) -> Result<std::process::Output> {
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawning subprocess")?;
+    match child.wait_timeout(timeout) {
+        Ok(Some(_status)) => {}
+        Ok(None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("subprocess timed out after {timeout:?} and was killed");
+        }
+        Err(e) => anyhow::bail!("waiting on subprocess: {e}"),
+    }
+    child
+        .wait_with_output()
+        .context("collecting subprocess output")
+}
+
 fn cmd_sync(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<()> {
     let repo_url = cfg.sync_repo.as_deref().ok_or_else(|| {
         anyhow::anyhow!("sync_repo is not configured in ~/.fugu-router/config.toml")
     })?;
     let sync_dir = cfg.sync_dir_path();
+    let sync_dir_str = sync_dir.to_string_lossy().into_owned();
 
     // --- pull phase ---
     if !push_only {
         if sync_dir.join(".git").exists() {
             eprintln!("pulling from remote…");
-            let status = std::process::Command::new("git")
-                .args(["-C", &sync_dir.to_string_lossy(), "pull", "--ff-only"])
-                .status()
-                .context("running git pull")?;
-            anyhow::ensure!(status.success(), "git pull failed");
+            let out = run_git_with_timeout(
+                &["-C", &sync_dir_str, "pull", "--ff-only"],
+                GIT_NETWORK_TIMEOUT,
+            )?;
+            anyhow::ensure!(out.status.success(), "git pull failed");
         } else {
             eprintln!("cloning {} → {}…", repo_url, sync_dir.display());
             if let Some(parent) = sync_dir.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            let status = std::process::Command::new("git")
-                .args(["clone", repo_url, &sync_dir.to_string_lossy()])
-                .status()
-                .context("running git clone")?;
-            anyhow::ensure!(status.success(), "git clone failed");
+            let out =
+                run_git_with_timeout(&["clone", repo_url, &sync_dir_str], GIT_NETWORK_TIMEOUT)?;
+            anyhow::ensure!(out.status.success(), "git clone failed");
         }
         eprintln!("pull done.");
     }
@@ -968,10 +1011,10 @@ fn cmd_sync(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<()
     // --- push phase: commit any new records ---
     // The store files are already inside sync_dir (store_path() points there when
     // sync_repo is set), so we just need to add & commit anything that changed.
-    let status_out = std::process::Command::new("git")
-        .args(["-C", &sync_dir.to_string_lossy(), "status", "--porcelain"])
-        .output()
-        .context("running git status")?;
+    let status_out = run_git_with_timeout(
+        &["-C", &sync_dir_str, "status", "--porcelain"],
+        GIT_LOCAL_TIMEOUT,
+    )?;
     let dirty = !status_out.stdout.is_empty();
 
     if !dirty {
@@ -982,49 +1025,37 @@ fn cmd_sync(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<()
     let ts = store::now_secs();
     let commit_msg = format!("fugu-router sync {ts}");
 
-    let add = std::process::Command::new("git")
-        .args(["-C", &sync_dir.to_string_lossy(), "add", "-u"])
-        .status()
-        .context("running git add")?;
-    anyhow::ensure!(add.success(), "git add failed");
+    let add = run_git_with_timeout(&["-C", &sync_dir_str, "add", "-u"], GIT_LOCAL_TIMEOUT)?;
+    anyhow::ensure!(add.status.success(), "git add failed");
 
     // Check if anything is actually staged before committing.
-    let staged = std::process::Command::new("git")
-        .args([
-            "-C",
-            &sync_dir.to_string_lossy(),
-            "diff",
-            "--cached",
-            "--quiet",
-        ])
-        .status()
-        .context("running git diff --cached")?;
-    if staged.success() {
+    let staged = run_git_with_timeout(
+        &["-C", &sync_dir_str, "diff", "--cached", "--quiet"],
+        GIT_LOCAL_TIMEOUT,
+    )?;
+    if staged.status.success() {
         eprintln!("nothing to push (no staged changes after add).");
         return Ok(());
     }
 
-    let commit = std::process::Command::new("git")
-        .args([
+    let commit = run_git_with_timeout(
+        &[
             "-C",
-            &sync_dir.to_string_lossy(),
+            &sync_dir_str,
             "commit",
             "--no-verify",
             "-m",
             &commit_msg,
-        ])
-        .output()
-        .context("running git commit")?;
+        ],
+        GIT_LOCAL_TIMEOUT,
+    )?;
     if !commit.status.success() {
         let stderr = String::from_utf8_lossy(&commit.stderr);
         let stdout = String::from_utf8_lossy(&commit.stdout);
         anyhow::bail!("git commit failed:\nstdout: {stdout}\nstderr: {stderr}");
     }
 
-    let push = std::process::Command::new("git")
-        .args(["-C", &sync_dir.to_string_lossy(), "push"])
-        .output()
-        .context("running git push")?;
+    let push = run_git_with_timeout(&["-C", &sync_dir_str, "push"], GIT_NETWORK_TIMEOUT)?;
     if !push.status.success() {
         let stderr = String::from_utf8_lossy(&push.stderr);
         anyhow::bail!("git push failed:\nstderr: {stderr}");
@@ -1080,6 +1111,37 @@ fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod sync_timeout_tests {
+    use super::*;
+
+    /// A subprocess that outlives its timeout is killed and reported as an
+    /// error, not left to hang `cmd_sync` indefinitely.
+    #[test]
+    fn spawn_and_wait_timeout_kills_slow_subprocess() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "sleep 5"]);
+        let start = std::time::Instant::now();
+        let result = spawn_and_wait_timeout(cmd, Duration::from_millis(200));
+        assert!(result.is_err(), "expected a timeout error, got {result:?}");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "spawn_and_wait_timeout must not block past the timeout"
+        );
+    }
+
+    /// A subprocess that finishes well within the timeout returns its output
+    /// normally (fail-soft path is not taken on the happy path).
+    #[test]
+    fn spawn_and_wait_timeout_returns_output_on_fast_success() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "echo hello"]);
+        let out = spawn_and_wait_timeout(cmd, Duration::from_secs(5)).expect("should not time out");
+        assert!(out.status.success());
+        assert_eq!(out.stdout, b"hello\n");
+    }
 }
 
 #[cfg(test)]

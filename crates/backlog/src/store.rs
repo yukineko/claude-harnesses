@@ -35,21 +35,83 @@ pub fn load(path: &Path) -> Result<Vec<Task>> {
     Ok(file.task)
 }
 
+/// A process-global monotonic counter that, combined with the pid and a
+/// nanosecond timestamp, gives every [`save`] a UNIQUE temp filename.
+///
+/// CA-backlog-003: the old code used a single FIXED temp name
+/// (`.tasks.toml.tmp`), so two concurrent DEGRADED writers (fail-soft callers
+/// that bypassed `with_tasks_lock`) shared — and clobbered — the same temp
+/// file: one writer's `std::fs::write` truncated the temp mid-write of the
+/// other, and one `rename` moved a temp the other then tried to rename
+/// (spurious ENOENT) → a lost update or a hard error. A pid+counter+nanos
+/// suffix (mirroring `lock.rs`'s pid+nanos temp) gives each writer a private
+/// temp so concurrent degraded writers never collide.
+static SAVE_TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Current time in nanoseconds since the Unix epoch (temp-filename entropy).
+fn now_unix_nanos() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
 /// Vec<Task> を tasks.toml に書き戻す (アトミック書き込み: 一時ファイル→rename)。
+///
+/// CA-backlog-001: the write is made DURABLE — the fully-written temp file is
+/// `sync_all`'d (fsync) BEFORE the rename, and the parent directory is fsync'd
+/// AFTER the rename — so a crash in the write window cannot leave `tasks.toml`
+/// truncated/empty (losing every task). This mirrors `lock.rs`'s `sync_all`
+/// durability. CA-backlog-003: the temp file has a UNIQUE per-writer name
+/// (pid + monotonic counter + nanos), so two concurrent degraded writers never
+/// share — and thus clobber — the same temp.
 pub fn save(path: &Path, tasks: &[Task]) -> Result<()> {
     let file = TasksFile {
         task: tasks.to_vec(),
     };
     let text = toml::to_string_pretty(&file).context("failed to serialize tasks to TOML")?;
 
-    // 一時ファイルは同ディレクトリに置いて rename でアトミック差し替え
-    let tmp_path = path.with_file_name(".tasks.toml.tmp");
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory {}", parent.display()))?;
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create directory {}", parent.display()))?;
+        }
     }
-    std::fs::write(&tmp_path, &text)
-        .with_context(|| format!("failed to write tmp file {}", tmp_path.display()))?;
+
+    // CA-backlog-003: unique temp name (pid + monotonic counter + nanos) so
+    // concurrent degraded writers get private temps and never collide.
+    let base = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("tasks.toml");
+    let counter = SAVE_TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp_name = format!(
+        ".{base}.tmp.{}.{}.{}",
+        std::process::id(),
+        counter,
+        now_unix_nanos()
+    );
+    let tmp_path = path.with_file_name(tmp_name);
+
+    // CA-backlog-001: write the temp file in full and fsync it BEFORE the
+    // rename, so the rename can only ever publish a complete, durable file.
+    // `create_new` (O_EXCL) makes the temp exclusively ours (the unique name
+    // means it never pre-exists in practice; if a crashed writer left one, we
+    // refuse to reuse it rather than silently overwrite).
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+            .with_context(|| format!("failed to create tmp file {}", tmp_path.display()))?;
+        f.write_all(text.as_bytes())
+            .with_context(|| format!("failed to write tmp file {}", tmp_path.display()))?;
+        f.sync_all()
+            .with_context(|| format!("failed to fsync tmp file {}", tmp_path.display()))?;
+    }
+
     std::fs::rename(&tmp_path, path).with_context(|| {
         format!(
             "failed to rename {} -> {}",
@@ -57,6 +119,22 @@ pub fn save(path: &Path, tasks: &[Task]) -> Result<()> {
             path.display()
         )
     })?;
+
+    // CA-backlog-001: fsync the parent directory so the rename (the new
+    // directory entry) is itself durable — otherwise a crash right after the
+    // rename could still lose the just-published file on some filesystems.
+    // Best-effort: not all platforms/filesystems support fsync on a dir fd.
+    if let Some(parent) = path.parent() {
+        let dir = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
+        if let Ok(dir_file) = std::fs::File::open(dir) {
+            let _ = dir_file.sync_all();
+        }
+    }
+
     Ok(())
 }
 
@@ -247,9 +325,16 @@ pub fn add_with_weight(
 }
 
 /// Reject an add whose content [`crate::task::hashkey`] is already held by
-/// EITHER (a) an existing task in `tasks` with status `pending` or `failed`
-/// (a `done` task with the same title does NOT block a re-add), OR (b) a live
-/// cross-session claim reported by `condukt state is-claimed --hashkey <h>`.
+/// EITHER (a) an existing task in `tasks` with status `pending`, `failed`, or
+/// the in-progress `claimed` state (a `done` task with the same title does NOT
+/// block a re-add), OR (b) a live cross-session claim reported by
+/// `condukt state is-claimed --hashkey <h>`.
+///
+/// CA-backlog-002: `claimed` is included in (a). A task the local
+/// [`next_claim`] has reserved is active, in-progress work; blocking only
+/// `pending`/`failed` let a re-add slip through while the SAME task was
+/// mid-flight (its cross-session ledger entry, checked in (b), is separate and
+/// may be absent), spawning a duplicate of work already underway.
 ///
 /// Fail-soft on (b): if the `condukt` binary is absent from PATH, or the
 /// command errors or exits with anything other than 0 (claimed) / 1 (not
@@ -260,10 +345,13 @@ fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
 
     if tasks.iter().any(|t| {
         crate::task::hashkey(&t.title, &t.project) == hk
-            && matches!(t.status.as_str(), STATUS_PENDING | STATUS_FAILED)
+            && matches!(
+                t.status.as_str(),
+                STATUS_PENDING | STATUS_FAILED | STATUS_CLAIMED
+            )
     }) {
         return Err(anyhow!(
-            "duplicate task rejected: an existing pending/failed task already has this content (hashkey {hk}); use --force to add anyway"
+            "duplicate task rejected: an existing pending/failed/claimed task already has this content (hashkey {hk}); use --force to add anyway"
         ));
     }
 
@@ -489,6 +577,7 @@ fn queue_order(a: &Task, b: &Task) -> std::cmp::Ordering {
 }
 
 /// defer_until <= now のタスクの defer_until を None にクリアして status を "pending" に戻す。
+/// 加えて、TTL を超えた stale な `claimed` タスクも "pending" に戻す (CA-backlog-005)。
 /// 変更したタスクの件数を返す。
 pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
     // Serialize the load-modify-save against concurrent mutators on the same
@@ -499,13 +588,29 @@ pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
         let mut tasks = load(path)?;
         let mut count = 0usize;
         for task in tasks.iter_mut() {
+            let mut changed = false;
             if let Some(defer_until) = task.defer_until {
                 if defer_until <= now {
                     task.defer_until = None;
                     task.status = STATUS_PENDING.to_string();
-                    task.updated_at = now;
-                    count += 1;
+                    changed = true;
                 }
+            }
+            // CA-backlog-005: a stale `claimed` task — its claimant crashed or
+            // was killed before calling `done`/`fail` and its claim is older
+            // than CLAIM_STALE_SECS — is rescued back to `pending` here too, so
+            // plain `next` and the unattended SessionStart `requeue_expired`
+            // (not ONLY `next_claim`) can resurface it. Otherwise a crashed
+            // claimant strands its task in `claimed` indefinitely.
+            if task.status == STATUS_CLAIMED
+                && now.saturating_sub(task.updated_at) >= CLAIM_STALE_SECS
+            {
+                task.status = STATUS_PENDING.to_string();
+                changed = true;
+            }
+            if changed {
+                task.updated_at = now;
+                count += 1;
             }
         }
         if count > 0 {
@@ -579,6 +684,14 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
 }
 
 /// フィールドの一部を更新して保存。None のフィールドは変更しない。
+///
+/// CA-backlog-004: an unknown `status` is REJECTED (validated against the same
+/// [`crate::task::STATUSES`] vocabulary that `list` warns on) BEFORE any write.
+/// Previously `edit --status open` wrote the raw typo through, stranding the
+/// task out of `next`/`next_claim` (neither `open` nor any non-vocabulary
+/// value is `is_pending()`) with no path back — `requeue_expired` only rescues
+/// deferred/stale-claimed tasks, so the typo'd task was lost. Rejecting up
+/// front keeps the task in its last valid state.
 pub fn edit(
     path: &Path,
     id: &str,
@@ -588,6 +701,11 @@ pub fn edit(
     status: Option<&str>,
 ) -> Result<()> {
     with_tasks_lock(path, || {
+        // CA-backlog-004: reject an unknown --status up front (same validation
+        // `list` uses) so a typo can never be persisted and strand the task.
+        if let Some(w) = crate::task::status_warning(status) {
+            return Err(anyhow!("{w}"));
+        }
         let mut tasks = load(path)?;
         let task = tasks
             .iter_mut()
@@ -1665,5 +1783,264 @@ mod tests {
              must give up well under TASKS_LOCK_STALE_SECS ({TASKS_LOCK_STALE_SECS}s) so it \
              cannot hold with_tasks_lock's critical section past the stale-reap window"
         );
+    }
+
+    // --- CA-backlog-001 / 003: durable, collision-free atomic save ----------
+
+    /// F→P regression oracle for CA-backlog-003. Many threads concurrently call
+    /// the RAW `save()` (bypassing `with_tasks_lock`, i.e. the fail-soft
+    /// "degraded writer" path) on the SAME file. With the old FIXED temp
+    /// filename (`.tasks.toml.tmp`) two writers shared one temp: one `rename`
+    /// moved the temp out from under another, whose own `rename` then failed
+    /// with ENOENT — so at least one `save` returned `Err` under contention.
+    /// With a UNIQUE per-writer temp name, every writer owns its temp and no
+    /// save ever errors. Reliably RED before the fix, GREEN after.
+    #[test]
+    fn save_unique_temp_no_collision_under_concurrency() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+
+        for iter in 0..20 {
+            let path = Arc::new(tmp_path());
+            // Seed so the file exists (each writer overwrites with its own set).
+            save(path.as_path(), &[]).unwrap();
+
+            const N: usize = 16;
+            let barrier = Arc::new(Barrier::new(N));
+            let errors = Arc::new(AtomicUsize::new(0));
+
+            let mut handles = Vec::with_capacity(N);
+            for w in 0..N {
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                let errors = Arc::clone(&errors);
+                handles.push(std::thread::spawn(move || {
+                    // Each writer persists a distinct, differently-sized set to
+                    // widen the interleave window.
+                    let mut set = Vec::new();
+                    for i in 0..(w + 1) {
+                        set.push(Task {
+                            id: format!("w{w}-{i}"),
+                            title: format!("writer-{w}-task-{i}"),
+                            project: "/repo".to_string(),
+                            tags: vec![],
+                            status: STATUS_PENDING.to_string(),
+                            notes: String::new(),
+                            created_at: 100,
+                            updated_at: 100,
+                            defer_until: None,
+                            weight: 0.0,
+                        });
+                    }
+                    barrier.wait();
+                    if save(path.as_path(), &set).is_err() {
+                        errors.fetch_add(1, Ordering::SeqCst);
+                    }
+                }));
+            }
+            for h in handles {
+                h.join().expect("thread join");
+            }
+
+            assert_eq!(
+                errors.load(Ordering::SeqCst),
+                0,
+                "iter {iter}: a concurrent raw save errored (fixed-temp collision → rename ENOENT)"
+            );
+        }
+    }
+
+    /// F→P regression oracle for CA-backlog-001 (durable atomic save). The
+    /// durable save must publish `tasks.toml` ONLY from a fresh, exclusively-
+    /// created, fsync'd temp — it must never adopt a pre-existing leftover temp
+    /// as its publish source. The old code used a FIXED temp name and
+    /// `std::fs::write` (create-or-truncate), so a leftover `.tasks.toml.tmp`
+    /// from a writer that CRASHED mid-save was silently reused and rename'd
+    /// into place; had that writer crashed after truncating but before fully
+    /// rewriting, the rename would publish a truncated file — exactly the
+    /// "crash in the write window truncates tasks.toml and loses all tasks"
+    /// failure. The durable path (unique `create_new` temp + fsync-before-
+    /// rename) leaves any such foreign leftover untouched. Deterministic:
+    /// reliably RED before the fix (leftover consumed), GREEN after (leftover
+    /// left intact), and the published file is always the complete new set.
+    #[test]
+    fn save_does_not_publish_a_leftover_temp_file() {
+        let path = tmp_path();
+        // Establish a good baseline file.
+        save(
+            &path,
+            &[Task {
+                id: "aaaa1111".to_string(),
+                title: "A".to_string(),
+                project: "/repo".to_string(),
+                tags: vec![],
+                status: STATUS_PENDING.to_string(),
+                notes: String::new(),
+                created_at: 100,
+                updated_at: 100,
+                defer_until: None,
+                weight: 0.0,
+            }],
+        )
+        .unwrap();
+
+        // Simulate a prior writer that CRASHED mid-save, leaving a partial
+        // garbage temp at the OLD fixed temp path.
+        let leftover = path.with_file_name(".tasks.toml.tmp");
+        std::fs::write(&leftover, b"GARBAGE partial write from a crashed writer").unwrap();
+
+        // A fresh durable save of a new set.
+        save(
+            &path,
+            &[Task {
+                id: "bbbb2222".to_string(),
+                title: "B".to_string(),
+                project: "/repo".to_string(),
+                tags: vec![],
+                status: STATUS_PENDING.to_string(),
+                notes: String::new(),
+                created_at: 200,
+                updated_at: 200,
+                defer_until: None,
+                weight: 0.0,
+            }],
+        )
+        .unwrap();
+
+        // The durable save must NOT have consumed/published the foreign
+        // leftover: it is still present with its original garbage contents.
+        assert!(
+            leftover.exists(),
+            "CA-backlog-001: durable save consumed a leftover temp as its publish \
+             source (a crashed writer's partial temp could thus truncate tasks.toml)"
+        );
+        assert_eq!(
+            std::fs::read(&leftover).unwrap(),
+            b"GARBAGE partial write from a crashed writer",
+            "the foreign leftover temp must be left byte-for-byte untouched"
+        );
+
+        // And tasks.toml is the complete, correct new set (no data loss).
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "bbbb2222");
+    }
+
+    // --- CA-backlog-002: a claimed task blocks a duplicate re-add -----------
+
+    /// F→P regression oracle for CA-backlog-002. Once a task is `claimed`
+    /// (reserved, in-progress work), re-adding the same content must be
+    /// rejected as a duplicate. Before the fix `check_duplicate` blocked only
+    /// `pending`/`failed`, so the `claimed` task did NOT block the re-add and a
+    /// duplicate of in-flight work slipped in. RED before, GREEN after.
+    #[test]
+    fn add_rejects_duplicate_of_claimed_task() {
+        let path = tmp_path();
+        add(&path, "Fix login", "/repo", vec![], "", 100).unwrap();
+        // Reserve it via next_claim → status becomes `claimed`.
+        let claimed = next_claim(&path, None, None).unwrap().unwrap();
+        assert_eq!(claimed.status, "claimed");
+
+        let err = add(&path, "Fix login", "/repo", vec![], "", 200)
+            .expect_err("a claimed (in-progress) duplicate must be rejected");
+        assert!(err.to_string().contains("duplicate"), "got: {err}");
+        // Only the original task exists — no duplicate was persisted.
+        assert_eq!(load(&path).unwrap().len(), 1);
+    }
+
+    // --- CA-backlog-004: edit validates --status like list ------------------
+
+    /// F→P regression oracle for CA-backlog-004. `edit(status = "open")` — a
+    /// typo (`open` is hypothesis's vocabulary, never backlog's) — must be
+    /// REJECTED, leaving the task in its prior valid state so `next` can still
+    /// surface it. Before the fix the raw `open` was written through, stranding
+    /// the task out of `next`/`next_claim` with `requeue_expired` unable to
+    /// rescue it. RED before, GREEN after.
+    #[test]
+    fn edit_rejects_unknown_status() {
+        let path = tmp_path();
+        let id = add(&path, "Task", "/repo", vec![], "", 100).unwrap();
+
+        let err = edit(&path, &id, None, None, None, Some("open"))
+            .expect_err("an unknown status must be rejected, not written through");
+        assert!(
+            err.to_string().contains("unknown status 'open'"),
+            "got: {err}"
+        );
+
+        // The task keeps its prior valid status and is still pickable.
+        let tasks = load(&path).unwrap();
+        assert_eq!(tasks[0].status, "pending", "status must be left unchanged");
+        assert!(
+            next(&path, None, None).unwrap().is_some(),
+            "the task must not be stranded out of the queue by a rejected edit"
+        );
+
+        // A VALID status still edits fine (fix must not over-reject).
+        edit(&path, &id, None, None, None, Some("done")).expect("a valid status must be accepted");
+        assert_eq!(load(&path).unwrap()[0].status, "done");
+    }
+
+    // --- CA-backlog-005: requeue_expired rescues a stale claimed task -------
+
+    /// F→P regression oracle for CA-backlog-005. A `claimed` task whose
+    /// claimant crashed (claim older than CLAIM_STALE_SECS) must be rescued to
+    /// `pending` by `requeue_expired` — the unattended SessionStart path — not
+    /// only by `next_claim`. Before the fix `requeue_expired` ignored `claimed`
+    /// tasks entirely, so a crashed claimant stranded its task in `claimed`
+    /// forever (plain `next` never resurfaced it). RED before, GREEN after.
+    #[test]
+    fn requeue_expired_rescues_stale_claimed_task() {
+        let path = tmp_path();
+
+        // Seed a claimed task whose claim is far older than CLAIM_STALE_SECS
+        // relative to `now`, plus a FRESH claimed task that must NOT be rescued.
+        let now = 10_000_000i64;
+        let seed = vec![
+            Task {
+                id: "stale".to_string(),
+                title: "stale-claim".to_string(),
+                project: "/repo".to_string(),
+                tags: vec![],
+                status: STATUS_CLAIMED.to_string(),
+                notes: String::new(),
+                created_at: 100,
+                updated_at: now - CLAIM_STALE_SECS - 1, // past TTL
+                defer_until: None,
+                weight: 0.0,
+            },
+            Task {
+                id: "fresh".to_string(),
+                title: "fresh-claim".to_string(),
+                project: "/repo".to_string(),
+                tags: vec![],
+                status: STATUS_CLAIMED.to_string(),
+                notes: String::new(),
+                created_at: 100,
+                updated_at: now - 1, // well within TTL
+                defer_until: None,
+                weight: 0.0,
+            },
+        ];
+        save(&path, &seed).unwrap();
+
+        let count = requeue_expired(&path, now).unwrap();
+        assert_eq!(count, 1, "exactly the stale claimed task must be rescued");
+
+        let tasks = load(&path).unwrap();
+        let stale = tasks.iter().find(|t| t.id == "stale").unwrap();
+        let fresh = tasks.iter().find(|t| t.id == "fresh").unwrap();
+        assert_eq!(
+            stale.status, "pending",
+            "a stale claimed task must be rescued to pending by requeue_expired"
+        );
+        assert_eq!(
+            fresh.status, "claimed",
+            "a fresh (within-TTL) claimed task must NOT be rescued (no over-rescue)"
+        );
+
+        // And plain `next` (not just next_claim) can now resurface it.
+        let picked = next(&path, None, None).unwrap().unwrap();
+        assert_eq!(picked.id, "stale");
     }
 }

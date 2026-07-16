@@ -10,10 +10,12 @@
 //!       crosses into a higher band, inject distill/offload advice ONCE.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use regex::Regex;
 use serde::Deserialize;
+use wait_timeout::ChildExt;
 
 use crate::config::Config;
 use harness_core::hook::HookInput;
@@ -658,24 +660,54 @@ fn find_overwatch_binary() -> Option<PathBuf> {
     candidates.pop()
 }
 
+/// Max time to wait on `overwatch lease` before giving up. This call sits on
+/// the UserPromptSubmit hook path, so a hung/stuck overwatch binary must never
+/// wedge the turn — bounded the same way `distill::run_model` bounds its
+/// headless child.
+const OVERWATCH_LEASE_TIMEOUT_SECS: u64 = 8;
+
 /// Read the live lease for `session_id` via `overwatch lease --session <id>
 /// --json`. Returns None (silent) when overwatch is absent, exits non-zero (no
-/// lease), or emits unparseable JSON — every failure mode is fail-soft, never
-/// breaking the turn (§4.3). Split from `check_session_anchor` so the cadence /
-/// injection logic is testable without a real overwatch binary.
+/// lease), emits unparseable JSON, or does not finish within
+/// `OVERWATCH_LEASE_TIMEOUT_SECS` (killed on timeout) — every failure mode is
+/// fail-soft, never breaking the turn (§4.3). Split from `check_session_anchor`
+/// so the cadence / injection logic is testable without a real overwatch
+/// binary.
 fn fetch_session_lease(session_id: &str) -> Option<SessionLease> {
     if session_id.is_empty() {
         return None;
     }
     let binary = find_overwatch_binary()?;
-    let out = Command::new(&binary)
+    let child = Command::new(&binary)
         .args(["lease", "--session", session_id, "--json"])
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
-    if !out.status.success() {
-        return None;
+    let stdout = run_with_timeout(child, Duration::from_secs(OVERWATCH_LEASE_TIMEOUT_SECS))?;
+    parse_session_lease(&stdout)
+}
+
+/// Wait on an already-spawned child for at most `timeout`, killing (and
+/// reaping) it on timeout so it never lingers. Returns the child's stdout on a
+/// successful exit; None on a non-zero exit, a timeout, or a wait error.
+/// Split out from `fetch_session_lease` so the timeout/kill path is testable
+/// against a real (but harmless) subprocess without needing an overwatch
+/// binary.
+fn run_with_timeout(mut child: std::process::Child, timeout: Duration) -> Option<Vec<u8>> {
+    match child.wait_timeout(timeout) {
+        Ok(Some(status)) if status.success() => {}
+        Ok(Some(_)) => return None,
+        Ok(None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        Err(_) => return None,
     }
-    parse_session_lease(&out.stdout)
+    let out = child.wait_with_output().ok()?;
+    Some(out.stdout)
 }
 
 /// Parse `overwatch lease --session … --json` stdout into a [`SessionLease`].
@@ -764,6 +796,41 @@ fn check_session_anchor_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stuck child (sleeping longer than the timeout) must be killed and
+    /// reaped rather than left to wedge the UserPromptSubmit hook — the
+    /// regression this task fixes for `fetch_session_lease`'s overwatch call.
+    #[test]
+    fn run_with_timeout_kills_and_returns_none_on_timeout() {
+        let child = Command::new("sh")
+            .args(["-c", "sleep 5"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sh -c sleep");
+        let start = std::time::Instant::now();
+        let result = run_with_timeout(child, Duration::from_millis(200));
+        assert!(result.is_none());
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "run_with_timeout must not block past the timeout"
+        );
+    }
+
+    /// A child that finishes well within the timeout returns its stdout.
+    #[test]
+    fn run_with_timeout_returns_stdout_on_fast_success() {
+        let child = Command::new("sh")
+            .args(["-c", "echo hello"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sh -c echo");
+        let result = run_with_timeout(child, Duration::from_secs(5));
+        assert_eq!(result.as_deref(), Some(b"hello\n".as_slice()));
+    }
 
     #[test]
     fn url_detected() {

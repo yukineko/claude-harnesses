@@ -97,7 +97,7 @@ jobs:
           done
       # tar preserves the crates/<plugin>/bin/ layout AND the executable bit.
       - run: tar czf darwin-bins.tar.gz crates/*/bin/*-darwin-*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: darwin-bins
           path: darwin-bins.tar.gz
@@ -121,7 +121,7 @@ jobs:
             bash scripts/build-plugin-bin.sh "$p" x86_64-unknown-linux-gnu
           done
       - run: tar czf linux-bins.tar.gz crates/*/bin/*-linux-*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-bins
           path: linux-bins.tar.gz
@@ -156,7 +156,7 @@ jobs:
             bash scripts/build-plugin-bin.sh "$p" aarch64-unknown-linux-gnu
           done
       - run: tar czf linux-arm64-bins.tar.gz crates/*/bin/*-linux-arm64
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-arm64-bins
           path: linux-arm64-bins.tar.gz
@@ -228,7 +228,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx --locked --root /tmp/cyclonedx-tool
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cargo-cyclonedx-bin
           path: /tmp/cyclonedx-tool/bin/cargo-cyclonedx

@@ -19,6 +19,11 @@ injected as `additionalContext` for the agent — **non-blocking** (it never bre
 [Configuration](#configuration)). Each `[[task]]` is a `name` + a shell `command`
 (optionally pinned to a `dir`), run once per calendar day via `sh -c`.
 
+Before spawning, `task.command` is checked against the same `blastguard` detector
+the PreToolUse hook uses. A flagged (destructive) command is refused fail-closed —
+never spawned — and reported as `name (blocked: <reason>)` in the summary/report
+instead of running.
+
 With **no tasks registered**, a built-in default `security` task runs, preserving the
 original behavior:
 
@@ -37,6 +42,7 @@ that ran today (both successes and failures):
 - exit 0 → `name (ok)`
 - exit non-zero → `name (fail exit N: <first salient line>)` (prefers `error`/`warning`/`RUSTSEC` lines)
 - command couldn't spawn → `name (error: …)`
+- command refused by blastguard before spawn → `name (blocked: <reason>)`
 - nothing was due today → stays silent
 
 Each task runs in its `dir` (or the session `cwd`) with `$CARGO_HOME/bin` prepended to

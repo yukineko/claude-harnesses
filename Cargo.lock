@@ -388,6 +388,7 @@ dependencies = [
 name = "daily"
 version = "0.3.6"
 dependencies = [
+ "blastguard",
  "chrono",
  "clap",
  "dirs",

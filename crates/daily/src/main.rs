@@ -249,6 +249,8 @@ enum Outcome {
     Failed { code: Option<i32>, brief: String },
     /// The command could not be spawned at all (e.g. `sh` missing).
     SpawnError(String),
+    /// blastguard refused the command before it was ever spawned (fail-closed).
+    Blocked(String),
 }
 
 /// Resolve `task.dir` against `cwd` (the session/project root) and verify it
@@ -290,7 +292,20 @@ fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> PathBuf {
 /// Run one task via `sh -c`, in its `dir` (or the session cwd), with
 /// `$CARGO_HOME/bin` prepended to PATH so cargo subcommands resolve even when
 /// `~/.cargo/bin` isn't on the ambient PATH.
+///
+/// `task.command` comes from `~/.daily/config.toml`, a file a user edits by
+/// hand — before it is ever handed to `sh -c`, it is run past the same pure
+/// blastguard detector the PreToolUse hook uses (mirroring condukt's
+/// `run_check`). A flagged command is refused fail-closed (never spawned)
+/// rather than silently run.
 fn run_task(task: &Task, cwd: &Path) -> Outcome {
+    let input = serde_json::json!({ "command": task.command });
+    if let blastguard::model::Decision::Deny(reason) =
+        blastguard::detect::detect("Bash", Some(&input))
+    {
+        return Outcome::Blocked(reason);
+    }
+
     let dir = resolve_task_dir(task.dir.as_deref(), cwd);
 
     let mut cmd = Command::new("sh");
@@ -334,6 +349,7 @@ fn summary(results: &[(String, Outcome)]) -> Option<String> {
                 format!("{name} (fail {status}: {})", first_line(brief))
             }
             Outcome::SpawnError(e) => format!("{name} (error: {})", first_line(e)),
+            Outcome::Blocked(reason) => format!("{name} (blocked: {})", first_line(reason)),
         })
         .collect();
     let any_fail = results.iter().any(|(_, o)| !matches!(o, Outcome::Ok));
@@ -368,6 +384,7 @@ impl ReportEntry {
             Outcome::Ok => ("ok", None, String::new()),
             Outcome::Failed { code, brief } => ("fail", *code, first_line(brief)),
             Outcome::SpawnError(e) => ("error", None, first_line(e)),
+            Outcome::Blocked(reason) => ("blocked", None, first_line(reason)),
         };
         ReportEntry {
             date: date.to_string(),
@@ -944,5 +961,42 @@ dir = \"/repo\"
         let root_canon = root.path().canonicalize().unwrap();
         let resolved = resolve_task_dir(Some("does-not-exist"), root.path());
         assert_eq!(resolved, root_canon);
+    }
+
+    /// A destructive task.command (rm -rf) must be refused by blastguard before
+    /// spawn: no process is created, so the sentinel file never gets touched,
+    /// and run_task reports Blocked instead of running the command.
+    #[test]
+    fn run_task_blocks_destructive_command_via_blastguard() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sentinel = tmp.path().join("ran.txt");
+        let task = Task {
+            name: "destructive".to_string(),
+            command: format!("touch {} && rm -rf /nonexistent", sentinel.display()),
+            dir: None,
+        };
+        let outcome = run_task(&task, tmp.path());
+        assert!(
+            matches!(outcome, Outcome::Blocked(_)),
+            "expected Blocked, got {outcome:?}"
+        );
+        assert!(
+            !sentinel.exists(),
+            "command must never spawn — sentinel file should not exist"
+        );
+    }
+
+    /// A benign task.command is unaffected by the blastguard gate and runs
+    /// normally through to completion.
+    #[test]
+    fn run_task_allows_benign_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let task = Task {
+            name: "benign".to_string(),
+            command: "true".to_string(),
+            dir: None,
+        };
+        let outcome = run_task(&task, tmp.path());
+        assert!(matches!(outcome, Outcome::Ok), "expected Ok, got {outcome:?}");
     }
 }

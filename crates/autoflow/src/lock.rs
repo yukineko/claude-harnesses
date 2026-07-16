@@ -10,8 +10,6 @@
 //! This only READS the lock (autoflow never acquires it); the writer/owner is the
 //! backlog binary.
 
-use std::process::Stdio;
-
 use harness_core::config::base_dir;
 use serde::Deserialize;
 
@@ -60,22 +58,37 @@ pub fn this_session_holds_lock(session_id: &str) -> bool {
     !info.session_id.is_empty() && info.session_id == session_id
 }
 
+/// Unix (Linux/macOS/BSD): send signal 0 via `libc::kill`, which delivers no
+/// actual signal and only checks whether the pid is signalable. `0` means
+/// alive; `ESRCH` means the process is gone; `EPERM` means it exists but is
+/// owned by another user (treated as alive — it's still occupying the pid).
+#[cfg(unix)]
 fn pid_alive(pid: u32) -> bool {
-    // Fast path on Linux: /proc/<pid> exists iff the process is alive.
-    #[cfg(target_os = "linux")]
-    {
-        if std::path::Path::new(&format!("/proc/{pid}")).exists() {
-            return true;
-        }
+    let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if ret == 0 {
+        return true;
     }
-    // Portable fallback: `kill -0 <pid>` exits 0 when the process is signalable.
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    matches!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EPERM)
+    )
+}
+
+/// Windows: `kill -0` has no equivalent, so liveness is checked by trying to
+/// open a handle to the process. A null handle means the pid doesn't exist
+/// (or isn't queryable); any real handle means it's alive and must be closed.
+#[cfg(windows)]
+fn pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        false
+    } else {
+        unsafe { CloseHandle(handle) };
+        true
+    }
 }
 
 #[cfg(test)]
@@ -114,6 +127,18 @@ mod tests {
         fn lock_path(&self) -> std::path::PathBuf {
             self.path.join(".backlog").join("run.lock")
         }
+    }
+
+    #[test]
+    fn pid_alive_true_for_self_false_for_impossible_pid() {
+        // Direct unit test of pid_alive() itself (the other tests only exercise
+        // it indirectly through backlog_driver_active's JSON parsing). Covers
+        // both branches of the new libc::kill(pid, 0)-based Unix implementation.
+        assert!(pid_alive(std::process::id()), "own pid must be alive");
+        assert!(
+            !pid_alive(2_147_483_646),
+            "an unassignable pid must read as dead"
+        );
     }
 
     #[test]

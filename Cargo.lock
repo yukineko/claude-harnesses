@@ -84,7 +84,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "clap",
  "harness-core",
@@ -94,6 +94,7 @@ dependencies = [
  "tempfile",
  "toml",
  "wait-timeout",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

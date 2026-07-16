@@ -29,7 +29,7 @@ def cargo_package_version(path):
     Line-anchored so `rust-version` is never mistaken for `version`, and
     `version.workspace = true` inheritance is reported as ('ws', ...).
     """
-    txt = open(path).read()
+    txt = open(path, encoding="utf-8").read()
     m = re.search(r"\[package\](.*?)(\n\[|\Z)", txt, re.S)
     sec = m.group(1) if m else txt
     if re.search(r"^\s*version\s*\.\s*workspace\s*=\s*true", sec, re.M) or re.search(
@@ -41,7 +41,7 @@ def cargo_package_version(path):
 
 
 def main():
-    mp = json.load(open(MP_PATH))
+    mp = json.load(open(MP_PATH, encoding="utf-8"))
     plugins = mp.get("plugins") if isinstance(mp, dict) else mp
     mp_ver = {p["name"]: p.get("version") for p in plugins if isinstance(p, dict) and "name" in p}
 
@@ -52,7 +52,7 @@ def main():
         pj = os.path.join(d, ".claude-plugin", "plugin.json")
         if not os.path.isfile(pj):
             continue  # not a plugin (e.g. harness-core, integration-tests)
-        pjd = json.load(open(pj))
+        pjd = json.load(open(pj, encoding="utf-8"))
         pname, pjv = pjd.get("name"), pjd.get("version")
         checked += 1
 

@@ -31,7 +31,7 @@ PLUGIN_JSON_REL = ".claude-plugin/plugin.json"
 
 
 def git(*args):
-    return subprocess.run(["git", *args], capture_output=True, text=True)
+    return subprocess.run(["git", *args], capture_output=True, text=True, encoding="utf-8")
 
 
 def semver(v):
@@ -61,7 +61,7 @@ def plugin_version_at(ref, path):
 
 def plugin_version_worktree(path):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f).get("version")
     except (FileNotFoundError, json.JSONDecodeError):
         return None

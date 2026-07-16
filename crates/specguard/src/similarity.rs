@@ -301,6 +301,7 @@ const OBJECT_STOPWORDS: &[&str] = &[
 /// pole is.
 fn object_bindings(s: &str) -> BTreeMap<String, BTreeMap<&'static str, usize>> {
     let bucket_of: BTreeMap<&'static str, &'static str> = POLARITY_TOKENS.iter().copied().collect();
+    let axis_of: BTreeMap<&'static str, &'static str> = POLARITY_AXES.iter().copied().collect();
     let stop: BTreeSet<&'static str> = OBJECT_STOPWORDS.iter().copied().collect();
     // A content head is any token that is neither a polarity token nor a function
     // word — the noun a pole actually modifies (as object) or is governed by (as
@@ -312,13 +313,66 @@ fn object_bindings(s: &str) -> BTreeMap<String, BTreeMap<&'static str, usize>> {
         let Some(&bucket) = bucket_of.get(tok.as_str()) else {
             continue;
         };
-        // Object head: the nearest FOLLOWING content token (the noun the pole
-        // modifies). Subject head: the nearest PRECEDING content token (the clause
-        // subject the pole governs). Binding both closes the pure subject-swap
-        // bypass (CA-specguard-01) as well as the forward object-swap bypass.
-        let forward = toks[i + 1..].iter().find(|t| is_head(t.as_str()));
-        let backward = toks[..i].iter().rev().find(|t| is_head(t.as_str()));
-        for head in [forward, backward].into_iter().flatten() {
+        let axis = axis_of.get(bucket).copied().unwrap_or(bucket);
+        // Object head(s): the nearest FOLLOWING content token(s) the pole modifies.
+        //
+        // A negation/quantifier adverb (always/never/no/…) or an obligation-modal
+        // adverb (must/should/require/optional) or an audit-verdict adverb (match/
+        // contradict) is not itself the load-bearing content verb — it modifies the
+        // OBJECT of the verb it precedes, so its nearest forward head is usually the
+        // *shared* verb (e.g. "always deploy X" / "never deploy Y", or "must ship X"
+        // / "should ship Y", both have the verb as the nearest head). Binding only
+        // that shared verb makes a cross-clause object swap invisible
+        // (CA-specguard-03/04 for neg; CA-specguard-06 for modal/audit — the neg fix
+        // was not mirrored onto the modal and audit axes, leaving a required-vs-
+        // optional two-modal object swap that inverts the obligation invisible). For
+        // these adverbial axes we therefore reach through to the nearest TWO forward
+        // heads so the object noun after the verb binds to the pole too, and a swap
+        // re-binds a preserved object word to the opposite pole (tripping the guard).
+        //
+        // BUT the widening must NOT bleed across a pole STACKED with another axis's
+        // pole over a shared verb. On the common `must always X` / `should never Y`
+        // phrasing a modal pole (must/should) sits immediately before a neg pole
+        // (always/never) and they share the following verb. Widening EITHER pole to
+        // two forward heads makes it reach through the other pole's shared verb, so a
+        // benign adverb insertion (`must always promptly X`) — which merely shifts one
+        // pole's single forward head onto the adverb — leaves the wider pole still
+        // covering the shared verb while the narrow pole moves off it, flipping a
+        // preserved head's bucket multiset and spuriously escalating a benign
+        // 1-extra-token edit the count backstop does not mask (this bit the neg fix in
+        // c1f8278 and, once modal/audit were widened too, the pre-existing
+        // `benign_adverb_in_modal_neg_clause_stays_precedented` pin — the modal side of
+        // the same stack). So we suppress widening for a pole immediately ADJACENT
+        // (either side) to another axis's polarity token; when poles are stacked the
+        // count-based BACKSTOP_AXES backstop still routes the two-token template to a
+        // human, so security is unaffected. The authz/route axes are NOT widened at
+        // all — an authz/route verb (allow/deny/human/…) already IS the pole, not an
+        // adverb before a shared verb, so they bind their single forward head.
+        let other_axis_at = |j: usize| {
+            bucket_of
+                .get(toks[j].as_str())
+                .is_some_and(|&b| axis_of.get(b).copied().unwrap_or(b) != axis)
+        };
+        let prev_is_other_axis = i > 0 && other_axis_at(i - 1);
+        let next_is_other_axis = i + 1 < toks.len() && other_axis_at(i + 1);
+        let widen = matches!(axis, "neg" | "modal" | "audit");
+        let forward_heads = if widen && !prev_is_other_axis && !next_is_other_axis {
+            2
+        } else {
+            1
+        };
+        let mut heads: Vec<&String> = toks[i + 1..]
+            .iter()
+            .filter(|t| is_head(t.as_str()))
+            .take(forward_heads)
+            .collect();
+        // Subject head: the nearest PRECEDING content token (the clause subject the
+        // pole governs). Binding it closes the pure subject-swap bypass
+        // (CA-specguard-01) as well as the forward object-swap bypass.
+        if let Some(back) = toks[..i].iter().rev().find(|t| is_head(t.as_str())) {
+            heads.push(back);
+        }
+        for head in heads {
             *out.entry(head.clone())
                 .or_default()
                 .entry(bucket)
@@ -462,13 +516,36 @@ pub enum Verdict {
 
 /// Axes on which a *single template* carrying two or more polarity tokens is, by
 /// itself, sufficient grounds to force human review — the **Phase 1 deterministic
-/// backstop**. `authz` (allow/deny/forbid/approve) and `route` (human/auto) are
-/// the two axes that encode *who decides* and *what is permitted*; a template that
-/// mentions either axis twice is expressing a *relationship* between two
-/// authorization or routing decisions, which is exactly the shape the heuristic
-/// Phase 2 guards ([`polarity_preserved`] / [`object_bindings`]) must reason
-/// hardest about (cross-clause pole swaps, object reattachment).
-const BACKSTOP_AXES: &[&str] = &["authz", "route"];
+/// backstop**. `authz` (allow/deny/forbid/approve), `route` (human/auto) and `neg`
+/// (never/always/no/not/none/unless/without) are the axes that encode *who
+/// decides*, *what is permitted*, and *whether a decision is negated*; a template
+/// that mentions any of them twice is expressing a *relationship* between two
+/// authorization, routing or negation decisions, which is exactly the shape the
+/// heuristic Phase 2 guards ([`polarity_preserved`] / [`object_bindings`]) must
+/// reason hardest about (cross-clause pole swaps, object reattachment).
+///
+/// `neg` is included (CA-specguard-02) because a cross-clause object swap between
+/// an `always` clause and a `never` clause inverts which object is always- vs
+/// never-governed while leaving the axis token *sequence* unchanged — and the
+/// Phase 2 [`object_bindings`] heuristic is blind to it (CA-specguard-03 binds each
+/// neg pole to the *shared* verb it precedes, so the swapped object nouns never
+/// collide as a head; CA-specguard-04's intersection-only comparison then never
+/// sees a differing head). Just as the analogous authz object swap (re-review
+/// finding 1a) is caught here by count alone rather than by the Phase 2 heuristic,
+/// two neg poles in one template now route to a human regardless of that blind spot.
+///
+/// `modal` (must/require/optional/should) and `audit` (match/contradict) are
+/// included for the SAME reason (CA-specguard-06): they are adverbial poles that
+/// govern the object of a following shared verb, so a cross-clause object swap
+/// between two modal clauses (e.g. required-vs-optional: "must ship X … optional to
+/// ship Y" → "must ship Y … optional to ship X") inverts which object is obligatory
+/// vs optional while leaving the modal token *sequence* unchanged — exactly the neg
+/// blind spot, one axis over. The neg fix (CA-specguard-02/03/04) was never mirrored
+/// onto these two axes, so a two-modal object swap `polarity_preserved`-ed and auto-
+/// ratified past the human (fail-open). Counting two modal (or two audit) poles in
+/// one template as grounds for human review closes that class by count alone — the
+/// blunt, heuristic-free backstop — independent of the Phase 2 widening below.
+const BACKSTOP_AXES: &[&str] = &["authz", "route", "neg", "modal", "audit"];
 
 /// The per-axis polarity-token occurrence count at or above which the Phase 1
 /// backstop fires (2: a single template expressing *two* authz or *two* route
@@ -542,8 +619,9 @@ pub fn triage(candidate: &str, corpus: &[String], threshold: f64) -> Verdict {
         // polarity signature is unchanged relative to that precedent.
         Some((precedent, sim)) => {
             // Phase 1 deterministic backstop (heuristic-free): a template carrying
-            // two or more polarity tokens on the authz or route axis always routes
-            // to a human, regardless of similarity or the Phase 2
+            // two or more polarity tokens on any BACKSTOP_AXES axis (authz, route,
+            // neg, modal, audit) always routes to a human, regardless of
+            // similarity or the Phase 2
             // `polarity_preserved` heuristics. This is layered ON TOP of — not a
             // replacement for — `object_bindings`: finding 1b (a cross-axis
             // single-occurrence swap) has count 1 per axis and is caught ONLY by
@@ -952,6 +1030,279 @@ mod tests {
         ));
     }
 
+    /// Defense-in-depth root-cause detection (finding fa2b7d0c, CA-specguard-03/04):
+    /// a cross-clause object swap between an `always` clause and a `never` clause
+    /// leaves the neg-axis token *sequence* (`[always, never]`) unchanged, so the
+    /// per-axis [`polarity_signature`] is blind to it. The fix makes
+    /// [`object_bindings`] reach through the shared verb to the object noun after it
+    /// (nearest TWO forward heads on the neg axis, since a neg adverb modifies the
+    /// object, not the verb), so the swapped object words bind to OPPOSITE neg poles
+    /// across the two texts and collide as a differing shared head — and
+    /// [`polarity_preserved`] returns `false`. Neither neg pole here is immediately
+    /// preceded by another axis's polarity token, so the widening is active. The
+    /// count-based backstop also fires (two neg tokens), so it must NOT auto-ratify.
+    #[test]
+    fn neg_axis_object_swap_is_caught_by_polarity_preserved() {
+        const THRESHOLD: f64 = 0.85; // the shipped default.
+                                     // Two neg clauses sharing the verb `ships`; the object noun sits one token
+                                     // past the verb. Neither `always` nor `never` is immediately preceded by a
+                                     // modal/authz/route pole (both follow the content word `automation`), so the
+                                     // neg-axis two-forward widening is active. Single-word swapped objects
+                                     // (`whitespace` / `rewrite`) keep the lexical similarity high.
+        let ratified = "during a fully gated production release run the ratification \
+                        policy plainly states that the deployment automation always \
+                        ships the whitespace straight into the pinned meta canon \
+                        corpus for this release while the deployment automation never \
+                        ships the rewrite into that same pinned meta canon corpus \
+                        without a second explicit human review under the current \
+                        release threshold for the whole pinned meta canon";
+        // Swap ONLY the two object nouns between the always- and never-clauses; both
+        // neg adverbs and the shared verb `ships` stay put. Now the automation
+        // ALWAYS ships the substantive rewrite and NEVER ships the whitespace — a
+        // dangerous inversion — yet the neg token sequence is untouched.
+        let flipped = ratified
+            .replace("always ships the whitespace", "always ships the rewrite2")
+            .replace("never ships the rewrite", "never ships the whitespace")
+            .replace("always ships the rewrite2", "always ships the rewrite");
+        assert_ne!(ratified, flipped, "the object swap must change the text");
+        let corpus = vec![ratified.to_string()];
+        let sim = best_similarity(&flipped, &corpus);
+        assert!(
+            sim >= THRESHOLD,
+            "expected a high (>= {THRESHOLD}) similarity that WOULD have \
+             auto-ratified without the guard, got {sim}"
+        );
+        // The root-cause signal: the neg-axis object swap perturbs the bindings even
+        // though each axis's token sequence is unchanged.
+        assert!(
+            !polarity_preserved(ratified, &flipped),
+            "the neg-axis object swap must flip polarity_preserved to false"
+        );
+        // ...and the graded gate must route it to a human (does NOT auto-ratify).
+        assert_eq!(
+            triage(&flipped, &corpus, THRESHOLD),
+            Verdict::Novel,
+            "neg-axis object swap must route to a human despite similarity {sim}"
+        );
+    }
+
+    /// The false-positive pin for finding fa2b7d0c: the neg-axis widening must NOT
+    /// bleed into a neighbouring MODAL clause. On `must always X` phrasing the modal
+    /// pole `must` binds the shared verb as its forward head; inserting a benign
+    /// adverb (`must always promptly X`) merely shifts that modal head onto the
+    /// adverb. The first (reverted, commit 97850cd) fix widened EVERY neg pole to two
+    /// forward heads, so the shared verb kept its neg bucket while losing the modal
+    /// bucket — flipping `polarity_preserved` to `false` on a benign 1-neg-token edit
+    /// the count backstop does not mask, and spuriously escalating to a human. This
+    /// test asserts the edit STAYS polarity-preserved and auto-ratifies; it would
+    /// FAIL under the reverted approach, guarding against re-introducing that
+    /// regression.
+    #[test]
+    fn benign_adverb_in_modal_neg_clause_stays_precedented() {
+        const THRESHOLD: f64 = 0.85; // the shipped default.
+                                     // A SINGLE neg token (`always`) so the count backstop does NOT force Novel —
+                                     // the outcome rests entirely on polarity_preserved (the trap the reverted
+                                     // fix sprung). `always` here IS immediately preceded by the modal `must`, so
+                                     // the widening must stay suppressed.
+        let precedent = "when the graded ratification gate evaluates a drifted meta \
+                         canon template during a fully gated production release run \
+                         the ratification policy plainly states that the deployment \
+                         automation must always deploy the routine formatting change \
+                         straight into the pinned meta canon corpus under the current \
+                         threshold for this whole release";
+        // Benign edit: insert the adverb `promptly` after the neg pole. No polarity
+        // token is added, removed or reordered.
+        let benign = precedent.replace("must always deploy", "must always promptly deploy");
+        assert_ne!(
+            precedent, benign,
+            "the adverb insertion must change the text"
+        );
+        let corpus = vec![precedent.to_string()];
+        let sim = best_similarity(&benign, &corpus);
+        assert!(
+            sim >= THRESHOLD,
+            "the benign one-word insertion must stay above threshold, got {sim}"
+        );
+        // The pin: a benign modal-clause adverb insertion is polarity-preserving.
+        assert!(
+            polarity_preserved(precedent, &benign),
+            "inserting a benign adverb into a `must always …` clause must NOT flip \
+             polarity_preserved (the modal-collision false positive)"
+        );
+        // ...so the graded gate auto-ratifies it instead of escalating to a human.
+        assert_eq!(
+            triage(&benign, &corpus, THRESHOLD),
+            Verdict::Precedented,
+            "benign modal-clause adverb insertion must auto-ratify, got Novel"
+        );
+    }
+
+    /// CA-specguard-06 (twin of the neg fix on the MODAL axis): the CA-specguard-
+    /// 02/03/04 neg-axis object-swap defense was never mirrored onto the `modal`
+    /// axis. A cross-clause OBJECT swap between a `must` clause and a `should` clause
+    /// (required-vs-optional obligation) inverts which object is obligatory while
+    /// leaving the modal-axis token *sequence* (`[must, should]`) unchanged — so the
+    /// per-axis [`polarity_signature`] is blind to it, and (before this fix) so was
+    /// [`object_bindings`]: a modal adverb binds only the *shared* verb it precedes
+    /// (`ship`), never the object noun beyond it, so the swapped objects never
+    /// collided as a differing head. Both twin remedies now apply to modal — the
+    /// count backstop ([`BACKSTOP_AXES`] now includes `modal`) AND the forward-head
+    /// widening (a modal pole reaches the nearest TWO forward heads unless preceded
+    /// by another axis's pole) — so the swap flips `polarity_preserved` to `false`
+    /// AND is forced Novel by count. RED before the fix (auto-ratified), green after.
+    #[test]
+    fn modal_axis_object_swap_is_caught_by_polarity_preserved() {
+        const THRESHOLD: f64 = 0.85; // the shipped default.
+                                     // Two modal clauses sharing the verb `ship`; the object noun sits one token
+                                     // past the verb. Neither `must` nor `should` is immediately preceded by
+                                     // another axis's pole (both follow the content word `automation`), so the
+                                     // modal-axis two-forward widening is active. Single-word swapped objects
+                                     // (`whitespace` / `rewrite`) keep the lexical similarity high.
+        let ratified = "during a fully gated production release run the ratification \
+                        policy plainly states that the deployment automation must ship \
+                        the whitespace straight into the pinned meta canon corpus for \
+                        this release while the deployment automation should ship the \
+                        rewrite into that same pinned meta canon corpus under the \
+                        current release threshold for the whole pinned meta canon";
+        // Swap ONLY the two object nouns between the must- and should-clauses; both
+        // modal poles and the shared verb `ship` stay put. Now the automation MUST
+        // ship the substantive rewrite and only SHOULD ship the whitespace — a
+        // dangerous obligation inversion — yet the modal token sequence is untouched.
+        let flipped = ratified
+            .replace("must ship the whitespace", "must ship the rewrite2")
+            .replace("should ship the rewrite", "should ship the whitespace")
+            .replace("must ship the rewrite2", "must ship the rewrite");
+        assert_ne!(ratified, flipped, "the object swap must change the text");
+        let corpus = vec![ratified.to_string()];
+        let sim = best_similarity(&flipped, &corpus);
+        assert!(
+            sim >= THRESHOLD,
+            "expected a high (>= {THRESHOLD}) similarity that WOULD have \
+             auto-ratified without the guard, got {sim}"
+        );
+        // Root-cause signal: the modal-axis object swap perturbs the bindings even
+        // though the axis token sequence is unchanged (Phase 2 widening).
+        assert!(
+            !polarity_preserved(ratified, &flipped),
+            "the modal-axis object swap must flip polarity_preserved to false"
+        );
+        // ...and the graded gate must route it to a human (does NOT auto-ratify).
+        assert_eq!(
+            triage(&flipped, &corpus, THRESHOLD),
+            Verdict::Novel,
+            "modal-axis object swap must route to a human despite similarity {sim}"
+        );
+    }
+
+    /// CA-specguard-06 (twin of the neg fix on the AUDIT axis): same blind spot, one
+    /// axis over. A cross-clause OBJECT swap between a `matches` clause and a
+    /// `contradicts` clause inverts which record is verified-vs-contradicted while
+    /// leaving the audit-axis token sequence (`[match, contradict]`) unchanged. Here
+    /// the buffer adjective `recorded` sits between each audit pole and its object
+    /// noun, so a single forward head binds only `recorded` (shared by both clauses)
+    /// — the object noun beyond it stays invisible until the widening reaches TWO
+    /// forward heads. Adding `audit` to [`BACKSTOP_AXES`] plus the widening now closes
+    /// it: `polarity_preserved` flips to `false` AND the two-audit-token count forces
+    /// Novel. RED before the fix (auto-ratified), green after.
+    #[test]
+    fn audit_axis_object_swap_is_caught_by_polarity_preserved() {
+        const THRESHOLD: f64 = 0.85; // the shipped default.
+        let ratified = "during the final release audit the verification ledger \
+                        carefully matches the recorded whitespace baseline against the \
+                        pinned meta canon corpus while the verification ledger clearly \
+                        contradicts the recorded rewrite baseline for that same pinned \
+                        meta canon corpus under the current release audit threshold";
+        // Swap ONLY the two object nouns between the matches- and contradicts-clauses;
+        // both audit poles and the buffer word `recorded` stay put. Now the ledger
+        // matches the rewrite and contradicts the whitespace — an audit-verdict
+        // inversion — yet the audit token sequence is untouched.
+        let flipped = ratified
+            .replace(
+                "matches the recorded whitespace",
+                "matches the recorded rewrite2",
+            )
+            .replace(
+                "contradicts the recorded rewrite",
+                "contradicts the recorded whitespace",
+            )
+            .replace(
+                "matches the recorded rewrite2",
+                "matches the recorded rewrite",
+            );
+        assert_ne!(ratified, flipped, "the object swap must change the text");
+        let corpus = vec![ratified.to_string()];
+        let sim = best_similarity(&flipped, &corpus);
+        assert!(
+            sim >= THRESHOLD,
+            "expected a high (>= {THRESHOLD}) similarity that WOULD have \
+             auto-ratified without the guard, got {sim}"
+        );
+        assert!(
+            !polarity_preserved(ratified, &flipped),
+            "the audit-axis object swap must flip polarity_preserved to false"
+        );
+        // The blunt count backstop also fires (two audit tokens in one template).
+        assert!(
+            backstop_forces_novel(&flipped, ratified),
+            "two audit-axis poles in one template must force Novel by count alone"
+        );
+        assert_eq!(
+            triage(&flipped, &corpus, THRESHOLD),
+            Verdict::Novel,
+            "audit-axis object swap must route to a human despite similarity {sim}"
+        );
+    }
+
+    /// False-positive pin for the CA-specguard-06 modal widening: extending the
+    /// two-forward-head widening to the `modal` axis must NOT re-introduce the
+    /// modal-collision false positive that commit c1f8278 fixed for neg. A benign
+    /// adverb insertion into a SINGLE-modal-token clause (count 1, so the backstop
+    /// does NOT fire — the outcome rests entirely on `polarity_preserved`, the exact
+    /// trap the reverted neg fix sprang) must STAY polarity-preserved and auto-
+    /// ratify. Green both before and after the fix.
+    #[test]
+    fn benign_modal_reword_stays_precedented() {
+        const THRESHOLD: f64 = 0.85; // the shipped default.
+                                     // A SINGLE modal token (`must`) — no second modal, so BACKSTOP_AXIS_COUNT
+                                     // is not reached and the count backstop stays quiet. `must` is preceded by
+                                     // the content word `automation` (not another axis's pole), so the widening
+                                     // is active — precisely the case that must not spuriously escalate.
+        let precedent = "when the graded ratification gate evaluates a drifted meta \
+                         canon template during a fully gated production release run \
+                         the ratification policy plainly states that the deployment \
+                         automation must deploy the routine formatting change straight \
+                         into the pinned meta canon corpus under the current threshold \
+                         for this whole release";
+        // Benign edit: insert the adverb `promptly` after the modal pole. No polarity
+        // token is added, removed or reordered.
+        let benign = precedent.replace(
+            "must deploy the routine",
+            "must promptly deploy the routine",
+        );
+        assert_ne!(
+            precedent, benign,
+            "the adverb insertion must change the text"
+        );
+        let corpus = vec![precedent.to_string()];
+        let sim = best_similarity(&benign, &corpus);
+        assert!(
+            sim >= THRESHOLD,
+            "the benign one-word insertion must stay above threshold, got {sim}"
+        );
+        // The pin: a benign single-modal-clause adverb insertion is polarity-
+        // preserving — the widening does not manufacture a differing head.
+        assert!(
+            polarity_preserved(precedent, &benign),
+            "inserting a benign adverb into a single `must …` clause must NOT flip \
+             polarity_preserved (the modal-widening false positive)"
+        );
+        assert_eq!(
+            triage(&benign, &corpus, THRESHOLD),
+            Verdict::Precedented,
+            "benign single-modal-clause adverb insertion must auto-ratify, got Novel"
+        );
+    }
+
     /// Regression for the synonym-bypass hole: an inversion that swaps to an
     /// OUT-OF-THE-ORIGINAL-SET synonym on the opposite polarity axis (e.g.
     /// "human" -> "greenlight" is not an axis flip by itself, but a genuine
@@ -1348,6 +1699,142 @@ mod tests {
         // One route token (human) only — backstop does not fire either.
         let one_route = "route the novel policy edit to a human for consent";
         assert!(!backstop_forces_novel(one_route, one_route));
+    }
+
+    // --- Negation-axis object swap (CA-specguard-02 / -03 / -04) --------------
+
+    /// A realistic-length meta-canon precedent with TWO negation-axis clauses:
+    /// the automation `always` merges the benign whitespace change and `never`
+    /// merges the substantive rewrite. The verb (`merge`) is a plain content word
+    /// (NOT a polarity token), so ONLY the negation axis carries two poles —
+    /// nothing lands on the authz/route axes.
+    const NEG_AXIS_RATIFIED: &str =
+        "when the graded ratification gate carefully evaluates a large incoming batch \
+         of drifted meta canon template edits during a fully gated production release \
+         run the deterministic triage policy will always merge the whitespace change \
+         into the pinned meta canon corpus because that particular edit carries little \
+         semantic weight over the eventual outcome and the very same triage policy will \
+         never merge the substantive rewrite into that same pinned meta canon corpus \
+         because that particular rewrite clearly does carry real semantic weight over \
+         the final audit outcome";
+
+    /// Regression for the cross-clause object-swap on the NEGATION axis
+    /// (CA-specguard-02 / -03 / -04, one underlying gap with three facets).
+    ///
+    /// Swapping ONLY the two object phrases between the `always` and `never`
+    /// clauses inverts which edit is always-merged vs never-merged — the
+    /// dangerous inversion — while leaving the lexical Jaccard high. This escaped
+    /// every layer before the fixes; all facets are now closed (defense in depth:
+    /// Phase-2 detects it AND the Phase-1 count backstop also fires):
+    ///  - CA-specguard-03 (FIXED, fa2b7d0c): [`object_bindings`] bound each neg pole
+    ///    only to the NEAREST content token, the *shared* verb `merge` (the object
+    ///    nouns sit one token further out), so the swapped objects never collided as
+    ///    a head. The neg axis now reaches through the verb to the object noun
+    ///    (nearest TWO forward heads), so the object binds to its pole. The widening
+    ///    is active here because neither neg pole is immediately preceded by another
+    ///    axis's polarity token (`will` is a function word, not a modal).
+    ///  - CA-specguard-04 (FIXED): with the object noun now bound, the swapped object
+    ///    words appear in BOTH texts bound to OPPOSITE neg poles, so
+    ///    [`polarity_preserved`]'s intersection comparison sees a differing head and
+    ///    returns `false` (asserted below).
+    ///  - CA-specguard-02 (FIXED, defense in depth): the `neg` axis is a
+    ///    [`BACKSTOP_AXES`] axis, so two neg poles in one template also route to a
+    ///    human by COUNT ALONE — exactly as an object-swap on the authz axis already
+    ///    does (re-review finding 1a) — even if the Phase-2 heuristic ever regressed.
+    #[test]
+    fn neg_axis_object_swap_routes_to_human() {
+        const THRESHOLD: f64 = 0.85; // the shipped default.
+        let ratified = NEG_AXIS_RATIFIED;
+        let flipped = ratified
+            .replace(
+                "always merge the whitespace change",
+                "always merge the substantive rewrite",
+            )
+            .replace(
+                "never merge the substantive rewrite",
+                "never merge the whitespace change",
+            );
+        let corpus = vec![ratified.to_string()];
+
+        // The danger regime: the two swapped object phrases barely perturb the
+        // shingle set of this long paragraph, so the lexical similarity stays high
+        // and WOULD have auto-ratified on similarity alone.
+        let sim = best_similarity(&flipped, &corpus);
+        assert!(
+            sim >= THRESHOLD,
+            "expected a high (>= {THRESHOLD}) lexical similarity that WOULD have \
+             auto-ratified, got {sim}"
+        );
+
+        // CA-specguard-03 / -04 (FIXED, fa2b7d0c): the neg poles now reach through
+        // the shared verb `merge` to the object noun after it, so the swapped object
+        // words bind to OPPOSITE neg poles across the two texts and collide as a
+        // shared head — the Phase-2 heuristic sees the inversion and reports the two
+        // texts as NOT polarity-equivalent.
+        assert!(
+            !polarity_preserved(ratified, &flipped),
+            "the neg-axis object swap must perturb the polarity bindings so \
+             polarity_preserved returns false"
+        );
+
+        // CA-specguard-02 (defense in depth): the neg axis is also a backstop axis,
+        // so two neg poles in one template trip the Phase-1 count backstop too.
+        assert!(
+            backstop_forces_novel(&flipped, ratified),
+            "two negation-axis poles must trip the Phase-1 backstop by count alone"
+        );
+
+        // End-to-end: the inversion routes to a human despite the high similarity
+        // and the Phase-2 blind spot.
+        assert_eq!(
+            triage(&flipped, &corpus, THRESHOLD),
+            Verdict::Novel,
+            "neg-axis object swap must route to a human (Novel) despite similarity {sim}"
+        );
+    }
+
+    /// CA-specguard-02 unit: the Phase-1 count backstop now covers the `neg`
+    /// (always/never/no/not/…) axis, mirroring `authz`/`route`. A single template
+    /// expressing two negation/quantifier decisions is forced to Novel by COUNT
+    /// ALONE, with no reliance on the Phase-2 [`object_bindings`] heuristic.
+    #[test]
+    fn phase1_backstop_forces_novel_on_two_neg_tokens() {
+        // Two neg poles (always + never) in one template — the shape of the
+        // neg-axis object swap. The backstop fires on the count alone.
+        let two_neg = "the triage policy will always merge the whitespace change and \
+                       will never merge the substantive rewrite";
+        assert!(
+            backstop_forces_novel(two_neg, "an unrelated benign precedent template"),
+            "two neg poles in the candidate must trip the Phase 1 backstop by count alone"
+        );
+        // The precedent side also trips it (the backstop inspects both texts).
+        assert!(
+            backstop_forces_novel("an unrelated benign precedent template", two_neg),
+            "two neg poles in the precedent must trip the Phase 1 backstop by count alone"
+        );
+        // End-to-end via triage: even at a fully-permissive threshold (0.0) with a
+        // lexically IDENTICAL precedent (similarity 1.0, polarity trivially
+        // preserved), a two-neg template still routes to a human.
+        let corpus = vec![two_neg.to_string()];
+        assert_eq!(
+            triage(two_neg, &corpus, 0.0),
+            Verdict::Novel,
+            "the Phase 1 backstop must override an otherwise-precedented two-neg match"
+        );
+    }
+
+    /// The neg backstop must NOT over-block a template carrying at most ONE
+    /// negation pole: a single negation clause stays eligible for auto-ratify, so
+    /// benign single-negation edits remain Precedented.
+    #[test]
+    fn neg_backstop_leaves_single_neg_clause_precedented() {
+        // One neg token (never) only — backstop does not fire.
+        let one_neg = "the policy will never merge the unreviewed rewrite before audit";
+        assert!(!backstop_forces_novel(one_neg, one_neg));
+        let corpus = vec![one_neg.to_string()];
+        // A benign whitespace/reflow edit keeps polarity and stays Precedented.
+        let benign = "the policy will never merge the unreviewed rewrite, before audit";
+        assert_eq!(triage(benign, &corpus, 0.85), Verdict::Precedented);
     }
 
     // Object nouns drawn for the fuzzer below; deliberately none is itself a

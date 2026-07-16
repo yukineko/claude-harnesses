@@ -24,6 +24,14 @@ pub fn lock_path(repo_root: &Path) -> PathBuf {
     repo_root.join(".specguard-prompt.lock")
 }
 
+/// Prefix of the machine-authored `reason` a *graded auto-ratify* records when it
+/// re-pins the lock (see the auto-ratify branch of `ratification_block`). It is
+/// the deterministic signal [`write_lock`] uses to distinguish an auto-ratify
+/// from a human `accept-prompt`, so an auto-ratify can be prevented from re-pinning
+/// the similarity precedent to its own just-approved text (CA-specguard-05). MUST
+/// stay in lockstep with the literal that the auto-ratify path formats.
+pub const AUTO_RATIFY_REASON_PREFIX: &str = "auto-ratified (graded)";
+
 #[derive(Debug, Deserialize)]
 pub struct Lock {
     pub audit_hash: String,
@@ -70,7 +78,7 @@ pub struct Lock {
 /// serde field names (`audit`/`decisions`/`refute`/`completeness`, each
 /// `#[serde(default)]`) are the on-disk lock keys and are preserved verbatim, so
 /// this refactor is behavior-preserving for the `[corpus]` table.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct TemplateSlots {
     #[serde(default)]
     pub audit: String,
@@ -127,6 +135,36 @@ pub fn write_lock(
     reason: &str,
 ) -> Result<PathBuf> {
     let path = lock_path(repo_root);
+    // CA-specguard-05: bound cumulative auto-ratify drift. The `[corpus]` table is
+    // the *human-anchored* similarity precedent the graded gate measures a later
+    // change against. A graded auto-ratify must NOT re-pin that precedent to its
+    // own just-approved text — if it did, a run of individually-sub-threshold edits
+    // would walk the meta-canon arbitrarily far from the last HUMAN ratification
+    // (each step close to the previous auto-approved text, yet the aggregate far
+    // from the baseline). So on an auto-ratify (identified by the machine-authored
+    // reason prefix) we PRESERVE the existing corpus as the precedent; only a human
+    // `accept-prompt` re-anchors it. The fingerprints (`*_hash`) still advance to
+    // the new texts so the accepted change is not re-flagged as drift next run —
+    // the effect is that every future edit is still measured against the human
+    // baseline, and one that strays past `threshold` from it escalates to a human.
+    let corpus: TemplateTexts = if reason.starts_with(AUTO_RATIFY_REASON_PREFIX) {
+        match read_lock(repo_root) {
+            // Keep the human-anchored precedent, but fall back to the incoming text
+            // per-slot when the prior lock has none recorded for that slot (e.g. a
+            // freshly activated gate) so the precedent is still seeded.
+            Some(prev) => TemplateTexts {
+                audit: pick_precedent(&prev.corpus.audit, &texts.audit),
+                decisions: pick_precedent(&prev.corpus.decisions, &texts.decisions),
+                refute: pick_precedent(&prev.corpus.refute, &texts.refute),
+                completeness: pick_precedent(&prev.corpus.completeness, &texts.completeness),
+            },
+            // No readable prior lock: nothing to anchor to, so record the new texts.
+            None => texts.clone(),
+        }
+    } else {
+        // Human ratification (`accept-prompt`): (re-)anchor the baseline to `texts`.
+        texts.clone()
+    };
     let body = format!(
         "# specguard prompt ratification lock.\n\
          # The prompt templates are meta-canon (the audit + verification policy).\n\
@@ -155,10 +193,10 @@ pub fn write_lock(
         toml_str(canon_commit),
         toml_str(date),
         toml_str(reason),
-        toml_str(&texts.audit),
-        toml_str(&texts.decisions),
-        toml_str(&texts.refute),
-        toml_str(&texts.completeness),
+        toml_str(&corpus.audit),
+        toml_str(&corpus.decisions),
+        toml_str(&corpus.refute),
+        toml_str(&corpus.completeness),
     );
     // Atomic tmp-write + rename (shared `harness_core::store` helper, already used
     // across the tree): the corpus payload can be large, so a plain in-place write
@@ -180,6 +218,18 @@ pub fn write_lock(
             Err(anyhow::Error::new(e)
                 .context(format!("writing ratification lock {}", path.display())))
         }
+    }
+}
+
+/// Pick the similarity precedent for one template slot on an auto-ratify: keep the
+/// human-anchored `prior` text when it is present, else fall back to the incoming
+/// `incoming` text (a slot the prior lock never recorded — e.g. a freshly activated
+/// gate — must still be seeded). Part of the CA-specguard-05 drift bound.
+fn pick_precedent(prior: &str, incoming: &str) -> String {
+    if prior.is_empty() {
+        incoming.to_string()
+    } else {
+        prior.to_string()
     }
 }
 
@@ -599,6 +649,159 @@ mod tests {
         assert_eq!(lock.corpus.audit, tricky);
         assert_eq!(lock.corpus.decisions, "decisions body");
         assert_eq!(lock.reason, "reason \"with\" quotes");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- Auto-ratify drift bound (CA-specguard-05) ---------------------------
+
+    // Three template texts forming a *walk*: E1 is close to the human baseline
+    // B0, E2 is close to E1, but E2 has drifted past the single-step bound from
+    // B0. NONE contains a polarity token, so the polarity guard / backstop stay
+    // vacuous and only the similarity-vs-precedent drift is under test.
+    const B0: &str = "orbit garden lantern pebble maple cipher meadow harbor velvet cascade \
+                      thicket ember quartz brindle sonnet fathom trellis lagoon marigold pennant \
+                      beacon cobalt driftwood ledger";
+    const E1: &str = "signal glacier lantern pebble maple cipher meadow harbor velvet cascade \
+                      thicket ember quartz brindle sonnet fathom trellis lagoon marigold pennant \
+                      beacon cobalt driftwood ledger";
+    const E2: &str = "signal glacier lantern pebble tundra saffron nectar plateau velvet cascade \
+                      thicket ember quartz brindle sonnet fathom trellis lagoon marigold pennant \
+                      beacon cobalt driftwood ledger";
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "specguard-ratify-{tag}-{}-{:p}",
+            std::process::id(),
+            &tag
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// CA-specguard-05 (facet 1): a *graded auto-ratify* must NOT re-pin the
+    /// similarity precedent (the `[corpus]`) to its own just-approved text. Only a
+    /// human `accept-prompt` re-anchors the baseline. `write_lock` distinguishes
+    /// the two by the machine-authored reason prefix and, on an auto-ratify,
+    /// preserves the existing (human-anchored) corpus while still advancing the
+    /// fingerprints (so the accepted change is not re-flagged next run).
+    #[test]
+    fn auto_ratify_preserves_human_baseline_corpus() {
+        let dir = temp_dir("drift-preserve");
+
+        // A human ratifies the baseline B0.
+        write_lock(
+            &dir,
+            &hashes(&hash(B0), "", "", ""),
+            &texts(B0, "", "", ""),
+            "c0",
+            "2026-07-15",
+            "human: initial ratify",
+        )
+        .unwrap();
+        assert_eq!(read_lock(&dir).unwrap().corpus.audit, B0);
+
+        // A graded auto-ratify re-pins to E1 with the machine-authored reason.
+        let auto_reason = format!(
+            "{AUTO_RATIFY_REASON_PREFIX}: precedented change to audit-prompt (similarity >= 0.85)"
+        );
+        write_lock(
+            &dir,
+            &hashes(&hash(E1), "", "", ""),
+            &texts(E1, "", "", ""),
+            "c1",
+            "2026-07-15",
+            &auto_reason,
+        )
+        .unwrap();
+
+        let lock = read_lock(&dir).unwrap();
+        // FIX: the corpus stays anchored to the HUMAN baseline B0 (RED before the
+        // fix: the auto-ratify overwrote it with E1, letting the baseline walk).
+        assert_eq!(
+            lock.corpus.audit, B0,
+            "an auto-ratify must not re-pin the similarity precedent to its own text"
+        );
+        // ...but the fingerprint advanced to E1 so `drifted()` will not re-flag the
+        // already-accepted E1 on the next run.
+        assert_eq!(lock.audit_hash, hash(E1));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// CA-specguard-05 (aggregate): a run of individually-sub-threshold
+    /// auto-ratifies must not walk the meta-canon arbitrarily far from the
+    /// human-anchored baseline. E1 passes against B0 and auto-ratifies; E2 then
+    /// passes against the *walked* text E1 (which is exactly how the drift slipped
+    /// through before the fix) — but because the corpus stays anchored to B0, E2 is
+    /// measured against the human baseline, has exceeded the bound, and escalates
+    /// to a human instead of silently re-pinning.
+    #[test]
+    fn cumulative_auto_ratify_drift_is_bounded_to_human_baseline() {
+        // Pick a threshold strictly inside the walk: E1 clears B0 and E2 clears E1,
+        // but E2 has drifted below it relative to B0.
+        let s_e1_b0 = similarity::similarity(E1, B0);
+        let s_e2_e1 = similarity::similarity(E2, E1);
+        let s_e2_b0 = similarity::similarity(E2, B0);
+        let high = s_e1_b0.min(s_e2_e1);
+        assert!(
+            s_e2_b0 < high,
+            "walk shape must hold: sim(E2,B0)={s_e2_b0} < min(sim(E1,B0),sim(E2,E1))={high}"
+        );
+        let thr = (s_e2_b0 + high) / 2.0;
+
+        let dir = temp_dir("drift-bound");
+
+        // Human ratifies B0.
+        write_lock(
+            &dir,
+            &hashes(&hash(B0), "", "", ""),
+            &texts(B0, "", "", ""),
+            "c0",
+            "2026-07-15",
+            "human: initial ratify",
+        )
+        .unwrap();
+        let lock = read_lock(&dir).unwrap();
+
+        // E1 individually clears the bar against the human baseline -> auto-ratify.
+        assert_eq!(
+            triage_drift(&["audit-prompt"], &lock.corpus, &texts(E1, "", "", ""), thr),
+            Triage::Precedented
+        );
+        let auto_reason =
+            format!("{AUTO_RATIFY_REASON_PREFIX}: precedented change to audit-prompt");
+        write_lock(
+            &dir,
+            &hashes(&hash(E1), "", "", ""),
+            &texts(E1, "", "", ""),
+            "c1",
+            "2026-07-15",
+            &auto_reason,
+        )
+        .unwrap();
+        let lock = read_lock(&dir).unwrap();
+        // The precedent is STILL the human baseline B0, not the walked E1.
+        assert_eq!(lock.corpus.audit, B0);
+
+        // E2 individually clears the bar against the WALKED text E1 — this is the
+        // step that auto-ratified before the fix, walking the meta-canon away.
+        assert_eq!(
+            triage_drift(
+                &["audit-prompt"],
+                &corpus(E1, "", "", ""),
+                &texts(E2, "", "", ""),
+                thr
+            ),
+            Triage::Precedented
+        );
+        // But measured against the preserved human baseline it has exceeded the
+        // bound -> escalate to a human (RED before the fix: corpus was E1 -> this
+        // auto-ratified and the walk continued unbounded).
+        assert_eq!(
+            triage_drift(&["audit-prompt"], &lock.corpus, &texts(E2, "", "", ""), thr),
+            Triage::Novel(vec!["audit-prompt"])
+        );
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }

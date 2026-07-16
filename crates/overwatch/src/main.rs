@@ -325,11 +325,13 @@ enum Command {
         /// severity-first ordering); shed lower-risk rows are reported.
         #[arg(long)]
         limit: Option<usize>,
-        /// Bridge CONFIRMED AI findings to the backlog instead of rendering:
-        /// each not-yet-bridged finding-id is forwarded via `backlog add`
-        /// (idempotent on finding-id via `bridged_findings.jsonl`). Fail-soft:
-        /// a missing findings store / absent backlog / failed add is warned and
-        /// skipped; the command still succeeds.
+        /// Drain the WHOLE review queue to the backlog instead of rendering:
+        /// each not-yet-bridged entry (AI finding, systemic violation, canary
+        /// rollback, or condukt escalation) is forwarded via `backlog add`.
+        /// Idempotent — findings on `bridged_findings.jsonl` (bare finding-id),
+        /// the other three streams on `bridged_entries.jsonl`
+        /// (`<kind>:<identifier>`). Fail-soft: a missing store / absent backlog
+        /// / failed add is warned and skipped; the command still succeeds.
         #[arg(long = "to-backlog")]
         to_backlog: bool,
     },

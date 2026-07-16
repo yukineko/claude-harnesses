@@ -21,6 +21,19 @@ pub use harness_core::config::expand_tilde;
 /// low threshold. Sanitization only — never panics.
 const MIN_SIMILARITY_THRESHOLD: f64 = 0.05;
 
+/// Floor for `progress_score_threshold` after sanitization. `0.0` is a
+/// degenerate value: the advisory gate fires when `advisory.score >=
+/// progress_score_threshold` (see `main::maybe_progress_advisory` /
+/// `detect::progress_score`), and `progress_score` is always in `[0, 1]`, so a
+/// threshold of `0.0` makes `score >= 0.0` trivially true for every scored
+/// window — the advisory fires on every action regardless of the actual stall
+/// signal, i.e. the gate becomes a tautology that silently disables the
+/// detector as a meaningful signal. A small positive floor keeps the advisory
+/// discriminating (some real stall signal must be present) while still letting
+/// operators opt into an aggressive, low threshold. Sanitization only — never
+/// panics.
+const MIN_PROGRESS_SCORE_THRESHOLD: f64 = 0.05;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub enabled: bool,
@@ -210,7 +223,9 @@ impl Config {
         cfg.oscillation_threshold = cfg.oscillation_threshold.max(1);
         cfg.escalate_after = cfg.escalate_after.max(1);
         cfg.progress_min_window = cfg.progress_min_window.max(2);
-        cfg.progress_score_threshold = cfg.progress_score_threshold.clamp(0.0, 1.0);
+        cfg.progress_score_threshold = cfg
+            .progress_score_threshold
+            .clamp(MIN_PROGRESS_SCORE_THRESHOLD, 1.0);
         // A drift_threshold larger than the window can never be reached (same
         // reasoning as repeat_threshold above), and 0 would fire on the first
         // event. Floor at 1 and clamp down to the window (fail-safe).
@@ -327,6 +342,40 @@ mod tests {
              threshold trivially true for every same-tool call, i.e. nudge-on-every-\
              action); got {}",
             cfg.similarity_threshold
+        );
+    }
+
+    /// CA-stuckguard-04 (advisory progress gate tautology): `load()` sanitized
+    /// `progress_score_threshold` with `.clamp(0.0, 1.0)`, so a config of `0.0`
+    /// passed straight through. The advisory fires when `advisory.score >=
+    /// progress_score_threshold` (see `main::maybe_progress_advisory`) and
+    /// `progress_score` is always in `[0, 1]`, so a threshold of `0.0` makes
+    /// `score >= 0.0` trivially true for every scored window — the advisory
+    /// fires on every action, i.e. the gate is a tautology that silently
+    /// disables the detector as a meaningful signal. Before the fix this test
+    /// fails (RED): a project config setting `progress_score_threshold = 0.0`
+    /// comes out of `load()` unchanged at `0.0`.
+    #[test]
+    fn progress_score_threshold_floor_prevents_degenerate_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            Config::project_path(dir.path()),
+            "progress_score_threshold = 0.0\n",
+        )
+        .unwrap();
+
+        let cfg = Config::load(dir.path());
+
+        assert!(
+            cfg.progress_score_threshold > 0.0,
+            "progress_score_threshold must be floored above 0.0 (0.0 makes score \
+             >= threshold trivially true for every scored window, i.e. the advisory \
+             fires on every action and the gate is a tautology); got {}",
+            cfg.progress_score_threshold
+        );
+        assert_eq!(
+            cfg.progress_score_threshold, MIN_PROGRESS_SCORE_THRESHOLD,
+            "a 0.0 misconfig must degrade to the positive minimum floor"
         );
     }
 }

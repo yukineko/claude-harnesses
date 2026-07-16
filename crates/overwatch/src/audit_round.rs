@@ -183,6 +183,22 @@ pub fn same_model(finder: &str, verifier: &str) -> bool {
     canonical_model(finder) == canonical_model(verifier)
 }
 
+/// True iff `finder` and `verifier` denote a model-diversity MUST violation:
+/// BOTH are supplied (`Some`), non-empty after trimming, and canonically the
+/// SAME model. A missing field (`None`) OR an empty / whitespace-only string is
+/// treated as "no model information" and does NOT trigger — so callers that pass
+/// no model args (backward compatible) and callers that pass a blank field are
+/// never flagged with a FALSE violation (note `same_model("", "")` is trivially
+/// `true`, which a raw `Some`/`Some` guard would wrongly surface). This is the
+/// deterministic decision the CLI `record` path consults before recording a
+/// model-collision finding. Pure and side-effect free.
+pub fn model_diversity_violation(finder: Option<&str>, verifier: Option<&str>) -> bool {
+    match (finder, verifier) {
+        (Some(f), Some(v)) if !f.trim().is_empty() && !v.trim().is_empty() => same_model(f, v),
+        _ => false,
+    }
+}
+
 /// Deterministic finding-id for a finder==verifier model-collision warning,
 /// derived from the round id so re-recording the same round yields the SAME id
 /// (idempotent key). Pure and side-effect free.
@@ -339,6 +355,44 @@ mod tests {
         assert!(!same_model("claude-3-5-sonnet", "claude-3-5-opus"));
         assert!(!same_model("opus", "haiku"));
         assert!(!same_model("sonnet", "haiku"));
+    }
+
+    #[test]
+    fn model_diversity_violation_flags_same_nonempty_models_only() {
+        // BOTH present, non-empty, and the SAME model (any case / whitespace
+        // variant) => a model-diversity MUST violation.
+        assert!(model_diversity_violation(
+            Some("claude-opus-4-8"),
+            Some("claude-opus-4-8")
+        ));
+        assert!(model_diversity_violation(Some("  Opus  "), Some("opus")));
+        assert!(model_diversity_violation(
+            Some("CLAUDE-3-5-HAIKU"),
+            Some("claude-3-5-haiku")
+        ));
+
+        // Distinct models satisfy the diversity requirement => no violation.
+        assert!(!model_diversity_violation(
+            Some("claude-3-5-sonnet"),
+            Some("claude-3-5-opus")
+        ));
+        assert!(!model_diversity_violation(Some("opus"), Some("haiku")));
+
+        // A MISSING model field (None on either side) must NOT trigger — the
+        // check is skipped so existing callers that pass no model args behave
+        // exactly as before.
+        assert!(!model_diversity_violation(None, Some("opus")));
+        assert!(!model_diversity_violation(Some("opus"), None));
+        assert!(!model_diversity_violation(None, None));
+
+        // An EMPTY / whitespace-only field is morally "missing" and must NOT
+        // trigger, even though `same_model("", "")` is trivially true. This is
+        // the false-positive the raw Some/Some guard around `same_model` let
+        // through.
+        assert!(!model_diversity_violation(Some(""), Some("")));
+        assert!(!model_diversity_violation(Some("   "), Some("  ")));
+        assert!(!model_diversity_violation(Some(""), Some("opus")));
+        assert!(!model_diversity_violation(Some("opus"), Some("   ")));
     }
 
     #[test]

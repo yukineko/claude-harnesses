@@ -1,27 +1,42 @@
-/// The finding→backlog bridge: `overwatch review-queue --to-backlog`.
+/// The review-queue→backlog drain: `overwatch review-queue --to-backlog`.
 ///
-/// Continuous-Audit re-records every CONFIRMED review finding into the
-/// overwatch findings store each round; this bridge closes the "discover→fix"
-/// loop by forwarding each *not-yet-bridged* finding to the backlog (a
-/// `backlog add`), so `/flow` can auto-repair it. The findings store is the
-/// confirmed-findings ingestion point (`record-finding`), so every finding read
-/// here is treated as confirmed.
+/// This closes the "discover→fix" loop by forwarding the **whole unified review
+/// queue** — not just AI findings — to the backlog (one `backlog add` per
+/// entry), so `/flow` can auto-repair each item. Two ledgers keep it idempotent,
+/// deliberately kept separate:
 ///
-/// Idempotency is enforced on `finding_id` via the `bridged_findings.jsonl`
-/// ledger, NOT by the backlog's own duplicate guard (which hashes on
-/// title+project). A finding recurring across audit rounds collapses to one
-/// row via [`review_queue::dedup_findings`] and, once bridged, is never
-/// forwarded again.
+/// * **AI findings** (`review_findings.jsonl`, the `record-finding` ingestion
+///   point) take the enrichment-carrying path below: each not-yet-bridged
+///   `finding_id` is forwarded with triage signals in its notes (elapsed days,
+///   verifier rationale, regression-test freshness) and recorded in
+///   `bridged_findings.jsonl`. That ledger doubles as the review-metrics
+///   "resolved finding" source, so it must stay keyed on bare finding-ids.
+/// * **The other three streams** — systemic gate violations, canary rollbacks,
+///   and condukt escalations — are assembled via [`review_queue::build_queue`]
+///   and forwarded by the pure [`plan_entry_adds`] planner, keyed on a
+///   composite `<kind-tag>:<identifier>` in a *separate* `bridged_entries.jsonl`
+///   ledger so the finding-resolution logic above is untouched.
 ///
-/// **Fail-soft (never-break-a-turn):** a missing/empty/corrupt findings store,
-/// an absent `backlog` binary, or a non-zero `backlog add` are each warned and
-/// skipped — the command as a whole always succeeds (exit 0). The existing
-/// `review-queue` (no flag) behaviour and the systemic/rollback streams are
-/// untouched.
+/// Idempotency is enforced by these ledgers, NOT by the backlog's own duplicate
+/// guard (which hashes on title+project). A finding recurring across audit
+/// rounds collapses to one row via [`review_queue::dedup_findings`]; a flapping
+/// canary collapses to one row via the queue's same-plugin collapse.
+///
+/// Severity maps one tier hotter than a generic finding (high→p0, med→p1,
+/// low→p2) because a gate-defense regression left unattended has outsized blast
+/// radius; findings are tagged with their `source`, and non-finding entries
+/// with their kind tag, so the backlog stays filterable (`backlog list --tag
+/// rollback`).
+///
+/// **Fail-soft (never-break-a-turn):** a missing/empty/corrupt store, an absent
+/// `backlog` binary, or a non-zero `backlog add` are each warned and skipped —
+/// the command as a whole always succeeds (exit 0).
+use crate::review_escalation;
 use crate::review_finding::ReviewFinding;
-use crate::review_queue;
+use crate::review_queue::{self, EntryKind, ReviewQueueEntry, Severity};
 use crate::store;
 use crate::test_freshness::{self, TestFreshness};
+use crate::violation::{self, RecurrencePolicy};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::Path;
@@ -46,13 +61,80 @@ fn resolve_backlog_bin() -> Option<String> {
     None
 }
 
-/// Map a reviewer severity to a backlog priority tier: `high` (any case) → p1,
-/// everything else (incl. unknown/absent) → p2.
+/// Map a reviewer severity to a backlog priority tier: `high` → p0, `medium`/
+/// `med` → p1, `low` → p2. Gate-defense findings carry outsized risk if left
+/// unattended, so the whole scale is one tier hotter than a generic finding.
+/// Unknown/absent severity defaults to p1 (the safe middle) rather than the
+/// lowest tier, so an unclassified gate finding is never silently buried.
 fn severity_to_priority(severity: Option<&str>) -> &'static str {
-    match severity.map(|s| s.to_ascii_lowercase()) {
-        Some(s) if s == "high" => "p1",
-        _ => "p2",
+    match severity.map(|s| s.to_ascii_lowercase()).as_deref() {
+        Some("high") => "p0",
+        Some("low") => "p2",
+        // "medium"/"med", unknown, and absent all land in the middle tier.
+        _ => "p1",
     }
+}
+
+/// The [`Severity`]-enum counterpart to [`severity_to_priority`], used for the
+/// non-finding streams whose severity is already normalized to the enum by
+/// [`review_queue::build_queue`] (systemic/rollback/escalation are always
+/// `High` → p0; the medium/low arms exist for completeness and to stay in
+/// lockstep with the string mapping). Same rationale: gate-defense signals ride
+/// one tier hotter than a generic finding.
+fn queue_severity_to_priority(severity: Severity) -> &'static str {
+    match severity {
+        Severity::High => "p0",
+        Severity::Medium => "p1",
+        Severity::Low => "p2",
+    }
+}
+
+/// One planned `backlog add` derived from a non-finding review-queue entry
+/// (systemic / rollback / escalation). Produced purely by [`plan_entry_adds`]
+/// so the enqueue decision is unit-testable without spawning `backlog`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlannedAdd {
+    /// Idempotency key `<kind-tag>:<identifier>`, recorded in the
+    /// bridged-entries ledger after a successful add.
+    key: String,
+    /// Backlog task title — the entry's human-readable summary.
+    title: String,
+    /// Priority tier from the entry's severity.
+    priority: &'static str,
+    /// The kind tag (`systemic`/`rollback`/`escalation`), so the backlog stays
+    /// filterable back to the stream it came from (`backlog list --tag rollback`).
+    tag: &'static str,
+    /// Machine-readable provenance line for the backlog task notes.
+    notes: String,
+}
+
+/// Pure planner: given the non-finding review-queue rows and the set of
+/// already-bridged keys, decide which rows to forward and how. AI-finding rows
+/// (if any slip in) are excluded — that stream is bridged by the richer,
+/// enrichment-carrying path in [`run_in`] and tracked in a separate ledger.
+/// Deterministic: input order is preserved and nothing depends on hash order.
+fn plan_entry_adds(rows: &[ReviewQueueEntry], already: &HashSet<String>) -> Vec<PlannedAdd> {
+    rows.iter()
+        .filter(|r| r.kind != EntryKind::AiFinding)
+        .filter_map(|r| {
+            let key = format!("{}:{}", r.kind.tag(), r.identifier);
+            if already.contains(&key) {
+                return None; // idempotent: already forwarded in a prior run.
+            }
+            Some(PlannedAdd {
+                title: r.summary.clone(),
+                priority: queue_severity_to_priority(r.severity),
+                tag: r.kind.tag(),
+                notes: format!(
+                    "kind:{} identifier:{} occurrences:{}",
+                    r.kind.tag(),
+                    r.identifier,
+                    r.occurrences
+                ),
+                key,
+            })
+        })
+        .collect()
 }
 
 /// Build the backlog task notes for one finding: the original
@@ -110,11 +192,33 @@ fn run_in(cwd: &Path) -> Result<()> {
     let findings = store::read_review_findings(cwd).unwrap_or_default();
     let deduped = review_queue::dedup_findings(&findings);
 
-    // 2. Already-bridged set (idempotency key = finding_id).
-    let already: HashSet<String> = store::read_bridged_findings(cwd)
+    // 1b. The other three review-queue streams — systemic gate violations,
+    // canary rollbacks, and condukt escalations — assembled into their queue
+    // rows (findings passed empty here; they take the richer path above). This
+    // is the "consolidation": `--to-backlog` now drains the WHOLE unified
+    // review queue, not just AI findings.
+    let events = store::read_violations(cwd).unwrap_or_default();
+    let systemic: Vec<_> =
+        violation::detect_recurrence(&events, store::now(), RecurrencePolicy::default())
+            .into_iter()
+            .filter(|r| r.is_systemic)
+            .collect();
+    let rollbacks = store::read_rollbacks(cwd).unwrap_or_default();
+    let escalations = review_escalation::read_open_escalations(cwd);
+    let entry_rows = review_queue::build_queue(&systemic, &rollbacks, &[], &escalations);
+
+    // 2. Already-bridged sets — findings keyed on bare finding_id (also the
+    // review-metrics "resolved" source), non-finding entries keyed on the
+    // composite `<kind-tag>:<identifier>` in their own separate ledger.
+    let already_findings: HashSet<String> = store::read_bridged_findings(cwd)
         .unwrap_or_default()
         .into_iter()
         .collect();
+    let already_entries: HashSet<String> = store::read_bridged_entries(cwd)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let planned = plan_entry_adds(&entry_rows, &already_entries);
 
     // 3. Backlog binary (fail-soft when absent).
     let backlog = match resolve_backlog_bin() {
@@ -128,6 +232,8 @@ fn run_in(cwd: &Path) -> Result<()> {
                 serde_json::json!({
                     "bridged": 0,
                     "considered": deduped.len(),
+                    "entries_bridged": 0,
+                    "entries_considered": planned.len(),
                     "skipped": "backlog-unavailable"
                 })
             );
@@ -140,7 +246,7 @@ fn run_in(cwd: &Path) -> Result<()> {
     let mut bridged_now = 0usize;
 
     for (f, _occurrences) in &deduped {
-        if already.contains(&f.finding_id) {
+        if already_findings.contains(&f.finding_id) {
             continue; // idempotent: already forwarded in a prior round.
         }
         let priority = severity_to_priority(f.severity.as_deref());
@@ -163,6 +269,11 @@ fn run_in(cwd: &Path) -> Result<()> {
             .arg(&project)
             .arg("--priority")
             .arg(priority)
+            // Tag with the finding's source (e.g. `continuous-audit`) so the
+            // backlog stays filterable back to where it came from
+            // (`backlog list --tag continuous-audit`).
+            .arg("--tag")
+            .arg(&f.source)
             .arg("--notes")
             .arg(&notes)
             .status();
@@ -196,9 +307,59 @@ fn run_in(cwd: &Path) -> Result<()> {
         }
     }
 
+    // The three non-finding streams. Same fail-soft contract as the finding
+    // loop: a failed/unspawnable `backlog add` is warned and skipped, and the
+    // idempotency key is only recorded after a successful add.
+    let mut entries_bridged_now = 0usize;
+    for p in &planned {
+        let status = std::process::Command::new(&backlog)
+            .arg("add")
+            .arg("--title")
+            .arg(&p.title)
+            .arg("--project")
+            .arg(&project)
+            .arg("--priority")
+            .arg(p.priority)
+            .arg("--tag")
+            .arg(p.tag)
+            .arg("--notes")
+            .arg(&p.notes)
+            .status();
+
+        match status {
+            Ok(s) if s.success() => match store::append_bridged_entry(cwd, &p.key) {
+                Ok(()) => entries_bridged_now += 1,
+                Err(e) => {
+                    eprintln!(
+                        "overwatch: WARNING bridged entry {} but could not record it (continuing): {e}",
+                        p.key
+                    );
+                }
+            },
+            Ok(s) => {
+                eprintln!(
+                    "overwatch: WARNING `backlog add` failed for entry {} (exit {:?}) — continuing",
+                    p.key,
+                    s.code()
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "overwatch: WARNING could not spawn backlog for entry {} (continuing): {e}",
+                    p.key
+                );
+            }
+        }
+    }
+
     println!(
         "{}",
-        serde_json::json!({ "bridged": bridged_now, "considered": deduped.len() })
+        serde_json::json!({
+            "bridged": bridged_now,
+            "considered": deduped.len(),
+            "entries_bridged": entries_bridged_now,
+            "entries_considered": planned.len(),
+        })
     );
     Ok(())
 }
@@ -208,12 +369,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn severity_maps_high_to_p1_else_p2() {
-        assert_eq!(severity_to_priority(Some("high")), "p1");
-        assert_eq!(severity_to_priority(Some("HIGH")), "p1");
-        assert_eq!(severity_to_priority(Some("medium")), "p2");
+    fn severity_maps_high_p0_medium_p1_low_p2() {
+        assert_eq!(severity_to_priority(Some("high")), "p0");
+        assert_eq!(severity_to_priority(Some("HIGH")), "p0");
+        assert_eq!(severity_to_priority(Some("medium")), "p1");
+        assert_eq!(severity_to_priority(Some("med")), "p1");
         assert_eq!(severity_to_priority(Some("low")), "p2");
-        assert_eq!(severity_to_priority(None), "p2");
+        // Unknown/absent severity defaults to the safe middle, not the floor.
+        assert_eq!(severity_to_priority(Some("weird")), "p1");
+        assert_eq!(severity_to_priority(None), "p1");
     }
 
     #[test]
@@ -287,5 +451,97 @@ mod tests {
             notes.contains("regression test: 該当テストなし"),
             "notes: {notes}"
         );
+    }
+
+    // --- non-finding stream planner (review-queue → backlog consolidation) ----
+
+    fn entry(
+        kind: EntryKind,
+        severity: Severity,
+        identifier: &str,
+        summary: &str,
+    ) -> ReviewQueueEntry {
+        ReviewQueueEntry {
+            kind,
+            severity,
+            ts: 100,
+            summary: summary.to_string(),
+            identifier: identifier.to_string(),
+            occurrences: 1,
+        }
+    }
+
+    #[test]
+    fn queue_severity_maps_high_p0_medium_p1_low_p2() {
+        assert_eq!(queue_severity_to_priority(Severity::High), "p0");
+        assert_eq!(queue_severity_to_priority(Severity::Medium), "p1");
+        assert_eq!(queue_severity_to_priority(Severity::Low), "p2");
+    }
+
+    #[test]
+    fn plan_entry_adds_maps_each_kind_to_keyed_tagged_add() {
+        let rows = vec![
+            entry(
+                EntryKind::Systemic,
+                Severity::High,
+                "blastguard:rm-rf",
+                "sys summary",
+            ),
+            entry(
+                EntryKind::Rollback,
+                Severity::High,
+                "overwatch",
+                "rb summary",
+            ),
+            entry(
+                EntryKind::Escalation,
+                Severity::High,
+                "esc-1",
+                "esc summary",
+            ),
+        ];
+        let planned = plan_entry_adds(&rows, &HashSet::new());
+        assert_eq!(planned.len(), 3);
+
+        // Keys are `<kind-tag>:<identifier>`, titles are the summaries, tags are
+        // the kind tags, priority follows severity, notes carry provenance.
+        assert_eq!(planned[0].key, "systemic:blastguard:rm-rf");
+        assert_eq!(planned[0].tag, "systemic");
+        assert_eq!(planned[0].title, "sys summary");
+        assert_eq!(planned[0].priority, "p0");
+        assert!(planned[0].notes.contains("kind:systemic"));
+        assert!(planned[0].notes.contains("identifier:blastguard:rm-rf"));
+
+        assert_eq!(planned[1].key, "rollback:overwatch");
+        assert_eq!(planned[1].tag, "rollback");
+        assert_eq!(planned[2].key, "escalation:esc-1");
+        assert_eq!(planned[2].tag, "escalation");
+    }
+
+    #[test]
+    fn plan_entry_adds_is_idempotent_against_already_bridged_keys() {
+        let rows = vec![
+            entry(EntryKind::Rollback, Severity::High, "overwatch", "rb"),
+            entry(EntryKind::Systemic, Severity::High, "blastguard:x", "sys"),
+        ];
+        let mut already = HashSet::new();
+        already.insert("rollback:overwatch".to_string());
+        let planned = plan_entry_adds(&rows, &already);
+        // The already-bridged rollback is skipped; the fresh systemic remains.
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].key, "systemic:blastguard:x");
+    }
+
+    #[test]
+    fn plan_entry_adds_excludes_ai_finding_rows() {
+        // AI-finding rows are bridged by the enrichment-carrying path, not here;
+        // even if one appears in the row slice it must be excluded.
+        let rows = vec![
+            entry(EntryKind::AiFinding, Severity::High, "F-1", "a finding"),
+            entry(EntryKind::Rollback, Severity::High, "overwatch", "rb"),
+        ];
+        let planned = plan_entry_adds(&rows, &HashSet::new());
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].tag, "rollback");
     }
 }

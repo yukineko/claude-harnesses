@@ -3123,6 +3123,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             let prior_status = t.status;
             t.status = st;
             t.updated_at = Some(state::now_secs());
+            if st == state::Status::Running {
+                t.started_at = Some(state::now_secs());
+            }
             if st == state::Status::Verified {
                 t.fp_oracle_valid = fp_gate_value;
             }
@@ -3907,6 +3910,9 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
             if !fingerprint.is_empty() {
                 cmd.args(["--skill-fingerprint", &fingerprint]);
             }
+            if let Some(secs) = s.duration_secs {
+                cmd.args(["--duration", &secs.to_string()]);
+            }
             // Best-effort: a single failed record must not abort the sweep.
             if let Err(e) = cmd.status() {
                 eprintln!("condukt: fugu-router record failed for '{}': {e}", s.title);
@@ -4258,6 +4264,7 @@ mod state_set_tests {
                 findings: None,
                 hashkey: None,
                 claimed_at: None,
+                started_at: None,
             }],
             paused: false,
             terminal_label: None,

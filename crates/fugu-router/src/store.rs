@@ -42,6 +42,13 @@ pub struct Episode {
     /// otherwise makes behaviour drift unattributable). `None` = not captured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_fingerprint: Option<String>,
+    /// Measured wall-clock duration (seconds) of the worker/verifier task, when
+    /// the caller (condukt) knows it. `#[serde(default)]` (not `Option`) so an
+    /// older JSONL line with no `duration_secs` field reads as `0.0` rather than
+    /// failing to parse — measurement-only, never consulted by routing/scoring
+    /// (`policy::route`/`decide_bandit` are unchanged by this field).
+    #[serde(default)]
+    pub duration_secs: f64,
 }
 
 fn default_role() -> String {
@@ -351,6 +358,7 @@ mod tests {
             human_label: None,
             labeled_by: None,
             skill_fingerprint: None,
+            duration_secs: 0.0,
         }
     }
 
@@ -562,6 +570,7 @@ mod tests {
             human_label: None,
             labeled_by: None,
             skill_fingerprint: None,
+            duration_secs: 0.0,
         };
         append(&path, &ep).unwrap();
         // a junk line must not break the load
@@ -617,6 +626,7 @@ mod tests {
                             human_label: None,
                             labeled_by: None,
                             skill_fingerprint: None,
+                            duration_secs: 0.0,
                         };
                         append(&path, &ep).unwrap();
                     }
@@ -724,5 +734,21 @@ mod tests {
         assert!(!none_line.contains("skill_fingerprint"));
         let back_none: Episode = serde_json::from_str(&none_line).unwrap();
         assert!(back_none.skill_fingerprint.is_none());
+    }
+
+    #[test]
+    fn duration_secs_roundtrips_and_defaults_to_zero_on_old_lines() {
+        let mut ep = sample_ep("add auth", "sonnet");
+        ep.duration_secs = 42.5;
+        let line = serde_json::to_string(&ep).unwrap();
+        let back: Episode = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.duration_secs, 42.5);
+
+        // An OLD episode JSON line recorded before this field existed has no
+        // "duration_secs" key at all — it must still parse, defaulting to 0.0
+        // rather than failing to deserialize.
+        let old_line = r#"{"ts":1,"title":"legacy task","touched_files":[],"class":"parallel","model":"sonnet","role":"worker","pass":true,"cost_usd":0.0}"#;
+        let back_old: Episode = serde_json::from_str(old_line).unwrap();
+        assert_eq!(back_old.duration_secs, 0.0);
     }
 }

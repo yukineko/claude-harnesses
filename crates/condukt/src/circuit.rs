@@ -381,6 +381,7 @@ mod tests {
             findings: None,
             hashkey: None,
             claimed_at: None,
+            started_at: None,
         }
     }
 

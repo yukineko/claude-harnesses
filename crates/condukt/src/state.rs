@@ -128,6 +128,13 @@ pub struct TaskState {
     /// serde-default/skip for backward-compatible on-disk layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_at: Option<i64>,
+    /// Unix timestamp (seconds) when this task's status most recently became
+    /// `running`. Paired with `updated_at` at settle time to derive a measured
+    /// wall-clock duration for the fugu-router learning signal (measurement
+    /// only — never consulted by routing/scoring logic). `None` for tasks
+    /// written before this field existed or that never entered `running`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
 }
 
 pub fn now_secs() -> i64 {
@@ -1038,6 +1045,12 @@ pub struct RecordSpec {
     pub status: String,
     pub cost_usd: f64,
     pub done_criteria: Option<String>,
+    /// Wall-clock seconds between `started_at` (last `running` transition) and
+    /// `updated_at` (the settling transition), when both are known. `None`
+    /// when either timestamp is missing (legacy task-state, or a task that
+    /// somehow settled without ever recording a `running` transition) — never
+    /// fabricated as 0.0, so the caller can omit `--duration` outright.
+    pub duration_secs: Option<f64>,
 }
 
 /// Build the outcomes to record for a run, or `None` when the run is not yet
@@ -1094,6 +1107,12 @@ pub fn records_for_run(
                 .or_else(|| task.and_then(|t| t.suggested_model.clone()))
                 .unwrap_or_else(|| "sonnet".to_string());
             let done_criteria = task.and_then(|t| t.done_criteria.clone());
+            let duration_secs = match (ts.started_at, ts.updated_at) {
+                (Some(started), Some(settled)) if settled >= started => {
+                    Some((settled - started) as f64)
+                }
+                _ => None,
+            };
             Some(RecordSpec {
                 title,
                 files,
@@ -1102,6 +1121,7 @@ pub fn records_for_run(
                 status: status.to_string(),
                 cost_usd: ts.cost_usd.unwrap_or(0.0),
                 done_criteria,
+                duration_secs,
             })
         })
         .collect();
@@ -1555,6 +1575,7 @@ mod tests {
                     findings: None,
                     hashkey: None,
                     claimed_at: None,
+                    started_at: None,
                 },
                 TaskState {
                     id: "b".into(),
@@ -1569,6 +1590,7 @@ mod tests {
                     findings: None,
                     hashkey: None,
                     claimed_at: None,
+                    started_at: None,
                 },
             ],
             paused: false,
@@ -1597,6 +1619,7 @@ mod tests {
                     findings: None,
                     hashkey: None,
                     claimed_at: None,
+                    started_at: None,
                 },
                 TaskState {
                     id: "b".into(),
@@ -1611,6 +1634,7 @@ mod tests {
                     findings: None,
                     hashkey: None,
                     claimed_at: None,
+                    started_at: None,
                 },
                 TaskState {
                     id: "c".into(),
@@ -1625,6 +1649,7 @@ mod tests {
                     findings: None,
                     hashkey: None,
                     claimed_at: None,
+                    started_at: None,
                 },
             ],
             paused: false,
@@ -2005,6 +2030,7 @@ mod tests {
                 findings: None,
                 hashkey: None,
                 claimed_at: None,
+                started_at: None,
             }],
             paused: false,
             terminal_label: None,
@@ -2203,6 +2229,7 @@ mod tests {
                 findings: None,
                 hashkey: None,
                 claimed_at: None,
+                started_at: None,
             }],
             paused: false,
             terminal_label: None,
@@ -2260,6 +2287,7 @@ mod tests {
             findings: None,
             hashkey: None,
             claimed_at: None,
+            started_at: None,
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert_eq!(ids, vec!["stuck-task".to_string()]);
@@ -2284,6 +2312,7 @@ mod tests {
             findings: None,
             hashkey: None,
             claimed_at: None,
+            started_at: None,
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert!(ids.is_empty(), "recent Running task must not be stuck");
@@ -2306,6 +2335,7 @@ mod tests {
             findings: None,
             hashkey: None,
             claimed_at: None,
+            started_at: None,
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert!(
@@ -2335,6 +2365,7 @@ mod tests {
             findings: None,
             hashkey: None,
             claimed_at: None,
+            started_at: None,
         }]);
         let t = run.tasks.iter_mut().find(|t| t.id == "t1").unwrap();
         t.status = Status::Pending;
@@ -2367,6 +2398,7 @@ mod tests {
             findings: None,
             hashkey: None,
             claimed_at: None,
+            started_at: None,
         }]);
         let t = run.tasks.iter_mut().find(|t| t.id == "t-fail").unwrap();
         t.status = Status::Pending;
@@ -2398,6 +2430,7 @@ mod tests {
                 findings: None,
                 hashkey: None,
                 claimed_at: None,
+                started_at: None,
             },
             TaskState {
                 id: "verified-task".into(),
@@ -2412,6 +2445,7 @@ mod tests {
                 findings: None,
                 hashkey: None,
                 claimed_at: None,
+                started_at: None,
             },
         ]);
         for t in &run.tasks {
@@ -2444,6 +2478,7 @@ mod tests {
                 findings: None,
                 hashkey: None,
                 claimed_at: None,
+                started_at: None,
             },
             TaskState {
                 id: "stuck-2".into(),
@@ -2458,6 +2493,7 @@ mod tests {
                 findings: None,
                 hashkey: None,
                 claimed_at: None,
+                started_at: None,
             },
             TaskState {
                 id: "active".into(),
@@ -2472,6 +2508,7 @@ mod tests {
                 findings: None,
                 hashkey: None,
                 claimed_at: None,
+                started_at: None,
             },
         ]);
 
@@ -2518,6 +2555,7 @@ mod tests {
             findings: None,
             hashkey: None,
             claimed_at: None,
+            started_at: None,
         }]);
         let found = run.tasks.iter().find(|t| t.id == "no-such-task");
         assert!(found.is_none(), "non-existent task id must not be found");
@@ -2600,6 +2638,7 @@ mod tests {
                 findings: None,
                 hashkey: None,
                 claimed_at: None,
+                started_at: None,
             },
             TaskState {
                 id: "done-old".into(),
@@ -2614,6 +2653,7 @@ mod tests {
                 findings: None,
                 hashkey: None,
                 claimed_at: None,
+                started_at: None,
             },
             TaskState {
                 id: "verified-old".into(),
@@ -2628,6 +2668,7 @@ mod tests {
                 findings: None,
                 hashkey: None,
                 claimed_at: None,
+                started_at: None,
             },
         ]);
         let ids = stuck_task_ids(&run, ttl);
@@ -2758,6 +2799,35 @@ mod tests {
         let specs = records_for_run(&run, &dec).unwrap();
         assert_eq!(specs[0].model, "opus");
         assert_eq!(specs[0].cost_usd, 0.42);
+    }
+
+    /// duration_secs is derived from started_at/updated_at when both are known.
+    #[test]
+    fn records_for_run_computes_duration_from_started_and_updated_at() {
+        let dec = Decomposition {
+            goal: "g".into(),
+            tasks: vec![task("a", "Task A", None)],
+        };
+        let mut t = ts("a", Status::Verified);
+        t.started_at = Some(1000);
+        t.updated_at = Some(1090);
+        let run = make_run_with_tasks(vec![t]);
+        let specs = records_for_run(&run, &dec).unwrap();
+        assert_eq!(specs[0].duration_secs, Some(90.0));
+    }
+
+    /// duration_secs is None (never fabricated as 0.0) when started_at is
+    /// missing, e.g. legacy task-state written before this field existed.
+    #[test]
+    fn records_for_run_duration_none_when_started_at_missing() {
+        let dec = Decomposition {
+            goal: "g".into(),
+            tasks: vec![task("a", "Task A", None)],
+        };
+        let t = ts("a", Status::Verified); // started_at defaults to None
+        let run = make_run_with_tasks(vec![t]);
+        let specs = records_for_run(&run, &dec).unwrap();
+        assert_eq!(specs[0].duration_secs, None);
     }
 
     /// Cancelled tasks carry no learning signal and are skipped.

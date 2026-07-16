@@ -108,6 +108,7 @@ mod tests {
                 human_label: None,
                 labeled_by: None,
                 skill_fingerprint: None,
+                duration_secs: 0.0,
             },
             sim,
         }
@@ -282,6 +283,7 @@ mod tests {
                 human_label: None,
                 labeled_by: None,
                 skill_fingerprint: None,
+                duration_secs: 0.0,
             })
             .collect();
         let files = vec!["src/auth/login.ts".to_string()];

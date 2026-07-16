@@ -78,6 +78,11 @@ enum Command {
         /// Fingerprint of the active SKILL.md corpus (see `fugu-router fingerprint`).
         #[arg(long, default_value = "")]
         skill_fingerprint: String,
+        /// Measured wall-clock duration (seconds) of the worker/verifier task,
+        /// if known (e.g. from condukt's started_at/updated_at). Measurement
+        /// only — never consulted by routing/scoring.
+        #[arg(long, default_value_t = 0.0)]
+        duration: f64,
     },
     /// Apply a human label to a recorded episode, overriding the verifier's
     /// self-pass in policy aggregation. The teacher signal that de-biases the
@@ -436,6 +441,7 @@ fn run_user(cmd: Command) -> Result<()> {
             done_criteria,
             notes,
             skill_fingerprint,
+            duration,
         } => {
             let raw_touched = split_files(&files);
             // Normalise absolute paths to repo-relative so stored paths are
@@ -459,6 +465,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 } else {
                     Some(skill_fingerprint)
                 },
+                duration_secs: duration,
             };
             store::append(&cfg.store_path(), &ep).context("appending episode")?;
             if pass && !done_criteria.is_empty() {
@@ -1162,6 +1169,7 @@ mod label_tests {
             human_label: None,
             labeled_by: None,
             skill_fingerprint: None,
+            duration_secs: 0.0,
         }
     }
 

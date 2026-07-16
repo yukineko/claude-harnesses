@@ -135,6 +135,13 @@ pub struct TaskState {
     /// written before this field existed or that never entered `running`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<i64>,
+    /// The Task-tool `agentId` of the worker/verifier subagent that produced this
+    /// task's outcome, when the caller supplied one. Used to resolve real cost
+    /// from `gauge subagents` by exact ID match at record time, instead of the
+    /// fragile description-string matching the SKILL.md prose used previously.
+    /// `None` = no agent id supplied (legacy behavior: `cost_usd` as manually set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
 }
 
 pub fn now_secs() -> i64 {
@@ -1051,6 +1058,10 @@ pub struct RecordSpec {
     /// somehow settled without ever recording a `running` transition) — never
     /// fabricated as 0.0, so the caller can omit `--duration` outright.
     pub duration_secs: Option<f64>,
+    /// The Task-tool agentId supplied via `state set --agent-id`, if any. When
+    /// present, the caller (record_runs) attempts to resolve the real cost from
+    /// `gauge subagents` by exact ID match, overriding `cost_usd` on success.
+    pub agent_id: Option<String>,
 }
 
 /// Build the outcomes to record for a run, or `None` when the run is not yet
@@ -1122,10 +1133,45 @@ pub fn records_for_run(
                 cost_usd: ts.cost_usd.unwrap_or(0.0),
                 done_criteria,
                 duration_secs,
+                agent_id: ts.agent_id.clone(),
             })
         })
         .collect();
     Some(specs)
+}
+
+/// Pure core of [`resolve_agent_cost`]: given the raw `gauge subagents --json`
+/// output (`[{agent_id, agent_type, description, cost_usd, turns}, ...]`),
+/// return the `cost_usd` of the entry whose `agent_id` exactly matches
+/// `agent_id`. Injected-JSON so this is unit-testable without a real `gauge`
+/// binary. `None` on malformed JSON, an empty array, or no matching entry —
+/// never panics.
+fn parse_agent_cost(json: &str, agent_id: &str) -> Option<f64> {
+    let entries: Vec<serde_json::Value> = serde_json::from_str(json).ok()?;
+    entries
+        .iter()
+        .find(|e| e.get("agent_id").and_then(|v| v.as_str()) == Some(agent_id))
+        .and_then(|e| e.get("cost_usd"))
+        .and_then(|v| v.as_f64())
+}
+
+/// Soft dependency: resolve the real USD cost of a Task-tool subagent by exact
+/// `agentId` match against `gauge subagents --json`, replacing the fragile
+/// description-string matching the SKILL.md prose used previously. Mirrors the
+/// `fugu_fingerprint` / `record_runs` soft-probe precedent in `main.rs`: any
+/// failure (gauge absent, non-zero exit, unparseable/empty stdout, no matching
+/// id) falls through to `None` so the caller can fall back to the manually
+/// recorded `cost_usd` — never a hard error.
+pub fn resolve_agent_cost(agent_id: &str) -> Option<f64> {
+    let out = std::process::Command::new("gauge")
+        .args(["subagents", "--json"])
+        .output()
+        .ok()?; // spawn failed (not on PATH) → soft-skip
+    if !out.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&out.stdout);
+    parse_agent_cost(&raw, agent_id)
 }
 
 /// Run the project's test suite (from the repo root) and propagate its result.
@@ -1576,6 +1622,7 @@ mod tests {
                     hashkey: None,
                     claimed_at: None,
                     started_at: None,
+                    agent_id: None,
                 },
                 TaskState {
                     id: "b".into(),
@@ -1591,6 +1638,7 @@ mod tests {
                     hashkey: None,
                     claimed_at: None,
                     started_at: None,
+                    agent_id: None,
                 },
             ],
             paused: false,
@@ -1620,6 +1668,7 @@ mod tests {
                     hashkey: None,
                     claimed_at: None,
                     started_at: None,
+                    agent_id: None,
                 },
                 TaskState {
                     id: "b".into(),
@@ -1635,6 +1684,7 @@ mod tests {
                     hashkey: None,
                     claimed_at: None,
                     started_at: None,
+                    agent_id: None,
                 },
                 TaskState {
                     id: "c".into(),
@@ -1650,6 +1700,7 @@ mod tests {
                     hashkey: None,
                     claimed_at: None,
                     started_at: None,
+                    agent_id: None,
                 },
             ],
             paused: false,
@@ -2031,6 +2082,7 @@ mod tests {
                 hashkey: None,
                 claimed_at: None,
                 started_at: None,
+                agent_id: None,
             }],
             paused: false,
             terminal_label: None,
@@ -2207,6 +2259,55 @@ mod tests {
         assert_eq!(rs.tasks[0].updated_at, None);
     }
 
+    /// Backward-compat: JSON without agent_id must load successfully with
+    /// agent_id == None (old run-state files predate this field).
+    #[test]
+    fn backward_compat_no_agent_id() {
+        let json = r#"{
+            "run_id": "run-legacy-agent",
+            "goal": "legacy goal",
+            "tasks": [
+                {"id": "t1", "status": "pending"}
+            ]
+        }"#;
+        let rs: RunState = serde_json::from_str(json).expect("must deserialize legacy JSON");
+        assert_eq!(rs.tasks[0].agent_id, None);
+    }
+
+    /// agent_id round-trips through serialize/deserialize when present, and is
+    /// omitted from the serialized JSON entirely when None (matches the
+    /// hashkey/claimed_at/started_at convention).
+    #[test]
+    fn agent_id_round_trips_and_omitted_when_none() {
+        let mut ts = TaskState {
+            id: "t1".into(),
+            status: Status::Verified,
+            worktree: None,
+            branch: None,
+            branch_sha: None,
+            updated_at: None,
+            model: None,
+            cost_usd: None,
+            fp_oracle_valid: None,
+            findings: None,
+            hashkey: None,
+            claimed_at: None,
+            started_at: None,
+            agent_id: Some("agent-123".to_string()),
+        };
+        let json = serde_json::to_string(&ts).unwrap();
+        assert!(json.contains("agent-123"));
+        let back: TaskState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.agent_id, Some("agent-123".to_string()));
+
+        ts.agent_id = None;
+        let json_none = serde_json::to_string(&ts).unwrap();
+        assert!(
+            !json_none.contains("agent_id"),
+            "agent_id must be omitted from serialized JSON when None, got: {json_none}"
+        );
+    }
+
     /// After a Set operation, updated_at must be Some(positive timestamp).
     #[test]
     fn set_status_writes_updated_at() {
@@ -2230,6 +2331,7 @@ mod tests {
                 hashkey: None,
                 claimed_at: None,
                 started_at: None,
+                agent_id: None,
             }],
             paused: false,
             terminal_label: None,
@@ -2288,6 +2390,7 @@ mod tests {
             hashkey: None,
             claimed_at: None,
             started_at: None,
+            agent_id: None,
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert_eq!(ids, vec!["stuck-task".to_string()]);
@@ -2313,6 +2416,7 @@ mod tests {
             hashkey: None,
             claimed_at: None,
             started_at: None,
+            agent_id: None,
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert!(ids.is_empty(), "recent Running task must not be stuck");
@@ -2336,6 +2440,7 @@ mod tests {
             hashkey: None,
             claimed_at: None,
             started_at: None,
+            agent_id: None,
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert!(
@@ -2366,6 +2471,7 @@ mod tests {
             hashkey: None,
             claimed_at: None,
             started_at: None,
+            agent_id: None,
         }]);
         let t = run.tasks.iter_mut().find(|t| t.id == "t1").unwrap();
         t.status = Status::Pending;
@@ -2399,6 +2505,7 @@ mod tests {
             hashkey: None,
             claimed_at: None,
             started_at: None,
+            agent_id: None,
         }]);
         let t = run.tasks.iter_mut().find(|t| t.id == "t-fail").unwrap();
         t.status = Status::Pending;
@@ -2431,6 +2538,7 @@ mod tests {
                 hashkey: None,
                 claimed_at: None,
                 started_at: None,
+                agent_id: None,
             },
             TaskState {
                 id: "verified-task".into(),
@@ -2446,6 +2554,7 @@ mod tests {
                 hashkey: None,
                 claimed_at: None,
                 started_at: None,
+                agent_id: None,
             },
         ]);
         for t in &run.tasks {
@@ -2479,6 +2588,7 @@ mod tests {
                 hashkey: None,
                 claimed_at: None,
                 started_at: None,
+                agent_id: None,
             },
             TaskState {
                 id: "stuck-2".into(),
@@ -2494,6 +2604,7 @@ mod tests {
                 hashkey: None,
                 claimed_at: None,
                 started_at: None,
+                agent_id: None,
             },
             TaskState {
                 id: "active".into(),
@@ -2509,6 +2620,7 @@ mod tests {
                 hashkey: None,
                 claimed_at: None,
                 started_at: None,
+                agent_id: None,
             },
         ]);
 
@@ -2556,6 +2668,7 @@ mod tests {
             hashkey: None,
             claimed_at: None,
             started_at: None,
+            agent_id: None,
         }]);
         let found = run.tasks.iter().find(|t| t.id == "no-such-task");
         assert!(found.is_none(), "non-existent task id must not be found");
@@ -2639,6 +2752,7 @@ mod tests {
                 hashkey: None,
                 claimed_at: None,
                 started_at: None,
+                agent_id: None,
             },
             TaskState {
                 id: "done-old".into(),
@@ -2654,6 +2768,7 @@ mod tests {
                 hashkey: None,
                 claimed_at: None,
                 started_at: None,
+                agent_id: None,
             },
             TaskState {
                 id: "verified-old".into(),
@@ -2669,6 +2784,7 @@ mod tests {
                 hashkey: None,
                 claimed_at: None,
                 started_at: None,
+                agent_id: None,
             },
         ]);
         let ids = stuck_task_ids(&run, ttl);
@@ -2799,6 +2915,23 @@ mod tests {
         let specs = records_for_run(&run, &dec).unwrap();
         assert_eq!(specs[0].model, "opus");
         assert_eq!(specs[0].cost_usd, 0.42);
+    }
+
+    /// records_for_run propagates the task state's agent_id into RecordSpec
+    /// unchanged (None stays None; Some(id) carries through).
+    #[test]
+    fn records_for_run_propagates_agent_id() {
+        let dec = Decomposition {
+            goal: "g".into(),
+            tasks: vec![task("a", "Task A", None), task("b", "Task B", None)],
+        };
+        let mut with_agent = ts("a", Status::Verified);
+        with_agent.agent_id = Some("agent-xyz".to_string());
+        let without_agent = ts("b", Status::Verified);
+        let run = make_run_with_tasks(vec![with_agent, without_agent]);
+        let specs = records_for_run(&run, &dec).unwrap();
+        assert_eq!(specs[0].agent_id, Some("agent-xyz".to_string()));
+        assert_eq!(specs[1].agent_id, None);
     }
 
     /// duration_secs is derived from started_at/updated_at when both are known.
@@ -3417,5 +3550,57 @@ mod tests {
         let loaded = load_run_policy_records(&cfg, &tmp, "no-such-run");
         assert!(loaded.is_empty());
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// An exact agent_id match returns that entry's cost_usd.
+    #[test]
+    fn parse_agent_cost_matches_exact_id() {
+        let json = r#"[
+            {"agent_id": "a1", "agent_type": "worker", "description": "x", "cost_usd": 1.23, "turns": 4},
+            {"agent_id": "a2", "agent_type": "worker", "description": "y", "cost_usd": 9.99, "turns": 1}
+        ]"#;
+        assert_eq!(parse_agent_cost(json, "a1"), Some(1.23));
+        assert_eq!(parse_agent_cost(json, "a2"), Some(9.99));
+    }
+
+    /// No entry has the given agent_id → None (caller falls back to cost_usd).
+    #[test]
+    fn parse_agent_cost_no_match_returns_none() {
+        let json = r#"[{"agent_id": "other", "cost_usd": 5.0}]"#;
+        assert_eq!(parse_agent_cost(json, "a1"), None);
+    }
+
+    /// Malformed JSON never panics — returns None.
+    #[test]
+    fn parse_agent_cost_malformed_json_returns_none() {
+        assert_eq!(parse_agent_cost("not json", "a1"), None);
+        assert_eq!(parse_agent_cost("{", "a1"), None);
+    }
+
+    /// An empty array (no subagents recorded yet) returns None, not a panic.
+    #[test]
+    fn parse_agent_cost_empty_array_returns_none() {
+        assert_eq!(parse_agent_cost("[]", "a1"), None);
+    }
+
+    /// Precedence: when the agent_id resolves to a real cost, that value must
+    /// override the manually recorded cost_usd (mirrors the exact expression
+    /// `record_runs` uses: `resolved.unwrap_or(cost_usd)`).
+    #[test]
+    fn agent_cost_precedence_override_when_resolved() {
+        let json = r#"[{"agent_id": "a1", "cost_usd": 2.5}]"#;
+        let resolved = parse_agent_cost(json, "a1");
+        let cost_usd = 0.0; // the SKILL.md-recorded fallback value
+        assert_eq!(resolved.unwrap_or(cost_usd), 2.5);
+    }
+
+    /// Precedence: when the agent_id does NOT resolve, the manually recorded
+    /// cost_usd must be used unchanged.
+    #[test]
+    fn agent_cost_precedence_falls_back_when_unresolved() {
+        let json = r#"[{"agent_id": "other", "cost_usd": 9.0}]"#;
+        let resolved = parse_agent_cost(json, "a1");
+        let cost_usd = 5.5;
+        assert_eq!(resolved.unwrap_or(cost_usd), 5.5);
     }
 }

@@ -685,6 +685,12 @@ enum StateAction {
         /// Observed USD cost of the task (recorded for fugu-router). Omitted → unchanged.
         #[arg(long)]
         cost: Option<f64>,
+        /// The Task-tool agentId of the worker/verifier subagent for this task
+        /// (recorded for exact-match cost resolution against `gauge subagents`,
+        /// instead of relying on description-string matching). Optional; omitted →
+        /// `agent_id` unchanged.
+        #[arg(long)]
+        agent_id: Option<String>,
         /// Free-text learning summary to record onto the task's `findings`.
         /// Persists REGARDLESS of status (a failed/unmerged experiment still
         /// records what was learned). Omitted → findings unchanged.
@@ -3149,6 +3155,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             clear_branch,
             model,
             cost,
+            agent_id,
             findings,
         } => {
             // Hold the per-run state lock across the entire load → oracle-gate →
@@ -3265,6 +3272,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
             if cost.is_some() {
                 t.cost_usd = cost;
+            }
+            if agent_id.is_some() {
+                t.agent_id = agent_id;
             }
             // Findings persist regardless of status (this whole handler runs for
             // any status): a failed/pending/unmerged experiment still records
@@ -4031,6 +4041,16 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
             continue; // not settled, or already recorded
         };
         for s in &specs {
+            // Exact-match cost resolution: when the task recorded a Task-tool
+            // agentId, prefer the real cost from `gauge subagents` over the
+            // manually-set `cost_usd` (which SKILL.md prose often leaves at the
+            // 0.0 default because description-string matching is fragile).
+            // Fail-soft — any resolution miss falls back to `s.cost_usd`.
+            let cost = s
+                .agent_id
+                .as_deref()
+                .and_then(state::resolve_agent_cost)
+                .unwrap_or(s.cost_usd);
             let mut cmd = std::process::Command::new("fugu-router");
             cmd.arg("record")
                 .args(["--title", &s.title])
@@ -4038,7 +4058,7 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
                 .args(["--class", &s.class])
                 .args(["--model", &s.model])
                 .args(["--status", &s.status])
-                .args(["--cost", &s.cost_usd.to_string()]);
+                .args(["--cost", &cost.to_string()]);
             if let Some(dc) = &s.done_criteria {
                 cmd.args(["--done-criteria", dc]);
             }
@@ -4400,6 +4420,7 @@ mod state_set_tests {
                 hashkey: None,
                 claimed_at: None,
                 started_at: None,
+                agent_id: None,
             }],
             paused: false,
             terminal_label: None,

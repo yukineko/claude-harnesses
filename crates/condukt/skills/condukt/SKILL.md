@@ -500,8 +500,11 @@ condukt state worktree-mode-check   # exit 0 + {"single_worktree":true} → 単�
    `condukt state claim/release/heartbeat/claims` を使う。
 3. `Task` で `condukt-worker` 相当を起動 (model=`t.suggested_model`)。下表のフィールドを渡す。
    **Task の `description` は必ず `"<t.id>: <task.title>"` 形式にする** (例 `"t1: add --cost flag"`)。
-   これがサブエージェントの `.meta.json` に記録され、Phase 6 が `gauge subagents` で per-task コストを
-   description マッチで引く鍵になる (escalation 再実行も同じ `<t.id>:` 前置で合算される)。
+   これはログ上の可読性・トリアージ用の慣習であり、Phase 6 のコスト記録自体はこの文字列に依存しない
+   (下記参照)。**Task tool の戻り値に含まれる `agentId` を控えておく** — Phase 6 で `state set
+   --agent-id` に渡し、`gauge subagents` の `agent_id` 完全一致でそのタスクのコストを引く鍵になる
+   (description の書式ゆれに影響されない厳密な紐付け)。escalation で worker を再起動した場合は
+   **最後に返った agentId** を使う。
 4. worker の返却 status を確認する:
    - `done`: `condukt state set --run $RID --task <t.id> --status done` し、**他の worker の完了を待たずにその場で Phase 6 の verifier を起動する**（パイプライン化）。
    - `needs-serial`: 分類ミス。worktree を破棄し、タスクを serial として main で直接実装して commit する。
@@ -927,36 +930,35 @@ budgetguard 不在などは非 trip に縮退) で、`condukt` が無い/失敗�
 snippet を打つのではなく **condukt バイナリが決定論的に発火する** (発火漏れを物理的に無くす):
 
 1. **タスクの status を set するとき、実際に使ったモデルとコストも一緒に書く** (escalation 後の
-   真値を残す)。`state set` が `--model` / `--cost` を受け付ける:
+   真値を残す)。`state set` が `--model` / `--agent-id` / `--cost` を受け付ける:
    ```bash
-   # 現在セッションの id はリポジトリ標準の CLAUDE_CODE_SESSION_ID で取る (CLAUDE_SESSION_ID は存在しない)。
-   # コストは **worker サブエージェント単位** で取る (セッション累積ではない — それだと同一 run の
-   # haiku/opus タスクが同じ値になり fugu-router の cost-per-pass ルーティングが壊れる)。worker は
-   # Phase 5 で Task description を "<t.id>: <title>" にして起動してあるので、gauge subagents の
-   # description でそのタスクの sub-agent を引ける (並列バッチでも description ごとに分離。escalation
-   # で再実行した分も同じ id で合算される = そのタスクに費やした総コスト)。
+   # 推奨経路: Phase 5 で控えた Task tool の agentId を渡す。condukt 側 (record_runs) が
+   # `gauge subagents --json` を agent_id **完全一致**で引いて実コストを解決する — description の
+   # 書式ゆれ (旧来の "<t.id>: <title>" prefix マッチ) に一切依存しないので、worker の description が
+   # 慣習通りでなくても取りこぼさない。agentId が引けない/gauge が無い場合は condukt 側が
+   # 自動で --cost の値にフォールバックする (fail-soft、prose 側で何もしなくてよい)。
+   condukt state set --run "$RID" --task "<t.id>" --status verified \
+     --model <worker に使ったモデル> --agent-id "<Task tool が返した agentId>" --cost 0
+   # fail 時も同様に --status failed --model <試したモデル> --agent-id <同上> を残す (失敗も学習信号)
+
+   # フォールバック (手動): agentId が無い/古い condukt の場合は従来通り gauge session の
+   # セッション累積コストを --cost に渡してもよい (--agent-id 省略時は agent_id 解決を試みず
+   # --cost の値がそのまま使われる — 後方互換)。
    SID="${CLAUDE_CODE_SESSION_ID:-}"
-   GAUGE_COST=$(gauge subagents --json ${SID:+--session "$SID"} 2>/dev/null \
-     | jq -r --arg t "<t.id>" '[.[] | select(.description != null and (.description | startswith($t + ":")))] | (map(.cost_usd) | add) // empty' 2>/dev/null || true)
-   # subagents が取れない場合 (古い gauge / inline-sidechain レイアウト / main で直接実装した
-   # fast-path タスク) はセッション累積にフォールバックする。
-   if [ -z "$GAUGE_COST" ]; then
-     GAUGE_COST=$(gauge session --json ${SID:+--session "$SID"} 2>/dev/null | jq -r '.cost_usd // empty' 2>/dev/null || true)
-   fi
+   GAUGE_COST=$(gauge session --json ${SID:+--session "$SID"} 2>/dev/null | jq -r '.cost_usd // empty' 2>/dev/null || true)
    condukt state set --run "$RID" --task "<t.id>" --status verified \
      --model <worker に使ったモデル> --cost "${GAUGE_COST:-0}"
-   # fail 時も同様に --status failed --model <試したモデル> を残す (失敗も学習信号)
+
    # タスクが verified になった直後に checkpoint を1本書く: これで「良好な run-state」が
    # snapshot され、後続タスクが後で fail (verified→failed) したとき auto-rollback
    # (main.rs の verified→failed 遷移) が直前のこの checkpoint へ復元できる。書かないと
    # 復元対象が生じず安全ネットは休眠のまま。checkpoint は fail-soft なので無条件に呼ぶ。
    condukt state checkpoint --run "$RID" --label "verified:<t.id>"
    ```
-   `--model` を省略すると decomposition の `suggested_model` に、`--cost` 省略は 0.0 にフォールバック
-   する (後方互換)。**per-sub-agent コストには gauge >= 0.3.0 (`gauge subagents`) が必要**、
-   `gauge session --json` フォールバックには gauge >= 0.2.0 が必要 (それ未満は `--json` を知らずエラー→0)。
-   per-sub-agent は新レイアウト (`<session>/subagents/agent-<id>.jsonl`) を live で読むので、Stop を
-   待たずタスク完了直後の正確なコストが取れる。
+   `--model` を省略すると decomposition の `suggested_model` に、`--agent-id`/`--cost` 省略はそれぞれ
+   unchanged/0.0 にフォールバックする (後方互換)。**agent-id 経由の実コスト解決には gauge >= 0.3.0
+   (`gauge subagents --json` に `agent_id`/`cost_usd` が乗っている版) が必要**。それ未満、または
+   agentId が解決できない場合は `--cost` に渡した値がそのまま記録される。
 
 2. **記録の発火は自動**。run の全タスクが settled (verified/failed/cancelled) になると、
    condukt の **Stop hook** が `condukt state record-run --all` を呼び、各タスクを 1 件ずつ

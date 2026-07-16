@@ -382,6 +382,7 @@ mod tests {
             hashkey: None,
             claimed_at: None,
             started_at: None,
+            agent_id: None,
         }
     }
 

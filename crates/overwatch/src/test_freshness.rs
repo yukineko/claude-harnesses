@@ -16,7 +16,17 @@
 //! need a real crate on disk to test.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+use wait_timeout::ChildExt;
+
+/// Max time to wait on the reverse-looked-up regression test before giving
+/// up. `cargo test` here includes a build step, so this is longer than the
+/// 8s used for the plain `overwatch lease` subprocess call in ctxrot's
+/// `run_with_timeout` — but it must still be bounded, since this runs inside
+/// `overwatch review-queue --to-backlog`'s per-finding loop and a single
+/// hung/deadlocking ignored test must not wedge the whole bridge.
+const RUN_IGNORED_TEST_TIMEOUT_SECS: u64 = 60;
 
 /// The outcome of re-running a regression test that was reverse-looked-up for
 /// a finding-id.
@@ -69,14 +79,38 @@ pub fn find_ignored_test(finding_id: &str, search_root: &Path) -> Option<(String
 /// --ignored <fn_name>` and classify the outcome. Fail-soft: any spawn/IO
 /// failure becomes `ExecutionError`, never a panic or `Err`.
 pub fn run_ignored_test(crate_name: &str, fn_name: &str) -> TestFreshness {
-    match Command::new("cargo")
+    let child = match Command::new("cargo")
         .args(["test", "-p", crate_name, "--", "--ignored", fn_name])
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
     {
-        Ok(out) => {
-            classify_test_output(out.status.success(), &String::from_utf8_lossy(&out.stdout))
+        Ok(c) => c,
+        Err(_) => return TestFreshness::ExecutionError,
+    };
+    match run_with_timeout(child, Duration::from_secs(RUN_IGNORED_TEST_TIMEOUT_SECS)) {
+        Some((success, stdout)) => classify_test_output(success, &String::from_utf8_lossy(&stdout)),
+        None => TestFreshness::ExecutionError,
+    }
+}
+
+/// Wait on an already-spawned child for at most `timeout`, killing (and
+/// reaping) it on timeout so it never lingers. Returns `(success, stdout)` on
+/// a completed exit; `None` on a timeout or wait error. Mirrors
+/// `ctxrot::hooks::guard::run_with_timeout`.
+fn run_with_timeout(mut child: std::process::Child, timeout: Duration) -> Option<(bool, Vec<u8>)> {
+    match child.wait_timeout(timeout) {
+        Ok(Some(status)) => {
+            let out = child.wait_with_output().ok()?;
+            Some((status.success(), out.stdout))
         }
-        Err(_) => TestFreshness::ExecutionError,
+        Ok(None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            None
+        }
+        Err(_) => None,
     }
 }
 
@@ -406,5 +440,44 @@ fn legacy_free_text_test() {}
             TestFreshness::Failing { message } => assert!(!message.is_empty()),
             other => panic!("expected Failing, got {other:?}"),
         }
+    }
+
+    /// A hung child must be killed and reaped within the timeout, never
+    /// blocking the caller past it. Mirrors
+    /// `ctxrot::hooks::guard::run_with_timeout_kills_and_returns_none_on_timeout`.
+    #[test]
+    fn run_with_timeout_kills_and_returns_none_on_timeout() {
+        let child = Command::new("sh")
+            .args(["-c", "sleep 5"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sh -c sleep");
+        let start = std::time::Instant::now();
+        let result = run_with_timeout(child, Duration::from_millis(200));
+        assert!(result.is_none());
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "run_with_timeout must not block past the timeout"
+        );
+    }
+
+    /// A child that finishes well within the timeout returns its stdout and
+    /// success status, exercising the fast-path classification is unaffected
+    /// by the switch from `Command::output()` to `spawn()`+`wait_timeout()`.
+    #[test]
+    fn run_with_timeout_returns_stdout_on_fast_success() {
+        let child = Command::new("sh")
+            .args(["-c", "echo hello"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sh -c echo");
+        let (success, stdout) = run_with_timeout(child, Duration::from_secs(5))
+            .expect("fast command must not time out");
+        assert!(success);
+        assert_eq!(String::from_utf8_lossy(&stdout).trim(), "hello");
     }
 }

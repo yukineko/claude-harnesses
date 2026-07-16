@@ -1,19 +1,18 @@
 ## north_star
-backlog 97ec7512: .compass/charter.md の未コミット変更をcommitするか破棄するか決める
+PDO運用の measure ループを機構で閉じ切る (build ≠ validate): 出荷済み・未計測(awaiting-measurement)の計測負債を可観測化し、shipped-vs-measured の健全性を1コマンドで surface する
 
 ## definition_of_done
-- git log --oneline -- .compass/charter.md の既存18件超の慣行(docs(compass): re-carve charter — north_star = ... 形式)に従い、現在の未コミット差分をcommitする
-- backlog 97ec7512 を done にする
+- SessionStart 注入が awaiting-measurement の計測負債を surface する (件数 + 最古仮説の経過日数)。hypothesis が 0 件なら無音、負債があれば起動 context に負債行が出る
+- shipped-vs-measured の PDO 健全性メトリクスを1コマンドで JSON 出力できる (shipped / validated / awaiting 件数 + 平均計測遅延)。回帰テストで数値を固定
+- measurement-debt 加齢ゲート: awaiting-measurement が閾値日数超で停滞したとき明示 warning を出す (閾値超入力で warning、未満で無音の赤緑テスト)
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-charter.mdは過去18回以上 re-carveのたびにcommitされてきた確立済み慣行があるため、今回も同様にcommitするのが一貫した扱い。破棄する理由(charterが誤っている等)は無い。
+measure ループの機構 (hypothesis crate / awaiting-measurement 状態 / flow measure step) は在るが観測面が欠落している: SessionStart は open 仮説しか surface せず awaiting-measurement の計測負債が見えない、shipped-vs-measured の健全性メトリクス・measurement-debt 加齢ゲートも未実装。build を validate に閉じる観測面が無い。最小スライスは DoD1 (SessionStart で計測負債を surface)。
 
 ## next_action
-git commit -m "docs(compass): re-carve charter — north_star = 97ec7512 charter diff commit-or-discard"
 
 ## parked
-- backlog 942c7d0b: specguard.toml の area/invariant を AEGIS 全域に拡張する — harness plugin自体の実装ではなく別プロダクト(AEGIS)向けの設定作業のため、ユーザー指示によりスコープ外。backlogにはpendingのまま残す。
 

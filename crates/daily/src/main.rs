@@ -997,6 +997,9 @@ dir = \"/repo\"
             dir: None,
         };
         let outcome = run_task(&task, tmp.path());
-        assert!(matches!(outcome, Outcome::Ok), "expected Ok, got {outcome:?}");
+        assert!(
+            matches!(outcome, Outcome::Ok),
+            "expected Ok, got {outcome:?}"
+        );
     }
 }

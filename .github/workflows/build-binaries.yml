@@ -216,3 +216,63 @@ jobs:
           # checkout leaves a detached HEAD at the triggering SHA; push the new
           # commit explicitly onto main (fast-forward from that SHA).
           git push origin HEAD:main
+
+  sbom-tool:
+    name: build cargo-cyclonedx
+    if: github.event_name != 'pull_request'
+    needs: smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked --root /tmp/cyclonedx-tool
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-cyclonedx-bin
+          path: /tmp/cyclonedx-tool/bin/cargo-cyclonedx
+          retention-days: 1
+
+  sbom-attest:
+    name: SBOM attestation (${{ matrix.plugin }})
+    # Only attest against binaries actually landed on main (never on PRs).
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [commit, sbom-tool]
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: [autoflow, backlog, beacon, budgetguard, compass, context-governor,
+                 condukt, ctxrot, curate, daily, deepwiki, difflog, donegate, evalkit,
+                 flow, fugu-router, gauge, harness-status, hypothesis, playbook,
+                 precommit-audit, replaykit, reviewgate, run-book, schemaguard,
+                 session-insights, stuckguard, taskprog, tdd, tracekit, trajectoryeval]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Same rationale as the provenance attestation above: id-token mints the
+      # OIDC token Sigstore signs with, attestations persists the result.
+      id-token: write
+      attestations: write
+    steps:
+      # commit (needs:) has already pushed the refreshed binaries onto main by
+      # the time this job starts; check out main explicitly (not the
+      # pre-rebuild triggering SHA) so subject-path resolves to those files.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/download-artifact@v4
+        with:
+          name: cargo-cyclonedx-bin
+          path: /tmp/cyclonedx-tool/bin
+      - name: Install cargo-cyclonedx from shared build
+        run: |
+          chmod +x /tmp/cyclonedx-tool/bin/cargo-cyclonedx
+          echo "/tmp/cyclonedx-tool/bin" >> "$GITHUB_PATH"
+      - name: Generate CycloneDX SBOM
+        run: bash scripts/generate-sbom.sh ${{ matrix.plugin }}
+      - name: Attest SBOM for committed binaries
+        uses: actions/attest-sbom@v4
+        with:
+          subject-path: crates/${{ matrix.plugin }}/bin/*
+          sbom-path: target/sbom/${{ matrix.plugin }}.cdx.json

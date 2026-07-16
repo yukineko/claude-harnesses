@@ -312,6 +312,12 @@ pub fn load_playbooks(path: &Path) -> Vec<Playbook> {
 }
 
 /// Append one playbook entry as a JSON line, creating parent dirs as needed.
+///
+/// Mirrors [`append`]'s single-`write_all` pattern (body + `\n` in one buffer,
+/// one `write()` syscall) instead of `writeln!`'s two syscalls, which can
+/// interleave under `O_APPEND` with a concurrent writer. Serialization
+/// failure is propagated as an `io::Result` error instead of silently writing
+/// an empty line (the previous `unwrap_or_default()` behavior).
 pub fn append_playbook(path: &Path, pb: &Playbook) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -320,8 +326,12 @@ pub fn append_playbook(path: &Path, pb: &Playbook) -> std::io::Result<()> {
         .create(true)
         .append(true)
         .open(path)?;
-    let line = serde_json::to_string(pb).unwrap_or_default();
-    writeln!(f, "{line}")
+    let line = serde_json::to_string(pb)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let mut buf = String::with_capacity(line.len() + 1);
+    buf.push_str(&line);
+    buf.push('\n');
+    f.write_all(buf.as_bytes())
 }
 
 #[cfg(test)]
@@ -632,6 +642,66 @@ mod tests {
 
         // load() must also see every record, none merged or dropped.
         let loaded = load(&path);
+        assert_eq!(loaded.len(), THREADS * PER_THREAD);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Same regression guard as `concurrent_append_never_interleaves_records`,
+    /// but for `append_playbook` — it used to write via `writeln!` (two
+    /// syscalls under `O_APPEND`), the same interleaving hazard fixed for
+    /// `append`. Single-buffer `write_all` keeps every line one parseable
+    /// JSON object with an exact record count.
+    #[test]
+    fn concurrent_append_playbook_never_interleaves_records() {
+        let dir = std::env::temp_dir().join(format!(
+            "fugu-router-concurrent-append-playbook-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("playbooks.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 250;
+
+        std::thread::scope(|scope| {
+            for t in 0..THREADS {
+                let path = path.clone();
+                scope.spawn(move || {
+                    for i in 0..PER_THREAD {
+                        let pad = "x".repeat(i % 64);
+                        let pb = Playbook {
+                            ts: i as u64,
+                            title: format!("t{t}-i{i}-{pad}"),
+                            touched_files: vec![],
+                            class: "parallel".into(),
+                            done_criteria: "criteria".into(),
+                            notes: String::new(),
+                        };
+                        append_playbook(&path, &pb).unwrap();
+                    }
+                });
+            }
+        });
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut count = 0usize;
+        for (n, l) in text.lines().enumerate() {
+            if l.is_empty() {
+                continue;
+            }
+            serde_json::from_str::<serde_json::Value>(l)
+                .unwrap_or_else(|e| panic!("line {n} is not a single JSON object: {e} — {l:.120}"));
+            count += 1;
+        }
+        assert_eq!(
+            count,
+            THREADS * PER_THREAD,
+            "every appended playbook record must survive as exactly one parseable line"
+        );
+
+        let loaded = load_playbooks(&path);
         assert_eq!(loaded.len(), THREADS * PER_THREAD);
 
         std::fs::remove_dir_all(&dir).ok();

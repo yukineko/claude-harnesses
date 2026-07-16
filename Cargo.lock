@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "chrono",
@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.59"
+version = "0.7.60"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1046,7 +1046,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "schemaguard"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "clap",

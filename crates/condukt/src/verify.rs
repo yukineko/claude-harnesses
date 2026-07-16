@@ -1329,7 +1329,22 @@ pub struct CheckReport {
 /// launch pattern elsewhere in this module), capture the exit code and combined
 /// stdout+stderr, and evaluate it with the pure [`check_passed`]. Fail-soft: a
 /// spawn error yields a non-passing result with `exit = -1` rather than panicking.
+///
+/// Before spawning, the command is run past the same pure blastguard detector
+/// the PreToolUse hook uses (see `launch_and_reflux`) — a flagged check is
+/// refused fail-closed (never reaches `sh -c`) and reported as a non-passing
+/// result rather than silently skipped.
 pub fn run_check(check: &crate::model::Check, cwd: Option<&std::path::Path>) -> CheckResult {
+    let input = serde_json::json!({ "command": check.cmd });
+    if let blastguard::model::Decision::Deny(_reason) =
+        blastguard::detect::detect("Bash", Some(&input))
+    {
+        return CheckResult {
+            cmd: check.cmd.clone(),
+            passed: false,
+            exit: -1,
+        };
+    }
     let mut command = Command::new("sh");
     command.arg("-c").arg(&check.cmd).stdin(Stdio::null());
     if let Some(dir) = cwd {
@@ -2766,6 +2781,15 @@ mod run_policy_gate_tests {
         assert!(!run_check(&check("false", None, None), None).passed);
         assert!(run_check(&check("echo hello", None, Some("hello")), None).passed);
         assert!(!run_check(&check("echo hello", None, Some("nope")), None).passed);
+    }
+
+    /// A destructive command flagged by blastguard must never reach `sh -c`:
+    /// `run_check` reports it as a non-passing result instead of executing it.
+    #[test]
+    fn run_check_blocks_destructive_command_via_blastguard() {
+        let result = run_check(&check("rm -rf /", None, None), None);
+        assert!(!result.passed);
+        assert_eq!(result.exit, -1);
     }
 
     /// `run_checks` aggregates and reports each check in declaration order.

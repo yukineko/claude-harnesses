@@ -159,6 +159,13 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Compare fork vs inline delegation-strategy episodes (class
+    /// "flow-delegation"): count / pass-rate / avg cost / avg duration per
+    /// bucket. See docs/design-delegation-strategy-measurement.md.
+    DelegationStats {
+        #[arg(long)]
+        json: bool,
+    },
     /// UserPromptSubmit hook: inject a routing-memory summary.
     Prompt,
     /// Write a starter fugu-router.toml in the current directory.
@@ -580,6 +587,7 @@ fn run_user(cmd: Command) -> Result<()> {
             Ok(())
         }
         Command::Stats { json } => cmd_stats(&cfg, json),
+        Command::DelegationStats { json } => cmd_delegation_stats(&cfg, json),
         Command::Init { target } => config::init_config(&target),
         Command::Install { dry_run } => install::install(dry_run),
         Command::Uninstall { dry_run } => install::uninstall(dry_run),
@@ -1148,6 +1156,220 @@ fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Canonicalize a free-text `--delegation` value (`crates/fugu-router/src/
+/// store.rs`'s `Episode::delegation` is intentionally unvalidated, same
+/// looseness as `class`). Case/whitespace variants of "fork"/"inline" map to
+/// their canonical form; anything else (including full-width lookalikes we
+/// don't special-case) falls into `"other"` rather than being silently
+/// dropped, so mis-typed values are still visible in the report.
+fn normalize_delegation(raw: &str) -> String {
+    match raw.trim().to_lowercase().as_str() {
+        "fork" => "fork".to_string(),
+        "inline" => "inline".to_string(),
+        _ => "other".to_string(),
+    }
+}
+
+/// One delegation bucket's aggregate stats. `duration_n` (episodes with a
+/// recorded `duration_secs > 0.0`) can be smaller than `count` — many
+/// episodes predate the duration feature entirely, and averaging their
+/// untracked `0.0` in with real measurements would silently pull the mean
+/// toward zero. `avg_duration_secs` is only ever computed over `duration_n`.
+struct DelegationBucket {
+    count: usize,
+    passes: usize,
+    cost_total: f64,
+    duration_n: usize,
+    duration_total: f64,
+}
+
+fn cmd_delegation_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
+    use std::collections::BTreeMap;
+    let eps = store::load(&cfg.store_path());
+    let mut agg: BTreeMap<String, DelegationBucket> = BTreeMap::new();
+    for e in eps.iter().filter(|e| e.class == "flow-delegation") {
+        let Some(raw) = &e.delegation else {
+            continue; // unrecorded delegation is meaningless for this comparison
+        };
+        let bucket = agg
+            .entry(normalize_delegation(raw))
+            .or_insert(DelegationBucket {
+                count: 0,
+                passes: 0,
+                cost_total: 0.0,
+                duration_n: 0,
+                duration_total: 0.0,
+            });
+        bucket.count += 1;
+        if e.pass {
+            bucket.passes += 1;
+        }
+        bucket.cost_total += e.cost_usd;
+        if e.duration_secs > 0.0 {
+            bucket.duration_n += 1;
+            bucket.duration_total += e.duration_secs;
+        }
+    }
+
+    let total: usize = agg.values().map(|b| b.count).sum();
+
+    if as_json {
+        let obj: serde_json::Map<String, serde_json::Value> = agg
+            .iter()
+            .map(|(k, b)| {
+                (
+                    k.clone(),
+                    json!({
+                        "count": b.count,
+                        "passes": b.passes,
+                        "pass_rate": if b.count > 0 { b.passes as f64 / b.count as f64 } else { 0.0 },
+                        "avg_cost_usd": if b.count > 0 { b.cost_total / b.count as f64 } else { 0.0 },
+                        "avg_duration_secs": if b.duration_n > 0 { b.duration_total / b.duration_n as f64 } else { 0.0 },
+                        "duration_samples": b.duration_n,
+                    }),
+                )
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &json!({ "flow_delegation_episodes": total, "delegation": obj })
+            )?
+        );
+    } else if total == 0 {
+        println!("no flow-delegation episodes recorded yet (fugu-router record --class flow-delegation --delegation fork|inline ...)");
+    } else {
+        println!("flow-delegation episodes: {total}");
+        for (k, b) in &agg {
+            let avg_dur = if b.duration_n > 0 {
+                format!(
+                    "{:.1}s (n={})",
+                    b.duration_total / b.duration_n as f64,
+                    b.duration_n
+                )
+            } else {
+                "no duration data".to_string()
+            };
+            println!(
+                "  {k:<6} {}/{} pass ({:.0}%)  avg ${:.4}  avg duration {avg_dur}",
+                b.passes,
+                b.count,
+                if b.count > 0 {
+                    b.passes as f64 / b.count as f64 * 100.0
+                } else {
+                    0.0
+                },
+                if b.count > 0 {
+                    b.cost_total / b.count as f64
+                } else {
+                    0.0
+                }
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod delegation_stats_tests {
+    use super::*;
+
+    fn ep(
+        class: &str,
+        delegation: Option<&str>,
+        pass: bool,
+        cost: f64,
+        duration: f64,
+    ) -> store::Episode {
+        store::Episode {
+            ts: 0,
+            title: "t".to_string(),
+            touched_files: vec![],
+            class: class.to_string(),
+            model: "sonnet".to_string(),
+            role: "worker".to_string(),
+            pass,
+            cost_usd: cost,
+            human_label: None,
+            labeled_by: None,
+            skill_fingerprint: None,
+            duration_secs: duration,
+            delegation: delegation.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn normalize_handles_case_and_whitespace_and_unknowns() {
+        assert_eq!(normalize_delegation("fork"), "fork");
+        assert_eq!(normalize_delegation("Fork"), "fork");
+        assert_eq!(normalize_delegation("  INLINE  "), "inline");
+        assert_eq!(normalize_delegation("async"), "other");
+        assert_eq!(normalize_delegation(""), "other");
+    }
+
+    #[test]
+    fn aggregation_separates_fork_and_inline_and_ignores_other_classes() {
+        let eps = [
+            ep("flow-delegation", Some("fork"), true, 1.0, 10.0),
+            ep("flow-delegation", Some("Fork"), true, 2.0, 20.0),
+            ep("flow-delegation", Some("inline"), false, 0.5, 5.0),
+            ep("worker", Some("fork"), true, 100.0, 999.0), // wrong class → excluded
+            ep("flow-delegation", None, true, 1.0, 1.0),    // no delegation → excluded
+        ];
+        let mut agg: std::collections::BTreeMap<String, DelegationBucket> =
+            std::collections::BTreeMap::new();
+        for e in eps.iter().filter(|e| e.class == "flow-delegation") {
+            let Some(raw) = &e.delegation else { continue };
+            let b = agg
+                .entry(normalize_delegation(raw))
+                .or_insert(DelegationBucket {
+                    count: 0,
+                    passes: 0,
+                    cost_total: 0.0,
+                    duration_n: 0,
+                    duration_total: 0.0,
+                });
+            b.count += 1;
+            if e.pass {
+                b.passes += 1;
+            }
+            b.cost_total += e.cost_usd;
+            if e.duration_secs > 0.0 {
+                b.duration_n += 1;
+                b.duration_total += e.duration_secs;
+            }
+        }
+        assert_eq!(agg.get("fork").unwrap().count, 2);
+        assert_eq!(agg.get("inline").unwrap().count, 1);
+        assert!(!agg.contains_key("other"));
+    }
+
+    #[test]
+    fn duration_average_excludes_untracked_zero_duration_episodes() {
+        let eps = [
+            ep("flow-delegation", Some("fork"), true, 1.0, 0.0), // predates duration feature
+            ep("flow-delegation", Some("fork"), true, 1.0, 100.0),
+        ];
+        let mut duration_n = 0usize;
+        let mut duration_total = 0.0f64;
+        for e in &eps {
+            if e.duration_secs > 0.0 {
+                duration_n += 1;
+                duration_total += e.duration_secs;
+            }
+        }
+        assert_eq!(duration_n, 1);
+        assert_eq!(duration_total, 100.0);
+    }
+
+    #[test]
+    fn zero_flow_delegation_episodes_yields_no_data_not_a_panic() {
+        let eps = [ep("worker", Some("fork"), true, 1.0, 1.0)];
+        let count = eps.iter().filter(|e| e.class == "flow-delegation").count();
+        assert_eq!(count, 0);
+    }
 }
 
 #[cfg(test)]

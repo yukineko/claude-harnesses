@@ -1,5 +1,8 @@
 # DESIGN: delegation戦略(fork vs inline)の計測基盤をfugu-routerに追加する
 
+**前提**: `docs/fork-subagent-type.md`を先に読むこと(forkの定義・context rotとの関係・
+監査独立性の観点でforkを使ってはいけない場面を先に整理してある)。
+
 **背景**: `/flow`が`/condukt`を起動する際、実行そのものを`fork`(subagent_typeの一種。親会話の
 contextを丸ごと継承し、prompt cacheも共有する)に包むか、mainで直接実行するかという選択がある。
 今回のセッションでの分析(会話ログ参照)では、forkはcontext-rot対策として有効な一方、

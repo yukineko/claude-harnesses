@@ -85,3 +85,5 @@
 - [e2e-autonomy.md](e2e-autonomy.md) — end-to-end 自律ループ
 - [condukt-context-flow.md](condukt-context-flow.md) — condukt のコンテキストフロー
 - [context-optimization.md](context-optimization.md) / [context-optimization-flow.md](context-optimization-flow.md) — コンテキスト最適化の設計と流れ
+- [fork-subagent-type.md](fork-subagent-type.md) — fork（subagent_type）の定義・context rot・監査独立性
+- [design-delegation-strategy-measurement.md](design-delegation-strategy-measurement.md) — fork/inline 選択のコスト最適性を計測する設計（`fork-subagent-type.md` の後続）

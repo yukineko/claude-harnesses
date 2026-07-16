@@ -5,7 +5,18 @@
 
 use std::path::PathBuf;
 
+/// Resolves the user's home directory. Prefers the `HOME` env var (when set
+/// and non-empty) over `dirs::home_dir()`. On Unix `HOME` is already the
+/// authoritative source, so this is a no-op there; on Windows,
+/// `dirs::home_dir()` resolves via `USERPROFILE`/`SHGetKnownFolderPath` and
+/// ignores `HOME`, which breaks the repo's `HOME`-swap test-isolation pattern
+/// (`std::env::set_var("HOME", tmpdir)` for state isolation in tests).
 pub fn home() -> PathBuf {
+    if let Ok(h) = std::env::var("HOME") {
+        if !h.is_empty() {
+            return PathBuf::from(h);
+        }
+    }
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
@@ -40,10 +51,35 @@ pub fn env_bool(key: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // home() reads the process-wide HOME env var, so tests that mutate it must
+    // not run concurrently with each other (mirrors beacon::config's precedent).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn base_dir_is_dotprefixed_under_home() {
         assert_eq!(base_dir("ctxrot"), home().join(".ctxrot"));
+    }
+
+    #[test]
+    fn home_prefers_home_env_var_over_dirs_home_dir() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("HOME");
+
+        std::env::set_var("HOME", "/tmp/harness-core-test-home");
+        assert_eq!(home(), PathBuf::from("/tmp/harness-core-test-home"));
+
+        std::env::set_var("HOME", "");
+        assert_eq!(
+            home(),
+            dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
     }
 
     #[test]

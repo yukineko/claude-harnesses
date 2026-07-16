@@ -1,8 +1,10 @@
 use crate::config::Config;
 use crate::goal_link::check_goal_link;
+use crate::hypothesis::Hypothesis;
 use crate::store::Store;
 use harness_core::hook::{read_stdin, HookInput};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// SessionStart hook entry point. Loads config and stdin itself so main can
 /// hand off to `run_hook` without capturing any state.
@@ -52,6 +54,16 @@ pub(crate) fn run_with(cfg: &Config, repo_root: &Path) -> Option<String> {
         }
     }
 
+    // Aggregate measurement DEBT: shipped-but-unmeasured hypotheses rot silently
+    // if only listed per-item. Surface a prominent summary (count + oldest age in
+    // days) so the debt is salient. Fail-soft: unparseable timestamps are skipped.
+    if let Some((count, oldest)) = awaiting_debt(&awaiting, now_epoch_days()) {
+        out.push_str(&format!(
+            "\n**\u{8a08}\u{6e2c}\u{8ca0}\u{50b5} (measurement debt): {} \u{4ef6}** \u{2014} \u{6700}\u{53e4} {} \u{65e5}\u{7d4c}\u{904e} (\u{51fa}\u{8377}\u{6e08}\u{307f}\u{30fb}\u{672a}\u{691c}\u{8a3c})\n",
+            count, oldest
+        ));
+    }
+
     for h in &awaiting {
         out.push_str(&format!(
             "- **[{}]** [awaiting-measurement] {}\n",
@@ -92,6 +104,84 @@ fn truncate_to_byte_boundary(s: &str, max_bytes: usize) -> &str {
         end -= 1;
     }
     &s[..end]
+}
+
+/// Days since the Unix epoch (1970-01-01) from the real clock. Day granularity
+/// is intentional — measurement debt is tracked in whole days.
+fn now_epoch_days() -> i64 {
+    (SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        / 86400) as i64
+}
+
+/// Proleptic Gregorian leap-year test — mirrors `hypothesis::is_leap_year`.
+fn is_leap_year(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+/// Parses the leading `YYYY-MM-DD` of an ISO8601 string into days-since-epoch,
+/// mirroring `hypothesis.rs`'s forward (days -> date) conversion in reverse.
+/// The time/zone portion is ignored (day granularity is intended). Returns
+/// `None` on malformed input so the caller can fail soft (never panic).
+fn iso_date_to_epoch_days(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    if b.len() < 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let year: i64 = s.get(0..4)?.parse().ok()?;
+    let month: u32 = s.get(5..7)?.parse().ok()?;
+    let day: u32 = s.get(8..10)?.parse().ok()?;
+    if year < 1970 || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+
+    let mut days: i64 = 0;
+    let mut y = 1970i64;
+    while y < year {
+        days += if is_leap_year(y) { 366 } else { 365 };
+        y += 1;
+    }
+    let leap = is_leap_year(year);
+    let days_in_month = [
+        31i64,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    for dim in days_in_month.iter().take((month - 1) as usize) {
+        days += *dim;
+    }
+    days += (day - 1) as i64;
+    Some(days)
+}
+
+/// Aggregate measurement-debt summary over the awaiting-measurement slice.
+/// Returns `(count, oldest_age_days)` where age is `now_days - min(updated_days)`
+/// clamped to `>= 0`, or `None` if the slice is empty. Fail-soft: items whose
+/// `updated_at` cannot be parsed contribute no age (skipped in the min); if ALL
+/// fail to parse, the count is still shown with `oldest = 0`.
+fn awaiting_debt(awaiting: &[&Hypothesis], now_days: i64) -> Option<(usize, i64)> {
+    if awaiting.is_empty() {
+        return None;
+    }
+    let count = awaiting.len();
+    let oldest = awaiting
+        .iter()
+        .filter_map(|h| iso_date_to_epoch_days(&h.updated_at))
+        .min()
+        .map(|min_updated| (now_days - min_updated).max(0))
+        .unwrap_or(0);
+    Some((count, oldest))
 }
 
 #[cfg(test)]
@@ -200,6 +290,54 @@ mod tests {
 
         let out = run_with(&cfg, dir.path()).expect("output");
         assert!(!out.contains("[unlinked]"));
+    }
+
+    #[test]
+    fn awaiting_debt_summary_counts_and_ages() {
+        // Two awaiting-measurement hypotheses with fixed past `updated_at` dates.
+        // 2026-06-16 -> epoch day 20620, 2026-06-01 -> epoch day 20605.
+        let mut a = Hypothesis::new("shipped A", None);
+        a.updated_at = "2026-06-16T09:30:00Z".to_string();
+        let mut b = Hypothesis::new("shipped B", None);
+        b.updated_at = "2026-06-01T00:00:00Z".to_string();
+        let awaiting: Vec<&Hypothesis> = vec![&a, &b];
+
+        // Fixed now = 2026-07-16 -> epoch day 20650.
+        let now_days = 20650;
+        let (count, oldest) = awaiting_debt(&awaiting, now_days).expect("non-empty slice");
+        assert_eq!(count, 2);
+        // Oldest item is 2026-06-01 (20605); 20650 - 20605 = 45 days.
+        assert_eq!(oldest, 45);
+
+        // Empty slice → no debt.
+        assert_eq!(awaiting_debt(&[], now_days), None);
+
+        // Reverse epoch-day conversion, independently computed.
+        assert_eq!(iso_date_to_epoch_days("2026-06-26T13:00:00Z"), Some(20630));
+        // Malformed input fails soft.
+        assert_eq!(iso_date_to_epoch_days("not-a-date"), None);
+
+        // All-unparseable timestamps still yield the count, oldest = 0.
+        let mut c = Hypothesis::new("bad ts", None);
+        c.updated_at = "garbage".to_string();
+        assert_eq!(awaiting_debt(&[&c], now_days), Some((1, 0)));
+    }
+
+    #[test]
+    fn session_hook_renders_measurement_debt_summary() {
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir);
+
+        let mut st = Store::load(&cfg).unwrap();
+        let id = st
+            .add("shipped, needs measuring".to_string(), None)
+            .unwrap();
+        st.mark_awaiting_measurement(&id, Some("run-1".to_string()))
+            .unwrap();
+
+        let out = run_with(&cfg, dir.path()).expect("output");
+        assert!(out.contains("\u{8a08}\u{6e2c}\u{8ca0}\u{50b5}")); // 計測負債
+        assert!(out.contains("\u{4ef6}")); // 件
     }
 
     #[test]

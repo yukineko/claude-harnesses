@@ -131,6 +131,17 @@ pub fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Whether any episode of `class` was recorded within the last `within`
+/// seconds of `now`. Pure/deterministic (no clock reads) so callers like
+/// `audit-recent` can be unit-tested without touching the filesystem or
+/// wall-clock time. Used to let a self-report ("I recorded it") be checked
+/// against the actual store instead of trusted blindly.
+pub fn recorded_within(episodes: &[Episode], class: &str, within: u64, now: u64) -> bool {
+    episodes
+        .iter()
+        .any(|e| e.class == class && now.saturating_sub(e.ts) <= within)
+}
+
 /// Return a stable hex content-hash for an Episode (all fields, via canonical JSON).
 /// Two Episode values are duplicates iff their content_hash_episode values match.
 pub fn content_hash_episode(ep: &Episode) -> String {
@@ -378,6 +389,33 @@ mod tests {
         ep.pass = false;
         ep.human_label = Some(true); // human rescues a failed episode
         assert!(ep.effective_pass());
+    }
+
+    #[test]
+    fn recorded_within_finds_matching_class_inside_window() {
+        let mut ep = sample_ep("flow batch", "sonnet");
+        ep.class = "flow-delegation".into();
+        ep.ts = 1000;
+        assert!(recorded_within(&[ep], "flow-delegation", 60, 1030));
+    }
+
+    #[test]
+    fn recorded_within_misses_when_window_too_short() {
+        let mut ep = sample_ep("flow batch", "sonnet");
+        ep.class = "flow-delegation".into();
+        ep.ts = 1000;
+        assert!(!recorded_within(&[ep], "flow-delegation", 10, 1030));
+    }
+
+    #[test]
+    fn recorded_within_ignores_other_classes() {
+        let ep = sample_ep("t", "sonnet"); // class: "parallel"
+        assert!(!recorded_within(
+            &[ep],
+            "flow-delegation",
+            u64::MAX,
+            1_000_000
+        ));
     }
 
     #[test]

@@ -143,6 +143,15 @@ fork/inline両方が最低3件以上)蓄積し、計測結果に基づいてvali
    計測ステップだけがLLM任せになっている。記録漏れが起きても検知できないため、実績が本当に
    10件以上貯まるかは運用の遵守率次第。将来的に`overwatch`か`gauge`側でrecord漏れを検出する
    fail-soft advisoryを足す余地がある。
+   → **Tier 1対応済み(2026-07-16)**: `fugu-router audit-recent --class <c> --within <secs>`
+   (直近N秒以内にそのclassのepisodeが記録されていればexit 0、無ければexit 1)を追加し、
+   `/flow`のSKILL.md Step 3-2の記録手順を「記録すること」という散文リマインダーから
+   「記録→`audit-recent`で自己検証→未達なら再試行/警告」という決定論的exit codeで
+   自己検証する手順に変更した。ただしこれは**LLMが自己検証コマンドを呼ぶこと自体**は
+   依然として手順遵守に依存しており、根本解決ではない。より強い保証(Tier 2: `autoflow`の
+   Stop hookでの他律的advisory)は、Stopフックペイロードにセッション内tool呼び出しログへの
+   アクセスが含まれるかが未確認のため要調査のまま残っている
+   (`docs/loop-engineering-followup-instructions.md`タスクB参照)。
 3. **`--delegation`が無検証のfree-text。** `--class`と揃える意図的な緩さだが、集計時に表記ゆれ
    (`"fork"`/`"Fork"`/全角など)が閾値判定に混入しうる。許容トレードオフとして明記されている
    ため実装ミスではないが、集計コード側で正規化が必要になることは覚えておく。

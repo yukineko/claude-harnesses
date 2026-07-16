@@ -280,18 +280,30 @@ backlog lock acquire --session-id <SESSION_ID> --project <CWD>
 肥大を防ぐ一方でタダではないため、既定バイアスは固定ルールに留め、状況ごとの自動判定はしない
 （`docs/design-delegation-strategy-measurement.md` 参照）。
 
-**手動記録（計測ループを回すための最小限の運用）**: condukt 実行が完了したら（fork/inline いずれでも）、
-観測できた cost_usd・duration_secs を `fugu-router record` に `--delegation` を添えて記録する
-（新しいコマンド呼び出しを増やさず、既存の record 呼び出しにオプションを1つ足すだけ）:
+**手動記録 + 自己検証（計測ループを回すための最小限の運用。記録漏れを決定論的に検知する）**:
+condukt 実行が完了したら（fork/inline いずれでも）、観測できた cost_usd・duration_secs を
+`fugu-router record` に `--delegation` を添えて記録し、直後に `audit-recent` で**その記録が
+実際にストアへ着地したか**を自己検証する（「記録したつもり」を防ぐ。LLM の自己申告だけに
+頼らない）:
 ```bash
 fugu-router record --title "<task title>" --class "flow-delegation" \
   --model <suggested_model> --status <verified|failed> \
   --cost <observed_cost_usd> --duration <observed_duration_secs> \
   --delegation <fork|inline>
+
+# 直近60秒以内に flow-delegation クラスの episode が実際に記録されたかを検証する。
+fugu-router audit-recent --class "flow-delegation" --within 60
 ```
-これは自動比較ではなく手動の実績記録。狙いは「等価なタスクの fork 実行/inline 実行の実績を、時間をかけて
-`fugu-router` の Episode ストアに貯める」こと。十分件数が貯まれば、次の一手として `fugu-router route`/
-`decide_bandit` に delegation 軸を組み込む判断ができる（今回はスコープ外。計測が先＝ build ≠ validate）。
+- **exit 0（found:true）** → 記録が確認できた。通常どおり次のサイクルへ進む。
+- **exit 1（found:false）** → 記録漏れ。`fugu-router record` をもう一度試みる（`fugu-router`
+  バイナリ不在・ストア書き込み失敗等が原因なら、ユーザーに「delegation 記録に失敗した」と
+  明示的に警告してから続行する。ここで condukt/flow のループ自体は止めない — 記録は計測目的の
+  補助シグナルであり、これが失敗しても本来のタスク実行結果には影響しない）。
+
+これは自動比較ではなく手動の実績記録＋その自己検証。狙いは「等価なタスクの fork 実行/inline
+実行の実績を、時間をかけて `fugu-router` の Episode ストアに貯める」こと。十分件数が貯まれば、
+次の一手として `fugu-router route`/`decide_bandit` に delegation 軸を組み込む判断ができる
+（今回はスコープ外。計測が先＝ build ≠ validate）。
 
 #### 3-3. 検証 → sink（結果の書き戻し）
 

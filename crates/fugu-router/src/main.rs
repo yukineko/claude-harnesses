@@ -90,6 +90,16 @@ enum Command {
         #[arg(long)]
         delegation: Option<String>,
     },
+    /// Check whether an episode of the given class was recorded within the
+    /// last N seconds. Exit 0 if found, 1 if not — lets a caller (e.g.
+    /// /flow's delegation-recording step) verify its own `record` call
+    /// actually landed instead of trusting a self-report.
+    AuditRecent {
+        #[arg(long)]
+        class: String,
+        #[arg(long)]
+        within: u64,
+    },
     /// Apply a human label to a recorded episode, overriding the verifier's
     /// self-pass in policy aggregation. The teacher signal that de-biases the
     /// verifier's self-reinforcing feedback loop (record's sibling).
@@ -494,6 +504,18 @@ fn run_user(cmd: Command) -> Result<()> {
                 eprintln!("recorded: {} \"{}\" pass={}", ep.model, ep.title, pass);
             }
             Ok(())
+        }
+        Command::AuditRecent { class, within } => {
+            let eps = store::load(&cfg.store_path());
+            let now = store::now_secs();
+            let found = store::recorded_within(&eps, &class, within, now);
+            if found {
+                println!("{{\"found\":true}}");
+                Ok(())
+            } else {
+                println!("{{\"found\":false}}");
+                std::process::exit(1);
+            }
         }
         Command::Label {
             selector,

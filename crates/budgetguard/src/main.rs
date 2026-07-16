@@ -3,6 +3,7 @@
 //! On every Stop it reads the session transcript, computes the USD cost using
 //! the same pricing table as gauge, and blocks the turn if session or daily
 //! limits are exceeded. Harness errors always exit 0 (never break the turn).
+#![deny(clippy::panic)]
 
 mod config;
 mod gate;

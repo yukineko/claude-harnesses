@@ -462,6 +462,7 @@ fn build_command(cmdline: &str) -> Command {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
 

@@ -7,6 +7,8 @@
 //! runs an independent reviewer and blocks only when issues are reported. It is
 //! the "is this good code?" complement to donegate's "does it actually run?".
 //!
+#![deny(clippy::panic)]
+//!
 //! Failure modes are split deliberately:
 //!   * a *harness* error (bad config, no git, our own bug) → exit 0, allow the
 //!     stop. We must never trap a turn because reviewgate itself broke.

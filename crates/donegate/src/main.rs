@@ -6,6 +6,8 @@
 //! keeps working. It is the dynamic, "does it actually run?" complement to the
 //! static (precommit) and spec-drift gates.
 //!
+#![deny(clippy::panic)]
+//!
 //! Failure modes are split deliberately:
 //!   * a *harness* error (bad config, no checks, our own bug) → exit 0, allow the
 //!     stop. We must never trap a turn because donegate itself broke.

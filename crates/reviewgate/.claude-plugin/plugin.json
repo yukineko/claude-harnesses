@@ -1,6 +1,6 @@
 {
   "name": "reviewgate",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Code-review gate for Claude Code: on Stop, review the diff before the agent can declare done. In inject mode it blocks the stop and injects a review rubric so the running agent self-reviews (no API key); in subprocess mode it runs an independent reviewer and surfaces only its findings. Subscription-native, bundled Rust binary.",
   "author": {
     "name": "yukineko"

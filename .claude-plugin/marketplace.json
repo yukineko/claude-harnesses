@@ -81,8 +81,8 @@
     },
     {
       "name": "budgetguard",
-      "description": "Real-time cost budget gate for Claude Code: on Stop, read the session transcript, compute USD cost, and block the turn when session or daily limits are exceeded — feeding the overage back so the agent winds down gracefully. Subscription-native (one Stop hook + bundled Rust binary, no API key).",
-      "version": "0.1.8",
+      "description": "Real-time cost budget gate for Claude Code: on Stop, read the session transcript, compute USD cost, and block the turn when session or daily limits are exceeded — feeding the overage back so the agent winds down gracefully. Subscription-native (one Stop hook + bundled Rust binary, no API key). v0.1.9: added #![deny(clippy::panic)] at crate root.",
+      "version": "0.1.9",
       "category": "cost",
       "keywords": [
         "hooks",
@@ -305,8 +305,8 @@
     },
     {
       "name": "donegate",
-      "description": "Completion-verification gate for Claude Code: on Stop, run your acceptance commands as subprocesses and block the stop until every required check is green, feeding failures back for an auto-fix loop. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.7",
+      "description": "Completion-verification gate for Claude Code: on Stop, run your acceptance commands as subprocesses and block the stop until every required check is green, feeding failures back for an auto-fix loop. Subscription-native (one hook + bundled Rust binary, no API key). v0.1.8: added #![deny(clippy::panic)] at crate root.",
+      "version": "0.1.8",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -531,8 +531,8 @@
     },
     {
       "name": "reviewgate",
-      "description": "Code-review gate for Claude Code: on Stop, review the diff before the agent can declare done. In inject mode it blocks the stop and injects a review rubric so the running agent self-reviews (no API key); in subprocess mode it runs an independent reviewer and surfaces only its findings. Subscription-native, bundled Rust binary.",
-      "version": "0.1.9",
+      "description": "Code-review gate for Claude Code: on Stop, review the diff before the agent can declare done. In inject mode it blocks the stop and injects a review rubric so the running agent self-reviews (no API key); in subprocess mode it runs an independent reviewer and surfaces only its findings. Subscription-native, bundled Rust binary. v0.1.10: added #![deny(clippy::panic)] at crate root (existing test-module panic!() calls allowed locally).",
+      "version": "0.1.10",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -579,8 +579,8 @@
     },
     {
       "name": "schemaguard",
-      "description": "Schema-validation gate for LLM structured outputs at source→executor boundaries: validate a JSON value against a named declared schema (condukt decomposition, fugu episode/playbook, scout measure), emit a structured error a caller uses to re-ask the model once, and count rejects so silent drops become observable (Guardrails-AI-lite). Subscription-native (one bundled Rust binary, no API key).",
-      "version": "0.1.5",
+      "description": "Schema-validation gate for LLM structured outputs at source→executor boundaries: validate a JSON value against a named declared schema (condukt decomposition, fugu episode/playbook, scout measure), emit a structured error a caller uses to re-ask the model once, and count rejects so silent drops become observable (Guardrails-AI-lite). Subscription-native (one bundled Rust binary, no API key). v0.1.6: added #![deny(clippy::panic)] at crate root (main.rs + lib.rs).",
+      "version": "0.1.6",
       "category": "quality",
       "keywords": [
         "schema",

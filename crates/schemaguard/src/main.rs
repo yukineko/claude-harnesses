@@ -1,5 +1,7 @@
 //! schemaguard — schema-validation gate for LLM structured outputs.
 //!
+#![deny(clippy::panic)]
+//!
 //! Validates a JSON value against a named declared schema, emits a structured
 //! error (the re-ask contract) when invalid, and records reject counts so
 //! silent drops at source→executor boundaries become observable.

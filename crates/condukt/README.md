@@ -50,6 +50,9 @@ hook (`restore`) and a Stop hook (`state record-run --all`).
 | `condukt gate check --run <id> --task <id>` | deterministic GATE-EXEC decision for a `gated` task: classifies its action text (risk × reversibility) and reads the autonomy policy — all fail-soft — runs `decide_gate_exec`, prints the verdict + signals as JSON, checkpoints the run before auto-executing (so the action is recoverable), and exits non-zero on escalate, so a caller can do `if ! condukt gate check --run RID --task T; then escalate; fi`. |
 | `condukt escalate add/list/resolve` | durable async escalation channel (`<state_dir>/<project>/escalations.json`, atomic + fail-soft): `add --run --task --question --option <o> [--recommend N]` enqueues an out-of-band question and prints its `id`; `list --run [--json]` shows the still-open escalations for a run; `resolve --id --choice` records the chosen answer so a blocked/gated task can resume instead of stalling on an inline `AskUserQuestion`. |
 | `condukt pr create --title <t> [--execute]` | terminal external-loop step: open a PR via the `gh` CLI. Without `--execute` it dry-runs, printing the exact argv that WOULD run; the `/condukt` skill passes `--execute` ONLY after the human GATED approval, so autonomous runs never open a PR on their own. Uses gh's own auth (no API key); gh absent/unauthenticated degrades to local-commit-only and exits 0 (fail-soft). |
+| `condukt shadow-run enable\|disable\|status` | manually toggle the opt-in **shadow-run** mode (default: disabled). `status` exits 0 when enabled, 1 when disabled (mirrors `state autonomy-check`'s exit-code contract). Always a human decision — there is no API exposing remaining rate-limit-window time, so no automatic trigger is implemented; pair with `gauge config set-window`/`gauge config show` if you want a manual approximation of the window to decide *when* to flip this on. |
+| `condukt shadow-run exec --topic <t> --branch <b> --model <m>` | gated on the enable flag (refuses with a non-zero exit while disabled, before creating anything): creates a second worktree via the existing `worktree create` machinery and prints its path. The caller (the `/condukt` skill, via a worker agent) runs the SAME task under `--model` inside it, purely to produce a clean side-by-side data point. |
+| `condukt shadow-run finish --path <p> --branch <b> --title <t> --model <m> [--pass] --cost <c> --duration <d>` | discards the shadow worktree (force-remove the dir + force-delete its branch — the shadow attempt is **never merged**, whatever the primary worker produced is what ships) and best-effort records the pass/fail/cost/duration outcome to `fugu-router record --class shadow-run` for later routing comparison. Soft dependency: succeeds even when `fugu-router` is absent or older than this flag set. |
 | `condukt state stats` | aggregate all runs (complete and incomplete): completion rate, task count, status distribution — useful as a before/after benchmark. |
 | `condukt state reconcile --run <id> [--dry-run]` | auto-promote tasks to `verified` when their branch is already merged into the default branch or has been deleted with its worktree. Fixes stale state after a session crash without manual `state set` calls. **Cross-run duplicate guard:** before that auto-promotion, it scans sibling runs for any hashkey this run completed (`done`/`verified`) that another `run_id` *also* completed *after* this run's `claimed_at`; on a hit it mutates nothing, prints `{"duplicate_completion":[{hashkey,runs:[run_id...]}]}`, and **exits 2** (escalate → human/HOTL picks which implementation to keep — per condukt's 0=auto / 2=escalate / 3=block convention). The no-duplicate path is unchanged (auto-verify, exit 0). |
 | `condukt state resume-context --run <id>` | emit pending/failed/done tasks as JSON for resuming a stopped run across sessions (see Phase 0-alt in the skill). |
@@ -209,6 +212,7 @@ All config file keys can be overridden at runtime with environment variables.
 | `CONDUKT_STUCK_TTL_SECS` | `1800` | Age (seconds) past which a `running` task is considered stuck and eligible for `state abandon --all-stuck`. |
 | `CONDUKT_WORKER_SANDBOX` | `false` | Set to `1`/`true` to run a worker's build/test through the sandboxed docker exec backend (overrides `[worker] sandbox_enabled`). Read by `sandbox run`. |
 | `CONDUKT_WORKER_SANDBOX_IMAGE` | _(unset)_ | Override the container image for sandboxed worker execution (overrides `[worker] docker_image`). |
+| `CONDUKT_SHADOW_RUN_DIR` | `~/.condukt` | Directory holding the shadow-run enable flag (`shadow_run.json`). Override in tests so they never touch the real `~/.condukt`. |
 
 ### `condukt loop` — test-fix cycle
 
@@ -271,6 +275,37 @@ The command is executed via `sh -c`, so quoted arguments, pipes, and env-var
 expansions all work as expected — e.g. `command = "pytest -k 'unit or smoke'"`.
 Running from the repo root (not the cwd of the caller) means auto-detection always
 sees the project manifest even when the caller is in a subdirectory.
+
+### `condukt shadow-run` — manual dual-model speculative execution
+
+Runs the SAME task under a second model in an independent worktree purely to
+produce a clean pass/fail/cost/duration comparison point for `fugu-router` — a
+manual A/B data point, not a routing change. **Manual-trigger only, by
+design**: there is no API or hook input exposing how much of the account's
+rate-limit window remains, so an automatic "fire when there's spare capacity"
+trigger isn't feasible. Deciding *when* to run one is always a human call
+(optionally informed by `gauge config set-window`/`gauge config show`'s
+manually-registered window approximation); deciding *whether it's allowed at
+all* is the `enable`/`disable` flag below.
+
+```
+condukt shadow-run enable                 # permit shadow-run to fire (off by default)
+condukt shadow-run status                 # exit 0/1 = enabled/disabled
+condukt shadow-run exec --topic t1-shadow --branch shadow/t1-opus --model opus
+# -> prints the new worktree's path; refuses (non-zero exit) while disabled,
+#    before creating anything
+# ... the /condukt skill runs a worker under --model inside that worktree ...
+condukt shadow-run finish --path <path> --branch shadow/t1-opus \
+  --title "t1 shadow attempt" --model opus --pass --cost 0.42 --duration 12.5
+# -> discards the worktree + branch (never merged) and best-effort records
+#    the outcome via `fugu-router record --class shadow-run`
+condukt shadow-run disable
+```
+
+The shadow worktree is always discarded via the same `worktree` machinery
+`condukt worktree remove`/`cleanup` use elsewhere (force-remove the dir,
+force-delete the branch) — whatever the primary worker produced is what
+ships; shadow-run never merges its own output.
 
 ## Soft integrations
 

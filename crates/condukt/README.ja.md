@@ -69,6 +69,9 @@ LLM 単体で大きな課題をオーケストレーションさせると、決�
 | `condukt gate check --run <id> --task <id>` | `gated` タスク向けの決定論的 GATE-EXEC 判定: アクション文（risk × reversibility）を分類し autonomy policy を読む（すべて fail-soft）。`decide_gate_exec` を実行して判定＋信号を JSON 出力し、auto-exec 前に run をチェックポイント（可逆にする）した上で、escalate なら非ゼロで終了する（`if ! condukt gate check --run RID --task T; then escalate; fi`）。 |
 | `condukt escalate add/list/resolve` | 永続的な非同期エスカレーションチャネル（`<state_dir>/<project>/escalations.json`、atomic write・fail-soft）。`add --run --task --question --option <o> [--recommend N]` は out-of-band な質問を登録し `id` を出力、`list --run [--json]` は run の未解決エスカレーションを表示、`resolve --id --choice` は選択した回答を記録し、ブロック/gated タスクがインラインの `AskUserQuestion` で止まらず再開できるようにする。 |
 | `condukt pr create --title <t> [--execute]` | 外部ループの終端ステップ: `gh` CLI で PR を開く。`--execute` なしでは dry-run で実行される argv を出力するだけ。`/condukt` スキルは人間の GATED 承認後にのみ `--execute` を渡すため、autonomous 実行が独断で PR を開くことはない。gh 自身の認証を使う（API key 不要）。gh 不在/未認証なら local-commit-only に縮退し exit 0（fail-soft）。 |
+| `condukt shadow-run enable\|disable\|status` | opt-in の **shadow-run** モード（既定: disabled）を手動で切り替える。`status` は enabled なら exit 0、disabled なら exit 1（`state autonomy-check` と同じ終了コード規約）。常に人間が判断する — レートリミット窓の残り時間を取得できる API が存在しないため自動発火は実装していない。いつ有効化するかの目安には `gauge config set-window`/`gauge config show` の手動登録済み窓近似値を使うとよい。 |
+| `condukt shadow-run exec --topic <t> --branch <b> --model <m>` | enable フラグでゲートされる（disabled 中は何も作らず非ゼロ終了で拒否）: 既存の `worktree create` の仕組みで2本目の worktree を作り、パスを出力する。呼び出し元（`/condukt` スキルの worker エージェント）はその中で同じタスクを `--model` の下で実装し、クリーンな比較用データ点を作る。 |
+| `condukt shadow-run finish --path <p> --branch <b> --title <t> --model <m> [--pass] --cost <c> --duration <d>` | shadow worktree を破棄する（ディレクトリを force-remove、ブランチを force-delete — shadow の実装は**マージされない**。本採用となるのは主ワーカーの成果物のみ）。pass/fail/cost/duration の結果は `fugu-router record --class shadow-run` へベストエフォートで記録する（`fugu-router` 不在・旧版でも成功する = ソフト依存）。 |
 | `condukt state stats` | すべての実行（完了・未完了）を集計する: 完了率、タスク数、ステータス分布。ビフォーアフターのベンチマークとして有用。 |
 | `condukt state reconcile --run <id> [--dry-run]` | 対象ブランチがデフォルトブランチへマージ済み、または worktree ごと削除済みのタスクを自動的に `verified` へ昇格させる。手動の `state set` なしに、セッションクラッシュ後の古い状態を修正する。**クロス run 重複ガード:** この自動昇格の前に、この run が完了（`done`/`verified`）させた hashkey を、別の `run_id` が**この run の `claimed_at` より後に**同じく完了させていないか兄弟 run を横断走査する。見つかった場合は何も変更せず、`{"duplicate_completion":[{hashkey,runs:[run_id...]}]}` を出力して **exit 2**（escalate → どちらの実装を残すかは人間 / HOTL が選ぶ。condukt の 0=auto / 2=escalate / 3=block 慣例に従う）で終了する。重複が無い通常パスは従来どおり（自動 verified、exit 0）。 |
 | `condukt state resume-context --run <id>` | 停止した実行をセッションをまたいで再開するために、保留中/失敗/完了タスクを JSON として出力する。 |
@@ -204,7 +207,34 @@ single_worktree = false                   # true にすると全タスクを mai
 
 `shared_globs` は、何もハードコードせずにプロジェクト全体のファイルをワーカーから保護する仕組みだ。例: `["**/models.py", "**/migrations/**", "docs/glossary.md"]`。これに触れる並列タスクは警告とともに直列実行へ降格される。
 
-設定ファイルのキーはすべて実行時に環境変数で上書きできる（`CONDUKT_WORKTREE_BASE` / `CONDUKT_DEFAULT_BRANCH` / `CONDUKT_MAX_PARALLEL`）。`CONDUKT_CONSENSUS=1`/`true` はマルチサンプル self-consistency の fan-out を有効にし（`[consensus] enabled` を上書き。opt-in で既定 OFF）、`CONDUKT_ADVERSARIAL=1`/`true` は敵対的反証パネルを有効にする（`[adversarial] enabled` を上書き。opt-in で既定 OFF。GATE crate に触れる変更はこのスイッチに関わらずパネルを強制する）、`CONDUKT_AUTONOMOUS=1`/`true` は autonomous モードで実行する（人間ゲートを縮退。config `autonomous` を上書き。`state autonomy-check` が読む）。`CONDUKT_SINGLE_WORKTREE=1`/`true` は全タスクを main ツリーで実行する（config `single_worktree` を上書き。`state worktree-mode-check` が読む）。`CONDUKT_STUCK_TTL_SECS`（既定 `1800`）は `running` タスクを stuck とみなす経過秒数で、`state abandon --all-stuck` の対象になる。`CONDUKT_WORKER_SANDBOX=1`/`true` はワーカーの build/test をサンドボックス化した docker exec backend 経由で実行する（`[worker] sandbox_enabled` を上書き。`sandbox run` が読む）。`CONDUKT_WORKER_SANDBOX_IMAGE` はサンドボックス実行の image を上書きする（`[worker] docker_image` を上書き）。`CONDUKT_DISABLE=1` はフック専用のキルスイッチで、SessionStart/statusline フックを no-op にする（CI で有用）。
+設定ファイルのキーはすべて実行時に環境変数で上書きできる（`CONDUKT_WORKTREE_BASE` / `CONDUKT_DEFAULT_BRANCH` / `CONDUKT_MAX_PARALLEL`）。`CONDUKT_CONSENSUS=1`/`true` はマルチサンプル self-consistency の fan-out を有効にし（`[consensus] enabled` を上書き。opt-in で既定 OFF）、`CONDUKT_ADVERSARIAL=1`/`true` は敵対的反証パネルを有効にする（`[adversarial] enabled` を上書き。opt-in で既定 OFF。GATE crate に触れる変更はこのスイッチに関わらずパネルを強制する）、`CONDUKT_AUTONOMOUS=1`/`true` は autonomous モードで実行する（人間ゲートを縮退。config `autonomous` を上書き。`state autonomy-check` が読む）。`CONDUKT_SINGLE_WORKTREE=1`/`true` は全タスクを main ツリーで実行する（config `single_worktree` を上書き。`state worktree-mode-check` が読む）。`CONDUKT_STUCK_TTL_SECS`（既定 `1800`）は `running` タスクを stuck とみなす経過秒数で、`state abandon --all-stuck` の対象になる。`CONDUKT_WORKER_SANDBOX=1`/`true` はワーカーの build/test をサンドボックス化した docker exec backend 経由で実行する（`[worker] sandbox_enabled` を上書き。`sandbox run` が読む）。`CONDUKT_WORKER_SANDBOX_IMAGE` はサンドボックス実行の image を上書きする（`[worker] docker_image` を上書き）。`CONDUKT_SHADOW_RUN_DIR`（既定 `~/.condukt`）は shadow-run の enable フラグ（`shadow_run.json`）を置くディレクトリで、テストが本物の `~/.condukt` に触れないよう上書きする。`CONDUKT_DISABLE=1` はフック専用のキルスイッチで、SessionStart/statusline フックを no-op にする（CI で有用）。
+
+### `condukt shadow-run` — 手動発火の2モデル投機実行
+
+同一タスクを別モデルで独立した worktree に実行し、`fugu-router` 向けのクリーンな
+pass/fail/cost/duration 比較データ点を作る（ルーティングを変えるものではなく、あくまで
+手動の A/B データ点）。**設計上、手動発火のみ**: レートリミット窓の残り時間を返す
+API/hook input が存在しないため、「空き容量があれば自動発火」は技術的に不可能。いつ
+実行するかは常に人間の判断（目安として `gauge config set-window`/`gauge config show`
+の手動登録済み窓近似値を使ってもよい）。実行そのものを許可するかどうかは
+`enable`/`disable` フラグで管理する。
+
+```
+condukt shadow-run enable                 # shadow-run を許可（既定は disabled）
+condukt shadow-run status                 # exit 0/1 = enabled/disabled
+condukt shadow-run exec --topic t1-shadow --branch shadow/t1-opus --model opus
+# -> 新しい worktree のパスを出力。disabled 中は何も作らず非ゼロ終了で拒否する
+# ... /condukt スキルが --model の worker をその worktree 内で実行する ...
+condukt shadow-run finish --path <path> --branch shadow/t1-opus \
+  --title "t1 shadow attempt" --model opus --pass --cost 0.42 --duration 12.5
+# -> worktree とブランチを破棄（マージしない）し、`fugu-router record --class
+#    shadow-run` へベストエフォートで結果を記録する
+condukt shadow-run disable
+```
+
+shadow worktree は `condukt worktree remove`/`cleanup` と同じ機構（ディレクトリを
+force-remove、ブランチを force-delete）で常に破棄される — 本採用となるのは主ワーカーの
+成果物のみで、shadow-run が自分の出力をマージすることはない。
 
 `condukt-loop` のサイクル定義（`config.toml` の `[loop]`）:
 

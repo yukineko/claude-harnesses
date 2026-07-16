@@ -35,6 +35,7 @@ mod review_order;
 mod review_worthiness;
 mod run_policy;
 mod schedule;
+mod shadow_run;
 mod state;
 mod status;
 mod store;
@@ -348,6 +349,59 @@ enum Command {
         /// human-readable default.
         #[arg(long)]
         json: bool,
+    },
+    /// Opt-in, manually-triggered speculative execution of the SAME task under
+    /// a second model, purely to generate a clean pass/fail/cost/duration
+    /// comparison data point for fugu-router. No automatic trigger exists (no
+    /// API exposes remaining rate-limit window time) — `exec` always requires
+    /// `enable` to have been run first, and the shadow worktree is discarded
+    /// (never merged) once evaluated.
+    ShadowRun {
+        #[command(subcommand)]
+        action: ShadowRunAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ShadowRunAction {
+    /// Permit shadow-run to fire. Off by default.
+    Enable,
+    /// Forbid shadow-run from firing (the default state).
+    Disable,
+    /// Exit 0 if shadow-run is currently enabled, 1 otherwise (mirrors
+    /// `state autonomy-check`'s exit-code contract so callers can branch on it).
+    Status,
+    /// Create the second (shadow) worktree for `--topic` on `--branch`, gated
+    /// on the enable flag. Prints the worktree path on success; the caller
+    /// (the `/condukt` skill, via a worker agent) does the actual implementation
+    /// under `--model` inside it, then calls `finish` to evaluate and discard.
+    Exec {
+        #[arg(long)]
+        topic: String,
+        #[arg(long)]
+        branch: String,
+        /// Model the shadow attempt will run under (recorded, not enforced —
+        /// the caller is responsible for actually invoking that model).
+        #[arg(long)]
+        model: String,
+    },
+    /// Discard the shadow worktree (never merge) and best-effort record the
+    /// outcome to fugu-router for later routing comparison.
+    Finish {
+        #[arg(long)]
+        path: PathBuf,
+        #[arg(long)]
+        branch: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        model: String,
+        #[arg(long)]
+        pass: bool,
+        #[arg(long)]
+        cost: f64,
+        #[arg(long)]
+        duration: f64,
     },
 }
 
@@ -1893,11 +1947,76 @@ fn run_user(cmd: Command) -> Result<()> {
             head,
             json,
         } => run_review_order(&cwd, diff_file, from_git, &base, &head, json)?,
+        Command::ShadowRun { action } => run_shadow_run(&cfg, &cwd, action)?,
         // These are dispatched as hooks in main() (via run_hook, which exits and
         // never returns here). Reaching this arm would be an internal dispatch
         // bug; return a clean error instead of panicking the process.
         Command::Restore | Command::Statusline | Command::Editgate => {
             bail!("internal: hook subcommands must be dispatched in main(), not run_user()")
+        }
+    }
+    Ok(())
+}
+
+/// Dispatch `condukt shadow-run <action>`. All actions are gated by the
+/// on-disk enable flag except `enable`/`disable`/`status` themselves.
+fn run_shadow_run(cfg: &Config, cwd: &Path, action: ShadowRunAction) -> Result<()> {
+    // Overridable so integration tests never touch the real `~/.condukt`.
+    let dir = std::env::var("CONDUKT_SHADOW_RUN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| config::base_dir());
+    match action {
+        ShadowRunAction::Enable => {
+            shadow_run::set_enabled(&dir, true)?;
+            println!("shadow-run enabled");
+        }
+        ShadowRunAction::Disable => {
+            shadow_run::set_enabled(&dir, false)?;
+            println!("shadow-run disabled");
+        }
+        ShadowRunAction::Status => {
+            let enabled = shadow_run::is_enabled(&dir);
+            println!("{}", if enabled { "enabled" } else { "disabled" });
+            if !enabled {
+                std::process::exit(1);
+            }
+        }
+        ShadowRunAction::Exec {
+            topic,
+            branch,
+            model,
+        } => {
+            if !shadow_run::is_enabled(&dir) {
+                bail!("shadow-run is disabled — run `condukt shadow-run enable` first");
+            }
+            let repo = worktree::toplevel(cwd)?;
+            let path = worktree::create(&repo, &cfg.worktree_base, &topic, &branch)?;
+            println!("{}", path.display());
+            eprintln!("condukt: shadow-run worktree ready for model '{model}' at {}; the caller implements there, then calls `shadow-run finish`", path.display());
+        }
+        ShadowRunAction::Finish {
+            path,
+            branch,
+            title,
+            model,
+            pass,
+            cost,
+            duration,
+        } => {
+            let repo = worktree::toplevel(cwd)?;
+            let outcome = shadow_run::ShadowOutcome {
+                title,
+                model,
+                pass,
+                cost_usd: cost,
+                duration_secs: duration,
+            };
+            let recorded = shadow_run::finish(&repo, &path, &branch, &outcome)?;
+            if recorded {
+                println!("shadow-run discarded and recorded to fugu-router");
+            } else {
+                println!("shadow-run discarded (fugu-router not on PATH — outcome not recorded)");
+            }
         }
     }
     Ok(())

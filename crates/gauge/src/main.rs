@@ -15,6 +15,7 @@ mod install;
 mod model;
 mod report;
 mod store;
+mod window;
 
 use std::path::Path;
 
@@ -92,6 +93,29 @@ enum Command {
     },
     /// Show the resolved config, store path, and recorded session count.
     Status,
+    /// Manage the manually-registered rate-limit window (length + last reset
+    /// time). There is no API to auto-detect this, so the user reads their
+    /// own `/usage` screen and registers it here; `gauge status` then shows
+    /// an approximate time-to-reset alongside continuous-uptime.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Register the window length and last known reset time.
+    SetWindow {
+        /// Window length in hours, as shown on the user's `/usage` screen.
+        #[arg(long)]
+        hours: f64,
+        /// RFC3339 timestamp of the last known window reset.
+        #[arg(long)]
+        last_reset: String,
+    },
+    /// Show the currently registered window config, if any.
+    Show,
 }
 
 fn main() {
@@ -105,6 +129,36 @@ fn main() {
         Command::Uninstall { dry_run } => exit_on_err(install::uninstall(dry_run)),
         Command::Init { force } => exit_on_err(init(force)),
         Command::Status => status(),
+        Command::Config { action } => config_cmd(action),
+    }
+}
+
+fn config_cmd(action: ConfigAction) {
+    let dir = config::base_dir();
+    match action {
+        ConfigAction::SetWindow { hours, last_reset } => {
+            let cfg = window::WindowConfig { hours, last_reset };
+            match window::save(&dir, &cfg) {
+                Ok(()) => println!(
+                    "registered window: {}h, last reset {}",
+                    cfg.hours, cfg.last_reset
+                ),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        ConfigAction::Show => match window::load(&dir) {
+            Some(cfg) => {
+                println!("hours:       {}", cfg.hours);
+                println!("last_reset:  {}", cfg.last_reset);
+                if let Some(secs) = window::approx_reset_in_secs(&cfg, chrono::Utc::now()) {
+                    println!("approx eta:  {}", fmt_duration(secs));
+                }
+            }
+            None => println!("no window registered. use `gauge config set-window` to set one."),
+        },
     }
 }
 
@@ -405,6 +459,15 @@ fn status() {
             format!("{} override(s) + built-in", cfg.pricing.len())
         }
     );
+    if let Some(w) = window::load(&config::base_dir()) {
+        if let Some(secs) = window::approx_reset_in_secs(&w, chrono::Utc::now()) {
+            println!(
+                "window eta:   {} (approx, {}h window)",
+                fmt_duration(secs),
+                w.hours
+            );
+        }
+    }
     println!("\nrun `gauge report` for the full breakdown.");
 }
 

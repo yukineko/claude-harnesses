@@ -25,6 +25,16 @@ record で実績を蓄積 ── episodes.jsonl ──▶ 似た過去タスク�
 
 限界は率直に述べる。ルーティングはターン単位ではなくタスク単位であり、隠れ状態ヘッドによるルーティングもニューラルな重み更新も無い。バンディットが学ぶのは報酬であって深い表現ではない。意味的な橋渡しも埋め込みではなく辞書ベースである。
 
+## fugu との対応
+
+| fugu | fugu-router |
+|---|---|
+| 訓練済みコーディネータ | エピソードストアに対する決定論的方策 |
+| エージェントプール / ティア | Claude のティア `haiku < sonnet < opus` |
+| 役割割り当て | タスクごとの `worker_model` + 独立した `verifier_model` |
+| 「いつ委譲するか / どのモデルか」 | しきい値を満たす類似タスクの中で最安のティア |
+| 学習 (CMA-ES / RL) | 記録済み実績に対する検索 + **オンラインバンディット**（Thompson サンプリング） |
+
 ## どうして必要か
 
 condukt はオーケストレーションの背骨だが、「どのタスクにどのモデルを充てるか」を毎回 interpreter の直感に委ねると、次の痛みが残る。
@@ -106,6 +116,13 @@ fugu-router install               # UserPromptSubmit フックをマージ
 
 `~/.fugu-router/config.toml`（`fugu-router.example.toml` 参照）。主な調整項目は `pass_threshold`（安いティアを信頼する前にどれだけ確信が要るか）、`min_samples`（コールドスタート prior を抜けるのに必要な履歴量）、`sim_threshold`（過去タスクをどれだけ似ていれば数えるか）。
 
+| キー | 既定値 | 説明 |
+|---|---|---|
+| `store_file` | `~/.fugu-router/episodes.jsonl` | エピソードストアのパス（git 管理下のパスへ向ければマシン間共有できる） |
+| `playbook_file` | `~/.fugu-router/playbooks.jsonl` | Playbook ストアのパス（同上。両ストアは独立に git 管理できる） |
+| `sync_repo` | *(未設定)* | `fugu-router sync` 用のリモート git リポジトリ URL。設定すると `store_file`/`playbook_file` は既定で `<sync_dir>/{episodes,playbooks}.jsonl` になる |
+| `sync_dir` | `~/.fugu-router/record-repo` | `sync_repo` のローカル clone 先 |
+
 マシン間で stores を共有する方法は 2 通り。**`sync`（管理された git リモート）:** `sync_repo` に git リポジトリ URL を設定すると、`store_file`/`playbook_file` は `<sync_dir>/{episodes,playbooks}.jsonl`（`sync_dir` 既定 `~/.fugu-router/record-repo`）を指す。`fugu-router sync` はまずリモートから pull し、続いてローカルの変更を commit & push する（`--pull-only` / `--push-only` で片側のみ）。**手動（`import`）:** `store_file` と `playbook_file` を自分で管理する git リポジトリ内のパスに向け、`git pull` 後に `import` するだけでマシン間同期が完結する（content-hash で重複排除されるので同じ実績を二度引いても安全）。
 
 ### コールドスタート
@@ -120,3 +137,7 @@ fugu-router install               # UserPromptSubmit フックをマージ
 独立 verifier も低stakesでは安くする。`opus` ワーカーは `sonnet` で検証、低stakesの `sonnet` ワーカーは `haiku` で検証、`haiku` ワーカーは独立性のため一段上の `sonnet` で検証する。serial/design は従来どおり `opus` verifier。`gated` タスクは自動ルーティングしない（人間承認の対象）。
 
 既定値もバイアスを補強する: `pass_threshold = 0.6`・`min_samples = 1` により、ほぼ信頼できる類似成功が1件あれば安いティアを信頼し、Thompson サンプリングの探索は安いティアに小さなボーナスを与えて未検証の安ティアを優先的に試す。
+
+## ライセンス
+
+MIT

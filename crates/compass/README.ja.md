@@ -115,3 +115,37 @@ Claude Code プラグイン（推奨）として、2 つの hook・`/compass` sk
 ```
 
 hook は `${CLAUDE_PLUGIN_ROOT}/bin/compass <sub>` を呼ぶ。`bin/compass` は host に合った `bin/compass-<os>-<arch>` を選ぶ POSIX ランチャで、Linux/macOS どちらでも動く。一致するバイナリが無ければ無言で exit 0 する。ソースからビルドする場合は `scripts/build-plugin-bin.sh compass`（macOS バイナリは CI または Mac 上でビルドしてコミットする）。
+
+### プラットフォーム対応 / バイナリのビルド
+
+プラグインはランタイムに `bin/compass` ランチャが選ぶプリビルド per-platform バイナリを同梱する:
+
+| Host | ファイル | 状態 |
+|---|---|---|
+| Linux x86_64 | `bin/compass-linux-x86_64` | 同梱 |
+| macOS Apple Silicon | `bin/compass-darwin-arm64` | macOS runner の CI（または Mac 上で `scripts/build-plugin-bin.sh`）でビルド |
+| macOS Intel | `bin/compass-darwin-x86_64` | macOS runner の CI（または Mac 上で `scripts/build-plugin-bin.sh x86_64-apple-darwin`）でビルド |
+
+Linux バイナリは直接コミットされる。**macOS バイナリ**は Linux からクロスビルドできない（Apple フレームワークに macOS SDK が要る）ため、リポジトリの CI が macOS runner 上で生成してコミットするか、Mac 上で手動ビルドする。
+
+## プラグイン構成
+
+```
+.claude-plugin/plugin.json     # プラグインマニフェスト
+hooks/hooks.json               # SessionStart=nudge / Stop=breadcrumb → ${CLAUDE_PLUGIN_ROOT}/bin/compass
+skills/compass/SKILL.md        # /compass skill（carve ループを駆動）
+bin/compass                    # POSIX ランチャ → compass-<os>-<arch>
+bin/compass-<os>-<arch>        # プリビルドバイナリ
+src/ … Cargo.toml              # Rust クレート本体
+```
+
+## 開発
+
+```sh
+cargo test -p compass     # ユニットテスト
+cargo build -p compass
+```
+
+## ライセンス
+
+MIT

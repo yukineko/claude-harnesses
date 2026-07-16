@@ -61,6 +61,7 @@ LLM 単体で大きな課題をオーケストレーションさせると、決�
 | `condukt state checkpoint/rollback --run <id>` | autonomous 続行のための可逆性セーフティネット（charter #7）。`checkpoint` は run の状態＋各タスクのブランチ SHA を永続スナップショットしイベントを journal に記録、新しい seq を出力する。`rollback` はスナップショットした状態を復元し、各 worktree を記録した SHA へ best-effort で `git reset` する（`--to <seq>` で指定、既定は最新）。 |
 | `condukt state verifier-model --worker <model> [--suggested <model>]` | verifier モデルが worker モデルと決して一致しないよう解決する（共有ブラインドスポット対策）。異なる `--suggested` は尊重し、無ければ別ティアを選ぶ。選んだモデルを出力する。 |
 | `condukt consensus plan/vote` | マルチサンプル self-consistency（opt-in のコストガード）。`plan` はタスクを N 個の候補実装に fan-out すべきかを決める（exit 0 = fan-out、1 = 単一サンプル）。`vote` は N 個の verifier 判定を決定論的な多数決の勝者＋合意率に集計し、全 fail・同票・閾値未満の合意率のときは opus へエスカレーションする。 |
+| `condukt adversarial plan/adjudicate` | 敵対的反証パネル（検証側の fan-out。opt-in のコストガード、既定 OFF）。`plan --touched <path>...` は完成した成果物が N 人の独立スケプティックを要するかを決める（exit 0 = パネル要、1 = 通常の単一 verifier 経路）。`CONDUKT_ADVERSARIAL`/`[adversarial] enabled` で有効化するか、`--touched` パスのいずれかが GATE crate（blastguard/propguard/specguard/stuckguard/mutategate）配下ならスイッチに関わらず強制される。`adjudicate` は同一成果物に対する N 件のスケプティック票（`refute|pass|abstain`、stdin JSON または `--file`）を受け取り fail-closed に判定する: pass なら exit 0、反証率が `block_ratio` 以上か有効票が `min_voters` 未満なら呼び出し側は自動採用してはならない（exit 1）。 |
 | `condukt policy decide/answer/answers` | 中央集権的な **graded-autonomy ポリシー**: 決定の risk × reversibility × confidence を `auto`/`escalate`/`block` に写像する（exit code 契約: 0=auto, 2=escalate, 3=block, 1=不正入力）。`answer` は `auto` 判定のとき 1 問を非対話的に解決し（選択を journal に記録）、それ以外はフォールスルーして呼び出し側が実際の `AskUserQuestion` を出す。`answers` は auto 応答の監査証跡（人間に問わず self-answer した全質問）を出力する。 |
 | `condukt verify digest/runtime/launch/regressions/confidence/checks` | 決定論的な verifier ステージのヘルパー（整形のみ。修正の判断は LLM worker に残る）。`digest` は生のテスト出力を構造化 `FailureDigest` に蒸留、`runtime` はターゲットのランタイム出力（exit code・panic/例外行・stderr/stdout の末尾）を蒸留し `--reflux` で pass/fail 判定、`launch` は blastguard 検証済みのエンベロープ内で実ターゲットを起動（破壊的な `--cmd` は fail-closed で拒否）しランタイム信号を reflux する（`--health-url` 指定時は exit を待たず HTTP 200 をポーリング）。`--docker`（既定 image `--image alpine:latest`）を付けると `--cmd` を `docker run --rm --network=none` の隔離コンテナ内で実行する（blastguard ゲートは docker 起動前に同様に適用、docker 自体が不在/デーモン不通なら `note:"docker_unavailable"` で fail-soft）。`regressions --baseline <f> --current <f>` は2つの失敗テスト集合を純粋な集合差分（`current - baseline`）で比較し、verifier の回帰判定を目視でなく決定論化する。`confidence --check-executed --exit-zero --no-regressions` は LLM の自己申告ではなく観測事実から `high|medium|low` を導出する。`checks --file <task.json> [--cwd <dir>]` はタスクが宣言した `checks[]`（下記スキーマ参照）を機械オラクルとして実行し `{"all_passed":bool,"results":[...]}` を出力する。すべて fail-soft（exit 0）。 |
 | `condukt replan handoff/stats` | 決定論的な reflux カスケードのヘルパー（分類/整形のみ。再分解の判断は LLM に残る）。`handoff` は失敗タスクの reflux 事実を `escalate_model` か `replan` に分類し、`replan` のときだけ interpreter に「新しい分解を作れ」と指示する handoff を組み立てる（`--run <id>` で決定を journal 記録）。`stats --run <id>` はそのログを directive 毎の件数に集計する。 |
@@ -175,6 +176,17 @@ single_worktree = false                   # true にすると全タスクを mai
 # samples   = 3
 # threshold = 0.5
 
+# 敵対的反証パネル（検証側の fan-out。opt-in、既定 OFF）。有効にすると、
+# 完了した高リスク成果物を単一 verifier ではなく N 人の独立スケプティックが
+# 反証する。反証率が block_ratio 以上なら成果物を fail-closed にする。GATE
+# crate に触れる変更は enabled = false でもパネルを強制する。min_voters は
+# 判定を信用するための有効投票者数の下限（これ未満は fail-closed）。
+# [adversarial]
+# enabled     = false
+# size        = 3
+# min_voters  = 2
+# block_ratio = 0.5
+
 # opt-in のワーカーサンドボックス（既定 OFF）。有効にすると、ワーカーが
 # `condukt sandbox run` 経由で走らせる build/test コマンドが、ホスト直実行では
 # なく docker exec backend（`docker run --rm --network=none`、CWD を同一パスへ
@@ -192,7 +204,7 @@ single_worktree = false                   # true にすると全タスクを mai
 
 `shared_globs` は、何もハードコードせずにプロジェクト全体のファイルをワーカーから保護する仕組みだ。例: `["**/models.py", "**/migrations/**", "docs/glossary.md"]`。これに触れる並列タスクは警告とともに直列実行へ降格される。
 
-設定ファイルのキーはすべて実行時に環境変数で上書きできる（`CONDUKT_WORKTREE_BASE` / `CONDUKT_DEFAULT_BRANCH` / `CONDUKT_MAX_PARALLEL`）。`CONDUKT_CONSENSUS=1`/`true` はマルチサンプル self-consistency の fan-out を有効にし（`[consensus] enabled` を上書き。opt-in で既定 OFF）、`CONDUKT_AUTONOMOUS=1`/`true` は autonomous モードで実行する（人間ゲートを縮退。config `autonomous` を上書き。`state autonomy-check` が読む）。`CONDUKT_SINGLE_WORKTREE=1`/`true` は全タスクを main ツリーで実行する（config `single_worktree` を上書き。`state worktree-mode-check` が読む）。`CONDUKT_STUCK_TTL_SECS`（既定 `1800`）は `running` タスクを stuck とみなす経過秒数で、`state abandon --all-stuck` の対象になる。`CONDUKT_WORKER_SANDBOX=1`/`true` はワーカーの build/test をサンドボックス化した docker exec backend 経由で実行する（`[worker] sandbox_enabled` を上書き。`sandbox run` が読む）。`CONDUKT_WORKER_SANDBOX_IMAGE` はサンドボックス実行の image を上書きする（`[worker] docker_image` を上書き）。`CONDUKT_DISABLE=1` はフック専用のキルスイッチで、SessionStart/statusline フックを no-op にする（CI で有用）。
+設定ファイルのキーはすべて実行時に環境変数で上書きできる（`CONDUKT_WORKTREE_BASE` / `CONDUKT_DEFAULT_BRANCH` / `CONDUKT_MAX_PARALLEL`）。`CONDUKT_CONSENSUS=1`/`true` はマルチサンプル self-consistency の fan-out を有効にし（`[consensus] enabled` を上書き。opt-in で既定 OFF）、`CONDUKT_ADVERSARIAL=1`/`true` は敵対的反証パネルを有効にする（`[adversarial] enabled` を上書き。opt-in で既定 OFF。GATE crate に触れる変更はこのスイッチに関わらずパネルを強制する）、`CONDUKT_AUTONOMOUS=1`/`true` は autonomous モードで実行する（人間ゲートを縮退。config `autonomous` を上書き。`state autonomy-check` が読む）。`CONDUKT_SINGLE_WORKTREE=1`/`true` は全タスクを main ツリーで実行する（config `single_worktree` を上書き。`state worktree-mode-check` が読む）。`CONDUKT_STUCK_TTL_SECS`（既定 `1800`）は `running` タスクを stuck とみなす経過秒数で、`state abandon --all-stuck` の対象になる。`CONDUKT_WORKER_SANDBOX=1`/`true` はワーカーの build/test をサンドボックス化した docker exec backend 経由で実行する（`[worker] sandbox_enabled` を上書き。`sandbox run` が読む）。`CONDUKT_WORKER_SANDBOX_IMAGE` はサンドボックス実行の image を上書きする（`[worker] docker_image` を上書き）。`CONDUKT_DISABLE=1` はフック専用のキルスイッチで、SessionStart/statusline フックを no-op にする（CI で有用）。
 
 `condukt-loop` のサイクル定義（`config.toml` の `[loop]`）:
 
@@ -227,6 +239,40 @@ max_iters      = 10   # 安全キャップ; スキルが強制する
 | `tracekit` / `replaykit` | interpreter→worker→verifier の span を記録し、run を replay golden へ promote。 |
 | `trajectoryeval` | Phase 6: transcript から worker の tool-call 軌跡を `extract` し、タスクの `expected_trajectory` と `check` で照合する（`done_criteria` と並ぶ第2の経路面 verifier 次元）。タスクに `expected_trajectory` が無い、またはバイナリ不在なら丸ごと skip。 |
 | `curate` | golden 化: `done_criteria` が機械的な `verified` タスクに対し、スキルが HOTL 確認（`AskUserQuestion`）を1回提示する。明示的に yes のときだけ `curate promote "<task.title>" --dataset <name>` を実行して evalkit golden へ promote し、否なら何も書き込まない。 |
+
+## 制約
+
+- **マシンごとのマーケットプレイス登録。** 各ユーザーが一度 `/plugin marketplace add <url>` する必要がある — Claude Code はチェックインされたリポジトリからマーケットプレイスを自動登録しない。
+- **プラットフォームごとのバイナリ。** Linux x86_64 は `bin/` にコミット済み。macOS arm64/x86_64 は GitHub Actions の macOS runner がビルドする（Apple SDK は Linux からクロスビルドできない）。host に一致するバイナリが無ければランチャは build hint を出して exit 0 する（フックはターンを壊さない）。
+- **実行ビット。** バイナリとランチャは git index 上で実行ビットを保持しなければならない（`git update-index --chmod=+x bin/condukt bin/condukt-*`）。リポジトリはしばしば `core.filemode=false` なマウント上にチェックアウトされるため。
+
+## 開発
+
+```
+cargo test          # ユニットテスト (scheduling, gate, project key)
+cargo clippy --all-targets
+scripts/build-plugin-bin.sh        # host 向けに bin/condukt-<os>-<arch> をビルド
+```
+
+### 正典はリポジトリ側。cache は編集しない
+
+`crates/condukt/`（このディレクトリ）が**唯一の正典**である。`/plugin install` はこれを
+`~/.claude/plugins/cache/<owner>/condukt/<version>/` へプレーンコピー（`.git` 無し）し、稼働中の
+`/condukt` スキルはそこからエージェントと `SKILL.md` を読み込む。condukt を使って condukt 自身を
+改善しようとするとき、うっかり cache 側を直接編集してしまいがちだが、それは git の外側で乖離した
+編集を生む。
+
+ルール: **cache を手編集しない。** ここのファイルを編集し、ローカルの install を更新する。condukt が
+自分自身のプラグインへの変更をオーケストレーションするときは、worker にはこのリポジトリ（の git
+worktree）を指させ、cache パスを指させてはならない。
+
+```
+scripts/sync-plugin-assets.sh           # repo -> cache: ローカル install を更新
+scripts/sync-plugin-assets.sh --check   # drift を報告。cache != repo なら exit 1
+```
+
+commit 前（または pre-push フックに組み込んで）に `--check` を走らせ、repo から乖離した cache や、
+cache 側だけに作られて commit されなかった新規 agent/skill ファイルを検出する。
 
 ## ライセンス
 

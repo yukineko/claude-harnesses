@@ -106,3 +106,116 @@ cp -r skills/ctx ~/.claude/skills/
 ```
 
 導入後はフック・subagent・スキルが通常のセッションモデル内で動くため、`ANTHROPIC_API_KEY` も別途の `cargo install` も不要。サブスクリプションで完結する。
+
+## プラットフォーム対応 / バイナリのビルド
+
+プラグインはランタイムに `bin/ctxrot` ランチャが選ぶプリビルド per-platform バイナリを同梱する:
+
+| Host | ファイル | 状態 |
+|---|---|---|
+| Linux x86_64 | `bin/ctxrot-linux-x86_64` | 同梱 |
+| macOS Apple Silicon | `bin/ctxrot-darwin-arm64` | Mac 上でビルド（下記） |
+| macOS Intel | `bin/ctxrot-darwin-x86_64` | Mac 上でビルド（下記） |
+
+一致するバイナリが無ければランチャは無言で exit 0 する（フックはターンを壊さない）。ビルドヒントを stderr に一行出す。
+
+```sh
+# host platform（Linux ならここ、Apple Silicon なら Mac 上で）
+scripts/build-plugin-bin.sh
+
+# Mac 上で Intel 版もクロスビルドする場合:
+rustup target add x86_64-apple-darwin
+scripts/build-plugin-bin.sh x86_64-apple-darwin
+
+git add bin/ && git update-index --chmod=+x bin/ctxrot bin/ctxrot-*
+git commit -m "Add <platform> binary"
+```
+
+このリポジトリは `core.filemode=false` マウント上にあるため、実行ビットは `git update-index --chmod=+x` で git index に強制する（そうしないとランチャ/バイナリが非実行可能でチェックアウトされフックが失敗する）。
+
+## プラグイン構成
+
+```
+.claude-plugin/plugin.json        # プラグインマニフェスト
+.claude-plugin/marketplace.json   # 単一プラグインのマーケットプレース (name: yukineko)
+hooks/hooks.json                  # 6 つの hook → ${CLAUDE_PLUGIN_ROOT}/bin/ctxrot
+agents/ctxrot-distiller.md        # distiller subagent (重い読み込みを main context から追い出す)
+skills/distill/SKILL.md           # /distill skill (subagent へ委譲)
+skills/ctx/SKILL.md               # /ctx skill (`ctxrot ctx` 経由の pin/drop/load)
+bin/ctxrot                        # POSIX ランチャ → ctxrot-<os>-<arch>
+bin/ctxrot-<os>-<arch>            # プリビルドバイナリ
+src/ … Cargo.toml                 # Rust クレート本体（無変更で再利用）
+```
+
+## メトリクス
+
+各フックは `<state_dir>/metrics.jsonl` に1行 JSONL を追記する — トークンの**軌跡**（プロンプトごとの `budget`）、すべての**帯またぎ**、rescue **ノートサイズ**、**gate** の拒否（context から締め出したバイト数）、通過した tool **ダンプ**。ローカルのみ、`metrics = false` または `GUARD_METRICS=0` で無効化できる。
+
+```sh
+ctxrot metrics             # セッション単位の集計 (プロンプト数/帯またぎ/ピークトークン/rescue/gate/dump)
+ctxrot metrics path        # metrics.jsonl のパス（jq に渡して即席分析）
+ctxrot metrics compare A B # A/B 2つの session-id prefix で両群 + Δ(A−B) を表示
+ctxrot metrics peak ID     # session-id prefix のピーク% + 最大帯 (/record がノートに記す用)
+```
+
+`ctxrot usage` は `$CLAUDE_CODE_SESSION_ID` から実 transcript を解決し、**現在の**セッションの使用率（`ctxrot 52% … band1` + アクション `hint:`）を出力する。`/distill` skill はまずこれを呼んで挙動を決める: band 0 なら省略、band 1 なら通常蒸留、band 2 以上なら蒸留に加えて `/compact` を必須で促す。
+
+これは guard が実際に N を抑えているかを測る土台である。
+
+### A/B 比較: guard は occupancy を下げるか
+
+代表的な重いタスクを guard-ON と `GUARD_DISABLE=1`（guard-OFF）の2回走らせ、それぞれを session-id prefix でグループ化して比較する:
+
+```sh
+# グループA (guard ON): 例えば on-… で始まる session id で実行
+# グループB (guard OFF): GUARD_DISABLE=1, off-… で始まる session id で実行
+ctxrot metrics compare on- off-
+```
+
+`compare` は両グループ・符号付き Δ(A−B)・**dwell** 行（各帯で費やしたプロンプト数 `b0 b1 b2 b3`）を出力する。occupancy の質はピークだけでなく形で見る — 効いている guard は高い帯で過ごすプロンプトが少ない。A の `peak_tok`/`band` の Δ が負で高帯 dwell が軽ければ、guard が context の高水位を下げたことを意味する。
+
+### Recall eval: re-anchor はトークンに見合うか
+
+re-anchor は窓の末尾に既知の決定事項を再注入する — *追加トークン*であり、まさに ctxrot が戦っている対象。recall の利得がコストを上回る場合のみ正当化されるので直接測定する。フック自体は LLM を呼ばず、eval はプロセス外で走る:
+
+```sh
+cargo build --release
+eval/run-recall.sh           # `claude` CLI + `jq` が必要。case ごとに claude -p を駆動
+# または手動で:
+ctxrot eval gen --out cases --cases 9      # filler に埋めた推測不能な決定事項を仕込む
+#   …各 cases/*.on.txt (決定事項が再浮上) と *.off.txt (再浮上なし) をモデルに渡す…
+ctxrot eval score --manifest cases/manifest.json --results cases/results.jsonl
+```
+
+`score` は OFF/ON 両バリアントの精度と re-anchor の追加トークンコスト（Σ anchor bytes /4）を出力し、正味の利得を1つの表にまとめる:
+
+```
+variant     cases  correct  accuracy
+off             9        4       44%
+on              9        8       89%
+re-anchor 追加注入: ~1.3k bytes (~330 tok) over 9 ON case(s)
+Δ accuracy (on − off): +45 pts
+```
+
+小さいトークンコストで大きな正の Δ なら re-anchor は正当化される。Δ がゼロ近辺（または負）なら `reanchor_min_band` を上げるか `reanchor_enabled = false` にするシグナル。既定（`reanchor_min_band = 2 ≈ 75%`、`reanchor_every_prompts = 8`）は意図的に保守的 — lost-in-the-middle が効いてくる窓の深いところでしか発火せず、最大でも8プロンプトに1回なのでトークンコストは抑えられる。自分の eval Δ から調整すること。
+
+## 開発
+
+```sh
+cargo test          # unit + fixture テスト
+cargo build
+```
+
+手動 hook チェック:
+
+```sh
+echo '{"prompt":"read /big.log","cwd":"'"$PWD"'","transcript_path":"tests/fixtures/transcript.jsonl","session_id":"s1"}' | ctxrot guard
+```
+
+## context-governor との共存
+
+`ctxrot` と [`context-governor`](../context-governor/README.ja.md) はどちらも `PostToolUse` / `UserPromptSubmit` / `SessionStart` / `PreCompact` にフックする。両者は異なるレバーを引く — ctxrot は*助言・退避・制御*（助言テキスト・rescue ノート・load gate）、context-governor は*窓を変異させる*（tool output の刈り込み・参照本文の注入・compact 時のスナップショット）— ので書き込み先は重ならず、どちらもブロックしない（ctxrot の `preguard` deny と context-governor の実質発火しない `PreCompact` block を除く）。両プラグインのハンドラコードで検証済みのイベントごとの決定マトリクスは [`context-governor/docs/coexistence-with-ctxrot.md`](../context-governor/docs/coexistence-with-ctxrot.md) にある。
+
+## ライセンス
+
+MIT

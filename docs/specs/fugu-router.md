@@ -52,7 +52,11 @@
 - **`record --title --model --status …`** — 1 タスクの検証結果を episode store へ append（学習信号）。
   `--status` が合格語（`verified|pass|passed|ok|true`）以外は非合格。pass かつ `--done_criteria` があれば
   playbook store にも書く。`--skill-fingerprint` で SKILL.md コーパス版を刻印できる。condukt 併用時は
-  condukt の Stop hook が発火するので手書き不要。
+  condukt の Stop hook が発火するので手書き不要。任意フィールド2つは計測専用でルーティングに一切影響
+  しない: `--duration <secs>`（wall-clock 実測値）、`--delegation <fork|inline>`（`--class` と同じく
+  無検証の自由記述。fork/inline のコスト・所要時間比較用。`docs/design-delegation-strategy-measurement.md`
+  参照。condukt の `shadow-run`（モデル比較）とは別軸で、こちらは呼び出し側の delegation 戦略選択を
+  手動記録する）。
 - **`code-index build [--root] [--if-stale]`** — code-RAG slice-1。`git ls-files` で列挙した tracked `.rs`
   からシンボルを抽出し per-repo JSONL（`<root>/.fugu/code-index.jsonl`）を再構築。`--if-stale` は
   path+size+mtime の安価な fingerprint（内容は読まない）を sidecar meta と比較し、不変なら no-op

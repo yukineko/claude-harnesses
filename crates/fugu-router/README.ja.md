@@ -71,6 +71,10 @@ fugu-router record --title "<task title>" --files "<touched_files>" \
 
 `--status` が合格語（`verified|pass|passed|ok|true`）以外なら非合格として数える。`--cost` は任意（gauge から読めばコスト考慮ルーティングになる）。`--files` に絶対パスを渡すと記録時にリポジトリ相対パスへ正規化され（`/Users/yuki/src/harness/crates/x.rs` → `crates/x.rs`）、マシン固有のパスがストアに混入しないので k-NN の精度が落ちない。`--skill-fingerprint "$(fugu-router fingerprint)"` を渡すと、その実績を生んだ SKILL.md コーパスのバージョンで刻印できる。
 
+`--duration <秒>`（任意、既定 `0.0`）はタスクの実測 wall-clock 所要時間を記録する（計測目的のみで routing/scoring からは一切参照されない）。
+
+`--delegation <fork|inline>`（任意、既定は未設定）は、そのエピソードがどちらの subagent delegation 戦略で生成されたかを記録する。fork/inline のコスト・所要時間比較用（リポジトリ直下の `docs/design-delegation-strategy-measurement.md` 参照）。`--class` と同様バリデーション無しの自由記述で、この比較と無関係な通常の worker/verifier 記録では省略してよい。`route`/`decide_bandit` から参照されることはない。
+
 **condukt と併用する場合、`record` の発火は手書き不要で、condukt の Stop hook が `condukt state record-run --all` で決定論的・冪等に行う**（手書き snippet は単発／condukt 非併用時のフォールバック）。
 
 ### その他のサブコマンド

@@ -69,6 +69,22 @@ gauge — 2 セッション / 310 turns
   2026-06-20     $54.08    49.32M
 ```
 
+## Rate-limit window (manual, optional)
+
+There is no API exposing how much time remains in the account's rate-limit
+window, so it can't be auto-detected. Register it by hand from your own
+`/usage` view:
+
+```sh
+gauge config set-window --hours 5 --last-reset 2026-07-16T09:00:00Z
+gauge config show                  # print the currently registered window, if any
+```
+
+`gauge status`/`gauge report` fall back to showing continuous-uptime only when
+unset — this is a normal, expected state, never an error. Useful as a manual
+input to decide *when* to enable `condukt shadow-run` (which also has no
+automatic trigger).
+
 ## Pricing
 
 Built-in rates (USD per 1M tokens, input/output): **Opus** 5/25 · **Sonnet**

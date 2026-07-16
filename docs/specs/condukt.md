@@ -82,6 +82,13 @@
   `pr create`, `lessons`, `knowledge`** — reflux 分類 / verify→docker→ship 判定 / circuit-breaker / gate-exec /
   self-consistency 投票 / opt-in docker サンドボックス / 非同期エスカレーション / gh PR（`--execute` は人間承認後
   のみ）/ cross-task 学習 capture / 規約注入。
+- **`shadow-run enable|disable|status|exec|finish`** — opt-in・手動発火限定の投機実行モード
+  （`shadow_run.rs`）。レートリミット窓の残り時間を取得する API が存在しないため自動発火は無く、
+  `enabled` フラグ（`~/.condukt/shadow_run.json`、既定 disabled）は人間だけが立てる。`exec` は既存の
+  `worktree create` で第2の worktree を作り、同一タスクを別モデルで並行実装させる。`finish` は
+  worktree/branch を**必ず破棄**（merge は絶対にしない。本採用は主ワーカーの成果のみ）した上で、
+  pass/fail/cost/duration を `fugu-router record --class shadow-run` へベストエフォートで記録する
+  （fugu-router 不在でも成功するソフト依存）。
 - **`restore`（SessionStart）/ `statusline` / `editgate`（PostToolUse）/ `status [--all]` /
   `loop --module <server|client|e2e>` / `init` / `install [--dry-run]` / `uninstall`** — hook・進捗表示・
   edit-time コンパイルゲート・test-fix ループ 1 イテレーション・手動インストール（プラグインユーザーは不要）。

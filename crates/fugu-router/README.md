@@ -111,6 +111,16 @@ edit that changes behaviour leaves the outcome unattributable to its cause; with
 it, outcomes can be stratified by skill version and `evalkit canary` can diff two
 versions' goldens.
 
+`--duration <secs>` (optional, default `0.0`) records measured wall-clock
+duration for the task — measurement only, never consulted by routing/scoring.
+
+`--delegation <fork|inline>` (optional, unset by default) tags the episode with
+which subagent delegation strategy produced it, for a fork-vs-inline
+cost/duration comparison (see `docs/design-delegation-strategy-measurement.md`
+in the repo root). Free text, not validated — same looseness as `--class`.
+Omit it for ordinary worker/verifier records unrelated to that comparison; it
+is never consulted by `route`/`decide_bandit`.
+
 ### `confidence` — calibrated pass-probability
 
 ```bash

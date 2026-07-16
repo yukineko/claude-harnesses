@@ -57,6 +57,13 @@ subscription-native（フック＋同梱バイナリのみ、API キー不要、
   merge/remove。プラグイン経路では代わりに `hooks/hooks.json`（`${CLAUDE_PLUGIN_ROOT}/bin/gauge record`,
   timeout 10）が使われる。
 - **`init [--force]`** — スターター `./gauge.toml`（`STARTER` 定数）を書き出す。既存かつ `--force` 無しは Err。
+- **`config set-window --hours <f64> --last-reset <RFC3339>` / `config show`** — アカウントのレートリミット窓
+  （長さ＋直近リセット時刻）を人間が手動登録する（`window.rs`）。残り時間を取得する API が存在しないため
+  自動検出不可。`~/.gauge/store` 配下の `window.json` に永続化し、`set-window` は上書き、`show` は現在値を
+  表示（未設定は「no window registered」）。`approx_reset_in_secs` が登録値から次リセットまでの概算秒数を
+  算出するが、リセット自体は観測できず登録済み窓長からの推測に過ぎない。未設定時は既存の
+  `first_ts`/`last_ts` ベースの連続稼働時間表示にフォールバックする（fail-soft・エラーにしない）。
+  `condukt shadow-run`（同じく自動発火を持たない投機実行モード）をいつ有効化するかの目安として使う。
 
 ### module 責務
 

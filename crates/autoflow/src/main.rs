@@ -13,11 +13,18 @@
 //!
 //!   condukt_prompts < 5  → block automatically
 //!   condukt_prompts ≥ 5  → block: ask user each time
+//!
+//! Independently of the above (Tier 2 delegation-record advisory): on every
+//! `record_requested`/`continuing` Stop, if this session's transcript shows
+//! `/flow` drove a condukt run to completion without ever calling
+//! `fugu-router record` for it, block once with a fail-soft nudge (deduped via
+//! `SessionState::delegation_audit_warned`) — see `delegation_audit`.
 
 mod backlog;
 mod compass;
 mod condukt;
 mod config;
+mod delegation_audit;
 mod insights;
 mod lock;
 mod state;
@@ -130,6 +137,21 @@ fn stop_command() -> ! {
                 }
             }
             Phase::RecordRequested | Phase::Continuing => {
+                // Tier 2 delegation-record advisory: independent of the
+                // pending-emptiness branch below, fires at most once per
+                // session (deduped via `delegation_audit_warned`).
+                if !s.delegation_audit_warned
+                    && delegation_audit::missing_delegation_record(&input.transcript_path, &cwd)
+                {
+                    s.delegation_audit_warned = true;
+                    state::save(&cfg.state_dir, &session_id, &s);
+                    block(
+                        "/flow経由のcondukt実行が完了しましたが、fugu-router recordでのdelegation記録が見当たりません。\
+`fugu-router record --class flow-delegation --delegation <fork|inline> ...`の呼び出しを確認してください。",
+                    );
+                    return;
+                }
+
                 let pending = condukt::find_pending(&cwd);
                 if !pending.is_empty() {
                     s.condukt_prompts += 1;

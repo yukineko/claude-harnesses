@@ -68,6 +68,21 @@ pub fn find_pending(cwd: &Path) -> Vec<TaskState> {
         .collect()
 }
 
+/// Did the most recent condukt run for the repo containing `cwd` reach a
+/// terminal state (`verified` or `failed`) on at least one task? Used by the
+/// Tier 2 delegation-record advisory to tell "a condukt run completed this
+/// session" apart from "nothing has finished yet". Fail-soft: no run state on
+/// disk (or an unreadable/unparseable one) returns `false`.
+pub fn has_completed_tasks(cwd: &Path) -> bool {
+    match load_latest(cwd) {
+        Some((_, run)) => run
+            .tasks
+            .iter()
+            .any(|t| matches!(t.status.as_str(), "verified" | "failed")),
+        None => false,
+    }
+}
+
 /// Mark the given task IDs as `running` (with current timestamp) in the most
 /// recent condukt run for the repo containing `cwd`.
 pub fn mark_running(cwd: &Path, task_ids: &[&str]) {
@@ -155,5 +170,74 @@ mod tests {
     fn project_key_matches_shared_source() {
         let p = Path::new("/tmp/some-repo");
         assert_eq!(project_key(p), harness_core::projkey::project_key(p));
+    }
+
+    // `has_completed_tasks` reads `$HOME/.condukt/state/...`, so these tests
+    // mutate the process-global HOME and serialize behind the crate-wide
+    // `test_home_guard` mutex (shared with main.rs's/lock.rs's own tests) to
+    // avoid a cross-test HOME race.
+
+    /// A temp HOME with a fake repo (`.git/`) and its condukt run-state dir
+    /// pre-resolved, so tests can write a `run-*.json` straight into it.
+    struct TmpEnv {
+        _dir: tempfile::TempDir,
+        repo: PathBuf,
+        run_dir: PathBuf,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+    impl TmpEnv {
+        fn new() -> Self {
+            let guard = crate::test_home_guard();
+            let dir = tempfile::tempdir().expect("tempdir");
+            let home = dir.path().to_path_buf();
+            std::env::set_var("HOME", &home);
+
+            let repo = home.join("repo");
+            std::fs::create_dir_all(repo.join(".git")).unwrap();
+
+            let key = project_key(&repo_root(&repo));
+            let run_dir = home.join(".condukt").join("state").join(&key);
+            std::fs::create_dir_all(&run_dir).unwrap();
+
+            TmpEnv {
+                _dir: dir,
+                repo,
+                run_dir,
+                _guard: guard,
+            }
+        }
+
+        fn write_run(&self, tasks_json: &str) {
+            let text = format!(r#"{{"run_id":"r1","goal":"g","tasks":{tasks_json}}}"#);
+            std::fs::write(self.run_dir.join("run-0001.json"), text).unwrap();
+        }
+    }
+
+    #[test]
+    fn has_completed_tasks_true_when_a_task_is_verified() {
+        let env = TmpEnv::new();
+        env.write_run(r#"[{"id":"t1","status":"verified"}]"#);
+        assert!(has_completed_tasks(&env.repo));
+    }
+
+    #[test]
+    fn has_completed_tasks_true_when_a_task_is_failed() {
+        let env = TmpEnv::new();
+        env.write_run(r#"[{"id":"t1","status":"failed"}]"#);
+        assert!(has_completed_tasks(&env.repo));
+    }
+
+    #[test]
+    fn has_completed_tasks_false_when_only_pending() {
+        let env = TmpEnv::new();
+        env.write_run(r#"[{"id":"t1","status":"pending"},{"id":"t2","status":"running"}]"#);
+        assert!(!has_completed_tasks(&env.repo));
+    }
+
+    #[test]
+    fn has_completed_tasks_false_when_no_run_state() {
+        let env = TmpEnv::new();
+        // No run-*.json written at all.
+        assert!(!has_completed_tasks(&env.repo));
     }
 }

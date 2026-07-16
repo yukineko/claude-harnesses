@@ -152,6 +152,19 @@ fork/inline両方が最低3件以上)蓄積し、計測結果に基づいてvali
    Stop hookでの他律的advisory)は、Stopフックペイロードにセッション内tool呼び出しログへの
    アクセスが含まれるかが未確認のため要調査のまま残っている
    (`docs/loop-engineering-followup-instructions.md`タスクB参照)。
+   → **Tier 2対応済み(2026-07-16)**: 調査の結果、`HookInput.transcript_path`
+   (`crates/harness-core/src/hook.rs`)が全hookイベント共通でセッションのtranscript
+   JSONLへのパスを持つことを確認し、時間窓ヒューリスティックへのフォールバックは不要だった。
+   `crates/autoflow`のStop hook(`stop_command`)に、LLMの自己申告に依存しない他律的advisoryを
+   追加した(`crates/autoflow/src/delegation_audit.rs`の`missing_delegation_record`)。
+   transcriptに`"backlog lock acquire"`(`/flow`駆動の証跡)があり、かつ
+   `condukt::has_completed_tasks`でこのセッション中にcondukt taskが`verified`/`failed`へ
+   到達した形跡があり、かつtranscriptに`fugu-router record`呼び出し
+   (`--class flow-delegation`または`--delegation`を含む行)が一切無い、の3条件が揃った時のみ
+   fail-soft advisoryを1セッションにつき1回(`SessionState::delegation_audit_warned`で
+   dedup)発火する。誤検知回避のため、`/flow`駆動でない通常の`condukt`実行は発火しないことを
+   テストで担保している。read/parse失敗はすべてno-opでturnを壊さない(既存の
+   `find_pending`/backlogフローの分岐は無変更)。
 3. **`--delegation`が無検証のfree-text。** `--class`と揃える意図的な緩さだが、集計時に表記ゆれ
    (`"fork"`/`"Fork"`/全角など)が閾値判定に混入しうる。許容トレードオフとして明記されている
    ため実装ミスではないが、集計コード側で正規化が必要になることは覚えておく。

@@ -25,6 +25,11 @@ pub struct SessionState {
     /// How many times we have prompted to run /backlog this session.
     #[serde(default)]
     pub backlog_prompts: u32,
+    /// Whether the Tier 2 delegation-record advisory has already fired this
+    /// session (dedup — fires at most once). `#[serde(default)]` keeps older
+    /// on-disk state files (without this field) deserializable.
+    #[serde(default)]
+    pub delegation_audit_warned: bool,
 }
 
 fn state_path(state_dir: &Path, session_id: &str) -> PathBuf {

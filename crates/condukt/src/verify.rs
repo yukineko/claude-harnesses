@@ -1105,22 +1105,28 @@ pub fn mechanical_skip_verdict(
 /// `expect_substring` unchanged. Only when the hint is `None` do we fall back
 /// to the regex/keyword prose extraction below (unchanged from before this
 /// hint existed).
+/// Tokenize a command string into argv respecting shell quoting/escaping
+/// (e.g. `"cargo test -- --path \"a b/c\""` keeps `a b/c` as one token),
+/// unlike `split_whitespace` which would split it into `a`, `b/c"`. Falls
+/// back to `split_whitespace` on unterminated-quote input that `shlex`
+/// cannot parse, so a malformed hint still yields a best-effort argv rather
+/// than silently dropping the mechanical check.
+fn parse_argv(s: &str) -> Vec<String> {
+    shlex::split(s).unwrap_or_else(|| s.split_whitespace().map(String::from).collect())
+}
+
 pub fn mechanical_cmd(
     done_criteria: &str,
     mechanical_check_hint: Option<&crate::model::MechanicalCheck>,
 ) -> Option<Vec<String>> {
     if let Some(check) = mechanical_check_hint {
-        return Some(check.cmd.split_whitespace().map(String::from).collect());
+        return Some(parse_argv(&check.cmd));
     }
     // Prefer an explicit backtick command: `cargo test -p condukt`
     if let Ok(re) = regex::Regex::new(r"`([^`]+)`") {
         for caps in re.captures_iter(done_criteria) {
             if let Some(inner) = caps.get(1) {
-                let argv: Vec<String> = inner
-                    .as_str()
-                    .split_whitespace()
-                    .map(String::from)
-                    .collect();
+                let argv = parse_argv(inner.as_str());
                 if argv.first().is_some_and(|p| is_criteria_runner(p)) {
                     return Some(argv);
                 }
@@ -1383,6 +1389,49 @@ pub fn run_checks(checks: &[crate::model::Check], cwd: Option<&std::path::Path>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── mechanical_cmd argv parsing (quote/escape-aware, not split_whitespace) ──
+
+    /// A quoted argument containing spaces stays a single token, unlike
+    /// `split_whitespace` which would split it in two.
+    #[test]
+    fn parse_argv_respects_quoted_spaces() {
+        let argv = parse_argv(r#"cargo test -- --path "a b/c""#);
+        assert_eq!(
+            argv,
+            vec!["cargo", "test", "--", "--path", "a b/c"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// mechanical_check_hint's cmd is tokenized through the same quote-aware
+    /// parser, so a hinted command with a quoted path is not mis-split.
+    #[test]
+    fn mechanical_cmd_hint_respects_quoted_path() {
+        let hint = crate::model::MechanicalCheck {
+            cmd: r#"pytest "tests/a b.py""#.to_string(),
+            expect_exit: None,
+            expect_substring: None,
+        };
+        let argv = mechanical_cmd("irrelevant prose", Some(&hint)).unwrap();
+        assert_eq!(argv, vec!["pytest".to_string(), "tests/a b.py".to_string()]);
+    }
+
+    /// Unterminated-quote input (unparseable by shlex) falls back to
+    /// split_whitespace rather than dropping the mechanical check entirely.
+    #[test]
+    fn parse_argv_falls_back_on_unterminated_quote() {
+        let argv = parse_argv(r#"cargo test "unterminated"#);
+        assert_eq!(
+            argv,
+            vec!["cargo", "test", "\"unterminated"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+    }
 
     // ── t1: deterministic regression set-diff (baseline-failure exclusion) ──
 

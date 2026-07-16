@@ -49,6 +49,12 @@ pub struct Episode {
     /// (`policy::route`/`decide_bandit` are unchanged by this field).
     #[serde(default)]
     pub duration_secs: f64,
+    /// Which delegation strategy produced this episode (`"fork"` / `"inline"`),
+    /// when the caller manually recorded it. `None` = not a delegation-strategy
+    /// comparison episode (ordinary worker/verifier record). Measurement-only —
+    /// never consulted by `policy::route`/`decide_bandit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<String>,
 }
 
 fn default_role() -> String {
@@ -359,6 +365,7 @@ mod tests {
             labeled_by: None,
             skill_fingerprint: None,
             duration_secs: 0.0,
+            delegation: None,
         }
     }
 
@@ -571,6 +578,7 @@ mod tests {
             labeled_by: None,
             skill_fingerprint: None,
             duration_secs: 0.0,
+            delegation: None,
         };
         append(&path, &ep).unwrap();
         // a junk line must not break the load
@@ -627,6 +635,7 @@ mod tests {
                             labeled_by: None,
                             skill_fingerprint: None,
                             duration_secs: 0.0,
+                            delegation: None,
                         };
                         append(&path, &ep).unwrap();
                     }
@@ -750,5 +759,32 @@ mod tests {
         let old_line = r#"{"ts":1,"title":"legacy task","touched_files":[],"class":"parallel","model":"sonnet","role":"worker","pass":true,"cost_usd":0.0}"#;
         let back_old: Episode = serde_json::from_str(old_line).unwrap();
         assert_eq!(back_old.duration_secs, 0.0);
+    }
+
+    #[test]
+    fn delegation_roundtrips_and_defaults_to_none_on_old_lines() {
+        let mut ep = sample_ep("run condukt via fork", "sonnet");
+        ep.delegation = Some("fork".to_string());
+        let line = serde_json::to_string(&ep).unwrap();
+        let back: Episode = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.delegation.as_deref(), Some("fork"));
+
+        // An OLD episode JSON line recorded before this field existed has no
+        // "delegation" key at all — it must still parse, defaulting to None
+        // rather than failing to deserialize.
+        let old_line = r#"{"ts":1,"title":"legacy task","touched_files":[],"class":"parallel","model":"sonnet","role":"worker","pass":true,"cost_usd":0.0}"#;
+        let back_old: Episode = serde_json::from_str(old_line).unwrap();
+        assert!(back_old.delegation.is_none());
+    }
+
+    #[test]
+    fn delegation_omitted_from_serialized_json_when_none() {
+        let ep = sample_ep("ordinary worker task", "sonnet");
+        assert!(ep.delegation.is_none());
+        let line = serde_json::to_string(&ep).unwrap();
+        assert!(
+            !line.contains("delegation"),
+            "unset delegation must be skipped from serialization (skip_serializing_if), got: {line}"
+        );
     }
 }

@@ -481,6 +481,7 @@ mod tests {
                 labeled_by: None,
                 skill_fingerprint: None,
                 duration_secs: 0.0,
+                delegation: None,
             },
             sim: 0.5,
         }

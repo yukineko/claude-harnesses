@@ -83,6 +83,12 @@ enum Command {
         /// only — never consulted by routing/scoring.
         #[arg(long, default_value_t = 0.0)]
         duration: f64,
+        /// Which delegation strategy (fork | inline) produced this episode,
+        /// when manually recorded for a delegation-strategy comparison. Free
+        /// text, not validated (same looseness as --class). Omit for ordinary
+        /// worker/verifier records unrelated to that comparison.
+        #[arg(long)]
+        delegation: Option<String>,
     },
     /// Apply a human label to a recorded episode, overriding the verifier's
     /// self-pass in policy aggregation. The teacher signal that de-biases the
@@ -442,6 +448,7 @@ fn run_user(cmd: Command) -> Result<()> {
             notes,
             skill_fingerprint,
             duration,
+            delegation,
         } => {
             let raw_touched = split_files(&files);
             // Normalise absolute paths to repo-relative so stored paths are
@@ -466,6 +473,7 @@ fn run_user(cmd: Command) -> Result<()> {
                     Some(skill_fingerprint)
                 },
                 duration_secs: duration,
+                delegation,
             };
             store::append(&cfg.store_path(), &ep).context("appending episode")?;
             if pass && !done_criteria.is_empty() {
@@ -1170,6 +1178,7 @@ mod label_tests {
             labeled_by: None,
             skill_fingerprint: None,
             duration_secs: 0.0,
+            delegation: None,
         }
     }
 

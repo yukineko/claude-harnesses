@@ -57,6 +57,57 @@ fn now_unix_nanos() -> u128 {
         .unwrap_or(0)
 }
 
+/// The ordered steps of a durable atomic [`save`], surfaced through the
+/// [`DurabilitySyncer`] seam so a test can assert the fsync ORDERING that
+/// CA-backlog-001 hardens — an ordering (temp fsync BEFORE the rename, parent-
+/// dir fsync AFTER the rename) that is otherwise invisible to a black-box test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SaveStep {
+    /// The serialized bytes were written in full to the temp file.
+    WriteTmp,
+    /// The temp file was fsync'd (must come BEFORE `Rename`).
+    SyncTmp,
+    /// The temp file was atomically renamed onto the target path.
+    Rename,
+    /// The parent directory was fsync'd (must come AFTER `Rename`).
+    SyncDir,
+}
+
+/// Injectable durability sync operations for [`save`]. Production
+/// ([`RealSyncer`]) performs real `fsync`s; a test can inject a recorder to
+/// OBSERVE that `sync_file` runs before the rename and `sync_dir` runs after
+/// it — the CA-backlog-001 ordering. The `on_step` hook lets an observer mark
+/// the non-sync steps (write/rename) too so the FULL sequence can be asserted;
+/// it defaults to a no-op for production.
+trait DurabilitySyncer {
+    fn on_step(&self, _step: SaveStep) {}
+    /// fsync the fully-written temp file. Called BEFORE the rename. Errors
+    /// propagate (a temp we can't durably flush must fail the save).
+    fn sync_file(&self, f: &std::fs::File) -> std::io::Result<()>;
+    /// fsync the parent directory. Called AFTER the rename. Best-effort.
+    fn sync_dir(&self, dir: &Path);
+}
+
+/// Production syncer: real `fsync` on the temp file (before rename) and a
+/// best-effort `fsync` on the parent directory (after rename), identical to the
+/// inline behavior it replaced. Each method records its step through the no-op
+/// `on_step` hook so the [`SaveStep`] variants are constructed on the
+/// production path too (a recorder overrides `on_step` to observe them).
+struct RealSyncer;
+
+impl DurabilitySyncer for RealSyncer {
+    fn sync_file(&self, f: &std::fs::File) -> std::io::Result<()> {
+        self.on_step(SaveStep::SyncTmp);
+        f.sync_all()
+    }
+    fn sync_dir(&self, dir: &Path) {
+        self.on_step(SaveStep::SyncDir);
+        if let Ok(dir_file) = std::fs::File::open(dir) {
+            let _ = dir_file.sync_all();
+        }
+    }
+}
+
 /// Vec<Task> を tasks.toml に書き戻す (アトミック書き込み: 一時ファイル→rename)。
 ///
 /// CA-backlog-001: the write is made DURABLE — the fully-written temp file is
@@ -67,6 +118,14 @@ fn now_unix_nanos() -> u128 {
 /// (pid + monotonic counter + nanos), so two concurrent degraded writers never
 /// share — and thus clobber — the same temp.
 pub fn save(path: &Path, tasks: &[Task]) -> Result<()> {
+    save_with_syncer(path, tasks, &RealSyncer)
+}
+
+/// The durable atomic-save core, generic over the [`DurabilitySyncer`] seam so
+/// a test can OBSERVE the fsync ordering. Production drives it via [`save`]
+/// with [`RealSyncer`]. The recorded step sequence is always
+/// `WriteTmp → SyncTmp → Rename → SyncDir`.
+fn save_with_syncer<S: DurabilitySyncer>(path: &Path, tasks: &[Task], syncer: &S) -> Result<()> {
     let file = TasksFile {
         task: tasks.to_vec(),
     };
@@ -108,7 +167,12 @@ pub fn save(path: &Path, tasks: &[Task]) -> Result<()> {
             .with_context(|| format!("failed to create tmp file {}", tmp_path.display()))?;
         f.write_all(text.as_bytes())
             .with_context(|| format!("failed to write tmp file {}", tmp_path.display()))?;
-        f.sync_all()
+        syncer.on_step(SaveStep::WriteTmp);
+        // Temp fsync BEFORE the rename (this is the durability ordering the
+        // seam makes observable). Removing this call is exactly the pre-fix
+        // regression the discriminating test guards against.
+        syncer
+            .sync_file(&f)
             .with_context(|| format!("failed to fsync tmp file {}", tmp_path.display()))?;
     }
 
@@ -119,6 +183,7 @@ pub fn save(path: &Path, tasks: &[Task]) -> Result<()> {
             path.display()
         )
     })?;
+    syncer.on_step(SaveStep::Rename);
 
     // CA-backlog-001: fsync the parent directory so the rename (the new
     // directory entry) is itself durable — otherwise a crash right after the
@@ -130,9 +195,9 @@ pub fn save(path: &Path, tasks: &[Task]) -> Result<()> {
         } else {
             parent
         };
-        if let Ok(dir_file) = std::fs::File::open(dir) {
-            let _ = dir_file.sync_all();
-        }
+        // Parent-dir fsync AFTER the rename. Removing this call is the other
+        // half of the pre-fix regression the discriminating test guards.
+        syncer.sync_dir(dir);
     }
 
     Ok(())
@@ -1850,24 +1915,44 @@ mod tests {
         }
     }
 
-    /// F→P regression oracle for CA-backlog-001 (durable atomic save). The
-    /// durable save must publish `tasks.toml` ONLY from a fresh, exclusively-
-    /// created, fsync'd temp — it must never adopt a pre-existing leftover temp
-    /// as its publish source. The old code used a FIXED temp name and
-    /// `std::fs::write` (create-or-truncate), so a leftover `.tasks.toml.tmp`
-    /// from a writer that CRASHED mid-save was silently reused and rename'd
-    /// into place; had that writer crashed after truncating but before fully
-    /// rewriting, the rename would publish a truncated file — exactly the
-    /// "crash in the write window truncates tasks.toml and loses all tasks"
-    /// failure. The durable path (unique `create_new` temp + fsync-before-
-    /// rename) leaves any such foreign leftover untouched. Deterministic:
-    /// reliably RED before the fix (leftover consumed), GREEN after (leftover
-    /// left intact), and the published file is always the complete new set.
+    /// F→P regression oracle for CA-backlog-001 (durable atomic save). Drives
+    /// the save through the [`DurabilitySyncer`] seam with a recording observer
+    /// and asserts the EXACT durability ORDERING: the temp file is fsync'd
+    /// BEFORE the rename and the parent directory is fsync'd AFTER the rename
+    /// (`WriteTmp → SyncTmp → Rename → SyncDir`). This discriminates on the
+    /// fsync steps THEMSELVES, not on the unique temp-naming (CA-003): if the
+    /// two production fsync calls (`sync_file` before rename, `sync_dir` after)
+    /// are removed — the pre-fix write+rename state — the recorded sequence
+    /// loses `SyncTmp`/`SyncDir` and this assertion FAILS. Verified RED with
+    /// both fsync calls removed, GREEN with them present.
     #[test]
-    fn save_does_not_publish_a_leftover_temp_file() {
+    fn save_fsyncs_temp_before_rename_and_dir_after() {
+        use std::cell::RefCell;
+
+        struct RecordingSyncer {
+            steps: RefCell<Vec<SaveStep>>,
+        }
+        impl DurabilitySyncer for RecordingSyncer {
+            fn on_step(&self, step: SaveStep) {
+                self.steps.borrow_mut().push(step);
+            }
+            fn sync_file(&self, _f: &std::fs::File) -> std::io::Result<()> {
+                // Recording the step here (not via a separate hook) is what
+                // couples the record to the CALL: if production stops invoking
+                // `sync_file`, `SyncTmp` is never recorded.
+                self.steps.borrow_mut().push(SaveStep::SyncTmp);
+                Ok(())
+            }
+            fn sync_dir(&self, _dir: &Path) {
+                self.steps.borrow_mut().push(SaveStep::SyncDir);
+            }
+        }
+
         let path = tmp_path();
-        // Establish a good baseline file.
-        save(
+        let rec = RecordingSyncer {
+            steps: RefCell::new(Vec::new()),
+        };
+        save_with_syncer(
             &path,
             &[Task {
                 id: "aaaa1111".to_string(),
@@ -1881,49 +1966,27 @@ mod tests {
                 defer_until: None,
                 weight: 0.0,
             }],
+            &rec,
         )
         .unwrap();
 
-        // Simulate a prior writer that CRASHED mid-save, leaving a partial
-        // garbage temp at the OLD fixed temp path.
-        let leftover = path.with_file_name(".tasks.toml.tmp");
-        std::fs::write(&leftover, b"GARBAGE partial write from a crashed writer").unwrap();
-
-        // A fresh durable save of a new set.
-        save(
-            &path,
-            &[Task {
-                id: "bbbb2222".to_string(),
-                title: "B".to_string(),
-                project: "/repo".to_string(),
-                tags: vec![],
-                status: STATUS_PENDING.to_string(),
-                notes: String::new(),
-                created_at: 200,
-                updated_at: 200,
-                defer_until: None,
-                weight: 0.0,
-            }],
-        )
-        .unwrap();
-
-        // The durable save must NOT have consumed/published the foreign
-        // leftover: it is still present with its original garbage contents.
-        assert!(
-            leftover.exists(),
-            "CA-backlog-001: durable save consumed a leftover temp as its publish \
-             source (a crashed writer's partial temp could thus truncate tasks.toml)"
-        );
         assert_eq!(
-            std::fs::read(&leftover).unwrap(),
-            b"GARBAGE partial write from a crashed writer",
-            "the foreign leftover temp must be left byte-for-byte untouched"
+            *rec.steps.borrow(),
+            vec![
+                SaveStep::WriteTmp,
+                SaveStep::SyncTmp,
+                SaveStep::Rename,
+                SaveStep::SyncDir,
+            ],
+            "CA-backlog-001: durable save must fsync the temp BEFORE the rename \
+             and fsync the parent dir AFTER the rename"
         );
 
-        // And tasks.toml is the complete, correct new set (no data loss).
+        // The file must also actually round-trip (the seam did not skip the
+        // real write/rename).
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].id, "bbbb2222");
+        assert_eq!(loaded[0].id, "aaaa1111");
     }
 
     // --- CA-backlog-002: a claimed task blocks a duplicate re-add -----------

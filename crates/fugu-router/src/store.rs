@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 /// One routing outcome: a task's features, the model that ran it, and whether it
 /// passed verification (plus cost). The k-NN policy learns from these.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Episode {
     /// Unix seconds when recorded (0 if unknown).
     #[serde(default)]
@@ -55,6 +55,39 @@ pub struct Episode {
     /// never consulted by `policy::route`/`decide_bandit`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegation: Option<String>,
+    /// The routing `Decision`'s `basis` ("learned"|"prior"|"gated") that put
+    /// this task on `model`, when the caller (condukt) carried it through from
+    /// `route.json`. `None` when not supplied (manual `record`, or a caller
+    /// predating this field). Measurement-only — never consulted by
+    /// `policy::route`/`decide_bandit`; kept so routing decisions can later be
+    /// correlated against `effective_pass()` to check whether the stated basis
+    /// actually predicted the outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_basis: Option<String>,
+    /// The routing `Decision`'s `confidence` ("high"|"low") at the time this
+    /// task was routed. Same provenance/measurement-only caveats as
+    /// `route_basis`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_confidence: Option<String>,
+    /// The routing `Decision`'s free-text `rationale` at the time this task was
+    /// routed. Same provenance/measurement-only caveats as `route_basis`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_rationale: Option<String>,
+    /// `git diff --stat` insertion/deletion counts for the task's commit(s),
+    /// when the caller could measure them before the branch was merged/removed.
+    /// Measurement-only — never consulted by routing/scoring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines_added: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines_removed: Option<u64>,
+    /// Token usage of the worker/verifier subagent transcript, when the caller
+    /// resolved it (e.g. condukt via `gauge subagents --json` exact agent-id
+    /// match, mirroring cost resolution). Measurement-only — never consulted
+    /// by routing/scoring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_input: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_output: Option<u64>,
 }
 
 fn default_role() -> String {
@@ -377,6 +410,7 @@ mod tests {
             skill_fingerprint: None,
             duration_secs: 0.0,
             delegation: None,
+            ..Default::default()
         }
     }
 
@@ -617,6 +651,7 @@ mod tests {
             skill_fingerprint: None,
             duration_secs: 0.0,
             delegation: None,
+            ..Default::default()
         };
         append(&path, &ep).unwrap();
         // a junk line must not break the load
@@ -674,6 +709,7 @@ mod tests {
                             skill_fingerprint: None,
                             duration_secs: 0.0,
                             delegation: None,
+                            ..Default::default()
                         };
                         append(&path, &ep).unwrap();
                     }
@@ -824,5 +860,62 @@ mod tests {
             !line.contains("delegation"),
             "unset delegation must be skipped from serialization (skip_serializing_if), got: {line}"
         );
+    }
+
+    /// Routing-provenance + lines-changed + token-usage fields round-trip, and
+    /// an OLD episode JSON line recorded before these fields existed still
+    /// parses (defaulting to None) rather than failing to deserialize.
+    #[test]
+    fn routing_provenance_and_measurement_fields_roundtrip_and_default_on_old_lines() {
+        let mut ep = sample_ep("wire the login endpoint", "sonnet");
+        ep.route_basis = Some("learned".to_string());
+        ep.route_confidence = Some("high".to_string());
+        ep.route_rationale = Some("Thompson(cost-adj): sonnet cleared 80%".to_string());
+        ep.lines_added = Some(42);
+        ep.lines_removed = Some(7);
+        ep.tokens_input = Some(12_345);
+        ep.tokens_output = Some(678);
+        let line = serde_json::to_string(&ep).unwrap();
+        let back: Episode = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.route_basis.as_deref(), Some("learned"));
+        assert_eq!(back.route_confidence.as_deref(), Some("high"));
+        assert_eq!(
+            back.route_rationale.as_deref(),
+            Some("Thompson(cost-adj): sonnet cleared 80%")
+        );
+        assert_eq!(back.lines_added, Some(42));
+        assert_eq!(back.lines_removed, Some(7));
+        assert_eq!(back.tokens_input, Some(12_345));
+        assert_eq!(back.tokens_output, Some(678));
+
+        let old_line = r#"{"ts":1,"title":"legacy task","touched_files":[],"class":"parallel","model":"sonnet","role":"worker","pass":true,"cost_usd":0.0}"#;
+        let back_old: Episode = serde_json::from_str(old_line).unwrap();
+        assert!(back_old.route_basis.is_none());
+        assert!(back_old.route_confidence.is_none());
+        assert!(back_old.route_rationale.is_none());
+        assert!(back_old.lines_added.is_none());
+        assert!(back_old.lines_removed.is_none());
+        assert!(back_old.tokens_input.is_none());
+        assert!(back_old.tokens_output.is_none());
+    }
+
+    #[test]
+    fn routing_provenance_and_measurement_fields_omitted_from_json_when_none() {
+        let ep = sample_ep("ordinary worker task", "sonnet");
+        let line = serde_json::to_string(&ep).unwrap();
+        for key in [
+            "route_basis",
+            "route_confidence",
+            "route_rationale",
+            "lines_added",
+            "lines_removed",
+            "tokens_input",
+            "tokens_output",
+        ] {
+            assert!(
+                !line.contains(key),
+                "unset {key} must be skipped from serialization, got: {line}"
+            );
+        }
     }
 }

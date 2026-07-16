@@ -960,6 +960,28 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
    (`gauge subagents --json` に `agent_id`/`cost_usd` が乗っている版) が必要**。それ未満、または
    agentId が解決できない場合は `--cost` に渡した値がそのまま記録される。
 
+1.5. **ルーティング根拠 (basis/confidence/rationale) と変更行数も同じ set で残す (完全 soft・
+   欠けても記録は壊れない)**。今の判断がどの根拠 (basis/confidence/rationale) で下されたかは
+   Phase 2 の `<route.json>` にタスク id ごと既に入っている。これを fugu-router の episode に
+   一緒に残すと、後から「その根拠は実際の pass/fail を予測できていたか」を振り返って検証できる
+   (今は route.json を作った時点で捨てられている)。`git diff --stat` の insertions/deletions も
+   同様に残すと、タスクのサイズと結果の相関を後から見られる。worker が commit した直後、
+   worktree が merge/discard で消える前に計測すること:
+   ```bash
+   RB=$(jq -r --arg t "<t.id>" '.[$t].basis // empty' <route.json> 2>/dev/null || true)
+   RC=$(jq -r --arg t "<t.id>" '.[$t].confidence // empty' <route.json> 2>/dev/null || true)
+   RR=$(jq -r --arg t "<t.id>" '.[$t].rationale // empty' <route.json> 2>/dev/null || true)
+   # worker の worktree (まだ残っていれば) で default_branch との差分行数を数える。
+   STAT=$(git -C "<worker の worktree、無ければ cwd>" diff --numstat "<default_branch>"...HEAD 2>/dev/null || true)
+   LINES_ADDED=$(echo "$STAT" | awk '{a+=$1} END {if (a>0) print a}')
+   LINES_REMOVED=$(echo "$STAT" | awk '{d+=$2} END {if (d>0) print d}')
+   condukt state set --run "$RID" --task "<t.id>" --status verified \
+     ${RB:+--route-basis "$RB"} ${RC:+--route-confidence "$RC"} ${RR:+--route-rationale "$RR"} \
+     ${LINES_ADDED:+--lines-added "$LINES_ADDED"} ${LINES_REMOVED:+--lines-removed "$LINES_REMOVED"}
+   ```
+   route.json が無い / `jq` が無い / `git diff` が失敗しても、該当フラグを素通りするだけで記録
+   自体は壊れない (fugu-router 側は該当フィールドを `None` のまま受け取る)。
+
 2. **記録の発火は自動**。run の全タスクが settled (verified/failed/cancelled) になると、
    condukt の **Stop hook** が `condukt state record-run --all` を呼び、各タスクを 1 件ずつ
    `fugu-router record` に流す。これは **冪等** (`recorded_at` を run に刻むので二重記録しない)
@@ -970,6 +992,10 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
    - `cancelled` タスクは学習信号を持たないので記録対象外。
    - record-run は可能なら `fugu-router fingerprint` を `--skill-fingerprint` に添え、outcome を
      **どの SKILL.md 版で出たか** で層別化する (古い fugu-router で fingerprint が無ければ省略)。
+   - **トークン使用量は完全自動**: 1 で控えた agentId が解決できれば (`gauge` >= 0.3.9)、record-run が
+     `gauge subagents --json` の `tokens_input`/`tokens_output` を同じ agent_id 完全一致で引き、
+     `fugu-router record --tokens-input/--tokens-output` に渡す。SKILL 側で追加の作業は不要 —
+     agentId さえ 1 で `--agent-id` に渡していれば、コストと同じ経路でトークンも記録される。
      版間の pass率/コスト差は `evalkit canary --baseline <旧> --current <新>` が golden replay の
      delta として出す (promptfoo side-by-side 相当)。
 

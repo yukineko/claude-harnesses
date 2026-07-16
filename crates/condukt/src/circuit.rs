@@ -383,6 +383,7 @@ mod tests {
             claimed_at: None,
             started_at: None,
             agent_id: None,
+            ..Default::default()
         }
     }
 

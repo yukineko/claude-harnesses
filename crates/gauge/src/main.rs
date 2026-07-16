@@ -69,7 +69,8 @@ enum Command {
     /// each `Task` invocation, so a caller can record per-task cost. Correlate
     /// on the `description` recorded in the `Task`'s sidecar.
     Subagents {
-        /// Emit JSON: `[{agent_id, agent_type, description, cost_usd, turns}]`.
+        /// Emit JSON: `[{agent_id, agent_type, description, cost_usd, turns,
+        /// tokens_input, tokens_output}]`.
         #[arg(long)]
         json: bool,
         /// Session id whose sub-agents to list. Defaults to the newest transcript.
@@ -375,12 +376,16 @@ fn subagents_cmd(json: bool, session_id: Option<&str>) {
         let arr: Vec<serde_json::Value> = subs
             .iter()
             .map(|s| {
+                let tokens_input: u64 = s.models.values().map(|m| m.input).sum();
+                let tokens_output: u64 = s.models.values().map(|m| m.output).sum();
                 serde_json::json!({
                     "agent_id": s.agent_id,
                     "agent_type": s.agent_type,
                     "description": s.description,
                     "cost_usd": cost_of(s),
                     "turns": s.turns,
+                    "tokens_input": tokens_input,
+                    "tokens_output": tokens_output,
                 })
             })
             .collect();

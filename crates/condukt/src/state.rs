@@ -142,6 +142,31 @@ pub struct TaskState {
     /// `None` = no agent id supplied (legacy behavior: `cost_usd` as manually set).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// The routing `Decision`'s `basis` ("learned"|"prior"|"gated") from
+    /// `route.json` (`fugu-router route --report`), when the skill carried it
+    /// through via `state set --route-basis`. Recorded onto the fugu-router
+    /// episode at record time so routing decisions can later be correlated
+    /// against actual pass/fail outcomes. Measurement only — never consulted
+    /// by condukt's own scheduling/routing. `None` = not supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_basis: Option<String>,
+    /// The routing `Decision`'s `confidence` ("high"|"low") from `route.json`,
+    /// same provenance/measurement-only caveats as `route_basis`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_confidence: Option<String>,
+    /// The routing `Decision`'s free-text `rationale` from `route.json`, same
+    /// provenance/measurement-only caveats as `route_basis`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_rationale: Option<String>,
+    /// `git diff --stat` insertion/deletion counts for this task's commit(s),
+    /// when the skill measured them (e.g. right after the worker commits,
+    /// before merge/worktree cleanup) via `state set --lines-added/--lines-removed`.
+    /// Measurement only — never consulted by scheduling/routing. `None` = not
+    /// supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines_added: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines_removed: Option<u64>,
 }
 
 pub fn now_secs() -> i64 {
@@ -1062,6 +1087,16 @@ pub struct RecordSpec {
     /// present, the caller (record_runs) attempts to resolve the real cost from
     /// `gauge subagents` by exact ID match, overriding `cost_usd` on success.
     pub agent_id: Option<String>,
+    /// Routing-decision provenance (`basis`/`confidence`/`rationale` from
+    /// `route.json`) and measured lines-changed, supplied via `state set
+    /// --route-basis/--route-confidence/--route-rationale/--lines-added/
+    /// --lines-removed`. Measurement only — passed through to the fugu-router
+    /// episode unchanged; never consulted by condukt itself.
+    pub route_basis: Option<String>,
+    pub route_confidence: Option<String>,
+    pub route_rationale: Option<String>,
+    pub lines_added: Option<u64>,
+    pub lines_removed: Option<u64>,
 }
 
 /// Build the outcomes to record for a run, or `None` when the run is not yet
@@ -1134,6 +1169,11 @@ pub fn records_for_run(
                 done_criteria,
                 duration_secs,
                 agent_id: ts.agent_id.clone(),
+                route_basis: ts.route_basis.clone(),
+                route_confidence: ts.route_confidence.clone(),
+                route_rationale: ts.route_rationale.clone(),
+                lines_added: ts.lines_added,
+                lines_removed: ts.lines_removed,
             })
         })
         .collect();
@@ -1172,6 +1212,39 @@ pub fn resolve_agent_cost(agent_id: &str) -> Option<f64> {
     }
     let raw = String::from_utf8_lossy(&out.stdout);
     parse_agent_cost(&raw, agent_id)
+}
+
+/// Pure core of [`resolve_agent_tokens`]: given the raw `gauge subagents --json`
+/// output (`[{agent_id, ..., tokens_input, tokens_output}, ...]`), return the
+/// `(tokens_input, tokens_output)` of the entry whose `agent_id` exactly
+/// matches. `None` on malformed JSON, an empty array, no matching entry, or a
+/// match missing either token field (older `gauge` predating this field) —
+/// never panics.
+fn parse_agent_tokens(json: &str, agent_id: &str) -> Option<(u64, u64)> {
+    let entries: Vec<serde_json::Value> = serde_json::from_str(json).ok()?;
+    let entry = entries
+        .iter()
+        .find(|e| e.get("agent_id").and_then(|v| v.as_str()) == Some(agent_id))?;
+    let input = entry.get("tokens_input")?.as_u64()?;
+    let output = entry.get("tokens_output")?.as_u64()?;
+    Some((input, output))
+}
+
+/// Soft dependency: resolve the real token usage of a Task-tool subagent by
+/// exact `agentId` match against `gauge subagents --json`, mirroring
+/// `resolve_agent_cost`. Any failure (gauge absent, non-zero exit,
+/// unparseable/empty stdout, no matching id, or an older `gauge` without the
+/// token fields) falls through to `None` — never a hard error.
+pub fn resolve_agent_tokens(agent_id: &str) -> Option<(u64, u64)> {
+    let out = std::process::Command::new("gauge")
+        .args(["subagents", "--json"])
+        .output()
+        .ok()?; // spawn failed (not on PATH) → soft-skip
+    if !out.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&out.stdout);
+    parse_agent_tokens(&raw, agent_id)
 }
 
 /// Run the project's test suite (from the repo root) and propagate its result.
@@ -1623,6 +1696,7 @@ mod tests {
                     claimed_at: None,
                     started_at: None,
                     agent_id: None,
+                    ..Default::default()
                 },
                 TaskState {
                     id: "b".into(),
@@ -1639,6 +1713,7 @@ mod tests {
                     claimed_at: None,
                     started_at: None,
                     agent_id: None,
+                    ..Default::default()
                 },
             ],
             paused: false,
@@ -1669,6 +1744,7 @@ mod tests {
                     claimed_at: None,
                     started_at: None,
                     agent_id: None,
+                    ..Default::default()
                 },
                 TaskState {
                     id: "b".into(),
@@ -1685,6 +1761,7 @@ mod tests {
                     claimed_at: None,
                     started_at: None,
                     agent_id: None,
+                    ..Default::default()
                 },
                 TaskState {
                     id: "c".into(),
@@ -1701,6 +1778,7 @@ mod tests {
                     claimed_at: None,
                     started_at: None,
                     agent_id: None,
+                    ..Default::default()
                 },
             ],
             paused: false,
@@ -2083,6 +2161,7 @@ mod tests {
                 claimed_at: None,
                 started_at: None,
                 agent_id: None,
+                ..Default::default()
             }],
             paused: false,
             terminal_label: None,
@@ -2294,6 +2373,7 @@ mod tests {
             claimed_at: None,
             started_at: None,
             agent_id: Some("agent-123".to_string()),
+            ..Default::default()
         };
         let json = serde_json::to_string(&ts).unwrap();
         assert!(json.contains("agent-123"));
@@ -2332,6 +2412,7 @@ mod tests {
                 claimed_at: None,
                 started_at: None,
                 agent_id: None,
+                ..Default::default()
             }],
             paused: false,
             terminal_label: None,
@@ -2391,6 +2472,7 @@ mod tests {
             claimed_at: None,
             started_at: None,
             agent_id: None,
+            ..Default::default()
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert_eq!(ids, vec!["stuck-task".to_string()]);
@@ -2417,6 +2499,7 @@ mod tests {
             claimed_at: None,
             started_at: None,
             agent_id: None,
+            ..Default::default()
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert!(ids.is_empty(), "recent Running task must not be stuck");
@@ -2441,6 +2524,7 @@ mod tests {
             claimed_at: None,
             started_at: None,
             agent_id: None,
+            ..Default::default()
         }]);
         let ids = stuck_task_ids(&run, ttl);
         assert!(
@@ -2472,6 +2556,7 @@ mod tests {
             claimed_at: None,
             started_at: None,
             agent_id: None,
+            ..Default::default()
         }]);
         let t = run.tasks.iter_mut().find(|t| t.id == "t1").unwrap();
         t.status = Status::Pending;
@@ -2506,6 +2591,7 @@ mod tests {
             claimed_at: None,
             started_at: None,
             agent_id: None,
+            ..Default::default()
         }]);
         let t = run.tasks.iter_mut().find(|t| t.id == "t-fail").unwrap();
         t.status = Status::Pending;
@@ -2539,6 +2625,7 @@ mod tests {
                 claimed_at: None,
                 started_at: None,
                 agent_id: None,
+                ..Default::default()
             },
             TaskState {
                 id: "verified-task".into(),
@@ -2555,6 +2642,7 @@ mod tests {
                 claimed_at: None,
                 started_at: None,
                 agent_id: None,
+                ..Default::default()
             },
         ]);
         for t in &run.tasks {
@@ -2589,6 +2677,7 @@ mod tests {
                 claimed_at: None,
                 started_at: None,
                 agent_id: None,
+                ..Default::default()
             },
             TaskState {
                 id: "stuck-2".into(),
@@ -2605,6 +2694,7 @@ mod tests {
                 claimed_at: None,
                 started_at: None,
                 agent_id: None,
+                ..Default::default()
             },
             TaskState {
                 id: "active".into(),
@@ -2621,6 +2711,7 @@ mod tests {
                 claimed_at: None,
                 started_at: None,
                 agent_id: None,
+                ..Default::default()
             },
         ]);
 
@@ -2669,6 +2760,7 @@ mod tests {
             claimed_at: None,
             started_at: None,
             agent_id: None,
+            ..Default::default()
         }]);
         let found = run.tasks.iter().find(|t| t.id == "no-such-task");
         assert!(found.is_none(), "non-existent task id must not be found");
@@ -2753,6 +2845,7 @@ mod tests {
                 claimed_at: None,
                 started_at: None,
                 agent_id: None,
+                ..Default::default()
             },
             TaskState {
                 id: "done-old".into(),
@@ -2769,6 +2862,7 @@ mod tests {
                 claimed_at: None,
                 started_at: None,
                 agent_id: None,
+                ..Default::default()
             },
             TaskState {
                 id: "verified-old".into(),
@@ -2785,6 +2879,7 @@ mod tests {
                 claimed_at: None,
                 started_at: None,
                 agent_id: None,
+                ..Default::default()
             },
         ]);
         let ids = stuck_task_ids(&run, ttl);
@@ -2932,6 +3027,39 @@ mod tests {
         let specs = records_for_run(&run, &dec).unwrap();
         assert_eq!(specs[0].agent_id, Some("agent-xyz".to_string()));
         assert_eq!(specs[1].agent_id, None);
+    }
+
+    /// records_for_run propagates routing-decision provenance and measured
+    /// lines-changed (set via `state set --route-basis/.../--lines-removed`)
+    /// into RecordSpec unchanged; unset tasks stay None.
+    #[test]
+    fn records_for_run_propagates_route_provenance_and_lines_changed() {
+        let dec = Decomposition {
+            goal: "g".into(),
+            tasks: vec![task("a", "Task A", None), task("b", "Task B", None)],
+        };
+        let mut with_route = ts("a", Status::Verified);
+        with_route.route_basis = Some("learned".to_string());
+        with_route.route_confidence = Some("high".to_string());
+        with_route.route_rationale = Some("Thompson(cost-adj): haiku cleared 60%".to_string());
+        with_route.lines_added = Some(12);
+        with_route.lines_removed = Some(3);
+        let without_route = ts("b", Status::Verified);
+        let run = make_run_with_tasks(vec![with_route, without_route]);
+        let specs = records_for_run(&run, &dec).unwrap();
+        assert_eq!(specs[0].route_basis.as_deref(), Some("learned"));
+        assert_eq!(specs[0].route_confidence.as_deref(), Some("high"));
+        assert_eq!(
+            specs[0].route_rationale.as_deref(),
+            Some("Thompson(cost-adj): haiku cleared 60%")
+        );
+        assert_eq!(specs[0].lines_added, Some(12));
+        assert_eq!(specs[0].lines_removed, Some(3));
+        assert_eq!(specs[1].route_basis, None);
+        assert_eq!(specs[1].route_confidence, None);
+        assert_eq!(specs[1].route_rationale, None);
+        assert_eq!(specs[1].lines_added, None);
+        assert_eq!(specs[1].lines_removed, None);
     }
 
     /// duration_secs is derived from started_at/updated_at when both are known.
@@ -3602,5 +3730,44 @@ mod tests {
         let resolved = parse_agent_cost(json, "a1");
         let cost_usd = 5.5;
         assert_eq!(resolved.unwrap_or(cost_usd), 5.5);
+    }
+
+    /// An exact agent_id match returns that entry's (tokens_input, tokens_output).
+    #[test]
+    fn parse_agent_tokens_matches_exact_id() {
+        let json = r#"[
+            {"agent_id": "a1", "cost_usd": 1.23, "turns": 4, "tokens_input": 100, "tokens_output": 200},
+            {"agent_id": "a2", "cost_usd": 9.99, "turns": 1, "tokens_input": 5, "tokens_output": 6}
+        ]"#;
+        assert_eq!(parse_agent_tokens(json, "a1"), Some((100, 200)));
+        assert_eq!(parse_agent_tokens(json, "a2"), Some((5, 6)));
+    }
+
+    /// No entry has the given agent_id → None (caller records no token fields).
+    #[test]
+    fn parse_agent_tokens_no_match_returns_none() {
+        let json = r#"[{"agent_id": "other", "tokens_input": 1, "tokens_output": 2}]"#;
+        assert_eq!(parse_agent_tokens(json, "a1"), None);
+    }
+
+    /// An older `gauge` predating the token fields returns entries without
+    /// tokens_input/tokens_output — must degrade to None, not panic.
+    #[test]
+    fn parse_agent_tokens_missing_fields_returns_none() {
+        let json = r#"[{"agent_id": "a1", "cost_usd": 1.0, "turns": 1}]"#;
+        assert_eq!(parse_agent_tokens(json, "a1"), None);
+    }
+
+    /// Malformed JSON never panics — returns None.
+    #[test]
+    fn parse_agent_tokens_malformed_json_returns_none() {
+        assert_eq!(parse_agent_tokens("not json", "a1"), None);
+        assert_eq!(parse_agent_tokens("{", "a1"), None);
+    }
+
+    /// An empty array (no subagents recorded yet) returns None, not a panic.
+    #[test]
+    fn parse_agent_tokens_empty_array_returns_none() {
+        assert_eq!(parse_agent_tokens("[]", "a1"), None);
     }
 }

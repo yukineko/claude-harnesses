@@ -639,6 +639,11 @@ enum LessonsAction {
     },
 }
 
+// `Set` carries many optional measurement/provenance fields (model/cost/
+// agent-id/findings, routing basis/confidence/rationale, lines-changed)
+// alongside the smaller variants; it's a short-lived CLI arg struct consumed
+// once per process, so the size delta doesn't warrant boxing every field.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum StateAction {
     /// Seed a run from a decomposition JSON; prints the run id on stdout.
@@ -696,6 +701,27 @@ enum StateAction {
         /// records what was learned). Omitted → findings unchanged.
         #[arg(long)]
         findings: Option<String>,
+        /// The routing `Decision`'s `basis` ("learned"|"prior"|"gated") for this
+        /// task from `route.json` (`fugu-router route --report`), recorded onto
+        /// the fugu-router episode at record time. Omitted → unchanged.
+        #[arg(long)]
+        route_basis: Option<String>,
+        /// The routing `Decision`'s `confidence` ("high"|"low") from `route.json`
+        /// for this task. Omitted → unchanged.
+        #[arg(long)]
+        route_confidence: Option<String>,
+        /// The routing `Decision`'s free-text `rationale` from `route.json` for
+        /// this task. Omitted → unchanged.
+        #[arg(long)]
+        route_rationale: Option<String>,
+        /// `git diff --stat` insertion count for this task's commit(s), measured
+        /// by the skill before merge/worktree cleanup. Omitted → unchanged.
+        #[arg(long)]
+        lines_added: Option<u64>,
+        /// `git diff --stat` deletion count for this task's commit(s), measured
+        /// by the skill before merge/worktree cleanup. Omitted → unchanged.
+        #[arg(long)]
+        lines_removed: Option<u64>,
     },
     /// Print a run's full state as JSON.
     Show {
@@ -3157,6 +3183,11 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             cost,
             agent_id,
             findings,
+            route_basis,
+            route_confidence,
+            route_rationale,
+            lines_added,
+            lines_removed,
         } => {
             // Hold the per-run state lock across the entire load → oracle-gate →
             // mutate → save cycle so a concurrent session/worktree cannot lose
@@ -3275,6 +3306,21 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
             if agent_id.is_some() {
                 t.agent_id = agent_id;
+            }
+            if route_basis.is_some() {
+                t.route_basis = route_basis;
+            }
+            if route_confidence.is_some() {
+                t.route_confidence = route_confidence;
+            }
+            if route_rationale.is_some() {
+                t.route_rationale = route_rationale;
+            }
+            if lines_added.is_some() {
+                t.lines_added = lines_added;
+            }
+            if lines_removed.is_some() {
+                t.lines_removed = lines_removed;
             }
             // Findings persist regardless of status (this whole handler runs for
             // any status): a failed/pending/unmerged experiment still records
@@ -4068,6 +4114,27 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
             if let Some(secs) = s.duration_secs {
                 cmd.args(["--duration", &secs.to_string()]);
             }
+            if let Some(b) = &s.route_basis {
+                cmd.args(["--route-basis", b]);
+            }
+            if let Some(c) = &s.route_confidence {
+                cmd.args(["--route-confidence", c]);
+            }
+            if let Some(r) = &s.route_rationale {
+                cmd.args(["--route-rationale", r]);
+            }
+            if let Some(n) = s.lines_added {
+                cmd.args(["--lines-added", &n.to_string()]);
+            }
+            if let Some(n) = s.lines_removed {
+                cmd.args(["--lines-removed", &n.to_string()]);
+            }
+            // Exact-match token resolution, mirroring the cost resolution above:
+            // fail-soft, only emitted when both counts resolve.
+            if let Some((tin, tout)) = s.agent_id.as_deref().and_then(state::resolve_agent_tokens) {
+                cmd.args(["--tokens-input", &tin.to_string()]);
+                cmd.args(["--tokens-output", &tout.to_string()]);
+            }
             // Best-effort: a single failed record must not abort the sweep.
             if let Err(e) = cmd.status() {
                 eprintln!("condukt: fugu-router record failed for '{}': {e}", s.title);
@@ -4421,6 +4488,7 @@ mod state_set_tests {
                 claimed_at: None,
                 started_at: None,
                 agent_id: None,
+                ..Default::default()
             }],
             paused: false,
             terminal_label: None,

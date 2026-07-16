@@ -482,6 +482,7 @@ mod tests {
                 skill_fingerprint: None,
                 duration_secs: 0.0,
                 delegation: None,
+                ..Default::default()
             },
             sim: 0.5,
         }

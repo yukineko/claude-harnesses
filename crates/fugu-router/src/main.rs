@@ -41,6 +41,11 @@ struct Cli {
     command: Command,
 }
 
+// `Record` carries many optional measurement/provenance fields (routing
+// basis/confidence/rationale, lines-changed, token usage) alongside the
+// smaller variants; it's a short-lived CLI arg struct consumed once per
+// process, so the size delta doesn't warrant boxing every field.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     /// Enrich a condukt decomposition: set each task's suggested_model from
@@ -89,6 +94,36 @@ enum Command {
         /// worker/verifier records unrelated to that comparison.
         #[arg(long)]
         delegation: Option<String>,
+        /// The routing `Decision`'s `basis` ("learned"|"prior"|"gated") that
+        /// put this task on --model, when the caller carried it through from
+        /// `route.json` (see `fugu-router route --report`). Measurement
+        /// only — never consulted by routing/scoring. Omit if unknown.
+        #[arg(long)]
+        route_basis: Option<String>,
+        /// The routing `Decision`'s `confidence` ("high"|"low") at route time.
+        /// Same provenance/measurement-only caveats as --route-basis.
+        #[arg(long)]
+        route_confidence: Option<String>,
+        /// The routing `Decision`'s free-text `rationale` at route time. Same
+        /// provenance/measurement-only caveats as --route-basis.
+        #[arg(long)]
+        route_rationale: Option<String>,
+        /// `git diff --stat` insertion count for the task's commit(s), if the
+        /// caller measured it before the branch was merged/removed.
+        #[arg(long)]
+        lines_added: Option<u64>,
+        /// `git diff --stat` deletion count for the task's commit(s), if the
+        /// caller measured it before the branch was merged/removed.
+        #[arg(long)]
+        lines_removed: Option<u64>,
+        /// Input tokens consumed by the worker/verifier subagent, if the
+        /// caller resolved it (e.g. condukt via `gauge subagents --json`).
+        #[arg(long)]
+        tokens_input: Option<u64>,
+        /// Output tokens produced by the worker/verifier subagent, if the
+        /// caller resolved it (e.g. condukt via `gauge subagents --json`).
+        #[arg(long)]
+        tokens_output: Option<u64>,
     },
     /// Check whether an episode of the given class was recorded within the
     /// last N seconds. Exit 0 if found, 1 if not — lets a caller (e.g.
@@ -466,6 +501,13 @@ fn run_user(cmd: Command) -> Result<()> {
             skill_fingerprint,
             duration,
             delegation,
+            route_basis,
+            route_confidence,
+            route_rationale,
+            lines_added,
+            lines_removed,
+            tokens_input,
+            tokens_output,
         } => {
             let raw_touched = split_files(&files);
             // Normalise absolute paths to repo-relative so stored paths are
@@ -491,6 +533,13 @@ fn run_user(cmd: Command) -> Result<()> {
                 },
                 duration_secs: duration,
                 delegation,
+                route_basis,
+                route_confidence,
+                route_rationale,
+                lines_added,
+                lines_removed,
+                tokens_input,
+                tokens_output,
             };
             store::append(&cfg.store_path(), &ep).context("appending episode")?;
             if pass && !done_criteria.is_empty() {
@@ -1297,6 +1346,7 @@ mod delegation_stats_tests {
             skill_fingerprint: None,
             duration_secs: duration,
             delegation: delegation.map(|s| s.to_string()),
+            ..Default::default()
         }
     }
 
@@ -1423,6 +1473,7 @@ mod label_tests {
             skill_fingerprint: None,
             duration_secs: 0.0,
             delegation: None,
+            ..Default::default()
         }
     }
 

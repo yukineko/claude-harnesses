@@ -350,9 +350,15 @@ fn unsatisfied_prop_ids(props: &[Property], findings: Option<&str>) -> Vec<&'sta
         .iter()
         .filter(|p| {
             let id = p.id.to_lowercase();
-            !lower
-                .lines()
-                .any(|line| verdict_for_id(line, &id) == Some(true))
+            // This property's own verdict, from its FIRST anchored verdict line.
+            // `None` means the checker emitted NO verdict line for it — it was
+            // never evaluated, which is NOT the same as checked-and-failed. Only
+            // a property that was checked and FAILED (`Some(false)`) is a fleet
+            // violation; a never-evaluated (unchecked) property must not be
+            // reported violated / pollute the fleet-correlation store, per
+            // property (CA-propguard-06).
+            let verdict = lower.lines().find_map(|line| verdict_for_id(line, &id));
+            verdict == Some(false)
         })
         .map(|p| p.id)
         .collect()
@@ -706,9 +712,23 @@ fn verdict_for_id(line: &str, id: &str) -> Option<bool> {
         Some(c) if c == ':' || c.is_whitespace() => {}
         _ => return None,
     }
-    // Read the verdict from this property's own line only. PASS iff it says
-    // "pass" and not "fail".
-    Some(line.contains("pass") && !line.contains("fail"))
+    // Read the verdict from the STRUCTURED token immediately following the id
+    // (after an optional ':' separator), NOT a substring search of the free-text
+    // reason. A substring search misparses a PASS whose reason merely mentions
+    // "fail"/"failure"/"cannot fail" as a FAIL, undercounting a satisfied
+    // property (CA-propguard-05). The leading alphabetic token is the verdict;
+    // anything trailing it (the human reason) is ignored.
+    let token: String = after
+        .trim_start_matches(|c: char| c == ':' || c.is_whitespace())
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
+    match token.as_str() {
+        "pass" => Some(true),
+        // FAIL, or any other/garbled token on this property's OWN line, fails
+        // closed: the property was named but not clearly PASSed.
+        _ => Some(false),
+    }
 }
 
 /// Parse `PROP <id>: PASS|FAIL` lines. A property is counted satisfied only when
@@ -1462,5 +1482,55 @@ PROP output-schema: PASS";
             }
             CheckOutcome::Error(e) => panic!("should parse: {e}"),
         }
+    }
+
+    // ── CA-propguard-05: a PASS verdict whose free-text reason merely mentions
+    //    "fail" (e.g. "cannot fail", "no failure") must stay PASS. The verdict is
+    //    the structured token after the id, not a substring of the reason. ───────
+    #[test]
+    fn pass_verdict_with_fail_in_reason_stays_pass() {
+        let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
+        let out = "\
+PROP error-path: PASS — all error branches handled, cannot fail silently\n\
+PROP output-schema: PASS — no failure modes changed\n\
+PROP determinism: FAIL — hidden RNG dependency";
+        match parse_checker_output(out, &props) {
+            CheckOutcome::Verified { satisfied, .. } => {
+                // Both PASS lines mention "fail" in prose; only determinism is a
+                // real FAIL. A substring parser would score 0 here.
+                assert_eq!(
+                    satisfied, 2,
+                    "PASS verdicts whose reason mentions 'fail' must stay PASS"
+                );
+            }
+            CheckOutcome::Error(e) => panic!("should parse: {e}"),
+        }
+        // And such a PASS must NOT be reported as a fleet violation.
+        let violated = unsatisfied_prop_ids(&props, Some(out));
+        assert_eq!(
+            violated,
+            vec!["determinism"],
+            "a PASS whose reason mentions 'fail' must not be reported violated"
+        );
+    }
+
+    // ── CA-propguard-06: a property the subprocess checker emitted NO verdict
+    //    line for is NEVER-EVALUATED, not checked-and-failed — it must not be
+    //    reported violated to the fleet-correlation store (per-property grain). ──
+    #[test]
+    fn never_evaluated_property_not_reported_violated() {
+        let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
+        // Checker emitted verdicts only for error-path (FAIL) and output-schema
+        // (PASS); determinism got NO line at all → never evaluated.
+        let out = "\
+PROP error-path: FAIL — panics on empty input\n\
+PROP output-schema: PASS";
+        let violated = unsatisfied_prop_ids(&props, Some(out));
+        assert_eq!(
+            violated,
+            vec!["error-path"],
+            "only the checked-and-FAILED property is violated; the never-evaluated \
+             property must not be reported (or pollute the correlation store)"
+        );
     }
 }

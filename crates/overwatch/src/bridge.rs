@@ -178,6 +178,65 @@ fn build_notes(f: &ReviewFinding, now: i64, freshness: Option<&TestFreshness>) -
     notes
 }
 
+/// Stable content fingerprint for a finding, kept **in lockstep** with
+/// [`review_queue::finding_fingerprint`] (the same key that
+/// [`review_queue::dedup_findings`] groups duplicates on): `source` plus the
+/// normalized `file`/`summary`, joined with a unit-separator so no field value
+/// can forge a collision. This is the finding's *stable* identity — unlike the
+/// dedup **representative id**, which rotates to the newest record's
+/// `finding_id` each round. The to-backlog idempotency check keys on this
+/// signature so a recurring finding surfacing under a fresh representative id is
+/// still recognized as already-bridged (CA-overwatch-01).
+fn finding_fingerprint(f: &ReviewFinding) -> String {
+    fn normalize(s: &str) -> String {
+        s.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase()
+    }
+    let file = normalize(f.file.as_deref().unwrap_or(""));
+    let summary = normalize(&f.summary);
+    format!("{}\u{1f}{}\u{1f}{}", f.source, file, summary)
+}
+
+/// Pure planner: given the deduped representative findings, the raw finding
+/// records, and the already-bridged ledger (bare finding-ids — also the
+/// review-metrics "resolved" source), decide which representatives still need a
+/// `backlog add`.
+///
+/// Idempotency keys on the **stable fingerprint**, not the rotating
+/// representative id. [`review_queue::dedup_findings`] collapses a recurring
+/// finding to ONE group whose representative is the newest (`ts`) record, so a
+/// finding re-recorded under a fresh `finding_id` each audit round rotates the
+/// representative id; an id-only check would then fail to match the prior
+/// round's ledger entry and re-bridge a DUPLICATE. Instead we take the
+/// fingerprints of every raw record whose bare id is already in the ledger — the
+/// recurring finding's prior record persists in `review_findings.jsonl` and
+/// shares this fingerprint — so the group is recognized as already-bridged
+/// however the representative id rotates. Deterministic (input order preserved,
+/// no hash-order dependence). The ledger contract is untouched: callers still
+/// record the bare representative `finding_id`.
+fn plan_finding_bridges<'a>(
+    deduped: &'a [(ReviewFinding, u32)],
+    raw_findings: &[ReviewFinding],
+    already: &HashSet<String>,
+) -> Vec<&'a ReviewFinding> {
+    let bridged_fingerprints: HashSet<String> = raw_findings
+        .iter()
+        .filter(|f| already.contains(&f.finding_id))
+        .map(finding_fingerprint)
+        .collect();
+
+    deduped
+        .iter()
+        .filter(|(f, _)| {
+            !already.contains(&f.finding_id)
+                && !bridged_fingerprints.contains(&finding_fingerprint(f))
+        })
+        .map(|(f, _)| f)
+        .collect()
+}
+
 /// Read the confirmed findings, forward each not-yet-bridged one to the backlog,
 /// and record the successful bridges. Always returns `Ok(())` (fail-soft).
 pub fn to_backlog() -> Result<()> {
@@ -220,6 +279,10 @@ fn run_in(cwd: &Path) -> Result<()> {
         .collect();
     let planned = plan_entry_adds(&entry_rows, &already_entries);
 
+    // Which deduped findings still need bridging — keyed on the STABLE
+    // fingerprint, not the rotating dedup representative id (CA-overwatch-01).
+    let to_bridge = plan_finding_bridges(&deduped, &findings, &already_findings);
+
     // 3. Backlog binary (fail-soft when absent).
     let backlog = match resolve_backlog_bin() {
         Some(b) => b,
@@ -245,10 +308,7 @@ fn run_in(cwd: &Path) -> Result<()> {
     let now = store::now();
     let mut bridged_now = 0usize;
 
-    for (f, _occurrences) in &deduped {
-        if already_findings.contains(&f.finding_id) {
-            continue; // idempotent: already forwarded in a prior round.
-        }
+    for &f in &to_bridge {
         let priority = severity_to_priority(f.severity.as_deref());
         // Regression-test freshness (fail-soft): reverse-lookup a
         // `#[ignore = "<finding-id>: ..."]` test and re-run it. Any failure to
@@ -543,5 +603,88 @@ mod tests {
         let planned = plan_entry_adds(&rows, &HashSet::new());
         assert_eq!(planned.len(), 1);
         assert_eq!(planned[0].tag, "rollback");
+    }
+
+    // --- stable-fingerprint idempotency (CA-overwatch-01) ---------------------
+
+    fn recurring_finding(id: &str, ts: i64) -> ReviewFinding {
+        // Same source + file + summary across rounds → same stable fingerprint;
+        // only the id and ts change (the Continuous-Audit loop mints a fresh id
+        // each round for a still-confirmed finding).
+        ReviewFinding::new(
+            id.to_string(),
+            "continuous-audit".to_string(),
+            Some("high".to_string()),
+            "unchecked unwrap in foo".to_string(),
+            Some("src/foo.rs".to_string()),
+            None,
+            ts,
+        )
+    }
+
+    #[test]
+    fn recurring_finding_under_rotating_representative_id_bridges_once() {
+        // Round 1: only F-1 exists; nothing bridged yet → it is planned once and
+        // the bridge records its bare id in the ledger (the review-metrics
+        // "resolved" source).
+        let f1 = recurring_finding("F-1", 100);
+        let round1_raw = vec![f1.clone()];
+        let round1_dedup = review_queue::dedup_findings(&round1_raw);
+        let none_bridged = HashSet::new();
+        let r1 = plan_finding_bridges(&round1_dedup, &round1_raw, &none_bridged);
+        assert_eq!(r1.len(), 1);
+        assert_eq!(r1[0].finding_id, "F-1");
+
+        // Ledger now holds the bare representative id (contract preserved).
+        let already: HashSet<String> = ["F-1".to_string()].into_iter().collect();
+
+        // Round 2: the SAME underlying finding recurs under a FRESH id (newer
+        // ts). dedup_findings collapses both into one group and ROTATES the
+        // representative to the newest record (F-2).
+        let f2 = recurring_finding("F-2", 200);
+        let round2_raw = vec![f1.clone(), f2.clone()];
+        let round2_dedup = review_queue::dedup_findings(&round2_raw);
+        assert_eq!(
+            round2_dedup.len(),
+            1,
+            "same fingerprint under different ids must collapse to one group"
+        );
+        assert_eq!(
+            round2_dedup[0].0.finding_id, "F-2",
+            "representative id rotates to the newest record"
+        );
+
+        // The recurring finding is recognized as already-bridged via its stable
+        // fingerprint (NOT the rotated representative id F-2, which is absent
+        // from the ledger) and is therefore NOT re-added. An id-only check
+        // (the pre-fix behavior) would plan F-2 here and double-bridge.
+        let r2 = plan_finding_bridges(&round2_dedup, &round2_raw, &already);
+        assert!(
+            r2.is_empty(),
+            "recurring finding under a rotated representative id must not re-bridge: {:?}",
+            r2.iter().map(|f| &f.finding_id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn distinct_findings_still_bridge_independently() {
+        // Guard against over-suppression: a genuinely different finding (distinct
+        // fingerprint) is still planned even when another finding is bridged.
+        let bridged = recurring_finding("F-1", 100);
+        let other = ReviewFinding::new(
+            "F-9".to_string(),
+            "continuous-audit".to_string(),
+            Some("high".to_string()),
+            "different issue entirely".to_string(),
+            Some("src/bar.rs".to_string()),
+            None,
+            150,
+        );
+        let raw = vec![bridged.clone(), other.clone()];
+        let deduped = review_queue::dedup_findings(&raw);
+        let already: HashSet<String> = ["F-1".to_string()].into_iter().collect();
+        let planned = plan_finding_bridges(&deduped, &raw, &already);
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].finding_id, "F-9");
     }
 }

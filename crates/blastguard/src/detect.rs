@@ -169,16 +169,18 @@ fn split_segments(cmd: &str) -> Vec<String> {
 }
 
 /// Find the first single `>` redirect outside quotes and return its target
-/// token. Returns None for `>>`, `&>>`, `2>`, `>&` and quoted `>` (but `&>` —
-/// the combined stdout+stderr truncating form — yields its target).
+/// token. Returns None for `>>`, `&>>`, `2>`, `>&<digit>` (fd dup) and quoted
+/// `>` (but `&>` and `>&<filename>` — the combined stdout+stderr truncating
+/// forms — yield their target).
 #[cfg(test)]
 fn single_redirect_target(seg: &str) -> Option<String> {
     redirect_targets(seg).into_iter().next()
 }
 
 /// Every single `>` truncating-redirect target on the line, in order, outside
-/// quotes. Skips `>>`, `&>>`, `2>`, `>&`, quoted `>`, Rust arrows (`->`) and
-/// angle-bracket placeholders (`<value>`). Scanning the *whole* line (rather
+/// quotes. Skips `>>`, `&>>`, `2>`, `>&<digit>` (fd dup), quoted `>`, Rust
+/// arrows (`->`) and angle-bracket placeholders (`<value>`); catches the
+/// truncating `>&<filename>` mirror of `&>`. Scanning the *whole* line (rather
 /// than pre-split segments) keeps the fd-dup context (`2>&1`, `>&2`) intact
 /// while still catching a truncating redirect in any later segment.
 fn redirect_targets(seg: &str) -> Vec<String> {
@@ -214,14 +216,43 @@ fn redirect_targets(seg: &str) -> Vec<String> {
                 }
                 &bytes[s..i] != b"1"
             };
+            // `>&<target>` is an fd DUPLICATION / fd-CLOSE (safe to skip) ONLY
+            // when the ENTIRE target token is all ASCII digits (`>&2`, `>&1`,
+            // `>&02`, `1>&2`) or the fd-close `-` (`>&-`, bash touches no file).
+            // A target that merely STARTS with a digit but contains ANY
+            // non-digit (`>&2x`, `>&2.txt`, `>&10.log`) is a FILENAME — the
+            // bash MIRROR of `&>` — and truncates BOTH stdout and stderr into
+            // that file, so it must NOT be skipped. Scan the FULL token after
+            // `&` (mirroring how `explicit_nonstdout_fd` scans the full digit
+            // run BEFORE `>`) and require it to terminate at whitespace / a
+            // command terminator / end-of-token.
+            let fd_dup_amp = next == b'&' && {
+                let tstart = i + 2;
+                let mut k = tstart;
+                while k < bytes.len() {
+                    let ck = bytes[k];
+                    if ck.is_ascii_whitespace()
+                        || ck == b';'
+                        || ck == b'|'
+                        || ck == b'&'
+                        || ck == b'>'
+                    {
+                        break;
+                    }
+                    k += 1;
+                }
+                let tok = &bytes[tstart..k];
+                // All-digit fd number (>=1 digit) => dup; bare `-` => fd close.
+                (!tok.is_empty() && tok.iter().all(u8::is_ascii_digit)) || tok == b"-"
+            };
             // Skip append `>>`, fd dup forms, and stderr/other-fd forms.
             // NOTE: `&>` (prev == `&`, single `>`) is NOT an fd-dup form — it is
             // the combined stdout+stderr TRUNCATING redirect (`echo x &> f` /
             // `&>f`), so it must fall through and be read as a real truncating
             // target. Only the APPEND form `&>>` (caught here by `next == b'>'`)
             // is non-truncating and stays skipped. (`2>&1`, `>&2` are still
-            // skipped via `next == b'&'`.)
-            if next == b'>' || prev == b'>' || explicit_nonstdout_fd || next == b'&' {
+            // skipped via the `fd_dup_amp` fd-dup clause.)
+            if next == b'>' || prev == b'>' || explicit_nonstdout_fd || fd_dup_amp {
                 i += 1;
                 continue;
             }
@@ -244,6 +275,12 @@ fn redirect_targets(seg: &str) -> Vec<String> {
             // char. (Casting a continuation byte `as char` could read as
             // U+00A0 no-break-space and break mid-character → panic.)
             let mut j = i + 1;
+            // `>&<filename>` (the `&>` mirror): the `&` immediately follows `>`.
+            // Step over it so we read the FILENAME target, not an empty token.
+            // (`>&<digit>` fd DUPs were already skipped above via `fd_dup_amp`.)
+            if bytes.get(j) == Some(&b'&') {
+                j += 1;
+            }
             while j < bytes.len() && bytes[j].is_ascii_whitespace() {
                 j += 1;
             }
@@ -256,7 +293,12 @@ fn redirect_targets(seg: &str) -> Vec<String> {
                 }
                 j += 1;
             }
-            targets.push(seg[start..j].to_string());
+            let tok = &seg[start..j];
+            // A bare `-` target is an fd CLOSE (`>&-` / `>& -`), not a file —
+            // bash touches no file, so it is non-destructive.
+            if tok != "-" {
+                targets.push(tok.to_string());
+            }
             i = j;
             continue;
         }
@@ -1016,6 +1058,47 @@ mod tests {
         // fd-dup forms remain unaffected.
         assert_eq!(bash("cargo test 2>&1"), Decision::Allow);
         assert_eq!(bash("make >&2"), Decision::Allow);
+    }
+
+    #[test]
+    fn ca_blastguard_08_gt_ampersand_filename_truncating_redirect_is_denied() {
+        // CA-blastguard-08: `>&<filename>` is the bash MIRROR of `&>` — it
+        // truncates BOTH stdout and stderr into the named file. The classifier
+        // used to skip EVERY `>&` form as an fd-dup, letting `cmd >& file`
+        // through (fail-OPEN). Only an ALL-DIGIT `>&<n>` is a real fd DUP.
+        assert!(bash("echo x >& out.txt").is_deny());
+        assert!(bash("echo x >&out.txt").is_deny()); // no-space form
+        assert!(bash("cat a >& b.log").is_deny());
+        // fd DUPLICATION forms (all-digit target) remain safe/allowed.
+        assert_eq!(bash("make >&2"), Decision::Allow);
+        assert_eq!(bash("make >&1"), Decision::Allow);
+        assert_eq!(bash("cargo test 2>&1"), Decision::Allow);
+        assert_eq!(bash("run 1>&2"), Decision::Allow);
+        // The `&>` twin behavior is unchanged: truncating denied, append allowed.
+        assert!(bash("echo x &> target").is_deny());
+        assert_eq!(bash("echo x &>> log.txt"), Decision::Allow);
+    }
+
+    #[test]
+    fn ca_blastguard_08_gt_ampersand_digit_prefixed_filename_is_denied() {
+        // Bypass of the first fix: a `>&` target that merely STARTS with a
+        // digit but contains ANY non-digit (`2x`, `2.txt`, `10.log`) is a
+        // FILENAME (real bash truncates it), not an fd number. A single-byte
+        // "next-is-digit" guard wrongly classified these as fd-dups and let
+        // them through — the same fail-open class, narrowed. They must Deny.
+        assert!(bash("echo x >&2x").is_deny());
+        assert!(bash("echo x >&2.txt").is_deny());
+        assert!(bash("echo x >&10.log").is_deny());
+        // True fd DUPs — the ENTIRE target token is digits — stay Allowed,
+        // including leading-zero runs and multi-fd/prefixed forms.
+        assert_eq!(bash("echo x >&2"), Decision::Allow);
+        assert_eq!(bash("echo x >&1"), Decision::Allow);
+        assert_eq!(bash("echo x >&02"), Decision::Allow); // leading-zero digit run
+        assert_eq!(bash("cargo test 2>&1"), Decision::Allow);
+        assert_eq!(bash("run 1>&2"), Decision::Allow);
+        assert_eq!(bash("foo 2>&1"), Decision::Allow);
+        // fd CLOSE (`>&-`) touches no file — non-destructive, must NOT over-deny.
+        assert_eq!(bash("echo x >&-"), Decision::Allow);
     }
 
     #[test]

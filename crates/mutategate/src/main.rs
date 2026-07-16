@@ -19,7 +19,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use mutategate::{evaluate, parse_outcomes, GateOutcome};
+use mutategate::{evaluate, parse_outcomes, GateOutcome, MutationSummary};
 
 /// Default minimum kill-rate. 0.80 mirrors the practical robustness bar used by
 /// established mutation tools (e.g. PIT) and the Meta ACH line of work: below it,
@@ -84,14 +84,7 @@ fn main() -> ExitCode {
     let s = &outcome.summary;
 
     println!("mutategate: mutation kill-rate gate");
-    println!(
-        "  mutants: {} viable ({} caught, {} timeout, {} missed) + {} unviable",
-        s.viable(),
-        s.caught,
-        s.timeout,
-        s.missed,
-        s.unviable,
-    );
+    println!("{}", format_mutants_line(s));
     match outcome.kill_rate {
         Some(kr) => println!(
             "  kill-rate: {:.1}%   threshold: {:.1}%",
@@ -112,6 +105,24 @@ fn main() -> ExitCode {
         emit_violation(&outcome, &cli.outcomes);
         ExitCode::from(1)
     }
+}
+
+/// Render the one-line `mutants:` breakdown printed for every run. The viable
+/// breakdown must enumerate **every** state that `MutationSummary::viable()`
+/// counts — `caught + timeout + missed + unknown` — so the parts always sum to
+/// the printed viable count. Omitting `unknown` (as an earlier version did) made
+/// the breakdown under-sum whenever a mutant carried an unrecognised summary
+/// state (CA-mutategate-04). Pure/testable: no I/O.
+fn format_mutants_line(s: &MutationSummary) -> String {
+    format!(
+        "  mutants: {} viable ({} caught, {} timeout, {} missed, {} unknown) + {} unviable",
+        s.viable(),
+        s.caught,
+        s.timeout,
+        s.missed,
+        s.unknown,
+        s.unviable,
+    )
 }
 
 /// Deterministic, non-empty reason-class token identifying *why* the gate
@@ -186,6 +197,34 @@ mod tests {
         assert_eq!(
             failure_reason_class(&outcome(Some(0.5))),
             failure_reason_class(&outcome(Some(0.5)))
+        );
+    }
+
+    // ── CA-mutategate-04: the printed viable breakdown must account for
+    //    `unknown`, so caught + timeout + missed + unknown sums to the viable
+    //    count. Omitting unknown made the breakdown under-sum whenever any
+    //    mutant carried an unrecognised summary state. ──────────────────────
+    #[test]
+    fn mutants_line_breakdown_accounts_for_unknown() {
+        let s = MutationSummary {
+            caught: 3,
+            missed: 2,
+            timeout: 1,
+            unviable: 4,
+            unknown: 5,
+            ..Default::default()
+        };
+        // viable = caught(3) + timeout(1) + missed(2) + unknown(5) = 11.
+        assert_eq!(s.viable(), 11);
+        let line = format_mutants_line(&s);
+        assert!(
+            line.contains("11 viable"),
+            "line should report the viable count: {line}"
+        );
+        assert!(
+            line.contains("5 unknown"),
+            "the viable breakdown omits `unknown`, so caught+timeout+missed does \
+             not sum to the viable count: {line}"
         );
     }
 }

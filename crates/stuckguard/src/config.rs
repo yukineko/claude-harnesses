@@ -220,7 +220,13 @@ impl Config {
         cfg.similarity_threshold = cfg
             .similarity_threshold
             .clamp(MIN_SIMILARITY_THRESHOLD, 1.0);
-        cfg.oscillation_threshold = cfg.oscillation_threshold.max(1);
+        // CA-stuckguard-05: the number of edit reversals is bounded by the
+        // number of edits in the window minus one (each later edit counts at
+        // most one reversal, the first can't), i.e. at most `window - 1`. An
+        // `oscillation_threshold >= window` can therefore never be reached and
+        // silently disables oscillation detection. Floor at 1 and clamp down to
+        // `window - 1` (fail-safe over-detect), mirroring the sibling clamps.
+        cfg.oscillation_threshold = cfg.oscillation_threshold.max(1).min(cfg.window - 1);
         cfg.escalate_after = cfg.escalate_after.max(1);
         cfg.progress_min_window = cfg.progress_min_window.max(2);
         cfg.progress_score_threshold = cfg
@@ -376,6 +382,67 @@ mod tests {
         assert_eq!(
             cfg.progress_score_threshold, MIN_PROGRESS_SCORE_THRESHOLD,
             "a 0.0 misconfig must degrade to the positive minimum floor"
+        );
+    }
+
+    /// CA-stuckguard-05: `oscillation_threshold` was floored with `.max(1)` but
+    /// never clamped against `window`. The reversal count is bounded by
+    /// `window - 1` (each later edit counts at most one reversal, the first can
+    /// never be one), so a threshold `>= window` can never be reached and
+    /// silently disables oscillation detection. `load()` must clamp it down to
+    /// at most `window - 1`. Before the fix this is RED: `oscillation_threshold
+    /// = 10` with `window = 5` survives sanitize unchanged at 10 (> window-1),
+    /// and the behavioral back-and-forth window below never trips.
+    #[test]
+    fn oscillation_threshold_clamped_below_window() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            Config::project_path(dir.path()),
+            "window = 5\noscillation_threshold = 10\n",
+        )
+        .unwrap();
+        let cfg = Config::load(dir.path());
+        assert_eq!(cfg.window, 5);
+        assert!(
+            cfg.oscillation_threshold < cfg.window,
+            "oscillation_threshold must be clamped to at most window-1 so it can \
+             still be reached (reversals are bounded by window-1); got {} with \
+             window {}",
+            cfg.oscillation_threshold,
+            cfg.window
+        );
+
+        // Behavioral: with the clamp, a threshold configured >= window still
+        // leaves oscillation detection able to fire once the window fills with
+        // back-and-forth edits (A->B, B->A, ... = window-1 reversals).
+        use crate::detect::detect;
+        use crate::sig::build;
+        let edit = |old: &str, new: &str| {
+            build(
+                "Edit",
+                Some(&serde_json::json!({
+                    "file_path": "f.rs",
+                    "old_string": old,
+                    "new_string": new,
+                })),
+                None,
+                true,
+            )
+            .unwrap()
+        };
+        let window = vec![
+            edit("A", "B"),
+            edit("B", "A"),
+            edit("A", "B"),
+            edit("B", "A"),
+            edit("A", "B"),
+        ];
+        let trip = detect(&window, &cfg);
+        assert!(
+            trip.is_some(),
+            "oscillation must still be detectable after clamping the threshold \
+             below window; effective threshold {}",
+            cfg.oscillation_threshold
         );
     }
 }

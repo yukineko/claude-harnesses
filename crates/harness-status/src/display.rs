@@ -4,6 +4,7 @@ use crate::budget::BudgetStatus;
 use crate::hooks::{sess8, HookLatencyReport};
 use crate::hooks_health::HooksHealthReport;
 use crate::inject::{key8, InjectReport};
+use crate::path_shadow::ShadowedBinary;
 use crate::progress::ProgressStatus;
 use crate::sessions::SessionSummary;
 
@@ -18,6 +19,7 @@ pub struct StatusReport<'a> {
     pub hooks: &'a HookLatencyReport,
     pub inject: &'a InjectReport,
     pub hooks_health: &'a HooksHealthReport,
+    pub path_shadow: &'a [ShadowedBinary],
 }
 
 pub fn print_status(report: &StatusReport, cwd_display: &str) {
@@ -29,6 +31,7 @@ pub fn print_status(report: &StatusReport, cwd_display: &str) {
         hooks,
         inject,
         hooks_health,
+        path_shadow,
     } = *report;
     println!("╔══════════════════════════════════════════════╗");
     println!("║         harness-status  ({today})         ║");
@@ -152,6 +155,22 @@ pub fn print_status(report: &StatusReport, cwd_display: &str) {
         }
     }
     println!();
+
+    // PATH shadowing: a stray standalone binary (e.g. a stale ~/.cargo/bin
+    // copy) resolving before the up-to-date plugin-cache copy on bare-name
+    // PATH lookup.
+    println!("── PATH shadowing (stray binaries) ───────────────");
+    if path_shadow.is_empty() {
+        println!("  no PATH-shadowed plugin binaries");
+    } else {
+        for s in path_shadow {
+            println!(
+                "  ⚠ SHADOWED  {} | {} shadows {}",
+                s.name, s.shadowing_path, s.cache_path
+            );
+        }
+    }
+    println!();
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -171,6 +190,7 @@ pub fn print_json(report: &StatusReport) {
         "hook_latency": report.hooks,
         "inject": report.inject,
         "hooks_health": report.hooks_health,
+        "path_shadow": report.path_shadow,
     });
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
 }

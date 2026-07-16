@@ -3,6 +3,7 @@ mod display;
 mod hooks;
 mod hooks_health;
 mod inject;
+mod path_shadow;
 mod plugins;
 mod progress;
 mod sessions;
@@ -43,6 +44,9 @@ enum Command {
     Plugins,
     /// Check registered hooks in ~/.claude/settings.json for missing binaries
     HooksHealth,
+    /// Check whether a stray PATH binary (e.g. a stale ~/.cargo/bin copy)
+    /// shadows a plugin-cache binary of the same name
+    PathShadow,
     /// SessionStart hook: warn (via additionalContext) only when a registered
     /// hook binary is missing; silent otherwise. Never breaks the turn.
     SessionStart,
@@ -239,6 +243,24 @@ fn main() {
                 }
             }
         }
+        Some(Command::PathShadow) => {
+            let shadowed = path_shadow::detect();
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&shadowed).unwrap_or_default()
+                );
+            } else if shadowed.is_empty() {
+                println!("[no PATH-shadowed plugin binaries]");
+            } else {
+                for s in &shadowed {
+                    println!(
+                        "⚠ shadowed binary: {} — {} shadows plugin cache {}",
+                        s.name, s.shadowing_path, s.cache_path
+                    );
+                }
+            }
+        }
         Some(Command::SessionStart) => {
             harness_core::hook::run_hook(|| {
                 // Read (and discard) stdin only if actually piped, mirroring the
@@ -247,24 +269,43 @@ fn main() {
                 // citizen w.r.t. stdin handling.
                 let _ = harness_core::hook::read_stdin_if_piped();
                 let r = hooks_health::read();
+                let shadowed = path_shadow::detect();
+                let mut sections = Vec::new();
                 if !r.missing.is_empty() {
                     let lines: Vec<String> = r
                         .missing
                         .iter()
                         .map(|m| format!("  ⚠ {} ({}): {}", m.event, m.binary_path, m.command))
                         .collect();
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "additionalContext": format!(
-                                "harness-status: {} 件の登録済みhookのbinaryが見つかりません（rollout未実行の可能性）:\n{}\n`harness-status hooks-health` で詳細確認、`scripts/rollout-plugins.sh` で反映してください。",
-                                r.missing.len(),
-                                lines.join("\n")
+                    sections.push(format!(
+                        "harness-status: {} 件の登録済みhookのbinaryが見つかりません（rollout未実行の可能性）:\n{}\n`harness-status hooks-health` で詳細確認、`scripts/rollout-plugins.sh` で反映してください。",
+                        r.missing.len(),
+                        lines.join("\n")
+                    ));
+                }
+                if !shadowed.is_empty() {
+                    let lines: Vec<String> = shadowed
+                        .iter()
+                        .map(|s| {
+                            format!(
+                                "  ⚠ {} は {} がPATH上で plugin cache版 ({}) より優先されています。古い版が使われ続ける可能性があります（rm または cp で cache版を再コピーしてください）。",
+                                s.name, s.shadowing_path, s.cache_path
                             )
                         })
+                        .collect();
+                    sections.push(format!(
+                        "harness-status: {} 件のbinaryがPATH上で古いコピーに shadow されています:\n{}\n`harness-status path-shadow` で詳細確認できます。",
+                        shadowed.len(),
+                        lines.join("\n")
+                    ));
+                }
+                if !sections.is_empty() {
+                    println!(
+                        "{}",
+                        serde_json::json!({ "additionalContext": sections.join("\n\n") })
                     );
                 }
-                // No missing binaries → stay silent (no output at all).
+                // Nothing to report → stay silent (no output at all).
             });
         }
         None => {
@@ -274,6 +315,7 @@ fn main() {
             let h = hooks::read();
             let i = inject::read();
             let hh = hooks_health::read();
+            let ps = path_shadow::detect();
             let report = display::StatusReport {
                 today: &today,
                 budget: &b,
@@ -282,6 +324,7 @@ fn main() {
                 hooks: &h,
                 inject: &i,
                 hooks_health: &hh,
+                path_shadow: &ps,
             };
             if cli.json {
                 display::print_json(&report);

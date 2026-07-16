@@ -212,12 +212,29 @@ pub fn evaluate(summary: MutationSummary, threshold: f64) -> GateOutcome {
             let passed = kr + KILL_RATE_EPSILON >= threshold;
             let (kr_s, th_s) = distinguishing_pct_pair(kr * 100.0, threshold * 100.0);
             let reason = if passed {
-                format!(
-                    "kill-rate {kr_s}% >= {th_s}% ({} killed / {} viable; {} missed survived){unknown_note}",
-                    summary.killed(),
-                    summary.viable(),
-                    summary.missed,
-                )
+                if kr >= threshold {
+                    // Genuinely at or above the threshold.
+                    format!(
+                        "kill-rate {kr_s}% >= {th_s}% ({} killed / {} viable; {} missed survived){unknown_note}",
+                        summary.killed(),
+                        summary.viable(),
+                        summary.missed,
+                    )
+                } else {
+                    // The kill-rate is a hair *below* the threshold and only the
+                    // `KILL_RATE_EPSILON` float-rounding tolerance bridges the gap.
+                    // Rendering "{kr_s}% >= {th_s}%" here would claim a smaller
+                    // number is at-or-above a larger one — the PASS-direction
+                    // mirror of the FAIL contradiction in CA-mutategate-02
+                    // (CA-mutategate-03). Phrase it as the tolerance it actually
+                    // is instead, so a PASS reason never contradicts itself.
+                    format!(
+                        "kill-rate {kr_s}% within epsilon ({KILL_RATE_EPSILON:e}) of threshold {th_s}% ({} killed / {} viable; {} missed survived){unknown_note}",
+                        summary.killed(),
+                        summary.viable(),
+                        summary.missed,
+                    )
+                }
             } else {
                 format!(
                     "kill-rate {kr_s}% < {th_s}% ({} missed mutant(s) survived out of {} viable) — tests too weak{unknown_note}",
@@ -407,6 +424,50 @@ mod tests {
             !g.reason.contains("80.0% < 80.0%"),
             "reason shows identical numbers on both sides of '<', which \
              contradicts the FAIL decision: {}",
+            g.reason
+        );
+    }
+
+    // ── CA-mutategate-03 (display-only, PASS mirror of -02): when the
+    //    `KILL_RATE_EPSILON` tolerance is what bridges a hair-below-threshold
+    //    kill-rate, the PASS reason must NOT render "{kr}% >= {threshold}%" with
+    //    the smaller kr on the left — that claims a smaller number is at-or-above
+    //    a larger one, contradicting itself. ─────────────────────────────────
+    #[test]
+    fn epsilon_bridged_pass_message_is_not_self_contradictory() {
+        // killed = caught(8) + timeout(0) = 8, viable = 8 + missed(2) = 10, so
+        // kr = 0.8. Set the threshold a hair ABOVE kr (well under the 1e-9
+        // epsilon), so kr is strictly below threshold yet the epsilon still
+        // bridges the gap and the gate PASSes.
+        let s = MutationSummary {
+            caught: 8,
+            missed: 2,
+            timeout: 0,
+            unviable: 0,
+            success: 0,
+            failure: 0,
+            unknown: 0,
+        };
+        let kr = s.kill_rate().unwrap();
+        let threshold = kr + 5e-10; // < KILL_RATE_EPSILON (1e-9) above kr
+        assert!(
+            kr < threshold,
+            "test premise: kr is strictly below threshold"
+        );
+        let g = evaluate(s, threshold);
+        assert!(
+            g.passed,
+            "the epsilon tolerance must bridge a hair-below-threshold rate: {}",
+            g.reason
+        );
+        // The two rendered percentages the reason would use, computed the same
+        // way `evaluate` does. kr_s < th_s numerically (kr is below threshold),
+        // so a PASS reason must never assert "{kr_s}% >= {th_s}%".
+        let (kr_s, th_s) = distinguishing_pct_pair(kr * 100.0, threshold * 100.0);
+        assert!(
+            !g.reason.contains(&format!("{kr_s}% >= {th_s}%")),
+            "epsilon-bridged PASS reason claims a smaller kill-rate is \
+             at-or-above a larger threshold, contradicting itself: {}",
             g.reason
         );
     }

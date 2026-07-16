@@ -274,6 +274,25 @@ backlog lock acquire --session-id <SESSION_ID> --project <CWD>
 - **verify も自動で並列化される**: condukt の Phase 6 は worker 完了ごとに即 verifier を起動し待ち合わせしない
   （pipeline 検証）。バッチで複数 item を渡せば、その検証も item 横断で並列に走る＝別途 flow 側で verify を並列化する必要はない。
 
+**delegation戦略（fork既定バイアス）**: この `/condukt` 呼び出しは既定で `fork`（subagent_type の一種。
+親会話の context を丸ごと継承し、prompt cache も共有する）に包んで実行する。例外は「タスクが xs 級・単発
+ファイルで、ユーザーが経過を対話的に見たいと明示した場合」のみ直接（inline）実行。fork は main の context
+肥大を防ぐ一方でタダではないため、既定バイアスは固定ルールに留め、状況ごとの自動判定はしない
+（`docs/design-delegation-strategy-measurement.md` 参照）。
+
+**手動記録（計測ループを回すための最小限の運用）**: condukt 実行が完了したら（fork/inline いずれでも）、
+観測できた cost_usd・duration_secs を `fugu-router record` に `--delegation` を添えて記録する
+（新しいコマンド呼び出しを増やさず、既存の record 呼び出しにオプションを1つ足すだけ）:
+```bash
+fugu-router record --title "<task title>" --class "flow-delegation" \
+  --model <suggested_model> --status <verified|failed> \
+  --cost <observed_cost_usd> --duration <observed_duration_secs> \
+  --delegation <fork|inline>
+```
+これは自動比較ではなく手動の実績記録。狙いは「等価なタスクの fork 実行/inline 実行の実績を、時間をかけて
+`fugu-router` の Episode ストアに貯める」こと。十分件数が貯まれば、次の一手として `fugu-router route`/
+`decide_bandit` に delegation 軸を組み込む判断ができる（今回はスコープ外。計測が先＝ build ≠ validate）。
+
 #### 3-3. 検証 → sink（結果の書き戻し）
 
 condukt の完了ゲートを通ったら結果を source に書き戻す:

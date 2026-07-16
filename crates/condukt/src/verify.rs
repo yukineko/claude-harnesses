@@ -918,6 +918,24 @@ pub fn resolve_verifier_model(worker: &str, suggested: Option<&str>) -> String {
     }
 }
 
+/// Resolve the model for the k-th independent skeptic in an adversarial
+/// panel. Never returns the worker's own tier (same shared-blind-spot guard
+/// as [`resolve_verifier_model`]), and spreads skeptics across the remaining
+/// tiers round-robin by index so a 3–5 person panel doesn't collapse onto a
+/// single non-worker tier.
+pub fn resolve_skeptic_model(worker: &str, index: usize) -> String {
+    let remaining: Vec<&str> = TIERS
+        .iter()
+        .copied()
+        .filter(|t| !same_model(t, worker))
+        .collect();
+    if remaining.is_empty() {
+        // worker's tier didn't match any known TIERS entry — fall back to opus.
+        return "opus".to_string();
+    }
+    remaining[index % remaining.len()].to_string()
+}
+
 /// Markers that mean the criteria demands judgement about implementation /
 /// logic / design / behaviour / correctness. Their presence forces the LLM
 /// verifier to run even if an accompanying command exits 0. Bilingual because
@@ -1555,6 +1573,36 @@ mod tests {
                 assert!(
                     !same_model(&v, w),
                     "verifier {v:?} must differ from worker {w:?} (suggested={s:?})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn skeptic_model_never_equals_worker_and_spreads_across_indices() {
+        let workers = [
+            "haiku",
+            "sonnet",
+            "opus",
+            "claude-sonnet-4",
+            "mystery-model",
+        ];
+        for w in workers {
+            let mut seen = std::collections::HashSet::new();
+            for idx in 0..6 {
+                let s = resolve_skeptic_model(w, idx);
+                assert!(
+                    !same_model(&s, w),
+                    "skeptic {s:?} at index {idx} must differ from worker {w:?}"
+                );
+                seen.insert(s);
+            }
+            // Recognised workers have 2 remaining tiers to spread across; an
+            // unrecognised worker falls back to a single "opus" tier.
+            if tier_index(w).is_some() {
+                assert!(
+                    seen.len() >= 2,
+                    "worker {w:?}: expected skeptics to spread across >=2 tiers, got {seen:?}"
                 );
             }
         }

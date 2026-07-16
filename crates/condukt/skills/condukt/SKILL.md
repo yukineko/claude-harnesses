@@ -622,6 +622,44 @@ PLAN_EXIT=$?
 
 ### Phase 6 — 検証 (verifier agent) + 実績の記録
 
+**adversarial verify ゲート（GATE クレート変更時の反証パネル・opt-in）**: 単一 verifier は
+worker と同じ盲点を共有しうる（shared blind spot）。重要な完了判定（GATE クレート自体の変更）
+に限り、N 人の独立 skeptic による反証パネルを挟めるかを、Phase 5.5 の `consensus plan` と
+同じ形で決定論的に判定する:
+```bash
+PLAN=$(condukt adversarial plan --touched <changed_file_1> --touched <changed_file_2> ...)
+PLAN_EXIT=$?
+```
+- **exit 1（engage:false・既定）** → 下記「単一 verifier による検証」をそのまま実行する
+  （既存パスは無変更）。追加コストなし。
+- **exit 0（engage:true）** → GATE_CRATES（blastguard/propguard/specguard/stuckguard/
+  mutategate）配下を変更している、または `CONDUKT_ADVERSARIAL=1`/config `[adversarial]
+  enabled=true` のグローバルスイッチ。`$PLAN` の `size`（N、2〜5 にクランプ済み）体の
+  独立 skeptic でパネルを張る。
+
+**パネル実行手順（engage 時のみ）**:
+1. N 体の skeptic subagent を **1 メッセージで並列 Task 起動**する。各 Task の description は
+   `"<t.id>-skeptic<k>"`。モデルは `condukt state skeptic-model --worker "<worker_model>"
+   --index <k>` で決定論的に解決する（worker とは異なる tier を保証し、複数 skeptic がいる
+   場合は残り tier に分散させる）。
+2. 各 skeptic のプロンプトは「既定 REFUTED。done_criteria と実装差分を読み、コード上の
+   具体的根拠で反証できたら refute、崩せなければ pass、判断不能なら abstain」を指示し、
+   `{"skeptic":"<id>","ballot":"refute|pass|abstain","reason":"..."}` の JSON のみを返させる。
+3. 集めた N 件の JSON 配列を `condukt adversarial adjudicate` に stdin 経由で渡す:
+   ```bash
+   ADJ=$(printf '%s' "$VOTES_JSON" | condukt adversarial adjudicate)
+   ADJ_EXIT=$?
+   OUTCOME=$(echo "$ADJ" | jq -r '.outcome')
+   ```
+   - `OUTCOME=pass`（exit 0） → `condukt state set --run $RID --task <id> --status verified`。
+   - `OUTCOME=block`（exit 1） → `--status failed` にし、カスケードエスカレーションへ
+     （下記「単一 verifier による検証」の失敗時と同じ経路）。
+   - `OUTCOME=escalate`（exit 1） → 自動判定せず人間/上位レビューへ引き渡す。condukt 自体の
+     blocked/GATED タスク滞留の既存経路（`condukt escalate add`）、または `overwatch
+     review-queue` の `[escalation]` ストリームに乗せる。
+
+### 単一 verifier による検証（既定・非 engage 時）
+
 **機械的 vs 振る舞い的 done_criteria の分類（verifier スキップ判定はバイナリが強制）**:
 verifier を省略してよいかは **プロンプトの語感で判断しない**。`condukt state check-criteria
 --run $RID --task <id>` が決定論的に分類し、JSON を返す（この判定は SKILL.md ではなくバイナリ側で

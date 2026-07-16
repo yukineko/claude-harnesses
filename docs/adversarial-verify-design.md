@@ -103,8 +103,13 @@ exit code 契約(consensus と同型): `adjudicate` は **pass=0 / block・escal
   (`enabled`/`size`/`min_voters`/`block_ratio`) と env `CONDUKT_ADVERSARIAL` を `Config::load`
   で解決する(consensus と同型: env が config.toml を上書き)。`condukt adversarial plan/adjudicate`
   は config 由来の switch と policy を使う(CLI flag > JSON > config > 既定)。既定は enabled=false。
-- **SKILL 配線は未実施**(上記「継ぎ目」)。決定論核が固まったので、次は Phase 6 での
-  N-skeptic 起動を skill に足す。
+- **SKILL 配線は実施済み**(`crates/condukt/skills/condukt/SKILL.md` Phase 6 冒頭)。
+  `condukt adversarial plan` の exit code でパネル起否を判定し、engage 時は
+  `condukt state skeptic-model --worker <model> --index <k>`(新規追加。TIERS のうち worker
+  と同じ tier を除外し、残り tier に index で round-robin して割り当てる。verifier-model と
+  同型の決定論)で N 体の独立 skeptic をモデル多様性つきで並列 Task 起動し、
+  `condukt adversarial adjudicate` の outcome で verified/failed/escalate に分岐する。
+  非 engage 時は既存の単一 verifier 手順を無変更で実行する。
 - 汎用化の余地: 現状 condukt-local。propguard/reviewgate からも使うなら `harness-core` へ
   昇格(全 plugin バイナリに焼き込まれる共有層)を検討。
 

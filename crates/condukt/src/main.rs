@@ -900,6 +900,16 @@ enum StateAction {
         #[arg(long)]
         suggested: Option<String>,
     },
+    /// Resolve the model for the k-th independent skeptic in an adversarial
+    /// panel (never the worker's tier; round-robins remaining tiers by index).
+    SkepticModel {
+        /// The model the worker used / will use for this task.
+        #[arg(long)]
+        worker: String,
+        /// Which skeptic in the panel (0-indexed) this call resolves for.
+        #[arg(long)]
+        index: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -3763,6 +3773,12 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
         StateAction::VerifierModel { worker, suggested } => {
             let chosen = verify::resolve_verifier_model(&worker, suggested.as_deref());
             // Invariant guard: never emit a verifier model equal to the worker.
+            debug_assert!(!verify::same_model(&chosen, &worker));
+            println!("{chosen}");
+        }
+        StateAction::SkepticModel { worker, index } => {
+            let chosen = verify::resolve_skeptic_model(&worker, index);
+            // Invariant guard: never emit a skeptic model equal to the worker.
             debug_assert!(!verify::same_model(&chosen, &worker));
             println!("{chosen}");
         }

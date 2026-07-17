@@ -31,12 +31,42 @@ fn pattern_prefix(p: &str) -> &str {
     }
 }
 
+/// Normalize a path/glob entry before comparison: strip a leading `./` and
+/// collapse repeated `/`. Two different spellings of the same path (e.g.
+/// `./src/a.rs` vs `src/a.rs`, or `src//a.rs` vs `src/a.rs`) must compare
+/// equal, or a same-file write race goes undetected — a false negative,
+/// unlike a false positive which only over-serializes (safe). Does not
+/// attempt to resolve `..` or relative-vs-absolute forms; touched_files is a
+/// bare repo-relative convention, not a filesystem path to fully canonicalize.
+fn normalize_entry(p: &str) -> String {
+    let mut s = p;
+    while let Some(rest) = s.strip_prefix("./") {
+        s = rest;
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut last_was_slash = false;
+    for c in s.chars() {
+        if c == '/' {
+            if last_was_slash {
+                continue;
+            }
+            last_was_slash = true;
+        } else {
+            last_was_slash = false;
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Do two individual path/glob entries conflict (could touch the same file)?
 ///
 /// Conservative: when uncertain we say "yes", because a false conflict only
 /// serializes work (safe) whereas a missed conflict races two workers on one
 /// file (unsafe).
 fn entries_conflict(a: &str, b: &str) -> bool {
+    let a = &normalize_entry(a);
+    let b = &normalize_entry(b);
     if a == b {
         return true;
     }
@@ -620,6 +650,66 @@ mod tests {
         assert_eq!(s.batches.len(), 1);
         assert_eq!(s.batches[0].parallel, vec!["b"]);
         assert_eq!(s.warnings.len(), 1);
+    }
+
+    #[test]
+    fn disjoint_globs_under_shared_parent_dir_do_not_conflict() {
+        // "src/foo/*.rs" and "src/bar/*.rs" share the literal parent "src/" but
+        // are genuinely disjoint (globset's `*` does not cross `/`). Must NOT
+        // false-positive into serial just because both live under src/.
+        let d = dec(vec![
+            task("a", &["src/foo/*.rs"], &[], Class::Parallel),
+            task("b", &["src/bar/*.rs"], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+        assert_eq!(s.batches.len(), 1);
+        assert_eq!(s.batches[0].parallel, vec!["a", "b"]);
+        assert!(s.serial.is_empty());
+    }
+
+    #[test]
+    fn nested_glob_prefix_is_conservatively_demoted_even_when_disjoint() {
+        // "src/*.rs" (prefix "src/") vs "src/sub/*.rs" (prefix "src/sub/"): the
+        // prefixes nest ("src/sub/".starts_with("src/")) so entries_conflict
+        // reports a conflict, even though globset's `*` wouldn't actually let
+        // "src/*.rs" match anything under src/sub/ — a known false positive.
+        // Documented as intentional/safe per this module's own doc comment
+        // ("a false conflict only serializes work (safe)"): this test pins that
+        // choice so a future change to the heuristic doesn't silently flip it.
+        let d = dec(vec![
+            task("a", &["src/*.rs"], &[], Class::Parallel),
+            task("b", &["src/sub/*.rs"], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+        assert!(s.batches.is_empty());
+        assert_eq!(s.serial, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn dot_slash_prefixed_path_recognized_as_same_file() {
+        // "./src/a.rs" and "src/a.rs" name the identical file. Without
+        // normalization, entries_conflict compares raw strings and misses the
+        // overlap (a genuine false negative: two workers could race the same
+        // file if touched_files ever mixes "./"-prefixed and bare spellings).
+        let d = dec(vec![
+            task("a", &["./src/a.rs"], &[], Class::Parallel),
+            task("b", &["src/a.rs"], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+        assert!(s.batches.is_empty(), "batches={:?}", s.batches);
+        assert_eq!(s.serial, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn repeated_slash_path_recognized_as_same_file() {
+        // "src//a.rs" (double slash) and "src/a.rs" name the identical file.
+        let d = dec(vec![
+            task("a", &["src//a.rs"], &[], Class::Parallel),
+            task("b", &["src/a.rs"], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+        assert!(s.batches.is_empty(), "batches={:?}", s.batches);
+        assert_eq!(s.serial, vec!["a", "b"]);
     }
 
     #[test]

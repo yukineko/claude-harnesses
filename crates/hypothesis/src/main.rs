@@ -111,6 +111,9 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Shipped-vs-measured PDO health metrics (shipped/validated/rejected/
+    /// awaiting counts + average measurement delay in days), as one JSON object
+    Stats,
     /// Install SessionStart hook
     Install {
         #[arg(long)]
@@ -206,6 +209,10 @@ fn run() -> Result<()> {
         Command::Reject { id, reason, run } => {
             let mut st = store::Store::load(&cfg)?;
             st.reject(&id, reason, run)?;
+        }
+        Command::Stats => {
+            let st = store::Store::load(&cfg)?;
+            println!("{}", serde_json::to_string(&st.stats())?);
         }
         Command::List { status, json } => {
             let st = store::Store::load(&cfg)?;

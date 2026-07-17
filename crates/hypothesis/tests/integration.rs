@@ -126,17 +126,26 @@ fn list_json_uses_hyphenated_status_vocabulary() {
         .output()
         .expect("list --json runs");
     let list_out = String::from_utf8_lossy(&list.stdout).into_owned();
-    assert_eq!(list.status.code().unwrap_or(-1), 0, "list --json must exit 0");
+    assert_eq!(
+        list.status.code().unwrap_or(-1),
+        0,
+        "list --json must exit 0"
+    );
 
     let items: serde_json::Value =
         serde_json::from_str(&list_out).expect("list --json must emit valid JSON");
-    let arr = items.as_array().expect("list --json must emit a JSON array");
+    let arr = items
+        .as_array()
+        .expect("list --json must emit a JSON array");
     assert_eq!(arr.len(), 1, "expected exactly the one added hypothesis");
     assert_eq!(
         arr[0]["status"], "open",
         "a freshly-added hypothesis must report status \"open\" (hyphen-free case), got: {list_out}"
     );
-    assert_eq!(arr[0]["id"], id, "the JSON item's id must match the added hypothesis");
+    assert_eq!(
+        arr[0]["id"], id,
+        "the JSON item's id must match the added hypothesis"
+    );
 
     // AwaitingMeasurement is the vocabulary word bucket_hypotheses() actually
     // depends on being hyphenated ("awaiting-measurement"), since serde's
@@ -166,6 +175,61 @@ fn list_json_uses_hyphenated_status_vocabulary() {
         "expected the hyphenated form \"awaiting-measurement\" (matching overwatch's \
          bucket_hypotheses vocabulary), got: {list2_out}"
     );
+}
+
+#[test]
+fn stats_reports_shipped_vs_measured_counts_as_one_json_object() {
+    let bin = env!("CARGO_BIN_EXE_hypothesis");
+    let home = temp_home("stats");
+
+    let add = Command::new(bin)
+        .args(["add", "stats end-to-end fixture"])
+        .env("HOME", &home)
+        .output()
+        .expect("add runs");
+    let id = String::from_utf8_lossy(&add.stdout).trim().to_string();
+
+    let stats0 = Command::new(bin)
+        .args(["stats"])
+        .env("HOME", &home)
+        .output()
+        .expect("stats runs");
+    let stats0_out = String::from_utf8_lossy(&stats0.stdout).into_owned();
+    assert_eq!(stats0.status.code().unwrap_or(-1), 0, "stats must exit 0");
+    let v0: serde_json::Value =
+        serde_json::from_str(&stats0_out).expect("stats must emit valid JSON");
+    assert_eq!(
+        v0["shipped"], 0,
+        "nothing has shipped yet, got: {stats0_out}"
+    );
+    assert_eq!(v0["awaiting"], 0);
+    assert!(v0["avg_measurement_delay_days"].is_null());
+
+    let awaiting = Command::new(bin)
+        .args(["await-measurement", &id])
+        .env("HOME", &home)
+        .output()
+        .expect("await-measurement runs");
+    assert_eq!(awaiting.status.code().unwrap_or(-1), 0);
+
+    let stats1 = Command::new(bin)
+        .args(["stats"])
+        .env("HOME", &home)
+        .output()
+        .expect("stats runs (2nd)");
+    let stats1_out = String::from_utf8_lossy(&stats1.stdout).into_owned();
+    std::fs::remove_dir_all(&home).ok();
+    let v1: serde_json::Value =
+        serde_json::from_str(&stats1_out).expect("stats must emit valid JSON (2nd)");
+    assert_eq!(
+        v1["shipped"], 1,
+        "one hypothesis has shipped (awaiting-measurement), got: {stats1_out}"
+    );
+    assert_eq!(
+        v1["awaiting"], 1,
+        "it is currently outstanding, got: {stats1_out}"
+    );
+    assert_eq!(v1["validated"], 0);
 }
 
 #[test]

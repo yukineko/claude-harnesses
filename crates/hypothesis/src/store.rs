@@ -213,8 +213,18 @@ impl Store {
             .ok_or_else(|| anyhow::anyhow!("hypothesis not found: {id}"))?;
         h.status = Status::AwaitingMeasurement;
         h.condukt_run = run_id;
-        h.updated_at = now_iso();
+        let now = now_iso();
+        // Overwritten on every (re-)ship: the shipped-vs-measured metric cares
+        // about the most recent shipment, not the first.
+        h.shipped_at = Some(now.clone());
+        h.updated_at = now;
         self.save()
+    }
+
+    /// Shipped-vs-measured PDO health metrics over the current store contents
+    /// (see [`crate::hypothesis::compute_stats`]).
+    pub fn stats(&self) -> crate::hypothesis::Stats {
+        crate::hypothesis::compute_stats(&self.hypotheses)
     }
 
     pub fn reject(
@@ -488,6 +498,33 @@ mod tests {
         let h = &st2.list(None)[0];
         assert!(h.status.is_awaiting_measurement());
         assert_eq!(h.condukt_run, Some("run-await1".to_string()));
+        assert!(
+            h.shipped_at.is_some(),
+            "mark_awaiting_measurement must stamp shipped_at"
+        );
+    }
+
+    #[test]
+    fn test_stats_reflects_shipped_and_measured() {
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir);
+
+        let mut st = Store::load(&cfg).unwrap();
+        st.add("still just an idea".to_string(), None).unwrap();
+        let shipped_id = st
+            .add("shipped, not measured yet".to_string(), None)
+            .unwrap();
+        st.mark_awaiting_measurement(&shipped_id, None).unwrap();
+
+        let stats = st.stats();
+        assert_eq!(stats.shipped, 1);
+        assert_eq!(stats.awaiting, 1);
+        assert_eq!(stats.validated, 0);
+        assert_eq!(stats.rejected, 0);
+        assert_eq!(
+            stats.avg_measurement_delay_days, None,
+            "nothing has been measured yet"
+        );
     }
 
     #[test]

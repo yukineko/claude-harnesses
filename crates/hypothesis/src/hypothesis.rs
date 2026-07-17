@@ -69,6 +69,51 @@ fn is_leap_year(year: u32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
+/// Parses the leading `YYYY-MM-DD` of an ISO8601 string into days-since-epoch,
+/// mirroring `now_iso8601`'s forward (days -> date) conversion in reverse.
+/// The time/zone portion is ignored (day granularity is intended for the
+/// measurement-delay metric). Returns `None` on malformed input so callers can
+/// fail soft (skip the item rather than panic or misreport).
+pub(crate) fn iso_date_to_epoch_days(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    if b.len() < 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let year: u32 = s.get(0..4)?.parse().ok()?;
+    let month: u32 = s.get(5..7)?.parse().ok()?;
+    let day: u32 = s.get(8..10)?.parse().ok()?;
+    if year < 1970 || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+
+    let mut days: i64 = 0;
+    let mut y = 1970u32;
+    while y < year {
+        days += if is_leap_year(y) { 366 } else { 365 };
+        y += 1;
+    }
+    let leap = is_leap_year(year);
+    let days_in_month = [
+        31i64,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    for dim in days_in_month.iter().take((month - 1) as usize) {
+        days += *dim;
+    }
+    days += (day - 1) as i64;
+    Some(days)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
@@ -350,6 +395,13 @@ pub struct Hypothesis {
     pub confidence: f64,
     pub created_at: String,
     pub updated_at: String,
+    /// When this hypothesis's linked deliverable shipped (entered
+    /// `awaiting-measurement`), as an ISO8601 timestamp. `None` for hypotheses
+    /// that have never shipped, and for legacy stores written before this field
+    /// existed (`#[serde(default)]` loads those as `None`, not a fabricated
+    /// timestamp — build ≠ validate; we don't guess when the past shipped).
+    #[serde(default)]
+    pub shipped_at: Option<String>,
 }
 
 /// Neutral default confidence for hypotheses created or loaded without one.
@@ -388,7 +440,70 @@ impl Hypothesis {
             confidence: default_confidence(),
             created_at: now.clone(),
             updated_at: now,
+            shipped_at: None,
         }
+    }
+}
+
+/// Shipped-vs-measured PDO health metrics (`hypothesis stats`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Stats {
+    /// Hypotheses that have ever shipped a linked deliverable (`shipped_at`
+    /// is set), regardless of current status.
+    pub shipped: usize,
+    pub validated: usize,
+    pub rejected: usize,
+    /// Currently outstanding: shipped but not yet measured.
+    pub awaiting: usize,
+    /// Mean days between `shipped_at` and `updated_at` for hypotheses that
+    /// have been measured (validated or rejected) and have a `shipped_at`.
+    /// `None` when no measured hypothesis has both timestamps available
+    /// (nothing to average — not the same as a delay of zero).
+    pub avg_measurement_delay_days: Option<f64>,
+}
+
+/// Compute shipped-vs-measured health metrics over a set of hypotheses.
+/// Pure and deterministic: no I/O, no clock reads — every input is a
+/// [`Hypothesis`] already loaded from the store, so callers get identical
+/// output for identical input (fixed-number regression tests hold).
+pub fn compute_stats(hypotheses: &[Hypothesis]) -> Stats {
+    let shipped = hypotheses.iter().filter(|h| h.shipped_at.is_some()).count();
+    let validated = hypotheses
+        .iter()
+        .filter(|h| h.status == Status::Validated)
+        .count();
+    let rejected = hypotheses
+        .iter()
+        .filter(|h| h.status == Status::Rejected)
+        .count();
+    let awaiting = hypotheses
+        .iter()
+        .filter(|h| h.status == Status::AwaitingMeasurement)
+        .count();
+
+    let delays: Vec<f64> = hypotheses
+        .iter()
+        .filter(|h| matches!(h.status, Status::Validated | Status::Rejected))
+        .filter_map(|h| {
+            let shipped_at = h.shipped_at.as_deref()?;
+            let shipped_days = iso_date_to_epoch_days(shipped_at)?;
+            let measured_days = iso_date_to_epoch_days(&h.updated_at)?;
+            Some((measured_days - shipped_days) as f64)
+        })
+        .collect();
+
+    let avg_measurement_delay_days = if delays.is_empty() {
+        None
+    } else {
+        Some(delays.iter().sum::<f64>() / delays.len() as f64)
+    };
+
+    Stats {
+        shipped,
+        validated,
+        rejected,
+        awaiting,
+        avg_measurement_delay_days,
     }
 }
 
@@ -450,12 +565,111 @@ mod tests {
     }
 
     #[test]
+    fn iso_date_to_epoch_days_known_dates() {
+        assert_eq!(iso_date_to_epoch_days("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(iso_date_to_epoch_days("1970-01-02T00:00:00Z"), Some(1));
+        // 2026 is not a leap year; sanity-check a date well past several
+        // leap-year boundaries (2020, 2024) rather than asserting a magic
+        // number blindly copied from elsewhere.
+        assert_eq!(
+            iso_date_to_epoch_days("2026-01-01T00:00:00Z"),
+            iso_date_to_epoch_days("2025-01-01T00:00:00Z").map(|d| d + 365)
+        );
+    }
+
+    #[test]
+    fn iso_date_to_epoch_days_rejects_malformed() {
+        assert_eq!(iso_date_to_epoch_days("garbage"), None);
+        assert_eq!(iso_date_to_epoch_days("1969-01-01T00:00:00Z"), None);
+        assert_eq!(iso_date_to_epoch_days("2026-13-01T00:00:00Z"), None);
+    }
+
+    fn hypothesis_with(status: Status, shipped_at: Option<&str>, updated_at: &str) -> Hypothesis {
+        let mut h = Hypothesis::new("stats fixture", None);
+        h.status = status;
+        h.shipped_at = shipped_at.map(str::to_string);
+        h.updated_at = updated_at.to_string();
+        h
+    }
+
+    #[test]
+    fn compute_stats_counts_and_avg_delay_are_fixed() {
+        let hypotheses = vec![
+            // Open, never shipped: contributes to none of the counts.
+            hypothesis_with(Status::Open, None, "2026-01-01T00:00:00Z"),
+            // Awaiting measurement: shipped, outstanding, not yet measured.
+            hypothesis_with(
+                Status::AwaitingMeasurement,
+                Some("2026-01-01T00:00:00Z"),
+                "2026-01-01T00:00:00Z",
+            ),
+            // Validated 10 days after shipping.
+            hypothesis_with(
+                Status::Validated,
+                Some("2026-01-01T00:00:00Z"),
+                "2026-01-11T00:00:00Z",
+            ),
+            // Rejected 4 days after shipping.
+            hypothesis_with(
+                Status::Rejected,
+                Some("2026-02-01T00:00:00Z"),
+                "2026-02-05T00:00:00Z",
+            ),
+        ];
+
+        let stats = compute_stats(&hypotheses);
+        assert_eq!(stats.shipped, 3, "3 of 4 have a shipped_at");
+        assert_eq!(stats.validated, 1);
+        assert_eq!(stats.rejected, 1);
+        assert_eq!(stats.awaiting, 1);
+        // (10 + 4) / 2 = 7.0 exactly — a fixed, deterministic number.
+        assert_eq!(stats.avg_measurement_delay_days, Some(7.0));
+    }
+
+    #[test]
+    fn compute_stats_avg_delay_is_none_when_nothing_measured() {
+        let hypotheses = vec![
+            hypothesis_with(Status::Open, None, "2026-01-01T00:00:00Z"),
+            hypothesis_with(
+                Status::AwaitingMeasurement,
+                Some("2026-01-01T00:00:00Z"),
+                "2026-01-01T00:00:00Z",
+            ),
+        ];
+        let stats = compute_stats(&hypotheses);
+        assert_eq!(stats.validated, 0);
+        assert_eq!(stats.rejected, 0);
+        assert_eq!(
+            stats.avg_measurement_delay_days, None,
+            "no validated/rejected hypothesis exists, so there is nothing to average"
+        );
+    }
+
+    #[test]
+    fn compute_stats_skips_measured_hypothesis_missing_shipped_at() {
+        // A hypothesis validated directly from `open` (bypassing
+        // awaiting-measurement, as `test_awaiting_measurement_can_still_validate`
+        // in store.rs exercises) has no shipped_at, so it can't contribute a
+        // delay — but it must still count toward `validated`.
+        let hypotheses = vec![hypothesis_with(
+            Status::Validated,
+            None,
+            "2026-01-11T00:00:00Z",
+        )];
+        let stats = compute_stats(&hypotheses);
+        assert_eq!(stats.shipped, 0);
+        assert_eq!(stats.validated, 1);
+        assert_eq!(stats.avg_measurement_delay_days, None);
+    }
+
+    #[test]
     fn hypothesis_new_sets_open_status() {
         let h = Hypothesis::new("our first hypothesis", None);
         assert!(h.status.is_open());
         assert_eq!(h.text, "our first hypothesis");
         assert!(h.evidence.is_empty());
         assert!(h.linked_goal.is_none());
+        assert!(h.shipped_at.is_none());
         assert_eq!(h.id.len(), 8);
     }
 

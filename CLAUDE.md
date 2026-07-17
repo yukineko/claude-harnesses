@@ -103,13 +103,22 @@ scripts/rollout-plugins.sh --plugin specguard --canary             # GATE クレ
   minor/major で判断）。
 - これは「今動けばいい」を禁じ、後の drift・古い版配布を根絶するための**徹底順守ルール**。
 
-**強制ゲート（2つを両方、commit 前・push 前・CI で回す）:**
+**強制ゲート（3つとも、commit 前・push 前・CI で回す）:**
 
 ```sh
 python3 scripts/check-plugin-versions.py            # lockstep: 3ファイルの version が一致するか（exit 1 で drift）
 python3 scripts/check-version-bumped.py             # bump-on-change: base(既定 HEAD)から変更のある plugin が bump 済みか
 python3 scripts/check-version-bumped.py --base origin/main   # CI/push前は pushed ref と比較
+python3 scripts/check-plugin-rollout.py             # rollout drift: source version が installed_plugins.json の registry version へ実際に反映(rollout-plugins.sh実行)済みか
 ```
+
+`check-plugin-rollout.py` は上の2つとは別の失敗モードを塞ぐ: **source 3ファイルの version 整合と
+bump-on-change を両方満たしていても、`rollout-plugins.sh` を実際に実行し忘れれば、その fix はどのセッションにも
+一切反映されない。** 過去に一度、5個の plugin（hypothesis/condukt/compass/blastguard/overwatch）で
+commit・version-bump 済みの fix が rollout されないまま放置されていたことが手作業の grep+jq 調査で発覚した。
+このスクリプトはその調査をスクリプト化したもので、`installed_plugins.json` の `"<name>@yukineko"` registry
+version と各 plugin.json の source version を比較し、不一致（＝ rollout 未実行）を機械的に検知する
+（registry ファイルが存在しない環境では検査対象なしとして exit 0 で skip）。
 
 `check-version-bumped.py` は `crates/<name>/` に差分がある plugin の plugin.json version が
 base より**厳密に上がっている**ことを要求し、上がっていなければ exit 1 で該当 plugin と変更ファイルを

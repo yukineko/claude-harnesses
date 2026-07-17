@@ -1,16 +1,16 @@
 ## north_star
-PDO並列実行の安全性を仕上げる: 本セッションで判明した cross-session排他機構(backlog lock/condukt claim/overwatch lease/hypothesis store lock/discovery store)の残存ギャップを閉じ、機能衝突drift・token浪費をさらに削減する
+rollout drift(committedかつversion-bump済みだがplugin cacheへ実際にデプロイされていない状態)を機械的に検知するCIゲートを新設し、本セッションで発覚した「fixは committed/version-bump済みなのに未 rollout」という事故クラスの再発を防ぐ
 
 ## definition_of_done
-- /flow のStep 3-4ループが backlog lock heartbeat を定期実行するよう配線され、30分超のセッションでもロックが自動失効(reap)されないことをテストか観察で確認できる
-- condukt::schedule.rs の衝突検知(Serial/Gated/shared-glob判定)に偽陽性/偽陰性が無いか調査し、結果(問題なし or 修正commit)が記録される
-- fugu-router のモデル割当が実際にtoken/コストを削減しているかを実測し、hypothesis(186f7a66等)のvalidate/rejectか計測レポートとして記録される
+- 各 crates/<name>/.claude-plugin/plugin.json の version と ~/.claude/plugins/installed_plugins.json の該当 plugin の registry version を比較し、不一致があれば非ゼロ終了でリストを出力する新規スクリプト(例 scripts/check-plugin-rollout.py)が追加される
+- 意図的にdrift状態(一時的にregistry versionを1つ古くする、またはCargo.toml versionだけ上げてrolloutしない状態)を作って新スクリプトの検知が失敗(exit非ゼロ)することを確認し、正常状態に戻してexit 0になることを確認する(fix無しでは検知できないことの証明に相当する検証プロセス)
+- 既存の check-plugin-versions.py / check-version-bumped.py と同様、CLAUDE.mdの該当セクションに新ゲートの実行コマンドが追記され、pre-push相当のタイミングで案内される
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-PDO並列安全性のうち、backlog lockのheartbeat機構は本セッションのfork作業でcommit 0f7edbfとして実装済みだが、/flowスキルのStep 3-4ループは condukt state heartbeat のみを呼び、新設された backlog lock heartbeat を呼んでいない。そのため30分超の長時間セッションではロックが自動失効(reap)されうるギャップが残る。最小right-sizeな一手は、/flowスキル(Step 3-4)に backlog lock heartbeat --session-id <SESSION_ID> の呼び出しを追加し(fail-soft、condukt state heartbeatと同じ呼び出し規約)、長時間ループでロックが維持されることを確認すること(backlog item c9225fec)。schedule.rsの衝突検知偽陽性/偽陰性調査とfugu-routerのtoken削減効果実測は、より調査/計測コストが高く別サイクルへ持ち越す。
+既存の check-plugin-versions.py(3ファイル間のversion一致)と check-version-bumped.py(変更されたplugin のbump有無)は source(Cargo.toml/plugin.json/marketplace.json)側の整合しか見ておらず、実際に ~/.claude/plugins/installed_plugins.json のregistry versionへ反映(rollout-plugins.sh実行)されているかは一切チェックしていない。本セッションはこのギャップにより5個のplugin(hypothesis/condukt/compass/blastguard/overwatch)でfixがcommit・version-bump済みなのに未rolloutのまま放置されていたことが判明した(手作業のfleet-wide grep+jqループで発見)。最小right-sizeな一手は、この手作業ループをスクリプト化した scripts/check-plugin-rollout.py を新設し、source側versionとregistry版versionの不一致を機械的・決定論的に検知することで、次に同じ事故が起きても人間が偶然気づく前に検知できるようにすること。
 
 ## next_action
 

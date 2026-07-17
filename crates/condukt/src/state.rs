@@ -12,6 +12,37 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Process-wide monotonic counter so two saves in the SAME process (identical
+/// pid, and possibly an identical `now_unix_nanos()` under a coarse clock) never
+/// derive the same temp name. Without it a nanos collision between two concurrent
+/// degraded writers (e.g. after a fail-soft lock timeout) could have both write
+/// the SAME fixed `.json.tmp` path, so a rename publishes a half-written run-state
+/// (which loads as corrupt/empty). Mirrors `lock::TMP_SEQ`.
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_unix_nanos() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+/// Build a per-call-unique sibling temp path for an atomic save:
+/// `<stem>.<tag>.tmp.<pid>.<nanos>.<seq>`. Two concurrent saves of the same
+/// file therefore never collide on a single temp name (which would let one
+/// publish a half-written file the other renames into place), mirroring
+/// `lock.rs`'s `TMP_SEQ`/`now_unix_nanos` idiom.
+fn unique_tmp(path: &Path, tag: &str) -> PathBuf {
+    use std::sync::atomic::Ordering;
+    path.with_extension(format!(
+        "{tag}.tmp.{}.{}.{}",
+        std::process::id(),
+        now_unix_nanos(),
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
@@ -233,7 +264,7 @@ impl RunState {
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("creating state dir {}", dir.display()))?;
         let path = dir.join(format!("{}.json", self.run_id));
-        let tmp_path = dir.join(format!("{}.json.tmp", self.run_id));
+        let tmp_path = unique_tmp(&path, "json");
         let json = serde_json::to_string_pretty(self)?;
         std::fs::write(&tmp_path, &json)
             .with_context(|| format!("writing tmp {}", tmp_path.display()))?;
@@ -336,7 +367,7 @@ pub fn save_decomposition(cfg: &Config, cwd: &Path, run_id: &str, json: &str) ->
         .ok_or_else(|| anyhow::anyhow!("decomposition path {} has no parent", path.display()))?;
     std::fs::create_dir_all(dir)
         .with_context(|| format!("creating state dir {}", dir.display()))?;
-    let tmp_path = dir.join(format!("{run_id}.decomposition.json.tmp"));
+    let tmp_path = unique_tmp(&path, "json");
     std::fs::write(&tmp_path, json)
         .with_context(|| format!("writing tmp decomposition to {}", tmp_path.display()))?;
     std::fs::rename(&tmp_path, &path)
@@ -1858,6 +1889,121 @@ mod tests {
             worker_sandbox_cpus: None,
             worker_sandbox_pids_limit: None,
         }
+    }
+
+    // `unique_tmp` must derive a DISTINCT temp path per call even within one
+    // process (same pid, and possibly an identical coarse-clock nanos). The old
+    // fixed `.json.tmp` name yielded ONE shared temp for every writer — the
+    // collision that lets two degraded writers publish a half-written run-state.
+    // RED with the fixed name (all equal), GREEN here.
+    #[test]
+    fn unique_tmp_names_are_distinct_per_call() {
+        let dir = make_tmp_dir("state-uniq");
+        let path = dir.join("run-1.json");
+        let a = unique_tmp(&path, "json");
+        let b = unique_tmp(&path, "json");
+        let c = unique_tmp(&path, "json");
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        assert_ne!(a, c);
+        assert_eq!(a.parent(), path.parent());
+        assert_ne!(a.file_name(), path.file_name());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // Two concurrent degraded writers saving the SAME run-state to one path must
+    // never leave a half-written/corrupt file behind: with unique temp names each
+    // writer renames its OWN fully-written temp atomically, so a concurrent
+    // reader always sees a complete, parseable run-state. Under the old fixed
+    // `.json.tmp` name both writers share one temp and one can rename a partially
+    // written file (corrupt run-state → `load` errors). Large task list so a
+    // single `write` is not atomic at the OS level (widens the corrupt window).
+    #[test]
+    fn concurrent_run_state_saves_never_publish_corrupt_state() {
+        let tmp = make_tmp_dir("state-concurrent-save");
+        let cfg = make_test_cfg(&tmp);
+        let cwd = tmp.join("repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let mut tasks = Vec::new();
+        for i in 0..300 {
+            tasks.push(TaskState {
+                id: format!("task-{i:04}-with-a-longish-identifier"),
+                status: Status::Pending,
+                ..Default::default()
+            });
+        }
+        let rs = RunState {
+            run_id: "concurrent-run".into(),
+            goal: "a reasonably long goal string to bulk up the payload".into(),
+            tasks,
+            paused: false,
+            terminal_label: None,
+            recorded_at: None,
+        };
+        let expected = rs.tasks.len();
+
+        const THREADS: usize = 8;
+        const ITERS: usize = 30;
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                let cfg = &cfg;
+                let cwd = cwd.clone();
+                let rs = rs.clone();
+                scope.spawn(move || {
+                    for _ in 0..ITERS {
+                        rs.save(cfg, &cwd).unwrap();
+                        // Interleave reads: every observed run-state must be a
+                        // complete, parseable file (never half-written).
+                        let loaded = RunState::load(cfg, &cwd, &rs.run_id)
+                            .expect("a concurrent reader observed a corrupt run-state");
+                        assert_eq!(loaded.tasks.len(), expected);
+                    }
+                });
+            }
+        });
+
+        let final_state = RunState::load(&cfg, &cwd, &rs.run_id).unwrap();
+        assert_eq!(final_state.tasks.len(), expected);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // TWIN of the run-state save: the decomposition sidecar had the SAME fixed
+    // `.decomposition.json.tmp` temp bug. Two concurrent degraded writers must
+    // never publish a half-written decomposition. Unique temps → each rename
+    // atomically publishes a complete JSON blob.
+    #[test]
+    fn concurrent_decomposition_saves_never_publish_corrupt_file() {
+        let tmp = make_tmp_dir("state-concurrent-decomp");
+        let cfg = make_test_cfg(&tmp);
+        let cwd = tmp.join("repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let run_id = "concurrent-decomp-run";
+        // A large JSON payload so a single write is not atomic at the OS level.
+        let big = format!("[{}]", "\"x\",".repeat(4000) + "\"end\"");
+
+        const THREADS: usize = 8;
+        const ITERS: usize = 30;
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                let cfg = &cfg;
+                let cwd = cwd.clone();
+                let big = big.clone();
+                scope.spawn(move || {
+                    for _ in 0..ITERS {
+                        save_decomposition(cfg, &cwd, run_id, &big).unwrap();
+                        // Every observed sidecar must be complete, parseable JSON.
+                        let loaded = load_decomposition(cfg, &cwd, run_id).unwrap();
+                        let _: serde_json::Value = serde_json::from_str(&loaded)
+                            .expect("a concurrent reader observed a corrupt decomposition");
+                    }
+                });
+            }
+        });
+
+        let loaded = load_decomposition(&cfg, &cwd, run_id).unwrap();
+        assert_eq!(loaded, big);
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     /// Minimal git repo with an initial commit on `main`. Returns the repo path.

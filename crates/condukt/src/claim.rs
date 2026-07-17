@@ -172,10 +172,42 @@ fn save<T: Serialize>(path: &Path, val: &T) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(val)?;
-    let tmp = path.with_extension("json.tmp");
+    let tmp = unique_tmp(path, "json");
     std::fs::write(&tmp, &json)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+/// Process-wide monotonic counter so two saves in the SAME process (identical
+/// pid, and possibly an identical `now_unix_nanos()` under a coarse clock) never
+/// derive the same temp name. Without it a nanos collision between two concurrent
+/// degraded writers (e.g. after a fail-soft lock timeout) could have both write
+/// the SAME fixed `json.tmp` path, so a rename publishes a half-written registry —
+/// which loads as empty, wiping every claim and enabling mass double-claim.
+/// Mirrors `lock::TMP_SEQ` / `overwatch::store::TMP_SEQ`.
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_unix_nanos() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+/// Build a per-call-unique sibling temp path for an atomic save:
+/// `<stem>.<tag>.tmp.<pid>.<nanos>.<seq>`. Two concurrent saves of the same
+/// registry therefore never collide on a single temp name (which would let one
+/// publish a half-written file the other renames into place), mirroring
+/// `lock.rs`'s `TMP_SEQ`/`now_unix_nanos` idiom.
+fn unique_tmp(path: &Path, tag: &str) -> PathBuf {
+    use std::sync::atomic::Ordering;
+    path.with_extension(format!(
+        "{tag}.tmp.{}.{}.{}",
+        std::process::id(),
+        now_unix_nanos(),
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 /// A claim is stale when its heartbeat is older than the TTL — the session that
@@ -551,6 +583,78 @@ mod tests {
             std::env::temp_dir().join(format!("condukt-claim-{tag}-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    // `unique_tmp` must derive a DISTINCT temp path per call even within one
+    // process (same pid, and possibly an identical coarse-clock nanos). The old
+    // fixed `path.with_extension("json.tmp")` yielded ONE shared name for every
+    // writer — the collision that lets two degraded writers publish a
+    // half-written registry. RED with the fixed name (all equal), GREEN here.
+    #[test]
+    fn unique_tmp_names_are_distinct_per_call() {
+        let path = make_tmp_dir("uniq").join("claims.json");
+        let a = unique_tmp(&path, "json");
+        let b = unique_tmp(&path, "json");
+        let c = unique_tmp(&path, "json");
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        assert_ne!(a, c);
+        // Still a sibling temp of the final path (same parent, distinct name).
+        assert_eq!(a.parent(), path.parent());
+        assert_ne!(a.file_name(), path.file_name());
+    }
+
+    // Two concurrent degraded writers saving the SAME registry to one path must
+    // never leave a half-written/empty file behind: with unique temp names each
+    // writer renames its OWN fully-written temp atomically, so a concurrent
+    // reader always sees a complete, parseable registry. Under the old fixed
+    // `json.tmp` name both writers share one temp and one can rename a partially
+    // written file (corrupt → loads empty → mass double-claim). Large payload so
+    // a single `write` is not atomic at the OS level (widens the corrupt window).
+    #[test]
+    fn concurrent_saves_never_publish_corrupt_registry() {
+        let path = make_tmp_dir("concurrent-save").join("claims.json");
+        // A non-trivial registry so a truncated/interleaved write fails to parse.
+        let mut reg = Registry::default();
+        for i in 0..400 {
+            reg.files.insert(
+                format!("crates/pkg/src/file_{i:04}.rs"),
+                Claim {
+                    run_id: format!("run-{i:04}"),
+                    pid: 12345,
+                    session_id: Some(format!("session-{i:04}")),
+                    heartbeat_at: 1_700_000_000 + i as i64,
+                    claimed_at: 1_700_000_000,
+                    title: Some(format!("task number {i} with a longish title")),
+                },
+            );
+        }
+
+        const THREADS: usize = 8;
+        const ITERS: usize = 40;
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                let path = path.clone();
+                let reg = reg.clone();
+                scope.spawn(move || {
+                    for _ in 0..ITERS {
+                        save(&path, &reg).unwrap();
+                        // Interleave reads: every observed file must be a
+                        // complete, parseable registry (never half-written).
+                        let loaded = load(&path);
+                        assert_eq!(
+                            loaded.files.len(),
+                            reg.files.len(),
+                            "a concurrent reader observed a corrupt/partial registry"
+                        );
+                    }
+                });
+            }
+        });
+
+        // Final state is intact.
+        let final_reg = load(&path);
+        assert_eq!(final_reg.files.len(), reg.files.len());
     }
 
     fn make_cfg(tmp: &Path) -> Config {

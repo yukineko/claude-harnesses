@@ -100,7 +100,7 @@ pub fn save_leases(cwd: &Path, leases: &LeaseRegistry) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(leases)?;
-    let tmp = path.with_extension("json.tmp");
+    let tmp = unique_tmp(&path, "json");
     std::fs::write(&tmp, &json)?;
     std::fs::rename(&tmp, &path)?;
     Ok(())
@@ -886,6 +886,77 @@ mod tests {
         assert!(!signature_is_bucketable(""));
         assert!(!signature_is_bucketable("blastguard"));
         assert!(!signature_is_bucketable(":rm-rf"));
+    }
+
+    // Two concurrent degraded writers saving the SAME lease registry to one path
+    // must never leave a half-written/empty leases.json behind. `save_leases` now
+    // uses `unique_tmp`, so each writer renames its OWN fully-written temp
+    // atomically and a concurrent reader always sees a complete registry. Under
+    // the old fixed `json.tmp` name both writers share one temp and one can rename
+    // a partially written file (corrupt leases → `load_leases` fails soft to an
+    // EMPTY registry → every lease vanishes → mass double-claim). Large registry
+    // so a single write is not atomic at the OS level (widens the corrupt window).
+    #[test]
+    fn concurrent_save_leases_never_publishes_corrupt_registry() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-store-test-concurrent-leases-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+
+        let mut leases = LeaseRegistry::new();
+        for i in 0..400 {
+            let key = format!("task-key-{i:04}-with-a-longish-identifier");
+            leases.insert(
+                key.clone(),
+                Lease {
+                    key,
+                    title: format!("task number {i} with a reasonably long title"),
+                    session_id: format!("session-{i:04}"),
+                    run_id: format!("run-{i:04}"),
+                    claimed_at: 1_700_000_000 + i as i64,
+                    heartbeat_at: 1_700_000_000 + i as i64,
+                    scope: vec![format!("crates/pkg/src/file_{i:04}.rs")],
+                    done_criteria: Some(format!("criterion for task {i}")),
+                },
+            );
+        }
+        let expected = leases.len();
+
+        const THREADS: usize = 8;
+        const ITERS: usize = 30;
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                let dir = dir.clone();
+                let leases = leases.clone();
+                scope.spawn(move || {
+                    for _ in 0..ITERS {
+                        save_leases(&dir, &leases).unwrap();
+                        // A concurrent reader must never observe a corrupt/empty
+                        // registry (fail-soft would swallow corruption as empty).
+                        let loaded = load_leases(&dir).unwrap();
+                        assert_eq!(
+                            loaded.len(),
+                            expected,
+                            "a concurrent reader observed a corrupt/empty leases.json"
+                        );
+                    }
+                });
+            }
+        });
+
+        let final_reg = load_leases(&dir).unwrap();
+        assert_eq!(final_reg.len(), expected);
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

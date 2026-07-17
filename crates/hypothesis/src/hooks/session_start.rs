@@ -57,11 +57,10 @@ pub(crate) fn run_with(cfg: &Config, repo_root: &Path) -> Option<String> {
     // Aggregate measurement DEBT: shipped-but-unmeasured hypotheses rot silently
     // if only listed per-item. Surface a prominent summary (count + oldest age in
     // days) so the debt is salient. Fail-soft: unparseable timestamps are skipped.
+    // Once the oldest item ages past AGING_THRESHOLD_DAYS, switch to an explicit
+    // warning-level rendering so stale measurement debt doesn't silently rot.
     if let Some((count, oldest)) = awaiting_debt(&awaiting, now_epoch_days()) {
-        out.push_str(&format!(
-            "\n**\u{8a08}\u{6e2c}\u{8ca0}\u{50b5} (measurement debt): {} \u{4ef6}** \u{2014} \u{6700}\u{53e4} {} \u{65e5}\u{7d4c}\u{904e} (\u{51fa}\u{8377}\u{6e08}\u{307f}\u{30fb}\u{672a}\u{691c}\u{8a3c})\n",
-            count, oldest
-        ));
+        out.push_str(&awaiting_debt_summary_line(count, oldest));
     }
 
     for h in &awaiting {
@@ -182,6 +181,31 @@ fn awaiting_debt(awaiting: &[&Hypothesis], now_days: i64) -> Option<(usize, i64)
         .map(|min_updated| (now_days - min_updated).max(0))
         .unwrap_or(0);
     Some((count, oldest))
+}
+
+/// Aging threshold (in days) past which measurement debt is considered stale
+/// enough to warrant an explicit warning-level rendering rather than the
+/// routine debt summary. Chosen as a reasonable default for "measurement is
+/// overdue" (roughly two weeks).
+const AGING_THRESHOLD_DAYS: i64 = 14;
+
+/// Renders the measurement-debt summary line for injection into the hook
+/// output. Below `AGING_THRESHOLD_DAYS` this is the routine summary line;
+/// at or above the threshold it switches to an explicit warning-level
+/// format (leading warning glyph + literal "WARNING") so aging debt is
+/// salient rather than silently blending into routine output.
+fn awaiting_debt_summary_line(count: usize, oldest: i64) -> String {
+    if oldest >= AGING_THRESHOLD_DAYS {
+        format!(
+            "\n**\u{26a0}\u{fe0f} WARNING: \u{8a08}\u{6e2c}\u{8ca0}\u{50b5} (measurement debt) \u{304c}\u{9577}\u{671f}\u{5316}: {} \u{4ef6}** \u{2014} \u{6700}\u{53e4} {} \u{65e5}\u{7d4c}\u{904e} (\u{95be}\u{5024} {} \u{65e5}\u{8d85}\u{904e}\u{30fb}\u{51fa}\u{8377}\u{6e08}\u{307f}\u{30fb}\u{672a}\u{691c}\u{8a3c})\n",
+            count, oldest, AGING_THRESHOLD_DAYS
+        )
+    } else {
+        format!(
+            "\n**\u{8a08}\u{6e2c}\u{8ca0}\u{50b5} (measurement debt): {} \u{4ef6}** \u{2014} \u{6700}\u{53e4} {} \u{65e5}\u{7d4c}\u{904e} (\u{51fa}\u{8377}\u{6e08}\u{307f}\u{30fb}\u{672a}\u{691c}\u{8a3c})\n",
+            count, oldest
+        )
+    }
 }
 
 #[cfg(test)]
@@ -321,6 +345,27 @@ mod tests {
         let mut c = Hypothesis::new("bad ts", None);
         c.updated_at = "garbage".to_string();
         assert_eq!(awaiting_debt(&[&c], now_days), Some((1, 0)));
+    }
+
+    #[test]
+    fn awaiting_debt_summary_line_below_threshold_is_routine() {
+        // oldest = 13 days < AGING_THRESHOLD_DAYS (14) → routine wording, no warning.
+        let line = awaiting_debt_summary_line(2, 13);
+        assert!(line.contains("\u{8a08}\u{6e2c}\u{8ca0}\u{50b5}")); // 計測負債
+        assert!(!line.contains("WARNING"));
+        assert!(!line.contains('\u{26a0}')); // no warning glyph
+    }
+
+    #[test]
+    fn awaiting_debt_summary_line_at_or_above_threshold_is_warning() {
+        // oldest = 14 days == AGING_THRESHOLD_DAYS → explicit warning-level wording.
+        let line = awaiting_debt_summary_line(2, 14);
+        assert!(line.contains("WARNING"));
+        assert!(line.contains('\u{26a0}')); // warning glyph present
+
+        // Well past the threshold too.
+        let line_far = awaiting_debt_summary_line(1, 45);
+        assert!(line_far.contains("WARNING"));
     }
 
     #[test]

@@ -14,6 +14,7 @@ mod lease;
 mod render;
 mod review_escalation;
 pub mod review_finding;
+mod reconcile;
 mod review_gate_decisions;
 mod review_queue;
 pub mod rollback;
@@ -368,6 +369,31 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
+    /// Scan a range of git commit messages for `CA-<crate>-<NNN>` finding-id
+    /// references and auto-record a CONFIRMED disposition for any referenced
+    /// finding that is on the review-findings store but not yet dispositioned
+    /// (closes the "fix landed, nobody ran record-disposition" gap that lets
+    /// review-queue go stale). Idempotent: already-dispositioned finding-ids
+    /// are skipped. Fail-soft: a git failure or unreadable store degrades to
+    /// "0 processed" rather than erroring, so this is always safe to wire
+    /// into a pre-push hook or a Continuous-Audit round.
+    ReconcileFixed {
+        /// Scan every commit since this ref (exclusive), i.e. `<ref>..HEAD`.
+        #[arg(long = "since-ref", conflicts_with_all = ["range", "last_n"])]
+        since_ref: Option<String>,
+        /// A raw git revision range/expression, passed to `git log` as-is.
+        #[arg(long, conflicts_with_all = ["since_ref", "last_n"])]
+        range: Option<String>,
+        /// Scan only the most recent N commits (default: 50 when no other
+        /// range selector is given).
+        #[arg(long = "last-n", conflicts_with_all = ["since_ref", "range"])]
+        last_n: Option<usize>,
+        /// Report what WOULD be reconciled without writing any dispositions.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Actions under `overwatch audit-round`.
@@ -659,6 +685,22 @@ fn main() -> Result<()> {
         }
         Command::CompactFindings { json } => {
             run_compact_findings(json)?;
+        }
+        Command::ReconcileFixed {
+            since_ref,
+            range,
+            last_n,
+            dry_run,
+            json,
+        } => {
+            let range = if let Some(r) = since_ref {
+                reconcile::ReconcileRange::SinceRef(r)
+            } else if let Some(r) = range {
+                reconcile::ReconcileRange::Range(r)
+            } else {
+                reconcile::ReconcileRange::LastN(last_n.unwrap_or(50))
+            };
+            reconcile::run(range, dry_run, json)?;
         }
     }
     Ok(())

@@ -230,6 +230,15 @@ round_args=(audit-round record
 [ -n "$VERIFIER_MODEL" ] && round_args+=(--verifier-model "$VERIFIER_MODEL")
 run_ow "${round_args[@]}"
 
+# --- auto-reconcile findings whose fix already landed (fail-soft) -----------
+# Closes the "fix commit landed, nobody ran record-disposition" gap that lets
+# review-queue go stale (see the 2026-07-17 incident: 18 already-fixed
+# findings sat "open" for weeks). Scans recent commit messages for
+# `CA-<crate>-<NNN>` references and auto-confirms any match still undisposed.
+echo
+echo "--- auto-reconciling fixed findings against recent commits ---"
+run_ow reconcile-fixed --last-n 200 --json
+
 # --- forward CONFIRMED findings to the backlog (single actionable queue) ------
 # This closes the discover->fix loop deterministically: every not-yet-bridged
 # finding-id becomes a `backlog add` (idempotent via bridged_findings.jsonl,

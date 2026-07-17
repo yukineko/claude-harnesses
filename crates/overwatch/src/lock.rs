@@ -131,6 +131,55 @@ impl LeaseLock {
         Self::acquire_at(path, deadline)
     }
 
+    /// Returns `true` when this guard genuinely holds the lock. A `false` here
+    /// means the lock degraded to unlocked (fail-soft after a timeout or I/O
+    /// error) and any RMW performed under it may race — the caller should treat
+    /// that as unsafe to mutate.
+    // `#[allow(dead_code)]`: new caller-facing API. It is public library surface
+    // (used by lease.rs, owned by another task, wired separately), but overwatch
+    // also builds a `bin` that re-declares `mod lock` and does not call it yet, so
+    // the bin target reads it as dead until then. Exercised now by the tests.
+    #[allow(dead_code)]
+    pub fn held(&self) -> bool {
+        self.path.is_some()
+    }
+
+    /// Fallible acquire: returns `Some(guard)` only when the lock is genuinely
+    /// HELD, and `None` when acquisition degraded to unlocked (timeout under
+    /// contention, path-resolution failure, or an I/O error) — a treat-as-held
+    /// **hard-skip**. Lets a caller SKIP its load->check->save instead of
+    /// mutating unlocked, which under pathological contention is what lets two
+    /// timed-out writers both proceed and double-claim (last-writer-wins).
+    /// Fail-soft: never panics. Uses the same [`LeaseLock::DEADLINE`] as
+    /// [`LeaseLock::acquire`].
+    #[allow(dead_code)] // caller-facing API wired by lease.rs (another task); see `held`.
+    pub fn acquire_or_skip(cwd: &Path) -> Option<Self> {
+        let path = match lock_path(cwd) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!(
+                    "overwatch: could not resolve lease lock path ({e}); skipping (treat as held)"
+                );
+                return None;
+            }
+        };
+        Self::acquire_or_skip_at(path, Self::DEADLINE)
+    }
+
+    /// Core of [`LeaseLock::acquire_or_skip`] against an explicit lock `path`:
+    /// runs the same fail-soft acquire and maps the degraded (unheld) guard to
+    /// `None`. Shared by the public API and the tests (which drive it with a
+    /// short deadline against a self-contained temp path).
+    #[allow(dead_code)] // reached via `acquire_or_skip` (wired by lease.rs) + tests.
+    fn acquire_or_skip_at(path: PathBuf, deadline: Duration) -> Option<Self> {
+        let guard = Self::acquire_at(path, deadline);
+        if guard.held() {
+            Some(guard)
+        } else {
+            None
+        }
+    }
+
     /// Core locking mechanics against an explicit lock-file `path`, independent
     /// of `store::leases_path`'s `$HOME`-derived resolution. Split out from
     /// [`LeaseLock::acquire_with_deadline`] so tests can exercise the hard-link
@@ -286,5 +335,51 @@ mod tests {
 
         let g = LeaseLock::acquire_at(path, Duration::from_millis(500));
         assert!(g.path.is_some(), "stale lock should have been reaped");
+    }
+
+    #[test]
+    fn held_reflects_acquisition_state() {
+        let path = tmp_lock_path("held");
+        let g = LeaseLock::acquire_at(path, Duration::from_millis(200));
+        assert!(g.held(), "a freshly-published lock must report held()");
+    }
+
+    // Wedge a holder, then attempt `acquire_or_skip` against the SAME lock path
+    // with a short deadline: it must hard-skip (`None`) rather than hand out an
+    // unheld guard. A guarded RMW modeled as a closure gated on `Some` must run
+    // exactly once (the holder), NOT twice — this is the window that a plain
+    // `acquire` degrade would let a second writer through, double-claiming.
+    #[test]
+    fn acquire_or_skip_hard_skips_while_first_is_held() {
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+
+        let path = tmp_lock_path("skip");
+        let writes = AtomicU32::new(0);
+        // A guarded RMW: it only mutates when handed a genuinely-held guard.
+        let guarded_rmw = |lock: Option<LeaseLock>| {
+            if let Some(g) = lock {
+                assert!(g.held());
+                writes.fetch_add(1, AtomicOrdering::Relaxed);
+            }
+        };
+
+        // First writer genuinely holds the lock. Keep the guard alive across the
+        // second writer's attempt to model overlap.
+        let holder = LeaseLock::acquire_or_skip_at(path.clone(), Duration::from_millis(200));
+        assert!(holder.is_some(), "first acquire_or_skip must be HELD");
+        // Second writer contends the SAME lock with a short deadline: it must
+        // hard-skip (None), NOT hand out an unheld guard that proceeds unlocked.
+        let contended = LeaseLock::acquire_or_skip_at(path, Duration::from_millis(80));
+        assert!(
+            contended.is_none(),
+            "contended acquire_or_skip must hard-skip (None), not proceed unlocked"
+        );
+
+        guarded_rmw(holder); // runs once (genuine holder)
+        guarded_rmw(contended); // None -> skipped, no second write
+
+        // Exactly one RMW ran; the contended writer skipped instead of
+        // double-claiming (last-writer-wins).
+        assert_eq!(writes.load(AtomicOrdering::Relaxed), 1);
     }
 }

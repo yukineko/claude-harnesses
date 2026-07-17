@@ -123,8 +123,55 @@ impl RunLock {
         run_id: &str,
         deadline: Duration,
     ) -> Self {
-        let path = lock_path(cfg, cwd, run_id);
+        Self::acquire_at(lock_path(cfg, cwd, run_id), deadline)
+    }
 
+    /// Returns `true` when this guard genuinely holds the lock. A `false` here
+    /// means the lock degraded to unlocked (fail-soft after a timeout or I/O
+    /// error) and any RMW performed under it may race — the caller should treat
+    /// that as unsafe to mutate.
+    // `#[allow(dead_code)]`: this is a new caller-facing API; its callers live in
+    // sibling modules (state.rs/claim.rs) owned by other tasks and are wired
+    // separately. condukt is a bin crate, so an as-yet-uncalled `pub fn` reads
+    // as dead until then. Exercised now by this module's tests.
+    #[allow(dead_code)]
+    pub fn held(&self) -> bool {
+        self.path.is_some()
+    }
+
+    /// Fallible acquire: returns `Some(guard)` only when the lock is genuinely
+    /// HELD, and `None` when acquisition degraded to unlocked (timeout under
+    /// contention, or an I/O error) — a treat-as-held **hard-skip**. Lets a
+    /// caller SKIP its read-modify-write instead of mutating unlocked, which
+    /// under pathological contention is what lets two timed-out writers both
+    /// proceed and double-write (last-writer-wins). Fail-soft: never panics.
+    /// Uses the same [`RunLock::DEADLINE`] as [`RunLock::acquire`].
+    #[allow(dead_code)] // caller-facing API wired by sibling tasks; see `held`.
+    pub fn acquire_or_skip(cfg: &Config, cwd: &Path, run_id: &str) -> Option<Self> {
+        Self::acquire_or_skip_at(lock_path(cfg, cwd, run_id), Self::DEADLINE)
+    }
+
+    /// Core of [`RunLock::acquire_or_skip`] against an explicit lock `path`:
+    /// runs the same fail-soft acquire and maps the degraded (unheld) guard to
+    /// `None`. Shared by the public API and the seam tests (which drive it with
+    /// a short deadline against a self-contained temp path).
+    #[allow(dead_code)] // reached via `acquire_or_skip` (wired by sibling tasks) + tests.
+    fn acquire_or_skip_at(path: PathBuf, deadline: Duration) -> Option<Self> {
+        let guard = Self::acquire_at(path, deadline);
+        if guard.held() {
+            Some(guard)
+        } else {
+            None
+        }
+    }
+
+    /// Core locking mechanics against an explicit lock-file `path`. Split out
+    /// from [`RunLock::acquire_with_deadline`] so both the fallible
+    /// `acquire_or_skip` and the tests can drive it against a self-contained
+    /// temp path. Stays fail-soft: returns `RunLock { path: None }` on any
+    /// timeout/error so existing callers of `acquire`/`acquire_with_deadline`
+    /// are unchanged.
+    fn acquire_at(path: PathBuf, deadline: Duration) -> Self {
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!(
@@ -137,10 +184,18 @@ impl RunLock {
 
         // Fully write our lock contents to a private temp file first, then
         // publish it atomically via hard link. A concurrent reader can never
-        // observe a partial lock at the final path.
+        // observe a partial lock at the final path. The run id is recorded for
+        // diagnostics only (never read functionally — reap keys off `pid`); it
+        // is recovered from the lock filename (`<safe_session(run_id)>.lock`)
+        // since `acquire_at` operates on an already-resolved path.
+        let run_id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
         let info = LockInfo {
             pid: std::process::id(),
-            run_id: run_id.to_string(),
+            run_id,
             acquired_at: now_unix(),
         };
         let json = match serde_json::to_string(&info) {
@@ -191,8 +246,9 @@ impl RunLock {
                         _ => {
                             if start.elapsed() >= deadline {
                                 eprintln!(
-                                    "condukt: run '{run_id}' state lock contended for {:?}; \
+                                    "condukt: state lock {} contended for {:?}; \
                                      proceeding unlocked (update may race)",
+                                    path.display(),
                                     deadline
                                 );
                                 return RunLock { path: None };
@@ -219,5 +275,68 @@ struct TmpGuard<'a>(&'a Path);
 impl Drop for TmpGuard<'_> {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(self.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+
+    // Drives `acquire_at`/`acquire_or_skip_at` directly against a self-contained
+    // temp path (never `lock_path`'s state-dir resolution), so these tests never
+    // touch a real `state_dir` and need no coordination with other tests.
+    fn tmp_lock_path(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "condukt-lock-test-{tag}-{}-{}",
+            std::process::id(),
+            now_unix_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("run.lock")
+    }
+
+    #[test]
+    fn held_reflects_acquisition_state() {
+        let path = tmp_lock_path("held");
+        let g = RunLock::acquire_at(path, Duration::from_millis(200));
+        assert!(g.held(), "a freshly-published lock must report held()");
+    }
+
+    // Wedge a holder, then attempt `acquire_or_skip` against the SAME lock path
+    // with a short deadline: it must hard-skip (`None`) rather than hand out an
+    // unheld guard. A guarded RMW modeled as a closure gated on `Some` must run
+    // exactly once (the holder), NOT twice — this is the window that a plain
+    // `acquire` degrade would let a second writer through, double-writing.
+    #[test]
+    fn acquire_or_skip_hard_skips_while_first_is_held() {
+        let path = tmp_lock_path("skip");
+        let writes = AtomicU32::new(0);
+        // A guarded RMW: it only mutates when handed a genuinely-held guard.
+        let guarded_rmw = |lock: Option<RunLock>| {
+            if let Some(g) = lock {
+                assert!(g.held());
+                writes.fetch_add(1, AtomicOrdering::Relaxed);
+            }
+        };
+
+        // First writer genuinely holds the lock and performs its RMW. Keep the
+        // guard alive across the second writer's attempt to model overlap.
+        let holder = RunLock::acquire_or_skip_at(path.clone(), Duration::from_millis(200));
+        assert!(holder.is_some(), "first acquire_or_skip must be HELD");
+        // Second writer contends the SAME lock with a short deadline: it must
+        // hard-skip (None), NOT hand out an unheld guard that proceeds unlocked.
+        let contended = RunLock::acquire_or_skip_at(path, Duration::from_millis(80));
+        assert!(
+            contended.is_none(),
+            "contended acquire_or_skip must hard-skip (None), not proceed unlocked"
+        );
+
+        guarded_rmw(holder); // runs once (genuine holder)
+        guarded_rmw(contended); // None -> skipped, no second write
+
+        // Exactly one RMW ran; the contended writer skipped instead of
+        // double-writing (last-writer-wins).
+        assert_eq!(writes.load(AtomicOrdering::Relaxed), 1);
     }
 }

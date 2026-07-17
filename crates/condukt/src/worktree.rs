@@ -9,6 +9,9 @@ use std::time::Duration;
 
 use wait_timeout::ChildExt;
 
+use crate::config::Config;
+use crate::lock;
+
 /// Every `git` subprocess spawned by this module is bounded by this timeout.
 /// worktree lifecycle ops (add/remove/merge/status) are expected to be local
 /// and fast, but a hung `git` (lock contention, a stuck credential helper
@@ -314,6 +317,13 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
     // clears only *dropped* (dir-gone) registrations; a branch genuinely checked
     // out in a LIVE worktree survives prune and is still correctly rejected
     // below. Best-effort / fail-soft, matching `discard()`'s prune idiom.
+    //
+    // `git worktree prune` and the branch-ref mutations that follow (branch -D,
+    // worktree add) all mutate the ONE primary repo, so take the repo-scoped
+    // lock to serialize with a concurrent merge/prune in another run. Held to
+    // the end of create(). (`_loaded`: create() doesn't thread a Config and its
+    // callers live in sibling modules out of this change's scope.)
+    let _repo_lock = lock::acquire_repo_primary_loaded(repo);
     let _ = git(repo, &["worktree", "prune"]);
     if branch_checked_out(repo, branch)? {
         bail!(
@@ -412,7 +422,13 @@ fn git_try(dir: &Path, args: &[&str]) -> Result<(bool, String, String)> {
 /// Pre-flight: attempts `git merge --no-commit --no-ff` to detect conflicts
 /// before performing the real merge. If conflicts are detected, aborts the
 /// trial merge and returns an error without touching the branch history.
-pub fn merge(repo: &Path, branch: &str, default_branch: &str) -> Result<()> {
+pub fn merge(cfg: &Config, repo: &Path, branch: &str, default_branch: &str) -> Result<()> {
+    // Serialize with every other primary-repo default-branch mutator (another
+    // condukt run's merge / main-tree commit / `git worktree prune`) on ONE
+    // repo-scoped advisory lock, so two runs in the same repo never race on the
+    // default branch. Held for the entire checkout+merge critical section and
+    // released on drop. Fail-soft: `acquire_repo_primary` never panics.
+    let _repo_lock = lock::acquire_repo_primary(cfg, repo);
     git(repo, &["checkout", default_branch])
         .with_context(|| format!("could not checkout {default_branch} before merge"))?;
     let current = git(repo, &["branch", "--show-current"])?;
@@ -482,6 +498,38 @@ mod worktree_remove_tests {
         (tmp, repo)
     }
 
+    /// Minimal `Config` for merge tests: its only functional use here is the
+    /// `state_dir` where `acquire_repo_primary` publishes the repo-scoped lock,
+    /// pinned under `tmp` so tests never touch the real state dir.
+    fn test_cfg(tmp: &Path) -> Config {
+        Config {
+            worktree_base: tmp.join("worktrees"),
+            default_branch: "main".to_string(),
+            shared_globs: Vec::new(),
+            max_parallel: 4,
+            state_dir: tmp.join("state"),
+            test_command: None,
+            stuck_ttl_secs: 1800,
+            build_command: None,
+            deploy_command: None,
+            loop_max_iters: 10,
+            autonomous: false,
+            consensus_enabled: false,
+            consensus_samples: crate::consensus::DEFAULT_SAMPLES,
+            consensus_threshold: crate::consensus::DEFAULT_THRESHOLD,
+            adversarial_enabled: false,
+            adversarial_size: crate::adversarial::DEFAULT_PANEL,
+            adversarial_min_voters: crate::adversarial::DEFAULT_MIN_VOTERS,
+            adversarial_block_ratio: crate::adversarial::DEFAULT_BLOCK_RATIO,
+            single_worktree: false,
+            worker_sandbox_enabled: false,
+            worker_sandbox_image: None,
+            worker_sandbox_memory: None,
+            worker_sandbox_cpus: None,
+            worker_sandbox_pids_limit: None,
+        }
+    }
+
     /// Create a branch from HEAD, write `content` to `file`, commit and return.
     fn make_branch(repo: &Path, branch: &str, file: &str, content: &str) {
         git(repo, &["checkout", "-b", branch]).unwrap();
@@ -496,7 +544,8 @@ mod worktree_remove_tests {
         let (_tmp, repo) = init_repo();
         make_branch(&repo, "feat", "feat.txt", "feature content\n");
 
-        merge(&repo, "feat", "main").expect("clean merge should succeed");
+        let cfg = test_cfg(&repo);
+        merge(&cfg, &repo, "feat", "main").expect("clean merge should succeed");
 
         // The file should now exist on main
         assert!(repo.join("feat.txt").exists());
@@ -526,7 +575,8 @@ mod worktree_remove_tests {
         git(&repo, &["add", "."]).unwrap();
         git(&repo, &["commit", "-m", "main edit"]).unwrap();
 
-        let result = merge(&repo, "conflict-branch", "main");
+        let cfg = test_cfg(&repo);
+        let result = merge(&cfg, &repo, "conflict-branch", "main");
         assert!(
             result.is_err(),
             "conflicting merge should return an error, but got Ok"
@@ -650,6 +700,12 @@ pub fn remove(repo: &Path, path: &Path, branch: Option<&str>) -> Result<Option<S
 /// If the worktree dir is already gone we `worktree prune` first so the stale
 /// admin entry does not make `branch -D` refuse ("checked out").
 pub fn discard(repo: &Path, path: &Path, branch: Option<&str>) -> Result<()> {
+    // Serialize the worktree-remove / `git worktree prune` / branch -D below
+    // (all primary-repo mutations) with a concurrent merge/prune in another run
+    // on the shared repo-scoped lock. Held for the whole function; fail-soft.
+    // (`_loaded`: discard() doesn't thread a Config; callers are in sibling
+    // modules out of this change's scope.)
+    let _repo_lock = lock::acquire_repo_primary_loaded(repo);
     let path_str = path.to_string_lossy().to_string();
     if path.exists() {
         if git(repo, &["worktree", "remove", &path_str]).is_err() {

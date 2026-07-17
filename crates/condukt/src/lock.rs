@@ -55,6 +55,32 @@ impl Drop for RunLock {
     }
 }
 
+/// Reserved run-id used only to key the REPO-scoped primary lock file
+/// (`<project>/__repo_primary__.lock`). A FIXED key (independent of any run_id)
+/// yields ONE per-repo/project lock, so every condukt process that mutates the
+/// single primary repo's default branch — `worktree::merge` (checkout
+/// default_branch + merge), the main-tree selective-staging commit, and
+/// `git worktree prune` — serializes on it instead of racing on `main` (which
+/// today is only serialized by the upstream flow backlog lock). Mirrors
+/// `claim::CLAIMS_LOCK_KEY`; it never names a real run so cannot collide with one.
+pub const REPO_PRIMARY_LOCK_KEY: &str = "__repo_primary__";
+
+/// Acquire the repo-scoped primary lock for the repo containing `cwd`, holding
+/// it (via the returned RAII guard) for the whole primary-repo critical section.
+/// Fail-soft: never panics, and under pathological contention may degrade to
+/// unlocked exactly like [`RunLock::acquire`] (bounded wait, pid-reaped).
+pub fn acquire_repo_primary(cfg: &Config, cwd: &Path) -> RunLock {
+    RunLock::acquire(cfg, cwd, REPO_PRIMARY_LOCK_KEY)
+}
+
+/// Like [`acquire_repo_primary`] but loads [`Config`] internally, for
+/// primary-repo mutators (e.g. `git worktree prune` inside
+/// `worktree::create`/`worktree::discard`) that do not already thread a `Config`
+/// and whose callers live in sibling modules. Same fail-soft guarantees.
+pub fn acquire_repo_primary_loaded(cwd: &Path) -> RunLock {
+    acquire_repo_primary(&Config::load(), cwd)
+}
+
 fn now_unix() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -338,5 +364,136 @@ mod tests {
         // Exactly one RMW ran; the contended writer skipped instead of
         // double-writing (last-writer-wins).
         assert_eq!(writes.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    fn test_cfg(state_dir: PathBuf) -> Config {
+        Config {
+            worktree_base: state_dir.join("worktrees"),
+            default_branch: "main".to_string(),
+            shared_globs: Vec::new(),
+            max_parallel: 4,
+            state_dir,
+            test_command: None,
+            stuck_ttl_secs: 1800,
+            build_command: None,
+            deploy_command: None,
+            loop_max_iters: 10,
+            autonomous: false,
+            consensus_enabled: false,
+            consensus_samples: crate::consensus::DEFAULT_SAMPLES,
+            consensus_threshold: crate::consensus::DEFAULT_THRESHOLD,
+            adversarial_enabled: false,
+            adversarial_size: crate::adversarial::DEFAULT_PANEL,
+            adversarial_min_voters: crate::adversarial::DEFAULT_MIN_VOTERS,
+            adversarial_block_ratio: crate::adversarial::DEFAULT_BLOCK_RATIO,
+            single_worktree: false,
+            worker_sandbox_enabled: false,
+            worker_sandbox_image: None,
+            worker_sandbox_memory: None,
+            worker_sandbox_cpus: None,
+            worker_sandbox_pids_limit: None,
+        }
+    }
+
+    // The core serialization proof for the repo-scoped primary lock: many
+    // threads each do a read-modify-write on ONE shared counter file, every RMW
+    // guarded by the SAME repo-primary lock path. A widened window
+    // (read -> sleep -> write) makes an UNLOCKED racer almost certainly clobber
+    // a concurrent increment (lost update) — this is the exact bug two condukt
+    // runs racing on `main` would hit. Under the shared lock every increment
+    // must survive: final == THREADS*ITERS. RED without the guard (drop `_g` and
+    // the counter under-counts), GREEN with it.
+    #[test]
+    fn repo_primary_lock_serializes_concurrent_rmw_no_lost_update() {
+        let dir = std::env::temp_dir().join(format!(
+            "condukt-repo-primary-rmw-{}-{}",
+            std::process::id(),
+            now_unix_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A FIXED lock path shared by every thread models the repo-scoped key
+        // (`REPO_PRIMARY_LOCK_KEY`): one lock for the one primary repo.
+        let lock_file = dir.join(format!("{REPO_PRIMARY_LOCK_KEY}.lock"));
+        let counter = dir.join("counter");
+        std::fs::write(&counter, "0").unwrap();
+
+        const THREADS: usize = 6;
+        const ITERS: usize = 8;
+
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                let lock_file = lock_file.clone();
+                let counter = counter.clone();
+                scope.spawn(move || {
+                    for _ in 0..ITERS {
+                        let g = RunLock::acquire_at(lock_file.clone(), Duration::from_secs(10));
+                        assert!(g.held(), "each RMW must genuinely hold the repo lock");
+                        // Widened read->modify->write window: an unlocked racer
+                        // reading the same `cur` here would lose an increment.
+                        let cur: u64 = std::fs::read_to_string(&counter)
+                            .unwrap()
+                            .trim()
+                            .parse()
+                            .unwrap();
+                        std::thread::sleep(Duration::from_millis(2));
+                        std::fs::write(&counter, (cur + 1).to_string()).unwrap();
+                    }
+                });
+            }
+        });
+
+        let final_val: u64 = std::fs::read_to_string(&counter)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            final_val,
+            (THREADS * ITERS) as u64,
+            "every increment must survive under the repo-primary lock (no lost update)"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // The repo-primary lock is REPO-scoped, not run-scoped: `acquire_repo_primary`
+    // keys off the FIXED reserved id, so its lock file lands at
+    // `<state_dir>/<project-key>/__repo_primary__.lock` regardless of any run id
+    // — the single shared path every primary-repo mutator (merge / main-tree
+    // commit / prune) contends. It is genuinely HELD and distinct from the
+    // claims registry lock.
+    #[test]
+    fn acquire_repo_primary_is_held_and_repo_scoped() {
+        assert_eq!(REPO_PRIMARY_LOCK_KEY, "__repo_primary__");
+
+        let base = std::env::temp_dir().join(format!(
+            "condukt-repo-primary-scope-{}-{}",
+            std::process::id(),
+            now_unix_nanos()
+        ));
+        let cwd = base.join("repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let cfg = test_cfg(base.join("state"));
+
+        let expected = cfg
+            .state_dir
+            .join(project_key(&repo_root(&cwd)))
+            .join(format!(
+                "{}.lock",
+                harness_core::store::safe_session(REPO_PRIMARY_LOCK_KEY)
+            ));
+
+        let guard = acquire_repo_primary(&cfg, &cwd);
+        assert!(guard.held(), "repo-primary lock must be genuinely held");
+        assert!(
+            expected.exists(),
+            "repo-primary lock file must be published at the repo-scoped path {}",
+            expected.display()
+        );
+        drop(guard);
+        assert!(
+            !expected.exists(),
+            "lock file must be released (removed) on guard drop"
+        );
+        std::fs::remove_dir_all(&base).ok();
     }
 }

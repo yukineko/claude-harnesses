@@ -920,6 +920,17 @@ enum StateAction {
     /// `{"single_worktree":<bool>}` and exits 0 when single-worktree, 1 when not
     /// — so the /condukt skill branches on the exit code to run all tasks in the
     /// main tree (selective staging, no per-task worktree/merge) only when on.
+    ///
+    /// NOTE (repo-primary serialization): the single-worktree main-tree commit
+    /// (`git add <explicit touched paths>` + commit on the primary repo) is
+    /// performed by the /condukt skill's shell, NOT by any condukt subcommand, so
+    /// there is no in-process site here to take `lock::REPO_PRIMARY_LOCK_KEY`.
+    /// That path is serialized against other primary-repo mutators by the
+    /// upstream flow backlog lock (one run per repo at a time); the Rust
+    /// primary-repo mutators (`worktree::merge`, `git worktree prune`) hold the
+    /// repo-scoped `RunLock` directly. If the skill is ever moved into a condukt
+    /// subcommand, that subcommand MUST wrap the staging+commit in
+    /// `lock::acquire_repo_primary(cfg, cwd)` to join the same serialization.
     WorktreeModeCheck,
     /// Resolve the verifier model so it never equals the worker model (shared
     /// blind-spot guard). Prints the chosen model on stdout. A distinct
@@ -2681,7 +2692,7 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
             let path = worktree::create(&repo, &cfg.worktree_base, &topic, &branch)?;
             println!("{}", path.display());
         }
-        WtAction::Merge { branch } => worktree::merge(&repo, &branch, &cfg.default_branch)?,
+        WtAction::Merge { branch } => worktree::merge(cfg, &repo, &branch, &cfg.default_branch)?,
         WtAction::Remove { path, branch } => {
             let undeleted = worktree::remove(&repo, &path, branch.as_deref())?;
             if let Some(b) = undeleted {
@@ -2701,6 +2712,11 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
         }
         WtAction::Cleanup { remove } => {
             let orphans = worktree::orphans(&repo, &cfg.worktree_base)?;
+            // `git worktree prune` mutates the primary repo — take the shared
+            // repo-scoped lock so it serializes with a concurrent merge/prune in
+            // another run rather than racing. Held across the prune (dropped at
+            // block end). Fail-soft: `acquire_repo_primary` never panics.
+            let _repo_lock = lock::acquire_repo_primary(cfg, &repo);
             let _ = worktree::git(&repo, &["worktree", "prune"]);
             if orphans.is_empty() {
                 eprintln!("no orphan worktrees under {}", cfg.worktree_base.display());
@@ -3005,7 +3021,7 @@ fn run_pr(cfg: &Config, cwd: &Path, action: PrAction) -> Result<()> {
                     let repo = worktree::toplevel(cwd)?;
                     // Fail-soft: a merge failure (e.g. conflicts) is reported and
                     // the turn still exits 0 — it never breaks the turn.
-                    match worktree::merge(&repo, &branch, &cfg.default_branch) {
+                    match worktree::merge(cfg, &repo, &branch, &cfg.default_branch) {
                         Ok(()) => {
                             println!("CI green: merged '{branch}' into '{}'.", cfg.default_branch)
                         }

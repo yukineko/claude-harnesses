@@ -307,10 +307,58 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
     if path.exists() {
         bail!("worktree path already exists: {}", path.display());
     }
+    // Prune stale worktree registrations before the branch-checked-out gate.
+    // If a worktree dir was removed out-of-band, git keeps a lingering admin
+    // entry that still reports the branch as "checked out" — falsely blocking a
+    // re-cut of the same branch until someone runs prune by hand. Pruning first
+    // clears only *dropped* (dir-gone) registrations; a branch genuinely checked
+    // out in a LIVE worktree survives prune and is still correctly rejected
+    // below. Best-effort / fail-soft, matching `discard()`'s prune idiom.
+    let _ = git(repo, &["worktree", "prune"]);
     if branch_checked_out(repo, branch)? {
         bail!(
             "branch '{branch}' is already checked out in another worktree (one dir = one branch)"
         );
+    }
+
+    // Pruning above cleared any *dropped* worktree's stale admin registration,
+    // and the branch_checked_out() gate above has already rejected a branch that
+    // is genuinely LIVE in another (dir-present) worktree. But `git worktree
+    // prune` keeps the branch REF itself (its commits are not garbage), so a
+    // stale leftover ref from a dropped/abandoned attempt can still exist here.
+    // A fresh `-b` (create-new-branch) would then hard-fail with "a branch named
+    // '<branch>' already exists".
+    //
+    // Force-delete that lingering ref so every re-cut is deterministically
+    // PRISTINE — branched off the caller's base HEAD — instead of silently
+    // re-attaching a crashed attempt's commits. condukt reuses `condukt/<t.id>`
+    // on every retry; the Abandon/stuck-worker recovery path only resets
+    // run-state pointers and never deletes the git branch, so a prior attempt's
+    // commits survive on the ref. That prior-attempt state is meant to flow
+    // explicitly via failure_context.diff into a NEW worktree, not invisibly
+    // through a reused ref (which would also corrupt the post-execution diffrisk
+    // audit — lines_added would count commits the current worker never wrote).
+    // This mirrors discard()'s "throw the branch away" (`git branch -D`) idiom.
+    //
+    // CRITICAL GUARD: this is safe precisely because we only reach here once the
+    // branch is NOT live anywhere. `prune` only clears dir-missing registrations,
+    // so a branch still checked out in a live worktree makes branch_checked_out()
+    // == true above and is rejected before this point; a surviving ref with
+    // branch_checked_out() == false is therefore a stale leftover, never a live
+    // branch. We never `-D` a branch that is checked out in a live worktree.
+    let (branch_ref_exists, _, _) = git_try(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )?;
+    if branch_ref_exists {
+        git(repo, &["branch", "-D", branch]).with_context(|| {
+            format!("could not force-delete stale branch ref '{branch}' before re-cut")
+        })?;
     }
 
     if let Some(parent) = path.parent() {
@@ -321,8 +369,9 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
         })?;
     }
     let path_str = path.to_string_lossy().to_string();
-    // `--` ends option parsing so a path/branch can never be read as a flag
-    // (defense in depth on top of validate_topic/validate_branch above).
+    // Always create a fresh branch off the current base HEAD. `--` ends option
+    // parsing so a path/branch can never be read as a flag (defense in depth on
+    // top of validate_topic/validate_branch above).
     git(repo, &["worktree", "add", "-b", branch, "--", &path_str]).with_context(|| {
         format!("could not create worktree for branch '{branch}' at {path_str}")
     })?;
@@ -1308,6 +1357,124 @@ mod tests {
             err.to_string().contains("inside the repo"),
             "worktree_base reached via a symlink into the repo must still be \
              rejected as 'inside the repo', got: {err}"
+        );
+    }
+
+    // ── prune stale registrations before the branch-checked-out gate ────────
+
+    /// `create()` must PRUNE a stale (dir-removed, admin-entry-lingering)
+    /// worktree registration AND force-delete the lingering branch ref before
+    /// re-cutting, so the same condukt branch can be re-cut after its worktree
+    /// dir was dropped out-of-band. Two failure modes are encoded here:
+    ///   (a) Without prune-first, git still reports the branch as "checked out
+    ///       in another worktree" and `create()` false-blocks the re-creation.
+    ///   (b) With prune-only OR re-attach (the rejected fix), the re-cut branch
+    ///       is NOT pristine: the dropped attempt's commit survives on the ref
+    ///       and is silently inherited. The re-cut MUST instead be branched
+    ///       fresh off base HEAD (the `git branch -D` + `-b` fix).
+    #[test]
+    fn create_prunes_stale_registration_and_recreates_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+
+        // Capture the base HEAD that every fresh re-cut must branch from.
+        let base_head = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+
+        let wt_base = tmp.path().join("worktrees");
+        fs::create_dir_all(&wt_base).unwrap();
+        let branch = "condukt/recut";
+
+        // 1. Create a worktree for `branch` via the real create() path.
+        let wt_path = create(&repo, &wt_base, "recut", branch).unwrap();
+        assert!(wt_path.exists(), "worktree dir should exist after create");
+
+        // 1b. Seed the (soon-to-be-dropped) attempt with a commit on `branch`.
+        //     This stands in for a crashed/abandoned worker's committed work
+        //     that survives on the ref. Its SHA must NOT reappear on the re-cut.
+        fs::write(wt_path.join("dropped-attempt.txt"), "stale work\n").unwrap();
+        git(&wt_path, &["add", "dropped-attempt.txt"]).unwrap();
+        git(&wt_path, &["commit", "-m", "dropped attempt commit"]).unwrap();
+        let dropped_sha = git(&wt_path, &["rev-parse", "HEAD"]).unwrap();
+        assert_ne!(
+            dropped_sha, base_head,
+            "the dropped attempt must have advanced the branch past base HEAD"
+        );
+
+        // 2. Remove the worktree DIRECTORY out-of-band, leaving git's stale
+        //    admin registration (and the branch ref, with its extra commit)
+        //    behind — git still thinks the branch is checked out there.
+        fs::remove_dir_all(&wt_path).unwrap();
+        assert!(
+            branch_checked_out(&repo, branch).unwrap(),
+            "precondition: git still reports a stale registration for the branch"
+        );
+
+        // 3. Re-create for the same branch. With prune + force-delete this
+        //    SUCCEEDS and yields a PRISTINE branch; against the old code it
+        //    false-blocks (a) or re-attaches the stale ref (b).
+        let recreated = create(&repo, &wt_base, "recut", branch)
+            .expect("re-creating the branch must succeed after pruning the stale registration");
+        assert!(
+            recreated.exists(),
+            "re-created worktree dir should exist: {}",
+            recreated.display()
+        );
+
+        // 4. PRISTINE assertion (the design fix): the re-cut branch must point
+        //    at base HEAD and must NOT contain the dropped attempt's commit.
+        //    A prune-only or re-attach implementation fails this: the re-cut
+        //    branch would still carry `dropped_sha`.
+        let recut_head = git(&recreated, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(
+            recut_head, base_head,
+            "re-cut branch must be branched fresh off base HEAD, not inherit the dropped ref"
+        );
+        assert_ne!(
+            recut_head, dropped_sha,
+            "re-cut branch must NOT point at the dropped attempt's commit"
+        );
+        // The dropped attempt's file must not be present in the fresh worktree.
+        assert!(
+            !recreated.join("dropped-attempt.txt").exists(),
+            "the dropped attempt's committed file must not resurface on a pristine re-cut"
+        );
+        // And the dropped commit must not be an ancestor of the re-cut branch.
+        let (contains_dropped, _, _) = git_try(
+            &repo,
+            &["merge-base", "--is-ancestor", &dropped_sha, branch],
+        )
+        .unwrap();
+        assert!(
+            !contains_dropped,
+            "the dropped attempt's commit must not be reachable from the re-cut branch"
+        );
+    }
+
+    /// The prune-first step must NOT weaken a legitimate rejection: a branch
+    /// genuinely checked out in a LIVE worktree survives `git worktree prune`,
+    /// so `create()` still refuses to re-cut it (one dir = one branch).
+    #[test]
+    fn create_still_rejects_branch_live_in_another_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+
+        let wt_base = tmp.path().join("worktrees");
+        fs::create_dir_all(&wt_base).unwrap();
+        let branch = "condukt/live";
+
+        // A LIVE worktree for `branch` (dir stays on disk).
+        create(&repo, &wt_base, "live", branch).unwrap();
+
+        // Re-cutting the same branch into a different topic must still be
+        // rejected — prune leaves a live registration untouched.
+        let err = create(&repo, &wt_base, "live2", branch).unwrap_err();
+        assert!(
+            err.to_string().contains("already checked out"),
+            "a branch live in another worktree must still be rejected, got: {err}"
         );
     }
 }

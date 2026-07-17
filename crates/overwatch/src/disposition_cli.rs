@@ -12,8 +12,14 @@
 /// string, by contrast, is a genuine input error and is rejected with `Err`
 /// (mirrors `DispositionVerdict::parse_cli`).
 use crate::disposition::{self, Disposition, DispositionVerdict};
+use crate::reconcile::{self, ReconcileRange};
 use crate::store;
 use anyhow::Result;
+
+/// Commit-range `reconcile-fixed` itself uses from `continuous-audit.sh`
+/// (`--last-n 200`) — kept identical here so `stale_undisposed_with_fix_commit`
+/// answers "would a `reconcile-fixed` run right now find anything to do".
+const STALE_SCAN_LAST_N: usize = 200;
 
 /// Record one human disposition of a review finding.
 ///
@@ -79,6 +85,13 @@ pub fn metrics(json: bool) -> Result<()> {
         .filter(|d| d.verdict == DispositionVerdict::FalsePositive)
         .count();
 
+    // Early warning for the "fix commit landed, nobody dispositioned it"
+    // stale-backlog gap (2026-07-17 incident): findings a `reconcile-fixed`
+    // run right now would confirm, recomputed read-only so it's visible even
+    // when reconcile-fixed hasn't run this round.
+    let stale_undisposed =
+        reconcile::stale_undisposed_count(&cwd, ReconcileRange::LastN(STALE_SCAN_LAST_N));
+
     if json {
         println!(
             "{}",
@@ -92,6 +105,7 @@ pub fn metrics(json: bool) -> Result<()> {
                     "dismissed": dismissed,
                     "false_positive": false_positive,
                 },
+                "stale_undisposed_with_fix_commit": stale_undisposed,
             }))?
         );
         return Ok(());
@@ -99,6 +113,11 @@ pub fn metrics(json: bool) -> Result<()> {
 
     if total == 0 {
         println!("(no dispositions recorded yet — run overwatch record-disposition)");
+        if stale_undisposed > 0 {
+            println!(
+                "  WARNING: {stale_undisposed} finding(s) have a landed fix commit but no disposition yet — run `overwatch reconcile-fixed`"
+            );
+        }
         return Ok(());
     }
 
@@ -119,5 +138,10 @@ pub fn metrics(json: bool) -> Result<()> {
     println!(
         "  by verdict: confirmed={confirmed} dismissed={dismissed} false_positive={false_positive}"
     );
+    if stale_undisposed > 0 {
+        println!(
+            "  WARNING: {stale_undisposed} finding(s) have a landed fix commit but no disposition yet — run `overwatch reconcile-fixed`"
+        );
+    }
     Ok(())
 }

@@ -233,6 +233,26 @@ fn reconcile_fixed_dry_run_does_not_write_disposition() {
     let metrics_out = run_ow(&home, &work, &["review-metrics", "--json"]);
     let m: Value = serde_json::from_str(&metrics_out).unwrap();
     assert_eq!(m["total"], 0, "--dry-run must not write a disposition");
+    // Early-warning signal: a fix commit for CA-overwatch-321 has landed but
+    // --dry-run deliberately left it undisposed — review-metrics must
+    // surface that gap rather than silently agreeing with the stale queue.
+    assert_eq!(
+        m["stale_undisposed_with_fix_commit"], 1,
+        "dry-run must not clear the stale-undisposed warning: {m}"
+    );
+
+    // A real (non-dry-run) reconcile-fixed clears the warning.
+    run_ow(
+        &home,
+        &work,
+        &["reconcile-fixed", "--last-n", "10", "--json"],
+    );
+    let metrics_out2 = run_ow(&home, &work, &["review-metrics", "--json"]);
+    let m2: Value = serde_json::from_str(&metrics_out2).unwrap();
+    assert_eq!(
+        m2["stale_undisposed_with_fix_commit"], 0,
+        "reconcile-fixed must clear the stale-undisposed warning: {m2}"
+    );
 }
 
 #[test]

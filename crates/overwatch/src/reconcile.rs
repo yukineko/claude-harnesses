@@ -148,6 +148,28 @@ fn parse_git_log(text: &str) -> Vec<CommitRef> {
         .collect()
 }
 
+/// Count findings that already have a landed fix commit (referenced within
+/// `range`) but no disposition yet — the `review-metrics` early-warning
+/// signal for the same "fix landed, nobody ran record-disposition" gap
+/// `reconcile-fixed` closes (recurs every round `reconcile-fixed` isn't run
+/// over, e.g. because it scans too short a range). Pure recomputation of
+/// `compute_reconcile_dispositions`'s output size — never writes. Fail-soft:
+/// a git or store read failure degrades to 0, matching `run()`.
+pub fn stale_undisposed_count(cwd: &Path, range: ReconcileRange) -> usize {
+    let commits = git_log_commits(cwd, &range);
+    let known_finding_ids: BTreeSet<String> = store::read_review_findings_all(cwd)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|f| f.finding_id)
+        .collect();
+    let already_disposed: BTreeSet<String> = store::read_dispositions(cwd)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| d.finding_id)
+        .collect();
+    compute_reconcile_dispositions(&commits, &known_finding_ids, &already_disposed, 0).len()
+}
+
 /// CLI entry point for `overwatch reconcile-fixed`. Fail-soft end-to-end:
 /// a git failure or an unreadable store both degrade to "0 processed",
 /// never an `Err` — this command must never break a pre-push hook or an
@@ -202,7 +224,11 @@ pub fn run(range: ReconcileRange, dry_run: bool, json: bool) -> Result<()> {
             commits.len()
         );
     } else {
-        let verb = if dry_run { "would reconcile" } else { "reconciled" };
+        let verb = if dry_run {
+            "would reconcile"
+        } else {
+            "reconciled"
+        };
         println!(
             "reconcile-fixed: scanned {} commit(s), {verb} {} finding(s):",
             commits.len(),
@@ -224,14 +250,20 @@ mod tests {
         let msg = "fix(overwatch): resolve CA-overwatch-004 leak\n\nAlso touches CA-blastguard-01.";
         assert_eq!(
             extract_finding_ids(msg),
-            vec!["CA-overwatch-004".to_string(), "CA-blastguard-01".to_string()]
+            vec![
+                "CA-overwatch-004".to_string(),
+                "CA-blastguard-01".to_string()
+            ]
         );
     }
 
     #[test]
     fn extract_finding_ids_dedupes_repeated_ids() {
         let msg = "CA-overwatch-004 fixed. See also CA-overwatch-004 in the test.";
-        assert_eq!(extract_finding_ids(msg), vec!["CA-overwatch-004".to_string()]);
+        assert_eq!(
+            extract_finding_ids(msg),
+            vec!["CA-overwatch-004".to_string()]
+        );
     }
 
     #[test]
@@ -292,7 +324,11 @@ mod tests {
         let known: BTreeSet<String> = ["CA-overwatch-001".to_string()].into_iter().collect();
         let disposed = BTreeSet::new();
         let out = compute_reconcile_dispositions(&commits, &known, &disposed, 1000);
-        assert_eq!(out.len(), 1, "the same finding-id must be disposed only once");
+        assert_eq!(
+            out.len(),
+            1,
+            "the same finding-id must be disposed only once"
+        );
         assert_eq!(out[0].reviewer, "auto-reconcile(commit aaa)");
     }
 

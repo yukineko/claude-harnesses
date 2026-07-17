@@ -66,6 +66,104 @@ fn spawn_end(cwd: &std::path::Path, home: &std::path::Path, key: &str) -> std::p
         .expect("failed to spawn overwatch end")
 }
 
+/// Spawn `overwatch reassign --key <key> --to <to>` with the reassign
+/// race-window widener set, so its load->remove->save cycle straddles a racing
+/// `begin` for a DIFFERENT key. Before the fix, `reassign` (control.rs) did its
+/// RMW without holding `LeaseLock` — the 6th lease mutator and the only one left
+/// unlocked — so it could load a pre-begin snapshot, sleep past the racing
+/// begin's save, then save the stale snapshot back, silently freeing the
+/// just-claimed key.
+fn spawn_reassign(
+    cwd: &std::path::Path,
+    home: &std::path::Path,
+    key: &str,
+    to: &str,
+) -> std::process::Child {
+    Command::new(bin())
+        .current_dir(cwd)
+        .env("HOME", home)
+        // Hold reassign()'s stale in-memory snapshot well past begin()'s save so
+        // the (pre-fix) unlocked reassign() deterministically clobbers begin()'s
+        // claim.
+        .env("OVERWATCH_TEST_REASSIGN_DELAY_MS", "500")
+        .args(["reassign", "--key", key, "--to", to])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn overwatch reassign")
+}
+
+/// A concurrent, unlocked `reassign` must not clobber a just-committed begin.
+///
+/// Regression for backlog 0ee61602: `control::reassign` performed its
+/// load->remove->save on `leases.json` WITHOUT holding `LeaseLock` (it was the
+/// 6th lease mutator, the unlocked twin of the five locked in 7916a97d). A
+/// racing `reassign key1` could load a pre-begin snapshot (no key2), let a
+/// concurrent `begin key2` commit, then save its stale snapshot back — silently
+/// freeing key2 so another begin could re-grab it (double-grab). Here we race
+/// `reassign key1` against `begin key2` and assert key2 SURVIVES every trial.
+/// Fails against the pre-fix (unlocked reassign) code; passes once reassign
+/// holds `LeaseLock`.
+#[test]
+fn concurrent_reassign_does_not_clobber_racing_begin() {
+    const TRIALS: u64 = 8;
+
+    for _ in 0..TRIALS {
+        let n = TRIAL_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "overwatch-lease-reassign-clobber-{}-{n}",
+            std::process::id()
+        ));
+        let home = tmp.join("home");
+        let cwd = tmp.join("cwd");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let key1 = "victim-key-1";
+        let key2 = "survivor-key-2";
+
+        // Establish key1 so there is a live lease for `reassign` to release.
+        let mut seed = spawn_begin(&cwd, &home, key1, "sess-a");
+        assert!(
+            seed.wait().expect("wait on seed begin").success(),
+            "trial {n}: seeding begin(key1) should succeed"
+        );
+
+        // Race: reassign(key1) loads a snapshot WITHOUT key2 and sleeps 500ms;
+        // begin(key2) loads, sleeps 150ms, then commits {key1,key2}. Without a
+        // shared lock, reassign() wakes last and saves its stale snapshot back,
+        // dropping key2.
+        let mut child_reassign = spawn_reassign(&cwd, &home, key1, "sess-c");
+        let mut child_begin = spawn_begin(&cwd, &home, key2, "sess-b");
+
+        child_reassign.wait().expect("wait on reassign");
+        assert!(
+            child_begin.wait().expect("wait on begin").success(),
+            "trial {n}: begin(key2) should win its own claim"
+        );
+
+        // Oracle: key2's holder (sess-b) must still have a live anchor. The
+        // `lease` subcommand exits 0 with the lease when present, 1 when the
+        // session holds nothing — so a non-zero exit means key2 was clobbered.
+        let status = Command::new(bin())
+            .current_dir(&cwd)
+            .env("HOME", &home)
+            .args(["lease", "--session", "sess-b", "--json"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("failed to query lease for sess-b");
+        assert!(
+            status.success(),
+            "trial {n}: key2 ({key2}) was clobbered by the racing unlocked reassign() \
+             (lease --session sess-b exited {:?})",
+            status.code()
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+}
+
 /// A concurrent, unlocked lease mutator must not clobber a just-committed begin.
 ///
 /// Regression for backlog 7916a97d: `run`/`end`/`heartbeat`/`reap` performed

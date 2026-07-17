@@ -28,6 +28,15 @@ fn resolve_run_id() -> String {
 /// near-duplicates (§4.6a). Overridable via `OVERWATCH_DUP_THRESHOLD`.
 const POSSIBLE_DUPLICATE_THRESHOLD: f64 = 0.6;
 
+/// Sleep for the millisecond count named by env var `var`, if set and parseable.
+/// No-op otherwise. Used only to widen a load->mutate->save race window in
+/// concurrency integration tests; never set in production.
+fn artificial_delay(var: &str) {
+    if let Some(ms) = std::env::var(var).ok().and_then(|s| s.parse::<u64>().ok()) {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+}
+
 /// Test-only race-window widener for `begin()`'s load->check->save section.
 /// Real process-spawn overhead (fork/exec/dynamic-link) dwarfs that section's
 /// natural duration, so two racing `begin()` processes essentially never
@@ -37,12 +46,16 @@ const POSSIBLE_DUPLICATE_THRESHOLD: f64 = 0.6;
 /// `lease_concurrency` integration test), so production behavior is
 /// unchanged.
 fn artificial_race_delay() {
-    if let Some(ms) = std::env::var("OVERWATCH_TEST_BEGIN_DELAY_MS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-    {
-        std::thread::sleep(std::time::Duration::from_millis(ms));
-    }
+    artificial_delay("OVERWATCH_TEST_BEGIN_DELAY_MS");
+}
+
+/// Test-only race-window widener for the mutators (`run`/`end`/`heartbeat`/
+/// `reap`), analogous to [`artificial_race_delay`] but keyed on a separate env
+/// var so a test can stagger a mutator's save relative to a racing `begin()`.
+/// No-op unless `OVERWATCH_TEST_MUTATOR_DELAY_MS` is set, so production behavior
+/// is unchanged.
+fn artificial_mutator_delay() {
+    artificial_delay("OVERWATCH_TEST_MUTATOR_DELAY_MS");
 }
 
 /// Resolve the near-duplicate threshold: env override if a valid `[0,1]` float,
@@ -219,9 +232,17 @@ pub fn run(key: &str, note: Option<&str>) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
 
+    // Hold the lease-registry lock across the whole load->mutate->save cycle,
+    // exactly as begin() does, so a concurrent mutator can never interleave on a
+    // stale pre-begin snapshot and clobber a just-committed claim (TOCTOU).
+    // Fail-soft: on lock timeout LeaseLock degrades to an unlocked guard; it
+    // never panics (never-break-a-turn).
+    let _lock = LeaseLock::acquire(&cwd);
+
     // Load leases
     let mut leases = store::load_leases(&cwd)?;
     store::reap_stale(&mut leases, now);
+    artificial_mutator_delay();
 
     // If the lease exists, update heartbeat. Otherwise just record the event (fail-soft).
     let (session_id, run_id, title) = if let Some(lease) = leases.get_mut(key) {
@@ -258,9 +279,16 @@ pub fn end(key: &str, status: &str) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
 
+    // Hold the lease-registry lock across the whole load->mutate->save cycle,
+    // exactly as begin() does, so a concurrent begin() can never have its fresh
+    // claim clobbered by this end() saving a stale pre-begin snapshot (TOCTOU).
+    // Fail-soft: LeaseLock degrades to unlocked on timeout and never panics.
+    let _lock = LeaseLock::acquire(&cwd);
+
     // Load leases
     let mut leases = store::load_leases(&cwd)?;
     store::reap_stale(&mut leases, now);
+    artificial_mutator_delay();
 
     // Get lease info before removing it (for the event)
     let (session_id, run_id, title) = if let Some(lease) = leases.get(key) {
@@ -298,9 +326,16 @@ pub fn heartbeat(key: &str) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
 
+    // Hold the lease-registry lock across the whole load->mutate->save cycle,
+    // exactly as begin() does, so a concurrent mutator cannot interleave on a
+    // stale snapshot and clobber a just-committed claim (TOCTOU). Fail-soft:
+    // LeaseLock degrades to unlocked on timeout and never panics.
+    let _lock = LeaseLock::acquire(&cwd);
+
     // Load leases
     let mut leases = store::load_leases(&cwd)?;
     store::reap_stale(&mut leases, now);
+    artificial_mutator_delay();
 
     // Update heartbeat if the lease exists
     if let Some(lease) = leases.get_mut(key) {
@@ -364,10 +399,17 @@ pub fn reap() -> Result<()> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
 
+    // Hold the lease-registry lock across the whole load->mutate->save cycle,
+    // exactly as begin() does, so a concurrent begin() can never have its fresh
+    // claim clobbered by this reap() saving a stale pre-begin snapshot (TOCTOU).
+    // Fail-soft: LeaseLock degrades to unlocked on timeout and never panics.
+    let _lock = LeaseLock::acquire(&cwd);
+
     // Load and reap
     let mut leases = store::load_leases(&cwd)?;
     let before = leases.len();
     store::reap_stale(&mut leases, now);
+    artificial_mutator_delay();
     let after = leases.len();
     let reaped = before - after;
 

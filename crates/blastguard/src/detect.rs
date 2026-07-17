@@ -309,16 +309,25 @@ fn redirect_targets(seg: &str) -> Vec<String> {
 
 /// True when the `>` at `bytes[gt]` closes an angle-bracket identifier
 /// placeholder like `<value>` / `<id>` / `<RID>` / `<run-id>`: scan back over
-/// identifier chars (`[A-Za-z0-9_-]`, at least one) and find an opening `<`.
-/// Such prose is a placeholder token, not a truncating redirect target. Hyphens
-/// are included because kebab-case placeholders (`<run-id>`, `<session-id>`,
-/// `<pdo-unit-id>`) are pervasive in this repo's prose; allowing them only
-/// matches when a real opening `<` is found, so genuine redirects like
-/// `foo-bar>file` (no preceding `<`) are still detected.
+/// identifier chars (`[A-Za-z0-9_-]`, at least one, plus any non-ASCII UTF-8
+/// byte so non-English placeholders like `<同一key>` / `<セッションID>` are
+/// recognized too) and find an opening `<`. Such prose is a placeholder token,
+/// not a truncating redirect target. Hyphens are included because kebab-case
+/// placeholders (`<run-id>`, `<session-id>`, `<pdo-unit-id>`) are pervasive in
+/// this repo's prose; allowing them (and non-ASCII bytes) only matches when a
+/// real opening `<` is found, so genuine redirects like `foo-bar>file` (no
+/// preceding `<`) are still detected. Every byte `>= 0x80` is either a
+/// multi-byte UTF-8 lead byte or a continuation byte (never a bare ASCII
+/// delimiter like `<`/whitespace/`;`), so treating them all as
+/// identifier-continuing never runs past a real `<` or swallows a delimiter —
+/// `bytes` comes from a `&str` so this scan never lands mid-character.
 fn is_angle_placeholder_close(bytes: &[u8], gt: usize) -> bool {
     let mut k = gt;
     while k > 0
-        && (bytes[k - 1].is_ascii_alphanumeric() || bytes[k - 1] == b'_' || bytes[k - 1] == b'-')
+        && (bytes[k - 1].is_ascii_alphanumeric()
+            || bytes[k - 1] == b'_'
+            || bytes[k - 1] == b'-'
+            || bytes[k - 1] >= 0x80)
     {
         k -= 1;
     }
@@ -1237,6 +1246,32 @@ mod tests {
     }
 
     #[test]
+    fn non_ascii_angle_bracket_placeholder_is_not_a_redirect() {
+        // Regression for the 2026-07-17 false-gate incident: a condukt
+        // done_criteria string with a Japanese placeholder (`<同一key>`)
+        // followed by prose (`...`) was misread as a truncating redirect
+        // whose target was the ellipsis, force-gating an ordinary task as
+        // High/irreversible.
+        assert_eq!(
+            single_redirect_target("2セッションが<同一key>をclaimする"),
+            None
+        );
+        assert_eq!(
+            bash("2セッションが<同一key>をclaimする結合テスト"),
+            Decision::Allow
+        );
+        assert_eq!(bash("emit {risk} for <セッションID>"), Decision::Allow);
+        let a = crate::classify::classify(
+            "2セッション(プロセス)がほぼ同時に同一keyをbeginする結合テストが追加され、\
+             片方が必ずskip(exit 1、または明示的な待機後の順序どおりの成功)になり\
+             両方が成功することは無いと固定される。<同一key>...を検証する",
+        );
+        assert_eq!(a.risk, crate::classify::Risk::Low);
+        assert!(a.reversible);
+        assert!(!a.requires_gate());
+    }
+
+    #[test]
     fn benign_lookalike_task_prose_is_low_and_reversible() {
         // The end-to-end path the bug broke: classify() over a task's prose.
         let a = crate::classify::classify("implement fn parse() -> Result and pass --flag <value>");
@@ -1252,6 +1287,10 @@ mod tests {
         assert!(bash("echo x > existing").is_deny());
         // Arrow/placeholder skip must not swallow a real redirect on the line.
         assert!(bash("echo done -> nope; cat x > realfile").is_deny());
+        // A non-ASCII redirect TARGET (no preceding `<`) must still be caught —
+        // the non-ASCII-byte allowance only extends the backward scan for an
+        // already-open `<...>` placeholder, it doesn't exempt real targets.
+        assert!(bash("cat x > 日本語.txt").is_deny());
     }
 
     // ---- Regression: fail-open defects (CA-blastguard-01 / -02) ----

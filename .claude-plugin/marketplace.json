@@ -32,8 +32,8 @@
     },
     {
       "name": "blastguard",
-      "description": "Destructive-operation guard for Claude Code: a PreToolUse hook that denies project-wrecking Bash commands and file operations (recursive/wildcard rm, git reset --hard, git clean -fd, single-> truncating overwrites, truncate/shred/mkfs/dd of=, recursive chmod/chown, find -delete, find -ok/-okdir, bare top-level interpreter inline-eval, stacked/versioned interpreter flags, tee truncation) before they run, while exempting repo config files (.claude/**, *.toml, *.yaml/yml, *.lock, package.json, .config/**). Subscription-native (one PreToolUse hook + bundled Rust binary, no API key).",
-      "version": "0.1.22",
+      "description": "v0.1.23: `is_angle_placeholder_close` now recognizes non-ASCII UTF-8 bytes as identifier chars, not just `[A-Za-z0-9_-]` — a condukt done_criteria string with a Japanese placeholder (`<同一key>`) was misread as a truncating redirect whose target was the following prose, force-gating an ordinary task as High/irreversible (the 2026-07-17 false-gate incident). Destructive-operation guard for Claude Code: a PreToolUse hook that denies project-wrecking Bash commands and file operations (recursive/wildcard rm, git reset --hard, git clean -fd, single-> truncating overwrites, truncate/shred/mkfs/dd of=, recursive chmod/chown, find -delete, find -ok/-okdir, bare top-level interpreter inline-eval, stacked/versioned interpreter flags, tee truncation) before they run, while exempting repo config files (.claude/**, *.toml, *.yaml/yml, *.lock, package.json, .config/**). Subscription-native (one PreToolUse hook + bundled Rust binary, no API key).",
+      "version": "0.1.23",
       "category": "security",
       "keywords": [
         "hooks",

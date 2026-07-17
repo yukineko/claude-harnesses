@@ -356,6 +356,15 @@ condukt state heartbeat --run "flow-$CLAUDE_CODE_SESSION_ID"
 （heartbeat が途切れた claim は TTL で自動 reap されるため、長時間のループでは各サイクルで呼ぶのが安全）。
 `condukt` が無い/失敗した場合は fail-soft（従来どおりループを続行）。
 
+**Step 2 で取得した backlog lock 自体も同じサイクルで heartbeat する**（`condukt state heartbeat` は
+claim registry 用で、backlog lock の生存とは別物）:
+```bash
+backlog lock heartbeat --session-id "$CLAUDE_CODE_SESSION_ID"
+```
+backlog lock の staleness は heartbeat_at ベースの TTL（既定30分）で判定されるため、長時間ループで
+これを呼ばないと、他セッションからの stale 誤判定で lock を奪われ得る。`backlog` が無い/失敗した場合は
+fail-soft（従来どおりループを続行）。
+
 続けて **決定論の循環ブレーカー**を1本のコマンドで判定する（cost・failure-streak・stall を集約。詳細は「早期脱出」）:
 ```bash
 condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID"   # trip なら nonzero、continue なら exit 0

@@ -56,8 +56,8 @@
     },
     {
       "name": "backlog",
-      "description": "Cross-project task queue with cycle-type tags for Claude Code: a /backlog skill that loops through open items (lock → pick → /condukt → done), a SessionStart hook that surfaces pending work at session open, and a backlog binary with list/next/done/fail/lock subcommands. Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.8",
+      "description": "Cross-project task queue with cycle-type tags for Claude Code: a /backlog skill that loops through open items (lock → pick → /condukt → done), a SessionStart hook that surfaces pending work at session open, and a backlog binary with list/next/done/fail/lock subcommands. v0.1.9 canonicalizes `--project` to its git-toplevel repo root on write and bridges bare-label-vs-absolute-path drift on read (backlog id b92a7a77), so a project's queue can no longer silently split across differently-spelled `--project` values. Subscription-native (skill + hook + bundled Rust binary, no API key).",
+      "version": "0.1.9",
       "category": "workflow",
       "keywords": [
         "backlog",

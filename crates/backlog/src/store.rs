@@ -365,6 +365,7 @@ pub fn add_with_weight(
     force: bool,
     now: i64,
 ) -> Result<String> {
+    let project = &canonicalize_project(project);
     with_tasks_lock(path, || {
         let mut tasks = load(path)?;
         if !force {
@@ -824,6 +825,28 @@ pub fn list(
 
 // ---- helpers ----------------------------------------------------------------
 
+/// Normalize a `--project` value before it is stored (backlog id b92a7a77):
+/// a path-shaped value (starts with `/`, `.`, or `~`) is resolved to its
+/// canonical git repo root — mirroring `harness_core::discovery`'s own
+/// resolve-then-key strategy — so `--project "$PWD"` from any subdirectory of
+/// a repo, or from a sibling worktree, always lands on the same string
+/// (closing the drift where different callers landed at different
+/// subdir/worktree paths for the SAME project). A bare short label (no
+/// separator, e.g. `"aegis"`) is passed through unchanged: it isn't a real
+/// path, so resolving it against this process's cwd would risk landing on an
+/// unrelated directory that coincidentally shares the name. `project_matches`
+/// separately bridges bare labels already in the store against absolute
+/// paths at read time.
+fn canonicalize_project(project: &str) -> String {
+    if !(project.starts_with('/') || project.starts_with('.') || project.starts_with('~')) {
+        return project.to_string();
+    }
+    let expanded = harness_core::config::expand_tilde(project);
+    harness_core::discovery::resolve_repo_root(&expanded)
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// project_filter のマッチング:
 /// Task.project が filter と完全一致、または filter で始まる場合にマッチ。
 fn project_matches(task_project: &str, filter: &str) -> bool {
@@ -833,9 +856,24 @@ fn project_matches(task_project: &str, filter: &str) -> bool {
     // filter が末尾スラッシュなしの repo_root の場合を考慮
     // task_project が filter + "/" で始まればマッチ
     if let Some(rest) = task_project.strip_prefix(filter) {
-        return rest.starts_with('/');
+        if rest.starts_with('/') {
+            return true;
+        }
     }
-    false
+    bare_name_matches_path(task_project, filter) || bare_name_matches_path(filter, task_project)
+}
+
+/// True iff `bare` has no path separator (a short project label, e.g.
+/// `"aegis"`) and equals the final path component of `path_like`. Bridges
+/// historical project-key drift (backlog id b92a7a77) where the SAME project
+/// was recorded once as a bare short name and once as its absolute repo path
+/// — before [`add_with_weight`] started canonicalizing new writes — without
+/// rewriting either already-stored value.
+fn bare_name_matches_path(bare: &str, path_like: &str) -> bool {
+    if bare.is_empty() || bare.contains('/') {
+        return false;
+    }
+    Path::new(path_like).file_name().is_some_and(|f| f == bare)
 }
 
 /// 現在の Unix タイムスタンプ (秒)。
@@ -1050,6 +1088,76 @@ mod tests {
     #[test]
     fn project_filter_no_match() {
         assert!(!project_matches("/repo/foobar", "/repo/foo"));
+    }
+
+    #[test]
+    fn project_filter_bridges_bare_name_and_absolute_path() {
+        // backlog id b92a7a77: historical drift where the SAME project was
+        // recorded once as a bare short label and once as its absolute path.
+        assert!(project_matches("aegis", "/mnt/c/Users/x/src/aegis"));
+        assert!(project_matches("/mnt/c/Users/x/src/aegis", "aegis"));
+    }
+
+    #[test]
+    fn project_filter_bare_name_does_not_match_unrelated_path() {
+        assert!(!project_matches("harness", "/mnt/c/Users/x/src/aegis"));
+    }
+
+    #[test]
+    fn project_filter_bare_name_vs_bare_name_only_matches_exact() {
+        // Neither side is path-shaped, so only the pre-existing exact-match
+        // branch applies — no accidental cross-match between distinct bare
+        // labels.
+        assert!(!project_matches("aegis", "harness"));
+    }
+
+    #[test]
+    fn canonicalize_project_leaves_bare_name_unchanged() {
+        assert_eq!(canonicalize_project("aegis"), "aegis");
+    }
+
+    #[test]
+    fn canonicalize_project_resolves_subdir_to_repo_root() {
+        // A path-shaped project value resolves through git-toplevel rather
+        // than being stored verbatim, so `--project "$PWD"` from any subdir
+        // of a repo lands on the same string.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        assert!(std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("init")
+            .arg("-q")
+            .status()
+            .unwrap()
+            .success());
+        let sub = root.join("a/b");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert_eq!(
+            canonicalize_project(root.to_str().unwrap()),
+            canonicalize_project(sub.to_str().unwrap()),
+        );
+    }
+
+    #[test]
+    fn add_canonicalizes_project_before_storing() {
+        let path = tmp_path();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        assert!(std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("init")
+            .arg("-q")
+            .status()
+            .unwrap()
+            .success());
+        let sub = root.join("nested");
+        std::fs::create_dir_all(&sub).unwrap();
+        let id = add(&path, "Task", sub.to_str().unwrap(), vec![], "", 100).unwrap();
+        let tasks = load(&path).unwrap();
+        let stored = &tasks.iter().find(|t| t.id == id).unwrap().project;
+        assert_eq!(stored, &canonicalize_project(root.to_str().unwrap()));
     }
 
     #[test]

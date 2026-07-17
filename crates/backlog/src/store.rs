@@ -241,14 +241,22 @@ fn tasks_lock_path(path: &Path) -> PathBuf {
 /// (which would cause a lost update on tasks.toml — the "stale-lock reap
 /// window race").
 const TASKS_LOCK_STALE_SECS: u64 = 10;
-/// Bounded blocking-acquire budget: attempts × sleep ≈ 2s worst case.
+/// Bounded blocking-acquire budget: attempts × sleep ≈ 8s worst case.
 ///
-/// CA-backlog-003: must comfortably exceed [`IS_CLAIMED_TIMEOUT`] (300ms) —
-/// the longest a live holder can legitimately keep the lock — so a waiting
-/// racer never gives up on ACQUIRING while the current holder is still
-/// legitimately mid-critical-section, and never itself needs to treat that
-/// live holder's lockfile as stale to make progress.
-const TASKS_LOCK_MAX_ATTEMPTS: u32 = 400;
+/// CA-backlog-003 originally sized this to comfortably exceed a SINGLE
+/// legitimate holder's worst-case critical section ([`IS_CLAIMED_TIMEOUT`],
+/// 300ms). That undercounted heavy contention: under N concurrent callers of
+/// `add`/`add_with_weight` (each potentially paying the full 300ms inside the
+/// lock via `is_claimed_elsewhere`), a waiter can queue behind several such
+/// holders in a row — up to roughly N × 300ms serialized — not just one. At
+/// N=20 (this crate's own `add_and_claim_no_lost_update_under_heavy_contention`
+/// stress test: 10 adders + 10 claimers) that's ~6s worst case, which blew
+/// through the old ~2s budget and made waiters degrade to unprotected
+/// best-effort mid-queue — the lost-update race that test exists to catch.
+/// The budget must stay a comfortable margin BELOW [`TASKS_LOCK_STALE_SECS`]
+/// (10s) so a queued-behind-many-live-holders waiter is never mistaken for
+/// one waiting on a crashed holder and made to reap+barge in early.
+const TASKS_LOCK_MAX_ATTEMPTS: u32 = 1600;
 const TASKS_LOCK_SLEEP: Duration = Duration::from_millis(5);
 
 /// RAII guard for the tasks-file-scoped advisory lock. Removes the lockfile on
@@ -285,7 +293,9 @@ fn tasks_lock_is_stale(lock_path: &Path) -> bool {
 /// obviously-stale lockfile (crashed holder) is reaped so it never deadlocks.
 ///
 /// Returns `Some(guard)` on success, or `None` if the lock could not be acquired
-/// within the budget — the caller must then degrade to a best-effort unprotected
+/// within the budget ([`TASKS_LOCK_MAX_ATTEMPTS`] × [`TASKS_LOCK_SLEEP`], sized
+/// for queuing behind many concurrent legitimate holders — see that constant's
+/// doc comment) — the caller must then degrade to a best-effort unprotected
 /// operation (fail-soft) rather than erroring.
 fn try_acquire_tasks_lock(path: &Path) -> Option<TasksLockGuard> {
     let lock_path = tasks_lock_path(path);

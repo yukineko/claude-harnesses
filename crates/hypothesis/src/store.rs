@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::hypothesis::{Assumption, Criterion, Evidence, Hypothesis, Risk, Status};
+use crate::lock::StoreLock;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
@@ -20,15 +21,37 @@ fn now_iso() -> String {
     Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+// Test-only race-window widener for the gap between reading the file in
+// `Store::load` and the caller's later `save()` (mutate happens in between).
+// Real process-spawn overhead dwarfs that gap, so two racing CLI invocations
+// essentially never interleave inside it by chance — a concurrency regression
+// test needs a deterministic way to force the interleave. No-op unless
+// `HYPOTHESIS_TEST_LOAD_DELAY_MS` is set (never set outside the
+// `store_lock_concurrency` integration test). Mirrors
+// `overwatch::lease::artificial_race_delay` / `condukt::claim::artificial_race_delay`.
+fn artificial_race_delay() {
+    if let Some(ms) = std::env::var("HYPOTHESIS_TEST_LOAD_DELAY_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+}
+
 // ── Store ─────────────────────────────────────────────────────────────────────
 
 pub struct Store {
     hypotheses: Vec<Hypothesis>,
     cfg: Config,
+    // Held for the lifetime of `Store` (RAII) so the whole load->mutate->save
+    // cycle of a CLI invocation is mutually exclusive with any other process
+    // doing the same (see `crate::lock`). Never read; its drop is the effect.
+    _lock: StoreLock,
 }
 
 impl Store {
     pub fn load(cfg: &Config) -> Result<Self> {
+        let lock = StoreLock::acquire(cfg);
         let path = cfg.hypotheses_path();
         let hypotheses = if path.exists() {
             let text = std::fs::read_to_string(&path)?;
@@ -37,6 +60,7 @@ impl Store {
         } else {
             vec![]
         };
+        artificial_race_delay();
         Ok(Self {
             hypotheses,
             cfg: Config {
@@ -44,6 +68,7 @@ impl Store {
                 store_dir: cfg.store_dir.clone(),
                 inject_limit: cfg.inject_limit,
             },
+            _lock: lock,
         })
     }
 

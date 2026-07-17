@@ -2,6 +2,7 @@ mod config;
 mod goal_link;
 mod hypothesis;
 mod install;
+mod lock;
 mod store;
 
 mod hooks {

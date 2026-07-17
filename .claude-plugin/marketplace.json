@@ -776,8 +776,8 @@
     },
     {
       "name": "hypothesis",
-      "description": "v0.1.7: `list --json` now emits `status` via `Status`'s hyphenated `Display` (e.g. \"awaiting-measurement\") instead of serde's snake_case rendering, fixing overwatch's `bucket_hypotheses()` PDO hypotheses view (previously always empty/wrong-cased); `session_start`'s measurement-debt summary gains a 14-day aging threshold that switches to an explicit warning line once awaiting-measurement debt is stale; a new `shipped_at` field (backward-compatible via `#[serde(default)]`) is stamped on `await-measurement`, and a new `stats` command reports shipped/validated/rejected/awaiting counts plus average measurement delay in days as one JSON object. PDO hypothesis lifecycle management for Claude Code: a /hypothesis skill plus create/validate/list/reject subcommands and a SessionStart hook to create, validate, and track discovery hypotheses aligned with compass goals. Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.7",
+      "description": "v0.1.8: the store's load->mutate->save cycle is now protected by an exclusive file lock (`StoreLock`, ported from backlog::lock/condukt::lock::RunLock/overwatch::lock::LeaseLock) so two concurrent processes mutating the store (e.g. `validate`/`reject`/`confidence`) can no longer lose one update to a last-writer-wins race; a multi-process regression test proves the fix (and that it fails without the lock). PDO hypothesis lifecycle management for Claude Code: a /hypothesis skill plus create/validate/list/reject subcommands and a SessionStart hook to create, validate, and track discovery hypotheses aligned with compass goals. Subscription-native (skill + hook + bundled Rust binary, no API key).",
+      "version": "0.1.8",
       "category": "planning",
       "keywords": [
         "pdo",

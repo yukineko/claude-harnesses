@@ -11,6 +11,7 @@ pub mod disposition;
 mod disposition_cli;
 pub mod event;
 mod lease;
+mod lock;
 mod reconcile;
 mod render;
 mod review_escalation;

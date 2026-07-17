@@ -751,6 +751,17 @@ pub fn init() -> Result<()> {
     Ok(())
 }
 
+/// Guards any test (in this module or elsewhere in the crate) that sandboxes
+/// the process-global `$HOME` env var, since `storage_root` resolves under
+/// the REAL `$HOME` (via `harness_core::config::home`) regardless of the
+/// caller-supplied `cwd`. A SINGLE crate-wide lock is required: two tests in
+/// DIFFERENT modules each guarded by their own separate `Mutex` would still
+/// race each other's `$HOME` mutation (env vars are process-global, and
+/// `cargo test` runs threads within one process) — that's exactly the bug
+/// this static fixes by being the one lock every such test shares.
+#[cfg(test)]
+pub(crate) static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -965,15 +976,6 @@ mod tests {
         let run2 = partition_findings(&findings, &resolved);
         assert_eq!(run1, run2);
     }
-
-    // `storage_root` resolves under the REAL `$HOME` (via
-    // `harness_core::config::home`, which reads the `HOME` env var on
-    // unix), not under any caller-supplied `cwd`. So any unit test that
-    // exercises the file-backed store functions must sandbox `HOME` to a
-    // temp dir for its duration (never touch the developer's real
-    // `~/.overwatch`), serialized via this lock since env vars are
-    // process-global and `cargo test` runs threads within one process.
-    static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn read_review_findings_all_concatenates_archive_after_hot() {

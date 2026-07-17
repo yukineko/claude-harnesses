@@ -790,9 +790,11 @@ mod tests {
     // `build_cached` and `store::status_cache_path` resolve under the real
     // `$HOME` (via `harness_core::config::base_dir`), so these tests sandbox
     // HOME the same way `store.rs`'s `read_review_findings_all_concatenates_*`
-    // test does, serialized via a lock since env vars are process-global and
-    // `cargo test` runs threads within one process.
-    static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // test does. MUST share `store::HOME_ENV_LOCK` (not a module-local copy):
+    // two separate `Mutex`es don't serialize against each other, so a test
+    // here and a test in `store.rs` could still both mutate the
+    // process-global `$HOME` env var at once.
+    use crate::store::HOME_ENV_LOCK;
 
     struct HomeSandbox {
         prev_home: Option<std::ffi::OsString>,

@@ -1,5 +1,6 @@
 /// Lease lifecycle management.
 use crate::event::LifecycleEvent;
+use crate::lock::LeaseLock;
 use crate::store;
 use anyhow::Result;
 use serde_json::json;
@@ -26,6 +27,23 @@ fn resolve_run_id() -> String {
 /// Default Jaccard threshold above which two anchors are flagged as possible
 /// near-duplicates (§4.6a). Overridable via `OVERWATCH_DUP_THRESHOLD`.
 const POSSIBLE_DUPLICATE_THRESHOLD: f64 = 0.6;
+
+/// Test-only race-window widener for `begin()`'s load->check->save section.
+/// Real process-spawn overhead (fork/exec/dynamic-link) dwarfs that section's
+/// natural duration, so two racing `begin()` processes essentially never
+/// interleave inside it by chance — a concurrency regression test needs a
+/// deterministic way to force the interleave. No-op unless
+/// `OVERWATCH_TEST_BEGIN_DELAY_MS` is set (never set outside the
+/// `lease_concurrency` integration test), so production behavior is
+/// unchanged.
+fn artificial_race_delay() {
+    if let Some(ms) = std::env::var("OVERWATCH_TEST_BEGIN_DELAY_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+}
 
 /// Resolve the near-duplicate threshold: env override if a valid `[0,1]` float,
 /// else the default.
@@ -99,9 +117,15 @@ pub fn begin(
     let run_id = resolve_run_id();
     let now = store::now();
 
+    // Hold the lease-registry lock across the whole load->check->save cycle so
+    // two sessions racing begin() for the same key can never both pass the
+    // is_held_by_other check before either saves (TOCTOU double-claim).
+    let lock = LeaseLock::acquire(&cwd);
+
     // Load and reap stale leases
     let mut leases = store::load_leases(&cwd)?;
     store::reap_stale(&mut leases, now);
+    artificial_race_delay();
 
     // Check if key is held by a live OTHER session
     if store::is_held_by_other(&leases, key, &session_id, now) {
@@ -115,6 +139,9 @@ pub fn begin(
             }
         });
         println!("{skip_json}");
+        // std::process::exit skips destructors: release the lock explicitly
+        // first, or it would leak until the next stale-pid reap.
+        drop(lock);
         std::process::exit(1);
     }
 

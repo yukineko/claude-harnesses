@@ -1,16 +1,16 @@
 ## north_star
-review-queueのfindingは fix commitが着地した時点で機構的に解消できるようにする(手動 record-disposition 頼みで放置されstaleになる再発を防ぐ)
+overwatch::leaseのセッション間タスクclaimをbacklog/condukt同様に排他ロック化し、TOCTOUによる二重claimを機構的に防ぐ
 
 ## definition_of_done
-- commit message からfinding-id(例 CA-<crate>-<NNN>)を検出し、該当findingを自動でrecord-disposition(confirmed)する決定論コマンド(reconcileの類)がoverwatchに実装され、赤緑テストで固定される
-- そのreconcileが人間の記憶に依存しない既存の自動化経路(continuous-audit round実行時 / pre-push hook / SessionStart等)に配線され、fail-soft(バイナリ不在・エラーでもターンを壊さない)であることがテストで固定される
-- review-metrics か audit-metrics に、fix commitは存在するがdispositionされていないfinding件数(stale backlog再発の早期警告)を出す1コマンドが追加され、回帰テストで数値が固定される
+- lease::begin()のload_leases→is_held_by_otherチェック→save_leasesが、condukt::lock/backlog::lockと同じ排他ロック機構(O_EXCL/hardlinkベース、stale lock reap付き)で保護され、read-modify-write全体がアトミックになる
+- 2セッション(プロセス)がほぼ同時に同一keyをbeginする結合テストが追加され、片方が必ずskip(exit 1、または明示的な待機後の順序どおりの成功)になり両方が成功することは無いと固定される。concurrencyテストが無い現状のギャップを埋める
+- 既存のadvisory機能(scope_overlap警告・possible_duplicate近似重複警告)の既存テストが全てgreenのまま回帰しない
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-2026-07-17の/flowセッションで発覚: review-queueの18件のai-finding(CA-backlog-001/002, CA-blastguard-004..010, CA-propguard-003..006, CA-specguard-003..005, CA-overwatch-003/004)は全てfix commit(aa0a471, e16e270, e960608, 0f8709f, 57214c2, 56a6b01, 0295058, 170d7e7他)が既に着地しcargo test全pass済みだったにも関わらず、誰もoverwatch record-dispositionを手動実行しなかったためreview-queueに『未解決』として残り続けていた。今回はrecord-disposition+compact-findingsで手動解消したが、これは対症療法(症状治療)であり、同じ放置が次のContinuous-Audit round後にも再発する。機構的なgapは: fix commitとfindingのdispositionを繋ぐ自動リンクが存在しないこと。最小right-sizeな一手は、commit message中のCA-IDを検出しrecord-dispositionを自動発火する決定論コマンドをoverwatchに追加し、既存の自動化経路(pre-push hook等)に配線すること。
+overwatch::lease::begin()はload_leases()→is_held_by_other()チェック→save_leases()というロック無しのread-modify-writeで、backlog::lock/condukt::lockが既に潰したのと同じTOCTOUクラスのバグが残っている(2セッションがほぼ同時に同一keyをbeginすると両方成功しうる)。concurrencyテストも無い(hypothesis 9c733d74で発見・記録済み)。最小right-sizeな一手は、condukt::lock(backlog::lockのhardlink+create_new方式を踏襲、stale lock reap・bounded wait・fail-soft degrade)と同じ設計をoverwatch::leaseのbegin()に適用し、2プロセス同時claimの結合テストで固定すること。
 
 ## next_action
 

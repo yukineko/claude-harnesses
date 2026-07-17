@@ -101,6 +101,74 @@ fn add_then_list_round_trips() {
 }
 
 #[test]
+fn list_json_uses_hyphenated_status_vocabulary() {
+    // overwatch's bucket_hypotheses() (crates/overwatch/src/aggregate.rs) parses
+    // `hypothesis list --json` and matches status strings against the hyphenated
+    // vocabulary "open"|"awaiting-measurement"|"validated"|"rejected" — NOT
+    // serde's default snake_case rendering of `Status` (which would emit
+    // "awaiting_measurement" with an underscore). This test pins that contract
+    // end-to-end through the real binary so a future change to `Status`'s serde
+    // derive (or to `list --json`'s field mapping) can't silently regress it.
+    let bin = env!("CARGO_BIN_EXE_hypothesis");
+    let home = temp_home("list-json");
+
+    let add = Command::new(bin)
+        .args(["add", "list --json emits hyphenated status"])
+        .env("HOME", &home)
+        .output()
+        .expect("add runs");
+    let id = String::from_utf8_lossy(&add.stdout).trim().to_string();
+    assert!(!id.is_empty(), "add must print a non-empty id");
+
+    let list = Command::new(bin)
+        .args(["list", "--json"])
+        .env("HOME", &home)
+        .output()
+        .expect("list --json runs");
+    let list_out = String::from_utf8_lossy(&list.stdout).into_owned();
+    assert_eq!(list.status.code().unwrap_or(-1), 0, "list --json must exit 0");
+
+    let items: serde_json::Value =
+        serde_json::from_str(&list_out).expect("list --json must emit valid JSON");
+    let arr = items.as_array().expect("list --json must emit a JSON array");
+    assert_eq!(arr.len(), 1, "expected exactly the one added hypothesis");
+    assert_eq!(
+        arr[0]["status"], "open",
+        "a freshly-added hypothesis must report status \"open\" (hyphen-free case), got: {list_out}"
+    );
+    assert_eq!(arr[0]["id"], id, "the JSON item's id must match the added hypothesis");
+
+    // AwaitingMeasurement is the vocabulary word bucket_hypotheses() actually
+    // depends on being hyphenated ("awaiting-measurement"), since serde's
+    // derive on `Status` would otherwise render it "awaiting_measurement".
+    let awaiting = Command::new(bin)
+        .args(["await-measurement", &id])
+        .env("HOME", &home)
+        .output()
+        .expect("await-measurement runs");
+    assert_eq!(
+        awaiting.status.code().unwrap_or(-1),
+        0,
+        "await-measurement must exit 0"
+    );
+
+    let list2 = Command::new(bin)
+        .args(["list", "--json"])
+        .env("HOME", &home)
+        .output()
+        .expect("list --json runs (2nd)");
+    let list2_out = String::from_utf8_lossy(&list2.stdout).into_owned();
+    std::fs::remove_dir_all(&home).ok();
+    let items2: serde_json::Value =
+        serde_json::from_str(&list2_out).expect("list --json must emit valid JSON (2nd)");
+    assert_eq!(
+        items2[0]["status"], "awaiting-measurement",
+        "expected the hyphenated form \"awaiting-measurement\" (matching overwatch's \
+         bucket_hypotheses vocabulary), got: {list2_out}"
+    );
+}
+
+#[test]
 fn session_start_hook_survives_empty_stdin() {
     // SessionStart runs under run_hook: malformed/empty stdin must never break a
     // turn, so the exit code is always 0.

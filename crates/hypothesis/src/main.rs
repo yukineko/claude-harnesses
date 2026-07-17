@@ -104,6 +104,12 @@ enum Command {
         /// rejected. Omit to list all. An unrecognised value matches nothing.
         #[arg(long, value_name = "open|awaiting-measurement|validated|rejected")]
         status: Option<String>,
+        /// Emit a JSON array instead of the plain-text listing. Each element
+        /// has a `status` field using the same hyphenated vocabulary as
+        /// `--status` (open|awaiting-measurement|validated|rejected), not
+        /// serde's default snake_case rendering of `Status`.
+        #[arg(long)]
+        json: bool,
     },
     /// Install SessionStart hook
     Install {
@@ -201,8 +207,30 @@ fn run() -> Result<()> {
             let mut st = store::Store::load(&cfg)?;
             st.reject(&id, reason, run)?;
         }
-        Command::List { status } => {
+        Command::List { status, json } => {
             let st = store::Store::load(&cfg)?;
+            if json {
+                let items: Vec<_> = st
+                    .list(status.as_deref())
+                    .into_iter()
+                    .map(|h| {
+                        serde_json::json!({
+                            "id": h.id,
+                            // Hyphenated Display string (e.g. "awaiting-measurement"),
+                            // not serde's snake_case rendering of `Status`
+                            // (which would emit "awaiting_measurement" with an
+                            // underscore) — consumers like overwatch's
+                            // bucket_hypotheses() match on this exact vocabulary.
+                            "status": h.status.to_string(),
+                            "text": h.text,
+                            "confidence": h.confidence,
+                            "run": h.condukt_run,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string(&items)?);
+                return Ok(());
+            }
             for h in st.list(status.as_deref()) {
                 let run_info = h
                     .condukt_run

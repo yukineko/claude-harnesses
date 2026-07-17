@@ -1,16 +1,17 @@
 ## north_star
-rollout drift(committedかつversion-bump済みだがplugin cacheへ実際にデプロイされていない状態)を機械的に検知するCIゲートを新設し、本セッションで発覚した「fixは committed/version-bump済みなのに未 rollout」という事故クラスの再発を防ぐ
+「PDOタスク衝突は回避されたか」という問いに実証で答えられる状態にする: schedule.rsの並列/直列判定を実際のworker/merge込みend-to-endで検証し、backlog lock heartbeatのTTL耐性を検証し、touched_filesのrepo-relative契約を強制し、fugu-routerのtoken削減効果を計測可能にする
 
 ## definition_of_done
-- 各 crates/<name>/.claude-plugin/plugin.json の version と ~/.claude/plugins/installed_plugins.json の該当 plugin の registry version を比較し、不一致があれば非ゼロ終了でリストを出力する新規スクリプト(例 scripts/check-plugin-rollout.py)が追加される
-- 意図的にdrift状態(一時的にregistry versionを1つ古くする、またはCargo.toml versionだけ上げてrolloutしない状態)を作って新スクリプトの検知が失敗(exit非ゼロ)することを確認し、正常状態に戻してexit 0になることを確認する(fix無しでは検知できないことの証明に相当する検証プロセス)
-- 既存の check-plugin-versions.py / check-version-bumped.py と同様、CLAUDE.mdの該当セクションに新ゲートの実行コマンドが追記され、pre-push相当のタイミングで案内される
+- condukt::schedule.rsの並列/直列判定について、実際にworker/merge込みのend-to-end capstoneテストが追加され、意図的に衝突させたタスクが直列化されて両方正しく着地することが確認される(backlog 415718c9)
+- backlog::lockのheartbeatがTTL(30分)超過によるstale reapを防ぐことを、lockファイルのheartbeat_atを直接過去日時に書き換える手法で時間を待たずに検証する回帰テストが追加される(backlog cbb429c0)
+- condukt::schedule.rsのtouched_filesがrepo-relative規約を守っているかのsanity checkが追加され、絶対パスや`..`混入を拒否または警告する(backlog a91f2b35)
+- fugu-routerのepisodeにsuggested_model/route_basis/tokens_input/tokens_outputを記録する配線が追加され、hypothesis f5f9522aを将来close可能にする最低限のデータ収集が始まる(backlog 030a2f1e)
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-既存の check-plugin-versions.py(3ファイル間のversion一致)と check-version-bumped.py(変更されたplugin のbump有無)は source(Cargo.toml/plugin.json/marketplace.json)側の整合しか見ておらず、実際に ~/.claude/plugins/installed_plugins.json のregistry versionへ反映(rollout-plugins.sh実行)されているかは一切チェックしていない。本セッションはこのギャップにより5個のplugin(hypothesis/condukt/compass/blastguard/overwatch)でfixがcommit・version-bump済みなのに未rolloutのまま放置されていたことが判明した(手作業のfleet-wide grep+jqループで発見)。最小right-sizeな一手は、この手作業ループをスクリプト化した scripts/check-plugin-rollout.py を新設し、source側versionとregistry版versionの不一致を機械的・決定論的に検知することで、次に同じ事故が起きても人間が偶然気づく前に検知できるようにすること。
+4件のbacklog項目(415718c9優先度p1, cbb429c0優先度p2, a91f2b35, 030a2f1e)が既に積まれ準備済み。最小right-sizeな一手は優先度順に処理すること: まず415718c9(schedule.rsのcapstone E2Eテスト)から着手する。
 
 ## next_action
 

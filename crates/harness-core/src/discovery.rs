@@ -88,6 +88,22 @@ pub fn fingerprint(title: &str) -> String {
     format!("{:016x}", h)
 }
 
+// Test-only race-window widener for the gap between `mark_selected_at`'s load
+// and its later rewrite. Real process-spawn overhead dwarfs that gap, so two
+// racing CLI invocations essentially never interleave inside it by chance — a
+// concurrency regression test needs a deterministic way to force the
+// interleave. No-op unless `DISCOVERY_TEST_LOAD_DELAY_MS` is set (never set
+// outside `compass`'s `discovery_lock_concurrency` integration test). Mirrors
+// `hypothesis::store::artificial_race_delay` / `overwatch::lease::artificial_race_delay`.
+fn artificial_race_delay() {
+    if let Some(ms) = std::env::var("DISCOVERY_TEST_LOAD_DELAY_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+}
+
 /// Append a discovery record to the store. Fails soft: on any IO or serialization
 /// error, the record is silently dropped and discovery continues.
 pub fn append(cwd: &Path, rec: &DiscoveryRecord) {
@@ -95,6 +111,13 @@ pub fn append(cwd: &Path, rec: &DiscoveryRecord) {
 }
 
 /// Internal: append to an explicit path. Used by append() and by tests.
+///
+/// Holds the same advisory lock as [`mark_selected_at`] across the write:
+/// `append_line`'s single `O_APPEND` write is atomic against other appends on
+/// its own, but a concurrent `mark_selected_at` reads a snapshot of the whole
+/// file and later rewrites it wholesale — without a shared lock, a rewrite
+/// that started before this append lands would silently clobber it on rename
+/// (lost update, not just a torn write).
 fn append_at(path: &Path, rec: &DiscoveryRecord) {
     // Ensure parent directory exists.
     if let Some(parent) = path.parent() {
@@ -103,6 +126,10 @@ fn append_at(path: &Path, rec: &DiscoveryRecord) {
 
     // Serialize the record and append it as one atomic JSON line.
     let Ok(json) = serde_json::to_string(rec) else {
+        return;
+    };
+
+    let Some(_guard) = crate::lessons::acquire_lock(path) else {
         return;
     };
     // Single atomic append (body + '\n' in one write) — see issue #15.
@@ -183,12 +210,22 @@ pub fn mark_selected(cwd: &Path, fingerprint: &str) {
 }
 
 /// Internal: mark selected on an explicit path. Used by mark_selected() and by tests.
+///
+/// Holds the same advisory lock as [`append_at`] across the whole
+/// load->mutate->rewrite cycle: without it, a concurrent `append_at` (or
+/// another `mark_selected_at`) landing between this fn's load and its rename
+/// would be silently discarded by the wholesale rewrite (lost update).
 fn mark_selected_at(path: &Path, fingerprint: &str) {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    let Some(_guard) = crate::lessons::acquire_lock(path) else {
+        return;
+    };
+
     // Load all records.
     let mut records = load_at(path);
+    artificial_race_delay();
 
     // Update matching records to Selected.
     for r in &mut records {

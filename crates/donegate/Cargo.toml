@@ -18,7 +18,7 @@ toml = { workspace = true }
 globset = "0.4"
 chrono = { workspace = true }
 clap = { workspace = true }
-dirs = "5"
+dirs = "6"
 anyhow = { workspace = true }
 
 [dev-dependencies]

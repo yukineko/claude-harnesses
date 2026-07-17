@@ -10,9 +10,11 @@
 /// audit loop — an unwritable ledger is reported to stderr rather than
 /// propagated, matching overwatch's observational / never-break-a-turn invariant.
 use crate::audit_round::{self, AuditRound, DEFAULT_CONVERGENCE_WINDOW};
+use crate::lock::LeaseLock;
 use crate::review_finding::ReviewFinding;
 use crate::store;
 use anyhow::Result;
+use std::path::Path;
 
 /// Record one Continuous-Audit round's metrics. Called by
 /// `scripts/continuous-audit.sh` after a finder→verifier review round completes.
@@ -161,20 +163,17 @@ fn model_collision_finding(
 /// double-count.
 pub fn close(round: String, tests: u64) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let rounds = store::read_audit_rounds(&cwd).unwrap_or_default();
-    let (updated, found) = audit_round::set_round_tests(&rounds, &round, tests);
-    if !found {
-        eprintln!(
-            "overwatch: WARNING audit-round close: no round matching id {round:?} (ledger unchanged)"
-        );
-        println!(
-            "{}",
-            serde_json::json!({ "closed": false, "reason": "round-not-found", "round": round })
-        );
-        return Ok(());
-    }
-    match store::rewrite_audit_rounds(&cwd, &updated) {
-        Ok(()) => {
+    match close_at(&cwd, &round, tests) {
+        Ok(CloseOutcome::NotFound) => {
+            eprintln!(
+                "overwatch: WARNING audit-round close: no round matching id {round:?} (ledger unchanged)"
+            );
+            println!(
+                "{}",
+                serde_json::json!({ "closed": false, "reason": "round-not-found", "round": round })
+            );
+        }
+        Ok(CloseOutcome::Closed) => {
             println!(
                 "{}",
                 serde_json::json!({
@@ -193,6 +192,53 @@ pub fn close(round: String, tests: u64) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Result of the locked read-modify-write in [`close_at`], so [`close`] can
+/// render the right message and the concurrency test can assert on the outcome
+/// without parsing stdout.
+enum CloseOutcome {
+    /// The round was found and its `regression_tests_added` was rewritten.
+    Closed,
+    /// No round matched the id; the ledger was left unchanged.
+    NotFound,
+}
+
+/// Locked read-modify-write core of [`close`], parameterized on an explicit
+/// `cwd` so the concurrency regression test can drive it against a temp store
+/// without mutating the process cwd.
+///
+/// Holds the store [`LeaseLock`] across the WHOLE read->modify->rewrite. Without
+/// it, a round appended (by a lock-respecting writer, e.g. a concurrent
+/// `audit-round record`) between this read and its `rewrite_audit_rounds` would
+/// be clobbered by the rewrite of the stale snapshot. Fail-soft: LeaseLock
+/// degrades to unlocked on timeout and never panics; the round is still recorded
+/// and the audit loop is never broken.
+fn close_at(cwd: &Path, round: &str, tests: u64) -> Result<CloseOutcome> {
+    let _lock = LeaseLock::acquire(cwd);
+    let rounds = store::read_audit_rounds(cwd).unwrap_or_default();
+    let (updated, found) = audit_round::set_round_tests(&rounds, round, tests);
+    if !found {
+        return Ok(CloseOutcome::NotFound);
+    }
+    // Test-only race widener (no-op in prod): widens the window between the read
+    // above and the rewrite below, held UNDER the lock so a lock-respecting
+    // concurrent writer is serialized against it.
+    artificial_close_delay();
+    store::rewrite_audit_rounds(cwd, &updated)?;
+    Ok(CloseOutcome::Closed)
+}
+
+/// Sleep for `OVERWATCH_TEST_CLOSE_DELAY_MS` ms if set (a no-op otherwise), to
+/// widen [`close_at`]'s locked read->rewrite window for the concurrency
+/// regression test. Never set in production. Mirrors `lease::artificial_delay`.
+fn artificial_close_delay() {
+    if let Some(ms) = std::env::var("OVERWATCH_TEST_CLOSE_DELAY_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
 }
 
 /// Read the audit-round ledger and print convergence metrics. `window` bounds
@@ -302,5 +348,74 @@ mod tests {
         // Empty / whitespace-only fields are "missing" => no FALSE finding.
         assert!(model_collision_finding("r", Some(""), Some(""), 1).is_none());
         assert!(model_collision_finding("r", Some("   "), Some("  "), 1).is_none());
+    }
+
+    // AXIS 1: a round appended concurrently with an `audit-round close`'s
+    // read-modify-write must NOT be lost. `close_at` now holds the store
+    // LeaseLock across its whole read->rewrite, so a lock-respecting concurrent
+    // writer (the appender below) serializes against it instead of having its
+    // append clobbered by the rewrite of a stale snapshot.
+    //
+    // RED (before the fix): remove the `LeaseLock::acquire` in `close_at` and
+    // this fails — the appended `r2` is silently dropped by close's rewrite.
+    // GREEN: with the lock, both the closed `r1` (tests=7) and `r2` survive.
+    #[test]
+    fn concurrent_record_append_survives_audit_round_close_rewrite() {
+        let _guard = store::HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-audit-close-race-{}-{}",
+            std::process::id(),
+            store::now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+        // Widen close's locked read->rewrite window so the appender reliably
+        // contends inside it.
+        std::env::set_var("OVERWATCH_TEST_CLOSE_DELAY_MS", "300");
+
+        // Seed round r1 (confirmed=9 so a later close to tests=7 is not clamped).
+        let now = store::now();
+        let r1 = AuditRound::new("r1".to_string(), &["overwatch".to_string()], 5, 9, 0, now);
+        store::append_audit_round(&dir, &r1).unwrap();
+
+        // Thread A: close r1 -> tests=7 (locked read-modify-write, delayed).
+        let dir_a = dir.clone();
+        let a = std::thread::spawn(move || {
+            close_at(&dir_a, "r1", 7).expect("close_at ok");
+        });
+
+        // Give A a moment to acquire the lock and enter its delay, then run a
+        // lock-respecting concurrent appender that records a NEW round r2.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let r2 = AuditRound::new("r2".to_string(), &["overwatch".to_string()], 3, 2, 0, now);
+        {
+            let _l = LeaseLock::acquire(&dir);
+            store::append_audit_round(&dir, &r2).unwrap();
+        }
+
+        a.join().unwrap();
+
+        let rounds = store::read_audit_rounds(&dir).unwrap();
+        let r1_out = rounds
+            .iter()
+            .find(|r| r.round == "r1")
+            .expect("r1 must survive");
+        assert_eq!(
+            r1_out.regression_tests_added, 7,
+            "close must persist r1's regression_tests_added"
+        );
+        assert!(
+            rounds.iter().any(|r| r.round == "r2"),
+            "concurrently appended r2 must not be lost by close's rewrite; got {:?}",
+            rounds.iter().map(|r| r.round.as_str()).collect::<Vec<_>>()
+        );
+
+        std::env::remove_var("OVERWATCH_TEST_CLOSE_DELAY_MS");
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

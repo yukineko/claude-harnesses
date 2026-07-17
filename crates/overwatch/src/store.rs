@@ -2,6 +2,7 @@
 use crate::audit_round::AuditRound;
 use crate::disposition::Disposition;
 use crate::event::LifecycleEvent;
+use crate::lock::LeaseLock;
 use crate::review_finding::ReviewFinding;
 use crate::rollback::RollbackEvent;
 use crate::violation::ViolationEvent;
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// One active lease for a task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +104,46 @@ pub fn save_leases(cwd: &Path, leases: &LeaseRegistry) -> Result<()> {
     std::fs::write(&tmp, &json)?;
     std::fs::rename(&tmp, &path)?;
     Ok(())
+}
+
+/// Process-wide monotonic counter so two rewrites in the SAME process (identical
+/// pid, and possibly an identical `now_unix_nanos()` under a coarse clock) never
+/// derive the same temp name. Without it a nanos collision between two concurrent
+/// rewrites of one store could have both publish over the SAME temp file, so a
+/// reader observes a half-written rename source. Mirrors `lock::TMP_SEQ`.
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn now_unix_nanos() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+/// Build a per-call-unique sibling temp path for an atomic rewrite:
+/// `<stem>.<tag>.tmp.<pid>.<nanos>.<seq>`. Two concurrent rewrites of the same
+/// store therefore never collide on a single temp name (which would let one
+/// publish a half-written file the other renames into place), mirroring
+/// `lock.rs`'s `TMP_SEQ`/`now_unix_nanos` idiom. Replaces the fixed
+/// `path.with_extension("jsonl.tmp")` used by the atomic rewrite helpers.
+fn unique_tmp(path: &Path, tag: &str) -> PathBuf {
+    path.with_extension(format!(
+        "{tag}.tmp.{}.{}.{}",
+        std::process::id(),
+        now_unix_nanos(),
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+/// Sleep for the millisecond count named by env var `var`, if set and parseable;
+/// a no-op otherwise. Used ONLY to widen a read->rewrite / check->append race
+/// window in the concurrency regression tests (never set in production),
+/// mirroring `lease::artificial_delay`.
+fn artificial_delay(var: &str) {
+    if let Some(ms) = std::env::var(var).ok().and_then(|s| s.parse::<u64>().ok()) {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
 }
 
 /// Append a lifecycle event to the events.jsonl file (one JSON line per event).
@@ -349,6 +391,21 @@ pub fn append_bridged_finding(cwd: &Path, finding_id: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // Hold the store LeaseLock across a check-then-append so two concurrent
+    // `review-queue --to-backlog` runs cannot both observe the finding-id as
+    // absent and double-add it (check-then-append TOCTOU). Idempotent: re-check
+    // membership INSIDE the lock and skip if already present. Guarding it here
+    // (the shared append site) covers ALL callers. Fail-soft: LeaseLock degrades
+    // to unlocked on timeout and never panics.
+    let _lock = LeaseLock::acquire(cwd);
+    if read_bridged_findings(cwd)?
+        .iter()
+        .any(|id| id == finding_id)
+    {
+        return Ok(());
+    }
+    // Test-only race widener (no-op in prod).
+    artificial_delay("OVERWATCH_TEST_BRIDGE_DELAY_MS");
     let rec = BridgedFinding {
         finding_id: finding_id.to_string(),
         ts: now(),
@@ -415,6 +472,16 @@ pub fn append_bridged_entry(cwd: &Path, key: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // Same check-then-append TOCTOU guard as `append_bridged_finding`: hold the
+    // store LeaseLock and re-check membership inside it so two concurrent
+    // to-backlog runs cannot double-add the same `<kind>:<identifier>` key.
+    // Fail-soft: LeaseLock degrades to unlocked on timeout and never panics.
+    let _lock = LeaseLock::acquire(cwd);
+    if read_bridged_entries(cwd)?.iter().any(|k| k == key) {
+        return Ok(());
+    }
+    // Test-only race widener (no-op in prod).
+    artificial_delay("OVERWATCH_TEST_BRIDGE_DELAY_MS");
     let rec = BridgedEntry {
         key: key.to_string(),
         ts: now(),
@@ -491,7 +558,11 @@ pub fn rewrite_audit_rounds(cwd: &Path, rounds: &[AuditRound]) -> Result<()> {
         buf.push_str(&serde_json::to_string(r)?);
         buf.push('\n');
     }
-    let tmp = path.with_extension("jsonl.tmp");
+    // Unique temp per call so two concurrent rewrites cannot collide on one temp
+    // and publish a half-written ledger. The caller (audit_round_cli::close)
+    // holds the store LeaseLock across its read->modify->rewrite so a concurrent
+    // writer serializes rather than having its append clobbered.
+    let tmp = unique_tmp(&path, "jsonl");
     std::fs::write(&tmp, buf.as_bytes())?;
     std::fs::rename(&tmp, &path)?;
     Ok(())
@@ -634,7 +705,10 @@ fn write_jsonl_atomic<T: Serialize>(path: &Path, records: &[T]) -> Result<()> {
         buf.push_str(&serde_json::to_string(r)?);
         buf.push('\n');
     }
-    let tmp = path.with_extension("jsonl.tmp");
+    // Unique temp per call (see `unique_tmp`): compaction rewrites BOTH the
+    // archive and the hot file, so a fixed temp name could collide with a
+    // concurrent rewrite and publish a half-written file.
+    let tmp = unique_tmp(path, "jsonl");
     std::fs::write(&tmp, buf.as_bytes())?;
     std::fs::rename(&tmp, path)?;
     Ok(())
@@ -677,6 +751,13 @@ pub fn compact_review_findings(cwd: &Path) -> Result<CompactionReport> {
         });
     }
 
+    // Hold the store LeaseLock across the WHOLE read->rewrite critical section so
+    // a finding appended (by a lock-respecting writer) concurrently with this
+    // compaction is not silently dropped: without it, this rewrites the hot file
+    // from a stale snapshot taken before the append, clobbering it. Fail-soft:
+    // LeaseLock degrades to unlocked on timeout and never panics.
+    let _lock = LeaseLock::acquire(cwd);
+
     let findings = read_review_findings(cwd)?;
 
     let mut resolved_ids: BTreeSet<String> = read_bridged_findings(cwd)?.into_iter().collect();
@@ -705,6 +786,11 @@ pub fn compact_review_findings(cwd: &Path) -> Result<CompactionReport> {
 
     let mut new_archive = existing_archive;
     new_archive.extend(archived.iter().cloned());
+
+    // Test-only race widener (no-op in prod): opens the window between the read
+    // above and the hot rewrite below so the concurrency regression test can
+    // reliably interleave a concurrent append.
+    artificial_delay("OVERWATCH_TEST_COMPACT_DELAY_MS");
 
     // Archive FIRST (crash-safety: a crash before the hot rewrite leaves the
     // resolved records recoverable in both files, and a re-run is idempotent).
@@ -1058,6 +1144,117 @@ mod tests {
         // it must not disturb the finding-resolution source.
         assert!(read_bridged_findings(&dir).unwrap().is_empty());
 
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // AXIS 2: a finding appended concurrently with `compact_review_findings`'s
+    // read->rewrite must NOT be dropped. Compaction now holds the store
+    // LeaseLock across its whole read->rewrite, so a lock-respecting concurrent
+    // appender serializes against it instead of having its append clobbered by
+    // the stale-snapshot hot rewrite.
+    //
+    // RED (before the fix): remove the `LeaseLock::acquire` in
+    // `compact_review_findings` and this fails — `f3` is dropped by the hot
+    // rewrite. GREEN: with the lock, `f3` survives in the hot store.
+    #[test]
+    fn concurrent_append_survives_compact_review_findings() {
+        use crate::lock::LeaseLock;
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-compact-race-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+        std::env::set_var("OVERWATCH_TEST_COMPACT_DELAY_MS", "300");
+
+        // f1 stays open; f2 is resolved (bridged) so compaction archives it.
+        append_review_finding(&dir, &finding("f1", 1)).unwrap();
+        append_review_finding(&dir, &finding("f2", 2)).unwrap();
+        append_bridged_finding(&dir, "f2").unwrap();
+
+        // Thread A: compact (locked read->rewrite, delayed).
+        let dir_a = dir.clone();
+        let a = std::thread::spawn(move || {
+            compact_review_findings(&dir_a).expect("compact ok");
+        });
+
+        // Give A a moment to acquire the lock and enter its delay, then run a
+        // lock-respecting appender that records a NEW open finding f3.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        {
+            let _l = LeaseLock::acquire(&dir);
+            append_review_finding(&dir, &finding("f3", 3)).unwrap();
+        }
+
+        a.join().unwrap();
+
+        let hot = read_review_findings(&dir).unwrap();
+        assert!(
+            hot.iter().any(|f| f.finding_id == "f3"),
+            "concurrently appended f3 must not be dropped by compaction; hot={:?}",
+            hot.iter()
+                .map(|f| f.finding_id.as_str())
+                .collect::<Vec<_>>()
+        );
+        // Sanity: compaction ran (f1 stays open, resolved f2 was archived out).
+        assert!(hot.iter().any(|f| f.finding_id == "f1"));
+        assert!(
+            !hot.iter().any(|f| f.finding_id == "f2"),
+            "resolved f2 should have been archived out of the hot store"
+        );
+
+        std::env::remove_var("OVERWATCH_TEST_COMPACT_DELAY_MS");
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // AXIS 3: two concurrent `to-backlog` runs appending the SAME bridged
+    // finding-id must NOT double-add. `append_bridged_finding` now holds the
+    // store LeaseLock AND re-checks membership inside it, so exactly one record
+    // survives.
+    //
+    // RED (before the fix): the unlocked, non-idempotent append always writes,
+    // so both runs pass the (absent) check inside the widened window and TWO
+    // "x" lines land. GREEN: lock + in-lock recheck => exactly one.
+    #[test]
+    fn concurrent_bridged_finding_append_does_not_double_add() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-bridged-race-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+        std::env::set_var("OVERWATCH_TEST_BRIDGE_DELAY_MS", "200");
+
+        // Two concurrent runs append the SAME finding-id "x".
+        let d1 = dir.clone();
+        let t1 = std::thread::spawn(move || append_bridged_finding(&d1, "x").unwrap());
+        let d2 = dir.clone();
+        let t2 = std::thread::spawn(move || append_bridged_finding(&d2, "x").unwrap());
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let ids = read_bridged_findings(&dir).unwrap();
+        let count = ids.iter().filter(|id| id.as_str() == "x").count();
+        assert_eq!(
+            count, 1,
+            "bridged finding-id x must appear exactly once; got {ids:?}"
+        );
+
+        std::env::remove_var("OVERWATCH_TEST_BRIDGE_DELAY_MS");
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),

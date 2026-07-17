@@ -600,11 +600,32 @@ pub fn dispositions_path(cwd: &Path) -> Result<PathBuf> {
 }
 
 /// Append a human disposition to dispositions.jsonl (one JSON line each).
+///
+/// Idempotent per `finding_id`: two concurrent writers (e.g. a `reconcile-fixed`
+/// run and a manual `record-disposition`, or two reconcile runs) that both
+/// resolve the SAME finding_id must not double-row it. Guarding it HERE — the
+/// shared write site both callers funnel through — covers all callers
+/// automatically. Same check-then-append TOCTOU guard as
+/// [`append_bridged_finding`]: hold the store `LeaseLock` across the
+/// read->check->append critical section and re-check for an existing
+/// disposition with this `finding_id` INSIDE the lock, skipping the append if
+/// one is already present. Fail-soft: `LeaseLock` degrades to unlocked on
+/// timeout and never panics; a corrupt existing line is skipped by
+/// [`read_dispositions`].
 pub fn append_disposition(cwd: &Path, disposition: &Disposition) -> Result<()> {
     let path = dispositions_path(cwd)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let _lock = LeaseLock::acquire(cwd);
+    if read_dispositions(cwd)?
+        .iter()
+        .any(|d| d.finding_id == disposition.finding_id)
+    {
+        return Ok(());
+    }
+    // Test-only race widener (no-op in prod).
+    artificial_delay("OVERWATCH_TEST_DISPOSITION_DELAY_MS");
     let json = serde_json::to_string(disposition)?;
     std::fs::OpenOptions::new()
         .create(true)
@@ -1255,6 +1276,73 @@ mod tests {
         );
 
         std::env::remove_var("OVERWATCH_TEST_BRIDGE_DELAY_MS");
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // Two concurrent disposition appends of the SAME finding-id must NOT
+    // double-row it. `append_disposition` now holds the store LeaseLock AND
+    // re-checks for an existing disposition with that finding_id INSIDE the
+    // lock, so exactly one row survives. Because the dedup lives at the shared
+    // write site, BOTH callers are covered: this simulates the cross-caller
+    // race (a manual `record-disposition` racing a `reconcile-fixed` append of
+    // the same finding_id) — either ordering yields a single row.
+    //
+    // RED (before the fix): the unlocked, non-idempotent append always writes,
+    // so both writers pass the (absent) check inside the widened window and TWO
+    // rows for the same finding_id land. GREEN: lock + in-lock recheck => one.
+    #[test]
+    fn concurrent_disposition_append_dedupes_on_finding_id() {
+        use crate::disposition::{Disposition, DispositionVerdict};
+
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-disp-race-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+        std::env::set_var("OVERWATCH_TEST_DISPOSITION_DELAY_MS", "200");
+
+        // Writer A: a "reconcile-fixed"-style append. Writer B: a manual
+        // "record-disposition"-style append. Same finding_id "f1", distinct
+        // reviewers to mirror the two callers racing at the shared write site.
+        let d1 = dir.clone();
+        let t1 = std::thread::spawn(move || {
+            let disp = Disposition::new(
+                "f1".to_string(),
+                DispositionVerdict::Confirmed,
+                "reconcile-fixed".to_string(),
+                now(),
+            );
+            append_disposition(&d1, &disp).unwrap();
+        });
+        let d2 = dir.clone();
+        let t2 = std::thread::spawn(move || {
+            let disp = Disposition::new(
+                "f1".to_string(),
+                DispositionVerdict::Dismissed,
+                "human".to_string(),
+                now(),
+            );
+            append_disposition(&d2, &disp).unwrap();
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let dispositions = read_dispositions(&dir).unwrap();
+        let count = dispositions.iter().filter(|d| d.finding_id == "f1").count();
+        assert_eq!(
+            count, 1,
+            "disposition finding_id f1 must appear exactly once; got {dispositions:?}"
+        );
+
+        std::env::remove_var("OVERWATCH_TEST_DISPOSITION_DELAY_MS");
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),

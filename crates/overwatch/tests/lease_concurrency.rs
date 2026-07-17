@@ -93,6 +93,102 @@ fn spawn_reassign(
         .expect("failed to spawn overwatch reassign")
 }
 
+/// Spawn `overwatch reap` with the mutator race-window widener set, so its
+/// load->reap->save cycle straddles a racing `begin` for a DIFFERENT key.
+/// `reap` shares `end`/`run`/`heartbeat`'s `OVERWATCH_TEST_MUTATOR_DELAY_MS`
+/// hook (see `lease::artificial_mutator_delay`). Before the fix, `reap` did its
+/// RMW without holding `LeaseLock`, so — even when it reaps nothing — it could
+/// load a pre-begin snapshot, sleep past the racing begin's save, then save the
+/// stale snapshot back, silently dropping the just-committed lease.
+fn spawn_reap(cwd: &std::path::Path, home: &std::path::Path) -> std::process::Child {
+    Command::new(bin())
+        .current_dir(cwd)
+        .env("HOME", home)
+        // Hold reap()'s stale in-memory snapshot well past begin()'s save so the
+        // (pre-fix) unlocked reap() deterministically clobbers begin()'s claim.
+        .env("OVERWATCH_TEST_MUTATOR_DELAY_MS", "500")
+        .args(["reap"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn overwatch reap")
+}
+
+/// A concurrent, unlocked `reap` must not clobber a just-committed begin.
+///
+/// Regression for backlog 7916a97d (the `reap` arm specifically): `reap`
+/// performed its load->reap->save on `leases.json` WITHOUT holding `LeaseLock`.
+/// A racing `reap` could load a pre-begin snapshot (no key2) — reaping nothing,
+/// since no lease is stale — let a concurrent `begin key2` commit, then save its
+/// stale snapshot back, silently freeing key2 so another begin could re-grab it
+/// (last-writer-wins lost update). Here we race `reap` against `begin key2` and
+/// assert key2 SURVIVES every trial. Fails against the pre-fix (unlocked reap)
+/// code; passes once reap holds `LeaseLock`.
+///
+/// This is the reap-vs-begin twin of `concurrent_end_does_not_clobber_racing_begin`
+/// (end-vs-begin) — the lost-update path had zero direct coverage for `reap`.
+#[test]
+fn concurrent_reap_does_not_clobber_racing_begin() {
+    const TRIALS: u64 = 8;
+
+    for _ in 0..TRIALS {
+        let n = TRIAL_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "overwatch-lease-reap-clobber-{}-{n}",
+            std::process::id()
+        ));
+        let home = tmp.join("home");
+        let cwd = tmp.join("cwd");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let key1 = "victim-key-1";
+        let key2 = "survivor-key-2";
+
+        // Establish key1 so the store is non-empty when `reap` snapshots it
+        // (reap frees nothing here — key1 is fresh — but still rewrites the file,
+        // which is exactly what makes its unlocked RMW able to drop key2).
+        let mut seed = spawn_begin(&cwd, &home, key1, "sess-a");
+        assert!(
+            seed.wait().expect("wait on seed begin").success(),
+            "trial {n}: seeding begin(key1) should succeed"
+        );
+
+        // Race: reap loads a snapshot WITHOUT key2 and sleeps 500ms; begin(key2)
+        // loads, sleeps 150ms, then commits {key1,key2}. Without a shared lock,
+        // reap() wakes last and saves its stale {key1} snapshot back, dropping
+        // key2.
+        let mut child_reap = spawn_reap(&cwd, &home);
+        let mut child_begin = spawn_begin(&cwd, &home, key2, "sess-b");
+
+        child_reap.wait().expect("wait on reap");
+        assert!(
+            child_begin.wait().expect("wait on begin").success(),
+            "trial {n}: begin(key2) should win its own claim"
+        );
+
+        // Oracle: key2's holder (sess-b) must still have a live anchor. The
+        // `lease` subcommand exits 0 with the lease when present, 1 when the
+        // session holds nothing — so a non-zero exit means key2 was clobbered.
+        let status = Command::new(bin())
+            .current_dir(&cwd)
+            .env("HOME", &home)
+            .args(["lease", "--session", "sess-b", "--json"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("failed to query lease for sess-b");
+        assert!(
+            status.success(),
+            "trial {n}: key2 ({key2}) was clobbered by the racing unlocked reap() \
+             (lease --session sess-b exited {:?})",
+            status.code()
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+}
+
 /// A concurrent, unlocked `reassign` must not clobber a just-committed begin.
 ///
 /// Regression for backlog 0ee61602: `control::reassign` performed its

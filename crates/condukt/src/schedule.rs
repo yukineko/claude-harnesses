@@ -56,15 +56,20 @@ fn violates_repo_relative_convention(p: &str) -> bool {
     p.split(['/', '\\']).any(|comp| comp == "..")
 }
 
-/// Normalize a path/glob entry before comparison: strip a leading `./` and
-/// collapse repeated `/`. Two different spellings of the same path (e.g.
-/// `./src/a.rs` vs `src/a.rs`, or `src//a.rs` vs `src/a.rs`) must compare
-/// equal, or a same-file write race goes undetected — a false negative,
-/// unlike a false positive which only over-serializes (safe). Does not
-/// attempt to resolve `..` or relative-vs-absolute forms; touched_files is a
-/// bare repo-relative convention, not a filesystem path to fully canonicalize.
-/// (See [`violates_repo_relative_convention`] for a non-canonicalizing sanity
-/// check that flags absolute paths / `..` components as a warning instead.)
+/// Normalize a path/glob entry before comparison: strip a leading `./`,
+/// collapse repeated `/`, and casefold (lowercase). Two different spellings of
+/// the same path (e.g. `./src/a.rs` vs `src/a.rs`, `src//a.rs` vs `src/a.rs`,
+/// or `Src/a.rs` vs `src/a.rs` on a case-insensitive filesystem like macOS's
+/// default APFS/HFS+) must compare equal, or a same-file write race goes
+/// undetected — a false negative, unlike a false positive which only
+/// over-serializes (safe). Casefolding is conservative: it can only merge two
+/// spellings into one same-file conflict (never split them), matching the
+/// "when uncertain, treat as a conflict" contract of [`entries_conflict`].
+/// Does not attempt to resolve `..` or relative-vs-absolute forms;
+/// touched_files is a bare repo-relative convention, not a filesystem path to
+/// fully canonicalize. (See [`violates_repo_relative_convention`] for a
+/// non-canonicalizing sanity check that flags absolute paths / `..` components
+/// as a warning instead.)
 fn normalize_entry(p: &str) -> String {
     let mut s = p;
     while let Some(rest) = s.strip_prefix("./") {
@@ -83,7 +88,11 @@ fn normalize_entry(p: &str) -> String {
         }
         out.push(c);
     }
-    out
+    // Casefold so case-only spelling differences (e.g. `Src/a.rs` vs
+    // `src/a.rs`) fold to the SAME file on case-insensitive filesystems. Glob
+    // metacharacters (`* ? [ {`) are not letters, so lowercasing never alters
+    // the glob semantics of a pattern entry.
+    out.to_lowercase()
 }
 
 /// Split a path entry into its non-empty components, tolerating either `/` or
@@ -138,7 +147,24 @@ fn entries_conflict(a: &str, b: &str) -> bool {
     // nest, the wildcard regions can overlap.
     if is_glob(a) || is_glob(b) {
         let (pa, pb) = (pattern_prefix(a), pattern_prefix(b));
-        if !pa.is_empty() && !pb.is_empty() && (pa.starts_with(pb) || pb.starts_with(pa)) {
+        if !pa.is_empty() && !pb.is_empty() {
+            if pa.starts_with(pb) || pb.starts_with(pa) {
+                return true;
+            }
+        } else if is_glob(a) && is_glob(b) {
+            // Leading-wildcard glob-vs-glob: at least one glob starts with a
+            // wildcard so its literal prefix is empty (e.g. `*.rs` or
+            // `**/foo.rs`). The nested-prefix test above short-circuits to
+            // "no conflict" here, but two globs cannot be cheaply proven
+            // disjoint — globset only matches glob-vs-literal, not
+            // glob-vs-glob — and a leading wildcard can reach into any
+            // directory (`**/foo.rs` overlaps `bar/**/foo.rs` at
+            // `bar/foo.rs`). Conservatively treat two globs where one has an
+            // empty literal prefix as a CONFLICT: a false conflict only
+            // serializes work (safe), a missed one races two workers onto one
+            // file (the bug). Genuinely-disjoint globs with two non-empty,
+            // non-nesting prefixes (e.g. `src/foo/*.rs` vs `src/bar/*.rs`) are
+            // handled by the branch above and are NOT dragged in here.
             return true;
         }
     }
@@ -438,13 +464,23 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
                         "task '{}' declares no touched_files (unknown blast radius) -> serial",
                         t.id
                     ));
-                } else if let Some(gs) = &shared {
-                    if t.touched_files.iter().any(|f| gs.is_match(f)) {
-                        forced_serial.insert(t.id.clone());
-                        sched
-                            .warnings
-                            .push(format!("task '{}' touches a shared path -> serial", t.id));
-                    }
+                } else if t.touched_files.iter().any(|f| {
+                    // Shared-glob overlap must be BIDIRECTIONAL. `gs.is_match(f)`
+                    // only fires when the touched_files entry `f` is a literal
+                    // path caught by a shared glob; it treats a glob-VALUED `f`
+                    // (e.g. `src/*.rs`) as an opaque literal string and misses
+                    // the case where `f` itself is the glob that overlaps a
+                    // (more literal) shared path (e.g. shared `src/models.rs`).
+                    // Evaluate `entries_conflict` in both directions against
+                    // each configured shared glob so a glob-valued entry that
+                    // overlaps a shared path still demotes to serial.
+                    shared.as_ref().is_some_and(|gs| gs.is_match(f))
+                        || shared_globs.iter().any(|sg| entries_conflict(f, sg))
+                }) {
+                    forced_serial.insert(t.id.clone());
+                    sched
+                        .warnings
+                        .push(format!("task '{}' touches a shared path -> serial", t.id));
                 }
             }
         }
@@ -952,6 +988,106 @@ mod tests {
         let s = schedule(&d, &[]);
         assert!(s.batches.is_empty());
         assert_eq!(s.serial, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn leading_wildcard_glob_pair_conservatively_serialized() {
+        // AXIS 1 (twin of the nested-prefix fix): "*/foo.rs" has an EMPTY
+        // literal prefix, so the empty-prefix guard used to short-circuit
+        // entries_conflict to "no conflict". It GENUINELY overlaps "src/*.rs"
+        // at "src/foo.rs", yet the glob-vs-literal probe misses the pair —
+        // "*/foo.rs" as a glob does not match the literal string "src/*.rs"
+        // (it needs a "/foo.rs" tail) and vice-versa — so two workers used to
+        // ride parallel worktrees onto src/foo.rs. glob-vs-glob overlap cannot
+        // be cheaply proven disjoint, so a leading-wildcard glob paired with
+        // another glob is conservatively a conflict -> both serial.
+        assert!(
+            entries_conflict("*/foo.rs", "src/*.rs"),
+            "leading-wildcard globs that genuinely overlap (at src/foo.rs) must conflict",
+        );
+        let d = dec(vec![
+            task("a", &["*/foo.rs"], &[], Class::Parallel),
+            task("b", &["src/*.rs"], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+        assert!(s.batches.is_empty(), "batches={:?}", s.batches);
+        assert_eq!(s.serial, vec!["a", "b"]);
+
+        // MUST NOT over-serialize genuinely-disjoint globs whose two literal
+        // prefixes are non-empty and do not nest (neither has a leading
+        // wildcard, so the conservative branch never fires for them).
+        let d2 = dec(vec![
+            task("a", &["src/foo/*.rs"], &[], Class::Parallel),
+            task("b", &["src/bar/*.rs"], &[], Class::Parallel),
+        ]);
+        let s2 = schedule(&d2, &[]);
+        assert_eq!(s2.batches.len(), 1);
+        assert_eq!(s2.batches[0].parallel, vec!["a", "b"]);
+        assert!(s2.serial.is_empty());
+    }
+
+    #[test]
+    fn case_only_spelling_difference_is_same_file() {
+        // AXIS 2 (twin of the ./-prefix / double-slash normalization fixes):
+        // on a case-insensitive filesystem (macOS default) "Src/a.rs" and
+        // "src/a.rs" name the SAME file. Without casefolding, entries_conflict
+        // compared case-sensitive strings and scheduled both in parallel,
+        // racing one file. normalize_entry now casefolds -> overlap detected,
+        // both serialize.
+        let d = dec(vec![
+            task("a", &["Src/a.rs"], &[], Class::Parallel),
+            task("b", &["src/a.rs"], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+        assert!(s.batches.is_empty(), "batches={:?}", s.batches);
+        assert_eq!(s.serial, vec!["a", "b"]);
+
+        // MUST NOT over-serialize genuinely-different files.
+        let d2 = dec(vec![
+            task("a", &["src/a.rs"], &[], Class::Parallel),
+            task("b", &["src/b.rs"], &[], Class::Parallel),
+        ]);
+        let s2 = schedule(&d2, &[]);
+        assert_eq!(s2.batches.len(), 1);
+        assert_eq!(s2.batches[0].parallel, vec!["a", "b"]);
+        assert!(s2.serial.is_empty());
+    }
+
+    #[test]
+    fn shared_glob_demotes_glob_valued_touched_file() {
+        // AXIS 3 (twin of the one-directional shared-glob check): the shared
+        // path is the literal "src/models.rs"; task "a"'s touched_files entry
+        // is itself a glob "src/*.rs" that OVERLAPS it. The old
+        // `gs.is_match(f)` treated the glob-valued entry as an opaque literal
+        // and missed the overlap, letting "a" ride a parallel worktree onto a
+        // shared file. Bidirectional entries_conflict now catches it -> "a"
+        // demotes to serial. A disjoint peer is untouched.
+        let d = dec(vec![
+            task("a", &["src/*.rs"], &[], Class::Parallel),
+            task("b", &["docs/x.md"], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &["src/models.rs".into()]);
+        assert!(
+            s.serial.contains(&"a".to_string()),
+            "glob-valued touched_files overlapping a shared glob must serialize; serial={:?}",
+            s.serial,
+        );
+        let batched: Vec<&String> = s.batches.iter().flat_map(|b| b.parallel.iter()).collect();
+        assert!(
+            !batched.iter().any(|id| *id == "a"),
+            "shared-glob-overlapping glob-valued task must NOT batch; batched={batched:?}",
+        );
+        assert!(
+            batched.iter().any(|id| *id == "b"),
+            "disjoint peer must still batch; batched={batched:?}",
+        );
+        assert!(
+            s.warnings
+                .iter()
+                .any(|w| w.contains("'a'") && w.contains("shared")),
+            "demotion must be announced; warnings={:?}",
+            s.warnings,
+        );
     }
 
     #[test]

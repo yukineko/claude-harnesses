@@ -86,6 +86,18 @@ fn normalize_entry(p: &str) -> String {
     out
 }
 
+/// Split a path entry into its non-empty components, tolerating either `/` or
+/// `\` separators (a convention-violating entry may use Windows separators).
+fn path_components(p: &str) -> Vec<&str> {
+    p.split(['/', '\\']).filter(|c| !c.is_empty()).collect()
+}
+
+/// Is `short` a component-wise suffix of `long`? (e.g. `[src, a.rs]` is a
+/// suffix of `[repo, src, a.rs]`.) Empty `short` never matches.
+fn is_path_suffix(long: &[&str], short: &[&str]) -> bool {
+    !short.is_empty() && short.len() <= long.len() && long[long.len() - short.len()..] == *short
+}
+
 /// Do two individual path/glob entries conflict (could touch the same file)?
 ///
 /// Conservative: when uncertain we say "yes", because a false conflict only
@@ -96,6 +108,20 @@ fn entries_conflict(a: &str, b: &str) -> bool {
     let b = &normalize_entry(b);
     if a == b {
         return true;
+    }
+    // Abs-vs-relative spelling of the SAME file: when one entry violates the
+    // repo-relative convention (absolute path / drive-letter / `..`), plain
+    // string comparison can't be trusted — e.g. `/repo/src/a.rs` and
+    // `src/a.rs` name the identical file yet compare unequal, silently
+    // defeating overlap-demotion and racing two workers on one file. Detect
+    // it precisely (not by dragging every disjoint peer to serial) via a
+    // component-wise path-suffix match, gated on a convention violation so
+    // ordinary relative-vs-relative comparisons are untouched.
+    if violates_repo_relative_convention(a) || violates_repo_relative_convention(b) {
+        let (ca, cb) = (path_components(a), path_components(b));
+        if is_path_suffix(&ca, &cb) || is_path_suffix(&cb, &ca) {
+            return true;
+        }
     }
     // glob-vs-literal: does either pattern match the other as a path?
     if let Ok(g) = Glob::new(a) {
@@ -401,7 +427,18 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
                 forced_serial.insert(t.id.clone());
             }
             Class::Parallel => {
-                if let Some(gs) = &shared {
+                if t.touched_files.is_empty() {
+                    // Undeclared file set = unknown blast radius. `files_conflict`
+                    // is an any()==false over an empty set, so overlap-demotion
+                    // can never fire for this task and it would ride a parallel
+                    // worktree, colliding invisibly with peers. "When in doubt,
+                    // serialize" (conservative): route it onto the serial track.
+                    forced_serial.insert(t.id.clone());
+                    sched.warnings.push(format!(
+                        "task '{}' declares no touched_files (unknown blast radius) -> serial",
+                        t.id
+                    ));
+                } else if let Some(gs) = &shared {
                     if t.touched_files.iter().any(|f| gs.is_match(f)) {
                         forced_serial.insert(t.id.clone());
                         sched
@@ -459,6 +496,36 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
                  (overlap is authoritative over class)"
             ));
         }
+    }
+
+    // Force-serialize any (non-gated/non-experiment) task whose touched_files
+    // violate the repo-relative convention (absolute path, `..` traversal, or
+    // drive-letter prefix). Such an entry is not reliably string-comparable
+    // against equivalent relative spellings, so overlap-demotion may miss a
+    // same-file collision with a peer — the warning above (kept) surfaces it,
+    // and here we act on it: route the offending task off the parallel-
+    // worktree track ("unknown/unnormalizable path -> serialize", conservative).
+    // Runs AFTER overlap-demotion on purpose: a convention-violating task is
+    // still a parallel_candidate while `entries_conflict`'s suffix match demotes
+    // it AND its clean same-file peer together (closing the abs-vs-relative
+    // blind spot for BOTH). This pass then also covers a lone violator that has
+    // no matching peer. Composes with the empty-touched_files serialization
+    // (a task may hit either or both; both route to serial). Sorted for
+    // deterministic ordering.
+    let mut convention_serial: Vec<String> = dec
+        .tasks
+        .iter()
+        .filter(|t| {
+            !excluded.contains(t.id.as_str())
+                && t.touched_files
+                    .iter()
+                    .any(|f| violates_repo_relative_convention(f))
+        })
+        .map(|t| t.id.clone())
+        .collect();
+    convention_serial.sort();
+    for id in convention_serial {
+        forced_serial.insert(id);
     }
 
     let depth = compute_depths(dec);
@@ -550,6 +617,102 @@ mod tests {
         let s = schedule(&d, &[]);
         assert!(s.batches.is_empty());
         assert_eq!(s.serial, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn empty_touched_files_parallel_task_is_serialized() {
+        // A Class::Parallel task that declares NO touched_files has an unknown
+        // blast radius. `files_conflict` is an any()==false over an empty set,
+        // so overlap-demotion can never fire for it and it would ride a
+        // parallel worktree, colliding invisibly with peers. "When in doubt,
+        // serialize" (conservative) -> it must land on the serial track and
+        // never appear in any parallel batch. Tasks that DO declare files keep
+        // their existing behavior.
+        let d = dec(vec![
+            task("a", &["src/a.rs"], &[], Class::Parallel),
+            task("blind", &[], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+        let batched: Vec<&String> = s.batches.iter().flat_map(|b| b.parallel.iter()).collect();
+        assert!(
+            !batched.iter().any(|id| *id == "blind"),
+            "empty-touched_files parallel task must NOT ride a parallel batch; batched={batched:?}",
+        );
+        assert!(
+            s.serial.contains(&"blind".to_string()),
+            "empty-touched_files task must be on the serial track; serial={:?}",
+            s.serial,
+        );
+        // The file-declaring parallel sibling is unaffected (no over-serializing).
+        assert!(
+            batched.iter().any(|id| *id == "a"),
+            "file-declaring parallel task must still batch; batched={batched:?}",
+        );
+    }
+
+    #[test]
+    fn abs_vs_relative_same_file_forces_both_serial() {
+        // Two Class::Parallel tasks touch ONE file spelled two ways: "a" names
+        // it with an absolute path (violates the repo-relative convention),
+        // "b" with the plain repo-relative spelling. `entries_conflict` used to
+        // compare raw strings and MISS the abs-vs-relative match, so both rode
+        // parallel worktrees cut from the same base and 3-way merge-conflicted
+        // at the shared file. Now a convention violation is force-serialized
+        // AND its suffix match is detected, so BOTH land on the serial track
+        // and neither appears in any parallel batch.
+        let d = dec(vec![
+            task("a", &["/repo/src/a.rs"], &[], Class::Parallel),
+            task("b", &["src/a.rs"], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+        let batched: Vec<&String> = s.batches.iter().flat_map(|b| b.parallel.iter()).collect();
+        assert!(
+            !batched.iter().any(|id| *id == "a" || *id == "b"),
+            "abs-vs-relative same-file tasks must NOT ride a parallel batch; batched={batched:?}",
+        );
+        assert_eq!(
+            s.serial,
+            vec!["a", "b"],
+            "both tasks must land on the serial track; serial={:?}",
+            s.serial,
+        );
+        // The convention violation is still surfaced as a warning (warn AND
+        // serialize), not silently swallowed.
+        assert!(
+            s.warnings
+                .iter()
+                .any(|w| w.contains("'a'") && w.contains("repo-relative")),
+            "convention-violation warning must still be emitted; warnings={:?}",
+            s.warnings,
+        );
+    }
+
+    #[test]
+    fn lone_convention_violating_parallel_task_is_serialized() {
+        // A single Class::Parallel task with an absolute-path entry has no peer
+        // to suffix-match, but an unnormalizable path is still an unknown
+        // collision surface — it must be force-serialized (not left riding a
+        // lone parallel batch), while an ordinary relative sibling batches.
+        let d = dec(vec![
+            task("clean", &["src/clean.rs"], &[], Class::Parallel),
+            task("bad", &["/etc/passwd"], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+        assert!(
+            s.serial.contains(&"bad".to_string()),
+            "convention-violating task must be serial; serial={:?}",
+            s.serial,
+        );
+        let batched: Vec<&String> = s.batches.iter().flat_map(|b| b.parallel.iter()).collect();
+        assert!(
+            !batched.iter().any(|id| *id == "bad"),
+            "convention-violating task must NOT batch; batched={batched:?}",
+        );
+        // The clean relative sibling is unaffected (no over-serializing).
+        assert!(
+            batched.iter().any(|id| *id == "clean"),
+            "disjoint relative task must still batch; batched={batched:?}",
+        );
     }
 
     #[test]
@@ -1084,10 +1247,12 @@ mod prop_tests {
             prop_assert!(!sched.warnings.is_empty(), "expected demotion warnings");
         }
 
-        /// Single parallel task → exactly one batch of size one.
+        /// Single parallel task (with a declared file) → exactly one batch of
+        /// size one. It must declare a file: an empty touched_files set is now
+        /// an unknown blast radius that is conservatively serialized.
         #[test]
         fn single_parallel_task_one_batch(id in "[a-z]{2,5}") {
-            let sched = schedule(&pd(vec![pt(&id, vec![], vec![], Class::Parallel)]), &[]);
+            let sched = schedule(&pd(vec![pt(&id, vec!["src/only.rs".into()], vec![], Class::Parallel)]), &[]);
             prop_assert_eq!(sched.batches.len(), 1);
             prop_assert_eq!(sched.batches[0].parallel.len(), 1);
             prop_assert!(sched.serial.is_empty());

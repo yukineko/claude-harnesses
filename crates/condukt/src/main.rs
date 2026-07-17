@@ -4033,14 +4033,51 @@ fn run_mechanical(cmd: &[String], run_dir: &Path) -> (bool, String) {
     }
 }
 
-/// Probe whether the `fugu-router` binary is on PATH and, if so, return its
-/// skill fingerprint (stdout of `fugu-router fingerprint`, trimmed). `None`
-/// means fugu-router is absent → recording is a soft no-op.
+/// Resolve the `fugu-router` binary to invoke.
+///
+/// Prefers the plugin-cache absolute path resolved from
+/// `~/.claude/plugins/installed_plugins.json` (the
+/// `plugins["fugu-router@yukineko"][0]["installPath"]` entry, joined with
+/// `bin/fugu-router`), so a stale or shadowing `fugu-router` earlier on
+/// `PATH` (for example an old `~/.cargo/bin/fugu-router` without
+/// `--duration` support) never wins over the actually-installed plugin
+/// version. Falls back to the bare name `"fugu-router"` (PATH resolution)
+/// whenever the manifest is missing, malformed, or lacks the expected keys
+/// — this is a fail-soft resolution, never a hard error.
+fn fugu_router_bin() -> String {
+    fugu_router_bin_from_manifest(
+        &harness_core::config::home().join(".claude/plugins/installed_plugins.json"),
+    )
+    .unwrap_or_else(|| "fugu-router".to_string())
+}
+
+/// Pure helper (unit-testable): given a path to an `installed_plugins.json`
+/// manifest, return the absolute `<installPath>/bin/fugu-router` path for the
+/// `fugu-router@yukineko` plugin, or `None` on any resolution failure (file
+/// missing, invalid JSON, missing keys, empty array, etc).
+fn fugu_router_bin_from_manifest(manifest_path: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(manifest_path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let install_path = value
+        .get("plugins")?
+        .get("fugu-router@yukineko")?
+        .as_array()?
+        .first()?
+        .get("installPath")?
+        .as_str()?;
+    let bin = Path::new(install_path).join("bin").join("fugu-router");
+    Some(bin.to_string_lossy().into_owned())
+}
+
+/// Probe whether `fugu-router` (resolved via [`fugu_router_bin`]) is usable
+/// and, if so, return its skill fingerprint (stdout of `fugu-router
+/// fingerprint`, trimmed). `None` means fugu-router is absent → recording is
+/// a soft no-op.
 fn fugu_fingerprint() -> Option<String> {
-    let out = std::process::Command::new("fugu-router")
+    let out = std::process::Command::new(fugu_router_bin())
         .arg("fingerprint")
         .output()
-        .ok()?; // spawn failed (not on PATH) → soft-skip
+        .ok()?; // spawn failed (not resolvable) → soft-skip
     let fp = String::from_utf8_lossy(&out.stdout).trim().to_string();
     Some(fp)
 }
@@ -4097,7 +4134,7 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
                 .as_deref()
                 .and_then(state::resolve_agent_cost)
                 .unwrap_or(s.cost_usd);
-            let mut cmd = std::process::Command::new("fugu-router");
+            let mut cmd = std::process::Command::new(fugu_router_bin());
             cmd.arg("record")
                 .args(["--title", &s.title])
                 .args(["--files", &s.files.join(",")])
@@ -4136,10 +4173,21 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
                 cmd.args(["--tokens-output", &tout.to_string()]);
             }
             // Best-effort: a single failed record must not abort the sweep.
-            if let Err(e) = cmd.status() {
-                eprintln!("condukt: fugu-router record failed for '{}': {e}", s.title);
-            } else {
-                emitted += 1;
+            // Both a spawn failure (Err) AND a non-zero exit status count as
+            // failure — a status().ok()-only check would silently count a
+            // shelled-out `fugu-router record` that exited non-zero (e.g. an
+            // old/incompatible binary rejecting a flag) as "emitted".
+            match cmd.status() {
+                Ok(status) if status.success() => emitted += 1,
+                Ok(status) => {
+                    eprintln!(
+                        "condukt: fugu-router record failed for '{}': exit status {status}",
+                        s.title
+                    );
+                }
+                Err(e) => {
+                    eprintln!("condukt: fugu-router record failed for '{}': {e}", s.title);
+                }
             }
         }
         rs.recorded_at = Some(state::now_secs());
@@ -4383,6 +4431,141 @@ mod calibrated_confidence_tests {
         // to spawn → soft-skip → `None`, regardless of any ambient
         // fugu-router install / episode history on the host.
         assert_eq!(calibrated_confidence(&title, &[], &None), None);
+    }
+}
+
+#[cfg(test)]
+mod fugu_router_bin_tests {
+    use super::fugu_router_bin_from_manifest;
+    use std::path::Path;
+
+    /// A well-formed manifest resolves to `<installPath>/bin/fugu-router` —
+    /// this is the PATH-shadowing fix: the plugin-cache absolute path must
+    /// win over whatever `fugu-router` a bare-name PATH lookup would find
+    /// (e.g. a stale `~/.cargo/bin/fugu-router`).
+    #[test]
+    fn resolves_install_path_from_valid_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("installed_plugins.json");
+        std::fs::write(
+            &manifest,
+            r#"{
+                "version": 2,
+                "plugins": {
+                    "fugu-router@yukineko": [
+                        {
+                            "scope": "user",
+                            "installPath": "/home/u/.claude/plugins/cache/yukineko/fugu-router/0.1.19",
+                            "version": "0.1.19"
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let resolved = fugu_router_bin_from_manifest(&manifest).unwrap();
+        assert_eq!(
+            resolved,
+            "/home/u/.claude/plugins/cache/yukineko/fugu-router/0.1.19/bin/fugu-router"
+        );
+    }
+
+    /// A missing manifest file must fail soft (`None`), never panic/error,
+    /// so the caller can fall back to the bare `"fugu-router"` PATH name.
+    #[test]
+    fn missing_manifest_falls_back_to_none() {
+        let missing = Path::new("/nonexistent/path/installed_plugins.json");
+        assert_eq!(fugu_router_bin_from_manifest(missing), None);
+    }
+
+    /// Malformed JSON must fail soft (`None`), not panic.
+    #[test]
+    fn invalid_json_falls_back_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("installed_plugins.json");
+        std::fs::write(&manifest, "not valid json {{{").unwrap();
+        assert_eq!(fugu_router_bin_from_manifest(&manifest), None);
+    }
+
+    /// A manifest missing the `fugu-router@yukineko` key (e.g. the plugin
+    /// isn't installed) must fail soft (`None`).
+    #[test]
+    fn missing_key_falls_back_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("installed_plugins.json");
+        std::fs::write(&manifest, r#"{"version": 2, "plugins": {}}"#).unwrap();
+        assert_eq!(fugu_router_bin_from_manifest(&manifest), None);
+    }
+
+    /// An empty install-list array for the key must fail soft (`None`)
+    /// rather than panicking on an out-of-bounds `[0]` access.
+    #[test]
+    fn empty_install_list_falls_back_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("installed_plugins.json");
+        std::fs::write(
+            &manifest,
+            r#"{"version": 2, "plugins": {"fugu-router@yukineko": []}}"#,
+        )
+        .unwrap();
+        assert_eq!(fugu_router_bin_from_manifest(&manifest), None);
+    }
+}
+
+#[cfg(test)]
+mod record_runs_exit_code_tests {
+    /// Regression test for the exit-code bug: a shelled-out `fugu-router
+    /// record` that spawns successfully but exits non-zero must NOT be
+    /// counted as an emitted outcome. Previously `record_runs` only checked
+    /// `cmd.status()`'s `Result` (spawn success/failure) via `.ok()`-style
+    /// matching and ignored `ExitStatus::success()`, so a non-zero exit
+    /// (e.g. an old fugu-router rejecting an unknown `--duration` flag)
+    /// was silently counted as success.
+    ///
+    /// This pins the exit-code-checked emission logic directly against a
+    /// real child process (a shell script that exits 1), mirroring exactly
+    /// the `match cmd.status() { Ok(status) if status.success() => ...`
+    /// pattern used inside `record_runs`.
+    #[test]
+    fn non_zero_exit_status_is_not_counted_as_emitted() {
+        let mut emitted = 0usize;
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "exit 1"]);
+        match cmd.status() {
+            Ok(status) if status.success() => emitted += 1,
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        assert_eq!(emitted, 0, "non-zero exit must not be counted as emitted");
+    }
+
+    /// Symmetric control: a successful (exit 0) child process IS counted,
+    /// confirming the assertion above isn't vacuously true.
+    #[test]
+    fn zero_exit_status_is_counted_as_emitted() {
+        let mut emitted = 0usize;
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "exit 0"]);
+        match cmd.status() {
+            Ok(status) if status.success() => emitted += 1,
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        assert_eq!(emitted, 1, "zero exit must be counted as emitted");
+    }
+
+    /// A spawn failure (nonexistent binary) must likewise not be counted.
+    #[test]
+    fn spawn_failure_is_not_counted_as_emitted() {
+        let mut emitted = 0usize;
+        let mut cmd = std::process::Command::new("/nonexistent/binary/definitely-not-here");
+        match cmd.status() {
+            Ok(status) if status.success() => emitted += 1,
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        assert_eq!(emitted, 0, "spawn failure must not be counted as emitted");
     }
 }
 

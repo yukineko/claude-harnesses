@@ -1,7 +1,7 @@
 {
   "name": "hypothesis",
-  "version": "0.1.6",
-  "description": "PDO hypothesis lifecycle management — create, validate, and track discovery hypotheses aligned with compass goals.",
+  "version": "0.1.7",
+  "description": "v0.1.7: `list --json` now emits `status` via `Status`'s hyphenated `Display` (e.g. \"awaiting-measurement\") instead of serde's snake_case rendering, fixing overwatch's `bucket_hypotheses()` PDO hypotheses view (previously always empty/wrong-cased); `session_start`'s measurement-debt summary gains a 14-day aging threshold that switches to an explicit warning line once awaiting-measurement debt is stale; a new `shipped_at` field (backward-compatible via `#[serde(default)]`) is stamped on `await-measurement`, and a new `stats` command reports shipped/validated/rejected/awaiting counts plus average measurement delay in days as one JSON object. PDO hypothesis lifecycle management — create, validate, and track discovery hypotheses aligned with compass goals.",
   "author": {
     "name": "yukineko"
   },

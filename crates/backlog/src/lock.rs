@@ -8,19 +8,44 @@ use harness_core::config::base_dir;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockInfo {
     pub session_id: String,
+    /// OS pid of the process that last (re)acquired this lock. Kept only for
+    /// observability (`backlog lock status`) — NOT used to judge staleness.
+    /// The `backlog` binary is a one-shot CLI invocation that exits immediately
+    /// after this command returns, so by the time any later command reads this
+    /// lock the recorded pid is already dead, whether or not the session that
+    /// holds it is still working. Staleness is judged by `heartbeat_at`
+    /// instead (see `is_stale`), mirroring condukt's task-claim registry and
+    /// overwatch's lease registry.
     pub pid: u32,
     pub project: String,
     pub acquired_at: i64,
+    /// Unix timestamp of the last heartbeat. Refreshed by `backlog lock
+    /// heartbeat` while the holding session is still active. Absent on locks
+    /// written before this field existed (`#[serde(default)]` -> 0), which
+    /// reads as maximally stale — safe, since such a lock predates any
+    /// session that could still legitimately hold it.
+    #[serde(default)]
+    pub heartbeat_at: i64,
 }
 
 #[derive(Debug)]
 pub enum LockStatus {
-    /// Lock is held by an active process.
+    /// Lock is held by a session whose heartbeat is still fresh.
     Active(LockInfo),
-    /// Lock file exists but the process is gone.
+    /// Lock file exists but its heartbeat is older than the stale TTL.
     Stale(LockInfo),
     /// No lock file.
     None,
+}
+
+/// A lock is stale once its heartbeat is older than this many seconds without
+/// a refresh. Mirrors condukt's `stuck_ttl_secs` / overwatch's
+/// `LEASE_TTL_SECS` (both default to 1800s / 30min) for consistency across
+/// the harness's cross-session staleness registries.
+const LOCK_STALE_TTL_SECS: i64 = 1800;
+
+fn is_stale(info: &LockInfo, now: i64) -> bool {
+    now.saturating_sub(info.heartbeat_at) > LOCK_STALE_TTL_SECS
 }
 
 fn lock_path() -> PathBuf {
@@ -34,26 +59,6 @@ fn lock_path_for(base: &Path) -> PathBuf {
 fn read_lock(path: &Path) -> Option<LockInfo> {
     let txt = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&txt).ok()
-}
-
-fn pid_alive(pid: u32) -> bool {
-    // Fast path on Linux: /proc/<pid> exists iff the process is alive.
-    #[cfg(target_os = "linux")]
-    {
-        if Path::new(&format!("/proc/{pid}")).exists() {
-            return true;
-        }
-    }
-    // Portable fallback (macOS and any platform without /procfs): `kill -0 <pid>`
-    // exits 0 when the process exists and is signalable, non-zero (ESRCH) otherwise.
-    // Without this, /proc-only checks treat every live lock as stale off Linux.
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
 }
 
 fn now_unix() -> i64 {
@@ -72,8 +77,9 @@ fn now_unix() -> i64 {
 /// so two processes racing to create the same lock cannot both succeed — exactly
 /// one wins the create, the loser sees `AlreadyExists`. There is no longer a
 /// check-then-write window (the previous TOCTOU bug): the create itself is the
-/// check. Stale locks (whose owning pid is gone) are reaped and the create is
-/// retried a bounded number of times, so a dead holder never blocks acquisition.
+/// check. Stale locks (whose heartbeat is older than the TTL) are reaped and
+/// the create is retried a bounded number of times, so a dead holder never
+/// blocks acquisition forever.
 pub fn acquire_at(
     session_id: &str,
     pid: u32,
@@ -125,11 +131,13 @@ fn acquire_inner(
             .with_context(|| format!("create lock dir {}", parent.display()))?;
     }
 
+    let now = now_unix();
     let info = LockInfo {
         session_id: session_id.to_string(),
         pid,
         project: project.to_string(),
-        acquired_at: now_unix(),
+        acquired_at: now,
+        heartbeat_at: now,
     };
     // Serialize the lock contents into a temp file *before* publishing it, then
     // expose it atomically. `create_new` on the temp file gives us a private,
@@ -164,11 +172,11 @@ fn acquire_inner(
             Ok(()) => return Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Someone else published a lock. Inspect it. We only reap when
-                // we can positively confirm the owner pid is dead; an
-                // unreadable/partial read is treated as "still being written"
-                // (active) so we never delete a live holder's lock.
+                // its heartbeat is older than the stale TTL; an unreadable/
+                // partial read is treated as "still being written" (active)
+                // so we never delete a live holder's lock.
                 match read_lock(&path) {
-                    Some(existing) if pid_alive(existing.pid) => {
+                    Some(existing) if !is_stale(&existing, now_unix()) => {
                         if force {
                             // --force: displace even a live holder, then retry
                             // the atomic publish.
@@ -182,8 +190,8 @@ fn acquire_inner(
                             existing.project
                         );
                     }
-                    Some(_dead) => {
-                        // Confirmed stale (readable, owner gone) — reap and retry.
+                    Some(_stale) => {
+                        // Confirmed stale (readable, heartbeat past TTL) — reap and retry.
                         let _ = std::fs::remove_file(&path);
                         continue;
                     }
@@ -260,10 +268,10 @@ pub fn status_at(lock_dir: Option<&Path>) -> LockStatus {
     match read_lock(&path) {
         None => LockStatus::None,
         Some(info) => {
-            if pid_alive(info.pid) {
-                LockStatus::Active(info)
-            } else {
+            if is_stale(&info, now_unix()) {
                 LockStatus::Stale(info)
+            } else {
+                LockStatus::Active(info)
             }
         }
     }
@@ -272,6 +280,51 @@ pub fn status_at(lock_dir: Option<&Path>) -> LockStatus {
 /// Return the lock status using the default lock path.
 pub fn status() -> LockStatus {
     status_at(None)
+}
+
+/// Refresh the heartbeat of the current lock, but only if it is held by
+/// `session_id` — a session must never resurrect or extend a lock it doesn't
+/// hold. Fail-soft: if there is no lock, or it is held by a different
+/// session, this is a no-op (`Ok(())`) rather than an error, since a
+/// heartbeat call racing a release/steal is expected, not exceptional.
+/// `lock_dir` allows tests to override the directory.
+pub fn heartbeat_at(session_id: &str, lock_dir: Option<&Path>) -> Result<()> {
+    let path = match lock_dir {
+        Some(d) => lock_path_for(d),
+        None => lock_path(),
+    };
+    let Some(mut info) = read_lock(&path) else {
+        return Ok(());
+    };
+    if info.session_id != session_id {
+        return Ok(());
+    }
+    info.heartbeat_at = now_unix();
+    let json = serde_json::to_string_pretty(&info)?;
+
+    // Publish the refreshed contents atomically (temp file + rename) so a
+    // concurrent reader never observes a partially-written heartbeat.
+    let tmp_path = path.with_extension(format!("tmp.{}.{}", std::process::id(), now_unix_nanos()));
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+            .with_context(|| format!("create temp lock file {}", tmp_path.display()))?;
+        f.write_all(json.as_bytes())
+            .with_context(|| format!("write temp lock file {}", tmp_path.display()))?;
+        f.sync_all().ok();
+    }
+    let _guard = TmpGuard(&tmp_path);
+    std::fs::rename(&tmp_path, &path)
+        .with_context(|| format!("rename heartbeat lock file {}", path.display()))?;
+    Ok(())
+}
+
+/// Refresh the heartbeat using the default lock path. See [`heartbeat_at`].
+pub fn heartbeat(session_id: &str) -> Result<()> {
+    heartbeat_at(session_id, None)
 }
 
 #[cfg(test)]
@@ -284,17 +337,85 @@ mod tests {
     }
 
     #[test]
-    fn pid_alive_is_cross_platform() {
-        // Regression guard: pid_alive must work off Linux too. A /proc-only check
-        // reports every live process as dead on macOS, which made fresh locks read
-        // as stale. The current process is definitely alive; a huge pid is not.
+    fn fresh_heartbeat_blocks_second_acquire_even_when_recorded_pid_is_already_dead() {
+        // Regression: LockInfo.pid is always the one-shot acquiring CLI's own
+        // pid, which is dead again by the time any later command reads the
+        // lock (the process exits right after this command returns) —
+        // whether or not the session that holds it is still working. Before
+        // this fix, staleness was judged by `pid_alive(existing.pid)`, so
+        // this pid is *always* seen as dead and the lock is reaped and stolen
+        // immediately: a fresh lock offered zero real protection. Staleness
+        // must instead be judged by `heartbeat_at`, which is fresh here.
+        let dead_pid: u32 = 99_999_999;
+        let dir = tmp();
+        let d = dir.path();
+        acquire_at("first", dead_pid, "proj", Some(d)).expect("first acquire");
+
+        let second = acquire_at("second", dead_pid, "proj", Some(d));
         assert!(
-            pid_alive(std::process::id()),
-            "current process should be reported alive"
+            second.is_err(),
+            "a lock with a fresh heartbeat must not be stealable even if its recorded pid is dead"
         );
+        match status_at(Some(d)) {
+            LockStatus::Active(i) => assert_eq!(i.session_id, "first"),
+            other => panic!("expected Active held by 'first', got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stale_heartbeat_lock_is_reaped_and_stealable() {
+        let dir = tmp();
+        let d = dir.path();
+
+        let info = LockInfo {
+            session_id: "old".to_string(),
+            pid: 424_242,
+            project: "old-proj".to_string(),
+            acquired_at: 0,
+            heartbeat_at: 0, // far older than LOCK_STALE_TTL_SECS
+        };
+        std::fs::write(lock_path_for(d), serde_json::to_string(&info).unwrap()).unwrap();
+
+        match status_at(Some(d)) {
+            LockStatus::Stale(i) => assert_eq!(i.session_id, "old"),
+            other => panic!("expected Stale, got {other:?}"),
+        }
+
+        let pid = std::process::id();
+        acquire_at("new-sess", pid, "new-proj", Some(d)).expect("should succeed over stale lock");
+        match status_at(Some(d)) {
+            LockStatus::Active(i) => assert_eq!(i.session_id, "new-sess"),
+            other => panic!("expected Active, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn heartbeat_refreshes_only_when_held_by_caller_session() {
+        let dir = tmp();
+        let d = dir.path();
+        let pid = std::process::id();
+        acquire_at("owner", pid, "proj", Some(d)).expect("acquire");
+
+        // Wrong session: no-op, must not touch the lock.
+        heartbeat_at("someone-else", Some(d)).expect("heartbeat no-op for wrong session");
+        match status_at(Some(d)) {
+            LockStatus::Active(i) => assert_eq!(i.session_id, "owner"),
+            other => panic!("expected Active held by 'owner', got {other:?}"),
+        }
+
+        // Back-date the heartbeat directly, then confirm the owner's session
+        // heartbeat call moves it forward again.
+        let backdated = now_unix() - (LOCK_STALE_TTL_SECS - 1);
+        {
+            let mut info = read_lock(&lock_path_for(d)).expect("lock present");
+            info.heartbeat_at = backdated;
+            std::fs::write(lock_path_for(d), serde_json::to_string(&info).unwrap()).unwrap();
+        }
+        heartbeat_at("owner", Some(d)).expect("heartbeat for owner session");
+        let refreshed = read_lock(&lock_path_for(d)).expect("lock present");
         assert!(
-            !pid_alive(99_999_999),
-            "an unused high pid should be reported not alive"
+            refreshed.heartbeat_at > backdated,
+            "heartbeat_at should be refreshed forward by the owning session"
         );
     }
 
@@ -332,25 +453,20 @@ mod tests {
         let dir = tmp();
         let d = dir.path();
 
-        // Write a lockfile with a pid that should not exist.
-        let stale_pid: u32 = 99_999_999;
-        // Confirm /proc/<pid> really doesn't exist (it won't on Linux for that pid).
-        assert!(
-            !pid_alive(stale_pid),
-            "assumption: pid {stale_pid} should not be alive"
-        );
-
+        // A lockfile whose heartbeat is far older than LOCK_STALE_TTL_SECS
+        // reads as Stale regardless of the (unused) pid value.
         let info = LockInfo {
             session_id: "stale-sess".to_string(),
-            pid: stale_pid,
+            pid: 99_999_999,
             project: "some-project".to_string(),
             acquired_at: 0,
+            heartbeat_at: 0,
         };
         std::fs::write(lock_path_for(d), serde_json::to_string(&info).unwrap()).unwrap();
 
         match status_at(Some(d)) {
             LockStatus::Stale(i) => {
-                assert_eq!(i.pid, stale_pid);
+                assert_eq!(i.session_id, "stale-sess");
             }
             other => panic!("expected Stale, got {other:?}"),
         }
@@ -364,7 +480,7 @@ mod tests {
 
         acquire_at("sess-a", pid, "proj-a", Some(d)).expect("first acquire");
 
-        // Second acquire should fail because pid is alive.
+        // Second acquire should fail because the heartbeat is fresh.
         let err = acquire_at("sess-b", pid, "proj-b", Some(d));
         assert!(err.is_err(), "expected error acquiring locked resource");
     }
@@ -373,13 +489,13 @@ mod tests {
     fn acquire_overwrites_stale_lock() {
         let dir = tmp();
         let d = dir.path();
-        let stale_pid: u32 = 99_999_999;
 
         let info = LockInfo {
             session_id: "old".to_string(),
-            pid: stale_pid,
+            pid: 424_242,
             project: "old-proj".to_string(),
             acquired_at: 0,
+            heartbeat_at: 0, // far older than LOCK_STALE_TTL_SECS
         };
         std::fs::write(lock_path_for(d), serde_json::to_string(&info).unwrap()).unwrap();
 
@@ -415,19 +531,18 @@ mod tests {
         }
     }
 
-    // (b) A stale lock (dead pid) must be reaped so a fresh acquire wins.
+    // (b) A stale lock (heartbeat past TTL) must be reaped so a fresh acquire wins.
     #[test]
     fn acquire_steals_stale_lock() {
         let dir = tmp();
         let d = dir.path();
-        let stale_pid: u32 = 99_999_999;
-        assert!(!pid_alive(stale_pid), "assumption: stale pid is not alive");
 
         let info = LockInfo {
             session_id: "dead".to_string(),
-            pid: stale_pid,
+            pid: 99_999_999,
             project: "dead-proj".to_string(),
             acquired_at: 0,
+            heartbeat_at: 0, // far older than LOCK_STALE_TTL_SECS
         };
         std::fs::write(lock_path_for(d), serde_json::to_string(&info).unwrap()).unwrap();
 
@@ -443,13 +558,13 @@ mod tests {
         }
     }
 
-    // --force steals a lock held by a *live* process, where a plain acquire
+    // --force steals a lock with a fresh heartbeat, where a plain acquire
     // would (correctly) fail. This is the documented 強制奪取 escape hatch.
     #[test]
     fn force_acquire_steals_a_live_lock() {
         let dir = tmp();
         let d = dir.path();
-        let live_pid = std::process::id(); // alive holder
+        let live_pid = std::process::id(); // holder with a fresh heartbeat
 
         acquire_at("incumbent", live_pid, "their-proj", Some(d)).expect("incumbent acquires");
 
@@ -502,6 +617,7 @@ mod tests {
                 pid: live_pid,
                 project: "comp-proj".to_string(),
                 acquired_at: now_unix(),
+                heartbeat_at: now_unix(),
             };
             std::fs::write(lock_path_for(d), serde_json::to_string(&existing).unwrap()).unwrap();
 
@@ -520,13 +636,12 @@ mod tests {
         {
             let dir = tmp();
             let d = dir.path();
-            let stale_pid: u32 = 99_999_999;
-            assert!(!pid_alive(stale_pid), "assumption: stale pid is not alive");
             let existing = LockInfo {
                 session_id: "ghost".to_string(),
-                pid: stale_pid,
+                pid: 99_999_999,
                 project: "ghost-proj".to_string(),
                 acquired_at: 0,
+                heartbeat_at: 0, // far older than LOCK_STALE_TTL_SECS
             };
             std::fs::write(lock_path_for(d), serde_json::to_string(&existing).unwrap()).unwrap();
 

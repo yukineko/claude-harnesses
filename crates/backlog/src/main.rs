@@ -178,6 +178,14 @@ enum LockAction {
 
     /// Print lock status as JSON, or "none"
     Status,
+
+    /// Refresh the lock's heartbeat, keeping a long-running session's hold
+    /// alive past the stale TTL. No-op if the lock isn't held by session_id.
+    Heartbeat {
+        /// Session ID (must match the current holder for this to take effect)
+        #[arg(long)]
+        session_id: String,
+    },
 }
 
 fn main() {
@@ -414,6 +422,10 @@ fn run(cli: Cli) -> Result<()> {
                         println!("{}", serde_json::to_string_pretty(&v)?);
                     }
                 }
+            }
+            LockAction::Heartbeat { session_id } => {
+                lock::heartbeat(&session_id)?;
+                println!("lock heartbeat updated");
             }
         },
     }

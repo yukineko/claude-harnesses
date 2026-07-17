@@ -56,8 +56,8 @@
     },
     {
       "name": "backlog",
-      "description": "Cross-project task queue with cycle-type tags for Claude Code: a /backlog skill that loops through open items (lock → pick → /condukt → done), a SessionStart hook that surfaces pending work at session open, and a backlog binary with list/next/done/fail/lock subcommands. v0.1.9 canonicalizes `--project` to its git-toplevel repo root on write and bridges bare-label-vs-absolute-path drift on read (backlog id b92a7a77), so a project's queue can no longer silently split across differently-spelled `--project` values. Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.9",
+      "description": "Cross-project task queue with cycle-type tags for Claude Code: a /backlog skill that loops through open items (lock → pick → /condukt → done), a SessionStart hook that surfaces pending work at session open, and a backlog binary with list/next/done/fail/lock subcommands. v0.1.10 fixes backlog::lock's cross-session mutual exclusion: staleness was judged by the recorded pid's liveness, but that pid is always the one-shot `backlog lock acquire` CLI's own pid (dead again the instant the command returns), so any lock could be immediately stolen by another session regardless of whether the holder was still active. Staleness is now judged by a `heartbeat_at` timestamp + 30-minute TTL (matching condukt's task-claim and overwatch's lease registries), with a new `backlog lock heartbeat` subcommand. Subscription-native (skill + hook + bundled Rust binary, no API key).",
+      "version": "0.1.10",
       "category": "workflow",
       "keywords": [
         "backlog",

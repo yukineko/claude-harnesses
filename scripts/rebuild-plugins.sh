@@ -24,24 +24,54 @@
 #   scripts/rebuild-plugins.sh --no-clean       # incremental build (skip cargo clean)
 #   scripts/rebuild-plugins.sh --stage-repo     # ALSO overwrite committed crates/*/bin
 #   scripts/rebuild-plugins.sh --dry-run        # show what would change; build nothing, copy nothing
+#   scripts/rebuild-plugins.sh --only=a,b       # restrict the CACHE REFRESH (copy step) to
+#                                                # these plugin names; still builds the whole
+#                                                # workspace, but only swaps binaries/hooks for
+#                                                # the listed plugins into the live cache
 #   CLAUDE_PLUGIN_CACHE=/path scripts/rebuild-plugins.sh   # override plugin cache root
 #
 # Env:
 #   CLAUDE_PLUGIN_CACHE   plugin cache root (default: ~/.claude/plugins/cache/yukineko)
+#
+# WHY --only EXISTS (Problem-2.3 gap fix)
+#   `cargo build --workspace` (below) always rebuilds every workspace binary,
+#   and without --only the refresh loop swaps ANY changed binary into the live
+#   cache. rollout-plugins.sh calls this script as its rebuild step even for a
+#   single-plugin `--plugin backlog` rollout — so, without scoping, a routine
+#   non-gate rollout could silently swap in fresh GATE_CRATE binaries (e.g.
+#   blastguard/overwatch/propguard/stuckguard) that never went through their
+#   required `--canary` staged health-gate. rollout-plugins.sh always passes
+#   --only=<the exact plugin set it is rolling out THIS invocation> so a
+#   rollout can only ever touch the cache for plugins it actually targeted.
+#   Manual/standalone calls (no --only) keep the historic behavior: refresh
+#   every installed plugin's binary.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
 
-clean=1 stage_repo=0 dry=0
+clean=1 stage_repo=0 dry=0 only_filter=""
 for arg in "$@"; do
   case "$arg" in
     --no-clean)   clean=0 ;;
     --stage-repo) stage_repo=1 ;;
     --dry-run)    dry=1 ;;
-    -h|--help)    sed -n '2,30p' "$0"; exit 0 ;;
+    --only=*)     only_filter="${arg#--only=}" ;;
+    -h|--help)    sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
+
+# Empty only_filter (default) = no restriction (historic behavior). Non-empty
+# = comma-separated plugin names; only these have their cache binary/hooks
+# swapped this run. No associative arrays (bash 3.2 / macOS default compat,
+# matching rollout-plugins.sh's row_for_name comment).
+in_only() {
+  [ -z "$only_filter" ] && return 0
+  case ",$only_filter," in
+    *",$1,"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 CACHE="${CLAUDE_PLUGIN_CACHE:-$HOME/.claude/plugins/cache/yukineko}"
 # Ask cargo where it actually puts artifacts rather than assuming
@@ -118,7 +148,7 @@ cratedir_for() {
 }
 
 # --- refresh ---------------------------------------------------------------
-updated_cache=0 updated_repo=0 updated_hooks=0 missing="" checked=0
+updated_cache=0 updated_repo=0 updated_hooks=0 missing="" checked=0 skipped_filter=0
 shopt -s nullglob
 for binfile in "$CACHE"/*/*/bin/*-"$SUF"; do
   checked=$((checked+1))
@@ -126,12 +156,17 @@ for binfile in "$CACHE"/*/*/bin/*-"$SUF"; do
   binname=${base%-$SUF}           # e.g. condukt
   src="$REL/$binname"
 
+  version_dir="$(dirname "$(dirname "$binfile")")"   # $CACHE/<plugin-name>/<version>
+  plugin_name="$(basename "$(dirname "$version_dir")")"
+  if ! in_only "$plugin_name"; then
+    skipped_filter=$((skipped_filter+1))
+    continue
+  fi
+
   # 0) hooks/ manifest config (e.g. hooks.json) — repo -> live cache. Only the
   #    JSON manifest, not the compiled hook binary (handled below). Runs
   #    regardless of whether the release binary was built this run, since it
   #    doesn't depend on the build step.
-  version_dir="$(dirname "$(dirname "$binfile")")"   # $CACHE/<plugin-name>/<version>
-  plugin_name="$(basename "$(dirname "$version_dir")")"
   if cratedir="$(cratedir_for "$plugin_name")" && [ -d "$cratedir/hooks" ]; then
     cache_hooks_dir="$version_dir/hooks"
     for cfg in "$cratedir"/hooks/*.json; do
@@ -194,6 +229,9 @@ shopt -u nullglob
 shopt -s nullglob
 for i in "${!plugin_names[@]}"; do
   pname="${plugin_names[$i]}"
+  if ! in_only "$pname"; then
+    continue
+  fi
   pj="${plugin_dirs[$i]}/.claude-plugin/plugin.json"
   ver=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pj" | head -1)
   [ -n "$ver" ] || continue
@@ -226,6 +264,7 @@ done
 shopt -u nullglob
 
 echo "---"
+[ -n "$only_filter" ] && echo "only:        $only_filter (skipped $skipped_filter bin(s) outside this set)"
 echo "cache bins scanned: $checked | cache updated: $updated_cache$([ $stage_repo = 1 ] && echo " | repo bin updated: $updated_repo") | hooks config updated: $updated_hooks"
 if [ -n "$missing" ]; then
   echo "WARNING: no release artifact for:$missing" >&2

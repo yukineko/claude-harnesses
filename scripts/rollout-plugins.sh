@@ -59,6 +59,18 @@
 #   crates), so it too requires --canary / --no-canary. Non-gate crates are
 #   unaffected — canary stays optional for them.
 #
+#   This requirement only means something because rebuild-plugins.sh is now
+#   scoped: run_rebuild_and_sync() always passes --only=<target_names> (this
+#   invocation's exact plugin set) to rebuild-plugins.sh. Without that scoping,
+#   `cargo build --workspace` (run unconditionally by rebuild-plugins.sh) would
+#   rebuild every gate crate's binary too, and the old unscoped refresh loop
+#   would swap ANY changed binary into the live cache — so a plain
+#   `--plugin backlog` rollout could silently deploy a fresh, never-canaried
+#   blastguard/overwatch/propguard/stuckguard binary as a side effect. Gate
+#   crate binaries now only ever reach the live cache via a rollout invocation
+#   that explicitly targets them (and therefore passed the --canary check
+#   above).
+#
 # ENV
 #   CLAUDE_PLUGIN_CACHE     owner-scoped plugin cache root
 #                           (default: ~/.claude/plugins/cache/yukineko)
@@ -475,15 +487,29 @@ PY
 # binaries). Honors --no-rebuild / --no-sync / --dry-run exactly like the
 # normal path. Args: zero or more "name:srcdir" entries for plugins that ship
 # scripts/sync-plugin-assets.sh.
+#
+# Always passes rebuild-plugins.sh --only=<target_names> (the exact plugin set
+# THIS rollout invocation targets: either --plugin's list, or every marketplace
+# plugin when unfiltered — see target_names above). `cargo build --workspace`
+# rebuilds every binary regardless, but without this scoping the cache-refresh
+# step used to swap in ANY changed binary — including GATE_CRATEs that were
+# never part of this invocation's --plugin filter and never went through their
+# required --canary health-gate (Problem-2.3 gap: a plain `--plugin backlog`
+# rollout could silently smuggle a fresh blastguard/overwatch/propguard/
+# stuckguard binary into the live cache as a side effect of the workspace-wide
+# rebuild). Scoping the copy step closes that gap; the build itself is
+# unaffected (still compiles the whole workspace either way).
 run_rebuild_and_sync() {
   echo
+  local only_arg
+  only_arg="$(IFS=,; echo "${target_names[*]}")"
   if [ "$no_rebuild" = 1 ]; then
     echo "rebuild: skipped (--no-rebuild)"
   elif [ "$dry" = 1 ]; then
-    echo "[dry-run] would run: scripts/rebuild-plugins.sh --no-clean (CLAUDE_PLUGIN_CACHE=$CACHE)"
+    echo "[dry-run] would run: scripts/rebuild-plugins.sh --no-clean --only=$only_arg (CLAUDE_PLUGIN_CACHE=$CACHE)"
   else
-    echo ">>> scripts/rebuild-plugins.sh --no-clean"
-    CLAUDE_PLUGIN_CACHE="$CACHE" bash "$REPO/scripts/rebuild-plugins.sh" --no-clean
+    echo ">>> scripts/rebuild-plugins.sh --no-clean --only=$only_arg"
+    CLAUDE_PLUGIN_CACHE="$CACHE" bash "$REPO/scripts/rebuild-plugins.sh" --no-clean --only="$only_arg"
   fi
   echo
 

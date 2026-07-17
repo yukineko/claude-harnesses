@@ -6,9 +6,26 @@
 /// downstream binary (`condukt`) or a non-zero exit must NOT crash the turn —
 /// and every action records an event to the overwatch ledger for auditability.
 use crate::event::LifecycleEvent;
+use crate::lock::LeaseLock;
 use crate::store;
 use anyhow::Result;
 use std::process::Command;
+
+/// Test-only race-window widener for `reassign()`'s load->remove->save section,
+/// analogous to `lease.rs`'s `artificial_mutator_delay`. Real process-spawn
+/// overhead dwarfs that section's natural duration, so a racing `begin()` almost
+/// never interleaves inside it by chance — the concurrency regression test needs
+/// a deterministic way to force the interleave. No-op unless
+/// `OVERWATCH_TEST_REASSIGN_DELAY_MS` is set (never set outside the
+/// `lease_concurrency` integration test), so production behavior is unchanged.
+fn artificial_reassign_delay() {
+    if let Some(ms) = std::env::var("OVERWATCH_TEST_REASSIGN_DELAY_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+}
 
 /// Resolve a session id for audit events: `--session` is not plumbed to control
 /// actions, so fall back to the env session id or a pid-derived id.
@@ -110,8 +127,20 @@ pub fn reassign(key: &str, to: &str) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
 
+    // Hold the lease-registry lock across the whole load->reap->remove->save
+    // cycle, exactly as lease.rs's mutators do. reassign is the 6th lease
+    // mutator and was the only one still doing its RMW WITHOUT the lock: a
+    // reassign racing a concurrent begin/heartbeat could load a pre-begin
+    // snapshot and, after the racer committed, save the stale snapshot back —
+    // silently freeing a just-claimed key so another begin could re-grab it
+    // (double-grab). Fail-soft: LeaseLock degrades to unlocked on timeout and
+    // never panics. reassign never calls process::exit, so the guard is simply
+    // dropped at end of scope.
+    let _lock = LeaseLock::acquire(&cwd);
+
     let mut leases = store::load_leases(&cwd)?;
     store::reap_stale(&mut leases, now);
+    artificial_reassign_delay();
 
     // Capture the run id of the released lease (if any) for the audit event.
     let released_run = leases.get(key).map(|l| l.run_id.clone());

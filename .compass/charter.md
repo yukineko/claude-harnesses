@@ -1,16 +1,16 @@
 ## north_star
-overwatch::leaseのセッション間タスクclaimをbacklog/condukt同様に排他ロック化し、TOCTOUによる二重claimを機構的に防ぐ
+specguard.toml の area 監査範囲を主要GATEクレート(blastguard・propguard・stuckguard・mutategate・overwatch)まで拡張し、42クレート中3クレートしか監査対象でない spec↔impl drift 監査の機構的ギャップを解消する
 
 ## definition_of_done
-- lease::begin()のload_leases→is_held_by_otherチェック→save_leasesが、condukt::lock/backlog::lockと同じ排他ロック機構(O_EXCL/hardlinkベース、stale lock reap付き)で保護され、read-modify-write全体がアトミックになる
-- 2セッション(プロセス)がほぼ同時に同一keyをbeginする結合テストが追加され、片方が必ずskip(exit 1、または明示的な待機後の順序どおりの成功)になり両方が成功することは無いと固定される。concurrencyテストが無い現状のギャップを埋める
-- 既存のadvisory機能(scope_overlap警告・possible_duplicate近似重複警告)の既存テストが全てgreenのまま回帰しない
+- specguard.toml に blastguard・propguard・stuckguard・mutategate・overwatch の5クレート分の area エントリが追加され、各エントリの canon が各クレートの README.md を指す
+- specguard scope の出力に新規5エリア(blastguard・propguard・stuckguard・mutategate・overwatch)が現れ、既存の3エリア(condukt・specguard・harness-core)の出力に回帰がない
+- python3 scripts/check-plugin-versions.py が引き続き exit 0 (specguard.toml は version-lockstep 対象外なのでバージョンbumpは不要)
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-overwatch::lease::begin()はload_leases()→is_held_by_other()チェック→save_leases()というロック無しのread-modify-writeで、backlog::lock/condukt::lockが既に潰したのと同じTOCTOUクラスのバグが残っている(2セッションがほぼ同時に同一keyをbeginすると両方成功しうる)。concurrencyテストも無い(hypothesis 9c733d74で発見・記録済み)。最小right-sizeな一手は、condukt::lock(backlog::lockのhardlink+create_new方式を踏襲、stale lock reap・bounded wait・fail-soft degrade)と同じ設計をoverwatch::leaseのbegin()に適用し、2プロセス同時claimの結合テストで固定すること。
+specguard.tomlは condukt・specguard・harness-core の3クレートのみを[[area]]として登録しており、42クレート中これら3クレート以外(blastguard・propguard・stuckguard・mutategate・overwatchを含む)はspec↔impl drift監査の対象外になっている。各GATEクレートにはREADME.md/README.ja.mdが既に存在しcanonとして使えるので、最小right-sizeな一手はspecguard.tomlに5クレート分の[[area]]エントリ(globs=crates/<name>/src/**、canon=crates/<name>/README.md)を追加し、specguard scopeの出力に新規エリアが現れ既存3エリアの動作に回帰がないことを確認すること。
 
 ## next_action
 

@@ -98,3 +98,33 @@ canon = ["docs/OVERVIEW.md"]
 name = "hook never panics"
 description = "harness-core::hook::run_hook must catch panics and always exit 0 (docs/OVERVIEW.md §フック不変条件)"
 canon = ["crates/harness-core/src/hook.rs", "docs/OVERVIEW.md"]
+
+# blastguard: destructive-Bash-command PreToolUse guard
+[[area]]
+name = "blastguard"
+globs = ["crates/blastguard/src/**"]
+canon = ["crates/blastguard/README.md", "crates/blastguard/README.ja.md"]
+
+# propguard: invariant/property verdict guard
+[[area]]
+name = "propguard"
+globs = ["crates/propguard/src/**"]
+canon = ["crates/propguard/README.md", "crates/propguard/README.ja.md"]
+
+# stuckguard: repeated-operation / oscillation nudge guard
+[[area]]
+name = "stuckguard"
+globs = ["crates/stuckguard/src/**"]
+canon = ["crates/stuckguard/README.md", "crates/stuckguard/README.ja.md"]
+
+# mutategate: mutation-testing PASS/fail gate
+[[area]]
+name = "mutategate"
+globs = ["crates/mutategate/src/**"]
+canon = ["crates/mutategate/README.md", "crates/mutategate/README.ja.md"]
+
+# overwatch: cross-session lease/review-queue observability registry
+[[area]]
+name = "overwatch"
+globs = ["crates/overwatch/src/**"]
+canon = ["crates/overwatch/README.md", "crates/overwatch/README.ja.md"]

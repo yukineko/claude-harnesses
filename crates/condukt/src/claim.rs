@@ -57,6 +57,23 @@ use std::path::{Path, PathBuf};
 /// a real run, so it cannot collide with one.
 const CLAIMS_LOCK_KEY: &str = "__claims__";
 
+/// Test-only race-window widener for [`claim_tasks`]'s load->check->save section.
+/// Real process-spawn overhead dwarfs that section's natural duration, so two
+/// racing `condukt state claim-task` processes essentially never interleave in
+/// it by chance — a concurrency regression test needs a deterministic way to
+/// force the interleave inside the [`RunLock`]-held critical section. No-op
+/// unless `CONDUKT_TEST_CLAIM_DELAY_MS` is set (never set outside the
+/// `run_lock_concurrency` integration test), so production behavior is
+/// unchanged. Mirrors `overwatch::lease::artificial_race_delay`.
+fn artificial_race_delay() {
+    if let Some(ms) = std::env::var("CONDUKT_TEST_CLAIM_DELAY_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+}
+
 /// One live occupancy of a file path/glob by a session's run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claim {
@@ -271,6 +288,7 @@ pub fn claim_tasks(
     let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
     let mut reg = load(&path);
     reap(&mut reg, now, ttl);
+    artificial_race_delay();
 
     let mut outcome = ClaimOutcome::default();
     for hk in hashkeys {

@@ -655,7 +655,71 @@ pub fn list(repo: &Path) -> Result<Vec<(PathBuf, Option<String>)>> {
     Ok(out)
 }
 
-/// Worktree dirs physically under `worktree_base` that git no longer tracks.
+/// Resolve the `gitdir:` a worktree-style `.git` *file* points at, if any.
+///
+/// A git worktree's `.git` is a plain-text file (not a directory) containing
+/// a single line `gitdir: <path>`. The path is typically absolute already,
+/// but may be relative to `git_file`'s parent when git wrote it that way, so
+/// both are handled. Returns `None` if `git_file` isn't a `.git` file, isn't
+/// readable, or doesn't match the expected `gitdir: ...` shape.
+fn resolve_gitdir_pointer(git_file: &Path) -> Option<PathBuf> {
+    let contents = std::fs::read_to_string(git_file).ok()?;
+    let line = contents.lines().next()?.trim();
+    let raw = line.strip_prefix("gitdir:")?.trim();
+    let candidate = PathBuf::from(raw);
+    let resolved = if candidate.is_absolute() {
+        candidate
+    } else {
+        git_file.parent()?.join(candidate)
+    };
+    Some(resolved)
+}
+
+/// Which repository (by its canonicalized `.git` common dir) a directory
+/// under `worktree_base` actually belongs to, if it belongs to any repo at
+/// all.
+///
+/// - A `.git` *file* (worktree pointer) resolves to the target's own
+///   `.git/worktrees/<name>` dir; its parent-of-parent is the owning repo's
+///   `.git` common dir.
+/// - A `.git` *directory* (a plain clone dropped into `worktree_base`, not a
+///   linked worktree) resolves to itself.
+/// - No `.git` at all (or an unreadable/malformed pointer) yields `None` —
+///   the caller treats that conservatively as condukt-created debris rather
+///   than silently ignoring it.
+fn owning_repo_git_dir(candidate: &Path) -> Option<PathBuf> {
+    let dot_git = candidate.join(".git");
+    if dot_git.is_dir() {
+        return dot_git.canonicalize().ok();
+    }
+    if dot_git.is_file() {
+        let pointed = resolve_gitdir_pointer(&dot_git)?;
+        // A linked worktree's gitdir is `<repo>/.git/worktrees/<name>`; the
+        // owning repo's common `.git` dir is two levels up. Canonicalize the
+        // pointed-at dir first (it may itself contain no further symlinks
+        // but could be relative-normalized oddly) then walk up.
+        let pointed = pointed.canonicalize().ok().unwrap_or(pointed);
+        return pointed
+            .parent() // .git/worktrees
+            .and_then(|p| p.parent()) // .git
+            .map(|p| p.to_path_buf())
+            .and_then(|p| p.canonicalize().ok().or(Some(p)));
+    }
+    None
+}
+
+/// Worktree dirs physically under `worktree_base` that git no longer tracks
+/// **for `repo`**.
+///
+/// `worktree_base` may be shared across multiple, unrelated repositories on
+/// the same machine (a common setup when several projects park their
+/// worktrees under the same scratch dir). A candidate directory is only
+/// reported as an orphan if it actually belongs to `repo` (its `.git`
+/// resolves under `repo`'s own `.git` common dir) and isn't in `repo`'s
+/// registered worktree list. A directory whose `.git` resolves to a
+/// *different* repo is silently skipped — it's not condukt's concern.
+/// A directory with no `.git` at all is treated conservatively as an orphan
+/// (it really is unattributable debris, most likely condukt-created).
 pub fn orphans(repo: &Path, worktree_base: &Path) -> Result<Vec<PathBuf>> {
     if !worktree_base.exists() {
         return Ok(Vec::new());
@@ -664,6 +728,13 @@ pub fn orphans(repo: &Path, worktree_base: &Path) -> Result<Vec<PathBuf>> {
         .into_iter()
         .filter_map(|(p, _)| p.canonicalize().ok())
         .collect();
+    let repo_git_dir = git(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .ok()
+    .map(PathBuf::from)
+    .and_then(|p| p.canonicalize().ok());
     let mut orphans = Vec::new();
     for entry in std::fs::read_dir(worktree_base)
         .with_context(|| format!("reading {}", worktree_base.display()))?
@@ -673,8 +744,20 @@ pub fn orphans(repo: &Path, worktree_base: &Path) -> Result<Vec<PathBuf>> {
             continue;
         }
         let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
-        if !registered.contains(&canon) {
-            orphans.push(path);
+        if registered.contains(&canon) {
+            continue;
+        }
+        match owning_repo_git_dir(&path) {
+            Some(owner) => {
+                // Only flag it if it belongs to `repo` itself; a directory
+                // owned by some other repo sharing this worktree_base is not
+                // condukt's concern and is silently skipped.
+                if repo_git_dir.as_ref() == Some(&owner) {
+                    orphans.push(path);
+                }
+            }
+            // No `.git` at all (or malformed): conservative — condukt debris.
+            None => orphans.push(path),
         }
     }
     Ok(orphans)
@@ -942,6 +1025,105 @@ mod tests {
         assert!(
             !found.iter().any(|p| p.ends_with("registered")),
             "registered worktree should not be listed as orphan; got: {:?}",
+            found
+        );
+    }
+
+    /// orphans() must ignore a directory under a *shared* worktree_base that
+    /// is actually a live worktree of a completely different repository.
+    /// Regression for the bug where a shared worktree_base (e.g.
+    /// `/mnt/c/tmp/aegis-worktrees` used by both `harness` and an unrelated
+    /// `ai-aegis` checkout) caused condukt to misreport the other project's
+    /// legitimate worktrees as orphans belonging to `repo`.
+    #[test]
+    fn orphans_ignores_other_repos_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // `repo` is the repo condukt is running orphan-detection for.
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+
+        // `other_repo` is a totally unrelated repository that happens to
+        // park its worktrees in the same shared base dir.
+        let other_repo = tmp.path().join("other_repo");
+        fs::create_dir_all(&other_repo).unwrap();
+        init_repo(&other_repo);
+
+        let wt_base = tmp.path().join("worktrees");
+        fs::create_dir_all(&wt_base).unwrap();
+
+        // A live, legitimate worktree of `other_repo`, sitting in the base
+        // dir shared with `repo`.
+        let other_wt_path = wt_base.join("other-repos-worktree");
+        git(
+            &other_repo,
+            &[
+                "worktree",
+                "add",
+                other_wt_path.to_str().unwrap(),
+                "-b",
+                "feat/other",
+            ],
+        )
+        .unwrap();
+
+        let found = orphans(&repo, &wt_base).unwrap();
+        assert!(
+            !found.iter().any(|p| p.ends_with("other-repos-worktree")),
+            "a live worktree belonging to a different repo must not be reported as an orphan of `repo`; got: {:?}",
+            found
+        );
+    }
+
+    /// orphans() must still flag a directory that IS a worktree of `repo`
+    /// itself but that git no longer has registered (e.g. because
+    /// `git worktree remove` didn't clean it up, leaving a stale `.git`
+    /// pointer file behind pointing back into `repo`'s own `.git/worktrees`).
+    /// This is the real-world case the shared-worktree_base fix must not
+    /// regress: only OTHER repos' worktrees should be ignored, not `repo`'s
+    /// own stale ones.
+    #[test]
+    fn orphans_detects_stale_worktree_of_own_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+
+        let wt_base = tmp.path().join("worktrees");
+        fs::create_dir_all(&wt_base).unwrap();
+        let wt_path = wt_base.join("stale");
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                wt_path.to_str().unwrap(),
+                "-b",
+                "feat/stale",
+            ],
+        )
+        .unwrap();
+
+        // Simulate an incomplete `git worktree remove`: git no longer lists
+        // it (drop the internal `.git/worktrees/stale` admin dir directly,
+        // the way a partial/failed removal can leave things), but the
+        // worktree dir and its `.git` pointer file (still pointing back into
+        // `repo`) are left behind on disk.
+        let admin_dir = repo.join(".git").join("worktrees").join("stale");
+        fs::remove_dir_all(&admin_dir).unwrap();
+
+        // Confirm git itself no longer considers it registered.
+        let registered = list(&repo).unwrap();
+        assert!(
+            !registered.iter().any(|(p, _)| p.ends_with("stale")),
+            "git should no longer register the stale worktree after its admin dir is removed"
+        );
+
+        let found = orphans(&repo, &wt_base).unwrap();
+        assert!(
+            found.iter().any(|p| p.ends_with("stale")),
+            "a stale, unregistered worktree that still belongs to `repo` must be reported as orphan; got: {:?}",
             found
         );
     }

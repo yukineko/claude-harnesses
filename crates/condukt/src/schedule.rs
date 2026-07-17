@@ -31,6 +31,31 @@ fn pattern_prefix(p: &str) -> &str {
     }
 }
 
+/// Does `p` look like it violates the repo-relative `touched_files`
+/// convention documented on [`normalize_entry`] — i.e. an absolute path
+/// (Unix `/foo`, or a Windows drive letter like `C:\foo` / `C:/foo`) or a
+/// path containing a `..` traversal component?
+///
+/// This is a **sanity check, not a canonicalizer**: it does not resolve or
+/// rewrite the entry, it only flags spellings that would silently defeat
+/// [`entries_conflict`]'s string-based comparison (e.g. `/etc/passwd` vs
+/// `../../etc/passwd` naming the same file but comparing unequal).
+fn violates_repo_relative_convention(p: &str) -> bool {
+    if p.starts_with('/') || p.starts_with('\\') {
+        return true;
+    }
+    // Windows drive letter: "C:\" or "C:/" (case-insensitive).
+    let bytes = p.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\')
+    {
+        return true;
+    }
+    p.split(['/', '\\']).any(|comp| comp == "..")
+}
+
 /// Normalize a path/glob entry before comparison: strip a leading `./` and
 /// collapse repeated `/`. Two different spellings of the same path (e.g.
 /// `./src/a.rs` vs `src/a.rs`, or `src//a.rs` vs `src/a.rs`) must compare
@@ -38,6 +63,8 @@ fn pattern_prefix(p: &str) -> &str {
 /// unlike a false positive which only over-serializes (safe). Does not
 /// attempt to resolve `..` or relative-vs-absolute forms; touched_files is a
 /// bare repo-relative convention, not a filesystem path to fully canonicalize.
+/// (See [`violates_repo_relative_convention`] for a non-canonicalizing sanity
+/// check that flags absolute paths / `..` components as a warning instead.)
 fn normalize_entry(p: &str) -> String {
     let mut s = p;
     while let Some(rest) = s.strip_prefix("./") {
@@ -303,6 +330,44 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
     let mut gated: Vec<String> = Vec::new();
     let mut experiment: Vec<String> = Vec::new();
     let mut forced_serial: HashSet<String> = HashSet::new();
+
+    // Sanity-check the repo-relative `touched_files` convention documented on
+    // `normalize_entry`. This is deliberately a WARN, not a reject: schedule()
+    // is the single-pass deterministic core of condukt, and erroring out here
+    // would halt the entire run on a convention violation rather than merely
+    // degrading the conflict heuristic it protects (an offending path just
+    // doesn't dedupe against equivalent relative spellings, so the affected
+    // task falls back on the "when uncertain, treat as no conflict for that
+    // one entry" side rather than losing collision detection for the whole
+    // batch). Surfacing it as a warning makes the silent-heuristic-defeat
+    // failure mode observable without giving false positives (e.g. from a
+    // caller that legitimately builds `touched_files` from an absolute-rooted
+    // decomposition) the power to stall scheduling. Sorted by id for
+    // deterministic warning order.
+    let mut convention_ids: Vec<&Task> = dec
+        .tasks
+        .iter()
+        .filter(|t| {
+            t.touched_files
+                .iter()
+                .any(|f| violates_repo_relative_convention(f))
+        })
+        .collect();
+    convention_ids.sort_by(|a, b| a.id.cmp(&b.id));
+    for t in convention_ids {
+        let mut offenders: Vec<&String> = t
+            .touched_files
+            .iter()
+            .filter(|f| violates_repo_relative_convention(f))
+            .collect();
+        offenders.sort();
+        sched.warnings.push(format!(
+            "task '{}' has touched_files entries that are not repo-relative \
+             (absolute path or '..' component): {:?} — conflict detection may \
+             silently miss same-file overlaps for these entries",
+            t.id, offenders
+        ));
+    }
 
     for t in &dec.tasks {
         // Deterministic force-gate (closes the LLM under-tag hole): a high-risk
@@ -775,6 +840,60 @@ mod tests {
     fn experiment_decomposition_validates() {
         let d = dec(vec![task("x", &["src/x.rs"], &[], Class::Experiment)]);
         assert!(validate(&d).is_empty());
+    }
+
+    #[test]
+    fn absolute_unix_path_in_touched_files_warns() {
+        // /etc/passwd is not a repo-relative touched_files entry; it silently
+        // defeats string-based conflict comparison against equivalent relative
+        // spellings. schedule() must surface this, not stay silent.
+        let d = dec(vec![task("a", &["/etc/passwd"], &[], Class::Parallel)]);
+        let s = schedule(&d, &[]);
+        assert!(
+            s.warnings
+                .iter()
+                .any(|w| w.contains('a') && w.contains("repo-relative")),
+            "expected a repo-relative-convention warning; warnings={:?}",
+            s.warnings,
+        );
+    }
+
+    #[test]
+    fn windows_drive_letter_path_in_touched_files_warns() {
+        let d = dec(vec![task(
+            "a",
+            &["C:\\Users\\evil\\file.rs"],
+            &[],
+            Class::Parallel,
+        )]);
+        let s = schedule(&d, &[]);
+        assert!(
+            s.warnings.iter().any(|w| w.contains("repo-relative")),
+            "expected a repo-relative-convention warning for a drive-letter path; warnings={:?}",
+            s.warnings,
+        );
+    }
+
+    #[test]
+    fn dot_dot_component_in_touched_files_warns() {
+        let d = dec(vec![task("a", &["../../etc/passwd"], &[], Class::Parallel)]);
+        let s = schedule(&d, &[]);
+        assert!(
+            s.warnings.iter().any(|w| w.contains("repo-relative")),
+            "expected a repo-relative-convention warning for a '..' path; warnings={:?}",
+            s.warnings,
+        );
+    }
+
+    #[test]
+    fn ordinary_relative_path_does_not_warn() {
+        let d = dec(vec![task("a", &["src/a.rs"], &[], Class::Parallel)]);
+        let s = schedule(&d, &[]);
+        assert!(
+            !s.warnings.iter().any(|w| w.contains("repo-relative")),
+            "a plain relative path must not trigger the sanity-check warning; warnings={:?}",
+            s.warnings,
+        );
     }
 }
 

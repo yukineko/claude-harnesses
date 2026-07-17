@@ -201,6 +201,19 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Flag models whose avg duration within a task class is a relative
+    /// outlier vs other models in the same class, and check whether those
+    /// outlier episodes have a lower effective pass rate — the measurement
+    /// test for PDO hypothesis ae64db03 ("duration outliers signal an
+    /// under-powered model that should be escalated").
+    DurationOutliers {
+        #[arg(long)]
+        json: bool,
+        /// A model's per-class avg duration counts as an outlier when it
+        /// exceeds the class's cross-model mean by this multiplier.
+        #[arg(long, default_value_t = 1.5)]
+        threshold: f64,
+    },
     /// UserPromptSubmit hook: inject a routing-memory summary.
     Prompt,
     /// Write a starter fugu-router.toml in the current directory.
@@ -637,6 +650,9 @@ fn run_user(cmd: Command) -> Result<()> {
         }
         Command::Stats { json } => cmd_stats(&cfg, json),
         Command::DelegationStats { json } => cmd_delegation_stats(&cfg, json),
+        Command::DurationOutliers { json, threshold } => {
+            cmd_duration_outliers(&cfg, json, threshold)
+        }
         Command::Init { target } => config::init_config(&target),
         Command::Install { dry_run } => install::install(dry_run),
         Command::Uninstall { dry_run } => install::uninstall(dry_run),
@@ -1321,6 +1337,160 @@ fn cmd_delegation_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Per-(class, model) duration aggregate, plus effective-pass counts split
+/// by whether this (class, model) pair is flagged as a duration outlier.
+struct ClassModelDuration {
+    duration_n: usize,
+    duration_total: f64,
+}
+
+fn cmd_duration_outliers(cfg: &config::Config, as_json: bool, threshold: f64) -> Result<()> {
+    use std::collections::BTreeMap;
+    let eps = store::load(&cfg.store_path());
+
+    // class -> model -> duration aggregate (only episodes with duration_secs > 0.0;
+    // older episodes default to 0.0 and would silently pull averages toward zero).
+    let mut by_class_model: BTreeMap<String, BTreeMap<String, ClassModelDuration>> =
+        BTreeMap::new();
+    for e in eps.iter().filter(|e| e.duration_secs > 0.0) {
+        let agg = by_class_model
+            .entry(e.class.clone())
+            .or_default()
+            .entry(e.model.clone())
+            .or_insert(ClassModelDuration {
+                duration_n: 0,
+                duration_total: 0.0,
+            });
+        agg.duration_n += 1;
+        agg.duration_total += e.duration_secs;
+    }
+
+    // For each class with >= 2 models having duration data, compute the
+    // cross-model mean (mean of per-model averages, not episode-count-weighted
+    // so one chatty model can't drag the baseline toward itself) and flag any
+    // model whose own avg exceeds threshold * that mean.
+    let mut outlier_pairs: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+    let mut class_reports: Vec<serde_json::Value> = Vec::new();
+    for (class, models) in &by_class_model {
+        if models.len() < 2 {
+            continue; // need at least 2 models in the class to call anything an outlier
+        }
+        let per_model_avg: Vec<(String, f64, usize)> = models
+            .iter()
+            .filter(|(_, agg)| agg.duration_n > 0)
+            .map(|(m, agg)| {
+                (
+                    m.clone(),
+                    agg.duration_total / agg.duration_n as f64,
+                    agg.duration_n,
+                )
+            })
+            .collect();
+        if per_model_avg.len() < 2 {
+            continue;
+        }
+        let cross_model_mean: f64 =
+            per_model_avg.iter().map(|(_, avg, _)| avg).sum::<f64>() / per_model_avg.len() as f64;
+        let mut model_entries = Vec::new();
+        for (model, avg, n) in &per_model_avg {
+            let is_outlier = *avg > threshold * cross_model_mean;
+            if is_outlier {
+                outlier_pairs.insert((class.clone(), model.clone()));
+            }
+            model_entries.push(json!({
+                "model": model,
+                "avg_duration_secs": avg,
+                "duration_samples": n,
+                "outlier": is_outlier,
+            }));
+        }
+        class_reports.push(json!({
+            "class": class,
+            "cross_model_mean_secs": cross_model_mean,
+            "models": model_entries,
+        }));
+    }
+
+    // Aggregate outlier-vs-non-outlier effective pass rate across all
+    // duration-bearing episodes, using effective_pass() (human_label overrides
+    // the verifier's self-pass) as the ground truth per Episode's own doc.
+    let (mut outlier_n, mut outlier_pass, mut normal_n, mut normal_pass) =
+        (0usize, 0usize, 0usize, 0usize);
+    for e in eps.iter().filter(|e| e.duration_secs > 0.0) {
+        if outlier_pairs.contains(&(e.class.clone(), e.model.clone())) {
+            outlier_n += 1;
+            if e.effective_pass() {
+                outlier_pass += 1;
+            }
+        } else {
+            normal_n += 1;
+            if e.effective_pass() {
+                normal_pass += 1;
+            }
+        }
+    }
+    let outlier_rate = if outlier_n > 0 {
+        outlier_pass as f64 / outlier_n as f64
+    } else {
+        0.0
+    };
+    let normal_rate = if normal_n > 0 {
+        normal_pass as f64 / normal_n as f64
+    } else {
+        0.0
+    };
+
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "threshold": threshold,
+                "classes": class_reports,
+                "outlier_vs_normal": {
+                    "outlier": {"n": outlier_n, "passes": outlier_pass, "pass_rate": outlier_rate},
+                    "normal": {"n": normal_n, "passes": normal_pass, "pass_rate": normal_rate},
+                },
+            }))?
+        );
+    } else if class_reports.is_empty() {
+        println!(
+            "no class has >= 2 models with recorded duration_secs data yet — nothing to compare"
+        );
+    } else {
+        println!("duration outliers (threshold = {threshold:.2}x cross-model mean):");
+        for c in &class_reports {
+            println!(
+                "  class {:<20} cross-model mean {:.1}s",
+                c["class"].as_str().unwrap_or("?"),
+                c["cross_model_mean_secs"].as_f64().unwrap_or(0.0)
+            );
+            for m in c["models"].as_array().unwrap() {
+                let flag = if m["outlier"].as_bool().unwrap_or(false) {
+                    " <-- OUTLIER"
+                } else {
+                    ""
+                };
+                println!(
+                    "    {:<10} avg {:.1}s (n={}){flag}",
+                    m["model"].as_str().unwrap_or("?"),
+                    m["avg_duration_secs"].as_f64().unwrap_or(0.0),
+                    m["duration_samples"].as_u64().unwrap_or(0)
+                );
+            }
+        }
+        println!(
+            "\noutlier episodes:  {outlier_pass}/{outlier_n} effective-pass ({:.0}%)",
+            outlier_rate * 100.0
+        );
+        println!(
+            "normal episodes:   {normal_pass}/{normal_n} effective-pass ({:.0}%)",
+            normal_rate * 100.0
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod delegation_stats_tests {
     use super::*;
@@ -1419,6 +1589,112 @@ mod delegation_stats_tests {
         let eps = [ep("worker", Some("fork"), true, 1.0, 1.0)];
         let count = eps.iter().filter(|e| e.class == "flow-delegation").count();
         assert_eq!(count, 0);
+    }
+}
+
+#[cfg(test)]
+mod duration_outliers_tests {
+    use super::*;
+
+    fn ep(
+        class: &str,
+        model: &str,
+        duration: f64,
+        pass: bool,
+        human_label: Option<bool>,
+    ) -> store::Episode {
+        store::Episode {
+            ts: 0,
+            title: "t".to_string(),
+            touched_files: vec![],
+            class: class.to_string(),
+            model: model.to_string(),
+            role: "worker".to_string(),
+            pass,
+            cost_usd: 0.0,
+            human_label,
+            labeled_by: None,
+            skill_fingerprint: None,
+            duration_secs: duration,
+            delegation: None,
+            ..Default::default()
+        }
+    }
+
+    fn aggregate(
+        eps: &[store::Episode],
+    ) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, ClassModelDuration>>
+    {
+        use std::collections::BTreeMap;
+        let mut by_class_model: BTreeMap<String, BTreeMap<String, ClassModelDuration>> =
+            BTreeMap::new();
+        for e in eps.iter().filter(|e| e.duration_secs > 0.0) {
+            let agg = by_class_model
+                .entry(e.class.clone())
+                .or_default()
+                .entry(e.model.clone())
+                .or_insert(ClassModelDuration {
+                    duration_n: 0,
+                    duration_total: 0.0,
+                });
+            agg.duration_n += 1;
+            agg.duration_total += e.duration_secs;
+        }
+        by_class_model
+    }
+
+    #[test]
+    fn clearly_separated_durations_flag_the_slow_model_as_outlier() {
+        let eps = [
+            ep("c1", "fast", 10.0, true, None),
+            ep("c1", "slow", 100.0, true, None),
+        ];
+        let by_class_model = aggregate(&eps);
+        let models = &by_class_model["c1"];
+        let cross_model_mean = (10.0 + 100.0) / 2.0; // 55.0, count-of-models mean not episode-weighted
+        let threshold = 1.5;
+        assert!(
+            models["slow"].duration_total / models["slow"].duration_n as f64
+                > threshold * cross_model_mean
+        );
+        assert!(
+            models["fast"].duration_total / models["fast"].duration_n as f64
+                <= threshold * cross_model_mean
+        );
+    }
+
+    #[test]
+    fn human_label_overrides_verifier_self_pass_in_effective_pass() {
+        // verifier said pass=true, but a human corrected it to bad.
+        let e = ep("c1", "sonnet", 10.0, true, Some(false));
+        assert!(!e.effective_pass());
+        // verifier said pass=false, but a human corrected it to good.
+        let e = ep("c1", "sonnet", 10.0, false, Some(true));
+        assert!(e.effective_pass());
+        // no human label at all -> verifier's pass stands.
+        let e = ep("c1", "sonnet", 10.0, true, None);
+        assert!(e.effective_pass());
+    }
+
+    #[test]
+    fn zero_duration_episodes_are_excluded_from_aggregation() {
+        let eps = [
+            ep("c1", "sonnet", 0.0, true, None), // predates duration feature
+            ep("c1", "sonnet", 50.0, true, None),
+        ];
+        let by_class_model = aggregate(&eps);
+        let agg = &by_class_model["c1"]["sonnet"];
+        assert_eq!(agg.duration_n, 1);
+        assert_eq!(agg.duration_total, 50.0);
+    }
+
+    #[test]
+    fn single_model_class_has_no_outlier_comparison() {
+        // only one model has data in this class -> nothing to compare against,
+        // so cmd_duration_outliers's real code skips classes with < 2 models.
+        let eps = [ep("c1", "sonnet", 10.0, true, None)];
+        let by_class_model = aggregate(&eps);
+        assert_eq!(by_class_model["c1"].len(), 1);
     }
 }
 

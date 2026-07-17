@@ -401,7 +401,18 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
                 forced_serial.insert(t.id.clone());
             }
             Class::Parallel => {
-                if let Some(gs) = &shared {
+                if t.touched_files.is_empty() {
+                    // Undeclared file set = unknown blast radius. `files_conflict`
+                    // is an any()==false over an empty set, so overlap-demotion
+                    // can never fire for this task and it would ride a parallel
+                    // worktree, colliding invisibly with peers. "When in doubt,
+                    // serialize" (conservative): route it onto the serial track.
+                    forced_serial.insert(t.id.clone());
+                    sched.warnings.push(format!(
+                        "task '{}' declares no touched_files (unknown blast radius) -> serial",
+                        t.id
+                    ));
+                } else if let Some(gs) = &shared {
                     if t.touched_files.iter().any(|f| gs.is_match(f)) {
                         forced_serial.insert(t.id.clone());
                         sched
@@ -550,6 +561,37 @@ mod tests {
         let s = schedule(&d, &[]);
         assert!(s.batches.is_empty());
         assert_eq!(s.serial, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn empty_touched_files_parallel_task_is_serialized() {
+        // A Class::Parallel task that declares NO touched_files has an unknown
+        // blast radius. `files_conflict` is an any()==false over an empty set,
+        // so overlap-demotion can never fire for it and it would ride a
+        // parallel worktree, colliding invisibly with peers. "When in doubt,
+        // serialize" (conservative) -> it must land on the serial track and
+        // never appear in any parallel batch. Tasks that DO declare files keep
+        // their existing behavior.
+        let d = dec(vec![
+            task("a", &["src/a.rs"], &[], Class::Parallel),
+            task("blind", &[], &[], Class::Parallel),
+        ]);
+        let s = schedule(&d, &[]);
+        let batched: Vec<&String> = s.batches.iter().flat_map(|b| b.parallel.iter()).collect();
+        assert!(
+            !batched.iter().any(|id| *id == "blind"),
+            "empty-touched_files parallel task must NOT ride a parallel batch; batched={batched:?}",
+        );
+        assert!(
+            s.serial.contains(&"blind".to_string()),
+            "empty-touched_files task must be on the serial track; serial={:?}",
+            s.serial,
+        );
+        // The file-declaring parallel sibling is unaffected (no over-serializing).
+        assert!(
+            batched.iter().any(|id| *id == "a"),
+            "file-declaring parallel task must still batch; batched={batched:?}",
+        );
     }
 
     #[test]
@@ -1084,10 +1126,12 @@ mod prop_tests {
             prop_assert!(!sched.warnings.is_empty(), "expected demotion warnings");
         }
 
-        /// Single parallel task → exactly one batch of size one.
+        /// Single parallel task (with a declared file) → exactly one batch of
+        /// size one. It must declare a file: an empty touched_files set is now
+        /// an unknown blast radius that is conservatively serialized.
         #[test]
         fn single_parallel_task_one_batch(id in "[a-z]{2,5}") {
-            let sched = schedule(&pd(vec![pt(&id, vec![], vec![], Class::Parallel)]), &[]);
+            let sched = schedule(&pd(vec![pt(&id, vec!["src/only.rs".into()], vec![], Class::Parallel)]), &[]);
             prop_assert_eq!(sched.batches.len(), 1);
             prop_assert_eq!(sched.batches[0].parallel.len(), 1);
             prop_assert!(sched.serial.is_empty());

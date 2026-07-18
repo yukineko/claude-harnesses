@@ -5,6 +5,7 @@
 
 pub mod audit_round;
 pub mod canary;
+pub mod changeset;
 pub mod disposition;
 pub mod event;
 // `lock` is bin-only in `main.rs`, but `store` (in this lib) now reuses

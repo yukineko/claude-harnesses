@@ -6,6 +6,7 @@ mod audit_round_cli;
 mod bridge;
 pub mod canary;
 mod canary_cli;
+pub mod changeset;
 mod control;
 pub mod disposition;
 mod disposition_cli;

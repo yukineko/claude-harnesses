@@ -1,5 +1,8 @@
 /// Event store and lease storage backend.
 use crate::audit_round::AuditRound;
+use crate::changeset::{
+    detect_conflicts_default, ActualChangeset, ChangesetRegistry, RuntimeConflictEvent,
+};
 use crate::disposition::Disposition;
 use crate::event::LifecycleEvent;
 use crate::lock::LeaseLock;
@@ -655,6 +658,149 @@ pub fn read_dispositions(cwd: &Path) -> Result<Vec<Disposition>> {
         }
         Err(_) => Ok(Vec::new()),
     }
+}
+
+// ── Mid-flight runtime-conflict detection (design 625aa170 A) ────────────────
+
+/// Path to `active_changesets.json`: the project-global registry of in-flight
+/// ACTUAL changesets (`task_key -> ActualChangeset`), a mutable JSON map
+/// (temp+rename atomic write) like `leases.json`. Distinct stream from the
+/// append-only ledgers since it is a live, upsert-in-place set.
+pub fn active_changesets_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("active_changesets.json"))
+}
+
+/// Path to `runtime_conflicts.jsonl`: the append-only ledger of detected
+/// mid-flight overlaps (one `RuntimeConflictEvent` per overlapping pair).
+pub fn runtime_conflicts_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("runtime_conflicts.jsonl"))
+}
+
+/// Fail-soft load of the active-changeset registry: a missing or corrupt file
+/// is treated as an empty registry (same contract as `load_leases`).
+pub fn load_active_changesets(cwd: &Path) -> Result<ChangesetRegistry> {
+    let path = active_changesets_path(cwd)?;
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => Ok(serde_json::from_str(&txt).unwrap_or_default()),
+        Err(_) => Ok(ChangesetRegistry::default()),
+    }
+}
+
+/// Atomic write (unique temp + rename) of the active-changeset registry.
+pub fn save_active_changesets(cwd: &Path, registry: &ChangesetRegistry) -> Result<()> {
+    let path = active_changesets_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(registry)?;
+    let tmp = unique_tmp(&path, "json");
+    std::fs::write(&tmp, &json)?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+/// Append one runtime-conflict event to `runtime_conflicts.jsonl` (one JSON
+/// line each). Fail-soft by contract at the call site (detection must never
+/// break a turn).
+pub fn append_runtime_conflict(cwd: &Path, event: &RuntimeConflictEvent) -> Result<()> {
+    let path = runtime_conflicts_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string(event)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?
+        .write_all(format!("{}\n", json).as_bytes())?;
+    Ok(())
+}
+
+/// Read all runtime-conflict events (fail-soft, corrupt lines skipped).
+pub fn read_runtime_conflicts(cwd: &Path) -> Result<Vec<RuntimeConflictEvent>> {
+    let path = runtime_conflicts_path(cwd)?;
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => {
+            let mut events = Vec::new();
+            for line in txt.lines() {
+                if !line.is_empty() {
+                    if let Ok(ev) = serde_json::from_str::<RuntimeConflictEvent>(line) {
+                        events.push(ev);
+                    }
+                }
+            }
+            Ok(events)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Record `changeset` into the project-global registry AND cross-check it
+/// against every OTHER in-flight entry, returning the detected overlaps.
+///
+/// This is the shared-registry read-modify-write that decision A gates on. It
+/// runs under the overwatch `LeaseLock` (the SAME lock every other overwatch
+/// registry mutation takes) so two tasks recording concurrently serialize
+/// rather than both loading the same pre-record snapshot and losing one
+/// upsert (a lost changeset would silently miss a real overlap). Inside the
+/// lock: load registry -> detect conflicts vs live `!merged` peers -> append
+/// each event -> upsert this changeset -> save. Returns the events so the
+/// caller (condukt's detection hook) can set a merge-hold when non-empty.
+///
+/// Fail-soft on the detection side: the caller wraps this so a lock timeout /
+/// write error degrades to "no overlap detected" and never holds a merge on a
+/// compute error (only a POSITIVE detection holds). The `LeaseLock` never
+/// panics; a write error propagates as `Err` for the caller to swallow.
+pub fn record_changeset_and_detect(
+    cwd: &Path,
+    changeset: &ActualChangeset,
+) -> Result<Vec<RuntimeConflictEvent>> {
+    let _lock = LeaseLock::acquire(cwd);
+    // Test-only race widener (no-op in prod): widen the load->save window so the
+    // concurrency regression test can reliably interleave two writers.
+    artificial_delay("OVERWATCH_TEST_CHANGESET_DELAY_MS");
+    let mut registry = load_active_changesets(cwd)?;
+    let events = detect_conflicts_default(changeset, &registry);
+    for ev in &events {
+        // Append each detected overlap; a single append failure must not drop
+        // the registry upsert below, so log-and-continue rather than early-return.
+        if let Err(e) = append_runtime_conflict(cwd, ev) {
+            eprintln!("overwatch: WARNING could not append runtime conflict (continuing): {e}");
+        }
+    }
+    registry.insert(changeset.task_key.clone(), changeset.clone());
+    save_active_changesets(cwd, &registry)?;
+    Ok(events)
+}
+
+/// Mark a task's changeset as merged (landed) in the registry, so it is no
+/// longer treated as in-flight for overlap checks. RMW under `LeaseLock`.
+/// Fail-soft: an absent entry is a no-op. Called on branch-land cleanup.
+pub fn mark_changeset_merged(cwd: &Path, task_key: &str) -> Result<()> {
+    let _lock = LeaseLock::acquire(cwd);
+    let mut registry = load_active_changesets(cwd)?;
+    if let Some(entry) = registry.get_mut(task_key) {
+        entry.merged = true;
+        save_active_changesets(cwd, &registry)?;
+    }
+    Ok(())
+}
+
+/// Prune changesets that are merged OR stale (older than `LEASE_TTL_SECS`
+/// relative to `now`), returning how many were removed. RMW under `LeaseLock`.
+/// The lease-liveness filter in `detect_conflicts` already ignores these, so
+/// pruning is a housekeeping compaction (keeps the registry bounded); a
+/// crashed run that left `merged=false` ages out here on any later record/prune.
+pub fn prune_stale_changesets(cwd: &Path, now: i64) -> Result<usize> {
+    let _lock = LeaseLock::acquire(cwd);
+    let mut registry = load_active_changesets(cwd)?;
+    let before = registry.len();
+    registry.retain(|_, c| !c.merged && (now - c.ts) <= LEASE_TTL_SECS);
+    let removed = before - registry.len();
+    if removed > 0 {
+        save_active_changesets(cwd, &registry)?;
+    }
+    Ok(removed)
 }
 
 /// Path to the review_findings_archive.jsonl file (append-only, COLD store):
@@ -1414,6 +1560,121 @@ mod tests {
         );
 
         std::env::remove_var("OVERWATCH_TEST_DISPOSITION_DELAY_MS");
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Mid-flight runtime-conflict store (design 625aa170 A) ────────────────
+
+    use crate::changeset::ActualChangeset;
+
+    fn changeset(task_key: &str, files: &[&str], ts: i64) -> ActualChangeset {
+        ActualChangeset::new(
+            task_key.to_string(),
+            task_key.split('/').next().unwrap_or("run").to_string(),
+            "sess".to_string(),
+            format!("condukt/{task_key}"),
+            "base".to_string(),
+            "head".to_string(),
+            &files.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            ts,
+        )
+    }
+
+    /// Round-trip: recording a first changeset yields no overlap; recording a
+    /// second one that shares an (undeclared) file returns exactly one event
+    /// naming that file, the registry holds both, and the event is persisted to
+    /// `runtime_conflicts.jsonl`. Store isolation via a per-test sandboxed HOME.
+    #[test]
+    fn record_changeset_and_detect_round_trips_overlap() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-changeset-rt-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+
+        let first =
+            record_changeset_and_detect(&dir, &changeset("runA/t1", &["shared.rs", "a.rs"], 100))
+                .unwrap();
+        assert!(first.is_empty(), "no peers yet -> no overlap");
+
+        let second =
+            record_changeset_and_detect(&dir, &changeset("runA/t2", &["shared.rs", "b.rs"], 110))
+                .unwrap();
+        assert_eq!(second.len(), 1, "one overlapping peer");
+        assert_eq!(second[0].overlapping_files, vec!["shared.rs".to_string()]);
+        assert_eq!(second[0].task_key_a, "runA/t2");
+        assert_eq!(second[0].task_key_b, "runA/t1");
+
+        let reg = load_active_changesets(&dir).unwrap();
+        assert_eq!(reg.len(), 2, "both changesets upserted");
+
+        let persisted = read_runtime_conflicts(&dir).unwrap();
+        assert_eq!(persisted.len(), 1, "the overlap event was appended");
+        assert_eq!(
+            persisted[0].overlapping_files,
+            vec!["shared.rs".to_string()]
+        );
+
+        // Cleanup / merged: mark t1 merged -> a later t3 sharing the file no
+        // longer overlaps it (merged excluded).
+        mark_changeset_merged(&dir, "runA/t1").unwrap();
+        let third =
+            record_changeset_and_detect(&dir, &changeset("runA/t3", &["shared.rs"], 120)).unwrap();
+        assert_eq!(third.len(), 1, "still overlaps live t2, but NOT merged t1");
+        assert!(third.iter().all(|e| e.task_key_b == "runA/t2"));
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Two tasks recording DISTINCT changesets concurrently must both survive:
+    /// without the `LeaseLock` serialization, one thread's load->save would
+    /// clobber the other's upsert (lost update), leaving the registry with one
+    /// entry instead of two — and silently missing a real cross-task overlap.
+    /// The `OVERWATCH_TEST_CHANGESET_DELAY_MS` widener forces the interleave.
+    #[test]
+    fn concurrent_record_changeset_never_loses_an_upsert() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-changeset-conc-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+        std::env::set_var("OVERWATCH_TEST_CHANGESET_DELAY_MS", "200");
+
+        let d1 = dir.clone();
+        let t1 = std::thread::spawn(move || {
+            record_changeset_and_detect(&d1, &changeset("runX/ta", &["a.rs"], now())).unwrap();
+        });
+        let d2 = dir.clone();
+        let t2 = std::thread::spawn(move || {
+            record_changeset_and_detect(&d2, &changeset("runX/tb", &["b.rs"], now())).unwrap();
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let reg = load_active_changesets(&dir).unwrap();
+        assert_eq!(
+            reg.len(),
+            2,
+            "both concurrent upserts must survive (LeaseLock serialization); got {reg:?}"
+        );
+
+        std::env::remove_var("OVERWATCH_TEST_CHANGESET_DELAY_MS");
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),

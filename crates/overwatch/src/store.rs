@@ -787,6 +787,61 @@ pub fn mark_changeset_merged(cwd: &Path, task_key: &str) -> Result<()> {
     Ok(())
 }
 
+/// Mark EVERY in-flight changeset whose `branch` matches as merged (landed), so
+/// it leaves the overlap-detection set. RMW under `LeaseLock`. Returns how many
+/// entries were marked. The merge path only knows the branch (not the
+/// `task_key`), so this is the branch-keyed sibling of [`mark_changeset_merged`]
+/// and is the production caller that closes finding #1 (a landed task's
+/// changeset staying `merged=false` and spuriously holding the next sequential
+/// task that touches a common file). Fail-soft by contract at the call site: a
+/// cleanup error must never break a merge that already succeeded.
+pub fn mark_branch_merged(cwd: &Path, branch: &str) -> Result<usize> {
+    let _lock = LeaseLock::acquire(cwd);
+    let mut registry = load_active_changesets(cwd)?;
+    let mut marked = 0usize;
+    for c in registry.values_mut() {
+        if !c.merged && c.branch == branch {
+            c.merged = true;
+            marked += 1;
+        }
+    }
+    if marked > 0 {
+        save_active_changesets(cwd, &registry)?;
+    }
+    Ok(marked)
+}
+
+/// Clear (resolve) any OPEN `RuntimeOverlap` merge-hold recorded against
+/// `branch` by writing a `Theirs`/`Policy` resolution for each — the branch has
+/// landed, so its content won and a lingering hold recorded against the same
+/// branch NAME must not block a later run's merge (the hold is looked up by
+/// branch only, so a REUSED `condukt/<id>` branch name would otherwise inherit a
+/// stale hold). Idempotent (resolution append dedups by `conflict_id`). Returns
+/// how many holds were cleared. Fail-soft by contract at the call site.
+pub fn clear_runtime_overlap_holds(cwd: &Path, branch: &str, now: i64) -> Result<usize> {
+    let open = open_merge_conflicts(cwd)?;
+    let mut cleared = 0usize;
+    for e in open {
+        if e.branch == branch
+            && matches!(
+                e.origin,
+                crate::merge_conflict::ConflictOrigin::RuntimeOverlap
+            )
+        {
+            let resolution = MergeConflictResolution {
+                conflict_id: e.conflict_id.clone(),
+                choice: crate::merge_conflict::ResolveChoice::Theirs,
+                decided_by: crate::merge_conflict::DecidedBy::Policy,
+                note: Some("auto-cleared: branch landed".to_string()),
+                ts: now,
+            };
+            append_merge_conflict_resolution(cwd, &resolution)?;
+            cleared += 1;
+        }
+    }
+    Ok(cleared)
+}
+
 /// Prune changesets that are merged OR stale (older than `LEASE_TTL_SECS`
 /// relative to `now`), returning how many were removed. RMW under `LeaseLock`.
 /// The lease-liveness filter in `detect_conflicts` already ignores these, so
@@ -1763,6 +1818,56 @@ mod tests {
             record_changeset_and_detect(&dir, &changeset("runA/t3", &["shared.rs"], 120)).unwrap();
         assert_eq!(third.len(), 1, "still overlaps live t2, but NOT merged t1");
         assert!(third.iter().all(|e| e.task_key_b == "runA/t2"));
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Finding #1 production wiring: `mark_branch_merged` (branch-keyed, what the
+    /// merge path can actually call — it only knows the branch, not the
+    /// `task_key`) takes a LANDED branch's changeset out of the detection set, so
+    /// a later sequential task that touches a common file is NOT spuriously
+    /// flagged. Also asserts `prune_stale_changesets` compacts merged entries.
+    #[test]
+    fn mark_branch_merged_excludes_a_landed_branch_from_detection() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-branch-merged-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+
+        // t1 finishes first (no peers -> no overlap). Its branch is condukt/runA/t1.
+        let first =
+            record_changeset_and_detect(&dir, &changeset("runA/t1", &["shared.rs"], 100)).unwrap();
+        assert!(first.is_empty(), "no peers yet");
+
+        // t1 LANDS: mark it merged by BRANCH (the only key the merge path has).
+        let marked = mark_branch_merged(&dir, "condukt/runA/t1").unwrap();
+        assert_eq!(marked, 1, "the landed branch's changeset is marked merged");
+        // Idempotent: a second call marks nothing (already merged).
+        assert_eq!(mark_branch_merged(&dir, "condukt/runA/t1").unwrap(), 0);
+
+        // t2 finishes later touching the SAME file — must NOT overlap the landed t1.
+        let second =
+            record_changeset_and_detect(&dir, &changeset("runA/t2", &["shared.rs"], 110)).unwrap();
+        assert!(
+            second.is_empty(),
+            "a landed (merged) peer must be excluded from overlap detection; got {second:?}"
+        );
+
+        // Housekeeping: pruning drops the merged t1 (bounded registry, finding #4).
+        let removed = prune_stale_changesets(&dir, 120).unwrap();
+        assert_eq!(removed, 1, "the merged changeset is pruned");
+        let reg = load_active_changesets(&dir).unwrap();
+        assert!(!reg.contains_key("runA/t1"), "merged entry pruned");
+        assert!(reg.contains_key("runA/t2"), "live entry retained");
 
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),

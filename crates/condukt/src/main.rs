@@ -3105,12 +3105,12 @@ fn run_pr(cfg: &Config, cwd: &Path, action: PrAction) -> Result<()> {
                         Ok(worktree::MergeOutcome::Held(id)) => println!(
                             "CI green but '{branch}' is HELD by a mid-flight runtime overlap \
                              ({id}); merge blocked for review, left as local commits. \
-                             Resolve then `condukt worktree resolve-merge --branch {branch}`."
+                             Resolve then `condukt worktree resolve-merge --id {id}`."
                         ),
                         Ok(worktree::MergeOutcome::Conflict(id)) => println!(
                             "CI green but merge of '{branch}' hit a conflict ({id}); recorded \
                              for review, left as local commits. Resolve then \
-                             `condukt worktree resolve-merge --branch {branch}`."
+                             `condukt worktree resolve-merge --id {id}`."
                         ),
                         Err(e) => println!(
                             "CI green but merge of '{branch}' into '{}' failed; \

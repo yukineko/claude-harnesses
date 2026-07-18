@@ -593,7 +593,42 @@ pub fn merge(
 
     git(repo, &["merge", "--no-edit", branch])
         .with_context(|| format!("merge of {branch} into {default_branch} failed"))?;
+    finalize_landed_branch(repo, branch);
     Ok(MergeOutcome::Merged)
+}
+
+/// On-merge cleanup (design 625aa170 decision A — the cleanup half). Once
+/// `branch` has LANDED, take it out of the mid-flight overlap-detection set and
+/// tidy the cross-run registry. Called from BOTH successful merge paths
+/// ([`merge`]'s `Merged` outcome and [`resolve_merge`]'s reconciled outcomes),
+/// which is why it lives in `worktree::merge` rather than each condukt `main.rs`
+/// caller — every merge caller (`run_pr` Poll, `run_worktree` Merge) routes
+/// through here, so the wiring is DRY and unit-testable.
+///
+/// Fail-soft by contract: the merge already succeeded, so a cleanup error must
+/// NEVER surface as an `Err` (that would report a green merge as failed). Every
+/// step logs-and-continues.
+///
+/// 1. mark every in-flight changeset for `branch` merged so it leaves the
+///    detection set (closes finding #1: the next sequential task that touches a
+///    common file is no longer spuriously Held);
+/// 2. clear any OPEN runtime-overlap hold recorded against `branch` (defensive
+///    against a stale hold from a REUSED branch name blocking a later run);
+/// 3. opportunistically prune merged/stale changesets so the cross-run registry
+///    stays bounded (finding #4).
+fn finalize_landed_branch(repo: &Path, branch: &str) {
+    if let Err(e) = overwatch::store::mark_branch_merged(repo, branch) {
+        eprintln!("condukt: could not mark landed branch '{branch}' merged (continuing): {e}");
+    }
+    let now = overwatch::store::now();
+    if let Err(e) = overwatch::store::clear_runtime_overlap_holds(repo, branch, now) {
+        eprintln!(
+            "condukt: could not clear runtime-overlap holds for '{branch}' (continuing): {e}"
+        );
+    }
+    if let Err(e) = overwatch::store::prune_stale_changesets(repo, now) {
+        eprintln!("condukt: could not prune stale changesets (continuing): {e}");
+    }
 }
 
 /// The outcome of [`resolve_merge`].
@@ -670,6 +705,7 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
             git(repo, &["merge", "-s", "ours", "--no-edit", branch]).with_context(|| {
                 format!("`merge -s ours` of {branch} into {default_branch} failed")
             })?;
+            finalize_landed_branch(repo, branch);
             Ok(ResolveOutcome::Reconciled(ResolveChoice::Ours))
         }
         ResolveChoice::Theirs => {
@@ -677,6 +713,7 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
             git(repo, &["merge", "-X", "theirs", "--no-edit", branch]).with_context(|| {
                 format!("`merge -X theirs` of {branch} into {default_branch} failed")
             })?;
+            finalize_landed_branch(repo, branch);
             Ok(ResolveOutcome::Reconciled(ResolveChoice::Theirs))
         }
         ResolveChoice::Manual => {
@@ -687,6 +724,7 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
             let unmerged = git(repo, &["ls-files", "--unmerged"]).unwrap_or_default();
             let pending = parse_unmerged_paths(&unmerged);
             if ok && pending.is_empty() {
+                finalize_landed_branch(repo, branch);
                 Ok(ResolveOutcome::Reconciled(ResolveChoice::Manual))
             } else {
                 // Merge left conflict markers materialized in the working tree.
@@ -1030,6 +1068,136 @@ mod worktree_remove_tests {
             assert!(
                 repo.join(".git").join("MERGE_HEAD").exists(),
                 "manual must leave the in-progress merge with conflict markers"
+            );
+        });
+    }
+
+    /// Decision A gate (finding #2a): an OPEN `RuntimeOverlap` merge-hold for the
+    /// branch must HOLD the merge — `merge()` returns `MergeOutcome::Held`, NOT
+    /// `Merged`. This test FAILS if the pre-merge hold gate (worktree.rs:~515-520)
+    /// is deleted (the branch would then merge and land on `main`).
+    #[test]
+    fn merge_is_held_when_an_open_runtime_overlap_exists() {
+        let (tmp, repo) = init_repo();
+        make_branch(&repo, "feat", "feat.txt", "feature content\n");
+        let cfg = test_cfg(&repo);
+        let home = tmp.path().join("home-held");
+        fs::create_dir_all(&home).unwrap();
+
+        let outcome = with_home(&home, || {
+            // Seed an OPEN RuntimeOverlap hold (what the runtime-conflict hook
+            // enqueues on a positive detection) with NO resolution → stays open.
+            let entry = overwatch::merge_conflict::MergeConflictEntry {
+                conflict_id: "run/feat/runtime-overlap".to_string(),
+                origin: overwatch::merge_conflict::ConflictOrigin::RuntimeOverlap,
+                run_id: "run".to_string(),
+                branch: "feat".to_string(),
+                default_branch: "main".to_string(),
+                base_ref: merge_base_sha(&repo, "main", "feat"),
+                conflicted_files: vec!["feat.txt".to_string()],
+                diff_ours: "peer".to_string(),
+                diff_theirs: "mine".to_string(),
+                ts: overwatch::store::now(),
+            };
+            overwatch::store::append_merge_conflict(&repo, &entry).unwrap();
+            merge(&cfg, &repo, "feat", "main")
+                .expect("a held overlap is a hold-for-review, not a hard error")
+        });
+
+        match outcome {
+            MergeOutcome::Held(id) => assert_eq!(id, "run/feat/runtime-overlap"),
+            other => panic!("an open runtime overlap must HOLD the merge, got {other:?}"),
+        }
+        // The held merge must NOT have landed the branch.
+        assert!(
+            !repo.join("feat.txt").exists(),
+            "a HELD merge must not land the branch onto the default branch"
+        );
+    }
+
+    /// Cleanup wiring (finding #1 + #2b): once a peer task's branch LANDS, its
+    /// changeset must leave the overlap-detection set so the next sequential task
+    /// that touches a common file is NOT spuriously Held. This test FAILS if the
+    /// on-merge cleanup (`finalize_landed_branch` → `mark_branch_merged`) is
+    /// absent: `record_changeset_and_detect` for t2 would then still see t1 as
+    /// in-flight and emit an overlap event, the mimic'd hook would enqueue a
+    /// hold, and t2's merge would come back `Held` instead of `Merged`.
+    #[test]
+    fn a_landed_peer_does_not_spuriously_hold_a_later_overlapping_merge() {
+        use overwatch::changeset::ActualChangeset;
+        let (tmp, repo) = init_repo();
+        // t1 adds `common.rs`; merges cleanly into main.
+        make_branch(&repo, "feat1", "common.rs", "t1 content\n");
+        let cfg = test_cfg(&repo);
+        let home = tmp.path().join("home-land");
+        fs::create_dir_all(&home).unwrap();
+
+        with_home(&home, || {
+            // t1 records its ACTUAL changeset (touches common.rs), UNMERGED.
+            let base1 = merge_base_sha(&repo, "main", "feat1");
+            let cs1 = ActualChangeset::new(
+                "run/t1".to_string(),
+                "run".to_string(),
+                "sess".to_string(),
+                "feat1".to_string(),
+                base1,
+                "head1".to_string(),
+                &["common.rs".to_string()],
+                overwatch::store::now(),
+            );
+            let ev1 = overwatch::store::record_changeset_and_detect(&repo, &cs1).unwrap();
+            assert!(ev1.is_empty(), "t1 is first in flight; no overlap yet");
+
+            // t1 lands cleanly. The #1 cleanup wiring must mark t1's changeset
+            // merged so it stops counting as in-flight.
+            assert_eq!(
+                merge(&cfg, &repo, "feat1", "main").unwrap(),
+                MergeOutcome::Merged,
+                "t1 must merge cleanly"
+            );
+
+            // t2 (a later, separate branch) records an OVERLAPPING changeset
+            // (also common.rs). Because t1 already LANDED, detection must find
+            // NO overlap → no hold is enqueued.
+            let cs2 = ActualChangeset::new(
+                "run/t2".to_string(),
+                "run".to_string(),
+                "sess".to_string(),
+                "feat2".to_string(),
+                "base2".to_string(),
+                "head2".to_string(),
+                &["common.rs".to_string()],
+                overwatch::store::now(),
+            );
+            let ev2 = overwatch::store::record_changeset_and_detect(&repo, &cs2).unwrap();
+            assert!(
+                ev2.is_empty(),
+                "a LANDED peer must be excluded from overlap detection; got {ev2:?}"
+            );
+            // Mimic the runtime-conflict hook: a hold is enqueued ONLY on a
+            // positive detection. Without the fix ev2 is non-empty → this fires.
+            if !ev2.is_empty() {
+                let hold = overwatch::merge_conflict::MergeConflictEntry {
+                    conflict_id: "run/t2/runtime-overlap".to_string(),
+                    origin: overwatch::merge_conflict::ConflictOrigin::RuntimeOverlap,
+                    run_id: "run".to_string(),
+                    branch: "feat2".to_string(),
+                    default_branch: "main".to_string(),
+                    base_ref: "base2".to_string(),
+                    conflicted_files: vec!["common.rs".to_string()],
+                    diff_ours: "peer".to_string(),
+                    diff_theirs: "mine".to_string(),
+                    ts: overwatch::store::now(),
+                };
+                overwatch::store::append_merge_conflict(&repo, &hold).unwrap();
+            }
+
+            // A real clean-merging feat2 branch; with no hold it must merge.
+            make_branch(&repo, "feat2", "feat2.txt", "t2 content\n");
+            assert_eq!(
+                merge(&cfg, &repo, "feat2", "main").unwrap(),
+                MergeOutcome::Merged,
+                "a landed peer must NOT spuriously hold t2's merge"
             );
         });
     }

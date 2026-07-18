@@ -596,6 +596,106 @@ pub fn merge(
     Ok(MergeOutcome::Merged)
 }
 
+/// The outcome of [`resolve_merge`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveOutcome {
+    /// The recorded resolution was reconciled (an `Ours`/`Theirs` strategy was
+    /// applied, or the branch already merged cleanly) and the merge is done.
+    Reconciled(overwatch::merge_conflict::ResolveChoice),
+    /// A `Manual` resolution left conflict markers materialized in the working
+    /// tree for a human/worker to resolve and commit (carries the paths). The
+    /// merge completes when they commit the in-progress merge.
+    ManualPending(Vec<String>),
+}
+
+/// Reconciliation driver (design 625aa170 decision B): apply a RECORDED
+/// resolution to a blocked merge and complete it. Reads the
+/// [`overwatch::merge_conflict::MergeConflictEntry`] (for the branch pair) and
+/// its [`overwatch::merge_conflict::MergeConflictResolution`] (for the chosen
+/// side) from the consensus review surface, then under the repo-primary lock:
+///
+/// - **Ours** → `git merge -s ours` (keep the default branch's version; the
+///   branch is recorded as merged so it leaves the in-flight set).
+/// - **Theirs** → `git merge -X theirs` (take the feature branch's version on
+///   conflicting hunks).
+/// - **Manual** → materialize the merge with conflict markers and stop
+///   ([`ResolveOutcome::ManualPending`]); a human/worker resolves + commits.
+///
+/// Requires a resolution to exist first (written by `overwatch
+/// resolve-merge-conflict`) — recording the resolution is ALSO what clears the
+/// runtime-overlap HOLD (it leaves the OPEN set), so a re-run of [`merge`] is
+/// no longer blocked. Never auto-picks a side on its own: the choice always
+/// comes from the recorded human/policy decision.
+pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<ResolveOutcome> {
+    use overwatch::merge_conflict::ResolveChoice;
+
+    // Serialize with every other default-branch mutator (same lock `merge` holds).
+    let _repo_lock = lock::acquire_repo_primary(cfg, repo);
+
+    // The entry names the branch pair. Read from the full stream (the entry may
+    // already be resolved, i.e. out of the OPEN set) and take the latest match.
+    let entries = overwatch::store::read_merge_conflicts(repo)
+        .with_context(|| "could not read merge-conflict entries")?;
+    let entry = entries
+        .into_iter()
+        .rev()
+        .find(|e| e.conflict_id == conflict_id)
+        .ok_or_else(|| anyhow!("no merge-conflict entry with id '{conflict_id}'"))?;
+
+    // The recorded decision (ours/theirs/manual). Without one there is nothing
+    // to reconcile — the human/policy must decide first.
+    let resolution = overwatch::store::find_merge_conflict_resolution(repo, conflict_id)
+        .with_context(|| "could not read merge-conflict resolutions")?
+        .ok_or_else(|| {
+            anyhow!(
+                "conflict '{conflict_id}' has no recorded resolution yet; run \
+                 `overwatch resolve-merge-conflict --id {conflict_id} --choose ours|theirs|manual` first"
+            )
+        })?;
+
+    let branch = &entry.branch;
+    let default_branch = &entry.default_branch;
+
+    git(repo, &["checkout", default_branch])
+        .with_context(|| format!("could not checkout {default_branch} before resolve-merge"))?;
+    let current = git(repo, &["branch", "--show-current"])?;
+    if current != *default_branch {
+        bail!("expected to be on '{default_branch}' but on '{current}'; aborting resolve-merge");
+    }
+
+    match resolution.choice {
+        ResolveChoice::Ours => {
+            // Keep our side; still record the merge so the branch is considered
+            // merged and leaves the in-flight set.
+            git(repo, &["merge", "-s", "ours", "--no-edit", branch]).with_context(|| {
+                format!("`merge -s ours` of {branch} into {default_branch} failed")
+            })?;
+            Ok(ResolveOutcome::Reconciled(ResolveChoice::Ours))
+        }
+        ResolveChoice::Theirs => {
+            // Favor the branch on conflicting hunks.
+            git(repo, &["merge", "-X", "theirs", "--no-edit", branch]).with_context(|| {
+                format!("`merge -X theirs` of {branch} into {default_branch} failed")
+            })?;
+            Ok(ResolveOutcome::Reconciled(ResolveChoice::Theirs))
+        }
+        ResolveChoice::Manual => {
+            // Materialize the merge. If the branch merges cleanly (e.g. a worker
+            // already resolved it on the branch), commit and report Reconciled;
+            // otherwise leave the markers in place for a human/worker to finish.
+            let (ok, _, _) = git_try(repo, &["merge", "--no-edit", branch])?;
+            let unmerged = git(repo, &["ls-files", "--unmerged"]).unwrap_or_default();
+            let pending = parse_unmerged_paths(&unmerged);
+            if ok && pending.is_empty() {
+                Ok(ResolveOutcome::Reconciled(ResolveChoice::Manual))
+            } else {
+                // Merge left conflict markers materialized in the working tree.
+                Ok(ResolveOutcome::ManualPending(pending))
+            }
+        }
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -777,6 +877,161 @@ mod worktree_remove_tests {
             !merge_head.exists(),
             "MERGE_HEAD should not exist after aborted pre-flight"
         );
+    }
+
+    /// Build a repo with a guaranteed 3-way conflict on `shared.txt` between
+    /// `conflict-branch` ("branch version") and `main` ("main version"), and
+    /// record a `MergeConflictEntry` for it (origin MergeConflict). Returns
+    /// `(tmp, repo, conflict_id)`. Caller runs under a sandboxed HOME.
+    fn seed_conflict_repo() -> (TempDir, PathBuf, String) {
+        let (tmp, repo) = init_repo();
+        let conflict_file = "shared.txt";
+        fs::write(repo.join(conflict_file), "line1\nline2\nline3\n").unwrap();
+        git(&repo, &["add", "."]).unwrap();
+        git(&repo, &["commit", "-m", "add shared file"]).unwrap();
+
+        git(&repo, &["checkout", "-b", "conflict-branch"]).unwrap();
+        fs::write(repo.join(conflict_file), "line1\nbranch version\nline3\n").unwrap();
+        git(&repo, &["add", "."]).unwrap();
+        git(&repo, &["commit", "-m", "branch edit"]).unwrap();
+
+        git(&repo, &["checkout", "main"]).unwrap();
+        fs::write(repo.join(conflict_file), "line1\nmain version\nline3\n").unwrap();
+        git(&repo, &["add", "."]).unwrap();
+        git(&repo, &["commit", "-m", "main edit"]).unwrap();
+
+        let conflict_id = "conflict-branch/merge-conflict".to_string();
+        let entry = overwatch::merge_conflict::MergeConflictEntry {
+            conflict_id: conflict_id.clone(),
+            origin: overwatch::merge_conflict::ConflictOrigin::MergeConflict,
+            run_id: String::new(),
+            branch: "conflict-branch".to_string(),
+            default_branch: "main".to_string(),
+            base_ref: merge_base_sha(&repo, "main", "conflict-branch"),
+            conflicted_files: vec![conflict_file.to_string()],
+            diff_ours: "ours".to_string(),
+            diff_theirs: "theirs".to_string(),
+            ts: overwatch::store::now(),
+        };
+        overwatch::store::append_merge_conflict(&repo, &entry).unwrap();
+        (tmp, repo, conflict_id)
+    }
+
+    /// Record a resolution (`overwatch resolve-merge-conflict` equivalent) for
+    /// `conflict_id` under the sandboxed HOME.
+    fn record_resolution(
+        repo: &Path,
+        conflict_id: &str,
+        choice: overwatch::merge_conflict::ResolveChoice,
+    ) {
+        let resolution = overwatch::merge_conflict::MergeConflictResolution {
+            conflict_id: conflict_id.to_string(),
+            choice,
+            decided_by: overwatch::merge_conflict::DecidedBy::Human,
+            note: None,
+            ts: overwatch::store::now(),
+        };
+        overwatch::store::append_merge_conflict_resolution(repo, &resolution).unwrap();
+    }
+
+    #[test]
+    fn resolve_merge_requires_a_recorded_resolution_first() {
+        let home = TempDir::new().unwrap();
+        with_home(home.path(), || {
+            let (_tmp, repo, conflict_id) = seed_conflict_repo();
+            let cfg = test_cfg(&repo);
+            // No resolution recorded yet → resolve_merge must error, NOT pick a side.
+            let err = resolve_merge(&cfg, &repo, &conflict_id)
+                .expect_err("resolve-merge with no recorded resolution must error");
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("no recorded resolution"),
+                "error should explain the missing resolution, got: {msg}"
+            );
+        });
+    }
+
+    #[test]
+    fn resolve_merge_ours_completes_keeping_default_content() {
+        let home = TempDir::new().unwrap();
+        with_home(home.path(), || {
+            let (_tmp, repo, conflict_id) = seed_conflict_repo();
+            record_resolution(
+                &repo,
+                &conflict_id,
+                overwatch::merge_conflict::ResolveChoice::Ours,
+            );
+            let cfg = test_cfg(&repo);
+            let out =
+                resolve_merge(&cfg, &repo, &conflict_id).expect("ours resolution should reconcile");
+            assert_eq!(
+                out,
+                ResolveOutcome::Reconciled(overwatch::merge_conflict::ResolveChoice::Ours)
+            );
+            // The merge is completed (no in-progress merge) keeping OUR (main) content.
+            assert!(!repo.join(".git").join("MERGE_HEAD").exists());
+            let content = fs::read_to_string(repo.join("shared.txt")).unwrap();
+            assert!(
+                content.contains("main version") && !content.contains("branch version"),
+                "ours must keep the default branch content, got: {content}"
+            );
+        });
+    }
+
+    #[test]
+    fn resolve_merge_theirs_completes_taking_branch_content() {
+        let home = TempDir::new().unwrap();
+        with_home(home.path(), || {
+            let (_tmp, repo, conflict_id) = seed_conflict_repo();
+            record_resolution(
+                &repo,
+                &conflict_id,
+                overwatch::merge_conflict::ResolveChoice::Theirs,
+            );
+            let cfg = test_cfg(&repo);
+            let out = resolve_merge(&cfg, &repo, &conflict_id)
+                .expect("theirs resolution should reconcile");
+            assert_eq!(
+                out,
+                ResolveOutcome::Reconciled(overwatch::merge_conflict::ResolveChoice::Theirs)
+            );
+            assert!(!repo.join(".git").join("MERGE_HEAD").exists());
+            let content = fs::read_to_string(repo.join("shared.txt")).unwrap();
+            assert!(
+                content.contains("branch version"),
+                "theirs must take the feature branch content, got: {content}"
+            );
+        });
+    }
+
+    #[test]
+    fn resolve_merge_manual_materializes_markers_for_a_human() {
+        let home = TempDir::new().unwrap();
+        with_home(home.path(), || {
+            let (_tmp, repo, conflict_id) = seed_conflict_repo();
+            record_resolution(
+                &repo,
+                &conflict_id,
+                overwatch::merge_conflict::ResolveChoice::Manual,
+            );
+            let cfg = test_cfg(&repo);
+            let out = resolve_merge(&cfg, &repo, &conflict_id)
+                .expect("manual resolution should materialize markers, not error");
+            match out {
+                ResolveOutcome::ManualPending(files) => {
+                    assert!(
+                        files.iter().any(|f| f == "shared.txt"),
+                        "manual pending must list the conflicted file, got {files:?}"
+                    );
+                }
+                other => panic!("manual must leave markers pending, got {other:?}"),
+            }
+            // The merge is IN PROGRESS (markers materialized) for a human to finish.
+            assert!(
+                repo.join(".git").join("MERGE_HEAD").exists(),
+                "manual must leave the in-progress merge with conflict markers"
+            );
+        });
     }
 
     #[test]

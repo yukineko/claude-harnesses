@@ -510,6 +510,14 @@ enum WtAction {
         #[arg(long)]
         branch: String,
     },
+    /// Reconcile a blocked merge (design 625aa170 B): apply the RECORDED
+    /// resolution (`overwatch resolve-merge-conflict --id <id> --choose ...`) for
+    /// conflict <id> and complete the merge. Ours→`merge -s ours`,
+    /// Theirs→`merge -X theirs`, Manual→materialize markers for a human to finish.
+    ResolveMerge {
+        #[arg(long)]
+        id: String,
+    },
     /// Remove a worktree and (best-effort) delete its branch.
     Remove {
         #[arg(long)]
@@ -985,6 +993,12 @@ enum PolicyAction {
         /// Optional task class for the calibrated-confidence path.
         #[arg(long)]
         class: Option<String>,
+        /// Frame this as a merge-conflict / mid-flight-overlap resolution
+        /// (design 625aa170 B): the verdict may only be `escalate` or `block`,
+        /// NEVER `auto` — an automatic pick-a-side is last-writer-wins. Clamps an
+        /// otherwise-`auto` verdict up to `escalate`.
+        #[arg(long)]
+        conflict: bool,
     },
     /// Non-interactively answer one question using the graded-autonomy policy.
     /// On an `auto` verdict, prints `{"answered":true,"policy":"auto","chosen":
@@ -1029,6 +1043,11 @@ enum PolicyAction {
         /// Optional task class for the calibrated-confidence path.
         #[arg(long)]
         class: Option<String>,
+        /// Frame this as a merge-conflict / mid-flight-overlap resolution
+        /// (design 625aa170 B): never self-answers (`auto` is clamped to
+        /// `escalate`); the human/AskUserQuestion always decides the side.
+        #[arg(long)]
+        conflict: bool,
     },
     /// Print the auto-answer audit trail (JSONL): every question the policy
     /// self-answered without prompting a human. The review surface for
@@ -2594,6 +2613,7 @@ fn run_policy(action: PolicyAction) -> ! {
             title,
             files,
             class,
+            conflict,
         } => {
             let (risk, reversible, mut confidence) =
                 parse_policy_levels(&risk, &reversible, &confidence);
@@ -2604,7 +2624,12 @@ fn run_policy(action: PolicyAction) -> ! {
             if let Some(cal) = calibrated_confidence(&title, &files, &class) {
                 confidence = cal;
             }
-            let decision = policy::decide(risk, reversible, confidence);
+            // A merge-conflict resolution may only escalate/block (never auto).
+            let decision = if conflict {
+                policy::decide_conflict_resolution(risk, reversible, confidence)
+            } else {
+                policy::decide(risk, reversible, confidence)
+            };
             println!("{decision}");
             let code = match decision {
                 policy::Decision::Auto => 0,
@@ -2624,6 +2649,7 @@ fn run_policy(action: PolicyAction) -> ! {
             title,
             files,
             class,
+            conflict,
         } => {
             let (risk, reversible, mut confidence) =
                 parse_policy_levels(&risk, &reversible, &confidence);
@@ -2632,7 +2658,13 @@ fn run_policy(action: PolicyAction) -> ! {
             if let Some(cal) = calibrated_confidence(&title, &files, &class) {
                 confidence = cal;
             }
-            let decision = policy::decide(risk, reversible, confidence);
+            // A merge-conflict resolution never self-answers (auto→escalate), so
+            // the side is always chosen by a human, never last-writer-wins.
+            let decision = if conflict {
+                policy::decide_conflict_resolution(risk, reversible, confidence)
+            } else {
+                policy::decide(risk, reversible, confidence)
+            };
             let outcome = gatelog::answer_outcome(decision, &options, recommend);
             match &outcome {
                 gatelog::AnswerOutcome::Answered {
@@ -2704,22 +2736,37 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                 // cleared via `condukt worktree resolve-merge` after resolution.
                 worktree::MergeOutcome::Held(id) => {
                     println!(
-                        "HELD '{}': mid-flight runtime overlap ({id}); merge blocked for review. \
-                     Resolve via `overwatch resolve-merge-conflict --id {id}` then \
-                     `condukt worktree resolve-merge --branch {}`.",
-                        branch, branch
+                        "HELD '{branch}': mid-flight runtime overlap ({id}); merge blocked for \
+                         review. Resolve via `overwatch resolve-merge-conflict --id {id} --choose \
+                         ours|theirs|manual` then `condukt worktree resolve-merge --id {id}`."
                     );
                 }
                 worktree::MergeOutcome::Conflict(id) => {
                     println!(
-                        "CONFLICT '{}': merge conflict recorded ({id}); merge blocked for review. \
-                     Resolve via `overwatch resolve-merge-conflict --id {id}` then \
-                     `condukt worktree resolve-merge --branch {}`.",
-                        branch, branch
+                        "CONFLICT '{branch}': merge conflict recorded ({id}); merge blocked for \
+                         review. Resolve via `overwatch resolve-merge-conflict --id {id} --choose \
+                         ours|theirs|manual` then `condukt worktree resolve-merge --id {id}`."
                     );
                 }
             }
         }
+        WtAction::ResolveMerge { id } => match worktree::resolve_merge(cfg, &repo, &id)? {
+            worktree::ResolveOutcome::Reconciled(choice) => {
+                println!(
+                    "reconciled '{id}' ({}): merge completed into {}.",
+                    choice.label(),
+                    cfg.default_branch
+                );
+            }
+            worktree::ResolveOutcome::ManualPending(files) => {
+                println!(
+                    "manual '{id}': conflict markers materialized in {} file(s): {}. \
+                     Resolve them, `git add`, and `git commit` to complete the merge.",
+                    files.len(),
+                    files.join(", ")
+                );
+            }
+        },
         WtAction::Remove { path, branch } => {
             let undeleted = worktree::remove(&repo, &path, branch.as_deref())?;
             if let Some(b) = undeleted {

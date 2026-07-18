@@ -140,6 +140,28 @@ pub fn decide(risk: Level, reversibility: Level, confidence: Level) -> Decision 
     }
 }
 
+/// Policy posture for resolving a merge conflict / mid-flight runtime overlap
+/// (design 625aa170 decision B). A conflict resolution may ONLY `Escalate` or
+/// `Block` — it MUST NOT `Auto`. An automatic pick-a-side IS last-writer-wins,
+/// the exact failure this feature kills, so the policy half never chooses a
+/// side unattended: it clamps any `Auto` verdict up to `Escalate` (ask the
+/// human) while leaving `Escalate`/`Block` untouched. Pure; total; no panics.
+///
+/// (There is deliberately NO opt-in that lets this return `Auto` — the DEFAULT
+/// and only posture is Escalate/Block.)
+pub fn decide_conflict_resolution(
+    risk: Level,
+    reversibility: Level,
+    confidence: Level,
+) -> Decision {
+    match decide(risk, reversibility, confidence) {
+        // A conflict is never auto-resolvable: the safest a "just proceed"
+        // verdict can be is to ASK, never to silently pick a side.
+        Decision::Auto => Decision::Escalate,
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod proptests {
     //! Property-based floor for [`decide`]: monotonicity and the irreversible
@@ -337,6 +359,53 @@ mod tests {
         assert_eq!(
             decide(Level::Medium, Level::Medium, Level::Low),
             Decision::Escalate
+        );
+    }
+
+    #[test]
+    fn conflict_resolution_never_auto_picks_a_side() {
+        // Design 625aa170 B: a conflict/overlap resolution may only Escalate or
+        // Block — NEVER Auto (auto pick-side = last-writer-wins). Every input
+        // that `decide` would Auto must clamp to Escalate here; nothing else moves.
+        for r in ALL {
+            for v in ALL {
+                for c in ALL {
+                    let base = decide(r, v, c);
+                    let conflict = decide_conflict_resolution(r, v, c);
+                    assert_ne!(
+                        conflict,
+                        Decision::Auto,
+                        "conflict resolution must never Auto (r={r:?} v={v:?} c={c:?})"
+                    );
+                    match base {
+                        Decision::Auto => assert_eq!(
+                            conflict,
+                            Decision::Escalate,
+                            "an Auto verdict must clamp up to Escalate"
+                        ),
+                        other => assert_eq!(
+                            conflict, other,
+                            "Escalate/Block verdicts must pass through unchanged"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn conflict_resolution_default_posture_is_escalate_on_the_safe_case() {
+        // The trivially-safe-and-reversible case that `decide` Autos becomes
+        // Escalate under the conflict posture (default = Escalate not Auto).
+        assert_eq!(decide(Level::Low, Level::High, Level::High), Decision::Auto);
+        assert_eq!(
+            decide_conflict_resolution(Level::Low, Level::High, Level::High),
+            Decision::Escalate
+        );
+        // A high-risk irreversible conflict still hard-Blocks.
+        assert_eq!(
+            decide_conflict_resolution(Level::High, Level::Low, Level::Low),
+            Decision::Block
         );
     }
 

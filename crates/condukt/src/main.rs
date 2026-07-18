@@ -34,6 +34,7 @@ mod review_brief;
 mod review_order;
 mod review_worthiness;
 mod run_policy;
+mod runtime_conflict;
 mod schedule;
 mod shadow_run;
 mod state;
@@ -3396,6 +3397,28 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         state::now_secs(),
                         &session,
                     );
+                    // Mid-flight runtime-conflict detection (design 625aa170 A):
+                    // record this task's ACTUAL changed-file set into the
+                    // overwatch project-global registry and, on a detected
+                    // overlap with another in-flight worktree, set a merge-hold
+                    // (an open RuntimeOverlap entry in the consensus review
+                    // surface). The condukt merge path checks the hold and skips
+                    // the merge until it is resolved. Fully fail-soft on the
+                    // compute side (only a positive detection holds); never
+                    // changes the exit code here.
+                    if runtime_conflict::record_and_check_actual_overlap(
+                        cfg,
+                        cwd,
+                        &run,
+                        t,
+                        state::now_secs(),
+                        &session,
+                    ) {
+                        eprintln!(
+                            "condukt: runtime overlap detected for task '{}' — merge held for review (overwatch review-queue [merge-conflict])",
+                            t.id
+                        );
+                    }
                 }
             }
             let (done, total) = rs.counts();

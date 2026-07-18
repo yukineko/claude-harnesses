@@ -8,6 +8,7 @@ pub mod canary;
 pub mod changeset;
 pub mod disposition;
 pub mod event;
+pub mod merge_conflict;
 // `lock` is bin-only in `main.rs`, but `store` (in this lib) now reuses
 // `LeaseLock` to serialize its shared-JSONL read-modify-write paths, so the lib
 // crate root must also declare the module. Kept private: it is an internal

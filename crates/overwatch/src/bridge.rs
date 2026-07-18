@@ -243,7 +243,11 @@ fn run_in(cwd: &Path) -> Result<()> {
             .collect();
     let rollbacks = store::read_rollbacks(cwd).unwrap_or_default();
     let escalations = review_escalation::read_open_escalations(cwd);
-    let entry_rows = review_queue::build_queue(&systemic, &rollbacks, &[], &escalations);
+    // Open blocked merges (real conflicts + gated overlaps) drain too, keyed as
+    // `merge-conflict:<conflict_id>` in bridged_entries.jsonl (fail-soft).
+    let merge_conflicts = store::open_merge_conflicts(cwd).unwrap_or_default();
+    let entry_rows =
+        review_queue::build_queue(&systemic, &rollbacks, &[], &escalations, &merge_conflicts);
 
     // 2. Already-bridged sets — findings keyed on bare finding_id (also the
     // review-metrics "resolved" source), non-finding entries keyed on the

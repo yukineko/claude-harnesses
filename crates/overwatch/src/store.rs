@@ -6,6 +6,7 @@ use crate::changeset::{
 use crate::disposition::Disposition;
 use crate::event::LifecycleEvent;
 use crate::lock::LeaseLock;
+use crate::merge_conflict::{MergeConflictEntry, MergeConflictResolution};
 use crate::review_finding::ReviewFinding;
 use crate::rollback::RollbackEvent;
 use crate::violation::ViolationEvent;
@@ -984,6 +985,138 @@ pub fn is_held_by_other(leases: &LeaseRegistry, key: &str, session_id: &str, now
 /// Check if a lease is stale (heartbeat older than TTL).
 pub fn is_stale(lease: &Lease, now: i64) -> bool {
     now.saturating_sub(lease.heartbeat_at) > LEASE_TTL_SECS
+}
+
+// ── Consensus merge-conflict resolution (design 625aa170 B) ──────────────────
+
+/// Path to `merge_conflicts.jsonl`: the append-only ledger of blocked merges
+/// (real 3-way conflicts AND gated mid-flight overlaps) awaiting resolution.
+pub fn merge_conflicts_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("merge_conflicts.jsonl"))
+}
+
+/// Path to `merge_conflict_resolutions.jsonl`: the append-only ledger of
+/// resolutions, joined to entries by `conflict_id` (mirrors dispositions).
+pub fn merge_conflict_resolutions_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("merge_conflict_resolutions.jsonl"))
+}
+
+/// Append one blocked-merge entry to `merge_conflicts.jsonl` (one JSON line
+/// each). Idempotent per `conflict_id`: re-recording the same blocked merge (a
+/// re-run of the same held task) is a no-op, guarded by a check-then-append
+/// under `LeaseLock` (same TOCTOU guard as `append_disposition`). Fail-soft by
+/// contract at the call site (recording must never break a turn).
+pub fn append_merge_conflict(cwd: &Path, entry: &MergeConflictEntry) -> Result<()> {
+    let path = merge_conflicts_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _lock = LeaseLock::acquire(cwd);
+    if read_merge_conflicts(cwd)?
+        .iter()
+        .any(|e| e.conflict_id == entry.conflict_id)
+    {
+        return Ok(());
+    }
+    artificial_delay("OVERWATCH_TEST_MERGE_CONFLICT_DELAY_MS");
+    let json = serde_json::to_string(entry)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?
+        .write_all(format!("{}\n", json).as_bytes())?;
+    Ok(())
+}
+
+/// Read all blocked-merge entries (fail-soft, corrupt lines skipped).
+pub fn read_merge_conflicts(cwd: &Path) -> Result<Vec<MergeConflictEntry>> {
+    let path = merge_conflicts_path(cwd)?;
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => {
+            let mut entries = Vec::new();
+            for line in txt.lines() {
+                if !line.is_empty() {
+                    if let Ok(e) = serde_json::from_str::<MergeConflictEntry>(line) {
+                        entries.push(e);
+                    }
+                }
+            }
+            Ok(entries)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Append one resolution to `merge_conflict_resolutions.jsonl`.
+///
+/// Idempotent per `conflict_id`: two concurrent resolvers (e.g. a human via
+/// `resolve-merge-conflict` and condukt's policy) that both resolve the SAME
+/// conflict must not double-row it. Same check-then-append TOCTOU guard as
+/// [`append_disposition`]: hold the store `LeaseLock`, re-check for an existing
+/// resolution of this `conflict_id` INSIDE the lock, skip if present. Fail-soft:
+/// `LeaseLock` degrades to unlocked on timeout and never panics.
+pub fn append_merge_conflict_resolution(
+    cwd: &Path,
+    resolution: &MergeConflictResolution,
+) -> Result<()> {
+    let path = merge_conflict_resolutions_path(cwd)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _lock = LeaseLock::acquire(cwd);
+    if read_merge_conflict_resolutions(cwd)?
+        .iter()
+        .any(|r| r.conflict_id == resolution.conflict_id)
+    {
+        return Ok(());
+    }
+    artificial_delay("OVERWATCH_TEST_MERGE_RESOLUTION_DELAY_MS");
+    let json = serde_json::to_string(resolution)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?
+        .write_all(format!("{}\n", json).as_bytes())?;
+    Ok(())
+}
+
+/// Read all merge-conflict resolutions (fail-soft, corrupt lines skipped).
+pub fn read_merge_conflict_resolutions(cwd: &Path) -> Result<Vec<MergeConflictResolution>> {
+    let path = merge_conflict_resolutions_path(cwd)?;
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => {
+            let mut resolutions = Vec::new();
+            for line in txt.lines() {
+                if !line.is_empty() {
+                    if let Ok(r) = serde_json::from_str::<MergeConflictResolution>(line) {
+                        resolutions.push(r);
+                    }
+                }
+            }
+            Ok(resolutions)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// The OPEN blocked-merge set: entries with no resolution (fail-soft read of
+/// both streams, joined by `conflict_id`). This is what `review-queue`
+/// surfaces as `[merge-conflict]` rows.
+pub fn open_merge_conflicts(cwd: &Path) -> Result<Vec<MergeConflictEntry>> {
+    let entries = read_merge_conflicts(cwd)?;
+    let resolutions = read_merge_conflict_resolutions(cwd)?;
+    Ok(crate::merge_conflict::open_entries(&entries, &resolutions))
+}
+
+/// Look up the resolution for a `conflict_id`, if any (for the condukt
+/// reconciliation driver that reads a human/policy decision back).
+pub fn find_merge_conflict_resolution(
+    cwd: &Path,
+    conflict_id: &str,
+) -> Result<Option<MergeConflictResolution>> {
+    Ok(read_merge_conflict_resolutions(cwd)?
+        .into_iter()
+        .find(|r| r.conflict_id == conflict_id))
 }
 
 /// Reap stale leases from the registry (in-place mutation).

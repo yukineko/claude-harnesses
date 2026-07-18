@@ -11,6 +11,7 @@
 /// slices ([`build_queue`]); the CLI shell ([`run`]) reads the stores fail-soft
 /// (a missing/empty source contributes nothing rather than erroring the whole
 /// command) and renders either a human-readable list or a JSON array.
+use crate::merge_conflict::MergeConflictEntry;
 use crate::review_escalation::{self, ConduktEscalation};
 use crate::review_finding::ReviewFinding;
 use crate::rollback::RollbackEvent;
@@ -34,6 +35,10 @@ pub enum EntryKind {
     /// out-of-band human answer) — bridged in from condukt's
     /// `escalations.json`, foreign-read by path (see `review_escalation.rs`).
     Escalation,
+    /// A blocked merge awaiting consensus resolution (design 625aa170 B): a
+    /// real git 3-way conflict OR a gated mid-flight actual-diff overlap
+    /// (decision A), recorded in `merge_conflicts.jsonl`, still unresolved.
+    MergeConflict,
 }
 
 impl EntryKind {
@@ -44,6 +49,7 @@ impl EntryKind {
             EntryKind::Rollback => "rollback",
             EntryKind::AiFinding => "ai-finding",
             EntryKind::Escalation => "escalation",
+            EntryKind::MergeConflict => "merge-conflict",
         }
     }
 }
@@ -278,6 +284,7 @@ pub fn build_queue(
     rollbacks: &[RollbackEvent],
     findings: &[ReviewFinding],
     escalations: &[ConduktEscalation],
+    merge_conflicts: &[MergeConflictEntry],
 ) -> Vec<ReviewQueueEntry> {
     let mut rows: Vec<ReviewQueueEntry> = Vec::new();
 
@@ -351,6 +358,33 @@ pub fn build_queue(
         });
     }
 
+    for mc in merge_conflicts {
+        let files = if mc.conflicted_files.is_empty() {
+            "(unknown files)".to_string()
+        } else {
+            mc.conflicted_files.join(", ")
+        };
+        rows.push(ReviewQueueEntry {
+            kind: EntryKind::MergeConflict,
+            // A blocked merge (real conflict or a gated mid-flight overlap) is a
+            // real, already-happening work stoppage awaiting resolution — High.
+            severity: Severity::High,
+            ts: mc.ts,
+            summary: format!(
+                "[{}] merge of {} into {} held: {} file(s) [{}]",
+                mc.origin.token(),
+                mc.branch,
+                mc.default_branch,
+                mc.conflicted_files.len(),
+                files
+            ),
+            identifier: mc.conflict_id.clone(),
+            // Idempotent per conflict_id upstream (append_merge_conflict); no
+            // further collapse here.
+            occurrences: 1,
+        });
+    }
+
     for e in escalations {
         rows.push(ReviewQueueEntry {
             kind: EntryKind::Escalation,
@@ -414,7 +448,17 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<()> {
     // (fail-soft: absent condukt / no open escalations contributes nothing).
     let escalations = review_escalation::read_open_escalations(&cwd);
 
-    let mut rows = build_queue(&systemic, &rollbacks, &findings, &escalations);
+    // Source 5: OPEN blocked merges (real conflicts + gated mid-flight overlaps),
+    // fail-soft (absent/empty store contributes nothing).
+    let merge_conflicts = store::open_merge_conflicts(&cwd).unwrap_or_default();
+
+    let mut rows = build_queue(
+        &systemic,
+        &rollbacks,
+        &findings,
+        &escalations,
+        &merge_conflicts,
+    );
 
     if let Some(since_ts) = since {
         rows.retain(|r| r.ts >= since_ts);
@@ -436,7 +480,7 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<()> {
 
     if rows.is_empty() {
         println!(
-            "(review queue empty — no systemic violations, rollbacks, findings, or escalations)"
+            "(review queue empty — no systemic violations, rollbacks, findings, escalations, or merge conflicts)"
         );
         return Ok(());
     }
@@ -554,7 +598,7 @@ mod tests {
         let rollbacks = vec![rb("overwatch", 300)];
         let findings = vec![finding("F-1", 200)];
 
-        let q = build_queue(&systemic, &rollbacks, &findings, &[]);
+        let q = build_queue(&systemic, &rollbacks, &findings, &[], &[]);
         assert_eq!(q.len(), 3);
         // Newest-first: 300 (rollback), 200 (ai-finding), 100 (systemic).
         assert_eq!(q[0].kind, EntryKind::Rollback);
@@ -569,12 +613,12 @@ mod tests {
     fn build_queue_missing_sources_degrade_gracefully() {
         // Only rollbacks present (systemic + findings empty): must still return
         // the rollback rows, not error / not drop everything.
-        let q = build_queue(&[], &[rb("p", 10)], &[], &[]);
+        let q = build_queue(&[], &[rb("p", 10)], &[], &[], &[]);
         assert_eq!(q.len(), 1);
         assert_eq!(q[0].kind, EntryKind::Rollback);
 
         // All empty -> empty queue.
-        assert!(build_queue(&[], &[], &[], &[]).is_empty());
+        assert!(build_queue(&[], &[], &[], &[], &[]).is_empty());
     }
 
     #[test]
@@ -584,8 +628,8 @@ mod tests {
         let s = vec![sig("blastguard:x", 50)];
         let r = vec![rb("p", 50)];
         let f = vec![finding("F", 50)];
-        let q1 = build_queue(&s, &r, &f, &[]);
-        let q2 = build_queue(&s, &r, &f, &[]);
+        let q1 = build_queue(&s, &r, &f, &[], &[]);
+        let q2 = build_queue(&s, &r, &f, &[], &[]);
         assert_eq!(q1, q2);
         // tags sorted: "ai-finding" < "rollback" < "systemic"
         assert_eq!(q1[0].kind, EntryKind::AiFinding);
@@ -601,7 +645,7 @@ mod tests {
 
     #[test]
     fn review_queue_entry_carries_kind_discriminator_in_json() {
-        let q = build_queue(&[], &[rb("overwatch", 1)], &[], &[]);
+        let q = build_queue(&[], &[rb("overwatch", 1)], &[], &[], &[]);
         let json = serde_json::to_string(&q).unwrap();
         assert!(json.contains("\"kind\":\"rollback\""));
     }
@@ -620,7 +664,7 @@ mod tests {
             vec![old.clone(), new.clone()],
             vec![new.clone(), old.clone()],
         ] {
-            let q = build_queue(&[], &[], &findings, &[]);
+            let q = build_queue(&[], &[], &findings, &[], &[]);
             let ai: Vec<_> = q
                 .iter()
                 .filter(|r| r.kind == EntryKind::AiFinding)
@@ -640,7 +684,7 @@ mod tests {
             finding_with("F-2", "finding two", 100),
             finding_with("F-3", "finding three", 100),
         ];
-        let q = build_queue(&[], &[], &findings, &[]);
+        let q = build_queue(&[], &[], &findings, &[], &[]);
         let ai = q.iter().filter(|r| r.kind == EntryKind::AiFinding).count();
         assert_eq!(
             ai, 3,
@@ -693,7 +737,7 @@ mod tests {
             None,
             999, // new ts
         );
-        let q = build_queue(&[], &[], &[stale_high, fresh_low], &[]);
+        let q = build_queue(&[], &[], &[stale_high, fresh_low], &[], &[]);
         assert_eq!(q.len(), 2);
         assert_eq!(q[0].identifier, "F-STALE-HIGH", "stale-high must lead");
         assert_eq!(q[0].severity, Severity::High);
@@ -708,7 +752,7 @@ mod tests {
         // tiebreak ordering between two genuinely distinct findings.
         let old_high = finding_with("F-OLD", "old finding content", 100);
         let new_high = finding_with("F-NEW", "new finding content", 200);
-        let q = build_queue(&[], &[], &[old_high, new_high], &[]);
+        let q = build_queue(&[], &[], &[old_high, new_high], &[], &[]);
         assert_eq!(q[0].identifier, "F-NEW");
         assert_eq!(q[1].identifier, "F-OLD");
     }
@@ -717,7 +761,7 @@ mod tests {
     fn systemic_and_rollback_rows_default_to_high_severity() {
         let systemic = vec![sig("blastguard:x", 10)];
         let rollbacks = vec![rb("overwatch", 20)];
-        let q = build_queue(&systemic, &rollbacks, &[], &[]);
+        let q = build_queue(&systemic, &rollbacks, &[], &[], &[]);
         for row in &q {
             assert_eq!(
                 row.severity,
@@ -752,7 +796,7 @@ mod tests {
                 1000 + i,
             ));
         }
-        let mut q = build_queue(&[], &[], &findings, &[]);
+        let mut q = build_queue(&[], &[], &findings, &[], &[]);
         q.truncate(1);
         assert_eq!(q[0].identifier, "F-HIGH");
     }
@@ -766,7 +810,7 @@ mod tests {
         // Two records of the SAME finding id (collapse to 1) alongside the other
         // two streams (which must each still contribute exactly one row).
         let findings = vec![finding("F-1", 30), finding("F-1", 40)];
-        let q = build_queue(&systemic, &rollbacks, &findings, &[]);
+        let q = build_queue(&systemic, &rollbacks, &findings, &[], &[]);
         assert_eq!(
             q.iter().filter(|r| r.kind == EntryKind::Systemic).count(),
             1
@@ -809,7 +853,7 @@ mod tests {
             None,
             200,
         );
-        let q = build_queue(&[], &[], &[a, b], &[]);
+        let q = build_queue(&[], &[], &[a, b], &[], &[]);
         let ai: Vec<_> = q
             .iter()
             .filter(|r| r.kind == EntryKind::AiFinding)
@@ -836,7 +880,7 @@ mod tests {
     #[test]
     fn build_queue_collapses_repeated_same_plugin_rollbacks() {
         let rollbacks = vec![rb("overwatch", 10), rb("overwatch", 20)];
-        let q = build_queue(&[], &rollbacks, &[], &[]);
+        let q = build_queue(&[], &rollbacks, &[], &[], &[]);
         let rb_rows: Vec<_> = q.iter().filter(|r| r.kind == EntryKind::Rollback).collect();
         assert_eq!(
             rb_rows.len(),
@@ -859,7 +903,7 @@ mod tests {
     #[test]
     fn build_queue_keeps_distinct_plugin_rollbacks_separate() {
         let rollbacks = vec![rb("overwatch", 10), rb("condukt", 20)];
-        let q = build_queue(&[], &rollbacks, &[], &[]);
+        let q = build_queue(&[], &rollbacks, &[], &[], &[]);
         let rb_rows = q.iter().filter(|r| r.kind == EntryKind::Rollback).count();
         assert_eq!(rb_rows, 2, "distinct plugins must not be collapsed");
     }
@@ -871,7 +915,7 @@ mod tests {
         let systemic = vec![sig("blastguard:x", 10)];
         let rollbacks = vec![rb("overwatch", 20)];
         let findings = vec![finding("F-1", 30)];
-        let q = build_queue(&systemic, &rollbacks, &findings, &[]);
+        let q = build_queue(&systemic, &rollbacks, &findings, &[], &[]);
         for row in &q {
             assert_eq!(
                 row.occurrences, 1,
@@ -894,7 +938,7 @@ mod tests {
         let rollbacks = vec![rb("overwatch", 300)];
         let escalations = vec![esc("esc-1", "runA", "t1", "Which approach?", 200)];
 
-        let q = build_queue(&systemic, &rollbacks, &[], &escalations);
+        let q = build_queue(&systemic, &rollbacks, &[], &escalations, &[]);
         assert_eq!(q.len(), 3);
 
         let escalation_row = q
@@ -920,6 +964,54 @@ mod tests {
         assert_eq!(q[2].kind, EntryKind::Systemic);
     }
 
+    // --- merge-conflict kind (design 625aa170 B / decision A) ----------------
+
+    fn mc(id: &str, origin: crate::merge_conflict::ConflictOrigin, ts: i64) -> MergeConflictEntry {
+        MergeConflictEntry {
+            conflict_id: id.to_string(),
+            origin,
+            run_id: "runA".to_string(),
+            branch: "condukt/t2".to_string(),
+            default_branch: "main".to_string(),
+            base_ref: "base".to_string(),
+            conflicted_files: vec!["crates/x/src/main.rs".to_string()],
+            diff_ours: "ours-diff".to_string(),
+            diff_theirs: "theirs-diff".to_string(),
+            ts,
+        }
+    }
+
+    /// RED->GREEN feature proof: an open merge conflict surfaces as a
+    /// High-severity `[merge-conflict]` row naming the conflicted file, and a
+    /// gated runtime-overlap surfaces under the SAME kind (unified surface).
+    #[test]
+    fn build_queue_surfaces_open_merge_conflict_as_high_severity_row() {
+        use crate::merge_conflict::ConflictOrigin;
+        let real = mc("c-real", ConflictOrigin::MergeConflict, 300);
+        let overlap = mc("c-overlap", ConflictOrigin::RuntimeOverlap, 250);
+
+        let q = build_queue(&[], &[], &[], &[], &[real, overlap]);
+        assert_eq!(q.len(), 2);
+        assert!(q.iter().all(|r| r.kind == EntryKind::MergeConflict));
+        assert!(q.iter().all(|r| r.severity == Severity::High));
+        // Newest-first within the High band: c-real (300) before c-overlap (250).
+        assert_eq!(q[0].identifier, "c-real");
+        assert!(q[0].summary.contains("crates/x/src/main.rs"));
+        assert!(q[0].summary.contains("merge-conflict"));
+        assert_eq!(q[1].identifier, "c-overlap");
+        assert!(
+            q[1].summary.contains("runtime-overlap"),
+            "overlap origin must be marked: {}",
+            q[1].summary
+        );
+    }
+
+    #[test]
+    fn merge_conflict_entry_kind_serializes_kebab_case() {
+        let j = serde_json::to_string(&EntryKind::MergeConflict).unwrap();
+        assert_eq!(j, "\"merge-conflict\"");
+    }
+
     /// Backward-compat: an existing 3-source scenario with `escalations = &[]`
     /// must yield the exact same rows as before this source existed — an empty
     /// escalation slice contributes nothing.
@@ -929,7 +1021,7 @@ mod tests {
         let rollbacks = vec![rb("overwatch", 300)];
         let findings = vec![finding("F-1", 200)];
 
-        let with_empty_escalations = build_queue(&systemic, &rollbacks, &findings, &[]);
+        let with_empty_escalations = build_queue(&systemic, &rollbacks, &findings, &[], &[]);
         assert_eq!(with_empty_escalations.len(), 3);
         assert!(with_empty_escalations
             .iter()

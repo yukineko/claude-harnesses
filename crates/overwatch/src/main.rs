@@ -13,6 +13,7 @@ mod disposition_cli;
 pub mod event;
 mod lease;
 mod lock;
+pub mod merge_conflict;
 mod reconcile;
 mod render;
 mod review_escalation;
@@ -311,6 +312,26 @@ enum Command {
     ReviewMetrics {
         #[arg(long)]
         json: bool,
+    },
+    /// Resolve a blocked merge (design 625aa170 B): a real git 3-way conflict
+    /// or a gated mid-flight overlap surfaced in `review-queue` as
+    /// `[merge-conflict]`. Records a resolution (join key: `--id`) so the entry
+    /// leaves the open set and condukt's reconciliation driver can act on it.
+    /// Escalate/Block only on the policy side — `--choose` is the human's
+    /// explicit pick (never an auto last-writer-wins). Idempotent per id.
+    ResolveMergeConflict {
+        /// The conflict_id to resolve (from `review-queue --json`).
+        #[arg(long = "id")]
+        id: String,
+        /// Which side to keep: ours | theirs | manual.
+        #[arg(long)]
+        choose: String,
+        /// Who decided: human | policy (default human).
+        #[arg(long, default_value = "human")]
+        by: String,
+        /// Optional free-text note recorded with the resolution.
+        #[arg(long)]
+        note: Option<String>,
     },
     /// The unified human review surface: merge systemic gate violations, canary
     /// rollback events, and AI-review findings into ONE risk-ordered list
@@ -664,6 +685,14 @@ fn main() -> Result<()> {
         }
         Command::ReviewMetrics { json } => {
             disposition_cli::metrics(json)?;
+        }
+        Command::ResolveMergeConflict {
+            id,
+            choose,
+            by,
+            note,
+        } => {
+            merge_conflict::record_resolution(id, &choose, &by, note, store::now())?;
         }
         Command::ReviewQueue {
             json,

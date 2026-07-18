@@ -2693,7 +2693,33 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
             let path = worktree::create(&repo, &cfg.worktree_base, &topic, &branch)?;
             println!("{}", path.display());
         }
-        WtAction::Merge { branch } => worktree::merge(cfg, &repo, &branch, &cfg.default_branch)?,
+        WtAction::Merge { branch } => {
+            match worktree::merge(cfg, &repo, &branch, &cfg.default_branch)? {
+                worktree::MergeOutcome::Merged => {
+                    println!("merged '{}' into {}", branch, cfg.default_branch);
+                }
+                // A HOLD (mid-flight runtime overlap) or a real conflict is a
+                // hold-for-review, NOT a hard error: report it and exit 0. The
+                // conflict/overlap is now visible in `overwatch review-queue` and
+                // cleared via `condukt worktree resolve-merge` after resolution.
+                worktree::MergeOutcome::Held(id) => {
+                    println!(
+                        "HELD '{}': mid-flight runtime overlap ({id}); merge blocked for review. \
+                     Resolve via `overwatch resolve-merge-conflict --id {id}` then \
+                     `condukt worktree resolve-merge --branch {}`.",
+                        branch, branch
+                    );
+                }
+                worktree::MergeOutcome::Conflict(id) => {
+                    println!(
+                        "CONFLICT '{}': merge conflict recorded ({id}); merge blocked for review. \
+                     Resolve via `overwatch resolve-merge-conflict --id {id}` then \
+                     `condukt worktree resolve-merge --branch {}`.",
+                        branch, branch
+                    );
+                }
+            }
+        }
         WtAction::Remove { path, branch } => {
             let undeleted = worktree::remove(&repo, &path, branch.as_deref())?;
             if let Some(b) = undeleted {
@@ -3023,9 +3049,22 @@ fn run_pr(cfg: &Config, cwd: &Path, action: PrAction) -> Result<()> {
                     // Fail-soft: a merge failure (e.g. conflicts) is reported and
                     // the turn still exits 0 — it never breaks the turn.
                     match worktree::merge(cfg, &repo, &branch, &cfg.default_branch) {
-                        Ok(()) => {
+                        Ok(worktree::MergeOutcome::Merged) => {
                             println!("CI green: merged '{branch}' into '{}'.", cfg.default_branch)
                         }
+                        // Hold-for-review (mid-flight overlap or real conflict):
+                        // a real block routed to the consensus review surface,
+                        // but still exit 0 (left as local commits until resolved).
+                        Ok(worktree::MergeOutcome::Held(id)) => println!(
+                            "CI green but '{branch}' is HELD by a mid-flight runtime overlap \
+                             ({id}); merge blocked for review, left as local commits. \
+                             Resolve then `condukt worktree resolve-merge --branch {branch}`."
+                        ),
+                        Ok(worktree::MergeOutcome::Conflict(id)) => println!(
+                            "CI green but merge of '{branch}' hit a conflict ({id}); recorded \
+                             for review, left as local commits. Resolve then \
+                             `condukt worktree resolve-merge --branch {branch}`."
+                        ),
                         Err(e) => println!(
                             "CI green but merge of '{branch}' into '{}' failed; \
                              left work as local commits (fail-soft): {e:#}",

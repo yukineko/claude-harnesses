@@ -416,19 +416,109 @@ fn git_try(dir: &Path, args: &[&str]) -> Result<(bool, String, String)> {
     ))
 }
 
+/// The outcome of [`merge`]. A blocked merge (a mid-flight runtime-overlap HOLD
+/// or a real 3-way conflict) is NOT a hard error — it is a hold-for-review
+/// (design 625aa170): the merge is skipped/recorded and the caller reports it
+/// and exits 0. Only a genuine git failure (a failed checkout, etc.) is an
+/// `Err`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeOutcome {
+    /// The branch was merged into the default branch.
+    Merged,
+    /// A mid-flight runtime overlap (decision A) held this branch BEFORE the
+    /// merge was attempted; carries the open hold's `conflict_id`. Resolve it
+    /// (`overwatch resolve-merge-conflict` + `condukt worktree resolve-merge`)
+    /// then retry.
+    Held(String),
+    /// A real 3-way conflict was detected in the trial merge; a
+    /// `MergeConflictEntry` was recorded to the consensus review surface (both
+    /// diffs + conflicted files) and the merge was aborted. Carries the
+    /// recorded `conflict_id`.
+    Conflict(String),
+}
+
+/// Look up an OPEN runtime-overlap merge-hold for `branch` in the overwatch
+/// review surface (decision A). Returns the hold's `conflict_id` when the
+/// branch is held. Fail-soft: any read error / absent store degrades to "no
+/// hold" (never blocks a merge on a compute error).
+fn open_runtime_overlap_hold(repo: &Path, branch: &str) -> Option<String> {
+    let open = overwatch::store::open_merge_conflicts(repo).ok()?;
+    open.into_iter()
+        .find(|e| {
+            e.branch == branch
+                && matches!(
+                    e.origin,
+                    overwatch::merge_conflict::ConflictOrigin::RuntimeOverlap
+                )
+        })
+        .map(|e| e.conflict_id)
+}
+
+/// Parse the unique conflicted paths out of `git ls-files --unmerged` output
+/// (lines shaped `<mode> <sha> <stage>\t<path>`, one per stage). Order-preserving,
+/// de-duplicated.
+fn parse_unmerged_paths(unmerged: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in unmerged.lines() {
+        if let Some((_, path)) = line.split_once('\t') {
+            let p = path.trim().to_string();
+            if !p.is_empty() && !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// The frozen three-dot merge-base SHA of `default_branch` and `branch` (the
+/// point both diffs are taken against). Falls back to `default_branch` when the
+/// merge-base can't be resolved.
+fn merge_base_sha(repo: &Path, default_branch: &str, branch: &str) -> String {
+    git(repo, &["merge-base", default_branch, branch])
+        .map(|s| s.trim().to_string())
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| default_branch.to_string())
+}
+
+/// Best-effort `git diff <from>...<to>` (three-dot), empty on failure.
+fn git_diff_range(repo: &Path, from: &str, to: &str) -> String {
+    git(repo, &["diff", &format!("{from}...{to}")]).unwrap_or_default()
+}
+
 /// Merge `branch` into the configured default branch. Verifies the repo is
 /// actually on the default branch first (verify -> act).
 ///
-/// Pre-flight: attempts `git merge --no-commit --no-ff` to detect conflicts
-/// before performing the real merge. If conflicts are detected, aborts the
-/// trial merge and returns an error without touching the branch history.
-pub fn merge(cfg: &Config, repo: &Path, branch: &str, default_branch: &str) -> Result<()> {
+/// Gate (design 625aa170):
+/// 1. **Pre-merge hold (decision A)**: if a mid-flight runtime overlap has HELD
+///    this branch for review, skip the merge and return [`MergeOutcome::Held`].
+/// 2. **Trial merge (no-commit)**: on a real 3-way conflict, CAPTURE a
+///    `MergeConflictEntry` (conflicted files + both byte-bounded diffs) to the
+///    consensus review surface, abort the trial, and return
+///    [`MergeOutcome::Conflict`] — the merge still stops (block PRESERVED) but
+///    it is now visible/resolvable instead of a silent local-only degrade, and
+///    it is a hold-for-review (exit 0), not a hard error.
+/// 3. **Clean**: abort the trial and perform the real merge → [`MergeOutcome::Merged`].
+pub fn merge(
+    cfg: &Config,
+    repo: &Path,
+    branch: &str,
+    default_branch: &str,
+) -> Result<MergeOutcome> {
     // Serialize with every other primary-repo default-branch mutator (another
     // condukt run's merge / main-tree commit / `git worktree prune`) on ONE
     // repo-scoped advisory lock, so two runs in the same repo never race on the
     // default branch. Held for the entire checkout+merge critical section and
     // released on drop. Fail-soft: `acquire_repo_primary` never panics.
     let _repo_lock = lock::acquire_repo_primary(cfg, repo);
+
+    // ── Pre-merge hold gate (decision A) ─────────────────────────────────────
+    // A detected mid-flight actual-diff overlap HOLDS this branch for review.
+    // Do not merge until it is resolved (the resolution clears the hold).
+    if let Some(conflict_id) = open_runtime_overlap_hold(repo, branch) {
+        return Ok(MergeOutcome::Held(conflict_id));
+    }
+
     git(repo, &["checkout", default_branch])
         .with_context(|| format!("could not checkout {default_branch} before merge"))?;
     let current = git(repo, &["branch", "--show-current"])?;
@@ -438,29 +528,63 @@ pub fn merge(cfg: &Config, repo: &Path, branch: &str, default_branch: &str) -> R
 
     // ── Pre-flight: trial merge (no-commit) to detect conflicts ──────────────
     // `git merge --no-commit --no-ff` either succeeds with a staged merge or
-    // fails immediately when conflicts exist. In both cases we abort and then
-    // re-run the real merge only when there are no conflicts.
-    let (trial_ok, _, trial_stderr) = git_try(repo, &["merge", "--no-commit", "--no-ff", branch])?;
+    // fails immediately when conflicts exist. Capture the conflicted paths from
+    // the index BEFORE aborting (works whether the trial exited non-zero or left
+    // CONFLICT markers with a zero exit).
+    let (trial_ok, _, _trial_stderr) = git_try(repo, &["merge", "--no-commit", "--no-ff", branch])?;
+    let unmerged = git(repo, &["ls-files", "--unmerged"]).unwrap_or_default();
+    let mut conflicted = parse_unmerged_paths(&unmerged);
 
-    if !trial_ok {
-        // Trial merge reported conflicts. Abort to restore clean state.
+    if !trial_ok || !conflicted.is_empty() {
+        // Capture BEFORE the abort: conflicted files + both sides' diffs (frozen
+        // merge-base, byte-bounded). Recorded to the consensus review surface so
+        // the conflict is visible/resolvable instead of a silent local degrade.
+        let base = merge_base_sha(repo, default_branch, branch);
+        if conflicted.is_empty() {
+            // Trial failed before staging any index entries — fall back to the
+            // symmetric name-only diff so the entry still names the files.
+            conflicted = git(
+                repo,
+                &[
+                    "diff",
+                    "--name-only",
+                    &format!("{default_branch}...{branch}"),
+                ],
+            )
+            .map(|s| {
+                s.lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        }
+        let conflict_id = format!("{branch}/merge-conflict");
+        let entry = overwatch::merge_conflict::MergeConflictEntry {
+            conflict_id: conflict_id.clone(),
+            origin: overwatch::merge_conflict::ConflictOrigin::MergeConflict,
+            run_id: String::new(),
+            branch: branch.to_string(),
+            default_branch: default_branch.to_string(),
+            base_ref: base.clone(),
+            conflicted_files: conflicted,
+            diff_ours: overwatch::merge_conflict::truncate_diff(
+                &git_diff_range(repo, &base, default_branch),
+                overwatch::merge_conflict::DIFF_BYTE_CAP,
+            ),
+            diff_theirs: overwatch::merge_conflict::truncate_diff(
+                &git_diff_range(repo, &base, branch),
+                overwatch::merge_conflict::DIFF_BYTE_CAP,
+            ),
+            ts: overwatch::store::now(),
+        };
+        // Idempotent per conflict_id. Fail-soft on the write (recording must
+        // never break the turn); the abort below always runs.
+        if let Err(e) = overwatch::store::append_merge_conflict(repo, &entry) {
+            eprintln!("condukt: could not record merge conflict (continuing): {e}");
+        }
         let _ = git_try(repo, &["merge", "--abort"]);
-        bail!(
-            "merge of '{branch}' into '{default_branch}' has conflicts (pre-flight); \
-             aborting without modifying history.\n{trial_stderr}"
-        );
-    }
-
-    // Even a "successful" --no-commit merge may leave CONFLICT markers when
-    // git decides to apply both sides with markers rather than refusing. Use
-    // `git ls-files --unmerged` to catch those cases.
-    let unmerged = git(repo, &["ls-files", "--unmerged"])?;
-    if !unmerged.trim().is_empty() {
-        let _ = git_try(repo, &["merge", "--abort"]);
-        bail!(
-            "merge of '{branch}' into '{default_branch}' has unresolved conflicts (pre-flight); \
-             aborting without modifying history."
-        );
+        return Ok(MergeOutcome::Conflict(conflict_id));
     }
 
     // No conflicts found in trial — abort the staged trial and do the real merge.
@@ -469,7 +593,7 @@ pub fn merge(cfg: &Config, repo: &Path, branch: &str, default_branch: &str) -> R
 
     git(repo, &["merge", "--no-edit", branch])
         .with_context(|| format!("merge of {branch} into {default_branch} failed"))?;
-    Ok(())
+    Ok(MergeOutcome::Merged)
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -479,6 +603,27 @@ mod worktree_remove_tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    // `merge()` now reads/writes the overwatch store, which keys off $HOME.
+    // Serialize the HOME swap so a merge test never races another HOME-mutating
+    // test and never touches the real `~/.overwatch`.
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Run `f` with `$HOME` pinned to `home` (restored afterwards), serialized
+    /// against other HOME swaps. Returns `f`'s value.
+    fn with_home<R>(home: &Path, f: impl FnOnce() -> R) -> R {
+        let _g = HOME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        let out = f();
+        match prev {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        out
+    }
 
     /// Initialise a bare-minimum git repo with an initial commit on `main`.
     fn init_repo() -> (TempDir, PathBuf) {
@@ -541,19 +686,32 @@ mod worktree_remove_tests {
 
     #[test]
     fn worktree_merge_no_conflict_succeeds() {
-        let (_tmp, repo) = init_repo();
+        let (tmp, repo) = init_repo();
         make_branch(&repo, "feat", "feat.txt", "feature content\n");
 
         let cfg = test_cfg(&repo);
-        merge(&cfg, &repo, "feat", "main").expect("clean merge should succeed");
+        let home = tmp.path().join("home-clean");
+        fs::create_dir_all(&home).unwrap();
+        let outcome = with_home(&home, || {
+            merge(&cfg, &repo, "feat", "main").expect("clean merge should succeed")
+        });
+        assert_eq!(
+            outcome,
+            MergeOutcome::Merged,
+            "a clean merge must report Merged"
+        );
 
         // The file should now exist on main
         assert!(repo.join("feat.txt").exists());
     }
 
+    /// A real 3-way conflict is NO LONGER a hard error (design 625aa170): the
+    /// merge is HELD for review — `merge()` returns `MergeOutcome::Conflict`,
+    /// records a `MergeConflictEntry` (both diffs + the conflicted file) to the
+    /// overwatch consensus review surface, and aborts so the repo stays clean.
     #[test]
-    fn worktree_merge_conflict_returns_error() {
-        let (_tmp, repo) = init_repo();
+    fn worktree_merge_conflict_records_entry_and_holds() {
+        let (tmp, repo) = init_repo();
 
         // Both branches modify the same file at the same line → guaranteed conflict
         let conflict_file = "shared.txt";
@@ -576,16 +734,41 @@ mod worktree_remove_tests {
         git(&repo, &["commit", "-m", "main edit"]).unwrap();
 
         let cfg = test_cfg(&repo);
-        let result = merge(&cfg, &repo, "conflict-branch", "main");
-        assert!(
-            result.is_err(),
-            "conflicting merge should return an error, but got Ok"
-        );
+        let home = tmp.path().join("home-conflict");
+        fs::create_dir_all(&home).unwrap();
+        let (outcome, open) = with_home(&home, || {
+            let outcome = merge(&cfg, &repo, "conflict-branch", "main")
+                .expect("a held conflict is a hold-for-review, not a hard error");
+            // Read back the recorded entries under the sandboxed HOME.
+            let open = overwatch::store::open_merge_conflicts(&repo).unwrap_or_default();
+            (outcome, open)
+        });
 
-        let err_msg = format!("{:?}", result.unwrap_err());
+        let conflict_id = match &outcome {
+            MergeOutcome::Conflict(id) => id.clone(),
+            other => panic!("conflicting merge must report Conflict, got {other:?}"),
+        };
+        assert_eq!(conflict_id, "conflict-branch/merge-conflict");
+
+        // The conflict was RECORDED to the consensus review surface (open set).
+        let entry = open
+            .iter()
+            .find(|e| e.conflict_id == conflict_id)
+            .expect("the conflict must be recorded as an open merge-conflict entry");
+        assert_eq!(
+            entry.origin,
+            overwatch::merge_conflict::ConflictOrigin::MergeConflict
+        );
+        assert_eq!(entry.branch, "conflict-branch");
+        assert_eq!(entry.default_branch, "main");
         assert!(
-            err_msg.contains("conflict") || err_msg.contains("unresolved"),
-            "error message should mention conflicts, got: {err_msg}"
+            entry.conflicted_files.iter().any(|f| f == conflict_file),
+            "the entry must name the conflicted file, got {:?}",
+            entry.conflicted_files
+        );
+        assert!(
+            !entry.diff_ours.is_empty() && !entry.diff_theirs.is_empty(),
+            "the entry must capture BOTH sides' diffs"
         );
 
         // The repo should be in a clean state (no in-progress merge)

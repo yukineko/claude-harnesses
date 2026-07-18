@@ -107,17 +107,27 @@ impl LeaseLock {
     /// Default bounded wait before degrading to unlocked. Generous enough that
     /// a normal `begin()` RMW cycle (a few file ops) always releases well
     /// within it.
-    const DEADLINE: Duration = Duration::from_secs(10);
+    pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
 
     /// Acquire the lease-registry lock, waiting (bounded) for any live holder
     /// to release. Reaps a stale lock whose owner pid is gone. Never fails: on
-    /// timeout it logs and returns an unlocked guard so the caller's
-    /// load→check→save still proceeds (fail-soft).
+    /// timeout it logs and returns an unlocked guard (fail-soft).
+    ///
+    /// `#[allow(dead_code)]`: every production lease/store mutator migrated to
+    /// the hard-skip [`LeaseLock::acquire_or_skip`] — proceeding under an
+    /// UNLOCKED guard on timeout was exactly the double-claim/double-write window
+    /// that closed. This wait-variant is retained as the concurrency and
+    /// wedged-holder tests' live lock (a genuinely-held guard); the bin target
+    /// (which re-declares `mod lock`) and the lib both read a pub fn only reached
+    /// from `#[cfg(test)]` as dead.
+    #[allow(dead_code)]
     pub fn acquire(cwd: &Path) -> Self {
         Self::acquire_with_deadline(cwd, Self::DEADLINE)
     }
 
-    /// Like [`LeaseLock::acquire`] but with an explicit deadline (used by tests).
+    /// Like [`LeaseLock::acquire`] but with an explicit deadline. See
+    /// [`LeaseLock::acquire`] for why this wait-variant is `allow(dead_code)`.
+    #[allow(dead_code)]
     pub fn acquire_with_deadline(cwd: &Path, deadline: Duration) -> Self {
         let path = match lock_path(cwd) {
             Ok(p) => p,
@@ -135,11 +145,6 @@ impl LeaseLock {
     /// means the lock degraded to unlocked (fail-soft after a timeout or I/O
     /// error) and any RMW performed under it may race — the caller should treat
     /// that as unsafe to mutate.
-    // `#[allow(dead_code)]`: new caller-facing API. It is public library surface
-    // (used by lease.rs, owned by another task, wired separately), but overwatch
-    // also builds a `bin` that re-declares `mod lock` and does not call it yet, so
-    // the bin target reads it as dead until then. Exercised now by the tests.
-    #[allow(dead_code)]
     pub fn held(&self) -> bool {
         self.path.is_some()
     }
@@ -151,8 +156,11 @@ impl LeaseLock {
     /// mutating unlocked, which under pathological contention is what lets two
     /// timed-out writers both proceed and double-claim (last-writer-wins).
     /// Fail-soft: never panics. Uses the same [`LeaseLock::DEADLINE`] as
-    /// [`LeaseLock::acquire`].
-    #[allow(dead_code)] // caller-facing API wired by lease.rs (another task); see `held`.
+    /// [`LeaseLock::acquire`]. Live callers: `lease::{begin, run, end, heartbeat,
+    /// reap}`, `control::reassign`, and the `store::` registry / check-then-append
+    /// mutators (`append_bridged_*`, `append_disposition`, `append_merge_*`,
+    /// `record_changeset_and_detect`, `mark_*_merged`, `prune_stale_changesets`,
+    /// the review-findings compaction), plus `audit_round_cli::close_at`.
     pub fn acquire_or_skip(cwd: &Path) -> Option<Self> {
         let path = match lock_path(cwd) {
             Ok(p) => p,
@@ -166,11 +174,28 @@ impl LeaseLock {
         Self::acquire_or_skip_at(path, Self::DEADLINE)
     }
 
+    /// Deadline-parameterized [`LeaseLock::acquire_or_skip`]. The hard-skip
+    /// check-then-append path ([`crate::store::append_disposition`]) delegates
+    /// here so both production (the 10s default) and its wedged-holder
+    /// regression test (a short deadline) drive the SAME skip-on-contention
+    /// code. Same fail-soft mapping (a degraded/unheld guard maps to `None`).
+    pub(crate) fn acquire_or_skip_with_deadline(cwd: &Path, deadline: Duration) -> Option<Self> {
+        let path = match lock_path(cwd) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!(
+                    "overwatch: could not resolve lease lock path ({e}); skipping (treat as held)"
+                );
+                return None;
+            }
+        };
+        Self::acquire_or_skip_at(path, deadline)
+    }
+
     /// Core of [`LeaseLock::acquire_or_skip`] against an explicit lock `path`:
     /// runs the same fail-soft acquire and maps the degraded (unheld) guard to
     /// `None`. Shared by the public API and the tests (which drive it with a
     /// short deadline against a self-contained temp path).
-    #[allow(dead_code)] // reached via `acquire_or_skip` (wired by lease.rs) + tests.
     fn acquire_or_skip_at(path: PathBuf, deadline: Duration) -> Option<Self> {
         let guard = Self::acquire_at(path, deadline);
         if guard.held() {

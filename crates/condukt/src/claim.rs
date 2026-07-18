@@ -57,6 +57,34 @@ use std::path::{Path, PathBuf};
 /// a real run, so it cannot collide with one.
 const CLAIMS_LOCK_KEY: &str = "__claims__";
 
+/// Synthetic holder run-id stamped on a [`Skipped`] entry when the claims-registry
+/// lock was contended past its deadline (rather than a real peer run holding the
+/// file). Marks a fail-CLOSED skip so the caller HARD-SKIPS its task instead of
+/// proceeding to an unlocked read-modify-write that could double-claim.
+const LOCK_CONTENDED_HOLDER: &str = "__lock_contended__";
+
+/// Fail-CLOSED outcome for a contended claims-registry lock: every requested
+/// identity (file path or task hashkey) is reported skipped and none claimed, so
+/// the caller treats them as unavailable and skips the task. This is the whole
+/// point of the hard-skip lock — under pathological contention two timed-out
+/// writers must NOT both proceed to an unlocked RMW and double-claim the same
+/// work (last-writer-wins). The synthetic [`LOCK_CONTENDED_HOLDER`] distinguishes
+/// a contention skip from a real peer-run skip.
+fn all_skipped(idents: &[String]) -> ClaimOutcome {
+    ClaimOutcome {
+        claimed: Vec::new(),
+        skipped: idents
+            .iter()
+            .map(|f| Skipped {
+                file: f.clone(),
+                holder_run: LOCK_CONTENDED_HOLDER.to_string(),
+                holder_pid: 0,
+                holder_session: None,
+            })
+            .collect(),
+    }
+}
+
 /// Test-only race-window widener for [`claim_tasks`]'s load->check->save section.
 /// Real process-spawn overhead dwarfs that section's natural duration, so two
 /// racing `condukt state claim-task` processes essentially never interleave in
@@ -248,9 +276,31 @@ pub fn claim_files(
     files: &[String],
     now: i64,
 ) -> Result<ClaimOutcome> {
+    claim_files_with_deadline(cfg, cwd, run_id, session_id, files, now, RunLock::DEADLINE)
+}
+
+/// Deadline-parameterized core of [`claim_files`] (production passes the 10s
+/// default; the wedged-holder regression test passes a short deadline to drive
+/// the same skip-on-contention path fast). HARD-SKIP semantics: if the registry
+/// lock cannot be acquired within `deadline` we return an [`all_skipped`]
+/// outcome and NEVER touch the registry — the old fail-soft `acquire` instead
+/// handed back an UNLOCKED guard and let the RMW proceed, which is exactly the
+/// double-claim window this closes.
+fn claim_files_with_deadline(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+    session_id: Option<&str>,
+    files: &[String],
+    now: i64,
+    deadline: std::time::Duration,
+) -> Result<ClaimOutcome> {
     let ttl = ttl_secs(cfg);
     let path = registry_path(cfg, cwd);
-    let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
+    let _lock = match RunLock::acquire_or_skip_with_deadline(cfg, cwd, CLAIMS_LOCK_KEY, deadline) {
+        Some(l) => l,
+        None => return Ok(all_skipped(files)),
+    };
     let mut reg = load(&path);
     reap(&mut reg, now, ttl);
 
@@ -317,7 +367,13 @@ pub fn claim_tasks(
 ) -> Result<ClaimOutcome> {
     let ttl = ttl_secs(cfg);
     let path = registry_path(cfg, cwd);
-    let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
+    // HARD-SKIP on contention: proceeding to an unlocked RMW here is what lets
+    // two timed-out writers both claim the same hashkey (double-claim). Treat
+    // every requested hashkey as unavailable so the caller skips the task.
+    let _lock = match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+        Some(l) => l,
+        None => return Ok(all_skipped(hashkeys)),
+    };
     let mut reg = load(&path);
     reap(&mut reg, now, ttl);
     artificial_race_delay();
@@ -366,7 +422,13 @@ pub fn claim_tasks(
 /// / gate cleanup). Returns the total number of claims released.
 pub fn release_run(cfg: &Config, cwd: &Path, run_id: &str) -> Result<usize> {
     let path = registry_path(cfg, cwd);
-    let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
+    // On contention, SKIP (return 0 released) rather than run an unlocked RMW
+    // that could clobber a concurrent writer's fresh claims. Safe: an unreleased
+    // claim ages out via the heartbeat-TTL stale reap.
+    let _lock = match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+        Some(l) => l,
+        None => return Ok(0),
+    };
     let mut reg = load(&path);
     let before = reg.files.len() + reg.task_claims.len();
     reg.files.retain(|_, c| c.run_id != run_id);
@@ -380,7 +442,12 @@ pub fn release_run(cfg: &Config, cwd: &Path, run_id: &str) -> Result<usize> {
 /// status). Only removes files this run actually holds. Returns the count removed.
 pub fn release_files(cfg: &Config, cwd: &Path, run_id: &str, files: &[String]) -> Result<usize> {
     let path = registry_path(cfg, cwd);
-    let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
+    // On contention, SKIP (0 released) rather than run an unlocked RMW that
+    // could clobber concurrent claims. Safe: a stale claim ages out via TTL.
+    let _lock = match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+        Some(l) => l,
+        None => return Ok(0),
+    };
     let mut reg = load(&path);
     let before = reg.files.len();
     reg.files
@@ -397,7 +464,12 @@ pub fn release_files(cfg: &Config, cwd: &Path, run_id: &str, files: &[String]) -
 #[allow(dead_code)]
 pub fn release_tasks(cfg: &Config, cwd: &Path, hashkeys: &[String]) -> Result<usize> {
     let path = registry_path(cfg, cwd);
-    let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
+    // On contention, SKIP (0 released) rather than run an unlocked RMW that
+    // could clobber concurrent claims. Safe: a stale claim ages out via TTL.
+    let _lock = match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+        Some(l) => l,
+        None => return Ok(0),
+    };
     let mut reg = load(&path);
     let before = reg.task_claims.len();
     reg.task_claims.retain(|k, _| !hashkeys.contains(k));
@@ -412,7 +484,13 @@ pub fn release_tasks(cfg: &Config, cwd: &Path, hashkeys: &[String]) -> Result<us
 pub fn heartbeat(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> Result<usize> {
     let ttl = ttl_secs(cfg);
     let path = registry_path(cfg, cwd);
-    let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
+    // On contention, SKIP (0 refreshed) rather than run an unlocked RMW that
+    // could clobber concurrent claims. A single missed heartbeat is safe — the
+    // claim only ages out after the full stuck-TTL of silence.
+    let _lock = match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+        Some(l) => l,
+        None => return Ok(0),
+    };
     let mut reg = load(&path);
     reap(&mut reg, now, ttl);
     let mut n = 0;
@@ -431,11 +509,22 @@ pub fn heartbeat(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> Result<usi
 pub fn active_claims(cfg: &Config, cwd: &Path, now: i64) -> Result<Registry> {
     let ttl = ttl_secs(cfg);
     let path = registry_path(cfg, cwd);
-    let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
-    let mut reg = load(&path);
-    reap(&mut reg, now, ttl);
-    save(&path, &reg)?;
-    Ok(reg)
+    // Observability read. On contention, return a freshly-loaded, reaped
+    // snapshot WITHOUT persisting (the save is only a housekeeping compaction) —
+    // proceeding to an unlocked save could clobber a concurrent writer.
+    match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+        Some(_lock) => {
+            let mut reg = load(&path);
+            reap(&mut reg, now, ttl);
+            save(&path, &reg)?;
+            Ok(reg)
+        }
+        None => {
+            let mut reg = load(&path);
+            reap(&mut reg, now, ttl);
+            Ok(reg)
+        }
+    }
 }
 
 /// Who holds a task claim — the observability slice of a [`Claim`] for the
@@ -559,15 +648,28 @@ fn join_execution_state(
 pub fn write_execution_state(cfg: &Config, cwd: &Path, now: i64) -> Result<Vec<ExecutionEntry>> {
     let ttl = ttl_secs(cfg);
     let path = registry_path(cfg, cwd);
-    let _lock = RunLock::acquire(cfg, cwd, CLAIMS_LOCK_KEY);
-    let mut reg = load(&path);
-    reap(&mut reg, now, ttl);
-    save(&path, &reg)?;
-
-    let pending = backlog_pending();
-    let entries = join_execution_state(&reg.task_claims, &pending);
-    save(&execution_state_path(cfg, cwd), &entries)?;
-    Ok(entries)
+    // On contention, degrade to a read-only view: compute and return the joined
+    // rows from a freshly-loaded, reaped snapshot but persist NOTHING (neither
+    // the registry compaction nor the execution-state file), rather than run an
+    // unlocked RMW that could clobber a concurrent writer. The view regenerates
+    // on the next uncontended call.
+    match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
+        Some(_lock) => {
+            let mut reg = load(&path);
+            reap(&mut reg, now, ttl);
+            save(&path, &reg)?;
+            let pending = backlog_pending();
+            let entries = join_execution_state(&reg.task_claims, &pending);
+            save(&execution_state_path(cfg, cwd), &entries)?;
+            Ok(entries)
+        }
+        None => {
+            let mut reg = load(&path);
+            reap(&mut reg, now, ttl);
+            let pending = backlog_pending();
+            Ok(join_execution_state(&reg.task_claims, &pending))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1066,6 +1168,66 @@ mod tests {
         let parsed: Vec<ExecutionEntry> = serde_json::from_str(&txt).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].hashkey, "hk-1");
+    }
+
+    // A wedged holder of the claims-registry lock must make the REAL production
+    // claim path HARD-SKIP (report every file skipped, claim none, persist
+    // nothing) rather than degrade to an unlocked read-modify-write that could
+    // double-claim. RED with the old fail-soft `acquire`: it hands back an
+    // unlocked guard, the RMW proceeds, and the files are claimed (claimed
+    // non-empty, registry written). GREEN with `acquire_or_skip_with_deadline`.
+    #[test]
+    fn contended_claims_lock_makes_claim_files_hard_skip_not_double_claim() {
+        use std::time::Duration;
+        let tmp = make_tmp_dir("wedge-skip");
+        let cfg = make_cfg(&tmp);
+
+        // Wedge a live holder of the reserved claims lock for the whole test.
+        let held = RunLock::acquire(&cfg, &tmp, CLAIMS_LOCK_KEY);
+        assert!(
+            held.held(),
+            "precondition: wedge must genuinely hold the claims lock"
+        );
+
+        // The real production path (claim_files -> claim_files_with_deadline)
+        // must skip every file under a short deadline rather than proceed
+        // unlocked and double-claim.
+        let out = claim_files_with_deadline(
+            &cfg,
+            &tmp,
+            "runB",
+            Some("sessB"),
+            &files(&["src/a.rs", "src/b.rs"]),
+            100,
+            Duration::from_millis(120),
+        )
+        .unwrap();
+
+        assert!(
+            out.claimed.is_empty(),
+            "contended claim must claim NOTHING, got: {:?}",
+            out.claimed
+        );
+        assert_eq!(
+            out.skipped.len(),
+            2,
+            "contended claim must report every requested file skipped"
+        );
+        assert!(
+            out.skipped
+                .iter()
+                .all(|s| s.holder_run == LOCK_CONTENDED_HOLDER),
+            "skips must be marked as lock-contention skips"
+        );
+
+        // Nothing was written to the registry (no unlocked double-claim).
+        let path = registry_path(&cfg, &tmp);
+        assert!(
+            !path.exists() || load(&path).files.is_empty(),
+            "a contended claim must not persist any claim to the registry"
+        );
+
+        drop(held);
     }
 
     #[test]

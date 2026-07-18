@@ -104,18 +104,26 @@ impl StoreLock {
     /// Default bounded wait before degrading to unlocked. Generous enough
     /// that a normal RMW cycle (a few file ops) always releases well within
     /// it.
-    const DEADLINE: Duration = Duration::from_secs(10);
+    pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
 
     /// Acquire the store lock, waiting (bounded) for any live holder to
     /// release. Reaps a stale lock whose owner pid is gone. Never fails: on
-    /// timeout it logs and returns an unlocked guard so the caller's load
-    /// still proceeds (fail-soft).
+    /// timeout it logs and returns an unlocked guard (fail-soft).
+    ///
+    /// `#[allow(dead_code)]`: production ([`crate::store::Store::load`]) migrated
+    /// to the hard-skip [`StoreLock::acquire_or_skip`] — proceeding under an
+    /// UNLOCKED guard on timeout was exactly the double-write window that closed.
+    /// This wait-variant is retained as the wedged-holder regression test's live
+    /// lock (a genuinely-held guard); hypothesis is a bin crate, so a pub fn only
+    /// reached from `#[cfg(test)]` reads as dead in the bin build.
+    #[allow(dead_code)]
     pub fn acquire(cfg: &Config) -> Self {
         Self::acquire_with_deadline(cfg, Self::DEADLINE)
     }
 
-    /// Like [`StoreLock::acquire`] but with an explicit deadline (used by
-    /// tests).
+    /// Like [`StoreLock::acquire`] but with an explicit deadline. See
+    /// [`StoreLock::acquire`] for why this wait-variant is `allow(dead_code)`.
+    #[allow(dead_code)]
     pub fn acquire_with_deadline(cfg: &Config, deadline: Duration) -> Self {
         Self::acquire_at(lock_path(cfg), deadline)
     }
@@ -124,11 +132,6 @@ impl StoreLock {
     /// means the lock degraded to unlocked (fail-soft after a timeout or I/O
     /// error) and any RMW performed under it may race — the caller should treat
     /// that as unsafe to mutate.
-    // `#[allow(dead_code)]`: this is a new caller-facing API; its caller lives in
-    // `store.rs` (owned by another task) and is wired separately. hypothesis is a
-    // bin crate, so an as-yet-uncalled `pub fn` reads as dead until then.
-    // Exercised now by this module's tests.
-    #[allow(dead_code)]
     pub fn held(&self) -> bool {
         self.path.is_some()
     }
@@ -139,17 +142,24 @@ impl StoreLock {
     /// caller SKIP its load->mutate->save instead of mutating unlocked, which
     /// under pathological contention is what lets two timed-out writers both
     /// proceed and double-write (last-writer-wins). Fail-soft: never panics.
-    /// Uses the same [`StoreLock::DEADLINE`] as [`StoreLock::acquire`].
-    #[allow(dead_code)] // caller-facing API wired by another task; see `held`.
+    /// Uses the same [`StoreLock::DEADLINE`] as [`StoreLock::acquire`]. Live
+    /// caller: [`crate::store::Store::load`].
     pub fn acquire_or_skip(cfg: &Config) -> Option<Self> {
         Self::acquire_or_skip_at(lock_path(cfg), Self::DEADLINE)
+    }
+
+    /// Deadline-parameterized [`StoreLock::acquire_or_skip`] for the
+    /// wedged-holder regression test, which drives the same production
+    /// skip-on-contention path with a short deadline instead of the 10s default.
+    #[cfg(test)]
+    pub(crate) fn acquire_or_skip_with_deadline(cfg: &Config, deadline: Duration) -> Option<Self> {
+        Self::acquire_or_skip_at(lock_path(cfg), deadline)
     }
 
     /// Core of [`StoreLock::acquire_or_skip`] against an explicit lock `path`:
     /// runs the same fail-soft acquire and maps the degraded (unheld) guard to
     /// `None`. Shared by the public API and the seam tests (which drive it with
     /// a short deadline against a self-contained temp path).
-    #[allow(dead_code)] // reached via `acquire_or_skip` (wired by another task) + tests.
     fn acquire_or_skip_at(path: PathBuf, deadline: Duration) -> Option<Self> {
         let guard = Self::acquire_at(path, deadline);
         if guard.held() {

@@ -215,7 +215,14 @@ enum CloseOutcome {
 /// degrades to unlocked on timeout and never panics; the round is still recorded
 /// and the audit loop is never broken.
 fn close_at(cwd: &Path, round: &str, tests: u64) -> Result<CloseOutcome> {
-    let _lock = LeaseLock::acquire(cwd);
+    // HARD-SKIP on contention: skip (report NotFound → "left unchanged") rather
+    // than proceed to an unlocked read->modify->rewrite that could clobber a
+    // concurrently-appended round. The audit loop is never broken; the close
+    // re-runs later. The old fail-soft `acquire` left that window open.
+    let _lock = match LeaseLock::acquire_or_skip(cwd) {
+        Some(l) => l,
+        None => return Ok(CloseOutcome::NotFound),
+    };
     let rounds = store::read_audit_rounds(cwd).unwrap_or_default();
     let (updated, found) = audit_round::set_round_tests(&rounds, round, tests);
     if !found {

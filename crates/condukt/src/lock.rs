@@ -132,7 +132,7 @@ fn read_info(path: &Path) -> Option<LockInfo> {
 impl RunLock {
     /// Default bounded wait before degrading to unlocked. Generous enough that a
     /// normal RMW cycle (a few file ops) always releases well within it.
-    const DEADLINE: Duration = Duration::from_secs(10);
+    pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
 
     /// Acquire the per-run lock, waiting (bounded) for any live holder to
     /// release. Reaps a stale lock whose owner pid is gone. Never fails: on
@@ -156,11 +156,6 @@ impl RunLock {
     /// means the lock degraded to unlocked (fail-soft after a timeout or I/O
     /// error) and any RMW performed under it may race — the caller should treat
     /// that as unsafe to mutate.
-    // `#[allow(dead_code)]`: this is a new caller-facing API; its callers live in
-    // sibling modules (state.rs/claim.rs) owned by other tasks and are wired
-    // separately. condukt is a bin crate, so an as-yet-uncalled `pub fn` reads
-    // as dead until then. Exercised now by this module's tests.
-    #[allow(dead_code)]
     pub fn held(&self) -> bool {
         self.path.is_some()
     }
@@ -171,17 +166,32 @@ impl RunLock {
     /// caller SKIP its read-modify-write instead of mutating unlocked, which
     /// under pathological contention is what lets two timed-out writers both
     /// proceed and double-write (last-writer-wins). Fail-soft: never panics.
-    /// Uses the same [`RunLock::DEADLINE`] as [`RunLock::acquire`].
-    #[allow(dead_code)] // caller-facing API wired by sibling tasks; see `held`.
+    /// Uses the same [`RunLock::DEADLINE`] as [`RunLock::acquire`]. Live callers:
+    /// `state::with_run_locked`, `state::discard_experiment`, the `state set`
+    /// CLI arm, and `claim::{claim_tasks, release_*, heartbeat, active_claims,
+    /// write_execution_state}`.
     pub fn acquire_or_skip(cfg: &Config, cwd: &Path, run_id: &str) -> Option<Self> {
         Self::acquire_or_skip_at(lock_path(cfg, cwd, run_id), Self::DEADLINE)
+    }
+
+    /// Deadline-parameterized [`RunLock::acquire_or_skip`]. The hard-skip claims
+    /// path ([`crate::claim::claim_files`]) delegates here so both production
+    /// (the 10s default) and its wedged-holder regression test (a short
+    /// deadline) drive the SAME skip-on-contention code. Same fail-soft mapping
+    /// (a degraded/unheld guard maps to `None`).
+    pub(crate) fn acquire_or_skip_with_deadline(
+        cfg: &Config,
+        cwd: &Path,
+        run_id: &str,
+        deadline: Duration,
+    ) -> Option<Self> {
+        Self::acquire_or_skip_at(lock_path(cfg, cwd, run_id), deadline)
     }
 
     /// Core of [`RunLock::acquire_or_skip`] against an explicit lock `path`:
     /// runs the same fail-soft acquire and maps the degraded (unheld) guard to
     /// `None`. Shared by the public API and the seam tests (which drive it with
     /// a short deadline against a self-contained temp path).
-    #[allow(dead_code)] // reached via `acquire_or_skip` (wired by sibling tasks) + tests.
     fn acquire_or_skip_at(path: PathBuf, deadline: Duration) -> Option<Self> {
         let guard = Self::acquire_at(path, deadline);
         if guard.held() {

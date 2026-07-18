@@ -240,6 +240,7 @@ mod tests {
         st.add("users want faster onboarding".to_string(), None)
             .unwrap();
 
+        drop(st); // release the write lock before the hook reloads the store
         let out = run_with(&cfg, dir.path()).expect("should produce output");
         assert!(out.contains("users want faster onboarding"));
         assert!(out.contains("## Hypothesis"));
@@ -257,6 +258,7 @@ mod tests {
         st.mark_awaiting_measurement(&id, Some("run-1".to_string()))
             .unwrap();
 
+        drop(st); // release the write lock before the hook reloads the store
         let out = run_with(&cfg, dir.path()).expect("should produce output");
         assert!(out.contains("shipped, needs measuring"));
         assert!(out.contains("[awaiting-measurement]"));
@@ -272,6 +274,7 @@ mod tests {
         st.validate(&id, vec!["measured".to_string()], None)
             .unwrap();
 
+        drop(st); // release the write lock before the hook reloads the store
         let result = run_with(&cfg, dir.path());
         // All open hypotheses gone → None
         assert!(result.is_none());
@@ -284,6 +287,8 @@ mod tests {
 
         let mut st = Store::load(&cfg).unwrap();
         st.add("no charter present".to_string(), None).unwrap();
+
+        drop(st); // release the write lock before the hook reloads the store
 
         // No .compass/charter.md → hypothesis treated as unlinked
         let out = run_with(&cfg, dir.path()).expect("output");
@@ -312,6 +317,7 @@ mod tests {
         )
         .unwrap();
 
+        drop(st); // release the write lock before the hook reloads the store
         let out = run_with(&cfg, dir.path()).expect("output");
         assert!(!out.contains("[unlinked]"));
     }
@@ -380,6 +386,7 @@ mod tests {
         st.mark_awaiting_measurement(&id, Some("run-1".to_string()))
             .unwrap();
 
+        drop(st); // release the write lock before the hook reloads the store
         let out = run_with(&cfg, dir.path()).expect("output");
         assert!(out.contains("\u{8a08}\u{6e2c}\u{8ca0}\u{50b5}")); // 計測負債
         assert!(out.contains("\u{4ef6}")); // 件
@@ -394,6 +401,7 @@ mod tests {
         let mut st = Store::load(&cfg).unwrap();
         st.add("a".repeat(200), None).unwrap();
 
+        drop(st); // release the write lock before the hook reloads the store
         let out = run_with(&cfg, dir.path()).expect("output");
         assert!(out.contains("*(truncated)*"));
     }

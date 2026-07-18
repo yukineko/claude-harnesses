@@ -135,8 +135,20 @@ pub fn reassign(key: &str, to: &str) -> Result<()> {
     // silently freeing a just-claimed key so another begin could re-grab it
     // (double-grab). Fail-soft: LeaseLock degrades to unlocked on timeout and
     // never panics. reassign never calls process::exit, so the guard is simply
-    // dropped at end of scope.
-    let _lock = LeaseLock::acquire(&cwd);
+    // dropped at end of scope. HARD-SKIP on contention: skip rather than proceed
+    // to an unlocked load->reap->remove->save that could silently free a peer's
+    // just-claimed key (double-grab). The old fail-soft `acquire` left that
+    // window open.
+    let _lock = match LeaseLock::acquire_or_skip(&cwd) {
+        Some(l) => l,
+        None => {
+            println!(
+                "{{\"control_note\": \"reassign: lease lock contended for {key}; \
+                 skipping to avoid a racing double-grab\"}}"
+            );
+            return Ok(());
+        }
+    };
 
     let mut leases = store::load_leases(&cwd)?;
     store::reap_stale(&mut leases, now);

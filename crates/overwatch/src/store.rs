@@ -399,9 +399,14 @@ pub fn append_bridged_finding(cwd: &Path, finding_id: &str) -> Result<()> {
     // `review-queue --to-backlog` runs cannot both observe the finding-id as
     // absent and double-add it (check-then-append TOCTOU). Idempotent: re-check
     // membership INSIDE the lock and skip if already present. Guarding it here
-    // (the shared append site) covers ALL callers. Fail-soft: LeaseLock degrades
-    // to unlocked on timeout and never panics.
-    let _lock = LeaseLock::acquire(cwd);
+    // (the shared append site) covers ALL callers. HARD-SKIP on contention: skip
+    // the append rather than proceed to an unlocked check-then-append that could
+    // double-forward the finding. The old fail-soft `acquire` left that window
+    // open.
+    let _lock = match LeaseLock::acquire_or_skip(cwd) {
+        Some(l) => l,
+        None => return Ok(()),
+    };
     if read_bridged_findings(cwd)?
         .iter()
         .any(|id| id == finding_id)
@@ -479,8 +484,13 @@ pub fn append_bridged_entry(cwd: &Path, key: &str) -> Result<()> {
     // Same check-then-append TOCTOU guard as `append_bridged_finding`: hold the
     // store LeaseLock and re-check membership inside it so two concurrent
     // to-backlog runs cannot double-add the same `<kind>:<identifier>` key.
-    // Fail-soft: LeaseLock degrades to unlocked on timeout and never panics.
-    let _lock = LeaseLock::acquire(cwd);
+    // HARD-SKIP on contention: skip the append rather than proceed to an
+    // unlocked check-then-append that could double-add. The old fail-soft
+    // `acquire` left that window open.
+    let _lock = match LeaseLock::acquire_or_skip(cwd) {
+        Some(l) => l,
+        None => return Ok(()),
+    };
     if read_bridged_entries(cwd)?.iter().any(|k| k == key) {
         return Ok(());
     }
@@ -617,11 +627,29 @@ pub fn dispositions_path(cwd: &Path) -> Result<PathBuf> {
 /// timeout and never panics; a corrupt existing line is skipped by
 /// [`read_dispositions`].
 pub fn append_disposition(cwd: &Path, disposition: &Disposition) -> Result<()> {
+    append_disposition_with_deadline(cwd, disposition, LeaseLock::DEADLINE)
+}
+
+/// Deadline-parameterized core of [`append_disposition`] (production passes the
+/// 10s default; the wedged-holder regression test passes a short deadline to
+/// drive the same skip-on-contention path fast). HARD-SKIP semantics: if the
+/// store lock cannot be acquired within `deadline` we SKIP the append entirely
+/// rather than proceed to an unlocked check-then-append that could double-row
+/// the disposition. The old fail-soft `acquire` handed back an UNLOCKED guard
+/// and let the append proceed — the exact TOCTOU this closes.
+fn append_disposition_with_deadline(
+    cwd: &Path,
+    disposition: &Disposition,
+    deadline: std::time::Duration,
+) -> Result<()> {
     let path = dispositions_path(cwd)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let _lock = LeaseLock::acquire(cwd);
+    let _lock = match LeaseLock::acquire_or_skip_with_deadline(cwd, deadline) {
+        Some(l) => l,
+        None => return Ok(()),
+    };
     if read_dispositions(cwd)?
         .iter()
         .any(|d| d.finding_id == disposition.finding_id)
@@ -756,7 +784,16 @@ pub fn record_changeset_and_detect(
     cwd: &Path,
     changeset: &ActualChangeset,
 ) -> Result<Vec<RuntimeConflictEvent>> {
-    let _lock = LeaseLock::acquire(cwd);
+    // HARD-SKIP on contention: skip the record+detect rather than proceed to an
+    // unlocked load->save that could clobber a peer's changeset. Returning no
+    // events matches the caller's documented degrade ("no overlap detected" — a
+    // positive detection is the only thing that holds a merge), so a contended
+    // pass never spuriously holds. The old fail-soft `acquire` left that window
+    // open.
+    let _lock = match LeaseLock::acquire_or_skip(cwd) {
+        Some(l) => l,
+        None => return Ok(Vec::new()),
+    };
     // Test-only race widener (no-op in prod): widen the load->save window so the
     // concurrency regression test can reliably interleave two writers.
     artificial_delay("OVERWATCH_TEST_CHANGESET_DELAY_MS");
@@ -778,7 +815,13 @@ pub fn record_changeset_and_detect(
 /// longer treated as in-flight for overlap checks. RMW under `LeaseLock`.
 /// Fail-soft: an absent entry is a no-op. Called on branch-land cleanup.
 pub fn mark_changeset_merged(cwd: &Path, task_key: &str) -> Result<()> {
-    let _lock = LeaseLock::acquire(cwd);
+    // HARD-SKIP on contention: skip rather than run an unlocked RMW that could
+    // clobber a peer's changeset. Safe: an unmarked entry ages out via
+    // prune_stale_changesets. The old fail-soft `acquire` left that window open.
+    let _lock = match LeaseLock::acquire_or_skip(cwd) {
+        Some(l) => l,
+        None => return Ok(()),
+    };
     let mut registry = load_active_changesets(cwd)?;
     if let Some(entry) = registry.get_mut(task_key) {
         entry.merged = true;
@@ -796,7 +839,14 @@ pub fn mark_changeset_merged(cwd: &Path, task_key: &str) -> Result<()> {
 /// task that touches a common file). Fail-soft by contract at the call site: a
 /// cleanup error must never break a merge that already succeeded.
 pub fn mark_branch_merged(cwd: &Path, branch: &str) -> Result<usize> {
-    let _lock = LeaseLock::acquire(cwd);
+    // HARD-SKIP on contention: skip (0 marked) rather than run an unlocked RMW
+    // that could clobber a peer's changeset. Safe: an unmarked entry ages out
+    // via prune_stale_changesets. The old fail-soft `acquire` left that window
+    // open.
+    let _lock = match LeaseLock::acquire_or_skip(cwd) {
+        Some(l) => l,
+        None => return Ok(0),
+    };
     let mut registry = load_active_changesets(cwd)?;
     let mut marked = 0usize;
     for c in registry.values_mut() {
@@ -848,7 +898,13 @@ pub fn clear_runtime_overlap_holds(cwd: &Path, branch: &str, now: i64) -> Result
 /// pruning is a housekeeping compaction (keeps the registry bounded); a
 /// crashed run that left `merged=false` ages out here on any later record/prune.
 pub fn prune_stale_changesets(cwd: &Path, now: i64) -> Result<usize> {
-    let _lock = LeaseLock::acquire(cwd);
+    // HARD-SKIP on contention: skip (0 pruned) rather than run an unlocked RMW
+    // that could clobber a peer's changeset. Pruning is housekeeping — a skipped
+    // pass runs again later. The old fail-soft `acquire` left that window open.
+    let _lock = match LeaseLock::acquire_or_skip(cwd) {
+        Some(l) => l,
+        None => return Ok(0),
+    };
     let mut registry = load_active_changesets(cwd)?;
     let before = registry.len();
     registry.retain(|_, c| !c.merged && (now - c.ts) <= LEASE_TTL_SECS);
@@ -977,9 +1033,20 @@ pub fn compact_review_findings(cwd: &Path) -> Result<CompactionReport> {
     // Hold the store LeaseLock across the WHOLE read->rewrite critical section so
     // a finding appended (by a lock-respecting writer) concurrently with this
     // compaction is not silently dropped: without it, this rewrites the hot file
-    // from a stale snapshot taken before the append, clobbering it. Fail-soft:
-    // LeaseLock degrades to unlocked on timeout and never panics.
-    let _lock = LeaseLock::acquire(cwd);
+    // from a stale snapshot taken before the append, clobbering it. HARD-SKIP on
+    // contention: skip the compaction (all-zero no-op report) rather than run
+    // that unlocked rewrite. Compaction is housekeeping and re-runs later; the
+    // old fail-soft `acquire` left the clobber window open.
+    let _lock = match LeaseLock::acquire_or_skip(cwd) {
+        Some(l) => l,
+        None => {
+            return Ok(CompactionReport {
+                open: 0,
+                archived: 0,
+                already_archived: 0,
+            })
+        }
+    };
 
     let findings = read_review_findings(cwd)?;
 
@@ -1066,7 +1133,13 @@ pub fn append_merge_conflict(cwd: &Path, entry: &MergeConflictEntry) -> Result<(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let _lock = LeaseLock::acquire(cwd);
+    // HARD-SKIP on contention: skip the append rather than proceed to an
+    // unlocked check-then-append that could double-row the blocked merge. The
+    // old fail-soft `acquire` left that window open.
+    let _lock = match LeaseLock::acquire_or_skip(cwd) {
+        Some(l) => l,
+        None => return Ok(()),
+    };
     if read_merge_conflicts(cwd)?
         .iter()
         .any(|e| e.conflict_id == entry.conflict_id)
@@ -1118,7 +1191,13 @@ pub fn append_merge_conflict_resolution(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let _lock = LeaseLock::acquire(cwd);
+    // HARD-SKIP on contention: skip the append rather than proceed to an
+    // unlocked check-then-append that could double-row the resolution. The old
+    // fail-soft `acquire` left that window open.
+    let _lock = match LeaseLock::acquire_or_skip(cwd) {
+        Some(l) => l,
+        None => return Ok(()),
+    };
     if read_merge_conflict_resolutions(cwd)?
         .iter()
         .any(|r| r.conflict_id == resolution.conflict_id)
@@ -1286,6 +1365,61 @@ mod tests {
         let final_reg = load_leases(&dir).unwrap();
         assert_eq!(final_reg.len(), expected);
 
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // A wedged holder of the store lock must make the REAL production
+    // check-then-append path HARD-SKIP (append NOTHING) rather than degrade to
+    // an unlocked check-then-append that could double-row the disposition. RED
+    // with the old fail-soft `acquire`: it hands back an unlocked guard, the
+    // append proceeds, and dispositions.jsonl gains a line. GREEN with
+    // `acquire_or_skip_with_deadline`.
+    #[test]
+    fn contended_store_lock_makes_append_disposition_skip_not_double_write() {
+        use crate::disposition::{Disposition, DispositionVerdict};
+        use crate::lock::LeaseLock;
+
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-store-test-append-skip-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+
+        // Wedge a live holder of the store lock for the whole critical section.
+        let held = LeaseLock::acquire(&dir);
+        assert!(
+            held.held(),
+            "precondition: wedge must genuinely hold the store lock"
+        );
+
+        let disp = Disposition {
+            finding_id: "finding-1".to_string(),
+            verdict: DispositionVerdict::Confirmed,
+            reviewer: "tester".to_string(),
+            resolved_ts: now(),
+        };
+
+        // The real production path must SKIP the append under contention, driven
+        // with a short deadline so the test stays fast.
+        append_disposition_with_deadline(&dir, &disp, std::time::Duration::from_millis(120))
+            .unwrap();
+
+        // Nothing was appended (no unlocked double-row).
+        let dispositions = read_dispositions(&dir).unwrap();
+        assert!(
+            dispositions.is_empty(),
+            "a contended append_disposition must not write any line, got {dispositions:?}"
+        );
+
+        drop(held);
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),

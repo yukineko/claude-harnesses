@@ -133,7 +133,18 @@ pub fn begin(
     // Hold the lease-registry lock across the whole load->check->save cycle so
     // two sessions racing begin() for the same key can never both pass the
     // is_held_by_other check before either saves (TOCTOU double-claim).
-    let lock = LeaseLock::acquire(&cwd);
+    // HARD-SKIP on contention: rather than proceed to an unlocked load->check->
+    // save (which under a timed-out contention is exactly what lets two writers
+    // both claim the key), signal a skip like the held-by-other path. The old
+    // fail-soft `acquire` returned an UNLOCKED guard here, leaving the
+    // double-claim window open in production.
+    let lock = match LeaseLock::acquire_or_skip(&cwd) {
+        Some(l) => l,
+        None => {
+            println!("{}", json!({ "skipped": true, "reason": "lock_contended" }));
+            std::process::exit(1);
+        }
+    };
 
     // Load and reap stale leases
     let mut leases = store::load_leases(&cwd)?;
@@ -235,9 +246,14 @@ pub fn run(key: &str, note: Option<&str>) -> Result<()> {
     // Hold the lease-registry lock across the whole load->mutate->save cycle,
     // exactly as begin() does, so a concurrent mutator can never interleave on a
     // stale pre-begin snapshot and clobber a just-committed claim (TOCTOU).
-    // Fail-soft: on lock timeout LeaseLock degrades to an unlocked guard; it
-    // never panics (never-break-a-turn).
-    let _lock = LeaseLock::acquire(&cwd);
+    // HARD-SKIP on contention: rather than proceed to an unlocked
+    // load->mutate->save that could clobber a concurrently-committed claim,
+    // skip this mutation (never-break-a-turn). The old fail-soft `acquire`
+    // returned an unlocked guard here, leaving that double-write window open.
+    let _lock = match LeaseLock::acquire_or_skip(&cwd) {
+        Some(l) => l,
+        None => return Ok(()),
+    };
 
     // Load leases
     let mut leases = store::load_leases(&cwd)?;
@@ -282,8 +298,14 @@ pub fn end(key: &str, status: &str) -> Result<()> {
     // Hold the lease-registry lock across the whole load->mutate->save cycle,
     // exactly as begin() does, so a concurrent begin() can never have its fresh
     // claim clobbered by this end() saving a stale pre-begin snapshot (TOCTOU).
-    // Fail-soft: LeaseLock degrades to unlocked on timeout and never panics.
-    let _lock = LeaseLock::acquire(&cwd);
+    // HARD-SKIP on contention: skip rather than proceed to an unlocked
+    // load->mutate->save. A skipped end() leaves the lease to age out via the
+    // stale reap, which is safer than an unlocked write clobbering a peer's
+    // fresh claim. The old fail-soft `acquire` left that window open.
+    let _lock = match LeaseLock::acquire_or_skip(&cwd) {
+        Some(l) => l,
+        None => return Ok(()),
+    };
 
     // Load leases
     let mut leases = store::load_leases(&cwd)?;
@@ -328,9 +350,17 @@ pub fn heartbeat(key: &str) -> Result<()> {
 
     // Hold the lease-registry lock across the whole load->mutate->save cycle,
     // exactly as begin() does, so a concurrent mutator cannot interleave on a
-    // stale snapshot and clobber a just-committed claim (TOCTOU). Fail-soft:
-    // LeaseLock degrades to unlocked on timeout and never panics.
-    let _lock = LeaseLock::acquire(&cwd);
+    // stale snapshot and clobber a just-committed claim (TOCTOU). HARD-SKIP on
+    // contention: skip rather than proceed to an unlocked load->mutate->save. A
+    // single missed heartbeat is safe — the lease only ages out after the full
+    // stale-TTL of silence. The old fail-soft `acquire` left that window open.
+    let _lock = match LeaseLock::acquire_or_skip(&cwd) {
+        Some(l) => l,
+        None => {
+            println!("{{\"refreshed\": 0}}");
+            return Ok(());
+        }
+    };
 
     // Load leases
     let mut leases = store::load_leases(&cwd)?;
@@ -402,8 +432,16 @@ pub fn reap() -> Result<()> {
     // Hold the lease-registry lock across the whole load->mutate->save cycle,
     // exactly as begin() does, so a concurrent begin() can never have its fresh
     // claim clobbered by this reap() saving a stale pre-begin snapshot (TOCTOU).
-    // Fail-soft: LeaseLock degrades to unlocked on timeout and never panics.
-    let _lock = LeaseLock::acquire(&cwd);
+    // HARD-SKIP on contention: skip rather than proceed to an unlocked
+    // load->reap->save. Reaping is housekeeping — a skipped pass runs again on
+    // the next call. The old fail-soft `acquire` left that window open.
+    let _lock = match LeaseLock::acquire_or_skip(&cwd) {
+        Some(l) => l,
+        None => {
+            println!("{{\"reaped\": 0}}");
+            return Ok(());
+        }
+    };
 
     // Load and reap
     let mut leases = store::load_leases(&cwd)?;

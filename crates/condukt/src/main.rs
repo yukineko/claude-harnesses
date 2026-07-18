@@ -3294,9 +3294,17 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
         } => {
             // Hold the per-run state lock across the entire load → oracle-gate →
             // mutate → save cycle so a concurrent session/worktree cannot lose
-            // this update (last-writer-wins TOCTOU). Fail-soft: degrades to
-            // unlocked on contention rather than failing the update.
-            let _lock = lock::RunLock::acquire(cfg, cwd, &run);
+            // this update (last-writer-wins TOCTOU). HARD-SKIP on contention:
+            // surface an error rather than proceed to an unlocked RMW that could
+            // silently drop this transition. The old fail-soft `acquire` returned
+            // an unlocked guard here, leaving the double-write window open.
+            let _lock = match lock::RunLock::acquire_or_skip(cfg, cwd, &run) {
+                Some(l) => l,
+                None => anyhow::bail!(
+                    "run '{run}' state lock is contended; skipping `state set` to \
+                     avoid a racing double-write (retry shortly)"
+                ),
+            };
             let mut rs = state::RunState::load(cfg, cwd, &run)?;
             let st: state::Status = status.parse()?;
 

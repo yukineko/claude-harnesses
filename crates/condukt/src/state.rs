@@ -310,7 +310,19 @@ pub fn with_run_locked<F>(cfg: &Config, cwd: &Path, run_id: &str, mutate: F) -> 
 where
     F: FnOnce(&mut RunState),
 {
-    let _lock = crate::lock::RunLock::acquire(cfg, cwd, run_id);
+    // HARD-SKIP on contention: if the per-run lock cannot be acquired within its
+    // deadline, surface an error instead of proceeding to an unlocked
+    // load→mutate→save that could lose a concurrent update (last-writer-wins).
+    // Silently dropping a run-state transition (e.g. a status change) would let
+    // the orchestrator act on stale state, so this fails loud rather than skips
+    // quiet. The old fail-soft `acquire` left this double-write window open.
+    let _lock = match crate::lock::RunLock::acquire_or_skip(cfg, cwd, run_id) {
+        Some(l) => l,
+        None => anyhow::bail!(
+            "run '{run_id}' state lock is contended; skipping update to avoid a \
+             racing double-write (retry shortly)"
+        ),
+    };
     let mut rs = RunState::load(cfg, cwd, run_id)?;
     mutate(&mut rs);
     rs.save(cfg, cwd)?;
@@ -771,7 +783,17 @@ pub fn detect_duplicate_completions(
 /// Backend for `condukt worktree discard`. Serialized under the per-run state
 /// lock (load → capture → remove → mutate → save) like the other mutators.
 pub fn discard_experiment(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> Result<()> {
-    let _lock = crate::lock::RunLock::acquire(cfg, cwd, run_id);
+    // HARD-SKIP on contention: this discard is a destructive load→capture→
+    // remove→mutate→save; proceeding unlocked could lose a concurrent update or
+    // race a peer mutator. Surface an error so the caller can retry rather than
+    // silently corrupt state. The old fail-soft `acquire` left the window open.
+    let _lock = match crate::lock::RunLock::acquire_or_skip(cfg, cwd, run_id) {
+        Some(l) => l,
+        None => anyhow::bail!(
+            "run '{run_id}' state lock is contended; skipping worktree discard to \
+             avoid a racing double-write (retry shortly)"
+        ),
+    };
     let repo = crate::worktree::toplevel(cwd).unwrap_or_else(|_| repo_root(cwd));
     let mut rs = RunState::load(cfg, cwd, run_id)?;
 

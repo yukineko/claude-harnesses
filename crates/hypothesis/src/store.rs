@@ -51,7 +51,25 @@ pub struct Store {
 
 impl Store {
     pub fn load(cfg: &Config) -> Result<Self> {
-        let lock = StoreLock::acquire(cfg);
+        // HARD-SKIP on contention: if the store lock cannot be acquired within
+        // its deadline, surface an error instead of proceeding to an unlocked
+        // load->mutate->save that could clobber a concurrent write
+        // (last-writer-wins). The prior fail-soft `acquire` returned an UNLOCKED
+        // guard here, leaving that double-write window open in production.
+        let lock = match StoreLock::acquire_or_skip(cfg) {
+            Some(l) => l,
+            None => anyhow::bail!(
+                "hypothesis store lock is contended; skipping to avoid a racing \
+                 double-write (retry shortly)"
+            ),
+        };
+        Self::from_locked(cfg, lock)
+    }
+
+    /// Build the in-memory store from disk under an already-acquired lock.
+    /// Shared by [`Store::load`] and the wedged-holder test seam so the
+    /// post-lock body is identical on both paths.
+    fn from_locked(cfg: &Config, lock: StoreLock) -> Result<Self> {
         let path = cfg.hypotheses_path();
         let hypotheses = if path.exists() {
             let text = std::fs::read_to_string(&path)?;
@@ -70,6 +88,21 @@ impl Store {
             },
             _lock: lock,
         })
+    }
+
+    /// Deadline-parameterized [`Store::load`]: production ([`load`]) passes the
+    /// 10s default; the wedged-holder regression test passes a short deadline to
+    /// drive the same skip-on-contention path fast.
+    #[cfg(test)]
+    fn load_with_deadline(cfg: &Config, deadline: std::time::Duration) -> Result<Self> {
+        let lock = match StoreLock::acquire_or_skip_with_deadline(cfg, deadline) {
+            Some(l) => l,
+            None => anyhow::bail!(
+                "hypothesis store lock is contended; skipping to avoid a racing \
+                 double-write (retry shortly)"
+            ),
+        };
+        Self::from_locked(cfg, lock)
     }
 
     fn save(&self) -> Result<()> {
@@ -380,6 +413,35 @@ mod tests {
         }
     }
 
+    // A wedged holder of the store lock must make the REAL production load path
+    // HARD-SKIP (return Err) rather than degrade to an unlocked
+    // load->mutate->save that could clobber a concurrent write. RED with the old
+    // fail-soft `acquire`: `Store::load` returned Ok(Store) and proceeded
+    // unlocked. GREEN with `acquire_or_skip`.
+    #[test]
+    fn contended_store_lock_makes_load_skip_not_double_write() {
+        use crate::lock::StoreLock;
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir);
+
+        // Wedge a live holder of the store lock for the whole test.
+        let held = StoreLock::acquire(&cfg);
+        assert!(
+            held.held(),
+            "precondition: wedge must genuinely hold the store lock"
+        );
+
+        // The real production load path must skip (Err) under contention,
+        // driven with a short deadline so the test stays fast.
+        let res = Store::load_with_deadline(&cfg, std::time::Duration::from_millis(120));
+        assert!(
+            res.is_err(),
+            "contended Store::load must hard-skip (Err), not proceed unlocked"
+        );
+
+        drop(held);
+    }
+
     #[test]
     fn test_add_load_roundtrip() {
         let dir = TempDir::new().unwrap();
@@ -389,6 +451,7 @@ mod tests {
         let mut st = Store::load(&cfg).unwrap();
         let id = st.add("my hypothesis text".to_string(), None).unwrap();
         assert!(!id.is_empty());
+        drop(st); // release the write lock before reloading
 
         // reload from disk
         let st2 = Store::load(&cfg).unwrap();
@@ -455,6 +518,7 @@ mod tests {
         st.set_confidence(&a, 0.9).unwrap();
         assert_eq!(st.list(None)[0].text, "A");
         // persisted, not just in-memory
+        drop(st); // release the write lock before reloading
         let st2 = Store::load(&cfg).unwrap();
         assert_eq!(st2.list(None)[0].text, "A");
     }
@@ -481,6 +545,7 @@ mod tests {
             None,
         )
         .unwrap();
+        drop(st); // release the write lock before reloading
 
         // reload to verify persistence
         let st2 = Store::load(&cfg).unwrap();
@@ -500,6 +565,7 @@ mod tests {
 
         st.reject(&id, Some("not supported by data".to_string()), None)
             .unwrap();
+        drop(st); // release the write lock before reloading
 
         let st2 = Store::load(&cfg).unwrap();
         let h = &st2.list(None)[0];
@@ -518,6 +584,7 @@ mod tests {
             .unwrap();
         st.mark_awaiting_measurement(&id, Some("run-await1".to_string()))
             .unwrap();
+        drop(st); // release the write lock before reloading
 
         let st2 = Store::load(&cfg).unwrap();
         let h = &st2.list(None)[0];
@@ -570,6 +637,7 @@ mod tests {
             Some("run-1".to_string()),
         )
         .unwrap();
+        drop(st); // release the write lock before reloading
 
         let st2 = Store::load(&cfg).unwrap();
         let h = &st2.list(None)[0];
@@ -618,6 +686,7 @@ mod tests {
             Some("run-abc123".to_string()),
         )
         .unwrap();
+        drop(st); // release the write lock before reloading
 
         let st2 = Store::load(&cfg).unwrap();
         let h = &st2.list(None)[0];
@@ -638,6 +707,7 @@ mod tests {
             Some("run-xyz789".to_string()),
         )
         .unwrap();
+        drop(st); // release the write lock before reloading
 
         let st2 = Store::load(&cfg).unwrap();
         let h = &st2.list(None)[0];
@@ -712,6 +782,7 @@ mod tests {
                 Some(Criterion::parse("activation <= 0.2").unwrap()),
             )
             .unwrap();
+        drop(st); // release the write lock before reloading
 
         let st2 = Store::load(&cfg).unwrap();
         let h = st2.list(None).into_iter().find(|h| h.id == id).unwrap();
@@ -766,6 +837,7 @@ mod tests {
 
         st.validate_with_measurements(&id, vec![], vec![("activation".to_string(), 0.45)], None)
             .unwrap();
+        drop(st); // release the write lock before reloading
 
         let st2 = Store::load(&cfg).unwrap();
         let h = &st2.list(None)[0];
@@ -850,6 +922,7 @@ mod tests {
         .unwrap();
 
         // Reload → assumptions persisted; RAT = highest leap score untested.
+        drop(st); // release the write lock before reloading
         let st2 = Store::load(&cfg).unwrap();
         let h = st2.list(None).into_iter().find(|h| h.id == id).unwrap();
         assert_eq!(h.assumptions.len(), 3);
@@ -857,8 +930,10 @@ mod tests {
         assert_eq!(rat.text, "users have this problem"); // high + none = score 4
 
         // Marking the top RAT tested promotes the next leap of faith.
+        drop(st2); // release the read lock before the next write
         let mut st3 = Store::load(&cfg).unwrap();
         st3.mark_assumption_tested(&id, 0).unwrap();
+        drop(st3); // release the write lock before reloading
         let st4 = Store::load(&cfg).unwrap();
         let h4 = st4.list(None).into_iter().find(|h| h.id == id).unwrap();
         assert!(h4.assumptions[0].tested);
@@ -901,6 +976,7 @@ mod tests {
         let mut st = Store::load(&cfg).unwrap();
         st.add("with goal".to_string(), Some("goal-abc".to_string()))
             .unwrap();
+        drop(st); // release the write lock before reloading
 
         let st2 = Store::load(&cfg).unwrap();
         let h = &st2.list(None)[0];

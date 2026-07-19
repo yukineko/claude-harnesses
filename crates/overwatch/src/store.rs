@@ -613,6 +613,22 @@ pub fn dispositions_path(cwd: &Path) -> Result<PathBuf> {
     Ok(storage_root(cwd)?.join("dispositions.jsonl"))
 }
 
+/// Outcome of a `LeaseLock`-guarded check-then-append store write. Lets a CLI
+/// surface report a contended HARD-SKIP TRUTHFULLY instead of a phantom
+/// success: a contended append persists NOTHING, yet used to return a bare
+/// `Ok(())` indistinguishable from a real write, so callers printed
+/// `recorded:true` / `resolved:true` while the ledger was untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppendOutcome {
+    /// The record is persisted: written this call, or already present
+    /// (idempotent dedup on the join key). Truthful `recorded:true`.
+    Recorded,
+    /// The store `LeaseLock` was contended past its deadline; the append was
+    /// SKIPPED and nothing was persisted this call. The caller should report
+    /// `recorded:false` (nonzero exit) and retry shortly.
+    SkippedContended,
+}
+
 /// Append a human disposition to dispositions.jsonl (one JSON line each).
 ///
 /// Idempotent per `finding_id`: two concurrent writers (e.g. a `reconcile-fixed`
@@ -626,7 +642,7 @@ pub fn dispositions_path(cwd: &Path) -> Result<PathBuf> {
 /// one is already present. Fail-soft: `LeaseLock` degrades to unlocked on
 /// timeout and never panics; a corrupt existing line is skipped by
 /// [`read_dispositions`].
-pub fn append_disposition(cwd: &Path, disposition: &Disposition) -> Result<()> {
+pub fn append_disposition(cwd: &Path, disposition: &Disposition) -> Result<AppendOutcome> {
     append_disposition_with_deadline(cwd, disposition, LeaseLock::DEADLINE)
 }
 
@@ -637,24 +653,33 @@ pub fn append_disposition(cwd: &Path, disposition: &Disposition) -> Result<()> {
 /// rather than proceed to an unlocked check-then-append that could double-row
 /// the disposition. The old fail-soft `acquire` handed back an UNLOCKED guard
 /// and let the append proceed — the exact TOCTOU this closes.
+///
+/// Returns an [`AppendOutcome`] so the CLI surface can distinguish a genuine
+/// persist / idempotent dedup ([`AppendOutcome::Recorded`]) from a contended
+/// HARD-SKIP ([`AppendOutcome::SkippedContended`], nothing persisted) and
+/// report it truthfully — a contended skip previously returned a bare `Ok(())`
+/// indistinguishable from success, so `record-disposition` printed
+/// `recorded:true` while NOTHING was written.
 fn append_disposition_with_deadline(
     cwd: &Path,
     disposition: &Disposition,
     deadline: std::time::Duration,
-) -> Result<()> {
+) -> Result<AppendOutcome> {
     let path = dispositions_path(cwd)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let _lock = match LeaseLock::acquire_or_skip_with_deadline(cwd, deadline) {
         Some(l) => l,
-        None => return Ok(()),
+        None => return Ok(AppendOutcome::SkippedContended),
     };
     if read_dispositions(cwd)?
         .iter()
         .any(|d| d.finding_id == disposition.finding_id)
     {
-        return Ok(());
+        // Already present (idempotent dedup on finding_id): the disposition IS
+        // persisted, so this is a truthful Recorded, not a skip.
+        return Ok(AppendOutcome::Recorded);
     }
     // Test-only race widener (no-op in prod).
     artificial_delay("OVERWATCH_TEST_DISPOSITION_DELAY_MS");
@@ -664,7 +689,7 @@ fn append_disposition_with_deadline(
         .append(true)
         .open(&path)?
         .write_all(format!("{}\n", json).as_bytes())?;
-    Ok(())
+    Ok(AppendOutcome::Recorded)
 }
 
 /// Read all dispositions from dispositions.jsonl. Returns an empty vec if the
@@ -1183,10 +1208,15 @@ pub fn read_merge_conflicts(cwd: &Path) -> Result<Vec<MergeConflictEntry>> {
 /// [`append_disposition`]: hold the store `LeaseLock`, re-check for an existing
 /// resolution of this `conflict_id` INSIDE the lock, skip if present. Fail-soft:
 /// `LeaseLock` degrades to unlocked on timeout and never panics.
+///
+/// Returns an [`AppendOutcome`] (like [`append_disposition`]) so the
+/// `resolve-merge-conflict` CLI can report a contended HARD-SKIP truthfully
+/// (`resolved:false`) instead of a phantom `resolved:true` while nothing was
+/// persisted.
 pub fn append_merge_conflict_resolution(
     cwd: &Path,
     resolution: &MergeConflictResolution,
-) -> Result<()> {
+) -> Result<AppendOutcome> {
     let path = merge_conflict_resolutions_path(cwd)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -1196,13 +1226,14 @@ pub fn append_merge_conflict_resolution(
     // fail-soft `acquire` left that window open.
     let _lock = match LeaseLock::acquire_or_skip(cwd) {
         Some(l) => l,
-        None => return Ok(()),
+        None => return Ok(AppendOutcome::SkippedContended),
     };
     if read_merge_conflict_resolutions(cwd)?
         .iter()
         .any(|r| r.conflict_id == resolution.conflict_id)
     {
-        return Ok(());
+        // Already present (idempotent dedup): the resolution IS persisted.
+        return Ok(AppendOutcome::Recorded);
     }
     artificial_delay("OVERWATCH_TEST_MERGE_RESOLUTION_DELAY_MS");
     let json = serde_json::to_string(resolution)?;
@@ -1211,7 +1242,7 @@ pub fn append_merge_conflict_resolution(
         .append(true)
         .open(&path)?
         .write_all(format!("{}\n", json).as_bytes())?;
-    Ok(())
+    Ok(AppendOutcome::Recorded)
 }
 
 /// Read all merge-conflict resolutions (fail-soft, corrupt lines skipped).
@@ -1409,8 +1440,18 @@ mod tests {
 
         // The real production path must SKIP the append under contention, driven
         // with a short deadline so the test stays fast.
-        append_disposition_with_deadline(&dir, &disp, std::time::Duration::from_millis(120))
-            .unwrap();
+        let outcome =
+            append_disposition_with_deadline(&dir, &disp, std::time::Duration::from_millis(120))
+                .unwrap();
+
+        // The skip must be OBSERVABLE (not a phantom success): the CLI relies on
+        // this to print `recorded:false` instead of `recorded:true` while the
+        // ledger is untouched. RED with a bare `Ok(())`/`Ok(Recorded)` return.
+        assert_eq!(
+            outcome,
+            AppendOutcome::SkippedContended,
+            "a contended append must report SkippedContended, not a phantom Recorded"
+        );
 
         // Nothing was appended (no unlocked double-row).
         let dispositions = read_dispositions(&dir).unwrap();

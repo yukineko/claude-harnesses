@@ -212,15 +212,15 @@ pub fn record_resolution(
         ts: now,
     };
     match crate::store::append_merge_conflict_resolution(&cwd, &resolution) {
-        Ok(()) => {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "resolved": true,
-                    "conflict_id": conflict_id,
-                    "choice": choice.label(),
-                })
-            );
+        Ok(outcome) => {
+            let (line, ok) = resolution_result(outcome, &conflict_id, choice);
+            println!("{line}");
+            // A contended HARD-SKIP persisted nothing: surface a nonzero exit
+            // (mirrors the lease `begin` skip-JSON pattern) rather than a silent
+            // exit-0 success. Only reached on the skip path.
+            if !ok {
+                std::process::exit(1);
+            }
         }
         Err(e) => {
             eprintln!(
@@ -233,6 +233,37 @@ pub fn record_resolution(
         }
     }
     Ok(())
+}
+
+/// Build the `resolve-merge-conflict` result line + success flag for a store
+/// [`crate::store::AppendOutcome`]. Pure/testable twin of
+/// `disposition_cli::disposition_result`: a contended HARD-SKIP is reported
+/// TRUTHFULLY as `resolved:false` (with a contention note, `ok=false` → nonzero
+/// exit), not a phantom `resolved:true` while nothing was persisted.
+fn resolution_result(
+    outcome: crate::store::AppendOutcome,
+    conflict_id: &str,
+    choice: ResolveChoice,
+) -> (serde_json::Value, bool) {
+    match outcome {
+        crate::store::AppendOutcome::Recorded => (
+            serde_json::json!({
+                "resolved": true,
+                "conflict_id": conflict_id,
+                "choice": choice.label(),
+            }),
+            true,
+        ),
+        crate::store::AppendOutcome::SkippedContended => (
+            serde_json::json!({
+                "resolved": false,
+                "reason": "lock_contended",
+                "note": "store lock contended; resolution NOT persisted — retry shortly",
+                "conflict_id": conflict_id,
+            }),
+            false,
+        ),
+    }
 }
 
 #[cfg(test)]

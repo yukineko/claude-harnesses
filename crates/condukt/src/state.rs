@@ -303,9 +303,17 @@ pub fn open_runs(cfg: &Config, cwd: &Path) -> Vec<RunState> {
 /// Serialized load → mutate → save for a run. The per-run state lock is held
 /// across all three steps so two concurrent sessions/worktrees cannot lose an
 /// update (the load→mutate→save windows can no longer interleave; it is a
-/// compare-and-swap scoped to this one run). The lock is fail-soft: if it cannot
-/// be acquired it degrades to proceeding unlocked (logged) rather than failing
-/// the update, and never panics. `mutate` runs while the lock is held.
+/// compare-and-swap scoped to this one run). `mutate` runs while the lock is
+/// held.
+///
+/// HARD-SKIP on contention (never panics): if the per-run lock cannot be
+/// acquired within its deadline this returns an `Err` and performs NO
+/// load→mutate→save, rather than degrading to an unlocked write that could lose
+/// a concurrent update (last-writer-wins). Silently dropping a run-state
+/// transition would let the orchestrator act on stale state, so a contended
+/// lock fails loud (retryable) instead of proceeding unlocked. (The lock
+/// acquisition itself is still fail-soft/non-panicking — it returns `None` on
+/// contention, which this maps to the error above.)
 pub fn with_run_locked<F>(cfg: &Config, cwd: &Path, run_id: &str, mutate: F) -> Result<()>
 where
     F: FnOnce(&mut RunState),

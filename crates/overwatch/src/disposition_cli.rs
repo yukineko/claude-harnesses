@@ -13,7 +13,7 @@
 /// (mirrors `DispositionVerdict::parse_cli`).
 use crate::disposition::{self, Disposition, DispositionVerdict};
 use crate::reconcile::{self, ReconcileRange};
-use crate::store;
+use crate::store::{self, AppendOutcome};
 use anyhow::Result;
 
 /// Commit-range `reconcile-fixed` itself uses from `continuous-audit.sh`
@@ -34,15 +34,16 @@ pub fn record(finding_id: String, verdict_str: &str, reviewer: String, now: i64)
     let record = Disposition::new(finding_id, verdict, reviewer, now);
 
     match store::append_disposition(&cwd, &record) {
-        Ok(()) => {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "recorded": true,
-                    "finding_id": record.finding_id,
-                    "verdict": verdict.label(),
-                })
-            );
+        Ok(outcome) => {
+            let (line, ok) = disposition_result(outcome, &record, verdict);
+            println!("{line}");
+            // Mirror the lease `begin` skip-JSON pattern: a contended HARD-SKIP
+            // persisted nothing, so surface it with a nonzero exit rather than a
+            // silent exit-0 success. `std::process::exit` is only reached on the
+            // skip path (never in tests, which drive `disposition_result`).
+            if !ok {
+                std::process::exit(1);
+            }
         }
         Err(e) => {
             eprintln!("overwatch: WARNING could not record disposition (continuing): {e}");
@@ -53,6 +54,37 @@ pub fn record(finding_id: String, verdict_str: &str, reviewer: String, now: i64)
         }
     }
     Ok(())
+}
+
+/// Build the `record-disposition` result line + success flag for a store
+/// [`AppendOutcome`]. Pure/testable: keeps the truthfulness contract out of the
+/// side-effecting `record()`. A contended HARD-SKIP is reported TRUTHFULLY as
+/// `recorded:false` (with a contention note) and `ok=false` (→ nonzero exit),
+/// NOT a phantom `recorded:true`, because nothing was persisted.
+fn disposition_result(
+    outcome: AppendOutcome,
+    record: &Disposition,
+    verdict: DispositionVerdict,
+) -> (serde_json::Value, bool) {
+    match outcome {
+        AppendOutcome::Recorded => (
+            serde_json::json!({
+                "recorded": true,
+                "finding_id": record.finding_id,
+                "verdict": verdict.label(),
+            }),
+            true,
+        ),
+        AppendOutcome::SkippedContended => (
+            serde_json::json!({
+                "recorded": false,
+                "reason": "lock_contended",
+                "note": "store lock contended; disposition NOT persisted — retry shortly",
+                "finding_id": record.finding_id,
+            }),
+            false,
+        ),
+    }
 }
 
 /// Read the disposition ledger (joined against the review-findings store) and
@@ -144,4 +176,52 @@ pub fn metrics(json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_disposition() -> Disposition {
+        Disposition::new(
+            "finding-1".to_string(),
+            DispositionVerdict::Confirmed,
+            "tester".to_string(),
+            42,
+        )
+    }
+
+    /// TRUTHFULNESS: a contended HARD-SKIP persisted nothing, so the CLI must
+    /// report `recorded:false` (with a contention reason) and a non-ok flag →
+    /// nonzero exit — NOT the phantom `recorded:true` the old bare-`Ok(())`
+    /// contention branch produced. RED before the fix (contention was
+    /// indistinguishable from success and reported `recorded:true`).
+    #[test]
+    fn contended_disposition_is_reported_not_recorded() {
+        let d = sample_disposition();
+        let (line, ok) = disposition_result(AppendOutcome::SkippedContended, &d, d.verdict);
+        assert!(
+            !ok,
+            "a contended skip must not report CLI success (nonzero exit)"
+        );
+        assert_eq!(
+            line["recorded"], false,
+            "contended skip must surface recorded:false, got {line}"
+        );
+        assert_eq!(
+            line["reason"], "lock_contended",
+            "contended skip must carry a contention reason, got {line}"
+        );
+    }
+
+    /// A genuine persist / idempotent dedup is truthfully `recorded:true`,
+    /// exit 0 — the fix must not regress the success surface.
+    #[test]
+    fn recorded_disposition_reports_success() {
+        let d = sample_disposition();
+        let (line, ok) = disposition_result(AppendOutcome::Recorded, &d, d.verdict);
+        assert!(ok, "a persisted disposition must report CLI success");
+        assert_eq!(line["recorded"], true);
+        assert_eq!(line["finding_id"], "finding-1");
+    }
 }

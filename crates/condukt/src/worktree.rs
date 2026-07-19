@@ -437,47 +437,12 @@ pub enum MergeOutcome {
     Conflict(String),
 }
 
-/// Is the run that PLACED a runtime-overlap hold still LIVE, per the overwatch
-/// lease TTL? A hold is only authoritative while its holder run is alive: an
-/// overlap held by a run that has since crashed/been abandoned is stale, and
-/// must NOT block a LIVE task that merely REUSES the same `condukt/<task.id>`
-/// branch name in a later run (the bug: `finalize_landed_branch` only clears
-/// holds on a branch that LANDS, so a never-landed abandoned branch leaves a
-/// stale OPEN hold that spuriously blocks the reused-branch task forever).
-///
-/// Liveness is decided by reusing overwatch's own lease primitives — a
-/// non-stale lease (heartbeat within [`overwatch::store::LEASE_TTL_SECS`])
-/// whose `run_id` matches the hold's placer — rather than reinventing a
-/// liveness notion. `load_leases` is itself fail-soft (missing/corrupt store
-/// ⇒ empty registry), so a store read never errors here.
-///
-/// An UNATTRIBUTED hold (empty `run_id` — no recorded placer to test liveness
-/// against) is treated as authoritative (still blocks): we do not weaken the
-/// gate on ambiguous data, preserving the pre-fix behavior for holds that
-/// carry no run.
-fn hold_placed_by_live_run(repo: &Path, run_id: &str, now: i64) -> bool {
-    if run_id.is_empty() {
-        return true;
-    }
-    overwatch::store::load_leases(repo)
-        .unwrap_or_default()
-        .values()
-        .any(|l| l.run_id == run_id && !overwatch::store::is_stale(l, now))
-}
-
 /// Look up an OPEN runtime-overlap merge-hold for `branch` in the overwatch
 /// review surface (decision A). Returns the hold's `conflict_id` when the
-/// branch is held BY A STILL-LIVE holder run. Fail-soft: any read error /
-/// absent store degrades to "no hold" (never blocks a merge on a compute
-/// error).
-///
-/// Authority is filtered by holder-run LIVENESS, not branch-name match alone
-/// (see [`hold_placed_by_live_run`]): a stale hold from a DEAD run does not
-/// block a task that reuses the branch name, while a hold from a LIVE run
-/// still blocks.
+/// branch is held. Fail-soft: any read error / absent store degrades to "no
+/// hold" (never blocks a merge on a compute error).
 fn open_runtime_overlap_hold(repo: &Path, branch: &str) -> Option<String> {
     let open = overwatch::store::open_merge_conflicts(repo).ok()?;
-    let now = overwatch::store::now();
     open.into_iter()
         .find(|e| {
             e.branch == branch
@@ -485,7 +450,6 @@ fn open_runtime_overlap_hold(repo: &Path, branch: &str) -> Option<String> {
                     e.origin,
                     overwatch::merge_conflict::ConflictOrigin::RuntimeOverlap
                 )
-                && hold_placed_by_live_run(repo, &e.run_id, now)
         })
         .map(|e| e.conflict_id)
 }
@@ -858,26 +822,6 @@ mod worktree_remove_tests {
         git(repo, &["checkout", "main"]).unwrap();
     }
 
-    /// Seed one overwatch lease for `run_id` with the given `heartbeat_at` into
-    /// the sandboxed HOME's leases.json. A fresh `heartbeat_at` (≈ now) makes the
-    /// run LIVE; a heartbeat older than `LEASE_TTL_SECS` makes it stale/DEAD.
-    /// Used to drive the runtime-overlap hold's holder-run liveness filter.
-    fn seed_lease(repo: &Path, run_id: &str, heartbeat_at: i64) {
-        let mut leases = overwatch::store::load_leases(repo).unwrap_or_default();
-        let lease = overwatch::store::Lease {
-            key: format!("{run_id}/task"),
-            title: "t".to_string(),
-            session_id: "sess".to_string(),
-            run_id: run_id.to_string(),
-            claimed_at: heartbeat_at,
-            heartbeat_at,
-            scope: Vec::new(),
-            done_criteria: None,
-        };
-        leases.insert(lease.key.clone(), lease);
-        overwatch::store::save_leases(repo, &leases).unwrap();
-    }
-
     #[test]
     fn worktree_merge_no_conflict_succeeds() {
         let (tmp, repo) = init_repo();
@@ -1128,15 +1072,12 @@ mod worktree_remove_tests {
         });
     }
 
-    /// Decision A gate (finding #2a) + LIVE-holder liveness (91b4a26b): an OPEN
-    /// `RuntimeOverlap` merge-hold whose HOLDER RUN IS STILL LIVE (a non-stale
-    /// lease carrying the hold's run_id) must HOLD the merge — `merge()` returns
-    /// `MergeOutcome::Held`, NOT `Merged`. This test FAILS if the pre-merge hold
-    /// gate is deleted (branch would merge and land on `main`); it also pins the
-    /// LIVE direction of the holder-run liveness filter (a live holder still
-    /// blocks).
+    /// Decision A gate (finding #2a): an OPEN `RuntimeOverlap` merge-hold for the
+    /// branch must HOLD the merge — `merge()` returns `MergeOutcome::Held`, NOT
+    /// `Merged`. This test FAILS if the pre-merge hold gate (worktree.rs:~515-520)
+    /// is deleted (the branch would then merge and land on `main`).
     #[test]
-    fn merge_is_held_when_an_open_runtime_overlap_from_a_live_run_exists() {
+    fn merge_is_held_when_an_open_runtime_overlap_exists() {
         let (tmp, repo) = init_repo();
         make_branch(&repo, "feat", "feat.txt", "feature content\n");
         let cfg = test_cfg(&repo);
@@ -1159,9 +1100,6 @@ mod worktree_remove_tests {
                 ts: overwatch::store::now(),
             };
             overwatch::store::append_merge_conflict(&repo, &entry).unwrap();
-            // The holder run "run" is LIVE: a lease with a FRESH heartbeat, so the
-            // hold is authoritative and must block the merge.
-            seed_lease(&repo, "run", overwatch::store::now());
             merge(&cfg, &repo, "feat", "main")
                 .expect("a held overlap is a hold-for-review, not a hard error")
         });
@@ -1174,63 +1112,6 @@ mod worktree_remove_tests {
         assert!(
             !repo.join("feat.txt").exists(),
             "a HELD merge must not land the branch onto the default branch"
-        );
-    }
-
-    /// DEAD-holder liveness (91b4a26b): an OPEN `RuntimeOverlap` hold whose
-    /// holder run is DEAD — no live lease carries its run_id (here a STALE lease,
-    /// aged past `LEASE_TTL_SECS`) — must NOT block a task that REUSES the same
-    /// `condukt/<task.id>` branch name in a later run. The stale hold is filtered
-    /// by holder-run liveness, so `merge()` proceeds and returns `Merged`.
-    ///
-    /// This is the bug 91b4a26b closes: `finalize_landed_branch` clears holds
-    /// only on a branch that LANDS, so a never-landed abandoned branch left a
-    /// stale OPEN hold that spuriously blocked the reused-branch task forever.
-    /// RED without the liveness filter (the hold matches by branch name and the
-    /// merge comes back `Held`); GREEN with it (`Merged`).
-    #[test]
-    fn merge_not_held_when_runtime_overlap_holder_run_is_dead() {
-        let (tmp, repo) = init_repo();
-        make_branch(&repo, "feat", "feat.txt", "feature content\n");
-        let cfg = test_cfg(&repo);
-        let home = tmp.path().join("home-dead-holder");
-        fs::create_dir_all(&home).unwrap();
-
-        let outcome = with_home(&home, || {
-            // Seed an OPEN RuntimeOverlap hold placed by run "deadrun".
-            let entry = overwatch::merge_conflict::MergeConflictEntry {
-                conflict_id: "deadrun/feat/runtime-overlap".to_string(),
-                origin: overwatch::merge_conflict::ConflictOrigin::RuntimeOverlap,
-                run_id: "deadrun".to_string(),
-                branch: "feat".to_string(),
-                default_branch: "main".to_string(),
-                base_ref: merge_base_sha(&repo, "main", "feat"),
-                conflicted_files: vec!["feat.txt".to_string()],
-                diff_ours: "peer".to_string(),
-                diff_theirs: "mine".to_string(),
-                ts: overwatch::store::now(),
-            };
-            overwatch::store::append_merge_conflict(&repo, &entry).unwrap();
-            // The holder run "deadrun" is DEAD: its only lease is STALE (heartbeat
-            // aged past LEASE_TTL_SECS), so it is not counted as live.
-            seed_lease(
-                &repo,
-                "deadrun",
-                overwatch::store::now() - overwatch::store::LEASE_TTL_SECS - 100,
-            );
-            merge(&cfg, &repo, "feat", "main")
-                .expect("a filtered stale hold must let the merge proceed, not error")
-        });
-
-        assert_eq!(
-            outcome,
-            MergeOutcome::Merged,
-            "a stale hold from a DEAD holder run must NOT block the reused-branch merge"
-        );
-        // The merge actually landed the reused branch.
-        assert!(
-            repo.join("feat.txt").exists(),
-            "the reused-branch merge must land once the stale hold is filtered"
         );
     }
 

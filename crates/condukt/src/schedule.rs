@@ -1386,9 +1386,25 @@ mod prop_tests {
         /// Single parallel task (with a declared file) → exactly one batch of
         /// size one. It must declare a file: an empty touched_files set is now
         /// an unknown blast radius that is conservatively serialized.
+        ///
+        /// Regression (id = "scp"): the `pt` helper sets `title = id`, and the
+        /// deterministic force-gate classifies `task_action_text` (title +
+        /// done_criteria + touched_files — NOT the id). A fuzzed id that
+        /// happens to spell a deploy/egress token — "scp" folds into
+        /// `task_action_text` as "scp src/only.rs", matching the `"scp "`
+        /// DEPLOY_SIGNAL — force-gated the task, yielding 0 batches (the task
+        /// landed in `gated`, not "dropped"). That is the gate working as
+        /// designed on a title; the conflation of the fuzzed *id* with the
+        /// risk-classified *title* is the test artifact (in a real
+        /// `Decomposition` id and title are distinct fields). This property is
+        /// about file-conflict batching, which is independent of the id, so we
+        /// pin a fixed benign title and keep fuzzing the id: batching must be
+        /// invariant under the id regardless of whether the id spells a token.
         #[test]
         fn single_parallel_task_one_batch(id in "[a-z]{2,5}") {
-            let sched = schedule(&pd(vec![pt(&id, vec!["src/only.rs".into()], vec![], Class::Parallel)]), &[]);
+            let mut t = pt(&id, vec!["src/only.rs".into()], vec![], Class::Parallel);
+            t.title = "implement the feature".into();
+            let sched = schedule(&pd(vec![t]), &[]);
             prop_assert_eq!(sched.batches.len(), 1);
             prop_assert_eq!(sched.batches[0].parallel.len(), 1);
             prop_assert!(sched.serial.is_empty());

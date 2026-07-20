@@ -1212,7 +1212,9 @@ mod tests {
         match outcome {
             CheckOutcome::Error(e) => assert!(e.contains('7'), "reason should name the exit: {e}"),
             CheckOutcome::Verified { satisfied, .. } => {
-                panic!("a non-zero exit must not be trusted as a verdict (got satisfied={satisfied})")
+                panic!(
+                    "a non-zero exit must not be trusted as a verdict (got satisfied={satisfied})"
+                )
             }
         }
     }

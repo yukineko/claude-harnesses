@@ -437,12 +437,65 @@ pub enum MergeOutcome {
     Conflict(String),
 }
 
+/// Is a runtime-overlap merge-hold placed by `run_id` still AUTHORITATIVE — is
+/// its placer run still LIVE, per condukt's OWN claim/heartbeat registry? A hold
+/// only blocks the merge while its holder run is alive: an overlap held by a run
+/// that has since crashed/been abandoned is stale and must NOT block a LIVE task
+/// that merely REUSES the same `condukt/<task.id>` branch name in a later run
+/// (the bug: `finalize_landed_branch` only clears holds on a branch that LANDS,
+/// so a never-landed abandoned branch leaves a stale OPEN hold that spuriously
+/// blocks the reused-branch task forever).
+///
+/// Liveness is read from condukt's OWN registry — [`crate::claim::run_liveness`],
+/// the claim/heartbeat TTL machinery keyed on the SAME condukt run-id space the
+/// hold's `run_id` lives in (a live run holds file/task claims under its run id
+/// and heart-beats them). It is deliberately NOT read from overwatch leases:
+/// condukt never begins an overwatch lease and `OVERWATCH_RUN_ID` is unset, so a
+/// lease-based liveness check runs against a DISJOINT id space, matches nothing,
+/// and reads EVERY hold as dead — silently disabling this gate in production.
+/// Staying inside condukt's own id space is the whole point.
+///
+/// **Fail CLOSED on ambiguity.** The hold keeps blocking unless we have POSITIVE
+/// evidence its placer run is dead: only a CLEAN registry read that finds no
+/// fresh claim ([`crate::claim::RunLiveness::Dead`]) drops it. `Live` obviously
+/// keeps it, and `Undetermined` — a present-but-unreadable/corrupt registry, or
+/// an UNATTRIBUTED hold (empty `run_id`, no placer to test) — ALSO keeps it.
+/// Letting the merge proceed on "could not determine liveness" is precisely the
+/// silent fail-open this gate exists to prevent (the reverted disjoint-id bug's
+/// failure class — an empty read making every hold look dead — re-entering via
+/// registry absence instead of id mismatch).
+///
+/// **Known residual (tracked, not a cannot-determine fail-open).** Liveness is
+/// keyed purely on the claim registry, so a run that placed a hold but holds NO
+/// claim under `run_id` — e.g. a task whose decomposition `touched_files` was
+/// empty (claims key off declared `touched_files`, while the hold is placed off
+/// the actual git diff), or a run that already released its claims at the
+/// `verified` transition while an open hold lingers — reads as `Dead` and its
+/// hold drops. This is a positive-evidence heuristic (a CLEAN read finding no
+/// live claim), the SAME basis the reaper uses — categorically different from the
+/// `Undetermined` fail-closed path above. The proper closure is a second
+/// positive signal (is `run_id` a currently-active, non-terminal run in
+/// `state::RunState`?); tracked as a backlog follow-up rather than coupling
+/// run-state into this gate under the current fix.
+fn hold_placed_by_live_run(cfg: &Config, repo: &Path, run_id: &str, now: i64) -> bool {
+    match crate::claim::run_liveness(cfg, repo, run_id, now) {
+        crate::claim::RunLiveness::Dead => false,
+        crate::claim::RunLiveness::Live | crate::claim::RunLiveness::Undetermined => true,
+    }
+}
+
 /// Look up an OPEN runtime-overlap merge-hold for `branch` in the overwatch
-/// review surface (decision A). Returns the hold's `conflict_id` when the
-/// branch is held. Fail-soft: any read error / absent store degrades to "no
-/// hold" (never blocks a merge on a compute error).
-fn open_runtime_overlap_hold(repo: &Path, branch: &str) -> Option<String> {
+/// review surface (decision A). Returns the hold's `conflict_id` when the branch
+/// is held BY A STILL-LIVE holder run. Fail-soft: any read error / absent store
+/// degrades to "no hold" (never blocks a merge on a compute error).
+///
+/// Authority is filtered by holder-run LIVENESS, not branch-name match alone
+/// (see [`hold_placed_by_live_run`]): a stale hold from a DEAD condukt run does
+/// not block a task that reuses the branch name, while a hold from a LIVE run
+/// still blocks.
+fn open_runtime_overlap_hold(cfg: &Config, repo: &Path, branch: &str) -> Option<String> {
     let open = overwatch::store::open_merge_conflicts(repo).ok()?;
+    let now = crate::state::now_secs();
     open.into_iter()
         .find(|e| {
             e.branch == branch
@@ -450,6 +503,7 @@ fn open_runtime_overlap_hold(repo: &Path, branch: &str) -> Option<String> {
                     e.origin,
                     overwatch::merge_conflict::ConflictOrigin::RuntimeOverlap
                 )
+                && hold_placed_by_live_run(cfg, repo, &e.run_id, now)
         })
         .map(|e| e.conflict_id)
 }
@@ -515,7 +569,7 @@ pub fn merge(
     // ── Pre-merge hold gate (decision A) ─────────────────────────────────────
     // A detected mid-flight actual-diff overlap HOLDS this branch for review.
     // Do not merge until it is resolved (the resolution clears the hold).
-    if let Some(conflict_id) = open_runtime_overlap_hold(repo, branch) {
+    if let Some(conflict_id) = open_runtime_overlap_hold(cfg, repo, branch) {
         return Ok(MergeOutcome::Held(conflict_id));
     }
 
@@ -1072,46 +1126,241 @@ mod worktree_remove_tests {
         });
     }
 
-    /// Decision A gate (finding #2a): an OPEN `RuntimeOverlap` merge-hold for the
-    /// branch must HOLD the merge — `merge()` returns `MergeOutcome::Held`, NOT
-    /// `Merged`. This test FAILS if the pre-merge hold gate (worktree.rs:~515-520)
-    /// is deleted (the branch would then merge and land on `main`).
+    /// Enqueue an OPEN `RuntimeOverlap` merge-hold for `branch` placed by
+    /// `run_id`, exactly as the runtime-conflict hook does on a positive
+    /// detection (no resolution → it stays open). Returns the `conflict_id`.
+    fn seed_runtime_overlap_hold(repo: &Path, run_id: &str, branch: &str) -> String {
+        let conflict_id = format!("{run_id}/{branch}/runtime-overlap");
+        let entry = overwatch::merge_conflict::MergeConflictEntry {
+            conflict_id: conflict_id.clone(),
+            origin: overwatch::merge_conflict::ConflictOrigin::RuntimeOverlap,
+            run_id: run_id.to_string(),
+            branch: branch.to_string(),
+            default_branch: "main".to_string(),
+            base_ref: merge_base_sha(repo, "main", branch),
+            conflicted_files: vec!["feat.txt".to_string()],
+            diff_ours: "peer".to_string(),
+            diff_theirs: "mine".to_string(),
+            ts: overwatch::store::now(),
+        };
+        overwatch::store::append_merge_conflict(repo, &entry).unwrap();
+        conflict_id
+    }
+
+    /// Decision A gate (finding #2a) + holder-run LIVENESS (e117d351): an OPEN
+    /// `RuntimeOverlap` merge-hold whose HOLDER RUN IS STILL LIVE must HOLD the
+    /// merge — `merge()` returns `MergeOutcome::Held`, NOT `Merged`.
+    ///
+    /// Liveness is seeded the SAME way production records it: the holder run
+    /// `run` claims the task's file in condukt's OWN claim registry
+    /// (`claim::claim_files`, exactly what `state set --status running` calls)
+    /// with a FRESH heartbeat, so `claim::run_is_live` reads it as alive. There
+    /// is NO fabricated cross-store alignment — no overwatch lease is seeded at
+    /// all — so this ALSO pins that liveness is read from condukt's claim
+    /// registry, not overwatch leases: against the reverted disjoint-lease
+    /// implementation (which matched the hold's run_id against overwatch LEASE
+    /// run_ids that condukt never populates) this hold would find no matching
+    /// lease, be treated as dead, and the merge would come back `Merged` — this
+    /// test would FAIL. It also FAILS if the pre-merge hold gate is deleted.
     #[test]
-    fn merge_is_held_when_an_open_runtime_overlap_exists() {
+    fn merge_is_held_when_runtime_overlap_holder_run_is_live() {
         let (tmp, repo) = init_repo();
         make_branch(&repo, "feat", "feat.txt", "feature content\n");
         let cfg = test_cfg(&repo);
-        let home = tmp.path().join("home-held");
+        let home = tmp.path().join("home-held-live");
         fs::create_dir_all(&home).unwrap();
 
         let outcome = with_home(&home, || {
-            // Seed an OPEN RuntimeOverlap hold (what the runtime-conflict hook
-            // enqueues on a positive detection) with NO resolution → stays open.
-            let entry = overwatch::merge_conflict::MergeConflictEntry {
-                conflict_id: "run/feat/runtime-overlap".to_string(),
-                origin: overwatch::merge_conflict::ConflictOrigin::RuntimeOverlap,
-                run_id: "run".to_string(),
-                branch: "feat".to_string(),
-                default_branch: "main".to_string(),
-                base_ref: merge_base_sha(&repo, "main", "feat"),
-                conflicted_files: vec!["feat.txt".to_string()],
-                diff_ours: "peer".to_string(),
-                diff_theirs: "mine".to_string(),
-                ts: overwatch::store::now(),
-            };
-            overwatch::store::append_merge_conflict(&repo, &entry).unwrap();
+            seed_runtime_overlap_hold(&repo, "run", "feat");
+            // The holder run "run" is LIVE: it holds a file claim in condukt's
+            // own registry with a FRESH heartbeat, precisely how a running task
+            // records itself (`state set --status running` -> claim_files).
+            crate::claim::claim_files(
+                &cfg,
+                &repo,
+                "run",
+                Some("sess"),
+                &["feat.txt".to_string()],
+                crate::state::now_secs(),
+            )
+            .unwrap();
             merge(&cfg, &repo, "feat", "main")
                 .expect("a held overlap is a hold-for-review, not a hard error")
         });
 
         match outcome {
             MergeOutcome::Held(id) => assert_eq!(id, "run/feat/runtime-overlap"),
-            other => panic!("an open runtime overlap must HOLD the merge, got {other:?}"),
+            other => panic!("a LIVE-holder runtime overlap must HOLD the merge, got {other:?}"),
         }
         // The held merge must NOT have landed the branch.
         assert!(
             !repo.join("feat.txt").exists(),
             "a HELD merge must not land the branch onto the default branch"
+        );
+    }
+
+    /// DEAD holder by ABSENCE (e117d351): an OPEN `RuntimeOverlap` hold whose
+    /// holder run holds NO claim in condukt's registry (a fully
+    /// abandoned/crashed run whose claims were released or never re-recorded)
+    /// must NOT block a task that REUSES the same `condukt/<task.id>` branch
+    /// name. The stale hold is filtered by holder-run liveness, so `merge()`
+    /// proceeds and returns `Merged`. RED without the liveness filter (the hold
+    /// matches by branch name and the merge comes back `Held`); GREEN with it.
+    #[test]
+    fn merge_not_held_when_runtime_overlap_holder_run_has_no_claim() {
+        let (tmp, repo) = init_repo();
+        make_branch(&repo, "feat", "feat.txt", "feature content\n");
+        let cfg = test_cfg(&repo);
+        let home = tmp.path().join("home-dead-absent");
+        fs::create_dir_all(&home).unwrap();
+
+        let outcome = with_home(&home, || {
+            // Hold placed by "deadrun"; that run holds NO claim → not live.
+            seed_runtime_overlap_hold(&repo, "deadrun", "feat");
+            merge(&cfg, &repo, "feat", "main")
+                .expect("a filtered stale hold must let the merge proceed, not error")
+        });
+
+        assert_eq!(
+            outcome,
+            MergeOutcome::Merged,
+            "a hold from a holder run with no live claim must NOT block the reused-branch merge"
+        );
+        assert!(
+            repo.join("feat.txt").exists(),
+            "the reused-branch merge must land once the stale hold is filtered"
+        );
+    }
+
+    /// DEAD holder by TTL EXPIRY (e117d351): the same filtering, but proving the
+    /// heartbeat-TTL staleness path. The holder run DID record a claim, but its
+    /// heartbeat is aged past the stuck-TTL (the run crashed without releasing),
+    /// so `claim::run_is_live` reads it as dead via `is_stale`. TTL expiry is
+    /// simulated deterministically by back-dating the claim's heartbeat rather
+    /// than sleeping. The hold must not block → `Merged`.
+    #[test]
+    fn merge_not_held_when_runtime_overlap_holder_claim_is_ttl_expired() {
+        let (tmp, repo) = init_repo();
+        make_branch(&repo, "feat", "feat.txt", "feature content\n");
+        let cfg = test_cfg(&repo);
+        let home = tmp.path().join("home-dead-ttl");
+        fs::create_dir_all(&home).unwrap();
+
+        let outcome = with_home(&home, || {
+            seed_runtime_overlap_hold(&repo, "deadrun", "feat");
+            // "deadrun" DID claim, but its last heartbeat is well past the TTL
+            // (recorded at now - stuck_ttl - 100): a genuinely dead run.
+            let stale_at = crate::state::now_secs() - cfg.stuck_ttl_secs as i64 - 100;
+            crate::claim::claim_files(
+                &cfg,
+                &repo,
+                "deadrun",
+                Some("sess"),
+                &["feat.txt".to_string()],
+                stale_at,
+            )
+            .unwrap();
+            merge(&cfg, &repo, "feat", "main")
+                .expect("a filtered TTL-expired hold must let the merge proceed, not error")
+        });
+
+        assert_eq!(
+            outcome,
+            MergeOutcome::Merged,
+            "a hold whose holder-run claim is TTL-expired must NOT block the reused-branch merge"
+        );
+        assert!(
+            repo.join("feat.txt").exists(),
+            "the reused-branch merge must land once the TTL-expired hold is filtered"
+        );
+    }
+
+    /// Anti-regression pin (e117d351): liveness is read from condukt's OWN claim
+    /// registry, NOT from overwatch leases. This is the exact trap the reverted
+    /// disjoint-lease implementation fell into. Here we FABRICATE the very
+    /// alignment that implementation relied on — a FRESH overwatch lease carrying
+    /// the hold's run_id — but record NO condukt claim. The reverted
+    /// `hold_placed_by_live_run` (load_leases + is_stale) would read this lease
+    /// as live and return `Held`; the correct condukt-registry check finds no
+    /// live claim and returns `Merged`. Asserting `Merged` proves the gate
+    /// ignores overwatch leases entirely and reads condukt's own registry.
+    #[test]
+    fn runtime_overlap_liveness_ignores_overwatch_leases() {
+        let (tmp, repo) = init_repo();
+        make_branch(&repo, "feat", "feat.txt", "feature content\n");
+        let cfg = test_cfg(&repo);
+        let home = tmp.path().join("home-lease-ignored");
+        fs::create_dir_all(&home).unwrap();
+
+        let outcome = with_home(&home, || {
+            seed_runtime_overlap_hold(&repo, "leaserun", "feat");
+            // Fabricate a FRESH overwatch lease for the holder run (the reverted
+            // impl's liveness source) — but record NO condukt claim.
+            let mut leases = overwatch::store::load_leases(&repo).unwrap_or_default();
+            leases.insert(
+                "leaserun/task".to_string(),
+                overwatch::store::Lease {
+                    key: "leaserun/task".to_string(),
+                    title: "t".to_string(),
+                    session_id: "sess".to_string(),
+                    run_id: "leaserun".to_string(),
+                    claimed_at: overwatch::store::now(),
+                    heartbeat_at: overwatch::store::now(),
+                    scope: Vec::new(),
+                    done_criteria: None,
+                },
+            );
+            overwatch::store::save_leases(&repo, &leases).unwrap();
+            merge(&cfg, &repo, "feat", "main")
+                .expect("a hold with no condukt-registry liveness must merge, not error")
+        });
+
+        assert_eq!(
+            outcome,
+            MergeOutcome::Merged,
+            "a fresh overwatch lease must NOT keep a hold alive; liveness reads condukt's claim registry"
+        );
+        assert!(
+            repo.join("feat.txt").exists(),
+            "the merge must land: no live condukt claim carries the hold's run_id"
+        );
+    }
+
+    /// FAIL-CLOSED on undetermined liveness (e117d351 hardening): if the claim
+    /// registry exists but is UNREADABLE/corrupt at merge time, the hold's
+    /// placer-run liveness cannot be established — so the hold must KEEP blocking
+    /// (`Held`), NOT be dropped. Dropping it here would re-enter the reverted
+    /// disjoint-id bug's failure class (an unreadable/empty registry making every
+    /// hold look dead ⇒ the gate silently off), just via registry corruption
+    /// instead of id mismatch. RED against the fail-soft `load()`-to-empty
+    /// behavior (corrupt ⇒ "not live" ⇒ `Merged`); GREEN once liveness is
+    /// three-valued and the gate fails closed on `Undetermined`.
+    #[test]
+    fn merge_stays_held_when_claim_registry_is_unreadable() {
+        let (tmp, repo) = init_repo();
+        make_branch(&repo, "feat", "feat.txt", "feature content\n");
+        let cfg = test_cfg(&repo);
+        let home = tmp.path().join("home-corrupt-registry");
+        fs::create_dir_all(&home).unwrap();
+
+        let outcome = with_home(&home, || {
+            seed_runtime_overlap_hold(&repo, "run", "feat");
+            // Corrupt the very registry `run_liveness` reads: liveness for "run"
+            // is now UNDETERMINED (not positively dead), so the gate must hold.
+            let reg = crate::claim::registry_path_for_test(&cfg, &repo);
+            fs::create_dir_all(reg.parent().unwrap()).unwrap();
+            fs::write(&reg, b"{ not valid json ]]").unwrap();
+            merge(&cfg, &repo, "feat", "main")
+                .expect("an undetermined-liveness hold is a hold-for-review, not a hard error")
+        });
+
+        match outcome {
+            MergeOutcome::Held(id) => assert_eq!(id, "run/feat/runtime-overlap"),
+            other => panic!("an unreadable registry must FAIL CLOSED (hold), got {other:?}"),
+        }
+        assert!(
+            !repo.join("feat.txt").exists(),
+            "the merge must NOT land while holder-run liveness is undetermined"
         );
     }
 

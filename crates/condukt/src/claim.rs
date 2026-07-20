@@ -527,6 +527,105 @@ pub fn active_claims(cfg: &Config, cwd: &Path, now: i64) -> Result<Registry> {
     }
 }
 
+/// Three-valued liveness verdict for a run id in the claim registry — see
+/// [`run_liveness`]. The third state ([`RunLiveness::Undetermined`]) is what
+/// keeps the merge-hold gate from silently failing open: it lets the caller
+/// tell "positively dead" apart from "could not find out", and fail CLOSED on
+/// the latter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunLiveness {
+    /// `run_id` holds ≥1 claim whose heartbeat is within the stuck-TTL.
+    Live,
+    /// The registry was read cleanly and holds no fresh claim for `run_id`
+    /// (a genuinely-absent registry = no claims = also Dead).
+    Dead,
+    /// Liveness could not be established (unreadable/corrupt registry, or an
+    /// empty/unattributed `run_id`). Callers that gate on death MUST treat this
+    /// as "still live" (fail closed).
+    Undetermined,
+}
+
+/// Liveness of `run_id` in this project's claim registry, for the runtime-overlap
+/// merge-hold gate ([`crate::worktree`]).
+///
+/// This is condukt's OWN liveness signal, in condukt's OWN run-id space: a live
+/// run refreshes the heartbeat of the claims it holds (`state set --status
+/// running` claims a task's files under the run id; every later `state set` /
+/// `state heartbeat` refreshes them via [`heartbeat`]), so a claim with a fresh
+/// heartbeat proves its run is alive. A run that has since crashed/been
+/// abandoned stops heart-beating and its claims age out past the TTL
+/// ([`is_stale`]) — exactly the same staleness the reaper uses. The hold's
+/// `run_id` IS a condukt run id, so it shares this registry's identity space —
+/// the whole point of keying liveness here rather than off a disjoint id space.
+///
+/// The gate uses this to decide whether a hold is still authoritative: a hold
+/// placed by a LIVE run keeps blocking the merge, while a hold left by a DEAD
+/// run ages out so it does not block a live task that merely REUSES the same
+/// `condukt/<task.id>` branch name.
+///
+/// **Fail-closed contract.** Only a CLEAN registry read that finds no fresh
+/// claim returns [`RunLiveness::Dead`]. A present-but-unreadable/corrupt
+/// registry, or an empty `run_id` (an unattributed hold with no placer to test),
+/// returns [`RunLiveness::Undetermined`] — never `Dead`. Collapsing "cannot read
+/// the registry" into "the placer is dead, drop the hold" would re-enter the
+/// reverted disjoint-id bug's failure class (an empty read making every hold
+/// look dead → the gate silently off) one layer down; the caller must fail
+/// closed on `Undetermined`.
+///
+/// A pure, lock-free read: it never persists (no reap-compaction) and never
+/// takes the claims lock, so a merge liveness probe cannot contend with a live
+/// run's claim writes. The atomic-rename saves mean this always observes a
+/// COMPLETE registry (never a half-written one), so a torn read cannot
+/// masquerade as a clean empty registry.
+pub fn run_liveness(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> RunLiveness {
+    if run_id.is_empty() {
+        // No placer id to test — death cannot be established. Fail closed.
+        return RunLiveness::Undetermined;
+    }
+    let reg = match read_registry(&registry_path(cfg, cwd)) {
+        Ok(Some(reg)) => reg,
+        // Genuinely-absent registry: no claims exist for anyone ⇒ Dead.
+        Ok(None) => return RunLiveness::Dead,
+        // Present but unreadable/corrupt: liveness UNKNOWN. Fail closed.
+        Err(_) => return RunLiveness::Undetermined,
+    };
+    let ttl = ttl_secs(cfg);
+    let live = reg
+        .files
+        .values()
+        .chain(reg.task_claims.values())
+        .any(|c| c.run_id == run_id && !is_stale(c, now, ttl));
+    if live {
+        RunLiveness::Live
+    } else {
+        RunLiveness::Dead
+    }
+}
+
+/// Read the claim registry distinguishing a genuinely-absent file (`Ok(None)`)
+/// from a present-but-unreadable/corrupt one (`Err`), so a caller that must fail
+/// CLOSED on "cannot determine" can tell the two apart. Plain [`load`]
+/// deliberately collapses both to an empty registry for callers that are fine
+/// degrading to no-claims; [`run_liveness`] cannot use it because that collapse
+/// is exactly the silent fail-open it must avoid.
+fn read_registry(path: &Path) -> std::io::Result<Option<Registry>> {
+    match std::fs::read_to_string(path) {
+        Ok(txt) => serde_json::from_str(&txt)
+            .map(Some)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Test-only accessor for the private registry path, so cross-module tests
+/// (e.g. the worktree merge-hold gate) can seed a CORRUPT registry at exactly
+/// the location [`run_liveness`] reads.
+#[cfg(test)]
+pub(crate) fn registry_path_for_test(cfg: &Config, cwd: &Path) -> PathBuf {
+    registry_path(cfg, cwd)
+}
+
 /// Who holds a task claim — the observability slice of a [`Claim`] for the
 /// execution-state view.
 #[allow(dead_code)] // consumed by the CLI wiring in the follow-up task
@@ -757,6 +856,82 @@ mod tests {
         // Final state is intact.
         let final_reg = load(&path);
         assert_eq!(final_reg.files.len(), reg.files.len());
+    }
+
+    /// A fresh claim ⇒ `Live`. Establishes liveness via the real claim path.
+    #[test]
+    fn run_liveness_live_for_fresh_claim() {
+        let tmp = make_tmp_dir("live");
+        let cfg = make_cfg(&tmp);
+        let now = 1_000_000;
+        claim_files(&cfg, &tmp, "run", Some("sess"), &files(&["a.txt"]), now).unwrap();
+        assert_eq!(run_liveness(&cfg, &tmp, "run", now), RunLiveness::Live);
+    }
+
+    /// A genuinely-absent registry ⇒ `Dead` (no claims exist for anyone). This
+    /// is the normal "the placer released/never wrote claims" case, and it must
+    /// stay `Dead` so a stale hold from a finished run does not block forever.
+    #[test]
+    fn run_liveness_dead_when_registry_absent() {
+        let tmp = make_tmp_dir("absent");
+        let cfg = make_cfg(&tmp);
+        // No claim ever written → claims.json does not exist.
+        assert!(!registry_path(&cfg, &tmp).exists());
+        assert_eq!(
+            run_liveness(&cfg, &tmp, "run", 1_000_000),
+            RunLiveness::Dead
+        );
+    }
+
+    /// A claim whose heartbeat is past the stuck-TTL ⇒ `Dead` (the placer went
+    /// silent — the reaper's own staleness).
+    #[test]
+    fn run_liveness_dead_when_claim_stale() {
+        let tmp = make_tmp_dir("stale");
+        let cfg = make_cfg(&tmp);
+        let claimed_at = 1_000_000;
+        claim_files(
+            &cfg,
+            &tmp,
+            "run",
+            Some("sess"),
+            &files(&["a.txt"]),
+            claimed_at,
+        )
+        .unwrap();
+        let now = claimed_at + cfg.stuck_ttl_secs as i64 + 100;
+        assert_eq!(run_liveness(&cfg, &tmp, "run", now), RunLiveness::Dead);
+    }
+
+    /// A present-but-UNREADABLE registry ⇒ `Undetermined`, NOT `Dead`. This is
+    /// the fail-closed pin: a corrupt claims.json must never be silently read as
+    /// "the placer is dead", which would let the merge-hold gate drop a hold it
+    /// cannot vouch for. RED against the old `load()`-to-empty behavior (which
+    /// returned "not live" ⇒ the gate would map it to Dead and merge).
+    #[test]
+    fn run_liveness_undetermined_when_registry_unreadable() {
+        let tmp = make_tmp_dir("corrupt");
+        let cfg = make_cfg(&tmp);
+        let path = registry_path(&cfg, &tmp);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"{ this is not valid json ]]").unwrap();
+        assert_eq!(
+            run_liveness(&cfg, &tmp, "run", 1_000_000),
+            RunLiveness::Undetermined
+        );
+    }
+
+    /// An empty `run_id` (an unattributed hold, no placer to test) ⇒
+    /// `Undetermined`, so the gate keeps blocking rather than dropping a hold on
+    /// ambiguous data.
+    #[test]
+    fn run_liveness_undetermined_for_empty_run_id() {
+        let tmp = make_tmp_dir("empty-id");
+        let cfg = make_cfg(&tmp);
+        assert_eq!(
+            run_liveness(&cfg, &tmp, "", 1_000_000),
+            RunLiveness::Undetermined
+        );
     }
 
     fn make_cfg(tmp: &Path) -> Config {

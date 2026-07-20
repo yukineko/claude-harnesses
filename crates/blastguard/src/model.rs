@@ -13,6 +13,18 @@
 /// `Deny` found anywhere on a command line must always outrank an `Ask` found
 /// anywhere else on it, or the stronger verdict would be silently downgraded.
 /// See [`Decision::is_blocking`] and `detect::VerdictAcc`.
+///
+/// DELIBERATELY NOT `#[non_exhaustive]`, even though adding `Ask` was therefore
+/// a breaking change that cost a 0.1 -> 0.2 bump, and even though cargo
+/// semver-checks will charge that same price for the next variant. The
+/// exhaustive match is load-bearing: adding `Ask` broke the build at
+/// `specguard::forge::implement::validate_test_cmd` and at
+/// `blastguard::rule_id`'s test helper, which is exactly how those two call
+/// sites were found and made to handle it. With `#[non_exhaustive]` every
+/// consumer would need a wildcard arm, and a wildcard arm next to `Allow` is
+/// where a future "cannot determine" variant would silently land as permission
+/// to proceed. Paying a version bump to keep that a COMPILE error is the whole
+/// bargain — do not add the attribute to make a release quieter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
     /// Let the tool call proceed (blastguard stays silent).

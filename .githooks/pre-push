@@ -3,7 +3,7 @@
 #
 #     git config core.hooksPath .githooks
 #
-# This is an ADVISORY-ONLY nudge with three checks:
+# This is an ADVISORY-ONLY nudge with four checks:
 #   1. GATE crates — when the push touches blastguard/propguard/specguard/
 #      stuckguard/mutategate/overwatch (the fleet defense gates), suggest a
 #      Continuous-Audit round (`scripts/continuous-audit.sh --dry-run`).
@@ -16,6 +16,16 @@
 #      human-0 chain depends on (condukt/scout/flow/backlog), suggest re-running
 #      `scripts/e2e-autonomy.sh`, which asserts the gate contracts that remove
 #      every AskUserQuestion stop. Also machine-local (needs installed binaries).
+#   4. Chronically-red CI — `scripts/check-ci-red.py` names workflows that have
+#      failed N runs in a row on main, and separately names the ones it could
+#      NOT judge. This repo has no required status checks, so a red workflow
+#      blocks nothing and tells no one: one clippy lint stayed red for 89
+#      consecutive runs unnoticed. Pinning the toolchain would have bought
+#      silence by giving up the detection; the defect was the silence, so this
+#      is where it gets fixed. Machine-local for the same reason as (2): it
+#      needs an authenticated `gh`, and running a check *about* CI inside CI is
+#      circular. Always inspects `main` — the shared branch whose rot is the
+#      problem — regardless of which ref is being pushed.
 #
 # It NEVER blocks the push: this hook always exits 0, matching the fail-soft
 # invariant used by `.githooks/pre-commit` (injectguard) and the Continuous-Audit
@@ -114,10 +124,26 @@ fi
 # out to the live cache reaches no session at all. The checker exits 0 when the
 # registry is absent (e.g. a machine with no plugins installed), so this stays
 # quiet where it does not apply. Skipped entirely without python3 or the script.
+#
+# The checker distinguishes its failure CLASSES by exit code (rc=1 rollout
+# drift, rc=2 enablement) because they have OPPOSITE fixes. Branching on a bare
+# non-zero and then unconditionally printing the rollout prose told the reader
+# to run `scripts/rollout-plugins.sh` for a disabled-GATE-crate failure — the
+# one command that, by the checker's own hint, does NOT enable plugins. So: the
+# checker's own output (which already carries the right Fix line for whichever
+# class fired) is always echoed, and the extra rollout prose is added only for
+# the rollout class. Any other non-zero rc is unrecognized: echo and say so
+# rather than inventing a remediation for it.
 if command -v python3 >/dev/null 2>&1 && [ -f scripts/check-plugin-rollout.py ]; then
-    if ! rollout_out="$(python3 scripts/check-plugin-rollout.py 2>&1)"; then
+    rollout_out="$(python3 scripts/check-plugin-rollout.py 2>&1)"
+    rollout_rc=$?
+    if [ "$rollout_rc" -ne 0 ]; then
         printf '\n%s\n' "$rollout_out" >&2
-        cat >&2 <<'EOF'
+    fi
+    case "$rollout_rc" in
+        0) ;;
+        1)
+            cat >&2 <<'EOF'
 
 rollout: the versions above are committed but not live — the fix is in git and
 reaches no session until you roll it out:
@@ -126,7 +152,69 @@ reaches no session until you roll it out:
 
 This is advisory only — the push is not blocked.
 EOF
+            ;;
+        2)
+            # Enablement class. Deliberately does NOT mention rollout-plugins.sh:
+            # the checker's own Fix line above names the real remedy (edit
+            # enabledPlugins in settings.json, then restart Claude Code).
+            cat >&2 <<'EOF'
+
+enablement: see the Fix line above — this class is NOT fixed by a rollout.
+A GATE crate that is installed but not listed in enabledPlugins is inert: its
+hooks never fire, so the gate reports nothing and guards nothing.
+
+This is advisory only — the push is not blocked.
+EOF
+            ;;
+        *)
+            printf '\n%s\n' "rollout check: unrecognized exit code $rollout_rc — see its output above. This is advisory only; the push is not blocked." >&2
+            ;;
+    esac
+fi
+
+# Chronically-red CI. Only the chronic class (default: 3+ consecutive failures)
+# is surfaced; a single red run is usually a flake or a mistake already being
+# fixed, and saying the same thing about both trains the reader to ignore both.
+#
+# The checker exits 0 for every "cannot tell" case (no gh, no auth, offline,
+# timeout, unparseable output) and prints its reason to stderr, so an offline
+# push stays quiet without ever being mistaken for an all-clear. Set
+# PREPUSH_SKIP_CI_RED=1 to skip the network call entirely.
+# Branching is on EXIT CODE, never on the output text. An earlier version
+# matched the literal string "check-ci-red: skipped" to tell "could not ask"
+# from "CI is fine" — so rewording one message would have silently turned this
+# into a no-op, which is precisely the failure mode the check exists to catch.
+#   0 = every active workflow judged, none chronic   1 = chronically red
+#   3 = something could not be determined            * = unrecognized
+if [ "${PREPUSH_SKIP_CI_RED:-0}" != "1" ] \
+    && command -v python3 >/dev/null 2>&1 && [ -f scripts/check-ci-red.py ]; then
+    ci_out="$(python3 scripts/check-ci-red.py --branch main 2>&1)"
+    ci_rc=$?
+    if [ "$ci_rc" -ne 0 ]; then
+        printf '\n%s\n' "$ci_out" >&2
     fi
+    case "$ci_rc" in
+        0) ;;
+        1)
+            # Says "chronically" rather than "already broken before this push":
+            # the report can also carry a recently-red section, and a fresh red
+            # there may well be from the developer's own previous push.
+            # The script's own output already explains the class and how to
+            # inspect it; only the push-safety line is added here.
+            printf '%s\n' "This is advisory only — the push is not blocked." >&2
+            ;;
+        3)
+            cat >&2 <<'EOF'
+
+CI health could not be fully determined — treat the above as UNKNOWN, not as an
+all-clear. A workflow that cannot be judged is exactly the one most likely to
+have rotted unnoticed. This is advisory only — the push is not blocked.
+EOF
+            ;;
+        *)
+            printf '\n%s\n' "check-ci-red: unrecognized exit code $ci_rc — see its output above. NOT an all-clear. This is advisory only; the push is not blocked." >&2
+            ;;
+    esac
 fi
 
 exit 0

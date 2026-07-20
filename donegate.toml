@@ -1,0 +1,44 @@
+# donegate — acceptance gate for this repo. The agent cannot finish its turn
+# until every required check exits 0; a failing check feeds its tail output back
+# so the agent fixes it and continues.
+#
+# WHY THIS FILE EXISTS: donegate ships safe-by-default — with no config it runs
+# nothing and allows every stop. This repo had no donegate.toml and no
+# ~/.donegate/config.toml, so the one gate that actually EXECUTES the test suite
+# was inert while tdd (syntactic evidence only), reviewgate (Inject mode) and
+# propguard (not enabled) covered nothing behind it. Configuring it is what makes
+# "ship broken code, touch one test file" stop being a clean path to a finished turn.
+#
+# LATENCY IS THE DESIGN CONSTRAINT: these run on every Stop. Each check is scoped
+# with when_changed so a docs/scripts-only turn pays nothing, and the test check
+# is scoped to touched crates (see scripts/test-changed-crates.sh) rather than the
+# full 39-crate workspace. A gate slow enough to be disabled protects nothing.
+#
+# NOTE: cargo is rustup-managed here and hook PATH does not always include the
+# shim dir, so each cargo check sources ~/.cargo/env first (CLAUDE.md rule).
+# NOTE: a project donegate.toml is IGNORED unless the project root is trusted —
+# run `donegate trust` once per clone, or this file silently does nothing.
+
+enabled = true
+max_attempts = 3          # give up (allow stop) after N consecutive blocks
+default_timeout_secs = 300
+output_tail_lines = 40
+reset_after_secs = 600    # attempt counter resets after this idle gap
+
+[[check]]
+name = "fmt"
+cmd = '. "$HOME/.cargo/env" 2>/dev/null; cargo fmt --all -- --check'
+when_changed = ["**/*.rs"]
+timeout_secs = 120
+
+[[check]]
+name = "clippy"
+cmd = '. "$HOME/.cargo/env" 2>/dev/null; cargo clippy --workspace --all-targets -- -D warnings'
+when_changed = ["**/*.rs", "Cargo.toml", "Cargo.lock"]
+timeout_secs = 600
+
+[[check]]
+name = "test-changed"
+cmd = "scripts/test-changed-crates.sh"
+when_changed = ["**/*.rs"]
+timeout_secs = 900

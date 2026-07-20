@@ -629,8 +629,21 @@ fn run_checker(cfg: &Config, criteria: &str, props: &[Property], diff: &str) -> 
             // join it with the same timeout budget so this call can never
             // hang past a reasonable bound even if the pipe stays open.
             let out = read_stdout_bounded(child.stdout.take(), timeout);
-            if !status.success() && out.trim().is_empty() {
-                return CheckOutcome::Error(format!("exit {:?}", status.code()));
+            // The exit status is the authority on whether the checker COMPLETED.
+            // The verdict itself lives in the `PROP <id>: PASS|FAIL` lines, never
+            // in the exit code, so a non-zero exit means the checker crashed or
+            // errored mid-run — and its stdout is then a partial, untrustworthy
+            // write that may name some properties PASS before dying. Trusting it
+            // (the old `&& out.trim().is_empty()` guard only caught the crash
+            // that ALSO wrote nothing) is the same fail-open as reading a process
+            // that exited 101 as "no errors": a crashed checker must be an Error,
+            // which fails closed, not a parsed verdict.
+            if !status.success() {
+                return CheckOutcome::Error(format!(
+                    "checker exited {:?} (non-zero exit means it did not complete; \
+                     its output cannot be trusted as a verdict)",
+                    status.code()
+                ));
             }
             parse_checker_output(&out, props)
         }
@@ -1171,6 +1184,54 @@ mod tests {
         // call returned instead of hanging.
         match outcome {
             CheckOutcome::Error(_) | CheckOutcome::Verified { .. } => {}
+        }
+    }
+
+    // ── a checker that exits non-zero must not be trusted, even with output ──
+    //
+    // The verdict lives in the `PROP <id>: PASS|FAIL` stdout lines, never in the
+    // exit code, so a non-zero exit means the checker crashed or errored
+    // mid-run. Before the fix, the guard was `!success && out.trim().is_empty()`,
+    // so a crash that had ALREADY written a `PASS` line before dying was parsed
+    // as an authoritative verdict — the same fail-open as reading a process that
+    // exited 101 as "no errors". This pins that a non-zero exit is an Error
+    // (fail-closed) regardless of what was on stdout.
+    #[cfg(unix)]
+    #[test]
+    fn nonzero_exit_with_a_pass_line_on_stdout_is_an_error_not_a_verdict() {
+        let props = props_by_ids(&["error-path"]);
+        let id = &props[0].id;
+        // Emit a full PASS verdict for the property, then exit non-zero — a
+        // partial/crashing checker that happened to write something first.
+        let cfg = Config {
+            checker_cmd: format!("echo 'PROP {id}: PASS'; exit 7"),
+            checker_timeout_secs: 5,
+            ..Config::default()
+        };
+        let outcome = run_checker(&cfg, "dc", &props, "diff");
+        match outcome {
+            CheckOutcome::Error(e) => assert!(e.contains('7'), "reason should name the exit: {e}"),
+            CheckOutcome::Verified { satisfied, .. } => {
+                panic!("a non-zero exit must not be trusted as a verdict (got satisfied={satisfied})")
+            }
+        }
+    }
+
+    // Guard the other side: a clean (exit 0) checker with a real verdict still
+    // parses, so the fix did not turn every checker into an error.
+    #[cfg(unix)]
+    #[test]
+    fn zero_exit_with_a_pass_line_still_parses_as_verified() {
+        let props = props_by_ids(&["error-path"]);
+        let id = &props[0].id;
+        let cfg = Config {
+            checker_cmd: format!("echo 'PROP {id}: PASS'; exit 0"),
+            checker_timeout_secs: 5,
+            ..Config::default()
+        };
+        match run_checker(&cfg, "dc", &props, "diff") {
+            CheckOutcome::Verified { satisfied, .. } => assert_eq!(satisfied, 1),
+            CheckOutcome::Error(e) => panic!("a clean checker must parse, got Error: {e}"),
         }
     }
 

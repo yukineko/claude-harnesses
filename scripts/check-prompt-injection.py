@@ -225,11 +225,37 @@ def scan_text(text: str) -> list[tuple[int, str, str]]:
     return scan_lines(text.splitlines())
 
 
+# Sentinel line number for a hit that is not a real line match but a refusal to
+# vouch for the file at all (unreadable / non-UTF-8). Carries through the same
+# (lineno, text, name) tuple channel so `main` counts it as a finding.
+UNREADABLE = -1
+
+
 def scan_file(path: Path) -> list[tuple[int, str, str]]:
+    """Scan one prompt asset. A file that cannot be decoded as UTF-8 is NOT
+    clean — it is unvouched-for, and returning `[]` (which reads as "no
+    injection") let an attacker silence the scanner on a poisoned file with a
+    single non-UTF-8 byte. The bytes are still scanned via a lossy decode so a
+    payload sitting beside the junk byte is caught, AND the undecodable file
+    itself is reported as a finding so the gate goes red rather than green on
+    "could not read"."""
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
+        raw = path.read_bytes()
+    except OSError as e:
+        # Genuinely unreadable (permissions, gone mid-scan). Cannot vouch → fail.
+        return [(UNREADABLE, f"cannot read prompt asset: {e}", "unreadable-asset")]
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        # A prompt asset is source text; non-UTF-8 bytes do not belong in one and
+        # are exactly the shape used to evade this scan. Report the file, and
+        # still scan a lossy decode so any adjacent payload is also surfaced.
+        lossy = raw.decode("utf-8", errors="replace")
+        hits: list[tuple[int, str, str]] = [
+            (UNREADABLE, "prompt asset is not valid UTF-8 (scanned lossily)", "non-utf8-asset")
+        ]
+        hits.extend(scan_lines(lossy.splitlines()))
+        return hits
     return scan_lines(text.splitlines())
 
 
@@ -239,7 +265,8 @@ def main(argv: list[str]) -> int:
     for path in files:
         for lineno, text, name in scan_file(path):
             rel = path.relative_to(REPO) if REPO in path.parents else path
-            print(f"{rel}:{lineno}: [{name}] {text.strip()}")
+            loc = str(lineno) if lineno != UNREADABLE else "?"
+            print(f"{rel}:{loc}: [{name}] {text.strip()}")
             total += 1
     if total:
         print(f"\ninjectguard: {total} suspicious line(s) in prompt assets. "

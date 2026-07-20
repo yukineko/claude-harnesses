@@ -3,8 +3,20 @@
 //!
 //! The bias is deliberately asymmetric: we only Deny on *clearly* destructive,
 //! hard-to-undo patterns (recursive/wildcard deletion, full-file truncation,
-//! disk-level writes, working-tree discards). Anything ambiguous falls through
-//! to Allow so blastguard never gets in the way of ordinary work.
+//! disk-level writes, working-tree discards).
+//!
+//! There are three answers, not two. A command blastguard positively knows to
+//! be destructive is DENIED; one it positively knows to be ordinary is ALLOWED;
+//! and a construct it genuinely CANNOT ANALYSE is ASKED
+//! ([`crate::model::Decision::Ask`]) rather than waved through. "Unknown" here
+//! means specifically *unanalysable* — an unresolvable expansion sitting in a
+//! position that gets executed, an unrecognised wrapper in front of a
+//! destructive command line, or a command too complex to finish analysing.
+//! It does NOT mean "not on an allowlist": there is no allowlist, and an
+//! ordinary command this module has no rule for still falls through to Allow.
+//!
+//! An `Ask` is only emitted by the hook when a human is actually there to
+//! answer it (see [`crate::interactive`]); otherwise it is hardened to a Deny.
 
 use serde_json::Value;
 
@@ -123,15 +135,142 @@ fn take_budget() -> bool {
     })
 }
 
+/// Combines sub-analysis verdicts under the `Deny > Ask > Allow` ranking.
+///
+/// Every re-analysis loop in this file (segments, `-c` payload candidates,
+/// command-word candidates, `-exec` tails) evaluates several sub-commands and
+/// must report the STRONGEST verdict any of them produced. Two mistakes are
+/// possible here and both are fail-opens:
+///
+///   * testing `is_deny()` and returning early on it alone — an `Ask` from a
+///     sub-analysis is then dropped and the loop falls through to Allow;
+///   * returning the FIRST blocking verdict — an early `Ask` would then mask a
+///     later `Deny` on the same line, downgrading a known-destructive command
+///     to a question.
+///
+/// So: a `Deny` short-circuits (nothing can outrank it), an `Ask` is remembered
+/// but the scan continues in case a `Deny` follows, and `finish` reports the
+/// remembered `Ask` only if no `Deny` was ever seen.
+#[derive(Default)]
+struct VerdictAcc {
+    ask: Option<Decision>,
+}
+
+impl VerdictAcc {
+    /// Record a sub-verdict. Returns `Some(deny)` when the caller must stop and
+    /// return it immediately; `None` when the scan should continue.
+    fn record(&mut self, d: Decision) -> Option<Decision> {
+        match d {
+            Decision::Deny(_) => Some(d),
+            Decision::Ask(_) => {
+                // Keep the FIRST ask, so the reported reason is the outermost /
+                // earliest unanalysable construct rather than the last one.
+                if self.ask.is_none() {
+                    self.ask = Some(d);
+                }
+                None
+            }
+            Decision::Allow => None,
+        }
+    }
+
+    /// The strongest verdict seen, given no `Deny` short-circuited the caller.
+    fn finish(self) -> Decision {
+        self.ask.unwrap_or(Decision::Allow)
+    }
+}
+
+/// Shell metacharacters whose value is only known when the command actually
+/// runs: parameter expansion (`$VAR`, `${VAR}`), command substitution
+/// (`$(…)`) and the backtick form of the same.
+///
+/// A token containing one of these is not text blastguard can read — it is a
+/// promise about text that will exist later.
+fn has_unresolvable_expansion(tok: &str) -> bool {
+    let mut escaped = false;
+    for c in tok.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            // A backslash-escaped `$`/backtick is a LITERAL dollar/backtick, not
+            // an expansion, so skipping the next char is correct here.
+            '\\' => escaped = true,
+            '$' | '`' => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The first COMMAND-WORD position in `cmd` whose text is an unresolvable
+/// expansion, if any.
+///
+/// This is deliberately restricted to command-word positions — the token that
+/// names the *program* — rather than flagging any `$` anywhere on the line.
+/// `sh -c "grep $pattern src/"` is fully analysable as far as blastguard's
+/// rules go: the program is `grep`, and `$pattern` is an operand whose value
+/// cannot turn `grep` into `rm`. Whereas in `sh -c "$CMD"` the expansion IS the
+/// program, and NOTHING about what will run is knowable from the text. Only the
+/// latter is unanalysable, and only the latter asks.
+///
+/// Each `;`/`&&`/`||`/`|`/`&`-separated segment gets its own command word, so
+/// `sh -c "cd $dir && $BUILD"` is caught on its second segment.
+fn unresolvable_command_word(cmd: &str) -> Option<String> {
+    for seg in split_segments(cmd) {
+        let tokens: Vec<&str> = seg.split_whitespace().collect();
+        for idx in command_candidates(&tokens) {
+            // Compare against the RAW token: `normalized_command` strips one
+            // level of quoting, and `"$CMD"` must still read as an expansion
+            // after that. Checking the raw token needs no such assumption.
+            if has_unresolvable_expansion(tokens[idx]) {
+                return Some(tokens[idx].to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Re-analyse a payload string that a shell-evaluation position will EXECUTE
+/// (`sh -c <payload>`, `eval <payload>`, `flock -c <payload>`).
+///
+/// Two outcomes beyond the ordinary rules:
+///   * the payload analyses as destructive → propagate that `Deny` unchanged;
+///   * the payload's command word is an unresolvable expansion → `Ask`. The
+///     text that will actually be executed is not in the command line at all,
+///     so "no rule matched" here means "nothing was examined", not "safe".
+///
+/// Deny is checked FIRST so a payload that is both destructive and partly
+/// unresolvable (`sh -c "rm -rf $DIR"` — command word `rm`, resolvable) keeps
+/// its Deny.
+fn analyze_shell_payload(payload: &str, depth: usize) -> Decision {
+    let d = detect_bash(payload, depth + 1);
+    if d.is_blocking() {
+        return d;
+    }
+    if let Some(word) = unresolvable_command_word(payload) {
+        return Decision::ask(format!(
+            "the command executed here comes from `{word}`, whose value only exists at run time — blastguard cannot see what would actually run"
+        ));
+    }
+    Decision::Allow
+}
+
 fn detect_bash(cmd: &str, depth: usize) -> Decision {
-    // D4: when the budget is exhausted we DENY, never Allow. A command too
-    // complex to analyse within a bounded amount of work must not be waved
-    // through unanalysed — an unanalysed destructive command is exactly the
-    // fail-open this module exists to prevent, and the caller can always
-    // simplify the command or approve it manually.
+    // D4: when the budget is exhausted we never Allow. A command too complex to
+    // analyse within a bounded amount of work must not be waved through
+    // unanalysed — an unanalysed destructive command is exactly the fail-open
+    // this module exists to prevent.
+    //
+    // Budget exhaustion is the definition of "unknown": we did not finish
+    // looking, so we have no verdict about the command. That is an ASK, which
+    // hardens to the pre-existing DENY whenever no human is available to answer
+    // (see `crate::interactive` and `Decision::hardened`) — so the fallback is
+    // exactly as safe as the deny this replaced, never weaker.
     if !take_budget() {
-        return Decision::deny(
-            "command is too complex to analyse within the safety budget — refusing rather than allowing it unanalysed",
+        return Decision::ask(
+            "command is too complex to analyse within the safety budget — blastguard cannot vouch for it either way",
         );
     }
 
@@ -155,15 +294,16 @@ fn detect_bash(cmd: &str, depth: usize) -> Decision {
         }
     }
 
-    // 3. Per-command-segment analysis.
+    // 3. Per-command-segment analysis. Ranked: a Deny in ANY segment outranks
+    //    an Ask in any other (see `VerdictAcc`).
+    let mut acc = VerdictAcc::default();
     for seg in split_segments(cmd) {
-        let d = analyze_segment(&seg, depth);
-        if d.is_deny() {
-            return d;
+        if let Some(deny) = acc.record(analyze_segment(&seg, depth)) {
+            return deny;
         }
     }
 
-    Decision::Allow
+    acc.finish()
 }
 
 fn redirect_target_is_safe(target: &str) -> bool {
@@ -625,10 +765,19 @@ fn command_candidates(tokens: &[&str]) -> Vec<usize> {
 /// closed quoted command word (`sudo 'rm' -rf /path`) closes within its token
 /// and therefore remains a candidate.
 fn opens_unclosed_quote(tok: &str) -> bool {
+    unclosed_quote_char(tok).is_some()
+}
+
+/// The quote character `tok` leaves open, if any.
+///
+/// Callers that must skip the WHOLE quoted string (not merely its first token)
+/// need to know which quote to look for when finding the end — see
+/// `unknown_wrapper_ask`.
+fn unclosed_quote_char(tok: &str) -> Option<char> {
     let mut chars = tok.chars();
     match chars.next() {
-        Some(q @ ('\'' | '"')) => !chars.any(|c| c == q),
-        _ => false,
+        Some(q @ ('\'' | '"')) if !chars.any(|c| c == q) => Some(q),
+        _ => None,
     }
 }
 
@@ -899,6 +1048,7 @@ fn payloads_after(rest: &[&str], pos: usize) -> Vec<String> {
 
 fn analyze_segment(seg: &str, depth: usize) -> Decision {
     let tokens: Vec<&str> = seg.split_whitespace().collect();
+    let mut acc = VerdictAcc::default();
 
     // D2: a wrapper that takes a shell command string via `-c` (flock) runs that
     // string through `sh -c`. Re-analyse it exactly like a shell's own `-c`
@@ -918,9 +1068,10 @@ fn analyze_segment(seg: &str, depth: usize) -> Decision {
                     payloads.extend(payloads_after(rest, pos));
                 }
                 for payload in payloads {
-                    let d = detect_bash(&payload, depth + 1);
-                    if d.is_deny() {
-                        return d;
+                    // Shell-eval position: an unresolvable command word here is
+                    // an Ask, not a silent Allow.
+                    if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth)) {
+                        return deny;
                     }
                 }
             }
@@ -930,10 +1081,170 @@ fn analyze_segment(seg: &str, depth: usize) -> Decision {
     // D3: analyse EVERY candidate command-word position; deny if ANY is
     // destructive. See `command_candidates`.
     for idx in command_candidates(&tokens) {
-        let d = analyze_command_at(&tokens, idx, depth);
-        if d.is_deny() {
-            return d;
+        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth)) {
+            return deny;
         }
+    }
+
+    // ASK-2: an UNRECOGNISED wrapper standing in front of a destructive command
+    // line. See `unknown_wrapper_ask`.
+    if let Some(deny) = acc.record(unknown_wrapper_ask(&tokens, depth)) {
+        return deny;
+    }
+
+    acc.finish()
+}
+
+/// True when `cmd` is a command word this module has an actual opinion about —
+/// either a rule arm in `analyze_command_at`, a re-analysis arm, or a wrapper
+/// whose payload is already followed.
+///
+/// Kept in lockstep with `analyze_command_at`'s `match` and the arms above it;
+/// `unknown_wrapper_ask_covers_every_unrecognized_head` pins that a head this
+/// returns false for really does fall through to the catch-all Allow arm.
+fn is_recognized_command(cmd: &str) -> bool {
+    // Rule arms in `analyze_command_at`'s match (the `mkfs` arm is a prefix).
+    matches!(
+        cmd,
+        "rm" | "git"
+            | "find"
+            | "xargs"
+            | "truncate"
+            | "shred"
+            | "dd"
+            | "chmod"
+            | "chown"
+            | "tee"
+            | "eval"
+            | "exec"
+            | "source"
+            | "."
+            | "-exec"
+            | "-execdir"
+            | "-ok"
+            | "-okdir"
+    ) || cmd.starts_with("mkfs")
+        // Re-analysis / wrapper arms.
+        || is_shell(cmd)
+        || is_code_interpreter(cmd)
+        || is_exec_wrapper(cmd)
+        || takes_shell_command_flag(cmd)
+}
+
+/// ASK-2: an unrecognised command word standing in front of something that
+/// parses as a DESTRUCTIVE command line.
+///
+/// `command_candidates` only widens the candidate set behind a KNOWN wrapper
+/// name (`sudo`, `env`, `timeout`, …). Behind anything else it returns the head
+/// position alone, so `my-cleanup-wrapper rm -rf /some/path` resolved to the
+/// single word `my-cleanup-wrapper`, matched no rule arm, and was ALLOWED with
+/// its payload never examined. The wrapper list cannot be completed — a local
+/// script, a `just` recipe or a `Makefile` shim is a wrapper blastguard has
+/// never heard of.
+///
+/// It is NOT a Deny: unlike `sudo`, we do not know that this program execs its
+/// arguments at all. It genuinely is the unknown middle, so it asks.
+///
+/// Narrowness, which is the whole difficulty here:
+///   * the head must be UNRECOGNISED — every rule arm and every known wrapper
+///     has already had its say above, and a Deny from there outranks this;
+///   * only ONE tail is examined: the first token after the head that is not a
+///     flag, not empty, and not the opening fragment of a quoted STRING
+///     (`opens_unclosed_quote`, so `mytool -x 'rm -rf' file` reads `'rm` as the
+///     DATA it is and never asks);
+///   * that tail must itself analyse to a full DENY. `mytool report.txt`,
+///     `cargo test`, `npm run build`, `gh pr list` all analyse to Allow and are
+///     silent. Only a genuinely destructive command line behind an unknown word
+///     asks.
+///
+/// Examining exactly one tail (rather than every position, as
+/// `command_candidates` does behind a known wrapper) also keeps the fan-out at
+/// one child per segment. That matters: fanning out per position is what made
+/// the recursion tree exponential in D4.
+///
+/// Missing an ask because the real payload sat at a position this scan skipped
+/// is not a regression — that case was, and remains, the pre-existing Allow.
+fn unknown_wrapper_ask(tokens: &[&str], depth: usize) -> Decision {
+    if depth >= MAX_SHELL_DEPTH {
+        return Decision::Allow;
+    }
+    // Resolve the head exactly as `analyze_segment` did.
+    let candidates = command_candidates(tokens);
+    // Behind a known wrapper `command_candidates` returns many positions; this
+    // rule is only about the single-candidate (non-wrapper head) shape.
+    let [idx] = candidates[..] else {
+        return Decision::Allow;
+    };
+    if is_recognized_command(&normalized_command(tokens[idx])) {
+        return Decision::Allow;
+    }
+    // First plausible command-line start behind the unknown head. Redirect
+    // punctuation is skipped here and truncates the tail below; see the note on
+    // `end` for why.
+    //
+    // A token that OPENS an unclosed quote begins a quoted STRING, and the
+    // whole string — not just that first token — is data. Skipping only the
+    // opening token left the scan free to resume INSIDE the string, so
+    // `echo 'eval rm -rf /'` skipped `'eval` and then started the tail at `rm`,
+    // asking about `echo` over text that is an argument, never a command. So
+    // `in_quote` runs to the token that closes the quote.
+    let mut in_quote: Option<char> = None;
+    let mut start = None;
+    for (j, &t) in tokens.iter().enumerate().skip(idx + 1) {
+        if let Some(q) = in_quote {
+            // The closing token ends the string; it is still data itself. An
+            // unterminated quote never closes, so the whole rest of the line is
+            // data and no ask is raised — the safe direction here, since an
+            // unbalanced quote means the shell would not run it as written.
+            if t.contains(q) {
+                in_quote = None;
+            }
+            continue;
+        }
+        if let Some(q) = unclosed_quote_char(t) {
+            in_quote = Some(q);
+            continue;
+        }
+        if t.is_empty() || t.starts_with('-') || is_redirect_token(t) {
+            continue;
+        }
+        start = Some(j);
+        break;
+    }
+    let Some(start) = start else {
+        return Decision::Allow;
+    };
+    // The tail STOPS at the first redirect token (and at a bare operator's
+    // target, which is punctuation too). Redirects belong to the outer command
+    // line and were already judged in full by the caller before this rule ran;
+    // re-analysing them here attributes the OUTER line's redirect to the head,
+    // which turned `cargo test 2>&1`, `make >&2` and `echo x >&2` into asks
+    // about `cargo` / `make` / `echo`. Re-joining tokens with a single space
+    // also re-serialises redirect punctuation into a shape the redirect
+    // classifier reads differently from the original text, so the re-parse was
+    // not even asking about the same redirect.
+    //
+    // Dropping them costs nothing: a destructive REDIRECT is a deny from the
+    // outer analysis regardless of what the head is, so nothing is missed.
+    let end = tokens
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find(|(_, t)| is_redirect_token(t))
+        .map_or(tokens.len(), |(j, _)| j);
+    let tail = tokens[start..end].join(" ");
+    if tail.trim().is_empty() {
+        return Decision::Allow;
+    }
+    // Only a positively DESTRUCTIVE tail asks. An Ask from the tail is not
+    // propagated: it would already have been reported by whichever construct
+    // produced it if that construct were reachable, and re-reporting it here
+    // would ask about a wrapper we have no evidence executes anything.
+    if detect_bash(&tail, depth + 1).is_deny() {
+        let head = tokens[idx];
+        return Decision::ask(format!(
+            "`{head}` is not a command blastguard recognises, and what follows it parses as a destructive command line — blastguard cannot tell whether `{head}` runs it"
+        ));
     }
     Decision::Allow
 }
@@ -947,6 +1258,10 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
     let cmd = normalized_command(tokens[idx]);
     let cmd = cmd.as_str();
     let rest = &tokens[idx + 1..];
+    // Collects verdicts from the shell-evaluation re-analysis arms below, so an
+    // Ask raised there survives the `match` that follows while still losing to
+    // any Deny (see `VerdictAcc`).
+    let mut acc = VerdictAcc::default();
 
     // A *genuine* help invocation never destroys anything — but only when the
     // help flag is the command's ONLY argument.
@@ -1005,26 +1320,27 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
     // allowed, preserving the no-false-positive bias.
     if depth < MAX_SHELL_DEPTH {
         // `eval`/`exec`/`source`/`.` run their remaining words as a command.
+        // ASK-1: this is a shell-EVALUATION position, so `eval "$CMD"` asks
+        // rather than falling through unanalysed.
         if matches!(cmd, "eval" | "exec" | "source" | ".") && !rest.is_empty() {
             let joined = rest.join(" ");
             let inline = strip_wrapping_quotes(&joined);
-            let d = detect_bash(inline, depth + 1);
-            if d.is_deny() {
-                return d;
+            if let Some(deny) = acc.record(analyze_shell_payload(inline, depth)) {
+                return deny;
             }
         }
         // `sh -c "<payload>"` and friends evaluate the `-c` argument.
+        // ASK-1: likewise a shell-evaluation position — `bash -c "$CMD"` asks.
         if is_shell(cmd) {
             for payload in dash_c_payloads(rest) {
-                let d = detect_bash(&payload, depth + 1);
-                if d.is_deny() {
-                    return d;
+                if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth)) {
+                    return deny;
                 }
             }
         }
     }
 
-    match cmd {
+    let verdict = match cmd {
         // BG-3 (second instance): `split_segments` splits on `;`, so the `\;`
         // terminator of a `find -exec` CUTS THE LINE before `analyze_find` ever
         // sees it. `find . -name x -exec grep rm {} \; -exec rm -rf {} \;`
@@ -1091,6 +1407,12 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
                 Decision::Allow
             }
         }
+    };
+    // A Deny from the rule arms wins outright; otherwise an Ask banked by the
+    // shell-evaluation arms above is reported instead of being dropped.
+    match acc.record(verdict) {
+        Some(deny) => deny,
+        None => acc.finish(),
     }
 }
 
@@ -1272,6 +1594,7 @@ fn analyze_find(rest: &[&str], depth: usize) -> Decision {
     if rest.contains(&"-delete") {
         return Decision::deny("find -delete removes every matching file");
     }
+    let mut acc = VerdictAcc::default();
     // Every -exec/-execdir/-ok/-okdir on the line, not just the first: a benign
     // early `-exec grep …` must not hide a later `-exec rm …`.
     for pos in rest
@@ -1361,14 +1684,13 @@ fn analyze_find(rest: &[&str], depth: usize) -> Decision {
         if depth < MAX_SHELL_DEPTH {
             let inline = tail.join(" ");
             if !inline.trim().is_empty() {
-                let d = detect_bash(&inline, depth + 1);
-                if d.is_deny() {
-                    return d;
+                if let Some(deny) = acc.record(detect_bash(&inline, depth + 1)) {
+                    return deny;
                 }
             }
         }
     }
-    Decision::Allow
+    acc.finish()
 }
 
 /// `xargs` runs a command assembled from its trailing args (after xargs's own
@@ -2593,6 +2915,103 @@ mod tests {
         }
     }
 
+    // ---- ASK-2: an unrecognised head in front of a destructive command line ----
+
+    #[test]
+    fn unknown_wrapper_ask_covers_every_unrecognized_head() {
+        // The rule this is named for: the wrapper list cannot be completed, so a
+        // local script / just recipe / Makefile shim in front of a genuinely
+        // destructive command line is the unknown middle — ask, do not allow.
+        for c in [
+            "my-cleanup-wrapper rm -rf /some/path",
+            "./deploy.sh git reset --hard",
+            "just shred secret",
+        ] {
+            let d = bash(c);
+            assert!(d.is_ask(), "expected ask for {c}, got {d:?}");
+            // And with nobody to answer it must land on refusal, never allow.
+            assert!(d.hardened().is_deny());
+        }
+    }
+
+    #[test]
+    fn a_deny_on_the_line_outranks_the_unknown_wrapper_ask() {
+        // Ranking Deny > Ask: where the ordinary rules reach a verdict of their
+        // own, the unknown head must not DOWNGRADE it to a question. Both of
+        // these also satisfy the ask rule's shape, so they prove the ordering
+        // rather than merely the absence of an ask.
+        for c in [
+            // Redirect deny from the outer line, unknown head in front.
+            "my-wrapper rm -rf /some/path > existing",
+            // Second segment denies on its own; the first only asks.
+            "my-wrapper rm -rf /some/path; rm -rf /other/path",
+        ] {
+            let d = bash(c);
+            assert!(
+                d.is_deny(),
+                "a known-destructive line must stay a deny: {d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_ask_rule_examines_only_one_tail_by_design() {
+        // Documented narrowness, pinned so it stays a deliberate limit rather
+        // than drifting into an accident: exactly ONE tail is re-analysed, and
+        // only a DENY from it asks. A nested unknown head (`just` → `nuke` →
+        // `shred`) therefore does NOT chain into an ask — that case was, and
+        // remains, the pre-existing Allow. Fanning out per position is what made
+        // the recursion exponential in D4, so widening this needs a bounded
+        // design, not a one-line change.
+        assert_eq!(bash("just nuke shred secret"), Decision::Allow);
+    }
+
+    #[test]
+    fn unknown_wrapper_ask_does_not_fire_on_redirects_from_the_outer_line() {
+        // Regression. The tail used to be re-joined from EVERY remaining token,
+        // redirect punctuation included, so the outer line's own redirect was
+        // re-parsed and blamed on the head — turning ordinary work into asks
+        // about `cargo` / `make` / `echo`. A redirect is judged by the outer
+        // analysis regardless of the head, so dropping it here loses nothing.
+        for c in [
+            "cargo test 2>&1",
+            "make >&2",
+            "echo x >&2",
+            "run 1>&2",
+            "cargo test >> log.txt",
+            "cmd 3>&2",
+        ] {
+            assert_eq!(bash(c), Decision::Allow, "expected allow: {c}");
+        }
+        // The destructive redirect forms still deny — via the redirect rule,
+        // not via the wrapper ask.
+        for c in ["echo x > existing", "echo x &> target", "make >& out.txt"] {
+            assert!(bash(c).is_deny(), "expected deny: {c}");
+        }
+    }
+
+    #[test]
+    fn unknown_wrapper_ask_skips_a_whole_quoted_string_not_just_its_first_token() {
+        // Regression. Skipping only the token that OPENS the quote let the scan
+        // resume INSIDE the string: `echo 'eval rm -rf /'` skipped `'eval` and
+        // then read `rm -rf /'` as a command line, asking about `echo` over text
+        // that is an argument and is never executed.
+        for c in [
+            "echo 'eval rm -rf /'",
+            "echo 'rm -rf /'",
+            "echo \"git reset --hard\"",
+            "mytool -x 'rm -rf' file",
+            "grep -rn 'shred secret' src/",
+        ] {
+            assert_eq!(bash(c), Decision::Allow, "expected allow: {c}");
+        }
+        // But a string that is actually HANDED TO A SHELL is still re-analysed
+        // by the arm that owns that construct — this exemption is about text
+        // sitting in argument position, not about quoting as a bypass.
+        assert!(bash("sh -c 'rm -rf /some/path'").is_deny());
+        assert!(bash("eval 'rm -rf /some/path'").is_deny());
+    }
+
     // ---- D4: `find -exec` re-analysis was exponential ----
     // `analyze_find` re-analyses the whole tail for EVERY `-exec` position, and
     // the tail still contains the other `-exec` tokens: branching factor N,
@@ -2616,9 +3035,23 @@ mod tests {
             elapsed < std::time::Duration::from_secs(2),
             "analysis took {elapsed:?}, expected well under 2s"
         );
-        // Correctness: budget exhaustion DENIES. A command too complex to
+        // Correctness: budget exhaustion BLOCKS. A command too complex to
         // analyse must never be waved through unanalysed.
-        assert!(d.is_deny(), "budget exhaustion must deny, got {d:?}");
+        //
+        // It is an `Ask`, not a `Deny`: "we did not finish looking" is not a
+        // verdict about the command. With no human to answer, the hook hardens
+        // it back to the deny this used to be (`Decision::hardened`), so this is
+        // never weaker than before — but asserting `is_deny()` here would pin
+        // the wrong half of that contract. What must hold is that it is NEVER
+        // an Allow.
+        assert!(d.is_blocking(), "budget exhaustion must block, got {d:?}");
+        assert_eq!(
+            d.clone().hardened(),
+            Decision::deny(
+                "command is too complex to analyse within the safety budget — blastguard cannot vouch for it either way"
+            ),
+            "with no human available the ask must harden to the pre-existing deny"
+        );
     }
 
     #[test]
@@ -2629,7 +3062,10 @@ mod tests {
             cmd.push_str("-exec find . ");
         }
         cmd.push_str("-exec echo {} +");
-        assert!(bash(&cmd).is_deny());
+        // Blocking (an Ask that hardens to Deny — see the test above), and the
+        // point of this case: the budget it consumed must not leak into the
+        // benign calls below.
+        assert!(bash(&cmd).is_blocking());
         assert_eq!(bash("ls -la"), Decision::Allow);
         assert_eq!(bash("cargo test"), Decision::Allow);
     }

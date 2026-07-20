@@ -16,6 +16,19 @@
 //! here) falls back to `"unknown"` rather than guessing — a stable but coarse
 //! signature is safer than a spurious sig-per-wording split.
 
+/// Reason surfaced when the analyser itself fails and the binary's panic
+/// barrier turns the crash into a deny.
+///
+/// It deliberately says what happened rather than naming a rule: this is not a
+/// verdict about the command, it is a refusal to guess about one.
+///
+/// Lives here, next to the classifier arm that recognises it, so the emitter
+/// (`main.rs`) and the classifier cannot drift apart — the drift would be
+/// silent, turning every crash into an `"unknown"` signature.
+pub const INTERNAL_ERROR_REASON: &str =
+    "blastguard hit an internal error while analysing this command — refusing rather than \
+allowing it unanalysed. Re-run with a simpler command, or report this.";
+
 /// Classify a deny `reason` string into a stable rule id.
 pub fn rule_id(reason: &str) -> &'static str {
     // Write handling.
@@ -110,6 +123,24 @@ pub fn rule_id(reason: &str) -> &'static str {
         return "analysis-budget-exhausted";
     }
 
+    // The Ask paths. Like the budget deny these are not verdicts about the
+    // command; they are refusals to guess about one. They still need stable ids
+    // because a RECURRING ask is the signal that a real construct is routinely
+    // going unanalysed — that frequency is only visible if the ids are stable.
+    if reason.contains("whose value only exists at run time") {
+        return "unresolvable-command-word";
+    }
+    if reason.contains("is not a command blastguard recognises") {
+        return "unrecognised-wrapper";
+    }
+
+    // The analyser itself crashed. Distinct from every rule above: it says
+    // nothing about the command, only that blastguard failed. A recurring one of
+    // these is a bug report.
+    if reason.contains("hit an internal error while analysing") {
+        return "internal-error";
+    }
+
     "unknown"
 }
 
@@ -121,10 +152,13 @@ mod tests {
     use crate::model::Decision;
     use serde_json::json;
 
+    /// Reason string of any BLOCKING verdict (deny or ask). Both kinds are
+    /// recorded as violations by the hook, so both must classify to a stable id;
+    /// accepting only `Deny` here would leave every ask path unexercised.
     fn deny_reason(tool: &str, input: serde_json::Value) -> String {
         match detect::detect(tool, Some(&input)) {
-            Decision::Deny(reason) => reason,
-            Decision::Allow => panic!("expected a deny decision"),
+            Decision::Deny(reason) | Decision::Ask(reason) => reason,
+            Decision::Allow => panic!("expected a blocking decision"),
         }
     }
 
@@ -171,6 +205,14 @@ mod tests {
                     "+ ".repeat(33)
                 ) }),
             ),
+            // The Ask paths. Same completeness obligation as the denies: the
+            // hook records an ask as a violation too, so an unclassified ask
+            // would land in the store as "unknown".
+            ("Bash", json!({ "command": "sh -c \"$MYSTERY --flag\"" })),
+            (
+                "Bash",
+                json!({ "command": "not_a_real_wrapper_xyz rm -rf dir" }),
+            ),
         ];
 
         for (tool, input) in cases {
@@ -181,6 +223,15 @@ mod tests {
                 "reason {reason:?} (from {tool} {input}) did not classify to a stable rule id"
             );
         }
+    }
+
+    #[test]
+    fn the_internal_error_reason_classifies_to_its_own_id() {
+        // Asserted against the shared constant the binary actually emits, not
+        // against a copy of its text: a reword that broke the classifier would
+        // otherwise leave this test green while every crash landed in the
+        // violation store as "unknown".
+        assert_eq!(rule_id(INTERNAL_ERROR_REASON), "internal-error");
     }
 
     #[test]

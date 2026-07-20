@@ -94,9 +94,15 @@ struct TestRun {
 /// returns `Err(reason)`; anything blastguard allows returns `Ok(())`.
 fn validate_test_cmd(test_cmd: &str) -> Result<(), String> {
     let input = serde_json::json!({ "command": test_cmd });
-    match blastguard::detect::detect("Bash", Some(&input)) {
+    // `.hardened()` collapses an `Ask` into a `Deny`: there is no human in this
+    // loop to answer one — the next thing that happens to this string is `sh -c`.
+    // "ask にできないときは fail".
+    match blastguard::detect::detect("Bash", Some(&input)).hardened() {
         blastguard::model::Decision::Deny(reason) => Err(reason),
         blastguard::model::Decision::Allow => Ok(()),
+        // Unreachable after `hardened()`, but written out rather than `_ =>` so
+        // a future variant fails the build instead of silently landing here.
+        blastguard::model::Decision::Ask(reason) => Err(reason),
     }
 }
 

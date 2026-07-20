@@ -72,7 +72,7 @@ def main():
             print(f"  - {p}", file=sys.stderr)
         print(
             "\nFix: scripts/rollout-plugins.sh --plugin <name> (add --canary for GATE crates: "
-            "blastguard/propguard/stuckguard/mutategate/overwatch).",
+            "blastguard/propguard/specguard/stuckguard/mutategate/overwatch).",
             file=sys.stderr,
         )
         return 1

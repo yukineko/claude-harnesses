@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the GATE_CRATES crate set is consistent across its 4 hardcoded sources.
+"""Verify the GATE_CRATES crate set is consistent across its 5 hardcoded sources.
 
 Two related-but-distinct concepts are hardcoded across these sources:
   - "GATE crates": fleet defense gates that require a canary rollout
@@ -15,6 +15,10 @@ Sources and how each must relate to the canonical GATE_CRATES set:
     equal canonical EXACTLY (pre-push's canary advisory is GATE-crates-only).
   - scripts/continuous-audit.sh   DEFAULT_TARGETS="..." (comma-separated) — must be
     a SUPERSET of canonical (the audit target set; may include non-GATE crates).
+  - scripts/check-plugin-rollout.py  the drift hint's "GATE crates: a/b/c)" list
+    (slash-separated) — must equal canonical EXACTLY. It tells the reader which
+    crates need --canary, so a stale copy sends them into a rollout that
+    rollout-plugins.sh hard-rejects.
   - crates/overwatch/skills/continuous-audit/SKILL.md  "## 対象 crate (既定)" section
     (comma-separated list after "既定の target は") — must equal
     scripts/continuous-audit.sh's DEFAULT_TARGETS EXACTLY (the doc must describe
@@ -56,6 +60,27 @@ def pre_push_crates(text):
     return set(m.group(1).split("|"))
 
 
+def rollout_hint_crates(text):
+    """Extract crate names from check-plugin-rollout.py's drift hint message.
+
+    The hint tells the reader which crates need `--canary`, so it is a 5th
+    hardcoded copy of the GATE set. A stale copy is actively misleading: it
+    sends someone to run a plain rollout on a crate that rollout-plugins.sh
+    will then hard-reject. Slash-separated, and the literal is usually split
+    across two adjacent Python string lines, hence the quote/newline tolerance.
+
+    Matched on the full `--canary for GATE crates:` phrase rather than a bare
+    "GATE crates:" so a future prose mention earlier in the file can't be picked
+    up instead. If the hint is reworded past recognition this returns None, which
+    the caller treats as drift — loud and fail-closed, which is the right way to
+    fail: silently parsing the wrong list would defeat the point of the check.
+    """
+    m = re.search(r'--canary for GATE crates:\s*"?\s*"?([a-z0-9/_-]+)\)', text)
+    if not m:
+        return None
+    return set(x for x in m.group(1).split("/") if x)
+
+
 def skill_md_crates(text):
     """Extract crate names from the "## 対象 crate (既定)" section's backtick CSV."""
     m = re.search(r"##\s*対象\s*crate\s*\(既定\)\s*\n+.*?`([a-z0-9_,-]+)`", text, re.S)
@@ -75,6 +100,7 @@ SOURCES = [
     ("scripts/rollout-plugins.sh", canonical_crates, "canonical"),
     (".githooks/pre-push", pre_push_crates, "exact"),
     ("scripts/continuous-audit.sh", continuous_audit_crates, "superset"),
+    ("scripts/check-plugin-rollout.py", rollout_hint_crates, "exact"),
     (
         "crates/overwatch/skills/continuous-audit/SKILL.md",
         skill_md_crates,

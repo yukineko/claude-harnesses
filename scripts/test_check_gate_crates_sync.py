@@ -39,19 +39,23 @@ def _make_fixture_repo(
     pre_push_missing=(),
     ca_extra=(),
     ca_missing=(),
+    hint_extra=(),
+    hint_missing=(),
     skill_extra=(),
     skill_missing=(),
 ):
-    """Build a tmp dir with all 4 sources. By default everything is exactly in
+    """Build a tmp dir with all 5 sources. By default everything is exactly in
     sync with CANONICAL. The `*_extra`/`*_missing` args perturb one source's
-    crate set relative to CANONICAL (for continuous-audit.sh/SKILL.md) so
-    callers can exercise the superset/mirror relations, not just exact match."""
+    crate set relative to CANONICAL (continuous-audit.sh/SKILL.md for the
+    superset/mirror relations; pre-push/check-plugin-rollout.py for exact) so
+    callers can exercise every relation, not just exact match."""
 
     def apply(base, extra, missing):
         return (set(base) | set(extra)) - set(missing)
 
     pre_push_set = apply(CANONICAL_SET, pre_push_extra, pre_push_missing)
     ca_set = apply(CANONICAL_SET, ca_extra, ca_missing)
+    hint_set = apply(CANONICAL_SET, hint_extra, hint_missing)
     skill_set = apply(CANONICAL_SET, skill_extra, skill_missing)
 
     _write(tmp / "scripts" / "rollout-plugins.sh", f'#!/bin/sh\nGATE_CRATES="{CANONICAL}"\n')
@@ -62,6 +66,16 @@ def _make_fixture_repo(
     _write(
         tmp / ".githooks" / "pre-push",
         f"#!/bin/sh\nGATE_PATTERN='^crates/({'|'.join(sorted(pre_push_set))})/'\n",
+    )
+    # Reproduce the real file's two-adjacent-string-literals split, so the
+    # extractor's newline tolerance is exercised rather than assumed.
+    _write(
+        tmp / "scripts" / "check-plugin-rollout.py",
+        "print(\n"
+        '    "\\nFix: scripts/rollout-plugins.sh --plugin <name> '
+        '(add --canary for GATE crates: "\n'
+        f'    "{"/".join(sorted(hint_set))})."\n'
+        ")\n",
     )
     _write(
         tmp / "crates" / "overwatch" / "skills" / "continuous-audit" / "SKILL.md",
@@ -133,6 +147,60 @@ class DriftDetection(unittest.TestCase):
             self.assertFalse(ok)
             by_path = _by_path(parsed)
             self.assertFalse(canonical <= by_path["scripts/continuous-audit.sh"])
+
+    def test_rollout_hint_missing_a_crate_is_detected(self):
+        """Regression: check-plugin-rollout.py's drift hint shipped for a while
+        listing only 5 of the 6 GATE crates (specguard was missing), telling the
+        reader a plain rollout was fine for a crate rollout-plugins.sh rejects.
+        Nothing caught it because the hint wasn't a tracked source. It is now."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), hint_missing=("specguard",))
+            ok, canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertFalse(ok)
+            by_path = _by_path(parsed)
+            self.assertNotIn("specguard", by_path["scripts/check-plugin-rollout.py"])
+
+    def test_rollout_hint_extra_crate_is_detected(self):
+        """The hint is `exact`, not `superset`: naming a non-GATE crate would
+        push someone into a needless canary rollout."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), hint_extra=("backlog",))
+            ok, _canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertFalse(ok)
+            self.assertIn("backlog", _by_path(parsed)["scripts/check-plugin-rollout.py"])
+
+    def test_rollout_hint_unrecognizable_is_treated_as_drift(self):
+        """If the hint is reworded past recognition the extractor returns None.
+        That must surface as drift (fail-closed + loud), never as a silent pass:
+        an unparseable source is exactly the state where the check stops
+        protecting anything, so it has to be noisy."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp))
+            _write(
+                repo / "scripts" / "check-plugin-rollout.py",
+                'print("Fix: see the rollout docs for which crates need a canary.")\n',
+            )
+            ok, _canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertFalse(ok)
+            self.assertIsNone(_by_path(parsed)["scripts/check-plugin-rollout.py"])
+
+    def test_rollout_hint_prose_mention_does_not_shadow_the_real_list(self):
+        """A prose mention of 'GATE crates:' earlier in the file must not be
+        picked up in place of the real hint — the extractor keys off the full
+        '--canary for GATE crates:' phrase."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp))
+            path = repo / "scripts" / "check-plugin-rollout.py"
+            path.write_text(
+                '"""Docs: GATE crates: blastguard/propguard) are the gated ones."""\n'
+                + path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            ok, _canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertTrue(ok, f"prose mention shadowed the real hint: {parsed}")
+            self.assertEqual(
+                _by_path(parsed)["scripts/check-plugin-rollout.py"], CANONICAL_SET
+            )
 
     def test_skill_md_diverging_from_continuous_audit_is_detected(self):
         """SKILL.md must mirror continuous-audit.sh's DEFAULT_TARGETS exactly.

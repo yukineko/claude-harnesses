@@ -1,0 +1,38 @@
+name: gate-crates-sync
+
+# Consistency gate for the GATE_CRATES set (the fleet defense gates that require
+# a canary rollout). The set is hardcoded in four places — rollout-plugins.sh
+# (canonical), .githooks/pre-push's GATE_PATTERN, continuous-audit.sh's
+# DEFAULT_TARGETS, and the continuous-audit SKILL.md — and scripts/
+# check-gate-crates-sync.py verifies each satisfies its required relation
+# (exact / superset / mirror). Until now that checker had no automated trigger,
+# so drift between the four sources was only caught by running it by hand; the
+# incident that motivated the checker is written up in docs/fix-gate-crates-drift.md.
+# Runs unconditionally (no paths filter): a crate can join or leave the gate set
+# via any of the four files, and a stale pre-push GATE_PATTERN silently drops the
+# canary advisory for a gate crate. Self-contained stdlib Python — no third-party action.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-crates-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Unit-test the checker
+        run: python3 scripts/test_check_gate_crates_sync.py
+      - name: Verify GATE_CRATES consistent across its 4 sources
+        run: python3 scripts/check-gate-crates-sync.py

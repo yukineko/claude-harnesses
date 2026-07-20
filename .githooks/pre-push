@@ -3,13 +3,24 @@
 #
 #     git config core.hooksPath .githooks
 #
-# This is an ADVISORY-ONLY nudge: when a push includes changes under a GATE
-# crate (blastguard/propguard/specguard/stuckguard/mutategate/overwatch — the
-# fleet defense gates), it prints a suggestion to run a Continuous-Audit round
-# (`scripts/continuous-audit.sh --dry-run`) before/after the push. It NEVER
-# blocks the push: this hook always exits 0, matching the fail-soft invariant
-# used by `.githooks/pre-commit` (injectguard) and the Continuous-Audit loop
-# itself (opt-in tooling, not an always-on gate).
+# This is an ADVISORY-ONLY nudge with three checks:
+#   1. GATE crates — when the push touches blastguard/propguard/specguard/
+#      stuckguard/mutategate/overwatch (the fleet defense gates), suggest a
+#      Continuous-Audit round (`scripts/continuous-audit.sh --dry-run`).
+#   2. Rollout drift — `scripts/check-plugin-rollout.py` reports plugins whose
+#      committed+bumped version was never actually rolled out to the live plugin
+#      cache. That fix then reaches NO session. This has to live here rather than
+#      in CI: the check reads ~/.claude/plugins/installed_plugins.json, which is
+#      a property of the developer's machine and does not exist on a runner.
+#   3. Autonomy chain — when the push touches the crates whose SKILL specs the
+#      human-0 chain depends on (condukt/scout/flow/backlog), suggest re-running
+#      `scripts/e2e-autonomy.sh`, which asserts the gate contracts that remove
+#      every AskUserQuestion stop. Also machine-local (needs installed binaries).
+#
+# It NEVER blocks the push: this hook always exits 0, matching the fail-soft
+# invariant used by `.githooks/pre-commit` (injectguard) and the Continuous-Audit
+# loop itself (opt-in tooling, not an always-on gate). Every check degrades to
+# silence if its prerequisite (python3, the script, the registry) is absent.
 #
 # Formalizes the pre-push fragment sketched in
 # scripts/continuous-audit.cron.example into a real, installable hook.
@@ -24,6 +35,12 @@ REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 cd "$REPO" 2>/dev/null || exit 0
 
 GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|mutategate|overwatch)/'
+
+# Crates whose SKILL specs carry the autonomy gate contracts asserted by
+# scripts/e2e-autonomy.sh (scout selection/hand-off, condukt agreement, flow
+# human gates). Deliberately NOT parsed by check-gate-crates-sync.py — this is
+# the autonomy chain, a different set from the defense-gate GATE_CRATES above.
+AUTONOMY_PATTERN='^crates/(condukt|scout|flow|backlog)/'
 
 # git invokes pre-push with zero-or-more "<local-ref> <local-sha> <remote-ref> <remote-sha>"
 # lines on stdin, one per updated ref. Collect the set of changed files across
@@ -77,6 +94,39 @@ Continuous-Audit round before or after pushing:
 
 This is advisory only — the push is not blocked.
 EOF
+fi
+
+if printf '%s\n' "$changed" | grep -Eq "$AUTONOMY_PATTERN"; then
+    cat >&2 <<'EOF'
+
+e2e-autonomy: changes detected under a crate the human-0 chain depends on
+(condukt/scout/flow/backlog). The autonomy gate contracts are asserted by:
+
+    scripts/e2e-autonomy.sh
+
+It re-checks the deterministic layer only (autonomy switch + gate contracts +
+queue wiring), skips loudly if autonomy is off, and touches no real state.
+This is advisory only — the push is not blocked.
+EOF
+fi
+
+# Rollout drift: a committed + version-bumped plugin whose fix was never rolled
+# out to the live cache reaches no session at all. The checker exits 0 when the
+# registry is absent (e.g. a machine with no plugins installed), so this stays
+# quiet where it does not apply. Skipped entirely without python3 or the script.
+if command -v python3 >/dev/null 2>&1 && [ -f scripts/check-plugin-rollout.py ]; then
+    if ! rollout_out="$(python3 scripts/check-plugin-rollout.py 2>&1)"; then
+        printf '\n%s\n' "$rollout_out" >&2
+        cat >&2 <<'EOF'
+
+rollout: the versions above are committed but not live — the fix is in git and
+reaches no session until you roll it out:
+
+    scripts/rollout-plugins.sh --plugin <name>            # add --canary for GATE crates
+
+This is advisory only — the push is not blocked.
+EOF
+    fi
 fi
 
 exit 0

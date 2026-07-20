@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the GATE_CRATES crate set is consistent across its 5 hardcoded sources.
+"""Verify the GATE_CRATES crate set is consistent across its 7 hardcoded sources.
 
 Two related-but-distinct concepts are hardcoded across these sources:
   - "GATE crates": fleet defense gates that require a canary rollout
@@ -15,10 +15,20 @@ Sources and how each must relate to the canonical GATE_CRATES set:
     equal canonical EXACTLY (pre-push's canary advisory is GATE-crates-only).
   - scripts/continuous-audit.sh   DEFAULT_TARGETS="..." (comma-separated) — must be
     a SUPERSET of canonical (the audit target set; may include non-GATE crates).
-  - scripts/check-plugin-rollout.py  the drift hint's "GATE crates: a/b/c)" list
-    (slash-separated) — must equal canonical EXACTLY. It tells the reader which
-    crates need --canary, so a stale copy sends them into a rollout that
-    rollout-plugins.sh hard-rejects.
+  - scripts/check-plugin-rollout.py  module-level GATE_CRATES = (...) tuple —
+    must equal canonical EXACTLY. It drives both that script's disabled-GATE-crate
+    failure and its "add --canary for GATE crates: ..." fix hint, so a stale copy
+    both under-guards and tells the reader to run a plain rollout for a crate
+    that rollout-plugins.sh hard-rejects without --canary. (The hint used to be a
+    second literal in the same file; it is now generated from this constant, so
+    only the constant can drift.)
+  - crates/condukt/src/adversarial.rs  pub const GATE_CRATES: [&str; N] — must
+    equal canonical EXACTLY. Decides which completions are "high-stakes" enough
+    to force the adversarial refutation panel.
+  - crates/tdd/src/config.rs  pub const GATE_CRATES: &[&str] — must equal
+    canonical EXACTLY. Decides where `strict_separation` (RED/GREEN author
+    diversity) defaults on. Both Rust copies had silently lost `overwatch`,
+    exempting the Continuous-Audit crate from the gates that loop depends on.
   - crates/overwatch/skills/continuous-audit/SKILL.md  "## 対象 crate (既定)" section
     (comma-separated list after "既定の target は") — must equal
     scripts/continuous-audit.sh's DEFAULT_TARGETS EXACTLY (the doc must describe
@@ -60,25 +70,122 @@ def pre_push_crates(text):
     return set(m.group(1).split("|"))
 
 
-def rollout_hint_crates(text):
-    """Extract crate names from check-plugin-rollout.py's drift hint message.
+# Comment syntaxes to blank out of a source file before locating the constant
+# and scraping quoted crate names out of it. Scraping RAW text counts a
+# commented-out entry (`// "overwatch",` / `# "overwatch",`), a prose TODO that
+# merely names the crate, or — worse — a doc comment that RESTATES the whole
+# constant, as if it were live code. A constant that actually lost a gate then
+# still parses to the full canonical set and the checker prints a green "OK":
+# a silent false negative in exactly the drift this checker exists to catch.
+_RUST_COMMENT = r"/\*.*?\*/|//[^\n]*"
+_PYTHON_COMMENT = r"#[^\n]*"
 
-    The hint tells the reader which crates need `--canary`, so it is a 5th
-    hardcoded copy of the GATE set. A stale copy is actively misleading: it
-    sends someone to run a plain rollout on a crate that rollout-plugins.sh
-    will then hard-reject. Slash-separated, and the literal is usually split
-    across two adjacent Python string lines, hence the quote/newline tolerance.
+# String-literal syntaxes, alternated BEFORE the comment pattern so a comment
+# marker inside a string is never mistaken for a comment. Language-specific on
+# purpose: Python has single-quoted and triple-quoted strings, while Rust's `'`
+# is a lifetime marker far more often than a char literal, so treating `'…'` as
+# a string there would swallow real code.
+_PYTHON_STRING = (
+    r'"""(?:[^"\\]|\\.|"(?!""))*"""'
+    r"|'''(?:[^'\\]|\\.|'(?!''))*'''"
+    r'|"(?:\\.|[^"\\\n])*"'
+    r"|'(?:\\.|[^'\\\n])*'"
+)
+_RUST_STRING = r'"(?:\\.|[^"\\])*"'
 
-    Matched on the full `--canary for GATE crates:` phrase rather than a bare
-    "GATE crates:" so a future prose mention earlier in the file can't be picked
-    up instead. If the hint is reworded past recognition this returns None, which
-    the caller treats as drift — loud and fail-closed, which is the right way to
-    fail: silently parsing the wrong list would defeat the point of the check.
+
+def _strip_comments(text, comment_pattern, string_pattern):
+    """Replace comments in `text` with a space, leaving string literals intact.
+
+    Alternating the string-literal pattern FIRST means a comment marker that
+    appears inside a quoted string is matched as part of that string and left
+    alone, so we never truncate a real entry.
     """
-    m = re.search(r'--canary for GATE crates:\s*"?\s*"?([a-z0-9/_-]+)\)', text)
+    pattern = re.compile(f"(?P<s>{string_pattern})|(?:{comment_pattern})", re.S)
+    return pattern.sub(lambda m: m.group("s") if m.group("s") is not None else " ", text)
+
+
+def _sole_match(pattern, text):
+    """The single match of `pattern` in `text`, or None if there are zero or
+    MORE THAN ONE.
+
+    Ambiguity is deliberately fail-closed. Taking the FIRST match (what
+    `re.search` does) silently picks a winner between two indistinguishable
+    candidates. When the loser is the live definition and the winner is a stale
+    copy in a docstring that still spells out the healthy set, the checker
+    reports the copy's set and prints OK for a constant that has drifted. There
+    is no way to tell code from prose with a regex, so the only safe answer is
+    to refuse: the caller treats None as drift, which is a loud false positive
+    at worst and never a silent pass.
+    """
+    matches = list(pattern.finditer(text))
+    return matches[0] if len(matches) == 1 else None
+
+
+_PYTHON_CONST_RE = re.compile(r"^GATE_CRATES\s*=\s*\(([^)]*)\)", re.M | re.S)
+_RUST_CONST_RE = re.compile(
+    r"pub const GATE_CRATES\s*:[^=]*=\s*&?\[(.*?)\]\s*;", re.S
+)
+
+
+def python_const_crates(text):
+    """Extract crate names from a module-level `GATE_CRATES = (...)` tuple.
+
+    check-plugin-rollout.py used to hardcode the GATE list a second time inside
+    its `--canary for GATE crates: a/b/c)` drift-hint prose. That literal is
+    gone: the file now holds ONE copy in a module-level constant and generates
+    the hint text from it, so the hint cannot drift from the constant at all —
+    only the constant can drift from canonical, which is what we parse here.
+
+    `#` comments are stripped from the WHOLE FILE before the constant is
+    located, not merely from the captured span. Stripping afterwards cannot help
+    when the comment itself supplies the entire span.
+
+    Returns None if the constant is missing, unrecognizable, or AMBIGUOUS (more
+    than one candidate definition — see `_sole_match`). The caller treats None
+    as drift: loud and fail-closed is the right failure mode, since an
+    unparseable source is exactly the state where the check protects nothing.
+    """
+    stripped = _strip_comments(text, _PYTHON_COMMENT, _PYTHON_STRING)
+    m = _sole_match(_PYTHON_CONST_RE, stripped)
     if not m:
         return None
-    return set(x for x in m.group(1).split("/") if x)
+    crates = set(re.findall(r'"([a-z0-9_-]+)"', m.group(1)))
+    return crates or None
+
+
+def rust_const_crates(text):
+    """Extract crate names from a Rust `pub const GATE_CRATES ... = [ ... ];`.
+
+    Handles both shapes in the tree: the sized array
+    (`pub const GATE_CRATES: [&str; 6] = [...]`, condukt/src/adversarial.rs) and
+    the slice (`pub const GATE_CRATES: &[&str] = &[...]`, tdd/src/config.rs).
+    The `&` before the bracket is optional and the array length in the type is
+    ignored — the parsed membership is the thing under test, and a wrong length
+    is a compile error anyway.
+
+    These two Rust copies were invisible to this checker for a while and both
+    silently drifted, missing `overwatch`: editing crates/overwatch/** triggered
+    neither condukt's adversarial panel nor tdd's default strict_separation, so
+    the crate implementing the Continuous-Audit loop was exempt from the very
+    gates that loop depends on. They are tracked sources now.
+
+    `//` and `/* … */` comments are stripped from the WHOLE FILE before the
+    constant is located. Stripping only the captured span was not enough: both
+    of these files carry a long "keep in sync with rollout-plugins.sh" doc
+    comment directly above the constant, and one illustrative
+    `/// pub const GATE_CRATES: [&str; 6] = ["…", "overwatch"];` line is matched
+    INSTEAD of the constant, with its own body as the span — no comment marker
+    inside it left to strip.
+
+    Returns None if missing, unrecognizable, or ambiguous (see `_sole_match`).
+    """
+    stripped = _strip_comments(text, _RUST_COMMENT, _RUST_STRING)
+    m = _sole_match(_RUST_CONST_RE, stripped)
+    if not m:
+        return None
+    crates = set(re.findall(r'"([a-z0-9_-]+)"', m.group(1)))
+    return crates or None
 
 
 def skill_md_crates(text):
@@ -100,7 +207,9 @@ SOURCES = [
     ("scripts/rollout-plugins.sh", canonical_crates, "canonical"),
     (".githooks/pre-push", pre_push_crates, "exact"),
     ("scripts/continuous-audit.sh", continuous_audit_crates, "superset"),
-    ("scripts/check-plugin-rollout.py", rollout_hint_crates, "exact"),
+    ("scripts/check-plugin-rollout.py", python_const_crates, "exact"),
+    ("crates/condukt/src/adversarial.rs", rust_const_crates, "exact"),
+    ("crates/tdd/src/config.rs", rust_const_crates, "exact"),
     (
         "crates/overwatch/skills/continuous-audit/SKILL.md",
         skill_md_crates,
@@ -157,7 +266,14 @@ def _mismatch_detail(crates, mode, canonical, by_path):
         missing = canonical - crates
         extra = set()
     elif mode.startswith("mirror:"):
-        target = by_path.get(mode.split(":", 1)[1]) or set()
+        target_path = mode.split(":", 1)[1]
+        target = by_path.get(target_path)
+        if target is None:
+            # `or set()` here used to turn an unparseable TARGET into an empty
+            # set, so every crate this file legitimately mirrors was reported as
+            # `unexpected [...]` — blaming the mirror for the target's breakage
+            # and sending the reader to the wrong file to fix it.
+            return f"cannot compare: {target_path} did not parse"
         missing = target - crates
         extra = crates - target
     else:

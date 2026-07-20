@@ -153,6 +153,23 @@ reaches no session until you roll it out:
 This is advisory only — the push is not blocked.
 EOF
             ;;
+        3)
+            # Unverifiable class. Neither a rollout nor an enablement edit can
+            # fix it: the checker could not read a plugin.json at all, so the
+            # population it inspected is incomplete and NOTHING it reported is a
+            # complete verdict. Naming either remedy here would send the reader
+            # to a command that cannot help — and, worse, imply the rest of the
+            # report was verified when it was not.
+            cat >&2 <<'EOF'
+
+unverifiable: a crate under crates/ ships a plugin.json that could not be read
+or parsed, so the rollout and enablement checks above covered an INCOMPLETE set
+of plugins. Treat their result as unknown, not as a pass — fix the file named in
+the Fix line above and re-run.
+
+This is advisory only — the push is not blocked.
+EOF
+            ;;
         2)
             # Enablement class. Deliberately does NOT mention rollout-plugins.sh:
             # the checker's own Fix line above names the real remedy (edit

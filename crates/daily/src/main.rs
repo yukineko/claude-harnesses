@@ -265,7 +265,15 @@ enum Outcome {
 /// escape) falls back to `cwd` itself rather than trusting the raw path.
 fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> PathBuf {
     let Some(raw) = task_dir else {
-        return cwd.to_path_buf();
+        // Canonicalize the default too. Every other exit from this function
+        // returns a canonical path, and a return value whose meaning depends on
+        // which branch produced it is a trap for callers that compare it with
+        // `starts_with` against another canonical path. On macOS the difference
+        // is real and routine: `/var/...` vs `/private/var/...` for the same
+        // directory, which is exactly what made this fail on macos-14 while
+        // passing on ubuntu. Falls back to the raw cwd when canonicalization is
+        // impossible, matching the `Err` arm below.
+        return cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
     };
 
     let candidate = if Path::new(raw).is_absolute() {

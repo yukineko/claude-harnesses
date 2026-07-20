@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "propguard"
-version = "0.1.18"
+version = "0.1.19"
 edition = "2021"
 description = "Property gate for Claude Code. On Stop it derives 3–5 semantic properties (invariants) from a task's done_criteria and checks the generated code against them before the agent can declare done: either by injecting a property checklist for the running agent to self-verify (no API key), or by spawning an independent checker command. It blocks when fewer than a threshold of the properties hold — going beyond 'concrete tests pass' to formalized invariants."
 license = "MIT"

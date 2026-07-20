@@ -102,6 +102,14 @@ pub fn rule_id(reason: &str) -> &'static str {
         return "tee-truncate";
     }
 
+    // D4: the analysis-budget deny. This is not a verdict about the command —
+    // it is a refusal to guess about one too complex to analyse — but it still
+    // needs a stable id, because a recurring budget exhaustion is exactly the
+    // signal that some real pattern is going unanalysed.
+    if reason.contains("too complex to analyse within the safety budget") {
+        return "analysis-budget-exhausted";
+    }
+
     "unknown"
 }
 
@@ -150,6 +158,18 @@ mod tests {
             (
                 "Write",
                 json!({ "file_path": "src/main.rs", "content": "" }),
+            ),
+            // D4 analysis-budget deny. This case was missing when the budget
+            // was introduced, so this test passed while the new deny path
+            // classified to "unknown" — the test asserted completeness it did
+            // not actually have. Any future deny path must be added here too.
+            (
+                "Bash",
+                json!({ "command": format!(
+                    "find . {}-exec echo {{}} {}",
+                    "-exec find . ".repeat(32),
+                    "+ ".repeat(33)
+                ) }),
             ),
         ];
 

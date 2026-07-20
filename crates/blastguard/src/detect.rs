@@ -19,7 +19,13 @@ pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
                 .and_then(|v| v.get("command"))
                 .and_then(|c| c.as_str());
             match cmd {
-                Some(c) => detect_bash(c, 0),
+                Some(c) => {
+                    // D4: reset the per-command node budget at the single
+                    // top-level entry point, so each tool call gets a full
+                    // budget and no state leaks between calls.
+                    ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+                    detect_bash(c, 0)
+                }
                 None => Decision::Allow,
             }
         }
@@ -83,15 +89,61 @@ fn detect_write(ti: Option<&Value>) -> Decision {
 /// realistic command line wraps a destructive payload this many layers deep.
 const MAX_SHELL_DEPTH: usize = 8;
 
+/// Total number of `detect_bash` invocations allowed for ONE top-level command.
+///
+/// D4 (verified availability defect, fixed): a depth cap alone does NOT bound
+/// the work, because the re-analysis arms FAN OUT. `analyze_find` loops over
+/// every `-exec` position and re-analyses the whole remaining tail, which still
+/// contains the other `-exec` tokens, so the branching factor is the number of
+/// `-exec` tokens and the tree is O(N^MAX_SHELL_DEPTH). Measured on a single
+/// invocation of `find . ` + `-exec find . `×N + `-exec echo {} ` + `+ `×(N+1):
+/// N=20 → 2.2s, N=24 → 8.2s, N=28 → 30s, N=32 (a 503-byte command) → >60s,
+/// killed. blastguard is a PreToolUse hook, so that hangs the user's turn.
+///
+/// This caps total NODE VISITS across the whole recursion tree, not just its
+/// depth. Ordinary commands use fewer than a dozen visits; the cap is three
+/// orders of magnitude above that, so it cannot be reached by real work.
+const MAX_ANALYSIS_NODES: u32 = 2_000;
+
+thread_local! {
+    /// Remaining node budget for the top-level command currently being analysed.
+    static ANALYSIS_BUDGET: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Consume one unit of the analysis budget. Returns false when it is exhausted.
+fn take_budget() -> bool {
+    ANALYSIS_BUDGET.with(|b| {
+        let left = b.get();
+        if left == 0 {
+            false
+        } else {
+            b.set(left - 1);
+            true
+        }
+    })
+}
+
 fn detect_bash(cmd: &str, depth: usize) -> Decision {
+    // D4: when the budget is exhausted we DENY, never Allow. A command too
+    // complex to analyse within a bounded amount of work must not be waved
+    // through unanalysed — an unanalysed destructive command is exactly the
+    // fail-open this module exists to prevent, and the caller can always
+    // simplify the command or approve it manually.
+    if !take_budget() {
+        return Decision::deny(
+            "command is too complex to analyse within the safety budget — refusing rather than allowing it unanalysed",
+        );
+    }
+
     // 1. Fork bomb (whitespace-insensitive signature).
     let compact: String = cmd.chars().filter(|c| !c.is_whitespace()).collect();
     if compact.contains(":(){") && compact.contains(":|:") {
         return Decision::deny("fork bomb pattern detected");
     }
 
-    // 2. Truncating `>` redirects (quote-aware, ignores >>, &>>, 2>, >&; but
-    //    catches the combined stdout+stderr truncating form `&>`). Scan
+    // 2. Truncating `>` redirects (quote-aware, ignores >>, &>> and fd dups
+    //    like `2>&1`/`>&2`; but catches EVERY `N>file` truncating form for any
+    //    fd N, plus the combined stdout+stderr truncating form `&>`). Scan
     // *every* redirect on the line, not just the first: a safe early redirect
     // (`> /dev/null`) must not blind the gate to a later truncating redirect in
     // a subsequent `;`/`&&`/`|` segment.
@@ -118,6 +170,23 @@ fn redirect_target_is_safe(target: &str) -> bool {
     let t = exclude::normalize(target);
     matches!(t.as_str(), "/dev/null" | "/dev/stdout" | "/dev/stderr") || exclude::is_config_file(&t)
 }
+
+// D1 (verified universal bypass, REMOVED — do not re-add): a `is_temp_scratch`
+// predicate used to allow any redirect target under `/tmp`, `/var/tmp`,
+// `/var/folders` and their `/private` twins, so that `cargo test 2> /tmp/log`
+// would not be denied. It was a raw `starts_with` prefix test, and
+// `exclude::normalize` does NOT resolve `..`, so `/tmp/../etc/hosts`,
+// `/var/tmp/../../etc/hosts`, `/private/tmp/../../Users/yuki/.zshrc`,
+// `/var/folders/../../etc/hosts` and `/tmp//../etc/hosts` all passed the
+// prefix test and thereby disabled the ENTIRE truncating-redirect rule for
+// ANY target on the line.
+//
+// It was NOT replaced with a `..`-resolving version. A carve-out whose only
+// purpose is convenience is exactly what produced this bypass, and the repo's
+// governing rule is that a gate which fails open is worse than no gate. The
+// pre-existing (sound) behaviour is restored: `> /tmp/log` is DENIED. That is
+// a false positive, which is the acceptable side of the trade — the user can
+// rephrase (`>> /tmp/log`, `2>&1`, `/dev/null`) or approve manually.
 
 /// Quote-aware split of a command line into individual simple-command segments
 /// on `;`, newline, `&&`, `||`, `|`, `&`.
@@ -169,17 +238,18 @@ fn split_segments(cmd: &str) -> Vec<String> {
 }
 
 /// Find the first single `>` redirect outside quotes and return its target
-/// token. Returns None for `>>`, `&>>`, `2>`, `>&<digit>` (fd dup) and quoted
-/// `>` (but `&>` and `>&<filename>` — the combined stdout+stderr truncating
-/// forms — yield their target).
+/// token. Returns None for `>>`, `&>>`, `>&<digit>` (fd dup) and quoted `>`
+/// (but `&>`, `>&<filename>` — the combined stdout+stderr truncating forms —
+/// and every explicit-fd `N>file` yield their target).
 #[cfg(test)]
 fn single_redirect_target(seg: &str) -> Option<String> {
     redirect_targets(seg).into_iter().next()
 }
 
 /// Every single `>` truncating-redirect target on the line, in order, outside
-/// quotes. Skips `>>`, `&>>`, `2>`, `>&<digit>` (fd dup), quoted `>`, Rust
-/// arrows (`->`) and angle-bracket placeholders (`<value>`); catches the
+/// quotes. Skips `>>`, `&>>`, `>&<digit>` (fd dup), quoted `>`, Rust
+/// arrows (`->`) and angle-bracket placeholders (`<value>`); catches every
+/// explicit-fd truncating form (`2>f`, `0>f`, `3>f`, `1>f`) and the
 /// truncating `>&<filename>` mirror of `&>`. Scanning the *whole* line (rather
 /// than pre-split segments) keeps the fd-dup context (`2>&1`, `>&2`) intact
 /// while still catching a truncating redirect in any later segment.
@@ -203,19 +273,18 @@ fn redirect_targets(seg: &str) -> Vec<String> {
         if c == b'>' && !in_s && !in_d {
             let prev = if i > 0 { bytes[i - 1] } else { 0 };
             let next = *bytes.get(i + 1).unwrap_or(&0);
-            // An explicit-fd redirect whose fd is NOT stdout (`2>file`, `11>file`)
-            // is allowed; fd 1 (`1>file`) truncates stdout identically to bare
-            // `>file` and must be treated as a real truncating redirect. Read the
-            // WHOLE digit run before `>` (not just one byte) so multi-digit fds
-            // like `11>`/`21>` — which merely END in 1 — stay allowed. (`1>&2` is
-            // still skipped below by the `next == b'&'` fd-dup clause.)
-            let explicit_nonstdout_fd = prev.is_ascii_digit() && {
-                let mut s = i - 1;
-                while s > 0 && bytes[s - 1].is_ascii_digit() {
-                    s -= 1;
-                }
-                &bytes[s..i] != b"1"
-            };
+            // BG-2 (fail-open regression, fixed): explicit-fd redirects whose fd
+            // is NOT stdout (`2>file`, `0>file`, `3>file`, `11>file`) used to be
+            // skipped outright. That is WRONG — `N>file` truncates `file` for
+            // EVERY fd N, exactly like bare `>file`; only the fd the program
+            // writes through differs, not the effect on the target. Skipping them
+            // let `shred --help 2> /some/path` and `echo x 2> /some/path` through.
+            // There is deliberately no fd-based skip left here: `2>&1` / `>&2`
+            // (fd DUP, no file touched) and `2>/dev/null` are still allowed, but
+            // via the `fd_dup_amp` clause and `redirect_target_is_safe`
+            // respectively — i.e. by what the redirect DOES, not by which fd
+            // number precedes the `>`.
+            //
             // `>&<target>` is an fd DUPLICATION / fd-CLOSE (safe to skip) ONLY
             // when the ENTIRE target token is all ASCII digits (`>&2`, `>&1`,
             // `>&02`, `1>&2`) or the fd-close `-` (`>&-`, bash touches no file).
@@ -223,8 +292,8 @@ fn redirect_targets(seg: &str) -> Vec<String> {
             // non-digit (`>&2x`, `>&2.txt`, `>&10.log`) is a FILENAME — the
             // bash MIRROR of `&>` — and truncates BOTH stdout and stderr into
             // that file, so it must NOT be skipped. Scan the FULL token after
-            // `&` (mirroring how `explicit_nonstdout_fd` scans the full digit
-            // run BEFORE `>`) and require it to terminate at whitespace / a
+            // `&` (the WHOLE token, not just its first byte) and require it
+            // to terminate at whitespace / a
             // command terminator / end-of-token.
             let fd_dup_amp = next == b'&' && {
                 let tstart = i + 2;
@@ -252,7 +321,7 @@ fn redirect_targets(seg: &str) -> Vec<String> {
             // target. Only the APPEND form `&>>` (caught here by `next == b'>'`)
             // is non-truncating and stays skipped. (`2>&1`, `>&2` are still
             // skipped via the `fd_dup_amp` fd-dup clause.)
-            if next == b'>' || prev == b'>' || explicit_nonstdout_fd || fd_dup_amp {
+            if next == b'>' || prev == b'>' || fd_dup_amp {
                 i += 1;
                 continue;
             }
@@ -339,6 +408,111 @@ fn basename(tok: &str) -> &str {
     tok.rsplit('/').next().unwrap_or(tok)
 }
 
+/// Parse the FIRST shell word of `s`, honouring single quotes, double quotes and
+/// backslash escapes, and return it with ONE level of quoting removed.
+///
+/// Whitespace-only tokenisation elsewhere in this file never unquotes, so a
+/// command word written in any of the standard quoting forms (`\rm`, `"rm"`,
+/// `'rm'`, `r""m`) survives as a literal that matches no rule arm and falls
+/// through to Allow. This is the shared primitive that closes that hole; it is
+/// also what makes a `-c` operand recoverable as a single word regardless of
+/// what follows it on the line.
+///
+/// Deliberately NOT a full shell lexer: no expansion of `$VAR`, `${…}`,
+/// `$(…)`/backticks, `~`, globs or history. See `normalized_command` for the
+/// list of forms that remain out of reach and why.
+fn first_shell_word(s: &str) -> Option<String> {
+    let mut chars = s.chars().peekable();
+    while chars.peek().is_some_and(|c| c.is_whitespace()) {
+        chars.next();
+    }
+    let mut out = String::new();
+    let mut saw_word = false;
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                // Single quotes: everything up to the next `'` is literal.
+                saw_word = true;
+                for d in chars.by_ref() {
+                    if d == '\'' {
+                        break;
+                    }
+                    out.push(d);
+                }
+            }
+            '"' => {
+                // Double quotes: only `\"`, `\\`, `\$` and '\`' are escapes.
+                saw_word = true;
+                while let Some(d) = chars.next() {
+                    if d == '"' {
+                        break;
+                    }
+                    if d == '\\' {
+                        match chars.next() {
+                            Some(e @ ('"' | '\\' | '$' | '`')) => out.push(e),
+                            Some(e) => {
+                                out.push('\\');
+                                out.push(e);
+                            }
+                            None => out.push('\\'),
+                        }
+                    } else {
+                        out.push(d);
+                    }
+                }
+            }
+            '\\' => {
+                // Backslash escapes the next char (`\rm` -> `rm`, the standard
+                // alias-bypass idiom); a trailing lone `\` is kept literal.
+                saw_word = true;
+                match chars.next() {
+                    Some(d) => out.push(d),
+                    None => out.push('\\'),
+                }
+            }
+            c if c.is_whitespace() => break,
+            c => {
+                saw_word = true;
+                out.push(c);
+            }
+        }
+    }
+    if saw_word {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+/// Normalise a COMMAND WORD to the bare program name used for rule matching.
+///
+/// Applies, in order: one level of shell quoting/escaping removal
+/// (`first_shell_word`) and then `basename`. Together these defend the forms
+/// that are reachable in ordinary use and that all name the SAME program:
+///
+///   * `\rm`      — the standard alias-bypass idiom (verified bypass)
+///   * `"rm"` / `'rm'` / `r""m` — quoted or split command words
+///   * `/bin/rm`, `$HOME/bin/rm` (literal path part) — via `basename`
+///   * `command rm`, `sudo rm`, `env rm`, … — via `command_index`'s wrapper skip
+///
+/// OUT OF REACH (deliberately not attempted — each needs runtime state we do
+/// not have, and guessing would deny benign commands):
+///   * `$(which rm)`, `` `which rm` ``, `$RM`, `${RM}` — command/parameter
+///     substitution: the value is only known at execution time.
+///   * user aliases and shell functions (`alias x='rm -rf'`) — defined in the
+///     user's rc files, not visible from the tool call.
+///   * `r$'m'` / `$'\x72m'` ANSI-C quoting and `%` -style expansions.
+///   * a program reached through a symlink or a PATH shadow whose NAME is not
+///     `rm` (e.g. `~/bin/cleanup` that execs `rm -rf`) — nothing in the command
+///     line says so.
+///
+/// Operand tokens are also intentionally left un-normalised: unquoting them
+/// would change glob/path semantics that `analyze_rm` reasons about.
+fn normalized_command(tok: &str) -> String {
+    let unquoted = first_shell_word(tok).unwrap_or_else(|| tok.to_string());
+    basename(&unquoted).to_string()
+}
+
 fn is_assignment(tok: &str) -> bool {
     if let Some(eq) = tok.find('=') {
         let name = &tok[..eq];
@@ -354,9 +528,66 @@ fn is_assignment(tok: &str) -> bool {
     }
 }
 
-/// Index of the effective command word, skipping leading `VAR=val` assignments
-/// and benign wrapper commands (sudo, env, nohup, …).
-fn command_index(tokens: &[&str]) -> Option<usize> {
+/// True if `cmd` is an exec-wrapper: a program whose own arguments end in a
+/// COMMAND that it then runs, so the effective command word is BEHIND it.
+fn is_exec_wrapper(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "sudo"
+            | "doas"
+            | "nohup"
+            | "env"
+            | "command"
+            | "time"
+            | "nice"
+            | "ionice"
+            | "timeout"
+            | "stdbuf"
+            | "setsid"
+            | "flock"
+            | "chroot"
+    )
+}
+
+/// Candidate indices of the effective command word, skipping leading `VAR=val`
+/// assignments. Callers analyse EVERY candidate and deny if ANY of them is
+/// destructive.
+///
+/// D3 (verified fail-open, fixed): this used to be `command_index` — a function
+/// that computed the SINGLE index it believed was the command word by modelling
+/// which of each wrapper's options take a separate value token
+/// (`wrapper_flag_takes_value`) and how many positional operands the wrapper
+/// consumes (`wrapper_leading_operands`). That model was wrong for GNU LONG
+/// options, which accept `--opt VALUE` as two tokens: `wrapper_flag_takes_value`
+/// returned false for every flag whose length was not exactly 2, commented "long
+/// flags already carry their value inline". So the VALUE token broke the flag
+/// loop, was eaten as the wrapper's leading operand, and the real command word
+/// was misresolved — `timeout --kill-after 10 5 rm -rf /path`,
+/// `chroot --userspec root /newroot rm -rf /path`, `stdbuf --output 0 rm …`,
+/// `flock --wait 5 /tmp/l rm …`, `sudo --user root rm …`, `env --unset FOO rm …`
+/// and `nice --adjustment 5 rm …` were all ALLOW. The short forms denied
+/// correctly, which is why the tests missed it.
+///
+/// The fix deliberately does NOT extend the option model — that is the "reason
+/// about token positions" pattern that has already rotted twice in this file,
+/// and every long option added later would reopen the same gap. Both option
+/// tables are DELETED. Instead, once a wrapper is seen, EVERY subsequent
+/// non-empty token position becomes a candidate command word. The candidate set
+/// is additive and evaluated deny-if-ANY, so whichever position the wrapper
+/// really execs is guaranteed to be among them, however its options parse.
+///
+/// This mirrors the shape BG-1 already used for `-c` payloads
+/// (see `dash_c_payloads`).
+///
+/// Widening justification: a candidate at a non-command position denies only if
+/// that token is ITSELF a destructive command word with destructive operands
+/// following it (e.g. an option value that literally reads `rm -rf <path>`).
+/// That is a false positive, and a recoverable one — the acceptable side of this
+/// module's fail-closed bias.
+///
+/// When the first non-assignment token is NOT a wrapper, exactly one candidate
+/// is returned, so ordinary commands are unaffected.
+fn command_candidates(tokens: &[&str]) -> Vec<usize> {
     let mut i = 0;
     while i < tokens.len() {
         let t = tokens[i];
@@ -364,59 +595,55 @@ fn command_index(tokens: &[&str]) -> Option<usize> {
             i += 1;
             continue;
         }
-        let wrapper = basename(t);
-        match wrapper {
-            "sudo" | "doas" | "nohup" | "env" | "command" | "time" | "nice" | "ionice" => {
-                i += 1;
-                // CA-blastguard-004: a wrapper's own flags (e.g. `sudo -u root`)
-                // must be skipped too, not just the wrapper word itself —
-                // otherwise the flag token is mistaken for the real command
-                // and the destructive command behind it never gets analysed.
-                while i < tokens.len() {
-                    let ft = tokens[i];
-                    if ft.is_empty() {
-                        i += 1;
-                        continue;
-                    }
-                    if ft == "--" {
-                        i += 1;
-                        break;
-                    }
-                    if !ft.starts_with('-') {
-                        break;
-                    }
-                    i += 1;
-                    if wrapper_flag_takes_value(wrapper, ft)
-                        && i < tokens.len()
-                        && !tokens[i].starts_with('-')
-                    {
-                        i += 1;
-                    }
-                }
-            }
-            _ => return Some(i),
+        if is_exec_wrapper(&normalized_command(t)) {
+            // Every position behind the wrapper is a candidate.
+            return (i + 1..tokens.len())
+                .filter(|&j| !tokens[j].is_empty() && !opens_unclosed_quote(tokens[j]))
+                .collect();
         }
+        return vec![i];
     }
-    None
+    Vec::new()
 }
 
-/// True if `flag` is a bare short option (e.g. `-u`, not the bundled `-n10`)
-/// that this wrapper takes a separate value token for, so that value must be
-/// skipped too before the real command can be found.
-fn wrapper_flag_takes_value(wrapper: &str, flag: &str) -> bool {
-    if flag.len() != 2 {
-        // Bundled short flags (`-n10`, `-c3`) and long flags already carry
-        // their value inline; only a bare 2-char short flag needs a lookahead.
-        return false;
-    }
-    let ch = flag.as_bytes()[1] as char;
-    match wrapper {
-        "sudo" | "doas" => matches!(ch, 'u' | 'g' | 'p' | 'h' | 'C' | 'D' | 'R' | 'T' | 'U'),
-        "env" => matches!(ch, 'u' | 'C' | 'S'),
-        "nice" => ch == 'n',
-        "ionice" => matches!(ch, 'c' | 'n' | 'p' | 't'),
+/// True when `tok` OPENS a quote it does not close within the same
+/// whitespace-delimited token — i.e. the token is the first fragment of a
+/// multi-word quoted STRING (`'rm` in `grep -rn 'rm -rf' src/`), not a command
+/// word.
+///
+/// Tokenisation elsewhere splits on whitespace only, so such a fragment
+/// unquotes to a bare `rm` and, as a D3 candidate position, would deny ordinary
+/// work like `stdbuf --output 0 grep -rn 'rm -rf' src/` — the same false
+/// positive CA-blastguard-016 fixed for `find -exec`.
+///
+/// Not a fail-open: excluding these fragments cannot hide a real payload,
+/// because a quoted multi-word string is never a program that exists on disk,
+/// and the ways such a string actually gets EXECUTED — `sh -c '…'`, `eval '…'`,
+/// `flock -c '…'` — are all re-analysed by their own arms
+/// (`dash_c_payloads`, the `eval` arm), which reassemble the full quoted word
+/// across token boundaries rather than reading a single fragment. A properly
+/// closed quoted command word (`sudo 'rm' -rf /path`) closes within its token
+/// and therefore remains a candidate.
+fn opens_unclosed_quote(tok: &str) -> bool {
+    let mut chars = tok.chars();
+    match chars.next() {
+        Some(q @ ('\'' | '"')) => !chars.any(|c| c == q),
         _ => false,
     }
+}
+
+/// Wrappers whose `-c` operand is a SHELL COMMAND STRING (run via `sh -c`),
+/// not an opaque option value.
+///
+/// D2 (verified fail-open, fixed): `flock`'s `-c` / `--command` takes a shell
+/// command string and executes it through `sh -c`, exactly like `bash -c`. It
+/// used to be listed in `wrapper_flag_takes_value` as a value-taking option, so
+/// the payload was SKIPPED as an opaque flag value and never analysed:
+/// `flock /tmp/l -c 'rm -rf /Users/yuki/src'` and
+/// `flock -c 'rm -rf /Users/yuki/src' /tmp/l` were both ALLOW. The payload is
+/// now routed into the same `dash_c_payloads` re-analysis path used for shells.
+fn takes_shell_command_flag(cmd: &str) -> bool {
+    matches!(cmd, "flock")
 }
 
 fn is_short_flag(tok: &str) -> bool {
@@ -426,6 +653,48 @@ fn is_short_flag(tok: &str) -> bool {
 /// True if any short flag bundle in `rest` contains `ch`, or the long flag is set.
 fn has_short(rest: &[&str], ch: char) -> bool {
     rest.iter().any(|t| is_short_flag(t) && t.contains(ch))
+}
+
+/// True if `tok` is a shell redirection token rather than an operand — either an
+/// operator with its target attached (`2>&1`, `>&2`, `2>/dev/null`, `>file`) or a
+/// bare operator (`>`, `>>`, `2>`, `&>`). Redirection is punctuation the shell
+/// consumes itself; it is never an argument the command can act on.
+fn is_redirect_token(tok: &str) -> bool {
+    tok.contains('>') || tok.contains('<')
+}
+
+/// True if `tok` is a redirect operator with NO attached target (`>`, `>>`,
+/// `2>`, `&>`), meaning the FOLLOWING token is its target and is likewise not a
+/// command operand. Recognised by "made only of redirect punctuation/fd digits
+/// AND ending in `>`" — `2>&1` and `>&2` end in a digit and carry their own
+/// target, so they consume only themselves.
+fn is_bare_redirect_op(tok: &str) -> bool {
+    tok.ends_with('>')
+        && tok
+            .chars()
+            .all(|c| matches!(c, '>' | '<' | '&' | '0'..='9'))
+}
+
+/// True if `rest` contains at least one OPERAND — a token that is neither one of
+/// the command's own flags nor shell redirection punctuation. Operands are
+/// identified exactly as `analyze_rm` identifies them (`!t.starts_with('-')`) so
+/// the two stay in agreement about what counts as a destroyable target.
+fn has_operand(rest: &[&str]) -> bool {
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        if t.is_empty() {
+            i += 1;
+        } else if is_bare_redirect_op(t) {
+            // Operator plus the target token it owns.
+            i += 2;
+        } else if is_redirect_token(t) || t.starts_with('-') {
+            i += 1;
+        } else {
+            return true;
+        }
+    }
+    false
 }
 
 /// Shells that take a command line as a string argument (e.g. `sh -c "…"`).
@@ -522,34 +791,210 @@ fn strip_wrapping_quotes(s: &str) -> &str {
     s
 }
 
-/// For `<shell> … -c <payload>`, return the payload command line (the words
-/// after the `-c`/bundled-`c` flag, with surrounding quotes peeled). Returns
-/// `None` when there is no `-c` flag (e.g. `bash script.sh`, whose file we
-/// cannot inspect).
-fn dash_c_payload(rest: &[&str]) -> Option<String> {
-    let pos = rest
+/// For `<shell> … -c <payload>`, return every candidate payload command line to
+/// re-analyse. Returns an empty vec when there is no `-c` flag (e.g.
+/// `bash script.sh`, whose file we cannot inspect).
+///
+/// CA-blastguard-012 (verified bypass): this used to JOIN all words after `-c`
+/// and then peel quotes only when the JOINED string began and ended with the
+/// same quote char. Appending ANY trailing token defeated that —
+/// `sh -c "rm -rf /some/path" --help` (or `; true`, or a bare `arg0`) left the
+/// last char belonging to the trailing token, nothing was peeled, the payload's
+/// command word parsed as the literal `"rm`, and analysis gave up: ALLOW.
+/// Trailing tokens are ordinary shell usage (`sh -c '…' scriptname arg1`), where
+/// they become `$0`, `$1`, … and are NOT executed — so the operand must be read
+/// as a single properly-quoted shell WORD, independent of what follows it.
+///
+/// Two candidates are returned, both analysed, deny-if-either:
+///   1. the first shell word after `-c` — the real, faithful shell semantics;
+///   2. the legacy join-then-peel string, when it differs — so an UNQUOTED
+///      multi-word payload (`sh -c rm -rf /path`) keeps being denied exactly as
+///      before. (Real `sh` would only run `rm` there, but the historical
+///      denial is the conservative side of the trade and costs no realistic
+///      false positive.)
+///
+/// CA-blastguard-014 (verified bypass, fail-open): the word after `-c` is not
+/// necessarily the payload. A shell keeps parsing OPTIONS until the first
+/// non-option operand, so `bash -c -- 'rm -rf /some/path'`, `sh -c -- "rm …"`
+/// and `bash -c -x 'rm …'` all really execute the payload while the old code
+/// read `--` / `-x` as the "first shell word" and gave up: ALLOW (verified:
+/// `bash -c -- 'echo RAN'`, `sh -c -- 'echo RAN'` and `bash -c -x 'echo RAN'`
+/// all print RAN).
+///
+/// BG-1 (incomplete fix): the CA-blastguard-014 scan skipped `-`-prefixed
+/// tokens and stopped at the first token that did not start with `-`. For a
+/// VALUE-TAKING option that token is the option's ARGUMENT, not the payload —
+/// `bash -c -o pipefail 'rm -rf /some/path'` stopped on `pipefail`, and `+o` /
+/// `+O` were not recognised as options at all (`bash -c +o history 'rm …'`).
+/// All of these really execute the payload; all were ALLOW. The old docstring's
+/// claim to "mirror the shell's own option parsing" was therefore false.
+///
+/// The fix deliberately does NOT model option parsing more precisely — that is
+/// the "reason about token positions" approach that has regressed this file
+/// three rounds running, and every value-taking option added later (`-o`, `-O`,
+/// `+o`, `--rcfile`, `--init-file`, …) would reopen the same gap. Instead it
+/// pushes a candidate for EVERY position after `-c`. The candidate set is
+/// additive and evaluated deny-if-ANY, so extra candidates can only ever WIDEN
+/// detection: whichever position the real shell picks as the command string is
+/// guaranteed to be among them, however the intervening options parse.
+///
+/// Widening justification (no false positive of consequence): a candidate at a
+/// non-payload position is re-analysed by the full pipeline, so it denies only
+/// if that text is ITSELF a destructive command line. The residue is a token
+/// that is both an option's value and a destructive command line (e.g.
+/// `bash -c 'echo hi' 'rm -rf /path'`, where the second string is `$0`, not
+/// code) — a deny there is a false positive, but a recoverable one, and it is
+/// the deliberate side of this module's fail-closed bias for shell-eval
+/// wrappers.
+///
+/// Fail-open condition: the real payload's first shell word is not derivable
+/// from any suffix of `rest` — e.g. the payload arrives through a variable
+/// (`bash -c "$CMD"`) or is assembled at runtime. That is unchanged by this fix
+/// and out of reach of any static analysis of the command line.
+fn dash_c_payloads(rest: &[&str]) -> Vec<String> {
+    let Some(pos) = rest
         .iter()
-        .position(|t| is_short_flag(t) && t.contains('c'))?;
-    let payload = rest[pos + 1..].join(" ");
-    let inner = strip_wrapping_quotes(&payload);
-    if inner.is_empty() {
-        None
-    } else {
-        Some(inner.to_string())
+        .position(|t| is_short_flag(t) && t.contains('c'))
+    else {
+        return Vec::new();
+    };
+    payloads_after(rest, pos)
+}
+
+/// The `dash_c_payloads` candidate set for a command-string flag already located
+/// at index `pos`. Split out so callers with a different spelling of the flag
+/// (e.g. flock's long form `--command`) reuse the identical candidate logic
+/// rather than duplicating it.
+fn payloads_after(rest: &[&str], pos: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut push_first_word = |from: usize| {
+        if from >= rest.len() {
+            return;
+        }
+        let joined = rest[from..].join(" ");
+        if let Some(word) = first_shell_word(&joined) {
+            // The `!word.is_empty()` guard matters: `sh -c ''` yields
+            // `Some("")`, which must not be re-analysed as an empty command.
+            if !word.is_empty() && !out.contains(&word) {
+                out.push(word);
+            }
+        }
+    };
+    // Candidate 1: EVERY position after `-c`. This subsumes the historical
+    // `pos + 1` candidate (so nothing previously denied can regress to Allow)
+    // and any option-skipping heuristic, without needing to know which of the
+    // shell's own options take a separate value token.
+    for from in pos + 1..rest.len() {
+        push_first_word(from);
     }
+
+    // Candidate 2: legacy join-then-peel, unchanged.
+    let joined = rest[pos + 1..].join(" ");
+    let legacy = strip_wrapping_quotes(&joined);
+    if !legacy.is_empty() && !out.iter().any(|p| p == legacy) {
+        out.push(legacy.to_string());
+    }
+    out
 }
 
 fn analyze_segment(seg: &str, depth: usize) -> Decision {
     let tokens: Vec<&str> = seg.split_whitespace().collect();
-    let idx = match command_index(&tokens) {
-        Some(i) => i,
-        None => return Decision::Allow,
-    };
-    let cmd = basename(tokens[idx]);
+
+    // D2: a wrapper that takes a shell command string via `-c` (flock) runs that
+    // string through `sh -c`. Re-analyse it exactly like a shell's own `-c`
+    // payload. Scanned position-independently so both `flock FILE -c '…'` and
+    // `flock -c '…' FILE` are covered.
+    if depth < MAX_SHELL_DEPTH {
+        for (i, t) in tokens.iter().enumerate() {
+            if takes_shell_command_flag(&normalized_command(t)) {
+                let rest = &tokens[i + 1..];
+                // Both spellings of flock's command flag: the short `-c` (via
+                // `dash_c_payloads`) and the long `--command`/`--command=…`.
+                let mut payloads = dash_c_payloads(rest);
+                if let Some(pos) = rest
+                    .iter()
+                    .position(|t| *t == "--command" || t.starts_with("--command="))
+                {
+                    payloads.extend(payloads_after(rest, pos));
+                }
+                for payload in payloads {
+                    let d = detect_bash(&payload, depth + 1);
+                    if d.is_deny() {
+                        return d;
+                    }
+                }
+            }
+        }
+    }
+
+    // D3: analyse EVERY candidate command-word position; deny if ANY is
+    // destructive. See `command_candidates`.
+    for idx in command_candidates(&tokens) {
+        let d = analyze_command_at(&tokens, idx, depth);
+        if d.is_deny() {
+            return d;
+        }
+    }
+    Decision::Allow
+}
+
+fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
+    // CA-blastguard-013 (verified bypass): the command word must be UNQUOTED
+    // before basename matching. `\rm -rf /some/path` (the standard alias-bypass
+    // idiom) and `"rm" -rf /some/path` previously matched no rule arm and fell
+    // through to Allow. See `normalized_command` for what this covers and what
+    // stays out of reach.
+    let cmd = normalized_command(tokens[idx]);
+    let cmd = cmd.as_str();
     let rest = &tokens[idx + 1..];
 
-    // A help invocation never destroys anything.
-    if rest.iter().any(|t| *t == "--help" || *t == "-h") {
+    // A *genuine* help invocation never destroys anything — but only when the
+    // help flag is the command's ONLY argument.
+    //
+    // CA-blastguard-011 (verified bypass): the previous rule short-circuited on
+    // `rest.iter().any(is_help_flag)`, so appending `--help` anywhere disabled
+    // every Bash rule. That assumed the flag makes the command print help and
+    // exit, which is false for the BSD userland on macOS: BSD `rm` has no
+    // `--help` option, so the token is taken as a plain filename operand and
+    // `rm -rf <dir> --help` exits 0 after DELETING `<dir>`. The same holds for
+    // any other operand ordering, because a command that does not know the flag
+    // treats it as data, and a command that does know it may still have already
+    // consumed the destructive operands (GNU getopt permutes, BSD getopt stops
+    // at the first non-option — neither is safe to assume).
+    //
+    // The property that actually makes a help invocation safe is that there is
+    // no OPERAND to destroy — not that the help flag is the only token.
+    //
+    // CA-blastguard-015 (false positive introduced by the `rest.len() == 1`
+    // form): ANY second token re-enabled the unconditional-deny arms, including
+    // a pure REDIRECT that carries no operand at all. `shred --help 2>&1 | head`,
+    // `truncate --help 2>/dev/null` and `tee --help 2>&1` are ordinary usage,
+    // and blastguard is a hard block whose stated bias is that ambiguity falls
+    // through to Allow — denying them is exactly the kind of interference the
+    // module header forbids.
+    //
+    // Narrowing justification (no fail-open): the operand test is computed the
+    // same way `analyze_rm` computes operands (`!t.starts_with('-')`), so any
+    // destructive target still counts and is still denied — `rm -rf /path --help`
+    // (operand `/path`) and `rm --help *` (operand `*`) both keep their DENY,
+    // which is the whole point of CA-blastguard-011 above. Only redirect
+    // operators and their targets are excluded, and those cannot themselves be
+    // destroyed by the command.
+    //
+    // BG-2: the previous version of this comment claimed a truncating redirect
+    // "is already denied earlier in `detect_bash` (rule 2)". That was FALSE for
+    // space-separated `N>` with N != 1 (`shred --help 2> /some/path`), because
+    // rule 2 skipped every non-stdout fd — so this skip really did open a hole.
+    // `redirect_targets` no longer has that fd-based skip: EVERY `N> target`
+    // (any fd, attached or space-separated) is now read as truncating and
+    // denied in rule 2 before segment analysis runs. What `has_operand` skips
+    // is therefore only what rule 2 has already vetted (a truncating target it
+    // judged safe) or what cannot truncate at all — append `>>`, fd dups
+    // (`2>&1`), and input redirects (`<`). With no operand left, there is
+    // nothing to
+    // destroy whichever way the command parses the flag (GNU getopt permutes,
+    // BSD getopt stops at the first non-option — neither assumption is needed).
+    if rest.iter().any(|t| *t == "--help" || *t == "-h") && !has_operand(rest) {
         return Decision::Allow;
     }
 
@@ -570,7 +1015,7 @@ fn analyze_segment(seg: &str, depth: usize) -> Decision {
         }
         // `sh -c "<payload>"` and friends evaluate the `-c` argument.
         if is_shell(cmd) {
-            if let Some(payload) = dash_c_payload(rest) {
+            for payload in dash_c_payloads(rest) {
                 let d = detect_bash(&payload, depth + 1);
                 if d.is_deny() {
                     return d;
@@ -580,9 +1025,19 @@ fn analyze_segment(seg: &str, depth: usize) -> Decision {
     }
 
     match cmd {
+        // BG-3 (second instance): `split_segments` splits on `;`, so the `\;`
+        // terminator of a `find -exec` CUTS THE LINE before `analyze_find` ever
+        // sees it. `find . -name x -exec grep rm {} \; -exec rm -rf {} \;`
+        // reaches this function as three segments, and the second one has
+        // `-exec` as its command word — matching no rule, so the destructive
+        // `-exec rm` was ALLOW while the `+`-terminated twin was correctly
+        // denied. Recognising a segment whose command word is an exec predicate
+        // and routing it back through `analyze_find` restores the multi-exec
+        // scan for the `\;` form without depending on where the split fell.
+        "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], depth),
         "rm" => analyze_rm(rest),
         "git" => analyze_git(rest),
-        "find" => analyze_find(rest),
+        "find" => analyze_find(rest, depth),
         "xargs" => analyze_xargs(rest, depth),
         "truncate" => Decision::deny("truncate can shrink a file to zero bytes"),
         "shred" => Decision::deny("shred destroys file contents irreversibly"),
@@ -744,8 +1199,8 @@ fn analyze_git(rest: &[&str]) -> Decision {
         Some(i) => i,
         None => return Decision::Allow,
     };
-    let sub = basename(rest[idx]);
-    match sub {
+    let sub = normalized_command(rest[idx]);
+    match sub.as_str() {
         "clean" => {
             let has_f = has_short(rest, 'f') || rest.contains(&"--force");
             let has_d = has_short(rest, 'd');
@@ -801,8 +1256,8 @@ fn analyze_git(rest: &[&str]) -> Decision {
             let subcmd = rest[idx + 1..]
                 .iter()
                 .find(|t| !t.starts_with('-'))
-                .map(|t| basename(t))
-                .unwrap_or("");
+                .map(|t| normalized_command(t))
+                .unwrap_or_default();
             if subcmd == "clear" || subcmd == "drop" {
                 Decision::deny("git stash clear/drop irreversibly deletes stashed changes")
             } else {
@@ -813,21 +1268,35 @@ fn analyze_git(rest: &[&str]) -> Decision {
     }
 }
 
-fn analyze_find(rest: &[&str]) -> Decision {
+fn analyze_find(rest: &[&str], depth: usize) -> Decision {
     if rest.contains(&"-delete") {
         return Decision::deny("find -delete removes every matching file");
     }
-    if let Some(pos) = rest
+    // Every -exec/-execdir/-ok/-okdir on the line, not just the first: a benign
+    // early `-exec grep …` must not hide a later `-exec rm …`.
+    for pos in rest
         .iter()
-        .position(|t| *t == "-exec" || *t == "-execdir" || *t == "-ok" || *t == "-okdir")
+        .enumerate()
+        .filter(|(_, t)| matches!(**t, "-exec" | "-execdir" | "-ok" | "-okdir"))
+        .map(|(i, _)| i)
     {
-        // The token right after -exec/-ok is the command run for each match.
-        // A shell there (`find … -exec sh -c "rm …"`) can run any destructive
-        // command and slips past a literal `rm` scan. -ok/-okdir are the
-        // interactive-confirmation twins of -exec/-execdir: they run the same
-        // arbitrary per-match command, just gated behind a y/n prompt first —
-        // that prompt does not make the payload any less destructive.
-        if let Some(c) = rest.get(pos + 1).map(|t| basename(t)) {
+        let tail = &rest[pos + 1..];
+        // The command run for each match starts right after -exec/-ok, modulo
+        // the same leading `VAR=val` assignments and benign wrappers
+        // (`sudo`, `env`, `command`, …) that `analyze_segment` skips — resolving
+        // it through `command_index` is what keeps `-exec sudo rm …` and
+        // `-exec env sh -c …` in reach. A shell there
+        // (`find … -exec sh -c "rm …"`) can run any destructive command.
+        // -ok/-okdir are the interactive-confirmation twins of -exec/-execdir:
+        // they run the same arbitrary per-match command, just gated behind a
+        // y/n prompt first — that prompt does not make the payload any less
+        // destructive. Normalised like every other command-word site, so
+        // `-exec \rm` / `-exec "sh" -c …` cannot slip past on quoting alone.
+        // D3: every candidate command-word position behind a wrapper is checked,
+        // not just one computed index. See `command_candidates`.
+        for ci in command_candidates(tail) {
+            let c = normalized_command(tail[ci]);
+            let c = c.as_str();
             if is_shell(c) {
                 return Decision::deny(
                     "find -exec on a shell can run an arbitrary destructive command per match",
@@ -835,15 +1304,68 @@ fn analyze_find(rest: &[&str]) -> Decision {
             }
             // A non-shell interpreter with an inline-eval flag (`python3 -c`,
             // `perl -e`, `node -e`, …) is equally dangerous: the payload runs
-            // per match and slips past the literal `rm` scan below.
-            if is_code_interpreter(c) && rest[pos + 1..].iter().any(|t| is_inline_eval_flag(t)) {
+            // per match. (The nested shell's own `-c` payload is already covered
+            // by the `is_shell` arm above, which denies the whole invocation
+            // without needing to look at the payload text at all.)
+            if is_code_interpreter(c) && tail[ci..].iter().any(|t| is_inline_eval_flag(t)) {
                 return Decision::deny(
-                    "find -exec on a code interpreter with an inline-eval flag can run an arbitrary destructive command per match",
-                );
+                "find -exec on a code interpreter with an inline-eval flag can run an arbitrary destructive command per match",
+            );
+            }
+            // CA-blastguard-016 (false positive): this used to normalise EVERY
+            // token in `rest` and deny if any of them came out as `rm`, so quoted
+            // DATA matched — `find . -name '*.md' -exec grep -l 'rm' {} \;`, i.e.
+            // searching for the literal string `rm`, is completely normal work and
+            // was hard-blocked. Only a plausible COMMAND position is normalised
+            // now.
+            //
+            // Narrowing justification (no fail-open): the token this checks is the
+            // one `find` actually execs, resolved through the same wrapper-skipping
+            // logic used everywhere else, so every genuinely destructive shape
+            // (`-exec rm`, `-exec /bin/rm`, `-exec \rm`, `-exec sudo rm`) is still
+            // denied. What is dropped is exactly the set of NON-command positions —
+            // `-name` patterns, `-path` arguments and per-match argument data —
+            // where a token named `rm` is a string being searched for, never a
+            // program being run.
+            if c == "rm" {
+                return Decision::deny("find -exec rm removes every matching file");
             }
         }
-        if rest.iter().any(|t| basename(t) == "rm") {
-            return Decision::deny("find -exec rm removes every matching file");
+
+        // BG-3 (fail-open regression, fixed): CA-blastguard-016 replaced the
+        // blanket "normalise every token" scan with head-token resolution only.
+        // That closed the `-exec grep -l 'rm'` false positive but re-opened
+        // every WRAPPER bypass the blanket scan had caught — `-exec timeout 5
+        // rm -rf {} +`, `-exec xargs rm -rf {} +`, `-exec stdbuf -o0 rm …`,
+        // `-exec flock /tmp/l rm …` all became ALLOW, because the resolved head
+        // was `timeout` / `xargs` / … and nothing looked further.
+        //
+        // The structural fix: re-analyse the whole `-exec` tail through
+        // `detect_bash`, exactly as the `-c` and `eval` arms already re-analyse
+        // their payloads. `find` really does exec this tail, so analysing it as
+        // a command line is faithful — and it inherits every present and FUTURE
+        // rule (rm, git, xargs, nested shells, interpreters, wrappers) instead
+        // of a hand-maintained name list that rots the moment a new wrapper
+        // ships. Depth-bounded like the other re-analysis arms.
+        //
+        // This does NOT reopen CA-blastguard-016: `detect_bash` analyses the
+        // tail from its COMMAND WORD outward, so `-exec grep -l 'rm' {} \;`
+        // still resolves to `grep` and the quoted DATA token `'rm'` is never in
+        // a command position.
+        //
+        // Fail-open condition: the exec'd program is a wrapper whose command
+        // word `command_index` cannot reach — an unknown wrapper name, or a
+        // known one whose positional-operand count differs from
+        // `wrapper_leading_operands`. That residue is strictly smaller than
+        // before this fix, and it is the same residue the top-level path has.
+        if depth < MAX_SHELL_DEPTH {
+            let inline = tail.join(" ");
+            if !inline.trim().is_empty() {
+                let d = detect_bash(&inline, depth + 1);
+                if d.is_deny() {
+                    return d;
+                }
+            }
         }
     }
     Decision::Allow
@@ -1174,6 +1696,52 @@ mod tests {
         assert_eq!(bash("rm --help"), Decision::Allow);
     }
 
+    // ---- Regression: CA-blastguard-011 (help-flag bypass) ----
+    #[test]
+    fn ca_blastguard_011_help_flag_does_not_disable_detection() {
+        // On macOS BSD `rm` has no `--help`, so the flag is just another
+        // filename operand: `rm -rf <dir> --help` exits 0 and DELETES <dir>.
+        // The old `rest.iter().any(is_help_flag)` short-circuit therefore
+        // turned `--help` into a universal bypass for every Bash rule.
+        assert!(bash("rm -rf /some/path --help").is_deny());
+        assert!(bash("rm -rf /some/path -h").is_deny());
+        // Help flag BEFORE the destructive operands is equally unsafe (GNU
+        // getopt permutes, so `-rf /path` is still parsed and executed).
+        assert!(bash("rm --help -rf /some/path").is_deny());
+        assert!(bash("rm -h -rf /some/path").is_deny());
+        // Interleaved / trailing orderings.
+        assert!(bash("rm -rf --help /some/path").is_deny());
+        assert!(bash("rm --help *").is_deny());
+        // Wrapper-prefixed form (help flag must not re-open the sudo path).
+        assert!(bash("sudo rm -rf /var/data --help").is_deny());
+
+        // Other commands in the same rule set shared the identical bypass.
+        assert!(bash("git reset --hard --help").is_deny());
+        assert!(bash("git clean -fdx --help").is_deny());
+        assert!(bash("chmod -R 777 . --help").is_deny());
+        assert!(bash("chown -R me:me / --help").is_deny());
+        assert!(bash("shred secret --help").is_deny());
+        assert!(bash("truncate -s0 x --help").is_deny());
+        assert!(bash("dd if=/dev/zero of=/dev/sda --help").is_deny());
+        assert!(bash("tee /etc/hosts --help").is_deny());
+        assert!(bash("mkfs.ext4 /dev/sdb1 --help").is_deny());
+        // Shell-eval smuggling: the payload is re-analysed, and the outer
+        // help flag must not suppress that either.
+        assert!(bash("eval rm -rf /some/path --help").is_deny());
+        assert!(bash("sh -c \"rm -rf /some/path --help\"").is_deny());
+
+        // …while a genuine help invocation (flag is the ONLY argument) stays
+        // allowed — the original no-false-positive intent is preserved.
+        assert_eq!(bash("rm --help"), Decision::Allow);
+        assert_eq!(bash("rm -h"), Decision::Allow);
+        assert_eq!(bash("git --help"), Decision::Allow);
+        assert_eq!(bash("shred --help"), Decision::Allow);
+        assert_eq!(bash("truncate --help"), Decision::Allow);
+        assert_eq!(bash("tee --help"), Decision::Allow);
+        assert_eq!(bash("chmod --help"), Decision::Allow);
+        assert_eq!(bash("sh --help"), Decision::Allow);
+    }
+
     #[test]
     fn allows_benign_shell_wrappers() {
         // Quoted text that merely mentions a destructive command is not run.
@@ -1209,8 +1777,18 @@ mod tests {
     fn append_and_fd_redirects_are_not_truncation() {
         assert_eq!(bash("echo x >> log.txt"), Decision::Allow);
         assert_eq!(bash("cargo test 2>&1"), Decision::Allow);
-        assert_eq!(bash("cargo build 2> err.log"), Decision::Allow);
         assert_eq!(bash("make >&2"), Decision::Allow);
+        // BG-2: `2> err.log` USED to be asserted Allow here. It is not an fd
+        // dup — it TRUNCATES `err.log` — so it now denies. What stays allowed
+        // is decided by what the redirect does to the target, not by the fd
+        // number: dup (`2>&1`), append (`>>`), /dev/null and config files.
+        assert!(bash("cargo build 2> err.log").is_deny());
+        assert_eq!(bash("cargo build 2> /dev/null"), Decision::Allow);
+        // D1 (DELIBERATELY FLIPPED from Allow): the `is_temp_scratch` carve-out
+        // that allowed this was a universal bypass (`/tmp/../etc/hosts`) and has
+        // been deleted, not patched. A denied temp-log redirect is a false
+        // positive; that is the acceptable side of the trade.
+        assert!(bash("cargo build 2> /tmp/err.log").is_deny());
     }
 
     #[test]
@@ -1317,19 +1895,18 @@ mod tests {
     fn explicit_stdout_fd_truncating_redirect_is_denied() {
         // CA-blastguard-03: `1>file` is an explicit stdout truncating redirect,
         // semantically identical to bare `>file` (denied) — must also be denied.
-        // Only stderr (`2>file`) and fd-dup (`2>&1`, `1>&2`) forms stay allowed.
         assert!(bash("echo x 1> existing").is_deny());
         assert!(bash("cat a 1>b.txt").is_deny());
-        // No regression: stderr redirect and fd-dup forms stay allowed.
-        assert_eq!(bash("cargo build 2> err.log"), Decision::Allow);
+        // BG-2: this test used to assert that only fd 1 truncates and that
+        // `2>`/`11>`/`21>`/`10>` stay Allow. That was the fail-open: `N>file`
+        // truncates `file` for EVERY fd N. All explicit fds now deny.
+        assert!(bash("cargo build 2> err.log").is_deny());
+        assert!(bash("echo hi 11> file.txt").is_deny());
+        assert!(bash("echo hi 21> out.txt").is_deny());
+        assert!(bash("echo hi 10> out.txt").is_deny());
+        // No regression: fd-dup forms touch no file and stay allowed.
         assert_eq!(bash("cargo test 2>&1"), Decision::Allow);
         assert_eq!(bash("run 1>&2"), Decision::Allow);
-        // Multi-digit explicit fds are NOT stdout — only the fd number `1`
-        // truncates stdout. `11>`, `21>` (end in 1 but aren't fd 1) stay allowed;
-        // guards against reading just the single byte before `>`.
-        assert_eq!(bash("echo hi 11> file.txt"), Decision::Allow);
-        assert_eq!(bash("echo hi 21> out.txt"), Decision::Allow);
-        assert_eq!(bash("echo hi 10> out.txt"), Decision::Allow);
     }
 
     #[test]
@@ -1542,5 +2119,540 @@ mod tests {
             Some("out-file.txt".to_string())
         );
         assert!(bash("cat x > important-data.txt").is_deny());
+    }
+
+    // ---- Regression: CA-blastguard-012 (trailing token defeats `-c` payload) ----
+    #[test]
+    fn trailing_token_after_dash_c_payload_does_not_bypass() {
+        // Verified bypass: the payload was join()ed with everything after it, so
+        // ANY trailing token left the joined string un-peelable and the payload
+        // command word parsed as the literal `"rm` -> Allow.
+        assert!(bash(r#"sh -c "rm -rf /some/path""#).is_deny());
+        assert!(bash(r#"sh -c "rm -rf /some/path" --help"#).is_deny());
+        assert!(bash(r#"sh -c "rm -rf /some/path" arg0"#).is_deny());
+        assert!(bash(r#"sh -c "rm -rf /some/path" -h"#).is_deny());
+        assert!(bash(r#"bash -c "rm -rf /some/path" x y z"#).is_deny());
+        assert!(bash(r#"zsh -c 'rm -rf /some/path' scriptname"#).is_deny());
+        // `; true` inside the trailing tokens (segment split happens on the
+        // OUTER line, so the trailing `true` segment is separately benign).
+        assert!(bash(r#"sh -c "rm -rf /some/path" ; true"#).is_deny());
+        // Unquoted multi-word payload keeps its historical denial.
+        assert!(bash("sh -c rm -rf /some/path").is_deny());
+    }
+
+    #[test]
+    fn benign_dash_c_payloads_with_trailing_tokens_still_allowed() {
+        // The widened `-c` parsing must not start denying ordinary shell usage
+        // where the trailing tokens are just $0/$1/… positional parameters.
+        assert!(!bash(r#"sh -c "ls""#).is_deny());
+        assert!(!bash(r#"sh -c "ls" myscript"#).is_deny());
+        assert!(!bash(r#"bash -c "cargo test -p blastguard" runner"#).is_deny());
+        assert!(!bash(r#"sh -c 'echo hello' arg0 arg1"#).is_deny());
+    }
+
+    // ---- Regression: CA-blastguard-013 (quoted / escaped command word) ----
+    #[test]
+    fn quoted_or_escaped_command_word_does_not_bypass() {
+        // `\rm` is the standard alias-bypass idiom, so this is reachable in
+        // ordinary use — not an exotic construction.
+        assert!(bash(r"\rm -rf /some/path").is_deny());
+        assert!(bash(r#""rm" -rf /some/path"#).is_deny());
+        assert!(bash("'rm' -rf /some/path").is_deny());
+        assert!(bash(r#"r""m -rf /some/path"#).is_deny());
+        // Same normalisation on the wrapper-skipping path and on nested shells.
+        assert!(bash(r"sudo \rm -rf /some/path").is_deny());
+        assert!(bash(r"command \rm -rf /some/path").is_deny());
+        assert!(bash(r#"sh -c "\rm -rf /some/path" --help"#).is_deny());
+        // Other rule arms reached through the same normalisation.
+        assert!(bash(r"\shred /some/file").is_deny());
+        assert!(bash(r#""git" reset --hard"#).is_deny());
+        assert!(bash(r"find . -name '*.log' -exec \rm {} \;").is_deny());
+        // A quoted absolute path still normalises to the bare program name.
+        assert!(bash(r#""/bin/rm" -rf /some/path"#).is_deny());
+    }
+
+    #[test]
+    fn command_word_normalisation_does_not_deny_benign_commands() {
+        // The single-argument help forms this gate deliberately allows.
+        assert!(!bash("rm --help").is_deny());
+        assert!(!bash("sh --help").is_deny());
+        assert!(!bash(r"\rm --help").is_deny());
+        // Ordinary commands whose words contain quotes/escapes or path parts.
+        assert!(!bash("echo 'rm -rf /some/path'").is_deny());
+        assert!(!bash(r#"grep -n "rm" src/detect.rs"#).is_deny());
+        assert!(!bash("./scripts/build.sh").is_deny());
+        assert!(!bash(r"printf '%s\n' done").is_deny());
+        assert!(!bash("ls -la").is_deny());
+        assert!(!bash("cargo test -p blastguard").is_deny());
+    }
+
+    #[test]
+    fn first_shell_word_unquotes_one_level() {
+        assert_eq!(first_shell_word(r"\rm").as_deref(), Some("rm"));
+        assert_eq!(first_shell_word(r#""rm""#).as_deref(), Some("rm"));
+        assert_eq!(first_shell_word("'rm'").as_deref(), Some("rm"));
+        assert_eq!(first_shell_word(r#"r""m"#).as_deref(), Some("rm"));
+        assert_eq!(
+            first_shell_word(r#""rm -rf /some/path" --help"#).as_deref(),
+            Some("rm -rf /some/path")
+        );
+        assert_eq!(
+            first_shell_word("'rm -rf /some/path' arg0").as_deref(),
+            Some("rm -rf /some/path")
+        );
+        assert_eq!(first_shell_word("   ").as_deref(), None);
+        assert_eq!(first_shell_word("").as_deref(), None);
+        // Only ONE level is removed and no expansion happens.
+        assert_eq!(first_shell_word("$(which rm)").as_deref(), Some("$(which"));
+    }
+
+    /// The double-quote escape table: inside `"…"` only `\"`, `\\`, `\$` and
+    /// '\`' are escapes; every other backslash pair is kept LITERALLY (POSIX),
+    /// so `\n` must survive as two characters and not become a newline.
+    #[test]
+    fn first_shell_word_double_quote_escape_table() {
+        assert_eq!(first_shell_word(r#""a\"b""#).as_deref(), Some("a\"b"));
+        assert_eq!(first_shell_word(r#""a\\b""#).as_deref(), Some(r"a\b"));
+        assert_eq!(first_shell_word(r#""a\$b""#).as_deref(), Some("a$b"));
+        assert_eq!(first_shell_word("\"a\\`b\"").as_deref(), Some("a`b"));
+        // NOT an escape: backslash and `n` both stay.
+        assert_eq!(first_shell_word(r#""a\nb""#).as_deref(), Some(r"a\nb"));
+        // A backslash at the very end of a double-quoted run has nothing to
+        // escape and is kept.
+        assert_eq!(first_shell_word("\"ab\\").as_deref(), Some(r"ab\"));
+    }
+
+    /// An UNTERMINATED quote is reachable in practice, not a theoretical case:
+    /// tokenisation splits on whitespace and can cut a quoted string in half,
+    /// so `first_shell_word` is routinely handed a fragment with no closing
+    /// quote. It must consume to end-of-input and still return the word rather
+    /// than losing it.
+    #[test]
+    fn first_shell_word_handles_unterminated_quotes() {
+        assert_eq!(
+            first_shell_word(r#""rm -rf /x"#).as_deref(),
+            Some("rm -rf /x")
+        );
+        assert_eq!(first_shell_word("'rm -rf /x").as_deref(), Some("rm -rf /x"));
+    }
+
+    /// A trailing lone backslash has no following character to escape; it is
+    /// kept literal instead of silently dropping the word.
+    #[test]
+    fn first_shell_word_trailing_lone_backslash() {
+        assert_eq!(first_shell_word(r"\").as_deref(), Some(r"\"));
+        assert_eq!(first_shell_word(r"rm\").as_deref(), Some(r"rm\"));
+    }
+
+    /// The ONLY reason `dash_c_payloads` carries a `!word.is_empty()` guard:
+    /// an empty quoted word is `Some("")`, not `None` (a word WAS seen), and
+    /// re-analysing an empty command must not happen.
+    #[test]
+    fn first_shell_word_empty_quoted_word_is_some_empty() {
+        assert_eq!(first_shell_word("''").as_deref(), Some(""));
+        assert_eq!(first_shell_word(r#""""#).as_deref(), Some(""));
+        assert!(dash_c_payloads(&["-c", "''"]).iter().all(|p| !p.is_empty()));
+    }
+
+    /// CA-blastguard-014 (fail-open): a shell parses its own OPTIONS before the
+    /// command string, so an option token between `-c` and the payload used to
+    /// hide the payload completely. All three forms really execute.
+    #[test]
+    fn ca_blastguard_014_options_between_dash_c_and_payload_are_denied() {
+        assert!(bash("bash -c -- 'rm -rf /some/path'").is_deny());
+        assert!(bash("bash -c -x 'rm -rf /some/path'").is_deny());
+        assert!(bash(r#"sh -c -- "rm -rf /some/path""#).is_deny());
+        assert!(bash("sh -c -x -- 'rm -rf /some/path'").is_deny());
+        assert!(bash("zsh -c -- 'rm -rf /some/path'").is_deny());
+        // Control: the bundled form was already denied and must stay denied.
+        assert!(bash("bash -cx 'rm -rf /some/path'").is_deny());
+        // No regression on the plain form, or on benign payloads behind the
+        // same option shapes.
+        assert!(bash("sh -c 'rm -rf /some/path'").is_deny());
+        assert_eq!(bash("sh -c -- 'ls'"), Decision::Allow);
+        assert_eq!(bash("bash -c -x 'ls -la'"), Decision::Allow);
+    }
+
+    /// CA-blastguard-015 (false positive): a help flag plus a pure REDIRECT
+    /// carries no operand, so there is nothing to destroy. These are ordinary
+    /// usage and blastguard is a hard block.
+    #[test]
+    fn ca_blastguard_015_help_with_redirect_only_is_allowed() {
+        assert_eq!(bash("shred --help 2>&1"), Decision::Allow);
+        assert_eq!(bash("shred --help 2>&1 | head"), Decision::Allow);
+        assert_eq!(bash("truncate --help 2>/dev/null"), Decision::Allow);
+        assert_eq!(bash("tee --help 2>&1"), Decision::Allow);
+        assert_eq!(bash("shred --help > /dev/null"), Decision::Allow);
+        assert_eq!(bash("shred -h 2>&1"), Decision::Allow);
+        // Help flag among other FLAGS only — still no operand.
+        assert_eq!(bash("shred -u --help"), Decision::Allow);
+        // And the CA-blastguard-011 denials must survive untouched: an OPERAND
+        // is present, so the help flag proves nothing.
+        assert!(bash("rm -rf /some/path --help").is_deny());
+        assert!(bash("rm --help *").is_deny());
+        assert!(bash("rm -rf /some/path -h").is_deny());
+        assert!(bash("rm --help -rf /some/path").is_deny());
+        assert!(bash(r#"sh -c "rm -rf /some/path" --help"#).is_deny());
+        assert!(bash("shred --help /some/path").is_deny());
+        assert!(bash("truncate --help -s 0 /some/path").is_deny());
+        // A truncating redirect is still denied earlier by detect_bash, so the
+        // help rule cannot launder one.
+        assert!(bash("shred --help > /some/path").is_deny());
+        // Bare `rm --help` / `sh --help` keep working.
+        assert_eq!(bash("rm --help"), Decision::Allow);
+        assert_eq!(bash("sh --help"), Decision::Allow);
+    }
+
+    /// CA-blastguard-016 (false positive): searching for the literal string
+    /// `rm` is normal work; only a plausible COMMAND position may be
+    /// normalised.
+    #[test]
+    fn ca_blastguard_016_find_rm_scan_only_at_command_positions() {
+        assert_eq!(
+            bash(r"find . -name '*.md' -exec grep -l 'rm' {} \;"),
+            Decision::Allow
+        );
+        assert_eq!(bash(r#"find . -name "rm" -print"#), Decision::Allow);
+        assert_eq!(
+            bash(r"find . -path './rm/*' -exec cat {} \;"),
+            Decision::Allow
+        );
+        assert_eq!(
+            bash(r"find . -name '*.rs' -exec grep -n 'rm -rf' {} \;"),
+            Decision::Allow
+        );
+        // Real command positions stay denied.
+        assert!(bash(r"find . -type f -exec rm {} \;").is_deny());
+        assert!(bash(r"find . -name '*.log' -exec \rm {} \;").is_deny());
+        assert!(bash(r"find . -exec /bin/rm -rf {} \;").is_deny());
+        assert!(bash(r"find . -okdir rm {} \;").is_deny());
+        assert!(bash(r"find . -exec sh -c 'rm -rf {}' \;").is_deny());
+        // A benign FIRST -exec must not hide a destructive later one — in both
+        // terminator forms. `+` keeps both clauses in ONE segment; `\;` is a
+        // `;` to `split_segments`, so the second clause arrives as its own
+        // segment whose command word is `-exec` (see the BG-3 arm in
+        // `analyze_segment`).
+        assert!(bash("find . -exec grep -l 'rm' {} + -exec rm {} +").is_deny());
+        assert!(bash(r"find . -exec grep -l 'rm' {} \; -exec rm {} \;").is_deny());
+        // Wrapper-resolved command position (widening: `sudo rm` is
+        // unambiguously the program `rm`, exactly as elsewhere in this file).
+        assert!(bash(r"find . -exec sudo rm -rf {} \;").is_deny());
+    }
+
+    // ---- Regression: BG-1 / BG-2 / BG-3 ----
+    //
+    // BG-2: every `N>` is a truncating redirect, whatever the fd number and
+    // whether the target is attached or space-separated. The previous round
+    // skipped all non-stdout fds, so `shred --help 2> /some/path` (which
+    // truncates `/some/path`) was ALLOW while the `>` and `1>` twins denied.
+    #[test]
+    fn bg2_every_explicit_fd_redirect_truncates() {
+        // Space-separated, any fd — all truncate the target.
+        assert!(bash("shred --help 2> /some/path").is_deny());
+        assert!(bash("shred --help 0> /some/path").is_deny());
+        assert!(bash("shred --help 3> /some/path").is_deny());
+        assert!(bash("shred --help 9> /some/path").is_deny());
+        // Controls that already denied before the fix.
+        assert!(bash("shred --help >  /some/path").is_deny());
+        assert!(bash("shred --help 1> /some/path").is_deny());
+        // The plain-command proof that rule 2 (not the help rule) is what was
+        // missing: `echo` has no rule of its own, so only rule 2 can catch it.
+        assert!(bash("echo x 2> /some/path").is_deny());
+        assert!(bash("echo x 3>/some/path").is_deny());
+    }
+
+    #[test]
+    fn bg2_fd_dup_and_safe_targets_stay_allowed() {
+        // fd DUP touches no file.
+        assert_eq!(bash("shred --help 2>&1"), Decision::Allow);
+        assert_eq!(bash("tee --help 2>&1"), Decision::Allow);
+        assert_eq!(bash("cmd 3>&2"), Decision::Allow);
+        // /dev/null and config files are safe targets at every fd.
+        assert_eq!(bash("truncate --help 2>/dev/null"), Decision::Allow);
+        assert_eq!(bash("gen 2> config.toml"), Decision::Allow);
+        // D1 (DELIBERATELY FLIPPED from Allow): temp-directory targets are no
+        // longer a safe class. `is_temp_scratch` was a raw prefix test that
+        // `/tmp/../<anything>` walked straight out of, disabling the whole
+        // truncating-redirect rule; it is deleted rather than normalised.
+        assert!(bash("cargo test 2> /tmp/log").is_deny());
+        assert!(bash("cargo test > /tmp/log").is_deny());
+        assert!(bash("cargo test 2> /var/tmp/log").is_deny());
+        assert!(bash("cargo test 2> /tmpfile").is_deny());
+        // Append is not truncation at any fd.
+        assert_eq!(bash("cmd 2>> err.log"), Decision::Allow);
+    }
+
+    #[test]
+    fn bg2_help_rule_operand_skip_stays_sound() {
+        // With rule 2 corrected, `has_operand`'s redirect skip only ever hides
+        // redirects rule 2 already vetted. Genuine operands still deny.
+        assert!(bash("shred --help /some/path").is_deny());
+        assert!(bash("rm -rf /some/path --help").is_deny());
+        assert!(bash("rm --help *").is_deny());
+        assert!(bash("rm --help -rf /some/path").is_deny());
+        // No operand at all → genuinely harmless help invocations.
+        assert_eq!(bash("rm --help"), Decision::Allow);
+        assert_eq!(bash("sh --help"), Decision::Allow);
+    }
+
+    // BG-3: `find -exec` must reach the command word BEHIND an exec-wrapper,
+    // and the `\;` terminator must not defeat the multi-exec scan.
+    #[test]
+    fn bg3_find_exec_wrappers_are_denied() {
+        assert!(bash("find . -exec timeout 5 rm -rf {} +").is_deny());
+        assert!(bash("find . -exec xargs rm -rf {} +").is_deny());
+        assert!(bash("find . -exec stdbuf -o0 rm -rf {} +").is_deny());
+        assert!(bash("find . -exec flock /tmp/l rm -rf {} +").is_deny());
+        assert!(bash("find . -exec setsid rm -rf {} +").is_deny());
+        assert!(bash("find . -exec chroot /newroot rm -rf {} +").is_deny());
+        // Control: the wrapper that already worked.
+        assert!(bash("find . -exec sudo rm -rf {} +").is_deny());
+        // Separate-token flag values must not be mistaken for the command.
+        assert!(bash("find . -exec timeout -s KILL 5 rm -rf {} +").is_deny());
+        assert!(bash("find . -exec stdbuf -o 0 rm -rf {} +").is_deny());
+    }
+
+    #[test]
+    fn bg3_exec_wrappers_are_denied_at_top_level_too() {
+        // The same wrapper gap existed outside `find` — `command_index` is the
+        // shared command-word resolver.
+        assert!(bash("timeout 5 rm -rf /some/path").is_deny());
+        assert!(bash("stdbuf -o0 rm -rf /some/path").is_deny());
+        assert!(bash("flock /tmp/lock rm -rf /some/path").is_deny());
+        assert!(bash("setsid rm -rf /some/path").is_deny());
+        assert!(bash("chroot /newroot rm -rf /some/path").is_deny());
+        // Wrapping something harmless stays harmless.
+        assert_eq!(bash("timeout 30 cargo test"), Decision::Allow);
+        assert_eq!(bash("flock /tmp/lock ls -la"), Decision::Allow);
+    }
+
+    #[test]
+    fn bg3_semicolon_terminated_multi_exec_is_denied() {
+        // `\;` splits the line, so the destructive clause arrives as a segment
+        // whose command word is `-exec`.
+        assert!(bash(r"find . -name x -exec grep rm {} \; -exec rm -rf {} \;").is_deny());
+        // The `+`-terminated twin (the loop itself) keeps working.
+        assert!(bash("find . -name x -exec grep rm {} +  -exec rm -rf {} +").is_deny());
+        // Every exec predicate spelling routes back through analyze_find.
+        assert!(bash(r"find . -name x -print \; -execdir rm -rf {} \;").is_deny());
+        assert!(bash(r"find . -name x -print \; -ok rm -rf {} \;").is_deny());
+        assert!(bash(r"find . -name x -print \; -okdir rm -rf {} \;").is_deny());
+        // A wrapper inside the split-off clause is reached too.
+        assert!(bash(r"find . -name x -print \; -exec timeout 5 rm -rf {} \;").is_deny());
+    }
+
+    #[test]
+    fn bg3_find_exec_data_tokens_stay_allowed() {
+        // CA-blastguard-016 must NOT regress: searching for the literal string
+        // `rm` is ordinary work, in both terminator forms.
+        assert_eq!(
+            bash(r"find . -name '*.md' -exec grep -l 'rm' {} \;"),
+            Decision::Allow
+        );
+        assert_eq!(
+            bash("find . -name '*.md' -exec grep -l 'rm' {} +"),
+            Decision::Allow
+        );
+        assert_eq!(bash(r#"find . -name "rm" -print"#), Decision::Allow);
+        assert_eq!(
+            bash(r"find . -exec grep -rn 'rm -rf' {} \;"),
+            Decision::Allow
+        );
+        // `find -delete` behaviour is unchanged by the re-analysis.
+        assert!(bash("find . -delete").is_deny());
+        assert!(bash("find . -name '*.tmp' -delete").is_deny());
+    }
+
+    // BG-1: the payload of `-c` can sit behind a value-taking option (whose
+    // ARGUMENT does not start with `-`) or behind a `+`-prefixed option.
+    #[test]
+    fn bg1_dash_c_payload_behind_value_taking_options() {
+        assert!(bash("bash -c -o pipefail 'rm -rf /some/path'").is_deny());
+        assert!(bash("bash -c -O extglob  'rm -rf /some/path'").is_deny());
+        assert!(bash("bash -c +o history  'rm -rf /some/path'").is_deny());
+        assert!(bash("bash -c +O extglob  'rm -rf /some/path'").is_deny());
+        assert!(bash("sh -c -o errexit 'rm -rf /some/path'").is_deny());
+        // Multiple options stacked before the payload.
+        assert!(bash("bash -c -o pipefail -x -- 'rm -rf /some/path'").is_deny());
+        // Controls that already denied.
+        assert!(bash("bash -c -e          'rm -rf /some/path'").is_deny());
+        assert!(bash("bash -c -- 'rm -rf /some/path'").is_deny());
+        assert!(bash("bash -c -x 'rm -rf /some/path'").is_deny());
+        assert!(bash(r#"sh -c "rm -rf /some/path" --help"#).is_deny());
+        assert!(bash(r#"sh -c "rm -rf /some/path" ; true"#).is_deny());
+    }
+
+    #[test]
+    fn bg1_benign_dash_c_invocations_stay_allowed() {
+        assert_eq!(bash(r#"sh -c "ls""#), Decision::Allow);
+        assert_eq!(bash("bash -c 'echo hi'"), Decision::Allow);
+        assert_eq!(bash("bash -c -o pipefail 'cargo test'"), Decision::Allow);
+        assert_eq!(bash("sh -c ''"), Decision::Allow);
+        assert_eq!(bash("bash -c"), Decision::Allow);
+    }
+
+    // ---- D1: the `is_temp_scratch` carve-out was a universal bypass ----
+    // `exclude::normalize` does not resolve `..`, so a `/tmp/../` prefix made
+    // ANY target look like temp scratch and disabled rule 2 entirely. Each row
+    // below was a VERIFIED live ALLOW against the built hook binary.
+    #[test]
+    fn d1_temp_prefix_traversal_no_longer_bypasses_redirect_rule() {
+        for c in [
+            "echo pwned > /tmp/../etc/hosts",
+            "echo x > /var/tmp/../../etc/hosts",
+            "echo x > /private/tmp/../../Users/yuki/.zshrc",
+            "echo x > /var/folders/../../etc/hosts",
+            "echo x > /tmp//../etc/hosts",
+            // The `/private` twins of the same traversal.
+            "echo x > /private/var/tmp/../../etc/hosts",
+            "echo x > /private/var/folders/../../etc/hosts",
+        ] {
+            assert!(bash(c).is_deny(), "expected deny: {c}");
+        }
+    }
+
+    #[test]
+    fn d1_plain_temp_redirects_are_denied_not_carved_out() {
+        // The carve-out is GONE, not narrowed. These are false positives and
+        // are the accepted cost — do not re-add a temp-directory exemption.
+        for c in [
+            "cargo test 2> /tmp/log",
+            "cargo test > /tmp/log",
+            "cargo test 2> /var/tmp/log",
+            "make 2> /var/folders/xy/z/T/err",
+            "cargo test 2> /private/tmp/log",
+        ] {
+            assert!(bash(c).is_deny(), "expected deny: {c}");
+        }
+        // Non-truncating ways to capture output are still allowed, so there is
+        // always a rephrasing available.
+        assert_eq!(bash("cargo test 2>> /tmp/log"), Decision::Allow);
+        assert_eq!(bash("cargo test 2> /dev/null"), Decision::Allow);
+    }
+
+    // ---- D2: flock's `-c` is a shell command string, not an opaque value ----
+    #[test]
+    fn d2_flock_dash_c_payload_is_reanalysed() {
+        assert!(bash("flock /tmp/l -c 'rm -rf /Users/yuki/src'").is_deny());
+        assert!(bash("flock -c 'rm -rf /Users/yuki/src' /tmp/l").is_deny());
+        // Long-form spelling of the same option.
+        assert!(bash("flock /tmp/l --command 'rm -rf /Users/yuki/src'").is_deny());
+        // A benign flock -c payload stays allowed.
+        assert_eq!(bash("flock /tmp/l -c 'cargo test'"), Decision::Allow);
+        assert_eq!(bash("flock -c 'ls -la' /tmp/l"), Decision::Allow);
+    }
+
+    // ---- D3: long-form wrapper flags with SEPARATE values ----
+    // `wrapper_flag_takes_value` returned false for any flag whose length was
+    // not 2, so the VALUE token was eaten as the wrapper's leading operand and
+    // the real command word was misresolved. Every row was a VERIFIED live
+    // ALLOW; the short-form twins denied correctly, which is why the previous
+    // round's tests missed this entirely.
+    #[test]
+    fn d3_long_form_wrapper_flags_do_not_bypass_detection() {
+        for c in [
+            "timeout --kill-after 10 5 rm -rf /Users/yuki/src",
+            "timeout --signal KILL 5 rm -rf /Users/yuki/src",
+            "chroot --userspec root /newroot rm -rf /Users/yuki/src",
+            "stdbuf --output 0 rm -rf /Users/yuki/src",
+            "flock --wait 5 /tmp/l rm -rf /Users/yuki/src",
+            "sudo --user root rm -rf /Users/yuki/src",
+            "env --unset FOO rm -rf /Users/yuki/src",
+            "nice --adjustment 5 rm -rf /Users/yuki/src",
+        ] {
+            assert!(bash(c).is_deny(), "expected deny: {c}");
+        }
+    }
+
+    #[test]
+    fn d3_long_form_wrapper_flags_inside_find_exec_too() {
+        // The same resolver backs `find -exec`, so the gap existed there too.
+        for c in [
+            "find . -exec timeout --kill-after 10 5 rm -rf {} +",
+            "find . -exec sudo --user root rm -rf {} +",
+            "find . -exec stdbuf --output 0 rm -rf {} +",
+        ] {
+            assert!(bash(c).is_deny(), "expected deny: {c}");
+        }
+    }
+
+    #[test]
+    fn d3_benign_long_form_wrapper_invocations_stay_allowed() {
+        // Widening the candidate set must not deny ordinary wrapped work.
+        for c in [
+            "timeout --kill-after 10 5 cargo test",
+            "timeout --signal KILL 30 cargo build",
+            "sudo --user root ls -la",
+            "env --unset FOO cargo test",
+            "nice --adjustment 5 cargo build --release",
+            "stdbuf --output 0 grep -rn 'rm -rf' src/",
+            "flock --wait 5 /tmp/l cargo test",
+            "chroot --userspec root /newroot ls",
+        ] {
+            assert_eq!(bash(c), Decision::Allow, "expected allow: {c}");
+        }
+    }
+
+    // ---- D4: `find -exec` re-analysis was exponential ----
+    // `analyze_find` re-analyses the whole tail for EVERY `-exec` position, and
+    // the tail still contains the other `-exec` tokens: branching factor N,
+    // depth 8, so O(N^8). Measured before the fix on ONE invocation: n=20 →
+    // 2.2s, n=24 → 8.2s, n=28 → 30s, n=32 (503 bytes) → >60s, killed.
+    #[test]
+    fn d4_exponential_find_exec_is_bounded_and_denies() {
+        let mut cmd = String::from("find . ");
+        for _ in 0..32 {
+            cmd.push_str("-exec find . ");
+        }
+        cmd.push_str("-exec echo {} ");
+        for _ in 0..33 {
+            cmd.push_str("+ ");
+        }
+        let start = std::time::Instant::now();
+        let d = bash(&cmd);
+        let elapsed = start.elapsed();
+        // Availability: a PreToolUse hook must never hang the user's turn.
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "analysis took {elapsed:?}, expected well under 2s"
+        );
+        // Correctness: budget exhaustion DENIES. A command too complex to
+        // analyse must never be waved through unanalysed.
+        assert!(d.is_deny(), "budget exhaustion must deny, got {d:?}");
+    }
+
+    #[test]
+    fn d4_budget_resets_between_top_level_calls() {
+        // A budget-exhausting command must not poison the next call.
+        let mut cmd = String::from("find . ");
+        for _ in 0..32 {
+            cmd.push_str("-exec find . ");
+        }
+        cmd.push_str("-exec echo {} +");
+        assert!(bash(&cmd).is_deny());
+        assert_eq!(bash("ls -la"), Decision::Allow);
+        assert_eq!(bash("cargo test"), Decision::Allow);
+    }
+
+    #[test]
+    fn bg_baseline_matrix_stays_intact() {
+        // The unchanged half of the verification matrix, kept as one guard.
+        for c in [
+            "rm -rf /some/path",
+            r"\rm -rf /some/path",
+            "'rm' -rf /some/path",
+            r#""rm" -rf /some/path"#,
+            "/bin/rm -rf /some/path",
+            "shred --help > /some/path",
+        ] {
+            assert!(bash(c).is_deny(), "expected deny: {c}");
+        }
+        for c in [
+            "ls -la",
+            "echo 'rm -rf /some/path'",
+            r#"grep -n "rm" src/detect.rs"#,
+        ] {
+            assert_eq!(bash(c), Decision::Allow, "expected allow: {c}");
+        }
     }
 }

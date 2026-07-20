@@ -69,10 +69,42 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
+      # crates/integration-tests/tests/e2e.rs does NOT link these crates — it
+      # spawns the REAL built binaries with std::process::Command and resolves
+      # them via `<target>/release/<name>` then `<target>/debug/<name>` (fn `bin`
+      # in that file). GitHub Actions sets CI=true, and under CI a missing binary
+      # is a hard panic (`skip_or_panic`), never a silent skip — so without this
+      # step all 6 e2e tests fail with "flow binary not built (CI must build all
+      # required binaries before running e2e tests)", the instrumented-test step
+      # exits 101, and the `Enforce coverage floor` step below never evaluates
+      # anything. That is exactly what had been happening.
+      #
+      # Note it is NOT enough that `cargo llvm-cov --workspace` below compiles
+      # these crates: cargo-llvm-cov redirects the build into
+      # `target/llvm-cov-target/`, whereas `bin()` resolves against
+      # `CARGO_TARGET_DIR` (which cargo-llvm-cov does not export to the test
+      # process) and therefore falls back to plain `target/`. The bins the
+      # workspace run produces land somewhere the e2e suite never looks, so they
+      # must be staged into `target/` explicitly, here.
+      #
+      # `cargo llvm-cov show-env --export-prefix` exports the instrumentation env
+      # (RUSTC_WRAPPER + LLVM_PROFILE_FILE + the crate allowlist) into this
+      # shell, and in show-env mode the build dir is plain `target/` — so the
+      # `cargo build` that follows puts INSTRUMENTED binaries exactly where
+      # `bin()` looks. Instrumenting them also means the work they do as spawned
+      # subprocesses is counted toward coverage instead of being invisible.
+      - name: Build the binaries the e2e suite shells out to (instrumented)
+        run: |
+          set -euo pipefail
+          source <(cargo llvm-cov show-env --export-prefix)
+          cargo build -p flow -p backlog -p fugu-router -p condukt
       # Instrument + run the same surface the smoke gate tests (`--workspace`,
       # default features) so the numbers reflect what CI already exercises.
       # `--no-report` keeps the raw profile data around so the report / summary /
-      # gate steps below can each re-render it without recompiling.
+      # gate steps below can each re-render it without recompiling. Its default
+      # clean only clears `target/llvm-cov-target/`, so the binaries staged into
+      # `target/` by the step above survive it (verified locally). Do not add
+      # `--no-clean`: cargo-llvm-cov rejects it together with `--no-report`.
       - name: Run instrumented workspace tests
         run: cargo llvm-cov --workspace --no-report
       - name: Generate lcov report

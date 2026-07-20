@@ -56,15 +56,29 @@ pub const DEFAULT_MIN_VOTERS: usize = 2;
 const RATIO_EPSILON: f64 = 1e-9;
 
 /// The fleet **GATE crates** whose changes make a completion "high-stakes" and
-/// thus worth an adversarial panel. Kept in sync with `scripts/rollout-plugins.sh`
-/// `GATE_CRATES` and `scripts/continuous-audit.sh`'s default target set (the same
-/// five gates the Continuous-Audit loop adversarially reviews).
-pub const GATE_CRATES: [&str; 5] = [
+/// thus worth an adversarial panel.
+///
+/// Must equal `scripts/rollout-plugins.sh`'s canonical `GATE_CRATES` **exactly**
+/// — the same set that requires a `--canary` rollout. `scripts/continuous-audit.sh`'s
+/// `DEFAULT_TARGETS` is a strict *superset* of this (it additionally carries
+/// audit-only crates such as `backlog`, which are reviewed but gate nothing), so
+/// it is deliberately NOT mirrored here.
+///
+/// `overwatch` is a member for the same reason rollout-plugins.sh includes it:
+/// it is not itself a prompt-injection/spec/mutation defense gate, but it
+/// computes the canary health-gate decision and records confirmed audit
+/// findings. A regression in it silently removes the safety net for every OTHER
+/// gate crate, which is precisely the "wrong-but-plausible change a lone
+/// verifier rubber-stamps" case this panel exists to catch.
+///
+/// Enforced by `scripts/check-gate-crates-sync.py` (this file is a tracked source).
+pub const GATE_CRATES: [&str; 6] = [
     "blastguard",
     "propguard",
     "specguard",
     "stuckguard",
     "mutategate",
+    "overwatch",
 ];
 
 /// One skeptic's ballot on the single artifact under review.
@@ -556,6 +570,17 @@ mod tests {
             "README.md".into(),
         ]));
         assert!(touches_gate_crate(&["crates/mutategate/src/lib.rs".into()]));
+        // `overwatch` is a GATE crate too: it computes the canary health-gate
+        // decision the other gates' rollouts depend on. It had silently gone
+        // missing from GATE_CRATES once, exempting the Continuous-Audit crate
+        // from the very panel that loop relies on — assert it here so the crate
+        // owning the semantics catches a revert, not just the Python checker.
+        assert!(touches_gate_crate(&["crates/overwatch/src/lib.rs".into()]));
+        assert!(touches_gate_crate(&[
+            "crates/overwatch/skills/continuous-audit/SKILL.md".into(),
+            "README.md".into(),
+        ]));
+        assert!(!touches_gate_crate(&["docs/specs/overwatch.md".into()]));
         // A non-gate crate is not high-stakes.
         assert!(!touches_gate_crate(&[
             "crates/condukt/src/main.rs".into(),

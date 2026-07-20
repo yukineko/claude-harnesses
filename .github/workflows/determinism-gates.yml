@@ -76,10 +76,18 @@ jobs:
           [ "$n" -gt 0 ] || { echo "::error::condukt proptest filter selected 0 tests"; exit 1; }
 
       # 2. Deterministic oracle / decision-layer tests (the pure fns that replaced
-      #    prose-keyword control flow live in these lib suites: scorer, lessons,
-      #    policy, replan, consensus, verify).
-      - name: Deterministic oracle tests — condukt lib
-        run: cargo test -p condukt --lib
+      #    prose-keyword control flow: scorer, lessons in harness-core; policy,
+      #    replan, consensus, verify in condukt).
+      #
+      #    condukt is a BIN-ONLY crate — crates/condukt/Cargo.toml declares
+      #    `[[bin]]` and there is no src/lib.rs, so its decision modules
+      #    (`mod policy; mod replan; mod consensus; mod verify;` in src/main.rs)
+      #    compile into the binary target and their #[cfg(test)] suites are
+      #    reached with `--bins`, not `--lib`. `--lib` here failed the whole job
+      #    with `error: no library targets found in package condukt`, which
+      #    aborted every step below it.
+      - name: Deterministic oracle tests — condukt bin
+        run: cargo test -p condukt --bins
 
       - name: Deterministic oracle tests — harness-core lib
         run: cargo test -p harness-core --lib

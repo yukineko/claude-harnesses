@@ -13,8 +13,24 @@ name: build & commit plugin binaries
 #   * commit     — collect the artifacts and commit the refreshed bin/<name>-<os>-<arch>
 #                  back to main (only on push-to-main / manual dispatch, never on PRs).
 #
-# specguard (no committed bin/, dual-binary) and harness-core (a library) are not
-# distributed and are intentionally excluded from the binary matrix.
+# Exclusion rule for the binary matrix (PLUGINS below): it lists every crate
+# directory under crates/ that ships a committed bin/ to end users. A crate is
+# excluded ONLY for one of the reasons below, and every exclusion is named:
+#
+#   * harness-core       — a library (no [[bin]]); compiled into every plugin.
+#   * integration-tests  — a test-only crate (publish = false, no [[bin]]).
+#   * mutategate         — an internal, deliberately NON-DISTRIBUTED tool (this
+#                          workspace's mutation-testing kill-rate gate; see
+#                          docs/GLOSSARY.md). No plugin.json, no marketplace
+#                          entry, publish = false.
+#   * scout, daily-report — skill-only plugins (no Cargo.toml / no Rust crate);
+#                          they ship skills + hooks only, nothing to build.
+#
+# Everything else in crates/ IS distributed and MUST appear in PLUGINS.
+# specguard is distributed (it has a marketplace entry and a committed
+# crates/specguard/bin/) — only its `specguard` bin is shipped; the extra
+# specforge / testaudit bins in its Cargo.toml are dev/POC tools and are not
+# committed, so the default (bin name == package name) build is correct.
 on:
   workflow_dispatch:
   push:
@@ -36,13 +52,21 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Distributable plugins, by crate directory (the script reads the package name
-  # from each Cargo.toml, so run-book → package runbook is handled).
+  # Distributable plugins, by CRATE DIRECTORY (build-plugin-bin.sh reads the
+  # package name out of crates/<dir>/Cargo.toml, so a dir that differs from the
+  # package name is fine — but the DIR must exist: the script does
+  # `sed ... crates/$plugin/Cargo.toml` under `set -euo pipefail`, so a stale
+  # entry exits 1 and aborts the whole build loop, silently starving every
+  # plugin after it. Keep this list in sync with `ls crates/` minus the
+  # exclusions named in the header comment above, and with the sbom-attest
+  # matrix at the bottom of this file.
   PLUGINS: >-
-    autoflow backlog beacon budgetguard compass context-governor condukt ctxrot curate daily
-    deepwiki difflog donegate evalkit flow fugu-router gauge harness-status
-    hypothesis playbook precommit-audit replaykit reviewgate run-book schemaguard
-    session-insights stuckguard taskprog tdd tracekit trajectoryeval
+    autoflow backlog beacon benchkit blastguard budgetguard compass condukt
+    context-governor ctxrot curate daily deepwiki difflog donegate evalkit flow
+    fugu-router gauge harness-status hypothesis overwatch playbook
+    precommit-audit propguard replaykit reviewgate runbook schemaguard
+    session-insights ship specguard stuckguard taskprog tdd tracekit
+    trajectoryeval
 
 jobs:
   smoke:
@@ -242,11 +266,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        plugin: [autoflow, backlog, beacon, budgetguard, compass, context-governor,
-                 condukt, ctxrot, curate, daily, deepwiki, difflog, donegate, evalkit,
-                 flow, fugu-router, gauge, harness-status, hypothesis, playbook,
-                 precommit-audit, replaykit, reviewgate, run-book, schemaguard,
-                 session-insights, stuckguard, taskprog, tdd, tracekit, trajectoryeval]
+        # Must mirror the PLUGINS env list at the top of this file (same crate
+        # directories, same exclusions).
+        plugin: [autoflow, backlog, beacon, benchkit, blastguard, budgetguard,
+                 compass, condukt, context-governor, ctxrot, curate, daily,
+                 deepwiki, difflog, donegate, evalkit, flow, fugu-router, gauge,
+                 harness-status, hypothesis, overwatch, playbook,
+                 precommit-audit, propguard, replaykit, reviewgate, runbook,
+                 schemaguard, session-insights, ship, specguard, stuckguard,
+                 taskprog, tdd, tracekit, trajectoryeval]
     runs-on: ubuntu-latest
     permissions:
       contents: read

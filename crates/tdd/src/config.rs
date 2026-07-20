@@ -61,17 +61,31 @@ pub struct Config {
     pub strict_separation_explicit: Option<bool>,
 }
 
-/// Defensive fleet gates that must not be handled loosely: for these crates,
+/// Fleet gate crates that must not be handled loosely: for these crates,
 /// `strict_separation` (RED/GREEN author-diversity, fail-closed) defaults **on**
 /// when otherwise unspecified — the same safe-by-default stance as the rollout
 /// `--canary` requirement for these same gates. Kept as a plain constant array
 /// so the context predicate stays a pure, unit-testable function.
+///
+/// Must equal `scripts/rollout-plugins.sh`'s canonical `GATE_CRATES` **exactly**.
+/// `scripts/continuous-audit.sh`'s `DEFAULT_TARGETS` is a strict *superset*
+/// (it also carries audit-only crates like `backlog` that gate nothing), so it
+/// is deliberately not mirrored here.
+///
+/// `overwatch` is a member for the same reason rollout-plugins.sh includes it:
+/// it is not itself a defense gate, but it computes the canary health-gate
+/// decision and records confirmed audit findings, so a regression in it removes
+/// the safety net protecting the other gates. That makes a self-authored
+/// RED/GREEN pair in `crates/overwatch/**` exactly as unsafe as in a defense gate.
+///
+/// Enforced by `scripts/check-gate-crates-sync.py` (this file is a tracked source).
 pub const GATE_CRATES: &[&str] = &[
     "blastguard",
     "propguard",
     "specguard",
     "stuckguard",
     "mutategate",
+    "overwatch",
 ];
 
 /// Pure predicate: is `path` inside one of the [`GATE_CRATES`] (i.e. does it
@@ -367,6 +381,16 @@ mod tests {
             "/x/crates/stuckguard/src/lib.rs"
         )));
         assert!(is_gate_crate_context(Path::new("crates/mutategate/mod.rs")));
+        // `overwatch` is a GATE crate too. Both Rust copies of GATE_CRATES had
+        // silently lost it, leaving strict_separation default-OFF inside
+        // crates/overwatch/** so one agent could author both RED and GREEN in
+        // the crate implementing the Continuous-Audit loop. Asserted here so
+        // reverting the one-line addition fails this crate's own tests rather
+        // than only the cross-source Python checker.
+        assert!(is_gate_crate_context(Path::new(
+            "/repo/crates/overwatch/src/main.rs"
+        )));
+        assert!(is_gate_crate_context(Path::new("crates/overwatch")));
     }
 
     #[test]

@@ -262,8 +262,13 @@ fn status() {
     println!("max_attempts:  {}", cfg.max_attempts);
     println!("state_dir:     {}", cfg.state_dir.display());
     match git::changed_files(&root) {
-        None => println!("changed:       (not a git repo — nothing to review)"),
-        Some(changed) => {
+        git::ChangeScan::NotRepo => {
+            println!("changed:       (not a git repo — nothing to review)")
+        }
+        git::ChangeScan::Failed => println!(
+            "changed:       (git scan FAILED — a git command errored; stop would be BLOCKED)"
+        ),
+        git::ChangeScan::Files(changed) => {
             let files = review::reviewable_files(&cfg, &changed);
             println!(
                 "changed:       {} file(s), {} reviewable",

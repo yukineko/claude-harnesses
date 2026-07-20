@@ -93,8 +93,22 @@ fn now() -> i64 {
 
 /// Core decision. `st` is the loaded prior session state.
 pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> Decision {
-    let Some(changed) = crate::git::changed_files(root) else {
-        return allow("no-git", st);
+    let changed = match crate::git::changed_files(root) {
+        // No git scope: nothing to review, allow (unchanged behavior).
+        crate::git::ChangeScan::NotRepo => return allow("no-git", st),
+        // A git command errored inside a real repo: the changed set is
+        // UNDETERMINED. Don't silently allow (that's the fail-open this closes,
+        // and it's the same treatment the reviewer-outage path already gets) —
+        // block, bounded & escapable so the turn is never trapped.
+        crate::git::ChangeScan::Failed => {
+            let prior_attempts = if now() - st.last_ts > cfg.reset_after_secs {
+                0
+            } else {
+                st.attempts
+            };
+            return decide_scan_failed(cfg, prior_attempts);
+        }
+        crate::git::ChangeScan::Files(v) => v,
     };
     let files = reviewable_files(cfg, &changed);
     if files.len() < cfg.min_changed_files {
@@ -283,6 +297,61 @@ fn decide_truncated(cfg: &Config, files: Vec<String>, prior_attempts: u32) -> De
         // above) rather than let the "already-reviewed" path certify it.
         last_hash: String::new(),
     }
+}
+
+/// A `git` command errored inside a real repo, so the changed set is
+/// UNDETERMINED — we have no reviewable diff we can trust. Fail *closed* (but
+/// bounded), modeled exactly on the reviewer-outage / truncation guards: block
+/// the stop with a loud, escapable reason for up to `max_attempts` consecutive
+/// stops (giving a transient git error — lock contention, a slow mount — a
+/// chance to clear), then give up *loudly* with a distinct tag so a persistently
+/// broken git can never trap the turn. Escape hatches (`.reviewgate-skip`,
+/// `REVIEWGATE_DISABLE=1`) stay available throughout and are named in the
+/// reason, satisfying the never-break-a-turn invariant. No hash is recorded
+/// (there is no diff to certify). Split out so it is unit-testable without git.
+fn decide_scan_failed(cfg: &Config, prior_attempts: u32) -> Decision {
+    let attempts = prior_attempts + 1;
+    if attempts > cfg.max_attempts {
+        eprintln!(
+            "reviewgate: WARNING git scan still failing after {max} attempt(s) — allowing the \
+             stop with the change set UNDETERMINED (unreviewed). Fix the git error (see \
+             `reviewgate status`) or set REVIEWGATE_DISABLE=1.",
+            max = cfg.max_attempts,
+        );
+        return Decision::Allow {
+            tag: "git-scan-failed-giveup",
+            attempts: 0,
+            last_hash: String::new(),
+        };
+    }
+    Decision::Block {
+        reason: scan_failed_reason(attempts, cfg.max_attempts),
+        tag: "git-scan-failed",
+        files: vec![],
+        attempts,
+        // No diff to hash: keep re-checking on the next stop until git recovers
+        // (or we give up above), never certify an undetermined change set.
+        last_hash: String::new(),
+    }
+}
+
+/// The git-scan failed: tell the agent the change set is undetermined and hand
+/// it every way forward, so a broken git can neither slip an unreviewed change
+/// through nor permanently trap the turn.
+fn scan_failed_reason(attempt: u32, max: u32) -> String {
+    format!(
+        "🚧 reviewgate: 変更内容を特定できませんでした — `git` コマンドが失敗しました (round {attempt}/{max}).\n\n\
+         git repo ではあるものの `git diff` / `git status` がエラー (spawn 失敗 / 非ゼロ終了) を返したため、\
+         何が変更されたか判定できません。空の diff を「変更なし」と解釈して無言で通過させると、未レビューの\
+         変更が gate をすり抜けてしまいます。判定不能な状態で停止を許可しないため、この停止を一時的に\
+         ブロックしています。{max}回連続で解消しなければ警告を出して通過を許可します（永久にはブロックしません）。\n\n\
+         前に進むには次のいずれか:\n\
+         - git のエラーを解消する（`reviewgate status` で対象 repo を確認）。\n\
+         - このレビューを1回だけスキップ: project root に `.reviewgate-skip` を作成（理由を1行）。\n\
+         - reviewgate を完全に無効化: 環境変数 REVIEWGATE_DISABLE=1。",
+        attempt = attempt,
+        max = max,
+    )
 }
 
 fn file_list(files: &[String]) -> String {
@@ -655,6 +724,62 @@ mod tests {
             }
             Decision::Block { .. } => {
                 panic!("must give up after max_attempts so a too-large diff never permanently traps the turn")
+            }
+        }
+    }
+
+    // --- a failed git scan must not become a silent allow --------------------
+
+    /// A git command that errored inside a real repo leaves the change set
+    /// UNDETERMINED. It must BLOCK the stop, never allow it — otherwise a
+    /// collapsed-empty scan bypasses the gate (the fail-open this fix closes).
+    /// The reason must always hand the human a way forward (never-break-a-turn),
+    /// and no hash may be recorded (there is no diff to certify).
+    #[test]
+    fn failed_git_scan_blocks_it_does_not_allow() {
+        let cfg = Config::default(); // max_attempts = 2
+        let d = decide_scan_failed(&cfg, 0);
+        match d {
+            Decision::Allow { tag, .. } => {
+                panic!("a failed git scan must not be silently allowed (undetermined-change bypass); got allow tag={tag}")
+            }
+            Decision::Block {
+                tag,
+                reason,
+                last_hash,
+                ..
+            } => {
+                assert_eq!(tag, "git-scan-failed");
+                assert!(
+                    last_hash.is_empty(),
+                    "must not record a hash for an undetermined change set"
+                );
+                assert!(
+                    reason.contains(".reviewgate-skip"),
+                    "reason must name the one-shot skip escape hatch: {reason}"
+                );
+                assert!(
+                    reason.contains("REVIEWGATE_DISABLE"),
+                    "reason must name the disable escape hatch: {reason}"
+                );
+            }
+        }
+    }
+
+    /// Bounded, never trapped: after max_attempts consecutive failed scans we
+    /// give up and allow — but via a *distinct* tag, so a persistently broken
+    /// git is never mistaken for a clean review and never traps the turn.
+    #[test]
+    fn failed_git_scan_gives_up_after_max_attempts_but_never_traps() {
+        let cfg = Config::default(); // max_attempts = 2
+        let d = decide_scan_failed(&cfg, cfg.max_attempts);
+        match d {
+            Decision::Allow { tag, last_hash, .. } => {
+                assert_eq!(tag, "git-scan-failed-giveup");
+                assert!(last_hash.is_empty());
+            }
+            Decision::Block { .. } => {
+                panic!("must give up after max_attempts so a broken git never permanently traps the turn")
             }
         }
     }

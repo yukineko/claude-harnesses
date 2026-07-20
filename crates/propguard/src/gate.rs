@@ -138,8 +138,22 @@ pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> D
     let threshold = effective_threshold(cfg, props.len());
 
     // 3. Gather the generated-code diff to check the properties against.
-    let Some(changed) = crate::git::changed_files(root) else {
-        return allow("no-git", st);
+    let changed = match crate::git::changed_files(root) {
+        // No git scope: nothing generated to check, allow (unchanged behavior).
+        crate::git::ChangeScan::NotRepo => return allow("no-git", st),
+        // A git command errored inside a real repo: the changed set is
+        // UNDETERMINED. Fail closed (bounded & escapable) exactly like the
+        // truncation / checker-outage guards — never silently allow an empty,
+        // collapsed scan (the fail-open this closes).
+        crate::git::ChangeScan::Failed => {
+            let prior_attempts = if now() - st.last_ts > cfg.reset_after_secs {
+                0
+            } else {
+                st.attempts
+            };
+            return decide_scan_failed(cfg, prior_attempts);
+        }
+        crate::git::ChangeScan::Files(v) => v,
     };
     let files = checkable_files(cfg, &changed);
     if files.len() < cfg.min_changed_files {
@@ -442,6 +456,60 @@ fn decide_truncated(
         attempts,
         last_hash: String::new(),
     }
+}
+
+/// A `git` command errored inside a real repo, so the changed set is
+/// UNDETERMINED — there is no generated-code diff we can trust to check the
+/// properties against. Fail *closed* (but bounded), modeled EXACTLY on
+/// [`decide_truncated`]: block the stop with a loud, escapable reason for up to
+/// `max_attempts` consecutive stops (giving a transient git error — lock
+/// contention, a slow mount, a timed-out `git` — a chance to clear), then give
+/// up *loudly* with a distinct tag so a persistently broken git can never trap
+/// the turn. Escape hatches (`.propguard-skip`, `PROPGUARD_DISABLE=1`) stay
+/// available throughout and are named in the reason (never-break-a-turn). No
+/// hash is recorded (there is no diff to certify) and — like the checker-
+/// unavailable / truncation blocks — NO per-property violations are attributed
+/// (nothing was checked), so the fleet-correlation store isn't polluted.
+fn decide_scan_failed(cfg: &Config, prior_attempts: u32) -> Decision {
+    let attempts = prior_attempts + 1;
+    if attempts > cfg.max_attempts {
+        eprintln!(
+            "propguard: WARNING git scan still failing after {max} attempt(s) — allowing the \
+             stop with the change set UNDETERMINED (properties UNVERIFIED). Fix the git error \
+             (see `propguard status`) or set PROPGUARD_DISABLE=1.",
+            max = cfg.max_attempts,
+        );
+        return Decision::Allow {
+            tag: "git-scan-failed-giveup",
+            attempts: 0,
+            last_hash: String::new(),
+        };
+    }
+    Decision::Block {
+        reason: scan_failed_reason(attempts, cfg.max_attempts),
+        tag: "git-scan-failed",
+        files: vec![],
+        properties: Vec::new(),
+        attempts,
+        last_hash: String::new(),
+    }
+}
+
+fn scan_failed_reason(attempt: u32, max: u32) -> String {
+    format!(
+        "🚧 propguard: 変更内容を特定できませんでした — `git` コマンドが失敗しました (round {attempt}/{max}).\n\n\
+         git repo ではあるものの `git diff` / `git status` がエラー (spawn 失敗 / 非ゼロ終了 / タイムアウト) を\
+         返したため、生成コードの diff を取得できず、プロパティを検査できません。空の diff を「変更なし」と\
+         解釈して無言で通過させると、未検査の変更が gate をすり抜けます。判定不能な状態で停止を許可しないため、\
+         この停止を一時的にブロックしています。{max}回連続で解消しなければ警告を出して通過を許可します \
+         (永久にはブロックしません)。\n\n\
+         前に進むには次のいずれか:\n\
+         - git のエラーを解消する (`propguard status` で対象 repo を確認)。\n\
+         - このチェックを1回だけスキップ: project root に `.propguard-skip` を作成 (理由を1行)。\n\
+         - propguard を完全に無効化: 環境変数 PROPGUARD_DISABLE=1。",
+        attempt = attempt,
+        max = max,
+    )
 }
 
 fn file_list(files: &[String]) -> String {
@@ -1378,6 +1446,70 @@ mod tests {
                 );
             }
             Decision::Allow { .. } => panic!("a truncated diff must block"),
+        }
+    }
+
+    // ── a failed git scan must not become a silent allow (fail-closed) ──────
+    //
+    // The fail-open this fix closes: a git command errored inside a real repo,
+    // the changed set collapsed to empty, and the gate read that as "no code
+    // changes → allow". A `Failed` scan must BLOCK — modeled exactly on the
+    // truncation / checker-outage guards: bounded, escapable, no hash, no
+    // per-property violations attributed (nothing was checked).
+
+    /// A failed git scan → BLOCK with the `git-scan-failed` tag, an escapable
+    /// reason, no recorded hash, and no per-property violations.
+    #[test]
+    fn failed_git_scan_blocks_it_does_not_allow() {
+        let cfg = cfg_default(); // max_attempts = 2
+        let d = decide_scan_failed(&cfg, 0);
+        match d {
+            Decision::Allow { tag, .. } => {
+                panic!("a failed git scan must not be silently allowed (undetermined-change bypass); got allow tag={tag}")
+            }
+            Decision::Block {
+                tag,
+                reason,
+                last_hash,
+                properties,
+                ..
+            } => {
+                assert_eq!(tag, "git-scan-failed");
+                assert!(
+                    last_hash.is_empty(),
+                    "must not certify an undetermined change set"
+                );
+                assert!(
+                    properties.is_empty(),
+                    "a git-scan-failed block checked nothing — it must not report per-property violations, got {properties:?}"
+                );
+                assert!(
+                    reason.contains("PROPGUARD_DISABLE"),
+                    "reason must name the disable escape hatch: {reason}"
+                );
+                assert!(
+                    reason.contains(".propguard-skip"),
+                    "reason must name the one-shot skip escape hatch: {reason}"
+                );
+            }
+        }
+    }
+
+    /// Bounded, never trapped: after max_attempts consecutive failed scans we
+    /// give up and allow — but via a *distinct* tag, so a persistently broken
+    /// git is never mistaken for a passing check and never traps the turn.
+    #[test]
+    fn failed_git_scan_gives_up_after_max_attempts_but_never_traps() {
+        let cfg = cfg_default(); // max_attempts = 2
+        let d = decide_scan_failed(&cfg, cfg.max_attempts);
+        match d {
+            Decision::Allow { tag, last_hash, .. } => {
+                assert_eq!(tag, "git-scan-failed-giveup");
+                assert!(last_hash.is_empty());
+            }
+            Decision::Block { .. } => {
+                panic!("must give up after max_attempts so a broken git never permanently traps the turn")
+            }
         }
     }
 

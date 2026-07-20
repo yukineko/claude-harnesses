@@ -1,7 +1,10 @@
 //! git helpers: which files changed, and the actual diff text for them. Pure
-//! subprocess calls to `git`. `None` from `changed_files` means "not a git repo
-//! / git unavailable" — the caller then has no generated code to check and
-//! allows the stop.
+//! subprocess calls to `git`. `changed_files` returns a [`ChangeScan`]:
+//! `NotRepo` means "not a git repo / git unavailable" (the caller then has no
+//! generated code to check and allows the stop), `Failed` means a git command
+//! errored inside a real repo (the changeset is UNDETERMINED — the gate fails
+//! closed / blocks rather than treat it as clean), and `Files(v)` is the
+//! (possibly-empty) changed set.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -92,37 +95,69 @@ fn read_stdout_bounded(stdout: Option<std::process::ChildStdout>, timeout: Durat
     rx.recv_timeout(timeout).unwrap_or_default()
 }
 
+/// Tri-state result of scanning the changed-files set. Distinguishes "no git
+/// scope" (`NotRepo` → allow) from "a git command errored" (`Failed` →
+/// undetermined → the gate fails closed / blocks), so a collapsed-empty scan
+/// can never read as "nothing changed → allow". `Files(v)` is a success; an
+/// EMPTY `Files` (a clean repo: `git diff` exits 0 with no output) is a genuine
+/// no-changes → allow, NOT `Failed`. Note: `run_git` maps a *timeout* to the
+/// same failure signal, so a hung git also fails the gate closed (bounded &
+/// escapable in `gate.rs`), never silently allows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangeScan {
+    NotRepo,
+    Failed,
+    Files(Vec<String>),
+}
+
 /// Changed paths relative to the repo root: tracked changes vs HEAD, staged
-/// changes, and untracked-but-not-ignored files. `None` ⇒ not a git repo.
-pub fn changed_files(root: &Path) -> Option<Vec<String>> {
+/// changes, and untracked-but-not-ignored files. Returns `NotRepo` when there
+/// is no git repo, `Failed` when any sub-command errored (spawn failure /
+/// non-zero exit / timeout) inside a real repo, or `Files(v)` on success
+/// (possibly empty).
+pub fn changed_files(root: &Path) -> ChangeScan {
     if !is_git_repo(root) {
-        return None;
+        return ChangeScan::NotRepo;
     }
     let mut out = Vec::new();
-    collect(root, &["diff", "--name-only"], &mut out);
-    collect(root, &["diff", "--cached", "--name-only"], &mut out);
-    collect(
-        root,
-        &["ls-files", "--others", "--exclude-standard"],
-        &mut out,
-    );
+    // If ANY sub-command errors, the changed set is undetermined → fail closed.
+    // A clean repo's commands all exit 0 with empty stdout → Files(vec![]).
+    let ok = collect(root, &["diff", "--name-only"], &mut out)
+        && collect(root, &["diff", "--cached", "--name-only"], &mut out)
+        && collect(
+            root,
+            &["ls-files", "--others", "--exclude-standard"],
+            &mut out,
+        );
+    if !ok {
+        return ChangeScan::Failed;
+    }
     out.sort();
     out.dedup();
-    Some(out)
+    ChangeScan::Files(out)
 }
 
 fn is_git_repo(root: &Path) -> bool {
     run_git(root, &["rev-parse", "--is-inside-work-tree"]).is_some()
 }
 
-fn collect(root: &Path, args: &[&str], out: &mut Vec<String>) {
-    if let Some(text) = run_git(root, args) {
-        for line in text.lines() {
-            let line = line.trim();
-            if !line.is_empty() {
-                out.push(line.to_string());
+/// Run one `git` sub-command, appending its trimmed non-empty stdout lines to
+/// `out`. Returns `true` on success, `false` when `run_git` reported failure
+/// (spawn error / non-zero exit / timeout) — the caller maps `false` to
+/// `ChangeScan::Failed`. A successful command with EMPTY stdout still returns
+/// `true` (clean ≠ failed).
+fn collect(root: &Path, args: &[&str], out: &mut Vec<String>) -> bool {
+    match run_git(root, args) {
+        Some(text) => {
+            for line in text.lines() {
+                let line = line.trim();
+                if !line.is_empty() {
+                    out.push(line.to_string());
+                }
             }
+            true
         }
+        None => false,
     }
 }
 
@@ -340,13 +375,118 @@ mod tests {
         let result = changed_files(&tmp);
         let elapsed = start.elapsed();
 
-        assert!(
-            result.is_none(),
-            "a non-repo dir must yield None, not hang or fabricate a diff"
+        assert_eq!(
+            result,
+            ChangeScan::NotRepo,
+            "a non-repo dir must yield NotRepo (no scope → allow), not hang or fabricate a diff"
         );
         assert!(
             elapsed < Duration::from_secs(15),
             "changed_files must return within the git timeout budget, took {elapsed:?}"
         );
+    }
+
+    // ── changed_files tri-state: NotRepo / Failed / Files ──────────────────
+
+    fn git_available() -> bool {
+        Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// A fresh, unique scratch directory under the system temp dir (avoids a
+    /// `tempfile` dev-dependency; mirrors this module's existing test style).
+    /// Caller is responsible for cleanup.
+    fn scratch_dir() -> std::path::PathBuf {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let p = std::env::temp_dir().join(format!(
+            "propguard-git-tristate-test-{}-{}-{}",
+            std::process::id(),
+            line!(),
+            n
+        ));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).expect("create scratch dir");
+        p
+    }
+
+    /// A clean repo is a SUCCESSFUL empty scan → `Files(vec![])`, never
+    /// `Failed`. Pins that a clean tree (git commands exit 0 with empty stdout)
+    /// does not start blocking under the fail-closed change.
+    #[test]
+    fn clean_repo_is_empty_files_not_failed() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = scratch_dir();
+        let root = root.as_path();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "t@t.com"][..],
+            &["config", "user.name", "t"][..],
+        ] {
+            assert!(Command::new("git")
+                .current_dir(root)
+                .args(args)
+                .status()
+                .expect("git")
+                .success());
+        }
+        std::fs::write(root.join("a.txt"), "x\n").unwrap();
+        assert!(Command::new("git")
+            .current_dir(root)
+            .args(["add", "a.txt"])
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .current_dir(root)
+            .args(["commit", "-qm", "init"])
+            .status()
+            .unwrap()
+            .success());
+
+        assert_eq!(
+            changed_files(root),
+            ChangeScan::Files(Vec::new()),
+            "a clean repo must be a successful empty scan, not Failed"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The `collect` helper's success/failure signal (which drives the Failed
+    /// mapping) must distinguish an errored sub-command from an empty-but-
+    /// successful one: a bogus git flag errors → `false`; a valid command with
+    /// no output → `true`.
+    #[test]
+    fn collect_reports_error_vs_empty_success() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = scratch_dir();
+        let root = root.as_path();
+        assert!(Command::new("git")
+            .current_dir(root)
+            .args(["init", "-q"])
+            .status()
+            .expect("git")
+            .success());
+
+        let mut out = Vec::new();
+        assert!(
+            collect(root, &["diff", "--name-only"], &mut out),
+            "an empty-but-successful git command must report true (not Failed)"
+        );
+        assert!(out.is_empty());
+        assert!(
+            !collect(root, &["diff", "--no-such-flag-xyzzy"], &mut out),
+            "a non-zero git exit must report false so the scan fails closed"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

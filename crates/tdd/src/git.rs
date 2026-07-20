@@ -12,6 +12,36 @@ pub struct AddedLine {
     pub text: String,
 }
 
+/// Tri-state result of scanning the changed-files set. Distinguishes "no git
+/// scope" from "a git command errored", so the gate can fail *closed* on the
+/// latter instead of collapsing both into an empty "nothing changed → allow".
+///
+/// * `NotRepo`  — not a git repo → the gate has no scope → allow (unchanged).
+/// * `Failed`   — in a real repo, but a `git` command errored (non-zero exit /
+///   spawn failure) → the changed set is UNDETERMINED → the gate must fail
+///   closed (block), never treat undetermined as clean.
+/// * `Files(v)` — success; the (possibly EMPTY) changed set. Empty = genuinely
+///   clean → allow path unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangeScan {
+    NotRepo,
+    Failed,
+    Files(Vec<String>),
+}
+
+/// Tri-state result of scanning the *added* lines. Same NotRepo / Failed /
+/// success trichotomy as [`ChangeScan`]: a failed git *command* (a failed
+/// `git diff -U0` / `git diff --cached -U0` / `git ls-files --others`) is
+/// `Failed` (undetermined → fail closed). Individual untracked-file *read*
+/// errors stay best-effort (skipped), since a git command that succeeded
+/// listed the file — only a failed git command is `Failed`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddedScan {
+    NotRepo,
+    Failed,
+    Lines(Vec<AddedLine>),
+}
+
 fn is_git_repo(root: &Path) -> bool {
     Command::new("git")
         .current_dir(root)
@@ -35,7 +65,11 @@ fn run(root: &Path, args: &[&str]) -> Option<String> {
 }
 
 /// Changed paths relative to the repo root: tracked changes vs HEAD, staged
-/// changes, and untracked-but-not-ignored files. `None` means "not a git repo".
+/// changes, and untracked-but-not-ignored files. Returns a [`ChangeScan`]:
+/// `NotRepo` (no git scope), `Failed` (a git command errored in a real repo —
+/// undetermined, gate fails closed), or `Files(v)` (the possibly-empty changed
+/// set). A clean repo yields `Files(vec![])` (the `git status` call exits 0
+/// with empty stdout), NOT `Failed`.
 ///
 /// Implemented as a single `git status --porcelain=v1 -z` spawn (instead of
 /// three separate `git diff` / `git diff --cached` / `git ls-files` calls).
@@ -45,11 +79,16 @@ fn run(root: &Path, args: &[&str]) -> Option<String> {
 /// state in one pass. Renames/copies emit an extra NUL-separated "orig path"
 /// field ahead of the (new) path in the record stream; we keep only the new
 /// path, matching what `git diff --name-only` reports for a rename.
-pub fn changed_files(root: &Path) -> Option<Vec<String>> {
+pub fn changed_files(root: &Path) -> ChangeScan {
     if !is_git_repo(root) {
-        return None;
+        return ChangeScan::NotRepo;
     }
-    let raw = run(root, &["status", "--porcelain=v1", "-z"])?;
+    // A failed `git status` (non-zero exit / spawn error) inside a real repo is
+    // an UNDETERMINED changeset, not an empty one — fail closed. A clean repo
+    // succeeds with empty stdout and flows through to `Files(vec![])`.
+    let Some(raw) = run(root, &["status", "--porcelain=v1", "-z"]) else {
+        return ChangeScan::Failed;
+    };
     let mut out = Vec::new();
     let mut tokens = raw.split('\0').peekable();
     while let Some(record) = tokens.next() {
@@ -74,35 +113,43 @@ pub fn changed_files(root: &Path) -> Option<Vec<String>> {
     }
     out.sort();
     out.dedup();
-    Some(out)
+    ChangeScan::Files(out)
 }
 
 /// All *added* lines across unstaged + staged diffs, plus the full content of
-/// untracked files (which have no diff). `None` means "not a git repo".
-pub fn added_lines(root: &Path) -> Option<Vec<AddedLine>> {
+/// untracked files (which have no diff). Returns an [`AddedScan`]: `NotRepo`,
+/// `Failed` (a git command errored → undetermined → gate fails closed), or
+/// `Lines(v)` (the possibly-empty added-line set). A failed git *command* is
+/// `Failed`; an individual untracked-file *read* error is best-effort (skipped).
+pub fn added_lines(root: &Path) -> AddedScan {
     if !is_git_repo(root) {
-        return None;
+        return AddedScan::NotRepo;
     }
     let mut out = Vec::new();
     for args in [&["diff", "-U0"][..], &["diff", "--cached", "-U0"][..]] {
-        if let Some(text) = run(root, args) {
-            parse_unified_diff(&text, &mut out);
-        }
+        // A failed diff command is undetermined, not "no added lines".
+        let Some(text) = run(root, args) else {
+            return AddedScan::Failed;
+        };
+        parse_unified_diff(&text, &mut out);
     }
-    // Untracked files: every line is "added".
-    if let Some(text) = run(root, &["ls-files", "--others", "--exclude-standard"]) {
-        for f in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
-            if let Ok(content) = std::fs::read_to_string(root.join(f)) {
-                for line in content.lines() {
-                    out.push(AddedLine {
-                        file: f.to_string(),
-                        text: line.to_string(),
-                    });
-                }
+    // Untracked files: every line is "added". A failed `ls-files` is undetermined.
+    let Some(text) = run(root, &["ls-files", "--others", "--exclude-standard"]) else {
+        return AddedScan::Failed;
+    };
+    for f in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        // Individual file-read errors stay best-effort: git already listed the
+        // file, so this is not a git-command failure — skip the unreadable file.
+        if let Ok(content) = std::fs::read_to_string(root.join(f)) {
+            for line in content.lines() {
+                out.push(AddedLine {
+                    file: f.to_string(),
+                    text: line.to_string(),
+                });
             }
         }
     }
-    Some(out)
+    AddedScan::Lines(out)
 }
 
 /// Parse `git diff` unified output, collecting `+` lines tagged with the file
@@ -250,10 +297,19 @@ diff --git a/old.rs b/old.rs
         assert!(status.success(), "git {args:?} should succeed");
     }
 
+    /// Unwrap a `ChangeScan` to its file vector, panicking on NotRepo/Failed.
+    /// Used by the batching-regression tests, which always run in a real repo.
+    fn files_of(scan: ChangeScan) -> Vec<String> {
+        match scan {
+            ChangeScan::Files(v) => v,
+            other => panic!("expected ChangeScan::Files, got {other:?}"),
+        }
+    }
+
     /// Assert the batched `changed_files` matches the legacy 3-call
     /// implementation, for whatever state the given repo is currently in.
     fn assert_sets_match(root: &Path, scenario: &str) {
-        let batched = changed_files(root).unwrap_or_default();
+        let batched = files_of(changed_files(root));
         let legacy = changed_files_legacy(root).unwrap_or_default();
         assert_eq!(
             batched, legacy,
@@ -284,7 +340,7 @@ diff --git a/old.rs b/old.rs
         write(root, "c.txt", "new\n");
 
         assert_sets_match(root, "modified+staged+untracked");
-        let files = changed_files(root).unwrap();
+        let files = files_of(changed_files(root));
         assert_eq!(files, vec!["a.txt", "b.txt", "c.txt"]);
     }
 
@@ -307,7 +363,7 @@ diff --git a/old.rs b/old.rs
         write(root, "d.txt", "base\nstaged\nmodified-again\n");
 
         assert_sets_match(root, "staged+modified (MM)");
-        let files = changed_files(root).unwrap();
+        let files = files_of(changed_files(root));
         assert_eq!(files, vec!["d.txt"]);
     }
 
@@ -327,7 +383,7 @@ diff --git a/old.rs b/old.rs
         git(root, &["mv", "old.txt", "new.txt"]);
 
         assert_sets_match(root, "renamed (staged, pure)");
-        let files = changed_files(root).unwrap();
+        let files = files_of(changed_files(root));
         assert_eq!(files, vec!["new.txt"]);
     }
 
@@ -348,7 +404,7 @@ diff --git a/old.rs b/old.rs
         write(root, "new.txt", "content\nmore\nextra\n");
 
         assert_sets_match(root, "renamed+modified (RM)");
-        let files = changed_files(root).unwrap();
+        let files = files_of(changed_files(root));
         assert_eq!(files, vec!["new.txt"]);
     }
 
@@ -369,14 +425,14 @@ diff --git a/old.rs b/old.rs
         // Unstaged deletion.
         std::fs::remove_file(root.join("e.txt")).expect("remove_file");
         assert_sets_match(root, "deleted (unstaged)");
-        let files = changed_files(root).unwrap();
+        let files = files_of(changed_files(root));
         assert_eq!(files, vec!["e.txt"]);
 
         // Stage the deletion (f.txt was never touched, so it stays absent
         // from the changed set).
         git(root, &["add", "-A"]);
         assert_sets_match(root, "deleted (staged)");
-        let files = changed_files(root).unwrap();
+        let files = files_of(changed_files(root));
         assert_eq!(files, vec!["e.txt"]);
     }
 
@@ -396,7 +452,7 @@ diff --git a/old.rs b/old.rs
         write(root, "space file.txt", "untracked with space\n");
 
         assert_sets_match(root, "untracked path with space");
-        let files = changed_files(root).unwrap();
+        let files = files_of(changed_files(root));
         assert_eq!(files, vec!["space file.txt"]);
     }
 
@@ -413,6 +469,52 @@ diff --git a/old.rs b/old.rs
         git(root, &["commit", "-qm", "init"]);
 
         assert_sets_match(root, "clean repo, no changes");
-        assert_eq!(changed_files(root).unwrap(), Vec::<String>::new());
+        // A clean repo is a SUCCESSFUL empty scan — `Files(vec![])`, never
+        // `Failed`. This pins that clean repos don't start reporting Failed
+        // (which would fail the gate closed on a genuinely-clean tree).
+        assert_eq!(changed_files(root), ChangeScan::Files(Vec::new()));
+        assert!(matches!(added_lines(root), AddedScan::Lines(v) if v.is_empty()));
+    }
+
+    /// A directory that is not a git repo maps to `NotRepo` (no scope → allow),
+    /// distinct from the `Failed` (undetermined → block) path. Doesn't need a
+    /// real git binary beyond `is_git_repo` returning false.
+    #[test]
+    fn non_repo_dir_maps_to_notrepo() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(changed_files(dir.path()), ChangeScan::NotRepo);
+        assert_eq!(added_lines(dir.path()), AddedScan::NotRepo);
+    }
+
+    /// A non-zero `git` exit (a real repo, but the command errors) must surface
+    /// as `Failed`, while a successful empty-stdout command is `Files(vec![])`.
+    /// This is the git.rs-level pin that distinguishes error from clean, which
+    /// the whole fail-closed fix rests on. Exercised through `run` (the shared
+    /// per-command helper): a bogus subcommand exits non-zero → `None`, an
+    /// empty-but-successful `status` → `Some("")`.
+    #[test]
+    fn nonzero_git_exit_is_none_empty_success_is_some() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let dir = init_repo();
+        let root = dir.path();
+        write(root, "only.txt", "content\n");
+        git(root, &["add", "only.txt"]);
+        git(root, &["commit", "-qm", "init"]);
+
+        // Successful command on a clean tree: empty stdout, but SUCCESS.
+        assert_eq!(
+            run(root, &["status", "--porcelain=v1", "-z"]),
+            Some(String::new()),
+            "a clean `git status` exits 0 with empty stdout → Some(\"\"), i.e. success"
+        );
+        // A command that errors (non-zero exit) → None, which callers map to Failed.
+        assert_eq!(
+            run(root, &["diff", "--no-such-flag-xyzzy"]),
+            None,
+            "a non-zero git exit must be None (→ Failed), never mistaken for empty success"
+        );
     }
 }

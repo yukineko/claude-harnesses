@@ -338,6 +338,20 @@ fn with_tasks_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     f()
 }
 
+/// Like [`with_tasks_lock`], but the closure is TOLD whether the exclusive lock
+/// is actually held (`true`) or the acquire degraded (`false`). Best-effort
+/// mutators use plain [`with_tasks_lock`] and ignore this — a lost update under
+/// contention is tolerable for them. Operations where mutual exclusion is a
+/// CORRECTNESS requirement (a claim's read-modify-write, which double-dispatches
+/// the SAME task to concurrent callers if it races) use this and FAIL CLOSED on
+/// `false` rather than running the RMW unprotected. The guard drops (releasing
+/// the lock if held) on every exit path, including `f` returning `Err` or
+/// unwinding.
+fn with_tasks_lock_aware<T>(path: &Path, f: impl FnOnce(bool) -> Result<T>) -> Result<T> {
+    let guard = try_acquire_tasks_lock(path);
+    f(guard.is_some())
+}
+
 /// タスクを追加して保存。生成した id を返す。weight は 0.0 (= 既定の優先順位)。
 /// weight を明示したい呼び出し元は [`add_with_weight`] を使う。
 ///
@@ -592,7 +606,34 @@ pub fn next_claim(
     tag_filter: Option<&str>,
     project_filter: Option<&str>,
 ) -> Result<Option<Task>> {
-    with_tasks_lock(path, || {
+    with_tasks_lock_aware(path, |locked| {
+        claim_next_locked(path, tag_filter, project_filter, locked)
+    })
+}
+
+/// The claim read-modify-write, split out so the fail-closed contract is
+/// deterministically testable. `locked` reports whether the exclusive tasks-lock
+/// is held.
+///
+/// **FAIL CLOSED.** Without the lock we cannot guarantee this claim's
+/// read-modify-write is mutually exclusive, and an unprotected claim reads the
+/// same pending task in two concurrent callers and marks it `claimed` in both —
+/// dispatching ONE task to multiple processes (the silent double-claim this
+/// guard exists to prevent). So when `!locked` we DECLINE — return `Ok(None)`,
+/// "nothing claimed right now" — rather than race an unprotected RMW. Declining
+/// is the safe degrade (the caller simply retries on its next tick; contention
+/// is bounded by the acquire budget), and it keeps to the doctrine that when
+/// safety cannot be guaranteed the safe action is to NOT act.
+fn claim_next_locked(
+    path: &Path,
+    tag_filter: Option<&str>,
+    project_filter: Option<&str>,
+    locked: bool,
+) -> Result<Option<Task>> {
+    if !locked {
+        return Ok(None);
+    }
+    {
         let now = now_unix();
         let mut tasks = load(path)?;
 
@@ -634,7 +675,7 @@ pub fn next_claim(
         let claimed = task.clone();
         save(path, &tasks)?;
         Ok(Some(claimed))
-    })
+    }
 }
 
 /// The deterministic source-layer queue order:
@@ -1852,6 +1893,38 @@ mod tests {
             "a stale claim must be reclaimable, not stuck forever"
         );
         assert_eq!(reclaimed.unwrap().id, id);
+    }
+
+    /// FAIL-CLOSED claim gate (d6bf269f): when the exclusive tasks-lock is NOT
+    /// held, the claim read-modify-write must DECLINE (return `Ok(None)`) rather
+    /// than run unprotected and double-claim the same task to concurrent
+    /// callers. Driven deterministically through the `locked` seam — a real
+    /// lock-contention test would burn the ~8s acquire budget. RED against the
+    /// old `with_tasks_lock` path, which ran the claim body unconditionally and
+    /// would mark the task `claimed` even with no lock held.
+    #[test]
+    fn next_claim_declines_when_lock_not_held_instead_of_racing_unprotected() {
+        let path = tmp_path();
+        add(&path, "Task", "/repo", vec![], "", 100).unwrap();
+
+        // Lock not held → must decline, and must NOT mutate the task on disk.
+        let declined = claim_next_locked(&path, None, None, false).unwrap();
+        assert!(
+            declined.is_none(),
+            "an unlocked claim must fail closed (decline), never race an unprotected RMW"
+        );
+        assert!(
+            load(&path).unwrap()[0].is_pending(),
+            "the task must stay pending when the claim was declined for lack of the lock"
+        );
+
+        // Sanity: with the lock held the same call claims normally.
+        let claimed = claim_next_locked(&path, None, None, true).unwrap();
+        assert!(
+            claimed.is_some(),
+            "with the lock held the claim proceeds as before"
+        );
+        assert_eq!(load(&path).unwrap()[0].status, "claimed");
     }
 
     #[test]

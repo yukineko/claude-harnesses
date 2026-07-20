@@ -29,6 +29,43 @@ use regex::Regex;
 use crate::config::Config;
 use harness_core::hook::HookInput;
 
+/// Reason returned when the analyser itself panics.
+///
+/// "Never break the turn" and "never block the call" are NOT the same
+/// contract (see `blastguard::main` for the sibling fix). `main`'s outer
+/// `run_hook` already catches any panic that escapes this hook and turns it
+/// into a silent `exit 0` — but for a PreToolUse gate, a silent exit 0 IS an
+/// allow. So a panic anywhere in `check_read`/`check_bash` (glob matching,
+/// regex, filesystem metadata) used to silently ALLOW the very Read/Bash call
+/// it had failed to analyse — exactly the huge-unexamined-dump case this hook
+/// exists to stop. `analyse` below catches that panic and turns it into a
+/// deny instead, which is a normal, non-breaking outcome.
+pub const INTERNAL_ERROR_REASON: &str =
+    "[context-rot guard] 内部エラーで解析に失敗したため、安全側に倒してこの呼び出しを拒否しました \
+     （原因不明のまま通すと巨大な読み込みが未検証で context に流れ込む恐れがあるため）。 \
+     Explore か general-purpose sub-agent 経由で読み直すか、limit を付けて再試行してください。";
+
+/// Run [`run`] behind a panic barrier: a panic in the detector becomes a deny
+/// instead of falling through to `main`'s outer `run_hook` backstop, which
+/// would otherwise turn it into a silent allow (see `INTERNAL_ERROR_REASON`).
+/// Mirrors blastguard's `analyse`. This is the entry point `main` calls.
+pub fn analyse(input: &HookInput, cfg: &Config) -> Option<String> {
+    analyse_barrier(std::panic::AssertUnwindSafe(|| run(input, cfg)))
+}
+
+/// Testable core of `analyse`: the panic barrier over an injected closure, so
+/// tests can force the panic path without needing a real panic-triggering
+/// input through `run`'s glob/regex/filesystem logic.
+fn analyse_barrier<F>(f: F) -> Option<String>
+where
+    F: FnOnce() -> Option<String> + std::panic::UnwindSafe,
+{
+    match std::panic::catch_unwind(f) {
+        Ok(v) => v,
+        Err(_) => Some(INTERNAL_ERROR_REASON.to_string()),
+    }
+}
+
 /// Returns a deny reason (the model is told to reroute), or None to stay silent
 /// and let the normal permission flow proceed.
 pub fn run(input: &HookInput, cfg: &Config) -> Option<String> {
@@ -474,6 +511,54 @@ mod tests {
     fn redirect_is_allowed() {
         assert!(!denied("cat x > y"));
         assert!(!denied("cat /var/log/huge.log >> out.txt"));
+    }
+
+    // ----- panic barrier (backlog e5623f14: panic must deny, not silently allow) -----
+
+    #[test]
+    fn analyse_denies_on_panic_instead_of_silently_allowing() {
+        // Before this fix, `main` called `run` directly; a panic anywhere in the
+        // detector unwound past this hook entirely and was caught only by
+        // `run_hook`'s outer backstop, which exits 0 with no output — a silent
+        // allow of the very Read/Bash call the detector failed to analyse. This
+        // pins the barrier itself, independent of finding a real panic-triggering
+        // input through `run`'s glob/regex/filesystem logic.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {})); // suppress panic noise in test output
+        let out = analyse_barrier(std::panic::AssertUnwindSafe(|| -> Option<String> {
+            panic!("simulated analyser panic");
+        }));
+        std::panic::set_hook(prev);
+        assert_eq!(
+            out.as_deref(),
+            Some(INTERNAL_ERROR_REASON),
+            "a panicking analyser must deny, not silently allow"
+        );
+    }
+
+    #[test]
+    fn analyse_matches_run_on_the_happy_path() {
+        // No panic → `analyse` must behave identically to `run`.
+        let cfg = Config::default();
+        let p = big_temp_file("analyse-huge.log", 1_200_000);
+        let out = analyse(
+            &read_input(json!({ "file_path": p.to_string_lossy() })),
+            &cfg,
+        );
+        assert!(out.unwrap().contains("sub-agent"));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn analyse_allows_normal_sized_file() {
+        let cfg = Config::default();
+        let p = big_temp_file("analyse-small.rs", 60_000);
+        let out = analyse(
+            &read_input(json!({ "file_path": p.to_string_lossy() })),
+            &cfg,
+        );
+        assert!(out.is_none());
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

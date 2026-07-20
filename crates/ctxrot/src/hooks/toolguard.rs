@@ -40,6 +40,55 @@ pub struct ToolguardOutput {
     pub nudge: Option<String>,
 }
 
+/// Replacement text for the (possibly huge, un-analysed) tool output when the
+/// analyser itself panics.
+///
+/// "Never break the turn" and "never let an un-sized dump enter context" are
+/// NOT the same contract (see `blastguard::main` / `preguard::analyse` for the
+/// sibling fixes). `main`'s outer `run_hook` already catches any panic that
+/// escapes this hook and turns it into a silent `exit 0` — but for toolguard, a
+/// silent exit 0 means neither `updatedToolOutput` nor the nudge is emitted, so
+/// the raw, un-measured (and potentially huge) tool response passes straight
+/// into context: exactly the rot this hook exists to stop. We cannot recover
+/// the real size after a panic in the measurement logic, so we treat it as the
+/// worst case and replace the output with a safe placeholder rather than let
+/// the unexamined original through.
+const INTERNAL_ERROR_PLACEHOLDER: &str =
+    "[toolguard] 出力サイズの解析中に内部エラーが発生したため、安全側に倒してこの出力を本文から \
+     差し替えました（未検証のまま大きい可能性のある出力を context に通さない方針）。全文が必要 \
+     なら Explore か general-purpose sub-agent 経由で読み直してください。";
+
+/// Advisory paired with [`INTERNAL_ERROR_PLACEHOLDER`].
+const INTERNAL_ERROR_NUDGE: &str =
+    "[context-rot guard] 直前のツール出力の解析に失敗しました。以降の重い読み込み・検索は Explore \
+     か general-purpose sub-agent に委譲してください。";
+
+/// Run [`run`] behind a panic barrier: a panic in the detector becomes the
+/// fail-closed placeholder/nudge instead of falling through to `main`'s outer
+/// `run_hook` backstop, which would otherwise silently pass the raw tool output
+/// through unexamined (see [`INTERNAL_ERROR_PLACEHOLDER`]). Mirrors
+/// blastguard's `analyse` / `preguard::analyse`. This is the entry point `main`
+/// calls.
+pub fn analyse(input: &HookInput, cfg: &Config) -> ToolguardOutput {
+    analyse_barrier(std::panic::AssertUnwindSafe(|| run(input, cfg)))
+}
+
+/// Testable core of `analyse`: the panic barrier over an injected closure, so
+/// tests can force the panic path without needing a real panic-triggering
+/// input through `run`'s measurement logic.
+fn analyse_barrier<F>(f: F) -> ToolguardOutput
+where
+    F: FnOnce() -> ToolguardOutput + std::panic::UnwindSafe,
+{
+    match std::panic::catch_unwind(f) {
+        Ok(out) => out,
+        Err(_) => ToolguardOutput {
+            updated: Some(INTERNAL_ERROR_PLACEHOLDER.to_string()),
+            nudge: Some(INTERNAL_ERROR_NUDGE.to_string()),
+        },
+    }
+}
+
 pub fn run(input: &HookInput, cfg: &Config) -> ToolguardOutput {
     if input.tool_name.is_empty() || !WATCHED.contains(&input.tool_name.as_str()) {
         return ToolguardOutput {
@@ -446,5 +495,48 @@ mod tests {
     #[test]
     fn nudge_cap_default_is_3() {
         assert_eq!(Config::default().toolguard_nudge_cap, 3);
+    }
+
+    // ----- panic barrier (backlog e5623f14: panic must deny, not silently allow) -----
+
+    #[test]
+    fn analyse_replaces_output_on_panic_instead_of_silently_passing_it_through() {
+        // Before this fix, `main` called `run` directly; a panic anywhere in the
+        // measurement logic unwound past this hook entirely and was caught only
+        // by `run_hook`'s outer backstop, which exits 0 with no output — neither
+        // `updatedToolOutput` nor the nudge fires, so the raw (possibly huge)
+        // tool response passes straight into context unexamined. This pins the
+        // barrier itself, independent of finding a real panic-triggering input
+        // through `run`'s size-measurement logic.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {})); // suppress panic noise in test output
+        let out = analyse_barrier(std::panic::AssertUnwindSafe(|| -> ToolguardOutput {
+            panic!("simulated analyser panic");
+        }));
+        std::panic::set_hook(prev);
+        assert_eq!(
+            out.updated.as_deref(),
+            Some(INTERNAL_ERROR_PLACEHOLDER),
+            "a panicking analyser must replace the output, not silently pass it through"
+        );
+        assert_eq!(out.nudge.as_deref(), Some(INTERNAL_ERROR_NUDGE));
+    }
+
+    #[test]
+    fn analyse_matches_run_on_the_happy_path() {
+        let cfg = temp_cfg("analyse-happy");
+        let out = analyse(&big_for("Read"), &cfg);
+        assert!(out.updated.is_some());
+        assert!(out.nudge.is_some());
+        let _ = std::fs::remove_dir_all(&cfg.state_dir);
+    }
+
+    #[test]
+    fn analyse_stays_silent_on_small_and_unwatched() {
+        let cfg = temp_cfg("analyse-silent");
+        let small = analyse(&input("Read", json!({ "content": "small" })), &cfg);
+        assert!(small.updated.is_none());
+        assert!(small.nudge.is_none());
+        let _ = std::fs::remove_dir_all(&cfg.state_dir);
     }
 }

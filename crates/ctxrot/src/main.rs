@@ -318,7 +318,10 @@ fn main() {
             let raw = read_stdin();
             if let Some(input) = HookInput::parse(&raw) {
                 let cfg = Config::load();
-                if let Some(reason) = hooks::preguard::run(&input, &cfg) {
+                // `analyse` (not `run`) wraps the detector in a panic barrier so a
+                // crash in the analysis maps to a deny, not a silent allow — see
+                // hooks::preguard::analyse.
+                if let Some(reason) = hooks::preguard::analyse(&input, &cfg) {
                     // PreToolUse: deny the call; the reason is the only steering
                     // channel (PreToolUse can't inject additionalContext).
                     let out = serde_json::json!({
@@ -339,7 +342,11 @@ fn main() {
             let raw = read_stdin();
             if let Some(input) = HookInput::parse(&raw) {
                 let cfg = Config::load();
-                let out_fields = hooks::toolguard::run(&input, &cfg);
+                // `analyse` (not `run`) wraps the detector in a panic barrier so a
+                // crash in the analysis maps to a fail-closed placeholder/nudge,
+                // not a silent pass-through of the un-analysed raw output — see
+                // hooks::toolguard::analyse.
+                let out_fields = hooks::toolguard::analyse(&input, &cfg);
                 let mut hook_output = serde_json::Map::new();
                 hook_output.insert(
                     "hookEventName".to_string(),

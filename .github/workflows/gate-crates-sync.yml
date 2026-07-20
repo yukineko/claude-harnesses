@@ -39,6 +39,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+      - name: Install PyYAML
+        # check-ci-red reads workflow trigger declarations to tell a
+        # dispatch-only workflow (never expected to run on main) from a rotting
+        # one. Without PyYAML it cannot read ANY of them, so every workflow goes
+        # undetermined — correct behaviour, but useless. The runner image has no
+        # PyYAML, so install it rather than let the feature sit dead here.
+        run: python3 -m pip install --disable-pip-version-check pyyaml
       - name: Unit-test the GATE_CRATES sync checker
         run: python3 scripts/test_check_gate_crates_sync.py
       - name: Unit-test the plugin-rollout checker

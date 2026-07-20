@@ -215,9 +215,22 @@ class GhBoundaryIsFailClosed(unittest.TestCase):
 class IsManualOnly(unittest.TestCase):
     """Recognising a known-by-design state, NOT suppressing an unknown one.
 
-    Everything this cannot positively confirm must return False so the workflow
-    stays undetermined and loud.
+    Tri-state: True (dispatch-only), False (has a real trigger), None (could not
+    tell). None must never be written as False — `assertFalse(None)` passes, so
+    every negative case here asserts `is None` or `is False` explicitly rather
+    than using assertTrue/assertFalse, which cannot tell the two apart. That
+    laxity is what let the whole feature sit dead on CI.
     """
+
+    def setUp(self):
+        # These cases are ABOUT parsing YAML, so a missing PyYAML makes every one
+        # of them vacuous (is_manual_only would answer None throughout and the
+        # negative assertions would still pass). Skip loudly instead: CI installs
+        # PyYAML, and a silent green here is what hid the defect before.
+        try:
+            import yaml  # noqa: F401
+        except ImportError:  # pragma: no cover
+            self.skipTest("PyYAML not installed; trigger-parsing cases cannot run")
 
     def _wf(self, body):
         import tempfile
@@ -227,45 +240,102 @@ class IsManualOnly(unittest.TestCase):
         return f.name
 
     def test_dispatch_only_mapping(self):
-        self.assertTrue(m.is_manual_only(self._wf("on:\n  workflow_dispatch:\njobs: {}\n")))
+        self.assertIs(m.is_manual_only(self._wf("on:\n  workflow_dispatch:\njobs: {}\n")), True)
 
     def test_dispatch_only_scalar(self):
-        self.assertTrue(m.is_manual_only(self._wf("on: workflow_dispatch\njobs: {}\n")))
+        self.assertIs(m.is_manual_only(self._wf("on: workflow_dispatch\njobs: {}\n")), True)
 
     def test_dispatch_only_list(self):
-        self.assertTrue(m.is_manual_only(self._wf("on: [workflow_dispatch]\njobs: {}\n")))
+        self.assertIs(m.is_manual_only(self._wf("on: [workflow_dispatch]\njobs: {}\n")), True)
 
     def test_dispatch_plus_push_is_not_manual_only(self):
         body = "on:\n  workflow_dispatch:\n  push:\n    branches: [main]\njobs: {}\n"
-        self.assertFalse(m.is_manual_only(self._wf(body)))
+        self.assertIs(m.is_manual_only(self._wf(body)), False)
 
     def test_schedule_only_is_not_manual_only(self):
         # A scheduled workflow IS expected to run; absence of runs is a problem.
-        self.assertFalse(m.is_manual_only(self._wf("on:\n  schedule:\n    - cron: '0 0 * * *'\n")))
+        self.assertIs(
+            m.is_manual_only(self._wf("on:\n  schedule:\n    - cron: '0 0 * * *'\n")), False
+        )
 
     def test_quoted_on_key_still_recognised(self):
         # PyYAML resolves a bare `on` to boolean True; a quoted "on" stays a
         # string. Both must work.
-        self.assertTrue(m.is_manual_only(self._wf('"on":\n  workflow_dispatch:\njobs: {}\n')))
+        self.assertIs(m.is_manual_only(self._wf('"on":\n  workflow_dispatch:\njobs: {}\n')), True)
 
-    def test_unreadable_path_is_not_manual_only(self):
-        self.assertFalse(m.is_manual_only("/nonexistent/nope.yml"))
+    # --- the cases that must be UNDETERMINED, not a verdict ---
 
-    def test_empty_path_is_not_manual_only(self):
-        self.assertFalse(m.is_manual_only(""))
+    def test_unreadable_path_is_undetermined_not_a_verdict(self):
+        self.assertIsNone(m.is_manual_only("/nonexistent/nope.yml"))
 
-    def test_malformed_yaml_is_not_manual_only(self):
-        self.assertFalse(m.is_manual_only(self._wf("on: [unclosed\n")))
+    def test_empty_path_is_undetermined_not_a_verdict(self):
+        self.assertIsNone(m.is_manual_only(""))
+
+    def test_malformed_yaml_is_undetermined_not_a_verdict(self):
+        self.assertIsNone(m.is_manual_only(self._wf("on: [unclosed\n")))
+
+    def test_missing_trigger_block_is_undetermined_not_a_verdict(self):
+        self.assertIsNone(m.is_manual_only(self._wf("jobs: {}\n")))
+
+    def test_explicit_null_trigger_is_undetermined_not_a_verdict(self):
+        # `.get("on", .get(True))` returned None here and fell to the `False`
+        # tail, reporting "has a real trigger" about a workflow with no readable
+        # trigger at all.
+        self.assertIsNone(m.is_manual_only(self._wf("on:\njobs: {}\n")))
 
     def test_real_repo_bench_regression_is_manual_only(self):
         p = pathlib.Path(__file__).resolve().parent.parent / ".github/workflows/bench-regression.yml"
         if p.exists():
-            self.assertTrue(m.is_manual_only(str(p)))
+            self.assertIs(m.is_manual_only(str(p)), True)
 
     def test_real_repo_gate_crates_sync_is_not_manual_only(self):
         p = pathlib.Path(__file__).resolve().parent.parent / ".github/workflows/gate-crates-sync.yml"
         if p.exists():
-            self.assertFalse(m.is_manual_only(str(p)))
+            self.assertIs(m.is_manual_only(str(p)), False)
+
+
+class UnreadableTriggerIsUndetermined(unittest.TestCase):
+    """A workflow whose trigger could not be read must not be silently judged.
+
+    Both collapses are wrong, in opposite directions: treating it as manual-only
+    hides a genuinely rotting workflow, and treating it as judgeable can invent a
+    chronic-red finding about one that was never meant to run on this branch.
+    """
+
+    def setUp(self):
+        self._lw, self._fr = m.list_workflows, m.fetch_runs
+        m.fetch_runs = lambda *a, **k: []
+
+    def tearDown(self):
+        m.list_workflows, m.fetch_runs = self._lw, self._fr
+
+    def test_unreadable_workflow_lands_in_undetermined_with_a_reason(self):
+        m.list_workflows = lambda: ([], [], [{"id": 5, "name": "mystery", "path": "m.yml"}])
+        buckets = m.collect("main", 25, 3, 45)
+        names = [u["workflow"] for u in buckets["undetermined"]]
+        self.assertIn("mystery", names)
+        self.assertNotIn("mystery", buckets["manual_only"])
+        why = next(u["why"] for u in buckets["undetermined"] if u["workflow"] == "mystery")
+        self.assertTrue(why, "an undetermined workflow must carry a reason")
+
+    def test_missing_pyyaml_is_named_as_the_missing_capability(self):
+        # The failure mode that hid this: no PyYAML on the CI image made EVERY
+        # workflow unreadable at once. The reader must be told that, not handed N
+        # identical mystery lines.
+        real = m.manual_only_unavailable_reason
+        m.manual_only_unavailable_reason = lambda: "PyYAML is not installed, so ..."
+        try:
+            m.list_workflows = lambda: ([], [], [{"id": 5, "name": "w", "path": "w.yml"}])
+            buckets = m.collect("main", 25, 3, 45)
+            self.assertIn("PyYAML", buckets["undetermined"][0]["why"])
+        finally:
+            m.manual_only_unavailable_reason = real
+
+    def test_an_unreadable_workflow_alone_is_not_a_clean_bill(self):
+        # Exit code must not be RC_OK when the only thing we saw was unreadable.
+        m.list_workflows = lambda: ([], [], [{"id": 5, "name": "w", "path": "w.yml"}])
+        buckets = m.collect("main", 25, 3, 45)
+        self.assertNotEqual(m.report(buckets, "main", 3), m.RC_OK)
 
 
 class ListWorkflows(unittest.TestCase):
@@ -281,7 +351,7 @@ class ListWorkflows(unittest.TestCase):
             {"id": 1, "name": "a", "state": "active"},
             {"id": 2, "name": "b", "state": "disabled_manually"},
         ]
-        judgeable, manual = m.list_workflows()
+        judgeable, manual, unreadable = m.list_workflows()
         self.assertEqual([w["name"] for w in judgeable], ["a"])
         self.assertEqual(manual, [])
 
@@ -291,7 +361,7 @@ class ListWorkflows(unittest.TestCase):
             {"id": 2, "name": "manual", "path": "m.yml", "state": "active"},
         ]
         m.is_manual_only = lambda p: p == "m.yml"
-        judgeable, manual = m.list_workflows()
+        judgeable, manual, unreadable = m.list_workflows()
         self.assertEqual([w["name"] for w in judgeable], ["a"])
         self.assertEqual([w["name"] for w in manual], ["manual"])
 
@@ -314,17 +384,17 @@ class Collect(unittest.TestCase):
         m.list_workflows, m.fetch_runs = self._lw, self._fr
 
     def test_no_active_workflows_raises_rather_than_reporting_clean(self):
-        m.list_workflows = lambda: ([], [])
+        m.list_workflows = lambda: ([], [], [])
         with self.assertRaises(m.Unavailable):
             m.collect("main", 25, 3)
 
     def test_manual_only_names_are_carried_through_for_reporting(self):
-        m.list_workflows = lambda: ([], [{"id": 9, "name": "manual"}])
+        m.list_workflows = lambda: ([], [{"id": 9, "name": "manual"}], [])
         b = m.collect("main", 25, 3)
         self.assertEqual(b["manual_only"], ["manual"])
 
     def test_per_workflow_failure_is_undetermined_not_dropped(self):
-        m.list_workflows = lambda: ([{"id": 1, "name": "a"}, {"id": 2, "name": "b"}], [])
+        m.list_workflows = lambda: ([{"id": 1, "name": "a"}, {"id": 2, "name": "b"}], [], [])
 
         def fetch(wid, branch, depth):
             if wid == 2:
@@ -336,7 +406,7 @@ class Collect(unittest.TestCase):
         self.assertEqual([r["workflow"] for r in b["undetermined"]], ["b"])
 
     def test_unexpected_exception_is_undetermined_not_a_crash(self):
-        m.list_workflows = lambda: ([{"id": 1, "name": "a"}], [])
+        m.list_workflows = lambda: ([{"id": 1, "name": "a"}], [], [])
 
         def fetch(*a):
             raise TypeError("bad payload")
@@ -346,7 +416,7 @@ class Collect(unittest.TestCase):
         self.assertIn("TypeError", b["undetermined"][0]["why"])
 
     def test_exhausted_budget_marks_remaining_undetermined_not_skipped(self):
-        m.list_workflows = lambda: ([{"id": i, "name": f"w{i}"} for i in range(3)], [])
+        m.list_workflows = lambda: ([{"id": i, "name": f"w{i}"} for i in range(3)], [], [])
         m.fetch_runs = lambda *a: [run("success")]
         # A clock already past the deadline on every call.
         b = m.collect("main", 25, 3, budget=0, now=lambda: 10.0)

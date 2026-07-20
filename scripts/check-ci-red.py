@@ -118,53 +118,90 @@ def _gh_json(args, timeout=GH_TIMEOUT_SECS):
 
 
 def is_manual_only(path):
-    """True when the workflow's ONLY trigger is `workflow_dispatch`.
+    """Tri-state: True (dispatch-only), False (has a real trigger), None (could
+    not tell).
 
-    Such a workflow is not expected to have any branch history, so "never ran on
-    main" is its designed state, not evidence of rot. Without this, a
-    manual-only workflow sits in UNDETERMINED forever and makes the undetermined
-    signal permanent — which is how an alarm becomes scenery, the exact decay
-    this checker exists to prevent.
+    A dispatch-only workflow is not expected to have any branch history, so
+    "never ran on main" is its designed state, not evidence of rot. Without this,
+    it sits in UNDETERMINED forever and makes the undetermined signal permanent —
+    which is how an alarm becomes scenery, the exact decay this checker exists to
+    prevent.
 
-    This is deliberately narrow: it reads the trigger declaration rather than
-    guessing from the absence of runs, so it recognises a KNOWN-BY-DESIGN state
-    rather than suppressing an unknown one. Anything it cannot read stays
-    undetermined. Excluded workflows are still reported (see `report`), so the
-    exclusion itself is visible and reviewable, never silent.
+    NONE IS NOT FALSE, and collapsing the two was a defect this docstring used to
+    describe away: the text claimed "anything it cannot read stays undetermined"
+    while every failure path returned False, which the caller reads as a positive
+    finding ("this workflow has a real trigger, judge its history"). A missing
+    PyYAML made that the answer for EVERY workflow at once, silently — the CI
+    image has no PyYAML, so the whole exclusion feature was dead there and only
+    the unit tests noticed.
+
+    Returning None instead pushes the workflow into the undetermined bucket,
+    where the reader is told the trigger could not be read and why. This is
+    deliberately narrow: it reads the trigger DECLARATION rather than guessing
+    from an absence of runs, so it recognises a known-by-design state rather than
+    suppressing an unknown one. Excluded workflows are still named in `report`,
+    so the exclusion itself stays visible and reviewable, never silent.
     """
     if not path:
-        return False
+        return None
     try:
-        import yaml  # optional; absent -> stay undetermined rather than guess
+        import yaml
     except ImportError:
-        return False
+        return None
     try:
         doc = yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
-        return False
+        return None
     if not isinstance(doc, dict):
-        return False
+        return None
     # PyYAML resolves the bare key `on` to the boolean True (YAML 1.1), so the
     # trigger block can arrive under either key depending on how it was quoted.
-    trig = doc.get("on", doc.get(True))
+    # `.get("on", .get(True))` mis-handles an explicit `on: null`; check
+    # membership so a present-but-empty trigger is undetermined, not False.
+    if "on" in doc:
+        trig = doc["on"]
+    elif True in doc:
+        trig = doc[True]
+    else:
+        return None
     if isinstance(trig, str):
         return trig == "workflow_dispatch"
-    if isinstance(trig, list):
+    if isinstance(trig, (list, dict)):
         return set(trig) == {"workflow_dispatch"}
-    if isinstance(trig, dict):
-        return set(trig) == {"workflow_dispatch"}
-    return False
+    return None
+
+
+def manual_only_unavailable_reason():
+    """Why `is_manual_only` cannot answer, or None when it can.
+
+    Kept separate so `report` can tell the reader WHICH capability is missing
+    instead of printing an unexplained pile of undetermined workflows.
+    """
+    try:
+        import yaml  # noqa: F401
+    except ImportError:
+        return ("PyYAML is not installed, so no workflow's trigger declaration "
+                "could be read (pip install pyyaml)")
+    return None
 
 
 def list_workflows():
-    """Active workflows, split into (judgeable, manual_only).
+    """Active workflows, split into (judgeable, manual_only, unreadable).
 
     A disabled workflow is excluded outright: it is not expected to run at all.
-    A manual-only workflow is separated rather than dropped, so `report` can
-    name it as intentionally not judged.
+    A manual-only workflow is separated rather than dropped, so `report` can name
+    it as intentionally not judged.
+
+    The third bucket is the one that must not be folded into either of the other
+    two. A workflow whose trigger could not be READ is not known to be
+    dispatch-only (so excluding it would hide a genuinely rotting workflow) and
+    is not known to have a real trigger either (so judging it can invent a
+    chronic-red finding about a workflow that was never meant to run on main).
+    Both collapses are wrong in a different direction, which is precisely why it
+    gets its own bucket and its own line in the report.
     """
     data = _gh_json(["workflow", "list", "--limit", "100", "--json", "id,name,path,state"])
-    judgeable, manual = [], []
+    judgeable, manual, unreadable = [], [], []
     for w in data:
         if not isinstance(w, dict):
             raise Unavailable("gh workflow list returned a non-object entry")
@@ -174,8 +211,14 @@ def list_workflows():
         if wid is None or not name:
             raise Unavailable("gh workflow list returned an entry without id/name")
         entry = {"id": wid, "name": name, "path": w.get("path") or ""}
-        (manual if is_manual_only(entry["path"]) else judgeable).append(entry)
-    return judgeable, manual
+        verdict = is_manual_only(entry["path"])
+        if verdict is None:
+            unreadable.append(entry)
+        elif verdict:
+            manual.append(entry)
+        else:
+            judgeable.append(entry)
+    return judgeable, manual, unreadable
 
 
 def fetch_runs(workflow_id, branch, depth):
@@ -293,13 +336,23 @@ def collect(branch, depth, chronic, budget=TOTAL_BUDGET_SECS, now=time.monotonic
     fetched — for any reason, including the budget running out — lands in
     undetermined with its reason. Nothing is ever dropped silently.
     """
-    workflows, manual_only = list_workflows()
-    if not workflows and not manual_only:
+    workflows, manual_only, unreadable = list_workflows()
+    if not workflows and not manual_only and not unreadable:
         raise Unavailable("no active workflows found")
 
     deadline = now() + budget
     buckets = {"green": [], "chronic": [], "fresh": [], "undetermined": [],
                "manual_only": [w["name"] for w in manual_only]}
+
+    # A workflow whose trigger could not be read is undetermined BEFORE any run
+    # history is considered: we do not know whether it is even supposed to run on
+    # this branch, so neither "green" nor "chronic" would mean anything about it.
+    # One shared reason is attached when the cause is global (no PyYAML), so the
+    # reader gets the missing capability instead of N identical mystery lines.
+    global_why = manual_only_unavailable_reason()
+    for wf in unreadable:
+        why = global_why or f"could not read the trigger declaration in {wf['path'] or '<no path>'}"
+        buckets["undetermined"].append({"workflow": wf["name"], "why": why})
 
     def work(wf):
         if now() >= deadline:

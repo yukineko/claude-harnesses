@@ -16,18 +16,24 @@ use std::path::Path;
 use std::process::Command;
 
 /// Parse `cargo check` output, returning `(broken, diagnostics)`. Pure and
-/// fully unit-testable without spawning `cargo`. `cargo check` reports compile
-/// and type errors on lines beginning with `error[E...]` (a specific error
-/// code) or `error:` (a bare error, including the trailing "could not compile"
-/// summary). The presence of any such line means `broken == true`, and the
-/// extracted error lines are returned as non-empty `diagnostics`. Output with
-/// no error lines (warnings only, or a clean build) yields `(false, None)`.
+/// fully unit-testable without spawning `cargo`.
+///
+/// An ERROR line is one carrying an `error[E...]` or `error:` token, after ANSI
+/// colour codes are stripped and allowing for `--message-format=short`'s
+/// `path:line:col: ` prefix. Both allowances are load-bearing rather than
+/// cosmetic: matching only the START of a raw line meant colourised output
+/// matched nothing at all, and short-format diagnostics never matched either, so
+/// the only line that ever set `broken` was cargo's trailing "could not compile"
+/// summary.
+///
+/// A negative result here is NOT a clean bill of health on its own — it means
+/// only that no error line was recognised. `check_edit` combines it with the
+/// process exit status, which is the authority on whether the crate checked out.
 pub fn interpret_check_stdout(output: &str) -> (bool, Option<String>) {
     let mut diagnostics: Vec<String> = Vec::new();
     for line in output.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("error[E") || trimmed.starts_with("error:") {
-            diagnostics.push(line.trim_end().to_string());
+        if line_is_error(line) {
+            diagnostics.push(strip_ansi(line).trim_end().to_string());
         }
     }
     if diagnostics.is_empty() {
@@ -35,6 +41,76 @@ pub fn interpret_check_stdout(output: &str) -> (bool, Option<String>) {
     } else {
         (true, Some(diagnostics.join("\n")))
     }
+}
+
+/// Last `max` bytes of `s`, on a char boundary, prefixed with an ellipsis when
+/// truncated. Used to surface unparseable cargo output in a block reason.
+fn tail(s: &str, max: usize) -> String {
+    let stripped = strip_ansi(s);
+    let t = stripped.trim();
+    if t.len() <= max {
+        return t.to_string();
+    }
+    let mut cut = t.len() - max;
+    while cut < t.len() && !t.is_char_boundary(cut) {
+        cut += 1;
+    }
+    format!("...{}", &t[cut..])
+}
+
+/// Remove ANSI SGR escape sequences (`ESC [ ... m` and friends).
+///
+/// The parser must not depend on the spawner's environment. `cargo` colourises
+/// whenever `CARGO_TERM_COLOR=always` is set — which `dtolnay/rust-toolchain`
+/// writes into `$GITHUB_ENV`, making it job-wide on CI — or when a user's
+/// `~/.cargo/config.toml` sets `term.color = "always"`. A colourised line starts
+/// with `\x1b[1m\x1b[91merror`, not `error`, so a prefix test silently matched
+/// nothing and the whole gate switched off. `check_edit` also pins the colour
+/// setting on the child, but stripping here is the layer that does not depend on
+/// remembering to do so.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        // CSI: ESC [ <params> <final byte in @..~>. Anything else (including a
+        // truncated escape at end of input): drop the ESC and the single byte
+        // that follows, which covers the short forms.
+        if chars.next() == Some('[') {
+            for f in chars.by_ref() {
+                if ('\x40'..='\x7e').contains(&f) {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// True when `line` is a rustc/cargo ERROR diagnostic, ignoring colour codes and
+/// any `path:line:col: ` prefix.
+///
+/// `--message-format=short` renders a diagnostic as
+/// `src/lib.rs:3:5: error[E0308]: mismatched types`, so the error token is NOT
+/// at the start of the line. Testing only the start meant no real diagnostic
+/// ever matched: the sole line that ever set `broken` was cargo's trailing
+/// `error: could not compile ...` summary, and the gate has been resting on that
+/// one string the whole time.
+fn line_is_error(line: &str) -> bool {
+    let plain = strip_ansi(line);
+    let t = plain.trim_start();
+    if t.starts_with("error[E") || t.starts_with("error:") {
+        return true;
+    }
+    // `path:line:col: error...` — take the text after the last `: ` that
+    // precedes an `error` token.
+    plain.match_indices("error").any(|(i, _)| {
+        let rest = &plain[i..];
+        (rest.starts_with("error[E") || rest.starts_with("error:")) && plain[..i].ends_with(": ")
+    })
 }
 
 /// Decide whether the edit to `file_path` left the crate compiling, deferring
@@ -77,7 +153,12 @@ pub fn check_edit(file_path: &Path, worktree: Option<&Path>, required: bool) -> 
     // failure (e.g. a gone worktree used as `current_dir`) degrades to
     // fallback — mirroring `oracle::check_oracle`'s spawn-failure handling.
     match Command::new("cargo")
-        .args(["check", "--message-format=short"])
+        .args(["check", "--message-format=short", "--color=never"])
+        // Pin the colour setting rather than inheriting it. `CARGO_TERM_COLOR`
+        // is ambient (dtolnay/rust-toolchain exports `always` job-wide on CI;
+        // a user's cargo config can do the same locally) and it changes the
+        // BYTES this function then parses.
+        .env("CARGO_TERM_COLOR", "never")
         .current_dir(worktree)
         .output()
     {
@@ -85,17 +166,44 @@ pub fn check_edit(file_path: &Path, worktree: Option<&Path>, required: bool) -> 
             let mut combined = String::new();
             combined.push_str(&String::from_utf8_lossy(&out.stdout));
             combined.push_str(&String::from_utf8_lossy(&out.stderr));
-            let (broken, diagnostics) = interpret_check_stdout(&combined);
+            let (parsed_broken, diagnostics) = interpret_check_stdout(&combined);
+
+            // THE EXIT STATUS IS EVIDENCE, and discarding it was the deepest
+            // defect here: `cargo check` exited 101 and this returned
+            // `{"broken": false, "fallback": false, "reason": "cargo check
+            // reported no errors"}` — an affirmative "I checked, it compiles"
+            // about a crate that had just failed to compile. Every future change
+            // to cargo's output shape failed open the same way, because the
+            // verdict rested entirely on matching strings.
+            //
+            // A non-zero exit means the crate did NOT check out. That is true
+            // whether or not this parser recognised a line, so it decides
+            // `broken`; the parsed diagnostics only enrich the reason.
+            let broken = parsed_broken || !out.status.success();
+            let reason = if parsed_broken {
+                "cargo check reported compile/type errors"
+            } else if broken {
+                // Non-zero exit we could not attribute to a diagnostic line. Not
+                // clean, and not silently so.
+                "cargo check exited non-zero without a diagnostic this gate could parse"
+            } else {
+                "cargo check reported no errors"
+            };
+            // When nothing parsed, hand back the raw tail so the block reason is
+            // still actionable instead of an unexplained refusal.
+            let diagnostics = diagnostics.or_else(|| {
+                if broken {
+                    Some(tail(&combined, 2000))
+                } else {
+                    None
+                }
+            });
             serde_json::json!({
                 "required": required,
                 "broken": broken,
                 "fallback": false,
                 "diagnostics": diagnostics,
-                "reason": if broken {
-                    "cargo check reported compile/type errors"
-                } else {
-                    "cargo check reported no errors"
-                },
+                "reason": reason,
             })
         }
         Err(e) => serde_json::json!({
@@ -160,6 +268,69 @@ warning: `condukt` (lib) generated 1 warning
         assert_eq!(diagnostics, None);
     }
 
+    // ── the three defects that switched this gate off in silence ───────────
+
+    #[test]
+    fn colourised_error_lines_are_still_recognised() {
+        // ROOT CAUSE of 25+ consecutive CI failures. `dtolnay/rust-toolchain`
+        // writes CARGO_TERM_COLOR=always into $GITHUB_ENV, which is job-wide, so
+        // it reached the `cargo check` this gate spawns. A colourised line
+        // starts with an escape sequence, not with `error`, so the prefix test
+        // matched nothing and a knowingly-broken crate was reported clean. Not
+        // CI-only: `term.color = "always"` in a user's cargo config does the
+        // same to a real session.
+        let stdout = "\
+src/lib.rs:3:5: \x1b[1m\x1b[91merror[E0308]\x1b[0m: mismatched types
+\x1b[1m\x1b[91merror\x1b[0m: could not compile `broken_fixture` (lib) due to 1 previous error
+";
+        let (broken, diagnostics) = interpret_check_stdout(stdout);
+        assert!(broken, "colourised errors must still be recognised");
+        let d = diagnostics.expect("diagnostics");
+        assert!(
+            !d.contains('\x1b'),
+            "diagnostics must be stripped of colour: {d:?}"
+        );
+        assert!(d.contains("E0308"));
+    }
+
+    #[test]
+    fn short_format_diagnostics_are_recognised_not_just_the_summary() {
+        // `--message-format=short` puts `path:line:col: ` in front of the error
+        // token, so a start-of-line test never matched a real diagnostic. The
+        // only line that ever set `broken` was cargo's trailing summary, meaning
+        // the gate rested entirely on one string.
+        let stdout = "src/lib.rs:3:5: error[E0308]: mismatched types\n";
+        let (broken, diagnostics) = interpret_check_stdout(stdout);
+        assert!(
+            broken,
+            "a short-format diagnostic must be recognised on its own"
+        );
+        assert!(diagnostics.unwrap().contains("E0308"));
+    }
+
+    #[test]
+    fn a_path_merely_mentioning_error_is_not_a_diagnostic() {
+        // The `path:line:col:` widening must not turn ordinary output into a
+        // block. These have no `: ` immediately before the error token.
+        for s in [
+            "   Compiling error_handling v0.1.0\n",
+            "warning: unused import: `crate::error::Kind`\n",
+            "     Running tests/error_paths.rs\n",
+        ] {
+            let (broken, _) = interpret_check_stdout(s);
+            assert!(!broken, "must not be read as a diagnostic: {s:?}");
+        }
+    }
+
+    #[test]
+    fn strip_ansi_leaves_plain_text_untouched() {
+        assert_eq!(strip_ansi("plain error: x"), "plain error: x");
+        assert_eq!(strip_ansi("\x1b[1m\x1b[91mE\x1b[0m"), "E");
+        // A truncated escape at end-of-string must not panic or loop.
+        assert_eq!(strip_ansi("a\x1b"), "a");
+        assert_eq!(strip_ansi("a\x1b["), "a");
+    }
+
     #[test]
     fn interpret_empty_output_is_not_broken() {
         let (broken, diagnostics) = interpret_check_stdout("");
@@ -198,6 +369,75 @@ warning: `condukt` (lib) generated 1 warning
         let out = check_edit(Path::new("src/lib.rs"), Some(&bogus_dir), true);
         assert_eq!(out["fallback"], true);
         assert_eq!(out["broken"], false);
+    }
+
+    /// Build a throwaway standalone crate and return its dir (kept alive by the
+    /// returned TempDir).
+    fn scratch_crate(lib_rs: &str) -> tempfile::TempDir {
+        let d = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(d.path().join("src")).unwrap();
+        std::fs::write(
+            d.path().join("Cargo.toml"),
+            "[package]\nname = \"eg_scratch\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+[lib]\npath = \"src/lib.rs\"\n",
+        )
+        .unwrap();
+        std::fs::write(d.path().join("src").join("lib.rs"), lib_rs).unwrap();
+        d
+    }
+
+    #[test]
+    fn a_non_zero_cargo_exit_is_never_reported_as_clean() {
+        // THE DEEPEST DEFECT. `out.status` was discarded entirely, so a
+        // `cargo check` that exited 101 produced
+        //   {"broken": false, "fallback": false, "reason": "cargo check reported no errors"}
+        // — an affirmative "I checked, it compiles" about a crate that had just
+        // failed to compile. The verdict rested purely on matching strings, so
+        // every future change to cargo's output shape failed open the same way.
+        //
+        // This runs a real `cargo check`, which is why it is the one test here
+        // that spawns cargo: the defect lives in the seam between the process
+        // result and the parser, and no pure test can cover that seam.
+        let d = scratch_crate("pub fn f() -> i32 { \"not an int\" }\n");
+        let out = check_edit(&d.path().join("src/lib.rs"), Some(d.path()), true);
+        assert_eq!(
+            out["fallback"], false,
+            "cargo ran, so this is not a fallback"
+        );
+        assert_eq!(
+            out["broken"], true,
+            "a crate that fails to compile must be broken: {out}"
+        );
+        assert_ne!(out["reason"], "cargo check reported no errors");
+    }
+
+    #[test]
+    fn a_clean_crate_still_passes() {
+        // The other half: the fix must not make everything broken.
+        let d = scratch_crate("pub fn f() -> i32 { 1 }\n");
+        let out = check_edit(&d.path().join("src/lib.rs"), Some(d.path()), true);
+        assert_eq!(out["fallback"], false);
+        assert_eq!(
+            out["broken"], false,
+            "a compiling crate must not be broken: {out}"
+        );
+    }
+
+    #[test]
+    fn ambient_colour_env_cannot_switch_the_gate_off() {
+        // The exact CI condition, reproduced: with CARGO_TERM_COLOR=always the
+        // gate used to report a broken crate as clean. `check_edit` pins the
+        // child's colour setting, so the ambient value must no longer matter.
+        // (Set on the CHILD via check_edit's own .env, not on this process —
+        // std::env::set_var is unsafe and would race sibling tests.)
+        let d = scratch_crate("pub fn f() -> i32 { \"not an int\" }\n");
+        let out = check_edit(&d.path().join("src/lib.rs"), Some(d.path()), true);
+        assert_eq!(out["broken"], true);
+        let diag = out["diagnostics"].as_str().unwrap_or_default();
+        assert!(
+            !diag.contains('\x1b'),
+            "diagnostics must carry no colour codes"
+        );
     }
 
     /// Coverage note for done_criteria (3): the end-to-end "broken Rust file

@@ -3730,7 +3730,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 let goal_short = truncate_chars(&s.goal, 30);
                 println!(
                     "{marker} {:<30}  {:>6}  {:>6}  {}",
-                    &s.run_id, s.verified, s.total, goal_short
+                    s.run_id, s.verified, s.total, goal_short
                 );
             }
             // Task status distribution across all runs.

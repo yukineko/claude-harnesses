@@ -269,7 +269,7 @@ fn report(session: Option<String>, all: bool, context: bool) {
                 s.tool_events,
                 s.size(&cfg.size_thresholds),
                 s.category(),
-                &s.last_at.chars().take(19).collect::<String>(),
+                s.last_at.chars().take(19).collect::<String>(),
             );
         }
         return;

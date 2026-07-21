@@ -43,12 +43,41 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 # Changed = tracked modifications vs HEAD, plus untracked files.
-changed="$(
-    {
-        git diff --name-only HEAD -- 2>/dev/null
-        git ls-files --others --exclude-standard 2>/dev/null
-    } | sort -u
-)"
+#
+# A git invocation that FAILS must NOT be swallowed into an empty change set:
+# empty reads as "no crate touched -> exit 0" below, silently passing the turn
+# having tested nothing precisely because git couldn't tell us what changed —
+# the exact cannot-determine -> allow fail-open this gate exists to end, and the
+# TWIN of the cargo-absent fail-closed above (which this mirrors). So capture
+# each command's exit status instead of piping `2>/dev/null` straight into a
+# string.
+diff_out=""
+diff_rc=0
+diff_out="$(git diff --name-only HEAD -- 2>/dev/null)" || diff_rc=$?
+
+# `git diff HEAD` fails on an UNBORN branch (a repo with no commits yet). That is
+# a legitimate, fully-DETERMINABLE state — "no baseline, everything present is
+# new" — not a broken environment, so it must not fail closed. Handle it by
+# treating every tracked/staged file as changed. Any OTHER git-diff failure is a
+# genuine cannot-determine and falls through to the fail-closed check below.
+if [ "$diff_rc" -ne 0 ] && ! git rev-parse --verify -q HEAD >/dev/null 2>&1; then
+    diff_out="$(git ls-files 2>/dev/null)"
+    diff_rc=0
+fi
+
+untracked_out=""
+untracked_rc=0
+untracked_out="$(git ls-files --others --exclude-standard 2>/dev/null)" || untracked_rc=$?
+
+if [ "$diff_rc" -ne 0 ] || [ "$untracked_rc" -ne 0 ]; then
+    # Cannot determine the changed set — fail CLOSED rather than report
+    # "nothing to test". donegate's max_attempts still prevents a permanent trap.
+    echo "test-changed-crates: git could not determine the changed file set (diff rc=$diff_rc, untracked rc=$untracked_rc)" >&2
+    echo "  refusing to pass a turn as 'nothing to test' when the change set is unknown — fix the repo state, or disable this check in donegate.toml" >&2
+    exit 1
+fi
+
+changed="$(printf '%s\n%s\n' "$diff_out" "$untracked_out" | sort -u)"
 
 # crates/<dir>/... -> <dir>
 dirs="$(printf '%s\n' "$changed" | sed -n 's#^crates/\([^/]*\)/.*#\1#p' | sort -u)"

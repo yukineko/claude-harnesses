@@ -1,19 +1,20 @@
 ## north_star
-このリポジトリのゲートが「判定不能」を「clean」に写せない状態を、型と CI で機械的に保証する。現状は道具が作られただけで展開されていない: harness_core::verdict の型契約は 9 ゲート crate 中 2 件(propguard と reviewgate)しか採用しておらず、check-fail-open の指摘は 34 件のまま、17 本ある CI workflow は 1 本も required status check になっていない(赤くても merge できる)。ゴールは、fail-open が型で書けず・CI で通れず・残存量が単調減少していると観測できる状態にすること。
+このリポジトリのゲートが「判定不能」を「clean」に写せない状態を、型と CI で機械的に保証する。現状は展開が途上: harness_core::verdict の型契約は 9 ゲート crate 中 3 件(propguard, reviewgate, blastguard)のみ、check-fail-open の指摘は 34 件のまま(かつスキャナ自身が exit 0 で単調性を強制していない=検出はするが gate していない)。CI 側は 4 本(fail-open-scan, doc-claims-scan, test-weakening-scan, version-lockstep-check)が required status check として稼働し、赤いとき merge が実際に止まることを観測済み。ただしこれは GitHub 上の main を守るだけで、local main は依然として無防備(条件は push 時にしか評価されない)。ゴールは、fail-open が型で書けず・CI で通れず・残存量が単調減少していると観測できる状態にすること。
 
 ## definition_of_done
-- harness_core::verdict の型契約を採用したゲート crate が 2 件から 9 件へ増える。対象は blastguard, propguard, specguard, stuckguard, mutategate, overwatch, donegate, reviewgate, tdd の 9 crate。検査なしに Clean を構築するコードが trybuild の compile-fail テストで固定されている
-- workflows 配下の 4 本(fail-open, doc-claims, test-weakening, version-lockstep)が branch protection の required status check に登録され、いずれかが赤いとき main への merge が実際にブロックされることを 1 度観測している
+- harness_core::verdict の型契約を採用したゲート crate が 3 件から 9 件へ増える。対象は blastguard, propguard, specguard, stuckguard, mutategate, overwatch, donegate, reviewgate, tdd の 9 crate。検査なしに Clean を構築するコードが trybuild の compile-fail テストで固定されている
+- [達成 2026-07-22] workflows 配下の 4 本が required status check に登録され、いずれかが赤いとき merge が実際にブロックされることを観測した。証拠: PR #21 で doc-claims-scan のみ FAILURE のとき mergeable=MERGEABLE かつ state=BLOCKED、偽の引用を消して 4 本 SUCCESS にすると state=UNSTABLE(merge 可)へ反転した
 - check-fail-open スキャナを --all で走らせたときの指摘件数が 34 件から減少し、その残数が CI で単調非増加としてゲートされている(新規追加が赤くなる)
+- GitHub 固有機能に依存しない層でも同じ阻止が効く。ホスト非依存の blocking gate を opt-in(既定無効)で用意し、CodeCommit など required-status-check の無いホストでも fail-open を止められることを観測する
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-型契約(harness_core::verdict)も CI ゲート(17 workflow)も存在するのに、どちらも実効していない: 採用は 9 crate 中 2 件、required status check は 0 本、check-fail-open の指摘 34 件が横ばい。最大かつ右サイズの差分は「1 本目の required status check を実際に効かせること」。理由は、型契約の展開(9 crate 移行)は l 級で複数モジュール横断だが、required 登録は既存の緑の workflow を 1 本 required にするだけで、それ以降のすべての fail-open 修正が「赤ければ merge できない」という強制力を得る=最小コストで最大の擁護可能性を生む。ただし branch protection API は現行 PAT で 403 のため、トークン調達か Web UI 操作という人間側の一手が前提になる。それが解けない場合の代替は、型契約を 1 ゲート crate へ移行して採用を 3 件にし、compile-fail テストで固定する s〜m 級の一手(今回は blastguard を選択し実行中)。
+DoD2 は閉じた(required 4 本が稼働し、赤で merge が止まることを観測)。残る差分は 3 つ: (1) 型契約の採用が 3/9 で止まっている、(2) check-fail-open が 34 件を検出しながら exit 0 で通す=検出はするが enforce しない fail-open が残っている、(3) 守られているのは GitHub の main だけで、成果物が最初に着地する local main は無防備(condukt は worktree から local main へ直接 FF merge する)。ローカル側の pre-commit/pre-push は常に exit 0 の advisory で、core.hooksPath 未設定なら動かず --no-verify で外せるため、ゲートとして数えられない。最大レバレッジは (2): baseline pin + 増加時 nonzero の単調 gate に変えれば、34 件が減る方向にしか動かなくなる。
 
 ## next_action
 
 ## parked
-- 旧 north_star: 出荷済み並列衝突ハードニングの validate 閉環。DoD1(canary rollout で live 化)は実測上ほぼ達成済み(overwatch は drift 無しで live、condukt の drift は cfg(test) のみの 0.7.84)。残るのは overwatch に runtime-conflict と merge-hold と contended-skip の時間窓集計 surface を足すことと、before/after delta の evidence 化。
+- 旧 north_star: 出荷済み並列衝突ハードニングの validate 閉環。DoD1(canary rollout で live 化)は実測上ほぼ達成済み(overwatch は drift 無しで live)。残るのは overwatch に runtime-conflict と merge-hold と contended-skip の時間窓集計 surface を足すことと、before/after delta の evidence 化。
 

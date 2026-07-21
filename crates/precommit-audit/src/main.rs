@@ -123,16 +123,62 @@ fn warn_untrusted_once(config_path: &Path) {
 
 fn main() {
     // never-break-a-turn: a panic while scanning changed files (unexpected bytes,
-    // linter subprocess quirks, …) must not abort a commit or break the turn with
-    // a backtrace. Real `exit(...)` calls inside `run` terminate directly; only a
-    // genuine panic unwinds here, where we fall back to allow (exit 0).
+    // linter subprocess quirks, …) must not break the turn with a backtrace. Real
+    // `exit(...)` calls inside `run` terminate directly; only a genuine panic
+    // unwinds here.
+    //
+    // fail-closed (99b506b7-sibling, blastguard#3 twin): a caught panic used to
+    // fall back to `exit(0)` — but exit 0 IS a clean/allow verdict, so any crash
+    // in the audit reported the working set it had just FAILED to scan as clean.
+    // A panic means the audit did not finish, which is the SAME "cannot vouch for
+    // this working set" condition as the git-error and incomplete-scan paths in
+    // `run`, both of which already fail CLOSED (block; never exit 0). So a caught
+    // panic now exits with the mode's blocking code (stop→2, precommit→1), never
+    // 0. Under SessionEnd a non-zero exit cannot block by platform design, but it
+    // surfaces as a failed hook — strictly better than a silent clean pass, and
+    // exactly what the git-error path already does (its `exit(3)` fallback).
     if std::panic::catch_unwind(run).is_err() {
-        exit(0);
+        exit(blocking_exit_for_mode(&mode_from_env_argv()));
     }
+}
+
+/// The blocking exit code to use when the audit could not complete: `stop`
+/// (and its SessionEnd variant) → 2, `precommit` → 1. Pure so the fail-closed
+/// contract is unit-testable without spawning a process.
+fn blocking_exit_for_mode(mode: &str) -> i32 {
+    if mode == "precommit" {
+        1
+    } else {
+        2
+    }
+}
+
+/// Resolve the mode from argv/env ONLY — never reads stdin (which `run` has
+/// already consumed) and does nothing that can itself panic, so it is safe to
+/// call from the panic-unwound path in `main`. Mirrors `resolve_mode`'s
+/// precedence (explicit `--mode` over `AUDIT_MODE`) without the parsed-args
+/// plumbing.
+fn mode_from_env_argv() -> String {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--mode") {
+        if let Some(m) = args.get(pos + 1) {
+            return m.clone();
+        }
+    }
+    std::env::var("AUDIT_MODE").unwrap_or_default()
 }
 
 fn run() {
     let args = parse_args();
+
+    // Test-only fault injection to exercise the panic->block barrier in `main`
+    // deterministically (there is otherwise no reliable way to induce a panic
+    // mid-audit from a test). Compiled OUT of release builds, so it adds no
+    // production surface; a panic here is caught by `main` and fails closed.
+    #[cfg(debug_assertions)]
+    if std::env::var_os("PRECOMMIT_AUDIT_FORCE_PANIC").is_some() {
+        panic!("forced panic (fault injection) exercising the panic->block barrier");
+    }
 
     // `precommit-audit trust`: register this root in the shared trust list, then
     // exit. Honors the same `harness_core::trust` store as donegate/reviewgate/tdd.
@@ -519,6 +565,54 @@ mod advisory_emission_tests {
         assert!(!plan.set_marker);
         assert_eq!(plan.exit_code, 0);
         assert_eq!(plan.warning_count, 1);
+    }
+}
+
+#[cfg(test)]
+mod panic_block {
+    //! Regression: backlog 99b71596 ("fail-open #9") — a caught panic in `main`
+    //! must exit with the mode's BLOCKING code, never 0. Previously a caught
+    //! panic fell back to `exit(0)`, which IS a clean/allow verdict, so any
+    //! crash mid-audit reported the un-scanned working set as clean (fail-open).
+    //! This pins panic→block (mirrors blastguard#3 panic→Deny), NOT panic→exit0.
+    //!
+    //! These unit-test the pure `blocking_exit_for_mode` seam directly; the
+    //! end-to-end panic barrier is exercised by `tests/panic_fails_closed.rs`.
+    use super::blocking_exit_for_mode;
+
+    #[test]
+    fn stop_mode_blocks_with_two() {
+        assert_eq!(blocking_exit_for_mode("stop"), 2);
+    }
+
+    #[test]
+    fn precommit_mode_blocks_with_one() {
+        assert_eq!(blocking_exit_for_mode("precommit"), 1);
+    }
+
+    #[test]
+    fn default_empty_mode_blocks_with_two() {
+        // No `--mode`/`AUDIT_MODE` resolves to an empty string in the
+        // panic-unwound path (`mode_from_env_argv`); it must fail closed as stop.
+        assert_eq!(blocking_exit_for_mode(""), 2);
+    }
+
+    #[test]
+    fn session_end_variant_blocks_with_two() {
+        // The SessionEnd variant is not "precommit", so it takes the stop code.
+        assert_eq!(blocking_exit_for_mode("SessionEnd"), 2);
+    }
+
+    // The core invariant in one place: NO mode maps a panic to exit 0.
+    #[test]
+    fn no_mode_maps_panic_to_exit_zero() {
+        for mode in ["stop", "precommit", "", "SessionEnd", "anything-else"] {
+            assert_ne!(
+                blocking_exit_for_mode(mode),
+                0,
+                "mode {mode:?} must never map a caught panic to exit 0 (fail-open #9)"
+            );
+        }
     }
 }
 

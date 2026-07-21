@@ -16,3 +16,6 @@ overwatch = { path = "../overwatch" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 globset = "0.4"
+
+[dev-dependencies]
+trybuild = "1"

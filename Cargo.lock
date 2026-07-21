@@ -168,6 +168,7 @@ dependencies = [
  "overwatch",
  "serde",
  "serde_json",
+ "trybuild",
 ]
 
 [[package]]

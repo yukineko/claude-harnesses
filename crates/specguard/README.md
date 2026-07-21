@@ -319,6 +319,7 @@ The canon is the audit prompt (`templates/audit-prompt.md` /
 | 5 | the prompt (meta-canon) is unratified/changed (when `require_ratification` is on); needs `accept-prompt` |
 | 6 | `ack` found no fix commit since the sentinel was raised; pass `--force` to override |
 | 7 | `testaudit` found tests that are implemented but not being run |
+| 8 | `testaudit` could not determine — an unreadable dir/`.rs` made the scan incomplete; fails closed rather than report GREEN (unknown → RED) |
 
 The source of truth is the `EXIT_*` constants in `src/main.rs` (this is the only
 doc copy of the table). Agent exit codes are never propagated raw — they always

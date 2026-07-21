@@ -47,6 +47,12 @@ const EXIT_UNRATIFIED: u8 = 5;
 const EXIT_NO_FIX_COMMIT: u8 = 6;
 /// `specguard testaudit` found one or more tests that are not being run.
 const EXIT_TESTAUDIT_FINDINGS: u8 = 7;
+/// `specguard testaudit` could NOT determine the answer — a directory or `.rs`
+/// file that exists but is unreadable made the scan incomplete. Distinct from
+/// [`EXIT_TESTAUDIT_FINDINGS`] (a real finding) and never [`EXIT_OK`]: an
+/// incomplete scan must fail closed (cannot-determine → RED), never masquerade
+/// as "no skipped tests". Twin doctrine to [`EXIT_AGENT_FAILED`].
+const EXIT_TESTAUDIT_UNDETERMINED: u8 = 8;
 
 #[derive(Parser)]
 #[command(
@@ -1162,7 +1168,21 @@ fn pending(cli: &Cli) -> u8 {
 
 /// Clear the sentinel (C). Idempotent: succeeds whether or not one was present.
 fn run_testaudit(repo_root: &std::path::Path, json: bool) -> Result<u8> {
-    let findings = testaudit::scan_repo(repo_root);
+    let findings = match testaudit::scan_repo(repo_root) {
+        Ok(f) => f,
+        // The scan could not read part of the tree (a dir/file that EXISTS but
+        // is unreadable, or an incomplete listing). That is cannot-determine,
+        // NOT "no skipped tests" — fail closed with a dedicated exit code rather
+        // than pass GREEN on a subtree we never read. The error goes to stderr;
+        // `--json` still emits nothing on stdout (no findings array to trust).
+        Err(e) => {
+            eprintln!("specguard testaudit: cannot determine — scan incomplete: {e:#}");
+            eprintln!(
+                "  refusing to report GREEN on a tree that could not be fully read (fail closed)"
+            );
+            return Ok(EXIT_TESTAUDIT_UNDETERMINED);
+        }
+    };
     if findings.is_empty() {
         if json {
             println!("{{\"findings\":[]}}");

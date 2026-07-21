@@ -13,6 +13,7 @@
 //! | [`TestFindingKind::UnincludedMod`] | A `tests` module file exists on disk but is not referenced by a `mod` declaration in its parent |
 //! | [`TestFindingKind::IntegrationTest`] | A Rust file under a `tests/` directory (integration-test candidates) |
 
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -385,8 +386,14 @@ fn is_self_or_ignored_stem(stem: &str, parent_path: &str) -> bool {
 /// 1. Running `scan_source` on every `.rs` file.
 /// 2. For each directory that contains a `lib.rs`, `main.rs`, or `mod.rs`,
 ///    running `find_unincluded_mods` against the sibling `.rs` files.
-pub fn scan_repo(repo_root: &std::path::Path) -> Vec<TestFinding> {
-    let rs_files = collect_rs_files(repo_root);
+///
+/// Fails closed (`Err`) when the walk is INCOMPLETE — a directory or `.rs` file
+/// that exists but cannot be read. An incomplete scan must NOT masquerade as
+/// "no skipped tests" (empty findings → GREEN); the caller maps the `Err` to a
+/// dedicated undetermined exit rather than exit 0. Twin of
+/// [`crate::decision::list_files`] (CA-specguard-001).
+pub fn scan_repo(repo_root: &std::path::Path) -> Result<Vec<TestFinding>> {
+    let rs_files = collect_rs_files(repo_root)?;
     let mut findings = Vec::new();
 
     // Pass 1: per-file scan (ignore/cfg-gate/integration-test).
@@ -396,19 +403,21 @@ pub fn scan_repo(repo_root: &std::path::Path) -> Vec<TestFinding> {
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
-        if let Ok(src) = std::fs::read_to_string(path) {
-            findings.extend(scan_source(&src, &rel));
-        }
+        // A `.rs` file that was ENUMERATED but is now unreadable is
+        // cannot-determine, not "no findings from this file" → fail closed.
+        let src = std::fs::read_to_string(path)
+            .with_context(|| format!("cannot read source file '{}'", path.display()))?;
+        findings.extend(scan_source(&src, &rel));
     }
 
     // Pass 2: mod-include graph per directory.
-    let mod_graph = collect_mod_graph(repo_root, &rs_files);
+    let mod_graph = collect_mod_graph(repo_root, &rs_files)?;
     for (parent_path, parent_src, candidates) in &mod_graph {
         let refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
         findings.extend(find_unincluded_mods(parent_src, parent_path, &refs));
     }
 
-    findings
+    Ok(findings)
 }
 
 type ModGraphEntry = (String, String, Vec<String>);
@@ -418,7 +427,7 @@ type ModGraphEntry = (String, String, Vec<String>);
 pub fn collect_mod_graph(
     repo_root: &std::path::Path,
     rs_files: &[std::path::PathBuf],
-) -> Vec<ModGraphEntry> {
+) -> Result<Vec<ModGraphEntry>> {
     use std::collections::HashMap;
 
     // Group .rs files by directory.
@@ -441,9 +450,12 @@ pub fn collect_mod_graph(
             }
         });
         let Some(parent_path) = parent else { continue };
-        let Ok(parent_src) = std::fs::read_to_string(&parent_path) else {
-            continue;
-        };
+        // A parent module (lib.rs/main.rs/mod.rs) that EXISTS but is unreadable
+        // means the mod-include graph for this directory cannot be built —
+        // cannot-determine, not "no unincluded mods here" → fail closed rather
+        // than silently drop this directory's UnincludedMod findings.
+        let parent_src = std::fs::read_to_string(&parent_path)
+            .with_context(|| format!("cannot read parent module '{}'", parent_path.display()))?;
         let parent_rel = parent_path
             .strip_prefix(repo_root)
             .unwrap_or(&parent_path)
@@ -466,21 +478,39 @@ pub fn collect_mod_graph(
             result.push((parent_rel, parent_src, candidates));
         }
     }
-    result
+    Ok(result)
 }
 
-/// Recursively collect all `.rs` files under `root`, skipping `target/`.
-fn collect_rs_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+/// Recursively collect all `.rs` files under `root`, skipping `target/` and
+/// hidden dirs. Fails closed on any unreadable (but existing) directory or
+/// listing entry — see [`collect_rs_files_inner`].
+fn collect_rs_files(root: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
     let mut out = Vec::new();
-    collect_rs_files_inner(root, &mut out);
-    out
+    collect_rs_files_inner(root, &mut out)?;
+    Ok(out)
 }
 
-fn collect_rs_files_inner(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+fn collect_rs_files_inner(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        // A MISSING dir legitimately contributes no files (e.g. a TOCTOU race
+        // where a subdir vanished mid-walk). A dir that EXISTS but is unreadable
+        // (PermissionDenied, IO error) is INCOMPLETE input, not "no files" →
+        // fail closed so the audit can't pass GREEN on a subtree it never read.
+        // Twin of decision.rs::list_files (CA-specguard-001); the old
+        // `let Ok(..) else { return }` collapsed every error to "empty here".
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(anyhow::Error::new(err)
+                .context(format!("cannot read directory '{}'", dir.display())));
+        }
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        // A per-entry error means the listing is INCOMPLETE. The old
+        // `entries.flatten()` dropped it, so a dir with one unreadable entry
+        // could silently under-report its `.rs` files. Fail closed instead.
+        let entry =
+            entry.with_context(|| format!("unreadable entry in directory '{}'", dir.display()))?;
         let path = entry.path();
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
@@ -489,11 +519,12 @@ fn collect_rs_files_inner(dir: &std::path::Path, out: &mut Vec<std::path::PathBu
             continue;
         }
         if path.is_dir() {
-            collect_rs_files_inner(&path, out);
+            collect_rs_files_inner(&path, out)?;
         } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
             out.push(path);
         }
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -722,7 +753,7 @@ fn ignored_integration() {}
         fs::write(src_dir.join("lib.rs"), "pub fn foo() {}\n").unwrap();
         fs::write(src_dir.join("test_foo.rs"), "#[test]\nfn it_works() {}\n").unwrap();
 
-        let findings = scan_repo(tmp.path());
+        let findings = scan_repo(tmp.path()).unwrap();
         assert!(
             findings
                 .iter()
@@ -752,7 +783,7 @@ fn ignored_integration() {}
         fs::write(src_dir.join("lib.rs"), "mod helper;\npub fn foo() {}\n").unwrap();
         fs::write(src_dir.join("helper.rs"), "pub fn bar() {}\n").unwrap();
 
-        let findings = scan_repo(tmp.path());
+        let findings = scan_repo(tmp.path()).unwrap();
         let unincluded: Vec<_> = findings
             .iter()
             .filter(|f| f.kind == TestFindingKind::UnincludedMod)
@@ -760,6 +791,57 @@ fn ignored_integration() {}
         assert!(
             unincluded.is_empty(),
             "should be no unincluded mods: {unincluded:?}"
+        );
+    }
+
+    /// A repo root that does not exist is legitimately "no `.rs` files" (the
+    /// NotFound arm), not a cannot-determine — it must return `Ok(empty)`, not
+    /// fail closed. Mirrors decision.rs::list_files_ok_and_empty_when_dir_absent.
+    #[test]
+    fn scan_repo_ok_and_empty_when_root_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("does-not-exist");
+        let findings = scan_repo(&missing).expect("absent root is not cannot-determine");
+        assert!(findings.is_empty(), "absent root: {findings:?}");
+    }
+
+    /// CA-specguard-001 (testaudit twin): a subdirectory that EXISTS but is
+    /// unreadable must fail CLOSED (`Err`), not be silently dropped from the
+    /// walk. If it were dropped, a `#[ignore]`d / cfg-gated / unincluded-`mod`
+    /// test living in that subtree would never be scanned and the audit would
+    /// report GREEN precisely when it could not determine the answer. Unix-only
+    /// (chmod-based unreadability), matching decision.rs's convention.
+    #[cfg(unix)]
+    #[test]
+    fn scan_repo_fails_closed_on_unreadable_subdir() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("lib.rs"), "pub fn foo() {}\n").unwrap();
+        // A subtree the walk can see but not read.
+        let hidden_sub = src_dir.join("experimental");
+        std::fs::create_dir_all(&hidden_sub).unwrap();
+        std::fs::write(
+            hidden_sub.join("skipped.rs"),
+            "#[test]\n#[ignore]\nfn s() {}\n",
+        )
+        .unwrap();
+
+        let mut perms = std::fs::metadata(&hidden_sub).unwrap().permissions();
+        perms.set_mode(0o000); // unreadable/unsearchable
+        std::fs::set_permissions(&hidden_sub, perms).unwrap();
+
+        let got = scan_repo(tmp.path());
+
+        // Restore perms so tempdir cleanup can remove it (before asserting).
+        let mut restore = std::fs::metadata(&hidden_sub).unwrap().permissions();
+        restore.set_mode(0o700);
+        let _ = std::fs::set_permissions(&hidden_sub, restore);
+
+        assert!(
+            got.is_err(),
+            "an unreadable subdir must fail closed, got {got:?}"
         );
     }
 }

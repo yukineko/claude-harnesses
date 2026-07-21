@@ -24,7 +24,12 @@ report と（人間レビューが要るときは）sentinel を書く。判定�
   や `$(` が含まれると `config::validate_agent_command` が拒否する。spawn は shell を介さない直接 `Command::new` のため。
 - **agent 失敗の隠蔽不可** — agent の生 exit code は伝播せず、常に `EXIT_AGENT_FAILED`(4) に写像し実 code は stderr へ
   （`finish` 内）。specguard 自身の exit code（`EXIT_OK`0/`EXIT_USAGE`2/`EXIT_NO_MARKER`3/`EXIT_AGENT_FAILED`4/
-  `EXIT_UNRATIFIED`5/`EXIT_NO_FIX_COMMIT`6/`EXIT_TESTAUDIT_FINDINGS`7）は agent のそれと必ず disjoint。
+  `EXIT_UNRATIFIED`5/`EXIT_NO_FIX_COMMIT`6/`EXIT_TESTAUDIT_FINDINGS`7/`EXIT_TESTAUDIT_UNDETERMINED`8）は agent の
+  それと必ず disjoint。
+- **testaudit の判定不能は fail closed** — `testaudit::scan_repo` は読めない（存在するが unreadable な）ディレクトリ／
+  `.rs` で走査が不完全になると `Err` を返し、`run_testaudit` はそれを `EXIT_TESTAUDIT_UNDETERMINED`(8) に写像する。
+  不完全な走査を「skipped test なし」(GREEN, exit 0) と偽らない＝不明は RED。`decision::list_files`（CA-specguard-001）の
+  NotFound=正当な不在／その他 read error=fail closed という双子の doctrine を testaudit 側にも適用したもの。
 - **map store は specmap.rs に委譲** — `specguard map` の永続化・同期は `specmap::SpecMap`（`load`/`load_or_init`/
   `save`/`sync`/`apply_changes`）が一手に担う。`sync` の唯一の副作用は `git log --name-status baseline..HEAD` の呼び出しで、
   `parse_name_status`/`apply_changes` は純関数。`SpecMap` は `BTreeMap` + sorted vec で決定論的に serialize され、
@@ -79,7 +84,8 @@ report と（人間レビューが要るときは）sentinel を書く。判定�
 - **`accept-prompt -m <reason>`** — prompt テンプレート（メタ正典）を契約チェック後に批准し、fingerprint・canon commit・理由を
   lock に pin（`ratify::write_lock`）。有効なゲートのポリシーのみ pin する。
 - **`testaudit [--json]`** — 実装済みだが実行されていないテスト（`#[ignore]`・cfg 除外・未 `mod` 宣言など）を走査
-  （`testaudit::scan_repo`）。clean で 0、findings で `EXIT_TESTAUDIT_FINDINGS`(7)。
+  （`testaudit::scan_repo`）。clean で 0、findings で `EXIT_TESTAUDIT_FINDINGS`(7)、走査が不完全（判定不能）なら
+  `EXIT_TESTAUDIT_UNDETERMINED`(8) で fail closed。
 - **`ack [--force]`** — 対応済み sentinel をクリア。既定は sentinel 立ち上げ以降の新規コミット
   （`report::sentinel_raised_at`/`has_new_commits`）を要求、無ければ `EXIT_NO_FIX_COMMIT`(6)。`--force` で回避。
 - **`pending`** — SessionStart hook 入口。sentinel が pending なら fix-offer ブロックを表示、無ければ／エラー時は無出力 exit 0。

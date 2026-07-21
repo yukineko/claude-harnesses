@@ -83,7 +83,7 @@ jobs:
     env:
       MIN_KILL_RATE: ${{ github.event.inputs.min_kill_rate || '0.80' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Need history to diff the PR/push against its base to pick the changed
           # pilot(s). A shallow clone cannot resolve the base commit.

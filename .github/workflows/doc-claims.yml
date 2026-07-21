@@ -37,6 +37,10 @@ concurrency:
 
 jobs:
   scan:
+    # Explicit unique name: a required status check is matched by context name,
+    # which defaults to the job id. Three workflows here used the id `scan`, so
+    # without this they are not individually addressable in branch protection.
+    name: doc-claims-scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

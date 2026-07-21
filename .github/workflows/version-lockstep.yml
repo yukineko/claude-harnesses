@@ -23,6 +23,9 @@ concurrency:
 
 jobs:
   check:
+    # Explicit unique name so this is addressable as a required status check
+    # (the context name otherwise defaults to the bare job id `check`).
+    name: version-lockstep-check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

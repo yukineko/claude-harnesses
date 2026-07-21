@@ -8,7 +8,7 @@ runs a stub against the real repository, and nothing here writes to it.
 
     python3 scripts/test_gate_bypass.py
 
-What is under test (four files, one property each)
+What is under test (one property each)
 
   .githooks/pre-commit        on green, certifies the tree it inspected into a
                               PER-WORKTREE sentinel, and clears the bypass
@@ -17,6 +17,8 @@ What is under test (four files, one property each)
                               mismatch or absence appends to a REPO-WIDE ledger
   .githooks/pre-merge-commit  execs pre-commit, because a true merge commit runs
                               pre-merge-commit and NOT pre-commit
+  .githooks/post-merge        execs post-commit for a real merge commit, because
+                              post-commit does NOT run on a merge at all
   .githooks/pre-push          blocks while the ledger is non-empty, and blocks
                               when it cannot run the check at all
   scripts/gate-bypass.py      ledger consumer: 0 clean / 1 outstanding /
@@ -57,7 +59,13 @@ _SCRIPTS_DIR = Path(
     os.environ.get("GATE_SCRIPTS_UNDER_TEST", _REPO / "scripts")
 ).resolve()
 
-HOOKS = ("pre-commit", "post-commit", "pre-merge-commit", "pre-push")
+HOOKS = (
+    "pre-commit",
+    "post-commit",
+    "pre-merge-commit",
+    "post-merge",
+    "pre-push",
+)
 
 SCANNERS = [
     "check-prompt-injection.py",
@@ -641,6 +649,65 @@ class MergeCommits(GateTestCase):
             proc.returncode, 0, "a red gate must stop a merge commit too"
         )
 
+    def test_a_true_merge_consumes_its_certificate(self):
+        """`.githooks/post-merge` exists because post-commit does NOT run on a
+        merge.  Without it pre-merge-commit's certificate is never consumed and
+        survives on disk, where a later `--no-verify` commit of the same tree
+        matches it and goes unrecorded.
+
+        Inverted from KNOWN DEFECT `merge_leaves_a_stale_sentinel_behind`; the
+        inversion is what proves the fix.
+        """
+        h = self.harness()
+        self._merge_setup(h)
+        self.assertFalse(h.sentinel.exists(), "precondition: no certificate yet")
+
+        h.git("merge", "--no-ff", "-m", "merge feat", "feat")
+        self.assertFalse(
+            h.sentinel.exists(),
+            "post-merge must consume the certificate pre-merge-commit wrote",
+        )
+
+        # And so the collapse trick no longer works: reduce the merge to an
+        # ordinary commit with --no-verify and there is nothing to certify it.
+        h.git("reset", "-q", "--soft", "HEAD~1")
+        proc = h.commit("ungated re-commit of the merge tree", "--no-verify")
+        self.assertEqual(proc.returncode, 0)
+        self.assertLedgerHas(h, 1, "the re-commit is a bypass and must be recorded")
+
+    def test_a_fast_forward_merge_is_not_read_as_a_bypass(self):
+        """post-merge also runs for a fast-forward, which creates no commit and
+        therefore no certificate.  An absent sentinel must not be recorded as a
+        bypass there, or every `git pull` would fill the ledger."""
+        h = self.harness()
+        h.git("checkout", "-q", "-b", "feat")
+        h.write("b.txt", "b\n")
+        h.git("add", "-A")
+        h.commit("feature")
+        h.git("checkout", "-q", "main")
+        h.clear_log()
+        self.assertLedgerEmpty(h, "before the merge")
+
+        h.git("merge", "--ff-only", "feat")
+        self.assertLedgerEmpty(h, "a fast-forward creates no commit to certify")
+
+    def test_merge_with_no_verify_is_recorded_and_blocks_the_push(self):
+        """`git merge --no-ff --no-verify` skips pre-merge-commit, so the merge
+        is genuinely ungated — that cannot be prevented.  post-merge survives
+        the flag, so it can still be made impossible to hide.
+
+        Inverted from KNOWN DEFECT `merge_with_no_verify_is_never_recorded`.
+        """
+        h = self.harness()
+        self._merge_setup(h)
+
+        h.git("merge", "--no-ff", "--no-verify", "-m", "ungated merge", "feat")
+        self.assertEqual(h.ran(), [], "precondition: no gate ran")
+        self.assertLedgerHas(h, 1, "the ungated merge must reach the ledger")
+        self.assertNotEqual(
+            h.pre_push().returncode, 0, "and pre-push must refuse to push it"
+        )
+
 
 # ---------------------------------------------------------------------------
 # 8. The sentinel is per-worktree.
@@ -897,87 +964,6 @@ class KnownDefects(GateTestCase):
             "fixed, this assertion must become assertLedgerHas(h, 1).",
         )
         self.assertNotIn("UNGATED COMMIT", proc.stderr)
-
-    def test_DEFECT_merge_leaves_a_stale_sentinel_behind(self):
-        """DEFECT (severity: high, and the supply line for the one above).
-        `git merge` does NOT run post-commit (observed: only pre-merge-commit
-        ran), so nothing ever consumes the certificate pre-merge-commit wrote.
-        Every true merge therefore leaves a live certificate on disk.
-
-        Note what this means for `.githooks/pre-merge-commit`'s stated purpose —
-        "without it, every true merge commit would land ... recorded as a
-        bypass".  That premise is false: post-commit does not run on a merge, so
-        a merge could never have been recorded either way.  The hook is still
-        worth having (it makes merges GATED), but its docstring describes a
-        mechanism that does not exist.
-        """
-        h = self.harness()
-        h.git("checkout", "-q", "-b", "feat")
-        h.write("b.txt", "b\n")
-        h.git("add", "-A")
-        h.commit("feature")
-        h.git("checkout", "-q", "main")
-        h.write("m.txt", "m\n")
-        h.git("add", "-A")
-        h.commit("main change")
-        self.assertFalse(h.sentinel.exists(), "precondition: no certificate yet")
-
-        h.git("merge", "--no-ff", "-m", "merge feat", "feat")
-        self.assertTrue(
-            h.sentinel.exists(),
-            "DEFECT PINNED: a merge leaves an unconsumed certificate. When "
-            "fixed, this must become assertFalse.",
-        )
-        self.assertEqual(
-            h.sentinel.read_text().split()[0],
-            h.git("rev-parse", "HEAD^{tree}").stdout.strip(),
-            "and it certifies exactly the merge's own tree",
-        )
-
-        # Which is immediately usable: collapse the merge into an ordinary
-        # commit with --no-verify and it certifies itself.
-        h.git("reset", "-q", "--soft", "HEAD~1")
-        proc = h.commit("ungated re-commit of the merge tree", "--no-verify")
-        self.assertEqual(proc.returncode, 0)
-        self.assertEqual(
-            h.ledger_lines(), [], "DEFECT PINNED: not recorded, via the stale merge cert"
-        )
-
-    def test_DEFECT_merge_with_no_verify_is_never_recorded(self):
-        """DEFECT (severity: high).  `git merge --no-ff --no-verify` skips
-        pre-merge-commit, and post-commit does not run on a merge at all.  The
-        result is an ungated commit that reaches NO layer of this arrangement:
-        no gate ran, no certificate, no ledger entry, and pre-push therefore
-        does not block it.
-
-        This is the one path where the stated property — "the bypass cannot be
-        prevented, only made impossible to hide" — is simply not delivered.
-        `scripts/deny-no-verify.py` covers it for an agent's Bash call; a human
-        in their own terminal, which is exactly the case layer 2 exists for, is
-        not covered by anything.
-        """
-        h = self.harness()
-        h.git("checkout", "-q", "-b", "feat")
-        h.write("b.txt", "b\n")
-        h.git("add", "-A")
-        h.commit("feature")
-        h.git("checkout", "-q", "main")
-        h.write("m.txt", "m\n")
-        h.git("add", "-A")
-        h.commit("main change")
-        h.clear_log()
-
-        h.git("merge", "--no-ff", "--no-verify", "-m", "ungated merge", "feat")
-        self.assertEqual(h.ran(), [], "precondition: no gate ran")
-        self.assertEqual(
-            h.ledger_lines(),
-            [],
-            "DEFECT PINNED: an ungated merge commit is invisible. When fixed, "
-            "this must become assertLedgerHas(h, 1).",
-        )
-        self.assertEqual(
-            h.pre_push().returncode, 0, "DEFECT PINNED: and it pushes freely"
-        )
 
     def test_DEFECT_a_green_run_clears_content_it_never_inspected(self):
         """DEFECT (severity: high).  The ledger is cleared by a green run over

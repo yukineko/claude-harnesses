@@ -280,10 +280,14 @@ fn status() {
         println!("  (none — the gate will allow every stop; run `donegate init`)");
         return;
     }
-    let changed = git::changed_files(&root);
-    match &changed {
-        Some(f) => println!("changed files: {}", f.len()),
-        None => println!("changed files: (not a git repo — all checks unscoped)"),
+    match git::changed_files(&root) {
+        git::ChangeScan::Files(f) => println!("changed files: {}", f.len()),
+        git::ChangeScan::NotRepo => {
+            println!("changed files: (not a git repo — all checks unscoped)")
+        }
+        git::ChangeScan::Failed => {
+            println!("changed files: (git state undetermined — all checks unscoped, fail-closed)")
+        }
     }
     for c in &cfg.checks {
         let scope = match &c.when_changed {

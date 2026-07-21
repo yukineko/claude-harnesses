@@ -5,47 +5,80 @@ use harness_core::git_probe::{probe_repo, RepoProbe};
 use std::path::Path;
 use std::process::Command;
 
-/// Changed paths relative to the repo root: tracked changes vs HEAD plus
-/// untracked-but-not-ignored files. `None` means "no usable changed-file set" —
-/// out of scope, or the repository state could not be determined. Callers then
-/// treat every check as applicable, which is the restrictive reading, so unlike
-/// the sibling gates both cases can share this branch. Repository detection
-/// itself goes through `harness_core::git_probe`.
-pub fn changed_files(root: &Path) -> Option<Vec<String>> {
-    // `None` here is donegate's RESTRICTIVE branch (the caller then treats every
-    // check as applicable), so both non-`Repo` answers collapse into it safely —
-    // unlike the sibling gates, where `NotRepo` means allow. The shared probe is
-    // still used so this copy cannot drift back into its own `bool` version.
-    if probe_repo(root) != RepoProbe::Repo {
-        return None;
-    }
-    let mut out = Vec::new();
-    // tracked, unstaged changes
-    collect(root, &["diff", "--name-only"], &mut out);
-    // staged changes — also the only signal in a repo with no commits yet, where
-    // `diff HEAD` errors out (no HEAD to diff against).
-    collect(root, &["diff", "--cached", "--name-only"], &mut out);
-    // untracked (respecting .gitignore)
-    collect(
-        root,
-        &["ls-files", "--others", "--exclude-standard"],
-        &mut out,
-    );
-    out.sort();
-    out.dedup();
-    Some(out)
+/// Tri-state result of scanning the working tree, mirroring the sibling gates
+/// (`reviewgate`/`tdd`/`propguard`) so donegate can no longer drift into its own
+/// shape. `NotRepo` = confirmed out of scope; `Failed` = the repo state could not
+/// be determined (git could not be run, or a sub-command errored); `Files` = a
+/// successful scan (possibly empty for a clean tree).
+///
+/// donegate's CONSUMER is restrictive: it maps BOTH `NotRepo` and `Failed` to
+/// "every check applies" (unlike the siblings, where `NotRepo` means allow). The
+/// point of the tri-state here is that `Failed` must NOT collapse into a
+/// successful empty scan: a git sub-command that errored used to leave an empty
+/// file set, which read as "nothing changed" and silently skipped every
+/// `when_changed` check — passing the Stop gate on an undetermined tree. `Failed`
+/// now keeps every check applicable instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangeScan {
+    NotRepo,
+    Failed,
+    Files(Vec<String>),
 }
 
-fn collect(root: &Path, args: &[&str], out: &mut Vec<String>) {
-    if let Ok(o) = Command::new("git").current_dir(root).args(args).output() {
-        if o.status.success() {
+/// Changed paths relative to the repo root: tracked changes vs HEAD, staged
+/// changes, and untracked-but-not-ignored files. Returns `NotRepo` when there is
+/// no git repo, `Failed` when the repo state is undetermined or any sub-command
+/// errored (non-zero exit / spawn failure), and `Files` on a successful scan.
+/// Repository detection goes through `harness_core::git_probe`.
+pub fn changed_files(root: &Path) -> ChangeScan {
+    match probe_repo(root) {
+        RepoProbe::Repo => {}
+        // Genuinely out of scope. donegate maps this to the restrictive branch in
+        // its consumer, but the scan result itself must stay honest (`NotRepo`, not
+        // an empty `Files`) so it mirrors the sibling gates' shared shape.
+        RepoProbe::NotRepo => return ChangeScan::NotRepo,
+        // git could not be run / refused to answer while a `.git` exists: unknown,
+        // not "no scope" → fail closed.
+        RepoProbe::Undetermined => return ChangeScan::Failed,
+    }
+    let mut out = Vec::new();
+    // If ANY sub-command errors, the changed set is undetermined → fail closed.
+    // A clean repo's commands all exit 0 with empty stdout → Files(vec![]).
+    let ok = collect(root, &["diff", "--name-only"], &mut out)
+        // staged changes — also the only signal in a repo with no commits yet,
+        // where `diff HEAD` errors out (no HEAD to diff against).
+        && collect(root, &["diff", "--cached", "--name-only"], &mut out)
+        && collect(
+            root,
+            &["ls-files", "--others", "--exclude-standard"],
+            &mut out,
+        );
+    if !ok {
+        return ChangeScan::Failed;
+    }
+    out.sort();
+    out.dedup();
+    ChangeScan::Files(out)
+}
+
+/// Run one `git` sub-command, appending its trimmed non-empty stdout lines to
+/// `out`. Returns `true` on success (exit 0), `false` on a spawn error or a
+/// non-zero exit — the caller maps `false` to `ChangeScan::Failed`. A successful
+/// command with EMPTY stdout still returns `true` (clean ≠ failed).
+fn collect(root: &Path, args: &[&str], out: &mut Vec<String>) -> bool {
+    match Command::new("git").current_dir(root).args(args).output() {
+        Ok(o) if o.status.success() => {
             for line in String::from_utf8_lossy(&o.stdout).lines() {
                 let line = line.trim();
                 if !line.is_empty() {
                     out.push(line.to_string());
                 }
             }
+            true
         }
+        // Spawn error OR non-zero exit: the sub-command did not complete
+        // successfully, so its (empty) output must not be trusted as "clean".
+        _ => false,
     }
 }
 
@@ -53,12 +86,13 @@ fn collect(root: &Path, args: &[&str], out: &mut Vec<String>) {
 ///
 /// donegate's `is_git_repo` is the same "git could not be run ⇒ not a repo"
 /// collapse as tdd/reviewgate/propguard, but its CONSUMER is restrictive: a
-/// `None` from `changed_files` makes every check applicable (`gate::applies`
-/// returns true for `&None`). So donegate is not fail-open at the consumer and
-/// these tests deliberately assert NO block — only that the shared probe
-/// reports `Undetermined` here, and that donegate keeps resolving that to the
-/// restrictive `None` rather than to a `Some(vec![])` "nothing changed" that
-/// would silently narrow every scoped check out of existence.
+/// `ChangeScan::NotRepo`/`Failed` from `changed_files` is mapped to `None` in
+/// `gate::evaluate`, which makes every check applicable (`gate::applies` returns
+/// true for `&None`). So donegate is not fail-open at the consumer and these
+/// tests deliberately assert NO block — only that the shared probe reports
+/// `Undetermined` here, and that donegate keeps resolving that to `Failed`
+/// (→ restrictive) rather than to a `Files(vec![])` "nothing changed" that would
+/// silently narrow every scoped check out of existence.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,11 +189,12 @@ mod tests {
              here is the shared fail-open (harmless in donegate, an ALLOW in tdd/reviewgate/\
              propguard)"
         );
-        assert!(
-            changed.is_none(),
-            "donegate must resolve an undetermined probe to `None` — the RESTRICTIVE branch, \
-             where every check stays applicable. A `Some(vec![])` here would read as 'nothing \
-             changed' and silently skip every `when_changed` check"
+        assert_eq!(
+            changed,
+            ChangeScan::Failed,
+            "donegate must resolve an undetermined probe to `Failed` — its consumer maps that to \
+             the RESTRICTIVE branch where every check stays applicable. A `Files(vec![])` here \
+             would read as 'nothing changed' and silently skip every `when_changed` check"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -207,5 +242,102 @@ mod tests {
              gates that consume the same probe"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn git_available() -> bool {
+        Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// A directory that is not a git repo → `NotRepo` (donegate maps that to the
+    /// restrictive branch, but the scan result itself must be honest, not Files).
+    #[test]
+    fn non_repo_dir_is_notrepo() {
+        let root = scratch_dir("notrepo");
+        if has_dot_git_ancestor(&root) {
+            eprintln!("SKIPPED non_repo_dir_is_notrepo: scratch has a .git ancestor here");
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+        assert_eq!(changed_files(&root), ChangeScan::NotRepo);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A clean repo is a SUCCESSFUL empty scan → `Files(vec![])`, never `Failed`.
+    /// Pins that a clean tree (git diff exits 0 with empty stdout) does NOT start
+    /// forcing every check under the fail-closed change (no over-block).
+    #[test]
+    fn clean_repo_is_empty_files_not_failed() {
+        if !git_available() {
+            eprintln!("skipping clean_repo_is_empty_files_not_failed: git not available");
+            return;
+        }
+        let root = scratch_dir("clean");
+        let root = root.as_path();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "t@t.com"][..],
+            &["config", "user.name", "t"][..],
+        ] {
+            assert!(Command::new("git")
+                .current_dir(root)
+                .args(args)
+                .status()
+                .expect("git")
+                .success());
+        }
+        std::fs::write(root.join("a.txt"), "x\n").unwrap();
+        for args in [&["add", "a.txt"][..], &["commit", "-qm", "init"][..]] {
+            assert!(Command::new("git")
+                .current_dir(root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        assert_eq!(
+            changed_files(root),
+            ChangeScan::Files(Vec::new()),
+            "a clean repo must be a successful empty scan, not Failed"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// RED→GREEN for 1ddd37e9: `collect` must distinguish an errored sub-command
+    /// from an empty-but-successful one. A bogus git flag exits non-zero → `false`
+    /// → `changed_files` returns `Failed` (the old code swallowed it into an empty
+    /// `Some(vec![])`, silently skipping every `when_changed` check). A valid
+    /// command with no output → `true` (clean ≠ failed).
+    #[test]
+    fn collect_reports_error_vs_empty_success() {
+        if !git_available() {
+            eprintln!("skipping collect_reports_error_vs_empty_success: git not available");
+            return;
+        }
+        let root = scratch_dir("collect");
+        let root = root.as_path();
+        assert!(Command::new("git")
+            .current_dir(root)
+            .args(["init", "-q"])
+            .status()
+            .expect("git")
+            .success());
+
+        let mut out = Vec::new();
+        // Valid command, no changes → success (true), even with empty output.
+        assert!(
+            collect(root, &["diff", "--name-only"], &mut out),
+            "an empty-but-successful git command must report true (not Failed)"
+        );
+        assert!(out.is_empty());
+        // Bogus flag → non-zero exit → false, so the scan fails closed to Failed.
+        assert!(
+            !collect(root, &["diff", "--no-such-flag-xyzzy"], &mut out),
+            "a non-zero git exit must report false so the scan fails closed"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

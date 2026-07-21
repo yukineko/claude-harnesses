@@ -68,7 +68,15 @@ fn applies(check: &Check, changed: &Option<Vec<String>>) -> bool {
 }
 
 pub fn evaluate(cfg: &Config, root: &Path) -> Verdict {
-    let changed = crate::git::changed_files(root);
+    // donegate is RESTRICTIVE: both "not a repo" and "could not determine" map to
+    // "no usable scope" → every check applies. Only a SUCCESSFUL scan narrows the
+    // check set. Crucially `Failed` (a git sub-command errored) must land here, not
+    // in a `Some(vec![])` "nothing changed" that would silently skip every
+    // `when_changed` check and pass the Stop gate on an undetermined tree.
+    let changed: Option<Vec<String>> = match crate::git::changed_files(root) {
+        crate::git::ChangeScan::Files(v) => Some(v),
+        crate::git::ChangeScan::NotRepo | crate::git::ChangeScan::Failed => None,
+    };
     let git_unscoped = changed.is_none();
     let tmp_dir = cfg.state_dir.join("tmp");
 

@@ -2,6 +2,7 @@
 //! evidence) and the *added* lines with their file (for inline-test detection
 //! and counting newly added implementation lines). Pure subprocess calls.
 
+use harness_core::git_probe::{probe_repo, RepoProbe};
 use std::path::Path;
 use std::process::Command;
 
@@ -16,7 +17,10 @@ pub struct AddedLine {
 /// scope" from "a git command errored", so the gate can fail *closed* on the
 /// latter instead of collapsing both into an empty "nothing changed → allow".
 ///
-/// * `NotRepo`  — not a git repo → the gate has no scope → allow (unchanged).
+/// * `NotRepo`  — CONFIRMED out of scope (git said so, or git could not answer
+///   and no `.git` exists above the path) → the gate has no scope → allow.
+///   An unreachable git over a real repo is `Failed`, not `NotRepo`; see
+///   `harness_core::git_probe`.
 /// * `Failed`   — in a real repo, but a `git` command errored (non-zero exit /
 ///   spawn failure) → the changed set is UNDETERMINED → the gate must fail
 ///   closed (block), never treat undetermined as clean.
@@ -40,15 +44,6 @@ pub enum AddedScan {
     NotRepo,
     Failed,
     Lines(Vec<AddedLine>),
-}
-
-fn is_git_repo(root: &Path) -> bool {
-    Command::new("git")
-        .current_dir(root)
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 fn run(root: &Path, args: &[&str]) -> Option<String> {
@@ -80,8 +75,14 @@ fn run(root: &Path, args: &[&str]) -> Option<String> {
 /// field ahead of the (new) path in the record stream; we keep only the new
 /// path, matching what `git diff --name-only` reports for a rename.
 pub fn changed_files(root: &Path) -> ChangeScan {
-    if !is_git_repo(root) {
-        return ChangeScan::NotRepo;
+    match probe_repo(root) {
+        RepoProbe::Repo => {}
+        // Genuinely out of scope: git said so, or git could not answer and no
+        // `.git` exists anywhere above to contradict it.
+        RepoProbe::NotRepo => return ChangeScan::NotRepo,
+        // git could not be run / refused to answer while a `.git` exists.
+        // Undetermined is not "no scope" — resolve to the restricted side.
+        RepoProbe::Undetermined => return ChangeScan::Failed,
     }
     // A failed `git status` (non-zero exit / spawn error) inside a real repo is
     // an UNDETERMINED changeset, not an empty one — fail closed. A clean repo
@@ -122,8 +123,14 @@ pub fn changed_files(root: &Path) -> ChangeScan {
 /// `Lines(v)` (the possibly-empty added-line set). A failed git *command* is
 /// `Failed`; an individual untracked-file *read* error is best-effort (skipped).
 pub fn added_lines(root: &Path) -> AddedScan {
-    if !is_git_repo(root) {
-        return AddedScan::NotRepo;
+    match probe_repo(root) {
+        RepoProbe::Repo => {}
+        // Genuinely out of scope: git said so, or git could not answer and no
+        // `.git` exists anywhere above to contradict it.
+        RepoProbe::NotRepo => return AddedScan::NotRepo,
+        // git could not be run / refused to answer while a `.git` exists.
+        // Undetermined is not "no scope" — resolve to the restricted side.
+        RepoProbe::Undetermined => return AddedScan::Failed,
     }
     let mut out = Vec::new();
     for args in [&["diff", "-U0"][..], &["diff", "--cached", "-U0"][..]] {
@@ -196,7 +203,7 @@ fn strip_diff_prefix(path: &str) -> String {
 /// call. Tests assert the batched path yields an identical set.
 #[cfg(test)]
 fn changed_files_legacy(root: &Path) -> Option<Vec<String>> {
-    if !is_git_repo(root) {
+    if probe_repo(root) != RepoProbe::Repo {
         return None;
     }
     let mut out = Vec::new();

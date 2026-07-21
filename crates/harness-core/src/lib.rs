@@ -29,6 +29,7 @@ pub mod daily;
 pub mod discovery;
 pub mod estimate;
 pub mod gate;
+pub mod git_probe;
 pub mod hash;
 pub mod hook;
 pub mod hook_latency;

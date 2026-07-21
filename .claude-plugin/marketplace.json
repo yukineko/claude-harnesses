@@ -306,7 +306,7 @@
     {
       "name": "donegate",
       "description": "Completion-verification gate for Claude Code: on Stop, run your acceptance commands as subprocesses and block the stop until every required check is green, feeding failures back for an auto-fix loop. Subscription-native (one hook + bundled Rust binary, no API key). v0.1.8: added #![deny(clippy::panic)] at crate root.",
-      "version": "0.1.9",
+      "version": "0.1.10",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -532,7 +532,7 @@
     {
       "name": "reviewgate",
       "description": "Code-review gate for Claude Code: on Stop, review the diff before the agent can declare done. In inject mode it blocks the stop and injects a review rubric so the running agent self-reviews (no API key); in subprocess mode it runs an independent reviewer and surfaces only its findings. Subscription-native, bundled Rust binary. v0.1.10: added #![deny(clippy::panic)] at crate root (existing test-module panic!() calls allowed locally).",
-      "version": "0.1.12",
+      "version": "0.1.13",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -703,7 +703,7 @@
     {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: a Stop hook that blocks the turn when implementation code lands without an accompanying test, plus a /tdd skill and red/green/verify subcommands that make test-first (RED before GREEN) a verifiable artifact. Subscription-native (one hook + skill + bundled Rust binary, no API key).",
-      "version": "0.1.16",
+      "version": "0.1.17",
       "category": "quality",
       "keywords": [
         "tdd",
@@ -957,7 +957,7 @@
     {
       "name": "propguard",
       "description": "Property gate for Claude Code: on Stop, derive 3–5 semantic properties (invariants) from a task's done_criteria and check the generated code against them before the agent can declare done. In inject mode it blocks and injects a property checklist for the running agent to self-verify (no API key); in subprocess mode it runs an independent checker and counts per-property PASS/FAIL, blocking when fewer than a threshold hold. Goes beyond 'concrete tests pass'. v0.1.16: merged two independently-developed Continuous-Audit fix lines that landed on the same v0.1.14 base — stopped correlation-store pollution (CA-propguard-03/04), and documented the checker subprocess timeout (checker_timeout_secs, default 300s, process-tree kill on timeout) with config-propagation tests. v0.1.13: fixed 3 subprocess-hang gaps (CA-propguard-004/005/006) — checker timeout now kills the whole shell-spawned process tree via a Unix process group, stdout reads are bounded so a lingering process can't hang them, and all git subprocess calls go through a timeout-bounded choke point with graceful fallback. Subscription-native, bundled Rust binary.",
-      "version": "0.1.21",
+      "version": "0.1.22",
       "category": "quality",
       "keywords": [
         "hooks",

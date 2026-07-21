@@ -460,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "chrono",
@@ -900,7 +900,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1052,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1297,7 +1297,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "anyhow",
  "chrono",

@@ -1,11 +1,15 @@
 //! git helpers: which files changed, and the actual diff text for them. Pure
 //! subprocess calls to `git`. `changed_files` returns a [`ChangeScan`]:
-//! `NotRepo` means "not a git repo / git unavailable" (the caller then has no
+//! `NotRepo` means "confirmed out of scope" — git said so, or git could not
+//! answer AND no `.git` exists anywhere above the path to contradict it. It
+//! does NOT mean "git unavailable": an unreachable git over a real repo is
+//! `Failed`, not `NotRepo`, via `harness_core::git_probe`. (The caller then has no
 //! generated code to check and allows the stop), `Failed` means a git command
 //! errored inside a real repo (the changeset is UNDETERMINED — the gate fails
 //! closed / blocks rather than treat it as clean), and `Files(v)` is the
 //! (possibly-empty) changed set.
 
+use harness_core::git_probe::{probe_repo, RepoProbe};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -116,8 +120,14 @@ pub enum ChangeScan {
 /// non-zero exit / timeout) inside a real repo, or `Files(v)` on success
 /// (possibly empty).
 pub fn changed_files(root: &Path) -> ChangeScan {
-    if !is_git_repo(root) {
-        return ChangeScan::NotRepo;
+    match probe_repo(root) {
+        RepoProbe::Repo => {}
+        // Genuinely out of scope: git said so, or git could not answer and no
+        // `.git` exists anywhere above to contradict it.
+        RepoProbe::NotRepo => return ChangeScan::NotRepo,
+        // git could not be run / refused to answer while a `.git` exists.
+        // Undetermined is not "no scope" — resolve to the restricted side.
+        RepoProbe::Undetermined => return ChangeScan::Failed,
     }
     let mut out = Vec::new();
     // If ANY sub-command errors, the changed set is undetermined → fail closed.
@@ -135,10 +145,6 @@ pub fn changed_files(root: &Path) -> ChangeScan {
     out.sort();
     out.dedup();
     ChangeScan::Files(out)
-}
-
-fn is_git_repo(root: &Path) -> bool {
-    run_git(root, &["rev-parse", "--is-inside-work-tree"]).is_some()
 }
 
 /// Run one `git` sub-command, appending its trimmed non-empty stdout lines to

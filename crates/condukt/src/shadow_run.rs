@@ -139,9 +139,17 @@ mod tests {
             .expect("git should run")
     }
 
+    /// Initialise a bare-minimum git repo under a process-private `TempDir`.
+    /// The repo lives in a `repo` subdirectory (not at `tmp`'s root) so that
+    /// callers can carve out a sibling directory under the same `TempDir` for
+    /// a worktree base — keeping it both outside the repo (required by
+    /// `worktree::create`'s anti-nesting guard) and private to this process
+    /// (unlike `tmp.path().parent()`, which is the shared system temp dir and
+    /// collides across concurrently-running test processes).
     fn init_repo() -> (TempDir, PathBuf) {
         let tmp = TempDir::new().expect("tempdir");
-        let repo = tmp.path().to_path_buf();
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
         git(&repo, &["init", "-b", "main"]);
         git(&repo, &["config", "user.email", "test@example.com"]);
         git(&repo, &["config", "user.name", "Test"]);
@@ -160,8 +168,12 @@ mod tests {
     /// outcomes of that soft dependency).
     #[test]
     fn finish_discards_shadow_worktree_and_never_merges_it() {
-        let (_tmp, repo) = init_repo();
-        let worktree_base = repo.parent().unwrap().join("shadow-worktrees");
+        let (tmp, repo) = init_repo();
+        // A sibling of `repo` under the same process-private `TempDir`, not
+        // `repo.parent()` (the shared system temp dir): that would collide
+        // with every other concurrently-running instance of this test on the
+        // same fixed worktree_base/branch/topic combination.
+        let worktree_base = tmp.path().join("shadow-worktrees");
         let branch = "shadow/t1-opus";
         let path = worktree::create(&repo, &worktree_base, "t1-shadow", branch)
             .expect("worktree create should succeed");

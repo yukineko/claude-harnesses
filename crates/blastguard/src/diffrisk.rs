@@ -5,6 +5,7 @@
 //! than a parallel path. Pure, deterministic, no I/O, no LLM.
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
+use harness_core::verdict::{Determination, Reason};
 
 use crate::classify::{Risk, RiskAssessment};
 
@@ -73,22 +74,55 @@ impl SensitiveConfig {
         SensitiveConfig { globs }
     }
 
-    fn build(&self) -> GlobSet {
+    /// Compile the configured globs into a [`GlobSet`], keeping "could not
+    /// compile" as its own answer.
+    ///
+    /// The glob list is **caller-supplied external input**
+    /// ([`SensitiveConfig::with_extra_globs`] / [`SensitiveConfig::from_globs`]
+    /// take it from a project config), so an unparseable pattern is a real,
+    /// reachable case — a typo, not a theoretical one. This used to `if let Ok`
+    /// past a bad `Glob::new` and `unwrap_or_else(|_| GlobSet::empty())` a bad
+    /// `build()`, which made "we could not compile your sensitive-path list"
+    /// byte-for-byte identical to "none of these paths is sensitive": the
+    /// permissive answer. That is the fail-open this repo's gate invariant
+    /// forbids (CLAUDE.md: 判定不能は必ず制限側に解決する), so **no error is
+    /// swallowed here**: either every pattern compiled, or the result is
+    /// [`Determination::Undetermined`] naming the offending pattern.
+    fn build(&self) -> Determination<GlobSet> {
         let mut b = GlobSetBuilder::new();
         for pat in &self.globs {
-            if let Ok(g) = Glob::new(pat) {
-                b.add(g);
+            match Glob::new(pat) {
+                Ok(g) => {
+                    b.add(g);
+                }
+                Err(e) => {
+                    return Determination::Undetermined(Reason::new(format!(
+                        "invalid sensitive glob `{pat}`: {e}"
+                    )));
+                }
             }
         }
-        b.build().unwrap_or_else(|_| GlobSet::empty())
+        match b.build() {
+            Ok(set) => Determination::Known(set),
+            Err(e) => Determination::Undetermined(Reason::new(format!(
+                "could not build sensitive glob set: {e}"
+            ))),
+        }
     }
 
-    /// True when any of `paths` matches a sensitive-path glob.
-    pub fn any_sensitive(&self, paths: &[String]) -> bool {
-        let set = self.build();
-        paths.iter().any(|p| {
-            let norm = p.trim().replace('\\', "/");
-            !norm.is_empty() && set.is_match(&norm)
+    /// Whether any of `paths` matches a sensitive-path glob.
+    ///
+    /// `Known(true)`/`Known(false)` mean the glob set compiled and the paths
+    /// were actually tested. `Undetermined` means the configured glob set could
+    /// not be compiled at all, so **nothing was tested** — callers must resolve
+    /// that to the restricted side (treat as sensitive / escalate), never to
+    /// `false`. See [`SensitiveConfig::build`].
+    pub fn any_sensitive(&self, paths: &[String]) -> Determination<bool> {
+        self.build().map(|set| {
+            paths.iter().any(|p| {
+                let norm = p.trim().replace('\\', "/");
+                !norm.is_empty() && set.is_match(&norm)
+            })
         })
     }
 }
@@ -190,24 +224,47 @@ pub fn changes_public_symbol(diff_text: &str) -> bool {
 /// `both_signals_compound_to_high`, `pub_crate_*`) which pin this behavior
 /// with real diff text. Wiring an actual diff into the two schedule-time
 /// call sites is a separate, condukt-side change and out of scope here.
+///
+/// ## Why this returns a [`Determination`] rather than resolving internally
+///
+/// The sensitive-path signal can be *undetermined* (an unparseable configured
+/// glob — see [`SensitiveConfig::build`]). Two designs resolve that safely:
+/// fold it into a maximal `RiskAssessment` here, or propagate it. This function
+/// **propagates** it, deliberately:
+///
+/// * A `RiskAssessment` has no room for "why" — collapsing here would hand
+///   downstream a High tier with no way to tell a *real* sensitive-path hit
+///   from a *misconfigured* glob list. One of the consumers
+///   (`condukt::review_brief`) renders risk drivers as prose for a human, and
+///   must be able to say "conservatively treated as sensitive because the glob
+///   list did not compile" instead of silently claiming the change touches
+///   auth code.
+/// * Propagating makes the restricted resolution *explicit and greppable* at
+///   each call site, and `Determination`'s single extractor (`require`) means
+///   no call site can quietly substitute a permissive default.
+///
+/// What must never happen — under either design — is `Undetermined` becoming
+/// indistinguishable from "not sensitive". `Known(assessment)` therefore means
+/// the sensitive-path check actually ran.
 pub fn classify_diff(
     paths: &[String],
     diff_text: &str,
     config: &SensitiveConfig,
-) -> RiskAssessment {
-    let sensitive = config.any_sensitive(paths);
+) -> Determination<RiskAssessment> {
     let public_api = changes_public_symbol(diff_text);
 
-    let risk = match (sensitive, public_api) {
-        (true, true) => Risk::High,
-        (true, false) | (false, true) => Risk::Medium,
-        (false, false) => Risk::Low,
-    };
+    config.any_sensitive(paths).map(|sensitive| {
+        let risk = match (sensitive, public_api) {
+            (true, true) => Risk::High,
+            (true, false) | (false, true) => Risk::Medium,
+            (false, false) => Risk::Low,
+        };
 
-    RiskAssessment {
-        risk,
-        reversible: true,
-    }
+        RiskAssessment {
+            risk,
+            reversible: true,
+        }
+    })
 }
 
 /// Caller-count threshold at/above which the blast-radius signal is graded
@@ -248,12 +305,19 @@ pub const HIGH_CALLER_THRESHOLD: usize = 5;
 /// `reversible` to `false` (which would wrongly force-gate a fully-undoable
 /// change). Irreversibility still flows only from the base assessment / command
 /// classification.
+///
+/// Returns a [`Determination`] for the same reason [`classify_diff`] does: the
+/// base assessment it builds on can be undetermined (unparseable sensitive-path
+/// glob), and an undetermined base must stay distinguishable from a Low one.
+/// The caller-blast-radius signal itself is always determinable (it is a pure
+/// count over an already-enumerated map), so it never introduces an
+/// `Undetermined` of its own.
 pub fn classify_diff_with_callers(
     paths: &[String],
     diff_text: &str,
     callers: &std::collections::BTreeMap<String, Vec<crate::callgraph::CallSite>>,
     config: &SensitiveConfig,
-) -> RiskAssessment {
+) -> Determination<RiskAssessment> {
     let base = classify_diff(paths, diff_text, config);
 
     // Total enumerated caller sites across every symbol this diff changed.
@@ -279,37 +343,120 @@ pub fn classify_diff_with_callers(
         reversible: true,
     };
 
-    base.merge(signal)
+    base.map(|b| b.merge(signal))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Unwrap a determination that the test asserts must be a real observation.
+    /// Panics (fails the test) on `Undetermined` — so a regression that turns a
+    /// working glob set into an undetermined one is a loud failure, not a
+    /// silently different value.
+    #[track_caller]
+    fn known<T>(d: Determination<T>) -> T {
+        d.require()
+            .expect("this test's config must classify to a Known value")
+    }
+
     #[test]
     fn sensitive_path_defaults_match_auth_payment_pii() {
         let cfg = SensitiveConfig::default();
-        assert!(cfg.any_sensitive(&["src/auth/login.rs".to_string()]));
-        assert!(cfg.any_sensitive(&["crates/api/src/payment_gateway.rs".to_string()]));
-        assert!(cfg.any_sensitive(&["services/billing/invoice.py".to_string()]));
-        assert!(cfg.any_sensitive(&["src/pii/redact.rs".to_string()]));
-        assert!(cfg.any_sensitive(&["src/checkout/cart.rs".to_string()]));
-        assert!(!cfg.any_sensitive(&["src/parser.rs".to_string(), "README.md".to_string()]));
+        assert!(known(cfg.any_sensitive(&["src/auth/login.rs".to_string()])));
+        assert!(known(cfg.any_sensitive(&[
+            "crates/api/src/payment_gateway.rs".to_string()
+        ])));
+        assert!(known(
+            cfg.any_sensitive(&["services/billing/invoice.py".to_string()])
+        ));
+        assert!(known(cfg.any_sensitive(&["src/pii/redact.rs".to_string()])));
+        assert!(known(
+            cfg.any_sensitive(&["src/checkout/cart.rs".to_string()])
+        ));
+        assert!(!known(cfg.any_sensitive(&[
+            "src/parser.rs".to_string(),
+            "README.md".to_string()
+        ])));
     }
 
     #[test]
     fn extra_globs_extend_defaults() {
         let cfg = SensitiveConfig::with_extra_globs(&["**/secrets_vault/**".to_string()]);
-        assert!(cfg.any_sensitive(&["infra/secrets_vault/keys.rs".to_string()]));
+        assert!(known(
+            cfg.any_sensitive(&["infra/secrets_vault/keys.rs".to_string()])
+        ));
         // Defaults still apply.
-        assert!(cfg.any_sensitive(&["src/auth/token.rs".to_string()]));
+        assert!(known(cfg.any_sensitive(&["src/auth/token.rs".to_string()])));
     }
 
     #[test]
     fn from_globs_uses_only_caller_list() {
         let cfg = SensitiveConfig::from_globs(vec!["**/custom/**".to_string()]);
-        assert!(cfg.any_sensitive(&["a/custom/b.rs".to_string()]));
-        assert!(!cfg.any_sensitive(&["src/auth/login.rs".to_string()]));
+        assert!(known(cfg.any_sensitive(&["a/custom/b.rs".to_string()])));
+        assert!(!known(
+            cfg.any_sensitive(&["src/auth/login.rs".to_string()])
+        ));
+    }
+
+    #[test]
+    fn invalid_glob_must_not_be_indistinguishable_from_not_sensitive() {
+        // RED (pre-fix): `build()` swallowed `Glob::new` errors and fell back to
+        // `GlobSet::empty()`, so a caller-supplied typo'd glob turned every path
+        // into "not sensitive" — "could not determine" collapsed into "clean".
+        let cfg = SensitiveConfig::from_globs(vec!["[".to_string()]);
+        let out = cfg.any_sensitive(&["src/auth/login.rs".to_string()]);
+        assert!(
+            !matches!(out, Determination::Known(false)),
+            "an unparseable sensitive glob must NOT answer Known(false) — that is \
+             indistinguishable from 'this path is safe'; got {out:?}"
+        );
+        let why = match &out {
+            Determination::Undetermined(why) => why.as_str(),
+            _ => "",
+        };
+        assert!(
+            why.contains('['),
+            "expected an Undetermined naming the offending pattern, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn invalid_glob_anywhere_in_the_list_undetermines_the_whole_set() {
+        // A partially-compilable list must not be used: dropping the bad pattern
+        // and matching on the rest would report a confident `false` for paths the
+        // dropped pattern would have caught.
+        let cfg = SensitiveConfig::with_extra_globs(&["**/{unclosed".to_string()]);
+        assert!(matches!(
+            cfg.any_sensitive(&["src/parser.rs".to_string()]),
+            Determination::Undetermined(_)
+        ));
+        // ... and it propagates through both diff classifiers and classify_change.
+        assert!(matches!(
+            classify_diff(&["src/parser.rs".to_string()], "", &cfg),
+            Determination::Undetermined(_)
+        ));
+        let empty: std::collections::BTreeMap<String, Vec<crate::callgraph::CallSite>> =
+            std::collections::BTreeMap::new();
+        assert!(matches!(
+            classify_diff_with_callers(&["src/parser.rs".to_string()], "", &empty, &cfg),
+            Determination::Undetermined(_)
+        ));
+    }
+
+    #[test]
+    fn valid_globs_still_answer_known_both_ways() {
+        // Invariance guard: the Determination wrapper must not change WHAT a
+        // well-formed config decides — only make "could not decide" expressible.
+        let cfg = SensitiveConfig::default();
+        assert_eq!(
+            cfg.any_sensitive(&["src/auth/login.rs".to_string()]),
+            Determination::Known(true)
+        );
+        assert_eq!(
+            cfg.any_sensitive(&["src/parser.rs".to_string()]),
+            Determination::Known(false)
+        );
     }
 
     #[test]
@@ -341,11 +488,11 @@ mod tests {
     #[test]
     fn neither_signal_is_low_baseline() {
         let cfg = SensitiveConfig::default();
-        let a = classify_diff(
+        let a = known(classify_diff(
             &["src/parser.rs".to_string()],
             "-fn helper() {}\n+fn helper2() {}\n",
             &cfg,
-        );
+        ));
         assert_eq!(a.risk, Risk::Low);
         assert!(a.reversible);
         assert!(!a.requires_gate());
@@ -354,7 +501,7 @@ mod tests {
     #[test]
     fn sensitive_path_alone_raises_to_medium() {
         let cfg = SensitiveConfig::default();
-        let a = classify_diff(&["src/auth/login.rs".to_string()], "", &cfg);
+        let a = known(classify_diff(&["src/auth/login.rs".to_string()], "", &cfg));
         assert_eq!(a.risk, Risk::Medium);
         assert!(a.reversible);
     }
@@ -362,7 +509,11 @@ mod tests {
     #[test]
     fn public_symbol_alone_raises_to_medium() {
         let cfg = SensitiveConfig::default();
-        let a = classify_diff(&["src/lib.rs".to_string()], "+pub fn new_api() {}", &cfg);
+        let a = known(classify_diff(
+            &["src/lib.rs".to_string()],
+            "+pub fn new_api() {}",
+            &cfg,
+        ));
         assert_eq!(a.risk, Risk::Medium);
         assert!(a.reversible);
     }
@@ -370,11 +521,11 @@ mod tests {
     #[test]
     fn both_signals_compound_to_high() {
         let cfg = SensitiveConfig::default();
-        let a = classify_diff(
+        let a = known(classify_diff(
             &["src/auth/token.rs".to_string()],
             "+pub fn issue_token() {}",
             &cfg,
-        );
+        ));
         assert_eq!(a.risk, Risk::High);
         assert!(a.reversible);
     }
@@ -412,11 +563,11 @@ mod tests {
         // `pub(crate) fn` source lines, so this diff-only change was
         // silently scored Low instead of Medium.
         let cfg = SensitiveConfig::default();
-        let a = classify_diff(
+        let a = known(classify_diff(
             &["src/lib.rs".to_string()],
             "+pub(crate) fn internal_api() {}",
             &cfg,
-        );
+        ));
         assert_eq!(a.risk, Risk::Medium);
         assert!(a.reversible);
     }
@@ -461,10 +612,10 @@ mod tests {
         let diff = "+pub fn new_api() {}";
 
         let empty: BTreeMap<String, Vec<CallSite>> = BTreeMap::new();
-        let with_empty = classify_diff_with_callers(&paths, diff, &empty, &cfg);
+        let with_empty = known(classify_diff_with_callers(&paths, diff, &empty, &cfg));
 
         let heavy = callers_for("new_api", HIGH_CALLER_THRESHOLD);
-        let with_heavy = classify_diff_with_callers(&paths, diff, &heavy, &cfg);
+        let with_heavy = known(classify_diff_with_callers(&paths, diff, &heavy, &cfg));
 
         assert!(
             with_heavy.risk > with_empty.risk,
@@ -481,8 +632,8 @@ mod tests {
         let diff = "+pub fn new_api() {}";
 
         let empty: BTreeMap<String, Vec<CallSite>> = BTreeMap::new();
-        let base = classify_diff(&paths, diff, &cfg);
-        let with_empty = classify_diff_with_callers(&paths, diff, &empty, &cfg);
+        let base = known(classify_diff(&paths, diff, &cfg));
+        let with_empty = known(classify_diff_with_callers(&paths, diff, &empty, &cfg));
         assert_eq!(
             with_empty, base,
             "empty callers must equal the base assessment"
@@ -490,7 +641,7 @@ mod tests {
 
         // Also: an unrelated caller entry (not for a changed symbol) is ignored.
         let unrelated = callers_for("some_other_symbol", 42);
-        let with_unrelated = classify_diff_with_callers(&paths, diff, &unrelated, &cfg);
+        let with_unrelated = known(classify_diff_with_callers(&paths, diff, &unrelated, &cfg));
         assert_eq!(
             with_unrelated, base,
             "callers of unchanged symbols must not count"
@@ -506,11 +657,11 @@ mod tests {
         let paths = ["src/parser.rs".to_string()];
         let diff = "-fn helper() {}\n+fn helper() { changed }";
 
-        let base = classify_diff(&paths, diff, &cfg);
+        let base = known(classify_diff(&paths, diff, &cfg));
         assert_eq!(base.risk, Risk::Low);
 
         let heavy = callers_for("helper", HIGH_CALLER_THRESHOLD);
-        let out = classify_diff_with_callers(&paths, diff, &heavy, &cfg);
+        let out = known(classify_diff_with_callers(&paths, diff, &heavy, &cfg));
 
         // Never lowered below the base; only raised by the additive signal.
         assert!(out.risk >= base.risk, "must never downgrade the base tier");
@@ -524,11 +675,11 @@ mod tests {
         let paths = ["src/parser.rs".to_string()];
         let diff = "+fn helper() {}";
 
-        let base = classify_diff(&paths, diff, &cfg);
+        let base = known(classify_diff(&paths, diff, &cfg));
         assert_eq!(base.risk, Risk::Low);
 
         let one = callers_for("helper", 1);
-        let out = classify_diff_with_callers(&paths, diff, &one, &cfg);
+        let out = known(classify_diff_with_callers(&paths, diff, &one, &cfg));
         assert_eq!(out.risk, Risk::Medium);
     }
 
@@ -542,7 +693,7 @@ mod tests {
 
         for n in [0usize, 1, HIGH_CALLER_THRESHOLD, HIGH_CALLER_THRESHOLD * 3] {
             let callers = callers_for("new_api", n);
-            let out = classify_diff_with_callers(&paths, diff, &callers, &cfg);
+            let out = known(classify_diff_with_callers(&paths, diff, &callers, &cfg));
             assert!(
                 out.reversible,
                 "{n} callers must not flip reversible to false: {out:?}"

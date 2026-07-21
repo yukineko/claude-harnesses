@@ -167,21 +167,44 @@ class UnreadableSourceIsNotClean(unittest.TestCase):
 
 
 class AllowlistSuppression(unittest.TestCase):
-    def test_allowlist_suppresses_only_its_own_hit(self):
-        # test_freshness.rs carries two allowlisted swallows → scan_file drops them.
-        p = fo.REPO / "crates/overwatch/src/test_freshness.rs"
-        if p.exists():
-            self.assertEqual(fo.scan_file(p), [],
-                             "allowlisted swallows must be suppressed")
-            # …but only because of the allowlist: with it emptied they reappear.
-            saved = fo.ALLOWLIST[:]
-            try:
-                fo.ALLOWLIST.clear()
-                self.assertNotEqual(fo.scan_file(p), [],
-                                    "without the allowlist the real swallow must show")
-            finally:
-                fo.ALLOWLIST.clear()
-                fo.ALLOWLIST.extend(saved)
+    def test_every_allowlist_entry_suppresses_a_real_hit(self):
+        """No dead suppression: each ALLOWLIST entry must be masking something
+        that is actually there right now.
+
+        Driven off ALLOWLIST itself rather than a hardcoded file, because the
+        hardcoded form went stale silently: 43ec3e80 fixed the real swallows in
+        `crates/overwatch/src/test_freshness.rs` and correctly dropped its two
+        entries, but this test kept naming that file and started asserting that
+        a swallow which no longer exists must reappear. It went red on 2026-07-21
+        and stayed red for 6 consecutive CI runs, unnoticed because `fail-open.yml`
+        was `paths:`-filtered and is not (yet) a required status check.
+
+        A dead entry is not merely untidy — it is a live fail-open: it would
+        silently suppress a swallow re-introduced at that (path, pattern, needle)
+        later on.
+        """
+        self.assertTrue(fo.ALLOWLIST, "ALLOWLIST is empty — nothing to vouch for")
+        for entry in fo.ALLOWLIST:
+            p = fo.REPO / entry["path"]
+            with self.subTest(path=entry["path"], pattern=entry["pattern"]):
+                self.assertTrue(
+                    p.exists(),
+                    f"allowlist entry points at a missing file: {entry['path']}")
+                # With the allowlist in force, this entry's pattern is suppressed.
+                self.assertNotIn(entry["pattern"], names(fo.scan_file(p)),
+                                 "allowlisted hit must be suppressed")
+                # …and only because of the allowlist: emptied, the hit comes back.
+                saved = fo.ALLOWLIST[:]
+                try:
+                    fo.ALLOWLIST.clear()
+                    self.assertIn(
+                        entry["pattern"], names(fo.scan_file(p)),
+                        "without the allowlist the real hit must show — a "
+                        "suppression that masks nothing is a dead entry and "
+                        "must be deleted, not kept")
+                finally:
+                    fo.ALLOWLIST.clear()
+                    fo.ALLOWLIST.extend(saved)
 
     def test_allowlist_needle_is_path_scoped(self):
         # The `entries.flatten()` needle must not suppress the same text in a

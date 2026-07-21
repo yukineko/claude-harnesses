@@ -5,4 +5,4 @@
 # fix; RAISING it (to admit new swallows) still passes the script and is
 # caught only by review of this file's diff. Regenerate after a fix with:
 #   python3 scripts/check-fail-open.py --update-baseline
-34
+29

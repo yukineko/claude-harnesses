@@ -1,0 +1,5 @@
+error[E0277]: the trait bound `Verdict: Default` is not satisfied
+ --> tests/ui/verdict/default_verdict.rs:8:49
+  |
+8 |     let _free: harness_core::verdict::Verdict = Default::default();
+  |                                                 ^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `Verdict`

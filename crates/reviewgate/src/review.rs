@@ -30,6 +30,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use globset::{Glob, GlobSetBuilder};
+use harness_core::verdict::Verdict;
 use wait_timeout::ChildExt;
 
 use crate::config::{Config, Mode};
@@ -174,12 +175,12 @@ pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> D
     }
 }
 
-/// Turn a `ReviewerResult` into a `Decision`. Split out from `evaluate` so the
-/// decision logic (especially the fail-closed error path) is unit-testable
-/// without spawning a real reviewer subprocess.
+/// Turn a reviewer [`Verdict`] into a `Decision`. Split out from `evaluate` so
+/// the decision logic (especially the fail-closed undetermined path) is
+/// unit-testable without spawning a real reviewer subprocess.
 fn decide_subprocess(
     cfg: &Config,
-    result: ReviewerResult,
+    result: Verdict,
     files: Vec<String>,
     hash: String,
     prior_attempts: u32,
@@ -194,8 +195,11 @@ fn decide_subprocess(
         // recover), then give up *loudly* so a permanently broken reviewer can
         // never trap the turn. Escape hatches (`.reviewgate-skip`,
         // REVIEWGATE_DISABLE=1) remain available throughout and are named in the
-        // reason, satisfying the never-break-a-turn invariant.
-        ReviewerResult::Error(e) => {
+        // reason, satisfying the never-break-a-turn invariant. `Undetermined`
+        // (the reviewer could not run to a conclusion) resolves here exactly
+        // like the old `Error` arm did — never to Allow/Clean.
+        Verdict::Undetermined(r) => {
+            let e = r.as_str();
             let attempts = prior_attempts + 1;
             if attempts > cfg.max_attempts {
                 eprintln!(
@@ -221,19 +225,20 @@ fn decide_subprocess(
             // Don't record the hash: keep re-checking whether the reviewer
             // recovered on the next stop; the attempt counter above bounds it.
             Decision::Block {
-                reason: reviewer_unavailable_reason(&e, attempts, cfg.max_attempts),
+                reason: reviewer_unavailable_reason(e, attempts, cfg.max_attempts),
                 tag: "reviewer-unavailable",
                 files,
                 attempts,
                 last_hash: String::new(),
             }
         }
-        ReviewerResult::Clean => Decision::Allow {
+        Verdict::Clean(_) => Decision::Allow {
             tag: "clean",
             attempts: 0,
             last_hash: hash,
         },
-        ReviewerResult::Issues(findings) => {
+        Verdict::Violation(r) => {
+            let findings = r.as_str();
             let attempts = prior_attempts + 1;
             if attempts > cfg.max_attempts {
                 return Decision::Allow {
@@ -242,7 +247,7 @@ fn decide_subprocess(
                     last_hash: String::new(),
                 };
             }
-            let reason = subprocess_reason(&files, &findings, attempts, cfg.max_attempts);
+            let reason = subprocess_reason(&files, findings, attempts, cfg.max_attempts);
             Decision::Block {
                 reason,
                 tag: "blocked-review",
@@ -448,15 +453,15 @@ fn truncated_reason(cfg: &Config, files: &[String], attempt: u32, max: u32) -> S
     )
 }
 
-enum ReviewerResult {
-    Clean,
-    Issues(String),
-    Error(String),
-}
-
 /// Run `reviewer_cmd`, feeding it the review prompt on stdin and reading
 /// findings from stdout. Output that is empty or starts with "LGTM" = clean.
-fn run_reviewer(cfg: &Config, diff: &str) -> ReviewerResult {
+///
+/// Returns a [`Verdict`]: `Clean` (ran, nothing to report), `Violation`
+/// (findings), or `Undetermined` (the reviewer could not run to a conclusion —
+/// spawn failure, non-zero exit with no output, timeout, wait error). An
+/// `Undetermined` is **not** a clean review and must resolve to the blocking
+/// side downstream — never Allow.
+fn run_reviewer(cfg: &Config, diff: &str) -> Verdict {
     let prompt = format!(
         "あなたは独立した辛口のコードレビュアーです。以下の git diff をレビューしてください。\n\n\
          観点:\n{rubric}\n\n\
@@ -474,7 +479,7 @@ fn run_reviewer(cfg: &Config, diff: &str) -> ReviewerResult {
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return ReviewerResult::Error(format!("spawn: {e}")),
+        Err(e) => return Verdict::undetermined(format!("spawn: {e}")),
     };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(prompt.as_bytes());
@@ -490,29 +495,29 @@ fn run_reviewer(cfg: &Config, diff: &str) -> ReviewerResult {
                 let _ = so.read_to_string(&mut out);
             }
             if !status.success() && out.trim().is_empty() {
-                return ReviewerResult::Error(format!("exit {:?}", status.code()));
+                return Verdict::undetermined(format!("exit {:?}", status.code()));
             }
             classify(&out)
         }
         Ok(None) => {
             let _ = child.kill();
             let _ = child.wait();
-            ReviewerResult::Error("timed out".to_string())
+            Verdict::undetermined("timed out")
         }
-        Err(e) => ReviewerResult::Error(format!("wait: {e}")),
+        Err(e) => Verdict::undetermined(format!("wait: {e}")),
     }
 }
 
-fn classify(out: &str) -> ReviewerResult {
+fn classify(out: &str) -> Verdict {
     let t = out.trim();
     if t.is_empty() {
-        return ReviewerResult::Clean;
+        return Verdict::from_findings(vec![]);
     }
     let first = t.lines().next().unwrap_or("").trim();
     if first.eq_ignore_ascii_case("lgtm") || first.to_ascii_lowercase().starts_with("lgtm") {
-        return ReviewerResult::Clean;
+        return Verdict::from_findings(vec![]);
     }
-    ReviewerResult::Issues(t.to_string())
+    Verdict::violation(t.to_string())
 }
 
 /// Split a command line into program + args for `sh -c`-free direct spawn,
@@ -564,12 +569,12 @@ mod tests {
 
     #[test]
     fn classify_lgtm_is_clean() {
-        assert!(matches!(classify("LGTM"), ReviewerResult::Clean));
-        assert!(matches!(classify("  lgtm \n"), ReviewerResult::Clean));
-        assert!(matches!(classify(""), ReviewerResult::Clean));
+        assert!(matches!(classify("LGTM"), Verdict::Clean(_)));
+        assert!(matches!(classify("  lgtm \n"), Verdict::Clean(_)));
+        assert!(matches!(classify(""), Verdict::Clean(_)));
         assert!(matches!(
             classify("- high: bug in foo.rs:10"),
-            ReviewerResult::Issues(_)
+            Verdict::Violation(_)
         ));
     }
 
@@ -581,15 +586,17 @@ mod tests {
 
     // --- reviewer failure must not become a silent bypass -------------------
 
-    /// A reviewer subprocess error (crash / spawn failure / unparseable output)
-    /// must BLOCK the stop, never allow it. This is the regression this gate
-    /// exists to prevent: a broken reviewer turning into a bypass (fail-open).
+    /// A reviewer that could not run (crash / spawn failure / unparseable
+    /// output) is `Undetermined` and must BLOCK the stop, never allow it. This
+    /// is the regression this gate exists to prevent: a broken reviewer turning
+    /// into a bypass (fail-open). `Undetermined` must block exactly like the old
+    /// `Error` arm did.
     #[test]
     fn reviewer_error_blocks_it_does_not_allow() {
         let cfg = Config::default(); // max_attempts = 2
         let d = decide_subprocess(
             &cfg,
-            ReviewerResult::Error("spawn: boom".to_string()),
+            Verdict::undetermined("spawn: boom"),
             vec!["src/x.rs".to_string()],
             "deadbeefdeadbeef".to_string(),
             0,
@@ -617,7 +624,7 @@ mod tests {
         let cfg = Config::default();
         let d = decide_subprocess(
             &cfg,
-            ReviewerResult::Error("timed out".to_string()),
+            Verdict::undetermined("timed out"),
             vec!["src/x.rs".to_string()],
             "hash".to_string(),
             0,
@@ -636,7 +643,7 @@ mod tests {
         let cfg = Config::default(); // max_attempts = 2
         let d = decide_subprocess(
             &cfg,
-            ReviewerResult::Error("still broken".to_string()),
+            Verdict::undetermined("still broken"),
             vec!["src/x.rs".to_string()],
             "hash".to_string(),
             cfg.max_attempts, // prior attempts already at the cap
@@ -649,9 +656,9 @@ mod tests {
         }
     }
 
-    /// End-to-end sanity on the classifier→error boundary: a reviewer_cmd that
-    /// cannot even spawn is reported as an Error (which the decision then
-    /// blocks on), never mistaken for Clean.
+    /// End-to-end sanity on the classifier→undetermined boundary: a reviewer_cmd
+    /// that cannot even spawn is reported as `Undetermined` (which the decision
+    /// then blocks on), never mistaken for Clean.
     #[test]
     fn run_reviewer_reports_error_for_unspawnable_command() {
         let cfg = Config {
@@ -659,11 +666,13 @@ mod tests {
             ..Config::default()
         };
         match run_reviewer(&cfg, "diff --git a/x b/x\n") {
-            ReviewerResult::Error(_) => {}
-            ReviewerResult::Clean => {
-                panic!("an unspawnable reviewer must be an Error, not Clean (that would bypass)")
+            Verdict::Undetermined(_) => {}
+            Verdict::Clean(_) => {
+                panic!(
+                    "an unspawnable reviewer must be Undetermined, not Clean (that would bypass)"
+                )
             }
-            ReviewerResult::Issues(_) => panic!("an unspawnable reviewer must be an Error"),
+            Verdict::Violation(_) => panic!("an unspawnable reviewer must be Undetermined"),
         }
     }
 

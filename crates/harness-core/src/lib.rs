@@ -51,6 +51,7 @@ pub mod store;
 pub mod transcript;
 pub mod trust;
 pub mod usage;
+pub mod verdict;
 
 // The one bundled transcript → (usage, cost) estimator, re-exported at the crate
 // root so consumers call a single API instead of pairing usage::aggregate with

@@ -1,0 +1,16 @@
+error[E0603]: tuple struct constructor `Evidence` is private
+  --> tests/ui/verdict/forge_clean.rs:10:80
+   |
+10 |     let _forged = harness_core::verdict::Verdict::Clean(harness_core::verdict::Evidence(()));
+   |                                                                                ^^^^^^^^ private tuple struct constructor
+   |
+  ::: src/verdict.rs
+   |
+   | pub struct Evidence(());
+   |                     -- a constructor is private if any of the fields is private
+   |
+note: the tuple struct constructor `Evidence` is defined here
+  --> src/verdict.rs
+   |
+   | pub struct Evidence(());
+   | ^^^^^^^^^^^^^^^^^^^

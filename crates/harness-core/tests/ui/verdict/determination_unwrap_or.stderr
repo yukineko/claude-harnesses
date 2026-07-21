@@ -1,0 +1,17 @@
+error[E0599]: no method named `unwrap_or` found for enum `Determination<T>` in the current scope
+  --> tests/ui/verdict/determination_unwrap_or.rs:14:15
+   |
+14 |     let _ = a.unwrap_or(vec![]);
+   |               ^^^^^^^^^ method not found in `Determination<Vec<u8>>`
+
+error[E0599]: no method named `ok` found for enum `Determination<T>` in the current scope
+  --> tests/ui/verdict/determination_unwrap_or.rs:17:15
+   |
+17 |     let _ = b.ok();
+   |               ^^ method not found in `Determination<Vec<u8>>`
+
+error[E0599]: no method named `unwrap_or_default` found for enum `Determination<T>` in the current scope
+  --> tests/ui/verdict/determination_unwrap_or.rs:20:15
+   |
+20 |     let _ = c.unwrap_or_default();
+   |               ^^^^^^^^^^^^^^^^^ method not found in `Determination<Vec<u8>>`

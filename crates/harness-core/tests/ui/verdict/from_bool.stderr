@@ -1,0 +1,18 @@
+error[E0308]: mismatched types
+  --> tests/ui/verdict/from_bool.rs:10:54
+   |
+10 |     let _from = harness_core::verdict::Verdict::from(true);
+   |                 ------------------------------------ ^^^^ expected `Verdict`, found `bool`
+   |                 |
+   |                 arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> $RUST/core/src/convert/mod.rs
+
+error[E0277]: the trait bound `bool: From<Verdict>` is not satisfied
+  --> tests/ui/verdict/from_bool.rs:13:25
+   |
+13 |     let _into: bool = v.into();
+   |                         ^^^^ the trait `From<Verdict>` is not implemented for `bool`
+   |
+   = note: required for `Verdict` to implement `Into<bool>`

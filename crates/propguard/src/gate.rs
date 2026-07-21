@@ -35,6 +35,7 @@ use std::time::Duration;
 use std::os::unix::process::CommandExt;
 
 use globset::{Glob, GlobSetBuilder};
+use harness_core::verdict::{Determination, Reason};
 use wait_timeout::ChildExt;
 
 use crate::config::{Config, Mode};
@@ -196,10 +197,10 @@ pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> D
             // diff is unverified: satisfied = 0, which is below any threshold ≥ 1.
             decide_from_count(
                 cfg,
-                CheckOutcome::Verified {
+                Determination::Known(Verified {
                     satisfied: 0,
                     findings: None,
-                },
+                }),
                 &props,
                 threshold,
                 files,
@@ -224,27 +225,31 @@ pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> D
     }
 }
 
-/// The outcome of trying to establish how many properties hold.
-pub enum CheckOutcome {
-    /// A count of satisfied properties was established (0 in inject mode's first
-    /// pass; a parsed PASS count in subprocess mode). `findings` carries the
-    /// checker's per-property verdict text, if any.
-    Verified {
-        satisfied: usize,
-        findings: Option<String>,
-    },
-    /// The checker itself failed (crash / timeout / unusable output). Never the
-    /// same as "checked and satisfied" — must not become a silent bypass.
-    Error(String),
+/// The established count of satisfied properties — the `Known` payload of a
+/// [`Determination<Verified>`]. `satisfied` is 0 in inject mode's first pass and
+/// a parsed PASS count in subprocess mode; `findings` carries the checker's
+/// per-property verdict text, if any.
+///
+/// A checker that itself failed (crash / timeout / unusable output) is **not**
+/// carried here: it is a [`Determination::Undetermined`], which is never the same
+/// as "checked and satisfied" and must not become a silent bypass. The
+/// three-valued [`Determination`] makes that "could not check" answer impossible
+/// to collapse into a permissive default (see `harness_core::verdict`).
+pub struct Verified {
+    pub satisfied: usize,
+    pub findings: Option<String>,
 }
 
-/// Turn a `CheckOutcome` into a `Decision`, enforcing the block threshold.
-/// Split out from `evaluate` so the threshold logic is unit-testable without
-/// git or a real checker subprocess.
+/// Turn a `Determination<Verified>` into a `Decision`, enforcing the block
+/// threshold. Split out from `evaluate` so the threshold logic is unit-testable
+/// without git or a real checker subprocess. `Undetermined` (the checker could
+/// not run) is matched directly rather than propagated with `require`/`?`,
+/// because it carries the bounded fail-closed retry policy — not a simple
+/// short-circuit.
 #[allow(clippy::too_many_arguments)]
 pub fn decide_from_count(
     cfg: &Config,
-    outcome: CheckOutcome,
+    outcome: Determination<Verified>,
     props: &[Property],
     threshold: usize,
     files: Vec<String>,
@@ -253,7 +258,8 @@ pub fn decide_from_count(
     criteria: &str,
 ) -> Decision {
     match outcome {
-        CheckOutcome::Error(e) => {
+        Determination::Undetermined(why) => {
+            let e = why.as_str();
             // Fail closed but bounded: block up to max_attempts, then give up
             // loudly so a permanently broken checker can't trap the turn.
             let attempts = prior_attempts + 1;
@@ -277,7 +283,7 @@ pub fn decide_from_count(
             // (CA-propguard-03). Mirrors the below-threshold path, which only
             // reports ids actually established as violated.
             Decision::Block {
-                reason: checker_unavailable_reason(&e, attempts, cfg.max_attempts),
+                reason: checker_unavailable_reason(e, attempts, cfg.max_attempts),
                 tag: "checker-unavailable",
                 files,
                 properties: Vec::new(),
@@ -285,10 +291,10 @@ pub fn decide_from_count(
                 last_hash: String::new(),
             }
         }
-        CheckOutcome::Verified {
+        Determination::Known(Verified {
             satisfied,
             findings,
-        } => {
+        }) => {
             // ---- THE THRESHOLD ENFORCEMENT POINT ----
             if !below_threshold(satisfied, threshold) {
                 // Enough properties hold: allow, and record the hash so the same
@@ -628,7 +634,12 @@ fn truncated_reason(cfg: &Config, files: &[String], attempt: u32, max: u32) -> S
 
 /// Run `checker_cmd`, feeding it the properties + diff on stdin and reading a
 /// `PROP <id>: PASS|FAIL` verdict per property on stdout.
-fn run_checker(cfg: &Config, criteria: &str, props: &[Property], diff: &str) -> CheckOutcome {
+fn run_checker(
+    cfg: &Config,
+    criteria: &str,
+    props: &[Property],
+    diff: &str,
+) -> Determination<Verified> {
     let prompt = format!(
         "あなたは独立したプロパティ検査官です。以下の done_criteria から導出された semantic property が、\
          提示された git diff の生成コードで成り立つかを 1 つずつ判定してください。\n\n\
@@ -665,7 +676,7 @@ fn run_checker(cfg: &Config, criteria: &str, props: &[Property], diff: &str) -> 
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return CheckOutcome::Error(format!("spawn: {e}")),
+        Err(e) => return Determination::Undetermined(Reason::new(format!("spawn: {e}"))),
     };
     // Write stdin from a background thread rather than inline. If the checker
     // writes enough stdout before draining stdin (its stdout pipe fills up
@@ -707,20 +718,20 @@ fn run_checker(cfg: &Config, criteria: &str, props: &[Property], diff: &str) -> 
             // that exited 101 as "no errors": a crashed checker must be an Error,
             // which fails closed, not a parsed verdict.
             if !status.success() {
-                return CheckOutcome::Error(format!(
+                return Determination::Undetermined(Reason::new(format!(
                     "checker exited {:?} (non-zero exit means it did not complete; \
                      its output cannot be trusted as a verdict)",
                     status.code()
-                ));
+                )));
             }
             parse_checker_output(&out, props)
         }
         Ok(None) => {
             kill_checker_tree(&mut child);
             let _ = child.wait();
-            CheckOutcome::Error("timed out".to_string())
+            Determination::Undetermined(Reason::new("timed out"))
         }
-        Err(e) => CheckOutcome::Error(format!("wait: {e}")),
+        Err(e) => Determination::Undetermined(Reason::new(format!("wait: {e}"))),
     }
 }
 
@@ -816,7 +827,7 @@ fn verdict_for_id(line: &str, id: &str) -> Option<bool> {
 /// its id is explicitly reported PASS on its OWN anchored verdict line. Output
 /// that mentions none of the derived property ids is unusable → Error (fail
 /// closed), never silently "all pass".
-pub fn parse_checker_output(out: &str, props: &[Property]) -> CheckOutcome {
+pub fn parse_checker_output(out: &str, props: &[Property]) -> Determination<Verified> {
     let lower = out.to_lowercase();
     let mut satisfied = 0usize;
     let mut seen_any = false;
@@ -839,15 +850,15 @@ pub fn parse_checker_output(out: &str, props: &[Property]) -> CheckOutcome {
         }
     }
     if !seen_any {
-        return CheckOutcome::Error(format!(
+        return Determination::Undetermined(Reason::new(format!(
             "checker output named none of the {} derived properties",
             props.len()
-        ));
+        )));
     }
-    CheckOutcome::Verified {
+    Determination::Known(Verified {
         satisfied,
         findings: Some(out.trim().to_string()),
-    }
+    })
 }
 
 fn build_command(cmdline: &str) -> Command {
@@ -907,10 +918,10 @@ mod tests {
         let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
         let d = decide_from_count(
             &cfg,
-            CheckOutcome::Verified {
+            Determination::Known(Verified {
                 satisfied: 3,
                 findings: None,
-            },
+            }),
             &props,
             3,
             vec!["src/x.rs".to_string()],
@@ -937,10 +948,10 @@ mod tests {
         let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
         let d = decide_from_count(
             &cfg,
-            CheckOutcome::Verified {
+            Determination::Known(Verified {
                 satisfied: 1,
                 findings: Some("PROP error-path: FAIL — panics".to_string()),
-            },
+            }),
             &props,
             3,
             vec!["src/x.rs".to_string()],
@@ -974,10 +985,10 @@ mod tests {
         let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
         let d = decide_from_count(
             &cfg,
-            CheckOutcome::Verified {
+            Determination::Known(Verified {
                 satisfied: 0,
                 findings: None,
-            },
+            }),
             &props,
             3,
             vec!["src/x.rs".to_string()],
@@ -995,10 +1006,10 @@ mod tests {
         let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
         let d = decide_from_count(
             &cfg,
-            CheckOutcome::Verified {
+            Determination::Known(Verified {
                 satisfied: 0,
                 findings: None,
-            },
+            }),
             &props,
             3,
             vec!["src/x.rs".to_string()],
@@ -1019,7 +1030,7 @@ mod tests {
         let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
         let d = decide_from_count(
             &cfg,
-            CheckOutcome::Error("spawn: boom".to_string()),
+            Determination::Undetermined(Reason::new("spawn: boom")),
             &props,
             3,
             vec!["src/x.rs".to_string()],
@@ -1047,7 +1058,7 @@ mod tests {
         let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
         let d = decide_from_count(
             &cfg,
-            CheckOutcome::Error("spawn: boom".to_string()),
+            Determination::Undetermined(Reason::new("spawn: boom")),
             &props,
             3,
             vec!["src/x.rs".to_string()],
@@ -1076,7 +1087,7 @@ mod tests {
         let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
         let d = decide_from_count(
             &cfg,
-            CheckOutcome::Error("still broken".to_string()),
+            Determination::Undetermined(Reason::new("still broken")),
             &props,
             3,
             vec!["src/x.rs".to_string()],
@@ -1178,8 +1189,8 @@ mod tests {
         let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
         let out = "PROP error-path: PASS\nPROP output-schema: FAIL — schema changed\nPROP determinism: PASS";
         match parse_checker_output(out, &props) {
-            CheckOutcome::Verified { satisfied, .. } => assert_eq!(satisfied, 2),
-            CheckOutcome::Error(e) => panic!("should parse: {e}"),
+            Determination::Known(Verified { satisfied, .. }) => assert_eq!(satisfied, 2),
+            Determination::Undetermined(why) => panic!("should parse: {}", why.as_str()),
         }
     }
 
@@ -1189,8 +1200,8 @@ mod tests {
         // Output that names none of the property ids must fail closed, not be
         // mistaken for "everything passed".
         match parse_checker_output("looks good to me!", &props) {
-            CheckOutcome::Error(_) => {}
-            CheckOutcome::Verified { .. } => {
+            Determination::Undetermined(_) => {}
+            Determination::Known(Verified { .. }) => {
                 panic!("unusable checker output must be an Error (fail closed), not all-pass")
             }
         }
@@ -1204,8 +1215,10 @@ mod tests {
         };
         let props = props_by_ids(&["error-path"]);
         match run_checker(&cfg, "dc", &props, "diff") {
-            CheckOutcome::Error(_) => {}
-            CheckOutcome::Verified { .. } => panic!("an unspawnable checker must be an Error"),
+            Determination::Undetermined(_) => {}
+            Determination::Known(Verified { .. }) => {
+                panic!("an unspawnable checker must be an Error")
+            }
         }
     }
 
@@ -1251,7 +1264,7 @@ mod tests {
         // hang-then-succeed path; either shape is acceptable evidence the
         // call returned instead of hanging.
         match outcome {
-            CheckOutcome::Error(_) | CheckOutcome::Verified { .. } => {}
+            Determination::Undetermined(_) | Determination::Known(Verified { .. }) => {}
         }
     }
 
@@ -1278,8 +1291,11 @@ mod tests {
         };
         let outcome = run_checker(&cfg, "dc", &props, "diff");
         match outcome {
-            CheckOutcome::Error(e) => assert!(e.contains('7'), "reason should name the exit: {e}"),
-            CheckOutcome::Verified { satisfied, .. } => {
+            Determination::Undetermined(why) => {
+                let e = why.as_str();
+                assert!(e.contains('7'), "reason should name the exit: {e}");
+            }
+            Determination::Known(Verified { satisfied, .. }) => {
                 panic!(
                     "a non-zero exit must not be trusted as a verdict (got satisfied={satisfied})"
                 )
@@ -1300,8 +1316,10 @@ mod tests {
             ..Config::default()
         };
         match run_checker(&cfg, "dc", &props, "diff") {
-            CheckOutcome::Verified { satisfied, .. } => assert_eq!(satisfied, 1),
-            CheckOutcome::Error(e) => panic!("a clean checker must parse, got Error: {e}"),
+            Determination::Known(Verified { satisfied, .. }) => assert_eq!(satisfied, 1),
+            Determination::Undetermined(why) => {
+                panic!("a clean checker must parse, got Error: {}", why.as_str())
+            }
         }
     }
 
@@ -1346,7 +1364,7 @@ mod tests {
             "run_checker must be bounded by checker_timeout_secs even when shell-wrapped, took {elapsed:?}"
         );
         assert!(
-            matches!(outcome, CheckOutcome::Error(_)),
+            matches!(outcome, Determination::Undetermined(_)),
             "a timed-out shell-wrapped checker must be reported as an Error"
         );
 
@@ -1397,7 +1415,7 @@ mod tests {
              bound even if a lingering process keeps the pipe open, took {elapsed:?}"
         );
         match outcome {
-            CheckOutcome::Error(_) | CheckOutcome::Verified { .. } => {}
+            Determination::Undetermined(_) | Determination::Known(Verified { .. }) => {}
         }
     }
 
@@ -1555,10 +1573,10 @@ mod tests {
         // Round 1: checker says satisfied=1 (< threshold 3) => Block.
         let d = decide_from_count(
             &cfg,
-            CheckOutcome::Verified {
+            Determination::Known(Verified {
                 satisfied: 1,
                 findings: Some("PROP error-path: FAIL".to_string()),
-            },
+            }),
             &props,
             3,
             vec!["src/x.rs".to_string()],
@@ -1593,10 +1611,10 @@ mod tests {
         let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
         let d = decide_from_count(
             &cfg,
-            CheckOutcome::Verified {
+            Determination::Known(Verified {
                 satisfied: 0,
                 findings: None,
-            },
+            }),
             &props,
             3,
             vec!["src/x.rs".to_string()],
@@ -1626,7 +1644,7 @@ mod tests {
             ..Config::default()
         };
         let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
-        let outcome = CheckOutcome::Verified {
+        let outcome = Determination::Known(Verified {
             satisfied: 2,
             findings: Some(
                 "PROP error-path: PASS\n\
@@ -1634,7 +1652,7 @@ mod tests {
                  PROP determinism: PASS"
                     .to_string(),
             ),
-        };
+        });
         let d = decide_from_count(
             &cfg,
             outcome,
@@ -1667,7 +1685,7 @@ PROP idempotence: PASS — this also confirms determinism holds and output-schem
 PROP determinism: FAIL — hidden RNG dependency\n\
 PROP output-schema: PASS";
         match parse_checker_output(out, &props) {
-            CheckOutcome::Verified { satisfied, .. } => {
+            Determination::Known(Verified { satisfied, .. }) => {
                 // idempotence PASS + output-schema PASS = 2; determinism is FAIL
                 // and must never be counted satisfied via line 1's mention.
                 assert_eq!(
@@ -1675,7 +1693,7 @@ PROP output-schema: PASS";
                     "determinism was reported FAIL and must not be counted satisfied"
                 );
             }
-            CheckOutcome::Error(e) => panic!("should parse: {e}"),
+            Determination::Undetermined(why) => panic!("should parse: {}", why.as_str()),
         }
     }
 
@@ -1690,7 +1708,7 @@ PROP error-path: PASS — all error branches handled, cannot fail silently\n\
 PROP output-schema: PASS — no failure modes changed\n\
 PROP determinism: FAIL — hidden RNG dependency";
         match parse_checker_output(out, &props) {
-            CheckOutcome::Verified { satisfied, .. } => {
+            Determination::Known(Verified { satisfied, .. }) => {
                 // Both PASS lines mention "fail" in prose; only determinism is a
                 // real FAIL. A substring parser would score 0 here.
                 assert_eq!(
@@ -1698,7 +1716,7 @@ PROP determinism: FAIL — hidden RNG dependency";
                     "PASS verdicts whose reason mentions 'fail' must stay PASS"
                 );
             }
-            CheckOutcome::Error(e) => panic!("should parse: {e}"),
+            Determination::Undetermined(why) => panic!("should parse: {}", why.as_str()),
         }
         // And such a PASS must NOT be reported as a fleet violation.
         let violated = unsatisfied_prop_ids(&props, Some(out));

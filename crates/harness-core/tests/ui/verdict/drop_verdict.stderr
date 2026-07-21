@@ -1,0 +1,16 @@
+error: unused `Verdict` that must be used
+  --> tests/ui/verdict/drop_verdict.rs:11:5
+   |
+11 |     harness_core::verdict::Verdict::from_findings(vec![]);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: a gate verdict must be acted on (blocked/allowed), never computed and dropped
+note: the lint level is defined here
+  --> tests/ui/verdict/drop_verdict.rs:8:9
+   |
+ 8 | #![deny(unused_must_use)]
+   |         ^^^^^^^^^^^^^^^
+help: use `let _ = ...` to ignore the resulting value
+   |
+11 |     let _ = harness_core::verdict::Verdict::from_findings(vec![]);
+   |     +++++++

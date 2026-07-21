@@ -1,6 +1,6 @@
 [package]
 name = "harness-core"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 # MSRV: `is_none_or` (store.rs) was stabilized in Rust 1.82.
 rust-version.workspace = true
@@ -20,3 +20,4 @@ wait-timeout = "0.2"
 [dev-dependencies]
 tempfile = { workspace = true }
 proptest = { version = "1", default-features = false, features = ["std"] }
+trybuild = "1"

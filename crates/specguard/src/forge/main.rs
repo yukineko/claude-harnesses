@@ -46,6 +46,14 @@ const EXIT_UNRATIFIED_SPEC: u8 = 6;
 /// bundle is written and `needs_user: yes` is emitted so the human is pulled in
 /// (principle 6 — don't fabricate a bundle). Disjoint from the reserved values.
 const EXIT_INTAKE_SHORTFALL: u8 = 7;
+/// ① gather could not READ one or more sources that EXIST (permission/IO error,
+/// NOT NotFound) — intake is INCOMPLETE, distinct from the "nothing found"
+/// shortfall (§7). Fails CLOSED: no bundle is written (a silently-partial bundle
+/// would let the spec be forged missing material) and `needs_user: yes` +
+/// `intake_incomplete: yes` are emitted so the human is pulled in. Mirror of
+/// specguard's `EXIT_TESTAUDIT_UNDETERMINED=8` cannot-determine (round #7),
+/// carried into the forge intake stage. Disjoint from every value above.
+const EXIT_INTAKE_INCOMPLETE: u8 = 8;
 
 #[derive(Parser)]
 #[command(
@@ -408,7 +416,27 @@ fn cmd_gather(l: &Loaded, topic: &str, id: Option<&str>) -> Result<u8> {
         min_score: l.cfg.gather.min_score,
     };
 
-    let bundle = gather::gather(topic, &input);
+    let outcome = gather::gather(topic, &input);
+    let bundle = &outcome.bundle;
+
+    // Cannot-determine intake (mirror testaudit round #7): one or more sources
+    // EXIST but could not be read (permission/IO error, not NotFound). Do NOT
+    // report a clean gather — a silently-partial bundle would let the spec be
+    // forged missing material it could not read. Fail closed: write no bundle and
+    // pull the human in (principle 6), distinct from the "nothing found" shortfall.
+    if !outcome.unreadable.is_empty() {
+        eprintln!(
+            "specforge: gather — 判定不能: 次のソースは存在するが読めない (intake が不完全 → 束は書かない):"
+        );
+        for u in &outcome.unreadable {
+            eprintln!("  - {u}");
+        }
+        println!("{}", gather::MARKER);
+        println!("needs_user: yes");
+        println!("intake_incomplete: yes");
+        println!("fragment_count: {}", bundle.fragments.len());
+        return Ok(EXIT_INTAKE_INCOMPLETE);
+    }
 
     // Material shortfall (principle 6): do NOT fabricate a bundle — pull the
     // human in. Emit the §8 trailer with needs_user: yes and no bundle_path.
@@ -422,8 +450,8 @@ fn cmd_gather(l: &Loaded, topic: &str, id: Option<&str>) -> Result<u8> {
         return Ok(EXIT_INTAKE_SHORTFALL);
     }
 
-    let path = write_bundle(l, &key, &bundle)?;
-    print_gather_summary(&bundle);
+    let path = write_bundle(l, &key, bundle)?;
+    print_gather_summary(bundle);
     println!();
     println!("束を書いた -> {}", path.display());
     println!("{}", gather::MARKER);

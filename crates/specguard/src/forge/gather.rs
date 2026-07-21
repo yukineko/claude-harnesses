@@ -103,17 +103,38 @@ pub fn encode_cwd(path: &Path) -> String {
 /// Walk a directory recursively, collecting files whose name ends in `suffix`.
 /// A small std-only walk so we don't add a glob/walkdir dependency for the
 /// (simple) directory patterns gather needs (DESIGN-INTAKE.md §7 note).
-fn walk_suffix(dir: &Path, suffix: &str, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+///
+/// Fails CLOSED on a cannot-determine (mirror of `testaudit`/`decision.rs`
+/// `list_files`, the round #7 contract): a directory that simply does not exist
+/// is a LEGITIMATE absent (the sources are optional — no vault, no transcripts,
+/// a canon base that isn't present) and is skipped silently; but any OTHER
+/// `read_dir` error (permission denied on an existing dir, IO), and any
+/// per-entry error, means we CANNOT assert this subtree is empty. Those are
+/// recorded in `unreadable` (instead of the old `.flatten()` that swallowed
+/// them) so the caller can refuse to report a silently-partial gather as clean.
+fn walk_suffix(dir: &Path, suffix: &str, out: &mut Vec<PathBuf>, unreadable: &mut Vec<String>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            unreadable.push(format!("{}: {e}", dir.display()));
+            return;
+        }
     };
-    let mut entries: Vec<_> = entries.flatten().collect();
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(e) => paths.push(e.path()),
+            // A directory we successfully opened but whose entry we cannot read
+            // is still a cannot-determine — never silently drop it.
+            Err(e) => unreadable.push(format!("{}: {e}", dir.display())),
+        }
+    }
     // Sort for deterministic traversal order.
-    entries.sort_by_key(|e| e.path());
-    for e in entries {
-        let path = e.path();
+    paths.sort();
+    for path in paths {
         if path.is_dir() {
-            walk_suffix(&path, suffix, out);
+            walk_suffix(&path, suffix, out, unreadable);
         } else if path.to_string_lossy().ends_with(suffix) {
             out.push(path);
         }
@@ -123,9 +144,22 @@ fn walk_suffix(dir: &Path, suffix: &str, out: &mut Vec<PathBuf>) {
 /// Read one markdown file into per-heading fragments. We split on top-level `#`
 /// headings so each fragment is a coherent unit with a heading anchor; a file
 /// without headings becomes one fragment.
-fn md_fragments(path: &Path, authority: Authority) -> Vec<RawFragment> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
+fn md_fragments(
+    path: &Path,
+    authority: Authority,
+    unreadable: &mut Vec<String>,
+) -> Vec<RawFragment> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        // The file was JUST enumerated by `walk_suffix`, so a NotFound here is a
+        // TOCTOU race (removed meanwhile) — treat as absent. Any other read error
+        // is a cannot-determine on material that EXISTS: record it so this file's
+        // requirements are not silently dropped from the intake (round #7 twin).
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            unreadable.push(format!("{}: {e}", path.display()));
+            return Vec::new();
+        }
     };
     let source = path.to_string_lossy().to_string();
     let mut out = Vec::new();
@@ -169,14 +203,14 @@ struct RawFragment {
 }
 
 /// Collect Obsidian fragments (authority High): `<vault>/AEGIS/{decisions,sessions}/**/*.md`.
-fn gather_obsidian(vault: &Path) -> Vec<RawFragment> {
+fn gather_obsidian(vault: &Path, unreadable: &mut Vec<String>) -> Vec<RawFragment> {
     let mut out = Vec::new();
     for sub in ["AEGIS/decisions", "AEGIS/sessions"] {
         let dir = vault.join(sub);
         let mut files = Vec::new();
-        walk_suffix(&dir, ".md", &mut files);
+        walk_suffix(&dir, ".md", &mut files, unreadable);
         for f in files {
-            out.extend(md_fragments(&f, Authority::High));
+            out.extend(md_fragments(&f, Authority::High, unreadable));
         }
     }
     out
@@ -185,17 +219,17 @@ fn gather_obsidian(vault: &Path) -> Vec<RawFragment> {
 /// Collect repo-canon fragments (authority Mid) from the `canon` globs. We only
 /// honor the leaf suffix of each glob (e.g. `docs/**/*.md` → walk `docs` for
 /// `*.md`) so a simple recursive walk suffices — no glob crate (DESIGN §7).
-fn gather_canon(root: &Path, globs: &[String]) -> Vec<RawFragment> {
+fn gather_canon(root: &Path, globs: &[String], unreadable: &mut Vec<String>) -> Vec<RawFragment> {
     let mut out = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
     for glob in globs {
         let (base, suffix) = split_glob(glob);
         let dir = root.join(base);
         let mut files = Vec::new();
-        walk_suffix(&dir, &suffix, &mut files);
+        walk_suffix(&dir, &suffix, &mut files, unreadable);
         for f in files {
             if seen.insert(f.clone()) {
-                out.extend(md_fragments(&f, Authority::Mid));
+                out.extend(md_fragments(&f, Authority::Mid, unreadable));
             }
         }
     }
@@ -229,13 +263,20 @@ fn split_glob(glob: &str) -> (String, String) {
 /// Collect past-prompt fragments (authority Low) from Claude Code transcripts:
 /// every `*.jsonl` under `<transcripts>/<enc-cwd>/`. Each line is best-effort
 /// JSON; we pull only user-prompt text and skip anything that doesn't parse.
-fn gather_transcripts(dir: &Path) -> Vec<RawFragment> {
+fn gather_transcripts(dir: &Path, unreadable: &mut Vec<String>) -> Vec<RawFragment> {
     let mut files = Vec::new();
-    walk_suffix(dir, ".jsonl", &mut files);
+    walk_suffix(dir, ".jsonl", &mut files, unreadable);
     let mut out = Vec::new();
     for f in files {
-        let Ok(text) = std::fs::read_to_string(&f) else {
-            continue;
+        let text = match std::fs::read_to_string(&f) {
+            Ok(t) => t,
+            // NotFound after enumeration = TOCTOU race → skip; any other read
+            // error is a cannot-determine on an existing transcript → record it.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                unreadable.push(format!("{}: {e}", f.to_string_lossy()));
+                continue;
+            }
         };
         let source = f.to_string_lossy().to_string();
         for line in text.lines() {
@@ -383,21 +424,44 @@ fn score(topic_toks: &HashSet<String>, text: &str) -> i64 {
 
 // ── driver ─────────────────────────────────────────────────────────────────
 
+/// Outcome of a gather run: the material `bundle` plus the list of sources that
+/// EXIST but could not be read (genuine IO errors, NOT NotFound).
+///
+/// A non-empty `unreadable` means intake is INCOMPLETE — the bundle may be
+/// silently missing material (a confirmed Obsidian decision, a canon spec) that
+/// gather could not read — so the caller MUST NOT report a clean/complete
+/// gather. This is the cannot-determine that round #7 closed in `testaudit`,
+/// carried into the intake stage: "couldn't look" is not "nothing there".
+pub struct GatherOutcome {
+    pub bundle: Bundle,
+    pub unreadable: Vec<String>,
+}
+
 /// Run the deterministic gather: walk all three sources, score against `topic`,
 /// drop fragments below `min_score`, and keep the top_k ordered by
-/// (authority desc, score desc). No LLM, no conflict resolution.
-pub fn gather(topic: &str, input: &GatherInput) -> Bundle {
+/// (authority desc, score desc). No LLM, no conflict resolution. Sources that
+/// exist but cannot be read are surfaced in `GatherOutcome::unreadable` (never
+/// silently dropped) so the caller can fail closed on an incomplete intake.
+pub fn gather(topic: &str, input: &GatherInput) -> GatherOutcome {
     let mut raws: Vec<RawFragment> = Vec::new();
+    let mut unreadable: Vec<String> = Vec::new();
     if let Some(vault) = &input.obsidian_vault {
-        raws.extend(gather_obsidian(vault));
+        raws.extend(gather_obsidian(vault, &mut unreadable));
     }
-    raws.extend(gather_canon(&input.canon_root, &input.canon_globs));
+    raws.extend(gather_canon(
+        &input.canon_root,
+        &input.canon_globs,
+        &mut unreadable,
+    ));
     if let Some(tdir) = &input.transcripts_dir {
-        raws.extend(gather_transcripts(tdir));
+        raws.extend(gather_transcripts(tdir, &mut unreadable));
     }
-    Bundle {
-        topic: topic.to_string(),
-        fragments: rank(topic, raws, input.min_score, input.top_k),
+    GatherOutcome {
+        bundle: Bundle {
+            topic: topic.to_string(),
+            fragments: rank(topic, raws, input.min_score, input.top_k),
+        },
+        unreadable,
     }
 }
 
@@ -600,8 +664,14 @@ mod tests {
             top_k: 24,
             min_score: 1,
         };
-        let bundle = gather("レート制限", &input);
+        let outcome = gather("レート制限", &input);
+        let bundle = &outcome.bundle;
 
+        assert!(
+            outcome.unreadable.is_empty(),
+            "all sources were readable → intake is complete: {:?}",
+            outcome.unreadable
+        );
         assert_eq!(bundle.topic, "レート制限");
         assert!(!bundle.fragments.is_empty());
         // The unrelated canon doc scored 0 and was dropped.
@@ -612,8 +682,96 @@ mod tests {
         // High authority (Obsidian) sorts first.
         assert_eq!(bundle.fragments[0].authority, Authority::High);
         // JSON round-trips.
-        let json = serde_json::to_string_pretty(&bundle).unwrap();
+        let json = serde_json::to_string_pretty(bundle).unwrap();
         let back: Bundle = serde_json::from_str(&json).unwrap();
-        assert_eq!(bundle, back);
+        assert_eq!(bundle, &back);
+    }
+
+    /// Cannot-determine intake (round #7 twin): a source directory that EXISTS
+    /// but is UNREADABLE (permission denied) must be surfaced in
+    /// `unreadable` — NOT silently walked over — so the caller can refuse to
+    /// report a clean gather. Reverting the `walk_suffix` tri-state to the old
+    /// `.flatten()` / `let Ok(..) else { return }` makes `unreadable` empty and
+    /// this assertion fail (a discriminating test).
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_existing_source_is_surfaced_not_silently_dropped() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // A readable canon doc that DOES match, so the bundle is non-empty and a
+        // naive gather would happily return EXIT_OK as if intake were complete.
+        let docs = root.join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("ok.md"), "# Auth\nrate limit policy\n").unwrap();
+
+        // A High-authority Obsidian decisions dir that EXISTS but is unreadable
+        // (chmod 000) — the exact fail-open: a confirmed decision we cannot read.
+        let dec = root.join("vault/AEGIS/decisions");
+        std::fs::create_dir_all(&dec).unwrap();
+        std::fs::write(dec.join("secret.md"), "# 決定\nレート制限は 5\n").unwrap();
+        let mut perms = std::fs::metadata(&dec).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&dec, perms).unwrap();
+
+        let input = GatherInput {
+            obsidian_vault: Some(root.join("vault")),
+            canon_root: root.to_path_buf(),
+            canon_globs: vec!["docs/**/*.md".to_string()],
+            transcripts_dir: None,
+            top_k: 24,
+            min_score: 1,
+        };
+        let outcome = gather("レート制限", &input);
+
+        // Restore perms BEFORE asserting so the tempdir can always be cleaned up.
+        let mut perms = std::fs::metadata(&dec).unwrap().permissions();
+        perms.set_mode(0o755);
+        let _ = std::fs::set_permissions(&dec, perms);
+
+        assert!(
+            !outcome.unreadable.is_empty(),
+            "an unreadable EXISTING source must be surfaced (cannot-determine), not silently dropped"
+        );
+        assert!(
+            outcome.unreadable.iter().any(|u| u.contains("decisions")),
+            "the unreadable decisions dir must be named: {:?}",
+            outcome.unreadable
+        );
+    }
+
+    /// The twin legitimate case: a source directory that simply does NOT exist is
+    /// an expected absent (sources are optional) — it must NOT be reported as
+    /// unreadable. This pins that we only fail closed on genuine IO errors, never
+    /// on NotFound (mirror of testaudit's NotFound→Ok(empty) split).
+    #[test]
+    fn absent_optional_source_is_not_flagged_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let docs = root.join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("ok.md"), "# Auth\nrate limit policy\n").unwrap();
+
+        let input = GatherInput {
+            // vault path does not exist; transcripts absent → both legitimately absent.
+            obsidian_vault: Some(root.join("no-such-vault")),
+            canon_root: root.to_path_buf(),
+            canon_globs: vec!["docs/**/*.md".to_string()],
+            transcripts_dir: Some(root.join("no-such-transcripts")),
+            top_k: 24,
+            min_score: 1,
+        };
+        let outcome = gather("rate limit", &input);
+        assert!(
+            outcome.unreadable.is_empty(),
+            "absent (NotFound) optional sources must not be flagged unreadable: {:?}",
+            outcome.unreadable
+        );
+        assert!(
+            !outcome.bundle.fragments.is_empty(),
+            "the readable canon doc still yields fragments"
+        );
     }
 }

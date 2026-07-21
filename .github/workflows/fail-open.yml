@@ -1,0 +1,61 @@
+name: fail-open-guard
+
+# Fail-open gate for the fleet-guarding crates. The doctrine of this repo is that
+# a gate must resolve "cannot determine" into a STOP (block / deny / fail /
+# surface-unknown), never into "fine / allow / green / empty". A directory walk
+# that silently drops an unreadable subtree (`let Ok(..)=read_dir else {return}`,
+# `entries.flatten()`), or a shell capture whose non-zero rc vanishes into an
+# empty string (`$(… 2>/dev/null)` with no `|| rc=$?`), re-imports exactly the
+# "probably fine" judgment the doctrine bans — an unreadable input reads as a
+# clean/empty one and the gate passes. This scanner catches such swallows on the
+# GATE crate surface + repo shell scripts at the moment of introduction, so it is
+# a merge-blocking check. The local pre-commit hook (.githooks/pre-commit) is the
+# fast advisory layer; this CI job is the enforced, non-bypassable one.
+# Self-contained stdlib Python.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/blastguard/src/**'
+      - 'crates/propguard/src/**'
+      - 'crates/specguard/src/**'
+      - 'crates/stuckguard/src/**'
+      - 'crates/mutategate/src/**'
+      - 'crates/overwatch/src/**'
+      - 'scripts/*.sh'
+      - 'scripts/check-fail-open.py'
+      - 'scripts/test_check_fail_open.py'
+      - '.github/workflows/fail-open.yml'
+  pull_request:
+    paths:
+      - 'crates/blastguard/src/**'
+      - 'crates/propguard/src/**'
+      - 'crates/specguard/src/**'
+      - 'crates/stuckguard/src/**'
+      - 'crates/mutategate/src/**'
+      - 'crates/overwatch/src/**'
+      - 'scripts/*.sh'
+      - 'scripts/check-fail-open.py'
+      - 'scripts/test_check_fail_open.py'
+      - '.github/workflows/fail-open.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fail-open-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Unit-test the scanner
+        run: python3 scripts/test_check_fail_open.py
+      - name: Scan gate surface for fail-open swallows
+        run: python3 scripts/check-fail-open.py

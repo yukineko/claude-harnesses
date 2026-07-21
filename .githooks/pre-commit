@@ -3,12 +3,17 @@
 #
 #     git config core.hooksPath .githooks
 #
-# This is the FAST, ADVISORY layer: it runs injectguard (the prompt-asset
-# injection scanner) locally before a commit lands, so a planted concealment /
-# egress instruction is caught at the moment of introduction — cheapest to fix.
-# It is intentionally bypassable (`git commit --no-verify`); the enforced,
-# non-bypassable copy of this check is the `injectguard` CI job, which blocks
-# merge regardless of local hook setup. The binary-reproducibility gate is
+# This is the FAST, ADVISORY layer: it runs two stdlib-only scanners locally
+# before a commit lands, so a defect is caught at the moment of introduction —
+# cheapest to fix:
+#   * injectguard (check-prompt-injection.py) — planted prompt-injection in the
+#     committed prompt assets.
+#   * fail-open-guard (check-fail-open.py) — a new fail-open swallow (a directory
+#     walk that drops an unreadable subtree, or a shell capture whose rc vanishes)
+#     on the gate surface.
+# Both are intentionally bypassable (`git commit --no-verify`); the enforced,
+# non-bypassable copies are the `injectguard` and `fail-open-guard` CI jobs, which
+# block merge regardless of local hook setup. The binary-reproducibility gate is
 # CI-only (it rebuilds from source — too slow for a pre-commit hook).
 #
 # The hook never blocks on infrastructure problems: a missing python or scanner
@@ -18,26 +23,42 @@
 set -u
 
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
-SCANNER="$REPO/scripts/check-prompt-injection.py"
+INJECT_SCANNER="$REPO/scripts/check-prompt-injection.py"
+FAILOPEN_SCANNER="$REPO/scripts/check-fail-open.py"
 
-[ -f "$SCANNER" ] || exit 0
 command -v python3 >/dev/null 2>&1 || {
-    echo "injectguard: python3 not found; skipping local scan (CI still enforces)" >&2
+    echo "pre-commit: python3 not found; skipping local scans (CI still enforces)" >&2
     exit 0
 }
 
-if python3 "$SCANNER"; then
-    exit 0
-fi
+rc=0
 
-cat >&2 <<'EOF'
+if [ -f "$INJECT_SCANNER" ] && ! python3 "$INJECT_SCANNER"; then
+    cat >&2 <<'EOF'
 
 injectguard: a suspicious instruction was found in a committed prompt asset
 (see file:line above). If this is a real planted injection, remove it. If it is
 legitimate defensive text, frame it under a prompt-injection / untrusted heading
 or add a defense marker nearby so the scanner recognises it as data, not attack.
-
-To commit anyway (not recommended — the injectguard CI job will still block the
-merge): git commit --no-verify
 EOF
-exit 1
+    rc=1
+fi
+
+if [ -f "$FAILOPEN_SCANNER" ] && ! python3 "$FAILOPEN_SCANNER"; then
+    cat >&2 <<'EOF'
+
+fail-open-guard: a new fail-open swallow was found on the gate surface (see
+file:line above). Fail CLOSED instead: for a read_dir walk, `match read_dir {
+Ok(e)=>e, Err(e) if e.kind()==NotFound => .., Err(e) => <surface> }` and a
+per-entry `match entry {…}` (never `.flatten()`); for a shell capture, keep the
+rc (`… || rc=$?`) and refuse to pass when it is non-zero. If it is a reviewed
+exception, add it to ALLOWLIST in check-fail-open.py with a reason.
+EOF
+    rc=1
+fi
+
+if [ "$rc" -ne 0 ]; then
+    echo "" >&2
+    echo "To commit anyway (not recommended — the CI jobs will still block the merge): git commit --no-verify" >&2
+fi
+exit "$rc"

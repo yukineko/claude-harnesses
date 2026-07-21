@@ -51,10 +51,19 @@ pub fn write(input: &HookInput, cfg: &Config, trigger: &str) -> Option<PathBuf> 
     // when this session already has a fresh rescue. PreCompact/auto are NEVER
     // coalesced — they fire right before real loss, so one must always land.
     if trigger.starts_with("band-") && cfg.rescue_coalesce_secs > 0 {
-        if let Some(existing) =
-            store.recent_session_rescue(&cwd, &input.session_id, cfg.rescue_coalesce_secs)
-        {
-            return Some(existing);
+        match store.recent_session_rescue(&cwd, &input.session_id, cfg.rescue_coalesce_secs) {
+            harness_core::verdict::Determination::Known(Some(existing)) => return Some(existing),
+            harness_core::verdict::Determination::Known(None) => {}
+            // Cannot tell whether a fresh rescue already exists. Fall through
+            // and write one: a duplicate note costs disk, a skipped one costs
+            // the carryover this hook exists to preserve. Reached by *seeing*
+            // the undetermined answer, not by mistaking it for "none exists".
+            harness_core::verdict::Determination::Undetermined(why) => {
+                eprintln!(
+                    "ctxrot rescue: 既存の退避ノートを確認できませんでした（重複を許して\
+                     新規作成します）: {why}"
+                );
+            }
         }
     }
 

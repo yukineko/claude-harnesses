@@ -1,6 +1,6 @@
 {
   "name": "ctxrot",
-  "version": "0.5.12",
+  "version": "0.5.13",
   "description": "Context-rot guard for Claude Code: detect, rescue, restore, distill, and CONTROL what loads into context (rule-based allow/deny gate + /ctx pin/drop/load + switchable carryover). Subscription-native (hooks + subagent + skill, no API key). v0.5.8: `guard::fetch_session_lease`'s `overwatch lease` subprocess call is now bounded by an 8s timeout (wait_timeout, kill+reap on expiry) instead of a plain unbounded `Command::output()`, so a hung overwatch binary can no longer wedge the UserPromptSubmit hook; the spawn/timeout/kill mechanics are split into a testable `run_with_timeout` helper.",
   "author": {
     "name": "yukineko"

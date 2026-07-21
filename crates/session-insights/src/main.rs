@@ -184,10 +184,29 @@ fn sessionend() {
             .to_string();
         s.ensure(&session, &project, &root.to_string_lossy());
     }
-    let turns_fallback = harness_core::usage::aggregate(&input.transcript_path)
-        .map(|a| a.turns)
-        .unwrap_or(0);
+    let turns_fallback = turns_fallback(&input.transcript_path);
     record::write_from_session(&cfg, &s, &input.transcript_path, turns_fallback);
+}
+
+/// Turn count from the transcript, used only when the ledger has none.
+///
+/// `0` here means "no transcript / no turns in it". It is deliberately NOT
+/// where an unreadable sub-agent transcript dir lands silently: session-insights
+/// is a passive recorder, so it keeps writing the note (a partial record beats
+/// none), but an under-counted turn total is disclosed on stderr rather than
+/// presented as the number. The cost figures in the same note carry the same
+/// disclosure inline (see `record::cost_incompleteness`).
+fn turns_fallback(transcript_path: &str) -> u64 {
+    let Some(agg) = harness_core::usage::aggregate(transcript_path) else {
+        return 0;
+    };
+    if let harness_core::verdict::Determination::Undetermined(why) = &agg.subagent_scan {
+        eprintln!(
+            "session-insights: sub-agent turns could not be read; the recorded \
+             turn count is an under-count: {why}"
+        );
+    }
+    agg.turns
 }
 
 /// Best-effort transcript discovery for a manually-run command (no hook stdin):
@@ -239,9 +258,7 @@ fn record_now(session_arg: Option<String>) {
         s.ensure(&session, &project, &root.to_string_lossy());
     }
     let transcript = find_transcript(&session);
-    let turns_fallback = harness_core::usage::aggregate(&transcript)
-        .map(|a| a.turns)
-        .unwrap_or(0);
+    let turns_fallback = turns_fallback(&transcript);
     match record::write_from_session(&cfg, &s, &transcript, turns_fallback) {
         Some(p) => println!("{}", p.display()),
         None => eprintln!(

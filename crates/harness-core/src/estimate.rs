@@ -12,21 +12,45 @@
 
 use crate::pricing::{self, PriceOverride};
 use crate::usage::{self, Aggregate};
+use crate::verdict::Determination;
 
 /// A transcript's aggregated usage plus its estimated USD cost, computed in one
 /// pass. `aggregate` is the full per-model / per-agent tally (identical to what
 /// [`usage::aggregate`] returns); `cost_usd` is [`pricing::session_cost`] over
 /// its grand-total `models`.
+///
+/// `cost_usd` is a bare `f64` and therefore **cannot express "this is an
+/// under-count"**. When the transcript's sibling `subagents/` directory could
+/// not be read, `aggregate.subagent_scan` is `Undetermined` and `cost_usd`
+/// omits that sub-agent spend. A consumer whose answer depends on the number
+/// being complete (a budget gate; a persisted canonical record) must read it
+/// through [`TranscriptCostEstimate::complete_cost`], not the field.
 #[derive(Debug)]
 pub struct TranscriptCostEstimate {
     pub aggregate: Aggregate,
     pub cost_usd: f64,
 }
 
+impl TranscriptCostEstimate {
+    /// The cost, but only when every sub-agent spend source was actually read.
+    /// `Undetermined` (carrying the sub-agent scan's reason) when `cost_usd`
+    /// would be an under-count of unknown size.
+    pub fn complete_cost(&self) -> Determination<f64> {
+        match &self.aggregate.subagent_scan {
+            Determination::Known(()) => Determination::Known(self.cost_usd),
+            Determination::Undetermined(why) => Determination::Undetermined(why.clone()),
+        }
+    }
+}
+
 /// Aggregate the session transcript at `path` and price it with `overrides` in a
 /// single call. Returns `None` on exactly the same conditions as
 /// [`usage::aggregate`] (empty/unreadable path, or a transcript with no turns
 /// and no tool calls) — fail-soft, never breaks the turn.
+///
+/// Note that "could not read this session's sub-agent spend" is **not** one of
+/// those `None` conditions: it comes back as a `Some` whose
+/// [`complete_cost`](TranscriptCostEstimate::complete_cost) is `Undetermined`.
 pub fn estimate_transcript_cost(
     path: &str,
     overrides: &[PriceOverride],

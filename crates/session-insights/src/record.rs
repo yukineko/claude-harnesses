@@ -19,6 +19,7 @@ use harness_core::pricing::{self, PriceOverride};
 use harness_core::session;
 use harness_core::transcript;
 use harness_core::usage::ModelUsage;
+use harness_core::verdict::Determination;
 
 use crate::config::Config;
 use crate::metrics::{short, Session};
@@ -69,6 +70,26 @@ fn session_models(ctx: &RecordCtx) -> Option<BTreeMap<String, ModelUsage>> {
     estimate_transcript_cost(ctx.transcript_path, ctx.overrides).map(|e| e.aggregate.models)
 }
 
+/// Why this session's cost figures are incomplete, if they are.
+///
+/// The rendered `## コスト` block is read by a human as "what this session
+/// cost", so a silently under-counted total is a false statement, not a
+/// degraded one. When the transcript's sub-agent spend could not be read this
+/// returns the reason, and [`cost_body`] prints it next to the numbers instead
+/// of presenting them as a measurement.
+///
+/// `None` also covers "the numbers came from gauge's canonical record" — that
+/// record is only ever written from a complete aggregate
+/// (`crates/gauge/src/main.rs` `record_hook` refuses an undetermined one), so
+/// there is no under-count to disclose on that path.
+fn cost_incompleteness(ctx: &RecordCtx) -> Option<String> {
+    let est = estimate_transcript_cost(ctx.transcript_path, ctx.overrides)?;
+    match est.complete_cost() {
+        Determination::Known(_) => None,
+        Determination::Undetermined(why) => Some(why.to_string()),
+    }
+}
+
 /// Resolve per-agent (main / sub-agent) token usage. Prefer gauge's canonical
 /// [`SessionRecord`] when it has agent data; fall back to a fresh transcript
 /// aggregate. This fallback makes session-insights robust against hook-ordering
@@ -90,6 +111,9 @@ fn cost_body(ctx: &RecordCtx) -> String {
     let Some(models) = session_models(ctx) else {
         return "- (コストデータなし)".to_string();
     };
+    let incomplete = cost_incompleteness(ctx)
+        .map(|why| format!("- ⚠ サブエージェント費用を読めませんでした（以下は過少計上）: {why}\n"))
+        .unwrap_or_default();
     let total_usd = pricing::session_cost(models.iter(), ctx.overrides);
     let mut input = 0u64;
     let mut output = 0u64;
@@ -130,7 +154,8 @@ fn cost_body(ctx: &RecordCtx) -> String {
     };
 
     format!(
-        "- total: ${total_usd:.2} USD\n\
+        "{incomplete}\
+         - total: ${total_usd:.2} USD\n\
          {agent_lines}\
          - total tokens: {total_tokens}\n\
          - input: {input}   output: {output}\n\

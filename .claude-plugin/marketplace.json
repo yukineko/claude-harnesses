@@ -82,7 +82,7 @@
     {
       "name": "budgetguard",
       "description": "Real-time cost budget gate for Claude Code: on Stop, read the session transcript, compute USD cost, and block the turn when session or daily limits are exceeded — feeding the overage back so the agent winds down gracefully. Subscription-native (one Stop hook + bundled Rust binary, no API key). v0.1.9: added #![deny(clippy::panic)] at crate root.",
-      "version": "0.1.9",
+      "version": "0.1.10",
       "category": "cost",
       "keywords": [
         "hooks",
@@ -183,7 +183,7 @@
     {
       "name": "ctxrot",
       "description": "Context-rot guard for Claude Code: detect, rescue, restore, distill, and CONTROL what loads into context (rule-based allow/deny gate + /ctx pin/drop/load + switchable carryover). Subscription-native (hooks + subagent + skill, no API key). v0.5.12: the Stop-hook compact nudge now fails CLOSED on a cannot-determine reading — when `estimate_tokens` falls back to the cache-blind bytes proxy (no `usage` block parsed) yet that proxy, a LOWER bound on true usage, has already reached band 1, the hook surfaces a one-shot `/compact` nudge instead of silently allowing a possibly-over-budget session to keep growing; previously its high 0.90 block threshold let a truncated/corrupt transcript read low and never nudge (behavioral twin of the v0.5.10/v0.5.11 render fixes). Bounded to fire ONCE per session (dedicated `.compact-unmeasured` sentinel, never a turn-trap); a genuine early session below band 1 stays silent (no over-alarm) and the eventual genuine over-threshold reading still blocks. v0.5.11: the context-usage readout (statusline + `ctxrot usage`) no longer renders a bytes-proxy estimate as a confident band — `estimate_tokens`'s source (`\"bytes\"` = a rough size/4 guess with no real usage block, vs `\"usage\"` = authoritative) is threaded through `usage::line` instead of discarded, so an estimate carries an `est?` marker and, when it lands in the green band, is DIMMED (neutral, not confident green) so a truncated/corrupt transcript reading low can't read as \"plenty of headroom\"; a high estimate keeps its alarming color and authoritative readings are unchanged. v0.5.10: the `statusline` render now fails CLOSED on a cannot-determine — a non-empty-but-unparseable payload, or a transcript that can't be read/estimated, renders an explicit non-green `?% … unknown` band (mirroring `ctxrot usage`'s \"不明\") instead of printing nothing; a blank status bar silently read as \"plenty of headroom\" (fail-open twin of the already-hardened Stop-hook path). Empty stdin / no session still renders blank; exit stays 0 so the bar never crashes. v0.5.9: the preguard (PreToolUse) and toolguard (PostToolUse) hooks now wrap their detectors in a `std::panic::catch_unwind` barrier (`analyse`) — a panic in the analysis maps to a deny (preguard) or a fail-closed placeholder+nudge (toolguard) instead of the un-analysed call/output silently passing through, closing a fail-open (blastguard 同型). v0.5.8: `guard::fetch_session_lease`'s `overwatch lease` subprocess call is now bounded by an 8s timeout (wait_timeout, kill+reap on expiry) instead of a plain unbounded `Command::output()`, so a hung overwatch binary can no longer wedge the UserPromptSubmit hook; the spawn/timeout/kill mechanics are split into a testable `run_with_timeout` helper.",
-      "version": "0.5.12",
+      "version": "0.5.13",
       "category": "context",
       "keywords": [
         "context",
@@ -433,7 +433,7 @@
     {
       "name": "gauge",
       "description": "Local LLMOps telemetry for Claude Code: a Stop hook that reads each session's transcript and records token usage, cache hits, tool calls, latency, and estimated cost to a local store — then `gauge report` rolls it up by project, model, and day. v0.3.7 adds a manually-registered rate-limit window (`gauge config set-window --hours <f64> --last-reset <ISO8601>` / `config show`), letting other tools query an approximate reset ETA — fail-soft, no automatic detection. v0.3.8: docs-only — README/README.ja and the spec draft now document the v0.3.7 `config set-window`/`config show` subcommands. v0.3.9: `gauge subagents --json` now also emits `tokens_input`/`tokens_output` per sub-agent, so callers can record real token usage alongside cost. Observability for your own agent runs, subscription-native (one hook + bundled Rust binary, no API key, nothing leaves the machine).",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -459,7 +459,7 @@
     {
       "name": "harness-status",
       "description": "Unified HOTL status dashboard for Claude Code. A /status command runs a bundled Rust binary that aggregates budgetguard's spend ledger, gauge's session records (recent sessions + cost), and taskprog's progress file into one human-on-the-loop view. Subscription-native (binary + command, no API key). A lightweight SessionStart hook additionally warns (fail-soft, silent when healthy) if a registered hook's binary is missing from disk, or if a stray PATH binary (e.g. a stale ~/.cargo/bin copy) shadows a newer plugin-cache copy.",
-      "version": "0.1.8",
+      "version": "0.1.9",
       "category": "observability",
       "keywords": [
         "status",
@@ -604,7 +604,7 @@
     {
       "name": "session-insights",
       "description": "Per-session work metrics for Claude Code: PostToolUse + Stop hooks roll up tool calls, turns, files touched, a size class (XS–XL) and a work category per session, viewable with `session-insights report` and optionally logged as a dated note to an Obsidian vault. Inspired by Devin Session Insights. Subscription-native (two hooks + bundled Rust binary, no API key).",
-      "version": "0.2.11",
+      "version": "0.2.12",
       "category": "observability",
       "keywords": [
         "hooks",

@@ -260,6 +260,24 @@ enum NoteAction {
     },
 }
 
+/// Resolve a note-store listing for a CLI command, or refuse to print.
+///
+/// An unreadable store must not render as an empty one: `note list` would print
+/// nothing (read as "this project has no notes"), and `note prune` would report
+/// "0 notes removed, 0 kept" for a store it never saw. Neither has a useful
+/// restricted output, so both say `unknown` on stderr and exit non-zero.
+fn known_or_exit<T>(d: harness_core::verdict::Determination<T>) -> T {
+    match d {
+        harness_core::verdict::Determination::Known(v) => v,
+        harness_core::verdict::Determination::Undetermined(why) => {
+            eprintln!(
+                "ctxrot: ノートストアを読めませんでした（「ノート無し」ではありません）: {why}"
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.command {
@@ -408,7 +426,7 @@ fn main() {
                     let cwd = cwd.unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
                     });
-                    for p in store.list_notes(&cwd) {
+                    for p in known_or_exit(store.list_notes(&cwd)) {
                         println!("{}", p.display());
                     }
                 }
@@ -416,7 +434,7 @@ fn main() {
                     let cwd = cwd.unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
                     });
-                    match store.latest_note(&cwd) {
+                    match known_or_exit(store.latest_note(&cwd)) {
                         Some(p) => println!("{}", p.display()),
                         None => {
                             eprintln!("(no notes for this project)");
@@ -496,12 +514,12 @@ fn main() {
                     let cwd = cwd.unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
                     });
-                    let res = store.prune(
+                    let res = known_or_exit(store.prune(
                         &cwd,
                         cfg.keep_notes_per_project,
                         cfg.keep_distill_min,
                         dry_run,
-                    );
+                    ));
                     let verb = if dry_run { "would remove" } else { "removed" };
                     for p in &res.removed {
                         println!("{verb}: {}", p.display());

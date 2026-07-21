@@ -7,6 +7,7 @@ use crate::inject::{key8, InjectReport};
 use crate::path_shadow::ShadowedBinary;
 use crate::progress::ProgressStatus;
 use crate::sessions::SessionSummary;
+use harness_core::verdict::Determination;
 
 /// All the per-panel reports the default (no-subcommand) view aggregates,
 /// bundled into one struct so `print_status`/`print_json` take a manageable
@@ -14,7 +15,9 @@ use crate::sessions::SessionSummary;
 pub struct StatusReport<'a> {
     pub today: &'a str,
     pub budget: &'a BudgetStatus,
-    pub sessions: &'a [SessionSummary],
+    /// `Undetermined` when gauge's session store could not be read — rendered
+    /// as an explicit `unknown`, never as the empty "no session records" state.
+    pub sessions: &'a Determination<Vec<SessionSummary>>,
     pub progress: &'a ProgressStatus,
     pub hooks: &'a HookLatencyReport,
     pub inject: &'a InjectReport,
@@ -52,21 +55,28 @@ pub fn print_status(report: &StatusReport, cwd_display: &str) {
 
     // Recent sessions
     println!("── Recent sessions (gauge) ───────────────────────");
-    if sessions.is_empty() {
-        println!("  No session records found — gauge not installed?");
-    } else {
-        println!(
-            "  {:<16} {:<20} {:>6} {:>12} {:>9}",
-            "Session", "Project", "Turns", "Tokens", "Cost USD"
-        );
-        println!("  {}", "-".repeat(70));
-        for s in sessions {
-            let id8 = s.session_id.get(..8).unwrap_or(&s.session_id);
-            let proj = truncate(&s.project, 20);
+    match sessions {
+        // "could not read the store" is NOT "no sessions": say unknown.
+        Determination::Undetermined(why) => {
+            println!("  unknown — gauge's session store could not be read: {why}");
+        }
+        Determination::Known(sessions) if sessions.is_empty() => {
+            println!("  No session records found — gauge not installed?");
+        }
+        Determination::Known(sessions) => {
             println!(
-                "  {:<16} {:<20} {:>6} {:>12} {:>9.4}",
-                id8, proj, s.turns, s.total_tokens, s.cost_usd
+                "  {:<16} {:<20} {:>6} {:>12} {:>9}",
+                "Session", "Project", "Turns", "Tokens", "Cost USD"
             );
+            println!("  {}", "-".repeat(70));
+            for s in sessions {
+                let id8 = s.session_id.get(..8).unwrap_or(&s.session_id);
+                let proj = truncate(&s.project, 20);
+                println!(
+                    "  {:<16} {:<20} {:>6} {:>12} {:>9.4}",
+                    id8, proj, s.turns, s.total_tokens, s.cost_usd
+                );
+            }
         }
     }
     println!();
@@ -185,7 +195,15 @@ pub fn print_json(report: &StatusReport) {
     let out = serde_json::json!({
         "date": report.today,
         "budget": report.budget,
-        "recent_sessions": report.sessions,
+        // A machine reader must be able to tell an empty store from an
+        // unreadable one, so the undetermined arm is a tagged object, not [].
+        "recent_sessions": match report.sessions {
+            Determination::Known(s) => serde_json::json!(s),
+            Determination::Undetermined(why) => serde_json::json!({
+                "status": "unknown",
+                "reason": why.as_str(),
+            }),
+        },
         "progress": report.progress,
         "hook_latency": report.hooks,
         "inject": report.inject,

@@ -537,8 +537,21 @@ fn check_reanchor(input: &HookInput, cfg: &Config) -> Option<String> {
     // Only re-surface what THIS session already committed to its own note; never
     // a sibling/fallback note (that's restore's job at SessionStart).
     let cwd = input.cwd_or_current();
+    // An unreadable note store must not present as "this session wrote no note"
+    // — that silently drops the re-anchor for the rest of the session with no
+    // trace. Say so, then stay silent (the hook has no restricted output here
+    // beyond not re-anchoring).
     let note =
-        Store::new(cfg.store_dir.clone()).latest_note_for_session(&cwd, &input.session_id)?;
+        match Store::new(cfg.store_dir.clone()).latest_note_for_session(&cwd, &input.session_id) {
+            harness_core::verdict::Determination::Known(note) => note?,
+            harness_core::verdict::Determination::Undetermined(why) => {
+                eprintln!(
+                    "ctxrot anchor: 退避ノートを読めませんでした（再浮上の要否は不明。\
+                 「ノート無し」ではありません）: {why}"
+                );
+                return None;
+            }
+        };
     let text = std::fs::read_to_string(&note).ok()?;
 
     let decisions = crate::hooks::restore::extract_section(&text, &["決定事項", "Decisions"])
@@ -902,7 +915,12 @@ mod tests {
         );
 
         let store = harness_core::store::Store::new(cfg.store_dir.clone());
-        let notes = store.list_notes(&cwd);
+        let notes = match store.list_notes(&cwd) {
+            harness_core::verdict::Determination::Known(notes) => notes,
+            harness_core::verdict::Determination::Undetermined(why) => {
+                panic!("readable note store must be Known, got Undetermined({why:?})")
+            }
+        };
         assert!(
             notes.iter().any(|p| p
                 .file_name()

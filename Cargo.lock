@@ -161,13 +161,14 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "globset",
  "harness-core",
  "overwatch",
  "serde",
  "serde_json",
+ "trybuild",
 ]
 
 [[package]]
@@ -299,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.84"
+version = "0.7.85"
 dependencies = [
  "anyhow",
  "blastguard",

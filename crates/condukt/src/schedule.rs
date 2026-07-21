@@ -355,6 +355,36 @@ pub(crate) fn task_action_text(t: &Task) -> String {
     s
 }
 
+/// Resolve one task's risk classification into `(force_gate, undetermined_why)`.
+///
+/// Extracted from [`schedule`] as a pure function so the FAIL-CLOSED arm is
+/// directly observable in a test: `schedule` builds its own
+/// `SensitiveConfig::default()`, which always compiles, so the undetermined
+/// branch is not reachable by feeding `schedule` a decomposition — it is only
+/// reachable through a misconfigured glob list. Testing the resolution here is
+/// the honest way to pin the invariant rather than leaving it unexercised.
+///
+/// * `Known(a)`  → gate iff `a.requires_gate() || a.risk >= Medium` (unchanged).
+/// * `Undetermined` → **always gate**, carrying the reason so the caller can
+///   emit a warning that names the misconfiguration. "Could not measure this
+///   task's risk" must never resolve to the permissive `false`.
+fn resolve_force_gate(
+    d: harness_core::verdict::Determination<blastguard::classify::RiskAssessment>,
+) -> (bool, Option<String>) {
+    match d.require() {
+        Ok(a) => (a.requires_gate() || a.risk >= Risk::Medium, None),
+        Err(verdict) => (
+            true,
+            Some(
+                verdict
+                    .reason()
+                    .map(|r| r.as_str().to_string())
+                    .unwrap_or_else(|| "risk classification undetermined".to_string()),
+            ),
+        ),
+    }
+}
+
 /// Compute the deterministic schedule. `shared_globs` come from config: any
 /// parallel task touching one is demoted to serial. A high-risk irreversible
 /// action (deploy/push/release, per [`blastguard::classify`]) is force-gated
@@ -374,6 +404,11 @@ pub(crate) fn task_action_text(t: &Task) -> String {
 /// trip `requires_gate()` on its own. We therefore force-gate on
 /// `requires_gate() || risk >= Risk::Medium`, which is exactly the "review
 /// required" OR that `classify_diff`'s doc comment anticipates callers add.
+///
+/// A classification that could NOT be determined (an unparseable configured
+/// sensitive-path glob) force-gates as well, via [`resolve_force_gate`], and
+/// emits a warning naming the misconfiguration — "could not measure the risk"
+/// is never read as "low risk".
 pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
     let mut sched = Schedule::default();
     let shared = build_globset(shared_globs);
@@ -429,10 +464,28 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
         // classifier is the single source of the risk/reversibility axes, so a
         // deploy mislabelled `parallel` can never slip past the only outward
         // gate, and neither can a sensitive-path change.
-        let assessment = classify_change(&task_action_text(t), &t.touched_files, "", &sensitive);
-        if assessment.requires_gate() || assessment.risk >= Risk::Medium {
+        //
+        // FAIL-CLOSED on an undetermined classification: `classify_change`
+        // returns a `Determination` because its sensitive-path signal can fail
+        // to compile (a bad configured glob). "We could not measure this task's
+        // risk" is NOT "this task is low risk" — it force-gates, exactly like a
+        // measured Medium+, and says so in a warning so the misconfiguration is
+        // visible rather than silently widening the gate.
+        let (force_gate, undetermined_why) = resolve_force_gate(classify_change(
+            &task_action_text(t),
+            &t.touched_files,
+            "",
+            &sensitive,
+        ));
+        if force_gate {
             gated.push(t.id.clone());
-            if !matches!(t.class, Class::Gated) {
+            if let Some(why) = undetermined_why {
+                sched.warnings.push(format!(
+                    "task '{}' force-gated: risk could not be determined ({why}) — \
+                     resolved to the restricted side",
+                    t.id
+                ));
+            } else if !matches!(t.class, Class::Gated) {
                 sched.warnings.push(format!(
                     "task '{}' force-gated: high-risk irreversible action (declared class {:?})",
                     t.id, t.class
@@ -599,6 +652,78 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
 mod tests {
     use super::*;
     use crate::model::{Class, Decomposition, Task};
+
+    // ── fail-closed: an undetermined risk classification force-gates ──────────
+
+    #[test]
+    fn undetermined_classification_force_gates_with_a_naming_warning() {
+        use blastguard::diffrisk::SensitiveConfig;
+        use harness_core::verdict::Determination;
+
+        // Real end-to-end signal: a misconfigured glob list makes
+        // `classify_change` undetermined ...
+        let bad = SensitiveConfig::from_globs(vec!["[".to_string()]);
+        let d = classify_change(
+            "write a unit test",
+            &["src/parser.rs".to_string()],
+            "",
+            &bad,
+        );
+        assert!(
+            matches!(d, Determination::Undetermined(_)),
+            "precondition: a bad glob list must classify as Undetermined"
+        );
+
+        // ... and the scheduler's resolution force-gates it, naming the cause.
+        let (force_gate, why) = resolve_force_gate(d);
+        assert!(
+            force_gate,
+            "an unmeasurable risk must force-gate, not fall through as Low"
+        );
+        let why = why.expect("the undetermined arm must carry a reason");
+        assert!(
+            why.contains("invalid sensitive glob"),
+            "the warning must name the misconfiguration, got {why:?}"
+        );
+    }
+
+    #[test]
+    fn determinable_classification_keeps_its_previous_gate_decision() {
+        use blastguard::diffrisk::SensitiveConfig;
+
+        let cfg = SensitiveConfig::default();
+        // Low + reversible + no sensitive path -> NOT gated (unchanged), and no
+        // undetermined reason is fabricated.
+        let (gate, why) = resolve_force_gate(classify_change(
+            "write a unit test",
+            &["src/parser.rs".to_string()],
+            "",
+            &cfg,
+        ));
+        assert!(!gate);
+        assert!(why.is_none());
+
+        // Sensitive path -> Medium -> gated (unchanged), still via the measured
+        // arm (no undetermined reason).
+        let (gate, why) = resolve_force_gate(classify_change(
+            "write a unit test",
+            &["src/auth/login.rs".to_string()],
+            "",
+            &cfg,
+        ));
+        assert!(gate);
+        assert!(why.is_none());
+
+        // Deploy text -> High/irreversible -> gated (unchanged).
+        let (gate, why) = resolve_force_gate(classify_change(
+            "git push origin main",
+            &["README.md".to_string()],
+            "",
+            &cfg,
+        ));
+        assert!(gate);
+        assert!(why.is_none());
+    }
 
     fn task(id: &str, files: &[&str], deps: &[&str], class: Class) -> Task {
         Task {

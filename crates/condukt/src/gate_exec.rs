@@ -59,11 +59,20 @@ fn risk_slug(risk: Risk) -> &'static str {
     }
 }
 
-/// Gather the `{risk, reversible}` signals for one gated task, FAIL-SOFT: an
-/// unloadable run, a missing/corrupt decomposition, or a task id that isn't in
-/// the decomposition yields `None` (which the caller degrades to Escalate).
-/// Never panics. Classifies the SAME action text the schedule force-gate does
-/// via [`crate::schedule::task_action_text`] — no duplicated join logic.
+/// Gather the `{risk, reversible}` signals for one gated task, FAIL-CLOSED: an
+/// unloadable run, a missing/corrupt decomposition, a task id that isn't in the
+/// decomposition, **or a risk classification that could not be determined**
+/// yields `None` — which the caller degrades to [`GateExec::Escalate`], the
+/// restricted side. Never panics. Classifies the SAME action text the schedule
+/// force-gate does via [`crate::schedule::task_action_text`] — no duplicated
+/// join logic.
+///
+/// The `None`-on-undetermined arm matters: [`classify_change`] returns a
+/// [`Determination`] because its sensitive-path signal can fail to compile
+/// (a bad configured glob). Reading that as a permissive Low/reversible
+/// assessment would auto-exec a task whose risk was never actually measured, so
+/// the undetermined arm joins the existing missing-signal path to Escalate
+/// rather than producing an assessment.
 fn gather_assessment(
     cfg: &Config,
     cwd: &Path,
@@ -80,12 +89,29 @@ fn gather_assessment(
     // matching classify_change's documented additive/backward-compatible
     // behavior. `touched_files` is condukt's own task field, so this is free.
     let sensitive = SensitiveConfig::default();
-    Some(classify_change(
+    resolve_assessment(classify_change(
         &crate::schedule::task_action_text(task),
         &task.touched_files,
         "",
         &sensitive,
     ))
+}
+
+/// Resolve a risk classification into the `Option<RiskAssessment>` the gate
+/// consumes: `Known(a)` → `Some(a)`, `Undetermined` → **`None`**, which
+/// [`run_gate_check`] degrades to [`GateExec::Escalate`].
+///
+/// Extracted as a pure function so this FAIL-CLOSED arm is directly testable:
+/// [`gather_assessment`] builds its own `SensitiveConfig::default()`, which
+/// always compiles, so the undetermined branch cannot be reached by feeding
+/// `gather_assessment` a decomposition — only by a misconfigured glob list.
+/// `require()` is `Determination`'s only extractor; there is deliberately no
+/// `unwrap_or`-style path that could substitute a permissive Low/reversible
+/// assessment for a risk that was never measured.
+fn resolve_assessment(
+    d: harness_core::verdict::Determination<RiskAssessment>,
+) -> Option<RiskAssessment> {
+    d.require().ok()
 }
 
 /// Handler for `condukt gate check --run RID --task TASKID`. Gathers the
@@ -193,6 +219,47 @@ pub fn run_gate_check(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use harness_core::verdict::Determination;
+
+    #[test]
+    fn undetermined_classification_never_auto_execs() {
+        // FAIL-CLOSED: a risk that could not be measured must NOT arrive as a
+        // Low/reversible assessment (which, under an auto policy, would
+        // auto-exec). It resolves to None -> the caller's Escalate arm.
+        let d: Determination<RiskAssessment> =
+            Determination::undetermined("invalid sensitive glob `[`");
+        let resolved = resolve_assessment(d);
+        assert!(
+            resolved.is_none(),
+            "an undetermined classification must not yield an assessment; got {resolved:?}"
+        );
+        // And the verdict the caller derives from None is Escalate, even when
+        // the autonomy policy is fully auto.
+        let verdict = match &resolved {
+            Some(a) => decide_gate_exec(a.risk, a.reversible, true),
+            None => GateExec::Escalate,
+        };
+        assert_eq!(verdict, GateExec::Escalate);
+    }
+
+    #[test]
+    fn known_classification_is_passed_through_unchanged() {
+        // Invariance guard: wrapping in a Determination must not alter what a
+        // determinable classification decides.
+        let a = RiskAssessment {
+            risk: Risk::Low,
+            reversible: true,
+        };
+        assert_eq!(
+            resolve_assessment(Determination::Known(a.clone())),
+            Some(a.clone())
+        );
+        assert_eq!(
+            decide_gate_exec(a.risk, a.reversible, true),
+            GateExec::AutoExec
+        );
+    }
 
     #[test]
     fn gate_exec_low_reversible_auto_autoexecs() {

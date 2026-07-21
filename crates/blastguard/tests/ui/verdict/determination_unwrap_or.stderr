@@ -1,0 +1,17 @@
+error[E0599]: no method named `unwrap_or` found for enum `Determination<T>` in the current scope
+  --> tests/ui/verdict/determination_unwrap_or.rs:15:15
+   |
+15 |     let _ = a.unwrap_or(false);
+   |               ^^^^^^^^^ method not found in `Determination<bool>`
+
+error[E0599]: no method named `ok` found for enum `Determination<T>` in the current scope
+  --> tests/ui/verdict/determination_unwrap_or.rs:18:15
+   |
+18 |     let _ = b.ok();
+   |               ^^ method not found in `Determination<bool>`
+
+error[E0599]: no method named `unwrap_or_default` found for enum `Determination<T>` in the current scope
+  --> tests/ui/verdict/determination_unwrap_or.rs:21:15
+   |
+21 |     let _ = c.unwrap_or_default();
+   |               ^^^^^^^^^^^^^^^^^ method not found in `Determination<bool>`

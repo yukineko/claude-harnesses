@@ -161,16 +161,52 @@ pub fn build_review_brief(
 
     // Sensitive-path classification: per-file, so ordering can put the
     // sensitive file(s) first while preserving declared order among them.
-    let sensitive_files: Vec<String> = touched_files
-        .iter()
-        .filter(|f| sensitive_cfg.any_sensitive(std::slice::from_ref(*f)))
-        .cloned()
-        .collect();
+    //
+    // FAIL-CLOSED: `any_sensitive` is a `Determination` — it is `Undetermined`
+    // when the configured sensitive-path globs did not compile, i.e. the file
+    // was never actually tested. That resolves to the RESTRICTED side (the file
+    // is treated as sensitive, which forces High tier and blocks the precedent
+    // downgrade below), but it is NOT silently reported as a real sensitive-path
+    // hit: `undetermined_why` below drives a distinct risk-driver line so the
+    // human reading this brief is told the list was a fallback caused by a
+    // misconfiguration, not a measurement that this change touches auth code.
+    let mut sensitive_files: Vec<String> = Vec::new();
+    let mut undetermined_why: Option<String> = None;
+    let mut measured_sensitive = false;
+    for f in touched_files {
+        match sensitive_cfg
+            .any_sensitive(std::slice::from_ref(f))
+            .require()
+        {
+            Ok(true) => {
+                measured_sensitive = true;
+                sensitive_files.push(f.clone());
+            }
+            Ok(false) => {}
+            Err(verdict) => {
+                if undetermined_why.is_none() {
+                    undetermined_why = Some(
+                        verdict
+                            .reason()
+                            .map(|r| r.as_str().to_string())
+                            .unwrap_or_else(|| "sensitive-path check undetermined".to_string()),
+                    );
+                }
+                sensitive_files.push(f.clone());
+            }
+        }
+    }
     let any_sensitive = !sensitive_files.is_empty();
 
     let mut risk_drivers: Vec<String> = Vec::new();
-    if any_sensitive {
+    if measured_sensitive {
         risk_drivers.push("touches sensitive path".to_string());
+    }
+    if let Some(why) = &undetermined_why {
+        risk_drivers.push(format!(
+            "sensitive-path check could not run ({why}) — every touched file is \
+             conservatively treated as sensitive; this is NOT a measured hit"
+        ));
     }
     for ti in &tripped_invariants {
         risk_drivers.push(format!(
@@ -497,7 +533,90 @@ mod tests {
         assert_eq!(brief.look_here_first[0], "crates/bar/hooks/stop.sh");
         // Consistency proof: blastguard's bare default would NOT flag hooks/.
         let hooks = "crates/bar/hooks/stop.sh".to_string();
-        assert!(!SensitiveConfig::default().any_sensitive(std::slice::from_ref(&hooks)));
+        assert_eq!(
+            SensitiveConfig::default().any_sensitive(std::slice::from_ref(&hooks)),
+            harness_core::verdict::Determination::Known(false)
+        );
+    }
+
+    #[test]
+    fn undetermined_sensitive_check_is_conservative_and_says_so() {
+        // FAIL-CLOSED end-to-end: a misconfigured (unparseable) sensitive-glob
+        // list means NO file was tested. Every touched file is treated as
+        // sensitive (High tier, precedent downgrade blocked) — but the brief
+        // must NOT claim the measured "touches sensitive path" driver, because
+        // that would tell a human this change hits auth code when in fact the
+        // check never ran.
+        let cfg = SensitiveConfig::from_globs(vec!["[".to_string()]);
+        let touched = vec!["src/parser.rs".to_string(), "README.md".to_string()];
+        let brief = build_review_brief(
+            plain_intent(),
+            "run-1/t1",
+            &touched,
+            &[],
+            &[],
+            &cfg,
+            &[],
+            DEFAULT_TEST_TOLERANCE,
+        );
+
+        assert_eq!(
+            brief.risk_tier,
+            RiskTier::High,
+            "an unmeasurable sensitive-path check must resolve to the restricted side"
+        );
+        assert!(
+            !brief
+                .risk_drivers
+                .iter()
+                .any(|d| d == "touches sensitive path"),
+            "must not claim a MEASURED sensitive-path hit: {:?}",
+            brief.risk_drivers
+        );
+        let undet = brief
+            .risk_drivers
+            .iter()
+            .find(|d| d.contains("could not run"))
+            .expect("the undetermined driver must be stated in prose");
+        assert!(
+            undet.contains("invalid sensitive glob") && undet.contains("NOT a measured hit"),
+            "the driver must name the cause and disclaim measurement: {undet:?}"
+        );
+        // Every file is conservatively surfaced for review.
+        for f in &touched {
+            assert!(brief.look_here_first.contains(f), "{f} must be surfaced");
+        }
+    }
+
+    #[test]
+    fn undetermined_sensitive_check_blocks_the_precedent_downgrade() {
+        // The precedent downgrade is only safe for a change PROVEN routine. An
+        // undetermined sensitive-path check proves nothing, so it must not open
+        // the downgrade door that a measured `false` would.
+        let cfg = SensitiveConfig::from_globs(vec!["[".to_string()]);
+        let touched = vec!["src/parser.rs".to_string()];
+        let precedents = vec![crate::precedent::Precedent {
+            fingerprint: structural_fingerprint(&touched, &[]),
+            files: touched.clone(),
+            symbols: vec![],
+            ratified_ts: 1,
+            note: "routine parser tweak".to_string(),
+        }];
+        let brief = build_review_brief(
+            plain_intent(),
+            "run-1/t1",
+            &touched,
+            &[],
+            &[],
+            &cfg,
+            &precedents,
+            DEFAULT_TEST_TOLERANCE,
+        );
+        assert!(
+            brief.precedented.is_none(),
+            "an undetermined risk must not be downgraded by a precedent"
+        );
+        assert_eq!(brief.risk_tier, RiskTier::High);
     }
 
     fn plain_intent() -> Intent {

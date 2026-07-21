@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "blastguard"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 description = "PreToolUse hook that denies project-destroying Bash commands and file operations. Self-contained, subscription-native."
 license = "MIT"
@@ -16,3 +16,6 @@ overwatch = { path = "../overwatch" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 globset = "0.4"
+
+[dev-dependencies]
+trybuild = "1"

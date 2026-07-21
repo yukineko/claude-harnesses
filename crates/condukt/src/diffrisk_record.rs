@@ -58,6 +58,16 @@ const DIFFRISK_RULE_ID: &str = "diffrisk-public-api";
 /// escalations under their own `blastguard:diffrisk-callgraph` signature.
 const DIFFRISK_CALLGRAPH_RULE_ID: &str = "diffrisk-callgraph";
 
+/// The rule id recorded when the diff risk could **not be determined** at all
+/// (the configured sensitive-path glob list did not compile, so the classifier
+/// never ran). Distinct from the two measured signatures precisely so a human
+/// reading `overwatch` can tell "we measured a High-risk diff" apart from "we
+/// could not measure this diff" — recording it under a measured id would make a
+/// misconfiguration look like a finding, and dropping it entirely would make
+/// "could not check" indistinguishable from "checked, nothing found", which is
+/// the fail-open this crate's gate invariant forbids.
+const DIFFRISK_UNDETERMINED_RULE_ID: &str = "diffrisk-undetermined";
+
 /// This repo's "sensitive" surface (WorkItem-D). It has no auth/payment/PII;
 /// what warrants extra review here is its gate/plugin machinery: hooks, plugin
 /// manifests, skills, agents, and the project charter / prompt assets. These
@@ -215,6 +225,36 @@ pub(crate) fn record_post_execution_diff_risk(
     let callers = blastguard::callgraph::enumerate_callers(&changed, &corpus);
     let full = classify_diff_with_callers(paths, &diff, &callers, &sensitive);
 
+    // FAIL-CLOSED on an undetermined classification. `classify_diff*` return a
+    // `Determination` because the sensitive-path signal can fail to compile (a
+    // bad configured glob). "Not High" is the *permissive* answer here (it drops
+    // the record), so an undetermined risk must NOT fall into it — it is
+    // recorded under its own signature instead, making the misconfiguration
+    // visible in overwatch rather than silently disabling this whole hook.
+    let (base, full) = match (base.require(), full.require()) {
+        (Ok(b), Ok(f)) => (b, f),
+        (Err(verdict), _) | (_, Err(verdict)) => {
+            let why = verdict
+                .reason()
+                .map(|r| r.as_str().to_string())
+                .unwrap_or_else(|| "diff-risk classification undetermined".to_string());
+            let detail = format!(
+                "post-execution diff-risk UNDETERMINED: {why} — the diff was never \
+                 classified (task '{}', run '{}')",
+                task.id, run_id
+            );
+            return record_violation(
+                cwd,
+                run_id,
+                task,
+                now,
+                session_id,
+                DIFFRISK_UNDETERMINED_RULE_ID,
+                detail,
+            );
+        }
+    };
+
     // OBSERVATIONAL: only High is recorded. Medium/Low are informational and not
     // persisted, mirroring the conservative "record only the clearly
     // review-worthy corner" posture.
@@ -254,10 +294,24 @@ pub(crate) fn record_post_execution_diff_risk(
         )
     };
 
-    // Build + append the violation, fail-soft. `build_event` returns None only
-    // for an un-bucketable discriminator (never, since the rule ids are fixed
-    // non-empty tokens), and `append_violation` degrades a write error to
-    // nothing — neither can change the exit code.
+    record_violation(cwd, run_id, task, now, session_id, rule_id, detail)
+}
+
+/// Build + append ONE blastguard violation for this task, fail-soft.
+/// `build_event` returns None only for an un-bucketable discriminator (never,
+/// since the rule ids are fixed non-empty tokens), and `append_violation`
+/// degrades a write error to nothing — neither can change the exit code.
+/// Returns `true` iff the event was actually appended.
+#[allow(clippy::too_many_arguments)]
+fn record_violation(
+    cwd: &Path,
+    run_id: &str,
+    task: &TaskState,
+    now: i64,
+    session_id: &str,
+    rule_id: &'static str,
+    detail: String,
+) -> bool {
     let raw = RawViolation {
         rule_id: Some(rule_id),
         ..Default::default()
@@ -280,24 +334,52 @@ pub(crate) fn record_post_execution_diff_risk(
 mod tests {
     use super::*;
 
+    /// Unwrap a determination this test asserts must be a real observation.
+    /// Fails loudly on `Undetermined` — the repo's own glob list must compile.
+    #[track_caller]
+    fn known<T>(d: harness_core::verdict::Determination<T>) -> T {
+        d.require()
+            .expect("this repo's sensitive-glob config must compile")
+    }
+
     #[test]
     fn repo_sensitive_config_matches_gate_plugin_surface() {
         let cfg = repo_sensitive_config();
         // The translated (WorkItem-D) globs fire on this repo's surface.
-        assert!(cfg.any_sensitive(&["crates/condukt/hooks/stop.sh".to_string()]));
-        assert!(cfg.any_sensitive(&["crates/condukt/.claude-plugin/plugin.json".to_string()]));
-        assert!(cfg.any_sensitive(&["crates/foo/skills/bar/SKILL.md".to_string()]));
-        assert!(cfg.any_sensitive(&["crates/foo/agents/worker.md".to_string()]));
-        assert!(cfg.any_sensitive(&["CLAUDE.md".to_string()]));
+        assert!(known(
+            cfg.any_sensitive(&["crates/condukt/hooks/stop.sh".to_string()])
+        ));
+        assert!(known(cfg.any_sensitive(&[
+            "crates/condukt/.claude-plugin/plugin.json".to_string()
+        ])));
+        assert!(known(
+            cfg.any_sensitive(&["crates/foo/skills/bar/SKILL.md".to_string()])
+        ));
+        assert!(known(
+            cfg.any_sensitive(&["crates/foo/agents/worker.md".to_string()])
+        ));
+        assert!(known(cfg.any_sensitive(&["CLAUDE.md".to_string()])));
         // A plain source file is NOT sensitive.
-        assert!(!cfg.any_sensitive(&["crates/condukt/src/schedule.rs".to_string()]));
+        assert!(!known(
+            cfg.any_sensitive(&["crates/condukt/src/schedule.rs".to_string()])
+        ));
     }
 
     #[test]
     fn repo_sensitive_config_still_has_blastguard_defaults() {
         // Layered on top of, not replacing, blastguard's auth/payment/PII globs.
         let cfg = repo_sensitive_config();
-        assert!(cfg.any_sensitive(&["src/auth/login.rs".to_string()]));
+        assert!(known(cfg.any_sensitive(&["src/auth/login.rs".to_string()])));
+    }
+
+    #[test]
+    fn repo_sensitive_config_is_actually_compilable() {
+        // The whole fail-closed wiring only pays off if the SHIPPED glob list is
+        // determinable — otherwise every task would force-gate. Pin that here.
+        assert!(matches!(
+            repo_sensitive_config().any_sensitive(&["CLAUDE.md".to_string()]),
+            harness_core::verdict::Determination::Known(true)
+        ));
     }
 
     #[test]

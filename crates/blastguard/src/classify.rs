@@ -8,6 +8,7 @@
 //! irreversible action (a deploy / `git push` / release) through the outward
 //! GATED gate even when an upstream LLM mislabelled it. Pure (no I/O).
 
+use harness_core::verdict::Determination;
 use serde::Serialize;
 use serde_json::json;
 
@@ -258,20 +259,41 @@ pub fn classify(text: &str) -> RiskAssessment {
 /// serialize it into prose). `diff_text` is optional unified-diff content
 /// (empty string if unavailable — the public-symbol signal simply won't
 /// fire, matching backward-compatible/additive behavior).
+///
+/// ## Undetermined is propagated, not folded into the command signal
+///
+/// The command-text signal ([`classify`]) is a pure text scan and always
+/// determinable; the diff-level signal is not (an unparseable configured
+/// sensitive-path glob leaves it undetermined — see
+/// [`crate::diffrisk::SensitiveConfig::build`]). Rather than merge a *guessed*
+/// diff assessment into the command one — which would report a plausible-looking
+/// `RiskAssessment` that no one could tell apart from a real measurement — this
+/// returns [`Determination::Undetermined`] whenever the diff signal could not be
+/// determined, **even if the command signal alone was High**. Callers resolve
+/// that to their own restricted side (condukt force-gates / escalates), which is
+/// always at least as restrictive as the command-only tier would have been.
 pub fn classify_change(
     text: &str,
     paths: &[String],
     diff_text: &str,
     sensitive: &SensitiveConfig,
-) -> RiskAssessment {
+) -> Determination<RiskAssessment> {
     let command = classify(text);
-    let diff = diffrisk::classify_diff(paths, diff_text, sensitive);
-    command.merge(diff)
+    diffrisk::classify_diff(paths, diff_text, sensitive).map(|diff| command.merge(diff))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Unwrap a determination the test asserts must be a real observation.
+    /// Fails the test on `Undetermined`, so a regression that silently turns a
+    /// well-formed config undetermined is loud rather than a different value.
+    #[track_caller]
+    fn known<T>(d: Determination<T>) -> T {
+        d.require()
+            .expect("this test's config must classify to a Known value")
+    }
 
     #[test]
     fn deploy_and_push_are_high_irreversible_and_gated() {
@@ -462,7 +484,12 @@ mod tests {
         // No sensitive path, no public-symbol diff → identical to classify().
         let cfg = SensitiveConfig::default();
         let text = "refactor the parser";
-        let a = classify_change(text, &["src/parser.rs".to_string()], "", &cfg);
+        let a = known(classify_change(
+            text,
+            &["src/parser.rs".to_string()],
+            "",
+            &cfg,
+        ));
         assert_eq!(a, classify(text));
     }
 
@@ -471,7 +498,12 @@ mod tests {
         let cfg = SensitiveConfig::default();
         let text = "add a login retry limit";
         let baseline = classify(text);
-        let a = classify_change(text, &["src/auth/login.rs".to_string()], "", &cfg);
+        let a = known(classify_change(
+            text,
+            &["src/auth/login.rs".to_string()],
+            "",
+            &cfg,
+        ));
         assert!(a.risk > baseline.risk, "sensitive path must raise risk");
     }
 
@@ -480,12 +512,12 @@ mod tests {
         let cfg = SensitiveConfig::default();
         let text = "add a helper function";
         let baseline = classify(text);
-        let a = classify_change(
+        let a = known(classify_change(
             text,
             &["src/lib.rs".to_string()],
             "+pub fn new_helper() {}",
             &cfg,
-        );
+        ));
         assert!(a.risk > baseline.risk, "public API change must raise risk");
     }
 
@@ -494,7 +526,12 @@ mod tests {
         // The existing destructive/deploy precedence is untouched: merge only
         // ever raises risk, never masks the pre-existing High+irreversible verdict.
         let cfg = SensitiveConfig::default();
-        let a = classify_change("git push origin main", &["README.md".to_string()], "", &cfg);
+        let a = known(classify_change(
+            "git push origin main",
+            &["README.md".to_string()],
+            "",
+            &cfg,
+        ));
         assert_eq!(a.risk, Risk::High);
         assert!(!a.reversible);
         assert!(a.requires_gate());

@@ -13,8 +13,8 @@ use std::path::Path;
 ///   sha256( diff_HEAD_lines_joined_by_LF + "\n"
 ///           + "---UNTRACKED---\n"
 ///           + sorted(untracked minus artifact/marker) joined by LF )
-pub fn diff_hash(root: &Path, audit_dir: &str, review_rel: &str) -> String {
-    let diff = git::diff_head(root);
+pub fn diff_hash(root: &Path, audit_dir: &str, review_rel: &str) -> Result<String, String> {
+    let diff = git::diff_head(root)?;
     // Normalize to LF and ensure a single trailing newline, matching the
     // PowerShell `($lines -join "`n") + "`n"` construction.
     let mut d: String = diff
@@ -26,7 +26,7 @@ pub fn diff_hash(root: &Path, audit_dir: &str, review_rel: &str) -> String {
 
     let artifact = norm_rel(review_rel);
     let marker = format!("{}/.audit-blocked", audit_dir.trim_end_matches('/'));
-    let mut untracked: Vec<String> = git::untracked(root)
+    let mut untracked: Vec<String> = git::untracked(root)?
         .into_iter()
         .map(|u| u.replace('\\', "/"))
         .filter(|u| u != &artifact && u != &marker)
@@ -37,7 +37,7 @@ pub fn diff_hash(root: &Path, audit_dir: &str, review_rel: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     let digest = hasher.finalize();
-    digest.iter().map(|b| format!("{b:02x}")).collect()
+    Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn norm_rel(p: &str) -> String {
@@ -59,12 +59,23 @@ pub fn check(ctx: &Ctx) -> Option<Issue> {
         return None;
     }
 
+    let want = match diff_hash(ctx.root, &ctx.cfg.audit_dir, &rc.path) {
+        Ok(w) => w,
+        Err(e) => {
+            return Some(Issue::block(
+                "SUBAGENT REVIEW REQUIRED",
+                format!(
+                    "SUBAGENT REVIEW REQUIRED: could not compute the diff hash ({e}); run /precommit to walk the checklist."
+                ),
+            ));
+        }
+    };
+
     let review_path = ctx.root.join(&rc.path);
     let ok = std::fs::read_to_string(&review_path)
         .ok()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
         .map(|v| {
-            let want = diff_hash(ctx.root, &ctx.cfg.audit_dir, &rc.path);
             v.get("diff_hash").and_then(|h| h.as_str()) == Some(want.as_str())
                 && v.get("verdict").and_then(|h| h.as_str()) == Some("pass")
         })

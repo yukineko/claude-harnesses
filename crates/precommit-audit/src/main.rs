@@ -20,6 +20,7 @@ mod model;
 use checks::Ctx;
 use classify::Classifier;
 use config::{Config, Severity};
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
@@ -211,7 +212,19 @@ fn run() {
         exit(0);
     }
 
-    let mut files = git::changed_and_untracked(&root);
+    let mut files = match git::changed_and_untracked(&root) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("precommit-audit: cannot determine the changed-files set: {e}");
+            eprintln!(
+                "  refusing to report a clean audit on an unknown working set (fail-closed)."
+            );
+            // Block in stop/precommit; under SessionEnd (fail_exit == 0, which cannot
+            // block by platform design) still exit non-zero so the failure surfaces as
+            // a failed hook rather than a silent clean pass. NEVER exit(0) on a git error.
+            exit(if fail_exit != 0 { fail_exit } else { 3 });
+        }
+    };
     // Never audit our own config file: it literally contains the rule patterns,
     // which would otherwise self-trigger on the commit that introduces it.
     if let Ok(rel) = config_path.strip_prefix(&root) {
@@ -223,11 +236,13 @@ fn run() {
     }
 
     let classifier = Classifier::new(&cfg.classify);
+    let incomplete = RefCell::new(Vec::new());
     let ctx = Ctx {
         root: &root,
         cfg: &cfg,
         cls: &classifier,
         files: &files,
+        incomplete: &incomplete,
     };
 
     let mut issues: Vec<model::Issue> = Vec::new();
@@ -239,6 +254,19 @@ fn run() {
         if let Some(i) = checks::review::check(&ctx) {
             issues.push(i);
         }
+    }
+
+    // Fail-closed: if any git error prevented a complete scan, treat the audit as
+    // blocking rather than reporting a pass over content it could not read.
+    let incomplete = incomplete.into_inner();
+    if !incomplete.is_empty() {
+        issues.push(model::Issue::block(
+            "AUDIT INCOMPLETE",
+            format!(
+                "AUDIT INCOMPLETE: git error(s) prevented a full scan; treating as blocking (fail-closed):\n  {}",
+                incomplete.join("\n  ")
+            ),
+        ));
     }
 
     emit_and_exit(&root, &cfg, &mode, fail_exit, &files, issues);

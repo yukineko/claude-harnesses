@@ -876,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "precommit-audit"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "globset",
  "harness-core",

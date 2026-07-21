@@ -12,6 +12,7 @@ use crate::git;
 use crate::model::Issue;
 use globset::{Glob, GlobMatcher};
 use regex::Regex;
+use std::cell::RefCell;
 use std::path::Path;
 
 /// Everything a check needs. Built once in main.
@@ -20,9 +21,40 @@ pub struct Ctx<'a> {
     pub cfg: &'a Config,
     pub cls: &'a Classifier<'a>,
     pub files: &'a [String],
+    /// Fail-closed latch: git errors hit mid-scan (a file whose diff could not be
+    /// read, a grep that errored) are recorded here so the audit BLOCKS on an
+    /// incomplete scan instead of silently missing patterns it could not read.
+    pub incomplete: &'a RefCell<Vec<String>>,
 }
 
 impl<'a> Ctx<'a> {
+    /// Added lines for `file`, latching any git error (fail-closed: an unscannable
+    /// file must not silently contribute zero added lines to the pattern scan).
+    fn added_lines(&self, file: &str) -> Vec<String> {
+        match git::added_lines(self.root, file) {
+            Ok(v) => v,
+            Err(e) => {
+                self.incomplete
+                    .borrow_mut()
+                    .push(format!("diff of {file}: {e}"));
+                Vec::new()
+            }
+        }
+    }
+
+    /// `git grep` for `pattern`, latching any git error (fail-closed).
+    fn grep_files(&self, pattern: &str) -> Vec<String> {
+        match git::grep_files(self.root, pattern) {
+            Ok(v) => v,
+            Err(e) => {
+                self.incomplete
+                    .borrow_mut()
+                    .push(format!("grep {pattern}: {e}"));
+                Vec::new()
+            }
+        }
+    }
+
     pub fn sources(&self) -> Vec<&'a str> {
         self.files
             .iter()
@@ -109,7 +141,7 @@ fn merged_added_lines(ctx: &Ctx) -> Vec<String> {
         if ctx.exists(file) && head_suppressed(&ctx.read_head(file, 20)) {
             continue;
         }
-        all.extend(git::added_lines(ctx.root, file));
+        all.extend(ctx.added_lines(file));
     }
     all
 }
@@ -212,7 +244,7 @@ pub fn check_duplicate_function(ctx: &Ctx, out: &mut Vec<Issue>) {
             Some(e) => e,
             None => continue,
         };
-        let added = git::added_lines(ctx.root, file);
+        let added = ctx.added_lines(file);
         let def_re = match ext.as_str() {
             ".py" => &py_def,
             ".ts" | ".tsx" | ".js" | ".jsx" => &js_def,
@@ -237,7 +269,8 @@ pub fn check_duplicate_function(ctx: &Ctx, out: &mut Vec<Issue>) {
             } else {
                 format!(r"(^|\s)(function\s+)?{esc}\s*\(")
             };
-            let others: Vec<String> = git::grep_files(ctx.root, &pat)
+            let others: Vec<String> = ctx
+                .grep_files(&pat)
                 .into_iter()
                 .filter(|f| {
                     let f = norm(f);
@@ -295,7 +328,7 @@ pub fn check_local_capture(ctx: &Ctx, out: &mut Vec<Issue>) {
         if head_suppressed(&head) {
             continue;
         }
-        for ln in git::added_lines(ctx.root, file) {
+        for ln in ctx.added_lines(file) {
             if pat.is_match(&ln) {
                 hits.push(format!("  {file}: {}", ln.trim_start_matches('+').trim()));
                 if hits.len() >= 8 {
@@ -532,7 +565,7 @@ pub fn check_custom_rules(ctx: &Ctx, out: &mut Vec<Issue>) {
         if applicable.is_empty() {
             continue;
         }
-        let added = git::added_lines(ctx.root, file);
+        let added = ctx.added_lines(file);
         for ln in &added {
             for &i in &applicable {
                 let r = &compiled[i];

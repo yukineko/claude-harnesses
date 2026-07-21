@@ -43,36 +43,104 @@ pub enum TestFreshness {
     /// otherwise couldn't be spawned/completed. Fail-soft: never propagated
     /// as an error to the caller.
     ExecutionError,
+    /// The source-tree scan that reverse-looks-up the regression test could
+    /// not be COMPLETED — a directory or `.rs` file that exists was unreadable
+    /// (PermissionDenied / IO error), so a "no matching test" answer cannot be
+    /// trusted. Distinct from `NotFound` (a complete walk that genuinely found
+    /// no test) precisely because it must NOT be rendered as "該当テストなし"
+    /// (a deprioritize signal): an incomplete search is *undetermined*, and
+    /// collapsing it into "no test" is the fail-open this state closes
+    /// (backlog 50ad2c1e; twin of specguard testaudit/gather rounds #7/#11).
+    ScanIncomplete { detail: String },
+}
+
+/// The result of reverse-looking-up an `#[ignore = "<finding-id>: ..."]` test
+/// for a finding. A tri-state so the caller can tell "genuinely no test"
+/// (`NotFound`) apart from "couldn't finish looking" (`ScanIncomplete`) — the
+/// distinction the old `Option` return collapsed into a single `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IgnoredTestLookup {
+    /// A matching test was found: `(crate_name, test_path, fn_name)`.
+    Found {
+        crate_name: String,
+        test_path: String,
+        fn_name: String,
+    },
+    /// The walk completed and no `#[ignore]`d test matched the finding-id.
+    NotFound,
+    /// The source walk could not be completed (an existing dir/file was
+    /// unreadable), so `NotFound` cannot be trusted. Carries a human-readable
+    /// detail for the triage note. Fail-closed: surfaced, never folded away.
+    ScanIncomplete { detail: String },
 }
 
 /// Search `search_root` for a Rust source file containing a test whose
 /// `#[ignore = "<finding_id>: ...` reason matches the given `finding_id`, and
-/// return `(crate_name, test_path, fn_name)` if found. `test_path` is the
-/// source file path (relative to `search_root` when the file is under it).
+/// return the located test if found. `test_path` is the source file path
+/// (relative to `search_root` when the file is under it).
 ///
-/// Fail-soft in every direction: unreadable files, non-UTF8 content, and a
-/// crate name that can't be resolved are all treated as "keep looking" /
-/// `None`, never a panic.
-pub fn find_ignored_test(finding_id: &str, search_root: &Path) -> Option<(String, String, String)> {
+/// Distinguishes three outcomes (backlog 50ad2c1e — the fail-open this closes):
+/// - `Found` — a matching test resolved to a crate.
+/// - `NotFound` — the walk COMPLETED and nothing matched (a *legitimate* empty:
+///   a `.rs` that vanished mid-walk, non-UTF8 content, or a file with no crate
+///   manifest above it are all "keep looking").
+/// - `ScanIncomplete` — an existing directory or `.rs` file was UNREADABLE, so
+///   the walk could not finish. This must not masquerade as `NotFound`: an
+///   unreadable subtree could hold the very test we're looking for, and
+///   reporting "no test" would falsely deprioritize the finding.
+pub fn find_ignored_test(finding_id: &str, search_root: &Path) -> IgnoredTestLookup {
     let prefix = format!("{finding_id}: ");
-    for path in rust_source_files(search_root) {
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
+    let files = match rust_source_files(search_root) {
+        Ok(f) => f,
+        Err(e) => {
+            return IgnoredTestLookup::ScanIncomplete {
+                detail: format!("source walk failed: {e}"),
+            }
+        }
+    };
+    for path in files {
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            // A file that vanished between listing and reading (TOCTOU) is a
+            // legitimate "nothing here" — keep looking. Any OTHER read error
+            // (PermissionDenied, IO) on a file that WAS listed means the scan
+            // is incomplete: that file could hold the matching test.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return IgnoredTestLookup::ScanIncomplete {
+                    detail: format!("cannot read '{}': {e}", path.display()),
+                }
+            }
         };
         let Some(fn_name) = extract_ignored_fn_name(&text, &prefix) else {
             continue;
         };
-        let Some(crate_name) = nearest_crate_name(&path) else {
-            continue;
-        };
-        let test_path = path
-            .strip_prefix(search_root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .into_owned();
-        return Some((crate_name, test_path, fn_name));
+        // Matched the finding in this file — resolve its crate. A missing
+        // manifest (`Ok(None)`) is "keep looking"; an unreadable-but-present
+        // manifest (`Err`) is undetermined — we found the test but can't name
+        // its crate, so we must not fall through to a false `NotFound`.
+        match nearest_crate_name(&path) {
+            Ok(Some(crate_name)) => {
+                let test_path = path
+                    .strip_prefix(search_root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
+                return IgnoredTestLookup::Found {
+                    crate_name,
+                    test_path,
+                    fn_name,
+                };
+            }
+            Ok(None) => continue,
+            Err(e) => {
+                return IgnoredTestLookup::ScanIncomplete {
+                    detail: format!("cannot resolve crate for '{}': {e}", path.display()),
+                }
+            }
+        }
     }
-    None
+    IgnoredTestLookup::NotFound
 }
 
 /// Run the reverse-looked-up test via `cargo test -p <crate_name> --
@@ -158,23 +226,32 @@ fn parse_fn_name(line: &str) -> Option<String> {
 }
 
 /// Walk up from `file`'s directory looking for the nearest `Cargo.toml`, and
-/// parse its `[package].name`. Returns `None` if no ancestor `Cargo.toml`
-/// exists or it can't be parsed (fail-soft — the caller just keeps looking).
-fn nearest_crate_name(file: &Path) -> Option<String> {
+/// parse its `[package].name`.
+///
+/// Returns `Ok(None)` when no ancestor `Cargo.toml` exists, or the nearest one
+/// exists but has no parseable `[package].name` — both are legitimate "can't
+/// name a crate here, keep looking". Returns `Err` only when a `Cargo.toml`
+/// that EXISTS is unreadable (PermissionDenied / IO): that's undetermined, not
+/// "no crate", and must not silently become a `NotFound` upstream. Reading the
+/// file directly (rather than `is_file()` then read) also avoids a TOCTOU:
+/// `NotFound` means the manifest isn't there and we walk up.
+fn nearest_crate_name(file: &Path) -> std::io::Result<Option<String>> {
     let mut dir = file.parent();
     while let Some(d) = dir {
         let candidate = d.join("Cargo.toml");
-        if candidate.is_file() {
-            if let Ok(text) = std::fs::read_to_string(&candidate) {
-                if let Some(name) = parse_crate_name(&text) {
-                    return Some(name);
-                }
-            }
-            return None; // Cargo.toml exists but has no parseable package name.
+        match std::fs::read_to_string(&candidate) {
+            // Exists and readable: this is the nearest manifest. Its parsed
+            // name (or `None` if unparseable) is the answer — do not keep
+            // walking up past a real Cargo.toml.
+            Ok(text) => return Ok(parse_crate_name(&text)),
+            // No manifest at this level — walk up to the parent.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // Present but unreadable → undetermined, fail closed.
+            Err(e) => return Err(e),
         }
         dir = d.parent();
     }
-    None
+    Ok(None)
 }
 
 /// Parse `[package].name` out of a `Cargo.toml` document.
@@ -239,15 +316,31 @@ fn extract_failure_message(stdout: &str) -> String {
 
 /// Recursively collect `.rs` file paths under `root`, skipping build/VCS
 /// directories that would otherwise make the walk slow and noisy.
-fn rust_source_files(root: &Path) -> Vec<PathBuf> {
+///
+/// Fails closed on an incomplete walk (backlog 50ad2c1e; twin of specguard
+/// `testaudit::collect_rs_files_inner`, rounds #7/#11): a directory that is
+/// MISSING contributes no files (a `NotFound` — e.g. `root` doesn't exist, or a
+/// subdir vanished mid-walk in a TOCTOU race), but a directory that EXISTS but
+/// is UNREADABLE (PermissionDenied / IO), or a per-entry listing error, means
+/// the result is INCOMPLETE — return `Err` instead of silently under-reporting.
+/// The old `let Ok(entries) = read_dir else { continue }` + `entries.flatten()`
+/// collapsed every such error into "no `.rs` files here", so the reverse-lookup
+/// could report "no regression test" for a finding whose test lived in a
+/// subtree it never managed to read.
+fn rust_source_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
     const SKIP_DIRS: &[&str] = &["target", ".git", "node_modules", ".condukt"];
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            // A per-entry error means the listing is INCOMPLETE; the old
+            // `.flatten()` dropped it, silently under-reporting. Fail closed.
+            let entry = entry?;
             let path = entry.path();
             if path.is_dir() {
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -259,7 +352,7 @@ fn rust_source_files(root: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -392,17 +485,115 @@ fn legacy_free_text_test() {}
         let found = find_ignored_test("CA-fixture-001", &dir);
         assert_eq!(
             found,
-            Some((
-                "fixture-crate".to_string(),
-                "src/lib.rs".to_string(),
-                "repro_thing".to_string()
-            ))
+            IgnoredTestLookup::Found {
+                crate_name: "fixture-crate".to_string(),
+                test_path: "src/lib.rs".to_string(),
+                fn_name: "repro_thing".to_string(),
+            }
         );
 
+        // A COMPLETE walk with no match is a legitimate `NotFound`, NOT
+        // `ScanIncomplete` — this is the "genuinely no test" case the fix must
+        // keep distinct from an unreadable subtree.
         let not_found = find_ignored_test("CA-fixture-999", &dir);
-        assert_eq!(not_found, None);
+        assert_eq!(not_found, IgnoredTestLookup::NotFound);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rust_source_files_ok_and_empty_when_root_absent() {
+        // An absent root is a legitimate "no sources" (NotFound), NOT an error:
+        // the reverse-lookup over a project with no such tree yields NotFound,
+        // not ScanIncomplete.
+        let missing = std::env::temp_dir().join(format!(
+            "overwatch-test-freshness-absent-{}-{}",
+            std::process::id(),
+            "nope"
+        ));
+        let got = rust_source_files(&missing).expect("absent root must be Ok(empty), not Err");
+        assert!(got.is_empty(), "absent root must yield no files: {got:?}");
+    }
+
+    /// 50ad2c1e: a directory that EXISTS but is unreadable must fail closed
+    /// (`Err`), not silently drop the subtree — otherwise the reverse-lookup
+    /// reports "no regression test" for a finding whose test lives in the
+    /// unreadable subtree (a false deprioritize signal). Twin of specguard
+    /// `decision::list_files_fails_closed_on_unreadable_dir` (rounds #7/#11).
+    /// Unix-only (chmod-based unreadability), skipped when running as root
+    /// (root bypasses the permission bit, so the walk would succeed).
+    #[cfg(unix)]
+    #[test]
+    fn rust_source_files_fails_closed_on_unreadable_subtree() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "overwatch-test-freshness-unreadable-{}",
+            std::process::id()
+        ));
+        let locked = root.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("hidden.rs"), "// would-be test file").unwrap();
+
+        let mut perms = std::fs::metadata(&locked).unwrap().permissions();
+        perms.set_mode(0o000); // unreadable/unsearchable
+        std::fs::set_permissions(&locked, perms).unwrap();
+
+        // Running as root defeats the 0o000 bit; skip rather than false-pass.
+        let readable_as_root = std::fs::read_dir(&locked).is_ok();
+
+        let got = rust_source_files(&root);
+
+        // Restore perms so cleanup can remove the tree (before asserting).
+        let mut restore = std::fs::metadata(&locked).unwrap().permissions();
+        restore.set_mode(0o700);
+        let _ = std::fs::set_permissions(&locked, restore);
+        std::fs::remove_dir_all(&root).ok();
+
+        if readable_as_root {
+            eprintln!("skipping unreadable-subtree assertion: running as root");
+            return;
+        }
+        assert!(
+            got.is_err(),
+            "an unreadable subtree must fail closed (Err), got {got:?}"
+        );
+    }
+
+    /// End-to-end: `find_ignored_test` must surface `ScanIncomplete` (not
+    /// `NotFound`) when the walk can't finish. This is the fail-open the round
+    /// closes — `NotFound` renders as "該当テストなし" (deprioritize), so an
+    /// incomplete search must be a *distinct* state.
+    #[cfg(unix)]
+    #[test]
+    fn find_ignored_test_scan_incomplete_on_unreadable_subtree() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "overwatch-test-freshness-incomplete-{}",
+            std::process::id()
+        ));
+        let locked = root.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+
+        let mut perms = std::fs::metadata(&locked).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&locked, perms).unwrap();
+        let readable_as_root = std::fs::read_dir(&locked).is_ok();
+
+        let got = find_ignored_test("CA-whatever-001", &root);
+
+        let mut restore = std::fs::metadata(&locked).unwrap().permissions();
+        restore.set_mode(0o700);
+        let _ = std::fs::set_permissions(&locked, restore);
+        std::fs::remove_dir_all(&root).ok();
+
+        if readable_as_root {
+            eprintln!("skipping ScanIncomplete assertion: running as root");
+            return;
+        }
+        assert!(
+            matches!(got, IgnoredTestLookup::ScanIncomplete { .. }),
+            "unreadable subtree must yield ScanIncomplete, not {got:?}"
+        );
     }
 
     /// Fail-soft contract: a nonexistent crate name must yield

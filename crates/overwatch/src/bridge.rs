@@ -35,7 +35,7 @@ use crate::review_escalation;
 use crate::review_finding::ReviewFinding;
 use crate::review_queue::{self, EntryKind, ReviewQueueEntry, Severity};
 use crate::store;
-use crate::test_freshness::{self, TestFreshness};
+use crate::test_freshness::{self, IgnoredTestLookup, TestFreshness};
 use crate::violation::{self, RecurrencePolicy};
 use anyhow::Result;
 use std::collections::HashSet;
@@ -167,9 +167,18 @@ fn build_notes(f: &ReviewFinding, now: i64, freshness: Option<&TestFreshness>) -
         Some(TestFreshness::Passing) => {
             notes.push_str(" | regression test: PASS（解消済みの可能性）");
         }
+        // A scan that could not be COMPLETED (an unreadable subtree) is
+        // undetermined, not "no test" — surface it distinctly so a human does
+        // not read a false "該当テストなし" deprioritize signal (50ad2c1e).
+        Some(TestFreshness::ScanIncomplete { detail }) => {
+            notes.push_str(&format!(
+                " | regression test: 判定不能（走査未完・読めないサブツリー: {detail}）"
+            ));
+        }
         // NotFound/ExecutionError and "no test looked up at all" are all
         // inconclusive from the triage reader's perspective — fold them into
         // one "no applicable test" line rather than surfacing internal states.
+        // (ScanIncomplete is deliberately NOT folded here — see above.)
         Some(TestFreshness::NotFound) | Some(TestFreshness::ExecutionError) | None => {
             notes.push_str(" | regression test: 該当テストなし");
         }
@@ -294,14 +303,23 @@ fn run_in(cwd: &Path) -> Result<()> {
     for &f in &to_bridge {
         let priority = severity_to_priority(f.severity.as_deref());
         // Regression-test freshness (fail-soft): reverse-lookup a
-        // `#[ignore = "<finding-id>: ..."]` test and re-run it. Any failure to
-        // find/run one (no matching test, cargo/crate unavailable) just
-        // leaves `freshness` as `None`, folded into "no test" in the notes.
-        let freshness = test_freshness::find_ignored_test(&f.finding_id, cwd).map(
-            |(crate_name, _test_path, fn_name)| {
-                test_freshness::run_ignored_test(&crate_name, &fn_name)
-            },
-        );
+        // `#[ignore = "<finding-id>: ..."]` test and re-run it. A COMPLETE walk
+        // with no match (`NotFound`) leaves `freshness` as `None`, folded into
+        // "該当テストなし". But an INCOMPLETE walk (`ScanIncomplete` — an
+        // unreadable subtree) is surfaced as its own `TestFreshness` state so
+        // it is NOT silently rendered as "no test" (50ad2c1e): a search that
+        // couldn't finish must not read as a deprioritize signal.
+        let freshness = match test_freshness::find_ignored_test(&f.finding_id, cwd) {
+            IgnoredTestLookup::Found {
+                crate_name,
+                fn_name,
+                ..
+            } => Some(test_freshness::run_ignored_test(&crate_name, &fn_name)),
+            IgnoredTestLookup::NotFound => None,
+            IgnoredTestLookup::ScanIncomplete { detail } => {
+                Some(TestFreshness::ScanIncomplete { detail })
+            }
+        };
         let notes = build_notes(f, now, freshness.as_ref());
 
         let status = std::process::Command::new(&backlog)

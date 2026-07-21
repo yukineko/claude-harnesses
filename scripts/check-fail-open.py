@@ -108,22 +108,10 @@ SH_PROBE = re.compile(r"\bcommand\s+-v\b|\btype\s+-p\b|\bwhich\b")
 # fix (grandfathered so this detector can ship and block NEW instances — never a
 # silent excuse).
 ALLOWLIST: list[dict[str, str]] = [
-    # GENUINE fail-open, grandfathered so this detector can ship and block NEW
-    # instances; tracked for a dedicated fix. The overwatch test-freshness .rs
-    # walk drops an unreadable subtree exactly like specguard testaudit/gather
-    # did before rounds #7/#11 — its fix (make the walk fail closed) is filed.
-    {
-        "path": "crates/overwatch/src/test_freshness.rs",
-        "pattern": "readdir-let-else-swallow",
-        "needle": "std::fs::read_dir(&dir)",
-        "reason": "filed: backlog 50ad2c1e (make the .rs walk fail closed)",
-    },
-    {
-        "path": "crates/overwatch/src/test_freshness.rs",
-        "pattern": "readdir-flatten-swallow",
-        "needle": "entries.flatten()",
-        "reason": "filed: backlog 50ad2c1e (per-entry error must not be swallowed)",
-    },
+    # (Round #19 / 50ad2c1e resolved: the overwatch test_freshness.rs `.rs` walk
+    # now fails closed via `rust_source_files -> io::Result` + `IgnoredTestLookup
+    # ::ScanIncomplete` — the read_dir let-else and `entries.flatten()` swallows
+    # were removed, so the two grandfathered entries here are gone with them.)
     # BENIGN (reviewed): the round-#6 unborn-branch in test-changed-crates.sh.
     # This `git ls-files` runs ONLY after `! git rev-parse --verify HEAD` has
     # proven the repo is on an unborn branch — a fully-determinable "no baseline,

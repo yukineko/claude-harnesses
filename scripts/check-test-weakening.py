@@ -164,31 +164,113 @@ def is_tests_dir_file(path: str) -> bool:
     return path.endswith(".rs") and "tests" in parts[:-1]
 
 
+def _matching_brace(src: str, open_idx: int) -> int | None:
+    """Index of the `}` matching the `{` at `open_idx`, or None if the braces do
+    not balance before end of input.
+
+    Braces inside string literals (`"..."`, raw `r#"..."#`), char literals
+    (`'}'`), line comments (`// ...`) and block comments (`/* ... */`, which nest
+    in Rust) are NOT counted. Counting raw `{`/`}` bytes instead lets a `}` inside
+    a literal such as `assert_eq!(s, "}")` drive the depth to zero early and
+    truncate the module surface, so a weakening past that point is silently
+    invisible -- the fail-open this function exists to prevent.
+    """
+    depth = 0
+    i = open_idx
+    n = len(src)
+    while i < n:
+        c = src[i]
+        # line comment -> skip to end of line
+        if c == "/" and i + 1 < n and src[i + 1] == "/":
+            nl = src.find("\n", i)
+            i = n if nl == -1 else nl
+            continue
+        # block comment -> skip to the matching */ (Rust nests them)
+        if c == "/" and i + 1 < n and src[i + 1] == "*":
+            i += 2
+            nest = 1
+            while i < n and nest > 0:
+                if src[i] == "/" and i + 1 < n and src[i + 1] == "*":
+                    nest += 1
+                    i += 2
+                elif src[i] == "*" and i + 1 < n and src[i + 1] == "/":
+                    nest -= 1
+                    i += 2
+                else:
+                    i += 1
+            continue
+        # raw string r"...", r#"..."#, r##"..."## (no escapes inside)
+        if c == "r" and i + 1 < n and src[i + 1] in '#"':
+            j = i + 1
+            hashes = 0
+            while j < n and src[j] == "#":
+                hashes += 1
+                j += 1
+            if j < n and src[j] == '"':
+                close = '"' + "#" * hashes
+                end = src.find(close, j + 1)
+                if end == -1:
+                    return None  # unterminated raw string: we cannot claim a read
+                i = end + len(close)
+                continue
+            # `r` not opening a raw string after all: fall through as a plain byte
+        # normal string "..." with backslash escapes
+        if c == '"':
+            i += 1
+            while i < n:
+                if src[i] == "\\":
+                    i += 2
+                    continue
+                if src[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+        # char literal 'x' / '\n' / '{' vs a lifetime 'a (which has no closing ')
+        if c == "'":
+            if i + 1 < n and src[i + 1] == "\\":
+                j = i + 2
+                while j < n and src[j] != "'":
+                    if src[j] == "\\":
+                        j += 1
+                    j += 1
+                if j < n:
+                    i = j + 1
+                    continue
+                # unterminated: treat the quote as ordinary punctuation
+            elif i + 2 < n and src[i + 2] == "'":
+                i += 3
+                continue
+            # a lifetime/label like 'a: consume just the quote and move on
+            i += 1
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
 def cfg_test_modules(src: str, path: str) -> str:
     """Concatenate every `#[cfg(test)]` module body found in `src`.
 
-    Brace matching is intentionally strict: if the braces of a module do not
-    balance we cannot claim to have inspected it, so the whole run goes
-    undetermined rather than reporting on a partial read.
+    Brace matching skips string/char literals and comments (see
+    `_matching_brace`); if a module's braces still do not balance we cannot claim
+    to have inspected it, so the whole run goes undetermined rather than
+    reporting on a partial read.
     """
     chunks = []
     for m in re.finditer(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]", src):
         brace = src.find("{", m.end())
         if brace == -1:
             raise Undetermined(f"{path}: #[cfg(test)] with no module body")
-        depth = 0
-        i = brace
-        while i < len(src):
-            if src[i] == "{":
-                depth += 1
-            elif src[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    chunks.append(src[brace : i + 1])
-                    break
-            i += 1
-        else:
+        end = _matching_brace(src, brace)
+        if end is None:
             raise Undetermined(f"{path}: unbalanced braces in #[cfg(test)] module")
+        chunks.append(src[brace : end + 1])
     return "\n".join(chunks)
 
 
@@ -323,6 +405,60 @@ def acknowledgements(repo: str, base_sha: str) -> set:
 # --- driver ----------------------------------------------------------------
 
 
+def _is_rs(path) -> bool:
+    return bool(path) and path.endswith(".rs")
+
+
+def changed_pairs(repo: str, merge_base: str) -> list:
+    """`(old_path, new_path)` for every change between `merge_base` and the worktree.
+
+    Two git flags carry the fail-closed contract here:
+
+    * `--name-status -z` emits LITERAL, NUL-delimited paths. The default
+      `--name-only` renders a non-ASCII path through `core.quotePath` as
+      `"crates/…/\\343\\203\\206.rs"` -- a string ending in `"`, not `.rs`, so an
+      `endswith('.rs')` filter drops the file and any weakening in it passes
+      unseen. A path the scanner cannot even name is the purest cannot-determine.
+    * `-M` makes a rename a single record whose OLD side is known, so a rename
+      that also drops assertions is compared against the coverage it moved FROM.
+      Without it, default rename detection reports only the destination, which
+      then looks like a brand-new file (absent at base) and its lost coverage is
+      invisible -- a weakening laundered through a `git mv`.
+
+    `old_path` is None for an addition; `new_path` is None for a deletion.
+    """
+    raw = git(
+        repo, "-c", "core.quotePath=false",
+        "diff", "--name-status", "-z", "-M", merge_base,
+    )
+    toks = raw.split("\0")
+    pairs = []
+    i = 0
+    while i < len(toks):
+        status = toks[i]
+        if status == "":
+            i += 1
+            continue
+        code = status[0]
+        if code in ("R", "C"):
+            if i + 2 >= len(toks):
+                raise Undetermined(f"truncated {code} record in diff output")
+            pairs.append((toks[i + 1], toks[i + 2]))
+            i += 3
+        else:
+            if i + 1 >= len(toks):
+                raise Undetermined(f"truncated '{code}' record in diff output")
+            path = toks[i + 1]
+            if code == "A":
+                pairs.append((None, path))
+            elif code == "D":
+                pairs.append((path, None))
+            else:  # M, T, U -- and any future code -- same path on both sides
+                pairs.append((path, path))
+            i += 2
+    return pairs
+
+
 def scan(repo: str, base: str, base_was_explicit: bool) -> list:
     if not is_git_repo(repo):
         raise Undetermined(f"not a git repository: {repo}")
@@ -331,21 +467,22 @@ def scan(repo: str, base: str, base_was_explicit: bool) -> list:
     if not merge_base:
         raise Undetermined("merge-base produced no commit")
 
-    changed = [
-        p
-        for p in git(repo, "diff", "--name-only", merge_base).splitlines()
-        if p.endswith(".rs")
+    pairs = [
+        (old, new)
+        for (old, new) in changed_pairs(repo, merge_base)
+        if _is_rs(old) or _is_rs(new)
     ]
 
     acked = acknowledgements(repo, merge_base)
 
     results = []
-    for path in sorted(set(changed)):
-        before_src = blob_at(repo, merge_base, path)
-        after_src = worktree_content(repo, path)
-        before = counts(test_surface(before_src, path)) if before_src else counts("")
-        after = counts(test_surface(after_src, path)) if after_src else counts("")
-        for p, kind, detail in findings_for(path, before, after):
+    for old, new in sorted(set(pairs), key=lambda pr: (pr[1] or "", pr[0] or "")):
+        rep = new or old  # attribute the finding to the surviving/current path
+        before_src = blob_at(repo, merge_base, old) if old else ""
+        after_src = worktree_content(repo, new) if new else ""
+        before = counts(test_surface(before_src, old)) if before_src else counts("")
+        after = counts(test_surface(after_src, new)) if after_src else counts("")
+        for p, kind, detail in findings_for(rep, before, after):
             results.append(
                 {
                     "path": p,

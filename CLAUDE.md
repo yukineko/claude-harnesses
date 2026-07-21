@@ -24,15 +24,15 @@
 `docs/article-llm-fail-open.md:48` に「swallow it and exit 0 (allow the stop; a hook must never break the user's turn)」として引用が残る。
 
 **移行済みの実体**: 4 ゲート（donegate / reviewgate / propguard / tdd の各 `main.rs`）が通る
-panic barrier `crates/harness-core/src/gate/run.rs:36` は `d6db4670` で fail-closed へ移行した。
-gate 本体が panic した＝判定不能は block に解決する（「**fail closed**: block the stop and surface the crash」）。
+panic barrier は `d6db4670` で fail-closed へ移行した。gate 本体が panic した＝判定不能は block に
+解決する: `crates/harness-core/src/gate/run.rs:36`「**fail closed**: block the stop and surface the crash」。
 連続 2 回目の panic だけが `stop_hook_active` により bounded に allow へ落ちる。
 
 **未移行の実体（この文書のこの版を書いた時点で生きている。方針だけ先行している）**:
 `docs/stop-gate-latency.md:41` が**同じ規範を MUST として再主張している**（「A gate that errors internally allows the stop (exit 0)」）。
 移行は backlog `13dba04c`。**この節と `docs/stop-gate-latency.md` は現在矛盾している** —
 移行完了までは、両者の食い違いを承知の上で新規コードにこの節を適用する。
-（`crates/harness-core/src/hook.rs:218` の `run_hook` も常に exit 0 だが、これは判定を持たない
+（`crates/harness-core/src/hook.rs:217`「exits 0 so the turn is never broken」の `run_hook` も常に exit 0 だが、これは判定を持たない
 observability hook 専用の入口であり、下の carve-out の側に属する。）したがって:
 
 - **判定を持つコード（ゲート・チェック・verdict を返すもの）に「ターンを壊すな」は適用されない。**
@@ -95,21 +95,48 @@ docstring は後に「An empty slice is a vacuous pass」と**追認する方向
 
 ### 3. 判定不能（cannot determine）は必ず制限側に解決する
 
-**IO 失敗・ロック取得失敗・subprocess の異常終了・パース不能・panic・空集合**を「問題なし」に
-潰してはならない。「わからない」は「大丈夫」ではない。
+> **ゲート不変条件（全ゲート共通。特定のクレートの都合ではない）**
+> 判定不能 — **IO 失敗 / ロック取得失敗 / subprocess の異常終了 / パース不能 / panic / 空集合** — は
+> **`clean` ではない。必ず `block` か `ask` に解決する。**
+> bool へ潰す場合、`unwrap_or` の既定値は**必ず制限側**。
+
+「わからない」は「大丈夫」ではない。この 2 つを同じ出力に写した時点で、そのゲートは
+「検査した」と「検査できなかった」を下流から区別不能にしている。
+
+この不変条件が最もよく説明されているのは `crates/blastguard/src/model.rs:5`（「Three answers, not two.」）で、
+**二値型そのものが原因**だと名指ししている — 二値の `Allow`/`Deny` は、blastguard が解析できない構文を
+すべて `Allow` に強制し、「これは理解できない」を「これは問題ない」として記録させていた。
+`Decision::Ask` はその欠けた第三の答えで、`crates/blastguard/src/model.rs:9`（「it is NOT a verdict about the command, it is a refusal」）
+のとおり**コマンドについての判定ではなく、判定を推測することの拒否**である。
+**これは blastguard 固有の設計ではなく、判定を持つ全コードへの要求**である（用語定義は `docs/GLOSSARY.md` の fail-closed 項）。
 
 - `Result`/`Option` を bool へ潰すとき、`unwrap_or` の既定値は**必ず制限側**（`deny`/`block`/`true`=違反あり）にする。
 - エラー時に**空の集合**を返さない。空集合は下流で「検査対象なし ＝ 合格」と読まれる。
   三値（`Absent` / `Undetermined` / `Known(T)`）で「判定できなかった」を**表現可能**にする。
-  **注意: この共有型はまだ存在しない**（`grep -rn Undetermined crates/harness-core/src/` = 0 件）。
+  **注意: 任意の `T` を包む共有三値型はまだ存在しない**。`grep -rn Undetermined crates/harness-core/src/`
+  は 8 件ヒットするが（測定日 2026-07-21）、すべて `crates/harness-core/src/git_probe.rs:35` の
+  `RepoProbe::Undetermined` — git 探索専用の三値であって汎用型ではない。
   各 crate が三値を個別に再発明している状態で、型による強制は未実装。backlog `42b7c9af`。
 - subprocess は `stdout` だけでなく**必ず終了ステータスを判定に使う**。落ちたチェッカは合格したチェッカではない。
 - 閾値の sanitize は**ゲートを無効化しない範囲に clamp** する（床なし clamp は「常に合格」を意味する）。
 
-> **測定値（再導出可能）**: `git log --all -i --grep='fail.open\|fail.closed'` = **45 件**
-> （`silently` まで含む広いパターンなら 126 件だが、無関係な commit と `feat` が混ざるため
-> 「このクラスの修正」の根拠には使えない）。2026-07-21 の 1 日で 14 件が landed した。
-> そのうち少なくとも 3 件（`3b1eb24` / `c066fc8` / `05df9b2`）は「安全な degrade だ」と
+> **測定値 — 数字を書くなら測定コマンド・測定点（rev）・測定日を必ず併記する。**
+> 測定点の無い数字は、次の著者が転記した瞬間に腐る。
+>
+> ```
+> git log 94364b09 -i --grep='fail.open\|fail.closed' --oneline | wc -l
+> ```
+> → **60 件**（測定日 2026-07-21、測定点 `94364b09`）。うち **32 件が 2026-07-21 の 1 日**に
+> landed している（同じ集合を `--format='%ad' --date=short` で日別集計）。
+>
+> 同じ手順を `silently` で回すと 106 件になるが、これは無関係な commit と `feat` を含む
+> **広いパターン**であり、「このクラスの修正」の根拠には使えない。
+> **広いパターンの値を狭い主張の根拠に転記しない** — それがこの節が防ごうとしている記録の腐敗そのもの。
+>
+> この段落の前版は「45 件 / 126 件 / 14 件」と書いていたが、**どれも同じ方法で再現できなかった**
+> （実測 60 / 106 / 32）。数字は継承せず、毎回測り直すこと。
+>
+> 60 件のうち少なくとも 3 件（`3b1eb24` / `c066fc8` / `05df9b2`）は「安全な degrade だ」と
 > *明示的に正当化するコメント*を伴っていた（`231e20e` はコメント無しだったので「全件」ではない）。
 > **バグというより、判断が ok 側に倒れた結果**である。だからこの規範を明文で置く。
 

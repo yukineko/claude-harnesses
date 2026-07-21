@@ -50,3 +50,14 @@ jobs:
         run: python3 scripts/test_check_fail_open.py
       - name: Scan gate surface for fail-open swallows
         run: python3 scripts/check-fail-open.py
+      - name: Enforce whole-workspace fail-open burn-down ratchet
+        # The gate-surface scan above blocks new swallows in the GATE crates. This
+        # step blocks the count from creeping UP anywhere else: it compares the
+        # live `--all` count against the committed baseline
+        # (scripts/check-fail-open.baseline) and fails on any drift — a new
+        # swallow (count > baseline), or an improvement not locked into the
+        # baseline (count < baseline). A missing/unreadable baseline fails closed
+        # (exit 2), so the enforcement cannot be silently removed by deleting the
+        # pin. This is the enforcement half of the burn-down that `--all` alone
+        # (advisory, exit 0) only ever observed.
+        run: python3 scripts/check-fail-open.py --ratchet

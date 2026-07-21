@@ -66,7 +66,13 @@ fn refute(
     let mut prompts: Vec<ShardPrompt> = Vec::new();
     let mut positions: Vec<usize> = Vec::new();
     for (i, (sh, (label, p))) in shards.iter().zip(parsed.iter()).enumerate() {
-        if p.needs_user && p.marker_found {
+        // `!p.indeterminate`: an indeterminate verdict (marker found but no clear
+        // needs_user) is a META-condition, not a concrete finding. A skeptic can
+        // quote-refute a real finding, but it has nothing to refute here — sending
+        // it to refute risks the skeptic returning `no` and `fold_refute` dropping
+        // it back to clean, re-opening fail-open #7. Keep it STICKY: not flagged
+        // for refute, so it passes through untouched and its needs_user=true holds.
+        if p.needs_user && p.marker_found && !p.indeterminate {
             prompts.push(ShardPrompt {
                 label: format!("refute:{label}"),
                 prompt: prompt::render_refute(cfg, scope, *sh, date, &p.report),
@@ -122,6 +128,10 @@ fn fold_refute(audit: &Parsed, r: &Parsed) -> Parsed {
         needs_user: r.needs_user,
         summary,
         marker_found: true,
+        // Propagate the skeptic's own indeterminacy: if the refuter emitted a
+        // marker but no clear verdict, keep it sticky rather than trusting a
+        // silently-defaulted clean.
+        indeterminate: r.indeterminate,
     }
 }
 
@@ -137,6 +147,7 @@ fn fold_inconclusive(audit: &Parsed) -> Parsed {
         needs_user: audit.needs_user,
         summary: audit.summary.clone(),
         marker_found: true,
+        indeterminate: audit.indeterminate,
     }
 }
 
@@ -185,6 +196,11 @@ fn completeness(
                         needs_user: true,
                         summary: String::new(),
                         marker_found: true,
+                        // A deliberate fail-safe surface, not an unparseable
+                        // verdict: it is already needs_user=true and is a separate
+                        // appended entry (never re-refuted), so it need not be
+                        // marked indeterminate.
+                        indeterminate: false,
                     },
                 );
             }
@@ -203,6 +219,7 @@ mod tests {
             needs_user,
             summary: summary.to_string(),
             marker_found: true,
+            indeterminate: false,
         }
     }
 
@@ -238,5 +255,113 @@ mod tests {
         assert_eq!(out.summary, "drift X");
         assert!(out.report.contains("反証不能"));
         assert!(out.report.contains("finding X"));
+    }
+
+    // --- Stickiness of the indeterminate verdict (backlog 61599e06, "fail-open
+    // #7") ---------------------------------------------------------------------
+    // An indeterminate audit (marker found, but needs_user could not be parsed →
+    // forced needs_user=true) is a META-condition, not a concrete finding. A
+    // skeptic can quote-refute a real finding, but has nothing to refute here.
+    // So `refute` must NOT select it: sending it to a skeptic risks a `no`
+    // verdict dropping it back to clean, re-opening the fail-open. It must pass
+    // through untouched and its needs_user=true must hold.
+
+    /// Minimal Config sufficient to drive `refute`'s selection loop. The agent
+    /// command is never invoked on this test's path because the sole parsed
+    /// entry is indeterminate and therefore never selected (prompts stays empty,
+    /// `refute` early-returns before `agent::run_shards`).
+    fn min_cfg() -> Config {
+        Config {
+            project: crate::config::Project {
+                name: "test".to_string(),
+                root: ".".to_string(),
+            },
+            agent: Default::default(),
+            scope: Default::default(),
+            output: Default::default(),
+            prompt: Default::default(),
+            decisions: Default::default(),
+            verify: Default::default(),
+            map: Default::default(),
+            areas: Vec::new(),
+            invariants: Vec::new(),
+        }
+    }
+
+    fn empty_scope() -> Scope {
+        Scope {
+            baseline: "HEAD".to_string(),
+            fell_back: false,
+            changed_files: Vec::new(),
+            in_scope: Vec::new(),
+            skipped_areas: Vec::new(),
+            decision_files: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn refute_does_not_select_indeterminate_verdict_stays_sticky() {
+        // An indeterminate verdict paired with a real shard: the selection guard
+        // `p.needs_user && p.marker_found && !p.indeterminate` must exclude it,
+        // so refute builds zero prompts and returns the entry byte-for-byte
+        // unchanged WITHOUT ever spawning a skeptic agent. If the `!indeterminate`
+        // guard regressed, this entry would be selected and the sticky
+        // needs_user=true could be dropped back to clean (fail-open #7).
+        // Parsed is not Clone, so build two equal values via a closure rather
+        // than cloning: `expected` for the comparison, one moved into the input.
+        let make = || Parsed {
+            report: "# audit\nverdict could not be determined".to_string(),
+            needs_user: true,
+            summary: "indeterminate".to_string(),
+            marker_found: true,
+            indeterminate: true,
+        };
+        let expected = make();
+        let cfg = min_cfg();
+        let scope = empty_scope();
+        // One shard, index-aligned with the one parsed entry, so the selection
+        // predicate is actually evaluated (not skipped by an empty zip).
+        let shards = [Shard::Area(0)];
+        let out = refute(
+            &cfg,
+            Path::new("."),
+            &scope,
+            &shards,
+            "2026-01-01",
+            vec![("area:x".to_string(), make())],
+        );
+        assert_eq!(out.len(), 1);
+        let (label, got) = &out[0];
+        assert_eq!(label, "area:x");
+        // Untouched: refute never folded a skeptic result over it (no agent was
+        // spawned; refute early-returned on an empty prompt list).
+        assert_eq!(
+            got, &expected,
+            "an indeterminate verdict must pass through refute untouched (sticky)"
+        );
+        assert!(got.needs_user, "sticky needs_user=true must hold");
+        assert!(
+            got.indeterminate,
+            "the indeterminate flag must be preserved"
+        );
+    }
+
+    #[test]
+    fn fold_inconclusive_preserves_indeterminate() {
+        // If a skeptic is inconclusive, an indeterminate audit stays
+        // indeterminate — never silently downgraded to a determined clean.
+        let audit = Parsed {
+            report: "# audit".to_string(),
+            needs_user: true,
+            summary: "indeterminate".to_string(),
+            marker_found: true,
+            indeterminate: true,
+        };
+        let out = fold_inconclusive(&audit);
+        assert!(out.needs_user);
+        assert!(
+            out.indeterminate,
+            "indeterminate must survive fold_inconclusive"
+        );
     }
 }

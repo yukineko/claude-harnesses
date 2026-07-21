@@ -25,6 +25,15 @@ pub struct Parsed {
     /// False when no marker was found — the report is incomplete and the
     /// caller must NOT raise a sentinel (avoids false positives).
     pub marker_found: bool,
+    /// True when the marker WAS found but the `needs_user` verdict could not be
+    /// determined (field absent, empty, or an unrecognised token). The audit ran
+    /// but did not state a clear verdict — "cannot determine" is NOT "clean", so
+    /// `needs_user` is forced true (fail-closed, fail-open #7). Kept distinct
+    /// from a genuine `yes` so this meta-condition stays STICKY through the
+    /// verify/refute pass: a skeptic can quote-refute a concrete finding, but it
+    /// has nothing to refute here, so an indeterminate verdict must never be
+    /// dropped back to clean.
+    pub indeterminate: bool,
 }
 
 /// Parse agent stdout. When the marker is missing, `marker_found` is false and
@@ -45,6 +54,7 @@ pub fn parse(stdout: &str) -> Parsed {
             needs_user: false,
             summary: String::new(),
             marker_found: false,
+            indeterminate: false,
         };
     };
 
@@ -52,22 +62,40 @@ pub fn parse(stdout: &str) -> Parsed {
     let report = lines[..marker_idx].join("\n").trim_end().to_string();
     let trailer = &lines[marker_idx + 1..];
 
-    let needs_user_raw = field(trailer, "needs_user");
-    if needs_user_raw.is_none() {
-        eprintln!(
-            "specguard: WARN parse: marker found but 'needs_user' field absent from trailer; defaulting to false"
-        );
-    }
-    let needs_user = needs_user_raw
+    // Fail-closed verdict (fail-open #7): the marker IS present, so the audit
+    // ran — but "the audit ran and could not state a verdict" is NOT the same as
+    // "the audit ran and found nothing". The old code mapped `starts_with("yes")
+    // else false`, so an absent field, an empty value, or any unrecognised token
+    // (`maybe`, `error`, a truncated line) silently became `no`/clean and
+    // advanced the baseline over content whose verdict was never established.
+    //
+    // Now: only an explicit, recognised `no` is clean; an explicit `yes` is a
+    // finding; ANYTHING ELSE is indeterminate → `needs_user = true`, mirroring
+    // the `completeness`/`fold_inconclusive` fail-safe ("cannot confirm →
+    // surface") already used one module over. The prompt (`audit-prompt.md`) is
+    // fixed in lockstep to tell a well-behaved auditor to emit `yes` when it
+    // cannot compare; this is the deterministic backstop for when it does not.
+    let verdict = field(trailer, "needs_user").map(|v| {
         // Take only the first whitespace token so "yes (3 findings)" -> "yes".
-        .map(|v| {
-            v.split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase()
-        })
-        .map(|t| t.starts_with("yes"))
-        .unwrap_or(false);
+        v.split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+    });
+    let (needs_user, indeterminate) = match verdict.as_deref() {
+        Some(t) if t.starts_with("yes") => (true, false),
+        Some(t) if t.starts_with("no") => (false, false),
+        other => {
+            let seen = match other {
+                Some(t) if !t.is_empty() => format!("an unrecognised value ('{t}')"),
+                _ => "absent/empty".to_string(),
+            };
+            eprintln!(
+                "specguard: WARN parse: marker found but 'needs_user' verdict is {seen}; failing closed to needs_user=true (indeterminate) — a verdict that could not be determined is not 'clean'"
+            );
+            (true, true)
+        }
+    };
 
     let summary = field(trailer, "summary").unwrap_or_default();
 
@@ -76,6 +104,7 @@ pub fn parse(stdout: &str) -> Parsed {
         needs_user,
         summary,
         marker_found: true,
+        indeterminate,
     }
 }
 
@@ -146,5 +175,108 @@ mod tests {
         let p = parse(s);
         assert!(p.needs_user);
         assert_eq!(p.summary, "Cap");
+    }
+
+    // --- Regression tests for backlog 61599e06 ("fail-open #7") ---------------
+    // When the marker IS present (the audit RAN) but the `needs_user` verdict
+    // cannot be determined — field absent, empty, or an unrecognised token — the
+    // parser must fail CLOSED (needs_user=true, indeterminate=true), NOT default
+    // to clean. "The audit ran and could not state a verdict" is not "the audit
+    // ran and found nothing". These tests pin the fixed contract.
+
+    #[test]
+    fn absent_needs_user_field_fails_closed_indeterminate() {
+        // fail-open #7 (61599e06): marker present, but the trailer has only a
+        // `summary:` line and NO `needs_user:` line. This was `false`/clean
+        // before the fix; it must now be indeterminate → needs_user=true.
+        let s = "r\n<<<SPEC_AUDIT>>>\nsummary: audit could not compare";
+        let p = parse(s);
+        assert!(p.marker_found, "marker is present");
+        assert!(
+            p.needs_user,
+            "absent needs_user verdict must fail closed to needs_user=true"
+        );
+        assert!(
+            p.indeterminate,
+            "absent verdict is indeterminate, not a clean pass"
+        );
+    }
+
+    #[test]
+    fn empty_needs_user_value_fails_closed_indeterminate() {
+        // fail-open #7 (61599e06): `needs_user:` with nothing after the colon.
+        let s = "r\n<<<SPEC_AUDIT>>>\nneeds_user:\nsummary: x";
+        let p = parse(s);
+        assert!(p.marker_found);
+        assert!(
+            p.needs_user,
+            "empty needs_user value must fail closed to needs_user=true"
+        );
+        assert!(p.indeterminate, "empty value is indeterminate");
+    }
+
+    #[test]
+    fn unrecognised_needs_user_tokens_fail_closed_indeterminate() {
+        // fail-open #7 (61599e06): any token that is neither `yes*` nor `no*`
+        // is indeterminate → needs_user=true. Note `"n"` does NOT start with
+        // `"no"` and `"y"` does NOT start with `"yes"`, so both are
+        // indeterminate — asserted explicitly here.
+        for tok in ["maybe", "error", "unknown", "y", "n", "true", "42", "???"] {
+            let s = format!("r\n<<<SPEC_AUDIT>>>\nneeds_user: {tok}\nsummary: s");
+            let p = parse(&s);
+            assert!(p.marker_found, "marker present for token {tok:?}");
+            assert!(
+                p.needs_user,
+                "unrecognised token {tok:?} must fail closed to needs_user=true"
+            );
+            assert!(
+                p.indeterminate,
+                "unrecognised token {tok:?} must be indeterminate"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_no_stays_clean_not_indeterminate() {
+        // A recognised `no` (and `no findings`, which starts with "no") is the
+        // ONLY clean verdict: needs_user=false AND indeterminate=false.
+        for val in ["no", "no findings"] {
+            let s = format!("r\n<<<SPEC_AUDIT>>>\nneeds_user: {val}\nsummary: none");
+            let p = parse(&s);
+            assert!(p.marker_found);
+            assert!(!p.needs_user, "{val:?} is a clean verdict");
+            assert!(!p.indeterminate, "{val:?} is a determined verdict");
+        }
+    }
+
+    #[test]
+    fn explicit_yes_is_finding_not_indeterminate() {
+        // A genuine `yes` finding raises needs_user but is NOT indeterminate.
+        // This discriminates a real finding from the fail-closed default: both
+        // set needs_user=true, but only the unparseable one is indeterminate.
+        for val in ["yes", "yes (3 findings)"] {
+            let s = format!("r\n<<<SPEC_AUDIT>>>\nneeds_user: {val}\nsummary: fix");
+            let p = parse(&s);
+            assert!(p.marker_found);
+            assert!(p.needs_user, "{val:?} is a real finding");
+            assert!(
+                !p.indeterminate,
+                "{val:?} is a determined finding, not a fail-closed default"
+            );
+        }
+    }
+
+    #[test]
+    fn no_marker_is_not_indeterminate() {
+        // Unchanged contract: no marker at all → marker_found=false,
+        // needs_user=false, indeterminate=false (caller handles missing marker).
+        let s = "# Report\nbody without any trailer\n";
+        let p = parse(s);
+        assert!(!p.marker_found);
+        assert!(!p.needs_user);
+        assert!(
+            !p.indeterminate,
+            "a missing marker is a separate condition, not indeterminate"
+        );
     }
 }

@@ -774,5 +774,117 @@ class JsonOutput(GateTestCase):
                               f"expected kind {kind}: {payload}")
 
 
+# ---------------------------------------------------------------------------
+# 7. Residual fail-opens found by the round-26 adversarial audit
+#    Each of the three "weakening blocks" tests below is EXIT 0 (fail-open) on
+#    the pre-fix scanner and EXIT 1 once fixed: the F->P oracle for this round.
+#    The "benign is clean" tests pin that the fix does not start over-blocking.
+# ---------------------------------------------------------------------------
+
+_BIG = "#[test]\nfn big() {\n" + "".join(
+    f"    assert_eq!({i}, {i});\n" for i in range(12)
+) + "}\n"
+_BIG_WEAKER = "#[test]\nfn big() {\n" + "".join(
+    f"    assert_eq!({i}, {i});\n" for i in range(11)
+) + "}\n"
+
+# A path whose bytes git quotes by default (core.quotePath=true) -> the quoted
+# form ends in `.rs"`, so an `endswith('.rs')` filter drops it from the scan.
+NONASCII_TEST_PATH = "crates/demo/tests/テスト.rs"
+
+# A #[cfg(test)] module whose body has a `}` inside a string literal, then a
+# further assertion. A raw-brace matcher closes the module at the in-string `}`
+# and never counts the trailing assertion (so dropping it looks like no change).
+LIB_BRACE_IN_STRING_BASE = (
+    "pub fn f() -> i32 { 1 }\n\n"
+    "#[cfg(test)]\nmod tests {\n"
+    "    #[test]\n    fn t() {\n"
+    '        let s = "}";\n        assert_eq!(s, "}");\n'
+    "        assert!(true);\n"
+    "    }\n}\n"
+)
+LIB_BRACE_IN_STRING_WEAK = (
+    "pub fn f() -> i32 { 1 }\n\n"
+    "#[cfg(test)]\nmod tests {\n"
+    "    #[test]\n    fn t() {\n"
+    '        let s = "}";\n        assert_eq!(s, "}");\n'
+    "    }\n}\n"
+)
+
+
+class ResidualFailOpensRound26(GateTestCase):
+    # --- F1: non-ASCII (git-quoted) paths ---------------------------------
+    def test_nonascii_path_weakening_blocks(self):
+        repo = self.make_repo({NONASCII_TEST_PATH: _BIG})
+        repo.write(NONASCII_TEST_PATH, _BIG_WEAKER)
+        repo.commit("weaken a test whose path is non-ASCII")
+        rc, out, err = self.run_gate(repo.root)
+        self.assertBlocks(rc, out, err, kind="assertion-removed")
+
+    def test_nonascii_path_benign_is_clean(self):
+        repo = self.make_repo({NONASCII_TEST_PATH: _BIG})
+        repo.write(NONASCII_TEST_PATH, _BIG.replace("fn big()", "fn renamed_fn()"))
+        repo.commit("rename the fn, keep every assertion")
+        rc, out, err = self.run_gate(repo.root)
+        self.assertClean(rc, out, err)
+
+    # --- F2: a rename must not launder a weakening ------------------------
+    def test_rename_plus_weakening_blocks(self):
+        repo = self.make_repo({TEST_PATH: _BIG})
+        repo.remove(TEST_PATH)
+        repo.write(SECOND_TEST_PATH, _BIG_WEAKER)  # >50% similar -> git sees a rename
+        repo.commit("rename the test file and drop an assertion")
+        # sanity: git really detected a rename here, else the test proves nothing
+        ns = repo.git("diff", "--name-status", "-M", BASE_REF, "HEAD").stdout
+        self.assertTrue(ns.startswith("R"), f"expected a detected rename, got: {ns!r}")
+        rc, out, err = self.run_gate(repo.root)
+        self.assertBlocks(rc, out, err, kind="assertion-removed")
+
+    def test_pure_rename_is_clean(self):
+        repo = self.make_repo({TEST_PATH: _BIG})
+        repo.remove(TEST_PATH)
+        repo.write(SECOND_TEST_PATH, _BIG)  # identical content -> pure rename
+        repo.commit("rename the test file, change nothing else")
+        rc, out, err = self.run_gate(repo.root)
+        self.assertClean(rc, out, err)
+
+    def test_low_similarity_rename_still_blocks_via_deletion(self):
+        # <50% similar: git reports delete+add, not a rename; the deletion of the
+        # old (asserting) file must still block.
+        repo = self.make_repo({TEST_PATH: _BIG})
+        repo.remove(TEST_PATH)
+        repo.write(SECOND_TEST_PATH, "#[test]\nfn tiny() {\n    assert_eq!(0, 0);\n}\n")
+        repo.commit("replace the test file with a much smaller one")
+        rc, out, err = self.run_gate(repo.root)
+        self.assertBlocks(rc, out, err)
+
+    # --- F3: braces inside string/char literals must not truncate ---------
+    def test_brace_in_string_literal_weakening_blocks(self):
+        repo = self.make_repo({LIB_PATH: LIB_BRACE_IN_STRING_BASE})
+        repo.write(LIB_PATH, LIB_BRACE_IN_STRING_WEAK)
+        repo.commit("drop an assertion sitting past a string-literal brace")
+        rc, out, err = self.run_gate(repo.root)
+        self.assertBlocks(rc, out, err, kind="assertion-removed")
+
+    def test_brace_in_string_literal_benign_is_clean(self):
+        repo = self.make_repo({LIB_PATH: LIB_BRACE_IN_STRING_BASE})
+        repo.write(LIB_PATH, LIB_BRACE_IN_STRING_BASE.replace("fn t()", "fn renamed()"))
+        repo.commit("rename the test fn, keep the assertions")
+        rc, out, err = self.run_gate(repo.root)
+        self.assertClean(rc, out, err)
+
+    def test_KNOWN_LIMITATION_assert_true_not_caught(self):
+        # A macro-COUNTING scanner cannot see `assert!(cond)` -> `assert!(true)`:
+        # the count is unchanged. Pinned as a KNOWN LIMITATION so a reviewer does
+        # not assume semantic neutering is covered here (the tdd F->P oracle is).
+        repo = self.make_repo(
+            {TEST_PATH: "#[test]\nfn t() {\n    assert!(1 + 1 == 2);\n}\n"}
+        )
+        repo.write(TEST_PATH, "#[test]\nfn t() {\n    assert!(true);\n}\n")
+        repo.commit("neuter an assertion without changing the count")
+        rc, out, err = self.run_gate(repo.root)
+        self.assertClean(rc, out, err)  # documents the gap, not an endorsement
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

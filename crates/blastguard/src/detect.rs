@@ -2965,10 +2965,7 @@ mod tests {
         // Double-quoted attached payload too.
         assert!(bash("flock /tmp/l --command=\"rm -rf /Users/yuki/src\"").is_deny());
         // A benign attached payload stays allowed (no over-block).
-        assert_eq!(
-            bash("flock /tmp/l --command='cargo test'"),
-            Decision::Allow
-        );
+        assert_eq!(bash("flock /tmp/l --command='cargo test'"), Decision::Allow);
     }
 
     /// 138607bc twin: the GLUED short form `-c<payload>` (no space) hides the

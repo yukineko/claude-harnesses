@@ -1007,7 +1007,17 @@ fn dash_c_payloads(rest: &[&str]) -> Vec<String> {
     else {
         return Vec::new();
     };
-    payloads_after(rest, pos)
+    let mut out = payloads_after(rest, pos);
+    // Glued short form `-c<payload>` (value in the SAME token, after `c`):
+    // `payloads_after` only sees LATER tokens, so `flock /l -c'rm -rf /'` left
+    // the payload unanalysed — the twin of the `--command=` attached-form
+    // bypass (138607bc). By getopt convention an option that takes an argument
+    // is last in a short bundle, so everything after the first `c` is its value.
+    if let Some(cidx) = rest[pos].find('c') {
+        let inline = &rest[pos][cidx + 1..];
+        out.extend(inline_command_payloads(rest, pos, inline));
+    }
+    out
 }
 
 /// The `dash_c_payloads` candidate set for a command-string flag already located
@@ -1046,6 +1056,31 @@ fn payloads_after(rest: &[&str], pos: usize) -> Vec<String> {
     out
 }
 
+/// Payloads for a command-string flag whose value is GLUED INSIDE the flag
+/// token — the long attached form `--command=<payload>` (value after `=`) and
+/// the short glued form `-c<payload>` (value after the `c`). `inline` is the
+/// in-token remainder already peeled off by the caller; the payload may also
+/// spill into following tokens once the line is split on whitespace
+/// (`--command='rm -rf /'` → `--command='rm`, `-rf`, `/'`), so we splice the
+/// inline remainder back in front of `rest[pos + 1..]` and reuse the identical
+/// candidate logic. `payloads_after` alone only inspects tokens strictly AFTER
+/// the flag, so without this the inline value was never analysed — the
+/// depth-0 Allow bypass this closes (138607bc).
+fn inline_command_payloads(rest: &[&str], pos: usize, inline: &str) -> Vec<String> {
+    // An empty inline means the value is NOT glued (`--command`, `-c`, or a
+    // bundle like `-nc` with the value in the next token) — `payloads_after`
+    // already covers that, so there is nothing extra to reconstruct here.
+    if inline.is_empty() {
+        return Vec::new();
+    }
+    // A dummy flag at index 0 lets us reuse `payloads_after`'s "everything after
+    // the flag" candidate logic with the inline value spliced in as the first
+    // operand token.
+    let mut synthetic = vec!["--x", inline];
+    synthetic.extend_from_slice(&rest[pos + 1..]);
+    payloads_after(&synthetic, 0)
+}
+
 fn analyze_segment(seg: &str, depth: usize) -> Decision {
     let tokens: Vec<&str> = seg.split_whitespace().collect();
     let mut acc = VerdictAcc::default();
@@ -1065,7 +1100,18 @@ fn analyze_segment(seg: &str, depth: usize) -> Decision {
                     .iter()
                     .position(|t| *t == "--command" || t.starts_with("--command="))
                 {
+                    // Detached long form `--command <payload>`: payload is the
+                    // token(s) AFTER the flag.
                     payloads.extend(payloads_after(rest, pos));
+                    // Attached long form `--command=<payload>`: the value is
+                    // glued to the flag token by `=`. Reconstruct it so the
+                    // same candidate logic applies — otherwise the inline value
+                    // is never extracted and `flock /l --command='rm -rf /'`
+                    // stayed Allow at depth 0 (138607bc).
+                    if let Some(eq) = rest[pos].find('=') {
+                        let inline = &rest[pos][eq + 1..];
+                        payloads.extend(inline_command_payloads(rest, pos, inline));
+                    }
                 }
                 for payload in payloads {
                     // Shell-eval position: an unresolvable command word here is
@@ -2862,6 +2908,39 @@ mod tests {
         // A benign flock -c payload stays allowed.
         assert_eq!(bash("flock /tmp/l -c 'cargo test'"), Decision::Allow);
         assert_eq!(bash("flock -c 'ls -la' /tmp/l"), Decision::Allow);
+    }
+
+    /// 138607bc: the ATTACHED long form `--command=<payload>` glues the value to
+    /// the flag token by `=`. `payloads_after` only inspected tokens AFTER the
+    /// flag, so the inline payload was never extracted and this was a verified
+    /// depth-0 Allow bypass. The value must be reconstructed and re-analysed.
+    #[test]
+    fn d2_flock_attached_long_command_payload_is_reanalysed() {
+        assert!(
+            bash("flock /tmp/l --command='rm -rf /Users/yuki/src'").is_deny(),
+            "attached --command= with a destructive payload must be denied"
+        );
+        assert!(bash("flock --command='rm -rf /Users/yuki/src' /tmp/l").is_deny());
+        // Double-quoted attached payload too.
+        assert!(bash("flock /tmp/l --command=\"rm -rf /Users/yuki/src\"").is_deny());
+        // A benign attached payload stays allowed (no over-block).
+        assert_eq!(
+            bash("flock /tmp/l --command='cargo test'"),
+            Decision::Allow
+        );
+    }
+
+    /// 138607bc twin: the GLUED short form `-c<payload>` (no space) hides the
+    /// value in the same token, after `c`. getopt allows this and it was the
+    /// same bypass class as `--command=`.
+    #[test]
+    fn d2_flock_glued_short_command_payload_is_reanalysed() {
+        assert!(
+            bash("flock /tmp/l -c'rm -rf /Users/yuki/src'").is_deny(),
+            "glued -c'…' with a destructive payload must be denied"
+        );
+        // Benign glued payload stays allowed.
+        assert_eq!(bash("flock /tmp/l -c'cargo test'"), Decision::Allow);
     }
 
     // ---- D3: long-form wrapper flags with SEPARATE values ----

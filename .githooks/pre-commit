@@ -1,64 +1,147 @@
 #!/bin/sh
-# Versioned pre-commit hook. Enable once per clone with:
+# Versioned pre-commit hook — the PRIMARY gate surface of this repository.
+# Enable once per clone with:
 #
 #     git config core.hooksPath .githooks
 #
-# This is the FAST, ADVISORY layer: it runs two stdlib-only scanners locally
-# before a commit lands, so a defect is caught at the moment of introduction —
-# cheapest to fix:
-#   * injectguard (check-prompt-injection.py) — planted prompt-injection in the
-#     committed prompt assets.
-#   * fail-open-guard (check-fail-open.py) — a new fail-open swallow (a directory
-#     walk that drops an unreadable subtree, or a shell capture whose rc vanishes)
-#     on the gate surface.
-# Both are intentionally bypassable (`git commit --no-verify`); the enforced,
-# non-bypassable copies are the `injectguard` and `fail-open-guard` CI jobs, which
-# block merge regardless of local hook setup. The binary-reproducibility gate is
-# CI-only (it rebuilds from source — too slow for a pre-commit hook).
+# Opt-in by construction: a clone that never runs that command gets no hook at
+# all. Nothing here assumes GitHub, a hosted CI, or any network service, so it
+# works identically on CodeCommit or a bare local repo.
 #
-# The hook never blocks on infrastructure problems: a missing python or scanner
-# fails soft (warn + allow), so it degrades to the CI gate rather than wedging
-# local commits.
+# Why the gate lives HERE and not in CI
+# -------------------------------------
+# Enforcement used to be pinned to four GitHub required status checks. That
+# arrangement failed in all three ways an external dependency can fail, on the
+# day it was introduced:
+#   * it blocked a correct fix (PR #24),
+#   * the block was invisible from the machine that wrote the code — the author
+#     could truthfully report success while the change was un-mergeable, and
+#   * removing it needed a permission the local token did not hold.
+# Commit time is where the loop is shortest: the agent that wrote the defect is
+# still holding the context needed to fix it. It is also the only point that
+# protects LOCAL main, where condukt fast-forward merges land first.
+#
+# What runs (all stdlib-only python3; each blocks, none warn-and-continue)
+# -----------------------------------------------------------------------
+#   injectguard        check-prompt-injection.py  planted prompt-injection in a
+#                                                 committed prompt asset
+#   fail-open-guard    check-fail-open.py         a new fail-open swallow on the
+#                                                 gate surface
+#   doc-claims         check-doc-claims.py        a `path:line` citation in the
+#                                                 norm documents that no longer
+#                                                 describes reality
+#   test-weakening     check-test-weakening.py    a change that weakens the test
+#                                                 surface instead of the code
+#   version-lockstep   check-plugin-versions.py   the three version files of a
+#                                                 plugin disagreeing
+#   bump-on-change     check-version-bumped.py    a touched plugin left un-bumped
+#
+# The binary-reproducibility gate stays out: it rebuilds every bin from source,
+# which is far too slow for a commit.
+#
+# Fail-closed contract (repo doctrine: "cannot determine" resolves to the
+# restricted side, never to "fine")
+# ------------------------------------------------------------------------
+# Every non-zero scanner exit blocks, and the distinction is preserved in the
+# message rather than in the outcome: check-test-weakening.py exits 1 for a
+# finding and 2 for "the verdict could not be determined at all", and BOTH stop
+# the commit. A missing python3 or a missing scanner file also blocks. That is a
+# deliberate change from the previous version of this hook, which skipped both
+# and exited 0 — defensible only while CI was the real enforcer, and this hook
+# is now the real enforcer.
+#
+# `git commit --no-verify` still bypasses everything. That is a real hole and it
+# is stated rather than hidden: there is no longer a required status check
+# standing behind it. It is accepted because the bypass is explicit, typed by a
+# human, and visible in the shell history — unlike the failure mode it replaces,
+# which was silent.
 
 set -u
 
-REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
-INJECT_SCANNER="$REPO/scripts/check-prompt-injection.py"
-FAILOPEN_SCANNER="$REPO/scripts/check-fail-open.py"
-
-command -v python3 >/dev/null 2>&1 || {
-    echo "pre-commit: python3 not found; skipping local scans (CI still enforces)" >&2
-    exit 0
+REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+    echo "pre-commit: not inside a git work tree — refusing to certify this commit" >&2
+    exit 1
 }
+
+if ! command -v python3 >/dev/null 2>&1; then
+    cat >&2 <<'EOF'
+pre-commit: python3 not found, so NONE of the local gates could run.
+
+"Could not check" is not "clean", so this commit is blocked rather than waved
+through. Install python3, or bypass deliberately with `git commit --no-verify`.
+EOF
+    exit 1
+fi
 
 rc=0
 
-if [ -f "$INJECT_SCANNER" ] && ! python3 "$INJECT_SCANNER"; then
-    cat >&2 <<'EOF'
+# run <scanner-basename> <human-label>
+# Blocks on any non-zero exit AND on the scanner file being absent. The scanner
+# prints its own diagnostic; this adds the label so a reader knows which gate
+# spoke, and names exit 2 as undetermined rather than letting it read as a
+# generic failure.
+run() {
+    scanner="$1"
+    label="$2"
+    path="$REPO/scripts/$scanner"
 
-injectguard: a suspicious instruction was found in a committed prompt asset
-(see file:line above). If this is a real planted injection, remove it. If it is
-legitimate defensive text, frame it under a prompt-injection / untrusted heading
-or add a defense marker nearby so the scanner recognises it as data, not attack.
-EOF
+    if [ ! -f "$path" ]; then
+        echo "" >&2
+        echo "$label: scripts/$scanner is missing — cannot determine, so blocking." >&2
+        echo "  (restore the file, or bypass deliberately with --no-verify)" >&2
+        rc=1
+        return
+    fi
+
+    python3 "$path"
+    status=$?
+    [ "$status" -eq 0 ] && return
+
+    echo "" >&2
+    if [ "$status" -eq 2 ]; then
+        echo "$label: UNDETERMINED (exit 2) — the gate could not reach a verdict." >&2
+        echo "  This blocks. An uninspected surface is not a clean surface; fix" >&2
+        echo "  what stopped the scanner rather than loosening it to pass." >&2
+    else
+        echo "$label: blocked (exit $status)." >&2
+    fi
     rc=1
-fi
+}
 
-if [ -f "$FAILOPEN_SCANNER" ] && ! python3 "$FAILOPEN_SCANNER"; then
-    cat >&2 <<'EOF'
-
-fail-open-guard: a new fail-open swallow was found on the gate surface (see
-file:line above). Fail CLOSED instead: for a read_dir walk, `match read_dir {
-Ok(e)=>e, Err(e) if e.kind()==NotFound => .., Err(e) => <surface> }` and a
-per-entry `match entry {…}` (never `.flatten()`); for a shell capture, keep the
-rc (`… || rc=$?`) and refuse to pass when it is non-zero. If it is a reviewed
-exception, add it to ALLOWLIST in check-fail-open.py with a reason.
-EOF
-    rc=1
-fi
+run check-prompt-injection.py injectguard
+run check-fail-open.py        fail-open-guard
+run check-doc-claims.py       doc-claims
+run check-test-weakening.py   test-weakening
+run check-plugin-versions.py  version-lockstep
+run check-version-bumped.py   bump-on-change
 
 if [ "$rc" -ne 0 ]; then
-    echo "" >&2
-    echo "To commit anyway (not recommended — the CI jobs will still block the merge): git commit --no-verify" >&2
+    cat >&2 <<'EOF'
+
+One or more local gates blocked this commit. A red gate is a detection, not an
+obstacle — it found the defect at the cheapest possible moment.
+
+Remediation hints:
+  injectguard       remove the planted instruction, or frame legitimate
+                    defensive text under a prompt-injection heading so the
+                    scanner reads it as data rather than as an attack.
+  fail-open-guard   fail CLOSED: for a read_dir walk use `match read_dir { Ok(e)
+                    => e, Err(e) if e.kind() == NotFound => .., Err(e) =>
+                    <surface> }` plus a per-entry `match entry {...}` (never
+                    `.flatten()`); for a shell capture keep the rc (`... || rc=$?`)
+                    and refuse to pass when it is non-zero.
+  doc-claims        the cited `path:line` no longer says what the prose claims.
+                    Fix the citation or the prose — in THIS commit, not later.
+  test-weakening    restore the assertion, or acknowledge one specific finding
+                    with a commit-message line
+                    `test-weakening-justified: <path>:<kind> - <reason>`.
+  version-lockstep  bring Cargo.toml / .claude-plugin/plugin.json /
+                    .claude-plugin/marketplace.json back into agreement.
+  bump-on-change    you touched a plugin without raising its version; raise at
+                    least the patch component in all three files.
+
+To commit anyway: git commit --no-verify
+Nothing else is standing behind this hook, so that bypass is the last word.
+EOF
 fi
 exit "$rc"

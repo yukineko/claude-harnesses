@@ -56,6 +56,17 @@ enum PanicAction {
 /// `body` returns `!` in practice (it always ends in `process::exit`), making
 /// the inferred `R` the never type; the signature stays generic over `R` so the
 /// `!` type need not be named.
+///
+/// **Caller contract (load-bearing since this fails closed):** because a panic
+/// now *blocks* the stop, `body` MUST evaluate its panic-free operator escapes —
+/// the `disabled` toggles and the `consume_skip(&root, ".<gate>-skip")` marker —
+/// *before* any panic-prone verification (config is fail-soft; the checkers /
+/// git / subprocess work is not). Otherwise a deterministically-crashing gate
+/// would be unescapable: the operator's skip marker or `enabled = false` would be
+/// dead code behind the crash. The `tests/gate_escape_ordering.rs` guard pins
+/// this ordering across all four gates. (The `give-up`/`max_attempts` hatch may
+/// stay after `evaluate`; the *crash* case is instead bounded by the
+/// `stop_hook_active` `BoundedAllow` above.)
 pub fn run_guarded<R, F: FnOnce() -> R>(
     name: &str,
     interactive: bool,

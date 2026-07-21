@@ -681,12 +681,28 @@ fn main() {
             }
         },
         Command::Statusline => {
-            // Never break the status bar: any failure prints nothing, exits 0.
+            // Never CRASH the status bar (always exit 0) — but never render a
+            // blank/green line for an UNKNOWN state either. A cannot-determine
+            // (a non-empty payload we can't parse, or a transcript we can't read)
+            // is SURFACED as an explicit non-green "unknown" band, mirroring
+            // `ctxrot usage`'s "不明" readout. Blank is reserved for "genuinely
+            // nothing to report yet" (empty stdin / no session).
             let cfg = Config::load();
             let raw = read_stdin();
-            if let Some(input) = harness_core::hook::HookInput::parse(&raw) {
-                if let Some(line) = statusline_from(&cfg, &input) {
-                    println!("{line}");
+            match harness_core::hook::HookInput::parse(&raw) {
+                Some(input) => {
+                    if let Some(line) = statusline_from(&cfg, &input) {
+                        println!("{line}");
+                    }
+                }
+                None => {
+                    // `parse` returns None for BOTH empty and unparseable stdin.
+                    // Empty = nothing to render (blank is honest). Non-empty but
+                    // unparseable = we were handed a payload and could not read it
+                    // → cannot-determine → surface it, don't silently blank it.
+                    if !raw.trim().is_empty() {
+                        println!("{}", usage::unknown_line(&cfg));
+                    }
                 }
             }
         }
@@ -858,12 +874,20 @@ fn statusline_from(cfg: &Config, input: &harness_core::hook::HookInput) -> Optio
     if let Some(p) = pct {
         return Some(usage::line(cfg, p.round() as u64, tokens));
     }
-    // Fallback: estimate from the transcript when Claude didn't supply a %.
+    // No % from Claude. With no transcript path either, there is genuinely
+    // nothing to report yet (no session) → a blank line is honest.
     if input.transcript_path.is_empty() {
         return None;
     }
-    let (t, _src) = harness_core::transcript::estimate_tokens(&input.transcript_path)?;
-    Some(usage::line(cfg, usage::pct_from_tokens(cfg, t), Some(t)))
+    // We HAVE a transcript path but Claude gave no %. If we can estimate, render
+    // it. If the estimate FAILS (the file exists in intent but can't be read /
+    // stat'd), that is cannot-determine — surface an explicit non-green "unknown"
+    // band, NOT a blank/green that reads as headroom (the mirror of the `usage`
+    // subcommand's "不明" branch, and the fail-open this fix closes).
+    match harness_core::transcript::estimate_tokens(&input.transcript_path) {
+        Some((t, _src)) => Some(usage::line(cfg, usage::pct_from_tokens(cfg, t), Some(t))),
+        None => Some(usage::unknown_line(cfg)),
+    }
 }
 
 const SAMPLE_CONFIG: &str = r#"# ctxrot configuration
@@ -1036,4 +1060,68 @@ fn init() -> anyhow::Result<()> {
         cfg.context_window
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod statusline_tests {
+    use super::*;
+    use harness_core::hook::{ContextWindow, HookInput};
+
+    fn cfg() -> Config {
+        Config::default()
+    }
+
+    /// When Claude supplies a %, render the concrete band (happy path).
+    #[test]
+    fn renders_band_from_claude_percentage() {
+        std::env::set_var("NO_COLOR", "1");
+        let input = HookInput {
+            context_window: Some(ContextWindow {
+                used_percentage: Some(52.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let line = statusline_from(&cfg(), &input).expect("a % must render a line");
+        assert!(line.contains("52%"), "{line}");
+        assert!(line.contains("band"), "{line}");
+        assert!(!line.contains("unknown"), "{line}");
+    }
+
+    /// No % and no transcript path = genuinely no session yet → blank (None) is
+    /// honest; this branch must NOT be forced to "unknown".
+    #[test]
+    fn no_signal_is_blank_not_unknown() {
+        let input = HookInput {
+            transcript_path: String::new(),
+            context_window: None,
+            ..Default::default()
+        };
+        assert!(
+            statusline_from(&cfg(), &input).is_none(),
+            "no session should stay blank, not fabricate a band"
+        );
+    }
+
+    /// THE FIX: a transcript path is present but unreadable (here, a path that
+    /// does not exist → `estimate_tokens` returns None). The OLD code did
+    /// `estimate_tokens(..)?` → None → the caller printed NOTHING (a blank line
+    /// that reads as healthy). It must now surface an explicit "unknown" band.
+    /// Reverting the failure arm to `?`/None makes this assertion fail.
+    #[test]
+    fn unreadable_transcript_surfaces_unknown_not_blank() {
+        std::env::set_var("NO_COLOR", "1");
+        let input = HookInput {
+            transcript_path: "/nonexistent/ctxrot-statusline-test/transcript.jsonl".to_string(),
+            context_window: None,
+            ..Default::default()
+        };
+        let line = statusline_from(&cfg(), &input)
+            .expect("an unreadable transcript must fail closed to 'unknown', not blank (None)");
+        assert!(line.contains("unknown"), "must be the unknown band: {line}");
+        assert!(
+            !line.contains("band0"),
+            "must NOT read as a healthy low band: {line}"
+        );
+    }
 }

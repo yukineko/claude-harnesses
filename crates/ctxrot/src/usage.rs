@@ -57,6 +57,20 @@ pub fn line(cfg: &Config, pct: u64, tokens: Option<u64>) -> String {
     format!("{c}ctxrot {pct}% {} band{band}{r}{tok}", bar(frac, slots))
 }
 
+/// The readout when context usage is UNKNOWN — the transcript could not be read
+/// or estimated (a cannot-determine). It must NEVER render as a green low band or
+/// a blank line that reads as "plenty of headroom": that is the statusline
+/// fail-open. Instead it gets an explicit, non-green `?% … unknown` state — the
+/// visual mirror of `ctxrot usage`'s "不明" readout — in the red band color (via
+/// `color`'s `_` arm) so it is distinct from every real band and still honours
+/// NO_COLOR. The caller keeps exit 0 so the status bar never crashes; what
+/// changes is that "unknown" is SHOWN rather than silently rendered as absence.
+pub fn unknown_line(cfg: &Config) -> String {
+    let (c, r) = color(usize::MAX); // red arm: unknown is an alarm state, never green
+    let slots = cfg.bands.len() + 1;
+    format!("{c}ctxrot ?% {} unknown{r}", "▚".repeat(slots))
+}
+
 /// A band-keyed action hint for usage-aware `/distill`. Centralizing it here (not
 /// in the skill prose) keeps the threshold logic next to `band_for`.
 pub fn hint(cfg: &Config, pct: u64) -> &'static str {
@@ -130,5 +144,33 @@ mod tests {
     fn pct_from_tokens_rounds() {
         assert_eq!(pct_from_tokens(&cfg(), 100_000), 50);
         assert_eq!(pct_from_tokens(&cfg(), 150_000), 75);
+    }
+
+    /// The unknown readout must be a distinct, labeled, NON-blank state that is
+    /// NOT a real band — so it can never be mistaken for a green low-usage bar
+    /// (the statusline fail-open being closed). Content-level assertions under
+    /// NO_COLOR (race-free vs the ANSI codes).
+    #[test]
+    fn unknown_line_is_labeled_not_a_real_band() {
+        std::env::set_var("NO_COLOR", "1");
+        let l = unknown_line(&cfg());
+        assert!(l.contains("unknown"), "must be labeled unknown: {l}");
+        assert!(l.contains("?%"), "must show ?% not a concrete %: {l}");
+        assert!(
+            !l.contains("band"),
+            "unknown must NOT render as a real band (would read as healthy): {l}"
+        );
+        assert!(!l.trim().is_empty(), "unknown must never be blank");
+    }
+
+    /// A genuine low-usage band DOES say `band0` and never `unknown` — the two
+    /// states are content-distinguishable without inspecting color.
+    #[test]
+    fn real_band_and_unknown_are_distinguishable() {
+        std::env::set_var("NO_COLOR", "1");
+        let low = line(&cfg(), 3, Some(6_000));
+        assert!(low.contains("band0") && !low.contains("unknown"), "{low}");
+        let unk = unknown_line(&cfg());
+        assert!(unk.contains("unknown") && !unk.contains("band0"), "{unk}");
     }
 }

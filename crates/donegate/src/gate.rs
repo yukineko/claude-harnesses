@@ -4,26 +4,38 @@
 use std::path::Path;
 
 use globset::{Glob, GlobSetBuilder};
+use harness_core::verdict::{Determination, Reason, Verdict};
 
 use crate::config::{Check, Config};
 use crate::runner::{self, Outcome};
 
-pub struct Verdict {
+/// What the git scan could say about the change scope, in the shared
+/// three-valued type (`harness_core::verdict::Determination`) instead of a pair
+/// of home-grown booleans:
+///
+/// * `Known(Some(files))` — the scan ran; these files changed (possibly none).
+/// * `Known(None)` — the scan ran and *determined* there is no repo here, so
+///   there is no scope to narrow by. A determined answer, not a failure.
+/// * `Undetermined(why)` — git could not answer (unspawnable, or a sub-command
+///   exited non-zero). Not the same fact as "no repo", and never reported as one.
+pub type ChangeScope = Determination<Option<Vec<String>>>;
+
+/// The gate's aggregate run report: which checks ran, which were scoped out, and
+/// what the scan could determine about the scope. Named `GateReport` rather than
+/// `Verdict` because the verdict is now the shared
+/// [`harness_core::verdict::Verdict`] returned by [`GateReport::verdict`].
+pub struct GateReport {
     /// Checks that actually ran (in order).
     pub ran: Vec<Outcome>,
     /// Names of checks skipped because nothing they watch changed.
     pub skipped: Vec<String>,
-    /// True when no git repo was found, so `when_changed` scoping was bypassed.
-    pub git_unscoped: bool,
-    /// True when the scan was UNDETERMINED (git unspawnable, or a sub-command
-    /// exited non-zero) rather than out of scope. Kept apart from
-    /// `git_unscoped` because reporting an undetermined scan as "no git repo"
-    /// states something false about the environment — `status` already made
-    /// this distinction; the gate's own report did not.
-    pub git_scan_failed: bool,
+    /// What the git scan determined about the change scope. Replaces the former
+    /// pair of booleans ("no repo" / "scan failed"), which was a local
+    /// reinvention of this exact three-valued answer.
+    pub scope: ChangeScope,
 }
 
-impl Verdict {
+impl GateReport {
     /// Required (non-optional) checks that failed — these block the stop.
     pub fn blocking(&self) -> Vec<&Outcome> {
         self.ran
@@ -40,8 +52,24 @@ impl Verdict {
             .collect()
     }
 
+    /// The gate's answer in the shared type.
+    ///
+    /// The findings are a real observation (`Known`), not a guess: an
+    /// undetermined scan *widens* the applicable check set rather than shrinking
+    /// it (see [`evaluate`]), so every required check in `ran` was actually
+    /// executed. An empty findings list therefore means "ran, found nothing" —
+    /// the only empty this crate may mint a `Clean` from.
+    pub fn verdict(&self) -> Verdict {
+        Verdict::from_findings(
+            self.blocking()
+                .iter()
+                .map(|o| Reason::new(format!("{} ({})", o.name, o.status())))
+                .collect(),
+        )
+    }
+
     pub fn all_green(&self) -> bool {
-        self.blocking().is_empty()
+        !self.verdict().blocks()
     }
 }
 
@@ -73,21 +101,44 @@ fn applies(check: &Check, changed: &Option<Vec<String>>) -> bool {
     files.iter().any(|f| set.is_match(f))
 }
 
-pub fn evaluate(cfg: &Config, root: &Path) -> Verdict {
+/// Map a `ChangeScan` onto the shared three-valued type.
+///
+/// The two non-`Files` arms bypass scoping alike, but they are NOT the same fact
+/// and must not collapse into one answer: reporting a merely *failed* scan as
+/// "no git repo" states something false about the environment.
+///
+/// `NotRepo` is placed on the `Known` side deliberately: the shared repo probe
+/// already separates "confirmed not a repo" from "could not tell" and only the
+/// latter reaches us as `Failed`. So `NotRepo` is a completed observation whose
+/// value is "there is no scope" (`Known(None)`), while `Failed` is the absence of
+/// an observation (`Undetermined`).
+fn scan_scope(scan: crate::git::ChangeScan) -> ChangeScope {
+    match scan {
+        crate::git::ChangeScan::Files(v) => Determination::known(Some(v)),
+        crate::git::ChangeScan::NotRepo => Determination::known(None),
+        crate::git::ChangeScan::Failed => Determination::undetermined(
+            "git could not report the changed files (unspawnable, or a sub-command exited non-zero)",
+        ),
+    }
+}
+
+pub fn evaluate(cfg: &Config, root: &Path) -> GateReport {
     // donegate is RESTRICTIVE: both "not a repo" and "could not determine" map to
     // "no usable scope" → every check applies. Only a SUCCESSFUL scan narrows the
     // check set. Crucially `Failed` (a git sub-command errored) must land here, not
     // in a `Some(vec![])` "nothing changed" that would silently skip every
     // `when_changed` check and pass the Stop gate on an undetermined tree.
-    let scan = crate::git::changed_files(root);
-    // Both non-`Files` scans bypass scoping, but they are NOT the same fact and
-    // must not share one flag: `git_unscoped` alone made the report below say
-    // "no git repo" about a repo whose git had merely failed.
-    let git_unscoped = scan == crate::git::ChangeScan::NotRepo;
-    let git_scan_failed = scan == crate::git::ChangeScan::Failed;
-    let changed: Option<Vec<String>> = match scan {
-        crate::git::ChangeScan::Files(v) => Some(v),
-        crate::git::ChangeScan::NotRepo | crate::git::ChangeScan::Failed => None,
+    let scope = scan_scope(crate::git::changed_files(root));
+    // `require()` is the only extractor, and it hands back a blocking
+    // `Verdict::Undetermined` — so the undetermined arm cannot reach the scoping
+    // code at all. Here it resolves to `None` = no scope = every check applies,
+    // which is the restrictive side (widening, never narrowing, the check set).
+    let changed: Option<Vec<String>> = match scope.clone().require() {
+        Ok(files) => files,
+        Err(undetermined) => {
+            debug_assert!(undetermined.blocks(), "an undetermined scope must block");
+            None
+        }
     };
     let tmp_dir = cfg.state_dir.join("tmp");
 
@@ -107,11 +158,10 @@ pub fn evaluate(cfg: &Config, root: &Path) -> Verdict {
         }
     }
 
-    Verdict {
+    GateReport {
         ran,
         skipped,
-        git_unscoped,
-        git_scan_failed,
+        scope,
     }
 }
 
@@ -145,7 +195,7 @@ fn render_outcome(o: &Outcome) -> String {
 }
 
 /// The reason string injected back into the model when the stop is blocked.
-pub fn block_reason(v: &Verdict, attempt: u32, max: u32) -> String {
+pub fn block_reason(v: &GateReport, attempt: u32, max: u32) -> String {
     let failing = v.blocking();
     let mut out = format!(
         "🚦 donegate: not done yet — {} required check(s) failed (attempt {attempt}/{max}). \
@@ -173,13 +223,20 @@ pub fn block_reason(v: &Verdict, attempt: u32, max: u32) -> String {
 }
 
 /// A compact human report for manual `donegate gate` runs.
-pub fn human_report(v: &Verdict) -> String {
+pub fn human_report(v: &GateReport) -> String {
     let mut out = String::new();
-    if v.git_unscoped {
-        out.push_str("(no git repo — all checks ran unscoped)\n");
-    }
-    if v.git_scan_failed {
-        out.push_str("(git state undetermined — all checks ran unscoped, fail-closed)\n");
+    // Three scopes, three distinct lines. A merely-failed scan must never render
+    // as "no git repo" (a false statement about a directory that does have one).
+    match &v.scope {
+        Determination::Known(None) => {
+            out.push_str("(no git repo — all checks ran unscoped)\n");
+        }
+        Determination::Undetermined(why) => {
+            out.push_str(&format!(
+                "(git state undetermined: {why} — all checks ran unscoped, fail-closed)\n"
+            ));
+        }
+        Determination::Known(Some(_)) => {}
     }
     for o in &v.ran {
         out.push_str(&render_outcome(o));
@@ -236,14 +293,19 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // NotRepo vs Failed must not share one flag, and the human report must not
+    // NotRepo vs Failed must not share one answer, and the human report must not
     // state something false about the environment.
     //
-    // The bug being pinned: `evaluate` set `git_unscoped = changed.is_none()`,
-    // so BOTH `ChangeScan::NotRepo` and `ChangeScan::Failed` raised it, and
+    // The bug being pinned: `evaluate` derived its "no repo" flag from
+    // `changed.is_none()`, so BOTH `ChangeScan::NotRepo` and `Failed` raised it, and
     // `human_report` then printed "(no git repo — all checks ran unscoped)"
     // for a repo whose git had merely FAILED. `main.rs`'s `status` printer
     // already distinguished the two; the gate's own report did not.
+    //
+    // The pair of booleans that once carried this distinction is gone; the same
+    // three observations are now fixed on `GateReport::scope`
+    // (`Determination<Option<Vec<String>>>`): Known(None) = confirmed non-repo,
+    // Undetermined = the scan could not answer, Known(Some) = a real scope.
     // ---------------------------------------------------------------------
 
     use std::path::PathBuf;
@@ -296,19 +358,34 @@ mod tests {
         }
     }
 
-    fn verdict_flags(git_unscoped: bool, git_scan_failed: bool) -> Verdict {
-        Verdict {
+    /// A report carrying nothing but the scan scope, for the report-prose tests.
+    fn report_with_scope(scope: ChangeScope) -> GateReport {
+        GateReport {
             ran: Vec::new(),
             skipped: Vec::new(),
-            git_unscoped,
-            git_scan_failed,
+            scope,
         }
+    }
+
+    /// The confirmed-non-repo scope (what the old "no repo" flag used to mean).
+    fn notrepo_scope() -> ChangeScope {
+        Determination::known(None)
+    }
+
+    /// The could-not-answer scope (what the old "scan failed" flag used to mean).
+    fn failed_scope() -> ChangeScope {
+        Determination::undetermined("git could not report the changed files")
+    }
+
+    /// A successful scan (neither caveat).
+    fn files_scope() -> ChangeScope {
+        Determination::known(Some(vec!["a.md".to_string()]))
     }
 
     /// End-to-end: a directory whose `.git` exists but is unusable makes the
     /// shared probe answer `Undetermined` → `ChangeScan::Failed`. `evaluate`
-    /// must record that as `git_scan_failed`, and must NOT claim `git_unscoped`
-    /// (which the report renders as "no git repo").
+    /// must record that as an `Undetermined` scope, and must NOT record the
+    /// confirmed-non-repo scope (which the report renders as "no git repo").
     #[test]
     fn evaluate_failed_scan_sets_scan_failed_not_unscoped() {
         if !git_available() {
@@ -337,14 +414,15 @@ mod tests {
         let v = evaluate(&cfg, &work);
 
         assert!(
-            v.git_scan_failed,
-            "a Failed scan must set git_scan_failed so the human is told the git state was \
-             undetermined"
+            matches!(v.scope, Determination::Undetermined(_)),
+            "a Failed scan must record an Undetermined scope so the human is told the git state \
+             was undetermined; got {:?}",
+            v.scope
         );
         assert!(
-            !v.git_unscoped,
-            "a Failed scan must NOT set git_unscoped — that flag is rendered as '(no git repo)', \
-             a false statement about a directory that does have a .git"
+            !matches!(v.scope, Determination::Known(None)),
+            "a Failed scan must NOT record the confirmed-non-repo scope — that scope is rendered \
+             as '(no git repo)', a false statement about a directory that does have a .git"
         );
         // Restrictive branch is unchanged: scoping is still bypassed.
         assert_eq!(v.skipped, Vec::<String>::new());
@@ -357,8 +435,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// End-to-end: a genuine non-repo sets `git_unscoped` and NOT
-    /// `git_scan_failed` (the fix must not start crying "undetermined" for a
+    /// End-to-end: a genuine non-repo records `Known(None)` and NOT
+    /// `Undetermined` (the fix must not start crying "undetermined" for a
     /// directory that is simply out of scope).
     #[test]
     fn evaluate_notrepo_scan_sets_unscoped_not_scan_failed() {
@@ -385,9 +463,13 @@ mod tests {
         let cfg = cfg_for(&root, vec![check("scoped", Some(vec!["**/*.rs"]))]);
         let v = evaluate(&cfg, &work);
 
-        assert!(v.git_unscoped, "a NotRepo scan must set git_unscoped");
         assert!(
-            !v.git_scan_failed,
+            matches!(v.scope, Determination::Known(None)),
+            "a NotRepo scan must record the confirmed-non-repo scope; got {:?}",
+            v.scope
+        );
+        assert!(
+            !matches!(v.scope, Determination::Undetermined(_)),
             "a NotRepo scan is a determined answer — it must NOT be reported as an undetermined \
              git state"
         );
@@ -396,8 +478,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// End-to-end: a successful scan sets NEITHER flag (no over-report), and
-    /// scoping actually narrows the check set.
+    /// End-to-end: a successful scan records NEITHER caveat scope (no
+    /// over-report), and scoping actually narrows the check set.
     #[test]
     fn evaluate_successful_scan_sets_neither_flag() {
         if !git_available() {
@@ -431,10 +513,18 @@ mod tests {
         let cfg = cfg_for(&root, vec![check("scoped", Some(vec!["**/*.rs"]))]);
         let v = evaluate(&cfg, &work);
 
-        assert!(!v.git_unscoped, "a successful scan is not 'no git repo'");
         assert!(
-            !v.git_scan_failed,
+            !matches!(v.scope, Determination::Known(None)),
+            "a successful scan is not 'no git repo'"
+        );
+        assert!(
+            !matches!(v.scope, Determination::Undetermined(_)),
             "a successful scan is not an undetermined git state"
+        );
+        assert!(
+            matches!(v.scope, Determination::Known(Some(_))),
+            "a successful scan must carry the observed file list; got {:?}",
+            v.scope
         );
         assert_eq!(
             v.skipped,
@@ -451,7 +541,7 @@ mod tests {
     /// undetermined (asserted as a robust disjunction, not exact prose).
     #[test]
     fn human_report_failed_scan_never_claims_no_git_repo() {
-        let report = human_report(&verdict_flags(false, true));
+        let report = human_report(&report_with_scope(failed_scope()));
         let lower = report.to_lowercase();
         assert!(
             !lower.contains("no git repo"),
@@ -470,7 +560,7 @@ mod tests {
     /// The fix must not erase the correct existing message for a real non-repo.
     #[test]
     fn human_report_notrepo_scan_still_says_no_git_repo() {
-        let report = human_report(&verdict_flags(true, false));
+        let report = human_report(&report_with_scope(notrepo_scope()));
         let lower = report.to_lowercase();
         assert!(
             lower.contains("no git repo"),
@@ -483,10 +573,41 @@ mod tests {
         );
     }
 
+    /// The gate's answer travels in the shared type, and the Stop channel of
+    /// that type blocks — `all_green` is now that verdict, not a private bool.
+    #[test]
+    fn verdict_is_the_shared_type_and_blocks_on_a_failed_required_check() {
+        let mut failing = report_with_scope(files_scope());
+        failing.ran.push(Outcome {
+            name: "test".to_string(),
+            cmd: "false".to_string(),
+            passed: false,
+            optional: false,
+            exit_code: Some(1),
+            timed_out: false,
+            spawn_error: None,
+            duration_secs: 0.0,
+            output_tail: String::new(),
+        });
+        let v = failing.verdict();
+        assert!(matches!(v, Verdict::Violation(_)), "got {v:?}");
+        assert!(v.blocks());
+        assert!(!failing.all_green());
+        let d = v
+            .stop_decision()
+            .expect("a blocking verdict emits a decision");
+        assert_eq!(d["decision"], "block");
+
+        // A report whose required checks all ran and passed is the only Clean.
+        let green = report_with_scope(files_scope());
+        assert!(matches!(green.verdict(), Verdict::Clean(_)));
+        assert!(green.all_green());
+    }
+
     /// A successful scan reports neither environment caveat.
     #[test]
     fn human_report_successful_scan_reports_no_git_caveat() {
-        let report = human_report(&verdict_flags(false, false));
+        let report = human_report(&report_with_scope(files_scope()));
         let lower = report.to_lowercase();
         assert!(!lower.contains("no git repo"), "got:\n{report}");
         assert!(!lower.contains("undetermined"), "got:\n{report}");

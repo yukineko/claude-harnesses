@@ -180,13 +180,13 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
-    let verdict = gate::evaluate(&cfg, &root);
+    let report = gate::evaluate(&cfg, &root);
 
-    if verdict.all_green() {
+    if report.all_green() {
         state::reset(&cfg.state_dir, &session);
-        log_event(&cfg, &session, "green", &ran_names(&verdict), 0);
+        log_event(&cfg, &session, "green", &ran_names(&report), 0);
         if interactive {
-            println!("{}", gate::human_report(&verdict));
+            println!("{}", gate::human_report(&report));
         }
         harness_core::hook_latency::record(
             "donegate",
@@ -198,7 +198,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 
     // blocking failures present
     let attempt = state::bump(&cfg.state_dir, &session, cfg.reset_after_secs);
-    let failing: Vec<String> = verdict.blocking().iter().map(|o| o.name.clone()).collect();
+    let failing: Vec<String> = report.blocking().iter().map(|o| o.name.clone()).collect();
 
     if attempt > cfg.max_attempts {
         state::reset(&cfg.state_dir, &session);
@@ -219,10 +219,10 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
 
     log_event(&cfg, &session, "blocked", &failing, attempt);
-    let reason = gate::block_reason(&verdict, attempt, cfg.max_attempts);
+    let reason = gate::block_reason(&report, attempt, cfg.max_attempts);
 
     if interactive {
-        eprintln!("{}", gate::human_report(&verdict));
+        eprintln!("{}", gate::human_report(&report));
         eprintln!("\n{reason}");
         harness_core::hook_latency::record(
             "donegate",
@@ -231,13 +231,26 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         );
         std::process::exit(1);
     }
-    // Stop hook: JSON decision blocks the stop; exit 0.
-    println!("{}", json!({ "decision": "block", "reason": reason }));
+    // Stop hook: the JSON `decision` field blocks the stop; the exit code stays 0
+    // toward Claude (unchanged protocol). `stop_decision()` is the shared type's
+    // Stop-hook channel: `Clean` yields `None`, and both non-clean arms — a
+    // violation and an undetermined — yield the same blocking JSON, so there is
+    // no arm that could let a non-green gate end the turn.
+    let blocked = harness_core::verdict::Verdict::violation(reason);
+    match blocked.stop_decision() {
+        Some(decision) => println!("{decision}"),
+        // Unreachable for a Violation, but resolved to the restricted side rather
+        // than to silence (which the Stop protocol reads as "allow").
+        None => println!(
+            "{}",
+            json!({ "decision": "block", "reason": "donegate: required checks failed" })
+        ),
+    }
     harness_core::hook_latency::record("donegate", &session, __start.elapsed().as_millis() as u64);
     std::process::exit(0);
 }
 
-fn ran_names(v: &gate::Verdict) -> Vec<String> {
+fn ran_names(v: &gate::GateReport) -> Vec<String> {
     v.ran.iter().map(|o| o.name.clone()).collect()
 }
 

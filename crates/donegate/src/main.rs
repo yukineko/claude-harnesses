@@ -116,14 +116,20 @@ fn exit_on_err(r: anyhow::Result<()>) {
 /// exit code, is what blocks a stop). Returns exit 1 only in manual CLI mode.
 ///
 /// The never-break-a-turn panic guard lives in `harness_core::gate::run`: a
-/// panic in `gate_run` is swallowed (exit 0) in hook mode and surfaced (exit 1)
-/// in manual CLI mode. Real `process::exit` calls inside `gate_run` terminate
-/// directly, so only genuine panics ever reach the guard.
+/// panic in `gate_run` fails CLOSED in hook mode (emits a `decision:block`,
+/// bounded to one block via `stop_hook_active` so it can't trap the session) and
+/// is surfaced (exit 1) in manual CLI mode. Real `process::exit` calls inside
+/// `gate_run` terminate directly, so only genuine panics ever reach the guard.
 fn gate_command() -> ! {
     let raw = read_stdin();
     let hook = HookInput::parse(&raw);
     let interactive = hook.is_none();
-    harness_core::gate::run::run_guarded("donegate", interactive, move || gate_run(hook))
+    // On a post-block re-entry Claude Code sets stop_hook_active; the panic guard
+    // uses it to bound a fail-closed block to a single occurrence (no turn-trap).
+    let stop_hook_active = hook.as_ref().is_some_and(|h| h.stop_hook_active);
+    harness_core::gate::run::run_guarded("donegate", interactive, stop_hook_active, move || {
+        gate_run(hook)
+    })
 }
 
 fn gate_run(hook: Option<HookInput>) -> ! {

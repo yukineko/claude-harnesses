@@ -3,40 +3,133 @@
 
 use std::path::Path;
 
+/// What a panicking gate body resolves to, once the run mode is known. Pulled
+/// out of [`run_guarded`] so the fail-closed policy is unit-testable without
+/// actually exiting the process.
+#[derive(Debug, PartialEq, Eq)]
+enum PanicAction {
+    /// Manual/interactive run: surface the crash on stderr and exit 1. No stop
+    /// decision is emitted (there is no live turn to block).
+    InteractiveError,
+    /// Real Stop hook, first stop in the continuation chain: the gate crashed
+    /// before it could decide, so it cannot certify the stop is safe. Emit a
+    /// **block** decision (fail closed) and exit 0.
+    FailClosedBlock,
+    /// Real Stop hook, already a post-block re-entry (`stop_hook_active`): a
+    /// second consecutive crash. Allow the stop (exit 0) to avoid trapping the
+    /// session in an endless block loop — the first crash already surfaced a
+    /// block. Bounded fail-open, and only after fail-closed fired once.
+    BoundedAllow,
+}
+
 /// Run a Stop-hook body under the never-break-a-turn panic guard.
 ///
 /// `body` is the gate logic; it returns `!` because it always ends in a
 /// `process::exit`. A real `process::exit` inside `body` terminates the process
 /// directly and never unwinds here — so only a genuine *panic* reaches this
-/// guard:
-///   * hook mode (`interactive == false`) → swallow it and exit 0 (allow the
-///     stop; a hook must never break the user's turn).
+/// guard. A panic means the gate's own logic crashed *before* it emitted any
+/// allow/block decision (the decision paths `process::exit`, which never
+/// unwinds), so the check did not run and its verdict is unknown. We resolve
+/// that unknown to the restrictive side rather than silently letting the turn
+/// end unchecked:
+///   * hook mode (`interactive == false`), first stop (`stop_hook_active ==
+///     false`) → emit a `{"decision":"block"}` decision on stdout and exit 0
+///     (**fail closed**: block the stop and surface the crash, since a crashed
+///     gate cannot certify the stop is safe).
+///   * hook mode, post-block re-entry (`stop_hook_active == true`) → allow the
+///     stop (exit 0). A deterministically-panicking gate would otherwise block
+///     forever; Claude Code sets `stop_hook_active` on the stop that follows a
+///     block, so this bounds the fail-closed block to a single occurrence
+///     (surface once, then let the session proceed). This mirrors how the Stop
+///     nudges (ctxrot/budgetguard) bound themselves via `stop_hook_active`.
 ///   * interactive/manual mode → print `<name>: internal error` and exit 1.
 ///
+/// Historically hook mode swallowed the panic and exited 0 (allow) — but an
+/// exit-0-with-no-decision is *indistinguishable from a passing gate*, so a
+/// crashing gate silently let every stop through. That is exactly the
+/// "cannot-determine collapsed into allow" fail-open this repo forbids.
+///
 /// `body` is wrapped in `AssertUnwindSafe`: on a panic we exit the process
-/// immediately, so no possibly-inconsistent captured state is ever observed.
+/// immediately (only a stdout decision line + exit — never observing the
+/// possibly-inconsistent captured state), so unwind-safety is not a concern.
 ///
 /// `body` returns `!` in practice (it always ends in `process::exit`), making
 /// the inferred `R` the never type; the signature stays generic over `R` so the
 /// `!` type need not be named.
-pub fn run_guarded<R, F: FnOnce() -> R>(name: &str, interactive: bool, body: F) -> R {
-    match guard(interactive, body) {
+pub fn run_guarded<R, F: FnOnce() -> R>(
+    name: &str,
+    interactive: bool,
+    stop_hook_active: bool,
+    body: F,
+) -> R {
+    match guard(interactive, stop_hook_active, body) {
         Ok(value) => value,
-        Err(code) => {
-            if interactive {
-                eprintln!("{name}: internal error");
-            }
-            std::process::exit(code);
-        }
+        Err(action) => panic_exit(name, action),
     }
 }
 
 /// Testable core of [`run_guarded`]: run `body`, returning its value on success
-/// or the exit code to use (1 interactive, 0 hook) if it panicked.
-fn guard<R, F: FnOnce() -> R>(interactive: bool, body: F) -> Result<R, i32> {
+/// or the [`PanicAction`] to take if it panicked. Does no IO and never exits, so
+/// the fail-closed policy can be asserted directly.
+fn guard<R, F: FnOnce() -> R>(
+    interactive: bool,
+    stop_hook_active: bool,
+    body: F,
+) -> Result<R, PanicAction> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         Ok(v) => Ok(v),
-        Err(_) => Err(if interactive { 1 } else { 0 }),
+        Err(_) => Err(if interactive {
+            PanicAction::InteractiveError
+        } else if stop_hook_active {
+            PanicAction::BoundedAllow
+        } else {
+            PanicAction::FailClosedBlock
+        }),
+    }
+}
+
+/// The fail-closed block decision emitted when a gate body panics on the first
+/// stop: a serialized `{"decision":"block","reason":...}` line (the gates' own
+/// block protocol). Pure — split out so its shape/reason is unit-testable
+/// without exiting the process.
+fn fail_closed_block_json(name: &str) -> String {
+    let reason = format!(
+        "{name}: internal error — the gate crashed before it could run, so this \
+         stop is blocked as fail-closed (the check did not execute; its result \
+         is unknown). Address the cause and continue; if {name} crashes again on \
+         the next stop it is allowed through, so the session is never trapped."
+    );
+    serde_json::json!({ "decision": "block", "reason": reason }).to_string()
+}
+
+/// Carry out a [`PanicAction`]: emit the appropriate diagnostic/decision and
+/// exit. Split from [`run_guarded`] so the policy (in [`guard`]) stays pure.
+fn panic_exit(name: &str, action: PanicAction) -> ! {
+    match action {
+        PanicAction::InteractiveError => {
+            eprintln!("{name}: internal error");
+            std::process::exit(1);
+        }
+        PanicAction::FailClosedBlock => {
+            // Fail closed: the gate crashed before deciding, so it cannot vouch
+            // that this stop is safe. Block it (the gates' own block protocol:
+            // a `decision:block` JSON on stdout, exit 0) rather than let the
+            // turn end unchecked. `stop_hook_active` bounds this to one block.
+            println!("{}", fail_closed_block_json(name));
+            std::process::exit(0);
+        }
+        PanicAction::BoundedAllow => {
+            // Second consecutive crash on the post-block re-entry. The first
+            // crash already surfaced a fail-closed block; blocking again would
+            // trap the session, so allow the stop (bounded fail-open). Still
+            // surface it on stderr for hook diagnostics.
+            eprintln!(
+                "{name}: internal error again on stop re-entry — allowing this \
+                 stop to avoid trapping the session (a fail-closed block was \
+                 already surfaced once)."
+            );
+            std::process::exit(0);
+        }
     }
 }
 
@@ -79,19 +172,60 @@ mod tests {
 
     #[test]
     fn guard_passes_value_through() {
-        assert_eq!(guard(true, || 7), Ok(7));
-        assert_eq!(guard(false, || 7), Ok(7));
+        // A clean body's value is returned regardless of mode / re-entry flag.
+        assert_eq!(guard(true, false, || 7), Ok(7));
+        assert_eq!(guard(false, false, || 7), Ok(7));
+        assert_eq!(guard(false, true, || 7), Ok(7));
     }
 
     #[test]
-    fn guard_maps_panic_to_exit_code() {
+    fn guard_maps_panic_to_action() {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let interactive: Result<(), i32> = guard(true, || panic!("boom"));
-        let hook: Result<(), i32> = guard(false, || panic!("boom"));
+        let interactive: Result<(), PanicAction> = guard(true, false, || panic!("boom"));
+        // Real Stop hook, first stop: fail CLOSED (block), NOT allow.
+        let first_stop: Result<(), PanicAction> = guard(false, false, || panic!("boom"));
+        // Real Stop hook, post-block re-entry: bounded allow so it can't trap.
+        let re_entry: Result<(), PanicAction> = guard(false, true, || panic!("boom"));
         std::panic::set_hook(prev);
-        assert_eq!(interactive, Err(1)); // manual CLI surfaces the error
-        assert_eq!(hook, Err(0)); // hook mode swallows it, allows the stop
+        assert_eq!(interactive, Err(PanicAction::InteractiveError));
+        assert_eq!(
+            first_stop,
+            Err(PanicAction::FailClosedBlock),
+            "a crashed gate on the first stop must fail CLOSED (block), not silently allow"
+        );
+        assert_eq!(
+            re_entry,
+            Err(PanicAction::BoundedAllow),
+            "a second crash on re-entry allows the stop so the session is not trapped"
+        );
+    }
+
+    #[test]
+    fn fail_closed_block_json_is_a_block_decision() {
+        // The panic fail-closed path must emit the gates' own block protocol:
+        // `{"decision":"block","reason":...}`. A parse + field check pins that a
+        // refactor can't silently turn it into an allow (no decision / approve).
+        let v: serde_json::Value =
+            serde_json::from_str(&fail_closed_block_json("donegate")).unwrap();
+        assert_eq!(v["decision"], "block", "must block the stop, not allow it");
+        let reason = v["reason"].as_str().unwrap();
+        assert!(reason.contains("donegate"), "reason names the gate");
+        assert!(
+            reason.contains("fail-closed"),
+            "reason states it is a fail-closed block"
+        );
+    }
+
+    #[test]
+    fn interactive_takes_precedence_over_stop_hook_active() {
+        // `interactive` wins even if the (irrelevant, no-payload) re-entry flag
+        // were set: a manual run has no live turn to block.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let r: Result<(), PanicAction> = guard(true, true, || panic!("boom"));
+        std::panic::set_hook(prev);
+        assert_eq!(r, Err(PanicAction::InteractiveError));
     }
 
     fn skip_root(tag: &str) -> std::path::PathBuf {

@@ -151,7 +151,12 @@ fn check_command() -> ! {
     let raw = read_stdin();
     let hook = HookInput::parse(&raw);
     let interactive = hook.is_none();
-    harness_core::gate::run::run_guarded("propguard", interactive, move || check_run(hook))
+    // On a post-block re-entry Claude Code sets stop_hook_active; the panic guard
+    // uses it to bound a fail-closed block to a single occurrence (no turn-trap).
+    let stop_hook_active = hook.as_ref().is_some_and(|h| h.stop_hook_active);
+    harness_core::gate::run::run_guarded("propguard", interactive, stop_hook_active, move || {
+        check_run(hook)
+    })
 }
 
 fn check_run(hook: Option<HookInput>) -> ! {

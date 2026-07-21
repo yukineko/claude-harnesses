@@ -24,6 +24,13 @@ Scope note: the two plain library crates `harness-core` and `mutategate` present
 no plugin surface (no hooks/skills/agents) and are **excluded** from the 35, exactly
 as in `plugin-activation-scopes.md`.
 
+**Known limit — binary-level spawns are NOT surveyed.** The edge rule above reads
+`SKILL.md` / agent files only. A plugin *binary* that spawns a sibling binary
+(e.g. `crates/condukt/src/oracle.rs:127` builds a `Command::new("tdd")`) produces
+an edge this doc does not draw, so "leaf" means **"no SKILL-level caller"**, never "no
+caller at all". Stated so this gap reads as a known limit rather than as coverage;
+closing it needs a separate `Command::new` survey across every crate.
+
 ---
 
 ## 1. Dependency DAG
@@ -131,10 +138,10 @@ strict DAG into a cyclic graph. They are guarded reads/writes, not part of the
 main execution path, so they are excluded from the mermaid picture above:
 
 - **`condukt -.-> compass`** — Phase 0-next reads `compass gap` to pick the next
-  move (`crates/condukt/skills/condukt/SKILL.md:96`). Combined with the forward
+  move (`crates/condukt/skills/condukt/SKILL.md:112`). Combined with the forward
   `compass --> condukt` handoff, this forms a **2-cycle `condukt ↔ compass`**.
 - **`condukt -.-> backlog`** — Phase 0-next reads `backlog list --status pending`
-  (`SKILL.md:93`). `backlog` calls no one, so this adds **no** cycle on its own,
+  (`crates/condukt/skills/condukt/SKILL.md:109`). `backlog` calls no one, so this adds **no** cycle on its own,
   but it is a back-edge against the source→executor layering.
 - **`condukt -.-> hypothesis`** — Phase 1 injects open hypotheses and Phase 8
   transitions `linked_hypotheses` to `awaiting-measurement`
@@ -171,7 +178,11 @@ absent. Evidence cites `crates/condukt/skills/condukt/SKILL.md`.
 > PDO linkage respectively) but are not part of the "~10 telemetry/eval seed"
 > above; they appear in the DAG and the reachability table.
 > `condukt` also **mentions** `tdd` once ("tdd/specguard を経路面から補強",
-> `:463`) but does **not** invoke it — that is a conceptual reference, not an edge.
+> `crates/condukt/skills/condukt/SKILL.md:831`) — that mention is a conceptual
+> reference, not a SKILL-level edge. It is **not** the whole story: condukt's
+> *binary* spawns `tdd` (`crates/condukt/src/oracle.rs:127`,
+> `Command::new("tdd")`), documented at
+> `crates/condukt/skills/condukt/SKILL.md:767`. See the scope limit below.
 
 ---
 
@@ -216,7 +227,7 @@ the DAG edges above). Sorted alphabetically.
 | specguard | always-on | `SessionStart` hook; `/specguard` skill; `specguard-auditor` agent; `specguard` CLI | condukt, scout |
 | stuckguard | always-on | `PostToolUse` hook | — |
 | taskprog | always-on | `SessionStart`, `Stop` hooks; `/taskprog` skill | compass |
-| tdd | always-on | `Stop` hook; `/tdd` skill | — (condukt mentions but does not invoke it) |
+| tdd | always-on | `Stop` hook; `/tdd` skill | — at the SKILL level (condukt only mentions it); condukt's **binary** does spawn `tdd oracle` — see §4 |
 | tracekit | manual | CLI only | condukt |
 | trajectoryeval | manual | CLI only | condukt |
 
@@ -252,8 +263,12 @@ Two nuances worth flagging:
   never called by another plugin. If you are auditing "is the `playbook` plugin
   wired into condukt?", the answer is **no — the name collides with a
   fugu-router-backed capability**.
-- **`tdd`** is referenced conceptually by condukt (`SKILL.md:463`) but is never
-  invoked, so it is a leaf.
+- **`tdd`** is a leaf **under this doc's edge rule only** (SKILL/agent-file
+  invocations). condukt's SKILL mentions it conceptually at
+  `crates/condukt/skills/condukt/SKILL.md:831` and issues no bash call to it —
+  but condukt's *binary* does spawn it (`crates/condukt/src/oracle.rs:127`),
+  so "condukt never invokes tdd" is **false at the process level**. The leaf
+  classification here means "no SKILL-level caller", not "no caller".
 
 The remaining non-leaf plugins form the orchestration core: `scout` and
 `compass` (sources) feed `flow` (driver) and `condukt` (executor); `backlog`

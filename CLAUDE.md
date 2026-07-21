@@ -17,18 +17,23 @@
 
 - ゲートが自分の変更を止めたら、まずゲートが正しい可能性を疑う。ゲートの側を疑うのはその後。
 
-**「ターンを壊すな」を判定の正当化に使ってはならない（撤去する *方針* — 実体は未移行）。**
+**「ターンを壊すな」を判定の正当化に使ってはならない（撤去する *方針*。実体は一部のみ移行済み）。**
 このリポジトリには「never break the turn ＝ ターンを壊すな」という**不変条件**があり、
-判定を持つコードにも適用されている。結果として `harness-core/src/gate/run.rs:12` の
-「swallow it and exit 0 (allow the stop; a hook must never break the user's turn)」のように、
-**panic やエラーを「許可」に写す実装がこの一文で正当化されている**。
+判定を持つコードにも適用されていた。結果として Stop ゲートの panic barrier は panic を「許可」に
+写しており、**panic やエラーを「許可」に写す実装がこの一文で正当化されていた** — 当時のコードは
+`docs/article-llm-fail-open.md:48` に「swallow it and exit 0 (allow the stop; a hook must never break the user's turn)」として引用が残る。
 
-**未移行の実体（この文書を書いた時点で生きている。方針だけ先行している）**:
-`crates/harness-core/src/gate/run.rs:12`（呼び出し元: donegate / reviewgate / propguard / tdd の
-各 `main.rs`）、`crates/harness-core/src/hook.rs:218`、および `docs/stop-gate-latency.md:41` が
-**同じ規範を MUST として再主張している**（「A gate that errors internally allows the stop (exit 0)」）。
+**移行済みの実体**: 4 ゲート（donegate / reviewgate / propguard / tdd の各 `main.rs`）が通る
+panic barrier `crates/harness-core/src/gate/run.rs:36` は `d6db4670` で fail-closed へ移行した。
+gate 本体が panic した＝判定不能は block に解決する（「**fail closed**: block the stop and surface the crash」）。
+連続 2 回目の panic だけが `stop_hook_active` により bounded に allow へ落ちる。
+
+**未移行の実体（この文書のこの版を書いた時点で生きている。方針だけ先行している）**:
+`docs/stop-gate-latency.md:41` が**同じ規範を MUST として再主張している**（「A gate that errors internally allows the stop (exit 0)」）。
 移行は backlog `13dba04c`。**この節と `docs/stop-gate-latency.md` は現在矛盾している** —
-移行完了までは、両者の食い違いを承知の上で新規コードにこの節を適用する。したがって:
+移行完了までは、両者の食い違いを承知の上で新規コードにこの節を適用する。
+（`crates/harness-core/src/hook.rs:218` の `run_hook` も常に exit 0 だが、これは判定を持たない
+observability hook 専用の入口であり、下の carve-out の側に属する。）したがって:
 
 - **判定を持つコード（ゲート・チェック・verdict を返すもの）に「ターンを壊すな」は適用されない。**
   ブロックはターンを壊す行為ではない。判定不能なら 3. に従って制限側へ倒す。それだけ。

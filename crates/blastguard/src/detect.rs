@@ -257,6 +257,29 @@ fn analyze_shell_payload(payload: &str, depth: usize) -> Decision {
     Decision::Allow
 }
 
+/// The recursion cap was reached, so analysis DID NOT FINISH. That is the same
+/// condition as budget exhaustion a few lines up (`detect_bash`'s D4 guard) —
+/// "we did not finish looking, so we have no verdict" — and it gets the same
+/// answer: an Ask, which `Decision::hardened` turns into the pre-existing Deny
+/// whenever no human is available to answer.
+///
+/// Every one of the five depth-capped sites used to resolve to `Allow`, either
+/// by returning it outright or by skipping the recursion and falling through to
+/// `acc.finish()`. A destructive payload nested past the cap was therefore
+/// waved through *unanalysed* — the exact fail-open this module exists to
+/// prevent, sitting one line away from the sibling condition that handles it
+/// correctly.
+///
+/// The reason deliberately differs from the budget ask so the two unfinished-
+/// analysis causes stay distinguishable in the logs.
+fn depth_exhausted() -> Decision {
+    Decision::ask(
+        "command nests shell/wrapper invocations deeper than blastguard analyses \
+         (recursion depth limit) — analysis did not finish, so blastguard cannot \
+         vouch for it either way",
+    )
+}
+
 fn detect_bash(cmd: &str, depth: usize) -> Decision {
     // D4: when the budget is exhausted we never Allow. A command too complex to
     // analyse within a bounded amount of work must not be waved through
@@ -1122,6 +1145,12 @@ fn analyze_segment(seg: &str, depth: usize) -> Decision {
                 }
             }
         }
+    } else {
+        // Cap reached: the recursion above did NOT run, so this segment was not
+        // fully analysed. Record the unfinished-analysis Ask into `acc` rather
+        // than returning early, so a Deny found by a later non-recursive rule in
+        // this same function still outranks it (see `VerdictAcc::record`).
+        let _ = acc.record(depth_exhausted());
     }
 
     // D3: analyse EVERY candidate command-word position; deny if ANY is
@@ -1212,7 +1241,7 @@ fn is_recognized_command(cmd: &str) -> bool {
 /// is not a regression — that case was, and remains, the pre-existing Allow.
 fn unknown_wrapper_ask(tokens: &[&str], depth: usize) -> Decision {
     if depth >= MAX_SHELL_DEPTH {
-        return Decision::Allow;
+        return depth_exhausted();
     }
     // Resolve the head exactly as `analyze_segment` did.
     let candidates = command_candidates(tokens);
@@ -1384,6 +1413,12 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
                 }
             }
         }
+    } else {
+        // Cap reached: the recursion above did NOT run, so this segment was not
+        // fully analysed. Record the unfinished-analysis Ask into `acc` rather
+        // than returning early, so a Deny found by a later non-recursive rule in
+        // this same function still outranks it (see `VerdictAcc::record`).
+        let _ = acc.record(depth_exhausted());
     }
 
     let verdict = match cmd {
@@ -1734,6 +1769,12 @@ fn analyze_find(rest: &[&str], depth: usize) -> Decision {
                     return deny;
                 }
             }
+        } else {
+            // Cap reached: the recursion above did NOT run, so this segment was not
+            // fully analysed. Record the unfinished-analysis Ask into `acc` rather
+            // than returning early, so a Deny found by a later non-recursive rule in
+            // this same function still outranks it (see `VerdictAcc::record`).
+            let _ = acc.record(depth_exhausted());
         }
     }
     acc.finish()
@@ -1746,7 +1787,7 @@ fn analyze_find(rest: &[&str], depth: usize) -> Decision {
 /// so it reuses the rm / shell-`-c` / find logic (and the recursion bound).
 fn analyze_xargs(rest: &[&str], depth: usize) -> Decision {
     if depth >= MAX_SHELL_DEPTH {
-        return Decision::Allow;
+        return depth_exhausted();
     }
     match xargs_command_start(rest) {
         Some(start) => {
@@ -3123,26 +3164,55 @@ mod tests {
         // never weaker than before — but asserting `is_deny()` here would pin
         // the wrong half of that contract. What must hold is that it is NEVER
         // an Allow.
-        assert!(d.is_blocking(), "budget exhaustion must block, got {d:?}");
-        assert_eq!(
-            d.clone().hardened(),
-            Decision::deny(
-                "command is too complex to analyse within the safety budget — blastguard cannot vouch for it either way"
-            ),
-            "with no human available the ask must harden to the pre-existing deny"
+        assert!(d.is_blocking(), "unfinished analysis must block, got {d:?}");
+        // WHICH bound saves this input is not the invariant. This command is
+        // both 33-wide (fan-out → budget) and 33-deep (nesting → depth cap);
+        // both are "we did not finish looking", both Ask, and both harden to the
+        // pre-existing Deny. Pinning one exact reason pinned an implementation
+        // detail of which limit is observed first — when `depth_exhausted` gave
+        // the depth cap a verdict of its own (it previously resolved to Allow),
+        // the depth reason started winning here, with no change to the verdict.
+        //
+        // The budget bound is NOT left untested by this loosening: a
+        // fan-out-only, shallow-nesting command still reports the budget reason
+        // verbatim, pinned in `tests/depth_limit_fail_open.rs`
+        // (`budget_bound_is_still_reachable_with_its_own_reason`,
+        // `budget_resets_between_top_level_calls_measured_on_a_budget_bound_input`).
+        let hardened = d.clone().hardened();
+        assert!(
+            hardened.is_deny(),
+            "with no human available the ask must harden to the pre-existing \
+             deny, got {hardened:?}"
+        );
+        let reason = match &hardened {
+            Decision::Deny(r) | Decision::Ask(r) => r.clone(),
+            Decision::Allow => String::new(),
+        };
+        assert!(
+            reason.contains("safety budget") || reason.contains("recursion depth limit"),
+            "the deny must say analysis did not finish, and say WHICH limit was \
+             hit (budget or depth) — a reason naming neither would mean this \
+             input is being blocked for some unrelated cause. got: {reason}"
         );
     }
 
     #[test]
-    fn d4_budget_resets_between_top_level_calls() {
-        // A budget-exhausting command must not poison the next call.
+    fn d4_analysis_limits_do_not_leak_between_top_level_calls() {
+        // Renamed from `d4_budget_resets_between_top_level_calls`: this input is
+        // 33 deep as well as 33 wide, so since the depth cap started blocking it
+        // is the DEPTH limit that answers here, not the budget. The name claimed
+        // a budget property the case no longer demonstrates. The property it
+        // DOES pin — no per-call analysis limit leaks into the next call — is
+        // still worth having, so it keeps the case under an honest name.
+        // A genuinely budget-bound version lives in
+        // `tests/depth_limit_fail_open.rs`.
         let mut cmd = String::from("find . ");
         for _ in 0..32 {
             cmd.push_str("-exec find . ");
         }
         cmd.push_str("-exec echo {} +");
         // Blocking (an Ask that hardens to Deny — see the test above), and the
-        // point of this case: the budget it consumed must not leak into the
+        // point of this case: whatever limit it consumed must not leak into the
         // benign calls below.
         assert!(bash(&cmd).is_blocking());
         assert_eq!(bash("ls -la"), Decision::Allow);

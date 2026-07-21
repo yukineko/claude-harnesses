@@ -123,6 +123,16 @@ pub fn rule_id(reason: &str) -> &'static str {
         return "analysis-budget-exhausted";
     }
 
+    // The recursion-depth twin of the budget deny. Same character (a refusal to
+    // guess, not a verdict about the command) and the same reason for needing a
+    // stable id: a RECURRING depth exhaustion is the signal that some real
+    // nesting shape is routinely going unanalysed. Kept separate from the
+    // budget id on purpose — collapsing them would hide which of the two limits
+    // is actually being hit, and they call for different fixes.
+    if reason.contains("recursion depth limit") {
+        return "analysis-depth-exhausted";
+    }
+
     // The Ask paths. Like the budget deny these are not verdicts about the
     // command; they are refusals to guess about one. They still need stable ids
     // because a RECURRING ask is the signal that a real construct is routinely

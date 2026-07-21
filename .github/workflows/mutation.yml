@@ -19,9 +19,17 @@ name: mutation
 #   * Overall job timeout bounds cost; cargo-mutants gets a per-mutant --timeout.
 #
 # TRIGGERS: this is intentionally NOT run on every PR (it is slow). It runs on
-# manual dispatch, on a weekly schedule, and only on PRs/pushes that touch the
-# mutation gate machinery itself — so it never surprises unrelated changes while
-# the pilot is being calibrated.
+# manual dispatch, on a weekly schedule, on PRs/pushes that touch the mutation gate
+# machinery itself, AND — crucially — on changes to any CALIBRATED PILOT CRATE
+# (harness-core, specguard, condukt). Firing only on the machinery was a fail-open:
+# the one gate that measures whether the tests would CATCH a fault never ran when a
+# pilot crate's implementation+tests changed, so it was inert against its actual
+# judgment target. Now a pilot-crate PR fires the gate against THAT crate (see the
+# "Select pilot crates" step, which maps the changed files to pilots via
+# scripts/mutation-pilots.sh and narrows the slow run to only the changed crate).
+# The remaining GATE_CRATES (blastguard/propguard/stuckguard/overwatch) are not yet
+# calibrated pilots and deliberately do NOT fire this gate — firing with no
+# meaningful scope would be false coverage. Calibrating them is tracked follow-up.
 on:
   workflow_dispatch:
     inputs:
@@ -37,15 +45,28 @@ on:
     - cron: '0 6 * * 1' # Mondays 06:00 UTC
   pull_request:
     paths:
+      # Gate machinery (keeps the gate honest about itself).
       - 'crates/mutategate/**'
       - 'scripts/mutation-gate.sh'
+      - 'scripts/mutation-pilots.sh'
+      - 'scripts/test_mutation_pilots.sh'
       - '.github/workflows/mutation.yml'
+      # Calibrated pilot crates (the judgment targets — a change here fires the
+      # gate against the changed crate; keep in lockstep with mutation-pilots.sh).
+      - 'crates/harness-core/**'
+      - 'crates/specguard/**'
+      - 'crates/condukt/**'
   push:
     branches: [main]
     paths:
       - 'crates/mutategate/**'
       - 'scripts/mutation-gate.sh'
+      - 'scripts/mutation-pilots.sh'
+      - 'scripts/test_mutation_pilots.sh'
       - '.github/workflows/mutation.yml'
+      - 'crates/harness-core/**'
+      - 'crates/specguard/**'
+      - 'crates/condukt/**'
 
 permissions:
   contents: read
@@ -60,17 +81,58 @@ jobs:
     # Hard cap: mutation runs are slow; never let one hang the queue.
     timeout-minutes: 30
     env:
-      PILOT: ${{ github.event.inputs.pilot || 'harness-core' }}
       MIN_KILL_RATE: ${{ github.event.inputs.min_kill_rate || '0.80' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Need history to diff the PR/push against its base to pick the changed
+          # pilot(s). A shallow clone cannot resolve the base commit.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Sanity-check the deterministic gate (parser + kill-rate + exit code) before
       # spending time on the slow engine. These unit tests are the real guarantee.
       - name: Unit-test the gate logic
         run: cargo test --package mutategate
+      # The wiring that makes this gate reach its target — test it before trusting it.
+      - name: Test pilot-selection helper
+        run: scripts/test_mutation_pilots.sh
+      - name: Select pilot crates
+        id: pilots
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual dispatch: honour the explicit pilot input (existing behaviour).
+            pilots="${{ github.event.inputs.pilot || 'harness-core' }}"
+          else
+            # PR / push / schedule: map the changed files to the calibrated pilot(s).
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD || true)"
+            else
+              before="${{ github.event.before }}"
+              if [ -n "$before" ] && git rev-parse --verify --quiet "${before}^{commit}"; then
+                changed="$(git diff --name-only "$before" HEAD || true)"
+              else
+                # First push / unresolvable base: diff the tip commit alone.
+                changed="$(git diff --name-only HEAD~1 HEAD || true)"
+              fi
+            fi
+            # Fail-closed: if the diff came back empty for any reason, the helper
+            # falls back to the default pilot (it never emits an empty list), so the
+            # gate still runs against something rather than silently passing.
+            pilots="$(printf '%s\n' "$changed" | scripts/mutation-pilots.sh | tr '\n' ' ')"
+          fi
+          echo "pilots=$pilots" >> "$GITHUB_OUTPUT"
+          echo "mutation gate will run against pilot(s): $pilots"
       - name: Install cargo-mutants
         run: cargo install cargo-mutants --locked
-      - name: Run mutation gate on pilot crate
-        run: scripts/mutation-gate.sh
+      - name: Run mutation gate on changed pilot crate(s)
+        run: |
+          set -uo pipefail
+          rc=0
+          for p in ${{ steps.pilots.outputs.pilots }}; do
+            echo "=== mutation gate: pilot=$p ==="
+            PILOT="$p" scripts/mutation-gate.sh || rc=1
+          done
+          # Any pilot below threshold fails the whole job (fail-closed).
+          exit "$rc"

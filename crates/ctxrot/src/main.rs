@@ -724,9 +724,9 @@ fn main() {
                 .as_deref()
                 .and_then(harness_core::transcript::estimate_tokens)
             {
-                Some((tokens, _src)) => {
+                Some((tokens, src)) => {
                     let pct = usage::pct_from_tokens(&cfg, tokens);
-                    println!("{}", usage::line(&cfg, pct, Some(tokens)));
+                    println!("{}", usage::line(&cfg, pct, Some(tokens), src == "bytes"));
                     println!("hint: {}", usage::hint(&cfg, pct));
                 }
                 None => {
@@ -872,7 +872,8 @@ fn statusline_from(cfg: &Config, input: &harness_core::hook::HookInput) -> Optio
         .and_then(|c| c.used_percentage);
     let tokens = input.context_window.as_ref().and_then(|c| c.total_tokens());
     if let Some(p) = pct {
-        return Some(usage::line(cfg, p.round() as u64, tokens));
+        // Claude's own reported % is authoritative — not an estimate.
+        return Some(usage::line(cfg, p.round() as u64, tokens, false));
     }
     // No % from Claude. With no transcript path either, there is genuinely
     // nothing to report yet (no session) → a blank line is honest.
@@ -885,7 +886,14 @@ fn statusline_from(cfg: &Config, input: &harness_core::hook::HookInput) -> Optio
     // band, NOT a blank/green that reads as headroom (the mirror of the `usage`
     // subcommand's "不明" branch, and the fail-open this fix closes).
     match harness_core::transcript::estimate_tokens(&input.transcript_path) {
-        Some((t, _src)) => Some(usage::line(cfg, usage::pct_from_tokens(cfg, t), Some(t))),
+        // `src == "bytes"` is the rough size/4 proxy (no real usage block) — mark
+        // it estimated so a low band isn't read as a confident reading.
+        Some((t, src)) => Some(usage::line(
+            cfg,
+            usage::pct_from_tokens(cfg, t),
+            Some(t),
+            src == "bytes",
+        )),
         None => Some(usage::unknown_line(cfg)),
     }
 }
@@ -1122,6 +1130,40 @@ mod statusline_tests {
         assert!(
             !line.contains("band0"),
             "must NOT read as a healthy low band: {line}"
+        );
+    }
+
+    /// Byte-proxy fail-open (d85a173c): a transcript that EXISTS and is readable
+    /// but has NO real `usage` block falls back to the `size/4` "bytes" proxy — a
+    /// rough guess a corrupt/truncated transcript can make read low. The rendered
+    /// band must carry the `est?` marker so a low reading is never taken as a
+    /// confident "plenty of headroom". Reverting the caller to discard `_src`
+    /// (drop the `est?` marker) makes this assertion fail.
+    #[test]
+    fn bytes_proxy_estimate_is_marked_not_confident() {
+        use std::io::Write;
+        std::env::set_var("NO_COLOR", "1");
+        // A transcript with content but no `"usage"` object → estimate_tokens
+        // returns ("bytes", size/4).
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            f,
+            "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}"
+        )
+        .unwrap();
+        let input = HookInput {
+            transcript_path: f.path().to_string_lossy().into_owned(),
+            context_window: None,
+            ..Default::default()
+        };
+        let line = statusline_from(&cfg(), &input).expect("a readable transcript renders a line");
+        assert!(
+            line.contains("est?"),
+            "a bytes-proxy estimate must be marked est?, not shown as a confident band: {line}"
+        );
+        assert!(
+            !line.contains("unknown"),
+            "a readable transcript is an estimate, not fully unknown: {line}"
         );
     }
 }

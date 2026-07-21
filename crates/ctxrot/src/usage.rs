@@ -34,6 +34,19 @@ fn color(band: usize) -> (&'static str, &'static str) {
     (c, "\x1b[0m")
 }
 
+/// Neutral/dim (bright-black) color for an UNVERIFIED low reading. Suppressed
+/// under NO_COLOR. A bytes-proxy estimate that lands in the green band is a low
+/// number we could not confirm (a corrupt/truncated transcript reads low here),
+/// so per doctrine it must NOT paint the confident "healthy green" — it is dimmed
+/// to signal "unverified", without being floored to yellow/red (which would
+/// over-alarm every pre-usage-block session and get the bar ignored).
+fn dim_color() -> (&'static str, &'static str) {
+    if std::env::var_os("NO_COLOR").is_some() {
+        return ("", "");
+    }
+    ("\x1b[90m", "\x1b[0m")
+}
+
 /// Tokens as a compact `104k` / `512` string.
 fn fmt_k(tokens: u64) -> String {
     if tokens >= 1000 {
@@ -45,16 +58,40 @@ fn fmt_k(tokens: u64) -> String {
 
 /// The shared one-line readout: `ctxrot 52% ▮▮▯▯▯ band1 ~104k/200k`.
 /// `pct` is 0–100; `tokens` adds the absolute `~used/window` suffix when known.
-pub fn line(cfg: &Config, pct: u64, tokens: Option<u64>) -> String {
+///
+/// `estimated` marks a reading that came from the bytes-proxy fallback
+/// (`estimate_tokens` source `"bytes"`) rather than a real `usage` block: a rough
+/// `size/4` guess that a corrupt/truncated transcript can make read LOW while true
+/// usage is high. Such a reading gets an explicit `est?` marker so a low band is
+/// never taken as a confident "plenty of headroom" — the caller threads the
+/// `estimate_tokens` source instead of discarding it. (It deliberately does NOT
+/// force a color: flooring every early, usage-block-less session to yellow/red
+/// would over-alarm and get the bar ignored; the marker surfaces the uncertainty
+/// while keeping the useful low reading. Authoritative sources — Claude's own %
+/// or a real `usage` block — pass `false` and render unmarked.)
+pub fn line(cfg: &Config, pct: u64, tokens: Option<u64>, estimated: bool) -> String {
     let frac = pct as f64 / 100.0;
     let band = cfg.band_for(frac);
     let slots = cfg.bands.len() + 1; // +1 for the "below the lowest band" slot
-    let (c, r) = color(band);
+
+    // An estimate that lands in the GREEN band (0–1) is an UNVERIFIED low reading
+    // → dim it (never confident green). A high estimate keeps its alarming color
+    // (the conservative direction); an authoritative reading uses its real band
+    // color unchanged.
+    let (c, r) = if estimated && band <= 1 {
+        dim_color()
+    } else {
+        color(band)
+    };
     let tok = match tokens {
         Some(t) => format!(" ~{}/{}", fmt_k(t), fmt_k(cfg.context_window)),
         None => String::new(),
     };
-    format!("{c}ctxrot {pct}% {} band{band}{r}{tok}", bar(frac, slots))
+    let est = if estimated { " est?" } else { "" };
+    format!(
+        "{c}ctxrot {pct}% {} band{band}{est}{r}{tok}",
+        bar(frac, slots)
+    )
 }
 
 /// The readout when context usage is UNKNOWN — the transcript could not be read
@@ -127,10 +164,33 @@ mod tests {
     #[test]
     fn line_has_percent_and_band() {
         std::env::set_var("NO_COLOR", "1");
-        let l = line(&cfg(), 52, Some(104_000));
+        let l = line(&cfg(), 52, Some(104_000), false);
         assert!(l.contains("52%"), "{l}");
         assert!(l.contains("band1"), "{l}");
         assert!(l.contains("~104k/200k"), "{l}");
+        assert!(
+            !l.contains("est?"),
+            "an authoritative reading must not be marked estimated: {l}"
+        );
+    }
+
+    /// A bytes-proxy reading (estimated) carries an explicit `est?` marker so a
+    /// low band is never read as a confident "plenty of headroom" — the byte-proxy
+    /// fail-open being closed. The same pct rendered from an authoritative source
+    /// has no marker, so the two are distinguishable.
+    #[test]
+    fn estimated_reading_is_marked() {
+        std::env::set_var("NO_COLOR", "1");
+        let est = line(&cfg(), 3, Some(6_000), true);
+        assert!(
+            est.contains("est?"),
+            "byte-proxy estimate must be marked: {est}"
+        );
+        let authoritative = line(&cfg(), 3, Some(6_000), false);
+        assert!(
+            !authoritative.contains("est?"),
+            "authoritative reading must be unmarked: {authoritative}"
+        );
     }
 
     #[test]
@@ -168,7 +228,7 @@ mod tests {
     #[test]
     fn real_band_and_unknown_are_distinguishable() {
         std::env::set_var("NO_COLOR", "1");
-        let low = line(&cfg(), 3, Some(6_000));
+        let low = line(&cfg(), 3, Some(6_000), false);
         assert!(low.contains("band0") && !low.contains("unknown"), "{low}");
         let unk = unknown_line(&cfg());
         assert!(unk.contains("unknown") && !unk.contains("band0"), "{unk}");

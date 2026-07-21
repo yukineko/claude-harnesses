@@ -593,6 +593,69 @@ row_for_name() {
   return 1
 }
 
+# Restore the just-applied stage's registry entries to their PRIOR version/path,
+# rolling the stage back. Shared by BOTH the health-gate ROLLBACK path (rc=3, a
+# real spike) and the fail-CLOSED gate-could-not-evaluate path (rc not in {0,3}),
+# so an unverified stage is never left live in either case.
+#   $1 = overwatch binary path   $2 = stage index   $3 = stage plugin names
+#   $4 = emit_record (1 = also append an observational violation-rollback event,
+#        0 = restore only). The eval-error path passes 0: there was NO health
+#        verdict/violation to attribute, so recording a `raw` rollback event
+#        would pollute the review-queue/metrics with a non-event.
+execute_stage_rollback() {
+  local ow="$1" s="$2" stage_names="$3" emit_record="${4:-1}"
+  local pn
+  local -a stage_rows=()
+  for pn in $stage_names; do
+    stage_rows+=("$(row_for_name "$pn")")
+  done
+  local stage_state prior_line cj
+  stage_state="$(build_state_json "${stage_rows[@]}")"
+  prior_line="$(sed -n '1p' <<<"$stage_state")"
+  cj="$(sed -n '2p' <<<"$stage_state")"
+  local rbplan
+  rbplan="$("$ow" canary-rollback-plan --stage-index "$s" --prior "$prior_line" --canary-targets "$cj")"
+  echo "  rollback plan for stage $s:"
+  echo "$rbplan" | sed 's/^/    /'
+  # Execute the rollback: re-point registry to each prior install path.
+  # NOTE: the plugin name is passed via argv (sys.argv[1] inside
+  # rollback_target_lookup), never string-interpolated into the Python source,
+  # so a name containing a quote or other special char cannot break out of (or
+  # inject into) the literal. The restores for the whole stage are batched into
+  # ONE registry_patch call (finding-17).
+  local -a rb_reg_args=()
+  for pn in $stage_names; do
+    local rv rp lookup_out
+    lookup_out="$(rollback_target_lookup "$rbplan" "$pn")"
+    rv="$(sed -n '1p' <<<"$lookup_out")"
+    rp="$(sed -n '2p' <<<"$lookup_out")"
+    if [ -n "$rv" ] && [ -n "$rp" ]; then
+      rb_reg_args+=("$pn" "$rv" "$rp")
+    else
+      echo "    $pn: newly introduced by canary — nothing to restore (left as-is)" >&2
+    fi
+    # Fail-soft: record an observational rollback event so `overwatch
+    # review-queue` can surface it later. This never gates or alters the
+    # rollback itself — a record failure is swallowed (|| true) so the audit log
+    # can NEVER break a rollout. Skipped entirely when emit_record=0 (the
+    # eval-error path), since attributing a `raw` violation-rollback to a stage
+    # that had no health verdict would be a false record.
+    if [ "$emit_record" = 1 ]; then
+      local canary_ver=""
+      IFS=$'\t' read -r _n canary_ver _rest <<<"$(row_for_name "$pn")"
+      local -a rb_ev_args=(record-rollback --plugin "$pn"
+        --to-version "$canary_ver" --stage "$s" --reason raw)
+      if [ -n "$rv" ]; then
+        rb_ev_args+=(--from-version "$rv")
+      fi
+      "$ow" "${rb_ev_args[@]}" >/dev/null 2>&1 || true
+    fi
+  done
+  if [ "${#rb_reg_args[@]}" -gt 0 ]; then
+    registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "${rb_reg_args[@]}" | sed 's/^/    /'
+  fi
+}
+
 run_canary() {
   local ow
   if ! ow="$(resolve_overwatch_bin)"; then
@@ -704,9 +767,12 @@ run_canary() {
         # OWN, lower threshold (Problem-2.1b: default 0 = any fleet-recurring
         # signature trips) so fleet recurrence can advise rollback independently
         # of the raw-spike count. --since anchors the count to this stage's
-        # deploy time (Problem-2.2). A gate-eval error must not crash the
-        # rollout: canary is observational, so on any non-rollback failure we
-        # treat it as "no spike observed" and PROCEED (fail-soft).
+        # deploy time (Problem-2.2). A gate-eval error (a non-{0,3} exit) now
+        # fails CLOSED — rolls the stage back and halts (exit 5) — rather than the
+        # old fail-soft PROCEED: for a fleet-defense rollout, a health check that
+        # could not run has verified NOTHING, so it must not wave the stage
+        # through (c8a962dd). See the gate_rc handling below and the explicit
+        # ROLLOUT_GATE_EVAL_FAILSOFT=1 escape for the bootstrap-skew case.
         #
         # KNOWN rc=2 cause (backlog 2a953ab5, root-caused 2026-07-13): "$ow" is
         # resolved ONCE via resolve_overwatch_bin() at the top of this function,
@@ -722,79 +788,56 @@ run_canary() {
         # for every gate-checked stage in that one run, and NOT reproducible
         # afterwards (a manual standalone re-run hits the freshly-swapped
         # binary and succeeds) — a one-time self-referential bootstrap skew,
-        # not a flake. Harmless by design (fail-soft below treats it as
-        # "no spike" and proceeds); no functional fix applied.
+        # not a flake. It now HALTS the rollout fail-closed (rc=2 is not in
+        # {0,3}), because "the gate could not evaluate" is exactly the state that
+        # must not silently proceed. Remedies for this known-benign case: roll
+        # overwatch out single-stage FIRST (a single-stage canary has no
+        # inter-stage gate check, so the skew never arises), or set
+        # ROLLOUT_GATE_EVAL_FAILSOFT=1 to explicitly acknowledge and proceed.
         local -a gate_args=(canary-gate --threshold "$canary_threshold" \
           --systemic-threshold "$canary_systemic_threshold")
         [ -n "$stage_deploy_ts" ] && gate_args+=(--since "$stage_deploy_ts")
         local gate_out gate_rc=0
         gate_out="$("$ow" "${gate_args[@]}")" || gate_rc=$?
         echo "$gate_out" | sed 's/^/  /'
-        # Exit 3 = rollback advised (raw OR systemic). Any OTHER non-zero code
-        # is a gate-eval error (bad args, unreadable store, etc.) — fail-soft:
-        # log and PROCEED rather than aborting the rollout on an observational
-        # check.
+        # Exit 0 = PROCEED, exit 3 = ROLLBACK advised (raw OR systemic). Any
+        # OTHER non-zero code means the gate COULD NOT EVALUATE the canary's
+        # health (clap usage rc=2 against a stale binary, rc=127 missing binary,
+        # a crash, an unreadable store — though the store case now returns rc=3
+        # / rollback after the overwatch fix). Historically this fell through to
+        # "treat as no-spike and PROCEED" — a fail-OPEN: a GATE-crate rollout
+        # advancing every stage precisely because the health check was broken and
+        # verified nothing (c8a962dd). For a fleet-defense rollout, "cannot verify
+        # health" must NOT silently proceed; it fails CLOSED (roll the stage back
+        # and halt without advancing).
+        #
+        # The one documented-benign cause is the overwatch self-upgrade BOOTSTRAP
+        # SKEW: this run is upgrading overwatch AND the same commit adds a new
+        # canary-gate flag, so every inter-stage check invokes that flag against
+        # the OLD, not-yet-swapped binary (clap rc=2) — 100% reproducible for that
+        # one run, gone on a standalone re-run. That is genuine, but it is still
+        # "health unverified", so it does not get a silent pass: an operator who
+        # KNOWS they are in that case sets ROLLOUT_GATE_EVAL_FAILSOFT=1 to
+        # explicitly opt back into fail-soft PROCEED (loudly logged), exactly like
+        # --no-canary is the explicit escape hatch for the canary requirement
+        # itself. Absent that acknowledgement, an un-evaluable gate halts.
         if [ "$gate_rc" -ne 0 ] && [ "$gate_rc" -ne 3 ]; then
-          echo "  health-gate: eval error (rc=$gate_rc) — treating as no-spike and PROCEEDING (fail-soft)" >&2
-          gate_rc=0
+          if [ "${ROLLOUT_GATE_EVAL_FAILSOFT:-0}" = 1 ]; then
+            echo "  health-gate: eval error (rc=$gate_rc) — ROLLOUT_GATE_EVAL_FAILSOFT=1 set; explicit operator override to PROCEED (fail-soft, acknowledged)" >&2
+            gate_rc=0
+          else
+            echo "  health-gate: CANNOT EVALUATE (rc=$gate_rc) — canary health unverifiable; failing CLOSED, rolling back stage $s and halting without advancing." >&2
+            echo "  (Known benign cause: overwatch self-upgrade bootstrap-skew, rc=2 against the pre-swap binary. Roll out overwatch single-stage first, or set ROLLOUT_GATE_EVAL_FAILSOFT=1 to explicitly proceed.)" >&2
+            # emit_record=0: there was NO health verdict/violation, so do not
+            # write a `raw` violation-rollback event (it would be a false record).
+            execute_stage_rollback "$ow" "$s" "$stage_names" 0
+            echo "canary: HALTED at stage $s — health gate could not evaluate (fail-closed)." >&2
+            exit 5
+          fi
         fi
         if [ "$gate_rc" -ne 0 ]; then
           echo "  health-gate: ROLLBACK — raw-spike or systemic recurrence detected; rolling back stage $s and halting" >&2
-          # Re-point the just-applied stage back to its prior version dir.
-          # Build the prior/canary JSON for this stage through the SAME
-          # json.dumps helper as the main path (finding-3 escaping +
-          # finding-14 dedup). Rows go via argv.
-          local pn
-          local -a stage_rows=()
-          for pn in $stage_names; do
-            stage_rows+=("$(row_for_name "$pn")")
-          done
-          local stage_state prior_line cj
-          stage_state="$(build_state_json "${stage_rows[@]}")"
-          prior_line="$(sed -n '1p' <<<"$stage_state")"
-          cj="$(sed -n '2p' <<<"$stage_state")"
-          local rbplan
-          rbplan="$("$ow" canary-rollback-plan --stage-index "$s" --prior "$prior_line" --canary-targets "$cj")"
-          echo "  rollback plan for stage $s:"
-          echo "$rbplan" | sed 's/^/    /'
-          # Execute the rollback: re-point registry to each prior install path.
-          # NOTE: the plugin name is passed via argv (sys.argv[1] inside
-          # rollback_target_lookup), never string-interpolated into the
-          # Python source, so a name containing a quote or other special
-          # char cannot break out of (or inject into) the literal. The
-          # restores for the whole stage are batched into ONE registry_patch
-          # call (finding-17).
-          local -a rb_reg_args=()
-          for pn in $stage_names; do
-            local rv rp lookup_out
-            lookup_out="$(rollback_target_lookup "$rbplan" "$pn")"
-            rv="$(sed -n '1p' <<<"$lookup_out")"
-            rp="$(sed -n '2p' <<<"$lookup_out")"
-            if [ -n "$rv" ] && [ -n "$rp" ]; then
-              rb_reg_args+=("$pn" "$rv" "$rp")
-            else
-              echo "    $pn: newly introduced by canary — nothing to restore (left as-is)" >&2
-            fi
-            # Fail-soft: record an observational rollback event so
-            # `overwatch review-queue` can surface it later. This never gates
-            # or alters the rollback itself — a record failure is swallowed
-            # (|| true) so the audit log can NEVER break a rollout. The canary
-            # (from) version this stage moved the plugin to is field 2 of the
-            # plugin's row; `rv` (may be empty for a newly-introduced plugin)
-            # is the prior version we restored to. The gate here counts raw
-            # violations (no --systemic on the canary-gate call), so reason=raw.
-            local canary_ver=""
-            IFS=$'\t' read -r _n canary_ver _rest <<<"$(row_for_name "$pn")"
-            local -a rb_ev_args=(record-rollback --plugin "$pn"
-              --to-version "$canary_ver" --stage "$s" --reason raw)
-            if [ -n "$rv" ]; then
-              rb_ev_args+=(--from-version "$rv")
-            fi
-            "$ow" "${rb_ev_args[@]}" >/dev/null 2>&1 || true
-          done
-          if [ "${#rb_reg_args[@]}" -gt 0 ]; then
-            registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "${rb_reg_args[@]}" | sed 's/^/    /'
-          fi
+          execute_stage_rollback "$ow" "$s" "$stage_names" 1
           echo "canary: HALTED at stage $s after auto-rollback." >&2
           exit 4
         fi

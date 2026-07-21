@@ -71,5 +71,9 @@ needs_user: <yes|no>
 summary: <修正候補の 1 行要約。改行なし。無ければ "なし">
 ```
 
-- `needs_user` は D3 を通じて `needs_user=yes` の finding が 1 件以上あれば `yes`。
-- 決定ログが読めない・照合不能のときは `needs_user: no` とし、summary に「照合不能 (理由)」。
+- `needs_user` は D3 を通じて `needs_user=yes` の finding が 1 件以上あれば `yes`。値は
+  **必ず `yes` か `no`** のどちらか (他の語・空・省略は不可)。
+- 決定ログが読めない・照合不能などで **判定できないときは必ず `needs_user: yes`** とし、summary に
+  「照合不能 (理由)」と書く。**判定できなかったこと自体が human review を要する**状態であり、
+  「照合不能」を「問題なし (`no`)」と報告してはならない (fail-closed: 判定不能を clean に潰さない)。
+  `no` は照合を完了し矛盾が無かったときにのみ用いる。

@@ -69,24 +69,35 @@ pub fn parse(stdout: &str) -> Parsed {
     // (`maybe`, `error`, a truncated line) silently became `no`/clean and
     // advanced the baseline over content whose verdict was never established.
     //
-    // Now: only an explicit, recognised `no` is clean; an explicit `yes` is a
-    // finding; ANYTHING ELSE is indeterminate → `needs_user = true`, mirroring
-    // the `completeness`/`fold_inconclusive` fail-safe ("cannot confirm →
-    // surface") already used one module over. The prompt (`audit-prompt.md`) is
-    // fixed in lockstep to tell a well-behaved auditor to emit `yes` when it
+    // The two sides are deliberately ASYMMETRIC because they fail in opposite
+    // directions:
+    //
+    //   * `yes` (SURFACE) is LIBERAL — a `yes`-prefixed first token is a finding
+    //     even with a trailing parenthetical ("yes (3 findings)"). Being liberal
+    //     here can only ever over-surface, which is the safe direction.
+    //   * `no` (CLEAN) is STRICT — only the exact, unambiguous token `no` clears
+    //     the audit. The old `starts_with("no")` also cleared "not sure", "not
+    //     determined", "not comparable" and "no idea" — the most natural ways an
+    //     auditor phrases "cannot determine" — silently passing GREEN. Since we
+    //     cannot distinguish "no findings" (clean) from "no idea" (undetermined)
+    //     by prefix, the clean side must be the bare contract token; anything
+    //     else is surfaced.
+    //
+    // Everything that is neither a `yes` finding nor a bare `no` is a first-class
+    // `indeterminate` → `needs_user = true`, mirroring the `completeness` /
+    // `fold_inconclusive` fail-safe ("cannot confirm → surface") one module over.
+    // The prompts (`audit-prompt.md`, `decisions-prompt.md`, `completeness-prompt.md`)
+    // are fixed in lockstep to tell a well-behaved auditor to emit `yes` when it
     // cannot compare; this is the deterministic backstop for when it does not.
-    let verdict = field(trailer, "needs_user").map(|v| {
-        // Take only the first whitespace token so "yes (3 findings)" -> "yes".
-        v.split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase()
-    });
-    let (needs_user, indeterminate) = match verdict.as_deref() {
-        Some(t) if t.starts_with("yes") => (true, false),
-        Some(t) if t.starts_with("no") => (false, false),
-        other => {
-            let seen = match other {
+    let normalized = field(trailer, "needs_user").map(|v| v.trim().to_ascii_lowercase());
+    let first_token = normalized
+        .as_deref()
+        .map(|v| v.split_whitespace().next().unwrap_or("").to_string());
+    let (needs_user, indeterminate) = match (first_token.as_deref(), normalized.as_deref()) {
+        (Some(f), _) if f.starts_with("yes") => (true, false),
+        (_, Some("no")) => (false, false),
+        _ => {
+            let seen = match first_token.as_deref() {
                 Some(t) if !t.is_empty() => format!("an unrecognised value ('{t}')"),
                 _ => "absent/empty".to_string(),
             };
@@ -237,15 +248,44 @@ mod tests {
     }
 
     #[test]
-    fn explicit_no_stays_clean_not_indeterminate() {
-        // A recognised `no` (and `no findings`, which starts with "no") is the
-        // ONLY clean verdict: needs_user=false AND indeterminate=false.
-        for val in ["no", "no findings"] {
+    fn explicit_bare_no_is_the_only_clean_verdict() {
+        // The bare contract token `no` (case-insensitive, surrounding whitespace
+        // trimmed) is the ONLY clean verdict: needs_user=false AND
+        // indeterminate=false.
+        for val in ["no", "NO", "  no  "] {
             let s = format!("r\n<<<SPEC_AUDIT>>>\nneeds_user: {val}\nsummary: none");
             let p = parse(&s);
             assert!(p.marker_found);
             assert!(!p.needs_user, "{val:?} is a clean verdict");
             assert!(!p.indeterminate, "{val:?} is a determined verdict");
+        }
+    }
+
+    #[test]
+    fn no_prefixed_uncertainty_fails_closed_not_clean() {
+        // fail-open #7 (61599e06), residual-hole hardening: a verdict that merely
+        // STARTS WITH "no"/"not" but expresses uncertainty ("not sure", "not
+        // determined", "no idea") — or is any non-bare "no ..." phrase — must NOT
+        // be read as clean. `starts_with("no")` used to pass all of these GREEN.
+        // The bare token `no` is clean; every one of these is indeterminate.
+        for val in [
+            "not sure",
+            "not determined",
+            "not comparable",
+            "no idea",
+            "no clue",
+            "no findings", // non-bare "no ..." → surfaced (fail-closed side)
+            "nope",
+            "none",
+        ] {
+            let s = format!("r\n<<<SPEC_AUDIT>>>\nneeds_user: {val}\nsummary: 照合不能");
+            let p = parse(&s);
+            assert!(p.marker_found, "marker present for {val:?}");
+            assert!(
+                p.needs_user,
+                "{val:?} is a cannot-determine phrasing and must fail closed to needs_user=true, not clean"
+            );
+            assert!(p.indeterminate, "{val:?} must be indeterminate, not clean");
         }
     }
 

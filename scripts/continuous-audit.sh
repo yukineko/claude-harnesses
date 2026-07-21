@@ -41,6 +41,22 @@
 # `overwatch record-finding --rationale <value>` when non-empty. The legacy
 # 4-field form (id|severity|summary|file) still works — rationale is simply
 # empty in that case (backward compatible).
+#
+# VERDICTS ARE TRI-STATE (CONFIRMED / REFUTED / UNVERIFIED).
+#   --finding             -> recorded with `--verdict confirmed`: established,
+#                            bridged to the backlog as actionable work.
+#   --unverified-finding  -> recorded with `--verdict unverified`: the verifier
+#                            could NEITHER establish NOR refute it. Same format.
+#                            It is NOT dropped (it stays on the review-queue
+#                            surface, marked [UNVERIFIED]) and NOT bridged to the
+#                            backlog — it stays pending re-verification.
+#   REFUTED findings are not passed to this script at all, and claiming REFUTED
+#   requires the verifier to have enumerated EVERY consumption path with
+#   verbatim quotes (see the continuous-audit SKILL.md). "I could not find a
+#   permissive path" is UNVERIFIED, not REFUTED — collapsing the two is the
+#   same fail-open this loop audits other crates for.
+#   --unverified <N> records the round's undetermined count in the ledger, kept
+#   separate from --confirmed so `new - confirmed` is never read as "refuted".
 # The COUNTS (--new-findings/--confirmed/--regression-tests-added) are recorded
 # verbatim into the round ledger; the --finding entries are the CONFIRMED subset
 # to ingest into the review queue. (They are independent inputs — the human/LLM
@@ -87,14 +103,19 @@ ROUND=""
 TARGET="$DEFAULT_TARGETS"
 NEW_FINDINGS=0
 CONFIRMED=0
+UNVERIFIED=0
 REGRESSION_TESTS_ADDED=0
 FINDER_MODEL=""
 VERIFIER_MODEL=""
 DRY_RUN=0
 declare -a FINDINGS=()
+# UNVERIFIED findings: undetermined verdicts. Kept in a SEPARATE array (not
+# folded into FINDINGS) because they take a different path: recorded with
+# `--verdict unverified`, visible in review-queue, NOT bridged to the backlog.
+declare -a UNVERIFIED_FINDINGS=()
 
 usage() {
-  sed -n '2,67p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,83p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -106,10 +127,12 @@ while [ $# -gt 0 ]; do
     --target) TARGET="${2:-}"; shift 2 ;;
     --new-findings) NEW_FINDINGS="${2:-0}"; shift 2 ;;
     --confirmed) CONFIRMED="${2:-0}"; shift 2 ;;
+    --unverified) UNVERIFIED="${2:-0}"; shift 2 ;;
     --regression-tests-added) REGRESSION_TESTS_ADDED="${2:-0}"; shift 2 ;;
     --finder-model) FINDER_MODEL="${2:-}"; shift 2 ;;
     --verifier-model) VERIFIER_MODEL="${2:-}"; shift 2 ;;
     --finding) FINDINGS+=("${2:-}"); shift 2 ;;
+    --unverified-finding) UNVERIFIED_FINDINGS+=("${2:-}"); shift 2 ;;
     *) echo "unknown arg: $1" >&2; usage 2 ;;
   esac
 done
@@ -174,6 +197,16 @@ else
   done
 fi
 echo
+echo "--- UNVERIFIED (undetermined) findings this round (${#UNVERIFIED_FINDINGS[@]}) ---"
+echo "  (recorded and kept visible, but NOT bridged to the backlog: pending re-verification)"
+if [ "${#UNVERIFIED_FINDINGS[@]}" -eq 0 ]; then
+  echo "  (none supplied via --unverified-finding)"
+else
+  for f in "${UNVERIFIED_FINDINGS[@]}"; do
+    echo "  * ${f}"
+  done
+fi
+echo
 
 # fail-soft wrapper: an overwatch call must never abort the loop.
 run_ow() {
@@ -188,11 +221,16 @@ if [ "$DRY_RUN" -eq 1 ]; then
   # array is an "unbound variable" error, so only iterate when non-empty.
   if [ "${#FINDINGS[@]}" -gt 0 ]; then
     for f in "${FINDINGS[@]}"; do
-      echo "  overwatch record-finding  <- ${f}"
+      echo "  overwatch record-finding --verdict confirmed   <- ${f}"
+    done
+  fi
+  if [ "${#UNVERIFIED_FINDINGS[@]}" -gt 0 ]; then
+    for f in "${UNVERIFIED_FINDINGS[@]}"; do
+      echo "  overwatch record-finding --verdict unverified  <- ${f}"
     done
   fi
   echo "  overwatch audit-round record --round ${ROUND} --target ${TARGET} \\"
-  echo "    --new-findings ${NEW_FINDINGS} --confirmed ${CONFIRMED} --regression-tests-added ${REGRESSION_TESTS_ADDED}${FINDER_MODEL:+ --finder-model ${FINDER_MODEL}}${VERIFIER_MODEL:+ --verifier-model ${VERIFIER_MODEL}}"
+  echo "    --new-findings ${NEW_FINDINGS} --confirmed ${CONFIRMED} --unverified ${UNVERIFIED} --regression-tests-added ${REGRESSION_TESTS_ADDED}${FINDER_MODEL:+ --finder-model ${FINDER_MODEL}}${VERIFIER_MODEL:+ --verifier-model ${VERIFIER_MODEL}}"
   echo "  overwatch review-queue --to-backlog   # forward each CONFIRMED finding to the backlog (idempotent on finding-id)"
   echo
   echo "--- current metrics (read-only) ---"
@@ -203,16 +241,31 @@ fi
 # --- record each CONFIRMED finding into the review-queue findings store ------
 # Guard the expansion: under bash 3.2 + `set -u`, "${FINDINGS[@]}" on an empty
 # array is an "unbound variable" error, so only iterate when non-empty.
-if [ "${#FINDINGS[@]}" -gt 0 ]; then
-  for f in "${FINDINGS[@]}"; do
+record_findings_with_verdict() {
+  # $1 = verdict token (confirmed|unverified), rest = 'id|sev|summary|file|rationale' entries
+  local verdict="$1"; shift
+  local f fid fsev fsummary ffile frationale
+  for f in "$@"; do
     # format: id|severity|summary|file|rationale  (severity, file & rationale may be empty)
     IFS='|' read -r fid fsev fsummary ffile frationale <<<"$f"
-    args=(record-finding --finding-id "${fid:-CA-${ROUND}}" --source "continuous-audit" --summary "${fsummary:-confirmed finding}")
+    args=(record-finding --finding-id "${fid:-CA-${ROUND}}" --source "continuous-audit" --summary "${fsummary:-${verdict} finding}" --verdict "$verdict")
     [ -n "${fsev:-}" ] && args+=(--severity "$fsev")
     [ -n "${ffile:-}" ] && args+=(--file "$ffile")
     [ -n "${frationale:-}" ] && args+=(--rationale "$frationale")
     run_ow "${args[@]}"
   done
+}
+
+if [ "${#FINDINGS[@]}" -gt 0 ]; then
+  record_findings_with_verdict confirmed "${FINDINGS[@]}"
+fi
+
+# --- record each UNVERIFIED finding (undetermined verdict) -------------------
+# Recorded so the claim is NOT silently dropped, with `--verdict unverified` so
+# it is never read as an established finding and is not bridged to the backlog
+# as actionable work by `review-queue --to-backlog` below.
+if [ "${#UNVERIFIED_FINDINGS[@]}" -gt 0 ]; then
+  record_findings_with_verdict unverified "${UNVERIFIED_FINDINGS[@]}"
 fi
 
 # --- record the round metrics into the convergence ledger --------------------
@@ -225,6 +278,7 @@ round_args=(audit-round record
   --target "$TARGET"
   --new-findings "$NEW_FINDINGS"
   --confirmed "$CONFIRMED"
+  --unverified "$UNVERIFIED"
   --regression-tests-added "$REGRESSION_TESTS_ADDED")
 [ -n "$FINDER_MODEL" ] && round_args+=(--finder-model "$FINDER_MODEL")
 [ -n "$VERIFIER_MODEL" ] && round_args+=(--verifier-model "$VERIFIER_MODEL")
@@ -246,7 +300,7 @@ run_ow reconcile-fixed --last-n 200 --json
 # left unattended. Fail-soft: a missing findings store / absent backlog is
 # warned and skipped inside the bridge (never aborts the loop).
 echo
-echo "--- forwarding CONFIRMED findings to backlog ---"
+echo "--- forwarding CONFIRMED findings to backlog (UNVERIFIED ones stay pending) ---"
 run_ow review-queue --to-backlog
 
 echo

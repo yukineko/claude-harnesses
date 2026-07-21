@@ -6,7 +6,7 @@
 /// the rollout. An unwritable store is swallowed (a warning to stderr) rather
 /// than propagated, matching overwatch's observational/never-break-a-turn
 /// invariant.
-use crate::review_finding::ReviewFinding;
+use crate::review_finding::{AuditVerdict, ReviewFinding};
 use crate::rollback::{RollbackEvent, RollbackReason};
 use crate::store;
 use anyhow::Result;
@@ -58,8 +58,19 @@ pub fn record(
 }
 
 /// Record one AI-review finding into the overwatch-readable findings store.
-/// This is the defined ingestion point for the future Continuous-Audit loop
-/// (and for this crate's integration test). Fail-soft like `record`.
+/// This is the defined ingestion point for the Continuous-Audit loop (and for
+/// this crate's integration test). Fail-soft like `record`.
+///
+/// `verdict` is the adversarial verifier's tri-state result:
+/// * `Some(raw)` — parsed by [`AuditVerdict::parse`]; anything unrecognized
+///   becomes `Unverified` (undetermined resolves restrictively), never a
+///   silent `Confirmed` and never a rejected/dropped record.
+/// * `None` — the caller stated no verdict. Reads as `Confirmed`, preserving
+///   the pre-tri-state ingestion contract in which `record-finding` was called
+///   ONLY for the verifier's CONFIRMED subset (`scripts/continuous-audit.sh`).
+///   That direction is also the LOUD one: the finding stays actionable on the
+///   review surface instead of being quietly parked. Callers that mean
+///   "undetermined" must say so with `--verdict unverified`.
 #[allow(clippy::too_many_arguments)]
 pub fn record_finding(
     finding_id: &str,
@@ -68,9 +79,13 @@ pub fn record_finding(
     summary: &str,
     file: Option<&str>,
     rationale: Option<&str>,
+    verdict: Option<&str>,
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
+    let verdict = verdict
+        .map(AuditVerdict::parse)
+        .unwrap_or(AuditVerdict::Confirmed);
     let finding = ReviewFinding::new(
         finding_id.to_string(),
         source.to_string(),
@@ -79,13 +94,18 @@ pub fn record_finding(
         file.map(str::to_string),
         rationale.map(str::to_string),
         now,
-    );
+    )
+    .with_verdict(verdict);
 
     match store::append_review_finding(&cwd, &finding) {
         Ok(()) => {
             println!(
                 "{}",
-                serde_json::json!({ "recorded": true, "finding_id": finding_id })
+                serde_json::json!({
+                    "recorded": true,
+                    "finding_id": finding_id,
+                    "verdict": verdict.label(),
+                })
             );
         }
         Err(e) => {

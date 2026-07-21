@@ -33,11 +33,17 @@ use std::path::Path;
 /// so a warning finding + the round record are preferred over aborting. When one
 /// or both model args are omitted, the check is skipped entirely (backward
 /// compatible: existing callers that pass no model args behave exactly as before).
+///
+/// `unverified` is the round's UNDETERMINED count (verdicts that were neither
+/// confirmed nor refuted). It is stored alongside `confirmed` — never folded
+/// into it — so the ledger cannot be read as if every finding was settled.
+#[allow(clippy::too_many_arguments)]
 pub fn record(
     round: String,
     target: &str,
     new_findings: u64,
     confirmed: u64,
+    unverified: u64,
     regression_tests_added: u64,
     finder_model: Option<&str>,
     verifier_model: Option<&str>,
@@ -52,7 +58,8 @@ pub fn record(
         confirmed,
         regression_tests_added,
         now,
-    );
+    )
+    .with_unverified(unverified);
 
     match store::append_audit_round(&cwd, &record) {
         Ok(()) => {
@@ -64,6 +71,7 @@ pub fn record(
                     "targets": record.targets,
                     "new_findings": new_findings,
                     "confirmed": confirmed,
+                    "unverified": unverified,
                     // Report the STORED (clamped-to-confirmed) value, not the
                     // raw CLI arg, so the printed output never claims a
                     // regression_tests_added > confirmed (CA-overwatch-004).
@@ -277,14 +285,18 @@ pub fn metrics(json: bool, window: Option<usize>) -> Result<()> {
             .map(|v| format!("{:.2}", v))
             .unwrap_or_else(|| "n/a".to_string());
         println!(
-            "    round {:>3}: new={:<4} confirmed={:<4} tests={:<4} closure={}",
-            r.round, r.new_findings, r.confirmed, r.regression_tests_added, cr
+            "    round {:>3}: new={:<4} confirmed={:<4} unverified={:<4} tests={:<4} closure={}",
+            r.round, r.new_findings, r.confirmed, r.unverified, r.regression_tests_added, cr
         );
     }
     println!("  total new findings:       {}", report.total_new_findings);
     println!(
         "  cumulative confirmed:     {}",
         report.cumulative_confirmed
+    );
+    println!(
+        "  cumulative unverified:    {} (undetermined — still open)",
+        report.cumulative_unverified
     );
     println!(
         "  cumulative reg. tests:    {}",

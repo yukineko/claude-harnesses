@@ -215,8 +215,16 @@ append-only なレジストリである。同じ種類の失敗は、発生し�
   `overwatch record-finding` のみが行い、finding TEXT を持たない reviewgate のゲートログとは独立。
   review-queue は **finding-id で dedup** し、同一 id の再供給は重複行にならず最新状態へ畳まれる
   （`/continuous-audit` が毎ラウンド同じ id を再利用しても1行に収束する前提）。
+- **finding の verdict は三値 (`AuditVerdict`: confirmed / refuted / unverified)** — 敵対的検証の結果は
+  二値ではない。`unverified` は「立証も反証もできなかった＝判定不能」であり、**制限側の既定**である:
+  パース不能な verdict 値は `unverified` に倒れ (silently confirmed にならず、行も捨てられない)、
+  verdict キーの無い旧行だけが `confirmed` として読まれる (旧 ingestion 契約が CONFIRMED subset 専用
+  だったため)。`confirmed` のみが `--to-backlog` で backlog へ橋渡しされ、`unverified` は
+  review-queue に `[UNVERIFIED]` マークつきで残り続ける (pending 扱い: 対応済みにも棄却にもしない)。
 - **audit-round ledger は per-round メトリクスの append-only 記録** — `audit_round.rs` はラウンドごとに
-  `{new_findings, confirmed, regression_tests_added}` を追記するだけで、finder/verifier は模さない。
+  `{new_findings, confirmed, unverified, regression_tests_added}` を追記するだけで、finder/verifier は模さない。
+  `unverified` は `confirmed` に畳み込まれない (`new_findings - confirmed` を「残りは refuted」と
+  読ませないため)。
   ラウンド越しに読み戻すと収束シグナル（per-round new-findings が下降、closure-rate = 回帰テスト数 ÷
   confirmed）が得られる。emission は fail-soft。
 
@@ -225,11 +233,12 @@ append-only なレジストリである。同じ種類の失敗は、発生し�
   （`[systemic]`/`[rollback]`/`[ai-finding]`/`[escalation]` タグ付き・新しい順）または `kind` 判別子付き
   JSON 配列で表示する。`--since`/`--limit` で窓を絞る。`--to-backlog` は CONFIRMED review findings を
   backlog へ橋渡しする。
-- **`overwatch record-finding --source <src> …`** — CONFIRMED な AI finding を1件
+- **`overwatch record-finding --source <src> [--verdict confirmed|refuted|unverified] …`** — AI finding を1件
   `review_findings.jsonl` へ追記する（review-queue の ai-finding アームの唯一の書き込み経路）。
-  `/continuous-audit` の CONFIRMED subset がここへ流れる。
+  `/continuous-audit` の CONFIRMED subset と UNVERIFIED subset がここへ流れる。`--verdict` を省略すると
+  `confirmed`（旧 CONFIRMED 専用契約との後方互換）、未知の値は `unverified`（判定不能は制限側）。
 - **`overwatch audit-round record --round <id> --target <csv> [--new-findings N] [--confirmed N]
-  [--regression-tests-added N]`** — 1ラウンドのメトリクスを収束 ledger へ追記する。`--round` は
+  [--unverified N] [--regression-tests-added N]`** — 1ラウンドのメトリクスを収束 ledger へ追記する。`--round` は
   **任意の String 識別子**（round id。連番・日付・週番号いずれも可）で、`audit-round close --round <id>
   --tests <n>` が後から同じ id のラウンドの `regression_tests_added` を確定できる（closure feedback）。
 - **`overwatch record-disposition` / `compact-findings` / `auto-approved`** — review-effectiveness の

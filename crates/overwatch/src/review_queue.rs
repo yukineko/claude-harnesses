@@ -13,7 +13,7 @@
 /// command) and renders either a human-readable list or a JSON array.
 use crate::merge_conflict::MergeConflictEntry;
 use crate::review_escalation::{self, ConduktEscalation};
-use crate::review_finding::ReviewFinding;
+use crate::review_finding::{AuditVerdict, ReviewFinding};
 use crate::rollback::RollbackEvent;
 use crate::store;
 use crate::violation::{self, RecurrencePolicy, SignatureRecurrence};
@@ -344,7 +344,16 @@ pub fn build_queue(
             .as_deref()
             .map(|s| format!("[{s}] "))
             .unwrap_or_default();
-        let mut summary = format!("{}{} ({})", sev, f.summary, f.source);
+        // Non-CONFIRMED verdicts are marked inline so a row is never read as
+        // an established finding. UNVERIFIED means "undetermined — still
+        // pending re-verification", not "handled": it stays visible here but
+        // is NOT bridged into the backlog as actionable work (see
+        // `bridge::plan_finding_bridges`).
+        let verdict_tag = match f.verdict {
+            AuditVerdict::Confirmed => String::new(),
+            other => format!("[{}] ", other.label().to_ascii_uppercase()),
+        };
+        let mut summary = format!("{}{}{} ({})", verdict_tag, sev, f.summary, f.source);
         if occurrences > 1 {
             summary.push_str(&format!(" ({occurrences}x)"));
         }
@@ -590,6 +599,35 @@ mod tests {
         // normalize = collapse whitespace to single spaces, trim, ascii-lowercase.
         let expected = "reviewgate\u{1f}crates/foo.rs\u{1f}duplicate helper across modules";
         assert_eq!(finding_fingerprint(&sample), expected);
+    }
+
+    /// An UNVERIFIED finding must still be VISIBLE on the review surface (it
+    /// is not discarded), but must be labelled as such so it is never read as
+    /// an established, confirmed finding.
+    #[test]
+    fn unverified_finding_row_is_labelled_unverified() {
+        let f = finding("F-U", 200).with_verdict(AuditVerdict::Unverified);
+        let rows = build_queue(&[], &[], std::slice::from_ref(&f), &[], &[]);
+        assert_eq!(rows.len(), 1, "the finding must NOT be dropped");
+        assert!(
+            rows[0].summary.contains("UNVERIFIED"),
+            "row must be marked UNVERIFIED: {}",
+            rows[0].summary
+        );
+    }
+
+    /// A CONFIRMED finding renders exactly as before (no marker) — the label
+    /// is only added for the non-confirmed verdicts.
+    #[test]
+    fn confirmed_finding_row_carries_no_verdict_marker() {
+        let f = finding("F-C", 200).with_verdict(AuditVerdict::Confirmed);
+        let rows = build_queue(&[], &[], std::slice::from_ref(&f), &[], &[]);
+        assert_eq!(rows.len(), 1);
+        assert!(
+            !rows[0].summary.contains("UNVERIFIED") && !rows[0].summary.contains("REFUTED"),
+            "confirmed row must not be marked: {}",
+            rows[0].summary
+        );
     }
 
     #[test]

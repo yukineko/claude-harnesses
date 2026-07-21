@@ -204,6 +204,13 @@ fn build_notes(f: &ReviewFinding, now: i64, freshness: Option<&TestFreshness>) -
 /// however the representative id rotates. Deterministic (input order preserved,
 /// no hash-order dependence). The ledger contract is untouched: callers still
 /// record the bare representative `finding_id`.
+///
+/// **Verdict filter**: only [`AuditVerdict::Confirmed`] representatives are
+/// bridged. A `Refuted` or `Unverified` finding is not established work: an
+/// undetermined claim must stay pending on the review surface (where
+/// `review-queue` renders it with an `UNVERIFIED` marker) instead of being
+/// converted into an actionable backlog task — and it is NOT dropped either,
+/// since its row remains in `review_findings.jsonl` and in the queue.
 fn plan_finding_bridges<'a>(
     deduped: &'a [(ReviewFinding, u32)],
     raw_findings: &[ReviewFinding],
@@ -218,7 +225,8 @@ fn plan_finding_bridges<'a>(
     deduped
         .iter()
         .filter(|(f, _)| {
-            !already.contains(&f.finding_id)
+            f.verdict.is_actionable()
+                && !already.contains(&f.finding_id)
                 && !bridged_fingerprints.contains(&review_queue::finding_fingerprint(f))
         })
         .map(|(f, _)| f)
@@ -428,6 +436,7 @@ fn run_in(cwd: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::review_finding::AuditVerdict;
 
     #[test]
     fn severity_maps_high_p0_medium_p1_low_p2() {
@@ -458,6 +467,37 @@ mod tests {
             rationale.map(str::to_string),
             ts,
         )
+    }
+
+    /// An UNVERIFIED finding is NOT an established finding: it must not take
+    /// the CONFIRMED path (auto-bridged into the backlog as actionable work).
+    /// It stays in `review_findings.jsonl` and on the review-queue surface as
+    /// pending re-verification — neither actioned nor silently dropped.
+    #[test]
+    fn unverified_findings_are_not_bridged_to_backlog() {
+        let confirmed = finding(None, 10).with_verdict(AuditVerdict::Confirmed);
+        let mut unverified = finding(None, 20).with_verdict(AuditVerdict::Unverified);
+        unverified.finding_id = "F-2".to_string();
+        unverified.summary = "could not trace all consumption paths".to_string();
+        let raw = vec![confirmed.clone(), unverified.clone()];
+        let deduped = review_queue::dedup_findings(&raw);
+        let planned = plan_finding_bridges(&deduped, &raw, &HashSet::new());
+        let ids: Vec<&str> = planned.iter().map(|f| f.finding_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["F-1"],
+            "only the CONFIRMED finding may be bridged; UNVERIFIED stays pending"
+        );
+    }
+
+    /// A REFUTED finding is likewise not actionable work — it must not bridge.
+    #[test]
+    fn refuted_findings_are_not_bridged_to_backlog() {
+        let refuted = finding(None, 10).with_verdict(AuditVerdict::Refuted);
+        let raw = vec![refuted];
+        let deduped = review_queue::dedup_findings(&raw);
+        let planned = plan_finding_bridges(&deduped, &raw, &HashSet::new());
+        assert!(planned.is_empty(), "REFUTED must not be bridged");
     }
 
     #[test]

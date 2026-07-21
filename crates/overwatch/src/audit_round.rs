@@ -70,6 +70,15 @@ pub struct AuditRound {
     pub new_findings: u64,
     /// How many of the round's findings the verifier CONFIRMED.
     pub confirmed: u64,
+    /// How many of the round's findings ended UNVERIFIED — the verifier could
+    /// neither establish nor discharge them (see
+    /// [`crate::review_finding::AuditVerdict`]). Recorded separately so
+    /// `new_findings - confirmed` is not read as "everything else was
+    /// refuted": an undetermined claim is still open. Absent in rounds written
+    /// before the tri-state existed, hence `#[serde(default)]` (reads as 0 —
+    /// those rounds carry no information about undetermined items).
+    #[serde(default)]
+    pub unverified: u64,
     /// How many confirmed findings were converted into regression tests this
     /// round.
     pub regression_tests_added: u64,
@@ -103,9 +112,19 @@ impl AuditRound {
             targets: normalize_targets(targets),
             new_findings,
             confirmed,
+            unverified: 0,
             regression_tests_added: regression_tests_added.min(confirmed),
             ts,
         }
+    }
+
+    /// Record how many of this round's findings ended UNVERIFIED (undetermined
+    /// — neither confirmed nor refuted). Not a constructor argument so every
+    /// existing caller keeps compiling with an honest 0 ("no undetermined
+    /// count was supplied") rather than a silently invented number.
+    pub fn with_unverified(mut self, unverified: u64) -> Self {
+        self.unverified = unverified;
+        self
     }
 }
 
@@ -227,6 +246,11 @@ pub struct RoundMetric {
     pub new_findings: u64,
     /// Findings confirmed this round.
     pub confirmed: u64,
+    /// Findings left UNVERIFIED (undetermined) this round — still open, not
+    /// discharged. Carried through so the metrics surface distinguishes
+    /// "settled" from "not settled".
+    #[serde(default)]
+    pub unverified: u64,
     /// Regression tests added this round.
     pub regression_tests_added: u64,
     /// Per-round closure rate = regression_tests_added / confirmed, in `[0,1]`.
@@ -243,6 +267,12 @@ pub struct AuditMetrics {
     pub total_new_findings: u64,
     /// Cumulative confirmed findings across all rounds.
     pub cumulative_confirmed: u64,
+    /// Cumulative UNVERIFIED (undetermined, still-open) findings across all
+    /// rounds. Never folded into `cumulative_confirmed`, and never counted as
+    /// closed by `closure_rate` — a claim nobody could settle is not a claim a
+    /// regression test can lock in.
+    #[serde(default)]
+    pub cumulative_unverified: u64,
     /// Cumulative regression tests added across all rounds.
     pub cumulative_regression_tests_added: u64,
     /// Overall closure rate = cumulative_regression_tests_added /
@@ -274,16 +304,19 @@ pub fn compute_metrics(rounds: &[AuditRound], window: usize) -> AuditMetrics {
     let mut per_round: Vec<RoundMetric> = Vec::with_capacity(rounds.len());
     let mut total_new = 0u64;
     let mut cum_confirmed = 0u64;
+    let mut cum_unverified = 0u64;
     let mut cum_tests = 0u64;
 
     for r in rounds {
         total_new = total_new.saturating_add(r.new_findings);
         cum_confirmed = cum_confirmed.saturating_add(r.confirmed);
+        cum_unverified = cum_unverified.saturating_add(r.unverified);
         cum_tests = cum_tests.saturating_add(r.regression_tests_added);
         per_round.push(RoundMetric {
             round: r.round.clone(),
             new_findings: r.new_findings,
             confirmed: r.confirmed,
+            unverified: r.unverified,
             regression_tests_added: r.regression_tests_added,
             closure_rate: rate(r.regression_tests_added, r.confirmed),
         });
@@ -295,6 +328,7 @@ pub fn compute_metrics(rounds: &[AuditRound], window: usize) -> AuditMetrics {
         rounds: per_round,
         total_new_findings: total_new,
         cumulative_confirmed: cum_confirmed,
+        cumulative_unverified: cum_unverified,
         cumulative_regression_tests_added: cum_tests,
         closure_rate: rate(cum_tests, cum_confirmed),
         convergence_window: window,
@@ -471,6 +505,32 @@ mod tests {
         // And it flows through compute_metrics carrying the stringified id.
         let m = compute_metrics(&[back], DEFAULT_CONVERGENCE_WINDOW);
         assert_eq!(m.rounds[0].round, "2");
+    }
+
+    /// A round's verdicts are TRI-state, so the ledger must be able to record
+    /// how many findings ended UNVERIFIED. Without it, `new_findings -
+    /// confirmed` silently conflates "refuted" with "could not determine" and
+    /// the convergence signal reads as if the round settled every claim.
+    #[test]
+    fn round_records_unverified_count_separately_from_confirmed() {
+        let r = round(1, 5, 2, 0, 10).with_unverified(3);
+        assert_eq!(r.confirmed, 2);
+        assert_eq!(r.unverified, 3);
+        // Closure is measured against CONFIRMED only — an unverified item is
+        // not something a regression test can close.
+        let m = compute_metrics(std::slice::from_ref(&r), DEFAULT_CONVERGENCE_WINDOW);
+        assert_eq!(m.rounds[0].unverified, 3);
+        assert_eq!(m.rounds[0].confirmed, 2);
+        assert_eq!(m.cumulative_unverified, 3);
+    }
+
+    /// Legacy rounds (written before the field existed) must keep reading, with
+    /// `unverified` defaulting to 0.
+    #[test]
+    fn legacy_round_without_unverified_field_reads_as_zero() {
+        let legacy = r#"{"round":"2026W28","targets":["specguard"],"new_findings":3,"confirmed":2,"regression_tests_added":2,"ts":1000}"#;
+        let back: AuditRound = serde_json::from_str(legacy).unwrap();
+        assert_eq!(back.unverified, 0);
     }
 
     #[test]

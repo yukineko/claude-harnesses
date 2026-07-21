@@ -271,6 +271,20 @@ enum Command {
         /// file:line quoted argument for why it's real), optional.
         #[arg(long)]
         rationale: Option<String>,
+        /// The adversarial verifier's TRI-state verdict:
+        /// `confirmed` | `refuted` | `unverified`.
+        ///
+        /// Any unrecognized value is recorded as `unverified` (undetermined
+        /// resolves to the restrictive side — never silently confirmed, never
+        /// dropped). Omitting the flag records `confirmed`, preserving the
+        /// pre-tri-state contract where this command ingested ONLY the
+        /// verifier's CONFIRMED subset; say `--verdict unverified` explicitly
+        /// when the verifier could not settle the claim. Only `confirmed`
+        /// findings are forwarded by `review-queue --to-backlog`;
+        /// `unverified` ones stay visible in the queue, marked, pending
+        /// re-verification.
+        #[arg(long)]
+        verdict: Option<String>,
     },
     /// Continuous-Audit round metrics ledger (2630b4c5). `record` appends one
     /// round's counts to the convergence ledger that `audit-metrics` reads back.
@@ -437,6 +451,12 @@ enum AuditRoundAction {
         /// How many findings the verifier CONFIRMED this round.
         #[arg(long, default_value_t = 0)]
         confirmed: u64,
+        /// How many findings ended UNVERIFIED this round (the verifier could
+        /// neither establish nor discharge them). Recorded separately so
+        /// `new_findings - confirmed` is not silently read as "all refuted" —
+        /// an undetermined claim is still open.
+        #[arg(long, default_value_t = 0)]
+        unverified: u64,
         /// How many confirmed findings were converted into regression tests.
         #[arg(long, default_value_t = 0)]
         regression_tests_added: u64,
@@ -639,6 +659,7 @@ fn main() -> Result<()> {
             summary,
             file,
             rationale,
+            verdict,
         } => {
             rollback_cli::record_finding(
                 &finding_id,
@@ -647,6 +668,7 @@ fn main() -> Result<()> {
                 &summary,
                 file.as_deref(),
                 rationale.as_deref(),
+                verdict.as_deref(),
             )?;
         }
         Command::AuditRound { action } => match action {
@@ -655,6 +677,7 @@ fn main() -> Result<()> {
                 target,
                 new_findings,
                 confirmed,
+                unverified,
                 regression_tests_added,
                 finder_model,
                 verifier_model,
@@ -664,6 +687,7 @@ fn main() -> Result<()> {
                     &target,
                     new_findings,
                     confirmed,
+                    unverified,
                     regression_tests_added,
                     finder_model.as_deref(),
                     verifier_model.as_deref(),

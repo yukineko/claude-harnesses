@@ -50,6 +50,7 @@ on:
       - 'scripts/mutation-gate.sh'
       - 'scripts/mutation-pilots.sh'
       - 'scripts/test_mutation_pilots.sh'
+      - 'scripts/test_mutation_gate_status.sh'
       - '.github/workflows/mutation.yml'
       # Calibrated pilot crates (the judgment targets — a change here fires the
       # gate against the changed crate; keep in lockstep with mutation-pilots.sh).
@@ -63,6 +64,7 @@ on:
       - 'scripts/mutation-gate.sh'
       - 'scripts/mutation-pilots.sh'
       - 'scripts/test_mutation_pilots.sh'
+      - 'scripts/test_mutation_gate_status.sh'
       - '.github/workflows/mutation.yml'
       - 'crates/harness-core/**'
       - 'crates/specguard/**'
@@ -97,6 +99,9 @@ jobs:
       # The wiring that makes this gate reach its target — test it before trusting it.
       - name: Test pilot-selection helper
         run: scripts/test_mutation_pilots.sh
+      # The gate's exit-status handling (fail-closed on non-completion / stale JSON).
+      - name: Test gate exit-status handling
+        run: scripts/test_mutation_gate_status.sh
       - name: Select pilot crates
         id: pilots
         run: |

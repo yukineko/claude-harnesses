@@ -1,0 +1,8 @@
+# fail-open-guard ratchet baseline. This is the pinned count of
+# un-allowlisted fail-open swallows across the whole workspace (the
+# `--all` scan). The `--ratchet` CI gate fails when the live count
+# drifts from this number in either direction. Lowering it locks in a
+# fix; RAISING it (to admit new swallows) still passes the script and is
+# caught only by review of this file's diff. Regenerate after a fix with:
+#   python3 scripts/check-fail-open.py --update-baseline
+34

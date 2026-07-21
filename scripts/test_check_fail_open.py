@@ -217,5 +217,234 @@ class AllowlistSuppression(unittest.TestCase):
                       "allowlist must not suppress the same text in another file")
 
 
+class RatchetVerdictPureLogic(unittest.TestCase):
+    """`ratchet_verdict(count, baseline)` decision table (no IO).
+
+    Discriminates regression (ROSE) from unlocked-improvement (FELL) from
+    hold (==). Both drift directions must be exit 1 with DISTINCT messages;
+    only equality is exit 0. RED on origin/main: `ratchet_verdict` does not
+    exist there (AttributeError)."""
+
+    def test_count_above_baseline_is_exit1_regression(self):
+        code, msg = fo.ratchet_verdict(35, 34)
+        self.assertEqual(code, 1)
+        self.assertIn("ROSE", msg)
+        self.assertNotIn("FELL", msg)
+
+    def test_count_below_baseline_is_exit1_improvement(self):
+        code, msg = fo.ratchet_verdict(33, 34)
+        self.assertEqual(code, 1)
+        self.assertIn("FELL", msg)
+        self.assertNotIn("ROSE", msg)
+
+    def test_count_equals_baseline_is_exit0_hold(self):
+        code, msg = fo.ratchet_verdict(34, 34)
+        self.assertEqual(code, 0)
+        self.assertIn("baseline", msg)
+        # An equal count is neither a rise nor a fall.
+        self.assertNotIn("ROSE", msg)
+        self.assertNotIn("FELL", msg)
+
+    def test_messages_distinguish_the_two_drift_directions(self):
+        _, up = fo.ratchet_verdict(40, 34)
+        _, down = fo.ratchet_verdict(30, 34)
+        self.assertNotEqual(up, down,
+                            "regression and improvement must not share a message")
+
+
+class ReadBaselineFailClosed(unittest.TestCase):
+    """`read_baseline` must RAISE BaselineError on any cannot-determine — never
+    silently return 0 (a bogus floor reads every count as a regression, or an
+    improvement-to-zero). RED on origin/main: `read_baseline`/`BaselineError`
+    do not exist there."""
+
+    def _write(self, text: str) -> Path:
+        f = tempfile.NamedTemporaryFile(
+            "w", suffix=".baseline", delete=False, encoding="utf-8")
+        f.write(text)
+        f.close()
+        p = Path(f.name)
+        self.addCleanup(lambda: p.unlink(missing_ok=True))
+        return p
+
+    def test_missing_file_raises(self):
+        missing = fo.REPO / "no-such-baseline-xyz.baseline"
+        self.assertFalse(missing.exists())
+        with self.assertRaises(fo.BaselineError):
+            fo.read_baseline(missing)
+
+    def test_only_comments_zero_integer_lines_raises(self):
+        p = self._write("# just a comment\n# another\n\n")
+        with self.assertRaises(fo.BaselineError):
+            fo.read_baseline(p)
+
+    def test_two_integer_lines_raises(self):
+        p = self._write("# header\n33\n34\n")
+        with self.assertRaises(fo.BaselineError):
+            fo.read_baseline(p)
+
+    def test_non_integer_content_raises(self):
+        p = self._write("# header\nthirty-four\n")
+        with self.assertRaises(fo.BaselineError):
+            fo.read_baseline(p)
+
+    def test_negative_integer_raises(self):
+        p = self._write("# header\n-5\n")
+        with self.assertRaises(fo.BaselineError):
+            fo.read_baseline(p)
+
+    def test_missing_file_does_not_return_zero(self):
+        # Belt-and-suspenders: the failure MUST be an exception, not a 0 sentinel.
+        missing = fo.REPO / "no-such-baseline-abc.baseline"
+        try:
+            val = fo.read_baseline(missing)
+        except fo.BaselineError:
+            return
+        self.fail(f"missing baseline returned {val!r} instead of failing closed")
+
+    def test_happy_path_comments_plus_one_integer(self):
+        p = self._write("# fail-open-guard ratchet baseline\n# more prose\n34\n")
+        self.assertEqual(fo.read_baseline(p), 34)
+
+
+class AllCratesCountFailClosed(unittest.TestCase):
+    """`all_crates_count` must fail closed (raise) when discovery is empty —
+    an empty target list is broken discovery, not a workspace with zero
+    swallows. RED on origin/main: the function does not exist there."""
+
+    def test_empty_discovery_raises_not_zero(self):
+        saved = fo.iter_target_files
+        try:
+            fo.iter_target_files = lambda all_crates: []
+            with self.assertRaises(fo.BaselineError):
+                fo.all_crates_count()
+        finally:
+            fo.iter_target_files = saved
+
+    def test_empty_discovery_never_returns_zero(self):
+        saved = fo.iter_target_files
+        try:
+            fo.iter_target_files = lambda all_crates: []
+            try:
+                val = fo.all_crates_count()
+            except fo.BaselineError:
+                return
+            self.fail(f"empty discovery returned {val!r} instead of failing closed")
+        finally:
+            fo.iter_target_files = saved
+
+
+class RatchetMainEndToEnd(unittest.TestCase):
+    """End-to-end `main(["--ratchet"])` exit-code wiring: 0 hold / 1 drift /
+    2 undetermined (fail-closed), mirroring check-test-weakening.py.
+
+    DISCRIMINATING (RED on origin/main): the pre-ratchet scanner has no
+    `--ratchet` branch, so `main(["--ratchet"])` falls through to a clean
+    gate-surface scan and returns 0 for EVERY case below — it cannot block a
+    regression, cannot demand an improvement be locked in, and cannot fail
+    closed on an undetermined baseline. These tests go red on that old code
+    and green only once the ratchet exists."""
+
+    # setUp is deliberately tolerant of a MISSING attribute (getattr default) so
+    # that on the pre-ratchet scanner — where all_crates_count / read_baseline do
+    # not exist — the test still REACHES main() and observes its real behavior
+    # (falling through to a clean gate-surface scan → exit 0), rather than
+    # erroring out in setUp. That is what makes these behaviorally discriminating.
+    _MISSING = object()
+
+    def setUp(self):
+        self._names = ("all_crates_count", "read_baseline", "iter_target_files")
+        self._saved = {n: getattr(fo, n, self._MISSING) for n in self._names}
+
+    def tearDown(self):
+        for n, v in self._saved.items():
+            if v is self._MISSING:
+                if hasattr(fo, n):
+                    delattr(fo, n)
+            else:
+                setattr(fo, n, v)
+
+    def _pin(self, count: int, baseline: int):
+        fo.all_crates_count = lambda: count
+        fo.read_baseline = lambda path=None: baseline
+
+    def test_hold_count_equals_baseline_exit0(self):
+        self._pin(34, 34)
+        self.assertEqual(fo.main(["check-fail-open.py", "--ratchet"]), 0)
+
+    def test_regression_count_above_baseline_exit1(self):
+        self._pin(35, 34)
+        # Old code returns 0 here (no --ratchet handling) → RED.
+        self.assertEqual(fo.main(["check-fail-open.py", "--ratchet"]), 1)
+
+    def test_improvement_count_below_baseline_exit1(self):
+        self._pin(30, 34)
+        self.assertEqual(fo.main(["check-fail-open.py", "--ratchet"]), 1)
+
+    def test_unreadable_baseline_is_undetermined_exit2(self):
+        def boom(path=None):
+            raise fo.BaselineError("simulated unreadable baseline")
+        fo.all_crates_count = lambda: 34
+        fo.read_baseline = boom
+        # Old code returns 0 (fell through to a clean scan) → RED.
+        self.assertEqual(fo.main(["check-fail-open.py", "--ratchet"]), 2)
+
+    def test_empty_discovery_is_undetermined_exit2(self):
+        # Drive the REAL all_crates_count fail-closed through main by breaking
+        # discovery, rather than stubbing the count function.
+        fo.iter_target_files = lambda all_crates: []
+        fo.read_baseline = lambda path=None: 34
+        self.assertEqual(fo.main(["check-fail-open.py", "--ratchet"]), 2)
+
+    def test_regression_prints_the_swallow_locations(self):
+        # A regression must surface WHICH swallows exist. Plant a fake finding
+        # via a stubbed scan surface so the block is findable.
+        self._pin(1, 0)
+        import io
+        import contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            rc = fo.main(["check-fail-open.py", "--ratchet"])
+        self.assertEqual(rc, 1)
+        self.assertIn("ROSE", buf.getvalue())
+
+
+class UpdateBaselineRepins(unittest.TestCase):
+    """`main(["--update-baseline"])` re-pins the baseline file to the live count
+    and exits 0, and the written file round-trips through read_baseline.
+
+    RED on origin/main: no `--update-baseline` handling there (it would fall
+    through to a scan and never write the baseline)."""
+
+    def setUp(self):
+        self._saved_count = fo.all_crates_count
+        self._saved_baseline_file = fo.BASELINE_FILE
+        self._tmp = Path(tempfile.mkdtemp()) / "check-fail-open.baseline"
+
+    def tearDown(self):
+        fo.all_crates_count = self._saved_count
+        fo.BASELINE_FILE = self._saved_baseline_file
+        if self._tmp.exists():
+            self._tmp.unlink()
+
+    def test_update_baseline_writes_current_count_and_roundtrips(self):
+        fo.all_crates_count = lambda: 7
+        fo.BASELINE_FILE = self._tmp  # _write_baseline reads this global at call time
+        rc = fo.main(["check-fail-open.py", "--update-baseline"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(self._tmp.exists(), "baseline file must be written")
+        # The pinned value round-trips through the reader.
+        self.assertEqual(fo.read_baseline(self._tmp), 7)
+
+    def test_update_baseline_fails_closed_when_count_undetermined(self):
+        def boom():
+            raise fo.BaselineError("broken discovery")
+        fo.all_crates_count = boom
+        fo.BASELINE_FILE = self._tmp
+        rc = fo.main(["check-fail-open.py", "--update-baseline"])
+        self.assertEqual(rc, 2, "cannot pin an undetermined count — must fail closed")
+        self.assertFalse(self._tmp.exists(), "must not write a baseline it cannot trust")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

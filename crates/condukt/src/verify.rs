@@ -1321,10 +1321,113 @@ pub fn check_passed(
     }
 }
 
-/// Aggregate verdict over a set of per-check results: `true` iff every result is
-/// `true`. An empty slice is a vacuous pass (`true`).
-pub fn checks_verdict(results: &[bool]) -> bool {
-    results.iter().all(|&r| r)
+/// The aggregate verdict over a set of declared checks. Three-valued on purpose:
+/// "no check ran" is NOT "every check passed". Collapsing the two is the
+/// fail-open this type exists to prevent — a task whose `checks` key is missing,
+/// misspelled, or dropped in serialization would otherwise report a vacuous pass
+/// to `condukt-verifier`, which treats this report as authoritative for the
+/// task's completion gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChecksVerdict {
+    /// At least one check ran and every one of them passed.
+    Passed,
+    /// At least one check ran and at least one of them failed.
+    Failed,
+    /// No check ran at all — the oracle was never applied. This is
+    /// **undetermined**, not a pass: the caller must not treat it as evidence
+    /// that anything was verified.
+    NoChecksDeclared,
+}
+
+/// Aggregate verdict over a set of per-check results.
+///
+/// An empty slice yields [`ChecksVerdict::NoChecksDeclared`], never a pass —
+/// nothing was observed, so nothing was verified.
+pub fn checks_verdict(results: &[bool]) -> ChecksVerdict {
+    if results.is_empty() {
+        return ChecksVerdict::NoChecksDeclared;
+    }
+    if results.iter().all(|&r| r) {
+        ChecksVerdict::Passed
+    } else {
+        ChecksVerdict::Failed
+    }
+}
+
+/// Extract the declared `checks` array from a checks JSON document (either a
+/// full Task or a bare `{"checks":[...]}` object). This is the single parse the
+/// `verify checks` command uses — production and tests share it, so a laxer
+/// second parser cannot drift in behind the one the tests bless.
+///
+/// Three outcomes, deliberately not collapsed into two:
+///
+/// - `Err` — the document is not JSON, **or** `checks` is present but cannot be
+///   read as a list of checks (wrong type, a misspelled field rejected by
+///   [`crate::model::Check`]'s `deny_unknown_fields`, a missing `cmd`).
+///   Declared-but-unreadable is not the same as nothing declared, and naming it
+///   "no checks declared" would be restrictive but untrue — it would hide the
+///   typo that caused it.
+/// - `Ok(None)` — no `checks` key is present at all (omitted, or misspelled so
+///   that the correct name is absent). Unknown sibling fields are ignored, so a
+///   full Task JSON still parses. Note this keys off the presence of `checks`
+///   alone: a document carrying *both* `checks` and a stray `check` reads the
+///   correct key and ignores the other.
+/// - `Ok(Some(v))` — the key was present and readable; `v` may be empty.
+///
+/// The last two both resolve to [`ChecksVerdict::NoChecksDeclared`] downstream;
+/// the return type keeps them distinguishable for reporting, not for the verdict.
+pub fn parse_checks_holder(raw: &str) -> anyhow::Result<Option<Vec<crate::model::Check>>> {
+    use anyhow::Context as _;
+
+    /// A strict mirror of [`crate::model::Check`], used only here.
+    ///
+    /// The strictness lives on this local type rather than on `model::Check`
+    /// itself because `model::Check` is reached through `model::Task`: making
+    /// *that* strict would fail the whole `Decomposition` parse over one stray
+    /// key, and `task_files`/`decomposition_files` swallow that into an empty
+    /// `touched_files`, which conflict analysis reads as "no conflicts". The
+    /// oracle's input is the only place that needs to be picky.
+    ///
+    /// The destructure-and-rebuild in the conversion below is the drift guard:
+    /// add a field to either struct and this stops compiling.
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct StrictCheck {
+        cmd: String,
+        #[serde(default)]
+        expect_exit: Option<i64>,
+        #[serde(default)]
+        expect_substring: Option<String>,
+    }
+
+    let doc: serde_json::Value = serde_json::from_str(raw).context("parsing checks JSON")?;
+    match doc.get("checks") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(declared) => serde_json::from_value::<Vec<StrictCheck>>(declared.clone())
+            .map(|v| {
+                Some(
+                    v.into_iter()
+                        .map(
+                            |StrictCheck {
+                                 cmd,
+                                 expect_exit,
+                                 expect_substring,
+                             }| crate::model::Check {
+                                cmd,
+                                expect_exit,
+                                expect_substring,
+                            },
+                        )
+                        .collect(),
+                )
+            })
+            .context(
+                "the `checks` key is present but could not be read as a list of checks \
+                 (wrong type, a misspelled field, or a missing `cmd`) — declared-but-unreadable \
+                 is not the same as no checks declared",
+            ),
+    }
 }
 
 /// The outcome of running one declared check.
@@ -1343,7 +1446,13 @@ pub struct CheckResult {
 /// The aggregate report of running a set of declared checks.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CheckReport {
-    /// `true` iff every check passed (see [`checks_verdict`]).
+    /// The three-valued verdict (see [`ChecksVerdict`]). This is the field to
+    /// read: `no_checks_declared` means the oracle never ran.
+    pub verdict: ChecksVerdict,
+    /// `true` **only** when [`Self::verdict`] is [`ChecksVerdict::Passed`].
+    /// Retained so that a consumer reading the old boolean field can never see
+    /// `true` for a run that verified nothing; it cannot distinguish "failed"
+    /// from "nothing ran", so new consumers must read `verdict` instead.
     pub all_passed: bool,
     /// Per-check results, in declaration order.
     pub results: Vec<CheckResult>,
@@ -1397,16 +1506,52 @@ pub fn run_check(check: &crate::model::Check, cwd: Option<&std::path::Path>) -> 
 /// Execute a set of declared checks in order and aggregate the verdict.
 pub fn run_checks(checks: &[crate::model::Check], cwd: Option<&std::path::Path>) -> CheckReport {
     let results: Vec<CheckResult> = checks.iter().map(|c| run_check(c, cwd)).collect();
-    let all_passed = checks_verdict(&results.iter().map(|r| r.passed).collect::<Vec<_>>());
+    let verdict = checks_verdict(&results.iter().map(|r| r.passed).collect::<Vec<_>>());
     CheckReport {
-        all_passed,
+        verdict,
+        all_passed: verdict == ChecksVerdict::Passed,
         results,
     }
+}
+
+/// The whole `condukt verify checks` body except file IO and printing: parse the
+/// document, run whatever checks it declares, and aggregate.
+///
+/// This exists so the CLI path itself is under test. Keeping the parse inside
+/// `main.rs` would let the unit tests above go green while the real command
+/// stayed fail-open — the parse is where a missing `checks` key silently
+/// becomes "nothing to run".
+///
+/// Three distinct outcomes, kept distinct on purpose:
+///
+/// - **Malformed JSON** → `Err`. A document that could not be parsed has not
+///   been shown to declare zero checks.
+/// - **`checks` present but unreadable** (wrong type, unknown field in an
+///   element, missing `cmd`) → `Err`. The author demonstrably declared checks;
+///   reporting `no_checks_declared` here would be restrictive but *untrue*, and
+///   would hide the typo that caused it.
+/// - **`checks` genuinely absent, or an empty array** → `Ok` with
+///   [`ChecksVerdict::NoChecksDeclared`]. Nothing was declared, so nothing ran.
+pub fn checks_report_from_json(
+    raw: &str,
+    cwd: Option<&std::path::Path>,
+) -> anyhow::Result<CheckReport> {
+    Ok(run_checks(
+        &parse_checks_holder(raw)?.unwrap_or_default(),
+        cwd,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // NAMING RULE for the declared-`checks` oracle contract: every test in that
+    // group MUST have `checks` in its name. Running `cargo test … checks`
+    // silently SKIPS non-matching tests and still reports success — "not run"
+    // read as "passed", the same fail-open this contract exists to remove. One
+    // guard here was invisible to that filter until it was renamed. Verify this
+    // contract with an UNFILTERED `cargo test -p condukt --bins`.
 
     // ── mechanical_cmd argv parsing (quote/escape-aware, not split_whitespace) ──
 
@@ -2862,13 +3007,448 @@ mod run_policy_gate_tests {
         assert!(check_passed(&check("x", Some(0), Some("ok")), 0, "ok!"));
     }
 
-    /// `checks_verdict` aggregate: all-true -> true, any-false -> false,
-    /// empty -> vacuous true.
+    /// `checks_verdict` aggregate: all-true -> `Passed`, any-false -> `Failed`.
+    /// An empty slice means the oracle never ran and MUST NOT be a pass — it is
+    /// the third, "cannot determine" value `NoChecksDeclared`.
     #[test]
     fn checks_verdict_aggregate() {
-        assert!(checks_verdict(&[true, true, true]));
-        assert!(!checks_verdict(&[true, false, true]));
-        assert!(checks_verdict(&[]));
+        assert_eq!(checks_verdict(&[true, true, true]), ChecksVerdict::Passed);
+        assert_eq!(checks_verdict(&[true, false, true]), ChecksVerdict::Failed);
+        assert_eq!(checks_verdict(&[]), ChecksVerdict::NoChecksDeclared);
+        // The hole this replaces: the empty set must not be readable as a pass.
+        assert_ne!(checks_verdict(&[]), ChecksVerdict::Passed);
+    }
+
+    /// The empty set is distinguishable from "everything passed" *in the
+    /// verdict itself* — `NoChecksDeclared` is neither `Passed` nor `Failed`.
+    #[test]
+    fn checks_verdict_empty_is_distinct_from_passed_and_failed() {
+        let empty = checks_verdict(&[]);
+        assert_ne!(empty, ChecksVerdict::Passed);
+        assert_ne!(empty, ChecksVerdict::Failed);
+        assert_eq!(empty, ChecksVerdict::NoChecksDeclared);
+    }
+
+    /// `run_checks` with zero declared checks must report the undetermined
+    /// verdict, and `all_passed` (the field the verifier agent reads as
+    /// authoritative) must be `false` — never a vacuous `true`.
+    #[test]
+    fn run_checks_zero_declared_is_not_all_passed() {
+        let report = run_checks(&[], None);
+        assert_eq!(report.verdict, ChecksVerdict::NoChecksDeclared);
+        assert!(
+            !report.all_passed,
+            "zero executed checks must not serialize as all_passed=true"
+        );
+        assert!(report.results.is_empty());
+    }
+
+    /// `all_passed` is `true` only for `Passed`; both `Failed` and
+    /// `NoChecksDeclared` serialize it as `false`.
+    #[test]
+    fn run_checks_all_passed_tracks_passed_verdict_only() {
+        let ok = run_checks(&[check("true", None, None)], None);
+        assert_eq!(ok.verdict, ChecksVerdict::Passed);
+        assert!(ok.all_passed);
+
+        let bad = run_checks(
+            &[check("true", None, None), check("false", None, None)],
+            None,
+        );
+        assert_eq!(bad.verdict, ChecksVerdict::Failed);
+        assert!(!bad.all_passed);
+
+        let none = run_checks(&[], None);
+        assert!(!none.all_passed);
+    }
+
+    /// Wire format: the verdict is a snake_case string, and it travels next to
+    /// `all_passed` so a downstream reader cannot mistake "nothing ran" for
+    /// "everything passed".
+    #[test]
+    fn check_report_serializes_verdict_as_snake_case() {
+        let json = serde_json::to_value(run_checks(&[], None)).unwrap();
+        assert_eq!(json["verdict"], "no_checks_declared");
+        assert_eq!(json["all_passed"], false);
+
+        let json = serde_json::to_value(run_checks(&[check("true", None, None)], None)).unwrap();
+        assert_eq!(json["verdict"], "passed");
+        assert_eq!(json["all_passed"], true);
+
+        let json = serde_json::to_value(run_checks(&[check("false", None, None)], None)).unwrap();
+        assert_eq!(json["verdict"], "failed");
+        assert_eq!(json["all_passed"], false);
+    }
+
+    /// `parse_checks_holder` distinguishes "the `checks` key is absent" (`None`)
+    /// from "the key is present but empty" (`Some([])`). A misspelled key
+    /// (`check:`) is an *absent* `checks` key, not an empty declaration.
+    #[test]
+    fn parse_checks_holder_reports_absent_key_as_none() {
+        // key present, empty array -> readable, and empty
+        assert_eq!(
+            parse_checks_holder(r#"{"checks": []}"#).unwrap(),
+            Some(vec![])
+        );
+        // key entirely missing -> genuinely absent
+        assert_eq!(parse_checks_holder(r#"{"title": "x"}"#).unwrap(), None);
+        // misspelled key -> `checks` is absent
+        assert_eq!(
+            parse_checks_holder(r#"{"check": [{"cmd": "true"}]}"#).unwrap(),
+            None
+        );
+        // key present with content
+        assert_eq!(
+            parse_checks_holder(r#"{"checks": [{"cmd": "true"}]}"#).unwrap(),
+            Some(vec![check("true", None, None)])
+        );
+    }
+
+    /// The `Ok(Some([]))` / `Ok(None)` distinction is load-bearing and must not
+    /// be flattened: an explicitly empty array is a *readable* declaration, a
+    /// missing key is an *absent* one. They agree on the downstream verdict but
+    /// are different facts, and this is the only place that keeps them apart.
+    #[test]
+    fn parse_checks_holder_empty_array_is_not_the_same_as_absent_checks_key() {
+        let empty = parse_checks_holder(r#"{"checks": []}"#).unwrap();
+        let absent = parse_checks_holder(r#"{"title": "x"}"#).unwrap();
+        assert_ne!(
+            empty, absent,
+            "an explicitly empty `checks` array must stay distinguishable from a missing key"
+        );
+        assert!(empty.is_some());
+        assert!(absent.is_none());
+    }
+
+    /// Both failure modes of the CLI entrypoint — an empty `checks` array and a
+    /// missing/misspelled `checks` key — must land on `no_checks_declared`, not
+    /// on a vacuous pass.
+    #[test]
+    fn missing_and_empty_checks_key_both_yield_no_checks_declared() {
+        for raw in [
+            r#"{"checks": []}"#,
+            r#"{"title": "x"}"#,
+            r#"{"check": [{"cmd": "true"}]}"#,
+        ] {
+            let checks = parse_checks_holder(raw)
+                .unwrap_or_else(|e| panic!("input {raw} must be readable, got error: {e}"))
+                .unwrap_or_default();
+            let report = run_checks(&checks, None);
+            assert_eq!(
+                report.verdict,
+                ChecksVerdict::NoChecksDeclared,
+                "input {raw} must not be treated as a pass"
+            );
+            assert!(!report.all_passed, "input {raw} must not be all_passed");
+        }
+    }
+
+    // ── `checks_report_from_json`: the single entrypoint the CLI must use ──
+    //
+    // These pin the raw-JSON-in / report-out function *directly*, so the wiring
+    // cannot regress to re-deriving `parse_checks_holder(..).unwrap_or_default()`
+    // at the call site without these tests noticing.
+
+    /// End-to-end over raw JSON: every shape in which zero checks are actually
+    /// executed — missing key, misspelled key, empty array — yields
+    /// `NoChecksDeclared` with `all_passed == false`.
+    #[test]
+    fn checks_report_from_json_zero_declared_is_not_a_pass() {
+        for raw in [
+            r#"{"title": "x"}"#,
+            r#"{"check": [{"cmd": "true"}]}"#,
+            r#"{"checks": []}"#,
+        ] {
+            let report = checks_report_from_json(raw, None)
+                .unwrap_or_else(|e| panic!("input {raw} must parse, got error: {e}"));
+            assert_eq!(
+                report.verdict,
+                ChecksVerdict::NoChecksDeclared,
+                "input {raw} must not be treated as a pass"
+            );
+            assert!(!report.all_passed, "input {raw} must not be all_passed");
+            assert!(report.results.is_empty(), "input {raw} ran no checks");
+        }
+    }
+
+    /// The normal path over raw JSON does not regress: a declared check that
+    /// passes -> `Passed`/`all_passed`, one that fails -> `Failed`.
+    #[test]
+    fn checks_report_from_json_executes_declared_checks() {
+        let ok = checks_report_from_json(r#"{"checks": [{"cmd": "true"}]}"#, None).unwrap();
+        assert_eq!(ok.verdict, ChecksVerdict::Passed);
+        assert!(ok.all_passed);
+        assert_eq!(ok.results.len(), 1);
+
+        let bad = checks_report_from_json(r#"{"checks": [{"cmd": "false"}]}"#, None).unwrap();
+        assert_eq!(bad.verdict, ChecksVerdict::Failed);
+        assert!(!bad.all_passed);
+        assert_eq!(bad.results.len(), 1);
+    }
+
+    /// Malformed JSON is an *error*, not a degradation to "zero checks
+    /// declared". A parse failure must never be silently reshaped into a
+    /// report at all — the caller has to see that the oracle could not run.
+    #[test]
+    fn checks_report_from_json_rejects_malformed_json() {
+        assert!(checks_report_from_json("{ not json", None).is_err());
+        assert!(checks_report_from_json("", None).is_err());
+        assert!(checks_report_from_json(r#"{"checks": [{"cmd": "true"}"#, None).is_err());
+    }
+
+    /// The serialized wire form the verifier agent reads: a zero-check run
+    /// carries `"no_checks_declared"` and must not contain `"all_passed":true`
+    /// anywhere in the payload.
+    #[test]
+    fn checks_report_from_json_serializes_no_checks_declared() {
+        let json =
+            serde_json::to_string(&checks_report_from_json(r#"{"title": "x"}"#, None).unwrap())
+                .unwrap();
+        assert!(
+            json.contains("no_checks_declared"),
+            "payload must name the undetermined verdict: {json}"
+        );
+        assert!(
+            !json.contains("\"all_passed\":true"),
+            "a zero-check run must not serialize an affirmative all_passed: {json}"
+        );
+    }
+
+    // ── unknown fields *inside a check element* are a hard error ──
+    //
+    // A check element with a misspelled field silently drops the condition the
+    // author wrote. `expect_substringg` is the worst case: the substring
+    // requirement vanishes, `expect_substring` defaults to `None` ("no
+    // constraint"), and the check reports `passed` with a NON-EMPTY `results`
+    // array — indistinguishable from a genuine pass, so it bypasses
+    // `ChecksVerdict` entirely.
+    //
+    // The contract is `Err`, not `NoChecksDeclared`: the author DID declare
+    // checks, so "the declaration could not be understood" is a different fact
+    // from "there was no declaration", and must not borrow that name.
+
+    /// A misspelled `expect_substring` silently deletes the substring
+    /// requirement. This must be a hard error, never an `Ok(passed)` report.
+    #[test]
+    fn checks_report_from_json_rejects_unknown_field_in_check_element() {
+        let raw = r#"{"checks":[{"cmd":"echo nope","expect_substringg":"BUILD OK"}]}"#;
+        let got = checks_report_from_json(raw, None);
+        assert!(
+            got.is_err(),
+            "an unparseable check declaration must be an error, got: {:?}",
+            got.ok()
+        );
+    }
+
+    /// A misspelled `expect_exit` happens to degrade to a failing check today,
+    /// but the declared condition is dropped just the same. Same contract: the
+    /// declaration could not be understood, so it is an error — not a verdict.
+    #[test]
+    fn checks_report_from_json_rejects_unknown_field_even_when_degradation_looks_safe() {
+        let raw = r#"{"checks":[{"cmd":"exit 1","expect_exitt":1}]}"#;
+        let got = checks_report_from_json(raw, None);
+        assert!(
+            got.is_err(),
+            "a dropped condition is an error regardless of which way it degrades, got: {:?}",
+            got.ok()
+        );
+    }
+
+    /// The unparseable-declaration error must NOT be laundered into the
+    /// `no_checks_declared` verdict — that name asserts "there was no
+    /// declaration", which is false here.
+    #[test]
+    fn unknown_field_in_check_element_does_not_become_no_checks_declared() {
+        for raw in [
+            r#"{"checks":[{"cmd":"echo nope","expect_substringg":"BUILD OK"}]}"#,
+            r#"{"checks":[{"cmd":"exit 1","expect_exitt":1}]}"#,
+        ] {
+            match checks_report_from_json(raw, None) {
+                Err(_) => {}
+                Ok(report) => panic!(
+                    "input {raw} must error, but produced verdict {:?} (all_passed={})",
+                    report.verdict, report.all_passed
+                ),
+            }
+        }
+    }
+
+    /// Non-regression: a check element using the full set of KNOWN fields
+    /// still parses and executes exactly as before.
+    #[test]
+    fn checks_report_from_json_accepts_all_known_check_fields() {
+        let raw = r#"{"checks":[{"cmd":"echo x","expect_exit":0,"expect_substring":"x"}]}"#;
+        let report = checks_report_from_json(raw, None).expect("known fields must still parse");
+        assert_eq!(report.verdict, ChecksVerdict::Passed);
+        assert!(report.all_passed);
+        assert_eq!(report.results.len(), 1);
+
+        // and the declared conditions are actually enforced, not ignored
+        let raw = r#"{"checks":[{"cmd":"echo y","expect_exit":0,"expect_substring":"x"}]}"#;
+        let report = checks_report_from_json(raw, None).expect("known fields must still parse");
+        assert_eq!(report.verdict, ChecksVerdict::Failed);
+    }
+
+    /// The strictness is scoped to check ELEMENTS only. A full Task JSON —
+    /// which carries many top-level fields the checks reader does not know —
+    /// must keep working. Regressing this breaks condukt itself.
+    #[test]
+    fn full_task_json_with_extra_top_level_fields_still_runs_checks() {
+        let raw = r#"{"id":"t1","title":"x","touched_files":[],"checks":[{"cmd":"true"}]}"#;
+        let report = checks_report_from_json(raw, None)
+            .expect("a full Task JSON must still parse (unknown TOP-LEVEL fields are fine)");
+        assert_eq!(report.verdict, ChecksVerdict::Passed);
+        assert!(report.all_passed);
+        assert_eq!(report.results.len(), 1);
+
+        // ...and the same leniency holds when there are no checks at all
+        let raw = r#"{"id":"t1","title":"x","touched_files":[],"done_criteria":["a"]}"#;
+        let report = checks_report_from_json(raw, None).expect("a full Task JSON must still parse");
+        assert_eq!(report.verdict, ChecksVerdict::NoChecksDeclared);
+    }
+
+    /// A `checks` key that is PRESENT but not interpretable as `Vec<Check>` is
+    /// an unreadable declaration, not an absent one. Wrong value type, wrong
+    /// container, or a check element missing the required `cmd` all mean "the
+    /// declaration could not be read" — which must be an error, not the
+    /// `no_checks_declared` verdict (whose name asserts something false here).
+    ///
+    /// The contrasting `{"title":"x"}` case lives in this same test on purpose:
+    /// side by side, the two halves are the evidence that the distinction
+    /// between "unreadable" and "absent" is actually preserved.
+    #[test]
+    fn checks_key_present_but_unreadable_is_an_error_not_no_checks_declared() {
+        for raw in [
+            r#"{"checks": "true"}"#,               // string, not an array
+            r#"{"checks": {"cmd":"true"}}"#,       // object, not an array
+            r#"{"checks": [{"expect_exit": 0}]}"#, // element missing required `cmd`
+            r#"{"checks": [{"cmd": 7}]}"#,         // `cmd` present but wrong type
+        ] {
+            match checks_report_from_json(raw, None) {
+                Err(_) => {}
+                Ok(report) => panic!(
+                    "input {raw} declares `checks` but it could not be read; \
+                     that must be an error, got verdict {:?} (all_passed={})",
+                    report.verdict, report.all_passed
+                ),
+            }
+        }
+
+        // ...and the contrast: only a genuinely ABSENT `checks` key is
+        // `no_checks_declared`. If this half ever fails at the same time as the
+        // half above, the two facts have been collapsed into one again.
+        let absent = checks_report_from_json(r#"{"title":"x"}"#, None)
+            .expect("an absent `checks` key is a verdict, not an error");
+        assert_eq!(absent.verdict, ChecksVerdict::NoChecksDeclared);
+        assert!(!absent.all_passed);
+    }
+
+    /// `parse_checks_holder`'s existing contract is untouched for inputs whose
+    /// check elements use only known fields: key present -> `Ok(Some)`, key
+    /// absent or misspelled -> `Ok(None)`. None of these may become `Err`.
+    #[test]
+    fn parse_checks_holder_known_field_contract_unchanged() {
+        assert_eq!(
+            parse_checks_holder(r#"{"checks": []}"#).unwrap(),
+            Some(vec![])
+        );
+        assert_eq!(parse_checks_holder(r#"{"title": "x"}"#).unwrap(), None);
+        assert_eq!(
+            parse_checks_holder(r#"{"check": [{"cmd": "true"}]}"#).unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_checks_holder(r#"{"checks": [{"cmd": "true"}]}"#).unwrap(),
+            Some(vec![check("true", None, None)])
+        );
+        assert_eq!(
+            parse_checks_holder(
+                r#"{"id":"t1","title":"x","checks":[{"cmd":"true","expect_exit":0}]}"#
+            )
+            .unwrap(),
+            Some(vec![check("true", Some(0), None)])
+        );
+    }
+
+    /// `parse_checks_holder` now carries the three-way outcome itself: `Err`
+    /// for unreadable (malformed JSON, or `checks` present but unparseable),
+    /// `Ok(None)` for absent, `Ok(Some(_))` for readable.
+    #[test]
+    fn parse_checks_holder_errors_on_unreadable_checks_declaration() {
+        // malformed document
+        assert!(parse_checks_holder("{ not json").is_err());
+        assert!(parse_checks_holder("").is_err());
+        // `checks` present but unreadable
+        assert!(parse_checks_holder(r#"{"checks": "true"}"#).is_err());
+        assert!(parse_checks_holder(r#"{"checks": {"cmd":"true"}}"#).is_err());
+        assert!(parse_checks_holder(r#"{"checks": [{"expect_exit": 0}]}"#).is_err());
+        assert!(parse_checks_holder(r#"{"checks": [{"cmd": 7}]}"#).is_err());
+        assert!(
+            parse_checks_holder(r#"{"checks":[{"cmd":"echo nope","expect_substringg":"x"}]}"#)
+                .is_err()
+        );
+        assert!(parse_checks_holder(r#"{"checks":[{"cmd":"exit 1","expect_exitt":1}]}"#).is_err());
+    }
+
+    /// Anti-drift: `checks_report_from_json` and `parse_checks_holder` must
+    /// agree on every input. Now that production calls the parser rather than
+    /// duplicating it, a divergence would mean a second parse path has crept
+    /// back in — the exact "dead second parser" shape that motivated the
+    /// signature change. Pinned as an equivalence over a spread of inputs so it
+    /// holds by construction, not by coincidence on one example.
+    #[test]
+    fn checks_report_from_json_agrees_with_parse_checks_holder() {
+        let inputs = [
+            // readable, executes
+            r#"{"checks": [{"cmd": "true"}]}"#,
+            r#"{"checks": [{"cmd": "false"}]}"#,
+            r#"{"checks":[{"cmd":"echo x","expect_exit":0,"expect_substring":"x"}]}"#,
+            r#"{"id":"t1","title":"x","touched_files":[],"checks":[{"cmd":"true"}]}"#,
+            // readable, but nothing to run
+            r#"{"checks": []}"#,
+            // absent
+            r#"{"title": "x"}"#,
+            r#"{"check": [{"cmd": "true"}]}"#,
+            // unreadable
+            r#"{ not json"#,
+            r#"{"checks": "true"}"#,
+            r#"{"checks": [{"expect_exit": 0}]}"#,
+            r#"{"checks":[{"cmd":"echo nope","expect_substringg":"x"}]}"#,
+            r#"{"checks":[{"cmd":"exit 1","expect_exitt":1}]}"#,
+        ];
+        for raw in inputs {
+            let parsed = parse_checks_holder(raw);
+            let report = checks_report_from_json(raw, None);
+            assert_eq!(
+                parsed.is_err(),
+                report.is_err(),
+                "strictness drift on {raw}: parse_checks_holder err={}, \
+                 checks_report_from_json err={}",
+                parsed.is_err(),
+                report.is_err()
+            );
+            if let (Ok(parsed), Ok(report)) = (parsed, report) {
+                // A readable declaration and an absent one differ in the parse
+                // result, but the report must reflect exactly what the parser
+                // handed over: as many results as there were checks.
+                let declared = parsed.unwrap_or_default();
+                assert_eq!(
+                    report.results.len(),
+                    declared.len(),
+                    "report ran {} checks but the parser read {} on {raw}",
+                    report.results.len(),
+                    declared.len()
+                );
+                let expected_verdict = if declared.is_empty() {
+                    ChecksVerdict::NoChecksDeclared
+                } else if report.results.iter().all(|r| r.passed) {
+                    ChecksVerdict::Passed
+                } else {
+                    ChecksVerdict::Failed
+                };
+                assert_eq!(report.verdict, expected_verdict, "verdict drift on {raw}");
+            }
+        }
     }
 
     /// Executor smoke tests against trivial coreutils commands.

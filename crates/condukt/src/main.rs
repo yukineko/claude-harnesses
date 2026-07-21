@@ -1197,11 +1197,18 @@ enum VerifyAction {
         no_regressions: bool,
     },
     /// Run a task's declared deterministic `checks[]` as a machine oracle and
-    /// print `{"all_passed":bool,"results":[{"cmd","passed","exit"}...]}` as JSON
-    /// on stdout. Reads a JSON file (`--file`) that is either a full Task or a
-    /// bare `{"checks":[...]}` object; each check runs via `sh -c` and passes iff
-    /// its exit matches `expect_exit` (default 0) and — when set — its combined
-    /// output contains `expect_substring`. Pure/deterministic verdict; no LLM.
+    /// print
+    /// `{"verdict":"passed"|"failed"|"no_checks_declared","all_passed":bool,"results":[{"cmd","passed","exit"}...]}`
+    /// as JSON on stdout. Reads a JSON file (`--file`) that is either a full
+    /// Task or a bare `{"checks":[...]}` object; each check runs via `sh -c` and
+    /// passes iff its exit matches `expect_exit` (default 0) and — when set —
+    /// its combined output contains `expect_substring`. Pure/deterministic
+    /// verdict; no LLM.
+    ///
+    /// A document that declares no checks — key absent, misspelled, or an empty
+    /// array — reports `no_checks_declared` with `all_passed:false`, never a
+    /// vacuous pass: nothing ran, so nothing was verified. Malformed JSON is a
+    /// hard error for the same reason.
     Checks {
         /// JSON file: a full Task or a bare `{"checks":[...]}` object.
         #[arg(long)]
@@ -1683,17 +1690,13 @@ fn run_user(cmd: Command) -> Result<()> {
             }
             VerifyAction::Checks { file, cwd } => {
                 // Accept either a full Task or a bare `{"checks":[...]}` object:
-                // unknown fields are ignored, and `checks` defaults to empty.
-                #[derive(serde::Deserialize)]
-                struct ChecksHolder {
-                    #[serde(default)]
-                    checks: Vec<model::Check>,
-                }
+                // unknown sibling fields are ignored. Parsing lives in
+                // `verify::checks_report_from_json` so the CLI path is the
+                // tested path — an absent/misspelled `checks` key must reach
+                // `no_checks_declared`, not a vacuous pass.
                 let raw = std::fs::read_to_string(&file)
                     .with_context(|| format!("reading {}", file.display()))?;
-                let holder: ChecksHolder =
-                    serde_json::from_str(&raw).context("parsing checks JSON")?;
-                let report = verify::run_checks(&holder.checks, cwd.as_deref());
+                let report = verify::checks_report_from_json(&raw, cwd.as_deref())?;
                 println!("{}", serde_json::to_string_pretty(&report)?);
             }
         },

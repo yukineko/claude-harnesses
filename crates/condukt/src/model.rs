@@ -21,8 +21,21 @@ pub enum Class {
 
 /// A declared, deterministic verification check: a shell command plus the
 /// observable condition that means it passed. Lets the verifier run a machine
-/// oracle instead of judging `done_criteria` prose by eye. All fields permissive;
-/// a Task with no `checks` (the default) behaves exactly as before.
+/// oracle instead of judging `done_criteria` prose by eye. A Task with no
+/// `checks` (the default) behaves exactly as before.
+///
+/// Deliberately **permissive** on unknown fields, and that is not an oversight:
+/// this type is reached through [`Task`], so making it strict would make one
+/// stray key inside a check element fail the whole `Decomposition` parse — and
+/// `main.rs`'s `task_files`/`decomposition_files` swallow that failure into an
+/// empty `touched_files` list, which conflict analysis reads as "no conflicts"
+/// and schedules colliding tasks in parallel. Strictness at this layer buys a
+/// caught typo at the price of a silent scheduling hazard.
+///
+/// The typo *is* caught, but at the boundary that claims authority instead:
+/// `verify::parse_checks_holder` deserializes the oracle's own input through a
+/// strict local mirror of this struct, so a misspelled condition is rejected
+/// there without touching how decompositions parse.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Check {
     /// Shell command to run (via `sh -c`) from the task's cwd/worktree.

@@ -35,10 +35,22 @@ tools: Read, Grep, Glob, Bash, WebFetch
   ```bash
   condukt verify checks --file <task.json>   # 任意で --cwd <task の worktree>
   ```
-  を実行し、その `{"all_passed":<bool>,"results":[{"cmd","passed","exit"}...]}` を **宣言された各 check の
-  合否の権威 (authoritative)** として使う (各 check は `sh -c` 実行、exit が `expect_exit` (既定 0) と一致し、
-  `expect_substring` があれば結合出力に含まれれば pass)。自由記述の判定は **宣言済み check がカバーしない
-  `done_criteria` にのみ**適用する。`all_passed:false` はその check 群の `pass=false` 根拠になる。
+  を実行し、その `{"verdict":"passed"|"failed"|"no_checks_declared","all_passed":<bool>,"results":[...]}`
+  の **`verdict` を** 宣言された各 check の合否の**権威 (authoritative)** として使う (各 check は `sh -c` 実行、
+  exit が `expect_exit` (既定 0) と一致し、`expect_substring` があれば結合出力に含まれれば pass)。
+  自由記述の判定は **宣言済み check がカバーしない `done_criteria` にのみ**適用する。
+
+  **`verdict` は三値であり、`no_checks_declared` を pass 扱いしてはならない**:
+  | verdict | 意味 | あなたの扱い |
+  |---|---|---|
+  | `passed` | 1 件以上実行され、全て合格 | その check 群は `pass=true` の根拠 |
+  | `failed` | 1 件以上実行され、1 件以上不合格 | その check 群は `pass=false` の根拠 |
+  | `no_checks_declared` | **1 件も実行されていない（オラクル未適用）** | **合否の根拠にならない。** タスクが `checks[]` を宣言しているはずなのにこれが返ったら、JSON の形が壊れている (キーの綴り違い・入れ子ミス・保存漏れ) 疑いが濃い。**pass にせず**、タスク JSON を作り直して再実行するか、直せないなら `pass=false` + 理由「宣言済み check を実行できなかった」で返す |
+
+  `all_passed` は後方互換のための派生 bool で、`verdict=="passed"` のときだけ `true` になる
+  (`no_checks_declared` でも `false`)。**`failed` と「何も実行されていない」を区別できないので、
+  判定には `verdict` を読むこと。** 「何も検証していない実行」を「全件パス」と読むのが、
+  このフィールドが三値化された理由そのものである。
 - `done_criteria` が外部 API・ライブラリの仕様に依存している場合、`WebFetch` で公式ドキュメント・
   仕様書を参照して実装が仕様に準拠しているか照合してよい。公式ドキュメントと実装の不一致は
   `pass=false` の根拠になる。

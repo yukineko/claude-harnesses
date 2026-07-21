@@ -140,8 +140,47 @@ Remediation hints:
   bump-on-change    you touched a plugin without raising its version; raise at
                     least the patch component in all three files.
 
-To commit anyway: git commit --no-verify
-Nothing else is standing behind this hook, so that bypass is the last word.
+`git commit --no-verify` skips this hook — git offers no way to refuse that. It
+is no longer silent, though: .githooks/post-commit records any commit whose tree
+this hook never certified, `git push` is blocked while such a commit is
+outstanding, and the record is cleared only by a run of this hook that goes
+green — i.e. by the content actually being inspected.
 EOF
+    exit "$rc"
 fi
-exit "$rc"
+
+# Green. Certify what was inspected so post-commit can tell a gated commit from
+# a bypassed one. Per-worktree, so two worktrees committing at the same time
+# cannot certify each other's trees.
+#
+# The certificate names the TREE *and* the HEAD it was judged against, not the
+# tree alone. Two of the six gates read a diff rather than a snapshot
+# (check-test-weakening and check-version-bumped both compare against HEAD), so
+# their verdict is a property of the pair. A tree-only certificate would survive
+# HEAD moving underneath it: run the gate green at HEAD=A, abandon the commit,
+# pull so HEAD=B, then `git commit --no-verify` the identical tree — the tree
+# still matches, so post-commit would call it gated, while the diff that was
+# actually judged no longer exists. Binding HEAD in closes that.
+#
+# Cost of the stricter form, stated rather than discovered later: `git commit
+# --amend` re-parents onto HEAD^, so the recorded HEAD is not among the new
+# commit's parents and the amend is recorded as ungated. That is a false
+# positive which fails CLOSED, and one green pre-commit clears it.
+GIT_DIR_LOCAL="$(git rev-parse --git-dir 2>/dev/null)"
+GIT_DIR_COMMON="$(git rev-parse --git-common-dir 2>/dev/null)"
+if [ -n "${GIT_DIR_LOCAL:-}" ] && tree="$(git write-tree 2>/dev/null)"; then
+    head="$(git rev-parse HEAD 2>/dev/null)" || head=""
+    printf '%s %s\n' "$tree" "$head" > "$GIT_DIR_LOCAL/gate-verified-tree"
+fi
+
+# The gate just inspected this tree and found it clean, so any commit sitting in
+# the bypass ledger is now covered. Clearing here — and NOWHERE else — keeps the
+# clearing tied to an actual inspection: there is no command that just empties it.
+LEDGER="${GIT_DIR_COMMON:-}/gate-bypassed"
+if [ -n "${GIT_DIR_COMMON:-}" ] && [ -s "$LEDGER" ]; then
+    cleared="$(wc -l < "$LEDGER" 2>/dev/null | tr -d ' ')"
+    rm -f "$LEDGER"
+    echo "pre-commit: gates green — cleared $cleared ungated commit(s) from the bypass ledger." >&2
+fi
+
+exit 0

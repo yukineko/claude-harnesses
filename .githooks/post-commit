@@ -1,0 +1,110 @@
+#!/bin/sh
+# Records a commit that was created WITHOUT passing the local gate.
+#
+# `git commit --no-verify` skips pre-commit entirely, so pre-commit cannot
+# defend against it. post-commit can: it still runs. Observed, and pinned by
+# scripts/test_git_hook_coverage.py:
+#
+#     plain commit                hooks that ran: pre-commit, post-commit
+#     commit --no-verify          hooks that ran: post-commit
+#     cherry-pick                 hooks that ran: post-commit
+#     rebase                      hooks that ran: post-commit
+#     merge --no-ff               hooks that ran: pre-merge-commit, commit-msg,
+#                                                 post-merge
+#     merge --no-ff --no-verify   hooks that ran: post-merge
+#
+# Note the last two rows: post-commit does NOT run for a merge. An earlier
+# version of this comment claimed it did, from a probe whose log was polluted by
+# its own setup commits — a false premise written down as fact, caught only when
+# the premise was finally pinned in a test. Merges are handed here by
+# `.githooks/post-merge`, which is the hook that actually runs on that path.
+#
+# So the bypass cannot be PREVENTED here — the commit already exists by the time
+# this runs. It can be made impossible to hide, which is the property that was
+# missing: the previous arrangement left `--no-verify` silent.
+#
+# How it works
+# ------------
+# On success, pre-commit certifies the tree it inspected by writing its hash to
+# a per-worktree sentinel. This hook compares that against the tree that was
+# actually committed:
+#
+#   match     the commit went through the gate. Consume the sentinel, stay quiet.
+#   no match  the content in this commit was never inspected. Append the commit
+#             to the repo-wide ledger and say so loudly.
+#
+# The last three rows of the table above are NOT false positives. cherry-pick and
+# rebase replay content that this working tree never gated, so "never inspected"
+# is the literal truth. Clearing the ledger requires a pre-commit run that goes
+# green, i.e. the content really does get inspected — one green commit clears a
+# whole rebase's worth of entries.
+#
+# The ledger lives in the common git dir, so every worktree of this repo shares
+# one, while the sentinel is per-worktree so concurrent commits cannot certify
+# each other's trees.
+#
+# Never blocks: the commit has already happened, and exiting non-zero here would
+# not undo it. The teeth are in `scripts/gate-bypass.py --status`, which is
+# consulted by pre-commit and pre-push.
+
+set -u
+
+GIT_DIR_LOCAL="$(git rev-parse --git-dir 2>/dev/null)" || exit 0
+GIT_DIR_COMMON="$(git rev-parse --git-common-dir 2>/dev/null)" || exit 0
+SENTINEL="$GIT_DIR_LOCAL/gate-verified-tree"
+LEDGER="$GIT_DIR_COMMON/gate-bypassed"
+
+committed_tree="$(git rev-parse HEAD^{tree} 2>/dev/null)" || exit 0
+parents="$(git rev-parse HEAD^@ 2>/dev/null)"
+
+certified_tree=""
+certified_head=""
+if [ -f "$SENTINEL" ]; then
+    read -r certified_tree certified_head < "$SENTINEL" 2>/dev/null || true
+    rm -f "$SENTINEL"
+fi
+
+# Both halves must match: the tree that was inspected, and the HEAD it was
+# inspected against (two of the six gates judge a diff, not a snapshot — see
+# pre-commit). An empty certified_head is the initial-commit case, which is
+# certified only when the new commit likewise has no parent.
+if [ -n "$certified_tree" ] && [ "$certified_tree" = "$committed_tree" ]; then
+    if [ -z "$certified_head" ]; then
+        [ -z "$parents" ] && exit 0
+    else
+        for p in $parents; do
+            [ "$p" = "$certified_head" ] && exit 0
+        done
+    fi
+fi
+
+sha="$(git rev-parse HEAD 2>/dev/null)" || exit 0
+subject="$(git log -1 --format=%s 2>/dev/null)"
+
+# The append is the ONLY record that this commit was never inspected. Swallowing
+# its failure would delete the detection and leave the commit looking gated, so
+# a failed write is said out loud. This hook still cannot block — the commit
+# already exists — but it must not be silent about having lost the record.
+if ! printf '%s\t%s\n' "$sha" "$subject" >> "$LEDGER" 2>/dev/null; then
+    cat >&2 <<EOF
+
+  !! BYPASS RECORD LOST: could not append to $LEDGER
+     Commit $(printf '%.12s' "$sha") skipped the gate AND could not be recorded,
+     so nothing downstream will stop it. Fix the ledger path and re-run the
+     gate over this content by hand before pushing.
+EOF
+    exit 0
+fi
+
+count="$(wc -l < "$LEDGER" 2>/dev/null | tr -d ' ')"
+cat >&2 <<EOF
+
+  ! UNGATED COMMIT: $(printf '%.12s' "$sha") $subject
+    The local gate did not inspect this content (--no-verify, cherry-pick or
+    rebase). Recorded in the bypass ledger; $count entr(y/ies) outstanding.
+
+    The next pre-commit run that goes green clears the ledger — that run is
+    what actually inspects the content. Until then, \`git push\` is blocked and
+    \`python3 scripts/gate-bypass.py --status\` reports non-zero.
+EOF
+exit 0

@@ -27,10 +27,16 @@
 #      circular. Always inspects `main` — the shared branch whose rot is the
 #      problem — regardless of which ref is being pushed.
 #
-# It NEVER blocks the push: this hook always exits 0, matching the fail-soft
-# invariant used by `.githooks/pre-commit` (injectguard) and the Continuous-Audit
-# loop itself (opt-in tooling, not an always-on gate). Every check degrades to
-# silence if its prerequisite (python3, the script, the registry) is absent.
+# Those four checks are advisory and always degrade to silence when their
+# prerequisite (python3, the script, the registry) is absent. They never block.
+#
+# ONE check does block, and it is the first thing this hook does: an ungated
+# commit outstanding in the bypass ledger (`scripts/gate-bypass.py`). That is the
+# consequence half of closing the `--no-verify` hole — the bypass cannot be
+# prevented at commit time, so it is instead made to stop the next push until the
+# content has actually been through the gate. This hook no longer "always exits
+# 0"; that sentence used to be here and is now false, so it is gone rather than
+# left to mislead the next reader.
 #
 # Formalizes the pre-push fragment sketched in
 # scripts/continuous-audit.cron.example into a real, installable hook.
@@ -43,6 +49,29 @@ set -u
 
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 cd "$REPO" 2>/dev/null || exit 0
+
+# --- the one blocking check -------------------------------------------------
+# An ungated commit (created with --no-verify, or replayed by cherry-pick or
+# rebase) must not leave this machine before the gate has seen its content.
+# exit 1 = outstanding, exit 2 = the ledger could not be read; both block, since
+# "could not determine" is not "clean". A missing python3 or missing script also
+# blocks: this check has teeth or it is theatre.
+if command -v python3 >/dev/null 2>&1 && [ -f "$REPO/scripts/gate-bypass.py" ]; then
+    python3 "$REPO/scripts/gate-bypass.py" >/dev/null
+    bypass_rc=$?
+    if [ "$bypass_rc" -ne 0 ]; then
+        python3 "$REPO/scripts/gate-bypass.py" >&2
+        echo "" >&2
+        echo "pre-push: blocked. Push again once the gate has gone green over this" >&2
+        echo "content — a successful pre-commit clears the ledger." >&2
+        exit 1
+    fi
+else
+    echo "" >&2
+    echo "pre-push: cannot check for ungated commits (python3 or" >&2
+    echo "scripts/gate-bypass.py missing) — blocking rather than assuming clean." >&2
+    exit 1
+fi
 
 GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|mutategate|overwatch)/'
 

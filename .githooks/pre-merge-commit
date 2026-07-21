@@ -1,0 +1,9 @@
+#!/bin/sh
+# A merge that creates a commit runs THIS hook, not pre-commit (observed:
+# `merge --no-ff` ran pre-merge-commit + post-commit, and no pre-commit).
+# Without it, every true merge commit would land uninspected and then be
+# recorded as a bypass — the gate would look like it was being evaded by the
+# repository's own normal workflow.
+#
+# Same gate, same certification: run pre-commit's body verbatim.
+exec "$(dirname "$0")/pre-commit"

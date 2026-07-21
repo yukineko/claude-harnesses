@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::loadset::LoadSet;
 use harness_core::hook::HookInput;
 use harness_core::store::Store;
+use harness_core::verdict::Determination;
 
 const READ_CAP: u64 = 256 * 1024;
 const SECTION_CAP_CHARS: usize = 1500;
@@ -53,6 +54,41 @@ pub fn run(input: &HookInput, cfg: &Config) -> Option<String> {
     }
 }
 
+/// Pick the note to restore from: this session's own note first, then the
+/// cross-session fallback.
+///
+/// `None` means **there is no note to restore** — a real observation. It is not
+/// where an unreadable note store lands: if [`Store::list_notes`] came back
+/// `Undetermined`, that is reported on stderr and this returns `None` only
+/// after having said so. Before the tri-state migration the `?` here swallowed
+/// an unreadable store into the same silent `None` as a fresh project, so a
+/// SessionStart injected nothing and never explained why.
+fn auto_select_note(store: &Store, cwd: &Path, session_id: &str) -> Option<PathBuf> {
+    let own = match store.latest_note_for_session(cwd, session_id) {
+        Determination::Known(own) => own,
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "ctxrot restore: 退避ノートを読めませんでした（前回の引き継ぎ有無は不明。\
+                 「引き継ぎ無し」ではありません）: {why}"
+            );
+            return None;
+        }
+    };
+    if own.is_some() {
+        return own;
+    }
+    match store.latest_fallback_note(cwd) {
+        Determination::Known(fallback) => fallback,
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "ctxrot restore: 退避ノートを読めませんでした（前回の引き継ぎ有無は不明。\
+                 「引き継ぎ無し」ではありません）: {why}"
+            );
+            None
+        }
+    }
+}
+
 /// The prior-session carryover derived from the latest note, honoring the
 /// `inject_decisions` / `inject_todos` switches. None when there is no note (or
 /// both sections are off/empty and the note carries nothing else worth a pointer).
@@ -68,17 +104,11 @@ fn note_carryover(input: &HookInput, cfg: &Config, cwd: &Path) -> Option<String>
             (p, true)
         } else {
             // Pinned note is gone; fall back silently to auto-selection.
-            let auto = store
-                .latest_note_for_session(cwd, &input.session_id)
-                .or_else(|| store.latest_fallback_note(cwd))?;
-            (auto, false)
+            (auto_select_note(&store, cwd, &input.session_id)?, false)
         }
     } else {
         // Normal auto-selection: prefer this session's own note, then latest safe note.
-        let auto = store
-            .latest_note_for_session(cwd, &input.session_id)
-            .or_else(|| store.latest_fallback_note(cwd))?;
-        (auto, false)
+        (auto_select_note(&store, cwd, &input.session_id)?, false)
     };
 
     let meta = std::fs::metadata(&latest).ok()?;

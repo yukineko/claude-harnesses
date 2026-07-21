@@ -4,18 +4,29 @@
 //! receives the overage notice and can wind down gracefully. A warn-only
 //! crossing emits `{"additionalContext":"…"}` (advisory, no block). Harness
 //! errors always exit 0 and allow the stop.
+//!
+//! **A spend that could not be determined is not a spend of $0.** When this
+//! session's cost cannot be measured (currently: the sibling `subagents/`
+//! transcript dir exists but cannot be enumerated, so sub-agent spend is missing
+//! by an unknown amount), the gate resolves to the restricted side via
+//! [`undetermined_verdict`] instead of `Allow`.
 
 use harness_core::estimate_transcript_cost;
 use harness_core::pricing;
 use harness_core::session::{self, SessionRecord};
+use harness_core::verdict::{Determination, Reason};
 use serde_json::json;
 
 use crate::config::Config;
 use harness_core::ledger::Ledger;
 
 pub struct GateResult {
-    pub session_usd: f64,
-    pub day_usd: f64,
+    /// `None` when this session's cost could not be determined — printed as
+    /// `unknown`, never as a number the gate did not measure.
+    pub session_usd: Option<f64>,
+    /// `None` when the day total could not be advanced because this session's
+    /// cost is unknown (the ledger is deliberately left untouched then).
+    pub day_usd: Option<f64>,
     pub verdict: Verdict,
 }
 
@@ -39,12 +50,29 @@ pub fn evaluate(
     // before gauge's, and under-counting the current turn would let a turn
     // slip over budget. So a stale/missing/empty record falls back to the
     // accurate, timely `estimate_transcript_cost` (the pre-existing behavior).
-    let session_usd = session_cost(
+    let session_usd = match session_cost(
         cfg,
         &session::default_state_dir(),
         session_id,
         transcript_path,
-    )?;
+    ) {
+        // Cost measured. (`Known(None)` = no transcript data at all — nothing to
+        // price, which is the pre-existing "allow silently" path.)
+        Determination::Known(Some(usd)) => usd,
+        Determination::Known(None) => return None,
+        Determination::Undetermined(why) => {
+            // This session's spend could not be measured. Do NOT write an
+            // under-counted number into the day ledger (that would bake the
+            // under-count into every later day total), and do NOT fall through
+            // to `verdict()`, which would read the missing spend as headroom.
+            eprintln!("budgetguard: session cost undetermined: {why}");
+            return Some(GateResult {
+                session_usd: None,
+                day_usd: None,
+                verdict: undetermined_verdict(cfg, &why),
+            });
+        }
+    };
 
     // Update the daily ledger with this session's latest cost. Serialize the
     // whole load → record → save against other concurrent sessions so a
@@ -72,19 +100,56 @@ pub fn evaluate(
 
     let verdict = verdict(cfg, session_usd, day_usd);
     Some(GateResult {
-        session_usd,
-        day_usd,
+        session_usd: Some(session_usd),
+        day_usd: Some(day_usd),
         verdict,
     })
+}
+
+/// The verdict for "this session's spend could not be measured".
+///
+/// The invariant is that an undetermined spend must never be treated as
+/// headroom, so this never returns `Allow` while any limit is armed:
+///
+/// * a **block** limit configured (`> 0.0`) → `Block`. An unmeasured spend
+///   could be over it, and the whole point of a block limit is that the turn
+///   does not continue past it on an assumption.
+/// * otherwise a **warn** limit configured → `Warn`. The operator asked to be
+///   told about spend, so they are told that spend is unknown.
+/// * every limit `0.0` (the gate is switched off — `verdict` already returns
+///   `Allow` for *any* cost in that config, see `zero_threshold_means_disabled`)
+///   → `Allow`. There is no threshold an under-count could hide a crossing of,
+///   so this is not the undetermined answer collapsing into a pass; it is the
+///   gate being disabled.
+fn undetermined_verdict(cfg: &Config, why: &Reason) -> Verdict {
+    let msg = format!(
+        "budgetguard: このセッションの費用を測定できませんでした（{why}）。\n\
+         未計測の支出は $0 ではありません。作業を保存し、コミットして終了してください。"
+    );
+    if cfg.session_block_usd > 0.0 || cfg.daily_block_usd > 0.0 {
+        Verdict::Block(msg)
+    } else if cfg.session_warn_usd > 0.0 || cfg.daily_warn_usd > 0.0 {
+        Verdict::Warn(format!("⚠ {msg}"))
+    } else {
+        Verdict::Allow
+    }
 }
 
 /// Resolve this session's USD cost. Prefers gauge's persisted canonical
 /// `SessionRecord` (looked up under `gauge_state_dir` — gauge's own store, NOT
 /// `cfg.state_dir`, which is budgetguard's ledger dir) when it is fresh enough
 /// to cover the current turn (see [`record_is_fresh`]); otherwise falls back
-/// to a full transcript re-parse via [`estimate_transcript_cost`]. `None`
-/// propagates the same data-error fail-soft behavior `estimate_transcript_cost`
-/// already had (empty/unreadable transcript => allow the stop).
+/// to a full transcript re-parse via [`estimate_transcript_cost`].
+///
+/// Three answers, not two:
+///
+/// * `Known(Some(usd))` — the cost was measured.
+/// * `Known(None)` — there is nothing to price (empty/unreadable transcript and
+///   no usable record). Same fail-soft data-error path as before: the caller
+///   allows the stop, because no spend was observed *and none was missed*.
+/// * `Undetermined(why)` — a spend source could not be read, so any number here
+///   would be an under-count (see [`TranscriptCostEstimate::complete_cost`]).
+///   The caller must not price this as `0`.
 ///
 /// `gauge_state_dir` is a parameter (rather than calling
 /// `session::default_state_dir()` directly) so tests can point it at a
@@ -95,16 +160,21 @@ fn session_cost(
     gauge_state_dir: &std::path::Path,
     session_id: &str,
     transcript_path: &str,
-) -> Option<f64> {
+) -> Determination<Option<f64>> {
     if let Some(rec) = session::load_one(gauge_state_dir, session_id) {
         if !rec.models.is_empty() && record_is_fresh(&rec, transcript_path) {
-            return Some(pricing::session_cost(
+            return Determination::Known(Some(pricing::session_cost(
                 rec.models.iter(),
                 &cfg.price_overrides,
-            ));
+            )));
         }
     }
-    Some(estimate_transcript_cost(transcript_path, &cfg.price_overrides)?.cost_usd)
+    match estimate_transcript_cost(transcript_path, &cfg.price_overrides) {
+        None => Determination::Known(None),
+        // `complete_cost` refuses to hand over a cost whose sub-agent spend was
+        // not readable — exactly the under-count this gate must not allow.
+        Some(est) => est.complete_cost().map(Some),
+    }
 }
 
 /// A gauge record "covers the current turn" when it was written at/after the
@@ -184,10 +254,19 @@ pub fn emit_and_exit(result: Option<GateResult>) -> ! {
         }
         Some(r) => {
             // Running totals to stderr (operator-visible log; never touches the
-            // stdout JSON the hook protocol parses).
+            // stdout JSON the hook protocol parses). An unmeasured total prints
+            // as `unknown`, never as `$0.0000` — the operator must be able to
+            // tell "spent nothing" from "could not tell".
+            fn usd(v: Option<f64>) -> String {
+                match v {
+                    Some(v) => format!("${v:.4}"),
+                    None => "unknown".to_string(),
+                }
+            }
             eprintln!(
-                "budgetguard: session ${:.4} / day ${:.4}",
-                r.session_usd, r.day_usd
+                "budgetguard: session {} / day {}",
+                usd(r.session_usd),
+                usd(r.day_usd)
             );
             match r.verdict {
                 Verdict::Allow => std::process::exit(0),
@@ -217,6 +296,23 @@ mod tests {
         assert!(budget_pressure(9.0, 5.0));
         // Unset (non-positive) threshold => never pressure, matching the gate.
         assert!(!budget_pressure(100.0, 0.0));
+    }
+
+    /// Resolve a `session_cost` result that must be `Known` (the fixtures below
+    /// all have a readable transcript and no sub-agent dir). Panics rather than
+    /// substituting `0.0` if it came back `Undetermined`, so a regression that
+    /// makes these paths undeterminable fails loudly instead of asserting over
+    /// a fabricated cost.
+    fn known_cost(d: Determination<Option<f64>>) -> Option<f64> {
+        match d {
+            Determination::Known(v) => v,
+            // `unreachable!` rather than `panic!`, because this crate denies
+            // `clippy::panic` (see main.rs). It still fails the test loudly and
+            // prints the reason — it never substitutes a fabricated cost.
+            Determination::Undetermined(why) => {
+                unreachable!("cost must be Known here, got Undetermined({why:?})")
+            }
+        }
     }
 
     fn cfg(sw: f64, sb: f64, dw: f64, db: f64) -> Config {
@@ -332,8 +428,13 @@ mod tests {
         session::upsert(store.path(), &rec);
 
         let cfg = Config::default();
-        let via_record = session_cost(&cfg, store.path(), "sess-fresh", tp.to_str().unwrap())
-            .expect("fresh record path");
+        let via_record = known_cost(session_cost(
+            &cfg,
+            store.path(),
+            "sess-fresh",
+            tp.to_str().unwrap(),
+        ))
+        .expect("fresh record path");
         let via_parse = estimate_transcript_cost(tp.to_str().unwrap(), &cfg.price_overrides)
             .expect("transcript parse")
             .cost_usd;
@@ -362,8 +463,13 @@ mod tests {
         session::upsert(store.path(), &rec);
 
         let cfg = Config::default();
-        let cost = session_cost(&cfg, store.path(), "sess-fresh", tp.to_str().unwrap())
-            .expect("fallback path");
+        let cost = known_cost(session_cost(
+            &cfg,
+            store.path(),
+            "sess-fresh",
+            tp.to_str().unwrap(),
+        ))
+        .expect("fallback path");
         // Falls back to the transcript (same fixture => same $30.00), proving
         // the stale record's numbers were NOT used blindly (record_is_fresh
         // gated it out even though it happens to carry identical usage here).
@@ -381,8 +487,13 @@ mod tests {
         let store = tempfile::tempdir().unwrap(); // empty — no record written
 
         let cfg = Config::default();
-        let cost = session_cost(&cfg, store.path(), "no-such-session", tp.to_str().unwrap())
-            .expect("fallback path");
+        let cost = known_cost(session_cost(
+            &cfg,
+            store.path(),
+            "no-such-session",
+            tp.to_str().unwrap(),
+        ))
+        .expect("fallback path");
         assert!((cost - 30.0).abs() < 1e-9, "{cost}");
 
         let _ = std::fs::remove_file(&tp);
@@ -402,11 +513,112 @@ mod tests {
         session::upsert(store.path(), &rec);
 
         let cfg = Config::default();
-        let cost = session_cost(&cfg, store.path(), "sess-fresh", tp.to_str().unwrap())
-            .expect("fallback path");
+        let cost = known_cost(session_cost(
+            &cfg,
+            store.path(),
+            "sess-fresh",
+            tp.to_str().unwrap(),
+        ))
+        .expect("fallback path");
         assert!((cost - 30.0).abs() < 1e-9, "{cost}");
 
         let _ = std::fs::remove_file(&tp);
+    }
+
+    /// The fail-open this gate's own docstring warns about ("under-counting the
+    /// current turn would let a turn slip over budget"), exercised end to end: a
+    /// transcript whose sibling `subagents/` dir HAS a sub-agent transcript in
+    /// it but cannot be enumerated must not be priced as if that spend were $0.
+    ///
+    /// Before the tri-state migration `subagent_files` returned an empty `Vec`
+    /// here, so the sub-agent spend silently vanished and the gate compared a
+    /// too-small number against the limits.
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_subagents_dir_is_undetermined_and_blocks_when_a_limit_is_armed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = tempfile::tempdir().unwrap();
+        let stem = "sess-undet";
+        let sub_dir = base.path().join(stem).join("subagents");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        let tp = base.path().join(format!("{stem}.jsonl"));
+        // Main transcript: a cheap turn well under any limit.
+        std::fs::write(
+            &tp,
+            concat!(
+                r#"{"type":"assistant","timestamp":"2026-06-22T10:00:01Z","message":{"model":"claude-opus-4-8","content":[],"usage":{"input_tokens":10,"output_tokens":10}}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        // A real, expensive sub-agent whose spend is about to become unreadable.
+        std::fs::write(
+            sub_dir.join("agent-aaa.jsonl"),
+            concat!(
+                r#"{"type":"assistant","isSidechain":true,"message":{"model":"claude-opus-4-8","content":[],"usage":{"input_tokens":1000000,"output_tokens":1000000}}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let store = tempfile::tempdir().unwrap(); // no gauge record → transcript path
+        let cfg = Config {
+            session_block_usd: 10.0,
+            ..Config::default()
+        };
+        let tp_str = tp.to_str().unwrap();
+
+        // Readable: the sub-agent spend IS counted, and it alone blows the limit.
+        let readable = known_cost(session_cost(&cfg, store.path(), "sess-undet", tp_str))
+            .expect("readable cost");
+        assert!(
+            readable > 10.0,
+            "fixture must exceed the block limit while readable: {readable}"
+        );
+
+        std::fs::set_permissions(&sub_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(
+            std::fs::read_dir(&sub_dir).is_err(),
+            "precondition: subagents dir must be unreadable as this user (root?)"
+        );
+
+        let got = session_cost(&cfg, store.path(), "sess-undet", tp_str);
+        // Restore before asserting, so a red assertion never leaves the dir
+        // locked for the TempDir cleanup.
+        let _ = std::fs::set_permissions(&sub_dir, std::fs::Permissions::from_mode(0o755));
+        let why = match got {
+            Determination::Undetermined(why) => why,
+            // `unreachable!` rather than `panic!` (crate denies clippy::panic).
+            Determination::Known(v) => {
+                unreachable!("an unreadable sub-agent spend must be Undetermined, priced as {v:?}")
+            }
+        };
+
+        // …and the gate resolves that to the restricted side, not Allow.
+        assert!(
+            matches!(undetermined_verdict(&cfg, &why), Verdict::Block(_)),
+            "an armed block limit must block on an unmeasurable spend"
+        );
+        // Warn-only config: still not Allow.
+        let warn_cfg = Config {
+            session_warn_usd: 1.0,
+            ..Config::default()
+        };
+        assert!(matches!(
+            undetermined_verdict(&warn_cfg, &why),
+            Verdict::Warn(_)
+        ));
+        // Every limit disabled → the gate is off; `verdict` allows ANY cost in
+        // that config, so there is no threshold an under-count could hide.
+        assert!(matches!(
+            undetermined_verdict(&Config::default(), &why),
+            Verdict::Allow
+        ));
+        assert!(matches!(
+            verdict(&Config::default(), 999.0, 999.0),
+            Verdict::Allow
+        ));
     }
 
     /// (c) Enforcement (verdict + day ledger) is unchanged by the cost source:
@@ -434,8 +646,13 @@ mod tests {
             ..Config::default()
         };
 
-        let session_usd =
-            session_cost(&cfg, store.path(), "sess-enforce", tp.to_str().unwrap()).expect("cost");
+        let session_usd = known_cost(session_cost(
+            &cfg,
+            store.path(),
+            "sess-enforce",
+            tp.to_str().unwrap(),
+        ))
+        .expect("cost");
         assert!((session_usd - 30.0).abs() < 1e-9);
         assert!(matches!(
             verdict(&cfg, session_usd, session_usd),

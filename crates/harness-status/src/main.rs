@@ -129,7 +129,24 @@ fn main() {
             }
         }
         Some(Command::Sessions) => {
-            let s = sessions::recent(cli.sessions);
+            let s = match sessions::recent(cli.sessions) {
+                harness_core::verdict::Determination::Known(s) => s,
+                // Silence here would read as "no sessions". Say unknown and
+                // exit non-zero so a script cannot mistake it for an empty run.
+                harness_core::verdict::Determination::Undetermined(why) => {
+                    if cli.json {
+                        println!(
+                            "{}",
+                            serde_json::json!({"status": "unknown", "reason": why.as_str()})
+                        );
+                    } else {
+                        eprintln!(
+                            "sessions: unknown — gauge's session store could not be read: {why}"
+                        );
+                    }
+                    std::process::exit(1);
+                }
+            };
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
             } else {

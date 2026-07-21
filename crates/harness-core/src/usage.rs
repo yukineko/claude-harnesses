@@ -1,9 +1,16 @@
 //! Per-model token/usage aggregation from a session's JSONL transcript.
 //!
 //! Aggregate one session's transcript into per-model token usage, tool call
-//! counts, and a timespan. Everything is fail-soft: any read/parse error yields
-//! `None` (the caller then records nothing), and an unknown transcript shape
-//! never breaks the turn.
+//! counts, and a timespan. A missing/unreadable *main transcript* and an
+//! unparseable individual line are fail-soft: the former yields `None` (the
+//! caller records nothing), the latter is skipped.
+//!
+//! The **sub-agent** side is deliberately not fail-soft, because there its
+//! failure mode is an under-count rather than an absence: when the sibling
+//! `<stem>/subagents/` directory exists but cannot be enumerated, that is
+//! reported as [`Determination::Undetermined`] (on
+//! [`Aggregate::subagent_scan`] / from [`subagent_usage`]), never as an empty
+//! list. An unreadable sub-agent directory is not a session without sub-agents.
 //!
 //! Each assistant line carries a `message.usage` block (`input_tokens`,
 //! `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`,
@@ -20,6 +27,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::verdict::{Determination, Reason};
 
 /// Agent bucket key for the main (top-level) conversation.
 pub const AGENT_MAIN: &str = "main";
@@ -80,7 +89,7 @@ impl AgentUsage {
 /// `models`/`turns` are the session grand total (main + sub-agent); `agents`
 /// splits the same totals by [`AGENT_MAIN`] / [`AGENT_SUB`] so reports can show
 /// where the spend went.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Aggregate {
     pub models: BTreeMap<String, ModelUsage>,
     /// Number of assistant model requests (turns) with usage.
@@ -90,6 +99,54 @@ pub struct Aggregate {
     pub last_ts: Option<String>,
     /// Per-agent breakdown keyed by [`AGENT_MAIN`] / [`AGENT_SUB`].
     pub agents: BTreeMap<String, AgentUsage>,
+    /// Whether every sub-agent spend source that applies to this transcript was
+    /// actually read.
+    ///
+    /// `Known(())` — nothing was left unread: either the sub-agent turns were
+    /// inline in the main transcript, or the sibling `<stem>/subagents/`
+    /// directory was enumerated to completion (including "it is absent").
+    ///
+    /// `Undetermined(why)` — the sibling `subagents/` directory exists but
+    /// could not be walked, so **the totals in this struct are an under-count
+    /// of unknown size**. A consumer that prices this aggregate (budgetguard's
+    /// budget gate, gauge's persisted [`crate::session::SessionRecord`]) must
+    /// not treat the number as a spend measurement; use
+    /// [`Aggregate::complete`] to get that refusal as a value.
+    pub subagent_scan: Determination<()>,
+}
+
+impl Default for Aggregate {
+    /// A zeroed accumulator. `subagent_scan` starts at `Known(())` because a
+    /// freshly-built accumulator has not *attempted* any sub-agent scan, and so
+    /// cannot have failed one; only [`aggregate`] moves it to `Undetermined`,
+    /// and it does so before the value is ever handed to a caller. This is not
+    /// a defaulted pass over a check that ran — there is no check yet.
+    fn default() -> Self {
+        Aggregate {
+            models: BTreeMap::new(),
+            turns: 0,
+            tools: BTreeMap::new(),
+            first_ts: None,
+            last_ts: None,
+            agents: BTreeMap::new(),
+            subagent_scan: Determination::Known(()),
+        }
+    }
+}
+
+impl Aggregate {
+    /// This aggregate, but only when every sub-agent source was read — the
+    /// fail-closed accessor for consumers whose answer depends on the totals
+    /// being complete (a budget gate, a persisted canonical record).
+    ///
+    /// `Undetermined` carries the same reason [`subagent_scan`](Self::subagent_scan)
+    /// holds, so `?` on `require()` short-circuits to a fail-closed verdict.
+    pub fn complete(self) -> Determination<Self> {
+        match &self.subagent_scan {
+            Determination::Known(()) => Determination::Known(self),
+            Determination::Undetermined(why) => Determination::Undetermined(why.clone()),
+        }
+    }
 }
 
 /// Aggregate one session's transcript at `path` into per-model usage.
@@ -105,6 +162,15 @@ pub struct Aggregate {
 /// sub-agent has its own file under `<transcript-stem>/subagents/*.jsonl`. The
 /// sibling files are only read when the main transcript had no inline sidechain
 /// lines, so the two layouts never double-count.
+///
+/// **When the sibling `subagents/` directory exists but cannot be enumerated,
+/// this does NOT return `None`** — `None` means "no transcript / nothing
+/// recorded", and collapsing "could not read the sub-agent spend" into it would
+/// hand a caller silence where an under-count happened. Instead the returned
+/// [`Aggregate`] carries `subagent_scan = Undetermined(why)` (see
+/// [`Aggregate::complete`]), and it is returned even when the main transcript
+/// contributed no turns or tools, so the undetermined answer always reaches the
+/// caller.
 pub fn aggregate(path: &str) -> Option<Aggregate> {
     if path.is_empty() {
         return None;
@@ -118,9 +184,20 @@ pub fn aggregate(path: &str) -> Option<Aggregate> {
     // Newer layout: sub-agent transcripts live in sibling files. Only fold them
     // in when the main transcript carried no inline sidechain turns.
     if !saw_inline_sub {
-        for file in subagent_files(path) {
-            if let Ok(sub_text) = std::fs::read_to_string(&file) {
-                ingest(&mut agg, &sub_text, Some(AGENT_SUB), false, false);
+        match subagent_files(path) {
+            Determination::Known(files) => {
+                for file in files {
+                    if let Ok(sub_text) = std::fs::read_to_string(&file) {
+                        ingest(&mut agg, &sub_text, Some(AGENT_SUB), false, false);
+                    }
+                }
+            }
+            Determination::Undetermined(why) => {
+                // The sub-agent spend for this session could not be read: these
+                // totals are an under-count. Say so instead of returning them
+                // (or an empty `None`) as if they were the whole session.
+                agg.subagent_scan = Determination::Undetermined(why);
+                return Some(agg);
             }
         }
     }
@@ -270,38 +347,48 @@ impl SubAgentUsage {
 /// controls the `Task` description).
 ///
 /// Reads the transcript files directly (not the post-Stop store), so it sees
-/// the spend of a sub-agent that has just finished, mid-session. Returns empty
-/// when the `subagents/` directory is absent (e.g. the older inline-sidechain
-/// layout, which is not attributable per agent). Fail-soft: unreadable files and
-/// parse errors are skipped.
-pub fn subagent_usage(main_transcript: &str) -> Vec<SubAgentUsage> {
-    let mut out = Vec::new();
-    for file in subagent_files(main_transcript) {
-        let Ok(text) = std::fs::read_to_string(&file) else {
-            continue;
-        };
-        let mut agg = Aggregate::default();
-        ingest(&mut agg, &text, Some(AGENT_SUB), false, false);
-        if agg.turns == 0 {
-            continue;
+/// the spend of a sub-agent that has just finished, mid-session.
+///
+/// Three-valued (see [`Determination`]): `Known(vec![])` when the `subagents/`
+/// directory is genuinely **absent** (e.g. the older inline-sidechain layout,
+/// which is not attributable per agent) or holds no sub-agent with usage;
+/// `Undetermined(why)` when the directory exists but could not be enumerated.
+/// The two must not collapse — an unreadable directory reported as an empty
+/// list is "this session spent nothing on sub-agents", which is a claim this
+/// function did not observe.
+///
+/// Within a successfully enumerated directory, individual unreadable files and
+/// per-line parse errors are still skipped.
+pub fn subagent_usage(main_transcript: &str) -> Determination<Vec<SubAgentUsage>> {
+    subagent_files(main_transcript).map(|files| {
+        let mut out = Vec::new();
+        for file in files {
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            let mut agg = Aggregate::default();
+            ingest(&mut agg, &text, Some(AGENT_SUB), false, false);
+            if agg.turns == 0 {
+                continue;
+            }
+            // agent_id from the `agent-<id>.jsonl` stem.
+            let stem = file
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
+            let agent_id = stem.strip_prefix("agent-").unwrap_or(stem).to_string();
+            // Sidecar: agent-<id>.jsonl -> agent-<id>.meta.json.
+            let (agent_type, description) = read_subagent_meta(&file.with_extension("meta.json"));
+            out.push(SubAgentUsage {
+                agent_id,
+                agent_type,
+                description,
+                models: agg.models,
+                turns: agg.turns,
+            });
         }
-        // agent_id from the `agent-<id>.jsonl` stem.
-        let stem = file
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default();
-        let agent_id = stem.strip_prefix("agent-").unwrap_or(stem).to_string();
-        // Sidecar: agent-<id>.jsonl -> agent-<id>.meta.json.
-        let (agent_type, description) = read_subagent_meta(&file.with_extension("meta.json"));
-        out.push(SubAgentUsage {
-            agent_id,
-            agent_type,
-            description,
-            models: agg.models,
-            turns: agg.turns,
-        });
-    }
-    out
+        out
+    })
 }
 
 /// Read `{agentType, description}` from an `agent-<id>.meta.json` sidecar.
@@ -323,27 +410,71 @@ fn read_subagent_meta(meta_path: &Path) -> (Option<String>, Option<String>) {
 }
 
 /// Locate sub-agent transcript files for a main transcript at `main_path`:
-/// `<dir>/<stem>/subagents/*.jsonl`. Returns empty if the directory is absent.
-fn subagent_files(main_path: &str) -> Vec<PathBuf> {
+/// `<dir>/<stem>/subagents/*.jsonl`.
+///
+/// `Known(vec![])` when the directory is genuinely **absent** (`NotFound`, or a
+/// `main_path` with no parent/stem — no sub-agent layout can exist there);
+/// `Undetermined(why)` when it exists but `read_dir` failed (permissions, IO)
+/// or one of its entries could not be read. A partial listing is never
+/// returned: every caller folds these files into a spend total, so a truncated
+/// list is an under-count presented as a measurement. `why` carries the
+/// directory path and the OS error.
+fn subagent_files(main_path: &str) -> Determination<Vec<PathBuf>> {
     let p = Path::new(main_path);
     let (Some(parent), Some(stem)) = (p.parent(), p.file_stem()) else {
-        return Vec::new();
+        return Determination::Known(Vec::new());
     };
     let dir = parent.join(stem).join("subagents");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Vec::new();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        // No subagents dir at all: this session has no per-agent transcripts.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Determination::Known(Vec::new())
+        }
+        Err(e) => {
+            return Determination::Undetermined(Reason::new(format!(
+                "sub-agent transcript dir {} could not be read: {e}",
+                dir.display()
+            )))
+        }
     };
-    entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl"))
-        .collect()
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                return Determination::Undetermined(Reason::new(format!(
+                    "sub-agent transcript dir {}: a directory entry could not be \
+                     read (listing is incomplete): {e}",
+                    dir.display()
+                )))
+            }
+        };
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            out.push(path);
+        }
+    }
+    Determination::Known(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// Resolve a `Determination` in a test whose sub-agent dir is readable by
+    /// construction. Panics (rather than substituting an empty list) if it came
+    /// back `Undetermined`, so a regression cannot make these assertions pass
+    /// vacuously over an empty vec.
+    fn known<T>(d: Determination<T>) -> T {
+        match d {
+            Determination::Known(v) => v,
+            Determination::Undetermined(why) => {
+                panic!("readable subagents dir must be Known, got Undetermined({why:?})")
+            }
+        }
+    }
 
     fn write_temp(name: &str, body: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
@@ -547,7 +678,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut subs = subagent_usage(main_path.to_str().unwrap());
+        let mut subs = known(subagent_usage(main_path.to_str().unwrap()));
         subs.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
         assert_eq!(subs.len(), 2, "one entry per sub-agent");
 
@@ -575,8 +706,8 @@ mod tests {
                 "\n",
             ),
         );
-        assert!(subagent_usage(path.to_str().unwrap()).is_empty());
-        assert!(subagent_usage("").is_empty());
+        assert!(known(subagent_usage(path.to_str().unwrap())).is_empty());
+        assert!(known(subagent_usage("")).is_empty());
         let _ = std::fs::remove_file(&path);
     }
 }

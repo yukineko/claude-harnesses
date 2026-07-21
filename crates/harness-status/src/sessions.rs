@@ -8,6 +8,7 @@
 use serde::Serialize;
 
 use harness_core::ledger::Ledger;
+use harness_core::verdict::Determination;
 use harness_core::{pricing, session};
 
 #[derive(Debug, Serialize, Clone)]
@@ -20,10 +21,31 @@ pub struct SessionSummary {
     pub cost_usd: f64,
 }
 
-pub fn recent(n: usize) -> Vec<SessionSummary> {
-    let mut records = session::load_all(&session::default_state_dir());
+/// The `n` most recent sessions gauge recorded.
+///
+/// Three-valued because the display layer must be able to say **unknown**:
+/// `Known(vec![])` is "gauge recorded no sessions" (the honest empty state this
+/// panel already renders as "No session records found — gauge not installed?"),
+/// while `Undetermined` is "gauge's store could not be read". Collapsing the
+/// latter into an empty `Vec` — which this function used to do — made an
+/// unreadable store render as a confident "no sessions", and this panel's
+/// numbers are read by a human as spend.
+///
+/// This function holds no allow/block verdict, but it is not exempt from
+/// [`Determination`] on that ground: the exemption in `CLAUDE.md` is for output
+/// no consumer can read as "fine", and its two consumers both render silence as
+/// an affirmative statement about spend —
+/// `crates/harness-status/src/main.rs:132` (`sessions` subcommand: an empty
+/// list prints nothing at all) and `crates/harness-status/src/main.rs:330`
+/// (default report → `crates/harness-status/src/display.rs:64`, which prints
+/// "No session records found"). Both are updated to print `unknown` instead.
+pub fn recent(n: usize) -> Determination<Vec<SessionSummary>> {
+    let mut records = match session::load_all(&session::default_state_dir()) {
+        Determination::Known(records) => records,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
     if records.is_empty() {
-        return vec![];
+        return Determination::Known(vec![]);
     }
 
     // Sort newest first.
@@ -35,7 +57,7 @@ pub fn recent(n: usize) -> Vec<SessionSummary> {
     // only when a session isn't in the ledger (gauge ran but budgetguard didn't).
     let ledger = Ledger::load(&harness_core::ledger::default_state_dir());
 
-    records
+    let summaries = records
         .into_iter()
         .map(|r| {
             let total_tokens = r.total_tokens();
@@ -51,5 +73,6 @@ pub fn recent(n: usize) -> Vec<SessionSummary> {
                 cost_usd,
             }
         })
-        .collect()
+        .collect();
+    Determination::Known(summaries)
 }

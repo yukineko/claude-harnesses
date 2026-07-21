@@ -7,8 +7,18 @@
 //!
 //! Like the rest of the toolkit the hook can only *observe*: `record` runs
 //! under `run_hook`, which catches panics and always exits 0, so bad/empty
-//! stdin, a missing transcript, or an unwritable store all silently record
-//! nothing rather than break the turn.
+//! stdin, a missing transcript, or an unwritable store all record nothing
+//! rather than break the turn.
+//!
+//! Two things are deliberately NOT silent, because "observe" must not degrade
+//! into "assert a number nobody measured":
+//!
+//! * `record` refuses to persist an aggregate whose sub-agent spend could not
+//!   be read (an under-count would be baked into the canonical `SessionRecord`
+//!   that budgetguard's gate then trusts), and says so on stderr.
+//! * the read commands (`report` / `session` / `status` / `subagents`) print
+//!   **`unknown`** and exit non-zero when the store or the sub-agent transcripts
+//!   cannot be read. An unreadable store is not "$0.00 across 0 sessions".
 
 mod config;
 mod install;
@@ -22,6 +32,7 @@ use std::path::Path;
 use clap::{Parser, Subcommand};
 
 use harness_core::hook::{read_stdin, run_hook};
+use harness_core::verdict::Determination;
 use harness_core::{pricing, usage};
 
 use config::Config;
@@ -190,12 +201,29 @@ fn record_hook() {
     else {
         return;
     };
+    // An aggregate whose sub-agent spend could not be read is an under-count of
+    // unknown size. Persisting it would write that under-count into the
+    // canonical record budgetguard's gate prefers as its cost source
+    // (crates/budgetguard/src/gate.rs:164), where it would look like a measured
+    // number forever. Record nothing instead, and say why.
+    let aggregate = match est.aggregate.complete() {
+        Determination::Known(aggregate) => aggregate,
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "gauge: not recording session {}: its cost could not be fully \
+                 determined ({why}); the canonical record must not hold an \
+                 under-count",
+                input.session_id
+            );
+            return;
+        }
+    };
 
     let rec = SessionRecord::from_aggregate(
         input.session_id.clone(),
         input.project_name(),
         root.to_string_lossy().to_string(),
-        est.aggregate,
+        aggregate,
         cfg.track_tools,
         chrono::Local::now().to_rfc3339(),
     );
@@ -205,7 +233,7 @@ fn record_hook() {
 fn report_cmd(project: Option<String>, since: Option<String>) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
-    let mut records = store::load_all(&cfg.state_dir);
+    let mut records = known_records(store::load_all(&cfg.state_dir));
     if let Some(p) = project.as_deref() {
         let needle = p.to_lowercase();
         records.retain(|r| r.project.to_lowercase().contains(&needle));
@@ -223,7 +251,7 @@ fn session_cmd(json: bool, session_id: Option<&str>) {
     let rec = if let Some(id) = session_id {
         store::load_one(cfg.state_dir.as_path(), id)
     } else {
-        store::load_all(&cfg.state_dir)
+        known_records(store::load_all(&cfg.state_dir))
             .into_iter()
             .max_by(|a, b| a.updated_at.cmp(&b.updated_at))
     };
@@ -368,7 +396,27 @@ fn subagents_cmd(json: bool, session_id: Option<&str>) {
         }
         return;
     };
-    let subs = usage::subagent_usage(&path.to_string_lossy());
+    let subs = match usage::subagent_usage(&path.to_string_lossy()) {
+        Determination::Known(subs) => subs,
+        // The sub-agent transcripts exist but could not be enumerated. Printing
+        // `[]` here would tell condukt's cost attribution
+        // (crates/condukt/src/state.rs:1291) "this session had no sub-agent
+        // spend", which is a claim gauge did not observe. Fail loudly instead:
+        // a non-zero exit makes condukt's soft probe fall back rather than
+        // record a fabricated zero.
+        Determination::Undetermined(why) => {
+            eprintln!("gauge: sub-agent usage unknown: {why}");
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({"status": "unknown", "reason": why.as_str()})
+                );
+            } else {
+                println!("sub-agent usage: unknown ({why})");
+            }
+            std::process::exit(1);
+        }
+    };
     let cost_of =
         |s: &usage::SubAgentUsage| -> f64 { pricing::session_cost(s.models.iter(), &cfg.pricing) };
 
@@ -420,6 +468,25 @@ fn subagents_cmd(json: bool, session_id: Option<&str>) {
     }
 }
 
+/// Resolve a session-store listing for a *read* command, or refuse to print.
+///
+/// An unreadable store must never render as an empty report ("no sessions
+/// recorded yet.", `$0.00`) — that is indistinguishable from a store that is
+/// genuinely empty. There is no useful restricted output for these commands, so
+/// they say `unknown` on stderr and exit non-zero.
+fn known_records(d: Determination<Vec<SessionRecord>>) -> Vec<SessionRecord> {
+    match d {
+        Determination::Known(records) => records,
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "gauge: session store unknown — it could not be read, so this \
+                 report would be blank rather than empty: {why}"
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
 fn duration_secs(rec: &SessionRecord) -> Option<i64> {
     let first = rec.first_ts.as_ref()?;
     let last = rec.last_ts.as_ref()?;
@@ -444,18 +511,28 @@ fn fmt_duration(secs: i64) -> String {
 fn status() {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
-    let records = store::load_all(&cfg.state_dir);
-    let total_cost: f64 = records
-        .iter()
-        .map(|r| pricing::session_cost(r.models.iter(), &cfg.pricing))
-        .sum();
+    // `unknown`, not `0` / `$0.00`: a human reads a zero here as "nothing was
+    // spent". Only a store we actually read may produce a number.
+    let (sessions_line, cost_line) = match store::load_all(&cfg.state_dir) {
+        Determination::Known(records) => {
+            let total_cost: f64 = records
+                .iter()
+                .map(|r| pricing::session_cost(r.models.iter(), &cfg.pricing))
+                .sum();
+            (records.len().to_string(), report::money(total_cost))
+        }
+        Determination::Undetermined(why) => (
+            format!("unknown ({why})"),
+            "unknown (session store unreadable)".to_string(),
+        ),
+    };
 
     println!("config:       {}", Config::config_source(&root).display());
     println!("enabled:      {}", cfg.enabled);
     println!("track_tools:  {}", cfg.track_tools);
     println!("state_dir:    {}", cfg.state_dir.display());
-    println!("sessions:     {}", records.len());
-    println!("total cost:   {}", report::money(total_cost));
+    println!("sessions:     {sessions_line}");
+    println!("total cost:   {cost_line}");
     println!(
         "pricing:      {}",
         if cfg.pricing.is_empty() {

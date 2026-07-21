@@ -45,7 +45,9 @@ impl UnreadableGuard {
     /// current user can still read it afterwards (e.g. running as root) —
     /// this constructor only performs the chmod.
     fn lock(dir: &Path) -> Self {
-        let mut perms = std::fs::metadata(dir).expect("stat dir before chmod").permissions();
+        let mut perms = std::fs::metadata(dir)
+            .expect("stat dir before chmod")
+            .permissions();
         perms.set_mode(0o000);
         std::fs::set_permissions(dir, perms).expect("chmod dir to 0o000");
         UnreadableGuard {
@@ -93,7 +95,11 @@ fn session_load_all_reports_undetermined_on_unreadable_dir() {
     let known = session::load_all(state_dir);
     match known {
         Determination::Known(recs) => {
-            assert_eq!(recs.len(), 1, "expected exactly the seeded record: {recs:?}");
+            assert_eq!(
+                recs.len(),
+                1,
+                "expected exactly the seeded record: {recs:?}"
+            );
             assert_eq!(recs[0].session_id, "sess-1");
         }
         Determination::Undetermined(why) => {
@@ -127,7 +133,11 @@ fn store_list_notes_reports_undetermined_on_unreadable_dir() {
     let known = store.list_notes(cwd);
     match known {
         Determination::Known(notes) => {
-            assert_eq!(notes.len(), 1, "expected exactly the seeded note: {notes:?}");
+            assert_eq!(
+                notes.len(),
+                1,
+                "expected exactly the seeded note: {notes:?}"
+            );
         }
         Determination::Undetermined(why) => {
             panic!("readable notes dir must be Known, got Undetermined({why:?})")
@@ -155,7 +165,8 @@ fn usage_subagent_usage_reports_undetermined_on_unreadable_subagents_dir() {
     std::fs::create_dir_all(&sub_dir).expect("mkdir subagents");
 
     let main_path = base.join(format!("{stem}.jsonl"));
-    std::fs::write(&main_path, "{\"type\":\"user\",\"message\":{}}\n").expect("write main transcript");
+    std::fs::write(&main_path, "{\"type\":\"user\",\"message\":{}}\n")
+        .expect("write main transcript");
 
     // One valid sub-agent transcript line with real usage.
     std::fs::write(
@@ -173,7 +184,11 @@ fn usage_subagent_usage_reports_undetermined_on_unreadable_subagents_dir() {
     let known = usage::subagent_usage(main_path_str);
     match known {
         Determination::Known(subs) => {
-            assert_eq!(subs.len(), 1, "expected exactly the seeded sub-agent: {subs:?}");
+            assert_eq!(
+                subs.len(),
+                1,
+                "expected exactly the seeded sub-agent: {subs:?}"
+            );
             assert_eq!(subs[0].agent_id, "aaa");
         }
         Determination::Undetermined(why) => {

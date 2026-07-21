@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 
+use crate::verdict::Determination;
+
 /// Stable, human-readable project key from a cwd: basename + short hash of the
 /// full path (so two different `src/` dirs don't collide).
 pub fn project_key(cwd: &Path) -> String {
@@ -178,19 +180,54 @@ impl Store {
     }
 
     /// All `.md` notes in a project's dir, newest first (by modified time).
-    pub fn list_notes(&self, cwd: &Path) -> Vec<PathBuf> {
+    ///
+    /// Three-valued on purpose (see [`Determination`]):
+    ///
+    /// * `Known(notes)` — the project dir was enumerated. An **absent** dir
+    ///   (`NotFound`: this project has never been written to) is a genuine
+    ///   `Known(vec![])`.
+    /// * `Undetermined(why)` — the project dir exists but could not be walked
+    ///   (permissions, IO error), or a directory entry could not be read. **No
+    ///   partial list is returned**: every derived selector below (latest /
+    ///   fallback / per-session / prune) would otherwise silently operate on a
+    ///   truncated view and report "no carryover exists" for a store it merely
+    ///   could not read. `why` carries the path and the OS error.
+    pub fn list_notes(&self, cwd: &Path) -> Determination<Vec<PathBuf>> {
         let dir = self.project_dir(cwd);
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            // A project dir that does not exist yet genuinely holds no notes.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Determination::Known(Vec::new())
+            }
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "note store {} could not be read: {e}",
+                    dir.display()
+                ))
+            }
+        };
         let mut entries: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(&dir) {
-            for e in rd.flatten() {
-                let p = e.path();
-                if p.extension().and_then(|s| s.to_str()) == Some("md") {
-                    let mtime = e
-                        .metadata()
-                        .and_then(|m| m.modified())
-                        .unwrap_or(std::time::UNIX_EPOCH);
-                    entries.push((mtime, p));
+        for e in rd {
+            // An unreadable entry makes the listing incomplete; a truncated
+            // list would be read downstream as the whole note history.
+            let e = match e {
+                Ok(e) => e,
+                Err(err) => {
+                    return Determination::undetermined(format!(
+                        "note store {}: a directory entry could not be read \
+                         (listing is incomplete): {err}",
+                        dir.display()
+                    ))
                 }
+            };
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("md") {
+                let mtime = e
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                entries.push((mtime, p));
             }
         }
         // Newest-first by mtime, breaking ties by filename descending. Notes embed
@@ -199,12 +236,14 @@ impl Store {
         // tie-break two notes written in the same mtime tick (fast filesystems /
         // CI) order nondeterministically, which flaked latest_fallback_note.
         entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
-        entries.into_iter().map(|(_, p)| p).collect()
+        Determination::Known(entries.into_iter().map(|(_, p)| p).collect())
     }
 
-    /// Most recent note for a project, if any.
-    pub fn latest_note(&self, cwd: &Path) -> Option<PathBuf> {
-        self.list_notes(cwd).into_iter().next()
+    /// Most recent note for a project. `Known(None)` = the dir was read and
+    /// holds no note; `Undetermined` = the dir could not be read (propagated
+    /// from [`list_notes`](Self::list_notes)) — the two must not collapse.
+    pub fn latest_note(&self, cwd: &Path) -> Determination<Option<PathBuf>> {
+        self.list_notes(cwd).map(|n| n.into_iter().next())
     }
 
     /// Write a note under an exact filename (no slug sanitizing). Test/utility helper.
@@ -266,102 +305,125 @@ impl Store {
     ///
     /// (Own-session notes are already handled by `latest_note_for_session`, so by
     /// the time we get here the tags present belong to *other* sessions.)
-    pub fn latest_fallback_note(&self, cwd: &Path) -> Option<PathBuf> {
-        let notes = self.list_notes(cwd);
-        let distinct: HashSet<String> = notes.iter().filter_map(|p| note_session_tag(p)).collect();
-        if distinct.len() <= 1 {
-            notes.into_iter().next()
-        } else {
-            notes.into_iter().find(|p| note_session_tag(p).is_none())
-        }
+    ///
+    /// `Undetermined` propagates from [`list_notes`](Self::list_notes): "the
+    /// store could not be read" must not present as "this project has no
+    /// carryover", which would silently start a session from scratch.
+    pub fn latest_fallback_note(&self, cwd: &Path) -> Determination<Option<PathBuf>> {
+        self.list_notes(cwd).map(|notes| {
+            let distinct: HashSet<String> =
+                notes.iter().filter_map(|p| note_session_tag(p)).collect();
+            if distinct.len() <= 1 {
+                notes.into_iter().next()
+            } else {
+                notes.into_iter().find(|p| note_session_tag(p).is_none())
+            }
+        })
     }
 
     /// Most recent `rescue-<tag>-*` note for this session whose mtime is within
-    /// `within_secs` of now — the coalescing probe (P3). None when there's no such
-    /// fresh rescue, so the caller writes a new one.
+    /// `within_secs` of now — the coalescing probe (P3). `Known(None)` when the
+    /// dir was read and holds no such fresh rescue, so the caller writes a new
+    /// one.
+    ///
+    /// `Undetermined` propagates from [`list_notes`](Self::list_notes) rather
+    /// than being folded into `Known(None)`. The caller's restricted side here
+    /// happens to be "write another rescue" (a duplicate note, never lost
+    /// data), but it must reach that by *seeing* the undetermined answer, not
+    /// by mistaking it for "no fresh rescue exists".
     pub fn recent_session_rescue(
         &self,
         cwd: &Path,
         session_id: &str,
         within_secs: u64,
-    ) -> Option<PathBuf> {
+    ) -> Determination<Option<PathBuf>> {
         if session_id.is_empty() {
-            return None;
+            return Determination::Known(None);
         }
         let prefix = format!("rescue-{}-", session_tag(session_id));
         let cutoff = std::time::SystemTime::now()
             .checked_sub(std::time::Duration::from_secs(within_secs))
             .unwrap_or(std::time::UNIX_EPOCH);
         // list_notes is newest-first, so the first match in window wins.
-        for p in self.list_notes(cwd) {
-            let is_ours = p
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(|n| n.starts_with(&prefix))
-                .unwrap_or(false);
-            if !is_ours {
-                continue;
-            }
-            let fresh = std::fs::metadata(&p)
-                .and_then(|m| m.modified())
-                .map(|t| t >= cutoff)
-                .unwrap_or(false);
-            if fresh {
-                return Some(p);
-            }
-        }
-        None
+        self.list_notes(cwd).map(|notes| {
+            notes.into_iter().find(|p| {
+                let is_ours = p
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|n| n.starts_with(&prefix))
+                    .unwrap_or(false);
+                is_ours
+                    && std::fs::metadata(p)
+                        .and_then(|m| m.modified())
+                        .map(|t| t >= cutoff)
+                        .unwrap_or(false)
+            })
+        })
     }
 
     /// GC: keep the newest `keep` notes overall, plus the newest `keep_distill_min`
     /// `distill-*` notes (higher value than rescues) even if they fall outside that
     /// window; delete the rest. `dry_run` computes the removal set without touching
     /// disk. Deletes are best-effort.
+    ///
+    /// `Undetermined` propagates from [`list_notes`](Self::list_notes) and
+    /// **nothing is deleted** in that case: pruning against a partial listing
+    /// could delete notes that a complete listing would have protected.
     pub fn prune(
         &self,
         cwd: &Path,
         keep: usize,
         keep_distill_min: usize,
         dry_run: bool,
-    ) -> PruneResult {
-        let notes = self.list_notes(cwd); // newest first
-        let mut protect: HashSet<PathBuf> = notes.iter().take(keep).cloned().collect();
-        for p in notes
-            .iter()
-            .filter(|p| is_distill(p))
-            .take(keep_distill_min)
-        {
-            protect.insert(p.clone());
-        }
-        let mut removed = Vec::new();
-        for p in &notes {
-            if protect.contains(p) {
-                continue;
+    ) -> Determination<PruneResult> {
+        self.list_notes(cwd).map(|notes| {
+            // newest first
+            let mut protect: HashSet<PathBuf> = notes.iter().take(keep).cloned().collect();
+            for p in notes
+                .iter()
+                .filter(|p| is_distill(p))
+                .take(keep_distill_min)
+            {
+                protect.insert(p.clone());
             }
-            if !dry_run {
-                let _ = std::fs::remove_file(p);
+            let mut removed = Vec::new();
+            for p in &notes {
+                if protect.contains(p) {
+                    continue;
+                }
+                if !dry_run {
+                    let _ = std::fs::remove_file(p);
+                }
+                removed.push(p.clone());
             }
-            removed.push(p.clone());
-        }
-        PruneResult {
-            kept: notes.len() - removed.len(),
-            removed,
-        }
+            PruneResult {
+                kept: notes.len() - removed.len(),
+                removed,
+            }
+        })
     }
 
     /// Most recent note whose filename carries this session's tag. Lets the
     /// originating session reach its own note amid parallel sessions sharing the
-    /// project dir. None if the id is empty or no tagged note exists.
-    pub fn latest_note_for_session(&self, cwd: &Path, session_id: &str) -> Option<PathBuf> {
+    /// project dir. `Known(None)` if the id is empty or no tagged note exists;
+    /// `Undetermined` propagates from [`list_notes`](Self::list_notes) so an
+    /// unreadable store cannot present as "this session wrote no note".
+    pub fn latest_note_for_session(
+        &self,
+        cwd: &Path,
+        session_id: &str,
+    ) -> Determination<Option<PathBuf>> {
         if session_id.is_empty() {
-            return None;
+            return Determination::Known(None);
         }
         let needle = format!("-{}-", session_tag(session_id));
-        self.list_notes(cwd).into_iter().find(|p| {
-            p.file_name()
-                .and_then(|s| s.to_str())
-                .map(|n| n.contains(&needle))
-                .unwrap_or(false)
+        self.list_notes(cwd).map(|notes| {
+            notes.into_iter().find(|p| {
+                p.file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|n| n.contains(&needle))
+                    .unwrap_or(false)
+            })
         })
     }
 }
@@ -563,6 +625,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Resolve a `Determination` in a test whose store is readable by
+    /// construction. Panics (rather than substituting an empty value) if the
+    /// listing came back `Undetermined`, so a regression that makes a readable
+    /// store unreadable fails the test loudly instead of silently asserting
+    /// over an empty list.
+    fn known<T>(d: Determination<T>) -> T {
+        match d {
+            Determination::Known(v) => v,
+            Determination::Undetermined(why) => {
+                panic!("readable store must be Known, got Undetermined({why:?})")
+            }
+        }
+    }
+
     /// A throwaway store rooted under the temp dir, isolated per test name + pid.
     fn temp_store(name: &str) -> (Store, PathBuf) {
         let root =
@@ -703,14 +779,14 @@ mod tests {
             .write_note_named(cwd, &format!("rescue-{b}-20260619-110000"), "theirs")
             .unwrap();
 
-        let mine = store.latest_note_for_session(cwd, "session-A").unwrap();
+        let mine = known(store.latest_note_for_session(cwd, "session-A")).unwrap();
         assert!(mine.to_string_lossy().contains(&a));
         assert!(!mine.to_string_lossy().contains(&b));
 
         // Unknown session → no tagged match, caller falls back to latest_note.
-        assert!(store.latest_note_for_session(cwd, "session-C").is_none());
+        assert!(known(store.latest_note_for_session(cwd, "session-C")).is_none());
         // Empty session id is never routed.
-        assert!(store.latest_note_for_session(cwd, "").is_none());
+        assert!(known(store.latest_note_for_session(cwd, "")).is_none());
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -747,7 +823,7 @@ mod tests {
         store
             .write_note_named(cwd, &format!("rescue-{a}-20260619-110000"), "newer")
             .unwrap();
-        let fb = store.latest_fallback_note(cwd).unwrap();
+        let fb = known(store.latest_fallback_note(cwd)).unwrap();
         assert!(std::fs::read_to_string(&fb).unwrap().contains("newer"));
 
         let _ = std::fs::remove_dir_all(&root);
@@ -770,10 +846,10 @@ mod tests {
         let cwd = Path::new("/some/project");
         write_series(&store, cwd, "rescue-aaaaaaaa-2026010", 5);
 
-        let res = store.prune(cwd, 2, 0, true);
+        let res = known(store.prune(cwd, 2, 0, true));
         assert_eq!(res.removed.len(), 3);
         // Nothing actually deleted.
-        assert_eq!(store.list_notes(cwd).len(), 5);
+        assert_eq!(known(store.list_notes(cwd)).len(), 5);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -783,9 +859,9 @@ mod tests {
         let cwd = Path::new("/some/project");
         write_series(&store, cwd, "rescue-aaaaaaaa-2026010", 5);
 
-        let res = store.prune(cwd, 2, 0, false);
+        let res = known(store.prune(cwd, 2, 0, false));
         assert_eq!(res.removed.len(), 3);
-        assert_eq!(store.list_notes(cwd).len(), 2);
+        assert_eq!(known(store.list_notes(cwd)).len(), 2);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -801,9 +877,9 @@ mod tests {
         write_series(&store, cwd, "rescue-aaaaaaaa-2026010", 4);
 
         // keep newest 2 (both rescues) + protect newest 1 distill (the old one).
-        let res = store.prune(cwd, 2, 1, false);
+        let res = known(store.prune(cwd, 2, 1, false));
         assert_eq!(res.removed.len(), 2); // the two oldest rescues
-        let remaining = store.list_notes(cwd);
+        let remaining = known(store.list_notes(cwd));
         assert_eq!(remaining.len(), 3);
         assert!(
             remaining.iter().any(|p| is_distill(p)),
@@ -1042,13 +1118,13 @@ mod tests {
         store
             .write_note_named(cwd, &format!("rescue-{b}-20260619-110000"), "B")
             .unwrap();
-        assert!(store.latest_fallback_note(cwd).is_none());
+        assert!(known(store.latest_fallback_note(cwd)).is_none());
 
         // With an untagged shared note present, fall back to that instead.
         store
             .write_note_named(cwd, "shared-handoff", "shared")
             .unwrap();
-        let fb = store.latest_fallback_note(cwd).unwrap();
+        let fb = known(store.latest_fallback_note(cwd)).unwrap();
         assert!(std::fs::read_to_string(&fb).unwrap().contains("shared"));
 
         let _ = std::fs::remove_dir_all(&root);

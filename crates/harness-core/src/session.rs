@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::usage::{AgentUsage, Aggregate, ModelUsage};
+use crate::verdict::Determination;
 
 /// Token counts for one model within a session. Alias kept for call sites that
 /// referred to it as `Usage`; the type itself is [`crate::usage::ModelUsage`].
@@ -131,8 +132,23 @@ pub fn safe_id(id: &str) -> String {
     }
 }
 
-/// Write (overwrite) the record for its session. Fail-soft: any IO error is
-/// swallowed so the hook never disturbs the turn.
+/// Write (overwrite) the record for its session.
+///
+/// **The write is best-effort and its failure is invisible to the caller**: if
+/// the store directory cannot be created, the record cannot be serialized, or
+/// the write fails, this returns normally having persisted nothing. It holds no
+/// verdict itself, and the two consumers of a *missing* record both resolve to
+/// the restricted side rather than reading absence as "no spend":
+///
+/// * `budgetguard::gate::session_cost` (`crates/budgetguard/src/gate.rs:164`)
+///   falls back to a full transcript re-parse when [`load_one`] yields nothing,
+///   which is the accurate (never under-counting) source.
+/// * [`load_all`] reports [`Determination::Undetermined`] when the store dir
+///   exists but cannot be enumerated, so an unreadable store is no longer
+///   indistinguishable from an empty one.
+///
+/// A lost write therefore degrades to "re-derive from the transcript", never to
+/// "there was no spend".
 pub fn upsert(state_dir: &Path, rec: &SessionRecord) {
     let dir = sessions_dir(state_dir);
     if std::fs::create_dir_all(&dir).is_err() {
@@ -151,14 +167,52 @@ pub fn load_one(state_dir: &Path, session_id: &str) -> Option<SessionRecord> {
     serde_json::from_str(&text).ok()
 }
 
-/// Load every session record in the store (skipping anything unparseable).
-pub fn load_all(state_dir: &Path) -> Vec<SessionRecord> {
+/// Load every session record in the store.
+///
+/// Three-valued on purpose (see [`crate::verdict::Determination`]):
+///
+/// * `Known(records)` — the store directory was enumerated. An **absent** store
+///   (`NotFound`: gauge never ran / a custom `state_dir`) is a genuine
+///   `Known(vec![])`, and individual `.json` files that are unreadable or
+///   unparseable are skipped (one corrupt record must not hide the rest).
+/// * `Undetermined(why)` — the store directory exists but could not be walked
+///   (permissions, IO error), or one of its directory entries could not be
+///   read. **No partial list is returned in that case**: a truncated list read
+///   as "all sessions" is the under-count this type exists to prevent. `why`
+///   carries the path and the OS error.
+///
+/// Before this returned `Vec<SessionRecord>`, an unreadable store yielded the
+/// same empty `Vec` as an empty one — observed directly: a store holding one
+/// record reported `1 record(s)` readable and `0 record(s)` after `chmod 000`.
+pub fn load_all(state_dir: &Path) -> Determination<Vec<SessionRecord>> {
     let dir = sessions_dir(state_dir);
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return out;
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        // An absent store is a real observation: there are no records.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Determination::Known(Vec::new())
+        }
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "session store {} could not be read: {e}",
+                dir.display()
+            ))
+        }
     };
-    for entry in entries.flatten() {
+    let mut out = Vec::new();
+    for entry in entries {
+        // A failed directory entry means the listing is incomplete; returning
+        // what we have so far would report an under-count as the whole store.
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "session store {}: a directory entry could not be read \
+                     (listing is incomplete): {e}",
+                    dir.display()
+                ))
+            }
+        };
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
@@ -169,7 +223,7 @@ pub fn load_all(state_dir: &Path) -> Vec<SessionRecord> {
             }
         }
     }
-    out
+    Determination::Known(out)
 }
 
 #[cfg(test)]
@@ -234,6 +288,7 @@ mod tests {
             first_ts: Some("2026-06-27T01:00:00Z".to_string()),
             last_ts: Some("2026-06-27T02:00:00Z".to_string()),
             agents,
+            ..Aggregate::default()
         }
     }
 
@@ -297,7 +352,10 @@ mod tests {
         let rec =
             SessionRecord::from_aggregate("sess-2", "proj", "/cwd", sample_aggregate(), true, "ts");
         upsert(dir.path(), &rec);
-        let all = load_all(dir.path());
+        let all = match load_all(dir.path()) {
+            Determination::Known(all) => all,
+            Determination::Undetermined(why) => panic!("readable store must be Known: {why:?}"),
+        };
         let one = load_one(dir.path(), "sess-2").unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].session_id, one.session_id);

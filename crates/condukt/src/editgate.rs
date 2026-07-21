@@ -3,10 +3,13 @@
 //! to a Rust file inside a live condukt worktree left the crate in a broken
 //! (non-compiling) state. This mirrors the F→P oracle (`oracle.rs`) in shape:
 //! a pure interpreter plus a fail-soft wrapper that spawns one external process
-//! (`cargo check`) with `.current_dir(...)`. Any spawn/IO failure — or an edit
-//! that is simply out of scope (non-Rust, or not inside a live worktree) —
-//! degrades to `fallback:true` (edit ALLOWED). It never panics, never unwraps
-//! on an error path, and never blocks a turn.
+//! (`cargo check`) with `.current_dir(...)`. An edit that is simply out of
+//! scope (non-Rust, or not inside a live worktree) degrades to `fallback:true`
+//! (edit ALLOWED). A spawn/IO failure does **not**: no `cargo`, no reachable
+//! worktree, means whether the edit compiles could not be determined, and that
+//! resolves to the restricted side (`fallback:false`, `broken:true` → the edit
+//! is rejected). It never panics and never unwraps on an error path; blocking
+//! an edit on an undetermined verdict is the gate working, not a broken turn.
 //!
 //! The public items here are consumed by the PostToolUse hook subcommand added
 //! in the follow-up task; until then they are exercised only by unit tests.
@@ -118,10 +121,11 @@ fn line_is_error(line: &str) -> bool {
 /// spawn; never panics.
 ///
 /// Always returns a JSON object carrying a `fallback` bool: `true` means "the
-/// compile gate does not apply, or could not be trusted — ALLOW the edit"
-/// (non-Rust file, path not inside a live worktree, or `cargo` unspawnable);
-/// `false` means the `broken`/`diagnostics` fields reflect a real `cargo check`
-/// verdict. The edit is only ever rejected downstream (see
+/// compile gate does not apply — ALLOW the edit" (non-Rust file, or a path not
+/// inside a live worktree). `false` means the gate must decide, either because
+/// `broken`/`diagnostics` reflect a real `cargo check` verdict, or because
+/// `cargo` was unspawnable and nothing could be determined (`broken:true` with
+/// a `reason` that says so). The edit is only ever rejected downstream (see
 /// `state::enforce_edit_gate`) when `required && !fallback && broken`.
 pub fn check_edit(file_path: &Path, worktree: Option<&Path>, required: bool) -> serde_json::Value {
     // Only Rust source files are in scope for a compile gate.
@@ -149,9 +153,11 @@ pub fn check_edit(file_path: &Path, worktree: Option<&Path>, required: bool) -> 
     };
 
     // Spawn `cargo check` in the worktree. `cargo` writes diagnostics to
-    // stderr, so both streams are combined before interpretation. Any spawn/IO
-    // failure (e.g. a gone worktree used as `current_dir`) degrades to
-    // fallback — mirroring `oracle::check_oracle`'s spawn-failure handling.
+    // stderr, so both streams are combined before interpretation. A spawn/IO
+    // failure (no `cargo` installed, not executable, a gone worktree used as
+    // `current_dir`) is `cannot determine`, and resolves to the restricted side
+    // — mirroring `oracle::check_oracle`'s spawn-failure handling. Both used to
+    // mirror the opposite way, degrading to fallback.
     match Command::new("cargo")
         .args(["check", "--message-format=short", "--color=never"])
         // Pin the colour setting rather than inheriting it. `CARGO_TERM_COLOR`
@@ -206,11 +212,20 @@ pub fn check_edit(file_path: &Path, worktree: Option<&Path>, required: bool) -> 
                 "reason": reason,
             })
         }
+        // `broken: true` is the restricted encoding of "cannot determine
+        // whether it compiles", not a claim that a compile error was observed
+        // — the `reason` says which. It has to be this shape because
+        // `state::enforce_edit_gate` only rejects on
+        // `required && !fallback && broken`.
         Err(e) => serde_json::json!({
             "required": required,
-            "broken": false,
-            "fallback": true,
-            "reason": format!("failed to spawn cargo: {e}"),
+            "broken": true,
+            "fallback": false,
+            "reason": format!(
+                "failed to spawn cargo ({e}) — whether the edit still compiles could not be \
+                 determined. Install/provide `cargo` and a reachable worktree; a checker that \
+                 never ran is not a checker that passed"
+            ),
         }),
     }
 }
@@ -340,35 +355,106 @@ src/lib.rs:3:5: \x1b[1m\x1b[91merror[E0308]\x1b[0m: mismatched types
 
     /// A non-Rust path is out of scope: the gate allows it via fallback and
     /// never spawns `cargo` (so this is fast and cannot panic).
+    ///
+    /// "Out of scope" is genuinely NOT "could not determine" — the fix that
+    /// makes spawn failure reject must not drag this case with it.
     #[test]
     fn non_rust_path_falls_back_allowed() {
         let out = check_edit(Path::new("/repo/README.md"), Some(Path::new("/repo")), true);
-        assert_eq!(out["fallback"], true);
-        assert_eq!(out["broken"], false);
+        assert_eq!(out["fallback"], true, "{out}");
+        assert_eq!(out["broken"], false, "{out}");
+        assert_eq!(
+            crate::state::enforce_edit_gate(&out),
+            crate::state::EditGateDecision::Allow,
+            "a non-Rust file is out of scope and must never be rejected: {out}"
+        );
     }
 
     /// `worktree: None` (path not inside a live worktree) → fallback allowed.
+    /// Also genuinely out of scope, not undetermined.
     #[test]
     fn no_worktree_falls_back_allowed() {
         let out = check_edit(Path::new("/repo/src/lib.rs"), None, true);
-        assert_eq!(out["fallback"], true);
-        assert_eq!(out["broken"], false);
+        assert_eq!(out["fallback"], true, "{out}");
+        assert_eq!(out["broken"], false, "{out}");
+        assert_eq!(
+            crate::state::enforce_edit_gate(&out),
+            crate::state::EditGateDecision::Allow,
+            "an edit outside any live worktree is out of scope and must never be rejected: {out}"
+        );
     }
 
     /// Spawning `cargo` with a nonexistent `current_dir` reliably fails the
     /// spawn regardless of whether `cargo` is on PATH — this exercises the
-    /// "cargo unreachable / worktree gone" fallback path deterministically.
-    /// Mirrors `oracle::spawn_failure_falls_back`.
+    /// "cargo unreachable / worktree gone" path deterministically.
+    ///
+    /// The twin of the oracle's spawn-failure defect: a missing module/binary
+    /// is **cannot determine**, not **not applicable**. Nothing compiled the
+    /// crate, so the gate must not be handed a `fallback:true` that Allows —
+    /// an environment where `cargo` cannot be spawned would otherwise let every
+    /// edit through unchecked. Mirrors
+    /// `oracle::tests::spawn_failure_is_undetermined_and_rejects`.
+    ///
+    /// Every spawn failure is ONE class here; this deliberately does not branch
+    /// on `io::ErrorKind`.
     #[test]
-    fn spawn_failure_falls_back() {
+    fn spawn_failure_is_undetermined_and_rejects() {
         let bogus_dir =
             std::env::temp_dir().join("condukt-editgate-test-nonexistent-dir-zzz-987654");
         let _ = std::fs::remove_dir_all(&bogus_dir);
         assert!(!bogus_dir.exists());
 
         let out = check_edit(Path::new("src/lib.rs"), Some(&bogus_dir), true);
-        assert_eq!(out["fallback"], true);
-        assert_eq!(out["broken"], false);
+        assert_eq!(out["required"], true, "{out}");
+        assert_eq!(
+            out["fallback"], false,
+            "an unspawnable cargo is undetermined, not out-of-scope fallback — got {out}"
+        );
+        assert_eq!(
+            out["broken"], true,
+            "nothing established that the crate compiles, so the restricted side is broken:true — got {out}"
+        );
+        assert_eq!(
+            crate::state::enforce_edit_gate(&out),
+            crate::state::EditGateDecision::Reject,
+            "an edit whose compile gate could not run must Reject end-to-end: {out}"
+        );
+    }
+
+    /// The spawn-failure `reason` is the only thing the operator sees. It must
+    /// name `cargo`, say the compile gate could not be determined, and ask for
+    /// cargo to be installed/made available. Stable substrings only.
+    #[test]
+    fn spawn_failure_reason_names_cargo_and_demands_it_be_installed() {
+        let bogus_dir =
+            std::env::temp_dir().join("condukt-editgate-test-nonexistent-dir-zzz-987655");
+        let _ = std::fs::remove_dir_all(&bogus_dir);
+        assert!(!bogus_dir.exists());
+
+        let out = check_edit(Path::new("src/lib.rs"), Some(&bogus_dir), true);
+        let reason = out["reason"]
+            .as_str()
+            .unwrap_or_else(|| panic!("verdict has no string `reason`: {out}"))
+            .to_ascii_lowercase();
+
+        assert!(
+            reason.contains("cargo"),
+            "reason must name `cargo` — got {reason:?}"
+        );
+        assert!(
+            reason.contains("could not be determined")
+                || reason.contains("cannot be determined")
+                || reason.contains("cannot determine")
+                || reason.contains("undetermined"),
+            "reason must say the compile gate could not be DETERMINED (not that it \
+             merely does not apply) — got {reason:?}"
+        );
+        assert!(
+            reason.contains("install")
+                || reason.contains("available")
+                || reason.contains("provide"),
+            "reason must tell the operator to install/provide cargo — got {reason:?}"
+        );
     }
 
     /// Build a throwaway standalone crate and return its dir (kept alive by the

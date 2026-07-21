@@ -937,17 +937,29 @@ pub enum FpGateDecision {
 /// valid_fp_oracle == false` — i.e. the task is in-scope for the oracle, a
 /// real (non-fallback) verdict was obtained, and that verdict says the
 /// Fail→Pass oracle is not valid. Every other case (not required, fallback,
-/// or a valid oracle) allows the promotion. Missing/non-bool fields default
-/// defensively (`false`) so a malformed verdict never rejects.
+/// or a valid oracle) allows the promotion.
+///
+/// **Every missing/non-bool field resolves to the restricted side**, and
+/// `fallback` is the one that used to not: it was read with `.unwrap_or(true)`
+/// while `required`/`valid_fp_oracle` used `.unwrap_or(false)`, so a verdict
+/// that had lost its `fallback` key was read as "defer to the legacy gate" —
+/// the permissive reading of a field we could not read at all. It now defaults
+/// to `false`, i.e. "this verdict is the gate's to decide". A verdict carrying
+/// no `required` key still Allows, because a missing `required` genuinely means
+/// the gate was never claimed to be in scope.
+///
+/// Note the docstring above this one used to claim all missing fields defaulted
+/// to `false` while the code defaulted `fallback` to `true`. Prose that
+/// describes the safe version of the code is worse than no prose.
 pub fn enforce_fp_gate(verdict: &serde_json::Value) -> FpGateDecision {
     let required = verdict
         .get("required")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let fallback = verdict
-        .get("fallback")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+    // Kept as an Option: "the field said false" and "there was no field" are
+    // the same for the Reject decision but NOT for what gets persisted.
+    let fallback_field = verdict.get("fallback").and_then(|v| v.as_bool());
+    let fallback = fallback_field.unwrap_or(false);
     let valid = verdict
         .get("valid_fp_oracle")
         .and_then(|v| v.as_bool())
@@ -958,9 +970,17 @@ pub fn enforce_fp_gate(verdict: &serde_json::Value) -> FpGateDecision {
     }
 
     if fallback {
-        FpGateDecision::Allow(None)
-    } else {
-        FpGateDecision::Allow(Some(valid))
+        return FpGateDecision::Allow(None);
+    }
+    // Only a verdict that actually CARRIED `fallback: false` asserted a real
+    // observation. Reaching here with no `fallback` field means the restricted
+    // default above got us past the Reject check, not that `tdd` looked and
+    // reported something — persisting `Some(valid)` would record a fabricated
+    // observation ("we determined the oracle is invalid") on a verdict where
+    // nothing was determined. Restricted defaults must not manufacture facts.
+    match fallback_field {
+        Some(false) => FpGateDecision::Allow(Some(valid)),
+        _ => FpGateDecision::Allow(None),
     }
 }
 
@@ -990,9 +1010,14 @@ pub enum EditGateDecision {
 /// — i.e. the edit is in-scope for the gate, a real (non-fallback) `cargo
 /// check` verdict was obtained, and that verdict says the crate no longer
 /// compiles. Every other case (not required, fallback, or a clean build)
-/// allows the edit. Missing/non-bool fields default defensively (`fallback`
-/// defaults to `true`, `required`/`broken` to `false`) so a malformed verdict
-/// fails open to `Allow` and never rejects.
+/// allows the edit.
+///
+/// **Every missing/non-bool field resolves to the restricted side**: `fallback`
+/// defaults to `false` ("this verdict is the gate's to decide"), `broken` to
+/// `true`. `required` still defaults to `false`, because a missing `required`
+/// genuinely means the gate was never claimed to be in scope — so a wholly
+/// malformed verdict still Allows, on that ground alone rather than by
+/// defaulting three fields permissively.
 #[allow(dead_code)]
 pub fn enforce_edit_gate(verdict: &serde_json::Value) -> EditGateDecision {
     let required = verdict
@@ -1002,11 +1027,11 @@ pub fn enforce_edit_gate(verdict: &serde_json::Value) -> EditGateDecision {
     let fallback = verdict
         .get("fallback")
         .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+        .unwrap_or(false);
     let broken = verdict
         .get("broken")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(true);
 
     if required && !fallback && broken {
         EditGateDecision::Reject
@@ -3437,6 +3462,40 @@ mod tests {
         assert_eq!(enforce_fp_gate(&verdict), FpGateDecision::Allow(None));
     }
 
+    /// The spawn-failure verdict shape (`tdd` unreachable → cannot determine)
+    /// must reach `Reject`. This is the gate half of
+    /// `oracle::tests::spawn_failure_is_undetermined_and_rejects`.
+    #[test]
+    fn enforce_fp_gate_rejects_undetermined_spawn_failure_verdict() {
+        let verdict = serde_json::json!({
+            "required": true,
+            "fallback": false,
+            "valid_fp_oracle": false,
+            "reason": "the F→P oracle could not be determined: failed to spawn tdd \
+                       (No such file or directory) — install the `tdd` binary and \
+                       make it available on PATH",
+        });
+        assert_eq!(enforce_fp_gate(&verdict), FpGateDecision::Reject);
+    }
+
+    /// A verdict that is in-scope (`required:true`) and reports no valid oracle,
+    /// but carries NO `fallback` key at all, is undetermined — the missing field
+    /// must resolve to the RESTRICTED side (Reject), not to a permissive
+    /// `fallback:true` default that Allows.
+    #[test]
+    fn enforce_fp_gate_missing_fallback_key_rejects() {
+        let verdict = serde_json::json!({
+            "required": true,
+            "valid_fp_oracle": false,
+        });
+        assert_eq!(
+            enforce_fp_gate(&verdict),
+            FpGateDecision::Reject,
+            "a missing `fallback` must default to the restricted side, got {:?} for {verdict}",
+            enforce_fp_gate(&verdict)
+        );
+    }
+
     // ── enforce_edit_gate tests ─────────────────────────────────────────────
 
     /// Reject ONLY when required && !fallback && broken.
@@ -3492,6 +3551,40 @@ mod tests {
         assert_eq!(enforce_edit_gate(&verdict), EditGateDecision::Allow);
         let garbage = serde_json::json!({ "broken": "not-a-bool", "required": 1 });
         assert_eq!(enforce_edit_gate(&garbage), EditGateDecision::Allow);
+    }
+
+    /// The spawn-failure verdict shape (`cargo` unspawnable → cannot determine)
+    /// must reach `Reject`. Gate half of
+    /// `editgate::tests::spawn_failure_is_undetermined_and_rejects`.
+    #[test]
+    fn enforce_edit_gate_rejects_undetermined_spawn_failure_verdict() {
+        let verdict = serde_json::json!({
+            "required": true,
+            "broken": true,
+            "fallback": false,
+            "reason": "the compile gate could not be determined: failed to spawn cargo \
+                       (No such file or directory) — install cargo and make it available \
+                       on PATH",
+        });
+        assert_eq!(enforce_edit_gate(&verdict), EditGateDecision::Reject);
+    }
+
+    /// A verdict that is in-scope (`required:true`) and reports the crate broken,
+    /// but carries NO `fallback` key at all, is undetermined — the missing field
+    /// must resolve to the RESTRICTED side (Reject), not to the current
+    /// permissive `fallback` default of `true` which Allows.
+    #[test]
+    fn enforce_edit_gate_missing_fallback_key_rejects() {
+        let verdict = serde_json::json!({
+            "required": true,
+            "broken": true,
+        });
+        assert_eq!(
+            enforce_edit_gate(&verdict),
+            EditGateDecision::Reject,
+            "a missing `fallback` must default to the restricted side, got {:?} for {verdict}",
+            enforce_edit_gate(&verdict)
+        );
     }
 
     // ── active_worktree_for_path tests ──────────────────────────────────────

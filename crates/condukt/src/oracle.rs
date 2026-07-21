@@ -4,17 +4,21 @@
 //! **not uniformly fail-soft** — two different failures mean two different
 //! things:
 //!
-//! - **The oracle could not be produced**: no `tdd` on PATH, spawn failure,
-//!   missing/corrupt stdout, a gone worktree. Nothing ran, so the legacy
-//!   `done_criteria` gate takes over — `fallback:true`, which
-//!   `state::enforce_fp_gate` Allows.
-//! - **The oracle ran and fell over**: `tdd` exited non-zero. That is
-//!   *undetermined*, not *unavailable*, and it resolves to the restricted side
-//!   — `fallback:false` with `required`/`!valid`, which `enforce_fp_gate`
-//!   Rejects. See [`verdict_from_oracle_output`].
+//! - **The check does not apply, or ran but had nothing to report**: not a
+//!   fix/feature task, no `reproduction_tests`, or `tdd` ran and produced
+//!   missing/corrupt stdout. `fallback:true`, which `state::enforce_fp_gate`
+//!   Allows — the legacy `done_criteria` gate takes over.
+//! - **The oracle could not be determined**: `tdd` exited non-zero, or `tdd`
+//!   could not be spawned at all (not installed, not executable, a gone
+//!   worktree). Nothing was established, and that is *undetermined*, not
+//!   *fine*: `fallback:false` with `required`/`!valid`, which
+//!   `enforce_fp_gate` Rejects. See [`verdict_from_oracle_output`] and
+//!   [`check_oracle`]'s spawn-failure branch.
 //!
-//! Collapsing the second case into the first is how a crashed checker passes
-//! for a checker that had nothing to say.
+//! Collapsing the second case into the first is how a crashed — or entirely
+//! absent — checker passes for a checker that had nothing to say. An
+//! environment without `tdd` installed must be told to install it, not quietly
+//! granted a pass on every fix/feature task.
 
 use std::path::Path;
 use std::process::Command;
@@ -88,19 +92,23 @@ pub fn verdict_from_oracle(valid: bool, transition: Option<&str>) -> serde_json:
 /// `run_dir`. Pure aside from the one external process spawn; never panics.
 ///
 /// Always returns a JSON object with a `fallback` bool. `true` means "the
-/// oracle check does not apply, or could not be produced at all — degrade to
-/// the legacy gate".
+/// oracle check does not apply, or `tdd` ran but had nothing usable to say —
+/// degrade to the legacy gate".
 ///
 /// `false` means the gate must decide on this verdict rather than defer, and it
-/// arises two ways that are **not** interchangeable:
+/// arises three ways that are **not** interchangeable:
 ///
 /// - the run produced a real verdict (`valid_fp_oracle`/`transition` reflect
-///   what `tdd` actually observed), or
+///   what `tdd` actually observed),
 /// - the run exited non-zero, so there is no verdict to reflect and
 ///   `valid_fp_oracle` is `false` because nothing was established — see
-///   [`verdict_from_oracle_output`]. The `reason` field is what distinguishes
-///   the two; do not read `valid_fp_oracle: false` here as "tdd looked and
-///   found the proofs invalid".
+///   [`verdict_from_oracle_output`], or
+/// - `tdd` could not be spawned at all (not installed / not executable). Also
+///   nothing established; the `reason` says so and asks for `tdd` to be
+///   installed.
+///
+/// The `reason` field is what distinguishes the three; do not read
+/// `valid_fp_oracle: false` here as "tdd looked and found the proofs invalid".
 pub fn check_oracle(
     requires_oracle: bool,
     reproduction_tests: Option<&str>,
@@ -124,11 +132,24 @@ pub fn check_oracle(
         Ok(out) => {
             verdict_from_oracle_output(&String::from_utf8_lossy(&out.stdout), out.status.success())
         }
+        // A spawn failure is `cannot determine`, NOT `unavailable`. The most
+        // common cause is that `tdd` is not installed at all, and that used to
+        // yield `fallback:true` → `enforce_fp_gate` Allow — i.e. an environment
+        // simply missing the checker passed the F→P gate for every fix/feature
+        // task, silently, forever. A missing checker is not a passing checker.
+        //
+        // Deliberately NOT branched on `e.kind()`: NotFound, EACCES and ENOMEM
+        // are all "no verdict was obtained", and splitting them would create a
+        // permissive path no test covers.
         Err(e) => serde_json::json!({
             "required": true,
             "valid_fp_oracle": false,
-            "fallback": true,
-            "reason": format!("failed to spawn tdd: {e}"),
+            "fallback": false,
+            "reason": format!(
+                "failed to spawn tdd ({e}) — the F→P oracle could not be determined. \
+                 Install/provide the `tdd` binary on PATH; a missing checker is not a \
+                 passing checker, so this blocks rather than degrading to the legacy gate"
+            ),
         }),
     }
 }
@@ -208,18 +229,74 @@ mod tests {
 
     /// Spawning `tdd` with a nonexistent `current_dir` reliably fails the
     /// spawn regardless of whether a `tdd` binary happens to be on PATH in
-    /// the test environment — this exercises the "tdd unreachable" fallback
-    /// path deterministically.
+    /// the test environment — this exercises the "tdd unreachable" path
+    /// deterministically.
+    ///
+    /// A spawn failure is **cannot determine**, not **unavailable**: nothing
+    /// looked at the proofs, so the gate must not be handed a `fallback:true`
+    /// that `enforce_fp_gate` Allows. An environment with no `tdd` installed
+    /// must not silently pass the F→P gate for every fix/feature task.
     #[test]
-    fn spawn_failure_falls_back() {
+    fn spawn_failure_is_undetermined_and_rejects() {
         let bogus_dir = std::env::temp_dir().join("condukt-oracle-test-nonexistent-dir-zzz-987654");
         let _ = std::fs::remove_dir_all(&bogus_dir);
         assert!(!bogus_dir.exists());
 
         let out = check_oracle(true, Some("cargo test -p x"), "t1", &bogus_dir);
-        assert_eq!(out["required"], true);
-        assert_eq!(out["fallback"], true);
-        assert_eq!(out["valid_fp_oracle"], false);
+        assert_eq!(out["required"], true, "{out}");
+        assert_eq!(
+            out["fallback"], false,
+            "a spawn failure is undetermined, not a could-not-generate fallback — got {out}"
+        );
+        assert_eq!(out["valid_fp_oracle"], false, "{out}");
+        assert!(
+            matches!(
+                crate::state::enforce_fp_gate(&out),
+                crate::state::FpGateDecision::Reject
+            ),
+            "an unspawnable tdd must Reject end-to-end, got {:?} for {out}",
+            crate::state::enforce_fp_gate(&out)
+        );
+    }
+
+    /// The spawn-failure `reason` is the only thing the operator sees. It must
+    /// (a) name the undetermined condition — `tdd` could not be spawned — and
+    /// (b) tell them to install/provide the `tdd` binary. Asserted on stable
+    /// substrings, not the whole string.
+    #[test]
+    fn spawn_failure_reason_names_tdd_and_demands_it_be_installed() {
+        let bogus_dir = std::env::temp_dir().join("condukt-oracle-test-nonexistent-dir-zzz-987655");
+        let _ = std::fs::remove_dir_all(&bogus_dir);
+        assert!(!bogus_dir.exists());
+
+        let out = check_oracle(true, Some("cargo test -p x"), "t1", &bogus_dir);
+        let reason = out["reason"]
+            .as_str()
+            .unwrap_or_else(|| panic!("verdict has no string `reason`: {out}"))
+            .to_ascii_lowercase();
+
+        assert!(
+            reason.contains("tdd"),
+            "reason must name the `tdd` binary — got {reason:?}"
+        );
+        assert!(
+            reason.contains("spawn"),
+            "reason must say tdd could not be spawned — got {reason:?}"
+        );
+        assert!(
+            reason.contains("could not be determined")
+                || reason.contains("cannot be determined")
+                || reason.contains("cannot determine")
+                || reason.contains("undetermined"),
+            "reason must say the oracle could not be DETERMINED (not that it is \
+             merely unavailable) — got {reason:?}"
+        );
+        assert!(
+            reason.contains("install")
+                || reason.contains("available")
+                || reason.contains("provide"),
+            "reason must tell the operator to install/provide `tdd` — got {reason:?}"
+        );
     }
 
     #[test]
@@ -566,6 +643,74 @@ mod tests {
             ),
             "must Reject end-to-end, got {:?} for {v}",
             crate::state::enforce_fp_gate(&v)
+        );
+    }
+
+    /// Run `check_oracle` with a PATH that contains nothing at all (a single
+    /// empty temp dir), so `tdd` is genuinely unreachable and the spawn fails.
+    /// PATH is restored before returning. Returns the verdict plus the run dir's
+    /// guard so it outlives the call.
+    #[cfg(unix)]
+    fn check_oracle_with_no_tdd_on_path() -> serde_json::Value {
+        let _guard = ORACLE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let empty_bin = tmp.path().join("empty-bin");
+        std::fs::create_dir_all(&empty_bin).unwrap();
+        let run_dir = tmp.path().join("run");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        assert!(
+            !empty_bin.join("tdd").exists(),
+            "PATH dir must contain no tdd"
+        );
+
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", &empty_bin);
+
+        let out = check_oracle(true, Some("cargo test -p x"), "t1", &run_dir);
+
+        match old_path {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        out
+    }
+
+    /// CASE C (the wiring proof for "no tdd installed"): the run dir is fine,
+    /// the task is in scope, and the ONLY thing wrong is that no `tdd` exists
+    /// anywhere on PATH. That is the exact shape of a machine that never
+    /// installed `tdd` — and today it silently passes the F→P gate for every
+    /// fix/feature task. It must Reject end-to-end, with a reason that names
+    /// `tdd` and demands it be installed.
+    #[cfg(unix)]
+    #[test]
+    fn oracle_no_tdd_anywhere_on_path_rejects_end_to_end() {
+        let v = check_oracle_with_no_tdd_on_path();
+        assert_eq!(v["required"], true, "{v}");
+        assert_eq!(
+            v["fallback"], false,
+            "no `tdd` installed is cannot-determine, not could-not-generate — got {v}"
+        );
+        assert_eq!(v["valid_fp_oracle"], false, "{v}");
+        assert!(
+            matches!(
+                crate::state::enforce_fp_gate(&v),
+                crate::state::FpGateDecision::Reject
+            ),
+            "an environment with no tdd must not silently pass the F→P gate, got {:?} for {v}",
+            crate::state::enforce_fp_gate(&v)
+        );
+        let reason = v["reason"]
+            .as_str()
+            .unwrap_or_else(|| panic!("verdict has no string `reason`: {v}"))
+            .to_ascii_lowercase();
+        assert!(reason.contains("tdd"), "reason must name tdd — {reason:?}");
+        assert!(
+            reason.contains("install")
+                || reason.contains("available")
+                || reason.contains("provide"),
+            "reason must tell the operator to install/provide tdd — {reason:?}"
         );
     }
 

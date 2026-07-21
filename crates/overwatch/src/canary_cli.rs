@@ -62,6 +62,51 @@ struct CombinedVerdict {
     systemic: HealthVerdict,
 }
 
+/// The verdict emitted when the violation registry is UNDETERMINED (unreadable
+/// or schema-drifted/corrupt) rather than cleanly empty. The canary gate must
+/// FAIL CLOSED here: an unknown health signal for a fleet-defense rollout is
+/// treated as "roll back / hold", never as "no spike → proceed". Carries a
+/// distinct `reason` so `scripts/rollout-plugins.sh` and its logs make the
+/// cannot-determine cause explicit instead of it masquerading as a real spike.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct StoreUndeterminedVerdict {
+    /// Always `Rollback` — the fail-closed decision.
+    decision: GateDecision,
+    /// Machine-stable cause tag: the store could not be trusted.
+    reason: &'static str,
+    /// Human-readable explanation for the rollout log.
+    detail: &'static str,
+    /// The raw-spike threshold that WOULD have applied (echoed for the log).
+    threshold: usize,
+    /// The systemic-recurrence threshold that WOULD have applied.
+    systemic_threshold: usize,
+    /// The window (seconds) that WOULD have applied.
+    window_secs: i64,
+}
+
+/// Emit the fail-closed rollback verdict for an undetermined violation store and
+/// return `Ok(true)` (rollback advised) so `main` exits 3 — the SAME signal the
+/// shell keys on for a real spike, so an undetermined store rolls back the stage
+/// rather than slipping through the shell's fail-soft "eval error → proceed"
+/// branch (which only fires for exit codes OTHER than 3).
+fn emit_store_undetermined_rollback(
+    threshold: usize,
+    systemic_threshold: usize,
+    window_secs: i64,
+) -> Result<bool> {
+    let verdict = StoreUndeterminedVerdict {
+        decision: GateDecision::Rollback,
+        reason: "violations-store-undetermined",
+        detail: "violation registry unreadable or corrupt (schema drift) — \
+                 health signal unknown; failing closed and rolling back this stage",
+        threshold,
+        systemic_threshold,
+        window_secs,
+    };
+    println!("{}", serde_json::to_string_pretty(&verdict)?);
+    Ok(true)
+}
+
 impl CombinedVerdict {
     /// Combine a raw-spike and a systemic verdict into one, ORing their
     /// decisions (Problem-2.1): the gate trips if EITHER sub-verdict rolls
@@ -140,12 +185,54 @@ pub fn gate(
         return print_verdict(&verdict);
     }
 
-    // Registry path: read events, then evaluate at an explicit `now`.
+    // Registry path: read the violation store for the cwd project, then evaluate.
+    // Split out with an explicit `cwd` (the ONLY impurity, `current_dir`, stays
+    // here) so the fail-closed wiring is testable against a real on-disk store
+    // without touching the process cwd.
     let cwd = std::env::current_dir()?;
+    gate_from_registry(&cwd, policy, systemic_policy, systemic, now_override, since)
+}
+
+/// The registry arm of [`gate`], with `cwd` injected. Reads the violation store
+/// under `cwd` via the FAIL-CLOSED [`store::scan_violations`] and returns
+/// `Ok(true)` iff a rollback is advised — including when the store is
+/// undetermined. Kept separate from `gate` so a test can drive it against a
+/// real temp store (undetermined / absent / clean) and pin the fail-closed
+/// decision at the actual fix point, not just its ingredients. The raw
+/// thresholds/window are read back off `policy`/`systemic_policy` (they carry
+/// the same values) rather than passed again, so the signature stays small.
+fn gate_from_registry(
+    cwd: &std::path::Path,
+    policy: HealthGatePolicy,
+    systemic_policy: HealthGatePolicy,
+    systemic: bool,
+    now_override: Option<i64>,
+    since: Option<i64>,
+) -> Result<bool> {
     let now = now_override.unwrap_or_else(store::now);
-    let events = store::read_violations(&cwd).unwrap_or_default();
+    // Fail CLOSED on an undetermined store. `scan_violations` keeps "absent
+    // registry" (a legitimately-empty history — the normal first-deploy case)
+    // distinct from "unreadable / schema-drifted" (untrustworthy count). The old
+    // `read_violations(..).unwrap_or_default()` collapsed BOTH — plus any
+    // per-line parse failure — into an empty vec, so an unreadable/corrupt store
+    // scored `observed=0` and PROCEEDED: the exact cannot-determine → allow
+    // fail-open this hardening removes. For a fleet-defense GATE, unknown health
+    // must roll back, not sail through.
+    let events = match store::scan_violations(cwd) {
+        store::ViolationScan::Events(v) => v,
+        // Genuinely no violations recorded yet — safe to proceed as before.
+        store::ViolationScan::Absent => Vec::new(),
+        // Unreadable / corrupt — cannot trust the health signal: roll back.
+        store::ViolationScan::Undetermined => {
+            return emit_store_undetermined_rollback(
+                policy.max_violations_in_window,
+                systemic_policy.max_violations_in_window,
+                policy.window_secs,
+            );
+        }
+    };
     let recurrence = RecurrencePolicy {
-        window_secs,
+        window_secs: policy.window_secs,
         ..RecurrencePolicy::default()
     };
 
@@ -233,6 +320,143 @@ mod tests {
         assert!(c.should_rollback());
         assert_eq!(c.raw.decision, GateDecision::Rollback);
         assert_eq!(c.systemic.decision, GateDecision::Proceed);
+    }
+
+    // An undetermined violation store must advise ROLLBACK (return Ok(true)),
+    // so `main` exits 3 — the SAME signal a real spike uses — rather than
+    // returning an error (which the shell's fail-soft branch would turn into
+    // PROCEED). This is the fail-CLOSED contract for cannot-determine.
+    #[test]
+    fn store_undetermined_advises_rollback() {
+        let advised = emit_store_undetermined_rollback(2, 0, 900).unwrap();
+        assert!(
+            advised,
+            "an undetermined violation store must advise rollback (fail closed)"
+        );
+    }
+
+    // The emitted verdict must serialize with decision=rollback and the stable
+    // cause tag, so the rollout log makes the cannot-determine cause explicit
+    // instead of it masquerading as a counted spike.
+    #[test]
+    fn store_undetermined_verdict_serializes_as_rollback_with_reason() {
+        let v = StoreUndeterminedVerdict {
+            decision: GateDecision::Rollback,
+            reason: "violations-store-undetermined",
+            detail: "x",
+            threshold: 2,
+            systemic_threshold: 0,
+            window_secs: 900,
+        };
+        let j: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&v).unwrap()).unwrap();
+        assert_eq!(j["decision"], "rollback");
+        assert_eq!(j["reason"], "violations-store-undetermined");
+    }
+
+    /// A process-unique temp dir (pid + monotonic seq, never a wall-clock
+    /// second) so back-to-back HOME-locked tests never collide on one dir and
+    /// poison each other's append-only violation store.
+    fn unique_test_dir(label: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let d = std::env::temp_dir().join(format!(
+            "overwatch-canary-test-{}-{}-{}",
+            label,
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    // THE regression test for the fix point: drive `gate_from_registry` (the
+    // arm `gate` delegates the registry path to) against a REAL on-disk store
+    // that is undetermined (one valid event + one schema-drifted line). It must
+    // advise ROLLBACK. Reverting the match arm to
+    // `read_violations(..).unwrap_or_default()` would silently drop the bad
+    // line, count 1 (< threshold 2) and PROCEED — flipping this assertion. So
+    // this test, unlike the isolated scan/emit tests, actually pins the wiring.
+    #[test]
+    fn gate_from_registry_rolls_back_on_undetermined_store() {
+        use crate::violation::{ViolationEvent, ViolationSource};
+        let _g = crate::store::HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = unique_test_dir("gate-undetermined");
+        std::env::set_var("HOME", &dir);
+
+        let ev = ViolationEvent {
+            source: ViolationSource::Blastguard,
+            signature: "blastguard:rm-rf".into(),
+            task_key: "t".into(),
+            session_id: "s".into(),
+            ts: 1_700_000_000,
+            detail: None,
+        };
+        store::append_violation(&dir, &ev).unwrap();
+        let path = store::violations_path(&dir).unwrap();
+        {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            writeln!(f, "{{corrupt-schema-drift").unwrap();
+        }
+
+        let policy = HealthGatePolicy {
+            max_violations_in_window: 2,
+            window_secs: 900,
+        };
+        let sys_policy = HealthGatePolicy {
+            max_violations_in_window: 0,
+            window_secs: 900,
+        };
+        let advised =
+            gate_from_registry(&dir, policy, sys_policy, false, Some(1_700_000_000), None).unwrap();
+        assert!(
+            advised,
+            "undetermined store must roll back at the gate() fix point (fail closed)"
+        );
+
+        match prev_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The paired non-regression: a fresh project with NO violation store must
+    // PROCEED (Absent → empty), so the fail-closed change does not roll back
+    // every first-time canary. Pins that Absent is not conflated with
+    // Undetermined at the gate.
+    #[test]
+    fn gate_from_registry_proceeds_on_absent_store() {
+        let _g = crate::store::HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = unique_test_dir("gate-absent");
+        std::env::set_var("HOME", &dir);
+
+        let policy = HealthGatePolicy {
+            max_violations_in_window: 2,
+            window_secs: 900,
+        };
+        let sys_policy = HealthGatePolicy {
+            max_violations_in_window: 0,
+            window_secs: 900,
+        };
+        let advised =
+            gate_from_registry(&dir, policy, sys_policy, false, Some(1_700_000_000), None).unwrap();
+        assert!(
+            !advised,
+            "a fresh project with no violation store must proceed, not roll back"
+        );
+
+        match prev_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

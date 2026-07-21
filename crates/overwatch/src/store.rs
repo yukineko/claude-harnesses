@@ -248,6 +248,70 @@ pub fn read_violations(cwd: &Path) -> Result<Vec<ViolationEvent>> {
     }
 }
 
+/// Three-valued result of reading the violation registry for a decision that
+/// must FAIL CLOSED on an undetermined store (the canary health gate). Unlike
+/// [`read_violations`] — which is fail-soft by contract for display/observational
+/// callers (any read/parse trouble collapses to an empty vec) — this scan keeps
+/// "genuinely no violations yet" DISTINCT from "cannot be trusted", so a
+/// fleet-defense caller can hold instead of reading a broken store as clean.
+#[derive(Debug)]
+pub enum ViolationScan {
+    /// The registry file does not exist: no violation has ever been recorded
+    /// for this project. A legitimately-empty history — safe to treat as zero
+    /// violations (this is the normal first-deploy case, so it must NOT trip a
+    /// rollback).
+    Absent,
+    /// The count cannot be trusted: the file exists but could not be read
+    /// (I/O / permission error), OR it was read but at least one non-empty line
+    /// failed to parse (schema drift / corruption) — meaning a real violation
+    /// could be silently dropped, under-counting the health signal. A caller
+    /// that gates the fleet must fail CLOSED here (hold / roll back), never read
+    /// this as "no violations".
+    Undetermined,
+    /// The file was read cleanly and EVERY non-empty line parsed: this is the
+    /// authoritative, trustworthy violation list (possibly empty if the file
+    /// existed but held only blank lines).
+    Events(Vec<ViolationEvent>),
+}
+
+/// Strictly scan the violation registry, distinguishing "absent" (legit empty)
+/// from "undetermined" (unreadable / partially-unparseable → untrustworthy)
+/// from a clean, fully-parsed event list. This is the fail-CLOSED counterpart
+/// to [`read_violations`]: use it only where an undetermined store must block
+/// (the canary health gate), so a broken/corrupt store is never silently read
+/// as "zero violations → proceed". A single non-empty line that fails to parse
+/// makes the WHOLE scan `Undetermined` — a schema-drifted line may be a real
+/// violation we can no longer see, so the count is untrustworthy.
+pub fn scan_violations(cwd: &Path) -> ViolationScan {
+    let path = match violations_path(cwd) {
+        Ok(p) => p,
+        // Cannot even resolve the storage path (e.g. no HOME): treat as
+        // undetermined rather than empty — we cannot claim "no violations".
+        Err(_) => return ViolationScan::Undetermined,
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(txt) => {
+            let mut events = Vec::new();
+            for line in txt.lines() {
+                if line.is_empty() {
+                    continue;
+                }
+                match serde_json::from_str::<ViolationEvent>(line) {
+                    Ok(event) => events.push(event),
+                    // A present-but-unparseable line means the store is
+                    // schema-drifted/corrupt; we cannot trust the count.
+                    Err(_) => return ViolationScan::Undetermined,
+                }
+            }
+            ViolationScan::Events(events)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ViolationScan::Absent,
+        // File exists but is unreadable (permission / I/O): undetermined, not
+        // empty. This is exactly the fail-open the canary gate must avoid.
+        Err(_) => ViolationScan::Undetermined,
+    }
+}
+
 /// Path to the rollbacks.jsonl file (append-only, canary rollback events).
 /// Kept as its own stream since a rollback is a distinct signal (a deploy-time
 /// health-gate action) from both the lease lifecycle log and the gate-violation
@@ -1316,6 +1380,99 @@ pub(crate) static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn viol_event(sig: &str, ts: i64) -> ViolationEvent {
+        ViolationEvent {
+            source: crate::violation::ViolationSource::Blastguard,
+            signature: sig.to_string(),
+            task_key: "task-key".to_string(),
+            session_id: "session".to_string(),
+            ts,
+            detail: None,
+        }
+    }
+
+    fn scan_test_home() -> (std::path::PathBuf, Option<std::ffi::OsString>) {
+        // Process-unique dir (pid + nanos + monotonic seq — NOT seconds), so the
+        // three HOME-locked scan tests that run back-to-back within one wall
+        // clock second never share a dir and poison each other's append-only
+        // violations.jsonl. Mirrors `unique_tmp`'s uniqueness recipe.
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-scan-violations-{}-{}-{}",
+            std::process::id(),
+            now_unix_nanos(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+        (dir, prev_home)
+    }
+
+    fn restore_home(prev_home: Option<std::ffi::OsString>) {
+        match prev_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    // Absent registry (nothing ever recorded) is a LEGITIMATELY-empty history —
+    // the normal first-deploy case — and must scan as `Absent`, NOT
+    // `Undetermined`, so the canary gate proceeds instead of rolling back every
+    // fresh rollout.
+    #[test]
+    fn scan_violations_absent_when_file_missing() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let (dir, prev_home) = scan_test_home();
+        assert!(matches!(scan_violations(&dir), ViolationScan::Absent));
+        restore_home(prev_home);
+    }
+
+    // A clean, fully-parseable registry scans as `Events` with every line — the
+    // authoritative count. Distinct from `Absent` (an empty file present but
+    // holding no events still yields `Events(empty)`, never `Undetermined`).
+    #[test]
+    fn scan_violations_events_when_all_lines_parse() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let (dir, prev_home) = scan_test_home();
+        append_violation(&dir, &viol_event("blastguard:rm-rf", 1_700_000_000)).unwrap();
+        append_violation(&dir, &viol_event("blastguard:rm-rf", 1_700_000_001)).unwrap();
+        let scan = scan_violations(&dir);
+        let len = match &scan {
+            ViolationScan::Events(v) => v.len(),
+            _ => usize::MAX,
+        };
+        assert_eq!(len, 2, "expected Events(2), got {scan:?}");
+        restore_home(prev_home);
+    }
+
+    // The core fail-CLOSED contract: a present registry with even ONE
+    // unparseable (schema-drifted / corrupt) line scans as `Undetermined`, NOT
+    // a silently-under-counted `Events`. A dropped line could be a real
+    // violation the fleet gate must not go blind to.
+    #[test]
+    fn scan_violations_undetermined_on_unparseable_line() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let (dir, prev_home) = scan_test_home();
+        // One valid event, then a corrupt (non-JSON / schema-drifted) line.
+        append_violation(&dir, &viol_event("blastguard:rm-rf", 1_700_000_000)).unwrap();
+        let path = violations_path(&dir).unwrap();
+        {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            writeln!(f, "{{not-valid-json-schema-drift").unwrap();
+        }
+        assert!(
+            matches!(scan_violations(&dir), ViolationScan::Undetermined),
+            "a corrupt line must make the whole scan Undetermined (fail closed), \
+             not a silently under-counted Events"
+        );
+        restore_home(prev_home);
+    }
 
     #[test]
     fn signature_bucketable_rejects_empty_discriminator() {

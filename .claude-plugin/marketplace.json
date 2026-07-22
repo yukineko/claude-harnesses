@@ -604,7 +604,7 @@
     {
       "name": "session-insights",
       "description": "Per-session work metrics for Claude Code: PostToolUse + Stop hooks roll up tool calls, turns, files touched, a size class (XS–XL) and a work category per session, viewable with `session-insights report` and optionally logged as a dated note to an Obsidian vault. Inspired by Devin Session Insights. Subscription-native (two hooks + bundled Rust binary, no API key).",
-      "version": "0.2.12",
+      "version": "0.2.13",
       "category": "observability",
       "keywords": [
         "hooks",

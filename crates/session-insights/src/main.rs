@@ -219,8 +219,17 @@ fn find_transcript(session_id: &str) -> String {
     let projects = harness_core::config::home()
         .join(".claude")
         .join("projects");
-    let Ok(entries) = std::fs::read_dir(&projects) else {
-        return String::new();
+    let entries = match std::fs::read_dir(&projects) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return String::new(),
+        Err(e) => {
+            eprintln!(
+                "session-insights: {} could not be scanned for the transcript; \
+                 the recorded note may be missing transcript-derived fields: {e}",
+                projects.display()
+            );
+            return String::new();
+        }
     };
     let file = format!("{session_id}.jsonl");
     for e in entries.flatten() {
@@ -272,7 +281,13 @@ fn report(session: Option<String>, all: bool, context: bool) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
     if all {
-        let sessions = metrics::load_all(&cfg);
+        let sessions = match metrics::load_all(&cfg) {
+            harness_core::verdict::Determination::Known(s) => s,
+            harness_core::verdict::Determination::Undetermined(why) => {
+                eprintln!("unknown — session store could not be read: {why}");
+                std::process::exit(1);
+            }
+        };
         if sessions.is_empty() {
             println!("(no sessions recorded yet)");
             return;
@@ -294,6 +309,13 @@ fn report(session: Option<String>, all: bool, context: bool) {
     let chosen = match session {
         Some(p) => metrics::find(&cfg, &p),
         None => metrics::latest(&cfg),
+    };
+    let chosen = match chosen {
+        harness_core::verdict::Determination::Known(s) => s,
+        harness_core::verdict::Determination::Undetermined(why) => {
+            eprintln!("unknown — session store could not be read: {why}");
+            std::process::exit(1);
+        }
     };
     match chosen {
         Some(s) => {
@@ -345,5 +367,12 @@ fn status() {
     println!("record:          {}", cfg.record);
     println!("record_dir:      {}", cfg.record_dir);
     println!("state_dir:       {}", cfg.state_dir.display());
-    println!("sessions:        {}", metrics::load_all(&cfg).len());
+    match metrics::load_all(&cfg) {
+        harness_core::verdict::Determination::Known(s) => {
+            println!("sessions:        {}", s.len());
+        }
+        harness_core::verdict::Determination::Undetermined(why) => {
+            println!("sessions:        unknown — store could not be read: {why}");
+        }
+    }
 }

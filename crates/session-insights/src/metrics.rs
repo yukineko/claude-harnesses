@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use harness_core::verdict::{Determination, Reason};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -166,35 +167,55 @@ pub fn short(s: &str) -> String {
     s.chars().take(8).collect()
 }
 
-/// All session rollups on disk, newest first.
-pub fn load_all(cfg: &Config) -> Vec<Session> {
+/// All session rollups on disk, newest first. A missing state dir is a
+/// legitimate absence (no session recorded yet) and yields `Known(vec![])`;
+/// any OTHER `read_dir` error (permission denied, IO) is a cannot-determine
+/// — it must not be silently read as "no sessions", so it comes back
+/// `Undetermined` instead.
+pub fn load_all(cfg: &Config) -> Determination<Vec<Session>> {
     let mut out = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&cfg.state_dir) {
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.extension().and_then(|s| s.to_str()) != Some("json") {
-                continue;
-            }
-            if let Some(s) = std::fs::read_to_string(&p)
-                .ok()
-                .and_then(|t| serde_json::from_str::<Session>(&t).ok())
-            {
-                out.push(s);
-            }
+    let entries = match std::fs::read_dir(&cfg.state_dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Determination::Known(Vec::new())
+        }
+        Err(e) => {
+            return Determination::Undetermined(Reason::new(format!(
+                "{}: {e}",
+                cfg.state_dir.display()
+            )))
+        }
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        if let Some(s) = std::fs::read_to_string(&p)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Session>(&t).ok())
+        {
+            out.push(s);
         }
     }
     out.sort_by(|a, b| b.last_at.cmp(&a.last_at));
-    out
+    Determination::Known(out)
 }
 
-pub fn latest(cfg: &Config) -> Option<Session> {
-    load_all(cfg).into_iter().next()
+pub fn latest(cfg: &Config) -> Determination<Option<Session>> {
+    match load_all(cfg) {
+        Determination::Known(v) => Determination::Known(v.into_iter().next()),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
 }
 
-pub fn find(cfg: &Config, prefix: &str) -> Option<Session> {
-    load_all(cfg)
-        .into_iter()
-        .find(|s| s.session_id.starts_with(prefix))
+pub fn find(cfg: &Config, prefix: &str) -> Determination<Option<Session>> {
+    match load_all(cfg) {
+        Determination::Known(v) => {
+            Determination::Known(v.into_iter().find(|s| s.session_id.starts_with(prefix)))
+        }
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
 }
 
 #[cfg(test)]
@@ -254,5 +275,44 @@ mod tests {
         s.tools.insert("Bash".into(), 3);
         s.tools.insert("Read".into(), 3);
         assert_eq!(s.category(), "mixed");
+    }
+
+    #[test]
+    fn missing_state_dir_yields_known_empty_not_undetermined() {
+        let mut c = cfg();
+        c.state_dir = std::path::PathBuf::from("/no/such/session-insights/state/dir/at/all");
+        assert!(matches!(load_all(&c), Determination::Known(v) if v.is_empty()));
+    }
+
+    /// CA-session-insights-metrics-01: a state dir that EXISTS but is
+    /// unreadable (permission denied) must resolve to `Undetermined`, not
+    /// the same `Known(vec![])` as a legitimately-absent dir — collapsing
+    /// both into "no sessions" makes an incomplete read look complete.
+    #[test]
+    #[cfg(unix)]
+    fn unreadable_existing_state_dir_is_undetermined_not_known_empty() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "session-insights-metrics-unreadable-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&dir, perms.clone()).unwrap();
+
+        let mut c = cfg();
+        c.state_dir = dir.clone();
+        let result = load_all(&c);
+
+        // Restore permissions so the temp dir can be cleaned up.
+        perms.set_mode(0o755);
+        let _ = std::fs::set_permissions(&dir, perms);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            matches!(result, Determination::Undetermined(_)),
+            "an unreadable existing state dir must be Undetermined, got {result:?}"
+        );
     }
 }

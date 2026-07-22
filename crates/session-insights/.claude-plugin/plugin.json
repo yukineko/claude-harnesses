@@ -1,6 +1,6 @@
 {
   "name": "session-insights",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "description": "Per-session work metrics for Claude Code: PostToolUse + Stop hooks roll up tool calls, turns, files touched, a size class (XS–XL) and a work category per session, viewable with `session-insights report` and optionally logged as a dated note to an Obsidian vault. The `/record` command (`record-now`) regenerates the note's machine-owned 数値サマリ/コスト blocks and has the model author Japanese prose sections (完了サマリ/つまずき・学び/振り返り/注意点・落とし穴/残課題/要追跡・あとで確認/関連); cross-session backlog reconciliation now delegates to the standalone `backlog` crate (`~/.backlog/tasks.toml`) rather than a session-insights-owned vault backlog.md. Subscription-native (two hooks + bundled Rust binary, no API key).",
   "author": {
     "name": "yukineko"

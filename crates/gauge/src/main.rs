@@ -350,11 +350,39 @@ fn session_cmd(json: bool, session_id: Option<&str>) {
 /// With no id, the most-recently-modified `*.jsonl` across all project dirs.
 /// Globs the project dir (whose name is Claude's own path encoding) by matching
 /// the session-id filename, so we never reimplement that encoding.
+///
+/// A missing `projects` dir legitimately yields `None` (no transcripts exist
+/// yet, and callers already render that as an honest "no transcript found").
+/// A `projects` dir (or a per-project subdir) that EXISTS but cannot be read
+/// is a cannot-determine and is surfaced via `eprintln!` rather than folded
+/// into the same `None`, since that gap could otherwise hide a real
+/// transcript from cost/usage reporting.
 fn find_transcript(session_id: Option<&str>) -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME")?;
     let projects = Path::new(&home).join(".claude").join("projects");
     let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
-    for proj in std::fs::read_dir(&projects).ok()?.flatten() {
+    let proj_entries = match std::fs::read_dir(&projects) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            eprintln!(
+                "warning: find_transcript: cannot read {}: {e}",
+                projects.display()
+            );
+            return None;
+        }
+    };
+    for proj in proj_entries {
+        let proj = match proj {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!(
+                    "warning: find_transcript: unreadable entry in {}: {e}",
+                    projects.display()
+                );
+                continue;
+            }
+        };
         let dir = proj.path();
         if !dir.is_dir() {
             continue;
@@ -366,16 +394,38 @@ fn find_transcript(session_id: Option<&str>) -> Option<std::path::PathBuf> {
             }
             continue;
         }
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                eprintln!(
+                    "warning: find_transcript: cannot read {}: {e}",
+                    dir.display()
+                );
+                continue;
+            }
         };
-        for f in entries.flatten() {
+        for f in entries {
+            let f = match f {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!(
+                        "warning: find_transcript: unreadable entry in {}: {e}",
+                        dir.display()
+                    );
+                    continue;
+                }
+            };
             let p = f.path();
             if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            let Ok(modified) = f.metadata().and_then(|md| md.modified()) else {
-                continue;
+            let modified = match f.metadata().and_then(|md| md.modified()) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("warning: find_transcript: cannot stat {}: {e}", p.display());
+                    continue;
+                }
             };
             if best.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
                 best = Some((modified, p));
@@ -589,4 +639,62 @@ fn init(force: bool) -> anyhow::Result<()> {
     println!("wrote {}", path.display());
     println!("Run `gauge install` to wire the Stop hook, then `gauge report` after some turns.");
     Ok(())
+}
+
+#[cfg(test)]
+mod find_transcript_tests {
+    use super::*;
+
+    fn with_home<T>(home: &Path, f: impl FnOnce() -> T) -> T {
+        let old = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        let result = f();
+        match old {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        result
+    }
+
+    #[test]
+    fn absent_projects_dir_returns_none() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let result = with_home(tmp.path(), || find_transcript(None));
+        assert_eq!(result, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_projects_dir_does_not_panic() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let projects = tmp.path().join(".claude").join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let mut perms = std::fs::metadata(&projects).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&projects, perms.clone()).unwrap();
+        let result = std::panic::catch_unwind(|| with_home(tmp.path(), || find_transcript(None)));
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&projects, perms).unwrap();
+        assert!(
+            result.is_ok(),
+            "must not panic on an unreadable projects dir"
+        );
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn finds_most_recently_modified_jsonl() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let proj = tmp.path().join(".claude").join("projects").join("p1");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("older.jsonl"), "{}").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(proj.join("newer.jsonl"), "{}").unwrap();
+        let result = with_home(tmp.path(), || find_transcript(None));
+        assert_eq!(
+            result.unwrap().file_name().unwrap().to_str().unwrap(),
+            "newer.jsonl"
+        );
+    }
 }

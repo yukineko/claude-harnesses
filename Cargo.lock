@@ -574,7 +574,7 @@ dependencies = [
 
 [[package]]
 name = "gauge"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "anyhow",
  "chrono",
@@ -583,6 +583,7 @@ dependencies = [
  "harness-core",
  "serde",
  "serde_json",
+ "tempfile",
  "toml 0.8.23",
 ]
 
@@ -1222,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "ship"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "clap",

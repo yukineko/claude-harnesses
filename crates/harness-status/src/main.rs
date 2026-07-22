@@ -227,20 +227,27 @@ fn main() {
         }
         Some(Command::Plugins) => {
             let root = plugins::find_repo_root(&cwd);
-            let r = plugins::report(&root);
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
-            } else {
-                let section = |title: &str, items: &[plugins::PluginInfo]| {
-                    println!("{} ({})", title, items.len());
-                    for p in items {
-                        println!("  {}  —  {}", p.name, p.trigger);
+            match plugins::report(&root) {
+                Err(e) => {
+                    eprintln!("harness-status: could not scan {}: {e}", root.join("crates").display());
+                    std::process::exit(1);
+                }
+                Ok(r) => {
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+                    } else {
+                        let section = |title: &str, items: &[plugins::PluginInfo]| {
+                            println!("{} ({})", title, items.len());
+                            for p in items {
+                                println!("  {}  —  {}", p.name, p.trigger);
+                            }
+                            println!();
+                        };
+                        section("ALWAYS-ON", &r.always_on);
+                        section("EVENT-SCOPED", &r.event_scoped);
+                        section("MANUAL", &r.manual);
                     }
-                    println!();
-                };
-                section("ALWAYS-ON", &r.always_on);
-                section("EVENT-SCOPED", &r.event_scoped);
-                section("MANUAL", &r.manual);
+                }
             }
         }
         Some(Command::HooksHealth) => {
@@ -260,24 +267,29 @@ fn main() {
                 }
             }
         }
-        Some(Command::PathShadow) => {
-            let shadowed = path_shadow::detect();
-            if cli.json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&shadowed).unwrap_or_default()
-                );
-            } else if shadowed.is_empty() {
-                println!("[no PATH-shadowed plugin binaries]");
-            } else {
-                for s in &shadowed {
+        Some(Command::PathShadow) => match path_shadow::detect() {
+            harness_core::verdict::Determination::Undetermined(why) => {
+                eprintln!("harness-status: PATH-shadow scan could not be completed: {why}");
+                std::process::exit(1);
+            }
+            harness_core::verdict::Determination::Known(shadowed) => {
+                if cli.json {
                     println!(
-                        "⚠ shadowed binary: {} — {} shadows plugin cache {}",
-                        s.name, s.shadowing_path, s.cache_path
+                        "{}",
+                        serde_json::to_string_pretty(&shadowed).unwrap_or_default()
                     );
+                } else if shadowed.is_empty() {
+                    println!("[no PATH-shadowed plugin binaries]");
+                } else {
+                    for s in &shadowed {
+                        println!(
+                            "⚠ shadowed binary: {} — {} shadows plugin cache {}",
+                            s.name, s.shadowing_path, s.cache_path
+                        );
+                    }
                 }
             }
-        }
+        },
         Some(Command::SessionStart) => {
             harness_core::hook::run_hook(|| {
                 // Read (and discard) stdin only if actually piped, mirroring the
@@ -300,21 +312,29 @@ fn main() {
                         lines.join("\n")
                     ));
                 }
-                if !shadowed.is_empty() {
-                    let lines: Vec<String> = shadowed
-                        .iter()
-                        .map(|s| {
-                            format!(
-                                "  ⚠ {} は {} がPATH上で plugin cache版 ({}) より優先されています。古い版が使われ続ける可能性があります（rm または cp で cache版を再コピーしてください）。",
-                                s.name, s.shadowing_path, s.cache_path
-                            )
-                        })
-                        .collect();
-                    sections.push(format!(
-                        "harness-status: {} 件のbinaryがPATH上で古いコピーに shadow されています:\n{}\n`harness-status path-shadow` で詳細確認できます。",
-                        shadowed.len(),
-                        lines.join("\n")
-                    ));
+                match shadowed {
+                    harness_core::verdict::Determination::Undetermined(why) => {
+                        sections.push(format!(
+                            "harness-status: PATH-shadow scan が完了しませんでした（判定不能）: {why}\n`harness-status path-shadow` で詳細確認してください。"
+                        ));
+                    }
+                    harness_core::verdict::Determination::Known(shadowed) if !shadowed.is_empty() => {
+                        let lines: Vec<String> = shadowed
+                            .iter()
+                            .map(|s| {
+                                format!(
+                                    "  ⚠ {} は {} がPATH上で plugin cache版 ({}) より優先されています。古い版が使われ続ける可能性があります（rm または cp で cache版を再コピーしてください）。",
+                                    s.name, s.shadowing_path, s.cache_path
+                                )
+                            })
+                            .collect();
+                        sections.push(format!(
+                            "harness-status: {} 件のbinaryがPATH上で古いコピーに shadow されています:\n{}\n`harness-status path-shadow` で詳細確認できます。",
+                            shadowed.len(),
+                            lines.join("\n")
+                        ));
+                    }
+                    harness_core::verdict::Determination::Known(_) => {}
                 }
                 if !sections.is_empty() {
                     println!(

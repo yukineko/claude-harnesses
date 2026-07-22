@@ -22,7 +22,10 @@ pub struct StatusReport<'a> {
     pub hooks: &'a HookLatencyReport,
     pub inject: &'a InjectReport,
     pub hooks_health: &'a HooksHealthReport,
-    pub path_shadow: &'a [ShadowedBinary],
+    /// `Undetermined` when `$PATH` or the plugin-cache root could not be read
+    /// — rendered as an explicit `unknown`, never as the empty "no shadowed
+    /// binaries" state.
+    pub path_shadow: &'a Determination<Vec<ShadowedBinary>>,
 }
 
 pub fn print_status(report: &StatusReport, cwd_display: &str) {
@@ -170,14 +173,20 @@ pub fn print_status(report: &StatusReport, cwd_display: &str) {
     // copy) resolving before the up-to-date plugin-cache copy on bare-name
     // PATH lookup.
     println!("── PATH shadowing (stray binaries) ───────────────");
-    if path_shadow.is_empty() {
-        println!("  no PATH-shadowed plugin binaries");
-    } else {
-        for s in path_shadow {
-            println!(
-                "  ⚠ SHADOWED  {} | {} shadows {}",
-                s.name, s.shadowing_path, s.cache_path
-            );
+    match path_shadow {
+        Determination::Undetermined(why) => {
+            println!("  unknown — PATH-shadow scan could not be completed: {why}");
+        }
+        Determination::Known(shadowed) if shadowed.is_empty() => {
+            println!("  no PATH-shadowed plugin binaries");
+        }
+        Determination::Known(shadowed) => {
+            for s in shadowed {
+                println!(
+                    "  ⚠ SHADOWED  {} | {} shadows {}",
+                    s.name, s.shadowing_path, s.cache_path
+                );
+            }
         }
     }
     println!();
@@ -208,7 +217,13 @@ pub fn print_json(report: &StatusReport) {
         "hook_latency": report.hooks,
         "inject": report.inject,
         "hooks_health": report.hooks_health,
-        "path_shadow": report.path_shadow,
+        "path_shadow": match report.path_shadow {
+            Determination::Known(s) => serde_json::json!(s),
+            Determination::Undetermined(why) => serde_json::json!({
+                "status": "unknown",
+                "reason": why.as_str(),
+            }),
+        },
     });
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
 }

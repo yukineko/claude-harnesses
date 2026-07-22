@@ -8,6 +8,7 @@
 //! flags that drift so it doesn't go unnoticed indefinitely. Purely
 //! diagnostic: fail-soft throughout, never blocks a turn.
 
+use harness_core::verdict::{Determination, Reason};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -107,10 +108,20 @@ fn list_binary_names(dir: &Path) -> Vec<String> {
 }
 
 /// Enumerate every `(name, cache_path)` pair across all plugin-cache dirs.
-/// Fail-soft: a missing/unreadable cache root yields an empty list.
-fn scan_cache_bins(root: &Path) -> Vec<(String, PathBuf)> {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
+/// A missing cache root is a legitimate absence (e.g. no plugins installed
+/// yet) and yields `Known(vec![])`; any OTHER `read_dir` error (permission
+/// denied, IO) is a cannot-determine and must not be silently read as "no
+/// shadowed binaries" — it comes back `Undetermined` so callers can say so.
+fn scan_cache_bins(root: &Path) -> Determination<Vec<(String, PathBuf)>> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Determination::Known(Vec::new()),
+        Err(e) => {
+            return Determination::Undetermined(Reason::new(format!(
+                "{}: {e}",
+                root.display()
+            )))
+        }
     };
     let mut plugin_dirs: Vec<PathBuf> = entries
         .filter_map(|e| e.ok())
@@ -129,19 +140,23 @@ fn scan_cache_bins(root: &Path) -> Vec<(String, PathBuf)> {
             out.push((name, cache_path));
         }
     }
-    out
+    Determination::Known(out)
 }
 
 /// Live detection: reads `$PATH`, the real plugin-cache root, and the real
 /// filesystem. Fail-soft throughout — a missing `$PATH` env var or missing
 /// cache root yields an empty report, never panics.
-pub fn detect() -> Vec<ShadowedBinary> {
+pub fn detect() -> Determination<Vec<ShadowedBinary>> {
     let Ok(path_env) = std::env::var("PATH") else {
-        return Vec::new();
+        return Determination::Undetermined(Reason::new("$PATH is not set"));
     };
     let path_dirs = split_path(&path_env);
-    let cache_bins = scan_cache_bins(&cache_root());
-    detect_with(&path_dirs, &cache_bins, |p| p.is_file())
+    match scan_cache_bins(&cache_root()) {
+        Determination::Known(cache_bins) => {
+            Determination::Known(detect_with(&path_dirs, &cache_bins, |p| p.is_file()))
+        }
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
 }
 
 #[cfg(test)]
@@ -197,14 +212,45 @@ mod tests {
     }
 
     #[test]
-    fn missing_cache_root_yields_empty_scan_never_panics() {
+    fn missing_cache_root_yields_known_empty_scan_never_panics() {
         let bins = scan_cache_bins(Path::new("/no/such/cache/root/at/all"));
-        assert!(bins.is_empty());
+        assert_eq!(bins, Determination::Known(Vec::new()));
     }
 
     #[test]
     fn empty_cache_bins_yields_no_findings() {
         let shadowed = detect_with(&[pb("/home/user/.cargo/bin")], &[], |_| true);
         assert!(shadowed.is_empty());
+    }
+
+    /// CA-harness-status-path-shadow-01: a cache root that EXISTS but is
+    /// unreadable (permission denied) must resolve to `Undetermined`, not the
+    /// same `Known(vec![])` as a legitimately-absent root — the old
+    /// `let Ok(..) else { return Vec::new() }` collapsed both into "no
+    /// shadowed binaries", which reads as clean even when the scan never ran.
+    #[test]
+    #[cfg(unix)]
+    fn unreadable_existing_cache_root_is_undetermined_not_known_empty() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "harness-status-path-shadow-unreadable-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&dir, perms.clone()).unwrap();
+
+        let result = scan_cache_bins(&dir);
+
+        // Restore permissions so the temp dir can be cleaned up.
+        perms.set_mode(0o755);
+        let _ = std::fs::set_permissions(&dir, perms);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            matches!(result, Determination::Undetermined(_)),
+            "an unreadable existing cache root must be Undetermined, got {result:?}"
+        );
     }
 }

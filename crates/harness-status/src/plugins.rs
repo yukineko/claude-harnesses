@@ -164,12 +164,15 @@ fn trigger_for(
 /// Scan `repo_root/crates/*/` and classify each plugin dir. Non-plugin dirs
 /// (plain libraries with no `.claude-plugin/`, `hooks/`, `skills/`, or `agents/`)
 /// are excluded. Returns plugins in filesystem-iteration order.
-pub fn scan(repo_root: &Path) -> Vec<PluginInfo> {
+///
+/// A `crates/` dir that cannot be read (permission denied, IO error) is a
+/// cannot-determine and is surfaced as `Err`, not silently read as "0
+/// plugins" — the CLI caller must not report an empty scan as if it were a
+/// complete one.
+pub fn scan(repo_root: &Path) -> Result<Vec<PluginInfo>, std::io::Error> {
     let crates_dir = repo_root.join("crates");
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(&crates_dir) else {
-        return out;
-    };
+    let entries = std::fs::read_dir(&crates_dir)?;
     let mut dirs: Vec<PathBuf> = entries
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.is_dir())
@@ -208,13 +211,13 @@ pub fn scan(repo_root: &Path) -> Vec<PluginInfo> {
             trigger,
         });
     }
-    out
+    Ok(out)
 }
 
 /// Scan + group into a [`PluginReport`], with names sorted alphabetically within
 /// each group.
-pub fn report(repo_root: &Path) -> PluginReport {
-    let plugins = scan(repo_root);
+pub fn report(repo_root: &Path) -> Result<PluginReport, std::io::Error> {
+    let plugins = scan(repo_root)?;
     let mut always_on = Vec::new();
     let mut event_scoped = Vec::new();
     let mut manual = Vec::new();
@@ -234,12 +237,12 @@ pub fn report(repo_root: &Path) -> PluginReport {
         manual: manual.len(),
         total: always_on.len() + event_scoped.len() + manual.len(),
     };
-    PluginReport {
+    Ok(PluginReport {
         always_on,
         event_scoped,
         manual,
         counts,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -341,7 +344,7 @@ mod tests {
         fs::create_dir_all(crates.join("epsilon/agents")).unwrap();
         write(&crates.join("epsilon/agents/w.md"), "agent\n");
 
-        let plugins = scan(&tmp);
+        let plugins = scan(&tmp).expect("tmp crates dir is readable");
         let by_name = |n: &str| plugins.iter().find(|p| p.name == n).cloned();
 
         assert!(by_name("libcore").is_none(), "bare lib excluded");
@@ -389,7 +392,7 @@ mod tests {
         // Use the real repo root discovered from CWD when running tests, but keep
         // the assertion structural so it survives plugin churn.
         let root = find_repo_root(&std::env::current_dir().unwrap());
-        let r = report(&root);
+        let r = report(&root).expect("repo crates dir is readable");
         assert_eq!(
             r.counts.total,
             r.counts.always_on + r.counts.event_scoped + r.counts.manual
@@ -402,5 +405,40 @@ mod tests {
         assert!(sorted(&r.always_on));
         assert!(sorted(&r.event_scoped));
         assert!(sorted(&r.manual));
+    }
+
+    /// CA-harness-status-plugins-01: an unreadable (but existing) `crates/`
+    /// dir must surface as `Err`, not the same empty `Vec`/`PluginReport` a
+    /// legitimately-plugin-less repo produces — the old
+    /// `let Ok(..) else { return out }` collapsed both into "0 plugins",
+    /// which reads as a complete scan even when it never ran.
+    #[test]
+    #[cfg(unix)]
+    fn unreadable_crates_dir_is_err_not_empty_scan() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = std::env::temp_dir().join(format!("hs-plugins-unreadable-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let crates_dir = tmp.join("crates");
+        fs::create_dir_all(&crates_dir).unwrap();
+        let mut perms = fs::metadata(&crates_dir).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&crates_dir, perms.clone()).unwrap();
+
+        let scan_result = scan(&tmp);
+        let report_result = report(&tmp);
+
+        // Restore permissions so the temp dir can be cleaned up.
+        perms.set_mode(0o755);
+        let _ = fs::set_permissions(&crates_dir, perms);
+        let _ = fs::remove_dir_all(&tmp);
+
+        assert!(
+            scan_result.is_err(),
+            "an unreadable crates/ dir must be Err, got {scan_result:?}"
+        );
+        assert!(
+            report_result.is_err(),
+            "report() must propagate scan()'s Err, got {report_result:?}"
+        );
     }
 }

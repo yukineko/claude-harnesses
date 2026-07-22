@@ -248,6 +248,42 @@ permissive 側が「何も壊れないように見える」からである。**�
 - これは 3.（判定不能は制限側へ）と**別の軸**である。置き場所を local へ移すのはゲートを
   緩めることではない。両方を同時に満たすこと — local に置き、かつ判定不能は block に倒す。
 
+### 8. 作業は worktree で行う — main の作業ツリーを共有編集しない（**義務**）
+
+**同時編集を避けることがルールであり、conflict を避けることはルールではない。** conflict は
+merge で統合すればよい。統合できないのは**同じ index / 作業ツリーを2つのセッションが共有した場合**だけで、
+これは git が救えない唯一の競合である。したがって分離するのは**編集の場**であって、変更内容ではない。
+
+- **各セッションは自分の worktree を持ち、そこで実装する。** main の作業ツリーで編集・stage・commit しない。
+- **待つのは解ではない。** 「他セッションが lock を持っているから見送る」「相手が green にするまで待つ」は
+  並行性の放棄であって解決ではない。分離して同時に進め、**統合で決着させる**。
+- **統合が本題**である。merge・conflict 解決・統合順序の設計に労力を割く。衝突の発生自体は失敗ではない。
+
+**実測（2026-07-23、本 repo で観測）**— 分離しないと何が起きるか:
+
+- 2セッションが main の作業ツリーを共有し、`git status` に双方の未コミット変更が同時に現れた
+  （一方は `crates/harness-core/src/boundary.rs`、他方は `crates/condukt/src/worktree.rs`）。
+  **触っているファイルは非衝突なのに、index が共有されているため分離できない。**
+- `donegate` の required check は workspace 全体（`cargo fmt --all` / `cargo clippy --workspace`）を見るため、
+  **自分が触っていない crate の赤が自分の停止をブロック**した。`reviewgate` も他セッションの差分を
+  自分の変更としてレビュー要求した。
+- その結果、唯一の逃げ道が project root の共有 skip ファイルになる。これは**一度だけ消費される**ため
+  他セッションの正当なゲートを素通りさせる — 5. が禁じる fail-open へ構造的に圧力がかかる。
+- **worktree 分離はこの3つを同時に消す**（別チェックアウトなので相手のファイルがそもそも存在せず、
+  ゲートは自分の変更だけを見る）。
+
+**したがって:**
+
+- `condukt` の実装タスクは worktree 経由で行う。`single_worktree` モードや `serial` タスクを
+  「main で直接実装する」経路として使わない（`crates/condukt/src/main.rs` の
+  「the single-worktree main-tree commit is performed by the /condukt skill's shell」が指す経路がこれ）。
+- **main の作業ツリーで許されるのは、統合（merge・conflict 解決）と、単一セッションしか動いていないことが
+  確かな場合の軽微な編集だけ**である。並行セッションの有無は `overwatch status` と
+  `backlog lock status --project "$PWD"` で確認できる。
+- worktree に出さず main を触る必要が生じたら、**その理由を明示して人間に返す**（5. に従う）。黙って触らない。
+- ゲート（donegate / reviewgate / precommit-audit）が他セッションの変更を自分のものとして要求してきたら、
+  それは**帰属のバグ**であって自分の不備ではない。共有 skip ファイルで黙らせず、記録して報告する。
+
 ## context 読み込み戦略（重要 — 盲目的に crate を探索しない）
 
 このリポジトリは 39 クレートある。全体を毎回読むと context を浪費するので、**必要な層だけを

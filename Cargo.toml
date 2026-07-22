@@ -30,6 +30,54 @@ tempfile   = "3"
 sha2       = "0.10"
 clap       = { version = "4", features = ["derive"] }
 
+# ゲート crate 共通の lint 設定。opt-in — 継承するのは `[lints] workspace = true`
+# を書いたメンバーだけで、既定では誰にも掛からない（後方互換）。
+#
+# なぜここに置くか: fail-open の物理的な出口は Result / Option を判定へ潰す少数の
+# イディオムに集中しており、そのうち unwrap と expect は「潰す」のではなく
+# 「潰せなかったら落ちる」形。判定を持つ crate では panic は判定不能そのものなので、
+# 書けてはならない。clippy の unwrap_used / expect_used は既定 allow なので、
+# ここで deny にするまでゲート crate でも素通りしていた（実測 2026-07-22 / 690cc4af:
+# production 側に 11 箇所 — specguard 7 / stuckguard 2 / overwatch 1 / blastguard 1 —
+# 残ったまま `cargo clippy -p <各 gate crate> --all-targets` が 6/6 green だった）。
+# 事前見積りではこれを 10 と報告していた。数え方が「ファイル最初の #[cfg(test)] 以降は
+# 全部テスト」と見なす heuristic で、テストモジュールの後ろにも production コードを持つ
+# blastguard/src/detect.rs を取りこぼしていた。過小側にのみ外れる floor だったが、
+# 黙って直さずここに残す。
+#
+# テスト側は crate ルートの `#![cfg_attr(test, allow(...))]` で除外する。テストで
+# unwrap するのは意図的な assert であって fail-open ではなく、ここを deny にすると
+# 大量の書き換えを強要して「lint を外す」圧力になる（CLAUDE.md 第4節が名指しする
+# 「通すためだけに緩める」を、こちら側から誘発してしまう）。規模の実測は
+# allow を入れる前に clippy 自身が出した 465 件（2026-07-22 / 690cc4af、
+# `[lints] workspace = true` のみを入れ allow を一切書かない状態で
+# `cargo clippy -p <各 gate crate> --all-targets`: blastguard 14 / propguard 36 /
+# specguard 1 / stuckguard 69 / mutategate 25 / overwatch 320）。specguard の
+# カスタム target root 2 本（[[bin]] src/forge/main.rs、[[test]] src/testaudit.rs）を
+# 覆った後にさらに 70 件が出たので、総数はこれより多い。
+#
+# この allow の射程（測定済みの限界、2026-07-22 / 690cc4af）: cfg_attr(test) は
+# crate ルート属性なので、cargo が bin を cfg(test) 付きでビルドする variant では
+# production コードにも allow が掛かる。production を実際に守っているのは
+# cfg(test) が false の素の bin target の方で、`--all-targets` はこれを必ず含むため
+# 新規 unwrap は RED になる（6/6 で injection 実測）。`--tests` だけに絞った
+# 呼び出しでは守られない。この repo にそういう呼び出しは無いが、増やさないこと。
+#
+# enforce の置き場所は local。CLAUDE.md 第7節により、この lint を GitHub の
+# required status check として登録しない — ブロックと許可を決める権限は手元に置く。
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
+# ラチェットの機構。既存の unwrap/expect には site ごとに
+# `#[expect(clippy::unwrap_used, reason = "…")]` を貼って「見えて数えられる」状態にするが、
+# それが**永住しない**ことをコンパイラに保証させる: 元の unwrap を消したのに attribute を
+# 残すと unfulfilled_lint_expectations が発火し、deny なのでビルドが落ちる。
+# つまり許可は自分で自分を回収する — 手で棚卸しする必要がなく、許可リストが
+# 現実から乖離したまま腐ることがない。
+[workspace.lints.rust]
+unfulfilled_lint_expectations = "deny"
+
 # 同梱バイナリ用の最適化プロファイル。各メンバーが個別に持っていた同一の
 # [profile.release] をここへ一元化（ワークスペースではルートのみ有効）。
 [profile.release]

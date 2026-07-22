@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "overwatch"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 description = "Lease & event store for condukt task orchestration. Manages claim registry, heartbeat lifecycle, and runtime state."
 
@@ -24,3 +24,10 @@ dirs = "5"
 anyhow = { workspace = true }
 wait-timeout = "0.2"
 regex = { workspace = true }
+
+# ワークスペースの [workspace.lints.clippy] を継承する（unwrap_used / expect_used = deny）。
+# 判定を持つ crate では panic は判定不能そのものなので、production 側に unwrap / expect を
+# 書けなくする。テスト側は各 crate root / 各 integration test の
+# `#![cfg_attr(test, allow(...))]` で除外している（意図的な assert であって fail-open ではない）。
+[lints]
+workspace = true

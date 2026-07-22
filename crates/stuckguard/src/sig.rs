@@ -226,6 +226,15 @@ fn normalize_error_text(s: &str) -> String {
     // followed by path-segment characters, e.g. `/home/user/proj/src/f.rs`
     // or `/tmp/foo-12345/bar`.
     static PATH_RE: OnceLock<regex::Regex> = OnceLock::new();
+    #[expect(
+        clippy::unwrap_used,
+        reason = "the pattern is a compile-time literal with no runtime input, so \
+                  Regex::new can only fail if this line itself is edited wrong — a \
+                  build-time bug, not a runtime condition. There is no restrictive \
+                  fallback to fall to: skipping normalization would make two \
+                  identical errors hash differently and stuckguard would stop \
+                  detecting the stuck loop, which is the fail-open direction."
+    )]
     let path_re = PATH_RE.get_or_init(|| regex::Regex::new(r"[/\\][A-Za-z0-9_.\-/\\]+").unwrap());
 
     // Any run of digits (with optional embedded `:`, `-`, `.`, or hex `a-f`
@@ -233,6 +242,11 @@ fn normalize_error_text(s: &str) -> String {
     // (`0x7f3a…`), timestamps (`12:34:56`, `2026-07-09`), and generic temp
     // values/offsets.
     static NUM_RE: OnceLock<regex::Regex> = OnceLock::new();
+    #[expect(
+        clippy::unwrap_used,
+        reason = "same class as PATH_RE above: compile-time literal pattern, no \
+                  runtime input, and no restrictive fallback available."
+    )]
     let num_re =
         NUM_RE.get_or_init(|| regex::Regex::new(r"0[xX][0-9a-fA-F]+|\d[\d:._\-]*\d|\d").unwrap());
 

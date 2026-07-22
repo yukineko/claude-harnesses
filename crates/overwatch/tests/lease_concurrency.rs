@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Two real processes racing `overwatch begin` for the SAME lease key must
 //! never both succeed: exactly one must win (exit 0) and the other must see
 //! itself skipped (exit 1). This is the regression test for the TOCTOU

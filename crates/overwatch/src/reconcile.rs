@@ -31,6 +31,13 @@ pub struct CommitRef {
 /// Extract every `CA-<crate>-<NNN>`-shaped finding-id referenced in `text`,
 /// in first-seen order, de-duplicated. Pure (no I/O, no clock).
 pub fn extract_finding_ids(text: &str) -> Vec<String> {
+    #[expect(
+        clippy::expect_used,
+        reason = "compile-time literal pattern with no runtime input; Regex::new can \
+                  only fail if this line is edited wrong, which is a build-time bug. \
+                  Returning an empty Vec instead would read downstream as 'this commit \
+                  references no finding' — the fail-open direction for reconcile."
+    )]
     let re = Regex::new(r"CA-[A-Za-z0-9_-]+-[0-9]+").expect("static finding-id pattern is valid");
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();

@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! End-to-end tests driving the built binary against a throwaway git repo with
 //! a *fake* agent (a `bash -c` script), so no real LLM is required. Exercises
 //! scope resolution, prompt delivery, marker parsing, and report/sentinel I/O.

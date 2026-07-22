@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "propguard"
-version = "0.1.24"
+version = "0.1.25"
 edition = "2021"
 description = "Property gate for Claude Code. On Stop it derives 3–5 semantic properties (invariants) from a task's done_criteria and checks the generated code against them before the agent can declare done: either by injecting a property checklist for the running agent to self-verify (no API key), or by spawning an independent checker command. It blocks when fewer than a threshold of the properties hold — going beyond 'concrete tests pass' to formalized invariants."
 license = "MIT"
@@ -27,3 +27,10 @@ anyhow = { workspace = true }
 # CA-propguard-004: kill the checker's whole process group (not just the
 # direct child) on timeout when checker_cmd is shell-wrapped.
 libc = "0.2"
+
+# ワークスペースの [workspace.lints.clippy] を継承する（unwrap_used / expect_used = deny）。
+# 判定を持つ crate では panic は判定不能そのものなので、production 側に unwrap / expect を
+# 書けなくする。テスト側は各 crate root / 各 integration test の
+# `#![cfg_attr(test, allow(...))]` で除外している（意図的な assert であって fail-open ではない）。
+[lints]
+workspace = true

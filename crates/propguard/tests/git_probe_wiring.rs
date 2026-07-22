@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! RED wiring test for backlog 7d3db473 (propguard's share of it).
 //!
 //! `propguard::git::is_git_repo` is `run_git(root, &["rev-parse",

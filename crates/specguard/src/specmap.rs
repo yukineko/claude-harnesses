@@ -307,7 +307,12 @@ pub fn parse_name_status(text: &str) -> Vec<Change> {
         if !is_status_code(code) {
             continue;
         }
-        let first = code.chars().next().unwrap();
+        // `is_status_code(code)` above already rejects the empty string, so the
+        // else arm is unreachable; it mirrors the `!is_status_code` skip right
+        // above rather than panicking on a line git could never emit.
+        let Some(first) = code.chars().next() else {
+            continue;
+        };
         match first {
             'A' => {
                 if let Some(p) = fields.next() {
@@ -473,10 +478,12 @@ impl SpecMap {
         let Some(key) = self.key_owning(path) else {
             return;
         };
-        let entry = self
-            .entries
-            .get_mut(&key)
-            .expect("key_owning returned a live key");
+        // `key_owning` just returned this key from the same map, so the lookup
+        // cannot miss; the else arm mirrors the `let Some(key) … else { return }`
+        // directly above rather than panicking.
+        let Some(entry) = self.entries.get_mut(&key) else {
+            return;
+        };
         entry.remove_path(path);
         entry.last_ref = ref_opt(synced_ref);
         entry.status = if entry.is_orphaned() {

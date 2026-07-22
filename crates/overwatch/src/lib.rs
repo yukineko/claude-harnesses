@@ -1,3 +1,6 @@
+// テスト内の unwrap/expect は意図的な assert であって fail-open ではないので許可する。
+// production 側は workspace の [workspace.lints.clippy] で deny のまま。
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! Overwatch: project-global lease ledger and cross-session dedup.
 //!
 //! Re-exports the public API for use by tests and other crates.

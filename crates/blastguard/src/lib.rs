@@ -1,3 +1,6 @@
+// テスト内の unwrap/expect は意図的な assert であって fail-open ではないので許可する。
+// production 側は workspace の [workspace.lints.clippy] で deny のまま。
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! blastguard as a library: the pure destructive-operation detector reused by
 //! other harness crates (e.g. specguard's forge validates an LLM-generated
 //! `test_cmd` with [`detect::detect`] before ever handing it to `sh -c`).

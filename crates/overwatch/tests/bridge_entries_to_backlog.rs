@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Integration test for the *consolidation* half of `overwatch review-queue
 //! --to-backlog`: draining the non-finding streams (systemic / rollback /
 //! escalation) into the backlog. Exercised here via the rollback stream, which

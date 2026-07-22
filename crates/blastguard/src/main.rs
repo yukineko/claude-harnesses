@@ -1,3 +1,6 @@
+// テスト内の unwrap/expect は意図的な assert であって fail-open ではないので許可する。
+// production 側は workspace の [workspace.lints.clippy] で deny のまま。
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! blastguard — a Claude Code PreToolUse hook that denies project-destroying
 //! Bash commands and file operations.
 //!

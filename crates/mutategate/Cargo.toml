@@ -24,3 +24,10 @@ clap = { workspace = true }
 anyhow = { workspace = true }
 harness-core = { path = "../harness-core" }
 overwatch = { path = "../overwatch" }
+
+# ワークスペースの [workspace.lints.clippy] を継承する（unwrap_used / expect_used = deny）。
+# 判定を持つ crate では panic は判定不能そのものなので、production 側に unwrap / expect を
+# 書けなくする。テスト側は各 crate root / 各 integration test の
+# `#![cfg_attr(test, allow(...))]` で除外している（意図的な assert であって fail-open ではない）。
+[lints]
+workspace = true

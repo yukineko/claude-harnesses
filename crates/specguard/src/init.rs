@@ -97,9 +97,13 @@ fn install_hook(target_dir: &Path) -> Result<()> {
     });
 
     // Merge into hooks.SessionStart without disturbing any existing settings.
+    // Each of the three casts below used to be `.unwrap()`. The shape was
+    // already checked upstream in every case, but an unwrap turns a
+    // "settings.json is not what we assumed" into a panic mid-write; bailing
+    // names the file and leaves it untouched.
     let hooks = root
         .as_object_mut()
-        .unwrap()
+        .ok_or_else(|| anyhow::anyhow!("{} is not a JSON object", settings_path.display()))?
         .entry("hooks")
         .or_insert_with(|| serde_json::json!({}));
     if !hooks.is_object() {
@@ -107,7 +111,7 @@ fn install_hook(target_dir: &Path) -> Result<()> {
     }
     let session_start = hooks
         .as_object_mut()
-        .unwrap()
+        .ok_or_else(|| anyhow::anyhow!("`hooks` in {} is not an object", settings_path.display()))?
         .entry("SessionStart")
         .or_insert_with(|| serde_json::json!([]));
     if !session_start.is_array() {
@@ -116,7 +120,15 @@ fn install_hook(target_dir: &Path) -> Result<()> {
             settings_path.display()
         );
     }
-    session_start.as_array_mut().unwrap().push(group);
+    session_start
+        .as_array_mut()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "`hooks.SessionStart` in {} is not an array",
+                settings_path.display()
+            )
+        })?
+        .push(group);
 
     let pretty = serde_json::to_string_pretty(&root).context("serializing settings.json")?;
     std::fs::write(&settings_path, format!("{pretty}\n"))

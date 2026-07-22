@@ -1,3 +1,6 @@
+// テスト内の unwrap/expect は意図的な assert であって fail-open ではないので許可する。
+// production 側は workspace の [workspace.lints.clippy] で deny のまま。
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! specguard — project-agnostic spec/implementation drift audit harness.
 //!
 //! Reads a TOML config describing a project's canon (areas, canon pointers,
@@ -436,18 +439,29 @@ fn run(cli: &Cli) -> Result<u8> {
     // `shards` and `outs` as index-aligned (agent::run_shards preserves the
     // dispatch order of `shard_prompts`, which itself preserves the relative
     // order of the non-cached subset of `shards`).
-    let outs: Vec<agent::ShardOutput> = cache
-        .iter()
-        .map(|c| {
-            if c.cached {
-                cached_shard_output(&c.label)
-            } else {
-                run_outs
-                    .next()
-                    .expect("to-run shard count matches dispatched agent outputs")
+    // Written as a loop rather than `.map().collect()` so running out of agent
+    // outputs can bail instead of panicking. The alignment is an invariant, but
+    // if it ever breaks, silently rebuilding a SHORT `outs` would attribute
+    // findings to the wrong shard — and a shard that got someone else's (empty)
+    // output reads downstream as "that shard was clean". Refusing is the only
+    // answer that does not manufacture a false all-clear.
+    let mut outs: Vec<agent::ShardOutput> = Vec::with_capacity(cache.len());
+    for c in cache.iter() {
+        if c.cached {
+            outs.push(cached_shard_output(&c.label));
+        } else {
+            match run_outs.next() {
+                Some(o) => outs.push(o),
+                None => anyhow::bail!(
+                    "shard/output misalignment: ran out of agent outputs while rebuilding \
+                     shard order at label {:?} ({} shard(s) total). Refusing to continue — \
+                     a short rebuild would report unaudited shards as clean.",
+                    c.label,
+                    cache.len()
+                ),
             }
-        })
-        .collect();
+        }
+    }
 
     // Progressive scope escalation (t4 Part B): re-dispatch (exactly once) any
     // area shard that signalled insufficient context, with a widened map. A

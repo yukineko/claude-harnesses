@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Integration test for the Continuous-Audit round metrics ledger (2630b4c5).
 //!
 //! Seeds >=2 rounds through the REAL CLI (`overwatch audit-round record`), where

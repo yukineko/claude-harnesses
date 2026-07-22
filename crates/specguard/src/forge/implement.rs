@@ -37,14 +37,13 @@ impl ImplResult {
 
 /// Parse the `<<<SPEC_IMPL>>>` trailer from agent stdout.
 fn parse_impl_output(stdout: &str) -> ParsedImpl {
-    let marker_pos = stdout.rfind(IMPL_MARKER);
-    if marker_pos.is_none() {
+    let Some(marker_pos) = stdout.rfind(IMPL_MARKER) else {
         return ParsedImpl {
             found: false,
             ..Default::default()
         };
-    }
-    let trailer = &stdout[marker_pos.unwrap() + IMPL_MARKER.len()..];
+    };
+    let trailer = &stdout[marker_pos + IMPL_MARKER.len()..];
     let mut p = ParsedImpl {
         found: true,
         ..Default::default()

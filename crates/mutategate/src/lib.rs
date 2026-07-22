@@ -1,3 +1,6 @@
+// テスト内の unwrap/expect は意図的な assert であって fail-open ではないので許可する。
+// production 側は workspace の [workspace.lints.clippy] で deny のまま。
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! mutategate — a mutation-testing **kill-rate gate** over `cargo-mutants` output.
 //!
 //! Golden/regression suites prove the code *still does what it did*; they say

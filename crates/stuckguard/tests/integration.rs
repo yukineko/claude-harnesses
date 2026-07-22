@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! End-to-end tests for the stuckguard binary.
 //!
 //! `watch` is the PostToolUse hook: it can only ADVISE (inject context); it can

@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Wiring test (2630b4c5): run the self-contained bash test that proves
 //! `scripts/continuous-audit.sh` behaves (help / dry-run is side-effect free /
 //! the record path ingests a finding into the review queue AND appends a round

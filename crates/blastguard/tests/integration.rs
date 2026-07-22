@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! End-to-end tests: feed a PreToolUse payload to the real built binary over
 //! stdin and assert on stdout + exit code.
 

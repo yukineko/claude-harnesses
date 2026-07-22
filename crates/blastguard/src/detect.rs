@@ -1938,7 +1938,16 @@ fn xargs_command_start(rest: &[&str]) -> Option<usize> {
             // Short flag (bundle). A standalone value-taking flag (`-I`, `-n`)
             // consumes the next token; a bundle that embeds the value (`-I{}`,
             // `-n1`) or a boolean bundle (`-0rt`) consumes only itself.
-            let last = t.chars().last().unwrap();
+            // `t.len() >= 2` above makes `last()` structurally Some, but the
+            // compiler cannot see that, and an `unwrap()` here would be a panic
+            // sitting inside a deny gate. The else arm is unreachable; it is
+            // written to the RESTRICTIVE side anyway — advancing by 1 rather
+            // than 2 re-examines the next token instead of skipping it, so a
+            // command word can still be found rather than silently missed.
+            let Some(last) = t.chars().last() else {
+                i += 1;
+                continue;
+            };
             let standalone_value = t.len() == 2 && VALUE_SHORT.contains(last);
             i += if standalone_value { 2 } else { 1 };
             continue;

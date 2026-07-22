@@ -1,3 +1,6 @@
+// テスト内の unwrap/expect は意図的な assert であって fail-open ではないので許可する。
+// production 側は workspace の [workspace.lints.clippy] で deny のまま。
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! mutategate CLI — read a `cargo-mutants` `outcomes.json`, compute the kill-rate
 //! of the existing tests, and exit non-zero when it falls below a threshold.
 //!

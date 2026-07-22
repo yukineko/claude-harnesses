@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Depth-cap fail-open (backlog 4b7b80d3).
 //!
 //! `detect::MAX_SHELL_DEPTH` bounds how far the analyser recurses into shell /

@@ -1,3 +1,6 @@
+// このファイルは丸ごと integration test なので unwrap/expect を許可する
+// (workspace の [workspace.lints.clippy] は production 向けの deny)。
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Problem-2.3 wiring: run the self-contained bash test that proves
 //! `scripts/rollout-plugins.sh` requires `--canary` for GATE crates (and that
 //! `--no-canary` overrides while non-gate crates stay unaffected) as part of

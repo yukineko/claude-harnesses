@@ -727,7 +727,7 @@
     {
       "name": "tracekit",
       "description": "Span-tree tracer for condukt runs: record one run's interpreter→worker→verifier phases as a parent-linked span tree (phase, model, ms, cost, status), render it with `tracekit trace <RID>`, and export OpenTelemetry GenAI-semconv JSON. Answers which phase of a failed run was slow/expensive/broke. Subscription-native (one bundled Rust binary, file-only, no network, no API key).",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "category": "observability",
       "keywords": [
         "observability",

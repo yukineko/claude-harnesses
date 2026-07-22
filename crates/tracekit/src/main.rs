@@ -14,7 +14,7 @@ mod otlp;
 mod span;
 mod trace;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -188,22 +188,56 @@ fn cmd_export(a: ExportArgs) -> i32 {
     }
 }
 
+/// List run-id directories under `base` that contain a `spans.jsonl`.
+///
+/// `Ok(None)` means `base` doesn't exist — a legitimate absence (no runs have
+/// ever been recorded here). `Ok(Some(v))` is a completed listing (possibly
+/// empty). `Err` means `base` (or an entry under it) exists but could not be
+/// read (permission denied, IO) — a cannot-determine that must not be
+/// reported the same way as "no runs" or a clean empty listing.
+fn list_runs(base: &Path) -> Result<Option<Vec<String>>, String> {
+    let entries = match std::fs::read_dir(base) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", base.display())),
+    };
+    let mut runs: Vec<String> = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(e) if e.path().join("spans.jsonl").exists() => {
+                if let Ok(name) = e.file_name().into_string() {
+                    runs.push(name);
+                }
+            }
+            Ok(_) => {}
+            Err(e) => return Err(format!("entry under {}: {e}", base.display())),
+        }
+    }
+    runs.sort();
+    Ok(Some(runs))
+}
+
 fn cmd_list() -> i32 {
     let base = harness_core::config::base_dir("tracekit");
-    let Ok(entries) = std::fs::read_dir(&base) else {
-        eprintln!("tracekit: no runs recorded (no {})", base.display());
-        return 0;
-    };
-    let mut runs: Vec<String> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().join("spans.jsonl").exists())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .collect();
-    runs.sort();
-    for r in &runs {
-        println!("{r}");
+    match list_runs(&base) {
+        Ok(None) => {
+            eprintln!("tracekit: no runs recorded (no {})", base.display());
+            0
+        }
+        Ok(Some(runs)) => {
+            for r in &runs {
+                println!("{r}");
+            }
+            0
+        }
+        Err(msg) => {
+            // The dir (or an entry under it) EXISTS but couldn't be read:
+            // cannot-determine, not "no runs" — must not report success on an
+            // incomplete listing.
+            eprintln!("tracekit: cannot list runs, unreadable: {msg}");
+            1
+        }
     }
-    0
 }
 
 fn now_unix_ms() -> u64 {
@@ -225,4 +259,50 @@ fn sanitize(run_id: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn missing_base_dir_is_ok_none() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("does-not-exist");
+        assert!(matches!(list_runs(&base), Ok(None)));
+    }
+
+    #[test]
+    fn populated_base_dir_lists_runs_with_spans() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("tracekit");
+        std::fs::create_dir_all(base.join("run-a")).unwrap();
+        std::fs::write(base.join("run-a").join("spans.jsonl"), "").unwrap();
+        std::fs::create_dir_all(base.join("run-b-no-spans")).unwrap();
+
+        let runs = list_runs(&base).unwrap().unwrap();
+        assert_eq!(runs, vec!["run-a".to_string()]);
+    }
+
+    #[test]
+    fn unreadable_existing_base_dir_is_err_not_ok_empty() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("tracekit");
+        std::fs::create_dir_all(&base).unwrap();
+        let mut perms = std::fs::metadata(&base).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&base, perms.clone()).unwrap();
+
+        let result = list_runs(&base);
+
+        perms.set_mode(0o755);
+        let _ = std::fs::set_permissions(&base, perms);
+
+        assert!(
+            result.is_err(),
+            "an unreadable existing base dir must be Err, got {result:?}"
+        );
+    }
 }

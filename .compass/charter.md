@@ -1,21 +1,21 @@
 ## north_star
-このリポジトリのゲートが「判定不能」を「clean」に写せない状態を、型と決定論ゲートで機械的に保証する。3 つの機構のうち 2 つは実測で達成済み(測定日 2026-07-22 / 測定点 470737c5): (a)【enforce 側・達成】check-fail-open --all の残存 swallow が 34→29 へ減り、scripts/check-fail-open.baseline=29 を pin した --ratchet ゲートが drift(count!=baseline)で非0終了し単調非増加を強制する。(b)【host 非依存 blocking・達成】fail-open/doc-claims/test-weakening/version-lockstep の 4 スキャナが .githooks/pre-commit で blocking として commit を止め、--no-verify も post-commit/post-merge の ledger + pre-push で塞がれ、GitHub 機構(ruleset)に依存しない。CI/ruleset は §7 に従い advisory へ降格(実測 gh api rulesets=[])。残る 1 機構=(c)【型契約・未達 3/9】harness_core::verdict の型契約を採用したゲート crate が 9 件中 3 件(blastguard, propguard, reviewgate)のみ。ゴールは、fail-open が(a)型で書けず・(b)決定論ゲートで通れず・(c)残存量が単調減少していると観測できる状態にすること。残差は(c)型契約の 3/9→9/9 展開に集約された。
+このリポジトリのゲートが「判定不能」を「clean」に写せない状態を、型と決定論ゲートで機械的に保証する。3つの機構のうち2つは実測で達成済み(測定日2026-07-22 測定点470737c5)。(a) enforce側 達成: check-fail-open --all の残存swallowが34から29へ減り、baselineファイル scripts/check-fail-open.baseline を29でpinした--ratchetゲートがdrift(count不一致)で非0終了し単調非増加を強制する。(b) host非依存blocking 達成: fail-open doc-claims test-weakening version-lockstepの4スキャナがpre-commitフック(githooks配下 opt-in)でblockingとしてcommitを止め、--no-verifyもpost-commit post-mergeのledgerとpre-pushで塞がれ、GitHub機構(ruleset)に依存しない。CI ruleset は方針7に従いadvisoryへ降格(実測 gh api rulesets 空配列)。残る1機構が(c) 型契約: harness_core::verdict の型契約を採用したゲートcrateが9crate中5crate(blastguard propguard reviewgate donegate tdd)。tddは測定日2026-07-22 測定点65256061で新規採用を確認(直前のdonegate単独採用から1crate進んだ)。ゴールは、fail-openが型で書けず 決定論ゲートで通れず 残存量が単調減少していると観測できる状態にすること。残差は型契約の9crate中5crateから9crate中9crateへの展開に集約された。
 
 ## definition_of_done
-- harness_core::verdict の型契約を採用したゲート crate が 3 件から 9 件へ増える。残り 6 crate は specguard, stuckguard, mutategate, overwatch, donegate, tdd。検査なしに Clean を構築するコードが trybuild の compile-fail テストで固定されている(現況 3/9: blastguard, propguard, reviewgate は採用済み)
-- [達成 2026-07-22 / 470737c5] fail-open の enforce は GitHub required status check ではなく local pre-commit(blocking)へ移した(1a59f09a)。4 スキャナが .githooks/pre-commit で非0終了し commit を止めることを使い捨て worktree で観測。旧 DoD『required 4 本が赤で merge を止める』は当時 PR #21 で観測した真の記録だが、§7(ゲートを外部サービスに預けない)により機構ごと撤去済み(実測 gh api rulesets=[])。ただし classic branch protection の有無は PAT 403 で未確認
-- [達成 2026-07-22 / 470737c5] check-fail-open --all の指摘件数が 34→29 へ減り、scripts/check-fail-open.baseline=29 を pin した --ratchet が count==baseline を保持・drift で非0(regression/lock-in 双方)として単調非増加をゲートする。実測 --ratchet exit 0 で floor held
-- [達成 2026-07-22 / 470737c5] GitHub 固有機能に依存しない層で同じ阻止が効く。.githooks は opt-in(既定無効: fresh clone は core.hooksPath 未設定で .git/hooks 空、弱体化がそのまま commit 成立するのを観測)で、core.hooksPath=.githooks を打てば 4 スキャナが blocking として効くことを観測。CodeCommit 等 required-status-check 非依存のホストでも同じ pre-commit が効く
+- harness_core::verdict の型契約を採用したゲートcrateが 9crate中5crate から 9crate中9crate へ増える。残り4crateは specguard stuckguard mutategate overwatch。検査なしにCleanを構築するコードがtrybuildのcompile-failテストで固定されている(現況 9crate中5crate。blastguard propguard reviewgate donegate tddは採用済み。測定日2026-07-22 測定点65256061。確認コマンド: 各crateのsrc配下を grep -rl して harness_core verdict の利用有無を見る)
+- [達成 2026-07-22 測定点470737c5] fail-openのenforceはGitHub required status checkではなくlocal pre-commit(blocking)へ移した(コミット1a59f09a)。4スキャナがpre-commitフックで非0終了しcommitを止めることを使い捨てworktreeで観測。旧DoDの『required4本が赤でmergeを止める』は当時PR21で観測した真の記録だが、方針7(ゲートを外部サービスに預けない)により機構ごと撤去済み(実測 gh api rulesets 空配列)。ただしclassic branch protectionの有無はPAT権限不足で未確認
+- [達成 2026-07-22 測定点470737c5] check-fail-open --all の指摘件数が34から29へ減り、baselineファイル scripts/check-fail-open.baseline を29でpinした--ratchetがcount一致を保持し、driftで非0(regression lock-in双方)として単調非増加をゲートする。実測--ratchet終了コード0でfloor held
+- [達成 2026-07-22 測定点470737c5] GitHub固有機能に依存しない層で同じ阻止が効く。pre-commitフックはopt-in(既定無効: fresh cloneはcore.hooksPath未設定でフック空、弱体化がそのままcommit成立するのを観測)で、core.hooksPathの向き先を切り替えれば4スキャナがblockingとして効くことを観測。CodeCommit等required-status-check非依存のホストでも同じpre-commitが効く
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-DoD2/3/4 は閉じた(測定日 2026-07-22 / 測定点 470737c5): enforce は local pre-commit の blocking へ移り、fail-open 残存は 29 で --ratchet が単調非増加を強制し、opt-in の .githooks が host 非依存で効くことを観測済み。残る唯一の実質差分は DoD1: harness_core::verdict の型契約の採用が 3/9 で止まっている(未採用は specguard, stuckguard, mutategate, overwatch, donegate, tdd の 6 crate)。最大レバレッジはこの 6 crate を verdict 型へ移行し、検査なしの Clean 構築が trybuild compile-fail で固定される状態にすること。ただし backlog 42b7c9af が『任意の T を包む共有三値型はまだ存在しない・各 crate が三値を個別に再発明している・型による強制は未実装』と記録しており、9/9 展開の前提として共有三値型の設計判断(harness-core に据えるか)が先行しうる — 型契約の対象 crate ごとに verdict 経路の形が異なるため、まず 1 crate(例: donegate か overwatch)を移行して型の当てはめ可否を観測してから残りへ展開する。
+DoD1が9crate中5crate(blastguard propguard reviewgate donegate tdd採用済み、測定点65256061)。残り4crate(specguard stuckguard mutategate overwatch)をharness_core verdictへ移行し、trybuild compile-failでClean偽造不可能性を固定するのが最大レバレッジ。共有三値型の設計判断は既に5crateで実績展開済みのため先行検討不要、直接展開でよい。
 
 ## next_action
 
 ## parked
-- 旧 DoD2『GitHub required status check で merge をブロック』: §7(ゲートを外部サービスに預けない)により機構撤去。CI/ruleset は advisory へ降格し、enforce は local pre-commit へ移管済み。再登録は §7 に反するため意図的に行わない。
-- 旧 north_star: 出荷済み並列衝突ハードニングの validate 閉環。overwatch は drift 無しで live。残るのは runtime-conflict/merge-hold/contended-skip の時間窓集計 surface と before/after delta の evidence 化。
+- 旧DoD2 GitHub required status checkでmergeをブロックする件: 方針7(ゲートを外部サービスに預けない)により機構撤去。CI rulesetはadvisoryへ降格し、enforceはlocal pre-commitへ移管済み。再登録は方針7に反するため意図的に行わない。
+- 旧north_star 出荷済み並列衝突ハードニングのvalidate閉環。overwatchはdrift無しでlive。残るのはruntime-conflict merge-hold contended-skipの時間窓集計surfaceとbefore-after deltaのevidence化。
 

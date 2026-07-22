@@ -422,7 +422,14 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
     // lock to serialize with a concurrent merge/prune in another run. Held to
     // the end of create(). (`_loaded`: create() doesn't thread a Config and its
     // callers live in sibling modules out of this change's scope.)
-    let _repo_lock = lock::acquire_repo_primary_loaded(repo);
+    //
+    // Cannot-acquire REFUSES (`?`). The lock does not merely guard the prune: it
+    // spans the `branch -D` of a stale ref and the `worktree add` below, so
+    // proceeding unlocked could force-delete a ref a peer's merge is landing, or
+    // race another run's worktree-admin mutation. Refusing is safe here because
+    // nothing has been mutated yet — the caller gets an error and can retry,
+    // which beats a half-created worktree nobody is tracking.
+    let _repo_lock = lock::acquire_repo_primary_loaded(repo)?;
     let _ = git(repo, &["worktree", "prune"]);
     if branch_checked_out(repo, branch)? {
         bail!(
@@ -660,10 +667,18 @@ pub fn merge(
 ) -> Result<MergeOutcome> {
     // Serialize with every other primary-repo default-branch mutator (another
     // condukt run's merge / main-tree commit / `git worktree prune`) on ONE
-    // repo-scoped advisory lock, so two runs in the same repo never race on the
-    // default branch. Held for the entire checkout+merge critical section and
-    // released on drop. Fail-soft: `acquire_repo_primary` never panics.
-    let _repo_lock = lock::acquire_repo_primary(cfg, repo);
+    // repo-scoped lock, so two runs in the same repo never race on the default
+    // branch. Held for the entire checkout+merge critical section and released
+    // on drop.
+    //
+    // Cannot-acquire REFUSES (`?`): this path checks out `default_branch` in the
+    // SHARED primary working tree and commits a merge onto it. Unlocked, it can
+    // interleave with a peer's `repo commit` staging into the same index, with
+    // another run's merge, or with a `worktree prune`. An unheld lock is
+    // cannot-determine and resolves to the restrictive side. Refusing costs
+    // nothing here: it happens before any git mutation, so the merge is simply
+    // retryable.
+    let _repo_lock = lock::acquire_repo_primary(cfg, repo)?;
 
     // ── Pre-merge hold gate (decision A) ─────────────────────────────────────
     // A detected mid-flight actual-diff overlap HOLDS this branch for review.
@@ -817,8 +832,12 @@ pub enum ResolveOutcome {
 pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<ResolveOutcome> {
     use overwatch::merge_conflict::ResolveChoice;
 
-    // Serialize with every other default-branch mutator (same lock `merge` holds).
-    let _repo_lock = lock::acquire_repo_primary(cfg, repo);
+    // Serialize with every other default-branch mutator (same lock `merge`
+    // holds), and REFUSE on cannot-acquire (`?`) for the same reason: this path
+    // checks out `default_branch` and completes a merge onto it in the shared
+    // primary working tree. Taken FIRST, before the store reads below, so a
+    // degraded lock can never be masked by a later "no such conflict" error.
+    let _repo_lock = lock::acquire_repo_primary(cfg, repo)?;
 
     // The entry names the branch pair. Read from the full stream (the entry may
     // already be resolved, i.e. out of the OPEN set) and take the latest match.
@@ -1599,6 +1618,146 @@ mod worktree_remove_tests {
             wt_path.display()
         );
     }
+
+    // ── Repo-primary lock: cannot-acquire must resolve to the RESTRICTIVE side ──
+    //
+    // Fault injection (shared by all four tests below): point the lock's
+    // `state_dir` at a path that is a regular FILE, so `acquire_at`'s
+    // `create_dir_all(<state_dir>/<project-key>)` fails with `NotADirectory`.
+    // That is a genuine, deterministic acquisition failure — the same
+    // "cannot determine whether a peer holds this lock" condition an I/O error
+    // or a 10s contention timeout produces — without a timing-dependent wait.
+
+    /// A `state_dir` that can never host a lock file (its own path is a FILE).
+    /// Returns the wedged dir; the caller keeps `TempDir` alive.
+    fn wedged_state_dir(tmp: &Path) -> PathBuf {
+        let p = tmp.join("wedged-state");
+        fs::write(&p, b"not a directory\n").unwrap();
+        p
+    }
+
+    /// A `$HOME` whose `~/.condukt/state` is a FILE, wedging the lock for the
+    /// `*_loaded` callers (`create` / `discard`) that build their own `Config`.
+    fn wedged_home(tmp: &Path) -> PathBuf {
+        let home = tmp.join("wedged-home");
+        fs::create_dir_all(home.join(".condukt")).unwrap();
+        fs::write(home.join(".condukt").join("state"), b"not a directory\n").unwrap();
+        home
+    }
+
+    /// `merge` checks out the default branch and commits a merge onto it in the
+    /// PRIMARY working tree. Running that unlocked can interleave with a peer
+    /// `repo commit`'s staging or another run's merge/prune. Cannot-acquire must
+    /// therefore REFUSE — and refuse BEFORE any git mutation.
+    #[test]
+    fn merge_refuses_when_repo_primary_lock_cannot_be_acquired() {
+        let (tmp, repo) = init_repo();
+        make_branch(&repo, "feat", "feat.txt", "feature content\n");
+
+        let side = TempDir::new().unwrap();
+        let mut cfg = test_cfg(&repo);
+        cfg.state_dir = wedged_state_dir(side.path());
+
+        let home = tmp.path().join("home-merge-refuse");
+        fs::create_dir_all(&home).unwrap();
+        let err = with_home(&home, || merge(&cfg, &repo, "feat", "main"))
+            .expect_err("merge must REFUSE when the repo-primary lock cannot be acquired");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("repo-primary lock"),
+            "the refusal must name the repo-primary lock, got: {msg}"
+        );
+        assert!(
+            !repo.join("feat.txt").exists(),
+            "a refused merge must not land the branch's content on the default branch"
+        );
+    }
+
+    /// `resolve_merge` performs the SAME default-branch mutation as `merge`
+    /// (checkout + `merge -s ours` / `-X theirs` / markers). Same verdict:
+    /// refuse. The assertion is on the MESSAGE, not merely `is_err()`, because
+    /// this path already errors for an unrelated reason ("no merge-conflict
+    /// entry") — proving the lock refusal happens FIRST, before the store read.
+    #[test]
+    fn resolve_merge_refuses_when_repo_primary_lock_cannot_be_acquired() {
+        let (tmp, repo) = init_repo();
+
+        let side = TempDir::new().unwrap();
+        let mut cfg = test_cfg(&repo);
+        cfg.state_dir = wedged_state_dir(side.path());
+
+        let home = tmp.path().join("home-resolve-refuse");
+        fs::create_dir_all(&home).unwrap();
+        let err = with_home(&home, || resolve_merge(&cfg, &repo, "nope/merge-conflict"))
+            .expect_err("resolve_merge must REFUSE when the repo-primary lock cannot be acquired");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("repo-primary lock"),
+            "the lock refusal must precede the store read, got: {msg}"
+        );
+    }
+
+    /// `create` holds the lock across `worktree prune` + `branch -D` (a REF
+    /// deletion) + `worktree add`. Unlocked, its `branch -D` can drop a ref a
+    /// concurrent merge is landing, and its prune/add can race another run's
+    /// worktree admin mutations. Cannot-acquire must refuse — and create nothing.
+    #[test]
+    fn create_refuses_when_repo_primary_lock_cannot_be_acquired() {
+        let (tmp, repo) = init_repo();
+        let wt = TempDir::new().unwrap();
+        let home = wedged_home(tmp.path());
+
+        let err = with_home(&home, || create(&repo, wt.path(), "t1", "condukt/t1"))
+            .expect_err("create must REFUSE when the repo-primary lock cannot be acquired");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("repo-primary lock"),
+            "the refusal must name the repo-primary lock, got: {msg}"
+        );
+        assert!(
+            !wt.path().join("t1").exists(),
+            "a refused create must not register a worktree"
+        );
+    }
+
+    /// `discard` force-removes a worktree, prunes, and `branch -D`s — the most
+    /// destructive primary-repo mutation condukt performs. Unlocked it can
+    /// delete a branch ref a concurrent merge is reading. Cannot-acquire must
+    /// refuse; leaving the worktree on disk is recoverable, deleting a branch
+    /// during a peer's merge is not.
+    #[test]
+    fn discard_refuses_when_repo_primary_lock_cannot_be_acquired() {
+        let (tmp, repo) = init_repo();
+        let wt = TempDir::new().unwrap();
+        let path = wt.path().join("exp");
+        git(
+            &repo,
+            &["worktree", "add", "-b", "exp", "--", path.to_str().unwrap()],
+        )
+        .unwrap();
+        let home = wedged_home(tmp.path());
+
+        let err = with_home(&home, || discard(&repo, &path, Some("exp")))
+            .expect_err("discard must REFUSE when the repo-primary lock cannot be acquired");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("repo-primary lock"),
+            "the refusal must name the repo-primary lock, got: {msg}"
+        );
+        assert!(
+            path.exists(),
+            "a refused discard must leave the worktree in place"
+        );
+        let (branch_alive, _, _) = git_try(
+            &repo,
+            &["rev-parse", "--verify", "--quiet", "refs/heads/exp"],
+        )
+        .unwrap();
+        assert!(
+            branch_alive,
+            "a refused discard must NOT force-delete the branch ref unlocked"
+        );
+    }
 }
 
 /// Remove the worktree at `path` and delete its `branch` (best-effort on branch).
@@ -1656,10 +1815,16 @@ pub fn remove(repo: &Path, path: &Path, branch: Option<&str>) -> Result<Option<S
 pub fn discard(repo: &Path, path: &Path, branch: Option<&str>) -> Result<()> {
     // Serialize the worktree-remove / `git worktree prune` / branch -D below
     // (all primary-repo mutations) with a concurrent merge/prune in another run
-    // on the shared repo-scoped lock. Held for the whole function; fail-soft.
+    // on the shared repo-scoped lock. Held for the whole function.
     // (`_loaded`: discard() doesn't thread a Config; callers are in sibling
     // modules out of this change's scope.)
-    let _repo_lock = lock::acquire_repo_primary_loaded(repo);
+    //
+    // Cannot-acquire REFUSES (`?`). This is condukt's most destructive
+    // primary-repo mutation — an unrecoverable `branch -D` — so proceeding
+    // unlocked could drop commits a peer's merge is mid-way through reading.
+    // The cost of refusing is bounded and reversible: the experiment worktree
+    // stays on disk (visible to `worktree cleanup`) and the discard is retried.
+    let _repo_lock = lock::acquire_repo_primary_loaded(repo)?;
     let path_str = path.to_string_lossy().to_string();
     if path.exists() {
         if git(repo, &["worktree", "remove", &path_str]).is_err() {

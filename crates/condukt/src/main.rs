@@ -2852,12 +2852,23 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
             );
         }
         WtAction::Cleanup { remove } => {
-            let orphans = worktree::orphans(&repo, &cfg.worktree_base)?;
             // `git worktree prune` mutates the primary repo — take the shared
             // repo-scoped lock so it serializes with a concurrent merge/prune in
-            // another run rather than racing. Held across the prune (dropped at
-            // block end). Fail-soft: `acquire_repo_primary` never panics.
-            let _repo_lock = lock::acquire_repo_primary(cfg, &repo);
+            // another run rather than racing. Held across the whole
+            // list→prune→delete cycle (dropped at block end).
+            //
+            // Cannot-acquire REFUSES (`?`): an unlocked prune can drop the admin
+            // entry a peer's `worktree add` just published, and deleting an
+            // "orphan" dir while a peer is creating worktrees can destroy a live
+            // one. Refusing is cheap and correct — `worktree cleanup` is an
+            // idempotent maintenance command, so erroring out just means "run it
+            // again when the repo is quiet"; nothing is left half-done.
+            //
+            // The orphan listing is taken INSIDE the critical section on purpose:
+            // computing it before the lock would be a TOCTOU — the list could be
+            // stale by the time the dirs are deleted.
+            let _repo_lock = lock::acquire_repo_primary(cfg, &repo)?;
+            let orphans = worktree::orphans(&repo, &cfg.worktree_base)?;
             let _ = worktree::git(&repo, &["worktree", "prune"]);
             if orphans.is_empty() {
                 eprintln!("no orphan worktrees under {}", cfg.worktree_base.display());

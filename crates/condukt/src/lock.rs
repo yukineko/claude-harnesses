@@ -14,9 +14,17 @@
 //! locks whose owner pid is gone are reaped, and the reap/retry loop is bounded.
 //! Unlike `backlog::lock` — which fails fast when a live holder exists — this lock
 //! *waits* (bounded) for the holder to release so concurrent RMW cycles serialize
-//! and both complete. It is fail-soft: if the lock cannot be acquired within the
-//! deadline it degrades to proceeding unlocked (logged) rather than failing the
-//! caller's state update, and it never panics.
+//! and both complete. The bounded wait IS the retry: a live holder is waited out
+//! for [`RunLock::DEADLINE`], and a dead holder's lock is reaped immediately.
+//!
+//! **Cannot-acquire resolves to the RESTRICTIVE side.** There is no public entry
+//! point that hands back an unheld guard: every acquisition is fallible
+//! ([`RunLock::acquire_or_skip`] → `Option`, [`acquire_repo_primary`] →
+//! `Result`), so "the deadline expired / an I/O error stopped me" cannot be
+//! silently rendered as "nobody else holds this". It never panics: the failure
+//! is a `None`/`Err` the caller must handle, not an abort.
+
+use anyhow::{bail, Result};
 
 use crate::config::Config;
 use crate::store::{project_key, repo_root};
@@ -28,8 +36,9 @@ use std::time::{Duration, Instant};
 /// Process-wide monotonic counter so two threads in the SAME process (identical
 /// pid, and possibly an identical `now_unix_nanos()` under a coarse clock) never
 /// derive the same private temp-lock name. Without it a nanos collision makes the
-/// loser's `create_new` fail `AlreadyExists`, degrading it to unlocked — the exact
-/// race this lock exists to prevent.
+/// loser's `create_new` fail `AlreadyExists`, turning a perfectly acquirable lock
+/// into a spurious acquisition failure (now a refusal, previously an unlocked
+/// proceed — the exact race this lock exists to prevent).
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -40,8 +49,10 @@ struct LockInfo {
 }
 
 /// RAII guard for a per-run state lock. Held across a load→mutate→save cycle and
-/// released (best-effort) on drop. When `path` is `None` the lock was not held
-/// (fail-soft degrade after a timeout) and drop is a no-op.
+/// released (best-effort) on drop. `path == None` is the INTERNAL representation
+/// of a failed acquisition; it never escapes this module as a usable guard —
+/// [`RunLock::acquire_or_skip`] maps it to `None` and [`acquire_repo_primary`]
+/// maps it to `Err`, so a caller can never be handed an unheld guard.
 #[must_use = "the run lock is released as soon as this guard is dropped"]
 pub struct RunLock {
     path: Option<PathBuf>,
@@ -67,17 +78,34 @@ pub const REPO_PRIMARY_LOCK_KEY: &str = "__repo_primary__";
 
 /// Acquire the repo-scoped primary lock for the repo containing `cwd`, holding
 /// it (via the returned RAII guard) for the whole primary-repo critical section.
-/// Fail-soft: never panics, and under pathological contention may degrade to
-/// unlocked exactly like [`RunLock::acquire`] (bounded wait, pid-reaped).
-pub fn acquire_repo_primary(cfg: &Config, cwd: &Path) -> RunLock {
-    RunLock::acquire(cfg, cwd, REPO_PRIMARY_LOCK_KEY)
+///
+/// **Fallible on purpose.** The bounded wait already absorbs ordinary
+/// contention (a live holder is waited out for [`RunLock::DEADLINE`], a dead
+/// holder is reaped and retried immediately), so reaching the deadline — or
+/// hitting an I/O/serialization error — means we genuinely cannot determine
+/// whether a peer is mid-mutation of the one primary repo. That is
+/// cannot-determine, and it resolves to the restrictive side: `Err`, so the
+/// caller refuses instead of mutating `main`/the shared index/the worktree
+/// admin dir unlocked. Never panics.
+pub fn acquire_repo_primary(cfg: &Config, cwd: &Path) -> Result<RunLock> {
+    match RunLock::acquire_or_skip(cfg, cwd, REPO_PRIMARY_LOCK_KEY) {
+        Some(guard) => Ok(guard),
+        None => bail!(
+            "could not acquire the repo-primary lock for {} within {:?}; \
+             refusing to mutate the primary repo unlocked (a concurrent condukt \
+             execution could be merging, committing into the shared index, or \
+             pruning worktrees at the same time)",
+            cwd.display(),
+            RunLock::DEADLINE
+        ),
+    }
 }
 
 /// Like [`acquire_repo_primary`] but loads [`Config`] internally, for
-/// primary-repo mutators (e.g. `git worktree prune` inside
-/// `worktree::create`/`worktree::discard`) that do not already thread a `Config`
-/// and whose callers live in sibling modules. Same fail-soft guarantees.
-pub fn acquire_repo_primary_loaded(cwd: &Path) -> RunLock {
+/// primary-repo mutators (`worktree::create`, `worktree::discard`) that do not
+/// already thread a `Config` and whose callers live in sibling modules. Same
+/// fallible contract: cannot-acquire is `Err`, never an unheld guard.
+pub fn acquire_repo_primary_loaded(cwd: &Path) -> Result<RunLock> {
     acquire_repo_primary(&Config::load(), cwd)
 }
 
@@ -130,32 +158,17 @@ fn read_info(path: &Path) -> Option<LockInfo> {
 }
 
 impl RunLock {
-    /// Default bounded wait before degrading to unlocked. Generous enough that a
-    /// normal RMW cycle (a few file ops) always releases well within it.
+    /// Default bounded wait before the acquisition FAILS (`None`/`Err` — never
+    /// an unlocked proceed). Generous enough that a normal RMW cycle (a few file
+    /// ops) always releases well within it.
     pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
 
-    /// Acquire the per-run lock, waiting (bounded) for any live holder to
-    /// release. Reaps a stale lock whose owner pid is gone. Never fails: on
-    /// timeout it logs and returns an unlocked guard so the caller's state
-    /// update still proceeds (fail-soft).
-    pub fn acquire(cfg: &Config, cwd: &Path, run_id: &str) -> Self {
-        Self::acquire_with_deadline(cfg, cwd, run_id, Self::DEADLINE)
-    }
-
-    /// Like [`RunLock::acquire`] but with an explicit deadline (used by tests).
-    pub fn acquire_with_deadline(
-        cfg: &Config,
-        cwd: &Path,
-        run_id: &str,
-        deadline: Duration,
-    ) -> Self {
-        Self::acquire_at(lock_path(cfg, cwd, run_id), deadline)
-    }
-
-    /// Returns `true` when this guard genuinely holds the lock. A `false` here
-    /// means the lock degraded to unlocked (fail-soft after a timeout or I/O
-    /// error) and any RMW performed under it may race — the caller should treat
-    /// that as unsafe to mutate.
+    /// Returns `true` when this guard genuinely holds the lock. Internal to the
+    /// fallible acquire paths: a `false` here means acquisition failed (timeout
+    /// or I/O error), which they map to `None`/`Err` rather than handing the
+    /// guard out. There is deliberately no public `acquire` that returns an
+    /// unheld guard — "I could not determine whether a peer holds this" must not
+    /// be representable as a usable lock.
     pub fn held(&self) -> bool {
         self.path.is_some()
     }
@@ -165,11 +178,12 @@ impl RunLock {
     /// contention, or an I/O error) — a treat-as-held **hard-skip**. Lets a
     /// caller SKIP its read-modify-write instead of mutating unlocked, which
     /// under pathological contention is what lets two timed-out writers both
-    /// proceed and double-write (last-writer-wins). Fail-soft: never panics.
-    /// Uses the same [`RunLock::DEADLINE`] as [`RunLock::acquire`]. Live callers:
+    /// proceed and double-write (last-writer-wins). Never panics.
+    /// Waits up to [`RunLock::DEADLINE`]. Live callers:
     /// `state::with_run_locked`, `state::discard_experiment`, the `state set`
-    /// CLI arm, and `claim::{claim_tasks, release_*, heartbeat, active_claims,
-    /// write_execution_state}`.
+    /// CLI arm, `claim::{claim_tasks, release_*, heartbeat, active_claims,
+    /// write_execution_state}`, `repo_commit::commit`, and (via
+    /// [`acquire_repo_primary`]) every primary-repo mutator in `worktree`/`main`.
     pub fn acquire_or_skip(cfg: &Config, cwd: &Path, run_id: &str) -> Option<Self> {
         Self::acquire_or_skip_at(lock_path(cfg, cwd, run_id), Self::DEADLINE)
     }
@@ -177,8 +191,8 @@ impl RunLock {
     /// Deadline-parameterized [`RunLock::acquire_or_skip`]. The hard-skip claims
     /// path ([`crate::claim::claim_files`]) delegates here so both production
     /// (the 10s default) and its wedged-holder regression test (a short
-    /// deadline) drive the SAME skip-on-contention code. Same fail-soft mapping
-    /// (a degraded/unheld guard maps to `None`).
+    /// deadline) drive the SAME skip-on-contention code. Same mapping (a failed
+    /// acquisition maps to `None`, never to a usable guard).
     pub(crate) fn acquire_or_skip_with_deadline(
         cfg: &Config,
         cwd: &Path,
@@ -189,8 +203,8 @@ impl RunLock {
     }
 
     /// Core of [`RunLock::acquire_or_skip`] against an explicit lock `path`:
-    /// runs the same fail-soft acquire and maps the degraded (unheld) guard to
-    /// `None`. Shared by the public API and the seam tests (which drive it with
+    /// runs the core acquire and maps the unheld guard to `None` so it cannot
+    /// escape. Shared by the public API and the seam tests (which drive it with
     /// a short deadline against a self-contained temp path).
     fn acquire_or_skip_at(path: PathBuf, deadline: Duration) -> Option<Self> {
         let guard = Self::acquire_at(path, deadline);
@@ -201,17 +215,15 @@ impl RunLock {
         }
     }
 
-    /// Core locking mechanics against an explicit lock-file `path`. Split out
-    /// from [`RunLock::acquire_with_deadline`] so both the fallible
-    /// `acquire_or_skip` and the tests can drive it against a self-contained
-    /// temp path. Stays fail-soft: returns `RunLock { path: None }` on any
-    /// timeout/error so existing callers of `acquire`/`acquire_with_deadline`
-    /// are unchanged.
+    /// Core locking mechanics against an explicit lock-file `path`. Private, so
+    /// the unheld (`path: None`) result it returns on any timeout/error can only
+    /// reach a caller through a fallible wrapper that turns it into `None`/`Err`
+    /// — the tests drive it directly against a self-contained temp path.
     fn acquire_at(path: PathBuf, deadline: Duration) -> Self {
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!(
-                    "condukt: could not create lock dir {} ({e}); proceeding unlocked",
+                    "condukt: could not create lock dir {} ({e}); lock NOT acquired",
                     parent.display()
                 );
                 return RunLock { path: None };
@@ -254,13 +266,13 @@ impl RunLock {
                 Ok(mut f) => {
                     if f.write_all(json.as_bytes()).is_err() {
                         let _ = std::fs::remove_file(&tmp_path);
-                        eprintln!("condukt: could not write temp lock; proceeding unlocked");
+                        eprintln!("condukt: could not write temp lock; lock NOT acquired");
                         return RunLock { path: None };
                     }
                     f.sync_all().ok();
                 }
                 Err(e) => {
-                    eprintln!("condukt: could not create temp lock ({e}); proceeding unlocked");
+                    eprintln!("condukt: could not create temp lock ({e}); lock NOT acquired");
                     return RunLock { path: None };
                 }
             }
@@ -283,7 +295,7 @@ impl RunLock {
                             if start.elapsed() >= deadline {
                                 eprintln!(
                                     "condukt: state lock {} contended for {:?}; \
-                                     proceeding unlocked (update may race)",
+                                     lock NOT acquired",
                                     path.display(),
                                     deadline
                                 );
@@ -296,7 +308,7 @@ impl RunLock {
                 }
                 Err(e) => {
                     eprintln!(
-                        "condukt: could not publish lock {} ({e}); proceeding unlocked",
+                        "condukt: could not publish lock {} ({e}); lock NOT acquired",
                         path.display()
                     );
                     return RunLock { path: None };
@@ -492,7 +504,7 @@ mod tests {
                 harness_core::store::safe_session(REPO_PRIMARY_LOCK_KEY)
             ));
 
-        let guard = acquire_repo_primary(&cfg, &cwd);
+        let guard = acquire_repo_primary(&cfg, &cwd).expect("repo-primary lock must be acquirable");
         assert!(guard.held(), "repo-primary lock must be genuinely held");
         assert!(
             expected.exists(),
@@ -503,6 +515,34 @@ mod tests {
         assert!(
             !expected.exists(),
             "lock file must be released (removed) on guard drop"
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    // The type-level half of the five call-site regressions in `worktree.rs` /
+    // `main.rs`: `acquire_repo_primary` itself must resolve cannot-acquire to
+    // `Err`, never to an unheld guard. Injected failure: a `state_dir` that is a
+    // regular FILE, so the lock dir can never be created.
+    #[test]
+    fn acquire_repo_primary_refuses_when_it_cannot_acquire() {
+        let base = std::env::temp_dir().join(format!(
+            "condukt-repo-primary-refuse-{}-{}",
+            std::process::id(),
+            now_unix_nanos()
+        ));
+        let cwd = base.join("repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let state = base.join("state-is-a-file");
+        std::fs::write(&state, b"not a directory\n").unwrap();
+
+        // `match`, not `expect_err`: `RunLock` is intentionally not `Debug`.
+        let msg = match acquire_repo_primary(&test_cfg(state), &cwd) {
+            Ok(_) => panic!("an unacquirable repo-primary lock must be Err, not an unheld guard"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(
+            msg.contains("repo-primary lock") && msg.contains("refusing"),
+            "the error must say the lock could not be taken and that we refuse; got: {msg}"
         );
         std::fs::remove_dir_all(&base).ok();
     }

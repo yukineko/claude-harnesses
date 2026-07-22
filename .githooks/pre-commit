@@ -190,7 +190,7 @@ Remediation hints:
   bump-on-change    you touched a plugin without raising its version; raise at
                     least the patch component in all three files.
   main-tree-guard   commit from a worktree instead of the shared primary tree
-                    (`condukt worktree add`, or `git stash` + `git worktree
+                    (`condukt worktree create`, or `git stash` + `git worktree
                     add`). Merges and rebases in the main tree already pass. If
                     you must commit here anyway, say why:
                     CONDUKT_MAINTREE_OVERRIDE="<reason>" git commit ... — the

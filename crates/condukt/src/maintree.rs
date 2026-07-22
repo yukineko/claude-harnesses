@@ -257,8 +257,8 @@ fn adjudicate(obs: Observations) -> Verdict {
             Reason::new(format!(
                 "session {} is live ({}{}{}) while {} path(s) are staged in the PRIMARY working tree \
                  — two sessions sharing one index is the collision git cannot merge (CLAUDE.md §8). \
-                 Commit from a worktree instead: `condukt worktree add`, or move the change with \
-                 `git stash` + `git worktree add`.",
+                 Commit from a worktree instead: `condukt worktree create`, or move the change \
+                 with `git stash` + `git worktree add`.",
                 p.session_id,
                 p.source.label(),
                 if p.detail.is_empty() { "" } else { ": " },

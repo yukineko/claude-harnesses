@@ -347,26 +347,49 @@ pub fn resume_run(cfg: &Config, cwd: &Path, run_id: &str) -> Result<()> {
     with_run_locked(cfg, cwd, run_id, |rs| rs.paused = false)
 }
 
-/// All runs (complete and incomplete) for this project, sorted by run_id.
+/// All runs (complete and incomplete) for this project, sorted by run_id. A
+/// missing project dir legitimately contributes no runs; a dir that EXISTS but
+/// cannot be read (permission denied) is a cannot-determine and is surfaced via
+/// `eprintln!` rather than silently read as "no runs" (the run list still
+/// degrades to whatever was readable — this is best-effort discovery, not a
+/// gate — but the gap must be visible, not silent).
 pub fn all_runs(cfg: &Config, cwd: &Path) -> Vec<RunState> {
     let dir = project_dir(cfg, cwd);
     let mut runs = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(&dir) {
-        for entry in rd.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            // Skip decomposition sidecars (run-id.decomposition.json).
-            let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if fname.ends_with(".decomposition.json") {
-                continue;
-            }
-            if let Ok(txt) = std::fs::read_to_string(&path) {
-                if let Ok(rs) = serde_json::from_str::<RunState>(&txt) {
-                    runs.push(rs);
+    match std::fs::read_dir(&dir) {
+        Ok(rd) => {
+            for entry in rd {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("warning: all_runs: unreadable entry in {}: {e}", dir.display());
+                        continue;
+                    }
+                };
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                // Skip decomposition sidecars (run-id.decomposition.json).
+                let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if fname.ends_with(".decomposition.json") {
+                    continue;
+                }
+                match std::fs::read_to_string(&path) {
+                    Ok(txt) => match serde_json::from_str::<RunState>(&txt) {
+                        Ok(rs) => runs.push(rs),
+                        Err(e) => eprintln!(
+                            "warning: all_runs: unparseable run state {}: {e}",
+                            path.display()
+                        ),
+                    },
+                    Err(e) => eprintln!("warning: all_runs: cannot read {}: {e}", path.display()),
                 }
             }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            eprintln!("warning: all_runs: cannot read {}: {e}", dir.display());
         }
     }
     runs.sort_by(|a, b| a.run_id.cmp(&b.run_id));
@@ -1043,9 +1066,13 @@ pub fn enforce_edit_gate(verdict: &serde_json::Value) -> EditGateDecision {
 /// Resolve the live condukt worktree that `path` falls under, if any. Scans the
 /// run-state JSON files in `run_dir` (the project's state directory), and
 /// returns the recorded `TaskState.worktree` of an *open* run (not every task
-/// verified) that is `path` itself or an ancestor of `path`. Fail-soft: an
-/// unreadable directory, or corrupt/unparseable run JSON, contributes nothing
-/// and never panics; when nothing matches the result is `None`.
+/// verified) that is `path` itself or an ancestor of `path`. A missing
+/// `run_dir` legitimately contributes nothing (`None`); a `run_dir` that
+/// EXISTS but cannot be read, or a run JSON that cannot be parsed, is a
+/// cannot-determine and is surfaced via `eprintln!` rather than silently
+/// folded into "no active worktree" — since this is the edit-gate analog
+/// described below, a silently swallowed error here would let an edit past a
+/// gate that should have blocked it.
 ///
 /// This is the edit-gate analog of how `open_runs` treats `TaskState.worktree`
 /// as the source of truth for "which worktrees are live". Kept low-level (a raw
@@ -1053,8 +1080,28 @@ pub fn enforce_edit_gate(verdict: &serde_json::Value) -> EditGateDecision {
 /// by the hook subcommand without materialising a full config.
 #[allow(dead_code)]
 pub fn active_worktree_for_path(path: &Path, run_dir: &Path) -> Option<PathBuf> {
-    let rd = std::fs::read_dir(run_dir).ok()?;
-    for entry in rd.flatten() {
+    let rd = match std::fs::read_dir(run_dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            eprintln!(
+                "warning: active_worktree_for_path: cannot read {}: {e}",
+                run_dir.display()
+            );
+            return None;
+        }
+    };
+    for entry in rd {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!(
+                    "warning: active_worktree_for_path: unreadable entry in {}: {e}",
+                    run_dir.display()
+                );
+                continue;
+            }
+        };
         let p = entry.path();
         if p.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
@@ -1065,11 +1112,17 @@ pub fn active_worktree_for_path(path: &Path, run_dir: &Path) -> Option<PathBuf> 
         }
         let txt = match std::fs::read_to_string(&p) {
             Ok(t) => t,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!("warning: active_worktree_for_path: cannot read {}: {e}", p.display());
+                continue;
+            }
         };
         let rs: RunState = match serde_json::from_str(&txt) {
             Ok(rs) => rs,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!("warning: active_worktree_for_path: unparseable run state {}: {e}", p.display());
+                continue;
+            }
         };
         // Only open runs describe live worktrees.
         let (done, total) = rs.counts();
@@ -4038,5 +4091,53 @@ mod tests {
     #[test]
     fn parse_agent_tokens_empty_array_returns_none() {
         assert_eq!(parse_agent_tokens("[]", "a1"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn all_runs_degrades_without_panic_on_unreadable_project_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cwd = tmp.path().join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let cfg = make_test_cfg(tmp.path());
+        let project_dir = project_dir(&cfg, &cwd);
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(project_dir.join("r1.json"), "{}").unwrap();
+        let mut perms = std::fs::metadata(&project_dir).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&project_dir, perms.clone()).unwrap();
+        let result = std::panic::catch_unwind(|| all_runs(&cfg, &cwd));
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&project_dir, perms).unwrap();
+        assert!(result.is_ok(), "all_runs must not panic on an unreadable project dir");
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_worktree_for_path_degrades_without_panic_on_unreadable_run_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("r1.json"), "{}").unwrap();
+        let mut perms = std::fs::metadata(dir.path()).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(dir.path(), perms.clone()).unwrap();
+        let result =
+            std::panic::catch_unwind(|| active_worktree_for_path(Path::new("/tmp/x"), dir.path()));
+        perms.set_mode(0o755);
+        std::fs::set_permissions(dir.path(), perms).unwrap();
+        assert!(
+            result.is_ok(),
+            "active_worktree_for_path must not panic on an unreadable run dir"
+        );
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn active_worktree_for_path_absent_run_dir_returns_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("does-not-exist");
+        assert_eq!(active_worktree_for_path(Path::new("/tmp/x"), &missing), None);
     }
 }

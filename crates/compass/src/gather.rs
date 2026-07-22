@@ -8,8 +8,11 @@
 //!   - **taskprog** `.claude/progress.md` / `progress.md` — [`Authority::Mid`],
 //!   - **deepwiki** `.deepwiki/**/*.md` — [`Authority::Mid`].
 //!
-//! Gathering is deterministic and tolerant: a non-git repo or a missing file
-//! simply contributes no fragments (the source is skipped, never an error).
+//! Gathering is deterministic and tolerant of absence: a non-git repo or a
+//! missing file simply contributes no fragments (the source is skipped, never
+//! an error). A source that EXISTS but cannot be read (permission denied, IO
+//! error) is a different case — cannot-determine, not "empty" — and is
+//! surfaced as an `Err` rather than silently degrading to a shorter bundle.
 //! `score` is a cheap length/recency heuristic — it carries no domain judgment.
 
 use std::path::Path;
@@ -33,8 +36,10 @@ const RECENT_COMMITS: usize = 30;
 const GIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Build the gather [`Bundle`] for `repo_root`. Never errors on a missing
-/// source; the `Result` is reserved for genuinely unexpected failures (none of
-/// the current sources produce one — they all degrade to "no fragments").
+/// source. Errors when a source EXISTS but cannot be read (e.g. `.deepwiki/`
+/// present but permission-denied) — that is cannot-determine, and returning a
+/// silently-partial bundle would let charter/gap synthesis proceed on an
+/// incomplete picture without any signal that something was skipped.
 // Wired into the `gap`/`route` commands in a later task (DESIGN §3); exercised
 // by tests now.
 #[allow(dead_code)]
@@ -44,7 +49,7 @@ pub fn gather(repo_root: &Path, charter: &Charter, _cfg: &Config) -> Result<Bund
     gather_charter(&mut fragments, charter);
     gather_git(&mut fragments, repo_root);
     gather_progress(&mut fragments, repo_root);
-    gather_deepwiki(&mut fragments, repo_root);
+    gather_deepwiki(&mut fragments, repo_root)?;
 
     Ok(Bundle { fragments })
 }
@@ -153,10 +158,10 @@ fn gather_progress(out: &mut Vec<Fragment>, repo_root: &Path) {
 
 /// deepwiki (DESIGN §3): any `.deepwiki/**/*.md`. Mid authority. Missing dir =>
 /// no fragments. Walks deterministically (sorted) so the bundle is stable.
-fn gather_deepwiki(out: &mut Vec<Fragment>, repo_root: &Path) {
+fn gather_deepwiki(out: &mut Vec<Fragment>, repo_root: &Path) -> Result<()> {
     let root = repo_root.join(".deepwiki");
     let mut files: Vec<std::path::PathBuf> = Vec::new();
-    collect_md(&root, &mut files);
+    collect_md(&root, &mut files)?;
     files.sort();
     for path in files {
         if let Ok(text) = std::fs::read_to_string(&path) {
@@ -178,22 +183,27 @@ fn gather_deepwiki(out: &mut Vec<Fragment>, repo_root: &Path) {
             });
         }
     }
+    Ok(())
 }
 
 /// Recursively collect `*.md` files under `dir` (deterministic; tolerant of a
-/// missing directory).
-fn collect_md(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+/// missing directory, fails closed on a directory that exists but cannot be
+/// read — permission denied is cannot-determine, not "no files here").
+fn collect_md(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for entry in entries {
+        let path = entry?.path();
         if path.is_dir() {
-            collect_md(&path, out);
+            collect_md(&path, out)?;
         } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
             out.push(path);
         }
     }
+    Ok(())
 }
 
 /// Run `git <args>` in `repo_root`, returning trimmed stdout on success.
@@ -301,5 +311,48 @@ mod tests {
             .fragments
             .iter()
             .any(|f| f.anchor.as_deref() == Some("taskprog")));
+    }
+
+    /// CA-fail-open: a `.deepwiki/` dir that EXISTS but cannot be read
+    /// (permission denied) must fail the whole gather closed (`Err`), not
+    /// silently degrade to a bundle missing deepwiki fragments. Mirrors the
+    /// `specguard::forge::gather` / `harness-core` walk contract.
+    #[cfg(unix)]
+    #[test]
+    fn gather_fails_closed_on_unreadable_deepwiki_dir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let deepwiki = dir.path().join(".deepwiki");
+        std::fs::create_dir_all(&deepwiki).unwrap();
+        std::fs::write(deepwiki.join("page.md"), "# hi\n").unwrap();
+        let mut perms = std::fs::metadata(&deepwiki).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&deepwiki, perms.clone()).unwrap();
+
+        let charter = Charter::default();
+        let result = gather(dir.path(), &charter, &Config::default());
+
+        // Restore perms so tempdir cleanup can remove the directory.
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&deepwiki, perms).unwrap();
+
+        assert!(
+            result.is_err(),
+            "an unreadable existing .deepwiki/ must fail gather closed, got {result:?}"
+        );
+    }
+
+    /// Control: a genuinely-absent `.deepwiki/` dir is a legitimate "no
+    /// fragments from this source", not a cannot-determine — must NOT error.
+    #[test]
+    fn gather_absent_deepwiki_dir_is_not_an_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let charter = Charter::default();
+        let result = gather(dir.path(), &charter, &Config::default());
+        assert!(
+            result.is_ok(),
+            "an absent .deepwiki/ must not error, got {result:?}"
+        );
     }
 }

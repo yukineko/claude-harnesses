@@ -125,19 +125,40 @@ fn worktree_diff(worktree: &Path, base: &str) -> Option<String> {
 /// Fail-soft & bounded: walks `worktree` for `*.rs` files, skipping `target/`,
 /// `.git/`, and any dir named `fixtures` (e.g. `tests/fixtures`). Symlinked
 /// directories are NOT followed (their dir-entry `file_type` is a symlink, not
-/// a dir), so the walk cannot loop. Any I/O error on a dir or file is skipped,
-/// yielding whatever was successfully read (an empty corpus is fine — it just
-/// means the caller signal can't fire). The file list is sorted before reading
-/// so the corpus — and thus caller enumeration — is deterministic.
+/// a dir), so the walk cannot loop. A directory that no longer exists (removed
+/// mid-walk, e.g. worktree cleanup racing this scan) is silently skipped —
+/// legitimate absence. Any OTHER I/O error (permission denied, etc.) is a
+/// cannot-determine and is surfaced via `eprintln!` (not silently dropped) even
+/// though the walk still degrades to whatever was successfully read — an empty
+/// corpus is fine — it just means the caller signal can't fire — but a
+/// *silent* one that never says why is not. The file list is sorted before
+/// reading so the corpus — and thus caller enumeration — is deterministic.
 fn worktree_rust_sources(worktree: &Path) -> Vec<(String, String)> {
     let mut files: Vec<PathBuf> = Vec::new();
     let mut stack: Vec<PathBuf> = vec![worktree.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
-            Err(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                eprintln!(
+                    "warning: worktree_rust_sources: cannot read {}: {e} (caller-blast-radius corpus incomplete)",
+                    dir.display()
+                );
+                continue;
+            }
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!(
+                        "warning: worktree_rust_sources: unreadable entry in {}: {e}",
+                        dir.display()
+                    );
+                    continue;
+                }
+            };
             let file_type = match entry.file_type() {
                 Ok(t) => t,
                 Err(_) => continue,

@@ -1,21 +1,24 @@
 ## north_star
-このリポジトリのゲートが「判定不能」を「clean」に写せない状態を、型と決定論ゲートで機械的に保証する。3つの機構のうち2つは実測で達成済み(測定日2026-07-22 測定点470737c5)。(a) enforce側 達成: check-fail-open --all の残存swallowが34から29へ減り、baselineファイル scripts/check-fail-open.baseline を29でpinした--ratchetゲートがdrift(count不一致)で非0終了し単調非増加を強制する。(b) host非依存blocking 達成: fail-open doc-claims test-weakening version-lockstepの4スキャナがpre-commitフック(githooks配下 opt-in)でblockingとしてcommitを止め、--no-verifyもpost-commit post-mergeのledgerとpre-pushで塞がれ、GitHub機構(ruleset)に依存しない。CI ruleset は方針7に従いadvisoryへ降格(実測 gh api rulesets 空配列)。残る1機構が(c) 型契約: harness_core::verdict の型契約を採用したゲートcrateが9crate中6crate(blastguard propguard reviewgate donegate tdd mutategate)。mutategateは測定日2026-07-22 測定点ba8519b1で新規採用を確認(直前のtdd単独採用から1crate進んだ)。ゴールは、fail-openが型で書けず 決定論ゲートで通れず 残存量が単調減少していると観測できる状態にすること。残差は型契約の9crate中6crateから9crate中9crateへの展開に集約された。
+plugin rollout drift(committed+version-bumpされた修正が実際のplugin cacheへrolloutされないまま残る状態)を、advisoryな警告ではなく機械的なblockingゲートで防ぐ。根拠(2026-07-22、当セッション実測): scripts/check-plugin-rollout.pyは.githooks/pre-pushに既に組み込まれているが、そのヘッダコメントで「ADVISORY-ONLY」と明記され、drift検出時(exit 1)も「This is advisory only — the push is not blocked.」と出すだけでpushを止めない設計になっている。さらにこのローカルcloneではcore.hooksPathが未設定(空文字)で、pre-push自体が発火していなかった。結果、当セッションだけでautoflow・budgetguard・compass・condukt・ctxrot・deepwiki・difflog・fugu-router・gauge・harness-status・playbook・runbook・session-insights・ship・tdd・tracekitの16pluginが、commit・version bump済みにもかかわらずrolloutされないまま約20コミット積み上がった(手動でcheck-plugin-rollout.pyを実行するまで誰にも検知されなかった)。fail-openのenforceをGitHub依存からlocal pre-commitへ移した今セッションの方針(判定不能はblockに倒す・外部サービスに預けない)を、version drift(判定不能ではなく既に判定済みのdriftを握り潰す設計)にも適用する。
 
 ## definition_of_done
-- harness_core::verdict の型契約を採用したゲートcrateが 9crate中6crate から 9crate中9crate へ増える。残り3crateは specguard stuckguard overwatch。検査なしにCleanを構築することは Evidence の private フィールドにより harness-core 外では構造的にコンパイルエラーになる(この契約自体は harness-core と blastguard の trybuild compile-fail テストで型システムレベルにpin済み。個々の採用crateがそれぞれ複製すべき性質ではなく、Verdict型を使う全crateに構造的に及ぶ)。現況 9crate中6crate。blastguard propguard reviewgate donegate tdd mutategateは採用済み。測定日2026-07-22 測定点ba8519b1。確認コマンド: 各crateのsrc配下を grep -rl して harness_core verdict の利用有無を見る
-- [達成 2026-07-22 測定点470737c5] fail-openのenforceはGitHub required status checkではなくlocal pre-commit(blocking)へ移した(コミット1a59f09a)。4スキャナがpre-commitフックで非0終了しcommitを止めることを使い捨てworktreeで観測。旧DoDの『required4本が赤でmergeを止める』は当時PR21で観測した真の記録だが、方針7(ゲートを外部サービスに預けない)により機構ごと撤去済み(実測 gh api rulesets 空配列)。ただしclassic branch protectionの有無はPAT権限不足で未確認
-- [達成 2026-07-22 測定点470737c5] check-fail-open --all の指摘件数が34から29へ減り、baselineファイル scripts/check-fail-open.baseline を29でpinした--ratchetがcount一致を保持し、driftで非0(regression lock-in双方)として単調非増加をゲートする。実測--ratchet終了コード0でfloor held
-- [達成 2026-07-22 測定点470737c5] GitHub固有機能に依存しない層で同じ阻止が効く。pre-commitフックはopt-in(既定無効: fresh cloneはcore.hooksPath未設定でフック空、弱体化がそのままcommit成立するのを観測)で、core.hooksPathの向き先を切り替えれば4スキャナがblockingとして効くことを観測。CodeCommit等required-status-check非依存のホストでも同じpre-commitが効く
+- pre-pushのrollout-drift検査(scripts/check-plugin-rollout.pyのexit 1、「committed but not rolled out」サブクラス)が、pushをblockするよう動作を変更済み。使い捨てworktree等で、意図的にdriftを作った状態からのgit pushが非0で拒否されることを実測で確認する。
+- このrepoのローカルcloneでcore.hooksPathが.githooksに設定済みであり、pre-pushフックが実際に発火することをgit config core.hooksPathの出力で確認する。
+- pre-pushの他の3チェック(GATE crate示唆・autonomy chain示唆・chronically-red CI)と、scripts/check-plugin-rollout.pyの他の2サブクラス(exit 2 enablement・exit 3 unverifiable)は既存どおりadvisoryのまま維持し、今回blockingに変えるのはrollout-drift本体(exit 1)のみであることをdiffで確認する(スコープを広げすぎない)。
+- scripts/check-plugin-rollout.pyのヘッダコメント、または.githooks/pre-push側のコメントで、rollout drift検出時にpre-pushへ非0を返してpushを止める契約が明文化されている(スクリプトのコメント/ドキュメントが実装と一致)。
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-DoD1が9crate中5crateから9crate中6crateへ前進(mutategateがharness_core verdictを採用、測定点ba8519b1)。残り3crate(specguard stuckguard overwatch)のうちstuckguardが右サイズの次候補。specguard/overwatchは大規模なため単発移行より分解が要るかもしれない。
+pre-pushのrollout-drift検査は既に実装されているが、exit 1でも常にpushを許可する設計になっており(class 2以外の3クラスは意図的にadvisoryのまま据え置く)、かつこのcloneではcore.hooksPathが未設定でそもそも発火していない。この2点を埋めるのが最大の差分。
 
 ## next_action
+.githooks/pre-pushのrollout drift分岐(rc=1)でexit 1して以降の処理を止めるよう変更し、このcloneでgit config core.hooksPath .githooksを実行し、使い捨てworktreeでdrift状態からのpushが拒否されることを確認する。
 
 ## parked
-- 旧DoD2 GitHub required status checkでmergeをブロックする件: 方針7(ゲートを外部サービスに預けない)により機構撤去。CI rulesetはadvisoryへ降格し、enforceはlocal pre-commitへ移管済み。再登録は方針7に反するため意図的に行わない。
+- 旧DoD2 GitHub required status checkでmergeをブロックする件: 方針7により機構撤去。CI rulesetはadvisoryへ降格し、enforceはlocal pre-commitへ移管済み。再登録は方針7に反するため意図的に行わない。
 - 旧north_star 出荷済み並列衝突ハードニングのvalidate閉環。overwatchはdrift無しでlive。残るのはruntime-conflict merge-hold contended-skipの時間窓集計surfaceとbefore-after deltaのevidence化。
+- specguard・stuckguard・overwatch の harness_core::verdict 非適合判定(2026-07-22): 型を無理に統合するのではなく、必要なら harness_core::verdict::Determination<T> 等の別の共有型で個別に判断する。今は着手しない。
+- [達成 2026-07-22] fail-openゲート機構の型・enforce・host非依存化(旧north_star)。DoD1は構造適合6crateで完了、check-fail-open --allは0件、enforceはlocal pre-commit。詳細はgit log 43ce376a周辺を参照。
 

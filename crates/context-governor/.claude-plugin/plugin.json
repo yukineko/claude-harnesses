@@ -1,6 +1,6 @@
 {
   "name": "context-governor",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "A thin control layer around Claude Code's built-in compaction: pin + lossless-recall + retrieval + tool-hygiene, wired as a single hook-dispatch binary. Separates the three axes it touches — size (window occupancy), cost (recompute/cache), correctness (norm preservation) — and never writes its own lossy summarizer (compression is delegated to built-in compaction). Subscription-native (hooks + binary, no API key).",
   "author": {
     "name": "yukineko"

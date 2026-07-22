@@ -9,7 +9,7 @@
     {
       "name": "beacon",
       "description": "Desktop & webhook notifications for Claude Code: Stop and Notification hooks that ping you (macOS/Linux desktop, Slack, generic webhook, or a custom command) when a turn finishes or Claude needs your input — so you can step away from long sessions. Subscription-native (two hooks + bundled Rust binary, no API key).",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "category": "notifications",
       "keywords": [
         "hooks",
@@ -33,7 +33,7 @@
     {
       "name": "blastguard",
       "description": "v0.2.5: blastguard adopted the `harness_core::verdict` type contract. `SensitiveConfig::build`/`any_sensitive` (diff-risk sensitive-path globs) used to swallow a bad `Glob::new` and `unwrap_or_else(|_| GlobSet::empty())` a failed build, making \"could not compile your sensitive-path list\" byte-for-byte identical to \"none of these paths is sensitive\" — a fail-open that flowed through classify_diff/classify_change into condukt's force-gate and gate-check verdicts. Both now return `Determination<GlobSet>`/`Determination<bool>`: no error is swallowed, a partially-compiled set is never used, and the reason names the offending pattern. All four consuming call sites resolve `Undetermined` to the RESTRICTED side (gate_exec -> Escalate, schedule -> force-gate, review_brief -> High with a driver line that distinguishes \"could not check\" from a measured hit, diffrisk_record -> its own rule id). A trybuild compile-fail suite pins from blastguard's own vantage point that `Verdict::Clean` cannot be fabricated (E0603 private witness) and that `Determination` has no `unwrap_or`/`ok`/`unwrap_or_default` (E0599), plus an end-to-end test pinning that the `Ask` hardening rule (Deny unless CLAUDE_CODE_ENTRYPOINT=cli) is unchanged. v0.2.4: closed a verified fail-open where a destructive command hand-nested in `sh -c \"…\"` layers escaping ONLY the double-quote (the naive way a human nests, leaving prior backslashes) was ALLOWED from depth 4 down (99b506b7). The accreting `\\\"` runs make `first_shell_word`'s faithful POSIX unquoting truncate the `-c` payload before the destructive command (`rm -rf /` dropped), and the trailing tokens are then read as the shell's positional operands, so no candidate normalised to `rm`. New `denoised_eval_rescan` is a scoped WIDENING backstop: only on shell-EVAL regions (`-c`/eval operand, genuinely code — never plain operands, so `grep -rn 'rm -rf' src/` is untouched) and only when a backslash is present (the construct that defeats extraction), it strips the escape/quote punctuation and re-scans every resulting position with the full rule engine, so the destructive word is found and denied at any depth while the same nesting shape around a benign payload (`echo hi`) stays Allow. Wired into all three shell-eval arms (shell `-c`, `eval`/`exec`/`source`, `flock -c`). v0.2.2: the recursion-depth cap (MAX_SHELL_DEPTH) reaching its limit no longer resolves to Allow — a destructive command nested past the cap via `sh -c`/`xargs`/`find -exec` used to pass PreToolUse UNANALYSED (4b7b80d3). New `depth_exhausted()` returns an Ask (the same 'analysis did not finish' answer as the sibling budget-exhaustion guard) that `Decision::hardened` turns into the pre-existing Deny when no human can answer; all five depth-capped sites (analyze_segment / unknown_wrapper_ask / analyze_command_at / analyze_find / analyze_xargs) now record/return it instead of falling through to Allow, and a distinct `analysis-depth-exhausted` rule_id keeps the depth cause separable from the budget one in the logs. v0.2.1: `flock`'s command-string payload is now extracted from the GLUED forms, closing a verified depth-0 Allow bypass (138607bc): the attached long form `flock /l --command='rm -rf /'` and the glued short form `flock /l -c'rm -rf /'` both slipped through because `payloads_after` only inspected tokens AFTER the flag, never the value fused into the flag token itself. New `inline_command_payloads` splices the in-token remainder (after `=` for `--command=`, after `c` for `-c…`) back in front of the following tokens and reuses the same first-word/quote-peel candidate logic, so an inline destructive payload is re-analysed and denied; benign inline payloads stay allowed. v0.1.23: `is_angle_placeholder_close` now recognizes non-ASCII UTF-8 bytes as identifier chars, not just `[A-Za-z0-9_-]` — a condukt done_criteria string with a Japanese placeholder (`<同一key>`) was misread as a truncating redirect whose target was the following prose, force-gating an ordinary task as High/irreversible (the 2026-07-17 false-gate incident). Destructive-operation guard for Claude Code: a PreToolUse hook that denies project-wrecking Bash commands and file operations (recursive/wildcard rm, git reset --hard, git clean -fd, single-> truncating overwrites, truncate/shred/mkfs/dd of=, recursive chmod/chown, find -delete, find -ok/-okdir, bare top-level interpreter inline-eval, stacked/versioned interpreter flags, tee truncation) before they run, while exempting repo config files (.claude/**, *.toml, *.yaml/yml, *.lock, package.json, .config/**). Subscription-native (one PreToolUse hook + bundled Rust binary, no API key).",
-      "version": "0.2.5",
+      "version": "0.2.6",
       "category": "security",
       "keywords": [
         "hooks",
@@ -57,7 +57,7 @@
     {
       "name": "backlog",
       "description": "Cross-project task queue with cycle-type tags for Claude Code: a /backlog skill that loops through open items (lock → pick → /condukt → done), a SessionStart hook that surfaces pending work at session open, and a backlog binary with list/next/done/fail/lock subcommands. v0.1.13 fails the next_claim read-modify-write CLOSED when the tasks-file lock cannot be acquired: with_tasks_lock ran its closure UNPROTECTED on a degraded acquire (contention/FS error), so concurrent next_claim callers could read the same pending task and mark it claimed in each -- dispatching ONE task to multiple processes. A new with_tasks_lock_aware tells the claim RMW whether the exclusive lock is actually held; when it is not, the claim now DECLINES (returns no task) and retries on the next tick rather than racing. Best-effort mutators keep the fail-soft with_tasks_lock (lost-update at worst, not double-dispatch). Deterministic regression test via the locked seam. v0.1.12 fixes a real lost-update race in add_with_weight/next_claim under heavy concurrent contention: the tasks-file lock's retry budget was sized for one legitimate holder's worst-case hold (300ms), not N holders queuing serially, so heavy contention (10 adders + 10 claimers) could exceed the budget and force an unprotected fallback that lost updates; budget raised from ~2s to ~8s, proven by a previously-red stress test now green. v0.1.11 adds a regression test proving the v0.1.10 heartbeat_at+TTL fix works without waiting the real 30-minute TTL (rewrites on-disk heartbeat_at back past the TTL, then confirms `backlog lock heartbeat` refreshes/protects it and an un-heartbeated lock is correctly reaped). v0.1.10 fixes backlog::lock's cross-session mutual exclusion: staleness was judged by the recorded pid's liveness, but that pid is always the one-shot `backlog lock acquire` CLI's own pid (dead again the instant the command returns), so any lock could be immediately stolen by another session regardless of whether the holder was still active. Staleness is now judged by a `heartbeat_at` timestamp + 30-minute TTL (matching condukt's task-claim and overwatch's lease registries), with a new `backlog lock heartbeat` subcommand. Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "category": "workflow",
       "keywords": [
         "backlog",
@@ -82,7 +82,7 @@
     {
       "name": "budgetguard",
       "description": "Real-time cost budget gate for Claude Code: on Stop, read the session transcript, compute USD cost, and block the turn when session or daily limits are exceeded — feeding the overage back so the agent winds down gracefully. Subscription-native (one Stop hook + bundled Rust binary, no API key). v0.1.11: Stop hook now runs under harness-core's run_guarded panic barrier (fail-closed block on crash instead of silent allow).",
-      "version": "0.1.11",
+      "version": "0.1.12",
       "category": "cost",
       "keywords": [
         "hooks",
@@ -107,7 +107,7 @@
     {
       "name": "compass",
       "description": "v0.1.15: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Goal re-grounding + next-move derivation upstream of condukt for Claude Code: when the goal goes fuzzy or you stall after finishing a chunk, it carves the project charter (north star + definition of done + current gap) through an interrogate loop, then routes only the right-sized next move into condukt while parking side-quests to taskprog. v0.1.14 fixes a fail-open in gather.rs: a `.deepwiki/` directory that exists but cannot be read (permission denied) was silently treated as empty via `.flatten()`, indistinguishable from a genuinely-absent directory; gather() now fails closed (Err) on cannot-determine while still tolerating a legitimately-missing directory. v0.1.13 fixes the C2 freshness DoD-ref check (Signal 3): CJK prose glued directly (no whitespace) to an embedded path or fraction was misread as one bogus token, and a leading `.` was stripped from dotfile paths (`.githooks/pre-commit` read as the non-existent `githooks/pre-commit`) — both caused false 'charter stale' positives. v0.1.12 fixed a lost-update race in the shared discovery store (harness_core::discovery): a concurrent `select` (load->mutate->rewrite) could silently clobber a concurrent `record` append (or another `select`) landing mid-cycle; both now share an advisory lock, proven by a multi-process regression test. Subscription-native (SessionStart nudge + Stop breadcrumb hooks + /compass skill + bundled Rust binary, no API key).",
-      "version": "0.1.15",
+      "version": "0.1.16",
       "category": "planning",
       "keywords": [
         "compass",
@@ -131,7 +131,7 @@
     {
       "name": "condukt",
       "description": "v0.7.87: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. v0.7.86: fixes 3 readdir/read-to-string fail-open swallows found in the workspace-wide fail-open audit — `state::all_runs` and `state::active_worktree_for_path` (readdir-flatten-swallow, `crates/condukt/src/state.rs`) and `diffrisk_record::worktree_rust_sources` no longer silently fold an unreadable directory/entry/file into \"nothing here\"; a genuinely-absent directory still degrades silently (legitimate), but any other IO error is now surfaced via `eprintln!` while the functions keep their existing fail-soft return contracts (`Vec<RunState>`/`Option<PathBuf>`) since both are documented as intentionally best-effort and `active_worktree_for_path` is not yet wired into any gate. New regression tests cover an unreadable project/run dir (chmod 000) and an absent run dir. v0.7.85: the four blastguard diff-risk consumption sites now resolve an `Undetermined` sensitive-path classification to the RESTRICTED side instead of reading it as \"not sensitive\": gate_exec degrades to Escalate (exit 1, human stop preserved), schedule force-gates and names the offending glob, review_brief treats every touched file as sensitive while emitting a driver line that distinguishes \"the check could not run\" from a measured hit, and diffrisk_record records under its own `diffrisk-undetermined` rule id rather than dropping the finding as non-High. v0.7.75: fix the runtime-conflict cleanup gap (design 625aa170 finding #1) — a task's branch landing now marks its `ActualChangeset` merged via a new `worktree::finalize_landed_branch` (calling overwatch's branch-keyed `store::mark_branch_merged`) wired into BOTH `merge()`'s clean-merge path AND `resolve_merge()`'s reconciled outcomes, so a cleanly-landed task no longer leaves `merged=false` within the lease TTL and spuriously HOLDS the next sequential task that touches a common file; also clears any stale `RuntimeOverlap` hold for the landed branch name and opportunistically prunes the cross-run changeset registry (bounded). Fixes the broken `run_pr` Poll remediation hint (`resolve-merge --branch` → the correct `--id`). New regression tests pin the pre-merge hold gate and the landed-peer cleanup. v0.7.74: runtime conflict detection + consensus merge-conflict resolution (design 625aa170). A mid-flight actual-diff overlap between two in-flight worktrees now HOLDS the second task's merge for review (routed into the SAME consensus review surface as a real merge conflict) rather than silently degrading to last-writer-wins; `worktree::merge` returns `MergeOutcome {Merged, Held(id), Conflict(id)}` (a HOLD/conflict is a hold-for-review, exit 0, not a hard error) and, on a real 3-way conflict, captures a `MergeConflictEntry` (conflicted files + both byte-bounded diffs) to the overwatch review surface. New reconciliation driver `condukt worktree resolve-merge --id <id>` applies a RECORDED resolution (Ours→`merge -s ours`, Theirs→`merge -X theirs`, Manual→materialize markers for a human) and completes the merge. Policy half (decision B): `policy::decide_conflict_resolution` (exposed via `policy decide|answer --conflict`) clamps an otherwise-`auto` verdict up to `escalate` — a conflict/overlap may ONLY escalate or block, NEVER auto-pick-a-side. v0.7.71: `schedule()` now warns (does not reject) when a task's `touched_files` entry looks like an absolute path (`/`-rooted or a Windows drive letter) or contains a `..` traversal component — such entries silently defeat the string-based conflict-detection heuristics documented as `normalize_entry`'s deliberate repo-relative-only scope. Warn (not reject) was chosen because `schedule()` is the decomposition-wide deterministic gate and a hard error there would stop the whole run over what is usually a false-positive-prone heuristic, not a certain conflict. Also adds a real end-to-end capstone test (`schedule_conflict_capstone_e2e.rs`) driving `schedule()` itself with a genuinely-overlapping pair, a normalize_entry-only-overlapping pair, and a genuinely-independent pair, asserting the first two serialize and the third stays parallel with no data loss; and `fugu_router_record_e2e.rs`, confirming the v0.7.66 `suggested_model`/`route_basis`/`tokens_input`/`tokens_output` wiring actually lands those fields in a real `episodes.jsonl` end-to-end. v0.7.70: `schedule::entries_conflict` now normalizes each touched-file entry (strip a leading `./`, collapse repeated `/`) before comparing, closing a false-negative gap where two different spellings of the identical path (e.g. `./src/a.rs` vs `src/a.rs`, or `src//a.rs` vs `src/a.rs`) went undetected as a conflict and could schedule two workers onto the same file in parallel. Audited for false positives too: confirmed (and pinned with a regression test) that disjoint globs sharing only a parent directory (`src/foo/*.rs` vs `src/bar/*.rs`) do NOT over-serialize, and that the literal-prefix-nesting heuristic's known conservative-but-safe over-approximation (e.g. `src/*.rs` vs `src/sub/*.rs`) is unchanged and intentional per this module's own \"conservative: false conflict only serializes work (safe)\" principle. v0.7.69: new `crates/condukt/tests/run_lock_concurrency.rs` spawns two real `condukt state claim-task` processes racing the SAME hashkey from different runs across 8 trials and asserts exactly one wins (with content-level assertions on the claimed/skipped JSON, not just exit codes, so a shared-tmp-file crash can never masquerade as a valid hard skip) — `RunLock` (ported from `backlog::lock`/`overwatch::lock`) had no dedicated multi-process regression test proving the port itself was correct end-to-end. `claim::claim_tasks` gains a test-only `CONDUKT_TEST_CLAIM_DELAY_MS`-gated `artificial_race_delay()` (mirrors `overwatch::lease::artificial_race_delay`) to deterministically widen the race window inside the `RunLock`-held critical section; no-op in production. v0.7.68: `orphans()` (worktree.rs) no longer misreports another repo's live worktree as condukt debris when `worktree_base` is shared across multiple, unrelated git repositories on the same machine — a candidate directory is now only flagged as an orphan if its `.git` (file pointer for a linked worktree, or dir for a plain clone) actually resolves under `repo`'s own `.git` common dir AND isn't in `repo`'s registered worktree list; a directory owned by a different repo is silently skipped, while a directory with no `.git` at all is still conservatively treated as orphan (unchanged). New regression tests `orphans_ignores_other_repos_worktree` and `orphans_detects_stale_worktree_of_own_repo` cover the new behavior and the real-world stale-worktree case this fix must not regress. v0.7.67: `record_runs` now checks the actual exit status of the `fugu-router record` subprocess instead of only catching a spawn `Err`, so a non-zero exit (e.g. a stale PATH-shadowed `fugu-router` binary rejecting a flag) is no longer silently counted as a successful record; also resolves `fugu-router`'s binary path via `~/.claude/plugins/installed_plugins.json`'s plugin-cache `installPath` first, falling back to the bare command name only if resolution fails, so a stale `~/.cargo/bin/fugu-router` can no longer shadow the correct plugin-installed version. v0.7.66: `TaskState`/`state set` gain measurement-only `route_basis`/`route_confidence`/`route_rationale` (the routing `Decision`'s provenance from `route.json`) and `lines_added`/`lines_removed` (measured `git diff --stat` insertions/deletions), plus a new `state::resolve_agent_tokens` (mirrors `resolve_agent_cost`, exact agent-id match against `gauge subagents --json`'s new `tokens_input`/`tokens_output`); `record_runs` threads all of these through to `fugu-router record`'s matching new flags so routing decisions and task cost/size can be retrospectively correlated against actual pass/fail outcomes. None of it is consulted by condukt's own scheduling/routing — purely additive, backward-compatible. Deterministic orchestration engine for Claude Code: an interpreter/worker/verifier skill plus a Rust binary that schedules tasks into parallel/serial batches by file-conflict analysis, manages the git-worktree lifecycle, tracks run state, and gates completion. v0.7.65: fixes a near-total cost-recording failure — `gauge subagents` cost lookup previously matched on a Task description prefix (`\"<task-id>: \"`) that real-world worker descriptions almost never honored, so `cost_usd` silently recorded as `0.0` (0/66 haiku+opus and 4/142 sonnet episodes ever got a nonzero cost). `state set --agent-id` now stores the Task tool's exact `agentId` on `TaskState`/`RecordSpec`; `record_runs` resolves cost via exact agent-id match against `gauge subagents --json` (`state::resolve_agent_cost`, built on a pure/testable `parse_agent_cost` core), falling back to the manually recorded `--cost` when unresolved. SKILL.md Phase 5/6 make `--agent-id` the primary path. v0.7.64: wires the `adversarial` panel (decided in v0.7.4x-era `adversarial.rs`) into Phase 6 of the SKILL — `condukt adversarial plan` gates whether a completion (GATE-crate change or global switch) gets an N-skeptic refutation panel instead of a single verifier; adds `verify::resolve_skeptic_model`/`condukt state skeptic-model` to spread panel members across model tiers excluding the worker's own (never collapses onto a shared blind spot). Non-engaging tasks run the existing single-verifier path unchanged. v0.7.63: opt-in **shadow-run** mode — `shadow-run enable|disable|status` (default disabled) plus `exec`/`finish` run the SAME task under a second model in an independent worktree (reusing existing worktree create/discard) to produce a clean pass/fail/cost/duration comparison for `fugu-router record --class shadow-run`; the shadow worktree is ALWAYS discarded, never merged. Manual-trigger only — no API/hook input exposes remaining rate-limit-window time, so no automatic firing is implemented. v0.7.62: task-duration measurement — `TaskState` gains `started_at` (set when a task transitions to `running`); `records_for_run` computes `duration_secs` from `(started_at, updated_at)` and `record_runs()` passes it to `fugu-router record --duration`, populating the new measurement-only `Episode.duration_secs` field (routing/scoring logic in fugu-router's `policy.rs` is unchanged). v0.7.61: `verify::mechanical_cmd` now tokenizes command strings (mechanical_check hint + backtick-extracted done_criteria command) via a new quote/escape-aware `parse_argv` (shlex-backed) instead of `split_whitespace`, so a quoted argument containing a space survives as one argv token; falls back to `split_whitespace` on unparseable input. v0.7.60: `verify::run_check` now gates each declared check command through blastguard's pure detector (same `detect(\"Bash\", ...)` call already used by `launch_and_reflux`) before spawning `sh -c`; a flagged command is refused fail-closed and reported as a non-passing `CheckResult` (exit -1) instead of being executed. New test `run_check_blocks_destructive_command_via_blastguard` proves a `rm -rf /` check never reaches the shell. v0.7.59: gatelog.rs's `append_decision`, `append_circuit`, and `append_gate_exec` now use harness-core's `append::append_line()` (single write_all syscall) instead of `writeln!` (body+newline as two syscalls), preventing interleaving of concurrent JSONL records under O_APPEND. Regression test `concurrent_decision_appends_never_interleave` ensures 8 threads appending 100 records each produce parseable lines (all 800 survive, none concatenated). v0.7.58: audited `lessons.rs`'s `harvest()` (production JSON-facts path) — already fail-soft throughout (`.ok()`/`.and_then()`/`.unwrap_or()`), no raw `.unwrap()`/`.expect()`; the flagged calls were inside `#[cfg(test)] mod tests` only. Also fixed a real test flake found while confirming green under parallel execution: a lessons.rs test mutating the process-global `LESSONS_STORE_DIR` env var now serializes via its own `ENV_LOCK` mutex (mirrors the existing `replan.rs` precedent). v0.7.57: `worktree.rs`'s git subprocess calls are now bounded by a 45s timeout (wait_timeout + process-group kill) instead of a plain unbounded `Command::output()`, so a hung `git` can no longer wedge a condukt run indefinitely; `create()`'s \"worktree must be outside the repo\" check now canonicalizes the candidate worktree path before comparing against the canonical repo root, closing a TOCTOU-adjacent bypass via a non-canonical `worktree_base`. v0.7.56: `verify::tests::skip_eligible_without_command_fails_soft` no longer relies on a `panic!` inside the invariant-violating runner closure — it records the invocation via a flag, logs it, and asserts the flag stays false, so the test path never aborts the process (production `mechanical_skip_verdict` behavior unchanged). v0.7.55: docs-only — SKILL.md Phase 7 documents the `state reconcile` exit 2 (duplicate_completion) escalation branch. v0.7.54: `gate_exec`'s escalate-finding call site follows overwatch's extended `record_finding`/`ReviewFinding.rationale` signature (no behavior change). Subscription-native (skill + agents + hook, no API key).",
-      "version": "0.7.87",
+      "version": "0.7.88",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -159,7 +159,7 @@
     {
       "name": "context-governor",
       "description": "A thin control layer around Claude Code's built-in compaction: pin + lossless-recall + retrieval + tool-hygiene, wired as a single hook-dispatch binary. Separates the three axes it touches — size (window occupancy), cost (recompute/cache), correctness (norm preservation) — and never writes its own lossy summarizer (compression is delegated to built-in compaction). Subscription-native (hooks + binary, no API key).",
-      "version": "0.1.8",
+      "version": "0.1.9",
       "category": "context",
       "keywords": [
         "context",
@@ -183,7 +183,7 @@
     {
       "name": "ctxrot",
       "description": "v0.5.16: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Context-rot guard for Claude Code: detect, rescue, restore, distill, and CONTROL what loads into context (rule-based allow/deny gate + /ctx pin/drop/load + switchable carryover). Subscription-native (hooks + subagent + skill, no API key). v0.5.15: `usage::find_transcript_for_session`'s `~/.claude/projects` scan no longer swallows a permission-denied (or other non-NotFound) read_dir/entry error into the same silent `None` as a legitimately-absent directory — the non-NotFound case now also surfaces via `eprintln!`; the `None` → \"unknown\" readout callers already render is unchanged (an absent dir was never a fail-open here, since the caller already treats `None` as cannot-determine). New regression tests cover an absent projects dir and a chmod-000 unreadable one. v0.5.14: the Stop hook now runs under harness-core's `run_guarded` panic barrier — a panic in `stop_run` fails CLOSED (`decision:block`) instead of the old `run_hook` behavior of silently exiting 0 with no decision. v0.5.12: the Stop-hook compact nudge now fails CLOSED on a cannot-determine reading — when `estimate_tokens` falls back to the cache-blind bytes proxy (no `usage` block parsed) yet that proxy, a LOWER bound on true usage, has already reached band 1, the hook surfaces a one-shot `/compact` nudge instead of silently allowing a possibly-over-budget session to keep growing; previously its high 0.90 block threshold let a truncated/corrupt transcript read low and never nudge (behavioral twin of the v0.5.10/v0.5.11 render fixes). Bounded to fire ONCE per session (dedicated `.compact-unmeasured` sentinel, never a turn-trap); a genuine early session below band 1 stays silent (no over-alarm) and the eventual genuine over-threshold reading still blocks. v0.5.11: the context-usage readout (statusline + `ctxrot usage`) no longer renders a bytes-proxy estimate as a confident band — `estimate_tokens`'s source (`\"bytes\"` = a rough size/4 guess with no real usage block, vs `\"usage\"` = authoritative) is threaded through `usage::line` instead of discarded, so an estimate carries an `est?` marker and, when it lands in the green band, is DIMMED (neutral, not confident green) so a truncated/corrupt transcript reading low can't read as \"plenty of headroom\"; a high estimate keeps its alarming color and authoritative readings are unchanged. v0.5.10: the `statusline` render now fails CLOSED on a cannot-determine — a non-empty-but-unparseable payload, or a transcript that can't be read/estimated, renders an explicit non-green `?% … unknown` band (mirroring `ctxrot usage`'s \"不明\") instead of printing nothing; a blank status bar silently read as \"plenty of headroom\" (fail-open twin of the already-hardened Stop-hook path). Empty stdin / no session still renders blank; exit stays 0 so the bar never crashes. v0.5.9: the preguard (PreToolUse) and toolguard (PostToolUse) hooks now wrap their detectors in a `std::panic::catch_unwind` barrier (`analyse`) — a panic in the analysis maps to a deny (preguard) or a fail-closed placeholder+nudge (toolguard) instead of the un-analysed call/output silently passing through, closing a fail-open (blastguard 同型). v0.5.8: `guard::fetch_session_lease`'s `overwatch lease` subprocess call is now bounded by an 8s timeout (wait_timeout, kill+reap on expiry) instead of a plain unbounded `Command::output()`, so a hung overwatch binary can no longer wedge the UserPromptSubmit hook; the spawn/timeout/kill mechanics are split into a testable `run_with_timeout` helper.",
-      "version": "0.5.16",
+      "version": "0.5.17",
       "category": "context",
       "keywords": [
         "context",
@@ -207,7 +207,7 @@
     {
       "name": "curate",
       "description": "Promote fugu-router playbooks into versioned golden eval datasets for evalkit: turn the append-only routing log into a curated, deduplicated holdout set. Mechanical acceptance criteria (`cargo test`, a backticked command) become runnable golden cases; the rest become drafts for a human to fill. The supply side of the offline eval loop. Subscription-native (one bundled Rust binary, no API key).",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "category": "quality",
       "keywords": [
         "eval",
@@ -232,7 +232,7 @@
     {
       "name": "deepwiki",
       "description": "v0.1.5: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Repository architecture wiki for Claude Code: a /deepwiki command that maps the repo with a bundled Rust scanner, has a subagent write & refresh hierarchical wiki pages (.deepwiki/*.md) with source links, and tracks freshness against git. Inspired by Devin Wiki. Subscription-native (binary + subagent + command, no API key). v0.1.4: `scan.rs`'s three readdir walks (`scan`'s top-level summary, `walk`, `count_files`) no longer swallow an unreadable subdirectory or entry via `.flatten()`/`let-else` into the same silent skip as a legitimately-vanished one — a non-NotFound error now surfaces via `eprintln!` while the scan still degrades to whatever was readable (this is a best-effort repo-map generator feeding a wiki-writer subagent, not a gate, so partial results remain correct behavior — only the silent swallowing of a real permission error was the bug). New regression test scans a tree with a chmod-000 subdirectory and confirms the readable files are still counted.",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "category": "knowledge",
       "keywords": [
         "wiki",
@@ -256,7 +256,7 @@
     {
       "name": "difflog",
       "description": "Session diff-log for Claude Code: snapshot HEAD at SessionStart, write a structured git diff summary (commits, stat, files changed, bounded diff body) at SessionEnd. A /difflog skill can generate a human-readable narrative from the log. Subscription-native (no API key). v0.1.5: `list`/`last`'s shared `md_entries` helper no longer swallows an unreadable individual directory entry via `.filter_map(|e| e.ok())`, and distinguishes a missing `log_dir` (\"not found\") from an existing-but-unreadable one (\"unreadable\", now surfaced) instead of both silently reading as \"no logs\". New regression tests cover an absent dir, a chmod-000 unreadable dir, and md-only filtering.",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -281,7 +281,7 @@
     {
       "name": "ship",
       "description": "v0.1.9: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Shipping-ritual nudge for Claude Code: deterministically detect unshipped state (uncommitted changes, unmerged condukt/* branches, leftover worktrees, unpushed commits, stale plugin binaries) and remind you to commit・merge・push・rebuild・rollout. A /ship skill and a fail-soft SessionEnd hook surface the checklist; only the plugin-rebuild (`--run-safe`, now `--stage-repo` so it refreshes the committed binary that stale-detection measures) and plugin-rollout (`ship rollout`, automates `/plugin update`) steps are auto-runnable — commit/merge/push stay human-gated. Subscription-native (no API key).",
-      "version": "0.1.9",
+      "version": "0.1.10",
       "category": "workflow",
       "keywords": [
         "hooks",
@@ -306,7 +306,7 @@
     {
       "name": "donegate",
       "description": "Completion-verification gate for Claude Code: on Stop, run your acceptance commands as subprocesses and block the stop until every required check is green, feeding failures back for an auto-fix loop. Subscription-native (one hook + bundled Rust binary, no API key). v0.1.8: added #![deny(clippy::panic)] at crate root.",
-      "version": "0.1.14",
+      "version": "0.1.15",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -330,7 +330,7 @@
     {
       "name": "evalkit",
       "description": "Offline golden-regression eval harness for Claude Code plugins: read golden *.jsonl cases (file-content or CLI-output assertions) and exit non-zero when a prompt edit or CLI contract regresses. The offline sibling of condukt's online verifier — runnable as a CI gate with no API key. Subscription-native (one bundled Rust binary).",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "category": "quality",
       "keywords": [
         "eval",
@@ -355,7 +355,7 @@
     {
       "name": "benchkit",
       "description": "External-benchmark (SWE-bench Verified) runner for Claude Code plugins: a typed SWE-bench Instance model, a deterministic fixture-based JSONL loader, and a gated `download` subcommand that shells out to `curl` (no HTTP crate) to fetch the Princeton NLP dataset only on explicit invocation. Subscription-native (one bundled Rust binary).",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "category": "quality",
       "keywords": [
         "benchmark",
@@ -380,7 +380,7 @@
     {
       "name": "flow",
       "description": "Unified source→executor driver for Claude Code: a /flow skill that binds the task SOURCES (compass next-move + backlog queue) to the EXECUTOR (condukt, model-routed by fugu-router) in one HOTL loop — gate on compass freshness, pick the highest-priority task, hand it to condukt, verify, mark done, repeat. A SessionStart hook proposes /flow every session when open work exists (propose-then-confirm). Subscription-native (skill + hook + bundled Rust binary, no API key). v0.1.12: Step 3-2 now documents a default fork-wrapping bias for /condukt invocations (exception: xs-class single-file tasks where the user wants interactive visibility) and a manual `fugu-router record --delegation fork|inline` logging convention, feeding a new open hypothesis measuring fork-vs-inline cost/duration. v0.1.13: the manual delegation-recording convention now includes a self-check step — after `fugu-router record --delegation`, call `fugu-router audit-recent --class flow-delegation --within <secs>` and retry/warn on a miss, instead of trusting the record call landed. v0.1.14: Step 3-4's per-cycle heartbeat now also refreshes the backlog lock itself (`backlog lock heartbeat --session-id <id>`), not just the condukt claim registry — closing a gap where a long-running loop could lose its cross-session backlog lock to a stale-TTL reap even though it was still actively working (fail-soft if `backlog` is absent/fails).",
-      "version": "0.1.14",
+      "version": "0.1.15",
       "category": "orchestration",
       "keywords": [
         "flow",
@@ -407,7 +407,7 @@
     {
       "name": "fugu-router",
       "description": "v0.1.22: `fingerprint::collect_skills`'s SKILL.md corpus walk no longer silently skips an unreadable directory/entry/file the same way it skips a legitimately-absent one — since this module exists specifically to detect a silent skill edit, a SKILL.md that becomes unreadable defeating that detection is now surfaced via `eprintln!` while the walk still degrades to whatever was readable (fail-soft, unchanged contract). New regression test: a chmod-000 subdirectory doesn't panic and the still-readable sibling SKILL.md is still hashed. v0.1.20: new `duration-outliers [--json] [--threshold <x>]` command flags models whose avg duration within a task class is a relative outlier vs other models in the same class (default threshold 1.5x the cross-model mean), and cross-references outlier-vs-normal effective pass rate — the measurement tool built to test PDO hypothesis ae64db03. v0.1.19: `Episode` gains measurement-only `route_basis`/`route_confidence`/`route_rationale` (the routing `Decision`'s provenance), `lines_added`/`lines_removed`, and `tokens_input`/`tokens_output`, all `Option<_>` and backward-compatible; `record` gains matching `--route-basis`/`--route-confidence`/`--route-rationale`/`--lines-added`/`--lines-removed`/`--tokens-input`/`--tokens-output` flags. Not consulted by `policy::route`/`decide_bandit` — exists so routing decisions and task cost can be retrospectively correlated against actual pass/fail outcomes. fugu-style per-model routing for Claude Code orchestration. Learns from past task outcomes (which model passed verification, at what cost) and picks the cheapest Claude tier that historically clears similar work. Feeds condukt's suggested_model deterministically; records outcomes back to a local episode store. No API key, no embedding service — lexical k-NN over a JSONL store. v0.1.13: every git subprocess in `cmd_sync` (pull/clone/status/add/diff/commit/push) is now bounded by a timeout (30s network ops, 10s local ops) via `wait-timeout`, killing a hung/stalled git process instead of wedging the sync command indefinitely. v0.1.12: `store::append_playbook` now writes body+newline in one `write_all` call (mirroring `append`'s existing single-syscall pattern) instead of `writeln!`'s two syscalls, closing the same O_APPEND interleaving hazard for playbook records; a JSON-serialization failure now propagates as an `io::Result` error instead of silently writing an empty line. New regression test `concurrent_append_playbook_never_interleaves_records`. v0.1.14: `Episode` gains a measurement-only `duration_secs: f64` field (`#[serde(default)]`, backward-compatible with older JSONL lines) and `record` gains a `--duration` flag threading it through; not consulted by `policy::route`/`decide_bandit` — routing/scoring behavior is unchanged. v0.1.15: `Episode` gains a measurement-only `delegation: Option<String>` field (`#[serde(default, skip_serializing_if)]`, backward-compatible) and `record` gains an optional `--delegation <fork|inline>` flag, for manually comparing /flow's condukt-invocation delegation strategy; not consulted by `policy::route`/`decide_bandit`. v0.1.16: docs-only — README/README.ja and the spec draft now document the `--duration`/`--delegation` record flags that shipped in v0.1.14/v0.1.15 but were missing from user-facing docs. v0.1.17: adds `audit-recent --class <c> --within <secs>`, a self-check subcommand (exit 0 if an episode of that class was recorded within the window, 1 if not) so a caller like /flow's delegation-recording step can verify its own `record` call actually landed instead of trusting a self-report. v0.1.18: adds `delegation-stats [--json]`, comparing fork vs inline flow-delegation episodes (count/pass-rate/avg cost/avg duration, delegation value normalized for case/whitespace).",
-      "version": "0.1.22",
+      "version": "0.1.23",
       "category": "orchestration",
       "keywords": [
         "routing",
@@ -433,7 +433,7 @@
     {
       "name": "gauge",
       "description": "Local LLMOps telemetry for Claude Code: a Stop hook that reads each session's transcript and records token usage, cache hits, tool calls, latency, and estimated cost to a local store — then `gauge report` rolls it up by project, model, and day. v0.3.11: `find_transcript`'s `~/.claude/projects` scan no longer swallows a permission-denied (or other non-NotFound) read_dir/entry/metadata error into the same silent `None`/skip as a legitimately-absent path — now surfaced via `eprintln!`, closing a gap that could otherwise hide a real transcript from cost/usage reporting; a missing projects dir still legitimately yields `None`. New regression tests cover an absent dir, a chmod-000 unreadable dir, and picking the most-recently-modified transcript. v0.3.7 adds a manually-registered rate-limit window (`gauge config set-window --hours <f64> --last-reset <ISO8601>` / `config show`), letting other tools query an approximate reset ETA — fail-soft, no automatic detection. v0.3.8: docs-only — README/README.ja and the spec draft now document the v0.3.7 `config set-window`/`config show` subcommands. v0.3.9: `gauge subagents --json` now also emits `tokens_input`/`tokens_output` per sub-agent, so callers can record real token usage alongside cost. Observability for your own agent runs, subscription-native (one hook + bundled Rust binary, no API key, nothing leaves the machine).",
-      "version": "0.3.11",
+      "version": "0.3.12",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -459,7 +459,7 @@
     {
       "name": "harness-status",
       "description": "v0.1.11: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Unified HOTL status dashboard for Claude Code. A /status command runs a bundled Rust binary that aggregates budgetguard's spend ledger, gauge's session records (recent sessions + cost), and taskprog's progress file into one human-on-the-loop view. Subscription-native (binary + command, no API key). A lightweight SessionStart hook additionally warns (fail-soft, silent when healthy) if a registered hook's binary is missing from disk, or if a stray PATH binary (e.g. a stale ~/.cargo/bin copy) shadows a newer plugin-cache copy.",
-      "version": "0.1.11",
+      "version": "0.1.12",
       "category": "observability",
       "keywords": [
         "status",
@@ -484,7 +484,7 @@
     {
       "name": "playbook",
       "description": "v0.1.7: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Project knowledge retrieval + injection for Claude Code: a UserPromptSubmit hook that pulls the curated atomic notes relevant to your prompt and injects them under a strict char budget, so conventions and gotchas resurface without re-typing. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "category": "knowledge",
       "keywords": [
         "hooks",
@@ -508,7 +508,7 @@
     {
       "name": "precommit-audit",
       "description": "v0.1.9: closed a fail-open where a panic mid-audit was swallowed into exit(0) — a clean/allow verdict — so any crash reported the working set it had just FAILED to scan as clean (99b71596, blastguard#3 twin). A caught panic now exits with the mode's BLOCKING code (stop→2, precommit→1), consistent with the git-error and incomplete-scan paths that already fail closed; under SessionEnd a non-zero exit surfaces as a failed hook rather than a silent pass. Config-driven pre-commit static audit for Claude Code: a Stop hook that runs generic checks plus your project rules (from a TOML file) over the pending diff — shelling out to git and optional linters — and blocks the stop, feeding findings back to the agent until they're clean. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.9",
+      "version": "0.1.10",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -532,7 +532,7 @@
     {
       "name": "reviewgate",
       "description": "Code-review gate for Claude Code: on Stop, review the diff before the agent can declare done. In inject mode it blocks the stop and injects a review rubric so the running agent self-reviews (no API key); in subprocess mode it runs an independent reviewer and surfaces only its findings. Subscription-native, bundled Rust binary. v0.1.10: added #![deny(clippy::panic)] at crate root (existing test-module panic!() calls allowed locally).",
-      "version": "0.1.14",
+      "version": "0.1.15",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -556,7 +556,7 @@
     {
       "name": "runbook",
       "description": "v0.1.8: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Reusable procedure includes for Claude Code: a UserPromptSubmit hook that expands `!name` macros in your prompt into the matching repo-committed procedure (.runbook/<name>.md), so recurring workflows run the same way every time. Inspired by Devin Playbooks; distinct from knowledge injection. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.8",
+      "version": "0.1.9",
       "category": "knowledge",
       "keywords": [
         "hooks",
@@ -580,7 +580,7 @@
     {
       "name": "schemaguard",
       "description": "Schema-validation gate for LLM structured outputs at source→executor boundaries: validate a JSON value against a named declared schema (condukt decomposition, fugu episode/playbook, scout measure), emit a structured error a caller uses to re-ask the model once, and count rejects so silent drops become observable (Guardrails-AI-lite). Subscription-native (one bundled Rust binary, no API key). v0.1.6: added #![deny(clippy::panic)] at crate root (main.rs + lib.rs).",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "category": "quality",
       "keywords": [
         "schema",
@@ -604,7 +604,7 @@
     {
       "name": "session-insights",
       "description": "Per-session work metrics for Claude Code: PostToolUse + Stop hooks roll up tool calls, turns, files touched, a size class (XS–XL) and a work category per session, viewable with `session-insights report` and optionally logged as a dated note to an Obsidian vault. Inspired by Devin Session Insights. Subscription-native (two hooks + bundled Rust binary, no API key).",
-      "version": "0.2.13",
+      "version": "0.2.14",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -628,7 +628,7 @@
     {
       "name": "specguard",
       "description": "v0.2.36: closed fail-open #7 (61599e06) — an audit whose marker was present but whose `needs_user` verdict was absent/empty/unrecognised was parsed as `no`/clean, advancing the baseline over content whose verdict was never established. parse.rs now fails closed with an asymmetric rule: the SURFACE side is liberal (a `yes`-prefixed token is a finding) but the CLEAN side is strict — only the bare token `no` clears the audit (the old `starts_with(\"no\")` also cleared \"not sure\"/\"no idea\"/\"not comparable\", natural cannot-determine phrasings). Anything else is a first-class `indeterminate` state → needs_user=true that stays STICKY through the verify/refute pass (a skeptic can't drop it back to clean). All three audit prompts (audit/decisions/completeness) fixed in lockstep to instruct the auditor to emit `yes` (not `no`) when it cannot compare, and to emit exactly `yes` or `no`. 仕様↔実装 整合監査ハーネスを Claude Code から subscription-native に実行する。各 shard を read-only な in-session subagent で監査し (nested claude --print なし)、決定的ハーネス (scope/render/parse/report) は specguard バイナリに委譲する。",
-      "version": "0.2.36",
+      "version": "0.2.37",
       "category": "quality",
       "keywords": [
         "spec",
@@ -654,7 +654,7 @@
     {
       "name": "stuckguard",
       "description": "Stuck-loop detector + escalation for Claude Code: a PostToolUse hook that spots repeated identical actions and edit thrash, then injects an escalating nudge to change approach or ask the user for help. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.18",
+      "version": "0.1.19",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -678,7 +678,7 @@
     {
       "name": "taskprog",
       "description": "Multi-session progress file for Claude Code. Injects .claude/progress.md at SessionStart so the agent knows what is pending; at Stop it prompts the agent to keep the file current. Enables seamless HOTL handoff across sessions.",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "category": "workflow",
       "keywords": [
         "hooks",
@@ -703,7 +703,7 @@
     {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: a Stop hook that blocks the turn when implementation code lands without an accompanying test, plus a /tdd skill and red/green/verify subcommands that make test-first (RED before GREEN) a verifiable artifact. Subscription-native (one hook + skill + bundled Rust binary, no API key). v0.1.18: gate verdict now routes through harness_core::verdict (compass DoD1).",
-      "version": "0.1.18",
+      "version": "0.1.19",
       "category": "quality",
       "keywords": [
         "tdd",
@@ -727,7 +727,7 @@
     {
       "name": "tracekit",
       "description": "Span-tree tracer for condukt runs: record one run's interpreter→worker→verifier phases as a parent-linked span tree (phase, model, ms, cost, status), render it with `tracekit trace <RID>`, and export OpenTelemetry GenAI-semconv JSON. Answers which phase of a failed run was slow/expensive/broke. Subscription-native (one bundled Rust binary, file-only, no network, no API key).",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "category": "observability",
       "keywords": [
         "observability",
@@ -752,7 +752,7 @@
     {
       "name": "autoflow",
       "description": "Session-end auto-flow gate for Claude Code: on Stop, prompt /record once, then loop /condukt until pending tasks are cleared (auto up to 4×, ask the user from 5× onward). Also fires a fail-soft Tier 2 advisory when a /flow-driven condukt run completes without any evidence of a fugu-router delegation record. Subscription-native (one hook + bundled Rust binary, no API key). v0.1.9: Stop hook now runs under harness-core's run_guarded panic barrier (fail-closed block on crash instead of silent allow).",
-      "version": "0.1.9",
+      "version": "0.1.10",
       "category": "orchestration",
       "keywords": [
         "hooks",
@@ -777,7 +777,7 @@
     {
       "name": "hypothesis",
       "description": "v0.1.8: the store's load->mutate->save cycle is now protected by an exclusive file lock (`StoreLock`, ported from backlog::lock/condukt::lock::RunLock/overwatch::lock::LeaseLock) so two concurrent processes mutating the store (e.g. `validate`/`reject`/`confidence`) can no longer lose one update to a last-writer-wins race; a multi-process regression test proves the fix (and that it fails without the lock). PDO hypothesis lifecycle management for Claude Code: a /hypothesis skill plus create/validate/list/reject subcommands and a SessionStart hook to create, validate, and track discovery hypotheses aligned with compass goals. Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "category": "planning",
       "keywords": [
         "pdo",
@@ -800,7 +800,7 @@
     {
       "name": "overwatch",
       "description": "v0.2.0 (major bump, not content): 0.1.52 added pub fields to externally-constructible structs (`AuditRound.unverified`, `RoundMetric.unverified`, `AuditMetrics.cumulative_unverified`, `ReviewFinding.verdict`) without a breaking version bump, so `cargo semver-checks` correctly failed CI on main (17 consecutive runs) with `constructible_struct_adds_field`; this release only bumps 0.1→0.2 per the crate's own pre-1.0 convention (breaking change bumps the minor field) to match the version to the API shape already shipped — no code change. v0.1.52: `test_freshness`'s reverse-lookup source walk now fails closed on an incomplete scan (50ad2c1e, twin of specguard testaudit/gather rounds #7/#11): `rust_source_files` returns `io::Result` (a MISSING dir/root is a legitimate empty, but an EXISTING-but-unreadable dir, a per-entry listing error, or an unreadable `.rs`/`Cargo.toml` is INCOMPLETE → `Err`), and `find_ignored_test` returns a tri-state `IgnoredTestLookup{Found,NotFound,ScanIncomplete}` instead of `Option`. `bridge.rs` maps `ScanIncomplete` to the new `TestFreshness::ScanIncomplete` and renders it as a distinct \"判定不能（走査未完）\" triage line rather than folding it into \"該当テストなし\" — an unreadable subtree that might hold a finding's regression test no longer masquerades as a false \"no test\" deprioritize signal. The old `let Ok(read_dir) else {continue}` + `entries.flatten()` swallows are gone, and the two grandfathered check-fail-open.py ALLOWLIST entries were removed with them. v0.1.48: `store::mark_branch_merged` (branch-keyed sibling of `mark_changeset_merged`) + `store::clear_runtime_overlap_holds` give condukt the on-land cleanup that takes a merged branch's changeset out of the mid-flight overlap set (fixing spurious ~30-min false-positive merge HOLDs) and clears stale RuntimeOverlap holds; `prune_stale_changesets` wired opportunistically keeps `active_changesets.json` bounded. All fail-soft under `LeaseLock`. v0.1.47: runtime conflict detection + consensus merge-conflict store (design 625aa170). New `changeset.rs` holds a project-global in-flight actual-changeset registry (`ActualChangeset`) + a runtime-conflict stream; `store::record_changeset_and_detect` (LeaseLock RMW) detects a mid-flight actual-diff overlap between two in-flight worktrees and appends a `RuntimeConflictEvent`. New `merge_conflict.rs` + store streams hold blocked-merge entries (`MergeConflictEntry`: origin MergeConflict|RuntimeOverlap, conflicted files, both byte-bounded diffs) and their resolutions (`MergeConflictResolution`, joined by conflict_id; OPEN set = unresolved); `review-queue` gains a `[merge-conflict]` High-severity kind so a held/blocked merge surfaces in the same unified human review pane and drains to backlog. New `overwatch resolve-merge-conflict --id <id> --choose ours|theirs|manual` writes a resolution (RMW under LeaseLock, idempotent). All detection/compute is fail-soft. v0.1.44: `lease::begin()`'s load->is_held_by_other check->save read-modify-write was unprotected against a TOCTOU race (two sessions racing begin() for the same key could both pass the check before either saved, both believing they'd claimed the lease) -- condukt::lock/backlog::lock had already fixed this exact pattern via hardlink+create_new(O_EXCL) exclusive locking, but overwatch::lease hadn't (hypothesis 9c733d74). New `crates/overwatch/src/lock.rs` (`LeaseLock`) ports that design -- hard-link atomic publish, a TMP_SEQ intra-process collision guard, stale-lock reap via pid liveness, bounded wait, fail-soft degrade-to-unlocked on timeout -- and `begin()` now holds it across the whole load->check->save cycle. New `crates/overwatch/tests/lease_concurrency.rs` spawns two real processes racing `begin()` for the same key across 8 trials and asserts exactly one wins; an env-gated `OVERWATCH_TEST_BEGIN_DELAY_MS` widens the race window past normal process-spawn overhead so the test deterministically forces the interleave (verified by temporarily reverting the lock: the test then reliably catches the double-claim). Also fixed a related pre-existing test-suite flake: `aggregate.rs` and `store.rs` each sandboxed the process-global `$HOME` env var behind their OWN separate `Mutex`, so tests in the two modules could still race each other's `HOME` mutation under parallel `cargo test`; unified to one crate-wide `store::HOME_ENV_LOCK`. v0.1.43: `review-metrics` now reports `stale_undisposed_with_fix_commit` — a read-only recount (same commit-range/store logic as `reconcile-fixed`, but never writes) of findings whose fix commit has already landed but are still undisposed, printed as a WARNING line in the human-readable report too. Closes the last piece of the 2026-07-17 stale-review-queue gap: `reconcile-fixed` only clears the backlog when someone remembers to run it, so this makes the gap visible on every `review-metrics` call even if reconcile-fixed hasn't run that round. v0.1.42: new `reconcile-fixed` command closes the \"fix commit landed, nobody ran record-disposition\" gap that let review-queue go stale (2026-07-17 incident: 18 already-fixed findings sat \"open\" for weeks because nobody remembered to dispose them). Scans a range of git commit messages (`--since-ref`/`--range`/`--last-n`, default last 50) for `CA-<crate>-<NNN>` finding-id references and auto-records a CONFIRMED disposition (`auto-reconcile(commit <hash>)`) for any referenced finding present on the review-findings store but not yet dispositioned; idempotent (already-disposed ids are skipped, a finding referenced by multiple commits is disposed once). Fail-soft end-to-end: a missing git binary, a non-repo cwd, or a non-zero `git log` all degrade to \"0 processed\" rather than erroring, so it is always safe to wire into automation. Wired into `scripts/continuous-audit.sh` (via the existing fail-soft `run_ow` wrapper) so every Continuous-Audit round auto-reconciles already-fixed findings before bridging the remainder to the backlog. v0.1.39: `test_freshness::run_ignored_test`'s `cargo test` subprocess call used `Command::output()`, which waits unbounded — a hung/deadlocking `#[ignore]`d regression test could wedge `overwatch review-queue --to-backlog`'s per-finding loop forever. Switched to `spawn()` + `wait_timeout()` (60s, since the call includes a build step) mirroring `ctxrot::hooks::guard::run_with_timeout`; timeout kills and reaps the child, folding into the existing `ExecutionError` fail-soft path (`bridge.rs` unchanged). review-queue → backlog consolidation: `review-queue --to-backlog` now drains the WHOLE unified queue (ai-finding / systemic / rollback / escalation), not just AI findings — each not-yet-bridged entry is forwarded via `backlog add` so `/flow` can auto-repair it. The three non-finding streams are keyed on a composite `<kind>:<identifier>` in a separate `bridged_entries.jsonl` ledger so the finding-resolution source (`bridged_findings.jsonl`) is untouched; systemic/rollback/escalation ride one priority tier hotter (p0) and are tagged with their kind for filterability. Fail-soft throughout (missing store / absent backlog / failed add are warned and skipped; exit 0). Fixed CA-overwatch-004: AuditRound::new (the constructor the audit-round `record` CLI path uses) now clamps regression_tests_added to confirmed for every construction path, not just the separate close-path set_round_tests, so `audit-round record --confirmed N --regression-tests-added M` can no longer persist or report a closure_rate above the documented [0,1] range. continuous-audit SKILL.md's target-crate default doc now matches the real 6-crate DEFAULT_TARGETS (overwatch included) instead of understating 5. set_round_tests() clamps an over-large --tests count to the round's own confirmed count before storing, so audit-round close can never push closure_rate above the documented [0,1] range. Project-global cross-session execution ledger with dedup guard + PDO progress view. Manages claim registry with heartbeat-based liveness and skip-on-duplicate contract for distributed session coordination. SessionStart and Stop hooks surface current run state and progress aggregation (session/backlog/hypothesis/condukt run/compass gap in fail-soft view) via a short-lived (10s TTL) on-disk render cache, so the two hooks firing close together collapse into one full aggregate scan (~5 subprocess spawns) instead of two; a cold/expired/corrupt cache always falls through to a fresh build (fail-soft). Includes the /continuous-audit driver skill that runs an adversarial finder->verifier review round over the gate crates and auto-populates the unified review-queue (findings deduped by content fingerprint, not just id; repeated same-plugin rollbacks likewise collapse, each with an occurrences count). review-queue now also bridges condukt's durable escalation queue in fail-soft by path (`EntryKind::Escalation`, High severity) so blocked/GATED tasks awaiting a human answer show in the same unified pane. New `auto-approved` companion command surfaces the auto-approved (self-answered without a human) decision population from condukt's `gate-decisions.jsonl`, fail-soft by path, as a count plus a deterministic seeded sample, so sampling coverage of mass auto-approval stays auditable. `record-disposition`/`review-metrics` close the loop with review-effectiveness measurement (false-positive rate, human-agreement rate, median resolution latency); the integration tests now patch only the CLI-written ledgers' timestamp fields, keeping the CLI-serialized verdict/reviewer intact, so those assertions cover record-disposition's field serialization end-to-end. New `compact-findings` command performs non-lossy compaction/rotation of the append-only review_findings.jsonl hot store: resolved (bridged or dispositioned) findings are MOVED into a cold review_findings_archive.jsonl (atomic temp+rename, archive written before hot for crash-safety, idempotent) so review-queue's human-surface read stays bounded to OPEN items while review-metrics keeps joining archived findings via the combined hot-plus-archive history. Continuous-Audit finding triage: `ReviewFinding` gains an optional `rationale` field (the verifier's CONFIRMED rationale, `#[serde(default)]` for backward-compatible reads) wired through `record-finding --rationale`; a new `test_freshness` module reverse-looks-up a `#[ignore = \"<finding-id>: ...\"]` regression test by finding-id and re-runs it fail-soft (Passing/Failing/NotFound/ExecutionError); `review-queue --to-backlog` now thickens each backlog task's notes with elapsed days since confirmation, the rationale (if any), and the regression-test freshness verdict, all advisory-only. Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "category": "observability",
       "keywords": [
         "pdo",
@@ -826,7 +826,7 @@
     {
       "name": "daily",
       "description": "Daily-once task runner for Claude Code: a SessionStart hook that runs registered shell tasks ([[task]] in ~/.daily/config.toml) at most once per calendar day and injects a summary of what ran. Skips while a /flow or /backlog driver is working (backlog lock), records each run to a JSONL report (a failed task still counts as run, no retry until tomorrow). task.command is checked against blastguard before spawning; a flagged command is refused fail-closed and reported as blocked. With no tasks registered it runs a default security audit (cargo deny check). Register/inspect with `daily add` / `daily list` / `daily report`. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.3.8",
+      "version": "0.3.9",
       "category": "security",
       "keywords": [
         "hooks",
@@ -908,7 +908,7 @@
     {
       "name": "trajectoryeval",
       "description": "Trajectory-match verifier for agent tool-call paths: condukt's online verifier checks a task's OUTPUT (done_criteria); trajectoryeval checks the PATH the worker took. `check` matches an actual ordered tool-call list against an expected trajectory spec (strict / unordered / subsequence) and reports {pass, missing, unexpected, out_of_order} with a 0/1/2 gate exit; `extract` streams a transcript into the ordered tool_use names. The path-side sibling of done-criteria verification (agentevals-style). Subscription-native (one bundled Rust binary, no API key).",
-      "version": "0.1.9",
+      "version": "0.1.10",
       "category": "quality",
       "keywords": [
         "trajectory",
@@ -932,7 +932,7 @@
     {
       "name": "replaykit",
       "description": "Trace→golden replay regression harness: turns a tracekit-recorded condukt run into an evalkit golden case so a real run becomes a committed regression fixture. `extract` distils a run's spans.jsonl into a portable trajectory summary (ordered phase/model/status steps + an `expect` block pinning phase set / error count / cost); `promote` writes the fixture under evals/replay/fixtures and appends a dedup'd golden whose `cmd` re-runs `replaykit verify`; `verify` recomputes those aggregates from the steps and gates 0/1/2. The trace-side sibling of curate's playbook→golden. Subscription-native (one bundled Rust binary, file-only, no network, no API key).",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "category": "quality",
       "keywords": [
         "replay",
@@ -957,7 +957,7 @@
     {
       "name": "propguard",
       "description": "Property gate for Claude Code: on Stop, derive 3–5 semantic properties (invariants) from a task's done_criteria and check the generated code against them before the agent can declare done. In inject mode it blocks and injects a property checklist for the running agent to self-verify (no API key); in subprocess mode it runs an independent checker and counts per-property PASS/FAIL, blocking when fewer than a threshold hold. Goes beyond 'concrete tests pass'. v0.1.16: merged two independently-developed Continuous-Audit fix lines that landed on the same v0.1.14 base — stopped correlation-store pollution (CA-propguard-03/04), and documented the checker subprocess timeout (checker_timeout_secs, default 300s, process-tree kill on timeout) with config-propagation tests. v0.1.13: fixed 3 subprocess-hang gaps (CA-propguard-004/005/006) — checker timeout now kills the whole shell-spawned process tree via a Unix process group, stdout reads are bounded so a lingering process can't hang them, and all git subprocess calls go through a timeout-bounded choke point with graceful fallback. Subscription-native, bundled Rust binary.",
-      "version": "0.1.23",
+      "version": "0.1.24",
       "category": "quality",
       "keywords": [
         "hooks",

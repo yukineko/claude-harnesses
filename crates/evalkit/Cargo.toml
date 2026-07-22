@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "evalkit"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "Offline golden-regression eval harness for Claude Code plugins. Reads golden *.jsonl cases (file-content or CLI-output assertions) and exits non-zero when a prompt edit or CLI contract regresses — the offline sibling of condukt's online verifier, runnable as a CI gate with no API key."
 license = "MIT"

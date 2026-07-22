@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "tracekit"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 description = "Span-tree tracer for condukt runs. Records the interpreter→worker→verifier phases of one run as a parent-linked span tree (phase, model, ms, cost, status), renders it with `tracekit trace <RID>`, and exports it as OpenTelemetry GenAI-semconv JSON. Subscription-native: file-only, no network, no API key."
 license = "MIT"

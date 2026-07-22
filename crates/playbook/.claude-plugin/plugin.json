@@ -1,6 +1,6 @@
 {
   "name": "playbook",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "v0.1.7: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Project knowledge retrieval + injection for Claude Code: a UserPromptSubmit hook that pulls the curated atomic notes relevant to your prompt and injects them under a strict char budget, so conventions and gotchas resurface without re-typing. Subscription-native (one hook + bundled Rust binary, no API key).",
   "author": {
     "name": "yukineko"

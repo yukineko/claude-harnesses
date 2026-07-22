@@ -431,8 +431,20 @@ def report(buckets, branch, chronic):
             print(f"  {name}")
 
     if chronic_rows or undetermined:
-        print("\nThese block nothing — this repo has no required status checks, so a red")
-        print("workflow stays red until someone looks. Inspect one with:")
+        print()
+        if chronic_rows:
+            # Deliberately no longer says "these block nothing". That sentence
+            # was true when every branch of .githooks/pre-push fell through to
+            # exit 0; the chronic class now BLOCKS the push there, so leaving it
+            # would be prose contradicting behaviour.
+            print("This repo has no required status checks, so nothing on GitHub's side")
+            print("stops a red workflow. The local pre-push hook does: the chronic class")
+            print("above blocks the push (.githooks/pre-push). Inspect one with:")
+        else:
+            print("This repo has no required status checks, so a workflow that cannot be")
+            print("judged stays unjudged until someone looks. The local pre-push hook")
+            print("reports this class but does NOT block on it — see the carve-out")
+            print("argued in .githooks/pre-push. Inspect one with:")
         print(f"    gh run view --log-failed --branch {branch}")
         return RC_CHRONIC if chronic_rows else RC_UNDETERMINED
 

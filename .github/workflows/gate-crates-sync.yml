@@ -57,5 +57,13 @@ jobs:
         # authenticated gh, and asking about CI from inside CI is circular), but
         # its tests stub the gh boundary and are fully hermetic.
         run: python3 scripts/test_check_ci_red.py
+      - name: Unit-test the pre-push hook's chronically-red-CI blocking contract
+        # The hook itself is machine-local (it is only ever invoked by git on a
+        # developer's clone that opted in via core.hooksPath), but this suite
+        # drives it as a subprocess in a throwaway repo with stubbed checkers,
+        # so it is fully hermetic. Advisory here by design: per CLAUDE.md
+        # section 7 the enforcing copy of this contract is the hook on the
+        # developer's machine, not a required status check on GitHub.
+        run: python3 scripts/test_prepush_hook.py
       - name: Verify GATE_CRATES consistent across its 7 sources
         run: python3 scripts/check-gate-crates-sync.py

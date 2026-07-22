@@ -3,7 +3,7 @@
 #
 #     git config core.hooksPath .githooks
 #
-# This hook has four advisory nudges plus two blocking checks:
+# This hook has three advisory nudges plus three blocking checks:
 #   1. GATE crates (advisory) — when the push touches blastguard/propguard/
 #      specguard/stuckguard/mutategate/overwatch (the fleet defense gates),
 #      suggest a Continuous-Audit round (`scripts/continuous-audit.sh --dry-run`).
@@ -24,29 +24,37 @@
 #      re-running `scripts/e2e-autonomy.sh`, which asserts the gate contracts
 #      that remove every AskUserQuestion stop. Also machine-local (needs
 #      installed binaries).
-#   4. Chronically-red CI (advisory) — `scripts/check-ci-red.py` names workflows
-#      that have failed N runs in a row on main, and separately names the ones
-#      it could NOT judge. This repo has no required status checks, so a red
-#      workflow blocks nothing and tells no one: one clippy lint stayed red for
-#      89 consecutive runs unnoticed. Pinning the toolchain would have bought
+#   4. Chronically-red CI — `scripts/check-ci-red.py` names workflows that have
+#      failed N runs in a row on main, and separately names the ones it could
+#      NOT judge. This repo has no required status checks, so a red workflow
+#      blocks nothing and tells no one: one clippy lint stayed red for 89
+#      consecutive runs unnoticed. Pinning the toolchain would have bought
 #      silence by giving up the detection; the defect was the silence, so this
 #      is where it gets fixed. Machine-local for the same reason as (2): it
 #      needs an authenticated `gh`, and running a check *about* CI inside CI is
 #      circular. Always inspects `main` — the shared branch whose rot is the
 #      problem — regardless of which ref is being pushed.
+#      Its rc=1 sub-class (chronic red CONFIRMED) and any unrecognized rc BLOCK;
+#      rc=3 (undetermined) stays advisory. See the block itself for why that
+#      one carve-out exists — it is deliberate and argued, not an oversight.
 #
-# Checks 1, 3, 4, and rollout-drift's rc=2/rc=3 sub-classes are advisory and
-# always degrade to silence when their prerequisite (python3, the script, the
-# registry) is absent. They never block.
+# Checks 1, 3, and rollout-drift's rc=2/rc=3 sub-classes are advisory and always
+# degrade to silence when their prerequisite (python3, the script, the registry)
+# is absent. They never block.
 #
-# TWO checks do block. The first thing this hook does: an ungated commit
+# THREE checks do block. The first thing this hook does: an ungated commit
 # outstanding in the bypass ledger (`scripts/gate-bypass.py`). That is the
 # consequence half of closing the `--no-verify` hole — the bypass cannot be
 # prevented at commit time, so it is instead made to stop the next push until the
 # content has actually been through the gate. The second is rollout drift's rc=1
 # sub-class (check 2 above) — a committed-but-not-deployed fix is exactly the
 # "judged but the judgment never reached a session" failure mode this repo's
-# gates exist to close, so advisory text alone is not enough for it either.
+# gates exist to close, so advisory text alone is not enough for it either. The
+# third is chronically-red CI's rc=1 and unrecognized-rc sub-classes (check 4),
+# promoted for the same reason: the previous north_star repaired two chronically
+# red workflows BY HAND after a 17-run streak, which fixed the symptom and left
+# the mechanism — every branch of this check fell through to the same exit 0, so
+# the next streak could accumulate with nothing able to stop it.
 # This hook no longer "always exits 0"; that sentence used to be here and is
 # now false, so it is gone rather than left to mislead the next reader.
 #
@@ -240,16 +248,41 @@ fi
 # is surfaced; a single red run is usually a flake or a mistake already being
 # fixed, and saying the same thing about both trains the reader to ignore both.
 #
-# The checker exits 0 for every "cannot tell" case (no gh, no auth, offline,
-# timeout, unparseable output) and prints its reason to stderr, so an offline
-# push stays quiet without ever being mistaken for an all-clear. Set
-# PREPUSH_SKIP_CI_RED=1 to skip the network call entirely.
+# The checker routes every "cannot tell" case (no gh, no auth, offline, timeout,
+# unparseable output) to rc=3, NOT to rc=0 — see RC_UNDETERMINED in
+# scripts/check-ci-red.py. An earlier version of this comment claimed those
+# cases exited 0; that was false, and it mattered, because it is the sentence a
+# reader would use to convince themselves rc=3 could be folded into the
+# all-clear branch. Set PREPUSH_SKIP_CI_RED=1 to skip the network call entirely
+# (an escape hatch for a genuinely offline push, NOT a standing bypass: exporting
+# it permanently removes the check, which is the "silence the red" move CLAUDE.md
+# section 4 forbids).
 # Branching is on EXIT CODE, never on the output text. An earlier version
 # matched the literal string "check-ci-red: skipped" to tell "could not ask"
 # from "CI is fine" — so rewording one message would have silently turned this
 # into a no-op, which is precisely the failure mode the check exists to catch.
 #   0 = every active workflow judged, none chronic   1 = chronically red
 #   3 = something could not be determined            * = unrecognized
+#
+# rc=1 and unrecognized rc BLOCK. rc=3 does NOT — and that single carve-out is
+# the one judgment call in this hook, so it is argued here rather than left to
+# be discovered:
+#
+#   CLAUDE.md section 3 says "cannot determine" must resolve to the restrictive
+#   side, which taken alone would make rc=3 block. Section 7 says the authority
+#   to stop or pass work must never be held by an external service. Those two
+#   collide here and section 7 wins: rc=3 fires whenever the GitHub API is
+#   unreachable, so blocking on it would make GitHub's availability a
+#   precondition for pushing at all — an offline developer could not push, and
+#   the block/allow authority would have been handed to a third party by the
+#   back door. Section 3's concern is that "unknown" gets RECORDED as "fine";
+#   that concern is met a different way, by rc=3 printing an explicit UNKNOWN
+#   notice rather than staying silent. Section 7's concern has no such
+#   alternative remedy.
+#
+#   An unrecognized rc is NOT covered by that carve-out and blocks: it means the
+#   checker grew a code this hook has never been taught to read, so nothing is
+#   known about it — including whether it is even reachable offline.
 if [ "${PREPUSH_SKIP_CI_RED:-0}" != "1" ] \
     && command -v python3 >/dev/null 2>&1 && [ -f scripts/check-ci-red.py ]; then
     ci_out="$(python3 scripts/check-ci-red.py --branch main 2>&1)"
@@ -265,18 +298,37 @@ if [ "${PREPUSH_SKIP_CI_RED:-0}" != "1" ] \
             # there may well be from the developer's own previous push.
             # The script's own output already explains the class and how to
             # inspect it; only the push-safety line is added here.
-            printf '%s\n' "This is advisory only — the push is not blocked." >&2
+            cat >&2 <<'EOF'
+
+check-ci-red: blocked. The workflows above have been red for N consecutive runs
+on main. That is not a flake — it is a detection nobody acted on, and letting
+this push through is what turned the last one into a 17-run streak.
+
+Fix the workflow, or — if it genuinely cannot be fixed right now — say so where
+someone will see it (`backlog add`) instead of pushing past it silently.
+
+PREPUSH_SKIP_CI_RED=1 exists for an offline push and skips the network call. It
+is not a way to make this message go away; using it for that is the exact move
+CLAUDE.md section 4 names as the worst thing you can do here.
+EOF
+            exit 1
             ;;
         3)
             cat >&2 <<'EOF'
 
 CI health could not be fully determined — treat the above as UNKNOWN, not as an
 all-clear. A workflow that cannot be judged is exactly the one most likely to
-have rotted unnoticed. This is advisory only — the push is not blocked.
+have rotted unnoticed.
+
+This case is deliberately advisory even though rc=1 blocks: rc=3 is what fires
+when GitHub is unreachable, and blocking on it would put the ability to push
+behind a third party's availability (CLAUDE.md section 7). See the comment above
+this block for the full argument.
 EOF
             ;;
         *)
-            printf '\n%s\n' "check-ci-red: unrecognized exit code $ci_rc — see its output above. NOT an all-clear. This is advisory only; the push is not blocked." >&2
+            printf '\n%s\n' "check-ci-red: blocked — unrecognized exit code $ci_rc, see its output above. NOT an all-clear: this hook has never been taught to read that code, so nothing about it is known. Teach this case explicitly rather than widening the rc=3 carve-out to cover it." >&2
+            exit 1
             ;;
     esac
 fi

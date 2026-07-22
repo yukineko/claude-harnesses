@@ -1,7 +1,7 @@
 {
   "name": "autoflow",
-  "version": "0.1.8",
-  "description": "Session-end auto-flow gate: on Stop, prompt /record once, then loop /condukt until pending tasks are cleared (auto up to 4×, ask user from 5× onward). Subscription-native (one hook + bundled Rust binary, no API key). v0.1.8: pid_alive() (used by backlog_driver_active()) no longer always reports dead on Windows — Unix now calls libc::kill(pid,0) directly (no subprocess), Windows uses windows-sys OpenProcess/CloseHandle instead of the non-existent `kill -0`.",
+  "version": "0.1.9",
+  "description": "Session-end auto-flow gate: on Stop, prompt /record once, then loop /condukt until pending tasks are cleared (auto up to 4×, ask user from 5× onward). Subscription-native (one hook + bundled Rust binary, no API key). v0.1.9: Stop hook now runs under harness-core's run_guarded panic barrier (fail-closed block on crash instead of silent allow).",
   "author": {
     "name": "yukineko"
   },

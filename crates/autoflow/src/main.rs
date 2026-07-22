@@ -99,10 +99,25 @@ fn resolve_session_id(input: &HookInput) -> String {
     }
 }
 
+/// The Stop hook entry point. Reads stdin once and determines the panic-guard
+/// mode flags up front, then runs the state-machine body under
+/// `harness_core::gate::run::run_guarded`: a panic in `stop_run` (a crash
+/// before any decision was emitted) now fails CLOSED (`decision:block`)
+/// instead of the old behavior of silently exiting 0 with no decision
+/// (indistinguishable from a clean, nothing-to-do stop).
 fn stop_command() -> ! {
-    run_hook(|| {
-        let raw = read_stdin();
-        let input = HookInput::parse(&raw).unwrap_or_default();
+    let raw = read_stdin();
+    let hook = HookInput::parse(&raw);
+    let interactive = hook.is_none();
+    let stop_hook_active = hook.as_ref().is_some_and(|h| h.stop_hook_active);
+    harness_core::gate::run::run_guarded("autoflow", interactive, stop_hook_active, move || {
+        stop_run(hook.unwrap_or_default())
+    });
+    std::process::exit(0);
+}
+
+fn stop_run(input: HookInput) {
+    {
         let session_id = if input.session_id.is_empty() {
             std::env::var("CLAUDE_CODE_SESSION_ID").unwrap_or_default()
         } else {
@@ -231,7 +246,7 @@ fn stop_command() -> ! {
             }
             Phase::Done => {}
         }
-    })
+    }
 }
 
 fn block(reason: &str) {

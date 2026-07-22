@@ -391,15 +391,7 @@ fn main() {
         }),
 
         // ----- user-invoked (normal error reporting) -----
-        Command::Stop => run_hook(|| {
-            let raw = read_stdin();
-            if let Some(input) = HookInput::parse(&raw) {
-                let cfg = Config::load();
-                if let Some(out) = hooks::stop::run(&input, &cfg) {
-                    println!("{out}");
-                }
-            }
-        }),
+        Command::Stop => stop_command(),
         Command::Install { dry_run } => {
             if let Err(e) = install::install(dry_run) {
                 eprintln!("install failed: {e}");
@@ -854,6 +846,33 @@ fn main() {
             let cfg = Config::load();
             hooks::distill::run_bg(&session, &transcript, &cwd, &cfg);
         }),
+    }
+}
+
+/// The Stop hook entry point. Reads stdin once and determines the panic-guard
+/// mode flags up front, then runs the actual logic under
+/// `harness_core::gate::run::run_guarded`: a panic in `stop_run` (a crash
+/// before any decision was emitted) now fails CLOSED (`decision:block`)
+/// instead of the old behavior of silently exiting 0 with no decision
+/// (indistinguishable from a clean stop).
+fn stop_command() -> ! {
+    let raw = read_stdin();
+    let hook = HookInput::parse(&raw);
+    let interactive = hook.is_none();
+    let stop_hook_active = hook.as_ref().is_some_and(|h| h.stop_hook_active);
+    harness_core::gate::run::run_guarded("ctxrot", interactive, stop_hook_active, move || {
+        stop_run(hook)
+    });
+    std::process::exit(0);
+}
+
+fn stop_run(hook: Option<HookInput>) {
+    let Some(input) = hook else {
+        return;
+    };
+    let cfg = Config::load();
+    if let Some(out) = hooks::stop::run(&input, &cfg) {
+        println!("{out}");
     }
 }
 

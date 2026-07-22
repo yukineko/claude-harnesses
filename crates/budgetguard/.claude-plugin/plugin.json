@@ -1,6 +1,6 @@
 {
   "name": "budgetguard",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Real-time cost budget gate for Claude Code: on Stop, read the session transcript, compute USD cost, and block the turn when session or daily limits are exceeded — feeding the overage back so the agent winds down gracefully. Subscription-native (one Stop hook + bundled Rust binary, no API key).",
   "author": {
     "name": "yukineko"

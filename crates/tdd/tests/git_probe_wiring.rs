@@ -2,8 +2,8 @@
 //!
 //! `tdd::git::is_git_repo` collapses "git could not be run" into "not a git
 //! repo", and `tdd::gate::classify` maps `ChangeScan::NotRepo` to
-//! `git_unscoped` → ALLOW. So a Stop hook running without `git` on PATH lets
-//! every untested change through, in a real repo.
+//! `Determination::Known(None)` → ALLOW. So a Stop hook running without `git`
+//! on PATH lets every untested change through, in a real repo.
 //!
 //! After the fix the probe must answer `Undetermined` there, `changed_files` /
 //! `added_lines` must report their BLOCKING variant (`ChangeScan::Failed` /
@@ -116,8 +116,8 @@ fn unspawnable_git_in_a_repo_blocks_the_stop() {
     assert!(
         stdout.contains("couldn't determine what changed"),
         "the block must come from the git-scan-undetermined path (tdd::gate::block_reason's \
-         git_scan_failed branch), not from the panic barrier's generic fail-closed block — \
-         otherwise this test would pass on a crashing gate. stdout was: {stdout:?}"
+         Determination::Undetermined branch), not from the panic barrier's generic fail-closed \
+         block — otherwise this test would pass on a crashing gate. stdout was: {stdout:?}"
     );
     let _ = std::fs::remove_dir_all(&root);
 }

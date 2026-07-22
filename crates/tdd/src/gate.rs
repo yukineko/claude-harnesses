@@ -5,12 +5,15 @@
 use std::path::Path;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
+use harness_core::verdict::{Determination, Verdict};
 use regex::RegexSet;
 
 use crate::config::Config;
 use crate::git::{self, AddedLine, AddedScan, ChangeScan};
 
-pub struct Verdict {
+/// What a successful scan found. Only populated on `Scan::Known(Some(_))` —
+/// i.e. a real git repo whose diff could be read.
+pub struct Fields {
     /// Number of *added* implementation lines (impl-glob file, not a test file,
     /// not itself a test marker).
     pub added_impl_lines: usize,
@@ -20,31 +23,63 @@ pub struct Verdict {
     pub test_file_changed: bool,
     /// A few implementation files touched, for the message.
     pub impl_files: Vec<String>,
-    /// True when there is no git repo, so we can't scope and allow the stop.
-    pub git_unscoped: bool,
-    /// True when a `git` command errored inside a real repo, so the changed set
-    /// is UNDETERMINED. We must not treat that as "nothing changed → allow";
-    /// the gate fails closed (blocks) — the same treatment the crate already
-    /// gives a failing checker/reviewer subprocess.
-    pub git_scan_failed: bool,
 }
 
-impl Verdict {
+impl Fields {
     pub fn has_test_evidence(&self) -> bool {
         self.test_marker_added || self.test_file_changed
     }
+}
 
-    /// Block the stop iff a git scan was undetermined (fail closed), OR enough
-    /// new implementation landed with no test.
-    pub fn blocks(&self, cfg: &Config) -> bool {
-        if self.git_scan_failed {
-            // Undetermined changeset → fail closed. Never silently allow: a git
-            // command that errored is not evidence of a clean tree.
-            return true;
+/// What the git scan could determine, in the shared three-valued type
+/// (`harness_core::verdict::Determination`) instead of a pair of home-grown
+/// booleans (the former `git_unscoped` / `git_scan_failed`):
+///
+/// * `Known(Some(fields))` — the scan ran; `fields` is what it found.
+/// * `Known(None)` — the scan ran and DETERMINED there is no repo here, so
+///   there is nothing to scope against (allow, as before). A determined
+///   answer, not a failure.
+/// * `Undetermined(why)` — a `git` command errored inside a real repo. Not the
+///   same fact as "no repo", and never reported as one: the changeset is
+///   undetermined, so the gate fails closed rather than reading a collapsed
+///   scan as "nothing changed".
+pub type Scan = Determination<Option<Fields>>;
+
+/// The gate's report: what the scan found, wrapped so the blocking decision
+/// travels through the shared [`Verdict`] rather than a private bool.
+pub struct Report {
+    pub scan: Scan,
+}
+
+impl Report {
+    /// The gate's answer in the shared type. `Known(None)` (confirmed no repo)
+    /// and a `Known(Some(fields))` with test evidence both mint `Clean` via
+    /// `from_findings(vec![])` — a real "ran, found nothing to block on".
+    /// `Undetermined` passes the reason straight through: never collapsed into
+    /// `Clean`.
+    pub fn verdict(&self, cfg: &Config) -> Verdict {
+        match &self.scan {
+            Determination::Undetermined(why) => Verdict::Undetermined(why.clone()),
+            Determination::Known(None) => Verdict::from_findings(Vec::new()),
+            Determination::Known(Some(f)) => {
+                let blocks =
+                    f.added_impl_lines >= cfg.min_added_impl_lines.max(1) && !f.has_test_evidence();
+                if blocks {
+                    Verdict::violation(format!(
+                        "{} new implementation line(s) added with no accompanying test",
+                        f.added_impl_lines
+                    ))
+                } else {
+                    Verdict::from_findings(Vec::new())
+                }
+            }
         }
-        !self.git_unscoped
-            && self.added_impl_lines >= cfg.min_added_impl_lines.max(1)
-            && !self.has_test_evidence()
+    }
+
+    /// Block the stop iff the shared verdict blocks (`Violation` or
+    /// `Undetermined` — both restricted, never silently allowed).
+    pub fn blocks(&self, cfg: &Config) -> bool {
+        self.verdict(cfg).blocks()
     }
 }
 
@@ -69,12 +104,12 @@ fn build_markers(patterns: &[String]) -> RegexSet {
     })
 }
 
-/// Classify a set of changed files + added lines into a verdict. Pure (no git):
-/// unit-testable. Maps the tri-state scans: any `Failed` → `git_scan_failed`
-/// (block, fail closed); otherwise any `NotRepo` → `git_unscoped` (allow, as
-/// before); otherwise the successful `Files`/`Lines` sets drive the existing
-/// test-evidence logic.
-pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Verdict {
+/// Classify a set of changed files + added lines into a report. Pure (no git):
+/// unit-testable. Maps the tri-state scans: any `Failed` → `Undetermined`
+/// (fail closed); otherwise any `NotRepo` → `Known(None)` (allow, as before);
+/// otherwise the successful `Files`/`Lines` sets drive the existing
+/// test-evidence logic, carried as `Known(Some(fields))`.
+pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report {
     let impl_set = build_globset(&cfg.impl_globs);
     let test_set = build_globset(&cfg.test_path_globs);
     let markers = build_markers(&cfg.test_markers);
@@ -83,26 +118,18 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Verdic
     // Fail closed rather than let a collapsed-empty scan read as "no changes".
     // Checked first so a Failed scan is never masked by a NotRepo companion.
     if matches!(changed, ChangeScan::Failed) || matches!(added, AddedScan::Failed) {
-        return Verdict {
-            added_impl_lines: 0,
-            test_marker_added: false,
-            test_file_changed: false,
-            impl_files: Vec::new(),
-            git_unscoped: false,
-            git_scan_failed: true,
+        return Report {
+            scan: Determination::undetermined(
+                "a `git` command failed while scanning the changeset",
+            ),
         };
     }
 
     let (ChangeScan::Files(changed), AddedScan::Lines(added)) = (changed, added) else {
         // At least one side is NotRepo (and neither is Failed): no git scope,
         // allow the stop exactly as before.
-        return Verdict {
-            added_impl_lines: 0,
-            test_marker_added: false,
-            test_file_changed: false,
-            impl_files: Vec::new(),
-            git_unscoped: true,
-            git_scan_failed: false,
+        return Report {
+            scan: Determination::known(None),
         };
     };
 
@@ -132,47 +159,63 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Verdic
         }
     }
 
-    Verdict {
-        added_impl_lines,
-        test_marker_added,
-        test_file_changed,
-        impl_files,
-        git_unscoped: false,
-        git_scan_failed: false,
+    Report {
+        scan: Determination::known(Some(Fields {
+            added_impl_lines,
+            test_marker_added,
+            test_file_changed,
+            impl_files,
+        })),
     }
 }
 
-/// Run the gate against a real project root. `git_scan_failed` is set (via
-/// `classify`) when either the changed-files or the added-lines scan reports
-/// `Failed`, so an errored git command fails the gate closed.
-pub fn evaluate(cfg: &Config, root: &Path) -> Verdict {
+/// Run the gate against a real project root. The `Failed` arm (via `classify`)
+/// fails the gate closed instead of collapsing an errored git command into an
+/// empty, allow-shaped scan.
+pub fn evaluate(cfg: &Config, root: &Path) -> Report {
     let changed = git::changed_files(root);
     let added = git::added_lines(root);
     classify(cfg, &changed, &added)
 }
 
 /// The reason injected back into the model when the stop is blocked.
-pub fn block_reason(v: &Verdict, attempt: u32, max: u32) -> String {
-    // Undetermined changeset (a git command errored): a DISTINCT, loud reason.
-    // We are not allowing the stop blindly on an empty/collapsed scan; the
-    // existing escape hatches still apply so the turn is never trapped.
-    if v.git_scan_failed {
-        return format!(
+pub fn block_reason(v: &Report, attempt: u32, max: u32) -> String {
+    match &v.scan {
+        // Undetermined changeset (a git command errored): a DISTINCT, loud
+        // reason. We are not allowing the stop blindly on an empty/collapsed
+        // scan; the existing escape hatches still apply so the turn is never
+        // trapped.
+        Determination::Undetermined(_) => format!(
             "🔴 tdd: couldn't determine what changed — a `git` command failed (attempt \
              {attempt}/{max}). Not allowing the stop blindly on an undetermined changeset \
              (that would let untested code through). Fix the git error (see `tdd status`), \
              or create `.tdd-skip` in the project root with a one-line reason to skip once, \
              or set TDD_DISABLE=1 to disable entirely."
-        );
+        ),
+        // Neither reachable in practice (a non-blocking report never reaches
+        // `block_reason`), but resolved to the same loud message rather than an
+        // empty string, since an empty block reason would be worse than either.
+        Determination::Known(None) => generic_block_reason(0, &[], attempt, max),
+        Determination::Known(Some(f)) => {
+            generic_block_reason(f.added_impl_lines, &f.impl_files, attempt, max)
+        }
     }
-    let sample = if v.impl_files.is_empty() {
+}
+
+fn generic_block_reason(
+    added_impl_lines: usize,
+    impl_files: &[String],
+    attempt: u32,
+    max: u32,
+) -> String {
+    let sample = if impl_files.is_empty() {
         String::new()
     } else {
-        let shown: Vec<&str> = v.impl_files.iter().take(6).map(String::as_str).collect();
+        let shown: Vec<&str> = impl_files.iter().take(6).map(String::as_str).collect();
         format!("\n  implementation changed: {}", shown.join(", "))
     };
     format!(
-        "🔴 tdd: write a test first — {} new implementation line(s) added with no \
+        "🔴 tdd: write a test first — {added_impl_lines} new implementation line(s) added with no \
          accompanying test (attempt {attempt}/{max}).{sample}\n\n\
          Add a test that exercises this change (a `#[test]`, `def test_…`, `func Test…`, \
          `it(...)`, or a file under tests/), then finish. Prefer test-first: run \
@@ -180,42 +223,42 @@ pub fn block_reason(v: &Verdict, attempt: u32, max: u32) -> String {
          `tdd green --task <id>` once it passes.\n\n\
          Genuinely no test needed (pure refactor/rename/docs)? Create `.tdd-skip` in the \
          project root with a one-line reason (consumed once). Disable entirely: TDD_DISABLE=1.",
-        v.added_impl_lines
     )
 }
 
 /// Compact human report for manual `tdd gate` / `tdd status` runs.
-pub fn human_report(v: &Verdict, cfg: &Config) -> String {
-    if v.git_scan_failed {
-        return "🔴 git scan FAILED (a git command errored) — tdd gate BLOCKS the stop \
-                (undetermined changeset, failing closed)"
-            .to_string();
-    }
-    if v.git_unscoped {
-        return "(no git repo — tdd gate allows the stop)".to_string();
-    }
-    let mut s = String::new();
-    s.push_str(&format!("added impl lines: {}\n", v.added_impl_lines));
-    s.push_str(&format!(
-        "test evidence:    {}\n",
-        if v.has_test_evidence() {
-            if v.test_file_changed && v.test_marker_added {
-                "yes (test file + inline test)"
-            } else if v.test_file_changed {
-                "yes (test file changed)"
+pub fn human_report(v: &Report, cfg: &Config) -> String {
+    match &v.scan {
+        Determination::Undetermined(_) => "🔴 git scan FAILED (a git command errored) — tdd gate \
+                                            BLOCKS the stop (undetermined changeset, failing \
+                                            closed)"
+            .to_string(),
+        Determination::Known(None) => "(no git repo — tdd gate allows the stop)".to_string(),
+        Determination::Known(Some(f)) => {
+            let mut s = String::new();
+            s.push_str(&format!("added impl lines: {}\n", f.added_impl_lines));
+            s.push_str(&format!(
+                "test evidence:    {}\n",
+                if f.has_test_evidence() {
+                    if f.test_file_changed && f.test_marker_added {
+                        "yes (test file + inline test)"
+                    } else if f.test_file_changed {
+                        "yes (test file changed)"
+                    } else {
+                        "yes (inline test added)"
+                    }
+                } else {
+                    "none"
+                }
+            ));
+            if v.blocks(cfg) {
+                s.push_str("\n🔴 would BLOCK: implementation added without a test");
             } else {
-                "yes (inline test added)"
+                s.push_str("\n✓ would allow the stop");
             }
-        } else {
-            "none"
+            s
         }
-    ));
-    if v.blocks(cfg) {
-        s.push_str("\n🔴 would BLOCK: implementation added without a test");
-    } else {
-        s.push_str("\n✓ would allow the stop");
     }
-    s
 }
 
 #[cfg(test)]
@@ -248,8 +291,11 @@ mod tests {
             "pub fn add(a:i32,b:i32)->i32{a+b}",
         )]);
         let v = classify(&cfg, &changed, &added);
-        assert_eq!(v.added_impl_lines, 1);
-        assert!(!v.has_test_evidence());
+        let Determination::Known(Some(f)) = &v.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert_eq!(f.added_impl_lines, 1);
+        assert!(!f.has_test_evidence());
         assert!(v.blocks(&cfg));
     }
 
@@ -266,7 +312,10 @@ mod tests {
             ),
         ]);
         let v = classify(&cfg, &changed, &added);
-        assert!(v.test_marker_added);
+        let Determination::Known(Some(f)) = &v.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert!(f.test_marker_added);
         assert!(!v.blocks(&cfg));
     }
 
@@ -279,7 +328,10 @@ mod tests {
             added("tests/add_test.rs", "assert_eq!(add(1,2),3);"),
         ]);
         let v = classify(&cfg, &changed, &added);
-        assert!(v.test_file_changed);
+        let Determination::Known(Some(f)) = &v.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert!(f.test_file_changed);
         assert!(!v.blocks(&cfg));
     }
 
@@ -289,7 +341,10 @@ mod tests {
         let changed = files(&["README.md"]);
         let added = lines(vec![added("README.md", "# hello")]);
         let v = classify(&cfg, &changed, &added);
-        assert_eq!(v.added_impl_lines, 0);
+        let Determination::Known(Some(f)) = &v.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert_eq!(f.added_impl_lines, 0);
         assert!(!v.blocks(&cfg));
     }
 
@@ -297,8 +352,11 @@ mod tests {
     fn no_git_never_blocks() {
         let cfg = Config::default();
         let v = classify(&cfg, &ChangeScan::NotRepo, &AddedScan::NotRepo);
-        assert!(v.git_unscoped);
-        assert!(!v.git_scan_failed);
+        assert!(
+            matches!(v.scan, Determination::Known(None)),
+            "a NotRepo scan must record the confirmed-non-repo scope; got {:?}",
+            describe(&v.scan)
+        );
         assert!(!v.blocks(&cfg));
     }
 
@@ -308,7 +366,10 @@ mod tests {
         let changed = files(&["src/lib.rs"]);
         let added = lines(vec![added("src/lib.rs", "   ")]);
         let v = classify(&cfg, &changed, &added);
-        assert_eq!(v.added_impl_lines, 0);
+        let Determination::Known(Some(f)) = &v.scan else {
+            panic!("expected a known, scoped scan");
+        };
+        assert_eq!(f.added_impl_lines, 0);
         assert!(!v.blocks(&cfg));
     }
 
@@ -319,17 +380,21 @@ mod tests {
     // changed → allow". A `Failed` scan must BLOCK (undetermined ≠ clean),
     // exactly like a failing checker/reviewer subprocess already does.
 
-    /// A `Failed` changed-files scan → `git_scan_failed` → BLOCK, even though
+    /// A `Failed` changed-files scan → `Undetermined` → BLOCK, even though
     /// nothing else is set (0 impl lines, no test). This is the regression.
     #[test]
     fn failed_change_scan_blocks_it_does_not_allow() {
         let cfg = Config::default();
         let v = classify(&cfg, &ChangeScan::Failed, &AddedScan::Lines(Vec::new()));
         assert!(
-            v.git_scan_failed,
-            "a failed git command must mark the scan failed"
+            matches!(v.scan, Determination::Undetermined(_)),
+            "a failed git command must record an undetermined scan; got {:?}",
+            describe(&v.scan)
         );
-        assert!(!v.git_unscoped, "Failed is not the no-scope NotRepo case");
+        assert!(
+            !matches!(v.scan, Determination::Known(None)),
+            "Failed is not the no-scope NotRepo case"
+        );
         assert!(
             v.blocks(&cfg),
             "an undetermined changeset must fail the gate closed (block), not allow"
@@ -342,7 +407,7 @@ mod tests {
     fn failed_added_scan_blocks_even_with_notrepo_companion() {
         let cfg = Config::default();
         let v = classify(&cfg, &ChangeScan::NotRepo, &AddedScan::Failed);
-        assert!(v.git_scan_failed);
+        assert!(matches!(v.scan, Determination::Undetermined(_)));
         assert!(
             v.blocks(&cfg),
             "Failed must not be masked by a NotRepo companion"
@@ -379,14 +444,61 @@ mod tests {
             &ChangeScan::Files(Vec::new()),
             &AddedScan::Lines(Vec::new()),
         );
-        assert!(!v.git_scan_failed, "an empty SUCCESS is not a failure");
         assert!(
-            !v.git_unscoped,
-            "a clean repo is in scope, just with no changes"
+            !matches!(v.scan, Determination::Undetermined(_)),
+            "an empty SUCCESS is not a failure"
+        );
+        assert!(
+            matches!(v.scan, Determination::Known(Some(_))),
+            "a clean repo is in scope, just with no changes; got {:?}",
+            describe(&v.scan)
         );
         assert!(
             !v.blocks(&cfg),
             "a genuinely clean repo must still be allowed"
         );
+    }
+
+    /// The gate's answer travels in the shared type: blocking yields
+    /// `Violation` and the Stop-hook channel of that type actually blocks;
+    /// an allow yields the unforgeable `Clean`.
+    #[test]
+    fn verdict_is_the_shared_type() {
+        let cfg = Config::default();
+        let blocking = classify(
+            &cfg,
+            &files(&["src/lib.rs"]),
+            &lines(vec![added("src/lib.rs", "pub fn f(){}")]),
+        );
+        let v = blocking.verdict(&cfg);
+        assert!(matches!(v, Verdict::Violation(_)), "got {v:?}");
+        assert!(v.blocks());
+        let decision = v
+            .stop_decision()
+            .expect("a blocking verdict emits a decision");
+        assert_eq!(decision["decision"], "block");
+
+        let clean = classify(
+            &cfg,
+            &ChangeScan::Files(Vec::new()),
+            &AddedScan::Lines(Vec::new()),
+        );
+        assert!(matches!(clean.verdict(&cfg), Verdict::Clean(_)));
+        assert!(clean.verdict(&cfg).stop_decision().is_none());
+
+        let undetermined = classify(&cfg, &ChangeScan::Failed, &AddedScan::Failed);
+        assert!(matches!(
+            undetermined.verdict(&cfg),
+            Verdict::Undetermined(_)
+        ));
+        assert!(undetermined.verdict(&cfg).blocks());
+    }
+
+    fn describe(scan: &Scan) -> &'static str {
+        match scan {
+            Determination::Known(Some(_)) => "Known(Some)",
+            Determination::Known(None) => "Known(None)",
+            Determination::Undetermined(_) => "Undetermined",
+        }
     }
 }

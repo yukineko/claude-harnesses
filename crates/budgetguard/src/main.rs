@@ -12,7 +12,7 @@ mod lock;
 
 use clap::{Args, Parser, Subcommand};
 
-use harness_core::hook::{read_stdin, run_hook};
+use harness_core::hook::read_stdin;
 
 use config::Config;
 
@@ -62,7 +62,7 @@ struct StatusArgs {
 fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Command::Gate => run_hook(gate_command),
+        Command::Gate => gate_command(),
         Command::Install { dry_run } => exit_on_err(install::install(dry_run)),
         Command::Uninstall { dry_run } => exit_on_err(install::uninstall(dry_run)),
         Command::Init { force } => exit_on_err(init(force)),
@@ -77,12 +77,30 @@ fn exit_on_err(r: anyhow::Result<()>) {
     }
 }
 
-fn gate_command() {
+/// The Stop hook entry point. Reads stdin once and determines the panic-guard
+/// mode flags up front, then runs the actual gate logic under
+/// `harness_core::gate::run::run_guarded`: a panic in `gate_run` (a crash
+/// before any Verdict was decided) now fails CLOSED — a `decision:block` is
+/// emitted — instead of the old behavior of silently exiting 0 with no
+/// decision (indistinguishable from a passing gate). `disabled_env` is checked
+/// first, outside the guard, so the operator's escape hatch stays reachable
+/// even if `gate_run` were to crash deterministically.
+fn gate_command() -> ! {
     if Config::disabled_env() {
-        return;
+        std::process::exit(0);
     }
     let raw = read_stdin();
-    let Some(input) = harness_core::hook::HookInput::parse(&raw) else {
+    let hook = harness_core::hook::HookInput::parse(&raw);
+    let interactive = hook.is_none();
+    let stop_hook_active = hook.as_ref().is_some_and(|h| h.stop_hook_active);
+    harness_core::gate::run::run_guarded("budgetguard", interactive, stop_hook_active, move || {
+        gate_run(hook)
+    });
+    std::process::exit(0);
+}
+
+fn gate_run(hook: Option<harness_core::hook::HookInput>) {
+    let Some(input) = hook else {
         return;
     };
     if input.transcript_path.is_empty() || input.session_id.is_empty() {

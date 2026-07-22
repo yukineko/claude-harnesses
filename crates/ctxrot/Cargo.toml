@@ -1,6 +1,6 @@
 [package]
 name = "ctxrot"
-version = "0.5.14"
+version = "0.5.15"
 edition = "2021"
 # MSRV: `is_none_or` (store.rs/usage.rs) was stabilized in Rust 1.82.
 rust-version.workspace = true

@@ -120,7 +120,13 @@ pub fn hint(cfg: &Config, pct: u64) -> &'static str {
 
 /// Locate the Claude Code transcript for a session id without replicating
 /// Claude's cwd-mangling: scan every `~/.claude/projects/*/` for `<id>.jsonl`
-/// and take the most recently modified match. Returns None if nothing matches.
+/// and take the most recently modified match. Returns None if nothing
+/// matches, INCLUDING when `projects` cannot be listed at all — that `None`
+/// already flows into callers' honest "unknown" readout (`unknown_line` /
+/// "context使用量は不明"), so it is not a fail-open. A permission-denied (or
+/// other non-NotFound) error on the top-level scan, or on an individual
+/// per-project entry, is still surfaced via `eprintln!` so the gap is visible
+/// rather than indistinguishable from "no transcripts exist yet".
 pub fn find_transcript_for_session(session_id: &str) -> Option<PathBuf> {
     if session_id.is_empty() {
         return None;
@@ -129,7 +135,28 @@ pub fn find_transcript_for_session(session_id: &str) -> Option<PathBuf> {
     let projects = PathBuf::from(home).join(".claude").join("projects");
     let target = format!("{session_id}.jsonl");
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-    for entry in std::fs::read_dir(&projects).ok()?.flatten() {
+    let entries = match std::fs::read_dir(&projects) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            eprintln!(
+                "warning: find_transcript_for_session: cannot read {}: {e}",
+                projects.display()
+            );
+            return None;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!(
+                    "warning: find_transcript_for_session: unreadable entry in {}: {e}",
+                    projects.display()
+                );
+                continue;
+            }
+        };
         let p = entry.path().join(&target);
         if let Ok(meta) = std::fs::metadata(&p) {
             let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
@@ -232,5 +259,46 @@ mod tests {
         assert!(low.contains("band0") && !low.contains("unknown"), "{low}");
         let unk = unknown_line(&cfg());
         assert!(unk.contains("unknown") && !unk.contains("band0"), "{unk}");
+    }
+
+    /// An absent `~/.claude/projects` legitimately contributes no transcript
+    /// (`None`, which callers already render as an honest "unknown" state).
+    #[test]
+    fn find_transcript_absent_projects_dir_returns_none() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", tmp.path());
+        let result = find_transcript_for_session("nonexistent-session");
+        match old_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        assert_eq!(result, None);
+    }
+
+    /// A `~/.claude/projects` that EXISTS but cannot be read must not panic —
+    /// it degrades to the same `None` → "unknown" readout, now with a visible
+    /// eprintln warning instead of an indistinguishable silent skip.
+    #[cfg(unix)]
+    #[test]
+    fn find_transcript_unreadable_projects_dir_does_not_panic() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let projects = tmp.path().join(".claude").join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let mut perms = std::fs::metadata(&projects).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&projects, perms.clone()).unwrap();
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", tmp.path());
+        let result = std::panic::catch_unwind(|| find_transcript_for_session("some-session"));
+        match old_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&projects, perms).unwrap();
+        assert!(result.is_ok(), "must not panic on an unreadable projects dir");
+        assert_eq!(result.unwrap(), None);
     }
 }

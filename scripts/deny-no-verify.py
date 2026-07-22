@@ -26,11 +26,30 @@ Protocol: reads the PreToolUse JSON payload on stdin.
 
 Fail-closed vs fail-open, deliberately chosen per branch: an UNPARSEABLE payload
 exits 0. That is not the doctrine's "cannot determine resolves to the restricted
-side" being waived — this hook is not the gate. The gate is `.githooks/*` plus
-the bypass ledger, which run regardless of what happens here. Blocking every
-Bash call in the session because one payload failed to decode would take the
-whole turn down to protect a check that has a working backstop. The cost of that
-asymmetry is stated here rather than left for a reader to discover.
+side" being waived — for the `--no-verify` class this hook is not the gate. The
+gate is `.githooks/*` plus the bypass ledger: `post-commit` records a commit this
+hook never certified and `pre-push` then refuses to send it. Blocking every Bash
+call in the session because one payload failed to decode would take the whole
+turn down to protect a check that has a working backstop.
+
+THE BACKSTOP DOES NOT COVER EVERY BYPASS, and an earlier version of this
+paragraph claimed it did — "the gate is `.githooks/*` plus the bypass ledger,
+which run regardless of what happens here". That is false for `-c
+core.hooksPath=`, and the failure was constructed rather than argued:
+
+    git commit --no-verify -m ungated       ledger 1, pre-push exit 1   caught
+    git -c core.hooksPath=/dev/null commit  ledger 0, pre-push exit 0   NOT caught
+
+The chain is post-commit -> ledger -> pre-push, and overriding `hooksPath` breaks
+it at the first link: `post-commit` never runs, so nothing is recorded, so
+`pre-push` reads an empty ledger and lets the ungated commit leave the machine.
+
+So the asymmetry above is narrower than it was written to be. For the hooksPath
+class this hook is the ONLY control, not redundant cover, which means a fail-open
+here is unconditional. The payload branch keeps its exemption on the reasoning
+that a Bash payload which fails to DECODE is a harness fault rather than an
+author's command — but it no longer gets to lean on a backstop that, for one of
+the two bypass classes it covers, is not there.
 
 An unparseable COMMAND is a different question, and it used to be answered the
 same permissive way — wrongly. Splitting on `;` / `|` with a regex BEFORE
@@ -110,11 +129,25 @@ BYPASS_LONG_MIN = "--no-v"
 # of them. Clusters are letters only — `-n5` is a value, not a cluster.
 SHORT_CLUSTER = re.compile(r"^-[A-Za-z]*n[A-Za-z]*$")
 
-# Subcommand options whose value is a SEPARATE token. Their value must not be
-# read as a flag: `git commit -m -n` is a commit whose message is "-n".
+# Subcommand options whose value is a MANDATORY SEPARATE token. Their value must
+# not be read as a flag: `git commit -m -n` is a commit whose message is "-n".
+#
+# Membership is decided by the form git prints in `git commit -h`, and the
+# distinction is load-bearing rather than pedantic:
+#
+#     -F, --file <file>          MANDATORY separate token   -> belongs here
+#     -S, --gpg-sign[=<key-id>]  OPTIONAL, ATTACHED         -> must NOT be here
+#
+# An earlier version put `-S`/`--gpg-sign` in this list. git does not consume the
+# following token for it, but the skip did, so `git commit -S --no-verify` had
+# its bypass flag swallowed as if it were a key-id and the hook exited 0 — a
+# bypass INTRODUCED by the false-positive fix, refused by every prior version of
+# this file. Before adding an option here, check `git commit -h`: `[=<...>]`
+# means the value is attached and the option takes no separate token.
+# (`-u`/`--untracked-files` is the other `[=...]` form; likewise excluded.)
 OPTS_WITH_VALUE = ("-m", "--message", "-F", "--file", "-C", "--reuse-message",
-                   "-c", "--reedit-message", "--author", "--date", "-S",
-                   "--gpg-sign", "-t", "--template", "--fixup", "--squash",
+                   "-c", "--reedit-message", "--author", "--date",
+                   "-t", "--template", "--fixup", "--squash",
                    "--cleanup", "--trailer", "--pathspec-from-file")
 
 # git's global options that take their value as a SEPARATE token. The value is

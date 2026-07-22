@@ -11,26 +11,48 @@
 use std::path::Path;
 use std::process::Command;
 
+use harness_core::verdict::Determination;
+
 /// Aggregated shipping-state detection results for a repo.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ShipStatus {
     pub uncommitted: bool,
     pub unmerged_branches: Vec<String>,
     pub leftover_worktrees: Vec<String>,
     pub unpushed_count: usize,
-    pub stale_crates: Vec<String>,
+    /// `Undetermined` when the stale-crate scan itself could not run
+    /// (`crates/` exists but is unreadable) — must not render the same as a
+    /// clean `Known(vec![])`, or an incomplete scan reads as "nothing stale".
+    pub stale_crates: Determination<Vec<String>>,
+}
+
+impl Default for ShipStatus {
+    fn default() -> Self {
+        ShipStatus {
+            uncommitted: false,
+            unmerged_branches: Vec::new(),
+            leftover_worktrees: Vec::new(),
+            unpushed_count: 0,
+            stale_crates: Determination::Known(Vec::new()),
+        }
+    }
 }
 
 impl ShipStatus {
     /// True iff there is any unshipped work worth reminding the user about.
     ///
     /// Leftover worktrees are informational-only (not "unshipped work" per se)
-    /// so they don't affect this; they're still shown in the checklist.
+    /// so they don't affect this; they're still shown in the checklist. An
+    /// `Undetermined` stale-crate scan counts as unshipped work too — a
+    /// check that couldn't run is not evidence that everything is clean.
     pub fn has_unshipped_work(&self) -> bool {
         self.uncommitted
             || !self.unmerged_branches.is_empty()
             || self.unpushed_count > 0
-            || !self.stale_crates.is_empty()
+            || match &self.stale_crates {
+                Determination::Known(v) => !v.is_empty(),
+                Determination::Undetermined(_) => true,
+            }
     }
 }
 
@@ -85,17 +107,25 @@ pub fn render(status: &ShipStatus) -> String {
     }
 
     // stale crates -> the committed bin is older than its src.
-    if status.stale_crates.is_empty() {
-        out.push_str("  [x] no stale plugin binaries\n");
-    } else {
-        out.push_str(&format!(
-            "  [ ] stale plugin binaries: {} — the committed crates/<name>/bin/ binary is older than \
+    match &status.stale_crates {
+        Determination::Known(v) if v.is_empty() => {
+            out.push_str("  [x] no stale plugin binaries\n");
+        }
+        Determination::Known(v) => {
+            out.push_str(&format!(
+                "  [ ] stale plugin binaries: {} — the committed crates/<name>/bin/ binary is older than \
 its src. Run `scripts/rebuild-plugins.sh --stage-repo` (safe, auto-runnable — writes files, never git) \
 to refresh the committed binary, then commit it ({GATED}). NOTE: plain `scripts/rebuild-plugins.sh` and \
 `scripts/rollout-plugins.sh` / `ship rollout` only swap the plugin *cache* and do NOT clear this \
 committed-binary staleness\n",
-            status.stale_crates.join(", ")
-        ));
+                v.join(", ")
+            ));
+        }
+        Determination::Undetermined(why) => {
+            out.push_str(&format!(
+                "  [?] stale-crate check could not run: {why}\n"
+            ));
+        }
     }
 
     out
@@ -246,11 +276,14 @@ pub fn session_end_reminder(status: &ShipStatus) -> Option<String> {
     if status.unpushed_count > 0 {
         parts.push(format!("未pushコミット {}件", status.unpushed_count));
     }
-    if !status.stale_crates.is_empty() {
-        parts.push(format!(
-            "古いプラグインバイナリ {}件",
-            status.stale_crates.len()
-        ));
+    match &status.stale_crates {
+        Determination::Known(v) if !v.is_empty() => {
+            parts.push(format!("古いプラグインバイナリ {}件", v.len()));
+        }
+        Determination::Known(_) => {}
+        Determination::Undetermined(why) => {
+            parts.push(format!("古いプラグインバイナリの検査が未完了: {why}"));
+        }
     }
 
     Some(format!(
@@ -270,7 +303,7 @@ mod tests {
             unmerged_branches: vec!["condukt/foo".to_string()],
             leftover_worktrees: vec![],
             unpushed_count: 2,
-            stale_crates: vec![],
+            stale_crates: Determination::Known(vec![]),
         };
         let out = render(&status);
         // commit
@@ -292,7 +325,7 @@ mod tests {
     #[test]
     fn render_marks_stale_crates_as_safe_auto_runnable() {
         let status = ShipStatus {
-            stale_crates: vec!["ship".to_string()],
+            stale_crates: Determination::Known(vec!["ship".to_string()]),
             ..Default::default()
         };
         let out = render(&status);
@@ -306,7 +339,7 @@ mod tests {
         // `--stage-repo` (refresh the committed bin) + a GATED commit, NOT a
         // cache-only rebuild/rollout.
         let status = ShipStatus {
-            stale_crates: vec!["ship".to_string()],
+            stale_crates: Determination::Known(vec!["ship".to_string()]),
             ..Default::default()
         };
         let out = render(&status);
@@ -348,7 +381,7 @@ mod tests {
     fn render_gated_remaining_all_clear_when_nothing_gated() {
         let status = ShipStatus {
             leftover_worktrees: vec!["/tmp/x".to_string()],
-            stale_crates: vec!["ship".to_string()],
+            stale_crates: Determination::Known(vec!["ship".to_string()]),
             ..Default::default()
         };
         let out = render_gated_remaining(&status);
@@ -376,12 +409,30 @@ mod tests {
         // as the cache-only paths that do NOT clear committed-binary staleness
         // (so the user isn't misdirected to a remedy that can't work).
         let status = ShipStatus {
-            stale_crates: vec!["ship".to_string()],
+            stale_crates: Determination::Known(vec!["ship".to_string()]),
             ..Default::default()
         };
         let out = render(&status);
         assert!(out.contains("rollout-plugins.sh"));
         assert!(out.contains("ship rollout"));
         assert!(out.contains("do NOT clear"));
+    }
+
+    /// CA-ship-checklist-01: an `Undetermined` stale-crate scan must render
+    /// as an explicit "could not run" line and count as unshipped work — it
+    /// must not be indistinguishable from a clean `Known(vec![])`.
+    #[test]
+    fn undetermined_stale_scan_renders_unknown_and_counts_as_unshipped() {
+        let status = ShipStatus {
+            stale_crates: Determination::Undetermined(harness_core::verdict::Reason::new(
+                "permission denied",
+            )),
+            ..Default::default()
+        };
+        assert!(status.has_unshipped_work());
+        let out = render(&status);
+        assert!(out.contains("could not run"));
+        assert!(!out.contains("[x] no stale plugin binaries"));
+        assert!(session_end_reminder(&status).is_some());
     }
 }

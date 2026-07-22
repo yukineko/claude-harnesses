@@ -23,6 +23,7 @@ compile_error!(
 );
 
 pub mod append;
+pub mod boundary;
 pub mod code_index;
 pub mod config;
 pub mod daily;

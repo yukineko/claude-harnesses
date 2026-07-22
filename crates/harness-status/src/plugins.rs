@@ -416,7 +416,8 @@ mod tests {
     #[cfg(unix)]
     fn unreadable_crates_dir_is_err_not_empty_scan() {
         use std::os::unix::fs::PermissionsExt;
-        let tmp = std::env::temp_dir().join(format!("hs-plugins-unreadable-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("hs-plugins-unreadable-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let crates_dir = tmp.join("crates");
         fs::create_dir_all(&crates_dir).unwrap();

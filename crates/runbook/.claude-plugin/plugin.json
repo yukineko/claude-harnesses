@@ -1,7 +1,7 @@
 {
   "name": "runbook",
-  "version": "0.1.7",
-  "description": "Reusable procedure includes for Claude Code: a UserPromptSubmit hook that expands `!name` macros in your prompt into the matching repo-committed procedure (.runbook/<name>.md), so recurring workflows run the same way every time. Inspired by Devin Playbooks; distinct from knowledge injection. Subscription-native (one hook + bundled Rust binary, no API key).",
+  "version": "0.1.8",
+  "description": "v0.1.8: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Reusable procedure includes for Claude Code: a UserPromptSubmit hook that expands `!name` macros in your prompt into the matching repo-committed procedure (.runbook/<name>.md), so recurring workflows run the same way every time. Inspired by Devin Playbooks; distinct from knowledge injection. Subscription-native (one hook + bundled Rust binary, no API key).",
   "author": {
     "name": "yukineko"
   },

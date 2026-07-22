@@ -236,10 +236,8 @@ mod tests {
     #[cfg(unix)]
     fn unreadable_existing_note_dir_is_undetermined_not_known_empty() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!(
-            "playbook-store-unreadable-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("playbook-store-unreadable-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut perms = std::fs::metadata(&dir).unwrap().permissions();
         perms.set_mode(0o000);

@@ -298,7 +298,10 @@ mod tests {
         }
         perms.set_mode(0o755);
         std::fs::set_permissions(&projects, perms).unwrap();
-        assert!(result.is_ok(), "must not panic on an unreadable projects dir");
+        assert!(
+            result.is_ok(),
+            "must not panic on an unreadable projects dir"
+        );
         assert_eq!(result.unwrap(), None);
     }
 }

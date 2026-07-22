@@ -1,7 +1,7 @@
 {
   "name": "ship",
-  "version": "0.1.8",
-  "description": "nudges the commit・merge・push・plugin-update shipping ritual; detects unshipped git/plugin-cache state; subscription-native",
+  "version": "0.1.9",
+  "description": "v0.1.9: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. nudges the commit・merge・push・plugin-update shipping ritual; detects unshipped git/plugin-cache state; subscription-native",
   "author": {
     "name": "yukineko"
   },

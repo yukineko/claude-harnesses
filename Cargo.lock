@@ -286,7 +286,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "compass"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "clap",
@@ -300,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.86"
+version = "0.7.87"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.15"
+version = "0.5.16"
 dependencies = [
  "anyhow",
  "chrono",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "deepwiki"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "harness-status"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "clap",
@@ -844,7 +844,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.1.52"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -865,7 +865,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "playbook"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "runbook"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1223,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "ship"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "clap",

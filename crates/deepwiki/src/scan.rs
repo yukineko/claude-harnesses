@@ -366,7 +366,10 @@ mod tests {
         let result = std::panic::catch_unwind(|| scan(dir.path()));
         perms.set_mode(0o755);
         std::fs::set_permissions(&locked, perms).unwrap();
-        assert!(result.is_ok(), "scan must not panic on an unreadable subdir");
+        assert!(
+            result.is_ok(),
+            "scan must not panic on an unreadable subdir"
+        );
         let map = result.unwrap();
         assert!(
             map.total_files >= 1,

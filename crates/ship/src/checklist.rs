@@ -122,9 +122,7 @@ committed-binary staleness\n",
             ));
         }
         Determination::Undetermined(why) => {
-            out.push_str(&format!(
-                "  [?] stale-crate check could not run: {why}\n"
-            ));
+            out.push_str(&format!("  [?] stale-crate check could not run: {why}\n"));
         }
     }
 

@@ -461,7 +461,9 @@ mod tests {
         std::fs::write(dir.path().join(".githooks/pre-commit"), "#!/bin/sh\n").unwrap();
         let charter = Charter {
             north_star: "x".to_string(),
-            definition_of_done: vec!["4スキャナが`.githooks/pre-commit`でblockingとして効く".to_string()],
+            definition_of_done: vec![
+                "4スキャナが`.githooks/pre-commit`でblockingとして効く".to_string()
+            ],
             ..Charter::default()
         };
         let charter_path = Charter::project_path(dir.path());
@@ -486,7 +488,9 @@ mod tests {
         let charter_path = Charter::project_path(dir.path());
         let f = check(dir.path(), &charter_path, &charter, &Config::default());
         assert!(
-            f.reasons.iter().any(|r| r.contains(".githooks/does-not-exist")),
+            f.reasons
+                .iter()
+                .any(|r| r.contains(".githooks/does-not-exist")),
             "a genuinely missing dotfile path must still trip: {:?}",
             f.reasons
         );

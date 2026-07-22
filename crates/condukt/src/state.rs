@@ -362,7 +362,10 @@ pub fn all_runs(cfg: &Config, cwd: &Path) -> Vec<RunState> {
                 let entry = match entry {
                     Ok(e) => e,
                     Err(e) => {
-                        eprintln!("warning: all_runs: unreadable entry in {}: {e}", dir.display());
+                        eprintln!(
+                            "warning: all_runs: unreadable entry in {}: {e}",
+                            dir.display()
+                        );
                         continue;
                     }
                 };
@@ -1113,14 +1116,20 @@ pub fn active_worktree_for_path(path: &Path, run_dir: &Path) -> Option<PathBuf> 
         let txt = match std::fs::read_to_string(&p) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("warning: active_worktree_for_path: cannot read {}: {e}", p.display());
+                eprintln!(
+                    "warning: active_worktree_for_path: cannot read {}: {e}",
+                    p.display()
+                );
                 continue;
             }
         };
         let rs: RunState = match serde_json::from_str(&txt) {
             Ok(rs) => rs,
             Err(e) => {
-                eprintln!("warning: active_worktree_for_path: unparseable run state {}: {e}", p.display());
+                eprintln!(
+                    "warning: active_worktree_for_path: unparseable run state {}: {e}",
+                    p.display()
+                );
                 continue;
             }
         };
@@ -4110,7 +4119,10 @@ mod tests {
         let result = std::panic::catch_unwind(|| all_runs(&cfg, &cwd));
         perms.set_mode(0o755);
         std::fs::set_permissions(&project_dir, perms).unwrap();
-        assert!(result.is_ok(), "all_runs must not panic on an unreadable project dir");
+        assert!(
+            result.is_ok(),
+            "all_runs must not panic on an unreadable project dir"
+        );
         assert!(result.unwrap().is_empty());
     }
 
@@ -4138,6 +4150,9 @@ mod tests {
     fn active_worktree_for_path_absent_run_dir_returns_none() {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("does-not-exist");
-        assert_eq!(active_worktree_for_path(Path::new("/tmp/x"), &missing), None);
+        assert_eq!(
+            active_worktree_for_path(Path::new("/tmp/x"), &missing),
+            None
+        );
     }
 }

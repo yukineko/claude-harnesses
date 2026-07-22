@@ -1,7 +1,7 @@
 {
   "name": "compass",
-  "version": "0.1.14",
-  "description": "Goal re-grounding + next-move derivation upstream of condukt; subscription-native.",
+  "version": "0.1.15",
+  "description": "v0.1.15: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Goal re-grounding + next-move derivation upstream of condukt; subscription-native.",
   "author": {
     "name": "yukineko"
   },

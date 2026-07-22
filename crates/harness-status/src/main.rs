@@ -229,7 +229,10 @@ fn main() {
             let root = plugins::find_repo_root(&cwd);
             match plugins::report(&root) {
                 Err(e) => {
-                    eprintln!("harness-status: could not scan {}: {e}", root.join("crates").display());
+                    eprintln!(
+                        "harness-status: could not scan {}: {e}",
+                        root.join("crates").display()
+                    );
                     std::process::exit(1);
                 }
                 Ok(r) => {
@@ -318,7 +321,9 @@ fn main() {
                             "harness-status: PATH-shadow scan が完了しませんでした（判定不能）: {why}\n`harness-status path-shadow` で詳細確認してください。"
                         ));
                     }
-                    harness_core::verdict::Determination::Known(shadowed) if !shadowed.is_empty() => {
+                    harness_core::verdict::Determination::Known(shadowed)
+                        if !shadowed.is_empty() =>
+                    {
                         let lines: Vec<String> = shadowed
                             .iter()
                             .map(|s| {

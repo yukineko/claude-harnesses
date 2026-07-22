@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "harness-status"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2021"
 description = "Unified human-on-the-loop status dashboard for Claude Code. A /status command aggregates budgetguard's spend ledger, gauge's session records (recent sessions + cost), and taskprog's progress file into one view. Subscription-native (binary + command, no API key). A lightweight SessionStart hook warns if a registered hook's binary is missing from disk, or if a stray PATH binary shadows a plugin-cache copy."
 

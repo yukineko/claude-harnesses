@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "runbook"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "Reusable procedure includes for Claude Code. A UserPromptSubmit hook that expands `!name` macros in a prompt into the matching repo-committed procedure (.runbook/<name>.md), so recurring workflows run the same way every time."
 license = "MIT"

@@ -115,12 +115,11 @@ fn list_binary_names(dir: &Path) -> Vec<String> {
 fn scan_cache_bins(root: &Path) -> Determination<Vec<(String, PathBuf)>> {
     let entries = match std::fs::read_dir(root) {
         Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Determination::Known(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Determination::Known(Vec::new())
+        }
         Err(e) => {
-            return Determination::Undetermined(Reason::new(format!(
-                "{}: {e}",
-                root.display()
-            )))
+            return Determination::Undetermined(Reason::new(format!("{}: {e}", root.display())))
         }
     };
     let mut plugin_dirs: Vec<PathBuf> = entries

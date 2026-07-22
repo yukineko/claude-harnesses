@@ -31,6 +31,27 @@ the bypass ledger, which run regardless of what happens here. Blocking every
 Bash call in the session because one payload failed to decode would take the
 whole turn down to protect a check that has a working backstop. The cost of that
 asymmetry is stated here rather than left for a reader to discover.
+
+An unparseable COMMAND is a different question, and it used to be answered the
+same permissive way — wrongly. Splitting on `;` / `|` with a regex BEFORE
+tokenizing cut straight through quoted text, so `git commit --no-verify -m "a; b"`
+was torn into a fragment with an unbalanced quote, `shlex.split` raised, the
+`except ValueError: return None` read as "not a bypass", and the hook exited 0.
+Observed, not theorised:
+
+    $ printf '%s' '{"tool_name":"Bash","tool_input":{"command":
+      "git commit --no-verify -m \\"a; b\\""}}' | python3 scripts/deny-no-verify.py
+    exit=0            # …while the same command without the semicolon exits 2
+
+A single character in a commit message turned the refusal off. The separator
+split is now done on TOKENS (`shlex` with `punctuation_chars`), so a quoted
+separator stays inside its argument, and a command that still will not tokenize
+resolves to DENY rather than allow whenever the raw text carries the markers a
+bypass necessarily has (`--no-verify`, or `-n` alongside `git`). That screen is
+a necessary condition, not a guess: a command whose raw text contains neither
+marker cannot be one of the two bypasses this hook refuses, so allowing it is a
+decision, not a shrug. The payload branch above keeps its exemption; this one
+does not get to borrow it.
 """
 
 from __future__ import annotations
@@ -53,23 +74,69 @@ GLOBAL_OPTS_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace",
                           "--exec-path", "--config-env")
 
 
-def split_commands(command: str) -> list[str]:
-    """Split on shell separators so `foo && git commit --no-verify` is caught."""
-    return [seg for seg in re.split(r"&&|\|\||;|\n|\|", command) if seg.strip()]
+# Shell control operators that end one command and start the next. `&` is here
+# too: `git commit --no-verify & ` backgrounds it, and a bypass that runs in the
+# background is still a bypass.
+SEPARATORS = frozenset({";", "&&", "||", "|", "&", "\n", ";;", "|&"})
 
 
-def is_bypass(segment: str) -> tuple[str, str] | None:
-    """Return (subcommand, flag) if this segment is a gate-skipping git call.
+def split_commands(command: str) -> list[list[str]] | None:
+    """Tokenize once, then split on separator TOKENS. None if it will not lex.
+
+    The separator split has to happen after tokenization, not before. Splitting
+    the raw string on `;`/`|` cuts through quoted text — see the module
+    docstring for the observed bypass that produced. `punctuation_chars` makes
+    shlex emit `;`, `|`, `&&` as tokens of their own while leaving a quoted one
+    inside its argument, which is exactly the distinction that was missing.
+
+    Returns None when the command does not tokenize at all (an unbalanced
+    quote). That is a cannot-determine and the caller must not read it as
+    "no bypass here".
+    """
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None
+
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for tok in tokens:
+        if tok in SEPARATORS:
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(tok)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def looks_like_bypass(command: str) -> bool:
+    """Necessary condition for the two bypasses this hook refuses.
+
+    Used only when tokenization failed, to decide what a cannot-determine
+    resolves to. A raw string carrying neither `--no-verify` nor a `-n` next to
+    a `git` cannot be `git commit/push/merge --no-verify` or `git commit -n`,
+    so allowing it is a decision rather than a shrug. It over-matches freely —
+    over-matching costs a refusal the author can rephrase, under-matching costs
+    the whole gate.
+    """
+    if BYPASS_LONG in command:
+        return True
+    return "git" in command and re.search(r"(?<!\w)-n(?!\w)", command) is not None
+
+
+def is_bypass(tokens: list[str]) -> tuple[str, str] | None:
+    """Return (subcommand, flag) if these tokens are a gate-skipping git call.
 
     Returns the subcommand rather than leaving the caller to re-derive it: the
     obvious re-derivation (`tokens.index("git")`) raises on an absolute path
     like `/usr/bin/git`, which turned a denial into a crash — observed, then
     pinned by scripts/test_gate_bypass.py.
     """
-    try:
-        tokens = shlex.split(segment)
-    except ValueError:
-        return None
     if not tokens:
         return None
 
@@ -123,6 +190,16 @@ fix that. If you believe the gate itself is wrong, say so and leave it red —
 a wrong gate is a defect worth reporting, not worth stepping around.
 """
 
+UNDETERMINED = """Refused: this command could not be parsed, and it carries a gate-bypass marker.
+
+The shell quoting does not close, so whether this is `git commit --no-verify`
+cannot be determined. A check that could not run has not passed, so this
+resolves to a refusal rather than to permission.
+
+Rephrase the command so it tokenizes (balance the quotes), and it will be
+judged on what it actually says.
+"""
+
 
 def main() -> int:
     try:
@@ -136,7 +213,17 @@ def main() -> int:
     if not isinstance(command, str):
         return 0
 
-    for segment in split_commands(command):
+    segments = split_commands(command)
+    if segments is None:
+        # Cannot determine whether this is a bypass. Refuse only when the raw
+        # text carries a marker a bypass necessarily has, so an unbalanced quote
+        # in an unrelated command does not take the session down.
+        if looks_like_bypass(command):
+            sys.stderr.write(UNDETERMINED)
+            return 2
+        return 0
+
+    for segment in segments:
         hit = is_bypass(segment)
         if hit:
             sub, flag = hit

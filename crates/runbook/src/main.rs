@@ -114,7 +114,13 @@ fn inject_hook() {
         return;
     }
     let store = Store::new(&cfg, &root);
-    let books = store.load_all();
+    // Fail-soft: an unreadable store is treated the same as an empty one —
+    // this hook must never fail a turn, so `Undetermined` just means "no
+    // runbooks to inject this time," not an error surfaced to the user.
+    let books = match store.load_all() {
+        harness_core::verdict::Determination::Known(b) => b,
+        harness_core::verdict::Determination::Undetermined(_) => return,
+    };
     let exp = inject::expand(&input.prompt, &books, &cfg);
     if let Some(text) = inject::render(&exp, &books, &cfg) {
         // UserPromptSubmit: plain stdout is injected as additional context.
@@ -141,7 +147,13 @@ fn cwd() -> std::path::PathBuf {
 fn list() {
     let root = cwd();
     let (cfg, store) = load(&root);
-    let books = store.load_all();
+    let books = match store.load_all() {
+        harness_core::verdict::Determination::Known(b) => b,
+        harness_core::verdict::Determination::Undetermined(why) => {
+            eprintln!("unknown — runbook store could not be read: {why}");
+            std::process::exit(1);
+        }
+    };
     if books.is_empty() {
         println!(
             "(no runbooks — create one with `runbook new <name>` in {})",
@@ -164,7 +176,13 @@ fn list() {
 fn show(name: &str) {
     let root = cwd();
     let (_cfg, store) = load(&root);
-    let books = store.load_all();
+    let books = match store.load_all() {
+        harness_core::verdict::Determination::Known(b) => b,
+        harness_core::verdict::Determination::Undetermined(why) => {
+            eprintln!("unknown — runbook store could not be read: {why}");
+            std::process::exit(1);
+        }
+    };
     let key = normalize_name(name);
     match books.iter().find(|r| r.matches(&key)) {
         Some(r) => {
@@ -295,7 +313,14 @@ fn status() {
     println!("include_global:    {}", cfg.include_global);
     println!("max_chars:         {}", cfg.max_chars);
     println!("per_runbook_chars: {}", cfg.per_runbook_chars);
-    println!("runbooks visible:  {}", books.len());
+    match books {
+        harness_core::verdict::Determination::Known(b) => {
+            println!("runbooks visible:  {}", b.len());
+        }
+        harness_core::verdict::Determination::Undetermined(why) => {
+            println!("runbooks visible:  unknown — store could not be read: {why}");
+        }
+    }
 }
 
 #[cfg(test)]

@@ -97,13 +97,18 @@ fn main() -> ExitCode {
         ),
     }
 
-    if outcome.passed {
-        println!("  PASS: {}", outcome.reason);
-        ExitCode::SUCCESS
-    } else {
+    // Route the pass/fail decision through the shared verdict type
+    // (`harness_core::verdict::Verdict`) rather than branching on the private
+    // `passed` bool directly, so the exit code can never diverge from the
+    // fail-closed contract every other migrated gate crate shares.
+    let verdict = outcome.verdict();
+    if verdict.blocks() {
         eprintln!("  FAIL: {}", outcome.reason);
         emit_violation(&outcome, &cli.outcomes);
-        ExitCode::from(1)
+        ExitCode::from(verdict.exit_code(1) as u8)
+    } else {
+        println!("  PASS: {}", outcome.reason);
+        ExitCode::SUCCESS
     }
 }
 

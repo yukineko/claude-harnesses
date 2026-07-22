@@ -7,7 +7,7 @@
 [package]
 rust-version.workspace = true
 name = "mutategate"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 description = "Mutation-testing kill-rate gate: parses cargo-mutants outcomes.json, computes the kill-rate (caught / viable) of the existing tests, and exits non-zero when it drops below a threshold. Measures the fault-detection power that golden/regression tests alone cannot."
 license = "MIT"
@@ -22,4 +22,5 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
+harness-core = { path = "../harness-core" }
 overwatch = { path = "../overwatch" }

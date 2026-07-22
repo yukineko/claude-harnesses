@@ -162,6 +162,28 @@ pub struct GateOutcome {
     pub reason: String,
 }
 
+impl GateOutcome {
+    /// The gate's answer in the shared three-valued type
+    /// (`harness_core::verdict::Verdict`), derived from the fields above rather
+    /// than a private bool. `kill_rate: None` ("no viable mutants produced") is
+    /// modeled as [`Verdict::Undetermined`] — the kill-rate genuinely could not
+    /// be measured, which is a distinct fact from "measured and below
+    /// threshold" — while a measured, below-threshold rate is
+    /// [`Verdict::Violation`]. Both block identically
+    /// (`Verdict::blocks`/`exit_code`), so this changes no observable
+    /// behaviour; it only carries the distinction through the shared type
+    /// instead of collapsing it into one `bool`.
+    pub fn verdict(&self) -> harness_core::verdict::Verdict {
+        if self.kill_rate.is_none() {
+            harness_core::verdict::Verdict::undetermined(self.reason.clone())
+        } else if self.passed {
+            harness_core::verdict::Verdict::from_findings(Vec::new())
+        } else {
+            harness_core::verdict::Verdict::violation(self.reason.clone())
+        }
+    }
+}
+
 /// Render `a` and `b` (both percentages, e.g. `79.96`) with the fewest decimal
 /// places (starting at 1, matching the gate's usual `{:.1}%` display) that
 /// still tell them apart. Below-threshold fails are decided on the full-
@@ -400,6 +422,58 @@ mod tests {
     #[test]
     fn malformed_json_is_an_error() {
         assert!(parse_outcomes("not json").is_err());
+    }
+
+    // ── verdict(): the shared harness_core::verdict type must agree with
+    //    `passed`/`kill_rate` exactly, and both non-clean cases must block. ──
+
+    #[test]
+    fn verdict_is_clean_when_passed() {
+        let s = parse_outcomes(SAMPLE).unwrap();
+        let g = evaluate(s, 0.75); // exactly at threshold -> pass
+        assert!(g.passed);
+        let v = g.verdict();
+        assert!(
+            matches!(v, harness_core::verdict::Verdict::Clean(_)),
+            "a passing gate must be Clean, got {v:?}"
+        );
+        assert!(!v.blocks());
+    }
+
+    #[test]
+    fn verdict_is_violation_when_below_threshold() {
+        let s = parse_outcomes(SAMPLE).unwrap();
+        let g = evaluate(s, 0.80); // 0.75 < 0.80
+        assert!(!g.passed);
+        let v = g.verdict();
+        assert!(
+            matches!(v, harness_core::verdict::Verdict::Violation(_)),
+            "a measured below-threshold rate must be a Violation, got {v:?}"
+        );
+        assert!(v.blocks(), "a Violation must block");
+    }
+
+    #[test]
+    fn verdict_is_undetermined_when_no_viable_mutants() {
+        let json = r#"{ "outcomes": [
+            { "scenario": "Baseline", "summary": "Success" },
+            { "scenario": { "Mutant": {} }, "summary": "Unviable" }
+        ] }"#;
+        let s = parse_outcomes(json).unwrap();
+        let g = evaluate(s, 0.80);
+        assert!(!g.passed);
+        assert_eq!(g.kill_rate, None);
+        let v = g.verdict();
+        assert!(
+            matches!(v, harness_core::verdict::Verdict::Undetermined(_)),
+            "no viable mutants means the kill-rate could not be measured — \
+             Undetermined, not a confirmed Violation; got {v:?}"
+        );
+        assert!(
+            v.blocks(),
+            "Undetermined must block exactly like a Violation — no viable \
+             mutants must never read as a pass"
+        );
     }
 
     // ── CA-mutategate-02 (display-only): near the threshold, `{:.1}%`

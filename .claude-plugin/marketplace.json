@@ -255,8 +255,8 @@
     },
     {
       "name": "difflog",
-      "description": "Session diff-log for Claude Code: snapshot HEAD at SessionStart, write a structured git diff summary (commits, stat, files changed, bounded diff body) at SessionEnd. A /difflog skill can generate a human-readable narrative from the log. Subscription-native (no API key).",
-      "version": "0.1.4",
+      "description": "Session diff-log for Claude Code: snapshot HEAD at SessionStart, write a structured git diff summary (commits, stat, files changed, bounded diff body) at SessionEnd. A /difflog skill can generate a human-readable narrative from the log. Subscription-native (no API key). v0.1.5: `list`/`last`'s shared `md_entries` helper no longer swallows an unreadable individual directory entry via `.filter_map(|e| e.ok())`, and distinguishes a missing `log_dir` (\"not found\") from an existing-but-unreadable one (\"unreadable\", now surfaced) instead of both silently reading as \"no logs\". New regression tests cover an absent dir, a chmod-000 unreadable dir, and md-only filtering.",
+      "version": "0.1.5",
       "category": "observability",
       "keywords": [
         "hooks",

@@ -119,17 +119,41 @@ fn session_end() {
     }
 }
 
+/// Reads `dir` and returns its `.md` entries, warning (not silently dropping)
+/// on any error — a missing `log_dir` prints "not found"; an existing-but-
+/// unreadable one, or an unreadable individual entry, prints a distinct
+/// warning so the two cannot-determine cases are never confused with "no logs
+/// yet".
+fn md_entries(dir: &std::path::Path) -> Vec<std::fs::DirEntry> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("log_dir not found: {}", dir.display());
+            return Vec::new();
+        }
+        Err(e) => {
+            eprintln!("log_dir unreadable: {}: {e}", dir.display());
+            return Vec::new();
+        }
+    };
+    let mut entries = Vec::new();
+    for e in rd {
+        match e {
+            Ok(e) => {
+                if e.path().extension().map(|x| x == "md").unwrap_or(false) {
+                    entries.push(e);
+                }
+            }
+            Err(e) => eprintln!("warning: unreadable entry in {}: {e}", dir.display()),
+        }
+    }
+    entries
+}
+
 fn list(limit: usize) {
     let cfg = Config::load(&std::env::current_dir().unwrap_or_else(|_| ".".into()));
     let dir = &cfg.log_dir;
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        eprintln!("log_dir not found: {}", dir.display());
-        return;
-    };
-    let mut entries: Vec<_> = rd
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|x| x == "md").unwrap_or(false))
-        .collect();
+    let mut entries = md_entries(dir);
     entries.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
     for e in entries.iter().take(limit) {
         println!("{}", e.file_name().to_string_lossy());
@@ -139,14 +163,7 @@ fn list(limit: usize) {
 fn last() {
     let cfg = Config::load(&std::env::current_dir().unwrap_or_else(|_| ".".into()));
     let dir = &cfg.log_dir;
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        eprintln!("log_dir not found: {}", dir.display());
-        return;
-    };
-    let mut entries: Vec<_> = rd
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|x| x == "md").unwrap_or(false))
-        .collect();
+    let mut entries = md_entries(dir);
     entries.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
     if let Some(e) = entries.first() {
         match std::fs::read_to_string(e.path()) {
@@ -176,4 +193,45 @@ fn status() {
     println!("log_dir:          {}", cfg.log_dir.display());
     println!("diff_body_limit:  {} bytes", cfg.diff_body_limit);
     println!("exclude_globs:    {:?}", cfg.exclude_globs);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn md_entries_absent_dir_returns_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("does-not-exist");
+        assert!(md_entries(&missing).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn md_entries_does_not_panic_on_unreadable_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.md"), "hi").unwrap();
+        let mut perms = std::fs::metadata(dir.path()).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(dir.path(), perms.clone()).unwrap();
+        let result = std::panic::catch_unwind(|| md_entries(dir.path()));
+        perms.set_mode(0o755);
+        std::fs::set_permissions(dir.path(), perms).unwrap();
+        assert!(
+            result.is_ok(),
+            "md_entries must not panic on an unreadable dir"
+        );
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn md_entries_filters_to_md_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.md"), "hi").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "hi").unwrap();
+        let entries = md_entries(dir.path());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].file_name().to_string_lossy(), "a.md");
+    }
 }

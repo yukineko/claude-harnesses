@@ -417,7 +417,7 @@ dependencies = [
 
 [[package]]
 name = "difflog"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -426,6 +426,7 @@ dependencies = [
  "harness-core",
  "serde",
  "serde_json",
+ "tempfile",
  "toml 0.8.23",
 ]
 

@@ -12,9 +12,14 @@ fail-open を『後から検出する』のをやめ、『そもそも書けな�
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-型は用意したが、まだ誰も使う義務を負っていない。boundary.rs は Determination で3つの入力境界を包んだが (未コミット)、GATE_CRATES には生の fs::read_dir / fs::read_to_string / Command::new が97箇所 (測定 2026-07-22 / 56872974) 残っており、新しく生の呼び出しを書き足すことを止めるものが何も無い。DoD4 の検出器と ratchet が無い限り boundary.rs は『使ってもよい代替』でしかなく、fail-open の入口は開いたままである。加えて DoD5 の対照実験がまだ無いため、仮に検出器を作っても『実在する fail-open を捕まえる』ことは未証明のまま。
+型は用意したが、まだ誰も使う義務を負っていない。boundary.rs は Determination で3つの入力境界を包んだ (527498c0)。しかし GATE_CRATES には生の fs::read_dir / fs::read_to_string / Command::new が97箇所 (測定 2026-07-22 / 56872974) 残っており、新しく生の呼び出しを書き足すことを止めるものが何も無い。DoD4 の検出器と ratchet が無い限り boundary.rs は『使ってもよい代替』でしかなく、fail-open の入口は開いたままである。加えて DoD5 の対照実験がまだ無いため、仮に検出器を作っても『実在する fail-open を捕まえる』ことは未証明のまま。
 
 ## next_action
+生 IO/subprocess の検出器と baseline ratchet を作る (size m)。GATE_CRATES の src 配下で fs::read_dir / fs::read_to_string / Command::new を直接呼ぶ箇所を数え、baseline を超えたら非0で終了する scripts/check-raw-io.py を追加し、baseline を測定コマンド・測定点・測定日つきで固定する。テスト除外規則は自己申告ではなく機械判定できる形にする。
 
 ## parked
+- 検出器を local の pre-commit に配線する (size s)。判定不能 (python3 欠落・スクリプト欠落) を exit 0 で素通りさせない。CI の required status check には登録しない (第7節)。
+- アンチ空虚の対照実験 = DoD5 (size s)。生の呼び出しを1件足すと赤く、boundary 経由に書き換えると緑に戻ることを観測し、両方の出力を記録する。
+- 既存97箇所のうち gate 判定に直結する経路を boundary 経由へ移行する (size xl — 要再分解)。
+- 手貼りの deny(clippy::panic) 残り5個 (budgetguard / donegate / reviewgate / schemaguard) の集約。各 crate を workspace lints に opt-in させると unwrap_used / expect_used の deny も同時に効くため、それら4 crate の production の unwrap/expect を潰すか expect で正当化する作業が伴う。
 

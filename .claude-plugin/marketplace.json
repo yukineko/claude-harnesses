@@ -531,8 +531,8 @@
     },
     {
       "name": "reviewgate",
-      "description": "Code-review gate for Claude Code: on Stop, review the diff before the agent can declare done. In inject mode it blocks the stop and injects a review rubric so the running agent self-reviews (no API key); in subprocess mode it runs an independent reviewer and surfaces only its findings. Subscription-native, bundled Rust binary. v0.1.16: adds the reviewgate-typing subagent — reviews a diff for whether type checking and determinism are actually being used (undetermined-unrepresentable signatures, contract erasure at call sites, non-deterministic verification).",
-      "version": "0.1.16",
+      "description": "Code-review gate for Claude Code: on Stop, review the diff before the agent can declare done. In inject mode it blocks the stop and injects a review rubric so the running agent self-reviews (no API key); in subprocess mode it runs an independent reviewer and surfaces only its findings. Subscription-native, bundled Rust binary. v0.1.17: the reviewgate-typing subagent reviews for whether type checking and determinism are actually used — five passes (prose/signature/call-site/body/early-return), a has-a-verdict gate that requires enumerating downstream consumers before reporting, and a mirror check that treats a correct tri-state twin as evidence its sibling is a migration miss.",
+      "version": "0.1.17",
       "category": "quality",
       "keywords": [
         "hooks",

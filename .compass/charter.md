@@ -12,7 +12,21 @@
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-機構は既にほぼ揃っており、残差は一箇所に集約されている。scripts/check-ci-red.py は既に三値の exit 契約(0=判定済み慢性赤なし、1=慢性赤、3=判定不能)を持ち、クラッシュや不正な閾値を 1 ではなく 3 に写す配慮まで実装済み。.githooks/pre-push もその exit code で分岐し(テキスト一致ではなく exit code で分岐する旨のコメントあり)、未知 exit code を『NOT an all-clear』と明記している。欠けているのは最後の一手だけ — 分岐したあと結局すべての枝が同じ exit 0 に合流している。したがって次の一手は『exit 1 と未知 exit code を非0終了へ写し、exit 3 だけを carve-out として advisory に残す』という pre-push の終了経路の書き換えと、その挙動を固定するテストである。規模は小さいが、格上げ前に push が通っていたことを先に観測しないとテストが何も証明しないので、RED の観測が必須。
+north_star は達成済み(2026-07-22 / 49e8daf7 / outcome #40 Forward)。pre-push の check-ci-red 終了経路は
+rc=1 と未知 rc で exit 1、rc=3 だけが carve-out として advisory。利害関係のない agent が書いた
+scripts/test_prepush_hook.py 6件が RED->GREEN で固定し、gate-crates-sync workflow にも advisory として配線済み。
+DoD 5項目すべて充足: 5番目の『慢性赤が無い通常状態で push が通る』は当初 hermetic のみだったが、
+rollout drift 解消後に実チェッカで hook を end-to-end 実行して exit 0 を観測し、実際の push も成功したため
+live でも充足。rollout drift 37件は canary rollout で解消(backlog 6a9f4ac1 close、check-plugin-rollout.py exit 0)。
+
+したがって次の /compass は north_star を彫り直す局面。彫り直しの入力として現時点で見えている素材:
+(1) hook のテスト3本(test_precommit_hook / test_gate_bypass / test_git_hook_coverage)がどの workflow からも
+    呼ばれず pre-commit のスキャナ列にも無い(backlog c3a98510 p1)。リポジトリの最重要ゲート面の契約テストが
+    人が手で叩かない限り一度も走らない、という今回と同型の advisory-only 欠陥。
+(2) backlog に p1 が30件超滞留しており、その中に検出機構そのものを強化する系(7ecf3797 workspace.lints、
+    a7d41587 単調性 proptest、66e305b5 フォールト注入、6d493e39 undetermined テレメトリ)が固まっている。
+(3) mutation workflow が 2 連続失敗中(閾値3未満なのでまだ chronic 扱いではない)。3回目で新しい blocking gate が
+    実際に push を止める側に回る — 機構が armed であることの最初の実地検証になりうる。
 
 ## next_action
 condukt へ渡す。pre-push の終了経路を書き換える前に、慢性赤を模した入力で push が現状は通ることを観測して RED として記録し、その後 blocking 化して同じ入力で止まることを確認する。

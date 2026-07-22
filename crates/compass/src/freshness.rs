@@ -133,25 +133,60 @@ fn elapsed_days(f: &mut Freshness, repo_root: &Path, charter_path: &Path, cfg: &
 /// exist on disk. A vanished referenced path is a strong stale signal.
 fn dod_refs_missing(f: &mut Freshness, repo_root: &Path, charter: &Charter) {
     for item in &charter.definition_of_done {
-        for token in item.split_whitespace() {
-            let tok = token.trim_matches(|c: char| {
-                matches!(c, '`' | '"' | '\'' | '(' | ')' | ',' | '.' | ':' | ';')
-            });
-            if tok.is_empty() || !looks_like_path(tok) {
+        for tok in path_candidates(item) {
+            // Bare digit/slash runs (e.g. a `3/9` progress fraction, or a
+            // `0.2.0` version number) are never real paths in this repo's DoD
+            // prose; requiring at least one ASCII letter keeps them out of
+            // the candidate set without needing a hand-maintained word list.
+            // Trade-off: this also means a genuinely all-numeric path segment
+            // (rare; not used anywhere in this repo's DoD text today) would be
+            // skipped — accepted to kill the much more common false positive.
+            if tok.is_empty() || !tok.chars().any(|c| c.is_ascii_alphabetic()) {
                 continue;
             }
-            // Re-trim trailing '.' was stripped above; check existence relative
-            // to the repo root (and as-is for absolute paths).
-            let candidate = if Path::new(tok).is_absolute() {
-                std::path::PathBuf::from(tok)
+            if !looks_like_path(&tok) {
+                continue;
+            }
+            let candidate = if Path::new(&tok).is_absolute() {
+                std::path::PathBuf::from(&tok)
             } else {
-                repo_root.join(tok)
+                repo_root.join(&tok)
             };
             if !candidate.exists() {
                 f.trip(format!("DoD references missing path `{tok}`"));
             }
         }
     }
+}
+
+/// Extract path-candidate substrings from a DoD item: maximal runs of ASCII
+/// "path characters" (`[A-Za-z0-9/._-]`). Unlike `split_whitespace`, this
+/// correctly delimits at CJK characters and other punctuation even when
+/// there's no whitespace separating Japanese prose from an embedded path or
+/// code token (repo convention: CJK text isn't whitespace-delimited — mirrors
+/// `next_action_divergence`'s char-level CJK handling below). A trailing `.`
+/// is trimmed (sentence-final punctuation glued directly onto the token with
+/// no space, e.g. `...config.toml。`), but a **leading** `.` is preserved so
+/// dotfile/dotdir paths (`.githooks/pre-commit`, `.git/hooks`) resolve
+/// correctly instead of being misread as the non-existent `githooks/pre-commit`.
+fn path_candidates(item: &str) -> Vec<String> {
+    let is_path_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '-' | '_');
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for ch in item.chars() {
+        if is_path_char(ch) {
+            cur.push(ch);
+        } else if !cur.is_empty() {
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out.into_iter()
+        .map(|s| s.trim_end_matches('.').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// A token "looks like a path" if it contains a `/` separator or ends in a
@@ -361,6 +396,110 @@ mod tests {
         let f = check(dir.path(), &charter_path, &charter, &Config::default());
         // The DoD-ref signal must not have produced a reason about lib.rs.
         assert!(!f.reasons.iter().any(|r| r.contains("lib.rs")));
+    }
+
+    /// CA-compass-001: a bare numeric fraction (progress notation like `3/9`,
+    /// no letters) glued into Japanese prose with no whitespace must not be
+    /// misread as a missing path. Regression for the false positive observed
+    /// 2026-07-22: `dod_refs_missing "DoD references missing path \`3/9\`"`.
+    #[test]
+    fn cjk_glued_numeric_fraction_does_not_trip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let charter = Charter {
+            north_star: "x".to_string(),
+            definition_of_done: vec![
+                "型契約を採用したゲートcrateが9crate中4crateへ増える(現況3/9から前進)".to_string(),
+            ],
+            ..Charter::default()
+        };
+        let charter_path = Charter::project_path(dir.path());
+        let f = check(dir.path(), &charter_path, &charter, &Config::default());
+        assert!(
+            !f.reasons.iter().any(|r| r.contains("3/9")),
+            "a bare numeric fraction must not be flagged as a missing path: {:?}",
+            f.reasons
+        );
+    }
+
+    /// CA-compass-001: a real existing path glued directly onto Japanese
+    /// prose with no whitespace (repo convention: CJK isn't
+    /// whitespace-delimited) must still resolve and must NOT be flagged, even
+    /// though `split_whitespace` alone would have glued it to the surrounding
+    /// prose into one bogus token.
+    #[test]
+    fn cjk_glued_existing_path_does_not_trip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+        std::fs::write(dir.path().join("scripts/check-fail-open.baseline"), "29\n").unwrap();
+        let charter = Charter {
+            north_star: "x".to_string(),
+            definition_of_done: vec![
+                "指摘件数が34から29へ減り、scripts/check-fail-open.baselineをpinした".to_string(),
+            ],
+            ..Charter::default()
+        };
+        let charter_path = Charter::project_path(dir.path());
+        let f = check(dir.path(), &charter_path, &charter, &Config::default());
+        assert!(
+            !f.reasons
+                .iter()
+                .any(|r| r.contains("check-fail-open.baseline")),
+            "an existing path glued to CJK prose must resolve, not be flagged: {:?}",
+            f.reasons
+        );
+    }
+
+    /// CA-compass-001: a dotfile/dotdir path (leading `.`) must not have its
+    /// leading `.` stripped by trimming — `.githooks/pre-commit` must resolve
+    /// as itself, not as the non-existent `githooks/pre-commit`. Regression
+    /// for the false positive observed 2026-07-22: `dod_refs_missing "DoD
+    /// references missing path \`githooks/pre-commit\`"`.
+    #[test]
+    fn dotfile_path_leading_dot_is_preserved() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join(".githooks")).unwrap();
+        std::fs::write(dir.path().join(".githooks/pre-commit"), "#!/bin/sh\n").unwrap();
+        let charter = Charter {
+            north_star: "x".to_string(),
+            definition_of_done: vec!["4スキャナが`.githooks/pre-commit`でblockingとして効く".to_string()],
+            ..Charter::default()
+        };
+        let charter_path = Charter::project_path(dir.path());
+        let f = check(dir.path(), &charter_path, &charter, &Config::default());
+        assert!(
+            !f.reasons.iter().any(|r| r.contains("githooks")),
+            ".githooks/pre-commit must resolve via its real (dotted) path: {:?}",
+            f.reasons
+        );
+    }
+
+    /// A genuinely missing dotfile path must still trip (the leading-dot fix
+    /// must not accidentally make every dotfile reference vacuously "found").
+    #[test]
+    fn dotfile_path_still_trips_when_genuinely_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let charter = Charter {
+            north_star: "x".to_string(),
+            definition_of_done: vec!["`.githooks/does-not-exist`を参照する".to_string()],
+            ..Charter::default()
+        };
+        let charter_path = Charter::project_path(dir.path());
+        let f = check(dir.path(), &charter_path, &charter, &Config::default());
+        assert!(
+            f.reasons.iter().any(|r| r.contains(".githooks/does-not-exist")),
+            "a genuinely missing dotfile path must still trip: {:?}",
+            f.reasons
+        );
+    }
+
+    #[test]
+    fn path_candidates_splits_on_cjk_and_preserves_leading_dot() {
+        let toks = path_candidates("現況について`.git/hooks`配下を見る。config.tomlを確認。");
+        assert!(toks.iter().any(|t| t == ".git/hooks"));
+        assert!(toks.iter().any(|t| t == "config.toml"));
+        // The trailing '。' is CJK punctuation, not a path char, so it never
+        // enters the run in the first place.
+        assert!(!toks.iter().any(|t| t.contains('。')));
     }
 
     #[test]

@@ -934,7 +934,7 @@ pub fn list(
 /// unrelated directory that coincidentally shares the name. `project_matches`
 /// separately bridges bare labels already in the store against absolute
 /// paths at read time.
-fn canonicalize_project(project: &str) -> String {
+pub(crate) fn canonicalize_project(project: &str) -> String {
     if !(project.starts_with('/') || project.starts_with('.') || project.starts_with('~')) {
         return project.to_string();
     }

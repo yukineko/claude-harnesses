@@ -21,10 +21,14 @@ backlog list --status pending [--project <path>]   # キュー一覧
 backlog next [--project <path>]                    # 次のアイテムをピック
 backlog done <id>                                  # アイテムを完了マーク
 backlog fail <id> --reason "<概要>"                # アイテムを失敗マーク
-backlog lock status                                # ロックステータス確認
+backlog lock status [--project <path>]             # ロックステータス確認（project 省略時は全 project 横断で「どこかで driver 稼働中か」を返す）
 backlog lock acquire --session-id <id> --project <path>  # ロック取得
-backlog lock release                               # ロック解放
+backlog lock release --project <path>              # ロック解放
 ```
+
+> ロックは **project ごとにスコープ**される。無関係な project 同士は同時に `/flow` を走らせても
+> 互いをブロックしない。`release` / `acquire` / `heartbeat` は `--project` 必須、`status` だけは
+> 省略可（省略時は全 project 横断スキャン）。
 
 ## 使い分け
 

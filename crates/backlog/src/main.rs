@@ -174,10 +174,20 @@ enum LockAction {
     },
 
     /// Release the lock (no-op if none)
-    Release,
+    Release {
+        /// Project path (must match the project passed to `acquire`)
+        #[arg(long)]
+        project: String,
+    },
 
-    /// Print lock status as JSON, or "none"
-    Status,
+    /// Print lock status as JSON, or "none". With `--project`, reports that
+    /// project's lock only. Without it, scans every project's lock and
+    /// reports whichever is most active (Active > Stale > None) — this is
+    /// the "is any driver active anywhere" scan `daily` depends on.
+    Status {
+        #[arg(long)]
+        project: Option<String>,
+    },
 
     /// Refresh the lock's heartbeat, keeping a long-running session's hold
     /// alive past the stale TTL. No-op if the lock isn't held by session_id.
@@ -185,6 +195,10 @@ enum LockAction {
         /// Session ID (must match the current holder for this to take effect)
         #[arg(long)]
         session_id: String,
+
+        /// Project path (must match the project passed to `acquire`)
+        #[arg(long)]
+        project: String,
     },
 }
 
@@ -400,12 +414,16 @@ fn run(cli: Cli) -> Result<()> {
                     println!("lock acquired");
                 }
             }
-            LockAction::Release => {
-                lock::release()?;
+            LockAction::Release { project } => {
+                lock::release(&project)?;
                 println!("lock released");
             }
-            LockAction::Status => {
-                match lock::status() {
+            LockAction::Status { project } => {
+                let status = match &project {
+                    Some(p) => lock::status(p),
+                    None => lock::status_any(),
+                };
+                match status {
                     lock::LockStatus::None => println!("none"),
                     lock::LockStatus::Active(info) => {
                         println!("{}", serde_json::to_string_pretty(&info)?);
@@ -423,8 +441,11 @@ fn run(cli: Cli) -> Result<()> {
                     }
                 }
             }
-            LockAction::Heartbeat { session_id } => {
-                lock::heartbeat(&session_id)?;
+            LockAction::Heartbeat {
+                session_id,
+                project,
+            } => {
+                lock::heartbeat(&session_id, &project)?;
                 println!("lock heartbeat updated");
             }
         },

@@ -5,6 +5,25 @@ use serde::{Deserialize, Serialize};
 
 use harness_core::config::base_dir;
 
+use crate::store::canonicalize_project;
+
+/// Derive a filesystem-safe, per-project lock-file identity: canonicalize the
+/// project the same way `store::add_with_weight`/`list` do (so `--project
+/// "$PWD"` from any subdirectory or worktree of the SAME repo lands on the
+/// same slug), then hash it with the shared FNV-1a so the filename never
+/// contains path separators. `backlog` is explicitly a cross-project queue
+/// (its own `--help` says so), so a single global `run.lock` blocked a
+/// session working on project A whenever ANY other session held the lock for
+/// unrelated project B — real observed friction, not a hypothetical (a `/flow`
+/// run on `harness` stood down because a concurrent session held the lock for
+/// `ai-aegis`, a completely different repo). Scoping the lock file per project
+/// lets independent projects' `/flow` loops run concurrently while still
+/// serializing two sessions racing on the SAME project's queue.
+fn project_slug(project: &str) -> String {
+    let canonical = canonicalize_project(project);
+    format!("{:016x}", harness_core::hash::fnv1a64(canonical.as_bytes()))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockInfo {
     pub session_id: String,
@@ -48,12 +67,37 @@ fn is_stale(info: &LockInfo, now: i64) -> bool {
     now.saturating_sub(info.heartbeat_at) > LOCK_STALE_TTL_SECS
 }
 
-fn lock_path() -> PathBuf {
-    base_dir("backlog").join("run.lock")
+fn locks_dir() -> PathBuf {
+    base_dir("backlog").join("locks")
 }
 
-fn lock_path_for(base: &Path) -> PathBuf {
-    base.join("run.lock")
+fn locks_dir_for(base: &Path) -> PathBuf {
+    base.join("locks")
+}
+
+fn lock_path(project: &str) -> PathBuf {
+    locks_dir().join(format!("{}.lock", project_slug(project)))
+}
+
+fn lock_path_for(base: &Path, project: &str) -> PathBuf {
+    locks_dir_for(base).join(format!("{}.lock", project_slug(project)))
+}
+
+/// List every currently-present lock file's path, for the project-agnostic
+/// "is ANY project's driver active" scan (`status_any`). A missing/unreadable
+/// `locks/` directory reads as "no locks" (fail-soft — mirrors every other
+/// gate in this repo that treats an absent store as empty rather than erroring
+/// the CLI invocation), since the directory is created lazily on first
+/// `acquire` and its absence just means nobody has ever locked anything yet.
+fn all_lock_files(dir: &Path) -> Vec<PathBuf> {
+    match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "lock"))
+            .collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 fn read_lock(path: &Path) -> Option<LockInfo> {
@@ -121,8 +165,8 @@ fn acquire_inner(
     force: bool,
 ) -> Result<()> {
     let path = match lock_dir {
-        Some(d) => lock_path_for(d),
-        None => lock_path(),
+        Some(d) => lock_path_for(d, project),
+        None => lock_path(project),
     };
 
     // Ensure directory exists.
@@ -241,10 +285,10 @@ pub fn acquire(session_id: &str, pid: u32, project: &str) -> Result<()> {
 
 /// Release the lock.  No-op if no lock file exists.
 /// `lock_dir` allows tests to override the directory.
-pub fn release_at(lock_dir: Option<&Path>) -> Result<()> {
+pub fn release_at(project: &str, lock_dir: Option<&Path>) -> Result<()> {
     let path = match lock_dir {
-        Some(d) => lock_path_for(d),
-        None => lock_path(),
+        Some(d) => lock_path_for(d, project),
+        None => lock_path(project),
     };
     if path.exists() {
         std::fs::remove_file(&path)
@@ -254,18 +298,22 @@ pub fn release_at(lock_dir: Option<&Path>) -> Result<()> {
 }
 
 /// Release using the default lock path.
-pub fn release() -> Result<()> {
-    release_at(None)
+pub fn release(project: &str) -> Result<()> {
+    release_at(project, None)
 }
 
-/// Return the current lock status.
+/// Return the current lock status for a specific project.
 /// `lock_dir` allows tests to override the directory.
-pub fn status_at(lock_dir: Option<&Path>) -> LockStatus {
+pub fn status_at(project: &str, lock_dir: Option<&Path>) -> LockStatus {
     let path = match lock_dir {
-        Some(d) => lock_path_for(d),
-        None => lock_path(),
+        Some(d) => lock_path_for(d, project),
+        None => lock_path(project),
     };
-    match read_lock(&path) {
+    status_from_path(&path)
+}
+
+fn status_from_path(path: &Path) -> LockStatus {
+    match read_lock(path) {
         None => LockStatus::None,
         Some(info) => {
             if is_stale(&info, now_unix()) {
@@ -277,9 +325,41 @@ pub fn status_at(lock_dir: Option<&Path>) -> LockStatus {
     }
 }
 
-/// Return the lock status using the default lock path.
-pub fn status() -> LockStatus {
-    status_at(None)
+/// Return the lock status for a specific project, using the default lock path.
+pub fn status(project: &str) -> LockStatus {
+    status_at(project, None)
+}
+
+/// Return whether ANY project's lock is currently active or stale-but-present,
+/// scanning every lock file under `locks/` rather than a single project's slug.
+/// This preserves `daily`'s "is any driver active anywhere on the machine"
+/// bare `backlog lock status` behavior (no `--project` flag) after the lock
+/// file layout became per-project: `daily` doesn't know or care which project
+/// a driver is working on, only whether one is running. Picks the single
+/// most "alive" result across all lock files: an `Active` lock anywhere wins
+/// over `Stale`, which wins over `None` (empty/missing `locks/` dir).
+pub fn status_any_at(lock_dir: Option<&Path>) -> LockStatus {
+    let dir = match lock_dir {
+        Some(d) => locks_dir_for(d),
+        None => locks_dir(),
+    };
+    let mut best = LockStatus::None;
+    for path in all_lock_files(&dir) {
+        let this = status_from_path(&path);
+        best = match (&best, &this) {
+            (LockStatus::Active(_), _) => best,
+            (_, LockStatus::Active(_)) => this,
+            (LockStatus::Stale(_), _) => best,
+            (_, LockStatus::Stale(_)) => this,
+            _ => best,
+        };
+    }
+    best
+}
+
+/// Return whether any project's driver is active, using the default lock path.
+pub fn status_any() -> LockStatus {
+    status_any_at(None)
 }
 
 /// Refresh the heartbeat of the current lock, but only if it is held by
@@ -288,10 +368,10 @@ pub fn status() -> LockStatus {
 /// session, this is a no-op (`Ok(())`) rather than an error, since a
 /// heartbeat call racing a release/steal is expected, not exceptional.
 /// `lock_dir` allows tests to override the directory.
-pub fn heartbeat_at(session_id: &str, lock_dir: Option<&Path>) -> Result<()> {
+pub fn heartbeat_at(session_id: &str, project: &str, lock_dir: Option<&Path>) -> Result<()> {
     let path = match lock_dir {
-        Some(d) => lock_path_for(d),
-        None => lock_path(),
+        Some(d) => lock_path_for(d, project),
+        None => lock_path(project),
     };
     let Some(mut info) = read_lock(&path) else {
         return Ok(());
@@ -323,8 +403,8 @@ pub fn heartbeat_at(session_id: &str, lock_dir: Option<&Path>) -> Result<()> {
 }
 
 /// Refresh the heartbeat using the default lock path. See [`heartbeat_at`].
-pub fn heartbeat(session_id: &str) -> Result<()> {
-    heartbeat_at(session_id, None)
+pub fn heartbeat(session_id: &str, project: &str) -> Result<()> {
+    heartbeat_at(session_id, project, None)
 }
 
 #[cfg(test)]
@@ -333,7 +413,11 @@ mod tests {
     use tempfile::TempDir;
 
     fn tmp() -> TempDir {
-        tempfile::tempdir().expect("tempdir")
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Tests that write a LockInfo directly via std::fs::write (bypassing
+        // acquire_inner, which lazily creates this dir) need it to pre-exist.
+        std::fs::create_dir_all(locks_dir_for(dir.path())).expect("create locks dir");
+        dir
     }
 
     #[test]
@@ -356,7 +440,7 @@ mod tests {
             second.is_err(),
             "a lock with a fresh heartbeat must not be stealable even if its recorded pid is dead"
         );
-        match status_at(Some(d)) {
+        match status_at("proj", Some(d)) {
             LockStatus::Active(i) => assert_eq!(i.session_id, "first"),
             other => panic!("expected Active held by 'first', got {other:?}"),
         }
@@ -370,20 +454,24 @@ mod tests {
         let info = LockInfo {
             session_id: "old".to_string(),
             pid: 424_242,
-            project: "old-proj".to_string(),
+            project: "proj".to_string(),
             acquired_at: 0,
             heartbeat_at: 0, // far older than LOCK_STALE_TTL_SECS
         };
-        std::fs::write(lock_path_for(d), serde_json::to_string(&info).unwrap()).unwrap();
+        std::fs::write(
+            lock_path_for(d, "proj"),
+            serde_json::to_string(&info).unwrap(),
+        )
+        .unwrap();
 
-        match status_at(Some(d)) {
+        match status_at("proj", Some(d)) {
             LockStatus::Stale(i) => assert_eq!(i.session_id, "old"),
             other => panic!("expected Stale, got {other:?}"),
         }
 
         let pid = std::process::id();
-        acquire_at("new-sess", pid, "new-proj", Some(d)).expect("should succeed over stale lock");
-        match status_at(Some(d)) {
+        acquire_at("new-sess", pid, "proj", Some(d)).expect("should succeed over stale lock");
+        match status_at("proj", Some(d)) {
             LockStatus::Active(i) => assert_eq!(i.session_id, "new-sess"),
             other => panic!("expected Active, got {other:?}"),
         }
@@ -397,8 +485,8 @@ mod tests {
         acquire_at("owner", pid, "proj", Some(d)).expect("acquire");
 
         // Wrong session: no-op, must not touch the lock.
-        heartbeat_at("someone-else", Some(d)).expect("heartbeat no-op for wrong session");
-        match status_at(Some(d)) {
+        heartbeat_at("someone-else", "proj", Some(d)).expect("heartbeat no-op for wrong session");
+        match status_at("proj", Some(d)) {
             LockStatus::Active(i) => assert_eq!(i.session_id, "owner"),
             other => panic!("expected Active held by 'owner', got {other:?}"),
         }
@@ -407,12 +495,16 @@ mod tests {
         // heartbeat call moves it forward again.
         let backdated = now_unix() - (LOCK_STALE_TTL_SECS - 1);
         {
-            let mut info = read_lock(&lock_path_for(d)).expect("lock present");
+            let mut info = read_lock(&lock_path_for(d, "proj")).expect("lock present");
             info.heartbeat_at = backdated;
-            std::fs::write(lock_path_for(d), serde_json::to_string(&info).unwrap()).unwrap();
+            std::fs::write(
+                lock_path_for(d, "proj"),
+                serde_json::to_string(&info).unwrap(),
+            )
+            .unwrap();
         }
-        heartbeat_at("owner", Some(d)).expect("heartbeat for owner session");
-        let refreshed = read_lock(&lock_path_for(d)).expect("lock present");
+        heartbeat_at("owner", "proj", Some(d)).expect("heartbeat for owner session");
+        let refreshed = read_lock(&lock_path_for(d, "proj")).expect("lock present");
         assert!(
             refreshed.heartbeat_at > backdated,
             "heartbeat_at should be refreshed forward by the owning session"
@@ -426,13 +518,13 @@ mod tests {
         let pid = std::process::id(); // current process — definitely alive
 
         // Initially no lock.
-        assert!(matches!(status_at(Some(d)), LockStatus::None));
+        assert!(matches!(status_at("my-project", Some(d)), LockStatus::None));
 
         // Acquire.
         acquire_at("sess-1", pid, "my-project", Some(d)).expect("acquire");
 
         // Status should be Active.
-        match status_at(Some(d)) {
+        match status_at("my-project", Some(d)) {
             LockStatus::Active(info) => {
                 assert_eq!(info.session_id, "sess-1");
                 assert_eq!(info.pid, pid);
@@ -442,10 +534,10 @@ mod tests {
         }
 
         // Release.
-        release_at(Some(d)).expect("release");
+        release_at("my-project", Some(d)).expect("release");
 
         // Status should be None again.
-        assert!(matches!(status_at(Some(d)), LockStatus::None));
+        assert!(matches!(status_at("my-project", Some(d)), LockStatus::None));
     }
 
     #[test]
@@ -462,9 +554,13 @@ mod tests {
             acquired_at: 0,
             heartbeat_at: 0,
         };
-        std::fs::write(lock_path_for(d), serde_json::to_string(&info).unwrap()).unwrap();
+        std::fs::write(
+            lock_path_for(d, "some-project"),
+            serde_json::to_string(&info).unwrap(),
+        )
+        .unwrap();
 
-        match status_at(Some(d)) {
+        match status_at("some-project", Some(d)) {
             LockStatus::Stale(i) => {
                 assert_eq!(i.session_id, "stale-sess");
             }
@@ -473,16 +569,42 @@ mod tests {
     }
 
     #[test]
-    fn acquire_fails_when_active_lock_exists() {
+    fn acquire_fails_when_active_lock_exists_for_same_project() {
         let dir = tmp();
         let d = dir.path();
         let pid = std::process::id();
 
         acquire_at("sess-a", pid, "proj-a", Some(d)).expect("first acquire");
 
-        // Second acquire should fail because the heartbeat is fresh.
-        let err = acquire_at("sess-b", pid, "proj-b", Some(d));
+        // Second acquire for the SAME project should fail because the
+        // heartbeat is fresh.
+        let err = acquire_at("sess-b", pid, "proj-a", Some(d));
         assert!(err.is_err(), "expected error acquiring locked resource");
+    }
+
+    // Core fix: the backlog lock is per-project. Two sessions racing on
+    // DIFFERENT projects must never block each other — this is exactly the
+    // observed friction ("/flow" on `harness` stood down because a concurrent
+    // session held the lock for the unrelated `ai-aegis` project) that this
+    // scoping fix exists to eliminate.
+    #[test]
+    fn cross_project_acquire_does_not_conflict() {
+        let dir = tmp();
+        let d = dir.path();
+        let pid = std::process::id();
+
+        acquire_at("sess-a", pid, "project-a", Some(d)).expect("project-a acquires");
+        acquire_at("sess-b", pid, "project-b", Some(d))
+            .expect("project-b must acquire concurrently without conflict");
+
+        match status_at("project-a", Some(d)) {
+            LockStatus::Active(i) => assert_eq!(i.session_id, "sess-a"),
+            other => panic!("expected project-a Active held by 'sess-a', got {other:?}"),
+        }
+        match status_at("project-b", Some(d)) {
+            LockStatus::Active(i) => assert_eq!(i.session_id, "sess-b"),
+            other => panic!("expected project-b Active held by 'sess-b', got {other:?}"),
+        }
     }
 
     #[test]
@@ -493,16 +615,20 @@ mod tests {
         let info = LockInfo {
             session_id: "old".to_string(),
             pid: 424_242,
-            project: "old-proj".to_string(),
+            project: "proj".to_string(),
             acquired_at: 0,
             heartbeat_at: 0, // far older than LOCK_STALE_TTL_SECS
         };
-        std::fs::write(lock_path_for(d), serde_json::to_string(&info).unwrap()).unwrap();
+        std::fs::write(
+            lock_path_for(d, "proj"),
+            serde_json::to_string(&info).unwrap(),
+        )
+        .unwrap();
 
         let pid = std::process::id();
-        acquire_at("new-sess", pid, "new-proj", Some(d)).expect("should succeed over stale lock");
+        acquire_at("new-sess", pid, "proj", Some(d)).expect("should succeed over stale lock");
 
-        match status_at(Some(d)) {
+        match status_at("proj", Some(d)) {
             LockStatus::Active(i) => assert_eq!(i.session_id, "new-sess"),
             other => panic!("expected Active, got {other:?}"),
         }
@@ -525,7 +651,7 @@ mod tests {
         );
 
         // The original owner must still hold the lock unchanged.
-        match status_at(Some(d)) {
+        match status_at("proj", Some(d)) {
             LockStatus::Active(i) => assert_eq!(i.session_id, "first"),
             other => panic!("expected Active held by 'first', got {other:?}"),
         }
@@ -540,16 +666,20 @@ mod tests {
         let info = LockInfo {
             session_id: "dead".to_string(),
             pid: 99_999_999,
-            project: "dead-proj".to_string(),
+            project: "proj".to_string(),
             acquired_at: 0,
             heartbeat_at: 0, // far older than LOCK_STALE_TTL_SECS
         };
-        std::fs::write(lock_path_for(d), serde_json::to_string(&info).unwrap()).unwrap();
+        std::fs::write(
+            lock_path_for(d, "proj"),
+            serde_json::to_string(&info).unwrap(),
+        )
+        .unwrap();
 
         let pid = std::process::id();
-        acquire_at("live", pid, "live-proj", Some(d)).expect("acquire must steal a stale lock");
+        acquire_at("live", pid, "proj", Some(d)).expect("acquire must steal a stale lock");
 
-        match status_at(Some(d)) {
+        match status_at("proj", Some(d)) {
             LockStatus::Active(i) => {
                 assert_eq!(i.session_id, "live");
                 assert_eq!(i.pid, pid);
@@ -566,22 +696,22 @@ mod tests {
         let d = dir.path();
         let live_pid = std::process::id(); // holder with a fresh heartbeat
 
-        acquire_at("incumbent", live_pid, "their-proj", Some(d)).expect("incumbent acquires");
+        acquire_at("incumbent", live_pid, "proj", Some(d)).expect("incumbent acquires");
 
         // Plain acquire must refuse a live holder.
         assert!(
-            acquire_at("usurper", live_pid, "our-proj", Some(d)).is_err(),
+            acquire_at("usurper", live_pid, "proj", Some(d)).is_err(),
             "plain acquire must not steal a live lock"
         );
 
         // Forced acquire takes it over.
-        acquire_forced_at("usurper", live_pid, "our-proj", Some(d))
+        acquire_forced_at("usurper", live_pid, "proj", Some(d))
             .expect("--force must steal a live lock");
 
-        match status_at(Some(d)) {
+        match status_at("proj", Some(d)) {
             LockStatus::Active(i) => {
                 assert_eq!(i.session_id, "usurper");
-                assert_eq!(i.project, "our-proj");
+                assert_eq!(i.project, "proj");
             }
             other => panic!("expected the usurper's lock active, got {other:?}"),
         }
@@ -594,9 +724,9 @@ mod tests {
         let dir = tmp();
         let d = dir.path();
         let pid = std::process::id();
-        assert!(matches!(status_at(Some(d)), LockStatus::None));
+        assert!(matches!(status_at("proj", Some(d)), LockStatus::None));
         acquire_forced_at("solo", pid, "proj", Some(d)).expect("force on free lock acquires");
-        match status_at(Some(d)) {
+        match status_at("proj", Some(d)) {
             LockStatus::Active(i) => assert_eq!(i.session_id, "solo"),
             other => panic!("expected Active, got {other:?}"),
         }
@@ -615,18 +745,22 @@ mod tests {
             let existing = LockInfo {
                 session_id: "competitor".to_string(),
                 pid: live_pid,
-                project: "comp-proj".to_string(),
+                project: "our-proj".to_string(),
                 acquired_at: now_unix(),
                 heartbeat_at: now_unix(),
             };
-            std::fs::write(lock_path_for(d), serde_json::to_string(&existing).unwrap()).unwrap();
+            std::fs::write(
+                lock_path_for(d, "our-proj"),
+                serde_json::to_string(&existing).unwrap(),
+            )
+            .unwrap();
 
             let res = acquire_at("us", live_pid, "our-proj", Some(d));
             assert!(
                 res.is_err(),
                 "acquire must fail when an active lock file already exists"
             );
-            match status_at(Some(d)) {
+            match status_at("our-proj", Some(d)) {
                 LockStatus::Active(i) => assert_eq!(i.session_id, "competitor"),
                 other => panic!("expected the competitor's lock intact, got {other:?}"),
             }
@@ -639,16 +773,20 @@ mod tests {
             let existing = LockInfo {
                 session_id: "ghost".to_string(),
                 pid: 99_999_999,
-                project: "ghost-proj".to_string(),
+                project: "our-proj".to_string(),
                 acquired_at: 0,
                 heartbeat_at: 0, // far older than LOCK_STALE_TTL_SECS
             };
-            std::fs::write(lock_path_for(d), serde_json::to_string(&existing).unwrap()).unwrap();
+            std::fs::write(
+                lock_path_for(d, "our-proj"),
+                serde_json::to_string(&existing).unwrap(),
+            )
+            .unwrap();
 
             let our_pid = std::process::id();
             acquire_at("us", our_pid, "our-proj", Some(d))
                 .expect("acquire must succeed over a stale pre-existing lock file");
-            match status_at(Some(d)) {
+            match status_at("our-proj", Some(d)) {
                 LockStatus::Active(i) => assert_eq!(i.session_id, "us"),
                 other => panic!("expected our lock active, got {other:?}"),
             }
@@ -694,5 +832,61 @@ mod tests {
             1,
             "exactly one concurrent acquire must succeed (no double acquisition)"
         );
+    }
+
+    #[test]
+    fn status_any_is_none_when_locks_dir_empty_or_missing() {
+        let dir = tmp();
+        let d = dir.path();
+        assert!(matches!(status_any_at(Some(d)), LockStatus::None));
+
+        // Even a missing locks/ dir (never created) reads as None, not an error.
+        let missing = dir.path().join("does-not-exist");
+        assert!(matches!(status_any_at(Some(&missing)), LockStatus::None));
+    }
+
+    // This is the behavior `daily::driver_active()` depends on: a bare
+    // `backlog lock status` (no --project) must still report "someone is
+    // active" for ANY project's lock, not just one fixed project.
+    #[test]
+    fn status_any_finds_active_lock_regardless_of_which_project_holds_it() {
+        let dir = tmp();
+        let d = dir.path();
+        let pid = std::process::id();
+        acquire_at("driver-sess", pid, "some-other-project", Some(d)).expect("acquire");
+
+        match status_any_at(Some(d)) {
+            LockStatus::Active(i) => assert_eq!(i.session_id, "driver-sess"),
+            other => panic!("expected Active from some-other-project, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn status_any_prefers_active_over_stale_across_projects() {
+        let dir = tmp();
+        let d = dir.path();
+        let pid = std::process::id();
+
+        // A stale lock for one project...
+        let stale = LockInfo {
+            session_id: "stale-sess".to_string(),
+            pid: 99_999_999,
+            project: "proj-stale".to_string(),
+            acquired_at: 0,
+            heartbeat_at: 0,
+        };
+        std::fs::write(
+            lock_path_for(d, "proj-stale"),
+            serde_json::to_string(&stale).unwrap(),
+        )
+        .unwrap();
+
+        // ...and a live lock for a different project.
+        acquire_at("live-sess", pid, "proj-live", Some(d)).expect("acquire");
+
+        match status_any_at(Some(d)) {
+            LockStatus::Active(i) => assert_eq!(i.session_id, "live-sess"),
+            other => panic!("expected the Active (not Stale) lock to win, got {other:?}"),
+        }
     }
 }

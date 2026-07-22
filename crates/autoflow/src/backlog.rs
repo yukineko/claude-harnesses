@@ -75,7 +75,7 @@ pub fn find_open(cwd: &Path) -> Vec<BacklogItem> {
 }
 
 /// Locate the `backlog` binary: PATH first, then the plugin cache.
-fn find_backlog_binary() -> Option<PathBuf> {
+pub(crate) fn find_backlog_binary() -> Option<PathBuf> {
     if std::process::Command::new("backlog")
         .arg("--version")
         .output()
@@ -113,7 +113,7 @@ fn find_backlog_binary() -> Option<PathBuf> {
 /// per repo and matches how tasks are stored (`backlog add --project "$PWD"`,
 /// a full path) under `project_matches`'s exact/prefix rule. Canonicalize
 /// failure falls back to the raw absolute path — still unique, never a constant.
-fn repo_project_path(cwd: &Path) -> String {
+pub(crate) fn repo_project_path(cwd: &Path) -> String {
     let root = repo_root(cwd);
     root.canonicalize()
         .unwrap_or(root)

@@ -140,9 +140,15 @@ compass gap     # ゴール−現状の gap と候補の一手を出す
 backlog のロックを使って二重ループを防ぐ:
 
 ```bash
-backlog lock status
+backlog lock status --project <CWD>
 backlog lock acquire --session-id <SESSION_ID> --project <CWD>
 ```
+
+> ロックは **project ごと** にスコープされる（`~/.backlog/locks/<project のハッシュ>.lock`）。
+> `--project` を付けずに `backlog lock status` を呼ぶと、**どの project かを問わず**
+> 「どこかで driver が動いているか」を全 project 横断でスキャンする（`daily` の起動判定専用）。
+> `/flow` 自身の競合チェックは**必ず `--project <CWD>` を付けて自分の project のロックだけ**を見ること
+> — 付け忘れると無関係な project のロックと衝突したと誤判定する。
 
 - 別セッションがアクティブにロック保持中（**生きている保有者**）→ **Step 0.5 の policy-answer routing** に通す
   （`--risk low --reversible high --confidence high`、`--question "生きた保有者がロック中。どうする?"`、
@@ -359,7 +365,7 @@ condukt state heartbeat --run "flow-$CLAUDE_CODE_SESSION_ID"
 **Step 2 で取得した backlog lock 自体も同じサイクルで heartbeat する**（`condukt state heartbeat` は
 claim registry 用で、backlog lock の生存とは別物）:
 ```bash
-backlog lock heartbeat --session-id "$CLAUDE_CODE_SESSION_ID"
+backlog lock heartbeat --session-id "$CLAUDE_CODE_SESSION_ID" --project "$PWD"
 ```
 backlog lock の staleness は heartbeat_at ベースの TTL（既定30分）で判定されるため、長時間ループで
 これを呼ばないと、他セッションからの stale 誤判定で lock を奪われ得る。`backlog` が無い/失敗した場合は
@@ -379,7 +385,7 @@ condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID"   # trip なら nonze
 source が尽きた / ユーザー中断 / 予算超過のいずれかで:
 
 ```bash
-backlog lock release
+backlog lock release --project "$PWD"
 ```
 
 **早期脱出時もロック解放は必須**。

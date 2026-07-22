@@ -132,14 +132,16 @@ fn stop_run(input: HookInput) {
             return;
         }
 
-        // Stand down while another live session holds the backlog lock: a /flow
-        // or /backlog driver is already running condukt against this queue, and
-        // autoflow's auto-loop would double-drive it.
-        if lock::backlog_driver_active() {
+        let cwd = input.cwd_or_current();
+
+        // Stand down while another live session holds the backlog lock for
+        // THIS project: a /flow or /backlog driver is already running condukt
+        // against this queue, and autoflow's auto-loop would double-drive it.
+        // (The lock is per-project, so an unrelated project's driver must not
+        // stand this session down.)
+        if lock::backlog_driver_active(&cwd) {
             return;
         }
-
-        let cwd = input.cwd_or_current();
         let mut s = state::load(&cfg.state_dir, &session_id);
 
         match s.phase {
@@ -307,14 +309,14 @@ const RESUME_FLOW_INJECT: &str = "直前に /compact したため flow ループ
 /// is running in THIS session (this session holds the backlog lock) and (b) the
 /// user hasn't opted out via `resume_flow_on_compact = false`. Any gate miss
 /// writes nothing. Never panics, never blocks compaction.
-fn pre_compact_run(session_id: &str, cfg: &Config) {
+fn pre_compact_run(session_id: &str, cwd: &std::path::Path, cfg: &Config) {
     if session_id.is_empty() {
         return; // unknown session → never key a marker
     }
     if !cfg.resume_flow_on_compact {
         return; // opted out
     }
-    if !lock::this_session_holds_lock(session_id) {
+    if !lock::this_session_holds_lock(session_id, cwd) {
         return; // flow loop is not driving THIS session → nothing to resume
     }
     state::write_resume_marker(&cfg.state_dir, session_id);
@@ -340,11 +342,12 @@ fn pre_compact_command() -> ! {
         let raw = read_stdin();
         let input = HookInput::parse(&raw).unwrap_or_default();
         let session_id = resolve_session_id(&input);
+        let cwd = input.cwd_or_current();
         let cfg = Config::load();
         if !cfg.enabled || Config::disabled_env() {
             return;
         }
-        pre_compact_run(&session_id, &cfg);
+        pre_compact_run(&session_id, &cwd, &cfg);
     })
 }
 
@@ -370,16 +373,23 @@ mod tests {
     use super::*;
     use std::sync::MutexGuard;
 
-    // pre_compact_run reads the real backlog lock at `$HOME/.backlog/run.lock`, so
-    // tests that exercise it mutate the process-global HOME. They serialize behind
-    // the crate-wide `test_home_guard` mutex (shared with lock.rs's own tests) to
-    // avoid a cross-test HOME race.
+    // `this_session_holds_lock` now shells out to the real `backlog` binary
+    // (per-project lock lookup) rather than reading a file directly, so the
+    // "lock actually held by THIS session" case can't be exercised as a pure
+    // unit test here without spawning both binaries — that case is covered
+    // end-to-end in `tests/precompact_lock.rs` instead. Every test in this
+    // module only reaches code paths that short-circuit *before* the lock
+    // check (empty session id, opted-out config) or don't touch the lock at
+    // all (prompt-submit consume), so none of them depend on `backlog` being
+    // installed. They still mutate the process-global HOME, so they serialize
+    // behind the crate-wide `test_home_guard` mutex to avoid a cross-test race.
 
-    /// A temp HOME with `.backlog/` created, plus a `state/` dir for markers. The
-    /// TempDir self-cleans on drop; `_guard` releases the HOME mutex last.
+    /// A temp HOME with `.backlog/` created, a `state/` dir for markers, and a
+    /// `project/` dir to use as `cwd`. The TempDir self-cleans on drop;
+    /// `_guard` releases the HOME mutex last.
     struct TmpEnv {
         _dir: tempfile::TempDir,
-        home: std::path::PathBuf,
+        project_dir: std::path::PathBuf,
         state_dir: std::path::PathBuf,
         _guard: MutexGuard<'static, ()>,
     }
@@ -389,25 +399,16 @@ mod tests {
             let dir = tempfile::tempdir().expect("tempdir");
             let home = dir.path().to_path_buf();
             std::fs::create_dir_all(home.join(".backlog")).unwrap();
+            let project_dir = home.join("project");
+            std::fs::create_dir_all(&project_dir).unwrap();
             let state_dir = home.join("state");
             std::env::set_var("HOME", &home);
             TmpEnv {
                 _dir: dir,
-                home,
+                project_dir,
                 state_dir,
                 _guard: guard,
             }
-        }
-        fn write_lock(&self, session_id: &str) {
-            std::fs::write(
-                self.home.join(".backlog").join("run.lock"),
-                format!(
-                    r#"{{"pid":{},"session_id":"{}","project":"/p","acquired_at":0}}"#,
-                    std::process::id(),
-                    session_id
-                ),
-            )
-            .unwrap();
         }
         fn cfg(&self, resume: bool) -> Config {
             Config {
@@ -421,59 +422,38 @@ mod tests {
         }
     }
 
-    // 1. Gate: a marker is written only when THIS session holds the lock. This is
-    //    the RED oracle for the gate — if `pre_compact_run` dropped the
-    //    `this_session_holds_lock` check, the "no lock" and "other session" cases
-    //    below would write a marker and the assertions would fail.
+    // No lock present (backlog likely absent in the test sandbox too) → no
+    // marker. Covers the fail-soft path where `find_backlog_binary()` finds
+    // nothing at all.
     #[test]
-    fn precompact_writes_marker_only_when_this_session_holds_lock() {
+    fn precompact_writes_no_marker_without_a_held_lock() {
         let env = TmpEnv::new();
         let cfg = env.cfg(true);
         let sess = "sess-own";
 
-        // (a) No lock file at all → no marker.
-        pre_compact_run(sess, &cfg);
+        pre_compact_run(sess, &env.project_dir, &cfg);
         assert!(
             !state::resume_marker_path(&cfg.state_dir, sess).exists(),
             "no lock → no marker"
         );
-
-        // (b) Lock held by a DIFFERENT session → no marker.
-        env.write_lock("sess-other");
-        pre_compact_run(sess, &cfg);
-        assert!(
-            !state::resume_marker_path(&cfg.state_dir, sess).exists(),
-            "other session's lock → no marker"
-        );
-
-        // (c) Lock held by THIS session → marker written.
-        env.write_lock(sess);
-        pre_compact_run(sess, &cfg);
-        assert!(
-            state::resume_marker_path(&cfg.state_dir, sess).exists(),
-            "own lock → marker written"
-        );
-        drop(env);
     }
 
-    // 2. Opt-out: resume_flow_on_compact = false suppresses the marker even when
-    //    this session holds the lock.
+    // Opt-out: resume_flow_on_compact = false suppresses the marker before the
+    // lock is ever consulted.
     #[test]
     fn precompact_respects_opt_out() {
         let env = TmpEnv::new();
         let cfg = env.cfg(false); // opted out
         let sess = "sess-optout";
-        env.write_lock(sess);
-        pre_compact_run(sess, &cfg);
+        pre_compact_run(sess, &env.project_dir, &cfg);
         assert!(
             !state::resume_marker_path(&cfg.state_dir, sess).exists(),
-            "opted out → no marker even when holding the lock"
+            "opted out → no marker"
         );
-        drop(env);
     }
 
-    // 3. Consume exactly once: with a marker present, prompt_submit injects the
-    //    resume text and deletes the marker; a second call injects nothing.
+    // Consume exactly once: with a marker present, prompt_submit injects the
+    // resume text and deletes the marker; a second call injects nothing.
     #[test]
     fn prompt_submit_consumes_marker_once() {
         let env = TmpEnv::new();
@@ -491,11 +471,10 @@ mod tests {
             prompt_submit_run(sess, &cfg).is_none(),
             "second call is silent (fires exactly once)"
         );
-        drop(env);
     }
 
-    // 4. Fail-soft: no marker / unknown session → both hooks stay silent and never
-    //    write anything (they must not panic; run_hook also catches panics).
+    // Fail-soft: no marker / unknown session → both hooks stay silent and never
+    // write anything (they must not panic; run_hook also catches panics).
     #[test]
     fn hooks_are_silent_without_marker_or_session() {
         let env = TmpEnv::new();
@@ -506,11 +485,10 @@ mod tests {
 
         // Unknown (empty) session → both no-op.
         assert!(prompt_submit_run("", &cfg).is_none());
-        pre_compact_run("", &cfg);
+        pre_compact_run("", &env.project_dir, &cfg);
         assert!(
             !state::resume_marker_path(&cfg.state_dir, "").exists(),
             "empty session → no marker"
         );
-        drop(env);
     }
 }

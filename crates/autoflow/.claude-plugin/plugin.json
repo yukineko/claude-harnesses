@@ -1,6 +1,6 @@
 {
   "name": "autoflow",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Session-end auto-flow gate: on Stop, prompt /record once, then loop /condukt until pending tasks are cleared (auto up to 4×, ask user from 5× onward). Subscription-native (one hook + bundled Rust binary, no API key). v0.1.9: Stop hook now runs under harness-core's run_guarded panic barrier (fail-closed block on crash instead of silent allow).",
   "author": {
     "name": "yukineko"

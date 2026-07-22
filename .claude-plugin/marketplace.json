@@ -57,7 +57,7 @@
     {
       "name": "backlog",
       "description": "Cross-project task queue with cycle-type tags for Claude Code: a /backlog skill that loops through open items (lock → pick → /condukt → done), a SessionStart hook that surfaces pending work at session open, and a backlog binary with list/next/done/fail/lock subcommands. v0.1.13 fails the next_claim read-modify-write CLOSED when the tasks-file lock cannot be acquired: with_tasks_lock ran its closure UNPROTECTED on a degraded acquire (contention/FS error), so concurrent next_claim callers could read the same pending task and mark it claimed in each -- dispatching ONE task to multiple processes. A new with_tasks_lock_aware tells the claim RMW whether the exclusive lock is actually held; when it is not, the claim now DECLINES (returns no task) and retries on the next tick rather than racing. Best-effort mutators keep the fail-soft with_tasks_lock (lost-update at worst, not double-dispatch). Deterministic regression test via the locked seam. v0.1.12 fixes a real lost-update race in add_with_weight/next_claim under heavy concurrent contention: the tasks-file lock's retry budget was sized for one legitimate holder's worst-case hold (300ms), not N holders queuing serially, so heavy contention (10 adders + 10 claimers) could exceed the budget and force an unprotected fallback that lost updates; budget raised from ~2s to ~8s, proven by a previously-red stress test now green. v0.1.11 adds a regression test proving the v0.1.10 heartbeat_at+TTL fix works without waiting the real 30-minute TTL (rewrites on-disk heartbeat_at back past the TTL, then confirms `backlog lock heartbeat` refreshes/protects it and an un-heartbeated lock is correctly reaped). v0.1.10 fixes backlog::lock's cross-session mutual exclusion: staleness was judged by the recorded pid's liveness, but that pid is always the one-shot `backlog lock acquire` CLI's own pid (dead again the instant the command returns), so any lock could be immediately stolen by another session regardless of whether the holder was still active. Staleness is now judged by a `heartbeat_at` timestamp + 30-minute TTL (matching condukt's task-claim and overwatch's lease registries), with a new `backlog lock heartbeat` subcommand. Subscription-native (skill + hook + bundled Rust binary, no API key).",
-      "version": "0.1.15",
+      "version": "0.1.16",
       "category": "workflow",
       "keywords": [
         "backlog",
@@ -380,7 +380,7 @@
     {
       "name": "flow",
       "description": "Unified source→executor driver for Claude Code: a /flow skill that binds the task SOURCES (compass next-move + backlog queue) to the EXECUTOR (condukt, model-routed by fugu-router) in one HOTL loop — gate on compass freshness, pick the highest-priority task, hand it to condukt, verify, mark done, repeat. A SessionStart hook proposes /flow every session when open work exists (propose-then-confirm). Subscription-native (skill + hook + bundled Rust binary, no API key). v0.1.12: Step 3-2 now documents a default fork-wrapping bias for /condukt invocations (exception: xs-class single-file tasks where the user wants interactive visibility) and a manual `fugu-router record --delegation fork|inline` logging convention, feeding a new open hypothesis measuring fork-vs-inline cost/duration. v0.1.13: the manual delegation-recording convention now includes a self-check step — after `fugu-router record --delegation`, call `fugu-router audit-recent --class flow-delegation --within <secs>` and retry/warn on a miss, instead of trusting the record call landed. v0.1.14: Step 3-4's per-cycle heartbeat now also refreshes the backlog lock itself (`backlog lock heartbeat --session-id <id>`), not just the condukt claim registry — closing a gap where a long-running loop could lose its cross-session backlog lock to a stale-TTL reap even though it was still actively working (fail-soft if `backlog` is absent/fails).",
-      "version": "0.1.15",
+      "version": "0.1.16",
       "category": "orchestration",
       "keywords": [
         "flow",
@@ -752,7 +752,7 @@
     {
       "name": "autoflow",
       "description": "Session-end auto-flow gate for Claude Code: on Stop, prompt /record once, then loop /condukt until pending tasks are cleared (auto up to 4×, ask the user from 5× onward). Also fires a fail-soft Tier 2 advisory when a /flow-driven condukt run completes without any evidence of a fugu-router delegation record. Subscription-native (one hook + bundled Rust binary, no API key). v0.1.9: Stop hook now runs under harness-core's run_guarded panic barrier (fail-closed block on crash instead of silent allow).",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "category": "orchestration",
       "keywords": [
         "hooks",

@@ -40,8 +40,26 @@ fn temp_home(tag: &str) -> PathBuf {
     dir
 }
 
+/// Locate the single per-project lock file under `~/.backlog/locks/`. The
+/// lock file name is now a hash of the (canonicalized) project string rather
+/// than a fixed path, so this test derives it by listing the directory
+/// instead of replicating the hash — each test here only ever acquires one
+/// project's lock at a time, so exactly one `.lock` file is expected.
 fn lock_path(home: &Path) -> PathBuf {
-    home.join(".backlog").join("run.lock")
+    let locks_dir = home.join(".backlog").join("locks");
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(&locks_dir)
+        .expect("locks dir readable")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "lock"))
+        .collect();
+    entries.sort();
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected exactly one lock file, found {entries:?}"
+    );
+    entries.into_iter().next().unwrap()
 }
 
 /// Run `backlog <args>` under an isolated HOME. Returns (exit_code, stdout).
@@ -110,7 +128,7 @@ fn heartbeat_refreshes_a_ttl_exceeded_lock_and_keeps_it_from_being_stolen() {
     backdate_heartbeat(&home, LOCK_STALE_TTL_SECS + 60);
 
     // Sanity: status must now report the lock as stale before we heartbeat it.
-    let (code, stdout) = run(&["lock", "status"], &home);
+    let (code, stdout) = run(&["lock", "status", "--project", "/p"], &home);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("\"stale\": true") || stdout.contains("\"stale\":true"),
@@ -119,11 +137,21 @@ fn heartbeat_refreshes_a_ttl_exceeded_lock_and_keeps_it_from_being_stolen() {
 
     // 3. The owning session heartbeats — this must refresh heartbeat_at back
     //    to "now" without waiting any real time.
-    let (code, stdout) = run(&["lock", "heartbeat", "--session-id", "owner"], &home);
+    let (code, stdout) = run(
+        &[
+            "lock",
+            "heartbeat",
+            "--session-id",
+            "owner",
+            "--project",
+            "/p",
+        ],
+        &home,
+    );
     assert_eq!(code, 0, "heartbeat must succeed, got: {stdout}");
 
     // 4. Status must now report Active again (heartbeat_at moved forward).
-    let (code, stdout) = run(&["lock", "status"], &home);
+    let (code, stdout) = run(&["lock", "status", "--project", "/p"], &home);
     assert_eq!(code, 0);
     assert!(
         !stdout.contains("stale"),
@@ -143,8 +171,10 @@ fn heartbeat_refreshes_a_ttl_exceeded_lock_and_keeps_it_from_being_stolen() {
         "heartbeat_at must have been moved forward within the TTL window, got {refreshed_heartbeat}"
     );
 
-    // 5. A competing session's acquire attempt must still fail: the lock is
-    //    active again thanks to the heartbeat, not stealable.
+    // 5. A competing session's acquire attempt for the SAME project must
+    //    still fail: the lock is active again thanks to the heartbeat, not
+    //    stealable. (A different project would trivially succeed now that
+    //    locks are per-project — that's not what this is testing.)
     let (code, stdout) = run(
         &[
             "lock",
@@ -152,7 +182,7 @@ fn heartbeat_refreshes_a_ttl_exceeded_lock_and_keeps_it_from_being_stolen() {
             "--session-id",
             "competitor",
             "--project",
-            "/q",
+            "/p",
         ],
         &home,
     );
@@ -189,7 +219,7 @@ fn without_a_heartbeat_a_ttl_exceeded_lock_is_reaped_by_a_different_session() {
     backdate_heartbeat(&home, LOCK_STALE_TTL_SECS + 60);
 
     // Sanity: status must report stale.
-    let (code, stdout) = run(&["lock", "status"], &home);
+    let (code, stdout) = run(&["lock", "status", "--project", "/p"], &home);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("\"stale\": true") || stdout.contains("\"stale\":true"),
@@ -197,7 +227,10 @@ fn without_a_heartbeat_a_ttl_exceeded_lock_is_reaped_by_a_different_session() {
     );
 
     // 3. No heartbeat call is made here (contrast with the other test). A
-    //    different session's acquire must reap the stale lock and win it.
+    //    different session's acquire for the SAME project must reap the
+    //    stale lock and win it. (A different project would trivially
+    //    succeed now that locks are per-project, regardless of staleness —
+    //    that's not what this is testing.)
     let (code, stdout) = run(
         &[
             "lock",
@@ -205,7 +238,7 @@ fn without_a_heartbeat_a_ttl_exceeded_lock_is_reaped_by_a_different_session() {
             "--session-id",
             "rescuer",
             "--project",
-            "/q",
+            "/p",
         ],
         &home,
     );
@@ -214,7 +247,7 @@ fn without_a_heartbeat_a_ttl_exceeded_lock_is_reaped_by_a_different_session() {
         "acquire by a different session must succeed over a TTL-exceeded (stale) lock, got: {stdout}"
     );
 
-    let (code, stdout) = run(&["lock", "status"], &home);
+    let (code, stdout) = run(&["lock", "status", "--project", "/p"], &home);
     assert_eq!(code, 0);
     assert!(
         !stdout.contains("stale"),

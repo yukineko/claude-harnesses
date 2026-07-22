@@ -18,6 +18,12 @@ Usage (run from repo root):
 Exit 0 if every changed plugin was bumped (or nothing relevant changed); exit 1
 lists each plugin that changed without a version bump. New plugins (absent at
 base) are OK. Deleted plugins are ignored.
+
+ONE carve-out, argued at its implementation site below: a plugin whose changed
+paths are ALL under crates/<name>/bin/ (compiled output, not source) does not
+require a bump. Mixed bin+source changes are still enforced, and every exempted
+plugin is printed — the exemption is never silent. Covered by
+scripts/tests/version-bumped-bin-only.sh.
 """
 import argparse
 import json
@@ -79,6 +85,7 @@ def main():
         return 2
 
     offenders = []
+    bin_only = []
     checked = 0
     if not os.path.isdir(CRATES):
         print("check-version-bumped: no crates/ dir (run from repo root)", file=sys.stderr)
@@ -95,8 +102,25 @@ def main():
         if diff.returncode != 0:
             print(f"check-version-bumped: git diff failed for {name}: {diff.stderr.strip()}", file=sys.stderr)
             return 2
-        if not diff.stdout.strip():
+        changed = [ln for ln in diff.stdout.splitlines() if ln.strip()]
+        if not changed:
             continue  # unchanged plugin — nothing to enforce
+
+        # Derived-artifact carve-out: crates/<name>/bin/* holds COMPILED output,
+        # not source. A rebuild of identical source produces different bytes
+        # (this repo already declares that difference unusable for a verdict —
+        # see scripts/check-bin-reproducibility.py, which judges only malicious
+        # deltas because "raw committed-only counts and size diffs are build
+        # nondeterminism"). Demanding a version bump for it demands a bump for a
+        # non-change, and it blocked integrating CI's own `ci: rebuild plugin
+        # binaries` commit (observed 2026-07-23: 34 plugins, zero source files).
+        # The carve-out is narrow ON PURPOSE: it applies only when EVERY changed
+        # path is under bin/, so a source change travelling alongside binaries is
+        # still caught. It is also announced below rather than applied silently.
+        bin_prefix = f"{CRATES}/{name}/bin/"
+        if all(p.startswith(bin_prefix) for p in changed):
+            bin_only.append((name, len(changed)))
+            continue
 
         base_v = plugin_version_at(base, pj_rel)
         if base_v is None:
@@ -105,8 +129,17 @@ def main():
 
         bs, cs = semver(base_v), semver(cur_v)
         if cs is None or bs is None or not (cs > bs):
-            changed_files = [ln for ln in diff.stdout.splitlines() if ln.strip()]
-            offenders.append((name, base_v, cur_v, changed_files))
+            offenders.append((name, base_v, cur_v, changed))
+
+    # Announce the carve-out. A gate that narrows its own coverage must say so;
+    # a silent exemption reads downstream as "nothing changed there".
+    if bin_only:
+        total = sum(n for _, n in bin_only)
+        names = ", ".join(name for name, _ in bin_only)
+        print(
+            f"check-version-bumped: {len(bin_only)} plugin(s) changed ONLY under "
+            f"bin/ ({total} derived-artifact file(s)); no bump required: {names}"
+        )
 
     if offenders:
         print(

@@ -30,6 +30,7 @@ mod policy;
 mod pr;
 mod precedent;
 mod replan;
+mod repo_commit;
 mod review_brief;
 mod review_order;
 mod review_worthiness;
@@ -88,6 +89,12 @@ enum Command {
     Worktree {
         #[command(subcommand)]
         action: WtAction,
+    },
+    /// Mutations of the PRIMARY working tree (the shared one), serialized on the
+    /// repo-scoped primary lock.
+    Repo {
+        #[command(subcommand)]
+        action: RepoAction,
     },
     /// Run-state tracking and the completion gate.
     State {
@@ -493,6 +500,33 @@ enum EscalateAction {
         /// The chosen option (should be one of the recorded options).
         #[arg(long)]
         choice: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum RepoAction {
+    /// Stage the named paths and commit them IN THE PRIMARY WORKING TREE, with
+    /// the repo-scoped primary lock (`lock::REPO_PRIMARY_LOCK_KEY`) held across
+    /// the whole read-modify-write, so two concurrent condukt executions can
+    /// never interleave content in the one shared index.
+    ///
+    /// This is the ONLY sanctioned way for the `/condukt` skill to commit in the
+    /// primary tree (single-worktree mode, the small-task fast path, and serial
+    /// tasks). Raw `git add ... && git commit` from the skill's shell holds no
+    /// lock and is exactly the hazard this replaces.
+    ///
+    /// Restrictive on every cannot-determine: no `--path`, a widening pathspec
+    /// (`.`, a glob, `:` magic), foreign content already staged in the shared
+    /// index, an unheld lock, or a failing `git` all refuse with a non-zero exit
+    /// and leave HEAD where it was.
+    Commit {
+        /// A file this task owns (repeatable). Explicit paths only — never `-A`,
+        /// `.` or a glob, so a peer's edits cannot ride along.
+        #[arg(long = "path")]
+        paths: Vec<String>,
+        /// Commit message.
+        #[arg(long, short = 'm')]
+        message: String,
     },
 }
 
@@ -940,15 +974,15 @@ enum StateAction {
     /// main tree (selective staging, no per-task worktree/merge) only when on.
     ///
     /// NOTE (repo-primary serialization): the single-worktree main-tree commit
-    /// (`git add <explicit touched paths>` + commit on the primary repo) is
-    /// performed by the /condukt skill's shell, NOT by any condukt subcommand, so
-    /// there is no in-process site here to take `lock::REPO_PRIMARY_LOCK_KEY`.
-    /// That path is serialized against other primary-repo mutators by the
-    /// upstream flow backlog lock (one run per repo at a time); the Rust
-    /// primary-repo mutators (`worktree::merge`, `git worktree prune`) hold the
-    /// repo-scoped `RunLock` directly. If the skill is ever moved into a condukt
-    /// subcommand, that subcommand MUST wrap the staging+commit in
-    /// `lock::acquire_repo_primary(cfg, cwd)` to join the same serialization.
+    /// IS an in-process site — `condukt repo commit` ([`RepoAction::Commit`] →
+    /// [`repo_commit::commit`]). It holds `lock::REPO_PRIMARY_LOCK_KEY` across
+    /// the whole index-check → `git add` → `git commit` cycle, joining the same
+    /// serialization as the other primary-repo mutators (`worktree::merge`,
+    /// `worktree::resolve_merge`, `git worktree prune`). The `/condukt` skill
+    /// must NOT hand-roll `git add && git commit` in the primary tree: that
+    /// holds no lock, and two sessions sharing one index is the one conflict git
+    /// cannot resolve by merging. Pinned by
+    /// `tests/repo_commit_index_isolation.rs`.
     WorktreeModeCheck,
     /// Resolve the verifier model so it never equals the worker model (shared
     /// blind-spot guard). Prints the chosen model on stdout. A distinct
@@ -1546,6 +1580,7 @@ fn run_user(cmd: Command) -> Result<()> {
             }
         }
         Command::Worktree { action } => run_worktree(&cfg, &cwd, action)?,
+        Command::Repo { action } => run_repo(&cfg, &cwd, action)?,
         Command::State { action } => run_state(&cfg, &cwd, action)?,
         Command::Verify { action } => match action {
             VerifyAction::Digest { file } => {
@@ -2728,6 +2763,20 @@ fn run_policy(action: PolicyAction) -> ! {
             std::process::exit(0);
         }
     }
+}
+
+/// Primary-working-tree mutators. `cwd` may be anywhere inside the repo; the
+/// repo toplevel is resolved so the lock is keyed per repo, exactly like the
+/// other primary-repo mutators.
+fn run_repo(cfg: &Config, cwd: &Path, action: RepoAction) -> Result<()> {
+    let repo = worktree::toplevel(cwd)?;
+    match action {
+        RepoAction::Commit { paths, message } => {
+            let sha = repo_commit::commit(cfg, &repo, &paths, &message)?;
+            println!("{}", serde_json::json!({ "commit": sha, "paths": paths }));
+        }
+    }
+    Ok(())
 }
 
 fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {

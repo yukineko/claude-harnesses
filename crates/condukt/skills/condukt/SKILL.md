@@ -452,6 +452,33 @@ run の初期 checkpoint を1本書く。これが無いと後段の auto-rollba
 condukt state checkpoint --run "$RID" --label baseline   # 復元フロア: 実装前の run-state を snapshot
 ```
 
+### 主作業ツリーへの commit — 必ず `condukt repo commit` を使う (素の git add/commit 禁止)
+
+fast path (Phase 4.5.5)・`serial` タスク・単一 worktree モード (Phase 5 B) は **worktree を作らず
+main の作業ツリーで実装する**。ここは **index も作業ツリーも 1 つしか無い**ので、2 セッションが
+同時に触ると **git が merge で解決できない唯一の衝突**になる (branch 分離もコンフリクト解消も
+効かない: 相手の staged 内容が黙って自分の commit に入る)。従来これは `/flow` の粗い backlog
+run.lock だけが偶然直列化していたが、per-task claiming への移行でその遮蔽は無くなる。
+
+したがって主作業ツリーの staging+commit は **必ず** 次のコマンドで行う:
+
+```bash
+condukt repo commit --path <file> [--path <file> ...] -m "<message>"
+# → {"commit":"<sha>","paths":[...]}  (exit 0)
+```
+
+- `git add ... && git commit` を skill/worker のシェルから直接叩かない (ロックを取らない = 上記ハザードそのもの)。
+- `repo commit` は **repo スコープの primary lock (`lock::REPO_PRIMARY_LOCK_KEY`)** を
+  「index 検査 → `git add` → `git commit`」の**全区間**で保持する。`worktree merge` /
+  `worktree prune` と同じ 1 本のロックなので、他の run の merge/prune とも直列化する。
+- **判定不能はすべて制限側**（いずれも exit 非0・commit しない・HEAD を動かさない）:
+  - ロックを本当に取れなかった（timeout / IO エラー）→ 無施錠で staging しない。
+  - `--path` が空 / `.` / glob / `-A` / `:` pathspec magic → タスクの範囲を推測しない。
+  - **共有 index に自分が置いていない staged 内容がある** → 相手の mid-flight staging と区別
+    できないので巻き込まず拒否する（先に commit か reset せよ、と報告する）。
+- したがって worker には **staging をさせない**。worker は編集だけ行い、commit は
+  オーケストレータが `condukt repo commit` で行う（`commit_mode: no-stage-no-commit`）。
+
 ### Phase 4.5.5 — Small-task fast path (省略可)
 
 **発動条件**: 以下のいずれかを満たす場合、Phase 5 の worktree 作成を省略して main で直接実装する:
@@ -460,7 +487,11 @@ condukt state checkpoint --run "$RID" --label baseline   # 復元フロア: 実�
 
 **fast path 手順**:
 1. `condukt state set --run $RID --task <t.id> --status running` (worktree/branch なし)
-2. main 上で直接実装・`git add && git commit`
+2. main 上で直接実装し、**commit は必ず `condukt repo commit` 経由**にする（下記「主作業ツリーへの
+   commit」参照）。素の `git add && git commit` は使わない:
+   ```bash
+   condukt repo commit --path <touched_file> [--path ...] -m "<msg>"
+   ```
 3. `condukt state set --run $RID --task <t.id> --status done`
 4. Phase 6 (verifier) へ — Phase 7 の worktree merge/remove はスキップ
 
@@ -516,7 +547,8 @@ condukt state worktree-mode-check   # exit 0 + {"single_worktree":true} → 単�
    **最後に返った agentId** を使う。
 4. worker の返却 status を確認する:
    - `done`: `condukt state set --run $RID --task <t.id> --status done` し、**他の worker の完了を待たずにその場で Phase 6 の verifier を起動する**（パイプライン化）。
-   - `needs-serial`: 分類ミス。worktree を破棄し、タスクを serial として main で直接実装して commit する。
+   - `needs-serial`: 分類ミス。worktree を破棄し、タスクを serial として main で直接実装し、commit は
+     `condukt repo commit --path ... -m ...` で行う（「主作業ツリーへの commit」参照）。
    - `blocked`: インラインの blocking な `AskUserQuestion` で loop を止める代わりに、**durable async escalation
      channel に enqueue して先へ進む**（HOTL: 人間は out-of-band で答える）。`condukt escalate add --run $RID
      --task <t.id> --question "<blocker>" --option "<A>" --option "<B>" --recommend <既定>` で質疑を永続化し
@@ -525,7 +557,7 @@ condukt state worktree-mode-check   # exit 0 + {"single_worktree":true} → 単�
      当該タスクを resume できる。`escalate` バイナリが無い等で enqueue に失敗したときのみ従来の即時報告に
      fail-soft する。GATED タスクの承認待ちも同様にこの channel に enqueue してよい。
 
-バッチ内は 1 メッセージで複数 `Task` を同時発行して並列化する。worker が完了するたびに即 verifier を起動し、worker 完了の待ち合わせはしない（後続 worker が動いている間に先行タスクの検証が進む）。`serial` タスクは worktree に出さず main で順に実装し commit。
+バッチ内は 1 メッセージで複数 `Task` を同時発行して並列化する。worker が完了するたびに即 verifier を起動し、worker 完了の待ち合わせはしない（後続 worker が動いている間に先行タスクの検証が進む）。`serial` タスクは worktree に出さず main で順に実装し、commit は `condukt repo commit` で行う（「主作業ツリーへの commit」参照）。
 
 ---
 
@@ -538,13 +570,21 @@ condukt state worktree-mode-check   # exit 0 + {"single_worktree":true} → 単�
 1. **並列編集（check/commit なし）**: バッチ内の各タスク `t` を 1 メッセージで同時 `Task` 起動する。ただし worker には:
    - 作業ディレクトリ = **main repo dir**（専用 worktree なし）。
    - **自分の `touched_files` だけを編集**（`peer_tasks` で他タスクのスコープを渡し衝突回避）。
-   - **`commit_mode: staged-no-commit`**: 実装したら `git add <touched_files>`（**`-A` は使わない**＝peer の編集を巻き込まない）で**ステージするところまで**。**個別の `cargo check`・`git commit` はしない**（batch 集約でやる）。
+   - **`commit_mode: no-stage-no-commit`**: 実装は**作業ツリーの編集までで止める**。`git add` も
+     `git commit` も**一切しない**（`-A` はもちろん、`git add <touched_files>` も禁止 — 共有 index を
+     ロック外で触る行為そのものがハザードで、peer の `condukt repo commit` から「自分が置いていない
+     staged 内容」として拒否される）。`cargo check` も batch 集約でやるので個別には走らせない。
+     staging と commit は下の 3. でオーケストレータが `condukt repo commit` にまとめて行わせる。
    - `condukt state set --run $RID --task <t.id> --status running`（worktree/branch なし）。
-2. **バッチ集約 `cargo check`（1 回）**: バッチ内 worker が全員ステージ完了したら、**オーケストレータが `cargo check`（影響 crate または workspace）を 1 回**実行する。独立タスクは別依存レイヤなので相互参照は無く、各タスクが正しければ green になる。
+2. **バッチ集約 `cargo check`（1 回）**: バッチ内 worker が全員編集完了したら（staging はまだ誰もしていない）、**オーケストレータが `cargo check`（影響 crate または workspace）を 1 回**実行する。独立タスクは別依存レイヤなので相互参照は無く、各タスクが正しければ green になる。
 3. **判定**:
-   - **green** → タスクごとに `git add <touched_files> && git commit`（選択コミットで per-task 帰属を保つ）→ `condukt state set ... --status done` → 各タスクの Phase 6 verifier を起動。
+   - **green** → タスクごとに `condukt repo commit --path <touched_file> ... -m "<msg>"`（**素の
+     `git add`/`git commit` は使わない** — repo-primary ロック下の選択コミットで per-task 帰属を保つ）
+     → `condukt state set ... --status done` → 各タスクの Phase 6 verifier を起動。**1 タスクずつ順に
+     呼ぶ**（`repo commit` は他タスクの未 staged 編集を index に載せないので、順に呼べば各 commit は
+     自分の `touched_files` だけを含む）。
    - **red** → 失敗を出したファイルから**原因タスクを特定**し、そのタスクを `failed` に set（Phase 6 カスケードエスカレーションへ）。**原因でないタスクは通常どおり commit**（disjoint なので巻き添えにしない）。特定不能なら保守的にバッチ全体を `failed` にして直列再実行へ。
-4. **serial タスク**（`schedule.serial` / 衝突・shared-glob）→ 従来どおり main で1件ずつ実装・自前 `cargo check`・commit。
+4. **serial タスク**（`schedule.serial` / 衝突・shared-glob）→ 従来どおり main で1件ずつ実装・自前 `cargo check` し、commit は `condukt repo commit` で行う。
 5. **例外＝直列に落とすタスク**: `reproduction_tests` を持つ **TDD タスク**は実装中にテストを走らせる（red→green）ため batch 末尾集約に乗らない。single-worktree モードでは**この種のタスクだけ serial 扱い**にして1件ずつ実行する（純編集タスクは上記どおり並列のまま）。
 
 Phase 7（merge/remove）は単一 worktree モードでは**スキップ**（commit は既に既定ブランチ上）。Phase 6 verify と Phase 7 gate はそのまま通す。
@@ -578,7 +618,7 @@ fi
 | フィールド | 必須/省略可 | 収集方法 | 説明 |
 |---|---|---|---|
 | 作業ディレクトリ | 必須 | 既定=`condukt worktree create` の出力 (`$WP`)／単一 worktree モード=**main repo dir** | worker が作業する起点 |
-| `commit_mode` | 単一 worktree モードで必須 | `staged-no-commit`（単一 worktree バッチ）を渡す。既定モードでは省略（従来の add -A && commit） | 並列編集の巻き込み防止＋check/commit のバッチ集約を worker に指示する |
+| `commit_mode` | 単一 worktree モードで必須 | `no-stage-no-commit`（単一 worktree バッチ）を渡す。既定モード（per-task worktree）では省略＝worktree 内で従来どおり add/commit してよい | 共有 index をロック外で触らせない（staging/commit はオーケストレータが `condukt repo commit` で行う）＋check のバッチ集約を worker に指示する |
 | `touched_files` | 必須 | Decomposition JSON の `t.touched_files` | worker が触れてよいファイルのスコープ |
 | `done_criteria` | 必須 | Decomposition JSON の `t.done_criteria` | verifier が照合する合格条件 |
 | `reproduction_tests` | 省略可 | Decomposition JSON の `t.reproduction_tests` | TDD ループ起点。渡すと worker が red→green サイクルを回す |

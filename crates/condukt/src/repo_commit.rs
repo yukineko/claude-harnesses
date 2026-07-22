@@ -109,11 +109,13 @@ pub fn commit(cfg: &Config, repo: &Path, paths: &[String], message: &str) -> Res
     // mutator (a peer `repo commit`, `worktree::merge`, `git worktree prune`) on
     // the one repo-scoped lock.
     //
-    // `acquire_or_skip` — not `acquire` — on purpose: `acquire` is fail-SOFT and
-    // hands back an unheld guard on timeout/IO error, which would let two timed
-    // out writers both stage into the shared index, i.e. exactly the defect this
-    // command exists to close. An unheld lock is cannot-determine, and
-    // cannot-determine resolves to the restrictive side: refuse, commit nothing.
+    // `acquire_or_skip` is FALLIBLE on purpose: the fail-soft `RunLock::acquire`
+    // this crate used to expose handed back an unheld guard on timeout/IO error,
+    // which would let two timed-out writers both stage into the shared index,
+    // i.e. exactly the defect this command exists to close. It has since been
+    // deleted outright (v0.7.91), so no primary-repo mutator can regress to it.
+    // An unheld lock is cannot-determine, and cannot-determine resolves to the
+    // restrictive side: refuse, commit nothing.
     let Some(_repo_lock) = RunLock::acquire_or_skip(cfg, repo, lock::REPO_PRIMARY_LOCK_KEY) else {
         bail!(
             "could not acquire the repo-primary lock for {} within {:?}; \

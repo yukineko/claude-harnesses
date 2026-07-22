@@ -2472,7 +2472,8 @@ mod tests {
         // across load → (widened window) → save, exactly like the production
         // pause/resume/Set paths do.
         let rmw = |which: char| {
-            let _lock = crate::lock::RunLock::acquire(&cfg, &tmp, run_id);
+            let _lock = crate::lock::RunLock::acquire_or_skip(&cfg, &tmp, run_id)
+                .expect("the per-run lock must be genuinely held for this RMW cycle");
             let mut rs = RunState::load(&cfg, &tmp, run_id).unwrap();
             // Widen the load→save window so the race is deterministic without
             // the lock (both threads load before either saves).

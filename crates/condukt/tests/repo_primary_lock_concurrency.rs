@@ -80,8 +80,9 @@ fn concurrent_worktree_prune_same_repo_serializes_no_deadlock() {
 
         // `wait_with_output` returns only when the process exits — a genuine
         // deadlock would hang here and trip the test-runner timeout, which is
-        // itself the "no deadlock" assertion. The lock is bounded-wait +
-        // fail-soft, so this always completes.
+        // itself the "no deadlock" assertion. The lock is bounded-wait, so the
+        // loser either acquires once the winner releases (the case here, both
+        // exit 0) or refuses after the deadline — never blocks forever.
         let out_a = a.wait_with_output().expect("wait on A");
         let out_b = b.wait_with_output().expect("wait on B");
 
@@ -100,4 +101,49 @@ fn concurrent_worktree_prune_same_repo_serializes_no_deadlock() {
 
         std::fs::remove_dir_all(&tmp).ok();
     }
+}
+
+/// `worktree cleanup` runs `git worktree prune` (and then deletes orphan dirs)
+/// against the primary repo. A prune racing a concurrent `worktree add` can drop
+/// the admin entry that add just published, and an orphan listing taken while a
+/// peer is creating worktrees can delete a live one. So when the repo-primary
+/// lock cannot be acquired, cleanup must REFUSE (non-zero) rather than prune
+/// unlocked.
+///
+/// Fault injection: a `$HOME` whose `~/.condukt/state` is a regular FILE, so the
+/// lock directory can never be created — a real, deterministic acquisition
+/// failure with no timing dependence.
+#[test]
+fn worktree_cleanup_refuses_when_repo_primary_lock_cannot_be_acquired() {
+    let n = TRIAL_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp = std::env::temp_dir().join(format!(
+        "condukt-repo-primary-refuse-{}-{n}",
+        std::process::id()
+    ));
+    let home = tmp.join("home");
+    let repo = tmp.join("repo");
+    std::fs::create_dir_all(home.join(".condukt")).unwrap();
+    std::fs::write(home.join(".condukt").join("state"), b"not a directory\n").unwrap();
+    init_repo(&repo);
+
+    let out = Command::new(bin())
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .args(["worktree", "cleanup"])
+        .output()
+        .expect("run condukt worktree cleanup");
+
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        !out.status.success(),
+        "cleanup must REFUSE (non-zero) when the repo-primary lock cannot be acquired; \
+         got {:?} stderr={stderr:?}",
+        out.status.code()
+    );
+    assert!(
+        stderr.contains("repo-primary lock"),
+        "the refusal must name the repo-primary lock; stderr={stderr:?}"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
 }

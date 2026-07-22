@@ -1348,9 +1348,10 @@ mod tests {
     // A wedged holder of the claims-registry lock must make the REAL production
     // claim path HARD-SKIP (report every file skipped, claim none, persist
     // nothing) rather than degrade to an unlocked read-modify-write that could
-    // double-claim. RED with the old fail-soft `acquire`: it hands back an
-    // unlocked guard, the RMW proceeds, and the files are claimed (claimed
-    // non-empty, registry written). GREEN with `acquire_or_skip_with_deadline`.
+    // double-claim. RED with the fail-soft `RunLock::acquire` this crate used to
+    // expose (since REMOVED): it handed back an unlocked guard, the RMW
+    // proceeded, and the files were claimed (claimed non-empty, registry
+    // written). GREEN with `acquire_or_skip_with_deadline`.
     #[test]
     fn contended_claims_lock_makes_claim_files_hard_skip_not_double_claim() {
         use std::time::Duration;
@@ -1358,7 +1359,8 @@ mod tests {
         let cfg = make_cfg(&tmp);
 
         // Wedge a live holder of the reserved claims lock for the whole test.
-        let held = RunLock::acquire(&cfg, &tmp, CLAIMS_LOCK_KEY);
+        let held = RunLock::acquire_or_skip(&cfg, &tmp, CLAIMS_LOCK_KEY)
+            .expect("precondition: wedge must genuinely hold the claims lock");
         assert!(
             held.held(),
             "precondition: wedge must genuinely hold the claims lock"

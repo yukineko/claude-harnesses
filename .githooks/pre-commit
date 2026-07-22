@@ -36,6 +36,11 @@
 #                                                 plugin disagreeing
 #   bump-on-change     check-version-bumped.py    a touched plugin left un-bumped
 #
+# Plus one Rust gate (not python3):
+#   main-tree-guard    condukt guard main-tree    a commit from the SHARED primary
+#                                                 working tree while another
+#                                                 session is live (CLAUDE.md §8)
+#
 # The binary-reproducibility gate stays out: it rebuilds every bin from source,
 # which is far too slow for a commit.
 #
@@ -115,6 +120,51 @@ run check-test-weakening.py   test-weakening
 run check-plugin-versions.py  version-lockstep
 run check-version-bumped.py   bump-on-change
 
+# main-tree-guard — CLAUDE.md §8, the one gate here that is Rust rather than
+# python3, because its decision is a tri-state over injectable inputs and is
+# unit-tested (crates/condukt/src/maintree.rs). It refuses a commit made from
+# the SHARED primary working tree while another session is live; it passes from
+# a linked worktree, during an integration, with nothing staged, or when no peer
+# session is reported.
+#
+# The binary is resolved with a freshly built one first, because a condukt on
+# PATH that predates `guard main-tree` answers "unrecognized subcommand" (exit
+# 2) — which blocks, as an unrunnable gate must. Build with
+# `cargo build --release -p condukt`, or roll the plugin out, rather than
+# loosening this.
+guard_bin=""
+for cand in "${CONDUKT_BIN:-}" "$REPO/target/release/condukt" "$REPO/target/debug/condukt"; do
+    if [ -n "$cand" ] && [ -x "$cand" ]; then
+        guard_bin="$cand"
+        break
+    fi
+done
+if [ -z "$guard_bin" ]; then
+    guard_bin="$(command -v condukt 2>/dev/null)" || guard_bin=""
+fi
+
+if [ -z "$guard_bin" ]; then
+    echo "" >&2
+    echo "main-tree-guard: no condukt binary found (tried \$CONDUKT_BIN, target/release," >&2
+    echo "  target/debug, PATH) — the §8 gate could not run, so this blocks." >&2
+    echo "  Build it: cargo build --release -p condukt" >&2
+    rc=1
+else
+    "$guard_bin" guard main-tree
+    guard_status=$?
+    if [ "$guard_status" -ne 0 ]; then
+        echo "" >&2
+        if [ "$guard_status" -eq 2 ]; then
+            echo "main-tree-guard: UNDETERMINED (exit 2) — the gate could not reach a verdict." >&2
+            echo "  This blocks. If the message names an unrecognized subcommand, the condukt" >&2
+            echo "  binary predates this gate: cargo build --release -p condukt." >&2
+        else
+            echo "main-tree-guard: blocked (exit $guard_status)." >&2
+        fi
+        rc=1
+    fi
+fi
+
 if [ "$rc" -ne 0 ]; then
     cat >&2 <<'EOF'
 
@@ -139,6 +189,14 @@ Remediation hints:
                     .claude-plugin/marketplace.json back into agreement.
   bump-on-change    you touched a plugin without raising its version; raise at
                     least the patch component in all three files.
+  main-tree-guard   commit from a worktree instead of the shared primary tree
+                    (`condukt worktree create`, or `git stash` + `git worktree
+                    add`). Merges and rebases in the main tree already pass. If
+                    you must commit here anyway, say why:
+                    CONDUKT_MAINTREE_OVERRIDE="<reason>" git commit ... — the
+                    reason is printed and the finding is not rewritten. It is an
+                    environment variable, never a file, so it cannot leak into
+                    another session's commit.
 
 `git commit --no-verify` skips this hook — git offers no way to refuse that. It
 is no longer silent, though: .githooks/post-commit records any commit whose tree

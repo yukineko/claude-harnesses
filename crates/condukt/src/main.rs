@@ -24,6 +24,7 @@ mod install;
 mod learning_signal;
 mod lessons;
 mod lock;
+mod maintree;
 mod model;
 mod oracle;
 mod policy;
@@ -148,6 +149,14 @@ enum Command {
     Gate {
         #[command(subcommand)]
         action: GateAction,
+    },
+    /// Local commit-time guards. Currently one: `main-tree`, the machine
+    /// enforcement of CLAUDE.md §8 (do not share-edit the primary working
+    /// tree). Blocks by exiting non-zero, so `.githooks/pre-commit` — not a CI
+    /// job, per §7 — is the enforcement point.
+    Guard {
+        #[command(subcommand)]
+        action: GuardAction,
     },
     /// Opt-in worker sandboxing: run a worker's build/test command through the
     /// docker exec backend (network + filesystem + resource isolation) when
@@ -1409,6 +1418,27 @@ enum GateAction {
 }
 
 #[derive(Subcommand)]
+enum GuardAction {
+    /// Refuse a commit made from the SHARED primary working tree while another
+    /// session is live (CLAUDE.md §8). Exits 0 when it passes, 1 on a
+    /// violation, 2 when the answer could not be determined — an undetermined
+    /// answer blocks exactly like a violation (§3).
+    ///
+    /// It passes when the commit comes from a linked worktree, when an
+    /// integration (merge/rebase/cherry-pick/revert) is in progress, when
+    /// nothing is staged, or when no other session is live.
+    ///
+    /// `CONDUKT_MAINTREE_OVERRIDE="<reason>"` bypasses it; the reason must be
+    /// non-blank and is echoed to stderr. It is an environment variable, never
+    /// a file, so it cannot leak into another session's commit.
+    MainTree {
+        /// Emit the decision as one JSON line instead of prose.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum PrAction {
     /// Prepare (dry-run) or, with --execute, open a PR via `gh pr create`.
     ///
@@ -1902,6 +1932,14 @@ fn run_user(cmd: Command) -> Result<()> {
                 // (fail-soft) and returns the exit code (0 = auto-exec, 1 =
                 // escalate). Exit directly so a caller can branch on the status.
                 let code = gate_exec::run_gate_check(&cfg, &cwd, &run, &task);
+                std::process::exit(code);
+            }
+        },
+        Command::Guard { action } => match action {
+            GuardAction::MainTree { json } => {
+                // Exit directly with the gate's own status so the pre-commit
+                // hook can tell violation (1) from undetermined (2).
+                let code = maintree::run_guard(&cwd, json);
                 std::process::exit(code);
             }
         },

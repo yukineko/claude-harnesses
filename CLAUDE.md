@@ -23,17 +23,19 @@
 写しており、**panic やエラーを「許可」に写す実装がこの一文で正当化されていた** — 当時のコードは
 `docs/article-llm-fail-open.md:48` に「swallow it and exit 0 (allow the stop; a hook must never break the user's turn)」として引用が残る。
 
-**移行済みの実体**: 4 ゲート（donegate / reviewgate / propguard / tdd の各 `main.rs`）が通る
-panic barrier は `d6db4670` で fail-closed へ移行した。gate 本体が panic した＝判定不能は block に
+**移行済みの実体**: 7 ゲート（donegate / reviewgate / propguard / tdd、および budgetguard / autoflow /
+ctxrot の Stop hook 各 `main.rs`）が通る panic barrier は fail-closed へ移行した（前者4つは `d6db4670`、
+後者3つ=budgetguard/autoflow/ctxrotは判定〈`{"decision":"block"}` を実際に返す〉を持ちながら
+`harness_core::hook::run_hook`〈panic握り潰し→常時exit0〉経由のまま取り残されていたのを本節の是正として
+`harness_core::gate::run::run_guarded` へ移行）。gate 本体が panic した＝判定不能は block に
 解決する: `crates/harness-core/src/gate/run.rs:36`「**fail closed**: block the stop and surface the crash」。
 連続 2 回目の panic だけが `stop_hook_active` により bounded に allow へ落ちる。
-
-**未移行の実体（この文書のこの版を書いた時点で生きている。方針だけ先行している）**:
-`docs/stop-gate-latency.md:41` が**同じ規範を MUST として再主張している**（「A gate that errors internally allows the stop (exit 0)」）。
-移行は backlog `13dba04c`。**この節と `docs/stop-gate-latency.md` は現在矛盾している** —
-移行完了までは、両者の食い違いを承知の上で新規コードにこの節を適用する。
-（`crates/harness-core/src/hook.rs:217`「exits 0 so the turn is never broken」の `run_hook` も常に exit 0 だが、これは判定を持たない
-observability hook 専用の入口であり、下の carve-out の側に属する。）したがって:
+`docs/stop-gate-latency.md` の記述もこの移行に合わせて更新済み（旧「A gate that errors internally
+allows the stop」という一律の記述は撤去）。
+（`crates/harness-core/src/hook.rs:217`「exits 0 so the turn is never broken」の `run_hook` は今も存在するが、
+判定を持たない純粋な observability hook（ctxrot の Guard/Rescue/Restore 等）専用の入口であり、
+下の carve-out の側に属する。判定を持つコードが `run_hook` を使っていないかは、新しい Stop hook を
+追加するたびに確認すること。）したがって:
 
 - **判定を持つコード（ゲート・チェック・verdict を返すもの）に「ターンを壊すな」は適用されない。**
   ブロックはターンを壊す行為ではない。判定不能なら 3. に従って制限側へ倒す。それだけ。
@@ -78,10 +80,12 @@ fail が出たとき、**判断で片付けない**。次の順で必ず事実�
 #### この規範が成立するための 2 条件（どちらも必須）
 
 「テストが通れば事実」は無条件には成り立たない。**何も検証していないテストは常に通る**からである
-（実例・**現在も未修正**: `crates/condukt/src/verify.rs:1326` の `checks_verdict` は空スライスに
-`true` を返し、`:2871` の `assert!(checks_verdict(&[]))` がそれを*正しいものとして固定*している。
-docstring は後に「An empty slice is a vacuous pass」と**追認する方向で更新された** — 空集合 fail-open が
-仕様として書き下された形であり、3. の「空集合を返さない」に真っ向から反する。backlog `100af807`）。
+（実例・**修正済み**: `crates/condukt/src/verify.rs` の `checks_verdict` はかつて空スライスに
+`true` を返し、`assert!(checks_verdict(&[]))` がそれを*正しいものとして固定*していた（空集合 fail-open が
+仕様として書き下された形で、3. の「空集合を返さない」に真っ向から反していた）。commit `d30d9b00`
+（2026-07-21 13:51、backlog `100af807`）で三値化し、今は空スライスに `ChecksVerdict::NoChecksDeclared`
+を返す（`Passed` ではない）。教訓は変わらない: **検証していないテストの assert が仕様として固定されうる**
+のは他の場所でも同様に起こりうるので、レビューでは「このテストは何を証明しないか」を先に問うこと）。
 したがって:
 
 - **(a) テストは利害関係のない Agent が書く。** 実装した本人（人間・LLM を問わず）は
@@ -113,10 +117,14 @@ docstring は後に「An empty slice is a vacuous pass」と**追認する方向
 - `Result`/`Option` を bool へ潰すとき、`unwrap_or` の既定値は**必ず制限側**（`deny`/`block`/`true`=違反あり）にする。
 - エラー時に**空の集合**を返さない。空集合は下流で「検査対象なし ＝ 合格」と読まれる。
   三値（`Absent` / `Undetermined` / `Known(T)`）で「判定できなかった」を**表現可能**にする。
-  **注意: 任意の `T` を包む共有三値型はまだ存在しない**。`grep -rn Undetermined crates/harness-core/src/`
-  は 8 件ヒットするが（測定日 2026-07-21）、すべて `crates/harness-core/src/git_probe.rs:35` の
-  `RepoProbe::Undetermined` — git 探索専用の三値であって汎用型ではない。
-  各 crate が三値を個別に再発明している状態で、型による強制は未実装。backlog `42b7c9af`。
+  **共有三値型は既に存在する**: `harness_core::verdict::Determination<T>`（任意の `T` を包む generic）
+  と `harness_core::verdict::Verdict`（gate 判定そのものの三値、`Clean`/`Violation`/`Undetermined`）。
+  `grep -rln 'harness_core::verdict::' crates/*/src/`（harness-core 自身を除く）は21ファイルにヒットする
+  （測定日 2026-07-22、測定点 `6d4312c5`）— blastguard/budgetguard/condukt/ctxrot/donegate/gauge/
+  harness-status/propguard/reviewgate/session-insights 等、各 crate が個別再発明するのではなく
+  この共有型へ収斂している。型による強制（`Verdict` は `Default`/`From<bool>` を持たず `#[must_use]`、
+  `Clean` は private witness で外部から偽造不可能）は `crates/harness-core/src/verdict.rs` の
+  doc comment で契約として明文化済み。
 - subprocess は `stdout` だけでなく**必ず終了ステータスを判定に使う**。落ちたチェッカは合格したチェッカではない。
 - 閾値の sanitize は**ゲートを無効化しない範囲に clamp** する（床なし clamp は「常に合格」を意味する）。
 

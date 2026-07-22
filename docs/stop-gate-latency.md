@@ -38,9 +38,18 @@ Therefore every gate MUST be:
 - **Side-effect-isolated.** A gate writes only its OWN state (its own
   `~/.<gate>/state/...` files). It must not mutate another gate's state, and it
   must not rely on shared mutable state being in a particular condition.
-- **Never-break-a-turn.** A gate that errors internally allows the stop (exit 0);
-  only a deliberate, actionable verdict blocks. An observability write failing is
-  swallowed, never surfaced.
+- **Fail-closed on crash, for any gate that carries a verdict.** A gate whose
+  Stop handler can emit `{"decision":"block"}` runs its body under
+  `harness_core::gate::run::run_guarded`: a panic there means the check never
+  ran, so the crash itself is surfaced as a fail-closed block (bounded to one
+  occurrence via `stop_hook_active`, so a deterministically-crashing gate can't
+  trap the session) instead of silently allowing the stop. This applies to
+  donegate, reviewgate, propguard, tdd, budgetguard, autoflow, and ctxrot.
+  **Never-break-a-turn only applies to gates that carry no verdict** —
+  condukt's `record-run --all` (pure fugu-router bookkeeping), context-governor,
+  and precommit-audit never emit a block decision, so an internal error there is
+  swallowed and the stop allowed (exit 0); the observability write itself failing
+  is likewise swallowed, never surfaced.
 
 Because the gates are independent, their wall-times are effectively additive from
 the user's point of view: a Stop event is not "done" until all registered hooks

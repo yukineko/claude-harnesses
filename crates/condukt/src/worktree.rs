@@ -253,6 +253,105 @@ fn validate_branch(branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate a run id used as a cross-session NAMESPACE segment. It is spliced
+/// into both a worktree topic (one path component) and a branch ref, so it must
+/// satisfy the *stricter* of the two: the [`validate_topic`] character class,
+/// with no path separators. Run ids are `run-%Y%m%d-%H%M%S` by default but can
+/// be supplied by the caller, so they are untrusted input.
+fn validate_run_ns(run: &str) -> Result<()> {
+    if run.is_empty() {
+        bail!("run namespace must not be empty");
+    }
+    if run.starts_with('-') || run.starts_with('.') {
+        bail!("run namespace {run:?} must not start with '-' or '.'");
+    }
+    if run.contains("..") {
+        bail!("run namespace {run:?} must not contain '..'");
+    }
+    if !run
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        bail!("run namespace {run:?} may only contain [A-Za-z0-9._-] (no path separators)");
+    }
+    Ok(())
+}
+
+/// The run-scoped worktree topic for `topic`.
+///
+/// Joined with `-`, NOT `/`, on purpose — two reasons, both load-bearing:
+///
+/// 1. [`validate_topic`] rejects path separators (a topic is a *single*
+///    component appended to `worktree_base`); that rejection is a traversal
+///    guard we do not want to relax, so the namespace is folded into the same
+///    single component instead.
+/// 2. [`orphans`] reads only the TOP level of `worktree_base`. A nested
+///    `<base>/<run>/<t1>` layout would make the intermediate `<base>/<run>` dir
+///    look like a `.git`-less, unattributable directory — i.e. it would be
+///    reported as condukt debris and swept.
+fn namespaced_topic(run: &str, topic: &str) -> String {
+    format!("{run}-{topic}")
+}
+
+/// The run-scoped branch ref for `branch`: the run id is inserted as its own
+/// path segment immediately before the final segment, so `condukt/t1` under run
+/// `run-A` becomes `condukt/run-A/t1`. Branch refs may contain `/` (see
+/// [`validate_branch`]), which keeps the refs grouped and greppable
+/// (`git branch --list 'condukt/run-A/*'`) and — critically — makes two runs
+/// emitting the same task id aim at DIFFERENT refs, so neither can be the
+/// "stale leftover" that [`create`] force-deletes.
+///
+/// This is additive with respect to legacy refs: an old un-namespaced
+/// `refs/heads/condukt/t1` is a ref *file* under `refs/heads/condukt/`, while
+/// the new ref lives under `refs/heads/condukt/<run>/`, so the two never
+/// collide and the old one is never targeted by the new naming.
+fn namespaced_branch(run: &str, branch: &str) -> String {
+    match branch.rsplit_once('/') {
+        Some((prefix, last)) => format!("{prefix}/{run}/{last}"),
+        None => format!("{run}/{branch}"),
+    }
+}
+
+/// Cross-session-namespaced [`create`]: cut the worktree for `topic`/`branch`
+/// under the namespace of run `run`.
+///
+/// Task ids (`t1`, `t2`, …) are per-run and NOT comparable across runs
+/// (`crate::claim` module docs), while `worktree_base` is machine-global. Two
+/// concurrent sessions that both emit `t1` therefore used to aim at the exact
+/// same dir and the exact same branch ref, which meant a hard bail at best and,
+/// at worst, `create`'s stale-ref `git branch -D` silently destroying a peer
+/// session's unmerged commits. Namespacing by run id removes the shared name,
+/// so the force-delete can only ever target this run's own leftover ref.
+///
+/// `run` is `None` for legacy/un-namespaced callers, which get exactly the old
+/// [`create`] behavior (byte-identical paths and refs) — worktrees and branches
+/// created by an older condukt stay addressable and are never re-targeted.
+pub fn create_namespaced(
+    repo: &Path,
+    worktree_base: &Path,
+    run: Option<&str>,
+    topic: &str,
+    branch: &str,
+) -> Result<PathBuf> {
+    match run {
+        None => create(repo, worktree_base, topic, branch),
+        Some(run) => {
+            validate_run_ns(run)?;
+            // Validate the *inputs* too, so a bad topic/branch is reported
+            // against what the caller passed rather than against the spliced
+            // form (create() re-validates the spliced result regardless).
+            validate_topic(topic)?;
+            validate_branch(branch)?;
+            create(
+                repo,
+                worktree_base,
+                &namespaced_topic(run, topic),
+                &namespaced_branch(run, branch),
+            )
+        }
+    }
+}
+
 /// Canonicalize `path`, falling back to canonicalizing the nearest existing
 /// ancestor and rejoining the non-existent trailing components when `path`
 /// itself does not exist yet (the common case here: we are about to create a
@@ -1767,6 +1866,99 @@ mod tests {
         assert!(validate_topic(".hidden").is_err());
         assert!(validate_topic("a b").is_err(), "spaces must be rejected");
         assert!(validate_topic("a;rm -rf").is_err());
+    }
+
+    #[test]
+    fn namespaced_topic_stays_a_single_validated_component() {
+        // The spliced topic must still satisfy validate_topic — otherwise
+        // create() would bail on our own construction. In particular it must NOT
+        // gain a path separator (orphans() only scans one level of
+        // worktree_base, and validate_topic is a traversal guard).
+        let t = namespaced_topic("run-20260723-101112", "t1");
+        assert_eq!(t, "run-20260723-101112-t1");
+        assert!(
+            validate_topic(&t).is_ok(),
+            "spliced topic must validate: {t}"
+        );
+        assert!(
+            !t.contains('/'),
+            "spliced topic must stay one component: {t}"
+        );
+
+        // Two runs, SAME task id -> different dirs. This is the whole point.
+        assert_ne!(
+            namespaced_topic("runA", "t1"),
+            namespaced_topic("runB", "t1")
+        );
+    }
+
+    #[test]
+    fn namespaced_branch_inserts_the_run_segment_and_never_matches_a_peer() {
+        assert_eq!(namespaced_branch("runA", "condukt/t1"), "condukt/runA/t1");
+        // No '/' in the input branch: the run becomes the leading segment.
+        assert_eq!(namespaced_branch("runA", "t1"), "runA/t1");
+        // Deeper prefixes keep their shape.
+        assert_eq!(namespaced_branch("runA", "a/b/t1"), "a/b/runA/t1");
+
+        for b in [
+            namespaced_branch("runA", "condukt/t1"),
+            namespaced_branch("runA", "t1"),
+            namespaced_branch("runA", "a/b/t1"),
+        ] {
+            assert!(
+                validate_branch(&b).is_ok(),
+                "spliced branch must validate: {b}"
+            );
+        }
+
+        // Two runs emitting the same task id must NEVER produce the same ref —
+        // that equality is exactly what let create()'s stale-ref `branch -D`
+        // destroy a peer session's unmerged commits.
+        assert_ne!(
+            namespaced_branch("runA", "condukt/t1"),
+            namespaced_branch("runB", "condukt/t1")
+        );
+        // And neither may equal the LEGACY un-namespaced ref, so old branches
+        // are never re-targeted by the new naming.
+        assert_ne!(namespaced_branch("runA", "condukt/t1"), "condukt/t1");
+    }
+
+    #[test]
+    fn validate_run_ns_rejects_separators_and_option_injection() {
+        assert!(validate_run_ns("run-20260723-101112").is_ok());
+        assert!(validate_run_ns("").is_err());
+        assert!(
+            validate_run_ns("a/b").is_err(),
+            "a '/' in the run id would escape the single-component topic"
+        );
+        assert!(validate_run_ns("..").is_err());
+        assert!(validate_run_ns("../evil").is_err());
+        assert!(validate_run_ns("-rf").is_err());
+        assert!(validate_run_ns(".hidden").is_err());
+        assert!(validate_run_ns("a b").is_err());
+        assert!(validate_run_ns("a;rm -rf").is_err());
+    }
+
+    #[test]
+    fn create_namespaced_without_a_run_is_byte_identical_to_legacy_create() {
+        // Backward compatibility: an older driver (or any caller that does not
+        // pass --run) must land on exactly the legacy path/branch.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        let base = tmp.path().join("wt");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+
+        let p = create_namespaced(&repo, &base, None, "t1", "condukt/t1").expect("legacy create");
+        assert_eq!(
+            p,
+            base.join("t1"),
+            "legacy layout must remain <worktree_base>/<topic>"
+        );
+        assert!(
+            git(&repo, &["rev-parse", "--verify", "refs/heads/condukt/t1"]).is_ok(),
+            "legacy branch name must be used verbatim"
+        );
     }
 
     #[test]

@@ -178,10 +178,10 @@ absent. Evidence cites `crates/condukt/skills/condukt/SKILL.md`.
 > PDO linkage respectively) but are not part of the "~10 telemetry/eval seed"
 > above; they appear in the DAG and the reachability table.
 > `condukt` also **mentions** `tdd` once ("tdd/specguard を経路面から補強",
-> `crates/condukt/skills/condukt/SKILL.md:831` "tdd/specguard を経路面") — that mention is a
+> `crates/condukt/skills/condukt/SKILL.md:842` "tdd/specguard を経路面") — that mention is a
 > conceptual reference, not a SKILL-level edge. It is **not** the whole story: condukt's
 > *binary* spawns it at `crates/condukt/src/oracle.rs:127` "tdd", documented at
-> `crates/condukt/skills/condukt/SKILL.md:767` "tdd oracle --task". See the scope limit below.
+> `crates/condukt/skills/condukt/SKILL.md:778` "tdd oracle --task". See the scope limit below.
 
 ---
 
@@ -264,7 +264,7 @@ Two nuances worth flagging:
   fugu-router-backed capability**.
 - **`tdd`** is a leaf **under this doc's edge rule only** (SKILL/agent-file
   invocations). condukt's SKILL mentions it conceptually at
-  `crates/condukt/skills/condukt/SKILL.md:831` "tdd/specguard を経路面" and issues no bash call to it —
+  `crates/condukt/skills/condukt/SKILL.md:842` "tdd/specguard を経路面" and issues no bash call to it —
   but condukt's *binary* does spawn it (`crates/condukt/src/oracle.rs:127` "tdd"),
   so "condukt never invokes tdd" is **false at the process level**. The leaf
   classification here means "no SKILL-level caller", not "no caller".

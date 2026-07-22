@@ -488,8 +488,17 @@ condukt state worktree-mode-check   # exit 0 + {"single_worktree":true} → 単�
 `schedule.batches` を**先頭から順に** 処理する (バッチ間は依存順、バッチ内は並列):
 
 バッチ内の各タスク `t` について:
-1. `WP=$(condukt worktree create --topic <t.id> --branch condukt/<t.id>)`
-2. `condukt state set --run $RID --task <t.id> --status running --worktree "$WP" --branch condukt/<t.id>`
+1. `WP=$(condukt worktree create --run "$RID" --topic <t.id> --branch condukt/<t.id>)`
+   **`--run "$RID"` は必ず渡す (クロスセッション名前空間)**: `worktree_base` はマシン共通
+   (`~/.condukt/worktrees`) で、タスク id (`t1` 等) は **run 内でしか意味を持たない**ため、同時実行中の
+   別セッションが同じ `t1` を出すと worktree dir も branch ref も**完全に一致**する。その結果
+   (a) `worktree path already exists` / `branch is already checked out` で弾かれるか、
+   (b) さらに悪く、`create` の stale-ref 掃除 (`git branch -D`) が**未 merge の peer セッションの
+   commit を破壊**する (peer が worktree dir を消して merge 前ならこの条件に一致する)。
+   `--run` を渡すと dir は `<worktree_base>/<RID>-<t.id>`、branch は `condukt/<RID>/<t.id>` になり、
+   2 つの run は決して同じ名前を指さない。以降の `--branch` はすべて **`condukt/$RID/<t.id>`** を使う。
+   (`--run` 省略時は従来の非名前空間レイアウトのまま = 後方互換。並列セッション下では使わないこと。)
+2. `condukt state set --run $RID --task <t.id> --status running --worktree "$WP" --branch condukt/$RID/<t.id>`
    **クロスセッション claim ゲート (PDO 衝突防止)**: `--status running` はこのタスクの `touched_files` を
    `<state>/<project>/claims.json` に自動占有する。**別 session の live な run が同じファイルを占有中**なら、
    この `state set` は skip JSON (`{"skipped":true,"conflicts":[...]}`) を stdout に出して **exit 1** し、
@@ -602,7 +611,9 @@ PLAN_EXIT=$?
 
 **fan-out 手順** (enabled のタスクのみ):
 1. `samples` 個の候補実装を作る。各候補 `k` に専用 worktree を切り (`condukt worktree create
-   --topic <t.id>-c<k> --branch condukt/<t.id>-c<k>`)、Phase 5 と同じ worker プロンプトで **並列に**
+   --run "$RID" --topic <t.id>-c<k> --branch condukt/<t.id>-c<k>` — Phase 5 と同じくクロスセッション
+   名前空間のため `--run` を必ず渡す。実 branch は `condukt/$RID/<t.id>-c<k>` になる)、
+   Phase 5 と同じ worker プロンプトで **並列に**
    起動する (1 メッセージで複数 `Task`)。Task の `description` は `"<t.id>-c<k>: <title>"`。
 2. 各候補を Phase 6 の verifier で検証し (`state check-criteria` → verifier-model 解決 → verifier agent)、
    `{candidate:"<t.id>-c<k>", pass:<bool>}` の verdict を集める。候補が明確に別アプローチを取っている場合は
@@ -1062,7 +1073,9 @@ condukt state gate --run $RID      # exit 0 まで完了宣言しない
 - **単一 worktree モード（`condukt state worktree-mode-check` exit 0）ではこの merge/remove ブロックを丸ごとスキップ**する
   （commit は既に既定ブランチ上にあり、per-task branch/worktree は存在しない）。gate 判定だけ行う。以下は per-task worktree モードのみ:
 - 各 verified タスクの worktree を **自分の turn 内で** 閉じる:
-  `condukt worktree merge --branch condukt/<id>` → `condukt worktree remove --path "$WP" --branch condukt/<id>`。
+  `condukt worktree merge --branch condukt/$RID/<id>` → `condukt worktree remove --path "$WP" --branch condukt/$RID/<id>`
+  （Phase 5 で `--run "$RID"` を渡して切った run-名前空間つき branch 名をそのまま使う。`--run` を
+  渡さずに切った旧レイアウトの worktree は従来どおり `condukt/<id>`）。
   最後に `condukt worktree cleanup` で orphan が無いことを確認。
 - **merge pre-flight 衝突への対処**: `condukt worktree merge` が merge pre-flight で衝突を検出した
   場合は以下の手順で対処する:

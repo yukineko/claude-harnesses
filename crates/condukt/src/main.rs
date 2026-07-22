@@ -504,6 +504,15 @@ enum WtAction {
         topic: String,
         #[arg(long)]
         branch: String,
+        /// Cross-session namespace (the run id). Task ids are per-run and not
+        /// comparable across runs, while worktree_base is machine-global, so two
+        /// concurrent sessions emitting the same task id would otherwise collide
+        /// on the dir AND on the branch ref (where the stale-ref `branch -D` in
+        /// create() could destroy the peer's unmerged commits). With --run the
+        /// worktree becomes <worktree_base>/<run>-<topic> and the branch becomes
+        /// <prefix>/<run>/<name>. Omit it for the legacy un-namespaced layout.
+        #[arg(long)]
+        run: Option<String>,
     },
     /// Merge <branch> into the configured default branch.
     Merge {
@@ -2724,8 +2733,14 @@ fn run_policy(action: PolicyAction) -> ! {
 fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
     let repo = worktree::toplevel(cwd)?;
     match action {
-        WtAction::Create { topic, branch } => {
-            let path = worktree::create(&repo, &cfg.worktree_base, &topic, &branch)?;
+        WtAction::Create { topic, branch, run } => {
+            let path = worktree::create_namespaced(
+                &repo,
+                &cfg.worktree_base,
+                run.as_deref(),
+                &topic,
+                &branch,
+            )?;
             println!("{}", path.display());
         }
         WtAction::Merge { branch } => {
@@ -4413,8 +4428,24 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
     }
 }
 
+/// Auto-generated run id.
+///
+/// The timestamp alone is only second-granular, so two sessions that ran
+/// `state init` within the same second collided on the id — and since the run id
+/// is what namespaces worktree dirs and branch refs
+/// (`worktree::create_namespaced`), a collision there re-opens the exact
+/// cross-session collision the namespace exists to close. The pid suffix
+/// disambiguates concurrent initializers: the two `condukt` processes are alive
+/// at the same instant, so the OS cannot have handed them the same pid.
+///
+/// Still `run-`-prefixed and still within the `[A-Za-z0-9._-]` class that
+/// `worktree::validate_run_ns` requires.
 fn default_run_id() -> String {
-    chrono::Local::now().format("run-%Y%m%d-%H%M%S").to_string()
+    format!(
+        "{}-{}",
+        chrono::Local::now().format("run-%Y%m%d-%H%M%S"),
+        std::process::id()
+    )
 }
 
 /// Auto-detect a terminal label: try `tty` output first, fall back to `pid-<PID>`.

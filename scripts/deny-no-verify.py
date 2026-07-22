@@ -110,6 +110,13 @@ BYPASS_LONG_MIN = "--no-v"
 # of them. Clusters are letters only — `-n5` is a value, not a cluster.
 SHORT_CLUSTER = re.compile(r"^-[A-Za-z]*n[A-Za-z]*$")
 
+# Subcommand options whose value is a SEPARATE token. Their value must not be
+# read as a flag: `git commit -m -n` is a commit whose message is "-n".
+OPTS_WITH_VALUE = ("-m", "--message", "-F", "--file", "-C", "--reuse-message",
+                   "-c", "--reedit-message", "--author", "--date", "-S",
+                   "--gpg-sign", "-t", "--template", "--fixup", "--squash",
+                   "--cleanup", "--trailer", "--pathspec-from-file")
+
 # git's global options that take their value as a SEPARATE token. The value is
 # not a flag, so it would otherwise be mistaken for the subcommand.
 GLOBAL_OPTS_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace",
@@ -175,7 +182,17 @@ def split_commands(command: str) -> list[list[str]] | None:
                 segments.append(current)
             current = []
         else:
-            current.append(tok)
+            # A backslash line continuation is an ESCAPE to posix shlex, not a
+            # separator, so the newline survives GLUED to the front of the next
+            # token: `git commit \<nl>--no-verify` lexes to
+            # ['git', 'commit', '\n--no-verify']. The flag then matches nothing,
+            # and a continuation before the subcommand yields '\ncommit', which
+            # is not in GUARDED_SUBCOMMANDS, so the segment is dismissed before
+            # the flag is even looked at. Both forms reached real git with the
+            # hook silent, in every version of this file including the first.
+            # The shell removes `\<nl>` entirely; stripping it here is the same
+            # answer arrived at one step later.
+            current.append(tok.lstrip("\r\n"))
     if current:
         segments.append(current)
     return segments
@@ -232,9 +249,20 @@ def is_bypass(tokens: list[str]) -> tuple[str, str] | None:
     # hooks off wholesale, and it does so for `post-commit` too, so the ledger
     # that is supposed to record an ungated commit never runs either. Checked
     # before the subcommand scan because it is a bypass of any subcommand.
+    #
+    # Only the VALUE of `-c` counts. Scanning every token made this a substring
+    # test over the whole command, so `git commit -m 'set core.hooksPath=... to
+    # enable'` — prose — was refused.
     for k, tok in enumerate(rest):
-        val = rest[k + 1] if tok == "-c" and k + 1 < len(rest) else tok
-        if HOOKSPATH_OVERRIDE in val.lower():
+        if tok not in ("-c", "--config-env") or k + 1 >= len(rest):
+            continue
+        if HOOKSPATH_OVERRIDE in rest[k + 1].lower():
+            # Deliberately refuses even a value pointing AT the repo's real
+            # hooks, which would strengthen the gate rather than skip it.
+            # Telling those apart means resolving the path against the repo's
+            # own config, and guessing wrong in the permissive direction costs
+            # the gate; the author can simply omit an override that is already
+            # the configured default.
             return "any subcommand", "-c core.hooksPath"
 
     sub = None
@@ -256,7 +284,18 @@ def is_bypass(tokens: list[str]) -> tuple[str, str] | None:
     if sub not in GUARDED_SUBCOMMANDS:
         return None
 
-    for tok in rest:
+    k = 0
+    while k < len(rest):
+        tok = rest[k]
+        # `--` ends the options; everything after it is a pathspec. A file
+        # literally named `-n` is not the bypass flag.
+        if tok == "--":
+            break
+        # Skip the VALUE of an option that takes one, so `git commit -m -n` (a
+        # commit whose message is "-n") is not read as the short bypass flag.
+        if tok in OPTS_WITH_VALUE:
+            k += 2
+            continue
         # `--no-verify`, and every abbreviation of it git would accept. The `=`
         # split covers `--no-verify=true`; git rejects that form, but refusing it
         # costs nothing and reading it as "not the flag" would not.
@@ -265,6 +304,7 @@ def is_bypass(tokens: list[str]) -> tuple[str, str] | None:
             return sub, tok
         if sub in SHORT_FLAG_SUBCOMMANDS and SHORT_CLUSTER.match(tok):
             return sub, tok
+        k += 1
     return None
 
 

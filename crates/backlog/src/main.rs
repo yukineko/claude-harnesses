@@ -1,6 +1,8 @@
 mod config;
+mod driver;
 mod hooks;
 mod install;
+mod liveness;
 mod lock;
 mod store;
 mod task;
@@ -148,10 +150,67 @@ enum Command {
         dry_run: bool,
     },
 
-    /// Manage the ~/.backlog/run.lock exclusive lock
+    /// Manage the per-project EXCLUSIVE lock (~/.backlog/locks/<project>.lock).
+    ///
+    /// Note: driving the queue does NOT require this lock. Per-task exclusivity
+    /// is provided by `next --claim`, which reserves a task in the same critical
+    /// section that selects it, so several sessions can drive one project's
+    /// queue concurrently. Use `driver register` to announce that you are
+    /// driving (non-exclusive); take this lock only when you genuinely need to
+    /// exclude every other session from a project.
     Lock {
         #[command(subcommand)]
         action: LockAction,
+    },
+
+    /// Announce/observe drivers of a project's queue WITHOUT excluding them.
+    ///
+    /// Any number of sessions may be registered for the same project at once.
+    /// This answers "is a driver active for this project" (what autoflow and
+    /// daily need) without serializing whole sessions the way the exclusive
+    /// lock does.
+    Driver {
+        #[command(subcommand)]
+        action: DriverAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum DriverAction {
+    /// Register this session as a driver of `--project`. Never fails because
+    /// another session is already registered.
+    Register {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        project: String,
+    },
+
+    /// Refresh this session's registration so it is not reaped as stale.
+    /// Upserts: a registration that was already reaped is written back, because
+    /// a session that heartbeats is alive right now.
+    Heartbeat {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        project: String,
+    },
+
+    /// Remove this session's registration (no-op if not registered).
+    Unregister {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        project: String,
+    },
+
+    /// Print the registered drivers as JSON. With `--project`, that project's
+    /// drivers only; without it, every project's. Always states `active`
+    /// explicitly — including `"undetermined": true` when the registry could
+    /// not be read, which is NOT reported as "no drivers".
+    Status {
+        #[arg(long)]
+        project: Option<String>,
     },
 }
 
@@ -180,10 +239,18 @@ enum LockAction {
         project: String,
     },
 
-    /// Print lock status as JSON, or "none". With `--project`, reports that
-    /// project's lock only. Without it, scans every project's lock and
-    /// reports whichever is most active (Active > Stale > None) — this is
-    /// the "is any driver active anywhere" scan `daily` depends on.
+    /// Print the project's liveness as JSON, or "none".
+    ///
+    /// This reports the UNION of the exclusive lock and the non-exclusive
+    /// driver registry, because `/flow` announces itself via `driver register`
+    /// rather than by taking the lock: reporting only the lock would answer
+    /// "none" while drivers were running. `kind` says which source answered,
+    /// and `drivers`/`driver_count` list every live driver. The legacy
+    /// contract is unchanged — `none` = nothing driving, `"stale": true` =
+    /// only a dead holder, any other object = active.
+    ///
+    /// With `--project`, reports that project only. Without it, scans every
+    /// project — the "is any driver active anywhere" scan `daily` depends on.
     Status {
         #[arg(long)]
         project: Option<String>,
@@ -322,7 +389,20 @@ fn run(cli: Cli) -> Result<()> {
             };
             match task {
                 Some(t) => {
-                    println!("{}", serde_json::to_string_pretty(&t)?);
+                    // Emit the computed (not stored) `hashkey` alongside the
+                    // task, exactly as `list --json` does. A driver that picks
+                    // with `next --claim` needs it for the cross-session claim
+                    // registry (`condukt state claim-task/release-task`) and
+                    // for its `overwatch begin --key`; without it, picking this
+                    // way would silently lose those keys.
+                    let mut v = serde_json::to_value(&t)?;
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert(
+                            "hashkey".to_string(),
+                            serde_json::Value::String(task::hashkey(&t.title, &t.project)),
+                        );
+                    }
+                    println!("{}", serde_json::to_string_pretty(&v)?);
                 }
                 None => {
                     println!("no pending tasks");
@@ -423,22 +503,10 @@ fn run(cli: Cli) -> Result<()> {
                     Some(p) => lock::status(p),
                     None => lock::status_any(),
                 };
-                match status {
-                    lock::LockStatus::None => println!("none"),
-                    lock::LockStatus::Active(info) => {
-                        println!("{}", serde_json::to_string_pretty(&info)?);
-                    }
-                    lock::LockStatus::Stale(info) => {
-                        // Print the info with an extra stale field. `info`
-                        // serializes to a JSON object, but stay fail-soft: if it
-                        // ever isn't one, print it as-is rather than panicking
-                        // (a `Stop`/CLI path must never abort on an unwrap).
-                        let mut v = serde_json::to_value(&info)?;
-                        if let Some(obj) = v.as_object_mut() {
-                            obj.insert("stale".to_string(), serde_json::Value::Bool(true));
-                        }
-                        println!("{}", serde_json::to_string_pretty(&v)?);
-                    }
+                let presence = driver::presence_at(project.as_deref(), None);
+                match liveness::status_value(status, presence) {
+                    None => println!("none"),
+                    Some(v) => println!("{}", serde_json::to_string_pretty(&v)?),
                 }
             }
             LockAction::Heartbeat {
@@ -447,6 +515,52 @@ fn run(cli: Cli) -> Result<()> {
             } => {
                 lock::heartbeat(&session_id, &project)?;
                 println!("lock heartbeat updated");
+            }
+        },
+
+        Command::Driver { action } => match action {
+            DriverAction::Register {
+                session_id,
+                project,
+            } => {
+                let info = driver::register_at(&session_id, std::process::id(), &project, None)?;
+                println!("{}", serde_json::to_string_pretty(&info)?);
+            }
+            DriverAction::Heartbeat {
+                session_id,
+                project,
+            } => {
+                driver::heartbeat_at(&session_id, std::process::id(), &project, None)?;
+                println!("driver heartbeat updated");
+            }
+            DriverAction::Unregister {
+                session_id,
+                project,
+            } => {
+                driver::unregister_at(&session_id, &project, None)?;
+                println!("driver unregistered");
+            }
+            DriverAction::Status { project } => {
+                // An unreadable registry is reported as `undetermined` with
+                // `active: true` — never as an empty driver list, which would
+                // read as "nobody is driving" (see driver.rs module docs).
+                let v = match driver::presence_at(project.as_deref(), None) {
+                    harness_core::verdict::Determination::Known(p) => json!({
+                        "project": project,
+                        "active": p.live_count() > 0,
+                        "undetermined": false,
+                        "count": p.live_count(),
+                        "drivers": p.live,
+                        "stale": p.stale,
+                    }),
+                    harness_core::verdict::Determination::Undetermined(why) => json!({
+                        "project": project,
+                        "active": true,
+                        "undetermined": true,
+                        "reason": format!("{why:?}"),
+                    }),
+                };
+                println!("{}", serde_json::to_string_pretty(&v)?);
             }
         },
     }

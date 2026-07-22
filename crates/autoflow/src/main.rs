@@ -55,7 +55,8 @@ enum Command {
     /// Silent when queue is empty and charter is fresh — never breaks a turn.
     SessionStart,
     /// PreCompact hook: if the flow loop is running in THIS session (this session
-    /// holds the backlog lock) and not opted out, drop a resume-flow marker so the
+    /// is a registered driver of the project) and not opted out, drop a
+    /// resume-flow marker so the
     /// next UserPromptSubmit re-injects a "/flow を再開" instruction. Never blocks
     /// compaction; silent when the gate isn't met.
     PreCompact,
@@ -76,7 +77,7 @@ fn main() {
 }
 
 /// Process-global guard for tests that mutate the `HOME` env var. Several test
-/// modules (lock.rs, main.rs) read the backlog lock under `$HOME/.backlog`; cargo
+/// modules (lock.rs, main.rs) read backlog's liveness state under `$HOME/.backlog`; cargo
 /// runs a binary's tests concurrently, so they must serialize behind ONE mutex
 /// (recovering from poison if a holder panics) to avoid a cross-test HOME race.
 #[cfg(test)]
@@ -134,11 +135,12 @@ fn stop_run(input: HookInput) {
 
         let cwd = input.cwd_or_current();
 
-        // Stand down while another live session holds the backlog lock for
-        // THIS project: a /flow or /backlog driver is already running condukt
-        // against this queue, and autoflow's auto-loop would double-drive it.
-        // (The lock is per-project, so an unrelated project's driver must not
-        // stand this session down.)
+        // Stand down while another live session is driving THIS project's
+        // queue: a /flow or /backlog driver is already running condukt against
+        // it, and autoflow's auto-loop would drive it a second time. Liveness
+        // is per-project, so an unrelated project's driver must not stand this
+        // session down; and a liveness answer we could not obtain counts as
+        // "active" (see lock::backlog_driver_active).
         if lock::backlog_driver_active(&cwd) {
             return;
         }
@@ -303,10 +305,11 @@ fn session_start_command() -> ! {
 /// Instruction re-injected on the first prompt after a `/compact`, mirroring the
 /// SessionStart `/flow` proposal wording. Kept as one const so the hook and its
 /// test agree on the text.
-const RESUME_FLOW_INJECT: &str = "直前に /compact したため flow ループを継続します: 中断した /flow の loop を次の一手から再開せよ（backlog lock は保持済み）。";
+const RESUME_FLOW_INJECT: &str = "直前に /compact したため flow ループを継続します: 中断した /flow の loop を次の一手から再開せよ（driver 登録は保持済み）。";
 
 /// PreCompact core (testable): drop the resume-flow marker iff (a) the flow loop
-/// is running in THIS session (this session holds the backlog lock) and (b) the
+/// is running in THIS session (this session is one of the project's registered
+/// drivers, or holds the exclusive lock) and (b) the
 /// user hasn't opted out via `resume_flow_on_compact = false`. Any gate miss
 /// writes nothing. Never panics, never blocks compaction.
 fn pre_compact_run(session_id: &str, cwd: &std::path::Path, cfg: &Config) {

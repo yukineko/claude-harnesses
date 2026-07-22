@@ -1,6 +1,6 @@
 ---
 name: flow
-description: 課題の供給（compass の次の一手 / backlog のキュー）から解決手段の実行（condukt、fugu-router がモデル選択）までを1本のループで貫く統合 driver。source→executor を束ねる「フレームワーク層」。SessionStart で開いている仕事があれば自動で提案され（承認後に起動）、手動でも `/flow` で起動できる。判定（どの source を引くか・止め時）は LLM、状態維持・ロック・モデル選択は既存バイナリ（compass/backlog/condukt/fugu-router）が担う。
+description: 課題の供給（compass の次の一手 / backlog のキュー）から解決手段の実行（condukt、fugu-router がモデル選択）までを1本のループで貫く統合 driver。source→executor を束ねる「フレームワーク層」。SessionStart で開いている仕事があれば自動で提案され（承認後に起動）、手動でも `/flow` で起動できる。判定（どの source を引くか・止め時）は LLM、状態維持・task 単位の claim・モデル選択は既存バイナリ（compass/backlog/condukt/fugu-router）が担う。同じ project を複数セッションが同時に回せる（キュー全体はロックしない）。
 argument-hint: "[任意: 直接の課題文。省略時は compass→backlog から自動でピック]"
 allowed-tools: Task, AskUserQuestion, Bash(backlog:*), Bash(compass:*), Bash(condukt:*), Bash(fugu-router:*), Bash(hypothesis:*), Bash(overwatch:*), Bash(git:*), Read
 ---
@@ -26,7 +26,7 @@ SOURCE（課題の供給）              EXECUTOR（解決手段の実行）
 >    **計測した証拠を添えて** validate/reject して閉じる（出荷だけでは validate しない＝build ≠ validate）。
 
 **役割分担（外さない）**: ループ制御（どの source を引くか・実行・検証・止め時の判定）は **この skill（LLM）**。
-状態維持・ロック・size routing・モデル選択は **既存バイナリ**（`compass` / `backlog` / `condukt` / `fugu-router`）。
+状態維持・task 単位の claim・size routing・モデル選択は **既存バイナリ**（`compass` / `backlog` / `condukt` / `fugu-router`）。
 この skill は新しい状態を持たず、**既存の決定論レイヤを束ねるだけ**。
 
 ## compass ／ flow ／ scout — どれから始めるか
@@ -53,7 +53,11 @@ SOURCE（課題の供給）              EXECUTOR（解決手段の実行）
 ## 競合しない理由（重要）
 
 - **source と executor は直交**し、state ディレクトリも別（compass / backlog / condukt はそれぞれ独立ストア）。
-- `/flow` は **backlog のロックを共有**して直列化する。`/backlog` と同時に走らせない（両方が condukt run を生むため）。**`/flow` は `/backlog` の上位互換**（compass ゲート＋複数 source を足したもの）。
+- **同じ project のキューを複数の `/flow` が同時に回してよい**。排他は **task 単位**で取る
+  （`backlog next --claim` が選択と予約を同一クリティカルセクションで行い、`condukt state claim-task` が
+  クロスセッションの最終ガード）。**キュー全体のロックは取らない** — それは 2 本目のセッションを
+  丸ごと締め出す過剰な直列化だった。分離するのは worktree/index であり、統合で決着させる。
+- `/backlog` と併走しても同様に task 単位で分かれる。**`/flow` は `/backlog` の上位互換**（compass ゲート＋複数 source を足したもの）。
 - compass は **ゲート兼優先順位付け**、backlog は **確定キュー**、condukt は **executor** という分担を崩さない。
 
 ---
@@ -105,7 +109,7 @@ esac
 
 | human gate | risk | reversible | confidence | 典型 verdict | 自答時の既定（recommend） |
 |---|---|---|---|---|---|
-| **ロック競合**（Step 2・生きた保有者） | low | high | high | auto | **stand down**（報告して clean exit。`--force` 自動奪取はしない） |
+| **排他ロック競合**（Step 2・他セッションが明示的に `lock acquire` 済み。driver の並走では発生しない） | low | high | high | auto | **stand down**（報告して clean exit。`--force` 自動奪取はしない） |
 | **resume 選択**（複数候補） | low | high | high | auto | 3-1 の優先度 pick 規則の先頭 |
 | **pivot-check**（Step 4・`pivot`） | medium | high | low | **escalate** | —（genuine な戦略判断なので人に聞く。既定案＝継続/persevere） |
 | **循環ブレーカー trip**（早期脱出・`condukt circuit check`） | low | high | high | auto | **clean stop**（ループを止め Step 4 へ） |
@@ -135,31 +139,41 @@ compass gap     # ゴール−現状の gap と候補の一手を出す
 
 > compass は「ONE に絞り残りは parked」が思想。`/flow` はそれを尊重し、compass の主筋を**最優先 source** として扱う。
 
-### Step 2 — ロック取得（クロスセッション直列化）
+### Step 2 — driver 登録（**排他ではない**）
 
-backlog のロックを使って二重ループを防ぐ:
+**キュー全体をロックしない。** 同じ project のキューは複数セッションが同時に回してよい。
+必要なのは **task 単位の排他**だけで、それは `backlog next --claim`（選択と予約が同一クリティカル
+セクション）と `condukt state claim-task` が既に保証している。**セッション丸ごとの直列化は過剰**であり、
+2 本目の `/flow` がキュー全体から締め出される原因だった（「同一 task の排他は当然だが、全部 lock は論外」）。
+
+自分が driver であることを **非排他** に登録する（他の driver が居ても**絶対に失敗しない**）:
 
 ```bash
-backlog lock status --project <CWD>
-backlog lock acquire --session-id <SESSION_ID> --project <CWD>
+backlog driver register --session-id "$CLAUDE_CODE_SESSION_ID" --project "$PWD"
+backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drivers[] に全員が並ぶ）
 ```
 
-> ロックは **project ごと** にスコープされる（`~/.backlog/locks/<project のハッシュ>.lock`）。
-> `--project` を付けずに `backlog lock status` を呼ぶと、**どの project かを問わず**
-> 「どこかで driver が動いているか」を全 project 横断でスキャンする（`daily` の起動判定専用）。
-> `/flow` 自身の競合チェックは**必ず `--project <CWD>` を付けて自分の project のロックだけ**を見ること
-> — 付け忘れると無関係な project のロックと衝突したと誤判定する。
+> 登録は **project ごと** にスコープされる（`~/.backlog/drivers/<project のハッシュ>/<session>.driver`）。
+> `--project` を付けずに `backlog lock status` を呼ぶと **全 project 横断**で「どこかで driver が
+> 動いているか」を返す（`daily` の起動判定専用）。`/flow` は**必ず `--project "$PWD"`** を付ける。
+> 登録は `autoflow`（Stop hook の自動ループ停止）と `daily`（当日実行のスキップ）が読む
+> 「この project で driver が動いているか」シグナルでもあるので、**登録と解除は飛ばさない**。
 
-- 別セッションがアクティブにロック保持中（**生きている保有者**）→ **Step 0.5 の policy-answer routing** に通す
-  （`--risk low --reversible high --confidence high`、`--question "生きた保有者がロック中。どうする?"`、
+- **他セッションが driver として登録済みでも、見送らない**。並走して構わない
+  （task の重複着手は `next --claim` と `claim-task` が防ぐ）。**待つのは解ではない。**
+- **例外 — 誰かが明示的に排他ロックを取っている場合**（`backlog lock status` の `kind` が
+  `exclusive-lock` で `stale` でない）: これは人間が「全セッションを締め出す」意図で
+  `backlog lock acquire` を打った状態なので尊重する。**Step 0.5 の policy-answer routing** に通す
+  （`--risk low --reversible high --confidence high`、`--question "他セッションが排他ロック中。どうする?"`、
   `--option "stand down" --option "wait" --option "force-steal" --recommend 0` → 既定 verdict は auto）:
-  - **auto（exit 0）** → `chosen`（＝stand down）を採用: `--force` の自動奪取はせず、「別セッションが実行中のため見送り」と
-    報告して**clean exit**（ロック未取得のまま正常終了。生きた保有者は決して奪わない）。自答は監査ログに残る。
+  - **auto（exit 0）** → `chosen`（＝stand down）を採用: 自動奪取はせず「排他ロック保持中のため見送り」と
+    報告して**clean exit**。自答は監査ログに残る。
   - **escalate（exit 2）／ 非自律・旧バイナリ・不正入力のフォールバック** → 従来どおり
     `AskUserQuestion`（待機 / 強制奪取 `--force` / 中止）。`--force` は **生きている保有者からも奪取**する
     （`backlog lock acquire --force ...`）。
-- stale（保有 pid が死亡）なら `acquire` が**自動で reap** するため `--force` は不要（自律・非自律とも同じ既存挙動）。
-- 取得失敗時は理由を報告して終了。
+- `kind` が `undetermined`（backlog が registry を読めなかった）→ **「driver 不在」とは読まない**。
+  安全側に倒し、理由を報告して見送る。
+- stale な登録・ロックは次の `register`／`acquire` が**自動で reap** する（TTL 30 分・heartbeat 基準）。
 
 ### Step 3 — 実行ループ（繰り返し）
 
@@ -186,16 +200,25 @@ backlog lock acquire --session-id <SESSION_ID> --project <CWD>
    condukt が判定し、非衝突タスクだけを並列バッチに、衝突・危険なものは自動で直列に落とす
    （**「並列が危険/高コストなら直列」はこの層で保証**される＝conservative: 迷えば直列）。
 
-   a. **バッチを取り出す**（優先度順の上位 N 件。並びは priority→weight 降順→created_at）:
+   a. **バッチを取り出す**（**1 件ずつ `--claim` で予約**しながら最大 N 件）:
       ```bash
-      backlog list --status pending --project "$PWD" --json   # 並び順どおりの JSON 配列
+      backlog next --claim --project "$PWD"   # 選択と予約が同一クリティカルセクション。N 回繰り返す
       ```
-      先頭から最大 **N 件**（既定 N=condukt の `max_parallel`。無指定なら **4**）を候補バッチとする。
-      各件の `id` / `title` / `notes` / **`hashkey`** を控える（sink で **id ごとに** `done`/`fail` する、
-      および claim の解放に必須）。backlog が 1 件だけなら従来どおり単一課題として扱う（N=1）。
-      **claim-skip ゲート（多重着手の防止）**: 候補バッチの各 item について
+      **`backlog list` で覗いて上位 N 件を自分のものと決めてはいけない**。`list` は純粋な read なので、
+      並走している別セッションと**同じ task を掴む**。`next --claim` は選んだ task を同じ
+      tasks-file ロックの中で `claimed` に落とすため、**2 つの driver が同じ task を受け取ることは無い**
+      （逆に、これがあるからキュー全体をロックする必要が無い）。
+      - 出力が `no pending tasks` になるまで、または **N 件**（既定 N=condukt の `max_parallel`。
+        無指定なら **4**）に達するまで繰り返す。
+      - 各件の `id` / `title` / `notes` / **`hashkey`**（`next --claim` の出力にも含まれる）を控える
+        （sink で **id ごとに** `done`/`fail` する、および claim の解放に必須）。1 件だけなら従来どおり
+        単一課題として扱う（N=1）。
+      - `next --claim` は**ロックを取れなかったとき何も返さない**（fail-closed な decline）ので、
+        `no pending tasks` が返っても即座に「キューが空」と断定せず、1 度は取り直す。
+      **claim-skip ゲート（多重着手の防止）**: 予約した各 item について
       `condukt state is-claimed --hashkey <hashkey>` を実行する。**exit 0（他セッションが既に claim 中）
-      → その item はスキップして次候補へ**（この機能の主目的＝クロスセッションでの二重着手防止）。
+      → その item は諦め、`backlog edit <id> --status pending` で**キューに戻してから**次候補へ**
+      （戻し忘れても `CLAIM_STALE_SECS`＝1 時間で自動復帰するが、他セッションを 1 時間待たせない）。
       `condukt` が無い/失敗した場合は fail-soft（従来どおりピックを続行）。
    b. **コスト/危険ゲート（直列フォールバック）** — 次のどれかに該当する候補は**バッチから外して 1 件ずつ直列**に回す（安全側）:
       - budgetguard が予算逼迫を示す → バッチ幅を絞る（極端なら N=1＝従来の直列に縮退）。
@@ -275,8 +298,8 @@ backlog lock acquire --session-id <SESSION_ID> --project <CWD>
 
 - `/condukt` は **`Task` ツールで非同期起動**（オーケストレーション継続のため）。
 - compass 由来の一手なら、`north_star / current_gap / measuring_stick` を文脈として課題文に添える。
-- **backlog バッチは 1 回の `/condukt` 呼び出し**（複数 condukt run を並走させない＝グローバル backlog ロック /
-  worktree / merge 競合を増やさない）。並列化は condukt 内部（Phase 5 の worktree 並列 + schedule.rs のバッチ）が担う。
+- **backlog バッチは 1 回の `/condukt` 呼び出し**（1 セッション内で複数 condukt run を並走させない＝
+  worktree / merge 競合を増やさない。別セッションの `/flow` と並走するのは前提どおり問題ない）。並列化は condukt 内部（Phase 5 の worktree 並列 + schedule.rs のバッチ）が担う。
 - **verify も自動で並列化される**: condukt の Phase 6 は worker 完了ごとに即 verifier を起動し待ち合わせしない
   （pipeline 検証）。バッチで複数 item を渡せば、その検証も item 横断で並列に走る＝別途 flow 側で verify を並列化する必要はない。
 
@@ -362,14 +385,14 @@ condukt state heartbeat --run "flow-$CLAUDE_CODE_SESSION_ID"
 （heartbeat が途切れた claim は TTL で自動 reap されるため、長時間のループでは各サイクルで呼ぶのが安全）。
 `condukt` が無い/失敗した場合は fail-soft（従来どおりループを続行）。
 
-**Step 2 で取得した backlog lock 自体も同じサイクルで heartbeat する**（`condukt state heartbeat` は
-claim registry 用で、backlog lock の生存とは別物）:
+**Step 2 で登録した driver 自体も同じサイクルで heartbeat する**（`condukt state heartbeat` は
+claim registry 用で、driver 登録の生存とは別物）:
 ```bash
-backlog lock heartbeat --session-id "$CLAUDE_CODE_SESSION_ID" --project "$PWD"
+backlog driver heartbeat --session-id "$CLAUDE_CODE_SESSION_ID" --project "$PWD"
 ```
-backlog lock の staleness は heartbeat_at ベースの TTL（既定30分）で判定されるため、長時間ループで
-これを呼ばないと、他セッションからの stale 誤判定で lock を奪われ得る。`backlog` が無い/失敗した場合は
-fail-soft（従来どおりループを続行）。
+driver 登録の staleness は heartbeat_at ベースの TTL（既定30分）で判定される。呼ばないと登録が
+stale として reap され、**その project で driver が動いていないと見なされて `autoflow` の自動ループや
+`daily` が動き出す**（＝二重駆動）。`backlog` が無い/失敗した場合は fail-soft（ループは続行）。
 
 続けて **決定論の循環ブレーカー**を1本のコマンドで判定する（cost・failure-streak・stall を集約。詳細は「早期脱出」）:
 ```bash
@@ -380,15 +403,17 @@ condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID"   # trip なら nonze
 
 3-1 に戻る。早期脱出条件（下記）に当たれば Step 4 へ。
 
-### Step 4 — ロック解放とサマリ
+### Step 4 — driver 登録の解除とサマリ
 
 source が尽きた / ユーザー中断 / 予算超過のいずれかで:
 
 ```bash
-backlog lock release --project "$PWD"
+backlog driver unregister --session-id "$CLAUDE_CODE_SESSION_ID" --project "$PWD"
 ```
 
-**早期脱出時もロック解放は必須**。
+**早期脱出時も解除は必須**（解除しないと `autoflow` / `daily` が最大 30 分「driver 稼働中」と
+読み続ける。TTL で最終的には reap されるが、その間は無駄に止まる）。
+Step 2 で例外的に `backlog lock acquire` した場合のみ `backlog lock release --project "$PWD"` も打つ。
 
 **overwatch anchor の解放（Step 3-1 の 7 で登録した各 anchor のライフサイクルを閉じる）**: 3-1 で
 `overwatch begin` した各 `<pdo-unit-id>` について、対応する `end` を呼ぶ:
@@ -397,14 +422,14 @@ overwatch end --key "<pdo-unit-id>" --status "<done|abandoned>"
 ```
 - `--status` は sink の結果を反映する（成功で閉じたなら `done`、失敗・未完で手放すなら `abandoned`）。
 - **バッチなら item ごとに `overwatch end`**（begin と同じ key＝各 item の `hashkey` を使う）。
-- **fail-soft**: `overwatch` バイナリが無い / 呼び出し失敗時は skip する（既存の backlog lock release /
+- **fail-soft**: `overwatch` バイナリが無い / 呼び出し失敗時は skip する（既存の driver unregister /
   claim 解放と同じ方針＝解放できなくても TTL で自動 reap されるため turn を壊さない）。
 
 最後に「処理件数・成功・失敗・残キュー・次に取り直した gap」を報告する。
 
 #### pivot-check（ループ終端の方向判断）
 
-ロック解放の直後、ループを正常終了した場合（中断・エラー以外）は以下を実行する:
+driver 登録の解除直後、ループを正常終了した場合（中断・エラー以外）は以下を実行する:
 
 ```bash
 compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"threshold":N,"reason":"…"}
@@ -433,7 +458,7 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
 
 | 状況 | 対応 |
 |---|---|
-| ユーザーが中断を指示 | 直ちに Step 4（ロック解放）へ |
+| ユーザーが中断を指示 | 直ちに Step 4（driver 登録の解除）へ |
 | 循環ブレーカーが trip（下記のとおり毎イテレーション `condukt circuit check --run RID` を実行し **nonzero**＝failure-streak がキャップ到達・予算超過・no-progress stall のいずれか） | **決定論的に clean stop**（ループを止め Step 4 へ。人にも policy にも聞かない hard stop。停止理由は verdict の JSONL に記録される）。非自律で追加確認を入れたい場合の**フォールバックのみ** `AskUserQuestion`「続行 / 中止」 |
 | budgetguard が予算超過を返す | ループ終了（Step 4）。残キューはそのまま次セッションへ（予算軸は上の circuit check にも consolidate 済み） |
 | compass ゲートが「再スコープが必要」を示す | ループを止め、`/compass` をユーザーに促す |
@@ -442,18 +467,21 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
 ## ハードルール
 
 - **source/executor の役割を混ぜない**: 課題の選定は compass/backlog、実行は condukt。`/flow` 自身は判定とループだけ。
-- **driver は1本**: `/flow` 実行中は `/backlog` を併走させない（backlog ロックで物理的に直列化されるが、ユーザーにも明示する）。
+- **キューを独占しない**: `/flow` は同じ project で並走してよい（排他は task 単位＝`next --claim` +
+  `condukt state claim-task`）。他セッションが driver 登録済みでも見送らない。**待つのは解ではない。**
+  ただし `backlog list` で覗いて上位 N 件を自分のものと決めるのは禁止（純粋 read なので重複着手する）。
 - **並列は「バッチを 1 condukt run に束ねる」で実現**（複数 condukt run を並走させない）: backlog に複数 ready 課題が
   あれば順列ではなく 1 回の condukt run に束ねて渡し、**並列/直列の実判定は condukt の `schedule.rs`（ファイル競合・
   Serial/Gated・shared-glob・依存層）に委譲**する。flow 自身は独立候補を束ねるだけで、危険/高コストなら condukt が
   自動で直列化する（conservative＝迷えば直列）。予算逼迫や明白な相互依存が読めるときは flow 側でバッチ幅を絞る（極端は N=1）。
 - **盲目実行しない**: compass ゲートが鮮明でない限り、自動でキューを流し始めない。
-- **ロック解放を絶対に飛ばさない**（早期脱出・エラー時も）。
+- **driver 登録の解除を絶対に飛ばさない**（早期脱出・エラー時も）。解除漏れは `autoflow` /
+  `daily` を最大 30 分止める。
 - **自律モードでは human gate を `condukt policy answer` に通す（Step 0.5）**: `autonomy-check` exit 0 のとき、
-  各ゲート（ロック競合 / resume 選択 / pivot）を per-gate の risk×reversible×confidence で
+  各ゲート（排他ロック競合 / resume 選択 / pivot）を per-gate の risk×reversible×confidence で
   `policy answer` に掛け、**auto は自答（Ask 撤去・監査ログに追記）／ escalate は従来 Ask（残す 質疑）／ block は拒否**。
   なお **failure-streak/予算/stall の早期脱出は policy answer ではなく決定論の `condukt circuit check` に集約**されており、
-  trip すれば人にも policy にも聞かず clean stop する（上記「早期脱出」）。routine なゲート（ロック競合＝stand down、
+  trip すれば人にも policy にも聞かず clean stop する（上記「早期脱出」）。routine なゲート（排他ロック競合＝stand down、
   resume＝優先 pick 先頭、循環ブレーカー trip＝clean stop）は auto で消え、
   **pivot は escalate**（genuine な戦略判断）として残る。自律で残る停止は **(a) pivot** **(b) worker blocked**
   **(c) deploy/push の GATED 承認** **(d) budgetguard 早期脱出**、および policy が escalate/block を返したゲート。

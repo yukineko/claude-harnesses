@@ -1,6 +1,6 @@
 [package]
 name = "daily"
-version = "0.3.9"
+version = "0.3.10"
 edition = "2021"
 rust-version.workspace = true
 description = "Daily-once task runner for Claude Code SessionStart: runs registered shell tasks at most once per calendar day, skips while a driver is working, and records a results report."

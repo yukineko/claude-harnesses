@@ -19,7 +19,7 @@ use crate::store::canonicalize_project;
 /// `ai-aegis`, a completely different repo). Scoping the lock file per project
 /// lets independent projects' `/flow` loops run concurrently while still
 /// serializing two sessions racing on the SAME project's queue.
-fn project_slug(project: &str) -> String {
+pub(crate) fn project_slug(project: &str) -> String {
     let canonical = canonicalize_project(project);
     format!("{:016x}", harness_core::hash::fnv1a64(canonical.as_bytes()))
 }
@@ -53,15 +53,22 @@ pub enum LockStatus {
     Active(LockInfo),
     /// Lock file exists but its heartbeat is older than the stale TTL.
     Stale(LockInfo),
-    /// No lock file.
+    /// No lock file. This is an *observation* — the file is genuinely absent,
+    /// so nobody holds the lock.
     None,
+    /// The lock could not be judged: a lock file exists but is unreadable or
+    /// unparseable, or the locks directory could not be scanned. This is NOT
+    /// `None`. Collapsing it into `None` would report "free" to callers that
+    /// use this to decide whether to start a second driver, which is the
+    /// permissive answer to a question we did not manage to answer.
+    Undetermined(String),
 }
 
 /// A lock is stale once its heartbeat is older than this many seconds without
 /// a refresh. Mirrors condukt's `stuck_ttl_secs` / overwatch's
 /// `LEASE_TTL_SECS` (both default to 1800s / 30min) for consistency across
 /// the harness's cross-session staleness registries.
-const LOCK_STALE_TTL_SECS: i64 = 1800;
+pub(crate) const LOCK_STALE_TTL_SECS: i64 = 1800;
 
 fn is_stale(info: &LockInfo, now: i64) -> bool {
     now.saturating_sub(info.heartbeat_at) > LOCK_STALE_TTL_SECS
@@ -84,20 +91,30 @@ fn lock_path_for(base: &Path, project: &str) -> PathBuf {
 }
 
 /// List every currently-present lock file's path, for the project-agnostic
-/// "is ANY project's driver active" scan (`status_any`). A missing/unreadable
-/// `locks/` directory reads as "no locks" (fail-soft — mirrors every other
-/// gate in this repo that treats an absent store as empty rather than erroring
-/// the CLI invocation), since the directory is created lazily on first
-/// `acquire` and its absence just means nobody has ever locked anything yet.
-fn all_lock_files(dir: &Path) -> Vec<PathBuf> {
-    match std::fs::read_dir(dir) {
-        Ok(entries) => entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|ext| ext == "lock"))
-            .collect(),
-        Err(_) => Vec::new(),
+/// "is ANY project's driver active" scan (`status_any`).
+///
+/// A `locks/` directory that has never been created reads as "no locks" — that
+/// is an observation, since the directory is created lazily on first `acquire`
+/// and its absence means nobody has ever locked anything. Any OTHER read
+/// failure is `Err`: we did not manage to look, and an empty list would be read
+/// downstream as "no driver is active", which is the permissive answer to an
+/// unanswered question.
+fn all_lock_files(dir: &Path) -> std::result::Result<Vec<PathBuf>, String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("reading {}: {e}", dir.display())),
+    };
+    let mut out = Vec::new();
+    for entry in entries {
+        let path = entry
+            .map_err(|e| format!("reading {}: {e}", dir.display()))?
+            .path();
+        if path.extension().is_some_and(|ext| ext == "lock") {
+            out.push(path);
+        }
     }
+    Ok(out)
 }
 
 fn read_lock(path: &Path) -> Option<LockInfo> {
@@ -314,7 +331,6 @@ pub fn status_at(project: &str, lock_dir: Option<&Path>) -> LockStatus {
 
 fn status_from_path(path: &Path) -> LockStatus {
     match read_lock(path) {
-        None => LockStatus::None,
         Some(info) => {
             if is_stale(&info, now_unix()) {
                 LockStatus::Stale(info)
@@ -322,6 +338,11 @@ fn status_from_path(path: &Path) -> LockStatus {
                 LockStatus::Active(info)
             }
         }
+        // Distinguish "no lock file" (an observation: nobody holds it) from
+        // "there IS a lock file but I could not read/parse it" (not an
+        // observation about the holder at all).
+        None if !path.exists() => LockStatus::None,
+        None => LockStatus::Undetermined(format!("unreadable lock file {}", path.display())),
     }
 }
 
@@ -336,19 +357,28 @@ pub fn status(project: &str) -> LockStatus {
 /// bare `backlog lock status` behavior (no `--project` flag) after the lock
 /// file layout became per-project: `daily` doesn't know or care which project
 /// a driver is working on, only whether one is running. Picks the single
-/// most "alive" result across all lock files: an `Active` lock anywhere wins
-/// over `Stale`, which wins over `None` (empty/missing `locks/` dir).
+/// most "alive" result across all lock files: `Active` anywhere wins over
+/// `Undetermined` (an Active lock already answers "yes, a driver is active"),
+/// which wins over `Stale`, which wins over `None`. `Undetermined` outranks
+/// `Stale`/`None` because both of those are read downstream as "not active" —
+/// a permissive answer we are not entitled to give when we failed to look.
 pub fn status_any_at(lock_dir: Option<&Path>) -> LockStatus {
     let dir = match lock_dir {
         Some(d) => locks_dir_for(d),
         None => locks_dir(),
     };
+    let files = match all_lock_files(&dir) {
+        Ok(f) => f,
+        Err(why) => return LockStatus::Undetermined(why),
+    };
     let mut best = LockStatus::None;
-    for path in all_lock_files(&dir) {
+    for path in files {
         let this = status_from_path(&path);
         best = match (&best, &this) {
             (LockStatus::Active(_), _) => best,
             (_, LockStatus::Active(_)) => this,
+            (LockStatus::Undetermined(_), _) => best,
+            (_, LockStatus::Undetermined(_)) => this,
             (LockStatus::Stale(_), _) => best,
             (_, LockStatus::Stale(_)) => this,
             _ => best,
@@ -858,6 +888,57 @@ mod tests {
         match status_any_at(Some(d)) {
             LockStatus::Active(i) => assert_eq!(i.session_id, "driver-sess"),
             other => panic!("expected Active from some-other-project, got {other:?}"),
+        }
+    }
+
+    // §3: "there is a lock file but I cannot read it" is not "there is no
+    // lock". The old code mapped both to `None`, i.e. "free" — the permissive
+    // answer to a question that was never answered.
+    #[test]
+    fn unreadable_lock_file_is_undetermined_not_none() {
+        let dir = tmp();
+        let d = dir.path();
+        std::fs::write(lock_path_for(d, "proj"), "{ not json").unwrap();
+        match status_at("proj", Some(d)) {
+            LockStatus::Undetermined(_) => {}
+            other => panic!("expected Undetermined for a corrupt lock file, got {other:?}"),
+        }
+        // ...and the cross-project scan must not launder it into None either.
+        match status_any_at(Some(d)) {
+            LockStatus::Undetermined(_) => {}
+            other => panic!("expected Undetermined from the any-project scan, got {other:?}"),
+        }
+    }
+
+    // An Active lock elsewhere already answers "a driver is active", so it
+    // outranks Undetermined; Undetermined still outranks Stale/None, which both
+    // read downstream as "not active".
+    #[test]
+    fn status_any_ranks_active_over_undetermined_over_stale() {
+        let dir = tmp();
+        let d = dir.path();
+        std::fs::write(lock_path_for(d, "corrupt"), "{ not json").unwrap();
+        let stale = LockInfo {
+            session_id: "stale-sess".to_string(),
+            pid: 1,
+            project: "proj-stale".to_string(),
+            acquired_at: 0,
+            heartbeat_at: 0,
+        };
+        std::fs::write(
+            lock_path_for(d, "proj-stale"),
+            serde_json::to_string(&stale).unwrap(),
+        )
+        .unwrap();
+        match status_any_at(Some(d)) {
+            LockStatus::Undetermined(_) => {}
+            other => panic!("undetermined must outrank stale, got {other:?}"),
+        }
+
+        acquire_at("live-sess", std::process::id(), "proj-live", Some(d)).unwrap();
+        match status_any_at(Some(d)) {
+            LockStatus::Active(i) => assert_eq!(i.session_id, "live-sess"),
+            other => panic!("an active lock must outrank undetermined, got {other:?}"),
         }
     }
 

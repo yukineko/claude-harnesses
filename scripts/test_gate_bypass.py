@@ -817,7 +817,13 @@ class DenyNoVerify(unittest.TestCase):
             "git commit --no-verify -m x",
             "git commit -n -m x",
             "git push --no-verify",
-            "git push -n origin main",
+            # `git push -n` was here and was WRONG — for push, `-n` is
+            # --dry-run, not --no-verify.  See
+            # test_the_short_flag_is_only_a_bypass_where_git_honours_it below,
+            # which now carries the `git push -h` evidence.  Replaced with the
+            # spellings push actually honours rather than dropped.
+            "git push --no-verify origin main",
+            "git push --no-verif origin main",
             "git merge --no-verify --no-ff feat",
         ):
             with self.subTest(command=command):
@@ -867,13 +873,40 @@ class DenyNoVerify(unittest.TestCase):
                 self.assertAllowed(command)
 
     def test_the_short_flag_is_only_a_bypass_where_git_honours_it(self):
-        """`-n` is --no-verify for commit/push and something else entirely for
-        everyone else.  Treating it as a bypass everywhere would deny `git log
-        -n 5`, which is how a guard like this gets turned off."""
+        """`-n` is --no-verify for COMMIT ONLY.  Every other subcommand spells
+        `-n` differently, so treating it as a bypass everywhere denies safe
+        commands, which is how a guard like this gets switched off.
+
+        This test previously asserted `assertDenied("git push -n")` and was
+        WRONG — it pinned a falsehood as if it were the specification, which is
+        exactly the failure mode CLAUDE.md 2(a) warns about.  The evidence is
+        recorded here so the next reader does not have to re-derive it.  From
+        the git on this machine:
+
+            $ git commit -h
+                -n, --no-verify       bypass pre-commit and commit-msg hooks
+            $ git push -h
+                -n, --dry-run         dry run
+                    --no-verify       bypass pre-push hook
+            $ git merge -h
+                -n                    do not show a diffstat at the end
+                    --no-verify       bypass pre-merge-commit and commit-msg hooks
+
+        So: commit honours the short form; push and merge are guarded for the
+        LONG flag only.  `git push -n` is a dry run — it contacts nothing and
+        skips nothing — and refusing it was a false positive on the safest
+        command in the set.
+        """
         self.assertDenied("git commit -n")
-        self.assertDenied("git push -n")
-        # `git merge -n` is --no-stat, not --no-verify.
+        self.assertDenied("git commit -n -m x")
+        # push: -n is --dry-run.  The long flag is still a bypass.
+        self.assertAllowed("git push -n")
+        self.assertAllowed("git push -n origin main")
+        self.assertAllowed("git push --dry-run origin main")
+        self.assertDenied("git push --no-verify origin main")
+        # merge: -n is --no-stat.  The long flag is still a bypass.
         self.assertAllowed("git merge -n feat")
+        self.assertDenied("git merge --no-verify feat")
 
     def test_non_bash_tools_are_allowed(self):
         for tool in ("Read", "Edit", "Write", "Glob"):
@@ -1015,13 +1048,19 @@ class KnownDefects(GateTestCase):
         )
         self.assertEqual(h.pre_push().returncode, 0, "DEFECT PINNED: and it pushes")
 
-    def test_DEFECT_deny_hook_misses_an_abbreviated_flag(self):
-        """DEFECT (severity: medium).  git accepts any unambiguous prefix of a
-        long option, so `git commit --no-verif` is `--no-verify`.  The hook
-        compares against the exact string and allows it.
+    def test_deny_hook_catches_an_abbreviated_flag(self):
+        """FIXED in 5453b4bc — this test is the INVERSION of the defect it used
+        to pin, per the contract in this class's header.
 
-        Confirmed against real git in the harness below: the abbreviated form
-        produces a commit that post-commit records, i.e. git honoured it.
+        git accepts any unambiguous prefix of a long option, so
+        `git commit --no-verif` is `--no-verify`.  The hook used to compare
+        against the exact string and allowed it.  It now accepts a token as the
+        flag when the token starts with `--no-v` and is a prefix of the full
+        spelling.
+
+        The harness below is kept unchanged: it is the independent evidence
+        that git really does honour the abbreviation, which is what makes the
+        assertion above worth making.
         """
         proc = subprocess.run(
             [_which("python3"), str(_SCRIPTS_DIR / "deny-no-verify.py")],
@@ -1036,9 +1075,8 @@ class KnownDefects(GateTestCase):
         )
         self.assertEqual(
             proc.returncode,
-            0,
-            "DEFECT PINNED: the abbreviation is allowed. When fixed, this must "
-            "become assertEqual(..., 2).",
+            2,
+            "the abbreviation must be refused; stderr:\n%s" % proc.stderr,
         )
 
         # ... and git really does treat it as the bypass.
@@ -1049,30 +1087,60 @@ class KnownDefects(GateTestCase):
         self.assertEqual(h.ran(), [], "git honoured the abbreviation: no gate ran")
         self.assertLedgerHas(h, 1, "the ledger did catch what the deny hook missed")
 
-    def test_DEFECT_deny_hook_misses_a_nested_shell(self):
-        """DEFECT (severity: medium).  The segment splitter knows `&&`, `||`,
-        `;`, `|` and newlines, and nothing about quoting or nesting.  Anything
-        that puts the bypass inside another word survives.
+    def _deny_hook(self, command):
+        return subprocess.run(
+            [_which("python3"), str(_SCRIPTS_DIR / "deny-no-verify.py")],
+            input=json.dumps(
+                {"tool_name": "Bash", "tool_input": {"command": command}}
+            ),
+            capture_output=True,
+            text=True,
+        )
+
+    def test_deny_hook_catches_a_subshell(self):
+        """PARTIALLY FIXED in 5453b4bc — the subshell half only.
+
+        This used to be one test over four commands, two of which are now fixed
+        and two of which are not.  Splitting it is deliberate: a single test
+        covering both would be GREEN on the fixed half and RED on the broken
+        half, and whichever way it was written, one half would be certifying the
+        other.  The wrapper half keeps its DEFECT name below.
+
+        `(` and `)` are now in SEPARATORS, so a subshell ends the segment
+        instead of shifting `git` out of argv[0].
+        """
+        for command in (
+            "(git commit --no-verify -m x)",
+            "( git commit --no-verify -m x )",
+            "echo $(git commit --no-verify -m x)",
+        ):
+            with self.subTest(command=command):
+                proc = self._deny_hook(command)
+                self.assertEqual(
+                    proc.returncode, 2, "%r must be refused" % command
+                )
+
+    def test_DEFECT_deny_hook_misses_an_interpreter_wrapper(self):
+        """DEFECT (severity: medium) — the half of the old nested-shell defect
+        that 5453b4bc did NOT fix, kept separate so the fixed half cannot
+        certify it.
+
+        `is_bypass` inspects argv[0] of each segment.  An interpreter takes the
+        whole command as a single quoted ARGUMENT, so `git` is never argv[0] and
+        the segment is dismissed.  Confirmed reaching real git.
 
         Not fatal on its own — the ledger still records the resulting commit —
-        but the module docstring claims this hook refuses the bypass "outright",
-        and for these forms it does not.
+        but the module docstring used to claim this hook refuses the bypass
+        "outright", and for these forms it does not.  The docstring now names
+        this hole explicitly instead.
         """
         for command in (
             "bash -c 'git commit --no-verify -m x'",
             "sh -c \"git commit -n\"",
-            "(git commit --no-verify -m x)",
-            "echo $(git commit --no-verify -m x)",
+            "eval 'git commit --no-verify -m x'",
         ):
             with self.subTest(command=command):
-                proc = subprocess.run(
-                    [_which("python3"), str(_SCRIPTS_DIR / "deny-no-verify.py")],
-                    input=json.dumps(
-                        {"tool_name": "Bash", "tool_input": {"command": command}}
-                    ),
-                    capture_output=True,
-                    text=True,
-                )
+                proc = self._deny_hook(command)
                 self.assertEqual(
                     proc.returncode, 0, "DEFECT PINNED: %r is allowed" % command
                 )
@@ -1333,62 +1401,227 @@ class QuotedSeparatorsDoNotDisableTheRefusal(DenyNoVerify):
 # commit landed and the hook never printed.  These are reproduced bypasses, not
 # suspicions.
 # ---------------------------------------------------------------------------
-class KnownDefectsDenyNoVerify(DenyNoVerify):
-    # Same override as the class above, for the same reason: every DEFECT test
-    # here was checked against an always-DENY mutant hook and observed to FAIL
-    # there.  Without that check a test asserting `returncode == 0` could be
-    # passing because it cannot tell 0 from 2.
+
+
+# ---------------------------------------------------------------------------
+# INVERSIONS.  Each test below was a `test_DEFECT_*` in this file until
+# 5453b4bc closed its defect; the DEFECT contract says the inversion is what
+# proves the fix, so these now assert the correct behaviour going forward.
+#
+# Every one was OBSERVED RED against the immediately preceding production file
+# (`git show f53f15b3:scripts/deny-no-verify.py`) and green on HEAD.  Pointing
+# DENY_HOOK_UNDER_TEST at that blob reproduces the red run.
+# ---------------------------------------------------------------------------
+class FixesLandedIn5453bc4(DenyNoVerify):
     SCRIPT = Path(os.environ.get("DENY_HOOK_UNDER_TEST",
                                  str(_SCRIPTS_DIR / "deny-no-verify.py")))
 
-    def test_DEFECT_REGRESSION_a_newline_between_commands_no_longer_splits(self):
-        """DEFECT (severity: HIGH — a REGRESSION introduced by 365941f8).
+    def test_a_newline_between_commands_splits_them(self):
+        """The regression the previous fix introduced, now closed.
 
-        The pre-fix `split_commands` split the raw string on `\\n`, so a
-        two-line Bash command with the bypass on the second line was DENIED.
-        The new one tokenizes with `shlex(whitespace_split=True)`, where a
-        newline is WHITESPACE and is never emitted as a token.  `"\\n"` is still
-        listed in SEPARATORS, but the lexer can never produce it, so the entry
-        is dead and the two lines are concatenated into ONE segment:
+        `punctuation_chars` does not make shlex emit a newline — a newline is
+        whitespace — so `"\\n"` sat in SEPARATORS as an entry the lexer could
+        never produce, and two lines FUSED into one segment whose argv[0] was
+        `cargo`.  A multi-line command string is the ordinary shape an agent
+        submits, so that hole was wider than the semicolon bug it shipped with.
 
-            split_commands("cargo test\\ngit commit --no-verify -m x")
-              -> [['cargo', 'test', 'git', 'commit', '--no-verify', '-m', 'x']]
-
-        `is_bypass` then reads `cargo` as argv[0], finds it is not git, and
-        returns None.  Exit 0.
-
-        A multi-line command string is the ordinary shape an agent submits, so
-        this is a wider hole than the quoted-separator one that was fixed.
-        Observed both ways: pre-fix exit=2, post-fix exit=0.
+        Now: `\\n`/`\\r` are moved out of `lexer.whitespace` into
+        `punctuation_chars`, and CRLF arrives as one `"\\r\\n"` token matched by
+        NEWLINE_TOKEN rather than by set membership.
         """
         for command in (
             "cargo test\ngit commit --no-verify -m x",
             "cd /repo\ngit commit -n -m x",
             "cargo fmt\ncargo test\ngit push --no-verify",
             "cargo test\r\ngit commit --no-verify -m x",
+            "cargo test\rgit commit --no-verify -m x",
+            "\ngit commit --no-verify -m x\n",
+            "cargo test\n\n\ngit commit --no-verify -m x",
+        ):
+            with self.subTest(command=command):
+                self.assertDenied(command)
+
+    def test_a_newline_does_not_split_inside_a_quoted_message(self):
+        """The other side of that change, and the one that could have been
+        broken by it: a multi-paragraph commit message is ONE argument.  If the
+        newline split inside quotes, a message that happens to contain a line
+        starting with `git commit` would be read as a second command.
+        """
+        self.assertAllowed('git commit -m "subject\n\nbody"')
+        self.assertAllowed('git commit -m "fix\ngit commit --no-verify was wrong"')
+        self.assertDenied('git commit --no-verify -m "subject\n\nbody"')
+
+    def test_ordinary_multi_line_work_is_still_allowed(self):
+        """Guard against buying the fix with a blanket refusal on multi-line
+        input.  Without this, a hook that denied every newline would pass the
+        test above."""
+        for command in (
+            "cargo fmt\ncargo test",
+            "cd /repo\ncargo build\ngit status",
+            "git add x\ngit commit -m ok",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
+    def test_whitespace_only_commands_do_not_crash_or_deny(self):
+        """`split_commands` returns `[]` for these.  An empty segment list is
+        the one case where "nothing to judge" really is nothing to judge, but it
+        is also exactly the shape that a `for seg in segments` loop silently
+        treats as clean, so it is asserted rather than assumed."""
+        for command in ("", "   ", "\n", "\r\n", "\n\n\n"):
+            with self.subTest(command=repr(command)):
+                proc = self.bash(command)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertNotIn("Traceback", proc.stderr)
+
+    def test_a_glued_short_option_cluster_is_recognised(self):
+        """`-nm`, `-anm`, `-nqm` are `--no-verify` as much as a bare `-n` is;
+        matching only the whole token `-n` missed all of them.  Confirmed
+        against real git: each committed with exit 0 and the hook never ran."""
+        for command in ("git commit -nm ok", "git commit -anm ok",
+                        "git commit -nqm ok", "git commit -nm 'a; b'"):
+            with self.subTest(command=command):
+                self.assertDenied(command)
+
+    def test_a_cluster_without_n_is_not_a_bypass(self):
+        """The boundary of the cluster rule.  No `git commit` short option
+        other than `-n` contains the letter `n`, which is why the rule is safe;
+        the clusters an author actually types must keep working."""
+        for command in ("git commit -am ok", "git commit -av",
+                        "git commit -sm ok", "git commit -qam ok"):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
+    def test_an_abbreviated_long_option_is_recognised(self):
+        """git accepts any UNAMBIGUOUS abbreviation of a long option.
+        Confirmed against real git: `--no-verif` and `--no-veri` both committed
+        with exit 0 and the hook never ran."""
+        for command in ("git commit --no-verif -m ok", "git commit --no-veri -m ok",
+                        "git commit --no-verify=true -m ok",
+                        "git push --no-verif origin main"):
+            with self.subTest(command=command):
+                self.assertDenied(command)
+
+    def test_an_ambiguous_abbreviation_is_not_claimed_to_be_the_flag(self):
+        """`--no-ver` is ambiguous between `--no-verbose` and `--no-verify`, and
+        git itself rejects it with exit 129 — it is not a bypass, so refusing it
+        would be a false positive.  `--no-verbose` is not a prefix of
+        `--no-verify`, so the prefix rule does not collide with it.
+
+        NOTE: `--no-ver` is still REFUSED, because it starts with `--no-v`.
+        That is over-matching on a command git would reject anyway, which is the
+        cheap direction; it is asserted here so the behaviour is a decision on
+        the record rather than an accident.
+        """
+        self.assertDenied("git commit --no-ver -m ok")
+        self.assertAllowed("git commit --no-verbose -m ok")
+        self.assertAllowed("git log --no-verbose")
+
+    def test_a_subshell_no_longer_shifts_git_out_of_argv0(self):
+        """`(` and `)` are emitted as tokens by `punctuation_chars` but were
+        absent from SEPARATORS, so they were appended INTO the segment and a
+        subshell reliably made `git` argv[N>0].  Confirmed against real git:
+        `( git commit --no-verify -m ok )` committed, hook never ran."""
+        for command in (
+            "( git commit --no-verify -m ok )",
+            "(git commit --no-verify -m ok)",
+            "cd /repo && (git commit -n -m ok)",
+            "echo $(git commit --no-verify -m ok)",
+            "case x in x) git commit --no-verify -m y ;; esac",
+        ):
+            with self.subTest(command=command):
+                self.assertDenied(command)
+
+    def test_hooksPath_override_is_refused(self):
+        """`git -c core.hooksPath=/dev/null commit -m ok` skips every hook while
+        carrying neither `--no-verify` nor `-n`.  It is worse than the flag
+        forms: it disables `post-commit` too, so the ledger that is supposed to
+        RECORD an ungated commit never runs either.  Confirmed against real git:
+        exit 0, hook never ran."""
+        for command in (
+            "git -c core.hooksPath=/dev/null commit -m ok",
+            "git -c core.hooksPath=/tmp/empty commit -m ok",
+            "git -c core.hooksPath=/dev/null push origin main",
+        ):
+            with self.subTest(command=command):
+                self.assertDenied(command)
+
+    def test_an_untokenizable_bypass_that_dodges_the_old_markers_is_refused(self):
+        """`looks_like_bypass` used to test for the literal `--no-verify` or a
+        bare `-n`.  `-nm` does not match `(?<!\\w)-n(?!\\w)` (the `m` is a word
+        character) and `--no-verif` is not the substring `--no-verify`, so an
+        untokenizable command using either dodged the fail-closed branch
+        entirely.  The screen is wider now: `--no-v`, `core.hookspath=`, or any
+        short cluster containing `n` near a `git`."""
+        for command in (
+            "git commit -nm 'unbalanced",
+            'git commit --no-verif -m "unbalanced',
+            'git commit -anm "unbalanced',
+            "git -c core.hooksPath=/dev/null commit -m 'unbalanced",
         ):
             with self.subTest(command=command):
                 proc = self.bash(command)
-                self.assertEqual(
-                    proc.returncode,
-                    0,
-                    "DEFECT PINNED (regression): %r. When fixed this must "
-                    "become assertDenied." % command,
-                )
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertIn("could not be parsed", proc.stderr)
 
-    def test_DEFECT_a_glued_short_option_bundle_is_not_recognised(self):
-        """DEFECT (severity: HIGH).  `is_bypass` compares whole tokens against
-        `-n`, so a bundled short option never matches.  git's parse-options
-        DOES honour the bundle.
+    def test_git_push_dash_n_is_a_dry_run_and_is_allowed(self):
+        """`git push -h` says `-n, --dry-run`.  The hook refused it, and an
+        older test asserted that refusal as if it were the spec.  Both are
+        corrected; the evidence lives in
+        `test_the_short_flag_is_only_a_bypass_where_git_honours_it`."""
+        self.assertAllowed("git push -n origin main")
+        self.assertAllowed("git push -n")
+        self.assertAllowed("git merge -n feat")
 
-        Confirmed against real git: `git commit -nm ok` and `git commit -anm ok`
-        both committed with exit 0 and the pre-commit hook never ran.  This is a
-        working bypass the hook allows.
+
+# ---------------------------------------------------------------------------
+# KNOWN DEFECTS still open after 5453bc4.  Same contract as the other
+# KnownDefects classes: each asserts the CURRENT, WRONG behaviour, is green by
+# construction, and must be INVERTED when its defect is fixed.  Nothing here is
+# an endorsement.
+#
+# Every "-> real bypass" note was CONFIRMED against real git in a throwaway repo
+# whose pre-commit hook prints and exits 1: the commit landed, the hook never
+# printed.
+# ---------------------------------------------------------------------------
+class KnownDefectsDenyNoVerify(DenyNoVerify):
+    SCRIPT = Path(os.environ.get("DENY_HOOK_UNDER_TEST",
+                                 str(_SCRIPTS_DIR / "deny-no-verify.py")))
+
+    def test_DEFECT_a_backslash_line_continuation_hides_the_flag(self):
+        """DEFECT (severity: HIGH).  Found while re-attacking 5453bc4; it is NOT
+        a regression from it — the same commands are allowed by every version of
+        this file, including the original.
+
+        A backslash-newline is a LINE CONTINUATION: the shell removes it
+        entirely, so `git commit \\<nl>--no-verify -m x` IS
+        `git commit --no-verify -m x`.  Confirmed against real git: exit 0, the
+        pre-commit hook never ran.
+
+        The hook does not turn the continuation into a separator — that part is
+        right, the segment does not split.  What happens is subtler: in posix
+        mode shlex treats the backslash as an ESCAPE, so the escaped newline
+        survives as a literal character glued to the FRONT of the next token.
+        Observed directly:
+
+            split_commands("git commit \\\\\\ngit --no-verify -m x")
+              -> [['git', 'commit', '\\n--no-verify', '-m', 'x']]
+
+        The token is `'\\n--no-verify'`, which equals neither `--no-verify` nor
+        any prefix of it, so the flag scan misses it.  The same corruption hits
+        the SUBCOMMAND: `git \\<nl>commit --no-verify` yields `'\\ncommit'`,
+        which is not in GUARDED_SUBCOMMANDS, so the segment is dismissed before
+        the flag is ever considered.
+
+        Suggested fix, if it survives review: strip leading `\\r`/`\\n` from each
+        token after lexing, or drop `\\\\\\n` from the command before lexing the
+        way the shell itself does.  Not attempted here — the verifier does not
+        certify their own repair.
         """
         for command in (
-            "git commit -nm ok",
-            "git commit -anm ok",
-            "git commit -nqm ok",
+            "git commit \\\n--no-verify -m ok",
+            "git \\\ncommit --no-verify -m ok",
+            "git commit \\\n-nm ok",
         ):
             with self.subTest(command=command):
                 proc = self.bash(command)
@@ -1399,62 +1632,30 @@ class KnownDefectsDenyNoVerify(DenyNoVerify):
                     "fixed this must become assertDenied." % command,
                 )
 
-    def test_DEFECT_an_abbreviated_long_option_is_not_recognised(self):
-        """DEFECT (severity: HIGH).  git's parse-options accepts any UNAMBIGUOUS
-        abbreviation of a long option.  `is_bypass` compares against the literal
-        string `--no-verify`, so every abbreviation walks through.
+    def test_DEFECT_deny_hook_misses_an_interpreter_wrapper_or_prefix(self):
+        """DEFECT (severity: HIGH) — named in the module docstring as open.
 
-        Confirmed against real git: `git commit --no-verif -m ok` and
-        `--no-veri` both committed with exit 0, hook never ran.  `--no-ver` is
-        genuinely ambiguous (`--no-verbose` / `--no-verify`) and git rejects it
-        with exit 129, so allowing THAT one is correct — the boundary is pinned
-        by the last case here.
+        `is_bypass` inspects argv[0] of each segment.  An interpreter takes the
+        command as a single quoted ARGUMENT; a prefix command puts its own name
+        in argv[0].  Either way `git` is argv[N>0] and the segment is dismissed.
+        All confirmed reaching real git.
+
+        The subshell family `( … )` / `$( … )` / `case … )` was the half of this
+        that 5453bc4 DID close; it is asserted green in
+        FixesLandedIn5453bc4.test_a_subshell_no_longer_shifts_git_out_of_argv0
+        and deliberately not repeated here, so the fixed half cannot make this
+        list look shorter than it is.
         """
         for command in (
-            "git commit --no-verif -m ok",
-            "git commit --no-veri -m ok",
-            "git commit --no-ver -m ok",  # correctly allowed: git errors on it
-        ):
-            with self.subTest(command=command):
-                proc = self.bash(command)
-                self.assertEqual(proc.returncode, 0, "DEFECT PINNED: %r" % command)
-
-    def test_DEFECT_a_wrapper_or_subshell_hides_the_bypass(self):
-        """DEFECT (severity: HIGH).  `is_bypass` only inspects argv[0] of a
-        segment.  Anything that puts a word in front of `git` — a subshell, a
-        shell wrapper, `env`, `xargs` — makes argv[0] something other than git
-        and the segment is dismissed.
-
-        `(` and `)` make this worse than a plain prefix: `punctuation_chars`
-        emits them as their own tokens, but SEPARATORS does not contain them, so
-        they are appended INTO the segment rather than ending it.  A subshell
-        therefore reliably shifts git out of argv[0].
-
-        Confirmed against real git: `( git commit --no-verify -m ok )`,
-        `sh -c 'git commit --no-verify -m ok'` and `env git commit --no-verify
-        -m ok` all committed with exit 0 and the hook never ran.
-        """
-        for command in (
-            "( git commit --no-verify -m ok )",
-            "(git commit --no-verify -m ok)",
-            "cd /repo && (git commit -n -m ok)",
             "sh -c 'git commit --no-verify -m ok'",
             'bash -lc "git commit --no-verify -m ok"',
+            "eval 'git commit --no-verify -m ok'",
             "env git commit --no-verify -m ok",
             "nohup git commit --no-verify -m ok",
             "time git commit --no-verify -m ok",
-            "eval 'git commit --no-verify -m ok'",
             "echo ok | xargs -I{} git commit --no-verify -m {}",
             "if true; then git commit --no-verify -m ok; fi",
             "for i in 1; do git commit --no-verify -m ok; done",
-            "echo $(git commit --no-verify -m ok)",
-            # `;;` IS in SEPARATORS and the lexer does emit it, but the only
-            # shell construct that uses it is `case`, whose `x)` arm leaves a
-            # `)` token that SEPARATORS does not end a segment on.  So the
-            # separator entry cannot be exercised without also tripping this
-            # defect — which is why this case lives here and not in the
-            # separator control above.
-            "case x in x) git commit --no-verify -m y ;; esac",
         ):
             with self.subTest(command=command):
                 proc = self.bash(command)
@@ -1465,87 +1666,142 @@ class KnownDefectsDenyNoVerify(DenyNoVerify):
                     "assertDenied." % command,
                 )
 
-    def test_DEFECT_hooksPath_devnull_skips_the_gate_without_any_flag(self):
-        """DEFECT (severity: MEDIUM — a bypass the hook does not model at all).
+    def test_DEFECT_hooksPath_substring_fires_on_prose_in_a_message(self):
+        """DEFECT (severity: MEDIUM — a FALSE POSITIVE introduced by 5453bc4).
 
-        `git -c core.hooksPath=/dev/null commit -m ok` skips every hook without
-        containing `--no-verify` or `-n`.  Confirmed against real git: exit 0,
-        hook never ran.  `-c` is already in GLOBAL_OPTS_WITH_VALUE, so the
-        subcommand is resolved correctly — the flag scan simply has no rule for
-        it.  Same for `--git-dir` pointed somewhere without the hooks.
+        The hooksPath check reads:
+
+            val = rest[k + 1] if tok == "-c" and k + 1 < len(rest) else val
+            if HOOKSPATH_OVERRIDE in val.lower():
+
+        The `else tok` arm makes it a substring test over EVERY token in the
+        segment, including a quoted commit message.  So writing ABOUT the bypass
+        is refused as if it were the bypass:
+
+            git commit -m 'set core.hooksPath=.githooks to enable'   -> exit 2
+
+        Worse, `git -c core.hooksPath=.githooks commit -m ok` — which POINTS AT
+        the repository's real hooks and therefore makes the gate stronger, not
+        weaker — is refused for the same reason.
+
+        Suggested fix: inspect only the VALUE of `-c`/`--config-env`, not every
+        token.  The real bypass is still caught; the message prose is not.
         """
         for command in (
-            "git -c core.hooksPath=/dev/null commit -m ok",
-            "git -c core.hooksPath=/tmp/empty commit -m ok",
-        ):
-            with self.subTest(command=command):
-                proc = self.bash(command)
-                self.assertEqual(proc.returncode, 0, "DEFECT PINNED: %r" % command)
-
-    def test_DEFECT_an_untokenizable_bypass_can_dodge_both_markers(self):
-        """DEFECT (severity: HIGH — this one falsifies the docstring).
-
-        The module docstring claims of `looks_like_bypass`:
-
-            That screen is a necessary condition, not a guess: a command whose
-            raw text contains neither marker cannot be one of the two bypasses
-            this hook refuses
-
-        It can.  `-nm` does not match `(?<!\\w)-n(?!\\w)` (the `m` is a word
-        character) and `--no-verif` is not the substring `--no-verify`, yet both
-        are bypasses real git honours.  Combine either with an unbalanced quote
-        and the command is untokenizable AND dodges both markers, so the
-        fail-closed branch resolves to ALLOW.
-
-        The screen is therefore not a necessary condition, and the docstring
-        overstates the fix (CLAUDE.md 4).
-        """
-        for command in (
-            "git commit -nm 'unbalanced",
-            'git commit --no-verif -m "unbalanced',
-            "git commit -anm \"unbalanced",
+            "git commit -m 'set core.hooksPath=.githooks to enable'",
+            "git commit -m 'core.hooksPath=x'",
+            "git -c core.hooksPath=.githooks commit -m ok",
         ):
             with self.subTest(command=command):
                 proc = self.bash(command)
                 self.assertEqual(
                     proc.returncode,
-                    0,
-                    "DEFECT PINNED: untokenizable REAL bypass allowed because "
-                    "it carries neither marker: %r" % command,
+                    2,
+                    "DEFECT PINNED (false positive): %r is refused. When fixed "
+                    "this must become assertAllowed." % command,
                 )
 
-    def test_DEFECT_git_push_dash_n_is_dry_run_and_is_refused_anyway(self):
-        """DEFECT (severity: LOW, but it is a false positive on a safe command,
-        and a comment that states git's behaviour incorrectly).
+    def test_DEFECT_the_flag_scan_does_not_skip_option_values(self):
+        """DEFECT (severity: LOW — a false positive, and a narrow one).
 
-        deny-no-verify.py says:
+        `for tok in rest` walks every token including the VALUES of options that
+        take one, so a value that looks like a short cluster is read as one:
 
-            # `git commit -n` is the short form of --no-verify. ... so the short
-            # form is only treated as a bypass for the two subcommands that
-            # honour it.
-            if tok == BYPASS_SHORT and sub in ("commit", "push"):
+            git commit -m -n            -> exit 2  (message is literally "-n")
+            git commit -m ok -- -n      -> exit 2  (pathspec named "-n")
 
-        `git push -n` is NOT --no-verify.  Observed from git itself:
-
-            $ git push -h
-                -n, --dry-run         dry run
-                --no-verify           bypass pre-push hook
-
-        `-n` is --dry-run for push; the two are separate options.  A dry run
-        contacts nothing and skips nothing, so refusing it denies a safe
-        command, and `test_the_short_flag_is_only_a_bypass_where_git_honours_it`
-        above pins the mistaken belief as if it were the specification.
-
-        When fixed, `-n` must be honoured as a bypass for `commit` only, this
-        test must become assertAllowed, and that older test must drop its
-        `assertDenied("git push -n")`.
+        Rare enough that it is recorded rather than urgent, and it errs toward
+        refusal, which is the cheap direction.  A token that merely CONTAINS the
+        letter is correctly untouched (`path-n.txt`), so the cluster regex is
+        not the problem — the missing value-skip is.
         """
-        proc = self.bash("git push -n origin main")
-        self.assertEqual(
-            proc.returncode,
-            2,
-            "DEFECT PINNED: `git push -n` is a dry run and is refused.",
+        for command in ("git commit -m -n", "git commit -m ok -- -n",
+                        "git commit --author -n -m ok"):
+            with self.subTest(command=command):
+                proc = self.bash(command)
+                self.assertEqual(
+                    proc.returncode, 2, "DEFECT PINNED (false positive): %r" % command
+                )
+        # The boundary: a value that only contains `n` is fine.
+        self.assertAllowed("git commit -m ok path-n.txt")
+
+    def test_DEFECT_a_heredoc_body_quoting_the_command_is_refused(self):
+        """DEFECT (severity: MEDIUM — a FALSE POSITIVE, and the one that made
+        writing the commit message for this very fix impossible).
+
+        A heredoc body is DATA, but shlex has no shell grammar and tokenizes it
+        like argv.  Now that newlines split segments, a body LINE that begins
+        with the command is a segment whose argv[0] is `git`:
+
+            git commit -F - <<'EOF'
+            git commit --no-verify was allowed
+            EOF
+                -> segment ['git','commit','--no-verify','was','allowed'] -> exit 2
+
+        Prose that merely MENTIONS the flag is fine — only prose that quotes the
+        command at the start of a line trips it.  The workaround is
+        `git commit -F <file>`, which keeps the text out of the Bash string.
+
+        Is it fixable at this layer?  PARTLY, and the argument is worth stating
+        because it is not obvious.  A heredoc body is only executable when its
+        consumer is an interpreter (`sh <<EOF`), and interpreter wrappers are
+        ALREADY an open hole pinned above.  So dropping heredoc bodies — tokens
+        between `<<DELIM` and `DELIM` — loses no coverage this hook currently
+        has, and removes this false positive.  What is NOT fixable here is the
+        general case: `$(…)` bodies genuinely are executable, so prose and code
+        are indistinguishable without a real shell parser.  Documented rather
+        than papered over, per the request that produced this test.
+        """
+        for command in (
+            "git commit -F - <<'EOF'\nfix\n\ngit commit --no-verify was allowed\nEOF",
+            "git commit -F - <<'EOF'\nObserved:\n  git commit -nm ok\nEOF",
+        ):
+            with self.subTest(command=command):
+                proc = self.bash(command)
+                self.assertEqual(
+                    proc.returncode,
+                    2,
+                    "DEFECT PINNED (false positive): %r. When fixed this must "
+                    "become assertAllowed." % command,
+                )
+        # Prose that does not START a line with the command is already fine —
+        # the boundary, so a fix cannot be claimed by widening this test.
+        self.assertAllowed(
+            "git commit -F - <<'EOF'\nwe stopped using --no-verify\nEOF"
         )
+
+    def test_DEFECT_looks_like_bypass_is_noisy_on_untokenizable_input(self):
+        """DEFECT (severity: LOW — accepted over-matching, measured not guessed).
+
+        The fail-closed screen fires when `"git" in command.lower()` and a
+        `-[A-Za-z]*n[A-Za-z]*` cluster is present.  `"git"` is a SUBSTRING test,
+        so it matches `digits`, `legitimate`, `github`, `.gitignore`; the
+        cluster regex matches `-n` but also `-name`, `-ln`, `-not`, `-newer`.
+        Any untokenizable command combining the two is refused:
+
+            echo 'legitimate -name thing        -> exit 2
+            ls -ln /Users/x/src/harness/.git |… -> exit 2
+            cargo test --no-vendor 'unbalanced  -> exit 2   (via the --no-v arm)
+
+        This only fires on input that does not lex, and the remedy is to balance
+        the quote, so it is recorded as accepted cost rather than as a bug to
+        fix.  It is pinned because "accepted" should be a decision someone made,
+        not something discovered later by whoever hits it.
+        """
+        for command in (
+            "echo 'legitimate -name thing",
+            "echo 'github actions -n dry",
+            "ls -ln /Users/x/src/harness/.git | grep 'foo",
+            "cargo test --no-vendor 'unbalanced",
+            "git log --no-verbose 'unbalanced",
+        ):
+            with self.subTest(command=command):
+                proc = self.bash(command)
+                self.assertEqual(
+                    proc.returncode, 2, "DEFECT PINNED (over-match): %r" % command
+                )
+        # The screen is not unconditional: no marker, no refusal.
+        self.assertAllowed("echo 'unbalanced")
 
 
 if __name__ == "__main__":

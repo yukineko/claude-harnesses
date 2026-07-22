@@ -26,10 +26,21 @@
 //! detected nothing — in four cases, each with its own test:
 //!
 //! 1. the commit is made from a **linked worktree** (not the primary tree);
-//! 2. an **integration is in progress** (`MERGE_HEAD` / rebase / cherry-pick /
-//!    revert). §8 explicitly permits merge and conflict resolution in the main
-//!    tree; a gate that blocked integration would make the worktree workflow
-//!    undischargeable, because the merges it prescribes could never land;
+//! 2. an **integration is in progress**. §8 explicitly permits merge and
+//!    conflict resolution in the main tree; a gate that blocked integration
+//!    would make the worktree workflow undischargeable, because the merges it
+//!    prescribes could never land. This needs *two* sources, covering disjoint
+//!    moments — getting it wrong the first time (on-disk markers only) blocked a
+//!    real merge of this very branch:
+//!    * the **invocation context** ([`declared_integration`]) for a merge that
+//!      is succeeding, where git has written no marker at all;
+//!    * the **on-disk markers** (`MERGE_HEAD`, `CHERRY_PICK_HEAD`,
+//!      `REVERT_HEAD`, `rebase-merge/`, `rebase-apply/`) for an integration that
+//!      stopped and is being finished by hand.
+//!
+//!    An integration pass is printed to stderr rather than being silent, so an
+//!    exclusion that fires wrongly is visible in the output of the command it
+//!    let through;
 //! 3. **nothing is staged** — there is no shared-index content to certify;
 //! 4. **no other live session** is reported by either liveness input.
 //!
@@ -85,15 +96,76 @@ pub enum TreeRole {
 /// An in-progress operation that §8 explicitly permits in the primary tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntegrationKind {
-    /// `MERGE_HEAD` exists: a merge is being concluded.
+    /// A merge is being concluded.
     Merge,
-    /// `rebase-merge/` or `rebase-apply/` exists.
+    /// A rebase is replaying commits.
     Rebase,
-    /// `CHERRY_PICK_HEAD` exists.
+    /// A cherry-pick is being concluded.
     CherryPick,
-    /// `REVERT_HEAD` exists.
+    /// A revert is being concluded.
     Revert,
 }
+
+/// How the in-progress integration was observed.
+///
+/// Two sources are needed because they cover disjoint moments, which was the
+/// defect in the first version of this gate: it had only the first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegrationEvidence {
+    /// A marker git wrote into the git dir (`MERGE_HEAD`, `CHERRY_PICK_HEAD`,
+    /// `REVERT_HEAD`, `rebase-merge/`, `rebase-apply/`).
+    ///
+    /// Measured: git writes `MERGE_HEAD` only when a merge **stops** — a
+    /// conflict, or `--no-commit`. A merge that succeeds never writes it, so
+    /// this evidence exists precisely when the integration is *not* proceeding.
+    /// It is what a hand-completed conflicted merge/cherry-pick/revert presents
+    /// at `pre-commit` time.
+    OnDisk(&'static str),
+    /// The invocation context: git ran `.githooks/pre-merge-commit`, which is
+    /// fired for a merge commit and nothing else, and that hook declared it via
+    /// [`HOOK_ENV`] before `exec`ing `pre-commit`.
+    ///
+    /// This is the moment the on-disk markers do not cover — measured in
+    /// `tests/main_tree_guard_merge.rs`: at `pre-merge-commit` time none of
+    /// them exist. Honored only when git's own [`REFLOG_ACTION_ENV`]
+    /// corroborates it; see [`declared_integration`] for why that is not a
+    /// blanket bypass.
+    HookInvocation,
+}
+
+/// An integration in progress, with what makes it observable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Integration {
+    /// Which operation.
+    pub kind: IntegrationKind,
+    /// How it was observed.
+    pub evidence: IntegrationEvidence,
+}
+
+impl Integration {
+    /// One line naming the exclusion, printed whenever it is what lets a commit
+    /// through, so an integration pass is never silent.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let how = match self.evidence {
+            IntegrationEvidence::OnDisk(marker) => format!("{marker} on disk"),
+            IntegrationEvidence::HookInvocation => {
+                "declared by .githooks/pre-merge-commit and corroborated by GIT_REFLOG_ACTION"
+                    .to_string()
+            }
+        };
+        format!("{:?} in progress ({how})", self.kind)
+    }
+}
+
+/// Set by `.githooks/pre-merge-commit` before it `exec`s `pre-commit`, naming
+/// the hook git actually invoked.
+pub const HOOK_ENV: &str = "CONDUKT_GIT_HOOK";
+
+/// git's own record of the operation it is performing. Measured: git sets it to
+/// `merge <ref>` while running `pre-merge-commit`, and leaves it **unset** for
+/// an ordinary `git commit`.
+pub const REFLOG_ACTION_ENV: &str = "GIT_REFLOG_ACTION";
 
 /// Where a peer-session observation came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,7 +207,7 @@ pub struct Observations {
     /// Primary tree or linked worktree.
     pub tree_role: Determination<TreeRole>,
     /// `Known(None)` = no integration in progress.
-    pub integration: Determination<Option<IntegrationKind>>,
+    pub integration: Determination<Option<Integration>>,
     /// Paths staged for this commit. `Known(vec![])` = nothing staged.
     pub staged_paths: Determination<Vec<String>>,
     /// Live sessions that are not this one. `Known(vec![])` = observed, none.
@@ -153,6 +225,11 @@ pub struct Decision {
     pub verdict: Verdict,
     /// `Some(reason)` iff the verdict blocks and a non-blank override was set.
     pub override_reason: Option<String>,
+    /// `Some(description)` iff an exclusion — rather than "nothing to object
+    /// to" — is what made this pass. An integration pass is announced instead of
+    /// being silent, so an exclusion that fired wrongly is visible in the output
+    /// of the very command it let through.
+    pub pass_note: Option<String>,
 }
 
 impl Decision {
@@ -192,9 +269,56 @@ fn sanitize_override(raw: Option<&str>) -> Option<String> {
     }
 }
 
+/// Whether the invocation context itself says an integration is under way.
+///
+/// `hook` is [`HOOK_ENV`] — set by `.githooks/pre-merge-commit`, the hook git
+/// fires for a merge commit and for nothing else — and `reflog_action` is git's
+/// own [`REFLOG_ACTION_ENV`].
+///
+/// **Why this is not a knob that waves an ordinary commit through, and what it
+/// still is.** Both halves must agree, and the second is written by git, not by
+/// the caller: measured (`tests/main_tree_guard_merge.rs`, and the same result
+/// in a scratch repo), git sets `GIT_REFLOG_ACTION=merge <ref>` while running
+/// `pre-merge-commit` and leaves it **unset** for an ordinary `git commit`. So
+/// exporting the declaration by hand and running a normal commit does not
+/// exclude anything — there is a test for exactly that. What this is *not* is
+/// unforgeable: a caller who sets both variables deliberately can reach the
+/// exclusion, exactly as `git commit --no-verify` can skip the hook entirely.
+/// That is not the failure mode being defended against; the defended failure
+/// mode is an exclusion firing *silently* or *by accident*, and against that
+/// the answer is that every integration pass prints [`Integration::describe`]
+/// to stderr, in the output of the very command it let through.
+///
+/// A declaration git does not corroborate yields `None` — "not an integration"
+/// — rather than `Undetermined`. It is a real observation: nothing about the
+/// invocation says a merge is happening. If a future git stopped setting
+/// `GIT_REFLOG_ACTION`, real merges would fall through to the ordinary checks
+/// and could block; that direction is the restricted one, and the operator
+/// still has the documented override.
+#[must_use]
+pub fn declared_integration(
+    hook: Option<&str>,
+    reflog_action: Option<&str>,
+) -> Option<Integration> {
+    if hook?.trim() != "pre-merge-commit" {
+        // Only the merge hook declares. An unknown hook name is not honored.
+        return None;
+    }
+    let action = reflog_action?.trim();
+    let verb = action.split_whitespace().next()?;
+    // `git pull` that merges reports "pull"; `git merge` reports "merge".
+    if verb != "merge" && verb != "pull" {
+        return None;
+    }
+    Some(Integration {
+        kind: IntegrationKind::Merge,
+        evidence: IntegrationEvidence::HookInvocation,
+    })
+}
+
 /// The pure decision. `override_raw` is the raw environment value (or `None`).
 pub fn decide(obs: Observations, override_raw: Option<&str>) -> Decision {
-    let verdict = adjudicate(obs);
+    let Adjudication { verdict, pass_note } = adjudicate(obs);
     let override_reason = if verdict.blocks() {
         sanitize_override(override_raw)
     } else {
@@ -204,12 +328,36 @@ pub fn decide(obs: Observations, override_raw: Option<&str>) -> Decision {
     Decision {
         verdict,
         override_reason,
+        pass_note,
+    }
+}
+
+/// What [`adjudicate`] produces: the verdict, and — when an exclusion is what
+/// made it clean — a description of that exclusion.
+struct Adjudication {
+    verdict: Verdict,
+    pass_note: Option<String>,
+}
+
+impl Adjudication {
+    fn verdict(verdict: Verdict) -> Self {
+        Adjudication {
+            verdict,
+            pass_note: None,
+        }
+    }
+
+    fn excluded(note: String) -> Self {
+        Adjudication {
+            verdict: Verdict::from_findings(vec![]),
+            pass_note: Some(note),
+        }
     }
 }
 
 /// The checks, in the order that lets each exclusion answer before the more
 /// expensive question is asked.
-fn adjudicate(obs: Observations) -> Verdict {
+fn adjudicate(obs: Observations) -> Adjudication {
     let Observations {
         tree_role,
         integration,
@@ -219,35 +367,39 @@ fn adjudicate(obs: Observations) -> Verdict {
 
     let role = match tree_role.require() {
         Ok(r) => r,
-        Err(v) => return v,
+        Err(v) => return Adjudication::verdict(v),
     };
     if role == TreeRole::Linked {
         // Exclusion 1: a linked worktree has its own index. This is the
-        // behaviour §8 asks for, so it is the common green path.
-        return Verdict::from_findings(vec![]);
+        // behaviour §8 asks for, so it is the common green path and is not
+        // announced.
+        return Adjudication::verdict(Verdict::from_findings(vec![]));
     }
 
     let integration = match integration.require() {
         Ok(i) => i,
-        Err(v) => return v,
+        Err(v) => return Adjudication::verdict(v),
     };
-    if integration.is_some() {
-        // Exclusion 2: §8 permits integration in the primary tree.
-        return Verdict::from_findings(vec![]);
+    if let Some(integration) = integration {
+        // Exclusion 2: §8 permits integration in the primary tree, and a gate
+        // that blocked it would make the worktree workflow undischargeable —
+        // nothing a worktree produced could ever land. Announced, because this
+        // is the exclusion with the widest reach.
+        return Adjudication::excluded(integration.describe());
     }
 
     let staged = match staged_paths.require() {
         Ok(s) => s,
-        Err(v) => return v,
+        Err(v) => return Adjudication::verdict(v),
     };
     if staged.is_empty() {
         // Exclusion 3: no shared-index content is being committed.
-        return Verdict::from_findings(vec![]);
+        return Adjudication::verdict(Verdict::from_findings(vec![]));
     }
 
     let peers = match peers.require() {
         Ok(p) => p,
-        Err(v) => return v,
+        Err(v) => return Adjudication::verdict(v),
     };
 
     // Exclusion 4 is the empty-findings case below: observed, no peer.
@@ -267,7 +419,7 @@ fn adjudicate(obs: Observations) -> Verdict {
             ))
         })
         .collect();
-    Verdict::from_findings(findings)
+    Adjudication::verdict(Verdict::from_findings(findings))
 }
 
 // ---------------------------------------------------------------------------
@@ -333,10 +485,27 @@ pub fn observe_tree_role(repo: &Path) -> Determination<TreeRole> {
 
 /// Whether a merge / rebase / cherry-pick / revert is being concluded.
 ///
+/// Two sources, because they cover disjoint moments:
+///
+/// 1. the invocation context ([`declared_integration`]) — the only thing
+///    available while a *succeeding* merge is being committed, since git writes
+///    no marker then;
+/// 2. the on-disk markers — what a *stopped* integration (conflicted merge,
+///    cherry-pick, revert, rebase) presents when a human finishes it with
+///    `git commit`.
+///
 /// A missing marker is a real absence (`Known(None)`); a marker that exists but
 /// cannot be read is `Undetermined` — `boundary::read_to_string` draws exactly
 /// that line.
-pub fn observe_integration(repo: &Path) -> Determination<Option<IntegrationKind>> {
+pub fn observe_integration(
+    repo: &Path,
+    hook: Option<&str>,
+    reflog_action: Option<&str>,
+) -> Determination<Option<Integration>> {
+    if let Some(declared) = declared_integration(hook, reflog_action) {
+        return Determination::known(Some(declared));
+    }
+
     let git_dir = match git_line(repo, &["rev-parse", "--absolute-git-dir"]).require() {
         Ok(v) => PathBuf::from(v),
         Err(v) => {
@@ -354,7 +523,12 @@ pub fn observe_integration(repo: &Path) -> Determination<Option<IntegrationKind>
         ("REVERT_HEAD", IntegrationKind::Revert),
     ] {
         match boundary::read_to_string(&git_dir.join(name)).require() {
-            Ok(Some(_)) => return Determination::known(Some(kind)),
+            Ok(Some(_)) => {
+                return Determination::known(Some(Integration {
+                    kind,
+                    evidence: IntegrationEvidence::OnDisk(name),
+                }))
+            }
             Ok(None) => {}
             Err(_) => {
                 return Determination::undetermined(format!(
@@ -364,12 +538,18 @@ pub fn observe_integration(repo: &Path) -> Determination<Option<IntegrationKind>
         }
     }
     for dir in ["rebase-merge", "rebase-apply"] {
+        let marker: &'static str = dir;
         // A rebase state directory: presence is what matters. `read_dir_entries`
         // answers Known(empty) for "not there" and Undetermined for "there but
         // unreadable", but cannot distinguish "not there" from "there and
         // empty" — so consult the metadata directly and keep the same split.
         match std::fs::metadata(git_dir.join(dir)) {
-            Ok(_) => return Determination::known(Some(IntegrationKind::Rebase)),
+            Ok(_) => {
+                return Determination::known(Some(Integration {
+                    kind: IntegrationKind::Rebase,
+                    evidence: IntegrationEvidence::OnDisk(marker),
+                }))
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
                 return Determination::undetermined(format!(
@@ -577,6 +757,8 @@ fn git_lines(repo: &Path, args: &[&str]) -> Determination<Vec<String>> {
 /// Gather every observation from the real world.
 pub fn observe(repo: &Path) -> Observations {
     let self_session = std::env::var(SESSION_ENV).ok();
+    let hook = std::env::var(HOOK_ENV).ok();
+    let reflog_action = std::env::var(REFLOG_ACTION_ENV).ok();
     let tree_role = observe_tree_role(repo);
 
     // Only the primary-tree path needs the rest; but the struct is built whole
@@ -589,7 +771,7 @@ pub fn observe(repo: &Path) -> Observations {
         integration: if excluded {
             Determination::known(None)
         } else {
-            observe_integration(repo)
+            observe_integration(repo, hook.as_deref(), reflog_action.as_deref())
         },
         staged_paths: if excluded {
             Determination::known(Vec::new())
@@ -626,6 +808,7 @@ pub fn run_guard(cwd: &Path, json: bool) -> i32 {
                     None
                 },
                 verdict,
+                pass_note: None,
             };
             eprintln!(
                 "main-tree-guard: UNDETERMINED — cannot resolve the working tree root; \
@@ -648,11 +831,19 @@ pub fn run_guard(cwd: &Path, json: bool) -> i32 {
             },
             "reason": decision.verdict.reason().map(Reason::as_str),
             "override_reason": decision.override_reason,
+            "pass_note": decision.pass_note,
             "blocks": decision.blocks(),
             "exit_code": decision.exit_code(),
         });
         println!("{payload}");
         return decision.exit_code();
+    }
+
+    // An exclusion that let the commit through says so, in the output of the
+    // command it let through. A pass that nobody can see is a pass nobody can
+    // audit.
+    if let Some(note) = &decision.pass_note {
+        eprintln!("main-tree-guard: allowed — {note} (CLAUDE.md §8 permits this in the main tree)");
     }
 
     match (&decision.verdict, &decision.override_reason) {
@@ -744,7 +935,10 @@ mod tests {
             IntegrationKind::Revert,
         ] {
             let obs = Observations {
-                integration: Determination::known(Some(kind)),
+                integration: Determination::known(Some(Integration {
+                    kind,
+                    evidence: IntegrationEvidence::OnDisk("MARKER"),
+                })),
                 ..blocking()
             };
             let d = decide(obs, None);
@@ -753,7 +947,95 @@ mod tests {
                 "{kind:?} is integration, which §8 permits in the main tree: {d:?}"
             );
             assert_eq!(d.exit_code(), 0);
+            assert!(
+                d.pass_note.is_some(),
+                "an integration pass must be announced, not silent"
+            );
         }
+    }
+
+    #[test]
+    fn an_integration_pass_names_its_evidence() {
+        for (evidence, needle) in [
+            (
+                IntegrationEvidence::OnDisk("MERGE_HEAD"),
+                "MERGE_HEAD on disk",
+            ),
+            (IntegrationEvidence::HookInvocation, "pre-merge-commit"),
+        ] {
+            let obs = Observations {
+                integration: Determination::known(Some(Integration {
+                    kind: IntegrationKind::Merge,
+                    evidence,
+                })),
+                ..blocking()
+            };
+            let note = decide(obs, None).pass_note.expect("announced");
+            assert!(note.contains(needle), "{note:?} should name {needle:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_ordinary_pass_is_silent() {
+        // A linked-worktree pass and a nothing-staged pass are the normal
+        // course of events and carry no note; only an exclusion does.
+        let quiet = Observations {
+            tree_role: Determination::known(TreeRole::Linked),
+            ..blocking()
+        };
+        assert_eq!(decide(quiet, None).pass_note, None);
+        let quiet = Observations {
+            peers: Determination::known(vec![]),
+            ..blocking()
+        };
+        assert_eq!(decide(quiet, None).pass_note, None);
+    }
+
+    #[test]
+    fn the_hook_declaration_alone_does_not_make_an_integration() {
+        // git leaves GIT_REFLOG_ACTION unset for an ordinary commit (measured),
+        // so a declaration with nothing corroborating it excludes nothing.
+        assert_eq!(declared_integration(Some("pre-merge-commit"), None), None);
+        assert_eq!(
+            declared_integration(Some("pre-merge-commit"), Some("")),
+            None
+        );
+        assert_eq!(
+            declared_integration(Some("pre-merge-commit"), Some("commit")),
+            None
+        );
+        assert_eq!(
+            declared_integration(Some("pre-merge-commit"), Some("commit (amend)")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_corroborated_merge_declaration_is_an_integration() {
+        for action in ["merge side", "merge", "pull --no-rebase origin main"] {
+            assert_eq!(
+                declared_integration(Some("pre-merge-commit"), Some(action)),
+                Some(Integration {
+                    kind: IntegrationKind::Merge,
+                    evidence: IntegrationEvidence::HookInvocation,
+                }),
+                "{action:?} should corroborate the declaration"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_or_absent_hook_declaration_is_not_honored() {
+        assert_eq!(declared_integration(None, Some("merge side")), None);
+        assert_eq!(
+            declared_integration(Some("pre-commit"), Some("merge side")),
+            None,
+            "only the merge hook declares; pre-commit runs for ordinary commits too"
+        );
+        assert_eq!(
+            declared_integration(Some("post-commit"), Some("merge side")),
+            None
+        );
     }
 
     #[test]

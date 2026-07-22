@@ -100,10 +100,14 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
 
-    /// Serializes the tests that mutate the process-global `PATH`. donegate's
-    /// other unit tests (config/gate/install) do not spawn subprocesses, and
-    /// this module's own git-spawning code is only reached from inside these
-    /// serialized tests, so the mutation window is covered.
+    /// Serializes every test in this module that either mutates the
+    /// process-global `PATH` or spawns a real `git` subprocess. `PATH` is
+    /// process-wide, so a PATH-mutating test running concurrently with a
+    /// real-git test (cargo test's default thread-parallel execution) can
+    /// transiently blank the other thread's `PATH` mid-spawn, failing it with
+    /// a spurious `Os { code: 2, NotFound }`. This previously covered only the
+    /// PATH-mutating tests themselves and not the real-git ones, which is
+    /// exactly the race that caused the intermittent CI failures fixed here.
     static PROBE_PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn scratch_dir(tag: &str) -> PathBuf {
@@ -256,6 +260,9 @@ mod tests {
     /// restrictive branch, but the scan result itself must be honest, not Files).
     #[test]
     fn non_repo_dir_is_notrepo() {
+        let _g = PROBE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let root = scratch_dir("notrepo");
         if has_dot_git_ancestor(&root) {
             eprintln!("SKIPPED non_repo_dir_is_notrepo: scratch has a .git ancestor here");
@@ -271,6 +278,9 @@ mod tests {
     /// forcing every check under the fail-closed change (no over-block).
     #[test]
     fn clean_repo_is_empty_files_not_failed() {
+        let _g = PROBE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if !git_available() {
             eprintln!("skipping clean_repo_is_empty_files_not_failed: git not available");
             return;
@@ -313,6 +323,9 @@ mod tests {
     /// command with no output → `true` (clean ≠ failed).
     #[test]
     fn collect_reports_error_vs_empty_success() {
+        let _g = PROBE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if !git_available() {
             eprintln!("skipping collect_reports_error_vs_empty_success: git not available");
             return;

@@ -231,8 +231,8 @@
     },
     {
       "name": "deepwiki",
-      "description": "Repository architecture wiki for Claude Code: a /deepwiki command that maps the repo with a bundled Rust scanner, has a subagent write & refresh hierarchical wiki pages (.deepwiki/*.md) with source links, and tracks freshness against git. Inspired by Devin Wiki. Subscription-native (binary + subagent + command, no API key).",
-      "version": "0.1.3",
+      "description": "Repository architecture wiki for Claude Code: a /deepwiki command that maps the repo with a bundled Rust scanner, has a subagent write & refresh hierarchical wiki pages (.deepwiki/*.md) with source links, and tracks freshness against git. Inspired by Devin Wiki. Subscription-native (binary + subagent + command, no API key). v0.1.4: `scan.rs`'s three readdir walks (`scan`'s top-level summary, `walk`, `count_files`) no longer swallow an unreadable subdirectory or entry via `.flatten()`/`let-else` into the same silent skip as a legitimately-vanished one — a non-NotFound error now surfaces via `eprintln!` while the scan still degrades to whatever was readable (this is a best-effort repo-map generator feeding a wiki-writer subagent, not a gate, so partial results remain correct behavior — only the silent swallowing of a real permission error was the bug). New regression test scans a tree with a chmod-000 subdirectory and confirms the readable files are still counted.",
+      "version": "0.1.4",
       "category": "knowledge",
       "keywords": [
         "wiki",

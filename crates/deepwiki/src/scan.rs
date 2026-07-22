@@ -141,26 +141,40 @@ pub fn scan(root: &Path) -> RepoMap {
     walk(root, root, &mut map);
 
     // Top-level summary.
-    if let Ok(entries) = std::fs::read_dir(root) {
-        let mut tops: Vec<DirEntry> = Vec::new();
-        for e in entries.flatten() {
-            let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') && name != ".github" {
-                continue;
+    match std::fs::read_dir(root) {
+        Ok(entries) => {
+            let mut tops: Vec<DirEntry> = Vec::new();
+            for e in entries {
+                let e = match e {
+                    Ok(e) => e,
+                    Err(err) => {
+                        eprintln!(
+                            "warning: scan: unreadable entry in {}: {err}",
+                            root.display()
+                        );
+                        continue;
+                    }
+                };
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') && name != ".github" {
+                    continue;
+                }
+                let is_dir = e.path().is_dir();
+                if is_dir && SKIP_DIRS.contains(&name.as_str()) {
+                    continue;
+                }
+                let files = if is_dir { count_files(&e.path()) } else { 1 };
+                tops.push(DirEntry {
+                    name,
+                    is_dir,
+                    files,
+                });
             }
-            let is_dir = e.path().is_dir();
-            if is_dir && SKIP_DIRS.contains(&name.as_str()) {
-                continue;
-            }
-            let files = if is_dir { count_files(&e.path()) } else { 1 };
-            tops.push(DirEntry {
-                name,
-                is_dir,
-                files,
-            });
+            tops.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(b.files.cmp(&a.files)));
+            map.top_level = tops;
         }
-        tops.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(b.files.cmp(&a.files)));
-        map.top_level = tops;
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => eprintln!("warning: scan: cannot read {}: {e}", root.display()),
     }
 
     map.key_files.sort();
@@ -171,10 +185,22 @@ pub fn scan(root: &Path) -> RepoMap {
 }
 
 fn walk(root: &Path, dir: &Path, map: &mut RepoMap) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            eprintln!("warning: walk: cannot read {}: {e}", dir.display());
+            return;
+        }
     };
-    for e in entries.flatten() {
+    for e in entries {
+        let e = match e {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("warning: walk: unreadable entry in {}: {e}", dir.display());
+                continue;
+            }
+        };
         let path = e.path();
         let name = e.file_name().to_string_lossy().to_string();
         if path.is_dir() {
@@ -229,10 +255,25 @@ fn count_files(dir: &Path) -> usize {
     let mut n = 0;
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else {
-            continue;
+        let entries = match std::fs::read_dir(&d) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                eprintln!("warning: count_files: cannot read {}: {e}", d.display());
+                continue;
+            }
         };
-        for e in entries.flatten() {
+        for e in entries {
+            let e = match e {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!(
+                        "warning: count_files: unreadable entry in {}: {e}",
+                        d.display()
+                    );
+                    continue;
+                }
+            };
             let p = e.path();
             let name = e.file_name().to_string_lossy().to_string();
             if p.is_dir() {
@@ -308,5 +349,28 @@ mod tests {
         assert!(is_entry_point("src/main.rs", "main.rs"));
         assert!(is_entry_point("cmd/app/run.go", "run.go"));
         assert!(!is_entry_point("src/util.rs", "util.rs"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_does_not_panic_on_unreadable_subdir() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("secret.rs"), "// hi\n").unwrap();
+        let mut perms = std::fs::metadata(&locked).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&locked, perms.clone()).unwrap();
+        let result = std::panic::catch_unwind(|| scan(dir.path()));
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&locked, perms).unwrap();
+        assert!(result.is_ok(), "scan must not panic on an unreadable subdir");
+        let map = result.unwrap();
+        assert!(
+            map.total_files >= 1,
+            "scan must still return the readable files it found, not an empty map"
+        );
     }
 }

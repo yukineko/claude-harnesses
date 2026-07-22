@@ -2255,10 +2255,22 @@ fn run_review_brief(
         kind: task.kind.clone(),
     };
     let task_key = format!("{run_id}/{task_id}");
-    // Fail-soft: an unreadable/absent ledger simply means no tripped
-    // invariants can be surfaced (never a hard error for this read-only
-    // digest command).
-    let violations = overwatch::store::read_violations(cwd).unwrap_or_default();
+    // The review brief's "tripped invariants" section is read by a human (or a
+    // reviewing agent) as a statement about this task's risk, so an EMPTY
+    // section is consumed as "nothing has tripped" — a verdict. An `Absent`
+    // ledger is a real empty and is fine; an `Undetermined` one (unreadable, or
+    // holding a line this build cannot decode) is NOT, and is refused with a
+    // non-zero exit rather than rendered as a clean brief. This is a read-only
+    // digest command, so erroring costs a re-run and hides nothing.
+    let violations = match overwatch::store::scan_violations(cwd) {
+        overwatch::store::ViolationScan::Absent => Vec::new(),
+        overwatch::store::ViolationScan::Events(events) => events,
+        overwatch::store::ViolationScan::Undetermined => bail!(
+            "the overwatch violation ledger could not be read, or holds a line this build \
+             cannot decode — the review brief's tripped-invariant section would be \
+             silently incomplete. Refusing to emit a brief that reads as clean."
+        ),
+    };
     // Use the SAME repo-aware sensitive config the diff-risk recorder uses
     // (diffrisk_record::repo_sensitive_config adds hooks/, .claude-plugin/,
     // skills/ on top of blastguard's defaults), so the brief's own

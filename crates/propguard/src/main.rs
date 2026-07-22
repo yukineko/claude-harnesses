@@ -287,12 +287,18 @@ fn check_run(hook: Option<HookInput>) -> ! {
 /// (including every other `Allow` tag and every `Block`) passes through
 /// completely unchanged.
 ///
-/// **Fail-soft**: every overwatch call here is best-effort. If recording the
-/// occurrence, reading it back, or recording the finding fails for any
-/// reason, this falls back to treating the outage as isolated (the original
-/// `Allow` stands) — an overwatch outage must never itself flip propguard to
-/// fail-closed, and must never panic or change the isolated per-task
-/// give-up behavior.
+/// **Recording is fail-soft; READING BACK is not.** Failing to *append* the
+/// occurrence, or to record the review finding, is best-effort and ignored (a
+/// write outage must not itself change the verdict, and nothing here panics).
+/// But if the ledger cannot be *read back* — unreadable file, or a line this
+/// build cannot decode — then whether this outage is fleet-wide is
+/// **undetermined**, and this returns a `Block` tagged
+/// `checker-outage-undetermined` rather than letting the give-up `Allow` ship.
+/// The previous `let Ok(events) = .. else { return false }` could never fire
+/// (the callee already swallowed every error into `Ok(vec![])`), so it read as
+/// error handling while being dead code; the real undetermined path resolved to
+/// `false` → `Allow{"checker-error-giveup"}` → unverified code shipped. See
+/// [`gate::escalate_giveup_on_outage_scan`].
 fn handle_checker_outage(decision: Decision, root: &Path, session: &str) -> Decision {
     if !matches!(
         &decision,
@@ -305,7 +311,7 @@ fn handle_checker_outage(decision: Decision, root: &Path, session: &str) -> Deci
     }
 
     let systemic = record_and_check_systemic_outage(root, session);
-    let decision = gate::escalate_giveup_on_systemic(decision, systemic);
+    let decision = gate::escalate_giveup_on_outage_scan(decision, systemic);
 
     if matches!(
         &decision,
@@ -337,9 +343,18 @@ fn handle_checker_outage(decision: Decision, root: &Path, session: &str) -> Deci
 /// recorded nothing, so the fleet had no signal at all), then query whether
 /// that signature has crossed overwatch's systemic-recurrence policy
 /// (occurrences >= threshold, spanning >1 distinct task or session — a
-/// single task retrying alone is never systemic). Fail-soft: any I/O error
-/// along the way returns `false` (treat as isolated) rather than propagating.
-fn record_and_check_systemic_outage(root: &Path, session: &str) -> bool {
+/// single task retrying alone is never systemic).
+///
+/// Returns a [`Determination<bool>`](harness_core::verdict::Determination), so
+/// the three answers stay three: `Known(true)` = confirmed systemic,
+/// `Known(false)` = checked and isolated, `Undetermined` = the ledger could not
+/// be read back and the question has NO answer. The append is still fail-soft
+/// (`let _ = ..`): a store we cannot write to is not evidence about recurrence,
+/// and the read-back that follows is what decides.
+fn record_and_check_systemic_outage(
+    root: &Path,
+    session: &str,
+) -> harness_core::verdict::Determination<bool> {
     let ts = overwatch::store::now();
     let task_key = format!("propguard:{}", root.display());
     let raw = overwatch::violation::RawViolation {
@@ -357,13 +372,26 @@ fn record_and_check_systemic_outage(root: &Path, session: &str) -> bool {
         let _ = overwatch::store::append_violation(root, &event);
     }
 
-    let Ok(events) = overwatch::store::read_violations(root) else {
-        return false;
+    use harness_core::verdict::Determination;
+    let events = match overwatch::store::scan_violations(root) {
+        // We appended above, so `Absent` normally means the append failed. It
+        // is still a real observation ("no occurrence is on record"), and one
+        // occurrence could not be systemic anyway — checked, isolated.
+        overwatch::store::ViolationScan::Absent => return Determination::Known(false),
+        overwatch::store::ViolationScan::Events(events) => events,
+        overwatch::store::ViolationScan::Undetermined => {
+            return Determination::undetermined(
+                "the overwatch violation ledger is unreadable or holds a line this build \
+                 cannot decode, so checker-outage recurrence could not be counted",
+            )
+        }
     };
     let policy = overwatch::violation::RecurrencePolicy::default();
-    overwatch::violation::systemic_issues(&events, ts, policy)
-        .iter()
-        .any(|r| r.signature == "propguard:checker-outage")
+    Determination::Known(
+        overwatch::violation::systemic_issues(&events, ts, policy)
+            .iter()
+            .any(|r| r.signature == "propguard:checker-outage"),
+    )
 }
 
 /// Record a fleet-level overwatch violation for each failing PROP-* property

@@ -252,12 +252,34 @@ fn run_in(cwd: &Path) -> Result<()> {
     // rows (findings passed empty here; they take the richer path above). This
     // is the "consolidation": `--to-backlog` now drains the WHOLE unified
     // review queue, not just AI findings.
-    let events = store::read_violations(cwd).unwrap_or_default();
-    let systemic: Vec<_> =
-        violation::detect_recurrence(&events, store::now(), RecurrencePolicy::default())
-            .into_iter()
-            .filter(|r| r.is_systemic)
-            .collect();
+    //
+    // The violation ledger is read with the FAIL-CLOSED scan: `Absent` is a
+    // real "nothing was ever recorded" and bridges nothing, but `Undetermined`
+    // (unreadable file / undecodable line) must NOT be bridged as "no systemic
+    // violations". Since this bridge is fail-soft by contract (it always
+    // returns Ok so a broken store never breaks a caller), the undetermined
+    // case degrades to: bridge NOTHING from this source and say so loudly on
+    // stderr. Bridging nothing is safe here — the ledger is append-only, so a
+    // later run with a readable store bridges the same rows (the idempotency
+    // ledgers make the retry a no-op for anything already sent).
+    let systemic: Vec<_> = match store::scan_violations(cwd) {
+        store::ViolationScan::Absent => Vec::new(),
+        store::ViolationScan::Events(events) => {
+            violation::detect_recurrence(&events, store::now(), RecurrencePolicy::default())
+                .into_iter()
+                .filter(|r| r.is_systemic)
+                .collect()
+        }
+        store::ViolationScan::Undetermined => {
+            eprintln!(
+                "overwatch --to-backlog: WARNING — the violation ledger could not be read \
+                 or held an undecodable line; NO systemic-violation entries were bridged \
+                 from it. This is NOT a report of zero systemic violations; re-run once \
+                 the store is readable."
+            );
+            Vec::new()
+        }
+    };
     let rollbacks = store::read_rollbacks(cwd).unwrap_or_default();
     let escalations = review_escalation::read_open_escalations(cwd);
     // Open blocked merges (real conflicts + gated overlaps) drain too, keyed as

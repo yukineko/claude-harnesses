@@ -436,10 +436,21 @@ pub fn execute_from_violations(
     // The REAL audit source: cross-reference the population against the
     // observed violation stream. A gate-passed change that later shows up as a
     // violation is a miss the gates let through.
-    let violations = match overwatch::store::read_violations(cwd) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("benchkit auditsample: reading violation stream: {e:#}");
+    // Fail CLOSED on an undetermined stream: the misses are DERIVED from these
+    // violations, so an unreadable (or partly-undecodable) ledger would be
+    // measured as "the gates missed nothing" and would feed a falsely-favorable
+    // threshold proposal onto the ratify queue. `Absent` is the honest empty
+    // (no violation ever recorded); `Undetermined` exits 2 like any other I/O
+    // failure here.
+    let violations = match overwatch::store::scan_violations(cwd) {
+        overwatch::store::ViolationScan::Events(v) => v,
+        overwatch::store::ViolationScan::Absent => Vec::new(),
+        overwatch::store::ViolationScan::Undetermined => {
+            eprintln!(
+                "benchkit auditsample: the violation stream could not be read, or holds a \
+                 line this build cannot decode — the derived miss rate would UNDER-count. \
+                 Refusing to calibrate from an untrustworthy stream."
+            );
             return 2;
         }
     };

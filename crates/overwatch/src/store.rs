@@ -227,9 +227,28 @@ pub fn append_violation(cwd: &Path, event: &ViolationEvent) -> Result<()> {
     Ok(())
 }
 
-/// Read all gate-violation events from violations.jsonl. Returns an empty
-/// vec if the file doesn't exist or is empty (fail-soft, same contract as
-/// `read_events`).
+/// **FAIL-OPEN BY CONSTRUCTION — SCHEDULED FOR DELETION. Do not add callers.**
+/// Use [`scan_violations`] instead.
+///
+/// Reads violations.jsonl into a vec. Its `Result` is a lie: the `Err(_) =>
+/// Ok(Vec::new())` arm makes an UNREADABLE ledger byte-identical to one that
+/// has never recorded a violation, and the `if let Ok(event)` in the success
+/// arm silently DROPS any line this build cannot decode — a schema-drifted real
+/// violation vanishes from a list the caller reads as authoritative. Both
+/// collapses are observed by
+/// `crates/overwatch/tests/faultinject_read_violations.rs`, which drives this
+/// function and [`scan_violations`] under the same injected faults.
+///
+/// **It has no production callers left.** Every one was migrated to
+/// [`scan_violations`], each deciding explicitly what `Undetermined` means
+/// there: `bridge.rs` and `review_queue.rs` omit the source and announce it,
+/// `violation_cli.rs` and `condukt`'s review-brief refuse with a non-zero exit,
+/// `benchkit::auditsample` exits 2, and `propguard`'s checker-outage escalation
+/// blocks. The remaining references are test-only
+/// (`crates/specguard/src/main.rs`, `crates/benchkit/src/auditsample.rs` tests)
+/// plus the fault-injection oracle above, which asserts *against* this
+/// function's behaviour and therefore cannot compile without it. Deleting the
+/// function requires retiring that oracle, which is a human decision.
 pub fn read_violations(cwd: &Path) -> Result<Vec<ViolationEvent>> {
     let path = violations_path(cwd)?;
     match std::fs::read_to_string(&path) {
@@ -248,12 +267,11 @@ pub fn read_violations(cwd: &Path) -> Result<Vec<ViolationEvent>> {
     }
 }
 
-/// Three-valued result of reading the violation registry for a decision that
-/// must FAIL CLOSED on an undetermined store (the canary health gate). Unlike
-/// [`read_violations`] — which is fail-soft by contract for display/observational
-/// callers (any read/parse trouble collapses to an empty vec) — this scan keeps
-/// "genuinely no violations yet" DISTINCT from "cannot be trusted", so a
-/// fleet-defense caller can hold instead of reading a broken store as clean.
+/// Three-valued result of reading the violation registry: the ONLY sanctioned
+/// way to read it. It keeps "genuinely no violations yet" DISTINCT from "cannot
+/// be trusted", so no caller can read a broken store as clean. Its two-valued
+/// predecessor [`read_violations`] is retained only for the fault-injection
+/// oracle that asserts against it and has no production callers.
 #[derive(Debug)]
 pub enum ViolationScan {
     /// The registry file does not exist: no violation has ever been recorded
@@ -276,10 +294,11 @@ pub enum ViolationScan {
 
 /// Strictly scan the violation registry, distinguishing "absent" (legit empty)
 /// from "undetermined" (unreadable / partially-unparseable → untrustworthy)
-/// from a clean, fully-parsed event list. This is the fail-CLOSED counterpart
-/// to [`read_violations`]: use it only where an undetermined store must block
-/// (the canary health gate), so a broken/corrupt store is never silently read
-/// as "zero violations → proceed". A single non-empty line that fails to parse
+/// from a clean, fully-parsed event list. This is the fail-CLOSED replacement
+/// for [`read_violations`] and the reader every caller now uses; each decides
+/// at its own call site what `Undetermined` means there (block, refuse, exit
+/// non-zero, or omit-and-announce) so a broken/corrupt store is never silently
+/// read as "zero violations → proceed". A single non-empty line that fails to parse
 /// makes the WHOLE scan `Undetermined` — a schema-drifted line may be a real
 /// violation we can no longer see, so the count is untrustworthy.
 pub fn scan_violations(cwd: &Path) -> ViolationScan {

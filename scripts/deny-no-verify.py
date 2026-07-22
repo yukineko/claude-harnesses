@@ -46,12 +46,32 @@ Observed, not theorised:
 A single character in a commit message turned the refusal off. The separator
 split is now done on TOKENS (`shlex` with `punctuation_chars`), so a quoted
 separator stays inside its argument, and a command that still will not tokenize
-resolves to DENY rather than allow whenever the raw text carries the markers a
-bypass necessarily has (`--no-verify`, or `-n` alongside `git`). That screen is
-a necessary condition, not a guess: a command whose raw text contains neither
-marker cannot be one of the two bypasses this hook refuses, so allowing it is a
-decision, not a shrug. The payload branch above keeps its exemption; this one
-does not get to borrow it.
+resolves to DENY rather than allow whenever the raw text carries a bypass
+marker. The payload branch above keeps its exemption; this one does not get to
+borrow it.
+
+WHAT THIS HOOK DOES NOT CATCH. An adversarial verifier reproduced the following
+against real git, and they are recorded here rather than left for the next
+reader to rediscover:
+
+  - The first fix REGRESSED multi-line commands. `punctuation_chars` does not
+    make shlex emit a newline — it is whitespace — so `cargo test\ngit commit
+    --no-verify` fused into one segment and was allowed, while the pre-fix regex
+    had caught it. Fixed by moving `\n` out of the lexer's whitespace set; the
+    reasoning is in `split_commands`. A gate that was verified only against the
+    bug it targeted let a wider one in.
+
+  - STILL OPEN, all confirmed to reach git: interpreter wrappers
+    (`sh -c '…'`, `bash -lc`, `eval`), and command prefixes that shift `git` out
+    of argv[0] (`env`, `nohup`, `time`, `xargs`), and shell compound forms
+    (`if … then`, `for … do`, command substitution). `is_bypass` inspects argv[0]
+    of each segment, so anything that makes `git` argv[N>0] is invisible to it.
+    These are known holes, not clean paths.
+
+This hook is therefore a REDUCTION in the ways the gate can be stepped around,
+not a proof that it cannot be. The claim that the marker screen was "a necessary
+condition" appeared here and was false; `-nm`, `--no-verif`, and
+`-c core.hooksPath=` were all bypasses carrying none of the old markers.
 """
 
 from __future__ import annotations
@@ -62,11 +82,33 @@ import shlex
 import sys
 
 # `git commit -n` is the short form of --no-verify. `-n` means something else to
-# other git subcommands entirely (`git log -n 5`), so the short form is only
-# treated as a bypass for the two subcommands that honour it.
+# other git subcommands entirely, so the short form is only treated as a bypass
+# for the subcommand that actually honours it. Checked against the git on this
+# machine rather than assumed:
+#
+#     git commit -h  ->  -n, --no-verify   bypass pre-commit and commit-msg hooks
+#     git push   -h  ->  -n, --dry-run     dry run
+#     git merge  -h  ->      --no-verify   (no short form at all)
+#
+# So `push` and `merge` are guarded for the LONG flag only. An earlier version of
+# this file claimed `-n` was honoured by "the two subcommands" and refused
+# `git push -n origin main` — a dry run, the safest command in the list. The test
+# that pinned that belief was asserting a falsehood as spec; both are corrected.
 BYPASS_LONG = "--no-verify"
-BYPASS_SHORT = "-n"
+SHORT_FLAG_SUBCOMMANDS = ("commit",)
 GUARDED_SUBCOMMANDS = ("commit", "push", "merge")
+
+# git accepts any UNAMBIGUOUS abbreviation of a long option, so `--no-verif`
+# bypasses just as well as the full spelling. Matching the literal string let
+# every abbreviation through. Shorter than `--no-v` is ambiguous and git itself
+# rejects it (exit 129), but over-matching here costs nothing: the author
+# rephrases, and a refusal is the cheap direction.
+BYPASS_LONG_MIN = "--no-v"
+
+# A short-option CLUSTER containing `n` (`-nm`, `-anm`, `-nqm`) is `--no-verify`
+# just as much as a bare `-n` is; matching only the whole token `-n` missed all
+# of them. Clusters are letters only — `-n5` is a value, not a cluster.
+SHORT_CLUSTER = re.compile(r"^-[A-Za-z]*n[A-Za-z]*$")
 
 # git's global options that take their value as a SEPARATE token. The value is
 # not a flag, so it would otherwise be mistaken for the subcommand.
@@ -76,8 +118,18 @@ GLOBAL_OPTS_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace",
 
 # Shell control operators that end one command and start the next. `&` is here
 # too: `git commit --no-verify & ` backgrounds it, and a bypass that runs in the
-# background is still a bypass.
-SEPARATORS = frozenset({";", "&&", "||", "|", "&", "\n", ";;", "|&"})
+# background is still a bypass. `(` and `)` are here because a subshell shifts
+# `git` out of argv[0] — `( git commit --no-verify )` was reaching git while
+# this hook read `(` as the program name.
+SEPARATORS = frozenset({";", "&&", "||", "|", "&", ";;", "|&", "(", ")"})
+
+# Newlines are separators too, but they arrive as their own token shape (`\n`,
+# `\r\n`) rather than as one of the operators above.
+NEWLINE_TOKEN = re.compile(r"^[\r\n]+$")
+
+# Passing `-c core.hooksPath=...` disables the hooks outright, so it is a gate
+# bypass that carries neither `--no-verify` nor `-n`.
+HOOKSPATH_OVERRIDE = "core.hookspath="
 
 
 def split_commands(command: str) -> list[list[str]] | None:
@@ -89,12 +141,27 @@ def split_commands(command: str) -> list[list[str]] | None:
     shlex emit `;`, `|`, `&&` as tokens of their own while leaving a quoted one
     inside its argument, which is exactly the distinction that was missing.
 
+    A newline has to be taken away from shlex's `whitespace` set and handed to
+    `punctuation_chars` instead, or it is swallowed as ordinary spacing and the
+    commands either side of it FUSE into one segment. That is not hypothetical:
+    the first version of this function had `"\\n"` in SEPARATORS but a lexer that
+    could never emit it, so
+
+        cargo test\\ngit commit --no-verify -m x
+
+    lexed to a single segment whose argv[0] was `cargo`, and the hook allowed it
+    — a regression wider than the semicolon bug it was written to fix, because a
+    multi-line command is the ordinary shape, not an edge case. Found by an
+    adversarial verifier, not by this author.
+
     Returns None when the command does not tokenize at all (an unbalanced
     quote). That is a cannot-determine and the caller must not read it as
     "no bypass here".
     """
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    # punctuation_chars has no setter, so the newline additions go here.
+    lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n\r")
     lexer.whitespace_split = True
+    lexer.whitespace = lexer.whitespace.replace("\n", "").replace("\r", "")
     try:
         tokens = list(lexer)
     except ValueError:
@@ -103,7 +170,7 @@ def split_commands(command: str) -> list[list[str]] | None:
     segments: list[list[str]] = []
     current: list[str] = []
     for tok in tokens:
-        if tok in SEPARATORS:
+        if tok in SEPARATORS or NEWLINE_TOKEN.match(tok):
             if current:
                 segments.append(current)
             current = []
@@ -118,15 +185,25 @@ def looks_like_bypass(command: str) -> bool:
     """Necessary condition for the two bypasses this hook refuses.
 
     Used only when tokenization failed, to decide what a cannot-determine
-    resolves to. A raw string carrying neither `--no-verify` nor a `-n` next to
-    a `git` cannot be `git commit/push/merge --no-verify` or `git commit -n`,
-    so allowing it is a decision rather than a shrug. It over-matches freely —
-    over-matching costs a refusal the author can rephrase, under-matching costs
-    the whole gate.
+    resolves to. It over-matches freely — over-matching costs a refusal the
+    author can rephrase, under-matching costs the whole gate.
+
+    This is a HEURISTIC, and the distinction matters enough to state plainly:
+    an earlier version of this docstring called it "a necessary condition, not a
+    guess", claiming a command carrying neither marker "cannot" be a bypass.
+    That was false and was demonstrated false — `git commit -nm 'unbalanced`,
+    `--no-verif`, and `-c core.hooksPath=/dev/null` are all real bypasses that
+    the old screen let through. The markers below are wider now, but a wider
+    heuristic is still a heuristic: an untokenizable command that dodges all of
+    them is allowed, and that residue is a known, unfixed hole rather than a
+    proof of absence.
     """
-    if BYPASS_LONG in command:
+    lowered = command.lower()
+    if BYPASS_LONG_MIN in lowered or HOOKSPATH_OVERRIDE in lowered:
         return True
-    return "git" in command and re.search(r"(?<!\w)-n(?!\w)", command) is not None
+    # Any short-option cluster containing `n` alongside a `git`.
+    return "git" in lowered and re.search(r"(?<![\w-])-[A-Za-z]*n[A-Za-z]*(?![\w-])",
+                                          command) is not None
 
 
 def is_bypass(tokens: list[str]) -> tuple[str, str] | None:
@@ -150,6 +227,16 @@ def is_bypass(tokens: list[str]) -> tuple[str, str] | None:
         return None
 
     rest = tokens[i + 1 :]
+
+    # `git -c core.hooksPath=/dev/null commit` needs no --no-verify: it turns the
+    # hooks off wholesale, and it does so for `post-commit` too, so the ledger
+    # that is supposed to record an ungated commit never runs either. Checked
+    # before the subcommand scan because it is a bypass of any subcommand.
+    for k, tok in enumerate(rest):
+        val = rest[k + 1] if tok == "-c" and k + 1 < len(rest) else tok
+        if HOOKSPATH_OVERRIDE in val.lower():
+            return "any subcommand", "-c core.hooksPath"
+
     sub = None
     j = 0
     while j < len(rest):
@@ -170,10 +257,14 @@ def is_bypass(tokens: list[str]) -> tuple[str, str] | None:
         return None
 
     for tok in rest:
-        if tok == BYPASS_LONG:
-            return sub, BYPASS_LONG
-        if tok == BYPASS_SHORT and sub in ("commit", "push"):
-            return sub, BYPASS_SHORT
+        # `--no-verify`, and every abbreviation of it git would accept. The `=`
+        # split covers `--no-verify=true`; git rejects that form, but refusing it
+        # costs nothing and reading it as "not the flag" would not.
+        flag = tok.split("=", 1)[0]
+        if flag.startswith(BYPASS_LONG_MIN) and BYPASS_LONG.startswith(flag):
+            return sub, tok
+        if sub in SHORT_FLAG_SUBCOMMANDS and SHORT_CLUSTER.match(tok):
+            return sub, tok
     return None
 
 

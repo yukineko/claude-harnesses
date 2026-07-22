@@ -1,29 +1,45 @@
-//! Read-only view of backlog's per-project run lock.
+//! Read-only view of backlog's per-project driver liveness.
 //!
-//! autoflow's Stop hook auto-drives `/condukt` and `/backlog`. But `/flow` and
-//! `/backlog` serialize their condukt runs with the backlog lock, which autoflow
-//! never consulted — so if autoflow's auto-loop fired while one of those drivers
-//! held the lock, the same queue would be driven twice (double condukt
-//! execution). autoflow therefore stands down whenever another *live* process
-//! holds the lock for the same project.
+//! autoflow's Stop hook auto-drives `/condukt` and `/backlog`. If that auto-loop
+//! fires while a `/flow` or `/backlog` driver is already running the same
+//! project's queue, the queue gets driven twice. autoflow therefore stands down
+//! whenever another live session is driving the same project.
 //!
-//! The backlog lock is scoped per-project (`~/.backlog/locks/<hash-of-project>.lock`,
-//! written by the `backlog` binary): two unrelated projects' `/flow` loops may
-//! run concurrently without conflicting, so this must ask "is a driver active
-//! for *my* project", not "is any driver active anywhere" — the same distinction
-//! `/flow`'s own conflict check makes. This shells out to `backlog lock status
-//! --project <project>` rather than reading the lock file directly, so the
-//! path/hash scheme lives in exactly one place (the `backlog` crate).
+//! `backlog lock status --project <p>` is the signal. It used to report only the
+//! *exclusive* `~/.backlog/locks/<hash-of-project>.lock`, which `/flow` held for
+//! its whole loop. `/flow` no longer takes that lock (holding it monopolised the
+//! queue: a second session on the same project stood down entirely, even though
+//! `backlog next --claim` already guarantees two drivers get disjoint tasks).
+//! It now registers *non-exclusive* presence instead, and `lock status` reports
+//! the union of the two — so the answer this module reads is unchanged in shape
+//! and meaning, but can now describe 2+ simultaneous drivers via the `drivers`
+//! array. Everything is still asked of the `backlog` binary rather than read off
+//! disk, so the path/hash scheme lives in exactly one place.
+//!
+//! Liveness is per-project: two unrelated projects' loops may run concurrently,
+//! so this asks "is a driver active for *my* project", not "anywhere".
 
 use std::path::Path;
 use std::process::Command;
 
 use crate::backlog::{find_backlog_binary, repo_project_path};
 
-/// True if another live process currently holds the backlog run lock for the
-/// project rooted at `cwd`. Fail-soft: if `backlog` is absent or errors, we
-/// can't see a driver, so this reports "not active" and autoflow proceeds
-/// normally.
+/// True if another live session is currently driving the queue for the project
+/// rooted at `cwd`.
+///
+/// **Cannot-determine resolves to `true` (stand down).** The two answers are
+/// not symmetric: `false` starts an *unattended* auto-loop on top of whatever
+/// is already running, while `true` costs one skipped tick (the Stop hook fires
+/// again next turn). So a `backlog` invocation that fails to run, exits
+/// non-zero, or prints something we cannot interpret is treated as "a driver
+/// may be active".
+///
+/// The one deliberate exception is `backlog` not being installed at all. That
+/// is an observation, not a failure to observe: with no `backlog` binary there
+/// is no queue, no registry, and no `/flow` or `/backlog` driver to collide
+/// with — and the auto-loop this guards would have nothing to double-drive.
+/// Treating it as "active" would permanently disable autoflow on machines that
+/// never had backlog, which is restriction without a hazard.
 pub fn backlog_driver_active(cwd: &Path) -> bool {
     let Some(binary) = find_backlog_binary() else {
         return false;
@@ -36,28 +52,51 @@ pub fn backlog_driver_active(cwd: &Path) -> bool {
         Ok(out) if out.status.success() => {
             driver_active_from_status(&String::from_utf8_lossy(&out.stdout))
         }
-        _ => false,
+        // Spawned but failed, or could not be spawned: we did not get an
+        // answer. Stand down rather than assume the coast is clear.
+        _ => true,
     }
 }
 
-/// Interpret `backlog lock status --project <p>` stdout: `none` → free; a JSON
-/// object with a truthy `stale` field → dead holder (not active); any other
-/// JSON object → an active live holder. Mirrors `daily`'s identical parser for
-/// the same CLI contract.
+/// Interpret `backlog lock status --project <p>` stdout.
+///
+/// * `none` → nothing is driving. This is the ONLY output that means "free":
+///   backlog prints it as a positive observation, never as a fallback.
+/// * a JSON object with a truthy `stale` field → only a dead holder or dead
+///   registration remains → not active.
+/// * any other JSON object → a live driver (this covers both an exclusive lock
+///   holder and one-or-more registered drivers, and the explicitly
+///   `undetermined` object backlog emits when it could not read its registry).
+/// * anything else (empty, non-JSON) → we cannot interpret the answer, so we
+///   report active and stand down.
+///
+/// `daily` carries the identical parser for the identical CLI contract.
 fn driver_active_from_status(stdout: &str) -> bool {
+    let trimmed = stdout.trim();
+    if trimmed == "none" {
+        return false;
+    }
     match parse_status_json(stdout) {
-        None => false,
+        None => true,
         Some(v) => !v.get("stale").and_then(|s| s.as_bool()).unwrap_or(false),
     }
 }
 
-/// True if the backlog run lock for `project` is held by *this* session — i.e.
-/// a `/flow` (or `/backlog`) driver is running the queue from within this very
-/// Claude session. Used by the PreCompact hook to decide whether to drop a
-/// resume-flow marker — we only want to auto-resume `/flow` after a `/compact`
-/// when the flow loop was actually running in this session, for this project.
-/// An empty `session_id`, a missing/garbage lock, or a mismatched owner all
-/// read as `false` (never resume blindly).
+/// True if *this* session is driving `project`'s queue — i.e. a `/flow` (or
+/// `/backlog`) loop is running from within this very Claude session. Used by
+/// the PreCompact hook to decide whether to drop a resume-flow marker: we only
+/// auto-resume `/flow` after a `/compact` when the flow loop was actually
+/// running in this session, for this project.
+///
+/// Since a project can now have several concurrent drivers, "this session" is
+/// matched against the top-level `session_id` (the exclusive-lock holder, or
+/// the most recently heartbeated driver) AND against every entry of the
+/// `drivers` array — otherwise a session that is genuinely driving would be
+/// missed whenever another driver happened to have heartbeated more recently.
+///
+/// An empty `session_id`, an unreadable status, or no match all read as `false`
+/// — not resuming is the conservative outcome here (a false positive would
+/// inject a "keep driving" instruction into a session that is not driving).
 pub fn this_session_holds_lock(session_id: &str, cwd: &Path) -> bool {
     if session_id.is_empty() {
         return false;
@@ -78,10 +117,23 @@ pub fn this_session_holds_lock(session_id: &str, cwd: &Path) -> bool {
 }
 
 fn holds_lock_from_status(stdout: &str, session_id: &str) -> bool {
-    match parse_status_json(stdout) {
-        None => false,
-        Some(v) => v.get("session_id").and_then(|s| s.as_str()) == Some(session_id),
+    let Some(v) = parse_status_json(stdout) else {
+        return false;
+    };
+    // A stale holder/registration is not driving anything.
+    if v.get("stale").and_then(|s| s.as_bool()).unwrap_or(false) {
+        return false;
     }
+    if v.get("session_id").and_then(|s| s.as_str()) == Some(session_id) {
+        return true;
+    }
+    v.get("drivers")
+        .and_then(|d| d.as_array())
+        .is_some_and(|drivers| {
+            drivers
+                .iter()
+                .any(|d| d.get("session_id").and_then(|s| s.as_str()) == Some(session_id))
+        })
 }
 
 /// Parse `backlog lock status` stdout into the lock's JSON object, or `None`
@@ -98,11 +150,28 @@ fn parse_status_json(stdout: &str) -> Option<serde_json::Value> {
 mod tests {
     use super::*;
 
+    /// `none` is backlog's positive observation that nothing is driving — the
+    /// only output that means "free".
     #[test]
     fn driver_active_from_status_none_is_inactive() {
         assert!(!driver_active_from_status("none"));
-        assert!(!driver_active_from_status(""));
-        assert!(!driver_active_from_status("not json"));
+        assert!(!driver_active_from_status("  none\n"));
+    }
+
+    /// §3: output we cannot interpret is a failure to observe, not an
+    /// observation that nobody is driving. It must stand autoflow down —
+    /// standing down costs one skipped tick, proceeding starts an unattended
+    /// loop on top of a live driver.
+    #[test]
+    fn driver_active_from_status_uninterpretable_output_stands_down() {
+        assert!(
+            driver_active_from_status(""),
+            "empty stdout is not an observation of an idle queue"
+        );
+        assert!(
+            driver_active_from_status("not json"),
+            "unparseable stdout is not an observation of an idle queue"
+        );
     }
 
     #[test]
@@ -116,6 +185,35 @@ mod tests {
     fn driver_active_from_status_stale_lock_is_inactive() {
         assert!(!driver_active_from_status(
             r#"{"session_id":"x","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":0,"stale":true}"#
+        ));
+    }
+
+    /// The new contract: `/flow` announces itself with a non-exclusive
+    /// registration, so liveness now arrives as `kind: driver-presence` with a
+    /// `drivers` array. One or many, autoflow must stand down.
+    #[test]
+    fn driver_active_from_status_registered_drivers_are_active() {
+        assert!(driver_active_from_status(
+            r#"{"kind":"driver-presence","session_id":"a","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":9,"driver_count":1,"drivers":[{"session_id":"a"}]}"#
+        ));
+        assert!(driver_active_from_status(
+            r#"{"kind":"driver-presence","session_id":"b","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":9,"driver_count":2,"drivers":[{"session_id":"a"},{"session_id":"b"}]}"#
+        ));
+    }
+
+    /// backlog says so explicitly when it could not read its registry. That
+    /// object deliberately carries no `stale` field, so it reads as active.
+    #[test]
+    fn driver_active_from_status_undetermined_object_is_active() {
+        assert!(driver_active_from_status(
+            r#"{"kind":"undetermined","undetermined":true,"reason":"registry unreadable"}"#
+        ));
+    }
+
+    #[test]
+    fn driver_active_from_status_stale_registration_is_inactive() {
+        assert!(!driver_active_from_status(
+            r#"{"kind":"driver-presence","session_id":"ghost","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":0,"stale":true,"driver_count":0,"drivers":[]}"#
         ));
     }
 
@@ -135,6 +233,36 @@ mod tests {
             "sess-a"
         ));
         assert!(!holds_lock_from_status("not json", "sess-a"));
+    }
+
+    /// New contract, pinned: with several concurrent drivers, only ONE of them
+    /// can be the top-level `session_id`. A session that is driving must still
+    /// be recognised from the `drivers` array, or it would lose its
+    /// resume-after-compact marker purely because a peer heartbeated later.
+    #[test]
+    fn holds_lock_from_status_matches_any_registered_driver() {
+        let two_drivers = r#"{"kind":"driver-presence","session_id":"sess-b","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":9,"driver_count":2,"drivers":[{"session_id":"sess-a","heartbeat_at":8},{"session_id":"sess-b","heartbeat_at":9}]}"#;
+        assert!(
+            holds_lock_from_status(two_drivers, "sess-b"),
+            "the most recently heartbeated driver is recognised"
+        );
+        assert!(
+            holds_lock_from_status(two_drivers, "sess-a"),
+            "a concurrently registered driver must also be recognised"
+        );
+        assert!(
+            !holds_lock_from_status(two_drivers, "sess-c"),
+            "a session that is not driving must not be recognised"
+        );
+    }
+
+    /// A stale registration is not a driving session, even if the id matches.
+    #[test]
+    fn holds_lock_from_status_ignores_a_stale_record() {
+        assert!(!holds_lock_from_status(
+            r#"{"session_id":"sess-a","pid":1,"project":"/p","acquired_at":0,"stale":true}"#,
+            "sess-a"
+        ));
     }
 
     #[test]

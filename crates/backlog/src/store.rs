@@ -1758,6 +1758,136 @@ mod tests {
         assert_eq!(b.status, "pending");
     }
 
+    /// Concurrency budget for [`claim_one_with_retry`]. A `None` from
+    /// `next_claim` is ambiguous — it means EITHER "the queue is empty" OR
+    /// "I declined because I could not take the tasks-file lock this instant"
+    /// (the documented fail-closed decline). A test that treats the first
+    /// `None` as "empty" would therefore fail intermittently under contention
+    /// while proving nothing, so retry a bounded number of times.
+    const CLAIM_RETRIES: usize = 500;
+
+    fn claim_one_with_retry(path: &Path, project: Option<&str>) -> Option<Task> {
+        for _ in 0..CLAIM_RETRIES {
+            if let Ok(Some(t)) = next_claim(path, None, project) {
+                return Some(t);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        None
+    }
+
+    /// The monopoly this whole change is about: several drivers pulling from
+    /// the SAME project's queue at the same time must each be handed a
+    /// DIFFERENT task, and none of them may be refused. This is what makes the
+    /// exclusive project-wide `backlog lock` unnecessary for exclusivity —
+    /// `next_claim` already provides it at task granularity, so `/flow` no
+    /// longer has to serialize whole sessions to avoid double-dispatch.
+    ///
+    /// RED against the plain `next()` (see
+    /// `concurrent_plain_next_hands_every_driver_the_same_task`, which pins
+    /// that vulnerability): there, every driver receives the identical task.
+    #[test]
+    fn concurrent_drivers_claim_disjoint_tasks_and_none_is_refused() {
+        use std::sync::{Arc, Barrier, Mutex};
+
+        for iter in 0..10 {
+            let path = tmp_path();
+            // More tasks than drivers, so "refused" can only mean contention,
+            // never an empty queue.
+            let mut ids = Vec::new();
+            for i in 0..8 {
+                ids.push(
+                    add(
+                        &path,
+                        &format!("Task {i}"),
+                        "/repo",
+                        vec![],
+                        "",
+                        100 + i as i64,
+                    )
+                    .unwrap(),
+                );
+            }
+
+            const DRIVERS: usize = 4;
+            let barrier = Arc::new(Barrier::new(DRIVERS));
+            let path = Arc::new(path);
+            let got: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(vec![None; DRIVERS]));
+
+            let mut handles = Vec::with_capacity(DRIVERS);
+            for d in 0..DRIVERS {
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                let got = Arc::clone(&got);
+                handles.push(std::thread::spawn(move || {
+                    barrier.wait();
+                    let claimed = claim_one_with_retry(path.as_path(), Some("/repo"));
+                    got.lock().expect("lock")[d] = claimed.map(|t| t.id);
+                }));
+            }
+            for h in handles {
+                h.join().expect("thread join");
+            }
+
+            let got = got.lock().expect("lock").clone();
+            // (a) Nobody stood down: every concurrent driver got work.
+            for (d, g) in got.iter().enumerate() {
+                assert!(
+                    g.is_some(),
+                    "iter {iter}: driver {d} was refused work while {} pending tasks existed",
+                    ids.len()
+                );
+            }
+            // (b) Disjoint: no two drivers were handed the same task.
+            let mut seen: Vec<&String> = got.iter().flatten().collect();
+            seen.sort();
+            let before = seen.len();
+            seen.dedup();
+            assert_eq!(
+                before,
+                seen.len(),
+                "iter {iter}: two concurrent drivers were handed the same task: {got:?}"
+            );
+            // (c) Persisted state agrees: exactly DRIVERS tasks are `claimed`.
+            let tasks = load(path.as_path()).unwrap();
+            let claimed: Vec<&Task> = tasks
+                .iter()
+                .filter(|t| t.status == STATUS_CLAIMED)
+                .collect();
+            assert_eq!(
+                claimed.len(),
+                DRIVERS,
+                "iter {iter}: exactly one claim per driver must be persisted"
+            );
+        }
+    }
+
+    /// The vulnerability the above fixes, pinned so it cannot be mistaken for
+    /// a safe alternative: with the plain (documented pure-read) `next()`,
+    /// concurrent drivers all receive the SAME task. This is why `/flow` must
+    /// pick with `next --claim` now that it no longer holds an exclusive lock.
+    #[test]
+    fn concurrent_plain_next_hands_every_driver_the_same_task() {
+        let path = tmp_path();
+        for i in 0..8 {
+            add(
+                &path,
+                &format!("Task {i}"),
+                "/repo",
+                vec![],
+                "",
+                100 + i as i64,
+            )
+            .unwrap();
+        }
+        let a = next(&path, None, Some("/repo")).unwrap().unwrap();
+        let b = next(&path, None, Some("/repo")).unwrap().unwrap();
+        assert_eq!(
+            a.id, b.id,
+            "plain next() is a pure read: two drivers get the identical task"
+        );
+    }
+
     /// F→P regression oracle for CA-backlog-001 (the fix). Many threads race
     /// `next_claim` against a SINGLE pending task concurrently. Atomicity
     /// (claim happens inside the same tasks-file-lock critical section as

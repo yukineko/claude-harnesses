@@ -212,21 +212,48 @@ fn session_start_cmd() -> ! {
 
 // ─────────────────────────── driver detection ──────────────────────────────
 
-/// True if a `/flow` / `/backlog` driver is *actively* holding the backlog lock
-/// (soft dependency on the `backlog` binary). Fail-open: if `backlog` is absent
-/// or errors, we can't see a driver, so we report "not active" and run normally.
+/// True if a `/flow` / `/backlog` driver is *actively* driving a queue (soft
+/// dependency on the `backlog` binary). See [`driver_active_from_output`] for
+/// how a failure to get an answer is resolved.
 fn driver_active() -> bool {
     match Command::new("backlog").args(["lock", "status"]).output() {
-        Ok(out) if out.status.success() => {
-            driver_active_from_status(&String::from_utf8_lossy(&out.stdout))
-        }
-        _ => false,
+        Ok(out) => driver_active_from_output(
+            true,
+            out.status.success(),
+            &String::from_utf8_lossy(&out.stdout),
+        ),
+        // Could not spawn at all: `backlog` is not installed, so there is no
+        // queue and no driver to collide with. That is an observation, not a
+        // failure to observe.
+        Err(_) => driver_active_from_output(false, false, ""),
     }
 }
 
+/// Resolve the driver question from the outcome of shelling out to `backlog`.
+/// Split out from [`driver_active`] so every arm — including the ones that
+/// never produce stdout — is observable in a test.
+///
+/// `spawned = false` → `backlog` is absent → no queue exists → not active.
+/// `spawned = true, success = false` → backlog ran and failed: we asked and did
+/// not get an answer, so treat it as active (skip today's run and try again at
+/// the next session) rather than trample a driver that may well be live.
+fn driver_active_from_output(spawned: bool, success: bool, stdout: &str) -> bool {
+    if !spawned {
+        return false;
+    }
+    if !success {
+        return true;
+    }
+    driver_active_from_status(stdout)
+}
+
 /// Interpret `backlog lock status` stdout: `none` → free; a JSON object with a
-/// truthy `stale` field → dead holder (not active); any other JSON object → an
-/// active live holder.
+/// truthy `stale` field → dead holder/registration (not active); any other JSON
+/// object → a live driver. Since `/flow` announces itself with a non-exclusive
+/// registration rather than by taking the exclusive lock, that object may now be
+/// a `kind: driver-presence` listing SEVERAL concurrent drivers, or the explicit
+/// `kind: undetermined` object backlog emits when it could not read its
+/// registry; both correctly read as active here.
 fn driver_active_from_status(stdout: &str) -> bool {
     let trimmed = stdout.trim();
     if trimmed.is_empty() || trimmed == "none" {
@@ -827,6 +854,48 @@ dir = \"/repo\"
         assert!(driver_active_from_status(r#"{"pid":1,"stale":false}"#));
         // Unparseable non-"none" → conservatively treated as held.
         assert!(driver_active_from_status("garbage-but-not-none"));
+    }
+
+    /// New contract: `/flow` registers non-exclusive presence instead of taking
+    /// the exclusive lock, so liveness arrives as a `driver-presence` object
+    /// that may list SEVERAL concurrent drivers. daily must still read that as
+    /// "a driver is active" and skip.
+    #[test]
+    fn driver_active_reads_the_non_exclusive_driver_presence_shape() {
+        assert!(driver_active_from_status(
+            r#"{"kind":"driver-presence","session_id":"a","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":9,"driver_count":1,"drivers":[{"session_id":"a"}]}"#
+        ));
+        assert!(driver_active_from_status(
+            r#"{"kind":"driver-presence","session_id":"b","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":9,"driver_count":2,"drivers":[{"session_id":"a"},{"session_id":"b"}]}"#
+        ));
+        // Only stale registrations remain -> daily may run.
+        assert!(!driver_active_from_status(
+            r#"{"kind":"driver-presence","session_id":"ghost","stale":true,"driver_count":0,"drivers":[]}"#
+        ));
+        // backlog could not read its registry and says so -> not an "all clear".
+        assert!(driver_active_from_status(
+            r#"{"kind":"undetermined","undetermined":true,"reason":"registry unreadable"}"#
+        ));
+    }
+
+    /// The arms that produce no stdout at all. Asking and not getting an answer
+    /// is not the same as being told the queue is idle.
+    #[test]
+    fn driver_active_from_output_resolves_a_failed_query_to_active() {
+        assert!(
+            !driver_active_from_output(false, false, ""),
+            "backlog not installed -> no queue exists -> daily may run"
+        );
+        assert!(
+            driver_active_from_output(true, false, ""),
+            "backlog ran and failed -> we have no answer -> skip rather than trample a driver"
+        );
+        assert!(!driver_active_from_output(true, true, "none"));
+        assert!(driver_active_from_output(
+            true,
+            true,
+            r#"{"kind":"driver-presence","driver_count":1,"drivers":[{"session_id":"a"}]}"#
+        ));
     }
 
     #[test]

@@ -140,7 +140,13 @@ fn inject() {
     }
 
     let store = Store::new(&cfg);
-    let notes = store.load_visible(&root);
+    // Fail-soft: an unreadable store is treated the same as an empty one —
+    // this hook must never fail a turn, so `Undetermined` just means "no
+    // notes to inject this time," not an error surfaced to the user.
+    let notes = match store.load_visible(&root) {
+        harness_core::verdict::Determination::Known(n) => n,
+        harness_core::verdict::Determination::Undetermined(_) => return,
+    };
     if notes.is_empty() {
         return;
     }
@@ -204,7 +210,13 @@ fn list() {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
     let store = Store::new(&cfg);
-    let notes = store.load_visible(&root);
+    let notes = match store.load_visible(&root) {
+        harness_core::verdict::Determination::Known(n) => n,
+        harness_core::verdict::Determination::Undetermined(why) => {
+            eprintln!("unknown — note store could not be read: {why}");
+            std::process::exit(1);
+        }
+    };
     if notes.is_empty() {
         println!("(no notes — add one with `playbook add --title ...`)");
         return;
@@ -225,7 +237,13 @@ fn search(query: String) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
     let store = Store::new(&cfg);
-    let notes = store.load_visible(&root);
+    let notes = match store.load_visible(&root) {
+        harness_core::verdict::Determination::Known(n) => n,
+        harness_core::verdict::Determination::Undetermined(why) => {
+            eprintln!("unknown — note store could not be read: {why}");
+            std::process::exit(1);
+        }
+    };
     if notes.is_empty() {
         println!("(no notes)");
         return;
@@ -312,5 +330,12 @@ fn status() {
     println!("include_global: {}", cfg.include_global);
     println!("project store:  {}", store.project_dir(&root).display());
     println!("global store:   {}", store.global_dir().display());
-    println!("visible notes:  {}", notes.len());
+    match notes {
+        harness_core::verdict::Determination::Known(n) => {
+            println!("visible notes:  {}", n.len());
+        }
+        harness_core::verdict::Determination::Undetermined(why) => {
+            println!("visible notes:  unknown — store could not be read: {why}");
+        }
+    }
 }

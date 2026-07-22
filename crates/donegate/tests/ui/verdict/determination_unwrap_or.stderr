@@ -1,0 +1,23 @@
+error[E0599]: no method named `unwrap_or` found for enum `Determination<T>` in the current scope
+  --> tests/ui/verdict/determination_unwrap_or.rs:15:15
+   |
+15 |     let _ = a.unwrap_or(None);
+   |               ^^^^^^^^^ method not found in `Determination<Option<Vec<String>>>`
+   |
+note: the method `unwrap_or` exists on the type `Option<Vec<String>>`
+  --> $RUST/core/src/option.rs
+
+error[E0599]: no method named `ok` found for enum `Determination<T>` in the current scope
+  --> tests/ui/verdict/determination_unwrap_or.rs:18:15
+   |
+18 |     let _ = b.ok();
+   |               ^^ method not found in `Determination<Option<Vec<String>>>`
+
+error[E0599]: no method named `unwrap_or_default` found for enum `Determination<T>` in the current scope
+  --> tests/ui/verdict/determination_unwrap_or.rs:21:15
+   |
+21 |     let _ = c.unwrap_or_default();
+   |               ^^^^^^^^^^^^^^^^^ method not found in `Determination<Option<Vec<String>>>`
+   |
+note: the method `unwrap_or_default` exists on the type `Option<Vec<String>>`
+  --> $RUST/core/src/option.rs

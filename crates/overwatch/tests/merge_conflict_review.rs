@@ -1,6 +1,6 @@
 // このファイルは丸ごと integration test なので unwrap/expect を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration test for the consensus merge-conflict review surface
 //! (design 625aa170 B): an open blocked-merge entry surfaces in
 //! `overwatch review-queue --json` as a `[merge-conflict]` High row, and

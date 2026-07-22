@@ -1,6 +1,6 @@
 // このファイルは丸ごと integration test なので unwrap/expect を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! CLI integration test for `overwatch compact-findings` (non-lossy
 //! compaction/rotation of the append-only `review_findings.jsonl` hot store
 //! into a cold `review_findings_archive.jsonl`).

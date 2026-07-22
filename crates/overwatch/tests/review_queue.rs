@@ -1,6 +1,6 @@
 // このファイルは丸ごと integration test なので unwrap/expect を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration test for the unified review surface (`overwatch review-queue`).
 //!
 //! Seeds all three sources end-to-end through the REAL CLI + store round trip —

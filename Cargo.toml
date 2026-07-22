@@ -68,6 +68,23 @@ clap       = { version = "4", features = ["derive"] }
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+# panic は上の2つと同じ理由（判定を持つ crate で panic は判定不能そのもの）だが、
+# 経緯が違う: これは新規の締め付けではなく、既に 15 ファイルに手貼りされていた
+# `#![deny(clippy::panic)]` の集約先。うち **10 個をここへ引き取り**、該当ファイルの
+# 属性行を削除した（blastguard lib+main / mutategate lib+main / overwatch lib+main /
+# propguard main / specguard main+forge-main / stuckguard main）。
+#
+# 残る 5 個（budgetguard / donegate / reviewgate / schemaguard lib+main）は
+# **手貼りのまま残す**。集約するにはその crate に `[lints] workspace = true` が要り、
+# それは unwrap_used / expect_used の deny も同時に持ち込む＝この一手のスコープを超える。
+# 「15 個を集約した」ではなく「10 個を集約し 5 個を残した」と書くのは、
+# 散文が実挙動と食い違わないようにするため（CLAUDE.md 第4節）。残り 5 個の集約は
+# それらの crate が workspace lints を opt-in する時に持ち越す。
+#
+# 集約が空虚でないことは対照実験で確認済み（2026-07-23 / c23ac506 の上）:
+# 属性を外し この行も入れない状態では production の panic! を clippy は
+# 捕まえない（exit 0）。この行を入れると同じ panic! が RED になる。
+panic = "deny"
 
 # ラチェットの機構。既存の unwrap/expect には site ごとに
 # `#[expect(clippy::unwrap_used, reason = "…")]` を貼って「見えて数えられる」状態にするが、

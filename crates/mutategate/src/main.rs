@@ -15,7 +15,6 @@
 //!   * `0`  — kill-rate met the threshold (gate passed).
 //!   * `1`  — kill-rate below threshold, or no viable mutants (gate failed).
 //!   * `2`  — usage/IO/parse error (could not evaluate the gate at all).
-#![deny(clippy::panic)]
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

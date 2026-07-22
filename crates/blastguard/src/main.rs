@@ -26,7 +26,6 @@
 //! normal, non-breaking outcome. Empty/invalid input and an unmatched tool are
 //! still a silent allow — those are cases where we successfully determined
 //! there is nothing to judge, not cases where we failed to determine anything.
-#![deny(clippy::panic)]
 
 use blastguard::model::Decision;
 use blastguard::rule_id::INTERNAL_ERROR_REASON;

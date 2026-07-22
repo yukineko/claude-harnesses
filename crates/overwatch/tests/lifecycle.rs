@@ -1,6 +1,6 @@
 // このファイルは丸ごと integration test なので unwrap/expect を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration tests for the lease lifecycle and cross-session dedup.
 use std::fs;
 use std::io::Write;

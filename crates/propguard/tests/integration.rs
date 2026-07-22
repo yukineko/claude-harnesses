@@ -1,6 +1,6 @@
 // このファイルは丸ごと integration test なので unwrap/expect を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end tests for the propguard binary.
 //!
 //! `check` is the Stop hook: it must ALWAYS exit 0 toward Claude (the `decision`

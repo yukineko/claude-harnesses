@@ -1,6 +1,6 @@
 // このファイルは丸ごと integration test なので unwrap/expect を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end tests for specforge driving the built binary against a throwaway
 //! git repo with a *fake* normalize agent (a `bash -c` script), so no real LLM
 //! is required. Exercises the entry gate: rigor pass → draft, rigor fail →

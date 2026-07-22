@@ -1,6 +1,6 @@
 // このファイルは丸ごと integration test なので unwrap/expect を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Backslash-over-escaped nested `sh -c` fail-OPEN (backlog 99b506b7).
 //!
 //! blastguard is a PreToolUse gate: a destructive shell command must be BLOCKED

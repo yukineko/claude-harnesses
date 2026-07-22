@@ -1,6 +1,6 @@
 // このファイルは丸ごと integration test なので unwrap/expect を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration tests for the opt-in canary staged-rollout core: exercising the
 //! public `overwatch::canary` API end-to-end (stage planning, health gating
 //! against the item-B violation registry, and rollback-plan computation) the

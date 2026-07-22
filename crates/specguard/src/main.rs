@@ -10,7 +10,6 @@
 //!
 //! The judgment lives in the agent (it reads the live canon and quotes it
 //! verbatim); this binary is the deterministic harness around it.
-#![deny(clippy::panic)]
 
 mod agent;
 mod auditmap;

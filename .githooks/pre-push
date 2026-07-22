@@ -3,7 +3,7 @@
 #
 #     git config core.hooksPath .githooks
 #
-# This hook has three advisory nudges plus three blocking checks:
+# This hook has four advisory nudges plus two blocking checks:
 #   1. GATE crates (advisory) — when the push touches blastguard/propguard/
 #      specguard/stuckguard/mutategate/overwatch (the fleet defense gates),
 #      suggest a Continuous-Audit round (`scripts/continuous-audit.sh --dry-run`).
@@ -12,13 +12,20 @@
 #      cache. That fix then reaches NO session. This has to live here rather than
 #      in CI: the check reads ~/.claude/plugins/installed_plugins.json, which is
 #      a property of the developer's machine and does not exist on a runner.
-#      Its rc=1 sub-class ("committed but not rolled out") BLOCKS the push
-#      (2026-07-22: 16 plugins drifted silently across ~20 commits in one
-#      session before anyone ran the checker by hand — advisory text alone did
-#      not surface it, because nothing forced the reader to look). Its rc=2
-#      (enablement) and rc=3 (unverifiable) sub-classes stay advisory: neither
-#      has a rollout fix, so blocking on them would send the reader to a command
-#      that cannot help.
+#      ALL of its sub-classes are advisory. rc=1 ("committed but not rolled
+#      out") used to BLOCK (2026-07-22: 16 plugins drifted silently across ~20
+#      commits in one session before anyone ran the checker by hand). It was
+#      demoted on 2026-07-23 because it gates the wrong thing at the wrong
+#      point: drift is a property of THIS machine's plugin cache, while `git
+#      push` shares CODE with a remote — local deployment state is not a
+#      statement about code quality, so it must not decide whether good commits
+#      may leave this machine. The detection is unchanged; only the consequence
+#      moved. See the rc=1 branch for the full argument, and the backlog item
+#      for relocating enforcement to session start (where an operator can act on
+#      it) so this does not degrade into "someone will notice". rc=2
+#      (enablement) and rc=3 (unverifiable) were already advisory: neither has a
+#      rollout fix, so blocking on them would send the reader to a command that
+#      cannot help.
 #   3. Autonomy chain (advisory) — when the push touches the crates whose SKILL
 #      specs the human-0 chain depends on (condukt/scout/flow/backlog), suggest
 #      re-running `scripts/e2e-autonomy.sh`, which asserts the gate contracts
@@ -42,15 +49,11 @@
 # degrade to silence when their prerequisite (python3, the script, the registry)
 # is absent. They never block.
 #
-# THREE checks do block. The first thing this hook does: an ungated commit
+# TWO checks do block. The first thing this hook does: an ungated commit
 # outstanding in the bypass ledger (`scripts/gate-bypass.py`). That is the
 # consequence half of closing the `--no-verify` hole — the bypass cannot be
 # prevented at commit time, so it is instead made to stop the next push until the
-# content has actually been through the gate. The second is rollout drift's rc=1
-# sub-class (check 2 above) — a committed-but-not-deployed fix is exactly the
-# "judged but the judgment never reached a session" failure mode this repo's
-# gates exist to close, so advisory text alone is not enough for it either. The
-# third is chronically-red CI's rc=1 and unrecognized-rc sub-classes (check 4),
+# content has actually been through the gate. The second is chronically-red CI's rc=1 and unrecognized-rc sub-classes (check 4),
 # promoted for the same reason: the previous north_star repaired two chronically
 # red workflows BY HAND after a 17-run streak, which fixed the symptom and left
 # the mechanism — every branch of this check fell through to the same exit 0, so
@@ -70,7 +73,7 @@ set -u
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 cd "$REPO" 2>/dev/null || exit 0
 
-# --- the one blocking check -------------------------------------------------
+# --- the first blocking check ------------------------------------------------
 # An ungated commit (created with --no-verify, or replayed by cherry-pick or
 # rebase) must not leave this machine before the gate has seen its content.
 # exit 1 = outstanding, exit 2 = the ledger could not be read; both block, since
@@ -197,16 +200,38 @@ if command -v python3 >/dev/null 2>&1 && [ -f scripts/check-plugin-rollout.py ];
     case "$rollout_rc" in
         0) ;;
         1)
+            # DEMOTED TO ADVISORY (2026-07-23), deliberately — not because it was
+            # noisy, but because it was gating the wrong thing at the wrong point.
+            #
+            # Rollout drift is a fact about THIS MACHINE's plugin cache
+            # (`~/.claude/plugins/.../installed_plugins.json`): the committed code
+            # is fine, it just has not been copied into the live harness here.
+            # `git push` is the act of SHARING CODE with a remote. Local
+            # deployment state says nothing about whether that code is correct,
+            # so blocking the share on it conflated two unrelated concerns — and
+            # penalized a machine that is behind on deployment by cutting it off
+            # from publishing perfectly good commits.
+            #
+            # This is NOT "the gate went red so we silenced it" (CLAUDE.md §4).
+            # The detection is unchanged and still runs and still prints; only
+            # the *consequence* moved. The failure mode it was built for — a
+            # committed, version-bumped fix that reaches no session (once found
+            # by hand across 5 plugins) — is real and must stay covered, but it
+            # is a DEPLOYMENT reminder, so it belongs at session start where the
+            # operator can act on it, not on the push path.
+            #
+            # Backlog tracks relocating the enforcement so this does not degrade
+            # into "someone will notice" (CLAUDE.md §6 forbids resting on that).
             cat >&2 <<'EOF'
 
-rollout: blocked. The versions above are committed but not live — the fix is in
-git and reaches no session until you roll it out:
+rollout: the versions above are committed but not live on THIS machine — the fix
+is in git and reaches no session here until you roll it out:
 
     scripts/rollout-plugins.sh --plugin <name>            # add --canary for GATE crates
 
-Push again once the rollout is done.
+This is advisory only — the push is not blocked. Rollout is local deployment
+state, not code quality, so it does not gate sharing code with the remote.
 EOF
-            exit 1
             ;;
         3)
             # Unverifiable class. Neither a rollout nor an enablement edit can

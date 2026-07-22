@@ -80,10 +80,16 @@ target 解決はコスト有界 (無際限な repo 探索をしない) にしま
 `--filter` が空 (map 全体対象) の場合は省略してよい。
 
 - 成功時、stdout は `prompt --json` と **同じ形の** JSON エンベロープ
-  `{project, baseline, head, date, marker, shards: [{label, prompt}]}`
+  `{project, baseline, head, date, marker, shards: [{label, prompt}], total_auditable, truncated}`
   (`marker` は `<<<SPEC_AUDIT>>>`)。これを parse する。
 - `shards` が **空配列** の場合は監査対象なし。手順 4 を飛ばし、空の outputs
   (`{"shards": []}`) で手順 5 に進む (ハーネスが「監査対象なし」を記録する)。
+- **`truncated: true`** の場合 (`total_auditable` が `shards.length` より大きい、
+  すなわち `MAX_AUDIT_SHARDS` 上限で切り詰められた) は、**この回の監査は map 全体を
+  カバーしていない** ことを手順 5 のユーザー報告に明示すること (「今回は
+  `shards.length`/`total_auditable` 件のみ監査、残りは次回以降に持ち越し」)。
+  黙って「監査完了」とだけ報告しない — CA-specguard-07: 以前は eprintln で stderr に
+  しか出ておらず、この harness は stderr を読まないため truncation が常に見落とされた。
 
 ## 4. 各 shard を read-only subagent で監査する (判定: subscription)
 

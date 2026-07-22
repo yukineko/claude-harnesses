@@ -207,9 +207,26 @@ pub(crate) fn dedup_findings(findings: &[ReviewFinding]) -> Vec<(ReviewFinding, 
     for (_, idxs) in groups {
         // Representative: newest ts; on a tie, the LATER index (later in the
         // original input order) wins — mirrors the "last write wins" rule.
+        //
+        // CA-overwatch-001: ts-only selection let a later same-fingerprint
+        // Unverified/Refuted record SHADOW an earlier Confirmed one, and
+        // `plan_finding_bridges` filters on the representative's verdict alone
+        // — so the whole group silently vanished from the backlog bridge even
+        // though Confirmed evidence exists in it. An actionable
+        // (`is_actionable()`) record therefore always outranks a
+        // non-actionable one regardless of `ts`; ties within the same
+        // actionability still resolve by newest `ts` (unchanged rule).
         let mut best = idxs[0];
         for &idx in &idxs[1..] {
-            if findings[idx].ts >= findings[best].ts {
+            let candidate_wins = match (
+                findings[idx].verdict.is_actionable(),
+                findings[best].verdict.is_actionable(),
+            ) {
+                (true, false) => true,
+                (false, true) => false,
+                _ => findings[idx].ts >= findings[best].ts,
+            };
+            if candidate_wins {
                 best = idx;
             }
         }
@@ -837,6 +854,33 @@ mod tests {
         let mut q = build_queue(&[], &[], &findings, &[], &[]);
         q.truncate(1);
         assert_eq!(q[0].identifier, "F-HIGH");
+    }
+
+    /// CA-overwatch-001 (verified bypass): the representative was picked by
+    /// newest `ts` alone, ignoring `verdict`. A later same-fingerprint
+    /// Unverified/Refuted re-audit therefore SHADOWED an earlier Confirmed
+    /// record, and `plan_finding_bridges` filters on the representative's
+    /// verdict — so the whole group silently dropped out of the backlog
+    /// bridge even though a Confirmed record genuinely exists in it.
+    #[test]
+    fn dedup_representative_prefers_confirmed_over_a_later_shadowing_verdict() {
+        let confirmed_old = finding("F-1", 100); // Confirmed by default (older).
+        let unverified_new = finding("F-1-DUP", 200).with_verdict(AuditVerdict::Unverified); // same fingerprint, newer.
+        let deduped = dedup_findings(&[confirmed_old, unverified_new]);
+        assert_eq!(
+            deduped.len(),
+            1,
+            "same-fingerprint records must collapse to one group"
+        );
+        assert_eq!(
+            deduped[0].0.verdict,
+            AuditVerdict::Confirmed,
+            "a later non-actionable verdict must not shadow a Confirmed record in the same group"
+        );
+        assert_eq!(
+            deduped[0].1, 2,
+            "occurrence count is unaffected by verdict priority"
+        );
     }
 
     /// Deduping the AI-findings stream must not touch the systemic/rollback

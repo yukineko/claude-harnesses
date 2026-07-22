@@ -200,6 +200,15 @@ pub struct AuditEnvelope {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub filter: String,
     pub shards: Vec<AuditShard>,
+    /// CA-specguard-07: total in-scope (auditable + filter-matching) entries
+    /// before the [`MAX_AUDIT_SHARDS`] cap, so a caller can tell
+    /// `shards.len() == total_auditable` (clean) from a truncated subset
+    /// without depending on stderr.
+    pub total_auditable: usize,
+    /// True when `total_auditable > shards.len()`. Always present (never
+    /// omitted) — a truncated audit must be a positive, machine-readable fact
+    /// in the JSON body, not something inferred from a missing field.
+    pub truncated: bool,
 }
 
 /// One audit shard: a label (the map entry key) + the rendered prompt. Mirrors
@@ -309,6 +318,8 @@ pub fn build_envelope(
         date: date.to_string(),
         marker: MARKER.to_string(),
         filter: filter.trim().to_string(),
+        truncated: total_auditable > shards.len(),
+        total_auditable,
         shards,
     }
 }
@@ -502,6 +513,49 @@ mod tests {
         let shard0 = &json["shards"][0];
         assert!(shard0.get("label").is_some());
         assert!(shard0.get("prompt").is_some());
+    }
+
+    /// CA-specguard-07 (verified bypass): truncation to `MAX_AUDIT_SHARDS` was
+    /// only reported via `eprintln!` to stderr, with no field in the JSON
+    /// envelope and no non-zero exit code — so the sole machine consumer (the
+    /// spec-audit skill, which reads `audit --json` and never stderr) could
+    /// not tell a fully-audited map from one silently truncated to 50 shards.
+    #[test]
+    fn envelope_reports_truncation_in_the_json_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut map = SpecMap::default();
+        for i in 0..(MAX_AUDIT_SHARDS + 7) {
+            let key = format!("feat-{i}");
+            map.entries.insert(
+                key.clone(),
+                entry(&key, Some("docs/feat.md"), &["src/feat.rs"], &[]),
+            );
+        }
+        let env = build_envelope(&cfg(), &map, tmp.path(), "b", "h", "2026-07-08", "");
+        assert_eq!(env.shards.len(), MAX_AUDIT_SHARDS);
+        assert_eq!(env.total_auditable, MAX_AUDIT_SHARDS + 7);
+        assert!(env.truncated, "envelope must self-report truncation");
+
+        let json = serde_json::to_value(&env).unwrap();
+        assert_eq!(json["total_auditable"], MAX_AUDIT_SHARDS + 7);
+        assert_eq!(json["truncated"], true);
+    }
+
+    /// The un-truncated (whole-map) case must still report `truncated: false`
+    /// and a `total_auditable` equal to the shard count — a clean subset must
+    /// be positively distinguishable from a truncated one, not merely by the
+    /// absence of a field.
+    #[test]
+    fn envelope_reports_no_truncation_when_the_whole_map_fits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut map = SpecMap::default();
+        map.entries.insert(
+            "feat".to_string(),
+            entry("feat", Some("docs/feat.md"), &["src/feat.rs"], &[]),
+        );
+        let env = build_envelope(&cfg(), &map, tmp.path(), "b", "h", "2026-07-08", "");
+        assert_eq!(env.total_auditable, 1);
+        assert!(!env.truncated);
     }
 
     // -- targeted filter (entry_matches, relocated to specmap.rs) -----------

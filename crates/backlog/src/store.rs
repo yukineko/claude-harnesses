@@ -389,9 +389,14 @@ pub fn add_with_weight(
     force: bool,
     now: i64,
 ) -> Result<String> {
+    let is_bare =
+        !(project.starts_with('/') || project.starts_with('.') || project.starts_with('~'));
     let project = &canonicalize_project(project);
     with_tasks_lock(path, || {
         let mut tasks = load(path)?;
+        if is_bare {
+            reject_ambiguous_bare_label(&tasks, project)?;
+        }
         if !force {
             check_duplicate(&tasks, title, project)?;
         }
@@ -430,6 +435,30 @@ pub fn add_with_weight(
 /// command errors or exits with anything other than 0 (claimed) / 1 (not
 /// claimed), this is treated as "not claimed" — a missing or misbehaving
 /// `condukt` must never block `backlog add`.
+/// CA-backlog-007: a bare (non-path-shaped) `--project` label is not resolved
+/// against anything at write time — `canonicalize_project` passes it through
+/// unchanged — so it stays freely writable, and `bare_name_matches_path`
+/// bridges it to ANY stored path sharing its basename with no registry
+/// binding the label to one specific project. If a DIFFERENT project is
+/// already known under a path whose basename equals this bare label, writing
+/// it would create exactly the ambiguity that bridge can silently leak across
+/// (fail closed rather than let a new ambiguous write in): refuse, naming the
+/// colliding path so the caller can supply an unambiguous canonical path
+/// instead. Reusing the SAME bare label already in the store is unaffected —
+/// only a DIFFERENT, differently-pathed project sharing the basename trips
+/// this.
+fn reject_ambiguous_bare_label(tasks: &[Task], bare: &str) -> Result<()> {
+    if let Some(colliding) = tasks.iter().find_map(|t| {
+        (t.project != bare && Path::new(&t.project).file_name().is_some_and(|f| f == bare))
+            .then_some(t.project.as_str())
+    }) {
+        return Err(anyhow!(
+            "ambiguous project label {bare:?}: it shares a basename with the already-known project {colliding:?}, and no registry binds the bare label to a specific project; use an unambiguous canonical path instead"
+        ));
+    }
+    Ok(())
+}
+
 fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
     let hk = crate::task::hashkey(title, project);
 
@@ -548,7 +577,12 @@ pub fn next(
 ) -> Result<Option<Task>> {
     let now = now_unix();
     let tasks = load(path)?;
-    Ok(pick_next(&tasks, now, tag_filter, project_filter).map(|t| (*t).clone()))
+    // CA-backlog-006: canonicalize the filter the same way `add_with_weight`
+    // canonicalizes a stored project, so a raw (possibly symlinked) path
+    // still matches its already-canonical stored form. See `list` for the
+    // full rationale.
+    let project_filter = project_filter.map(canonicalize_project);
+    Ok(pick_next(&tasks, now, tag_filter, project_filter.as_deref()).map(|t| (*t).clone()))
 }
 
 /// Selects the single highest-priority eligible task from `tasks` (shared by
@@ -606,8 +640,10 @@ pub fn next_claim(
     tag_filter: Option<&str>,
     project_filter: Option<&str>,
 ) -> Result<Option<Task>> {
+    // CA-backlog-006: same read-side canonicalization as `next`/`list`.
+    let project_filter = project_filter.map(canonicalize_project);
     with_tasks_lock_aware(path, |locked| {
-        claim_next_locked(path, tag_filter, project_filter, locked)
+        claim_next_locked(path, tag_filter, project_filter.as_deref(), locked)
     })
 }
 
@@ -853,6 +889,16 @@ pub fn list(
     status_filter: Option<&str>,
 ) -> Result<Vec<Task>> {
     let tasks = load(path)?;
+    // CA-backlog-006: `add_with_weight` canonicalizes a path-shaped project
+    // (via `canonicalize_project`, which resolves symlinks through
+    // `resolve_repo_root`) before storing it, but callers pass this filter
+    // raw — CLI `--project` and SessionStart's `repo_root()` both hand in an
+    // uncanonicalized cwd-derived path. Canonicalizing here, once, at the read
+    // boundary, closes that drift for every caller of `list`/`next`/
+    // `next_claim` without requiring each of them to resolve symlinks
+    // themselves.
+    let project_filter = project_filter.map(canonicalize_project);
+    let project_filter = project_filter.as_deref();
     let mut result: Vec<Task> = tasks
         .into_iter()
         .filter(|t| match tag_filter {
@@ -1141,6 +1187,41 @@ mod tests {
         assert!(!project_matches("/repo/foobar", "/repo/foo"));
     }
 
+    /// CA-backlog-007 (verified bypass): `canonicalize_project` passes a bare
+    /// (non-path-shaped) `--project` label through unchanged, so it remains
+    /// freely writable today — not just a historical artifact. Combined with
+    /// `bare_name_matches_path` bridging ANY path sharing that basename (with
+    /// no registry binding the label to one specific project), a bare label
+    /// that collides with an unrelated, already-known, differently-pathed
+    /// project risks leaking one project's tasks into the other's filtered
+    /// view. Blocking the write once that collision is knowable closes the
+    /// gap going forward (fail closed on the ambiguity, per this repo's own
+    /// doctrine) without touching the read-side historical-drift bridge.
+    #[test]
+    fn add_rejects_a_bare_project_label_that_collides_with_a_different_known_path() {
+        let path = tmp_path();
+        add(&path, "Existing", "/home/bob/work/aegis", vec![], "", 100).unwrap();
+        let err = add(&path, "New", "aegis", vec![], "", 200).unwrap_err();
+        assert!(
+            err.to_string().contains("ambiguous"),
+            "expected an ambiguity error, got: {err}"
+        );
+        let tasks = load(&path).unwrap();
+        assert_eq!(tasks.len(), 1, "the rejected add must not persist a task");
+    }
+
+    /// Reusing the SAME bare label repeatedly (no other project shares its
+    /// basename) must keep working — this guard targets collisions, not bare
+    /// labels in general.
+    #[test]
+    fn add_allows_reusing_the_same_bare_project_label_repeatedly() {
+        let path = tmp_path();
+        add(&path, "First", "aegis", vec![], "", 100).unwrap();
+        add(&path, "Second", "aegis", vec![], "", 200).unwrap();
+        let tasks = load(&path).unwrap();
+        assert_eq!(tasks.len(), 2);
+    }
+
     #[test]
     fn project_filter_bridges_bare_name_and_absolute_path() {
         // backlog id b92a7a77: historical drift where the SAME project was
@@ -1209,6 +1290,44 @@ mod tests {
         let tasks = load(&path).unwrap();
         let stored = &tasks.iter().find(|t| t.id == id).unwrap().project;
         assert_eq!(stored, &canonicalize_project(root.to_str().unwrap()));
+    }
+
+    /// CA-backlog-006 (verified bypass): `add_with_weight` canonicalizes a
+    /// path-shaped project through `canonicalize_project` (git toplevel +
+    /// `canonicalize()`, which resolves symlinks) before storing it. Read-side
+    /// filters (CLI `--project`, and SessionStart's `repo_root()`) passed the
+    /// raw path straight into `project_matches` with no equivalent
+    /// resolution, so a task looked up via a symlinked path to the SAME repo
+    /// silently failed to match its own canonical stored project.
+    #[test]
+    fn list_matches_a_project_filter_reached_via_a_symlinked_path() {
+        let path = tmp_path();
+        let real_dir = tempfile::tempdir().unwrap();
+        let real_root = real_dir.path().canonicalize().unwrap();
+        assert!(std::process::Command::new("git")
+            .arg("-C")
+            .arg(&real_root)
+            .arg("init")
+            .arg("-q")
+            .status()
+            .unwrap()
+            .success());
+
+        let link_parent = tempfile::tempdir().unwrap();
+        let link_path = link_parent.path().join("via-symlink");
+        std::os::unix::fs::symlink(&real_root, &link_path).unwrap();
+
+        // Stored via the REAL (post-canonicalization) path, mirroring what
+        // `add_with_weight` actually persists.
+        add(&path, "Task", real_root.to_str().unwrap(), vec![], "", 100).unwrap();
+
+        // Looked up via the SYMLINK path — a different string, same repo.
+        let tasks = list(&path, None, Some(link_path.to_str().unwrap()), None).unwrap();
+        assert_eq!(
+            tasks.len(),
+            1,
+            "a task must be found via a symlinked path to the same repo"
+        );
     }
 
     #[test]

@@ -1317,6 +1317,22 @@ fn unknown_wrapper_ask(tokens: &[&str], depth: usize) -> Decision {
     let [idx] = candidates[..] else {
         return Decision::Allow;
     };
+    // CA-blastguard-017 (verified bypass): the command word ITSELF may be an
+    // unresolvable expansion (`$RM`, `${RM}`, backtick/`$()` substitution).
+    // Falling through to the tail-only destructiveness check below silently
+    // assumed a benign program: the tail is only the ARGUMENTS (`-rf /path`),
+    // and a bare path/flag list rarely parses as destructive on its own, so
+    // `$RM -rf /path` reached Allow with the actual program never examined.
+    // This is exactly the condition `unresolvable_command_word` already asks
+    // about for shell-eval payloads (`sh -c "$CMD"`) — the top-level command
+    // word deserves the same treatment, checked on the RAW token for the same
+    // reason `unresolvable_command_word` does (see its own comment).
+    if has_unresolvable_expansion(tokens[idx]) {
+        let head = tokens[idx];
+        return Decision::ask(format!(
+            "the command word `{head}` is an expansion whose value only exists at run time — blastguard cannot tell what program this runs"
+        ));
+    }
     if is_recognized_command(&normalized_command(tokens[idx])) {
         return Decision::Allow;
     }
@@ -3124,6 +3140,28 @@ mod tests {
             let d = bash(c);
             assert!(d.is_ask(), "expected ask for {c}, got {d:?}");
             // And with nobody to answer it must land on refusal, never allow.
+            assert!(d.hardened().is_deny());
+        }
+    }
+
+    #[test]
+    fn unresolvable_expansion_as_the_command_word_itself_asks() {
+        // CA-blastguard-017 (verified bypass): `has_unresolvable_expansion` was
+        // wired only into `analyze_shell_payload` (the `sh -c`/`eval` payload
+        // path), never consulted when the expansion IS the top-level command
+        // word. `$RM -rf /path` reached `unknown_wrapper_ask`, which resolved
+        // the tail by skipping the `-rf` flag and testing only `/path` for
+        // destructiveness — a bare path is not itself destructive, so the
+        // whole line fell through to Allow even though the actual program that
+        // runs is unknowable.
+        for c in [
+            "$RM -rf /some/path",
+            "${RM} -rf /some/path",
+            "`get_rm` -rf /some/path",
+            "$(get_rm) -rf /some/path",
+        ] {
+            let d = bash(c);
+            assert!(d.is_ask(), "expected ask for {c}, got {d:?}");
             assert!(d.hardened().is_deny());
         }
     }

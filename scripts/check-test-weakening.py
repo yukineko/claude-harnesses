@@ -229,10 +229,22 @@ def _matching_brace(src: str, open_idx: int) -> int | None:
         # char literal 'x' / '\n' / '{' vs a lifetime 'a (which has no closing ')
         if c == "'":
             if i + 1 < n and src[i + 1] == "\\":
-                j = i + 2
+                # Escaped char literal: '\n' '\t' '\\' '\'' '\x41' '\u{7f}'. The
+                # byte right after the backslash is escaped CONTENT (which may
+                # itself be '\' as in '\\', or a quote as in '\''), never the
+                # closing quote and never a fresh escape lead -- so skip it, then
+                # scan to the closing quote. No char-escape form contains an
+                # unescaped ' before its real closing quote, so this is exact.
+                #
+                # The old scan started at i+2 and re-read that content byte AS an
+                # escape lead: for '\\' it saw the second backslash, did j += 2,
+                # and jumped PAST the closing quote, then ran on to the NEXT ' in
+                # the file -- swallowing every { and } in between. store.rs (two
+                # `.contains('\\')` assertions) hit exactly this, and the run-on
+                # is precisely the surface truncation this function exists to
+                # prevent (a weakening hidden past the first '\\' would vanish).
+                j = i + 3
                 while j < n and src[j] != "'":
-                    if src[j] == "\\":
-                        j += 1
                     j += 1
                 if j < n:
                     i = j + 1

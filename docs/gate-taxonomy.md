@@ -247,6 +247,116 @@ tdd/condukt の2コピーが実際にドリフトした前例がある以上、�
 手書きしているものは見当たらなかった。無理に対象を見つけて統合する必要はないため、これ以上の
 統合は行わない。
 
+## 敵対的fail-openミューテーション検証（2026-07-23）
+
+「このゲートは fail-closed に書かれている」という主張は**判断（予測）**であり、CLAUDE.md 冒頭の
+最上位方針 §2「判断は予測にすぎない。fail はテストで決着させる」に従えば、そのままでは事実として
+扱えない。この節は、GATE_CRATES（`blastguard`/`propguard`/`specguard`/`stuckguard`/`mutategate`/
+`overwatch`）それぞれの判定ロジックに**実際に fail-open 変異を注入し、既存テストスイートが
+本当に RED になるかを機械的に観測**した記録である。実装したハーネスは
+`scripts/check-fail-open-mutation.py`（新規）。
+
+### 設計: 生成と検証を同一エージェントの単発判断に依存させない
+
+各シナリオは `Scenario(crate, file_rel, description, old, new)` という**具体的なソース文字列
+置換**として事前に固定されている（実行時に LLM が「これは壊れそうだ」と判断する余地はない）。
+スクリプトは各シナリオについて必ず次の手順を決定論的に実行する:
+
+1. 対象ファイルが `git status --porcelain` でクリーンであることを確認（汚れていれば変異を拒否）。
+2. `old` 文字列が対象ファイル中に**ちょうど1回**だけ出現することを確認してから `new` へ置換
+   （0回・複数回はどちらも「曖昧」として変異を拒否し、判断で選ばない）。
+3. `cargo test -p <crate>` を実行し、終了コードを観測する。
+4. 終了コードが非ゼロ（RED）かどうかを判定する。ただし出力にコンパイルエラーの兆候
+   （`error[E...]` 等）が見られる場合は「テストスイートが意味的に検出した」ことにはならないため
+   `inconclusive`（判定不能）として扱い、`caught`（捕捉成功）とは区別する。
+5. **成功・失敗・例外いずれの経路でも** `finally` 相当のブロックで `git checkout --` により
+   変異を必ず元に戻し、その後ファイルの内容が変異前のバイト列と完全一致するかを検証する
+   （revert 自体の成否も出力に明記する）。
+
+「REDにできなかった場合は実装を止め判断で代替しない」という是正基準に従い、`not-caught`
+（変異が実際に混入したのに既存テストが検出できなかった）はスクリプトの失敗ではなく**発見**として
+明示的に報告する専用ステータスを持つ（後述のとおり、今回はどのシナリオも `not-caught` にならな
+かった）。
+
+### 選定した6シナリオ（各1件、file:line と変異前後）
+
+- **blastguard** — `crates/blastguard/src/model.rs:84`
+  `            Decision::Ask(reason) => Decision::Deny(reason),`
+  → `            Decision::Ask(_reason) => Decision::Allow,`
+  （`Decision::hardened()`: 人間が答えられない `Ask` を `Deny` へ畳み込む契約を破り、`Allow` へ
+  すり替える — 同ファイル75-81行のdocコメントが「an `Ask` that no human can answer must not
+  become an `Allow`」と明記する、まさにこの関数が防ぐべき fail-open）。
+- **propguard** — `crates/propguard/src/gate.rs:47`
+  `pub fn below_threshold(satisfied: usize, threshold: usize) -> bool {`
+  （本体48行 `    satisfied < threshold`）
+  → `_satisfied`/`_threshold` を受け取り常に `false` を返す（閾値未達でも決してブロックしない）。
+- **specguard** — `crates/specguard/src/parse.rs:107`
+  `            (true, true)`
+  → `            (false, false)`
+  （`parse()`: `needs_user` が解析不能・不在のときの fail-closed デフォルト
+  `(needs_user=true, indeterminate=true)` を、無言でクリーン扱いする `(false, false)` へ反転 —
+  同ファイル28-36行のdocコメントが明記する fail-open #7 そのもの）。
+- **stuckguard** — `crates/stuckguard/src/detect.rs:92`
+  `    if same.len() < cfg.repeat_threshold {`
+  → `    if true {`
+  （`repeat()`: 閾値比較を無条件 `true` に固定し、繰り返し検出が二度と発火しなくする）。
+- **mutategate** — `crates/mutategate/src/lib.rs:236`
+  `            let passed = kr + KILL_RATE_EPSILON >= threshold;`
+  → `            let passed = true;`
+  （`evaluate()`: kill-rate が閾値未満でも常に合格扱いにする — mutategate 自身の kill-rate gate
+  ロジックへの変異）。
+- **overwatch** — `crates/overwatch/src/canary.rs:184`
+  `    let decision = if observed_violations > policy.max_violations_in_window {`
+  → `observed_violations`/`policy.max_violations_in_window` を握りつぶし常に
+  `GateDecision::Proceed` を返す（canary health gate がどれだけ違反が急増しても rollback しない）。
+
+### 実行結果（`python3 scripts/check-fail-open-mutation.py`、2026-07-23）
+
+全6シナリオが `caught`（RED confirmed: yes）、revert confirmed: yes、スクリプトは exit 0 で終了した。
+実行ログ（該当行を引用、フルログはコマンド再実行で再現可能）:
+
+```
+--- blastguard :: ... status: caught  (RED confirmed: yes; revert confirmed: yes; 2.0s)
+--- propguard  :: ... status: caught  (RED confirmed: yes; revert confirmed: yes; 3.6s)
+--- specguard  :: ... status: caught  (RED confirmed: yes; revert confirmed: yes; 3.4s)
+--- stuckguard :: ... status: caught  (RED confirmed: yes; revert confirmed: yes; 1.3s)
+--- mutategate :: ... status: caught  (RED confirmed: yes; revert confirmed: yes; 1.6s)
+--- overwatch  :: ... status: caught  (RED confirmed: yes; revert confirmed: yes; 5.2s)
+
+=== summary ===
+  scenarios run: 6/6
+  caught (RED confirmed): 6
+  NOT caught (existing tests missed a real fail-open): 0
+  inconclusive (mutation didn't compile): 0
+  errored (setup/revert problem): 0
+```
+
+**今回は「テストが検出できなかった fail-open」という発見は無かった** — 6クレートすべてで、選定した
+代表的な fail-open 変異は既存テストスイートによって決定論的に RED として捕捉されることを実測で
+確認した（判断ではなく、実際に `cargo test -p <crate>` を実行して観測した事実）。
+
+### 安全策の実測: 汚れたファイル・クラッシュ復旧経路
+
+「2回連続実行しても、あるいは変異注入中にクラッシュしても、対象ソースを変異状態のまま残さない」
+という是正基準を、対象ファイルへ意図的に未コミットの変更を残した状態で
+`python3 scripts/check-fail-open-mutation.py --crate blastguard` を実行して確認した:
+スクリプトは `git status --porcelain` でファイルが汚れていることを検知して変異注入そのものを
+**拒否**し（`error` ステータス、exit 1）、既存の未コミット変更には一切触れなかった
+（実行前後で `git diff` が完全一致することを確認）。
+
+### `GATE_CRATES` の9番目の重複コピーを新規登録
+
+`scripts/check-fail-open-mutation.py` は6crate配列 `GATE_CRATES = (...)` を Python の
+module-level tuple として保持している（standalone script のため
+`harness_core::fleet::GATE_CRATES` を直接 `pub use` できない）。前節「重複ゲートの統合監査」が
+指摘した既存の**8番目の未追跡コピー**（`scripts/check-fail-open.py`）に続く**9番目**の独立コピーを
+また新たに追加してしまわないよう、`scripts/check-gate-crates-sync.py` の `SOURCES` リストへ
+`("scripts/check-fail-open-mutation.py", python_const_crates, "exact")` として新規登録した
+（既存の `python_const_crates` 抽出関数がそのまま流用できる形で書いたため、抽出関数自体の追加は
+不要だった）。登録後 `python3 scripts/check-gate-crates-sync.py` は
+`OK: GATE_CRATES consistent across 8 sources` を返し、追跡対象ソースは7から8に増えた
+（前節で7に減った経緯があるため、この節での8への増加は新しい追跡対象の追加であり、後戻りではない）。
+
 ## 関連ドキュメント
 
 - [GLOSSARY.md](GLOSSARY.md) — 用語・クレート早見表

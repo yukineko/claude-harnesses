@@ -299,7 +299,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.95"
+version = "0.7.96"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -1324,7 +1324,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "anyhow",
  "chrono",

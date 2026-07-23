@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the GATE_CRATES crate set is consistent across its 7 hardcoded sources.
+"""Verify the GATE_CRATES crate set is consistent across its 8 hardcoded sources.
 
 Two related-but-distinct concepts are hardcoded across these sources:
   - "GATE crates": fleet defense gates that require a canary rollout
@@ -22,6 +22,12 @@ Sources and how each must relate to the canonical GATE_CRATES set:
     that rollout-plugins.sh hard-rejects without --canary. (The hint used to be a
     second literal in the same file; it is now generated from this constant, so
     only the constant can drift.)
+  - scripts/check-fail-open-mutation.py  module-level GATE_CRATES = (...) tuple —
+    must equal canonical EXACTLY. This is the adversarial fail-open mutation
+    harness: it hardcodes the same 6-crate list only because it is a standalone
+    Python script that cannot `pub use harness_core::fleet::GATE_CRATES`. A
+    stale copy here would either mutation-test a crate that is no longer a GATE
+    crate, or (worse) silently skip a real GATE crate's fail-open coverage.
   - crates/harness-core/src/fleet.rs  pub const GATE_CRATES: &[&str] — must equal
     canonical EXACTLY. This is now the SOLE Rust-side literal: it used to be two
     independently hand-copied literals (crates/condukt/src/adversarial.rs's
@@ -246,6 +252,7 @@ SOURCES = [
     (".githooks/pre-push", pre_push_crates, "exact"),
     ("scripts/continuous-audit.sh", continuous_audit_crates, "superset"),
     ("scripts/check-plugin-rollout.py", python_const_crates, "exact"),
+    ("scripts/check-fail-open-mutation.py", python_const_crates, "exact"),
     ("crates/harness-core/src/fleet.rs", rust_const_crates, "exact"),
     (
         "crates/overwatch/skills/continuous-audit/SKILL.md",

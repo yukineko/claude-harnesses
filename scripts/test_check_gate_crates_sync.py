@@ -45,6 +45,10 @@ def _make_fixture_repo(
     skill_missing=(),
     rust_extra=(),
     rust_missing=(),
+    overview_extra=(),
+    overview_missing=(),
+    mutation_extra=(),
+    mutation_missing=(),
     hint_comment="",
     rust_comment="",
     hint_prefix="",
@@ -79,6 +83,8 @@ def _make_fixture_repo(
     hint_set = apply(CANONICAL_SET, hint_extra, hint_missing)
     skill_set = apply(CANONICAL_SET, skill_extra, skill_missing)
     rust_set = apply(CANONICAL_SET, rust_extra, rust_missing)
+    overview_set = apply(CANONICAL_SET, overview_extra, overview_missing)
+    mutation_set = apply(CANONICAL_SET, mutation_extra, mutation_missing)
 
     _write(tmp / "scripts" / "rollout-plugins.sh", f'#!/bin/sh\nGATE_CRATES="{CANONICAL}"\n')
     _write(
@@ -118,6 +124,20 @@ def _make_fixture_repo(
         "## 対象 crate (既定)\n\n"
         f"既定の target は fleet の **GATE crates**: `{','.join(sorted(skill_set))}`\n"
         "(同期の説明文)。`--target` で上書きできる。\n",
+    )
+    _write(
+        tmp / "docs" / "OVERVIEW.md",
+        "## Continuous-Audit\n\n"
+        f"GATE_CRATES（{' / '.join(sorted(overview_set))}）を敵対的にレビューする。\n",
+    )
+    # The adversarial fail-open mutation harness: a second standalone Python
+    # source with the same module-level-tuple shape as check-plugin-rollout.py
+    # (reuses the same extractor, see check-gate-crates-sync.py's SOURCES).
+    _write(
+        tmp / "scripts" / "check-fail-open-mutation.py",
+        "GATE_CRATES = (\n"
+        + "".join(f'    "{c}",\n' for c in sorted(mutation_set))
+        + ")\n",
     )
     return tmp
 
@@ -183,6 +203,28 @@ class DriftDetection(unittest.TestCase):
             self.assertFalse(ok)
             by_path = _by_path(parsed)
             self.assertFalse(canonical <= by_path["scripts/continuous-audit.sh"])
+
+    def test_overview_md_missing_a_crate_is_detected(self):
+        """docs/OVERVIEW.md's prose GATE_CRATES（a / b / c）list must equal
+        canonical EXACTLY; dropping a crate from the prose must be caught."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), overview_missing=("overwatch",))
+            ok, canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertFalse(ok)
+            by_path = _by_path(parsed)
+            self.assertNotIn("overwatch", by_path["docs/OVERVIEW.md"])
+
+    def test_fail_open_mutation_script_missing_a_crate_is_detected(self):
+        """scripts/check-fail-open-mutation.py hardcodes the same 6-crate list
+        (it cannot `pub use` the Rust constant, being a standalone Python
+        script) so it is tracked here too; a dropped crate must be detected,
+        not silently skip that crate's fail-open mutation coverage."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), mutation_missing=("mutategate",))
+            ok, canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertFalse(ok)
+            by_path = _by_path(parsed)
+            self.assertNotIn("mutategate", by_path["scripts/check-fail-open-mutation.py"])
 
     def test_rollout_hint_missing_a_crate_is_detected(self):
         """Regression: check-plugin-rollout.py's GATE list shipped for a while

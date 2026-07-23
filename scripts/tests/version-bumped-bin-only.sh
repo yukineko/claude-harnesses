@@ -7,9 +7,9 @@
 # does not use core.hooksPath, so that commit lands remotely; locally the gate
 # then refuses to integrate it (observed 2026-07-23: `git merge origin/main`
 # blocked with "VERSION-BUMP GATE FAILED: 34 changed plugin(s) not bumped").
-# Those byte differences are build nondeterminism — the same class this repo
-# already declares unusable for a verdict in scripts/check-bin-reproducibility.py
-# — so demanding a version bump for them demands a bump for a non-change.
+# Those byte differences are build nondeterminism (a rebuild of identical
+# source yields different bytes) — so demanding a version bump for them demands
+# a bump for a non-change.
 #
 # This proves:
 #   A. a bin-ONLY change no longer demands a bump (exit 0), and says so;

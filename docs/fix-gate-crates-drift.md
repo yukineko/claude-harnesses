@@ -71,7 +71,7 @@ advisory メッセージ本文中の crate 列挙（コメント含む）も同�
 - `crates/overwatch/skills/continuous-audit/SKILL.md` の該当節からクレート列挙を抽出し、正典と一致するか確認。
 - 不一致があれば非0終了・該当ファイルと差分を表示（`check-plugin-versions.py` と同じ出力作法）。
 
-CI もしくは `.githooks/pre-commit`（advisory 層）に配線するかは、既存の injectguard/bin-reproducibility ゲートと同様の判断基準（非バイパス本ゲートは CI 側）に従う。
+CI もしくは `.githooks/pre-commit`（advisory 層）に配線するかは、既存の injectguard/doc-claims ゲートと同様の判断基準（非バイパス本ゲートは CI 側）に従う。
 
 ## 6. 受け入れ基準
 

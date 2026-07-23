@@ -16,8 +16,8 @@ name: coverage
 # the bottom — nothing here reaches the network beyond the crates.io installs
 # the other workflows already do.
 #
-# This is a separate job from build-binaries.yml's `smoke` gate; it does not
-# touch or weaken that gate.
+# This is an independent coverage job; it does not gate anything (no required
+# checks in this repo) and reports coverage only.
 on:
   workflow_dispatch:
   push:

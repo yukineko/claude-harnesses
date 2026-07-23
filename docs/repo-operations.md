@@ -8,14 +8,11 @@
 
 ## ゲートスクリプトの詳細（`cargo fmt`/`clippy` 以外）
 
-- **prompt-injection 防御ゲート（2本）** — prompt に load される資産と同梱バイナリの改竄を機械検出する:
+- **prompt-injection 防御ゲート（1本）** — prompt に load される資産に改竄が植わっていないか機械検出する:
   - `python3 scripts/check-prompt-injection.py`（injectguard）— skills/agents/hooks/CLAUDE.md/.compass/docs
     に隠蔽・検証バイパス・egress 文言が植わっていないか走査（防御 framing は除外）。ローカルは
     `git config core.hooksPath .githooks` で pre-commit を有効化（速い advisory 層。CI の `injectguard` job が
     非バイパスの本ゲート）。
-  - `python3 scripts/check-bin-reproducibility.py`（CI `bin-reproducibility` job）— 全 bin をソースから再ビルドし、
-    committed-only な悪性パターン文字列（source が生成しない焼き込み）を検出。生の committed-only 件数・size 差は
-    ビルド非決定性なので**判定に使わない**（悪性デルタのみ）。host triple のみ対象。
 - **Continuous-Audit 自動起動導線** — `git config core.hooksPath .githooks` を有効化していれば
   `.githooks/pre-push` が GATE_CRATES（blastguard/propguard/specguard/stuckguard/mutategate/overwatch）配下の
   変更を検知し、`scripts/continuous-audit.sh --dry-run` を勧める advisory メッセージを出す

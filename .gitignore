@@ -25,3 +25,13 @@ __pycache__/
 
 # crate-local runtime progress artifacts (taskprog etc.) — never track
 crates/*/.claude/
+
+# compiled per-platform plugin binaries — NEVER committed (personal repo, no
+# distribution). Local deploy builds from source: rollout/rebuild run
+# `cargo build --release` and copy target/release/<name> into the live plugin
+# cache. Only the platform-tagged artifacts are ignored; the hand-written
+# bin/<name> wrapper dispatchers (no -os-arch tag) stay tracked.
+crates/*/bin/*-darwin-arm64
+crates/*/bin/*-darwin-x86_64
+crates/*/bin/*-linux-arm64
+crates/*/bin/*-linux-x86_64

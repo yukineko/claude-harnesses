@@ -41,7 +41,6 @@
 | `check-test-weakening.py`（test-weakening） | テスト適合性 | pre-commit / CI（`test-weakening.yml`） | 同一 commit 内で実装とテストが変化した際、テスト側のアサーション削除等の「弱体化」を検出する |
 | `check-plugin-versions.py`（version-lockstep） | 実装正しさ | pre-commit / CI（`version-lockstep.yml`） | 3ファイルの version 文字列が一致するかだけを見る機械的整合チェック |
 | `check-version-bumped.py`（bump-on-change） | 実装正しさ | pre-commit / CI（`version-lockstep.yml`） | base ref との version 比較という機械的な bump-on-change チェック |
-| `check-bin-reproducibility.py` | 実装正しさ | CI（`bin-reproducibility.yml`） | ソースからの再ビルド結果と committed バイナリを比較する再現性検査（悪性デルタのみ判定に使用） |
 | `check-bench-regression.py` | テスト適合性 | CI（`bench-regression.yml`） | benchkit の SWE-bench 実行結果から回帰（regression）を検出する、テスト実行結果ベースの判定 |
 | `check-gate-crates-sync.py` | 実装正しさ | CI（`gate-crates-sync.yml`。および pre-push が参照する GATE_CRATES 集合の元） | GATE_CRATES 集合が複数ソース間で一致するかを機械照合する |
 | `check-plugin-rollout.py` | 実装正しさ | pre-push（advisory）/ CI（`gate-crates-sync.yml` はテストのみ実行、本体は pre-push 駆動） | source version と registry version の文字列比較のみの機械判定 |
@@ -132,7 +131,7 @@
   すべて機械的。下記「グレーゾーン設計」節の理由により、束ねて total verdict とする設計自体は
   混在とみなさずリファクタリングしない。
 - スクリプトゲート（`check-doc-claims.py`, `check-test-weakening.py`, `check-plugin-versions.py`,
-  `check-version-bumped.py`, `check-bin-reproducibility.py`, `check-bench-regression.py`,
+  `check-version-bumped.py`, `check-bench-regression.py`,
   `check-gate-crates-sync.py`, `check-plugin-rollout.py`, `check-ci-red.py`, `check-fail-open.py`）
   — いずれも実装を確認し、文字列/バージョン比較・path:line 照合・数値閾値・run 履歴カウントなど
   決定論的な判定のみで構成されていることを確認した。分類（実装正しさ or テスト適合性）と実装は一致。

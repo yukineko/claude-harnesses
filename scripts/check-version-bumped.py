@@ -108,10 +108,11 @@ def main():
 
         # Derived-artifact carve-out: crates/<name>/bin/* holds COMPILED output,
         # not source. A rebuild of identical source produces different bytes
-        # (this repo already declares that difference unusable for a verdict —
-        # see scripts/check-bin-reproducibility.py, which judges only malicious
-        # deltas because "raw committed-only counts and size diffs are build
-        # nondeterminism"). Demanding a version bump for it demands a bump for a
+        # (a rebuild of identical source produces different bytes, so those
+        # diffs are build nondeterminism, not a meaningful signal). Compiled
+        # binaries are now gitignored (personal repo, no distribution), so this
+        # is a backstop for a stray tracked artifact. Demanding a version bump
+        # for one demands a bump for a
         # non-change, and it blocked integrating CI's own `ci: rebuild plugin
         # binaries` commit (observed 2026-07-23: 34 plugins, zero source files).
         # The carve-out is narrow ON PURPOSE: it applies only when EVERY changed

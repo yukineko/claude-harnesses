@@ -35,7 +35,7 @@
 
 | ゲート (スクリプト) | 分類 | トリガー種別 | 分類理由 |
 |---|---|---|---|
-| `check-prompt-injection.py`（injectguard） | 総合判断 | pre-commit（advisory）/ CI（`injectguard.yml`、非バイパスの本ゲート） | プロンプト資産中の隠蔽・検証バイパス・exfiltration 文言というパターンを走査するが、文脈判断（防御 framing の除外等）を伴う複合判定 |
+| `check-prompt-injection.py`（injectguard） | 実装正しさ（是正済み。旧: 総合判断） | pre-commit（advisory）/ CI（`injectguard.yml`、非バイパスの本ゲート） | 正規表現によるパターン走査＋近傍行/見出しの決定論的ウィンドウ判定（`DEFENSE_WINDOW`）のみで判定する。LLM 呼び出し・主観評価は一切なく、`check-fail-open.py`（実装正しさ）と同一手法（receiver-aware パターン照合）。旧分類理由「文脈判断を伴う複合判定」は実装のアルゴリズム的性質（決定論的固定ロジック）を「複合判断」という言葉で holistic 側に誤誘導していたため是正した（詳細は下記「階層混在監査」節） |
 | `check-fail-open.py`（fail-open-guard） | 実装正しさ | pre-commit / CI（`fail-open.yml`、`--ratchet` 付き） | 既知のコードパターン（swallow-and-allow 等の構文形）を機械的に検出する静的解析 |
 | `check-doc-claims.py`（doc-claims） | 実装正しさ | pre-commit / CI（`doc-claims.yml`） | ドキュメント中の `path:line` 引用が実際のファイル内容と一致するかを機械照合する |
 | `check-test-weakening.py`（test-weakening） | テスト適合性 | pre-commit / CI（`test-weakening.yml`） | 同一 commit 内で実装とテストが変化した際、テスト側のアサーション削除等の「弱体化」を検出する |
@@ -65,6 +65,95 @@
 - Continuous-Audit（GATE_CRATES = blastguard / propguard / specguard / stuckguard / mutategate の
   敵対的レビュー）は本表のような常時ゲートではなく opt-in の別ループなので、この一覧には含めない
   （`docs/OVERVIEW.md` の該当節を参照）。
+
+## 階層混在監査（2026-07-23）
+
+各ゲート（Stop hook crate 7つ + `scripts/check-*.py` 11本）の実装を読み、上記3階層分類との「階層混在」
+（実装正しさ用の機械的ゲートに LLM 判断/曖昧な総合基準が明確に混入している。あるいは総合判断ゲートが
+実は機械的閾値だけで済む判定を holistic scope に含めている）がないかを監査した。
+
+是正基準: 「明確な混在のみ是正必須」。機械的ゲートに LLM 判断/曖昧な総合判断基準が**明確に**混入している
+箇所のみパッチを当てる。グレーゾーン設計（機械的だが複合的な判定を束ねている）自体は混在とみなさず、
+コードは変更せず理由をここに明記するに留める。
+
+### 是正した混在: `check-prompt-injection.py`（injectguard）の分類誤り
+
+**発見**: 分類は「総合判断」、分類理由は「プロンプト資産中の隠蔽・検証バイパス・exfiltration 文言という
+パターンを走査するが、文脈判断（防御 framing の除外等）を伴う複合判定」だった。しかし実装
+（`scripts/check-prompt-injection.py`）を読むと、判定はすべて次の決定論的な要素だけで構成されている:
+
+- `scripts/check-prompt-injection.py:46-76` の `MALICIOUS` — 正規表現パターンのリスト（LLM 呼び出しなし）。
+- `scripts/check-prompt-injection.py:80-87` の `DEFENSE_MARKERS` — 偽陽性抑制も同様に正規表現。
+- `scripts/check-prompt-injection.py:89` の `DEFENSE_WINDOW = 4  # lines above/below a hit to look for a defense marker`
+  — 「文脈判断」の実体は固定行数ウィンドウ内の正規表現マッチという、完全に決定論的なアルゴリズム。
+- `scripts/check-prompt-injection.py:150-159` の `line_is_defended` — 見出し (`nearest_heading`) と近傍行の
+  `DEFENSE_MARKERS` マッチのみで判定し、主観評価・LLM 推論は一切呼んでいない。
+
+これは同じ「pre-commit / CI で駆動される静的解析＋receiver-aware な偽陽性抑制」という設計の
+`check-fail-open.py`（実装正しさに分類済み、`scripts/check-fail-open.py:31-34`
+「the patterns are matched RECEIVER-AWARE, not by a bare keyword」）と手法的に同一である。
+両者とも「曖昧さの余地が小さい」機械的判定であり、旧分類理由の「複合判定」という言葉が実装の
+決定論的な性質を holistic 側に誤誘導していた（誤診断であって、実際に LLM 判断や曖昧な総合基準を
+呼んでいるわけではない）。
+
+**是正**: 上記「ゲート一覧」の該当行を「実装正しさ（是正済み。旧: 総合判断）」に変更し、分類理由を
+実装の逐語引用に基づいて書き換えた。**コード自体（`scripts/check-prompt-injection.py`）は変更していない**
+（判定ロジックそのものは元から正しく決定論的だったため、直すべきは taxonomy 側の記述のみ）。
+
+### 監査したが混在なしと判断したゲート
+
+- **donegate**（`crates/donegate/src/gate.rs`）— `GateReport::verdict`
+  (`crates/donegate/src/gate.rs:62-69`) は `blocking()` の exit code 判定のみで `Verdict` を構成する。
+  LLM 判断・曖昧基準は無し。実装正しさとして妥当。
+- **tdd**（`crates/tdd/src/gate.rs`）— `classify`/`Report::verdict`
+  (`crates/tdd/src/gate.rs:60-77`, `112-170`) は git diff のスキャン結果と正規表現/グロブ照合のみで
+  ブロック判定する。テスト適合性として妥当。
+- **mutategate**（`crates/mutategate/src/lib.rs`）— `evaluate`
+  (`crates/mutategate/src/lib.rs:212-278`) は `cargo-mutants` の `outcomes.json` から算出した
+  kill-rate と閾値の数値比較のみ。テスト適合性として妥当。
+- **budgetguard**（`crates/budgetguard/src/gate.rs`）— `verdict`
+  (`crates/budgetguard/src/gate.rs:209-246`) はコスト USD と閾値の数値比較のみ。実装正しさとして妥当。
+- **propguard**（`crates/propguard/src/gate.rs`, `derive.rs`）— 導出 (`derive_properties`) と
+  閾値判定 (`below_threshold`, `crates/propguard/src/gate.rs:44-49`) はいずれも決定論的だが、各
+  プロパティが実際に「成り立つか」の判定自体は inject/subprocess の総合評価に委譲されている
+  （`crates/propguard/src/derive.rs:11-17` が「Honest ceiling」として明文化済み）。この委譲構造こそが
+  「総合判断」分類の根拠であり、混在ではなく設計として正しい記述。
+- **reviewgate**（`crates/reviewgate/src/main.rs`, `review.rs`）— inject モードは running agent の
+  自己レビュー、subprocess モードは独立レビュアー subprocess の自由記述判定に依存する
+  (`crates/reviewgate/src/main.rs:1-24` のモジュール doc)。閾値・カウントに還元できない複合判断であり、
+  総合判断として妥当。
+- **precommit-audit**（`crates/precommit-audit/src/checks/*.rs`）— 個々のチェック（`check_hardcoded_ip`
+  `crates/precommit-audit/src/checks/mod.rs:149-173`、`check_hardcoded_secret` 同 175-200、
+  `check_swallowed_error` 同 202-226 等）はすべて正規表現・grep・exit code ベースの静的解析であり、
+  `checks/review.rs` の subagent review contract (`crates/precommit-audit/src/checks/review.rs:16-95`)
+  もハッシュ照合（`diff_hash` が計算した SHA-256 と `<review_path>` に書かれた値の一致確認）のみで、
+  precommit-audit 自身は LLM 判断を一切行わない（LLM 判断は `/precommit` コマンド側の責務であり、
+  precommit-audit はその成果物の存在・一致を機械的に検査するだけ）。したがって個々のルールは
+  すべて機械的。下記「グレーゾーン設計」節の理由により、束ねて total verdict とする設計自体は
+  混在とみなさずリファクタリングしない。
+- スクリプトゲート（`check-doc-claims.py`, `check-test-weakening.py`, `check-plugin-versions.py`,
+  `check-version-bumped.py`, `check-bin-reproducibility.py`, `check-bench-regression.py`,
+  `check-gate-crates-sync.py`, `check-plugin-rollout.py`, `check-ci-red.py`, `check-fail-open.py`）
+  — いずれも実装を確認し、文字列/バージョン比較・path:line 照合・数値閾値・run 履歴カウントなど
+  決定論的な判定のみで構成されていることを確認した。分類（実装正しさ or テスト適合性）と実装は一致。
+
+### グレーゾーンとして是正しない設計（理由の明記のみ）
+
+- **precommit-audit**（総合判断）— 個々のルールはいずれも機械的（正規表現・grep・exit code）だが、
+  10種以上の独立した検査（missing-test / hardcoded-ip / hardcoded-secret / swallowed-error /
+  duplicate-function / local-capture / markdown-links / line-endings / file-length / custom-rules /
+  linters / subagent-review-contract、`crates/precommit-audit/src/checks/mod.rs:604-641` の
+  `run_static_checks` が束ねる一覧）を1回の diff に対して総合し、「この diff は clean か」という
+  単一の複合判定へ集約する。個々のルールを分解して「実装正しさ」に再分類しても、ゲートとしての
+  振る舞い（複数の独立した機械的シグナルを1つの block/allow に統合するオーケストレーション自体）は
+  総合判断的性質を持ち続けるため、リファクタリングの実益が薄い。このグレーゾーンはタスクの
+  是正基準が明示的に許容する設計判断として維持する。
+- **budgetguard**（実装正しさ）— `session_cost` (`crates/budgetguard/src/gate.rs:158-178`) は
+  gauge の `SessionRecord` キャッシュと transcript 再パースという複数のコスト情報源を
+  fresh 判定 (`record_is_fresh`, 同 186-198) で選択し、`Determination<Option<f64>>` の三値
+  （測定済み/計測対象なし/判定不能）に正規化してから閾値比較する、という点で「複合的」ではあるが、
+  各分岐は if/else の決定論的ロジックであり LLM 判断・曖昧基準は一切登場しない。「機械的だが
+  複数のソース/分岐を束ねている」というグレーゾーンはタスクの是正基準に照らして混在とみなさない。
 
 ## 関連ドキュメント
 

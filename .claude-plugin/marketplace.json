@@ -531,8 +531,8 @@
     },
     {
       "name": "reviewgate",
-      "description": "v0.1.16: new `emit_violation(root, session, tag)` records an `overwatch` `ViolationSource::Reviewgate` event tagged with the block reason after `review_run` blocks a Stop, feeding the unified review-queue. Code-review gate for Claude Code: on Stop, review the diff before the agent can declare done. In inject mode it blocks the stop and injects a review rubric so the running agent self-reviews (no API key); in subprocess mode it runs an independent reviewer and surfaces only its findings. Subscription-native, bundled Rust binary. v0.1.10: added #![deny(clippy::panic)] at crate root (existing test-module panic!() calls allowed locally).",
-      "version": "0.1.16",
+      "description": "v0.1.17: the reviewgate-typing subagent reviews for whether type checking and determinism are actually used — five passes (prose/signature/call-site/body/early-return), a has-a-verdict gate that requires enumerating downstream consumers before reporting, and a mirror check that treats a correct tri-state twin as evidence its sibling is a migration miss. v0.1.16: new `emit_violation(root, session, tag)` records an `overwatch` `ViolationSource::Reviewgate` event tagged with the block reason after `review_run` blocks a Stop, feeding the unified review-queue. Code-review gate for Claude Code: on Stop, review the diff before the agent can declare done. In inject mode it blocks the stop and injects a review rubric so the running agent self-reviews (no API key); in subprocess mode it runs an independent reviewer and surfaces only its findings. Subscription-native, bundled Rust binary. v0.1.10: added #![deny(clippy::panic)] at crate root (existing test-module panic!() calls allowed locally).",
+      "version": "0.1.17",
       "category": "quality",
       "keywords": [
         "hooks",

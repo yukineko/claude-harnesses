@@ -400,7 +400,9 @@ mod violation_emission_tests {
         std::fs::create_dir_all(&root).expect("create project root");
         emit_violation(&root, "session-x", "blocked-review");
 
-        let events = overwatch::store::read_violations(&root).expect("read_violations");
+        let events = overwatch::store::scan_violations(&root)
+            .events_or_empty()
+            .expect("read_violations");
 
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),
@@ -435,7 +437,9 @@ mod violation_emission_tests {
         std::fs::create_dir_all(&root).expect("create project root");
         emit_violation(&root, "session-x", "");
 
-        let events = overwatch::store::read_violations(&root).expect("read_violations");
+        let events = overwatch::store::scan_violations(&root)
+            .events_or_empty()
+            .expect("read_violations");
 
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),

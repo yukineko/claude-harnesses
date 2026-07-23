@@ -227,51 +227,11 @@ pub fn append_violation(cwd: &Path, event: &ViolationEvent) -> Result<()> {
     Ok(())
 }
 
-/// **FAIL-OPEN BY CONSTRUCTION — SCHEDULED FOR DELETION. Do not add callers.**
-/// Use [`scan_violations`] instead.
-///
-/// Reads violations.jsonl into a vec. Its `Result` is a lie: the `Err(_) =>
-/// Ok(Vec::new())` arm makes an UNREADABLE ledger byte-identical to one that
-/// has never recorded a violation, and the `if let Ok(event)` in the success
-/// arm silently DROPS any line this build cannot decode — a schema-drifted real
-/// violation vanishes from a list the caller reads as authoritative. Both
-/// collapses are observed by
-/// `crates/overwatch/tests/faultinject_read_violations.rs`, which drives this
-/// function and [`scan_violations`] under the same injected faults.
-///
-/// **It has no production callers left.** Every one was migrated to
-/// [`scan_violations`], each deciding explicitly what `Undetermined` means
-/// there: `bridge.rs` and `review_queue.rs` omit the source and announce it,
-/// `violation_cli.rs` and `condukt`'s review-brief refuse with a non-zero exit,
-/// `benchkit::auditsample` exits 2, and `propguard`'s checker-outage escalation
-/// blocks. The remaining references are test-only
-/// (`crates/specguard/src/main.rs`, `crates/benchkit/src/auditsample.rs` tests)
-/// plus the fault-injection oracle above, which asserts *against* this
-/// function's behaviour and therefore cannot compile without it. Deleting the
-/// function requires retiring that oracle, which is a human decision.
-pub fn read_violations(cwd: &Path) -> Result<Vec<ViolationEvent>> {
-    let path = violations_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => {
-            let mut events = Vec::new();
-            for line in txt.lines() {
-                if !line.is_empty() {
-                    if let Ok(event) = serde_json::from_str::<ViolationEvent>(line) {
-                        events.push(event);
-                    }
-                }
-            }
-            Ok(events)
-        }
-        Err(_) => Ok(Vec::new()),
-    }
-}
-
 /// Three-valued result of reading the violation registry: the ONLY sanctioned
 /// way to read it. It keeps "genuinely no violations yet" DISTINCT from "cannot
-/// be trusted", so no caller can read a broken store as clean. Its two-valued
-/// predecessor [`read_violations`] is retained only for the fault-injection
-/// oracle that asserts against it and has no production callers.
+/// be trusted", so no caller can read a broken store as clean. It fully
+/// replaced the retired two-valued reader: there is no fail-open `Result`
+/// variant left for a caller to reach for.
 #[derive(Debug)]
 pub enum ViolationScan {
     /// The registry file does not exist: no violation has ever been recorded
@@ -292,10 +252,36 @@ pub enum ViolationScan {
     Events(Vec<ViolationEvent>),
 }
 
+impl ViolationScan {
+    /// Fail-closed extractor for callers that only care about the clean and
+    /// absent cases and want an ERROR on the untrustworthy one: `Events` yields
+    /// its list, `Absent` yields an empty vec (a store that was never written
+    /// genuinely holds zero violations), and `Undetermined` is an `Err`.
+    ///
+    /// This is the exact, fail-closed stand-in the tests use in place of the
+    /// retired two-valued reader, which returned an empty vec for BOTH absent
+    /// and unreadable/corrupt — collapsing "nothing recorded" into "could not
+    /// read". Here the absent case is preserved but the untrustworthy case can
+    /// no longer masquerade as empty; the caller must handle the `Err`
+    /// (read-back assertions `.expect()` it, so a corrupt store fails loudly
+    /// instead of silently reading as empty). Production gating code should
+    /// `match` all three arms directly and decide what `Undetermined` means at
+    /// its own call site rather than routing through this helper.
+    pub fn events_or_empty(self) -> Result<Vec<ViolationEvent>> {
+        match self {
+            ViolationScan::Events(events) => Ok(events),
+            ViolationScan::Absent => Ok(Vec::new()),
+            ViolationScan::Undetermined => {
+                anyhow::bail!("violation store is Undetermined — it must not be read as empty")
+            }
+        }
+    }
+}
+
 /// Strictly scan the violation registry, distinguishing "absent" (legit empty)
 /// from "undetermined" (unreadable / partially-unparseable → untrustworthy)
-/// from a clean, fully-parsed event list. This is the fail-CLOSED replacement
-/// for [`read_violations`] and the reader every caller now uses; each decides
+/// from a clean, fully-parsed event list. This is the ONLY sanctioned reader
+/// of the violation registry; each caller decides
 /// at its own call site what `Undetermined` means there (block, refuse, exit
 /// non-zero, or omit-and-announce) so a broken/corrupt store is never silently
 /// read as "zero violations → proceed". A single non-empty line that fails to parse
@@ -357,7 +343,7 @@ pub fn append_rollback(cwd: &Path, event: &RollbackEvent) -> Result<()> {
 
 /// Read all canary rollback events from rollbacks.jsonl. Returns an empty vec
 /// if the file doesn't exist or is empty (fail-soft, same contract as
-/// `read_events` / `read_violations`).
+/// `read_events`).
 pub fn read_rollbacks(cwd: &Path) -> Result<Vec<RollbackEvent>> {
     let path = rollbacks_path(cwd)?;
     match std::fs::read_to_string(&path) {

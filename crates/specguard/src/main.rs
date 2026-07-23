@@ -2016,7 +2016,9 @@ mod tests {
             std::env::set_var("CLAUDE_CODE_SESSION_ID", "sess-123");
             emit_audit_violations(&repo, &findings);
             std::env::remove_var("CLAUDE_CODE_SESSION_ID");
-            overwatch::store::read_violations(&repo).unwrap()
+            overwatch::store::scan_violations(&repo)
+                .events_or_empty()
+                .unwrap()
         });
 
         assert_eq!(events.len(), 2);
@@ -2038,7 +2040,9 @@ mod tests {
 
         let events = with_home(tmp.path(), || {
             emit_audit_violations(&repo, &[]);
-            overwatch::store::read_violations(&repo).unwrap()
+            overwatch::store::scan_violations(&repo)
+                .events_or_empty()
+                .unwrap()
         });
         assert!(
             events.is_empty(),

@@ -413,7 +413,7 @@ pub fn execute(
 /// Reads the gate-passed population from disk, draws the same deterministic
 /// seeded sample as [`execute`], then — instead of loading a modeled audits
 /// file — reads the *actual* recorded violations via
-/// [`overwatch::store::read_violations`] and derives the misses by
+/// [`overwatch::store::scan_violations`] and derives the misses by
 /// cross-reference ([`derive_misses_from_violations`]). Only the derived
 /// verdicts whose `change_id` is in the sample are routed through the two
 /// feedback paths, exactly as the modeled path does. Returns the process exit
@@ -845,7 +845,9 @@ mod tests {
         overwatch::store::append_violation(cwd.path(), &ev).unwrap();
 
         // Sanity: the store now has the event (proves we read real data).
-        let read_back = overwatch::store::read_violations(cwd.path()).unwrap();
+        let read_back = overwatch::store::scan_violations(cwd.path())
+            .events_or_empty()
+            .unwrap();
         assert_eq!(read_back.len(), 1);
         assert_eq!(read_back[0].task_key, "c001");
 

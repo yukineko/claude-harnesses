@@ -188,7 +188,14 @@ fn git_output_to_result(
             detail
         );
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    // `trim_end`, NOT `trim`: git's own output (e.g. `status --porcelain`)
+    // can carry a semantically meaningful LEADING space on its first line —
+    // the "not staged" status column of the first entry. A blanket `.trim()`
+    // eats that byte (it sits at position 0 of the whole blob), which made
+    // `repo_commit::staged_paths` misread an ordinary unstaged edit as
+    // staged. Only the trailing newline(s) `git` always appends need
+    // stripping.
+    Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
 }
 
 /// Repo root for `cwd` per git itself.

@@ -1,25 +1,27 @@
 ## north_star
-fail-open を『後から検出する』のをやめ、『そもそも書けない』側へ移す。harness_core の verdict 型は出力側でこれを既に達成している — Clean は private witness でしか作れず、Determination には unwrap_or も ok も Default も無いので、『判定できなかった』を『問題なし』へ潰す最短経路が型として存在しない。同じ技法を入力側へ広げる。根拠 (測定日 2026-07-22 / 測定点 56872974): (1) ルート Cargo.toml にも各 crate の Cargo.toml にも lints セクションが1つも無く、clippy の unwrap_used/expect_used は既定 off なので gate crate でも素通りしていた。代わりに deny(clippy::panic) が15ファイルに手貼り。(2) GATE_CRATES の src 配下に生の fs::read_dir / fs::read_to_string / Command::new が97箇所。harness_core は verdict.rs を持つが fs/proc の境界ラッパを持たない。(3) 既にある機械ゲート check-fail-open.py は行単位のテキスト走査で、自身の docstring が『a line-level scan cannot tell whether the caller treats None as fail-open』と限界を明記している。検出器は本質的に上限を持つので、その外側を型で閉じる。
+fail-open を『後から検出する』のをやめ、『そもそも書けない』側へ移す。harness_core の verdict 型は出力側でこれを既に達成している — Clean は private witness でしか作れず、Determination には unwrap_or も ok も Default も無いので、『判定できなかった』を『問題なし』へ潰す最短経路が型として存在しない。同じ技法を入力側へ広げる。
 
 ## definition_of_done
-- ワークスペース直下の Cargo.toml が clippy の lints セクションを持ち、gate crate 側の Cargo.toml がそれを継承する。unwrap_used / expect_used / panic が gate crate で deny に なっていることを、違反を1件わざと書いて clippy が非0で終了するのを観測してから消す (RED を先に見る) ことで確認している。手貼りの deny(clippy::panic) のうち gate crate 側の 10個がワークスペース設定へ集約され重複が残っていない。残り5個 (budgetguard / donegate / reviewgate / schemaguard) は集約せず、集約しない理由 (その crate を workspace lints に opt-in させると unwrap_used / expect_used の deny も同時に効くため、別スコープの一手になる) が コード側のコメントに明文で残っている。この5個の集約は parked。
-- enforce の置き場所は local である。clippy ゲートを GitHub の required status check として 登録しない。これは backlog 7ecf3797 の完了条件に書かれていた『clippy ジョブが required status check として列挙される』を意図的に採用しないという判断であり、理由は CLAUDE.md 第7節 (ブロックと許可を決める権限を外部サービスに預けない)。不採用の理由が backlog 項目と charter の 両方に明文で残っており、散文が実挙動と一致している。
-- harness_core が fallible な入力境界のラッパを提供し、その返り値が既存の三値型 Determination である。少なくともディレクトリ走査・ファイル読み出し・subprocess 実行の3経路を覆う。新しい三値型を 作らず既存のものを再利用していること、および Result を bool へ潰す近道を型として提供していない こと (Default も From<bool> も unwrap_or も生えていないこと) をコンパイル失敗テストで固定している。
-- GATE_CRATES 内で標準ライブラリの生のディレクトリ走査・ファイル読み出し・subprocess 実行を 直接呼んでいる箇所が機械的に検出され、検出時に local のゲートが非0で終了する。段階移行の ための許可リストを持ってよいが、その件数は baseline として固定され、増える方向の編集が ゲートで止まる (ratchet)。baseline の初期値は測定コマンドと測定点つきで記録されている。
-- アンチ空虚の対照実験を記録している。上記の型とゲートが実在する fail-open を実際に捕まえる ことを、既知の未修正インスタンス少なくとも1件に対して観測している (導入前は緑、導入後は赤、修正後にまた緑)。何も検出しない検出器は常に緑なので、これが無ければ他の4項目は『通ること』しか証明しない。
+- ワークスペース直下の Cargo.toml が clippy の lints セクションを持ち、gate crate 側の Cargo.toml がそれを継承する。達成済み (blastguard・propguard・specguard・stuckguard・mutategate・overwatch の6crateが [lints] workspace = true を持つ、budgetguard・donegate・reviewgate・schemaguardの4個は集約しない理由がコード側コメントに明文で残るparked)。
+- enforce の置き場所は local である。clippy ゲートを GitHub の required status check として登録しない。達成済み (CLAUDE.md 第7節どおりlocal pre-commit配線)。
+- harness_core が fallible な入力境界のラッパを提供し、その返り値が既存の三値型 Determination である。達成済み (crates/harness-core/src/boundary.rs、ディレクトリ走査・ファイル読み出し・subprocess実行の3経路)。
+- GATE_CRATES 内で標準ライブラリの生のディレクトリ走査・ファイル読み出し・subprocess 実行を直接呼んでいる箇所が機械的に検出され、検出時に local のゲートが非0で終了する。達成済み (scripts/check-raw-io-ratchet.py、baseline=77、.githooks/pre-commit に配線済み、commit adec7ae3)。
+- アンチ空虚の対照実験を記録している。達成済み (scripts/test_check_raw_io_ratchet.py の anti-vacuity control experiment、20 tests green)。
+- baseline=77 の内訳 (specguard 37・overwatch 30・propguard 5・stuckguard 4・mutategate 1) の生IO呼び出しが、右サイズに分解した単位でharness_core内のboundaryラッパ経由へ実際に移行され、baselineが77から単調減少する。各移行はboundary移行前後でcargo testとclippyがgreenであることを観測してから確定する。
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト
 
 ## current_gap
-型は用意したが、まだ誰も使う義務を負っていない。boundary.rs は Determination で3つの入力境界を包んだ (527498c0)。しかし GATE_CRATES には生の fs::read_dir / fs::read_to_string / Command::new が97箇所 (測定 2026-07-22 / 56872974) 残っており、新しく生の呼び出しを書き足すことを止めるものが何も無い。DoD4 の検出器と ratchet が無い限り boundary.rs は『使ってもよい代替』でしかなく、fail-open の入口は開いたままである。加えて DoD5 の対照実験がまだ無いため、仮に検出器を作っても『実在する fail-open を捕まえる』ことは未証明のまま。
+DoD1-5は達成済み(2026-07-23確認、outcome #28)。残る唯一のDoDは、baseline=77の生IO呼び出し(specguard 37・overwatch 30・propguard 5・stuckguard 4・mutategate 1)をharness_core内のboundaryラッパ経由へ移行しbaselineを単調減少させること。mutategate(1)+stuckguard(4)+propguard(5)=10箇所は合計しても小さく1タスクでs〜mサイズに収まるが、overwatch(30)とspecguard(37)はそれぞれ単体でxl相当のためさらに再分解が要る。
 
 ## next_action
-生 IO/subprocess の検出器と baseline ratchet を作る (size m)。GATE_CRATES の src 配下で fs::read_dir / fs::read_to_string / Command::new を直接呼ぶ箇所を数え、baseline を超えたら非0で終了する scripts/check-raw-io.py を追加し、baseline を測定コマンド・測定点・測定日つきで固定する。テスト除外規則は自己申告ではなく機械判定できる形にする。
+mutategate(1箇所)・stuckguard(4箇所)・propguard(5箇所)、計10箇所の生IO呼び出しをharness_core内のboundaryラッパ経由へ移行する (size s)。移行前にcargo test -p mutategate -p stuckguard -p propguardがgreenであることを確認し、移行後も同じテストがgreenであること、およびscripts/check-raw-io-ratchet.pyのcountが77から67へ減ることを観測する。baselineファイルは67に再pinする。overwatch・specguardはそれぞれ別タスクとしてこの後に回す(park)。
 
 ## parked
-- 検出器を local の pre-commit に配線する (size s)。判定不能 (python3 欠落・スクリプト欠落) を exit 0 で素通りさせない。CI の required status check には登録しない (第7節)。
-- アンチ空虚の対照実験 = DoD5 (size s)。生の呼び出しを1件足すと赤く、boundary 経由に書き換えると緑に戻ることを観測し、両方の出力を記録する。
-- 既存97箇所のうち gate 判定に直結する経路を boundary 経由へ移行する (size xl — 要再分解)。
-- 手貼りの deny(clippy::panic) 残り5個 (budgetguard / donegate / reviewgate / schemaguard) の集約。各 crate を workspace lints に opt-in させると unwrap_used / expect_used の deny も同時に効くため、それら4 crate の production の unwrap/expect を潰すか expect で正当化する作業が伴う。
+- overwatch(30箇所)の生IO呼び出しをharness_core内のboundaryラッパ経由へ移行する (size l — ファイル単位でさらに分解が要る。対象は主に aggregate.rs と bridge.rs)。
+- specguard(37箇所)の生IO呼び出しをharness_core内のboundaryラッパ経由へ移行する (size l — ファイル単位でさらに分解が要る)。
+- 手貼りのdeny(clippy::panic)残り5個 (budgetguard・donegate・reviewgate・schemaguard) の集約。各crateをworkspace lintsにopt-inさせるとunwrap_used・expect_usedのdenyも同時に効くため、それら4crateのproductionのunwrap・expectを潰すかexpectで正当化する作業が伴う。
+- condukt v0.7.99の未コミット変更 (plugin.json/Cargo.toml/marketplace.json/state.rs) をコミットする (backlog 3c2d5384、本north_starと無関係の別スレッド)。
+- condukt テストのPATH env race修正 (backlog b0db2bff、本north_starと無関係の別スレッド、今セッションで発見)。
 

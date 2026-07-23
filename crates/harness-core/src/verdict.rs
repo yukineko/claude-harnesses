@@ -163,6 +163,41 @@ impl Verdict {
         }
     }
 
+    /// Combine many partial verdicts under one priority: any `Violation`
+    /// present wins over any `Undetermined`, which wins over `Clean`. This is
+    /// the shared shape behind every hand-rolled "combine sub-analysis
+    /// results, worst wins" accumulator this repo keeps reinventing (e.g.
+    /// blastguard's `detect::VerdictAcc`, which ranks its own three answers
+    /// `Deny > Ask > Allow` — the identical ordering, just named differently).
+    ///
+    /// All `Violation` reasons are joined (via [`Reason::joined`]) into one
+    /// `Violation`, exactly like [`Verdict::from_findings`] joins multiple
+    /// findings; likewise all `Undetermined` reasons are joined into one
+    /// `Undetermined` when no `Violation` is present. An empty iterator
+    /// yields `Clean` — mirroring `from_findings(vec![])`'s existing
+    /// "observed nothing, ran to completion" semantics — so a caller that
+    /// combines zero sub-verdicts gets the same "checked, found nothing"
+    /// answer as a check with no findings, not a free pass minted some other
+    /// way.
+    pub fn worst_of(verdicts: impl IntoIterator<Item = Verdict>) -> Self {
+        let mut violations = Vec::new();
+        let mut undetermined = Vec::new();
+        for v in verdicts {
+            match v {
+                Verdict::Violation(r) => violations.push(r),
+                Verdict::Undetermined(r) => undetermined.push(r),
+                Verdict::Clean(_) => {}
+            }
+        }
+        if !violations.is_empty() {
+            Verdict::Violation(Reason::joined(&violations))
+        } else if !undetermined.is_empty() {
+            Verdict::Undetermined(Reason::joined(&undetermined))
+        } else {
+            Verdict::from_findings(vec![])
+        }
+    }
+
     /// The sanctioned Clean-minting path for a check that **may fail to run**.
     /// The caller expresses the outcome as a [`Determination`]:
     ///
@@ -391,5 +426,53 @@ mod tests {
         assert!(matches!(d.map(|n| n + 1), Determination::Undetermined(_)));
         let d: Determination<u8> = Determination::Known(1);
         assert!(matches!(d.map(|n| n + 1), Determination::Known(2)));
+    }
+
+    #[test]
+    fn worst_of_empty_is_clean() {
+        assert!(matches!(Verdict::worst_of(vec![]), Verdict::Clean(_)));
+    }
+
+    #[test]
+    fn worst_of_violation_outranks_undetermined_and_clean() {
+        let v = Verdict::worst_of(vec![
+            Verdict::from_findings(vec![]),
+            Verdict::undetermined("could not read"),
+            Verdict::violation("found a problem"),
+        ]);
+        match v {
+            Verdict::Violation(r) => assert_eq!(r.as_str(), "found a problem"),
+            other => panic!("expected Violation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn worst_of_undetermined_outranks_clean_when_no_violation_present() {
+        let v = Verdict::worst_of(vec![
+            Verdict::from_findings(vec![]),
+            Verdict::undetermined("io error"),
+        ]);
+        match v {
+            Verdict::Undetermined(r) => assert_eq!(r.as_str(), "io error"),
+            other => panic!("expected Undetermined, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn worst_of_all_clean_is_clean() {
+        let v = Verdict::worst_of(vec![
+            Verdict::from_findings(vec![]),
+            Verdict::from_findings(vec![]),
+        ]);
+        assert!(matches!(v, Verdict::Clean(_)));
+    }
+
+    #[test]
+    fn worst_of_joins_multiple_violations_like_from_findings() {
+        let v = Verdict::worst_of(vec![Verdict::violation("a"), Verdict::violation("b")]);
+        match v {
+            Verdict::Violation(r) => assert_eq!(r.as_str(), "a; b"),
+            other => panic!("expected Violation, got {other:?}"),
+        }
     }
 }

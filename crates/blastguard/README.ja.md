@@ -88,6 +88,28 @@ truncating-redirect については、この判定と並行して**別種の純�
   マッチし、`python3 script.py`（フラグ無しのスクリプト実行）は対象外
   （`:986-987` のコメント参照）。複雑な処理が必要なら Write ツールでスクリプトを
   書き出してから引数無しで実行すればよく、コードも可視化される。
+  - **v0.2.12 で追記した具体例**: この判定の妥当性を、本セッション自身で観測した
+    実発火例で裏付ける。次の `python3 -c` 呼び出しは、transcript ファイルを開いて
+    `json.loads` でパースし、マッチした行番号を `print` するだけの read-only スクリプト
+    だったが、`is_inline_eval_flag`（`:1007-1020`）はペイロードの中身を見ないため
+    無条件に deny された:
+    ```
+    python3 -c "
+    import json
+    lines = open('....jsonl').readlines()
+    for i, l in enumerate(lines):
+        if 'inline-eval flag can run' in l:
+            ...
+            print(i, tool_use_id)
+    "
+    ```
+    一見「read-only スクリプトまで一律ブロックする過検知」に見えるが、構文だけから
+    「本当に read-only か」を判定する信頼できる方法は無い —
+    `import os; os.system(...)` や `eval(...)`、難読化された文字列結合を同じ `-c`
+    引数内に混在させれば、静的な字面判定は容易に迂回できる。したがってこの一手も
+    truncating-redirect の D1 と同種の「意図的な false positive の許容」と判断し、
+    コードは変更しない。回避策は本セッションでも実際に採った通り、`jq`/`grep` 等の
+    専用ツールを使うか、Write でスクリプトファイルを書き出して引数無しで実行すること。
 
 ## ライブラリとしての再利用
 

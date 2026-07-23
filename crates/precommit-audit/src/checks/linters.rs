@@ -331,13 +331,36 @@ pub fn run(ctx: &Ctx, out: &mut Vec<Issue>) {
             .filter(|f| !ctx.cls.is_excluded(f) && ctx.root.join(f).exists())
             .collect();
         if !scan.is_empty() {
+            // `gitleaks detect` has no per-file argument list (unlike semgrep
+            // above) — only `--source <dir>` or `--pipe`. Scanning `ctx.root`
+            // directly with `--no-git` walks the WHOLE working tree, including
+            // .gitignore'd build artifacts (e.g. Python __pycache__/*.pyc,
+            // which embed source string literals as compiled constants and
+            // can false-positive on secret-shaped test fixtures). So we copy
+            // only the actually-changed files into a scratch dir, preserving
+            // relative paths, and scan that instead — this is what the
+            // comment above always claimed to do.
+            let tmp = tempfile::tempdir();
+            let Ok(tmp) = tmp else {
+                out.push(Issue::block(
+                    "GITLEAKS",
+                    "gitleaks scan skipped: could not create scratch dir for scan".to_string(),
+                ));
+                return;
+            };
+            for f in &scan {
+                let src = ctx.root.join(f);
+                let dest = tmp.path().join(f);
+                if let Some(parent) = dest.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::copy(&src, &dest);
+            }
             let mut c = Command::new("gitleaks");
-            // Scan the repo tree directly with --no-git; cheaper than copying and
-            // sufficient since we only care that changed files are clean.
             c.arg("detect")
                 .arg("--no-git")
                 .arg("--source")
-                .arg(ctx.root)
+                .arg(tmp.path())
                 .arg("--no-banner")
                 .arg("--redact");
             c.current_dir(ctx.root);
@@ -361,6 +384,53 @@ pub fn run(ctx: &Ctx, out: &mut Vec<Issue>) {
                 ));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod real_repo_repro {
+    use super::*;
+    use crate::classify::Classifier;
+    use crate::config::Config;
+    use std::cell::RefCell;
+
+    /// Manual repro for backlog 848913b8 against the actual harness repo tree.
+    /// Runs for real when `scripts/__pycache__/*.pyc` exists (e.g. after
+    /// `pytest scripts/test_check_hardcoded_secret.py`), otherwise skips —
+    /// same pattern as the gitleaks-not-on-PATH skip below.
+    #[test]
+    fn does_not_flag_pycache_outside_changed_set() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        if !root
+            .join("scripts/__pycache__/check-hardcoded-secret.cpython-312.pyc")
+            .exists()
+        {
+            eprintln!(
+                "skipping: run `pytest scripts/test_check_hardcoded_secret.py` first to regenerate __pycache__"
+            );
+            return;
+        }
+        let cfg = Config::default();
+        let cls = Classifier::new(&cfg.classify);
+        let files = vec!["crates/precommit-audit/Cargo.toml".to_string()];
+        let incomplete = RefCell::new(Vec::new());
+        let ctx = Ctx {
+            root: &root,
+            cfg: &cfg,
+            cls: &cls,
+            files: &files,
+            incomplete: &incomplete,
+        };
+        let mut out = Vec::new();
+        run(&ctx, &mut out);
+        let categories: Vec<&str> = out.iter().map(|i| i.category.as_str()).collect();
+        assert!(
+            out.iter().all(|i| i.category != "GITLEAKS"),
+            "gitleaks flagged something even though the only changed file is clean; scan must have leaked into __pycache__: {categories:?}"
+        );
     }
 }
 
@@ -392,4 +462,96 @@ fn eslint_root(ctx: &Ctx, file: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod gitleaks_scope_tests {
+    use super::*;
+    use crate::classify::Classifier;
+    use crate::config::Config;
+    use std::cell::RefCell;
+
+    /// Regression test for backlog 848913b8: `run` must scan only the
+    /// changed files (`ctx.files`), never the whole `ctx.root` tree. A
+    /// gitignored/untracked file containing a secret-shaped string must NOT
+    /// be flagged, even though it physically sits under `ctx.root`.
+    #[test]
+    fn gitleaks_ignores_untracked_files_outside_the_changed_set() {
+        if which("gitleaks").is_none() {
+            eprintln!("skipping: gitleaks not on PATH");
+            return;
+        }
+        let root = tempfile::tempdir().expect("tempdir");
+        let root = root.path();
+
+        // A file that is NOT part of the changed set (simulates a gitignored
+        // build artifact like scripts/__pycache__/*.pyc) containing a
+        // secret-shaped literal that gitleaks' generic-api-key rule matches.
+        std::fs::create_dir_all(root.join("untracked_dir")).unwrap();
+        std::fs::write(
+            root.join("untracked_dir/stale_cache.txt"),
+            "api_key = \"sk-abcd1234efgh5678ignoreme\"\n",
+        )
+        .unwrap();
+
+        // A file that IS part of the changed set and is clean.
+        std::fs::write(root.join("clean.py"), "print('hello')\n").unwrap();
+
+        let cfg = Config::default();
+        let cls = Classifier::new(&cfg.classify);
+        let files = vec!["clean.py".to_string()];
+        let incomplete = RefCell::new(Vec::new());
+        let ctx = Ctx {
+            root,
+            cfg: &cfg,
+            cls: &cls,
+            files: &files,
+            incomplete: &incomplete,
+        };
+        let mut out = Vec::new();
+        run(&ctx, &mut out);
+
+        let categories: Vec<&str> = out.iter().map(|i| i.category.as_str()).collect();
+        assert!(
+            out.iter().all(|i| i.category != "GITLEAKS"),
+            "gitleaks flagged an untracked file outside ctx.files: {categories:?}"
+        );
+    }
+
+    /// A real secret in a file that IS in the changed set must still be
+    /// caught (the fix must not blind the scan entirely).
+    #[test]
+    fn gitleaks_still_catches_a_secret_in_a_changed_file() {
+        if which("gitleaks").is_none() {
+            eprintln!("skipping: gitleaks not on PATH");
+            return;
+        }
+        let root = tempfile::tempdir().expect("tempdir");
+        let root = root.path();
+        std::fs::write(
+            root.join("leaky.py"),
+            "api_key = \"sk-abcd1234efgh5678ignoreme\"\n",
+        )
+        .unwrap();
+
+        let cfg = Config::default();
+        let cls = Classifier::new(&cfg.classify);
+        let files = vec!["leaky.py".to_string()];
+        let incomplete = RefCell::new(Vec::new());
+        let ctx = Ctx {
+            root,
+            cfg: &cfg,
+            cls: &cls,
+            files: &files,
+            incomplete: &incomplete,
+        };
+        let mut out = Vec::new();
+        run(&ctx, &mut out);
+
+        let categories: Vec<&str> = out.iter().map(|i| i.category.as_str()).collect();
+        assert!(
+            out.iter().any(|i| i.category == "GITLEAKS"),
+            "gitleaks failed to flag a real secret in a changed file: {categories:?}"
+        );
+    }
 }

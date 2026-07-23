@@ -41,6 +41,15 @@
 #                                                 gap recorded in
 #                                                 crates/precommit-audit/README
 #                                                 .ja.md's self-apply section)
+#   raw-io-ratchet     check-raw-io-ratchet.py    a new raw stdlib read_dir/
+#                                                 read_to_string/Command::new
+#                                                 call in GATE_CRATES src/,
+#                                                 bypassing the fallible
+#                                                 harness_core::boundary
+#                                                 wrappers (compass DoD item 4,
+#                                                 north_star "close the
+#                                                 fail-open ENTRANCE with types
+#                                                 and lints")
 #
 # Plus one Rust gate (not python3):
 #   main-tree-guard    condukt guard main-tree    a commit from the SHARED primary
@@ -126,6 +135,7 @@ run check-test-weakening.py   test-weakening
 run check-plugin-versions.py  version-lockstep
 run check-version-bumped.py   bump-on-change
 run check-hardcoded-secret.py secret-guard
+run check-raw-io-ratchet.py   raw-io-ratchet
 
 # main-tree-guard — CLAUDE.md §8, the one gate here that is Rust rather than
 # python3, because its decision is a tri-state over injectable inputs and is
@@ -200,6 +210,14 @@ Remediation hints:
                     var / secret-store reference instead), or, if it is a
                     reviewed exception, add a distinguishing substring to
                     scripts/check-hardcoded-secret.py's ALLOWLIST with a reason.
+  raw-io-ratchet    a raw std::fs::read_dir/read_to_string or Command::new
+                    call landed in a GATE_CRATES src/ tree. Route it through
+                    harness_core::boundary's Determination-returning wrappers
+                    instead of the raw stdlib call. If this is a reviewed,
+                    intentional exception, re-pin with `python3
+                    scripts/check-raw-io-ratchet.py --update-baseline` and
+                    commit the updated scripts/check-raw-io-ratchet.baseline
+                    (raising the pin is visible in review, not hidden).
   main-tree-guard   commit from a worktree instead of the shared primary tree
                     (`condukt worktree create`, or `git stash` + `git worktree
                     add`). Merges and rebases in the main tree already pass. If

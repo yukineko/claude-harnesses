@@ -78,6 +78,7 @@
 ## さらに読む（docs/）
 
 - [OVERVIEW.md](OVERVIEW.md) — 全体設計・プラグイン一覧・フック早見表
+- [gate-taxonomy.md](gate-taxonomy.md) — 全ゲート（Stop フック群 + `scripts/check-*.py`）を実装正しさ／テスト適合性／総合判断の3階層＋トリガー種別で分類した一覧
 - [USAGE.md](USAGE.md) — セッションを開いてから打つ典型パターン集
 - [AGENTIC-CODING-GUIDE.md](AGENTIC-CODING-GUIDE.md) — condukt を背骨にプロジェクトを回すガイド
 - [plugin-activation-scopes.md](plugin-activation-scopes.md) — 各プラグインの発火スコープ分類（always-on / event-scoped / manual）と分類ルール

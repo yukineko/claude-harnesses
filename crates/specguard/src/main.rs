@@ -1173,7 +1173,14 @@ fn pending(cli: &Cli) -> u8 {
         return EXIT_OK;
     };
     let paths = report::paths(&l.cfg, &l.repo_root, &l.date);
-    match report::sentinel_pending(&paths) {
+    render_pending(&paths)
+}
+
+/// The body of [`pending`]'s SessionStart hook, taking `paths` directly (rather
+/// than a full [`Cli`]) so it can be exercised against synthetic [`report::Paths`]
+/// in tests — mirroring how [`ack`] takes `paths` rather than `cli`.
+fn render_pending(paths: &report::Paths) -> u8 {
+    match report::sentinel_pending(paths) {
         // No sentinel: nothing to surface at session start.
         harness_core::verdict::Determination::Known(false) => return EXIT_OK,
         // Could not tell: staying silent would read as "no drift pending", which
@@ -1190,29 +1197,73 @@ fn pending(cli: &Cli) -> u8 {
         // A sentinel is raised: fall through and render it.
         harness_core::verdict::Determination::Known(true) => {}
     }
-    let body = std::fs::read_to_string(&paths.sentinel).unwrap_or_default();
-    let field = |key: &str| -> String {
-        body.lines()
-            .find_map(|line| line.strip_prefix(key).map(|v| v.trim().to_string()))
-            .unwrap_or_default()
-    };
-    let report = field("report:");
-    let summary = field("summary:");
-
-    println!("⚠ specguard: 未処理の仕様ドリフト指摘があります (Human-on-the-loop)。");
-    if !report.is_empty() {
-        println!("report: {report}");
-    }
-    if !summary.is_empty() {
-        println!("summary: {summary}");
-    }
-    println!();
-    println!("対応方針: まず report (上記パス) を Read して指摘内容を把握し、`AskUserQuestion` で");
-    println!("次の3択を人間に提示せよ (人間が選ぶまで勝手に修正・ack しないこと):");
-    println!("  1. 別タスクで修正に着手 — 各 finding を B(コード修正)/C(doc 更新) に分類し、修正後 `specguard ack`");
-    println!("  2. 後で — sentinel を残す (次セッションで再提示)");
-    println!("  3. 不要 — `specguard ack` で sentinel を解除");
+    // sentinel_pending() already confirmed the sentinel exists (Known(true)); the
+    // read below has its own three-way outcome. `unwrap_or_default()` would fold
+    // "raised but unreadable" into an empty body — printing nothing, exactly the
+    // fail-open this function's own doc comment above forbids. Distinguish it.
+    println!(
+        "{}",
+        pending_body_message(
+            &paths.sentinel,
+            harness_core::boundary::read_to_string(&paths.sentinel)
+        )
+    );
     EXIT_OK
+}
+
+/// Pure companion to [`render_pending`]'s post-`Known(true)` branch: turns the
+/// [`harness_core::boundary::read_to_string`] outcome for an already-confirmed
+/// sentinel into the text to surface at SessionStart. Split out (rather than
+/// `println!`ing inline) so the fail-closed "raised but unreadable" branch is
+/// assertable in tests without capturing stdout.
+fn pending_body_message(
+    sentinel_path: &Path,
+    read: harness_core::verdict::Determination<Option<String>>,
+) -> String {
+    match read {
+        harness_core::verdict::Determination::Known(Some(body)) => {
+            let field = |key: &str| -> String {
+                body.lines()
+                    .find_map(|line| line.strip_prefix(key).map(|v| v.trim().to_string()))
+                    .unwrap_or_default()
+            };
+            let report = field("report:");
+            let summary = field("summary:");
+
+            let mut out = String::new();
+            out.push_str("⚠ specguard: 未処理の仕様ドリフト指摘があります (Human-on-the-loop)。\n");
+            if !report.is_empty() {
+                out.push_str(&format!("report: {report}\n"));
+            }
+            if !summary.is_empty() {
+                out.push_str(&format!("summary: {summary}\n"));
+            }
+            out.push('\n');
+            out.push_str("対応方針: まず report (上記パス) を Read して指摘内容を把握し、`AskUserQuestion` で\n");
+            out.push_str("次の3択を人間に提示せよ (人間が選ぶまで勝手に修正・ack しないこと):\n");
+            out.push_str("  1. 別タスクで修正に着手 — 各 finding を B(コード修正)/C(doc 更新) に分類し、修正後 `specguard ack`\n");
+            out.push_str("  2. 後で — sentinel を残す (次セッションで再提示)\n");
+            out.push_str("  3. 不要 — `specguard ack` で sentinel を解除");
+            out
+        }
+        // Vanished between the exists-check above and this read (a genuine race,
+        // not an error): there is nothing left to surface.
+        harness_core::verdict::Determination::Known(None) => {
+            format!(
+                "⚠ specguard: sentinel ({}) が raised と判定された直後に消えました (race)。再実行して確認してください。",
+                sentinel_path.display()
+            )
+        }
+        // The sentinel is there but unreadable. Staying silent here would read
+        // as "no drift pending" even though we just confirmed one is raised —
+        // surface the opacity instead of an empty body.
+        harness_core::verdict::Determination::Undetermined(why) => {
+            format!(
+                "⚠ specguard: 未処理の仕様ドリフト指摘の sentinel ({}) がありますが内容を読み込めません ({why})。\nsentinel の内容を手で確認してください（Human-on-the-loop、fix-offer は表示できません）。",
+                sentinel_path.display()
+            )
+        }
+    }
 }
 
 /// Clear the sentinel (C). Idempotent: succeeds whether or not one was present.
@@ -1282,7 +1333,30 @@ fn run_testaudit(repo_root: &std::path::Path, json: bool) -> Result<u8> {
 fn ack(paths: &report::Paths, repo_root: &std::path::Path, force: bool) -> Result<u8> {
     // If the sentinel exists, check whether a fix commit was made since it was raised.
     if !force && paths.sentinel.exists() {
-        let content = std::fs::read_to_string(&paths.sentinel).unwrap_or_default();
+        let content = match harness_core::boundary::read_to_string(&paths.sentinel) {
+            harness_core::verdict::Determination::Known(Some(content)) => content,
+            // Vanished between the exists() check just above and this read (a
+            // genuine race) — nothing to verify against; fall through to the
+            // idempotent remove below exactly as the old-format-without-
+            // raised_at case does.
+            harness_core::verdict::Determination::Known(None) => String::new(),
+            // The sentinel is there but unreadable: we cannot tell whether a fix
+            // commit was ever verified. `unwrap_or_default()` would fold this
+            // into "", which has no `raised_at` line and so clears the sentinel
+            // with the fix-commit check silently skipped — exactly the
+            // fail-open this migration closes. Fail closed like the other guards
+            // in this function (same EXIT_NO_FIX_COMMIT, same escape hatch).
+            harness_core::verdict::Determination::Undetermined(why) => {
+                eprintln!(
+                    "specguard: sentinel ({}) が読み込めないため安全側で ack を拒否 ({why})",
+                    paths.sentinel.display()
+                );
+                eprintln!(
+                    "  内容を手で確認してから `specguard ack` を実行するか、意図的に解除するなら `specguard ack --force`"
+                );
+                return Ok(EXIT_NO_FIX_COMMIT);
+            }
+        };
         if let Some(raised_at) = report::sentinel_raised_at(&content) {
             // CA-specguard-003: current_head() errors (e.g. git unavailable) must
             // not be swallowed into "" — has_new_commits("<hash>", "") reads as a
@@ -2258,6 +2332,77 @@ mod tests {
         let result = ack(&paths, &repo_root(), true).unwrap();
         assert_eq!(result, EXIT_OK);
         assert!(!sentinel.exists(), "sentinel should have been removed");
+    }
+
+    #[test]
+    fn ack_sentinel_unreadable_fails_closed_without_force() {
+        // Regression for the fail-open this migration closes: a sentinel that
+        // EXISTS but cannot be READ (here: chmod 0o000, a regular file, not a
+        // directory — deletion only needs the parent dir's write permission,
+        // so a naive fix would still let `remove_file` succeed below and clear
+        // an unverified sentinel) must NOT be treated as "" (no raised_at line
+        // -> fix-commit check silently skipped -> sentinel cleared without
+        // ever verifying a fix). `ack` must refuse instead, exactly like its
+        // other fail-closed guards.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("sentinel_unreadable.txt");
+        std::fs::write(&sentinel, "raised_at: deadbeef\n").unwrap();
+        std::fs::set_permissions(&sentinel, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let paths = make_paths(sentinel.clone());
+        let result = ack(&paths, &repo_root(), false).unwrap();
+        // Restore permissions before any assertion/tempdir cleanup so the test
+        // never leaks an unreadable file behind it.
+        std::fs::set_permissions(&sentinel, std::fs::Permissions::from_mode(0o644)).ok();
+        assert_eq!(result, EXIT_NO_FIX_COMMIT);
+        assert!(
+            sentinel.exists(),
+            "an unreadable sentinel must not be cleared without --force"
+        );
+    }
+
+    #[test]
+    fn pending_body_message_sentinel_unreadable_is_not_silent() {
+        // Regression for the fail-open this migration closes: `pending()`
+        // confirmed a sentinel is raised (Known(true)) but the content read
+        // then hits an unreadable path. `unwrap_or_default()` folded that into
+        // an empty body, which the caller could not distinguish from a
+        // legitimately-empty report/summary — the exact "print nothing" this
+        // module's own doc comment forbids. The message must say so instead.
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("sentinel_unreadable_dir");
+        std::fs::create_dir(&sentinel).unwrap();
+
+        let read = harness_core::boundary::read_to_string(&sentinel);
+        assert!(
+            matches!(read, harness_core::verdict::Determination::Undetermined(_)),
+            "a directory at the sentinel path must read as Undetermined, not Known"
+        );
+
+        let msg = pending_body_message(&sentinel, read);
+        assert!(
+            !msg.trim().is_empty(),
+            "an unreadable-but-raised sentinel must never render an empty message"
+        );
+        assert!(
+            msg.contains("読み込めません"),
+            "the message must name the opacity explicitly, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn pending_body_message_known_body_renders_report_and_summary() {
+        // Control case: a normal, readable sentinel still renders the
+        // report/summary fields as before the migration.
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("sentinel.txt");
+        let body = "date: 2026-07-24\nreport: reports/spec-audit/2026-07-24.md\nsummary: some drift\nraised_at: abc123\n";
+        let msg = pending_body_message(
+            &sentinel,
+            harness_core::verdict::Determination::Known(Some(body.to_string())),
+        );
+        assert!(msg.contains("report: reports/spec-audit/2026-07-24.md"));
+        assert!(msg.contains("summary: some drift"));
     }
 
     // --- content-hash memoization (skip unchanged shards) ---

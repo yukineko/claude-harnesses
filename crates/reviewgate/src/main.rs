@@ -216,6 +216,7 @@ fn review_run(hook: Option<HookInput>) -> ! {
                 },
             );
             log_event(&cfg, &session, tag, &files, attempts);
+            emit_violation(&root, &session, tag);
             if interactive {
                 eprintln!("{reason}");
                 harness_core::hook_latency::record(
@@ -237,6 +238,31 @@ fn review_run(hook: Option<HookInput>) -> ! {
 }
 
 /// Append one JSONL line per decision. Best effort, local only.
+/// Record a fleet-level violation for a blocking review verdict, for
+/// cross-gate correlated-error detection (`overwatch::violation`). Fail-soft:
+/// never changes the gate's exit code/stdout, never panics if the overwatch
+/// store is unwritable (mirrors donegate's `emit_violations`,
+/// crates/donegate/src/main.rs). `task_key` is set to the session id (see
+/// that function's doc comment for why: a Stop-hook gate has no separate
+/// "task" concept below the session/turn it fires in).
+fn emit_violation(root: &std::path::Path, session: &str, tag: &str) {
+    let raw = overwatch::violation::RawViolation {
+        check_kind: Some(tag),
+        ..Default::default()
+    };
+    let event = overwatch::violation::build_event(
+        overwatch::violation::ViolationSource::Reviewgate,
+        &raw,
+        session.to_string(),
+        session.to_string(),
+        overwatch::store::now(),
+        None,
+    );
+    if let Some(event) = event {
+        let _ = overwatch::store::append_violation(root, &event);
+    }
+}
+
 fn log_event(cfg: &Config, session: &str, verdict: &str, files: &[String], attempt: u32) {
     let entry = json!({
         "ts": chrono::Local::now().to_rfc3339(),
@@ -350,3 +376,73 @@ max_diff_bytes = 200000   # cap the diff handed to the hasher / reviewer
 # reviewer_cmd = "claude -p"
 # reviewer_timeout_secs = 300
 "#;
+
+#[cfg(test)]
+mod violation_emission_tests {
+    use super::emit_violation;
+    use crate::config::HOME_ENV_LOCK;
+
+    // Shares `config::HOME_ENV_LOCK` with `config::tests` — see that static's
+    // doc comment for why a locally scoped lock is not enough to prevent
+    // cross-module races on `$HOME`.
+    #[test]
+    fn emit_violation_records_a_reviewgate_event() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_home = std::env::var_os("HOME");
+        let temp_home = std::env::temp_dir().join(format!(
+            "reviewgate-emit-violation-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_home).expect("create temp HOME");
+        std::env::set_var("HOME", &temp_home);
+
+        let root = temp_home.join("project");
+        std::fs::create_dir_all(&root).expect("create project root");
+        emit_violation(&root, "session-x", "blocked-review");
+
+        let events = overwatch::store::read_violations(&root).expect("read_violations");
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&temp_home);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].source,
+            overwatch::violation::ViolationSource::Reviewgate
+        );
+        assert_eq!(events[0].signature, "reviewgate:blocked-review");
+    }
+
+    #[test]
+    fn emit_violation_with_clean_tag_records_nothing() {
+        // "clean"/"allow" tags never reach emit_violation in production (it's
+        // only called from the Decision::Block arm) — this pins that an empty
+        // tag specifically is dropped, matching build_event's "no usable
+        // discriminator" contract rather than silently bucketing it.
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_home = std::env::var_os("HOME");
+        let temp_home = std::env::temp_dir().join(format!(
+            "reviewgate-emit-violation-empty-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_home).expect("create temp HOME");
+        std::env::set_var("HOME", &temp_home);
+
+        let root = temp_home.join("project");
+        std::fs::create_dir_all(&root).expect("create project root");
+        emit_violation(&root, "session-x", "");
+
+        let events = overwatch::store::read_violations(&root).expect("read_violations");
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&temp_home);
+
+        assert!(events.is_empty());
+    }
+}

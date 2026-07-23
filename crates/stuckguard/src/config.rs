@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
+use harness_core::boundary;
 use serde::Deserialize;
 
 // Re-exported so existing `crate::config::expand_tilde` call sites keep working.
@@ -164,7 +165,12 @@ impl Config {
             }
         };
         if let Some(path) = chosen {
-            if let Ok(text) = std::fs::read_to_string(&path) {
+            // Both "file vanished between exists() and here" (Known(None)) and
+            // "file is there but unreadable" (Undetermined) fall through to
+            // built-in defaults, same as the raw `std::fs::read_to_string(..).ok()`
+            // this replaced: stuckguard is a pure advisory hook (never blocks), so
+            // config-load failure degrades to defaults rather than escalating.
+            if let Some(text) = boundary::read_to_string(&path).require().ok().flatten() {
                 if let Ok(fc) = toml::from_str::<FileConfig>(&text) {
                     if let Some(v) = fc.enabled {
                         cfg.enabled = v;

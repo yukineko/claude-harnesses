@@ -465,6 +465,16 @@ impl Config {
     }
 }
 
+/// Serializes tests that mutate the process-global `HOME` env var — used by
+/// `main.rs`'s violation-emission tests, which need a controlled `$HOME`
+/// because `overwatch::store`'s violation log resolves its storage root off
+/// it. `cargo test` runs a crate's unit tests on multiple threads by default;
+/// two such tests racing without a shared lock corrupts each other's view of
+/// "where does the store live" (same failure mode documented on
+/// donegate's/reviewgate's identically-named lock, crates/donegate/src/config.rs).
+#[cfg(test)]
+pub(crate) static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;

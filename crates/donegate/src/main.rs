@@ -219,6 +219,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
 
     log_event(&cfg, &session, "blocked", &failing, attempt);
+    emit_violations(&root, &session, &failing);
     let reason = gate::block_reason(&report, attempt, cfg.max_attempts);
 
     if interactive {
@@ -248,6 +249,35 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
     harness_core::hook_latency::record("donegate", &session, __start.elapsed().as_millis() as u64);
     std::process::exit(0);
+}
+
+/// Record one fleet-level violation per failing check, for cross-gate
+/// correlated-error detection (`overwatch::violation`). Fail-soft: never
+/// changes the gate's exit code/stdout, never panics if the overwatch store
+/// is unwritable (mirrors mutategate's `emit_violation`,
+/// crates/mutategate/src/main.rs). `task_key` is set to the session id
+/// (rather than a distinct per-attempt id) because a Stop-hook gate has no
+/// separate "task" concept below the session/turn it fires in — unlike
+/// condukt's per-worker tasks, one donegate invocation IS the unit.
+fn emit_violations(root: &std::path::Path, session: &str, failing: &[String]) {
+    let now = overwatch::store::now();
+    for name in failing {
+        let raw = overwatch::violation::RawViolation {
+            check_kind: Some(name.as_str()),
+            ..Default::default()
+        };
+        let event = overwatch::violation::build_event(
+            overwatch::violation::ViolationSource::Donegate,
+            &raw,
+            session.to_string(),
+            session.to_string(),
+            now,
+            None,
+        );
+        if let Some(event) = event {
+            let _ = overwatch::store::append_violation(root, &event);
+        }
+    }
 }
 
 fn ran_names(v: &gate::GateReport) -> Vec<String> {
@@ -459,3 +489,75 @@ cmd = "make build"
 name = "test"
 cmd = "make test"
 "#;
+
+#[cfg(test)]
+mod violation_emission_tests {
+    use super::emit_violations;
+    use crate::config::HOME_ENV_LOCK;
+
+    // `overwatch::store::append_violation`/`read_violations` resolve their
+    // storage root via `harness_core::config::home()`, which reads `$HOME`.
+    // Shares `config::HOME_ENV_LOCK` with `config::tests` (not a locally
+    // scoped lock) — see that static's doc comment for why a per-module lock
+    // is not enough to prevent cross-module races on this same env var.
+    #[test]
+    fn emit_violations_records_one_event_per_failing_check() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_home = std::env::var_os("HOME");
+        let temp_home = std::env::temp_dir().join(format!(
+            "donegate-emit-violations-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_home).expect("create temp HOME");
+        std::env::set_var("HOME", &temp_home);
+
+        let root = temp_home.join("project");
+        std::fs::create_dir_all(&root).expect("create project root");
+        emit_violations(
+            &root,
+            "session-x",
+            &["build".to_string(), "lint".to_string()],
+        );
+
+        let events = overwatch::store::read_violations(&root).expect("read_violations");
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&temp_home);
+
+        assert_eq!(events.len(), 2, "expected one event per failing check");
+        assert!(events
+            .iter()
+            .all(|e| e.source == overwatch::violation::ViolationSource::Donegate));
+        assert!(events.iter().any(|e| e.signature == "donegate:build"));
+        assert!(events.iter().any(|e| e.signature == "donegate:lint"));
+    }
+
+    #[test]
+    fn emit_violations_with_no_failures_records_nothing() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_home = std::env::var_os("HOME");
+        let temp_home = std::env::temp_dir().join(format!(
+            "donegate-emit-violations-empty-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_home).expect("create temp HOME");
+        std::env::set_var("HOME", &temp_home);
+
+        let root = temp_home.join("project");
+        std::fs::create_dir_all(&root).expect("create project root");
+        emit_violations(&root, "session-x", &[]);
+
+        let events = overwatch::store::read_violations(&root).expect("read_violations");
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&temp_home);
+
+        assert!(events.is_empty());
+    }
+}

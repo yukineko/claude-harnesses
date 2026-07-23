@@ -5,5 +5,22 @@
 # recorded as a bypass — the gate would look like it was being evaded by the
 # repository's own normal workflow.
 #
+# Declare the invocation context across the exec.
+#
+# The main-tree guard has to exclude integration commits — CLAUDE.md §8 permits
+# merge and conflict resolution in the main tree, and a gate that blocked them
+# would make the worktree workflow undischargeable, since nothing a worktree
+# produced could ever land. It cannot learn that from the git dir at this
+# moment: measured, git writes MERGE_HEAD only when a merge STOPS (a conflict,
+# or --no-commit), so a merge that is succeeding presents no marker at all. It
+# is this hook — which git fires for a merge commit and for nothing else — that
+# holds the fact, so this hook states it.
+#
+# The guard honors it only when git's own GIT_REFLOG_ACTION agrees, and it
+# prints the exclusion it applied, so this cannot silently wave an ordinary
+# commit through.
+CONDUKT_GIT_HOOK=pre-merge-commit
+export CONDUKT_GIT_HOOK
+
 # Same gate, same certification: run pre-commit's body verbatim.
 exec "$(dirname "$0")/pre-commit"

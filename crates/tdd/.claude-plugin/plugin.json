@@ -1,7 +1,7 @@
 {
   "name": "tdd",
-  "version": "0.1.19",
-  "description": "Test-first gate for Claude Code: a Stop hook that blocks the turn when implementation code lands without an accompanying test, plus a /tdd skill and red/green/verify subcommands that make test-first (RED before GREEN) a verifiable artifact. Subscription-native (one hook + skill + bundled Rust binary, no API key). v0.1.18: gate verdict now routes through harness_core::verdict (compass DoD1).",
+  "version": "0.1.21",
+  "description": "Test-first gate for Claude Code: a Stop hook that blocks the turn when implementation code lands without an accompanying test, plus a /tdd skill and red/green/verify subcommands that make test-first (RED before GREEN) a verifiable artifact. Subscription-native (one hook + skill + bundled Rust binary, no API key). v0.1.20: config.rs's local GATE_CRATES const is now `pub use harness_core::fleet::GATE_CRATES;`, removing a duplicate hand-written copy that had independently drifted (lost `overwatch`) in the past. v0.1.18: gate verdict now routes through harness_core::verdict (compass DoD1).",
   "author": {
     "name": "yukineko"
   },

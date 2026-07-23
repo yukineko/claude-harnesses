@@ -22,6 +22,7 @@ use serde_json::Value;
 
 use crate::exclude;
 use crate::model::Decision;
+use harness_core::verdict::Verdict;
 
 /// Top-level entry: dispatch on the tool name.
 pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
@@ -151,32 +152,71 @@ fn take_budget() -> bool {
 /// So: a `Deny` short-circuits (nothing can outrank it), an `Ask` is remembered
 /// but the scan continues in case a `Deny` follows, and `finish` reports the
 /// remembered `Ask` only if no `Deny` was ever seen.
+///
+/// Internally this ranking is exactly [`harness_core::verdict::Verdict`]'s own
+/// `Violation > Undetermined > Clean` priority (`Verdict::worst_of`), renamed
+/// to this crate's domain vocabulary at the two edges (see
+/// [`decision_to_verdict`]/[`verdict_to_decision`]) rather than re-implemented.
 #[derive(Default)]
 struct VerdictAcc {
-    ask: Option<Decision>,
+    // Holds at most one Undetermined (the first one seen) — a Violation is
+    // resolved and returned by `record` immediately so it never sits here,
+    // and Clean carries nothing worth keeping.
+    rest: Vec<Verdict>,
 }
 
 impl VerdictAcc {
     /// Record a sub-verdict. Returns `Some(deny)` when the caller must stop and
     /// return it immediately; `None` when the scan should continue.
     fn record(&mut self, d: Decision) -> Option<Decision> {
-        match d {
-            Decision::Deny(_) => Some(d),
-            Decision::Ask(_) => {
-                // Keep the FIRST ask, so the reported reason is the outermost /
-                // earliest unanalysable construct rather than the last one.
-                if self.ask.is_none() {
-                    self.ask = Some(d);
+        match decision_to_verdict(d) {
+            // Nothing recorded so far can outrank a Violation, so there is no
+            // need to fold it into `rest` first — report it straight away.
+            v @ Verdict::Violation(_) => Some(verdict_to_decision(v)),
+            v @ Verdict::Undetermined(_) => {
+                // Keep only the FIRST undetermined, so the reported reason is
+                // the outermost / earliest unanalysable construct rather than
+                // the last one. `Verdict::worst_of` joins every `Undetermined`
+                // reason it is handed, so recording just the first is what
+                // preserves that "first wins" behavior through to `finish`.
+                if !self
+                    .rest
+                    .iter()
+                    .any(|r| matches!(r, Verdict::Undetermined(_)))
+                {
+                    self.rest.push(v);
                 }
                 None
             }
-            Decision::Allow => None,
+            Verdict::Clean(_) => None,
         }
     }
 
     /// The strongest verdict seen, given no `Deny` short-circuited the caller.
     fn finish(self) -> Decision {
-        self.ask.unwrap_or(Decision::Allow)
+        verdict_to_decision(Verdict::worst_of(self.rest))
+    }
+}
+
+/// Boundary conversion: this crate's domain-specific three answers map
+/// one-to-one onto `harness_core`'s generic three answers, in the same
+/// priority order (`Deny`/`Violation` > `Ask`/`Undetermined` > `Allow`/`Clean`).
+fn decision_to_verdict(d: Decision) -> Verdict {
+    match d {
+        Decision::Allow => Verdict::from_findings(vec![]),
+        Decision::Deny(reason) => Verdict::violation(reason),
+        Decision::Ask(reason) => Verdict::undetermined(reason),
+    }
+}
+
+/// The inverse of [`decision_to_verdict`], used at the boundary where a
+/// computation finishes with a generic `Verdict` and must report back in this
+/// crate's own `Decision` vocabulary.
+fn verdict_to_decision(v: Verdict) -> Decision {
+    match v {
+        Verdict::Clean(_) => Decision::Allow,
+        Verdict::Violation(reason) => Decision::deny(reason.as_str().to_string()),
+        Verdict::Undetermined(reason) => Decision::ask(reason.as_str().to_string()),
     }
 }
 
@@ -580,7 +620,18 @@ fn redirect_targets(seg: &str) -> Vec<String> {
             let start = j;
             while j < bytes.len() {
                 let cj = bytes[j];
-                if cj.is_ascii_whitespace() || cj == b';' || cj == b'|' || cj == b'&' || cj == b'>'
+                // `)` terminates the target too: `$(cmd 2>/dev/null)` is the
+                // universal idiom for silencing stderr inside a command
+                // substitution, and the closing paren is not part of the
+                // filename. Without this, the target token becomes
+                // `/dev/null)`, which fails `redirect_target_is_safe`'s exact
+                // match and denies a command that touches no file at all.
+                if cj.is_ascii_whitespace()
+                    || cj == b';'
+                    || cj == b'|'
+                    || cj == b'&'
+                    || cj == b'>'
+                    || cj == b')'
                 {
                     break;
                 }
@@ -2309,6 +2360,31 @@ mod tests {
     }
 
     #[test]
+    fn devnull_redirect_inside_command_substitution_is_allowed() {
+        // Regression (systemic signature blastguard:truncating-redirect,
+        // observed live in session a8cb4c0a): `$(cmd 2>/dev/null)` is a
+        // universally-common idiom for silencing stderr inside a command
+        // substitution. The redirect-target scanner did not treat `)` as a
+        // token terminator, so the substitution's closing paren was read as
+        // part of the target (`/dev/null)`), which fails
+        // `redirect_target_is_safe` (only the exact string `/dev/null`
+        // matches) and denies a command that touches no file at all.
+        assert_eq!(
+            single_redirect_target("cmd 2>/dev/null)"),
+            Some("/dev/null".to_string())
+        );
+        assert_eq!(
+            bash("CACHE_BIN=$(find /some/dir -name x 2>/dev/null)"),
+            Decision::Allow
+        );
+        assert_eq!(bash("x=$(cat a.txt 2> /dev/null)"), Decision::Allow);
+        // Control: a real truncating redirect immediately followed by `)` in
+        // prose (not /dev/null) must still be denied — `)` termination must
+        // not blind the scanner to a genuine target.
+        assert!(bash("(cmd > real.log)").is_deny());
+    }
+
+    #[test]
     fn quoted_destructive_text_is_not_executed() {
         // The dangerous text lives inside an echo string, not as a command.
         assert_eq!(bash("echo 'rm -rf /'"), Decision::Allow);
@@ -3193,6 +3269,43 @@ mod tests {
                 "a known-destructive line must stay a deny: {d:?}"
             );
         }
+    }
+
+    #[test]
+    fn verdict_acc_violation_outranks_undetermined_and_allow() {
+        // Directly exercises VerdictAcc's internal Verdict::worst_of ranking,
+        // mirroring `a_deny_on_the_line_outranks_the_unknown_wrapper_ask`
+        // above but at the combinator level rather than through `bash()`.
+        let mut acc = VerdictAcc::default();
+        assert_eq!(acc.record(Decision::Allow), None);
+        assert_eq!(acc.record(Decision::ask("unresolvable head")), None);
+        let deny = acc.record(Decision::deny("recursive delete"));
+        assert_eq!(deny, Some(Decision::deny("recursive delete")));
+    }
+
+    #[test]
+    fn verdict_acc_undetermined_outranks_allow_when_no_violation_seen() {
+        let mut acc = VerdictAcc::default();
+        assert_eq!(acc.record(Decision::Allow), None);
+        assert_eq!(acc.record(Decision::ask("unresolvable head")), None);
+        assert_eq!(acc.record(Decision::Allow), None);
+        assert_eq!(acc.finish(), Decision::ask("unresolvable head"));
+    }
+
+    #[test]
+    fn verdict_acc_keeps_only_the_first_undetermined_reason() {
+        let mut acc = VerdictAcc::default();
+        assert_eq!(acc.record(Decision::ask("first unknown")), None);
+        assert_eq!(acc.record(Decision::ask("second unknown")), None);
+        assert_eq!(acc.finish(), Decision::ask("first unknown"));
+    }
+
+    #[test]
+    fn verdict_acc_all_allow_finishes_allow() {
+        let mut acc = VerdictAcc::default();
+        assert_eq!(acc.record(Decision::Allow), None);
+        assert_eq!(acc.record(Decision::Allow), None);
+        assert_eq!(acc.finish(), Decision::Allow);
     }
 
     #[test]

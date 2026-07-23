@@ -1,0 +1,88 @@
+name: fail-open-mutation
+
+# CI wiring for scripts/check-fail-open-mutation.py (the adversarial fail-open
+# mutation harness documented in docs/gate-taxonomy.md's "敵対的fail-open
+# ミューテーション検証" section). Until this workflow existed the harness had NO
+# automatic trigger at all — it only ran when someone remembered to invoke it by
+# hand, which means the one check that PROVES (not judges) whether the GATE
+# crates' own test suites would catch a fail-open regression was silently inert
+# on every real change to those crates.
+#
+# WHY NOT "run on every task / every commit" (the wrong fix): each scenario
+# mutates one GATE crate's source, runs `cargo test -p <crate>`, then reverts —
+# six crates, each a real compile+test cycle. That is comparable in cost to the
+# mutation-testing gate (.github/workflows/mutation.yml) and far too slow for a
+# per-commit local hook or a Stop-hook fired on every condukt task. Forcing it
+# to fire that often would itself be a new fail-open: a slow gate that people
+# route around (skip files, disable hooks) is worse than a fast gate that
+# actually runs. The correct home is the same one mutation.yml already uses:
+# CI, scoped to changes that can actually move this gate's verdict.
+#
+# TRIGGERS (mirrors mutation.yml's calibrated-pilot pattern): workflow_dispatch
+# for on-demand runs, a weekly schedule as a backstop (offset from mutation.yml's
+# Monday slot to avoid runner contention), and PR/push but ONLY when the diff
+# touches the harness itself or one of the 6 GATE_CRATES it mutates
+# (blastguard/propguard/specguard/stuckguard/mutategate/overwatch — same set as
+# .githooks/pre-push's GATE_PATTERN and scripts/check-gate-crates-sync.py's
+# canonical list). A change anywhere else in the repo cannot flip this harness's
+# verdict, so it is excluded to keep the gate meaningful (an unconditional
+# `on: pull_request` here would be "runs everywhere" cosplaying as "checks
+# everything" while mostly burning CI minutes on unrelated diffs).
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 2' # Tuesdays 06:00 UTC (mutation.yml owns Mondays)
+  pull_request:
+    paths:
+      - 'scripts/check-fail-open-mutation.py'
+      - 'scripts/test_check_fail_open_mutation.py'
+      - '.github/workflows/fail-open-mutation.yml'
+      - 'crates/blastguard/**'
+      - 'crates/propguard/**'
+      - 'crates/specguard/**'
+      - 'crates/stuckguard/**'
+      - 'crates/mutategate/**'
+      - 'crates/overwatch/**'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/check-fail-open-mutation.py'
+      - 'scripts/test_check_fail_open_mutation.py'
+      - '.github/workflows/fail-open-mutation.yml'
+      - 'crates/blastguard/**'
+      - 'crates/propguard/**'
+      - 'crates/specguard/**'
+      - 'crates/stuckguard/**'
+      - 'crates/mutategate/**'
+      - 'crates/overwatch/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fail-open-mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutate:
+    runs-on: ubuntu-latest
+    # Hard cap: six crate compile+test cycles is comparable to the mutation-gate
+    # job; never let one hang the queue.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      # Sanity-check the harness itself (anchor uniqueness, revert-on-exception,
+      # dirty-tree refusal, summary/exit-code mapping) before spending CI minutes
+      # on the slow real thing.
+      - name: Unit-test the mutation harness
+        run: python3 scripts/test_check_fail_open_mutation.py
+      # The real thing: mutate each of the 6 GATE crates one at a time, assert
+      # the crate's own test suite goes RED, then revert. --keep-going so one
+      # crate's finding doesn't hide the other five in the same run.
+      - name: Run fail-open mutation scenarios against all GATE crates
+        run: python3 scripts/check-fail-open-mutation.py --keep-going

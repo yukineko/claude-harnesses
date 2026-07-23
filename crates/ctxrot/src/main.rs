@@ -871,8 +871,34 @@ fn stop_run(hook: Option<HookInput>) {
         return;
     };
     let cfg = Config::load();
-    if let Some(out) = hooks::stop::run(&input, &cfg) {
+    if let Some((out, check_kind)) = hooks::stop::run(&input, &cfg) {
         println!("{out}");
+        emit_violation(&input.cwd_or_current(), &input.session_id, check_kind);
+    }
+}
+
+/// Record a fleet-level violation for a blocking Stop-hook nudge, for
+/// cross-gate correlated-error detection (`overwatch::violation`). Fail-soft:
+/// never changes the hook's exit code/stdout, never panics if the overwatch
+/// store is unwritable (mirrors donegate's `emit_violations`,
+/// crates/donegate/src/main.rs). `task_key` is set to the session id (see
+/// that function's doc comment for why: a Stop-hook gate has no separate
+/// "task" concept below the session/turn it fires in).
+fn emit_violation(root: &std::path::Path, session: &str, check_kind: &str) {
+    let raw = overwatch::violation::RawViolation {
+        check_kind: Some(check_kind),
+        ..Default::default()
+    };
+    let event = overwatch::violation::build_event(
+        overwatch::violation::ViolationSource::Ctxrot,
+        &raw,
+        session.to_string(),
+        session.to_string(),
+        overwatch::store::now(),
+        None,
+    );
+    if let Some(event) = event {
+        let _ = overwatch::store::append_violation(root, &event);
     }
 }
 
@@ -1202,5 +1228,69 @@ mod statusline_tests {
             !line.contains("unknown"),
             "a readable transcript is an estimate, not fully unknown: {line}"
         );
+    }
+}
+
+#[cfg(test)]
+mod violation_emission_tests {
+    use super::emit_violation;
+    use crate::config::HOME_ENV_LOCK;
+
+    // Shares `config::HOME_ENV_LOCK` with `main.rs` (not a locally scoped
+    // lock) — see that static's doc comment for why a per-module lock is not
+    // enough to prevent cross-module races on this same env var.
+    #[test]
+    fn emit_violation_records_a_ctxrot_event() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_home = std::env::var_os("HOME");
+        let temp_home =
+            std::env::temp_dir().join(format!("ctxrot-emit-violation-test-{}", std::process::id()));
+        std::fs::create_dir_all(&temp_home).expect("create temp HOME");
+        std::env::set_var("HOME", &temp_home);
+
+        let root = temp_home.join("project");
+        std::fs::create_dir_all(&root).expect("create project root");
+        emit_violation(&root, "session-x", "budget-threshold-crossed");
+
+        let events = overwatch::store::read_violations(&root).expect("read_violations");
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&temp_home);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].source,
+            overwatch::violation::ViolationSource::Ctxrot
+        );
+        assert_eq!(events[0].signature, "ctxrot:budget-threshold-crossed");
+    }
+
+    #[test]
+    fn emit_violation_with_empty_check_kind_records_nothing() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_home = std::env::var_os("HOME");
+        let temp_home = std::env::temp_dir().join(format!(
+            "ctxrot-emit-violation-empty-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_home).expect("create temp HOME");
+        std::env::set_var("HOME", &temp_home);
+
+        let root = temp_home.join("project");
+        std::fs::create_dir_all(&root).expect("create project root");
+        emit_violation(&root, "session-x", "");
+
+        let events = overwatch::store::read_violations(&root).expect("read_violations");
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&temp_home);
+
+        assert!(events.is_empty());
     }
 }

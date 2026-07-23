@@ -74,13 +74,11 @@ gate/block しないため GATE crate ではない＝canary 必須にはなら�
 finder の各指摘を、**別の (finder とは独立した) `Task` verifier subagent**に渡し、
 **反証を試みさせる** (adversarial verify)。
 
-> **既定は REFUTED ではない。既定は UNVERIFIED。**
-> 二値 (CONFIRMED/REFUTED) + 「既定 REFUTED」は、**「permissive な経路を辿れなかった」を
-> 「経路が無い」に潰す**。これは監査対象のゲートが持つ fail-open と全く同じ形であり、実測で
-> 実在する fail-open を誤って棄却した (2026-07-21: specguard `forge/gather.rs` の指摘を REFUTED と
-> したが、検証者は shortfall→sentinel の 1 経路しか辿っておらず、件数閾値を満たす部分的な束が
-> clean として下流へ渡る経路を見ていなかった。後に `EXIT_INTAKE_INCOMPLETE=8` を追加する修正が
-> 入り、指摘が実在したことが示された)。**判定不能は制限側 = UNVERIFIED に倒す。**
+> **既定は REFUTED ではない。既定は UNVERIFIED。** 二値 (CONFIRMED/REFUTED) + 「既定 REFUTED」は
+> 監査対象のゲート自身が持つ fail-open と同じ形（「経路を辿れなかった」を「経路が無い」に潰す）。
+> 根拠と実例（2026-07-21 specguard `forge/gather.rs` の誤棄却）は
+> [`CLAUDE.md`](../../../../CLAUDE.md) 第6節「反証にも同じ立証責任を課す」を参照。
+> **判定不能は制限側 = UNVERIFIED に倒す。**
 
 **verdict は三値 (CONFIRMED / REFUTED / UNVERIFIED)**。verifier には次を指示する:
 

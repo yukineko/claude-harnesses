@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the GATE_CRATES crate set is consistent across its 7 hardcoded sources.
+"""Verify the GATE_CRATES crate set is consistent across its 9 hardcoded sources.
 
 Two related-but-distinct concepts are hardcoded across these sources:
   - "GATE crates": fleet defense gates that require a canary rollout
@@ -22,17 +22,44 @@ Sources and how each must relate to the canonical GATE_CRATES set:
     that rollout-plugins.sh hard-rejects without --canary. (The hint used to be a
     second literal in the same file; it is now generated from this constant, so
     only the constant can drift.)
-  - crates/condukt/src/adversarial.rs  pub const GATE_CRATES: [&str; N] — must
-    equal canonical EXACTLY. Decides which completions are "high-stakes" enough
-    to force the adversarial refutation panel.
-  - crates/tdd/src/config.rs  pub const GATE_CRATES: &[&str] — must equal
-    canonical EXACTLY. Decides where `strict_separation` (RED/GREEN author
-    diversity) defaults on. Both Rust copies had silently lost `overwatch`,
-    exempting the Continuous-Audit crate from the gates that loop depends on.
+  - scripts/check-fail-open-mutation.py  module-level GATE_CRATES = (...) tuple —
+    must equal canonical EXACTLY. This is the adversarial fail-open mutation
+    harness: it hardcodes the same 6-crate list only because it is a standalone
+    Python script that cannot `pub use harness_core::fleet::GATE_CRATES`. A
+    stale copy here would either mutation-test a crate that is no longer a GATE
+    crate, or (worse) silently skip a real GATE crate's fail-open coverage.
+  - crates/harness-core/src/fleet.rs  pub const GATE_CRATES: &[&str] — must equal
+    canonical EXACTLY. This is now the SOLE Rust-side literal: it used to be two
+    independently hand-copied literals (crates/condukt/src/adversarial.rs's
+    `pub const GATE_CRATES: [&str; N]`, deciding which completions are
+    "high-stakes" enough to force the adversarial refutation panel, and
+    crates/tdd/src/config.rs's `pub const GATE_CRATES: &[&str]`, deciding where
+    `strict_separation` (RED/GREEN author diversity) defaults on). Both Rust
+    copies had, at different points, silently lost `overwatch`, exempting the
+    Continuous-Audit crate from the gates that loop depends on — the same
+    failure mode this cross-source script exists to catch. `condukt` and `tdd`
+    now each `pub use harness_core::fleet::GATE_CRATES;` instead of redefining
+    the literal, so the Rust *compiler* (not this script) is what keeps those
+    two crates' copies identical to this one; this script only needs to track
+    this one Rust source against the non-Rust sources below.
   - crates/overwatch/skills/continuous-audit/SKILL.md  "## 対象 crate (既定)" section
     (comma-separated list after "既定の target は") — must equal
     scripts/continuous-audit.sh's DEFAULT_TARGETS EXACTLY (the doc must describe
     what the script actually defaults to, whatever audit-only crates it has).
+  - docs/OVERVIEW.md  the "GATE_CRATES（a / b / c）" prose parenthetical in the
+    Continuous-Audit section — must equal canonical EXACTLY. This is the
+    human-facing description readers see before ever opening
+    rollout-plugins.sh; a stale copy tells them the wrong crates require a
+    canary rollout.
+  - scripts/check-fail-open.py  module-level GATE_CRATES = (...) tuple — must
+    equal canonical EXACTLY. This is the fail-open swallow scanner's own
+    merge-blocking scope list (which crates' `src/` a fail-open finding
+    blocks on, see that script's docstring); a stale copy would silently drop
+    a real GATE crate from fail-open enforcement, or scan a crate that is no
+    longer a GATE crate. Found as an untracked 9th copy (docs/gate-taxonomy.md
+    "重複+実測ゼロ件" section, backlog bb667ce1) and left out of an earlier
+    consolidation pass because it was live-enforcing (not "zero-observed");
+    tracking it here does not change enforcement, only drift detection.
 
 See docs/fix-gate-crates-drift.md for the incident that motivated this checker.
 
@@ -157,23 +184,32 @@ def python_const_crates(text):
 def rust_const_crates(text):
     """Extract crate names from a Rust `pub const GATE_CRATES ... = [ ... ];`.
 
-    Handles both shapes in the tree: the sized array
-    (`pub const GATE_CRATES: [&str; 6] = [...]`, condukt/src/adversarial.rs) and
-    the slice (`pub const GATE_CRATES: &[&str] = &[...]`, tdd/src/config.rs).
-    The `&` before the bracket is optional and the array length in the type is
-    ignored — the parsed membership is the thing under test, and a wrong length
-    is a compile error anyway.
+    Handles both shapes the regex may see: the sized array
+    (`pub const GATE_CRATES: [&str; 6] = [...]`) and the slice
+    (`pub const GATE_CRATES: &[&str] = &[...]`, the shape
+    crates/harness-core/src/fleet.rs actually uses today). The `&` before the
+    bracket is optional and the array length in the type is ignored — the
+    parsed membership is the thing under test, and a wrong length is a compile
+    error anyway.
 
-    These two Rust copies were invisible to this checker for a while and both
-    silently drifted, missing `overwatch`: editing crates/overwatch/** triggered
-    neither condukt's adversarial panel nor tdd's default strict_separation, so
-    the crate implementing the Continuous-Audit loop was exempt from the very
-    gates that loop depends on. They are tracked sources now.
+    Until this constant was consolidated into crates/harness-core/src/fleet.rs,
+    it was two independently hand-copied Rust literals
+    (crates/condukt/src/adversarial.rs and crates/tdd/src/config.rs). Both were
+    invisible to this checker for a while and both silently drifted, missing
+    `overwatch`: editing crates/overwatch/** triggered neither condukt's
+    adversarial panel nor tdd's default strict_separation, so the crate
+    implementing the Continuous-Audit loop was exempt from the very gates that
+    loop depends on. `condukt` and `tdd` now `pub use` the single
+    harness-core copy instead of redefining the literal, so this function only
+    needs to track the one remaining Rust source
+    (crates/harness-core/src/fleet.rs) — the Rust compiler keeps the two `pub
+    use` re-exports identical to it by construction, which this script cannot
+    silently fail to notice the way it could a second hand-copied literal.
 
     `//` and `/* … */` comments are stripped from the WHOLE FILE before the
-    constant is located. Stripping only the captured span was not enough: both
-    of these files carry a long "keep in sync with rollout-plugins.sh" doc
-    comment directly above the constant, and one illustrative
+    constant is located. Stripping only the captured span was not enough: this
+    file carries a long "keep in sync with rollout-plugins.sh" doc comment
+    directly above the constant, and one illustrative
     `/// pub const GATE_CRATES: [&str; 6] = ["…", "overwatch"];` line is matched
     INSTEAD of the constant, with its own body as the span — no comment marker
     inside it left to strip.
@@ -196,6 +232,23 @@ def skill_md_crates(text):
     return set(x for x in m.group(1).split(",") if x)
 
 
+def overview_md_crates(text):
+    """Extract crate names from docs/OVERVIEW.md's prose "GATE_CRATES（a / b / c）" list.
+
+    This is the human-facing description of the canonical set inside the
+    Continuous-Audit section. It is prose, not code, so `_sole_match` is not
+    applied here (there is no comment/string ambiguity to guard against for a
+    single fenced-off parenthetical) — but a missing or empty match still
+    returns None, which the caller treats as drift rather than as an
+    unrelated/absent file.
+    """
+    m = re.search(r"GATE_CRATES(?:（|\()([^）)]+)(?:）|\))", text)
+    if not m:
+        return None
+    crates = set(x.strip() for x in m.group(1).split("/") if x.strip())
+    return crates or None
+
+
 # mode:
 #   "canonical" — this source defines the canonical GATE_CRATES set.
 #   "exact"     — must equal canonical exactly (no extra, no missing).
@@ -208,13 +261,15 @@ SOURCES = [
     (".githooks/pre-push", pre_push_crates, "exact"),
     ("scripts/continuous-audit.sh", continuous_audit_crates, "superset"),
     ("scripts/check-plugin-rollout.py", python_const_crates, "exact"),
-    ("crates/condukt/src/adversarial.rs", rust_const_crates, "exact"),
-    ("crates/tdd/src/config.rs", rust_const_crates, "exact"),
+    ("scripts/check-fail-open-mutation.py", python_const_crates, "exact"),
+    ("crates/harness-core/src/fleet.rs", rust_const_crates, "exact"),
     (
         "crates/overwatch/skills/continuous-audit/SKILL.md",
         skill_md_crates,
         "mirror:scripts/continuous-audit.sh",
     ),
+    ("docs/OVERVIEW.md", overview_md_crates, "exact"),
+    ("scripts/check-fail-open.py", python_const_crates, "exact"),
 ]
 
 

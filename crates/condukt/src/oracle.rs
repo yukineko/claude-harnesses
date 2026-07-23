@@ -554,11 +554,6 @@ mod tests {
     // would keep every unit test green while the live gate stayed fail-open.
     // These tests close that seam by spawning a fake `tdd` off a prepended PATH.
 
-    /// Serializes the tests that mutate the process-global `PATH` (condukt tests
-    /// run in parallel by default; mirrors `lessons::tests::ENV_LOCK` and
-    /// `replan::tests::ENV_LOCK`).
-    static ORACLE_PATH_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// Write an executable `tdd` into `dir` that prints `stdout` and exits with
     /// `code`. Returns nothing; the caller prepends `dir` to `PATH`.
     #[cfg(unix)]
@@ -574,8 +569,8 @@ mod tests {
     /// `stdout`. PATH is restored before returning.
     #[cfg(unix)]
     fn check_oracle_with_fake_tdd(stdout: &str, code: i32) -> serde_json::Value {
-        let _guard = ORACLE_PATH_ENV_LOCK
-            .lock()
+        let _guard = crate::env_lock::PATH_ENV_LOCK
+            .write()
             .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let bin = tmp.path().join("bin");
@@ -652,8 +647,8 @@ mod tests {
     /// guard so it outlives the call.
     #[cfg(unix)]
     fn check_oracle_with_no_tdd_on_path() -> serde_json::Value {
-        let _guard = ORACLE_PATH_ENV_LOCK
-            .lock()
+        let _guard = crate::env_lock::PATH_ENV_LOCK
+            .write()
             .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let empty_bin = tmp.path().join("empty-bin");

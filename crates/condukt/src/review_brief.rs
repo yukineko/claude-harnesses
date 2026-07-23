@@ -118,6 +118,12 @@ fn source_label(source: ViolationSource) -> &'static str {
         ViolationSource::Propguard => "propguard",
         ViolationSource::Specguard => "specguard",
         ViolationSource::Mutategate => "mutategate",
+        ViolationSource::Donegate => "donegate",
+        ViolationSource::Reviewgate => "reviewgate",
+        ViolationSource::Tdd => "tdd",
+        ViolationSource::Budgetguard => "budgetguard",
+        ViolationSource::Autoflow => "autoflow",
+        ViolationSource::Ctxrot => "ctxrot",
     }
 }
 

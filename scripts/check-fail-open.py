@@ -89,14 +89,20 @@ BASELINE_FILE = REPO / "scripts" / "check-fail-open.baseline"
 
 # The crates whose gates guard the fleet (CLAUDE.md GATE_CRATES). A fail-open
 # here is load-bearing, so these are the merge-blocking surface.
-GATE_CRATES = [
+#
+# Tuple syntax (not a list) is deliberate: scripts/check-gate-crates-sync.py's
+# `python_const_crates()` extractor only recognizes `GATE_CRATES = (...)`
+# (the shape check-plugin-rollout.py and check-fail-open-mutation.py already
+# use), so this copy is now tracked as that script's 9th SOURCES entry
+# (backlog bb667ce1) — keep it a tuple or the sync checker stops parsing it.
+GATE_CRATES = (
     "blastguard",
     "propguard",
     "specguard",
     "stuckguard",
     "mutategate",
     "overwatch",
-]
+)
 
 # How many code lines above a `.flatten()` we look for the `read_dir(` that makes
 # it a directory-walk swallow (the idiom is `let Ok(x)=read_dir(..) else {..};

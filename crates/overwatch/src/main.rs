@@ -117,13 +117,16 @@ enum Command {
         #[arg(long)]
         to: String,
     },
-    /// Record a gate-violation event (blastguard/propguard/specguard/mutategate)
-    /// with a normalized signature, for fleet-level correlated-error detection.
+    /// Record a gate-violation event (blastguard/propguard/specguard/mutategate/
+    /// donegate/reviewgate/tdd/budgetguard/autoflow/ctxrot) with a normalized
+    /// signature, for fleet-level correlated-error detection.
     RecordViolation {
-        /// Source gate: blastguard | propguard | specguard | mutategate
+        /// Source gate: blastguard | propguard | specguard | mutategate |
+        /// donegate | reviewgate | tdd | budgetguard | autoflow | ctxrot
         #[arg(long)]
         source: String,
-        /// Source-specific discriminator (rule id / PROP id / drift kind / mutation operator).
+        /// Source-specific discriminator (rule id / PROP id / drift kind /
+        /// mutation operator / check kind for the 6 newer sources).
         #[arg(long)]
         discriminator: String,
         /// Optional symbol (used by specguard alongside `discriminator` as drift kind).
@@ -497,7 +500,7 @@ enum AuditRoundAction {
 fn parse_source(s: &str) -> Result<ViolationSource> {
     ViolationSource::parse(&s.to_lowercase()).ok_or_else(|| {
         anyhow::anyhow!(
-            "unknown violation source: {s} (expected blastguard|propguard|specguard|mutategate)"
+            "unknown violation source: {s} (expected blastguard|propguard|specguard|mutategate|donegate|reviewgate|tdd|budgetguard|autoflow|ctxrot)"
         )
     })
 }

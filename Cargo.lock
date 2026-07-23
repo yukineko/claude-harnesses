@@ -84,11 +84,12 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.11"
+version = "0.1.13"
 dependencies = [
  "clap",
  "harness-core",
  "libc",
+ "overwatch",
  "serde",
  "serde_json",
  "tempfile",
@@ -98,7 +99,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.1.16"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -127,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "benchkit"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "clap",
@@ -160,7 +161,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.9"
+version = "0.2.14"
 dependencies = [
  "globset",
  "harness-core",
@@ -191,13 +192,14 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "dirs",
  "harness-core",
+ "overwatch",
  "serde",
  "serde_json",
  "tempfile",
@@ -299,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.92"
+version = "0.7.100"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -359,13 +361,14 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.17"
+version = "0.5.18"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "dirs",
  "harness-core",
+ "overwatch",
  "regex",
  "serde",
  "serde_json",
@@ -388,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "daily"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "blastguard",
  "chrono",
@@ -462,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -470,6 +473,7 @@ dependencies = [
  "dirs",
  "globset",
  "harness-core",
+ "overwatch",
  "serde",
  "serde_json",
  "tempfile",
@@ -519,7 +523,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flow"
-version = "0.1.16"
+version = "0.2.0"
 dependencies = [
  "clap",
  "serde",
@@ -844,7 +848,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -888,7 +892,7 @@ dependencies = [
 
 [[package]]
 name = "precommit-audit"
-version = "0.1.10"
+version = "0.1.13"
 dependencies = [
  "globset",
  "harness-core",
@@ -912,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.27"
+version = "0.1.29"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1064,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1072,6 +1076,7 @@ dependencies = [
  "dirs",
  "globset",
  "harness-core",
+ "overwatch",
  "serde",
  "serde_json",
  "toml 0.8.23",
@@ -1277,7 +1282,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "stuckguard"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1324,7 +1329,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.19"
+version = "0.1.21"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1332,6 +1337,7 @@ dependencies = [
  "dirs",
  "globset",
  "harness-core",
+ "overwatch",
  "regex",
  "serde",
  "serde_json",

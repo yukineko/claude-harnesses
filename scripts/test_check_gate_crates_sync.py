@@ -43,34 +43,39 @@ def _make_fixture_repo(
     hint_missing=(),
     skill_extra=(),
     skill_missing=(),
-    condukt_extra=(),
-    condukt_missing=(),
-    tdd_extra=(),
-    tdd_missing=(),
-    condukt_comment="",
-    tdd_comment="",
+    rust_extra=(),
+    rust_missing=(),
+    overview_extra=(),
+    overview_missing=(),
+    mutation_extra=(),
+    mutation_missing=(),
+    fail_open_extra=(),
+    fail_open_missing=(),
     hint_comment="",
-    condukt_prefix="",
-    tdd_prefix="",
+    rust_comment="",
     hint_prefix="",
+    rust_prefix="",
 ):
-    """Build a tmp dir with all 7 sources. By default everything is exactly in
+    """Build a tmp dir with all 6 sources. By default everything is exactly in
     sync with CANONICAL. The `*_extra`/`*_missing` args perturb one source's
     crate set relative to CANONICAL (continuous-audit.sh/SKILL.md for the
-    superset/mirror relations; pre-push/check-plugin-rollout.py and the two Rust
-    constants for exact) so callers can exercise every relation, not just exact
+    superset/mirror relations; pre-push/check-plugin-rollout.py/the Rust
+    constant for exact) so callers can exercise every relation, not just exact
     match. `hint_*` perturbs check-plugin-rollout.py's module-level GATE_CRATES
     tuple (the name is kept for continuity: that constant is what now generates
-    the --canary drift hint).
+    the --canary drift hint). `rust_*` perturbs the ONE remaining Rust source,
+    crates/harness-core/src/fleet.rs — condukt and tdd now `pub use` this same
+    constant instead of each hand-copying their own literal, so there is only
+    one Rust fixture to perturb.
 
-    `condukt_comment` / `tdd_comment` / `hint_comment` inject a raw extra line
-    INSIDE the literal's span (a Rust `//`/`/*…*/` or a Python `#` comment), so
-    tests can pin that a commented-out or merely-mentioned crate name is NOT
-    counted as a member.
+    `hint_comment` / `rust_comment` inject a raw extra line INSIDE the
+    literal's span (a Python `#` or Rust `//`/`/*…*/` comment), so tests can pin
+    that a commented-out or merely-mentioned crate name is NOT counted as a
+    member.
 
-    `condukt_prefix` / `tdd_prefix` / `hint_prefix` inject raw text BEFORE the
-    constant (outside its span), so tests can pin the decoy case: a doc comment
-    or docstring that restates the constant and is matched INSTEAD of it."""
+    `hint_prefix` / `rust_prefix` inject raw text BEFORE the constant (outside
+    its span), so tests can pin the decoy case: a doc comment or docstring that
+    restates the constant and is matched INSTEAD of it."""
 
     def apply(base, extra, missing):
         return (set(base) | set(extra)) - set(missing)
@@ -79,8 +84,10 @@ def _make_fixture_repo(
     ca_set = apply(CANONICAL_SET, ca_extra, ca_missing)
     hint_set = apply(CANONICAL_SET, hint_extra, hint_missing)
     skill_set = apply(CANONICAL_SET, skill_extra, skill_missing)
-    condukt_set = apply(CANONICAL_SET, condukt_extra, condukt_missing)
-    tdd_set = apply(CANONICAL_SET, tdd_extra, tdd_missing)
+    rust_set = apply(CANONICAL_SET, rust_extra, rust_missing)
+    overview_set = apply(CANONICAL_SET, overview_extra, overview_missing)
+    mutation_set = apply(CANONICAL_SET, mutation_extra, mutation_missing)
+    fail_open_set = apply(CANONICAL_SET, fail_open_extra, fail_open_missing)
 
     _write(tmp / "scripts" / "rollout-plugins.sh", f'#!/bin/sh\nGATE_CRATES="{CANONICAL}"\n')
     _write(
@@ -103,24 +110,16 @@ def _make_fixture_repo(
         "def rollout_hint():\n"
         "    return f\"(add --canary for GATE crates: {'/'.join(GATE_CRATES)}).\"\n",
     )
-    # Both Rust copies, in their two real shapes: condukt uses a sized array
-    # (`[&str; N]`), tdd uses a slice (`&[&str]`). The extractor must handle both.
+    # The single canonical Rust source (condukt/adversarial.rs and
+    # tdd/config.rs both `pub use` this constant instead of redefining it, so
+    # only this one file is a tracked source for the checker).
     _write(
-        tmp / "crates" / "condukt" / "src" / "adversarial.rs",
+        tmp / "crates" / "harness-core" / "src" / "fleet.rs",
         "/// The fleet GATE crates whose changes make a completion high-stakes.\n"
-        + condukt_prefix
-        + f"pub const GATE_CRATES: [&str; {len(condukt_set)}] = [\n"
-        + "".join(f'    "{c}",\n' for c in sorted(condukt_set))
-        + (f"    {condukt_comment}\n" if condukt_comment else "")
-        + "];\n",
-    )
-    _write(
-        tmp / "crates" / "tdd" / "src" / "config.rs",
-        "/// Fleet gate crates: strict_separation defaults on for these.\n"
-        + tdd_prefix
+        + rust_prefix
         + "pub const GATE_CRATES: &[&str] = &[\n"
-        + "".join(f'    "{c}",\n' for c in sorted(tdd_set))
-        + (f"    {tdd_comment}\n" if tdd_comment else "")
+        + "".join(f'    "{c}",\n' for c in sorted(rust_set))
+        + (f"    {rust_comment}\n" if rust_comment else "")
         + "];\n",
     )
     _write(
@@ -128,6 +127,29 @@ def _make_fixture_repo(
         "## 対象 crate (既定)\n\n"
         f"既定の target は fleet の **GATE crates**: `{','.join(sorted(skill_set))}`\n"
         "(同期の説明文)。`--target` で上書きできる。\n",
+    )
+    _write(
+        tmp / "docs" / "OVERVIEW.md",
+        "## Continuous-Audit\n\n"
+        f"GATE_CRATES（{' / '.join(sorted(overview_set))}）を敵対的にレビューする。\n",
+    )
+    # The adversarial fail-open mutation harness: a second standalone Python
+    # source with the same module-level-tuple shape as check-plugin-rollout.py
+    # (reuses the same extractor, see check-gate-crates-sync.py's SOURCES).
+    _write(
+        tmp / "scripts" / "check-fail-open-mutation.py",
+        "GATE_CRATES = (\n"
+        + "".join(f'    "{c}",\n' for c in sorted(mutation_set))
+        + ")\n",
+    )
+    # The fail-open swallow scanner's own merge-blocking scope list — a third
+    # standalone Python source with the same module-level-tuple shape (see
+    # check-gate-crates-sync.py's SOURCES, backlog bb667ce1).
+    _write(
+        tmp / "scripts" / "check-fail-open.py",
+        "GATE_CRATES = (\n"
+        + "".join(f'    "{c}",\n' for c in sorted(fail_open_set))
+        + ")\n",
     )
     return tmp
 
@@ -193,6 +215,40 @@ class DriftDetection(unittest.TestCase):
             self.assertFalse(ok)
             by_path = _by_path(parsed)
             self.assertFalse(canonical <= by_path["scripts/continuous-audit.sh"])
+
+    def test_overview_md_missing_a_crate_is_detected(self):
+        """docs/OVERVIEW.md's prose GATE_CRATES（a / b / c）list must equal
+        canonical EXACTLY; dropping a crate from the prose must be caught."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), overview_missing=("overwatch",))
+            ok, canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertFalse(ok)
+            by_path = _by_path(parsed)
+            self.assertNotIn("overwatch", by_path["docs/OVERVIEW.md"])
+
+    def test_fail_open_mutation_script_missing_a_crate_is_detected(self):
+        """scripts/check-fail-open-mutation.py hardcodes the same 6-crate list
+        (it cannot `pub use` the Rust constant, being a standalone Python
+        script) so it is tracked here too; a dropped crate must be detected,
+        not silently skip that crate's fail-open mutation coverage."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), mutation_missing=("mutategate",))
+            ok, canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertFalse(ok)
+            by_path = _by_path(parsed)
+            self.assertNotIn("mutategate", by_path["scripts/check-fail-open-mutation.py"])
+
+    def test_fail_open_scanner_missing_a_crate_is_detected(self):
+        """scripts/check-fail-open.py hardcodes the same 6-crate list as its own
+        merge-blocking scan scope (a fail-open here would silently drop a real
+        GATE crate from fail-open enforcement). Found as an untracked 9th copy
+        (docs/gate-taxonomy.md, backlog bb667ce1) and is now tracked here too."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), fail_open_missing=("stuckguard",))
+            ok, canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertFalse(ok)
+            by_path = _by_path(parsed)
+            self.assertNotIn("stuckguard", by_path["scripts/check-fail-open.py"])
 
     def test_rollout_hint_missing_a_crate_is_detected(self):
         """Regression: check-plugin-rollout.py's GATE list shipped for a while
@@ -285,7 +341,7 @@ class DriftDetection(unittest.TestCase):
     # above their constant, so one illustrative example is all it takes.
 
     def test_rust_doc_comment_decoy_equal_to_canonical_is_not_silent(self):
-        """condukt's array loses `overwatch` while the doc comment above it
+        """The Rust array loses `overwatch` while the doc comment above it
         shows the full canonical list. Must be drift, not OK.
 
         The decoy is written on ONE line on purpose: the captured span then
@@ -301,7 +357,7 @@ class DriftDetection(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             repo = _make_fixture_repo(
-                Path(tmp), condukt_missing=("overwatch",), condukt_prefix=decoy
+                Path(tmp), rust_missing=("overwatch",), rust_prefix=decoy
             )
             ok, _canonical, parsed = cgcs.check(repo=str(repo))
             self.assertFalse(
@@ -309,11 +365,11 @@ class DriftDetection(unittest.TestCase):
             )
             self.assertNotIn(
                 "overwatch",
-                _by_path(parsed)["crates/condukt/src/adversarial.rs"] or set(),
+                _by_path(parsed)["crates/harness-core/src/fleet.rs"] or set(),
             )
 
     def test_rust_block_comment_decoy_equal_to_canonical_is_not_silent(self):
-        """Same decoy in `/* … */` form, above tdd's slice constant."""
+        """Same decoy in `/* … */` form, above the slice constant."""
         decoy = (
             "/* canonical reference:\n"
             "   pub const GATE_CRATES: &[&str] = &["
@@ -322,14 +378,14 @@ class DriftDetection(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             repo = _make_fixture_repo(
-                Path(tmp), tdd_missing=("overwatch",), tdd_prefix=decoy
+                Path(tmp), rust_missing=("overwatch",), rust_prefix=decoy
             )
             ok, _canonical, parsed = cgcs.check(repo=str(repo))
             self.assertFalse(
                 ok, "a block-comment decoy restating canonical silenced the gate"
             )
             self.assertNotIn(
-                "overwatch", _by_path(parsed)["crates/tdd/src/config.rs"] or set()
+                "overwatch", _by_path(parsed)["crates/harness-core/src/fleet.rs"] or set()
             )
 
     def test_python_docstring_decoy_equal_to_canonical_is_not_silent(self):
@@ -398,58 +454,52 @@ class DriftDetection(unittest.TestCase):
         )
 
     def test_rust_constants_are_parsed_in_both_shapes(self):
-        """condukt's sized array (`[&str; N]`) and tdd's slice (`&[&str]`) must
-        both parse to the canonical set in the fully-synced fixture."""
+        """The extractor must handle both the sized-array shape
+        (`[&str; N]`, condukt's former copy) and the slice shape (`&[&str]`,
+        the shape crates/harness-core/src/fleet.rs actually uses today)."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = _make_fixture_repo(Path(tmp))
             ok, _canonical, parsed = cgcs.check(repo=str(repo))
-            self.assertTrue(ok, f"expected synced Rust constants to pass: {parsed}")
+            self.assertTrue(ok, f"expected synced Rust constant to pass: {parsed}")
             by_path = _by_path(parsed)
-            self.assertEqual(by_path["crates/condukt/src/adversarial.rs"], CANONICAL_SET)
-            self.assertEqual(by_path["crates/tdd/src/config.rs"], CANONICAL_SET)
+            self.assertEqual(by_path["crates/harness-core/src/fleet.rs"], CANONICAL_SET)
 
-    def test_condukt_rust_const_missing_overwatch_is_detected(self):
-        """The exact drift that shipped: condukt's adversarial panel constant
-        lost `overwatch`, so changes to the Continuous-Audit crate never forced
-        the panel. This is the hole the new source closes."""
+    def test_rust_const_missing_overwatch_is_detected(self):
+        """The exact drift that shipped historically: a Rust copy of
+        GATE_CRATES lost `overwatch`, so changes to the Continuous-Audit crate
+        never forced condukt's adversarial panel / tdd's strict_separation.
+        Consolidating to one Rust source (crates/harness-core/src/fleet.rs)
+        closes the hole structurally; this pins that the sync checker still
+        catches drift in that single remaining source."""
         with tempfile.TemporaryDirectory() as tmp:
-            repo = _make_fixture_repo(Path(tmp), condukt_missing=("overwatch",))
+            repo = _make_fixture_repo(Path(tmp), rust_missing=("overwatch",))
             ok, _canonical, parsed = cgcs.check(repo=str(repo))
             self.assertFalse(ok)
             self.assertNotIn(
-                "overwatch", _by_path(parsed)["crates/condukt/src/adversarial.rs"]
+                "overwatch", _by_path(parsed)["crates/harness-core/src/fleet.rs"]
             )
 
-    def test_tdd_rust_const_missing_overwatch_is_detected(self):
-        """Same drift in tdd's copy: strict_separation stayed default-off inside
-        crates/overwatch/**, letting one agent author both RED and GREEN there."""
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = _make_fixture_repo(Path(tmp), tdd_missing=("overwatch",))
-            ok, _canonical, parsed = cgcs.check(repo=str(repo))
-            self.assertFalse(ok)
-            self.assertNotIn("overwatch", _by_path(parsed)["crates/tdd/src/config.rs"])
-
     def test_rust_const_extra_crate_is_detected(self):
-        """The Rust copies are `exact`, not `superset`: an audit-only crate like
+        """The Rust source is `exact`, not `superset`: an audit-only crate like
         `backlog` must not sneak in and force a panel / strict separation for a
         crate that gates nothing."""
         with tempfile.TemporaryDirectory() as tmp:
-            repo = _make_fixture_repo(Path(tmp), tdd_extra=("backlog",))
+            repo = _make_fixture_repo(Path(tmp), rust_extra=("backlog",))
             ok, _canonical, parsed = cgcs.check(repo=str(repo))
             self.assertFalse(ok)
-            self.assertIn("backlog", _by_path(parsed)["crates/tdd/src/config.rs"])
+            self.assertIn("backlog", _by_path(parsed)["crates/harness-core/src/fleet.rs"])
 
     def test_rust_const_unrecognizable_is_treated_as_drift(self):
-        """A Rust copy that no longer parses fails closed, like the others."""
+        """A Rust source that no longer parses fails closed, like the others."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = _make_fixture_repo(Path(tmp))
             _write(
-                repo / "crates" / "condukt" / "src" / "adversarial.rs",
+                repo / "crates" / "harness-core" / "src" / "fleet.rs",
                 "pub fn gate_crates() -> Vec<&'static str> { vec![\"blastguard\"] }\n",
             )
             ok, _canonical, parsed = cgcs.check(repo=str(repo))
             self.assertFalse(ok)
-            self.assertIsNone(_by_path(parsed)["crates/condukt/src/adversarial.rs"])
+            self.assertIsNone(_by_path(parsed)["crates/harness-core/src/fleet.rs"])
 
     # ── commented-out entries must not be counted (F1) ──────────────────────
     #
@@ -464,13 +514,13 @@ class DriftDetection(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = _make_fixture_repo(
                 Path(tmp),
-                condukt_missing=("overwatch",),
-                condukt_comment='// "overwatch",',
+                rust_missing=("overwatch",),
+                rust_comment='// "overwatch",',
             )
             ok, _canonical, parsed = cgcs.check(repo=str(repo))
             self.assertFalse(ok, "commented-out Rust entry was counted as live")
             self.assertNotIn(
-                "overwatch", _by_path(parsed)["crates/condukt/src/adversarial.rs"]
+                "overwatch", _by_path(parsed)["crates/harness-core/src/fleet.rs"]
             )
 
     def test_rust_const_line_comment_mention_is_detected(self):
@@ -478,25 +528,27 @@ class DriftDetection(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = _make_fixture_repo(
                 Path(tmp),
-                tdd_missing=("overwatch",),
-                tdd_comment='// TODO: re-add "overwatch" once panel cost is acceptable',
+                rust_missing=("overwatch",),
+                rust_comment='// TODO: re-add "overwatch" once panel cost is acceptable',
             )
             ok, _canonical, parsed = cgcs.check(repo=str(repo))
             self.assertFalse(ok, "Rust line-comment mention was counted as live")
-            self.assertNotIn("overwatch", _by_path(parsed)["crates/tdd/src/config.rs"])
+            self.assertNotIn(
+                "overwatch", _by_path(parsed)["crates/harness-core/src/fleet.rs"]
+            )
 
     def test_rust_const_block_comment_mention_is_detected(self):
         """The `/* … */` form is stripped too, not just `//`."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = _make_fixture_repo(
                 Path(tmp),
-                condukt_missing=("overwatch",),
-                condukt_comment='/* "overwatch", disabled for now */',
+                rust_missing=("overwatch",),
+                rust_comment='/* "overwatch", disabled for now */',
             )
             ok, _canonical, parsed = cgcs.check(repo=str(repo))
             self.assertFalse(ok, "Rust block-comment mention was counted as live")
             self.assertNotIn(
-                "overwatch", _by_path(parsed)["crates/condukt/src/adversarial.rs"]
+                "overwatch", _by_path(parsed)["crates/harness-core/src/fleet.rs"]
             )
 
     def test_python_const_commented_out_entry_is_detected(self):
@@ -538,15 +590,13 @@ class DriftDetection(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = _make_fixture_repo(
                 Path(tmp),
-                condukt_comment='// keep "backlog" out — audit-only, not a gate',
-                tdd_comment='/* keep "backlog" out — audit-only, not a gate */',
+                rust_comment='// keep "backlog" out — audit-only, not a gate',
                 hint_comment='# keep "backlog" out — audit-only, not a gate',
             )
             ok, _canonical, parsed = cgcs.check(repo=str(repo))
             self.assertTrue(ok, f"comment stripping ate live entries: {parsed}")
             by_path = _by_path(parsed)
-            self.assertEqual(by_path["crates/condukt/src/adversarial.rs"], CANONICAL_SET)
-            self.assertEqual(by_path["crates/tdd/src/config.rs"], CANONICAL_SET)
+            self.assertEqual(by_path["crates/harness-core/src/fleet.rs"], CANONICAL_SET)
             self.assertEqual(
                 by_path["scripts/check-plugin-rollout.py"], CANONICAL_SET
             )

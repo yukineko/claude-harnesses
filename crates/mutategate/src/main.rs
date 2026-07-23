@@ -21,6 +21,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
+use harness_core::verdict::Determination;
 use mutategate::{evaluate, parse_outcomes, GateOutcome, MutationSummary};
 
 /// Default minimum kill-rate. 0.80 mirrors the practical robustness bar used by
@@ -59,11 +60,19 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
 
-    let json = match std::fs::read_to_string(&cli.outcomes) {
-        Ok(j) => j,
-        Err(e) => {
+    let json = match harness_core::boundary::read_to_string(&cli.outcomes) {
+        Determination::Known(Some(j)) => j,
+        Determination::Known(None) => {
             eprintln!(
-                "mutategate: cannot read outcomes file {}: {e}\n\
+                "mutategate: cannot read outcomes file {}: No such file or directory\n\
+                 (run `cargo mutants` first, or point --outcomes at its outcomes.json)",
+                cli.outcomes.display()
+            );
+            return ExitCode::from(2);
+        }
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "mutategate: cannot read outcomes file {}: {why}\n\
                  (run `cargo mutants` first, or point --outcomes at its outcomes.json)",
                 cli.outcomes.display()
             );

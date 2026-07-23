@@ -72,7 +72,9 @@ diff が *変化* すれば 1 ラウンド消費、`max_attempts`（既定 2）�
 - チェッカーが crash / timeout / 解析不能出力 → **ブロック**（有界）後に警告して通過 —
   壊れたチェッカーはバイパスにならない
 - 大きすぎて切り詰められた diff（未検査の末尾）→ **ブロック**（有界）後に通過
-- ハーネス自身の panic → exit 0 で握りつぶす（never-break-a-turn）
+- ハーネス自身の panic → `run_guarded` 経由で fail-closed。1 回目の panic は判定不能として
+  **ブロック**（クラッシュを表面化）、`stop_hook_active` が立つ 2 回連続 panic のときだけ
+  bounded に許可（同じ panic で永久にブロックし続けないための上限）
 
 エスケープ：`.propguard-skip`（1 回限り・理由 1 行）を作成、または `PROPGUARD_DISABLE=1`。
 

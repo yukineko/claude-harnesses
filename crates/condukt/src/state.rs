@@ -347,6 +347,22 @@ pub fn resume_run(cfg: &Config, cwd: &Path, run_id: &str) -> Result<()> {
     with_run_locked(cfg, cwd, run_id, |rs| rs.paused = false)
 }
 
+/// Non-RunState sidecar files that share the per-project state directory with
+/// `<run_id>.json` run-state files: `<run_id>.decomposition.json` and
+/// `<run_id>.checkpoints.json` (per-run), plus the bare project-wide registries
+/// `claims.json` (claim.rs), `precedents.json` (precedent.rs), `escalations.json`
+/// (escalate.rs), and `execution-state.json` (claim.rs, not yet wired but same
+/// directory). None of these deserialize as `RunState`; a directory scan that
+/// tries anyway misreports them as corrupt run state (backlog 1af91627).
+fn is_run_state_sidecar(fname: &str) -> bool {
+    fname.ends_with(".decomposition.json")
+        || fname.ends_with(".checkpoints.json")
+        || matches!(
+            fname,
+            "claims.json" | "precedents.json" | "escalations.json" | "execution-state.json"
+        )
+}
+
 /// All runs (complete and incomplete) for this project, sorted by run_id. A
 /// missing project dir legitimately contributes no runs; a dir that EXISTS but
 /// cannot be read (permission denied) is a cannot-determine and is surfaced via
@@ -373,9 +389,8 @@ pub fn all_runs(cfg: &Config, cwd: &Path) -> Vec<RunState> {
                 if path.extension().and_then(|e| e.to_str()) != Some("json") {
                     continue;
                 }
-                // Skip decomposition sidecars (run-id.decomposition.json).
                 let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if fname.ends_with(".decomposition.json") {
+                if is_run_state_sidecar(fname) {
                     continue;
                 }
                 match std::fs::read_to_string(&path) {
@@ -1110,7 +1125,7 @@ pub fn active_worktree_for_path(path: &Path, run_dir: &Path) -> Option<PathBuf> 
             continue;
         }
         let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if fname.ends_with(".decomposition.json") {
+        if is_run_state_sidecar(fname) {
             continue;
         }
         let txt = match std::fs::read_to_string(&p) {
@@ -4125,6 +4140,52 @@ mod tests {
             "all_runs must not panic on an unreadable project dir"
         );
         assert!(result.unwrap().is_empty());
+    }
+
+    /// Regression test for backlog 1af91627: `all_runs` must skip every
+    /// non-RunState sidecar in the project dir (`<run_id>.checkpoints.json`,
+    /// `claims.json`, `precedents.json`, `escalations.json`,
+    /// `execution-state.json`), not just `<run_id>.decomposition.json`, and
+    /// must not warn about any of them.
+    #[test]
+    fn all_runs_skips_all_known_sidecars_without_warning() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cwd = tmp.path().join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let cfg = make_test_cfg(tmp.path());
+        let project_dir = project_dir(&cfg, &cwd);
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let valid = make_run_with_tasks(vec![]);
+        std::fs::write(
+            project_dir.join(format!("{}.json", valid.run_id)),
+            serde_json::to_string(&valid).unwrap(),
+        )
+        .unwrap();
+
+        // Sidecars that are NOT RunState and must never be parsed as one.
+        std::fs::write(
+            project_dir.join(format!("{}.checkpoints.json", valid.run_id)),
+            r#"[{"seq":1,"label":"x","created_at":0,"run":{}}]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            project_dir.join(format!("{}.decomposition.json", valid.run_id)),
+            r#"{"tasks":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(project_dir.join("claims.json"), r#"{"task_claims":{}}"#).unwrap();
+        std::fs::write(project_dir.join("precedents.json"), r#"[]"#).unwrap();
+        std::fs::write(project_dir.join("escalations.json"), r#"[]"#).unwrap();
+        std::fs::write(project_dir.join("execution-state.json"), r#"{}"#).unwrap();
+
+        let runs = all_runs(&cfg, &cwd);
+        assert_eq!(
+            runs.len(),
+            1,
+            "all_runs must return exactly the one valid RunState, ignoring sidecars"
+        );
+        assert_eq!(runs[0].run_id, valid.run_id);
     }
 
     #[cfg(unix)]

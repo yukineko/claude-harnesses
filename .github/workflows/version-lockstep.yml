@@ -38,3 +38,8 @@ jobs:
         run: python3 scripts/check-plugin-versions.py
       - name: Verify changed plugins bumped their version vs origin/main
         run: python3 scripts/check-version-bumped.py --base origin/main
+      # The bump gate has one carve-out (bin-only, derived artifacts). A carve-out
+      # nobody exercises is how a gate stops gating, so its test runs here too —
+      # it also pins that source changes and mixed bin+source changes still fail.
+      - name: Exercise the bump gate's derived-artifact carve-out
+        run: bash scripts/tests/version-bumped-bin-only.sh

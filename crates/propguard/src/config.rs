@@ -226,9 +226,32 @@ impl Config {
         };
 
         if let Some(path) = chosen {
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                if let Ok(fc) = toml::from_str::<FileConfig>(&text) {
-                    cfg.apply(fc);
+            // `Known(Some(text))`: read and apply. `Known(None)`: the file
+            // vanished between the `p.exists()` check above and this read —
+            // genuinely absent, same as "no config" (unchanged behavior).
+            // `Undetermined` (unreadable despite existing: permission denied,
+            // invalid UTF-8, …): this loader has no way to signal failure to
+            // its caller (`Config::load` returns `Self`, not a `Result`), and
+            // its whole documented contract is "the gate must never crash a
+            // turn" — an in-progress/unreadable config falls back to defaults
+            // exactly as a parse error already does a few lines below. This is
+            // the one call site in this migration where Undetermined and
+            // Known(None) converge on purpose, not by accident: both already
+            // shared the same fallback before this migration, and this keeps
+            // it that way while still naming the distinction in code.
+            match harness_core::boundary::read_to_string(&path) {
+                harness_core::verdict::Determination::Known(Some(text)) => {
+                    if let Ok(fc) = toml::from_str::<FileConfig>(&text) {
+                        cfg.apply(fc);
+                    }
+                }
+                harness_core::verdict::Determination::Known(None) => {}
+                harness_core::verdict::Determination::Undetermined(reason) => {
+                    eprintln!(
+                        "propguard: cannot read {}: {}; falling back to defaults",
+                        path.display(),
+                        reason.as_str()
+                    );
                 }
             }
         }

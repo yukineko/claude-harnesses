@@ -181,6 +181,44 @@ mod tests {
         }
     }
 
+    /// Regression: `git()`'s shared output formatter used to `.trim()` the
+    /// WHOLE stdout blob, not just its trailing newline. `git status
+    /// --porcelain`'s first line for an unstaged modification is `" M path"`
+    /// — a leading space that is semantically the "not staged" column, not
+    /// incidental whitespace. Because that space sat at byte 0 of the whole
+    /// blob, the blanket `.trim()` ate it, leaving `"M path"`. `staged_paths`
+    /// then read byte 0 as `'M'` (neither `' '` nor `'?'`) and treated the
+    /// first modified-but-unstaged file as STAGED, and `l[3..]` (meant to
+    /// skip the 2-char status + 1 space) sliced one byte too many off the
+    /// path itself. This made `condukt repo commit` refuse to commit ANY
+    /// task whose first `git status --porcelain` entry was an ordinary
+    /// unstaged edit, with an error naming a path missing its first
+    /// character. Uses a real temp repo (not the harness repo itself) so the
+    /// test is deterministic regardless of what's dirty in the working tree.
+    #[test]
+    fn first_unstaged_modification_is_not_misread_as_staged() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        worktree::git(repo, &["init", "--quiet"]).unwrap();
+        worktree::git(repo, &["config", "user.email", "t@example.com"]).unwrap();
+        worktree::git(repo, &["config", "user.name", "t"]).unwrap();
+        std::fs::write(repo.join(".claude-plugin.json"), "one\n").unwrap();
+        worktree::git(repo, &["add", "."]).unwrap();
+        worktree::git(repo, &["commit", "--quiet", "-m", "init"]).unwrap();
+        // Modify without staging: this file becomes porcelain's FIRST line,
+        // status " M .claude-plugin.json" — the exact shape that triggered
+        // the bug (a path that itself starts with `.`, so a dropped leading
+        // byte is visible as a dropped dot, matching the real incident).
+        std::fs::write(repo.join(".claude-plugin.json"), "two\n").unwrap();
+
+        let staged = staged_paths(repo).unwrap();
+        assert_eq!(
+            staged,
+            Vec::<String>::new(),
+            "an unstaged modification must never be reported as staged"
+        );
+    }
+
     #[test]
     fn race_delay_is_off_unless_set_to_a_positive_number() {
         // Guard the test-only hook: a missing/invalid/zero value must be a no-op

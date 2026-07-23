@@ -1344,14 +1344,38 @@ pub enum ChecksVerdict {
 ///
 /// An empty slice yields [`ChecksVerdict::NoChecksDeclared`], never a pass —
 /// nothing was observed, so nothing was verified.
+///
+/// Internally this goes through [`harness_core::verdict::Determination`] /
+/// [`harness_core::verdict::Verdict`], the same three-valued idiom
+/// propguard/reviewgate already use: an empty slice is "could not observe
+/// anything" ([`Determination::Undetermined`]) rather than a `Known` empty
+/// findings list, because — unlike a plain [`harness_core::verdict::Verdict`]
+/// check, where an empty findings list legitimately means "ran, found
+/// nothing" — an empty `results` slice here means the oracle never ran at
+/// all. Conflating the two is exactly the fail-open [`ChecksVerdict`]'s own
+/// doc comment calls out. `ChecksVerdict` itself cannot literally become
+/// `Verdict` (see `Verdict`'s module docs on why `Clean` must never be
+/// `Deserialize`), so the translation back to `ChecksVerdict` happens once,
+/// at the return boundary.
 pub fn checks_verdict(results: &[bool]) -> ChecksVerdict {
-    if results.is_empty() {
-        return ChecksVerdict::NoChecksDeclared;
-    }
-    if results.iter().all(|&r| r) {
-        ChecksVerdict::Passed
+    use harness_core::verdict::{Determination, Reason, Verdict};
+
+    let determination: Determination<Vec<Reason>> = if results.is_empty() {
+        Determination::undetermined("no checks declared — the oracle was never applied")
     } else {
-        ChecksVerdict::Failed
+        Determination::Known(
+            results
+                .iter()
+                .enumerate()
+                .filter(|(_, &passed)| !passed)
+                .map(|(i, _)| Reason::new(format!("check {i} failed")))
+                .collect(),
+        )
+    };
+    match Verdict::adjudicate(determination) {
+        Verdict::Clean(_) => ChecksVerdict::Passed,
+        Verdict::Violation(_) => ChecksVerdict::Failed,
+        Verdict::Undetermined(_) => ChecksVerdict::NoChecksDeclared,
     }
 }
 

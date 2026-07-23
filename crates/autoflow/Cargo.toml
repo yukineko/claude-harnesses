@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "autoflow"
-version = "0.1.11"
+version = "0.1.13"
 edition = "2021"
 description = "Session-end auto-flow: record + condukt continuation gate for Claude Code."
 
@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 harness-core = { path = "../harness-core" }
+overwatch = { path = "../overwatch" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

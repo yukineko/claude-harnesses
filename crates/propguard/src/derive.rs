@@ -155,10 +155,30 @@ pub fn source_criteria(cfg: &Config, root: &Path) -> Option<String> {
         }
     }
     let p = root.join(&cfg.criteria_file);
-    if let Ok(text) = std::fs::read_to_string(&p) {
-        let t = text.trim().to_string();
-        if !t.is_empty() {
-            return Some(t);
+    // `Known(Some(text))`: use it if non-empty. `Known(None)` (file absent) and
+    // an empty/blank file both fall through to the inline `done_criteria`
+    // below, unchanged from before this migration. `Undetermined` (the file
+    // exists but could not be read — permission denied, invalid UTF-8, …) is
+    // NOT folded into "absent": this function has no way to distinguish
+    // "nothing to derive from" (which `gate.rs` documents as an intentional
+    // allow) from "there IS a criteria file but we could not read it", so the
+    // latter is at least surfaced loudly here rather than silently treated as
+    // if the file had never existed.
+    match harness_core::boundary::read_to_string(&p) {
+        harness_core::verdict::Determination::Known(Some(text)) => {
+            let t = text.trim().to_string();
+            if !t.is_empty() {
+                return Some(t);
+            }
+        }
+        harness_core::verdict::Determination::Known(None) => {}
+        harness_core::verdict::Determination::Undetermined(reason) => {
+            eprintln!(
+                "propguard: cannot read criteria_file {}: {}; falling back to inline \
+                 done_criteria",
+                p.display(),
+                reason.as_str()
+            );
         }
     }
     let inline = cfg.done_criteria.trim();
@@ -269,6 +289,64 @@ mod tests {
         assert_eq!(
             got.as_deref(),
             Some("handle errors and keep the schema stable")
+        );
+    }
+
+    /// An unreadable (but existing) `criteria_file` must fall through to the
+    /// inline `done_criteria`, exactly like a missing file — Undetermined is
+    /// not silently promoted to "found nothing", but this function has no
+    /// channel to report failure to its caller other than falling through to
+    /// the next source in priority order (unchanged from before the
+    /// boundary-read migration).
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_criteria_file_falls_through_to_inline() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("PROPGUARD_CRITERIA");
+
+        let dir = std::env::temp_dir().join(format!(
+            "propguard-derive-unreadable-criteria-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let criteria_file = "criteria.txt";
+        std::fs::write(dir.join(criteria_file), "must be idempotent").unwrap();
+        std::fs::set_permissions(
+            dir.join(criteria_file),
+            std::fs::Permissions::from_mode(0o000),
+        )
+        .unwrap();
+
+        // If chmod 000 doesn't actually deny this uid (e.g. running as root),
+        // the test's premise is absent — say so instead of asserting the
+        // wrong thing, mirroring harness-core's own boundary tests.
+        let denied = std::fs::read_to_string(dir.join(criteria_file)).is_err();
+
+        let cfg = Config {
+            criteria_file: criteria_file.to_string(),
+            done_criteria: "inline fallback wins".to_string(),
+            ..Config::default()
+        };
+        let got = source_criteria(&cfg, &dir);
+
+        std::fs::set_permissions(
+            dir.join(criteria_file),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            denied,
+            "precondition: chmod 000 must deny this uid (running as root?)"
+        );
+        assert_eq!(
+            got.as_deref(),
+            Some("inline fallback wins"),
+            "an unreadable criteria_file must fall through to inline done_criteria, \
+             not be silently treated as if it had real (or no) content"
         );
     }
 

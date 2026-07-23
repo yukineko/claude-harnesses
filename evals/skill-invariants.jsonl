@@ -3,7 +3,7 @@
 // guardrails, `evalkit run` goes red before it ships. file paths resolve
 // against --root (the repo root). Add a line when you codify a new invariant.
 {"id":"flow-keeps-blind-exec-rule","describe":"flow must keep the 盲目実行しない hard rule","file":"crates/flow/skills/flow/SKILL.md","assert":{"contains":["盲目実行しない"]}}
-{"id":"flow-keeps-lock-release-rule","describe":"flow must never drop the lock-release guarantee","file":"crates/flow/skills/flow/SKILL.md","assert":{"contains":["ロック解放を絶対に飛ばさない"]}}
+{"id":"flow-keeps-lock-release-rule","describe":"flow must never drop the driver-unregister guarantee (renamed from lock-release by e19d501a: per-task claims replaced the exclusive project lock)","file":"crates/flow/skills/flow/SKILL.md","assert":{"contains":["driver 登録の解除を絶対に飛ばさない"]}}
 {"id":"condukt-keeps-main-consent-rule","describe":"condukt consent stays on the main loop only","file":"crates/condukt/skills/condukt/SKILL.md","assert":{"contains":["合意は main loop のみ"]}}
 {"id":"condukt-keeps-completion-gate","describe":"condukt completion is gated by `condukt state gate`","file":"crates/condukt/skills/condukt/SKILL.md","assert":{"contains":["完了は `condukt state gate` が判定"]}}
 {"id":"scout-stays-read-only","describe":"scout audit must stay read-only","file":"crates/scout/skills/scout/SKILL.md","assert":{"contains":["監査は read-only"]}}

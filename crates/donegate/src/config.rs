@@ -195,6 +195,19 @@ fn warn_untrusted_once(root: &Path, project_path: &Path) {
     let _ = root;
 }
 
+/// Serializes every test in this crate that mutates the process-global
+/// `$HOME` env var (workspace-trust lookups here, and — since main.rs's
+/// `violation_emission_tests` also point `$HOME` at a scratch dir to isolate
+/// `overwatch::store`'s home-relative storage root — the violation-emission
+/// tests too). `cargo test` runs a crate's unit tests on multiple threads by
+/// default; two such tests racing without a shared lock corrupts each
+/// other's view of "which project is trusted" / "where does the store
+/// live" (observed directly: adding the violation-emission tests without
+/// wiring them to this lock made `project_config_is_gated_behind_workspace_trust`
+/// fail intermittently under the default multi-threaded test runner).
+#[cfg(test)]
+pub(crate) static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +235,7 @@ cmd = "echo home"
     // scenario runs in a single serialized #[test].
     #[test]
     fn project_config_is_gated_behind_workspace_trust() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let proj = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", home.path());

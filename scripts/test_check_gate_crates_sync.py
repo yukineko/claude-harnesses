@@ -49,6 +49,8 @@ def _make_fixture_repo(
     overview_missing=(),
     mutation_extra=(),
     mutation_missing=(),
+    fail_open_extra=(),
+    fail_open_missing=(),
     hint_comment="",
     rust_comment="",
     hint_prefix="",
@@ -85,6 +87,7 @@ def _make_fixture_repo(
     rust_set = apply(CANONICAL_SET, rust_extra, rust_missing)
     overview_set = apply(CANONICAL_SET, overview_extra, overview_missing)
     mutation_set = apply(CANONICAL_SET, mutation_extra, mutation_missing)
+    fail_open_set = apply(CANONICAL_SET, fail_open_extra, fail_open_missing)
 
     _write(tmp / "scripts" / "rollout-plugins.sh", f'#!/bin/sh\nGATE_CRATES="{CANONICAL}"\n')
     _write(
@@ -137,6 +140,15 @@ def _make_fixture_repo(
         tmp / "scripts" / "check-fail-open-mutation.py",
         "GATE_CRATES = (\n"
         + "".join(f'    "{c}",\n' for c in sorted(mutation_set))
+        + ")\n",
+    )
+    # The fail-open swallow scanner's own merge-blocking scope list — a third
+    # standalone Python source with the same module-level-tuple shape (see
+    # check-gate-crates-sync.py's SOURCES, backlog bb667ce1).
+    _write(
+        tmp / "scripts" / "check-fail-open.py",
+        "GATE_CRATES = (\n"
+        + "".join(f'    "{c}",\n' for c in sorted(fail_open_set))
         + ")\n",
     )
     return tmp
@@ -225,6 +237,18 @@ class DriftDetection(unittest.TestCase):
             self.assertFalse(ok)
             by_path = _by_path(parsed)
             self.assertNotIn("mutategate", by_path["scripts/check-fail-open-mutation.py"])
+
+    def test_fail_open_scanner_missing_a_crate_is_detected(self):
+        """scripts/check-fail-open.py hardcodes the same 6-crate list as its own
+        merge-blocking scan scope (a fail-open here would silently drop a real
+        GATE crate from fail-open enforcement). Found as an untracked 9th copy
+        (docs/gate-taxonomy.md, backlog bb667ce1) and is now tracked here too."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), fail_open_missing=("stuckguard",))
+            ok, canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertFalse(ok)
+            by_path = _by_path(parsed)
+            self.assertNotIn("stuckguard", by_path["scripts/check-fail-open.py"])
 
     def test_rollout_hint_missing_a_crate_is_detected(self):
         """Regression: check-plugin-rollout.py's GATE list shipped for a while

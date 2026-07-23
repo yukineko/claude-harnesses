@@ -225,19 +225,29 @@ condukt・tdd 側を個別に parse する意味がなくなったため。こ�
 このタスクでは是正しない（`touched_files` 外の未修正フィクスチャ欠陥であり、今回の統合が
 生んだ新規リグレッションではないことのみ確認した）。
 
-### 見つけたが対象外にした重複: `scripts/check-fail-open.py` の `GATE_CRATES` 第9のコピー
+### 解消済み: `scripts/check-fail-open.py` の `GATE_CRATES` 第9のコピー（backlog bb667ce1）
 
-**発見**: `scripts/check-fail-open.py:92`「`GATE_CRATES = [` (`"blastguard", "propguard",
+<!-- doc-claim-exempt: historical snapshot before bb667ce1's fix; see 是正 paragraph below for current state -->
+**発見**（当時）: `scripts/check-fail-open.py:92`「`GATE_CRATES = [` (`"blastguard", "propguard",
 "specguard", "stuckguard", "mutategate", "overwatch"`)」もまた同じ crate 集合の独立した
 手書きコピーであり、`scripts/check-gate-crates-sync.py` の `SOURCES` リスト・docstring
-いずれにも**含まれていない**（同スクリプトの追跡漏れ）。値は現時点で canonical と一致しているが、
-tdd/condukt の2コピーが実際にドリフトした前例がある以上、これも将来ドリフトしうる潜在的重複である。
+いずれにも**含まれていない**（同スクリプトの追跡漏れ）。値は当時 canonical と一致していたが、
+tdd/condukt の2コピーが実際にドリフトした前例がある以上、これも将来ドリフトしうる潜在的重複だった。
 
-**対象外にした理由**: このタスクの `touched_files` は `scripts/check-gate-crates-sync.py` の
-編集のみを許可しており、`scripts/check-fail-open.py` はスコープ外。また「実測ゼロ件」の観点でも、
+**当時対象外にした理由**: 発見したタスクの `touched_files` は `scripts/check-gate-crates-sync.py` の
+編集のみを許可しており、`scripts/check-fail-open.py` はスコープ外だった。また「実測ゼロ件」の観点でも、
 `check-fail-open.py` は CI の `fail-open.yml`（`--ratchet` 付き、非バイパス本ゲート）で常時
-稼働しており実測ゼロ件とは言えないため、今回の是正基準（重複**かつ**実測ゼロ件の両方を満たす）を
-満たさない。**統合はせず、次の是正対象の候補として記録するに留める**（別タスクでの追跡を推奨）。
+稼働しており実測ゼロ件とは言えないため、当時の是正基準（重複**かつ**実測ゼロ件の両方を満たす）を
+満たさず、統合せず次の是正対象の候補として記録するに留めた（別タスクでの追跡を推奨）。
+
+**是正**: backlog `bb667ce1` として別タスク化され、`scripts/check-fail-open.py` の
+`GATE_CRATES` をタプル構文 (`(...)`, 従来はリスト構文 `[...]`) に変更した上で
+`scripts/check-gate-crates-sync.py` の `SOURCES`（9番目のエントリ、mode `"exact"`）へ登録した。
+`python_const_crates()` 抽出器がタプル構文 `GATE_CRATES = (...)` しか認識しない
+（正規表現 `_PYTHON_CONST_RE` が丸括弧のみ対応）ため、構文変更が是正の前提条件だった。
+`scripts/test_check_gate_crates_sync.py` に `test_fail_open_scanner_missing_a_crate_is_detected`
+を追加し、この9番目のソースが実際にドリフト検知対象であることを F→P（登録前は fail・登録後は
+pass）で確認済み。
 
 ### その他: これ以上の「重複+実測ゼロ件」ゲートは見つからなかった
 

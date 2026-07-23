@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the GATE_CRATES crate set is consistent across its 8 hardcoded sources.
+"""Verify the GATE_CRATES crate set is consistent across its 9 hardcoded sources.
 
 Two related-but-distinct concepts are hardcoded across these sources:
   - "GATE crates": fleet defense gates that require a canary rollout
@@ -51,6 +51,15 @@ Sources and how each must relate to the canonical GATE_CRATES set:
     human-facing description readers see before ever opening
     rollout-plugins.sh; a stale copy tells them the wrong crates require a
     canary rollout.
+  - scripts/check-fail-open.py  module-level GATE_CRATES = (...) tuple — must
+    equal canonical EXACTLY. This is the fail-open swallow scanner's own
+    merge-blocking scope list (which crates' `src/` a fail-open finding
+    blocks on, see that script's docstring); a stale copy would silently drop
+    a real GATE crate from fail-open enforcement, or scan a crate that is no
+    longer a GATE crate. Found as an untracked 9th copy (docs/gate-taxonomy.md
+    "重複+実測ゼロ件" section, backlog bb667ce1) and left out of an earlier
+    consolidation pass because it was live-enforcing (not "zero-observed");
+    tracking it here does not change enforcement, only drift detection.
 
 See docs/fix-gate-crates-drift.md for the incident that motivated this checker.
 
@@ -260,6 +269,7 @@ SOURCES = [
         "mirror:scripts/continuous-audit.sh",
     ),
     ("docs/OVERVIEW.md", overview_md_crates, "exact"),
+    ("scripts/check-fail-open.py", python_const_crates, "exact"),
 ]
 
 

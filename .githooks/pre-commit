@@ -35,6 +35,12 @@
 #   version-lockstep   check-plugin-versions.py   the three version files of a
 #                                                 plugin disagreeing
 #   bump-on-change     check-version-bumped.py    a touched plugin left un-bumped
+#   secret-guard       check-hardcoded-secret.py  a password/token/api-key/
+#                                                 secret literal in added lines
+#                                                 (backlog aa74be67; closes the
+#                                                 gap recorded in
+#                                                 crates/precommit-audit/README
+#                                                 .ja.md's self-apply section)
 #
 # Plus one Rust gate (not python3):
 #   main-tree-guard    condukt guard main-tree    a commit from the SHARED primary
@@ -119,6 +125,7 @@ run check-doc-claims.py       doc-claims
 run check-test-weakening.py   test-weakening
 run check-plugin-versions.py  version-lockstep
 run check-version-bumped.py   bump-on-change
+run check-hardcoded-secret.py secret-guard
 
 # main-tree-guard — CLAUDE.md §8, the one gate here that is Rust rather than
 # python3, because its decision is a tri-state over injectable inputs and is
@@ -189,6 +196,10 @@ Remediation hints:
                     .claude-plugin/marketplace.json back into agreement.
   bump-on-change    you touched a plugin without raising its version; raise at
                     least the patch component in all three files.
+  secret-guard      remove the literal value from the added line (use an env
+                    var / secret-store reference instead), or, if it is a
+                    reviewed exception, add a distinguishing substring to
+                    scripts/check-hardcoded-secret.py's ALLOWLIST with a reason.
   main-tree-guard   commit from a worktree instead of the shared primary tree
                     (`condukt worktree create`, or `git stash` + `git worktree
                     add`). Merges and rebases in the main tree already pass. If

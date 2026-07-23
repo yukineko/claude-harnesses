@@ -101,8 +101,8 @@ precommit-audit は意図的に、`harness_core::gate` 上に構築された JSO
 
 precommit-audit はこの repo が生み出し配布する project-agnostic な製品だが、この repo 自身の
 git-commit-time ゲート（`.githooks/pre-commit`。injectguard/fail-open-guard/doc-claims/
-test-weakening/version-lockstep/bump-on-changeの6本、`.githooks/pre-commit:26-37`）には
-**統合されていない**（別々に発展した独立実装のまま）。ただし precommit-audit が user scope で
+test-weakening/version-lockstep/bump-on-change/secret-guardの7本、`.githooks/pre-commit:26-43`）
+には**統合されていない**（別々に発展した独立実装のまま）。ただし precommit-audit が user scope で
 インストール済みの環境では、Stop hook（`crates/precommit-audit/hooks/hooks.json:2-8`）として
 この repo 上の Claude Code セッションでも実際に発火する——つまり `.githooks/pre-commit` には
 現れないが、この repo でも「使われていない」わけではない。
@@ -114,12 +114,17 @@ project-agnostic な独立製品として、Stop hook 経由でのみこの repo
 規則を持つため、precommit-audit の汎用ルールへ置き換えるには両者のポリシーを一致させる
 作業が要る）に見合う具体的な破綻が今のところ観測されていないため。
 
-**記録したギャップ（是正はこのタスクのスコープ外）**: `.githooks/pre-commit` の6ゲートには
-`check_hardcoded_secret`（`crates/precommit-audit/src/checks/mod.rs:175-199`）に相当する
-汎用シークレットスキャンが1つも無い。つまり precommit-audit を user scope でインストール
-していない contributor がこの repo に commit する場合、hardcoded secret を検出する
-git-commit-time ゲートが存在しない。この gap 自体の是正（`.githooks/pre-commit` への
-secret-scan 追加、または precommit-audit 呼び出しの統合）は別タスクとして backlog に積む。
+**記録したギャップ → 解消済み（2026-07-23、backlog aa74be67）**: 以前はここに「`.githooks/
+pre-commit` の6ゲートには `check_hardcoded_secret`（`crates/precommit-audit/src/checks/mod.rs:
+175-199`）に相当する汎用シークレットスキャンが1つも無い」というギャップを記録していた。
+`scripts/check-hardcoded-secret.py`（secret-guard、`.githooks/pre-commit:38`で起動）が
+precommit-audit を wholesale 統合せずにこの gap だけを埋めた — 同じキー名・同じ shape 要件
+（`(password|passwd|secret|api[_-]?key|token|private[_-]?key) = "<4文字以上>"`）で
+`check_hardcoded_secret` と歩調を合わせつつ、対象は ADDED 行のみ（`git diff <base>`、
+既存の6ゲートと同じ独立 stdlib-only python3 実装）。したがって precommit-audit を
+user scope でインストールしていない contributor にも、この repo では hardcoded secret を
+検出する git-commit-time ゲートが存在する。上記「決定: 現状維持」（wholesale 統合はしない）
+は変わらない — 埋めたのはこの1つの記録済み gap だけで、他の5ゲートとの統合は今も行っていない。
 
 ## なぜ移植したか
 

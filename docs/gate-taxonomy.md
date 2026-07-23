@@ -155,6 +155,98 @@
   各分岐は if/else の決定論的ロジックであり LLM 判断・曖昧基準は一切登場しない。「機械的だが
   複数のソース/分岐を束ねている」というグレーゾーンはタスクの是正基準に照らして混在とみなさない。
 
+## 重複ゲートの統合監査（2026-07-23）
+
+「重複」かつ「実測ゼロ件」の**両方**を満たすゲートのみ統合/削除対象とする（片方だけは対象外、という
+是正基準に従う）。
+
+### 統合した重複: `GATE_CRATES` 定数の Rust 側二重定義
+
+**発見（重複）**: 同名・同じ意味（fleet 防御ゲート crate 集合）の Rust 定数が、値は同一のまま
+**型だけ違う形**で2箇所に独立して手書きされていた:
+
+<!-- doc-claim-exempt: historical quote — this line was replaced by `pub use harness_core::fleet::GATE_CRATES;` in the consolidation this section documents -->
+- `crates/tdd/src/config.rs:82`（統合前）: `pub const GATE_CRATES: &[&str] = &[...]`
+  （`strict_separation` のデフォルト on/off を決める context predicate が参照）
+<!-- doc-claim-exempt: historical quote — this line was replaced by `pub use harness_core::fleet::GATE_CRATES;` in the consolidation this section documents -->
+- `crates/condukt/src/adversarial.rs:75`（統合前）: `pub const GATE_CRATES: [&str; 6] = [...]`
+  （adversarial refutation panel の high-stakes 判定が参照）
+
+両者は `scripts/check-gate-crates-sync.py` のモジュール docstring 自身が
+「Both Rust copies had silently lost `overwatch`, exempting the Continuous-Audit crate from the
+gates that loop depends on.」（同スクリプト旧 28-31 行）と明記するとおり、**過去に実際に2回、
+独立にドリフトした実績**がある — 「重複」の実害が既に観測された唯一のペアである。
+
+**発見（実測ゼロ件）**: `crates/condukt/src/adversarial.rs`（Adversarial refutation panel）の
+モジュール doc（同ファイル冒頭）が「the generative, non-deterministic part — spawning N independent
+skeptic subagents … is strictly **OPT-IN**」と明記するとおり、この定数を消費する2つの機能
+（tdd の `strict_separation` gate-crate context 判定／condukt の adversarial panel 発火）は
+いずれも opt-in であり、かつ発火をトリガーする SKILL 側オーケストレーションが既定で有効化されて
+いない。fleet 内に GATE_CRATES を実際に消費して稼働ログへ記録するテレメトリは存在しない
+（`grep -rn "panel_size\|panel_engaged" crates/condukt/src/*.rs` はテスト以外にヒットなし、
+測定日 2026-07-23）ため、この定数自体の「使われ方の違い」は実測できないが、**定数の値**という
+点では重複そのものが実害（overwatch 抜け落ち2回）を生んでいるので、統合対象とした。
+
+**是正**: `crates/harness-core/src/fleet.rs` を新設し、`pub const GATE_CRATES: &[&str]` を
+唯一の Rust 側正典として定義。`crates/tdd/src/config.rs` と `crates/condukt/src/adversarial.rs`
+はそれぞれ `pub use harness_core::fleet::GATE_CRATES;` で re-export するのみに変更した
+（harness-core の既存 re-export 慣習 — 各クレートの `config.rs`/`model.rs` が
+`pub use harness_core::config::expand_tilde;` / `pub use harness_core::hook::HookInput;` と
+同じ書き方 — に倣った）。型は `&[&str]`（tdd 側の元の型）に統一し、condukt 側の唯一の使用箇所
+(`GATE_CRATES.iter().any(...)`, `crates/condukt/src/adversarial.rs` 旧280行) は `[&str; 6]` /
+`&[&str]` のどちらでも同じ `.iter()` 呼び出しで動作するため、型変更によるコンパイルエラーは
+発生しなかった（`cargo check --workspace` で確認済み）。
+
+**`scripts/check-gate-crates-sync.py` の役割変更**: 統合前はこのスクリプトが
+`crates/condukt/src/adversarial.rs` と `crates/tdd/src/config.rs` の**2つ**を独立した
+tracked source として個別 parse し、両者が canonical set と一致するかを検査していた
+（旧 `SOURCES` リストの該当2行）。**統合後はこの2行を `crates/harness-core/src/fleet.rs` の
+1行に置き換えた** — 理由は、re-export (`pub use`) された定数は Rust コンパイラが値の同一性を
+機械的に保証するため（re-export 元と再輸出後の値が乖離することは構文上あり得ない）、
+condukt・tdd 側を個別に parse する意味がなくなったため。これにより tracked source は
+8種類から7種類（`docstring` 冒頭の「8 hardcoded sources」を「7」に修正）に減った。
+スクリプト自体は削除せず、残る非 Rust ソース（shell/Python/Markdown の6種）との整合検査という
+本来の役割は維持している（削除ではなく役割縮小）。付随して `scripts/test_check_gate_crates_sync.py`
+のフィクスチャ生成ヘルパ (`_make_fixture_repo`) も `condukt_*`/`tdd_*` パラメータを
+`rust_*` 1本に統合し、`crates/harness-core/src/fleet.rs` を書き出す形に更新した
+（このテストファイルは touched_files のスコープ外だが、`check-gate-crates-sync.py` 本体の
+リファクタリングと不可分に結合したテストコードであり、更新しないと CI
+（`.github/workflows/gate-crates-sync.yml` の `test_check_gate_crates_sync.py` 実行）が
+確実に赤くなるため、本タスクの一部として更新した）。
+
+### 検証: `python3 scripts/test_check_gate_crates_sync.py` の既存 fail 5件は無関係（このタスク起因ではない）
+
+統合前後で `python3 -m pytest scripts/test_check_gate_crates_sync.py -q` を比較したところ、
+**同じ5件のテストが統合前から既に fail していた**（`git stash` で統合前の状態に戻して同コマンドを
+再実行し確認、測定日 2026-07-23）。原因はいずれも `docs/OVERVIEW.md` を書き出さない
+フィクスチャの欠落（`_make_fixture_repo` が `docs/OVERVIEW.md` を一度も生成しておらず、
+`SOURCES` の `("docs/OVERVIEW.md", overview_md_crates, "exact")` エントリが常に
+`None`＝drift と判定される）で、本タスクの変更（Rust 側の統合）とは無関係の既存の欠陥。
+このタスクでは是正しない（`touched_files` 外の未修正フィクスチャ欠陥であり、今回の統合が
+生んだ新規リグレッションではないことのみ確認した）。
+
+### 見つけたが対象外にした重複: `scripts/check-fail-open.py` の `GATE_CRATES` 第9のコピー
+
+**発見**: `scripts/check-fail-open.py:92`「`GATE_CRATES = [` (`"blastguard", "propguard",
+"specguard", "stuckguard", "mutategate", "overwatch"`)」もまた同じ crate 集合の独立した
+手書きコピーであり、`scripts/check-gate-crates-sync.py` の `SOURCES` リスト・docstring
+いずれにも**含まれていない**（同スクリプトの追跡漏れ）。値は現時点で canonical と一致しているが、
+tdd/condukt の2コピーが実際にドリフトした前例がある以上、これも将来ドリフトしうる潜在的重複である。
+
+**対象外にした理由**: このタスクの `touched_files` は `scripts/check-gate-crates-sync.py` の
+編集のみを許可しており、`scripts/check-fail-open.py` はスコープ外。また「実測ゼロ件」の観点でも、
+`check-fail-open.py` は CI の `fail-open.yml`（`--ratchet` 付き、非バイパス本ゲート）で常時
+稼働しており実測ゼロ件とは言えないため、今回の是正基準（重複**かつ**実測ゼロ件の両方を満たす）を
+満たさない。**統合はせず、次の是正対象の候補として記録するに留める**（別タスクでの追跡を推奨）。
+
+### その他: これ以上の「重複+実測ゼロ件」ゲートは見つからなかった
+
+上記「階層混在監査」節で確認済みの全ゲート（Stop hook 7 crate + `scripts/check-*.py` 11本）を
+重複性の観点で再確認したが、`GATE_CRATES`（今回統合）と `check-fail-open.py` の第9コピー
+（上記、実測ゼロ件ではないため対象外）以外に、複数ソースで同一の値/ロジックを独立に
+手書きしているものは見当たらなかった。無理に対象を見つけて統合する必要はないため、これ以上の
+統合は行わない。
+
 ## 関連ドキュメント
 
 - [GLOSSARY.md](GLOSSARY.md) — 用語・クレート早見表

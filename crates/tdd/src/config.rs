@@ -64,29 +64,23 @@ pub struct Config {
 /// Fleet gate crates that must not be handled loosely: for these crates,
 /// `strict_separation` (RED/GREEN author-diversity, fail-closed) defaults **on**
 /// when otherwise unspecified — the same safe-by-default stance as the rollout
-/// `--canary` requirement for these same gates. Kept as a plain constant array
-/// so the context predicate stays a pure, unit-testable function.
+/// `--canary` requirement for these same gates.
 ///
-/// Must equal `scripts/rollout-plugins.sh`'s canonical `GATE_CRATES` **exactly**.
-/// `scripts/continuous-audit.sh`'s `DEFAULT_TARGETS` is a strict *superset*
-/// (it also carries audit-only crates like `backlog` that gate nothing), so it
-/// is deliberately not mirrored here.
+/// This used to be a second hand-copied literal array in this file — it and
+/// `crates/condukt/src/adversarial.rs`'s copy both silently drifted and lost
+/// `overwatch` at different points (see the regression test in the `tests`
+/// module below). It is now a re-export of the single canonical definition in
+/// [`harness_core::fleet::GATE_CRATES`], so there is exactly one place the
+/// crate-name *value* can be edited; this file and `condukt`'s copy can no
+/// longer diverge from each other by construction (the Rust compiler, not a
+/// cross-source script, is what keeps a `pub use` re-export identical to what
+/// it re-exports).
 ///
-/// `overwatch` is a member for the same reason rollout-plugins.sh includes it:
-/// it is not itself a defense gate, but it computes the canary health-gate
-/// decision and records confirmed audit findings, so a regression in it removes
-/// the safety net protecting the other gates. That makes a self-authored
-/// RED/GREEN pair in `crates/overwatch/**` exactly as unsafe as in a defense gate.
-///
-/// Enforced by `scripts/check-gate-crates-sync.py` (this file is a tracked source).
-pub const GATE_CRATES: &[&str] = &[
-    "blastguard",
-    "propguard",
-    "specguard",
-    "stuckguard",
-    "mutategate",
-    "overwatch",
-];
+/// Enforced against the remaining non-Rust sources (shell/Python/Markdown) by
+/// `scripts/check-gate-crates-sync.py`, which now parses
+/// `crates/harness-core/src/fleet.rs` as the sole tracked Rust source (see
+/// that script's module docstring).
+pub use harness_core::fleet::GATE_CRATES;
 
 /// Pure predicate: is `path` inside one of the [`GATE_CRATES`] (i.e. does it
 /// contain a `crates/<gate-crate>/…` segment)? Side-effect free (no cwd/env

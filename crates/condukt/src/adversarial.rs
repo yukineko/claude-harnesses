@@ -58,28 +58,20 @@ const RATIO_EPSILON: f64 = 1e-9;
 /// The fleet **GATE crates** whose changes make a completion "high-stakes" and
 /// thus worth an adversarial panel.
 ///
-/// Must equal `scripts/rollout-plugins.sh`'s canonical `GATE_CRATES` **exactly**
-/// — the same set that requires a `--canary` rollout. `scripts/continuous-audit.sh`'s
-/// `DEFAULT_TARGETS` is a strict *superset* of this (it additionally carries
-/// audit-only crates such as `backlog`, which are reviewed but gate nothing), so
-/// it is deliberately NOT mirrored here.
+/// This used to be a second hand-copied literal array in this file — it and
+/// `crates/tdd/src/config.rs`'s copy both silently drifted and lost `overwatch`
+/// at different points. It is now a re-export of the single canonical
+/// definition in [`harness_core::fleet::GATE_CRATES`], so there is exactly one
+/// place the crate-name *value* can be edited; this file and `tdd`'s copy can
+/// no longer diverge from each other by construction (the Rust compiler, not a
+/// cross-source script, is what keeps a `pub use` re-export identical to what
+/// it re-exports).
 ///
-/// `overwatch` is a member for the same reason rollout-plugins.sh includes it:
-/// it is not itself a prompt-injection/spec/mutation defense gate, but it
-/// computes the canary health-gate decision and records confirmed audit
-/// findings. A regression in it silently removes the safety net for every OTHER
-/// gate crate, which is precisely the "wrong-but-plausible change a lone
-/// verifier rubber-stamps" case this panel exists to catch.
-///
-/// Enforced by `scripts/check-gate-crates-sync.py` (this file is a tracked source).
-pub const GATE_CRATES: [&str; 6] = [
-    "blastguard",
-    "propguard",
-    "specguard",
-    "stuckguard",
-    "mutategate",
-    "overwatch",
-];
+/// Enforced against the remaining non-Rust sources (shell/Python/Markdown) by
+/// `scripts/check-gate-crates-sync.py`, which now parses
+/// `crates/harness-core/src/fleet.rs` as the sole tracked Rust source (see
+/// that script's module docstring).
+pub use harness_core::fleet::GATE_CRATES;
 
 /// One skeptic's ballot on the single artifact under review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

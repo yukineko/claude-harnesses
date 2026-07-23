@@ -441,6 +441,31 @@ Stop フック群の表（本ファイル31行目）には既に `precommit-audi
 「gate-taxonomy.mdのStop hook表に既にある」ことと「他3箇所に無いのは正しい」ことの両方を
 1箇所から参照できるようにした。
 
+## GATE_CRATES内の「即座にblockする系」と「protect-the-protector系」の区別（2026-07-23）
+
+上記の節（`scripts/rollout-plugins.sh`の`GATE_CRATES`）が既に導入した**protect-the-protector**
+という共通性質は、`blastguard`/`propguard`/`specguard`/`stuckguard`/`mutategate`/`overwatch` の
+6crateを canary 必須の一集合として束ねる根拠として妥当だが、この6crateは「今まさに何かをblock
+しているか」で見ると一様ではない。各crateの `hooks/hooks.json`（無ければ非登録）を実測した結果:
+
+| crate | フック登録 | 実際の挙動 | 分類 |
+|---|---|---|---|
+| `blastguard` | PreToolUse（`hooks/hooks.json`） | 破壊的コマンドを deny する | **即座にblockする系** |
+| `propguard` | Stop（`hooks/hooks.json`） | 性質未充足で turn 終了を block する | **即座にblockする系** |
+| `mutategate` | **なし**（`.claude-plugin/`・`hooks/`とも不在） | CLI/CI 専用の mutation kill-rate 測定。Claude Code のどのイベントにも自動登録されない | protect-the-protector（block 主体ではなく計測ツール） |
+| `stuckguard` | PostToolUse（`hooks/hooks.json`） | README 自身が明記: 「It only ever injects advice. It cannot block a tool call or end a turn」（`crates/stuckguard/README.md:12`） | protect-the-protector（advisory のみ、block しない） |
+| `specguard` | SessionStart（`hooks/hooks.json`。`specguard pending`の通知のみ） | 実監査は `/specguard:run` の手動起動が担い、read-only（実装・テストを書き換えない） | protect-the-protector（監査結果は human review/backlog へ流れるだけで、それ自体は何もblockしない） |
+| `overwatch` | SessionStart / Stop（`hooks/hooks.json`。いずれも`overwatch status`） | レジストリの状態表示のみで block 判定を返さない | protect-the-protector（registry/observability。他5crateの防御能力を可視化・保護する側） |
+
+この表は上記「3階層の定義」（何を判定しているか）とは**別の軸**（いつ・どうblockするか）であり、
+既存の3階層分類を置き換えない。同じ crate が両方の軸で語られてよい（例: `propguard` は
+3階層では「総合判断」、この軸では「即座にblockする系」）。`GATE_CRATES` という1つのフラットな
+リストがこの2crate（block主体）と4crate（protect-the-protector）を区別せず canary 必須集合として
+扱っている理由は、上記の節が既に述べたとおり「fleet防御crateのrollout破損自体がリスク」という
+canary運用上の要求であり、block/advisory の違いに関わらず全crateに同じcanary厳格度が要る、という
+判断は変えない（区別が必要なのは「読み手がこの集合の中身を誤解しないため」のドキュメント上の
+distinctionであり、rollout運用のcanary要求を緩めるものではない）。
+
 ## 関連ドキュメント
 
 - [GLOSSARY.md](GLOSSARY.md) — 用語・クレート早見表

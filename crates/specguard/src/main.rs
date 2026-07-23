@@ -882,17 +882,29 @@ fn finish(
             l.cfg.project.name, l.date, scope.baseline, head
         );
         report::write_report(paths, &body)?;
-        if report::sentinel_pending(paths) {
-            println!(
-                "specguard: 監査対象なし。ただし未処理 sentinel ({}) があるため baseline を据え置く (`specguard ack` で解除)",
-                paths.sentinel.display()
-            );
-        } else {
-            report::advance_baseline(paths, &head)?;
-            println!(
-                "specguard: 監査対象なし (report: {})",
-                paths.report.display()
-            );
+        // Advance ONLY on a positive `NotFound` observation. `Undetermined` (the
+        // sentinel's presence could not be observed) holds the baseline exactly
+        // like a raised sentinel does — retiring drift no human reviewed is the
+        // fail-open this migration closes.
+        match report::sentinel_pending(paths) {
+            harness_core::verdict::Determination::Known(true) => {
+                println!(
+                    "specguard: 監査対象なし。ただし未処理 sentinel ({}) があるため baseline を据え置く (`specguard ack` で解除)",
+                    paths.sentinel.display()
+                );
+            }
+            harness_core::verdict::Determination::Undetermined(why) => {
+                println!(
+                    "specguard: 監査対象なし。ただし sentinel の有無を確認できなかったため baseline を据え置く ({why})"
+                );
+            }
+            harness_core::verdict::Determination::Known(false) => {
+                report::advance_baseline(paths, &head)?;
+                println!(
+                    "specguard: 監査対象なし (report: {})",
+                    paths.report.display()
+                );
+            }
         }
         return Ok(EXIT_OK);
     }
@@ -972,20 +984,30 @@ fn finish(
             paths.sentinel.display(),
             paths.report.display()
         );
-    } else if report::sentinel_pending(paths) {
-        // Clean this run, but a prior run's sentinel is still unhandled: keep the
-        // baseline put so its drift stays in scope. Leave the sentinel untouched.
-        println!(
-            "specguard: 修正候補なし。ただし未処理 sentinel ({}) が残るため baseline を据え置く (`specguard ack` で解除)",
-            paths.sentinel.display()
-        );
     } else {
-        // Fully clean: advance the baseline.
-        report::advance_baseline(paths, &head)?;
-        println!(
-            "specguard: 修正候補なし (report: {})",
-            paths.report.display()
-        );
+        // Clean THIS run. Whether to advance the baseline turns on a prior
+        // sentinel — and `Undetermined` (could not observe it) holds, like a
+        // raised one, rather than advancing past drift no human reviewed.
+        match report::sentinel_pending(paths) {
+            harness_core::verdict::Determination::Known(true) => {
+                println!(
+                    "specguard: 修正候補なし。ただし未処理 sentinel ({}) が残るため baseline を据え置く (`specguard ack` で解除)",
+                    paths.sentinel.display()
+                );
+            }
+            harness_core::verdict::Determination::Undetermined(why) => {
+                println!(
+                    "specguard: 修正候補なし。ただし sentinel の有無を確認できなかったため baseline を据え置く ({why})"
+                );
+            }
+            harness_core::verdict::Determination::Known(false) => {
+                report::advance_baseline(paths, &head)?;
+                println!(
+                    "specguard: 修正候補なし (report: {})",
+                    paths.report.display()
+                );
+            }
+        }
     }
     Ok(EXIT_OK)
 }
@@ -1151,8 +1173,22 @@ fn pending(cli: &Cli) -> u8 {
         return EXIT_OK;
     };
     let paths = report::paths(&l.cfg, &l.repo_root, &l.date);
-    if !report::sentinel_pending(&paths) {
-        return EXIT_OK;
+    match report::sentinel_pending(&paths) {
+        // No sentinel: nothing to surface at session start.
+        harness_core::verdict::Determination::Known(false) => return EXIT_OK,
+        // Could not tell: staying silent would read as "no drift pending", which
+        // is the fail-open. Surface that the state is unknown instead — the one
+        // thing we must not do is print nothing.
+        harness_core::verdict::Determination::Undetermined(why) => {
+            println!("⚠ specguard: 未処理の仕様ドリフト指摘の有無を確認できませんでした ({why})。");
+            println!(
+                "sentinel ({}) の状態を手で確認してください。",
+                paths.sentinel.display()
+            );
+            return EXIT_OK;
+        }
+        // A sentinel is raised: fall through and render it.
+        harness_core::verdict::Determination::Known(true) => {}
     }
     let body = std::fs::read_to_string(&paths.sentinel).unwrap_or_default();
     let field = |key: &str| -> String {

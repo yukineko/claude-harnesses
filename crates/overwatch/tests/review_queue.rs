@@ -307,3 +307,78 @@ fn review_queue_degrades_gracefully_when_a_source_is_empty() {
         "no finding was recorded, so none should appear"
     );
 }
+
+/// Recursively find a file named `name` under `root`, or `None`.
+fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(root).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_file(&path, name) {
+                return Some(found);
+            }
+        } else if path.file_name().map(|f| f == name).unwrap_or(false) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+#[test]
+fn review_queue_review_findings_unreadable_surfaces_warning_not_empty() {
+    // A CONFIRMED adversarial-review finding was recorded (a real producer
+    // wrote review_findings.jsonl), but the file is then made present-but-
+    // UNREADABLE (replaced by a directory at the same path — root-proof,
+    // unlike chmod 0). The review queue must NOT silently collapse this to
+    // "no findings" / "review queue empty": that would be a confirmed finding
+    // vanishing from the queue with no trace. It must instead surface a
+    // WARNING and refuse to claim the queue is empty.
+    let (home, work) = make_sandbox("findings-unreadable");
+
+    run_ow(
+        &home,
+        &work,
+        &[
+            "record-finding",
+            "--finding-id",
+            "F-77",
+            "--source",
+            "reviewgate",
+            "--severity",
+            "high",
+            "--summary",
+            "a confirmed adversarial finding that must not silently vanish",
+        ],
+    );
+
+    let findings_path = find_file(&home, "review_findings.jsonl")
+        .expect("record-finding must have created review_findings.jsonl under HOME");
+    std::fs::remove_file(&findings_path).expect("remove the valid file");
+    std::fs::create_dir(&findings_path).expect("replace it with a directory (present, unreadable-as-file)");
+
+    let out = Command::new(overwatch_bin())
+        .args(["review-queue"])
+        .env("HOME", &home)
+        .env("CLAUDE_CODE_SESSION_ID", "")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .current_dir(&work)
+        .output()
+        .expect("failed to spawn overwatch binary");
+    let stdout = String::from_utf8(out.stdout).expect("stdout not utf8");
+    let stderr = String::from_utf8(out.stderr).expect("stderr not utf8");
+
+    assert!(
+        out.status.success(),
+        "review-queue must still exit 0 even when a source is undetermined: stderr={stderr}"
+    );
+
+    assert!(
+        stderr.contains("WARNING") && stderr.contains("review-findings"),
+        "expected a WARNING that the review-findings source could not be read; got stderr={stderr:?}"
+    );
+    assert!(
+        !stdout.contains("review queue empty"),
+        "an UNDETERMINED review-findings source must never be reported as an empty queue \
+         (a confirmed finding could be the very thing that failed to read back); \
+         got stdout={stdout:?}"
+    );
+}

@@ -486,8 +486,24 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<()> {
     // Source 2: canary rollback events.
     let rollbacks = store::read_rollbacks(&cwd).unwrap_or_default();
 
-    // Source 3: AI-review findings (normally empty — no producer wired yet).
-    let findings = store::read_review_findings(&cwd).unwrap_or_default();
+    // Source 3: AI-review findings, via the tri-state boundary reader (mirrors
+    // Source 1 above). An Undetermined scan must NOT collapse to empty: the
+    // ledger could hold a real, already-CONFIRMED adversarial finding that
+    // simply failed to read back, and the review queue exists precisely to
+    // surface that — never to silently drop it.
+    let (findings, findings_undetermined) = match store::scan_review_findings(&cwd) {
+        // Absent = no finding was ever recorded: a real, trustworthy empty.
+        store::ReviewFindingScan::Absent => (Vec::new(), false),
+        store::ReviewFindingScan::Findings(findings) => (findings, false),
+        store::ReviewFindingScan::Undetermined(reason) => {
+            eprintln!(
+                "overwatch review-queue: WARNING — the review-findings ledger could not be \
+                 read or held an undecodable line ({reason}); the [ai-finding] source is \
+                 OMITTED from this queue. This is NOT a report of zero AI-review findings."
+            );
+            (Vec::new(), true)
+        }
+    };
 
     // Source 4: condukt's durable escalation queue, foreign-read by path
     // (fail-soft: absent condukt / no open escalations contributes nothing).
@@ -529,13 +545,20 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<()> {
              undecodable line; systemic violations could not be determined."
         );
     }
+    if findings_undetermined {
+        println!(
+            "[ai-finding] SOURCE NOT SHOWN — the review-findings ledger is unreadable or \
+             holds an undecodable line; AI-review findings could not be determined."
+        );
+    }
 
     if rows.is_empty() {
-        // Only claim the violation source is empty when it was actually read.
-        if violations_undetermined {
+        // Only claim a source is empty when it was actually read; an
+        // UNDETERMINED source must never be folded into "queue empty".
+        if violations_undetermined || findings_undetermined {
             println!(
-                "(no rollbacks, findings, escalations, or merge conflicts — systemic \
-                 violations UNDETERMINED, see above)"
+                "(no rollbacks, escalations, or merge conflicts — see UNDETERMINED source(s) \
+                 above; this is NOT a report that the queue is empty)"
             );
         } else {
             println!(

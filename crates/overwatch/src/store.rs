@@ -418,6 +418,12 @@ pub fn record_finding(
 /// Read all AI-review findings from review_findings.jsonl. Returns an empty vec
 /// if the file doesn't exist or is empty (fail-soft): with no producer wired
 /// yet, this is the normal case and the review-queue degrades gracefully.
+///
+/// Kept for consumers that already treat "unreadable" as "empty" by contract
+/// (`read_review_findings_all`, `compact`, `bridge`). The review-queue VERDICT
+/// path does NOT use this reader — see [`scan_review_findings`], which keeps
+/// "never written" distinct from "unreadable/corrupt" so a confirmed finding
+/// can never be silently dropped by a permission glitch.
 pub fn read_review_findings(cwd: &Path) -> Result<Vec<ReviewFinding>> {
     let path = review_findings_path(cwd)?;
     match std::fs::read_to_string(&path) {
@@ -433,6 +439,76 @@ pub fn read_review_findings(cwd: &Path) -> Result<Vec<ReviewFinding>> {
             Ok(findings)
         }
         Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Three-valued result of reading the AI-review findings stream, mirroring
+/// [`ViolationScan`] (see that type's doc for the full rationale): "no
+/// producer has ever written this file" (`Absent`) must stay distinguishable
+/// from "the file is there but could not be trusted" (`Undetermined`), so a
+/// CONFIRMED adversarial-review finding can never be silently collapsed into
+/// an empty finding set by a permission glitch or a corrupt line.
+#[derive(Debug)]
+pub enum ReviewFindingScan {
+    /// review_findings.jsonl does not exist: no finding has ever been
+    /// recorded. Legitimately empty — the normal case while no producer is
+    /// wired, or before the first one runs.
+    Absent,
+    /// The file exists but could not be trusted: unreadable (I/O / permission)
+    /// via [`harness_core::boundary::read_to_string`], or read but held a
+    /// non-empty line that failed to parse. A caller MUST NOT read this as
+    /// "no findings" — the very finding that failed to come back could be a
+    /// real, already-CONFIRMED adversarial review result.
+    Undetermined(String),
+    /// The file was read cleanly and every non-empty line parsed: the
+    /// authoritative, trustworthy finding list (possibly empty if the file
+    /// existed but held only blank lines).
+    Findings(Vec<ReviewFinding>),
+}
+
+/// Strictly scan the AI-review findings stream, distinguishing "absent" (legit
+/// empty) from "undetermined" (unreadable / partially-unparseable →
+/// untrustworthy) from a clean, fully-parsed finding list. This is the
+/// sanctioned reader for the review-queue VERDICT path; other established
+/// consumers of `review_findings.jsonl` (`read_review_findings_all`,
+/// `compact`, `bridge`) keep using [`read_review_findings`] and are out of
+/// scope here. Reads via [`harness_core::boundary::read_to_string`] so the
+/// absent/opaque distinction is drawn by the shared boundary type, not
+/// re-derived locally.
+pub fn scan_review_findings(cwd: &Path) -> ReviewFindingScan {
+    let path = match review_findings_path(cwd) {
+        // Cannot even resolve the storage path (e.g. no HOME): undetermined,
+        // not empty — we cannot claim "no findings".
+        Err(e) => return ReviewFindingScan::Undetermined(format!(
+            "cannot resolve the review-findings storage path: {e}"
+        )),
+        Ok(p) => p,
+    };
+    match harness_core::boundary::read_to_string(&path) {
+        harness_core::verdict::Determination::Known(None) => ReviewFindingScan::Absent,
+        harness_core::verdict::Determination::Known(Some(txt)) => {
+            let mut findings = Vec::new();
+            for line in txt.lines() {
+                if line.is_empty() {
+                    continue;
+                }
+                match serde_json::from_str::<ReviewFinding>(line) {
+                    Ok(f) => findings.push(f),
+                    // A present-but-unparseable line means the store is
+                    // schema-drifted/corrupt; the whole scan is untrustworthy
+                    // rather than a silently under-counted `Findings`.
+                    Err(e) => {
+                        return ReviewFindingScan::Undetermined(format!(
+                            "review_findings.jsonl holds an undecodable line: {e}"
+                        ))
+                    }
+                }
+            }
+            ReviewFindingScan::Findings(findings)
+        }
+        harness_core::verdict::Determination::Undetermined(reason) => {
+            ReviewFindingScan::Undetermined(reason.to_string())
+        }
     }
 }
 

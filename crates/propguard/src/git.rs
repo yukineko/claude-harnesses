@@ -196,7 +196,19 @@ pub fn diff_text(root: &Path, files: &[String], max_bytes: usize) -> DiffText {
     }
     for f in others {
         s.push_str(&format!("\n=== new file: {f} ===\n"));
-        if let Ok(content) = std::fs::read_to_string(root.join(&f)) {
+        // `Known(Some(content))`: include it, as before. `Known(None)` (the
+        // untracked file vanished between `ls-files` and this read) and
+        // `Undetermined` (exists but unreadable / not valid UTF-8) both leave
+        // the diff text without this file's body — unchanged from the prior
+        // `if let Ok(..)` behavior, which silently skipped both cases too.
+        // This is a best-effort diff assembled for a checker prompt, not a
+        // verdict: an unreadable untracked file does not make the surrounding
+        // `changed_files`/`ChangeScan::Failed` fail-closed path meaningless,
+        // it just means this one file's contents are missing from the
+        // rendered diff, same risk shape as before this migration.
+        if let harness_core::verdict::Determination::Known(Some(content)) =
+            harness_core::boundary::read_to_string(&root.join(&f))
+        {
             s.push_str(&content);
             if !s.ends_with('\n') {
                 s.push('\n');

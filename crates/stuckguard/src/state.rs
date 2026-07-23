@@ -62,8 +62,17 @@ pub fn path(state_dir: &Path, session: &str) -> PathBuf {
         .join(format!("{}.json", safe(session)))
 }
 
-pub fn load(state_dir: &Path, session: &str) -> SessionState {
-    harness_core::store::load_json(&path(state_dir, session))
+/// Load a session's ring buffer, keeping "could not read it" distinct from
+/// "nothing recorded yet".
+///
+/// Returns `Undetermined` when the state file exists but cannot be read
+/// (unreadable, unsearchable parent) or does not parse (schema drift, truncated
+/// write). A missing file — a genuinely fresh session — is `Known(default)`.
+/// The caller MUST NOT collapse `Undetermined` into an empty window: an
+/// unreadable history that reads as "no history" silences the very stuck loop
+/// this gate exists to catch (see `main::watch`).
+pub fn load(state_dir: &Path, session: &str) -> harness_core::verdict::Determination<SessionState> {
+    harness_core::store::load_json_determined(&path(state_dir, session))
 }
 
 pub fn save(state_dir: &Path, session: &str, st: &SessionState) {

@@ -1,28 +1,24 @@
 ## north_star
-fail-open を『後から検出する』のをやめ、『そもそも書けない』側へ移す。harness_core の verdict 型は出力側でこれを既に達成している — Clean は private witness でしか作れず、Determination には unwrap_or も ok も Default も無いので、『判定できなかった』を『問題なし』へ潰す最短経路が型として存在しない。同じ技法を入力側へ広げる。
+fail-open を『後から検出する』のをやめ、『そもそも書けない』側へ移す。harness_core の verdict 型は出力側でこれを既に達成している — Clean は private witness でしか作れず、Determination には unwrap_or も ok も Default も無いので、『判定できなかった』を『問題なし』へ潰す最短経路が型として存在しない。同じ技法を入力側（fallible な入力境界）へ広げる。
 
 ## definition_of_done
-- ワークスペース直下の Cargo.toml が clippy の lints セクションを持ち、gate crate 側の Cargo.toml がそれを継承する。達成済み (blastguard・propguard・specguard・stuckguard・mutategate・overwatch の6crateが [lints] workspace = true を持つ、budgetguard・donegate・reviewgate・schemaguardの4個は集約しない理由がコード側コメントに明文で残るparked)。
-- enforce の置き場所は local である。clippy ゲートを GitHub の required status check として登録しない。達成済み (CLAUDE.md 第7節どおりlocal pre-commit配線)。
-- harness_core が fallible な入力境界のラッパを提供し、その返り値が既存の三値型 Determination である。達成済み (crates/harness-core/src/boundary.rs、ディレクトリ走査・ファイル読み出し・subprocess実行の3経路)。
-- GATE_CRATES 内で標準ライブラリの生のディレクトリ走査・ファイル読み出し・subprocess 実行を直接呼んでいる箇所が機械的に検出され、検出時に local のゲートが非0で終了する。達成済み (scripts/check-raw-io-ratchet.py、.githooks/pre-commit に配線済み、commit adec7ae3。boundary::修飾漏れ修正=commit 8df18f50、Command::new構造的欠陥の修正(terminal method検出への再設計)=commit f4631d4e)。
-- アンチ空虚の対照実験を記録している。達成済み (scripts/test_check_raw_io_ratchet.py の anti-vacuity control experiment、29 tests green)。
-- baseline の内訳 (現在69件・specguard 37・overwatch 30・propguard 2) の生IO呼び出しが、右サイズに分解した単位でharness_core内のboundaryラッパ経由へ実際に移行され、baselineが単調減少する。各移行はboundary移行前後でcargo testとclippyがgreenであることを観測してから確定する。mutategate(1)・stuckguard(4)・propguard(5のうち3)は移行済み(77→72→69、condukt run-20260723-161953-13614 + backlog 422508c3の検出器再設計)。
+- DoD1: ワークスペース直下の Cargo.toml が clippy lints を持ち gate crate が継承する。達成済み（6 crate が workspace 継承、非集約の4 crate は理由をコード内に明文化して parked）。
+- DoD2: enforce の置き場所は local である（clippy ゲートを required status check にしない）。達成済み（CLAUDE.md 第7節どおり local pre-commit 配線）。
+- DoD3: harness_core が fallible な入力境界のラッパを提供し返り値が三値 Determination である。達成済み（boundary モジュール、走査・読み出し・subprocess の3経路）。
+- DoD4: gate crate 内の生の走査・読み出し・subprocess 直接呼び出しが機械検出され、検出時に local ゲートが非0で終了する。達成済み（raw-io ratchet を pre-commit 配線、terminal method 検出に再設計済み）。
+- DoD5: アンチ空虚の対照実験を記録している。達成済み（ratchet の対照実験 29 tests green）。
+- DoD6: 生 IO 呼び出しの baseline が boundary ラッパ経由へ移行され単調減少する。各移行は前後で cargo test と clippy が green を観測して確定。現況 baseline=67（specguard 37・overwatch 28・propguard 2、他 gate crate は 0）。実測 2026-07-24、HEAD b20aa4a5。
+- DoD7: fail-open reader（Result 崩壊を permissive default へ潰す入力読み取り）が三値 Determination へ移行され確定数が単調増加する。既知集合 M1-M4 は 4/4 確定で全て main に landed（M1 overwatch read_violations を fail-closed scan 化、M2 specguard sentinel_pending 三値化、M3 overwatch lock の pid_alive 三値化、M4 harness-core load_json 三値化と stuckguard consumer 移行）。各確定は利害のない agent の RED oracle を fault injection で先に観測してから GREEN 化する（F→P）。新たな fail-open reader を発見したら既知集合に追加する。
+- DoD8: fail-open reader は raw-IO ratchet に現れない意味的 Result 崩壊も含むため、可能な箇所は boundary 経由へ寄せて DoD6 と同時前進させる（一つの移行で ratchet baseline を下げつつ三値化を確定する）。
 
 ## measuring_stick
-擁護可能性 × ゴールへの接近距離 ÷ コスト
+擁護可能性 × ゴールへの接近距離 ÷ コスト（各移行は利害のない agent の RED oracle を先に観測してから確定）
 
 ## current_gap
-DoD1-5達成済み。DoD6は69件まで進捗(77→72→69)。検出器の2つの既知の欠陥(boundary::修飾漏れ・Command::new構造的欠陥)は両方修正済み(commit 8df18f50/f4631d4e)ので、baselineの数字は今後の移行を正しく反映する。残る作業: (a) propguard gate.rs:871・git.rs:34の2箇所はtimeout対応primitive待ち(backlog 0e0f5249)。(b) specguard(37箇所)・overwatch(30箇所)はサイズxlで未着手・要ファイル単位の再分解 — これは /compass での再carveセッションが必要(次のtoolでは実行不可、次action)。
+DoD1-5 と DoD7(fail-open reader M1-M4=4/4) は達成済みで全て main(b20aa4a5) に landed。残る勾配は DoD6 の raw-IO ratchet=67 を boundary 経由へ移して単調減少させること。内訳は specguard 37・overwatch 28・propguard 2 で、最大バケットは specguard。次の右サイズの一手は specguard の report-state 読み取り（sentinel を present-but-unreadable のとき空扱いして gate を素通しさせる fail-open）を三値 boundary::read_to_string へ移す s スライス。DoD8 どおり ratchet 減少と三値化を同時に達成できる。
 
 ## next_action
-specguard・overwatch のraw-IO移行をファイル単位でsize s/mへ再分解するため、/compass で再carveセッションを行う(主に対象: overwatch/src/aggregate.rs・overwatch/src/bridge.rs、specguardは要ファイル一覧確認)。再carveが済むまでの間、/flow はbacklogの他の右サイズ項目(b0db2bff PATH env race修正、0e0f5249 timeout primitive設計、7d71e1bd orphan worktree最終処分)を順に処理してよい。
+specguard の sentinel 読み取り 2 箇所（report 描画パス main.rs:1193 と ack パス main.rs:1285、いずれも読み取り失敗を空扱いして drift gate を素通しさせる dangerous-direction の fail-open）を harness_core::boundary::read_to_string(三値 Determination) へ移行し present-but-unreadable を absent と区別する。利害のない agent が unreadable sentinel を注入して gate が誤通過することを先に観測(RED)→移行後 GREEN の F→P で確定。cargo test と clippy を green 観測。ratchet 67→65。
 
 ## parked
-- propguard gate.rs:871・git.rs:34の2箇所の生Command実行をharness_core::boundaryのtimeout対応primitive経由へ移行する (backlog 0e0f5249、新primitive設計が前提)。
-- overwatch(30箇所)の生IO呼び出しをharness_core内のboundaryラッパ経由へ移行する (size l — ファイル単位でさらに分解が要る。対象は主に aggregate.rs と bridge.rs)。
-- specguard(37箇所)の生IO呼び出しをharness_core内のboundaryラッパ経由へ移行する (size l — ファイル単位でさらに分解が要る)。
-- 手貼りのdeny(clippy::panic)残り5個 (budgetguard・donegate・reviewgate・schemaguard) の集約。各crateをworkspace lintsにopt-inさせるとunwrap_used・expect_usedのdenyも同時に効くため、それら4crateのproductionのunwrap・expectを潰すかexpectで正当化する作業が伴う。
-- condukt テストのPATH env race修正 (backlog b0db2bff、本north_starと無関係の別スレッド)。
-- /mnt/c/tmp/orphan-worktree-quarantine/smb-share-hardening の最終処分判断 (backlog 7d71e1bd、削除でなくquarantine移動のみ、本north_starと無関係)。
 

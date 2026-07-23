@@ -397,6 +397,50 @@ skip ファイルを使う）という新しい fail-open を生む。
 変更（ハーネス自身 or 対象6crateの変更）が入ったとき」という**あるべきGate**（このリポジトリの
 既存パターンに従った、対象を絞ったCIトリガー）を通るようになった。
 
+## precommit-auditのStop-hook限定を正式化する（2026-07-23）
+
+**発見**: precommit-auditのsecret/credentialスキャナ（`check_hardcoded_secret`、
+`crates/precommit-audit/src/checks/mod.rs:175-199`）は実在し既定有効
+（`ctx.cfg.hardcoded_secret`は`config.rs`のdefault実装で有効）で、Stop hookとして常時稼働している
+（`crates/precommit-audit/hooks/hooks.json:2-8`が`"Stop"`イベントにバイナリを登録、
+`docs/GLOSSARY.md:56`が「always-on」と明記）。しかし本ドキュメント冒頭「ゲート一覧」の
+Stop フック群の表（本ファイル31行目）には既に `precommit-audit | 総合判断 | Stop hook` として
+掲載済みであり、**gate-taxonomy.md自体には欠落していない**。欠落していたのは別の3箇所——
+`.githooks/pre-commit`・`scripts/rollout-plugins.sh`の`GATE_CRATES`・
+`scripts/continuous-audit.sh`の`DEFAULT_TARGETS`——だった。
+
+**判断: 3箇所とも意図的に対象外が正しい（登録しない）**。理由をそれぞれ逐語で示す:
+
+- **`.githooks/pre-commit`**（`.githooks/pre-commit:24-25`「What runs (all stdlib-only python3;
+  each blocks, none warn-and-continue)」）——ここに列挙されるのは **git commit 時**に発火する
+  stdlib-only python3 スクリプト6本（injectguard/fail-open-guard/doc-claims/test-weakening/
+  version-lockstep/bump-on-change、同ファイル26-37行）。precommit-auditは Rust バイナリで
+  **Stop hook**（condukt run中のターン終了時）に発火し、`.githooks/pre-commit`が発火する
+  git-commit-timeとはトリガー時点そのものが異なる。同じ「pre-commit」という名前を持つが
+  git hookではなくStop hookなので、この一覧に加えるとトリガー種別の異なるものを同一列に
+  混在させることになり、`.githooks/pre-commit`の「python3 stdlib-onlyがcommit時に走る」という
+  一覧の一貫性を壊す。
+- **`scripts/rollout-plugins.sh`の`GATE_CRATES`**（`scripts/rollout-plugins.sh:123`
+  `GATE_CRATES="blastguard propguard specguard stuckguard mutategate overwatch"`）——
+  この6crateは「fleetの防御を担うがゆえにcanary無し反映を拒否される」特定集合（同ファイル
+  113-122行目のoverwatchについてのコメントが「so it gets the same canary requirement as the
+  crates it protects」と明記するとおり、**protect-the-protector**という共通性質で束ねられている）。
+  precommit-auditは汎用diff監査ツールであり、この「fleetの防御機構自体を守る」性質を持たない
+  （precommit-auditが壊れても他のGATE_CRATESの防御能力が落ちるわけではない）。加えるとこの
+  6crateの意味——canary必須のfleet防御コア——が拡散する。
+- **`scripts/continuous-audit.sh`の`DEFAULT_TARGETS`**（`scripts/continuous-audit.sh:91-100`
+  「Default target set = the GLOSSARY gate crates ... PLUS `backlog`」）——このリストは
+  GATE_CRATES 6つ + backlog（backlog自身はGATE crateではないがGATE_CRATESの運用に不可欠な
+  ため監査対象に追加、と同コメントが明記）という**GATE_CRATESの厳密な上位集合**として設計
+  されている（同97行「This is a strict superset of GATE_CRATES」）。Continuous-Auditが
+  対象とするのは「fail-openを注入したときに検出できるか」という**GATE_CRATES固有の敵対的検証**
+  であり、precommit-auditはそのものの対象ではない（precommit-auditへの敵対的fail-open検証が
+  必要かどうかは別の検討課題であり、このリストの意味を変えずに個別に評価すべき）。
+
+**是正**: コードは変更しない（3箇所とも実装は正しい）。本節を追加してこの判断を明文化し、
+「gate-taxonomy.mdのStop hook表に既にある」ことと「他3箇所に無いのは正しい」ことの両方を
+1箇所から参照できるようにした。
+
 ## 関連ドキュメント
 
 - [GLOSSARY.md](GLOSSARY.md) — 用語・クレート早見表

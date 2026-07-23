@@ -50,6 +50,22 @@ fn run_git_bounded_with(
     args: &[&str],
     timeout: Duration,
 ) -> Result<GitOutput> {
+    // Every real git spawn in this crate funnels through here, so this is the
+    // one place that needs to defend against `crate::env_lock`'s PATH-mutating
+    // tests (oracle.rs, main.rs): take PATH_ENV_LOCK's read side so a spawn
+    // relying on PATH resolution can never interleave with a mutation window.
+    // Many concurrent git spawns are fine (shared read lock); only a mutator
+    // holding the write lock excludes this. See `env_lock` for the race this
+    // closes (reproduced: repo_commit.rs's git-spawning tests flaked when a
+    // PATH mutator ran concurrently, without either side taking any lock).
+    // Unconditional (not gated to test-only compilation): in production
+    // nothing ever takes the write side, so this read lock is always
+    // uncontended — negligible cost for sidestepping a cfg(test)-on-a-
+    // bare-statement ambiguity (see `env_lock`'s doc comment).
+    let _path_guard = crate::env_lock::PATH_ENV_LOCK
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+
     let mut cmd = Command::new(git_bin);
     cmd.current_dir(dir)
         .args(args)

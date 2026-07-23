@@ -16,6 +16,7 @@ mod config;
 mod consensus;
 mod diffrisk_record;
 mod editgate;
+mod env_lock;
 mod escalate;
 mod gate_exec;
 mod gatelog;
@@ -4651,8 +4652,15 @@ mod calibrated_confidence_tests {
     /// `Some(..)`, per `calibrated_confidence`'s shell-out above). Every
     /// other directory (git, gh, tty, ...) stays resolvable, and the
     /// original `PATH` is restored on drop (incl. on panic, since `Drop`
-    /// still runs during unwind) so no other concurrently-running test in
-    /// this binary observes the mutation.
+    /// still runs during unwind).
+    ///
+    /// PATH is process-global and `cargo test` runs tests on multiple
+    /// threads in one process, so this also takes `crate::env_lock::
+    /// PATH_ENV_LOCK` — the same lock `oracle.rs`'s PATH-mutating tests
+    /// take — before mutating, and holds the guard until PATH is restored.
+    /// Without this, this test and oracle.rs's tests could interleave their
+    /// PATH mutations, producing nondeterministic spawn failures in
+    /// whichever test observed the other's half-restored PATH.
     #[test]
     fn flag_supplied_but_probe_unusable_falls_back() {
         /// RAII guard: temporarily overrides the process `PATH` env var,
@@ -4679,6 +4687,10 @@ mod calibrated_confidence_tests {
                 }
             }
         }
+
+        let _guard = crate::env_lock::PATH_ENV_LOCK
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
 
         let original_path = std::env::var("PATH").unwrap_or_default();
         let sep = if cfg!(windows) { ';' } else { ':' };

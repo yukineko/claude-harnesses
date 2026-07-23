@@ -164,6 +164,10 @@ push は止めない）。cron 定期実行の雛形は `scripts/continuous-audi
 #### budgetguard
 セッション・日次のコスト上限を設定し、超過すると Stop をブロックする。gauge の記録を読んでコストを計算する。
 
+上記の Stop フック群に加え `scripts/check-*.py` 系のスクリプトゲート（pre-commit/pre-push/CI 駆動）も
+含めた全ゲートを「実装正しさ／テスト適合性／総合判断」の3階層とトリガー種別で横断整理した一覧は
+[gate-taxonomy.md](gate-taxonomy.md) を参照。
+
 ---
 
 ### 仕様管理

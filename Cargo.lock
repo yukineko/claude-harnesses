@@ -84,11 +84,12 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "clap",
  "harness-core",
  "libc",
+ "overwatch",
  "serde",
  "serde_json",
  "tempfile",
@@ -127,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "benchkit"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -160,7 +161,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "globset",
  "harness-core",
@@ -191,13 +192,14 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "dirs",
  "harness-core",
+ "overwatch",
  "serde",
  "serde_json",
  "tempfile",
@@ -299,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.96"
+version = "0.7.97"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -359,13 +361,14 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.17"
+version = "0.5.18"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "dirs",
  "harness-core",
+ "overwatch",
  "regex",
  "serde",
  "serde_json",
@@ -462,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -470,6 +473,7 @@ dependencies = [
  "dirs",
  "globset",
  "harness-core",
+ "overwatch",
  "serde",
  "serde_json",
  "tempfile",
@@ -844,7 +848,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -888,7 +892,7 @@ dependencies = [
 
 [[package]]
 name = "precommit-audit"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "globset",
  "harness-core",
@@ -912,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1064,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1072,6 +1076,7 @@ dependencies = [
  "dirs",
  "globset",
  "harness-core",
+ "overwatch",
  "serde",
  "serde_json",
  "toml 0.8.23",
@@ -1324,7 +1329,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1332,6 +1337,7 @@ dependencies = [
  "dirs",
  "globset",
  "harness-core",
+ "overwatch",
  "regex",
  "serde",
  "serde_json",

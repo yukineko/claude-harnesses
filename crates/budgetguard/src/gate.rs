@@ -33,7 +33,12 @@ pub struct GateResult {
 pub enum Verdict {
     Allow,
     Warn(String),
-    Block(String),
+    /// `(reason, check_kind)` — `check_kind` is a stable short discriminator
+    /// (e.g. "session-budget-exceeded") for cross-gate correlated-error
+    /// detection (`overwatch::violation::RawViolation::check_kind`),
+    /// distinct from the human-readable `reason` so callers don't need to
+    /// parse the (localized) message to tell which limit tripped.
+    Block(String, &'static str),
 }
 
 /// Run the budget gate. Returns a GateResult (or None on data errors).
@@ -127,7 +132,7 @@ fn undetermined_verdict(cfg: &Config, why: &Reason) -> Verdict {
          未計測の支出は $0 ではありません。作業を保存し、コミットして終了してください。"
     );
     if cfg.session_block_usd > 0.0 || cfg.daily_block_usd > 0.0 {
-        Verdict::Block(msg)
+        Verdict::Block(msg, "cost-undetermined")
     } else if cfg.session_warn_usd > 0.0 || cfg.daily_warn_usd > 0.0 {
         Verdict::Warn(format!("⚠ {msg}"))
     } else {
@@ -209,18 +214,24 @@ pub fn budget_pressure(day_usd: f64, daily_warn_usd: f64) -> bool {
 fn verdict(cfg: &Config, session_usd: f64, day_usd: f64) -> Verdict {
     // Check block limits first (higher priority than warn).
     if cfg.session_block_usd > 0.0 && session_usd >= cfg.session_block_usd {
-        return Verdict::Block(format!(
-            "budgetguard: セッション予算超過 ${:.4} / ${:.2} (上限)。\n\
+        return Verdict::Block(
+            format!(
+                "budgetguard: セッション予算超過 ${:.4} / ${:.2} (上限)。\n\
              作業を保存し、コミットして終了してください。",
-            session_usd, cfg.session_block_usd
-        ));
+                session_usd, cfg.session_block_usd
+            ),
+            "session-budget-exceeded",
+        );
     }
     if cfg.daily_block_usd > 0.0 && day_usd >= cfg.daily_block_usd {
-        return Verdict::Block(format!(
-            "budgetguard: 日次予算超過 ${:.4} / ${:.2} (上限)。\n\
+        return Verdict::Block(
+            format!(
+                "budgetguard: 日次予算超過 ${:.4} / ${:.2} (上限)。\n\
              作業を保存し、コミットして終了してください。",
-            day_usd, cfg.daily_block_usd
-        ));
+                day_usd, cfg.daily_block_usd
+            ),
+            "daily-budget-exceeded",
+        );
     }
 
     // Warn limits.
@@ -242,6 +253,19 @@ fn verdict(cfg: &Config, session_usd: f64, day_usd: f64) -> Verdict {
         Verdict::Allow
     } else {
         Verdict::Warn(format!("⚠ budgetguard:\n{}", warns.join("\n")))
+    }
+}
+
+/// The `check_kind` of a blocking result, for cross-gate correlated-error
+/// detection — `None` for `Allow`/`Warn`/no-result, so the caller only emits
+/// a violation on an actual block.
+pub fn block_check_kind(result: &Option<GateResult>) -> Option<&'static str> {
+    match result {
+        Some(GateResult {
+            verdict: Verdict::Block(_, check_kind),
+            ..
+        }) => Some(*check_kind),
+        _ => None,
     }
 }
 
@@ -274,7 +298,7 @@ pub fn emit_and_exit(result: Option<GateResult>) -> ! {
                     println!("{}", json!({ "additionalContext": msg }));
                     std::process::exit(0);
                 }
-                Verdict::Block(reason) => {
+                Verdict::Block(reason, _check_kind) => {
                     println!("{}", json!({ "decision": "block", "reason": reason }));
                     std::process::exit(0);
                 }
@@ -342,13 +366,13 @@ mod tests {
     fn block_is_inclusive_at_threshold_and_beats_warn() {
         let c = cfg(1.0, 2.0, 5.0, 10.0);
         // session cost exactly at the block threshold blocks (>=), not just warns.
-        assert!(matches!(verdict(&c, 2.0, 2.0), Verdict::Block(_)));
+        assert!(matches!(verdict(&c, 2.0, 2.0), Verdict::Block(_, _)));
     }
 
     #[test]
     fn daily_block_triggers_independently_of_session() {
         let c = cfg(0.0, 0.0, 0.0, 10.0); // only a daily block configured
-        assert!(matches!(verdict(&c, 0.01, 10.0), Verdict::Block(_)));
+        assert!(matches!(verdict(&c, 0.01, 10.0), Verdict::Block(_, _)));
         assert!(matches!(verdict(&c, 0.01, 9.99), Verdict::Allow));
     }
 
@@ -597,7 +621,7 @@ mod tests {
 
         // …and the gate resolves that to the restricted side, not Allow.
         assert!(
-            matches!(undetermined_verdict(&cfg, &why), Verdict::Block(_)),
+            matches!(undetermined_verdict(&cfg, &why), Verdict::Block(_, _)),
             "an armed block limit must block on an unmeasurable spend"
         );
         // Warn-only config: still not Allow.
@@ -656,7 +680,7 @@ mod tests {
         assert!((session_usd - 30.0).abs() < 1e-9);
         assert!(matches!(
             verdict(&cfg, session_usd, session_usd),
-            Verdict::Block(_)
+            Verdict::Block(_, _)
         ));
 
         let _ = std::fs::remove_file(&tp);

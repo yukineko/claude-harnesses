@@ -122,7 +122,35 @@ fn gate_run(hook: Option<harness_core::hook::HookInput>) {
 
     let today = today_str();
     let result = gate::evaluate(&cfg, &input.session_id, &input.transcript_path, &today);
+    if let Some(check_kind) = gate::block_check_kind(&result) {
+        emit_violation(&cwd, &input.session_id, check_kind);
+    }
     gate::emit_and_exit(result);
+}
+
+/// Record a fleet-level violation for a blocking Stop, for cross-gate
+/// correlated-error detection (`overwatch::violation`). Fail-soft: never
+/// changes the gate's exit code/stdout, never panics if the overwatch store
+/// is unwritable (mirrors donegate/reviewgate/tdd's `emit_violation[s]`).
+/// `task_key` is set to the session id (see those functions' doc comments for
+/// why: a Stop-hook gate has no separate "task" concept below the
+/// session/turn it fires in).
+fn emit_violation(root: &std::path::Path, session: &str, check_kind: &str) {
+    let raw = overwatch::violation::RawViolation {
+        check_kind: Some(check_kind),
+        ..Default::default()
+    };
+    let event = overwatch::violation::build_event(
+        overwatch::violation::ViolationSource::Budgetguard,
+        &raw,
+        session.to_string(),
+        session.to_string(),
+        overwatch::store::now(),
+        None,
+    );
+    if let Some(event) = event {
+        let _ = overwatch::store::append_violation(root, &event);
+    }
 }
 
 fn today_str() -> String {
@@ -185,6 +213,16 @@ fn status(args: StatusArgs) {
     println!("today ({today}):     ${day_usd:.4} spent");
 }
 
+/// Serializes every test in this crate that mutates the process-global
+/// `$HOME` env var (currently only `violation_emission_tests`, which points
+/// `$HOME` at a scratch dir to isolate `overwatch::store`'s home-relative
+/// storage root). `cargo test` runs a crate's tests on multiple threads by
+/// default; an unsynchronized `$HOME` mutation races against any other test
+/// doing the same (the same race already found and fixed this way in
+/// donegate/reviewgate/tdd's `config.rs`).
+#[cfg(test)]
+pub(crate) static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::date_key;
@@ -203,6 +241,74 @@ mod tests {
             date_key(instant.with_timezone(&jst)),
             "2026-01-02",
             "at +09:00 the local calendar day is already Jan 2"
+        );
+    }
+}
+
+#[cfg(test)]
+mod violation_emission_tests {
+    use super::*;
+
+    fn with_scratch_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", home.path());
+        let root = tempfile::tempdir().unwrap();
+        let result = f(root.path());
+        std::env::remove_var("HOME");
+        result
+    }
+
+    #[test]
+    fn emit_violation_records_a_budgetguard_event() {
+        with_scratch_home(|root| {
+            emit_violation(root, "sess-1", "session-budget-exceeded");
+            let events = overwatch::store::read_violations(root).expect("read_violations");
+            assert_eq!(events.len(), 1, "expected exactly one recorded violation");
+            assert_eq!(
+                events[0].source,
+                overwatch::violation::ViolationSource::Budgetguard
+            );
+            assert_eq!(events[0].signature, "budgetguard:session-budget-exceeded");
+        });
+    }
+
+    #[test]
+    fn emit_violation_with_blank_check_kind_records_nothing() {
+        with_scratch_home(|root| {
+            emit_violation(root, "sess-1", "   ");
+            let events = overwatch::store::read_violations(root).expect("read_violations");
+            assert!(
+                events.is_empty(),
+                "a blank discriminator must not build a signature"
+            );
+        });
+    }
+
+    #[test]
+    fn block_check_kind_matches_only_block_verdicts() {
+        use crate::gate::GateResult;
+
+        assert_eq!(
+            gate::block_check_kind(&None),
+            None,
+            "no result must not be read as a block"
+        );
+        assert_eq!(
+            gate::block_check_kind(&Some(GateResult {
+                session_usd: Some(0.0),
+                day_usd: Some(0.0),
+                verdict: gate::Verdict::Allow,
+            })),
+            None
+        );
+        assert_eq!(
+            gate::block_check_kind(&Some(GateResult {
+                session_usd: Some(1.0),
+                day_usd: Some(1.0),
+                verdict: gate::Verdict::Block("over budget".to_string(), "session-budget-exceeded"),
+            })),
+            Some("session-budget-exceeded")
         );
     }
 }

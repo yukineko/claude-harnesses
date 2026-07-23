@@ -178,6 +178,18 @@ pub fn evaluate(cfg: &Config, root: &Path) -> Report {
     classify(cfg, &changed, &added)
 }
 
+/// A stable short discriminator for a blocking report, for cross-gate
+/// correlated-error detection (`overwatch::violation::RawViolation::check_kind`).
+/// Only meaningful when the report actually blocks; distinguishes the two
+/// distinct blocking reasons (missing test vs. an undetermined git scan)
+/// rather than lumping every tdd block under one signature.
+pub fn check_kind(v: &Report) -> &'static str {
+    match &v.scan {
+        Determination::Undetermined(_) => "git-scan-undetermined",
+        _ => "missing-test",
+    }
+}
+
 /// The reason injected back into the model when the stop is blocked.
 pub fn block_reason(v: &Report, attempt: u32, max: u32) -> String {
     match &v.scan {

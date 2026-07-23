@@ -57,6 +57,15 @@ pub fn record(
             mutation_operator: Some(discriminator),
             ..Default::default()
         },
+        ViolationSource::Donegate
+        | ViolationSource::Reviewgate
+        | ViolationSource::Tdd
+        | ViolationSource::Budgetguard
+        | ViolationSource::Autoflow
+        | ViolationSource::Ctxrot => RawViolation {
+            check_kind: Some(discriminator),
+            ..Default::default()
+        },
     };
 
     // An empty / whitespace-only / missing discriminator is not bucketable:

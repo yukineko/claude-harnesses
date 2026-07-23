@@ -54,7 +54,14 @@ mod tests {
     fn gate_crates_is_the_known_six() {
         assert_eq!(
             GATE_CRATES,
-            &["blastguard", "propguard", "specguard", "stuckguard", "mutategate", "overwatch"]
+            &[
+                "blastguard",
+                "propguard",
+                "specguard",
+                "stuckguard",
+                "mutategate",
+                "overwatch"
+            ]
         );
     }
 }

@@ -343,6 +343,18 @@ impl Config {
     }
 }
 
+/// Serializes every test in this crate that mutates the process-global
+/// `$HOME` env var (workspace-trust lookups here, and — since main.rs's
+/// `violation_emission_tests` also point `$HOME` at a scratch dir to isolate
+/// `overwatch::store`'s home-relative storage root — the violation-emission
+/// tests too). `cargo test` runs a crate's unit tests on multiple threads by
+/// default; two such tests racing without a shared lock corrupts each
+/// other's view of "which project is trusted" / "where does the store
+/// live" (the same race already found and fixed this way in donegate and
+/// reviewgate's `config.rs`).
+#[cfg(test)]
+pub(crate) static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,6 +454,7 @@ mod tests {
     // trust matrix is exercised in a SINGLE #[test] to keep it serialized.
     #[test]
     fn project_test_cmd_is_gated_behind_workspace_trust() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = unique_dir("trust-home");
         let proj = unique_dir("trust-proj");
         std::env::set_var("HOME", &home);

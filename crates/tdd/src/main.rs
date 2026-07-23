@@ -235,6 +235,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
 
     log_event(&cfg, &session, "blocked", attempt);
+    emit_violation(&root, &session, gate::check_kind(&verdict));
     let reason = gate::block_reason(&verdict, attempt, cfg.max_attempts);
 
     if interactive {
@@ -320,6 +321,31 @@ fn log_event(cfg: &Config, session: &str, verdict: &str, attempt: u32) {
         "attempt": attempt,
     });
     harness_core::gate::run::append_jsonl(&cfg.state_dir, &entry);
+}
+
+/// Record a fleet-level violation for a blocking Stop, for cross-gate
+/// correlated-error detection (`overwatch::violation`). Fail-soft: never
+/// changes the gate's exit code/stdout, never panics if the overwatch store
+/// is unwritable (mirrors donegate's `emit_violations` / reviewgate's
+/// `emit_violation`). `task_key` is set to the session id (see those
+/// functions' doc comments for why: a Stop-hook gate has no separate "task"
+/// concept below the session/turn it fires in).
+fn emit_violation(root: &Path, session: &str, check_kind: &str) {
+    let raw = overwatch::violation::RawViolation {
+        check_kind: Some(check_kind),
+        ..Default::default()
+    };
+    let event = overwatch::violation::build_event(
+        overwatch::violation::ViolationSource::Tdd,
+        &raw,
+        session.to_string(),
+        session.to_string(),
+        overwatch::store::now(),
+        None,
+    );
+    if let Some(event) = event {
+        let _ = overwatch::store::append_violation(root, &event);
+    }
 }
 
 fn status() {
@@ -411,3 +437,48 @@ proof_dir = ".tdd"
 # security boundary. See the /tdd skill for details.
 # strict_separation = false
 "#;
+
+#[cfg(test)]
+mod violation_emission_tests {
+    use super::*;
+
+    // These mutate the process-global HOME env var (to isolate
+    // `overwatch::store`'s home-relative storage root), so they share
+    // `config::HOME_ENV_LOCK` with config.rs's workspace-trust test — see that
+    // static's doc comment for why an unsynchronized $HOME mutation races
+    // under the default multi-threaded test runner.
+    fn with_scratch_home<T>(f: impl FnOnce(&Path) -> T) -> T {
+        let _guard = config::HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", home.path());
+        let root = tempfile::tempdir().unwrap();
+        let result = f(root.path());
+        std::env::remove_var("HOME");
+        result
+    }
+
+    #[test]
+    fn emit_violation_records_a_tdd_event() {
+        with_scratch_home(|root| {
+            emit_violation(root, "sess-1", "missing-test");
+            let events = overwatch::store::read_violations(root).expect("read_violations");
+            assert_eq!(events.len(), 1, "expected exactly one recorded violation");
+            assert_eq!(events[0].source, overwatch::violation::ViolationSource::Tdd);
+            assert_eq!(events[0].signature, "tdd:missing-test");
+        });
+    }
+
+    #[test]
+    fn emit_violation_with_blank_check_kind_records_nothing() {
+        with_scratch_home(|root| {
+            emit_violation(root, "sess-1", "   ");
+            let events = overwatch::store::read_violations(root).expect("read_violations");
+            assert!(
+                events.is_empty(),
+                "a blank discriminator must not build a signature"
+            );
+        });
+    }
+}

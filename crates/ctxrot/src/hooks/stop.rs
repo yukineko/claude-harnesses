@@ -22,10 +22,14 @@ use harness_core::transcript;
 use crate::config::Config;
 use crate::hooks::guard::safe_session;
 
-/// Stop hook core: returns a JSON `{"decision":"block","reason":"..."}` string
-/// when the budget-meter usage crosses into a new band at/above the threshold,
-/// `None` to allow the session to end.
-pub fn run(input: &HookInput, cfg: &Config) -> Option<String> {
+/// Stop hook core: returns `(json, check_kind)` — `json` a
+/// `{"decision":"block","reason":"..."}` string — when the budget-meter usage
+/// crosses into a new band at/above the threshold, `None` to allow the
+/// session to end. `check_kind` is a stable short discriminator for
+/// cross-gate correlated-error detection
+/// (`overwatch::violation::RawViolation::check_kind`), distinguishing the
+/// normal over-threshold block from the unmeasurable-transcript nudge.
+pub fn run(input: &HookInput, cfg: &Config) -> Option<(String, &'static str)> {
     // A block we ourselves triggered re-enters as `stop_hook_active` → never
     // block again on that pass (the built-in guard against an infinite Stop loop).
     if input.stop_hook_active {
@@ -83,7 +87,8 @@ pub fn run(input: &HookInput, cfg: &Config) -> Option<String> {
         // session — which never reaches band 1 without a usage block — is not
         // over-alarmed.
         if src == "bytes" && band >= 1 && frac < threshold {
-            return unmeasurable_nudge(cfg, &input.session_id, frac);
+            return unmeasurable_nudge(cfg, &input.session_id, frac)
+                .map(|json| (json, "unmeasurable-transcript"));
         }
         return None;
     }
@@ -99,7 +104,10 @@ pub fn run(input: &HookInput, cfg: &Config) -> Option<String> {
          (This nudge fires once per band; to disable it set auto_compact_enabled=false in \
          ~/.ctxrot/config.toml or CTXROT_AUTO_COMPACT=0.)"
     );
-    Some(serde_json::json!({ "decision": "block", "reason": reason }).to_string())
+    Some((
+        serde_json::json!({ "decision": "block", "reason": reason }).to_string(),
+        "budget-threshold-crossed",
+    ))
 }
 
 /// One-shot compact nudge for an UNMEASURABLE session: the transcript had no
@@ -205,7 +213,8 @@ mod tests {
         let base = tmp.path();
         let t = write_transcript(base, 184_000);
         let cfg = cfg_at(base, true, 0.90);
-        let out = run(&input_for("s-over", &t, false), &cfg).unwrap();
+        let (out, check_kind) = run(&input_for("s-over", &t, false), &cfg).unwrap();
+        assert_eq!(check_kind, "budget-threshold-crossed");
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["decision"], "block");
         let reason = v["reason"].as_str().unwrap();
@@ -285,8 +294,9 @@ mod tests {
         let t = write_bytes_transcript(base, 4000);
         let cfg = cfg_window(base, 0.90, 1500);
 
-        let out = run(&input_for("s-unmeasured", &t, false), &cfg)
+        let (out, check_kind) = run(&input_for("s-unmeasured", &t, false), &cfg)
             .expect("bytes-proxy at band 1 below threshold must surface a nudge, not stay silent");
+        assert_eq!(check_kind, "unmeasurable-transcript");
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["decision"], "block");
         let reason = v["reason"].as_str().unwrap();
@@ -334,8 +344,9 @@ mod tests {
         assert!(run(&input_for("s-climb2", &t_lo, false), &cfg).is_some());
         // Then: a bigger no-usage-block transcript over threshold (~1400 tokens).
         let t_hi = write_bytes_transcript(base, 5800); // ~1450 tokens, frac ~0.97
-        let out = run(&input_for("s-climb2", &t_hi, false), &cfg)
+        let (out, check_kind) = run(&input_for("s-climb2", &t_hi, false), &cfg)
             .expect("a genuine over-threshold reading must still block");
+        assert_eq!(check_kind, "budget-threshold-crossed");
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["decision"], "block");
     }

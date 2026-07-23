@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "donegate"
-version = "0.1.16"
+version = "0.1.17"
 edition = "2021"
 description = "Completion-verification gate for Claude Code. On Stop it runs your acceptance commands as subprocesses; the agent can't declare done until every applicable check is green. Failures are fed back for an auto-fix loop."
 license = "MIT"
@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 harness-core = { path = "../harness-core" }
+overwatch = { path = "../overwatch" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

@@ -152,7 +152,12 @@ fn stop_run(input: HookInput) {
                 if metrics.turns >= cfg.min_turns && metrics.tool_events >= cfg.min_tool_events {
                     s.phase = Phase::RecordRequested;
                     state::save(&cfg.state_dir, &session_id, &s);
-                    block("/session-insights:record を実行してセッションを記録してください。");
+                    block(
+                        &cwd,
+                        &session_id,
+                        "record-requested",
+                        "/session-insights:record を実行してセッションを記録してください。",
+                    );
                 }
             }
             Phase::RecordRequested | Phase::Continuing => {
@@ -165,6 +170,9 @@ fn stop_run(input: HookInput) {
                     s.delegation_audit_warned = true;
                     state::save(&cfg.state_dir, &session_id, &s);
                     block(
+                        &cwd,
+                        &session_id,
+                        "delegation-audit-missing",
                         "/flow経由のcondukt実行が完了しましたが、fugu-router recordでのdelegation記録が見当たりません。\
 `fugu-router record --class flow-delegation --delegation <fork|inline> ...`の呼び出しを確認してください。",
                     );
@@ -188,18 +196,28 @@ fn stop_run(input: HookInput) {
                         .join("\n");
 
                     if s.condukt_prompts <= 4 {
-                        block(&format!(
-                            "condukt に残課題が {} 件あります:\n{}\n\n/condukt で続きを処理してください。",
-                            pending.len(),
-                            list
-                        ));
+                        block(
+                            &cwd,
+                            &session_id,
+                            "condukt-pending",
+                            &format!(
+                                "condukt に残課題が {} 件あります:\n{}\n\n/condukt で続きを処理してください。",
+                                pending.len(),
+                                list
+                            ),
+                        );
                     } else {
-                        block(&format!(
-                            "condukt に残課題が {} 件あります ({}回目):\n{}\n\n自動実行を停止しています。続けるかどうかユーザーに確認してください。",
-                            pending.len(),
-                            s.condukt_prompts,
-                            list
-                        ));
+                        block(
+                            &cwd,
+                            &session_id,
+                            "condukt-pending-repeated",
+                            &format!(
+                                "condukt に残課題が {} 件あります ({}回目):\n{}\n\n自動実行を停止しています。続けるかどうかユーザーに確認してください。",
+                                pending.len(),
+                                s.condukt_prompts,
+                                list
+                            ),
+                        );
                     }
                 } else {
                     // condukt 完了 → backlog を確認
@@ -221,9 +239,14 @@ fn stop_run(input: HookInput) {
                                 let why = v
                                     .reason
                                     .unwrap_or_else(|| "charter が鮮明ではありません".to_string());
-                                block(&format!(
-                                    "compass: {why}\n\n自動でバックログを流す前に /compass で再オリエンテーションしてください（鮮明化後に /flow か /backlog を再開）。"
-                                ));
+                                block(
+                                    &cwd,
+                                    &session_id,
+                                    "compass-stale",
+                                    &format!(
+                                        "compass: {why}\n\n自動でバックログを流す前に /compass で再オリエンテーションしてください（鮮明化後に /flow か /backlog を再開）。"
+                                    ),
+                                );
                                 return;
                             }
                         }
@@ -244,7 +267,7 @@ fn stop_run(input: HookInput) {
                             "残課題バックログに {} 件の未完了課題があります。\n\n次の課題 [{}]: {}\n\n/backlog を実行してください。",
                             remaining, next.id, next.text
                         );
-                        block(&msg);
+                        block(&cwd, &session_id, "backlog-next-pending", &msg);
                     }
                 }
             }
@@ -253,8 +276,34 @@ fn stop_run(input: HookInput) {
     }
 }
 
-fn block(reason: &str) {
+fn block(cwd: &std::path::Path, session: &str, check_kind: &str, reason: &str) {
+    emit_violation(cwd, session, check_kind);
     println!("{}", json!({ "decision": "block", "reason": reason }));
+}
+
+/// Record a fleet-level violation for a blocking Stop, for cross-gate
+/// correlated-error detection (`overwatch::violation`). Fail-soft: never
+/// changes the gate's exit code/stdout, never panics if the overwatch store
+/// is unwritable (mirrors donegate/reviewgate/tdd/budgetguard's
+/// `emit_violation[s]`). `task_key` is set to the session id (see those
+/// functions' doc comments for why: a Stop-hook gate has no separate "task"
+/// concept below the session/turn it fires in).
+fn emit_violation(cwd: &std::path::Path, session: &str, check_kind: &str) {
+    let raw = overwatch::violation::RawViolation {
+        check_kind: Some(check_kind),
+        ..Default::default()
+    };
+    let event = overwatch::violation::build_event(
+        overwatch::violation::ViolationSource::Autoflow,
+        &raw,
+        session.to_string(),
+        session.to_string(),
+        overwatch::store::now(),
+        None,
+    );
+    if let Some(event) = event {
+        let _ = overwatch::store::append_violation(cwd, &event);
+    }
 }
 
 fn session_start_command() -> ! {
@@ -493,5 +542,49 @@ mod tests {
             !state::resume_marker_path(&cfg.state_dir, "").exists(),
             "empty session → no marker"
         );
+    }
+}
+
+#[cfg(test)]
+mod violation_emission_tests {
+    use super::*;
+
+    // Mutates the process-global HOME (to isolate `overwatch::store`'s
+    // home-relative storage root), so it serializes behind the crate-wide
+    // `test_home_guard` mutex like every other HOME-mutating test here.
+    #[test]
+    fn emit_violation_records_an_autoflow_event() {
+        let _guard = crate::test_home_guard();
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", home.path());
+        let root = tempfile::tempdir().unwrap();
+
+        emit_violation(root.path(), "sess-1", "condukt-pending");
+        let events = overwatch::store::read_violations(root.path()).expect("read_violations");
+        assert_eq!(events.len(), 1, "expected exactly one recorded violation");
+        assert_eq!(
+            events[0].source,
+            overwatch::violation::ViolationSource::Autoflow
+        );
+        assert_eq!(events[0].signature, "autoflow:condukt-pending");
+
+        std::env::remove_var("HOME");
+    }
+
+    #[test]
+    fn emit_violation_with_blank_check_kind_records_nothing() {
+        let _guard = crate::test_home_guard();
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", home.path());
+        let root = tempfile::tempdir().unwrap();
+
+        emit_violation(root.path(), "sess-1", "   ");
+        let events = overwatch::store::read_violations(root.path()).expect("read_violations");
+        assert!(
+            events.is_empty(),
+            "a blank discriminator must not build a signature"
+        );
+
+        std::env::remove_var("HOME");
     }
 }

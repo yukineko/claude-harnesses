@@ -1,6 +1,6 @@
 {
   "name": "ctxrot",
-  "version": "0.5.17",
+  "version": "0.5.18",
   "description": "v0.5.16: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Context-rot guard for Claude Code: detect, rescue, restore, distill, and CONTROL what loads into context (rule-based allow/deny gate + /ctx pin/drop/load + switchable carryover). Subscription-native (hooks + subagent + skill, no API key). v0.5.14: Stop hook now runs under harness-core's run_guarded panic barrier (fail-closed block on crash instead of silent allow).",
   "author": {
     "name": "yukineko"

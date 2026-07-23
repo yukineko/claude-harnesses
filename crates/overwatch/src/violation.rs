@@ -32,6 +32,18 @@ pub enum ViolationSource {
     Specguard,
     /// mutategate: a mutant survived (kill failure).
     Mutategate,
+    /// donegate: a build/test/lint blocking check failed.
+    Donegate,
+    /// reviewgate: a diff review (inject or subprocess) returned a blocking verdict.
+    Reviewgate,
+    /// tdd: the RED→GREEN test-first sequence was not observed before a Stop.
+    Tdd,
+    /// budgetguard: session/task cost exceeded the configured cap.
+    Budgetguard,
+    /// autoflow: the deterministic circuit breaker tripped (failure-streak/stall/budget).
+    Autoflow,
+    /// ctxrot: context-budget usage crossed a blocking threshold.
+    Ctxrot,
 }
 
 impl ViolationSource {
@@ -42,6 +54,12 @@ impl ViolationSource {
             ViolationSource::Propguard => "propguard",
             ViolationSource::Specguard => "specguard",
             ViolationSource::Mutategate => "mutategate",
+            ViolationSource::Donegate => "donegate",
+            ViolationSource::Reviewgate => "reviewgate",
+            ViolationSource::Tdd => "tdd",
+            ViolationSource::Budgetguard => "budgetguard",
+            ViolationSource::Autoflow => "autoflow",
+            ViolationSource::Ctxrot => "ctxrot",
         }
     }
 
@@ -54,6 +72,12 @@ impl ViolationSource {
             "propguard" => Some(ViolationSource::Propguard),
             "specguard" => Some(ViolationSource::Specguard),
             "mutategate" => Some(ViolationSource::Mutategate),
+            "donegate" => Some(ViolationSource::Donegate),
+            "reviewgate" => Some(ViolationSource::Reviewgate),
+            "tdd" => Some(ViolationSource::Tdd),
+            "budgetguard" => Some(ViolationSource::Budgetguard),
+            "autoflow" => Some(ViolationSource::Autoflow),
+            "ctxrot" => Some(ViolationSource::Ctxrot),
             _ => None,
         }
     }
@@ -95,6 +119,14 @@ pub struct RawViolation<'a> {
     pub symbol: Option<&'a str>,
     /// mutategate: the mutation operator that survived (e.g. "arithmetic-op-swap").
     pub mutation_operator: Option<&'a str>,
+    /// donegate / reviewgate / tdd / budgetguard / autoflow / ctxrot: the
+    /// stable check/rule identifier that blocked (e.g. donegate's failing
+    /// command name, tdd's missing-RED reason, ctxrot's threshold name).
+    /// Shared across these six sources rather than one field per source,
+    /// since — unlike blastguard's structured rule_id or specguard's
+    /// drift_kind+symbol pair — each of these gates already reduces its
+    /// blocking reason to a single short discriminator before reporting it.
+    pub check_kind: Option<&'a str>,
 }
 
 /// Normalize a raw violation into a stable signature string: same kind of
@@ -141,6 +173,12 @@ pub fn normalize_signature(source: ViolationSource, raw: &RawViolation) -> Optio
             }
         }
         ViolationSource::Mutategate => raw.mutation_operator.and_then(norm)?,
+        ViolationSource::Donegate
+        | ViolationSource::Reviewgate
+        | ViolationSource::Tdd
+        | ViolationSource::Budgetguard
+        | ViolationSource::Autoflow
+        | ViolationSource::Ctxrot => raw.check_kind.and_then(norm)?,
     };
 
     Some(format!("{}:{}", source.token(), discriminator))
@@ -326,6 +364,13 @@ mod tests {
         }
     }
 
+    fn raw_check_kind(kind: &str) -> RawViolation<'_> {
+        RawViolation {
+            check_kind: Some(kind),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn normalize_signature_same_input_same_signature() {
         let a = normalize_signature(ViolationSource::Blastguard, &raw_blastguard("rm-rf"));
@@ -368,6 +413,64 @@ mod tests {
             &raw_mutategate("arithmetic-op-swap"),
         );
         assert_eq!(sig.as_deref(), Some("mutategate:arithmetic-op-swap"));
+    }
+
+    #[test]
+    fn normalize_signature_new_sources_use_check_kind() {
+        let cases = [
+            (ViolationSource::Donegate, "donegate"),
+            (ViolationSource::Reviewgate, "reviewgate"),
+            (ViolationSource::Tdd, "tdd"),
+            (ViolationSource::Budgetguard, "budgetguard"),
+            (ViolationSource::Autoflow, "autoflow"),
+            (ViolationSource::Ctxrot, "ctxrot"),
+        ];
+        for (source, token) in cases {
+            let sig = normalize_signature(source, &raw_check_kind("some-check"));
+            assert_eq!(
+                sig.as_deref(),
+                Some(format!("{token}:some-check").as_str()),
+                "source {token:?} did not use check_kind"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_signature_new_sources_reject_empty_check_kind() {
+        for source in [
+            ViolationSource::Donegate,
+            ViolationSource::Reviewgate,
+            ViolationSource::Tdd,
+            ViolationSource::Budgetguard,
+            ViolationSource::Autoflow,
+            ViolationSource::Ctxrot,
+        ] {
+            assert_eq!(normalize_signature(source, &raw_check_kind("   ")), None);
+            assert_eq!(normalize_signature(source, &RawViolation::default()), None);
+        }
+    }
+
+    #[test]
+    fn violation_source_parse_round_trips_all_variants() {
+        for source in [
+            ViolationSource::Blastguard,
+            ViolationSource::Propguard,
+            ViolationSource::Specguard,
+            ViolationSource::Mutategate,
+            ViolationSource::Donegate,
+            ViolationSource::Reviewgate,
+            ViolationSource::Tdd,
+            ViolationSource::Budgetguard,
+            ViolationSource::Autoflow,
+            ViolationSource::Ctxrot,
+        ] {
+            assert_eq!(ViolationSource::parse(source.token()), Some(source));
+        }
+    }
+
+    #[test]
+    fn violation_source_parse_rejects_unknown_token() {
+        assert_eq!(ViolationSource::parse("not-a-real-gate"), None);
     }
 
     #[test]

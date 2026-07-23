@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the GATE_CRATES crate set is consistent across its 7 hardcoded sources.
+"""Verify the GATE_CRATES crate set is consistent across its 8 hardcoded sources.
 
 Two related-but-distinct concepts are hardcoded across these sources:
   - "GATE crates": fleet defense gates that require a canary rollout
@@ -33,6 +33,11 @@ Sources and how each must relate to the canonical GATE_CRATES set:
     (comma-separated list after "既定の target は") — must equal
     scripts/continuous-audit.sh's DEFAULT_TARGETS EXACTLY (the doc must describe
     what the script actually defaults to, whatever audit-only crates it has).
+  - docs/OVERVIEW.md  the "GATE_CRATES（a / b / c）" prose parenthetical in the
+    Continuous-Audit section — must equal canonical EXACTLY. This is the
+    human-facing description readers see before ever opening
+    rollout-plugins.sh; a stale copy tells them the wrong crates require a
+    canary rollout.
 
 See docs/fix-gate-crates-drift.md for the incident that motivated this checker.
 
@@ -196,6 +201,23 @@ def skill_md_crates(text):
     return set(x for x in m.group(1).split(",") if x)
 
 
+def overview_md_crates(text):
+    """Extract crate names from docs/OVERVIEW.md's prose "GATE_CRATES（a / b / c）" list.
+
+    This is the human-facing description of the canonical set inside the
+    Continuous-Audit section. It is prose, not code, so `_sole_match` is not
+    applied here (there is no comment/string ambiguity to guard against for a
+    single fenced-off parenthetical) — but a missing or empty match still
+    returns None, which the caller treats as drift rather than as an
+    unrelated/absent file.
+    """
+    m = re.search(r"GATE_CRATES(?:（|\()([^）)]+)(?:）|\))", text)
+    if not m:
+        return None
+    crates = set(x.strip() for x in m.group(1).split("/") if x.strip())
+    return crates or None
+
+
 # mode:
 #   "canonical" — this source defines the canonical GATE_CRATES set.
 #   "exact"     — must equal canonical exactly (no extra, no missing).
@@ -215,6 +237,7 @@ SOURCES = [
         skill_md_crates,
         "mirror:scripts/continuous-audit.sh",
     ),
+    ("docs/OVERVIEW.md", overview_md_crates, "exact"),
 ]
 
 

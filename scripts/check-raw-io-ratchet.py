@@ -26,7 +26,7 @@ Detected patterns (receiver-aware, GATE_CRATES `src/` only, `#[cfg(test)]`
 regions and comments excluded):
   * `std::fs::read_dir(` / bare `read_dir(`           — directory walk
   * `std::fs::read_to_string(` / bare `read_to_string(` — file read
-  * `Command::new(` / `std::process::Command::new(`   — subprocess exec
+  * `.output()` / `.spawn()` / `.status()`            — subprocess exec
 
 `read_to_string`/`read_dir` are matched only when NOT preceded by `.` — `std::fs::read_to_string(path)`
 is the free function this script polices; `some_reader.read_to_string(&mut buf)`
@@ -45,6 +45,35 @@ progress: the first migration commits (mutategate/stuckguard/propguard raw-IO
 burn-down, 2026-07-23) still matched verbatim, holding the count at 77 despite
 correct migrations landing (see backlog entries filed by that run's workers,
 who independently rediscovered this gap).
+
+Subprocess exec is matched on the TERMINAL method call (`.output()` /
+`.spawn()` / `.status()`), not on `Command::new(` construction. An earlier
+version of this gate matched `Command::new(` directly, on the theory that a
+subprocess call site is "constructed once, unconditionally raw." That theory
+is wrong: `harness_core::boundary::run(cmd: &mut Command) -> Determination<...>`
+takes an ALREADY-BUILT `Command` — it does not construct one — so every call
+site, migrated or not, must still write `Command::new(...)` to produce the
+value `boundary::run` consumes. Matching `Command::new(` therefore can never
+distinguish "raw" from "migrated"; it is structurally the wrong signal and
+holds the count artificially high forever (confirmed 2026-07-23:
+`crates/stuckguard/src/anchor.rs`'s 3 sites were migrated to `boundary::run`
+in commit ac4af8ef — cargo test/clippy green — but stayed in `--list` under
+the old pattern because `Command::new("overwatch")`/`Command::new("condukt")`
+still appear as construction lines). The actual raw-exec signal is the
+terminal method a raw call site invokes DIRECTLY on the `Command`/builder
+(`.output()`, `.spawn()`, or `.status()`, always empty-argument by signature);
+code that hands the same `Command` to `boundary::run` instead never calls
+these methods in GATE_CRATES' own source (the call happens inside
+`harness_core::boundary`, a different crate not in `GATE_CRATES`). Checked
+before adopting this pattern: `grep -rn '\\.output()\\|\\.spawn()\\|\\.status()'`
+across every GATE_CRATES `src/` turns up only `std::process::Command`/`Child`
+receivers — no `reqwest`/`hyper`/HTTP-response `.status()`, no other type in
+this codebase exposes these three method names — so the receiver-agnostic
+match (no type-narrowing needed, unlike the `read_to_string`/`io::Read`
+collision above) is safe here. Being method calls, they need no separate
+receiver-blind exclusion the way `read_to_string`/`read_dir` do (a bare,
+qualifier-free `.output()`/`.spawn()`/`.status()` call is by construction only
+reachable via `.`).
 
 Usage:
   python3 scripts/check-raw-io-ratchet.py                # gate surface, blocking (exit 1 on drift, 2 undetermined)
@@ -84,11 +113,18 @@ GATE_CRATES = (
 # form calls migrate TO (`harness_core::boundary::read_to_string(` /
 # `boundary::read_to_string(` after a `use harness_core::boundary;`) — both
 # lookbehinds are fixed-width (required by `re`) and independent, so either one
-# firing suppresses the match. `Command::new(` has no such collision in this
-# codebase (always `std::process::Command` or a `use`-imported alias of it) so
-# it is matched unconditionally.
+# firing suppresses the match.
+#
+# Subprocess exec is matched on the terminal, empty-argument method call
+# (`.output()` / `.spawn()` / `.status()`) instead of `Command::new(`
+# construction — see the module docstring for why `Command::new(` cannot
+# distinguish raw from `boundary::run`-migrated call sites. These are always
+# method calls (the leading `\.` is part of the pattern, not a lookbehind), so
+# no receiver-blind exclusion is needed the way `read_to_string`/`read_dir`
+# need one.
 RAW_IO_PATTERN = re.compile(
-    r"(?<!\.)(?<!boundary::)\bread_dir\s*\(|(?<!\.)(?<!boundary::)\bread_to_string\s*\(|\bCommand::new\s*\("
+    r"(?<!\.)(?<!boundary::)\bread_dir\s*\(|(?<!\.)(?<!boundary::)\bread_to_string\s*\("
+    r"|\.output\s*\(\s*\)|\.spawn\s*\(\s*\)|\.status\s*\(\s*\)"
 )
 
 
@@ -257,7 +293,8 @@ def ratchet_verdict(count: int, baseline: int) -> tuple[int, str]:
     if count > baseline:
         return 1, (
             f"raw-io-ratchet: count ROSE {baseline} -> {count}. A new raw "
-            f"stdlib read_dir/read_to_string/Command::new call landed in a "
+            f"stdlib read_dir/read_to_string call, or a raw .output()/.spawn()/"
+            f".status() subprocess exec, landed in a "
             f"GATE_CRATES src/ tree, bypassing harness_core::boundary. Route it "
             f"through boundary.rs's Determination-returning wrappers instead, "
             f"or, if a reviewed exception, re-pin with --update-baseline (the "

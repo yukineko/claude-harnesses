@@ -58,13 +58,58 @@ class ScanFileDetectsFreeFunctionCalls(unittest.TestCase):
         lines = ["use std::fs::read_dir;\n", "let entries = read_dir(dir)?;\n"]
         self.assertEqual(len(rio.scan_file_lines(lines)), 1)
 
-    def test_command_new_is_flagged(self):
-        lines = ['let c = Command::new("git");\n']
+    def test_output_call_is_flagged(self):
+        lines = ['let out = Command::new("git").output()?;\n']
         self.assertEqual(len(rio.scan_file_lines(lines)), 1)
 
-    def test_qualified_process_command_new_is_flagged(self):
-        lines = ['let c = std::process::Command::new("git");\n']
+    def test_spawn_call_is_flagged(self):
+        lines = ['let child = Command::new("git").spawn()?;\n']
         self.assertEqual(len(rio.scan_file_lines(lines)), 1)
+
+    def test_status_call_is_flagged(self):
+        lines = ['let st = std::process::Command::new("git").status()?;\n']
+        self.assertEqual(len(rio.scan_file_lines(lines)), 1)
+
+
+class CommandConstructionAloneIsNotFlagged(unittest.TestCase):
+    """F->P for the Command::new structural gap discovered 2026-07-23 (backlog
+    422508c3) during the same condukt run that surfaced the module-qualification
+    gap above: `harness_core::boundary::run(cmd: &mut Command)` takes an
+    ALREADY-BUILT Command, so a migrated call site must still write
+    `Command::new(...)` — matching on construction can never distinguish raw
+    from migrated. Reproduce the historical RED directly against the pattern
+    this replaces:
+      python3 -c "import re; p = re.compile(r'\\bCommand::new\\s*\\(');
+      print(bool(p.search('let mut cmd = Command::new(\"git\");')))"  # -> True (wrong: this line alone is not a raw exec)
+    """
+
+    def test_bare_command_new_with_no_terminal_call_is_not_flagged(self):
+        lines = ['let c = Command::new("git");\n']
+        self.assertEqual(rio.scan_file_lines(lines), [])
+
+    def test_qualified_bare_command_new_is_not_flagged(self):
+        lines = ['let c = std::process::Command::new("git");\n']
+        self.assertEqual(rio.scan_file_lines(lines), [])
+
+    def test_command_new_feeding_boundary_run_is_not_flagged(self):
+        """Mirrors the real stuckguard/anchor.rs pattern (migrated in commit
+        ac4af8ef): constructing a Command and handing it to boundary::run,
+        never calling .output()/.spawn()/.status() directly."""
+        lines = [
+            'let mut cmd = Command::new("overwatch");\n',
+            'cmd.arg("status");\n',
+            'let result = harness_core::boundary::run(&mut cmd);\n',
+        ]
+        self.assertEqual(rio.scan_file_lines(lines), [])
+
+    def test_old_pattern_would_have_flagged_bare_construction(self):
+        """F->P proof: the Command::new(-matching pattern this gate replaced
+        DOES match bare construction with no terminal call — demonstrating the
+        fix is not vacuous."""
+        import re
+
+        old_pattern = re.compile(r"\bCommand::new\s*\(")
+        self.assertTrue(old_pattern.search('let mut cmd = Command::new("overwatch");'))
 
 
 class ModuleQualifiedBoundaryCallsAreNotFlagged(unittest.TestCase):

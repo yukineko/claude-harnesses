@@ -357,6 +357,46 @@ module-level tuple として保持している（standalone script のため
 `OK: GATE_CRATES consistent across 8 sources` を返し、追跡対象ソースは7から8に増えた
 （前節で7に減った経緯があるため、この節での8への増加は新しい追跡対象の追加であり、後戻りではない）。
 
+## 敵対的fail-openミューテーション検証のCI配線（2026-07-23 訂正）
+
+上の節で作った `scripts/check-fail-open-mutation.py` は、実装完了時点では**どの自動トリガーにも
+配線されていなかった**（`.github/workflows/` と `.githooks/` の両方を `grep` して確認、ヒットなし）。
+手動実行しない限り一度も走らない、という状態は「テストが本当にfail-openを検出できるかを機械的に
+検証する」という当初の是正目的に対し**実効性ゼロ**であり、そのまま放置してよい状態ではなかった。
+
+**誤った解決策（採用しなかったもの）**: 「タスクごとに自動実行する」——例えば `condukt` の各タスク
+完了時や、ローカル Stop hook・pre-commit で毎回走らせる——は誤り。各シナリオは対象 crate を
+mutate → `cargo test -p <crate>` → revert という実コンパイル＋テスト往復であり、6 crate 分だと
+`.github/workflows/mutation.yml`（cargo-mutants による kill-rate ゲート）と同等のコストになる。
+これを commit 単位・task 単位で強制すると、遅すぎるゲートを人間が迂回する（hook を無効化する・
+skip ファイルを使う）という新しい fail-open を生む。
+
+**正しい是正**: 既存の `mutation.yml` と同じ「calibrated crate の変更時のみ + 定期実行」パターンに
+倣い、`.github/workflows/fail-open-mutation.yml` を新規作成した:
+
+- **トリガー**: `workflow_dispatch`（手動）／`schedule`（毎週火曜 06:00 UTC — `mutation.yml` が
+  月曜を使っているため曜日をずらし runner 競合を避けた）／`pull_request` と `push`（`main`）は
+  **path filter 付き**（ハーネス自身: `scripts/check-fail-open-mutation.py` /
+  `scripts/test_check_fail_open_mutation.py` / このワークフロー自体、および対象6crate:
+  `crates/{blastguard,propguard,specguard,stuckguard,mutategate,overwatch}/**`）。
+  この6crateは `.githooks/pre-push` の `GATE_PATTERN`（同ファイル99行目）・
+  `scripts/check-gate-crates-sync.py` の canonical set と同一集合。
+- **フィルタなしの `on: pull_request` にしなかった理由**: この harness の verdict を動かせるのは
+  ハーネス自身か対象6crateの変更だけであり、無関係な diff にまで unconditional に発火させるのは
+  「全部に発火＝全部を検査している」ように見えて実際はCI時間を浪費するだけの見せかけになる
+  （`fail-open.yml`・`gate-crates-sync.yml` が path filter 無しなのは、それぞれ repo 全体の
+  swallow パターン走査・7ソース横断整合性チェックという性質上、path filter を付けると
+  「関係ない PR には報告されない」問題＝ required check にできない問題が起きるため。今回の
+  ミューテーションハーネスは対象が6crateに限定されており、その事情が当てはまらない）。
+- **ジョブ内容**: `dtolnay/rust-toolchain@stable` + `Swatinem/rust-cache@v2` で Rust 環境を用意し、
+  まず `python3 scripts/test_check_fail_open_mutation.py`（ハーネス自身の22テスト）、続けて
+  `python3 scripts/check-fail-open-mutation.py --keep-going`（全6crateへの実ミューテーション実行。
+  `--keep-going` で1crateの発見が残り5crateの結果を隠さないようにする）を実行する。
+
+これで「タスクごとに自動実行」という誤った頻度ではなく、「この harness の verdict が変わりうる
+変更（ハーネス自身 or 対象6crateの変更）が入ったとき」という**あるべきGate**（このリポジトリの
+既存パターンに従った、対象を絞ったCIトリガー）を通るようになった。
+
 ## 関連ドキュメント
 
 - [GLOSSARY.md](GLOSSARY.md) — 用語・クレート早見表

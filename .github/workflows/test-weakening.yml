@@ -46,7 +46,7 @@ jobs:
           # clean — turning a misconfigured checkout into a red job instead of
           # a silently vacuous pass.
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.x'
       - name: Unit-test the scanner

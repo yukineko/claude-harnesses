@@ -67,6 +67,40 @@ class ScanFileDetectsFreeFunctionCalls(unittest.TestCase):
         self.assertEqual(len(rio.scan_file_lines(lines)), 1)
 
 
+class ModuleQualifiedBoundaryCallsAreNotFlagged(unittest.TestCase):
+    """F->P for the module-qualification gap discovered 2026-07-23 by the
+    condukt run migrating mutategate/propguard/stuckguard to
+    harness_core::boundary: RAW_IO_PATTERN's only exclusion was the `.`
+    receiver lookbehind, so `harness_core::boundary::read_to_string(` (the
+    form call sites migrate TO) still matched verbatim and the baseline count
+    never dropped for a correct migration. Reproduce the historical RED
+    directly against the receiver-only pattern this replaces:
+      python3 -c "import re; p = re.compile(r'(?<!\\.)\\bread_to_string\\s*\\(');
+      print(bool(p.search('harness_core::boundary::read_to_string(&path)')))"  # -> True (wrong)
+    """
+
+    def test_fully_qualified_boundary_read_to_string_is_not_flagged(self):
+        lines = ["let stdout = harness_core::boundary::read_to_string(&path)?;\n"]
+        self.assertEqual(rio.scan_file_lines(lines), [])
+
+    def test_bare_boundary_read_to_string_is_not_flagged(self):
+        lines = ["use harness_core::boundary;\n", "let t = boundary::read_to_string(&path)?;\n"]
+        self.assertEqual(len(rio.scan_file_lines(lines)), 0)
+
+    def test_bare_boundary_read_dir_is_not_flagged(self):
+        lines = ["use harness_core::boundary;\n", "let e = boundary::read_dir_entries(dir)?;\n"]
+        self.assertEqual(len(rio.scan_file_lines(lines)), 0)
+
+    def test_receiver_only_pattern_would_have_flagged_the_boundary_call(self):
+        """F->P proof: the pattern this gate's extra lookbehind replaced DOES
+        match the module-qualified boundary call — demonstrating the fix is
+        not vacuous."""
+        import re
+
+        receiver_only = re.compile(r"(?<!\.)\bread_to_string\s*\(")
+        self.assertTrue(receiver_only.search("harness_core::boundary::read_to_string(&path)"))
+
+
 class ReceiverAwareFalsePositiveDiscipline(unittest.TestCase):
     def test_method_call_is_not_flagged(self):
         """The io::Read trait method (`reader.read_to_string(&mut buf)`), used

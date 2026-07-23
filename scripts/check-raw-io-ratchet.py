@@ -28,7 +28,7 @@ regions and comments excluded):
   * `std::fs::read_to_string(` / bare `read_to_string(` — file read
   * `Command::new(` / `std::process::Command::new(`   — subprocess exec
 
-`read_to_string` is matched only when NOT preceded by `.` — `std::fs::read_to_string(path)`
+`read_to_string`/`read_dir` are matched only when NOT preceded by `.` — `std::fs::read_to_string(path)`
 is the free function this script polices; `some_reader.read_to_string(&mut buf)`
 is the unrelated `io::Read` trait method (found in propguard/gate.rs,
 propguard/git.rs, specguard/main.rs, specguard/forge/main.rs — all subprocess
@@ -36,6 +36,15 @@ stdout/stderr capture, not file reads) and is NOT a raw-stdlib-boundary bypass.
 Excluding it is load-bearing: an earlier, receiver-blind version of this
 pattern over-counted by 4 (81 vs the correct 77 — see the anti-vacuity
 docstring in `scripts/test_check_raw_io_ratchet.py` for the reproduction).
+
+They are also excluded when immediately preceded by `boundary::` —
+`harness_core::boundary::read_to_string(path)` / `boundary::read_to_string(path)`
+is the module-qualified free function that call sites migrate TO, not a raw
+bypass. Without this exclusion the script cannot see its own DoD item 6
+progress: the first migration commits (mutategate/stuckguard/propguard raw-IO
+burn-down, 2026-07-23) still matched verbatim, holding the count at 77 despite
+correct migrations landing (see backlog entries filed by that run's workers,
+who independently rediscovered this gap).
 
 Usage:
   python3 scripts/check-raw-io-ratchet.py                # gate surface, blocking (exit 1 on drift, 2 undetermined)
@@ -71,11 +80,15 @@ GATE_CRATES = (
 # Receiver-aware: `(?<!\.)` excludes `some_reader.read_to_string(&mut buf)` (the
 # io::Read trait method) and any hypothetical `.read_dir()` method call, leaving
 # only the free-function forms (`std::fs::read_dir(`, bare `read_dir(` via a
-# `use` import). `Command::new(` has no such collision in this codebase (always
-# `std::process::Command` or a `use`-imported alias of it) so it is matched
-# unconditionally.
+# `use` import). `(?<!boundary::)` additionally excludes the module-qualified
+# form calls migrate TO (`harness_core::boundary::read_to_string(` /
+# `boundary::read_to_string(` after a `use harness_core::boundary;`) — both
+# lookbehinds are fixed-width (required by `re`) and independent, so either one
+# firing suppresses the match. `Command::new(` has no such collision in this
+# codebase (always `std::process::Command` or a `use`-imported alias of it) so
+# it is matched unconditionally.
 RAW_IO_PATTERN = re.compile(
-    r"(?<!\.)\bread_dir\s*\(|(?<!\.)\bread_to_string\s*\(|\bCommand::new\s*\("
+    r"(?<!\.)(?<!boundary::)\bread_dir\s*\(|(?<!\.)(?<!boundary::)\bread_to_string\s*\(|\bCommand::new\s*\("
 )
 
 

@@ -23,4 +23,16 @@ CONDUKT_GIT_HOOK=pre-merge-commit
 export CONDUKT_GIT_HOOK
 
 # Same gate, same certification: run pre-commit's body verbatim.
-exec "$(dirname "$0")/pre-commit"
+#
+# Resolve this hook's own directory WITHOUT spawning `dirname`. A git hook's
+# PATH is whatever invoked git — measured on macos-14 CI it was git's own dir
+# with NO coreutils, so `$(dirname "$0")` failed with "dirname: command not
+# found", collapsed to empty, and exec'd "/pre-commit" (nonexistent) -> the hook
+# died 126 and BLOCKED the very integration merges CLAUDE.md §8 permits. A gate
+# must not depend on the ambient environment carrying coreutils; POSIX parameter
+# expansion is a shell builtin and needs nothing on PATH.
+case "$0" in
+  */*) hookdir=${0%/*} ;;
+  *)   hookdir=. ;;
+esac
+exec "$hookdir/pre-commit"

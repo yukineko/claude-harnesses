@@ -227,6 +227,59 @@ fn a_clean_no_ff_merge_completes_in_the_primary_tree_with_a_peer_live() {
     );
 }
 
+/// macos-14 regression, pinned host-independently. A git hook's PATH is
+/// whatever invoked git; on some hosts (observed: macos-14 CI) that directory
+/// carries no coreutils. The merge hook resolved its own dir with
+/// `$(dirname "$0")`; with `dirname` off PATH that collapsed to "" and exec'd
+/// "/pre-commit", so the hook died 126 and BLOCKED the integration merge §8
+/// permits. The integration test above could not catch it: on hosts where
+/// git's dir happens to also carry coreutils (ubuntu-latest, this mac) `dirname`
+/// resolved and it passed — a host-dependent oracle. This gives PATH a single
+/// empty directory, so `dirname` is absent on EVERY host: the old hook fails
+/// here everywhere, the builtin-only hook passes everywhere.
+#[test]
+fn the_merge_hook_reaches_pre_commit_with_no_coreutils_on_path() {
+    let pid = std::process::id();
+    let mut base = std::env::temp_dir();
+    base.push(format!("condukt-maintree-hookdir-{pid}"));
+    let _ = std::fs::remove_dir_all(&base);
+    let hooks = base.join("hooks");
+    let emptybin = base.join("emptybin");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::create_dir_all(&emptybin).unwrap();
+
+    // The real hook, verbatim — the file under test.
+    std::fs::copy(
+        repo_githooks().join("pre-merge-commit"),
+        hooks.join("pre-merge-commit"),
+    )
+    .expect("copy pre-merge-commit");
+    // A pre-commit that only proves it was reached (absolute exec, no ext cmd).
+    write_exec(
+        &hooks.join("pre-commit"),
+        "#!/bin/sh\nprintf 'PRE_COMMIT_REACHED\\n'\nexit 0\n",
+    );
+
+    // PATH = one empty dir: no `dirname`, no coreutils, on any host.
+    let out = Command::new("/bin/sh")
+        .arg(hooks.join("pre-merge-commit"))
+        .env("PATH", emptybin.display().to_string())
+        .output()
+        .expect("hook runs");
+    let text = combined(&out);
+    let _ = std::fs::remove_dir_all(&base);
+
+    assert!(
+        out.status.success() && text.contains("PRE_COMMIT_REACHED"),
+        "the merge hook must reach pre-commit using only shell builtins, with no \
+         coreutils on PATH:\n{text}"
+    );
+    assert!(
+        !text.contains("command not found"),
+        "the hook must not depend on an external command being on PATH:\n{text}"
+    );
+}
+
 /// The other half: the gate must still block an ORDINARY commit in the primary
 /// tree while a peer is live. A fix that lets the merge through by letting
 /// everything through has detected nothing.

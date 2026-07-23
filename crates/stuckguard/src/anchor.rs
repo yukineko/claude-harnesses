@@ -15,6 +15,7 @@
 
 use std::process::Command;
 
+use harness_core::boundary;
 use serde::Deserialize;
 
 use crate::sig::Event;
@@ -42,15 +43,22 @@ pub fn parse_anchor(json: &str) -> Option<SessionAnchor> {
 /// Read the live anchor for `session_id` by shelling out to overwatch. Fail-soft:
 /// returns `None` if overwatch is missing, exits non-zero (no live lease), or
 /// emits unparseable output.
+///
+/// Routed through `harness_core::boundary::run` so "overwatch could not be run
+/// at all" (`Undetermined`) is distinguished from "overwatch ran and said no
+/// lease" (`Known`, non-zero exit) at the call site — but stuckguard is a pure
+/// advisory hook (never blocks), so both degrade the same way this function
+/// always has: a silent `None`, same as before this migration.
 pub fn fetch_session_anchor(session_id: &str) -> Option<SessionAnchor> {
-    let out = Command::new("overwatch")
-        .args(["lease", "--session", session_id, "--json"])
-        .output()
+    let mut cmd = Command::new("overwatch");
+    cmd.args(["lease", "--session", session_id, "--json"]);
+    let stdout = boundary::run(&mut cmd)
+        .require()
+        .ok()?
+        .stdout_on_success()
+        .require()
         .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    parse_anchor(&String::from_utf8_lossy(&out.stdout))
+    parse_anchor(&stdout)
 }
 
 /// Keep this session's claim/lease alive (§4.6b). Fires a `condukt` and an
@@ -58,14 +66,14 @@ pub fn fetch_session_anchor(session_id: &str) -> Option<SessionAnchor> {
 /// ignored (the nudge path must never be blocked by this side effect).
 pub fn heartbeat_piggyback(anchor: &SessionAnchor) {
     if !anchor.run_id.is_empty() {
-        let _ = Command::new("condukt")
-            .args(["state", "heartbeat", "--run", &anchor.run_id])
-            .output();
+        let mut cmd = Command::new("condukt");
+        cmd.args(["state", "heartbeat", "--run", &anchor.run_id]);
+        let _ = boundary::run(&mut cmd);
     }
     if !anchor.key.is_empty() {
-        let _ = Command::new("overwatch")
-            .args(["heartbeat", "--key", &anchor.key])
-            .output();
+        let mut cmd = Command::new("overwatch");
+        cmd.args(["heartbeat", "--key", &anchor.key]);
+        let _ = boundary::run(&mut cmd);
     }
 }
 

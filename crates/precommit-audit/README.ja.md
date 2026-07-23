@@ -97,6 +97,30 @@ exec precommit-audit --mode precommit
 
 precommit-audit は意図的に、`harness_core::gate` 上に構築された JSON Stop ゲートの一員ではない。あの 3 つは Claude 専用の Stop フックで、`{"decision":"block","reason":…}` を出力してブロックする。precommit-audit は git フック（`precommit` モード、失敗時 **1**）と Claude Code Stop フック（`stop` モード、**2**）の両方として動き、さらに advisory な **SessionEnd** パス（**0**。ブロッキングな指摘を表面化・記録しつつセッションは失敗させない）も備える dual-mode フックである。git フックは Claude の JSON `decision:block` プロトコルを話せないため、終了コード＋ブロックマーカーという別の契約を保つ。プロジェクトローカル設定を `harness_core::trust` の背後でゲートする点は 3 つと共通だが、JSON Stop ゲートではなく、その兄弟として扱う。
 
+## この repo 自身での位置づけ（self-apply、2026-07-23決定）
+
+precommit-audit はこの repo が生み出し配布する project-agnostic な製品だが、この repo 自身の
+git-commit-time ゲート（`.githooks/pre-commit`。injectguard/fail-open-guard/doc-claims/
+test-weakening/version-lockstep/bump-on-changeの6本、`.githooks/pre-commit:26-37`）には
+**統合されていない**（別々に発展した独立実装のまま）。ただし precommit-audit が user scope で
+インストール済みの環境では、Stop hook（`crates/precommit-audit/hooks/hooks.json:2-8`）として
+この repo 上の Claude Code セッションでも実際に発火する——つまり `.githooks/pre-commit` には
+現れないが、この repo でも「使われていない」わけではない。
+
+**決定: 現状維持**。`.githooks/pre-commit` への統合は行わず、precommit-audit は引き続き
+project-agnostic な独立製品として、Stop hook 経由でのみこの repo に効く。理由は「意図的な
+設計判断が過去にあった」からではなく（そこまでの経緯は確認できていない）、統合の
+コスト（`.githooks/pre-commit` の6本は個々に stdlib-only python3 で書かれ独自の許容/除外
+規則を持つため、precommit-audit の汎用ルールへ置き換えるには両者のポリシーを一致させる
+作業が要る）に見合う具体的な破綻が今のところ観測されていないため。
+
+**記録したギャップ（是正はこのタスクのスコープ外）**: `.githooks/pre-commit` の6ゲートには
+`check_hardcoded_secret`（`crates/precommit-audit/src/checks/mod.rs:175-199`）に相当する
+汎用シークレットスキャンが1つも無い。つまり precommit-audit を user scope でインストール
+していない contributor がこの repo に commit する場合、hardcoded secret を検出する
+git-commit-time ゲートが存在しない。この gap 自体の是正（`.githooks/pre-commit` への
+secret-scan 追加、または precommit-audit 呼び出しの統合）は別タスクとして backlog に積む。
+
 ## なぜ移植したか
 
 元のフックは PowerShell 専用（Windows のみ）だった。この書き直しは:

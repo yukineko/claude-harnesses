@@ -313,8 +313,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let criteria_file = "criteria.txt";
         std::fs::write(dir.join(criteria_file), "must be idempotent").unwrap();
-        std::fs::set_permissions(dir.join(criteria_file), std::fs::Permissions::from_mode(0o000))
-            .unwrap();
+        std::fs::set_permissions(
+            dir.join(criteria_file),
+            std::fs::Permissions::from_mode(0o000),
+        )
+        .unwrap();
 
         // If chmod 000 doesn't actually deny this uid (e.g. running as root),
         // the test's premise is absent — say so instead of asserting the
@@ -328,8 +331,11 @@ mod tests {
         };
         let got = source_criteria(&cfg, &dir);
 
-        std::fs::set_permissions(dir.join(criteria_file), std::fs::Permissions::from_mode(0o644))
-            .unwrap();
+        std::fs::set_permissions(
+            dir.join(criteria_file),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(

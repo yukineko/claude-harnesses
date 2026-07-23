@@ -580,7 +580,18 @@ fn redirect_targets(seg: &str) -> Vec<String> {
             let start = j;
             while j < bytes.len() {
                 let cj = bytes[j];
-                if cj.is_ascii_whitespace() || cj == b';' || cj == b'|' || cj == b'&' || cj == b'>'
+                // `)` terminates the target too: `$(cmd 2>/dev/null)` is the
+                // universal idiom for silencing stderr inside a command
+                // substitution, and the closing paren is not part of the
+                // filename. Without this, the target token becomes
+                // `/dev/null)`, which fails `redirect_target_is_safe`'s exact
+                // match and denies a command that touches no file at all.
+                if cj.is_ascii_whitespace()
+                    || cj == b';'
+                    || cj == b'|'
+                    || cj == b'&'
+                    || cj == b'>'
+                    || cj == b')'
                 {
                     break;
                 }
@@ -2306,6 +2317,31 @@ mod tests {
     fn redirect_to_devnull_and_config_is_allowed() {
         assert_eq!(bash("echo hi > /dev/null"), Decision::Allow);
         assert_eq!(bash("generate > config.toml"), Decision::Allow);
+    }
+
+    #[test]
+    fn devnull_redirect_inside_command_substitution_is_allowed() {
+        // Regression (systemic signature blastguard:truncating-redirect,
+        // observed live in session a8cb4c0a): `$(cmd 2>/dev/null)` is a
+        // universally-common idiom for silencing stderr inside a command
+        // substitution. The redirect-target scanner did not treat `)` as a
+        // token terminator, so the substitution's closing paren was read as
+        // part of the target (`/dev/null)`), which fails
+        // `redirect_target_is_safe` (only the exact string `/dev/null`
+        // matches) and denies a command that touches no file at all.
+        assert_eq!(
+            single_redirect_target("cmd 2>/dev/null)"),
+            Some("/dev/null".to_string())
+        );
+        assert_eq!(
+            bash("CACHE_BIN=$(find /some/dir -name x 2>/dev/null)"),
+            Decision::Allow
+        );
+        assert_eq!(bash("x=$(cat a.txt 2> /dev/null)"), Decision::Allow);
+        // Control: a real truncating redirect immediately followed by `)` in
+        // prose (not /dev/null) must still be denied — `)` termination must
+        // not blind the scanner to a genuine target.
+        assert!(bash("(cmd > real.log)").is_deny());
     }
 
     #[test]

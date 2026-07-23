@@ -84,7 +84,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "clap",
  "harness-core",
@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "benchkit"
-version = "0.1.8"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "chrono",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.101"
+version = "0.7.102"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -361,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.18"
+version = "0.5.19"
 dependencies = [
  "anyhow",
  "chrono",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "anyhow",
  "chrono",
@@ -848,7 +848,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.6"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "clap",
@@ -916,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.29"
+version = "0.1.30"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1068,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.16"
+version = "0.1.18"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1258,7 +1258,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "specguard"
-version = "0.2.40"
+version = "0.2.43"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -1282,7 +1282,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "stuckguard"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1329,7 +1329,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "chrono",

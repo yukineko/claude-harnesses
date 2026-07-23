@@ -495,7 +495,7 @@ mod violation_emission_tests {
     use super::emit_violations;
     use crate::config::HOME_ENV_LOCK;
 
-    // `overwatch::store::append_violation`/`read_violations` resolve their
+    // `overwatch::store::append_violation`/`scan_violations` resolve their
     // storage root via `harness_core::config::home()`, which reads `$HOME`.
     // Shares `config::HOME_ENV_LOCK` with `config::tests` (not a locally
     // scoped lock) — see that static's doc comment for why a per-module lock
@@ -519,7 +519,9 @@ mod violation_emission_tests {
             &["build".to_string(), "lint".to_string()],
         );
 
-        let events = overwatch::store::read_violations(&root).expect("read_violations");
+        let events = overwatch::store::scan_violations(&root)
+            .events_or_empty()
+            .expect("read_violations");
 
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),
@@ -550,7 +552,9 @@ mod violation_emission_tests {
         std::fs::create_dir_all(&root).expect("create project root");
         emit_violations(&root, "session-x", &[]);
 
-        let events = overwatch::store::read_violations(&root).expect("read_violations");
+        let events = overwatch::store::scan_violations(&root)
+            .events_or_empty()
+            .expect("read_violations");
 
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),

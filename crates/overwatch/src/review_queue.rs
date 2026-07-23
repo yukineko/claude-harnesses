@@ -457,12 +457,31 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<()> {
     let now = store::now();
 
     // Source 1: systemic violations (reuse the item-B recurrence path).
-    let events = store::read_violations(&cwd).unwrap_or_default();
-    let systemic: Vec<SignatureRecurrence> =
-        violation::detect_recurrence(&events, now, RecurrencePolicy::default())
-            .into_iter()
-            .filter(|r| r.is_systemic)
-            .collect();
+    //
+    // This command renders; it returns no verdict. So an undetermined ledger
+    // degrades to "this source is NOT SHOWN" — announced on stderr — and never
+    // to "there are no systemic violations". The distinction matters because a
+    // silently-omitted source is byte-identical to a clean one (CLAUDE.md §1:
+    // 沈黙は許容される degrade ではない).
+    let (systemic, violations_undetermined) = match store::scan_violations(&cwd) {
+        // Absent = no violation was ever recorded: a real, trustworthy empty.
+        store::ViolationScan::Absent => (Vec::new(), false),
+        store::ViolationScan::Events(events) => (
+            violation::detect_recurrence(&events, now, RecurrencePolicy::default())
+                .into_iter()
+                .filter(|r| r.is_systemic)
+                .collect::<Vec<SignatureRecurrence>>(),
+            false,
+        ),
+        store::ViolationScan::Undetermined => {
+            eprintln!(
+                "overwatch review-queue: WARNING — the violation ledger could not be read \
+                 or held an undecodable line; the [systemic] source is OMITTED from this \
+                 queue. This is NOT a report of zero systemic violations."
+            );
+            (Vec::new(), true)
+        }
+    };
 
     // Source 2: canary rollback events.
     let rollbacks = store::read_rollbacks(&cwd).unwrap_or_default();
@@ -504,10 +523,25 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<()> {
         return Ok(());
     }
 
-    if rows.is_empty() {
+    if violations_undetermined {
         println!(
-            "(review queue empty — no systemic violations, rollbacks, findings, escalations, or merge conflicts)"
+            "[systemic] SOURCE NOT SHOWN — the violation ledger is unreadable or holds an \
+             undecodable line; systemic violations could not be determined."
         );
+    }
+
+    if rows.is_empty() {
+        // Only claim the violation source is empty when it was actually read.
+        if violations_undetermined {
+            println!(
+                "(no rollbacks, findings, escalations, or merge conflicts — systemic \
+                 violations UNDETERMINED, see above)"
+            );
+        } else {
+            println!(
+                "(review queue empty — no systemic violations, rollbacks, findings, escalations, or merge conflicts)"
+            );
+        }
         return Ok(());
     }
     for r in &rows {

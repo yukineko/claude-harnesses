@@ -560,7 +560,9 @@ mod violation_emission_tests {
         let root = tempfile::tempdir().unwrap();
 
         emit_violation(root.path(), "sess-1", "condukt-pending");
-        let events = overwatch::store::read_violations(root.path()).expect("read_violations");
+        let events = overwatch::store::scan_violations(root.path())
+            .events_or_empty()
+            .expect("read_violations");
         assert_eq!(events.len(), 1, "expected exactly one recorded violation");
         assert_eq!(
             events[0].source,
@@ -579,7 +581,9 @@ mod violation_emission_tests {
         let root = tempfile::tempdir().unwrap();
 
         emit_violation(root.path(), "sess-1", "   ");
-        let events = overwatch::store::read_violations(root.path()).expect("read_violations");
+        let events = overwatch::store::scan_violations(root.path())
+            .events_or_empty()
+            .expect("read_violations");
         assert!(
             events.is_empty(),
             "a blank discriminator must not build a signature"

@@ -263,7 +263,9 @@ mod violation_emission_tests {
     fn emit_violation_records_a_budgetguard_event() {
         with_scratch_home(|root| {
             emit_violation(root, "sess-1", "session-budget-exceeded");
-            let events = overwatch::store::read_violations(root).expect("read_violations");
+            let events = overwatch::store::scan_violations(root)
+                .events_or_empty()
+                .expect("read_violations");
             assert_eq!(events.len(), 1, "expected exactly one recorded violation");
             assert_eq!(
                 events[0].source,
@@ -277,7 +279,9 @@ mod violation_emission_tests {
     fn emit_violation_with_blank_check_kind_records_nothing() {
         with_scratch_home(|root| {
             emit_violation(root, "sess-1", "   ");
-            let events = overwatch::store::read_violations(root).expect("read_violations");
+            let events = overwatch::store::scan_violations(root)
+                .events_or_empty()
+                .expect("read_violations");
             assert!(
                 events.is_empty(),
                 "a blank discriminator must not build a signature"

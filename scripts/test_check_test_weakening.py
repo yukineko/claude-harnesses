@@ -811,6 +811,38 @@ LIB_BRACE_IN_STRING_WEAK = (
     "    }\n}\n"
 )
 
+# F3b: an escaped-backslash CHAR literal '\\' must not run the brace scanner
+# off the rails. The `\\` char literal used to make _matching_brace skip past
+# its own closing quote and run on to the next quote in the file (here the
+# lifetime 'a in `helper`), swallowing fn a()'s closing `}` and desyncing the
+# depth so the whole #[cfg(test)] module read as unbalanced -> Undetermined
+# (exit 2). That both blocked honest commits (store.rs, two `.contains('\\')`
+# assertions) AND could hide a weakening past the '\\'. BASE has an assertion in
+# fn b() sitting past the '\\'; WEAK drops it.
+LIB_CHAR_BACKSLASH_BASE = (
+    "pub fn f() -> i32 { 1 }\n\n"
+    "#[cfg(test)]\nmod tests {\n"
+    "    #[test]\n    fn a() {\n"
+    "        assert!(!\"x\".contains('\\\\'));\n"
+    "    }\n"
+    "    fn helper<'a>(x: &'a str) -> &'a str { x }\n"
+    "    #[test]\n    fn b() {\n"
+    "        assert!(helper(\"y\") == \"y\");\n"
+    "        assert!(true);\n"
+    "    }\n}\n"
+)
+LIB_CHAR_BACKSLASH_WEAK = (
+    "pub fn f() -> i32 { 1 }\n\n"
+    "#[cfg(test)]\nmod tests {\n"
+    "    #[test]\n    fn a() {\n"
+    "        assert!(!\"x\".contains('\\\\'));\n"
+    "    }\n"
+    "    fn helper<'a>(x: &'a str) -> &'a str { x }\n"
+    "    #[test]\n    fn b() {\n"
+    "        assert!(helper(\"y\") == \"y\");\n"
+    "    }\n}\n"
+)
+
 
 class ResidualFailOpensRound26(GateTestCase):
     # --- F1: non-ASCII (git-quoted) paths ---------------------------------
@@ -870,6 +902,25 @@ class ResidualFailOpensRound26(GateTestCase):
         repo = self.make_repo({LIB_PATH: LIB_BRACE_IN_STRING_BASE})
         repo.write(LIB_PATH, LIB_BRACE_IN_STRING_BASE.replace("fn t()", "fn renamed()"))
         repo.commit("rename the test fn, keep the assertions")
+        rc, out, err = self.run_gate(repo.root)
+        self.assertClean(rc, out, err)
+
+    def test_escaped_backslash_char_literal_weakening_blocks(self):
+        # RED before the _matching_brace fix: the '\\' char literal desynced the
+        # brace scan -> the module read as unbalanced -> Undetermined (exit 2),
+        # so the gate could not even SEE the dropped assertion in fn b().
+        repo = self.make_repo({LIB_PATH: LIB_CHAR_BACKSLASH_BASE})
+        repo.write(LIB_PATH, LIB_CHAR_BACKSLASH_WEAK)
+        repo.commit("drop an assertion sitting past a '\\\\' char literal")
+        rc, out, err = self.run_gate(repo.root)
+        self.assertBlocks(rc, out, err, kind="assertion-removed")
+
+    def test_escaped_backslash_char_literal_benign_is_clean(self):
+        # And the same '\\' must not produce a false Undetermined when nothing is
+        # weakened: a pure rename with every assertion intact is clean (exit 0).
+        repo = self.make_repo({LIB_PATH: LIB_CHAR_BACKSLASH_BASE})
+        repo.write(LIB_PATH, LIB_CHAR_BACKSLASH_BASE.replace("fn b()", "fn renamed()"))
+        repo.commit("rename a test fn past a '\\\\' char literal, keep assertions")
         rc, out, err = self.run_gate(repo.root)
         self.assertClean(rc, out, err)
 

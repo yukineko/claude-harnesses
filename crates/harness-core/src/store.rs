@@ -428,17 +428,61 @@ impl Store {
     }
 }
 
-/// Load a JSON value, returning `Default` on any miss/parse error (fail-soft).
+/// Load a JSON value, collapsing every miss AND every read/parse FAILURE into
+/// `T::default()`.
 ///
-/// This captures the read→`from_str`→`unwrap_or_default` idiom repeated across
-/// the plugin state stores. The cardinal rule holds: a missing or corrupt file
-/// yields the type's default, never an error that could break a hook turn.
-/// Callers keep their own `path()` schemes; only the read body lives here.
+/// This is fail-**open**: a missing file, an unreadable one (EACCES, an
+/// unsearchable parent dir), and a corrupt/truncated one all return the SAME
+/// `T::default()`, so a caller cannot tell "nothing recorded yet" from "I could
+/// not read what was recorded". The collapse is written out below rather than
+/// buried in `.ok()`, and it is acceptable ONLY for callers whose decision does
+/// not depend on that distinction.
+///
+/// **A gate that reads state to reach a verdict must use
+/// [`load_json_determined`] instead** — it keeps "could not read"
+/// (`Undetermined`) apart from "absent" (`Known(default)`), so an unreadable
+/// history cannot silence a gate. See CLAUDE.md §3.
 pub fn load_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+    match load_json_determined(path) {
+        Determination::Known(v) => v,
+        // Fail-open, deliberately and in the open: a caller of THIS function has
+        // opted into "the default on anything I could not read".
+        Determination::Undetermined(_) => T::default(),
+    }
+}
+
+/// Load a JSON value with the three outcomes of a load kept distinct instead of
+/// collapsed into the type's default.
+///
+/// | situation | answer |
+/// |---|---|
+/// | the file is not there | `Known(T::default())` — a real "nothing recorded yet" |
+/// | there but unreadable (EACCES / unsearchable parent / I/O fault) | `Undetermined` |
+/// | there but it does not parse as `T` (schema drift, truncated write) | `Undetermined` |
+/// | it parsed | `Known(T)` |
+///
+/// Absence is the ONLY miss that stays `Known`: a file that was never written is
+/// genuinely empty. Opacity — unreadable or unparseable — is `Undetermined`,
+/// because the bytes the caller wanted may well be there. This is the input-side
+/// counterpart to [`Determination`]'s output-side contract, and the fix for the
+/// fail-open that [`load_json`] documents: a gate reads through this so an
+/// unreadable store cannot masquerade as a fresh one.
+pub fn load_json_determined<T: serde::de::DeserializeOwned + Default>(
+    path: &Path,
+) -> Determination<T> {
+    match crate::boundary::read_to_string(path) {
+        Determination::Known(None) => Determination::known(T::default()),
+        Determination::Known(Some(text)) => match serde_json::from_str::<T>(&text) {
+            Ok(v) => Determination::known(v),
+            Err(e) => Determination::undetermined(format!(
+                "{} exists but does not parse as {}: {e} — a corrupt or truncated \
+                 store is not an empty one",
+                path.display(),
+                std::any::type_name::<T>()
+            )),
+        },
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
 }
 
 /// Save a JSON value (compact), creating parent dirs. Fail-soft: IO/serialize

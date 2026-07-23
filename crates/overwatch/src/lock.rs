@@ -20,6 +20,7 @@
 //! unlocked (logged) rather than failing the caller, and it never panics.
 
 use crate::store;
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -75,20 +76,27 @@ fn now_unix_nanos() -> u128 {
         .unwrap_or(0)
 }
 
-fn pid_alive(pid: u32) -> bool {
+/// Whether the process `pid` is alive — as three answers, not two.
+///
+/// `Known(true)`/`Known(false)` are positive observations (the OS answered).
+/// `Undetermined` is "I could not ask": `kill` could not be spawned (empty
+/// `PATH`, denied exec) or was killed by a signal, so there is no exit code to
+/// read. The previous `.status().map(..).unwrap_or(false)` mapped that opacity
+/// to `false` = "the holder is dead", which is the fail-open the caller's reap
+/// arm turns into stealing a *live* holder's lock. Routing through
+/// [`harness_core::boundary::run`] keeps the spawn/signal failure as
+/// `Undetermined`; `map` carries the exit code (`0` == alive) only when the
+/// process actually ran.
+fn pid_alive(pid: u32) -> Determination<bool> {
     #[cfg(target_os = "linux")]
     {
         if Path::new(&format!("/proc/{pid}")).exists() {
-            return true;
+            return Determination::known(true);
         }
     }
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    let mut cmd = std::process::Command::new("kill");
+    cmd.args(["-0", &pid.to_string()]);
+    harness_core::boundary::run(&mut cmd).map(|out| out.code() == 0)
 }
 
 /// Lock file path for a project's lease registry — sits beside `leases.json`,
@@ -270,7 +278,16 @@ impl LeaseLock {
                     // Someone holds the lock. Reap it only if we can positively
                     // confirm the owner pid is gone; otherwise wait for release.
                     match read_info(&path) {
-                        Some(existing) if !pid_alive(existing.pid) => {
+                        // Reap ONLY on a positive "the owner is gone"
+                        // (`Known(false)`). A live owner (`Known(true)`) AND an
+                        // UNDETERMINED liveness (`kill` unspawnable / signalled —
+                        // "I could not ask the OS") both fall through to the wait
+                        // arm below. Reaping on "cannot tell" would steal a live
+                        // holder's lock — the exact fail-open this lock exists to
+                        // close.
+                        Some(existing)
+                            if matches!(pid_alive(existing.pid), Determination::Known(false)) =>
+                        {
                             let _ = std::fs::remove_file(&path);
                             continue;
                         }

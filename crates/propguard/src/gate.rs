@@ -418,6 +418,54 @@ pub fn escalate_giveup_on_systemic(decision: Decision, systemic_outage: bool) ->
     }
 }
 
+/// The three-valued front door to [`escalate_giveup_on_systemic`], taking the
+/// recurrence answer as a [`Determination<bool>`] so "the violation ledger
+/// could not be read" is its own answer rather than a `false`.
+///
+/// * `Known(false)` — checked, isolated flake → the input `Allow` is unchanged.
+/// * `Known(true)`  — checked, fleet-wide outage → `Block` (delegated).
+/// * `Undetermined` — the ledger could not be read / holds an undecodable line.
+///   We already know propguard's checker FAILED (this path is only reached from
+///   the `checker-error-giveup` arm), and we now cannot tell whether that
+///   failure is fleet-wide. Two unknowns stacked must not resolve to "ship it":
+///   this blocks, with its OWN tag and reason so it is never mistaken for a
+///   *confirmed* systemic outage (`checker-outage-systemic`). Per CLAUDE.md §3,
+///   判定不能 resolves to the restricted side.
+///
+/// Like its delegate, this rewrites ONLY the `checker-error-giveup` `Allow`;
+/// every other decision passes through untouched on all three answers, so an
+/// unreadable ledger cannot turn an unrelated `Allow` into a `Block`.
+pub fn escalate_giveup_on_outage_scan(
+    decision: Decision,
+    outage: harness_core::verdict::Determination<bool>,
+) -> Decision {
+    use harness_core::verdict::Determination;
+    match outage {
+        Determination::Known(systemic) => escalate_giveup_on_systemic(decision, systemic),
+        Determination::Undetermined(why) => match decision {
+            Decision::Allow {
+                tag: "checker-error-giveup",
+                ..
+            } => Decision::Block {
+                reason: format!(
+                    "propguard: the checker failed AND the fleet violation ledger could not \
+                     be read ({why}), so whether this is an isolated flake or a fleet-wide \
+                     outage is UNDETERMINED — holding the stop rather than shipping \
+                     UNVERIFIED code on an unverifiable signal. Fix checker_cmd and the \
+                     overwatch store (see `propguard status`), or set PROPGUARD_DISABLE=1 \
+                     to bypass."
+                ),
+                tag: "checker-outage-undetermined",
+                files: vec![],
+                properties: vec![],
+                attempts: 0,
+                last_hash: String::new(),
+            },
+            other => other,
+        },
+    }
+}
+
 fn allow(tag: &'static str, st: &crate::state::SessionState) -> Decision {
     Decision::Allow {
         tag,

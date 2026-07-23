@@ -23,6 +23,7 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 
 use harness_core::hook::{read_stdin, run_hook};
+use harness_core::verdict::Determination;
 
 use config::Config;
 use detect::{Kind, Trip};
@@ -120,7 +121,29 @@ fn watch() {
         }
     }
 
-    let mut st = state::load(&cfg.state_dir, &session);
+    let mut st = match state::load(&cfg.state_dir, &session) {
+        Determination::Known(st) => st,
+        // FAIL-CLOSED: the session history could not be read (unreadable /
+        // unsearchable parent / corrupt-unparseable). The repeat detector runs
+        // over a WINDOW of prior events; loading `SessionState::default()` here
+        // would hand it a one-event window and report "no stuck loop" for a loop
+        // that may well be in progress — "I cannot read the history" emitted as
+        // "all clear". Instead resolve the undetermined read to the restrictive
+        // side: surface the nudge and stop. Do NOT `save` — overwriting an
+        // unreadable/corrupt file with a default would destroy the evidence and
+        // reset a real loop's history.
+        Determination::Undetermined(why) => {
+            eprintln!("stuckguard: cannot read session history ({why}); nudging out of caution");
+            let out = json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": undetermined_history_message(),
+                }
+            });
+            println!("{out}");
+            return;
+        }
+    };
     let seq = st.push(event, cfg.window);
 
     let trip = detect::detect(&st.events, &cfg);
@@ -188,6 +211,16 @@ fn watch() {
         });
         println!("{out}");
     }
+}
+
+/// Shown when the session history could not be read, so the repeat detector
+/// could not run. It names stuckguard (the fault-injection oracle keys on that)
+/// and asks the agent to self-check rather than silently assuming "no loop".
+fn undetermined_history_message() -> String {
+    "🔁 stuckguard: セッション履歴を読み取れませんでした（状態ファイルが読取り不能または破損）。\
+     ループ検知の窓を復元できないため、念のため通知します。同じ操作を無自覚に繰り返していないか\
+     確認し、行き詰まっていればいったん手を止めてユーザーに状況を報告してください。"
+        .to_string()
 }
 
 /// The escalating advice injected back into the conversation.

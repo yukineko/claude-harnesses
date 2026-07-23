@@ -99,12 +99,27 @@ pub fn record(
 }
 
 /// Compute recurrence/escalation for all recorded violations, using `now`
-/// and the given policy. Fail-soft: an unreadable store yields no events
-/// rather than an error, matching `aggregate::build`'s posture.
+/// and the given policy.
+///
+/// **Fail-CLOSED on an undetermined store.** This feeds
+/// [`print_escalations`], whose empty output is read as "no signature has gone
+/// systemic" — a verdict. So an unreadable ledger, or one holding a line this
+/// build cannot decode, returns an `Err` (a diagnostic on stderr and a non-zero
+/// exit) instead of an empty report. Only a genuinely `Absent` ledger — nothing
+/// was ever recorded — yields the empty report, because that empty is a real
+/// observation.
 pub fn recurrence_report(policy: RecurrencePolicy) -> Result<Vec<SignatureRecurrence>> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
-    let events = store::read_violations(&cwd).unwrap_or_default();
+    let events = match store::scan_violations(&cwd) {
+        store::ViolationScan::Absent => Vec::new(),
+        store::ViolationScan::Events(events) => events,
+        store::ViolationScan::Undetermined => anyhow::bail!(
+            "the violation ledger could not be read, or holds a line this build cannot \
+             decode — the recurrence report would UNDER-count. Refusing to report \
+             'no systemic signatures' from a store that could not be trusted."
+        ),
+    };
     Ok(violation::detect_recurrence(&events, now, policy))
 }
 

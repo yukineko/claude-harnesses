@@ -3,6 +3,7 @@
 
 use crate::config::Config;
 use anyhow::{Context, Result};
+use harness_core::verdict::Determination;
 use std::path::{Path, PathBuf};
 
 pub struct Paths {
@@ -51,9 +52,34 @@ pub fn advance_baseline(paths: &Paths, head: &str) -> Result<()> {
     Ok(())
 }
 
-/// Whether a sentinel is currently raised (pending human review).
-pub fn sentinel_pending(paths: &Paths) -> bool {
-    paths.sentinel.exists()
+/// Whether a sentinel is currently raised (pending human review) — as three
+/// answers, not two.
+///
+/// `Path::exists()` cannot express the third one: it maps *every* failure of the
+/// underlying `stat` — an unsearchable parent directory, EIO, a dangling
+/// symlink, EACCES — to `false`, i.e. to "no human review is pending". That is
+/// the permissive answer, and it is the one that lets [`advance_baseline`] retire
+/// drift no human ever reviewed (observed in
+/// `crates/specguard/tests/faultinject_sentinel.rs`).
+///
+/// So this returns a [`Determination<bool>`]:
+///
+/// * `Known(true)`  — the sentinel file is there; a review is pending.
+/// * `Known(false)` — `NotFound` specifically: we looked, and there is none.
+///   This is the only observation that authorises advancing the baseline.
+/// * `Undetermined` — the sentinel's presence could not be observed at all.
+///   A caller must hold (never advance, never report "nothing pending").
+pub fn sentinel_pending(paths: &Paths) -> Determination<bool> {
+    match std::fs::symlink_metadata(&paths.sentinel) {
+        Ok(_) => Determination::Known(true),
+        // The one error that is a real observation: we reached the parent
+        // directory and the entry is genuinely absent.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Determination::Known(false),
+        Err(e) => Determination::undetermined(format!(
+            "cannot tell whether the sentinel {} exists: {e}",
+            paths.sentinel.display()
+        )),
+    }
 }
 
 /// Sentinel marker for "current_head() could not be resolved at raise time"

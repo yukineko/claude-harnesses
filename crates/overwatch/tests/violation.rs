@@ -92,7 +92,7 @@ fn violations_persist_and_round_trip_through_store() {
     }
     fs::write(&violations_path, contents).unwrap();
 
-    // Read back (mirrors store::read_violations).
+    // Read back (mirrors store::scan_violations).
     let text = fs::read_to_string(&violations_path).unwrap();
     let loaded: Vec<ViolationEvent> = text
         .lines()

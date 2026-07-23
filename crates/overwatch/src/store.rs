@@ -227,33 +227,11 @@ pub fn append_violation(cwd: &Path, event: &ViolationEvent) -> Result<()> {
     Ok(())
 }
 
-/// Read all gate-violation events from violations.jsonl. Returns an empty
-/// vec if the file doesn't exist or is empty (fail-soft, same contract as
-/// `read_events`).
-pub fn read_violations(cwd: &Path) -> Result<Vec<ViolationEvent>> {
-    let path = violations_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => {
-            let mut events = Vec::new();
-            for line in txt.lines() {
-                if !line.is_empty() {
-                    if let Ok(event) = serde_json::from_str::<ViolationEvent>(line) {
-                        events.push(event);
-                    }
-                }
-            }
-            Ok(events)
-        }
-        Err(_) => Ok(Vec::new()),
-    }
-}
-
-/// Three-valued result of reading the violation registry for a decision that
-/// must FAIL CLOSED on an undetermined store (the canary health gate). Unlike
-/// [`read_violations`] — which is fail-soft by contract for display/observational
-/// callers (any read/parse trouble collapses to an empty vec) — this scan keeps
-/// "genuinely no violations yet" DISTINCT from "cannot be trusted", so a
-/// fleet-defense caller can hold instead of reading a broken store as clean.
+/// Three-valued result of reading the violation registry: the ONLY sanctioned
+/// way to read it. It keeps "genuinely no violations yet" DISTINCT from "cannot
+/// be trusted", so no caller can read a broken store as clean. It fully
+/// replaced the retired two-valued reader: there is no fail-open `Result`
+/// variant left for a caller to reach for.
 #[derive(Debug)]
 pub enum ViolationScan {
     /// The registry file does not exist: no violation has ever been recorded
@@ -274,12 +252,39 @@ pub enum ViolationScan {
     Events(Vec<ViolationEvent>),
 }
 
+impl ViolationScan {
+    /// Fail-closed extractor for callers that only care about the clean and
+    /// absent cases and want an ERROR on the untrustworthy one: `Events` yields
+    /// its list, `Absent` yields an empty vec (a store that was never written
+    /// genuinely holds zero violations), and `Undetermined` is an `Err`.
+    ///
+    /// This is the exact, fail-closed stand-in the tests use in place of the
+    /// retired two-valued reader, which returned an empty vec for BOTH absent
+    /// and unreadable/corrupt — collapsing "nothing recorded" into "could not
+    /// read". Here the absent case is preserved but the untrustworthy case can
+    /// no longer masquerade as empty; the caller must handle the `Err`
+    /// (read-back assertions `.expect()` it, so a corrupt store fails loudly
+    /// instead of silently reading as empty). Production gating code should
+    /// `match` all three arms directly and decide what `Undetermined` means at
+    /// its own call site rather than routing through this helper.
+    pub fn events_or_empty(self) -> Result<Vec<ViolationEvent>> {
+        match self {
+            ViolationScan::Events(events) => Ok(events),
+            ViolationScan::Absent => Ok(Vec::new()),
+            ViolationScan::Undetermined => {
+                anyhow::bail!("violation store is Undetermined — it must not be read as empty")
+            }
+        }
+    }
+}
+
 /// Strictly scan the violation registry, distinguishing "absent" (legit empty)
 /// from "undetermined" (unreadable / partially-unparseable → untrustworthy)
-/// from a clean, fully-parsed event list. This is the fail-CLOSED counterpart
-/// to [`read_violations`]: use it only where an undetermined store must block
-/// (the canary health gate), so a broken/corrupt store is never silently read
-/// as "zero violations → proceed". A single non-empty line that fails to parse
+/// from a clean, fully-parsed event list. This is the ONLY sanctioned reader
+/// of the violation registry; each caller decides
+/// at its own call site what `Undetermined` means there (block, refuse, exit
+/// non-zero, or omit-and-announce) so a broken/corrupt store is never silently
+/// read as "zero violations → proceed". A single non-empty line that fails to parse
 /// makes the WHOLE scan `Undetermined` — a schema-drifted line may be a real
 /// violation we can no longer see, so the count is untrustworthy.
 pub fn scan_violations(cwd: &Path) -> ViolationScan {
@@ -338,7 +343,7 @@ pub fn append_rollback(cwd: &Path, event: &RollbackEvent) -> Result<()> {
 
 /// Read all canary rollback events from rollbacks.jsonl. Returns an empty vec
 /// if the file doesn't exist or is empty (fail-soft, same contract as
-/// `read_events` / `read_violations`).
+/// `read_events`).
 pub fn read_rollbacks(cwd: &Path) -> Result<Vec<RollbackEvent>> {
     let path = rollbacks_path(cwd)?;
     match std::fs::read_to_string(&path) {

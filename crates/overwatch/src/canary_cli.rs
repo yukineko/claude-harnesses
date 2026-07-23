@@ -212,9 +212,10 @@ fn gate_from_registry(
     let now = now_override.unwrap_or_else(store::now);
     // Fail CLOSED on an undetermined store. `scan_violations` keeps "absent
     // registry" (a legitimately-empty history — the normal first-deploy case)
-    // distinct from "unreadable / schema-drifted" (untrustworthy count). The old
-    // `read_violations(..).unwrap_or_default()` collapsed BOTH — plus any
-    // per-line parse failure — into an empty vec, so an unreadable/corrupt store
+    // distinct from "unreadable / schema-drifted" (untrustworthy count). The
+    // retired two-valued reader (`read_violations`, since deleted) collapsed BOTH
+    // via `.unwrap_or_default()` — plus any per-line parse failure — into an
+    // empty vec, so an unreadable/corrupt store
     // scored `observed=0` and PROCEEDED: the exact cannot-determine → allow
     // fail-open this hardening removes. For a fleet-defense GATE, unknown health
     // must roll back, not sail through.
@@ -373,9 +374,10 @@ mod tests {
     // THE regression test for the fix point: drive `gate_from_registry` (the
     // arm `gate` delegates the registry path to) against a REAL on-disk store
     // that is undetermined (one valid event + one schema-drifted line). It must
-    // advise ROLLBACK. Reverting the match arm to
-    // `read_violations(..).unwrap_or_default()` would silently drop the bad
-    // line, count 1 (< threshold 2) and PROCEED — flipping this assertion. So
+    // advise ROLLBACK. Reverting the match arm to a two-valued
+    // `.unwrap_or_default()` read (as the retired `read_violations` did) would
+    // silently drop the bad line, count 1 (< threshold 2) and PROCEED — flipping
+    // this assertion. So
     // this test, unlike the isolated scan/emit tests, actually pins the wiring.
     #[test]
     fn gate_from_registry_rolls_back_on_undetermined_store() {

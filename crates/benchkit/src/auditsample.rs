@@ -413,7 +413,7 @@ pub fn execute(
 /// Reads the gate-passed population from disk, draws the same deterministic
 /// seeded sample as [`execute`], then — instead of loading a modeled audits
 /// file — reads the *actual* recorded violations via
-/// [`overwatch::store::read_violations`] and derives the misses by
+/// [`overwatch::store::scan_violations`] and derives the misses by
 /// cross-reference ([`derive_misses_from_violations`]). Only the derived
 /// verdicts whose `change_id` is in the sample are routed through the two
 /// feedback paths, exactly as the modeled path does. Returns the process exit
@@ -442,10 +442,21 @@ pub fn execute_from_violations(
     // The REAL audit source: cross-reference the population against the
     // observed violation stream. A gate-passed change that later shows up as a
     // violation is a miss the gates let through.
-    let violations = match overwatch::store::read_violations(cwd) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("benchkit auditsample: reading violation stream: {e:#}");
+    // Fail CLOSED on an undetermined stream: the misses are DERIVED from these
+    // violations, so an unreadable (or partly-undecodable) ledger would be
+    // measured as "the gates missed nothing" and would feed a falsely-favorable
+    // threshold proposal onto the ratify queue. `Absent` is the honest empty
+    // (no violation ever recorded); `Undetermined` exits 2 like any other I/O
+    // failure here.
+    let violations = match overwatch::store::scan_violations(cwd) {
+        overwatch::store::ViolationScan::Events(v) => v,
+        overwatch::store::ViolationScan::Absent => Vec::new(),
+        overwatch::store::ViolationScan::Undetermined => {
+            eprintln!(
+                "benchkit auditsample: the violation stream could not be read, or holds a \
+                 line this build cannot decode — the derived miss rate would UNDER-count. \
+                 Refusing to calibrate from an untrustworthy stream."
+            );
             return 2;
         }
     };
@@ -834,7 +845,9 @@ mod tests {
         overwatch::store::append_violation(cwd.path(), &ev).unwrap();
 
         // Sanity: the store now has the event (proves we read real data).
-        let read_back = overwatch::store::read_violations(cwd.path()).unwrap();
+        let read_back = overwatch::store::scan_violations(cwd.path())
+            .events_or_empty()
+            .unwrap();
         assert_eq!(read_back.len(), 1);
         assert_eq!(read_back[0].task_key, "c001");
 

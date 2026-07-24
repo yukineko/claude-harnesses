@@ -38,7 +38,9 @@ pub struct DiscoveryRecord {
 /// Strategy: ask git for the toplevel (`git -C <cwd> rev-parse
 /// --show-toplevel`), trim it, and canonicalize. Fully fail-soft: if git is
 /// missing, the dir isn't a repo, or any IO/parse error occurs, fall back to
-/// `cwd.canonicalize()` (and finally the raw cwd). NEVER panics.
+/// `cwd.canonicalize()`, and finally to a purely lexical normalization of the
+/// raw cwd (see [`lexical_normalize`]) for paths that don't exist locally at
+/// all. NEVER panics.
 pub fn resolve_repo_root(cwd: &Path) -> PathBuf {
     if let Some(top) = git_toplevel(cwd) {
         if let Ok(canon) = top.canonicalize() {
@@ -46,7 +48,55 @@ pub fn resolve_repo_root(cwd: &Path) -> PathBuf {
         }
         return top;
     }
-    cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf())
+    cwd.canonicalize()
+        .unwrap_or_else(|_| lexical_normalize(cwd))
+}
+
+/// Purely lexical path normalization: resolves `.` and `..` components via
+/// `Path::components()` without touching the filesystem (no `canonicalize`,
+/// no `stat`).
+///
+/// Why this exists: `resolve_repo_root`'s last-resort fallback fires when the
+/// path is NOT a git repo (or git is absent) AND `fs::canonicalize` fails
+/// because nothing exists at that path on THIS machine/worktree — e.g. a
+/// project key was recorded by a different machine/session referencing a path
+/// that isn't present here. Before this function existed, that fallback
+/// returned the raw, unresolved `cwd` verbatim: no `.`/`..` collapsing, no
+/// trailing-slash stripping. So `/foo/bar/`, `/foo/./bar`, and
+/// `/foo/baz/../bar` — three spellings of the SAME logical path — would each
+/// produce a DIFFERENT resolved key, silently fragmenting one project's
+/// tasks/records across multiple stores. Since no filesystem lookup is
+/// possible in this branch (that's exactly why we're here), the only
+/// available fix is lexical: collapse what can be collapsed from the string
+/// alone, so the same logical path collapses to the same key regardless of
+/// which machine/worktree wrote it.
+///
+/// Semantics: `CurDir` (`.`) components are dropped. A `ParentDir` (`..`)
+/// pops the last resolved `Normal` component if one exists; otherwise, for an
+/// absolute path, it is dropped (you can't go above root); for a relative
+/// path with nothing left to pop, the `..` is kept verbatim since it can't be
+/// resolved without a filesystem or a known base directory.
+fn lexical_normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match out.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                Some(Component::RootDir) | Some(Component::Prefix(_)) => {
+                    // Can't go above root; drop the `..`.
+                }
+                _ => {
+                    out.push("..");
+                }
+            },
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// Best-effort `git -C <cwd> rev-parse --show-toplevel`. Returns `None` on any
@@ -506,5 +556,68 @@ mod tests {
         // Should be ~/.compass/<project_key>/discovery.jsonl
         assert!(path.to_string_lossy().contains(".compass"));
         assert!(path.to_string_lossy().ends_with("discovery.jsonl"));
+    }
+
+    // --- lexical_normalize / resolve_repo_root fallback-branch regression tests ---
+    //
+    // These exercise the "path does not exist locally AND is not a git repo"
+    // fallback branch of `resolve_repo_root` (git absent-or-not-a-repo, then
+    // `cwd.canonicalize()` fails because nothing exists at that path on THIS
+    // machine). That's exactly the situation when a project key was written by
+    // a different machine/worktree referencing a path not present here. Before
+    // the fix, this branch returned `cwd.to_path_buf()` completely unresolved,
+    // so trailing slashes / `.`/`..` segments would NOT collapse to the same
+    // key as their canonical sibling representation — silently fragmenting one
+    // project's tasks/records across multiple keys. Segment names below are
+    // randomized/unlikely to exist on any real machine so we actually hit the
+    // "doesn't exist locally" branch rather than a real directory.
+
+    #[test]
+    fn resolve_repo_root_trailing_slash_matches_no_trailing_slash_when_unresolvable() {
+        let base = "/definitely/nonexistent-xyz-q7f3k9z2/foo";
+        let with_slash = PathBuf::from(format!("{base}/"));
+        let without_slash = PathBuf::from(base);
+
+        assert_eq!(
+            resolve_repo_root(&with_slash),
+            resolve_repo_root(&without_slash),
+            "a trailing slash on an unresolvable path must not change the resolved key"
+        );
+    }
+
+    #[test]
+    fn resolve_repo_root_dotdot_traversal_matches_lexically_collapsed_equivalent_when_unresolvable()
+    {
+        let with_dotdot = PathBuf::from("/definitely/nonexistent-xyz-q7f3k9z2/foo/bar/../baz");
+        let collapsed = PathBuf::from("/definitely/nonexistent-xyz-q7f3k9z2/foo/baz");
+
+        assert_eq!(
+            resolve_repo_root(&with_dotdot),
+            resolve_repo_root(&collapsed),
+            "a `..`-traversal path must resolve to the same key as its lexically-collapsed equivalent"
+        );
+    }
+
+    #[test]
+    fn lexical_normalize_collapses_dotdot_and_curdir_without_touching_filesystem() {
+        assert_eq!(
+            lexical_normalize(Path::new(
+                "/definitely/nonexistent-xyz-q7f3k9z2/foo/bar/../baz"
+            )),
+            PathBuf::from("/definitely/nonexistent-xyz-q7f3k9z2/foo/baz")
+        );
+        assert_eq!(
+            lexical_normalize(Path::new("/definitely/nonexistent-xyz-q7f3k9z2/foo/")),
+            PathBuf::from("/definitely/nonexistent-xyz-q7f3k9z2/foo")
+        );
+        assert_eq!(
+            lexical_normalize(Path::new("/a/./b")),
+            PathBuf::from("/a/b")
+        );
+        // Leading `..` past root on an absolute path can't go higher than root; drop it.
+        assert_eq!(lexical_normalize(Path::new("/../a")), PathBuf::from("/a"));
+        // Relative path with nothing to pop keeps the unresolved `..` (can't
+        // resolve without a filesystem or a known base).
+        assert_eq!(lexical_normalize(Path::new("../a")), PathBuf::from("../a"));
     }
 }

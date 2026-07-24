@@ -10,8 +10,11 @@ mod task;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use harness_core::boundary;
 use harness_core::hook::{read_stdin, run_hook, HookInput};
+use harness_core::verdict::Determination;
 use serde_json::json;
+use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "backlog", about = "Cross-project task queue for Claude Code")]
@@ -631,19 +634,39 @@ fn git_remote_origin_url(project: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Bound on how long `gh_probe` waits for `gh` before treating it as absent.
+/// `add_with_weight_and_github_push` calls `gh_probe` from inside the
+/// tasks-file lock's critical section, so an unbounded spawn (`gh` hanging on
+/// a network auth prompt) would hold that lock indefinitely and block every
+/// other session's `backlog add`/`next --claim`. Mirrors `propguard::git`'s
+/// `GIT_TIMEOUT` use of `boundary::run_with_timeout`.
+const GH_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Spawn `gh <argv>` and map it to the injected-runner shape
 /// `github::decide_issue_create` expects: `Some((success, combined_output))`,
-/// or `None` when the binary can't be spawned (gh absent). Never panics — a
-/// spawn failure is the fail-soft "absent" signal. Mirrors condukt::main's
-/// `gh_probe` for the same `gh_status`-style detection pattern.
+/// or `None` when the binary can't be spawned OR doesn't finish within
+/// `GH_TIMEOUT` (gh absent / hung — both are the same fail-soft "absent"
+/// signal to the caller, since either way there is no answer to act on).
+/// Never panics. Mirrors condukt::main's `gh_probe` for the same
+/// `gh_status`-style detection pattern, plus the timeout bound from
+/// `boundary::run_with_timeout` (kills the whole process group on timeout).
 fn gh_probe(argv: &[&str]) -> Option<(bool, String)> {
-    let out = std::process::Command::new("gh").args(argv).output().ok()?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    Some((out.status.success(), combined))
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(argv).stdin(std::process::Stdio::null());
+    match boundary::run_with_timeout(&mut cmd, GH_TIMEOUT) {
+        Determination::Known(out) => {
+            let code = out.code();
+            let stderr = out.stderr().to_string();
+            let stdout = match out.stdout_allowing(&[code]) {
+                Determination::Known(s) => s,
+                Determination::Undetermined(_) => unreachable!(
+                    "stdout_allowing given the command's own exit code always succeeds"
+                ),
+            };
+            Some((code == 0, format!("{stdout}{stderr}")))
+        }
+        Determination::Undetermined(_) => None,
+    }
 }
 
 /// Unix タイムスタンプ (秒) を "YYYY-MM-DD HH:MM UTC" 形式の文字列に変換する。
@@ -672,4 +695,67 @@ fn format_unix_datetime(secs: u64) -> String {
         "{:04}-{:02}-{:02} {:02}:{:02} UTC",
         year, month, day, hh, mm
     )
+}
+
+#[cfg(test)]
+#[allow(clippy::panic)]
+mod gh_probe_tests {
+    use super::*;
+
+    // ── gh-probe-timeout: gh_probe must be timeout-bounded ──────────────────
+    //
+    // Before this fix, `gh_probe` spawned `gh` with no timeout at all. Since
+    // `add_with_weight_and_github_push` calls it from inside the tasks-file
+    // lock's critical section, a hung `gh` (e.g. stuck on an interactive
+    // network-auth prompt) would hold that lock indefinitely and block every
+    // other session's `backlog add`/`next --claim`. Actually reproducing a
+    // hung `gh` binary is too heavy for a unit test, so this checks the two
+    // things done_criteria calls out instead: the timeout bound is set to a
+    // concrete, sane value, and the underlying mechanism `gh_probe` wires
+    // through (`boundary::run_with_timeout`) really does bound a hung
+    // subprocess rather than blocking forever — mirroring
+    // `propguard::git`'s equivalent regression test for the same mechanism.
+
+    #[test]
+    fn gh_timeout_is_a_concrete_bounded_value() {
+        assert!(
+            GH_TIMEOUT > Duration::from_secs(0),
+            "GH_TIMEOUT must be a real bound, not zero/disabled"
+        );
+        assert!(
+            GH_TIMEOUT <= Duration::from_secs(60),
+            "GH_TIMEOUT must stay well under the tasks-file lock's own stale-reap window, \
+             got {GH_TIMEOUT:?}"
+        );
+    }
+
+    #[test]
+    fn hung_subprocess_via_run_with_timeout_returns_promptly_undetermined() {
+        // Exercises the exact mechanism `gh_probe` calls
+        // (`boundary::run_with_timeout`) against a deliberately hanging
+        // command, with a short local timeout override so the test doesn't
+        // have to wait out the production `GH_TIMEOUT` (20s) or depend on a
+        // real slow `gh` binary being available.
+        let marker = format!("backlog-gh-probe-hang-marker-{}", std::process::id());
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", &format!("sh -c 'sleep 30' {marker}")])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        let short_timeout = Duration::from_millis(300);
+
+        let start = std::time::Instant::now();
+        let outcome = boundary::run_with_timeout(&mut cmd, short_timeout);
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(outcome, Determination::Undetermined(_)),
+            "a timed-out invocation must fall back gracefully (Undetermined), matching the \
+             `None` that gh_probe maps it to, not fabricate a Known result: {outcome:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "must return promptly on timeout, took {elapsed:?}"
+        );
+    }
 }

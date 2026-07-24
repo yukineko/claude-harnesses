@@ -76,6 +76,12 @@ enum Command {
         /// autoflow) instead of the human table.
         #[arg(long)]
         json: bool,
+
+        /// Return every project's tasks, not just the cwd-resolved one.
+        /// Reproduces the pre-existing (project-omitted) default. Ignored if
+        /// `--project` is also given (`--project` wins, not a union).
+        #[arg(long)]
+        all: bool,
     },
 
     /// Show the next highest-priority pending task
@@ -316,6 +322,7 @@ fn run(cli: Cli) -> Result<()> {
             project,
             status,
             json: as_json,
+            all,
         } => {
             // A typo'd status used to silently match nothing ("no tasks"),
             // indistinguishable from a genuinely empty queue. Warn loudly so an
@@ -324,10 +331,28 @@ fn run(cli: Cli) -> Result<()> {
             if let Some(w) = task::status_warning(status.as_deref()) {
                 eprintln!("{w}");
             }
+            // Default scope is the cwd-resolved project, not cross-project
+            // (backlog-list-default-scope): an explicit `--project` always
+            // wins; `--all` opts back into the old cross-project default;
+            // otherwise resolve cwd to its repo root the same way
+            // `canonicalize_project` does, so this matches what `add
+            // --project "$PWD"` would have stored.
+            let effective_project = if project.is_some() {
+                project
+            } else if all {
+                None
+            } else {
+                let cwd = std::env::current_dir()?;
+                Some(
+                    harness_core::discovery::resolve_repo_root(&cwd)
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            };
             let tasks = store::list(
                 &tasks_path,
                 tag.as_deref(),
-                project.as_deref(),
+                effective_project.as_deref(),
                 status.as_deref(),
             )?;
 

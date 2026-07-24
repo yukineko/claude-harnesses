@@ -38,6 +38,14 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("wiping the file") {
         return "write-empty-content";
     }
+    // Protected gate/hook/policy path. Deliberately ONE id for the whole class
+    // (Write, Edit/MultiEdit/NotebookEdit, truncating redirect, append
+    // redirect): they are the same recurring failure — an agent reaching for
+    // the file that decides whether the gates run — and splitting them by tool
+    // would fragment exactly the signature overwatch needs to see recur.
+    if reason.contains("protected gate/config path") {
+        return "protected-path";
+    }
 
     // Bash: fork bomb / redirect.
     if reason == "fork bomb pattern detected" {
@@ -67,6 +75,9 @@ pub fn rule_id(reason: &str) -> &'static str {
     }
     if reason.contains("git checkout -- . discards all working-tree changes") {
         return "git-checkout-dash-dot";
+    }
+    if reason.contains("git config core.hooksPath repoints every git hook") {
+        return "git-config-hookspath";
     }
 
     // Bash: truncate/shred/dd/chmod/chown/mkfs/find.
@@ -202,6 +213,33 @@ mod tests {
             (
                 "Write",
                 json!({ "file_path": "src/main.rs", "content": "" }),
+            ),
+            // Protected gate/hook/policy path: Write, Edit, and the redirect
+            // forms all share the ONE "protected-path" rule id (see the
+            // comment on that arm in `rule_id` above). Covering all four
+            // call sites here pins that they actually reach it, not just
+            // that the substring match exists.
+            (
+                "Write",
+                json!({ "file_path": ".githooks/pre-commit", "content": "x" }),
+            ),
+            (
+                "Edit",
+                json!({ "file_path": ".claude/settings.json", "old_string": "a", "new_string": "b" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "echo x > .githooks/pre-commit" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "echo x >> .claude/settings.json" }),
+            ),
+            // git config core.hooksPath: the single-command equivalent of
+            // overwriting every file under `.git/hooks/`.
+            (
+                "Bash",
+                json!({ "command": "git config core.hooksPath .githooks" }),
             ),
             // D4 analysis-budget deny. This case was missing when the budget
             // was introduced, so this test passed while the new deny path

@@ -44,7 +44,12 @@ pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
         }
         "Write" => detect_write(tool_input),
         // Edit / MultiEdit / NotebookEdit are partial edits, not full-file
-        // destruction — always allowed.
+        // destruction, so they are allowed for ordinary files. They are NOT
+        // unconditionally allowed: a one-line edit is all it takes to disarm a
+        // gate (`.claude/settings.json`, `.githooks/pre-commit`, a shell rc),
+        // and "partial" says nothing about blast radius. Classifying the TARGET
+        // is what distinguishes the two.
+        "Edit" | "MultiEdit" | "NotebookEdit" => detect_edit(tool_input),
         _ => Decision::Allow,
     }
 }
@@ -68,11 +73,36 @@ fn extract_path(ti: Option<&Value>) -> Option<String> {
 /// Write is new/overwrite both. We stay conservative and only Deny the clearly
 /// destructive shapes: replacing a (non-config) file with empty content, or
 /// overwriting git internals. Everything else is allowed.
+/// Deny reason for a tool call that would modify a protected gate/hook/policy
+/// path, or `None` when the target is not one.
+///
+/// The wording is shared by every call site (Write, Edit/MultiEdit/
+/// NotebookEdit, truncating redirect, append redirect) so that
+/// [`crate::rule_id`] gives the whole class ONE stable signature.
+fn protected_path_deny(action: &str, path: &str) -> Option<Decision> {
+    if exclude::is_protected_path(path) {
+        Some(Decision::deny(format!(
+            "{action} targets a protected gate/config path ({path}) — it controls which hooks, \
+gates or policies run, so blastguard refuses"
+        )))
+    } else {
+        None
+    }
+}
+
 fn detect_write(ti: Option<&Value>) -> Decision {
     let path = match extract_path(ti) {
         Some(p) => p,
         None => return Decision::Allow,
     };
+    // BEFORE the config-file allowlist, not after: `.claude/**`, `*.toml` and
+    // `settings.local.json` are all matched by `is_config_file`, so the
+    // exemption used to swallow exactly the paths that decide whether the gates
+    // run at all. "It is a config file" is the reason to look harder here, not
+    // the reason to stop looking.
+    if let Some(deny) = protected_path_deny("Write", &path) {
+        return deny;
+    }
     if exclude::is_config_file(&path) {
         return Decision::Allow;
     }
@@ -89,6 +119,22 @@ fn detect_write(ti: Option<&Value>) -> Decision {
         return Decision::deny(format!(
             "Write would replace {path} with empty content, wiping the file"
         ));
+    }
+    Decision::Allow
+}
+
+/// Edit / MultiEdit / NotebookEdit: a partial edit of an ordinary file is
+/// allowed, but a partial edit of a protected gate/hook/policy path is exactly
+/// how a guard gets switched off, so the target is classified rather than
+/// assumed harmless. `NotebookEdit` addresses its target via `notebook_path`,
+/// which `extract_path` already covers.
+fn detect_edit(ti: Option<&Value>) -> Decision {
+    let path = match extract_path(ti) {
+        Some(p) => p,
+        None => return Decision::Allow,
+    };
+    if let Some(deny) = protected_path_deny("Edit", &path) {
+        return deny;
     }
     Decision::Allow
 }
@@ -411,10 +457,26 @@ fn detect_bash(cmd: &str, depth: usize) -> Decision {
     // (`> /dev/null`) must not blind the gate to a later truncating redirect in
     // a subsequent `;`/`&&`/`|` segment.
     for target in redirect_targets(cmd) {
+        if let Some(deny) = protected_path_deny("redirect", &target) {
+            return deny;
+        }
         if !redirect_target_is_safe(&target) {
             return Decision::deny(format!(
                 "'> {target}' truncates and overwrites an existing file"
             ));
+        }
+    }
+
+    // 2b. APPEND redirects (`>>`, `&>>`). Appending does not truncate, so it is
+    //     ordinarily allowed and deliberately skipped by `redirect_targets` —
+    //     but "does not truncate" is a statement about the file's old bytes,
+    //     not about blast radius. One appended line is enough to add a hook
+    //     entry to a settings file or a command to `.githooks/pre-commit`, so a
+    //     PROTECTED target is denied regardless of the append/truncate
+    //     distinction. Ordinary appends (`echo x >> /tmp/log`) stay allowed.
+    for target in append_redirect_targets(cmd) {
+        if let Some(deny) = protected_path_deny("append redirect", &target) {
+            return deny;
         }
     }
 
@@ -432,6 +494,12 @@ fn detect_bash(cmd: &str, depth: usize) -> Decision {
 
 fn redirect_target_is_safe(target: &str) -> bool {
     let t = exclude::normalize(target);
+    // A protected path is never "safe" to truncate, even though most of them
+    // (`.claude/settings.json`, `deny.toml`, …) also match `is_config_file`.
+    // Checked first so the config-file exemption cannot re-open the hole.
+    if exclude::is_protected_path(&t) {
+        return false;
+    }
     matches!(t.as_str(), "/dev/null" | "/dev/stdout" | "/dev/stderr") || exclude::is_config_file(&t)
 }
 
@@ -644,6 +712,64 @@ fn redirect_targets(seg: &str) -> Vec<String> {
                 targets.push(tok.to_string());
             }
             i = j;
+            continue;
+        }
+        i += 1;
+    }
+    targets
+}
+
+/// Every APPEND redirect target on the line (`>> f`, `&>> f`), in order,
+/// outside quotes. The exact complement of [`redirect_targets`], which skips
+/// these because appending does not truncate.
+///
+/// Callers must NOT treat a hit as destructive on its own — an append is
+/// non-truncating and stays allowed for ordinary targets. It exists so that a
+/// PROTECTED target (a settings/hook/policy file) is still reachable by the
+/// gate: smuggling one extra line into `.githooks/pre-commit` needs no
+/// truncation at all.
+fn append_redirect_targets(seg: &str) -> Vec<String> {
+    let bytes = seg.as_bytes();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut targets = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'\'' && !in_d {
+            in_s = !in_s;
+            i += 1;
+            continue;
+        }
+        if c == b'"' && !in_s {
+            in_d = !in_d;
+            i += 1;
+            continue;
+        }
+        if c == b'>' && !in_s && !in_d && bytes.get(i + 1) == Some(&b'>') {
+            // Same target-token scan as `redirect_targets`: ASCII-only
+            // delimiters, so `seg[start..j]` never splits a multi-byte char.
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            let start = j;
+            while j < bytes.len() {
+                let cj = bytes[j];
+                if cj.is_ascii_whitespace()
+                    || cj == b';'
+                    || cj == b'|'
+                    || cj == b'&'
+                    || cj == b'>'
+                    || cj == b')'
+                {
+                    break;
+                }
+                j += 1;
+            }
+            if start < j {
+                targets.push(seg[start..j].to_string());
+            }
+            i = j.max(i + 2);
             continue;
         }
         i += 1;
@@ -1578,6 +1704,15 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
         "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], depth),
         "rm" => analyze_rm(rest),
         "git" => analyze_git(rest),
+        // Round 2 (adversarial verifier): every rule in this dispatch was about
+        // DELETING or TRUNCATING, so the ordinary ways of REPLACING a file's
+        // contents — copying/moving/linking something over it, or rewriting it
+        // in place — had no arm at all and fell through to `_ => Allow`. That
+        // left `cp evil.json .claude/settings.json` as a one-command bypass of
+        // the whole protected-path rule. Only the DESTINATION matters here:
+        // reading a protected file is harmless, writing one is the hazard.
+        "cp" | "mv" | "install" | "ln" => analyze_copy_move(cmd, rest),
+        "sed" => analyze_sed(rest),
         "find" => analyze_find(rest, depth),
         "xargs" => analyze_xargs(rest, depth),
         "truncate" => Decision::deny("truncate can shrink a file to zero bytes"),
@@ -1695,6 +1830,158 @@ fn analyze_rm(rest: &[&str]) -> Decision {
     }
 }
 
+/// Positional operands of a simple command: tokens that are neither the
+/// command's own flags, nor shell redirection punctuation, nor the separate-form
+/// VALUE of one of `value_flags`.
+///
+/// The redirect skipping mirrors [`has_operand`] exactly, so "what counts as a
+/// target" stays one definition. `value_flags` must list ONLY options that
+/// really take a separate value: a wrong entry swallows the following token, and
+/// if that token was the destination the check silently sees nothing — the
+/// fail-open shape this whole class of rules exists to prevent.
+fn positional_operands<'a>(rest: &[&'a str], value_flags: &[&str]) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        if t.is_empty() {
+            i += 1;
+        } else if is_bare_redirect_op(t) {
+            // Operator plus the target token it owns.
+            i += 2;
+        } else if is_redirect_token(t) {
+            i += 1;
+        } else if value_flags.contains(&t) {
+            i += 2;
+        } else if t.starts_with('-') && t.len() > 1 {
+            i += 1;
+        } else {
+            out.push(t);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Separate-form value options of `cp`/`mv`/`install`/`ln`. Deliberately short:
+/// only options that genuinely consume the next token (see
+/// [`positional_operands`]). `-Z`/`--context` are omitted because their value is
+/// optional and `=`-attached — listing them would eat an operand.
+const COPY_VALUE_FLAGS: &[&str] = &[
+    "-t",
+    "--target-directory",
+    "-S",
+    "--suffix",
+    "-m",
+    "--mode",
+    "-o",
+    "--owner",
+    "-g",
+    "--group",
+    "--strip-program",
+];
+
+/// The `-t DIR` / `--target-directory=DIR` destination directory, if given.
+fn target_directory(rest: &[&str]) -> Option<String> {
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        if t == "-t" || t == "--target-directory" {
+            return rest.get(i + 1).map(|v| (*v).to_string());
+        }
+        if let Some(v) = t.strip_prefix("--target-directory=") {
+            return Some(v.to_string());
+        }
+        if let Some(v) = t.strip_prefix("-t") {
+            if !v.is_empty() && !v.starts_with('-') {
+                return Some(v.to_string());
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// `cp` / `mv` / `install` / `ln`: the DESTINATION is what gets overwritten.
+///
+/// Sources are ignored on purpose — copying a protected file somewhere else is
+/// a read, and denying it would be a false positive on ordinary backups. Only
+/// where the bytes LAND matters.
+///
+/// Three destination shapes are handled, because a rule that only understood
+/// the two-operand form would leave the other two as free bypasses:
+///   * `cp SRC DEST` — the last operand is the destination;
+///   * `cp -t DIR SRC…` — every operand is a source and the file created is
+///     `DIR/<basename SRC>`;
+///   * `cp SRC… DIR/` — same, with the directory written last.
+fn analyze_copy_move(cmd: &str, rest: &[&str]) -> Decision {
+    let action = format!("{cmd} destination");
+    let operands = positional_operands(rest, COPY_VALUE_FLAGS);
+
+    // Directory-destination forms: resolve the file each source would create.
+    let (dir, sources): (Option<String>, &[&str]) = match target_directory(rest) {
+        Some(d) => (Some(d), &operands[..]),
+        None => match operands.split_last() {
+            Some((last, init)) if last.ends_with('/') && !init.is_empty() => {
+                (Some((*last).to_string()), init)
+            }
+            _ => (None, &[]),
+        },
+    };
+    if let Some(dir) = dir {
+        if let Some(deny) = protected_path_deny(&action, &dir) {
+            return deny;
+        }
+        let base = dir.trim_end_matches('/');
+        for src in sources {
+            let landed = format!("{base}/{}", basename(src));
+            if let Some(deny) = protected_path_deny(&action, &landed) {
+                return deny;
+            }
+        }
+        return Decision::Allow;
+    }
+
+    match operands.last() {
+        Some(dest) => protected_path_deny(&action, dest).unwrap_or(Decision::Allow),
+        // One operand or none: nothing is being written over (`cp a` is an
+        // error, `mv -t DIR` with no source does nothing).
+        None => Decision::Allow,
+    }
+}
+
+/// Separate-form value options of `sed`. `-e`/`-f` supply the SCRIPT, so their
+/// value is not a file sed writes to.
+const SED_VALUE_FLAGS: &[&str] = &["-e", "--expression", "-f", "--file", "-l", "--line-length"];
+
+/// `sed -i` rewrites its operands IN PLACE — a full-content overwrite of an
+/// existing file, the same hazard as `>` or `tee`. Without `-i`, sed only reads
+/// and writes to stdout, so it stays Allow.
+///
+/// EVERY operand is checked, including the leading script in the
+/// `sed -i SCRIPT FILE` form. Checking the script too can only add candidates
+/// that fail the protected match anyway (`s/a/b/` is not a path), whereas
+/// getting the script/file split wrong in the other direction — BSD's
+/// `sed -i '' SCRIPT FILE` takes a separate suffix argument, GNU's `-i.bak`
+/// attaches it — would drop a real target and fail open.
+fn analyze_sed(rest: &[&str]) -> Decision {
+    let in_place = rest.iter().any(|t| {
+        *t == "--in-place"
+            || t.starts_with("--in-place=")
+            // `-i`, `-i.bak` (attached suffix) and clusters like `-ni`.
+            || (is_short_flag(t) && t.contains('i'))
+    });
+    if !in_place {
+        return Decision::Allow;
+    }
+    for operand in positional_operands(rest, SED_VALUE_FLAGS) {
+        if let Some(deny) = protected_path_deny("sed -i target", operand) {
+            return deny;
+        }
+    }
+    Decision::Allow
+}
+
 /// Index in `rest` of the git subcommand token, skipping git's global options
 /// AND the separate-token value of a value-taking global option. Without this,
 /// a naive "first non-dash token" scan lands on the VALUE of a value-taking
@@ -1741,11 +2028,80 @@ fn git_subcommand_index(rest: &[&str]) -> Option<usize> {
     None
 }
 
+/// The shared reason for every way of repointing `core.hooksPath`. One wording
+/// so [`crate::rule_id`] gives the whole class one signature.
+const HOOKSPATH_REASON: &str =
+    "git config core.hooksPath repoints every git hook at once, disabling the repo's hook gates";
+
+/// Config assignments carried by git's GLOBAL options, in every spelling git
+/// accepts: `-c k=v`, `-ck=v` (glued), `--config-env k=v`, `--config-env=k=v`.
+///
+/// `git_subcommand_index` already knew these options exist — it skips past them
+/// to find the subcommand — but nothing looked at the value it skipped. That is
+/// how `git -c core.hooksPath=/tmp/evil status` reached Allow while
+/// `git config core.hooksPath …` was denied: the same setting, applied for the
+/// duration of one command instead of written to a file, through a code path
+/// whose only job was to ignore it.
+fn git_global_config_assignments<'a>(globals: &[&'a str]) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < globals.len() {
+        let t = globals[i];
+        if t == "-c" || t == "--config-env" {
+            if let Some(v) = globals.get(i + 1) {
+                out.push(*v);
+            }
+            i += 2;
+            continue;
+        }
+        if let Some(v) = t.strip_prefix("--config-env=") {
+            out.push(v);
+        } else if let Some(v) = t.strip_prefix("-c") {
+            // Glued short form `-ccore.hooksPath=x`. `-C`/`--config-env=` are
+            // not reachable here (`strip_prefix` is case-sensitive and the
+            // long form was handled above).
+            if !v.is_empty() {
+                out.push(v);
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// True when any global `-c`/`--config-env` assignment sets `core.hooksPath`.
+/// Git config keys are case-insensitive, so the key is folded before comparing.
+fn sets_hookspath_inline(globals: &[&str]) -> bool {
+    git_global_config_assignments(globals).iter().any(|a| {
+        a.split('=')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .eq_ignore_ascii_case("core.hookspath")
+    })
+}
+
 fn analyze_git(rest: &[&str]) -> Decision {
     let idx = match git_subcommand_index(rest) {
         Some(i) => i,
-        None => return Decision::Allow,
+        // No subcommand: still inspect the globals. A bare
+        // `git -c core.hooksPath=…` does nothing on its own, but "there is no
+        // subcommand to classify" is not a reason to stop looking at what the
+        // line does set.
+        None => {
+            return if sets_hookspath_inline(rest) {
+                Decision::deny(HOOKSPATH_REASON)
+            } else {
+                Decision::Allow
+            }
+        }
     };
+    // Global options sit BEFORE the subcommand; `-c` there applies the setting
+    // to whatever subcommand follows, so it is checked for every git command,
+    // not just `git config`.
+    if sets_hookspath_inline(&rest[..idx]) {
+        return Decision::deny(HOOKSPATH_REASON);
+    }
     let sub = normalized_command(rest[idx]);
     match sub.as_str() {
         "clean" => {
@@ -1788,6 +2144,34 @@ fn analyze_git(rest: &[&str]) -> Decision {
                 Decision::Allow
             } else {
                 Decision::deny("git restore discards working-tree changes")
+            }
+        }
+        "config" => {
+            // `git config core.hooksPath <dir>` repoints EVERY git hook at once
+            // — it is the single-command equivalent of overwriting every file
+            // under `.git/hooks/`, and it leaves no trace in the working tree.
+            // `--unset`/`--unset-all` is the same hazard in the other
+            // direction (it disarms the repo's opt-in `.githooks` tree), so it
+            // is denied too.
+            //
+            // Read-only forms are allowed: they change nothing. Anything that
+            // mentions the key WITHOUT one of those flags is treated as a write
+            // (the bare one-argument read included) — an unrecognised shape of
+            // a hook-repointing command resolves to the restrictive side.
+            let mentions_hookspath = rest[idx + 1..].iter().any(|t| {
+                let t = normalized_command(t).to_ascii_lowercase();
+                t == "core.hookspath" || t.starts_with("core.hookspath=")
+            });
+            let read_only = rest[idx + 1..].iter().any(|t| {
+                matches!(
+                    *t,
+                    "--get" | "--get-all" | "--get-regexp" | "--get-urlmatch" | "--list" | "-l"
+                )
+            });
+            if mentions_hookspath && !read_only {
+                Decision::deny(HOOKSPATH_REASON)
+            } else {
+                Decision::Allow
             }
         }
         "stash" => {
@@ -2626,12 +3010,17 @@ mod tests {
             ),
             Decision::Allow
         );
-        assert_eq!(
+        // UPDATED (was Decision::Allow): `.claude/settings.json` controls which
+        // hooks/gates run at all, so wiping it must Deny, not fall through the
+        // config-file exemption. See `write_to_protected_config_paths_is_denied`
+        // for the broader set of security-relevant paths this covers.
+        assert!(
             detect(
                 "Write",
                 Some(&json!({ "file_path": ".claude/settings.json", "content": "" }))
-            ),
-            Decision::Allow
+            )
+            .is_deny(),
+            "emptying .claude/settings.json must be denied, not exempted as a config file"
         );
     }
 
@@ -3473,5 +3862,278 @@ mod tests {
         ] {
             assert_eq!(bash(c), Decision::Allow, "expected allow: {c}");
         }
+    }
+
+    // =========================================================================
+    // Independent test-author coverage (blastguard-protected fix).
+    //
+    // Confirmed-open bugs under test, all currently RED because the fix has
+    // not landed yet:
+    //   1. detect_write's is_config_file(..) => Allow short-circuit exempts
+    //      `.claude/**`, `settings.local.json`, and `*.toml` wholesale.
+    //   2. `detect`'s wildcard arm sends every Edit/MultiEdit/NotebookEdit to
+    //      Allow regardless of target path.
+    //   3. `.githooks/` is not `is_git_internal`, and `git config
+    //      core.hooksPath` is unclassified, so hook-path hijacking is Allow.
+    // =========================================================================
+
+    #[test]
+    fn write_to_protected_config_paths_is_denied() {
+        for path in [
+            "/Users/yuki/.claude/settings.json", // ~/.claude/settings.json
+            ".claude/settings.local.json",
+            "nested/dir/.claude/settings.local.json",
+            ".claude/hooks.json", // hook wiring under .claude
+            "deny.toml",          // repo-root security policy toml
+        ] {
+            assert!(
+                detect(
+                    "Write",
+                    Some(&json!({ "file_path": path, "content": "malicious content" }))
+                )
+                .is_deny(),
+                "Write to {path} must be denied, not Allowed as a config file"
+            );
+        }
+    }
+
+    #[test]
+    fn write_to_githooks_pre_commit_is_denied() {
+        // `.githooks/` is not `.git/` (is_git_internal only matches paths
+        // containing a literal `.git` directory), so this currently falls all
+        // the way through detect_write's ordinary-file path to Allow.
+        assert!(detect(
+            "Write",
+            Some(&json!({ "file_path": ".githooks/pre-commit", "content": "#!/bin/sh\nexit 0\n" }))
+        )
+        .is_deny());
+    }
+
+    #[test]
+    fn edit_multiedit_notebookedit_to_protected_paths_is_denied() {
+        // Edit/MultiEdit/NotebookEdit currently ALWAYS Allow (detect's wildcard
+        // arm), independent of path. These must Deny once the fix classifies
+        // them instead of blanket-allowing every partial edit.
+        let protected_paths = [
+            ".claude/settings.json",
+            "/Users/yuki/.claude/settings.json",
+            "~/.zshrc", // shell rc file: a startup-persistence vector
+            ".githooks/pre-commit",
+        ];
+        for path in protected_paths {
+            assert!(
+                detect(
+                    "Edit",
+                    Some(&json!({ "file_path": path, "old_string": "a", "new_string": "b" }))
+                )
+                .is_deny(),
+                "Edit to {path} must be denied"
+            );
+            assert!(
+                detect(
+                    "MultiEdit",
+                    Some(&json!({
+                        "file_path": path,
+                        "edits": [{ "old_string": "a", "new_string": "b" }]
+                    }))
+                )
+                .is_deny(),
+                "MultiEdit to {path} must be denied"
+            );
+        }
+        // NotebookEdit addresses its target via `notebook_path`, not `file_path`.
+        assert!(
+            detect(
+                "NotebookEdit",
+                Some(&json!({ "notebook_path": ".claude/settings.json", "new_source": "x" }))
+            )
+            .is_deny(),
+            "NotebookEdit to settings.json must be denied"
+        );
+    }
+
+    #[test]
+    fn append_redirect_targeting_protected_path_is_denied() {
+        // Append (`>>`) does not truncate, so it is ordinarily Allow (see
+        // `append_and_fd_redirects_are_not_truncation` above) — but appending
+        // into a security/hook/settings file is still a way to smuggle in a
+        // malicious hook entry or setting, so a protected TARGET must override
+        // the append-is-safe default and Deny.
+        assert!(bash("echo malicious >> ~/.claude/settings.json").is_deny());
+        assert!(bash("echo malicious >> .githooks/pre-commit").is_deny());
+        assert!(bash("echo malicious >> deny.toml").is_deny());
+    }
+
+    #[test]
+    fn git_config_hookspath_rewrite_is_denied() {
+        // Repointing core.hooksPath is equivalent to swapping out every git
+        // hook wholesale; it is currently unclassified Bash and falls through
+        // to Allow.
+        assert!(bash("git config core.hooksPath .githooks").is_deny());
+        assert!(bash("git config --local core.hooksPath .githooks").is_deny());
+    }
+
+    // ---- Negative / non-regression: the fix must not deny everything ----
+
+    #[test]
+    fn ordinary_source_edit_stays_allowed() {
+        assert_eq!(
+            detect(
+                "Edit",
+                Some(
+                    &json!({ "file_path": "crates/foo/src/lib.rs", "old_string": "a", "new_string": "b" })
+                )
+            ),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn ordinary_crate_manifest_write_stays_allowed() {
+        // Decision (documented here for the implementer, not enforced by this
+        // test author): an ordinary crate's `Cargo.toml` is a routine package
+        // manifest, not a security/guard config, unlike `deny.toml` (repo-root
+        // security policy) or a gate crate's own config toml. The fix should
+        // narrow is_config_file's blanket `*.toml` exemption to name the
+        // security-relevant tomls specifically, rather than removing the
+        // extension-wide allowance outright — otherwise ordinary `cargo add` /
+        // dependency-bump edits would start prompting Deny/Ask on every touch
+        // of Cargo.toml, which is not the bug being fixed here.
+        assert_eq!(
+            detect(
+                "Write",
+                Some(&json!({
+                    "file_path": "crates/blastguard/Cargo.toml",
+                    "content": "[package]\nname = \"x\"\n"
+                }))
+            ),
+            Decision::Allow
+        );
+    }
+
+    // =========================================================================
+    // Round 2: adversarially-found bypasses that still reach protected files.
+    // All four are currently RED — the code has no defense against any of
+    // them yet.
+    // =========================================================================
+
+    #[test]
+    fn case_variant_protected_paths_are_denied() {
+        // macOS's filesystem is case-INsensitive but `globset` matching is
+        // case-sensitive, so these are the SAME file on disk as the lower-case
+        // forms already covered elsewhere, yet is_protected_path/is_config_file
+        // do no case-folding anywhere (no `to_lowercase`/`nocase` in exclude.rs).
+        //
+        // Collects every failing case (instead of asserting inline per-item)
+        // so a RED run reports the FULL set of still-open variants, not just
+        // whichever one happens to be first in the list.
+        let cases = [
+            ".CLAUDE/Settings.json",
+            ".Claude/settings.JSON",
+            ".GITHOOKS/pre-commit",
+            ".githooks/PRE-COMMIT",
+            "DENY.TOML",
+            "Deny.Toml",
+            ".ZSHRC",
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|path| {
+                !detect(
+                    "Write",
+                    Some(&json!({ "file_path": path, "content": "malicious" })),
+                )
+                .is_deny()
+            })
+            .collect();
+        assert!(
+            failing.is_empty(),
+            "case-variant paths not denied (same file on a case-insensitive fs): {failing:?}"
+        );
+    }
+
+    #[test]
+    fn double_slash_protected_paths_are_denied() {
+        // POSIX collapses `//` to `/`, but `normalize()` never does — it only
+        // unescapes backslashes and strips a leading `./`. `.claude//settings.json`
+        // and `.claude/settings.json` name the same file.
+        let cases = [
+            ".claude//settings.json",
+            "nested//.claude/settings.local.json",
+            ".githooks//pre-commit",
+            "//.githooks/pre-commit",
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|path| {
+                !detect(
+                    "Write",
+                    Some(&json!({ "file_path": path, "content": "malicious" })),
+                )
+                .is_deny()
+            })
+            .collect();
+        assert!(
+            failing.is_empty(),
+            "double-slash paths not denied (same file once // collapses): {failing:?}"
+        );
+    }
+
+    #[test]
+    fn cp_mv_sed_onto_protected_paths_are_denied() {
+        // `detect.rs`'s command dispatch has arms for `rm`/`git`/`truncate`/
+        // `shred`/`dd`/`tee`/… but none for `cp`, `mv`, or `sed -i` — all three
+        // fully overwrite their destination and fall through to the default
+        // `_ => Decision::Allow` arm regardless of target.
+        let cases = [
+            "cp evil.json .claude/settings.json",
+            "cp -f evil.json .claude/settings.json",
+            "install evil.json .claude/settings.json",
+            "mv evil.json .claude/settings.json",
+            "mv evil.sh .githooks/pre-commit",
+            "sed -i s/a/b/ .claude/settings.json",
+            "sed --in-place s/a/b/ .claude/settings.json",
+            "sed -i.bak s/a/b/ .githooks/pre-commit",
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|cmd| !bash(cmd).is_deny())
+            .collect();
+        assert!(
+            failing.is_empty(),
+            "writes onto a protected path via cp/mv/sed not denied: {failing:?}"
+        );
+    }
+
+    #[test]
+    fn git_dash_c_inline_hookspath_is_denied() {
+        // Only the `git config` SUBCOMMAND is inspected for `core.hooksPath`
+        // (analyze_git's "config" arm). `git -c core.hooksPath=... <anything>`
+        // sets the same config for the duration of the command via the GLOBAL
+        // `-c` option and is never routed through that arm — git_subcommand_index
+        // deliberately skips `-c` and its value to find the *subcommand*, but
+        // nothing separately inspects the value it skipped past.
+        let cases = [
+            "git -c core.hooksPath=/tmp/evil status",
+            "git -c core.hooksPath=/tmp/evil push",
+            "git -ccore.hooksPath=/tmp/evil status", // glued short-option form
+            "git -c Core.HooksPath=/tmp/evil status", // git config keys are case-insensitive
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|cmd| !bash(cmd).is_deny())
+            .collect();
+        assert!(failing.is_empty(), "not denied: {failing:?}");
+    }
+
+    // ---- Negative / non-regression: ordinary uses of these same commands ----
+
+    #[test]
+    fn ordinary_cp_mv_sed_and_git_dash_c_stay_allowed() {
+        assert_eq!(bash("cp a.txt b.txt"), Decision::Allow);
+        assert_eq!(bash("mv a.txt b.txt"), Decision::Allow);
+        assert_eq!(bash("sed -i s/a/b/ src/main.rs"), Decision::Allow);
+        assert_eq!(bash("git -c user.name=x status"), Decision::Allow);
+        assert_eq!(bash("git -c user.email=a@b.com status"), Decision::Allow);
     }
 }

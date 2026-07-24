@@ -27,9 +27,18 @@
 #                                                 committed prompt asset
 #   fail-open-guard    check-fail-open.py         a new fail-open swallow on the
 #                                                 gate surface
-#   doc-claims         check-doc-claims.py        a `path:line` citation in the
-#                                                 norm documents that no longer
+#   doc-claims         check-doc-claims.py        a `path:line` citation in
+#                                                 docs/**/*.md that no longer
 #                                                 describes reality
+#   claudemd-claims    check-claudemd-claims.py   a `path:line` citation in
+#                                                 CLAUDE.md itself that no
+#                                                 longer describes reality —
+#                                                 the dedicated gate for the
+#                                                 norm/instruction file, split
+#                                                 out of doc-claims so an
+#                                                 instruction file is not
+#                                                 folded into documentation
+#                                                 verification. No bypass flag.
 #   test-weakening     check-test-weakening.py    a change that weakens the test
 #                                                 surface instead of the code
 #   version-lockstep   check-plugin-versions.py   the three version files of a
@@ -131,6 +140,7 @@ run() {
 run check-prompt-injection.py injectguard
 run check-fail-open.py        fail-open-guard
 run check-doc-claims.py       doc-claims
+run check-claudemd-claims.py  claudemd-claims
 run check-test-weakening.py   test-weakening
 run check-plugin-versions.py  version-lockstep
 run check-version-bumped.py   bump-on-change
@@ -199,6 +209,11 @@ Remediation hints:
                     and refuse to pass when it is non-zero.
   doc-claims        the cited `path:line` no longer says what the prose claims.
                     Fix the citation or the prose — in THIS commit, not later.
+  claudemd-claims   same as doc-claims, scoped to CLAUDE.md itself. Fix the
+                    citation or the code — there is no bypass flag for this
+                    gate; a reasoned `<!-- doc-claim-exempt: <reason> -->` on
+                    the line before a deliberately historical claim is the
+                    only escape hatch.
   test-weakening    restore the assertion, or acknowledge one specific finding
                     with a commit-message line
                     `test-weakening-justified: <path>:<kind> - <reason>`.

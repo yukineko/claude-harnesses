@@ -33,10 +33,15 @@ Load-bearing properties pinned here:
      identifier in. Both halves of that rule are pinned here, because if they
      drift apart the escape route from a false positive disappears.
   4. Doc-set scoping works in every direction: `docs/**/*.md` is walked
-     RECURSIVELY (not only CLAUDE.md, and not only the top level), `--doc`
-     restricts the set, and a set that comes out EMPTY is exit 2 rather than a
-     vacuous exit 0 -- a scope that has silently shrunk to nothing reports
-     clean most convincingly at the moment it stopped checking anything.
+     RECURSIVELY (not only the top level), `--doc` restricts the set, and a
+     set that comes out EMPTY is exit 2 rather than a vacuous exit 0 -- a
+     scope that has silently shrunk to nothing reports clean most convincingly
+     at the moment it stopped checking anything. CLAUDE.md is deliberately NOT
+     in this gate's default scope -- its claims are verified by the dedicated
+     scripts/check-claudemd-claims.py gate (scripts/test_check_claudemd_claims.py),
+     which reuses this same engine. Keeping CLAUDE.md folded into a generic
+     docs/-citation gate blurred an instruction/config file into documentation
+     verification, which is the split this repo now makes explicit.
   5. The exemption escape hatch is EXACT: `<!-- doc-claim-exempt: <reason> -->`
      on the line IMMEDIATELY BEFORE the claim. A reasonless
      `<!-- doc-claim-exempt: -->` exempts NOTHING, and a comment two lines up
@@ -148,8 +153,26 @@ class GateTestCase(unittest.TestCase):
         return tree
 
     def with_claude_md(self, body: str, sources: dict | None = None) -> TempTree:
+        """Write `body` into CLAUDE.md. Reserved for the small number of tests
+        that specifically pin CLAUDE.md's exclusion from this gate's default
+        scope, or that pass CLAUDE.md explicitly via `--doc`. CLAUDE.md
+        coverage of the shared engine itself lives in
+        scripts/test_check_claudemd_claims.py; use `with_doc` below for
+        engine-behaviour tests here."""
         tree = self.make_tree(sources)
         tree.write("CLAUDE.md", body)
+        return tree
+
+    def with_doc(
+        self, body: str, sources: dict | None = None, relpath: str = "docs/test.md"
+    ) -> TempTree:
+        """Write `body` into a docs/**/*.md file (in this gate's default
+        scope) and return the tree. This is the generic fixture for testing
+        the claim-verification engine itself -- CLAUDE.md is no longer in
+        check-doc-claims.py's default scope, so engine tests must not rely on
+        CLAUDE.md being scanned."""
+        tree = self.make_tree(sources)
+        tree.write(relpath, body)
         return tree
 
     def run_gate(self, repo_path, *extra):
@@ -201,25 +224,25 @@ class DetectsMismatch(GateTestCase):
     def test_path_not_found_blocks(self):
         """The cited file does not exist. This is a real ANSWER about the claim
         (exit 1), not an inability to look (exit 2) — see the asymmetry test."""
-        tree = self.with_claude_md("See `src/gone.rs:3` for the invariant.\n")
+        tree = self.with_doc("See `src/gone.rs:3` for the invariant.\n")
         self.assertBlocks(*self.run_gate(tree.root), kind="path-not-found")
 
     def test_line_out_of_range_blocks(self):
         """`src/a.rs` has 5 lines; a claim about line 99 cannot be true."""
-        tree = self.with_claude_md(f"See `{PATH_A}:99` for the invariant.\n")
+        tree = self.with_doc(f"See `{PATH_A}:99` for the invariant.\n")
         self.assertBlocks(*self.run_gate(tree.root), kind="line-out-of-range")
 
     def test_quote_not_found_blocks(self):
         """The quote is nowhere in the cited file: the doc is describing code
         that does not exist. This is the 'described as removed but still live'
         class that motivated the gate, in its simplest form."""
-        tree = self.with_claude_md(f"See `{PATH_A}:3` 「fn goodbye() {{」 for the shape.\n")
+        tree = self.with_doc(f"See `{PATH_A}:3` 「fn goodbye() {{」 for the shape.\n")
         self.assertBlocks(*self.run_gate(tree.root), kind="quote-not-found")
 
     def test_line_drifted_blocks_and_reports_the_real_line(self):
         """The quote is still there, but the line number rotted. Reporting WHERE
         it actually is turns the finding into a one-line fix instead of a hunt."""
-        tree = self.with_claude_md(f"See `{PATH_LONG}:5` 「drifted marker」 today.\n")
+        tree = self.with_doc(f"See `{PATH_LONG}:5` 「drifted marker」 today.\n")
         rc, out, err = self.run_gate(tree.root)
         self.assertBlocks(rc, out, err, kind="line-drifted")
         self.assertIn(
@@ -231,16 +254,16 @@ class DetectsMismatch(GateTestCase):
 
     def test_drift_boundary_ten_lines_away_is_clean(self):
         """`within +/-10 lines` is read as INCLUSIVE: cited 20, actual 30."""
-        tree = self.with_claude_md(f"See `{PATH_LONG}:20` 「drifted marker」.\n")
+        tree = self.with_doc(f"See `{PATH_LONG}:20` 「drifted marker」.\n")
         self.assertClean(*self.run_gate(tree.root))
 
     def test_drift_boundary_eleven_lines_away_blocks(self):
         """Cited 19, actual 30: 11 lines away, outside the tolerance."""
-        tree = self.with_claude_md(f"See `{PATH_LONG}:19` 「drifted marker」.\n")
+        tree = self.with_doc(f"See `{PATH_LONG}:19` 「drifted marker」.\n")
         self.assertBlocks(*self.run_gate(tree.root), kind="line-drifted")
 
     def test_two_bad_claims_produce_two_findings(self):
-        tree = self.with_claude_md(
+        tree = self.with_doc(
             f"First `src/gone.rs:1`.\n\nSecond `{PATH_A}:99`.\n"
         )
         rc, payload, err = self.json_of(tree.root)
@@ -259,18 +282,18 @@ class DetectsMismatch(GateTestCase):
 
 class NoFalsePositives(GateTestCase):
     def test_fully_correct_claim_is_clean(self):
-        tree = self.with_claude_md(f"See `{PATH_A}:3` 「fn hello() {{」 for the shape.\n")
+        tree = self.with_doc(f"See `{PATH_A}:3` 「fn hello() {{」 for the shape.\n")
         self.assertClean(*self.run_gate(tree.root))
 
     def test_claim_without_a_quote_is_clean(self):
         """path + line only: nothing to compare beyond existence and range."""
-        tree = self.with_claude_md(f"The barrier lives at `{PATH_A}:4`.\n")
+        tree = self.with_doc(f"The barrier lives at `{PATH_A}:4`.\n")
         self.assertClean(*self.run_gate(tree.root))
 
     def test_path_line_token_not_in_backticks_is_not_a_claim(self):
         """Ordinary prose must not become a claim, or every sentence mentioning
         a line number becomes a merge blocker and the gate gets switched off."""
-        tree = self.with_claude_md(
+        tree = self.with_doc(
             "see line 12 of foo.rs for context, and also src/gone.rs:99 in passing.\n"
         )
         self.assertClean(*self.run_gate(tree.root))
@@ -278,14 +301,14 @@ class NoFalsePositives(GateTestCase):
     def test_backticked_non_claim_tokens_are_ignored(self):
         """Backticks are used all over these docs for commands and type names.
         Only a `<path>:<line>` shape is a claim."""
-        tree = self.with_claude_md(
+        tree = self.with_doc(
             "Run `cargo test -p harness-core`, and note `Result`/`Option` and "
             "`docs/GLOSSARY.md` and `foo:bar`.\n"
         )
         self.assertClean(*self.run_gate(tree.root))
 
     def test_doc_with_no_claims_at_all_is_clean(self):
-        tree = self.with_claude_md("# Title\n\nJust prose. Nothing cited.\n")
+        tree = self.with_doc("# Title\n\nJust prose. Nothing cited.\n")
         self.assertClean(*self.run_gate(tree.root))
 
     # NOTE: the "no docs present is vacuously clean" case used to live here and
@@ -313,14 +336,14 @@ class QuoteMatching(GateTestCase):
         """Source has `let x =   1;\\tlet y = 2;`; the doc quotes it with single
         spaces. A byte-exact matcher would report a false quote-not-found and
         train authors to distrust the gate."""
-        tree = self.with_claude_md(
+        tree = self.with_doc(
             f"See `{PATH_SPACED}:2` 「let x = 1; let y = 2;」 for the shape.\n"
         )
         self.assertClean(*self.run_gate(tree.root))
 
     def test_whitespace_is_normalized_doc_looser_than_source(self):
         """The reverse direction: the doc pads the quote, the source is tidy."""
-        tree = self.with_claude_md(
+        tree = self.with_doc(
             f"See `{PATH_A}:3` 「fn   hello()    {{」 for the shape.\n"
         )
         self.assertClean(*self.run_gate(tree.root))
@@ -328,19 +351,19 @@ class QuoteMatching(GateTestCase):
     def test_quote_matching_is_case_sensitive(self):
         """Case carries meaning in code (`Undetermined` vs `undetermined`), so a
         case-folded match would silently bless a wrong quote."""
-        tree = self.with_claude_md(f"See `{PATH_A}:3` 「FN HELLO() {{」.\n")
+        tree = self.with_doc(f"See `{PATH_A}:3` 「FN HELLO() {{」.\n")
         self.assertBlocks(*self.run_gate(tree.root), kind="quote-not-found")
 
     def test_corner_bracket_delimiter_is_recognized(self):
-        tree = self.with_claude_md(f"`{PATH_A}:3` 「fn goodbye() {{」\n")
+        tree = self.with_doc(f"`{PATH_A}:3` 「fn goodbye() {{」\n")
         self.assertBlocks(*self.run_gate(tree.root), kind="quote-not-found")
 
     def test_double_quote_delimiter_is_recognized(self):
-        tree = self.with_claude_md(f'`{PATH_A}:3` "fn goodbye() {{"\n')
+        tree = self.with_doc(f'`{PATH_A}:3` "fn goodbye() {{"\n')
         self.assertBlocks(*self.run_gate(tree.root), kind="quote-not-found")
 
     def test_backtick_delimiter_is_recognized_when_the_span_has_whitespace(self):
-        tree = self.with_claude_md(f"`{PATH_A}:3` `fn goodbye() {{`\n")
+        tree = self.with_doc(f"`{PATH_A}:3` `fn goodbye() {{`\n")
         self.assertBlocks(*self.run_gate(tree.root), kind="quote-not-found")
 
     def test_backticked_bare_identifier_is_not_a_quote(self):
@@ -353,29 +376,29 @@ class QuoteMatching(GateTestCase):
         ordinary markdown gets switched off, and a switched-off gate detects
         nothing at all.
         """
-        tree = self.with_claude_md(f"See `{PATH_A}:3`, handled by `goodbye`.\n")
+        tree = self.with_doc(f"See `{PATH_A}:3`, handled by `goodbye`.\n")
         self.assertClean(*self.run_gate(tree.root))
 
     def test_backticked_following_path_line_is_not_a_quote(self):
         """The other measured false positive: the next backticked span is
         another `path:line` reference. It has no whitespace, so it is not a
         quote — and it is itself a claim, checked on its own terms."""
-        tree = self.with_claude_md(f"See `{PATH_A}:3` and `{PATH_A}:4`.\n")
+        tree = self.with_doc(f"See `{PATH_A}:3` and `{PATH_A}:4`.\n")
         self.assertClean(*self.run_gate(tree.root))
 
     def test_bare_identifier_in_corner_brackets_is_checked(self):
         """The explicit-opt-in half of the amended rule. 「」 is how an author
         says 'I really do mean this bare token as a verbatim quote'. If this
         half rots, the backtick relaxation becomes an unconditional hole."""
-        tree = self.with_claude_md(f"See `{PATH_A}:3` 「goodbye」.\n")
+        tree = self.with_doc(f"See `{PATH_A}:3` 「goodbye」.\n")
         self.assertBlocks(*self.run_gate(tree.root), kind="quote-not-found")
 
     def test_bare_identifier_in_double_quotes_is_checked(self):
-        tree = self.with_claude_md(f'See `{PATH_A}:3` "goodbye".\n')
+        tree = self.with_doc(f'See `{PATH_A}:3` "goodbye".\n')
         self.assertBlocks(*self.run_gate(tree.root), kind="quote-not-found")
 
     def test_bare_identifier_in_corner_brackets_matches_when_present(self):
-        tree = self.with_claude_md(f"See `{PATH_A}:3` 「hello」.\n")
+        tree = self.with_doc(f"See `{PATH_A}:3` 「hello」.\n")
         self.assertClean(*self.run_gate(tree.root))
 
     def test_a_skipped_backtick_span_does_not_consume_a_later_real_quote(self):
@@ -384,25 +407,25 @@ class QuoteMatching(GateTestCase):
         identifier written before the real quotation would silently disable the
         check on that line — a fail-open dressed up as false-positive
         discipline."""
-        tree = self.with_claude_md(f"See `{PATH_A}:3` in `goodbye` 「fn goodbye() {{」.\n")
+        tree = self.with_doc(f"See `{PATH_A}:3` in `goodbye` 「fn goodbye() {{」.\n")
         self.assertBlocks(*self.run_gate(tree.root), kind="quote-not-found")
 
     def test_corner_bracket_delimiter_matches_when_correct(self):
-        tree = self.with_claude_md(f"`{PATH_A}:3` 「fn hello() {{」\n")
+        tree = self.with_doc(f"`{PATH_A}:3` 「fn hello() {{」\n")
         self.assertClean(*self.run_gate(tree.root))
 
     def test_double_quote_delimiter_matches_when_correct(self):
-        tree = self.with_claude_md(f'`{PATH_A}:3` "fn hello() {{"\n')
+        tree = self.with_doc(f'`{PATH_A}:3` "fn hello() {{"\n')
         self.assertClean(*self.run_gate(tree.root))
 
     def test_backtick_delimiter_matches_when_correct(self):
-        tree = self.with_claude_md(f"`{PATH_A}:3` `fn hello() {{`\n")
+        tree = self.with_doc(f"`{PATH_A}:3` `fn hello() {{`\n")
         self.assertClean(*self.run_gate(tree.root))
 
     def test_quote_on_a_later_doc_line_is_not_attached(self):
         """`ON THE SAME LINE` is the contract. A quote on the NEXT doc line
         belongs to no claim, so this is a path+line-only claim -> clean."""
-        tree = self.with_claude_md(f"See `{PATH_A}:3` for the shape,\n「fn goodbye() {{」\n")
+        tree = self.with_doc(f"See `{PATH_A}:3` for the shape,\n「fn goodbye() {{」\n")
         self.assertClean(*self.run_gate(tree.root))
 
 
@@ -412,22 +435,28 @@ class QuoteMatching(GateTestCase):
 
 
 class DocSetScoping(GateTestCase):
-    def test_docs_markdown_is_checked_not_only_claude_md(self):
+    def test_docs_markdown_is_checked(self):
         tree = self.make_tree()
         tree.write("docs/stop-gate-latency.md", "The gate is at `src/gone.rs:41`.\n")
         rc, out, err = self.run_gate(tree.root)
         self.assertBlocks(rc, out, err, kind="path-not-found")
         self.assertIn("docs/stop-gate-latency.md", out + err)
 
-    def test_claude_md_and_docs_are_both_in_the_default_set(self):
+    def test_claude_md_is_not_in_the_default_scope_but_docs_is(self):
+        """CHANGED (was: test_claude_md_and_docs_are_both_in_the_default_set,
+        which asserted the opposite verdict). CLAUDE.md moved out of this
+        gate's default scope into the dedicated check-claudemd-claims.py gate
+        (scripts/test_check_claudemd_claims.py pins CLAUDE.md coverage now).
+        A false claim planted ONLY in CLAUDE.md here must NOT be reported by
+        this gate, while a false claim in docs/ still is."""
         tree = self.with_claude_md("Root doc cites `src/gone.rs:1`.\n")
         tree.write("docs/x.md", f"Docs cites `{PATH_A}:99`.\n")
         rc, payload, err = self.json_of(tree.root)
         self.assertEqual(rc, 1, f"{payload}\n{err}")
         self.assertEqual(
             sorted({f["doc"] for f in payload["findings"]}),
-            ["CLAUDE.md", "docs/x.md"],
-            f"both docs must be scanned by default: {payload}",
+            ["docs/x.md"],
+            f"CLAUDE.md must NOT be scanned by default any more: {payload}",
         )
 
     def test_doc_flag_restricts_the_set(self):
@@ -556,7 +585,7 @@ class DocSetScoping(GateTestCase):
 
 class Exemption(GateTestCase):
     def test_exemption_with_a_reason_passes(self):
-        tree = self.with_claude_md(
+        tree = self.with_doc(
             "<!-- doc-claim-exempt: quoting a file that lives in another repo -->\n"
             "See `src/gone.rs:3` for the upstream shape.\n"
         )
@@ -566,7 +595,7 @@ class Exemption(GateTestCase):
         """Exempt != invisible. The finding stays in the report with
         exempt=true, so the escape hatch is auditable rather than a way to make
         the stale claim disappear from view."""
-        tree = self.with_claude_md(
+        tree = self.with_doc(
             "<!-- doc-claim-exempt: upstream file, deliberately not vendored -->\n"
             "See `src/gone.rs:3` for the upstream shape.\n"
         )
@@ -582,13 +611,13 @@ class Exemption(GateTestCase):
         """THE loophole test. A reasonless `<!-- doc-claim-exempt: -->` would be
         a one-line way to switch the gate off for any claim, re-creating exactly
         the rot this gate exists to detect."""
-        tree = self.with_claude_md(
+        tree = self.with_doc(
             "<!-- doc-claim-exempt: -->\nSee `src/gone.rs:3` for the shape.\n"
         )
         self.assertBlocks(*self.run_gate(tree.root), kind="path-not-found")
 
     def test_exemption_with_whitespace_only_reason_exempts_nothing(self):
-        tree = self.with_claude_md(
+        tree = self.with_doc(
             "<!-- doc-claim-exempt:    -->\nSee `src/gone.rs:3` for the shape.\n"
         )
         self.assertBlocks(*self.run_gate(tree.root), kind="path-not-found")
@@ -597,7 +626,7 @@ class Exemption(GateTestCase):
         """IMMEDIATELY BEFORE means immediately. Anything looser lets one
         exemption drift down a document and quietly cover claims it was never
         written for."""
-        tree = self.with_claude_md(
+        tree = self.with_doc(
             "<!-- doc-claim-exempt: a real reason -->\n"
             "\n"
             "See `src/gone.rs:3` for the shape.\n"
@@ -606,7 +635,7 @@ class Exemption(GateTestCase):
 
     def test_exemption_does_not_carry_to_the_following_claim(self):
         """It exempts the NEXT line only, not the rest of the document."""
-        tree = self.with_claude_md(
+        tree = self.with_doc(
             "<!-- doc-claim-exempt: a real reason -->\n"
             "Exempted `src/gone.rs:3`.\n"
             "Not exempted `src/gone2.rs:3`.\n"
@@ -622,7 +651,7 @@ class Exemption(GateTestCase):
 
     def test_exemption_covers_every_claim_on_the_next_line(self):
         """Contract: it exempts the LINE, so every claim on that line."""
-        tree = self.with_claude_md(
+        tree = self.with_doc(
             "<!-- doc-claim-exempt: both files live upstream -->\n"
             "Both `src/gone.rs:3` and `src/gone2.rs:4` are upstream.\n"
         )
@@ -648,13 +677,17 @@ class CannotDetermine(GateTestCase):
     def test_nonexistent_repo_path_is_undetermined(self):
         self.assertUndetermined(*self.run_gate("/nonexistent-path-for-doc-claims-xyz"))
 
-    def test_undecodable_doc_is_undetermined(self):
-        """A doc we cannot decode is a doc whose claims we did not read. Zero
-        findings from an unread file is this repo's signature fail-open."""
-        tree = self.make_tree()
-        tree.write_bytes("CLAUDE.md", b"# Title\n\xff\xfe not utf-8\n")
-        self.assertUndetermined(*self.run_gate(tree.root))
-
+    # NOTE: test_undecodable_doc_is_undetermined (which wrote undecodable bytes
+    # to CLAUDE.md) was REMOVED here, not weakened in place. Now that CLAUDE.md
+    # is out of this gate's default scope, that write would no longer be read
+    # via the "undecodable doc" path at all -- with no docs/ present the scope
+    # would come out EMPTY, so the test would still assert exit 2 but for the
+    # WRONG reason (empty-scope Undetermined, not undecodable-doc Undetermined),
+    # making it a false positive as a regression pin. It is now a duplicate of
+    # test_undecodable_docs_markdown_is_undetermined immediately below, which
+    # already covers "an undecodable docs/**/*.md file is undetermined" via a
+    # real docs/ file. CLAUDE.md's own undecodable-file coverage moved to
+    # scripts/test_check_claudemd_claims.py.
     def test_undecodable_docs_markdown_is_undetermined(self):
         tree = self.make_tree()
         tree.write_bytes("docs/broken.md", b"\xff\xfe\n")
@@ -666,7 +699,7 @@ class CannotDetermine(GateTestCase):
         observe (exit 2)."""
         tree = self.make_tree()
         tree.write_bytes("src/binary.rs", b"fn hello() {\n\xff\xfe\n}\n")
-        tree.write("CLAUDE.md", "See `src/binary.rs:1` 「fn hello() {」.\n")
+        tree.write("docs/d.md", "See `src/binary.rs:1` 「fn hello() {」.\n")
         self.assertUndetermined(*self.run_gate(tree.root))
 
     def test_undecodable_cited_file_without_a_quote_is_still_undetermined(self):
@@ -675,7 +708,7 @@ class CannotDetermine(GateTestCase):
         'existence checked, good enough'."""
         tree = self.make_tree()
         tree.write_bytes("src/binary.rs", b"fn hello() {\n\xff\xfe\n}\n")
-        tree.write("CLAUDE.md", "See `src/binary.rs:2`.\n")
+        tree.write("docs/d.md", "See `src/binary.rs:2`.\n")
         self.assertUndetermined(*self.run_gate(tree.root))
 
     def test_missing_vs_unreadable_cited_file_are_not_conflated(self):
@@ -683,24 +716,24 @@ class CannotDetermine(GateTestCase):
         them has to delete an explicit comparison rather than quietly relax a
         single assertion."""
         tree = self.make_tree()
-        tree.write("CLAUDE.md", "See `src/gone.rs:1`.\n")
+        tree.write("docs/d.md", "See `src/gone.rs:1`.\n")
         rc_missing, out_m, err_m = self.run_gate(tree.root)
         self.assertEqual(
             rc_missing, 1, f"missing cited file is a FINDING\n{out_m}\n{err_m}"
         )
         tree.write_bytes("src/binary.rs", b"\xff\xfe\n")
-        tree.write("CLAUDE.md", "See `src/binary.rs:1`.\n")
+        tree.write("docs/d.md", "See `src/binary.rs:1`.\n")
         self.assertUndetermined(*self.run_gate(tree.root))
 
     def test_explicit_doc_that_does_not_exist_is_undetermined(self):
         """`--doc missing.md` is 'a doc in the doc set cannot be read'. Skipping
         it would let a typo in a CI invocation silently scan nothing."""
-        tree = self.with_claude_md(f"Good claim `{PATH_A}:3`.\n")
+        tree = self.with_doc(f"Good claim `{PATH_A}:3`.\n")
         self.assertUndetermined(*self.run_gate(tree.root, "--doc", "docs/nope.md"))
 
     def test_undetermined_json_verdict_and_exit_code_agree(self):
         tree = self.make_tree()
-        tree.write_bytes("CLAUDE.md", b"\xff\xfe\n")
+        tree.write_bytes("docs/broken2.md", b"\xff\xfe\n")
         rc, payload, err = self.json_of(tree.root)
         self.assertEqual(rc, 2, f"--json must not soften the exit code\n{payload}\n{err}")
         self.assertEqual(payload["verdict"], "undetermined")
@@ -713,14 +746,14 @@ class CannotDetermine(GateTestCase):
 
 class JsonOutput(GateTestCase):
     def test_clean_json_shape(self):
-        tree = self.with_claude_md(f"See `{PATH_A}:3` 「fn hello() {{」.\n")
+        tree = self.with_doc(f"See `{PATH_A}:3` 「fn hello() {{」.\n")
         rc, payload, err = self.json_of(tree.root)
         self.assertEqual(rc, 0, f"{payload}\n{err}")
         self.assertEqual(payload["verdict"], "clean")
         self.assertEqual(payload["findings"], [])
 
     def test_mismatched_json_shape(self):
-        tree = self.with_claude_md(
+        tree = self.with_doc(
             "# Title\n\nSee `src/gone.rs:7` 「fn hello() {」 for the shape.\n"
         )
         rc, payload, err = self.json_of(tree.root)
@@ -733,7 +766,7 @@ class JsonOutput(GateTestCase):
             >= {"doc", "doc_line", "path", "cited_line", "kind", "detail", "exempt"},
             f"finding is missing required keys: {finding}",
         )
-        self.assertEqual(finding["doc"], "CLAUDE.md")
+        self.assertEqual(finding["doc"], "docs/test.md")
         self.assertEqual(finding["doc_line"], 3, "doc_line is 1-based")
         self.assertEqual(finding["path"], "src/gone.rs")
         self.assertEqual(finding["cited_line"], 7)
@@ -752,7 +785,7 @@ class JsonOutput(GateTestCase):
         ]
         for kind, body in cases:
             with self.subTest(kind=kind):
-                tree = self.with_claude_md(body)
+                tree = self.with_doc(body)
                 rc, payload, err = self.json_of(tree.root)
                 self.assertEqual(rc, 1, f"{payload}\n{err}")
                 self.assertEqual(
@@ -762,7 +795,7 @@ class JsonOutput(GateTestCase):
                 )
 
     def test_json_does_not_change_the_exit_code_for_a_clean_run(self):
-        tree = self.with_claude_md(f"See `{PATH_A}:3`.\n")
+        tree = self.with_doc(f"See `{PATH_A}:3`.\n")
         rc_plain, _, _ = self.run_gate(tree.root)
         rc_json, _, _ = self.run_gate(tree.root, "--json")
         self.assertEqual((rc_plain, rc_json), (0, 0))

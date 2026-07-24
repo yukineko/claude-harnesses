@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that `path:line` claims in the norm documents still describe reality.
+"""Verify that `path:line` claims in docs/**/*.md still describe reality.
 
 Why this gate exists
 --------------------
@@ -10,6 +10,12 @@ existing that `grep` finds zero of, and a defect written about in the past tense
 that is still present. A record that has rotted is not a harmless record — the
 next implementer reasons from it, so a stale document does the same damage as a
 docstring that lies about its own code, which this repo treats as the worst act.
+
+Scope note: CLAUDE.md is an instruction/config file, not a documentation page,
+and folding it into a generic doc-citation gate blurred two different concerns.
+CLAUDE.md's claims are now verified by the DEDICATED gate
+`scripts/check-claudemd-claims.py`, which reuses the exact same engine defined
+in this module. THIS gate's scope is `docs/**/*.md` only.
 
 Prose cannot be checked in general. A *citation* can. So this gate checks the
 part of the prose that carries a machine-verifiable commitment: the cited path,
@@ -41,11 +47,12 @@ the claim (`path-not-found`, exit 1); a cited file that EXISTS BUT CANNOT BE
 READ is not an answer at all (exit 2). Collapsing the second into the first
 would let an unreadable tree read as a documented one.
 
-The default scope is `CLAUDE.md` plus `docs/**/*.md`, walked RECURSIVELY, and a
-scope that comes out EMPTY is exit 2 rather than exit 0. Both halves guard the
-same failure: a gate whose scope silently shrinks to nothing goes on reporting
-clean, and does so most convincingly at the moment it has stopped checking
-anything.
+The default scope is `docs/**/*.md`, walked RECURSIVELY, and a scope that comes
+out EMPTY is exit 2 rather than exit 0. Both halves guard the same failure: a
+gate whose scope silently shrinks to nothing goes on reporting clean, and does
+so most convincingly at the moment it has stopped checking anything.
+CLAUDE.md is deliberately NOT in this default scope — see the dedicated
+check-claudemd-claims.py gate above.
 
 Exemption
 ---------
@@ -266,14 +273,18 @@ def doc_set(repo: str, explicit: list) -> list:
             out.append(rel)
         return out
     found = []
-    if os.path.isfile(os.path.join(repo, "CLAUDE.md")):
-        found.append("CLAUDE.md")
     # RECURSIVE (`docs/**/*.md`), deliberately widened from the flat `docs/*.md`
     # this shipped with. Under a flat glob, moving a document into a
     # subdirectory removes it from coverage with no signal at all: the gate
     # keeps reporting clean over a shrinking scope. That is the same shape as a
     # scan failure collapsing to the empty set, and it is invisible precisely
     # because nothing fails.
+    #
+    # CLAUDE.md is deliberately NOT added here — it is an instruction/config
+    # file, not a documentation page, and its claims are verified by the
+    # dedicated scripts/check-claudemd-claims.py gate, which reuses this same
+    # engine. Folding it into this gate's default scope would re-blur the two
+    # concerns this split exists to separate.
     pattern = os.path.join(repo, "docs", "**", "*.md")
     for full in sorted(glob.glob(pattern, recursive=True)):
         found.append(os.path.relpath(full, repo))
@@ -284,7 +295,7 @@ def doc_set(repo: str, explicit: list) -> list:
         # moved out from under the gate. Checking nothing is undetermined.
         raise Undetermined(
             f"no documents to check under {repo} "
-            "(no CLAUDE.md and no docs/**/*.md) — an empty scope is not a clean scope"
+            "(no docs/**/*.md) — an empty scope is not a clean scope"
         )
     return found
 

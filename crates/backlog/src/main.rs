@@ -1,5 +1,6 @@
 mod config;
 mod driver;
+mod github;
 mod hooks;
 mod install;
 mod liveness;

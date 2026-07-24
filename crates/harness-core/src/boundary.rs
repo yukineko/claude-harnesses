@@ -28,7 +28,10 @@
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use wait_timeout::ChildExt;
 
 use crate::verdict::Determination;
 
@@ -196,6 +199,135 @@ pub fn run(cmd: &mut Command) -> Determination<CommandOutput> {
         stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
         display,
     })
+}
+
+/// Run `cmd` to completion, but never block past `timeout`.
+///
+/// This is [`run`] plus a bound: a checker/subprocess that hangs — a stuck
+/// `git`, a shell-wrapped checker command that backgrounds a grandchild —
+/// must not be able to block the caller forever. `Undetermined` covers every
+/// way this can fail to produce a trustworthy result: spawn failure, the wait
+/// itself erroring, a signal (no exit code), and timeout. `Known` only when
+/// the process ran to completion within `timeout`, whatever its exit code —
+/// judging the code is still the caller's job via [`CommandOutput`].
+///
+/// On Unix the child is placed in its own process group
+/// (`process_group(0)`) before spawn, so a timeout can kill the whole tree
+/// the child spawned (e.g. a shell exec'ing or backgrounding a real
+/// long-running process) via a single negative-pid `SIGKILL`, not just the
+/// direct child. `child.kill()` is also called as a fallback/supplement (a
+/// no-op if the group kill already reaped it, and the only mechanism at all
+/// on non-Unix platforms), and `child.wait()` reaps the zombie afterward.
+///
+/// stdout is read on a background thread and joined with `recv_timeout`
+/// bounded by `timeout`, rather than read inline: the immediate child having
+/// exited does not guarantee the write end of the stdout pipe is closed — a
+/// backgrounded/detached grandchild can still hold it open, and a bare
+/// `read_to_string` would then block indefinitely even after `wait_timeout`
+/// reports the child gone. If the read itself cannot be joined within the
+/// timeout, the call is `Undetermined` rather than silently returning a
+/// partial read as if it were complete output.
+pub fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Determination<CommandOutput> {
+    let display = std::iter::once(cmd.get_program())
+        .chain(cmd.get_args())
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "cannot run {display}: {e} — a checker that never started has not passed"
+            ))
+        }
+    };
+
+    match child.wait_timeout(timeout) {
+        Ok(Some(status)) => {
+            let Some(code) = status.code() else {
+                return Determination::undetermined(format!(
+                    "{display} terminated without an exit code (signal); there is no result to \
+                     read"
+                ));
+            };
+            let stdout = read_pipe_bounded(child.stdout.take(), timeout);
+            let stderr = read_pipe_bounded(child.stderr.take(), timeout);
+            Determination::known(CommandOutput {
+                code,
+                stdout,
+                stderr,
+                display,
+            })
+        }
+        Ok(None) => {
+            kill_process_tree(&mut child);
+            let _ = child.wait();
+            Determination::undetermined(format!(
+                "{display} timed out after {timeout:?} — a checker that did not finish has not \
+                 passed"
+            ))
+        }
+        Err(e) => Determination::undetermined(format!(
+            "cannot wait on {display}: {e} — a checker whose status could not be observed has \
+             not passed"
+        )),
+    }
+}
+
+/// Kill a timed-out child's whole process tree, not just the direct process.
+///
+/// On Unix, [`run_with_timeout`] puts the child in its own process group via
+/// `process_group(0)` at spawn time, so a negative-pid `SIGKILL` targets the
+/// whole group in one call — the direct child *and* anything it exec'd or
+/// backgrounded. `child.kill()` is always also called: a harmless no-op if
+/// the group kill already reaped it, and the only mechanism at all on
+/// non-Unix platforms where there is no process group to target.
+fn kill_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        // SAFETY: `kill` is a plain libc syscall; passing a negative pid
+        // targets the process group whose id equals the child's pid (valid
+        // because the group was created via `process_group(0)` at spawn
+        // time above). Best-effort cleanup on a timeout path: any error
+        // (e.g. the group already gone) is intentionally ignored, exactly
+        // as the `let _ = child.kill()` fallback below already tolerates.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+}
+
+/// Read a child's stdout/stderr pipe to completion, but never block past
+/// `timeout`: the read happens on a background thread, joined with a bound
+/// instead of calling `read_to_string` inline. If the join itself times out
+/// (some lingering process still holds the pipe's write end open), whatever
+/// was read so far is returned rather than hanging further — the read
+/// thread is detached and leaked in that case. This is a best-effort
+/// completion of an already-`Known` result (the exit status, which drives
+/// the `Determination`, has already been observed by the caller); it does
+/// not itself decide `Known` vs `Undetermined`.
+fn read_pipe_bounded<R: io::Read + Send + 'static>(pipe: Option<R>, timeout: Duration) -> String {
+    use std::sync::mpsc;
+    let Some(mut p) = pipe else {
+        return String::new();
+    };
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut out = String::new();
+        let _ = p.read_to_string(&mut out);
+        let _ = tx.send(out);
+    });
+    rx.recv_timeout(timeout).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -438,6 +570,112 @@ mod tests {
         assert!(
             why.contains("without an exit code"),
             "a signalled process has no result to read: {why}"
+        );
+    }
+
+    // ---- run_with_timeout ---------------------------------------------------
+
+    #[test]
+    fn run_with_timeout_missing_binary_is_undetermined() {
+        let mut cmd = Command::new("harness-core-no-such-binary-9d1f");
+        let why = expect_undetermined(run_with_timeout(&mut cmd, Duration::from_secs(5)));
+        assert!(
+            why.contains("harness-core-no-such-binary-9d1f"),
+            "the reason must name the program: {why}"
+        );
+    }
+
+    #[test]
+    fn run_with_timeout_completes_within_budget_is_known() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("printf 'hello\n'; echo warn >&2; exit 0");
+        let out = expect_known(run_with_timeout(&mut cmd, Duration::from_secs(5)));
+        assert_eq!(out.code(), 0);
+        assert_eq!(expect_known(out.clone().stdout_on_success()), "hello\n");
+        assert!(out.stderr().contains("warn"));
+    }
+
+    #[test]
+    fn run_with_timeout_nonzero_exit_within_budget_is_known() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("printf 'partial'; exit 7");
+        let out = expect_known(run_with_timeout(&mut cmd, Duration::from_secs(5)));
+        assert_eq!(out.code(), 7);
+        assert_eq!(expect_known(out.stdout_allowing(&[7])), "partial");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_with_timeout_killed_by_signal_is_undetermined() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("kill -9 $$");
+        let why = expect_undetermined(run_with_timeout(&mut cmd, Duration::from_secs(5)));
+        assert!(
+            why.contains("without an exit code"),
+            "a signalled process has no result to read: {why}"
+        );
+    }
+
+    /// The central claim of this primitive: a hung process must not block
+    /// past `timeout`, and the process (and any process-group descendants)
+    /// must actually be gone afterward — not merely abandoned to linger in
+    /// the background while the call returns.
+    #[cfg(unix)]
+    #[test]
+    fn run_with_timeout_kills_hung_process_group_and_returns_promptly() {
+        // A marker unique to this test run's pid, so the liveness probe below
+        // cannot match anything except the actual descendant sleep — not
+        // some unrelated process, and not the probe command's own argv (a
+        // literal like "sleep 30" would self-match a `pgrep -f 'sleep 30'`
+        // invocation, since `-f` matches the whole command line).
+        let marker = format!("harness-core-boundary-test-marker-{}", std::process::id());
+
+        let mut cmd = Command::new("sh");
+        // Backgrounds a grandchild sleep inside its own subshell, standing in
+        // for a shell-wrapped checker that execs/backgrounds real work: only
+        // a process-group kill (not a plain `child.kill()` on the direct
+        // child) reaches it. Both the direct child and the backgrounded
+        // grandchild are themselves `sh -c "sleep 30"` processes, so the
+        // marker rides as a harmless extra path component of an `sh -c`
+        // invocation (arg0's script text) rather than a bogus argument to
+        // `sleep`: it shows up in `pgrep -f`'s view of the command line
+        // without perturbing what `sleep` parses.
+        cmd.arg("-c").arg(format!(
+            "(sh -c 'sleep 30' {marker} &) ; sh -c 'sleep 30' {marker}"
+        ));
+
+        let start = std::time::Instant::now();
+        let why = expect_undetermined(run_with_timeout(&mut cmd, Duration::from_millis(300)));
+        let elapsed = start.elapsed();
+
+        assert!(
+            why.contains("timed out"),
+            "the reason must say this was a timeout: {why}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "run_with_timeout must return promptly on timeout, took {elapsed:?}"
+        );
+
+        // Give the group-kill a moment to actually land, then confirm no
+        // process carrying the marker survived — proving the whole tree was
+        // reaped, not just the immediate `sh`. `pgrep -f marker` cannot match
+        // this very probe command (its argv is `pgrep -f <marker>`, i.e. the
+        // marker appears once as pgrep's own pattern argument, and pgrep
+        // excludes itself from its own results by default) nor any process
+        // started before this test picked its pid-derived marker.
+        std::thread::sleep(Duration::from_millis(200));
+        let still_running = expect_known(run(Command::new("pgrep").arg("-fc").arg(&marker)));
+        // `pgrep -c` prints a count and exits 1 when the count is 0 — so read
+        // stdout regardless of the exit code rather than only on success.
+        let count: i64 = expect_known(still_running.stdout_allowing(&[0, 1]))
+            .trim()
+            .parse()
+            .unwrap_or(-1);
+        assert_eq!(
+            count, 0,
+            "the process group (including the backgrounded grandchild carrying marker {marker}) \
+             must be killed, not left running"
         );
     }
 }

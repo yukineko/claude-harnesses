@@ -1,6 +1,6 @@
 [package]
 name = "harness-core"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 # MSRV: `is_none_or` (store.rs) was stabilized in Rust 1.82.
 rust-version.workspace = true
@@ -16,6 +16,12 @@ dirs = "5"
 chrono = { workspace = true }
 anyhow = { workspace = true }
 wait-timeout = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+# Process-group kill for `boundary::run_with_timeout`: a timed-out child may
+# have exec'd or backgrounded a grandchild (e.g. a shell-wrapped checker
+# command), and killing only the direct child leaves that grandchild running.
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }

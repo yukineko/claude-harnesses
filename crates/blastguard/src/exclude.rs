@@ -39,18 +39,111 @@ const ALLOW_GLOBS: &[&str] = &[
     "**/.config/**",
 ];
 
+/// Glob patterns for paths that are NOT ordinary config files: they decide
+/// which gates, hooks and policies run at all. Writing/appending/editing one is
+/// how a guard gets disarmed, so a match here OUTRANKS [`ALLOW_GLOBS`] and
+/// resolves to `Deny`, never to the config-file exemption.
+///
+/// Why this list is by NAME rather than by extension: `ALLOW_GLOBS` exempts
+/// `*.toml` wholesale, which is right for the routine case (a crate's
+/// `Cargo.toml` is a package manifest and gets edited by every `cargo add`) and
+/// wrong for the security case (`deny.toml`, a gate crate's own config). The
+/// fix names the security-relevant files instead of removing the
+/// extension-wide allowance — an ordinary `Cargo.toml` stays allowed, and
+/// nothing here matches `Cargo.toml`.
+///
+/// The `.example.toml` templates are deliberately NOT listed: they are
+/// checked-in samples, not the live config a gate reads.
+const PROTECTED_GLOBS: &[&str] = &[
+    // ---- Claude Code settings & hook wiring (project, $HOME, or nested) ----
+    // These decide which hooks fire, i.e. whether blastguard itself runs.
+    ".claude/settings.json",
+    "**/.claude/settings.json",
+    ".claude/settings.local.json",
+    "**/.claude/settings.local.json",
+    ".claude/hooks.json",
+    "**/.claude/hooks.json",
+    ".claude/hooks/**",
+    "**/.claude/hooks/**",
+    // The project-local override, also reachable by its bare basename when the
+    // path is given relative to the `.claude` directory itself.
+    "settings.local.json",
+    "**/settings.local.json",
+    // ---- git hook paths ----
+    // `.githooks/` is this repo's opt-in `core.hooksPath` tree. It is NOT
+    // matched by `is_git_internal` (no literal `.git` directory component), so
+    // it needs naming here; `.git/hooks/` is its in-repo twin.
+    ".githooks",
+    ".githooks/**",
+    "**/.githooks",
+    "**/.githooks/**",
+    ".git/hooks/**",
+    "**/.git/hooks/**",
+    // ---- shell startup files (startup-persistence vector) ----
+    // Matched by basename anywhere, so both the literal unexpanded `~/.zshrc`
+    // and an absolute `/Users/x/.zshrc` are covered.
+    ".zshrc",
+    "**/.zshrc",
+    ".zshenv",
+    "**/.zshenv",
+    ".zprofile",
+    "**/.zprofile",
+    ".zlogin",
+    "**/.zlogin",
+    ".bashrc",
+    "**/.bashrc",
+    ".bash_profile",
+    "**/.bash_profile",
+    ".profile",
+    "**/.profile",
+    // ---- security / gate configuration tomls ----
+    // Named individually so the `*.toml` allowance keeps covering ordinary
+    // manifests. Each of these is read by a gate to decide what it enforces.
+    "deny.toml",
+    "**/deny.toml",
+    "donegate.toml",
+    "**/donegate.toml",
+    "specguard.toml",
+    "**/specguard.toml",
+    "tdd.toml",
+    "**/tdd.toml",
+    "blastguard.toml",
+    "**/blastguard.toml",
+    "propguard.toml",
+    "**/propguard.toml",
+    "stuckguard.toml",
+    "**/stuckguard.toml",
+    "mutategate.toml",
+    "**/mutategate.toml",
+    "reviewgate.toml",
+    "**/reviewgate.toml",
+    "budgetguard.toml",
+    "**/budgetguard.toml",
+    "overwatch.toml",
+    "**/overwatch.toml",
+    ".precommit-audit.toml",
+    "**/.precommit-audit.toml",
+];
+
+fn build_set(patterns: &[&str]) -> GlobSet {
+    let mut b = GlobSetBuilder::new();
+    for pat in patterns {
+        // Patterns are compile-time constants; a build error would be a bug.
+        if let Ok(g) = Glob::new(pat) {
+            b.add(g);
+        }
+    }
+    b.build().unwrap_or_else(|_| GlobSet::empty())
+}
+
 fn glob_set() -> &'static GlobSet {
     static SET: OnceLock<GlobSet> = OnceLock::new();
-    SET.get_or_init(|| {
-        let mut b = GlobSetBuilder::new();
-        for pat in ALLOW_GLOBS {
-            // Patterns are compile-time constants; a build error would be a bug.
-            if let Ok(g) = Glob::new(pat) {
-                b.add(g);
-            }
-        }
-        b.build().unwrap_or_else(|_| GlobSet::empty())
-    })
+    SET.get_or_init(|| build_set(ALLOW_GLOBS))
+}
+
+fn protected_set() -> &'static GlobSet {
+    static SET: OnceLock<GlobSet> = OnceLock::new();
+    SET.get_or_init(|| build_set(PROTECTED_GLOBS))
 }
 
 /// Normalize a raw path/operand for matching: strip surrounding quotes,
@@ -77,6 +170,22 @@ pub fn is_config_file(path: &str) -> bool {
         return false;
     }
     glob_set().is_match(&norm)
+}
+
+/// True when `path` is a gate/hook/policy file whose modification disarms a
+/// guard. This is checked BEFORE [`is_config_file`] everywhere a path is
+/// classified: "it is a config file" was previously enough to wave through a
+/// write to `.claude/settings.json` — i.e. the allowlist covered exactly the
+/// files an attacker (or an over-eager agent) would edit to turn the gates off.
+///
+/// A protected path is not an "unknown"; it is a positively recognised
+/// high-blast-radius target, so it resolves to `Deny`, not `Ask`.
+pub fn is_protected_path(path: &str) -> bool {
+    let norm = normalize(path);
+    if norm.is_empty() {
+        return false;
+    }
+    protected_set().is_match(&norm)
 }
 
 /// True when `path` points inside a `.git/` directory (git internals). Wholesale

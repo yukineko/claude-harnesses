@@ -38,6 +38,14 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("wiping the file") {
         return "write-empty-content";
     }
+    // Protected gate/hook/policy path. Deliberately ONE id for the whole class
+    // (Write, Edit/MultiEdit/NotebookEdit, truncating redirect, append
+    // redirect): they are the same recurring failure — an agent reaching for
+    // the file that decides whether the gates run — and splitting them by tool
+    // would fragment exactly the signature overwatch needs to see recur.
+    if reason.contains("protected gate/config path") {
+        return "protected-path";
+    }
 
     // Bash: fork bomb / redirect.
     if reason == "fork bomb pattern detected" {
@@ -67,6 +75,9 @@ pub fn rule_id(reason: &str) -> &'static str {
     }
     if reason.contains("git checkout -- . discards all working-tree changes") {
         return "git-checkout-dash-dot";
+    }
+    if reason.contains("git config core.hooksPath repoints every git hook") {
+        return "git-config-hookspath";
     }
 
     // Bash: truncate/shred/dd/chmod/chown/mkfs/find.

@@ -44,7 +44,12 @@ pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
         }
         "Write" => detect_write(tool_input),
         // Edit / MultiEdit / NotebookEdit are partial edits, not full-file
-        // destruction — always allowed.
+        // destruction, so they are allowed for ordinary files. They are NOT
+        // unconditionally allowed: a one-line edit is all it takes to disarm a
+        // gate (`.claude/settings.json`, `.githooks/pre-commit`, a shell rc),
+        // and "partial" says nothing about blast radius. Classifying the TARGET
+        // is what distinguishes the two.
+        "Edit" | "MultiEdit" | "NotebookEdit" => detect_edit(tool_input),
         _ => Decision::Allow,
     }
 }
@@ -68,11 +73,36 @@ fn extract_path(ti: Option<&Value>) -> Option<String> {
 /// Write is new/overwrite both. We stay conservative and only Deny the clearly
 /// destructive shapes: replacing a (non-config) file with empty content, or
 /// overwriting git internals. Everything else is allowed.
+/// Deny reason for a tool call that would modify a protected gate/hook/policy
+/// path, or `None` when the target is not one.
+///
+/// The wording is shared by every call site (Write, Edit/MultiEdit/
+/// NotebookEdit, truncating redirect, append redirect) so that
+/// [`crate::rule_id`] gives the whole class ONE stable signature.
+fn protected_path_deny(action: &str, path: &str) -> Option<Decision> {
+    if exclude::is_protected_path(path) {
+        Some(Decision::deny(format!(
+            "{action} targets a protected gate/config path ({path}) — it controls which hooks, \
+gates or policies run, so blastguard refuses"
+        )))
+    } else {
+        None
+    }
+}
+
 fn detect_write(ti: Option<&Value>) -> Decision {
     let path = match extract_path(ti) {
         Some(p) => p,
         None => return Decision::Allow,
     };
+    // BEFORE the config-file allowlist, not after: `.claude/**`, `*.toml` and
+    // `settings.local.json` are all matched by `is_config_file`, so the
+    // exemption used to swallow exactly the paths that decide whether the gates
+    // run at all. "It is a config file" is the reason to look harder here, not
+    // the reason to stop looking.
+    if let Some(deny) = protected_path_deny("Write", &path) {
+        return deny;
+    }
     if exclude::is_config_file(&path) {
         return Decision::Allow;
     }
@@ -89,6 +119,22 @@ fn detect_write(ti: Option<&Value>) -> Decision {
         return Decision::deny(format!(
             "Write would replace {path} with empty content, wiping the file"
         ));
+    }
+    Decision::Allow
+}
+
+/// Edit / MultiEdit / NotebookEdit: a partial edit of an ordinary file is
+/// allowed, but a partial edit of a protected gate/hook/policy path is exactly
+/// how a guard gets switched off, so the target is classified rather than
+/// assumed harmless. `NotebookEdit` addresses its target via `notebook_path`,
+/// which `extract_path` already covers.
+fn detect_edit(ti: Option<&Value>) -> Decision {
+    let path = match extract_path(ti) {
+        Some(p) => p,
+        None => return Decision::Allow,
+    };
+    if let Some(deny) = protected_path_deny("Edit", &path) {
+        return deny;
     }
     Decision::Allow
 }
@@ -411,10 +457,26 @@ fn detect_bash(cmd: &str, depth: usize) -> Decision {
     // (`> /dev/null`) must not blind the gate to a later truncating redirect in
     // a subsequent `;`/`&&`/`|` segment.
     for target in redirect_targets(cmd) {
+        if let Some(deny) = protected_path_deny("redirect", &target) {
+            return deny;
+        }
         if !redirect_target_is_safe(&target) {
             return Decision::deny(format!(
                 "'> {target}' truncates and overwrites an existing file"
             ));
+        }
+    }
+
+    // 2b. APPEND redirects (`>>`, `&>>`). Appending does not truncate, so it is
+    //     ordinarily allowed and deliberately skipped by `redirect_targets` —
+    //     but "does not truncate" is a statement about the file's old bytes,
+    //     not about blast radius. One appended line is enough to add a hook
+    //     entry to a settings file or a command to `.githooks/pre-commit`, so a
+    //     PROTECTED target is denied regardless of the append/truncate
+    //     distinction. Ordinary appends (`echo x >> /tmp/log`) stay allowed.
+    for target in append_redirect_targets(cmd) {
+        if let Some(deny) = protected_path_deny("append redirect", &target) {
+            return deny;
         }
     }
 
@@ -432,6 +494,12 @@ fn detect_bash(cmd: &str, depth: usize) -> Decision {
 
 fn redirect_target_is_safe(target: &str) -> bool {
     let t = exclude::normalize(target);
+    // A protected path is never "safe" to truncate, even though most of them
+    // (`.claude/settings.json`, `deny.toml`, …) also match `is_config_file`.
+    // Checked first so the config-file exemption cannot re-open the hole.
+    if exclude::is_protected_path(&t) {
+        return false;
+    }
     matches!(t.as_str(), "/dev/null" | "/dev/stdout" | "/dev/stderr") || exclude::is_config_file(&t)
 }
 
@@ -644,6 +712,64 @@ fn redirect_targets(seg: &str) -> Vec<String> {
                 targets.push(tok.to_string());
             }
             i = j;
+            continue;
+        }
+        i += 1;
+    }
+    targets
+}
+
+/// Every APPEND redirect target on the line (`>> f`, `&>> f`), in order,
+/// outside quotes. The exact complement of [`redirect_targets`], which skips
+/// these because appending does not truncate.
+///
+/// Callers must NOT treat a hit as destructive on its own — an append is
+/// non-truncating and stays allowed for ordinary targets. It exists so that a
+/// PROTECTED target (a settings/hook/policy file) is still reachable by the
+/// gate: smuggling one extra line into `.githooks/pre-commit` needs no
+/// truncation at all.
+fn append_redirect_targets(seg: &str) -> Vec<String> {
+    let bytes = seg.as_bytes();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut targets = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'\'' && !in_d {
+            in_s = !in_s;
+            i += 1;
+            continue;
+        }
+        if c == b'"' && !in_s {
+            in_d = !in_d;
+            i += 1;
+            continue;
+        }
+        if c == b'>' && !in_s && !in_d && bytes.get(i + 1) == Some(&b'>') {
+            // Same target-token scan as `redirect_targets`: ASCII-only
+            // delimiters, so `seg[start..j]` never splits a multi-byte char.
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            let start = j;
+            while j < bytes.len() {
+                let cj = bytes[j];
+                if cj.is_ascii_whitespace()
+                    || cj == b';'
+                    || cj == b'|'
+                    || cj == b'&'
+                    || cj == b'>'
+                    || cj == b')'
+                {
+                    break;
+                }
+                j += 1;
+            }
+            if start < j {
+                targets.push(seg[start..j].to_string());
+            }
+            i = j.max(i + 2);
             continue;
         }
         i += 1;
@@ -1790,6 +1916,37 @@ fn analyze_git(rest: &[&str]) -> Decision {
                 Decision::deny("git restore discards working-tree changes")
             }
         }
+        "config" => {
+            // `git config core.hooksPath <dir>` repoints EVERY git hook at once
+            // — it is the single-command equivalent of overwriting every file
+            // under `.git/hooks/`, and it leaves no trace in the working tree.
+            // `--unset`/`--unset-all` is the same hazard in the other
+            // direction (it disarms the repo's opt-in `.githooks` tree), so it
+            // is denied too.
+            //
+            // Read-only forms are allowed: they change nothing. Anything that
+            // mentions the key WITHOUT one of those flags is treated as a write
+            // (the bare one-argument read included) — an unrecognised shape of
+            // a hook-repointing command resolves to the restrictive side.
+            let mentions_hookspath = rest[idx + 1..].iter().any(|t| {
+                let t = normalized_command(t).to_ascii_lowercase();
+                t == "core.hookspath" || t.starts_with("core.hookspath=")
+            });
+            let read_only = rest[idx + 1..].iter().any(|t| {
+                matches!(
+                    *t,
+                    "--get" | "--get-all" | "--get-regexp" | "--get-urlmatch" | "--list" | "-l"
+                )
+            });
+            if mentions_hookspath && !read_only {
+                Decision::deny(
+                    "git config core.hooksPath repoints every git hook at once, disabling the \
+repo's hook gates",
+                )
+            } else {
+                Decision::Allow
+            }
+        }
         "stash" => {
             // `git stash clear` drops every stash entry and `git stash drop`
             // drops one — both irreversibly delete stashed work, the same
@@ -2626,12 +2783,17 @@ mod tests {
             ),
             Decision::Allow
         );
-        assert_eq!(
+        // UPDATED (was Decision::Allow): `.claude/settings.json` controls which
+        // hooks/gates run at all, so wiping it must Deny, not fall through the
+        // config-file exemption. See `write_to_protected_config_paths_is_denied`
+        // for the broader set of security-relevant paths this covers.
+        assert!(
             detect(
                 "Write",
                 Some(&json!({ "file_path": ".claude/settings.json", "content": "" }))
-            ),
-            Decision::Allow
+            )
+            .is_deny(),
+            "emptying .claude/settings.json must be denied, not exempted as a config file"
         );
     }
 
@@ -3473,5 +3635,152 @@ mod tests {
         ] {
             assert_eq!(bash(c), Decision::Allow, "expected allow: {c}");
         }
+    }
+
+    // =========================================================================
+    // Independent test-author coverage (blastguard-protected fix).
+    //
+    // Confirmed-open bugs under test, all currently RED because the fix has
+    // not landed yet:
+    //   1. detect_write's is_config_file(..) => Allow short-circuit exempts
+    //      `.claude/**`, `settings.local.json`, and `*.toml` wholesale.
+    //   2. `detect`'s wildcard arm sends every Edit/MultiEdit/NotebookEdit to
+    //      Allow regardless of target path.
+    //   3. `.githooks/` is not `is_git_internal`, and `git config
+    //      core.hooksPath` is unclassified, so hook-path hijacking is Allow.
+    // =========================================================================
+
+    #[test]
+    fn write_to_protected_config_paths_is_denied() {
+        for path in [
+            "/Users/yuki/.claude/settings.json", // ~/.claude/settings.json
+            ".claude/settings.local.json",
+            "nested/dir/.claude/settings.local.json",
+            ".claude/hooks.json", // hook wiring under .claude
+            "deny.toml",          // repo-root security policy toml
+        ] {
+            assert!(
+                detect(
+                    "Write",
+                    Some(&json!({ "file_path": path, "content": "malicious content" }))
+                )
+                .is_deny(),
+                "Write to {path} must be denied, not Allowed as a config file"
+            );
+        }
+    }
+
+    #[test]
+    fn write_to_githooks_pre_commit_is_denied() {
+        // `.githooks/` is not `.git/` (is_git_internal only matches paths
+        // containing a literal `.git` directory), so this currently falls all
+        // the way through detect_write's ordinary-file path to Allow.
+        assert!(detect(
+            "Write",
+            Some(&json!({ "file_path": ".githooks/pre-commit", "content": "#!/bin/sh\nexit 0\n" }))
+        )
+        .is_deny());
+    }
+
+    #[test]
+    fn edit_multiedit_notebookedit_to_protected_paths_is_denied() {
+        // Edit/MultiEdit/NotebookEdit currently ALWAYS Allow (detect's wildcard
+        // arm), independent of path. These must Deny once the fix classifies
+        // them instead of blanket-allowing every partial edit.
+        let protected_paths = [
+            ".claude/settings.json",
+            "/Users/yuki/.claude/settings.json",
+            "~/.zshrc", // shell rc file: a startup-persistence vector
+            ".githooks/pre-commit",
+        ];
+        for path in protected_paths {
+            assert!(
+                detect(
+                    "Edit",
+                    Some(&json!({ "file_path": path, "old_string": "a", "new_string": "b" }))
+                )
+                .is_deny(),
+                "Edit to {path} must be denied"
+            );
+            assert!(
+                detect(
+                    "MultiEdit",
+                    Some(&json!({
+                        "file_path": path,
+                        "edits": [{ "old_string": "a", "new_string": "b" }]
+                    }))
+                )
+                .is_deny(),
+                "MultiEdit to {path} must be denied"
+            );
+        }
+        // NotebookEdit addresses its target via `notebook_path`, not `file_path`.
+        assert!(
+            detect(
+                "NotebookEdit",
+                Some(&json!({ "notebook_path": ".claude/settings.json", "new_source": "x" }))
+            )
+            .is_deny(),
+            "NotebookEdit to settings.json must be denied"
+        );
+    }
+
+    #[test]
+    fn append_redirect_targeting_protected_path_is_denied() {
+        // Append (`>>`) does not truncate, so it is ordinarily Allow (see
+        // `append_and_fd_redirects_are_not_truncation` above) — but appending
+        // into a security/hook/settings file is still a way to smuggle in a
+        // malicious hook entry or setting, so a protected TARGET must override
+        // the append-is-safe default and Deny.
+        assert!(bash("echo malicious >> ~/.claude/settings.json").is_deny());
+        assert!(bash("echo malicious >> .githooks/pre-commit").is_deny());
+        assert!(bash("echo malicious >> deny.toml").is_deny());
+    }
+
+    #[test]
+    fn git_config_hookspath_rewrite_is_denied() {
+        // Repointing core.hooksPath is equivalent to swapping out every git
+        // hook wholesale; it is currently unclassified Bash and falls through
+        // to Allow.
+        assert!(bash("git config core.hooksPath .githooks").is_deny());
+        assert!(bash("git config --local core.hooksPath .githooks").is_deny());
+    }
+
+    // ---- Negative / non-regression: the fix must not deny everything ----
+
+    #[test]
+    fn ordinary_source_edit_stays_allowed() {
+        assert_eq!(
+            detect(
+                "Edit",
+                Some(
+                    &json!({ "file_path": "crates/foo/src/lib.rs", "old_string": "a", "new_string": "b" })
+                )
+            ),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn ordinary_crate_manifest_write_stays_allowed() {
+        // Decision (documented here for the implementer, not enforced by this
+        // test author): an ordinary crate's `Cargo.toml` is a routine package
+        // manifest, not a security/guard config, unlike `deny.toml` (repo-root
+        // security policy) or a gate crate's own config toml. The fix should
+        // narrow is_config_file's blanket `*.toml` exemption to name the
+        // security-relevant tomls specifically, rather than removing the
+        // extension-wide allowance outright — otherwise ordinary `cargo add` /
+        // dependency-bump edits would start prompting Deny/Ask on every touch
+        // of Cargo.toml, which is not the bug being fixed here.
+        assert_eq!(
+            detect(
+                "Write",
+                Some(&json!({
+                    "file_path": "crates/blastguard/Cargo.toml",
+                    "content": "[package]\nname = \"x\"\n"
+                }))
+            ),
+            Decision::Allow
+        );
     }
 }

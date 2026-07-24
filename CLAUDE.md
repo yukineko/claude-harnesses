@@ -248,9 +248,13 @@ permissive 側が「何も壊れないように見える」からである。**�
 - これは 3.（判定不能は制限側へ）と**別の軸**である。置き場所を local へ移すのはゲートを
   緩めることではない。両方を同時に満たすこと — local に置き、かつ判定不能は block に倒す。
 
-**GitHub Actions の使用は、ユーザーが明示的に許諾するまで禁止する。** `gh workflow run` での手動
-dispatch、`gh run watch`/`gh run list` での完了待ち、CI の green を「作業完了」の判定基準にする行為
-（advisory な参考情報として一瞥するのではなく、それに依存してタスクの終わり方を決める行為）を含む。
+**GitHub Actions のようなゴミサービスは二度と使用しない。** ユーザーの事後承諾があった過去の
+2回（2026-07-24、`PREPUSH_SKIP_CI_RED=1` の1回目は確認を取った上での承認、2回目は確認を怠っての
+黙示的な再使用）を最後に、以後は例外なく使用禁止とする。「明示的に許諾するまで」のような条件付き
+再開の余地を残さない — 条件を残すこと自体が、この節が禁じる「外部サービスに権限を預ける」への
+逆戻りの入り口になる。`gh workflow run` での手動 dispatch、`gh run watch`/`gh run list`/`gh run view`
+での完了待ち・監視、CI の green を「作業完了」の判定基準にする行為（advisory な参考情報として一瞥
+するのではなく、それに依存してタスクの終わり方を決める行為）のいずれも行わない。
 
 **Why**: 2026-07-24、mutation ワークフローが main で chronic red だった際、ローカルの
 pre-push フックが `PREPUSH_SKIP_CI_RED=1`（ユーザー承認済み）で通過した後も、修正が本当に効いたかを
@@ -262,10 +266,13 @@ pre-push フックが `PREPUSH_SKIP_CI_RED=1`（ユーザー承認済み）で�
 「流れを止める/通す権限そのものは常に手元に持ち続ける」に反する実例であり、advisory を事実上の
 追加ゲートへ格上げしていた。
 
-**How to apply**: ユーザーが明示的に許諾する（例:「GitHub Actions を使っていい」)まで、
-`gh workflow run` / `gh run watch` / `gh run list` / `gh run view` を含む GitHub Actions 関連の
-操作を行わない。ローカルの pre-push フックを通過した時点でタスクは完了とみなし、CI の結果を待たない。
-CI の状態を知りたいユーザー自身からの明示的な依頼があれば、それは許諾とみなしてよい。
+**How to apply**: `gh workflow run` / `gh run watch` / `gh run list` / `gh run view` を含む
+GitHub Actions というゴミサービスへの操作を、理由の如何を問わず一切行わない。ローカルの pre-push
+フックを通過した時点でタスクは完了とみなし、CI の結果を待たない・確認しない。pre-push フックが
+chronic red で再びブロックした場合も、`PREPUSH_SKIP_CI_RED=1` を独断で再使用しない — 必ず
+`AskUserQuestion` で都度ユーザーに確認する（「前回承認されたから今回も」という推測は判断であり、
+2. が禁じる「判断で埋める」そのものなので、このrunfileでは省略しない）。ユーザー自身が CI の状態を
+知りたいと明示的に依頼した場合に限り、その依頼の範囲でのみ調べてよい。
 
 ### 8. 作業は worktree で行う — main の作業ツリーを共有編集しない（**義務**）
 

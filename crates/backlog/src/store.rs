@@ -1076,6 +1076,16 @@ fn now_unix() -> i64 {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    /// Serializes every test in this module that either mutates the
+    /// process-global `PATH` or spawns a real `git` subprocess. `PATH` is
+    /// process-wide, so a PATH-mutating test running concurrently with a
+    /// real-git test (cargo test's default thread-parallel execution) can
+    /// transiently blank the other thread's `PATH` mid-spawn, failing it with
+    /// a spurious `Os { code: 2, NotFound }`. Mirrors donegate's
+    /// `PROBE_PATH_ENV_LOCK` (crates/donegate/src/git.rs).
+    static PROBE_PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn tmp_path() -> PathBuf {
         let dir = tempfile::tempdir().expect("tmp dir");
@@ -1338,6 +1348,9 @@ mod tests {
 
     #[test]
     fn canonicalize_project_resolves_subdir_to_repo_root() {
+        let _g = PROBE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // A path-shaped project value resolves through git-toplevel rather
         // than being stored verbatim, so `--project "$PWD"` from any subdir
         // of a repo lands on the same string.
@@ -1361,6 +1374,9 @@ mod tests {
 
     #[test]
     fn add_canonicalizes_project_before_storing() {
+        let _g = PROBE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let path = tmp_path();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
@@ -1389,6 +1405,9 @@ mod tests {
     /// silently failed to match its own canonical stored project.
     #[test]
     fn list_matches_a_project_filter_reached_via_a_symlinked_path() {
+        let _g = PROBE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let path = tmp_path();
         let real_dir = tempfile::tempdir().unwrap();
         let real_root = real_dir.path().canonicalize().unwrap();
@@ -2344,6 +2363,9 @@ mod tests {
     /// `TASKS_LOCK_STALE_SECS`, never blocking on the hang.
     #[test]
     fn is_claimed_elsewhere_does_not_block_past_lock_stale_window_on_hang() {
+        let _g = PROBE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tmp dir");
         let fake_condukt = dir.path().join("condukt");
         std::fs::write(

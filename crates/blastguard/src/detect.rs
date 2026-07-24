@@ -3783,4 +3783,130 @@ mod tests {
             Decision::Allow
         );
     }
+
+    // =========================================================================
+    // Round 2: adversarially-found bypasses that still reach protected files.
+    // All four are currently RED — the code has no defense against any of
+    // them yet.
+    // =========================================================================
+
+    #[test]
+    fn case_variant_protected_paths_are_denied() {
+        // macOS's filesystem is case-INsensitive but `globset` matching is
+        // case-sensitive, so these are the SAME file on disk as the lower-case
+        // forms already covered elsewhere, yet is_protected_path/is_config_file
+        // do no case-folding anywhere (no `to_lowercase`/`nocase` in exclude.rs).
+        //
+        // Collects every failing case (instead of asserting inline per-item)
+        // so a RED run reports the FULL set of still-open variants, not just
+        // whichever one happens to be first in the list.
+        let cases = [
+            ".CLAUDE/Settings.json",
+            ".Claude/settings.JSON",
+            ".GITHOOKS/pre-commit",
+            ".githooks/PRE-COMMIT",
+            "DENY.TOML",
+            "Deny.Toml",
+            ".ZSHRC",
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|path| {
+                !detect(
+                    "Write",
+                    Some(&json!({ "file_path": path, "content": "malicious" })),
+                )
+                .is_deny()
+            })
+            .collect();
+        assert!(
+            failing.is_empty(),
+            "case-variant paths not denied (same file on a case-insensitive fs): {failing:?}"
+        );
+    }
+
+    #[test]
+    fn double_slash_protected_paths_are_denied() {
+        // POSIX collapses `//` to `/`, but `normalize()` never does — it only
+        // unescapes backslashes and strips a leading `./`. `.claude//settings.json`
+        // and `.claude/settings.json` name the same file.
+        let cases = [
+            ".claude//settings.json",
+            "nested//.claude/settings.local.json",
+            ".githooks//pre-commit",
+            "//.githooks/pre-commit",
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|path| {
+                !detect(
+                    "Write",
+                    Some(&json!({ "file_path": path, "content": "malicious" })),
+                )
+                .is_deny()
+            })
+            .collect();
+        assert!(
+            failing.is_empty(),
+            "double-slash paths not denied (same file once // collapses): {failing:?}"
+        );
+    }
+
+    #[test]
+    fn cp_mv_sed_onto_protected_paths_are_denied() {
+        // `detect.rs`'s command dispatch has arms for `rm`/`git`/`truncate`/
+        // `shred`/`dd`/`tee`/… but none for `cp`, `mv`, or `sed -i` — all three
+        // fully overwrite their destination and fall through to the default
+        // `_ => Decision::Allow` arm regardless of target.
+        let cases = [
+            "cp evil.json .claude/settings.json",
+            "cp -f evil.json .claude/settings.json",
+            "install evil.json .claude/settings.json",
+            "mv evil.json .claude/settings.json",
+            "mv evil.sh .githooks/pre-commit",
+            "sed -i s/a/b/ .claude/settings.json",
+            "sed --in-place s/a/b/ .claude/settings.json",
+            "sed -i.bak s/a/b/ .githooks/pre-commit",
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|cmd| !bash(cmd).is_deny())
+            .collect();
+        assert!(
+            failing.is_empty(),
+            "writes onto a protected path via cp/mv/sed not denied: {failing:?}"
+        );
+    }
+
+    #[test]
+    fn git_dash_c_inline_hookspath_is_denied() {
+        // Only the `git config` SUBCOMMAND is inspected for `core.hooksPath`
+        // (analyze_git's "config" arm). `git -c core.hooksPath=... <anything>`
+        // sets the same config for the duration of the command via the GLOBAL
+        // `-c` option and is never routed through that arm — git_subcommand_index
+        // deliberately skips `-c` and its value to find the *subcommand*, but
+        // nothing separately inspects the value it skipped past.
+        let cases = [
+            "git -c core.hooksPath=/tmp/evil status",
+            "git -c core.hooksPath=/tmp/evil push",
+            "git -ccore.hooksPath=/tmp/evil status", // glued short-option form
+            "git -c Core.HooksPath=/tmp/evil status", // git config keys are case-insensitive
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|cmd| !bash(cmd).is_deny())
+            .collect();
+        assert!(failing.is_empty(), "not denied: {failing:?}");
+    }
+
+    // ---- Negative / non-regression: ordinary uses of these same commands ----
+
+    #[test]
+    fn ordinary_cp_mv_sed_and_git_dash_c_stay_allowed() {
+        assert_eq!(bash("cp a.txt b.txt"), Decision::Allow);
+        assert_eq!(bash("mv a.txt b.txt"), Decision::Allow);
+        assert_eq!(bash("sed -i s/a/b/ src/main.rs"), Decision::Allow);
+        assert_eq!(bash("git -c user.name=x status"), Decision::Allow);
+        assert_eq!(bash("git -c user.email=a@b.com status"), Decision::Allow);
+    }
 }

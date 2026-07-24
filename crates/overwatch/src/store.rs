@@ -1189,7 +1189,14 @@ pub struct CompactionReport {
 /// atomic (temp file + rename), mirroring [`rewrite_audit_rounds`].
 ///
 /// Fail-soft: a missing hot file is a no-op reporting all-zero counts (never
-/// creates files nor errors). Never panics.
+/// creates files nor errors). A missing existing archive is likewise a
+/// legitimate no-op contribution (first compaction ever). But an existing
+/// archive that cannot be READ (permission-denied, non-UTF-8, etc.) is
+/// distinct from absent and must not be treated as if it held zero records:
+/// this now ABORTS with `Err` before either file is rewritten, so an
+/// unreadable-but-present archive is never silently discarded and then
+/// clobbered by `write_jsonl_atomic` with only the newly-archived batch.
+/// Never panics.
 pub fn compact_review_findings(cwd: &Path) -> Result<CompactionReport> {
     let hot_path = review_findings_path(cwd)?;
     if !hot_path.exists() {
@@ -1228,8 +1235,18 @@ pub fn compact_review_findings(cwd: &Path) -> Result<CompactionReport> {
     let (open, archived) = partition_findings(&findings, &resolved_ids);
 
     let archive_path = review_findings_archive_path(cwd)?;
-    let existing_archive: Vec<ReviewFinding> = match std::fs::read_to_string(&archive_path) {
-        Ok(txt) => {
+    // Read via the shared boundary tri-state (mirrors `scan_review_findings`)
+    // so "absent" (legit, first compaction) and "unreadable" (untrustworthy)
+    // are drawn by the boundary type rather than collapsed by a raw
+    // `Err(_) => Vec::new()`, which would silently discard an existing-but-
+    // unreadable archive and then let `write_jsonl_atomic` below overwrite it
+    // with only the newly-archived batch — destroying every previously
+    // archived finding.
+    let existing_archive: Vec<ReviewFinding> = match harness_core::boundary::read_to_string(
+        &archive_path,
+    ) {
+        harness_core::verdict::Determination::Known(None) => Vec::new(),
+        harness_core::verdict::Determination::Known(Some(txt)) => {
             let mut v = Vec::new();
             for line in txt.lines() {
                 if !line.is_empty() {
@@ -1240,7 +1257,12 @@ pub fn compact_review_findings(cwd: &Path) -> Result<CompactionReport> {
             }
             v
         }
-        Err(_) => Vec::new(),
+        harness_core::verdict::Determination::Undetermined(reason) => {
+            anyhow::bail!(
+                "cannot compact review findings: the existing archive at {} exists but is unreadable ({reason}); aborting before any write to avoid discarding it",
+                archive_path.display()
+            );
+        }
     };
     let already_archived = existing_archive.len();
 
@@ -2050,6 +2072,66 @@ mod tests {
         );
 
         std::env::remove_var("OVERWATCH_TEST_COMPACT_DELAY_MS");
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // A pre-existing archive that EXISTS but is UNREADABLE (non-UTF-8 bytes,
+    // independent of and root-safe unlike permission bits) must abort the
+    // compaction with an Err BEFORE any write, rather than being silently
+    // treated as absent (empty Vec) and then overwritten with only the
+    // newly-archived batch — which would destroy every previously-archived
+    // finding. RED (before the fix): the raw `std::fs::read_to_string(&
+    // archive_path)` match collapses the InvalidData error to `Vec::new()`
+    // in its `Err(_)` arm, so `compact_review_findings` returns `Ok` and
+    // `write_jsonl_atomic` clobbers the archive file, losing the non-UTF-8
+    // bytes. GREEN: the boundary tri-state read distinguishes Undetermined
+    // (unreadable) from Known(None) (absent) and bails out before either
+    // `write_jsonl_atomic` call runs, leaving the archive bytes untouched.
+    #[test]
+    fn compact_review_findings_aborts_on_unreadable_archive() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-compact-unreadable-archive-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+
+        // Seed the hot store with a resolved finding so compaction would want
+        // to archive it (and would touch the archive file) if it ran.
+        append_review_finding(&dir, &finding("r1", 1)).unwrap();
+        append_bridged_finding(&dir, "r1").unwrap();
+
+        // Corrupt the archive with non-UTF-8 bytes: std::fs::read_to_string
+        // returns Err(InvalidData) for this, which the shared boundary reader
+        // classifies as Undetermined (exists but unreadable) rather than
+        // Known(None) (absent).
+        let archive_path = review_findings_archive_path(&dir).unwrap();
+        std::fs::create_dir_all(archive_path.parent().unwrap()).unwrap();
+        let corrupt_bytes: &[u8] = &[0xFF, 0xFE, 0xFF];
+        std::fs::write(&archive_path, corrupt_bytes).unwrap();
+
+        let result = compact_review_findings(&dir);
+        assert!(
+            result.is_err(),
+            "compaction must abort (Err) when the existing archive is unreadable, not silently discard it"
+        );
+
+        // The archive on disk must be UNCHANGED: the destructive overwrite
+        // (discarding the unreadable archive as an empty Vec, then writing
+        // only the newly-archived batch) must not have happened.
+        let bytes_after = std::fs::read(&archive_path).unwrap();
+        assert_eq!(
+            bytes_after, corrupt_bytes,
+            "the unreadable archive must survive untouched, not be overwritten"
+        );
+
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),

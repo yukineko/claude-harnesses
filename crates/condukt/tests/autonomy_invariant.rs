@@ -199,6 +199,79 @@ fn gated_task_is_isolated_and_never_batched() {
 }
 
 // ---------------------------------------------------------------------------
+// 1c. CODE CONTRACT: `policy answer --untestable` never self-answers
+// ---------------------------------------------------------------------------
+//
+// The §2 "untestable -> must ask a human" gate: an untestable decision may
+// ONLY escalate or block (exactly like the existing `--conflict` clamp), so
+// even an input that would otherwise self-answer `auto` must fall through to
+// a real AskUserQuestion once framed `--untestable`.
+
+/// Run `condukt policy answer` on a fixed trivially-safe-and-reversible input
+/// (low risk / high reversibility / high confidence — the case `decide` Autos)
+/// with or without `--untestable`. Returns (exit_code, trimmed stdout).
+fn run_policy_answer_untestable(dir: &Path, untestable: bool) -> (i32, String) {
+    let mut cmd = Command::new(condukt_bin());
+    cmd.args([
+        "policy",
+        "answer",
+        "--risk",
+        "low",
+        "--reversible",
+        "high",
+        "--confidence",
+        "high",
+        "--question",
+        "Proceed with the untestable step?",
+        "--option",
+        "yes",
+        "--option",
+        "no",
+        "--recommend",
+        "0",
+        "--journal-dir",
+    ])
+    .arg(dir)
+    .env("HOME", dir);
+    if untestable {
+        cmd.arg("--untestable");
+    }
+    let out = cmd.output().expect("condukt policy answer should run");
+    let code = out.status.code().expect("process exits with a code");
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (code, stdout)
+}
+
+#[test]
+fn policy_answer_without_untestable_self_answers_the_safe_case() {
+    // Baseline: absent --untestable, this trivially-safe input self-answers
+    // `auto`. Proves the next test isn't vacuous — the flag is what changes
+    // this outcome, not the input itself.
+    let tmp = tempfile::tempdir().unwrap();
+    let (code, out) = run_policy_answer_untestable(tmp.path(), false);
+    assert_eq!(code, 0, "baseline must self-answer auto; got {out:?}");
+    assert!(out.contains("\"answered\":true"), "got {out:?}");
+}
+
+#[test]
+fn policy_answer_untestable_clamps_auto_to_escalate_never_self_answers() {
+    // The SAME input that self-answers above must fall through to a human
+    // once framed --untestable (auto -> escalate), exactly like the existing
+    // --conflict clamp: never self-answered, never journaled.
+    let tmp = tempfile::tempdir().unwrap();
+    let (code, out) = run_policy_answer_untestable(tmp.path(), true);
+    assert_eq!(code, 2, "--untestable must escalate (exit 2); got {out:?}");
+    assert_eq!(
+        out, r#"{"answered":false,"policy":"escalate"}"#,
+        "must print the escalate JSON shape, never self-answer"
+    );
+    assert!(
+        !tmp.path().join("gate-decisions.jsonl").exists(),
+        "an escalated untestable decision must not be journaled as a self-answer"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 2. SKILL AUDIT: freeze the set of `AskUserQuestion` sites
 // ---------------------------------------------------------------------------
 

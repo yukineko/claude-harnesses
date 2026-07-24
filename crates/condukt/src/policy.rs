@@ -162,6 +162,29 @@ pub fn decide_conflict_resolution(
     }
 }
 
+/// Policy posture for a decision that CANNOT be meaningfully tested (CLAUDE.md
+/// §2). When a change cannot be observed by a test — the observation is
+/// impossible, or a test would assert nothing — the surviving 質疑 channel is to
+/// ask the human: §2's "untestable → ask a human" gate must NEVER be closed by a
+/// self-answer. So an untestable decision may ONLY `Escalate` or `Block`, never
+/// `Auto`: it clamps any `Auto` verdict up to `Escalate` (ask the human) while
+/// leaving `Escalate`/`Block` untouched. The clamp only ever RAISES
+/// restrictiveness — it never relaxes an already-gated verdict. Pure; total; no
+/// panics.
+///
+/// (Exactly like [`decide_conflict_resolution`], there is deliberately NO opt-in
+/// that lets this return `Auto` — the DEFAULT and only posture is
+/// Escalate/Block. An auto-self-answered "this was untestable so I decided for
+/// you" is the precise failure this clamp kills.)
+pub fn decide_untestable(risk: Level, reversibility: Level, confidence: Level) -> Decision {
+    match decide(risk, reversibility, confidence) {
+        // An untestable decision is never auto-answerable: the safest a "just
+        // proceed" verdict can be is to ASK a human, never to silently self-answer.
+        Decision::Auto => Decision::Escalate,
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod proptests {
     //! Property-based floor for [`decide`]: monotonicity and the irreversible
@@ -407,6 +430,92 @@ mod tests {
             decide_conflict_resolution(Level::High, Level::Low, Level::Low),
             Decision::Block
         );
+    }
+
+    #[test]
+    fn untestable_never_auto_and_never_relaxes_escalate_or_block() {
+        // §2 "untestable -> must ask a human": every input for which `decide`
+        // Autos must clamp to Escalate under `decide_untestable`; every
+        // Escalate/Block input must pass through completely unchanged (it
+        // only clamps Auto, it never relaxes). Mirrors
+        // `conflict_resolution_never_auto_picks_a_side`.
+        for r in ALL {
+            for v in ALL {
+                for c in ALL {
+                    let base = decide(r, v, c);
+                    let untestable = decide_untestable(r, v, c);
+                    assert_ne!(
+                        untestable,
+                        Decision::Auto,
+                        "decide_untestable must never Auto (r={r:?} v={v:?} c={c:?})"
+                    );
+                    match base {
+                        Decision::Auto => assert_eq!(
+                            untestable,
+                            Decision::Escalate,
+                            "an Auto verdict must clamp up to Escalate (r={r:?} v={v:?} c={c:?})"
+                        ),
+                        other => assert_eq!(
+                            untestable, other,
+                            "Escalate/Block verdicts must pass through unchanged \
+                             (r={r:?} v={v:?} c={c:?})"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn anchor_untestable_escalates_the_trivially_safe_case() {
+        // The trivially-safe-and-reversible case that `decide` Autos becomes
+        // Escalate under the untestable posture (default = Escalate, not
+        // Auto). Mirrors `conflict_resolution_default_posture_is_escalate_on_the_safe_case`.
+        assert_eq!(decide(Level::Low, Level::High, Level::High), Decision::Auto);
+        assert_eq!(
+            decide_untestable(Level::Low, Level::High, Level::High),
+            Decision::Escalate
+        );
+        // A high-risk irreversible untestable decision still hard-Blocks.
+        assert_eq!(
+            decide_untestable(Level::High, Level::Low, Level::Low),
+            Decision::Block
+        );
+    }
+
+    #[test]
+    fn untestable_restrictiveness_is_never_less_than_decide() {
+        // decide_untestable's restrictiveness must be >= decide's for every
+        // input: it never yields a less restrictive verdict than plain
+        // `decide` would.
+        for r in ALL {
+            for v in ALL {
+                for c in ALL {
+                    let base = decide(r, v, c).restrictiveness();
+                    let untestable = decide_untestable(r, v, c).restrictiveness();
+                    assert!(
+                        untestable >= base,
+                        "decide_untestable must never be less restrictive than decide \
+                         (r={r:?} v={v:?} c={c:?}): base={base} untestable={untestable}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn untestable_is_total_and_never_panics() {
+        for r in ALL {
+            for v in ALL {
+                for c in ALL {
+                    let d = decide_untestable(r, v, c);
+                    assert!(matches!(
+                        d,
+                        Decision::Auto | Decision::Escalate | Decision::Block
+                    ));
+                }
+            }
+        }
     }
 
     #[test]

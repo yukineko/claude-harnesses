@@ -16,9 +16,40 @@
 ///
 /// Pure string match: no network, no git invocation. Recognizes
 /// `https://github.com/...`, `git@github.com:...`, and `ssh://git@github.com/...`.
+///
+/// Compares the parsed **host** exactly against `github.com` (case-insensitive)
+/// rather than doing a substring match, so a lookalike host
+/// (`github.company.internal`, `github.com.evil.example`) or a `github.com`
+/// occurrence elsewhere in the URL (query string, path) is not mistaken for
+/// the real remote.
 pub fn is_github_remote(remote_url: &str) -> bool {
-    let lower = remote_url.to_lowercase();
-    lower.contains("github.com")
+    let lower = remote_url.trim().to_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+
+    // SCP-like syntax has no "://": `[user@]host:path`, e.g. `git@github.com:owner/repo.git`.
+    if !lower.contains("://") {
+        return match lower.split_once('@') {
+            Some((_, after_at)) => match after_at.split_once(':') {
+                Some((host, _path)) => host == "github.com",
+                None => false,
+            },
+            None => false,
+        };
+    }
+
+    // URL form: `scheme://[user@]host[:port][/path...]`.
+    let Some((_, after_scheme)) = lower.split_once("://") else {
+        return false;
+    };
+    let host_and_rest = after_scheme.split('/').next().unwrap_or("");
+    let host_part = match host_and_rest.rsplit_once('@') {
+        Some((_, host)) => host,
+        None => host_and_rest,
+    };
+    let host = host_part.split(':').next().unwrap_or("");
+    host == "github.com"
 }
 
 /// Deterministically format the argv for `gh issue create`. Pure, no side effects.
@@ -105,6 +136,26 @@ mod tests {
             "https://git.internal.example.com/owner/repo.git"
         ));
         assert!(!is_github_remote(""));
+    }
+
+    /// A lookalike host (github.com as a prefix/suffix/substring of a
+    /// DIFFERENT host, or appearing only in the path/query) must not be
+    /// mistaken for the real github.com — this is an exact-host comparison,
+    /// not a substring match.
+    #[test]
+    fn is_github_remote_rejects_lookalike_hosts() {
+        assert!(!is_github_remote(
+            "https://github.company.internal/owner/repo.git"
+        ));
+        assert!(!is_github_remote(
+            "https://github.com.evil.example/owner/repo.git"
+        ));
+        assert!(!is_github_remote(
+            "https://evil.example/redirect?to=github.com"
+        ));
+        assert!(!is_github_remote(
+            "git@github.company.internal:owner/repo.git"
+        ));
     }
 
     #[test]

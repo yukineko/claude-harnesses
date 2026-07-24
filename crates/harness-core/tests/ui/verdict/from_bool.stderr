@@ -8,9 +8,6 @@ error[E0308]: mismatched types
    |
 note: associated function defined here
   --> $RUST/core/src/convert/mod.rs
-   |
-   |     fn from(value: T) -> Self;
-   |        ^^^^
 
 error[E0277]: the trait bound `bool: From<Verdict>` is not satisfied
   --> tests/ui/verdict/from_bool.rs:13:25

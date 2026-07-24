@@ -1087,6 +1087,48 @@ mod tests {
     /// `PROBE_PATH_ENV_LOCK` (crates/donegate/src/git.rs).
     static PROBE_PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// Deterministic proof that `PROBE_PATH_ENV_LOCK` actually serializes
+    /// holders (independent of the flaky, timing-dependent real-git/PATH
+    /// race it protects against). 8 threads race to increment a shared
+    /// counter, hold it briefly, then decrement; the max observed
+    /// concurrent-holder count must be exactly 1 if the lock is taken.
+    #[test]
+    fn probe_path_env_lock_actually_serializes_concurrent_holders() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::Duration;
+
+        let concurrent_holders = Arc::new(AtomicUsize::new(0));
+        let max_observed = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let concurrent_holders = Arc::clone(&concurrent_holders);
+                let max_observed = Arc::clone(&max_observed);
+                thread::spawn(move || {
+                    let _g = PROBE_PATH_ENV_LOCK
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let now = concurrent_holders.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_observed.fetch_max(now, Ordering::SeqCst);
+                    thread::sleep(Duration::from_millis(20));
+                    concurrent_holders.fetch_sub(1, Ordering::SeqCst);
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(
+            max_observed.load(Ordering::SeqCst),
+            1,
+            "PROBE_PATH_ENV_LOCK must serialize holders; observed {} concurrent holders",
+            max_observed.load(Ordering::SeqCst)
+        );
+    }
+
     fn tmp_path() -> PathBuf {
         let dir = tempfile::tempdir().expect("tmp dir");
         // keep the dir alive by leaking — acceptable in tests

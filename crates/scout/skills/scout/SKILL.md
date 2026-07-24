@@ -216,7 +216,9 @@ done
 **発見ストア**（`~/.compass/<project_key>/discovery.jsonl`）は、同一機械上の複数 scout セッションが**同じ施策を重複 backlog 追加する**のを防ぐ side-channel（repo 書き込みではない）。ストア呼び出しが失敗しても scout は常に続行する（**never break a turn**）。
 
 `--tag scout` を付け、scout 由来の施策と分かるようにする。`--notes` に証拠と完了条件を残し、
-実行時（condukt の interpreter）が done_criteria を引けるようにする。
+実行時（condukt の interpreter）が done_criteria を引けるようにする。クロスプロジェクトで
+繰り返し検出される作業種別（worktree衛生・デプロイ後疎通確認・ネットワーク設定等）に該当する場合は
+`docs/backlog-tag-taxonomy.md` の規約タグ（例: `worktree-hygiene`）も併せて付ける。
 
 ### Phase 6 — 実行引き渡し（autonomy で分岐）
 

@@ -28,6 +28,15 @@ pub struct Config {
     pub explore: bool,
     /// Max bytes of routing summary injected at UserPromptSubmit (0 = no limit).
     pub inject_limit: usize,
+    /// Default mode axis value ("fast"|"normal"|"high"), lowest-precedence
+    /// source in `mode::resolve` (CLI flag > `FUGU_ROUTER_MODE` env > this >
+    /// `normal`). Deliberately `Option<String>`, NOT a typed `mode::Mode`
+    /// field: `Config::load` silently falls back to `Config::default()` when
+    /// the TOML fails to parse (see below), so a typed enum field would make
+    /// the *whole file* unparseable on a bad value and the bad value would
+    /// vanish into the default rather than erroring. Keeping it a raw string
+    /// lets `mode::resolve` validate it explicitly and error loudly instead.
+    pub mode: Option<String>,
 }
 
 impl Default for Config {
@@ -48,6 +57,7 @@ impl Default for Config {
             min_samples: 1,
             explore: true,
             inject_limit: 1500,
+            mode: None,
         }
     }
 }
@@ -111,4 +121,27 @@ pub fn init_config(target: &str) -> anyhow::Result<()> {
     std::fs::write(&path, include_str!("../fugu-router.example.toml"))?;
     println!("wrote {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `mode` is `Option<String>`, not a typed `mode::Mode` enum, precisely so
+    /// a bad value doesn't make the whole TOML file unparseable (which would
+    /// make `Config::load` silently fall back to `Config::default()` on a
+    /// typo — see the field's doc comment). The TOML layer must accept any
+    /// string; the invalid value must instead surface as an explicit error
+    /// once `mode::resolve` validates it — never silently become `normal`.
+    #[test]
+    fn invalid_config_mode_string_parses_but_fails_explicit_resolve() {
+        let toml_text = r#"mode = "turbo""#;
+        let cfg: Config =
+            toml::from_str(toml_text).expect("Option<String> field must always parse");
+        assert_eq!(cfg.mode.as_deref(), Some("turbo"));
+
+        let err = crate::mode::resolve(None, None, cfg.mode.as_deref())
+            .expect_err("an invalid config `mode` must be an explicit error, not a silent default");
+        assert!(err.contains("turbo"), "{err}");
+    }
 }

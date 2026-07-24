@@ -14,6 +14,7 @@ mod decomp;
 mod fingerprint;
 mod inject;
 mod install;
+mod mode;
 mod pathutil;
 mod policy;
 mod rag;
@@ -56,6 +57,13 @@ enum Command {
         /// Also write a per-task routing report (worker/verifier/basis) here.
         #[arg(long)]
         report: Option<PathBuf>,
+        /// Aggressiveness preset applied on top of the policy's pick: `fast`
+        /// (one tier down, opus never selected), `normal` (identity,
+        /// back-compat default), `high` (one tier up, capped at opus).
+        /// Precedence: this flag > `FUGU_ROUTER_MODE` env > config.toml
+        /// `mode` > `normal`. A `gated` task is unaffected by any mode.
+        #[arg(long)]
+        mode: Option<mode::Mode>,
     },
     /// Record one task outcome into the episode store (the learning signal).
     Record {
@@ -124,6 +132,13 @@ enum Command {
         /// caller resolved it (e.g. condukt via `gauge subagents --json`).
         #[arg(long)]
         tokens_output: Option<u64>,
+        /// The mode axis ("fast"|"normal"|"high") this episode was routed
+        /// under, when the caller knows it. `None` (omit the flag) means
+        /// "not recorded" — distinct from, and never coerced into,
+        /// `Some("normal")`. Measurement only — never consulted by
+        /// `policy::route`/`decide_bandit`.
+        #[arg(long)]
+        mode: Option<mode::Mode>,
     },
     /// Check whether an episode of the given class was recorded within the
     /// last N seconds. Exit 0 if found, 1 if not — lets a caller (e.g.
@@ -176,6 +191,11 @@ enum Command {
         class: String,
         /// The task description (free text).
         text: Vec<String>,
+        /// Aggressiveness preset — see `route --mode` for the semantics and
+        /// precedence order (this flag > `FUGU_ROUTER_MODE` env > config.toml
+        /// `mode` > `normal`).
+        #[arg(long)]
+        mode: Option<mode::Mode>,
     },
     /// Print a calibrated confidence in [0,1] that a task like this one will
     /// pass verification, derived from the historical k-NN pass-rate of
@@ -497,10 +517,22 @@ fn main() {
     }
 }
 
+/// Resolve the effective mode for a CLI invocation: `mode::resolve` with the
+/// live `FUGU_ROUTER_MODE` env var and `cfg.mode`. An invalid env/config
+/// value becomes an `anyhow::Error` here, which `main()` turns into an
+/// `eprintln!` + non-zero exit — never a silent fallback to `normal`.
+fn resolve_mode(cli: Option<mode::Mode>, cfg: &config::Config) -> Result<mode::Mode> {
+    let env_value = std::env::var("FUGU_ROUTER_MODE").ok();
+    mode::resolve(cli, env_value, cfg.mode.as_deref()).map_err(anyhow::Error::msg)
+}
+
 fn run_user(cmd: Command) -> Result<()> {
     let cfg = config::Config::load();
     match cmd {
-        Command::Route { file, report } => cmd_route(&cfg, file, report),
+        Command::Route { file, report, mode } => {
+            let mode = resolve_mode(mode, &cfg)?;
+            cmd_route(&cfg, file, report, mode)
+        }
         Command::Record {
             title,
             files,
@@ -521,6 +553,7 @@ fn run_user(cmd: Command) -> Result<()> {
             lines_removed,
             tokens_input,
             tokens_output,
+            mode,
         } => {
             let raw_touched = split_files(&files);
             // Normalise absolute paths to repo-relative so stored paths are
@@ -553,6 +586,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 lines_removed,
                 tokens_input,
                 tokens_output,
+                mode: mode.map(|m| m.as_str().to_string()),
             };
             store::append(&cfg.store_path(), &ep).context("appending episode")?;
             if pass && !done_criteria.is_empty() {
@@ -620,12 +654,19 @@ fn run_user(cmd: Command) -> Result<()> {
             }
         },
         Command::Lessons { action } => cmd_lessons(action),
-        Command::Suggest { files, class, text } => {
+        Command::Suggest {
+            files,
+            class,
+            text,
+            mode,
+        } => {
             let title = text.join(" ");
             let f = split_files(&files);
             let eps = store::load(&cfg.store_path());
             let mut rng = seed_rng(eps.len());
             let d = route_decision(&cfg, &title, &f, &class, &eps, &mut rng);
+            let resolved_mode = resolve_mode(mode, &cfg)?;
+            let d = mode::apply(d, resolved_mode, &class, &title);
             println!(
                 "worker={} verifier={} ({}, {} confidence)\n  {}",
                 d.worker_model, d.verifier_model, d.basis, d.confidence, d.rationale
@@ -919,7 +960,12 @@ fn kind_str(kind: harness_core::lessons::Kind) -> &'static str {
     }
 }
 
-fn cmd_route(cfg: &config::Config, file: Option<PathBuf>, report: Option<PathBuf>) -> Result<()> {
+fn cmd_route(
+    cfg: &config::Config,
+    file: Option<PathBuf>,
+    report: Option<PathBuf>,
+    mode: mode::Mode,
+) -> Result<()> {
     let raw = match file {
         Some(p) => {
             std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?
@@ -942,6 +988,12 @@ fn cmd_route(cfg: &config::Config, file: Option<PathBuf>, report: Option<PathBuf
     let mut report_map = serde_json::Map::new();
     for t in &mut dec.tasks {
         let d = route_decision(cfg, &t.title, &t.touched_files, &t.class, &eps, &mut rng);
+        // Mode clamp FIRST, budget downgrade LAST: budget is a hard resource
+        // limit and mode is a preference, so budget must be able to negate a
+        // `high` pick (mode::apply's rationale note survives into
+        // downgrade_for_budget's appended note, so the negation stays
+        // legible rather than the high tier silently disappearing).
+        let d = mode::apply(d, mode, &t.class, &t.title);
         let d = if pressured {
             policy::downgrade_for_budget(d)
         } else {

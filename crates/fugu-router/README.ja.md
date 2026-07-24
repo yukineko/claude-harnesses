@@ -77,6 +77,24 @@ fugu-router record --title "<task title>" --files "<touched_files>" \
 
 **condukt と併用する場合、`record` の発火は手書き不要で、condukt の Stop hook が `condukt state record-run --all` で決定論的・冪等に行う**（手書き snippet は単発／condukt 非併用時のフォールバック）。
 
+### モード軸（fast / normal / high）
+
+`route`/`suggest` は `--mode fast|normal|high` を受け付ける。方策（`decide`/`decide_bandit`）が決めた `Decision` に対する**後段の決定論的クランプ**であり、学習ロジック自体は一切変更しない。
+
+- `normal` — 恒等（互換のための既定値）。方策の選択をそのまま使う。
+- `high` — worker を1ティア上げる（`opus` で頭打ち）。
+- `fast` — worker を1ティア下げる（`sonnet` で頭打ち＝`opus` は worker にも verifier にも絶対に選ばれない）。
+
+`fast`/`high` いずれも、verifier は**クランプ後の worker から** `policy::verifier_model` で再計算する（元の verifier をそのまま引き継がない）。`fast` の場合はさらに verifier を `sonnet` に上限クランプする。
+
+優先順位: `--mode` フラグ ＞ 環境変数 `FUGU_ROUTER_MODE` ＞ `config.toml` の `mode` ＞ 既定 `normal`。**不正な値（env・config いずれも）は `normal` へ黙って倒れず、明示エラー＋非0終了になる。**
+
+`class=gated`（人間承認が必要な opus/opus）はどのモードでも**無変化**（`downgrade_for_budget` の gated no-op と同じ扱い）。
+
+**適用順序: モードのクランプが先、`downgrade_for_budget`（予算逼迫時の値下げ）が後。** 予算はハードな資源制約、モードは選好にすぎないので、予算が最終的に勝つ。`mode=high` が予算逼迫で打ち消された場合も、rationale にはモードの適用結果と予算による打ち消しの両方が残る（`downgrade_for_budget` は既存の rationale に追記するだけで上書きしないため、`high` が静かに消えることはない）。
+
+`record --mode <fast|normal|high>`（任意）でそのエピソードが走ったモードを記録できる。省略時は「未記録」であり、`normal` だったことには**しない**（別々の事実として区別する）。
+
 ### その他のサブコマンド
 
 ```

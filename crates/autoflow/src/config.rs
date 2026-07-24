@@ -10,9 +10,12 @@ pub struct Config {
     /// Minimum total tool events before triggering the record prompt.
     pub min_tool_events: u64,
     pub state_dir: PathBuf,
-    /// Max times to prompt /backlog before giving up (Phase::Done).
-    /// Prevents infinite loops when the skill or command fails.
-    pub max_backlog_prompts: u32,
+    /// Consecutive no-progress observations (pending/open set not shrinking)
+    /// before a continuation branch escalates as stuck (`StopDecision::
+    /// EscalateStuck`). This is the infinite-loop backstop — a *progress*
+    /// backstop, NOT a cumulative call-count ceiling: while work keeps
+    /// shrinking, autoflow continues indefinitely. Default 3.
+    pub stuck_threshold: u32,
     /// When true (default), a `/compact` performed while THIS session holds the
     /// backlog lock drops a marker so the next UserPromptSubmit re-injects a
     /// "resume /flow" instruction (PreCompact/PostCompact can't inject directly).
@@ -26,7 +29,7 @@ struct FileConfig {
     min_turns: Option<u64>,
     min_tool_events: Option<u64>,
     state_dir: Option<String>,
-    max_backlog_prompts: Option<u32>,
+    stuck_threshold: Option<u32>,
     resume_flow_on_compact: Option<bool>,
 }
 
@@ -38,7 +41,7 @@ impl Config {
             min_turns: 2,
             min_tool_events: 3,
             state_dir: base.join("state"),
-            max_backlog_prompts: 2,
+            stuck_threshold: 3,
             resume_flow_on_compact: true,
         };
         if let Ok(txt) = std::fs::read_to_string(base.join("config.toml")) {
@@ -55,8 +58,8 @@ impl Config {
                 if let Some(v) = fc.state_dir {
                     cfg.state_dir = expand_tilde(&v);
                 }
-                if let Some(v) = fc.max_backlog_prompts {
-                    cfg.max_backlog_prompts = v;
+                if let Some(v) = fc.stuck_threshold {
+                    cfg.stuck_threshold = v;
                 }
                 if let Some(v) = fc.resume_flow_on_compact {
                     cfg.resume_flow_on_compact = v;

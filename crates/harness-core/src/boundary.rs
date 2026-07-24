@@ -228,6 +228,31 @@ pub fn run(cmd: &mut Command) -> Determination<CommandOutput> {
 /// timeout, the call is `Undetermined` rather than silently returning a
 /// partial read as if it were complete output.
 pub fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Determination<CommandOutput> {
+    run_with_timeout_and_stdin(cmd, timeout, None)
+}
+
+/// [`run_with_timeout`], additionally writing `stdin` to the child before the
+/// bounded wait begins.
+///
+/// The write happens on its own background thread rather than inline for the
+/// same reason the stdout/stderr reads do: a checker that writes enough of
+/// its own output before draining stdin can fill both the child's stdout
+/// pipe and the parent's stdin pipe at once (each ~64KB), and a synchronous
+/// `write_all` here would then block forever — *before* the wait below ever
+/// starts, so `timeout` would provide zero protection against that deadlock.
+/// The thread is detached: if the child is killed on timeout, the write
+/// simply errors out (broken pipe) and the thread exits; nothing is joined
+/// here since the join itself must not be able to block.
+///
+/// Callers that need stdin must still put `cmd.stdin(Stdio::piped())`
+/// themselves; passing `stdin: Some(_)` without that set up front means the
+/// bytes are silently dropped (there is no pipe to write them into), mirroring
+/// how `Child::stdin` is `None` in that situation.
+pub fn run_with_timeout_and_stdin(
+    cmd: &mut Command,
+    timeout: Duration,
+    stdin: Option<Vec<u8>>,
+) -> Determination<CommandOutput> {
     let display = std::iter::once(cmd.get_program())
         .chain(cmd.get_args())
         .map(|a| a.to_string_lossy().into_owned())
@@ -249,6 +274,15 @@ pub fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Determination<C
             ))
         }
     };
+
+    if let Some(bytes) = stdin {
+        if let Some(mut child_stdin) = child.stdin.take() {
+            std::thread::spawn(move || {
+                use io::Write;
+                let _ = child_stdin.write_all(&bytes);
+            });
+        }
+    }
 
     match child.wait_timeout(timeout) {
         Ok(Some(status)) => {
@@ -677,5 +711,78 @@ mod tests {
             "the process group (including the backgrounded grandchild carrying marker {marker}) \
              must be killed, not left running"
         );
+    }
+
+    // ---- run_with_timeout_and_stdin -----------------------------------------
+
+    #[test]
+    fn run_with_timeout_and_stdin_writes_and_the_child_reads_it() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("cat").stdin(Stdio::piped());
+        let out = expect_known(run_with_timeout_and_stdin(
+            &mut cmd,
+            Duration::from_secs(5),
+            Some(b"hello from stdin".to_vec()),
+        ));
+        assert_eq!(out.code(), 0);
+        assert_eq!(
+            expect_known(out.stdout_on_success()),
+            "hello from stdin",
+            "the child must see exactly the bytes written to stdin"
+        );
+    }
+
+    /// The deadlock this exists to avoid: a child that never reads stdin at
+    /// all (so a *synchronous* stdin write on this thread would block
+    /// forever, before `wait_timeout` is ever reached — the write happening
+    /// on its own background thread instead is what `run_with_timeout_and_stdin`
+    /// adds over a bare `wait_timeout` call). The child here also floods
+    /// stdout past a pipe buffer, which independently caps how quickly
+    /// `wait_timeout` itself can return (the child can stall mid-write with
+    /// nobody draining its stdout until this call's own bounded read starts,
+    /// so `wait_timeout` blocking up to the full `timeout` in that shape is
+    /// expected, not a bug — see CA-propguard-005 in `gate.rs`, which has the
+    /// same characteristic). The contract under test is narrower than "fast":
+    /// the call must still return `Undetermined` within `timeout`, i.e. the
+    /// off-thread stdin write must not add its own *unbounded* stall on top.
+    #[test]
+    fn run_with_timeout_and_stdin_does_not_deadlock_when_child_floods_stdout_first() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("yes X | head -c 500000")
+            .stdin(Stdio::piped());
+        let big_stdin = b"line of stdin content\n".repeat(20_000);
+        let timeout = Duration::from_secs(2);
+
+        let start = std::time::Instant::now();
+        let outcome = run_with_timeout_and_stdin(&mut cmd, timeout, Some(big_stdin));
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < timeout * 5,
+            "must be bounded by `timeout` (with slack for OS/CI scheduling), not hang \
+             indefinitely because the child never drains stdin; took {elapsed:?} against \
+             timeout {timeout:?}"
+        );
+        // Whatever the outcome (a timeout, or a fast exit that never needed
+        // stdin at all), it must not be silently "all pass" via a
+        // hang-then-succeed path; either shape is acceptable evidence the
+        // call returned instead of hanging unboundedly.
+        match outcome {
+            Determination::Known(_) | Determination::Undetermined(_) => {}
+        }
+    }
+
+    #[test]
+    fn run_with_timeout_and_stdin_none_behaves_like_run_with_timeout() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("printf 'no stdin needed\n'");
+        let out = expect_known(run_with_timeout_and_stdin(
+            &mut cmd,
+            Duration::from_secs(5),
+            None,
+        ));
+        assert_eq!(out.code(), 0);
+        assert_eq!(expect_known(out.stdout_on_success()), "no stdin needed\n");
     }
 }

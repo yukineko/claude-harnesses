@@ -1,7 +1,7 @@
 {
   "name": "autoflow",
-  "version": "0.1.14",
-  "description": "Session-end auto-flow gate: on Stop, prompt /record once, then loop /condukt until pending tasks are cleared (auto up to 4×, ask user from 5× onward). Subscription-native (one hook + bundled Rust binary, no API key). v0.1.14: Tier 2 delegation-record advisory now matches only genuine executed Bash tool_use invocations (not raw transcript prose/doc text) and scopes run-completion checks to THIS session's own condukt run id (not the project-wide latest run file), fixing two false-positive classes (backlog d8051ed4). v0.1.9: Stop hook now runs under harness-core's run_guarded panic barrier (fail-closed block on crash instead of silent allow).",
+  "version": "0.1.15",
+  "description": "Session-end auto-flow gate: on Stop, prompt /record once, then loop /condukt until pending tasks are cleared (auto up to 4×, ask user from 5× onward). Subscription-native (one hook + bundled Rust binary, no API key). v0.1.15: strengthened the Tier 2 delegation-record advisory's own regression test (skill_doc_text_quoting_backlog_lock_acquire_never_fires) after an independent verifier found the prior fixture vacuous — no functional code change. v0.1.14: Tier 2 delegation-record advisory now matches only genuine executed Bash tool_use invocations (not raw transcript prose/doc text) and scopes run-completion checks to THIS session's own condukt run id (not the project-wide latest run file), fixing two false-positive classes (backlog d8051ed4). v0.1.9: Stop hook now runs under harness-core's run_guarded panic barrier (fail-closed block on crash instead of silent allow).",
   "author": {
     "name": "yukineko"
   },

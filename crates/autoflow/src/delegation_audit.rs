@@ -430,14 +430,34 @@ mod tests {
     }
 
     /// Regression for root cause 1: the `/flow` SKILL.md's own documentation
-    /// text — quoting `backlog lock acquire` and a `fugu-router record
-    /// --class "flow-delegation" --delegation <fork|inline>` example as
-    /// *instructions*, not as executed commands — appearing verbatim in the
-    /// transcript (e.g. because the skill file was read/quoted back) must
-    /// never trigger the advisory on its own. Only genuine executed Bash
-    /// tool_use invocations count as evidence.
+    /// text — quoting `backlog lock acquire` as an *instruction*, not as an
+    /// executed command — appearing verbatim in the transcript (e.g. because
+    /// the skill file was read/quoted back) must never, on its own, make the
+    /// advisory think this session was `/flow`-driven.
+    ///
+    /// This is the true shape of the false positive: the doc excerpt below
+    /// mentions ONLY `"backlog lock acquire"` — deliberately NOT also
+    /// quoting a `fugu-router record --delegation` example on the same
+    /// transcript, and no real `fugu-router record --delegation` tool_use
+    /// appears anywhere either. That absence is load-bearing. Under the OLD
+    /// (pre-fix) logic — `text.contains("backlog lock acquire")` for
+    /// condition 1, and condition 3's `has_record` scanning raw
+    /// `text.lines()` for `"fugu-router record"` + `"flow-delegation"`/
+    /// `"--delegation"` — this exact fixture combination is a genuine false
+    /// positive: condition 1 is satisfied by the doc prose alone, condition 2
+    /// is satisfied by the completed run below, and condition 3's
+    /// `has_record` is `false` (no line anywhere mentions a record call), so
+    /// `!has_record` is `true` and the OLD code fires. (Confirmed against a
+    /// standalone reimplementation of the pre-fix `missing_delegation_record`
+    /// logic run over this exact transcript text — the old logic returns
+    /// `true`, i.e. it would nag the user, before this fix landed.)
+    ///
+    /// Under the NEW logic, condition 1 only looks at genuine executed Bash
+    /// `tool_use` commands — never prose — so a doc-text-only mention of
+    /// `backlog lock acquire` does not satisfy `flow_driven` and the
+    /// advisory correctly stays silent.
     #[test]
-    fn skill_doc_text_quoting_commands_never_fires() {
+    fn skill_doc_text_quoting_backlog_lock_acquire_never_fires() {
         let _guard = crate::test_home_guard();
         let home_dir = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", home_dir.path());
@@ -455,22 +475,18 @@ mod tests {
         )
         .unwrap();
 
-        // Verbatim-ish excerpt of the /flow SKILL.md's own doc content, as it
-        // would appear when the skill file gets read into the transcript as
-        // plain assistant/user prose (a file-read tool_result, or the skill
-        // instructions block) — never as an executed tool_use.
+        // Excerpt of the /flow SKILL.md's own doc content, as it would
+        // appear when the skill file gets read into the transcript as plain
+        // assistant/user prose (a file-read tool_result, or the skill
+        // instructions block) — never as an executed tool_use. Mentions
+        // ONLY `backlog lock acquire`; deliberately does NOT also quote a
+        // `fugu-router record --delegation` example (see doc comment above
+        // for why that absence is what makes this fixture non-vacuous).
         let skill_doc_excerpt = r#"
 ## Step 2: acquire the backlog lock
 
-Run `backlog lock acquire` before starting work on a task.
-
-## Step N: record the delegation
-
-After the condukt run finishes, call:
-
-    fugu-router record --title "..." --class "flow-delegation" --delegation <fork|inline>
-
-so Tier 1 auditing can find it later.
+Run `backlog lock acquire` before starting work on a task, so /flow can
+tell this session apart from an ad-hoc /condukt invocation.
 "#;
 
         let dir = tempfile::tempdir().unwrap();
@@ -480,7 +496,8 @@ so Tier 1 auditing can find it later.
                 prose_line(skill_doc_excerpt),
                 // The session's actual, real tool_use activity: it drove a
                 // condukt run to completion directly (not through /flow) and
-                // never really invoked fugu-router record.
+                // never really invoked fugu-router record — anywhere, in any
+                // form, prose or tool_use.
                 bash_tool_use_line("condukt state init"),
                 tool_result_line(run_id),
                 bash_tool_use_line(&format!(
@@ -490,7 +507,8 @@ so Tier 1 auditing can find it later.
         );
         assert!(
             !missing_delegation_record(&path, &repo),
-            "doc/prose text quoting the trigger commands must not count as real invocation evidence"
+            "doc/prose text quoting backlog lock acquire must not count as real invocation \
+             evidence, even with a completed run and no real record call anywhere"
         );
     }
 

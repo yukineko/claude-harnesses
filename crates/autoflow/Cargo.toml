@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "autoflow"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2021"
 description = "Session-end auto-flow: record + condukt continuation gate for Claude Code."
 
@@ -17,6 +17,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 clap = { workspace = true }
+regex = { workspace = true }
 wait-timeout = "0.2"
 
 [target.'cfg(unix)'.dependencies]

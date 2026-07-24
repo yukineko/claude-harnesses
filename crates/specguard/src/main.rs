@@ -29,6 +29,7 @@ mod verify;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use config::Config;
+use harness_core::verdict::Determination;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -747,13 +748,23 @@ fn ratification_block(l: &Loaded) -> Result<Option<u8>> {
     }
     let hashes = current_hashes(l);
     match ratify::read_lock(&l.repo_root) {
-        None => {
+        Determination::Known(None) => {
             eprintln!(
                 "specguard: prompt (メタ正典) が未批准です。内容を確認し、\n  `specguard accept-prompt -m \"理由\"` で批准してください。"
             );
             Ok(Some(EXIT_UNRATIFIED))
         }
-        Some(lock) => {
+        // The lock file exists but could not be read or parsed: this is NOT the
+        // same as "never ratified" and must not be reported as such — a corrupt
+        // lock could otherwise be silently re-auto-ratified (see ratify::read_lock).
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "specguard: 批准ロック ({}) が読み取れない、または壊れているため批准状態を検証できません: {why}\n  ロックファイルを確認・修復するか、`specguard accept-prompt -m \"理由\"` で再批准してください。",
+                ratify::lock_path(&l.repo_root).display()
+            );
+            Ok(Some(EXIT_UNRATIFIED))
+        }
+        Determination::Known(Some(lock)) => {
             let drift = ratify::drifted(
                 &lock,
                 &hashes,

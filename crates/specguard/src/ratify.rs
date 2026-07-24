@@ -8,6 +8,7 @@
 
 use crate::similarity;
 use anyhow::Result;
+use harness_core::verdict::Determination;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -116,10 +117,26 @@ pub fn mask_inactive(slots: &mut TemplateSlots, refute_active: bool, completenes
     }
 }
 
-/// Read the ratification lock, if present and parseable.
-pub fn read_lock(repo_root: &Path) -> Option<Lock> {
-    let text = std::fs::read_to_string(lock_path(repo_root)).ok()?;
-    toml::from_str(&text).ok()
+/// Read the ratification lock. Three-valued so an unreadable/corrupt lock is
+/// never indistinguishable from a genuinely absent one (an absent lock means
+/// "never ratified"; an unreadable/corrupt lock means "cannot tell whether it
+/// was ratified" — collapsing the two into `None` let an auto-ratify silently
+/// re-anchor the CA-specguard-05 drift precedent onto a lock it could not
+/// actually read). `Known(None)` = no lock file (legitimately unratified);
+/// `Known(Some(lock))` = read and parsed; `Undetermined` = the file exists but
+/// could not be read (permission, non-UTF-8, ...) or its TOML could not be
+/// parsed — a present-but-corrupt lock is cannot-determine, NOT absent.
+pub fn read_lock(repo_root: &Path) -> Determination<Option<Lock>> {
+    match harness_core::boundary::read_to_string(&lock_path(repo_root)) {
+        Determination::Known(None) => Determination::known(None),
+        Determination::Known(Some(text)) => match toml::from_str::<Lock>(&text) {
+            Ok(lock) => Determination::known(Some(lock)),
+            Err(e) => Determination::undetermined(format!(
+                "ratification lock is present but unparseable: {e}"
+            )),
+        },
+        Determination::Undetermined(reason) => Determination::undetermined(reason.to_string()),
+    }
 }
 
 /// Write (or overwrite) the lock — the act of ratification. The verify hashes in
@@ -152,14 +169,29 @@ pub fn write_lock(
             // Keep the human-anchored precedent, but fall back to the incoming text
             // per-slot when the prior lock has none recorded for that slot (e.g. a
             // freshly activated gate) so the precedent is still seeded.
-            Some(prev) => TemplateTexts {
+            Determination::Known(Some(prev)) => TemplateTexts {
                 audit: pick_precedent(&prev.corpus.audit, &texts.audit),
                 decisions: pick_precedent(&prev.corpus.decisions, &texts.decisions),
                 refute: pick_precedent(&prev.corpus.refute, &texts.refute),
                 completeness: pick_precedent(&prev.corpus.completeness, &texts.completeness),
             },
-            // No readable prior lock: nothing to anchor to, so record the new texts.
-            None => texts.clone(),
+            // No prior lock at all: nothing to anchor to (legitimate fresh
+            // activation), so record the new texts.
+            Determination::Known(None) => texts.clone(),
+            // The prior lock exists but could not be read or parsed: we cannot
+            // tell what the human-anchored precedent was. Auto-ratifying here
+            // would either silently drop that precedent (if we fell back to
+            // `texts.clone()`) or fabricate one — both defeat CA-specguard-05.
+            // Refuse the auto-ratify instead of writing anything.
+            Determination::Undetermined(why) => {
+                anyhow::bail!(
+                    "refusing to auto-ratify: existing ratification lock at {} is \
+                     unreadable/corrupt ({why}) — auto-ratifying now would risk losing \
+                     the human-anchored drift precedent (CA-specguard-05); resolve or \
+                     remove the lock and re-ratify with `specguard accept-prompt`",
+                    lock_path(repo_root).display()
+                );
+            }
         }
     } else {
         // Human ratification (`accept-prompt`): (re-)anchor the baseline to `texts`.
@@ -389,6 +421,18 @@ mod tests {
             refute: refute.into(),
             completeness: completeness.into(),
         }
+    }
+
+    /// Test helper: read back a lock that the test knows must be present and
+    /// parseable, panicking loudly (via `require`/`unwrap`) if it is instead
+    /// `Undetermined` or absent — i.e. the same "must exist" assertion the old
+    /// `read_lock(&dir).unwrap()` / `.expect(...)` calls made, adapted to the
+    /// tri-state return type.
+    fn present(dir: &Path) -> Lock {
+        read_lock(dir)
+            .require()
+            .expect("lock must be readable and parseable")
+            .expect("lock must be present")
     }
 
     #[test]
@@ -644,7 +688,7 @@ mod tests {
             "reason \"with\" quotes",
         )
         .unwrap();
-        let lock = read_lock(&dir).expect("lock must parse back");
+        let lock = present(&dir);
         assert_eq!(lock.audit_hash, "ah");
         assert_eq!(lock.corpus.audit, tricky);
         assert_eq!(lock.corpus.decisions, "decisions body");
@@ -698,7 +742,7 @@ mod tests {
             "human: initial ratify",
         )
         .unwrap();
-        assert_eq!(read_lock(&dir).unwrap().corpus.audit, B0);
+        assert_eq!(present(&dir).corpus.audit, B0);
 
         // A graded auto-ratify re-pins to E1 with the machine-authored reason.
         let auto_reason = format!(
@@ -714,7 +758,7 @@ mod tests {
         )
         .unwrap();
 
-        let lock = read_lock(&dir).unwrap();
+        let lock = present(&dir);
         // FIX: the corpus stays anchored to the HUMAN baseline B0 (RED before the
         // fix: the auto-ratify overwrote it with E1, letting the baseline walk).
         assert_eq!(
@@ -761,7 +805,7 @@ mod tests {
             "human: initial ratify",
         )
         .unwrap();
-        let lock = read_lock(&dir).unwrap();
+        let lock = present(&dir);
 
         // E1 individually clears the bar against the human baseline -> auto-ratify.
         assert_eq!(
@@ -779,7 +823,7 @@ mod tests {
             &auto_reason,
         )
         .unwrap();
-        let lock = read_lock(&dir).unwrap();
+        let lock = present(&dir);
         // The precedent is STILL the human baseline B0, not the walked E1.
         assert_eq!(lock.corpus.audit, B0);
 
@@ -800,6 +844,40 @@ mod tests {
         assert_eq!(
             triage_drift(&["audit-prompt"], &lock.corpus, &texts(E2, "", "", ""), thr),
             Triage::Novel(vec!["audit-prompt"])
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn auto_ratify_aborts_when_prior_lock_is_unreadable_or_corrupt() {
+        let dir = temp_dir("corrupt-lock-refuses-auto-ratify");
+
+        let corrupt: &[u8] = b"this is not valid toml : : [";
+        std::fs::write(lock_path(&dir), corrupt).unwrap();
+
+        let auto_reason =
+            format!("{AUTO_RATIFY_REASON_PREFIX}: precedented change to audit-prompt");
+        let result = write_lock(
+            &dir,
+            &hashes(&hash(E1), "", "", ""),
+            &texts(E1, "", "", ""),
+            "c1",
+            "2026-07-15",
+            &auto_reason,
+        );
+        assert!(
+            result.is_err(),
+            "an auto-ratify must refuse to proceed when the prior ratification lock \
+             is present but unreadable/corrupt, to avoid silently dropping the \
+             human-anchored CA-specguard-05 drift precedent: got {result:?}"
+        );
+
+        let on_disk = std::fs::read(lock_path(&dir)).unwrap();
+        assert_eq!(
+            on_disk, corrupt,
+            "write_lock must not touch the existing lock file when it refuses an \
+             auto-ratify over an unreadable/corrupt prior lock"
         );
 
         std::fs::remove_dir_all(&dir).ok();

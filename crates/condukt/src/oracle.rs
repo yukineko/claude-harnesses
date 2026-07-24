@@ -5,9 +5,11 @@
 //! things:
 //!
 //! - **The check does not apply, or ran but had nothing to report**: not a
-//!   fix/feature task, no `reproduction_tests`, or `tdd` ran and produced
-//!   missing/corrupt stdout. `fallback:true`, which `state::enforce_fp_gate`
-//!   Allows — the legacy `done_criteria` gate takes over.
+//!   fix/feature task, or `tdd` ran and produced missing/corrupt stdout.
+//!   `fallback:true`, which `state::enforce_fp_gate` Allows — the legacy
+//!   `done_criteria` gate takes over. (A fix/feature task that merely did not
+//!   *declare* `reproduction_tests` is NOT in this bucket: it still consults
+//!   `tdd`. The only exemption is `!requires_oracle`.)
 //! - **The oracle could not be determined**: `tdd` exited non-zero, or `tdd`
 //!   could not be spawned at all (not installed, not executable, a gone
 //!   worktree). Nothing was established, and that is *undetermined*, not
@@ -91,6 +93,12 @@ pub fn verdict_from_oracle(valid: bool, transition: Option<&str>) -> serde_json:
 /// Fail→Pass reproduction oracle, deferring to `tdd oracle --task <id>` run in
 /// `run_dir`. Pure aside from the one external process spawn; never panics.
 ///
+/// The only exemption from the F→P gate is `!requires_oracle` (not a
+/// fix/feature task). A fix/feature task is ALWAYS consulted against `tdd`,
+/// whether or not it declared `reproduction_tests` — missing
+/// `reproduction_tests` no longer short-circuits to an exempt verdict, because
+/// real tdd proofs can exist for a task that never declared them.
+///
 /// Always returns a JSON object with a `fallback` bool. `true` means "the
 /// oracle check does not apply, or `tdd` ran but had nothing usable to say —
 /// degrade to the legacy gate".
@@ -111,16 +119,20 @@ pub fn verdict_from_oracle(valid: bool, transition: Option<&str>) -> serde_json:
 /// `valid_fp_oracle: false` here as "tdd looked and found the proofs invalid".
 pub fn check_oracle(
     requires_oracle: bool,
-    reproduction_tests: Option<&str>,
+    // Retained for signature stability (callers in `main.rs` and the tests pass
+    // it positionally). It is NO LONGER a gate switch: a fix/feature task is
+    // consulted against `tdd` regardless of whether it declared
+    // `reproduction_tests`. See the `!requires_oracle`-only guard below.
+    _reproduction_tests: Option<&str>,
     task_id: &str,
     run_dir: &Path,
 ) -> serde_json::Value {
-    if !requires_oracle || reproduction_tests.is_none() {
+    if !requires_oracle {
         return serde_json::json!({
             "required": false,
             "valid_fp_oracle": false,
             "fallback": true,
-            "reason": "not a fix/feature task or no reproduction_tests",
+            "reason": "not a fix/feature task",
         });
     }
 
@@ -219,12 +231,25 @@ mod tests {
         assert_eq!(out["valid_fp_oracle"], false);
     }
 
+    /// Post-fix contract (backlog 22b69f6a): a fix/feature task
+    /// (`requires_oracle: true`) that declared no `reproduction_tests` is NOT
+    /// exempted — it must still consult `tdd`. Against a fresh empty run dir
+    /// with no recorded proofs the result is `required: true` in both worlds
+    /// (tdd present-but-no-proofs → unknown fallback, or tdd absent → spawn
+    /// Err), never the old `required: false` exemption.
     #[test]
     fn no_reproduction_tests_falls_back_even_when_required() {
-        let out = check_oracle(true, None, "t1", Path::new("."));
-        assert_eq!(out["required"], false);
-        assert_eq!(out["fallback"], true);
-        assert_eq!(out["valid_fp_oracle"], false);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let out = check_oracle(true, None, "t1", tmp.path());
+        assert_eq!(
+            out["required"], true,
+            "a fix/feature task without reproduction_tests must still consult tdd — got {out}"
+        );
+        assert_eq!(out["valid_fp_oracle"], false, "{out}");
+        assert_ne!(
+            out["reason"], "not a fix/feature task",
+            "must not resolve via the !requires_oracle exemption — got {out}"
+        );
     }
 
     /// Spawning `tdd` with a nonexistent `current_dir` reliably fails the
@@ -727,6 +752,90 @@ mod tests {
                 crate::state::FpGateDecision::Allow(Some(true))
             ),
             "exit-0 regression: {v}"
+        );
+    }
+
+    // --- THE FIX under test (backlog 22b69f6a): the top-of-function
+    // short-circuit `!requires_oracle || reproduction_tests.is_none()` must
+    // narrow to `!requires_oracle` alone. A fix/feature task
+    // (`requires_oracle: true`) that simply did not DECLARE
+    // `reproduction_tests` must NOT be exempted from the F→P gate — it must
+    // still consult `tdd`, exactly like a task that did declare
+    // `reproduction_tests`.
+    //
+    // Deterministic, env-independent pivot: after the fix,
+    // `check_oracle(true, None, <task>, <fresh dir with no recorded proofs>)`
+    // returns `required == true` in BOTH possible worlds —
+    //   (a) `tdd` is on PATH but finds no proofs for `<task>` in the dir →
+    //       `verdict_from_oracle_output`'s "unknown transition" fallback,
+    //       which is `required:true, fallback:true`, or
+    //   (b) `tdd` is not on PATH / not spawnable → the spawn-`Err` branch,
+    //       `required:true, fallback:false`.
+    // Today's short-circuit returns `required:false` unconditionally in this
+    // case, so this assertion is the RED→GREEN pivot for the bug fix and does
+    // not depend on whether `tdd` happens to be installed in the test
+    // environment.
+
+    /// THE bug (backlog 22b69f6a): a fix/feature task with no declared
+    /// `reproduction_tests` is currently exempted from the F→P gate. It must
+    /// not be — `check_oracle` must still consult `tdd` and can only resolve
+    /// to a non-required exemption via the `!requires_oracle` gate, never via
+    /// missing `reproduction_tests` alone.
+    #[test]
+    fn check_oracle_fix_or_feature_without_reproduction_tests_is_not_exempted() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        let out = check_oracle(true, None, "nonexistent-task-224466", tmp.path());
+        assert_eq!(
+            out["required"], true,
+            "a fix/feature task with no declared reproduction_tests must still \
+             consult tdd — it must not be exempted from the F\u{2192}P gate merely \
+             for not declaring reproduction_tests — got {out}"
+        );
+    }
+
+    /// Non-regression: a task that is NOT fix/feature (`requires_oracle:
+    /// false`) must stay exempted. This guards against the implementer
+    /// over-tightening the fix and deleting the legitimate `!requires_oracle`
+    /// exemption along with the buggy `reproduction_tests.is_none()` one.
+    #[test]
+    fn check_oracle_non_fix_feature_task_is_still_exempted() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        let out = check_oracle(false, None, "t1", tmp.path());
+        assert_eq!(out["required"], false, "{out}");
+        assert_eq!(out["fallback"], true, "{out}");
+    }
+
+    /// The exemption is governed by task `kind` (`requires_oracle`), not by
+    /// whether `reproduction_tests` happens to be present. A non-fix/feature
+    /// task stays exempt even when `reproduction_tests` IS declared.
+    #[test]
+    fn check_oracle_non_fix_feature_exempt_regardless_of_reproduction_tests() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        let out = check_oracle(false, Some("cargo test"), "t1", tmp.path());
+        assert_eq!(
+            out["required"], false,
+            "kind gates the exemption, not reproduction_tests — got {out}"
+        );
+    }
+
+    /// The old exempt shape's `reason` string
+    /// ("not a fix/feature task or no reproduction_tests") conflated the two
+    /// gates. Once the fix lands, a fix/feature task with no
+    /// reproduction_tests must no longer produce that exact reason, since it
+    /// is no longer exempt on that basis.
+    #[test]
+    fn check_oracle_fix_feature_no_reproduction_tests_reason_is_not_old_exempt_shape() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        let out = check_oracle(true, None, "nonexistent-task-224469", tmp.path());
+        let reason = out["reason"].as_str().unwrap_or("").to_string();
+        assert_ne!(
+            reason, "not a fix/feature task or no reproduction_tests",
+            "reason must no longer claim a fix/feature task is exempt for lacking \
+             reproduction_tests — got {out}"
         );
     }
 }

@@ -81,6 +81,12 @@ pub fn decide_issue_create<R: Fn(&[&str]) -> Option<(bool, String)>>(
     }
 }
 
+/// Extract the trailing issue number from a `gh issue create` URL
+/// (e.g. `https://github.com/owner/repo/issues/42` -> `Some(42)`). Pure, no IO.
+pub fn parse_issue_number(url: &str) -> Option<u64> {
+    url.rsplit('/').next()?.parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,6 +186,16 @@ mod tests {
             }
             other => panic!("gh failure must degrade to local-only, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_issue_number_extracts_trailing_segment() {
+        assert_eq!(
+            parse_issue_number("https://github.com/owner/repo/issues/42"),
+            Some(42)
+        );
+        assert_eq!(parse_issue_number("not-a-url"), None);
+        assert_eq!(parse_issue_number(""), None);
     }
 
     /// gh present and `issue create` succeeds ⇒ Created{url} from stdout.

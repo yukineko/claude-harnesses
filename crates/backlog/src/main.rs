@@ -305,7 +305,16 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             let now = now_unix();
-            let id = store::add_with_weight(
+            // Fail-soft GitHub push (Phase 1, one-way): resolve the project's
+            // git remote URL for real (`git config --get remote.origin.url`,
+            // best-effort empty on any failure) and inject the real `gh`
+            // spawn via `gh_probe`, mirroring condukt::pr's real-closure-at-
+            // the-call-site / fake-closure-in-tests pattern. The pure
+            // decision (`github::decide_issue_create`, driven from
+            // `store::add_with_weight_and_github_push`) never runs a process
+            // itself, so unit tests exercise it with fake closures only.
+            let remote_url = git_remote_origin_url(&project);
+            let id = store::add_with_weight_and_github_push(
                 &tasks_path,
                 &title,
                 &project,
@@ -314,6 +323,8 @@ fn run(cli: Cli) -> Result<()> {
                 weight,
                 force,
                 now,
+                &remote_url,
+                gh_probe,
             )?;
             println!("added: {id}");
         }
@@ -600,6 +611,39 @@ fn now_unix() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Best-effort git remote URL (`git config --get remote.origin.url`, run in
+/// `project`), trimmed. Empty string on any failure (not a git repo, no
+/// `origin` remote, `git` absent, non-UTF8 output) — the IO boundary for
+/// `store::add_with_weight_and_github_push`'s `remote_url` parameter. An
+/// empty/non-github.com string makes `github::is_github_remote` false, which
+/// fail-softs the push to local-only, exactly like every other failure mode
+/// here. Never spawns from within a unit test — this fn is only reachable
+/// from the `Add` handler, not from any pure decision logic under test.
+fn git_remote_origin_url(project: &str) -> String {
+    std::process::Command::new("git")
+        .args(["-C", project, "config", "--get", "remote.origin.url"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+/// Spawn `gh <argv>` and map it to the injected-runner shape
+/// `github::decide_issue_create` expects: `Some((success, combined_output))`,
+/// or `None` when the binary can't be spawned (gh absent). Never panics — a
+/// spawn failure is the fail-soft "absent" signal. Mirrors condukt::main's
+/// `gh_probe` for the same `gh_status`-style detection pattern.
+fn gh_probe(argv: &[&str]) -> Option<(bool, String)> {
+    let out = std::process::Command::new("gh").args(argv).output().ok()?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Some((out.status.success(), combined))
 }
 
 /// Unix タイムスタンプ (秒) を "YYYY-MM-DD HH:MM UTC" 形式の文字列に変換する。

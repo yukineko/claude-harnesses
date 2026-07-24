@@ -88,12 +88,35 @@ pub fn violations_path(cwd: &Path) -> Result<PathBuf> {
     Ok(storage_root(cwd)?.join("violations.jsonl"))
 }
 
-/// Fail-soft load: a missing or corrupt leases.json is treated as an empty registry.
+/// Load the lease registry, distinguishing a genuinely-absent leases.json
+/// (legitimate cold-start empty registry) from one that exists but could not
+/// be trusted (unreadable, or present but corrupt/unparseable). Reads via
+/// [`harness_core::boundary::read_to_string`] (mirrors [`scan_review_findings`])
+/// so the absent/opaque distinction is drawn by the shared boundary type
+/// rather than re-derived locally.
+///
+/// Callers do `load_leases(cwd)?` then mutate the registry then
+/// `save_leases(cwd, ..)` (an atomic temp+rename read-modify-write). If an
+/// unreadable or corrupt leases.json were folded into an empty registry (as
+/// the old fail-soft behavior did), that read-modify-write would silently
+/// clobber every other session's lease with an empty registry on the
+/// subsequent write (mass double-claim). So only a genuinely-absent file
+/// yields `Ok(LeaseRegistry::default())`; an unreadable or corrupt file
+/// yields `Err`, aborting the mutator before it can write anything back.
 pub fn load_leases(cwd: &Path) -> Result<LeaseRegistry> {
     let path = leases_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => Ok(serde_json::from_str(&txt).unwrap_or_default()),
-        Err(_) => Ok(LeaseRegistry::default()),
+    match harness_core::boundary::read_to_string(&path) {
+        harness_core::verdict::Determination::Known(None) => Ok(LeaseRegistry::default()),
+        harness_core::verdict::Determination::Known(Some(txt)) => serde_json::from_str::<
+            LeaseRegistry,
+        >(&txt)
+        .map_err(|e| anyhow::anyhow!("leases.json present but corrupt at {}: {e}", path.display())),
+        harness_core::verdict::Determination::Undetermined(reason) => {
+            anyhow::bail!(
+                "leases.json could not be read at {}: {reason}",
+                path.display()
+            )
+        }
     }
 }
 
@@ -1655,6 +1678,52 @@ mod tests {
 
         let final_reg = load_leases(&dir).unwrap();
         assert_eq!(final_reg.len(), expected);
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // A corrupt (present but unparseable) leases.json must surface as an Err
+    // from `load_leases`, not silently fold into an empty registry. RED (before
+    // the fix): the raw `std::fs::read_to_string` + `unwrap_or_default()` match
+    // collapses BOTH "unreadable" and "corrupt" into `Ok(LeaseRegistry::default())`,
+    // identical to a genuinely-absent file — a read-modify-write caller then
+    // clobbers every other session's lease with an empty registry (mass
+    // double-claim). GREEN: the boundary tri-state read distinguishes
+    // Known(None) (absent → legit empty registry) from Known(Some(txt)) with a
+    // corrupt parse, and from Undetermined (unreadable) — both of the latter
+    // two become Err.
+    #[test]
+    fn load_leases_surfaces_corrupt_or_unreadable_registry_as_err() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-store-test-corrupt-leases-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+
+        // A genuinely-absent leases.json is still a legitimate cold-start empty
+        // registry, not an error.
+        assert!(
+            load_leases(&dir).unwrap().is_empty(),
+            "a missing leases.json must still yield an empty registry"
+        );
+
+        // Now corrupt it: present bytes that are valid UTF-8 but not valid JSON.
+        let path = leases_path(&dir).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"{ this is not valid json : : [").unwrap();
+
+        assert!(
+            load_leases(&dir).is_err(),
+            "a corrupt leases.json must surface as Err, not silently fold to an empty registry"
+        );
 
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),

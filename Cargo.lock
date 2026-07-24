@@ -302,7 +302,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.105"
+version = "0.7.106"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -362,7 +362,7 @@ dependencies = [
 
 [[package]]
 name = "ctxrot"
-version = "0.5.19"
+version = "0.5.20"
 dependencies = [
  "anyhow",
  "chrono",

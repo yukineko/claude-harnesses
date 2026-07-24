@@ -1011,6 +1011,22 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
    (`gauge subagents --json` に `agent_id`/`cost_usd` が乗っている版) が必要**。それ未満、または
    agentId が解決できない場合は `--cost` に渡した値がそのまま記録される。
 
+   **verifier 側も対になる形で記録する** (計測専用。route.rs/decide_bandit 等の自動ルーティング
+   ロジックはまだこの値を読まない — 将来 hypothesis を検証する際の観測データとして蓄積するだけ)。
+   verifier agent (condukt-verifier) が `done_criteria` を照合して pass/fail の判定を返した後、
+   その判定を反映する **同じ** `state set --status verified`(または `failed`) 呼び出しに
+   `--verifier-model` / `--verifier-agent-id` を追加で渡す:
+   ```bash
+   condukt state set --run "$RID" --task "<t.id>" --status verified \
+     --model <worker に使ったモデル> --agent-id "<worker の Task tool が返した agentId>" --cost 0 \
+     --verifier-model <verifier に使ったモデル> \
+     --verifier-agent-id "<verifier の Task tool が返した agentId>"
+   # fail 時も同様に --status failed に --verifier-model/--verifier-agent-id を残す (検証の失敗も学習信号)
+   ```
+   verifier のコストが分かる場合 (`gauge subagents --json` を verifier の agentId で引けた、または
+   セッション累積コストが取れた) は `--verifier-cost` も一緒に渡してよい。省略すればいずれも
+   unchanged にフォールバックする (後方互換、fail-soft)。
+
 1.5. **ルーティング根拠 (basis/confidence/rationale) と変更行数も同じ set で残す (完全 soft・
    欠けても記録は壊れない)**。今の判断がどの根拠 (basis/confidence/rationale) で下されたかは
    Phase 2 の `<route.json>` にタスク id ごと既に入っている。これを fugu-router の episode に

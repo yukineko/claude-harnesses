@@ -231,6 +231,8 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
       backlog add --title "<課題>" --project "$PWD" --priority p1 --weight "${W:-0}"
       ```
       weight 無指定は既定 0.0＝従来の (priority, created_at) 順（後方互換）。weight は順序を変えるだけで priority は上書きしない。
+      クロスプロジェクトで繰り返し検出される作業種別は `docs/backlog-tag-taxonomy.md` の規約タグ（例:
+      `worktree-hygiene` / `deploy-verify` / `network-infra`）も併せて付ける。
 4. backlog も空なら **hypothesis（新規 discovery: open 仮説）**:
    ```bash
    hypothesis list --status open    # confidence 降順（同点 created_at 昇順）でソート済み。空なら次へ

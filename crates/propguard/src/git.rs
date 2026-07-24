@@ -9,12 +9,12 @@
 //! closed / blocks rather than treat it as clean), and `Files(v)` is the
 //! (possibly-empty) changed set.
 
+use harness_core::boundary;
 use harness_core::git_probe::{probe_repo, RepoProbe};
+use harness_core::verdict::Determination;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
-
-use wait_timeout::ChildExt;
 
 /// CA-propguard-006: every git invocation below feeds `evaluate()`, which
 /// runs *before* `run_checker` is ever reached — so a hung/slow `git`
@@ -27,9 +27,13 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Run `git <args>` in `root` with a bounded wait. Returns `None` on spawn
 /// failure, non-zero exit, or timeout — matching this module's existing
 /// "fail gracefully / treat as git-unavailable" convention (callers already
-/// tolerate `None`/empty output for those cases). On timeout the child (and,
-/// on Unix, its process group) is killed so no orphaned `git` process is
-/// left behind.
+/// tolerate `None`/empty output for those cases). The bound, the
+/// process-group kill on timeout (so no orphaned `git` process — or, if
+/// `git` were ever shell-wrapped, none of its descendants either — is left
+/// behind), and the bounded stdout read all now live in
+/// `boundary::run_with_timeout` (CA-propguard-004/005 moved there; see
+/// `harness_core::boundary` for the shared implementation and its own
+/// tests).
 fn run_git(root: &Path, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new("git");
     cmd.current_dir(root)
@@ -37,66 +41,14 @@ fn run_git(root: &Path, args: &[&str]) -> Option<String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
 
-    let mut child = cmd.spawn().ok()?;
-    match child.wait_timeout(GIT_TIMEOUT) {
-        Ok(Some(status)) => {
-            let out = read_stdout_bounded(child.stdout.take(), GIT_TIMEOUT);
-            if status.success() {
-                Some(out)
-            } else {
-                None
-            }
-        }
-        Ok(None) => {
-            kill_tree(&mut child);
-            let _ = child.wait();
-            None
-        }
-        Err(_) => None,
+    match boundary::run_with_timeout(&mut cmd, GIT_TIMEOUT) {
+        Determination::Known(out) => match out.stdout_on_success() {
+            Determination::Known(stdout) => Some(stdout),
+            Determination::Undetermined(_) => None,
+        },
+        Determination::Undetermined(_) => None,
     }
-}
-
-/// Kill the whole process tree of a timed-out `git` call, not just the
-/// direct process — mirrors the same group-kill approach used for the
-/// checker subprocess in `gate.rs` (CA-propguard-004), applied here so a
-/// hung git helper process can't outlive the timeout either.
-fn kill_tree(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        let pid = child.id() as i32;
-        // SAFETY: plain libc syscall; negative pid targets the process
-        // group we created via `process_group(0)` at spawn time. Best
-        // effort: any error is ignored, same as the plain `child.kill()` it
-        // supplements.
-        unsafe {
-            libc::kill(-pid, libc::SIGKILL);
-        }
-    }
-    let _ = child.kill();
-}
-
-/// Bounded stdout read: never block past `timeout` even if some lingering
-/// process keeps the pipe's write end open after the immediate child exits.
-/// Same rationale/shape as `gate::read_stdout_bounded` (CA-propguard-005).
-fn read_stdout_bounded(stdout: Option<std::process::ChildStdout>, timeout: Duration) -> String {
-    use std::sync::mpsc;
-    let Some(mut so) = stdout else {
-        return String::new();
-    };
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        use std::io::Read;
-        let mut out = String::new();
-        let _ = so.read_to_string(&mut out);
-        let _ = tx.send(out);
-    });
-    rx.recv_timeout(timeout).unwrap_or_default()
 }
 
 /// Tri-state result of scanning the changed-files set. Distinguishes "no git
@@ -250,6 +202,7 @@ fn truncate_on_boundary(mut s: String, max_bytes: usize) -> DiffText {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
 
@@ -290,10 +243,11 @@ mod tests {
         // it invokes — it operates on `Command::new("git")` only. To
         // exercise the *timeout* path itself (rather than "git exited
         // quickly because the dir isn't a repo"), reach for the same
-        // machinery `run_git` uses (spawn + wait_timeout) directly here,
-        // against a deliberately hanging shell command standing in for a
-        // stuck `git`, so the test doesn't depend on a real slow git binary
-        // being available.
+        // machinery `run_git` uses — `boundary::run_with_timeout` — directly
+        // here, against a deliberately hanging shell command standing in for
+        // a stuck `git`, with a short local timeout override so the test
+        // doesn't have to wait out the production `GIT_TIMEOUT` (10s) or
+        // depend on a real slow git binary being available.
         let tmp = std::env::temp_dir().join(format!(
             "propguard-git-timeout-test-{}-{}",
             std::process::id(),
@@ -301,79 +255,66 @@ mod tests {
         ));
         let _ = std::fs::create_dir_all(&tmp);
 
+        // A marker unique to this test run's pid, so the liveness probe
+        // below cannot match anything except the actual hung descendant —
+        // not the probe command's own argv (see the equivalent guard in
+        // harness-core's boundary.rs test of the same underlying mechanism).
+        let marker = format!("propguard-git-rs-hang-marker-{}", std::process::id());
+
+        let mut cmd = Command::new("sh");
+        cmd.current_dir(&tmp)
+            .args(["-c", &format!("sh -c 'sleep 30' {marker}")])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let short_timeout = Duration::from_millis(300);
+
         let start = std::time::Instant::now();
-        let out = run_hanging_via_run_git_path(&tmp);
+        let outcome = boundary::run_with_timeout(&mut cmd, short_timeout);
         let elapsed = start.elapsed();
 
         assert!(
-            out.is_none(),
-            "a timed-out invocation must fall back gracefully (None), not fabricate output"
+            matches!(outcome, Determination::Undetermined(_)),
+            "a timed-out invocation must fall back gracefully (Undetermined), not fabricate a \
+             Known result: {outcome:?}"
         );
         assert!(
             elapsed < Duration::from_secs(5),
-            "run_git must return promptly on timeout, took {elapsed:?} (GIT_TIMEOUT is only used \
-             for the real `git` binary in production; this test drives the same code path with a \
-             short local timeout override to stay fast)"
+            "run_git (via boundary::run_with_timeout) must return promptly on timeout, took \
+             {elapsed:?} (GIT_TIMEOUT is only used for the real `git` binary in production; this \
+             test drives the same code path with a short local timeout override to stay fast)"
+        );
+
+        // Give the group-kill a moment to actually land, then confirm the
+        // hung process is really gone — not merely abandoned to linger in
+        // the background while this call returned. This is run_git's own
+        // regression coverage for CA-propguard-006's "must not leave the
+        // hung process running afterwards" contract, independent of
+        // boundary's own unit test for the same mechanism.
+        std::thread::sleep(Duration::from_millis(200));
+        let still_running = expect_known(harness_core::boundary::run(
+            Command::new("pgrep").arg("-fc").arg(&marker),
+        ));
+        let count: i64 = expect_known(still_running.stdout_allowing(&[0, 1]))
+            .trim()
+            .parse()
+            .unwrap_or(-1);
+        assert_eq!(
+            count, 0,
+            "run_git must not leave a timed-out git invocation (marker {marker}) running"
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Exercises the exact spawn/wait_timeout/kill logic `run_git` uses, but
-    /// against a short-lived local timeout (instead of the production
-    /// `GIT_TIMEOUT` = 10s) and a guaranteed-to-hang command, so the
-    /// regression test itself stays fast and deterministic without requiring
-    /// a real `git` binary that can be made to hang on demand.
-    fn run_hanging_via_run_git_path(root: &Path) -> Option<String> {
-        let mut cmd = Command::new("sh");
-        cmd.current_dir(root)
-            .args(["-c", "sleep 30"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            cmd.process_group(0);
-        }
-        let mut child = cmd.spawn().ok()?;
-        let short_timeout = Duration::from_millis(300);
-        match child.wait_timeout(short_timeout) {
-            Ok(Some(status)) => {
-                let out = read_stdout_bounded(child.stdout.take(), short_timeout);
-                if status.success() {
-                    Some(out)
-                } else {
-                    None
-                }
+    #[track_caller]
+    fn expect_known<T>(d: Determination<T>) -> T {
+        match d {
+            Determination::Known(v) => v,
+            Determination::Undetermined(why) => {
+                panic!("expected Known, got Undetermined: {}", why.as_str())
             }
-            Ok(None) => {
-                kill_tree(&mut child);
-                let _ = child.wait();
-                // Verify the process is actually gone (not just detached),
-                // proving the group-kill really reached it rather than
-                // merely returning while it lingers in the background.
-                std::thread::sleep(Duration::from_millis(100));
-                assert!(
-                    !process_alive(child.id()),
-                    "kill_tree must actually terminate the hung process, not merely time out on it"
-                );
-                None
-            }
-            Err(_) => None,
         }
-    }
-
-    #[cfg(unix)]
-    fn process_alive(pid: u32) -> bool {
-        // SAFETY: signal 0 performs no action, only existence/permission
-        // checks — a standard, safe-in-practice liveness probe.
-        unsafe { libc::kill(pid as i32, 0) == 0 }
-    }
-
-    #[cfg(not(unix))]
-    fn process_alive(_pid: u32) -> bool {
-        false
     }
 
     /// evaluate()'s git-dependent step (`changed_files`) must itself return

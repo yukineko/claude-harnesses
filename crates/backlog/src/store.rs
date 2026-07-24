@@ -355,8 +355,8 @@ fn with_tasks_lock_aware<T>(path: &Path, f: impl FnOnce(bool) -> Result<T>) -> R
 /// タスクを追加して保存。生成した id を返す。weight は 0.0 (= 既定の優先順位)。
 /// weight を明示したい呼び出し元は [`add_with_weight`] を使う。
 ///
-/// バイナリ側は `--weight` を取れる [`add_with_weight`] を直接呼ぶため、この
-/// 0.0 既定ラッパーはテスト専用 (`#[cfg(test)]`)。
+/// バイナリ側は GitHub push 込みの [`add_with_weight_and_github_push`] を直接
+/// 呼ぶため、この 0.0 既定ラッパーはテスト専用 (`#[cfg(test)]`)。
 #[cfg(test)]
 pub fn add(
     path: &Path,
@@ -378,6 +378,14 @@ pub fn add(
 /// when an existing pending/failed task or a live cross-session claim already
 /// holds this title+project's [`crate::task::hashkey`]. CLI surfaces this as
 /// `backlog add --force`.
+///
+/// The binary now calls [`add_with_weight_and_github_push`] directly (it folds
+/// in a fail-soft GitHub-issue push on top of this exact logic), so this
+/// plain, push-free entry point is kept `#[cfg(test)]`-reachable: it remains
+/// the direct target of this module's own weight-ordering/duplicate-guard/
+/// concurrency tests, which don't need a `run` closure to exercise those
+/// behaviors.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn add_with_weight(
     path: &Path,
@@ -412,6 +420,8 @@ pub fn add_with_weight(
             updated_at: now,
             defer_until: None,
             weight,
+            issue_number: None,
+            issue_url: None,
         };
         tasks.push(task);
         save(path, &tasks)?;
@@ -881,6 +891,84 @@ pub fn edit(
     })
 }
 
+/// Like [`add_with_weight`], but additionally attempts a fail-soft, one-way
+/// push of the new task to GitHub as an issue (Phase 1: `backlog add` ->
+/// `gh issue create`), recording `issue_number`/`issue_url` on the persisted
+/// `Task` when it succeeds.
+///
+/// `remote_url` is the project's git remote URL (or `""`/anything
+/// non-github.com to skip the push entirely — see
+/// [`crate::github::is_github_remote`]). `run` is the SAME kind of injectable
+/// command runner `crate::github::decide_issue_create` expects
+/// (`Fn(&[&str]) -> Option<(bool, String)>`); the real `gh` spawn belongs at
+/// the IO boundary in `main.rs`, never here, so this function stays fully
+/// unit-testable with a fake closure and never spawns a process itself.
+///
+/// Fail-soft is mandatory: whatever `crate::github::decide_issue_create`
+/// decides — non-GitHub remote, `gh` absent, or `gh issue create` failing
+/// (non-zero exit) — `add_with_weight`'s local-only add still succeeds; only
+/// a `Created{url}` outcome additionally sets `issue_number`/`issue_url`
+/// (parsed via [`crate::github::parse_issue_number`]) before the SAME save.
+/// All of `add_with_weight`'s existing guards (bare-label ambiguity rejection,
+/// duplicate-content guard, tasks-file locking) are reused unchanged — this
+/// function performs the identical read-modify-write, just with the GitHub
+/// push folded into the same critical section before `save`.
+#[allow(clippy::too_many_arguments)]
+pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>(
+    path: &Path,
+    title: &str,
+    project: &str,
+    tags: Vec<String>,
+    notes: &str,
+    weight: f64,
+    force: bool,
+    now: i64,
+    remote_url: &str,
+    run: R,
+) -> Result<String> {
+    let is_bare =
+        !(project.starts_with('/') || project.starts_with('.') || project.starts_with('~'));
+    let project = &canonicalize_project(project);
+    with_tasks_lock(path, || {
+        let mut tasks = load(path)?;
+        if is_bare {
+            reject_ambiguous_bare_label(&tasks, project)?;
+        }
+        if !force {
+            check_duplicate(&tasks, title, project)?;
+        }
+        let id = new_id(title, now);
+        let mut task = Task {
+            id: id.clone(),
+            title: title.to_string(),
+            project: project.to_string(),
+            tags,
+            status: STATUS_PENDING.to_string(),
+            notes: notes.to_string(),
+            created_at: now,
+            updated_at: now,
+            defer_until: None,
+            weight,
+            issue_number: None,
+            issue_url: None,
+        };
+
+        // Fail-soft GitHub push: never abort the add on a non-GitHub remote,
+        // an absent `gh`, or a failed `gh issue create` — only a genuine
+        // `Created{url}` populates issue_number/issue_url.
+        if let crate::github::IssueOutcome::Created { url } =
+            crate::github::decide_issue_create(remote_url, title, notes, &run)
+        {
+            task.issue_number = crate::github::parse_issue_number(&url);
+            task.issue_url = Some(url);
+        }
+
+        tasks.push(task);
+        save(path, &tasks)?;
+        Ok(id)
+    })
+}
+
 /// タスク一覧を返す。フィルタは all None で全件。
 pub fn list(
     path: &Path,
@@ -988,6 +1076,58 @@ fn now_unix() -> i64 {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    /// Serializes every test in this module that either mutates the
+    /// process-global `PATH` or spawns a real `git` subprocess. `PATH` is
+    /// process-wide, so a PATH-mutating test running concurrently with a
+    /// real-git test (cargo test's default thread-parallel execution) can
+    /// transiently blank the other thread's `PATH` mid-spawn, failing it with
+    /// a spurious `Os { code: 2, NotFound }`. Mirrors donegate's
+    /// `PROBE_PATH_ENV_LOCK` (crates/donegate/src/git.rs).
+    static PROBE_PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Deterministic proof that `PROBE_PATH_ENV_LOCK` actually serializes
+    /// holders (independent of the flaky, timing-dependent real-git/PATH
+    /// race it protects against). 8 threads race to increment a shared
+    /// counter, hold it briefly, then decrement; the max observed
+    /// concurrent-holder count must be exactly 1 if the lock is taken.
+    #[test]
+    fn probe_path_env_lock_actually_serializes_concurrent_holders() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::Duration;
+
+        let concurrent_holders = Arc::new(AtomicUsize::new(0));
+        let max_observed = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let concurrent_holders = Arc::clone(&concurrent_holders);
+                let max_observed = Arc::clone(&max_observed);
+                thread::spawn(move || {
+                    let _g = PROBE_PATH_ENV_LOCK
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let now = concurrent_holders.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_observed.fetch_max(now, Ordering::SeqCst);
+                    thread::sleep(Duration::from_millis(20));
+                    concurrent_holders.fetch_sub(1, Ordering::SeqCst);
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(
+            max_observed.load(Ordering::SeqCst),
+            1,
+            "PROBE_PATH_ENV_LOCK must serialize holders; observed {} concurrent holders",
+            max_observed.load(Ordering::SeqCst)
+        );
+    }
 
     fn tmp_path() -> PathBuf {
         let dir = tempfile::tempdir().expect("tmp dir");
@@ -1250,6 +1390,9 @@ mod tests {
 
     #[test]
     fn canonicalize_project_resolves_subdir_to_repo_root() {
+        let _g = PROBE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // A path-shaped project value resolves through git-toplevel rather
         // than being stored verbatim, so `--project "$PWD"` from any subdir
         // of a repo lands on the same string.
@@ -1273,6 +1416,9 @@ mod tests {
 
     #[test]
     fn add_canonicalizes_project_before_storing() {
+        let _g = PROBE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let path = tmp_path();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
@@ -1301,6 +1447,9 @@ mod tests {
     /// silently failed to match its own canonical stored project.
     #[test]
     fn list_matches_a_project_filter_reached_via_a_symlinked_path() {
+        let _g = PROBE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let path = tmp_path();
         let real_dir = tempfile::tempdir().unwrap();
         let real_root = real_dir.path().canonicalize().unwrap();
@@ -1422,6 +1571,8 @@ mod tests {
                     updated_at: 100,
                     defer_until: Some(500),
                     weight: 0.0,
+                    issue_number: None,
+                    issue_url: None,
                 });
             }
             save(&path, &seed).unwrap();
@@ -1983,6 +2134,8 @@ mod tests {
                     updated_at: 100,
                     defer_until: None,
                     weight: 0.0,
+                    issue_number: None,
+                    issue_url: None,
                 });
             }
             save(&path, &seed).unwrap();
@@ -2252,6 +2405,9 @@ mod tests {
     /// `TASKS_LOCK_STALE_SECS`, never blocking on the hang.
     #[test]
     fn is_claimed_elsewhere_does_not_block_past_lock_stale_window_on_hang() {
+        let _g = PROBE_PATH_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tmp dir");
         let fake_condukt = dir.path().join("condukt");
         std::fs::write(
@@ -2335,6 +2491,8 @@ mod tests {
                             updated_at: 100,
                             defer_until: None,
                             weight: 0.0,
+                            issue_number: None,
+                            issue_url: None,
                         });
                     }
                     barrier.wait();
@@ -2405,6 +2563,8 @@ mod tests {
                 updated_at: 100,
                 defer_until: None,
                 weight: 0.0,
+                issue_number: None,
+                issue_url: None,
             }],
             &rec,
         )
@@ -2511,6 +2671,8 @@ mod tests {
                 updated_at: now - CLAIM_STALE_SECS - 1, // past TTL
                 defer_until: None,
                 weight: 0.0,
+                issue_number: None,
+                issue_url: None,
             },
             Task {
                 id: "fresh".to_string(),
@@ -2523,6 +2685,8 @@ mod tests {
                 updated_at: now - 1, // well within TTL
                 defer_until: None,
                 weight: 0.0,
+                issue_number: None,
+                issue_url: None,
             },
         ];
         save(&path, &seed).unwrap();
@@ -2545,5 +2709,163 @@ mod tests {
         // And plain `next` (not just next_claim) can now resurface it.
         let picked = next(&path, None, None).unwrap().unwrap();
         assert_eq!(picked.id, "stale");
+    }
+
+    // ---- add_with_weight_and_github_push (backlog-add-integration) ---------
+
+    /// Case 1: a GitHub-managed project + a successful `gh issue create` (via
+    /// the injected runner) must record issue_number/issue_url on the saved
+    /// Task, persisted to tasks.toml.
+    #[test]
+    fn github_push_records_issue_ref_on_success() {
+        let path = tmp_path();
+        let id = add_with_weight_and_github_push(
+            &path,
+            "Add feature X",
+            "/repo",
+            vec![],
+            "some body",
+            0.0,
+            false,
+            1000,
+            "https://github.com/owner/repo.git",
+            |argv| {
+                assert_eq!(
+                    argv,
+                    [
+                        "issue",
+                        "create",
+                        "--title",
+                        "Add feature X",
+                        "--body",
+                        "some body"
+                    ]
+                );
+                Some((
+                    true,
+                    "https://github.com/owner/repo/issues/42\n".to_string(),
+                ))
+            },
+        )
+        .unwrap();
+
+        let tasks = load(&path).unwrap();
+        let task = tasks.iter().find(|t| t.id == id).unwrap();
+        assert_eq!(task.issue_number, Some(42));
+        assert_eq!(
+            task.issue_url.as_deref(),
+            Some("https://github.com/owner/repo/issues/42")
+        );
+    }
+
+    /// Case 2: a non-GitHub-managed project must skip the issue-create call
+    /// entirely (fail-soft `decide_issue_create` short-circuit) and the add
+    /// must still succeed locally with issue fields left None.
+    #[test]
+    fn github_push_skipped_for_non_github_remote_add_still_succeeds() {
+        let path = tmp_path();
+        let id = add_with_weight_and_github_push(
+            &path,
+            "Task",
+            "/repo",
+            vec![],
+            "",
+            0.0,
+            false,
+            1000,
+            "https://gitlab.com/owner/repo.git",
+            |_argv| panic!("gh must not be invoked for a non-github remote"),
+        )
+        .unwrap();
+
+        let tasks = load(&path).unwrap();
+        let task = tasks.iter().find(|t| t.id == id).unwrap();
+        assert!(task.issue_number.is_none());
+        assert!(task.issue_url.is_none());
+    }
+
+    /// Case 3: `gh` absent (injected runner always returns None) must
+    /// fail-soft — `backlog add` still succeeds, issue fields stay None.
+    #[test]
+    fn github_push_gh_absent_add_still_succeeds() {
+        let path = tmp_path();
+        let id = add_with_weight_and_github_push(
+            &path,
+            "Task",
+            "/repo",
+            vec![],
+            "",
+            0.0,
+            false,
+            1000,
+            "https://github.com/owner/repo.git",
+            |_argv| None,
+        )
+        .unwrap();
+
+        let tasks = load(&path).unwrap();
+        let task = tasks.iter().find(|t| t.id == id).unwrap();
+        assert!(task.issue_number.is_none());
+        assert!(task.issue_url.is_none());
+    }
+
+    /// Case 4: `gh issue create` runs but exits non-zero — must fail-soft the
+    /// same way, add still succeeds locally, issue fields stay None.
+    #[test]
+    fn github_push_gh_failure_add_still_succeeds() {
+        let path = tmp_path();
+        let id = add_with_weight_and_github_push(
+            &path,
+            "Task",
+            "/repo",
+            vec![],
+            "",
+            0.0,
+            false,
+            1000,
+            "https://github.com/owner/repo.git",
+            |_argv| Some((false, "HTTP 422: validation failed".to_string())),
+        )
+        .unwrap();
+
+        let tasks = load(&path).unwrap();
+        let task = tasks.iter().find(|t| t.id == id).unwrap();
+        assert!(task.issue_number.is_none());
+        assert!(task.issue_url.is_none());
+    }
+
+    /// The existing guards (duplicate-content rejection, bare-label ambiguity)
+    /// must still apply on this new entry point, not just on `add_with_weight`.
+    #[test]
+    fn github_push_still_rejects_duplicate_content() {
+        let path = tmp_path();
+        add_with_weight_and_github_push(
+            &path,
+            "Same title",
+            "/repo",
+            vec![],
+            "",
+            0.0,
+            false,
+            1000,
+            "https://gitlab.com/owner/repo.git",
+            |_argv| panic!("must not be invoked for a non-github remote"),
+        )
+        .unwrap();
+
+        let err = add_with_weight_and_github_push(
+            &path,
+            "Same title",
+            "/repo",
+            vec![],
+            "",
+            0.0,
+            false,
+            2000,
+            "https://gitlab.com/owner/repo.git",
+            |_argv| panic!("must not be invoked for a non-github remote"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("duplicate"));
     }
 }

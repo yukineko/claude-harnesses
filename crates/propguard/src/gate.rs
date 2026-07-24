@@ -26,17 +26,13 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
-
 use globset::{Glob, GlobSetBuilder};
+use harness_core::boundary;
 use harness_core::verdict::{Determination, Reason};
-use wait_timeout::ChildExt;
 
 use crate::config::{Config, Mode};
 use crate::derive::{derive_properties, source_criteria, Property};
@@ -702,134 +698,43 @@ fn run_checker(
     );
 
     let mut cmd = build_command(&cfg.checker_cmd);
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    // CA-propguard-004: when `checker_cmd` is shell-wrapped (contains shell
-    // metacharacters → `harness_core::shell::command` spawns `sh -c "..."` /
-    // `cmd /C "..."`), the direct child we get back is the *shell*, not the
-    // real checker. If the shell execs or backgrounds a grandchild (or a
-    // pipeline of several processes), killing only the direct child on
-    // timeout never reaches that real process — it can keep running (and
-    // keep the stdout pipe open, see CA-propguard-005) forever. Put the
-    // child in its own process group on Unix so the whole tree the shell
-    // spawned can be killed together via a single group-kill on timeout.
-    // Best-effort on platforms without process groups (Windows): we still
-    // kill the direct child; a grandchild there may survive, but we don't
-    // regress any existing guarantee (none existed before this fix either).
-    #[cfg(unix)]
-    {
-        cmd.process_group(0);
-    }
-
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => return Determination::Undetermined(Reason::new(format!("spawn: {e}"))),
-    };
-    // Write stdin from a background thread rather than inline. If the checker
-    // writes enough stdout before draining stdin (its stdout pipe fills up
-    // while our stdin pipe is also full), a synchronous write_all here would
-    // block forever *before* we ever reach `wait_timeout` below — meaning
-    // `cfg.checker_timeout_secs` would provide zero protection against that
-    // deadlock. Doing the write on its own thread lets the main thread reach
-    // `wait_timeout` immediately, so the overall call is always bounded by the
-    // configured timeout regardless of how the child interleaves its I/O. The
-    // thread is detached: if the child is killed on timeout, the write simply
-    // errors out (broken pipe) and the thread exits; nothing to join here
-    // since we don't want the join itself to be able to block.
-    if let Some(mut stdin) = child.stdin.take() {
-        let prompt_bytes = prompt.into_bytes();
-        std::thread::spawn(move || {
-            let _ = stdin.write_all(&prompt_bytes);
-        });
-    }
-
+    cmd.stdin(Stdio::piped());
+    // Process-group placement on spawn (so a shell-wrapped checker's
+    // backgrounded grandchildren die with it on timeout — CA-propguard-004),
+    // the stdin write happening off-thread before the wait starts (so a
+    // checker that floods stdout before draining stdin can't deadlock this
+    // call — fix-propguard-003), and the stdout-pipe-stays-open-after-exit
+    // hazard (CA-propguard-005) are now all handled inside
+    // `boundary::run_with_timeout_and_stdin`; this call site owns only what's
+    // specific to a checker invocation: building the prompt, and parsing the
+    // PASS/FAIL verdict lines out of the resulting stdout.
     let timeout = Duration::from_secs(cfg.checker_timeout_secs);
-    match child.wait_timeout(timeout) {
-        Ok(Some(status)) => {
-            // CA-propguard-005: the *immediate* child (possibly the shell
-            // wrapper) having exited does not mean stdout's write end is
-            // closed — a backgrounded/detached grandchild can still hold the
-            // pipe's write end open, and a bare `read_to_string` here would
-            // then block indefinitely: a second hang vector `wait_timeout`
-            // above does nothing to bound. Do the read on its own thread and
-            // join it with the same timeout budget so this call can never
-            // hang past a reasonable bound even if the pipe stays open.
-            let out = read_stdout_bounded(child.stdout.take(), timeout);
-            // The exit status is the authority on whether the checker COMPLETED.
-            // The verdict itself lives in the `PROP <id>: PASS|FAIL` lines, never
-            // in the exit code, so a non-zero exit means the checker crashed or
-            // errored mid-run — and its stdout is then a partial, untrustworthy
-            // write that may name some properties PASS before dying. Trusting it
-            // (the old `&& out.trim().is_empty()` guard only caught the crash
-            // that ALSO wrote nothing) is the same fail-open as reading a process
-            // that exited 101 as "no errors": a crashed checker must be an Error,
+    match boundary::run_with_timeout_and_stdin(&mut cmd, timeout, Some(prompt.into_bytes())) {
+        Determination::Known(out) => {
+            // The exit status is the authority on whether the checker
+            // COMPLETED. The verdict itself lives in the `PROP <id>:
+            // PASS|FAIL` lines, never in the exit code, so a non-zero exit
+            // means the checker crashed or errored mid-run — and its stdout
+            // is then a partial, untrustworthy write that may name some
+            // properties PASS before dying. Trusting it (the old `&&
+            // out.trim().is_empty()` guard only caught the crash that ALSO
+            // wrote nothing) is the same fail-open as reading a process that
+            // exited 101 as "no errors": a crashed checker must be an Error,
             // which fails closed, not a parsed verdict.
-            if !status.success() {
-                return Determination::Undetermined(Reason::new(format!(
-                    "checker exited {:?} (non-zero exit means it did not complete; \
-                     its output cannot be trusted as a verdict)",
-                    status.code()
-                )));
+            match out.stdout_on_success() {
+                Determination::Known(stdout) => parse_checker_output(&stdout, props),
+                Determination::Undetermined(why) => {
+                    Determination::Undetermined(Reason::new(format!(
+                        "{} (its output cannot be trusted as a verdict)",
+                        why.as_str()
+                    )))
+                }
             }
-            parse_checker_output(&out, props)
         }
-        Ok(None) => {
-            kill_checker_tree(&mut child);
-            let _ = child.wait();
-            Determination::Undetermined(Reason::new("timed out"))
-        }
-        Err(e) => Determination::Undetermined(Reason::new(format!("wait: {e}"))),
-    }
-}
-
-/// Kill the checker's whole process tree on timeout, not just the direct
-/// child. On Unix, `run_checker` puts the child in its own process group
-/// (see `cmd.process_group(0)` above), so a negative-pid kill targets the
-/// group — the shell *and* whatever it exec'd/backgrounded — in one call.
-/// Falls back to killing just the direct child where that isn't available
-/// (non-Unix, or if the group id can't be determined), which is no worse
-/// than the pre-fix behavior.
-fn kill_checker_tree(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        let pid = child.id() as i32;
-        // SAFETY: `kill` is a plain libc syscall; passing a negative pid
-        // targets the process group whose id equals the child's pid (valid
-        // because we created that group via `process_group(0)` at spawn
-        // time). This is best-effort cleanup on a timeout path — any error
-        // (e.g. the group already gone) is intentionally ignored, mirroring
-        // the pre-existing `let _ = child.kill()` behavior it replaces.
-        unsafe {
-            libc::kill(-pid, libc::SIGKILL);
+        Determination::Undetermined(why) => {
+            Determination::Undetermined(Reason::new(why.as_str().to_string()))
         }
     }
-    // Always also signal the direct child through the standard API: this is
-    // a harmless no-op if the group kill above already reaped it, and it is
-    // the only mechanism at all on non-Unix platforms.
-    let _ = child.kill();
-}
-
-/// Read `stdout` to completion, but never block past `timeout`: the read
-/// happens on a background thread and we join it with a bound instead of
-/// calling `read_to_string` inline. If the join times out (pipe still open
-/// because some lingering process holds the write end), we give up and
-/// return whatever was read so far instead of hanging — the thread itself
-/// is detached and leaked in that case, matching the fail-soft, bounded-call
-/// contract the rest of `run_checker` already has via `wait_timeout`.
-fn read_stdout_bounded(stdout: Option<std::process::ChildStdout>, timeout: Duration) -> String {
-    use std::sync::mpsc;
-    let Some(mut so) = stdout else {
-        return String::new();
-    };
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        use std::io::Read;
-        let mut out = String::new();
-        let _ = so.read_to_string(&mut out);
-        let _ = tx.send(out);
-    });
-    rx.recv_timeout(timeout).unwrap_or_default()
 }
 
 /// If `line` (already lowercased) is *this* property's own verdict line — i.e.

@@ -68,19 +68,43 @@ pub fn find_pending(cwd: &Path) -> Vec<TaskState> {
         .collect()
 }
 
-/// Did the most recent condukt run for the repo containing `cwd` reach a
-/// terminal state (`verified` or `failed`) on at least one task? Used by the
-/// Tier 2 delegation-record advisory to tell "a condukt run completed this
-/// session" apart from "nothing has finished yet". Fail-soft: no run state on
-/// disk (or an unreadable/unparseable one) returns `false`.
-pub fn has_completed_tasks(cwd: &Path) -> bool {
-    match load_latest(cwd) {
-        Some((_, run)) => run
-            .tasks
-            .iter()
-            .any(|t| matches!(t.status.as_str(), "verified" | "failed")),
-        None => false,
-    }
+/// Did the SPECIFIC condukt run named `run_id` (for the repo containing `cwd`)
+/// reach a terminal state (`verified` or `failed`) on at least one task?
+///
+/// Unlike a project-wide "most recent run file" lookup (which would follow
+/// whatever run file sorts last project-wide, regardless of who wrote it),
+/// this loads the exact run file this session claims to have driven. That
+/// distinction matters for the Tier 2 delegation-record advisory: two condukt
+/// sessions can run concurrently against the same project, and "the newest
+/// run file on disk" can belong to a completely unrelated, still-running
+/// session's run rather than this session's own. Scoping to a caller-supplied
+/// `run_id` (extracted from this session's own transcript — see
+/// `delegation_audit::extract_flow_run_ids`) removes that cross-session
+/// false-positive path entirely.
+///
+/// Uses the same `<project_dir>/<safe_session(run_id)>.json` layout condukt's
+/// own `run_path` writes (see `crates/condukt/src/state.rs`), so this reads
+/// the exact file a matching `condukt state ... --run <run_id>` invocation
+/// would have written. Fail-soft: an unreadable/unparseable/missing run file
+/// returns `false`.
+pub fn has_completed_tasks_for_run(cwd: &Path, run_id: &str) -> bool {
+    let root = repo_root(cwd);
+    let key = project_key(&root);
+    let project_dir = home().join(".condukt").join("state").join(&key);
+    let path = project_dir.join(format!(
+        "{}.json",
+        harness_core::store::safe_session(run_id)
+    ));
+    let run = match std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<RunState>(&t).ok())
+    {
+        Some(r) => r,
+        None => return false,
+    };
+    run.tasks
+        .iter()
+        .any(|t| matches!(t.status.as_str(), "verified" | "failed"))
 }
 
 /// Mark the given task IDs as `running` (with current timestamp) in the most
@@ -207,37 +231,122 @@ mod tests {
             }
         }
 
-        fn write_run(&self, tasks_json: &str) {
-            let text = format!(r#"{{"run_id":"r1","goal":"g","tasks":{tasks_json}}}"#);
-            std::fs::write(self.run_dir.join("run-0001.json"), text).unwrap();
+        /// Write a run file under its own `run_id`-named path (the layout
+        /// `has_completed_tasks_for_run` reads).
+        fn write_named_run(&self, run_id: &str, tasks_json: &str) {
+            let text = format!(r#"{{"run_id":"{run_id}","goal":"g","tasks":{tasks_json}}}"#);
+            std::fs::write(
+                self.run_dir.join(format!(
+                    "{}.json",
+                    harness_core::store::safe_session(run_id)
+                )),
+                text,
+            )
+            .unwrap();
         }
     }
 
     #[test]
-    fn has_completed_tasks_true_when_a_task_is_verified() {
+    fn has_completed_tasks_for_run_true_when_that_run_verified() {
         let env = TmpEnv::new();
-        env.write_run(r#"[{"id":"t1","status":"verified"}]"#);
-        assert!(has_completed_tasks(&env.repo));
+        env.write_named_run(
+            "run-20260101-000000-1",
+            r#"[{"id":"t1","status":"verified"}]"#,
+        );
+        assert!(has_completed_tasks_for_run(
+            &env.repo,
+            "run-20260101-000000-1"
+        ));
     }
 
     #[test]
-    fn has_completed_tasks_true_when_a_task_is_failed() {
+    fn has_completed_tasks_for_run_true_when_that_run_failed() {
         let env = TmpEnv::new();
-        env.write_run(r#"[{"id":"t1","status":"failed"}]"#);
-        assert!(has_completed_tasks(&env.repo));
+        env.write_named_run(
+            "run-20260101-000000-1",
+            r#"[{"id":"t1","status":"failed"}]"#,
+        );
+        assert!(has_completed_tasks_for_run(
+            &env.repo,
+            "run-20260101-000000-1"
+        ));
     }
 
     #[test]
-    fn has_completed_tasks_false_when_only_pending() {
+    fn has_completed_tasks_for_run_false_when_only_pending() {
         let env = TmpEnv::new();
-        env.write_run(r#"[{"id":"t1","status":"pending"},{"id":"t2","status":"running"}]"#);
-        assert!(!has_completed_tasks(&env.repo));
+        env.write_named_run(
+            "run-20260101-000000-1",
+            r#"[{"id":"t1","status":"pending"},{"id":"t2","status":"running"}]"#,
+        );
+        assert!(!has_completed_tasks_for_run(
+            &env.repo,
+            "run-20260101-000000-1"
+        ));
     }
 
     #[test]
-    fn has_completed_tasks_false_when_no_run_state() {
+    fn has_completed_tasks_for_run_false_for_unknown_run_id() {
         let env = TmpEnv::new();
-        // No run-*.json written at all.
-        assert!(!has_completed_tasks(&env.repo));
+        env.write_named_run(
+            "run-20260101-000000-1",
+            r#"[{"id":"t1","status":"verified"}]"#,
+        );
+        assert!(!has_completed_tasks_for_run(
+            &env.repo,
+            "run-20260101-000000-999-does-not-exist"
+        ));
+    }
+
+    /// Regression for the cross-session false-positive (backlog d8051ed4):
+    /// two condukt runs exist for the same project — one belonging to THIS
+    /// session (still pending, not completed) and a concurrent OTHER
+    /// session's run that happens to sort later and HAS completed. A
+    /// project-wide "most recent run file" lookup (`load_latest`, which
+    /// `find_pending`/`mark_running` use for their own purposes) would follow
+    /// whatever sorts last regardless of who wrote it and wrongly attribute
+    /// the other session's completion to this one. `has_completed_tasks_for_run`
+    /// scoped to this session's own run id must not.
+    #[test]
+    fn has_completed_tasks_for_run_does_not_leak_across_sessions() {
+        let env = TmpEnv::new();
+        // This session's own run: still pending, nothing completed.
+        env.write_named_run(
+            "run-20260101-000000-1000",
+            r#"[{"id":"t1","status":"pending"}]"#,
+        );
+        // A different, concurrent session's run for the SAME project: sorts
+        // after the one above and has a verified task.
+        env.write_named_run(
+            "run-20260101-999999-2000",
+            r#"[{"id":"t1","status":"verified"}]"#,
+        );
+
+        // The project-wide, cross-session-hazardous lookup (`load_latest`)
+        // follows whatever sorts last — the other session's completed run —
+        // so naively trusting it would wrongly read as "this session
+        // completed something."
+        let (_, latest) = load_latest(&env.repo).expect("a run file exists");
+        assert!(
+            latest
+                .tasks
+                .iter()
+                .any(|t| matches!(t.status.as_str(), "verified" | "failed")),
+            "sanity check: the project-wide latest run is the OTHER session's completed one"
+        );
+
+        // But scoped to the run THIS session's own transcript actually
+        // showed it driving, completion must correctly read as `false`.
+        assert!(!has_completed_tasks_for_run(
+            &env.repo,
+            "run-20260101-000000-1000"
+        ));
+        // And scoped to the other session's run id, it correctly reads true
+        // (proving the function isn't just always false — it's genuinely
+        // scoped to the id given).
+        assert!(has_completed_tasks_for_run(
+            &env.repo,
+            "run-20260101-999999-2000"
+        ));
     }
 }

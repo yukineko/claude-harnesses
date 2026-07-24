@@ -198,6 +198,24 @@ pub struct TaskState {
     pub lines_added: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lines_removed: Option<u64>,
+    /// The model used by the verifier (as opposed to the worker) that produced
+    /// this task's verdict, when the caller supplied one via
+    /// `state set --verifier-model`. Measurement only — never consulted by
+    /// condukt's own scheduling/routing. `None` = not supplied (legacy data or
+    /// no distinct verifier model recorded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_model: Option<String>,
+    /// Observed USD cost of the verifier's work on this task, when the caller
+    /// supplied one via `state set --verifier-cost`. Same provenance/
+    /// measurement-only caveats as `verifier_model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_cost_usd: Option<f64>,
+    /// The Task-tool `agentId` of the verifier subagent that produced this
+    /// task's verdict, when the caller supplied one via
+    /// `state set --verifier-agent-id`. Same provenance/measurement-only
+    /// caveats as `verifier_model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_agent_id: Option<String>,
 }
 
 pub fn now_secs() -> i64 {
@@ -1260,6 +1278,17 @@ pub struct RecordSpec {
     pub route_rationale: Option<String>,
     pub lines_added: Option<u64>,
     pub lines_removed: Option<u64>,
+    /// Verifier-side model/cost/agent-id, supplied via `state set
+    /// --verifier-model/--verifier-cost/--verifier-agent-id`. Same
+    /// provenance/measurement-only caveats as the worker-side `model`/
+    /// `cost_usd`/`agent_id` fields above — passed through to the fugu-router
+    /// episode unchanged; never consulted by condukt itself. `verifier_model`
+    /// being `Some` is also the signal `record_runs` uses to emit a SECOND
+    /// episode with `role=verifier`, reusing this spec's title/files/class/
+    /// done_criteria/status.
+    pub verifier_model: Option<String>,
+    pub verifier_cost_usd: Option<f64>,
+    pub verifier_agent_id: Option<String>,
 }
 
 /// Build the outcomes to record for a run, or `None` when the run is not yet
@@ -1337,6 +1366,9 @@ pub fn records_for_run(
                 route_rationale: ts.route_rationale.clone(),
                 lines_added: ts.lines_added,
                 lines_removed: ts.lines_removed,
+                verifier_model: ts.verifier_model.clone(),
+                verifier_cost_usd: ts.verifier_cost_usd,
+                verifier_agent_id: ts.verifier_agent_id.clone(),
             })
         })
         .collect();
@@ -2632,6 +2664,24 @@ mod tests {
         assert_eq!(rs.tasks[0].agent_id, None);
     }
 
+    /// Backward-compat: JSON without verifier_model/verifier_cost_usd/
+    /// verifier_agent_id must load successfully with all three == None (old
+    /// run-state files predate these fields).
+    #[test]
+    fn backward_compat_no_verifier_fields() {
+        let json = r#"{
+            "run_id": "run-legacy-verifier",
+            "goal": "legacy goal",
+            "tasks": [
+                {"id": "t1", "status": "pending"}
+            ]
+        }"#;
+        let rs: RunState = serde_json::from_str(json).expect("must deserialize legacy JSON");
+        assert_eq!(rs.tasks[0].verifier_model, None);
+        assert_eq!(rs.tasks[0].verifier_cost_usd, None);
+        assert_eq!(rs.tasks[0].verifier_agent_id, None);
+    }
+
     /// agent_id round-trips through serialize/deserialize when present, and is
     /// omitted from the serialized JSON entirely when None (matches the
     /// hashkey/claimed_at/started_at convention).
@@ -2713,6 +2763,54 @@ mod tests {
             .expect("updated_at must be Some after Set");
         assert!(ts >= before, "timestamp must be >= before");
         assert!(ts <= after, "timestamp must be <= after");
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Simulates `condukt state set --run <RID> --task <id> --verifier-model
+    /// X --verifier-cost 1.5 --verifier-agent-id "agent123"`: load, apply the
+    /// same `if x.is_some() { t.x = x; }` assignment the `StateAction::Set`
+    /// handler uses, save, reload — the three verifier_* fields must round-trip.
+    #[test]
+    fn set_verifier_fields_round_trips() {
+        let tmp = make_tmp_dir("verifier-fields-set");
+        let cfg = make_test_cfg(&tmp);
+        let rs = RunState {
+            run_id: "run-verifier".into(),
+            goal: "verifier fields test".into(),
+            tasks: vec![TaskState {
+                id: "t1".into(),
+                status: Status::Pending,
+                ..Default::default()
+            }],
+            paused: false,
+            terminal_label: None,
+            recorded_at: None,
+        };
+        rs.save(&cfg, &tmp).unwrap();
+
+        let verifier_model: Option<String> = Some("X".to_string());
+        let verifier_cost: Option<f64> = Some(1.5);
+        let verifier_agent_id: Option<String> = Some("agent123".to_string());
+
+        let mut loaded = RunState::load(&cfg, &tmp, "run-verifier").unwrap();
+        let t = loaded.tasks.iter_mut().find(|t| t.id == "t1").unwrap();
+        if verifier_model.is_some() {
+            t.verifier_model = verifier_model;
+        }
+        if verifier_cost.is_some() {
+            t.verifier_cost_usd = verifier_cost;
+        }
+        if verifier_agent_id.is_some() {
+            t.verifier_agent_id = verifier_agent_id;
+        }
+        loaded.save(&cfg, &tmp).unwrap();
+
+        let reloaded = RunState::load(&cfg, &tmp, "run-verifier").unwrap();
+        let t = &reloaded.tasks[0];
+        assert_eq!(t.verifier_model.as_deref(), Some("X"));
+        assert_eq!(t.verifier_cost_usd, Some(1.5));
+        assert_eq!(t.verifier_agent_id.as_deref(), Some("agent123"));
 
         std::fs::remove_dir_all(&tmp).ok();
     }
@@ -3339,6 +3437,30 @@ mod tests {
         assert_eq!(specs[1].route_rationale, None);
         assert_eq!(specs[1].lines_added, None);
         assert_eq!(specs[1].lines_removed, None);
+    }
+
+    /// records_for_run propagates the task state's verifier_model/
+    /// verifier_cost_usd/verifier_agent_id into RecordSpec unchanged (None
+    /// stays None; Some(_) carries through).
+    #[test]
+    fn records_for_run_propagates_verifier_fields() {
+        let dec = Decomposition {
+            goal: "g".into(),
+            tasks: vec![task("a", "Task A", None), task("b", "Task B", None)],
+        };
+        let mut with_verifier = ts("a", Status::Verified);
+        with_verifier.verifier_model = Some("opus".to_string());
+        with_verifier.verifier_cost_usd = Some(1.5);
+        with_verifier.verifier_agent_id = Some("agent123".to_string());
+        let without_verifier = ts("b", Status::Verified);
+        let run = make_run_with_tasks(vec![with_verifier, without_verifier]);
+        let specs = records_for_run(&run, &dec).unwrap();
+        assert_eq!(specs[0].verifier_model, Some("opus".to_string()));
+        assert_eq!(specs[0].verifier_cost_usd, Some(1.5));
+        assert_eq!(specs[0].verifier_agent_id, Some("agent123".to_string()));
+        assert_eq!(specs[1].verifier_model, None);
+        assert_eq!(specs[1].verifier_cost_usd, None);
+        assert_eq!(specs[1].verifier_agent_id, None);
     }
 
     /// duration_secs is derived from started_at/updated_at when both are known.

@@ -84,12 +84,13 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "clap",
  "harness-core",
  "libc",
  "overwatch",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
@@ -99,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.2.0"
+version = "0.2.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -301,7 +302,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.102"
+version = "0.7.105"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -465,7 +466,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.19"
+version = "0.1.21"
 dependencies = [
  "anyhow",
  "chrono",
@@ -523,7 +524,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flow"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "serde",
@@ -656,11 +657,12 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "chrono",
  "dirs",
+ "libc",
  "proptest",
  "regex",
  "serde",
@@ -916,7 +918,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "anyhow",
  "chrono",
@@ -929,7 +931,6 @@ dependencies = [
  "serde",
  "serde_json",
  "toml 0.8.23",
- "wait-timeout",
 ]
 
 [[package]]

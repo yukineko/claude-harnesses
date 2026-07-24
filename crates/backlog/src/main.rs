@@ -616,22 +616,39 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// Bound on how long `git_remote_origin_url` waits for `git` before treating
+/// it as absent/failed. `add_with_weight_and_github_push` calls it from
+/// inside `Add`'s critical path, so an unbounded spawn (a hung `git` — a
+/// corrupt/locked index, a wedged credential helper, an fsmonitor/hook
+/// subprocess that never returns) would block the whole `backlog add`
+/// indefinitely. Kept short relative to `GH_TIMEOUT`: this is a local
+/// `git config` read, not a network round-trip to `gh`, so it does not need
+/// 20s to distinguish "slow" from "hung".
+const GIT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Best-effort git remote URL (`git config --get remote.origin.url`, run in
 /// `project`), trimmed. Empty string on any failure (not a git repo, no
-/// `origin` remote, `git` absent, non-UTF8 output) — the IO boundary for
+/// `origin` remote, `git` absent, non-UTF8 output, or a hung `git` that
+/// doesn't finish within `GIT_TIMEOUT`) — the IO boundary for
 /// `store::add_with_weight_and_github_push`'s `remote_url` parameter. An
 /// empty/non-github.com string makes `github::is_github_remote` false, which
 /// fail-softs the push to local-only, exactly like every other failure mode
-/// here. Never spawns from within a unit test — this fn is only reachable
-/// from the `Add` handler, not from any pure decision logic under test.
+/// here. Bounded via `boundary::run_with_timeout` (mirrors `gh_probe` below
+/// and `propguard::git`'s `GIT_TIMEOUT` pattern) so a hung `git` cannot hold
+/// up the caller. Never spawns from within a unit test — this fn is only
+/// reachable from the `Add` handler, not from any pure decision logic under
+/// test.
 fn git_remote_origin_url(project: &str) -> String {
-    std::process::Command::new("git")
-        .args(["-C", project, "config", "--get", "remote.origin.url"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["-C", project, "config", "--get", "remote.origin.url"])
+        .stdin(std::process::Stdio::null());
+    match boundary::run_with_timeout(&mut cmd, GIT_TIMEOUT) {
+        Determination::Known(out) => match out.stdout_allowing(&[0]) {
+            Determination::Known(s) => s.trim().to_string(),
+            Determination::Undetermined(_) => String::new(),
+        },
+        Determination::Undetermined(_) => String::new(),
+    }
 }
 
 /// Bound on how long `gh_probe` waits for `gh` before treating it as absent.
@@ -752,6 +769,66 @@ mod gh_probe_tests {
             matches!(outcome, Determination::Undetermined(_)),
             "a timed-out invocation must fall back gracefully (Undetermined), matching the \
              `None` that gh_probe maps it to, not fabricate a Known result: {outcome:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "must return promptly on timeout, took {elapsed:?}"
+        );
+    }
+}
+
+// ── git-remote-url-timeout: git_remote_origin_url must be timeout-bounded ──
+//
+// Before this fix, `git_remote_origin_url` spawned `git config --get
+// remote.origin.url` via a raw `std::process::Command::output()` with no
+// timeout at all, so a hung `git` (e.g. stuck on a corrupt/locked index, an
+// interactive credential prompt some misconfigured `git config` triggers, or
+// an fsmonitor/hook subprocess that never returns) would block the `Add`
+// command's caller indefinitely. This mirrors the exact `gh_probe`-timeout
+// fix above and `propguard::git`'s `GIT_TIMEOUT`/`run_git` treatment of the
+// same underlying problem.
+#[cfg(test)]
+#[allow(clippy::panic)]
+mod git_remote_url_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn git_timeout_is_a_concrete_bounded_value() {
+        assert!(
+            GIT_TIMEOUT > Duration::from_secs(0),
+            "GIT_TIMEOUT must be a real bound, not zero/disabled"
+        );
+        assert!(
+            GIT_TIMEOUT <= Duration::from_secs(20),
+            "GIT_TIMEOUT must stay short — this is a local git-config read, not a network \
+             call like GH_TIMEOUT, got {GIT_TIMEOUT:?}"
+        );
+    }
+
+    #[test]
+    fn hung_subprocess_via_run_with_timeout_returns_promptly_undetermined() {
+        // Exercises the exact mechanism `git_remote_origin_url` must call
+        // (`boundary::run_with_timeout`) against a deliberately hanging
+        // command, with a short local timeout override so the test doesn't
+        // have to wait out the production `GIT_TIMEOUT` or depend on a real
+        // stuck `git` binary being available.
+        let marker = format!("backlog-git-remote-url-hang-marker-{}", std::process::id());
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", &format!("sh -c 'sleep 30' {marker}")])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        let short_timeout = Duration::from_millis(300);
+
+        let start = std::time::Instant::now();
+        let outcome = boundary::run_with_timeout(&mut cmd, short_timeout);
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(outcome, Determination::Undetermined(_)),
+            "a timed-out invocation must fall back gracefully (Undetermined), matching the \
+             empty string that git_remote_origin_url maps it to, not fabricate a Known \
+             result: {outcome:?}"
         );
         assert!(
             elapsed < Duration::from_secs(5),

@@ -1282,7 +1282,10 @@ pub struct RecordSpec {
     /// --verifier-model/--verifier-cost/--verifier-agent-id`. Same
     /// provenance/measurement-only caveats as the worker-side `model`/
     /// `cost_usd`/`agent_id` fields above — passed through to the fugu-router
-    /// episode unchanged; never consulted by condukt itself.
+    /// episode unchanged; never consulted by condukt itself. `verifier_model`
+    /// being `Some` is also the signal `record_runs` uses to emit a SECOND
+    /// episode with `role=verifier`, reusing this spec's title/files/class/
+    /// done_criteria/status.
     pub verifier_model: Option<String>,
     pub verifier_cost_usd: Option<f64>,
     pub verifier_agent_id: Option<String>,

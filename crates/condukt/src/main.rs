@@ -4421,59 +4421,36 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
                 .as_deref()
                 .and_then(state::resolve_agent_cost)
                 .unwrap_or(s.cost_usd);
-            let mut cmd = std::process::Command::new(fugu_router_bin());
-            cmd.arg("record")
-                .args(["--title", &s.title])
-                .args(["--files", &s.files.join(",")])
-                .args(["--class", &s.class])
-                .args(["--model", &s.model])
-                .args(["--status", &s.status])
-                .args(["--cost", &cost.to_string()]);
-            if let Some(dc) = &s.done_criteria {
-                cmd.args(["--done-criteria", dc]);
+            let tokens = s.agent_id.as_deref().and_then(state::resolve_agent_tokens);
+            if spawn_fugu_record(s, "worker", &s.model, cost, tokens, &fingerprint) {
+                emitted += 1;
             }
-            if !fingerprint.is_empty() {
-                cmd.args(["--skill-fingerprint", &fingerprint]);
-            }
-            if let Some(secs) = s.duration_secs {
-                cmd.args(["--duration", &secs.to_string()]);
-            }
-            if let Some(b) = &s.route_basis {
-                cmd.args(["--route-basis", b]);
-            }
-            if let Some(c) = &s.route_confidence {
-                cmd.args(["--route-confidence", c]);
-            }
-            if let Some(r) = &s.route_rationale {
-                cmd.args(["--route-rationale", r]);
-            }
-            if let Some(n) = s.lines_added {
-                cmd.args(["--lines-added", &n.to_string()]);
-            }
-            if let Some(n) = s.lines_removed {
-                cmd.args(["--lines-removed", &n.to_string()]);
-            }
-            // Exact-match token resolution, mirroring the cost resolution above:
-            // fail-soft, only emitted when both counts resolve.
-            if let Some((tin, tout)) = s.agent_id.as_deref().and_then(state::resolve_agent_tokens) {
-                cmd.args(["--tokens-input", &tin.to_string()]);
-                cmd.args(["--tokens-output", &tout.to_string()]);
-            }
-            // Best-effort: a single failed record must not abort the sweep.
-            // Both a spawn failure (Err) AND a non-zero exit status count as
-            // failure — a status().ok()-only check would silently count a
-            // shelled-out `fugu-router record` that exited non-zero (e.g. an
-            // old/incompatible binary rejecting a flag) as "emitted".
-            match cmd.status() {
-                Ok(status) if status.success() => emitted += 1,
-                Ok(status) => {
-                    eprintln!(
-                        "condukt: fugu-router record failed for '{}': exit status {status}",
-                        s.title
-                    );
-                }
-                Err(e) => {
-                    eprintln!("condukt: fugu-router record failed for '{}': {e}", s.title);
+
+            // Second episode, role=verifier: only when this task carried a
+            // verifier model (`state set --verifier-model`). Reuses the same
+            // title/files/class/done_criteria/status as the worker episode —
+            // it's the same task, judged by a different (verifier) subagent.
+            // Measurement only (hypothesis f5f9522a) — never consulted by
+            // condukt's own scheduling/routing.
+            if let Some(vm) = &s.verifier_model {
+                let verifier_cost = s
+                    .verifier_agent_id
+                    .as_deref()
+                    .and_then(state::resolve_agent_cost)
+                    .unwrap_or_else(|| s.verifier_cost_usd.unwrap_or(0.0));
+                let verifier_tokens = s
+                    .verifier_agent_id
+                    .as_deref()
+                    .and_then(state::resolve_agent_tokens);
+                if spawn_fugu_record(
+                    s,
+                    "verifier",
+                    vm,
+                    verifier_cost,
+                    verifier_tokens,
+                    &fingerprint,
+                ) {
+                    emitted += 1;
                 }
             }
         }
@@ -4488,6 +4465,83 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
         );
     }
     Ok(())
+}
+
+/// Spawn one `fugu-router record --role <role>` for `s`, reusing its
+/// title/files/class/done_criteria/status/duration/route-provenance/
+/// lines-changed, but with the given `role`/`model`/`cost`/`tokens` (which
+/// differ between the worker episode and the optional verifier episode).
+/// Best-effort: a spawn failure or non-zero exit is logged and returns
+/// `false` (never aborts the caller's sweep over other specs/runs).
+fn spawn_fugu_record(
+    s: &state::RecordSpec,
+    role: &str,
+    model: &str,
+    cost: f64,
+    tokens: Option<(u64, u64)>,
+    fingerprint: &str,
+) -> bool {
+    let mut cmd = std::process::Command::new(fugu_router_bin());
+    cmd.arg("record")
+        .args(["--title", &s.title])
+        .args(["--files", &s.files.join(",")])
+        .args(["--class", &s.class])
+        .args(["--model", model])
+        .args(["--status", &s.status])
+        .args(["--role", role])
+        .args(["--cost", &cost.to_string()]);
+    if let Some(dc) = &s.done_criteria {
+        cmd.args(["--done-criteria", dc]);
+    }
+    if !fingerprint.is_empty() {
+        cmd.args(["--skill-fingerprint", fingerprint]);
+    }
+    if let Some(secs) = s.duration_secs {
+        cmd.args(["--duration", &secs.to_string()]);
+    }
+    if let Some(b) = &s.route_basis {
+        cmd.args(["--route-basis", b]);
+    }
+    if let Some(c) = &s.route_confidence {
+        cmd.args(["--route-confidence", c]);
+    }
+    if let Some(r) = &s.route_rationale {
+        cmd.args(["--route-rationale", r]);
+    }
+    if let Some(n) = s.lines_added {
+        cmd.args(["--lines-added", &n.to_string()]);
+    }
+    if let Some(n) = s.lines_removed {
+        cmd.args(["--lines-removed", &n.to_string()]);
+    }
+    // Exact-match token resolution, mirroring the cost resolution above:
+    // fail-soft, only emitted when both counts resolve.
+    if let Some((tin, tout)) = tokens {
+        cmd.args(["--tokens-input", &tin.to_string()]);
+        cmd.args(["--tokens-output", &tout.to_string()]);
+    }
+    // Best-effort: a single failed record must not abort the sweep. Both a
+    // spawn failure (Err) AND a non-zero exit status count as failure — a
+    // status().ok()-only check would silently count a shelled-out
+    // `fugu-router record` that exited non-zero (e.g. an old/incompatible
+    // binary rejecting a flag) as "emitted".
+    match cmd.status() {
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            eprintln!(
+                "condukt: fugu-router record ({role}) failed for '{}': exit status {status}",
+                s.title
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!(
+                "condukt: fugu-router record ({role}) failed for '{}': {e}",
+                s.title
+            );
+            false
+        }
+    }
 }
 
 fn init(cfg: &Config) -> Result<()> {

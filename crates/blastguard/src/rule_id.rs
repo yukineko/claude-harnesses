@@ -43,8 +43,34 @@ pub fn rule_id(reason: &str) -> &'static str {
     // redirect): they are the same recurring failure — an agent reaching for
     // the file that decides whether the gates run — and splitting them by tool
     // would fragment exactly the signature overwatch needs to see recur.
+    //
+    // ORDER IS LOAD-BEARING: the three ids below all contain the substring
+    // "protected gate/config path", so the more specific wordings must be
+    // tested BEFORE the generic one or every disarm would classify as a plain
+    // write.
+    //
+    // Round 3 (disarm by non-write): neutralising a protected path WITHOUT
+    // writing to it — `rm`, `mv` away, `chmod -x`, `git checkout --` — is a
+    // different recurring failure from writing to it, and wants a different
+    // signature: "an agent made the gate stop being read" vs "an agent edited
+    // the gate".
+    if reason.contains("disarms a protected gate/config path") {
+        return "protected-path-disarm";
+    }
+    // The CONTAINER twin: the target is the directory that holds protected
+    // paths (`rm -rf .claude`), not a protected path itself.
+    if reason.contains("destroys a directory tree holding protected gate/config paths") {
+        return "protected-tree-destroy";
+    }
     if reason.contains("protected gate/config path") {
         return "protected-path";
+    }
+    // The Ask twin of the two above: a recursive copy INTO a directory that
+    // holds protected paths. Not a verdict about the command — the landing set
+    // is not derivable from the command line — but a recurring one is the
+    // signal that some real copy shape is routinely going unanalysed.
+    if reason.contains("which holds protected gate/config paths") {
+        return "protected-landing-unenumerable";
     }
 
     // Bash: fork bomb / redirect.
@@ -75,6 +101,10 @@ pub fn rule_id(reason: &str) -> &'static str {
     }
     if reason.contains("git checkout -- . discards all working-tree changes") {
         return "git-checkout-dash-dot";
+    }
+    // The narrower `git checkout -- <path>` form: the `git restore` twin.
+    if reason.contains("git checkout -- <path> overwrites the working tree") {
+        return "git-checkout-pathspec";
     }
     if reason.contains("git config core.hooksPath repoints every git hook") {
         return "git-config-hookspath";
@@ -241,6 +271,29 @@ mod tests {
                 "Bash",
                 json!({ "command": "git config core.hooksPath .githooks" }),
             ),
+            // Round 3 (disarm by non-write). Same completeness obligation as
+            // every arm above: each NEW deny/ask wording added below has to be
+            // exercised here, or it would classify as "unknown" in the
+            // violation store while this test stayed green.
+            ("Bash", json!({ "command": "rm .githooks/pre-commit" })),
+            ("Bash", json!({ "command": "rm -rf .claude" })),
+            (
+                "Bash",
+                json!({ "command": "mv .githooks/pre-commit /tmp/x" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "chmod -x .githooks/pre-commit" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "git checkout -- .claude/settings.json" }),
+            ),
+            ("Bash", json!({ "command": "git checkout -- src/main.rs" })),
+            ("Bash", json!({ "command": "tee -a .githooks/pre-commit" })),
+            // The Ask twin: a recursive copy into a directory that HOLDS
+            // protected paths.
+            ("Bash", json!({ "command": "cp -r evildir/ .claude/" })),
             // D4 analysis-budget deny. This case was missing when the budget
             // was introduced, so this test passed while the new deny path
             // classified to "unknown" — the test asserted completeness it did

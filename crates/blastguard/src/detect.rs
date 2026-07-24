@@ -90,6 +90,84 @@ gates or policies run, so blastguard refuses"
     }
 }
 
+/// Deny reason for an operation that DISARMS a protected gate/hook/policy path
+/// without writing a single byte to it, or `None` when the target is not one.
+///
+/// Round 3. Every rule up to 0.2.18 asked "do bytes land ON this file?" — Write,
+/// Edit, `>`/`>>`, `cp`/`mv`/`install`/`ln` DESTINATION, `sed -i`. A guard does
+/// not have to be rewritten to be switched off; it only has to stop running.
+/// Deleting it, moving it out of the directory the loader looks in, clearing its
+/// exec bit, or restoring it from the index all leave the bytes untouched (or
+/// remove them wholesale) and are invisible to a destination-only rule.
+///
+/// Kept as its own wording — and its own [`crate::rule_id`] id — rather than
+/// folded into [`protected_path_deny`], because "an agent WROTE to the file that
+/// decides whether the gates run" and "an agent made that file stop being read"
+/// are different recurring failures and want different signatures.
+fn protected_disarm_deny(action: &str, path: &str) -> Option<Decision> {
+    if exclude::is_protected_path(path) {
+        Some(Decision::deny(format!(
+            "{action} disarms a protected gate/config path ({path}) without writing to it — \
+it controls which hooks, gates or policies run, so blastguard refuses"
+        )))
+    } else {
+        None
+    }
+}
+
+/// Deny reason for an operation that destroys a whole DIRECTORY TREE holding
+/// protected paths.
+///
+/// Separate from [`protected_disarm_deny`] because the target is the CONTAINER,
+/// not the file: `.claude` matches no protected glob, yet `rm -rf .claude` takes
+/// `.claude/settings.json` and every `.claude/hooks/*` with it. The verdict is a
+/// Deny rather than an Ask because a recursive delete of a directory removes
+/// EVERYTHING under it — the protected paths are a subset of what goes, so there
+/// is nothing to guess about.
+fn protected_tree_deny(action: &str, path: &str) -> Option<Decision> {
+    if exclude::is_protected_path(path) || exclude::holds_protected_paths(path) {
+        Some(Decision::deny(format!(
+            "{action} destroys a directory tree holding protected gate/config paths ({path}) — \
+it controls which hooks, gates or policies run, so blastguard refuses"
+        )))
+    } else {
+        None
+    }
+}
+
+/// Verdict for a RECURSIVE copy whose landing directory is, or holds, protected
+/// paths.
+///
+/// The two cases are genuinely different questions and get different answers:
+///
+///   * the landing directory IS protected (`.claude/hooks/`, `.githooks/`) —
+///     every file the copy creates lands inside a protected tree, so this is a
+///     positively recognised hazard: **Deny**;
+///   * the landing directory merely HOLDS protected paths (`.claude/`) —
+///     whether the copy overwrites `.claude/settings.json` depends on the
+///     SOURCE tree's contents, which exist only on disk at run time and are not
+///     derivable from the command line: **Ask**.
+///
+/// The second is the textbook case for the third answer (`model.rs`: "it is NOT
+/// a verdict about the command, it is a refusal to guess about one"). It is not
+/// a softer Deny: with no human in the loop `Decision::hardened` collapses it to
+/// a Deny, so the restrictive resolution CLAUDE.md requires holds either way —
+/// what `Ask` buys is that the two situations stay distinguishable downstream
+/// instead of both being recorded as "blastguard knows this is bad".
+fn protected_landing_block(action: &str, dir: &str) -> Option<Decision> {
+    if exclude::is_protected_path(dir) {
+        return protected_path_deny(action, dir);
+    }
+    if exclude::holds_protected_paths(dir) {
+        return Some(Decision::ask(format!(
+            "{action} lands a whole tree in {dir}, which holds protected gate/config paths — \
+blastguard cannot tell from the command line which files the copy creates there, and refuses \
+to guess"
+        )));
+    }
+    None
+}
+
 fn detect_write(ti: Option<&Value>) -> Decision {
     let path = match extract_path(ti) {
         Some(p) => p,
@@ -1728,7 +1806,24 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
             if has_short(rest, 'R') || rest.contains(&"--recursive") {
                 Decision::deny("recursive chmod re-permissions a whole tree")
             } else {
-                Decision::Allow
+                // Round 3, shape 3 of the disarm-by-non-write class. Like the
+                // `rm` arm, this rule measured BLAST RADIUS (`-R`) and never
+                // asked what the target was. A git hook — or a
+                // `.claude/hooks/*` script — that exists but is not executable
+                // is silently SKIPPED by its loader: the file is intact byte
+                // for byte and the gate is off, so no write-shaped rule can
+                // see it.
+                let (mode, targets) = chmod_mode_and_targets(rest);
+                // A chmod whose mode could not be located is not a harmless
+                // chmod; treat it as removing executability (restrictive).
+                if mode.map(mode_removes_exec).unwrap_or(true) {
+                    targets
+                        .into_iter()
+                        .find_map(|t| protected_disarm_deny("chmod", t))
+                        .unwrap_or(Decision::Allow)
+                } else {
+                    Decision::Allow
+                }
             }
         }
         "chown" => {
@@ -1742,12 +1837,23 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
         // FILE identically to a `>` redirect. Append-mode tee is safe and
         // stays Allow.
         "tee" => {
-            if rest.iter().any(|t| *t == "-a" || *t == "--append") {
-                Decision::Allow
-            } else {
-                Decision::deny(
+            // Round 3, MIRROR GAP. Rule 2b in `detect_bash` already settled
+            // that for a PROTECTED target the append/truncate distinction is
+            // irrelevant — one appended line adds a hook entry or an
+            // `exit 0` — and denies `>>` onto one. `tee -a` is the same
+            // operation spelled differently and never got the same treatment,
+            // so the append arm below handed it an unconditional Allow.
+            // Classifying the target FIRST is what makes the two spellings
+            // agree.
+            let protected = positional_operands(rest, &[])
+                .into_iter()
+                .find_map(|t| protected_path_deny("tee target", t));
+            match protected {
+                Some(deny) => deny,
+                None if rest.iter().any(|t| *t == "-a" || *t == "--append") => Decision::Allow,
+                None => Decision::deny(
                     "tee without -a/--append truncates and overwrites its target file(s)",
-                )
+                ),
             }
         }
         // CA-blastguard-006: a bare top-level command-interpreter invocation
@@ -1795,6 +1901,131 @@ fn has_glob_meta(tok: &str) -> bool {
     false
 }
 
+/// True when `tok` is one of `chmod`'s OWN option flags rather than a mode.
+///
+/// This cannot reuse [`positional_operands`]: chmod's MODE argument routinely
+/// begins with `-` (`chmod -x FILE` SUBTRACTS the exec bit), so a generic
+/// "starts with `-` ⇒ flag" scan drops the mode and then reads the FILE as the
+/// mode — silently moving the real target out of view, which is the fail-open
+/// shape this whole class of rules exists to prevent. The option set is
+/// therefore spelled out and everything else is treated as data.
+///
+/// Every letter listed is one chmod does NOT accept inside a mode (mode letters
+/// are `rwxXst` and `ugoa`), so no mode can be mistaken for an option: `-x`,
+/// `-w`, `-rwx`, `-X`, `-s`, `-t` all contain a mode letter and fall through.
+fn is_chmod_option(tok: &str) -> bool {
+    const LONG: &[&str] = &[
+        "--recursive",
+        "--changes",
+        "--silent",
+        "--quiet",
+        "--verbose",
+        "--preserve-root",
+        "--no-preserve-root",
+        "--dereference",
+        "--no-dereference",
+        "--help",
+        "--version",
+    ];
+    if LONG.contains(&tok) || tok.starts_with("--reference=") {
+        return true;
+    }
+    is_short_flag(tok)
+        && tok.len() > 1
+        && tok[1..]
+            .chars()
+            .all(|c| matches!(c, 'R' | 'f' | 'v' | 'c' | 'h' | 'H' | 'L' | 'P'))
+}
+
+/// Split a `chmod` argument list into its MODE and its file operands.
+///
+/// Returns `None` for the mode when none could be located; callers must treat
+/// that as "unparseable", not as "harmless" (see the `chmod` arm).
+fn chmod_mode_and_targets<'a>(rest: &[&'a str]) -> (Option<&'a str>, Vec<&'a str>) {
+    let mut mode: Option<&'a str> = None;
+    let mut targets: Vec<&'a str> = Vec::new();
+    let mut end_of_options = false;
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        if t.is_empty() {
+            i += 1;
+        } else if t == "--" {
+            end_of_options = true;
+            i += 1;
+        } else if is_bare_redirect_op(t) {
+            // Operator plus the target token it owns (mirrors
+            // `positional_operands`, so "what counts as an operand" stays one
+            // definition).
+            i += 2;
+        } else if is_redirect_token(t) || (!end_of_options && mode.is_none() && is_chmod_option(t))
+        {
+            // Redirect punctuation the shell consumes, or one of chmod's own
+            // option flags: neither is a mode and neither is a file operand.
+            i += 1;
+        } else {
+            if mode.is_none() {
+                mode = Some(t);
+            } else {
+                targets.push(t);
+            }
+            i += 1;
+        }
+    }
+    (mode, targets)
+}
+
+/// True when `mode` takes executability AWAY from the file's owner.
+///
+/// The predicate is about the MODE, deliberately, not about "a chmod touched a
+/// protected path": re-asserting the exec bit is how a hook gets INSTALLED
+/// (`chmod +x .githooks/pre-commit`, `chmod 755`), and denying that would block
+/// the legitimate direction of the very same command.
+///
+/// Only the OWNER's execute bit is consulted for octal modes: a git hook or a
+/// `.claude/hooks/*` script is run by the user who owns the checkout, so
+/// `chmod 700` leaves it executable while `644`/`444`/`000` do not.
+///
+/// A mode this function cannot parse returns `true` — the restrictive side per
+/// CLAUDE.md §3. The result is only ever consulted for a target already known to
+/// be protected, so the price of that default is a false positive on an exotic
+/// mode spelling aimed at a gate file; the price of the permissive default would
+/// be a silent disarm.
+fn mode_removes_exec(mode: &str) -> bool {
+    if !mode.is_empty() && mode.chars().all(|c| c.is_ascii_digit()) {
+        let digits: Vec<u32> = mode.chars().filter_map(|c| c.to_digit(8)).collect();
+        // An `8` or `9` is not octal at all — unparseable, so restrictive.
+        if digits.len() != mode.len() {
+            return true;
+        }
+        return match digits.len() {
+            // `755` / `0755`: the owner triad is the third digit from the end.
+            3 | 4 => digits[digits.len() - 3] & 1 == 0,
+            _ => true,
+        };
+    }
+    // Symbolic, comma-separated clauses: `u-x`, `a-x`, `go-w,u+x`, `a=r`.
+    let mut removes = false;
+    for clause in mode.split(',') {
+        let Some(op_pos) = clause.rfind(['+', '-', '=']) else {
+            // No operator: not a symbolic mode we understand.
+            return true;
+        };
+        let op = clause.as_bytes()[op_pos];
+        let perms = &clause[op_pos + 1..];
+        let grants_exec = perms.contains('x') || perms.contains('X') || perms.contains('s');
+        match op {
+            // `-x`, `a-x`, `u-x`: subtracting the exec bit.
+            b'-' if grants_exec => removes = true,
+            // `a=r`: `=` replaces the whole set, so a set without `x` clears it.
+            b'=' if !grants_exec => removes = true,
+            b'+' | b'-' | b'=' => {}
+            _ => return true,
+        }
+    }
+    removes
+}
+
 fn analyze_rm(rest: &[&str]) -> Decision {
     let recursive = rest
         .iter()
@@ -1805,6 +2036,45 @@ fn analyze_rm(rest: &[&str]) -> Decision {
         .copied()
         .collect();
     let wildcard = operands.iter().any(|o| has_glob_meta(o));
+
+    // PROTECTED PRECEDENCE, ahead of BOTH exits below. This arm was the last
+    // place in the crate where `is_config_file` was consulted without
+    // `is_protected_path` in front of it — the very precedence 0.2.18
+    // established for every write path — and it let deletion through twice
+    // over:
+    //
+    //   * the "below the destructive bar" early return measures how MANY files
+    //     vanish and says nothing about WHICH, so a single
+    //     `rm .claude/settings.json` (one file, no wildcard) was Allow;
+    //   * the config-file exemption then caught the recursive form, because
+    //     `.claude/**` sits in ALLOW_GLOBS — so `rm -rf .claude` and even
+    //     `rm -rf /Users/yuki/.claude` were Allow while `rm -rf .githooks` was
+    //     correctly denied. The difference was never intended; it is just which
+    //     tree happens to be on the allowlist.
+    //
+    // Deleting a gate's config is the most complete disarm there is, so the
+    // target is classified BEFORE the blast-radius question is asked at all.
+    for operand in &operands {
+        // A wildcard operand is not a literal path; matching it against the
+        // protected globs would be a guess in the permissive direction (it can
+        // only ever fail to match and thereby look clean), so it is left to the
+        // wildcard rule below, which denies it anyway.
+        if has_glob_meta(operand) {
+            continue;
+        }
+        if let Some(deny) = protected_disarm_deny("rm", operand) {
+            return deny;
+        }
+        // The CONTAINER case: `.claude` matches no protected glob but is where
+        // the protected files live. Only asked for a recursive rm — a
+        // non-recursive `rm <dir>` fails outright, so there is nothing to
+        // resolve restrictively.
+        if recursive {
+            if let Some(deny) = protected_tree_deny("recursive rm", operand) {
+                return deny;
+            }
+        }
+    }
 
     if !recursive && !wildcard {
         // Single, non-recursive rm of named files — below the destructive bar.
@@ -1902,11 +2172,21 @@ fn target_directory(rest: &[&str]) -> Option<String> {
     None
 }
 
-/// `cp` / `mv` / `install` / `ln`: the DESTINATION is what gets overwritten.
+/// `cp` / `mv` / `install` / `ln`: the DESTINATION is what gets overwritten —
+/// and, for `mv` alone, the SOURCE is what disappears.
 ///
-/// Sources are ignored on purpose — copying a protected file somewhere else is
-/// a read, and denying it would be a false positive on ordinary backups. Only
-/// where the bytes LAND matters.
+/// The source/destination asymmetry is the whole design of this function and is
+/// modelled explicitly rather than assumed:
+///
+///   * `cp`, `install`, `ln` READ their sources and leave them in place, so a
+///     protected source is a backup, not a hazard — `cp .claude/settings.json
+///     /tmp/settings.backup.json` must stay Allow, and denying it would be a
+///     false positive on ordinary work;
+///   * `mv` UNLINKS its sources. Moving `.githooks/pre-commit` to `/tmp`, or
+///     renaming `.claude/settings.json` to `settings.json.disabled` in the same
+///     directory, disarms the gate exactly as thoroughly as deleting it — and
+///     neither is visible to a destination-only rule, because the DESTINATION
+///     in both cases is an unprotected path.
 ///
 /// Three destination shapes are handled, because a rule that only understood
 /// the two-operand form would leave the other two as free bypasses:
@@ -1914,6 +2194,12 @@ fn target_directory(rest: &[&str]) -> Option<String> {
 ///   * `cp -t DIR SRC…` — every operand is a source and the file created is
 ///     `DIR/<basename SRC>`;
 ///   * `cp SRC… DIR/` — same, with the directory written last.
+///
+/// A RECURSIVE copy is handled separately from all three: its landing set is a
+/// whole tree whose shape lives on disk, so the per-file `DIR/<basename SRC>`
+/// model does not describe it (and for a `SRC/` with a trailing slash the model
+/// collapses to `DIR/` itself, which matches nothing). See
+/// [`protected_landing_block`].
 fn analyze_copy_move(cmd: &str, rest: &[&str]) -> Decision {
     let action = format!("{cmd} destination");
     let operands = positional_operands(rest, COPY_VALUE_FLAGS);
@@ -1928,6 +2214,47 @@ fn analyze_copy_move(cmd: &str, rest: &[&str]) -> Decision {
             _ => (None, &[]),
         },
     };
+
+    // ---- source side: only `mv` removes what it names ----
+    if cmd == "mv" {
+        let moved: &[&str] = if dir.is_some() {
+            sources
+        } else {
+            // `mv SRC… DEST`: everything but the last operand is a source.
+            operands.split_last().map(|(_, init)| init).unwrap_or(&[])
+        };
+        for src in moved {
+            if let Some(deny) = protected_disarm_deny("mv source", src) {
+                return deny;
+            }
+            // Moving the CONTAINER away takes every protected file in it.
+            if let Some(deny) = protected_tree_deny("mv source", src) {
+                return deny;
+            }
+        }
+    }
+
+    // ---- destination side ----
+    // A recursive copy lands an unmodelled set of files; ask about the landing
+    // DIRECTORY before falling back to the per-file model below, which cannot
+    // describe it.
+    if is_recursive_copy(rest) {
+        let landing = dir
+            .clone()
+            // `cp -r SRC DEST` without a trailing slash on DEST: with `-r` the
+            // last operand is still a destination directory, so the trailing
+            // slash must not be what decides whether the rule fires.
+            .or_else(|| match operands.split_last() {
+                Some((last, init)) if !init.is_empty() => Some((*last).to_string()),
+                _ => None,
+            });
+        if let Some(landing) = landing {
+            if let Some(block) = protected_landing_block(&action, &landing) {
+                return block;
+            }
+        }
+    }
+
     if let Some(dir) = dir {
         if let Some(deny) = protected_path_deny(&action, &dir) {
             return deny;
@@ -1948,6 +2275,19 @@ fn analyze_copy_move(cmd: &str, rest: &[&str]) -> Decision {
         // error, `mv -t DIR` with no source does nothing).
         None => Decision::Allow,
     }
+}
+
+/// True when a `cp`/`install` line copies whole directory TREES (`-r`, `-R`,
+/// `-a`/`--archive`, `--recursive`, or any cluster containing `r`/`R`/`a`).
+///
+/// `mv` and `ln` have no recursive mode, so the predicate simply never fires for
+/// them; there is no need to special-case the command name.
+fn is_recursive_copy(rest: &[&str]) -> bool {
+    rest.iter().any(|t| {
+        *t == "--recursive"
+            || *t == "--archive"
+            || (is_short_flag(t) && (t.contains('r') || t.contains('R') || t.contains('a')))
+    })
 }
 
 /// Separate-form value options of `sed`. `-e`/`-f` supply the SCRIPT, so their
@@ -2125,9 +2465,36 @@ fn analyze_git(rest: &[&str]) -> Decision {
             if rest.contains(&"--force") || has_short(rest, 'f') {
                 return Decision::deny("git checkout --force discards working-tree changes");
             }
+            // Round 3, MIRROR GAP. The `restore` arm below denies
+            // `git restore <path>` UNCONDITIONALLY, because it overwrites the
+            // working tree from the index and throws away uncommitted work.
+            // `git checkout -- <path>` is that same operation under its older
+            // spelling — git's own docs describe `restore` as the split-out
+            // half of `checkout` — yet this arm only caught `--force` and the
+            // whole-tree `-- .` form. Fixing one spelling and leaving its twin
+            // open is the recurring failure this crate keeps re-learning, so
+            // the two arms are brought into agreement rather than patched with
+            // one more special case.
+            //
+            // Target classification runs FIRST so a protected path gets the
+            // disarm reason (and its own rule id) rather than the generic one.
+            for op in positional_operands(&rest[idx + 1..], &[]) {
+                if let Some(deny) = protected_disarm_deny("git checkout", op) {
+                    return deny;
+                }
+                if let Some(deny) = protected_tree_deny("git checkout", op) {
+                    return deny;
+                }
+            }
             if let Some(pos) = rest.iter().position(|t| *t == "--") {
                 if rest[pos + 1..].iter().any(|t| *t == "." || *t == "./") {
                     return Decision::deny("git checkout -- . discards all working-tree changes");
+                }
+                if !rest[pos + 1..].is_empty() {
+                    return Decision::deny(
+                        "git checkout -- <path> overwrites the working tree from the index, \
+discarding uncommitted changes",
+                    );
                 }
             }
             Decision::Allow
@@ -2713,9 +3080,34 @@ mod tests {
     fn allows_rm_of_config_files_even_when_destructive() {
         // Single config file, non-recursive — allowed anyway.
         assert_eq!(bash("rm package.json"), Decision::Allow);
-        // Recursive rm whose only target is a config tree.
-        assert_eq!(bash("rm -rf .claude"), Decision::Allow);
         assert_eq!(bash("rm -f Cargo.lock"), Decision::Allow);
+        // Recursive rm whose only target is a config tree.
+        // (`.config/**` is on the config allowlist and holds nothing
+        // protected, so the exemption still applies to it. A NON-config tree
+        // like `node_modules` was never exempt and stays denied by the
+        // pre-existing blast-radius rule.)
+        assert_eq!(bash("rm -rf .config"), Decision::Allow);
+
+        // DELIBERATELY FLIPPED (Round 3), was `assert_eq!(bash("rm -rf
+        // .claude"), Decision::Allow)`.
+        //
+        // This line asserted the fail-open as if it were the specification.
+        // `.claude/**` is on the config ALLOWLIST, so `analyze_rm`'s
+        // config-file exemption waved through a recursive delete of the tree
+        // that holds `.claude/settings.json` and `.claude/hooks/*` — the files
+        // that decide whether blastguard itself runs — while the identical
+        // `rm -rf .githooks` was correctly denied, purely because `.githooks`
+        // is not on the allowlist. It is the same precedence bug 0.2.18 fixed
+        // for every WRITE path (`is_protected_path` ahead of
+        // `is_config_file`), surviving in the one arm that had not been
+        // brought into line.
+        //
+        // Flipped, not deleted: the assertion above it still pins that the
+        // config-file exemption itself is intact for a tree that holds nothing
+        // protected. What changed is which of the two rules wins when both
+        // match, and that is exactly what this pair now records.
+        assert!(bash("rm -rf .claude").is_deny());
+        assert!(bash("rm -rf /Users/yuki/.claude").is_deny());
     }
 
     // ---- Bash: boundary cases (no false positives) ----
@@ -4135,5 +4527,354 @@ mod tests {
         assert_eq!(bash("sed -i s/a/b/ src/main.rs"), Decision::Allow);
         assert_eq!(bash("git -c user.name=x status"), Decision::Allow);
         assert_eq!(bash("git -c user.email=a@b.com status"), Decision::Allow);
+    }
+
+    // =========================================================================
+    // Round 3 (independent test author): DISARM BY NON-WRITE.
+    //
+    // 0.2.18 closed the WRITE path: every rule added so far asks "do bytes land
+    // ON this protected file?" (Write/Edit, `>`/`>>`, cp/mv/install/ln
+    // DESTINATION, `sed -i`). A guard does not have to be REWRITTEN to be
+    // switched off — it only has to stop running. Deleting it, moving it out of
+    // the path git/Claude Code looks in, clearing its exec bit, or restoring it
+    // from the index all neutralise it while writing nothing to it, so none of
+    // them are seen by a destination-only rule.
+    //
+    // Six shapes below. All are "the target is a POSITIVELY RECOGNISED protected
+    // path", so per `exclude::is_protected_path`'s contract they resolve to Deny
+    // rather than Ask — with one exception (shape 6) where the landing set
+    // genuinely cannot be enumerated statically and `is_blocking()` (Deny OR
+    // Ask) is therefore the honest assertion.
+    //
+    // Each test collects the FULL failing set instead of asserting inline, so a
+    // RED run names every still-open variant rather than only the first.
+    // =========================================================================
+
+    // ---- Shape 1: deletion --------------------------------------------------
+
+    #[test]
+    fn deleting_a_protected_path_is_denied() {
+        // `analyze_rm` returns Allow for any rm that is neither recursive nor
+        // wildcarded ("below the destructive bar"). That bar is about how MANY
+        // files vanish; it says nothing about WHICH. A single non-recursive
+        // `rm .claude/settings.json` deletes the file that decides whether
+        // blastguard itself runs, and is currently Allow.
+        let cases = [
+            "rm .claude/settings.json",
+            "rm .githooks/pre-commit",
+            "rm -f .claude/settings.local.json",
+            "rm .claude/hooks/pre-tool-use.sh",
+            "rm /Users/yuki/.claude/settings.json",
+            "rm .zshrc",
+            "rm deny.toml",
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|cmd| !bash(cmd).is_deny())
+            .collect();
+        assert!(
+            failing.is_empty(),
+            "deleting a protected path is a disarm and must be denied: {failing:?}"
+        );
+    }
+
+    #[test]
+    fn recursive_rm_of_the_githooks_tree_is_already_denied() {
+        // Non-regression, already GREEN before the fix: `.githooks` is not in
+        // ALLOW_GLOBS, so the recursive form is caught by the pre-existing
+        // blast-radius rule. Pinned so the fix does not reroute it into a
+        // weaker arm.
+        assert!(bash("rm -rf .githooks").is_deny());
+        assert!(bash("rm -r .githooks/").is_deny());
+    }
+
+    #[test]
+    fn recursive_rm_of_a_protected_claude_tree_is_denied() {
+        // Found while writing the shape-1 controls, NOT in the original brief —
+        // and it is a second, independent hole in the same rule.
+        //
+        // `analyze_rm` reaches its destructive verdict and is then let back out
+        // by the config-file exemption: "every operand is a known, literal
+        // config file → Allow". `.claude/**` IS in ALLOW_GLOBS, so a RECURSIVE
+        // delete of the entire Claude Code config tree — hooks and settings
+        // included — is currently Allow, even though the equivalent Write is
+        // denied. The exemption is checked with `is_config_file` alone; the
+        // `is_protected_path` precedence that 0.2.18 established everywhere
+        // else was never applied here.
+        let cases = [
+            "rm -r .claude/hooks",
+            "rm -rf .claude",
+            "rm -rf .claude/settings.json",
+            "rm -rf /Users/yuki/.claude",
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|cmd| !bash(cmd).is_deny())
+            .collect();
+        assert!(
+            failing.is_empty(),
+            "analyze_rm's is_config_file exemption re-opens recursive deletion of \
+protected trees: {failing:?}"
+        );
+    }
+
+    #[test]
+    fn ordinary_single_file_rm_stays_allowed() {
+        // Non-regression, GREEN now and must stay GREEN: the fix must key on
+        // the target being PROTECTED, not on "rm of a named file".
+        for cmd in [
+            "rm src/main.rs",
+            "rm -f target/debug/blastguard",
+            "rm /tmp/scratch.txt",
+            "rm notes.txt README.md",
+            "rm Cargo.lock",
+        ] {
+            assert_eq!(bash(cmd), Decision::Allow, "expected allow: {cmd}");
+        }
+    }
+
+    // ---- Shape 2: move-away -------------------------------------------------
+
+    #[test]
+    fn moving_a_protected_path_away_is_denied() {
+        // `analyze_copy_move` documents "Sources are ignored on purpose —
+        // copying a protected file somewhere else is a read". That reasoning is
+        // sound for `cp`/`install`/`ln`, which leave the source in place, and
+        // FALSE for `mv`, which unlinks it. Moving `.githooks/pre-commit` to
+        // /tmp disarms the hook exactly as thoroughly as deleting it.
+        let cases = [
+            "mv .githooks/pre-commit /tmp/x",
+            "mv .claude/settings.json /tmp/settings.json",
+            // Same-directory rename: the destination is NOT protected (the
+            // globs name exact files), so the destination-only rule sees
+            // nothing, yet the hook is gone from the path git looks in.
+            "mv .claude/settings.json .claude/settings.json.disabled",
+            "mv deny.toml deny.toml.off",
+            // Directory-destination form: landing is /tmp/.zshrc, unprotected.
+            "mv .zshrc /tmp/",
+            // -t form: landing is /tmp/pre-commit, unprotected.
+            "mv -t /tmp .githooks/pre-commit",
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|cmd| !bash(cmd).is_deny())
+            .collect();
+        assert!(
+            failing.is_empty(),
+            "moving a protected path away is a disarm and must be denied: {failing:?}"
+        );
+    }
+
+    #[test]
+    fn copying_from_a_protected_path_stays_allowed() {
+        // Non-regression, GREEN now and must stay GREEN. This is the boundary
+        // that keeps shape 2 from being "fixed" by checking sources for the
+        // whole cp/mv/install/ln family: `cp` READS its source, so backing up a
+        // settings file is ordinary work and must not become a Deny. Only `mv`
+        // removes the source.
+        for cmd in [
+            "cp .claude/settings.json /tmp/settings.backup.json",
+            "cp .githooks/pre-commit /tmp/pre-commit.bak",
+            // NB: the destination must not itself carry a protected BASENAME —
+            // `cp deny.toml /tmp/deny.toml` is already Denied by the existing
+            // destination rule, because PROTECTED_GLOBS matches `**/deny.toml`
+            // anywhere. That is pre-existing intended behaviour, not part of
+            // this fix, so the control uses a renamed backup.
+            "cp deny.toml /tmp/deny.backup.toml",
+            "mv a.txt b.txt",
+            "mv src/foo.rs src/bar.rs",
+            "mv /tmp/one /tmp/two",
+        ] {
+            assert_eq!(bash(cmd), Decision::Allow, "expected allow: {cmd}");
+        }
+    }
+
+    // ---- Shape 3: exec-bit stripping ---------------------------------------
+
+    #[test]
+    fn stripping_the_exec_bit_from_a_protected_hook_is_denied() {
+        // The `chmod` arm only denies the RECURSIVE form (`-R`), i.e. it too
+        // measures blast radius rather than target. A git hook that exists but
+        // is not executable is silently skipped by git — the file is intact,
+        // byte for byte, and the gate is off. The `.claude/hooks/**` scripts
+        // are invoked the same way.
+        let cases = [
+            "chmod -x .githooks/pre-commit",
+            "chmod a-x .githooks/pre-commit",
+            "chmod u-x .githooks/pre-commit",
+            "chmod 000 .githooks/pre-commit",
+            "chmod 644 .githooks/pre-commit",
+            "chmod 444 .claude/hooks/pre-tool-use.sh",
+            "chmod -x .claude/hooks/pre-tool-use.sh",
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|cmd| !bash(cmd).is_deny())
+            .collect();
+        assert!(
+            failing.is_empty(),
+            "removing executability from a protected hook disarms it and must be denied: {failing:?}"
+        );
+    }
+
+    #[test]
+    fn chmod_that_keeps_executability_stays_allowed() {
+        // Non-regression, GREEN now and must stay GREEN. The rule is "this mode
+        // REMOVES executability", not "this is a chmod on a protected path" —
+        // restoring or re-asserting the exec bit is how a hook gets INSTALLED,
+        // and must not be blocked.
+        for cmd in [
+            "chmod +x .githooks/pre-commit",
+            "chmod u+x .githooks/pre-commit",
+            "chmod 755 .githooks/pre-commit",
+            "chmod 700 .claude/hooks/pre-tool-use.sh",
+            // …and ordinary non-protected targets of any mode.
+            "chmod -x scripts/build.sh",
+            "chmod 644 README.md",
+            "chmod 000 /tmp/scratch",
+        ] {
+            assert_eq!(bash(cmd), Decision::Allow, "expected allow: {cmd}");
+        }
+    }
+
+    // ---- Shape 4: checkout / restore discard --------------------------------
+
+    #[test]
+    fn git_checkout_discarding_a_protected_path_is_denied() {
+        // MIRROR GAP, not a uniform hole. `analyze_git`'s "restore" arm already
+        // denies `git restore <path>` unconditionally (see the already-covered
+        // test below), but its "checkout" twin only denies `--force` and the
+        // whole-tree `-- .` form. `git checkout -- .claude/settings.json`
+        // overwrites the working-tree file from the index — the identical
+        // hazard, spelled the other way — and is currently Allow.
+        let cases = [
+            "git checkout -- .claude/settings.json",
+            "git checkout -- .githooks/pre-commit",
+            "git checkout HEAD -- .githooks/pre-commit",
+            "git checkout main -- .claude/settings.json",
+            "git checkout -- deny.toml",
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|cmd| !bash(cmd).is_deny())
+            .collect();
+        assert!(
+            failing.is_empty(),
+            "git checkout of a protected path discards it silently and must be denied: {failing:?}"
+        );
+    }
+
+    #[test]
+    fn git_restore_of_a_protected_path_is_already_denied() {
+        // Non-regression, already GREEN before the fix — recorded here as the
+        // reference mirror the `checkout` arm has to match. If a future change
+        // narrows `restore` to "protected paths only", these must keep denying.
+        assert!(bash("git restore .claude/settings.json").is_deny());
+        assert!(bash("git restore .githooks/pre-commit").is_deny());
+        assert!(bash("git restore --worktree .claude/settings.json").is_deny());
+    }
+
+    #[test]
+    fn plain_git_branch_operations_stay_allowed() {
+        // Non-regression, GREEN now and must stay GREEN: a branch switch names
+        // a REF, not a path, and destroys nothing.
+        for cmd in [
+            "git checkout somebranch",
+            "git checkout main",
+            "git checkout -b feature/new-thing",
+            "git checkout -",
+        ] {
+            assert_eq!(bash(cmd), Decision::Allow, "expected allow: {cmd}");
+        }
+    }
+
+    // ---- Shape 5: tee append ------------------------------------------------
+
+    #[test]
+    fn tee_append_onto_a_protected_path_is_denied() {
+        // The `tee` arm denies the truncating form and returns Allow for
+        // `-a`/`--append`, mirroring the `>` vs `>>` distinction. But rule 2b in
+        // `detect_bash` already established that for a PROTECTED target the
+        // append/truncate distinction is irrelevant — one appended line adds a
+        // hook entry or a `exit 0`. `tee -a` is the twin of `>>` and did not get
+        // the same treatment.
+        let cases = [
+            "tee -a .githooks/pre-commit",
+            "tee --append .claude/settings.json",
+            "echo evil | tee -a .githooks/pre-commit",
+            "echo evil | tee -a ~/.zshrc",
+            "echo evil | tee -a deny.toml",
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|cmd| !bash(cmd).is_deny())
+            .collect();
+        assert!(
+            failing.is_empty(),
+            "tee -a writes to its file argument; a protected target must be denied: {failing:?}"
+        );
+    }
+
+    #[test]
+    fn tee_append_onto_an_ordinary_path_stays_allowed() {
+        // Non-regression, GREEN now and must stay GREEN. Note the control is
+        // the APPEND form only: plain `tee /tmp/log` is already denied by the
+        // general truncation rule (the same rule that denies `> /tmp/log`), and
+        // that is intended behaviour, not a regression this test protects.
+        for cmd in [
+            "tee -a /tmp/build.log",
+            "echo hi | tee -a notes.txt",
+            "cargo test | tee -a target/test.log",
+        ] {
+            assert_eq!(bash(cmd), Decision::Allow, "expected allow: {cmd}");
+        }
+    }
+
+    // ---- Shape 6: recursive-copy landing ------------------------------------
+
+    #[test]
+    fn recursive_copy_landing_in_a_protected_dir_is_blocked() {
+        // `analyze_copy_move`'s directory-destination arm models the landing
+        // path as `DIR/<basename SRC>`. For `cp -r somedir/ .claude/` the
+        // trailing slash makes `basename` return the EMPTY string, so the
+        // landing collapses back to `.claude/` — which is not itself in
+        // PROTECTED_GLOBS — and the actual landing sites
+        // (`.claude/settings.json`, `.claude/hooks/*`) are never modelled at
+        // all. A recursive copy lands a whole TREE whose contents are not
+        // knowable from the command line.
+        //
+        // Asserted as `is_blocking()` rather than `is_deny()`: unlike shapes
+        // 1-5 the target here is genuinely not enumerable statically, so `Ask`
+        // ("blastguard refuses to guess") is an equally correct answer and the
+        // test must not force a design choice. What is NOT acceptable is Allow.
+        let cases = [
+            "cp -r evildir/ .claude/",
+            "cp -R evildir/ .githooks/",
+            "cp -a evildir/ .claude/hooks/",
+            "cp -r evildir/. .claude/",
+            "cp -r evildir/ .claude/hooks/",
+        ];
+        let failing: Vec<&str> = cases
+            .into_iter()
+            .filter(|cmd| !bash(cmd).is_blocking())
+            .collect();
+        assert!(
+            failing.is_empty(),
+            "a recursive copy into a protected directory has an unmodelled landing set \
+and must not be Allowed: {failing:?}"
+        );
+    }
+
+    #[test]
+    fn recursive_copy_into_an_ordinary_dir_stays_allowed() {
+        // Non-regression, GREEN now and must stay GREEN: the fix must key on
+        // the DESTINATION being (or containing) a protected path, not on `-r`.
+        for cmd in [
+            "cp -r src/ /tmp/backup/",
+            "cp -R crates/foo/ /tmp/foo/",
+            "cp -r assets/ build/",
+        ] {
+            assert_eq!(bash(cmd), Decision::Allow, "expected allow: {cmd}");
+        }
     }
 }

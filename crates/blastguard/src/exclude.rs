@@ -125,6 +125,44 @@ const PROTECTED_GLOBS: &[&str] = &[
     "**/.precommit-audit.toml",
 ];
 
+/// Directory glob patterns derived MECHANICALLY from [`PROTECTED_GLOBS`]: every
+/// proper path prefix of a protected pattern that still carries at least one
+/// literal component.
+///
+/// The gap this closes: `.claude` itself matches nothing in `PROTECTED_GLOBS`
+/// — only `.claude/settings.json`, `.claude/hooks/**` and friends do. So an
+/// operation aimed at the DIRECTORY (`rm -rf .claude`, `cp -r evil/ .claude/`)
+/// reached every protected file underneath it while matching no protected
+/// pattern at all. "The container of a protected file" is a distinct question
+/// from "is a protected file", and it needed its own answer.
+///
+/// Why DERIVED rather than a second hand-written list: a hand list is a mirror,
+/// and the recurring failure mode in this crate is a mirror that stops being
+/// updated (one spelling of an operation fixed, its twin left open). Deriving
+/// means a new entry in `PROTECTED_GLOBS` extends this set for free and cannot
+/// be forgotten.
+///
+/// Prefixes made ONLY of `**` are dropped: `**` matches every directory, so
+/// keeping it would classify every path anywhere as "holds protected paths" and
+/// turn the rules built on it into a universal block.
+fn protected_dir_patterns() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for pat in PROTECTED_GLOBS {
+        let comps: Vec<&str> = pat.split('/').collect();
+        for i in 1..comps.len() {
+            let prefix = &comps[..i];
+            if prefix.iter().all(|c| *c == "**") {
+                continue;
+            }
+            let joined = prefix.join("/");
+            if !out.contains(&joined) {
+                out.push(joined);
+            }
+        }
+    }
+    out
+}
+
 fn build_set(patterns: &[&str], case_insensitive: bool) -> GlobSet {
     let mut b = GlobSetBuilder::new();
     for pat in patterns {
@@ -228,6 +266,38 @@ pub fn is_protected_path(path: &str) -> bool {
         return false;
     }
     protected_set().is_match(&norm)
+}
+
+/// The derived directory set, matched CASE-INSENSITIVELY for the same reason as
+/// [`protected_set`]: folding here can only ever classify MORE paths as
+/// containers of protected files, which is the restrictive direction.
+fn protected_dir_set() -> &'static GlobSet {
+    static SET: OnceLock<GlobSet> = OnceLock::new();
+    SET.get_or_init(|| {
+        let pats = protected_dir_patterns();
+        let refs: Vec<&str> = pats.iter().map(String::as_str).collect();
+        build_set(&refs, true)
+    })
+}
+
+/// True when `path` names a DIRECTORY that lexically holds protected paths, even
+/// though the directory itself matches no pattern in [`PROTECTED_GLOBS`].
+///
+/// This is deliberately a statement about the NAME, not about the filesystem:
+/// blastguard does no I/O, so it cannot know whether `.claude/settings.json`
+/// exists right now. What it can know is that `.claude` is the place that file
+/// lives, so an operation that consumes the whole directory reaches it. Callers
+/// decide what that means for their verb — a recursive `rm` definitely destroys
+/// everything under it (Deny), while a recursive `cp` INTO it lands a set of
+/// files that is not knowable from the command line (Ask; see
+/// [`crate::model::Decision::Ask`]).
+pub fn holds_protected_paths(path: &str) -> bool {
+    let norm = normalize(path);
+    let trimmed = norm.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return false;
+    }
+    protected_dir_set().is_match(trimmed)
 }
 
 /// True when `path` points inside a `.git/` directory (git internals). Wholesale

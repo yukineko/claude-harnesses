@@ -412,6 +412,8 @@ pub fn add_with_weight(
             updated_at: now,
             defer_until: None,
             weight,
+            issue_number: None,
+            issue_url: None,
         };
         tasks.push(task);
         save(path, &tasks)?;
@@ -876,6 +878,22 @@ pub fn edit(
         if let Some(v) = status {
             task.status = v.to_string();
         }
+        task.updated_at = now_unix();
+        save(path, &tasks)
+    })
+}
+
+/// タスクに GitHub issue 番号/URL を記録する (fail-soft な一方向 push の書き戻し先)。
+/// id が見つからない場合はエラー。
+pub fn set_issue_ref(path: &Path, id: &str, issue_number: u64, issue_url: &str) -> Result<()> {
+    with_tasks_lock(path, || {
+        let mut tasks = load(path)?;
+        let task = tasks
+            .iter_mut()
+            .find(|t| t.id == id)
+            .ok_or_else(|| anyhow!("task not found: {}", id))?;
+        task.issue_number = Some(issue_number);
+        task.issue_url = Some(issue_url.to_string());
         task.updated_at = now_unix();
         save(path, &tasks)
     })
@@ -1422,6 +1440,8 @@ mod tests {
                     updated_at: 100,
                     defer_until: Some(500),
                     weight: 0.0,
+                    issue_number: None,
+                    issue_url: None,
                 });
             }
             save(&path, &seed).unwrap();
@@ -1983,6 +2003,8 @@ mod tests {
                     updated_at: 100,
                     defer_until: None,
                     weight: 0.0,
+                    issue_number: None,
+                    issue_url: None,
                 });
             }
             save(&path, &seed).unwrap();
@@ -2335,6 +2357,8 @@ mod tests {
                             updated_at: 100,
                             defer_until: None,
                             weight: 0.0,
+                            issue_number: None,
+                            issue_url: None,
                         });
                     }
                     barrier.wait();
@@ -2405,6 +2429,8 @@ mod tests {
                 updated_at: 100,
                 defer_until: None,
                 weight: 0.0,
+                issue_number: None,
+                issue_url: None,
             }],
             &rec,
         )
@@ -2511,6 +2537,8 @@ mod tests {
                 updated_at: now - CLAIM_STALE_SECS - 1, // past TTL
                 defer_until: None,
                 weight: 0.0,
+                issue_number: None,
+                issue_url: None,
             },
             Task {
                 id: "fresh".to_string(),
@@ -2523,6 +2551,8 @@ mod tests {
                 updated_at: now - 1, // well within TTL
                 defer_until: None,
                 weight: 0.0,
+                issue_number: None,
+                issue_url: None,
             },
         ];
         save(&path, &seed).unwrap();

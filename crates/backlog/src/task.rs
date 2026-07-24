@@ -41,6 +41,15 @@ pub struct Task {
     /// (all-equal weight → tie-break falls through to created_at).
     #[serde(default)]
     pub weight: f64,
+    /// GitHub issue number this task was pushed to (Phase1: one-way push via
+    /// `gh issue create`). Absent in older tasks.toml files; treated as None
+    /// (not yet pushed).
+    #[serde(default)]
+    pub issue_number: Option<u64>,
+    /// GitHub issue URL this task was pushed to. Absent in older tasks.toml
+    /// files; treated as None (not yet pushed).
+    #[serde(default)]
+    pub issue_url: Option<String>,
 }
 
 impl Task {
@@ -144,6 +153,8 @@ mod tests {
             updated_at: 0,
             defer_until: None,
             weight: 0.0,
+            issue_number: None,
+            issue_url: None,
         }
     }
 
@@ -339,5 +350,24 @@ mod tests {
         // weight is also absent in this legacy record → defaults to 0.0,
         // which keeps legacy tasks ordering identically to before.
         assert_eq!(t.weight, 0.0);
+    }
+
+    #[test]
+    fn serde_roundtrip_without_issue_fields() {
+        // Older tasks.toml records that lack issue_number/issue_url must
+        // deserialize fine (backward compat for the GitHub push feature).
+        let json = r#"{
+            "id": "abcd1234",
+            "title": "old task",
+            "project": "/tmp/p",
+            "tags": [],
+            "status": "pending",
+            "notes": "",
+            "created_at": 0,
+            "updated_at": 0
+        }"#;
+        let t: Task = serde_json::from_str(json).expect("deserialize without issue fields");
+        assert!(t.issue_number.is_none());
+        assert!(t.issue_url.is_none());
     }
 }

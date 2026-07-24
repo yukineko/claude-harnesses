@@ -1064,6 +1064,13 @@ enum PolicyAction {
         /// otherwise-`auto` verdict up to `escalate`.
         #[arg(long)]
         conflict: bool,
+        /// Frame this as an UNTESTABLE decision (CLAUDE.md §2): the verdict may
+        /// only be `escalate` or `block`, NEVER `auto` — a thing that cannot be
+        /// meaningfully tested must ask the human (the surviving 質疑 channel),
+        /// never self-answer. Clamps an otherwise-`auto` verdict up to
+        /// `escalate`. Takes precedence over --conflict (both clamp identically).
+        #[arg(long)]
+        untestable: bool,
     },
     /// Non-interactively answer one question using the graded-autonomy policy.
     /// On an `auto` verdict, prints `{"answered":true,"policy":"auto","chosen":
@@ -1113,6 +1120,13 @@ enum PolicyAction {
         /// `escalate`); the human/AskUserQuestion always decides the side.
         #[arg(long)]
         conflict: bool,
+        /// Frame this as an UNTESTABLE decision (CLAUDE.md §2): never
+        /// self-answers (`auto` is clamped to `escalate`); the human /
+        /// AskUserQuestion always decides, because a thing that cannot be
+        /// meaningfully tested must ask the human — §2's surviving 質疑 channel.
+        /// Takes precedence over --conflict (both clamp identically).
+        #[arg(long)]
+        untestable: bool,
     },
     /// Print the auto-answer audit trail (JSONL): every question the policy
     /// self-answered without prompting a human. The review surface for
@@ -2699,6 +2713,7 @@ fn run_policy(action: PolicyAction) -> ! {
             files,
             class,
             conflict,
+            untestable,
         } => {
             let (risk, reversible, mut confidence) =
                 parse_policy_levels(&risk, &reversible, &confidence);
@@ -2709,8 +2724,12 @@ fn run_policy(action: PolicyAction) -> ! {
             if let Some(cal) = calibrated_confidence(&title, &files, &class) {
                 confidence = cal;
             }
-            // A merge-conflict resolution may only escalate/block (never auto).
-            let decision = if conflict {
+            // An untestable decision (§2) or a merge-conflict resolution may only
+            // escalate/block (never auto). --untestable takes precedence; both
+            // clamp Auto→Escalate identically, so the result is the same either way.
+            let decision = if untestable {
+                policy::decide_untestable(risk, reversible, confidence)
+            } else if conflict {
                 policy::decide_conflict_resolution(risk, reversible, confidence)
             } else {
                 policy::decide(risk, reversible, confidence)
@@ -2735,6 +2754,7 @@ fn run_policy(action: PolicyAction) -> ! {
             files,
             class,
             conflict,
+            untestable,
         } => {
             let (risk, reversible, mut confidence) =
                 parse_policy_levels(&risk, &reversible, &confidence);
@@ -2743,9 +2763,12 @@ fn run_policy(action: PolicyAction) -> ! {
             if let Some(cal) = calibrated_confidence(&title, &files, &class) {
                 confidence = cal;
             }
-            // A merge-conflict resolution never self-answers (auto→escalate), so
-            // the side is always chosen by a human, never last-writer-wins.
-            let decision = if conflict {
+            // An untestable decision (§2) or a merge-conflict resolution never
+            // self-answers (auto→escalate), so a human always decides.
+            // --untestable takes precedence; both clamp Auto→Escalate identically.
+            let decision = if untestable {
+                policy::decide_untestable(risk, reversible, confidence)
+            } else if conflict {
                 policy::decide_conflict_resolution(risk, reversible, confidence)
             } else {
                 policy::decide(risk, reversible, confidence)

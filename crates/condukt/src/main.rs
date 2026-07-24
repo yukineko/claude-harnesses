@@ -9,7 +9,6 @@
 
 mod adversarial;
 mod checkpoint;
-mod ci;
 mod circuit;
 mod claim;
 mod config;
@@ -1482,31 +1481,6 @@ enum PrAction {
         #[arg(long)]
         execute: bool,
     },
-    /// Poll a PR's CI status via `gh pr checks`, decide the next action with
-    /// the deterministic CI state machine, and — ONLY when CI is green — merge
-    /// the branch into the default branch.
-    ///
-    /// The verdict is one of Wait (CI still running), Reenter (CI failed),
-    /// Merge (CI green), or DegradedLocalOnly (gh absent / CI status
-    /// undeterminable). The real `worktree::merge` runs ONLY on the green
-    /// verdict AND with `--execute` (the GATED gate the /condukt skill supplies
-    /// after human approval); without --execute a green verdict is reported as a
-    /// dry-run and nothing is merged. gh absent, CI-status-unavailable, or a
-    /// failed merge all degrade to local-commit-only and exit 0 (fail-soft:
-    /// never breaks the turn, never merges on a non-green path).
-    Poll {
-        /// The PR number or URL to poll (passed to `gh pr checks <pr>`).
-        #[arg(long)]
-        pr: String,
-        /// Branch to merge when CI is green. Defaults to the current branch.
-        #[arg(long)]
-        branch: Option<String>,
-        /// GATED gate: actually run `worktree::merge` on the green path. Only
-        /// supplied after the human GATED approval. Without it, a green verdict
-        /// is a dry-run and no merge is performed.
-        #[arg(long)]
-        execute: bool,
-    },
 }
 
 fn main() {
@@ -2063,7 +2037,7 @@ fn run_user(cmd: Command) -> Result<()> {
             };
             println!("{}", serde_json::to_string(&out)?);
         }
-        Command::Pr { action } => run_pr(&cfg, &cwd, action)?,
+        Command::Pr { action } => run_pr(&cfg, action)?,
         Command::Loop {
             module,
             iteration,
@@ -3214,70 +3188,8 @@ fn stderr_tail(s: &str, max: usize) -> String {
     t[start..].to_string()
 }
 
-fn run_pr(cfg: &Config, cwd: &Path, action: PrAction) -> Result<()> {
+fn run_pr(cfg: &Config, action: PrAction) -> Result<()> {
     match action {
-        PrAction::Poll {
-            pr,
-            branch,
-            execute,
-        } => {
-            let branch = branch.unwrap_or_else(current_branch);
-
-            // Fetch CI status through the SAME injected-runner pattern as the PR
-            // path (gh spawned via gh_probe), mapped by the pure state machine.
-            let argv = ci::build_ci_checks_args(&pr);
-            let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
-            let verdict = ci::fetch_and_decide(gh_probe, &argv_ref);
-
-            // Merge gate: the real worktree::merge runs ONLY on the green verdict
-            // AND with --execute (the GATED gate). Every other verdict — Wait,
-            // Reenter, DegradedLocalOnly — leaves the work as local commits.
-            match &verdict {
-                ci::CiVerdict::Merge if execute => {
-                    let repo = worktree::toplevel(cwd)?;
-                    // Fail-soft: a merge failure (e.g. conflicts) is reported and
-                    // the turn still exits 0 — it never breaks the turn.
-                    match worktree::merge(cfg, &repo, &branch, &cfg.default_branch) {
-                        Ok(worktree::MergeOutcome::Merged) => {
-                            println!("CI green: merged '{branch}' into '{}'.", cfg.default_branch)
-                        }
-                        // Hold-for-review (mid-flight overlap or real conflict):
-                        // a real block routed to the consensus review surface,
-                        // but still exit 0 (left as local commits until resolved).
-                        Ok(worktree::MergeOutcome::Held(id)) => println!(
-                            "CI green but '{branch}' is HELD by a mid-flight runtime overlap \
-                             ({id}); merge blocked for review, left as local commits. \
-                             Resolve then `condukt worktree resolve-merge --id {id}`."
-                        ),
-                        Ok(worktree::MergeOutcome::Conflict(id)) => println!(
-                            "CI green but merge of '{branch}' hit a conflict ({id}); recorded \
-                             for review, left as local commits. Resolve then \
-                             `condukt worktree resolve-merge --id {id}`."
-                        ),
-                        Err(e) => println!(
-                            "CI green but merge of '{branch}' into '{}' failed; \
-                             left work as local commits (fail-soft): {e:#}",
-                            cfg.default_branch
-                        ),
-                    }
-                }
-                ci::CiVerdict::Merge => println!(
-                    "CI green: would merge '{branch}' into '{}' \
-                     (dry-run; pass --execute to merge).",
-                    cfg.default_branch
-                ),
-                ci::CiVerdict::Wait => {
-                    println!("CI still running for '{pr}': waiting (no merge).")
-                }
-                ci::CiVerdict::Reenter => {
-                    println!("CI failed for '{pr}': re-enter the worker to fix it (no merge).")
-                }
-                ci::CiVerdict::DegradedLocalOnly { reason } => println!(
-                    "CI status unavailable for '{pr}': {reason}; \
-                     left work as local commits (no merge)."
-                ),
-            }
-        }
         PrAction::Create {
             title,
             body,

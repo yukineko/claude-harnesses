@@ -7,7 +7,7 @@
 
 use std::sync::OnceLock;
 
-use globset::{Glob, GlobSet, GlobSetBuilder};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
 /// Glob patterns whose matches are always allowed (treated as config files).
 const ALLOW_GLOBS: &[&str] = &[
@@ -125,29 +125,63 @@ const PROTECTED_GLOBS: &[&str] = &[
     "**/.precommit-audit.toml",
 ];
 
-fn build_set(patterns: &[&str]) -> GlobSet {
+fn build_set(patterns: &[&str], case_insensitive: bool) -> GlobSet {
     let mut b = GlobSetBuilder::new();
     for pat in patterns {
         // Patterns are compile-time constants; a build error would be a bug.
-        if let Ok(g) = Glob::new(pat) {
+        if let Ok(g) = GlobBuilder::new(pat)
+            .case_insensitive(case_insensitive)
+            .build()
+        {
             b.add(g);
         }
     }
     b.build().unwrap_or_else(|_| GlobSet::empty())
 }
 
+/// The allowlist is matched CASE-SENSITIVELY, deliberately.
+///
+/// Case-folding it would EXEMPT more paths (`CARGO.TOML`, `.CLAUDE/agents/x`),
+/// i.e. it would move the permissive side of the gate, and a spelling this side
+/// does not recognise must fall through to the rules rather than skip them. The
+/// protected set is folded instead (see [`protected_set`]) because folding
+/// *there* denies more. Same filesystem fact, opposite direction — the
+/// asymmetry is the point, not an oversight.
 fn glob_set() -> &'static GlobSet {
     static SET: OnceLock<GlobSet> = OnceLock::new();
-    SET.get_or_init(|| build_set(ALLOW_GLOBS))
+    SET.get_or_init(|| build_set(ALLOW_GLOBS, false))
 }
 
+/// The protected set is matched CASE-INSENSITIVELY.
+///
+/// macOS (and Windows) filesystems are case-insensitive by default, so
+/// `.CLAUDE/Settings.json`, `.claude/settings.json` and `DENY.TOML` are the SAME
+/// file on disk — but `globset` matches case-sensitively, so a single shifted
+/// letter walked straight past the protected check and back into the
+/// `is_config_file` allowlist. Folding here is the restrictive direction (it can
+/// only ever deny MORE), which is the side "cannot determine" must resolve to.
 fn protected_set() -> &'static GlobSet {
     static SET: OnceLock<GlobSet> = OnceLock::new();
-    SET.get_or_init(|| build_set(PROTECTED_GLOBS))
+    SET.get_or_init(|| build_set(PROTECTED_GLOBS, true))
 }
 
 /// Normalize a raw path/operand for matching: strip surrounding quotes,
-/// convert backslashes to forward slashes, and drop a leading `./`.
+/// convert backslashes to forward slashes, collapse redundant separators
+/// (`//`) and no-op `/./` components, and drop a leading `./`.
+///
+/// The collapsing steps exist because the kernel does them too: POSIX treats
+/// `a//b` and `a/./b` as naming exactly the same file as `a/b`, while glob
+/// matching splits on every literal `/` and therefore saw a different path.
+/// `.claude//settings.json` slipped past the protected patterns for that reason
+/// alone. A normalizer that is *less* aggressive than the filesystem it models
+/// is a bypass generator: every un-collapsed spelling is a free variant.
+///
+/// Still deliberately NOT resolved here: `..` segments (see the D1 note in
+/// `detect.rs` — a `..`-resolving convenience carve-out is what produced the
+/// `/tmp/../etc/hosts` universal bypass), `~` expansion, symlinks, and
+/// environment/glob expansion. Those need runtime state; a path that still
+/// contains them simply fails to match the allowlist and falls through to the
+/// rules, which is the restrictive side.
 pub fn normalize(raw: &str) -> String {
     let mut s = raw.trim();
     // Strip a single layer of matching surrounding quotes.
@@ -157,6 +191,14 @@ pub fn normalize(raw: &str) -> String {
         s = &s[1..s.len() - 1];
     }
     let mut s = s.replace('\\', "/");
+    // Each pass strictly shortens `s`, so both loops terminate. `replace` is
+    // non-overlapping, hence the loop: `a///b` needs two passes.
+    while s.contains("//") {
+        s = s.replace("//", "/");
+    }
+    while s.contains("/./") {
+        s = s.replace("/./", "/");
+    }
     while let Some(rest) = s.strip_prefix("./") {
         s = rest.to_string();
     }

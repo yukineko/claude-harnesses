@@ -1704,6 +1704,15 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
         "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], depth),
         "rm" => analyze_rm(rest),
         "git" => analyze_git(rest),
+        // Round 2 (adversarial verifier): every rule in this dispatch was about
+        // DELETING or TRUNCATING, so the ordinary ways of REPLACING a file's
+        // contents — copying/moving/linking something over it, or rewriting it
+        // in place — had no arm at all and fell through to `_ => Allow`. That
+        // left `cp evil.json .claude/settings.json` as a one-command bypass of
+        // the whole protected-path rule. Only the DESTINATION matters here:
+        // reading a protected file is harmless, writing one is the hazard.
+        "cp" | "mv" | "install" | "ln" => analyze_copy_move(cmd, rest),
+        "sed" => analyze_sed(rest),
         "find" => analyze_find(rest, depth),
         "xargs" => analyze_xargs(rest, depth),
         "truncate" => Decision::deny("truncate can shrink a file to zero bytes"),
@@ -1821,6 +1830,158 @@ fn analyze_rm(rest: &[&str]) -> Decision {
     }
 }
 
+/// Positional operands of a simple command: tokens that are neither the
+/// command's own flags, nor shell redirection punctuation, nor the separate-form
+/// VALUE of one of `value_flags`.
+///
+/// The redirect skipping mirrors [`has_operand`] exactly, so "what counts as a
+/// target" stays one definition. `value_flags` must list ONLY options that
+/// really take a separate value: a wrong entry swallows the following token, and
+/// if that token was the destination the check silently sees nothing — the
+/// fail-open shape this whole class of rules exists to prevent.
+fn positional_operands<'a>(rest: &[&'a str], value_flags: &[&str]) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        if t.is_empty() {
+            i += 1;
+        } else if is_bare_redirect_op(t) {
+            // Operator plus the target token it owns.
+            i += 2;
+        } else if is_redirect_token(t) {
+            i += 1;
+        } else if value_flags.contains(&t) {
+            i += 2;
+        } else if t.starts_with('-') && t.len() > 1 {
+            i += 1;
+        } else {
+            out.push(t);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Separate-form value options of `cp`/`mv`/`install`/`ln`. Deliberately short:
+/// only options that genuinely consume the next token (see
+/// [`positional_operands`]). `-Z`/`--context` are omitted because their value is
+/// optional and `=`-attached — listing them would eat an operand.
+const COPY_VALUE_FLAGS: &[&str] = &[
+    "-t",
+    "--target-directory",
+    "-S",
+    "--suffix",
+    "-m",
+    "--mode",
+    "-o",
+    "--owner",
+    "-g",
+    "--group",
+    "--strip-program",
+];
+
+/// The `-t DIR` / `--target-directory=DIR` destination directory, if given.
+fn target_directory(rest: &[&str]) -> Option<String> {
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        if t == "-t" || t == "--target-directory" {
+            return rest.get(i + 1).map(|v| (*v).to_string());
+        }
+        if let Some(v) = t.strip_prefix("--target-directory=") {
+            return Some(v.to_string());
+        }
+        if let Some(v) = t.strip_prefix("-t") {
+            if !v.is_empty() && !v.starts_with('-') {
+                return Some(v.to_string());
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// `cp` / `mv` / `install` / `ln`: the DESTINATION is what gets overwritten.
+///
+/// Sources are ignored on purpose — copying a protected file somewhere else is
+/// a read, and denying it would be a false positive on ordinary backups. Only
+/// where the bytes LAND matters.
+///
+/// Three destination shapes are handled, because a rule that only understood
+/// the two-operand form would leave the other two as free bypasses:
+///   * `cp SRC DEST` — the last operand is the destination;
+///   * `cp -t DIR SRC…` — every operand is a source and the file created is
+///     `DIR/<basename SRC>`;
+///   * `cp SRC… DIR/` — same, with the directory written last.
+fn analyze_copy_move(cmd: &str, rest: &[&str]) -> Decision {
+    let action = format!("{cmd} destination");
+    let operands = positional_operands(rest, COPY_VALUE_FLAGS);
+
+    // Directory-destination forms: resolve the file each source would create.
+    let (dir, sources): (Option<String>, &[&str]) = match target_directory(rest) {
+        Some(d) => (Some(d), &operands[..]),
+        None => match operands.split_last() {
+            Some((last, init)) if last.ends_with('/') && !init.is_empty() => {
+                (Some((*last).to_string()), init)
+            }
+            _ => (None, &[]),
+        },
+    };
+    if let Some(dir) = dir {
+        if let Some(deny) = protected_path_deny(&action, &dir) {
+            return deny;
+        }
+        let base = dir.trim_end_matches('/');
+        for src in sources {
+            let landed = format!("{base}/{}", basename(src));
+            if let Some(deny) = protected_path_deny(&action, &landed) {
+                return deny;
+            }
+        }
+        return Decision::Allow;
+    }
+
+    match operands.last() {
+        Some(dest) => protected_path_deny(&action, dest).unwrap_or(Decision::Allow),
+        // One operand or none: nothing is being written over (`cp a` is an
+        // error, `mv -t DIR` with no source does nothing).
+        None => Decision::Allow,
+    }
+}
+
+/// Separate-form value options of `sed`. `-e`/`-f` supply the SCRIPT, so their
+/// value is not a file sed writes to.
+const SED_VALUE_FLAGS: &[&str] = &["-e", "--expression", "-f", "--file", "-l", "--line-length"];
+
+/// `sed -i` rewrites its operands IN PLACE — a full-content overwrite of an
+/// existing file, the same hazard as `>` or `tee`. Without `-i`, sed only reads
+/// and writes to stdout, so it stays Allow.
+///
+/// EVERY operand is checked, including the leading script in the
+/// `sed -i SCRIPT FILE` form. Checking the script too can only add candidates
+/// that fail the protected match anyway (`s/a/b/` is not a path), whereas
+/// getting the script/file split wrong in the other direction — BSD's
+/// `sed -i '' SCRIPT FILE` takes a separate suffix argument, GNU's `-i.bak`
+/// attaches it — would drop a real target and fail open.
+fn analyze_sed(rest: &[&str]) -> Decision {
+    let in_place = rest.iter().any(|t| {
+        *t == "--in-place"
+            || t.starts_with("--in-place=")
+            // `-i`, `-i.bak` (attached suffix) and clusters like `-ni`.
+            || (is_short_flag(t) && t.contains('i'))
+    });
+    if !in_place {
+        return Decision::Allow;
+    }
+    for operand in positional_operands(rest, SED_VALUE_FLAGS) {
+        if let Some(deny) = protected_path_deny("sed -i target", operand) {
+            return deny;
+        }
+    }
+    Decision::Allow
+}
+
 /// Index in `rest` of the git subcommand token, skipping git's global options
 /// AND the separate-token value of a value-taking global option. Without this,
 /// a naive "first non-dash token" scan lands on the VALUE of a value-taking
@@ -1867,11 +2028,80 @@ fn git_subcommand_index(rest: &[&str]) -> Option<usize> {
     None
 }
 
+/// The shared reason for every way of repointing `core.hooksPath`. One wording
+/// so [`crate::rule_id`] gives the whole class one signature.
+const HOOKSPATH_REASON: &str =
+    "git config core.hooksPath repoints every git hook at once, disabling the repo's hook gates";
+
+/// Config assignments carried by git's GLOBAL options, in every spelling git
+/// accepts: `-c k=v`, `-ck=v` (glued), `--config-env k=v`, `--config-env=k=v`.
+///
+/// `git_subcommand_index` already knew these options exist — it skips past them
+/// to find the subcommand — but nothing looked at the value it skipped. That is
+/// how `git -c core.hooksPath=/tmp/evil status` reached Allow while
+/// `git config core.hooksPath …` was denied: the same setting, applied for the
+/// duration of one command instead of written to a file, through a code path
+/// whose only job was to ignore it.
+fn git_global_config_assignments<'a>(globals: &[&'a str]) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < globals.len() {
+        let t = globals[i];
+        if t == "-c" || t == "--config-env" {
+            if let Some(v) = globals.get(i + 1) {
+                out.push(*v);
+            }
+            i += 2;
+            continue;
+        }
+        if let Some(v) = t.strip_prefix("--config-env=") {
+            out.push(v);
+        } else if let Some(v) = t.strip_prefix("-c") {
+            // Glued short form `-ccore.hooksPath=x`. `-C`/`--config-env=` are
+            // not reachable here (`strip_prefix` is case-sensitive and the
+            // long form was handled above).
+            if !v.is_empty() {
+                out.push(v);
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// True when any global `-c`/`--config-env` assignment sets `core.hooksPath`.
+/// Git config keys are case-insensitive, so the key is folded before comparing.
+fn sets_hookspath_inline(globals: &[&str]) -> bool {
+    git_global_config_assignments(globals).iter().any(|a| {
+        a.split('=')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .eq_ignore_ascii_case("core.hookspath")
+    })
+}
+
 fn analyze_git(rest: &[&str]) -> Decision {
     let idx = match git_subcommand_index(rest) {
         Some(i) => i,
-        None => return Decision::Allow,
+        // No subcommand: still inspect the globals. A bare
+        // `git -c core.hooksPath=…` does nothing on its own, but "there is no
+        // subcommand to classify" is not a reason to stop looking at what the
+        // line does set.
+        None => {
+            return if sets_hookspath_inline(rest) {
+                Decision::deny(HOOKSPATH_REASON)
+            } else {
+                Decision::Allow
+            }
+        }
     };
+    // Global options sit BEFORE the subcommand; `-c` there applies the setting
+    // to whatever subcommand follows, so it is checked for every git command,
+    // not just `git config`.
+    if sets_hookspath_inline(&rest[..idx]) {
+        return Decision::deny(HOOKSPATH_REASON);
+    }
     let sub = normalized_command(rest[idx]);
     match sub.as_str() {
         "clean" => {
@@ -1939,10 +2169,7 @@ fn analyze_git(rest: &[&str]) -> Decision {
                 )
             });
             if mentions_hookspath && !read_only {
-                Decision::deny(
-                    "git config core.hooksPath repoints every git hook at once, disabling the \
-repo's hook gates",
-                )
+                Decision::deny(HOOKSPATH_REASON)
             } else {
                 Decision::Allow
             }

@@ -214,6 +214,33 @@ mod tests {
                 "Write",
                 json!({ "file_path": "src/main.rs", "content": "" }),
             ),
+            // Protected gate/hook/policy path: Write, Edit, and the redirect
+            // forms all share the ONE "protected-path" rule id (see the
+            // comment on that arm in `rule_id` above). Covering all four
+            // call sites here pins that they actually reach it, not just
+            // that the substring match exists.
+            (
+                "Write",
+                json!({ "file_path": ".githooks/pre-commit", "content": "x" }),
+            ),
+            (
+                "Edit",
+                json!({ "file_path": ".claude/settings.json", "old_string": "a", "new_string": "b" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "echo x > .githooks/pre-commit" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "echo x >> .claude/settings.json" }),
+            ),
+            // git config core.hooksPath: the single-command equivalent of
+            // overwriting every file under `.git/hooks/`.
+            (
+                "Bash",
+                json!({ "command": "git config core.hooksPath .githooks" }),
+            ),
             // D4 analysis-budget deny. This case was missing when the budget
             // was introduced, so this test passed while the new deny path
             // classified to "unknown" — the test asserted completeness it did

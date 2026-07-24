@@ -70,13 +70,18 @@ fn write_empty_overwrite_is_denied() {
 }
 
 #[test]
-fn config_file_edit_is_allowed_silently() {
+fn config_file_edit_to_protected_path_is_denied() {
+    // Renamed from `config_file_edit_is_allowed_silently`: this was the
+    // end-to-end twin of the fail-open flipped in the unit tests (detect.rs
+    // `write_with_content_or_to_config_is_allowed`) — an Edit to
+    // `.claude/settings.json` decides which hooks/gates run at all, so it
+    // must now Deny and be surfaced to the agent, not pass through silently.
     let payload = r#"{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":".claude/settings.json"}}"#;
     let (code, stdout) = run(payload);
-    assert_eq!(code, 0);
+    assert_eq!(code, 0, "hook must always exit 0");
     assert!(
-        stdout.trim().is_empty(),
-        "allow must be silent, got: {stdout}"
+        stdout.contains(r#""permissionDecision":"deny""#),
+        "expected deny, got stdout: {stdout}"
     );
 }
 

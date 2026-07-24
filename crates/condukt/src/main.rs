@@ -784,6 +784,19 @@ enum StateAction {
         /// by the skill before merge/worktree cleanup. Omitted → unchanged.
         #[arg(long)]
         lines_removed: Option<u64>,
+        /// Model used by the verifier (as opposed to the worker) that produced
+        /// this task's verdict (recorded for fugu-router). Omitted → unchanged.
+        #[arg(long)]
+        verifier_model: Option<String>,
+        /// Observed USD cost of the verifier's work on this task (recorded for
+        /// fugu-router). Omitted → unchanged.
+        #[arg(long)]
+        verifier_cost: Option<f64>,
+        /// The Task-tool agentId of the verifier subagent that produced this
+        /// task's verdict (recorded for exact-match cost resolution against
+        /// `gauge subagents`). Omitted → unchanged.
+        #[arg(long)]
+        verifier_agent_id: Option<String>,
     },
     /// Print a run's full state as JSON.
     Show {
@@ -3420,6 +3433,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             route_rationale,
             lines_added,
             lines_removed,
+            verifier_model,
+            verifier_cost,
+            verifier_agent_id,
         } => {
             // Hold the per-run state lock across the entire load → oracle-gate →
             // mutate → save cycle so a concurrent session/worktree cannot lose
@@ -3561,6 +3577,15 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
             if lines_removed.is_some() {
                 t.lines_removed = lines_removed;
+            }
+            if verifier_model.is_some() {
+                t.verifier_model = verifier_model;
+            }
+            if verifier_cost.is_some() {
+                t.verifier_cost_usd = verifier_cost;
+            }
+            if verifier_agent_id.is_some() {
+                t.verifier_agent_id = verifier_agent_id;
             }
             // Findings persist regardless of status (this whole handler runs for
             // any status): a failed/pending/unmerged experiment still records

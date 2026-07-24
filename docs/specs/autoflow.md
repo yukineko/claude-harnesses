@@ -17,9 +17,14 @@ subscription-native 設計で、API キーもデーモンも不要。中核は *
 
 - **ゲートは block 判定のみ・作業しない** — autoflow 自身は record も condukt も実行せず、`stop_command` は
   `println!` で `{"decision":"block","reason":…}` JSON を出すだけ。実作業は誘導先の skill/LLM が行う。
-- **暴走上限** — condukt ループは自動で 4 回まで（`s.condukt_prompts <= 4`）block し、5 回目以降は文面を切り替えて
-  ユーザーに続行確認を委ねる（自動 block を止めない代わりにプロンプト文言で明示）。backlog ループは
-  `cfg.max_backlog_prompts`（既定 2）を超えたら `Phase::Done` に落として諦める。
+- **停止は progress ベース（回数プロキシではない）** — condukt / backlog の両ループとも、継続するかは
+  「残件集合（pending / open）が縮んでいるか＝進捗の有無」で決まる（`state::decide_progress`）。進捗がある限り
+  累積回数に関係なく block（継続）し、進捗が止まった `no_progress_streak` が `cfg.stuck_threshold`（既定 3）に
+  達した stuck のときだけ、文面を escalation に切り替えて block する。**stuck でも黙って allow/`Phase::Done` に
+  はしない**（見える形で必ず block）。`Phase::Done`（唯一の正当な停止）へ落ちるのは残件集合が空＝タスク完了に
+  なったときのみ。stuck の文面は `is_autonomous()`（`condukt state autonomy-check` を shell、失敗時は
+  非自律に fail-safe）で分岐し、自律時は out-of-band 対処を促し、非自律時はユーザー確認を促す。進捗中の継続は
+  両モードとも確認を出さない。
 - **他セッションが lock を握れば撤退** — `lock::backlog_driver_active()`（`~/.backlog/run.lock` を read-only 参照、
   owner pid が生きていれば active）が真なら `stop_command` は即 return。稼働中の `/flow`/`/backlog` driver と
   同一 queue を二重駆動しない。stale lock（pid 消滅）は inactive 扱いで wedge しない。

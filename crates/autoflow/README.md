@@ -25,7 +25,7 @@ block the turn (with a `/`-command nudge) or let it end:
 | Phase | Condition | autoflow does |
 |---|---|---|
 | **Idle** | enough turns + tool events this session | block → `/session-insights:record` |
-| **RecordRequested / Continuing** | condukt tasks still pending | block → `/condukt` (auto ≤4×, then ask from 5×) |
+| **RecordRequested / Continuing** | condukt tasks still pending | block → `/condukt` (continues while the pending set keeps *shrinking* — no call-count ceiling; escalates *visibly* only when progress stalls) |
 | **Continuing** | condukt clear, backlog has open items, compass charter fresh | block → `/backlog <next item>` |
 | **Continuing** | backlog open but compass charter **stale** | nudge `/compass`, then stand down |
 | **Done** | nothing pending | allow the turn to end |

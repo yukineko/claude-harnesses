@@ -11,8 +11,13 @@
 //!       no  → done (allow)
 //!   done → allow
 //!
-//!   condukt_prompts < 5  → block automatically
-//!   condukt_prompts ≥ 5  → block: ask user each time
+//! Continuation is progress-based, not count-based: both the condukt (pending)
+//! and backlog (open queue) branches call `state::decide_progress`. While the
+//! set keeps shrinking, autoflow keeps continuing (blocking) — there is no
+//! cumulative call-count ceiling. Only a stalled-progress streak reaching
+//! `cfg.stuck_threshold` escalates, and even then it stays VISIBLE (blocks with
+//! an escalation message, worded by autonomy) rather than silently standing
+//! down. An empty pending/open set is the only legitimate stop (→ done/allow).
 //!
 //! Independently of the above (Tier 2 delegation-record advisory): on every
 //! `record_requested`/`continuing` Stop, if this session's transcript shows
@@ -34,7 +39,7 @@ use harness_core::hook::{read_stdin, run_hook, HookInput};
 use serde_json::json;
 
 use config::Config;
-use state::Phase;
+use state::{Phase, StopDecision};
 
 #[derive(Parser)]
 #[command(
@@ -181,7 +186,17 @@ fn stop_run(input: HookInput) {
 
                 let pending = condukt::find_pending(&cwd);
                 if !pending.is_empty() {
-                    s.condukt_prompts += 1;
+                    // Progress-based continuation: continue as long as the
+                    // pending set is shrinking; escalate (visibly) only on a
+                    // stalled-progress streak. No cumulative call-count ceiling.
+                    let (decision, next_prev, next_streak) = state::decide_progress(
+                        pending.len() as u32,
+                        s.condukt_prev_pending,
+                        s.condukt_no_progress_streak,
+                        cfg.stuck_threshold,
+                    );
+                    s.condukt_prev_pending = next_prev;
+                    s.condukt_no_progress_streak = next_streak;
                     s.phase = Phase::Continuing;
                     state::save(&cfg.state_dir, &session_id, &s);
 
@@ -195,29 +210,55 @@ fn stop_run(input: HookInput) {
                         .collect::<Vec<_>>()
                         .join("\n");
 
-                    if s.condukt_prompts <= 4 {
-                        block(
-                            &cwd,
-                            &session_id,
-                            "condukt-pending",
-                            &format!(
-                                "condukt に残課題が {} 件あります:\n{}\n\n/condukt で続きを処理してください。",
-                                pending.len(),
-                                list
-                            ),
-                        );
-                    } else {
-                        block(
-                            &cwd,
-                            &session_id,
-                            "condukt-pending-repeated",
-                            &format!(
-                                "condukt に残課題が {} 件あります ({}回目):\n{}\n\n自動実行を停止しています。続けるかどうかユーザーに確認してください。",
-                                pending.len(),
-                                s.condukt_prompts,
-                                list
-                            ),
-                        );
+                    match decision {
+                        StopDecision::Continue => {
+                            block(
+                                &cwd,
+                                &session_id,
+                                "condukt-pending",
+                                &format!(
+                                    "condukt に残課題が {} 件あります:\n{}\n\n/condukt で続きを処理してください。",
+                                    pending.len(),
+                                    list
+                                ),
+                            );
+                        }
+                        StopDecision::EscalateStuck => {
+                            // Stalled progress: never silent. Word the visible
+                            // escalation by autonomy — autonomous keeps going
+                            // (noting out-of-band handling), non-autonomous asks
+                            // the user to confirm/redirect.
+                            let reason = if is_autonomous() {
+                                format!(
+                                    "自律継続中: condukt の pending が {} 回連続で減っていません（進捗停滞を検知）。残課題 {} 件:\n{}\n\nout-of-band で対処しつつ継続します（/condukt を再実行）。",
+                                    cfg.stuck_threshold,
+                                    pending.len(),
+                                    list
+                                )
+                            } else {
+                                format!(
+                                    "進捗が止まっています: condukt の pending が {} 回連続で減っていません。残課題 {} 件:\n{}\n\n継続するか方針を変えるかユーザーに確認してください。",
+                                    cfg.stuck_threshold,
+                                    pending.len(),
+                                    list
+                                )
+                            };
+                            block(&cwd, &session_id, "condukt-pending-stuck", &reason);
+                        }
+                        // pending is non-empty here, so decide_progress never
+                        // returns DoneEmpty; handle defensively as Continue.
+                        StopDecision::DoneEmpty => {
+                            block(
+                                &cwd,
+                                &session_id,
+                                "condukt-pending",
+                                &format!(
+                                    "condukt に残課題が {} 件あります:\n{}\n\n/condukt で続きを処理してください。",
+                                    pending.len(),
+                                    list
+                                ),
+                            );
+                        }
                     }
                 } else {
                     // condukt 完了 → backlog を確認
@@ -251,29 +292,77 @@ fn stop_run(input: HookInput) {
                             }
                         }
 
-                        s.backlog_prompts += 1;
-                        // If we've hit the limit, give up — the skill or command likely failed.
-                        if s.backlog_prompts > cfg.max_backlog_prompts {
-                            s.phase = Phase::Done;
-                            state::save(&cfg.state_dir, &session_id, &s);
-                            return;
-                        }
+                        // Progress-based continuation for the open queue.
+                        // Never silently drops to Done with a non-empty queue —
+                        // a stalled-progress streak escalates VISIBLY instead.
+                        let (decision, next_prev, next_streak) = state::decide_progress(
+                            open.len() as u32,
+                            s.backlog_prev_open,
+                            s.backlog_no_progress_streak,
+                            cfg.stuck_threshold,
+                        );
+                        s.backlog_prev_open = next_prev;
+                        s.backlog_no_progress_streak = next_streak;
                         s.phase = Phase::Continuing;
                         state::save(&cfg.state_dir, &session_id, &s);
 
                         let next = &open[0];
                         let remaining = open.len();
-                        let msg = format!(
-                            "残課題バックログに {} 件の未完了課題があります。\n\n次の課題 [{}]: {}\n\n/backlog を実行してください。",
-                            remaining, next.id, next.text
-                        );
-                        block(&cwd, &session_id, "backlog-next-pending", &msg);
+                        match decision {
+                            StopDecision::Continue => {
+                                let msg = format!(
+                                    "残課題バックログに {} 件の未完了課題があります。\n\n次の課題 [{}]: {}\n\n/backlog を実行してください。",
+                                    remaining, next.id, next.text
+                                );
+                                block(&cwd, &session_id, "backlog-next-pending", &msg);
+                            }
+                            StopDecision::EscalateStuck => {
+                                let reason = if is_autonomous() {
+                                    format!(
+                                        "自律継続中: open キューが {} 回連続で減っていません（進捗停滞を検知）。未完了 {} 件（次: [{}] {}）。/backlog か skill が失敗している可能性を out-of-band で調べつつ継続します。",
+                                        cfg.stuck_threshold, remaining, next.id, next.text
+                                    )
+                                } else {
+                                    format!(
+                                        "open キューが {} 回連続で減っていません（進捗停滞）。未完了 {} 件（次: [{}] {}）。/backlog か skill が失敗している可能性があります。継続するか調べるかユーザーに確認してください。",
+                                        cfg.stuck_threshold, remaining, next.id, next.text
+                                    )
+                                };
+                                block(&cwd, &session_id, "backlog-next-stuck", &reason);
+                            }
+                            // open is non-empty here, so decide_progress never
+                            // returns DoneEmpty; handle defensively as Continue.
+                            StopDecision::DoneEmpty => {
+                                let msg = format!(
+                                    "残課題バックログに {} 件の未完了課題があります。\n\n次の課題 [{}]: {}\n\n/backlog を実行してください。",
+                                    remaining, next.id, next.text
+                                );
+                                block(&cwd, &session_id, "backlog-next-pending", &msg);
+                            }
+                        }
                     }
                 }
             }
             Phase::Done => {}
         }
     }
+}
+
+/// Whether the current run is autonomous, per `condukt state autonomy-check`.
+/// Shells out (like `lock::backlog_driver_active`): exit 0 = autonomous; ANY
+/// failure — non-zero exit, spawn error, missing binary — is treated as
+/// non-autonomous (fail-safe: default to asking the user rather than assuming
+/// autonomy). Consulted ONLY on the `EscalateStuck` path to word the visible
+/// escalation message, so no extra subprocess is spawned on the common
+/// progress (`Continue`) path.
+fn is_autonomous() -> bool {
+    std::process::Command::new("condukt")
+        .args(["state", "autonomy-check"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|st| st.success())
+        .unwrap_or(false)
 }
 
 fn block(cwd: &std::path::Path, session: &str, check_kind: &str, reason: &str) {
@@ -468,7 +557,7 @@ mod tests {
                 min_turns: 2,
                 min_tool_events: 3,
                 state_dir: self.state_dir.clone(),
-                max_backlog_prompts: 2,
+                stuck_threshold: 3,
                 resume_flow_on_compact: resume,
             }
         }

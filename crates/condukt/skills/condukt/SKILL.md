@@ -658,10 +658,16 @@ PLAN_EXIT=$?
 2. 各候補を Phase 6 の verifier で検証し (`state check-criteria` → verifier-model 解決 → verifier agent)、
    `{candidate:"<t.id>-c<k>", pass:<bool>}` の verdict を集める。候補が明確に別アプローチを取っている場合は
    `group:"<手法の要約>"` を添えると、投票が手法バケット単位の self-consistency になる (省略時は pass 一括投票)。
-3. verdict を `condukt consensus vote` に渡して**決定論的に集計**する:
+   **verdict を返さなかった候補 (worker/verifier が crash・timeout・沈黙) は配列に入れない** — その欠落は
+   次の `--expected` が検出する。
+3. verdict を `condukt consensus vote` に渡して**決定論的に集計**する。`--expected` には
+   **spawn した候補数 (`$SAMPLES`)** を必ず渡す (集まった数ではなく dispatch した数)。沈黙した候補が
+   いれば `verdicts.len() < expected` となり、集まった verdict が全員一致でも `escalate`
+   (missing>0) に倒れる — 沈黙を「異議なし＝合意」と数えない (CLAUDE.md §3):
    ```bash
-   printf '%s' "$VERDICTS_JSON" | condukt consensus vote   # → {winner, agreement_rate, escalate, escalate_to, ...}
-   CONSENSUS_EXIT=$?   # 0 = 合意成立 (winner 採用) / 1 = 要エスカレーション
+   SAMPLES=$(printf '%s' "$PLAN" | jq -r '.samples')   # Phase 5.5 の consensus plan が返した fan-out 幅
+   printf '%s' "$VERDICTS_JSON" | condukt consensus vote --expected "$SAMPLES"   # → {winner, agreement_rate, escalate, missing, ...}
+   CONSENSUS_EXIT=$?   # 0 = 合意成立 (winner 採用) / 1 = 要エスカレーション (欠落 missing>0 を含む)
    ```
    - **exit 0 (escalate:false)** → `winner` の候補 branch を採用する。その候補を `done` に set して
      Phase 6 の最終記録 (fugu-router 実績) に進み、**採用しなかった候補の worktree は Phase 7 の
@@ -699,11 +705,17 @@ PLAN_EXIT=$?
 2. 各 skeptic のプロンプトは「既定 REFUTED。done_criteria と実装差分を読み、コード上の
    具体的根拠で反証できたら refute、崩せなければ pass、判断不能なら abstain」を指示し、
    `{"skeptic":"<id>","ballot":"refute|pass|abstain","reason":"..."}` の JSON のみを返させる。
-3. 集めた N 件の JSON 配列を `condukt adversarial adjudicate` に stdin 経由で渡す:
+   **ballot を返さなかった skeptic (crash・timeout・沈黙) は配列に入れない** — その欠落は
+   次の `--expected` が検出する。
+3. 集めた JSON 配列を `condukt adversarial adjudicate` に stdin 経由で渡す。`--expected` には
+   **spawn した skeptic 数 (`$SIZE`、= `$PLAN` の `size`)** を必ず渡す (集まった数ではなく dispatch
+   した数)。沈黙した skeptic がいれば `votes.len() < expected` となり、集まった ballot が全員 pass
+   でも `escalate` (missing>0) に倒れる — 沈黙を「異議なし」と数えない (CLAUDE.md §3):
    ```bash
-   ADJ=$(printf '%s' "$VOTES_JSON" | condukt adversarial adjudicate)
+   SIZE=$(printf '%s' "$PLAN" | jq -r '.size')   # adversarial plan が返したパネル幅 (dispatch した skeptic 数)
+   ADJ=$(printf '%s' "$VOTES_JSON" | condukt adversarial adjudicate --expected "$SIZE")
    ADJ_EXIT=$?
-   OUTCOME=$(echo "$ADJ" | jq -r '.outcome')
+   OUTCOME=$(echo "$ADJ" | jq -r '.outcome')   # pass | block | escalate (escalate は missing>0 を含む)
    ```
    - `OUTCOME=pass`（exit 0） → `condukt state set --run $RID --task <id> --status verified`。
    - `OUTCOME=block`（exit 1） → `--status failed` にし、カスケードエスカレーションへ

@@ -633,6 +633,17 @@ enum ConsensusAction {
         /// Agreement threshold override (CLI > JSON > config > built-in default).
         #[arg(long)]
         threshold: Option<f64>,
+        /// REQUIRED. How many candidate verdicts you actually spawned (the
+        /// fan-out plan size). A verifier that went silent (crashed / timed
+        /// out / never returned) is then detected and forces an escalate —
+        /// instead of the verdicts that DID arrive being silently tallied as
+        /// if that was the whole panel. This is mandatory, not defaulted:
+        /// silently defaulting it to the number received would re-open the
+        /// exact silence→pass fail-open this flag closes (CLAUDE.md §3 —
+        /// "cannot determine" must resolve to the restrictive side, never
+        /// silently to "fine").
+        #[arg(long)]
+        expected: usize,
     },
 }
 
@@ -672,6 +683,17 @@ enum AdversarialAction {
         /// Refute-ratio block threshold override (inclusive; [0.0, 1.0]).
         #[arg(long)]
         block_ratio: Option<f64>,
+        /// REQUIRED. How many skeptics you actually spawned (the panel plan
+        /// size). A skeptic that went silent (crashed / timed out / never
+        /// returned a ballot) is then detected and forces an escalate —
+        /// instead of the ballots that DID arrive being silently tallied as
+        /// if that was the whole panel. This is mandatory, not defaulted:
+        /// silently defaulting it to the number received would re-open the
+        /// exact silence→pass fail-open this flag closes (CLAUDE.md §3 —
+        /// "cannot determine" must resolve to the restrictive side, never
+        /// silently to "fine").
+        #[arg(long)]
+        expected: usize,
     },
 }
 
@@ -3069,7 +3091,11 @@ fn run_consensus(cfg: &Config, action: ConsensusAction) -> Result<()> {
                 std::process::exit(1);
             }
         }
-        ConsensusAction::Vote { file, threshold } => {
+        ConsensusAction::Vote {
+            file,
+            threshold,
+            expected,
+        } => {
             let raw = match &file {
                 Some(p) => std::fs::read_to_string(p)
                     .with_context(|| format!("reading {}", p.display()))?,
@@ -3108,7 +3134,12 @@ fn run_consensus(cfg: &Config, action: ConsensusAction) -> Result<()> {
             if !(0.0..=1.0).contains(&thr) {
                 bail!("threshold must be within [0.0, 1.0], got {thr}");
             }
-            let decision = consensus::tally(&verdicts, thr);
+            // `--expected` is REQUIRED (clap enforces its presence): it is the
+            // number of candidate verdicts actually dispatched. A verdict that
+            // never arrived (silent verifier) must be counted as a missing
+            // vote, not silently dropped from the denominator — so the gate is
+            // always active, never defaulted to "however many showed up".
+            let decision = consensus::tally(&verdicts, thr, expected);
             println!("{}", serde_json::to_string_pretty(&decision)?);
             // Exit 1 when the caller should escalate (all-fail, tie, or agreement
             // below threshold); 0 when a consensus winner is taken. Distinct JSON
@@ -3172,6 +3203,7 @@ fn run_adversarial(cfg: &Config, action: AdversarialAction) -> Result<()> {
             file,
             min_voters,
             block_ratio,
+            expected,
         } => {
             let raw = match &file {
                 Some(p) => std::fs::read_to_string(p)
@@ -3201,7 +3233,12 @@ fn run_adversarial(cfg: &Config, action: AdversarialAction) -> Result<()> {
                     policy.block_ratio
                 );
             }
-            let decision = adversarial::adjudicate(&votes, &policy);
+            // `--expected` is REQUIRED (clap enforces its presence): it is the
+            // number of skeptics actually dispatched. A ballot that never
+            // arrived (silent skeptic) must be counted as a missing vote, not
+            // silently dropped from the denominator — so the gate is always
+            // active, never defaulted to "however many showed up".
+            let decision = adversarial::adjudicate(&votes, &policy, expected);
             println!("{}", serde_json::to_string_pretty(&decision)?);
             // Exit 1 when the caller must NOT auto-accept (block or escalate); 0
             // when the artifact passes. The `outcome` field tells block vs

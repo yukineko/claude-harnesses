@@ -81,11 +81,36 @@ pub struct Consensus {
     pub escalate_to: &'static str,
     /// Human-readable explanation of the decision.
     pub reason: String,
+    /// `expected - n` (never negative — `expected` is effectively floored at
+    /// `n`), the number of verdicts that were supposed to arrive but never
+    /// did. A candidate that was spawned and never returned a verdict is a
+    /// *silent* loss, indistinguishable at the tally from a candidate that
+    /// would have failed/disagreed. `missing > 0` alone forces `escalate`
+    /// with `winner = None` (see [`tally`]) regardless of how the received
+    /// verdicts agree — counting a verdict that never happened as agreement
+    /// is exactly the "could not determine" -> "clean" mapping CLAUDE.md
+    /// forbids.
+    pub missing: usize,
 }
 
 /// Tally N verifier verdicts into a consensus winner + escalation decision.
 ///
+/// `expected` is how many candidate verdicts were actually spawned/supposed
+/// to arrive. Pass `verdicts.len()` when the caller has no such count (the
+/// pre-existing, backward-compatible behavior: missing-verdict detection is
+/// then a no-op, since `expected == n` always). Passing the true spawn count
+/// lets a candidate that was spawned but never returned a verdict (a
+/// *silent* loss — timeout, crash, dropped worker) be told apart from one
+/// that voted; the two are NOT the same thing, even though a naive tally
+/// over only the verdicts that arrived cannot distinguish them.
+///
 /// Voting rules (deterministic, order-independent):
+///   * **Verdicts went missing** (`verdicts.len() < expected`) → **escalate**
+///     unconditionally, `winner = None`, even if the verdicts that DID arrive
+///     agree unanimously. A verdict that never arrived is indistinguishable
+///     from one that would have disagreed, so it cannot be silently counted
+///     as agreement (CLAUDE.md §3/§6: "could not determine" must resolve to
+///     block/escalate, never to clean).
 ///   * Only PASSING candidates cast a vote; a failing implementation produced no
 ///     valid answer. Failing candidates still count toward `n` (the denominator),
 ///     so they lower the agreement rate — a sample that disagreed with the winner.
@@ -97,8 +122,11 @@ pub struct Consensus {
 ///   * `agreement_rate = winning_votes / n`.
 ///   * `escalate` iff no candidate passed, OR the top group is tied, OR
 ///     `agreement_rate < threshold`.
-pub fn tally(verdicts: &[Verdict], threshold: f64) -> Consensus {
+pub fn tally(verdicts: &[Verdict], threshold: f64, expected: usize) -> Consensus {
     let n = verdicts.len();
+    // Never negative: a caller-supplied `expected` smaller than what actually
+    // arrived (e.g. the default `verdicts.len()`) means nothing is missing.
+    let missing = expected.saturating_sub(n);
 
     // Bucket passing candidates by answer group. BTreeMap keys => deterministic
     // iteration order for stable tie-breaking.
@@ -113,6 +141,28 @@ pub fn tally(verdicts: &[Verdict], threshold: f64) -> Consensus {
         }
     }
     let passing: usize = groups.values().map(|c| c.len()).sum();
+
+    // Fail closed: fewer verdicts arrived than were expected. A silent/missing
+    // candidate must not be counted as agreement, so this fires even when the
+    // verdicts that DID arrive unanimously agree and would otherwise clear the
+    // threshold below. No settled winner is ever returned on a partial vote.
+    if missing > 0 {
+        return Consensus {
+            n,
+            passing,
+            winner: None,
+            winning_group: None,
+            winning_votes: 0,
+            agreement_rate: 0.0,
+            threshold,
+            escalate: true,
+            escalate_to: ESCALATE_TO,
+            reason: format!(
+                "{missing} of {expected} expected verdict(s) never arrived ({n} received) — a missing verdict cannot be counted as agreement → escalate"
+            ),
+            missing,
+        };
+    }
 
     // No candidate passed → nothing to select, escalate outright.
     if groups.is_empty() {
@@ -131,6 +181,7 @@ pub fn tally(verdicts: &[Verdict], threshold: f64) -> Consensus {
             } else {
                 format!("0/{n} candidates passed verification → escalate to {ESCALATE_TO}")
             },
+            missing: 0,
         };
     }
 
@@ -186,6 +237,7 @@ pub fn tally(verdicts: &[Verdict], threshold: f64) -> Consensus {
         escalate,
         escalate_to: ESCALATE_TO,
         reason,
+        missing: 0,
     }
 }
 
@@ -290,15 +342,15 @@ mod proptests {
             verdicts in prop::collection::vec(any_verdict(), 0..12),
             threshold in 0.0f64..=1.0,
         ) {
-            let base = tally(&verdicts, threshold);
+            let base = tally(&verdicts, threshold, verdicts.len());
 
             let mut rev = verdicts.clone();
             rev.reverse();
-            prop_assert_eq!(key(&base), key(&tally(&rev, threshold)), "reverse changed decision");
+            prop_assert_eq!(key(&base), key(&tally(&rev, threshold, rev.len())), "reverse changed decision");
 
             let mut sorted = verdicts.clone();
             sorted.sort_by(|a, b| a.candidate.cmp(&b.candidate));
-            prop_assert_eq!(key(&base), key(&tally(&sorted, threshold)), "sort changed decision");
+            prop_assert_eq!(key(&base), key(&tally(&sorted, threshold, sorted.len())), "sort changed decision");
         }
 
         // agreement_rate ∈ [0,1] and winning_votes ≤ n, for any threshold.
@@ -307,7 +359,7 @@ mod proptests {
             verdicts in prop::collection::vec(any_verdict(), 0..12),
             threshold in proptest::num::f64::ANY,
         ) {
-            let c = tally(&verdicts, threshold);
+            let c = tally(&verdicts, threshold, verdicts.len());
             prop_assert!(
                 (0.0..=1.0).contains(&c.agreement_rate),
                 "agreement_rate {} out of [0,1]", c.agreement_rate
@@ -322,7 +374,7 @@ mod proptests {
             verdicts in prop::collection::vec(any_verdict(), 0..12),
             threshold in proptest::num::f64::ANY,
         ) {
-            let c = tally(&verdicts, threshold);
+            let c = tally(&verdicts, threshold, verdicts.len());
             // An empty (or all-failing) tally must escalate with no winner.
             if !verdicts.iter().any(|v| v.pass) {
                 prop_assert!(c.escalate && c.winner.is_none());
@@ -361,7 +413,7 @@ mod tests {
     fn all_pass_unanimous_no_escalation() {
         // 3/3 pass, no groups → all agree on the implicit bucket, agreement 1.0.
         let verdicts = [v("a", true), v("b", true), v("c", true)];
-        let c = tally(&verdicts, DEFAULT_THRESHOLD);
+        let c = tally(&verdicts, DEFAULT_THRESHOLD, verdicts.len());
         assert_eq!(c.passing, 3);
         assert_eq!(c.winning_votes, 3);
         assert!(approx(c.agreement_rate, 1.0));
@@ -375,7 +427,7 @@ mod tests {
     fn majority_pass_over_one_fail_takes_winner() {
         // 2 pass / 1 fail → 2/3 = 67% >= 50% → consensus, winner = smallest id.
         let verdicts = [v("z", true), v("m", true), v("q", false)];
-        let c = tally(&verdicts, DEFAULT_THRESHOLD);
+        let c = tally(&verdicts, DEFAULT_THRESHOLD, verdicts.len());
         assert_eq!(c.passing, 2);
         assert_eq!(c.winning_votes, 2);
         assert!(approx(c.agreement_rate, 2.0 / 3.0));
@@ -394,7 +446,7 @@ mod tests {
             vg("a3", true, "A"),
             vg("b1", true, "B"),
         ];
-        let c = tally(&verdicts, DEFAULT_THRESHOLD);
+        let c = tally(&verdicts, DEFAULT_THRESHOLD, verdicts.len());
         assert_eq!(c.winning_group.as_deref(), Some("A"));
         assert_eq!(c.winning_votes, 3);
         assert!(approx(c.agreement_rate, 3.0 / 4.0));
@@ -409,7 +461,7 @@ mod tests {
         // A: 1, B: 1 — even though both passed, they disagree on the answer with
         // no majority → escalate for a tie-break.
         let verdicts = [vg("b1", true, "B"), vg("a1", true, "A")];
-        let c = tally(&verdicts, DEFAULT_THRESHOLD);
+        let c = tally(&verdicts, DEFAULT_THRESHOLD, verdicts.len());
         assert!(c.escalate, "an even split must escalate: {c:?}");
         assert_eq!(c.escalate_to, "opus");
         // Report is still deterministic: smallest group key ('A') is named.
@@ -426,7 +478,7 @@ mod tests {
             vg("c", true, "B"),
             vg("d", true, "B"),
         ];
-        let c = tally(&verdicts, DEFAULT_THRESHOLD);
+        let c = tally(&verdicts, DEFAULT_THRESHOLD, verdicts.len());
         assert!(c.escalate);
         assert_eq!(c.winning_votes, 2);
         assert!(approx(c.agreement_rate, 0.5));
@@ -438,7 +490,7 @@ mod tests {
     fn below_threshold_escalates() {
         // 1 pass / 2 fail → 1/3 = 33% < 50% → escalate.
         let verdicts = [v("a", true), v("b", false), v("c", false)];
-        let c = tally(&verdicts, DEFAULT_THRESHOLD);
+        let c = tally(&verdicts, DEFAULT_THRESHOLD, verdicts.len());
         assert_eq!(c.passing, 1);
         assert!(approx(c.agreement_rate, 1.0 / 3.0));
         assert!(c.escalate, "33% agreement is below 50%: {c:?}");
@@ -450,7 +502,7 @@ mod tests {
     fn threshold_is_inclusive_lower_bound() {
         // Exactly at threshold (0.5) must NOT escalate on the agreement criterion.
         let verdicts = [v("a", true), v("b", false)];
-        let c = tally(&verdicts, 0.5);
+        let c = tally(&verdicts, 0.5, verdicts.len());
         assert!(approx(c.agreement_rate, 0.5));
         assert!(
             !c.escalate,
@@ -462,7 +514,7 @@ mod tests {
     fn custom_high_threshold_forces_escalation() {
         // 2/3 = 67% agreement, but a strict 0.9 threshold is not met → escalate.
         let verdicts = [v("a", true), v("b", true), v("c", false)];
-        let c = tally(&verdicts, 0.9);
+        let c = tally(&verdicts, 0.9, verdicts.len());
         assert!(approx(c.agreement_rate, 2.0 / 3.0));
         assert!(c.escalate, "67% < 90% strict threshold: {c:?}");
     }
@@ -472,7 +524,7 @@ mod tests {
     #[test]
     fn all_fail_escalates_with_no_winner() {
         let verdicts = [v("a", false), v("b", false), v("c", false)];
-        let c = tally(&verdicts, DEFAULT_THRESHOLD);
+        let c = tally(&verdicts, DEFAULT_THRESHOLD, verdicts.len());
         assert_eq!(c.passing, 0);
         assert_eq!(c.winner, None);
         assert_eq!(c.winning_group, None);
@@ -483,7 +535,7 @@ mod tests {
 
     #[test]
     fn empty_verdicts_escalate() {
-        let c = tally(&[], DEFAULT_THRESHOLD);
+        let c = tally(&[], DEFAULT_THRESHOLD, 0);
         assert_eq!(c.n, 0);
         assert_eq!(c.winner, None);
         assert!(c.escalate);
@@ -495,7 +547,7 @@ mod tests {
     fn n1_pass_is_trivially_consensual() {
         // Degenerate single sample: it "agrees with itself" at 100%. This is the
         // ordinary single-implementation path — never escalates on agreement.
-        let c = tally(&[v("only", true)], DEFAULT_THRESHOLD);
+        let c = tally(&[v("only", true)], DEFAULT_THRESHOLD, 1);
         assert_eq!(c.n, 1);
         assert!(approx(c.agreement_rate, 1.0));
         assert!(!c.escalate);
@@ -504,7 +556,7 @@ mod tests {
 
     #[test]
     fn n1_fail_escalates() {
-        let c = tally(&[v("only", false)], DEFAULT_THRESHOLD);
+        let c = tally(&[v("only", false)], DEFAULT_THRESHOLD, 1);
         assert_eq!(c.passing, 0);
         assert!(c.escalate);
         assert_eq!(c.winner, None);
@@ -516,8 +568,11 @@ mod tests {
     fn winner_is_order_independent() {
         let a = [v("c", true), v("a", true), v("b", true)];
         let b = [v("b", true), v("c", true), v("a", true)];
-        assert_eq!(tally(&a, 0.5).winner, tally(&b, 0.5).winner);
-        assert_eq!(tally(&a, 0.5).winner.as_deref(), Some("a"));
+        assert_eq!(
+            tally(&a, 0.5, a.len()).winner,
+            tally(&b, 0.5, b.len()).winner
+        );
+        assert_eq!(tally(&a, 0.5, a.len()).winner.as_deref(), Some("a"));
     }
 
     // ── opt-in plan gate ───────────────────────────────────────────────────
@@ -556,5 +611,40 @@ mod tests {
         // is floored to 2 so a "vote" always has at least two samples.
         assert_eq!(plan(true, 99, 0.5, None).samples, MAX_SAMPLES);
         assert_eq!(plan(true, 1, 0.5, None).samples, 2);
+    }
+
+    // ── silent vote-loss must fail closed (regression, RED-first) ──────────
+
+    #[test]
+    fn missing_verdicts_escalates_even_when_received_verdicts_agree() {
+        // 3 candidates expected, only 2 verdicts ever arrive (one verifier
+        // went silent), and both received verdicts pass and agree. Without
+        // the expected-count check agreement_rate = 2/2 = 100% >= threshold,
+        // so the old code would settle a winner — silently treating a
+        // verdict that never arrived as one that agreed. That maps "could
+        // not determine" to "clean", which this repo forbids (CLAUDE.md
+        // §3/§6). The fix must fail closed: no settled winner, escalate,
+        // and report the gap via `missing`.
+        let verdicts = [v("a", true), v("b", true)];
+        let c = tally(&verdicts, DEFAULT_THRESHOLD, 3);
+        assert!(
+            c.escalate,
+            "a silent third verifier must not be counted as agreement: {c:?}"
+        );
+        assert_eq!(c.winner, None, "must not settle a winner on a partial vote");
+        assert_eq!(c.missing, 1, "expected 3 - received 2 = 1 missing verdict");
+    }
+
+    #[test]
+    fn omitting_expected_preserves_old_behavior() {
+        // Non-regression: when the caller does not pass an expected count,
+        // `expected` defaults to the number of verdicts actually received
+        // (missing-verdict detection is opt-in), so every pre-existing
+        // caller behaves exactly as before this change.
+        let verdicts = [v("a", true), v("b", true)];
+        let c = tally(&verdicts, DEFAULT_THRESHOLD, verdicts.len());
+        assert!(!c.escalate);
+        assert_eq!(c.winner.as_deref(), Some("a"));
+        assert_eq!(c.missing, 0);
     }
 }

@@ -65,10 +65,29 @@ forge・condukt のスケジューラが再利用）。
   `eval`/`exec`/`source`/`.` は残り語を、`sh|bash|zsh|ksh|dash -c <payload>` は payload を
   `detect_bash` へ再投入する。
 - **コマンド別 deny 規則** — `rm`（`analyze_rm`: 再帰 `-r/-R/--recursive` またはワイルドカード
-  operand。ただし全 operand が config なら allow）、`git`（`analyze_git`: `clean -f` + `-d`/`-x`、
-  `reset --hard`、`checkout --force`/`-f`、`checkout -- .`）、`find`（`analyze_find`: `-delete`、
-  `-exec`/`-execdir` の直後が shell または `rm`）、`truncate`/`shred`/`dd of=`/`mkfs*`、再帰
-  `chmod`/`chown`（`-R`/`--recursive`）。それ以外は allow。
+  operand。ただし全 operand が config なら allow。**保護パスは config 免除より先に判定され、
+  免除を上書きする**＝`is_protected_path`/`protected_tree_deny` が `is_config_file` に優先）、
+  `git`（`analyze_git`: `clean -f` + `-d`/`-x`、`clean -f` 単体でも追跡外ファイルを消すので deny、
+  `reset --hard`、`checkout --force`/`-f`、`checkout -- .`（whole-tree）、`switch -f/--discard-changes`、
+  `stash` の `-a/--all/-u`（追跡外・無視ファイルを working-tree から除去）、`git rm`（`--cached` 含む・
+  保護パス target のみ）、および `checkout`/`restore` の operand が保護パスの場合。**通常の追跡ファイルへの
+  `git checkout -- <path>` は allow**＝保護パス限定に絞り、日常操作を blanket deny しない）、
+  `find`（`analyze_find`: `-delete`、`-exec`/`-execdir` の直後が shell または `rm`）、
+  `truncate`/`shred`/`dd of=`/`mkfs*`、再帰 `chmod`/`chown`（`-R`/`--recursive`）、
+  `sort`/`uniq`（read-only ではない: `sort -o <保護パス>`／`uniq <in> <保護パス>` は出力ファイルを
+  truncate するので deny。純粋な読取・非保護 output は allow — `analyze_sort`/`analyze_uniq`）。
+- **disarm-by-non-write 規則（保護パスを『書かずに無力化』する経路）** — 保護ファイル
+  （`.claude/settings.json`・`settings.local.json`・`hooks.json`・`hooks/**`、`.githooks/**`、
+  `.git/hooks/**`、shell rc、gate config toml）に対する削除（`rm`〈再帰 `-r` に加え空ディレクトリ削除
+  `-d`/`--dir` の保護コンテナも `protected_tree_deny`〉・`unlink`・`rmdir`）、退避
+  （`mv` source）、実行・読取権剥奪（`chmod` で owner の exec **または** read bit を落とす mode。
+  shell hook は shebang 実行のため read も必須で、`chmod -r`／`chmod 311` は exec を残しても hook を
+  無力化する〈`mode_removes_exec`／`mode_removes_read`〉）、index からの復元
+  （`git checkout -- <protected>`・`git restore`）、append（`tee -a`・`>>`）、in-place 置換
+  （`sed -i` 等）、および保護パスを内包するディレクトリへの再帰 `cp`（landing 集合が静的に
+  確定できないため **Ask**）。パスは `normalize`＋`resolve_parents` で `..`/`.`/`//` を字句解決して
+  から判定する（`..` で allowlist 側に滑り込ませる bypass を塞ぐ。解決不能・曖昧は制限側）。
+  それ以外は allow。
 
 ### module 責務
 

@@ -561,6 +561,16 @@ enum WtAction {
     Merge {
         #[arg(long)]
         branch: String,
+        /// Optional run id whose task owns this branch. When both --run and
+        /// --task are given and the merge succeeds, stamps `merge_completed_at`
+        /// on that task (per-phase measurement; set-once). Omit for a merge with
+        /// no task association (behavior otherwise unchanged).
+        #[arg(long)]
+        run: Option<String>,
+        /// Optional task id to stamp `merge_completed_at` on when the merge
+        /// succeeds (requires --run).
+        #[arg(long)]
+        task: Option<String>,
     },
     /// Reconcile a blocked merge (design 625aa170 B): apply the RECORDED
     /// resolution (`overwatch resolve-merge-conflict --id <id> --choose ...`) for
@@ -813,6 +823,17 @@ enum StateAction {
     Show {
         #[arg(long)]
         run: String,
+    },
+    /// Print each task's per-phase timing breakdown (worker/verifier/merge).
+    /// An unmeasured phase is rendered as an explicit `unmeasured` marker (or
+    /// `null` under --json), NEVER as 0 seconds, so never-measured and
+    /// completed-instantly stay distinguishable.
+    Timings {
+        #[arg(long)]
+        run: String,
+        /// Emit machine-readable JSON instead of the text table.
+        #[arg(long)]
+        json: bool,
     },
     /// Claim files for a run in the cross-session registry (PDO collision guard).
     /// With --file, claims those paths/globs; without, claims every touched_file
@@ -2865,10 +2886,21 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
             )?;
             println!("{}", path.display());
         }
-        WtAction::Merge { branch } => {
+        WtAction::Merge { branch, run, task } => {
             match worktree::merge(cfg, &repo, &branch, &cfg.default_branch)? {
                 worktree::MergeOutcome::Merged => {
                     println!("merged '{}' into {}", branch, cfg.default_branch);
+                    // Stamp the MERGE phase timestamp on the owning task, if the
+                    // caller identified it. Set-once via the locked mutate so a
+                    // re-merge cannot move the boundary; fail-soft on a missing
+                    // run/task so a bare `worktree merge` is unaffected.
+                    if let (Some(run), Some(task)) = (run, task) {
+                        let _ = state::with_run_locked(cfg, cwd, &run, |rs| {
+                            if let Some(t) = rs.tasks.iter_mut().find(|t| t.id == task) {
+                                state::stamp_if_unset(&mut t.merge_completed_at, state::now_secs());
+                            }
+                        });
+                    }
                 }
                 // A HOLD (mid-flight runtime overlap) or a real conflict is a
                 // hold-for-review, NOT a hard error: report it and exit 0. The
@@ -3494,7 +3526,27 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             t.status = st;
             t.updated_at = Some(state::now_secs());
             if st == state::Status::Running {
-                t.started_at = Some(state::now_secs());
+                // Set-once: a re-dispatch (running→…→running) must not reset the
+                // original start and shrink the measured duration.
+                state::stamp_started_at_if_unset(t, state::now_secs());
+            }
+            // Per-phase timestamps (measurement only; each stamped by the REAL
+            // orchestrator transition, set-once so a re-run of `state set` or a
+            // re-dispatch never moves a phase boundary). `state timings` renders
+            // an unstamped phase as an explicit unmeasured marker, never 0.
+            if st == state::Status::Running {
+                state::stamp_if_unset(&mut t.worker_started_at, state::now_secs());
+            }
+            if st == state::Status::Done && prior_status != state::Status::Done {
+                // The worker committed (worker phase ends) and verification of
+                // that output begins on the same edge.
+                let now = state::now_secs();
+                state::stamp_if_unset(&mut t.worker_ended_at, now);
+                state::stamp_if_unset(&mut t.verifier_started_at, now);
+            }
+            if matches!(st, state::Status::Verified | state::Status::Failed) {
+                // A verdict was reached (verifier phase ends).
+                state::stamp_if_unset(&mut t.verifier_ended_at, state::now_secs());
             }
             if st == state::Status::Verified {
                 t.fp_oracle_valid = fp_gate_value;
@@ -3545,6 +3597,8 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
             // None 上書き保護: --worktree/--branch が省略された場合は既存値を保持する。
             // 明示的にクリアしたい場合は --clear-worktree / --clear-branch を使う。
+            let assigning_worktree = !clear_worktree && worktree.is_some();
+            let assigning_branch = !clear_branch && branch.is_some();
             if clear_worktree {
                 t.worktree = None;
             } else if worktree.is_some() {
@@ -3566,6 +3620,16 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                     }
                 }
                 t.branch = branch;
+            }
+            // Close the started_at stamping gap: a task can be driven to a
+            // settled state (verified/failed via reconcile, or done directly)
+            // without ever passing through the `running` transition that
+            // stamps started_at above, leaving it durationless. Assigning a
+            // worktree/branch provably precedes worker execution, so it is the
+            // earliest defensible start instant on those paths. Set-once, so it
+            // never overwrites a start already recorded by the running edge.
+            if assigning_worktree || assigning_branch {
+                state::stamp_started_at_if_unset(t, state::now_secs());
             }
             rs.save(cfg, cwd)?;
             // Post-execution diff-risk recording (finding 4 / WorkItem-A):
@@ -3691,6 +3755,10 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                     }
                 }
             }
+        }
+        StateAction::Timings { run, json } => {
+            let rs = state::RunState::load(cfg, cwd, &run)?;
+            print_timings(&rs, json)?;
         }
         StateAction::Claim { run, session, file } => {
             let files = if file.is_empty() {
@@ -4350,6 +4418,74 @@ fn fugu_fingerprint() -> Option<String> {
     Some(fp)
 }
 
+/// Wall-clock seconds spanning `[a, b]`, or `None` when the span is unmeasured.
+/// Unmeasured means EITHER endpoint was never stamped (`None`) OR the endpoints
+/// are out of order (`b < a`, a cannot-determine that resolves to unmeasured,
+/// never a negative or a fabricated 0). A genuine same-instant phase (`b == a`)
+/// is a real, measured `Some(0)` — completed-instantly is distinct from
+/// never-measured, which is the whole point of the tri-state.
+fn phase_span_secs(a: Option<i64>, b: Option<i64>) -> Option<i64> {
+    match (a, b) {
+        (Some(a), Some(b)) if b >= a => Some(b - a),
+        _ => None,
+    }
+}
+
+/// Render an optional measured span for the text table: `"{n}s"` when measured
+/// (including a real `0s`), the explicit marker `"unmeasured"` when `None`.
+fn fmt_span(secs: Option<i64>) -> String {
+    match secs {
+        Some(s) => format!("{s}s"),
+        None => "unmeasured".to_string(),
+    }
+}
+
+/// Print each task's per-phase timing breakdown. An unmeasured phase is rendered
+/// as an explicit `unmeasured` marker (text) or `null` (JSON), NEVER as 0
+/// seconds — so a never-measured phase and a completed-instantly phase (a real
+/// measured `0`) stay distinguishable, the same tri-state norm as the fugu-router
+/// duration field.
+fn print_timings(rs: &state::RunState, json: bool) -> Result<()> {
+    if json {
+        let tasks: Vec<serde_json::Value> = rs
+            .tasks
+            .iter()
+            .map(|t| {
+                let worker = phase_span_secs(t.worker_started_at, t.worker_ended_at);
+                let verifier = phase_span_secs(t.verifier_started_at, t.verifier_ended_at);
+                let verify_to_merge = phase_span_secs(t.verifier_ended_at, t.merge_completed_at);
+                serde_json::json!({
+                    "id": t.id,
+                    "worker_started_at": t.worker_started_at,
+                    "worker_ended_at": t.worker_ended_at,
+                    "verifier_started_at": t.verifier_started_at,
+                    "verifier_ended_at": t.verifier_ended_at,
+                    "merge_completed_at": t.merge_completed_at,
+                    // Derived spans: null (not 0) when unmeasured.
+                    "worker_secs": worker,
+                    "verifier_secs": verifier,
+                    "verify_to_merge_secs": verify_to_merge,
+                })
+            })
+            .collect();
+        let out = serde_json::json!({ "run": rs.run_id, "tasks": tasks });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("run '{}' phase timings:", rs.run_id);
+        for t in &rs.tasks {
+            let worker = fmt_span(phase_span_secs(t.worker_started_at, t.worker_ended_at));
+            let verifier = fmt_span(phase_span_secs(t.verifier_started_at, t.verifier_ended_at));
+            let verify_to_merge =
+                fmt_span(phase_span_secs(t.verifier_ended_at, t.merge_completed_at));
+            println!(
+                "  {}  worker: {}  verifier: {}  verify→merge: {}",
+                t.id, worker, verifier, verify_to_merge
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Record completed runs' outcomes to fugu-router. Deterministic and idempotent:
 /// only settled, not-yet-recorded runs emit episodes, and each is stamped with
 /// `recorded_at` so repeated firings (the Stop hook) never double-record.
@@ -4477,7 +4613,14 @@ fn spawn_fugu_record(
     if !fingerprint.is_empty() {
         cmd.args(["--skill-fingerprint", fingerprint]);
     }
-    if let Some(secs) = s.duration_secs {
+    // Only forward a STRICTLY POSITIVE duration. fugu-router's tri-state
+    // `duration_secs` treats 0.0 as "unmeasured" and `record --duration` now
+    // rejects a non-positive value with a non-zero exit (fugu-router 0.1.25).
+    // A same-second task yields `Some(0.0)` from the derivation here; passing
+    // that through would make the child `record` fail. Omitting `--duration`
+    // records the episode as unmeasured, which is the correct semantics for a
+    // duration we could not positively measure.
+    if let Some(secs) = s.duration_secs.filter(|d| *d > 0.0) {
         cmd.args(["--duration", &secs.to_string()]);
     }
     if let Some(b) = &s.route_basis {

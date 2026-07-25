@@ -43,8 +43,59 @@ pub fn rule_id(reason: &str) -> &'static str {
     // redirect): they are the same recurring failure — an agent reaching for
     // the file that decides whether the gates run — and splitting them by tool
     // would fragment exactly the signature overwatch needs to see recur.
+    //
+    // ORDER IS LOAD-BEARING: the three ids below all contain the substring
+    // "protected gate/config path", so the more specific wordings must be
+    // tested BEFORE the generic one or every disarm would classify as a plain
+    // write.
+    //
+    // Round 3 (disarm by non-write): neutralising a protected path WITHOUT
+    // writing to it — `rm`, `mv` away, `chmod -x`, `git checkout --` — is a
+    // different recurring failure from writing to it, and wants a different
+    // signature: "an agent made the gate stop being read" vs "an agent edited
+    // the gate".
+    // Round 2 (unknown-verb catch-all). ALSO ordered before the generic arm:
+    // this wording ends in "is a protected gate/config path" and would otherwise
+    // be filed as a positive protected-path verdict. It is not one — it is a
+    // refusal to guess about a verb blastguard has no rule for — and conflating
+    // the two would hide exactly the signal this id exists to expose: a
+    // RECURRING unknown verb aimed at the gates is the name of the next rule
+    // this crate needs.
+    if reason.contains("is a command blastguard has no rule for") {
+        return "unknown-verb-protected-path";
+    }
+    if reason.contains("disarms a protected gate/config path") {
+        return "protected-path-disarm";
+    }
+    // Round 2: the WILDCARD twin. A `*`-bearing operand cannot be matched
+    // against the protected globs at all (it is not a literal path), so this
+    // verdict is reached through the operand's literal PREFIX. Its own id
+    // because a recurring one says something specific — an agent is reaching
+    // for the gates through shell expansion, which no per-path rule can see.
+    if reason.contains("expanding inside a protected gate/config tree") {
+        return "protected-path-wildcard";
+    }
+    // Round 2: a `find -exec` placeholder (`{}`) in an unlinking position. Not a
+    // verdict about the command — the operand is resolved by `find` at run time
+    // — but a recurring one is the signal that find-exec is routinely being used
+    // as a delete/move vector past the per-operand rules.
+    if reason.contains("is a find -exec placeholder standing for every matched path") {
+        return "find-exec-placeholder-operand";
+    }
+    // The CONTAINER twin: the target is the directory that holds protected
+    // paths (`rm -rf .claude`), not a protected path itself.
+    if reason.contains("destroys a directory tree holding protected gate/config paths") {
+        return "protected-tree-destroy";
+    }
     if reason.contains("protected gate/config path") {
         return "protected-path";
+    }
+    // The Ask twin of the two above: a recursive copy INTO a directory that
+    // holds protected paths. Not a verdict about the command — the landing set
+    // is not derivable from the command line — but a recurring one is the
+    // signal that some real copy shape is routinely going unanalysed.
+    if reason.contains("which holds protected gate/config paths") {
+        return "protected-landing-unenumerable";
     }
 
     // Bash: fork bomb / redirect.
@@ -67,6 +118,13 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("git clean -f with -d/-x deletes untracked files") {
         return "git-clean-force";
     }
+    // Round 2: plain `git clean -f`, without `-d`/`-x`. SAME id on purpose —
+    // `-d` only widens the delete to directories, so this is one recurring
+    // failure with two spellings, and splitting the signature would make the
+    // class look half as frequent as it is.
+    if reason.contains("git clean -f deletes untracked files irreversibly") {
+        return "git-clean-force";
+    }
     if reason.contains("git reset --hard discards working-tree changes") {
         return "git-reset-hard";
     }
@@ -75,6 +133,30 @@ pub fn rule_id(reason: &str) -> &'static str {
     }
     if reason.contains("git checkout -- . discards all working-tree changes") {
         return "git-checkout-dash-dot";
+    }
+    // Round 2: the pathspec-without-`--` spelling of the same whole-tree
+    // discard. SAME id as the `--`-separated form: one operation, two
+    // spellings, and the whole point of the round-2 fix was that they had
+    // drifted apart.
+    if reason.contains("git checkout . discards all working-tree changes") {
+        return "git-checkout-dash-dot";
+    }
+    // Round 2: `git switch`, the other half git split `checkout` into.
+    if reason.contains("git switch --force/--discard-changes") {
+        return "git-switch-force";
+    }
+    // `git stash clear/drop`. Round 1 added the rule and did NOT add this arm,
+    // so every stash-discard deny had been landing in the violation store as
+    // "unknown" — the completeness obligation stated in the test below is real.
+    if reason.contains("git stash clear/drop irreversibly deletes stashed changes") {
+        return "git-stash-discard";
+    }
+    // Round 2: `git stash -u`/`-a`, which sweeps untracked files out of the
+    // working tree. Its own id, not `git-stash-discard`: this one destroys
+    // UNTRACKED work (git has no copy), which is the `git clean` hazard, while
+    // clear/drop destroys already-stashed work.
+    if reason.contains("git stash -u/-a removes untracked") {
+        return "git-stash-untracked";
     }
     if reason.contains("git config core.hooksPath repoints every git hook") {
         return "git-config-hookspath";
@@ -241,6 +323,28 @@ mod tests {
                 "Bash",
                 json!({ "command": "git config core.hooksPath .githooks" }),
             ),
+            // Round 3 (disarm by non-write). Same completeness obligation as
+            // every arm above: each NEW deny/ask wording added below has to be
+            // exercised here, or it would classify as "unknown" in the
+            // violation store while this test stayed green.
+            ("Bash", json!({ "command": "rm .githooks/pre-commit" })),
+            ("Bash", json!({ "command": "rm -rf .claude" })),
+            (
+                "Bash",
+                json!({ "command": "mv .githooks/pre-commit /tmp/x" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "chmod -x .githooks/pre-commit" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "git checkout -- .claude/settings.json" }),
+            ),
+            ("Bash", json!({ "command": "tee -a .githooks/pre-commit" })),
+            // The Ask twin: a recursive copy into a directory that HOLDS
+            // protected paths.
+            ("Bash", json!({ "command": "cp -r evildir/ .claude/" })),
             // D4 analysis-budget deny. This case was missing when the budget
             // was introduced, so this test passed while the new deny path
             // classified to "unknown" — the test asserted completeness it did
@@ -253,6 +357,25 @@ mod tests {
                     "+ ".repeat(33)
                 ) }),
             ),
+            // Round 2 (adversarial verifier). Same completeness obligation:
+            // each new wording below is exercised here, or it would classify as
+            // "unknown" in the violation store while this test stayed green.
+            ("Bash", json!({ "command": "git rm .githooks/pre-commit" })),
+            ("Bash", json!({ "command": "unlink .claude/settings.json" })),
+            ("Bash", json!({ "command": "rmdir .githooks" })),
+            ("Bash", json!({ "command": "chmod 000 .claude/*" })),
+            ("Bash", json!({ "command": "mv .claude/* /tmp/" })),
+            ("Bash", json!({ "command": "git clean -f" })),
+            ("Bash", json!({ "command": "git checkout ." })),
+            ("Bash", json!({ "command": "git switch -f main" })),
+            ("Bash", json!({ "command": "git stash clear" })),
+            ("Bash", json!({ "command": "git stash -a" })),
+            // The `..` bypass: same protected-path class, reached through a
+            // spelling that used to defeat the match entirely.
+            (
+                "Write",
+                json!({ "file_path": ".claude/x/../settings.json", "content": "x" }),
+            ),
             // The Ask paths. Same completeness obligation as the denies: the
             // hook records an ask as a violation too, so an unclassified ask
             // would land in the store as "unknown".
@@ -261,6 +384,35 @@ mod tests {
                 "Bash",
                 json!({ "command": "not_a_real_wrapper_xyz rm -rf dir" }),
             ),
+            ("Bash", json!({ "command": "gzip .claude/settings.json" })),
+            (
+                "Bash",
+                json!({ "command": "find . -name pre-commit -exec mv {} /tmp/ ;" }),
+            ),
+            // Round 4 (adversarial verifier). Same completeness obligation:
+            // each new deny/ask path is exercised here, or it would classify as
+            // "unknown" in the violation store while this test stayed green.
+            // `sort -o`/`uniq` output onto a protected path is a write to it,
+            // so it reaches the shared protected-path deny.
+            (
+                "Bash",
+                json!({ "command": "sort -o .githooks/pre-commit /dev/null" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "uniq /dev/null .claude/settings.json" }),
+            ),
+            // chmod removing the READ bit (not just exec) disarms a shell hook.
+            (
+                "Bash",
+                json!({ "command": "chmod -r .githooks/pre-commit" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "chmod 311 .githooks/pre-commit" }),
+            ),
+            // rm -d/--dir on a protected container.
+            ("Bash", json!({ "command": "rm -d .claude" })),
         ];
 
         for (tool, input) in cases {

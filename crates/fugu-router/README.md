@@ -62,14 +62,15 @@ Semantic bridging is lexicon-based, not embedding-based.
 ## Commands
 
 ```
-fugu-router route --file decomp.json [--report route.json]   # set suggested_model per task; JSON to stdout
+fugu-router route --file decomp.json [--report route.json] [--mode fast|normal|high]  # set suggested_model per task; JSON to stdout
 fugu-router record --title "..." --files a,b --class parallel \
-                   --model sonnet --status verified --cost 0.12   # feed an outcome
-fugu-router suggest --files src/auth/login.ts "fix login validation"  # one-off
+                   --model sonnet --status verified --cost 0.12 [--mode fast|normal|high]  # feed an outcome
+fugu-router suggest --files src/auth/login.ts "fix login validation" [--mode fast|normal|high]  # one-off
 fugu-router confidence --files src/auth/login.ts "fix login validation"  # calibrated pass-probability in [0,1]
 fugu-router procedures search --query "fix login validation" --files a,b --k 3
                                                              # k-NN over how similar verified tasks were solved
-fugu-router stats [--json]                                   # per-model pass-rate / avg cost
+fugu-router stats [--json]                                   # per-model pass-rate / avg cost + duration coverage
+fugu-router duration [--json]                                # alias of duration-outliers: duration coverage + per-class outliers
 fugu-router import --episodes /path/episodes.jsonl [--playbooks /path/playbooks.jsonl] [--dry-run]
                                                              # merge another machine's stores (content-hash dedup)
 fugu-router import --dedup                                   # dedup local stores in place
@@ -111,8 +112,19 @@ edit that changes behaviour leaves the outcome unattributable to its cause; with
 it, outcomes can be stratified by skill version and `evalkit canary` can diff two
 versions' goldens.
 
-`--duration <secs>` (optional, default `0.0`) records measured wall-clock
-duration for the task — measurement only, never consulted by routing/scoring.
+`--duration <secs>` (optional) records the measured wall-clock duration for the
+task — measurement only, never consulted by routing/scoring. `Episode.duration_secs`
+is a **tri-state**: `None` = unmeasured (never conflated with a measured `0.0`),
+`Some(x)` = a real measurement `x > 0`. **Omit `--duration` to record an episode as
+unmeasured**; a non-positive value is **rejected** (non-zero exit) because `0` /
+negative would be an unrepresentable/unmeasured measurement. On disk the field is
+omitted entirely for unmeasured episodes; for back-compat, a legacy line that wrote
+`duration_secs: 0.0` (the old encoding for "unmeasured") is read back as unmeasured
+(`None`), never as a measured `0.0`. Unmeasured episodes are excluded from every
+duration average (never folded in as `0.0`). `fugu-router stats` and `fugu-router
+duration` (alias of `duration-outliers`) both print **duration coverage** as
+`recorded/total` so the (historically low) recording rate is visible rather than
+hidden behind averages.
 
 `--delegation <fork|inline>` (optional, unset by default) tags the episode with
 which subagent delegation strategy produced it, for a fork-vs-inline
@@ -120,6 +132,41 @@ cost/duration comparison (see `docs/design-delegation-strategy-measurement.md`
 in the repo root). Free text, not validated — same looseness as `--class`.
 Omit it for ordinary worker/verifier records unrelated to that comparison; it
 is never consulted by `route`/`decide_bandit`.
+
+### The mode axis (`fast` / `normal` / `high`)
+
+`route` and `suggest` accept `--mode fast|normal|high`: a **deterministic
+clamp applied after** the policy (`decide`/`decide_bandit`) has already
+picked a worker/verifier pair. It never touches the learning logic itself.
+
+- `normal` — identity (the backward-compatible default); the policy's pick
+  stands unchanged.
+- `high` — shift the worker one tier up, capped at `opus`.
+- `fast` — shift the worker one tier down, capped at `sonnet` — `opus` can
+  never be selected as worker or verifier under `fast`.
+
+Under both `fast` and `high`, the verifier is **recomputed from the clamped
+worker** via `policy::verifier_model` (never carried over unchanged); under
+`fast` the recomputed verifier is additionally capped at `sonnet`.
+
+Precedence: `--mode` flag > env `FUGU_ROUTER_MODE` > `config.toml`'s `mode` >
+default `normal`. **An invalid value (env or config) is never silently
+coerced to `normal`** — it is an explicit error with a non-zero exit.
+
+A `gated` decision (`class=gated`, human-approved opus/opus) is a **no-op
+under every mode**, mirroring `policy::downgrade_for_budget`'s own `gated`
+no-op.
+
+**Ordering: the mode clamp runs first, `downgrade_for_budget` (budget-pressure
+downgrade) runs last.** Budget is a hard resource limit; mode is only a
+preference, so budget wins. When a `mode=high` pick gets negated by budget
+pressure, the rationale still shows both the upshift and the downgrade that
+took it back — `downgrade_for_budget` appends to (never replaces) the
+incoming rationale, so a high tier never silently disappears.
+
+`record --mode <fast|normal|high>` (optional) tags the episode with the mode
+it was routed under. Omitting it means "not recorded" — this is **never**
+treated as `Some("normal")`; those are distinct facts.
 
 ### `confidence` — calibrated pass-probability
 

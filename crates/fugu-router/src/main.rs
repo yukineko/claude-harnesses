@@ -14,6 +14,7 @@ mod decomp;
 mod fingerprint;
 mod inject;
 mod install;
+mod mode;
 mod pathutil;
 mod policy;
 mod rag;
@@ -56,6 +57,13 @@ enum Command {
         /// Also write a per-task routing report (worker/verifier/basis) here.
         #[arg(long)]
         report: Option<PathBuf>,
+        /// Aggressiveness preset applied on top of the policy's pick: `fast`
+        /// (one tier down, opus never selected), `normal` (identity,
+        /// back-compat default), `high` (one tier up, capped at opus).
+        /// Precedence: this flag > `FUGU_ROUTER_MODE` env > config.toml
+        /// `mode` > `normal`. A `gated` task is unaffected by any mode.
+        #[arg(long)]
+        mode: Option<mode::Mode>,
     },
     /// Record one task outcome into the episode store (the learning signal).
     Record {
@@ -85,9 +93,12 @@ enum Command {
         skill_fingerprint: String,
         /// Measured wall-clock duration (seconds) of the worker/verifier task,
         /// if known (e.g. from condukt's started_at/updated_at). Measurement
-        /// only — never consulted by routing/scoring.
-        #[arg(long, default_value_t = 0.0)]
-        duration: f64,
+        /// only — never consulted by routing/scoring. OMIT the flag to record
+        /// the episode as unmeasured; a non-positive value is REJECTED (exit
+        /// non-zero) because `0.0`/negative would be an unrepresentable /
+        /// unmeasured measurement — omit the flag instead.
+        #[arg(long)]
+        duration: Option<f64>,
         /// Which delegation strategy (fork | inline) produced this episode,
         /// when manually recorded for a delegation-strategy comparison. Free
         /// text, not validated (same looseness as --class). Omit for ordinary
@@ -124,6 +135,13 @@ enum Command {
         /// caller resolved it (e.g. condukt via `gauge subagents --json`).
         #[arg(long)]
         tokens_output: Option<u64>,
+        /// The mode axis ("fast"|"normal"|"high") this episode was routed
+        /// under, when the caller knows it. `None` (omit the flag) means
+        /// "not recorded" — distinct from, and never coerced into,
+        /// `Some("normal")`. Measurement only — never consulted by
+        /// `policy::route`/`decide_bandit`.
+        #[arg(long)]
+        mode: Option<mode::Mode>,
     },
     /// Check whether an episode of the given class was recorded within the
     /// last N seconds. Exit 0 if found, 1 if not — lets a caller (e.g.
@@ -176,6 +194,11 @@ enum Command {
         class: String,
         /// The task description (free text).
         text: Vec<String>,
+        /// Aggressiveness preset — see `route --mode` for the semantics and
+        /// precedence order (this flag > `FUGU_ROUTER_MODE` env > config.toml
+        /// `mode` > `normal`).
+        #[arg(long)]
+        mode: Option<mode::Mode>,
     },
     /// Print a calibrated confidence in [0,1] that a task like this one will
     /// pass verification, derived from the historical k-NN pass-rate of
@@ -205,7 +228,9 @@ enum Command {
     /// outlier vs other models in the same class, and check whether those
     /// outlier episodes have a lower effective pass rate — the measurement
     /// test for PDO hypothesis ae64db03 ("duration outliers signal an
-    /// under-powered model that should be escalated").
+    /// under-powered model that should be escalated"). Also prints duration
+    /// coverage (measured / total episodes). Aliased as `duration`.
+    #[command(alias = "duration")]
     DurationOutliers {
         #[arg(long)]
         json: bool,
@@ -497,10 +522,22 @@ fn main() {
     }
 }
 
+/// Resolve the effective mode for a CLI invocation: `mode::resolve` with the
+/// live `FUGU_ROUTER_MODE` env var and `cfg.mode`. An invalid env/config
+/// value becomes an `anyhow::Error` here, which `main()` turns into an
+/// `eprintln!` + non-zero exit — never a silent fallback to `normal`.
+fn resolve_mode(cli: Option<mode::Mode>, cfg: &config::Config) -> Result<mode::Mode> {
+    let env_value = std::env::var("FUGU_ROUTER_MODE").ok();
+    mode::resolve(cli, env_value, cfg.mode.as_deref()).map_err(anyhow::Error::msg)
+}
+
 fn run_user(cmd: Command) -> Result<()> {
     let cfg = config::Config::load();
     match cmd {
-        Command::Route { file, report } => cmd_route(&cfg, file, report),
+        Command::Route { file, report, mode } => {
+            let mode = resolve_mode(mode, &cfg)?;
+            cmd_route(&cfg, file, report, mode)
+        }
         Command::Record {
             title,
             files,
@@ -521,7 +558,19 @@ fn run_user(cmd: Command) -> Result<()> {
             lines_removed,
             tokens_input,
             tokens_output,
+            mode,
         } => {
+            // A supplied --duration must be a real positive measurement.
+            // `0.0`/negative means "unmeasured", which is represented by
+            // OMITTING the flag (Episode.duration_secs = None), never by writing
+            // an unrepresentable 0.0 that the store now reads back as unmeasured.
+            let duration_secs = match duration {
+                Some(d) if d > 0.0 => Some(d),
+                Some(d) => anyhow::bail!(
+                    "--duration must be a positive number of seconds (got {d}); 0 or a negative value means \"unmeasured\" — omit --duration to record the episode as unmeasured"
+                ),
+                None => None,
+            };
             let raw_touched = split_files(&files);
             // Normalise absolute paths to repo-relative so stored paths are
             // portable across machines (no username / mount-point leakage).
@@ -544,7 +593,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 } else {
                     Some(skill_fingerprint)
                 },
-                duration_secs: duration,
+                duration_secs,
                 delegation,
                 route_basis,
                 route_confidence,
@@ -553,6 +602,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 lines_removed,
                 tokens_input,
                 tokens_output,
+                mode: mode.map(|m| m.as_str().to_string()),
             };
             store::append(&cfg.store_path(), &ep).context("appending episode")?;
             if pass && !done_criteria.is_empty() {
@@ -620,12 +670,19 @@ fn run_user(cmd: Command) -> Result<()> {
             }
         },
         Command::Lessons { action } => cmd_lessons(action),
-        Command::Suggest { files, class, text } => {
+        Command::Suggest {
+            files,
+            class,
+            text,
+            mode,
+        } => {
             let title = text.join(" ");
             let f = split_files(&files);
             let eps = store::load(&cfg.store_path());
             let mut rng = seed_rng(eps.len());
             let d = route_decision(&cfg, &title, &f, &class, &eps, &mut rng);
+            let resolved_mode = resolve_mode(mode, &cfg)?;
+            let d = mode::apply(d, resolved_mode, &class, &title);
             println!(
                 "worker={} verifier={} ({}, {} confidence)\n  {}",
                 d.worker_model, d.verifier_model, d.basis, d.confidence, d.rationale
@@ -919,7 +976,12 @@ fn kind_str(kind: harness_core::lessons::Kind) -> &'static str {
     }
 }
 
-fn cmd_route(cfg: &config::Config, file: Option<PathBuf>, report: Option<PathBuf>) -> Result<()> {
+fn cmd_route(
+    cfg: &config::Config,
+    file: Option<PathBuf>,
+    report: Option<PathBuf>,
+    mode: mode::Mode,
+) -> Result<()> {
     let raw = match file {
         Some(p) => {
             std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?
@@ -942,6 +1004,12 @@ fn cmd_route(cfg: &config::Config, file: Option<PathBuf>, report: Option<PathBuf
     let mut report_map = serde_json::Map::new();
     for t in &mut dec.tasks {
         let d = route_decision(cfg, &t.title, &t.touched_files, &t.class, &eps, &mut rng);
+        // Mode clamp FIRST, budget downgrade LAST: budget is a hard resource
+        // limit and mode is a preference, so budget must be able to negate a
+        // `high` pick (mode::apply's rationale note survives into
+        // downgrade_for_budget's appended note, so the negation stays
+        // legible rather than the high tier silently disappearing).
+        let d = mode::apply(d, mode, &t.class, &t.title);
         let d = if pressured {
             policy::downgrade_for_budget(d)
         } else {
@@ -1187,6 +1255,10 @@ fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
         }
         s.2 += e.cost_usd;
     }
+    // Duration coverage: how many episodes carry a real (Some) measurement out
+    // of the total — surfaced so the low recording rate is visible.
+    let measured_n = eps.iter().filter(|e| e.duration_secs.is_some()).count();
+    let total_n = eps.len();
     if as_json {
         let obj: serde_json::Map<String, serde_json::Value> = agg
             .iter()
@@ -1204,10 +1276,15 @@ fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
             .collect();
         println!(
             "{}",
-            serde_json::to_string_pretty(&json!({ "episodes": eps.len(), "models": obj }))?
+            serde_json::to_string_pretty(&json!({
+                "episodes": eps.len(),
+                "duration_coverage": {"recorded": measured_n, "total": total_n},
+                "models": obj,
+            }))?
         );
     } else {
         println!("episodes: {}", eps.len());
+        println!("duration coverage: {measured_n}/{total_n} episodes measured");
         for (m, (n, p, c)) in &agg {
             println!(
                 "  {m:<6} {p}/{n} pass ({:.0}%)  avg ${:.4}",
@@ -1272,9 +1349,9 @@ fn cmd_delegation_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
             bucket.passes += 1;
         }
         bucket.cost_total += e.cost_usd;
-        if e.duration_secs > 0.0 {
+        if let Some(d) = e.duration_secs {
             bucket.duration_n += 1;
-            bucket.duration_total += e.duration_secs;
+            bucket.duration_total += d;
         }
     }
 
@@ -1348,11 +1425,19 @@ fn cmd_duration_outliers(cfg: &config::Config, as_json: bool, threshold: f64) ->
     use std::collections::BTreeMap;
     let eps = store::load(&cfg.store_path());
 
-    // class -> model -> duration aggregate (only episodes with duration_secs > 0.0;
-    // older episodes default to 0.0 and would silently pull averages toward zero).
+    // Duration coverage: how many episodes carry a real measurement out of the
+    // total. Surfaced so the (historically low) recording rate is visible
+    // rather than hidden behind averages computed over the measured subset.
+    let measured_n = eps.iter().filter(|e| e.duration_secs.is_some()).count();
+    let total_n = eps.len();
+
+    // class -> model -> duration aggregate. Only MEASURED episodes participate
+    // (Episode.duration_secs = Some); unmeasured episodes are excluded entirely
+    // rather than folded in as 0.0, which would pull averages toward zero.
     let mut by_class_model: BTreeMap<String, BTreeMap<String, ClassModelDuration>> =
         BTreeMap::new();
-    for e in eps.iter().filter(|e| e.duration_secs > 0.0) {
+    for e in &eps {
+        let Some(d) = e.duration_secs else { continue };
         let agg = by_class_model
             .entry(e.class.clone())
             .or_default()
@@ -1362,7 +1447,7 @@ fn cmd_duration_outliers(cfg: &config::Config, as_json: bool, threshold: f64) ->
                 duration_total: 0.0,
             });
         agg.duration_n += 1;
-        agg.duration_total += e.duration_secs;
+        agg.duration_total += d;
     }
 
     // For each class with >= 2 models having duration data, compute the
@@ -1417,7 +1502,7 @@ fn cmd_duration_outliers(cfg: &config::Config, as_json: bool, threshold: f64) ->
     // the verifier's self-pass) as the ground truth per Episode's own doc.
     let (mut outlier_n, mut outlier_pass, mut normal_n, mut normal_pass) =
         (0usize, 0usize, 0usize, 0usize);
-    for e in eps.iter().filter(|e| e.duration_secs > 0.0) {
+    for e in eps.iter().filter(|e| e.duration_secs.is_some()) {
         if outlier_pairs.contains(&(e.class.clone(), e.model.clone())) {
             outlier_n += 1;
             if e.effective_pass() {
@@ -1446,6 +1531,7 @@ fn cmd_duration_outliers(cfg: &config::Config, as_json: bool, threshold: f64) ->
             "{}",
             serde_json::to_string_pretty(&json!({
                 "threshold": threshold,
+                "duration_coverage": {"recorded": measured_n, "total": total_n},
                 "classes": class_reports,
                 "outlier_vs_normal": {
                     "outlier": {"n": outlier_n, "passes": outlier_pass, "pass_rate": outlier_rate},
@@ -1453,11 +1539,14 @@ fn cmd_duration_outliers(cfg: &config::Config, as_json: bool, threshold: f64) ->
                 },
             }))?
         );
-    } else if class_reports.is_empty() {
-        println!(
-            "no class has >= 2 models with recorded duration_secs data yet — nothing to compare"
-        );
     } else {
+        println!("duration coverage: {measured_n}/{total_n} episodes measured");
+        if class_reports.is_empty() {
+            println!(
+                "no class has >= 2 models with recorded duration_secs data yet — nothing to compare"
+            );
+            return Ok(());
+        }
         println!("duration outliers (threshold = {threshold:.2}x cross-model mean):");
         for c in &class_reports {
             println!(
@@ -1514,7 +1603,7 @@ mod delegation_stats_tests {
             human_label: None,
             labeled_by: None,
             skill_fingerprint: None,
-            duration_secs: duration,
+            duration_secs: (duration > 0.0).then_some(duration),
             delegation: delegation.map(|s| s.to_string()),
             ..Default::default()
         }
@@ -1556,9 +1645,9 @@ mod delegation_stats_tests {
                 b.passes += 1;
             }
             b.cost_total += e.cost_usd;
-            if e.duration_secs > 0.0 {
+            if let Some(d) = e.duration_secs {
                 b.duration_n += 1;
-                b.duration_total += e.duration_secs;
+                b.duration_total += d;
             }
         }
         assert_eq!(agg.get("fork").unwrap().count, 2);
@@ -1575,9 +1664,9 @@ mod delegation_stats_tests {
         let mut duration_n = 0usize;
         let mut duration_total = 0.0f64;
         for e in &eps {
-            if e.duration_secs > 0.0 {
+            if let Some(d) = e.duration_secs {
                 duration_n += 1;
-                duration_total += e.duration_secs;
+                duration_total += d;
             }
         }
         assert_eq!(duration_n, 1);
@@ -1615,7 +1704,7 @@ mod duration_outliers_tests {
             human_label,
             labeled_by: None,
             skill_fingerprint: None,
-            duration_secs: duration,
+            duration_secs: (duration > 0.0).then_some(duration),
             delegation: None,
             ..Default::default()
         }
@@ -1628,7 +1717,8 @@ mod duration_outliers_tests {
         use std::collections::BTreeMap;
         let mut by_class_model: BTreeMap<String, BTreeMap<String, ClassModelDuration>> =
             BTreeMap::new();
-        for e in eps.iter().filter(|e| e.duration_secs > 0.0) {
+        for e in eps {
+            let Some(d) = e.duration_secs else { continue };
             let agg = by_class_model
                 .entry(e.class.clone())
                 .or_default()
@@ -1638,7 +1728,7 @@ mod duration_outliers_tests {
                     duration_total: 0.0,
                 });
             agg.duration_n += 1;
-            agg.duration_total += e.duration_secs;
+            agg.duration_total += d;
         }
         by_class_model
     }
@@ -1747,7 +1837,7 @@ mod label_tests {
             human_label: None,
             labeled_by: None,
             skill_fingerprint: None,
-            duration_secs: 0.0,
+            duration_secs: None,
             delegation: None,
             ..Default::default()
         }

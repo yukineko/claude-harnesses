@@ -161,11 +161,18 @@ pub struct TaskState {
     /// serde-default/skip for backward-compatible on-disk layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_at: Option<i64>,
-    /// Unix timestamp (seconds) when this task's status most recently became
-    /// `running`. Paired with `updated_at` at settle time to derive a measured
+    /// Unix timestamp (seconds) of this task's earliest defensible start,
+    /// stamped set-once and never overwritten (see [`stamp_started_at_if_unset`]).
+    /// It is stamped on the first `running` transition OR — for orchestration
+    /// paths that settle a task without ever passing through `running` — when a
+    /// worktree/branch is first assigned, both of which provably precede worker
+    /// execution. Paired with `updated_at` at settle time to derive a measured
     /// wall-clock duration for the fugu-router learning signal (measurement
     /// only — never consulted by routing/scoring logic). `None` for tasks
-    /// written before this field existed or that never entered `running`.
+    /// written before this field existed, or that genuinely have no start
+    /// information (e.g. a reconcile-promoted task that never got a
+    /// worktree/branch); such a `None` maps to an unmeasured (`None`) duration,
+    /// never a fabricated `0.0`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<i64>,
     /// The Task-tool `agentId` of the worker/verifier subagent that produced this
@@ -218,6 +225,42 @@ pub struct TaskState {
     /// caveats as `verifier_model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verifier_agent_id: Option<String>,
+    /// Unix timestamp (seconds) marking the start of the WORKER phase — stamped
+    /// set-once on the first `running` transition (the orchestrator's real
+    /// worker-dispatch edge), via [`stamp_if_unset`]. Per-phase measurement
+    /// companion to `started_at`; measurement only, never consulted by
+    /// scheduling/routing. `Option` + serde-default/skip so run-state JSON
+    /// written before this field still deserializes and tasks lacking it
+    /// serialize unchanged. `None` = the phase was never observed (a task that
+    /// settled without a `running` edge, or legacy data); `state timings`
+    /// renders it as an explicit unmeasured marker, NEVER as 0 seconds —
+    /// not-measured must never be recorded as measured-as-zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_started_at: Option<i64>,
+    /// End of the WORKER phase — stamped set-once on the first `done` transition
+    /// (the worker committed its output). Same measurement-only /
+    /// backward-compatible / never-fabricate-0 contract as `worker_started_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_ended_at: Option<i64>,
+    /// Start of the VERIFIER phase — stamped set-once on the same first `done`
+    /// transition as `worker_ended_at` (verification begins once the worker's
+    /// output is ready). Kept a distinct field so a future change to when
+    /// verification begins need not overload `worker_ended_at`. Same contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_started_at: Option<i64>,
+    /// End of the VERIFIER phase — stamped set-once on the first settle to
+    /// `verified` or `failed` (a verdict was reached). Set-once so a later
+    /// re-settle (e.g. verified→failed auto-rollback) does not move it. Same
+    /// contract as `worker_started_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_ended_at: Option<i64>,
+    /// Completion of the MERGE phase — stamped set-once when this task's branch
+    /// is successfully merged into the integration branch (`worktree merge
+    /// --run --task`). Same contract as `worker_started_at`; `None` for tasks
+    /// never merged (small-task fast path, or not yet merged) — rendered as an
+    /// explicit unmeasured marker, never 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_completed_at: Option<i64>,
 }
 
 pub fn now_secs() -> i64 {
@@ -226,6 +269,43 @@ pub fn now_secs() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+/// Stamp `started_at` at the earliest defensible observation point, NEVER
+/// overwriting a value that is already set. Returns `true` iff it stamped a
+/// fresh value.
+///
+/// Callers stamp on the first `running` transition and, for paths that settle a
+/// task without ever passing through `running`, when a worktree or branch is
+/// first assigned — both provably precede worker execution. Keeping the stamp
+/// monotone (set-once) is load-bearing for the tri-state duration derivation in
+/// [`records_for_run`]: overwriting `started_at` on a *later* transition would
+/// shrink or zero a real measured duration.
+///
+/// Where a task genuinely has no defensible start instant (e.g. a
+/// reconcile-promoted task that never got a worktree/branch), the caller simply
+/// does not call this. `started_at` stays `None`, which the duration derivation
+/// maps to an unmeasured (`None`) duration rather than a fabricated `0.0` —
+/// not-measured must never be recorded as measured-as-zero.
+pub fn stamp_started_at_if_unset(t: &mut TaskState, now: i64) -> bool {
+    stamp_if_unset(&mut t.started_at, now)
+}
+
+/// Set-once stamp for an optional timestamp slot: writes `now` iff the slot is
+/// currently `None`, returning `true` iff it stamped a fresh value. Used for the
+/// per-phase timestamps (`worker_started_at`, `worker_ended_at`,
+/// `verifier_started_at`, `verifier_ended_at`, `merge_completed_at`), each of
+/// which records the FIRST time its real orchestrator transition fired, so a
+/// re-dispatch or a re-run of `state set` cannot move a phase boundary and
+/// distort the measured span. A slot left `None` stays unmeasured (rendered as
+/// an explicit marker by `state timings`, never as `0`).
+pub fn stamp_if_unset(slot: &mut Option<i64>, now: i64) -> bool {
+    if slot.is_none() {
+        *slot = Some(now);
+        true
+    } else {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

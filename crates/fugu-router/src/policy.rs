@@ -144,11 +144,24 @@ pub fn verifier_model(worker: &str, class: &str, title: &str) -> &'static str {
 }
 
 /// Drop a model one tier toward the cheapest. haiku is the floor.
-fn one_tier_down(model: &str) -> &'static str {
+///
+/// `pub(crate)` (not private) so `mode::apply` can reuse the exact same clamp
+/// `downgrade_for_budget` uses for its `fast`-mode worker shift, instead of
+/// re-deriving the tier table.
+pub(crate) fn one_tier_down(model: &str) -> &'static str {
     match model {
         "opus" => "sonnet",
         "sonnet" => "haiku",
         _ => "haiku",
+    }
+}
+
+/// Raise a model one tier toward the priciest. opus is the ceiling.
+/// Sibling of [`one_tier_down`], for `mode::apply`'s `high`-mode worker shift.
+pub(crate) fn one_tier_up(model: &str) -> &'static str {
+    match model {
+        "haiku" => "sonnet",
+        _ => "opus", // sonnet/opus/unknown -> opus (opus is already the ceiling)
     }
 }
 
@@ -480,7 +493,7 @@ mod tests {
                 human_label: None,
                 labeled_by: None,
                 skill_fingerprint: None,
-                duration_secs: 0.0,
+                duration_secs: None,
                 delegation: None,
                 ..Default::default()
             },

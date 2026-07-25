@@ -248,3 +248,75 @@ fn source_venv_activate_is_allowed() {
         "source with benign file path must be silent, got: {stdout}"
     );
 }
+
+// ── disarm-by-non-write: end-to-end twin of detect.rs's "Round 3" block ─────
+//
+// The unit tests in `detect.rs` pin the pure verdict; these pin that the
+// verdict actually reaches the agent through the hook boundary (a Deny that is
+// computed but printed as silence is indistinguishable from an Allow).
+
+/// Feed one Bash command through the real binary and return its stdout.
+fn bash_hook(cmd: &str) -> String {
+    let escaped = cmd.replace('\\', "\\\\").replace('"', "\\\"");
+    let payload = format!(
+        r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{{"command":"{escaped}"}}}}"#
+    );
+    let (code, stdout) = run(&payload);
+    assert_eq!(code, 0, "hook must always exit 0 (cmd: {cmd})");
+    stdout
+}
+
+#[test]
+fn disarming_a_protected_path_without_writing_to_it_is_denied() {
+    // One representative of each of the five shapes whose target is a
+    // positively recognised protected path: delete / move away / strip the
+    // exec bit / restore over it / append via tee.
+    let cases = [
+        "rm .githooks/pre-commit",
+        "mv .githooks/pre-commit /tmp/x",
+        "chmod -x .githooks/pre-commit",
+        "git checkout -- .claude/settings.json",
+        "tee -a .githooks/pre-commit",
+    ];
+    let failing: Vec<&str> = cases
+        .into_iter()
+        .filter(|cmd| !bash_hook(cmd).contains(r#""permissionDecision":"deny""#))
+        .collect();
+    assert!(
+        failing.is_empty(),
+        "these neutralise a gate without writing to it and must surface a deny: {failing:?}"
+    );
+}
+
+#[test]
+fn recursive_copy_into_a_protected_dir_is_not_silently_allowed() {
+    // Sixth shape. The landing set of `cp -r somedir/ .claude/` cannot be
+    // enumerated from the command line, so either `deny` or `ask` is a correct
+    // answer — silence (Allow) is not.
+    let stdout = bash_hook("cp -r evildir/ .claude/");
+    assert!(
+        stdout.contains(r#""permissionDecision":"deny""#)
+            || stdout.contains(r#""permissionDecision":"ask""#),
+        "an unmodelled recursive landing into .claude/ must not pass silently, got: {stdout}"
+    );
+}
+
+#[test]
+fn ordinary_non_write_file_operations_stay_silent() {
+    // Non-regression: the same five verbs on non-protected targets, plus the
+    // read-only `cp` FROM a protected file, must keep passing silently.
+    for cmd in [
+        "rm src/main.rs",
+        "mv a.txt b.txt",
+        "chmod +x scripts/build.sh",
+        "git checkout somebranch",
+        "tee -a /tmp/build.log",
+        "cp .githooks/pre-commit /tmp/pre-commit.bak",
+    ] {
+        let stdout = bash_hook(cmd);
+        assert!(
+            stdout.trim().is_empty(),
+            "ordinary command must stay silent ({cmd}), got: {stdout}"
+        );
+    }
+}

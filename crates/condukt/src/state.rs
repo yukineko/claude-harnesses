@@ -9,6 +9,8 @@ use crate::config::Config;
 use crate::store::{project_key, repo_root};
 use crate::worktree;
 use anyhow::{bail, Context, Result};
+use harness_core::progress;
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -937,6 +939,120 @@ pub fn stuck_task_ids(run: &RunState, stuck_ttl_secs: u64) -> Vec<String> {
         .filter(|t| t.updated_at.map(|ts| ts < threshold).unwrap_or(false))
         .map(|t| t.id.clone())
         .collect()
+}
+
+// ── Progress probe (observability) ────────────────────────────────────────
+
+/// One durable progress signal's reading for a task, for the `state probe` view.
+#[derive(Debug, Clone, Serialize)]
+pub struct SignalSample {
+    /// Signal identity (e.g. `git-head`, `task-updated-at`).
+    pub name: String,
+    /// Whether the signal was readable this sample. An unreadable signal is
+    /// `Undetermined` and (per the fail-closed combiner) forces the whole task
+    /// verdict to `undetermined` — it never reads as "frozen".
+    pub readable: bool,
+    /// Human-facing detail: the fingerprint contribution, or why it was unreadable.
+    pub detail: String,
+}
+
+/// Per-task progress verdict for `condukt state probe`.
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskProbe {
+    pub task_id: String,
+    pub agent_id: Option<String>,
+    pub status: Status,
+    pub signals: Vec<SignalSample>,
+    /// `now - updated_at` (seconds) — age since this task last durably advanced.
+    /// `None` for legacy tasks with no `updated_at`.
+    pub last_progress_age_secs: Option<i64>,
+    /// `progressing` | `stalled` | `undetermined`. Multi-sample: the first probe
+    /// (no prior snapshot) and any probe before the window elapses are
+    /// `undetermined` by construction — reap authority is `stalled` ONLY.
+    pub verdict: String,
+}
+
+/// Full `condukt state probe --run RID` report.
+#[derive(Debug, Clone, Serialize)]
+pub struct RunProbe {
+    pub run_id: String,
+    pub now: i64,
+    pub window_secs: i64,
+    pub tasks: Vec<TaskProbe>,
+}
+
+fn liveness_word(v: &Determination<progress::Liveness>) -> String {
+    match v {
+        Determination::Known(progress::Liveness::Progressing) => "progressing".into(),
+        Determination::Known(progress::Liveness::Stalled) => "stalled".into(),
+        Determination::Undetermined(_) => "undetermined".into(),
+    }
+}
+
+fn signal_sample(name: &str, d: &Determination<Vec<u8>>) -> SignalSample {
+    match d {
+        Determination::Known(bytes) => SignalSample {
+            name: name.to_string(),
+            readable: true,
+            detail: String::from_utf8_lossy(bytes).into_owned(),
+        },
+        Determination::Undetermined(reason) => SignalSample {
+            name: name.to_string(),
+            readable: false,
+            detail: reason.as_str().to_string(),
+        },
+    }
+}
+
+/// Probe the PROGRESS (not liveness) of every RUNNING task in a run: sample the
+/// durable signals (git HEAD of the repo + the task's `updated_at`) into the
+/// shared multi-sample progress store and report each task's verdict, signals,
+/// and age since last durable advance.
+///
+/// This is the observability twin of the reap gate — it does not reap anything,
+/// but it samples the SAME engine, so repeated probes across the window are what
+/// let a genuinely-frozen task converge to `stalled`. A single probe of a task
+/// with no prior snapshot is `undetermined` by construction (fail-closed).
+pub fn probe_run(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> Result<RunProbe> {
+    let rs = RunState::load(cfg, cwd, run_id)?;
+    let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+    let store = crate::claim::progress_store_dir(cfg, cwd);
+    // git HEAD is a run-level (repo-wide) signal shared by every task.
+    let head = progress::git_head_signal(&repo_root(cwd));
+
+    let mut tasks = Vec::new();
+    for t in rs.tasks.iter().filter(|t| t.status == Status::Running) {
+        let updated = match t.updated_at {
+            Some(ts) => Determination::Known(ts.to_string().into_bytes()),
+            None => Determination::Undetermined(harness_core::verdict::Reason::new(
+                "task has no updated_at (legacy) — durable progress unreadable",
+            )),
+        };
+        let signals = vec![
+            signal_sample("git-head", &head),
+            signal_sample("task-updated-at", &updated),
+        ];
+        let current = progress::fingerprint_from_signals(vec![
+            ("git-head", head.clone()),
+            ("task-updated-at", updated),
+        ]);
+        let key = format!("probe:{run_id}:{}", t.id);
+        let verdict = progress::sample(&store, &key, current, now, window);
+        tasks.push(TaskProbe {
+            task_id: t.id.clone(),
+            agent_id: t.agent_id.clone(),
+            status: t.status,
+            signals,
+            last_progress_age_secs: t.updated_at.map(|u| now.saturating_sub(u)),
+            verdict: liveness_word(&verdict),
+        });
+    }
+    Ok(RunProbe {
+        run_id: run_id.to_string(),
+        now,
+        window_secs: window,
+        tasks,
+    })
 }
 
 // ── Stats ──────────────────────────────────────────────────────────────────
@@ -2267,6 +2383,98 @@ mod tests {
             recorded_at: None,
         };
         rs.save(cfg, cwd).unwrap();
+    }
+
+    #[test]
+    fn probe_reports_only_running_tasks_first_sample_undetermined() {
+        let tmp = make_tmp_dir("probe-basic");
+        let cfg = make_test_cfg(&tmp);
+        let rs = RunState {
+            run_id: "runP".into(),
+            goal: "g".into(),
+            tasks: vec![
+                TaskState {
+                    id: "running-a".into(),
+                    status: Status::Running,
+                    updated_at: Some(500),
+                    agent_id: Some("agent-xyz".into()),
+                    ..Default::default()
+                },
+                TaskState {
+                    id: "done-b".into(),
+                    status: Status::Verified,
+                    updated_at: Some(400),
+                    ..Default::default()
+                },
+            ],
+            paused: false,
+            terminal_label: None,
+            recorded_at: None,
+        };
+        rs.save(&cfg, &tmp).unwrap();
+
+        let report = probe_run(&cfg, &tmp, "runP", 1000).unwrap();
+        // Only the RUNNING task is probed.
+        assert_eq!(report.tasks.len(), 1);
+        let t = &report.tasks[0];
+        assert_eq!(t.task_id, "running-a");
+        assert_eq!(t.agent_id.as_deref(), Some("agent-xyz"));
+        // Age since last durable advance = now - updated_at.
+        assert_eq!(t.last_progress_age_secs, Some(500));
+        // First sample of a task with no prior snapshot is undetermined — the
+        // engine cannot yet claim progress OR stall (fail-closed by construction).
+        assert_eq!(t.verdict, "undetermined");
+        // Both durable signals are reported by name.
+        let names: Vec<&str> = t.signals.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"git-head"));
+        assert!(names.contains(&"task-updated-at"));
+        // task-updated-at is readable (Some(500)); git-head may be un/readable
+        // depending on whether tmp is inside a repo — the verdict is undetermined
+        // either way (no prior snapshot), which is the point being pinned.
+        let upd = t
+            .signals
+            .iter()
+            .find(|s| s.name == "task-updated-at")
+            .unwrap();
+        assert!(upd.readable);
+        assert_eq!(upd.detail, "500");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn probe_legacy_task_without_updated_at_is_unreadable_and_undetermined() {
+        let tmp = make_tmp_dir("probe-legacy");
+        let cfg = make_test_cfg(&tmp);
+        let rs = RunState {
+            run_id: "runL".into(),
+            goal: "g".into(),
+            tasks: vec![TaskState {
+                id: "legacy".into(),
+                status: Status::Running,
+                updated_at: None, // legacy run-state, no timestamp
+                ..Default::default()
+            }],
+            paused: false,
+            terminal_label: None,
+            recorded_at: None,
+        };
+        rs.save(&cfg, &tmp).unwrap();
+
+        let report = probe_run(&cfg, &tmp, "runL", 1000).unwrap();
+        assert_eq!(report.tasks.len(), 1);
+        let t = &report.tasks[0];
+        // No updated_at ⇒ no age, and the durable signal reads UNREADABLE (never
+        // "frozen"), so the verdict stays undetermined — absence of evidence is
+        // not evidence of a stall.
+        assert_eq!(t.last_progress_age_secs, None);
+        let upd = t
+            .signals
+            .iter()
+            .find(|s| s.name == "task-updated-at")
+            .unwrap();
+        assert!(!upd.readable);
+        assert_eq!(t.verdict, "undetermined");
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     /// §4.6c: a second run completing the same hashkey AFTER this run's claim is

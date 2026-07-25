@@ -724,6 +724,18 @@ enum StateAction {
         #[arg(long)]
         file: Option<PathBuf>,
     },
+    /// Probe the multi-sample PROGRESS (not liveness) of a run's RUNNING tasks:
+    /// per task, the durable signals, the age since last durable advance, and the
+    /// three-valued verdict (progressing|stalled|undetermined). Samples the same
+    /// engine the claim reap gate uses, so repeated probes across the window are
+    /// what let a genuinely-frozen task converge to `stalled` — a single probe of
+    /// a task with no prior snapshot is `undetermined` by construction.
+    Probe {
+        #[arg(long)]
+        run: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Update one task's status (and optionally its worktree/branch).
     /// Passing --worktree/--branch without a value has no effect; use
     /// --clear-worktree / --clear-branch to explicitly erase the existing value.
@@ -3645,6 +3657,40 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
         StateAction::Show { run } => {
             let rs = state::RunState::load(cfg, cwd, &run)?;
             println!("{}", serde_json::to_string_pretty(&rs)?);
+        }
+        StateAction::Probe { run, json } => {
+            let report = state::probe_run(cfg, cwd, &run, state::now_secs())?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "run {} — {} running task(s), window {}s",
+                    report.run_id,
+                    report.tasks.len(),
+                    report.window_secs
+                );
+                for t in &report.tasks {
+                    let age = t
+                        .last_progress_age_secs
+                        .map(|a| format!("{a}s"))
+                        .unwrap_or_else(|| "unknown".into());
+                    let agent = t.agent_id.as_deref().unwrap_or("-");
+                    println!(
+                        "  {} [{}] verdict={} last_progress={} agent={}",
+                        t.task_id,
+                        serde_json::to_string(&t.status)
+                            .unwrap_or_default()
+                            .trim_matches('"'),
+                        t.verdict,
+                        age,
+                        agent
+                    );
+                    for s in &t.signals {
+                        let mark = if s.readable { "ok" } else { "UNREADABLE" };
+                        println!("      {} [{}] {}", s.name, mark, s.detail);
+                    }
+                }
+            }
         }
         StateAction::Claim { run, session, file } => {
             let files = if file.is_empty() {

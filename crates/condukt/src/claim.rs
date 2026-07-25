@@ -48,6 +48,8 @@ use crate::lock::RunLock;
 use crate::schedule::files_conflict;
 use crate::store::{project_key, repo_root};
 use anyhow::Result;
+use harness_core::progress::{self, Liveness};
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -238,25 +240,157 @@ fn unique_tmp(path: &Path, tag: &str) -> PathBuf {
     ))
 }
 
-/// A claim is stale when its heartbeat is older than the TTL — the session that
-/// held it died (or stalled past the stuck-TTL) without releasing.
+/// A claim's heartbeat is stale when it is older than the TTL — the session that
+/// held it went QUIET (died, or stalled past the stuck-TTL) without releasing.
 ///
-/// Liveness is anchored to the **heartbeat**, NOT to `c.pid`: the condukt CLI is
+/// Heartbeat-staleness is NECESSARY but NOT SUFFICIENT to reap: a quiet session
+/// may still be doing durable work (committing, growing its transcript, advancing
+/// tasks). The actual reap ([`reap`]/[`retain_claim`]) additionally requires a
+/// confirmed `Known(Stalled)` PROGRESS verdict ([`claim_progress`]) before it
+/// steals the claim; a stale-but-progressing (or unconfirmable) holder is kept.
+///
+/// Staleness is anchored to the **heartbeat**, NOT to `c.pid`: the condukt CLI is
 /// ephemeral (each invocation is a separate short-lived process that exits
 /// immediately), so the recorded pid is essentially always dead by the next
 /// command. Reaping on pid-liveness would therefore wipe every claim on the very
 /// next invocation. A live session instead proves liveness by refreshing the
 /// heartbeat (via `state set`/`state heartbeat`); `c.pid` is retained only for
 /// observability (which condukt process last touched the claim). The TTL reuses
-/// the STUCK TTL, so a claim becomes reclaimable exactly when its task would
-/// already be considered stuck.
+/// the STUCK TTL, so a claim becomes ELIGIBLE for a progress-gated reap exactly
+/// when its task would already be considered stuck.
 fn is_stale(c: &Claim, now: i64, ttl: i64) -> bool {
     now.saturating_sub(c.heartbeat_at) > ttl
 }
 
-fn reap(reg: &mut Registry, now: i64, ttl: i64) {
-    reg.files.retain(|_, c| !is_stale(c, now, ttl));
-    reg.task_claims.retain(|_, c| !is_stale(c, now, ttl));
+/// Directory where per-run progress snapshots are persisted (one file per run,
+/// keyed by run id). Colocated with the claim registry's state dir so it is torn
+/// down with the run's state, never leaking across projects.
+pub(crate) fn progress_store_dir(cfg: &Config, cwd: &Path) -> PathBuf {
+    registry_path(cfg, cwd)
+        .parent()
+        .map(|p| p.join("progress"))
+        .unwrap_or_else(|| PathBuf::from("progress"))
+}
+
+/// Multi-signal, multi-sample PROGRESS verdict for the run owning claim `c`.
+///
+/// A heartbeat lapsing past the stuck-TTL proves only that the session went
+/// QUIET, not that it DIED — the reap must not force-steal a holder that is
+/// still doing durable work. This samples three durable signals (git HEAD of the
+/// project repo, the owning session's transcript growth, and the run's max task
+/// `updated_at` advancing) across the [`progress`] window and returns:
+/// `Known(Stalled)` only when ALL readable signals are frozen for the full
+/// window; `Known(Progressing)` when any advanced; `Undetermined` when a signal
+/// is unreadable, there is no prior sample yet, or the window has not elapsed.
+/// Reap fires ONLY on `Known(Stalled)` — Progressing and Undetermined both
+/// preserve the claim (fail-closed).
+fn claim_progress(cfg: &Config, cwd: &Path, c: &Claim, now: i64) -> Determination<Liveness> {
+    #[cfg(test)]
+    if let Some(forced) = test_hook::forced_progress() {
+        return forced;
+    }
+    let head = progress::git_head_signal(&repo_root(cwd));
+    let transcript = match c.session_id.as_deref() {
+        Some(sid) => progress::session_transcript_signal(sid),
+        None => Determination::Undetermined(harness_core::verdict::Reason::new(
+            "claim has no owning session id — transcript progress unreadable",
+        )),
+    };
+    let task_progress = run_task_progress_signal(cfg, cwd, &c.run_id);
+    let current = progress::fingerprint_from_signals(vec![
+        ("git-head", head),
+        ("transcript", transcript),
+        ("run-tasks", task_progress),
+    ]);
+    let key = format!("claim:{}", c.run_id);
+    progress::sample(
+        &progress_store_dir(cfg, cwd),
+        &key,
+        current,
+        now,
+        progress::window_secs(progress::DEFAULT_WINDOW_SECS),
+    )
+}
+
+/// Durable run-progress signal: the maximum `updated_at` across the run's tasks.
+///
+/// This is deliberately NOT the run-state file mtime — heartbeats rewrite that
+/// file without changing any task, so file mtime tracks LIVENESS, not progress.
+/// `TaskState.updated_at` only advances on a real status/field transition, so
+/// its max is a true "durable work advanced" signal. An unloadable run state is
+/// `Undetermined` (protective — an unreadable signal must never read as frozen).
+fn run_task_progress_signal(cfg: &Config, cwd: &Path, run_id: &str) -> Determination<Vec<u8>> {
+    match crate::state::RunState::load(cfg, cwd, run_id) {
+        Ok(rs) => {
+            let max_updated = rs
+                .tasks
+                .iter()
+                .filter_map(|t| t.updated_at)
+                .max()
+                .unwrap_or(0);
+            Determination::Known(max_updated.to_string().into_bytes())
+        }
+        Err(e) => Determination::Undetermined(harness_core::verdict::Reason::new(format!(
+            "run state for {run_id} unreadable: {e}"
+        ))),
+    }
+}
+
+/// Decide whether a claim survives a reap. A claim with a FRESH heartbeat is
+/// always kept. A claim whose heartbeat has lapsed past the TTL is kept UNLESS
+/// its run's progress is confirmed `Known(Stalled)` — Progressing or
+/// Undetermined preserve it (fail-closed: "cannot determine" never reaps).
+fn retain_claim(
+    c: &Claim,
+    now: i64,
+    ttl: i64,
+    progress: &dyn Fn(&Claim) -> Determination<Liveness>,
+) -> bool {
+    if !is_stale(c, now, ttl) {
+        return true;
+    }
+    !matches!(progress(c), Determination::Known(Liveness::Stalled))
+}
+
+/// Reap stale claims, gated on confirmed run non-progress. `progress` yields the
+/// owning run's multi-sample progress verdict for a claim; a heartbeat-stale
+/// claim is reaped ONLY when that verdict is `Known(Stalled)`. See
+/// [`retain_claim`] and [`claim_progress`].
+fn reap(
+    reg: &mut Registry,
+    now: i64,
+    ttl: i64,
+    progress: &dyn Fn(&Claim) -> Determination<Liveness>,
+) {
+    reg.files.retain(|_, c| retain_claim(c, now, ttl, progress));
+    reg.task_claims
+        .retain(|_, c| retain_claim(c, now, ttl, progress));
+}
+
+#[cfg(test)]
+mod test_hook {
+    use super::*;
+    use std::cell::RefCell;
+    thread_local! {
+        static FORCED: RefCell<Option<Determination<Liveness>>> = const { RefCell::new(None) };
+    }
+    pub(super) fn forced_progress() -> Option<Determination<Liveness>> {
+        FORCED.with(|c| c.borrow().clone())
+    }
+    /// Force [`claim_progress`] to return `v` for the duration of `body` (this
+    /// thread only). Compiled out of production — the reap gate is exercised in
+    /// tests without spawning git or racing wall-clock windows.
+    pub(super) fn with_forced<R>(v: Determination<Liveness>, body: impl FnOnce() -> R) -> R {
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                FORCED.with(|c| *c.borrow_mut() = None);
+            }
+        }
+        FORCED.with(|c| *c.borrow_mut() = Some(v));
+        let _g = Guard;
+        body()
+    }
 }
 
 fn ttl_secs(cfg: &Config) -> i64 {
@@ -302,7 +436,7 @@ fn claim_files_with_deadline(
         None => return Ok(all_skipped(files)),
     };
     let mut reg = load(&path);
-    reap(&mut reg, now, ttl);
+    reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
 
     let mut outcome = ClaimOutcome::default();
     for f in files {
@@ -375,7 +509,7 @@ pub fn claim_tasks(
         None => return Ok(all_skipped(hashkeys)),
     };
     let mut reg = load(&path);
-    reap(&mut reg, now, ttl);
+    reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
     artificial_race_delay();
 
     let mut outcome = ClaimOutcome::default();
@@ -492,7 +626,7 @@ pub fn heartbeat(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> Result<usi
         None => return Ok(0),
     };
     let mut reg = load(&path);
-    reap(&mut reg, now, ttl);
+    reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
     let mut n = 0;
     for c in reg.files.values_mut().chain(reg.task_claims.values_mut()) {
         if c.run_id == run_id {
@@ -515,13 +649,13 @@ pub fn active_claims(cfg: &Config, cwd: &Path, now: i64) -> Result<Registry> {
     match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
         Some(_lock) => {
             let mut reg = load(&path);
-            reap(&mut reg, now, ttl);
+            reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
             save(&path, &reg)?;
             Ok(reg)
         }
         None => {
             let mut reg = load(&path);
-            reap(&mut reg, now, ttl);
+            reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
             Ok(reg)
         }
     }
@@ -755,7 +889,7 @@ pub fn write_execution_state(cfg: &Config, cwd: &Path, now: i64) -> Result<Vec<E
     match RunLock::acquire_or_skip(cfg, cwd, CLAIMS_LOCK_KEY) {
         Some(_lock) => {
             let mut reg = load(&path);
-            reap(&mut reg, now, ttl);
+            reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
             save(&path, &reg)?;
             let pending = backlog_pending();
             let entries = join_execution_state(&reg.task_claims, &pending);
@@ -764,7 +898,7 @@ pub fn write_execution_state(cfg: &Config, cwd: &Path, now: i64) -> Result<Vec<E
         }
         None => {
             let mut reg = load(&path);
-            reap(&mut reg, now, ttl);
+            reap(&mut reg, now, ttl, &|c| claim_progress(cfg, cwd, c, now));
             let pending = backlog_pending();
             Ok(join_execution_state(&reg.task_claims, &pending))
         }
@@ -1075,12 +1209,14 @@ mod tests {
     }
 
     #[test]
-    fn stale_claim_past_heartbeat_ttl_is_reaped_and_reclaimable() {
+    fn stale_claim_with_confirmed_stalled_progress_is_reaped_and_reclaimable() {
         let tmp = make_tmp_dir("stale-hb");
         let cfg = make_cfg(&tmp);
-        // A claim whose heartbeat is far in the past — the holding session died
-        // without releasing. The pid is irrelevant to liveness (condukt is
-        // ephemeral); staleness is decided purely by the heartbeat age.
+        // A claim whose heartbeat is far in the past — the holding session went
+        // quiet without releasing. Heartbeat-staleness alone is NOT enough to
+        // reap now; the run's progress must be CONFIRMED Stalled. Force that
+        // verdict via the thread-local test seam (production samples git HEAD +
+        // transcript + task updated_at across the window instead).
         let mut reg = Registry::default();
         reg.files.insert(
             "src/a.rs".to_string(),
@@ -1094,11 +1230,76 @@ mod tests {
             },
         );
         save(&registry_path(&cfg, &tmp), &reg).unwrap();
-        // now = ttl + 1 past the heartbeat → reaped, so a live run can take it.
+        // now = ttl + 1 past the heartbeat → eligible; confirmed Stalled → reaped.
         let now = cfg.stuck_ttl_secs as i64 + 1;
-        let out = claim_files(&cfg, &tmp, "runB", None, &files(&["src/a.rs"]), now).unwrap();
+        let out = test_hook::with_forced(Determination::Known(Liveness::Stalled), || {
+            claim_files(&cfg, &tmp, "runB", None, &files(&["src/a.rs"]), now).unwrap()
+        });
         assert_eq!(out.claimed, vec!["src/a.rs".to_string()]);
         assert!(out.skipped.is_empty());
+    }
+
+    #[test]
+    fn stale_claim_but_progressing_is_not_reaped() {
+        let tmp = make_tmp_dir("stale-hb-progressing");
+        let cfg = make_cfg(&tmp);
+        // Same heartbeat-stale claim, but the run is still doing durable work.
+        // The quiet holder must be PRESERVED — reaping it would force-steal a
+        // live-but-quiet session (the exact fail-open this gate closes).
+        let mut reg = Registry::default();
+        reg.files.insert(
+            "src/a.rs".to_string(),
+            Claim {
+                run_id: "busy".into(),
+                session_id: Some("live-quiet".into()),
+                pid: std::process::id(),
+                claimed_at: 0,
+                heartbeat_at: 0,
+                title: None,
+            },
+        );
+        save(&registry_path(&cfg, &tmp), &reg).unwrap();
+        let now = cfg.stuck_ttl_secs as i64 + 1;
+        let out = test_hook::with_forced(Determination::Known(Liveness::Progressing), || {
+            claim_files(&cfg, &tmp, "runB", None, &files(&["src/a.rs"]), now).unwrap()
+        });
+        assert!(out.claimed.is_empty(), "progressing holder must be kept");
+        assert_eq!(out.skipped.len(), 1);
+        assert_eq!(out.skipped[0].holder_run, "busy");
+    }
+
+    #[test]
+    fn stale_claim_with_undetermined_progress_is_not_reaped() {
+        let tmp = make_tmp_dir("stale-hb-undet");
+        let cfg = make_cfg(&tmp);
+        // Progress could not be established (unreadable signals / no prior sample
+        // / window not elapsed). "Cannot determine" must resolve to the
+        // restrictive side: the claim is KEPT, never reaped.
+        let mut reg = Registry::default();
+        reg.files.insert(
+            "src/a.rs".to_string(),
+            Claim {
+                run_id: "unknown".into(),
+                session_id: Some("opaque".into()),
+                pid: std::process::id(),
+                claimed_at: 0,
+                heartbeat_at: 0,
+                title: None,
+            },
+        );
+        save(&registry_path(&cfg, &tmp), &reg).unwrap();
+        let now = cfg.stuck_ttl_secs as i64 + 1;
+        let undet =
+            Determination::Undetermined(harness_core::verdict::Reason::new("no sample yet"));
+        let out = test_hook::with_forced(undet, || {
+            claim_files(&cfg, &tmp, "runB", None, &files(&["src/a.rs"]), now).unwrap()
+        });
+        assert!(
+            out.claimed.is_empty(),
+            "undetermined progress must NOT reap"
+        );
+        assert_eq!(out.skipped.len(), 1);
+        assert_eq!(out.skipped[0].holder_run, "unknown");
     }
 
     #[test]
@@ -1198,7 +1399,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_task_claim_is_reaped_on_load_and_reclaimable() {
+    fn stale_task_claim_with_confirmed_stalled_progress_is_reaped_and_reclaimable() {
         let tmp = make_tmp_dir("task-stale");
         let cfg = make_cfg(&tmp);
         let mut reg = Registry::default();
@@ -1214,13 +1415,47 @@ mod tests {
             },
         );
         save(&registry_path(&cfg, &tmp), &reg).unwrap();
-        // now past the TTL of the heartbeat → reaped, so a live run can take it.
+        // now past the TTL of the heartbeat → eligible; confirmed Stalled → reaped.
         let now = cfg.stuck_ttl_secs as i64 + 1;
-        let out = claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runB", None, now, None).unwrap();
+        let out = test_hook::with_forced(Determination::Known(Liveness::Stalled), || {
+            // The reclaiming acquire AND the observability read both reap under a
+            // Stalled verdict, so hold the seam across both.
+            let out = claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runB", None, now, None).unwrap();
+            let live = active_claims(&cfg, &tmp, now).unwrap();
+            assert_eq!(live.task_claims["hk-1"].run_id, "runB");
+            out
+        });
         assert_eq!(out.claimed, vec!["hk-1".to_string()]);
         assert!(out.skipped.is_empty());
-        let live = active_claims(&cfg, &tmp, now).unwrap();
-        assert_eq!(live.task_claims["hk-1"].run_id, "runB");
+    }
+
+    #[test]
+    fn stale_task_claim_but_progressing_is_not_reaped() {
+        let tmp = make_tmp_dir("task-stale-progressing");
+        let cfg = make_cfg(&tmp);
+        let mut reg = Registry::default();
+        reg.task_claims.insert(
+            "hk-1".to_string(),
+            Claim {
+                run_id: "busy".into(),
+                session_id: Some("live".into()),
+                pid: std::process::id(),
+                claimed_at: 0,
+                heartbeat_at: 0,
+                title: Some("still working".into()),
+            },
+        );
+        save(&registry_path(&cfg, &tmp), &reg).unwrap();
+        let now = cfg.stuck_ttl_secs as i64 + 1;
+        let out = test_hook::with_forced(Determination::Known(Liveness::Progressing), || {
+            claim_tasks(&cfg, &tmp, &files(&["hk-1"]), "runB", None, now, None).unwrap()
+        });
+        assert!(
+            out.claimed.is_empty(),
+            "progressing task holder must be kept"
+        );
+        assert_eq!(out.skipped.len(), 1);
+        assert_eq!(out.skipped[0].holder_run, "busy");
     }
 
     #[test]

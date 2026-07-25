@@ -3,7 +3,15 @@
 //!
 //! The bias is deliberately asymmetric: we only Deny on *clearly* destructive,
 //! hard-to-undo patterns (recursive/wildcard deletion, full-file truncation,
-//! disk-level writes, working-tree discards).
+//! disk-level writes, working-tree discards) — and, since the egress/
+//! remote-exec closure landed, the exfil/remote-exec exit of the
+//! prompt-injection "lethal trifecta": a network fetch or `base64 -d` piped
+//! into a shell/interpreter (`curl … | bash`), `curl`/`wget` uploading a file
+//! reference to a URL, `nc`/`netcat` fed a file on stdin, and bash's
+//! `/dev/tcp/`/`/dev/udp/` raw-socket pseudo-devices (see
+//! [`analyze_pipe_egress`], [`analyze_fetch`], [`analyze_nc`],
+//! [`contains_dev_tcp_or_udp`]). Plain source-control upload (`git push`) is
+//! deliberately OUT of this scope — that outbound-comms tier is separate.
 //!
 //! There are three answers, not two. A command blastguard positively knows to
 //! be destructive is DENIED; one it positively knows to be ordinary is ALLOWED;
@@ -845,6 +853,17 @@ fn detect_bash(cmd: &str, depth: usize) -> Decision {
         return Decision::deny("fork bomb pattern detected");
     }
 
+    // 1b. Egress: bash's `/dev/tcp/`/`/dev/udp/` pseudo-devices open a raw
+    // network socket in ANY position (redirect, `exec N<>`, bare read), not
+    // only the `>`-redirect form rule 2 below happens to catch. See
+    // `contains_dev_tcp_or_udp`.
+    if contains_dev_tcp_or_udp(cmd) {
+        return Decision::deny(
+            "`/dev/tcp/`/`/dev/udp/` opens a raw network socket — this is a network egress \
+primitive, not a filesystem path",
+        );
+    }
+
     // 2. Truncating `>` redirects (quote-aware, ignores >>, &>> and fd dups
     //    like `2>&1`/`>&2`; but catches EVERY `N>file` truncating form for any
     //    fd N, plus the combined stdout+stderr truncating form `&>`). Scan
@@ -896,6 +915,16 @@ fn detect_bash(cmd: &str, depth: usize) -> Decision {
     // in an EARLIER segment is visible to a LATER one; see
     // `advance_cwd_and_rewrite`.
     let mut acc = VerdictAcc::default();
+
+    // 2c. Egress across `|` pipelines: a fetch/decode stage feeding a
+    // shell/interpreter stage downstream of it. Run BEFORE the per-segment
+    // loop below (which judges each segment in isolation and cannot see this
+    // cross-segment relationship) so a Deny here outranks whatever the
+    // per-segment loop finds, per `VerdictAcc`. See `analyze_pipe_egress`.
+    if let Some(deny) = acc.record(analyze_pipe_egress(cmd)) {
+        return deny;
+    }
+
     let mut cwd = CwdState::Root;
     let mut aliases: HashMap<String, String> = HashMap::new();
     for seg in split_segments(cmd) {
@@ -2126,6 +2155,11 @@ fn is_recognized_command(cmd: &str) -> bool {
             | "-execdir"
             | "-ok"
             | "-okdir"
+            | "curl"
+            | "wget"
+            | "nc"
+            | "ncat"
+            | "netcat"
     ) || cmd.starts_with("mkfs")
         // Re-analysis / wrapper arms.
         || is_shell(cmd)
@@ -2399,6 +2433,12 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
         // Round 2: the single-file and empty-directory twins of `rm`, which had
         // no arm at all. See `analyze_unlink_rmdir`.
         "unlink" | "rmdir" => analyze_unlink_rmdir(cmd, rest),
+        // Egress: exfiltration via curl/wget upload flags and nc/netcat fed a
+        // file on stdin. See `analyze_fetch` / `analyze_nc`. Remote-exec
+        // (fetch piped into a shell/interpreter) is handled separately, across
+        // segments, by `analyze_pipe_egress` in `detect_bash`.
+        "curl" | "wget" => analyze_fetch(cmd, rest),
+        "nc" | "ncat" | "netcat" => analyze_nc(rest),
         // Round 4: `sort`/`uniq` were miscategorised as read-only. Both have
         // output-FILE forms that truncate the named file, so they get dedicated
         // arms that Deny the write-onto-a-protected-path shape (pure reads stay
@@ -3578,6 +3618,289 @@ fn xargs_command_start(rest: &[&str]) -> Option<usize> {
         return Some(i); // first non-flag token = the command word
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// Egress / fetched-payload-exec detection (prompt-injection "lethal trifecta"
+// exfil/remote-exec exit).
+// ---------------------------------------------------------------------------
+
+/// One `;`/`&&`/`||`/`&`/newline-separated STATEMENT, further broken into its
+/// `|`-connected PIPE STAGES in order.
+///
+/// Deliberately NOT `split_segments`: that function flattens every operator
+/// (`;`, `&&`, `||`, `|`, `&`) into one list and — by design, for the rules it
+/// backs — throws away which operator joined which pair. Egress detection
+/// needs exactly that distinction: a downstream interpreter is only "fed" an
+/// upstream fetch's output when the two are joined by an actual `|`. `curl url
+/// && bash script.sh` runs `bash` as a fresh, disconnected command (it never
+/// sees `curl`'s stdout) and must stay Allow; only a real pipe wires the two
+/// together. Reusing `split_segments`'s flat output and treating "adjacent
+/// entries" as "piped" would misfire on that `&&`/`;` shape, which is exactly
+/// the over-blocking this module's asymmetric bias forbids.
+fn split_statements_into_pipe_stages(cmd: &str) -> Vec<Vec<String>> {
+    let chars: Vec<char> = cmd.chars().collect();
+    let mut statements: Vec<Vec<String>> = Vec::new();
+    let mut stages: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+            cur.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '"' && !in_s {
+            in_d = !in_d;
+            cur.push(c);
+            i += 1;
+            continue;
+        }
+        if !in_s && !in_d {
+            // `||`/`&&` end the STATEMENT (not a pipe stage boundary).
+            if (c == '|' && chars.get(i + 1) == Some(&'|'))
+                || (c == '&' && chars.get(i + 1) == Some(&'&'))
+            {
+                stages.push(std::mem::take(&mut cur));
+                statements.push(std::mem::take(&mut stages));
+                i += 2;
+                continue;
+            }
+            // A single `|` is a pipe: new stage, SAME statement.
+            if c == '|' {
+                stages.push(std::mem::take(&mut cur));
+                i += 1;
+                continue;
+            }
+            if c == ';' || c == '\n' || c == '&' {
+                stages.push(std::mem::take(&mut cur));
+                statements.push(std::mem::take(&mut stages));
+                i += 1;
+                continue;
+            }
+        }
+        cur.push(c);
+        i += 1;
+    }
+    stages.push(cur);
+    statements.push(stages);
+    statements
+}
+
+/// True when `cmd`/`rest` names a network fetch (`curl`, `wget`, `fetch`, or
+/// httpie's `http`/`https`) or a `base64 -d`/`--decode` invocation — the two
+/// ways an UPSTREAM pipe stage hands an opaque, remotely-controlled payload to
+/// the stage downstream of it.
+///
+/// Keyed on the fetch/decode being present, NOT on merely "a network tool
+/// appears somewhere on the line" — `curl -o file` and `curl | jq` never reach
+/// this far down a Deny path because the DOWNSTREAM stage (see
+/// [`analyze_pipe_egress`]) is what actually gates it: a fetch feeding a
+/// non-interpreter stays Allow.
+fn is_fetch_or_decode(cmd: &str, rest: &[&str]) -> bool {
+    match cmd {
+        "curl" | "wget" | "fetch" | "http" | "https" => true,
+        "base64" | "base64url" => rest
+            .iter()
+            .any(|t| *t == "-d" || *t == "--decode" || t.starts_with("--decode=")),
+        _ => false,
+    }
+}
+
+/// Egress/remote-exec closure over a full command line's `|` pipelines.
+///
+/// For every ADJACENT pair of stages within the same statement (see
+/// [`split_statements_into_pipe_stages`]):
+///   * upstream is a fetch/decode AND downstream is a shell/interpreter →
+///     `Deny` (fetched content is being executed);
+///   * upstream is a fetch/decode AND downstream's command word is an
+///     unresolvable expansion → `Ask` (cannot tell whether the expansion
+///     resolves to an interpreter);
+///   * downstream is a shell/interpreter AND upstream's command word is an
+///     unresolvable expansion → `Ask` (cannot tell whether the expansion
+///     resolves to a fetch) — this is the tri-state answer for `$X | sh`
+///     where `$X` is dynamic: genuinely unanalysable, never a silent Allow.
+///
+/// A pipeline with three or more stages (`curl … | base64 -d | sh`) is caught
+/// on whichever ADJACENT pair actually matches (`base64 -d | sh` here) —
+/// every adjacent pair is checked, not just the first.
+fn analyze_pipe_egress(cmd: &str) -> Decision {
+    let mut acc = VerdictAcc::default();
+    for statement in split_statements_into_pipe_stages(cmd) {
+        for pair in statement.windows(2) {
+            let up_tokens: Vec<&str> = pair[0].split_whitespace().collect();
+            let down_tokens: Vec<&str> = pair[1].split_whitespace().collect();
+            let (Some(&up_head_raw), Some(&down_head_raw)) =
+                (up_tokens.first(), down_tokens.first())
+            else {
+                continue;
+            };
+            let up_head = normalized_command(up_head_raw);
+            let down_head = normalized_command(down_head_raw);
+
+            let down_is_interp = is_shell(&down_head) || is_code_interpreter(&down_head);
+            let down_unresolvable = has_unresolvable_expansion(down_head_raw);
+            let up_is_fetch = is_fetch_or_decode(&up_head, &up_tokens[1..]);
+            let up_unresolvable = has_unresolvable_expansion(up_head_raw);
+
+            let verdict = if up_is_fetch && down_is_interp {
+                Some(Decision::deny(format!(
+                    "`{up_head}` fetches/decodes remote or opaque content and pipes it into \
+`{down_head}` — this executes fetched content, the remote-exec exit of the \
+prompt-injection lethal trifecta"
+                )))
+            } else if up_is_fetch && down_unresolvable {
+                Some(Decision::ask(format!(
+                    "`{up_head}` fetches/decodes content and pipes it into `{down_head_raw}`, \
+whose value only exists at run time — blastguard cannot tell whether this executes fetched \
+content"
+                )))
+            } else if down_is_interp && up_unresolvable {
+                Some(Decision::ask(format!(
+                    "`{up_head_raw}` is an expansion whose value only exists at run time, piped \
+into `{down_head}` — blastguard cannot tell whether this executes fetched content"
+                )))
+            } else {
+                None
+            };
+            if let Some(v) = verdict {
+                if let Some(deny) = acc.record(v) {
+                    return deny;
+                }
+            }
+        }
+    }
+    acc.finish()
+}
+
+/// True when `tok` is (or contains) bash's `/dev/tcp/HOST/PORT` or
+/// `/dev/udp/HOST/PORT` pseudo-device — a built-in raw TCP/UDP socket, not a
+/// real filesystem path. Any use of it (redirect, `exec N<>`, bare read) opens
+/// a network channel that no ordinary filesystem operation would; there is no
+/// legitimate default use of this pseudo-path in a shell one-liner.
+///
+/// Scanned as a raw substring of the whole line (mirrors the fork-bomb check
+/// just above it in `detect_bash`) so it is caught in EVERY position, not just
+/// the `>`-redirect form already denied by rule 2 in `detect_bash` (that rule
+/// denies it only incidentally, because the target matches no safe-target
+/// exemption — it does not recognise `/dev/tcp/`/`/dev/udp/` by name, and a
+/// non-redirect form like `exec 3<>/dev/tcp/1.2.3.4/4444` or
+/// `cat < /dev/tcp/1.2.3.4/9999` never reaches rule 2 at all).
+fn contains_dev_tcp_or_udp(cmd: &str) -> bool {
+    cmd.contains("/dev/tcp/") || cmd.contains("/dev/udp/")
+}
+
+/// `curl`/`wget` exfiltration: an upload/data-file flag whose operand
+/// references a FILE (`-d @file`, `--data @file`, `--data-binary @file`,
+/// `--data-ascii @file`, `--data-raw @file`, `-T file`/`--upload-file file`,
+/// `-F name=@file`/`--form name=@file`), on a command line that also names a
+/// URL. Returns the referenced operand for the deny message.
+///
+/// Requiring a URL operand too is what keeps this narrow: `-d @file` alone
+/// (no URL) is not even a valid curl invocation blastguard needs to worry
+/// about, and matching on the flag alone would risk widening past what the
+/// flag actually does (send `file`'s bytes to a network target).
+fn fetch_exfil_upload(rest: &[&str]) -> Option<String> {
+    if !rest.iter().any(|t| t.contains("://")) {
+        return None;
+    }
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        let (flag, attached_val) = match t.find('=') {
+            Some(eq) if t.starts_with("--") => (&t[..eq], Some(&t[eq + 1..])),
+            _ => (t, None),
+        };
+        let is_data_flag = matches!(
+            flag,
+            "-d" | "--data" | "--data-binary" | "--data-ascii" | "--data-raw"
+        );
+        let is_form_flag = matches!(flag, "-F" | "--form");
+        let is_upload_flag = matches!(flag, "-T" | "--upload-file");
+
+        if is_data_flag {
+            // Attached short form `-d@file` (no space, no `=`).
+            if attached_val.is_none() && flag == t {
+                if let Some(rest_of_short) = t.strip_prefix("-d") {
+                    if rest_of_short.starts_with('@') {
+                        return Some(rest_of_short.to_string());
+                    }
+                }
+            }
+            let operand = attached_val
+                .map(|s| s.to_string())
+                .or_else(|| rest.get(i + 1).map(|s| s.to_string()));
+            if let Some(op) = operand {
+                if op.starts_with('@') {
+                    return Some(op);
+                }
+            }
+        } else if is_form_flag {
+            let operand = attached_val
+                .map(|s| s.to_string())
+                .or_else(|| rest.get(i + 1).map(|s| s.to_string()));
+            if let Some(op) = operand {
+                if op.contains("=@") || op.starts_with('@') {
+                    return Some(op);
+                }
+            }
+        } else if is_upload_flag {
+            let operand = attached_val
+                .map(|s| s.to_string())
+                .or_else(|| rest.get(i + 1).map(|s| s.to_string()));
+            if let Some(op) = operand {
+                return Some(op);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// `curl`/`wget`: deny a data-exfiltration upload (see [`fetch_exfil_upload`]);
+/// otherwise fall back to the pre-existing generic protected-path scan (a
+/// fetch with no rule of its own already asked when one of its operands named
+/// a protected gate/config path — that behaviour is preserved unchanged).
+fn analyze_fetch(cmd: &str, rest: &[&str]) -> Decision {
+    if let Some(op) = fetch_exfil_upload(rest) {
+        return Decision::deny(format!(
+            "`{cmd}` uploads `{op}` (a file reference) to a network target — this is a \
+data-exfiltration pattern"
+        ));
+    }
+    unknown_verb_protected_ask(cmd, rest)
+}
+
+/// `nc`/`ncat`/`netcat` fed a FILE on stdin (`nc host port < file`): a raw
+/// exfiltration channel — the file's bytes go straight to the network target,
+/// with no protocol/inspection layer in between. Only the input-redirect shape
+/// is denied; `nc -l` (listen) and interactive/no-redirect invocations have no
+/// file operand to exfiltrate and stay Allow.
+fn analyze_nc(rest: &[&str]) -> Decision {
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        if t == "<" {
+            if let Some(&target) = rest.get(i + 1) {
+                return Decision::deny(format!(
+                    "`nc`/`netcat` reading `{target}` on stdin toward a network target is a raw \
+exfiltration channel"
+                ));
+            }
+        } else if t.len() > 1 && t.starts_with('<') && !t.starts_with("<<") && !t.starts_with("<(")
+        {
+            let target = &t[1..];
+            return Decision::deny(format!(
+                "`nc`/`netcat` reading `{target}` on stdin toward a network target is a raw \
+exfiltration channel"
+            ));
+        }
+        i += 1;
+    }
+    Decision::Allow
 }
 
 #[cfg(test)]

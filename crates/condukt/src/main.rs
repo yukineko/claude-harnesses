@@ -4372,10 +4372,6 @@ fn fugu_fingerprint() -> Option<String> {
     Some(fp)
 }
 
-/// Record completed runs' outcomes to fugu-router. Deterministic and idempotent:
-/// only settled, not-yet-recorded runs emit episodes, and each is stamped with
-/// `recorded_at` so repeated firings (the Stop hook) never double-record.
-///
 /// Wall-clock seconds spanning `[a, b]`, or `None` when the span is unmeasured.
 /// Unmeasured means EITHER endpoint was never stamped (`None`) OR the endpoints
 /// are out of order (`b < a`, a cannot-determine that resolves to unmeasured,
@@ -4444,6 +4440,10 @@ fn print_timings(rs: &state::RunState, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Record completed runs' outcomes to fugu-router. Deterministic and idempotent:
+/// only settled, not-yet-recorded runs emit episodes, and each is stamped with
+/// `recorded_at` so repeated firings (the Stop hook) never double-record.
+///
 /// Soft dependency: when fugu-router is not on PATH this is a clean no-op and
 /// does NOT mark runs recorded, so a later invocation (once fugu-router exists)
 /// still captures the signal.

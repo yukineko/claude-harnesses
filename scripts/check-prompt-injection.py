@@ -110,21 +110,35 @@ _HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 def _added_lines_for_file(path: Path) -> tuple[set[int], bool]:
     """Return (1-based added/changed line numbers, diff_available) for `path`
-    from the staged git diff (`git diff --cached -U0`).
+    from `git diff HEAD -U0` (HEAD vs the WORKING TREE, not the index).
+
+    This MUST be HEAD-vs-working-tree, not HEAD-vs-index (`--cached`):
+    `scan_file` reads the working tree (`path.read_bytes()`), so the
+    added/untrusted-line set has to be computed against that exact same
+    content, or the two disagree about what "pre-existing" means. A staged
+    diff (`--cached`) undercounts: an attacker can `git add` only the
+    malicious line and then append a defense marker to the file WITHOUT
+    staging it -- `scan_file` still sees the marker (working tree), but
+    `--cached` never reports its line as added, so `line_is_defended` reads
+    it as a trustworthy pre-existing line and suppresses the hit, even
+    though the committed blob carries the payload with no marker at all.
+    `git diff HEAD` closes that gap by comparing against the same working
+    tree `scan_file` reads, regardless of what is staged.
 
     `diff_available=False` means the diff itself could not be determined at
-    all (no git repo, subprocess failure) -- it is NOT the same thing as "no
+    all (no git repo, subprocess failure, no HEAD yet in a fresh repo --
+    `git diff HEAD` exits non-zero there) -- it is NOT the same thing as "no
     lines added". Callers MUST fail closed on False rather than treat it as
     an empty added set: a broken git invocation must never silently
     re-enable the permissive proximity-marker suppression this function
     exists to gate (that would be exactly the fail-open this task fixes, just
-    moved one layer down). An empty-but-available result (file untouched by
-    the staged diff) is the normal, fully-trusted case -- every line in that
-    file is pre-existing.
+    moved one layer down). An empty-but-available result (file untouched
+    since HEAD) is the normal, fully-trusted case -- every line in that file
+    is pre-existing.
     """
     try:
         out = subprocess.run(
-            ["git", "-C", str(REPO), "diff", "--cached", "--no-color", "-U0",
+            ["git", "-C", str(REPO), "diff", "HEAD", "--no-color", "-U0",
              "--", str(path)],
             capture_output=True, text=True, check=True,
         ).stdout

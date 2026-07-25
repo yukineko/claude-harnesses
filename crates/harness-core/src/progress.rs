@@ -71,6 +71,28 @@ pub enum Liveness {
 /// is never mistaken for stalled.
 pub const DEFAULT_WINDOW_SECS: i64 = 90;
 
+/// Environment variable overriding the multi-sample window (seconds). Lets an
+/// operator tune how long a freeze must persist before a holder is judged
+/// Stalled (invariant: the window is configurable), and lets an end-to-end test
+/// collapse it so the reap path is exercised without a 90s wait. An unset,
+/// empty, or unparseable value keeps `DEFAULT_WINDOW_SECS`; a negative value is
+/// clamped to 0 (a 0-second window still requires ≥2 samples with a frozen
+/// fingerprint, so it never turns a single observation into Stalled).
+pub const WINDOW_ENV: &str = "HARNESS_PROGRESS_WINDOW_SECS";
+
+/// Resolve the effective window: the [`WINDOW_ENV`] override if it is a valid
+/// non-negative integer, else `default` (callers pass [`DEFAULT_WINDOW_SECS`]).
+#[must_use]
+pub fn window_secs(default: i64) -> i64 {
+    match std::env::var(WINDOW_ENV) {
+        Ok(v) => match v.trim().parse::<i64>() {
+            Ok(n) => n.max(0),
+            Err(_) => default,
+        },
+        Err(_) => default,
+    }
+}
+
 /// A deterministic digest over an ordered set of `(signal-name, opaque-value)`
 /// entries. Two fingerprints are equal iff every signal has the identical value
 /// in the identical order — so ANY signal advancing yields a different
@@ -105,6 +127,28 @@ impl ProgressFingerprint {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// Fold a caller's ordered signal observations into one
+/// `Determination<ProgressFingerprint>`. This is where the multi-signal
+/// **fail-closed** rule lives: if ANY signal is `Undetermined` (unreadable or
+/// absent) the whole fingerprint is `Undetermined` — a holder cannot be judged
+/// frozen while one of its progress signals could not even be read. Only when
+/// every signal is `Known` is a fingerprint minted (from the values in the given
+/// order). Both reap twins (backlog lock, condukt claim) call this so the rule
+/// is identical across them.
+pub fn fingerprint_from_signals(
+    signals: Vec<(&str, Determination<Vec<u8>>)>,
+) -> Determination<ProgressFingerprint> {
+    let mut entries: Vec<(&str, Vec<u8>)> = Vec::with_capacity(signals.len());
+    for (name, sig) in signals {
+        match sig {
+            Determination::Known(value) => entries.push((name, value)),
+            // One unreadable signal ⇒ cannot compute a comparable fingerprint.
+            Determination::Undetermined(why) => return Determination::Undetermined(why),
+        }
+    }
+    Determination::Known(ProgressFingerprint::from_entries(&entries))
 }
 
 /// The persisted per-target progress state: the last observed fingerprint, when
@@ -614,6 +658,22 @@ mod tests {
             DEFAULT_WINDOW_SECS,
         );
         assert!(matches!(v, Determination::Undetermined(_)));
+    }
+
+    #[test]
+    fn fingerprint_from_signals_is_undetermined_if_any_signal_is() {
+        // All Known ⇒ Known fingerprint.
+        let ok = fingerprint_from_signals(vec![
+            ("head", Determination::Known(b"aaa".to_vec())),
+            ("tx", Determination::Known(b"10".to_vec())),
+        ]);
+        assert!(matches!(ok, Determination::Known(_)));
+        // One Undetermined ⇒ whole thing Undetermined (fail closed).
+        let bad = fingerprint_from_signals(vec![
+            ("head", Determination::Known(b"aaa".to_vec())),
+            ("tx", Determination::undetermined("transcript absent")),
+        ]);
+        assert!(matches!(bad, Determination::Undetermined(_)));
     }
 
     // --- signal readers (real git / filesystem) ---------------------------

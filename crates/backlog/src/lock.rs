@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use harness_core::config::base_dir;
+use harness_core::progress::{self, Liveness};
+use harness_core::verdict::Determination;
 
 use crate::store::canonicalize_project;
 
@@ -74,6 +76,88 @@ fn is_stale(info: &LockInfo, now: i64) -> bool {
     now.saturating_sub(info.heartbeat_at) > LOCK_STALE_TTL_SECS
 }
 
+/// Directory holding this reaper's per-holder progress snapshots. Beside the
+/// locks (under the same base or the test override) so a test that overrides
+/// `lock_dir` gets an isolated progress store too.
+fn progress_store_dir(lock_dir: Option<&Path>) -> PathBuf {
+    match lock_dir {
+        Some(d) => d.join("progress"),
+        None => base_dir("backlog").join("progress"),
+    }
+}
+
+/// Judge whether the current holder of a **heartbeat-stale** lock is actually
+/// making progress, or has genuinely stalled. This is the correctness core of
+/// the reap fix: a stale heartbeat alone no longer authorizes a reap, because a
+/// live-but-quiet session (fresh git commits / a growing transcript, heartbeat
+/// merely lapsed) would be force-stolen. Signals: the project's git HEAD and the
+/// holder session's transcript growth. If either is unreadable/absent the
+/// fingerprint is `Undetermined`; a single sample is `Undetermined`; only a
+/// fingerprint frozen across the multi-sample window is `Known(Stalled)`.
+///
+/// A reaper reaps **iff** this returns `Known(Stalled)`; `Progressing` and
+/// `Undetermined` both protect the holder (never reap).
+fn holder_progress(
+    existing: &LockInfo,
+    now: i64,
+    lock_dir: Option<&Path>,
+) -> Determination<Liveness> {
+    #[cfg(test)]
+    if let Some(forced) = test_hook::forced_progress() {
+        return forced;
+    }
+    let head = progress::git_head_signal(Path::new(&existing.project));
+    let transcript = progress::session_transcript_signal(&existing.session_id);
+    let current =
+        progress::fingerprint_from_signals(vec![("git-head", head), ("transcript", transcript)]);
+    let key = format!(
+        "lock:{}:{}",
+        project_slug(&existing.project),
+        existing.session_id
+    );
+    progress::sample(
+        &progress_store_dir(lock_dir),
+        &key,
+        current,
+        now,
+        progress::window_secs(progress::DEFAULT_WINDOW_SECS),
+    )
+}
+
+/// `#[cfg(test)]` seam that lets a unit test force the progress verdict of a
+/// holder, so the reap-gate truth table (Stalled ⇒ reap; Progressing /
+/// Undetermined ⇒ protect) is exercised deterministically without standing up a
+/// real git repo + live transcript per case. Thread-local, so parallel cargo
+/// test threads never race, and compiled out of production entirely (the check
+/// in [`holder_progress`] is `#[cfg(test)]`).
+#[cfg(test)]
+mod test_hook {
+    use super::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static FORCED: RefCell<Option<Determination<Liveness>>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn forced_progress() -> Option<Determination<Liveness>> {
+        FORCED.with(|c| c.borrow().clone())
+    }
+
+    /// Run `body` with the holder progress verdict forced to `v`, restoring the
+    /// prior state afterward (RAII so a panic still clears it).
+    pub(super) fn with_forced<R>(v: Determination<Liveness>, body: impl FnOnce() -> R) -> R {
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                FORCED.with(|c| *c.borrow_mut() = None);
+            }
+        }
+        FORCED.with(|c| *c.borrow_mut() = Some(v));
+        let _g = Guard;
+        body()
+    }
+}
+
 fn locks_dir() -> PathBuf {
     base_dir("backlog").join("locks")
 }
@@ -138,9 +222,18 @@ fn now_unix() -> i64 {
 /// so two processes racing to create the same lock cannot both succeed — exactly
 /// one wins the create, the loser sees `AlreadyExists`. There is no longer a
 /// check-then-write window (the previous TOCTOU bug): the create itself is the
-/// check. Stale locks (whose heartbeat is older than the TTL) are reaped and
-/// the create is retried a bounded number of times, so a dead holder never
-/// blocks acquisition forever.
+/// check.
+///
+/// **Reaping is progress-gated, not heartbeat-gated.** A lock whose heartbeat is
+/// past the TTL is reaped ONLY when the holder's *progress* is confirmed stalled
+/// (see [`holder_progress`]): git HEAD and the holder's transcript frozen across
+/// the multi-sample window. A holder that is still progressing — or whose
+/// progress cannot yet be determined (a single sample, an unreadable signal) —
+/// is NOT reaped even with a stale heartbeat, because a stale heartbeat can
+/// accompany a live-but-quiet session. `--force` ([`acquire_forced_at`]) is the
+/// human override that reaps regardless. The retry loop is bounded, so a genuine
+/// dead holder (frozen signals) ages out across successive acquire attempts and
+/// never blocks acquisition forever.
 pub fn acquire_at(
     session_id: &str,
     pid: u32,
@@ -153,8 +246,9 @@ pub fn acquire_at(
 /// Force-acquire the lock, displacing even a *live* holder. This is the
 /// documented `--force` ("強制奪取") escape hatch: a human has decided the
 /// current holder — e.g. an abandoned session whose process is still alive —
-/// should be taken over. Unlike [`acquire_at`], which only reaps locks whose
-/// owner pid is gone, this reaps the existing lock regardless of liveness.
+/// should be taken over. Unlike [`acquire_at`], which reaps a stale lock only
+/// once the holder's progress is confirmed stalled, this reaps the existing lock
+/// regardless of liveness or progress.
 /// The publish step is still atomic, and the steal happens *inside* the bounded
 /// retry loop, so a competitor that re-grabs the lock in the race window is
 /// itself displaced (up to the attempt cap).
@@ -172,8 +266,9 @@ pub fn acquire_forced(session_id: &str, pid: u32, project: &str) -> Result<()> {
     acquire_forced_at(session_id, pid, project, None)
 }
 
-/// Shared acquire implementation. `force = true` steals a live holder's lock
-/// (the `--force` path); `force = false` only reaps confirmed-stale locks.
+/// Shared acquire implementation. `force = true` steals any holder's lock (the
+/// `--force` path); `force = false` reaps a stale-heartbeat lock ONLY when the
+/// holder's progress is confirmed stalled ([`holder_progress`]).
 fn acquire_inner(
     session_id: &str,
     pid: u32,
@@ -251,10 +346,41 @@ fn acquire_inner(
                             existing.project
                         );
                     }
-                    Some(_stale) => {
-                        // Confirmed stale (readable, heartbeat past TTL) — reap and retry.
-                        let _ = std::fs::remove_file(&path);
-                        continue;
+                    Some(existing) => {
+                        // Heartbeat is stale — but a stale heartbeat NO LONGER
+                        // authorizes a reap on its own. A live-but-quiet holder
+                        // (still committing / still growing its transcript, only
+                        // its heartbeat lapsed) would otherwise be force-stolen
+                        // (the memory scar this closes). Reap ONLY on confirmed
+                        // non-progress; Progressing / Undetermined protect the
+                        // holder. `--force` is the human override and still reaps.
+                        if force {
+                            let _ = std::fs::remove_file(&path);
+                            continue;
+                        }
+                        match holder_progress(&existing, now_unix(), lock_dir) {
+                            Determination::Known(Liveness::Stalled) => {
+                                // Confirmed stalled across the multi-sample window: reap and retry.
+                                let _ = std::fs::remove_file(&path);
+                                continue;
+                            }
+                            verdict => {
+                                anyhow::bail!(
+                                    "lock held by session {} (project {}): heartbeat is stale but \
+                                     progress is not confirmed stalled ({}); refusing to reap a \
+                                     possibly-live holder — use --force to override",
+                                    existing.session_id,
+                                    existing.project,
+                                    match verdict {
+                                        Determination::Known(Liveness::Progressing) =>
+                                            "still progressing".to_string(),
+                                        Determination::Undetermined(why) =>
+                                            format!("undetermined: {why}"),
+                                        Determination::Known(Liveness::Stalled) => unreachable!(),
+                                    }
+                                );
+                            }
+                        }
                     }
                     None => {
                         // Unreadable: a writer is mid-publish (impossible with
@@ -392,6 +518,135 @@ pub fn status_any() -> LockStatus {
     status_any_at(None)
 }
 
+/// One progress signal's readout for the [`ProbeReport`].
+#[derive(Debug, Clone, Serialize)]
+pub struct SignalReport {
+    /// Signal name (`git-head`, `transcript`).
+    pub name: String,
+    /// Whether the signal could be read this sample. An unreadable signal forces
+    /// the verdict to `undetermined` (never a reap).
+    pub readable: bool,
+    /// The opaque value when readable (a git SHA, a `size:mtime`), or the reason
+    /// it could not be read.
+    pub detail: String,
+}
+
+/// The `backlog lock probe` readout: the progress verdict for the current
+/// holder, the signals it was derived from, and the relevant ages. `verdict` is
+/// one of `none` (no holder), `progressing`, `stalled`, or `undetermined`;
+/// `reap_eligible` is true ONLY for `stalled` — the sole state in which a
+/// non-`--force` acquire will reap this holder.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProbeReport {
+    pub project: String,
+    pub verdict: String,
+    pub reap_eligible: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub holder_session: Option<String>,
+    /// Seconds since the holder's last heartbeat (`None` when there is no holder).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heartbeat_age_secs: Option<i64>,
+    /// Whether the heartbeat is past the stale TTL. NOTE: `heartbeat_stale &&
+    /// !reap_eligible` is the exact case the fix protects — stale heartbeat, but
+    /// progress not confirmed stalled, so the holder is NOT reaped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heartbeat_stale: Option<bool>,
+    pub signals: Vec<SignalReport>,
+}
+
+fn signal_report(name: &str, d: &Determination<Vec<u8>>) -> SignalReport {
+    match d {
+        Determination::Known(v) => SignalReport {
+            name: name.to_string(),
+            readable: true,
+            detail: String::from_utf8_lossy(v).to_string(),
+        },
+        Determination::Undetermined(why) => SignalReport {
+            name: name.to_string(),
+            readable: false,
+            detail: why.as_str().to_string(),
+        },
+    }
+}
+
+/// Probe the current holder's PROGRESS (not mere liveness) for `project`,
+/// advancing the multi-sample state machine by one step and reporting the
+/// verdict + the signals it was read from + ages. This is the observability
+/// window onto the reap decision: `reap_eligible == true` (verdict `stalled`)
+/// means a plain `acquire` would now reap this holder; `progressing` /
+/// `undetermined` mean it would be protected. Repeated probes are how a genuine
+/// stall accrues toward `stalled` across the window. `lock_dir` overrides the
+/// directory for tests.
+pub fn probe_at(project: &str, lock_dir: Option<&Path>) -> ProbeReport {
+    let now = now_unix();
+    let path = match lock_dir {
+        Some(d) => lock_path_for(d, project),
+        None => lock_path(project),
+    };
+    let info = match read_lock(&path) {
+        Some(info) => info,
+        None => {
+            let (verdict, reason) = if path.exists() {
+                (
+                    "undetermined",
+                    Some("lock file present but unreadable".to_string()),
+                )
+            } else {
+                ("none", Some("no lock held for this project".to_string()))
+            };
+            return ProbeReport {
+                project: project.to_string(),
+                verdict: verdict.to_string(),
+                reap_eligible: false,
+                reason,
+                holder_session: None,
+                heartbeat_age_secs: None,
+                heartbeat_stale: None,
+                signals: Vec::new(),
+            };
+        }
+    };
+
+    let head = progress::git_head_signal(Path::new(&info.project));
+    let transcript = progress::session_transcript_signal(&info.session_id);
+    let signals = vec![
+        signal_report("git-head", &head),
+        signal_report("transcript", &transcript),
+    ];
+    let current =
+        progress::fingerprint_from_signals(vec![("git-head", head), ("transcript", transcript)]);
+    let key = format!("lock:{}:{}", project_slug(&info.project), info.session_id);
+    let verdict = progress::sample(
+        &progress_store_dir(lock_dir),
+        &key,
+        current,
+        now,
+        progress::window_secs(progress::DEFAULT_WINDOW_SECS),
+    );
+    let (v, reason, reap) = match &verdict {
+        Determination::Known(Liveness::Progressing) => ("progressing", None, false),
+        Determination::Known(Liveness::Stalled) => ("stalled", None, true),
+        Determination::Undetermined(why) => ("undetermined", Some(why.as_str().to_string()), false),
+    };
+    ProbeReport {
+        project: project.to_string(),
+        verdict: v.to_string(),
+        reap_eligible: reap,
+        reason,
+        holder_session: Some(info.session_id.clone()),
+        heartbeat_age_secs: Some(now.saturating_sub(info.heartbeat_at)),
+        heartbeat_stale: Some(is_stale(&info, now)),
+        signals,
+    }
+}
+
+/// Probe using the default lock path. See [`probe_at`].
+pub fn probe(project: &str) -> ProbeReport {
+    probe_at(project, None)
+}
+
 /// Refresh the heartbeat of the current lock, but only if it is held by
 /// `session_id` — a session must never resurrect or extend a lock it doesn't
 /// hold. Fail-soft: if there is no lock, or it is held by a different
@@ -476,8 +731,15 @@ mod tests {
         }
     }
 
+    // NEW CONTRACT: a stale heartbeat alone no longer reaps. A stale-heartbeat
+    // lock is reaped by a plain acquire ONLY when the holder's progress is
+    // CONFIRMED stalled (git HEAD + transcript frozen across the window). The
+    // old test asserted heartbeat-stale ⇒ reap unconditionally; that premise is
+    // exactly the fail-open this change closes (a live-but-quiet holder would be
+    // force-stolen). Here we force the confirmed-stalled verdict so the reap is
+    // authorized, and assert the takeover still works.
     #[test]
-    fn stale_heartbeat_lock_is_reaped_and_stealable() {
+    fn stale_heartbeat_lock_with_confirmed_stalled_progress_is_reaped() {
         let dir = tmp();
         let d = dir.path();
 
@@ -500,10 +762,105 @@ mod tests {
         }
 
         let pid = std::process::id();
-        acquire_at("new-sess", pid, "proj", Some(d)).expect("should succeed over stale lock");
+        test_hook::with_forced(Determination::Known(Liveness::Stalled), || {
+            acquire_at("new-sess", pid, "proj", Some(d))
+                .expect("a confirmed-stalled holder must be reapable")
+        });
         match status_at("proj", Some(d)) {
             LockStatus::Active(i) => assert_eq!(i.session_id, "new-sess"),
             other => panic!("expected Active, got {other:?}"),
+        }
+    }
+
+    // The protective half of the new contract: a stale heartbeat whose holder is
+    // still PROGRESSING must NOT be reaped by a plain acquire (this is the memory
+    // scar — force-stealing a live session). Undetermined is likewise protective.
+    #[test]
+    fn stale_heartbeat_but_progressing_holder_is_not_reaped() {
+        let dir = tmp();
+        let d = dir.path();
+        let info = LockInfo {
+            session_id: "live-but-quiet".to_string(),
+            pid: 424_242,
+            project: "proj".to_string(),
+            acquired_at: 0,
+            heartbeat_at: 0, // stale heartbeat...
+        };
+        std::fs::write(
+            lock_path_for(d, "proj"),
+            serde_json::to_string(&info).unwrap(),
+        )
+        .unwrap();
+
+        let pid = std::process::id();
+        // ...but progress is confirmed Progressing ⇒ acquire must REFUSE.
+        let res = test_hook::with_forced(Determination::Known(Liveness::Progressing), || {
+            acquire_at("usurper", pid, "proj", Some(d))
+        });
+        assert!(
+            res.is_err(),
+            "a progressing holder must never be reaped on a stale heartbeat"
+        );
+        match status_at("proj", Some(d)) {
+            LockStatus::Stale(i) => assert_eq!(i.session_id, "live-but-quiet"),
+            other => panic!("holder must remain, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stale_heartbeat_with_undetermined_progress_is_not_reaped() {
+        let dir = tmp();
+        let d = dir.path();
+        let info = LockInfo {
+            session_id: "unknowable".to_string(),
+            pid: 1,
+            project: "proj".to_string(),
+            acquired_at: 0,
+            heartbeat_at: 0,
+        };
+        std::fs::write(
+            lock_path_for(d, "proj"),
+            serde_json::to_string(&info).unwrap(),
+        )
+        .unwrap();
+
+        let pid = std::process::id();
+        let res =
+            test_hook::with_forced(Determination::undetermined("cannot read signals"), || {
+                acquire_at("usurper", pid, "proj", Some(d))
+            });
+        assert!(
+            res.is_err(),
+            "undetermined progress must fail closed: never reap"
+        );
+    }
+
+    // --force still reaps a stale holder regardless of progress verdict (human
+    // override), even when progress would otherwise protect it.
+    #[test]
+    fn force_reaps_stale_holder_even_when_progressing() {
+        let dir = tmp();
+        let d = dir.path();
+        let info = LockInfo {
+            session_id: "incumbent".to_string(),
+            pid: 1,
+            project: "proj".to_string(),
+            acquired_at: 0,
+            heartbeat_at: 0,
+        };
+        std::fs::write(
+            lock_path_for(d, "proj"),
+            serde_json::to_string(&info).unwrap(),
+        )
+        .unwrap();
+        let pid = std::process::id();
+        test_hook::with_forced(Determination::Known(Liveness::Progressing), || {
+            acquire_forced_at("usurper", pid, "proj", Some(d))
+                .expect("--force overrides progress protection")
+        });
+        match status_at("proj", Some(d)) {
+            LockStatus::Active(i) => assert_eq!(i.session_id, "usurper"),
+            other => panic!("force must take over, got {other:?}"),
         }
     }
 
@@ -656,7 +1013,10 @@ mod tests {
         .unwrap();
 
         let pid = std::process::id();
-        acquire_at("new-sess", pid, "proj", Some(d)).expect("should succeed over stale lock");
+        // Confirmed-stalled holder ⇒ reap authorized (new contract).
+        test_hook::with_forced(Determination::Known(Liveness::Stalled), || {
+            acquire_at("new-sess", pid, "proj", Some(d)).expect("should succeed over stalled lock")
+        });
 
         match status_at("proj", Some(d)) {
             LockStatus::Active(i) => assert_eq!(i.session_id, "new-sess"),
@@ -707,7 +1067,10 @@ mod tests {
         .unwrap();
 
         let pid = std::process::id();
-        acquire_at("live", pid, "proj", Some(d)).expect("acquire must steal a stale lock");
+        // Confirmed-stalled holder ⇒ reap authorized (new contract).
+        test_hook::with_forced(Determination::Known(Liveness::Stalled), || {
+            acquire_at("live", pid, "proj", Some(d)).expect("acquire must steal a stalled lock")
+        });
 
         match status_at("proj", Some(d)) {
             LockStatus::Active(i) => {
@@ -814,8 +1177,11 @@ mod tests {
             .unwrap();
 
             let our_pid = std::process::id();
-            acquire_at("us", our_pid, "our-proj", Some(d))
-                .expect("acquire must succeed over a stale pre-existing lock file");
+            // Confirmed-stalled holder ⇒ reap authorized (new contract).
+            test_hook::with_forced(Determination::Known(Liveness::Stalled), || {
+                acquire_at("us", our_pid, "our-proj", Some(d))
+                    .expect("acquire must succeed over a stalled pre-existing lock file")
+            });
             match status_at("our-proj", Some(d)) {
                 LockStatus::Active(i) => assert_eq!(i.session_id, "us"),
                 other => panic!("expected our lock active, got {other:?}"),
@@ -969,5 +1335,48 @@ mod tests {
             LockStatus::Active(i) => assert_eq!(i.session_id, "live-sess"),
             other => panic!("expected the Active (not Stale) lock to win, got {other:?}"),
         }
+    }
+
+    // --- probe -------------------------------------------------------------
+
+    #[test]
+    fn probe_reports_none_when_no_lock() {
+        let dir = tmp();
+        let d = dir.path();
+        let r = probe_at("proj", Some(d));
+        assert_eq!(r.verdict, "none");
+        assert!(!r.reap_eligible);
+        assert!(r.holder_session.is_none());
+        assert!(r.signals.is_empty());
+    }
+
+    // A held lock in a bare temp dir (not a git repo, no discoverable
+    // transcript) has both signals UNREADABLE ⇒ the verdict is `undetermined`
+    // and it is NOT reap-eligible — a probe must never call a holder reapable
+    // off signals it could not even read.
+    #[test]
+    fn probe_of_holder_with_unreadable_signals_is_undetermined_not_reapable() {
+        let dir = tmp();
+        let d = dir.path();
+        let info = LockInfo {
+            session_id: "held".to_string(),
+            pid: 1,
+            project: d.join("not-a-repo").to_string_lossy().to_string(),
+            acquired_at: 0,
+            heartbeat_at: 0,
+        };
+        std::fs::write(
+            lock_path_for(d, "proj"),
+            serde_json::to_string(&info).unwrap(),
+        )
+        .unwrap();
+        let r = probe_at("proj", Some(d));
+        assert_eq!(r.verdict, "undetermined", "got {r:?}");
+        assert!(!r.reap_eligible, "undetermined must never be reap-eligible");
+        assert_eq!(r.holder_session.as_deref(), Some("held"));
+        assert_eq!(r.heartbeat_stale, Some(true));
+        // Both signals reported as unreadable.
+        assert!(r.signals.iter().all(|s| !s.readable), "got {:?}", r.signals);
+        assert_eq!(r.signals.len(), 2);
     }
 }

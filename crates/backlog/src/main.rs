@@ -277,6 +277,22 @@ enum LockAction {
         #[arg(long)]
         project: String,
     },
+
+    /// Probe the current holder's PROGRESS (git HEAD + transcript growth), not
+    /// mere liveness, and print the verdict + signals + ages. `reap_eligible`
+    /// (verdict `stalled`) is the ONLY state in which a plain `acquire` will
+    /// reap this holder; `progressing`/`undetermined` protect it. Each probe
+    /// advances the multi-sample state machine, so a genuine stall accrues to
+    /// `stalled` across repeated probes over the window.
+    Probe {
+        /// Project path (must match the project passed to `acquire`)
+        #[arg(long)]
+        project: String,
+
+        /// Emit the full report as JSON (default: a one-line human summary).
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() {
@@ -547,6 +563,29 @@ fn run(cli: Cli) -> Result<()> {
                 match liveness::status_value(status, presence) {
                     None => println!("none"),
                     Some(v) => println!("{}", serde_json::to_string_pretty(&v)?),
+                }
+            }
+            LockAction::Probe { project, json } => {
+                let report = lock::probe(&project);
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    let holder = report.holder_session.as_deref().unwrap_or("(none)");
+                    println!(
+                        "progress: {} (reap_eligible={}) holder={} heartbeat_stale={:?}",
+                        report.verdict, report.reap_eligible, holder, report.heartbeat_stale
+                    );
+                    if let Some(reason) = &report.reason {
+                        println!("  reason: {reason}");
+                    }
+                    for s in &report.signals {
+                        println!(
+                            "  signal {}: {} ({})",
+                            s.name,
+                            if s.readable { "readable" } else { "UNREADABLE" },
+                            s.detail
+                        );
+                    }
                 }
             }
             LockAction::Heartbeat {

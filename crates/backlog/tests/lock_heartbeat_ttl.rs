@@ -6,13 +6,19 @@
 //! `heartbeat_at` field directly to a timestamp older than the TTL, simulating
 //! the passage of time.
 //!
-//! Two scenarios:
+//! Scenarios:
 //! 1. The lock's owning session calls `lock heartbeat`, which must refresh
 //!    `heartbeat_at` back to "now" and keep the lock non-stale (a competing
 //!    session's acquire attempt must still fail).
-//! 2. Without a heartbeat call, a lock file whose `heartbeat_at` was rewritten
-//!    past the TTL must be judged stale and be reapable by a different
-//!    session's `lock acquire`.
+//! 2. NEW CONTRACT (progress-gated reap): a TTL-exceeded heartbeat is no longer
+//!    sufficient to reap. When the holder's progress cannot be confirmed stalled
+//!    (signals unreadable ⇒ Undetermined), a plain acquire must REFUSE; only
+//!    `--force` reaps. This is the protective fix — a stale heartbeat can
+//!    accompany a live-but-quiet holder.
+//! 3. The genuine reap path: with a real git-repo project + a discoverable
+//!    transcript both FROZEN, and the multi-sample window collapsed via
+//!    `HARNESS_PROGRESS_WINDOW_SECS=0`, the second acquire attempt confirms the
+//!    stall and reaps.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -196,11 +202,17 @@ fn heartbeat_refreshes_a_ttl_exceeded_lock_and_keeps_it_from_being_stolen() {
     assert_eq!(still_owner["session_id"], "owner");
 }
 
+// NEW CONTRACT (progress-gated reap): a TTL-exceeded heartbeat is NO LONGER
+// sufficient to reap. When the holder's PROGRESS cannot be confirmed stalled —
+// here `/p` is not a git repo and the holder has no discoverable transcript, so
+// both progress signals are Undetermined — a plain acquire by a different
+// session must REFUSE (protecting a possibly-live holder whose heartbeat merely
+// lapsed). Only `--force` (the human override) reaps it. This is the E2E form of
+// the memory scar this change closes.
 #[test]
-fn without_a_heartbeat_a_ttl_exceeded_lock_is_reaped_by_a_different_session() {
-    let home = temp_home("reap");
+fn ttl_exceeded_lock_with_unconfirmable_progress_is_not_reaped_but_force_wins() {
+    let home = temp_home("noreap");
 
-    // 1. Acquire the lock for "owner".
     let (code, stdout) = run(
         &[
             "lock",
@@ -214,11 +226,9 @@ fn without_a_heartbeat_a_ttl_exceeded_lock_is_reaped_by_a_different_session() {
     );
     assert_eq!(code, 0, "initial acquire must succeed, got: {stdout}");
 
-    // 2. Simulate 30+ minutes passing without any heartbeat call: rewrite
-    //    heartbeat_at on disk to be older than LOCK_STALE_TTL_SECS.
+    // Simulate 30+ minutes passing without any heartbeat.
     backdate_heartbeat(&home, LOCK_STALE_TTL_SECS + 60);
 
-    // Sanity: status must report stale.
     let (code, stdout) = run(&["lock", "status", "--project", "/p"], &home);
     assert_eq!(code, 0);
     assert!(
@@ -226,11 +236,8 @@ fn without_a_heartbeat_a_ttl_exceeded_lock_is_reaped_by_a_different_session() {
         "lock with a TTL-exceeded heartbeat must report stale, got: {stdout}"
     );
 
-    // 3. No heartbeat call is made here (contrast with the other test). A
-    //    different session's acquire for the SAME project must reap the
-    //    stale lock and win it. (A different project would trivially
-    //    succeed now that locks are per-project, regardless of staleness —
-    //    that's not what this is testing.)
+    // A plain acquire by a different session must FAIL: progress is
+    // Undetermined (signals unreadable), which is protective, not a reap.
     let (code, stdout) = run(
         &[
             "lock",
@@ -242,19 +249,136 @@ fn without_a_heartbeat_a_ttl_exceeded_lock_is_reaped_by_a_different_session() {
         ],
         &home,
     );
+    assert_ne!(
+        code, 0,
+        "a stale-heartbeat holder with unconfirmable progress must NOT be reaped, got: {stdout}"
+    );
+    let held = read_lock_json(&home);
+    assert_eq!(held["session_id"], "owner", "holder must be unchanged");
+
+    // --force is the escape hatch and must take it over.
+    let (code, stdout) = run(
+        &[
+            "lock",
+            "acquire",
+            "--session-id",
+            "rescuer",
+            "--project",
+            "/p",
+            "--force",
+        ],
+        &home,
+    );
     assert_eq!(
         code, 0,
-        "acquire by a different session must succeed over a TTL-exceeded (stale) lock, got: {stdout}"
+        "--force must reap regardless of progress, got: {stdout}"
     );
+    let now_held = read_lock_json(&home);
+    assert_eq!(now_held["session_id"], "rescuer");
+}
 
-    let (code, stdout) = run(&["lock", "status", "--project", "/p"], &home);
-    assert_eq!(code, 0);
-    assert!(
-        !stdout.contains("stale"),
-        "status must not report stale immediately after a fresh acquire, got: {stdout}"
+/// Set up a fake Claude transcript for `session` under `home/.claude/projects`
+/// so `session_transcript_signal` finds a (frozen) transcript. Returns the file.
+fn seed_transcript(home: &Path, session: &str) -> PathBuf {
+    let dir = home.join(".claude").join("projects").join("-fake-cwd");
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join(format!("{session}.jsonl"));
+    std::fs::write(&f, "{\"type\":\"user\"}\n").unwrap();
+    f
+}
+
+/// `git init` a project dir with one commit, so `git_head_signal` reads a real
+/// (and, absent further commits, frozen) HEAD.
+fn git_repo(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "backlog-progress-repo-{tag}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(dir.join("a.txt"), "1").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "one"]);
+    dir
+}
+
+// The GENUINE reap path E2E: a real git-repo project + a discoverable transcript
+// that both stay FROZEN. With the multi-sample window collapsed to 0 (via
+// HARNESS_PROGRESS_WINDOW_SECS, the configurable knob), the first acquire attempt
+// anchors the fingerprint (Undetermined ⇒ no reap) and the second — still frozen,
+// window elapsed ⇒ confirmed Stalled — reaps and wins.
+#[test]
+fn frozen_signals_across_the_window_are_confirmed_stalled_and_reaped() {
+    let home = temp_home("stalled-reap");
+    let repo = git_repo("stalled");
+    let project = repo.to_string_lossy().to_string();
+    seed_transcript(&home, "owner");
+
+    let acquire = |session: &str| -> (i32, String) {
+        let bin = env!("CARGO_BIN_EXE_backlog");
+        let out = Command::new(bin)
+            .args([
+                "lock",
+                "acquire",
+                "--session-id",
+                session,
+                "--project",
+                &project,
+            ])
+            .env("HOME", &home)
+            .env("HARNESS_PROGRESS_WINDOW_SECS", "0") // collapse the window
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+            .wait_with_output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
+    };
+
+    assert_eq!(acquire("owner").0, 0, "owner acquires");
+    backdate_heartbeat(&home, LOCK_STALE_TTL_SECS + 60);
+
+    // Sample 1: first observation of the frozen fingerprint ⇒ Undetermined ⇒
+    // the rescuer must NOT reap yet (protective on the first sample).
+    let (code1, out1) = acquire("rescuer");
+    assert_ne!(
+        code1, 0,
+        "first attempt must not reap (single sample), got: {out1}"
     );
-    assert!(
-        stdout.contains("\"session_id\": \"rescuer\""),
-        "the reaping session must now hold the lock, got: {stdout}"
+    assert_eq!(read_lock_json(&home)["session_id"], "owner");
+
+    // Sample 2: still frozen, window (0s) elapsed ⇒ confirmed Stalled ⇒ reap.
+    let (code2, out2) = acquire("rescuer");
+    assert_eq!(
+        code2, 0,
+        "second attempt over a confirmed-stalled holder must reap, got: {out2}"
     );
+    assert_eq!(read_lock_json(&home)["session_id"], "rescuer");
+
+    let _ = std::fs::remove_dir_all(&repo);
 }

@@ -286,9 +286,16 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "sha512sum",
     "shasum",
     "cksum",
-    // text transforms that write only to stdout
-    "sort",
-    "uniq",
+    // text transforms that write only to stdout.
+    //
+    // Round 4 (adversarial verifier): `sort` and `uniq` were HERE and are the
+    // reason this list is not a set of "commands that only READ their operands"
+    // — they both have OUTPUT-FILE forms (`sort -o FILE`, `uniq [IN [OUT]]`)
+    // that TRUNCATE the named file (proven: each zeroed a real file). A command
+    // that can write must not be silently exempted by a read-only rule, so they
+    // are removed from this list and given dedicated arms (`analyze_sort`,
+    // `analyze_uniq`) that Deny the output-onto-a-protected-path forms while
+    // leaving pure reads Allow. The remaining entries write ONLY to stdout.
     "cut",
     "tr",
     "fold",
@@ -388,6 +395,88 @@ fn analyze_unlink_rmdir(cmd: &str, rest: &[&str]) -> Decision {
             return deny;
         }
         if let Some(deny) = protected_glob_deny(&format!("{cmd} operand"), op) {
+            return deny;
+        }
+    }
+    Decision::Allow
+}
+
+/// The OUTPUT file of a `sort` command (`-o FILE`, `-oFILE`, `--output=FILE`,
+/// `--output FILE`, or a clustered `-bo FILE`), if one is present.
+///
+/// Round 4. `sort` reads by default and writes ONLY when told to via `-o`; the
+/// output flag is the entire hazard, so it is what this locates. `o` is the only
+/// short flag `sort` spells with the letter `o`, so its presence in a short-flag
+/// cluster unambiguously means "output", and it consumes a value (attached after
+/// the `o`, else the next token).
+fn sort_output_file<'a>(rest: &[&'a str]) -> Option<&'a str> {
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        if let Some(v) = t.strip_prefix("--output=") {
+            return Some(v);
+        }
+        if t == "--output" {
+            return rest.get(i + 1).copied();
+        }
+        if is_short_flag(t) {
+            if let Some(opos) = t.find('o') {
+                let after = &t[opos + 1..];
+                if !after.is_empty() {
+                    return Some(after);
+                }
+                return rest.get(i + 1).copied();
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// `sort`: Deny only the OUTPUT-onto-a-protected-path form.
+///
+/// Round 4 (adversarial verifier). `sort -o .githooks/pre-commit /dev/null` was
+/// ALLOW because `sort` sat in `READ_ONLY_COMMANDS` and the unknown-verb rule
+/// exempts that list without inspecting operands — but `sort -o FILE` writes
+/// FILE in place (proven: truncated a real file to 0 bytes). A protected output
+/// target is a positively recognised write hazard, exactly like a `cp`/`mv`
+/// destination, so it is a Deny. Pure reads (`sort .githooks/pre-commit`, no
+/// `-o`) and non-protected outputs stay Allow — `sort`'s read semantics are
+/// known, so there is no need to Ask.
+fn analyze_sort(rest: &[&str]) -> Decision {
+    match sort_output_file(rest) {
+        Some(out) => protected_path_deny("sort -o", out)
+            .or_else(|| protected_glob_deny("sort -o", out))
+            .unwrap_or(Decision::Allow),
+        None => Decision::Allow,
+    }
+}
+
+/// Separate-form value options of `uniq` (`-f N`, `-s N`, `-w N` and their long
+/// spellings). Listed so [`positional_operands`] does not read the numeric VALUE
+/// of one of these as a file operand.
+const UNIQ_VALUE_FLAGS: &[&str] = &[
+    "-f",
+    "--skip-fields",
+    "-s",
+    "--skip-chars",
+    "-w",
+    "--check-chars",
+];
+
+/// `uniq`: Deny only the OUTPUT-operand-onto-a-protected-path form.
+///
+/// Round 4 (adversarial verifier). `uniq /dev/null .githooks/pre-commit` was
+/// ALLOW for the same reason as `sort` — but `uniq [INPUT [OUTPUT]]` writes its
+/// SECOND positional operand (proven: truncated a real file). Only the 2nd
+/// operand is a write target; the 1st (INPUT) is read, so a protected INPUT
+/// stays Allow and only a protected OUTPUT is a Deny.
+fn analyze_uniq(rest: &[&str]) -> Decision {
+    let operands = positional_operands(rest, UNIQ_VALUE_FLAGS);
+    if let Some(out) = operands.get(1) {
+        if let Some(deny) = protected_path_deny("uniq output", out)
+            .or_else(|| protected_glob_deny("uniq output", out))
+        {
             return deny;
         }
     }
@@ -2023,6 +2112,12 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
         // Round 2: the single-file and empty-directory twins of `rm`, which had
         // no arm at all. See `analyze_unlink_rmdir`.
         "unlink" | "rmdir" => analyze_unlink_rmdir(cmd, rest),
+        // Round 4: `sort`/`uniq` were miscategorised as read-only. Both have
+        // output-FILE forms that truncate the named file, so they get dedicated
+        // arms that Deny the write-onto-a-protected-path shape (pure reads stay
+        // Allow). See `analyze_sort` / `analyze_uniq`.
+        "sort" => analyze_sort(rest),
+        "uniq" => analyze_uniq(rest),
         "sed" => analyze_sed(rest),
         "find" => analyze_find(rest, depth),
         "xargs" => analyze_xargs(rest, depth),
@@ -2048,8 +2143,19 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
                 // see it.
                 let (mode, targets) = chmod_mode_and_targets(rest);
                 // A chmod whose mode could not be located is not a harmless
-                // chmod; treat it as removing executability (restrictive).
-                if mode.map(mode_removes_exec).unwrap_or(true) {
+                // chmod; treat it as disarming (restrictive).
+                //
+                // Round 4: EXEC is not the only bit a hook needs. A shell script
+                // hook is run by its shebang, and the kernel/interpreter must
+                // READ the file to execute it — proven on this host:
+                // `chmod -r hook.sh` (mode -wx--x--x) makes `./hook.sh` fail
+                // "Permission denied" (exit 126) despite the exec bit. So a mode
+                // that removes EITHER read or exec from the relevant class
+                // disarms the hook, and both gate the protected-target deny.
+                if mode
+                    .map(|m| mode_removes_exec(m) || mode_removes_read(m))
+                    .unwrap_or(true)
+                {
                     // Round 2: the wildcard case. `chmod 000 .claude/*` was
                     // ALLOW because `protected_disarm_deny` was handed a token
                     // containing `*`, which cannot match a literal path glob.
@@ -2274,10 +2380,70 @@ fn mode_removes_exec(mode: &str) -> bool {
     removes
 }
 
+/// True when `mode` takes the READ bit AWAY from the file's owner.
+///
+/// Round 4 (adversarial verifier). The twin of [`mode_removes_exec`]: a shell
+/// script hook is executed via its shebang, so the interpreter must READ the
+/// file — clearing read disarms the hook exactly as clearing exec does.
+/// `chmod -r hook.sh` (mode `-wx--x--x`) makes `./hook.sh` fail exit 126 on this
+/// host despite the exec bit still being set, and `chmod 311 hook.sh` (owner
+/// triad `3` = `-wx`, read bit 4 clear) is the octal spelling of the same.
+///
+/// The structure mirrors [`mode_removes_exec`] so the two stay in lockstep: the
+/// OWNER read bit (value 4) for octal modes, and a symbolic clause that
+/// subtracts `r` or a `=` replacement that omits it. A mode this function cannot
+/// parse returns `true` — the restrictive side per CLAUDE.md §3, and only ever
+/// consulted for a target already known to be protected.
+fn mode_removes_read(mode: &str) -> bool {
+    if !mode.is_empty() && mode.chars().all(|c| c.is_ascii_digit()) {
+        let digits: Vec<u32> = mode.chars().filter_map(|c| c.to_digit(8)).collect();
+        // An `8`/`9` is not octal at all — unparseable, so restrictive.
+        if digits.len() != mode.len() {
+            return true;
+        }
+        return match digits.len() {
+            // `755` / `0755`: the owner triad is the third digit from the end;
+            // the read bit is value 4.
+            3 | 4 => digits[digits.len() - 3] & 4 == 0,
+            _ => true,
+        };
+    }
+    // Symbolic, comma-separated clauses.
+    let mut removes = false;
+    for clause in mode.split(',') {
+        let Some(op_pos) = clause.rfind(['+', '-', '=']) else {
+            return true;
+        };
+        let op = clause.as_bytes()[op_pos];
+        let perms = &clause[op_pos + 1..];
+        let grants_read = perms.contains('r');
+        match op {
+            // `-r`, `a-r`, `u-r`: subtracting the read bit.
+            b'-' if grants_read => removes = true,
+            // `a=x`: `=` replaces the whole set, so a set without `r` clears it.
+            b'=' if !grants_read => removes = true,
+            b'+' | b'-' | b'=' => {}
+            _ => return true,
+        }
+    }
+    removes
+}
+
 fn analyze_rm(rest: &[&str]) -> Decision {
     let recursive = rest
         .iter()
         .any(|t| (is_short_flag(t) && (t.contains('r') || t.contains('R'))) || *t == "--recursive");
+    // Round 4 (adversarial verifier): `-d`/`--dir` removes an EMPTY directory.
+    // It is NOT recursive, so it never triggered the container check below, and
+    // `rm -d .claude/hooks` / `rm --dir .git/hooks` / `rm -d .claude` were ALLOW.
+    // `-d` only succeeds when the directory is empty, but that is a real state
+    // (fresh scaffold, inline-hook repos, a dir emptied by other means), and
+    // removing the container takes every protected path it would hold with it.
+    // `d` is the only rm short flag spelled with that letter, so a cluster
+    // containing it unambiguously means `--dir`.
+    let dir_flag = rest
+        .iter()
+        .any(|t| (is_short_flag(t) && t.contains('d')) || *t == "--dir");
     let operands: Vec<&str> = rest
         .iter()
         .filter(|t| !t.starts_with('-'))
@@ -2314,11 +2480,13 @@ fn analyze_rm(rest: &[&str]) -> Decision {
             return deny;
         }
         // The CONTAINER case: `.claude` matches no protected glob but is where
-        // the protected files live. Only asked for a recursive rm — a
-        // non-recursive `rm <dir>` fails outright, so there is nothing to
-        // resolve restrictively.
-        if recursive {
-            if let Some(deny) = protected_tree_deny("recursive rm", operand) {
+        // the protected files live. Asked for a recursive rm (`-r`) OR a
+        // directory rm (`-d`/`--dir`) — both delete the directory itself. A
+        // plain non-recursive `rm <dir>` (neither flag) fails outright, so there
+        // is nothing to resolve restrictively for it.
+        if recursive || dir_flag {
+            let action = if recursive { "recursive rm" } else { "rm -d" };
+            if let Some(deny) = protected_tree_deny(action, operand) {
                 return deny;
             }
         }

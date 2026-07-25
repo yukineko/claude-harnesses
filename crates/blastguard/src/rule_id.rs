@@ -389,6 +389,30 @@ mod tests {
                 "Bash",
                 json!({ "command": "find . -name pre-commit -exec mv {} /tmp/ ;" }),
             ),
+            // Round 4 (adversarial verifier). Same completeness obligation:
+            // each new deny/ask path is exercised here, or it would classify as
+            // "unknown" in the violation store while this test stayed green.
+            // `sort -o`/`uniq` output onto a protected path is a write to it,
+            // so it reaches the shared protected-path deny.
+            (
+                "Bash",
+                json!({ "command": "sort -o .githooks/pre-commit /dev/null" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "uniq /dev/null .claude/settings.json" }),
+            ),
+            // chmod removing the READ bit (not just exec) disarms a shell hook.
+            (
+                "Bash",
+                json!({ "command": "chmod -r .githooks/pre-commit" }),
+            ),
+            (
+                "Bash",
+                json!({ "command": "chmod 311 .githooks/pre-commit" }),
+            ),
+            // rm -d/--dir on a protected container.
+            ("Bash", json!({ "command": "rm -d .claude" })),
         ];
 
         for (tool, input) in cases {

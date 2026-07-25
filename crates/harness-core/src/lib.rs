@@ -43,6 +43,7 @@ pub mod ledger;
 pub mod lessons;
 pub mod metrics;
 pub mod pricing;
+pub mod progress;
 pub mod projkey;
 pub mod retrieval;
 pub mod scorer;

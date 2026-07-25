@@ -160,9 +160,27 @@ pub struct Panel {
     /// in input order. Empty when nobody refuted. Surfaces *why* the panel
     /// blocked/escalated so the human/skill sees the concrete objections.
     pub refutations: Vec<String>,
+    /// `expected - n` (never negative — `expected` is clamped up to `n` first),
+    /// the number of ballots that were supposed to arrive but never did. A
+    /// skeptic that was spawned and never returned a ballot is a *silent* vote
+    /// loss, indistinguishable at the tally from a skeptic that would have
+    /// refuted. `missing > 0` alone is enough to force `escalate` (see
+    /// [`adjudicate`] rule 2.5) regardless of what the received ballots say —
+    /// counting a vote that never happened as a non-objection is exactly the
+    /// "could not determine" -> "clean" mapping CLAUDE.md forbids.
+    pub missing: usize,
 }
 
 /// Adjudicate N skeptic ballots into a fail-closed gate decision.
+///
+/// `expected` is how many skeptics were actually spawned/supposed to vote.
+/// Pass `votes.len()` when the caller has no such count (the pre-existing,
+/// backward-compatible behavior: missing-vote detection is then a no-op,
+/// since `expected == n` always). Passing the true spawn count lets a
+/// skeptic that was spawned but never returned a ballot (a *silent* vote
+/// loss — timeout, crash, dropped subagent) be told apart from a skeptic
+/// that voted `Pass`; the two are NOT the same thing, even though a naive
+/// tally over only the ballots that arrived cannot distinguish them.
 ///
 /// Deterministic and order-independent. The rules, in order:
 ///   1. **Too few effective skeptics** (`effective < min_voters`) → **block**.
@@ -170,11 +188,20 @@ pub struct Panel {
 ///      not get the benefit of the doubt.
 ///   2. **Majority (or configured ratio) refute** (`refutes/effective >=
 ///      block_ratio`, inclusive so a tie blocks) → **block**.
-///   3. **Minority dissent** (some refutes, below the block ratio) →
+///   3. **Votes went missing** (`votes.len() < expected`) → **escalate**,
+///      unconditionally, even if the received ballots unanimously pass and
+///      clear `min_voters`. A ballot that never arrived is indistinguishable
+///      from one that would have refuted, so it cannot be silently counted as
+///      a non-objection (CLAUDE.md §3/§6: "could not determine" must resolve
+///      to block/escalate, never to clean).
+///   4. **Minority dissent** (some refutes, below the block ratio) →
 ///      **escalate** when `escalate_on_dissent`, else fall through to pass.
-///   4. Otherwise (no refutes, enough voters) → **pass**.
-pub fn adjudicate(votes: &[Vote], policy: &Policy) -> Panel {
+///   5. Otherwise (no refutes, enough voters, no missing votes) → **pass**.
+pub fn adjudicate(votes: &[Vote], policy: &Policy, expected: usize) -> Panel {
     let n = votes.len();
+    // Never negative: a caller-supplied `expected` smaller than what actually
+    // arrived (e.g. the default `votes.len()`) means nothing is missing.
+    let missing = expected.saturating_sub(n);
     let refutes = votes.iter().filter(|v| v.ballot == Ballot::Refute).count();
     let passes = votes.iter().filter(|v| v.ballot == Ballot::Pass).count();
     let abstains = votes.iter().filter(|v| v.ballot == Ballot::Abstain).count();
@@ -210,6 +237,7 @@ pub fn adjudicate(votes: &[Vote], policy: &Policy) -> Panel {
         block_ratio: policy.block_ratio,
         reason,
         refutations: refutations.clone(),
+        missing,
     };
 
     // Rule 1 — fail closed: not enough independent skeptics actually voted.
@@ -241,7 +269,22 @@ pub fn adjudicate(votes: &[Vote], policy: &Policy) -> Panel {
         );
     }
 
-    // Rule 3 — minority dissent: below the block ratio but not unanimous.
+    // Rule 3 — fail closed: fewer ballots arrived than were expected. A
+    // silent/missing skeptic must not be counted as a non-objection, so this
+    // fires even when the ballots that DID arrive are unanimous passes that
+    // would otherwise clear straight to "pass" at rule 5.
+    if missing > 0 {
+        return mk(
+            false,
+            true,
+            "escalate",
+            format!(
+                "{missing} of {expected} expected skeptic(s) never voted ({n} ballot(s) received) — a missing vote cannot be counted as a non-objection → escalate"
+            ),
+        );
+    }
+
+    // Rule 4 — minority dissent: below the block ratio but not unanimous.
     if refutes > 0 && policy.escalate_on_dissent {
         return mk(
             false,
@@ -254,7 +297,7 @@ pub fn adjudicate(votes: &[Vote], policy: &Policy) -> Panel {
         );
     }
 
-    // Rule 4 — unanimous survive (or dissent-escalation disabled with a
+    // Rule 5 — unanimous survive (or dissent-escalation disabled with a
     // sub-majority of refutes, which the ratio check already cleared).
     mk(
         false,
@@ -354,9 +397,9 @@ mod proptests {
     proptest! {
         #[test]
         fn adjudicate_is_order_independent(mut votes in prop::collection::vec(any_vote(), 0..12), pol in any_policy()) {
-            let a = adjudicate(&votes, &pol);
+            let a = adjudicate(&votes, &pol, votes.len());
             votes.reverse();
-            let b = adjudicate(&votes, &pol);
+            let b = adjudicate(&votes, &pol, votes.len());
             // Counts and the decision are invariant to input order.
             prop_assert_eq!(a.block, b.block);
             prop_assert_eq!(a.escalate, b.escalate);
@@ -366,7 +409,7 @@ mod proptests {
 
         #[test]
         fn outcome_is_exhaustive_and_exclusive(votes in prop::collection::vec(any_vote(), 0..12), pol in any_policy()) {
-            let p = adjudicate(&votes, &pol);
+            let p = adjudicate(&votes, &pol, votes.len());
             // Exactly one of the three outcomes holds, and it matches the flags.
             prop_assert!(matches!(p.outcome, "block" | "escalate" | "pass"));
             prop_assert_eq!(p.block, p.outcome == "block");
@@ -376,14 +419,14 @@ mod proptests {
 
         #[test]
         fn counts_are_conserved(votes in prop::collection::vec(any_vote(), 0..12), pol in any_policy()) {
-            let p = adjudicate(&votes, &pol);
+            let p = adjudicate(&votes, &pol, votes.len());
             prop_assert_eq!(p.refutes + p.passes + p.abstains, p.n);
             prop_assert_eq!(p.effective, p.refutes + p.passes);
         }
 
         #[test]
         fn never_panics(votes in prop::collection::vec(any_vote(), 0..30), pol in any_policy()) {
-            let _ = adjudicate(&votes, &pol);
+            let _ = adjudicate(&votes, &pol, votes.len());
         }
     }
 }
@@ -407,7 +450,7 @@ mod tests {
             v("b", Ballot::Pass),
             v("c", Ballot::Pass),
         ];
-        let p = adjudicate(&votes, &Policy::default());
+        let p = adjudicate(&votes, &Policy::default(), votes.len());
         assert_eq!(p.outcome, "pass");
         assert!(!p.block && !p.escalate);
         assert_eq!(p.effective, 3);
@@ -420,7 +463,7 @@ mod tests {
             v("b", Ballot::Refute),
             v("c", Ballot::Pass),
         ];
-        let p = adjudicate(&votes, &Policy::default());
+        let p = adjudicate(&votes, &Policy::default(), votes.len());
         assert_eq!(p.outcome, "block");
         assert!(p.block);
     }
@@ -440,7 +483,7 @@ mod tests {
             },
             v("s3", Ballot::Pass),
         ];
-        let p = adjudicate(&votes, &Policy::default());
+        let p = adjudicate(&votes, &Policy::default(), votes.len());
         assert_eq!(p.outcome, "block");
         assert_eq!(
             p.refutations,
@@ -455,7 +498,7 @@ mod tests {
             v("b", Ballot::Pass),
             v("c", Ballot::Pass),
         ];
-        let p = adjudicate(&votes, &Policy::default());
+        let p = adjudicate(&votes, &Policy::default(), votes.len());
         assert!(p.refutations.is_empty());
     }
 
@@ -468,7 +511,7 @@ mod tests {
             v("c", Ballot::Pass),
             v("d", Ballot::Pass),
         ];
-        let p = adjudicate(&votes, &Policy::default());
+        let p = adjudicate(&votes, &Policy::default(), votes.len());
         assert_eq!(p.outcome, "block", "an even split must fail closed");
     }
 
@@ -476,7 +519,7 @@ mod tests {
     fn below_min_voters_blocks() {
         // One lone skeptic passing is not an adversarial panel → block.
         let votes = vec![v("a", Ballot::Pass)];
-        let p = adjudicate(&votes, &Policy::default());
+        let p = adjudicate(&votes, &Policy::default(), votes.len());
         assert_eq!(p.outcome, "block");
         assert!(p.block);
     }
@@ -488,7 +531,7 @@ mod tests {
             v("b", Ballot::Abstain),
             v("c", Ballot::Abstain),
         ];
-        let p = adjudicate(&votes, &Policy::default());
+        let p = adjudicate(&votes, &Policy::default(), votes.len());
         assert_eq!(p.effective, 0);
         assert_eq!(p.outcome, "block", "no effective voters → fail-closed");
     }
@@ -502,7 +545,7 @@ mod tests {
             v("c", Ballot::Pass),
             v("d", Ballot::Pass),
         ];
-        let p = adjudicate(&votes, &Policy::default());
+        let p = adjudicate(&votes, &Policy::default(), votes.len());
         assert_eq!(p.outcome, "escalate");
         assert!(p.escalate && !p.block);
     }
@@ -519,7 +562,7 @@ mod tests {
             escalate_on_dissent: false,
             ..Policy::default()
         };
-        let p = adjudicate(&votes, &policy);
+        let p = adjudicate(&votes, &policy, votes.len());
         assert_eq!(p.outcome, "pass");
     }
 
@@ -532,7 +575,7 @@ mod tests {
             v("c", Ballot::Abstain),
             v("d", Ballot::Abstain),
         ];
-        let p = adjudicate(&votes, &Policy::default());
+        let p = adjudicate(&votes, &Policy::default(), votes.len());
         assert_eq!(p.effective, 2);
         assert_eq!(p.abstains, 2);
         assert_eq!(p.outcome, "block");
@@ -551,7 +594,7 @@ mod tests {
             block_ratio: 0.25,
             ..Policy::default()
         };
-        let p = adjudicate(&votes, &policy);
+        let p = adjudicate(&votes, &policy, votes.len());
         assert_eq!(p.outcome, "block");
     }
 
@@ -611,5 +654,38 @@ mod tests {
         assert_eq!(plan(true, 99, &Policy::default(), false).size, MAX_PANEL);
         // A configured 1 is floored to 2 when engaged (1 is not a panel).
         assert_eq!(plan(true, 1, &Policy::default(), false).size, 2);
+    }
+
+    // ── silent vote-loss must fail closed (regression, RED-first) ──────────
+
+    #[test]
+    fn missing_votes_escalates_even_when_received_votes_all_pass() {
+        // 3 skeptics expected, only 2 ballots ever arrive (one went silent),
+        // and BOTH received ballots pass. Without the expected-count check
+        // this clears min_voters (2 >= 2) and refutes == 0, so the old code
+        // returned "pass" — silently treating a verifier that never ran as a
+        // verifier that did not object. That maps "could not determine" to
+        // "clean", which this repo forbids (CLAUDE.md §3/§6). The fix must
+        // fail closed to `escalate` and report the gap via `missing`.
+        let votes = vec![v("a", Ballot::Pass), v("b", Ballot::Pass)];
+        let p = adjudicate(&votes, &Policy::default(), 3);
+        assert_eq!(
+            p.outcome, "escalate",
+            "a silent third skeptic must not be counted as a non-objection: {p:?}"
+        );
+        assert!(!p.block, "missing votes escalate, they do not block: {p:?}");
+        assert_eq!(p.missing, 1, "expected 3 - received 2 = 1 missing vote");
+    }
+
+    #[test]
+    fn omitting_expected_preserves_old_behavior() {
+        // Non-regression: when the caller does not know (or does not pass) an
+        // expected count, `expected` defaults to the number of votes actually
+        // received (missing-vote detection is opt-in), so every pre-existing
+        // caller behaves exactly as before this change.
+        let votes = vec![v("a", Ballot::Pass), v("b", Ballot::Pass)];
+        let p = adjudicate(&votes, &Policy::default(), votes.len());
+        assert_eq!(p.outcome, "pass");
+        assert_eq!(p.missing, 0);
     }
 }

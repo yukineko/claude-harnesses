@@ -241,3 +241,45 @@ fn zero_min_kill_rate_is_rejected_by_the_cli_before_evaluating() {
         "rejection must happen before any evaluation/emit"
     );
 }
+
+/// A **sub-epsilon** `--min-kill-rate` (e.g. `1e-10`, below the `1e-9`
+/// `KILL_RATE_EPSILON`) must also be rejected (exit 2), not accepted. The
+/// outcomes file here is a genuine 0% kill-rate (1 missed, 0 caught): under the
+/// first floor fix (which only rejected `<= 0.0`) this sub-epsilon threshold was
+/// accepted and then `evaluate()`'s epsilon bridge (`0.0 + 1e-9 >= 1e-10`) made
+/// the gate PASS (exit 0) on a suite that killed nothing — the exact
+/// gate-disabling fail-open, just moved into the `(0, 1e-9]` window. Observed
+/// RED against that behavior (exit 0); GREEN after flooring the threshold at
+/// `KILL_RATE_EPSILON`.
+#[test]
+fn sub_epsilon_min_kill_rate_is_rejected_by_the_cli() {
+    const SAMPLE_ZERO: &str = r#"{ "outcomes": [
+        { "scenario": { "Mutant": {} }, "summary": "MissedMutant" }
+    ] }"#;
+    let sb = Sandbox::new("sub-epsilon-min-kill-rate", SAMPLE_ZERO);
+    let out = Command::new(env!("CARGO_BIN_EXE_mutategate"))
+        .arg("--outcomes")
+        .arg("outcomes.json")
+        .arg("--min-kill-rate=0.0000000001") // 1e-10, below KILL_RATE_EPSILON
+        .current_dir(&sb.dir)
+        .env("HOME", sb.home())
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .output()
+        .expect("failed to run mutategate binary");
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a sub-epsilon min-kill-rate must be rejected (exit 2): the epsilon \
+         bridge would otherwise pass a 0% kill-rate, silently disabling the gate"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("disable the gate"),
+        "stderr must explain WHY a sub-epsilon threshold is refused, got: {stderr}"
+    );
+    assert!(
+        !sb.home().join(".overwatch").exists(),
+        "rejection must happen before any evaluation/emit"
+    );
+}

@@ -45,9 +45,10 @@ struct Cli {
     outcomes: PathBuf,
 
     /// Minimum acceptable kill-rate (killed / viable mutants). Must be in the
-    /// half-open range `(0.0, 1.0]`: `0.0` (or negative) is REJECTED because it
-    /// would disable the gate — a kill-rate is always `>= 0.0`, so a `0.0` floor
-    /// always passes. See `validate_min_kill_rate`.
+    /// half-open range `(KILL_RATE_EPSILON, 1.0]`: any value `<= 1e-9` (`0.0`,
+    /// negative, or sub-epsilon) is REJECTED because it would disable the gate —
+    /// a 0% kill-rate is bridged to a pass by the epsilon tolerance, so such a
+    /// floor always passes. See `validate_min_kill_rate`.
     #[arg(long, default_value_t = DEFAULT_MIN_KILL_RATE)]
     min_kill_rate: f64,
 }

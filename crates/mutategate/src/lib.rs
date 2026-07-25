@@ -47,19 +47,24 @@ const KILL_RATE_EPSILON: f64 = 1e-9;
 /// Returns the rate unchanged when it is a usable threshold, or an `Err` with a
 /// human-readable reason the caller should print before exiting non-zero.
 ///
-/// A valid threshold is `0.0 < rate <= 1.0`. Both open ends are rejected on
-/// purpose, and the lower one is the point of this function:
+/// A valid threshold is `KILL_RATE_EPSILON < rate <= 1.0`. Both open ends are
+/// rejected on purpose, and the lower one is the point of this function:
 ///
-///   * **`rate <= 0.0` (including `0.0` itself) is REJECTED.** Because a suite's
-///     kill-rate is always `>= 0.0` and the gate passes when `kill_rate >=
-///     min_kill_rate`, a floor of `0.0` makes the gate pass unconditionally —
-///     i.e. it silently DISABLES the gate while still reporting "passed". That
-///     is the classic floorless-clamp fail-open (CLAUDE.md §3: a threshold
-///     sanitizer must clamp to a range that keeps the gate *enabled*; "cannot
-///     determine / measure-only" must not masquerade as "clean"). A caller that
-///     genuinely wants no mutation gate must not run this binary at all, rather
-///     than run it with a threshold that always passes. This mirrors
-///     `propguard`'s `config.rs` (`if self.threshold == 0 { self.threshold = 1 }`).
+///   * **`rate <= KILL_RATE_EPSILON` (including `0.0`, negatives, and any
+///     sub-epsilon positive) is REJECTED.** Because a suite's kill-rate is
+///     always `>= 0.0` and [`evaluate`] passes when `kill_rate + KILL_RATE_EPSILON
+///     >= threshold`, ANY threshold `<= KILL_RATE_EPSILON` is met even by a **0%
+///     kill-rate** (`0.0 + 1e-9 >= 1e-9`) — the epsilon float-rounding bridge
+///     turns it into an unconditional pass. So the disabling window is not just
+///     `0.0` but the whole `(-inf, KILL_RATE_EPSILON]` range: such a floor
+///     silently DISABLES the gate while still reporting "passed". That is the
+///     floorless-clamp fail-open (CLAUDE.md §3: a threshold sanitizer must clamp
+///     to a range that keeps the gate *enabled*; "cannot determine / measure-only"
+///     must not masquerade as "clean"). The floor is `KILL_RATE_EPSILON`, not
+///     `0.0`, precisely so no accepted threshold can be bridged-to-pass from a 0%
+///     kill-rate. A caller that genuinely wants no mutation gate must not run this
+///     binary at all, rather than run it with a threshold that always passes. This
+///     mirrors `propguard`'s `config.rs` (`if self.threshold == 0 { self.threshold = 1 }`).
 ///   * `rate > 1.0` is rejected as unsatisfiable (a kill-rate can never exceed
 ///     1.0, so the gate could never pass — an always-fail misconfiguration).
 ///   * `NaN` is rejected (no comparison against it is meaningful).
@@ -67,12 +72,14 @@ pub fn validate_min_kill_rate(rate: f64) -> Result<f64, String> {
     if rate.is_nan() {
         return Err("--min-kill-rate must be a number, got NaN".to_string());
     }
-    if rate <= 0.0 {
+    if rate <= KILL_RATE_EPSILON {
         return Err(format!(
-            "--min-kill-rate must be greater than 0.0 and at most 1.0 (got {rate}); \
-             0.0 (or negative) would disable the gate — the kill-rate is always \
-             >= 0.0, so a 0.0 floor always passes. To skip the mutation gate, do \
-             not run it; do not run it with a threshold that can never fail."
+            "--min-kill-rate must be greater than {KILL_RATE_EPSILON:e} and at most \
+             1.0 (got {rate}); a threshold at or below the {KILL_RATE_EPSILON:e} \
+             kill-rate epsilon (0.0, negative, or any sub-epsilon value) would \
+             disable the gate — a 0% kill-rate is bridged to a pass by that epsilon, \
+             so the gate would always pass. To skip the mutation gate, do not run \
+             it; do not run it with a threshold that can never fail."
         ));
     }
     if rate > 1.0 {
@@ -361,14 +368,33 @@ mod tests {
 
     #[test]
     fn a_meaningful_positive_threshold_is_accepted_unchanged() {
-        // The whole usable open-closed range (0.0, 1.0] is accepted verbatim,
-        // including the smallest positive threshold and the maximum 1.0.
+        // The usable range (KILL_RATE_EPSILON, 1.0] is accepted verbatim: a
+        // realistic threshold, the maximum 1.0, and a small-but-above-epsilon
+        // value (which a 0% kill-rate does NOT clear).
         assert_eq!(validate_min_kill_rate(0.8).unwrap(), 0.8);
         assert_eq!(validate_min_kill_rate(1.0).unwrap(), 1.0);
-        assert_eq!(
-            validate_min_kill_rate(f64::MIN_POSITIVE).unwrap(),
-            f64::MIN_POSITIVE
-        );
+        // Just above the epsilon floor: still a real (if lax) enabled gate.
+        assert_eq!(validate_min_kill_rate(1e-6).unwrap(), 1e-6);
+    }
+
+    #[test]
+    fn sub_epsilon_min_kill_rate_is_rejected_it_still_disables_the_gate() {
+        // A threshold at or below KILL_RATE_EPSILON is met even by a 0% kill-rate,
+        // because `evaluate()` passes on `kill_rate + KILL_RATE_EPSILON >=
+        // threshold` (0.0 + 1e-9 >= 1e-9). So the disabling window is the whole
+        // (-inf, KILL_RATE_EPSILON], not just 0.0 — these sub-epsilon positives
+        // must be rejected too, or the gate is silently disabled. The previous
+        // fix only rejected `rate <= 0.0`; this test was RED against that (a
+        // sub-epsilon positive was accepted) and is GREEN after flooring at
+        // KILL_RATE_EPSILON.
+        for &r in &[KILL_RATE_EPSILON, KILL_RATE_EPSILON / 2.0, 1e-10, 1e-12] {
+            let err = validate_min_kill_rate(r)
+                .expect_err("a sub-epsilon threshold disables the gate and must be rejected");
+            assert!(
+                err.contains("disable the gate"),
+                "the error must explain WHY {r:e} is refused, got: {err}"
+            );
+        }
     }
 
     /// A realistic (trimmed) `outcomes.json`: one baseline + a mix of mutant

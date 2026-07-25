@@ -3482,7 +3482,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             t.status = st;
             t.updated_at = Some(state::now_secs());
             if st == state::Status::Running {
-                t.started_at = Some(state::now_secs());
+                // Set-once: a re-dispatch (running→…→running) must not reset the
+                // original start and shrink the measured duration.
+                state::stamp_started_at_if_unset(t, state::now_secs());
             }
             if st == state::Status::Verified {
                 t.fp_oracle_valid = fp_gate_value;
@@ -3533,6 +3535,8 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
             // None 上書き保護: --worktree/--branch が省略された場合は既存値を保持する。
             // 明示的にクリアしたい場合は --clear-worktree / --clear-branch を使う。
+            let assigning_worktree = !clear_worktree && worktree.is_some();
+            let assigning_branch = !clear_branch && branch.is_some();
             if clear_worktree {
                 t.worktree = None;
             } else if worktree.is_some() {
@@ -3554,6 +3558,16 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                     }
                 }
                 t.branch = branch;
+            }
+            // Close the started_at stamping gap: a task can be driven to a
+            // settled state (verified/failed via reconcile, or done directly)
+            // without ever passing through the `running` transition that
+            // stamps started_at above, leaving it durationless. Assigning a
+            // worktree/branch provably precedes worker execution, so it is the
+            // earliest defensible start instant on those paths. Set-once, so it
+            // never overwrites a start already recorded by the running edge.
+            if assigning_worktree || assigning_branch {
+                state::stamp_started_at_if_unset(t, state::now_secs());
             }
             rs.save(cfg, cwd)?;
             // Post-execution diff-risk recording (finding 4 / WorkItem-A):

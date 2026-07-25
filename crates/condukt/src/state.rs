@@ -159,11 +159,18 @@ pub struct TaskState {
     /// serde-default/skip for backward-compatible on-disk layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_at: Option<i64>,
-    /// Unix timestamp (seconds) when this task's status most recently became
-    /// `running`. Paired with `updated_at` at settle time to derive a measured
+    /// Unix timestamp (seconds) of this task's earliest defensible start,
+    /// stamped set-once and never overwritten (see [`stamp_started_at_if_unset`]).
+    /// It is stamped on the first `running` transition OR — for orchestration
+    /// paths that settle a task without ever passing through `running` — when a
+    /// worktree/branch is first assigned, both of which provably precede worker
+    /// execution. Paired with `updated_at` at settle time to derive a measured
     /// wall-clock duration for the fugu-router learning signal (measurement
     /// only — never consulted by routing/scoring logic). `None` for tasks
-    /// written before this field existed or that never entered `running`.
+    /// written before this field existed, or that genuinely have no start
+    /// information (e.g. a reconcile-promoted task that never got a
+    /// worktree/branch); such a `None` maps to an unmeasured (`None`) duration,
+    /// never a fabricated `0.0`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<i64>,
     /// The Task-tool `agentId` of the worker/verifier subagent that produced this
@@ -224,6 +231,31 @@ pub fn now_secs() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+/// Stamp `started_at` at the earliest defensible observation point, NEVER
+/// overwriting a value that is already set. Returns `true` iff it stamped a
+/// fresh value.
+///
+/// Callers stamp on the first `running` transition and, for paths that settle a
+/// task without ever passing through `running`, when a worktree or branch is
+/// first assigned — both provably precede worker execution. Keeping the stamp
+/// monotone (set-once) is load-bearing for the tri-state duration derivation in
+/// [`records_for_run`]: overwriting `started_at` on a *later* transition would
+/// shrink or zero a real measured duration.
+///
+/// Where a task genuinely has no defensible start instant (e.g. a
+/// reconcile-promoted task that never got a worktree/branch), the caller simply
+/// does not call this. `started_at` stays `None`, which the duration derivation
+/// maps to an unmeasured (`None`) duration rather than a fabricated `0.0` —
+/// not-measured must never be recorded as measured-as-zero.
+pub fn stamp_started_at_if_unset(t: &mut TaskState, now: i64) -> bool {
+    if t.started_at.is_none() {
+        t.started_at = Some(now);
+        true
+    } else {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

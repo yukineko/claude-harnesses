@@ -105,6 +105,66 @@ TARGET_GLOBS = [
 ]
 
 
+_HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def _added_lines_for_file(path: Path) -> tuple[set[int], bool]:
+    """Return (1-based added/changed line numbers, diff_available) for `path`
+    from `git diff HEAD -U0` (HEAD vs the WORKING TREE, not the index).
+
+    This MUST be HEAD-vs-working-tree, not HEAD-vs-index (`--cached`):
+    `scan_file` reads the working tree (`path.read_bytes()`), so the
+    added/untrusted-line set has to be computed against that exact same
+    content, or the two disagree about what "pre-existing" means. A staged
+    diff (`--cached`) undercounts: an attacker can `git add` only the
+    malicious line and then append a defense marker to the file WITHOUT
+    staging it -- `scan_file` still sees the marker (working tree), but
+    `--cached` never reports its line as added, so `line_is_defended` reads
+    it as a trustworthy pre-existing line and suppresses the hit, even
+    though the committed blob carries the payload with no marker at all.
+    `git diff HEAD` closes that gap by comparing against the same working
+    tree `scan_file` reads, regardless of what is staged.
+
+    `diff_available=False` means the diff itself could not be determined at
+    all (no git repo, subprocess failure, no HEAD yet in a fresh repo --
+    `git diff HEAD` exits non-zero there) -- it is NOT the same thing as "no
+    lines added". Callers MUST fail closed on False rather than treat it as
+    an empty added set: a broken git invocation must never silently
+    re-enable the permissive proximity-marker suppression this function
+    exists to gate (that would be exactly the fail-open this task fixes, just
+    moved one layer down). An empty-but-available result (file untouched
+    since HEAD) is the normal, fully-trusted case -- every line in that file
+    is pre-existing.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(REPO), "diff", "HEAD", "--no-color", "-U0",
+             "--", str(path)],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return set(), False
+    added: set[int] = set()
+    lineno = 0
+    for line in out.splitlines():
+        m = _HUNK_HEADER.match(line)
+        if m:
+            lineno = int(m.group(1))
+            continue
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            added.add(lineno)
+            lineno += 1
+        elif line.startswith("-"):
+            continue  # removed line: does not consume a new-file line number
+        elif line.startswith("\\"):
+            continue  # "\ No newline at end of file"
+        else:
+            lineno += 1
+    return added, True
+
+
 def _tracked_files() -> set[Path] | None:
     """Set of git-tracked files (absolute). None if git is unavailable.
 
@@ -147,15 +207,48 @@ def nearest_heading(lines: list[str], idx: int) -> str:
     return ""
 
 
-def line_is_defended(lines: list[str], idx: int) -> bool:
-    """True if line idx sits in a defense context (heading or nearby marker)."""
+def line_is_defended(
+    lines: list[str],
+    idx: int,
+    added_lines: set[int] | None = None,
+    diff_available: bool = True,
+) -> bool:
+    """True if line idx sits in a defense context (heading or nearby marker).
+
+    Diff-aware, fail-closed (CLAUDE.md §3): the ADDED lines of a commit's
+    diff are author-untrusted-in-context -- an attacker submitting the change
+    controls them -- so a defense marker planted on ANOTHER added line must
+    NOT be able to suppress a hit on an added line; that would be a
+    self-exemption. Concretely, for a hit on an added line, a nearby marker
+    only counts when it sits on a PRE-EXISTING (unchanged) line; the nearest
+    heading is still honored unconditionally (headings are structural
+    document context, not a per-line proximity trick). A hit on an unchanged
+    line keeps the exact pre-fix behaviour: heading OR any nearby marker,
+    added or not, since unchanged context is trusted regardless of who wrote
+    the marker.
+
+    When `diff_available` is False the diff could not be determined at all
+    (no git repo, subprocess failure, file outside any diff) -- we then
+    cannot tell which lines are pre-existing, so we fail closed for EVERY
+    hit: only the heading is honored, proximity is never trusted. This can
+    only make the gate report MORE findings, never fewer, than the diff-aware
+    path -- it must never be treated as license to fall back to the old
+    permissive proximity behaviour.
+    """
     if DEFENSE_MARKERS.search(nearest_heading(lines, idx)):
         return True
+    if not diff_available:
+        return False
+    added = added_lines or set()
+    hit_is_added = (idx + 1) in added
     lo = max(0, idx - DEFENSE_WINDOW)
     hi = min(len(lines), idx + DEFENSE_WINDOW + 1)
     for j in range(lo, hi):
-        if DEFENSE_MARKERS.search(lines[j]):
-            return True
+        if not DEFENSE_MARKERS.search(lines[j]):
+            continue
+        if hit_is_added and (j + 1) in added:
+            continue  # self-exemption: marker planted on another added line
+        return True
     return False
 
 
@@ -210,13 +303,25 @@ def malicious_ignoring_self_declared_defense(s: str) -> str | None:
     return scan_line(s)
 
 
-def scan_lines(lines: list[str]) -> list[tuple[int, str, str]]:
+def scan_lines(
+    lines: list[str],
+    added_lines: set[int] | None = None,
+    diff_available: bool = True,
+) -> list[tuple[int, str, str]]:
     """Scan a file's lines. Returns [(1-based lineno, text, pattern_name)] for
-    undefended malicious hits."""
+    undefended malicious hits.
+
+    `added_lines` / `diff_available` thread through to `line_is_defended` --
+    see its docstring for the diff-aware, fail-closed suppression contract.
+    Defaults (`added_lines=None`, `diff_available=True`) mean "no lines are
+    added", i.e. every line is treated as pre-existing/unchanged -- the exact
+    pre-fix proximity behaviour, which is what `scan_text` and direct callers
+    without diff context rely on.
+    """
     hits: list[tuple[int, str, str]] = []
     for idx, raw in enumerate(lines):
         name = scan_line(raw)
-        if name and not line_is_defended(lines, idx):
+        if name and not line_is_defended(lines, idx, added_lines, diff_available):
             hits.append((idx + 1, raw.rstrip("\n"), name))
     return hits
 
@@ -244,6 +349,7 @@ def scan_file(path: Path) -> list[tuple[int, str, str]]:
     except OSError as e:
         # Genuinely unreadable (permissions, gone mid-scan). Cannot vouch → fail.
         return [(UNREADABLE, f"cannot read prompt asset: {e}", "unreadable-asset")]
+    added_lines, diff_available = _added_lines_for_file(path)
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -254,9 +360,9 @@ def scan_file(path: Path) -> list[tuple[int, str, str]]:
         hits: list[tuple[int, str, str]] = [
             (UNREADABLE, "prompt asset is not valid UTF-8 (scanned lossily)", "non-utf8-asset")
         ]
-        hits.extend(scan_lines(lossy.splitlines()))
+        hits.extend(scan_lines(lossy.splitlines(), added_lines, diff_available))
         return hits
-    return scan_lines(text.splitlines())
+    return scan_lines(text.splitlines(), added_lines, diff_available)
 
 
 def main(argv: list[str]) -> int:

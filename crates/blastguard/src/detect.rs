@@ -18,6 +18,8 @@
 //! An `Ask` is only emitted by the hook when a human is actually there to
 //! answer it (see [`crate::interactive`]); otherwise it is hardened to a Deny.
 
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 use crate::exclude;
@@ -875,14 +877,262 @@ fn detect_bash(cmd: &str, depth: usize) -> Decision {
 
     // 3. Per-command-segment analysis. Ranked: a Deny in ANY segment outranks
     //    an Ask in any other (see `VerdictAcc`).
+    //
+    // BG-cwd (verified bypass, ea1355f5): every rule above (and every rule
+    // `analyze_segment` reaches) judges ONE segment's operands as literal
+    // path TEXT, with no memory of what an EARLIER segment on the same line
+    // did to the shell's working directory. Every protected pattern in
+    // `exclude.rs` is path-shaped, so `cd .githooks && rm pre-commit` never
+    // matched any of them: `.githooks` alone (the `cd` operand) touches a
+    // protected path and is read-only, so it is exempt; `pre-commit` alone
+    // (the `rm` operand) is a bare basename that matches no protected glob on
+    // its own. Neither segment, judged independently, is the direct-path form
+    // `rm .githooks/pre-commit` that every rule above already denies.
+    //
+    // `cwd`/`aliases` are threaded through the loop below (not recomputed per
+    // segment) so a `cd`/`pushd` — or a `ln -s` alias resolved through one —
+    // in an EARLIER segment is visible to a LATER one; see
+    // `advance_cwd_and_rewrite`.
     let mut acc = VerdictAcc::default();
+    let mut cwd = CwdState::Root;
+    let mut aliases: HashMap<String, String> = HashMap::new();
     for seg in split_segments(cmd) {
-        if let Some(deny) = acc.record(analyze_segment(&seg, depth)) {
+        let (effective_seg, extra, next_cwd) = advance_cwd_and_rewrite(&seg, &cwd, &mut aliases);
+        cwd = next_cwd;
+        if let Some(extra_decision) = extra {
+            if let Some(deny) = acc.record(extra_decision) {
+                return deny;
+            }
+        }
+        if let Some(deny) = acc.record(analyze_segment(&effective_seg, depth)) {
             return deny;
         }
     }
 
     acc.finish()
+}
+
+/// The shell working-directory PREFIX this analysis has tracked so far, built
+/// up left-to-right across the `;`/`&&`/`||`/`|`/`&`-separated segments of ONE
+/// command line (see the loop in [`detect_bash`]) so a later segment's
+/// bare-basename operand can be judged in the directory it actually resolves
+/// inside, not just as literal text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CwdState {
+    /// No `cd`/`pushd` has been seen yet: judge bare-basename operands
+    /// exactly as before this fix (no prefix to apply).
+    Root,
+    /// A `cd`/`pushd` (or a `cd` through a `ln -s`-created alias) this
+    /// analysis could resolve LEXICALLY to a literal directory — relative or
+    /// absolute, `..` collapsed via [`exclude::normalize`].
+    Known(String),
+    /// A directory change occurred but its target could not be resolved
+    /// statically (`cd $VAR`, bare `cd -`, `cd ~`, or a `popd` — this
+    /// analysis tracks only the CURRENT directory, not a full stack, so what
+    /// a `popd` returns to is not knowable here). Per CLAUDE.md §3
+    /// "cannot determine" resolves to the RESTRICTIVE side, never `Allow` —
+    /// see the `CwdState::Unknown` arm of [`advance_cwd_and_rewrite`].
+    Unknown,
+}
+
+/// Strip a leading run of `(` and a trailing run of `)` from a single
+/// already-whitespace-split token.
+///
+/// `split_segments` splits on `;`/`&&`/`||`/`|`/`&` but has no notion of a
+/// parenthesised subshell, so `(cd .githooks && rm pre-commit)` splits into
+/// the segments `"(cd .githooks "` and `" rm pre-commit)"` — the subshell
+/// punctuation lands glued to the first and last WORD of the group, not as
+/// its own token. This is applied only to the handful of tokens this cwd-
+/// tracking pass itself inspects (a segment's head word, a `cd`/`pushd`
+/// target, an `ln -s` operand, a rewritten bare-basename operand) — never to
+/// the general tokeniser `analyze_segment` uses, so it cannot change how any
+/// PRE-EXISTING rule reads a token.
+fn strip_edge_parens(tok: &str) -> &str {
+    let mut t = tok;
+    while let Some(rest) = t.strip_prefix('(') {
+        t = rest;
+    }
+    while let Some(rest) = t.strip_suffix(')') {
+        t = rest;
+    }
+    t
+}
+
+/// The operand TARGETS a bare-basename rewrite (or the Undetermined-cwd Ask)
+/// cares about for `head`: the same set [`rewrite_bare_basenames`] would
+/// substitute, computed the same way the verb's own rule arm in
+/// `analyze_command_at` computes its operands, so the two definitions cannot
+/// drift apart. Every other verb — anything this cwd-tracking pass has no
+/// opinion about — gets an empty set, which is a no-op for both callers.
+fn verb_targets<'a>(head: &str, rest: &[&'a str]) -> Vec<&'a str> {
+    match head {
+        "rm" => rest
+            .iter()
+            .filter(|t| !t.starts_with('-'))
+            .copied()
+            .collect(),
+        "unlink" | "rmdir" => positional_operands(rest, &[]),
+        "chmod" => chmod_mode_and_targets(rest).1,
+        _ => Vec::new(),
+    }
+}
+
+/// Rewrite every BARE-BASENAME (no `/`) target operand of `seg` — for the
+/// verbs [`verb_targets`] has an opinion about — into `dir/operand`, so it is
+/// judged against the protected-path rules exactly as the direct-path form
+/// (`rm .githooks/pre-commit`) already is. Non-target tokens (flags, a
+/// chmod MODE, an operand that already carries a `/`) are left untouched.
+///
+/// A stray subshell `)` glued to the last token (see [`strip_edge_parens`])
+/// is dropped from the rewritten path rather than carried into it — the
+/// rewrite is meant to reproduce the direct-path form exactly, not a
+/// direct-path-form-plus-punctuation that only some protected globs (the
+/// wildcard-terminated ones) are lenient enough to still match.
+fn rewrite_bare_basenames(seg: &str, dir: &str) -> String {
+    let tokens: Vec<&str> = seg.split_whitespace().collect();
+    let Some((head_tok, rest)) = tokens.split_first() else {
+        return seg.to_string();
+    };
+    let head = normalized_command(strip_edge_parens(head_tok));
+    let targets = verb_targets(&head, rest);
+    let mut out = String::from(*head_tok);
+    for t in rest {
+        out.push(' ');
+        if targets.contains(t) {
+            let clean = strip_edge_parens(t);
+            if !clean.is_empty() && !clean.contains('/') {
+                out.push_str(dir);
+                out.push('/');
+                out.push_str(clean);
+                continue;
+            }
+        }
+        out.push_str(t);
+    }
+    out
+}
+
+/// Resolve a `cd`/`pushd` target token (or an `ln -s` source) to the
+/// directory it names, relative to the cwd already tracked — or to
+/// [`CwdState::Unknown`] when it cannot be resolved statically.
+///
+/// A LITERAL alias recorded by an earlier `ln -s SRC DEST` (see
+/// [`advance_cwd_and_rewrite`]) is consulted FIRST: `cd` through a symlink
+/// whose target is a protected directory must land on the same `Known(dir)`
+/// a direct `cd` into that directory would, so a bare-basename operand in a
+/// LATER segment is judged the same way either route got there.
+fn resolve_dir_token(tok: &str, cwd: &CwdState, aliases: &HashMap<String, String>) -> CwdState {
+    let tok = strip_edge_parens(tok);
+    if let Some(target) = aliases.get(tok) {
+        return CwdState::Known(target.clone());
+    }
+    if tok.starts_with('/') {
+        return CwdState::Known(exclude::normalize(tok));
+    }
+    let joined = match cwd {
+        CwdState::Known(dir) => format!("{dir}/{tok}"),
+        CwdState::Root => tok.to_string(),
+        CwdState::Unknown => return CwdState::Unknown,
+    };
+    CwdState::Known(exclude::normalize(&joined))
+}
+
+/// One step of the left-to-right cwd walk [`detect_bash`] runs across a
+/// command line's segments: update `cwd`/`aliases` for a `cd`/`pushd`/`popd`/
+/// `ln -s`, or — for any other segment — return it (rewritten, if the tracked
+/// cwd is [`CwdState::Known`]) unchanged for [`analyze_segment`] to judge as
+/// before, plus an optional EXTRA verdict for the [`CwdState::Unknown`]
+/// restrictive case (CLAUDE.md §3: "cannot determine" is not `Allow`).
+///
+/// Returns `(segment to hand to analyze_segment, an extra verdict to record,
+/// the cwd state for the NEXT segment)`.
+fn advance_cwd_and_rewrite(
+    seg: &str,
+    cwd: &CwdState,
+    aliases: &mut HashMap<String, String>,
+) -> (String, Option<Decision>, CwdState) {
+    let tokens: Vec<&str> = seg.split_whitespace().collect();
+    let Some((head_tok, rest)) = tokens.split_first() else {
+        return (seg.to_string(), None, cwd.clone());
+    };
+    let head = normalized_command(strip_edge_parens(head_tok));
+    let head = head.as_str();
+
+    // `ln -s SRC DEST`: record a static symlink alias so a LATER `cd DEST`
+    // resolves through it to SRC, exactly like `cd SRC` would. Only a
+    // LITERAL (non-expansion) SRC and DEST are tracked; a dynamic name on
+    // either side just leaves the alias table alone — a later `cd` on that
+    // name is then judged as an ordinary path (or Unknown), never as
+    // Allow-by-omission.
+    if head == "ln" {
+        if rest
+            .iter()
+            .any(|t| *t == "-s" || (is_short_flag(t) && t.contains('s')))
+        {
+            let operands = positional_operands(rest, &[]);
+            if let (Some(src), Some(dest)) = (operands.first(), operands.last()) {
+                if operands.len() >= 2
+                    && !has_unresolvable_expansion(src)
+                    && !has_unresolvable_expansion(dest)
+                {
+                    if let CwdState::Known(dir) = resolve_dir_token(src, cwd, aliases) {
+                        let dest_name = basename(strip_edge_parens(dest)).to_string();
+                        aliases.insert(dest_name, dir);
+                    }
+                }
+            }
+        }
+        return (seg.to_string(), None, cwd.clone());
+    }
+
+    if matches!(head, "cd" | "pushd") {
+        let target = rest.iter().find(|t| !t.starts_with('-')).copied();
+        let new_cwd = match target {
+            None => CwdState::Unknown,
+            Some(t) => {
+                let clean = strip_edge_parens(t);
+                if clean.is_empty()
+                    || clean == "-"
+                    || clean.starts_with('~')
+                    || has_unresolvable_expansion(clean)
+                {
+                    CwdState::Unknown
+                } else {
+                    resolve_dir_token(clean, cwd, aliases)
+                }
+            }
+        };
+        return (seg.to_string(), None, new_cwd);
+    }
+    if head == "popd" {
+        // `popd` returns to whatever the matching `pushd` displaced. This
+        // pass tracks only the CURRENT top of the directory stack, not the
+        // whole stack, so what it returns to is not knowable here — treated
+        // as Unknown rather than silently reverting to `Root`, which could
+        // wrongly clear a still-live protected prefix.
+        return (seg.to_string(), None, CwdState::Unknown);
+    }
+
+    match cwd {
+        CwdState::Known(dir) => (rewrite_bare_basenames(seg, dir), None, cwd.clone()),
+        CwdState::Unknown => {
+            let targets = verb_targets(head, rest);
+            if targets
+                .iter()
+                .any(|t| !strip_edge_parens(t).is_empty() && !strip_edge_parens(t).contains('/'))
+            {
+                let ask = Decision::ask(format!(
+                    "`{head}` operates on a bare filename after an earlier cd/pushd whose \
+target directory blastguard could not statically resolve — it cannot tell whether this reaches \
+a protected gate/config path, and refuses to guess"
+                ));
+                (seg.to_string(), Some(ask), cwd.clone())
+            } else {
+                (seg.to_string(), None, cwd.clone())
+            }
+        }
+        CwdState::Root => (seg.to_string(), None, cwd.clone()),
+    }
 }
 
 fn redirect_target_is_safe(target: &str) -> bool {

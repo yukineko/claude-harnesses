@@ -7,9 +7,10 @@
 //! silent drops at source→executor boundaries become observable.
 //!
 //! Exit codes:
-//!   0  — JSON parsed and schema valid
+//!   0  — JSON parsed and schema valid (or `metrics`/`list` succeeded)
 //!   1  — JSON parsed but schema violations found
-//!   2  — JSON failed to parse, OR an unknown schema was requested
+//!   2  — could not determine: JSON failed to parse, an unknown schema was
+//!        requested, or (`metrics`) the reject store exists but is unreadable
 //!
 //! This is a plain CLI, not a lifecycle hook — do not wrap in `run_hook`.
 
@@ -145,7 +146,28 @@ fn cmd_check(args: CheckArgs) -> i32 {
 }
 
 fn cmd_metrics(args: MetricsArgs) -> i32 {
-    let counts = metrics::counts();
+    // An unreadable store is "cannot determine", not "nothing to report". Printing
+    // an empty result here would be indistinguishable from a genuinely empty store
+    // and would read as "no rejects ever happened" — the inverse of what this
+    // counter exists to show. `require()` is the only extractor, so the permissive
+    // path is not expressible.
+    let counts = match metrics::counts().require() {
+        Ok(c) => c,
+        Err(verdict) => {
+            let why = verdict
+                .reason()
+                .map(|r| r.as_str().to_string())
+                .unwrap_or_else(|| "reject store could not be read".to_string());
+            if args.json {
+                let out = json!({"status": "unknown", "error": why});
+                println!("{}", serde_json::to_string(&out).unwrap_or_default());
+            } else {
+                println!("unknown — reject counts could not be determined");
+            }
+            eprintln!("schemaguard: cannot determine reject counts: {why}");
+            return 2;
+        }
+    };
     if args.json {
         println!("{}", serde_json::to_string_pretty(&counts).unwrap());
     } else {

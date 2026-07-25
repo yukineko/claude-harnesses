@@ -1,9 +1,10 @@
 //! End-to-end tests for the schemaguard binary.
 //!
 //! schemaguard is a plain 0/1/2 gate CLI (NOT a lifecycle hook):
-//!   0 — JSON parsed and schema valid
+//!   0 — JSON parsed and schema valid (or `metrics`/`list` succeeded)
 //!   1 — JSON parsed but schema violations found
-//!   2 — JSON failed to parse, OR an unknown schema was requested
+//!   2 — could not determine: JSON failed to parse, an unknown schema was
+//!       requested, or (`metrics`) the reject store exists but is unreadable
 //! `list` is the safe read-only subcommand.
 
 use std::io::Write;
@@ -105,5 +106,124 @@ fn check_unparseable_json_exits_two() {
     assert!(
         stdout.contains("invalid JSON"),
         "expected parse-error message, got: {stdout}"
+    );
+}
+
+// ── metrics: "could not read" must not read as "nothing to report" ───────────
+//
+// The reject counter exists so that silent drops at a source→executor boundary
+// become observable. If an unreadable store folds into an empty map, the CLI
+// reports zero rejects — i.e. "no silent drops" — which is the exact inversion
+// of the crate's purpose. Absent (nothing recorded yet) and unreadable (cannot
+// determine) must therefore be distinguishable downstream.
+
+/// Outcome of a metrics run against a pre-seeded store.
+struct StoreRun {
+    code: i32,
+    stdout: String,
+    stderr: String,
+    /// Whether the *test process itself* could still read the seeded store after
+    /// `seed` ran. When a permission-denial fault is injected this is `false`;
+    /// if it is `true` the denial did not take (e.g. running as root, or a
+    /// filesystem that ignores mode bits), so the fault was never actually
+    /// applied and asserting on it would prove nothing.
+    fault_applied: bool,
+}
+
+/// Run `schemaguard <args>` in an isolated HOME whose `.schemaguard/rejects.jsonl`
+/// has already been seeded by `seed`.
+fn run_with_store(args: &[&str], seed: impl FnOnce(&std::path::Path)) -> StoreRun {
+    let home = temp_home();
+    let store_dir = home.join(".schemaguard");
+    std::fs::create_dir_all(&store_dir).expect("create store dir");
+    let store = store_dir.join("rejects.jsonl");
+    seed(&store);
+    let fault_applied = store.exists() && std::fs::read_to_string(&store).is_err();
+
+    let bin = env!("CARGO_BIN_EXE_schemaguard");
+    let out = Command::new(bin)
+        .args(args)
+        .current_dir(&home)
+        .env("HOME", &home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("binary runs");
+    StoreRun {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        fault_applied,
+    }
+}
+
+#[test]
+fn metrics_absent_store_reports_empty_and_exits_zero() {
+    // Control arm (anti-vacuity): a store that was never written is legitimately
+    // empty and must STAY permissive. Without this, the restrictive assertions
+    // below would also pass under a trivially broken implementation that simply
+    // errors on every path.
+    let r = run_with_store(&["metrics", "--json"], |_path| {});
+    assert_eq!(
+        r.code, 0,
+        "absent store is not an error; stdout: {} stderr: {}",
+        r.stdout, r.stderr
+    );
+    assert!(
+        r.stdout.contains("{}"),
+        "absent store should report an empty map, got: {}",
+        r.stdout
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn metrics_unreadable_store_is_not_reported_as_zero_rejects() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let r = run_with_store(&["metrics", "--json"], |path| {
+        std::fs::write(path, "{\"schema\":\"decomposition\",\"violations\":7}\n")
+            .expect("seed store");
+        // Fault injection: the store exists and holds 7 rejects, but cannot be read.
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).expect("chmod 000");
+    });
+
+    // If the denial did not take (root, or a mode-ignoring filesystem), the fault
+    // was never applied — report that instead of asserting a false pass.
+    if !r.fault_applied {
+        eprintln!("skipping: permission denial did not take (root or mode-ignoring fs)");
+        return;
+    }
+
+    assert_ne!(
+        r.code, 0,
+        "an unreadable store must not exit 0 (that reads as 'no rejects'); \
+         stdout: {} stderr: {}",
+        r.stdout, r.stderr
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn metrics_human_output_unreadable_store_does_not_say_no_rejects() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let r = run_with_store(&["metrics"], |path| {
+        std::fs::write(path, "{\"schema\":\"episode\",\"violations\":3}\n").expect("seed store");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).expect("chmod 000");
+    });
+
+    if !r.fault_applied {
+        eprintln!("skipping: permission denial did not take (root or mode-ignoring fs)");
+        return;
+    }
+
+    assert!(
+        !r.stdout.contains("No rejects recorded yet"),
+        "an unreadable store must not print the same line as a genuinely empty one; \
+         stdout: {} stderr: {}",
+        r.stdout,
+        r.stderr
     );
 }

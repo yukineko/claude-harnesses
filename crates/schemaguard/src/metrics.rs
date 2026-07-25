@@ -2,18 +2,25 @@
 //! `~/.schemaguard/rejects.jsonl` and can aggregate totals by schema name.
 //!
 //! Design choices:
-//! - **Fail-soft**: a write error never changes the gate exit code; only a
-//!   warning goes to stderr.
+//! - **Writes fail soft**: a write error never changes the gate exit code; only
+//!   a warning goes to stderr. Losing a counter line must not turn a valid
+//!   payload into a rejected one.
+//! - **Reads fail closed**: reading the store back is a *judgement* ("how many
+//!   rejects were there?"), so an unreadable store resolves to
+//!   [`Determination::Undetermined`], never to an empty map. Absent and
+//!   unreadable are different answers and stay distinguishable downstream.
 //! - **Append-only JSONL**: easy to `tail -f` and trivially diff-able in git.
 //! - **No timestamp by default** (the spec is explicit), but we include one
 //!   as an optional field using `SystemTime` to aid debugging without making
 //!   the test corpus time-dependent.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, Write};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use harness_core::boundary;
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 
 // ── types ────────────────────────────────────────────────────────────────────
@@ -72,13 +79,31 @@ fn write_reject_line(path: &PathBuf, schema: &str, violations: usize) -> anyhow:
 
 /// Return cumulative reject counts per schema name, read from the JSONL store.
 ///
-/// Missing file → empty map. Malformed lines are silently skipped.
-pub fn counts() -> BTreeMap<String, usize> {
-    let path = rejects_path();
-    match std::fs::File::open(&path) {
-        Ok(f) => parse_counts(std::io::BufReader::new(f).lines()),
-        Err(_) => BTreeMap::new(),
-    }
+/// Three-valued on purpose. The reject counter exists so that silent drops at a
+/// source→executor boundary become **observable**; folding an unreadable store
+/// into an empty map would report "zero rejects" — i.e. "no silent drops" — which
+/// is the exact inversion of that purpose. So:
+///
+/// - store absent (nothing recorded yet) → `Known(empty map)`; legitimately empty
+/// - store readable                      → `Known(counts)`
+/// - store present but unreadable        → `Undetermined(why)`; the caller cannot
+///   collapse this to a value, because [`Determination`] has no `unwrap_or`/`ok`
+///
+/// Malformed *lines* inside a readable store are still silently skipped — that is
+/// a separate, still-open gap (see [`parse_counts`]), not something this function
+/// resolves.
+pub fn counts() -> Determination<BTreeMap<String, usize>> {
+    counts_at(&rejects_path())
+}
+
+/// [`counts`] against an explicit path, so the tri-state can be exercised without
+/// touching `$HOME`.
+pub fn counts_at(path: &Path) -> Determination<BTreeMap<String, usize>> {
+    boundary::read_to_string(path).map(|maybe_raw| match maybe_raw {
+        // Absent: never written. A genuinely empty observation, not a failure.
+        None => BTreeMap::new(),
+        Some(raw) => parse_counts(raw.lines().map(|l| Ok(l.to_string()))),
+    })
 }
 
 /// Pure helper: sum reject counts from an iterator of raw JSON lines.

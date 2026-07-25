@@ -581,7 +581,7 @@
     {
       "name": "schemaguard",
       "description": "Schema-validation gate for LLM structured outputs at source→executor boundaries: validate a JSON value against a named declared schema (condukt decomposition, fugu episode/playbook, scout measure), emit a structured error a caller uses to re-ask the model once, and count rejects so silent drops become observable (Guardrails-AI-lite). Subscription-native (one bundled Rust binary, no API key). v0.1.6: added #![deny(clippy::panic)] at crate root (main.rs + lib.rs).",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "category": "quality",
       "keywords": [
         "schema",

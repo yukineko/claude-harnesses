@@ -135,21 +135,35 @@ pub fn validate(value: &serde_json::Value, fields: &[Field], path: &str) -> Vec<
             continue;
         }
 
-        // Enum check (only meaningful for String fields)
+        // Enum check. A declared `enum_values` set is a constraint that must be
+        // *applied*, so a value the constraint cannot be evaluated against (a
+        // non-string, reachable when a caller pairs `enum_values` with `Ty::Any`
+        // or a numeric type) is a violation — not a silent skip. "Could not
+        // check" is not "passed".
         if !field.enum_values.is_empty() {
-            if let Some(s) = val.as_str() {
-                if !field.enum_values.contains(&s) {
-                    let allowed = field
-                        .enum_values
-                        .iter()
-                        .map(|v| format!("\"{}\"", v))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    violations.push(Violation {
-                        path: field_path.clone(),
-                        problem: format!("'{}' not in [{}]", s, allowed),
-                    });
+            let allowed = field
+                .enum_values
+                .iter()
+                .map(|v| format!("\"{}\"", v))
+                .collect::<Vec<_>>()
+                .join(", ");
+            match val.as_str() {
+                Some(s) => {
+                    if !field.enum_values.contains(&s) {
+                        violations.push(Violation {
+                            path: field_path.clone(),
+                            problem: format!("'{}' not in [{}]", s, allowed),
+                        });
+                    }
                 }
+                None => violations.push(Violation {
+                    path: field_path.clone(),
+                    problem: format!(
+                        "enum constraint [{}] cannot be applied: value is not a string, got {}",
+                        allowed,
+                        json_type_name(val)
+                    ),
+                }),
             }
         }
 
@@ -357,6 +371,44 @@ mod tests {
         let v = json!({"metadata": 42, "extra": {"key": "val"}});
         let violations = validate(&v, ANY_AND_OBJECT_FIELDS, "");
         assert!(violations.is_empty(), "got {:?}", violations);
+    }
+
+    static ANY_WITH_ENUM_FIELDS: &[Field] = &[Field {
+        name: "mode",
+        ty: Ty::Any,
+        required: true,
+        enum_values: &["fast", "slow"],
+        items: &[],
+    }];
+
+    #[test]
+    fn enum_on_non_string_value_is_a_violation_not_a_silent_pass() {
+        // A declared constraint that cannot be applied must resolve restrictively.
+        // Previously the enum check sat inside `if let Some(s) = val.as_str()` with
+        // no else arm, so a non-string value skipped the constraint entirely and
+        // validated clean — "could not check" silently became "passed".
+        //
+        // Not reachable through the five registered schemas today (every field
+        // carrying `enum_values` is `Ty::String`, so the type check rejects first),
+        // but `validate`/`Field` are public API, so an external caller pairing
+        // `enum_values` with `Ty::Any`/`Ty::Number` hits it.
+        let v = json!({"mode": 42});
+        let violations = validate(&v, ANY_WITH_ENUM_FIELDS, "");
+        assert!(
+            violations
+                .iter()
+                .any(|vi| vi.path == "mode" && vi.problem.contains("not a string")),
+            "a non-string value under an enum constraint must violate, got: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn enum_on_matching_string_still_passes_under_any() {
+        // Control arm: the restrictive change must not reject legitimate values.
+        let v = json!({"mode": "fast"});
+        let violations = validate(&v, ANY_WITH_ENUM_FIELDS, "");
+        assert!(violations.is_empty(), "got: {:?}", violations);
     }
 
     #[test]

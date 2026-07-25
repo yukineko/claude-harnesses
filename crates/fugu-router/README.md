@@ -69,7 +69,8 @@ fugu-router suggest --files src/auth/login.ts "fix login validation" [--mode fas
 fugu-router confidence --files src/auth/login.ts "fix login validation"  # calibrated pass-probability in [0,1]
 fugu-router procedures search --query "fix login validation" --files a,b --k 3
                                                              # k-NN over how similar verified tasks were solved
-fugu-router stats [--json]                                   # per-model pass-rate / avg cost
+fugu-router stats [--json]                                   # per-model pass-rate / avg cost + duration coverage
+fugu-router duration [--json]                                # alias of duration-outliers: duration coverage + per-class outliers
 fugu-router import --episodes /path/episodes.jsonl [--playbooks /path/playbooks.jsonl] [--dry-run]
                                                              # merge another machine's stores (content-hash dedup)
 fugu-router import --dedup                                   # dedup local stores in place
@@ -111,8 +112,19 @@ edit that changes behaviour leaves the outcome unattributable to its cause; with
 it, outcomes can be stratified by skill version and `evalkit canary` can diff two
 versions' goldens.
 
-`--duration <secs>` (optional, default `0.0`) records measured wall-clock
-duration for the task — measurement only, never consulted by routing/scoring.
+`--duration <secs>` (optional) records the measured wall-clock duration for the
+task — measurement only, never consulted by routing/scoring. `Episode.duration_secs`
+is a **tri-state**: `None` = unmeasured (never conflated with a measured `0.0`),
+`Some(x)` = a real measurement `x > 0`. **Omit `--duration` to record an episode as
+unmeasured**; a non-positive value is **rejected** (non-zero exit) because `0` /
+negative would be an unrepresentable/unmeasured measurement. On disk the field is
+omitted entirely for unmeasured episodes; for back-compat, a legacy line that wrote
+`duration_secs: 0.0` (the old encoding for "unmeasured") is read back as unmeasured
+(`None`), never as a measured `0.0`. Unmeasured episodes are excluded from every
+duration average (never folded in as `0.0`). `fugu-router stats` and `fugu-router
+duration` (alias of `duration-outliers`) both print **duration coverage** as
+`recorded/total` so the (historically low) recording rate is visible rather than
+hidden behind averages.
 
 `--delegation <fork|inline>` (optional, unset by default) tags the episode with
 which subagent delegation strategy produced it, for a fork-vs-inline

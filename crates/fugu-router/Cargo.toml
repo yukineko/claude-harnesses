@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "fugu-router"
-version = "0.1.24"
+version = "0.1.25"
 edition = "2021"
 description = "fugu-style per-model routing for Claude Code orchestration. Learns from past task outcomes (which Claude tier passed verification, at what cost) via lexical k-NN over a local JSONL episode store and picks the cheapest tier that historically clears similar work; feeds condukt's suggested_model. No API key, no embedding service."
 

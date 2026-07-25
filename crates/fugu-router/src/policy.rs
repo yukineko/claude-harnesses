@@ -493,7 +493,7 @@ mod tests {
                 human_label: None,
                 labeled_by: None,
                 skill_fingerprint: None,
-                duration_secs: 0.0,
+                duration_secs: None,
                 delegation: None,
                 ..Default::default()
             },

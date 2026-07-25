@@ -43,12 +43,24 @@ pub struct Episode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_fingerprint: Option<String>,
     /// Measured wall-clock duration (seconds) of the worker/verifier task, when
-    /// the caller (condukt) knows it. `#[serde(default)]` (not `Option`) so an
-    /// older JSONL line with no `duration_secs` field reads as `0.0` rather than
-    /// failing to parse — measurement-only, never consulted by routing/scoring
+    /// the caller (condukt) knows it. Tri-state: `None` = **unmeasured** (never
+    /// conflated with a measured `0.0`), `Some(x)` = a real measurement `x > 0`.
+    ///
+    /// Back-compat with the ~1112-line legacy JSONL store is explicit: the OLD
+    /// writer always serialized this field, writing `0.0` for an unmeasured
+    /// task, so a legacy line carries `duration_secs: 0.0` for "unmeasured".
+    /// [`de_duration_secs`] therefore maps BOTH an absent field (via
+    /// `#[serde(default)]`) AND a present `0.0` (and any non-positive/`null`) to
+    /// `None`; only a present strictly-positive number is a measurement. The NEW
+    /// writer OMITS the field entirely for `None` (`skip_serializing_if`) rather
+    /// than writing `0.0`. Measurement-only, never consulted by routing/scoring
     /// (`policy::route`/`decide_bandit` are unchanged by this field).
-    #[serde(default)]
-    pub duration_secs: f64,
+    #[serde(
+        default,
+        deserialize_with = "de_duration_secs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub duration_secs: Option<f64>,
     /// Which delegation strategy produced this episode (`"fork"` / `"inline"`),
     /// when the caller manually recorded it. `None` = not a delegation-strategy
     /// comparison episode (ordinary worker/verifier record). Measurement-only —
@@ -101,6 +113,23 @@ pub struct Episode {
 
 fn default_role() -> String {
     "worker".to_string()
+}
+
+/// Deserialize `Episode::duration_secs`, collapsing the legacy on-disk encoding
+/// onto the tri-state. The OLD writer always serialized the field, writing
+/// `0.0` for a task whose duration was never measured; the NEW writer omits it
+/// (`skip_serializing_if`). So a present `0.0` (legacy unmeasured), a present
+/// `null`, or any non-positive value ALL mean "unmeasured" and map to `None`;
+/// only a present strictly-positive number is a real measurement. An entirely
+/// absent field is handled by `#[serde(default)]` (which does not call this) and
+/// also yields `None`. This is the single point that guarantees not-measured is
+/// never read back as measured-as-zero.
+fn de_duration_secs<'de, D>(d: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<f64>::deserialize(d)?;
+    Ok(v.filter(|x| *x > 0.0))
 }
 
 impl Episode {
@@ -417,7 +446,7 @@ mod tests {
             human_label: None,
             labeled_by: None,
             skill_fingerprint: None,
-            duration_secs: 0.0,
+            duration_secs: None,
             delegation: None,
             ..Default::default()
         }
@@ -658,7 +687,7 @@ mod tests {
             human_label: None,
             labeled_by: None,
             skill_fingerprint: None,
-            duration_secs: 0.0,
+            duration_secs: None,
             delegation: None,
             ..Default::default()
         };
@@ -716,7 +745,7 @@ mod tests {
                             human_label: None,
                             labeled_by: None,
                             skill_fingerprint: None,
-                            duration_secs: 0.0,
+                            duration_secs: None,
                             delegation: None,
                             ..Default::default()
                         };
@@ -829,19 +858,48 @@ mod tests {
     }
 
     #[test]
-    fn duration_secs_roundtrips_and_defaults_to_zero_on_old_lines() {
+    fn duration_secs_tristate_roundtrip_and_legacy_zero_is_unmeasured() {
+        // A real positive measurement round-trips as Some(x).
         let mut ep = sample_ep("add auth", "sonnet");
-        ep.duration_secs = 42.5;
+        ep.duration_secs = Some(42.5);
         let line = serde_json::to_string(&ep).unwrap();
         let back: Episode = serde_json::from_str(&line).unwrap();
-        assert_eq!(back.duration_secs, 42.5);
+        assert_eq!(back.duration_secs, Some(42.5));
 
-        // An OLD episode JSON line recorded before this field existed has no
-        // "duration_secs" key at all — it must still parse, defaulting to 0.0
-        // rather than failing to deserialize.
-        let old_line = r#"{"ts":1,"title":"legacy task","touched_files":[],"class":"parallel","model":"sonnet","role":"worker","pass":true,"cost_usd":0.0}"#;
-        let back_old: Episode = serde_json::from_str(old_line).unwrap();
-        assert_eq!(back_old.duration_secs, 0.0);
+        // The NEW writer OMITS the field for an unmeasured (None) episode
+        // rather than writing 0.0.
+        let mut none_ep = sample_ep("no duration", "sonnet");
+        none_ep.duration_secs = None;
+        let none_line = serde_json::to_string(&none_ep).unwrap();
+        assert!(
+            !none_line.contains("duration_secs"),
+            "unmeasured episode must omit the field, got: {none_line}"
+        );
+        let back_none: Episode = serde_json::from_str(&none_line).unwrap();
+        assert_eq!(back_none.duration_secs, None);
+
+        // An OLD line predating the field (absent key) → unmeasured (None).
+        let old_absent = r#"{"ts":1,"title":"legacy","touched_files":[],"class":"parallel","model":"sonnet","role":"worker","pass":true,"cost_usd":0.0}"#;
+        let back_absent: Episode = serde_json::from_str(old_absent).unwrap();
+        assert_eq!(
+            back_absent.duration_secs, None,
+            "an absent duration_secs must read as unmeasured"
+        );
+
+        // A LEGACY line that explicitly wrote 0.0 for an unmeasured task MUST
+        // also read as unmeasured (None), NOT as a measured 0.0 — the whole
+        // point of the tri-state (not-measured != measured-as-zero).
+        let legacy_zero = r#"{"ts":1,"title":"legacy","touched_files":[],"class":"parallel","model":"sonnet","role":"worker","pass":true,"cost_usd":0.0,"duration_secs":0.0}"#;
+        let back_zero: Episode = serde_json::from_str(legacy_zero).unwrap();
+        assert_eq!(
+            back_zero.duration_secs, None,
+            "a legacy present 0.0 must read as unmeasured, never Some(0.0)"
+        );
+
+        // A present positive value still round-trips from disk.
+        let legacy_pos = r#"{"ts":1,"title":"m","touched_files":[],"class":"parallel","model":"sonnet","role":"worker","pass":true,"cost_usd":0.0,"duration_secs":7.5}"#;
+        let back_pos: Episode = serde_json::from_str(legacy_pos).unwrap();
+        assert_eq!(back_pos.duration_secs, Some(7.5));
     }
 
     #[test]

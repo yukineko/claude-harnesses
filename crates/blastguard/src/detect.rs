@@ -168,6 +168,232 @@ to guess"
     None
 }
 
+/// The literal directory prefix of a wildcard operand: the components before
+/// the first component that carries a glob metacharacter. `None` when the very
+/// first component is already a pattern (`*`, `*.rs`) — there is nothing literal
+/// left to judge, so the caller must not pretend it learned anything.
+fn glob_literal_prefix(tok: &str) -> Option<String> {
+    let mut literal: Vec<&str> = Vec::new();
+    for comp in tok.split('/') {
+        if has_glob_meta(comp) {
+            break;
+        }
+        literal.push(comp);
+    }
+    if literal.is_empty() {
+        return None;
+    }
+    Some(literal.join("/"))
+}
+
+/// Deny reason for a WILDCARD operand aimed into a protected tree, or `None`.
+///
+/// Round 2 (adversarial verifier). `analyze_rm` skips glob operands before the
+/// protected check — correctly, because a token containing `*` is not a literal
+/// path and matching it against the protected globs can only ever FAIL and
+/// thereby look clean — and it can afford to, because it has a blanket
+/// "wildcard rm denies" backstop underneath. The `chmod` arm and the `mv` source
+/// loop copied the first half of that reasoning and not the second: they handed
+/// the raw `*`-bearing token to the protected check, got the guaranteed
+/// non-match, and fell through to Allow. `chmod 000 .claude/*`,
+/// `chmod 644 .claude/*` and `mv .claude/* /tmp/` were all ALLOW on 0.2.19,
+/// while `chmod -x .githooks/*` denied only by the accident that the pattern
+/// `.githooks/**` glob-matches the literal token `.githooks/*`.
+///
+/// What is knowable about a wildcard without running the shell is its LITERAL
+/// PREFIX, and that is enough: `.claude/*` cannot expand to anything outside
+/// `.claude`, so if the prefix is (or holds) protected paths the expansion
+/// reaches them. This is a Deny rather than an Ask because it is the same
+/// verdict the equivalent `rm` shape already gets, and a wildcard consuming a
+/// protected directory's children is a positively recognised hazard, not an
+/// unanalysable construct.
+fn protected_glob_deny(action: &str, tok: &str) -> Option<Decision> {
+    if !has_glob_meta(tok) {
+        return None;
+    }
+    let prefix = glob_literal_prefix(tok)?;
+    if exclude::touches_protected(&prefix) {
+        Some(Decision::deny(format!(
+            "{action} is a wildcard ({tok}) expanding inside a protected gate/config tree — \
+it controls which hooks, gates or policies run, so blastguard refuses"
+        )))
+    } else {
+        None
+    }
+}
+
+/// Commands that only READ their operands. Reading a gate's config
+/// (`cat .claude/settings.json`, `grep hooks .githooks/pre-commit`) is routine
+/// work and must stay Allow, so this set is what makes the unrecognised-verb
+/// rule in [`unknown_verb_protected_ask`] affordable at all.
+///
+/// The list runs in the CLOSED direction, which is the whole reason it is
+/// spelled this way round. A list of DESTRUCTIVE verbs rots open: every verb
+/// nobody thought of (`unlink`, `ditto`, `ex`, `awk -i inplace`) is a free
+/// bypass the day it is invented, which is exactly how finding 3 was produced.
+/// A list of READ-ONLY verbs rots closed: a verb nobody thought of resolves to
+/// Ask when it touches a protected path, which is what CLAUDE.md §3 asks of
+/// "cannot determine". The residual cost is a false Ask on some unlisted
+/// read-only tool aimed at a gate file — recoverable by a human, or by adding
+/// the name here.
+///
+/// Shells, code interpreters and the shell-evaluation words (`eval`, `exec`,
+/// `source`, `.`) are NOT listed here: they are exempted separately in
+/// [`unknown_verb_protected_ask`] because they have dedicated analysis above
+/// (payload re-analysis, the inline-eval-flag deny). RUNNING a hook script or
+/// sourcing an rc file (`. ~/.bashrc`, `source .venv/bin/activate`) is not
+/// modifying it, and what the payload then does is judged by the recursive
+/// analysis, not by this rule.
+const READ_ONLY_COMMANDS: &[&str] = &[
+    // viewers / pagers
+    "cat",
+    "bat",
+    "head",
+    "tail",
+    "less",
+    "more",
+    "nl",
+    "od",
+    "xxd",
+    "hexdump",
+    "strings",
+    // search
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "ag",
+    "ack", // listing / metadata
+    "ls",
+    "stat",
+    "file",
+    "du",
+    "df",
+    "wc",
+    "realpath",
+    "readlink",
+    "dirname",
+    "basename",
+    "pwd",
+    // comparison
+    "diff",
+    "cmp",
+    "comm", // digests
+    "md5",
+    "md5sum",
+    "sha1sum",
+    "sha256sum",
+    "sha512sum",
+    "shasum",
+    "cksum",
+    // text transforms that write only to stdout
+    "sort",
+    "uniq",
+    "cut",
+    "tr",
+    "fold",
+    "column",
+    "paste",
+    "join",
+    "rev",
+    // structured-data readers
+    "jq",
+    "yq", // shell builtins / navigation that create nothing destructive
+    "echo",
+    "printf",
+    "true",
+    "false",
+    "test",
+    "which",
+    "type",
+    "whereis",
+    "cd",
+    "pushd",
+    "popd",
+    "mkdir",
+    "export",
+    "set",
+    "unset",
+];
+
+fn is_read_only_command(cmd: &str) -> bool {
+    READ_ONLY_COMMANDS.contains(&cmd)
+}
+
+/// Verdict for a command this module has NO rule for, when one of its operands
+/// names (or contains) a protected gate/hook/policy path.
+///
+/// Round 2 (adversarial verifier). The catch-all arm of the dispatch was
+/// `other => Allow` (modulo `mkfs`), so every verb without an arm reached every
+/// protected path unclassified — measured ALLOW on 0.2.19: `unlink <protected>`,
+/// `rmdir .githooks`, `patch -p1 <protected>`, `ed`/`ex` scripts, `awk -i
+/// inplace`, `gzip`/`bzip2`/`xz` (which REPLACE their input), `rsync -a --delete
+/// … .claude/hooks/`, `ditto`, `tar -x -C .claude`, `unzip -d`.
+///
+/// The choice made here, stated explicitly because the alternative was on the
+/// table: this is a GENERAL PRINCIPLE with a read-only exemption, not a list of
+/// destructive verbs. An unknown verb pointed at a protected path is the literal
+/// definition of "cannot determine" — blastguard does not know whether it reads,
+/// rewrites or deletes — and CLAUDE.md §3 says that resolves to the restrictive
+/// side. `Ask` rather than `Deny` because the honest content of the verdict is a
+/// refusal to guess, not a claim about the command (`model.rs`: "it is NOT a
+/// verdict about the command, it is a refusal to guess about one"); with no
+/// human present `Decision::hardened` collapses it to Deny anyway, so the
+/// restrictive resolution holds either way.
+///
+/// A verb-list version of this rule was rejected on the evidence: the list in
+/// the finding above IS the list somebody would have written in round 1, and it
+/// was assembled by an adversary probing round 1's gaps, not by foresight.
+fn unknown_verb_protected_ask(cmd: &str, rest: &[&str]) -> Decision {
+    if is_read_only_command(cmd)
+        || is_shell(cmd)
+        || is_code_interpreter(cmd)
+        || matches!(cmd, "eval" | "exec" | "source" | ".")
+    {
+        return Decision::Allow;
+    }
+    for op in positional_operands(rest, &[]) {
+        let hit = if has_glob_meta(op) {
+            glob_literal_prefix(op)
+                .map(|p| exclude::touches_protected(&p))
+                .unwrap_or(false)
+        } else {
+            exclude::touches_protected(op)
+        };
+        if hit {
+            return Decision::ask(format!(
+                "`{cmd}` is a command blastguard has no rule for, and {op} is a protected \
+gate/config path — blastguard cannot tell whether this reads it, rewrites it or removes it, \
+and refuses to guess"
+            ));
+        }
+    }
+    Decision::Allow
+}
+
+/// `unlink` / `rmdir`: the single-file and empty-directory twins of `rm`.
+///
+/// Round 2. `unlink FILE` is `rm FILE` with a different spelling of the same
+/// syscall, and `rmdir .githooks` removes the hook directory outright — neither
+/// had an arm, so both reached `_ => Allow`. Ordinary targets stay allowed: a
+/// non-recursive single-target delete is below this crate's destructive bar
+/// (same rule `analyze_rm` applies), so only the protected-target case is a
+/// verdict.
+fn analyze_unlink_rmdir(cmd: &str, rest: &[&str]) -> Decision {
+    for op in positional_operands(rest, &[]) {
+        if let Some(deny) = protected_disarm_deny(cmd, op) {
+            return deny;
+        }
+        if let Some(deny) = protected_tree_deny(cmd, op) {
+            return deny;
+        }
+        if let Some(deny) = protected_glob_deny(&format!("{cmd} operand"), op) {
+            return deny;
+        }
+    }
+    Decision::Allow
+}
+
 fn detect_write(ti: Option<&Value>) -> Decision {
     let path = match extract_path(ti) {
         Some(p) => p,
@@ -585,18 +811,22 @@ fn redirect_target_is_safe(target: &str) -> bool {
 // predicate used to allow any redirect target under `/tmp`, `/var/tmp`,
 // `/var/folders` and their `/private` twins, so that `cargo test 2> /tmp/log`
 // would not be denied. It was a raw `starts_with` prefix test, and
-// `exclude::normalize` does NOT resolve `..`, so `/tmp/../etc/hosts`,
+// at the time `exclude::normalize` did not resolve `..`, so `/tmp/../etc/hosts`,
 // `/var/tmp/../../etc/hosts`, `/private/tmp/../../Users/yuki/.zshrc`,
 // `/var/folders/../../etc/hosts` and `/tmp//../etc/hosts` all passed the
 // prefix test and thereby disabled the ENTIRE truncating-redirect rule for
 // ANY target on the line.
 //
-// It was NOT replaced with a `..`-resolving version. A carve-out whose only
-// purpose is convenience is exactly what produced this bypass, and the repo's
-// governing rule is that a gate which fails open is worse than no gate. The
-// pre-existing (sound) behaviour is restored: `> /tmp/log` is DENIED. That is
-// a false positive, which is the acceptable side of the trade — the user can
-// rephrase (`>> /tmp/log`, `2>&1`, `/dev/null`) or approve manually.
+// It was NOT replaced with a `..`-resolving version, and 0.2.20 does not
+// reinstate it even though `normalize` DOES resolve `..` now. Those are two
+// separate questions: resolving `..` removes one of the ways the carve-out
+// could be fooled, it does not make a convenience carve-out on the permissive
+// side of a gate a good idea (`~`, `$TMPDIR` and symlinks are all still
+// unresolvable here). The repo's governing rule is that a gate which fails open
+// is worse than no gate. The pre-existing (sound) behaviour stands:
+// `> /tmp/log` is DENIED. That is a false positive, which is the acceptable
+// side of the trade — the user can rephrase (`>> /tmp/log`, `2>&1`,
+// `/dev/null`) or approve manually.
 
 /// Quote-aware split of a command line into individual simple-command segments
 /// on `;`, newline, `&&`, `||`, `|`, `&`.
@@ -1790,6 +2020,9 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
         // the whole protected-path rule. Only the DESTINATION matters here:
         // reading a protected file is harmless, writing one is the hazard.
         "cp" | "mv" | "install" | "ln" => analyze_copy_move(cmd, rest),
+        // Round 2: the single-file and empty-directory twins of `rm`, which had
+        // no arm at all. See `analyze_unlink_rmdir`.
+        "unlink" | "rmdir" => analyze_unlink_rmdir(cmd, rest),
         "sed" => analyze_sed(rest),
         "find" => analyze_find(rest, depth),
         "xargs" => analyze_xargs(rest, depth),
@@ -1817,9 +2050,21 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
                 // A chmod whose mode could not be located is not a harmless
                 // chmod; treat it as removing executability (restrictive).
                 if mode.map(mode_removes_exec).unwrap_or(true) {
+                    // Round 2: the wildcard case. `chmod 000 .claude/*` was
+                    // ALLOW because `protected_disarm_deny` was handed a token
+                    // containing `*`, which cannot match a literal path glob.
+                    // See `protected_glob_deny`. The DIRECTORY case is checked
+                    // too: a non-recursive `chmod 000 .claude` clears the
+                    // traverse bit and makes every protected file under it
+                    // unreachable, which is a disarm without touching a byte of
+                    // any of them.
                     targets
                         .into_iter()
-                        .find_map(|t| protected_disarm_deny("chmod", t))
+                        .find_map(|t| {
+                            protected_disarm_deny("chmod", t)
+                                .or_else(|| protected_tree_deny("chmod", t))
+                                .or_else(|| protected_glob_deny("chmod target", t))
+                        })
                         .unwrap_or(Decision::Allow)
                 } else {
                     Decision::Allow
@@ -1870,7 +2115,10 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
             if other.starts_with("mkfs") {
                 Decision::deny("mkfs formats a filesystem, destroying all data")
             } else {
-                Decision::Allow
+                // Round 2: this arm WAS `Decision::Allow`, i.e. every verb
+                // without a rule reached every protected path unclassified.
+                // See `unknown_verb_protected_ask`.
+                unknown_verb_protected_ask(other, rest)
             }
         }
     };
@@ -2231,6 +2479,26 @@ fn analyze_copy_move(cmd: &str, rest: &[&str]) -> Decision {
             if let Some(deny) = protected_tree_deny("mv source", src) {
                 return deny;
             }
+            // Round 2: `mv .claude/* /tmp/` was ALLOW. The two checks above are
+            // handed a token containing `*`, which cannot match a literal path
+            // glob, and unlike `analyze_rm` this loop has no wildcard backstop
+            // underneath it. See `protected_glob_deny`.
+            if let Some(deny) = protected_glob_deny("mv source", src) {
+                return deny;
+            }
+            // Round 2: `find … -exec mv {} /tmp/ \;` re-analyses to the tail
+            // `mv {} /tmp/`, whose source operand is the literal placeholder
+            // `{}` — a path known only to `find` at run time. Matching it
+            // against the protected globs is guaranteed to miss, so the
+            // placeholder has to be recognised as what it is: an operand
+            // blastguard cannot resolve, in a position that unlinks whatever it
+            // resolves to. Ask, per CLAUDE.md §3.
+            if src.contains("{}") {
+                return Decision::ask(format!(
+                    "mv source {src} is a find -exec placeholder standing for every matched \
+path — blastguard cannot tell what it expands to, and mv unlinks it, so it refuses to guess"
+                ));
+            }
         }
     }
 
@@ -2259,6 +2527,9 @@ fn analyze_copy_move(cmd: &str, rest: &[&str]) -> Decision {
         if let Some(deny) = protected_path_deny(&action, &dir) {
             return deny;
         }
+        if let Some(deny) = protected_glob_deny(&action, &dir) {
+            return deny;
+        }
         let base = dir.trim_end_matches('/');
         for src in sources {
             let landed = format!("{base}/{}", basename(src));
@@ -2270,7 +2541,9 @@ fn analyze_copy_move(cmd: &str, rest: &[&str]) -> Decision {
     }
 
     match operands.last() {
-        Some(dest) => protected_path_deny(&action, dest).unwrap_or(Decision::Allow),
+        Some(dest) => protected_path_deny(&action, dest)
+            .or_else(|| protected_glob_deny(&action, dest))
+            .unwrap_or(Decision::Allow),
         // One operand or none: nothing is being written over (`cp a` is an
         // error, `mv -t DIR` with no source does nothing).
         None => Decision::Allow,
@@ -2450,6 +2723,14 @@ fn analyze_git(rest: &[&str]) -> Decision {
             let has_x = has_short(rest, 'x');
             if has_f && (has_d || has_x) {
                 Decision::deny("git clean -f with -d/-x deletes untracked files & dirs")
+            } else if has_f {
+                // Round 2: the `&& (has_d || has_x)` conjunction read as if `-d`
+                // were what made the command destructive. It is not — it only
+                // widens the delete to DIRECTORIES. Plain `git clean -f` already
+                // deletes every untracked FILE under the pathspec, irreversibly
+                // (they are untracked, so git has no copy). `-n`/`--dry-run`
+                // carries no `f` and is unaffected.
+                Decision::deny("git clean -f deletes untracked files irreversibly")
             } else {
                 Decision::Allow
             }
@@ -2490,11 +2771,78 @@ fn analyze_git(rest: &[&str]) -> Decision {
                 if rest[pos + 1..].iter().any(|t| *t == "." || *t == "./") {
                     return Decision::deny("git checkout -- . discards all working-tree changes");
                 }
-                if !rest[pos + 1..].is_empty() {
+            }
+            // Over-block narrowing (round 2 follow-up). The earlier round denied
+            // `git checkout -- <ANY path>` unconditionally, to mirror the
+            // `restore` arm. But `git restore <path>` blanket-denying an
+            // *ordinary* tracked file is itself a pre-existing over-block
+            // (backlog 628b6594), and "discard my uncommitted edits to one file"
+            // is one of the most common git operations there is — blanket-denying
+            // it is the kind of friction that gets a gate switched off, a worse
+            // outcome than the narrow hole. Protected pathspecs are already
+            // denied by the target-classification loop above (with the disarm
+            // reason + rule id); the whole-tree `-- .` form is caught just above.
+            // Everything else — `git checkout -- src/main.rs`, `-- Cargo.toml`,
+            // `git checkout HEAD~1 -- src/main.rs` — falls through to Allow, its
+            // pre-round-1 behaviour. The two mirrors are brought into agreement
+            // on the PROTECTED condition, not by unifying upward to blanket deny.
+            // Round 2: the whole-tree rule above is gated on finding a literal
+            // `--`, so the separator-less spelling escaped it — `git checkout .`
+            // and `git checkout HEAD .` were ALLOW while `git checkout -- .` was
+            // DENY, for the same operation. Only `.`/`./` is matched here: a
+            // pathspec and a branch name are indistinguishable without the
+            // separator (`git checkout main` must stay Allow), but `.` is never
+            // a branch name.
+            for op in positional_operands(&rest[idx + 1..], &[]) {
+                if op == "." || op == "./" {
                     return Decision::deny(
-                        "git checkout -- <path> overwrites the working tree from the index, \
-discarding uncommitted changes",
+                        "git checkout . discards all working-tree changes under the current \
+directory",
                     );
+                }
+            }
+            Decision::Allow
+        }
+        // Round 2, MIRROR GAP (the same one twice). `restore` and `switch` are
+        // the two halves git split `checkout` into; round 1 adopted `restore`'s
+        // twin and left `switch`'s, so `git switch -f main` and
+        // `git switch --discard-changes main` had no arm at all and reached
+        // `_ => Allow` — both throw away uncommitted working-tree changes, which
+        // is precisely what the `checkout --force` arm above denies.
+        //
+        // A plain `git switch <branch>` REFUSES to run with a dirty tree, so it
+        // is not the same command and stays allowed; likewise `-c/--create`.
+        "switch" => {
+            if rest.contains(&"--force")
+                || rest.contains(&"--discard-changes")
+                || has_short(rest, 'f')
+            {
+                Decision::deny("git switch --force/--discard-changes discards working-tree changes")
+            } else {
+                Decision::Allow
+            }
+        }
+        // Round 2: `git rm` had no arm, so `git rm .githooks/pre-commit`,
+        // `git rm -rf .githooks`, `git rm -r -f .claude` and
+        // `git rm --cached .claude/settings.json` all reached `_ => Allow`.
+        // `.githooks/**` is tracked in this repo, so `git rm` really does delete
+        // it from the working tree — the same one-command disarm as the
+        // already-denied `rm -rf .githooks`, spelled through git.
+        //
+        // `--cached` is denied too: it leaves the bytes on disk but removes the
+        // file from the repo, so the next clone/checkout has no gate. Ordinary
+        // targets are untouched (`git rm src/old.rs` stays Allow) — only the
+        // TARGET is classified, never the blast radius.
+        "rm" => {
+            for op in positional_operands(&rest[idx + 1..], &[]) {
+                if let Some(deny) = protected_disarm_deny("git rm", op) {
+                    return deny;
+                }
+                if let Some(deny) = protected_tree_deny("git rm", op) {
+                    return deny;
+                }
+                if let Some(deny) = protected_glob_deny("git rm operand", op) {
+                    return deny;
                 }
             }
             Decision::Allow
@@ -2557,7 +2905,25 @@ discarding uncommitted changes",
                 .map(|t| normalized_command(t))
                 .unwrap_or_default();
             if subcmd == "clear" || subcmd == "drop" {
-                Decision::deny("git stash clear/drop irreversibly deletes stashed changes")
+                return Decision::deny("git stash clear/drop irreversibly deletes stashed changes");
+            }
+            // Round 2: the scan above is `.find(|t| !t.starts_with('-'))`, so it
+            // SKIPS every flag — and the flags are where the destruction is.
+            // `git stash -a`/`--all` and `git stash push -u` sweep untracked
+            // (and, for `-a`, ignored) files out of the working tree. That is
+            // the functional equal of the already-denied `git clean -fdx`, just
+            // with the debris parked in a stash entry a later `stash drop`
+            // erases. Every one of these was ALLOW on 0.2.19.
+            let sweeps_untracked = rest[idx + 1..].iter().any(|t| {
+                *t == "--all"
+                    || *t == "--include-untracked"
+                    || (is_short_flag(t) && (t.contains('a') || t.contains('u')))
+            });
+            if sweeps_untracked {
+                Decision::deny(
+                    "git stash -u/-a removes untracked (and with -a, ignored) files from the \
+working tree, like git clean",
+                )
             } else {
                 Decision::Allow
             }
@@ -3860,9 +4226,12 @@ mod tests {
     }
 
     // ---- D1: the `is_temp_scratch` carve-out was a universal bypass ----
-    // `exclude::normalize` does not resolve `..`, so a `/tmp/../` prefix made
-    // ANY target look like temp scratch and disabled rule 2 entirely. Each row
-    // below was a VERIFIED live ALLOW against the built hook binary.
+    // At the time, `exclude::normalize` did not resolve `..`, so a `/tmp/../`
+    // prefix made ANY target look like temp scratch and disabled rule 2
+    // entirely. Each row below was a VERIFIED live ALLOW against the built hook
+    // binary. These stay denied for a DIFFERENT reason than they were fixed
+    // for — the carve-out is gone, so there is nothing left for a traversal to
+    // fool — and 0.2.20's `..` resolution does not change that.
     #[test]
     fn d1_temp_prefix_traversal_no_longer_bypasses_redirect_rule() {
         for c in [

@@ -178,3 +178,78 @@ fn symlink_alias_form_is_blocked() {
         "ln -s .githooks hookslink && cd hookslink && rm pre-commit",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Residual (ea1355f5, round 2): `rewrite_bare_basenames` only rewrote an
+// operand with NO `/` at all, on the reasoning that anything already
+// carrying a `/` was "already pathful" and therefore already judged
+// correctly by the pre-existing rules. That reasoning silently assumed the
+// operand's `/`-bearing text was relative to the shell's REAL starting
+// directory — false once a `cd` has been tracked: `./pre-commit` and
+// `sub/../pre-commit` both LEXICALLY resolve back to `pre-commit` inside the
+// tracked directory, and the direct-path proof
+// (`rm .githooks/./pre-commit`, `rm .githooks/sub/../pre-commit`) was
+// already denied — only the REWRITE step was missing this case.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn controls_relative_direct_path_forms_are_already_denied() {
+    // Same anti-vacuity point as `controls_direct_path_forms_are_already_denied`,
+    // for the specific relative-operand spellings this residual fix covers.
+    assert_blocking(
+        bash("rm .githooks/./pre-commit"),
+        "rm .githooks/./pre-commit",
+    );
+    assert_blocking(
+        bash("rm .githooks/sub/../pre-commit"),
+        "rm .githooks/sub/../pre-commit",
+    );
+}
+
+#[test]
+fn cd_into_protected_dir_then_rm_dot_slash_basename_is_blocked() {
+    assert_blocking(
+        bash("cd .githooks && rm ./pre-commit"),
+        "cd .githooks && rm ./pre-commit",
+    );
+}
+
+#[test]
+fn cd_into_protected_dir_then_rm_dir_dotdot_basename_is_blocked() {
+    assert_blocking(
+        bash("cd .githooks && rm sub/../pre-commit"),
+        "cd .githooks && rm sub/../pre-commit",
+    );
+}
+
+#[test]
+fn dynamic_cd_then_relative_dot_slash_operand_is_never_silently_allowed() {
+    // `$DYNAMIC` cannot be resolved statically, so the tracked cwd goes
+    // `Unknown` — CLAUDE.md §3: "cannot determine" must resolve to the
+    // RESTRICTIVE side, never a silent `Allow`, and that must hold for a
+    // relative-with-slash operand exactly as it already held for a bare
+    // basename.
+    assert_blocking(
+        bash("cd $DYNAMIC && rm ./pre-commit"),
+        "cd $DYNAMIC && rm ./pre-commit",
+    );
+}
+
+#[test]
+fn relative_operand_that_escapes_the_tracked_dir_stays_allowed() {
+    // Anti-over-block control: a relative operand that lexically walks back
+    // OUT of the tracked (protected) directory into somewhere ordinary must
+    // stay `Allow` — the fix must not treat "any relative operand after a
+    // `cd` into a protected dir" as inherently suspicious, only one that
+    // actually resolves back INTO the protected tree.
+    assert_eq!(
+        bash("cd .githooks && rm ../src/build.o"),
+        Decision::Allow,
+        "expected Allow for `cd .githooks && rm ../src/build.o`"
+    );
+    assert_eq!(
+        bash("cd src && rm ./foo.o"),
+        Decision::Allow,
+        "expected Allow for `cd src && rm ./foo.o`"
+    );
+}

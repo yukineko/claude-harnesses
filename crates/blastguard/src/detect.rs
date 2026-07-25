@@ -885,8 +885,10 @@ fn detect_bash(cmd: &str, depth: usize) -> Decision {
     // `exclude.rs` is path-shaped, so `cd .githooks && rm pre-commit` never
     // matched any of them: `.githooks` alone (the `cd` operand) touches a
     // protected path and is read-only, so it is exempt; `pre-commit` alone
-    // (the `rm` operand) is a bare basename that matches no protected glob on
-    // its own. Neither segment, judged independently, is the direct-path form
+    // (the `rm` operand) is a bare basename — and `./pre-commit`/
+    // `sub/../pre-commit` are relative operands of the same shape — that
+    // match no protected glob on their own. Neither segment, judged
+    // independently, is the direct-path form
     // `rm .githooks/pre-commit` that every rule above already denies.
     //
     // `cwd`/`aliases` are threaded through the loop below (not recomputed per
@@ -915,12 +917,12 @@ fn detect_bash(cmd: &str, depth: usize) -> Decision {
 /// The shell working-directory PREFIX this analysis has tracked so far, built
 /// up left-to-right across the `;`/`&&`/`||`/`|`/`&`-separated segments of ONE
 /// command line (see the loop in [`detect_bash`]) so a later segment's
-/// bare-basename operand can be judged in the directory it actually resolves
-/// inside, not just as literal text.
+/// RELATIVE operand (bare basename or `./`/`../`-qualified) can be judged in
+/// the directory it actually resolves inside, not just as literal text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CwdState {
-    /// No `cd`/`pushd` has been seen yet: judge bare-basename operands
-    /// exactly as before this fix (no prefix to apply).
+    /// No `cd`/`pushd` has been seen yet: judge relative operands exactly as
+    /// before this fix (no prefix to apply).
     Root,
     /// A `cd`/`pushd` (or a `cd` through a `ln -s`-created alias) this
     /// analysis could resolve LEXICALLY to a literal directory — relative or
@@ -944,7 +946,7 @@ enum CwdState {
 /// punctuation lands glued to the first and last WORD of the group, not as
 /// its own token. This is applied only to the handful of tokens this cwd-
 /// tracking pass itself inspects (a segment's head word, a `cd`/`pushd`
-/// target, an `ln -s` operand, a rewritten bare-basename operand) — never to
+/// target, an `ln -s` operand, a rewritten relative operand) — never to
 /// the general tokeniser `analyze_segment` uses, so it cannot change how any
 /// PRE-EXISTING rule reads a token.
 fn strip_edge_parens(tok: &str) -> &str {
@@ -958,9 +960,9 @@ fn strip_edge_parens(tok: &str) -> &str {
     t
 }
 
-/// The operand TARGETS a bare-basename rewrite (or the Undetermined-cwd Ask)
-/// cares about for `head`: the same set [`rewrite_bare_basenames`] would
-/// substitute, computed the same way the verb's own rule arm in
+/// The operand TARGETS a relative-operand rewrite (or the Undetermined-cwd
+/// Ask) cares about for `head`: the same set [`rewrite_relative_operands`]
+/// would substitute, computed the same way the verb's own rule arm in
 /// `analyze_command_at` computes its operands, so the two definitions cannot
 /// drift apart. Every other verb — anything this cwd-tracking pass has no
 /// opinion about — gets an empty set, which is a no-op for both callers.
@@ -977,18 +979,54 @@ fn verb_targets<'a>(head: &str, rest: &[&'a str]) -> Vec<&'a str> {
     }
 }
 
-/// Rewrite every BARE-BASENAME (no `/`) target operand of `seg` — for the
-/// verbs [`verb_targets`] has an opinion about — into `dir/operand`, so it is
-/// judged against the protected-path rules exactly as the direct-path form
-/// (`rm .githooks/pre-commit`) already is. Non-target tokens (flags, a
-/// chmod MODE, an operand that already carries a `/`) are left untouched.
+/// True when `tok` is a RELATIVE filesystem operand — neither ABSOLUTE
+/// (`/etc/x`) nor home-relative (`~/x`; left alone, this analysis has no
+/// notion of `$HOME`).
+///
+/// BG-cwd-2 (residual, verified bypass on a571c683): the first cut of this
+/// rewrite only treated a BARE basename (no `/` at all, e.g. `pre-commit`) as
+/// eligible, on the reasoning that anything already carrying a `/` was
+/// "already pathful" and therefore already judged correctly. That reasoning
+/// is only true for a path relative to the shell's REAL starting directory —
+/// it is false for one relative to the tracked cwd: `cd .githooks && rm
+/// ./pre-commit` still evaluated `./pre-commit` from `Root` (no protected
+/// glob matches it) even though the direct form `rm .githooks/./pre-commit`
+/// was already denied. `sub/../pre-commit` is the same hole spelled with a
+/// real subdirectory instead of `.`. A bare basename is just the ZERO-`/`
+/// case of "relative operand", not a different question — this predicate
+/// covers both, and [`rewrite_relative_operands`] treats them identically.
+fn is_relative_operand(tok: &str) -> bool {
+    !tok.is_empty() && !tok.starts_with('/') && !tok.starts_with('~')
+}
+
+/// Rewrite every RELATIVE target operand of `seg` — for the verbs
+/// [`verb_targets`] has an opinion about — into `dir` joined with the
+/// operand and lexically normalized (`.`/`..` resolved via
+/// [`exclude::normalize`]), so it is judged against the protected-path rules
+/// exactly as the direct-path form (`rm .githooks/pre-commit`) already is.
+/// This covers a bare basename (`pre-commit`), a `./`-prefixed one
+/// (`./pre-commit`), and one that navigates back INTO the tracked directory
+/// (`sub/../pre-commit`) identically — see [`is_relative_operand`]. An
+/// operand that navigates back OUT of the tracked directory into somewhere
+/// else (`../src/build.o`) normalizes to that somewhere-else path and is
+/// judged there, which is correctly `Allow` when that somewhere-else is not
+/// itself protected — this rewrite does not make an escaping relative
+/// operand MORE suspicious than the same path typed directly would be.
+///
+/// Non-target tokens (flags, a chmod MODE) and operands carrying an
+/// unresolvable shell expansion (`$VAR`, `` $(...) ``, backtick — nothing
+/// about their eventual value is known statically, so nothing safe can be
+/// joined against `dir`) are left untouched. Absolute and `~`-relative
+/// operands are also left untouched: [`is_relative_operand`] is false for
+/// them, so they fall through to the raw-token branch below and stay judged
+/// as-is, exactly as before this fix.
 ///
 /// A stray subshell `)` glued to the last token (see [`strip_edge_parens`])
 /// is dropped from the rewritten path rather than carried into it — the
 /// rewrite is meant to reproduce the direct-path form exactly, not a
 /// direct-path-form-plus-punctuation that only some protected globs (the
 /// wildcard-terminated ones) are lenient enough to still match.
-fn rewrite_bare_basenames(seg: &str, dir: &str) -> String {
+fn rewrite_relative_operands(seg: &str, dir: &str) -> String {
     let tokens: Vec<&str> = seg.split_whitespace().collect();
     let Some((head_tok, rest)) = tokens.split_first() else {
         return seg.to_string();
@@ -1000,10 +1038,9 @@ fn rewrite_bare_basenames(seg: &str, dir: &str) -> String {
         out.push(' ');
         if targets.contains(t) {
             let clean = strip_edge_parens(t);
-            if !clean.is_empty() && !clean.contains('/') {
-                out.push_str(dir);
-                out.push('/');
-                out.push_str(clean);
+            if !clean.is_empty() && is_relative_operand(clean) && !has_unresolvable_expansion(clean)
+            {
+                out.push_str(&exclude::normalize(&format!("{dir}/{clean}")));
                 continue;
             }
         }
@@ -1019,7 +1056,7 @@ fn rewrite_bare_basenames(seg: &str, dir: &str) -> String {
 /// A LITERAL alias recorded by an earlier `ln -s SRC DEST` (see
 /// [`advance_cwd_and_rewrite`]) is consulted FIRST: `cd` through a symlink
 /// whose target is a protected directory must land on the same `Known(dir)`
-/// a direct `cd` into that directory would, so a bare-basename operand in a
+/// a direct `cd` into that directory would, so a relative operand in a
 /// LATER segment is judged the same way either route got there.
 fn resolve_dir_token(tok: &str, cwd: &CwdState, aliases: &HashMap<String, String>) -> CwdState {
     let tok = strip_edge_parens(tok);
@@ -1114,15 +1151,15 @@ fn advance_cwd_and_rewrite(
     }
 
     match cwd {
-        CwdState::Known(dir) => (rewrite_bare_basenames(seg, dir), None, cwd.clone()),
+        CwdState::Known(dir) => (rewrite_relative_operands(seg, dir), None, cwd.clone()),
         CwdState::Unknown => {
             let targets = verb_targets(head, rest);
             if targets
                 .iter()
-                .any(|t| !strip_edge_parens(t).is_empty() && !strip_edge_parens(t).contains('/'))
+                .any(|t| is_relative_operand(strip_edge_parens(t)))
             {
                 let ask = Decision::ask(format!(
-                    "`{head}` operates on a bare filename after an earlier cd/pushd whose \
+                    "`{head}` operates on a RELATIVE path after an earlier cd/pushd whose \
 target directory blastguard could not statically resolve — it cannot tell whether this reaches \
 a protected gate/config path, and refuses to guess"
                 ));

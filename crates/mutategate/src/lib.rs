@@ -42,6 +42,48 @@ use serde::Deserialize;
 /// binary-float rounding (e.g. `0.7999999` when the true value is `0.8`).
 const KILL_RATE_EPSILON: f64 = 1e-9;
 
+/// Validate a `--min-kill-rate` before it is used as the gate threshold.
+///
+/// Returns the rate unchanged when it is a usable threshold, or an `Err` with a
+/// human-readable reason the caller should print before exiting non-zero.
+///
+/// A valid threshold is `0.0 < rate <= 1.0`. Both open ends are rejected on
+/// purpose, and the lower one is the point of this function:
+///
+///   * **`rate <= 0.0` (including `0.0` itself) is REJECTED.** Because a suite's
+///     kill-rate is always `>= 0.0` and the gate passes when `kill_rate >=
+///     min_kill_rate`, a floor of `0.0` makes the gate pass unconditionally —
+///     i.e. it silently DISABLES the gate while still reporting "passed". That
+///     is the classic floorless-clamp fail-open (CLAUDE.md §3: a threshold
+///     sanitizer must clamp to a range that keeps the gate *enabled*; "cannot
+///     determine / measure-only" must not masquerade as "clean"). A caller that
+///     genuinely wants no mutation gate must not run this binary at all, rather
+///     than run it with a threshold that always passes. This mirrors
+///     `propguard`'s `config.rs` (`if self.threshold == 0 { self.threshold = 1 }`).
+///   * `rate > 1.0` is rejected as unsatisfiable (a kill-rate can never exceed
+///     1.0, so the gate could never pass — an always-fail misconfiguration).
+///   * `NaN` is rejected (no comparison against it is meaningful).
+pub fn validate_min_kill_rate(rate: f64) -> Result<f64, String> {
+    if rate.is_nan() {
+        return Err("--min-kill-rate must be a number, got NaN".to_string());
+    }
+    if rate <= 0.0 {
+        return Err(format!(
+            "--min-kill-rate must be greater than 0.0 and at most 1.0 (got {rate}); \
+             0.0 (or negative) would disable the gate — the kill-rate is always \
+             >= 0.0, so a 0.0 floor always passes. To skip the mutation gate, do \
+             not run it; do not run it with a threshold that can never fail."
+        ));
+    }
+    if rate > 1.0 {
+        return Err(format!(
+            "--min-kill-rate must be at most 1.0 (got {rate}); a kill-rate can \
+             never exceed 1.0, so this threshold could never be met."
+        ));
+    }
+    Ok(rate)
+}
+
 /// Raw top-level `outcomes.json` document. Only `outcomes` is needed.
 #[derive(Debug, Deserialize)]
 struct RawLabOutcome {
@@ -280,6 +322,54 @@ pub fn evaluate(summary: MutationSummary, threshold: f64) -> GateOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── min-kill-rate validation: a gate-disabling floor must be rejected ──
+    // (backlog cde2212c) These pin the §3 floorless-clamp fix: the OLD guard
+    // was `!(0.0..=1.0).contains(&rate)`, which ACCEPTED 0.0. Because a suite's
+    // kill-rate is always >= 0.0 and the gate passes on `kill_rate >=
+    // min_kill_rate`, a 0.0 floor makes the gate pass unconditionally = a
+    // silently-disabled gate reported as "passed". Observed RED against the old
+    // accept-0.0 behavior before this validator existed.
+
+    #[test]
+    fn zero_min_kill_rate_is_rejected_it_disables_the_gate() {
+        let err = validate_min_kill_rate(0.0)
+            .expect_err("0.0 must be rejected: it disables the gate (always passes)");
+        assert!(
+            err.contains("disable the gate"),
+            "the error must explain WHY 0.0 is refused, got: {err}"
+        );
+    }
+
+    #[test]
+    fn negative_min_kill_rate_is_rejected() {
+        // Even more disabling than 0.0 — every kill-rate clears a negative floor.
+        assert!(validate_min_kill_rate(-0.01).is_err());
+        assert!(validate_min_kill_rate(-1.0).is_err());
+    }
+
+    #[test]
+    fn above_one_min_kill_rate_is_rejected_unsatisfiable() {
+        assert!(validate_min_kill_rate(1.0001).is_err());
+        assert!(validate_min_kill_rate(2.0).is_err());
+    }
+
+    #[test]
+    fn nan_min_kill_rate_is_rejected() {
+        assert!(validate_min_kill_rate(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn a_meaningful_positive_threshold_is_accepted_unchanged() {
+        // The whole usable open-closed range (0.0, 1.0] is accepted verbatim,
+        // including the smallest positive threshold and the maximum 1.0.
+        assert_eq!(validate_min_kill_rate(0.8).unwrap(), 0.8);
+        assert_eq!(validate_min_kill_rate(1.0).unwrap(), 1.0);
+        assert_eq!(
+            validate_min_kill_rate(f64::MIN_POSITIVE).unwrap(),
+            f64::MIN_POSITIVE
+        );
+    }
 
     /// A realistic (trimmed) `outcomes.json`: one baseline + a mix of mutant
     /// states. Baseline must be ignored; the score is computed from mutants only.

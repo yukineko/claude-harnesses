@@ -44,7 +44,10 @@ struct Cli {
     #[arg(long, default_value = DEFAULT_OUTCOMES)]
     outcomes: PathBuf,
 
-    /// Minimum acceptable kill-rate (killed / viable mutants), 0.0..=1.0.
+    /// Minimum acceptable kill-rate (killed / viable mutants). Must be in the
+    /// half-open range `(0.0, 1.0]`: `0.0` (or negative) is REJECTED because it
+    /// would disable the gate — a kill-rate is always `>= 0.0`, so a `0.0` floor
+    /// always passes. See `validate_min_kill_rate`.
     #[arg(long, default_value_t = DEFAULT_MIN_KILL_RATE)]
     min_kill_rate: f64,
 }
@@ -52,11 +55,8 @@ struct Cli {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    if !(0.0..=1.0).contains(&cli.min_kill_rate) {
-        eprintln!(
-            "mutategate: --min-kill-rate must be within 0.0..=1.0 (got {})",
-            cli.min_kill_rate
-        );
+    if let Err(why) = mutategate::validate_min_kill_rate(cli.min_kill_rate) {
+        eprintln!("mutategate: {why}");
         return ExitCode::from(2);
     }
 

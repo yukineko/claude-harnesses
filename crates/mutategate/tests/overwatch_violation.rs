@@ -199,3 +199,45 @@ fn no_panic_when_store_unwritable() {
     );
     assert_eq!(out.status.code(), Some(1));
 }
+
+/// Real-CLI counterpart to the lib unit tests (backlog cde2212c): a
+/// gate-disabling `--min-kill-rate 0` must be REJECTED with a usage error
+/// (exit 2) BEFORE any evaluation, not silently accepted.
+///
+/// The outcomes file here is a genuine PASS (`SAMPLE_FAIL` is 1 caught / 1
+/// missed = 0.5 kill-rate, which is `>= 0.0`), so the OLD `!(0.0..=1.0)`
+/// guard accepted `0.0`, evaluated, and exited 0 — the gate silently passed
+/// while effectively disabled. Observed RED against that behavior (exit 0);
+/// GREEN after the floor fix (exit 2). Distinct exit code (2 = usage) from the
+/// pass/fail codes (0/1) so this can't be confused with a normal gate verdict.
+#[test]
+fn zero_min_kill_rate_is_rejected_by_the_cli_before_evaluating() {
+    let sb = Sandbox::new("zero-min-kill-rate", SAMPLE_FAIL);
+    let out = Command::new(env!("CARGO_BIN_EXE_mutategate"))
+        .arg("--outcomes")
+        .arg("outcomes.json")
+        .arg("--min-kill-rate")
+        .arg("0")
+        .current_dir(&sb.dir)
+        .env("HOME", sb.home())
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .output()
+        .expect("failed to run mutategate binary");
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a gate-disabling min-kill-rate of 0 must be rejected as a usage error \
+         (exit 2), not accepted and evaluated"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("disable the gate"),
+        "stderr must explain WHY 0 is refused, got: {stderr}"
+    );
+    // It was rejected up front, so no store dir was ever created.
+    assert!(
+        !sb.home().join(".overwatch").exists(),
+        "rejection must happen before any evaluation/emit"
+    );
+}

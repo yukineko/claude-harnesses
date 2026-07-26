@@ -124,6 +124,52 @@ fn holder_progress(
     )
 }
 
+/// Compute the current holder's PROGRESS verdict for `project` as a
+/// [`Determination<Liveness>`], using the SAME single-call delta-vs-snapshot
+/// machinery as [`holder_progress`] / [`probe_at`] (git-head + transcript
+/// signals sampled against the persisted prior snapshot under
+/// `progress_store_dir`). This is the verdict `backlog lock status` embeds in
+/// an active-liveness object so heartbeat-only liveness cannot be rendered
+/// ([`crate::liveness::status_value`]).
+///
+/// When there is no holder — or the lock file is present but unreadable — there
+/// is no holder to judge, so the result is `Undetermined` (never a fabricated
+/// `Progressing`): status renders that branch without a liveness claim. A held
+/// holder whose signals are all unreadable, or a single sample, is likewise
+/// `Undetermined` (CLAUDE.md §3).
+///
+/// This is READ-ONLY observability: it advances the same sample state machine
+/// as `probe`, but it does NOT reap and does NOT change the reap-gate
+/// invariant — a plain acquire still reaps ONLY when [`holder_progress`]
+/// returns `Known(Stalled)`.
+pub fn holder_progress_verdict_at(
+    project: &str,
+    lock_dir: Option<&Path>,
+) -> Determination<Liveness> {
+    let path = match lock_dir {
+        Some(d) => lock_path_for(d, project),
+        None => lock_path(project),
+    };
+    let existing = match read_lock(&path) {
+        Some(info) => info,
+        None => {
+            let why = if path.exists() {
+                "lock file present but unreadable"
+            } else {
+                "no lock held for this project"
+            };
+            return Determination::undetermined(why);
+        }
+    };
+    holder_progress(&existing, now_unix(), lock_dir)
+}
+
+/// Compute the current holder's progress verdict using the default lock path.
+/// See [`holder_progress_verdict_at`].
+pub fn holder_progress_verdict(project: &str) -> Determination<Liveness> {
+    holder_progress_verdict_at(project, None)
+}
+
 /// `#[cfg(test)]` seam that lets a unit test force the progress verdict of a
 /// holder, so the reap-gate truth table (Stalled ⇒ reap; Progressing /
 /// Undetermined ⇒ protect) is exercised deterministically without standing up a

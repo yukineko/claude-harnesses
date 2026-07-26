@@ -560,7 +560,23 @@ fn run(cli: Cli) -> Result<()> {
                     None => lock::status_any(),
                 };
                 let presence = driver::presence_at(project.as_deref(), None);
-                match liveness::status_value(status, presence) {
+                // Compute the holder's progress verdict up front, via the SAME
+                // machinery as the reap gate, so an active/heartbeat liveness
+                // object can never be rendered without a progress verdict. When
+                // there is no --project (the cross-project `status_any` scan),
+                // the winning lock's own project is used; an absent/unreadable
+                // holder is `Undetermined`, not a fabricated "progressing".
+                let progress = match (&project, &status) {
+                    (Some(p), _) => lock::holder_progress_verdict(p),
+                    (None, lock::LockStatus::Active(info))
+                    | (None, lock::LockStatus::Stale(info)) => {
+                        lock::holder_progress_verdict(&info.project)
+                    }
+                    (None, _) => harness_core::verdict::Determination::undetermined(
+                        "no single holder to probe for progress",
+                    ),
+                };
+                match liveness::status_value(status, presence, progress) {
                     None => println!("none"),
                     Some(v) => println!("{}", serde_json::to_string_pretty(&v)?),
                 }

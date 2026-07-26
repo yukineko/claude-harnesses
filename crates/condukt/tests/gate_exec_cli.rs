@@ -422,3 +422,133 @@ fn missing_run_fails_soft_to_escalate_nonzero() {
         "expected escalate verdict; got {stdout}"
     );
 }
+
+// ── `verify checks` oracle: blastguard `Ask` must harden to `Deny` ───────────
+//
+// `verify::run_check` (the checks[] oracle spawned by `condukt verify checks`)
+// gates every declared command through `blastguard::detect::detect` before
+// handing it to `sh -c`. The oracle runs fully non-interactively (no human is
+// ever present to answer a blastguard `Ask`), so an `Ask` verdict must be
+// hardened to `Deny` and refused fail-closed — matching `Decision::hardened`'s
+// own contract (`crates/blastguard/src/model.rs`). Before the fix, only
+// `Decision::Deny` was matched, so an `Ask`-classified command string slipped
+// through untouched and reached `sh -c`.
+
+/// Write `checks` (a `{"checks":[...]}` document) to a temp file and run
+/// `condukt verify checks --file <path>`, returning the parsed report JSON.
+fn run_verify_checks(tag: &str, checks_json: &str) -> (std::process::Output, serde_json::Value) {
+    let pid = std::process::id();
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("condukt-verify-checks-cli-{pid}-{tag}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("checks.json");
+    std::fs::write(&file, checks_json).unwrap();
+
+    let out = Command::new(bin())
+        .args(["verify", "checks", "--file", file.to_str().unwrap()])
+        .current_dir(&dir)
+        .output()
+        .expect("spawn condukt verify checks");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("parse report JSON: {e}; {out:?}"));
+    (out, value)
+}
+
+#[test]
+fn pin_the_ask_classified_command_used_below() {
+    // RED-pin: confirm this exact command string is genuinely classified
+    // `Decision::Ask` by blastguard's detector — an unrecognised wrapper head
+    // (`my-cleanup-wrapper`) in front of a destructive `rm -rf` tail, the
+    // documented "ASK-2: unknown wrapper" case (blastguard detect.rs
+    // `unknown_wrapper_ask_covers_every_unrecognized_head`). If blastguard ever
+    // reclassifies this string, this assertion (not the refusal test below)
+    // is what breaks, keeping the two failure modes distinguishable.
+    let cmd = "my-cleanup-wrapper rm -rf /some/path";
+    let input = serde_json::json!({ "command": cmd });
+    let decision = blastguard::detect::detect("Bash", Some(&input));
+    assert!(
+        decision.is_ask(),
+        "expected Decision::Ask for {cmd:?}, got {decision:?} — pick a different pinned input"
+    );
+}
+
+#[test]
+fn ask_classified_check_command_is_refused_fail_closed_never_spawned() {
+    // GREEN (post-fix) behavior: the checks[] oracle hardens Ask -> Deny before
+    // spawning, so this never reaches `sh -c`. A refusal is observable as
+    // passed:false with exit:-1 (the same fail-soft shape used for a
+    // blastguard-Deny and for a genuine spawn failure) — critically NOT the
+    // exit code `sh` would produce if it actually tried to run
+    // `my-cleanup-wrapper` (a nonexistent binary -> exit 127). exit:-1 here is
+    // proof the shell was never invoked, not proof the command failed inside
+    // the shell.
+    let checks = r#"{"checks":[{"cmd":"my-cleanup-wrapper rm -rf /some/path"}]}"#;
+    let (out, report) = run_verify_checks("ask-refused", checks);
+    assert!(
+        out.status.success(),
+        "verify checks itself must exit 0 (the refusal is IN the report, not a CLI failure); out={out:?}"
+    );
+    assert_eq!(report["verdict"], "failed", "report={report}");
+    assert_eq!(report["all_passed"], false, "report={report}");
+    let results = report["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 1, "report={report}");
+    assert_eq!(
+        results[0]["passed"], false,
+        "an Ask-classified command must be refused, not executed: {report}"
+    );
+    assert_eq!(
+        results[0]["exit"], -1,
+        "refusal must short-circuit before spawn (exit -1), never sh's own exit code: {report}"
+    );
+}
+
+#[test]
+fn allow_classified_check_command_still_runs_normally_anti_vacuity() {
+    // Anti-vacuity control: hardening Ask->Deny must not over-block ordinary,
+    // clearly-safe checks. `true` (POSIX no-op, always exits 0) is
+    // Decision::Allow — pin that first, then prove it still actually runs
+    // (passed:true, exit:0) through the SAME oracle path exercised above.
+    let cmd = "true";
+    let input = serde_json::json!({ "command": cmd });
+    assert_eq!(
+        blastguard::detect::detect("Bash", Some(&input)),
+        blastguard::model::Decision::Allow,
+        "expected {cmd:?} to be Decision::Allow"
+    );
+
+    let checks = r#"{"checks":[{"cmd":"true","expect_exit":0}]}"#;
+    let (out, report) = run_verify_checks("allow-runs", checks);
+    assert!(out.status.success(), "out={out:?}");
+    assert_eq!(report["verdict"], "passed", "report={report}");
+    assert_eq!(report["all_passed"], true, "report={report}");
+    let results = report["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 1, "report={report}");
+    assert_eq!(
+        results[0]["passed"], true,
+        "an Allow-classified benign command must actually run and pass: {report}"
+    );
+    assert_eq!(results[0]["exit"], 0, "report={report}");
+}
+
+#[test]
+fn deny_classified_check_command_stays_refused_regression() {
+    // Regression: a clearly-destructive Deny input must remain refused exactly
+    // as before this change (Deny was already matched pre-fix; this guards
+    // against the .hardened() refactor accidentally changing that path).
+    let cmd = "rm -rf /";
+    let input = serde_json::json!({ "command": cmd });
+    assert!(
+        blastguard::detect::detect("Bash", Some(&input)).is_deny(),
+        "expected {cmd:?} to be Decision::Deny"
+    );
+
+    let checks = format!(r#"{{"checks":[{{"cmd":{cmd:?}}}]}}"#);
+    let (out, report) = run_verify_checks("deny-refused", &checks);
+    assert!(out.status.success(), "out={out:?}");
+    assert_eq!(report["verdict"], "failed", "report={report}");
+    let results = report["results"].as_array().expect("results array");
+    assert_eq!(results[0]["passed"], false, "report={report}");
+    assert_eq!(results[0]["exit"], -1, "report={report}");
+}

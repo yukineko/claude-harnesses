@@ -335,9 +335,11 @@ fn is_panic_evidence(t: &str) -> bool {
 /// **never-break-a-turn**: this function never `panic!`/`unwrap`/`expect`s on an
 /// external-input or absent-tool path. Every branch returns a verdict (JSON):
 ///
-/// - **blastguard `Deny`**: the command is refused *fail-closed* and is NEVER
-///   spawned — a fail-soft runtime-failure verdict carries the refusal reason in
-///   its stderr tail. No shell runs, so a destructive payload cannot execute.
+/// - **blastguard `Deny` (including `Ask` hardened to `Deny` — this launcher
+///   has no human in the loop)**: the command is refused *fail-closed* and is
+///   NEVER spawned — a fail-soft runtime-failure verdict carries the refusal
+///   reason in its stderr tail. No shell runs, so a destructive payload cannot
+///   execute.
 /// - **spawn failure** (missing target / not executable): a fail-soft failure
 ///   verdict (`exit_code` null, stderr carries the error, `note = "spawn-error"`).
 /// - **timeout**: the child is killed; a fail-soft failure verdict (`exit_code`
@@ -351,10 +353,12 @@ fn is_panic_evidence(t: &str) -> bool {
 pub fn launch_and_reflux(cmd: &str, timeout_secs: u64) -> serde_json::Value {
     // (a) blastguard gate — validate BEFORE spawning, reusing the same pure
     // detector the PreToolUse hook uses (no reimplementation). A flagged command
-    // is refused fail-closed and never reaches the shell.
+    // is refused fail-closed and never reaches the shell. `.hardened()` folds
+    // `Ask` into `Deny`: this launcher runs non-interactively (no human present
+    // to answer an Ask), so an unresolved Ask must refuse rather than proceed.
     let input = serde_json::json!({ "command": cmd });
     if let blastguard::model::Decision::Deny(reason) =
-        blastguard::detect::detect("Bash", Some(&input))
+        blastguard::detect::detect("Bash", Some(&input)).hardened()
     {
         let stderr = format!(
             "[blastguard] launch command `{cmd}` refused before sh -c (fail-closed) — {reason}"
@@ -574,10 +578,12 @@ pub fn launch_server_and_probe(
         }
     };
 
-    // (b) Blastguard gate — validate BEFORE spawning.
+    // (b) Blastguard gate — validate BEFORE spawning. `.hardened()` folds an
+    // unresolved `Ask` into `Deny`: this launcher is non-interactive, so no
+    // human is present to answer it.
     let input = serde_json::json!({ "command": cmd });
     if let blastguard::model::Decision::Deny(reason) =
-        blastguard::detect::detect("Bash", Some(&input))
+        blastguard::detect::detect("Bash", Some(&input)).hardened()
     {
         let stderr = format!(
             "[blastguard] launch command `{cmd}` refused before sh -c (fail-closed) — {reason}"
@@ -715,9 +721,10 @@ fn docker_available() -> bool {
 /// this function never `panic!`/`unwrap`/`expect`s on an external-input or
 /// absent-tool path.
 ///
-/// - **blastguard `Deny`**: `cmd` is refused *fail-closed* and NEVER reaches
-///   docker (checked before the availability probe, so a flagged command
-///   cannot even trigger a `docker info` call).
+/// - **blastguard `Deny` (including `Ask` hardened to `Deny` — no human is in
+///   the loop for this launcher)**: `cmd` is refused *fail-closed* and NEVER
+///   reaches docker (checked before the availability probe, so a flagged
+///   command cannot even trigger a `docker info` call).
 /// - **docker unavailable** (binary missing, or `docker info` exits non-zero
 ///   — daemon down / permission denied): a fail-soft verdict with
 ///   `note: "docker_unavailable"`. The command is NEVER run outside the
@@ -738,10 +745,11 @@ pub fn launch_in_container(
 ) -> serde_json::Value {
     // (a) blastguard gate — validate BEFORE even checking docker availability,
     // reusing the same pure detector as the host launcher. A flagged command
-    // is refused fail-closed and never reaches docker.
+    // is refused fail-closed and never reaches docker. `.hardened()` folds an
+    // unresolved `Ask` into `Deny`: this launcher is non-interactive.
     let input = serde_json::json!({ "command": cmd });
     if let blastguard::model::Decision::Deny(reason) =
-        blastguard::detect::detect("Bash", Some(&input))
+        blastguard::detect::detect("Bash", Some(&input)).hardened()
     {
         let stderr = format!(
             "[blastguard] launch command `{cmd}` refused before docker run (fail-closed) — {reason}"
@@ -1490,11 +1498,13 @@ pub struct CheckReport {
 /// Before spawning, the command is run past the same pure blastguard detector
 /// the PreToolUse hook uses (see `launch_and_reflux`) — a flagged check is
 /// refused fail-closed (never reaches `sh -c`) and reported as a non-passing
-/// result rather than silently skipped.
+/// result rather than silently skipped. The verdict is `.hardened()` before
+/// matching: this oracle runs non-interactively, so an unresolved `Ask` (no
+/// human present to answer it) must refuse rather than proceed to `sh -c`.
 pub fn run_check(check: &crate::model::Check, cwd: Option<&std::path::Path>) -> CheckResult {
     let input = serde_json::json!({ "command": check.cmd });
     if let blastguard::model::Decision::Deny(_reason) =
-        blastguard::detect::detect("Bash", Some(&input))
+        blastguard::detect::detect("Bash", Some(&input)).hardened()
     {
         return CheckResult {
             cmd: check.cmd.clone(),

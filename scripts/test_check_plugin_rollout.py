@@ -96,6 +96,32 @@ def _changed_stub(changed_crates=()):
     return _fn
 
 
+def _mirror_crate(crate_dir, install, *, skip=(), modify=(), extra=()):
+    """Copy the crate tree into the install dir the way a rollout rsync would.
+
+    `skip` / `modify` / `extra` deliberately break the mirror so a case can pin
+    what the checker does about each kind of divergence.
+    """
+    skip, modify = set(skip), set(modify)
+    for dirpath, _dirnames, filenames in os.walk(crate_dir):
+        rel_dir = os.path.relpath(dirpath, crate_dir)
+        rel_dir = "" if rel_dir == "." else rel_dir
+        for f in filenames:
+            rel = os.path.join(rel_dir, f)
+            if rel in skip:
+                continue
+            dst = install / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            data = Path(dirpath, f).read_bytes()
+            if rel in modify:
+                data = data + b"\n# deployed copy has drifted\n"
+            dst.write_bytes(data)
+    for rel in extra:
+        dst = install / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text("stray", encoding="utf-8")
+
+
 def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                   enabled_absent=(), enabled_plugins_raw=None,
                   write_registry=True, write_settings=True,
@@ -104,7 +130,9 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                   omit_version=(), registry_raw_entries=None,
                   provenance=None, provenance_text=None,
                   install_paths=True,
-                  skill_only=(), no_host_binary=(), force_host_binary=()):
+                  skill_only=(), no_host_binary=(), force_host_binary=(),
+                  asset_missing=None, asset_modified=None, asset_extra=None,
+                  cached_versions=None):
     """Build a fixture repo + registry + settings under `tmp`.
 
     versions           — crate -> source version (defaults to FIXTURE_PLUGINS)
@@ -133,6 +161,9 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
     no_host_binary     — crates that DECLARE a binary in the source but have
                          none deployed (the "installed but execs nothing" case).
     """
+    asset_missing = dict(asset_missing or {})
+    asset_modified = dict(asset_modified or {})
+    asset_extra = dict(asset_extra or {})
     versions = dict(versions or FIXTURE_PLUGINS)
     crates = tmp / "crates"
     for crate in versions:
@@ -188,6 +219,14 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                     hostbin = install / "bin" / f"{c}-{_HOST_SUFFIX}"
                     hostbin.parent.mkdir(parents=True, exist_ok=True)
                     hostbin.write_text("", encoding="utf-8")
+                # A real rollout rsyncs the whole crate into the version dir, so
+                # the fixture must too — otherwise every plugin would look like
+                # it had an empty deployed tree and the asset assertions would
+                # fire everywhere instead of only where a case broke the mirror.
+                _mirror_crate(crates / c, install,
+                              skip=asset_missing.get(c, ()),
+                              modify=asset_modified.get(c, ()),
+                              extra=asset_extra.get(c, ()))
                 manifest = provenance.get(c, _DEFAULT_PROVENANCE)
                 if provenance_text is not None and c in provenance:
                     (install / ".deployed-from.json").write_text(
@@ -201,6 +240,20 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
         for c, raw in (registry_raw_entries or {}).items():
             plugins[f"{c}@{OWNER}"] = raw
         _write_json(registry_path, {"plugins": plugins})
+
+    # Superseded version dirs left in the cache. `marker_pids` on an entry makes
+    # a live session hold it; os.getpid() is the only pid a test can be sure is
+    # alive.
+    for c, extra_vers in (cached_versions or {}).items():
+        for spec in extra_vers:
+            ver, pids = (spec, ()) if isinstance(spec, str) else spec
+            vd = cache_root / c / ver
+            vd.mkdir(parents=True, exist_ok=True)
+            (vd / "payload.txt").write_text(ver, encoding="utf-8")
+            if pids:
+                (vd / ".in_use").mkdir(exist_ok=True)
+                for p in pids:
+                    (vd / ".in_use" / str(p)).write_text("x", encoding="utf-8")
 
     settings_path = tmp / "settings.json"
     if settings_text is not None:
@@ -230,11 +283,16 @@ class _FixtureCase(unittest.TestCase):
             cpr.REGISTRY_PATH,
             cpr.SETTINGS_PATH,
             getattr(cpr, "SOURCE_CHANGED_SINCE", None),
+            getattr(cpr, "PLUGIN_CACHE_ROOT", None),
         )
         cpr.CRATES = str(crates)
         cpr.REGISTRY_PATH = str(registry_path)
         cpr.SETTINGS_PATH = str(settings_path)
         cpr.SOURCE_CHANGED_SINCE = _changed_stub(changed)
+        # Without this the stale-version-dir dimension would inspect the REAL
+        # plugin cache on the developer's machine and every case would inherit
+        # its findings.
+        cpr.PLUGIN_CACHE_ROOT = str(Path(tmp) / "cache")
         out, err = io.StringIO(), io.StringIO()
         try:
             with redirect_stdout(out), redirect_stderr(err):
@@ -245,6 +303,7 @@ class _FixtureCase(unittest.TestCase):
                 cpr.REGISTRY_PATH,
                 cpr.SETTINGS_PATH,
                 cpr.SOURCE_CHANGED_SINCE,
+                cpr.PLUGIN_CACHE_ROOT,
             ) = saved
         return rc, out.getvalue(), err.getvalue()
 
@@ -795,6 +854,111 @@ class SkillOnlyPlugins(_FixtureCase):
             f"a deployed binary with no manifest must not pass.\nout={out}\nerr={err}",
         )
         self.assertIn("benchkit", out + err)
+
+
+class DeployedFileMirror(_FixtureCase):
+    """The payload, not just the binary.
+
+    Checking only the compiled artifact was too narrow a reading of "is this
+    rolled out". A plugin's payload is its skills, agents, hooks, commands and
+    manifests; for the two skill-only plugins that payload is ALL there is, and
+    the provenance dimension says nothing about any of it. A stale skill file is
+    a stale rollout.
+    """
+
+    def test_deployed_file_differing_from_source_is_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, asset_modified={"condukt": ["src/main.rs"]}
+            )
+        self.assertNotEqual(
+            rc, 0, f"a drifted deployed file must not pass.\nout={out}\nerr={err}"
+        )
+        self.assertIn("condukt", out + err)
+
+    def test_source_file_never_deployed_is_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                asset_missing={"blastguard": [
+                    os.path.join(".claude-plugin", "plugin.json")
+                ]},
+            )
+        self.assertNotEqual(
+            rc, 0, f"an undeployed source file must not pass.\nout={out}\nerr={err}"
+        )
+        self.assertIn("blastguard", out + err)
+
+    def test_unaccounted_extra_file_in_deployed_tree_is_drift(self):
+        """Left-behind files matter too: rsync --delete should have removed it,
+        so its presence means the deploy that ran was not this rsync."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, asset_extra={"propguard": ["skills/leftover.md"]}
+            )
+        self.assertNotEqual(
+            rc, 0, f"a stray deployed file must not pass.\nout={out}\nerr={err}"
+        )
+        self.assertIn("propguard", out + err)
+
+    def test_rebuild_artifacts_are_not_reported_as_extra(self):
+        """Control arm: the two things rebuild-plugins.sh legitimately adds must
+        NOT count as drift. Without this, the mirror rule would report every
+        plugin forever — a permanently red gate teaches its reader to ignore it.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                asset_extra={"specguard": [
+                    ".deployed-from.json",
+                    f"bin/specguard-{_HOST_SUFFIX}",
+                    "bin/specguard-linux-x86_64",
+                ]},
+            )
+        self.assertEqual(
+            rc, 0,
+            f"rebuild artifacts must not be drift.\nout={out}\nerr={err}",
+        )
+
+
+class StaleVersionDirs(_FixtureCase):
+    """A rollout that leaves every superseded version behind is half a rollout.
+
+    Measured 2026-07-26 before this dimension existed: 265 superseded dirs
+    holding 1.29 GB, 25 versions deep for one plugin. Nothing looked at a
+    directory the registry did not point at.
+    """
+
+    def test_removable_superseded_dir_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, cached_versions={"condukt": ["0.0.1", "0.0.2"]}
+            )
+        self.assertNotEqual(
+            rc, 0, f"superseded dirs must be reported.\nout={out}\nerr={err}"
+        )
+        self.assertIn("condukt/0.0.1", out + err)
+
+    def test_dir_held_by_a_live_session_is_not_reported(self):
+        """Control arm: a held dir cannot be removed, so reporting it would be a
+        red nothing can clear until an unrelated session exits."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, cached_versions={"condukt": [("0.0.1", (os.getpid(),))]}
+            )
+        self.assertEqual(
+            rc, 0, f"a live-held dir must not be drift.\nout={out}\nerr={err}"
+        )
+        self.assertIn("held by a live session", out)
+
+    def test_current_version_dir_is_never_reported(self):
+        """Second control arm: the install dirs the fixture creates ARE current
+        versions. If the rule were 'every dir under the cache', this passes only
+        by accident and the pruner would be aimed at the live directory."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(tmp)
+        self.assertEqual(rc, 0, f"clean fixture must pass.\nout={out}\nerr={err}")
+        self.assertIn("no superseded version dir left in the cache", out)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""Behavioural tests for the CLAUDE.md §8 worktree-isolation enforcement:
+
+    check-worktree-isolation.py   commit chokepoint (sound, route-independent)
+    guard-maintree-edit.py        PreToolUse Edit/Write deny on the main tree
+    guard-maintree-bash.py        PreToolUse Bash mutation deny on the main tree
+
+Each test builds a throwaway git repo with a linked worktree and asserts the
+exit code, so the RED (blocked) and GREEN (allowed) sides are both pinned. These
+are the F→P proofs the scripts were written against.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import tempfile
+import unittest
+
+SCRIPTS = os.path.dirname(os.path.abspath(__file__))
+
+
+def _run(script: str, cwd: str, payload=None, env_extra=None) -> int:
+    env = dict(os.environ)
+    if env_extra:
+        env.update(env_extra)
+    p = subprocess.run(
+        ["python3", os.path.join(SCRIPTS, script)],
+        cwd=cwd,
+        input=(json.dumps(payload) if payload is not None else None),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    return p.returncode
+
+
+class WorktreeIsolationGuards(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp(prefix="maintree-test.")
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", self.tmp]))
+        self.main = os.path.join(self.tmp, "main")
+        os.makedirs(self.main)
+        subprocess.run(["git", "init", "-q", self.main], check=True)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "config", k, v], cwd=self.main, check=True)
+        open(os.path.join(self.main, "tracked.rs"), "w").write("hi\n")
+        subprocess.run(["git", "add", "-A"], cwd=self.main, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=self.main, check=True)
+        self.wt = os.path.join(self.tmp, "wtA")
+        subprocess.run(
+            ["git", "worktree", "add", "-q", self.wt, "-b", "feat", "HEAD"],
+            cwd=self.main, check=True,
+        )
+        self.env = {"CLAUDE_PROJECT_DIR": self.main}
+
+    # ---- commit chokepoint (sound) --------------------------------------
+    def test_commit_main_nonmerge_blocks(self):
+        self.assertEqual(_run("check-worktree-isolation.py", self.main), 1)
+
+    def test_commit_worktree_allows(self):
+        self.assertEqual(_run("check-worktree-isolation.py", self.wt), 0)
+
+    def test_commit_main_merge_allows(self):
+        gd = subprocess.run(
+            ["git", "rev-parse", "--absolute-git-dir"],
+            cwd=self.main, capture_output=True, text=True,
+        ).stdout.strip()
+        open(os.path.join(gd, "MERGE_HEAD"), "w").write("x")
+        try:
+            self.assertEqual(_run("check-worktree-isolation.py", self.main), 0)
+        finally:
+            os.remove(os.path.join(gd, "MERGE_HEAD"))
+
+    def test_commit_non_repo_blocks_failclosed(self):
+        self.assertEqual(_run("check-worktree-isolation.py", self.tmp), 1)
+
+    # ---- edit-time guard (Edit tools) -----------------------------------
+    def _edit(self, path):
+        return {"tool_name": "Edit", "tool_input": {"file_path": path}}
+
+    def test_edit_main_denies(self):
+        self.assertEqual(
+            _run("guard-maintree-edit.py", self.main,
+                 self._edit(os.path.join(self.main, "tracked.rs")), self.env), 2)
+
+    def test_edit_new_main_file_denies(self):
+        self.assertEqual(
+            _run("guard-maintree-edit.py", self.main,
+                 self._edit(os.path.join(self.main, "brand_new.rs")), self.env), 2)
+
+    def test_edit_worktree_allows(self):
+        self.assertEqual(
+            _run("guard-maintree-edit.py", self.main,
+                 self._edit(os.path.join(self.wt, "tracked.rs")), self.env), 0)
+
+    def test_edit_outside_repo_allows(self):
+        self.assertEqual(
+            _run("guard-maintree-edit.py", self.main,
+                 self._edit(os.path.join(self.tmp, "x.txt")), self.env), 0)
+
+    def test_edit_non_edit_tool_allows(self):
+        self.assertEqual(
+            _run("guard-maintree-edit.py", self.main,
+                 {"tool_name": "Read", "tool_input": {"file_path":
+                  os.path.join(self.main, "tracked.rs")}}, self.env), 0)
+
+    # ---- edit-time guard (Bash mutations) -------------------------------
+    def _bash(self, cmd):
+        return {"tool_name": "Bash", "tool_input": {"command": cmd}}
+
+    def test_bash_sed_main_denies(self):
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash(f"sed -i s/a/b/ {self.main}/tracked.rs"), self.env), 2)
+
+    def test_bash_rm_main_denies(self):
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash(f"rm {self.main}/tracked.rs"), self.env), 2)
+
+    def test_bash_redirect_main_denies(self):
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash(f"echo x {chr(62)} {self.main}/new.rs"), self.env), 2)
+
+    def test_bash_git_checkout_main_denies(self):
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash("git checkout -- tracked.rs"), self.env), 2)
+
+    def test_bash_sed_worktree_allows(self):
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash(f"sed -i s/a/b/ {self.wt}/tracked.rs"), self.env), 0)
+
+    def test_bash_rm_outside_allows(self):
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash(f"rm {self.tmp}/whatever"), self.env), 0)
+
+    def test_bash_read_allows(self):
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash(f"cat {self.main}/tracked.rs"), self.env), 0)
+
+
+class LifecycleHooks(WorktreeIsolationGuards):
+    """SessionStart auto-worktree and the Stop verify gate."""
+
+    def test_stop_worktree_allows(self):
+        self.assertEqual(
+            _run("stop-verify-worktree.py", self.wt, {"cwd": self.wt}), 0)
+
+    def test_stop_main_clean_allows(self):
+        self.assertEqual(
+            _run("stop-verify-worktree.py", self.main, {"cwd": self.main}), 0)
+
+    def test_stop_main_dirty_blocks(self):
+        open(os.path.join(self.main, "dirty.rs"), "w").write("x\n")
+        self.assertEqual(
+            _run("stop-verify-worktree.py", self.main, {"cwd": self.main}), 2)
+
+    def test_stop_dirty_but_active_bounded_allows(self):
+        open(os.path.join(self.main, "dirty.rs"), "w").write("x\n")
+        self.assertEqual(
+            _run("stop-verify-worktree.py", self.main,
+                 {"cwd": self.main, "stop_hook_active": True}), 0)
+
+    def test_sessionstart_in_worktree_noops(self):
+        self.assertEqual(
+            _run("session-worktree-init.py", self.wt,
+                 {"cwd": self.wt, "session_id": "abcd1234-x"}), 0)
+
+    def test_sessionstart_on_main_creates_worktree(self):
+        rc = _run("session-worktree-init.py", self.main,
+                  {"cwd": self.main, "session_id": "abcd1234-x"})
+        self.assertEqual(rc, 0)
+        made = os.path.join(
+            os.path.dirname(self.main), ".main-worktrees", "session-abcd1234")
+        try:
+            self.assertTrue(os.path.isdir(made))
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", made],
+                           cwd=self.main, capture_output=True)
+            subprocess.run(["rm", "-rf", made], capture_output=True)
+
+
+if __name__ == "__main__":
+    unittest.main()

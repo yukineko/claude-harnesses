@@ -146,6 +146,7 @@ run check-plugin-versions.py  version-lockstep
 run check-version-bumped.py   bump-on-change
 run check-hardcoded-secret.py secret-guard
 run check-raw-io-ratchet.py   raw-io-ratchet
+run check-worktree-isolation.py worktree-isolation
 
 # main-tree-guard — CLAUDE.md §8, the one gate here that is Rust rather than
 # python3, because its decision is a tri-state over injectable inputs and is

@@ -274,7 +274,13 @@ chronic red で再びブロックした場合も、`PREPUSH_SKIP_CI_RED=1` を�
 2. が禁じる「判断で埋める」そのものなので、このrunfileでは省略しない）。ユーザー自身が CI の状態を
 知りたいと明示的に依頼した場合に限り、その依頼の範囲でのみ調べてよい。
 
-### 8. 作業は worktree で行う — main の作業ツリーを共有編集しない（**義務**）
+### 8. 作業は worktree で行う — main の作業ツリーを共有編集しない（**絶対義務・例外は統合のみ**）
+
+> **最優先の不変条件（この節の他のどの記述にも優先する）**: **別セッションは常に存在する前提で動く。**
+> main の作業ツリーで許されるのは**統合（merge・conflict 解決）だけ**であり、それ以外の編集・stage・commit は —
+> crate コードだけでなく、単一ファイルの doc / 状態編集（CLAUDE.md・`.compass/charter.md` 等）や一見「軽微」な
+> 変更も含めて — **一切 main で直接行わない。必ず worktree で行う**。「自分だけが動いている」ことを根拠に
+> main を直接触ってはならない — それは検証不能な**予測**（2./6. が禁じる自己許可）であって観測ではない。
 
 **同時編集を避けることがルールであり、conflict を避けることはルールではない。** conflict は
 merge で統合すればよい。統合できないのは**同じ index / 作業ツリーを2つのセッションが共有した場合**だけで、
@@ -303,9 +309,17 @@ merge で統合すればよい。統合できないのは**同じ index / 作業
 - `condukt` の実装タスクは worktree 経由で行う。`single_worktree` モードや `serial` タスクを
   「main で直接実装する」経路として使わない（`crates/condukt/src/main.rs` の
   「the single-worktree main-tree commit is performed by the /condukt skill's shell」が指す経路がこれ）。
-- **main の作業ツリーで許されるのは、統合（merge・conflict 解決）と、単一セッションしか動いていないことが
-  確かな場合の軽微な編集だけ**である。並行セッションの有無は `overwatch status` と
-  `backlog lock status --project "$PWD"` で確認できる。
+- **main の作業ツリーで許されるのは統合（merge・conflict 解決）だけ**である。crate コードだけでなく、
+  単一ファイルの doc / 状態編集（CLAUDE.md・`.compass/charter.md`・memory 隣接の repo ファイル等）や
+  一見「軽微」な変更も**すべて worktree で行う**。旧版にあった「単一セッションしか動いていないことが確かな場合の
+  軽微な編集だけは可」という carve-out は**撤去した** — その「確かな場合」は検証不能だからである
+  （実測 2026-07-26: `overwatch status` が no session を返す一方で `scripts/rebuild-plugins.sh` が連続する
+  2 回の git 呼び出しの間に modified→clean へ変化し、別セッションが main のツリーを触っている証拠になった。
+  「たぶん自分だけ」は判断＝予測であり 2./6. が禁じる自己許可そのもの）。
+- **compass / flow など現ツリーへ書き込む skill も worktree から実行する**（`compass charter --write` は
+  `.compass/charter.md` を現ツリーへ書くため、main で走らせると本節に反する）。
+- **この不変条件は機械ゲートで強制する**（自己申告に依存しない — 6. の原則）: `scripts/check-worktree-isolation.py`
+  が pre-commit で「main の作業ツリーからの非 merge commit」を block する（判定不能は block へ倒す fail-closed）。
 - worktree に出さず main を触る必要が生じたら、**その理由を明示して人間に返す**（5. に従う）。黙って触らない。
 - ゲート（donegate / reviewgate / precommit-audit）が他セッションの変更を自分のものとして要求してきたら、
   それは**帰属のバグ**であって自分の不備ではない。共有 skip ファイルで黙らせず、記録して報告する。

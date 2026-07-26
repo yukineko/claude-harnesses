@@ -885,6 +885,57 @@ run_canary() {
 # independently. It is printed rather than swallowed — `set -e` would otherwise
 # turn "one dir could not be inspected" into "the rollout failed", and `|| true`
 # would turn it into silence.
+# Refuse to report success while the fleet is still drifted.
+#
+# The gate that detects drift (check-plugin-rollout.py) is wired into
+# .githooks/pre-push, but only as ADVISORY: rc=1 prints and does not block,
+# deliberately demoted 2026-07-23 because rollout state is a fact about THIS
+# machine while `git push` shares code with a remote. That reasoning is sound for
+# the push path and is not touched here — but it left the detection with no
+# enforcement point at all, which the demotion comment itself flags as a risk of
+# degrading into "someone will notice" (CLAUDE.md §6 forbids resting on that).
+#
+# This is where enforcement is unambiguous: a rollout that ends with the fleet
+# still drifted did not do its job, and printing "done." there is this script
+# certifying an outcome it did not achieve. So the gate runs here and its
+# rollout-class verdict becomes this script's exit code.
+#
+# Only rc=1 (ROLLOUT class) is fatal. rc=2 (a plugin is not enabled) and rc=3 (an
+# unreadable plugin.json) are real problems with real remedies, but neither is a
+# remedy a rollout can perform, so failing on them would block this script on
+# something it cannot fix. They are printed in full instead.
+verify_rollout_complete() {
+  local out rc=0
+  if [ "${#only_plugins[@]}" -gt 0 ]; then
+    # A filtered run deliberately left the rest of the fleet alone, so a
+    # whole-fleet verdict would fail for reasons this run never attempted.
+    echo
+    echo "verify: skipped — this run was filtered to: ${only_plugins[*]}"
+    echo "        (run without --plugin to verify and enforce the whole fleet)"
+    return 0
+  fi
+  echo
+  echo ">>> scripts/check-plugin-rollout.py (verifying this rollout actually landed)"
+  out="$(python3 "$REPO/scripts/check-plugin-rollout.py" 2>&1)" || rc=$?
+  printf '%s\n' "$out"
+  case "$rc" in
+    0) return 0 ;;
+    1)
+      echo >&2
+      echo "rollout: FAILED — drift remains after this run (see above). The fleet is" >&2
+      echo "         NOT current, so this script will not report success." >&2
+      return 1
+      ;;
+    *)
+      echo >&2
+      echo "rollout: the check exited $rc — not a rollout-class failure (enablement, or" >&2
+      echo "         an unreadable plugin.json), which a rollout cannot fix. Reported," >&2
+      echo "         not fatal here." >&2
+      return 0
+      ;;
+  esac
+}
+
 prune_stale_versions() {
   local rc=0
   echo
@@ -899,6 +950,7 @@ prune_stale_versions() {
 if [ "$canary" = 1 ]; then
   run_canary
   prune_stale_versions
+  verify_rollout_complete || exit 1
   echo
   echo "done (canary)."
   exit 0
@@ -970,5 +1022,7 @@ fi
 run_rebuild_and_sync ${synced_plugins[@]+"${synced_plugins[@]}"}
 
 prune_stale_versions
+
+verify_rollout_complete || exit 1
 
 echo "done."

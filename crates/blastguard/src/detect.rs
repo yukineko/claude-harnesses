@@ -4815,19 +4815,29 @@ fn analyze_high_blast_tier(cmd: &str) -> Decision {
 }
 
 /// (A) `git push` carrying a history-rewrite force flag: `--force`, `-f`, or
-/// `--force-with-lease` (bare or with an attached `=<refspec>`). A NORMAL
-/// (non-force) `git push` only ever fast-forwards the remote and never has a
-/// rule of its own (`analyze_git`'s `match` has no `"push"` arm at all, so it
-/// falls to the `_ => Decision::Allow` catch-all) — measured: `git push`,
-/// `git push origin main` are `Allow` both before and after this tier.
-/// Force-pushing can overwrite or discard commits already on the remote,
-/// i.e. rewrite shared history, which is exactly the class of hard-to-reverse
-/// operation this tier exists to catch.
+/// `--force-with-lease` (bare or with an attached `=<refspec>`) — OR a
+/// refspec argument whose source side begins with a literal `+` (`+main`,
+/// `+refs/heads/x:refs/heads/x`), which forces that one ref exactly as the
+/// flag forms do, just spelled without the flag (a pre-flag git idiom that
+/// still works today). A NORMAL (non-force) `git push` only ever
+/// fast-forwards the remote and never has a rule of its own (`analyze_git`'s
+/// `match` has no `"push"` arm at all, so it falls to the `_ =>
+/// Decision::Allow` catch-all) — measured: `git push`, `git push origin
+/// main` are `Allow` both before and after this tier. Force-pushing can
+/// overwrite or discard commits already on the remote, i.e. rewrite shared
+/// history, which is exactly the class of hard-to-reverse operation this
+/// tier exists to catch.
 ///
 /// `--force-if-includes` is deliberately NOT treated as a force flag by
 /// itself: it is a SAFETY modifier that only takes effect alongside
 /// `--force`/`--force-with-lease` (it makes the force conditional on having
 /// seen the remote tip), so a line carrying it alone is not a force push.
+///
+/// The refspec scan is bound tightly to just the leading-`+` source-side
+/// shape: [`refspec_source_is_force`] only inspects non-flag tokens (so
+/// `-u`/`--set-upstream` and its operand, a plain remote name, a plain
+/// branch/tag name, and a non-force colon refspec like `HEAD:main` all stay
+/// untouched) — see that helper's doc comment for the exact boundary.
 fn high_blast_git_force_push(rest: &[&str]) -> Option<Decision> {
     let idx = git_subcommand_index(rest)?;
     if normalized_command(rest[idx]) != "push" {
@@ -4838,13 +4848,41 @@ fn high_blast_git_force_push(rest: &[&str]) -> Option<Decision> {
         *t == "--force" || *t == "--force-with-lease" || t.starts_with("--force-with-lease=")
     }) || has_short(tail, 'f');
     if forces {
-        Some(Decision::ask(
+        return Some(Decision::ask(
             "`git push` with --force/-f/--force-with-lease can overwrite or discard commits \
 already on the remote — this rewrites shared history",
-        ))
-    } else {
-        None
+        ));
     }
+    if let Some(refspec) = tail.iter().find(|t| refspec_source_is_force(t)) {
+        return Some(Decision::ask(format!(
+            "`git push` refspec `{refspec}` has a leading `+` on its source side, which forces \
+that ref exactly like --force/-f — this rewrites shared history"
+        )));
+    }
+    None
+}
+
+/// True if `tok` is a non-flag `git push` argument whose refspec SOURCE side
+/// (the part before the first `:`, or the whole token if there is no `:`)
+/// begins with a literal `+`. That `+` is git's own force-refspec syntax
+/// (`git push origin +main`, `git push origin +src:dst`) — it forces the
+/// update of that one ref exactly as `--force`/`-f` does for the whole
+/// invocation, just spelled on the refspec instead of as a flag.
+///
+/// Deliberately does NOT match: any `-`-prefixed token (flags, including
+/// `-u`/`--set-upstream` and any operand a caller passed to a value-taking
+/// flag — this function is only ever called on ALREADY-non-flag tokens by
+/// its one call site, but the guard is kept here too so the boundary is
+/// self-evident from the helper alone); a plain remote/branch/tag name
+/// (`main`, `v1.0`, `origin` — no leading `+`); or a colon refspec whose
+/// source side does NOT start with `+` (`HEAD:main`, `src:dst` — measured:
+/// these are the exact non-force colon forms this tier must leave `Allow`).
+fn refspec_source_is_force(tok: &str) -> bool {
+    if tok.starts_with('-') {
+        return false;
+    }
+    let source = tok.split(':').next().unwrap_or(tok);
+    source.starts_with('+')
 }
 
 /// (B) `curl`/`wget` uploading local file content ([`upload_flag_operand`]'s

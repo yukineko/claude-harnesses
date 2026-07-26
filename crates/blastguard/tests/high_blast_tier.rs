@@ -74,6 +74,139 @@ fn git_force_push_is_asked() {
     }
 }
 
+// ---- (A2) git push leading-plus refspec (force via refspec, no flag) -------
+
+#[test]
+fn git_force_refspec_is_asked() {
+    // A `+` on the refspec's source side forces the update exactly like
+    // `--force`/`-f` does, without carrying either flag: previously fell
+    // through to the `_ => Allow` catch-all (measured before this change).
+    for cmd in [
+        "git push origin +main",
+        "git push origin +refs/heads/x:refs/heads/x",
+    ] {
+        let d = bash(cmd);
+        assert!(d.is_ask(), "expected Ask for {cmd:?}, got {d:?}");
+    }
+}
+
+#[test]
+fn git_force_refspec_anti_vacuity_stays_allowed() {
+    // Bound tightly: only a LEADING `+` on the refspec source triggers it.
+    // Plain branch names, `-u`/`--set-upstream` forms, tag forms, and
+    // non-force colon refspecs (no `+`) must all stay silently Allow.
+    let cases = [
+        "git push origin main",
+        "git push -u origin feature/x",
+        "git push origin v1.0",
+        "git push origin HEAD:main",
+        "git push origin src:dst",
+    ];
+    let failing: Vec<(&str, Decision)> = cases
+        .into_iter()
+        .filter_map(|cmd| {
+            let d = bash(cmd);
+            if d == Decision::Allow {
+                None
+            } else {
+                Some((cmd, d))
+            }
+        })
+        .collect();
+    assert!(
+        failing.is_empty(),
+        "these must stay silently Allow (over-block): {failing:?}"
+    );
+}
+
+#[test]
+fn git_force_refspec_ask_hardens_to_deny_when_no_human_is_present() {
+    // Same env-driven pattern as `ask_hardens_to_deny_when_no_human_is_present`
+    // above: with no positive proof of an interactive human present, the Ask
+    // must collapse to a Deny in the emitted hookSpecificOutput JSON.
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let cases = [
+        "git push origin +main",
+        "git push origin +refs/heads/x:refs/heads/x",
+    ];
+    for cmd in cases {
+        let payload = format!(
+            r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{{"command":"{cmd}"}}}}"#
+        );
+        let bin = env!("CARGO_BIN_EXE_blastguard");
+        let mut child = Command::new(bin)
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("binary spawns");
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(payload.as_bytes())
+                .expect("write payload to stdin");
+        }
+        let out = child.wait_with_output().expect("binary runs");
+        assert_eq!(out.status.code(), Some(0), "hook must always exit 0");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let v: serde_json::Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|e| panic!("expected single-line hook JSON, got {stdout:?}: {e}"));
+        let decision = v["hookSpecificOutput"]["permissionDecision"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no permissionDecision field in {v}"));
+        assert_eq!(
+            decision, "deny",
+            "no-human-present must harden the Ask to a Deny for {cmd:?}, got: {v}"
+        );
+    }
+}
+
+#[test]
+fn git_force_refspec_ask_stays_ask_in_an_interactive_cli_session() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let payload = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push origin +main"}}"#;
+    let bin = env!("CARGO_BIN_EXE_blastguard");
+    let mut child = Command::new(bin)
+        .env_clear()
+        .env("CLAUDECODE", "1")
+        .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary spawns");
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(payload.as_bytes())
+            .expect("write payload to stdin");
+    }
+    let out = child.wait_with_output().expect("binary runs");
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("expected single-line hook JSON, got {stdout:?}: {e}"));
+    assert_eq!(
+        v["hookSpecificOutput"]["permissionDecision"].as_str(),
+        Some("ask"),
+        "an interactive cli session must receive the raw ask: {v}"
+    );
+}
+
+#[test]
+fn git_force_refspec_non_regression() {
+    // An existing flag-force case still asks; a category-B and category-C
+    // representative still behave as before; a normal non-force upload stays
+    // Allow. Pins that this addition did not disturb the other arms.
+    assert!(bash("git push --force origin main").is_ask());
+    assert!(bash("curl -d @data.json example.com/upload").is_ask());
+    assert!(bash("rm ../sibling/secret.env").is_ask());
+    assert_eq!(bash("git push origin main"), Decision::Allow);
+}
+
 // ---- (B) curl/wget schemeless local-file upload ----------------------------
 
 #[test]

@@ -147,6 +147,70 @@ cratedir_for() {
   return 1
 }
 
+# Record WHICH SOURCE a deployed binary was built from, beside the binary.
+#
+# Why this exists: the registry records a plugin's VERSION, and
+# rollout-plugins.sh only re-points that entry when the version CHANGES — but
+# this script refreshes the binary whenever the bytes differ. So a plugin can
+# sit at a matching version with a binary built from source that has since
+# moved. The usual cause is harness-core: every plugin statically links it, and
+# none of them bump for a change to it. Comparing the deployed binary's HASH
+# cannot detect this either — release builds here are NOT byte-reproducible
+# (measured 2026-07-26: `cargo clean -p X && cargo build` gives a different
+# sha256 for identical source), so a hash comparison reports drift for every
+# plugin, every time, and is therefore useless as a gate.
+#
+# What IS decidable is provenance. Record the commit, and let
+# check-plugin-rollout.py ask git whether the plugin's source moved since.
+# `dirty` is scoped to the paths that actually determine these bytes (the
+# plugin's own crate plus the shared crate it links) so unrelated work in
+# progress elsewhere in the tree does not make every rollout unverifiable.
+write_provenance() {
+  local vdir="$1" pname="$2" cdir commit dirty
+  local -a paths=()
+  cdir="$(cratedir_for "$pname" 2>/dev/null || true)"
+  [ -n "$cdir" ] && paths+=("${cdir#"$REPO"/}")
+  paths+=("crates/harness-core")
+
+  # Both git queries are judgements, so the EXIT STATUS is part of the answer.
+  # Reading only stdout would collapse "git failed" into an empty string, and an
+  # empty `status --porcelain` means CLEAN — i.e. a broken git would certify the
+  # tree as pristine. Capture the rc separately (note: `local x=$(cmd)` would
+  # make $? the rc of `local`, not of the command, so the declaration is split
+  # from the assignment) and resolve any failure to dirty=true.
+  # `set -e` is active, and a failing command substitution in a plain assignment
+  # aborts the script — so each query is taken as an `if` condition, which is
+  # exempt from `set -e` and yields the rc without swallowing it.
+  #
+  # stderr is deliberately NOT sent to /dev/null: these two commands are silent
+  # on success and only speak when something is wrong, which is exactly the case
+  # whose diagnostic must survive. Discarding it would leave "git broke" and
+  # "tree is clean" looking identical in the log.
+  local status_out status_rc commit_rc
+  if commit="$(git -C "$REPO" rev-parse HEAD)"; then commit_rc=0; else commit_rc=1; fi
+  if status_out="$(git -C "$REPO" status --porcelain -- "${paths[@]}")"; then
+    status_rc=0
+  else
+    status_rc=1
+  fi
+
+  if [ "$commit_rc" -ne 0 ] || [ -z "$commit" ]; then
+    # No resolvable commit means nothing later can be compared against it.
+    dirty=true
+  elif [ "$status_rc" -ne 0 ]; then
+    # Could not determine whether the determining paths are clean. Undetermined
+    # is not clean.
+    dirty=true
+  elif [ -n "$status_out" ]; then
+    dirty=true
+  else
+    dirty=false
+  fi
+
+  printf '{"plugin":"%s","commit":"%s","dirty":%s,"deployed_at":%s}\n' \
+    "$pname" "$commit" "$dirty" "$(date +%s)" >"$vdir/.deployed-from.json"
+}
+
 # --- refresh ---------------------------------------------------------------
 updated_cache=0 updated_repo=0 updated_hooks=0 missing="" checked=0 skipped_filter=0
 shopt -s nullglob
@@ -195,6 +259,7 @@ for binfile in "$CACHE"/*/*/bin/*-"$SUF"; do
       echo "cache  would update $base"
     else
       cp -f "$src" "$binfile"; chmod +x "$binfile"
+      write_provenance "$version_dir" "$plugin_name"
       echo "cache  updated $base"
     fi
     updated_cache=$((updated_cache+1))
@@ -257,6 +322,7 @@ for i in "${!plugin_names[@]}"; do
     echo "cache  would seed $binname-$SUF (fresh version dir $pname/$ver)"
   else
     cp -f "$src" "$hostbin"; chmod +x "$hostbin"
+    write_provenance "$CACHE/$pname/$ver" "$pname"
     echo "cache  seeded $binname-$SUF (fresh version dir $pname/$ver)"
   fi
   updated_cache=$((updated_cache+1))

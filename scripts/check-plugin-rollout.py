@@ -35,8 +35,9 @@ fixes and a caller that conflates them sends the reader to the wrong command —
   0 — no rollout drift, no disabled/unaccounted-for GATE crate, no malformed
       input. Warnings about disabled non-gate plugins may still have been
       printed to stderr.
-  1 — ROLLOUT class: at least one plugin's source version was never rolled out
-      (or the registry is malformed). Fix: scripts/rollout-plugins.sh.
+  1 — ROLLOUT class: at least one plugin's source version was never rolled out,
+      OR its deployed BINARY is not provably built from current source, OR the
+      registry is malformed. Fix: scripts/rollout-plugins.sh.
       Takes precedence when both classes fail; the enablement detail and its
       own fix line are still printed to stderr in that case.
   2 — ENABLEMENT class only: a GATE crate is disabled, or settings.json is
@@ -51,6 +52,31 @@ fixes and a caller that conflates them sends the reader to the wrong command —
       class-specific remedy per code, and both of those remedies are wrong
       here. pre-push's catch-all branch prints this script's full output
       instead, which names the actual problem.)
+
+The rollout dimension checks TWO things, because a matching version string is
+not evidence that the deployed bytes are current:
+
+  (a) VERSION — the registry's version equals the source's plugin.json version.
+  (b) PROVENANCE — the binary in that install dir is provably built from source
+      that has not moved since. rebuild-plugins.sh drops a `.deployed-from.json`
+      beside every host binary it places, recording the commit and whether the
+      tree was dirty; this script asks git whether crates/<plugin> or a shared
+      crate it links (harness-core) changed since that commit.
+
+(b) exists because (a) alone was blind to the most common staleness: every
+plugin statically links harness-core, so a change there changes every binary
+while no plugin's own version moves — and rollout-plugins.sh, being idempotent
+on an unchanged version, never re-points the registry, so (a) keeps reporting a
+clean fleet. Note that comparing binary HASHES cannot substitute for (b): this
+repo's release builds are not byte-reproducible (measured 2026-07-26 — `cargo
+clean -p X && cargo build` yields a different sha256 for identical source), so a
+hash comparison flags every plugin on every run and gates nothing.
+
+Every "cannot tell" branch of (b) — no manifest, unreadable manifest, no
+recorded commit, a commit git cannot resolve, or a binary built from a dirty
+tree — reports drift rather than passing. An unverifiable binary is the state
+this check exists to surface; resolving it to clean would make "never recorded"
+indistinguishable from "verified current".
 
 Both dimensions fail SOFT on a MISSING input file: an absent registry skips the
 rollout check, an absent settings.json skips the enablement check, and neither
@@ -83,6 +109,49 @@ RC_UNVERIFIABLE = 3
 
 REPO = os.getcwd()
 CRATES = os.path.join(REPO, "crates")
+
+# Filename of the provenance manifest rebuild-plugins.sh drops beside every host
+# binary it places, recording the commit that binary was built from.
+PROVENANCE_FILE = ".deployed-from.json"
+
+# Crates every plugin binary statically links. A change to one of these changes
+# every binary while no plugin's own version moves, which is precisely the drift
+# a version-string comparison cannot see.
+SHARED_SOURCE_PATHS = ("crates/harness-core",)
+
+
+def _git_changed_since(commit, crate):
+    """Did `crate`'s source (or a shared crate it links) move since `commit`?
+
+    Returns True (moved), False (unchanged), or None (could not determine —
+    e.g. the commit is unknown to this repo, or git failed). None is NOT
+    "unchanged": callers must resolve it restrictively.
+    """
+    import subprocess
+
+    paths = [f"crates/{crate}"] + list(SHARED_SOURCE_PATHS)
+    try:
+        # `git diff --quiet A HEAD -- <paths>`: rc 0 = no difference, rc 1 =
+        # differs. Any other rc (128 = bad object / not a repo) is undetermined,
+        # NOT "no difference" — the exit code is the verdict, not just stdout.
+        proc = subprocess.run(
+            ["git", "diff", "--quiet", commit, "HEAD", "--"] + paths,
+            cwd=REPO,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode == 0:
+        return False
+    if proc.returncode == 1:
+        return True
+    return None
+
+
+# Rebindable so the provenance dimension is testable without a git repo, the
+# same way REGISTRY_PATH/SETTINGS_PATH are rebound at a fixture.
+SOURCE_CHANGED_SINCE = _git_changed_since
 REGISTRY_PATH = os.environ.get(
     "CLAUDE_PLUGIN_REGISTRY", os.path.expanduser("~/.claude/plugins/installed_plugins.json")
 )
@@ -273,7 +342,73 @@ def check_rollout(plugins):
             problems.append(
                 f"{crate}: source={src_ver} registry={reg_ver} <- rollout-plugins.sh not run since bump"
             )
+            # The version is already known stale; the binary necessarily is too.
+            # Reporting both would just double-count one fix.
+            continue
+        problem = _provenance_problem(crate, entry[0])
+        if problem:
+            problems.append(problem)
     return problems, checked
+
+
+def _provenance_problem(crate, entry):
+    """Return a drift string if the deployed binary is not provably current.
+
+    A matching version string only says the registry POINTER was re-pointed at
+    some point; it says nothing about the bytes sitting in that directory. The
+    binary is only provably current when a manifest records the commit it was
+    built from, that commit is committed (not a dirty tree), and the plugin's
+    source has not moved since.
+
+    Every "cannot tell" branch resolves to drift, not to clean: an unverifiable
+    binary is exactly the state this check exists to surface, and returning None
+    for it would make "never recorded" indistinguishable from "verified current".
+    """
+    install = entry.get("installPath")
+    if not install:
+        return (
+            f"{crate}: registry entry has no 'installPath', so the deployed "
+            "binary cannot be located and its provenance cannot be verified"
+        )
+    manifest_path = os.path.join(install, PROVENANCE_FILE)
+    state, manifest = _load_json(manifest_path)
+    if state == ABSENT:
+        return (
+            f"{crate}: no {PROVENANCE_FILE} beside the deployed binary — cannot "
+            "tell which commit it was built from, so it is not verifiable as "
+            "current (re-run rollout-plugins.sh to record provenance)"
+        )
+    if state == MALFORMED or not isinstance(manifest, dict):
+        return (
+            f"{crate}: {PROVENANCE_FILE} is present but unreadable ({manifest!r}); "
+            "the deployed binary's provenance cannot be established"
+        )
+    if manifest.get("dirty"):
+        return (
+            f"{crate}: deployed binary was built from a DIRTY tree at "
+            f"{str(manifest.get('commit'))[:12]} — the recorded commit does not "
+            "describe those bytes, so currency cannot be checked against it"
+        )
+    commit = manifest.get("commit")
+    if not commit:
+        return (
+            f"{crate}: {PROVENANCE_FILE} records no 'commit', so there is nothing "
+            "to compare the current source against"
+        )
+    moved = SOURCE_CHANGED_SINCE(commit, crate)
+    if moved is None:
+        return (
+            f"{crate}: could not determine whether source moved since "
+            f"{str(commit)[:12]} (unknown commit, or git unavailable) — "
+            "undetermined is not 'unchanged'"
+        )
+    if moved:
+        return (
+            f"{crate}: deployed binary was built at {str(commit)[:12]}, but "
+            f"crates/{crate} or a shared crate it links has changed since "
+            "<- rollout-plugins.sh not run since that change"
+        )
+    return None
 
 
 def check_enabled(plugins):

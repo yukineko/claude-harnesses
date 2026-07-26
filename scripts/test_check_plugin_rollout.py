@@ -55,12 +55,36 @@ def _write_json(path, data):
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+# A clean provenance manifest: the deployed binary was built from a committed
+# tree, at a commit the stub `source_changed` below reports as unchanged.
+_DEFAULT_PROVENANCE = {"commit": "cafef00d" * 5, "dirty": False, "deployed_at": 0}
+
+
+def _changed_stub(changed_crates=()):
+    """Stand in for the git query, so provenance is testable without a repo.
+
+    Returns a callable matching SOURCE_CHANGED_SINCE's contract:
+    (commit, crate) -> True (source moved since), False (unchanged), or None
+    (could not determine).
+    """
+    changed = dict(changed_crates) if isinstance(changed_crates, dict) else {
+        c: True for c in changed_crates
+    }
+
+    def _fn(commit, crate):
+        return changed.get(crate, False)
+
+    return _fn
+
+
 def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                   enabled_absent=(), enabled_plugins_raw=None,
                   write_registry=True, write_settings=True,
                   registry_text=None, settings_text=None,
                   corrupt_plugin_json=(), drop_plugin_json=(),
-                  omit_version=(), registry_raw_entries=None):
+                  omit_version=(), registry_raw_entries=None,
+                  provenance=None, provenance_text=None,
+                  install_paths=True):
     """Build a fixture repo + registry + settings under `tmp`.
 
     versions           — crate -> source version (defaults to FIXTURE_PLUGINS)
@@ -99,13 +123,34 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
     (crates / "harness-core").mkdir(parents=True, exist_ok=True)
 
     registry_path = tmp / "installed_plugins.json"
+    # Each installed plugin gets a cache dir; the deployed binary's provenance
+    # manifest lives beside the binary in there. `provenance` maps crate -> the
+    # manifest dict to write (None = write no manifest at all, the "cannot tell
+    # what this binary was built from" case).
+    cache_root = tmp / "cache"
+    if provenance is None:
+        provenance = {}
     if registry_text is not None:
         registry_path.write_text(registry_text, encoding="utf-8")
     elif write_registry:
         rv = dict(versions) if registry_versions is None else dict(registry_versions)
-        plugins = {
-            f"{c}@{OWNER}": [{"version": v}] for c, v in rv.items() if v is not None
-        }
+        plugins = {}
+        for c, v in rv.items():
+            if v is None:
+                continue
+            entry = {"version": v}
+            if install_paths:
+                install = cache_root / c / str(v)
+                install.mkdir(parents=True, exist_ok=True)
+                entry["installPath"] = str(install)
+                manifest = provenance.get(c, _DEFAULT_PROVENANCE)
+                if provenance_text is not None and c in provenance:
+                    (install / ".deployed-from.json").write_text(
+                        provenance_text, encoding="utf-8"
+                    )
+                elif manifest is not None:
+                    _write_json(install / ".deployed-from.json", manifest)
+            plugins[f"{c}@{OWNER}"] = [entry]
         for c in omit_version:
             plugins[f"{c}@{OWNER}"] = [{}]
         for c, raw in (registry_raw_entries or {}).items():
@@ -133,18 +178,29 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
 class _FixtureCase(unittest.TestCase):
     """Rebinds the script's path constants at the fixture, restores after."""
 
-    def run_main(self, tmp, **kwargs):
+    def run_main(self, tmp, *, changed=(), **kwargs):
         crates, registry_path, settings_path = _make_fixture(Path(tmp), **kwargs)
-        saved = (cpr.CRATES, cpr.REGISTRY_PATH, cpr.SETTINGS_PATH)
+        saved = (
+            cpr.CRATES,
+            cpr.REGISTRY_PATH,
+            cpr.SETTINGS_PATH,
+            getattr(cpr, "SOURCE_CHANGED_SINCE", None),
+        )
         cpr.CRATES = str(crates)
         cpr.REGISTRY_PATH = str(registry_path)
         cpr.SETTINGS_PATH = str(settings_path)
+        cpr.SOURCE_CHANGED_SINCE = _changed_stub(changed)
         out, err = io.StringIO(), io.StringIO()
         try:
             with redirect_stdout(out), redirect_stderr(err):
                 rc = cpr.main()
         finally:
-            cpr.CRATES, cpr.REGISTRY_PATH, cpr.SETTINGS_PATH = saved
+            (
+                cpr.CRATES,
+                cpr.REGISTRY_PATH,
+                cpr.SETTINGS_PATH,
+                cpr.SOURCE_CHANGED_SINCE,
+            ) = saved
         return rc, out.getvalue(), err.getvalue()
 
 
@@ -519,6 +575,96 @@ class HintGeneration(unittest.TestCase):
         self.assertEqual(
             sum(1 for ln in lines if ln.startswith("GATE_CRATES = (")), 1
         )
+
+
+class BinaryProvenance(_FixtureCase):
+    """A matching version string is not evidence that the deployed binary is current.
+
+    The registry records a version, and rollout-plugins.sh only re-points that
+    entry when the version CHANGES — but rebuild-plugins.sh refreshes the binary
+    whenever the bytes differ. So a plugin can sit at the right version with a
+    binary built from source that has since moved (most commonly because
+    harness-core changed underneath it: every plugin statically links it, and
+    none of them bump for it). Comparing version strings cannot see that, and
+    comparing binary HASHES cannot either — this repo's release builds are NOT
+    byte-reproducible (measured 2026-07-26: `cargo clean -p X && cargo build`
+    yields a different sha256 for identical source). What IS decidable is
+    provenance: record the commit each binary was built from, then ask git
+    whether that plugin's source moved since.
+    """
+
+    def test_stale_binary_at_matching_version_is_drift(self):
+        # Every version string matches, so the old check reports a clean fleet.
+        # But condukt's source has moved since its binary was built.
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                provenance={"condukt": {"commit": "deadbeef" * 5, "dirty": False}},
+                changed=["condukt"],
+            )
+        self.assertNotEqual(
+            rc, 0, f"a stale binary must not pass as deployed.\nout={out}\nerr={err}"
+        )
+        self.assertIn("condukt", out + err)
+
+    def test_clean_provenance_still_passes(self):
+        # Control arm (anti-vacuity): if every binary was built from source that
+        # has not moved, the checker must still report a clean fleet. Without
+        # this, the assertions above would also hold for a checker that simply
+        # fails on everything.
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(tmp)
+        self.assertEqual(rc, 0, f"clean fleet must pass.\nout={out}\nerr={err}")
+        self.assertIn("no rollout drift", out)
+
+    def test_missing_provenance_manifest_is_drift_not_clean(self):
+        # No manifest = the checker cannot tell what the binary was built from.
+        # "Cannot determine" must resolve restrictively, not to "fine".
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(tmp, provenance={"blastguard": None})
+        self.assertNotEqual(
+            rc, 0, f"unverifiable provenance must not pass.\nout={out}\nerr={err}"
+        )
+        self.assertIn("blastguard", out + err)
+
+    def test_binary_built_from_dirty_tree_is_drift(self):
+        # Built from uncommitted work: the recorded commit does not describe the
+        # bytes, so no later comparison against it can be trusted.
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                provenance={"specguard": {"commit": "abc123" * 6, "dirty": True}},
+            )
+        self.assertNotEqual(
+            rc, 0, f"a binary built from a dirty tree must not pass.\nout={out}\nerr={err}"
+        )
+        self.assertIn("specguard", out + err)
+
+    def test_undeterminable_git_answer_is_drift(self):
+        # git could not answer (commit rebased away, repo unavailable). That is
+        # not "unchanged".
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                provenance={"propguard": {"commit": "0" * 40, "dirty": False}},
+                changed={"propguard": None},
+            )
+        self.assertNotEqual(
+            rc, 0, f"an undeterminable provenance answer must not pass.\nout={out}\nerr={err}"
+        )
+        self.assertIn("propguard", out + err)
+
+    def test_malformed_provenance_manifest_is_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                provenance={"overwatch": {"commit": "x" * 40, "dirty": False}},
+                provenance_text="{ not json",
+            )
+        self.assertNotEqual(
+            rc, 0, f"a malformed manifest must not pass.\nout={out}\nerr={err}"
+        )
+        self.assertIn("overwatch", out + err)
 
 
 if __name__ == "__main__":

@@ -68,6 +68,23 @@ least-privilege を機械的に強制する。エージェントが騙されて�
 - `state::check` は 3 値（`Clean` / `Tainted(sources)` / `Undetermined(why)`）
   で、marker が読めない・パースできないケースを `Clean` に潰さない。
   `is_tainted` はこの 3 値のうち `Clean` 以外を全部 `true` にする bool 便利関数。
+- marker が**存在しない**場合も無条件に `Clean` を返さない。「このセッションは
+  一度も untrusted content を消費していない（安全）」と「直前の `mark` が
+  state dir 書き込み不能（読み取り専用マウント／`chmod 555`／disk full）で
+  静かに失われた（`Clean` にしてはならない）」は marker の不在という同じ
+  観測結果を作るため、`check` は marker 不在のケースに限り、その session state
+  dir が今まさに書き込み可能かをプローブ（作成→書き込み→削除の使い捨てファイル）
+  する。プローブ成功（健全な store）→ `Clean`（通常の空セッションはこれまで通り
+  素通り＝over-block しない）。プローブ失敗（store が書き込み不能）→
+  `Undetermined`（corrupt marker と同じ fail-closed 側）。
+- marker が**存在する**が想定スキーマと食い違う場合（例: 必須の `tainted`
+  フィールドを欠いた `{"foo":123}`）も、serde のデフォルト値で黒魔術的に
+  `tainted: false` → `Clean` に解決したりしない。`tainted` は
+  `#[serde(default)]` を外してあるので、欠落は deserialize の `Err` になり、
+  corrupt marker と同じ `Undetermined` に落ちる。
 - `mark`/`gate` はどちらも `catch_unwind` によるパニックバリアで包まれており、
   内部で panic しても「何もしなかった（＝silent allow）」にはならず、
-  fail-closed な結果（強制 mark / 強制 ask-deny）に解決する。
+  fail-closed な結果（強制 mark / 強制 ask-deny）に解決する。ただし `mark` の
+  書き込み失敗自体（panic ではない通常の IO エラー）はこのパニックバリアの
+  対象外 — その場合の fail-closed の実体は上記の `check` 側の書き込み可能性
+  プローブである（`mark` は失敗を stderr に出して exit 0 するだけ）。

@@ -521,6 +521,191 @@ fn read_with_no_file_path_fails_closed() {
     );
 }
 
+// ── FIX #1 (primary): an unwritable state store must fail closed, a healthy
+// one must not over-block ──────────────────────────────────────────────────
+
+/// CONTROL for FIX #1: a genuinely healthy, writable, empty store (no `mark`
+/// ever ran) must still allow silently. Guards against the writability probe
+/// itself becoming an over-block on the ordinary happy path.
+#[test]
+fn healthy_writable_empty_store_allows_silently() {
+    let f = fixture("writable-control");
+    let (code, stdout) = run(
+        "gate",
+        &gate_payload(
+            "Bash",
+            serde_json::json!({"command": "echo hi"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        INTERACTIVE_ENV,
+    );
+    assert_eq!(code, 0);
+    assert!(
+        stdout.trim().is_empty(),
+        "a healthy, writable, empty store must allow silently (no over-block), got: {stdout:?}"
+    );
+}
+
+/// PRIMARY FIX #1: when the state base is unwritable, a `mark` write is lost
+/// (fail-soft, exits 0) and the marker stays absent. `gate` must not read
+/// that absence as trustworthy `Clean` — it must probe the store's
+/// writability and fail closed when the probe itself fails.
+#[cfg(unix)]
+#[test]
+fn unwritable_state_store_fails_closed_despite_a_lost_mark() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let f = fixture("unwritable-store");
+
+    // Make the state base unwritable BEFORE the mark attempt, mirroring a
+    // read-only mount / chmod 555 / disk-full session state dir.
+    std::fs::set_permissions(&f.state_dir, std::fs::Permissions::from_mode(0o555))
+        .expect("chmod state dir read-only");
+
+    let restore_perms = || {
+        std::fs::set_permissions(&f.state_dir, std::fs::Permissions::from_mode(0o755))
+            .expect("restore state dir permissions for cleanup");
+    };
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // This mark attempt cannot actually persist (the dir is read-only),
+        // but per the crate's fail-soft write contract it still exits 0.
+        let (mark_code, _) = run(
+            "mark",
+            &mark_payload(
+                "WebFetch",
+                serde_json::json!({"url": "https://example.com"}),
+                &f.cwd,
+                &f.session,
+            ),
+            &f.cwd,
+            &f.state_dir,
+            &[],
+        );
+        assert_eq!(
+            mark_code, 0,
+            "mark must always exit 0 even when it cannot persist"
+        );
+
+        // The marker never landed (store unwritable) — confirm the gate does
+        // NOT trust that absence as Clean.
+        let (gate_code, stdout) = run(
+            "gate",
+            &gate_payload(
+                "Bash",
+                serde_json::json!({"command": "echo hi"}),
+                &f.cwd,
+                &f.session,
+            ),
+            &f.cwd,
+            &f.state_dir,
+            INTERACTIVE_ENV,
+        );
+        assert_eq!(gate_code, 0, "gate must always exit 0");
+        let decision = permission_decision(&stdout);
+        assert!(
+            decision.as_deref() == Some("ask") || decision.as_deref() == Some("deny"),
+            "an unwritable state store with a lost mark must fail closed, not silently \
+             allow, got: {stdout:?}"
+        );
+    }));
+
+    // Restore permissions unconditionally so the TempDir can clean up on drop
+    // regardless of the assertions' outcome above.
+    restore_perms();
+    result.unwrap();
+}
+
+// ── FIX #3: a valid-JSON, wrong-schema marker must fail closed ──────────────
+
+#[test]
+fn wrong_schema_marker_fails_closed_to_ask_or_deny() {
+    let f = fixture("wrong-schema-marker");
+    // Establish the marker path the same way the corrupt-marker test does
+    // (real mark first, then clobber), so the derived path is guaranteed
+    // correct without reimplementing the crate's private path logic here.
+    let (code, _) = run(
+        "mark",
+        &mark_payload(
+            "WebFetch",
+            serde_json::json!({"url": "https://example.com"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &[],
+    );
+    assert_eq!(code, 0);
+
+    let marker =
+        find_marker_file(&f.state_dir).expect("mark must have written exactly one marker file");
+    // Valid JSON, but missing the required `tainted` field entirely.
+    std::fs::write(&marker, br#"{"foo":123}"#).expect("overwrite with wrong-schema marker");
+
+    let (code, stdout) = run(
+        "gate",
+        &gate_payload(
+            "Bash",
+            serde_json::json!({"command": "echo hi"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        INTERACTIVE_ENV,
+    );
+    assert_eq!(code, 0);
+    let decision = permission_decision(&stdout);
+    assert!(
+        decision.as_deref() == Some("ask") || decision.as_deref() == Some("deny"),
+        "a valid-JSON but wrong-schema marker must fail closed, not serde-default to clean, \
+         got: {stdout:?}"
+    );
+}
+
+// ── FIX #4: an unexpanded leading `~` must never be trusted ─────────────────
+
+#[test]
+fn unexpanded_tilde_read_taints_and_gate_fails_closed() {
+    let f = fixture("tilde-read");
+    let (code, _) = run(
+        "mark",
+        &mark_payload(
+            "Read",
+            serde_json::json!({"file_path": "~/secret"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &[],
+    );
+    assert_eq!(code, 0);
+
+    let (code, stdout) = run(
+        "gate",
+        &gate_payload(
+            "Edit",
+            serde_json::json!({"file_path": "src/main.rs"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        INTERACTIVE_ENV,
+    );
+    assert_eq!(code, 0);
+    let decision = permission_decision(&stdout);
+    assert!(
+        decision.as_deref() == Some("ask") || decision.as_deref() == Some("deny"),
+        "a Read of an unexpanded `~` path must not be trusted, got: {stdout:?}"
+    );
+}
+
 /// Locate the single `taint.json` marker file under `state_dir` (recursively) —
 /// a test helper, not a reimplementation of the crate's path derivation.
 fn find_marker_file(state_dir: &Path) -> Option<std::path::PathBuf> {

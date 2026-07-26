@@ -55,8 +55,20 @@ fn normalize_lexical(path: &Path) -> PathBuf {
 /// there is no trustworthy boundary to compare against, so the answer is
 /// `Indeterminate`.
 pub fn classify(root: &Path, target: &str) -> Trust {
-    if target.trim().is_empty() {
+    let trimmed = target.trim();
+    if trimmed.is_empty() {
         return Trust::Indeterminate;
+    }
+    // A literal, unexpanded leading `~` (`~/secret`, `~otheruser/x`) is never
+    // what a real `Read` tool_input carries (Claude Code always resolves it
+    // to an absolute path first) — so seeing one here means the shape is
+    // unverified from this function's own resolution. Naively joining it onto
+    // `root` would create a literal `<root>/~/secret` path that lexically
+    // starts_with `root` and misclassifies as `Trusted`. Defensive: anything
+    // we cannot confidently resolve to inside the root is `Untrusted`, not
+    // `Trusted` (see FIX #4 in the crate's issue history).
+    if trimmed.starts_with('~') {
+        return Trust::Untrusted;
     }
     let Ok(root_canonical) = root.canonicalize() else {
         return Trust::Indeterminate;
@@ -181,5 +193,15 @@ mod tests {
             classify(root.path(), "/tmp/some-scratch-file"),
             Trust::Untrusted
         );
+    }
+
+    /// FIX #4: an unexpanded leading `~` must never be trusted just because
+    /// joining it onto the root lexically starts with the root.
+    #[test]
+    fn unexpanded_tilde_path_is_untrusted() {
+        let root = temp_root("tilde");
+        assert_eq!(classify(root.path(), "~/secret"), Trust::Untrusted);
+        assert_eq!(classify(root.path(), "~"), Trust::Untrusted);
+        assert_eq!(classify(root.path(), "~otheruser/x"), Trust::Untrusted);
     }
 }

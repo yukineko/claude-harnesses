@@ -982,8 +982,8 @@
     },
     {
       "name": "taintguard",
-      "description": "New crate. Provenance-scoped least-privilege gate: after a turn consumes untrusted-provenance content (a WebFetch/WebSearch result, or a Read outside the project root), write-class tools (Bash/Write/Edit/MultiEdit/NotebookEdit) are downgraded to ask (interactive) / deny (headless) for the rest of that turn; a clean Stop restores normal access. Subscription-native, bundled Rust binary.",
-      "version": "0.1.0",
+      "description": "v0.1.1: closes an independently-verified fail-open — an absent taint marker after a lost/unpersisted mark (state dir readable-but-unwritable) used to read as Clean/allow indistinguishably from a genuinely clean session; `gate`'s absent-marker branch now probes the session state dir's writability before trusting the absence (probe succeeds → Clean/allow unchanged, probe fails → Undetermined → ask/deny), with a control test proving a healthy writable empty store still allows silently. Also: a valid-JSON but wrong-schema marker (missing the required `tainted` field) now fails closed to Undetermined instead of serde-defaulting to Clean; an unresolved leading `~` in a Read target (`~/secret`) now classifies Untrusted instead of lexically-joining onto the root as Trusted; and a docstring that falsely claimed the absent-marker case already failed closed has been corrected to describe the actual (now fixed) behavior. New crate. Provenance-scoped least-privilege gate: after a turn consumes untrusted-provenance content (a WebFetch/WebSearch result, or a Read outside the project root), write-class tools (Bash/Write/Edit/MultiEdit/NotebookEdit) are downgraded to ask (interactive) / deny (headless) for the rest of that turn; a clean Stop restores normal access. Subscription-native, bundled Rust binary.",
+      "version": "0.1.1",
       "category": "security",
       "keywords": [
         "security",

@@ -1,6 +1,6 @@
 {
   "name": "taintguard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Provenance-scoped least-privilege gate: after a turn consumes untrusted-provenance content (a WebFetch/WebSearch result, or a Read outside the project root), write-class tools (Bash/Write/Edit/MultiEdit/NotebookEdit) are downgraded to ask (interactive) / deny (headless) for the rest of that turn; a clean Stop restores normal access.",
   "author": {
     "name": "yukineko"

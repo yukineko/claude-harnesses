@@ -1,5 +1,5 @@
 ## north_star
-fail-open を『後から検出する』のをやめ、『そもそも書けない』側へ移す。harness_core の verdict 型は出力側でこれを既に達成している — Clean は private witness でしか作れず、Determination には unwrap_or も ok も Default も無いので、『判定できなかった』を『問題なし』へ潰す最短経路が型として存在しない。同じ技法を入力側（fallible な入力境界）へ広げる。
+fail-open を『後から検出する』のをやめ、『そもそも書けない』側へ移す。harness_core の verdict 型は出力側でこれを既に達成している — Clean は private witness でしか作れず、Determination には unwrap_or も ok も Default も無いので、『判定できなかった』を『問題なし』へ潰す最短経路が型として存在しない。同じ技法を入力側（fallible な入力境界）と gate 内部の verdict 経路へ広げる。
 
 ## definition_of_done
 - DoD1: ワークスペース直下の Cargo.toml が clippy lints を持ち gate crate が継承する。達成済み（6 crate が workspace 継承、非集約の4 crate は理由をコード内に明文化して parked）。
@@ -7,18 +7,19 @@ fail-open を『後から検出する』のをやめ、『そもそも書けな�
 - DoD3: harness_core が fallible な入力境界のラッパを提供し返り値が三値 Determination である。達成済み（boundary モジュール、走査・読み出し・subprocess の3経路）。
 - DoD4: gate crate 内の生の走査・読み出し・subprocess 直接呼び出しが機械検出され、検出時に local ゲートが非0で終了する。達成済み（raw-io ratchet を pre-commit 配線、terminal method 検出に再設計済み）。
 - DoD5: アンチ空虚の対照実験を記録している。達成済み（ratchet の対照実験 29 tests green）。
-- DoD6: 生 IO 呼び出しの baseline が boundary ラッパ経由へ移行され単調減少する。各移行は前後で cargo test と clippy が green を観測して確定。現況 baseline=67（specguard 37・overwatch 28・propguard 2、他 gate crate は 0）。実測 2026-07-24、HEAD b20aa4a5。
-- DoD7: fail-open reader（Result 崩壊を permissive default へ潰す入力読み取り）が三値 Determination へ移行され確定数が単調増加する。既知集合 M1-M4 は 4/4 確定で全て main に landed（M1 overwatch read_violations を fail-closed scan 化、M2 specguard sentinel_pending 三値化、M3 overwatch lock の pid_alive 三値化、M4 harness-core load_json 三値化と stuckguard consumer 移行）。各確定は利害のない agent の RED oracle を fault injection で先に観測してから GREEN 化する（F→P）。新たな fail-open reader を発見したら既知集合に追加する。
-- DoD8: fail-open reader は raw-IO ratchet に現れない意味的 Result 崩壊も含むため、可能な箇所は boundary 経由へ寄せて DoD6 と同時前進させる（一つの移行で ratchet baseline を下げつつ三値化を確定する）。
+- DoD6: 生 IO 呼び出しの baseline が boundary ラッパ経由へ移行され単調減少する — この軸は converged=達成として固定。現況 baseline=60（実測 2026-07-26 HEAD 2742a8c1、`python3 scripts/check-raw-io-ratchet.py` が count==baseline=60、floor held を報告）。remaining sites は Bucket-A（既に fail-closed・機械的）／Bucket-B（documented fail-soft contract・contested）で、clean な raw-IO fail-open は残っていない。以後の勾配は raw-IO ではなく DoD9（意味的 verdict 経路）へ移す。
+- DoD7: fail-open reader（Result 崩壊を permissive default へ潰す入力読み取り）が三値 Determination へ移行され確定数が単調増加する。既知集合 M1-M4 は 4/4 確定で全て main に landed。各確定は利害のない agent の RED oracle を fault injection で先に観測してから GREEN 化する（F→P）。新たな fail-open reader を発見したら既知集合に追加する。
+- DoD8: fail-open reader は raw-IO ratchet に現れない意味的 Result 崩壊も含むため、可能な箇所は boundary 経由へ寄せて DoD6 と同時前進させる。
+- DoD9: 各 gate crate の verdict 経路（block/allow/ask 等の判定を返す関数、およびそれを消費する call site）が三値（harness_core::verdict::Determination / Verdict）で表現され、silence（沈黙した subagent 票）・空集合・panic・IO/parse/subprocess 失敗を restrictive（block/ask/escalate）へ解決する。per-gate 監査で『未監査の verdict 経路 0本』を各 gate crate の完了条件とし、監査済み gate crate 数 / 全 gate crate 数を単調増加の計測単位とする。各確定は利害のない agent が fault injection で RED（gate が誤って pass/allow）を先に観測してから GREEN（restrictive 解決）で確定（F→P）。発見した意味的 fail-open を既知集合に追加する。本セッションで cde2212c（mutategate floorless-clamp）・dd3aad81（condukt silent-verifier）・ea1355f5（blastguard cwd-bypass）が landed 済み。
 
 ## measuring_stick
-擁護可能性 × ゴールへの接近距離 ÷ コスト（各移行は利害のない agent の RED oracle を先に観測してから確定）
+擁護可能性 × ゴールへの接近距離 ÷ コスト（各確定は利害のない agent の RED oracle を fault injection で先に観測してから GREEN 化して確定＝F→P。build≠validate）
 
 ## current_gap
-DoD1-5 と DoD7(fail-open reader M1-M4=4/4) は達成済みで全て main(b20aa4a5) に landed。残る勾配は DoD6 の raw-IO ratchet=67 を boundary 経由へ移して単調減少させること。内訳は specguard 37・overwatch 28・propguard 2 で、最大バケットは specguard。次の右サイズの一手は specguard の report-state 読み取り（sentinel を present-but-unreadable のとき空扱いして gate を素通しさせる fail-open）を三値 boundary::read_to_string へ移す s スライス。DoD8 どおり ratchet 減少と三値化を同時に達成できる。
+DoD6 の raw-IO ratchet は baseline=60 で converged（実測 2026-07-26、count==baseline、floor held）＝この軸は達成固定。DoD7 M1-M4 も 4/4 達成。残る勾配は DoD9: gate-crate 内部の意味的 fail-open（verdict 経路が silence／空集合／panic／IO・parse 失敗を permissive へ潰す class）の per-gate fail-closed 監査。verdict/boundary 未採用は schemaguard(0)・autoflow(0)、低採用は budgetguard／gauge／reviewgate(各1 file)。次の右サイズ一手は未監査 gate 1本の verdict 経路 fail-closed 監査（schemaguard を先頭候補）。
 
 ## next_action
-specguard の sentinel 読み取り 2 箇所（report 描画パス main.rs:1193 と ack パス main.rs:1285、いずれも読み取り失敗を空扱いして drift gate を素通しさせる dangerous-direction の fail-open）を harness_core::boundary::read_to_string(三値 Determination) へ移行し present-but-unreadable を absent と区別する。利害のない agent が unreadable sentinel を注入して gate が誤通過することを先に観測(RED)→移行後 GREEN の F→P で確定。cargo test と clippy を green 観測。ratchet 67→65。
+schemaguard の verdict 経路を per-gate fail-closed 監査する: schema 検証（decomposition 等）が『schema／入力を読めない・parse 不能・空』を『valid』へ潰していないか、fallible 入力（IO/parse/subprocess）ごとに restrictive 解決を確認。利害のない agent が unreadable/malformed/empty schema を注入して gate が誤って pass することを先に観測(RED)→三値 Determination 経由へ移行し fail-closed(GREEN)で確定(F→P)。cargo test と clippy green 観測、schemaguard version を3ファイル lockstep bump。※実行 handoff（condukt）は d52 の排他ロック解放後。今サイクルは charter 彫りのみ。
 
 ## parked
 

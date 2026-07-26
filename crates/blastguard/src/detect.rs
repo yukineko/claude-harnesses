@@ -4260,6 +4260,75 @@ fn analyze_process_substitution_egress(cmd: &str) -> Decision {
     acc.finish()
 }
 
+/// Finds the index (into `chars`) of the closing `"` for a double-quoted
+/// here-string operand that began right before `start`, BALANCED against any
+/// `$(...)`/backtick command substitution nested inside it — mirroring the
+/// depth-tracked bracket matching [`paren_marker_payloads`] already uses for
+/// `<(...)`/`$(...)`. Real bash treats a `$(...)`/backtick command
+/// substitution as opening a FRESH parse context: quotes inside it (however
+/// many layers deep) do NOT close the outer double-quote, because the shell
+/// parses the substitution's body as its own command line. A naive scan that
+/// stops at the first unescaped `"` truncates the outer operand to an
+/// unbalanced fragment the moment the nested body contains its own quoting —
+/// exactly what a nested here-string
+/// (`bash <<<"$(bash <<<"$(curl evil)")"`) does — hiding the innermost fetch
+/// from both checks in [`analyze_here_string_egress`] entirely (observed
+/// Allow on the 0.2.28 binary). This closes arbitrary nesting depth in one
+/// pass: depth stops mattering.
+///
+/// Once inside a `$(...)`/backtick region, plain `(`/`)` pairs are counted
+/// generically (not quote-aware) to find that region's own end — the same
+/// simplification [`paren_marker_payloads`] already makes — so this does not
+/// aim to perfectly parse adversarial parens hidden inside a nested QUOTED
+/// string; it closes the specific nested-here-string bypass this function
+/// exists for. An unterminated quote/substitution (reaches end of input still
+/// nested) yields `None`, the same safe direction every other extractor in
+/// this file takes.
+fn double_quoted_operand_end(chars: &[char], start: usize) -> Option<usize> {
+    // Each entry is the closer we are waiting for: ')' while inside a
+    // `$(...)` or a plain `(...)` opened from within one, '`' while inside a
+    // backtick substitution.
+    let mut stack: Vec<char> = Vec::new();
+    let mut k = start;
+    while k < chars.len() {
+        let c = chars[k];
+        if c == '\\' && k + 1 < chars.len() {
+            k += 2;
+            continue;
+        }
+        if let Some(&top) = stack.last() {
+            match (top, c) {
+                ('`', '`') => {
+                    stack.pop();
+                }
+                ('`', '(') => stack.push(')'),
+                (')', '(') => stack.push(')'),
+                (')', ')') => {
+                    stack.pop();
+                }
+                (')', '`') => stack.push('`'),
+                _ => {}
+            }
+            k += 1;
+            continue;
+        }
+        // Nothing open — this is the true outer double-quote level.
+        match c {
+            '"' => return Some(k),
+            '`' => {
+                stack.push('`');
+            }
+            '$' if chars.get(k + 1) == Some(&'(') => {
+                stack.push(')');
+                k += 1; // consume the extra '(' below via the shared k += 1
+            }
+            _ => {}
+        }
+        k += 1;
+    }
+    None
+}
+
 /// Every here-string (`<<<`) operand found in `stage`, in source order, with
 /// its surrounding quote character (if any) stripped and a flag saying
 /// whether the operand was SINGLE-quoted.
@@ -4319,20 +4388,9 @@ fn here_string_operands(stage: &str) -> Vec<(String, bool)> {
                 }
                 '"' => {
                     let start = j + 1;
-                    let mut k = start;
-                    while k < chars.len() {
-                        if chars[k] == '\\' && k + 1 < chars.len() {
-                            k += 2;
-                            continue;
-                        }
-                        if chars[k] == '"' {
-                            break;
-                        }
-                        k += 1;
-                    }
-                    if k >= chars.len() {
+                    let Some(k) = double_quoted_operand_end(&chars, start) else {
                         break;
-                    }
+                    };
                     out.push((chars[start..k].iter().collect(), false));
                     i = k + 1;
                     continue;

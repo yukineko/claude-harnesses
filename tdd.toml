@@ -1,5 +1,33 @@
-# tdd config for this repo. `test_cmd` is executed verbatim by `tdd red`/`tdd green`
-# (project must be `tdd trust`ed). Scoped to the overwatch crate for the
-# continuous-audit finder!=verifier model-diversity enforcement task (t1).
-test_cmd = "cargo test -p overwatch"
+# tdd.toml — test-first gate for Claude Code.
+#
+# On Stop, `tdd gate` blocks the turn when implementation code was ADDED without
+# an accompanying test (an inline #[test]/def test_/func Test/it(...), or a file
+# under tests/). The block is fed back so the agent writes the test and finishes.
+#
+# `tdd red`/`tdd green` (driven by the /tdd skill) make test-first verifiable:
+# red REQUIRES the tests to fail first; green REQUIRES a prior red then a pass.
+
 enabled = true
+max_attempts = 3            # give up (allow stop) after N consecutive blocks
+reset_after_secs = 600      # attempt counter resets after this idle gap
+min_added_impl_lines = 1    # need a test once this many impl lines are added
+
+# Default command for `tdd red` / `tdd green` (override per call with --cmd).
+test_cmd = "cargo test"
+
+# Where RED/GREEN proof artifacts are written (relative to the project root).
+proof_dir = ".tdd"
+
+# Files that count as implementation / as tests. Defaults cover Rust, Python,
+# TS/JS, Go, Java, Ruby, C/C++, Kotlin, Swift — override to taste.
+# impl_globs = ["**/*.rs", "**/*.py", "**/*.ts"]
+# test_path_globs = ["**/tests/**", "**/test_*.py", "**/*.spec.*"]
+# test_markers = ['#\[\s*test', '\bdef\s+test_', '\bfunc\s+Test\w']
+
+# Opt-in: `tdd green` fail-closed rejects if the RED (test-authoring) identity
+# equals the GREEN (implementation) identity. Identity defaults to
+# CLAUDE_CODE_SESSION_ID when `--author` is omitted from `tdd red`/`tdd green`
+# (not just an honor-system string) — but a single agent can still defeat this
+# by passing two different --author overrides; this is HOTL, not a hard
+# security boundary. See the /tdd skill for details.
+# strict_separation = false

@@ -259,11 +259,16 @@ for binfile in "$CACHE"/*/*/bin/*-"$SUF"; do
       echo "cache  would update $base"
     else
       cp -f "$src" "$binfile"; chmod +x "$binfile"
-      write_provenance "$version_dir" "$plugin_name"
       echo "cache  updated $base"
     fi
     updated_cache=$((updated_cache+1))
   fi
+  # Provenance describes the bytes deployed RIGHT NOW, so it is recorded whether
+  # or not this run replaced them. Writing it only on replacement was wrong: a
+  # binary that already matched the current build is equally current, but would
+  # keep no manifest and so stay permanently unverifiable — the checker would
+  # report drift forever and no rollout could ever clear it.
+  [ $dry = 1 ] || write_provenance "$version_dir" "$plugin_name"
   # 2) committed repo copy — what /plugin install ships (opt-in via --stage-repo)
   if [ $stage_repo = 1 ]; then
     repofile=$(ls "$REPO"/crates/*/bin/"$base" 2>/dev/null | head -n1 || true)

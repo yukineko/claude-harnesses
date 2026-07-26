@@ -78,6 +78,18 @@ tree — reports drift rather than passing. An unverifiable binary is the state
 this check exists to surface; resolving it to clean would make "never recorded"
 indistinguishable from "verified current".
 
+(b) applies only to plugins that HAVE a binary, and that is decided from the
+SOURCE (does crates/<name> declare a bin target?), never from whether one is
+present in the deployed tree. Two plugins — daily-report and scout — are skills
+and hooks only, with no Rust crate at all; they have no compiled artifact whose
+provenance could drift, and no rollout could ever write a manifest for them, so
+demanding one reported permanent unfixable drift. That exemption is the sole
+branch of (b) that passes with no manifest and it is deliberately narrow: a
+plugin whose source DOES declare a binary but has none deployed is reported as
+drift (a fresh version dir missing its host binary makes the launcher exec
+nothing and silently no-op), and a binary sitting on disk must be verifiable
+whatever the source says.
+
 Both dimensions fail SOFT on a MISSING input file: an absent registry skips the
 rollout check, an absent settings.json skips the enablement check, and neither
 absence is a failure (nothing is deployed / nothing is configured yet). A
@@ -152,6 +164,84 @@ def _git_changed_since(commit, crate):
 # Rebindable so the provenance dimension is testable without a git repo, the
 # same way REGISTRY_PATH/SETTINGS_PATH are rebound at a fixture.
 SOURCE_CHANGED_SINCE = _git_changed_since
+
+
+def _host_suffix():
+    """This host's `<os>-<arch>` binary suffix, matching rebuild-plugins.sh's $SUF.
+
+    The suffix must be the HOST's, not "any known platform": a version dir ships
+    the committed cross-platform binaries, so accepting any suffix would call a
+    plugin deployed whose per-host binary is precisely the one missing — the
+    documented failure where the launcher execs nothing and silently no-ops.
+    """
+    import platform
+
+    sysname = platform.system().lower()
+    os_part = sysname if sysname in ("darwin", "linux", "windows") else "unknown"
+    mach = platform.machine().lower()
+    if mach in ("x86_64", "amd64"):
+        arch = "x86_64"
+    elif mach in ("aarch64", "arm64"):
+        arch = "arm64"
+    else:
+        arch = "unknown"
+    return f"{os_part}-{arch}"
+
+
+HOST_SUFFIX = _host_suffix()
+
+
+def _crate_ships_binary(crate):
+    """Does crates/<crate> declare a binary target? True / False / None.
+
+    None means undetermined, and callers must resolve it restrictively. This is
+    deliberately decided from the SOURCE, never from whether a binary happens to
+    be present in the deployed tree: "no bin/ directory" is itself one of the
+    failure states this check exists to catch, so reading the deployed side to
+    decide whether a binary was expected would let that failure certify itself.
+
+    A plugin may legitimately ship no binary at all (skills/ and hooks/ only,
+    with no Rust crate under crates/<name> — daily-report and scout are the two
+    such plugins today). Those have no compiled artifact whose provenance could
+    drift, and are the sole case allowed to pass with no manifest.
+    """
+    crate_dir = os.path.join(CRATES, crate)
+    if not os.path.isdir(crate_dir):
+        return None
+    if os.path.isfile(os.path.join(crate_dir, "src", "main.rs")):
+        return True
+    cargo = os.path.join(crate_dir, "Cargo.toml")
+    if not os.path.exists(cargo):
+        # No Rust crate at all: skill-only plugin.
+        return False
+    if not os.path.isfile(cargo):
+        return None
+    try:
+        with open(cargo, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    # A crate can declare its binary explicitly instead of via src/main.rs
+    # (context-governor does exactly this), so both forms must be recognised.
+    return "[[bin]]" in text
+
+
+def _host_binary_deployed(install):
+    """Is this host's binary present under `install`/bin? True / False / None.
+
+    None means the directory exists but could not be listed — undetermined, not
+    "absent" and not "present".
+    """
+    bindir = os.path.join(install, "bin")
+    try:
+        entries = os.listdir(bindir)
+    except FileNotFoundError:
+        return False
+    except NotADirectoryError:
+        return None
+    except OSError:
+        return None
+    return any(e.endswith("-" + HOST_SUFFIX) for e in entries)
 REGISTRY_PATH = os.environ.get(
     "CLAUDE_PLUGIN_REGISTRY", os.path.expanduser("~/.claude/plugins/installed_plugins.json")
 )
@@ -370,6 +460,36 @@ def _provenance_problem(crate, entry):
             f"{crate}: registry entry has no 'installPath', so the deployed "
             "binary cannot be located and its provenance cannot be verified"
         )
+    ships = _crate_ships_binary(crate)
+    if ships is None:
+        return (
+            f"{crate}: could not determine from crates/{crate} whether this "
+            "plugin ships a binary (crate directory missing or Cargo.toml "
+            "unreadable), so it cannot be told apart from a skill-only plugin "
+            "— undetermined is not 'nothing to verify'"
+        )
+    deployed = _host_binary_deployed(install)
+    if deployed is None:
+        return (
+            f"{crate}: could not list {os.path.join(install, 'bin')}, so whether "
+            "a binary is deployed at all is undetermined"
+        )
+    if not ships and not deployed:
+        # Skill-only plugin: no Rust crate in the source, and no binary on disk.
+        # There is no compiled artifact whose provenance could drift, so there is
+        # nothing here to verify. This is the ONLY branch that passes with no
+        # manifest, and it requires BOTH sides to agree — a missing bin/ alone
+        # never excuses a plugin whose source declares a binary.
+        return None
+    if ships and not deployed:
+        return (
+            f"{crate}: crates/{crate} declares a binary target, but no "
+            f"{HOST_SUFFIX} binary is deployed under "
+            f"{os.path.join(install, 'bin')} — the plugin is installed but "
+            "execs nothing (re-run rollout-plugins.sh)"
+        )
+    # A binary is on disk (whether or not the source still declares one), so its
+    # provenance must be verifiable.
     manifest_path = os.path.join(install, PROVENANCE_FILE)
     state, manifest = _load_json(manifest_path)
     if state == ABSENT:

@@ -20,6 +20,7 @@ import importlib.util
 import io
 import json
 import os
+import platform
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -39,6 +40,24 @@ OWNER = "yukineko"
 # gate it could not account for, so a fixture missing one is (correctly) drift
 # rather than a clean baseline. `mutategate` is deliberately absent — it ships no
 # plugin.json and is the exempted non-plugin gate.
+# The `<os>-<arch>` suffix rebuild-plugins.sh gives this host's binary. Computed
+# here rather than imported from the script under test: a fixture that borrowed
+# the checker's own constant would agree with it by construction, including when
+# both are wrong, and would also make the suite un-runnable against a build of
+# the checker that predates the constant.
+def _host_suffix_for_fixture():
+    sysname = platform.system().lower()
+    os_part = sysname if sysname in ("darwin", "linux", "windows") else "unknown"
+    mach = platform.machine().lower()
+    if mach in ("x86_64", "amd64"):
+        return f"{os_part}-x86_64"
+    if mach in ("aarch64", "arm64"):
+        return f"{os_part}-arm64"
+    return f"{os_part}-unknown"
+
+
+_HOST_SUFFIX = _host_suffix_for_fixture()
+
 FIXTURE_PLUGINS = {
     "blastguard": "1.2.0",   # GATE
     "propguard": "0.9.1",    # GATE
@@ -84,7 +103,8 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                   corrupt_plugin_json=(), drop_plugin_json=(),
                   omit_version=(), registry_raw_entries=None,
                   provenance=None, provenance_text=None,
-                  install_paths=True):
+                  install_paths=True,
+                  skill_only=(), no_host_binary=(), force_host_binary=()):
     """Build a fixture repo + registry + settings under `tmp`.
 
     versions           — crate -> source version (defaults to FIXTURE_PLUGINS)
@@ -103,9 +123,28 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                          "version" key at all.
     registry_raw_entries— crate -> the exact value to store as the registry
                          entry (used for malformed entry shapes).
+    skill_only         — crates that ship NO Rust binary (no src/main.rs, no
+                         Cargo.toml), like the real daily-report and scout.
+                         Every other crate gets both a binary target in the
+                         source AND a deployed host binary, so the provenance
+                         dimension actually applies to it — without that, the
+                         whole class would be classified skill-only and every
+                         provenance assertion below would pass vacuously.
+    no_host_binary     — crates that DECLARE a binary in the source but have
+                         none deployed (the "installed but execs nothing" case).
     """
     versions = dict(versions or FIXTURE_PLUGINS)
     crates = tmp / "crates"
+    for crate in versions:
+        # Give every crate a binary target unless the case says otherwise: the
+        # checker treats a plugin with no Rust crate as skill-only and exempts it
+        # from provenance entirely, so a fixture that wrote no source would make
+        # the provenance suite assert nothing.
+        if crate in skill_only:
+            continue
+        main_rs = crates / crate / "src" / "main.rs"
+        main_rs.parent.mkdir(parents=True, exist_ok=True)
+        main_rs.write_text("fn main() {}\n", encoding="utf-8")
     for crate, ver in versions.items():
         if crate in drop_plugin_json:
             (crates / crate).mkdir(parents=True, exist_ok=True)
@@ -143,6 +182,12 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                 install = cache_root / c / str(v)
                 install.mkdir(parents=True, exist_ok=True)
                 entry["installPath"] = str(install)
+                if c in force_host_binary or (
+                    c not in skill_only and c not in no_host_binary
+                ):
+                    hostbin = install / "bin" / f"{c}-{_HOST_SUFFIX}"
+                    hostbin.parent.mkdir(parents=True, exist_ok=True)
+                    hostbin.write_text("", encoding="utf-8")
                 manifest = provenance.get(c, _DEFAULT_PROVENANCE)
                 if provenance_text is not None and c in provenance:
                     (install / ".deployed-from.json").write_text(
@@ -665,6 +710,91 @@ class BinaryProvenance(_FixtureCase):
             rc, 0, f"a malformed manifest must not pass.\nout={out}\nerr={err}"
         )
         self.assertIn("overwatch", out + err)
+
+
+class SkillOnlyPlugins(_FixtureCase):
+    """Which plugins the provenance dimension applies to at all.
+
+    Not every plugin compiles to a binary: daily-report and scout are skills and
+    hooks only, with no crates/<name> Rust crate. Demanding a provenance manifest
+    from them reported permanent, unfixable drift — no rollout can ever write a
+    manifest beside a binary that does not exist, so the check would have stayed
+    red forever and trained its reader to ignore it.
+
+    The exemption is narrow on purpose, and these tests pin both edges of it: it
+    is decided from the SOURCE, and it does not survive a binary actually being
+    on disk. "bin/ is missing" must never be self-certifying, because that is
+    itself a real failure — a fresh version dir with no host binary makes the
+    launcher exec nothing and silently no-op.
+    """
+
+    def test_skill_only_plugin_needs_no_provenance(self):
+        """A plugin with no Rust crate has no binary whose provenance can drift."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                skill_only=("benchkit",),
+                provenance={"benchkit": None},
+            )
+        self.assertEqual(
+            rc, 0, f"a skill-only plugin must not be reported as drift.\nout={out}\nerr={err}"
+        )
+
+    def test_skill_only_exemption_does_not_excuse_binary_plugins(self):
+        """Control arm: the exemption must not blanket-pass the other plugins.
+
+        Without this, `_crate_ships_binary` returning False for everything would
+        satisfy the test above while silently disabling the entire dimension.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                skill_only=("benchkit",),
+                provenance={"benchkit": None, "condukt": None},
+            )
+        self.assertNotEqual(
+            rc, 0,
+            f"a binary plugin with no manifest must still be drift.\nout={out}\nerr={err}",
+        )
+        self.assertIn("condukt", out + err)
+        self.assertNotIn("benchkit", out + err)
+
+    def test_declared_binary_not_deployed_is_drift(self):
+        """Source declares a binary but none is deployed: execs nothing.
+
+        specguard keeps a perfectly clean manifest here, so the only thing wrong
+        is the absent binary — which is exactly the state a manifest-only check
+        waves through.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                no_host_binary=("specguard",),
+            )
+        self.assertNotEqual(
+            rc, 0,
+            f"a declared-but-undeployed binary must not pass.\nout={out}\nerr={err}",
+        )
+        self.assertIn("specguard", out + err)
+
+    def test_deployed_binary_still_needs_provenance_even_if_source_has_no_crate(self):
+        """A binary on disk must be verifiable whatever the source says.
+
+        The exemption keys off the source, so a stale binary left behind after
+        its crate was removed would otherwise be waved through unverified.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                skill_only=("benchkit",),
+                provenance={"benchkit": None},
+                force_host_binary=("benchkit",),
+            )
+        self.assertNotEqual(
+            rc, 0,
+            f"a deployed binary with no manifest must not pass.\nout={out}\nerr={err}",
+        )
+        self.assertIn("benchkit", out + err)
 
 
 if __name__ == "__main__":

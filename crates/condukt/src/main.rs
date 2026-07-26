@@ -2068,6 +2068,40 @@ fn run_user(cmd: Command) -> Result<()> {
                     ts,
                 };
                 harness_core::retrieval::record(&event);
+                // 3rd taintguard trigger: this turn consumed cross-project
+                // lessons (untrusted-provenance content injected into the
+                // transcript from a store other sessions/machines wrote to).
+                // Mark the session tainted ONLY on the same non-empty-hit
+                // condition the retrieval ledger's `hit` flag already uses —
+                // a zero-hit search injects nothing, so it must stay a no-op
+                // (preserves the existing empty `lessons_context: []`
+                // contract). `mark`'s write is fail-soft by design (see
+                // `taintguard::state::mark`'s doc comment); a lost write
+                // degrades to `check`'s writability probe failing closed to
+                // `Undetermined`, never to a silent allow, so an `Err` here
+                // is logged and NOT treated as a command failure —
+                // record-retrieval is a soft injection helper and must not
+                // break Phase 1.
+                //
+                // Session-key edge (documented, not fixed here): the SKILL
+                // invokes this with `--run "${CLAUDE_CODE_SESSION_ID:-interpret}"`.
+                // taintguard's own state dir maps an EMPTY session id to its
+                // `"default"` bucket (see `taintguard::state::state_dir`), so
+                // if `CLAUDE_CODE_SESSION_ID` is unset, this mark lands under
+                // whatever non-empty `run` value was passed (e.g.
+                // `"interpret"`) rather than taintguard's `"default"` bucket —
+                // a different bucket than a taintguard hook fired with an
+                // empty session would use. In a live turn the env var is
+                // always set and matches taintguard's `input.session_id`
+                // exactly, so there is no real-world effect; this only
+                // diverges for a non-live manual/CI invocation. Not changed
+                // here (the skill's fallback is also load-bearing for the
+                // retrieval ledger — out of scope for this task).
+                if event.hit {
+                    if let Err(e) = taintguard::state::mark(&cwd, &event.run_id, "lessons") {
+                        eprintln!("warning: could not record lessons taint mark: {e}");
+                    }
+                }
                 // Emit lessons_context: the hit lessons, each with a `score` —
                 // byte-shape-identical to `fugu-router lessons search` so the
                 // SKILL Phase-1 swap is drop-in.

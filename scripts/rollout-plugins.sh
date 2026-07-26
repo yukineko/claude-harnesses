@@ -10,7 +10,8 @@
 #   marketplace, and both are entirely scriptable:
 #     1. plain-copies the repo's `crates/<name>/` into
 #        `~/.claude/plugins/cache/yukineko/<name>/<version>/` (a fresh dir
-#        per version — old version dirs are never touched/deleted).
+#        per version; superseded dirs are pruned at the end of the run — see
+#        prune_stale_versions / scripts/prune-plugin-cache.py).
 #     2. repoints `~/.claude/plugins/installed_plugins.json` so
 #        `"<name>@yukineko"` names the new version dir.
 #   This script does both, then (unless disabled) runs `rebuild-plugins.sh`
@@ -82,8 +83,11 @@
 #
 # SAFETY
 #   - Idempotent: re-running with no version change is a no-op.
-#   - Never deletes old version dirs, never touches other plugins' registry
-#     entries, never touches the registry's top-level "version" field.
+#   - Prunes SUPERSEDED version dirs at the end of the run, but never the
+#     current one, never one held by a live session (`.in_use/<live pid>`), and
+#     never one whose hold status could not be determined. Never touches other
+#     plugins' registry entries, never touches the registry's top-level
+#     "version" field.
 #   - Excludes target/, .git/, and .in_use/ (a runtime lock dir the Claude
 #     Code plugin loader creates *inside* a live cache version dir — not part
 #     of repo source, must survive a --force recopy of an in-use version).
@@ -865,8 +869,36 @@ run_canary() {
   run_rebuild_and_sync ${canary_synced[@]+"${canary_synced[@]}"}
 }
 
+# Delete superseded version dirs. This used to be documented non-behaviour ("never
+# deletes old version dirs"), and the bill came to 265 stale dirs / 1.29 GB,
+# 25 versions deep for one plugin (measured 2026-07-26). A superseded dir is not
+# merely disk: `claude plugin install` can pin to one, and neither the provenance
+# nor the file-mirror check looks at a directory the registry does not point at.
+#
+# The decision of WHAT may be deleted lives in scripts/plugin_cache.py, shared
+# with check-plugin-rollout.py, so the rule the gate reports against and the rule
+# the remover obeys cannot drift apart. Never removed: the current version, a dir
+# held by a live session, or a dir whose hold status is undetermined.
+#
+# A non-zero rc here does NOT abort the rollout: the rollout itself succeeded,
+# and the authority to block lives in the gate, which reports the same finding
+# independently. It is printed rather than swallowed — `set -e` would otherwise
+# turn "one dir could not be inspected" into "the rollout failed", and `|| true`
+# would turn it into silence.
+prune_stale_versions() {
+  local rc=0
+  echo
+  echo ">>> scripts/prune-plugin-cache.py$([ $dry = 1 ] && echo ' --dry-run')"
+  python3 "$REPO/scripts/prune-plugin-cache.py" --repo "$REPO" --cache "$CACHE" \
+    $([ $dry = 1 ] && echo --dry-run) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "prune: exited $rc — some dir could not be removed or inspected (kept; see above)" >&2
+  fi
+}
+
 if [ "$canary" = 1 ]; then
   run_canary
+  prune_stale_versions
   echo
   echo "done (canary)."
   exit 0
@@ -936,5 +968,7 @@ fi
 
 # --- rebuild + asset sync (shared with the canary success path) --------------
 run_rebuild_and_sync ${synced_plugins[@]+"${synced_plugins[@]}"}
+
+prune_stale_versions
 
 echo "done."

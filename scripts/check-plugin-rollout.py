@@ -53,8 +53,8 @@ fixes and a caller that conflates them sends the reader to the wrong command —
       here. pre-push's catch-all branch prints this script's full output
       instead, which names the actual problem.)
 
-The rollout dimension checks TWO things, because a matching version string is
-not evidence that the deployed bytes are current:
+The rollout dimension checks FOUR things, because a matching version string is
+not evidence that anything in that directory is current:
 
   (a) VERSION — the registry's version equals the source's plugin.json version.
   (b) PROVENANCE — the binary in that install dir is provably built from source
@@ -62,6 +62,22 @@ not evidence that the deployed bytes are current:
       beside every host binary it places, recording the commit and whether the
       tree was dirty; this script asks git whether crates/<plugin> or a shared
       crate it links (harness-core) changed since that commit.
+  (c) FILE MIRROR — every other file in the install dir is byte-identical to
+      crates/<plugin>. rollout deploys with `rsync -a --delete` excluding only
+      target/, .git/ and .in_use/, so a complete rollout leaves a full mirror
+      plus the artifacts rebuild adds. Checking only (b) was too narrow a
+      reading of "is this rolled out": a plugin's payload is its skills, agents,
+      hooks, commands and manifests, and for the two skill-only plugins that
+      payload is ALL there is, so (b) said nothing about them at all.
+  (d) NO SUPERSEDED DIRS — the cache keeps no removable version dir other than
+      the current one. Measured before this existed: 265 superseded dirs, 1.29
+      GB, 25 versions deep for a single plugin. `claude plugin install` can pin
+      to one of those, and (b) and (c) both look only at the directory the
+      registry points at. A dir held by a live session (`.in_use/<live pid>`) is
+      not reported — it cannot be removed and would be a red nothing can clear;
+      a dir whose hold status cannot be determined IS reported. The rule lives
+      in scripts/plugin_cache.py, shared with scripts/prune-plugin-cache.py, so
+      what the gate demands and what the pruner deletes cannot drift apart.
 
 (b) exists because (a) alone was blind to the most common staleness: every
 plugin statically links harness-core, so a change there changes every binary
@@ -109,6 +125,9 @@ import json
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import plugin_cache  # noqa: E402
+
 OWNER = "yukineko"
 
 # Exit codes, one per failure CLASS (see the module docstring). Named so callers
@@ -125,6 +144,23 @@ CRATES = os.path.join(REPO, "crates")
 # Filename of the provenance manifest rebuild-plugins.sh drops beside every host
 # binary it places, recording the commit that binary was built from.
 PROVENANCE_FILE = ".deployed-from.json"
+
+# Top-level dirs rollout-plugins.sh's rsync excludes, so they are never expected
+# in a deployed tree and must be excluded from both sides of the comparison.
+# `.in_use/` is a runtime marker dir written by live sessions, not payload.
+DEPLOY_EXCLUDED_TOP = ("target", ".git", ".in_use")
+
+# The <os>-<arch> suffixes a plugin binary can carry. Binaries are generated,
+# never committed for every platform, so bin/<name>-<suffix> is allowed to exist
+# in the deployed tree without a counterpart in the crate.
+PLATFORM_SUFFIXES = (
+    "darwin-arm64",
+    "darwin-x86_64",
+    "linux-x86_64",
+    "linux-arm64",
+    "windows-x86_64",
+    "windows-arm64",
+)
 
 # Crates every plugin binary statically links. A change to one of these changes
 # every binary while no plugin's own version moves, which is precisely the drift
@@ -248,6 +284,8 @@ REGISTRY_PATH = os.environ.get(
 SETTINGS_PATH = os.environ.get(
     "CLAUDE_SETTINGS", os.path.expanduser("~/.claude/settings.json")
 )
+# Rebindable at a fixture, like the two paths above.
+PLUGIN_CACHE_ROOT = plugin_cache.default_cache_root()
 
 # The fleet GATE crates: fleet defense gates (plus `overwatch`, which computes
 # the canary health-gate decision that protects the others). These require a
@@ -438,6 +476,9 @@ def check_rollout(plugins):
         problem = _provenance_problem(crate, entry[0])
         if problem:
             problems.append(problem)
+        problem = _asset_problem(crate, entry[0])
+        if problem:
+            problems.append(problem)
     return problems, checked
 
 
@@ -531,6 +572,169 @@ def _provenance_problem(crate, entry):
     return None
 
 
+def _walk_files(root):
+    """Relative path -> absolute path for every file under `root`, or None.
+
+    Returns None if the walk hit an error. os.walk swallows OSError by default,
+    which would silently yield a SHORT listing — and a short listing of the
+    source side reads as "fewer files to check" while a short listing of the
+    deployed side reads as "files are missing". Both are wrong answers dressed
+    as data, so the walk raises and this returns undetermined instead.
+
+    The three dirs rollout-plugins.sh excludes are excluded here too, at the top
+    level only, exactly as its rsync does: `--exclude '/target/'` is anchored.
+    """
+    out = {}
+
+    def _raise(exc):
+        raise exc
+
+    try:
+        for dirpath, dirnames, filenames in os.walk(root, onerror=_raise):
+            rel = os.path.relpath(dirpath, root)
+            if rel == ".":
+                rel = ""
+                dirnames[:] = [d for d in dirnames if d not in DEPLOY_EXCLUDED_TOP]
+            for f in filenames:
+                out[os.path.join(rel, f)] = os.path.join(dirpath, f)
+    except OSError:
+        return None
+    return out
+
+
+def _is_rebuild_artifact(rel):
+    """Is `rel` a file rebuild-plugins.sh adds to a version dir after the copy?
+
+    Only two kinds exist, and both are generated rather than committed: the
+    provenance manifest, and per-platform binaries under bin/. Everything else
+    present in the deployed dir but absent from the crate is unaccounted for.
+    """
+    if rel == PROVENANCE_FILE:
+        return True
+    parts = rel.split(os.sep)
+    return (
+        len(parts) == 2
+        and parts[0] == "bin"
+        and any(parts[1].endswith("-" + s) for s in PLATFORM_SUFFIXES)
+    )
+
+
+def _asset_problem(crate, entry):
+    """Return a drift string if the deployed FILES are not the crate's files.
+
+    Checking only the binary was too narrow a reading of "is this rolled out".
+    rollout-plugins.sh deploys a plugin with
+
+        rsync -a --delete --exclude '/target/' --exclude '/.git/' --exclude '/.in_use/'
+
+    so a complete rollout leaves the install dir a full mirror of crates/<name>,
+    plus the two artifacts rebuild-plugins.sh adds afterwards. A plugin's real
+    payload is its skills, agents, hooks, commands and manifests; for the two
+    skill-only plugins that payload is ALL there is, and the binary dimension
+    says nothing about any of it. A stale skill file is a stale rollout.
+
+    The allowed delta was not assumed — it was measured across all 39 plugins on
+    2026-07-26 at 65c1b3ff: zero files present in source but missing from the
+    cache, zero files differing in content, and the only cache-side extras were
+    37 provenance manifests and 91 per-platform binaries.
+    """
+    install = entry.get("installPath")
+    if not install:
+        # Already reported by the provenance dimension, which runs first and
+        # returns its own message for this. Reporting it twice would just
+        # double-count one fix.
+        return None
+    src = _walk_files(os.path.join(CRATES, crate))
+    if src is None:
+        return (
+            f"{crate}: could not read crates/{crate} to compare against what is "
+            "deployed — undetermined, not 'nothing to compare'"
+        )
+    dst = _walk_files(install)
+    if dst is None:
+        return (
+            f"{crate}: could not read the deployed tree at {install} — "
+            "undetermined, not 'matches'"
+        )
+
+    missing = sorted(set(src) - set(dst))
+    extra = sorted(r for r in set(dst) - set(src) if not _is_rebuild_artifact(r))
+    differing = []
+    unreadable = []
+    for rel in sorted(set(src) & set(dst)):
+        try:
+            with open(src[rel], "rb") as a, open(dst[rel], "rb") as b:
+                if a.read() != b.read():
+                    differing.append(rel)
+        except OSError as exc:
+            unreadable.append(f"{rel} ({exc})")
+
+    def _sample(items):
+        head = ", ".join(items[:3])
+        return head + (f", +{len(items) - 3} more" if len(items) > 3 else "")
+
+    parts = []
+    if unreadable:
+        parts.append(f"{len(unreadable)} file(s) could not be compared: {_sample(unreadable)}")
+    if differing:
+        parts.append(f"{len(differing)} deployed file(s) differ from source: {_sample(differing)}")
+    if missing:
+        parts.append(f"{len(missing)} source file(s) not deployed: {_sample(missing)}")
+    if extra:
+        parts.append(
+            f"{len(extra)} deployed file(s) are not in the crate and are not "
+            f"rebuild artifacts: {_sample(extra)}"
+        )
+    if not parts:
+        return None
+    return (
+        f"{crate}: deployed tree is not a mirror of crates/{crate} — "
+        + "; ".join(parts)
+        + " <- rollout-plugins.sh not run since that change"
+    )
+
+
+def check_stale_version_dirs():
+    """Return (problems, checked) for version dirs the cache should no longer keep.
+
+    A rollout that leaves every superseded version behind is only half a
+    rollout: `claude plugin install` can pin to a stale cached dir, and nothing
+    in the provenance or asset dimensions looks at a directory the registry does
+    not point at. Measured 2026-07-26: 265 stale dirs, 1.29 GB, up to 25
+    versions deep for one plugin.
+
+    A stale dir held by a LIVE session is not reported — it is expected and
+    transient, and the session that holds it will release it. A dir whose hold
+    status could not be determined IS reported: the pruner deliberately keeps
+    such a dir (deletion is irreversible), so if the gate stayed quiet about it
+    nothing would ever surface a cache it cannot inspect.
+    """
+    cache_root = PLUGIN_CACHE_ROOT
+    current, src_problems = plugin_cache.source_versions(CRATES)
+    stale, scan_problems = plugin_cache.scan(cache_root, current)
+
+    problems = list(src_problems) + list(scan_problems)
+    removable = [s for s in stale if s.removable]
+    undetermined = [s for s in stale if s.holders.undetermined]
+
+    if removable:
+        sample = ", ".join(s.describe() for s in removable[:4])
+        if len(removable) > 4:
+            sample += f", +{len(removable) - 4} more"
+        problems.append(
+            f"{len(removable)} superseded plugin version dir(s) still in the "
+            f"cache and removable: {sample} <- run scripts/prune-plugin-cache.py "
+            "(rollout-plugins.sh does this automatically)"
+        )
+    for s in undetermined:
+        problems.append(
+            f"{s.plugin}/{s.version}: cannot determine whether a live session "
+            f"holds this superseded dir ({s.holders.undetermined}) — it is kept, "
+            "but undetermined is not clean"
+        )
+    return problems, len(stale)
+
+
 def check_enabled(plugins):
     """Return (gate_failures, warnings, checked) for the enabledPlugins dimension.
 
@@ -612,10 +816,22 @@ def main():
     rollout_problems, rollout_checked = check_rollout(plugins)
     gate_failures, warnings, (enabled_checked, gates_seen) = check_enabled(plugins)
 
+    # Superseded version dirs are part of the same "is this actually rolled out"
+    # verdict and share its remediation (run the rollout), so they are folded
+    # into the rollout problem list rather than given a fourth exit code. They
+    # are checked even when the registry is absent: leftover dirs are a property
+    # of the cache, not of the registry pointing at them.
+    stale_problems, stale_checked = check_stale_version_dirs()
+
     if rollout_problems is None:
         print(f"installed_plugins.json not found: {REGISTRY_PATH}", file=sys.stderr)
         print("(set CLAUDE_PLUGIN_REGISTRY to override, or install at least one plugin first)", file=sys.stderr)
         print("SKIP: no registry to check against (not a failure — nothing is deployed yet)")
+
+    # Folded in only after the SKIP notice above, so an absent registry still
+    # reports itself as a skip rather than being masked by a cache finding.
+    if stale_problems:
+        rollout_problems = list(rollout_problems or []) + stale_problems
 
     if gate_failures is None:
         print(f"settings.json not found: {SETTINGS_PATH}", file=sys.stderr)
@@ -640,7 +856,15 @@ def main():
     # below would then describe a smaller fleet than exists, which reads exactly
     # like a clean run.
     if rollout_problems is not None and not rollout_problems and not unverifiable:
-        print(f"OK: {rollout_checked} plugins deployed at their source version (no rollout drift)")
+        held = (
+            f"; {stale_checked} superseded dir(s) remain, all held by a live session"
+            if stale_checked
+            else "; no superseded version dir left in the cache"
+        )
+        print(
+            f"OK: {rollout_checked} plugins deployed at their source version "
+            f"and file-for-file identical to their crate (no rollout drift){held}"
+        )
     if (
         gate_failures is not None
         and not gate_failures

@@ -57,11 +57,6 @@ TARGET_ALL = {
     "rm", "unlink", "rmdir", "mv", "cp", "tee", "touch", "mkdir",
     "ln", "install", "truncate", "shred",
 }
-# git subcommands that mutate the working tree of their repo. When not re-anchored
-# to a worktree (`git -C <wt>`), these hit the main checkout -> refuse.
-GIT_WT_MUTATORS = {
-    "apply", "checkout", "restore", "rm", "mv", "stash", "clean", "reset",
-}
 
 
 def _git(cwd: str, *args: str) -> str | None:
@@ -101,8 +96,18 @@ def _resolve(root: str, path: str) -> str:
     return os.path.realpath(path)
 
 
+_UNRESOLVABLE = set("$`*?{}~")
+
+
 def _hits_main(root: str, path: str) -> bool:
     """True if `path` lands on a non-ignored location under the main tree."""
+    if any(c in path for c in _UNRESOLVABLE):
+        # A shell variable ($WT), glob, or brace-expansion — this process cannot
+        # expand it, so it cannot be resolved to a literal path under the main
+        # tree. Refusing it would false-positive on legitimate worktree flows
+        # (`cd "$WT" && sed -i ...`); the commit chokepoint catches whatever this
+        # lets through.
+        return False
     resolved = _resolve(root, path)
     if not _under(resolved, root):
         return False
@@ -197,18 +202,16 @@ def _candidate_targets(tokens: list[str], root: str) -> list[str]:
             targets += [a for a in rest if not a.startswith("-")]
         elif prog == "dd":
             targets += [a[3:] for a in rest if a.startswith("of=")]
-        elif prog == "patch":
-            # target is stdin-driven / cwd-relative and hard to read; over-match
-            # to the main tree root so a patch applied on main is refused.
-            targets.append(root)
-        elif prog == "git":
-            sub = next((a for a in rest if not a.startswith("-")), None)
-            if sub in GIT_WT_MUTATORS:
-                if sub == "apply" and "--check" in rest:
-                    continue
-                # Mutates the working tree of cwd (the main root here). Refuse by
-                # pointing at the root itself.
-                targets.append(root)
+        # NOTE: git subcommands (rm/mv/apply/checkout/restore/stash/reset/clean)
+        # are deliberately NOT handled here. Their effect depends on the cwd they
+        # run in (often a worktree), they are frequently RECOVERY or move-to-
+        # worktree operations (`git stash`, `git checkout -- <path>` discard
+        # changes — they clean the tree, they do not add code to it), and an
+        # over-match here false-positived on the sanctioned worktree flow
+        # (`git stash push` + `git worktree add`). Any git mutation that actually
+        # reaches main is caught by check-worktree-isolation.py at commit time,
+        # which is the sound, route-independent gate. `patch` is likewise left to
+        # the commit chokepoint rather than over-matched to the whole tree.
 
     return targets
 

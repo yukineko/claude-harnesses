@@ -687,10 +687,16 @@ def _asset_problem(crate, entry):
         )
     if not parts:
         return None
+    # The generic remedy is wrong for this dimension and was measured to be so:
+    # rollout-plugins.sh is idempotent on an unchanged version, so a plain run
+    # leaves a drifted file exactly as it found it — the gate then stays red and
+    # the operator follows advice that cannot work. `--force` recopies.
     return (
         f"{crate}: deployed tree is not a mirror of crates/{crate} — "
         + "; ".join(parts)
-        + " <- rollout-plugins.sh not run since that change"
+        + f" <- fix with: scripts/rollout-plugins.sh --plugin {crate} --force "
+        "(a plain rollout is a no-op at an unchanged version and will NOT "
+        "repair this)"
     )
 
 

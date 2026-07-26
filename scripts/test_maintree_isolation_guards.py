@@ -125,10 +125,30 @@ class WorktreeIsolationGuards(unittest.TestCase):
             _run("guard-maintree-bash.py", self.main,
                  self._bash(f"echo x {chr(62)} {self.main}/new.rs"), self.env), 2)
 
-    def test_bash_git_checkout_main_denies(self):
+    def test_bash_git_ops_not_bashguard_denied(self):
+        # git subcommands are NOT handled by the Bash guard (they are often
+        # recovery / move-to-worktree ops, and any git mutation that reaches main
+        # is caught by check-worktree-isolation.py at commit). Over-matching them
+        # false-positived on the sanctioned `git stash` + `git worktree` flow.
+        for cmd in ("git checkout -- tracked.rs", "git stash push -- tracked.rs",
+                    "git worktree add -b b /tmp/x HEAD", "git rm tracked.rs"):
+            self.assertEqual(
+                _run("guard-maintree-bash.py", self.main,
+                     self._bash(cmd), self.env), 0, cmd)
+
+    def test_bash_variable_path_allowed(self):
+        # A shell variable cannot be expanded here; refusing it would block
+        # legitimate worktree flows. Left to the commit chokepoint.
         self.assertEqual(
             _run("guard-maintree-bash.py", self.main,
-                 self._bash("git checkout -- tracked.rs"), self.env), 2)
+                 self._bash("sed -i s/a/b/ $WT/tracked.rs"), self.env), 0)
+
+    def test_bash_move_to_worktree_flow_allowed(self):
+        # The exact flow the DENY message recommends must not be self-blocked.
+        flow = ('cd %s && git stash push -- f && git worktree add -b b "$WT" HEAD '
+                '&& cd "$WT" && git stash apply') % self.main
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main, self._bash(flow), self.env), 0)
 
     def test_bash_sed_worktree_allows(self):
         self.assertEqual(

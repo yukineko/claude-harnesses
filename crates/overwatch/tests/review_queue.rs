@@ -353,7 +353,8 @@ fn review_queue_review_findings_unreadable_surfaces_warning_not_empty() {
     let findings_path = find_file(&home, "review_findings.jsonl")
         .expect("record-finding must have created review_findings.jsonl under HOME");
     std::fs::remove_file(&findings_path).expect("remove the valid file");
-    std::fs::create_dir(&findings_path).expect("replace it with a directory (present, unreadable-as-file)");
+    std::fs::create_dir(&findings_path)
+        .expect("replace it with a directory (present, unreadable-as-file)");
 
     let out = Command::new(overwatch_bin())
         .args(["review-queue"])

@@ -40,19 +40,30 @@ _PID_RE = re.compile(r"^[0-9]+$")
 class Holders:
     """Who is holding a version dir. `undetermined` is not "nobody"."""
 
-    __slots__ = ("live_pids", "undetermined")
+    __slots__ = ("live_pids", "undetermined", "pinned")
 
-    def __init__(self, live_pids=(), undetermined=None):
+    def __init__(self, live_pids=(), undetermined=None, pinned=()):
         self.live_pids = tuple(live_pids)
         self.undetermined = undetermined
+        self.pinned = tuple(pinned)
 
     @property
     def held(self):
-        """True if the dir must not be removed: live holders OR unknown."""
-        return bool(self.live_pids) or self.undetermined is not None
+        """True if the dir must not be removed: live holders, unknown, or a
+        settings.json pin (a hardcoded absolute path outside the registry's
+        current-version pointer, which the pruner has no other visibility
+        into — see settings_pinned_versions)."""
+        return (
+            bool(self.live_pids)
+            or self.undetermined is not None
+            or bool(self.pinned)
+        )
 
     def __repr__(self):  # pragma: no cover - diagnostics only
-        return f"Holders(live_pids={self.live_pids}, undetermined={self.undetermined!r})"
+        return (
+            f"Holders(live_pids={self.live_pids}, "
+            f"undetermined={self.undetermined!r}, pinned={self.pinned})"
+        )
 
 
 def pid_alive(pid):
@@ -149,20 +160,32 @@ class StaleDir:
     def describe(self):
         if self.holders.undetermined:
             return f"{self.plugin}/{self.version} (undetermined: {self.holders.undetermined})"
+        if self.holders.pinned:
+            refs = ", ".join(sorted(self.holders.pinned))
+            return f"{self.plugin}/{self.version} (pinned by settings.json: {refs})"
         if self.holders.live_pids:
             pids = ",".join(str(p) for p in self.holders.live_pids)
             return f"{self.plugin}/{self.version} (in use by pid {pids})"
         return f"{self.plugin}/{self.version}"
 
 
-def scan(cache_root, current_versions):
+def scan(cache_root, current_versions, settings_pins=None, settings_undetermined=None):
     """Return (stale_dirs, problems) for every plugin dir under `cache_root`.
 
     A plugin present in the cache but absent from `current_versions` is reported
     as a problem and NONE of its dirs are listed stale. Treating "I don't know
     which version is current" as "every version is stale" would hand the pruner
     the live dir.
+
+    `settings_pins` (from settings_pinned_versions) marks (plugin, version)
+    pairs referenced by an absolute path in settings.json — these carry a
+    holder just like a live `.in_use` pid does, even with zero markers on
+    disk. `settings_undetermined`, if set, means settings.json existed but
+    could not be read/parsed; every dir is then treated as pinned, because
+    "could not check for a pin" must resolve to the same restrictive side as
+    "found a pin", not to "found no pins".
     """
+    settings_pins = settings_pins or {}
     stale = []
     problems = []
     try:
@@ -192,7 +215,20 @@ def scan(cache_root, current_versions):
             vdir = os.path.join(pdir, v)
             if v == cur or not os.path.isdir(vdir):
                 continue
-            stale.append(StaleDir(pname, v, vdir, holders_of(vdir)))
+            h = holders_of(vdir)
+            if settings_undetermined:
+                h = Holders(
+                    live_pids=h.live_pids,
+                    undetermined=h.undetermined or settings_undetermined,
+                    pinned=h.pinned,
+                )
+            else:
+                raws = settings_pins.get((pname, v))
+                if raws:
+                    h = Holders(
+                        live_pids=h.live_pids, undetermined=h.undetermined, pinned=raws
+                    )
+            stale.append(StaleDir(pname, v, vdir, h))
     return stale, problems
 
 
@@ -202,3 +238,54 @@ def default_cache_root():
     if override:
         return override
     return os.path.expanduser("~/.claude/plugins/cache/yukineko")
+
+
+def settings_json_paths():
+    """Which settings.json file(s) to scan for hardcoded cache-dir pins.
+
+    Incident 2026-07-27: only ~/.claude/settings.json carried the stale
+    absolute paths that broke, so that is the default. CLAUDE_SETTINGS_JSON
+    (a PATHSEP-separated list) lets tests and any future project-level
+    settings.json be added without touching this function again.
+    """
+    override = os.environ.get("CLAUDE_SETTINGS_JSON")
+    if override:
+        return [p for p in override.split(os.pathsep) if p]
+    return [os.path.expanduser("~/.claude/settings.json")]
+
+
+def settings_pinned_versions(cache_root, paths=None):
+    """Which (plugin, version) pairs are referenced by an absolute path
+    under `cache_root` somewhere in settings.json.
+
+    Returns (pins, undetermined):
+      - pins: dict[(plugin, version) -> set of raw matched path strings].
+        A missing settings.json file is not an error — it contributes no
+        pins and is NOT the same as "could not check".
+      - undetermined: None, or a reason string if a settings.json file
+        exists but could not be read/parsed. When set, the caller MUST treat
+        every version dir as potentially pinned (see scan()) rather than
+        reading "we couldn't check the pins" as "there are no pins" ahead of
+        an irreversible delete.
+    """
+    import json
+
+    paths = paths if paths is not None else settings_json_paths()
+    root = cache_root.rstrip("/")
+    pin_re = re.compile(re.escape(root) + r"/([^/\"'\s]+)/(\d+\.\d+\.\d+)")
+    pins = {}
+    undetermined = None
+    for path in paths:
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                text = fh.read()
+            json.loads(text)
+        except (OSError, ValueError) as exc:
+            undetermined = f"{path}: unreadable or unparseable ({exc})"
+            continue
+        for m in pin_re.finditer(text):
+            key = (m.group(1), m.group(2))
+            pins.setdefault(key, set()).add(m.group(0))
+    return pins, undetermined

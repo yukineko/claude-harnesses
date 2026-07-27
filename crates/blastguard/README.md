@@ -2,9 +2,12 @@
 
 A Claude Code **PreToolUse** hook that **denies project-destroying operations**
 before they run. It is a single self-contained Rust binary that reads the pending
-tool call from stdin, decides allow/deny with a pure function, and — only on a
-deny — emits the PreToolUse `deny` JSON. It never breaks a turn: on empty/invalid
-input, an unmatched tool, or any internal panic it stays silent and exits 0.
+tool call from stdin, decides allow/deny/ask with a pure function, and — on
+anything but an allow — emits the PreToolUse JSON. Empty/invalid input and an
+unmatched tool are cases where it determined there is nothing to judge, so it
+stays silent (allow, exit 0). An internal panic during analysis is a different
+case — it is *undetermined*, not *safe* — so it is caught (`catch_unwind`) and
+resolved to a **deny**, never to a silent allow.
 
 **Subscription-native:** one hook + one bundled binary, no API key.
 
@@ -61,9 +64,11 @@ In agentic coding, a single `rm -rf`, `git reset --hard`, `git clean -fdx`, or
 These are irreversible, and because they arrive buried inside a stream of tool
 calls, expecting a human to catch each one by eye isn't realistic. blastguard is
 a safety net dedicated to intercepting only that small set of destructive-yet-
-irreversible patterns before they run — deterministically, via a pure function,
-holding the "never breaks a turn" invariant — and it favors reliably stopping the
-clearly dangerous over casting a wide net that gets in the way of ordinary work.
+irreversible patterns before they run — deterministically, via a pure function —
+and it favors reliably stopping the clearly dangerous over casting a wide net
+that gets in the way of ordinary work. Undetermined outcomes (a panic inside the
+analyser) resolve to a deny, not to a silent allow — see "Build" below for how
+that is implemented.
 
 ## Also a library
 
@@ -87,6 +92,9 @@ cargo test -p blastguard              # unit + integration tests
 
 The hook (`hooks/hooks.json`) registers on **PreToolUse** with matcher
 `Bash|Edit|Write|MultiEdit|NotebookEdit` (timeout 10) and calls
-`${CLAUDE_PLUGIN_ROOT}/bin/blastguard`, a POSIX-sh launcher that execs the
-matching `blastguard-<os>-<arch>` build, or exits 0 silently if none is bundled
-for the host.
+`${CLAUDE_PLUGIN_ROOT}/bin/blastguard`, a POSIX-sh launcher (`bin/blastguard`)
+that execs the matching `blastguard-<os>-<arch>` build. If no build is bundled
+for the host platform, the launcher prints a warning to stderr and exits 0 — a
+known fail-open gap distinct from the deny-on-panic behaviour above: with no
+binary to run, there is no analyser present to resolve the "undetermined" case
+to a deny in the first place.

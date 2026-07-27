@@ -16,6 +16,7 @@ The module under test has hyphens in its name, so it is loaded via importlib.
 from __future__ import annotations
 
 import importlib.util
+import json
 import unittest
 from pathlib import Path
 
@@ -25,6 +26,8 @@ _SPEC = importlib.util.spec_from_file_location(
 )
 ig = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(ig)
+
+_CORPUS_PATH = _HERE / "tests" / "fixtures" / "injection_parity_corpus.json"
 
 
 class DetectsPlantedInjection(unittest.TestCase):
@@ -377,6 +380,57 @@ class UnreadableAssetIsNotClean(unittest.TestCase):
         # End to end: a non-UTF-8 asset drives the whole gate red.
         p = self._tmp(self.CONCEAL + b"\xe9\n")
         self.assertEqual(ig.main(["check-prompt-injection.py", str(p)]), 1)
+
+
+class ParityWithFetchguardCorpus(unittest.TestCase):
+    """SINGLE-SOURCE-OF-TRUTH oracle (option (ii), see crates/fetchguard/src/
+    scan.rs's module docs): this repo has TWO independently-maintained
+    injection taxonomies -- this Python gate's `MALICIOUS`/`DEFENSE_MARKERS`
+    (commit-time, prompt assets) and fetchguard's Rust `regex::Regex` port
+    (runtime, WebFetch/WebSearch tool_response). A literally-shared pattern
+    source between Python's `re` and Rust's `regex` is not practical, so
+    instead BOTH sides run the SAME fixture corpus
+    (scripts/tests/fixtures/injection_parity_corpus.json) and must agree on
+    every fixture; `crates/fetchguard/tests/pattern_parity.rs` is the Rust
+    twin of this test class. A category renamed, a phrase added to one side
+    only, or a defense marker recognised by one but not the other trips
+    whichever side's suite runs -- divergence cannot silently drift."""
+
+    def _corpus(self):
+        with open(_CORPUS_PATH, encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_corpus_is_non_trivial_and_covers_all_four_categories(self):
+        corpus = self._corpus()
+        self.assertGreaterEqual(len(corpus), 8, f"corpus is suspiciously small: {len(corpus)}")
+        malicious_categories = {
+            f["category"] for f in corpus if f["expect_hit"] and f.get("category")
+        }
+        for want in ("conceal-ja", "conceal-en", "verify-bypass", "override", "egress"):
+            self.assertIn(
+                want, malicious_categories,
+                f"corpus is missing a malicious fixture for category {want!r}",
+            )
+        self.assertTrue(
+            any(not f["expect_hit"] for f in corpus),
+            "corpus must include at least one benign control",
+        )
+
+    def test_injectguard_matches_corpus_expectations(self):
+        for fixture in self._corpus():
+            hits = ig.scan_text(fixture["text"])
+            got_hit = bool(hits)
+            self.assertEqual(
+                got_hit, fixture["expect_hit"],
+                f"fixture {fixture['id']!r}: expected hit={fixture['expect_hit']}, got hits={hits}",
+            )
+            want_category = fixture.get("category")
+            if fixture["expect_hit"] and want_category:
+                names = {n for _, _, n in hits}
+                self.assertIn(
+                    want_category, names,
+                    f"fixture {fixture['id']!r}: expected category {want_category!r} among hits {hits}",
+                )
 
 
 if __name__ == "__main__":

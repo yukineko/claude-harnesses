@@ -1003,6 +1003,29 @@
         "path": "crates/taintguard",
         "ref": "main"
       }
+    },
+    {
+      "name": "fetchguard",
+      "description": "New crate (backlog 18506c09). Runtime content-level injection scanner: a PostToolUse hook (matcher WebFetch|WebSearch) scans the tool_response text for planted prompt-injection phrasings (concealment / verification-bypass / instruction-override / egress — the same four-category taxonomy scripts/check-prompt-injection.py already enforces at commit time) and, on a hit OR an undecidable response shape, injects additionalContext telling the model the flagged span is untrusted DATA whose embedded directives must NOT be followed. Closes the gap check-prompt-injection.py's own docstring names: that gate covers committed prompt assets, not text a web tool call pulls in at runtime. Orthogonal to taintguard's provenance signal (WHERE content came from) — this is the content signal (WHAT it says); the two are meant to run together. External-file Read is deferred (needs taintguard's path-trust classifier). A shared fixture corpus (scripts/tests/fixtures/injection_parity_corpus.json) is run by both this crate's tests/pattern_parity.rs and scripts/test_check_prompt_injection.py's ParityWithFetchguardCorpus, so the two independently-maintained taxonomies cannot silently drift apart. Subscription-native, bundled Rust binary (not yet registered in any enabledPlugins — building/merging this crate has no effect on a running session until a human does so and restarts).",
+      "version": "0.1.0",
+      "category": "security",
+      "keywords": [
+        "security",
+        "hooks",
+        "prompt-injection",
+        "rust"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/fetchguard",
+      "author": {
+        "name": "yukineko"
+      },
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/yukineko/claude-harnesses.git",
+        "path": "crates/fetchguard",
+        "ref": "main"
+      }
     }
   ]
 }

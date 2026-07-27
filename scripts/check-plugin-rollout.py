@@ -300,6 +300,7 @@ GATE_CRATES = (
     "propguard",
     "specguard",
     "stuckguard",
+    "taintguard",
     "mutategate",
     "overwatch",
 )
@@ -773,6 +774,61 @@ def check_settings_pins():
     return problems, len(paths)
 
 
+def _bin_launcher_problem(crate):
+    """Does crates/<crate> ship the bin/<crate> launcher its own binary needs?
+
+    A plugin's hooks.json execs `bin/<crate>` (a POSIX-sh dispatcher that picks
+    the per-platform binary), never the binary directly — so a plugin whose
+    source declares a binary target but has no `bin/<crate>` script under its
+    own crate directory is one `enabledPlugins` edit away from every one of its
+    hooks failing at invocation time, and nothing in the rollout/enablement
+    dimensions above would catch it (they only look at the DEPLOYED tree, not
+    at whether the source ever had a launcher to deploy). taintguard shipped
+    exactly this gap from birth (backlog 4ee2b335) until this check's own task
+    added its launcher — this exists so the next new gate crate cannot repeat it.
+
+    Scoped to plugins only (the caller already filtered to crates with a
+    readable plugin.json): a bare workspace tool with no plugin.json
+    (mutategate) is invoked directly and never through a packaged launcher, so
+    it needs no exemption list here — it is simply never a candidate.
+    """
+    ships = _crate_ships_binary(crate)
+    if ships is None:
+        return (
+            f"{crate}: could not determine from crates/{crate} whether this "
+            "plugin ships a binary target, so whether it needs a bin/"
+            f"{crate} launcher is undetermined"
+        )
+    if not ships:
+        return None
+    launcher = os.path.join(CRATES, crate, "bin", crate)
+    if not os.path.isfile(launcher):
+        return (
+            f"{crate}: crates/{crate} declares a binary target, but there is "
+            f"no crates/{crate}/bin/{crate} launcher script — hooks.json execs "
+            "that path directly, so every hook of this plugin fails at "
+            "invocation time regardless of rollout/enablement state "
+            "(see crates/ctxrot/bin/ctxrot for the pattern)"
+        )
+    return None
+
+
+def check_bin_launchers(plugins):
+    """Return (problems, checked) for plugins missing their bin/<crate> launcher.
+
+    Pure source-tree check, independent of the registry and of settings.json —
+    unlike check_rollout/check_enabled, it never skips: there is no "absent
+    registry" analogue for "does the source repo contain this file".
+    """
+    problems, checked = [], 0
+    for crate, _pname, _src_ver in plugins:
+        checked += 1
+        problem = _bin_launcher_problem(crate)
+        if problem:
+            problems.append(problem)
+    return problems, checked
+
+
 def check_enabled(plugins):
     """Return (gate_failures, warnings, checked) for the enabledPlugins dimension.
 
@@ -867,6 +923,12 @@ def main():
     # rollout verdict + exit code rather than given a fifth code.
     pin_problems, pin_checked = check_settings_pins()
 
+    # Same reasoning as stale_problems/pin_problems: a missing bin/<crate>
+    # launcher is a property of the SOURCE tree, not of the registry, so it is
+    # checked even when the registry is absent and folded into the same
+    # rollout verdict + exit code rather than given a sixth code.
+    launcher_problems, launcher_checked = check_bin_launchers(plugins)
+
     if rollout_problems is None:
         print(f"installed_plugins.json not found: {REGISTRY_PATH}", file=sys.stderr)
         print("(set CLAUDE_PLUGIN_REGISTRY to override, or install at least one plugin first)", file=sys.stderr)
@@ -878,6 +940,8 @@ def main():
         rollout_problems = list(rollout_problems or []) + stale_problems
     if pin_problems:
         rollout_problems = list(rollout_problems or []) + pin_problems
+    if launcher_problems:
+        rollout_problems = list(rollout_problems or []) + launcher_problems
 
     if gate_failures is None:
         print(f"settings.json not found: {SETTINGS_PATH}", file=sys.stderr)

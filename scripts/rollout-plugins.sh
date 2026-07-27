@@ -109,8 +109,9 @@ usage() { sed -n '2,80p' "$0"; }
 # --- GATE CRATES (Problem-2.3) ----------------------------------------------
 # The prompt-injection / spec / mutation DEFENSE gates, per docs/GLOSSARY.md
 # (the canonical source: crates classified/described as "gate" — blastguard,
-# propguard, specguard, stuckguard — plus the mutation-testing kill-rate gate
-# `mutategate`, which is a non-plugin here but listed for completeness). These
+# propguard, specguard, stuckguard, taintguard — plus the mutation-testing
+# kill-rate gate `mutategate`, which is a non-plugin here but listed for
+# completeness). These
 # guard the fleet itself, so they MUST NOT roll out without a canary: when the
 # target set includes any of them, --canary becomes REQUIRED (omitting it is an
 # ERROR). `--no-canary` is the explicit escape hatch. Non-gate crates are
@@ -124,7 +125,7 @@ usage() { sed -n '2,80p' "$0"; }
 # rollback/health-gate safety net for the OTHER gate crates with no forcing
 # function to catch it (backlog 50f94a60) — so it gets the same canary
 # requirement as the crates it protects.
-GATE_CRATES="blastguard propguard specguard stuckguard mutategate overwatch"
+GATE_CRATES="blastguard propguard specguard stuckguard taintguard mutategate overwatch"
 
 is_gate_crate() {
   local want="$1" g

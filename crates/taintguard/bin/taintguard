@@ -1,0 +1,75 @@
+#!/bin/sh
+# taintguard plugin launcher — selects the per-platform binary bundled in this dir.
+#
+# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/taintguard <sub>`; this dispatcher execs
+# the matching `taintguard-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT a blanket "exit 0" —
+# that is byte-for-byte what a clean run looks like, so silence would read
+# downstream as "taintguard examined this and found nothing to flag" (CLAUDE.md
+# §1/§3). This dispatcher resolves the unknown per subcommand, mirroring
+# crates/ctxrot/bin/ctxrot's classification (fixed 2026-07-27 for the same
+# reason):
+#
+#   gate  (PreToolUse, verdict-bearing) -> permissionDecision "ask". We cannot
+#         say the session is untainted (an allow would be a lie) and we cannot
+#         permanently deny every Bash/Write/Edit either, so the decision goes
+#         to the human — the same "ask" blastguard/ctxrot's preguard use for
+#         "cannot determine, not clean".
+#
+#   mark  (PostToolUse, state-mutation, no permissionDecision channel exists
+#         for this event) -> exit 0, but never silent: stderr says the taint
+#         marker was NOT updated for this call. This is safe specifically
+#         BECAUSE mark/gate/clear are one binary: whenever it is missing, gate
+#         is missing too, and gate's own missing-binary path above already
+#         asks (fails closed) for the entire window the binary is absent — a
+#         missed mark cannot manufacture a false "not tainted" allow while
+#         gate is independently refusing to allow anything with confidence.
+#
+#   clear (Stop, state-mutation) -> exit 0, but never silent. A missing clear
+#         leaves the taint marker SET, which is the restrictive direction (the
+#         next turn stays tainted rather than being incorrectly trusted) —
+#         the failure mode here fails closed on its own, no JSON needed.
+#
+#   anything else -> exit 1 (no other subcommand exists; an empty stdout for
+#         an unrecognised CLI invocation must not read as real data).
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+binary="$root/taintguard-$os-$arch"
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
+fi
+
+echo "taintguard: no bundled binary for $os-$arch ($binary). Build it with scripts/build-plugin-bin.sh on that platform." >&2
+
+fix="Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the taintguard hooks."
+
+case "${1:-}" in
+  gate)
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"%s"}}\n' \
+      "taintguard gate did not run: no bundled binary for $os-$arch. Whether this session is tainted was NOT evaluated, so this call is UNCHECKED, not approved. $fix"
+    exit 0
+    ;;
+  mark)
+    echo "taintguard: mark did not run for this call (no binary) — the taint marker was NOT updated. $fix" >&2
+    exit 0
+    ;;
+  clear)
+    echo "taintguard: clear did not run (no binary) — any existing taint marker was NOT reset, so the next turn stays tainted. $fix" >&2
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac

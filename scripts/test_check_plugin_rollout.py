@@ -63,6 +63,7 @@ FIXTURE_PLUGINS = {
     "propguard": "0.9.1",    # GATE
     "specguard": "2.1.0",    # GATE
     "stuckguard": "0.4.2",   # GATE
+    "taintguard": "0.1.2",   # GATE
     "overwatch": "5.0.1",    # GATE
     "condukt": "3.0.0",      # non-gate
     "benchkit": "0.1.0",     # non-gate (the kind users disable on purpose)
@@ -132,7 +133,7 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                   install_paths=True,
                   skill_only=(), no_host_binary=(), force_host_binary=(),
                   asset_missing=None, asset_modified=None, asset_extra=None,
-                  cached_versions=None, settings_extra=None):
+                  cached_versions=None, settings_extra=None, no_bin_launcher=()):
     """Build a fixture repo + registry + settings under `tmp`.
 
     versions           — crate -> source version (defaults to FIXTURE_PLUGINS)
@@ -160,6 +161,9 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                          provenance assertion below would pass vacuously.
     no_host_binary     — crates that DECLARE a binary in the source but have
                          none deployed (the "installed but execs nothing" case).
+    no_bin_launcher    — crates that declare a binary but ship no source-side
+                         crates/<crate>/bin/<crate> launcher script (the real
+                         taintguard-before-this-task gap).
     """
     asset_missing = dict(asset_missing or {})
     asset_modified = dict(asset_modified or {})
@@ -176,6 +180,10 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
         main_rs = crates / crate / "src" / "main.rs"
         main_rs.parent.mkdir(parents=True, exist_ok=True)
         main_rs.write_text("fn main() {}\n", encoding="utf-8")
+        if crate not in no_bin_launcher:
+            launcher = crates / crate / "bin" / crate
+            launcher.parent.mkdir(parents=True, exist_ok=True)
+            launcher.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
     for crate, ver in versions.items():
         if crate in drop_plugin_json:
             (crates / crate).mkdir(parents=True, exist_ok=True)
@@ -1031,6 +1039,80 @@ class SettingsPinExistence(_FixtureCase):
         with tempfile.TemporaryDirectory() as tmp:
             rc, out, err = self.run_main(tmp, settings_text="{not valid json")
         self.assertNotEqual(rc, 0, f"out={out}\nerr={err}")
+
+
+class BinLauncherPresence(_FixtureCase):
+    """taintguard shipped a binary target with no crates/taintguard/bin/taintguard
+    launcher from birth (backlog 4ee2b335): hooks.json execs bin/<crate>
+    directly, never the compiled binary, so a plugin missing that dispatcher
+    fails every hook at invocation time regardless of what the rollout/
+    enablement dimensions above report. Neither dimension looks at the SOURCE
+    tree's own bin/ directory, so this gap was invisible to both."""
+
+    def test_missing_launcher_for_binary_crate_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(tmp, no_bin_launcher=("blastguard",))
+            self.assertEqual(rc, cpr.RC_ROLLOUT, f"out={out}\nerr={err}")
+            self.assertIn("blastguard", err)
+            self.assertIn("no crates/blastguard/bin/blastguard launcher", err)
+
+    def test_present_launcher_passes(self):
+        """Control arm: the ordinary fixture (every crate gets a launcher by
+        default) must not spuriously report a missing one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(tmp)
+            self.assertEqual(rc, 0, f"out={out}\nerr={err}")
+            self.assertNotIn("launcher script", err)
+
+    def test_skill_only_plugin_needs_no_launcher(self):
+        """Control arm: a plugin with no Rust crate at all (daily-report/scout's
+        real shape) declares no binary, so it cannot be missing a launcher for
+        one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, skill_only=("benchkit",), no_bin_launcher=("benchkit",)
+            )
+            self.assertEqual(rc, 0, f"out={out}\nerr={err}")
+            self.assertNotIn("benchkit", err)
+
+    def test_non_plugin_crate_is_exempt_without_a_second_hardcoded_list(self):
+        """A crate with a binary but NO plugin.json (mutategate's real shape,
+        invoked directly rather than through a packaged launcher) is never
+        even offered to check_bin_launchers — scan_plugins() only returns
+        crates with a readable plugin.json — so it needs no exemption entry
+        here, unlike NON_PLUGIN_GATES elsewhere in this file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            crates, registry_path, settings_path = _make_fixture(Path(tmp))
+            # mutategate's real shape: a binary crate with NO plugin.json and
+            # no bin/ launcher, added directly rather than via the versions=
+            # pipeline so it never enters the registry/enabledPlugins fixture
+            # machinery — only scan_plugins()'s plugin.json filter is under
+            # test here.
+            (crates / "mutategate" / "src").mkdir(parents=True, exist_ok=True)
+            (crates / "mutategate" / "src" / "main.rs").write_text(
+                "fn main() {}\n", encoding="utf-8"
+            )
+            saved = (
+                cpr.CRATES, cpr.REGISTRY_PATH, cpr.SETTINGS_PATH,
+                cpr.SOURCE_CHANGED_SINCE, cpr.PLUGIN_CACHE_ROOT,
+            )
+            cpr.CRATES, cpr.REGISTRY_PATH, cpr.SETTINGS_PATH = (
+                str(crates), str(registry_path), str(settings_path),
+            )
+            cpr.SOURCE_CHANGED_SINCE = _changed_stub()
+            cpr.PLUGIN_CACHE_ROOT = str(Path(tmp) / "cache")
+            out_buf, err_buf = io.StringIO(), io.StringIO()
+            try:
+                with redirect_stdout(out_buf), redirect_stderr(err_buf):
+                    rc = cpr.main()
+            finally:
+                (
+                    cpr.CRATES, cpr.REGISTRY_PATH, cpr.SETTINGS_PATH,
+                    cpr.SOURCE_CHANGED_SINCE, cpr.PLUGIN_CACHE_ROOT,
+                ) = saved
+            out, err = out_buf.getvalue(), err_buf.getvalue()
+            self.assertEqual(rc, 0, f"out={out}\nerr={err}")
+            self.assertNotIn("mutategate", err)
 
 
 if __name__ == "__main__":

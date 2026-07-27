@@ -8,7 +8,7 @@ Claude Code 向けの **context-rot（コンテキスト腐敗）ガード**。R
 
 中核は「フック＝速くて決定論的・LLM を呼ばない安全網」と「`/distill` スキル＝必要時に走る LLM 品質の要約」という役割分担である。フックは PreCompact の厳しいタイムアウト内でも安全に動き、判断を要する蒸留はセッション内のスキルに任せる。
 
-各フックは `ctxrot` バイナリのサブコマンドであり、フックの JSON ペイロードを **stdin** から読む。鉄則は「フックは決してターンを壊さない」——どんなエラーでも exit 0 で黙って終わる。
+各フックは `ctxrot` バイナリのサブコマンドであり、フックの JSON ペイロードを **stdin** から読む。エラー時の振る舞いは **一律の「exit 0 で黙る」ではない**——判定を持つサブコマンド（`preguard`/`toolguard`/`stop`/`statusline` と、空出力が「データ無し」と読まれる CLI 系）は判定不能を restrictive 側に解決し、判定を持たない observability フック（`guard`/`rescue`/`restore`）だけが exit 0 で沈黙する。詳細は下の [ランチャの分類表](#ランチャの分類表判定を持つ--持たない) を見ること。
 
 | サブコマンド | フック | 役割 |
 |---|---|---|
@@ -19,6 +19,39 @@ Claude Code 向けの **context-rot（コンテキスト腐敗）ガード**。R
 | `ctxrot toolguard` | `PostToolUse` | `Read`/`Bash`/`Grep`/… が巨大なペイロードを返した時、*次の*重い読みを sub-agent 経由にして結論だけ残すよう促す（preguard ゲートを通り抜ける 50KB〜1MB の中間帯を扱う）。1 セッションあたりの回数は `toolguard_nudge_cap`（既定 3）で上限を設ける（助言自体が rot 源にならないよう）。 |
 | `ctxrot stop` | `Stop` | **オプトインの auto-compact 促し。** バジェットメーターの使用率が `auto_compact_at_percentage`（既定 **0.90**）を超えると `{"decision":"block"}` を返して Claude に `/compact` を促す。しきい値は ctxrot **自身のバジェットメーター**（`est_tokens / context_window`。`guard`/`usage` と同じ推定で 100% 超も出せる）で測り、生の model-window `used_percentage` では **ない**——だから真の ~1M 窓に対しても正しく発火する。既定は無効（`auto_compact_enabled = false`）。block は帯をまたぐごとに一度だけで、ターンを恒久的に塞ぐことはない。 |
 | `ctxrot statusline` | `statusLine` | 常時表示の context 使用率メーター（`ctxrot 52% ▮▮▯▯ band1 ~104k/200k`）を帯ごとに色付け（緑→黄→赤）で出す。Claude の `context_window.used_percentage` を読み（無ければ transcript から推定）。 |
+
+### ランチャの分類表（判定を持つ / 持たない）
+
+`bin/ctxrot` は `bin/ctxrot-<os>-<arch>` を選んで exec する POSIX ランチャである。**ホスト用のビルドが無いとき何を返すか**は、サブコマンドが判定を持つかどうかで決まる（CLAUDE.md 第1節「『判定を持つ』は返り値の型ではなく消費のされ方で決まる」／第3節「判定不能は必ず制限側に解決する」）。
+
+**なぜ exit 0 が誤りだったか**: バイナリ不在は「チェックが走らなかった」＝判定不能である。ところが exit 0・無出力は *クリーンに走ったとき* と 1 バイトも変わらない。つまり下流（Claude Code のフック実行系・モデル・スキル）はそれを「ctxrot が見て、問題無しと言った」と読む。旧ランチャはこの写像を全サブコマンドに一律で適用していた。
+
+#### 判定を持つ側（沈黙が「問題なし」と読まれる）
+
+| サブコマンド | イベント | 下流消費者 | 沈黙が意味してしまうこと | バイナリ不在時の解決 |
+|---|---|---|---|---|
+| `preguard` | `PreToolUse` | Claude Code の permission 判定エンジン（`hookSpecificOutput.permissionDecision`）→ ツール実行の可否 | deny が来ない＝**このロードは許可**。1GB ログの無制限 `Read` も `load_deny` 一致も素通り | `permissionDecision: "ask"`（blastguard `Decision::Ask` と同じ第三の答え＝**コマンドについての判定ではなく、判定を推測することの拒否**）。`deny` は全 `Read`/`Bash` を不可逆に塞いで逃げ道が無くなるので採らない |
+| `toolguard` | `PostToolUse` | Claude Code の context 組み立て（`updatedToolOutput` で置換、`additionalContext` で注入）→ モデルの context | 巨大な出力が **計測済みで問題ないサイズだった** かのようにそのまま context に載る | `additionalContext` で「この出力は未計測（small ではない）」と明示。ツールは既に走った後なので block はできない |
+| `stop` | `Stop` | Claude Code のターン終了判定（`{"decision":"block"}`）| バジェット超過チェックが **走って合格した** かのようにターンが終わる。`harness_core::gate::run` 自身の言葉で「exit-0-with-no-decision is *indistinguishable from a passing gate*」 | 最初の stop は `{"decision":"block"}`（fail-closed）。ただし `stop_hook_active: true` の再入では allow（`PanicAction::BoundedAllow` と同じ**有界**な fail-open——セッションを恒久的に塞がない）。stdin が空＝手動実行はブロックすべきターンが無いので偽の decision を出さず exit 1（`PanicAction::InteractiveError` の写し） |
+| `statusline` | `statusLine` | ステータスバー（人間）| 空行＝緑帯＝**まだ余裕がある**。CLAUDE.md 第1節が名指しする `3b1eb24` の fail-open そのもの | `usage::unknown_line` と同じ明示的な `unknown` を表示。exit は 0（バーは落とさない）が、**沈黙はしない** |
+| その他すべて（`note` / `metrics` / `ctx` / `usage` / `eval` / `install` / `init` / 引数無し）| CLI | `/distill`・`/ctx` スキル（`ctxrot usage`・`ctxrot ctx list`・`ctxrot note dir`・`ctxrot note list`）、`ctxrot ctx pinned` / `dropped` の行指向出力を読むスクリプト、人間 | 空出力＝「ノートは無い」「pin は無い」「**drop 指定は無い**（→ 除外すべきものを読み込む）」「使用量は取れなかった」。CLAUDE.md 第3節「エラー時に**空の集合**を返さない」 | exit 1（`bin/evalkit` と同じ扱い）。stdout には何も出さない |
+
+#### 判定を持たない側（免責を主張する側 —— 下流消費者を列挙する）
+
+CLAUDE.md 第1節は「免責を主張するモジュールは下流消費者を列挙すること。その出力が別の判定の入力になった時点で免責は失効する」と要求する。以下は同節が `run_hook`（判定を持たない純粋 observability hook 専用の入口）の carve-out として名指ししているものと一致する。
+
+| サブコマンド | イベント | 下流消費者（すべて列挙）| 免責の根拠 |
+|---|---|---|---|
+| `guard` | `UserPromptSubmit` | (1) stdout → モデルの context に注入される助言プロース。(2) `harness_core::inject_metrics::record` → `harness-status` の注入量集計（表示のみ・ゲート入力ではない）| 出力は**条件付き・最小限**（「関係が無ければ何も出さない」が正常動作であり、無出力は元から日常茶飯事）。機械消費者はおらず、モデルは「助言が来るはずだった」ことを知らないので、欠落は verdict として読まれない |
+| `rescue` | `PreCompact` | (1) ノートストアへの副作用（後で `restore` / `/distill` が読む）。(2) stderr のログ 1 行のみ（PreCompact は context 注入不可）| stdout を消費する主体が存在しない。ノート不在は `restore` 側で「前セッションのノート無し」として扱われ、そこでは判定を伴わない |
+| `restore` | `SessionStart` | stdout → セッション開始時の carryover 注入（モデルの context のみ）| 同上。carryover は「あれば良い」もので、機械消費者はいない |
+| `distill-bg` | （フックではない・`rescue` が detach して起動する内部コマンド）| ノートストアへの副作用のみ | fire-and-forget。呼び出し元はこのランチャ経由でバイナリが在るときにしか起動しない |
+
+これらは **exit 0 のまま**だが、**沈黙はしない**——ランチャは常に「no bundled binary for `<os>-<arch>`」を stderr に出す（「判定しないものは、失敗しても判定したふりをしない」）。
+
+> **残る限界（隠さず書く）**: フックが exit 0 のとき stderr は Claude Code の debug 出力にしか現れない。つまり `guard`/`rescue`/`restore` の「走らなかった」信号は、既定の UI では人間に見えない。ここを可視化するには注入チャネル（UserPromptSubmit / SessionStart の stdout）を使うしかなく、それは毎ターンのノイズと引き換えになる。上の免責は「機械消費者がいないので verdict にならない」という一点で成り立っており、**stderr が見えることを根拠にしていない**。この 4 つのいずれかの出力が将来なんらかの判定の入力になったら、免責は失効する。
+
+回帰テストは `tests/launcher_missing_binary.rs`（バイナリの無い一時ディレクトリにランチャを複製して実行し、上表の各行を固定する。バイナリが在るときに exec と引数透過が壊れていないことも併せて固定）。
 
 加えて 2 つのスキルがある:
 

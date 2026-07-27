@@ -2,8 +2,38 @@
 # ctxrot plugin launcher — selects the per-platform binary bundled in this dir.
 #
 # Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/ctxrot <sub>`; this dispatcher execs the
-# matching `ctxrot-<os>-<arch>` build. If no build exists for the host platform,
-# it exits 0 silently so a hook NEVER breaks the user's turn.
+# matching `ctxrot-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT "exit 0". A missing
+# binary means the check DID NOT RUN — a cannot-determine — and exit 0 with no
+# output is byte-for-byte what a clean run looks like, so it is read downstream
+# as "ctxrot examined this and found nothing to flag". This dispatcher therefore
+# resolves the unknown on the restrictive side of each subcommand's OWN protocol
+# (CLAUDE.md §1/§3), and only the subcommands that carry no verdict keep the
+# silent exit 0.
+#
+# Classification (rationale + downstream consumers: crates/ctxrot/README.ja.md
+# "ランチャの分類表"):
+#
+#   verdict-bearing (silence would be read as "no problem"):
+#     preguard    PreToolUse   -> permissionDecision "ask" (a refusal to guess,
+#                                 not a verdict about the call; deny would be
+#                                 unescapable, allow would be a lie)
+#     toolguard   PostToolUse  -> additionalContext marking the output UNMEASURED
+#     stop        Stop         -> {"decision":"block"} on the first stop, bounded
+#                                 by stop_hook_active exactly like
+#                                 harness_core::gate::run's panic barrier
+#     statusline  statusLine   -> an explicit `unknown` band (a blank bar reads
+#                                 as headroom — CLAUDE.md §1, commit 3b1eb24)
+#
+#   non-verdict (injected prose, no machine consumer) — exit 0, but never
+#   silent: the stderr diagnostic below is the "did not run" signal.
+#     guard / rescue / restore / distill-bg
+#
+#   everything else (note / metrics / ctx / usage / eval / install / init / …)
+#   is consumed by skills, scripts and humans, where an EMPTY result reads as
+#   real data ("no notes", "nothing dropped"). Those exit non-zero — an error
+#   must not return an empty set (CLAUDE.md §3), mirroring bin/evalkit.
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in
@@ -18,8 +48,65 @@ case "$(uname -m)" in
 esac
 
 binary="$root/ctxrot-$os-$arch"
-if [ ! -x "$binary" ]; then
-  echo "ctxrot: no bundled binary for $os-$arch ($binary). Build it with scripts/build-plugin-bin.sh on that platform." >&2
-  exit 0
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
 fi
-exec "$binary" "$@"
+
+# ---- no binary for this platform: report, then resolve per subcommand --------
+echo "ctxrot: no bundled binary for $os-$arch ($binary). Build it with scripts/build-plugin-bin.sh on that platform." >&2
+
+fix="Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the ctxrot hooks."
+
+case "${1:-}" in
+  preguard)
+    # PreToolUse: staying silent IS granting the call. We cannot say the load
+    # gate passed, and we must not permanently deny every Read/Bash either —
+    # so we hand the decision to the human ("ask" = the third answer).
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"%s"}}\n' \
+      "ctxrot preguard did not run: no bundled binary for $os-$arch. The load gate (load_deny globs + the unbounded-large-Read size gate) was NOT evaluated, so this call is UNCHECKED, not approved. $fix"
+    exit 0
+    ;;
+  toolguard)
+    # PostToolUse: the payload already landed, so there is nothing left to
+    # block; what we must not do is let it pass as if it had been sized and
+    # truncated. Mark it unmeasured in the one channel this event has.
+    printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n' \
+      "ctxrot toolguard did not run: no bundled binary for $os-$arch. This tool output was NOT size-checked or truncated — treat its context cost as unmeasured, not as small. $fix"
+    exit 0
+    ;;
+  stop)
+    # Stop: read the event ourselves (no binary will). Empty stdin = a manual
+    # run with no live turn -> report an error, do not fabricate a decision
+    # (mirrors PanicAction::InteractiveError). A real stop blocks once, then
+    # the post-block re-entry (stop_hook_active) is allowed through so a
+    # missing binary can never trap the session (PanicAction::BoundedAllow).
+    payload="$(cat)"
+    if [ -z "$(printf '%s' "$payload" | tr -d '[:space:]')" ]; then
+      exit 1
+    fi
+    if printf '%s' "$payload" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
+      echo "ctxrot: stop re-entry with no binary — allowing this stop (a fail-closed block was already surfaced once; the budget check still has NOT run)." >&2
+      exit 0
+    fi
+    printf '{"decision":"block","reason":"%s"}\n' \
+      "ctxrot stop did not run: no bundled binary for $os-$arch, so the context-budget check did not execute and this stop cannot be certified (blocked fail-closed, once — the next stop is allowed through). $fix"
+    exit 0
+    ;;
+  statusline)
+    # statusLine: exit 0 so the bar never crashes, but render the same explicit
+    # non-green "unknown" state usage::unknown_line does. A blank bar is read as
+    # "plenty of headroom".
+    printf 'ctxrot ?%% ▚▚▚▚ unknown (no %s binary)\n' "$os-$arch"
+    exit 0
+    ;;
+  guard|rescue|restore|distill-bg)
+    # Non-verdict observability: their output is prose injected into context
+    # with no machine consumer, so absence is not read as a verdict. The stderr
+    # line above already states that they did not run.
+    exit 0
+    ;;
+  *)
+    # CLI / skill-consumed: an empty stdout here would be read as real data.
+    exit 1
+    ;;
+esac

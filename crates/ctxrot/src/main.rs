@@ -1,8 +1,25 @@
 //! ctxrot — a context-rot guard for Claude Code.
 //!
 //! One binary, one subcommand per hook. Hook subcommands read the event JSON
-//! from stdin and emit the appropriate output. The cardinal rule: a hook must
-//! NEVER break the user's turn — on any error we exit 0 and stay silent.
+//! from stdin and emit the appropriate output.
+//!
+//! Failure is NOT uniformly "exit 0 and stay silent" (it used to be, and that
+//! docstring outlived the code). The subcommands split in two:
+//!
+//!   * **verdict-bearing** — `preguard` / `toolguard` / `stop` / `statusline`,
+//!     plus the CLI commands whose empty output would read as real data. Here a
+//!     cannot-determine is resolved to the restrictive side of the relevant
+//!     protocol: `stop` runs under `gate::run::run_guarded` (a panic becomes
+//!     `{"decision":"block"}`), `preguard`/`toolguard` wrap their detectors in
+//!     `analyse` (a panic becomes a deny / a fail-closed placeholder),
+//!     `statusline` renders an explicit `unknown` band instead of a blank bar,
+//!     and the store-reading CLI paths go through `known_or_exit` (exit 1).
+//!   * **pure observability** — `guard` / `rescue` / `restore` / `distill-bg`:
+//!     conditional prose injected into context with no machine consumer, so
+//!     absence is not read as a verdict. These keep `run_hook`'s exit 0.
+//!
+//! `bin/ctxrot` (the launcher) applies the same split when no per-platform
+//! binary exists; see its header and README.ja.md "ランチャの分類表".
 
 mod config;
 mod eval;

@@ -36,6 +36,7 @@ mod state;
 
 use clap::{Parser, Subcommand};
 use harness_core::hook::{read_stdin, run_hook, HookInput};
+use harness_core::verdict::{Determination, Reason, Verdict};
 use serde_json::json;
 
 use config::Config;
@@ -184,7 +185,25 @@ fn stop_run(input: HookInput) {
                     return;
                 }
 
-                let pending = condukt::find_pending(&cwd);
+                let pending = match condukt::find_pending(&cwd) {
+                    Determination::Known(pending) => pending,
+                    // We could not read the condukt run-state. Falling through
+                    // to the backlog branch would let an unread run-state end
+                    // in `Phase::Done` — the session would go permanently
+                    // silent on the strength of an observation never made.
+                    // Block instead, and leave the phase untouched so the next
+                    // Stop re-observes rather than inheriting a verdict.
+                    Determination::Undetermined(why) => {
+                        block_undetermined(
+                            &cwd,
+                            &session_id,
+                            "condukt-state-undetermined",
+                            "condukt の run-state を読み取れませんでした",
+                            &why,
+                        );
+                        return;
+                    }
+                };
                 if !pending.is_empty() {
                     // Progress-based continuation: continue as long as the
                     // pending set is shrinking; escalate (visibly) only on a
@@ -262,8 +281,28 @@ fn stop_run(input: HookInput) {
                     }
                 } else {
                     // condukt 完了 → backlog を確認
-                    let open = backlog::find_open(&cwd);
+                    let open = match backlog::find_open(&cwd) {
+                        Determination::Known(open) => open,
+                        // The queue could not be read. `Phase::Done` below is a
+                        // latch — it silences autoflow for the rest of the
+                        // session — so it must rest on an OBSERVED-empty queue.
+                        // A failure to observe blocks visibly instead, and the
+                        // phase is left as-is so a later readable answer still
+                        // decides.
+                        Determination::Undetermined(why) => {
+                            block_undetermined(
+                                &cwd,
+                                &session_id,
+                                "backlog-queue-undetermined",
+                                "backlog のキューを読み取れませんでした",
+                                &why,
+                            );
+                            return;
+                        }
+                    };
                     if open.is_empty() {
+                        // The one legitimate stop: we asked, and there is
+                        // nothing left.
                         s.phase = Phase::Done;
                         state::save(&cfg.state_dir, &session_id, &s);
                     } else {
@@ -370,6 +409,48 @@ fn block(cwd: &std::path::Path, session: &str, check_kind: &str, reason: &str) {
     println!("{}", json!({ "decision": "block", "reason": reason }));
 }
 
+/// Block because autoflow could not make an observation it needs.
+///
+/// This is the crate's single "cannot determine" exit, routed through
+/// `harness_core::verdict::Verdict`, whose `stop_decision()` maps `Undetermined`
+/// onto the blocking channel exactly like a `Violation`. The alternative —
+/// letting the Stop through — is not neutral: the surrounding state machine
+/// reads "nothing to do" from exactly the same silence, so an unobserved queue
+/// would end the session as if it had been observed empty.
+///
+/// The caller deliberately does NOT persist a phase before calling this: the
+/// undetermined answer is about this tick only, and the next Stop must re-ask
+/// rather than inherit a verdict. If the underlying cause is permanent, the
+/// message names it (and `AUTOFLOW_DISABLE=1` remains the documented opt-out) —
+/// a loud stop the operator can fix, rather than a silent one they cannot see.
+fn block_undetermined(
+    cwd: &std::path::Path,
+    session: &str,
+    check_kind: &str,
+    what: &str,
+    why: &Reason,
+) {
+    let verdict = Verdict::undetermined(format!(
+        "{what}（判定不能）: {why}\n\n\
+         これは「残作業が無い」という観測ではありません。原因を確認して解消してください\
+         （恒久的に解消できない場合の緊急退避は AUTOFLOW_DISABLE=1）。"
+    ));
+    emit_violation(cwd, session, check_kind);
+    match verdict.stop_decision() {
+        Some(decision) => println!("{decision}"),
+        // Unreachable: `Verdict::undetermined` is never `Clean`. Kept explicit
+        // because falling silent here would reinstate the very fail-open this
+        // function exists to close, so the impossible branch still blocks.
+        None => println!(
+            "{}",
+            json!({
+                "decision": "block",
+                "reason": format!("{what}（判定不能）: {why}"),
+            })
+        ),
+    }
+}
+
 /// Record a fleet-level violation for a blocking Stop, for cross-gate
 /// correlated-error detection (`overwatch::violation`). Fail-soft: never
 /// changes the gate's exit code/stdout, never panics if the overwatch store
@@ -422,21 +503,40 @@ fn session_start_command() -> ! {
         }
 
         // Check backlog for pending items and propose /flow when work exists.
-        let open = backlog::find_open(&cwd);
-        if !open.is_empty() {
-            let n = open.len();
-            let first = &open[0];
-            println!(
-                "{}",
-                json!({
-                    "additionalContext": format!(
-                        "バックログに {} 件 (最優先: '{}')。/flow で開始しますか？",
-                        n, first.text
-                    )
-                })
-            );
+        match backlog::find_open(&cwd) {
+            Determination::Known(open) => {
+                if !open.is_empty() {
+                    let n = open.len();
+                    let first = &open[0];
+                    println!(
+                        "{}",
+                        json!({
+                            "additionalContext": format!(
+                                "バックログに {} 件 (最優先: '{}')。/flow で開始しますか？",
+                                n, first.text
+                            )
+                        })
+                    );
+                }
+                // 0 pending + charter fresh → stay silent
+            }
+            // SessionStart cannot block, so the restrictive answer here is to
+            // report the failure rather than stay silent: silence is read as
+            // "the queue is empty", which is precisely what we could not
+            // establish. (An absent `backlog` is `Known(vec![])`, not this arm,
+            // so machines without backlog stay quiet as before.)
+            Determination::Undetermined(why) => {
+                println!(
+                    "{}",
+                    json!({
+                        "additionalContext": format!(
+                            "autoflow: バックログのキューを確認できませんでした（判定不能）: {why}\n\
+                             未完了課題が無いという意味ではありません。"
+                        )
+                    })
+                );
+            }
         }
-        // 0 pending + charter fresh → stay silent
     })
 }
 

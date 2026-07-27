@@ -6,8 +6,10 @@
 対象:
 - `crates/schemaguard/src/schema.rs` の `validate()`（全84〜183行）
 - `crates/schemaguard/src/registry.rs` の `get()` / `names()`（全217〜255行）
-- `crates/condukt/src/main.rs` の `schema_precheck` / `schema_precheck_each` /
-  `render_schema_violations`（4848〜4898行）
+- `validate()` の戻り値 `Vec<Violation>` を消費する production 経路の**全体**（§4 に全集合を列挙）:
+  - `crates/schemaguard/src/main.rs` の `cmd_check`（105〜146行。ゲート自身の CLI verdict 出力点）
+  - `crates/condukt/src/main.rs` の `schema_precheck` / `schema_precheck_each` /
+    `render_schema_violations`（4848〜4898行）
 
 目的: CLAUDE.md 第3節（「判定不能は clean ではない。必ず block か ask に解決する」）に照らして、
 各分岐が **restrictive**（violation を積む＝block 相当）・**permissive**（意図的・理由付きで
@@ -125,9 +127,32 @@
 
 ---
 
-## 4. `crates/condukt/src/main.rs` — `schema_precheck` 系の呼び出し側消費
+## 4. `validate()` の呼び出し元の全集合と、各呼び出し側での消費
 
-`validate()` の唯一の呼び出し元は condukt の以下3関数（4848〜4898行、実測済み）:
+**呼び出し元の全集合**（実測: 本監査で `grep -rn "schema::validate" crates/ --include "*.rs"` を
+再実行し、`#[cfg(test)] mod tests`（schema.rs:185 / registry.rs:259 以降）に属するヒットを除いた
+production 経路）:
+
+| # | 呼び出し箇所 | 逐語引用（当該行） | 消費者 |
+|---|--------------|--------------------|--------|
+| A | `crates/schemaguard/src/schema.rs:175` | 「let mut sub = validate(elem, field.items, &elem_path);」 | `validate()` 自身からの再帰呼び出し（配列要素。§1 分類 #9）。戻り値は次行の append で親の violation リストへ合流する |
+| B | `crates/schemaguard/src/main.rs:121` | 「let violations = schema::validate(&value, &schema.fields, "");」 | **schemaguard 自身の CLI `cmd_check`**。§4.2 |
+| C | `crates/condukt/src/main.rs:4860` | 「let violations = schemaguard::schema::validate(&value, &schema.fields, "");」 | condukt `schema_precheck`。§4.1 |
+| D | `crates/condukt/src/main.rs:4874` | 「let mut sub = schemaguard::schema::validate(v, &schema.fields, &format!("[{i}]"));」 | condukt `schema_precheck_each`。§4.1 |
+
+`schemaguard` を依存に持つ crate は condukt のみである（実測: `grep -rn "schemaguard" crates/*/Cargo.toml`
+→ 自クレートの `[package]`/`[lib]`/`[[bin]]` 名を除くと `crates/condukt/Cargo.toml:18`
+`schemaguard = { path = "../schemaguard" }` の1件のみ）。したがって上表 A〜D が
+**`Vec<Violation>` を消費する production 経路の全体**であり、5番目は存在しない。
+
+> **訂正（本監査の前版の誤り）**: 前版はここで「`validate()` の唯一の呼び出し元は condukt の以下3関数」
+> と書いていた。これは事実に反する。**監査対象クレート自身の CLI（`crates/schemaguard/src/main.rs:121`）が
+> 4番目の呼び出し元**であり、しかもそこは §1/§3 で識別した空集合の曖昧さが外部から観測可能な verdict
+> （`"valid": true` / exit 0 / reject カウンタのスキップ）へ変換される、まさにその地点である。
+> 全 verdict 経路を洗い出すことを目的とする監査が、持っていない網羅性（「唯一の」）を主張し、
+> ゲート自身の CLI verdict 経路を未検査のまま残していた。本版で §4.2 として検査・追記する。
+
+### 4.1 condukt 側の消費 — `schema_precheck` 系3関数（4848〜4898行、実測済み）
 
 ```rust
 /// Validate raw LLM JSON against a named schemaguard schema BEFORE deserialize.
@@ -212,25 +237,123 @@ fn render_schema_violations(
    （二重チェックの前段が失敗しただけで後段の serde が本来のエラーを出す設計）。ただし、この
    「後段が拾うはずだ」という前提そのものは本監査では検証していない（後段の serde 側の挙動は
    スコープ外）。
-3. `violations.is_empty()` の判定（render_schema_violations 内、4886行）が **唯一の block/pass
-   分岐点**であり、`Vec<Violation>` という形状をそのまま bool へ潰している。CLAUDE.md 第3節が
+3. `violations.is_empty()` の判定（render_schema_violations 内、4886行）が **condukt 側の唯一の
+   block/pass 分岐点**であり（schemaguard 自身の CLI にも別の分岐点がある。§4.2）、`Vec<Violation>` という形状をそのまま bool へ潰している。CLAUDE.md 第3節が
    要求する「`Result`/`Option` を bool へ潰すとき、既定値は必ず制限側」という観点では、ここは
    `!violations.is_empty()` という比較そのものが判定なので "既定値" の概念は無いが、**空集合が
    「検査した上で問題なし」なのか「検査対象外だった」なのかを区別できない**という schema.rs 側の
    構造的な問題（1節・3節参照）が、この bool 化を経由してそのまま condukt の CLI 終了コード・
    エラーメッセージへ伝播する。
 
+### 4.2 schemaguard 自身の CLI `cmd_check`（`crates/schemaguard/src/main.rs:105-146`）— 2つ目の in-process な `Vec<Violation>` 消費者
+
+`Vec<Violation>` を消費する production 経路は condukt だけではない。**監査対象クレート自身の CLI が
+2つ目の in-process 消費者**であり、ここは condukt のような別 crate 越しの利用ではなく
+**ゲート自身が外部へ verdict を出す出力点**（stdout の JSON・プロセス終了コード・reject カウンタ）である。
+
+逐語引用（schemaguard/src/main.rs:105-145。146行は `cmd_check` の閉じ括弧 `}`）:
+
+```rust
+    // Parse JSON
+    let value: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            // Parse failure counts as a reject
+            metrics::record_reject(&schema.name, 1);
+            let out = json!({
+                "valid": false,
+                "error": format!("invalid JSON: {}", e)
+            });
+            println!("{}", serde_json::to_string(&out).unwrap());
+            return 2;
+        }
+    };
+
+    // Validate
+    let violations = schema::validate(&value, &schema.fields, "");
+
+    if violations.is_empty() {
+        let out = json!({
+            "valid": true,
+            "schema": schema.name,
+            "errors": []
+        });
+        println!("{}", serde_json::to_string(&out).unwrap());
+        0
+    } else {
+        let error_count = violations.len();
+        metrics::record_reject(&schema.name, error_count);
+        let errors: Vec<_> = violations
+            .iter()
+            .map(|v| json!({"path": v.path, "problem": v.problem}))
+            .collect();
+        let out = json!({
+            "valid": false,
+            "schema": schema.name,
+            "errors": errors
+        });
+        println!("{}", serde_json::to_string(&out).unwrap());
+        1
+    }
+```
+
+**事実として記録する消費の形状**:
+
+1. `violations.is_empty()`（main.rs:123）が **CLI 側の唯一の block/pass 分岐点**であり、空集合が
+   3つの外部観測可能な出力へ同時に写される:
+   - stdout の `{"valid": true, "schema": ..., "errors": []}`（main.rs:124-129）
+   - プロセス終了コード **0**（main.rs:130。非空側は **1**、main.rs:144）
+   - `metrics::record_reject` を **呼ばない**（非空側だけが main.rs:133 で
+     `metrics::record_reject(&schema.name, error_count);` を呼ぶ）。すなわち「検査対象外だったので
+     violation 0件」だったケースは reject カウンタにも一切現れない。
+2. したがって §1/§3 で識別した「空の violation 集合は『検査して合格』と『適用外』を区別できない」
+   という性質は、condukt の in-process 経路（§4.1）だけでなく、**`schemaguard check` の
+   `"valid": true` と exit 0 という形で外部境界も越える**。この CLI 出力を消費する側
+   （shell スクリプト・他フック）は `"valid": true` を「全フィールドを検査した上で合格」と読むが、
+   実際には「`required: false` のフィールドは一度も検査されていない」場合を含む（§5-8 に入力例）。
+3. **対照的に、同じ CLI の「判定不能」経路は既に restrictive に解決している**（本監査で確認した事実。
+   したがって §4.2 の指摘は「判定不能が permissive」型ではなく「検査対象外が合格として出力される」型に
+   限定される）: unknown schema 名は exit **2**（main.rs:69-79。condukt 側の `schema_precheck` が
+   同じ状況を `return Ok(())` へ潰す（§5-5）のとは逆の選択）、ファイル/stdin の読み取り失敗も exit **2**
+   （main.rs:83-103）、JSON パース失敗は exit **2** かつ `metrics::record_reject(&schema.name, 1)`
+   （main.rs:106-118）。crate doc（main.rs:9-13）も3値の終了コードを明記している:
+
+   ```rust
+   //! Exit codes:
+   //!   0  — JSON parsed and schema valid (or `metrics`/`list` succeeded)
+   //!   1  — JSON parsed but schema violations found
+   //!   2  — could not determine: JSON failed to parse, an unknown schema was
+   //!        requested, or (`metrics`) the reject store exists but is unreadable
+   ```
+
 **次タスク（`validate()` の三値化）への制約として明記する**:
 
-`schema_precheck` / `schema_precheck_each` / `render_schema_violations` は `Vec<Violation>` という
-形状に **構造的に依存**している（`violations.is_empty()` で分岐、`violations.len()` をエラー文言に
-埋め込み、`v.path`/`v.problem` をそのまま整形して表示する）。次タスクが `validate()` の戻り値を
-三値型（例: `Determination<Vec<Violation>>` や、フィールド単位で `Checked`/`NotApplicable` を
-区別する型）へ変更する場合、**この3関数のシグネチャ・消費ロジックを壊さない設計を優先すべき**
-——具体的には、三値型から既存の `Vec<Violation>` 相当（「検査した上での違反リスト」）を取り出す
-変換経路を用意し、呼び出し側（main.rs:3145/3149/3423 の3箇所）は無改修で通せることが望ましい。
-壊す場合は condukt 側も同一バッチ・同一 PR で追随させる必要があり、`touched_files` のスコープが
-`crates/schemaguard/` だけでは完結しない点に注意する。
+`Vec<Violation>` という形状に **構造的に依存**している消費者は、**2つの crate にまたがる4関数**である
+（§4 の呼び出し元全集合 B〜D に対応。いずれも `violations.is_empty()` で分岐し、`violations.len()` /
+`v.path` / `v.problem` を出力へ埋め込む）:
+
+- condukt: `schema_precheck` / `schema_precheck_each` / `render_schema_violations`
+  （condukt/src/main.rs:4848-4898）
+- **schemaguard 自身: `cmd_check`（schemaguard/src/main.rs:105-146）** — 前版はこれを見落としていた
+  （§4 冒頭の訂正を参照）
+
+次タスクが `validate()` の戻り値を三値型（例: `Determination<Vec<Violation>>` や、フィールド単位で
+`Checked`/`NotApplicable` を区別する型）へ変更する場合、**この4関数のシグネチャ・消費ロジックを
+壊さない設計を優先すべき** ——具体的には、三値型から既存の `Vec<Violation>` 相当（「検査した上での
+違反リスト」）を取り出す変換経路を用意し、呼び出し側（condukt/src/main.rs:3145/3149/3423 の3箇所と
+schemaguard/src/main.rs:121）は無改修で通せることが望ましい。
+
+壊す場合に lockstep で追随が必要な対象は**2系統**ある:
+
+1. **schemaguard 自身の `src/main.rs`** — 同一 crate 内なので `touched_files` は
+   `crates/schemaguard/` で閉じるが、`crates/schemaguard/` を触った時点で version bump の
+   3ファイル lockstep（`Cargo.toml` / `.claude-plugin/plugin.json` /
+   `.claude-plugin/marketplace.json`。本監査時点でいずれも `0.1.8`）の対象になる。
+   また `cmd_check` を変更する以上、三値化の効果は **exit code / `"valid"` フィールドという
+   外部契約**（main.rs:9-13 の doc に明記された 0/1/2）に現れるため、その契約を変えるか
+   維持するかを設計時に決める必要がある。
+2. **condukt 側** — こちらは `crates/schemaguard/` に閉じないため、同一バッチ・同一 PR での
+   追随が必要になる。
 
 ---
 
@@ -292,6 +415,31 @@ RED 対象の候補として列挙する。
    `val.as_array()` が `None` を返す状況が起こりうる。現状のコードでは両者は同じ `val` に対する
    同じ判定（`is_array()`）を実質的に二重評価しているため到達不能だが、**判定式が2箇所に分離
    していること自体がリスク**。
+
+8. **`schemaguard check` は violation 0件を無条件に `"valid": true` / exit 0 / reject カウント無しへ
+   写す**（schemaguard/src/main.rs:121-133。**ゲート自身の verdict 出力点**であり、上記 6・7 の
+   silent-skip が外部から観測可能な verdict になる出口。§4.2 で詳述）。
+   入力例: `decomposition` スキーマの `class` フィールドの定義は以下（逐語、registry.rs:34-40）。
+
+   ```rust
+       Field {
+           name: "class",
+           ty: Ty::String,
+           required: false,
+           enum_values: &["parallel", "serial", "gated"],
+           items: &[],
+       },
+   ```
+
+   したがって
+   `echo '{"goal":"x","tasks":[{"id":"t1"}]}' | schemaguard check --schema decomposition` は
+   enum 制約を一度も評価しないまま `{"valid":true,"schema":"decomposition","errors":[]}` を
+   stdout に出して exit 0 で終わり、`metrics::record_reject` も呼ばれない。
+   `{"goal":"x","tasks":[{"id":"t1","class":"parallel"}]}`（enum を実際に評価して合格）と
+   **外部からは完全に同一の観測結果**になる。「検査して合格」と「検査対象外」の区別不能が、
+   in-process の戻り値だけでなく **CLI の外部境界を越えて伝播する**のがこの項目である。
+   なお同じ CLI の**判定不能**経路（unknown schema / 読み取り失敗 / パース失敗）は既に exit 2 へ
+   restrictive に解決済みであり（§4.2-3）、この項目は「判定不能が permissive」型ではない。
 
 ---
 

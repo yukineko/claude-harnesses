@@ -165,6 +165,67 @@ class WorktreeIsolationGuards(unittest.TestCase):
             _run("guard-maintree-bash.py", self.main,
                  self._bash(f"cat {self.main}/tracked.rs"), self.env), 0)
 
+    # ---- own-worktree .git/worktrees/<name>/ administrative files --------
+    def test_bash_rm_own_worktree_gitdir_lockfile_allowed(self):
+        # False positive observed live (backlog): removing a stale index.lock
+        # inside THIS worktree's own `.git/worktrees/<name>/` administrative
+        # directory (resolved from the worktree's own git-dir) is not a
+        # mutation of main's tracked content and must be allowed.
+        gd = subprocess.run(
+            ["git", "rev-parse", "--absolute-git-dir"],
+            cwd=self.wt, capture_output=True, text=True,
+        ).stdout.strip()
+        lockfile = os.path.join(gd, "index.lock")
+        open(lockfile, "w").close()
+        self.addCleanup(lambda: os.path.exists(lockfile) and os.remove(lockfile))
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.wt,
+                 self._bash(f"rm {lockfile}"),
+                 {"CLAUDE_PROJECT_DIR": self.main}), 0)
+
+    def test_bash_rm_other_worktree_gitdir_denied(self):
+        # A command run from wtA that reaches into a DIFFERENT worktree's
+        # `.git/worktrees/<other>/` administrative directory is not "your own
+        # worktree" and must still be refused (undetermined -> block, not a
+        # blanket allow-all-of-.git/worktrees).
+        wt2 = os.path.join(self.tmp, "wtB")
+        subprocess.run(
+            ["git", "worktree", "add", "-q", wt2, "-b", "feat2", "HEAD"],
+            cwd=self.main, check=True,
+        )
+        gd2 = subprocess.run(
+            ["git", "rev-parse", "--absolute-git-dir"],
+            cwd=wt2, capture_output=True, text=True,
+        ).stdout.strip()
+        lockfile2 = os.path.join(gd2, "index.lock")
+        open(lockfile2, "w").close()
+        self.addCleanup(lambda: os.path.exists(lockfile2) and os.remove(lockfile2))
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.wt,
+                 self._bash(f"rm {lockfile2}"),
+                 {"CLAUDE_PROJECT_DIR": self.main}), 2)
+
+    def test_bash_rm_main_gitconfig_still_denied(self):
+        # .git/config of the MAIN tree itself must remain blocked: allowing
+        # `.git/` blanket would let a command disable the gate or corrupt the
+        # repo. This must not regress when the own-worktree carve-out lands.
+        gd = subprocess.run(
+            ["git", "rev-parse", "--absolute-git-dir"],
+            cwd=self.main, capture_output=True, text=True,
+        ).stdout.strip()
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash(f"rm {gd}/config"), self.env), 2)
+
+    def test_bash_rm_main_hooks_still_denied(self):
+        gd = subprocess.run(
+            ["git", "rev-parse", "--absolute-git-dir"],
+            cwd=self.main, capture_output=True, text=True,
+        ).stdout.strip()
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash(f"rm -rf {gd}/hooks"), self.env), 2)
+
 
 class LifecycleHooks(WorktreeIsolationGuards):
     """SessionStart auto-worktree and the Stop verify gate."""

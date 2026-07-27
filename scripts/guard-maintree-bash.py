@@ -24,7 +24,14 @@ Resolution rule per candidate target:
   * a target that resolves OUTSIDE the main tree (a worktree, /tmp scratchpad,
     ~/.claude memory) is allowed;
   * a target under the main tree that is git-ignored is allowed (local scratch);
-  * a target under the main tree that is not ignored is REFUSED.
+  * a target inside THIS process's OWN `.git/worktrees/<name>/` administrative
+    directory (resolved from the hook's own cwd via `git rev-parse
+    --absolute-git-dir`, never from the command string) is allowed — it is
+    linked-worktree-private transient state (e.g. a stale `index.lock`), not
+    main's tracked content, and is not shared with any other worktree/session;
+  * a target under the main tree that is not ignored, and not inside that own
+    admin dir, is REFUSED — this still covers `.git/config`, `.git/hooks/*`,
+    `.git/refs/**`, and every OTHER worktree's `.git/worktrees/<other>/`.
 When a command re-anchors into a worktree (`cd <wt> && …`, `git -C <wt> …`) the
 command is allowed, since its mutations land in that worktree, not on main.
 
@@ -99,7 +106,28 @@ def _resolve(root: str, path: str) -> str:
 _UNRESOLVABLE = set("$`*?{}~")
 
 
-def _hits_main(root: str, path: str) -> bool:
+def _own_worktree_gitdir(root: str) -> str | None:
+    """The absolute git-dir of the CALLING process's own worktree, i.e. the
+    directory this hook is actually running from (cwd), resolved via git
+    itself — NOT trusted from any string in the command being inspected.
+
+    Returns None (undetermined) if this cannot be established, so the caller
+    resolves undetermined to "not exempt" (CLAUDE.md 3: block side)."""
+    gd = _git(os.getcwd(), "rev-parse", "--absolute-git-dir")
+    if gd is None:
+        return None
+    gd = os.path.realpath(gd)
+    # Only a genuine `.git/worktrees/<name>` administrative dir under THIS
+    # main root qualifies — a bare repo's own .git, or a git-dir that is not
+    # actually nested under root/.git/worktrees/, is not the carve-out this
+    # exists for.
+    worktrees_root = os.path.realpath(os.path.join(root, ".git", "worktrees"))
+    if not _under(gd, worktrees_root) or gd == worktrees_root:
+        return None
+    return gd
+
+
+def _hits_main(root: str, path: str, own_gitdir: str | None) -> bool:
     """True if `path` lands on a non-ignored location under the main tree."""
     if any(c in path for c in _UNRESOLVABLE):
         # A shell variable ($WT), glob, or brace-expansion — this process cannot
@@ -110,6 +138,16 @@ def _hits_main(root: str, path: str) -> bool:
         return False
     resolved = _resolve(root, path)
     if not _under(resolved, root):
+        return False
+    # Narrow carve-out: the calling worktree's OWN `.git/worktrees/<name>/`
+    # administrative directory (e.g. a stale index.lock) is not main's tracked
+    # content and is not shared with any other worktree/session, so it is safe
+    # to mutate. This is resolved from the hook's own cwd via git — never from
+    # a string inside the candidate path — and is scoped to exactly one
+    # worktree's admin dir, not a blanket `.git/` or `.git/worktrees/` allow
+    # (main's own .git/config, .git/hooks/*, other worktrees' admin dirs, etc.
+    # all remain protected below).
+    if own_gitdir is not None and _under(resolved, own_gitdir):
         return False
     ignored = subprocess.run(
         ("git", "check-ignore", "-q", resolved), cwd=root, capture_output=True
@@ -247,8 +285,9 @@ def decide(payload: dict) -> tuple[int, str]:
     if _reanchored_outside(tokens, root):
         return 0, ""
 
+    own_gitdir = _own_worktree_gitdir(root)
     for target in _candidate_targets(tokens, root):
-        if _hits_main(root, target):
+        if _hits_main(root, target, own_gitdir):
             return 2, DENY.format(cmd=command.strip().splitlines()[0][:120])
     return 0, ""
 

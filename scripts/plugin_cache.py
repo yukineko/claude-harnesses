@@ -289,3 +289,41 @@ def settings_pinned_versions(cache_root, paths=None):
             key = (m.group(1), m.group(2))
             pins.setdefault(key, set()).add(m.group(0))
     return pins, undetermined
+
+
+def cache_command_paths(cache_root, paths=None):
+    """Every full filesystem path under `cache_root` mentioned anywhere in
+    settings.json (a hook or statusLine `command`'s executable, typically).
+
+    Unlike settings_pinned_versions (which extracts only the plugin/version
+    pair), this returns the FULL path so a caller can check whether the file
+    it names still exists. That existence check is what closed the
+    2026-07-27 hole: check-plugin-rollout.py reported "OK" while 8
+    hooks/statusLine entries referenced an already-pruned dir, because
+    nothing verified a settings.json-referenced path was still there.
+
+    Returns (paths, undetermined) with the same fail-closed contract as
+    settings_pinned_versions: a missing settings.json contributes no paths;
+    an unreadable/unparseable one sets `undetermined` rather than silently
+    reporting zero paths.
+    """
+    import json
+
+    paths_arg = paths if paths is not None else settings_json_paths()
+    root = cache_root.rstrip("/")
+    path_re = re.compile(re.escape(root) + r"/[^\"'\s]+")
+    found = set()
+    undetermined = None
+    for path in paths_arg:
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                text = fh.read()
+            json.loads(text)
+        except (OSError, ValueError) as exc:
+            undetermined = f"{path}: unreadable or unparseable ({exc})"
+            continue
+        for m in path_re.finditer(text):
+            found.add(m.group(0))
+    return found, undetermined

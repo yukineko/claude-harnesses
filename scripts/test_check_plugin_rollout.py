@@ -132,7 +132,7 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                   install_paths=True,
                   skill_only=(), no_host_binary=(), force_host_binary=(),
                   asset_missing=None, asset_modified=None, asset_extra=None,
-                  cached_versions=None):
+                  cached_versions=None, settings_extra=None):
     """Build a fixture repo + registry + settings under `tmp`.
 
     versions           — crate -> source version (defaults to FIXTURE_PLUGINS)
@@ -266,10 +266,9 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
             en.update(enabled or {})
             for c in enabled_absent:
                 en.pop(c, None)
-            _write_json(
-                settings_path,
-                {"enabledPlugins": {f"{c}@{OWNER}": v for c, v in en.items()}},
-            )
+            data = {"enabledPlugins": {f"{c}@{OWNER}": v for c, v in en.items()}}
+            data.update(settings_extra or {})
+            _write_json(settings_path, data)
     return crates, registry_path, settings_path
 
 
@@ -421,8 +420,19 @@ class MalformedInputs(_FixtureCase):
     def test_malformed_settings_is_a_hard_failure_not_a_skip(self):
         with tempfile.TemporaryDirectory() as tmp:
             rc, out, err = self.run_main(tmp, settings_text="{ oops, not json")
-            self.assertEqual(rc, cpr.RC_ENABLEMENT)
+            # RC_ROLLOUT, not RC_ENABLEMENT: check_settings_pins() (added
+            # alongside check_enabled()'s pre-existing MALFORMED handling)
+            # independently treats an unparseable settings.json as
+            # undetermined-not-clean too, and its finding folds into
+            # rollout_problems. Both dimensions still fire and print their own
+            # block (main()'s "a failure in one never suppresses the other's
+            # result" contract); rollout wins the documented tie-break because
+            # its remediation is a prerequisite for reasoning about the
+            # deployed state at all. The thing this test actually pins — hard
+            # failure, not a skip — still holds.
+            self.assertEqual(rc, cpr.RC_ROLLOUT)
             self.assertIn("present but unparseable", err)
+            self.assertIn("unreadable or unparseable", err)
             self.assertNotIn("SKIP: no settings", out)
             self.assertNotIn("settings.json not found", err)
 
@@ -959,6 +969,68 @@ class StaleVersionDirs(_FixtureCase):
             rc, out, err = self.run_main(tmp)
         self.assertEqual(rc, 0, f"clean fixture must pass.\nout={out}\nerr={err}")
         self.assertIn("no superseded version dir left in the cache", out)
+
+
+class SettingsPinExistence(_FixtureCase):
+    """The 2026-07-27 incident: prune deleted ctxrot/0.5.18 and stuckguard/0.1.21
+    while 8 hooks/statusLine entries in settings.json still pointed at their
+    absolute paths verbatim, and this checker reported OK anyway — nothing
+    verified that a settings.json-referenced path still exists on disk."""
+
+    def test_dead_hook_path_is_reported_as_rollout_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dead = str(Path(tmp) / "cache" / "ctxrot" / "0.5.18" / "bin" / "ctxrot-linux-x86_64")
+            rc, out, err = self.run_main(
+                tmp,
+                settings_extra={
+                    "hooks": {
+                        "Stop": [
+                            {"hooks": [{"type": "command", "command": f"{dead} guard"}]}
+                        ]
+                    }
+                },
+            )
+            self.assertNotEqual(
+                rc, 0, f"a dead settings.json pin must fail the check.\nout={out}\nerr={err}"
+            )
+            self.assertIn(dead, out + err)
+
+    def test_dead_statusline_path_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dead = str(Path(tmp) / "cache" / "stuckguard" / "0.1.21" / "bin" / "stuckguard-linux-x86_64")
+            rc, out, err = self.run_main(
+                tmp,
+                settings_extra={"statusLine": {"type": "command", "command": f"{dead} watch"}},
+            )
+            self.assertNotEqual(rc, 0, f"out={out}\nerr={err}")
+            self.assertIn(dead, out + err)
+
+    def test_live_pin_pointing_at_an_existing_dir_passes(self):
+        """Control arm: a hook that references the plugin's OWN, still-deployed
+        install dir (the normal, working shape) must not be flagged."""
+        with tempfile.TemporaryDirectory() as tmp:
+            live = str(Path(tmp) / "cache" / "condukt" / "3.0.0" / "bin" / f"condukt-{_HOST_SUFFIX}")
+            rc, out, err = self.run_main(
+                tmp,
+                settings_extra={
+                    "hooks": {
+                        "Stop": [{"hooks": [{"type": "command", "command": f"{live} guard"}]}]
+                    }
+                },
+            )
+            self.assertEqual(rc, 0, f"a pin at an existing path must pass.\nout={out}\nerr={err}")
+
+    def test_no_hooks_or_statusline_is_not_flagged(self):
+        """Control arm: the ordinary fixture (enabledPlugins only, no hooks/
+        statusLine) must not spuriously report a dead pin."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(tmp)
+        self.assertEqual(rc, 0, f"out={out}\nerr={err}")
+
+    def test_unparseable_settings_json_is_undetermined_not_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(tmp, settings_text="{not valid json")
+        self.assertNotEqual(rc, 0, f"out={out}\nerr={err}")
 
 
 if __name__ == "__main__":

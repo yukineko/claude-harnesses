@@ -741,6 +741,38 @@ def check_stale_version_dirs():
     return problems, len(stale)
 
 
+def check_settings_pins():
+    """Return (problems, checked) for settings.json-referenced cache paths
+    that no longer exist on disk.
+
+    2026-07-27 incident: prune deleted ctxrot/0.5.18 and stuckguard/0.1.21
+    while 8 hooks/statusLine entries in settings.json still pointed at their
+    absolute paths, and this script reported "OK: all N GATE plugin(s)
+    enabled" anyway — check_rollout()/check_enabled() only ever look at the
+    CURRENT registry-pointed version, never at a hardcoded path elsewhere in
+    settings.json. This dimension closes that: every cache-dir path
+    settings.json mentions must actually exist, or it is drift, not clean.
+
+    An absent settings.json contributes nothing here (fail-soft, same as
+    check_enabled's own skip). An unreadable/unparseable one is reported as
+    a problem rather than read as "zero paths pinned" — undetermined must
+    not collapse to clean ahead of a green "OK" line.
+    """
+    paths, undetermined = plugin_cache.cache_command_paths(
+        PLUGIN_CACHE_ROOT, paths=[SETTINGS_PATH]
+    )
+    if undetermined:
+        return [f"{undetermined} — cannot verify settings.json-referenced paths exist"], 0
+    missing = sorted(p for p in paths if not os.path.exists(p))
+    problems = [
+        f"settings.json references {p}, which does not exist on disk "
+        "(pruned, moved, or never built) — the hook/statusLine using it will "
+        "fail at runtime"
+        for p in missing
+    ]
+    return problems, len(paths)
+
+
 def check_enabled(plugins):
     """Return (gate_failures, warnings, checked) for the enabledPlugins dimension.
 
@@ -829,6 +861,12 @@ def main():
     # of the cache, not of the registry pointing at them.
     stale_problems, stale_checked = check_stale_version_dirs()
 
+    # Same reasoning as stale_problems: a settings.json pin referencing a
+    # dead path is a property of the deployed fleet, not of the registry, so
+    # it is checked even when the registry is absent and folded into the same
+    # rollout verdict + exit code rather than given a fifth code.
+    pin_problems, pin_checked = check_settings_pins()
+
     if rollout_problems is None:
         print(f"installed_plugins.json not found: {REGISTRY_PATH}", file=sys.stderr)
         print("(set CLAUDE_PLUGIN_REGISTRY to override, or install at least one plugin first)", file=sys.stderr)
@@ -838,6 +876,8 @@ def main():
     # reports itself as a skip rather than being masked by a cache finding.
     if stale_problems:
         rollout_problems = list(rollout_problems or []) + stale_problems
+    if pin_problems:
+        rollout_problems = list(rollout_problems or []) + pin_problems
 
     if gate_failures is None:
         print(f"settings.json not found: {SETTINGS_PATH}", file=sys.stderr)

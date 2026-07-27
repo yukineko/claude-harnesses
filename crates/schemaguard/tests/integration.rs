@@ -93,6 +93,61 @@ fn check_schema_violation_exits_one() {
     );
 }
 
+// ── "checked and clean" must be distinguishable from "never checked" ─────────
+//
+// docs/audit-schemaguard-verdict-paths.md §5-6/§5-8: a decomposition task that
+// carries only `id` never evaluates the `class` / `suggested_model` /
+// `confidence` enum constraints (the fields are absent and `required: false`,
+// so schema.rs:114 `continue`s before the enum check). Its CLI verdict is
+// nevertheless byte-identical to a task whose enums WERE evaluated and passed:
+// `{"valid":true,"schema":"decomposition","errors":[]}` + exit 0. Silence reads
+// as "every declared check ran and passed", which is not what happened.
+//
+// The optional-and-absent path is a *declared* permissive (registry.rs keeps
+// `required` in lockstep with condukt's `model::Task`), so the fix is NOT to
+// reject it — it is to stop the verdict from claiming a completeness it does
+// not have: the output must name the declared checks that were not performed.
+
+#[test]
+fn valid_verdict_names_the_declared_checks_it_did_not_perform() {
+    // Only `id` present → the `class`/`suggested_model`/`confidence` enum
+    // constraints declared for a task are never evaluated.
+    let payload = r#"{"goal":"x","tasks":[{"id":"t1"}]}"#;
+    let (code, stdout) = run(&["check", "--schema", "decomposition"], payload);
+    assert_eq!(
+        code, 0,
+        "an absent optional field is a declared permissive, not a violation; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"valid\":true"),
+        "expected valid:true, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("not_checked"),
+        "verdict must carry a not_checked section so 'checked clean' and \
+         'never checked' are distinguishable; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("tasks[0].class"),
+        "the un-evaluated `class` enum constraint must be named in the verdict; got: {stdout}"
+    );
+}
+
+#[test]
+fn fully_populated_payload_reports_nothing_as_not_checked() {
+    // Anti-vacuity control for the test above: an implementation that simply
+    // always lists every field would pass that assertion while proving nothing.
+    // Here every declared field is present and every declared constraint is
+    // actually evaluated, so nothing may be reported as not-checked.
+    let payload = r#"{"goal":"x","tasks":[{"id":"t1","title":"do","class":"serial","done_criteria":"d","suggested_model":"sonnet","confidence":"high"}]}"#;
+    let (code, stdout) = run(&["check", "--schema", "decomposition"], payload);
+    assert_eq!(code, 0, "fully-populated valid payload must exit 0");
+    assert!(
+        stdout.contains("\"not_checked\":[]"),
+        "every declared check ran here, so not_checked must be empty; got: {stdout}"
+    );
+}
+
 #[test]
 fn check_unknown_schema_exits_two() {
     let (code, _stdout) = run(&["check", "--schema", "no-such-schema"], "{}");

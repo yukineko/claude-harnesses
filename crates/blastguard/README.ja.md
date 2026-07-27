@@ -28,9 +28,13 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
 しない。非再帰の `rm file.txt`、追記（`>>`）、fd リダイレクト（`2>&1`, `>&2`）、
 `/dev/null` 等への切り詰めリダイレクトはいずれも通す。
 
-さらに、リポジトリの**設定ファイル**に対する編集 / 削除は、形が破壊的に見えても常に
-除外（allow）する: `.claude/**`、`**/settings.local.json`、`**/.claude/settings.json`、
-`**/package.json`、`**/*.toml` / `*.yaml` / `*.yml` / `*.lock`、`.config/**` など。
+さらに、リポジトリの**設定ファイル**に対する編集 / 削除は、形が破壊的に見えても
+`.claude/**`、`**/package.json`、`**/*.toml` / `*.yaml` / `*.yml` / `*.lock`、
+`.config/**` などは除外（allow）する。**ただし `.claude/settings.json` /
+`.claude/settings.local.json` / `.claude/hooks.json` / `.claude/hooks/**` /
+`.githooks/**` など、どのゲート・フックが動くか自体を決めるファイルはこの除外の
+**対象外**であり、常に deny になる（守護者自身を無効化する経路を塞ぐため、
+この一群は設定ファイル除外より優先される）。
 
 ## どうして必要か
 

@@ -23,7 +23,11 @@
 //!   * fewer than `threshold` properties satisfied → block (bounded, escapable).
 //!   * a *checker* that itself fails → block (bounded) then give up loudly, so a
 //!     broken checker can never become a bypass.
-//!   * a genuine panic → swallowed to exit 0 by the never-break-a-turn guard.
+//!   * a genuine panic → resolved fail-closed by `harness_core::gate::run::run_guarded`:
+//!     the first stop is blocked (the crashed gate cannot certify the stop is
+//!     safe), and only a second consecutive crash on the post-block re-entry
+//!     (`stop_hook_active`) is allowed through, bounding the block to one
+//!     occurrence so the session is never trapped.
 
 mod config;
 mod derive;
@@ -147,8 +151,11 @@ fn exit_on_err(r: anyhow::Result<()>) {
 }
 
 /// The Stop hook. Always exits 0 toward Claude (the `decision` field, not the
-/// exit code, is what blocks a stop). The never-break-a-turn panic guard lives
-/// in `harness_core::gate::run`.
+/// exit code, is what blocks a stop). The fail-closed panic guard lives in
+/// `harness_core::gate::run::run_guarded`: a panic here resolves to a `block`
+/// decision on the first stop (unknown verdict → restrictive side), and only
+/// bounds to `allow` on a second consecutive crash (`stop_hook_active`) so the
+/// session cannot be trapped in an endless block loop.
 fn check_command() -> ! {
     let raw = read_stdin();
     let hook = HookInput::parse(&raw);

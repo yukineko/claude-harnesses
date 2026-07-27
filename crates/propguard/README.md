@@ -82,7 +82,10 @@ trapped. Fail-closed but bounded:
   (bounded), then give up loudly — a broken checker never becomes a bypass.
 - A truncated (too-large) diff has an unchecked tail → **block** (bounded), then
   give up loudly.
-- A genuine harness panic → swallowed to exit 0 (never-break-a-turn).
+- A genuine harness panic → fail-closed **block** on the first stop (a crashed
+  gate cannot certify the stop is safe); only a second consecutive crash on the
+  post-block re-entry (`stop_hook_active`) is allowed through, bounding the
+  block to one occurrence so the session is never trapped.
 
 Escape hatches: create `.propguard-skip` (one-shot, with a one-line reason) or
 set `PROPGUARD_DISABLE=1`.

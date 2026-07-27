@@ -40,10 +40,17 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
 人間が毎回目視で止めるのは現実的でない。
 
 blastguard はこの「破壊的だが不可逆な少数のパターン」だけを実行前に遮断する安全網に
-徹する。判定は純粋関数で決定論的に行われ、**ターンを決して壊さない**という不変条件を
-守る: 入力が空 / 不正、対象外のツール、内部 panic のいずれでも、黙って exit 0 する
-（panic の握り潰しは `harness_core::hook::run_hook` が保証する）。広く構えすぎて通常
-作業を妨げるより、明確に危険なものだけを確実に止めることを優先している。
+徹する。判定は純粋関数で決定論的に行われる: 入力が空 / 不正、または対象外のツール
+（＝判定対象が無いと確定できたケース）は黙って allow（exit 0、出力なし）だが、
+**検出器内部で panic が起きた場合は判定不能であり、allow ではなく deny に解決する**
+（`crates/blastguard/src/main.rs` の `analyse` が `std::panic::catch_unwind` で panic を
+捕捉し `Decision::deny(INTERNAL_ERROR_REASON)` を返す）。これは
+`Decision::{Allow, Deny, Ask}` の三値設計（`src/model.rs`）を保つための挙動であり、
+「判定できなかった」を「安全である」に丸め込まない。プロセス自体（stdin 読み取り・
+JSON 出力）がクラッシュしないことは `harness_core::hook::run_hook` が保証するが、
+これは判定を持たない外側の backstop であり、上記の deny-on-panic とは別レイヤーである。
+広く構えすぎて通常作業を妨げるより、明確に危険なものだけを確実に止めることを優先
+している。
 
 ## 既知の high-frequency deny（backlog ba72dc46 / cd99fa2c の判定記録）
 
@@ -167,9 +174,13 @@ specguard の forge は LLM が生成した `test_cmd` を `sh -c` に渡す前�
 ```
 
 `bin/blastguard` はホストの OS / アーキテクチャに合う `blastguard-<os>-<arch>` を
-exec する POSIX-sh ランチャで、該当ビルドが同梱されていなければ黙って exit 0 する。
-API キーは不要で、**1 フック + 同梱バイナリだけで完結する subscription-native** な
-構成である。
+exec する POSIX-sh ランチャである。**該当プラットフォーム向けの同梱ビルドが無い場合は
+stderr に警告を出しつつ exit 0 する**（`crates/blastguard/bin/blastguard` 参照） —
+これは analyser 内部の「判定不能は deny」とは異なるレイヤーの、既知の fail-open
+ギャップである。バイナリが存在しない環境では検出器そのものが起動しないため、判定を
+下す主体が居ない。この経路は起動前のプラットフォーム欠落のみに限られ、起動後の
+判定不能（内部 panic 等）は上記の通り deny に解決される。API キーは不要で、**1 フック
++ 同梱バイナリだけで完結する subscription-native** な構成である。
 
 CLI 表面は最小限で、stdin を触る前に `--version` / `-V` と `--help` / `-h` のみ
 短絡する。

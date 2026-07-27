@@ -151,5 +151,109 @@ class Staleness(unittest.TestCase):
                 os.chmod(marker, 0o700)
 
 
+class SettingsJsonPin(unittest.TestCase):
+    """Reproduces the 2026-07-27 incident: a version dir with no `.in_use`
+    marker at all, but referenced by an absolute path hardcoded into
+    ~/.claude/settings.json, must not be removable. This is the actual bug —
+    prune only looked at `.in_use`, so a settings.json-only pin was invisible
+    and 8 hooks/statusLine broke when their pinned dirs got deleted."""
+
+    def _fixture(self, tmp):
+        crates, cache = Path(tmp) / "crates", Path(tmp) / "cache"
+        crates.mkdir()
+        cache.mkdir()
+        return crates, cache
+
+    def _settings(self, tmp, body):
+        p = Path(tmp) / "settings.json"
+        p.write_text(body, encoding="utf-8")
+        return str(p)
+
+    def test_dir_referenced_by_settings_json_hook_is_not_removable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            crates, cache = self._fixture(tmp)
+            _plugin(crates, "ctxrot", "0.5.20")
+            _cached(cache, "ctxrot", "0.5.18")  # no .in_use marker at all
+            _cached(cache, "ctxrot", "0.5.20")
+            settings = self._settings(
+                tmp,
+                '{"hooks": {"Stop": [{"hooks": [{"type": "command", '
+                f'"command": "{cache}/ctxrot/0.5.18/bin/ctxrot-linux-x86_64 guard"}}]}}]}}}}',
+            )
+            pins, undetermined = pc.settings_pinned_versions(str(cache), paths=[settings])
+            self.assertIsNone(undetermined)
+            self.assertIn(("ctxrot", "0.5.18"), pins)
+
+            cur, _ = pc.source_versions(str(crates))
+            stale, _ = pc.scan(str(cache), cur, settings_pins=pins)
+            self.assertEqual([s.version for s in stale], ["0.5.18"])
+            self.assertFalse(
+                stale[0].removable,
+                "a dir pinned only by settings.json (no .in_use marker) must be kept",
+            )
+            self.assertTrue(stale[0].holders.pinned)
+
+    def test_pin_for_one_plugin_does_not_protect_an_unrelated_stale_dir(self):
+        """Control arm: a non-degenerate fix must still allow pruning of dirs
+        that settings.json says nothing about."""
+        with tempfile.TemporaryDirectory() as tmp:
+            crates, cache = self._fixture(tmp)
+            _plugin(crates, "ctxrot", "0.5.20")
+            _plugin(crates, "beta", "2.0.0")
+            _cached(cache, "ctxrot", "0.5.18")
+            _cached(cache, "ctxrot", "0.5.20")
+            _cached(cache, "beta", "1.0.0")
+            _cached(cache, "beta", "2.0.0")
+            settings = self._settings(
+                tmp,
+                '{"hooks": {"Stop": [{"hooks": [{"type": "command", '
+                f'"command": "{cache}/ctxrot/0.5.18/bin/ctxrot-linux-x86_64 guard"}}]}}]}}}}',
+            )
+            pins, undetermined = pc.settings_pinned_versions(str(cache), paths=[settings])
+            cur, _ = pc.source_versions(str(crates))
+            stale, _ = pc.scan(str(cache), cur, settings_pins=pins)
+            by_plugin = {s.plugin: s for s in stale}
+            self.assertFalse(by_plugin["ctxrot"].removable)
+            self.assertTrue(by_plugin["beta"].removable)
+
+    def test_no_settings_json_pins_nothing(self):
+        """Control arm: absence of a settings file must not itself protect
+        anything (else every prune run would silently no-op)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            crates, cache = self._fixture(tmp)
+            _plugin(crates, "alpha", "2.0.0")
+            _cached(cache, "alpha", "1.0.0")
+            _cached(cache, "alpha", "2.0.0")
+            missing = str(Path(tmp) / "does-not-exist.json")
+            pins, undetermined = pc.settings_pinned_versions(str(cache), paths=[missing])
+            self.assertEqual(pins, {})
+            self.assertIsNone(undetermined)
+            cur, _ = pc.source_versions(str(crates))
+            stale, _ = pc.scan(str(cache), cur, settings_pins=pins)
+            self.assertTrue(stale[0].removable)
+
+    def test_unreadable_settings_json_is_undetermined_and_protects_everything(self):
+        """settings.json existing but failing to parse must resolve to the
+        restrictive side (kept), not be treated as 'no pins found'."""
+        with tempfile.TemporaryDirectory() as tmp:
+            crates, cache = self._fixture(tmp)
+            _plugin(crates, "alpha", "2.0.0")
+            _cached(cache, "alpha", "1.0.0")
+            _cached(cache, "alpha", "2.0.0")
+            settings = self._settings(tmp, "{not valid json")
+            pins, undetermined = pc.settings_pinned_versions(str(cache), paths=[settings])
+            self.assertIsNotNone(undetermined)
+
+            cur, _ = pc.source_versions(str(crates))
+            stale, _ = pc.scan(
+                str(cache), cur, settings_pins=pins, settings_undetermined=undetermined
+            )
+            self.assertFalse(
+                stale[0].removable,
+                "an unparseable settings.json must keep dirs, not be read as zero pins",
+            )
+            self.assertIsNotNone(stale[0].holders.undetermined)
+
+
 if __name__ == "__main__":
     unittest.main()

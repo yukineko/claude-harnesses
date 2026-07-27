@@ -11,7 +11,14 @@ point at. So the rollout now prunes as it deploys.
 What is NEVER removed:
   - the plugin's current version dir (read from crates/<name>/plugin.json);
   - any version dir held by a live session (`.in_use/<pid>` for a live pid);
-  - any dir whose hold status could not be determined.
+  - any version dir referenced by an absolute path in settings.json (a
+    hardcoded pin the registry repoint never reaches — this is exactly what
+    broke on 2026-07-27: prune deleted ctxrot/0.5.18 and stuckguard/0.1.21
+    while 8 hooks/statusLine in ~/.claude/settings.json still pointed at
+    them, verbatim);
+  - any dir whose hold status could not be determined (this now also covers
+    settings.json existing but failing to parse — see
+    plugin_cache.settings_pinned_versions).
 
 That last one is the point: deletion is the irreversible action here, so
 "cannot tell" keeps the directory. The gate (check-plugin-rollout.py) resolves
@@ -42,8 +49,13 @@ def main(argv=None):
     crates = os.path.join(args.repo, "crates")
 
     current, src_problems = plugin_cache.source_versions(crates)
-    stale, scan_problems = plugin_cache.scan(cache_root, current)
+    pins, pins_undetermined = plugin_cache.settings_pinned_versions(cache_root)
+    stale, scan_problems = plugin_cache.scan(
+        cache_root, current, settings_pins=pins, settings_undetermined=pins_undetermined
+    )
     problems = list(src_problems) + list(scan_problems)
+    if pins_undetermined:
+        problems.append(f"{pins_undetermined} — every cached dir is kept as potentially pinned")
 
     removable = [s for s in stale if s.removable]
     kept = [s for s in stale if not s.removable]

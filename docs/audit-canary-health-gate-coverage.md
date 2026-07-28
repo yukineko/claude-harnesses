@@ -29,7 +29,7 @@ registry-repointed) unconditionally — this happens for every stage, including 
 | Step | FILE:LINE | Verbatim code |
 |---|---|---|
 | Copy each plugin in the stage | `scripts/rollout-plugins.sh:743` | `      canary_copy_row "$pn_row"` |
-| Collect registry args if the row needs a registry update | `scripts/rollout-plugins.sh:745-748` | ```      if [ "$needs_registry" = "1" ] || [ "$force" = 1 ]; then\n        stage_reg_args+=("$name" "$version" "$target")\n      fi``` |
+| Collect registry args if the row needs a registry update | `scripts/rollout-plugins.sh:745-747` | ```      if [ "$needs_registry" = "1" ] || [ "$force" = 1 ]; then\n        stage_reg_args+=("$name" "$version" "$target")\n      fi``` |
 | Batch-commit the stage's registry pointer (dry-run variant) | `scripts/rollout-plugins.sh:749-751` | ```    if [ "${#stage_reg_args[@]}" -gt 0 ]; then\n      if [ "$dry" = 1 ]; then\n        registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --dry-run "${stage_reg_args[@]}" | sed 's/^/  /'``` |
 | Batch-commit the stage's registry pointer (real, non-dry-run) | `scripts/rollout-plugins.sh:752-753` | ```      else\n        registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "${stage_reg_args[@]}" | sed 's/^/  /'``` |
 
@@ -57,13 +57,22 @@ The block opened by this `if` does not close until:
 
 (line 850 closes the inner `if [ "$dry" = 1 ]` branch introduced at `scripts/rollout-plugins.sh:760`;
 line 851 closes the outer `if [ "$s" -lt "$((nstages - 1))" ]` opened at line 758). Everything
-between lines 759 and 849 — the `echo "  health-gate: checking violation rate..."` announcement,
-the dry-run stub gate call, the real `"$ow" canary-gate ...` invocation, the `gate_rc` branching,
-`execute_stage_rollback`, and both `exit 4` / `exit 5` halts — is **only reached when
-`s < nstages - 1`**. There is no other call site of `canary-gate` inside `run_canary` and no other
-place the health gate is invoked in the whole script (confirmed by `grep -n canary-gate
-scripts/rollout-plugins.sh`, which returns only the doc-comment mentions and the one call at line
-806, all inside this same `if`).
+between lines 759 and 849 — the `echo "  health-gate: checking violation rate (threshold=$canary_threshold)..."`
+announcement, the dry-run stub gate call, the real `"$ow" canary-gate ...` invocation, the
+`gate_rc` branching, `execute_stage_rollback`, and both `exit 4` / `exit 5` halts — is **only
+reached when `s < nstages - 1`**. `grep -n canary-gate scripts/rollout-plugins.sh` returns six
+lines: four are doc/code comments (`scripts/rollout-plugins.sh:44`, `:122`, `:788`, `:821`) and
+**two are executable call sites**, both inside this same `if [ "$s" -lt "$((nstages - 1))" ]`
+guard opened at :758 — the dry-run branch's `"$ow" canary-gate --observed-violations 0 --threshold
+"$canary_threshold" | sed 's/^/  /' || true` at `scripts/rollout-plugins.sh:763`, and the
+real-path `gate_args=(canary-gate --threshold "$canary_threshold" ...)` array literal at
+`scripts/rollout-plugins.sh:802`, invoked two lines later via `"$ow" "${gate_args[@]}"` at
+`scripts/rollout-plugins.sh:806` (that invocation line does not itself contain the literal string
+`canary-gate`, so it does not show up in the grep output, but it is the same call whose arguments
+are constructed at :802). The dry-run call (:763) and the real-path call (:802/:806) are mutually
+exclusive branches of the inner `if [ "$dry" = 1 ]` (:760), so this correction does not change the
+report's substantive conclusion: **every** `canary-gate` invocation — dry-run or real — sits
+strictly inside the `s < nstages - 1` guard and is therefore skipped for the last (or only) stage.
 
 **Established by quotation**: the condition guarding the entire health-gate block is
 `[ "$s" -lt "$((nstages - 1))" ]` (`scripts/rollout-plugins.sh:758`), i.e. "stage index is less
@@ -81,8 +90,9 @@ Command run verbatim in the worktree:
 bash scripts/rollout-plugins.sh --plugin schemaguard --canary --dry-run
 ```
 
-Full output (captured directly from the tool invocation, not redirected to a file per the
-no-`>`/no-`2>&1` constraint):
+Output excerpt (captured directly from the tool invocation, not redirected to a file per the
+no-`>`/no-`2>&1` constraint; the `...` markers below are elisions in the pasted excerpt, not part
+of the tool's actual output):
 
 ```
 repo:        /Users/yuki/.condukt/worktrees/run-20260729-061440-32616-audit-canary-gate-coverage
@@ -137,7 +147,7 @@ done (canary).
 Note: with `--plugin schemaguard`, `overwatch canary-plan` produced exactly one stage
 (`"stages": [{ "index": 0, ... }]`), so `nstages = 1`. The stage-loop body between `--- stage 0:
 schemaguard ---` and `canary: all 1 stage(s) completed.` contains **no `health-gate:` line at
-all** — the gate's own `echo "  health-gate: checking violation rate..."`
+all** — the gate's own `echo "  health-gate: checking violation rate (threshold=$canary_threshold)..."`
 (`scripts/rollout-plugins.sh:759`) never printed.
 
 Count measurement (same command, piped to `grep -c` — no `>`/`2>&1` used):
@@ -156,6 +166,34 @@ Output:
 with `nstages = 1` the loop's single iteration has `s = 0` and the guard evaluates
 `0 -lt (1 - 1)` = `0 -lt 0` = false, so the entire health-gate block (lines 759-849) is skipped,
 exactly as predicted by the code trace in section 1.
+
+### Anti-vacuity control: a two-plugin run that produces `nstages = 2`
+
+A count of 0 only demonstrates the coverage gap if the `grep -c "health-gate:"` pattern is a real
+discriminator — i.e. it must return a non-zero count on *some* run, or the 0 above could just as
+well mean the pattern never matches anything (a vacuous non-match), rather than a genuine absence
+in this specific single-stage run. To rule that out, I ran the identical command against a
+two-plugin invocation, which `overwatch canary-plan` splits into two stages (`--stage-size`
+defaults to 1 plugin per stage), so `nstages = 2` and the guard `s < nstages - 1` is true for
+`s = 0`:
+
+```
+bash scripts/rollout-plugins.sh --plugin schemaguard --plugin autoflow --canary --dry-run | grep -c "health-gate:"
+```
+
+Output (re-run directly by me in this worktree, not copied from the verifier's report):
+
+```
+1
+```
+
+**Measured count: 1**, versus **0** for the single-plugin (`nstages = 1`) run above. This is a
+genuine negative control: the same `grep -c "health-gate:"` pattern, against the same script, in
+the same worktree, returns a non-zero count once `nstages > 1` puts at least one stage on the
+`s < nstages - 1` side of the guard (here, only stage 0 of the two — stage 1, the last stage, still
+gets no `health-gate:` line, consistent with the section 1 trace). This confirms the pattern is a
+real discriminator and that the single-plugin run's count of 0 is a genuine absence of the
+health-gate check, not a vacuous non-match of a broken grep pattern.
 
 ---
 
@@ -248,7 +286,7 @@ section 1) are already fail-closed and must **not** be weakened by any future ch
 
 **(a) `gate_rc` neither 0 nor 3 → `execute_stage_rollback` + `exit 5`** (gate could not evaluate):
 
-`scripts/rollout-plugins.sh:829-841`
+`scripts/rollout-plugins.sh:829-842`
 ```bash
         if [ "$gate_rc" -ne 0 ] && [ "$gate_rc" -ne 3 ]; then
           if [ "${ROLLOUT_GATE_EVAL_FAILSOFT:-0}" = 1 ]; then
@@ -314,34 +352,57 @@ guidance built on the identical assumption, so it will also go stale once the ga
 ```
 
 `grep -n single-stage scripts/rollout-plugins.sh` (run in the worktree) confirms these are the
-**only two** occurrences of "single-stage" in the file:
+**only two** occurrences of the literal string "single-stage" in the file:
 
 ```
 799:        # overwatch out single-stage FIRST (a single-stage canary has no
 835:            echo "  (Known benign cause: overwatch self-upgrade bootstrap-skew, rc=2 against the pre-swap binary. Roll out overwatch single-stage first, or set ROLLOUT_GATE_EVAL_FAILSOFT=1 to explicitly proceed.)" >&2
 ```
 
+That grep is necessarily incomplete as an inventory of stale prose, because it only catches
+occurrences of the literal phrase "single-stage". A third comment states the same soon-to-be-false
+premise in different words, without using that phrase, and was found by direct reading rather than
+by the grep above:
+
+**`scripts/rollout-plugins.sh:757`** (the comment directly above the guard itself):
+
+```
+    # Health gate BETWEEN stages (skip the check after the final stage).
+```
+
+This asserts, as current behavior, that the check is skipped "after the final stage" — the exact
+premise this report's sections 1-3 show also holds for the *only* stage of a single-stage run.
+Once a fix makes the gate always run, this comment becomes false in the same way as the two
+identified by the "single-stage" grep, even though it does not itself contain that string.
+
 ### CONSTRAINT FOR THE NEXT TASK
 
-Both the comment at `scripts/rollout-plugins.sh:798-801` and the operator-facing message at
-`scripts/rollout-plugins.sh:835` state or imply, as a documented-benign fact, that "a single-stage
-canary has no inter-stage gate check" and recommend rolling `overwatch` out single-stage as the
-remedy for the self-upgrade bootstrap-skew (backlog `2a953ab5`). **Once a fix makes the health gate
-always run — including for the last/only stage — this premise becomes false**, and the recommended
-remedy ("roll overwatch out single-stage first") would no longer avoid the bootstrap-skew (it would
-now trigger the gate-eval-error fail-closed path unconditionally on such a run, or would need the
-gate itself to be made bootstrap-skew-aware). Any change that closes the coverage gap identified in
-sections 1-3 of this report **must, in the same commit**, correct or remove:
+The comment at `scripts/rollout-plugins.sh:798-801`, the operator-facing message at
+`scripts/rollout-plugins.sh:835`, and the guard comment at `scripts/rollout-plugins.sh:757` all
+state or imply, as a documented-benign or current-behavior fact, that the health gate is skipped
+for the last (or only) stage — the first two frame it as "a single-stage canary has no inter-stage
+gate check" and recommend rolling `overwatch` out single-stage as the remedy for the self-upgrade
+bootstrap-skew (backlog `2a953ab5`); the third simply documents the skip-on-final-stage behavior
+directly. **Once a fix makes the health gate always run — including for the last/only stage — all
+three premises become false**, and the recommended remedy ("roll overwatch out single-stage
+first") would no longer avoid the bootstrap-skew (it would now trigger the gate-eval-error
+fail-closed path unconditionally on such a run, or would need the gate itself to be made
+bootstrap-skew-aware). Any change that closes the coverage gap identified in sections 1-3 of this
+report **must, in the same commit**, correct or remove:
 
 - the comment at `scripts/rollout-plugins.sh:798-801` (the "remedies for this known-benign case"
-  text), and
+  text),
 - the runtime message at `scripts/rollout-plugins.sh:835` ("Roll out overwatch single-stage
-  first, ..."),
+  first, ..."), and
+- the guard comment at `scripts/rollout-plugins.sh:757` ("Health gate BETWEEN stages (skip the
+  check after the final stage)."),
 
-so that neither continues to advertise a remedy the fixed code no longer provides. Leaving either
-uncorrected after the fix would be a docstring/comment that claims a behavior the code does not
-have — a case CLAUDE.md §4 explicitly names as prohibited ("docstring / コメントで実挙動と違う
-「安全な話」を書く").
+so that none continues to advertise a remedy or describe a behavior the fixed code no longer has.
+Leaving any of the three uncorrected after the fix would be a docstring/comment that claims a
+behavior the code does not have — a case CLAUDE.md §4 explicitly names as prohibited
+("docstring / コメントで実挙動と違う「安全な話」を書く"). Anyone following the list literally
+without this third item would leave `:757` stale, which is exactly the hazard this section exists
+to prevent.
 
 ---
 
@@ -355,9 +416,13 @@ have — a case CLAUDE.md §4 explicitly names as prohibited ("docstring / コ�
 - The unconditional `run_rebuild_and_sync` call at the end of `run_canary`
   (`scripts/rollout-plugins.sh:870`) means an applied-but-never-gated stage's binary and registry
   pointer become fully live on the running harness with no health verification ever performed.
-- The two existing rollback branches (`scripts/rollout-plugins.sh:829-841` and
+- The two existing rollback branches (`scripts/rollout-plugins.sh:829-842` and
   `scripts/rollout-plugins.sh:843-848`) are correctly fail-closed and are not implicated in the
   gap — they are simply unreachable on the last (or only) stage.
-- Two pieces of prose (`scripts/rollout-plugins.sh:798-801` comment, `scripts/rollout-plugins.sh:835`
-  runtime message) currently rely on the coverage gap as a known-benign remedy and will need
-  correcting in the same commit as any fix that removes the gap.
+- Three pieces of prose (`scripts/rollout-plugins.sh:798-801` comment, `scripts/rollout-plugins.sh:835`
+  runtime message, and `scripts/rollout-plugins.sh:757` guard comment) currently rely on or
+  describe the coverage gap as known-benign/current behavior and will need correcting in the same
+  commit as any fix that removes the gap.
+- Anti-vacuity control: `grep -c "health-gate:"` on a two-plugin (`nstages = 2`) canary dry-run
+  returns **1**, versus **0** for the single-plugin (`nstages = 1`) run — confirming the pattern is
+  a real discriminator and the 0 above is a genuine absence, not a vacuous non-match.

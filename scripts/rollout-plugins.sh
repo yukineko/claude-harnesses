@@ -39,9 +39,10 @@
 #   scripts/rollout-plugins.sh --plugin specguard --canary  # gate crate: --canary required
 #   scripts/rollout-plugins.sh --plugin specguard --no-canary  # explicit override (escape hatch)
 #   With --canary, the plugin set is split into ordered STAGES (via
-#   `overwatch canary-plan`). Each stage is copied+repointed, then BETWEEN
-#   stages the item-B violation registry is checked via `overwatch
-#   canary-gate`. The gate emits a COMBINED verdict carrying BOTH a raw-spike
+#   `overwatch canary-plan`). Each stage is copied+repointed, then the item-B
+#   violation registry is checked via `overwatch canary-gate` — for EVERY
+#   stage, including the last one and the only stage of a single-stage run.
+#   The gate emits a COMBINED verdict carrying BOTH a raw-spike
 #   AND a systemic (fleet-recurrence) signal and rolls back if EITHER fires
 #   (Problem-2.1); the count is anchored to each stage's deploy time via
 #   --since so pre-deploy violations are not misattributed (Problem-2.2). On a
@@ -754,100 +755,109 @@ run_canary() {
       fi
     fi
 
-    # Health gate BETWEEN stages (skip the check after the final stage).
-    if [ "$s" -lt "$((nstages - 1))" ]; then
-      echo "  health-gate: checking violation rate (threshold=$canary_threshold)..."
-      if [ "$dry" = 1 ]; then
-        # Dry-run: observe 0 violations (nothing was really applied) so the
-        # gate deterministically PROCEEDs and we exercise the full plan.
-        "$ow" canary-gate --observed-violations 0 --threshold "$canary_threshold" | sed 's/^/  /' || true
-        echo "  [dry-run] gate would PROCEED (no live violations observed)"
-      else
-        # Real path: consult the item-B violation registry for the cwd project.
-        # The gate (default registry mode) emits a COMBINED verdict carrying
-        # BOTH a raw-spike AND a systemic (fleet-recurrence) sub-verdict and
-        # exits non-zero if EITHER fires (Problem-2.1) — so this single check
-        # already honors both signals; we do NOT pass --systemic (which would
-        # restrict to the single systemic-only path). The systemic arm uses its
-        # OWN, lower threshold (Problem-2.1b: default 0 = any fleet-recurring
-        # signature trips) so fleet recurrence can advise rollback independently
-        # of the raw-spike count. --since anchors the count to this stage's
-        # deploy time (Problem-2.2). A gate-eval error (a non-{0,3} exit) now
-        # fails CLOSED — rolls the stage back and halts (exit 5) — rather than the
-        # old fail-soft PROCEED: for a fleet-defense rollout, a health check that
-        # could not run has verified NOTHING, so it must not wave the stage
-        # through (c8a962dd). See the gate_rc handling below and the explicit
-        # ROLLOUT_GATE_EVAL_FAILSOFT=1 escape for the bootstrap-skew case.
-        #
-        # KNOWN rc=2 cause (backlog 2a953ab5, root-caused 2026-07-13): "$ow" is
-        # resolved ONCE via resolve_overwatch_bin() at the top of this function,
-        # BEFORE any stage is applied, and the actual live-binary swap only
-        # happens in rebuild-plugins.sh AFTER all canary stages complete. If a
-        # rollout run is itself upgrading overwatch (bundled as a plain --plugin
-        # alongside the canary target, or overwatch is added to GATE_CRATES) AND
-        # that same commit also adds a new canary-gate CLI flag (e.g.
-        # --systemic-threshold in Problem-2.1b, 0a14284), every gate check in
-        # THIS run invokes the flag against the OLD, not-yet-swapped-in
-        # overwatch binary, which rejects it with a clap usage error (exit 2,
-        # "For more information, try '--help'."). This is 100% reproducible
-        # for every gate-checked stage in that one run, and NOT reproducible
-        # afterwards (a manual standalone re-run hits the freshly-swapped
-        # binary and succeeds) — a one-time self-referential bootstrap skew,
-        # not a flake. It now HALTS the rollout fail-closed (rc=2 is not in
-        # {0,3}), because "the gate could not evaluate" is exactly the state that
-        # must not silently proceed. Remedies for this known-benign case: roll
-        # overwatch out single-stage FIRST (a single-stage canary has no
-        # inter-stage gate check, so the skew never arises), or set
-        # ROLLOUT_GATE_EVAL_FAILSOFT=1 to explicitly acknowledge and proceed.
-        local -a gate_args=(canary-gate --threshold "$canary_threshold" \
-          --systemic-threshold "$canary_systemic_threshold")
-        [ -n "$stage_deploy_ts" ] && gate_args+=(--since "$stage_deploy_ts")
-        local gate_out gate_rc=0
-        gate_out="$("$ow" "${gate_args[@]}")" || gate_rc=$?
-        echo "$gate_out" | sed 's/^/  /'
-        # Exit 0 = PROCEED, exit 3 = ROLLBACK advised (raw OR systemic). Any
-        # OTHER non-zero code means the gate COULD NOT EVALUATE the canary's
-        # health (clap usage rc=2 against a stale binary, rc=127 missing binary,
-        # a crash, an unreadable store — though the store case now returns rc=3
-        # / rollback after the overwatch fix). Historically this fell through to
-        # "treat as no-spike and PROCEED" — a fail-OPEN: a GATE-crate rollout
-        # advancing every stage precisely because the health check was broken and
-        # verified nothing (c8a962dd). For a fleet-defense rollout, "cannot verify
-        # health" must NOT silently proceed; it fails CLOSED (roll the stage back
-        # and halt without advancing).
-        #
-        # The one documented-benign cause is the overwatch self-upgrade BOOTSTRAP
-        # SKEW: this run is upgrading overwatch AND the same commit adds a new
-        # canary-gate flag, so every inter-stage check invokes that flag against
-        # the OLD, not-yet-swapped binary (clap rc=2) — 100% reproducible for that
-        # one run, gone on a standalone re-run. That is genuine, but it is still
-        # "health unverified", so it does not get a silent pass: an operator who
-        # KNOWS they are in that case sets ROLLOUT_GATE_EVAL_FAILSOFT=1 to
-        # explicitly opt back into fail-soft PROCEED (loudly logged), exactly like
-        # --no-canary is the explicit escape hatch for the canary requirement
-        # itself. Absent that acknowledgement, an un-evaluable gate halts.
-        if [ "$gate_rc" -ne 0 ] && [ "$gate_rc" -ne 3 ]; then
-          if [ "${ROLLOUT_GATE_EVAL_FAILSOFT:-0}" = 1 ]; then
-            echo "  health-gate: eval error (rc=$gate_rc) — ROLLOUT_GATE_EVAL_FAILSOFT=1 set; explicit operator override to PROCEED (fail-soft, acknowledged)" >&2
-            gate_rc=0
-          else
-            echo "  health-gate: CANNOT EVALUATE (rc=$gate_rc) — canary health unverifiable; failing CLOSED, rolling back stage $s and halting without advancing." >&2
-            echo "  (Known benign cause: overwatch self-upgrade bootstrap-skew, rc=2 against the pre-swap binary. Roll out overwatch single-stage first, or set ROLLOUT_GATE_EVAL_FAILSOFT=1 to explicitly proceed.)" >&2
-            # emit_record=0: there was NO health verdict/violation, so do not
-            # write a `raw` violation-rollback event (it would be a false record).
-            execute_stage_rollback "$ow" "$s" "$stage_names" 0
-            echo "canary: HALTED at stage $s — health gate could not evaluate (fail-closed)." >&2
-            exit 5
-          fi
+    # Health gate for EVERY stage, including the LAST (or, in a single-stage
+    # run, the ONLY) one. This check used to be nested inside
+    # `if [ "$s" -lt "$((nstages - 1))" ]`, i.e. it only ran BETWEEN stages: a
+    # single-stage canary ran it ZERO times and the final stage of an N-stage
+    # run was never checked, yet the stage was still applied (copy + registry
+    # repoint) and run_rebuild_and_sync still went live at the end — so "never
+    # checked" and "checked and healthy" were indistinguishable downstream
+    # (CLAUDE.md §3). Gating every stage removes that gap.
+    echo "  health-gate: checking violation rate (threshold=$canary_threshold)..."
+    if [ "$dry" = 1 ]; then
+      # Dry-run: observe 0 violations (nothing was really applied) so the
+      # gate deterministically PROCEEDs and we exercise the full plan.
+      "$ow" canary-gate --observed-violations 0 --threshold "$canary_threshold" | sed 's/^/  /' || true
+      echo "  [dry-run] gate would PROCEED (no live violations observed)"
+    else
+      # Real path: consult the item-B violation registry for the cwd project.
+      # The gate (default registry mode) emits a COMBINED verdict carrying
+      # BOTH a raw-spike AND a systemic (fleet-recurrence) sub-verdict and
+      # exits non-zero if EITHER fires (Problem-2.1) — so this single check
+      # already honors both signals; we do NOT pass --systemic (which would
+      # restrict to the single systemic-only path). The systemic arm uses its
+      # OWN, lower threshold (Problem-2.1b: default 0 = any fleet-recurring
+      # signature trips) so fleet recurrence can advise rollback independently
+      # of the raw-spike count. --since anchors the count to this stage's
+      # deploy time (Problem-2.2). A gate-eval error (a non-{0,3} exit) now
+      # fails CLOSED — rolls the stage back and halts (exit 5) — rather than the
+      # old fail-soft PROCEED: for a fleet-defense rollout, a health check that
+      # could not run has verified NOTHING, so it must not wave the stage
+      # through (c8a962dd). See the gate_rc handling below and the explicit
+      # ROLLOUT_GATE_EVAL_FAILSOFT=1 escape for the bootstrap-skew case.
+      #
+      # KNOWN rc=2 cause (backlog 2a953ab5, root-caused 2026-07-13): "$ow" is
+      # resolved ONCE via resolve_overwatch_bin() at the top of this function,
+      # BEFORE any stage is applied, and the actual live-binary swap only
+      # happens in rebuild-plugins.sh AFTER all canary stages complete. If a
+      # rollout run is itself upgrading overwatch (bundled as a plain --plugin
+      # alongside the canary target, or overwatch is added to GATE_CRATES) AND
+      # that same commit also adds a new canary-gate CLI flag (e.g.
+      # --systemic-threshold in Problem-2.1b, 0a14284), every gate check in
+      # THIS run invokes the flag against the OLD, not-yet-swapped-in
+      # overwatch binary, which rejects it with a clap usage error (exit 2,
+      # "For more information, try '--help'."). This is 100% reproducible
+      # for every gate-checked stage in that one run, and NOT reproducible
+      # afterwards (a manual standalone re-run hits the freshly-swapped
+      # binary and succeeds) — a one-time self-referential bootstrap skew,
+      # not a flake. It now HALTS the rollout fail-closed (rc=2 is not in
+      # {0,3}), because "the gate could not evaluate" is exactly the state that
+      # must not silently proceed. Rolling overwatch out single-stage FIRST used
+      # to be the documented remedy for this known-benign case, because a
+      # single-stage canary then ran no gate check at all. That is no longer
+      # true: every stage is gated now, including the only stage of a
+      # single-stage run, so a single-stage overwatch rollout hits this very
+      # fail-closed halt instead of side-stepping it. The one remaining explicit
+      # escape is ROLLOUT_GATE_EVAL_FAILSOFT=1, which acknowledges the skew and
+      # proceeds (loudly logged).
+      local -a gate_args=(canary-gate --threshold "$canary_threshold" \
+        --systemic-threshold "$canary_systemic_threshold")
+      [ -n "$stage_deploy_ts" ] && gate_args+=(--since "$stage_deploy_ts")
+      local gate_out gate_rc=0
+      gate_out="$("$ow" "${gate_args[@]}")" || gate_rc=$?
+      echo "$gate_out" | sed 's/^/  /'
+      # Exit 0 = PROCEED, exit 3 = ROLLBACK advised (raw OR systemic). Any
+      # OTHER non-zero code means the gate COULD NOT EVALUATE the canary's
+      # health (clap usage rc=2 against a stale binary, rc=127 missing binary,
+      # a crash, an unreadable store — though the store case now returns rc=3
+      # / rollback after the overwatch fix). Historically this fell through to
+      # "treat as no-spike and PROCEED" — a fail-OPEN: a GATE-crate rollout
+      # advancing every stage precisely because the health check was broken and
+      # verified nothing (c8a962dd). For a fleet-defense rollout, "cannot verify
+      # health" must NOT silently proceed; it fails CLOSED (roll the stage back
+      # and halt without advancing).
+      #
+      # The one documented-benign cause is the overwatch self-upgrade BOOTSTRAP
+      # SKEW: this run is upgrading overwatch AND the same commit adds a new
+      # canary-gate flag, so every stage's check invokes that flag against
+      # the OLD, not-yet-swapped binary (clap rc=2) — 100% reproducible for that
+      # one run, gone on a standalone re-run. That is genuine, but it is still
+      # "health unverified", so it does not get a silent pass: an operator who
+      # KNOWS they are in that case sets ROLLOUT_GATE_EVAL_FAILSOFT=1 to
+      # explicitly opt back into fail-soft PROCEED (loudly logged), exactly like
+      # --no-canary is the explicit escape hatch for the canary requirement
+      # itself. Absent that acknowledgement, an un-evaluable gate halts.
+      if [ "$gate_rc" -ne 0 ] && [ "$gate_rc" -ne 3 ]; then
+        if [ "${ROLLOUT_GATE_EVAL_FAILSOFT:-0}" = 1 ]; then
+          echo "  health-gate: eval error (rc=$gate_rc) — ROLLOUT_GATE_EVAL_FAILSOFT=1 set; explicit operator override to PROCEED (fail-soft, acknowledged)" >&2
+          gate_rc=0
+        else
+          echo "  health-gate: CANNOT EVALUATE (rc=$gate_rc) — canary health unverifiable; failing CLOSED, rolling back stage $s and halting without advancing." >&2
+          echo "  (Known benign cause: overwatch self-upgrade bootstrap-skew, rc=2 against the pre-swap binary. Every stage is gated, including the only stage of a single-stage run, so rolling overwatch out single-stage does NOT avoid this; set ROLLOUT_GATE_EVAL_FAILSOFT=1 to explicitly acknowledge the skew and proceed.)" >&2
+          # emit_record=0: there was NO health verdict/violation, so do not
+          # write a `raw` violation-rollback event (it would be a false record).
+          execute_stage_rollback "$ow" "$s" "$stage_names" 0
+          echo "canary: HALTED at stage $s — health gate could not evaluate (fail-closed)." >&2
+          exit 5
         fi
-        if [ "$gate_rc" -ne 0 ]; then
-          echo "  health-gate: ROLLBACK — raw-spike or systemic recurrence detected; rolling back stage $s and halting" >&2
-          execute_stage_rollback "$ow" "$s" "$stage_names" 1
-          echo "canary: HALTED at stage $s after auto-rollback." >&2
-          exit 4
-        fi
-        echo "  health-gate: PROCEED"
       fi
+      if [ "$gate_rc" -ne 0 ]; then
+        echo "  health-gate: ROLLBACK — raw-spike or systemic recurrence detected; rolling back stage $s and halting" >&2
+        execute_stage_rollback "$ow" "$s" "$stage_names" 1
+        echo "canary: HALTED at stage $s after auto-rollback." >&2
+        exit 4
+      fi
+      echo "  health-gate: PROCEED"
     fi
   done
 

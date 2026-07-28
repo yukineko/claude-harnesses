@@ -84,7 +84,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "clap",
  "harness-core",
@@ -517,6 +517,18 @@ name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
+
+[[package]]
+name = "fetchguard"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "harness-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -1133,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "schemaguard"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "clap",

@@ -4,6 +4,7 @@ use harness_core::config::home;
 // Shared with condukt (the single source of truth) so autoflow reads the exact
 // run-state directory condukt writes — see harness_core::projkey.
 use harness_core::projkey::{project_key, repo_root};
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 
 /// 2 hours in seconds. Running tasks older than this are considered interrupted.
@@ -35,10 +36,20 @@ struct RunState {
 ///
 /// Before returning, reverts any `running` task whose `updated_at` is older
 /// than 2 hours — those were almost certainly interrupted mid-session.
-pub fn find_pending(cwd: &Path) -> Vec<TaskState> {
+///
+/// Three answers, not two. `Known(vec![])` means the run-state was read and
+/// holds no pending work; `Undetermined` means it could not be read (see
+/// [`load_latest`]). The distinction is load-bearing: the caller latches
+/// `Phase::Done` on an empty set, so an unreadable run file collapsing into an
+/// empty vec makes "we couldn't look" indistinguishable from "there is nothing
+/// left" — and a single task missing its `status` field is enough to make a run
+/// full of healthy tasks unreadable (audit §4.4).
+pub fn find_pending(cwd: &Path) -> Determination<Vec<TaskState>> {
     let (path, mut run) = match load_latest(cwd) {
-        Some(x) => x,
-        None => return vec![],
+        Determination::Known(Some(x)) => x,
+        // No run file for this project: condukt was never run here. Observed.
+        Determination::Known(None) => return Determination::Known(vec![]),
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
 
     let now = now_secs();
@@ -62,10 +73,12 @@ pub fn find_pending(cwd: &Path) -> Vec<TaskState> {
         }
     }
 
-    run.tasks
-        .into_iter()
-        .filter(|t| matches!(t.status.as_str(), "pending" | "failed"))
-        .collect()
+    Determination::Known(
+        run.tasks
+            .into_iter()
+            .filter(|t| matches!(t.status.as_str(), "pending" | "failed"))
+            .collect(),
+    )
 }
 
 /// Did the SPECIFIC condukt run named `run_id` (for the repo containing `cwd`)
@@ -111,8 +124,16 @@ pub fn has_completed_tasks_for_run(cwd: &Path, run_id: &str) -> bool {
 /// recent condukt run for the repo containing `cwd`.
 pub fn mark_running(cwd: &Path, task_ids: &[&str]) {
     let (path, mut run) = match load_latest(cwd) {
-        Some(x) => x,
-        None => return,
+        Determination::Known(Some(x)) => x,
+        Determination::Known(None) => return,
+        // Bookkeeping, not a verdict: failing to mark tasks running cannot make
+        // autoflow conclude anything, it only means the next Stop re-observes
+        // the same pending set (which `decide_progress` surfaces as stalled
+        // progress). Say so on stderr rather than failing silently.
+        Determination::Undetermined(why) => {
+            eprintln!("autoflow: could not mark condukt tasks running: {why}");
+            return;
+        }
     };
     let now = now_secs();
     let mut modified = false;
@@ -135,15 +156,38 @@ pub fn mark_running(cwd: &Path, task_ids: &[&str]) {
     }
 }
 
-fn load_latest(cwd: &Path) -> Option<(PathBuf, RunState)> {
+/// Load this project's most recent condukt run-state.
+///
+/// `Known(None)` = there is no run file (condukt never ran for this project) —
+/// an observation. `Undetermined` = a run file exists but we could not turn it
+/// into a `RunState` (unreadable, truncated mid-write, or valid JSON that does
+/// not fit the schema — e.g. one task missing `status`, which fails the WHOLE
+/// document and would otherwise hide every healthy task alongside it).
+fn load_latest(cwd: &Path) -> Determination<Option<(PathBuf, RunState)>> {
     let root = repo_root(cwd);
     let key = project_key(&root);
     let project_dir = home().join(".condukt").join("state").join(&key);
-    let path = latest_run_file(&project_dir)?;
-    let run = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|t| serde_json::from_str::<RunState>(&t).ok())?;
-    Some((path, run))
+    let path = match latest_run_file(&project_dir) {
+        Determination::Known(Some(p)) => p,
+        Determination::Known(None) => return Determination::Known(None),
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "could not read condukt run-state {}: {e}",
+                path.display()
+            ))
+        }
+    };
+    match serde_json::from_str::<RunState>(&text) {
+        Ok(run) => Determination::Known(Some((path, run))),
+        Err(e) => Determination::undetermined(format!(
+            "could not parse condukt run-state {}: {e}",
+            path.display()
+        )),
+    }
 }
 
 /// Persist run-state. Returns the IO/serialize error instead of swallowing it,
@@ -167,20 +211,46 @@ fn now_secs() -> i64 {
         .as_secs() as i64
 }
 
-fn latest_run_file(project_dir: &Path) -> Option<PathBuf> {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(project_dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.starts_with("run-") && n.ends_with(".json"))
-                .unwrap_or(false)
-        })
-        .collect();
+/// The newest `run-*.json` in `project_dir`.
+///
+/// A missing directory is `Known(None)` (condukt never ran for this project);
+/// any other enumeration failure is `Undetermined`, because a directory we
+/// could not list is not a directory we observed to be empty (audit §4.6: a
+/// mode-111 state dir made a live pending run invisible).
+fn latest_run_file(project_dir: &Path) -> Determination<Option<PathBuf>> {
+    let dir = match std::fs::read_dir(project_dir) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Determination::Known(None),
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "could not enumerate {}: {e}",
+                project_dir.display()
+            ))
+        }
+    };
+    let mut entries: Vec<PathBuf> = Vec::new();
+    for entry in dir {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "could not read an entry of {}: {e}",
+                    project_dir.display()
+                ))
+            }
+        };
+        let path = entry.path();
+        let is_run_file = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with("run-") && n.ends_with(".json"))
+            .unwrap_or(false);
+        if is_run_file {
+            entries.push(path);
+        }
+    }
     entries.sort();
-    entries.pop()
+    Determination::Known(entries.pop())
 }
 
 #[cfg(test)]
@@ -326,7 +396,10 @@ mod tests {
         // follows whatever sorts last — the other session's completed run —
         // so naively trusting it would wrongly read as "this session
         // completed something."
-        let (_, latest) = load_latest(&env.repo).expect("a run file exists");
+        let (_, latest) = match load_latest(&env.repo) {
+            Determination::Known(Some(x)) => x,
+            other => panic!("a run file exists and must be readable, got {other:?}"),
+        };
         assert!(
             latest
                 .tasks

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use harness_core::config::home;
 use harness_core::projkey::repo_root;
+use harness_core::verdict::Determination;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -18,12 +19,27 @@ pub struct BacklogItem {
 }
 
 /// Find outstanding (pending) backlog items for the repo containing `cwd`.
-/// Returns an empty vec if the `backlog` binary is not found or there is no
-/// pending work. Fail-soft throughout — autoflow must never break a turn.
-pub fn find_open(cwd: &Path) -> Vec<BacklogItem> {
+///
+/// Three answers, not two. `Known(vec![])` means "asked the queue, it is empty"
+/// — the only answer that entitles the caller to conclude there is no work left
+/// (it latches `Phase::Done` for the rest of the session). Every way of *failing
+/// to ask* — the `backlog` invocation not spawning, exiting non-zero, printing
+/// output we cannot parse, or answering in a status vocabulary we do not
+/// recognise — is `Undetermined`, because an empty vec returned for those would
+/// be indistinguishable from an observed-empty queue at the call site.
+///
+/// The one deliberate exception is `backlog` not being installed, which stays
+/// `Known(vec![])`: with no binary there is no queue to have work in. That is an
+/// observation, not a failure to observe (the same carve-out
+/// `lock::backlog_driver_active` documents).
+pub fn find_open(cwd: &Path) -> Determination<Vec<BacklogItem>> {
     let binary = match find_backlog_binary() {
-        Some(b) => b,
-        None => return vec![],
+        Determination::Known(Some(b)) => b,
+        // No backlog installed ⇒ no queue ⇒ genuinely nothing pending.
+        Determination::Known(None) => return Determination::Known(vec![]),
+        // We could not even tell whether backlog exists, so we certainly cannot
+        // tell whether its queue is empty.
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
 
     let project = repo_project_path(cwd);
@@ -47,41 +63,72 @@ pub fn find_open(cwd: &Path) -> Vec<BacklogItem> {
     let output = match output {
         Ok(o) if o.status.success() => o,
         Ok(o) => {
-            // Non-zero exit: surface it rather than silently reporting "no work"
-            // (which would let autoflow conclude the queue is empty on a tooling
-            // error). Still fail-soft to an empty vec — never break the turn.
-            eprintln!(
-                "autoflow: backlog list exited {}: {}",
-                o.status,
-                String::from_utf8_lossy(&o.stderr).trim()
-            );
-            return vec![];
+            // Non-zero exit: the queue was never reported. The diagnostic goes to
+            // stderr AND the verdict says "undetermined" — reporting an empty vec
+            // here is what let autoflow conclude "no work" on a tooling error.
+            let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            eprintln!("autoflow: backlog list exited {}: {}", o.status, stderr);
+            return Determination::undetermined(format!(
+                "`backlog list` exited {}: {stderr}",
+                o.status
+            ));
         }
         Err(e) => {
             eprintln!("autoflow: could not run backlog list: {e}");
-            return vec![];
+            return Determination::undetermined(format!("could not run `backlog list`: {e}"));
         }
     };
 
-    let items: Vec<BacklogItem> = serde_json::from_slice(&output.stdout).unwrap_or_default();
+    let items: Vec<BacklogItem> = match serde_json::from_slice(&output.stdout) {
+        Ok(items) => items,
+        // Unparseable stdout is not an observation of an idle queue (the same
+        // rule `lock::driver_active_from_status` applies to its own stdout).
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "could not parse `backlog list --json` output: {e}"
+            ))
+        }
+    };
 
     // Server already filtered to status=pending; re-assert client-side as a
     // belt-and-braces guard (a failed task is deferred ~2 days, so surfacing it
     // here would re-drive it immediately and churn).
-    items
+    let listed = items.len();
+    let pending: Vec<BacklogItem> = items
         .into_iter()
         .filter(|i| i.status == "pending")
-        .collect()
+        .collect();
+
+    // The server was ASKED for `--status pending`, so it answering with items
+    // that none of them match means the two sides disagree about the status
+    // vocabulary (audit §4.2). The client filter then empties a non-empty
+    // answer, which is a failure to interpret the reply — not an observation
+    // that the queue is empty.
+    if pending.is_empty() && listed > 0 {
+        return Determination::undetermined(format!(
+            "`backlog list --status pending` returned {listed} item(s), none with status \"pending\" \
+             — the status vocabulary does not match, so the queue could not be read"
+        ));
+    }
+    Determination::Known(pending)
 }
 
 /// Locate the `backlog` binary: PATH first, then the plugin cache.
-pub(crate) fn find_backlog_binary() -> Option<PathBuf> {
+///
+/// `Known(None)` is the *observation* that backlog is not installed (no plugin
+/// cache directory at all). An enumerable-but-failing cache directory — the
+/// read denied, an entry unreadable, a candidate whose existence cannot be
+/// tested — is `Undetermined`: collapsing it into the same `None` is what let a
+/// merely unreadable directory read as "backlog is not installed" and start an
+/// unattended auto-loop next to a live driver (audit §4.5, the one permissive-A
+/// path).
+pub(crate) fn find_backlog_binary() -> Determination<Option<PathBuf>> {
     if std::process::Command::new("backlog")
         .arg("--version")
         .output()
         .is_ok()
     {
-        return Some(PathBuf::from("backlog"));
+        return Determination::Known(Some(PathBuf::from("backlog")));
     }
 
     // ~/.claude/plugins/cache/yukineko/backlog/<version>/bin/backlog
@@ -92,15 +139,47 @@ pub(crate) fn find_backlog_binary() -> Option<PathBuf> {
         .join("yukineko")
         .join("backlog");
 
-    let mut candidates: Vec<PathBuf> = std::fs::read_dir(&base)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path().join("bin").join("backlog"))
-        .filter(|p| p.exists())
-        .collect();
+    let dir = match std::fs::read_dir(&base) {
+        Ok(d) => d,
+        // No cache dir ⇒ backlog was never installed here. An observation.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Determination::Known(None),
+        // Anything else (permission denied, IO error) ⇒ we did not get to look.
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "could not enumerate {}: {e}",
+                base.display()
+            ))
+        }
+    };
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for entry in dir {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "could not read an entry of {}: {e}",
+                    base.display()
+                ))
+            }
+        };
+        let candidate = entry.path().join("bin").join("backlog");
+        // `exists()` folds "not there" and "cannot tell" into one `false`;
+        // `try_exists()` keeps them apart.
+        match candidate.try_exists() {
+            Ok(true) => candidates.push(candidate),
+            Ok(false) => {}
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "could not test {}: {e}",
+                    candidate.display()
+                ))
+            }
+        }
+    }
 
     candidates.sort();
-    candidates.pop()
+    Determination::Known(candidates.pop())
 }
 
 /// The repo root as a stable, *unique* project filter for `backlog list`.

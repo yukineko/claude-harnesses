@@ -22,6 +22,8 @@
 use std::path::Path;
 use std::process::Command;
 
+use harness_core::verdict::Determination;
+
 use crate::backlog::{find_backlog_binary, repo_project_path};
 
 /// True if another live session is currently driving the queue for the project
@@ -40,9 +42,20 @@ use crate::backlog::{find_backlog_binary, repo_project_path};
 /// with — and the auto-loop this guards would have nothing to double-drive.
 /// Treating it as "active" would permanently disable autoflow on machines that
 /// never had backlog, which is restriction without a hazard.
+///
+/// That exception covers only the *observed* absence. `find_backlog_binary`
+/// separately reports `Undetermined` when it could not tell whether backlog is
+/// installed (an unreadable plugin-cache directory), and that lands on the
+/// stand-down side with every other failure to observe — the cannot-determine
+/// rule above admits no carve-out it has not actually observed.
 pub fn backlog_driver_active(cwd: &Path) -> bool {
-    let Some(binary) = find_backlog_binary() else {
-        return false;
+    let binary = match find_backlog_binary() {
+        Determination::Known(Some(b)) => b,
+        // Observed: no backlog ⇒ no queue ⇒ no driver to collide with.
+        Determination::Known(None) => return false,
+        // Could not tell whether backlog exists ⇒ could not tell whether a
+        // driver is running. Stand down, exactly like the `_ => true` below.
+        Determination::Undetermined(_) => return true,
     };
     let project = repo_project_path(cwd);
     match Command::new(&binary)
@@ -97,12 +110,19 @@ fn driver_active_from_status(stdout: &str) -> bool {
 /// An empty `session_id`, an unreadable status, or no match all read as `false`
 /// — not resuming is the conservative outcome here (a false positive would
 /// inject a "keep driving" instruction into a session that is not driving).
+/// Note the direction is the OPPOSITE of `backlog_driver_active`'s for the same
+/// undetermined input, and deliberately so: there, not knowing means "someone
+/// may be driving" (stand down); here, not knowing means "we cannot show this
+/// session is driving", and the restrictive answer is to write no marker.
 pub fn this_session_holds_lock(session_id: &str, cwd: &Path) -> bool {
     if session_id.is_empty() {
         return false;
     }
-    let Some(binary) = find_backlog_binary() else {
-        return false;
+    let binary = match find_backlog_binary() {
+        Determination::Known(Some(b)) => b,
+        // Not installed, or we could not tell — either way nothing proves this
+        // session is driving, so don't resume.
+        Determination::Known(None) | Determination::Undetermined(_) => return false,
     };
     let project = repo_project_path(cwd);
     match Command::new(&binary)

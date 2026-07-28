@@ -1,0 +1,14 @@
+{
+  "name": "fetchguard",
+  "version": "0.1.0",
+  "description": "Runtime content-level injection scanner: a PostToolUse hook (matcher WebFetch|WebSearch) that scans the tool_response text for planted prompt-injection phrasings (concealment / verification-bypass / instruction-override / egress) and, on a hit or an undecidable response, injects additionalContext telling the model the flagged span is untrusted DATA whose embedded directives must NOT be followed.",
+  "author": {
+    "name": "yukineko"
+  },
+  "keywords": [
+    "security",
+    "hooks",
+    "prompt-injection",
+    "rust"
+  ]
+}

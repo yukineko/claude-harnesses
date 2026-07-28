@@ -16,14 +16,34 @@
 
 ## 不変条件
 
-- **終了コードの意味は固定**（`main.rs` doc-comment）— `0`=JSON パース成功かつスキーマ妥当 / `1`=パース成功
-  だが違反あり（→再依頼）/ `2`=JSON パース失敗、または未知スキーマ要求。`cmd_check` は schema 解決を最初に
-  行い、未知スキーマは入力を読む前に fail-fast で `2` を返す。ファイル読み取り失敗・stdin 読み取り失敗も `2`。
-- **validate は純関数**（`schema.rs`）— `validate` は副作用を持たず、short-circuit せず全違反を蓄積して返す。
-  これにより呼び出し側は完全な error 集合を得て精密な再依頼プロンプトを組める。unknown な余剰フィールドは
-  黙って許容する（`unknown_extra_fields_are_allowed`）。
-- **型不一致は以降のチェックを打ち切る** — `validate` はフィールドが必須欠落なら violation を積んで continue、
-  型不一致なら violation を積んだ後 enum/再帰チェックをスキップする（mistyped 値に更なる検査は無意味）。
+- **終了コードの意味は固定**（`main.rs` doc-comment）— `0`=JSON パース成功かつ実行された検査がすべて合格 /
+  `1`=パース成功だが違反あり（→再依頼）/ `2`=判定不能（JSON パース失敗、未知スキーマ要求、または宣言された
+  制約を渡された値に適用できなかった）。`cmd_check` は schema 解決を最初に行い、未知スキーマは入力を読む前に
+  fail-fast で `2` を返す。ファイル読み取り失敗・stdin 読み取り失敗も `2`。
+- **判定は 3 値**（`schema.rs` の `Report`）— 「検査して失敗」(`violations`) / 「検査できなかった」
+  (`undetermined`) / 「意図的に検査しなかった」(`waived`) を別々に保持する。`Report::verdict` は
+  `harness_core::verdict::Verdict` へ解決し（`Violation` > `Undetermined` > `Clean`、`Verdict::worst_of` の
+  順序）、`Undetermined` は `Violation` と同じくブロック側へ倒れる。`Report` は `validate_report` だけが
+  構築でき（フィールド private・`Default` 無し）、空の `Report` は「検査が実際に走った」記録である。
+  `cmd_check` の verdict 化は純関数 `check_verdict`（`main.rs`）が担い、`Clean`→`0` / `Violation`→`1` /
+  `Undetermined`→`2` を返す（`Verdict::exit_code` は block code を 1 つしか持てないため 3 アームを明示）。
+  違反と判定不能はどちらも reject として計上される。
+- **validate/validate_report は純関数**（`schema.rs`）— 副作用を持たず、short-circuit せず全 finding を
+  蓄積して返す。これにより呼び出し側は完全な error 集合を得て精密な再依頼プロンプトを組める。unknown な
+  余剰フィールドは許容する（`unknown_extra_fields_are_allowed`）が、`waived` に記録され CLI の
+  `not_checked[]` に現れる（「許容した」と「検査した」を下流が区別できるようにするため）。
+  `validate` は `Vec<Violation>` を返す 2 値アダプタで、`undetermined` を **制限側**（`Violation` 形状）へ
+  畳み込む（`into_violations`）。2 値しか表現できない消費者に「検査できなかった」を空集合＝合格として
+  渡さないため。
+- **宣言された制約は必ず適用する** — `enum_values` を文字列でない値に適用できない場合は violation
+  （既存）。同様に `items` サブスキーマは、宣言（`items` が非空）を起点に適用され、配列でない値に対しては
+  `undetermined` になる（旧実装は `field.ty == Ty::Array` を再帰の条件にしていたため、`Ty::Any`/`Ty::Object`
+  と `items` を組み合わせた宣言を黙って捨てていた。また「配列か」の判定が `Ty::Array => val.is_array()` と
+  `val.as_array()` の 2 箇所に分裂し、後者の `None` 分岐は前者に守られただけの no-op だった。判定は 1 箇所に
+  統合済み）。
+- **型不一致は以降のチェックを打ち切る** — `validate_report` はフィールドが必須欠落なら violation を積んで
+  continue（optional 欠落なら `waived` を積んで continue）、型不一致なら violation を積んだ後 enum/再帰
+  チェックをスキップする（mistyped 値に更なる検査は無意味）。
 - **メトリクスは fail-soft**（`metrics.rs`）— `record_reject` の書き込み IO エラーは stderr へ warning を
   出すのみでゲートの終了コードを変えない。`counts` はファイル欠落で空 map、malformed 行は黙ってスキップ
   （`parse_counts`）。パース失敗も違反も両方 reject として計上する（`cmd_check` は前者に `record_reject(name, 1)`、
@@ -43,8 +63,14 @@
 - **`check --schema <name> [--file <path>]`**（`cmd_check`）— `registry::get` で schema 解決（未知なら既知名を
   stderr へ列挙して `2`）。入力は `--file` 指定時はファイル、省略時は stdin から読む。`serde_json::from_str` で
   パース → 失敗なら `record_reject(name, 1)` して `{valid:false, error:"invalid JSON: …"}` を出し `2`。成功なら
-  `schema::validate` を実行。違反 0 件なら `{valid:true, schema, errors:[]}` を出し `0`。違反ありなら
-  `record_reject(name, error_count)` して `{valid:false, schema, errors:[{path, problem}]}` を出し `1`。
+  `schema::validate_report` を実行し `check_verdict` で verdict 化する。clean なら
+  `{valid:true, schema, errors:[], not_checked:[{path, reason}]}` を出し `0`。違反ありなら
+  `{valid:false, schema, errors:[{path, problem}], undetermined:[…], not_checked:[…]}` を出し `1`。
+  判定不能（宣言された制約を適用できなかった）なら同じ形状を出し `2`。ブロックする 2 アームはいずれも
+  `record_reject(name, violations + undetermined 件数)` を呼ぶ。
+  なお現行の 5 スキーマは `items` を宣言するフィールド（`decomposition.tasks`）が `Ty::Array` でもあるため、
+  非配列値は items 判定の手前の型チェックで弾かれる。すなわち **検証由来の `2` は登録済みスキーマ経由では
+  現状到達しない**（`validate_report`/`check_verdict` の単体テストで検証している）。
 - **`metrics [--json]`**（`cmd_metrics`）— `metrics::counts` の schema 別 reject 件数を表示。`--json` は
   `serde_json::to_string_pretty` で機械可読出力、無指定は human-readable table（reject 無しなら
   `No rejects recorded yet.`）。常に `0`。
@@ -77,7 +103,10 @@
 - **`schema`** — 外部依存の無い小さな宣言的スキーマエンジン。`Ty`（`String`/`Number`/`Bool`/`Array`/
   `Object`/`Any`。後 2 者は `#[allow(dead_code)]` で予約＝現行 registry では未使用）、`Field`
   （`name`/`ty`/`required`/`enum_values`/`items`）、`Schema`、`Violation`（`path`/`problem`, serde 可シリアライズ）、
-  純関数 `validate`（object 検査・必須・型・enum・array 要素の再帰、path prefix 付与）。
+  `Undetermined`（`path`/`problem`）、`Waived`（`path`/`reason`）、3 値の `Report`
+  （`violations`/`undetermined`/`waived` アクセサ・`verdict`・`into_violations`）、
+  純関数 `validate_report`（object 検査・必須・型・enum・array 要素の再帰、path prefix 付与）と
+  2 値アダプタ `validate`。
 - **`registry`** — 名前付きスキーマの静的レジストリ。`names`（安定順の 5 名）と `get`（未知は `None`）。
   各スキーマの `Field` slice を保持。新スキーマはここに追加する。
 - **`metrics`** — reject 観測。`record_reject`（fail-soft 追記）、`write_reject_line`、`counts`（JSONL 読取り集計）、

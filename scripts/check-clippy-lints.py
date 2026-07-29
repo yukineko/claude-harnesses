@@ -96,10 +96,43 @@ adding `[lints] workspace = true` to those four manifests, which touches
 of scope for the change that introduced this file, not a judgement that the gap
 is unimportant.
 
-A second, smaller limitation: selection is driven by paths under `crates/<dir>/`
-plus the workspace root `Cargo.toml`. A change to some other file outside both
-(for example a `build.rs` at the repository root, or a path dependency living
-elsewhere) that alters what a gate crate compiles to would not select that crate.
+A second limitation, with a DEMONSTRATED false negative
+------------------------------------------------------
+Selection is driven by paths under `crates/<dir>/` plus the workspace root
+`Cargo.toml`. A change to any other file that alters what a gate crate compiles
+to will not select that crate.
+
+This was verified concretely rather than left as a hypothetical, and the first
+wording of this paragraph was wrong about how. Its two examples do not hold in
+this repo: a repository-root `build.rs` is never invoked, because the root
+`Cargo.toml` is workspace-only and has no `[package]` section; and no path
+dependency outside `crates/` currently exists. Both were checked.
+
+The real, reproducible escape is a manifest `build` path pointing out of the
+crate directory. With `build = "../../buildscripts/foo.rs"` in an opted-in
+crate's Cargo.toml, editing ONLY `buildscripts/foo.rs` to add a denied
+`.unwrap()` yields:
+
+    git diff --name-only HEAD --   ->  buildscripts/foo.rs
+    this scanner                   ->  "nothing to check", exit 0
+    cargo clippy -p <pkg> --all-targets
+        error: used `unwrap()` on an `Option` value
+          --> crates/<c>/../../buildscripts/foo.rs
+        = note: requested on the command line with `-D clippy::unwrap-used`
+
+That is a genuine pass-with-violation: the build script inherits the crate's
+deny table, real clippy flags it, and this scanner reports clean. No crate in
+this repo currently uses an out-of-directory `build` path, so it is latent
+rather than live — but it is a false negative in the gate, not a design choice,
+and it is written down here so the gate is not trusted beyond what it checks.
+
+Two currently-real instances of the same shape that CANNOT smuggle a violation,
+recorded so the boundary is precise: the root `Cargo.lock` (changes on any
+dependency bump), and `crates/specguard/src/forge/prompt.rs:10`, which does
+`include_str!("../../templates/normalize-prompt.md")` — a real repo-root file
+that changes what an opted-in crate compiles. Neither can introduce a denied
+expression, because a lockfile bump adds no source to the crate and
+`include_str!` embeds inert text rather than parsed Rust.
 
 Exit codes
 ----------
@@ -119,9 +152,26 @@ from dataclasses import dataclass
 
 # Test seam: an explicit cargo path, used by
 # scripts/tests/precommit-clippy-gate.sh to exercise the not-executable and
-# exit-status branches without a real toolchain. It is not a bypass — PATH is
-# already an equivalent seam for any caller who can set environment variables,
-# and neither can turn a non-zero clippy into a pass.
+# exit-status branches without a real toolchain.
+#
+# BE PRECISE ABOUT WHAT THIS IS. It IS a bypass: pointing it at anything that
+# exits 0 (e.g. /usr/bin/true) makes this gate report clean on a crate that
+# genuinely contains a denied .unwrap(). That was demonstrated, not reasoned
+# about — an independent verifier reproduced exactly that, exit 0 on a real
+# violation.
+#
+# What is true is narrower, and is the only claim made here: it grants no
+# capability beyond what PATH control already grants. The same verifier
+# reproduced the identical result with no env var at all, by shadowing `cargo`
+# on PATH. Any local pre-commit hook has this property, because the committer
+# controls their own environment; it is the same class as `git commit
+# --no-verify`, which .githooks/pre-commit documents as a deliberate hole.
+#
+# What this seam CANNOT do is convert a real clippy run's non-zero exit into a
+# pass — the verdict is `proc.returncode` and nothing else (see run_clippy).
+# The earlier wording here ("it is not a bypass") overstated that narrow fact
+# into a categorical safety claim, which is exactly the prose-drifts-from-code
+# failure CLAUDE.md section 4 forbids.
 CARGO_ENV = "CHECK_CLIPPY_LINTS_CARGO"
 
 CRATES_PREFIX = "crates/"

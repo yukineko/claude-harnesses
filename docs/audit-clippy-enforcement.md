@@ -182,19 +182,27 @@ mkdtemp した使い捨て repo、stub scanner、必要なバイナリだけを 
 
 測定点 `6302d166`（クリーンな main）で `python3 scripts/test_precommit_hook.py` を実行すると
 **`FAILED (failures=2)`** になる。原因は、このテストが pre-commit の scanner 一覧を
-**厳密な inventory として assert** しており、その一覧が既に 3 本ぶん古いこと:
+**厳密な inventory として assert** しており、その一覧が既に古いこと。
 
-```
--  'check-hardcoded-secret.py',
--  'check-raw-io-ratchet.py',
--  'check-worktree-isolation.py']
-```
+**実測（数え直した値）**: `scripts/test_precommit_hook.py:53-60` の `EXPECTED_SCANNERS` は
+**6 本**、`.githooks/pre-commit` の `run ` 行は **10 本**。したがって乖離は **4 本**である:
 
-つまり **scanner を 3 本追加したときに誰もこのテストを更新しなかった**。
+- `check-claudemd-claims.py`
+- `check-hardcoded-secret.py`
+- `check-raw-io-ratchet.py`
+- `check-worktree-isolation.py`
+
+> **訂正の記録**: 本節の初版は「3 本」と書き、続けて「新しい scanner を足すと 4 本になる」と
+> 予測していた。どちらも誤り。テスト失敗出力の diff 断片を目視で数えて `check-claudemd-claims.py`
+> を落としたのが原因で、**乖離は追加前から既に 4 本**である。独立検証者が
+> `EXPECTED_SCANNERS` と `run ` 行を直接数えて指摘した。**目視で数えた値を測定値として書かない**
+> というのが、この監査自身から出た教訓である（CLAUDE.md 第2節: 判断は予測であって事実ではない）。
+
+つまり **scanner を 4 本追加する間、誰もこのテストを更新しなかった**。
 そして**どこからも実行されていない**ため、誰も気づかなかった。これは `c3a98510`
 （フックテストが何にも配線されていない）が指す欠陥の**実害が観測された初めての例**である。
 
-**配線タスクへの制約**: 新しい scanner を 1 行足すと、この inventory の乖離は 4 本になる。
+**配線タスクへの制約**: 新しい scanner を 1 行足すと乖離は **5 本**になる。
 配線と同じコミットで `test_precommit_hook.py` の期待一覧を実態に合わせて更新すること。
 これは「テストを通すために緩める」ではない — 一覧が実態を追跡することがこのテストの目的であり、
 追跡させることが修正である。ただし**既に赤かったという事実を隠さない**こと（測定値を上に残す理由）。

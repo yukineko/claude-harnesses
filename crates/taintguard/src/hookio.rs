@@ -16,35 +16,25 @@ pub fn ask_json(reason: &str) -> String {
     decision_json("ask", reason)
 }
 
-/// Serialize a PreToolUse output that carries **only** `additionalContext`: an
-/// advisory warning injected into the turn's context, expressing no
-/// `permissionDecision` at all.
+/// Serialize the observe-only PreToolUse output: an `additionalContext`-only
+/// `hookSpecificOutput` body carrying **no `permissionDecision` at all**, plus a
+/// **top-level** `systemMessage` sibling of `hookSpecificOutput`.
 ///
-/// Used by observe-only mode ([`crate::observe`]). Emitting no
-/// `permissionDecision` is the point: the normal permission flow — the user's
-/// own rules and every other hook's verdict — is left completely untouched,
-/// and taintguard contributes information instead of a decision.
+/// Emitting no `permissionDecision` is the point: the normal permission flow —
+/// the user's own rules and every other hook's verdict — is left completely
+/// untouched, and taintguard contributes information instead of a decision.
 ///
 /// This is deliberately NOT `permissionDecision: "allow"`. An explicit `allow`
 /// is a positive verdict that would *override* the remaining permission checks
 /// and other gates' answers, so a mode whose entire purpose is to stop
 /// enforcing would end up enforcing something far broader than what it
-/// suppressed. `additionalContext` alone cannot do that.
-pub fn context_json(context: &str) -> String {
-    serde_json::json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "additionalContext": context,
-        }
-    })
-    .to_string()
-}
-
-/// Serialize the observe-only PreToolUse output: the same
-/// `additionalContext`-only body as [`context_json`] (still **no**
-/// `permissionDecision` — see that function's docs for why an explicit `allow`
-/// is not an option), plus a **top-level** `systemMessage` sibling of
-/// `hookSpecificOutput`.
+/// suppressed. An `additionalContext`-plus-`systemMessage` body cannot do that.
+///
+/// (A `context_json` helper emitting the same body WITHOUT `systemMessage` used
+/// to live here. Once `emit_gate` switched to this function it had zero
+/// production callers and only a test still exercised it — the same
+/// all-call-sites-are-`#[cfg(test)]` defect this release fixes elsewhere — so it
+/// was removed rather than left to drift out of sync with what is emitted.)
 ///
 /// Why two fields for one event. Per the Claude Code hooks reference
 /// (<https://code.claude.com/docs/en/hooks.md>), `additionalContext` is

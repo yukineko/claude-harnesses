@@ -47,9 +47,13 @@
 //! **unequal reliability** (see [`crate::hookio::observe_json`], which is what
 //! observe mode emits):
 //!
-//! * `additionalContext` — **model-facing only**. Per the hooks reference it is
-//!   wrapped in a system reminder and injected into Claude's context; it does
-//!   not appear as a chat message in the interface. It does not reach a human.
+//! * `additionalContext` — **model-facing**. Per the hooks reference it is
+//!   wrapped in a system reminder and injected into Claude's context, and
+//!   "doesn't appear as a chat message in the interface". That is the docs'
+//!   actual wording and it is all that is claimed here: it is not a channel a
+//!   human is shown, so it cannot be relied on to inform one. (Not the stronger
+//!   claim that it is unreachable by any means — a transcript inspector is not
+//!   the operator-facing readout this mode needs either way.)
 //! * a top-level `systemMessage` — **best-effort**. Documented only as a
 //!   "Warning message shown to the user", with no example pairing it with a
 //!   PreToolUse response that omits `permissionDecision`, so its rendering on

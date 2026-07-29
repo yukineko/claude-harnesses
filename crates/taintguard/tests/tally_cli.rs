@@ -194,17 +194,20 @@ fn unreadable_ledger_exits_non_zero_and_prints_no_count() {
     let ledger = f.plant_ledger(&[valid_line("Bash", "s1")]);
 
     if !make_unreadable(&ledger) {
-        // Documented skip, NOT a silent pass: the fault could not be injected
-        // (running privileged?), so this test observed nothing and must not be
-        // read as evidence that the unreadable path fails closed.
+        // CANNOT-DETERMINE RESOLVES TO THE RESTRICTED SIDE (CLAUDE.md §3). The
+        // fault could not be injected (privileged process — likely root), so
+        // this test observed NOTHING about the unreadable path. This used to
+        // `return`, which cargo reports as a PASS and whose stderr note cargo
+        // HIDES on green — rendering "I could not verify" indistinguishable from
+        // "I verified it", which is the exact collapse this file exists to pin.
+        // Failing is the honest answer.
         make_readable(&ledger);
-        eprintln!(
-            "SKIPPED unreadable_ledger_exits_non_zero_and_prints_no_count: chmod 000 on {} did \
-             NOT make it unreadable (privileged process — likely root). This test asserted \
-             NOTHING; the unreadable-ledger path is UNVERIFIED in this environment.",
+        panic!(
+            "CANNOT VERIFY unreadable_ledger_exits_non_zero_and_prints_no_count: chmod 000 on {} \
+             did NOT make it unreadable (privileged process — likely root). This test asserted \
+             NOTHING, so it FAILS rather than passing vacuously. Re-run unprivileged.",
             ledger.display()
         );
-        return;
     }
 
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -455,14 +458,15 @@ fn json_failure_reports_an_error_object_with_no_suppressed_key() {
     let ledger = f.plant_ledger(&[valid_line("Bash", "s1")]);
 
     if !make_unreadable(&ledger) {
+        // Cannot-determine resolves to the restricted side (CLAUDE.md §3) — see
+        // the longer note in `unreadable_ledger_exits_non_zero_and_prints_no_count`.
         make_readable(&ledger);
-        eprintln!(
-            "SKIPPED json_failure_reports_an_error_object_with_no_suppressed_key: chmod 000 on \
-             {} did NOT make it unreadable (privileged process — likely root). This test \
-             asserted NOTHING; the --json failure shape is UNVERIFIED in this environment.",
+        panic!(
+            "CANNOT VERIFY json_failure_reports_an_error_object_with_no_suppressed_key: chmod 000 \
+             on {} did NOT make it unreadable (privileged process — likely root). This test \
+             asserted NOTHING, so it FAILS rather than passing vacuously. Re-run unprivileged.",
             ledger.display()
         );
-        return;
     }
 
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

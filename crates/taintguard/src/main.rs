@@ -380,9 +380,21 @@ fn run_tally(json: bool) {
                 println!("  suppressed: {ok}");
                 println!("  corrupt: {corrupt}");
                 if ok == 0 && corrupt == 0 {
+                    // Deliberately does NOT say "the ledger was read
+                    // successfully": this branch is also reached when the file
+                    // is ABSENT, and `harness_core::boundary::read_to_string`
+                    // maps every `NotFound` to `Known(None)` — including the
+                    // `ENOENT` of a DANGLING SYMLINK at the ledger path, where
+                    // nothing was opened at all. An earlier wording claimed a
+                    // successful read and was false for that input. What this
+                    // line can honestly assert is the part that matters to the
+                    // reader: no read FAILED, so this zero is a real zero and
+                    // not a swallowed error — the failure path never prints a
+                    // count and always exits non-zero.
                     println!(
-                        "  nothing observed yet (the ledger was read successfully and holds no \
-                         records — a real zero, not a failed read)"
+                        "  nothing observed yet (no records, and no read error — a real zero. \
+                         The ledger is absent or empty; a read that FAILED would have exited \
+                         non-zero and printed no count at all.)"
                     );
                 }
             }
@@ -631,6 +643,17 @@ mod tests {
     /// and — critically — **no `permissionDecision` at all**. An explicit
     /// `allow` here would override other gates and the user's own permission
     /// rules, so its absence is part of the contract, not an omission.
+    ///
+    /// This serializes through [`hookio::observe_json`] — the function
+    /// `emit_gate` actually calls. It used to call `hookio::context_json`, which
+    /// after the `systemMessage` change had ZERO production callers, so this
+    /// test pinned a shape nothing emitted while its docstring claimed to pin
+    /// observe-only's real output. That is the same "all call sites are
+    /// `#[cfg(test)]`" defect this release fixes for `observe::tally`, so it is
+    /// fixed here too rather than left as an irony. The end-to-end shape
+    /// (including the top-level `systemMessage`) is pinned against the real
+    /// binary by `observe_only_suppression_is_visible_on_stdout_with_a_top_level_system_message`
+    /// in `tests/provenance_gate.rs`.
     #[test]
     fn observe_only_warns_without_any_permission_decision() {
         let (_guard, _dir, cwd) = temp_env("observe-tainted");
@@ -650,9 +673,19 @@ mod tests {
             other => panic!("expected Observe, got {other:?}"),
         };
 
-        let line = hookio::context_json(&context);
+        let line = hookio::observe_json(&context, &context);
         let v: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        // The top-level `systemMessage` is a sibling of `hookSpecificOutput`,
+        // never nested inside it (best-effort channel; see `observe_json`).
+        assert!(
+            v["systemMessage"].is_string(),
+            "observe-only must carry a TOP-LEVEL systemMessage; got {v}"
+        );
+        assert!(
+            v["hookSpecificOutput"]["systemMessage"].is_null(),
+            "systemMessage must NOT be nested inside hookSpecificOutput; got {v}"
+        );
         assert!(
             v["hookSpecificOutput"]["permissionDecision"].is_null(),
             "observe-only must emit NO permissionDecision (an explicit allow would \

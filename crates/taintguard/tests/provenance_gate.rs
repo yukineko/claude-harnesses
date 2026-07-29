@@ -848,7 +848,7 @@ fn observe_only_env() -> Vec<(&'static str, &'static str)> {
 ///     alone is only seen by the model, never by the human who set the posture.
 ///
 /// It must carry NO `permissionDecision` (an explicit `allow` would override
-/// other gates and the user's own rules — see `hookio::context_json`'s docs).
+/// other gates and the user's own rules — see `hookio::observe_json`'s docs).
 ///
 /// HOW THIS FAILS against a wrong implementation:
 ///   * `println!` deleted / made conditional → stdout empty → `hook_json` panics.
@@ -1357,13 +1357,16 @@ fn ledger_append_failure_is_reported_on_stderr_and_still_shows_the_suppression()
     let ledger = ledger_path(&f);
     let planted = std::fs::create_dir_all(&ledger).is_ok() && ledger.is_dir();
     if !planted {
-        eprintln!(
-            "!!! SKIPPED (NOT A PASS): could not plant the append fault — a directory at {} \
-             could not be created, so this run proves NOTHING about the append-failure \
-             diagnostic. Investigate rather than trusting this test's green.",
+        // Cannot-determine resolves to the restricted side (CLAUDE.md §3). The
+        // previous shape printed this note and `return`ed, which cargo reports
+        // as a PASS while hiding the note — "proves NOTHING" was being rendered
+        // as green. A test that could not inject its fault must fail.
+        panic!(
+            "CANNOT VERIFY: could not plant the append fault — a directory at {} could not be \
+             created, so this run proves NOTHING about the append-failure diagnostic. Failing \
+             rather than reporting a vacuous green.",
             ledger.display()
         );
-        return;
     }
 
     let (code, _, _) = run(

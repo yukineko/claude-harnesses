@@ -14,12 +14,17 @@
 //! for the rest of that turn. A clean `Stop` (the turn ends without further
 //! taint) restores the session to normal.
 //!
-//! Three hooks, three subcommands:
+//! Three hooks, plus a fourth subcommand that is NOT a hook:
 //!   * `mark`  (PostToolUse, matcher `WebFetch|WebSearch|Read`) — records the
 //!     taint.
 //!   * `gate`  (PreToolUse, matcher `Bash|Write|Edit|MultiEdit|NotebookEdit`) —
 //!     consumes it.
 //!   * `clear` (Stop) — resets it.
+//!   * `tally` — operator readout: prints the observe-only ledger totals for the
+//!     project in the process cwd. Reads no stdin, is deliberately NOT wrapped
+//!     in `harness_core::hook::run_hook` (whose terminal `exit(0)` would make
+//!     "could not read the tally" and "the tally is zero" share an exit
+//!     status), and exits non-zero when the tally could not be read.
 //!
 //! # Operating postures
 //!

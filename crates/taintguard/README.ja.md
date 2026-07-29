@@ -78,10 +78,14 @@ least-privilege を機械的に強制する。エージェントが騙されて�
   `systemMessage`**。`observe_json`）、同時に append-only の JSONL 台帳に1行追記する。
   ただし**この 3 つは信頼度が違う**ので、混ぜて読んではならない:
 
-  - **`additionalContext` は model 向けチャンネルであり、ユーザーには表示されない。**
+  - **`additionalContext` は model 向けチャンネルであり、ユーザーに提示される経路ではない。**
     Claude Code はこの文字列を system reminder で包んで hook 発火位置の会話に挿入し、
     Claude は次のモデルリクエストでそれを読むが、**インターフェース上のチャット
     メッセージとしては現れない**（出典: <https://code.claude.com/docs/en/hooks.md>）。
+    docs の文言はここまでなので、主張もここまでに留める — 「人間が絶対に到達できない」
+    とまでは言わない（transcript を掘れば見えるかもしれない）。言えるのは
+    **人間に提示されるチャンネルではないので、これで人間に知らせたことにはならない**
+    ということである。
   - **`systemMessage` はユーザーに出ることを期待した best-effort** にすぎない。
     docs でこのフィールドは "Warning message shown to the user" と説明されているが、
     **`permissionDecision` を省いた non-blocking な応答でこれが描画されるかは
@@ -151,6 +155,13 @@ affordance であって、内部エラーを飲み込む許可ではない。
 hook 用の `harness_core::hook::run_hook` ラッパは**意図的に使っていない** — あれは
 最後に `exit(0)` するので、それで包むと「読めなかった」と「0 件だった」が同じ終了
 ステータスになってしまう（`run_tally` の doc comment 参照）。
+
+プラグインとして導入している場合、PATH に `taintguard` は入らないので同梱ランチャを
+直接叩く（以下の例では `taintguard` と略記する）:
+
+```
+$ "${CLAUDE_PLUGIN_ROOT}/bin/taintguard" tally
+```
 
 ```
 $ taintguard tally

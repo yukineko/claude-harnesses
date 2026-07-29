@@ -13,13 +13,14 @@ least-privilege を機械的に強制する。エージェントが騙されて�
 外部 content から取り込んでいても、それが即座に `Bash`/`Write`/`Edit` 等の
 実行に直結しないようにする。
 
-## 3 つの hook
+## 3 つの hook と 1 つの CLI readout
 
-| hook | event | matcher | 役割 |
+| サブコマンド | event | matcher | 役割 |
 |---|---|---|---|
 | `taintguard mark`  | PostToolUse | `WebFetch\|WebSearch\|Read` | 出所を判定し taint marker を記録 |
 | `taintguard gate`  | PreToolUse  | `Bash\|Write\|Edit\|MultiEdit\|NotebookEdit` | tainted なら ask/deny |
 | `taintguard clear` | Stop        | (全体)                        | クリーンなターン終了で marker を解除 |
+| `taintguard tally` | **hook ではない**（CLI readout） | — | observe-only 台帳の件数を人間向けに出力（`--json` で機械可読）。stdin を読まず、読み取り失敗時は **exit 非0**。詳細は後述の「`tally` で読む」 |
 
 ### mark（PostToolUse）
 
@@ -48,8 +49,10 @@ least-privilege を機械的に強制する。エージェントが騙されて�
   「判定できなかった」を「問題なし（silent allow）」に潰さない。
 - tainted でなければ何も出力しない（silent allow）。
 - 以上は既定の **enforce** posture の挙動。`TAINTGUARD_OBSERVE_ONLY=1` の
-  **observe-only** posture では `permissionDecision` を出さず警告のみになる
-  （＝強制されない）。詳細と注意点は後述の「observe-only モード」を参照。
+  **observe-only** posture では `permissionDecision` をどの値でも出さず、警告テキストと
+  台帳への追記だけになる（＝強制されない）。**この警告が画面に出ることは保証されていない**
+  — 人間が確実に読める経路は `taintguard tally` だけである。詳細と注意点は後述の
+  「observe-only モード」を参照。
 
 ### clear（Stop）
 
@@ -69,14 +72,45 @@ least-privilege を機械的に強制する。エージェントが騙されて�
   したがって tainted なターンでも write-class ツールは通常どおり実行される。
   **保護は効いていない。**
 - **抑止しないもの**: 検査そのもの、および報告。tainted を検出したら
-  `hookSpecificOutput.additionalContext` で「このターンは tainted」「どの source が
-  汚染したか」「observe-only なので強制を抑止した」ことを明示し、同時に
-  append-only の JSONL 台帳に1行追記する。**沈黙はしない** — 黙って通るゲートは
-  「何も見つけなかったゲート」と区別できず、それ自体が fail-open になるため。
-- **`permissionDecision: "allow"` は出さない**（意図的）。明示的な `allow` は
-  他のゲートやユーザー自身の権限規則を**上書きする**正の判定なので、強制を
-  やめるためのモードが結果としてより広い範囲を強制してしまう。
-  `additionalContext` のみならその副作用が無い。
+  「このターンは tainted」「どの source が汚染したか」「observe-only なので強制を
+  抑止した」ことを述べる警告テキストを **2 つのチャンネル**に出し
+  （`hookSpecificOutput.additionalContext` と、その兄弟にあたる **top-level の
+  `systemMessage`**。`observe_json`）、同時に append-only の JSONL 台帳に1行追記する。
+  ただし**この 3 つは信頼度が違う**ので、混ぜて読んではならない:
+
+  - **`additionalContext` は model 向けチャンネルであり、ユーザーには表示されない。**
+    Claude Code はこの文字列を system reminder で包んで hook 発火位置の会話に挿入し、
+    Claude は次のモデルリクエストでそれを読むが、**インターフェース上のチャット
+    メッセージとしては現れない**（出典: <https://code.claude.com/docs/en/hooks.md>）。
+  - **`systemMessage` はユーザーに出ることを期待した best-effort** にすぎない。
+    docs でこのフィールドは "Warning message shown to the user" と説明されているが、
+    **`permissionDecision` を省いた non-blocking な応答でこれが描画されるかは
+    ドキュメントに記載がない**（docs の PreToolUse の例は `permissionDecision: "deny"`
+    を伴うものだけで、決定を持たない応答と `systemMessage` を組み合わせた例が存在しない）。
+    未検証であって「出ない」と確認されたわけでもない。**どちらとも言えないので、
+    これに依存してはならない。**
+  - **人間が確実に読める唯一の経路は `taintguard tally`** と、その裏にある append-only
+    台帳である。抑止件数を数える／観測結果を報告する際は、必ずこちらを根拠にする。
+
+  **以前この節は「沈黙はしない」と主張していたが、それは誤りだった。** 当時 gate が
+  出していたのは `additionalContext` だけで、上記のとおりそれは model にしか届かない。
+  つまり**人間の読み手にとって、observe-only モードは「何も見つけなかったゲート」と
+  区別できていなかった** — 沈黙していないのはモデルに対してだけで、まさにこの節が
+  fail-open だと呼んでいた状態そのものだった。`systemMessage` の追加と `tally` は
+  その誤りへの是正であり、うち**保証があるのは `tally` の側だけ**である。
+- **`permissionDecision` はどの値でも出さない。とくに `"allow"` は出さない**（意図的）。
+  明示的な `allow` は他のゲートやユーザー自身の権限規則を**上書きする**正の判定なので、
+  強制をやめるためのモードが結果としてより広い範囲を強制してしまう。この理由は今も
+  そのまま有効である。
+  ただし省略の位置づけは正直に述べる: これは**構成上（by construction）安全側**である
+  — 何も主張していないので正の判定にはなり得ない — というだけであり、
+  **ドキュメントがこの形状の挙動を保証しているわけではない**。docs の
+  「exit code 0 with no output means the hook has no decision to report」という記述は
+  **出力が無い場合**に限定されており、observe-only は出力を出す。JSON body があるのに
+  `permissionDecision` を欠く場合どう扱われるかは docs に記載がない。`defer` も
+  許容値として列挙されているだけで説明の散文が一切無い（既知のドキュメント欠落。
+  GitHub issue #41791）。したがって「省略＝`defer` と同じ」と**ドキュメントに書いてある**
+  という主張はしない。
 
 ### opt-in は fail-closed
 
@@ -109,6 +143,49 @@ affordance であって、内部エラーを飲み込む許可ではない。
 作らない）。この失敗は**権限の fail-open にはならない** — 台帳は「強制するか」の
 判断に一切読まれず、判断は `state::check`（独自の書き込み可能性プローブつき）
 だけが行うため。失敗すると計測が過少計上されるだけで、その事実は stderr に出る。
+
+#### `tally` で読む（人間が確実に読める唯一の経路）
+
+`taintguard tally` は **hook ではなく operator 向けの CLI readout** である。stdin を
+読まず、**プロセスの現在ディレクトリ**から project を決めて、その project の台帳を数える。
+hook 用の `harness_core::hook::run_hook` ラッパは**意図的に使っていない** — あれは
+最後に `exit(0)` するので、それで包むと「読めなかった」と「0 件だった」が同じ終了
+ステータスになってしまう（`run_tally` の doc comment 参照）。
+
+```
+$ taintguard tally
+[taintguard] observe-only ledger: /home/…/.taintguard/state/<project_key>/observe-only.jsonl
+  suppressed: 3
+  corrupt: 0
+
+$ taintguard tally --json
+{"corrupt":0,"ledger":"/home/…/observe-only.jsonl","suppressed":3}
+```
+
+各フィールドの意味:
+
+| フィールド | 意味 |
+|---|---|
+| `ledger` | 数えた台帳ファイルの実パス（どの project を見たかを取り違えないため） |
+| `suppressed` | **パースできた**レコード数 ＝ 抑止した強制の件数 |
+| `corrupt` | **パースできなかった**行数。`suppressed` には**足されない**（壊れた行は摩擦ではなく store の健全性問題なので、合算すると両方を誤読する） |
+
+**読み取り失敗は exit 非0 であり、0 件とは区別される**（CLAUDE.md §3）:
+
+- **本物の 0 件**: 台帳が存在しない／空 → exit **0**。テキスト出力では
+  `suppressed: 0` / `corrupt: 0` に加えて **`nothing observed yet`** の行が出る。
+  この行が出るのが「読めて、かつ 0 件だった」という本物の 0 の印である。
+- **読み取り失敗**: 台帳が存在するのに読めない、あるいはプロセスの cwd が解決できない
+  （どの project を数えるべきか不明）→ **exit 1**。メッセージは **stderr** に出て
+  `NOT a tally of zero`（件数は UNKNOWN）と明言し、**件数は一切出力しない**
+  （stdout には 0 すら出さない）。`--json` の失敗時は stderr に `{"error": …}` のみで、
+  `suppressed` キーは**存在しない** — 成功時の JSON は `ledger` / `suppressed` /
+  `corrupt` の 3 キーちょうどで、件数は数値として出る（文字列化すると
+  `jq '.suppressed > 0'` が黙って誤判定する）。
+
+したがって `tally` の結果を計測値として記録する前に、**必ず終了ステータスを見る**。
+非0 のときは「0 件だった」ではなく「数えられなかった」であり、その run は観測として
+使えない。
 
 ## 状態の保存先
 

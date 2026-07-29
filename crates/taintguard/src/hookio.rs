@@ -40,6 +40,40 @@ pub fn context_json(context: &str) -> String {
     .to_string()
 }
 
+/// Serialize the observe-only PreToolUse output: the same
+/// `additionalContext`-only body as [`context_json`] (still **no**
+/// `permissionDecision` — see that function's docs for why an explicit `allow`
+/// is not an option), plus a **top-level** `systemMessage` sibling of
+/// `hookSpecificOutput`.
+///
+/// Why two fields for one event. Per the Claude Code hooks reference
+/// (<https://code.claude.com/docs/en/hooks.md>), `additionalContext` is
+/// "injected into Claude's context" as a system reminder and "doesn't appear as
+/// a chat message in the interface" — so it is a model-facing channel, not a
+/// human-facing one. `systemMessage` is documented there only as a "Warning
+/// message shown to the user", which is the closest thing this hook protocol
+/// offers to a user-facing channel on a PreToolUse response.
+///
+/// **`systemMessage` here is best-effort only, and nothing may depend on it.**
+/// The docs carry no example pairing `systemMessage` with a PreToolUse response
+/// that omits `permissionDecision`, so whether it renders on a non-blocking
+/// response like this one is **undocumented** — unverified either way, not
+/// verified-absent. The guaranteed human readout of suppressed enforcements is
+/// therefore elsewhere and is load-bearing: the durable append-only ledger
+/// ([`crate::observe::append`]) and the `taintguard tally` subcommand that reads
+/// it. This field is an extra chance at immediacy on top of that, never a
+/// substitute for it.
+pub fn observe_json(context: &str, system_message: &str) -> String {
+    serde_json::json!({
+        "systemMessage": system_message,
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": context,
+        }
+    })
+    .to_string()
+}
+
 fn decision_json(decision: &str, reason: &str) -> String {
     serde_json::json!({
         "hookSpecificOutput": {

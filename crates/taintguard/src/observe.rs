@@ -43,11 +43,23 @@
 //! An observe-only gate that simply stayed quiet would be
 //! indistinguishable from a gate that found nothing — the same defect as the
 //! statusline whose blank output read as "plenty of headroom" (commit
-//! `3b1eb24`). So a suppressed enforcement still produces **two** visible
-//! artifacts: a human/model-visible `additionalContext` warning (see
-//! [`crate::hookio::context_json`]) and a durable ledger line
-//! ([`append`]). Observe-only suppresses the *enforcement*, never the
-//! *reporting*.
+//! `3b1eb24`). So a suppressed enforcement still reports, in three places of
+//! **unequal reliability** (see [`crate::hookio::observe_json`], which is what
+//! observe mode emits):
+//!
+//! * `additionalContext` — **model-facing only**. Per the hooks reference it is
+//!   wrapped in a system reminder and injected into Claude's context; it does
+//!   not appear as a chat message in the interface. It does not reach a human.
+//! * a top-level `systemMessage` — **best-effort**. Documented only as a
+//!   "Warning message shown to the user", with no example pairing it with a
+//!   PreToolUse response that omits `permissionDecision`, so its rendering on
+//!   this non-blocking shape is undocumented. Unverified, not verified-absent —
+//!   either way nothing here may depend on it.
+//! * the durable append-only ledger ([`append`]) read back by
+//!   `taintguard tally` — **the guaranteed human readout, and therefore the
+//!   load-bearing one**. Counts of suppressed enforcements come from here.
+//!
+//! Observe-only suppresses the *enforcement*, never the *reporting*.
 //!
 //! # Opt-in fails closed
 //!
@@ -259,12 +271,19 @@ pub fn tally(cwd: &Path) -> Result<(usize, usize), String> {
     Ok((ok, bad))
 }
 
-/// The human/model-facing warning text for a suppressed enforcement.
+/// The warning text for a suppressed enforcement.
 ///
 /// States all three things the operator needs: that the turn IS tainted, which
 /// sources tainted it, and that enforcement was suppressed *because
 /// observe-only is active* (so the absence of an `ask`/`deny` is not mistaken
 /// for a clean turn).
+///
+/// Where this text actually lands is NOT symmetrical, so this doc no longer
+/// calls it "human/model-facing": it is carried both by the model-only
+/// `additionalContext` and by the best-effort, undocumented-on-a-non-blocking-
+/// response top-level `systemMessage` (see [`crate::hookio::observe_json`]).
+/// Neither is a guaranteed human channel. The guaranteed one is the ledger read
+/// back by `taintguard tally`; see the module docs.
 pub fn warning(sources_desc: &str, tool: &str) -> String {
     format!(
         "[taintguard] OBSERVE-ONLY (measurement mode, {OBSERVE_ONLY_ENV}={OBSERVE_ONLY_OPT_IN}): \
@@ -330,16 +349,79 @@ mod tests {
         }
     }
 
-    /// `Posture` must not be obtainable permissively for free. This is a
-    /// compile-time property (no `Default`, no `From<bool>`), asserted here as a
-    /// documented intent: if someone adds `impl Default for Posture` returning
-    /// `ObserveOnly`, the module docs and this test's rationale are the record
-    /// of why that is forbidden.
+    /// `Posture` must not be obtainable permissively for free. Two separate
+    /// claims, both asserted here — the second one used to be *documented
+    /// intent only*, which is why it is spelled out:
+    ///
+    /// 1. `resolve`'s catch-all arm yields [`Posture::Enforce`].
+    /// 2. `Posture` implements neither `Default` nor `From<bool>`, so a
+    ///    permissive posture cannot appear via `Default::default()`, `.into()`,
+    ///    or `?`-elision — it has to be written out by [`resolve`] after it has
+    ///    seen the exact opt-in value (module docs, "Opt-in fails closed").
+    ///
+    /// Claim 2 is a *negative* trait property, which is not expressible as a
+    /// bound, so it is probed by inherent-method shadowing (see the comment in
+    /// the body). VERIFIED by fault injection: adding
+    /// `impl Default for Posture { fn default() -> Self { Posture::ObserveOnly } }`
+    /// turns this test RED (`Posture` must not implement `Default`); the
+    /// previous version of this test stayed green under that same injection
+    /// because its body only checked claim 1.
     #[test]
     fn enforce_is_the_catch_all_not_a_default() {
-        // `resolve` is the sole constructor path used by production code, and
-        // its catch-all arm is Enforce.
+        // Claim 1 — `resolve` is the sole constructor path used by production
+        // code, and its catch-all arm is Enforce.
         assert_eq!(resolve(None), Posture::Enforce);
+
+        // Claim 2 — "`Posture` does NOT implement `Default`" cannot be written
+        // as a where-clause, so it is observed instead: an *inherent*
+        // associated fn is only a resolution candidate when its own
+        // `where` clause holds, and it takes priority over a trait's default
+        // body. So `Probe::<T>::has_default()` answers `true` exactly when
+        // `T: Default` and falls back to `false` otherwise.
+        struct Probe<T>(std::marker::PhantomData<T>);
+        impl<T: Default> Probe<T> {
+            fn has_default() -> bool {
+                true
+            }
+        }
+        impl<T: From<bool>> Probe<T> {
+            fn has_from_bool() -> bool {
+                true
+            }
+        }
+        trait NoPermissiveCtor {
+            fn has_default() -> bool {
+                false
+            }
+            fn has_from_bool() -> bool {
+                false
+            }
+        }
+        impl<T> NoPermissiveCtor for Probe<T> {}
+
+        // Positive control FIRST: a probe that always answered `false` would
+        // make the two assertions below vacuous. `u8` has both impls.
+        assert!(
+            Probe::<u8>::has_default(),
+            "the probe itself is broken: it must see `u8: Default`"
+        );
+        assert!(
+            Probe::<u8>::has_from_bool(),
+            "the probe itself is broken: it must see `u8: From<bool>`"
+        );
+
+        assert!(
+            !Probe::<Posture>::has_default(),
+            "`Posture` must NOT implement `Default`: a permissive posture would \
+             become reachable via `Default::default()` / `?`-elision without \
+             anyone having read the opt-in env value"
+        );
+        assert!(
+            !Probe::<Posture>::has_from_bool(),
+            "`Posture` must NOT implement `From<bool>`: a bool is exactly the \
+             two-valued shape that lets `ObserveOnly` be produced by an \
+             `.into()` far from the opt-in check"
+        );
     }
 
     fn env(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
@@ -397,8 +479,15 @@ mod tests {
     }
 
     /// The ledger is project-scoped, not session-scoped: two sessions' events
-    /// land in ONE file so a project-wide fire-rate can be totalled (and so the
-    /// Stop hook's session `clear` cannot wipe the measurement).
+    /// land in ONE file so a project-wide fire-rate can be totalled.
+    ///
+    /// Scope is ALL this test checks. It does **not** call [`crate::state::clear`],
+    /// so it says nothing about the related claim that the Stop hook cannot wipe
+    /// the measurement — an earlier version of this docstring asserted that
+    /// parenthetically and was wrong to (CLAUDE.md §4). That claim is pinned
+    /// end-to-end, through the real binary's `clear` subcommand, by
+    /// `stop_hook_clear_cannot_wipe_the_project_scoped_ledger` in
+    /// `tests/provenance_gate.rs`.
     #[test]
     fn ledger_is_project_scoped_across_sessions() {
         let _lock = crate::state::env_lock_for_test();

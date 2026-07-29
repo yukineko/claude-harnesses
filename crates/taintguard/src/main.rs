@@ -5,8 +5,9 @@
 //! least-privilege gate.
 //!
 //! Contract (shared by every plugin in this repo): a hook must NEVER break the
-//! user's turn. All three subcommands read a hook payload from stdin and
-//! always exit 0 (`harness_core::hook::run_hook`).
+//! user's turn. The three HOOK subcommands (`mark`/`gate`/`clear`) read a hook
+//! payload from stdin and always exit 0 (`harness_core::hook::run_hook`). The
+//! fourth subcommand, `tally`, is **not** a hook — see [`run_tally`].
 //!
 //! * `mark`  (PostToolUse, matcher `WebFetch|WebSearch|Read`) — after a tool
 //!   call that may have introduced untrusted-provenance content into context,
@@ -17,6 +18,9 @@
 //!   of staying silent (an allow).
 //! * `clear` (Stop) — a clean turn ends: reset the taint marker so the next
 //!   turn starts trusted again.
+//! * `tally` (CLI readout, NOT a hook) — print the observe-only ledger totals
+//!   for the project in the process current directory. Reads no stdin, is not
+//!   wrapped in `run_hook`, and exits non-zero when the tally could not be read.
 //!
 //! Both `mark` and `gate` run their real logic behind a `catch_unwind` panic
 //! barrier that resolves a panic to the FAIL-CLOSED outcome (a forced taint
@@ -50,6 +54,12 @@ enum Command {
     Gate,
     /// Stop hook: clear the taint marker after a clean turn.
     Clear,
+    /// CLI readout (NOT a hook): print the observe-only ledger totals.
+    Tally {
+        /// Emit machine-readable JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() {
@@ -78,6 +88,8 @@ fn main() {
                 }
             }
         }),
+        // Deliberately NOT `run_hook` — see `run_tally`'s docs.
+        Command::Tally { json } => run_tally(json),
     }
 }
 
@@ -272,12 +284,25 @@ where
 /// silently invisible even when the durable record is lost. It also cannot
 /// become a permission fail-open: the ledger is never read to decide whether to
 /// enforce (see `observe::append`'s docs).
+///
+/// The `Observe` arm prints the warning twice over, in two different channels
+/// ([`hookio::observe_json`]): once as `additionalContext`, which per the hooks
+/// reference is injected into the model's context rather than shown in the
+/// interface, and once as a top-level `systemMessage`, documented only as a
+/// warning shown to the user. The second is **best-effort**: the docs contain no
+/// example pairing `systemMessage` with a PreToolUse response that carries no
+/// `permissionDecision`, so its rendering on this shape is undocumented and this
+/// code does not rely on it. The readout an operator can actually count on is
+/// the ledger line appended just below plus `taintguard tally`.
 fn emit_gate(input: &HookInput, action: GateAction) {
     match action {
         GateAction::Silent => {}
         GateAction::Enforce(line) => println!("{line}"),
         GateAction::Observe { context, record } => {
-            println!("{}", hookio::context_json(&context));
+            // The same text in both channels: it already names the posture
+            // (`OBSERVE-ONLY`), the suppression (`SUPPRESSED`) and the tool, so
+            // a second wording could only drift away from the first.
+            println!("{}", hookio::observe_json(&context, &context));
             let cwd = input.cwd_or_current();
             if let Err(reason) = observe::append(&cwd, &record) {
                 eprintln!(
@@ -287,6 +312,111 @@ fn emit_gate(input: &HookInput, action: GateAction) {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// tally (operator readout — NOT a hook)
+// ---------------------------------------------------------------------------
+
+/// Print the observe-only ledger totals for the project in the process current
+/// directory: the number of parseable records (`suppressed`) and the number of
+/// lines that could not be parsed (`corrupt`), as reported by
+/// [`observe::tally`]. Never returns on the failure path (it exits).
+///
+/// **Why this is not wrapped in `run_hook`.** `harness_core::hook::run_hook`
+/// ends in `std::process::exit(0)`. For a hook that is exactly right — a hook
+/// must never break the user's turn — and for an operator readout it is exactly
+/// wrong: it would make a non-zero exit unreachable, so "I could not read the
+/// tally" and "the tally is zero" would leave the shell with the same status.
+/// `tally` is therefore called directly from `main`, reads no stdin, and is
+/// allowed — required — to exit non-zero. `mark`/`gate`/`clear` keep their
+/// `run_hook` wrappers unchanged.
+///
+/// **Why the failure path prints no count.** A tally that could not be read is
+/// cannot-determine, not zero (CLAUDE.md §3). On `Err` — and equally when the
+/// process cwd itself cannot be read, since "I do not know which project" is
+/// not "this project has zero" — this prints the propagated message to stderr,
+/// prints *nothing at all* on stdout, and exits 1. There is deliberately no
+/// `unwrap_or` / `unwrap_or_default` / `.ok()` fallback anywhere here: a count
+/// that was never read must be unrepresentable in the output, in JSON mode too
+/// (the failure object carries `error` and no `suppressed`/`corrupt` key).
+///
+/// A genuine zero therefore stays distinguishable from a read failure in the
+/// OUTPUT as well as via the exit code: `ok == 0 && corrupt == 0` prints an
+/// extra `nothing observed yet` line, which the failure path never prints.
+fn run_tally(json: bool) {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        // No fallback to `.` (which would tally whatever project the resolver
+        // happened to land on) and no fallback to a zero tally.
+        Err(e) => fail_tally(
+            json,
+            &format!(
+                "could not read the process current directory ({e}), so which project to tally \
+                 is unknown"
+            ),
+        ),
+    };
+    match observe::tally(&cwd) {
+        Ok((ok, corrupt)) => {
+            let ledger = observe::ledger_path(&cwd);
+            if json {
+                // `serde_json::json!` so both counts serialize as JSON numbers
+                // (a stringified count silently misreads under `jq '.suppressed
+                // > 0'`). Exactly the three contract keys, no more.
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ledger": ledger.to_string_lossy(),
+                        "suppressed": ok,
+                        "corrupt": corrupt,
+                    })
+                );
+            } else {
+                // The two counts are printed on separate lines and never
+                // summed: a corrupt tail is a store-health problem, not extra
+                // suppressions.
+                println!("[taintguard] observe-only ledger: {}", ledger.display());
+                println!("  suppressed: {ok}");
+                println!("  corrupt: {corrupt}");
+                if ok == 0 && corrupt == 0 {
+                    println!(
+                        "  nothing observed yet (the ledger was read successfully and holds no \
+                         records — a real zero, not a failed read)"
+                    );
+                }
+            }
+        }
+        Err(why) => fail_tally(json, &why),
+    }
+}
+
+/// Report a tally that could NOT be produced, then exit non-zero. Never
+/// returns.
+///
+/// `why` is the message from the failed step (propagated verbatim, so
+/// `observe::tally`'s own `could not read observe-only ledger …` text reaches
+/// the operator rather than being replaced by a generic one). The disclaimer is
+/// appended because the exit code alone is easy to drop when this is piped: the
+/// text itself has to say that no count was produced.
+///
+/// Nothing is written to stdout on this path — not even a zero — so a caller
+/// that only captures stdout cannot mistake a failed read for a clean
+/// measurement. In JSON mode stderr carries the error object *alone*, so a
+/// consumer can parse stderr directly, and the object has no `suppressed` /
+/// `corrupt` key at all.
+fn fail_tally(json: bool, why: &str) -> ! {
+    let message = format!("[taintguard] {why}. This is NOT a tally of zero: the count is UNKNOWN.");
+    if json {
+        eprintln!("{}", serde_json::json!({"error": message}));
+    } else {
+        eprintln!("{message}");
+        eprintln!(
+            "[taintguard] No count was produced. Do not record this run as an observe-only \
+             measurement."
+        );
+    }
+    std::process::exit(1)
 }
 
 #[cfg(test)]
@@ -311,8 +441,15 @@ mod tests {
 
     /// `TAINTGUARD_STATE_DIR` is a process-global env var; tests that set it
     /// must not run concurrently with each other (`cargo test` parallelizes
-    /// by default within one binary). Every test below holds this for its
-    /// whole body via the returned guard.
+    /// by default within one binary). Every test that calls [`temp_env`] holds
+    /// this for its whole body via the returned guard.
+    ///
+    /// The two panic-barrier tests do NOT call `temp_env` and therefore do NOT
+    /// hold this lock: they inject a closure that panics before any state or
+    /// env read happens, so they must not — and do not — depend on the state
+    /// dir or on any env var. If a future panic-barrier test needs either, it
+    /// has to take `temp_env` like the rest, or it becomes a test whose verdict
+    /// is decided by the ambient environment.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn temp_env(
@@ -621,10 +758,28 @@ mod tests {
         assert_ne!(action, GateAction::Silent);
     }
 
-    /// ANTI-VACUITY (b): with the env var absent or set to garbage, the gate
-    /// ENFORCES exactly as before. This is the test that makes the fail-closed
-    /// opt-in claim non-empty; without it, `resolve` could return `ObserveOnly`
-    /// unconditionally and every other observe-only test would still pass.
+    /// Three things, and NOT the env var: for every raw value that is not the
+    /// exact opt-in string, [`observe::resolve`] maps it to
+    /// [`observe::Posture::Enforce`]; `decide_gate_with`'s `Enforce` arm then
+    /// downgrades a tainted turn to ask/deny; and `emit_gate`'s `Enforce` arm
+    /// appends no observe-only ledger line.
+    ///
+    /// WHAT THIS TEST DOES NOT DO — stated plainly, because an earlier docstring
+    /// claimed it: it does **not** exercise the real environment variable.
+    /// It never calls [`observe::posture()`] and never sets
+    /// `TAINTGUARD_OBSERVE_ONLY`; it feeds the raw values to `resolve` directly.
+    /// So it cannot catch a `posture()` that ignores or mis-reads the env var,
+    /// and it is not, on its own, what makes the fail-closed opt-in claim
+    /// non-empty. The env var itself is covered end-to-end, through the real
+    /// binary, by `the_real_observe_only_env_var_fails_closed_for_every_non_opt_in_value`
+    /// in `crates/taintguard/tests/provenance_gate.rs`.
+    ///
+    /// It is also weaker than it looks in a second way: because the posture
+    /// handed to `decide_gate_with` is the one `resolve` just returned (and is
+    /// asserted to be `Enforce`), the loop is eleven repetitions of
+    /// "`Enforce` + tainted ⇒ ask/deny". That is worth pinning — it is the arm a
+    /// regression in `decide_gate_with` would break — but it is a property of
+    /// the mapping and the arm, not of the environment.
     #[test]
     fn absent_or_garbage_env_still_enforces() {
         let (_guard, _dir, cwd) = temp_env("observe-failclosed");
@@ -657,28 +812,60 @@ mod tests {
                 observe::Posture::Enforce,
                 "{raw:?} must NOT opt into observe-only"
             );
-            assert_enforced(&decide_gate_with(&gate_input, posture));
+            let action = decide_gate_with(&gate_input, posture);
+            assert_enforced(&action);
+            // Emit for real, so the tally assertion below is about `emit_gate`'s
+            // Enforce arm rather than about nothing. The previous version of
+            // this test asserted `tally == (0, 0)` WITHOUT ever calling
+            // `emit_gate`, and `decide_gate_with` does no ledger IO by design —
+            // so that assertion could not fail for the reason it stated. Do not
+            // "restore" it in that shape: drop this `emit_gate` call and the
+            // assertion goes vacuous again.
+            emit_gate(&gate_input, action);
         }
         assert_eq!(
             observe::tally(&cwd).unwrap(),
             (0, 0),
-            "enforcing must not write observe-only ledger lines"
+            "enforcing must not write observe-only ledger lines, not even when \
+             the decision is actually emitted"
         );
     }
 
-    /// A panic fails closed to ask/deny **even though** observe-only is the
-    /// posture: cannot-determine resolves to the restricted side regardless of
-    /// posture, and the barrier cannot trust a posture it never finished
-    /// reading.
+    /// A caught panic fails closed to ask/deny, and does so **posture-
+    /// independently by construction**: [`analyse_gate_barrier`] never reads a
+    /// posture at all — the posture read lives *inside* the closure it guards
+    /// (`decide_gate` → `observe::posture()`), so a panic on that path cannot
+    /// have produced a posture for the barrier to honour. That structural fact
+    /// is the safety property worth pinning here, and it is what makes a panic
+    /// enforce no matter what `TAINTGUARD_OBSERVE_ONLY` says.
+    ///
+    /// WHAT THIS TEST DOES NOT DO: it does not exercise the observe-only posture.
+    /// It sets no environment variable and hands the barrier no posture, so it is
+    /// deliberately identical in reach to
+    /// [`analyse_gate_panic_barrier_fails_closed`] above — the two differ only in
+    /// which regression a reader would look here for. An earlier version of this
+    /// test claimed to cover observe-only via a dead
+    /// `let _ = observe::Posture::ObserveOnly;` statement (removed: it bound
+    /// nothing, influenced nothing, and the verdict was in fact decided by the
+    /// ambient environment of whoever ran `cargo test`).
+    ///
+    /// Observe-only-posture behaviour is covered end-to-end, with the real env
+    /// var set in a child process, by
+    /// `undetermined_state_with_the_real_observe_only_env_set_is_reported_not_silent`
+    /// in `crates/taintguard/tests/provenance_gate.rs`. That test also records
+    /// that the panic arm itself is NOT reachable from outside the process, which
+    /// is why it stays pinned here.
+    ///
+    /// Renamed from `panic_enforces_even_under_observe_only` (the old name is
+    /// still quoted in that `provenance_gate.rs` docstring; grep both).
     #[test]
-    fn panic_enforces_even_under_observe_only() {
+    fn panic_enforces_regardless_of_posture_because_the_barrier_never_reads_it() {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // `analyse_gate`'s real barrier, driven by a panicking decision fn.
             analyse_gate_with(|_: &HookInput| -> GateAction {
-                let _ = observe::Posture::ObserveOnly;
-                panic!("boom inside observe-only")
+                panic!("boom before any posture could be read")
             })
         }));
         std::panic::set_hook(prev);

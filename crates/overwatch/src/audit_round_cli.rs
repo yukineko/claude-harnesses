@@ -5,10 +5,18 @@
 /// ledger back and prints the convergence report (per-round new-findings trend,
 /// closure-rate, and a `converging` flag) either human-readable or as JSON.
 ///
-/// Both paths are **fail-soft**: `scripts/continuous-audit.sh` calls `record`
-/// while orchestrating a round, and a store-write failure must NEVER break the
-/// audit loop — an unwritable ledger is reported to stderr rather than
-/// propagated, matching overwatch's observational / never-break-a-turn invariant.
+/// Reporting failures here are **fail-soft**: a store-write failure is reported
+/// to stderr rather than propagated, matching overwatch's observational
+/// invariant — an unwritable ledger should not destroy a round's work.
+///
+/// The round ACCEPTANCE check is not, and must not be described as if it were.
+/// `record` refuses outright (non-zero, nothing written) when a round confirms
+/// findings it does not close; see [`audit_round::closure_incomplete`]. The
+/// earlier version of this header said "both paths are fail-soft ... must NEVER
+/// break the audit loop", and that sentence is precisely the shape CLAUDE.md §1
+/// forbids around a verdict: it reads as blanket permission to map any bad
+/// outcome to success. The narrower claim — reporting failures degrade, verdicts
+/// do not — is the one that is true.
 use crate::audit_round::{self, AuditRound, DEFAULT_CONVERGENCE_WINDOW};
 use crate::lock::LeaseLock;
 use crate::review_finding::ReviewFinding;
@@ -49,6 +57,31 @@ pub fn record(
     verifier_model: Option<&str>,
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
+
+    // ACCEPTANCE CONDITION, checked before anything is written (5b33b4cd).
+    //
+    // A round that confirms findings without closing them is refused outright:
+    // no ledger append, no findings ingest, non-zero exit. Recording it would
+    // put a round in the convergence ledger that proves the audit found a
+    // defect class and left it live, which is what `converging:false` had been
+    // reporting for six rounds running.
+    //
+    // This path is deliberately NOT fail-soft, and that is a departure from the
+    // rest of this module. The module header calls every path fail-soft so the
+    // audit loop is never broken; CLAUDE.md §1 says that reasoning must not be
+    // applied to code that holds a verdict, and this is one. Refusing a round is
+    // not "breaking the loop" — it is the loop working.
+    if audit_round::closure_incomplete(confirmed, regression_tests_added) {
+        anyhow::bail!(
+            "refusing to record round {round:?}: {confirmed} finding(s) confirmed but only \
+             {regression_tests_added} closed by regression tests. Every CONFIRMED finding must \
+             be pinned by a regression test in the SAME round — otherwise the next round \
+             re-harvests the same defect class and the audit never converges. Write the \
+             missing {} test(s), then re-record. Do not lower --confirmed to match.",
+            confirmed.saturating_sub(regression_tests_added),
+        );
+    }
+
     let now = store::now();
     let targets = audit_round::parse_targets(target);
     let record = AuditRound::new(

@@ -208,10 +208,29 @@ else
 fi
 echo
 
-# fail-soft wrapper: an overwatch call must never abort the loop.
+# fail-soft wrapper: a REPORTING overwatch call must not abort the loop.
+#
+# Use this only for calls whose failure costs visibility (metrics, reconcile,
+# bridging). It must NOT be used for a call that returns a verdict: it maps
+# every non-zero exit to "continuing", so a gate invoked through it can refuse
+# while the loop sails past and prints its PASS line. That is how the round
+# acceptance check would have been born inert (5b33b4cd) -- the binary refusing
+# and the script reporting success are not in conflict if nobody reads the
+# status.
 run_ow() {
   if ! "$OW" "$@"; then
     echo "continuous-audit: WARNING overwatch $* failed (continuing, fail-soft)" >&2
+  fi
+}
+
+# verdict-bearing wrapper: a non-zero exit is the answer, so it stops the run.
+run_ow_gate() {
+  if ! "$OW" "$@"; then
+    echo >&2
+    echo "continuous-audit: overwatch $1 refused this round (exit non-zero)." >&2
+    echo "  The round was NOT recorded. Nothing above this line was rolled back;" >&2
+    echo "  re-run once the reported condition is fixed." >&2
+    exit 1
   fi
 }
 
@@ -282,7 +301,9 @@ round_args=(audit-round record
   --regression-tests-added "$REGRESSION_TESTS_ADDED")
 [ -n "$FINDER_MODEL" ] && round_args+=(--finder-model "$FINDER_MODEL")
 [ -n "$VERIFIER_MODEL" ] && round_args+=(--verifier-model "$VERIFIER_MODEL")
-run_ow "${round_args[@]}"
+# Gate, not report: `record` refuses a round whose CONFIRMED findings are not
+# closed by regression tests, and that refusal has to stop the run.
+run_ow_gate "${round_args[@]}"
 
 # --- auto-reconcile findings whose fix already landed (fail-soft) -----------
 # Closes the "fix commit landed, nobody ran record-disposition" gap that lets

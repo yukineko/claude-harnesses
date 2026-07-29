@@ -65,6 +65,14 @@ fn audit_metrics_reports_decreasing_trend_and_closure_rate() {
 
     // Round 1: MORE new-findings than round 2, half of confirmed converted.
     // new=6 confirmed=4 tests=2  => per-round closure = 2/4 = 0.5
+    //
+    // Recorded closed (tests=4) and then SET down to 2 via `close`, rather than
+    // recorded partial in one call. `record` refuses a round with
+    // regression_tests_added < confirmed (5b33b4cd), so a partial round is no
+    // longer constructible that way — it now arises only from ledger rows
+    // written before that rule, plus `close`'s SET semantics. The metric under
+    // test is unchanged: compute_metrics must still render closure_rate 0.5 for
+    // such a row, because those rows exist and must not be misreported.
     run_ow(
         &home,
         &work,
@@ -80,8 +88,13 @@ fn audit_metrics_reports_decreasing_trend_and_closure_rate() {
             "--confirmed",
             "4",
             "--regression-tests-added",
-            "2",
+            "4",
         ],
+    );
+    run_ow(
+        &home,
+        &work,
+        &["audit-round", "close", "--round", "1", "--tests", "2"],
     );
 
     // Round 2: FEWER new-findings, all confirmed converted.

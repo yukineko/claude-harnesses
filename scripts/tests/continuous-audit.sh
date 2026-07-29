@@ -107,4 +107,41 @@ grep -q '"new_findings": 4' <<<"$METRICS" || fail "round 2026W28 new_findings mu
 pass "round metrics reached the convergence ledger"
 
 echo
-echo "PASS: continuous-audit.sh help/dry-run/record paths all behave."
+echo "=== case 4: a round that confirms findings but closes none is REFUSED ==="
+# The defect this closes (backlog 5b33b4cd): the ledger proved the audit was
+# finding without preventing -- 2026W29 recorded confirmed:10 with
+# regression_tests_added:0. Accepting such a round lets the same defect class be
+# re-harvested next round forever, which is what `converging:false` was
+# reporting. An unclosed round is now not recordable.
+run_ca --round 2026W30 --target specguard \
+    --new-findings 5 --confirmed 4 --regression-tests-added 1 \
+    --finding 'U-001|high|confirmed but never closed|crates/specguard/src/z.rs'
+[ "$RC" -ne 0 ] || fail "case 4: a round with regression_tests_added < confirmed must NOT exit 0 (got $RC)"
+grep -qi "regression" <<<"$OUT" || fail "case 4: the refusal must name what was missing"
+
+# Refusing must mean refusing: the round must be absent from the ledger, not
+# recorded-and-warned. A warning that still writes is the fail-open this closes.
+METRICS4="$( run_ow audit-metrics --json )"
+grep -q '"round": "2026W30"' <<<"$METRICS4" && fail "case 4: a refused round must NOT reach the ledger"
+
+# And the script must not sign off on a run it just failed. `run_ow` swallowed
+# every non-zero exit, so before this fix the binary could refuse while the
+# script still printed its PASS line -- an inert gate.
+grep -q "round 2026W30 recorded" <<<"$OUT" && fail "case 4: the script claimed success for a refused round"
+pass "an unclosed round is refused, absent from the ledger, and not signed off"
+
+echo
+echo "=== case 5: ANTI-VACUITY — a fully closed round still records ==="
+# Without this, 'refuse everything' would satisfy case 4. Equal counts are the
+# accepting case: closure_rate 1.0.
+run_ca --round 2026W31 --target specguard \
+    --new-findings 2 --confirmed 2 --regression-tests-added 2 \
+    --finding 'C-001|high|confirmed and closed|crates/specguard/src/w.rs'
+[ "$RC" -eq 0 ] || fail "case 5: a fully closed round must still be accepted (got $RC)"
+METRICS5="$( run_ow audit-metrics --json )"
+grep -q '"round": "2026W31"' <<<"$METRICS5" || fail "case 5: an accepted round must reach the ledger"
+pass "a fully closed round is still accepted and recorded"
+
+echo
+echo "PASS: continuous-audit.sh help/dry-run/record paths all behave,"
+echo "      and an unclosed round is refused end-to-end."

@@ -218,6 +218,32 @@ pub fn model_diversity_violation(finder: Option<&str>, verifier: Option<&str>) -
     }
 }
 
+/// True iff a round confirmed findings without closing all of them — i.e.
+/// `regression_tests_added < confirmed`. Pure and side-effect free.
+///
+/// This is the acceptance condition for recording a round (backlog 5b33b4cd).
+/// The ledger had been proving that the audit *found* without *preventing*:
+/// round 2026W29 recorded `confirmed:10, regression_tests_added:0`, and the
+/// new-findings trend ran 5→1→13→0→14→15 with `converging:false`. A round whose
+/// confirmed findings are not pinned by regression tests leaves that defect
+/// class free to be re-harvested next round, which is exactly what the trend
+/// was measuring.
+///
+/// A round with `confirmed == 0` is vacuously complete: there is nothing to
+/// close, so a finder-only round (`new_findings > 0`, none confirmed) still
+/// records. That matters — refusing those would make the gate unrunnable during
+/// a genuine all-refuted round.
+///
+/// Note this is deliberately NOT the same shape as
+/// [`model_diversity_violation`], which records a warning finding and lets the
+/// round through. That check is advisory; this one refuses. The difference is
+/// deliberate and is the point of CLAUDE.md §1: "never break the turn" does not
+/// apply to code that holds a verdict, and an unclosed round is a verdict, not
+/// an observation.
+pub fn closure_incomplete(confirmed: u64, regression_tests_added: u64) -> bool {
+    regression_tests_added < confirmed
+}
+
 /// Deterministic finding-id for a finder==verifier model-collision warning,
 /// derived from the round id so re-recording the same round yields the SAME id
 /// (idempotent key). Pure and side-effect free.
@@ -736,5 +762,33 @@ mod tests {
         assert_eq!(out[1].regression_tests_added, 11, "latest closed");
         let m = compute_metrics(&out, DEFAULT_CONVERGENCE_WINDOW);
         assert_eq!(m.rounds[1].closure_rate, Some(1.0)); // 11/11, not >1.0
+    }
+
+    #[test]
+    fn closure_incomplete_flags_the_observed_2026w29_round() {
+        // The round that motivated the gate: 10 confirmed, 0 closed.
+        assert!(closure_incomplete(10, 0));
+        // One short is still short -- the boundary is where the gate lives, so
+        // an off-by-one in the comparison shows up here rather than in the wild.
+        assert!(closure_incomplete(10, 9));
+    }
+
+    #[test]
+    fn closure_incomplete_accepts_a_fully_closed_round() {
+        // Anti-vacuity: a predicate that always returned true would pass the
+        // test above and fail here.
+        assert!(!closure_incomplete(10, 10));
+        // Over-closure is not incomplete. It cannot actually reach the ledger
+        // (AuditRound::new clamps tests down to confirmed), but the predicate
+        // must not call it a violation on the way past.
+        assert!(!closure_incomplete(10, 11));
+    }
+
+    #[test]
+    fn closure_incomplete_lets_an_all_refuted_round_through() {
+        // confirmed == 0 is vacuously complete: nothing was confirmed, so there
+        // is nothing to pin. Refusing this would stall the loop on a round where
+        // the verifier legitimately refuted everything.
+        assert!(!closure_incomplete(0, 0));
     }
 }

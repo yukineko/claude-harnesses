@@ -168,7 +168,35 @@ scripts/continuous-audit.sh --round <round-id> --dry-run
   `new_findings - confirmed` を「残りは全部 refuted」と読ませないため (未決は未決として残す)。
 - スクリプトは各 finding を `overwatch record-finding --source continuous-audit --verdict … ` で review-queue へ、
   ラウンドを `overwatch audit-round record …` で収束 ledger へ追記し、最後に `overwatch audit-metrics` を印字する。
-- **fail-soft**: overwatch 呼び出しが失敗してもループは止まらない (never-break-a-turn 不変)。
+- **fail-soft なのは報告系の呼び出しだけ**: `record-finding` / `reconcile-fixed` / `review-queue` /
+  `audit-metrics` が失敗してもループは止まらない (可視性を失うだけで、判定ではないため)。
+  **`audit-round record` は判定を持つので例外**であり、拒否されたらスクリプトはそこで停止する
+  (`run_ow_gate`)。旧版はここで全呼び出しを一律 fail-soft と書いていたが、それは判定経路にまで
+  「ターンを壊すな」を適用する記述であり CLAUDE.md 第1節が名指しで禁じている形だった。
+
+### Step 3.5 — ミラー掃討 (**必須**。省略した round は受理しない)
+
+**確定した各 CONFIRMED について、その「双子」を同じラウンド内で探索する。** これを飛ばすと修正が
+対称ペアの片側だけに当たり、次ラウンドで残り半分を新規発見として再収穫し続ける — ledger の
+new_findings が 5→1→13→0→14→15 と振動して `converging:false` に張り付いていた実測の原因がこれである。
+
+各 CONFIRMED に対して、最低限この 5 軸を走査する:
+
+| 軸 | 問い | 例 |
+|---|---|---|
+| **極性** | 否定形・肯定形の両方を見たか | `!ok` は直したが `ok == false` は? modal と negation |
+| **軸/方向** | 対称な相手側を見たか | `>&` を直して `&>` を残す、read を直して write を残す |
+| **別綴り** | 同義の別表記があるか | `expect` と `unwrap`、`--json` と `-j` |
+| **同一 store の別書き手** | 同じ状態を書く他の経路があるか | 同じ ledger に append する別 CLI パス |
+| **粒度** | より細かい/粗い単位に同じ穴があるか | crate 単位で直して per-file を残す |
+
+- 掃討で見つかった双子は**そのラウンドの CONFIRMED として扱う** (次回送りにしない)。当然
+  `--confirmed` と `--regression-tests-added` の両方に反映される。
+- **掃討して何も出なかったこと自体が成果**である。その場合は「掃討済み・双子なし」と報告に明記する
+  (黙って省略すると、掃討したのか忘れたのかが下流から区別できない — 第3節の判定不能と同じ構造)。
+- 掃討の網羅性を機械判定する手段は現状無い。**したがってこの Step は自己申告に依存している** —
+  `record` が強制できるのは「締めたか」であって「双子を探したか」ではない。この非対称は既知であり、
+  埋めるとしたら双子探索の証跡を round に添える形になる (未実装)。
 
 ### Step 4 — 回帰テスト化 (継続運用の原則)
 
@@ -181,15 +209,31 @@ CONFIRMED のうち**挙動バグ**は、対象 crate に**回帰テストを追
   従来は自由文言 (例: "...re-review finding 2") で運用していたが、finding-id と回帰テストを機械的に
   逆引きできるようにするため、今後はこの規約に統一する。
 
-> **回帰テストは通常ラウンド記録より後に landed する** (修正は backlog/condukt へ委譲される別タスク)。
-> Step 3 の `--regression-tests-added` は「そのラウンドと同時にテストまで締めた」件数だけを入れ、
-> **後から締めた分は Step 4.5 の closure で round に還元する** (record 時は 0 のままにしてよい)。
+> **回帰テストはラウンド記録より後に landed させてはならない** (2026-07-30 変更)。
+> 旧版はここで「後から締めた分は Step 4.5 の closure で還元する (record 時は 0 のままにしてよい)」と
+> 書いていた。**この許容が本ループの収束を止めていた**: ledger は `confirmed:10 /
+> regression_tests_added:0` (round 2026W29) を受理し、new_findings は 5→1→13→0→14→15 と推移して
+> `converging:false` に張り付いた。締めていない CONFIRMED は次ラウンドで同じ欠陥クラスとして
+> 再収穫されるので、「後で締める」は事実上「締めない」と同じ観測値を生む。
+>
+> したがって `overwatch audit-round record` は **`regression_tests_added < confirmed` のラウンドを
+> 拒否する** (非0終了・ledger へ一切書かない・`scripts/continuous-audit.sh` もそこで停止する)。
+> CONFIRMED を減らして辻褄を合わせるのは禁止 — それは第4節の「通すためだけに緩める」に当たる。
+> confirmed が 0 のラウンド (全件 refute) は締める対象が無いので通る。
 
 ### Step 4.5 — closure フィードバック (fix 側を収束シグナルに還元する)
 
 CONFIRMED を回帰テストで締めたら、その件数を**元のラウンドへ closure として書き戻す**。これをやらないと
 `audit-metrics` の `closure-rate` と `converging` は fix 側を見ないまま `0.00 / false` に張り付き、
 「fleet は硬化しているか?」というループ本来の問いに答えられない (build ≠ validate)。
+
+> **適用範囲 (2026-07-30 以降)**: Step 3 が未締結ラウンドを拒否するようになったので、**新規ラウンドは
+> record 時点で必ず `closure_rate = 1.0`** になる。したがってこの Step は
+> **拒否ルール導入前に記録された既存ラウンドの backfill 専用**である。新規ラウンドを「record は 0 で通し、
+> 後から close で埋める」経路は**塞がれている** (record 自体が通らない)。
+> 副作用として `closure_rate` は新規ラウンドでは常に 1.0 になり、指標ではなく**受理の前提条件**へ変わる。
+> 収束シグナルとしては `new_findings` の推移 (`converging` の判定材料) だけが残る —
+> `converging` は closure_rate を参照しないので、この変更で収束判定が甘くなることはない (確認済み)。
 
 ```sh
 # ラウンド <id> の confirmed findings を締めた回帰テスト件数 <N> を還元する。

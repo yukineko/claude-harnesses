@@ -31,8 +31,13 @@
 #         next turn stays tainted rather than being incorrectly trusted) —
 #         the failure mode here fails closed on its own, no JSON needed.
 #
-#   anything else -> exit 1 (no other subcommand exists; an empty stdout for
-#         an unrecognised CLI invocation must not read as real data).
+#   tally (operator readout, NOT a hook) -> falls through to exit 1 below, which
+#         is already the correct answer: `tally`'s whole contract is that a count
+#         it could not produce must exit non-zero and print no number, so a
+#         missing binary must not print a zero either. It needs no special arm.
+#
+#   anything else -> exit 1 (an empty stdout for an unrecognised or
+#         unservable CLI invocation must not read as real data).
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in

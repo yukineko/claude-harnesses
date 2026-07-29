@@ -89,6 +89,29 @@ pub enum Check {
 /// onto different bases).
 const STATE_DIR_ENV: &str = "TAINTGUARD_STATE_DIR";
 
+/// [`STATE_DIR_ENV`] for sibling modules' tests (e.g. `crate::observe`), which
+/// must point the state base at a temp dir the same way this module's tests do.
+#[cfg(test)]
+pub(crate) const STATE_DIR_ENV_FOR_TEST: &str = STATE_DIR_ENV;
+
+/// One process-wide lock for the `TAINTGUARD_STATE_DIR` env var, shared by every
+/// test in this crate's lib target.
+///
+/// `std::env::set_var` is process-global and `cargo test` runs a binary's tests
+/// in parallel threads, so `state`'s tests and `observe`'s tests would otherwise
+/// clobber each other's state base mid-assertion. One lock, not one per module
+/// (two independent locks would not exclude each other, which is the bug this
+/// replaces).
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Acquire [`ENV_LOCK`] for the caller's whole test body. Poison is recovered
+/// (`into_inner`) because a panicking test must not wedge every later test.
+#[cfg(test)]
+pub(crate) fn env_lock_for_test() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Base directory for taint markers: `$TAINTGUARD_STATE_DIR` (absolute only)
 /// or `~/.taintguard/state`.
 fn state_base() -> PathBuf {
@@ -114,12 +137,36 @@ fn state_dir(cwd: &Path, session: &str) -> PathBuf {
     state_base().join(project_key(&cwd_canonical)).join(session)
 }
 
+/// Project-scoped (NOT session-scoped) state dir for `cwd`, reusing the exact
+/// same `$TAINTGUARD_STATE_DIR`-or-`~/.taintguard/state` base and `project_key`
+/// derivation as the session markers above.
+///
+/// Used by the observe-only ledger ([`crate::observe::ledger_path`]), which
+/// must accumulate ACROSS sessions: the Stop hook's [`clear`] wipes a session's
+/// marker, and a fire-rate measured within a single session is not the number
+/// the measurement is for. Exposed here rather than re-deriving the layout in
+/// `observe` so there is one owner of the on-disk shape.
+pub fn project_state_dir(cwd: &Path) -> PathBuf {
+    let cwd_canonical = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    state_base().join(project_key(&cwd_canonical))
+}
+
 /// Marker file name within a session's state dir.
 const MARKER_FILENAME: &str = "taint.json";
 
 /// Full path to this session's taint marker.
 fn marker_path(cwd: &Path, session: &str) -> PathBuf {
     state_dir(cwd, session).join(MARKER_FILENAME)
+}
+
+/// [`marker_path`] exposed for the binary target's tests, which live in a
+/// separate crate and so cannot reach the private helper. Needed to plant a
+/// deliberately corrupt marker and drive the `Undetermined` branch — the same
+/// fault-injection this module's own `corrupt_marker_is_undetermined_and_fails_closed`
+/// test uses. Not part of the runtime contract.
+#[doc(hidden)]
+pub fn marker_path_for_test(cwd: &Path, session: &str) -> PathBuf {
+    marker_path(cwd, session)
 }
 
 /// Probe whether `dir` is actually writable right now, by creating it (if
@@ -286,12 +333,6 @@ pub fn clear(cwd: &Path, session: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// `TAINTGUARD_STATE_DIR` is a process-global env var, so tests that set it
-    /// (via [`env`]) must never run concurrently with each other — `cargo
-    /// test` runs tests in parallel threads by default. `_guard` holds this
-    /// lock for the whole test (mirrors `ctxrot::config::HOME_ENV_LOCK`).
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// Isolate each test's state dir under a throwaway temp dir + unique
     /// session id, so parallel test runs never collide on the same marker path
     /// (mirrors the pattern used throughout the repo's other state-dir tests).
@@ -305,7 +346,7 @@ mod tests {
     }
 
     fn env(name: &str) -> Env {
-        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = super::env_lock_for_test();
         let dir = tempfile::Builder::new()
             .prefix(&format!("taintguard-state-{name}-"))
             .tempdir()

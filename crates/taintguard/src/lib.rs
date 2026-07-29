@@ -14,14 +14,40 @@
 //! for the rest of that turn. A clean `Stop` (the turn ends without further
 //! taint) restores the session to normal.
 //!
-//! Three hooks, three subcommands:
+//! Three hooks, plus a fourth subcommand that is NOT a hook:
 //!   * `mark`  (PostToolUse, matcher `WebFetch|WebSearch|Read`) — records the
 //!     taint.
 //!   * `gate`  (PreToolUse, matcher `Bash|Write|Edit|MultiEdit|NotebookEdit`) —
 //!     consumes it.
 //!   * `clear` (Stop) — resets it.
+//!   * `tally` — operator readout: prints the observe-only ledger totals for the
+//!     project in the process cwd. Reads no stdin, is deliberately NOT wrapped
+//!     in `harness_core::hook::run_hook` (whose terminal `exit(0)` would make
+//!     "could not read the tally" and "the tally is zero" share an exit
+//!     status), and exits non-zero when the tally could not be read.
+//!
+//! # Operating postures
+//!
+//! `gate` has two postures, resolved from `TAINTGUARD_OBSERVE_ONLY` (see
+//! [`observe`]): the default **enforce** posture described above, and an opt-in
+//! **observe-only** measurement posture that runs the same check, reports the
+//! same finding, but emits no `permissionDecision` and instead records the
+//! suppressed enforcement so its fire-rate can be counted. Observe-only never
+//! turns a `Tainted`/`Undetermined` check into a `Clean` one — the two live on
+//! separate axes ([`state::Check`] vs [`observe::Posture`]) exactly so that
+//! "suppressed" stays distinguishable from "nothing found".
+//!
+//! Observe-only suppresses **`Tainted` only** (changed in 0.1.6). A
+//! [`state::Check::Undetermined`] — the taint state could not be determined —
+//! resolves to `ask`/`deny` in either posture, as does a panic in the gate's
+//! barrier: cannot-determine always resolves to the restricted side (CLAUDE.md
+//! §3), and suppressing a finding that names no sources would have measured
+//! nothing anyway. Such an enforced `Undetermined` therefore writes **no** ledger
+//! line, so the ledger counts *suppressed enforcements* rather than *gate
+//! firings*; see [`observe`]'s module docs for the full argument.
 
 pub mod classify;
 pub mod hookio;
 pub mod interactive;
+pub mod observe;
 pub mod state;

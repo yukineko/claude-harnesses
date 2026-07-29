@@ -49,10 +49,13 @@ least-privilege を機械的に強制する。エージェントが騙されて�
   「判定できなかった」を「問題なし（silent allow）」に潰さない。
 - tainted でなければ何も出力しない（silent allow）。
 - 以上は既定の **enforce** posture の挙動。`TAINTGUARD_OBSERVE_ONLY=1` の
-  **observe-only** posture では `permissionDecision` をどの値でも出さず、警告テキストと
-  台帳への追記だけになる（＝強制されない）。**この警告が画面に出ることは保証されていない**
-  — 人間が確実に読める経路は `taintguard tally` だけである。詳細と注意点は後述の
-  「observe-only モード」を参照。
+  **observe-only** posture では、**既知の taint（`Tainted`）に限り** `permissionDecision` を
+  どの値でも出さず、警告テキストと台帳への追記だけになる（＝強制されない）。
+  **この警告が画面に出ることは保証されていない** — 人間が確実に読める経路は
+  `taintguard tally` だけである。
+- **ただし直前の項（marker が読めない/壊れている＝判定不能 `Undetermined`）は
+  observe-only でも抑止されず、常に `ask`/`deny` に倒れる**（0.1.6 で変更）。
+  詳細と注意点は後述の「observe-only モード」を参照。
 
 ### clear（Stop）
 
@@ -68,10 +71,14 @@ least-privilege を機械的に強制する。エージェントが騙されて�
 生むか」を予測ではなく観測で答えるための計測モードであり、防御の代わりには
 ならない。
 
-- **抑止するもの**: `ask`/`deny` の `permissionDecision` を**一切出さない**。
+- **抑止するもの**: **`Tainted`（＝どの source が汚染したか判っている検出）に対する**
+  `ask`/`deny` の `permissionDecision` を**一切出さない**。
   したがって tainted なターンでも write-class ツールは通常どおり実行される。
   **保護は効いていない。**
-- **抑止しないもの**: 検査そのもの、および報告。tainted を検出したら
+- **抑止しないもの（判定不能）**: `Undetermined`（marker が壊れている／スキーマ違い／
+  state dir が書き込み不能）は observe-only でも **`ask`/`deny` に倒れる**。
+  理由は後述の「判定不能（Undetermined）と panic は observe-only を尊重しない」。
+- **抑止しないもの（検査と報告）**: 検査そのもの、および報告。tainted を検出したら
   「このターンは tainted」「どの source が汚染したか」「observe-only なので強制を
   抑止した」ことを述べる警告テキストを **2 つのチャンネル**に出し
   （`hookSpecificOutput.additionalContext` と、その兄弟にあたる **top-level の
@@ -124,24 +131,50 @@ least-privilege を機械的に強制する。エージェントが騙されて�
 解釈は一切しない（`observe::resolve`）。`Posture` に `Default` 実装は無い
 （許容側が `Default::default()` や `.into()` から生まれないようにするため）。
 
-### panic は observe-only を尊重しない
+### 判定不能（Undetermined）と panic は observe-only を尊重しない
 
-`gate` の panic barrier が発火した場合は、observe-only が設定されていても
+**0.1.6 で変更**: `state::check` が `Undetermined`（marker が壊れている／スキーマ違い／
+state dir が書き込み不能）を返した場合は、`TAINTGUARD_OBSERVE_ONLY=1` でも
+**`ask`/`deny` に倒れる**。observe-only が存在する理由は「**既知の** taint を強制した
+ときの摩擦を測る」ことであり、`Undetermined` は source を1つも名指しできない
+（`sources` が空）ので、抑止しても得られる計測値が無い。**得るものが無いのに
+CLAUDE.md §3（判定不能は必ず制限側に解決する）を支払う**ことになるため、抑止しない。
+「判定できなかった」は「panic した」と同じクラスであり、panic は元から強制している。
+
+`gate` の panic barrier が発火した場合も同様に、observe-only が設定されていても
 **`ask`/`deny` に倒れる**。panic は「解析が完走しなかった」＝判定不能であり、
 posture の読み取り自体も barrier の内側にあるため、尊重すべき posture を
 知っているとは言えない。observe-only は**動いているゲートを計測する**ための
 affordance であって、内部エラーを飲み込む許可ではない。
 
+observe-only 下で `Undetermined` により強制された場合、`ask`/`deny` の reason 文には
+**「observe-only は設定されているがこの経路では尊重されない」**という注記が付く
+（`observe::undetermined_not_suppressed_note`）。observe-only を設定した運用者が
+`ask` を見て混乱しないため、かつ **この事象は台帳に1行も書かれない**ことを
+その場で述べるため（次節参照）。
+
+なお 0.1.5 までは `Undetermined` も observe-only で抑止され、台帳に
+`check: "undetermined"` の行が1行残っていた。この挙動は上記の理由で撤去した。
+
 ### 計測値の読み方
 
 台帳は `$TAINTGUARD_STATE_DIR/<project_key>/observe-only.jsonl`
 （**session 単位ではなく project 単位** — Stop hook の `clear` は session marker を
-消すので、session に閉じた台帳では発火率が測れない）。1行 = 抑止した強制1件で、
-`{ts, tool, sources, check, session}` を持つ。`check` は `"tainted"` と
-`"undetermined"` を**区別して**記録する（marker が読めなかった件を摩擦の統計に
-混ぜると store の健全性問題が隠れるため）。`observe::tally` は
-パースできた件数と**できなかった件数を別々に**返す（壊れた行を黙って捨てて
-件数を下げると「思ったより摩擦が少ない」と誤読される）。
+消すので、session に閉じた台帳では発火率が測れない）。**1行 = 抑止した強制1件**で、
+`{ts, tool, sources, check, session}` を持つ。
+
+**台帳が数えるのは「gate が発火した回数」ではなく「強制を抑止した回数」である。**
+0.1.6 以降この2つはずれる: observe-only 下の `Undetermined` は**抑止されず強制される**ので、
+**台帳には1行も書かれない**。これは意図的な選択である — `tally` の `suppressed` は
+「抑止した件数」を主張するカウンタなので、抑止していない事象をそこに足すと
+カウンタ自身が嘘になる（`suppressed` を三値に割るには tally の出力契約を変える必要があり、
+それはこの変更の範囲外）。その事象は台帳ではなく、**実際に出た `ask`/`deny` と
+その reason 文中の注記**として観測する。したがって新規に書かれる行の `check` は
+常に `"tainted"` である（フィールドは残す — 0.1.5 以前に書かれた既存の台帳には
+`"undetermined"` の行が存在しうるので、パースできる必要がある）。
+
+`observe::tally` はパースできた件数と**できなかった件数を別々に**返す（壊れた行を
+黙って捨てて件数を下げると「思ったより摩擦が少ない」と誤読される）。
 
 台帳への追記に失敗した場合は `Err` を返し stderr に出す（「記録したつもり」を
 作らない）。この失敗は**権限の fail-open にはならない** — 台帳は「強制するか」の
@@ -178,7 +211,7 @@ $ taintguard tally --json
 | フィールド | 意味 |
 |---|---|
 | `ledger` | 数えた台帳ファイルの実パス（どの project を見たかを取り違えないため） |
-| `suppressed` | **パースできた**レコード数 ＝ 抑止した強制の件数 |
+| `suppressed` | **パースできた**レコード数 ＝ 抑止した強制の件数。**gate が発火した回数ではない** — observe-only 下の `Undetermined` は抑止されず強制されるので、ここには現れない（上記「計測値の読み方」参照） |
 | `corrupt` | **パースできなかった**行数。`suppressed` には**足されない**（壊れた行は摩擦ではなく store の健全性問題なので、合算すると両方を誤読する） |
 
 **読み取り失敗は exit 非0 であり、0 件とは区別される**（CLAUDE.md §3）:
@@ -234,3 +267,7 @@ session ディレクトリの下ではない（理由は上記「計測値の読
   書き込み失敗自体（panic ではない通常の IO エラー）はこのパニックバリアの
   対象外 — その場合の fail-closed の実体は上記の `check` 側の書き込み可能性
   プローブである（`mark` は失敗を stderr に出して exit 0 するだけ）。
+- `Undetermined`（上記のいずれか）は **posture に関わらず** `ask`/`deny` に解決する。
+  observe-only は `Tainted` の摩擦を測るための posture であって、判定不能を抑止する
+  許可ではない（CLAUDE.md §3）。強制する側だけが posture を無視するので、
+  observe-only が「抑止した」と数える台帳の意味は保たれる。

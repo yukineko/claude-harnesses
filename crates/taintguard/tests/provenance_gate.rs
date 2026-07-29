@@ -1204,51 +1204,62 @@ fn stop_hook_clear_cannot_wipe_the_project_scoped_ledger() {
     );
 }
 
-/// SUPPLIES THE OBSERVE-ONLY COVERAGE a former unit test only claimed to have.
-/// That test used to be called `panic_enforces_even_under_observe_only` and was
-/// vacuous on this axis: its `let _ = observe::Posture::ObserveOnly;` line had no
-/// effect, `analyse_gate_barrier` never consults a posture, and it set no env
-/// var — so its verdict was decided by the ambient environment of whoever ran
-/// `cargo test`. It has since been renamed to
-/// `panic_enforces_regardless_of_posture_because_the_barrier_never_reads_it`
-/// (`src/main.rs`), the dead line is gone, and its docstring now claims only the
-/// posture-INDEPENDENCE of the barrier, which is the property it actually pins.
-/// This test is what covers the real env var end-to-end.
+/// THE DECISIVE TEST for "observe-only must NOT suppress a cannot-determine"
+/// (CLAUDE.md §3: 判定不能は必ず制限側に解決する).
 ///
-/// ## What this test does NOT do — stated explicitly, per the brief
+/// This test previously had the name
+/// `undetermined_state_with_the_real_observe_only_env_set_is_reported_not_silent`
+/// and asserted the OPPOSITE of what it asserts now: it pinned production's
+/// then-actual behaviour, a SUPPRESSED-but-reported observe warning with **no**
+/// `permissionDecision` and one `check: "undetermined"` ledger line. Its own
+/// docstring flagged that as an open design question for a human ("If
+/// 'cannot-determine must enforce regardless of posture' is meant to cover the
+/// `Undetermined` path too … this test is the place that will go red when it
+/// changes"). That decision has now been made — **yes, §3 covers the
+/// `Undetermined` path, not just the panic path** — so this is that red, resolved
+/// in the direction of enforcing.
 ///
-/// It does **not** test the `catch_unwind` panic arm. I could NOT reach that arm
+/// ## What it pins
+///
+/// With the REAL `TAINTGUARD_OBSERVE_ONLY=1` in the child's environment and a
+/// corrupt on-disk marker (so `state::check` returns `Check::Undetermined`), the
+/// binary must still print a real `ask`/`deny` `permissionDecision`. Observe-only
+/// is an affordance for measuring a *working* gate; it is not a licence to
+/// swallow "I could not read my own store".
+///
+/// The env var is driven through the real binary on purpose. Every unit test
+/// injects the posture into `decide_gate_with` and therefore never calls
+/// `observe::posture()`, the only reader of the var — a loose parse there once
+/// stayed green across the entire unit suite (see this file's module docs). Only
+/// a child process with the var actually set makes `posture()` the code under
+/// test, which is why the decisive assertion lives here.
+///
+/// ## What this test does NOT do — stated explicitly
+///
+/// It does **not** test the `catch_unwind` panic arm. That arm is unreachable
 /// from outside the process: the binary exposes no fault-injection hook, and
 /// every externally-plantable fault (corrupt marker, wrong-schema marker,
-/// unwritable store, missing `file_path`) is *handled* — it reaches
-/// `Check::Undetermined`, not a panic. So the panic barrier remains pinned only
-/// by the in-process unit tests, and I am not claiming otherwise.
+/// unwritable store, missing `file_path`) is *handled* — it lands on
+/// `Check::Undetermined`, not on a panic. The panic barrier remains pinned only
+/// by the in-process unit tests, and this test claims nothing about it.
 ///
-/// ## What it DOES pin, and a documentation↔behaviour conflict it exposes
-///
-/// It pins `Check::Undetermined` **with the real `TAINTGUARD_OBSERVE_ONLY=1` set
-/// in the child's environment**: production's actual behaviour is a SUPPRESSED
-/// BUT REPORTED observe warning recorded as `check: "undetermined"` — *not*
-/// `ask`/`deny`. The brief asked me to assert `ask`/`deny` here; that assertion
-/// would FAIL against current production, and `decide_gate_with`'s
-/// `Undetermined` + `ObserveOnly` arm (`src/main.rs:230-237`) shows why: only a
-/// *panic* bypasses observe-only, an unreadable store does not. I am pinning the
-/// real behaviour rather than writing an assertion I know to be false about it,
-/// and reporting the conflict. If "cannot-determine must enforce regardless of
-/// posture" (CLAUDE.md §3) is meant to cover the `Undetermined` path too — not
-/// just the panic path — then this is a design decision for a human, and this
-/// test is the place that will go red when it changes.
+/// It also does not prove observe-only still works at all — a binary with
+/// observe-only deleted wholesale would pass this test. That is what
+/// `observe_only_still_suppresses_a_genuinely_tainted_session_...` (the
+/// anti-vacuity anchor below) is for.
 ///
 /// HOW THIS FAILS against a wrong implementation:
-///   * `posture()` ignoring the env var → the child enforces → a
-///     `permissionDecision` appears → the absence assertion fails.
+///   * `Undetermined` + `ObserveOnly` routed to `Observe` (the pre-change
+///     behaviour) → stdout carries `additionalContext` but no
+///     `permissionDecision` → the decision assertion fails. This is the RED at
+///     HEAD.
 ///   * `Undetermined` treated as `Clean` under observe-only → stdout empty →
-///     `hook_json` panics ("an unreadable store is not a clean turn").
-///   * `Undetermined` folded into `"tainted"` in the ledger → the
-///     `record.check` assertion fails (a store-health problem must not hide
-///     inside the friction statistic).
+///     `permission_decision` returns `None` → same assertion fails ("an
+///     unreadable store is not a clean turn").
+///   * `posture()` mis-reading the var such that this path silently softens →
+///     caught here rather than nowhere.
 #[test]
-fn undetermined_state_with_the_real_observe_only_env_set_is_reported_not_silent() {
+fn observe_only_must_not_suppress_a_cannot_determine_corrupt_marker() {
     let f = fixture("observe-undetermined");
     let env = observe_only_env();
 
@@ -1286,43 +1297,513 @@ fn undetermined_state_with_the_real_observe_only_env_set_is_reported_not_silent(
     );
     assert_eq!(code, 0, "gate must always exit 0");
 
-    let v = hook_json(&stdout);
-    let hso = hook_specific(&v);
-    let ctx = hso
-        .get("additionalContext")
-        .and_then(|c| c.as_str())
-        .unwrap_or_else(|| panic!("additionalContext must be present and a string, got {v}"));
+    let decision = permission_decision(&stdout);
     assert!(
-        ctx.contains("OBSERVE-ONLY"),
-        "must announce the posture: {ctx}"
-    );
-    assert!(
-        ctx.contains("SUPPRESSED"),
-        "must say enforcement was suppressed: {ctx}"
-    );
-    assert!(
-        ctx.contains("could not verify"),
-        "must say the taint state could NOT be read (a store-health signal, distinct from a \
-         recorded taint): {ctx}"
-    );
-    assert!(
-        hso.get("permissionDecision").is_none(),
-        "with the real {}={} set, this path emits no permissionDecision, got {v}",
+        decision.as_deref() == Some("ask") || decision.as_deref() == Some("deny"),
+        "with the real {}={} set, a CORRUPT marker (cannot-determine) must STILL emit an \
+         ask/deny permissionDecision — observe-only must not suppress a cannot-determine \
+         (CLAUDE.md §3). got decision={decision:?}, stdout={stdout:?}",
         observe::OBSERVE_ONLY_ENV,
-        observe::OBSERVE_ONLY_OPT_IN
+        observe::OBSERVE_ONLY_OPT_IN,
+    );
+}
+
+/// THE SECOND HALF OF THE DECISIVE CONTRACT: an enforced cannot-determine under
+/// observe-only appends **NO** ledger line.
+///
+/// This is deliberate, not an oversight, which is why it is asserted rather than
+/// left to a comment. The ledger — and `taintguard tally`'s `suppressed` counter
+/// that reads it — is *defined* as the count of **suppressed enforcements**. This
+/// event was not suppressed; it enforced. Recording it would inflate a counter
+/// whose very name asserts suppression, i.e. it would make the measurement lie in
+/// the same direction the observe-only mode exists to measure honestly.
+///
+/// The ledger assertion comes FIRST so the failure message names the contract
+/// under test; the enforcement assertion follows as the tie-in that stops this
+/// from passing against an implementation that simply stopped writing the ledger
+/// while ALSO still suppressing.
+///
+/// ## What this test does NOT do
+///
+/// It says nothing about the ledger on the *tainted* path — a suppressed taint
+/// must still be recorded, and that is
+/// `observe_only_still_suppresses_a_genuinely_tainted_session_...` below. Without
+/// that anchor, "the ledger stayed at (0, 0)" would also be satisfied by a
+/// binary that never writes a ledger at all.
+///
+/// HOW THIS FAILS against a wrong implementation:
+///   * pre-change behaviour (suppress + record) → tally is `(1, 0)` → the first
+///     assertion fails. This is the RED at HEAD.
+///   * enforce-but-still-record → tally is `(1, 0)` → same assertion fails.
+///   * enforce, record nothing, but also stop enforcing → the tie-in decision
+///     assertion fails.
+#[test]
+fn observe_only_enforced_cannot_determine_appends_no_ledger_line() {
+    let f = fixture("observe-undet-no-ledger");
+    let env = observe_only_env();
+
+    let (code, _, _) = run(
+        "mark",
+        &mark_payload(
+            "WebFetch",
+            serde_json::json!({"url": "https://example.com"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0);
+    let marker =
+        find_marker_file(&f.state_dir).expect("mark must have written exactly one marker file");
+    std::fs::write(&marker, b"{ not json").expect("corrupt the marker");
+
+    let (code, stdout, _) = run(
+        "gate",
+        &gate_payload(
+            "Bash",
+            serde_json::json!({"command": "echo hi"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0, "gate must always exit 0");
+
+    // THE CONTRACT: nothing suppressed ⇒ nothing on the suppression ledger.
+    assert_eq!(
+        ledger_tally(&f),
+        (0, 0),
+        "an ENFORCED cannot-determine under observe-only must append NO ledger line — the \
+         ledger and `taintguard tally`'s `suppressed` counter are defined as suppressed \
+         enforcements, and this event was not suppressed. stdout was: {stdout:?}"
+    );
+    // …and the file should not even exist, since nothing was ever appended.
+    let path = ledger_path(&f);
+    assert!(
+        !path.exists(),
+        "no ledger file should have been created at all, but {} exists with: {:?}",
+        path.display(),
+        std::fs::read_to_string(&path).ok()
     );
 
-    // And the ledger keeps `undetermined` distinct from `tainted`.
-    let records = ledger_records(&f);
-    assert_eq!(records.len(), 1, "exactly one record, got {records:?}");
-    assert_eq!(
-        records[0].check, "undetermined",
-        "an unreadable store must be recorded as `undetermined`, never folded into `tainted`"
+    // TIE-IN (stops a vacuous pass): the event really was enforced.
+    let decision = permission_decision(&stdout);
+    assert!(
+        decision.as_deref() == Some("ask") || decision.as_deref() == Some("deny"),
+        "the un-recorded event must be un-recorded BECAUSE it enforced, not because \
+         enforcement vanished; got decision={decision:?}, stdout={stdout:?}"
+    );
+}
+
+/// A SECOND FAULT ROUTE to the same contract: a valid-JSON but WRONG-SCHEMA
+/// marker (`{"foo":123}`), which `wrong_schema_marker_fails_closed_to_ask_or_deny`
+/// already pins under the enforce posture, must also enforce under observe-only.
+///
+/// Worth its own test because the corrupt-marker route and the wrong-schema route
+/// reach `Check::Undetermined` through different code in `state::read_state`
+/// (a serde parse error vs. a missing required field). An implementation that
+/// fixed only one of them — e.g. by special-casing unparseable bytes — would pass
+/// the corrupt-marker test and fail here.
+///
+/// ## What this test does NOT do
+///
+/// It does not assert on the ledger; that is the previous test's job, and
+/// duplicating it here would only add a second place to update.
+#[test]
+fn observe_only_must_not_suppress_a_cannot_determine_wrong_schema_marker() {
+    let f = fixture("observe-undet-wrong-schema");
+    let env = observe_only_env();
+
+    let (code, _, _) = run(
+        "mark",
+        &mark_payload(
+            "WebFetch",
+            serde_json::json!({"url": "https://example.com"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0);
+    let marker =
+        find_marker_file(&f.state_dir).expect("mark must have written exactly one marker file");
+    // Valid JSON, but missing the required `tainted` field entirely.
+    std::fs::write(&marker, br#"{"foo":123}"#).expect("overwrite with wrong-schema marker");
+
+    let (code, stdout, _) = run(
+        "gate",
+        &gate_payload(
+            "Write",
+            serde_json::json!({"file_path": "out.rs", "content": "x"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0, "gate must always exit 0");
+
+    let decision = permission_decision(&stdout);
+    assert!(
+        decision.as_deref() == Some("ask") || decision.as_deref() == Some("deny"),
+        "with the real {}={} set, a WRONG-SCHEMA marker (cannot-determine) must STILL emit an \
+         ask/deny permissionDecision — a serde default to clean is a fail-open in either \
+         posture. got decision={decision:?}, stdout={stdout:?}",
+        observe::OBSERVE_ONLY_ENV,
+        observe::OBSERVE_ONLY_OPT_IN,
+    );
+}
+
+/// ANTI-VACUITY ANCHOR — PASSES BOTH BEFORE AND AFTER the change, by design.
+///
+/// The tests above would all be satisfied by a binary with observe-only ripped
+/// out entirely (always enforce). This one proves it was not: with the same env
+/// var set, a GENUINELY `Tainted` session is still SUPPRESSED — no
+/// `permissionDecision` anywhere in the output — and the suppression is still
+/// recorded as exactly ONE ledger line.
+///
+/// Both halves are asserted in ONE run so the pair cannot drift apart: "no
+/// decision" and "one recorded suppression" are the same event seen from two
+/// sides, and an implementation that emitted the warning but stopped recording it
+/// (or recorded it but stopped warning) must fail rather than half-pass.
+///
+/// The `permissionDecision` absence is checked twice on purpose: once on the
+/// parsed object (so a payload whose `hookSpecificOutput` is missing entirely
+/// cannot satisfy it vacuously — `hook_specific` panics in that case) and once as
+/// a raw substring over the whole of stdout (so a decision smuggled in under some
+/// other key or nesting is still caught).
+///
+/// ## What this test does NOT do
+///
+/// It does not check the exact warning wording — that is
+/// `observe_only_suppression_is_visible_on_stdout_with_a_top_level_system_message`.
+#[test]
+fn observe_only_still_suppresses_a_genuinely_tainted_session_and_records_exactly_one_line() {
+    let f = fixture("observe-tainted-anchor");
+    let env = observe_only_env();
+
+    let (code, _, _) = run(
+        "mark",
+        &mark_payload(
+            "WebFetch",
+            serde_json::json!({"url": "https://example.com"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0, "mark must always exit 0");
+
+    let (code, stdout, _) = run(
+        "gate",
+        &gate_payload(
+            "Bash",
+            serde_json::json!({"command": "echo hi"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0, "gate must always exit 0");
+
+    let v = hook_json(&stdout);
+    let hso = hook_specific(&v);
+    assert!(
+        hso.get("permissionDecision").is_none(),
+        "a genuinely TAINTED session under observe-only must still be SUPPRESSED (no \
+         permissionDecision) — otherwise observe-only was deleted wholesale rather than \
+         narrowed to exclude cannot-determine, got {v}"
     );
     assert!(
-        records[0].sources.is_empty(),
-        "an unreadable marker cannot name what tainted it, so sources must stay empty, got {:?}",
-        records[0].sources
+        !stdout.contains("permissionDecision"),
+        "no `permissionDecision` may appear ANYWHERE in the output for a suppressed taint, \
+         got: {stdout:?}"
+    );
+    assert!(
+        hso.get("additionalContext")
+            .and_then(|c| c.as_str())
+            .is_some_and(|c| !c.trim().is_empty()),
+        "the suppressed taint must still be reported, got {v}"
+    );
+
+    let records = ledger_records(&f);
+    assert_eq!(
+        records.len(),
+        1,
+        "exactly ONE suppressed enforcement must be recorded, got {records:?}"
+    );
+    assert_eq!(
+        records[0].check, "tainted",
+        "a suppressed genuine taint must be recorded as `tainted`, got {:?}",
+        records[0]
+    );
+    assert_eq!(
+        ledger_tally(&f),
+        (1, 0),
+        "the tally must agree with the records read back"
+    );
+}
+
+/// ANTI-VACUITY ANCHOR #2 — PASSES BOTH BEFORE AND AFTER the change.
+///
+/// `Check::Clean` → `Silent`, in the observe-only posture too. Cheap, and it
+/// pins the one thing a "make cannot-determine always enforce" change could
+/// plausibly over-reach into: turning the empty/clean store into a warning or a
+/// decision. A gate that starts speaking on every clean turn is not fail-closed,
+/// it is broken.
+///
+/// ## What this test does NOT do
+///
+/// A clean store here is an *empty* store (no `mark` ever ran). It does not cover
+/// the mark-then-clear route to clean; `clear_after_stop_restores_a_clean_gate`
+/// does that (under the enforce posture).
+#[test]
+fn observe_only_with_a_clean_session_is_still_silent() {
+    let f = fixture("observe-clean-anchor");
+    let env = observe_only_env();
+
+    let (code, stdout, _) = run(
+        "gate",
+        &gate_payload(
+            "Bash",
+            serde_json::json!({"command": "cargo test"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0, "gate must always exit 0");
+    assert!(
+        stdout.trim().is_empty(),
+        "a clean session must allow SILENTLY even under observe-only, got: {stdout:?}"
+    );
+    assert_eq!(
+        ledger_tally(&f),
+        (0, 0),
+        "a clean turn must not append a ledger line"
+    );
+}
+
+/// THE DIFFERENTIAL, in ONE project and therefore ONE ledger: the same binary,
+/// the same env var, the same `cwd` — and two sessions that must be treated
+/// DIFFERENTLY.
+///
+/// This is the test that cannot be satisfied by moving a single global switch. A
+/// build that always enforces fails on the tainted half; a build that always
+/// suppresses fails on the undetermined half; the pre-change build fails on the
+/// undetermined half (both its decision and its ledger line). Only "suppress a
+/// recorded taint, enforce a cannot-determine" passes.
+///
+/// Sharing one `cwd` is the point: the ledger is project-scoped
+/// (`observe::ledger_path` takes only `cwd`), so the tally after the undetermined
+/// half and the tally after the tainted half are readings of the SAME counter.
+/// That makes "the undetermined event did not inflate the suppressed count"
+/// directly observable rather than inferred from two separate stores.
+///
+/// The undetermined session is driven FIRST on purpose: `find_marker_file`
+/// returns whichever marker it walks into first, so it is only unambiguous while
+/// exactly one session has marked.
+///
+/// ## What this test does NOT do
+///
+/// It does not cover the headless (`deny`) hardening — `observe_only_env()` is
+/// deliberately interactive, so a wrongly-softening implementation still has to
+/// produce the *softer* `ask` and is caught by the same assertion.
+#[test]
+fn one_ledger_records_the_suppressed_taint_but_not_the_enforced_cannot_determine() {
+    let f = fixture("observe-differential");
+    let env = observe_only_env();
+
+    // ── half 1: cannot-determine ⇒ ENFORCE, and record NOTHING ──────────────
+    let undet_session = format!("{}-undetermined", f.session);
+    let (code, _, _) = run(
+        "mark",
+        &mark_payload(
+            "WebFetch",
+            serde_json::json!({"url": "https://example.com"}),
+            &f.cwd,
+            &undet_session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0);
+    let marker = find_marker_file(&f.state_dir)
+        .expect("exactly one session has marked so far, so the marker is unambiguous");
+    std::fs::write(&marker, b"{ not json").expect("corrupt the marker");
+
+    let (code, undet_stdout, _) = run(
+        "gate",
+        &gate_payload(
+            "Bash",
+            serde_json::json!({"command": "echo hi"}),
+            &f.cwd,
+            &undet_session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0);
+    let decision = permission_decision(&undet_stdout);
+    assert!(
+        decision.as_deref() == Some("ask") || decision.as_deref() == Some("deny"),
+        "cannot-determine half: must ENFORCE under observe-only, got decision={decision:?}, \
+         stdout={undet_stdout:?}"
+    );
+    assert_eq!(
+        ledger_tally(&f),
+        (0, 0),
+        "cannot-determine half: the shared project ledger must still be empty — an enforced \
+         event must not inflate the `suppressed` count"
+    );
+
+    // ── half 2: a genuine taint ⇒ SUPPRESS, and record exactly one line ─────
+    let taint_session = format!("{}-tainted", f.session);
+    let (code, _, _) = run(
+        "mark",
+        &mark_payload(
+            "WebSearch",
+            serde_json::json!({"query": "how to x"}),
+            &f.cwd,
+            &taint_session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0);
+
+    let (code, taint_stdout, _) = run(
+        "gate",
+        &gate_payload(
+            "Bash",
+            serde_json::json!({"command": "echo hi"}),
+            &f.cwd,
+            &taint_session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0);
+    assert!(
+        hook_specific(&hook_json(&taint_stdout))
+            .get("permissionDecision")
+            .is_none(),
+        "tainted half: must still be SUPPRESSED under observe-only, got: {taint_stdout:?}"
+    );
+
+    // THE DIFFERENTIAL: the shared counter moved by exactly one, and it was the
+    // tainted event that moved it.
+    let records = ledger_records(&f);
+    assert_eq!(
+        records.len(),
+        1,
+        "the shared ledger must hold exactly ONE record — the suppressed taint, and not the \
+         enforced cannot-determine, got {records:?}"
+    );
+    assert_eq!(
+        records[0].check, "tainted",
+        "the single record must be the SUPPRESSED TAINT, not the enforced cannot-determine, \
+         got {:?}",
+        records[0]
+    );
+    assert_eq!(
+        records[0].session, taint_session,
+        "the single record must belong to the tainted session, got {:?}",
+        records[0]
+    );
+}
+
+/// ADVISORY / WORDING-DEPENDENT — see the note at the end.
+///
+/// When observe-only is set but is NOT honoured (the cannot-determine path), the
+/// enforced `permissionDecisionReason` must say so. Without it the operator sees
+/// an `ask` they explicitly configured away and has no way to tell whether their
+/// posture is broken, ignored, or deliberately overridden on this one path. The
+/// panic arm already does exactly this (`src/main.rs`: "Observe-only, if set, is
+/// NOT honoured on this path"), so this only asks the `Undetermined` arm to be
+/// consistent with its sibling.
+///
+/// The check is case-insensitive on the single token `observe-only` — the
+/// weakest assertion that still requires the posture to be NAMED. It does not
+/// pin the sentence, the surrounding words, or the order.
+///
+/// ## Honest caveat about this test specifically
+///
+/// This is the ONE assertion in this set that depends on wording the
+/// implementation has not written yet. It is a deliberately separate test so
+/// that, if the final wording spells the posture differently (e.g. "observe
+/// only", no hyphen), only this test needs a word changed and the decisive
+/// tests above stay untouched. Retune the substring, do not delete the test —
+/// the requirement (name the un-honoured posture) is real.
+#[test]
+fn observe_only_enforced_cannot_determine_reason_names_the_unhonoured_posture() {
+    let f = fixture("observe-undet-reason");
+    let env = observe_only_env();
+
+    let (code, _, _) = run(
+        "mark",
+        &mark_payload(
+            "WebFetch",
+            serde_json::json!({"url": "https://example.com"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0);
+    let marker =
+        find_marker_file(&f.state_dir).expect("mark must have written exactly one marker file");
+    std::fs::write(&marker, b"{ not json").expect("corrupt the marker");
+
+    let (code, stdout, _) = run(
+        "gate",
+        &gate_payload(
+            "Bash",
+            serde_json::json!({"command": "echo hi"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0);
+
+    let v = hook_json(&stdout);
+    let hso = hook_specific(&v);
+    let reason = hso
+        .get("permissionDecisionReason")
+        .and_then(|r| r.as_str())
+        .unwrap_or_else(|| {
+            panic!("an enforced decision must carry a permissionDecisionReason, got {v}")
+        });
+    assert!(
+        reason.to_lowercase().contains("observe-only"),
+        "the enforced reason must NAME the posture it is not honouring, so the operator can \
+         tell an ignored posture from a deliberately-overridden one: {reason}"
+    );
+    assert!(
+        reason.to_lowercase().contains("taintguard"),
+        "the reason must name the gate that produced it: {reason}"
     );
 }
 

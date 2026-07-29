@@ -176,17 +176,26 @@ fn format_sources(sources: &[String]) -> String {
 /// `Silent`. That is what keeps observe-only from being a fail-open: the
 /// suppression is carried in its own variant, along with the finding it
 /// suppressed, so nothing downstream can read it as "nothing was found".
+///
+/// Narrower than that, though: **only `Check::Tainted` can reach `Observe`.**
+/// `Check::Undetermined` resolves to `Enforce` in *both* postures (see
+/// [`decide_gate_with`]), so `Observe` means exactly one thing — "a known taint,
+/// with named sources, whose enforcement was suppressed for measurement".
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum GateAction {
     /// The check came back `Clean`. Print nothing at all — byte-identical to
     /// this crate's behaviour before observe-only existed.
     Silent,
-    /// A finding, and this process is in the enforce posture: print the
-    /// `ask`/`deny` PreToolUse decision.
+    /// A finding, and this process is either in the enforce posture **or** the
+    /// finding is a cannot-determine (which enforces in either posture): print
+    /// the `ask`/`deny` PreToolUse decision.
     Enforce(String),
-    /// A finding, and this process is in the observe-only posture: print an
-    /// `additionalContext` warning carrying **no** `permissionDecision`, and
-    /// append `record` to the ledger so the suppressed enforcement is counted.
+    /// A **`Tainted`** finding, and this process is in the observe-only posture:
+    /// print an `additionalContext` warning carrying **no**
+    /// `permissionDecision`, and append `record` to the ledger so the suppressed
+    /// enforcement is counted. Reachable from `Check::Tainted` only — a
+    /// cannot-determine is never suppressed, so it never lands here and
+    /// therefore never writes a ledger line.
     Observe {
         context: String,
         record: observe::Record,
@@ -202,6 +211,10 @@ fn decide_gate(input: &HookInput) -> GateAction {
 
 /// [`decide_gate`] with the posture injected, so tests can drive both postures
 /// without mutating the process-global environment.
+///
+/// The posture is consulted on **exactly one** of the three arms below —
+/// `Check::Tainted`. `Check::Clean` is silent in either posture, and
+/// `Check::Undetermined` enforces in either posture; see that arm's comment.
 fn decide_gate_with(input: &HookInput, posture: observe::Posture) -> GateAction {
     let cwd = input.cwd_or_current();
     let tool = input.tool_name.as_str();
@@ -222,19 +235,46 @@ fn decide_gate_with(input: &HookInput, posture: observe::Posture) -> GateAction 
                 },
             }
         }
-        state::Check::Undetermined(why) => match posture {
-            observe::Posture::Enforce => GateAction::Enforce(build_decision(&format!(
+        // CANNOT-DETERMINE ENFORCES REGARDLESS OF POSTURE (CLAUDE.md §3).
+        //
+        // Through 0.1.5 this arm honoured observe-only and returned `Observe`,
+        // i.e. "I could not determine the taint state" was silenced by a
+        // measurement flag. That is the cannot-determine→permissive collapse §3
+        // forbids, and it bought nothing: observe-only exists to measure the
+        // friction caused by *known* taint, and an `Undetermined` check names no
+        // sources at all (the record's `sources` was always empty), so
+        // suppressing it produced no measurement while spending the invariant.
+        // "Could not determine" is the same class as "panicked", and the panic
+        // barrier below already enforces in either posture — this arm is now
+        // consistent with it.
+        //
+        // NO LEDGER LINE IS WRITTEN HERE, deliberately. The ledger — and
+        // `taintguard tally`'s `suppressed` field that reads it — is *defined* as
+        // the count of suppressed enforcements (`observe::Record`, `observe::tally`).
+        // This event was not suppressed; it enforced. Appending it would inflate a
+        // counter whose own name asserts suppression, so the honest options were
+        // "don't record" or "change tally's output contract to split `suppressed`
+        // three ways"; the first is chosen and the README says so explicitly, so
+        // no reader is left thinking the ledger counts every time the gate fired.
+        // The event stays observable as the `ask`/`deny` it actually produced,
+        // whose reason names the un-honoured posture (below) — the same channel
+        // the panic arm uses.
+        state::Check::Undetermined(why) => {
+            let unhonoured = match posture {
+                // Nothing to say: no posture was overridden.
+                observe::Posture::Enforce => String::new(),
+                // Say it, so an operator who deliberately set observe-only can
+                // tell "my posture is being ignored/broken" from "this one path
+                // never honours it, on purpose".
+                observe::Posture::ObserveOnly => {
+                    format!(" {}", observe::undetermined_not_suppressed_note())
+                }
+            };
+            GateAction::Enforce(build_decision(&format!(
                 "[taintguard] could not verify this session's taint state ({why}); \
-                 failing closed (treating this turn as tainted)."
-            ))),
-            observe::Posture::ObserveOnly => GateAction::Observe {
-                context: observe::warning_undetermined(&why, tool),
-                // No sources: an unreadable marker cannot name what tainted it.
-                // Recorded as `undetermined` rather than folded into `tainted`
-                // so a store-health problem stays visible in the tally.
-                record: observe::Record::now(tool, &[], "undetermined", &input.session_id),
-            },
-        },
+                 failing closed (treating this turn as tainted).{unhonoured}"
+            )))
+        }
     }
 }
 
@@ -248,8 +288,13 @@ fn decide_gate_with(input: &HookInput, posture: observe::Posture) -> GateAction 
 /// barrier — the posture it was supposed to honour. Observe-only is an
 /// affordance for measuring a *working* gate, not a licence to swallow an
 /// internal error; cannot-determine resolves to the restricted side regardless
-/// of posture (CLAUDE.md §3). A panic is therefore the one case where
-/// observe-only does not suppress, and it is loud in stderr besides.
+/// of posture (CLAUDE.md §3). It is loud in stderr besides.
+///
+/// This used to be described as "the one case where observe-only does not
+/// suppress". It no longer is: `Check::Undetermined` also enforces in either
+/// posture (see [`decide_gate_with`]'s comment on that arm). Observe-only now
+/// suppresses exactly one thing — a `Check::Tainted` finding — which is the only
+/// thing it could ever have measured.
 fn analyse_gate(input: &HookInput) -> GateAction {
     analyse_gate_barrier(input, decide_gate)
 }
@@ -762,12 +807,39 @@ mod tests {
         assert_eq!(observe::tally(&cwd).unwrap(), (3, 0));
     }
 
-    /// An `Undetermined` check under observe-only is recorded as
-    /// `"undetermined"`, NOT folded into `"tainted"` — otherwise a store-health
-    /// problem would hide inside the friction statistic. Driven by a corrupt
-    /// marker, the same fault `state.rs` uses for its own Undetermined test.
+    /// An `Undetermined` check **enforces in BOTH postures** — observe-only does
+    /// NOT suppress a cannot-determine (CLAUDE.md §3: 判定不能は必ず制限側に
+    /// 解決する). Driven by a corrupt marker, the same fault `state.rs` uses for
+    /// its own Undetermined test.
+    ///
+    /// This test replaces `observe_only_keeps_undetermined_distinct_from_tainted`,
+    /// which asserted the opposite (`GateAction::Observe` with
+    /// `record.check == "undetermined"`). That shape only made sense while
+    /// observe-only was allowed to swallow a cannot-determine; the human decision
+    /// recorded in this change is that it is not. The "keep `undetermined`
+    /// distinct from `tainted` in the ledger" property it pinned is now moot on
+    /// this path, because **nothing is written to the ledger at all** for an
+    /// enforced `Undetermined` — asserted below.
+    ///
+    /// ## Why no ledger line
+    ///
+    /// The ledger and `taintguard tally`'s `suppressed` counter are defined as
+    /// *suppressed enforcements*. This event was NOT suppressed — it enforced —
+    /// so recording it would inflate a counter whose name asserts suppression.
+    /// The absence is deliberate, not an oversight, which is why it has an
+    /// assertion rather than a comment.
+    ///
+    /// ## WHAT THIS TEST DOES NOT DO
+    ///
+    /// It injects the posture directly and therefore never calls
+    /// [`observe::posture()`], the only reader of `TAINTGUARD_OBSERVE_ONLY`. So it
+    /// cannot catch a `posture()` that mis-reads the env var — that is covered
+    /// end-to-end through the real binary by
+    /// `observe_only_must_not_suppress_a_cannot_determine_corrupt_marker` in
+    /// `crates/taintguard/tests/provenance_gate.rs`. This test pins only the
+    /// posture-INDEPENDENCE of the `Undetermined` arm of `decide_gate_with`.
     #[test]
-    fn observe_only_keeps_undetermined_distinct_from_tainted() {
+    fn undetermined_enforces_under_both_postures_and_records_no_ledger_line() {
         let (_guard, _dir, cwd) = temp_env("observe-undet");
         let session = "s-observe-undet";
         let marker = state::marker_path_for_test(&cwd, session);
@@ -775,20 +847,31 @@ mod tests {
         std::fs::write(&marker, b"{ not json").unwrap();
 
         let gate_input = hook_input("Bash", json!({}), &cwd, session);
-        let action = decide_gate_with(&gate_input, observe::Posture::ObserveOnly);
-        match &action {
-            GateAction::Observe { context, record } => {
-                assert_eq!(record.check, "undetermined");
-                assert!(record.sources.is_empty());
-                assert!(
-                    context.contains("could not verify"),
-                    "the warning must say the state was unreadable: {context}"
-                );
-            }
-            other => panic!("expected Observe, got {other:?}"),
+
+        for posture in [observe::Posture::ObserveOnly, observe::Posture::Enforce] {
+            let action = decide_gate_with(&gate_input, posture);
+            assert!(
+                matches!(action, GateAction::Enforce(_)),
+                "an unreadable taint marker must ENFORCE under {posture:?} — observe-only must \
+                 not suppress a cannot-determine, got {action:?}"
+            );
+            assert_enforced(&action);
+            // Not silent, and not the suppressed-observe shape either: an
+            // unreadable store is neither a clean turn nor a measured one.
+            assert_ne!(action, GateAction::Silent);
+
+            // And emitting it appends nothing to the observe-only ledger, in
+            // either posture: this enforcement was not suppressed, so the
+            // `suppressed` counter must not move.
+            emit_gate(&gate_input, action);
+            assert_eq!(
+                observe::tally(&cwd).unwrap(),
+                (0, 0),
+                "an ENFORCED cannot-determine must append no observe-only ledger line under \
+                 {posture:?} — the ledger counts suppressed enforcements, and this one was not \
+                 suppressed"
+            );
         }
-        // And it must NOT be silent — an unreadable store is not a clean turn.
-        assert_ne!(action, GateAction::Silent);
     }
 
     /// Three things, and NOT the env var: for every raw value that is not the

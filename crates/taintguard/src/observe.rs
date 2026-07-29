@@ -65,6 +65,31 @@
 //!
 //! Observe-only suppresses the *enforcement*, never the *reporting*.
 //!
+//! # What observe-only does NOT suppress (changed in 0.1.6)
+//!
+//! **Only [`crate::state::Check::Tainted`] is ever suppressed.** A
+//! [`crate::state::Check::Undetermined`] check — corrupt marker, wrong-schema
+//! marker, unwritable store — resolves to `ask`/`deny` in *either* posture, as
+//! does a panic in the barrier (see `main.rs`'s `analyse_gate`). Through 0.1.5
+//! `Undetermined` was suppressed too, which was a fail-open dressed as a
+//! measurement: this module's whole premise is "how much friction does enforcing
+//! **known** taint cause", and an `Undetermined` finding names no sources at all
+//! (its record's `sources` was always empty), so suppressing it produced no
+//! measurable friction datum while collapsing cannot-determine into permission
+//! (CLAUDE.md §3). "Could not determine" is the same class as "panicked", and
+//! panic already enforced.
+//!
+//! Consequence for the numbers, stated here because it is easy to misread: an
+//! enforced `Undetermined` under observe-only appends **no** ledger line. So the
+//! ledger counts *suppressed enforcements*, which is **not** the same as *times
+//! the gate fired* — see [`tally`] and README.ja.md. Recording it would have
+//! inflated a counter whose name asserts suppression; the alternative, splitting
+//! [`tally`]'s `suppressed` into three, would change this module's output
+//! contract and was out of scope. The un-recorded event is still observable: it
+//! produced a real `ask`/`deny`, and its reason carries
+//! [`undetermined_not_suppressed_note`], which says both that the posture was not
+//! honoured and that nothing was written here.
+//!
 //! # Opt-in fails closed
 //!
 //! Only the exact string `"1"` in `TAINTGUARD_OBSERVE_ONLY` selects
@@ -104,6 +129,10 @@ pub enum Posture {
     /// Measurement mode: run the check, report the finding, but emit **no**
     /// `permissionDecision`, and append a ledger line so the suppressed
     /// enforcement can be counted.
+    ///
+    /// Applies to a `Tainted` finding **only**. An `Undetermined` finding (and a
+    /// panic) enforces even in this posture — see the module docs, "What
+    /// observe-only does NOT suppress".
     ObserveOnly,
 }
 
@@ -143,13 +172,19 @@ pub struct Record {
     /// The write-class tool whose call would have been downgraded.
     pub tool: String,
     /// Which provenance sources had tainted the turn (`"web"`,
-    /// `"external-read"`, `"lessons"`, `"internal-error"`). Empty for an
-    /// `Undetermined` check, where the taint state could not be read at all.
+    /// `"external-read"`, `"lessons"`, `"internal-error"`). Never empty in a
+    /// record written by 0.1.6+, because only a `Tainted` check is suppressed and
+    /// a `Tainted` check names its sources. (Records written by ≤0.1.5 for an
+    /// `Undetermined` check have this empty.)
     pub sources: Vec<String>,
-    /// `"tainted"` or `"undetermined"` — kept distinct so the measurement can
-    /// tell "the gate would have blocked a real taint" from "the gate would
-    /// have blocked because it could not read its own state". Collapsing these
-    /// would hide a store-health problem inside a friction statistic.
+    /// Always `"tainted"` in records written by 0.1.6+: `Undetermined` is no
+    /// longer suppressed, so it never reaches the ledger (see the module docs).
+    ///
+    /// The field is **kept rather than dropped** because ledgers written by
+    /// ≤0.1.5 can contain `"undetermined"` lines, and those must still
+    /// deserialize — [`tally`] counts a line it cannot parse as `corrupt`, so
+    /// removing this field would retroactively turn an operator's existing
+    /// measurement into reported corruption.
     pub check: String,
     /// Session id the suppression happened in, so per-session fire-rates can be
     /// derived from a project-wide ledger.
@@ -298,18 +333,35 @@ pub fn warning(sources_desc: &str, tool: &str) -> String {
     )
 }
 
-/// The warning text for a suppressed enforcement whose cause was an
-/// unreadable taint state rather than a recorded taint. Kept separate from
-/// [`warning`] so the operator can see that the gate could not read its own
-/// store — a store-health signal that must not be folded into the friction
-/// statistic.
-pub fn warning_undetermined(why: &str, tool: &str) -> String {
+/// The note appended to the fail-closed `ask`/`deny` reason when this process
+/// **is** in observe-only but the check came back
+/// [`crate::state::Check::Undetermined`] — the one finding observe-only does not
+/// suppress.
+///
+/// Replaces the former `warning_undetermined`, which was the observe-mode
+/// *warning* for that case. It had to go rather than be kept unused: its text
+/// said "enforcement was SUPPRESSED because observe-only is active, and the event
+/// was recorded to the observe-only ledger", and after 0.1.6 neither half is true
+/// on this path — nothing is suppressed and nothing is recorded. Leaving that
+/// prose in the tree would have been a CLAUDE.md §4 defect (a docstring telling a
+/// safer story than the code), so the function is gone and this one took its
+/// place.
+///
+/// It exists at all because an operator who deliberately exported
+/// `TAINTGUARD_OBSERVE_ONLY=1` and then gets an `ask` needs to distinguish three
+/// things: their posture being ignored, their posture being mis-parsed, and this
+/// one path never honouring it on purpose. Saying so also documents the ledger
+/// decision at the moment it matters, so nobody goes looking in `tally` for a
+/// count that was never written.
+pub fn undetermined_not_suppressed_note() -> String {
     format!(
-        "[taintguard] OBSERVE-ONLY (measurement mode, {OBSERVE_ONLY_ENV}={OBSERVE_ONLY_OPT_IN}): \
-         could not verify this turn's taint state ({why}). Normally this `{tool}` call would \
-         be downgraded to ask/deny (failing closed); enforcement was SUPPRESSED because \
-         observe-only is active, and the event was recorded to the observe-only ledger. \
-         This is NOT a verified-clean turn."
+        "(Observe-only IS set ({OBSERVE_ONLY_ENV}={OBSERVE_ONLY_OPT_IN}) but is deliberately NOT \
+         honoured here: observe-only suppresses enforcement for KNOWN taint so its friction can \
+         be measured, and a state that could not be determined names no sources, so suppressing \
+         it would measure nothing while turning cannot-determine into permission — \
+         cannot-determine always resolves to the restricted side. No observe-only ledger line \
+         was written for this event either: the ledger counts SUPPRESSED enforcements, and this \
+         one was not suppressed.)"
     )
 }
 
@@ -563,11 +615,27 @@ mod tests {
         assert!(w.contains("SUPPRESSED"));
         assert!(w.contains("Bash"));
         assert!(w.contains("NOT a clean turn"));
+    }
 
-        let u = warning_undetermined("marker unreadable", "Write");
-        assert!(u.contains("OBSERVE-ONLY"));
-        assert!(u.contains("could not verify"));
-        assert!(u.contains("SUPPRESSED"));
-        assert!(u.contains("Write"));
+    /// The un-honoured-posture note must (a) name the posture, so the operator
+    /// can tell an ignored posture from a deliberately-overridden one, and
+    /// (b) state that nothing was written to the ledger, so nobody hunts in
+    /// `tally` for a count that does not exist. It must NOT claim a suppression:
+    /// this note is emitted on the path that ENFORCED.
+    #[test]
+    fn undetermined_note_names_the_posture_and_denies_both_suppression_and_recording() {
+        let n = undetermined_not_suppressed_note();
+        assert!(n.to_lowercase().contains("observe-only"));
+        assert!(n.contains(OBSERVE_ONLY_ENV));
+        assert!(n.contains("NOT honoured"));
+        assert!(n.contains("ledger"));
+        assert!(
+            n.contains("not suppressed"),
+            "the note must deny the suppression, not assert one: {n}"
+        );
+        assert!(
+            !n.contains("was SUPPRESSED"),
+            "this path enforced; the note must never say enforcement was suppressed: {n}"
+        );
     }
 }

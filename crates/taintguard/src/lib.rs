@@ -36,6 +36,15 @@
 //! turns a `Tainted`/`Undetermined` check into a `Clean` one — the two live on
 //! separate axes ([`state::Check`] vs [`observe::Posture`]) exactly so that
 //! "suppressed" stays distinguishable from "nothing found".
+//!
+//! Observe-only suppresses **`Tainted` only** (changed in 0.1.6). A
+//! [`state::Check::Undetermined`] — the taint state could not be determined —
+//! resolves to `ask`/`deny` in either posture, as does a panic in the gate's
+//! barrier: cannot-determine always resolves to the restricted side (CLAUDE.md
+//! §3), and suppressing a finding that names no sources would have measured
+//! nothing anyway. Such an enforced `Undetermined` therefore writes **no** ledger
+//! line, so the ledger counts *suppressed enforcements* rather than *gate
+//! firings*; see [`observe`]'s module docs for the full argument.
 
 pub mod classify;
 pub mod hookio;

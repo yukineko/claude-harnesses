@@ -427,6 +427,92 @@ grep -q -- '-p plaincrate-pkg' <<<"$OUT" && fail "Q: a crate without [lints] was
 pass "root-manifest change selects opted-in crates only, and exits 0 when clean"
 
 # =============================================================================
+# R: a manifest `build` path pointing OUT of the crate directory.
+#
+# Editing only that file changes what the opted-in crate compiles, under that
+# crate's own deny table, while touching nothing under crates/<dir>/. Selection
+# driven purely by the `crates/` prefix cannot see it, so the scanner said
+# "nothing to check" and exited 0 while real clippy failed the same tree. That
+# is a pass-with-violation, demonstrated rather than theorised (backlog
+# 3832ba25).
+#
+# This case also settles a claim rather than trusting it: it is only a false
+# negative if clippy actually applies the package deny table to a build script.
+# If it does not, this case cannot reach exit 1 no matter how selection works.
+# =============================================================================
+echo
+echo ">>> R: out-of-crate build script edited — expect the crate selected, exit 1"
+seed r
+mkdir -p "$T/buildscripts"
+
+# Rewritten whole rather than appended to: `build` belongs to [package], and
+# appending would land it under [lints], where it means nothing.
+cat >"$T/crates/gatecrate/Cargo.toml" <<'EOF'
+[package]
+name    = "gatecrate-pkg"
+version = "0.0.0"
+edition = "2021"
+build   = "../../buildscripts/build_helper.rs"
+
+[[bin]]
+name = "gatecrate-pkg"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+EOF
+printf '%s\n' 'fn main() {}' >"$T/buildscripts/build_helper.rs"
+"$REAL_GIT" -C "$T" add -A >/dev/null
+"$REAL_GIT" -C "$T" commit -qm build-script
+
+# The violation goes in the OUT-OF-CRATE file, and nowhere else.
+printf '%s\n' 'fn main() { let v: Option<u32> = Some(1); let _ = v.unwrap(); }' \
+  >"$T/buildscripts/build_helper.rs"
+RDIFF="$("$REAL_GIT" -C "$T" diff --name-only HEAD --)"
+[ "$RDIFF" = "buildscripts/build_helper.rs" ] \
+  || fail "R: fixture is wrong — expected only the build script changed, got: $RDIFF"
+pass "precondition: only an out-of-crate build script changed"
+scan PATH="$PATH"
+[ "$RC" = "1" ] \
+  || fail "R: a denied expression in an out-of-crate build script must block; expected 1, got $RC"
+grep -q 'gatecrate-pkg' <<<"$OUT" \
+  || fail "R: the crate whose build path was edited was never selected"
+pass "an out-of-crate build path is followed back to its crate and blocks"
+
+# =============================================================================
+# S: a `build` path that escapes the REPOSITORY, not merely the crate dir.
+#
+# Such a file can never appear in `git diff`, so the gate cannot know whether it
+# changed or what is in it. That is cannot-determine, and CLAUDE.md 3 puts it on
+# the restrictive side: exit 2, not a silent 0. Skipping it quietly would be the
+# same fail-open this case exists to remove, one level further out.
+# =============================================================================
+echo
+echo ">>> S: build path escaping the repo root — expect UNDETERMINED (exit 2)"
+seed s
+cat >"$T/crates/gatecrate/Cargo.toml" <<'EOF'
+[package]
+name    = "gatecrate-pkg"
+version = "0.0.0"
+edition = "2021"
+build   = "../../../outside/build_helper.rs"
+
+[[bin]]
+name = "gatecrate-pkg"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+EOF
+printf '%s\n' "$CLEAN_MAIN" >"$T/crates/gatecrate/src/main.rs.new"
+mv "$T/crates/gatecrate/src/main.rs.new" "$T/crates/gatecrate/src/main.rs"
+printf '%s\n' '// touched' >>"$T/crates/gatecrate/src/main.rs"
+scan PATH="$PATH"
+[ "$RC" = "2" ] \
+  || fail "S: a build path outside the repo is uncheckable and must be UNDETERMINED; expected 2, got $RC"
+pass "a build path escaping the repo resolves to cannot-determine, not to clean"
+
+# =============================================================================
 # P: the two zero-crate answers are DIFFERENT exit codes.
 # =============================================================================
 echo

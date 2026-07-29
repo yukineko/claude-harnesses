@@ -96,35 +96,35 @@ adding `[lints] workspace = true` to those four manifests, which touches
 of scope for the change that introduced this file, not a judgement that the gap
 is unimportant.
 
-A second limitation, with a DEMONSTRATED false negative
-------------------------------------------------------
-Selection is driven by paths under `crates/<dir>/` plus the workspace root
-`Cargo.toml`. A change to any other file that alters what a gate crate compiles
-to will not select that crate.
-
-This was verified concretely rather than left as a hypothetical, and the first
-wording of this paragraph was wrong about how. Its two examples do not hold in
-this repo: a repository-root `build.rs` is never invoked, because the root
-`Cargo.toml` is workspace-only and has no `[package]` section; and no path
-dependency outside `crates/` currently exists. Both were checked.
-
-The real, reproducible escape is a manifest `build` path pointing out of the
-crate directory. With `build = "../../buildscripts/foo.rs"` in an opted-in
-crate's Cargo.toml, editing ONLY `buildscripts/foo.rs` to add a denied
-`.unwrap()` yields:
+Out-of-directory sources: a false negative that WAS demonstrated, now closed
+---------------------------------------------------------------------------
+Selection began as `crates/<dir>/` prefixes plus the workspace root
+`Cargo.toml`. That missed a real escape, found by an independent verifier and
+reproduced here: a manifest `build` path pointing out of the crate directory.
+With `build = "../../buildscripts/foo.rs"` in an opted-in crate's Cargo.toml,
+editing ONLY `buildscripts/foo.rs` to add a denied `.unwrap()` gave
 
     git diff --name-only HEAD --   ->  buildscripts/foo.rs
     this scanner                   ->  "nothing to check", exit 0
-    cargo clippy -p <pkg> --all-targets
-        error: used `unwrap()` on an `Option` value
-          --> crates/<c>/../../buildscripts/foo.rs
-        = note: requested on the command line with `-D clippy::unwrap-used`
+    cargo clippy -p <pkg> --all-targets  ->  error, exit 101
 
-That is a genuine pass-with-violation: the build script inherits the crate's
-deny table, real clippy flags it, and this scanner reports clean. No crate in
-this repo currently uses an out-of-directory `build` path, so it is latent
-rather than live — but it is a false negative in the gate, not a design choice,
-and it is written down here so the gate is not trusted beyond what it checks.
+— a pass-with-violation, because the build script inherits the crate's deny
+table. That clippy really does apply the package deny table to a build script
+is measured, not assumed; case R of the test suite fails if it ever stops
+being true, and the failure it produced before the fix is in the same case.
+
+`_external_sources` closes it: every opted-in crate's manifest is read, the
+target paths that inherit its `[lints]` table (`package.build`, `lib.path`, and
+`path` on `[[bin]]`/`[[example]]`/`[[test]]`/`[[bench]]`) are resolved against
+the crate directory, and any that lands outside it is registered as a trigger
+for that crate. A path that leaves the REPOSITORY is Undetermined rather than
+ignored — such a file can never appear in `git diff`, so whether it changed is
+unknowable, and quietly skipping it would displace the same fail-open one level
+outward. Reading all 42 manifests costs ~0.1s, measured on this repo.
+
+Path DEPENDENCIES are deliberately not followed. A path dependency is its own
+package with its own lint table, so a violation inside one is attributed to
+that package, not to the crate that depends on it.
 
 Two currently-real instances of the same shape that CANNOT smuggle a violation,
 recorded so the boundary is precise: the root `Cargo.lock` (changes on any
@@ -132,7 +132,11 @@ dependency bump), and `crates/specguard/src/forge/prompt.rs:10`, which does
 `include_str!("../../templates/normalize-prompt.md")` — a real repo-root file
 that changes what an opted-in crate compiles. Neither can introduce a denied
 expression, because a lockfile bump adds no source to the crate and
-`include_str!` embeds inert text rather than parsed Rust.
+`include_str!` embeds inert text rather than parsed Rust. Note that this means
+the gate still does not follow `include_str!`/`include!` targets: those are not
+manifest-declared, so finding them would mean parsing Rust source rather than
+TOML. `include!` of a repo file containing a denied expression remains an
+uncovered path.
 
 Exit codes
 ----------
@@ -144,6 +148,7 @@ Exit codes
 from __future__ import annotations
 
 import os
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -318,6 +323,83 @@ def _package_name(manifest: dict) -> str | None:
     return None
 
 
+def _manifest_source_paths(manifest: dict) -> tuple[str, ...]:
+    """Every manifest value naming Rust source that THIS package compiles.
+
+    Restricted to targets that inherit the package's `[lints]` table, because
+    inheriting that table is the whole reason a path matters here. Path
+    dependencies are deliberately excluded: a path dependency is its own
+    package with its own lint table, so a violation in one is attributed to
+    that package, not to this one.
+
+    `build = true` / `build = false` select or disable the default `build.rs`,
+    which lives inside the crate directory and is already covered by the
+    ordinary `crates/<dir>/` prefix; only a string names some other file.
+    """
+    found: list[str] = []
+
+    package = manifest.get("package")
+    if isinstance(package, dict):
+        build = package.get("build")
+        if isinstance(build, str) and build.strip():
+            found.append(build.strip())
+
+    lib = manifest.get("lib")
+    if isinstance(lib, dict):
+        path = lib.get("path")
+        if isinstance(path, str) and path.strip():
+            found.append(path.strip())
+
+    for table in ("bin", "example", "test", "bench"):
+        entries = manifest.get(table)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("path")
+            if isinstance(path, str) and path.strip():
+                found.append(path.strip())
+
+    return tuple(found)
+
+
+def _external_sources(
+    manifest: dict, crate_dir: str
+) -> Undetermined | frozenset[str]:
+    """Repo-relative paths this crate compiles from OUTSIDE its own directory.
+
+    A path that leaves the repository is Undetermined rather than ignored: such
+    a file can never appear in `git diff`, so the gate cannot see whether it
+    changed or what is in it. Skipping it quietly would be the same
+    empty-set-reads-as-clean fail-open this function exists to close, displaced
+    one level outward.
+    """
+    inside = f"{CRATES_PREFIX}{crate_dir}/"
+    manifest_path = f"{inside}Cargo.toml"
+    external: set[str] = set()
+
+    for raw in _manifest_source_paths(manifest):
+        normalised = raw.replace("\\", "/")
+        if posixpath.isabs(normalised):
+            return Undetermined(
+                f"{manifest_path} compiles {raw!r}, an absolute path; the gate "
+                f"cannot tell whether a file outside the working tree changed"
+            )
+        resolved = posixpath.normpath(posixpath.join(inside, normalised))
+        if resolved == ".." or resolved.startswith("../"):
+            return Undetermined(
+                f"{manifest_path} compiles {raw!r}, which resolves to "
+                f"{resolved!r} — outside the repository. That file cannot "
+                f"appear in `git diff`, so whether it introduced a denied "
+                f"expression is unknowable here"
+            )
+        if not resolved.startswith(inside):
+            external.add(resolved)
+
+    return frozenset(external)
+
+
 def select_crates(repo: str) -> Undetermined | Selection:
     """Which cargo packages to run clippy on, derived from the working tree."""
     changed = changed_paths(repo)
@@ -340,6 +422,32 @@ def select_crates(repo: str) -> Undetermined | Selection:
         if isinstance(all_dirs, Undetermined):
             return all_dirs
         dirs.update(all_dirs)
+
+    # A crate can compile source that does not live under its own directory — a
+    # manifest `build` or target `path` pointing elsewhere. Such a file carries
+    # the crate's deny table, so editing it must select the crate even though
+    # nothing under crates/<dir>/ was touched. Selection driven only by the
+    # `crates/` prefix missed this, and the miss was a demonstrated
+    # pass-with-violation, not a hypothetical (backlog 3832ba25).
+    #
+    # Every opted-in crate is examined, including ones already selected: the
+    # repo-escaping check below is about whether this gate CAN see the crate's
+    # sources at all, which is true regardless of why the crate is in scope.
+    all_dirs = _crate_dirs_with_manifests(repo)
+    if isinstance(all_dirs, Undetermined):
+        return all_dirs
+    for crate_dir in all_dirs:
+        manifest_path = os.path.join(repo, "crates", crate_dir, "Cargo.toml")
+        manifest = _read_manifest(manifest_path)
+        if isinstance(manifest, Undetermined):
+            return manifest
+        if not _opts_in(manifest):
+            continue
+        external = _external_sources(manifest, crate_dir)
+        if isinstance(external, Undetermined):
+            return external
+        if external & changed:
+            dirs.add(crate_dir)
 
     selected: list[tuple[str, str]] = []
     for crate_dir in sorted(dirs):

@@ -28,7 +28,7 @@
 use clap::{Parser, Subcommand};
 
 use harness_core::hook::{read_stdin, run_hook, HookInput};
-use taintguard::{classify, hookio, interactive, state};
+use taintguard::{classify, hookio, interactive, observe, state};
 
 #[derive(Parser)]
 #[command(
@@ -64,9 +64,7 @@ fn main() {
         Command::Gate => run_hook(|| {
             let raw = read_stdin();
             if let Some(input) = HookInput::parse(&raw) {
-                if let Some(line) = analyse_gate(&input) {
-                    println!("{line}");
-                }
+                emit_gate(&input, analyse_gate(&input));
             }
         }),
         Command::Clear => run_hook(|| {
@@ -157,34 +155,137 @@ fn format_sources(sources: &[String]) -> String {
     }
 }
 
-/// Core `gate` decision, pure given `input` + the on-disk taint marker.
-/// `None` means allow (stay silent); `Some(json)` is the line to print.
-fn decide_gate(input: &HookInput) -> Option<String> {
+/// What `gate` decided to DO — as distinct from what the check FOUND
+/// (`state::Check`).
+///
+/// Three actions, and the middle two are **not** interchangeable with the
+/// first. `Silent` is reachable only from `Check::Clean`; a `Tainted` or
+/// `Undetermined` check always produces either `Enforce` or `Observe`, never
+/// `Silent`. That is what keeps observe-only from being a fail-open: the
+/// suppression is carried in its own variant, along with the finding it
+/// suppressed, so nothing downstream can read it as "nothing was found".
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GateAction {
+    /// The check came back `Clean`. Print nothing at all — byte-identical to
+    /// this crate's behaviour before observe-only existed.
+    Silent,
+    /// A finding, and this process is in the enforce posture: print the
+    /// `ask`/`deny` PreToolUse decision.
+    Enforce(String),
+    /// A finding, and this process is in the observe-only posture: print an
+    /// `additionalContext` warning carrying **no** `permissionDecision`, and
+    /// append `record` to the ledger so the suppressed enforcement is counted.
+    Observe {
+        context: String,
+        record: observe::Record,
+    },
+}
+
+/// Core `gate` decision, pure given `input`, the on-disk taint marker, and the
+/// process posture. All I/O is inside `state::check` (the ledger append happens
+/// later, in [`emit_gate`], so this stays a decision function).
+fn decide_gate(input: &HookInput) -> GateAction {
+    decide_gate_with(input, observe::posture())
+}
+
+/// [`decide_gate`] with the posture injected, so tests can drive both postures
+/// without mutating the process-global environment.
+fn decide_gate_with(input: &HookInput, posture: observe::Posture) -> GateAction {
     let cwd = input.cwd_or_current();
+    let tool = input.tool_name.as_str();
     match state::check(&cwd, &input.session_id) {
-        state::Check::Clean => None,
-        state::Check::Tainted(sources) => Some(build_decision(&format!(
-            "[taintguard] this turn consumed untrusted-provenance content ({}); \
-             write-class tools are downgraded until this turn ends cleanly \
-             (a clean Stop restores normal access).",
-            format_sources(&sources)
-        ))),
-        state::Check::Undetermined(why) => Some(build_decision(&format!(
-            "[taintguard] could not verify this session's taint state ({why}); \
-             failing closed (treating this turn as tainted)."
-        ))),
+        // A clean check is the ONLY route to silence, in either posture.
+        state::Check::Clean => GateAction::Silent,
+        state::Check::Tainted(sources) => {
+            let desc = format_sources(&sources);
+            match posture {
+                observe::Posture::Enforce => GateAction::Enforce(build_decision(&format!(
+                    "[taintguard] this turn consumed untrusted-provenance content ({desc}); \
+                     write-class tools are downgraded until this turn ends cleanly \
+                     (a clean Stop restores normal access)."
+                ))),
+                observe::Posture::ObserveOnly => GateAction::Observe {
+                    context: observe::warning(&desc, tool),
+                    record: observe::Record::now(tool, &sources, "tainted", &input.session_id),
+                },
+            }
+        }
+        state::Check::Undetermined(why) => match posture {
+            observe::Posture::Enforce => GateAction::Enforce(build_decision(&format!(
+                "[taintguard] could not verify this session's taint state ({why}); \
+                 failing closed (treating this turn as tainted)."
+            ))),
+            observe::Posture::ObserveOnly => GateAction::Observe {
+                context: observe::warning_undetermined(&why, tool),
+                // No sources: an unreadable marker cannot name what tainted it.
+                // Recorded as `undetermined` rather than folded into `tainted`
+                // so a store-health problem stays visible in the tally.
+                record: observe::Record::now(tool, &[], "undetermined", &input.session_id),
+            },
+        },
     }
 }
 
 /// Run [`decide_gate`] behind a panic barrier: a panic in the taint check must
 /// not fall through to a silent allow. A caught panic resolves to the same
 /// fail-closed ask/deny as `Check::Undetermined`.
-fn analyse_gate(input: &HookInput) -> Option<String> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decide_gate(input))) {
+///
+/// The panic arm **enforces even in observe-only mode**, deliberately. A panic
+/// means the analysis did not complete, so this process cannot claim to know
+/// either the taint state or — since the posture read is itself inside the
+/// barrier — the posture it was supposed to honour. Observe-only is an
+/// affordance for measuring a *working* gate, not a licence to swallow an
+/// internal error; cannot-determine resolves to the restricted side regardless
+/// of posture (CLAUDE.md §3). A panic is therefore the one case where
+/// observe-only does not suppress, and it is loud in stderr besides.
+fn analyse_gate(input: &HookInput) -> GateAction {
+    analyse_gate_barrier(input, decide_gate)
+}
+
+/// The panic barrier itself, with the decision function injected.
+///
+/// Parameterising it (rather than inlining `decide_gate` and having tests
+/// re-implement the barrier in a look-alike helper) means the panic-barrier
+/// tests exercise **this** code — the code that actually runs in production —
+/// instead of a copy that could drift away from it. The previous shape had a
+/// duplicated `analyse_gate_with` in the test module, so a regression in the
+/// real barrier would not have failed any test.
+fn analyse_gate_barrier<F>(input: &HookInput, f: F) -> GateAction
+where
+    F: FnOnce(&HookInput) -> GateAction,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(input))) {
         Ok(out) => out,
-        Err(_) => Some(build_decision(
-            "[taintguard] internal error while checking taint state; failing closed (ask/deny).",
+        Err(_) => GateAction::Enforce(build_decision(
+            "[taintguard] internal error while checking taint state; failing closed (ask/deny). \
+             (Observe-only, if set, is NOT honoured on this path: a panic means the taint state \
+             could not be determined, which always resolves to the restricted side.)",
         )),
+    }
+}
+
+/// Emit `action`: print the hook line (if any) and, for a suppressed
+/// enforcement, append the ledger record.
+///
+/// A ledger append failure is logged to stderr and does not change the emitted
+/// decision — the warning has already been printed, so the event is never
+/// silently invisible even when the durable record is lost. It also cannot
+/// become a permission fail-open: the ledger is never read to decide whether to
+/// enforce (see `observe::append`'s docs).
+fn emit_gate(input: &HookInput, action: GateAction) {
+    match action {
+        GateAction::Silent => {}
+        GateAction::Enforce(line) => println!("{line}"),
+        GateAction::Observe { context, record } => {
+            println!("{}", hookio::context_json(&context));
+            let cwd = input.cwd_or_current();
+            if let Err(reason) = observe::append(&cwd, &record) {
+                eprintln!(
+                    "[taintguard] observe-only: suppressed an enforcement but could NOT record it \
+                     ({reason}); the measurement under-counts by at least one event"
+                );
+            }
+        }
     }
 }
 
@@ -232,6 +333,28 @@ mod tests {
         (guard, dir, cwd)
     }
 
+    /// Enforce posture, passed explicitly everywhere below. The pre-existing
+    /// tests used to call `decide_gate`, which reads the real process
+    /// environment — so once `TAINTGUARD_OBSERVE_ONLY=1` exists, an operator
+    /// with that var exported would have flipped these assertions. Injecting the
+    /// posture keeps them deterministic.
+    const ENFORCE: observe::Posture = observe::Posture::Enforce;
+
+    /// Assert `action` is an enforced `ask` or `deny`.
+    fn assert_enforced(action: &GateAction) {
+        let line = match action {
+            GateAction::Enforce(line) => line,
+            other => panic!("expected an enforced decision, got {other:?}"),
+        };
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        assert!(
+            v["hookSpecificOutput"]["permissionDecision"] == "ask"
+                || v["hookSpecificOutput"]["permissionDecision"] == "deny",
+            "expected ask/deny, got {v}"
+        );
+    }
+
     #[test]
     fn webfetch_marks_and_gate_then_asks_or_denies() {
         let (_guard, _dir, cwd) = temp_env("webfetch");
@@ -245,12 +368,7 @@ mod tests {
         decide_mark(&mark_input).unwrap();
 
         let gate_input = hook_input("Bash", json!({"command": "echo hi"}), &cwd, session);
-        let line = decide_gate(&gate_input).expect("tainted session must not allow silently");
-        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
-        assert!(
-            v["hookSpecificOutput"]["permissionDecision"] == "ask"
-                || v["hookSpecificOutput"]["permissionDecision"] == "deny"
-        );
+        assert_enforced(&decide_gate_with(&gate_input, ENFORCE));
     }
 
     #[test]
@@ -268,8 +386,9 @@ mod tests {
         decide_mark(&mark_input).unwrap();
 
         let gate_input = hook_input("Write", json!({"file_path": "out.rs"}), &cwd, session);
-        assert!(
-            decide_gate(&gate_input).is_none(),
+        assert_eq!(
+            decide_gate_with(&gate_input, ENFORCE),
+            GateAction::Silent,
             "an in-repo Read must not taint the session"
         );
     }
@@ -293,14 +412,14 @@ mod tests {
         decide_mark(&mark_input).unwrap();
 
         let gate_input = hook_input("Edit", json!({"file_path": "src.rs"}), &cwd, session);
-        assert!(decide_gate(&gate_input).is_some());
+        assert_enforced(&decide_gate_with(&gate_input, ENFORCE));
     }
 
     #[test]
     fn clean_session_gate_allows_silently() {
         let (_guard, _dir, cwd) = temp_env("clean-gate");
         let gate_input = hook_input("Bash", json!({"command": "cargo test"}), &cwd, "s-clean");
-        assert!(decide_gate(&gate_input).is_none());
+        assert_eq!(decide_gate_with(&gate_input, ENFORCE), GateAction::Silent);
     }
 
     #[test]
@@ -309,10 +428,19 @@ mod tests {
         let session = "s-clear";
         let mark_input = hook_input("WebSearch", json!({"query": "x"}), &cwd, session);
         decide_mark(&mark_input).unwrap();
-        assert!(decide_gate(&hook_input("Bash", json!({"command": "x"}), &cwd, session)).is_some());
+        assert_enforced(&decide_gate_with(
+            &hook_input("Bash", json!({"command": "x"}), &cwd, session),
+            ENFORCE,
+        ));
 
         state::clear(&cwd, session).unwrap();
-        assert!(decide_gate(&hook_input("Bash", json!({"command": "x"}), &cwd, session)).is_none());
+        assert_eq!(
+            decide_gate_with(
+                &hook_input("Bash", json!({"command": "x"}), &cwd, session),
+                ENFORCE
+            ),
+            GateAction::Silent
+        );
     }
 
     #[test]
@@ -320,31 +448,240 @@ mod tests {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            analyse_gate_with(|_: &HookInput| -> Option<String> { panic!("boom") })
+            analyse_gate_with(|_: &HookInput| -> GateAction { panic!("boom") })
         }));
         std::panic::set_hook(prev);
-        let line = out.unwrap().expect("a panic must fail closed, not allow");
-        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
-        assert!(
-            v["hookSpecificOutput"]["permissionDecision"] == "ask"
-                || v["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert_enforced(&out.unwrap());
+    }
+
+    /// Drive the REAL barrier ([`analyse_gate_barrier`]) with a panicking
+    /// decision function. No look-alike copy of the barrier lives in the test
+    /// module any more, so these tests fail if production's panic arm regresses.
+    fn analyse_gate_with<F>(f: F) -> GateAction
+    where
+        F: FnOnce(&HookInput) -> GateAction,
+    {
+        let dummy = HookInput::default();
+        analyse_gate_barrier(&dummy, f)
+    }
+
+    // -----------------------------------------------------------------------
+    // observe-only mode
+    // -----------------------------------------------------------------------
+
+    /// ANTI-VACUITY (a): observe-only must not change the `Clean` path. A clean
+    /// turn stays silent — no warning, no ledger line. Without this, an
+    /// implementation that warned on every call would still pass the tests
+    /// below.
+    #[test]
+    fn observe_only_leaves_the_clean_path_silent_and_unrecorded() {
+        let (_guard, _dir, cwd) = temp_env("observe-clean");
+        let gate_input = hook_input("Bash", json!({"command": "ls"}), &cwd, "s-observe-clean");
+        assert_eq!(
+            decide_gate_with(&gate_input, observe::Posture::ObserveOnly),
+            GateAction::Silent,
+            "observe-only must not invent a finding on a clean turn"
+        );
+        emit_gate(&gate_input, GateAction::Silent);
+        assert_eq!(
+            observe::tally(&cwd).unwrap(),
+            (0, 0),
+            "a clean turn must not write a ledger line"
         );
     }
 
-    /// Test-only seam so the panic-barrier test above can inject a panicking
-    /// closure without needing a real panic-triggering input through
-    /// `decide_gate`'s taint-check logic (mirrors `blastguard`'s
-    /// `analyse_barrier` helper in `ctxrot::hooks::toolguard`).
-    fn analyse_gate_with<F>(f: F) -> Option<String>
-    where
-        F: FnOnce(&HookInput) -> Option<String> + std::panic::UnwindSafe,
-    {
-        let dummy = HookInput::default();
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&dummy))) {
-            Ok(out) => out,
-            Err(_) => Some(build_decision(
-                "[taintguard] internal error while checking taint state; failing closed (ask/deny).",
-            )),
+    /// A tainted turn under observe-only emits an `additionalContext` warning
+    /// and — critically — **no `permissionDecision` at all**. An explicit
+    /// `allow` here would override other gates and the user's own permission
+    /// rules, so its absence is part of the contract, not an omission.
+    #[test]
+    fn observe_only_warns_without_any_permission_decision() {
+        let (_guard, _dir, cwd) = temp_env("observe-tainted");
+        let session = "s-observe-tainted";
+        decide_mark(&hook_input(
+            "WebFetch",
+            json!({"url": "https://example.com"}),
+            &cwd,
+            session,
+        ))
+        .unwrap();
+
+        let gate_input = hook_input("Bash", json!({"command": "rm -rf /"}), &cwd, session);
+        let action = decide_gate_with(&gate_input, observe::Posture::ObserveOnly);
+        let context = match &action {
+            GateAction::Observe { context, .. } => context.clone(),
+            other => panic!("expected Observe, got {other:?}"),
+        };
+
+        let line = hookio::context_json(&context);
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        assert!(
+            v["hookSpecificOutput"]["permissionDecision"].is_null(),
+            "observe-only must emit NO permissionDecision (an explicit allow would \
+             override other gates); got {v}"
+        );
+        let ctx = v["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .expect("additionalContext must be present and a string");
+        // Silence is not an option: the warning must name the taint, the source
+        // that caused it, and the fact that enforcement was suppressed.
+        assert!(
+            ctx.contains("OBSERVE-ONLY"),
+            "must announce the posture: {ctx}"
+        );
+        assert!(ctx.contains("web"), "must name the tainting source: {ctx}");
+        assert!(
+            ctx.contains("SUPPRESSED"),
+            "must say enforcement was suppressed: {ctx}"
+        );
+        assert!(
+            ctx.contains("Bash"),
+            "must name the tool that would have been downgraded: {ctx}"
+        );
+    }
+
+    /// The countable signal: a suppressed enforcement lands one ledger line
+    /// carrying the trigger source and the tool.
+    #[test]
+    fn observe_only_records_the_suppressed_enforcement() {
+        let (_guard, _dir, cwd) = temp_env("observe-ledger");
+        let session = "s-observe-ledger";
+        decide_mark(&hook_input(
+            "WebSearch",
+            json!({"query": "x"}),
+            &cwd,
+            session,
+        ))
+        .unwrap();
+
+        let gate_input = hook_input("Edit", json!({"file_path": "a.rs"}), &cwd, session);
+        let action = decide_gate_with(&gate_input, observe::Posture::ObserveOnly);
+        emit_gate(&gate_input, action);
+
+        assert_eq!(
+            observe::tally(&cwd).unwrap(),
+            (1, 0),
+            "exactly one parseable ledger line must be appended"
+        );
+        let text = std::fs::read_to_string(observe::ledger_path(&cwd)).unwrap();
+        let rec: observe::Record = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(rec.tool, "Edit");
+        assert_eq!(rec.sources, vec!["web".to_string()]);
+        assert_eq!(rec.check, "tainted");
+        assert_eq!(rec.session, session);
+    }
+
+    /// The ledger accumulates (append-only), so a fire-rate can be totalled.
+    #[test]
+    fn observe_only_ledger_accumulates_across_calls() {
+        let (_guard, _dir, cwd) = temp_env("observe-accum");
+        let session = "s-observe-accum";
+        decide_mark(&hook_input(
+            "WebFetch",
+            json!({"url": "https://e.com"}),
+            &cwd,
+            session,
+        ))
+        .unwrap();
+        for tool in ["Bash", "Write", "Edit"] {
+            let gi = hook_input(tool, json!({}), &cwd, session);
+            let action = decide_gate_with(&gi, observe::Posture::ObserveOnly);
+            emit_gate(&gi, action);
         }
+        assert_eq!(observe::tally(&cwd).unwrap(), (3, 0));
+    }
+
+    /// An `Undetermined` check under observe-only is recorded as
+    /// `"undetermined"`, NOT folded into `"tainted"` — otherwise a store-health
+    /// problem would hide inside the friction statistic. Driven by a corrupt
+    /// marker, the same fault `state.rs` uses for its own Undetermined test.
+    #[test]
+    fn observe_only_keeps_undetermined_distinct_from_tainted() {
+        let (_guard, _dir, cwd) = temp_env("observe-undet");
+        let session = "s-observe-undet";
+        let marker = state::marker_path_for_test(&cwd, session);
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"{ not json").unwrap();
+
+        let gate_input = hook_input("Bash", json!({}), &cwd, session);
+        let action = decide_gate_with(&gate_input, observe::Posture::ObserveOnly);
+        match &action {
+            GateAction::Observe { context, record } => {
+                assert_eq!(record.check, "undetermined");
+                assert!(record.sources.is_empty());
+                assert!(
+                    context.contains("could not verify"),
+                    "the warning must say the state was unreadable: {context}"
+                );
+            }
+            other => panic!("expected Observe, got {other:?}"),
+        }
+        // And it must NOT be silent — an unreadable store is not a clean turn.
+        assert_ne!(action, GateAction::Silent);
+    }
+
+    /// ANTI-VACUITY (b): with the env var absent or set to garbage, the gate
+    /// ENFORCES exactly as before. This is the test that makes the fail-closed
+    /// opt-in claim non-empty; without it, `resolve` could return `ObserveOnly`
+    /// unconditionally and every other observe-only test would still pass.
+    #[test]
+    fn absent_or_garbage_env_still_enforces() {
+        let (_guard, _dir, cwd) = temp_env("observe-failclosed");
+        let session = "s-failclosed";
+        decide_mark(&hook_input(
+            "WebFetch",
+            json!({"url": "https://e.com"}),
+            &cwd,
+            session,
+        ))
+        .unwrap();
+        let gate_input = hook_input("Bash", json!({}), &cwd, session);
+
+        for raw in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("false"),
+            Some("true"),
+            Some("yes"),
+            Some(" 1"),
+            Some("1 "),
+            Some("01"),
+            Some("2"),
+            Some("OBSERVE"),
+        ] {
+            let posture = observe::resolve(raw);
+            assert_eq!(
+                posture,
+                observe::Posture::Enforce,
+                "{raw:?} must NOT opt into observe-only"
+            );
+            assert_enforced(&decide_gate_with(&gate_input, posture));
+        }
+        assert_eq!(
+            observe::tally(&cwd).unwrap(),
+            (0, 0),
+            "enforcing must not write observe-only ledger lines"
+        );
+    }
+
+    /// A panic fails closed to ask/deny **even though** observe-only is the
+    /// posture: cannot-determine resolves to the restricted side regardless of
+    /// posture, and the barrier cannot trust a posture it never finished
+    /// reading.
+    #[test]
+    fn panic_enforces_even_under_observe_only() {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // `analyse_gate`'s real barrier, driven by a panicking decision fn.
+            analyse_gate_with(|_: &HookInput| -> GateAction {
+                let _ = observe::Posture::ObserveOnly;
+                panic!("boom inside observe-only")
+            })
+        }));
+        std::panic::set_hook(prev);
+        assert_enforced(&out.unwrap());
     }
 }

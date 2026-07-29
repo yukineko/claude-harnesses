@@ -47,6 +47,9 @@ least-privilege を機械的に強制する。エージェントが騙されて�
 - taint marker が読めない/壊れている場合も **fail-closed**（`ask`/`deny` 側）。
   「判定できなかった」を「問題なし（silent allow）」に潰さない。
 - tainted でなければ何も出力しない（silent allow）。
+- 以上は既定の **enforce** posture の挙動。`TAINTGUARD_OBSERVE_ONLY=1` の
+  **observe-only** posture では `permissionDecision` を出さず警告のみになる
+  （＝強制されない）。詳細と注意点は後述の「observe-only モード」を参照。
 
 ### clear（Stop）
 
@@ -55,6 +58,58 @@ least-privilege を機械的に強制する。エージェントが騙されて�
 - 削除に失敗した場合は stderr に出すだけで exit 0（**tainted のまま残る方が
   安全側**なので、消せなかったことを許可の失敗として扱わない）。
 
+## observe-only モード（計測専用・既定では無効）
+
+`TAINTGUARD_OBSERVE_ONLY=1` を設定すると、`gate` は **強制を抑止する**。
+**これはゲートを無効化する設定である** — 有効化する前に「実際どれくらい摩擦を
+生むか」を予測ではなく観測で答えるための計測モードであり、防御の代わりには
+ならない。
+
+- **抑止するもの**: `ask`/`deny` の `permissionDecision` を**一切出さない**。
+  したがって tainted なターンでも write-class ツールは通常どおり実行される。
+  **保護は効いていない。**
+- **抑止しないもの**: 検査そのもの、および報告。tainted を検出したら
+  `hookSpecificOutput.additionalContext` で「このターンは tainted」「どの source が
+  汚染したか」「observe-only なので強制を抑止した」ことを明示し、同時に
+  append-only の JSONL 台帳に1行追記する。**沈黙はしない** — 黙って通るゲートは
+  「何も見つけなかったゲート」と区別できず、それ自体が fail-open になるため。
+- **`permissionDecision: "allow"` は出さない**（意図的）。明示的な `allow` は
+  他のゲートやユーザー自身の権限規則を**上書きする**正の判定なので、強制を
+  やめるためのモードが結果としてより広い範囲を強制してしまう。
+  `additionalContext` のみならその副作用が無い。
+
+### opt-in は fail-closed
+
+`TAINTGUARD_OBSERVE_ONLY` が **厳密に `1`** のときだけ observe-only になる。
+未設定・空文字・`0`・`false`・`true`・`yes`・` 1`（前後の空白つき）・`01`・
+その他あらゆる値は**すべて従来どおり強制する**。トリム・大小無視・truthy 文字列
+解釈は一切しない（`observe::resolve`）。`Posture` に `Default` 実装は無い
+（許容側が `Default::default()` や `.into()` から生まれないようにするため）。
+
+### panic は observe-only を尊重しない
+
+`gate` の panic barrier が発火した場合は、observe-only が設定されていても
+**`ask`/`deny` に倒れる**。panic は「解析が完走しなかった」＝判定不能であり、
+posture の読み取り自体も barrier の内側にあるため、尊重すべき posture を
+知っているとは言えない。observe-only は**動いているゲートを計測する**ための
+affordance であって、内部エラーを飲み込む許可ではない。
+
+### 計測値の読み方
+
+台帳は `$TAINTGUARD_STATE_DIR/<project_key>/observe-only.jsonl`
+（**session 単位ではなく project 単位** — Stop hook の `clear` は session marker を
+消すので、session に閉じた台帳では発火率が測れない）。1行 = 抑止した強制1件で、
+`{ts, tool, sources, check, session}` を持つ。`check` は `"tainted"` と
+`"undetermined"` を**区別して**記録する（marker が読めなかった件を摩擦の統計に
+混ぜると store の健全性問題が隠れるため）。`observe::tally` は
+パースできた件数と**できなかった件数を別々に**返す（壊れた行を黙って捨てて
+件数を下げると「思ったより摩擦が少ない」と誤読される）。
+
+台帳への追記に失敗した場合は `Err` を返し stderr に出す（「記録したつもり」を
+作らない）。この失敗は**権限の fail-open にはならない** — 台帳は「強制するか」の
+判断に一切読まれず、判断は `state::check`（独自の書き込み可能性プローブつき）
+だけが行うため。失敗すると計測が過少計上されるだけで、その事実は stderr に出る。
+
 ## 状態の保存先
 
 `$TAINTGUARD_STATE_DIR/<project_key>/<session>/taint.json`
@@ -62,6 +117,9 @@ least-privilege を機械的に強制する。エージェントが騙されて�
 `project_key`/セッションディレクトリの命名規則は
 `harness_core::store::context_state_dir` と同じ慣習（cwd を canonicalize
 してから project key を作る）。
+
+observe-only の台帳のみ **project 単位**（`<project_key>/observe-only.jsonl`）で、
+session ディレクトリの下ではない（理由は上記「計測値の読み方」）。
 
 ## fail-closed の設計
 

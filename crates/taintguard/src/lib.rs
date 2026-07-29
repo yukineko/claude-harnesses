@@ -20,8 +20,20 @@
 //!   * `gate`  (PreToolUse, matcher `Bash|Write|Edit|MultiEdit|NotebookEdit`) —
 //!     consumes it.
 //!   * `clear` (Stop) — resets it.
+//!
+//! # Operating postures
+//!
+//! `gate` has two postures, resolved from `TAINTGUARD_OBSERVE_ONLY` (see
+//! [`observe`]): the default **enforce** posture described above, and an opt-in
+//! **observe-only** measurement posture that runs the same check, reports the
+//! same finding, but emits no `permissionDecision` and instead records the
+//! suppressed enforcement so its fire-rate can be counted. Observe-only never
+//! turns a `Tainted`/`Undetermined` check into a `Clean` one — the two live on
+//! separate axes ([`state::Check`] vs [`observe::Posture`]) exactly so that
+//! "suppressed" stays distinguishable from "nothing found".
 
 pub mod classify;
 pub mod hookio;
 pub mod interactive;
+pub mod observe;
 pub mod state;

@@ -16,6 +16,13 @@ mod install;
 mod model;
 mod sig;
 mod state;
+/// Verdict-monotonicity property (backlog a7d41587). Test-only: stuckguard is a
+/// `[[bin]]`-only crate, so an integration test cannot reach `state::load` /
+/// `detect::detect` without making them public — a production change made to
+/// suit a test. An in-crate `cfg(test)` module reaches them directly and,
+/// unlike `tests/faultinject_state.rs`, does not pay a subprocess per case.
+#[cfg(test)]
+mod verdict_monotonicity;
 
 use std::path::Path;
 

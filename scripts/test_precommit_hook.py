@@ -54,9 +54,12 @@ EXPECTED_SCANNERS = [
     "check-prompt-injection.py",
     "check-fail-open.py",
     "check-doc-claims.py",
-    "check-test-weakening.py",
+    "check-claudemd-claims.py",
     "check-plugin-versions.py",
     "check-version-bumped.py",
+    "check-hardcoded-secret.py",
+    "check-raw-io-ratchet.py",
+    "check-worktree-isolation.py",
 ]
 
 # Label the hook prints for each scanner, used to check the message names the
@@ -65,9 +68,12 @@ LABELS = {
     "check-prompt-injection.py": "injectguard",
     "check-fail-open.py": "fail-open-guard",
     "check-doc-claims.py": "doc-claims",
-    "check-test-weakening.py": "test-weakening",
+    "check-claudemd-claims.py": "claudemd-claims",
     "check-plugin-versions.py": "version-lockstep",
     "check-version-bumped.py": "bump-on-change",
+    "check-hardcoded-secret.py": "secret-guard",
+    "check-raw-io-ratchet.py": "raw-io-ratchet",
+    "check-worktree-isolation.py": "worktree-isolation",
 }
 
 _STUB = """#!/usr/bin/env python3
@@ -131,12 +137,24 @@ class HookHarness:
         for tool in tools:
             os.symlink(_which(tool), self.bindir / tool)
 
+        # main-tree-guard is the one gate here that is a Rust binary rather than
+        # a python3 scanner, and it fails CLOSED when it cannot find condukt. That
+        # is correct in production and useless in this harness, where the subject
+        # under test is the SHELL hook's exit-code plumbing, not condukt's §8
+        # verdict. Point it at a stub that answers "allowed" so the python-scanner
+        # properties below are not all masked by one unrelated block. Tests that
+        # care about condukt's own decision live in crates/condukt/src/maintree.rs.
+        self.condukt = self.bindir / "condukt-stub"
+        self.condukt.write_text("#!/bin/sh\nexit 0\n")
+        self.condukt.chmod(0o755)
+
         self.env = {
             "PATH": str(self.bindir),
             "HOME": str(self.root),
             "HOOK_TEST_LOG": str(self.log),
             "LC_ALL": "C.UTF-8",
             "GIT_CONFIG_NOSYSTEM": "1",
+            "CONDUKT_BIN": str(self.condukt),
         }
 
     def run(self):
@@ -213,7 +231,7 @@ class UndeterminedBlocksAndIsNamed(HookTestCase):
                 self.assertBlocked(proc, "when %s exits 2" % scanner)
 
     def test_exit_two_stderr_says_undetermined(self):
-        scanner = "check-test-weakening.py"
+        scanner = "check-doc-claims.py"
         h = self.harness(exits={scanner: 2})
         proc = h.run()
         self.assertBlocked(proc)
@@ -224,7 +242,7 @@ class UndeterminedBlocksAndIsNamed(HookTestCase):
 
     def test_exit_one_is_not_labelled_undetermined(self):
         """The distinction must go both ways, or it carries no information."""
-        h = self.harness(exits={"check-test-weakening.py": 1})
+        h = self.harness(exits={"check-doc-claims.py": 1})
         proc = h.run()
         self.assertBlocked(proc)
         self.assertNotIn("UNDETERMINED", proc.stderr)
@@ -281,13 +299,13 @@ class EveryScannerIsRun(HookTestCase):
 
     def test_multiple_failures_are_all_reported(self):
         h = self.harness(
-            exits={"check-prompt-injection.py": 1, "check-test-weakening.py": 2}
+            exits={"check-prompt-injection.py": 1, "check-doc-claims.py": 2}
         )
         proc = h.run()
         self.assertBlocked(proc)
         self.assertEqual(h.ran(), EXPECTED_SCANNERS)
         self.assertIn("injectguard", proc.stderr)
-        self.assertIn("test-weakening", proc.stderr)
+        self.assertIn("doc-claims", proc.stderr)
         self.assertIn("UNDETERMINED", proc.stderr)
 
     def test_hook_source_invokes_exactly_the_expected_scanner_list(self):

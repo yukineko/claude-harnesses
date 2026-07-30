@@ -141,7 +141,11 @@ run check-prompt-injection.py injectguard
 run check-fail-open.py        fail-open-guard
 run check-doc-claims.py       doc-claims
 run check-claudemd-claims.py  claudemd-claims
-run check-test-weakening.py   test-weakening
+# check-test-weakening.py is NOT run here: it is run from .githooks/commit-msg
+# instead. Its acknowledgment marker lives in the commit message, which git has
+# not prepared yet at pre-commit time, so from here the remedy it prints is
+# unreachable and `--no-verify` becomes the only way past a false positive.
+# It blocks the same commit either way; see that hook's header for the detail.
 run check-plugin-versions.py  version-lockstep
 run check-version-bumped.py   bump-on-change
 run check-hardcoded-secret.py secret-guard

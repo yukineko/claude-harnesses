@@ -36,7 +36,7 @@ mod state;
 
 use clap::{Parser, Subcommand};
 use harness_core::hook::{read_stdin, run_hook, HookInput};
-use harness_core::verdict::{Determination, Reason, Verdict};
+use harness_core::verdict::{Determination, Verdict};
 use serde_json::json;
 
 use config::Config;
@@ -199,7 +199,7 @@ fn stop_run(input: HookInput) {
                             &session_id,
                             "condukt-state-undetermined",
                             "condukt の run-state を読み取れませんでした",
-                            &why,
+                            why.as_str(),
                         );
                         return;
                     }
@@ -295,7 +295,7 @@ fn stop_run(input: HookInput) {
                                 &session_id,
                                 "backlog-queue-undetermined",
                                 "backlog のキューを読み取れませんでした",
-                                &why,
+                                why.as_str(),
                             );
                             return;
                         }
@@ -428,7 +428,7 @@ fn block_undetermined(
     session: &str,
     check_kind: &str,
     what: &str,
-    why: &Reason,
+    why: &str,
 ) {
     let verdict = Verdict::undetermined(format!(
         "{what}（判定不能）: {why}\n\n\

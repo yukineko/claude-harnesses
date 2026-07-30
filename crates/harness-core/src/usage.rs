@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::verdict::{Determination, Reason};
+use crate::verdict::Determination;
 
 /// Agent bucket key for the main (top-level) conversation.
 pub const AGENT_MAIN: &str = "main";
@@ -432,10 +432,10 @@ fn subagent_files(main_path: &str) -> Determination<Vec<PathBuf>> {
             return Determination::Known(Vec::new())
         }
         Err(e) => {
-            return Determination::Undetermined(Reason::new(format!(
+            return Determination::undetermined(format!(
                 "sub-agent transcript dir {} could not be read: {e}",
                 dir.display()
-            )))
+            ))
         }
     };
     let mut out = Vec::new();
@@ -443,11 +443,11 @@ fn subagent_files(main_path: &str) -> Determination<Vec<PathBuf>> {
         let entry = match entry {
             Ok(entry) => entry,
             Err(e) => {
-                return Determination::Undetermined(Reason::new(format!(
+                return Determination::undetermined(format!(
                     "sub-agent transcript dir {}: a directory entry could not be \
                      read (listing is incomplete): {e}",
                     dir.display()
-                )))
+                ))
             }
         };
         let path = entry.path();

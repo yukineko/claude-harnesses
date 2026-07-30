@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use harness_core::verdict::{Determination, Reason};
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -121,9 +121,7 @@ fn read_dir_runbooks(dir: &Path, global: bool) -> Determination<Vec<Runbook>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Determination::Known(Vec::new())
         }
-        Err(e) => {
-            return Determination::Undetermined(Reason::new(format!("{}: {e}", dir.display())))
-        }
+        Err(e) => return Determination::undetermined(format!("{}: {e}", dir.display())),
     };
     for e in entries.flatten() {
         let path = e.path();

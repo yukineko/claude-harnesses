@@ -54,6 +54,7 @@ pub mod spans;
 pub mod store;
 pub mod transcript;
 pub mod trust;
+pub mod undetermined;
 pub mod usage;
 pub mod verdict;
 

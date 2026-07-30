@@ -1,0 +1,16 @@
+error[E0603]: tuple struct constructor `Undet` is private
+  --> tests/ui/verdict/forge_undetermined.rs:15:32
+   |
+15 |         harness_core::verdict::Undet(harness_core::verdict::Reason::new("uncounted")),
+   |                                ^^^^^ private tuple struct constructor
+   |
+  ::: src/verdict.rs
+   |
+   | pub struct Undet(Reason);
+   |                  ------ a constructor is private if any of the fields is private
+   |
+note: the tuple struct constructor `Undet` is defined here
+  --> src/verdict.rs
+   |
+   | pub struct Undet(Reason);
+   | ^^^^^^^^^^^^^^^^

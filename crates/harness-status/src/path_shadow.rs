@@ -8,7 +8,7 @@
 //! flags that drift so it doesn't go unnoticed indefinitely. Purely
 //! diagnostic: fail-soft throughout, never blocks a turn.
 
-use harness_core::verdict::{Determination, Reason};
+use harness_core::verdict::Determination;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -118,9 +118,7 @@ fn scan_cache_bins(root: &Path) -> Determination<Vec<(String, PathBuf)>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Determination::Known(Vec::new())
         }
-        Err(e) => {
-            return Determination::Undetermined(Reason::new(format!("{}: {e}", root.display())))
-        }
+        Err(e) => return Determination::undetermined(format!("{}: {e}", root.display())),
     };
     let mut plugin_dirs: Vec<PathBuf> = entries
         .filter_map(|e| e.ok())
@@ -147,7 +145,7 @@ fn scan_cache_bins(root: &Path) -> Determination<Vec<(String, PathBuf)>> {
 /// cache root yields an empty report, never panics.
 pub fn detect() -> Determination<Vec<ShadowedBinary>> {
     let Ok(path_env) = std::env::var("PATH") else {
-        return Determination::Undetermined(Reason::new("$PATH is not set"));
+        return Determination::undetermined("$PATH is not set");
     };
     let path_dirs = split_path(&path_env);
     match scan_cache_bins(&cache_root()) {

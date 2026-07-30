@@ -5,7 +5,7 @@
 //! than a parallel path. Pure, deterministic, no I/O, no LLM.
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use harness_core::verdict::{Determination, Reason};
+use harness_core::verdict::Determination;
 
 use crate::classify::{Risk, RiskAssessment};
 
@@ -96,17 +96,17 @@ impl SensitiveConfig {
                     b.add(g);
                 }
                 Err(e) => {
-                    return Determination::Undetermined(Reason::new(format!(
+                    return Determination::undetermined(format!(
                         "invalid sensitive glob `{pat}`: {e}"
-                    )));
+                    ));
                 }
             }
         }
         match b.build() {
             Ok(set) => Determination::Known(set),
-            Err(e) => Determination::Undetermined(Reason::new(format!(
-                "could not build sensitive glob set: {e}"
-            ))),
+            Err(e) => {
+                Determination::undetermined(format!("could not build sensitive glob set: {e}"))
+            }
         }
     }
 

@@ -14,7 +14,7 @@
 use harness_core::estimate_transcript_cost;
 use harness_core::pricing;
 use harness_core::session::{self, SessionRecord};
-use harness_core::verdict::{Determination, Reason};
+use harness_core::verdict::Determination;
 use serde_json::json;
 
 use crate::config::Config;
@@ -74,7 +74,7 @@ pub fn evaluate(
             return Some(GateResult {
                 session_usd: None,
                 day_usd: None,
-                verdict: undetermined_verdict(cfg, &why),
+                verdict: undetermined_verdict(cfg, why.as_str()),
             });
         }
     };
@@ -126,7 +126,7 @@ pub fn evaluate(
 ///   → `Allow`. There is no threshold an under-count could hide a crossing of,
 ///   so this is not the undetermined answer collapsing into a pass; it is the
 ///   gate being disabled.
-fn undetermined_verdict(cfg: &Config, why: &Reason) -> Verdict {
+fn undetermined_verdict(cfg: &Config, why: &str) -> Verdict {
     let msg = format!(
         "budgetguard: このセッションの費用を測定できませんでした（{why}）。\n\
          未計測の支出は $0 ではありません。作業を保存し、コミットして終了してください。"
@@ -621,7 +621,10 @@ mod tests {
 
         // …and the gate resolves that to the restricted side, not Allow.
         assert!(
-            matches!(undetermined_verdict(&cfg, &why), Verdict::Block(_, _)),
+            matches!(
+                undetermined_verdict(&cfg, why.as_str()),
+                Verdict::Block(_, _)
+            ),
             "an armed block limit must block on an unmeasurable spend"
         );
         // Warn-only config: still not Allow.
@@ -630,13 +633,13 @@ mod tests {
             ..Config::default()
         };
         assert!(matches!(
-            undetermined_verdict(&warn_cfg, &why),
+            undetermined_verdict(&warn_cfg, why.as_str()),
             Verdict::Warn(_)
         ));
         // Every limit disabled → the gate is off; `verdict` allows ANY cost in
         // that config, so there is no threshold an under-count could hide.
         assert!(matches!(
-            undetermined_verdict(&Config::default(), &why),
+            undetermined_verdict(&Config::default(), why.as_str()),
             Verdict::Allow
         ));
         assert!(matches!(

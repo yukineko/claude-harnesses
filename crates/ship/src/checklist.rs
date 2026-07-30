@@ -422,9 +422,7 @@ mod tests {
     #[test]
     fn undetermined_stale_scan_renders_unknown_and_counts_as_unshipped() {
         let status = ShipStatus {
-            stale_crates: Determination::Undetermined(harness_core::verdict::Reason::new(
-                "permission denied",
-            )),
+            stale_crates: Determination::undetermined("permission denied"),
             ..Default::default()
         };
         assert!(status.has_unshipped_work());

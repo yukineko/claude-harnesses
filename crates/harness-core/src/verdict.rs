@@ -45,6 +45,17 @@
 //!    `From<Verdict> for ExitCode` that would hard-code one gate's convention
 //!    onto all of them. Instead [`Verdict::stop_decision`] and
 //!    [`Verdict::exit_code`] each map `Undetermined` exactly like `Violation`.
+//! 6. **`Undetermined` cannot be minted un-counted.** The same private-field
+//!    trick as (1), aimed the other way: the payload is [`Undet`], not a bare
+//!    [`Reason`], so `Undetermined(..)` is unwriteable outside this crate and the
+//!    only way in is [`Verdict::undetermined`] / [`Determination::undetermined`],
+//!    which record one caller-attributed telemetry event per give-up (see
+//!    [`crate::undetermined`]). This exists because "cannot determine" resolving
+//!    to the restricted side is only half the discipline — a fleet that blocks
+//!    correctly but cannot say *how often* it is blocking on ignorance has no way
+//!    to tell a hardening gate from a broken one. Forwarding an existing
+//!    `Undetermined` upward stays free and deliberately does not re-record: the
+//!    origin already counted it once.
 
 use std::fmt;
 
@@ -108,6 +119,51 @@ impl fmt::Display for Reason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Evidence(());
 
+/// The payload of an `Undetermined`, and the same private-field trick as
+/// [`Evidence`] pointed at the opposite end: an `Undetermined` cannot be
+/// *minted* outside `harness-core` either.
+///
+/// The reason is telemetry. [`Verdict::undetermined`] / [`Determination::undetermined`]
+/// record one event per give-up so the fleet-wide rate of "could not decide" is
+/// observable; a branch that wrote `Verdict::Undetermined(Reason::new(..))`
+/// directly would be a real give-up that the counter never saw, making the
+/// measurement understate itself — the same silence the measurement exists to
+/// end. Rather than police that with a grep gate (which fails open on every
+/// spelling it did not anticipate, and which this repo cannot even wire into
+/// `.githooks` today), the field is private: `Undet(..)` is unwriteable
+/// outside this module, so the only way to reach the variant is through the
+/// recording constructors. Bypassing the counter is a **compile error**, not a
+/// review finding.
+///
+/// *Propagating* an existing one stays free — `Undetermined(why) => return
+/// Undetermined(why)` moves the payload and rightly does not re-record, since
+/// the origin already did. That is the distinction the type draws for you:
+/// minting is instrumented, forwarding is not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Undet(Reason);
+
+impl Undet {
+    /// The message. Mirrors [`Reason::as_str`] so `Undetermined(why)` arms read
+    /// the same as they did when the payload was a bare `Reason`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    /// The underlying reason, for the (rare) caller that needs the `Reason`
+    /// itself — e.g. to fold it into a findings list.
+    #[must_use]
+    pub fn reason(&self) -> &Reason {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Undet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.as_str())
+    }
+}
+
 /// The three answers a gate can give — "checked, clean", "checked, violation",
 /// and "could not check" — kept as three distinct answers so the third can
 /// never masquerade as the first.
@@ -129,7 +185,10 @@ pub enum Verdict {
     /// subprocess crash, timeout, ambiguous output). This is **not** clean and
     /// **not** a violation — it resolves to the restricted side on every
     /// channel. Never produce this to mean "nothing found".
-    Undetermined(Reason),
+    ///
+    /// The payload is [`Undet`], not a bare `Reason`, so this variant cannot be
+    /// minted outside `harness-core` — see [`Verdict::undetermined`].
+    Undetermined(Undet),
 }
 
 impl Verdict {
@@ -140,8 +199,20 @@ impl Verdict {
 
     /// Build an `Undetermined` with a reason. Use this — never an empty
     /// findings list — when a check could not run to a conclusion.
+    ///
+    /// Emits one telemetry record (see [`crate::undetermined`]) attributed to
+    /// the CALLER via `#[track_caller]`, so the crate/file/line in the stream is
+    /// the branch that gave up rather than this line. Best-effort and never a
+    /// gate: a telemetry failure cannot change this verdict.
+    ///
+    /// This is the *only* way to mint one: the [`Undet`] payload has a private
+    /// field, so `Verdict::Undetermined(..)` cannot be written outside this
+    /// crate and no give-up can slip past the counter.
+    #[track_caller]
     pub fn undetermined(reason: impl Into<String>) -> Self {
-        Verdict::Undetermined(Reason::new(reason))
+        let reason = Reason::new(reason);
+        crate::undetermined::record(reason.as_str(), std::panic::Location::caller());
+        Verdict::Undetermined(Undet(reason))
     }
 
     /// The sanctioned Clean-minting path for a check that **cannot itself be
@@ -192,7 +263,12 @@ impl Verdict {
         if !violations.is_empty() {
             Verdict::Violation(Reason::joined(&violations))
         } else if !undetermined.is_empty() {
-            Verdict::Undetermined(Reason::joined(&undetermined))
+            // A fold of give-ups that were each already recorded at their origin.
+            // Minting the combined payload directly (rather than through
+            // `Verdict::undetermined`) is the correct choice here: re-recording
+            // would count one give-up several times over as it bubbles up.
+            let reasons: Vec<Reason> = undetermined.iter().map(|u| u.0.clone()).collect();
+            Verdict::Undetermined(Undet(Reason::joined(&reasons)))
         } else {
             Verdict::from_findings(vec![])
         }
@@ -230,7 +306,8 @@ impl Verdict {
     pub fn reason(&self) -> Option<&Reason> {
         match self {
             Verdict::Clean(_) => None,
-            Verdict::Violation(r) | Verdict::Undetermined(r) => Some(r),
+            Verdict::Violation(r) => Some(r),
+            Verdict::Undetermined(u) => Some(u.reason()),
         }
     }
 
@@ -243,9 +320,13 @@ impl Verdict {
     pub fn stop_decision(&self) -> Option<serde_json::Value> {
         match self {
             Verdict::Clean(_) => None,
-            Verdict::Violation(r) | Verdict::Undetermined(r) => Some(serde_json::json!({
+            Verdict::Violation(r) => Some(serde_json::json!({
                 "decision": "block",
                 "reason": r.as_str(),
+            })),
+            Verdict::Undetermined(u) => Some(serde_json::json!({
+                "decision": "block",
+                "reason": u.as_str(),
             })),
         }
     }
@@ -294,8 +375,10 @@ impl Verdict {
 pub enum Determination<T> {
     /// The check ran and observed this value (which may be legitimately empty).
     Known(T),
-    /// The check could not run to a conclusion. Carries why.
-    Undetermined(Reason),
+    /// The check could not run to a conclusion. Carries why. The payload is
+    /// [`Undet`], not a bare `Reason`, so this variant cannot be minted outside
+    /// `harness-core` — see [`Determination::undetermined`].
+    Undetermined(Undet),
 }
 
 impl<T> Determination<T> {
@@ -305,8 +388,15 @@ impl<T> Determination<T> {
     }
 
     /// Build an `Undetermined` with a reason.
+    ///
+    /// Telemetry-emitting and caller-attributed, exactly as
+    /// [`Verdict::undetermined`] — and likewise the only way to mint one, since
+    /// the [`Undet`] payload is unwriteable outside this crate.
+    #[track_caller]
     pub fn undetermined(reason: impl Into<String>) -> Self {
-        Determination::Undetermined(Reason::new(reason))
+        let reason = Reason::new(reason);
+        crate::undetermined::record(reason.as_str(), std::panic::Location::caller());
+        Determination::Undetermined(Undet(reason))
     }
 
     /// The one and only extractor. `Known(v)` → `Ok(v)`; `Undetermined(why)` →

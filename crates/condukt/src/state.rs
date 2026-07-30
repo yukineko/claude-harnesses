@@ -1104,9 +1104,9 @@ pub fn probe_run(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> Result<Run
     for t in rs.tasks.iter().filter(|t| t.status == Status::Running) {
         let updated = match t.updated_at {
             Some(ts) => Determination::Known(ts.to_string().into_bytes()),
-            None => Determination::Undetermined(harness_core::verdict::Reason::new(
+            None => Determination::undetermined(
                 "task has no updated_at (legacy) — durable progress unreadable",
-            )),
+            ),
         };
         let signals = vec![
             signal_sample("git-head", &head),

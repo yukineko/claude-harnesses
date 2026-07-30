@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use harness_core::verdict::{Determination, Reason};
+use harness_core::verdict::Determination;
 
 /// Find crate names whose src/ is newer than their bin/<name>-linux-x86_64 binary.
 ///
@@ -24,12 +24,7 @@ pub fn stale_crates(repo: &Path) -> Determination<Vec<String>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Determination::Known(Vec::new())
         }
-        Err(e) => {
-            return Determination::Undetermined(Reason::new(format!(
-                "{}: {e}",
-                crates_dir.display()
-            )))
-        }
+        Err(e) => return Determination::undetermined(format!("{}: {e}", crates_dir.display())),
     };
     for entry in entries.flatten() {
         let path = entry.path();

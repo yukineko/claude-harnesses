@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use globset::{Glob, GlobSetBuilder};
 use harness_core::boundary;
-use harness_core::verdict::{Determination, Reason};
+use harness_core::verdict::Determination;
 
 use crate::config::{Config, Mode};
 use crate::derive::{derive_properties, source_criteria, Property};
@@ -723,17 +723,13 @@ fn run_checker(
             // which fails closed, not a parsed verdict.
             match out.stdout_on_success() {
                 Determination::Known(stdout) => parse_checker_output(&stdout, props),
-                Determination::Undetermined(why) => {
-                    Determination::Undetermined(Reason::new(format!(
-                        "{} (its output cannot be trusted as a verdict)",
-                        why.as_str()
-                    )))
-                }
+                Determination::Undetermined(why) => Determination::undetermined(format!(
+                    "{} (its output cannot be trusted as a verdict)",
+                    why.as_str()
+                )),
             }
         }
-        Determination::Undetermined(why) => {
-            Determination::Undetermined(Reason::new(why.as_str().to_string()))
-        }
+        Determination::Undetermined(why) => Determination::undetermined(why.as_str().to_string()),
     }
 }
 
@@ -803,10 +799,10 @@ pub fn parse_checker_output(out: &str, props: &[Property]) -> Determination<Veri
         }
     }
     if !seen_any {
-        return Determination::Undetermined(Reason::new(format!(
+        return Determination::undetermined(format!(
             "checker output named none of the {} derived properties",
             props.len()
-        )));
+        ));
     }
     Determination::Known(Verified {
         satisfied,
@@ -983,7 +979,7 @@ mod tests {
         let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
         let d = decide_from_count(
             &cfg,
-            Determination::Undetermined(Reason::new("spawn: boom")),
+            Determination::undetermined("spawn: boom"),
             &props,
             3,
             vec!["src/x.rs".to_string()],
@@ -1011,7 +1007,7 @@ mod tests {
         let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
         let d = decide_from_count(
             &cfg,
-            Determination::Undetermined(Reason::new("spawn: boom")),
+            Determination::undetermined("spawn: boom"),
             &props,
             3,
             vec!["src/x.rs".to_string()],
@@ -1040,7 +1036,7 @@ mod tests {
         let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
         let d = decide_from_count(
             &cfg,
-            Determination::Undetermined(Reason::new("still broken")),
+            Determination::undetermined("still broken"),
             &props,
             3,
             vec!["src/x.rs".to_string()],

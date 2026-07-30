@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use harness_core::verdict::{Determination, Reason};
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -179,12 +179,7 @@ pub fn load_all(cfg: &Config) -> Determination<Vec<Session>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Determination::Known(Vec::new())
         }
-        Err(e) => {
-            return Determination::Undetermined(Reason::new(format!(
-                "{}: {e}",
-                cfg.state_dir.display()
-            )))
-        }
+        Err(e) => return Determination::undetermined(format!("{}: {e}", cfg.state_dir.display())),
     };
     for e in entries.flatten() {
         let p = e.path();

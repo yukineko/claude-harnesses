@@ -256,5 +256,24 @@ append-only なレジストリである。同じ種類の失敗は、発生し�
   現在は読み取り自体も三値で、**読めない ledger は「ラウンド 0 本」ではなくエラー**になる。
   残存ギャップ: レコード境界ちょうどでの truncate は妥当な短い ledger になるため内容だけでは
   検出できない（`crates/overwatch/tests/verdict_monotonicity.rs` の known-gap テストが固定）。
+- **`overwatch undetermined-metrics [--json] [--window-days N]`** — `harness_core::undetermined` が
+  書く「判定不能テレメトリ」stream を集計し、**ゲートが実際にどれだけ諦めているか**を crate 別・
+  site（`file:line`）別に印字する（backlog 6d493e39）。第3節は「判定不能は制限側へ倒せ」と要求するが、
+  **どれだけ倒れているかは誰も測っていなかった** — 正しくブロックする fleet と壊れている fleet を
+  区別する手段が無い状態だった。
+  - 集計キーは **site**。reason 文字列はパス・errno・exit code を含むためほぼ全て異なり、
+    まとめるには正規化が必要になる。正規化は**本来別物の give-up を合流させて趨勢を捏造しうる**ので
+    採らない。site は正確で、監査者が次に開く場所そのものである。
+  - **読み取りは fail-closed**: ledger 不在は `Known(empty)`（「まだ誰も諦めていない」は実観測）だが、
+    **読めない / パースできない ledger はエラー**（exit 1）であって 0 件レポートではない。部分集計を
+    total として出すのは、この stream が測るべき量そのものを過小申告する行為である。
+  - **0 は必ず sink 状態と併記する**。`0 件` と「そもそも記録されていない」は同じ `0` に見え、後者は
+    good news として読まれる。`sink:` 行（`active (path)` / `SUPPRESSED (CARGO)` / `DISABLED` /
+    `UNRESOLVABLE`）を counts より**前**に出すのはこのため。
+  - per-process cap に当たった記録が window 内にあると total は **FLOOR** とラベルされる（真の件数は
+    それ以上）。window から外れた件数も `excluded by window` として明示する（silent cap を作らない）。
+  - 書き込み側は `Undetermined` の payload が private field の `Undet` なので、**記録を経由しない
+    `Undetermined` の生成は compile error**（`crates/harness-core/tests/ui/verdict/forge_undetermined.rs`
+    が E0603 で固定）。既存 `Undetermined` の転送は再記録しない（origin が既に1回数えている）。
 - **rollback 事象の記録口** — `scripts/rollout-plugins.sh` の canary auto-rollback 時に
   `overwatch record-rollback` が `RollbackEvent` を追記する（fail-soft: 記録失敗はロールアウトを止めない）。

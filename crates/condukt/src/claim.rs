@@ -292,9 +292,9 @@ fn claim_progress(cfg: &Config, cwd: &Path, c: &Claim, now: i64) -> Determinatio
     let head = progress::git_head_signal(&repo_root(cwd));
     let transcript = match c.session_id.as_deref() {
         Some(sid) => progress::session_transcript_signal(sid),
-        None => Determination::Undetermined(harness_core::verdict::Reason::new(
+        None => Determination::undetermined(
             "claim has no owning session id — transcript progress unreadable",
-        )),
+        ),
     };
     let task_progress = run_task_progress_signal(cfg, cwd, &c.run_id);
     let current = progress::fingerprint_from_signals(vec![
@@ -330,9 +330,7 @@ fn run_task_progress_signal(cfg: &Config, cwd: &Path, run_id: &str) -> Determina
                 .unwrap_or(0);
             Determination::Known(max_updated.to_string().into_bytes())
         }
-        Err(e) => Determination::Undetermined(harness_core::verdict::Reason::new(format!(
-            "run state for {run_id} unreadable: {e}"
-        ))),
+        Err(e) => Determination::undetermined(format!("run state for {run_id} unreadable: {e}")),
     }
 }
 
@@ -1289,8 +1287,7 @@ mod tests {
         );
         save(&registry_path(&cfg, &tmp), &reg).unwrap();
         let now = cfg.stuck_ttl_secs as i64 + 1;
-        let undet =
-            Determination::Undetermined(harness_core::verdict::Reason::new("no sample yet"));
+        let undet = Determination::undetermined("no sample yet");
         let out = test_hook::with_forced(undet, || {
             claim_files(&cfg, &tmp, "runB", None, &files(&["src/a.rs"]), now).unwrap()
         });

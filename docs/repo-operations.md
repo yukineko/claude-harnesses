@@ -19,6 +19,32 @@
   （pre-commit と同じ fail-soft 設計。push は絶対に止めない・常に exit 0）。cron 定期実行の雛形は
   `scripts/continuous-audit.cron.example` を参照。
 
+## ビルド成果物ディレクトリの上限（`scripts/cap-target-dir.sh`）
+
+`.cargo/config.toml`（`/.cargo/` は gitignore 済みの machine-local 設定）で `target-dir` を
+`/tmp/condukt-build` のような**絶対パス**へ逃がしている環境では、その 1 つのディレクトリに
+すべてのビルド成果物が積み上がり、誰も回収しない（2026-07-30 実測: 37.1 GiB / 262,954 files）。
+
+`scripts/cap-target-dir.sh` はこれを決定論的に抑える:
+
+- `cargo metadata` で解決した target-dir を `du -sm` で実測し、**閾値を超えたときだけ** `cargo clean`
+  して 1 行を stderr に出す。超えていなければ**完全に沈黙**する。
+- 閾値は環境変数 `CARGO_TARGET_CAP_MB`（MB 単位、**既定 20000 = 20GB**）。
+  **`CARGO_TARGET_CAP_MB=0` で明示的に無効化**できる。
+- **ビルドの「前」に走る**（後ではない）。後で clean すると、いま作った成果物を捨てて次回フルリビルドに
+  なるだけで、総コストは同じなのに 1 回分無駄が増える。前なら「閾値超過時のそのビルドだけがフル
+  リビルド」で済む。
+- このスクリプトの失敗はビルドの失敗ではない。`cargo metadata` が失敗する・target-dir が無い・`du` が
+  失敗する（部分的にしか歩けず数値が過少になる場合を含む）— いずれもスクリプト自身は何もせず exit 0
+  （ただし `cargo` / `du` 自身の診断 stderr は握りつぶさない）。とくに **`cargo metadata` が rc != 0 で失敗したときは
+  `$PWD/target` へフォールバックしない**（cargo workspace の外か cargo が壊れているかで、そこにある
+  `target/` が cargo の成果物である保証が無く、`cargo clean` も同じ理由で失敗する。判定できない状態で
+  破壊的操作を撃たない）。フォールバックするのは **rc == 0 だが出力に `target_directory` が無い**
+  場合だけ。
+
+呼び出し元は `scripts/rebuild-plugins.sh`（`--no-clean` 時。既定の clean 経路は自前で `cargo clean`
+するため不要）・`scripts/build-plugin-bin.sh`・`scripts/test-changed-crates.sh`（donegate の Stop ゲート）。
+
 ## プラグインを改修したときの反映（忘れやすい）
 
 `crates/<name>/` が唯一の正典。`/plugin install` はここを

@@ -116,6 +116,13 @@ else
   if [ $clean = 1 ]; then
     echo ">>> cargo clean"
     cargo clean
+  else
+    # --no-clean skips the reclaim above, and when .cargo/config.toml redirects
+    # the target-dir to a fixed absolute path nothing else empties it either.
+    # Apply the size cap BEFORE the build: cleaning after would
+    # discard exactly the artifacts this build is about to produce.
+    # No-op unless the cap is exceeded. See scripts/cap-target-dir.sh.
+    scripts/cap-target-dir.sh
   fi
   echo ">>> cargo build --release --workspace --bins"
   cargo build --release --workspace --bins

@@ -3,7 +3,15 @@
 /// `record` appends one round record to the audit-round ledger (the deterministic
 /// counterpart of the LLM-driven finder/verifier step); `metrics` reads the
 /// ledger back and prints the convergence report (per-round new-findings trend,
-/// closure-rate, and a `converging` flag) either human-readable or as JSON.
+/// closure-rate, and a tri-state `converging` flag) either human-readable or as
+/// JSON.
+///
+/// READING the ledger is fail-CLOSED, and deliberately so: `metrics` and `close`
+/// both abort when the ledger cannot be read or parsed, rather than proceeding
+/// from `unwrap_or_default()`'s empty vec. Reporting metrics over a history you
+/// could not read produced a *better* verdict than the true one, and `close`
+/// rewrites the whole file, so a partial read there would delete records. See
+/// `store::read_audit_rounds` and `tests/verdict_monotonicity.rs`.
 ///
 /// Reporting failures here are **fail-soft**: a store-write failure is reported
 /// to stderr rather than propagated, matching overwatch's observational
@@ -264,7 +272,23 @@ fn close_at(cwd: &Path, round: &str, tests: u64) -> Result<CloseOutcome> {
         Some(l) => l,
         None => return Ok(CloseOutcome::NotFound),
     };
-    let rounds = store::read_audit_rounds(cwd).unwrap_or_default();
+    // Do NOT fall back to an empty ledger here. This is a read->modify->rewrite:
+    // rewriting from a ledger we could not fully read would DESTROY the rounds
+    // we failed to parse. `unwrap_or_default()` used to make that the quiet
+    // default path.
+    let rounds = match store::read_audit_rounds(cwd)?.require() {
+        Ok(r) => r,
+        Err(v) => {
+            anyhow::bail!(
+                "refusing to close round {round:?}: {}. Closing rewrites the \
+                 whole ledger, so proceeding from a partial read would drop \
+                 every record that failed to parse.",
+                v.reason()
+                    .map(|r| r.as_str())
+                    .unwrap_or("ledger undetermined")
+            )
+        }
+    };
     let (updated, found) = audit_round::set_round_tests(&rounds, round, tests);
     if !found {
         return Ok(CloseOutcome::NotFound);
@@ -295,7 +319,20 @@ fn artificial_close_delay() {
 /// zero-round report rather than an error.
 pub fn metrics(json: bool, window: Option<usize>) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let rounds = store::read_audit_rounds(&cwd).unwrap_or_default();
+    // A ledger that cannot be read is not a ledger with no rounds. Reporting
+    // metrics over `unwrap_or_default()`'s empty vec is how `converging: true`
+    // became reachable by damaging the file.
+    let rounds = match store::read_audit_rounds(&cwd)?.require() {
+        Ok(r) => r,
+        Err(v) => {
+            anyhow::bail!(
+                "cannot report audit metrics: {}",
+                v.reason()
+                    .map(|r| r.as_str())
+                    .unwrap_or("ledger undetermined")
+            )
+        }
+    };
     let window = window.unwrap_or(DEFAULT_CONVERGENCE_WINDOW);
     let report = audit_round::compute_metrics(&rounds, window);
 
@@ -340,9 +377,20 @@ pub fn metrics(json: bool, window: Option<usize>) -> Result<()> {
         .map(|v| format!("{:.2}", v))
         .unwrap_or_else(|| "n/a".to_string());
     println!("  overall closure-rate:     {overall}");
+    // Print the undetermined arm as words, not as `None`. A reader skimming this
+    // must not be able to mistake "cannot tell yet" for a verdict either way —
+    // that confusion is the whole defect this tri-state removes.
+    let converging = match report.converging {
+        Some(true) => "yes".to_string(),
+        Some(false) => "NO".to_string(),
+        None => format!(
+            "unknown (only {} round(s) in scope — a trend needs 2)",
+            report.rounds.len().min(report.convergence_window.max(1))
+        ),
+    };
     println!(
-        "  converging (last {} rounds): {}",
-        report.convergence_window, report.converging
+        "  converging (last {} rounds): {converging}",
+        report.convergence_window
     );
     Ok(())
 }
@@ -411,6 +459,86 @@ mod tests {
     // RED (before the fix): remove the `LeaseLock::acquire` in `close_at` and
     // this fails — the appended `r2` is silently dropped by close's rewrite.
     // GREEN: with the lock, both the closed `r1` (tests=7) and `r2` survive.
+    /// The IO arm of the read tri-state, which the pure monotonicity property
+    /// in `tests/verdict_monotonicity.rs` cannot reach (it drives text, not
+    /// files) — so it is pinned here, serialized on `HOME_ENV_LOCK`.
+    ///
+    /// `Degradation::Unreadable`: the ledger exists and is full of rounds, but
+    /// the process cannot open it. That MUST read as undetermined. It used to be
+    /// `Err(_) => Ok(Vec::new())`, i.e. "there is no audit history", which is
+    /// how `chmod 000` on this file flipped the shipped 0.2.15 binary's report
+    /// from `converging: false` to `converging: true` at exit 0.
+    ///
+    /// RED (before the fix): restore that arm and this returns `Known([])`.
+    #[test]
+    #[cfg(unix)]
+    fn an_unreadable_ledger_is_undetermined_not_an_empty_history() {
+        use harness_core::verdict::Determination;
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = store::HOME_ENV_LOCK.lock().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-audit-unreadable-{}-{}",
+            std::process::id(),
+            store::now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+
+        // A real, non-empty, perfectly valid ledger...
+        let now = store::now();
+        for (i, n) in [5u64, 9].iter().enumerate() {
+            let r = AuditRound::new(
+                format!("r{i}"),
+                &["overwatch".to_string()],
+                *n,
+                0,
+                0,
+                now + i as i64,
+            );
+            store::append_audit_round(&dir, &r).unwrap();
+        }
+        let path = store::audit_rounds_path(&dir).unwrap();
+        let determined = store::read_audit_rounds(&dir).unwrap();
+        assert!(
+            matches!(&determined, Determination::Known(r) if r.len() == 2),
+            "control: the ledger must read cleanly before we take it away"
+        );
+
+        // ...that the process can no longer open.
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&path, perms).unwrap();
+
+        let got = store::read_audit_rounds(&dir).unwrap();
+
+        // Restore before asserting so a failure cannot leave an unreadable
+        // file behind in temp.
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(&path, perms).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        // `assert_eq!` on the round count rather than `panic!` in a match arm:
+        // `clippy::panic` is deny for this target and widening the crate-root
+        // allow to satisfy one test would loosen the lint for every test in the
+        // binary.
+        let known_rounds = match &got {
+            Determination::Known(rounds) => Some(rounds.len()),
+            Determination::Undetermined(_) => None,
+        };
+        assert_eq!(
+            known_rounds, None,
+            "an unreadable ledger read back as a KNOWN history; 'I could not \
+             open it' is not 'there is nothing in it'"
+        );
+    }
+
     #[test]
     fn concurrent_record_append_survives_audit_round_close_rewrite() {
         let _guard = store::HOME_ENV_LOCK.lock().unwrap();
@@ -448,7 +576,10 @@ mod tests {
 
         a.join().unwrap();
 
-        let rounds = store::read_audit_rounds(&dir).unwrap();
+        let rounds = store::read_audit_rounds(&dir)
+            .unwrap()
+            .require()
+            .expect("the ledger written by this test must read back determined");
         let r1_out = rounds
             .iter()
             .find(|r| r.round == "r1")

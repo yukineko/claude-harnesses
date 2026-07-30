@@ -1,5 +1,5 @@
 /// Event store and lease storage backend.
-use crate::audit_round::AuditRound;
+use crate::audit_round::{self, AuditRound};
 use crate::changeset::{
     detect_conflicts_default, ActualChangeset, ChangesetRegistry, RuntimeConflictEvent,
 };
@@ -11,6 +11,7 @@ use crate::review_finding::ReviewFinding;
 use crate::rollback::RollbackEvent;
 use crate::violation::ViolationEvent;
 use anyhow::Result;
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -753,24 +754,36 @@ pub fn rewrite_audit_rounds(cwd: &Path, rounds: &[AuditRound]) -> Result<()> {
 }
 
 /// Read all Continuous-Audit round records from audit_rounds.jsonl, in recorded
-/// (append) order. Returns an empty vec if the file doesn't exist or is empty
-/// (fail-soft, same contract as `read_events` / `read_rollbacks`). Corrupt
-/// lines are skipped rather than failing the whole read.
-pub fn read_audit_rounds(cwd: &Path) -> Result<Vec<AuditRound>> {
+/// (append) order.
+///
+/// Tri-state, deliberately NOT the fail-soft contract of `read_events` /
+/// `read_rollbacks`:
+///
+/// * **absent ledger** → `Known(vec![])`. "No rounds recorded yet" is a real
+///   answer, and a fresh checkout must not read as an error.
+/// * **unreadable ledger** (permissions, IO error) → `Undetermined`. This arm
+///   used to be `Err(_) => Ok(Vec::new())`, which reported "there is no audit
+///   history" for a history the process simply could not open.
+/// * **unparseable record** → `Undetermined`, via [`audit_round::parse_rounds`].
+///   The old loop skipped bad lines silently and returned the survivors, so a
+///   single corrupted byte produced a shorter history that looked healthier.
+///
+/// The three together were measurable on the shipped 0.2.15 binary: corrupting,
+/// truncating, or `chmod 000`-ing this file each flipped `overwatch
+/// audit-metrics` from `converging: false` to `converging: true` at exit 0.
+/// Degrading the evidence improved the verdict — see
+/// `crates/overwatch/tests/verdict_monotonicity.rs` and
+/// `harness_core::degrade`.
+pub fn read_audit_rounds(cwd: &Path) -> Result<Determination<Vec<AuditRound>>> {
     let path = audit_rounds_path(cwd)?;
     match std::fs::read_to_string(&path) {
-        Ok(txt) => {
-            let mut rounds = Vec::new();
-            for line in txt.lines() {
-                if !line.is_empty() {
-                    if let Ok(r) = serde_json::from_str::<AuditRound>(line) {
-                        rounds.push(r);
-                    }
-                }
-            }
-            Ok(rounds)
-        }
-        Err(_) => Ok(Vec::new()),
+        Ok(txt) => Ok(audit_round::parse_rounds(&txt)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Determination::Known(Vec::new())),
+        Err(e) => Ok(Determination::undetermined(format!(
+            "cannot read the audit-round ledger at {}: {e}. The round history is \
+             unknown, not empty.",
+            path.display()
+        ))),
     }
 }
 

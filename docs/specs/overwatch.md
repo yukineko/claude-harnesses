@@ -248,5 +248,13 @@ append-only なレジストリである。同じ種類の失敗は、発生し�
   closure-rate・`converging` フラグ（既定は末尾3ラウンドの下降判定）を印字する。`converging` は
   successive round が **同一スコープ** を再監査したときのみ意味を持つ（スコープを広げた round では
   new-findings 増加は退行ではない）。
+  `converging` は **三値**（`yes` / `NO` / `unknown`）。window 内のラウンドが 2 本未満だと隣接ペアが
+  無く趨勢が読めないので `unknown` を返す — 旧実装はここで `true`（「vacuously converging」）を
+  返しており、これは判定不能を permissive へ写す CLAUDE.md 第3節そのものだった。しかも
+  **ledger を壊すだけで到達できた**: `audit_rounds.jsonl` を truncate / corrupt / chmod 000 すると
+  出荷済み 0.2.15 バイナリは `converging: false` → `true` を exit 0 で返した（実測）。
+  現在は読み取り自体も三値で、**読めない ledger は「ラウンド 0 本」ではなくエラー**になる。
+  残存ギャップ: レコード境界ちょうどでの truncate は妥当な短い ledger になるため内容だけでは
+  検出できない（`crates/overwatch/tests/verdict_monotonicity.rs` の known-gap テストが固定）。
 - **rollback 事象の記録口** — `scripts/rollout-plugins.sh` の canary auto-rollback 時に
   `overwatch record-rollback` が `RollbackEvent` を追記する（fail-soft: 記録失敗はロールアウトを止めない）。

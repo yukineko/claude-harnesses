@@ -299,8 +299,13 @@ enum Command {
     },
     /// Read the Continuous-Audit round ledger and print convergence metrics:
     /// per-round new-findings trend, closure-rate (regression tests ÷
-    /// confirmed), and a `converging` flag. Fail-soft: an empty ledger prints a
-    /// zero-round report.
+    /// confirmed), and a tri-state `converging` flag (yes / NO / unknown).
+    ///
+    /// An ABSENT or empty ledger prints a zero-round report — "no rounds yet" is
+    /// a real answer. An UNREADABLE or unparseable one is an error, not a
+    /// zero-round report: a history that cannot be read is unknown, not empty,
+    /// and reporting it as empty made `converging` reachable by damaging the
+    /// file.
     AuditMetrics {
         #[arg(long)]
         json: bool,

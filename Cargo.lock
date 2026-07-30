@@ -870,6 +870,7 @@ dependencies = [
  "clap",
  "dirs",
  "harness-core",
+ "proptest",
  "regex",
  "serde",
  "serde_json",

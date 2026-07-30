@@ -15,9 +15,17 @@
 /// confirmed) shows how diligently confirmed findings are being locked in as
 /// tests.
 ///
-/// Everything here is data + pure computation. Emission is fail-soft (see
-/// `store::append_audit_round` and `audit_round_cli::record`), matching
-/// overwatch's observational / never-break-a-turn invariant.
+/// Everything here is data + pure computation. WRITING a round is fail-soft
+/// (see `store::append_audit_round`), matching overwatch's observational /
+/// never-break-a-turn invariant: a store-write failure must not destroy the
+/// round's work.
+///
+/// READING one back is not, and the two must not be conflated. A verdict
+/// computed over a history that could not be read is worse than no verdict, so
+/// [`parse_rounds`] and `store::read_audit_rounds` are tri-state and the CLI
+/// aborts on `Undetermined`. `audit_round_cli::record` likewise REFUSES rounds
+/// that confirm findings without closing them — see `closure_incomplete`.
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Deserialize a round identifier from either a JSON string or a JSON number.
@@ -218,6 +226,41 @@ pub fn model_diversity_violation(finder: Option<&str>, verifier: Option<&str>) -
     }
 }
 
+/// Parse a JSONL audit-round ledger. Pure: no IO, so the monotonicity property
+/// can drive it without touching the process-global `HOME`.
+///
+/// Returns `Undetermined` if ANY non-empty line fails to parse. The previous
+/// reader did `if let Ok(r) = serde_json::from_str(line)` and silently skipped
+/// bad lines, which is the fail-open this exists to remove: a partially-read
+/// history is not a shorter history. One corrupted record dropped two rounds to
+/// one, and `is_converging` reports `true` for anything under two rounds — so
+/// damaging the ledger *improved* the reported verdict. Measured, on the shipped
+/// 0.2.15 binary: corrupt / truncate / chmod-000 each flipped `converging` from
+/// `false` to `true` at exit 0.
+///
+/// An empty input is `Known(vec![])` — a ledger with no rounds yet is a real,
+/// determined answer, distinct from one that could not be read.
+pub fn parse_rounds(text: &str) -> Determination<Vec<AuditRound>> {
+    let mut rounds = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<AuditRound>(line) {
+            Ok(r) => rounds.push(r),
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "audit-round ledger line {} is unparseable ({e}); the round \
+                     history is incomplete, so convergence cannot be computed \
+                     from it. Refusing to report metrics over a partial ledger.",
+                    i + 1
+                ))
+            }
+        }
+    }
+    Determination::Known(rounds)
+}
+
 /// True iff a round confirmed findings without closing all of them — i.e.
 /// `regression_tests_added < confirmed`. Pure and side-effect free.
 ///
@@ -306,11 +349,19 @@ pub struct AuditMetrics {
     pub closure_rate: Option<f64>,
     /// How many trailing rounds the convergence check considered.
     pub convergence_window: usize,
-    /// Is the audit CONVERGING? True when new-findings is non-increasing over
-    /// the last `convergence_window` rounds (each round ≤ the previous). With
-    /// fewer than 2 rounds there is no trend to violate, so it is vacuously
-    /// true.
-    pub converging: bool,
+    /// Is the audit CONVERGING? `Some(true)` when new-findings is non-increasing
+    /// over the last `convergence_window` rounds (each round ≤ the previous),
+    /// `Some(false)` when it increased, and **`None` when there are fewer than
+    /// two rounds in scope and therefore no trend to read**.
+    ///
+    /// That third case used to be `true` — "vacuously converging". It is the
+    /// permissive answer to a question that could not be answered, which is the
+    /// gate invariant in CLAUDE.md §3, and it was reachable by *damaging the
+    /// ledger*: truncating or emptying `audit_rounds.jsonl` shortens the history
+    /// to one round, and the report flipped from `converging: false` to
+    /// `converging: true` at exit 0. Measured on the shipped 0.2.15 binary
+    /// across three degradations; see `tests/verdict_monotonicity.rs`.
+    pub converging: Option<bool>,
 }
 
 /// The default number of trailing rounds the convergence check considers.
@@ -326,6 +377,7 @@ pub const DEFAULT_CONVERGENCE_WINDOW: usize = 3;
 /// * `converging` = new-findings is NON-INCREASING across the last `window`
 ///   rounds (i.e. each considered round's new-findings ≤ its predecessor's).
 ///   Ties (equal counts) count as converging — the trend must not INCREASE.
+///   `None` when fewer than two rounds are in scope: no trend, no answer.
 pub fn compute_metrics(rounds: &[AuditRound], window: usize) -> AuditMetrics {
     let mut per_round: Vec<RoundMetric> = Vec::with_capacity(rounds.len());
     let mut total_new = 0u64;
@@ -371,12 +423,18 @@ fn rate(numer: u64, denom: u64) -> Option<f64> {
     }
 }
 
-/// Is new-findings non-increasing over the last `window` rounds? With <2 rounds
-/// in scope there is no adjacent pair to violate, so the answer is `true`
-/// (vacuously converging). A `window` of 0 is treated as "all rounds".
-fn is_converging(rounds: &[AuditRound], window: usize) -> bool {
+/// Is new-findings non-increasing over the last `window` rounds? A `window` of
+/// 0 is treated as "all rounds".
+///
+/// **`None` with fewer than two rounds in scope.** There is no adjacent pair, so
+/// there is no trend, so there is no answer — and "no adjacent pair violated the
+/// trend" is not the same statement as "the audit is converging". The former was
+/// reported as the latter, which made a *shorter* history look like a *better*
+/// one and turned every way of damaging the ledger into a way of getting a clean
+/// report.
+fn is_converging(rounds: &[AuditRound], window: usize) -> Option<bool> {
     if rounds.len() < 2 {
-        return true;
+        return None;
     }
     let start = if window == 0 {
         0
@@ -384,9 +442,17 @@ fn is_converging(rounds: &[AuditRound], window: usize) -> bool {
         rounds.len().saturating_sub(window)
     };
     let scope = &rounds[start..];
-    scope
-        .windows(2)
-        .all(|w| w[1].new_findings <= w[0].new_findings)
+    // `window == 1` leaves a single round in scope even with a long history, so
+    // the early return above does not cover this. Same reasoning: no pair, no
+    // trend, no answer.
+    if scope.len() < 2 {
+        return None;
+    }
+    Some(
+        scope
+            .windows(2)
+            .all(|w| w[1].new_findings <= w[0].new_findings),
+    )
 }
 
 #[cfg(test)]
@@ -589,7 +655,10 @@ mod tests {
             round(2, 3, 3, 3, 20),
             round(3, 1, 1, 1, 30),
         ];
-        assert!(compute_metrics(&rounds, DEFAULT_CONVERGENCE_WINDOW).converging);
+        assert_eq!(
+            compute_metrics(&rounds, DEFAULT_CONVERGENCE_WINDOW).converging,
+            Some(true)
+        );
     }
 
     #[test]
@@ -600,14 +669,20 @@ mod tests {
             round(2, 3, 3, 3, 20),
             round(3, 3, 3, 3, 30),
         ];
-        assert!(compute_metrics(&rounds, DEFAULT_CONVERGENCE_WINDOW).converging);
+        assert_eq!(
+            compute_metrics(&rounds, DEFAULT_CONVERGENCE_WINDOW).converging,
+            Some(true)
+        );
     }
 
     #[test]
     fn not_converging_when_new_findings_increase() {
         // 1 -> 4 within the window => an increase => NOT converging.
         let rounds = vec![round(1, 1, 1, 1, 10), round(2, 4, 4, 4, 20)];
-        assert!(!compute_metrics(&rounds, DEFAULT_CONVERGENCE_WINDOW).converging);
+        assert_eq!(
+            compute_metrics(&rounds, DEFAULT_CONVERGENCE_WINDOW).converging,
+            Some(false)
+        );
     }
 
     #[test]
@@ -621,23 +696,44 @@ mod tests {
             round(3, 3, 3, 3, 30),
             round(4, 1, 1, 1, 40),
         ];
-        assert!(compute_metrics(&rounds, 2).converging);
+        assert_eq!(compute_metrics(&rounds, 2).converging, Some(true));
         // With window=0 (all rounds) the 2->9 increase makes it NOT converging.
-        assert!(!compute_metrics(&rounds, 0).converging);
+        assert_eq!(compute_metrics(&rounds, 0).converging, Some(false));
     }
 
     #[test]
-    fn single_round_is_vacuously_converging() {
+    fn single_round_cannot_answer_the_convergence_question() {
+        // Was `single_round_is_vacuously_converging`, asserting `true`. One
+        // round has no adjacent pair, so there is no trend to read; reporting
+        // the permissive answer to an unanswerable question is exactly the
+        // fail-open in CLAUDE.md §3, and it was reachable by truncating the
+        // ledger down to one round.
         let rounds = vec![round(1, 7, 7, 7, 10)];
-        assert!(compute_metrics(&rounds, DEFAULT_CONVERGENCE_WINDOW).converging);
+        assert_eq!(
+            compute_metrics(&rounds, DEFAULT_CONVERGENCE_WINDOW).converging,
+            None
+        );
     }
 
     #[test]
-    fn empty_ledger_is_converging_with_no_rounds() {
+    fn empty_ledger_cannot_answer_the_convergence_question() {
+        // Was `empty_ledger_is_converging_with_no_rounds`, asserting `true`.
+        // Note what does NOT change: the ledger being empty is still a KNOWN,
+        // legitimate state (a fresh checkout has no rounds). It is the
+        // *convergence verdict over* that state that is unanswerable.
         let m = compute_metrics(&[], DEFAULT_CONVERGENCE_WINDOW);
         assert!(m.rounds.is_empty());
-        assert!(m.converging);
+        assert_eq!(m.converging, None);
         assert_eq!(m.closure_rate, None);
+    }
+
+    #[test]
+    fn a_window_of_one_has_no_pair_either() {
+        // The `rounds.len() < 2` early return does not cover this: the history
+        // is long, but the window narrows the scope to a single round.
+        let rounds = vec![round(1, 9, 9, 9, 10), round(2, 1, 1, 1, 20)];
+        assert_eq!(compute_metrics(&rounds, 1).converging, None);
+        assert_eq!(compute_metrics(&rounds, 2).converging, Some(true));
     }
 
     #[test]

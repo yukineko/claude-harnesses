@@ -42,11 +42,16 @@ a blanket pass would reintroduce the very fail-open this gate exists to stop.
 
 Two consequences of that design, stated so they read as decisions:
 
-* A weakening that is only STAGED cannot be acknowledged, because the marker
-  lives in a commit message that does not exist yet. Run locally it therefore
-  blocks until the justifying commit is written. That is the intent: the
-  justification has to be durable in history where a reviewer meets it, not a
-  transient state of someone's index.
+* The marker is read from `base..HEAD` commit messages AND, when `--pending-msg
+  FILE` is passed, from the message about to be written. Until 2026-07-30 only
+  the former was read, which made the hatch unreachable exactly when it was
+  needed: git runs `pre-commit` before any message exists, and on a branch's
+  first commit `base..HEAD` is empty, so a staged weakening could not be
+  acknowledged at all and `--no-verify` was the only way past a false positive.
+  The justification is still durable in history where a reviewer meets it --
+  `--pending-msg` points at the message that is being committed, not at a
+  scratch file -- and it is held to the same exactness rules. This gate now runs
+  from .githooks/commit-msg, where git supplies that path as $1.
 * Scope is NET, PER FILE, base vs HEAD -- not per commit. A file that did not
   exist at the base cannot have had existing coverage weakened, and per-commit
   analysis would fire on ordinary iteration (write test, refactor, consolidate);
@@ -393,13 +398,34 @@ def findings_for(path: str, before: dict, after: dict) -> list:
     return [(path, kind, detail) for kind, detail in out]
 
 
-def acknowledgements(repo: str, base_sha: str) -> set:
+def acknowledgements(repo: str, base_sha: str, pending_msg: str | None = None) -> set:
     """`<path>:<kind>` pairs acknowledged by commit messages in the range.
 
     A line without a well-formed `<path>:<kind>` and a non-empty reason is
     ignored on purpose, so a bare marker cannot act as a blanket pass.
+
+    `pending_msg` is the path to a commit message that is about to be written —
+    the `$1` a `commit-msg` hook receives. It is scanned in ADDITION to the
+    range, never instead of it, and it is held to exactly the same exactness
+    rules; it widens WHERE a marker may live, not HOW loose one may be.
+
+    Without it the escape hatch is unreachable at the moment it is needed. git
+    runs `pre-commit` before any message exists, and on a branch's first commit
+    `base..HEAD` is empty, so a marker in the message being written is invisible
+    and the only way past a false positive is `--no-verify` — the bypass this
+    repo has a separate hook to refuse. A gate whose documented remedy cannot be
+    applied is not strict, it is broken.
     """
     body = git(repo, "log", "--format=%B", f"{base_sha}..HEAD")
+    if pending_msg is not None:
+        try:
+            with open(pending_msg, encoding="utf-8", errors="replace") as fh:
+                body += "\n" + fh.read()
+        except OSError as exc:
+            # "could not read it" is not "it contained no markers". Reading the
+            # first as the second would silently drop every acknowledgment the
+            # caller believed they had written.
+            raise Undetermined(f"pending commit message unreadable ({pending_msg}): {exc}")
     acked = set()
     for line in body.splitlines():
         m = JUSTIFY_RE.match(line)
@@ -471,7 +497,7 @@ def changed_pairs(repo: str, merge_base: str) -> list:
     return pairs
 
 
-def scan(repo: str, base: str, base_was_explicit: bool) -> list:
+def scan(repo: str, base: str, base_was_explicit: bool, pending_msg=None) -> list:
     if not is_git_repo(repo):
         raise Undetermined(f"not a git repository: {repo}")
     base_sha = resolve_base(repo, base, base_was_explicit)
@@ -485,7 +511,7 @@ def scan(repo: str, base: str, base_was_explicit: bool) -> list:
         if _is_rs(old) or _is_rs(new)
     ]
 
-    acked = acknowledgements(repo, merge_base)
+    acked = acknowledgements(repo, merge_base, pending_msg)
 
     results = []
     for old, new in sorted(set(pairs), key=lambda pr: (pr[1] or "", pr[0] or "")):
@@ -511,13 +537,20 @@ def main(argv=None) -> int:
     ap.add_argument("--base", default="origin/main")
     ap.add_argument("--repo", default=None)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument(
+        "--pending-msg",
+        default=None,
+        metavar="FILE",
+        help="commit message about to be written (a commit-msg hook's $1); "
+        "scanned for acknowledgments IN ADDITION to base..HEAD",
+    )
     args = ap.parse_args(argv)
 
     repo = args.repo or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     base_was_explicit = args.base != "origin/main"
 
     try:
-        findings = scan(repo, args.base, base_was_explicit)
+        findings = scan(repo, args.base, base_was_explicit, args.pending_msg)
     except Undetermined as exc:
         # The one branch that must never become 0. `undetermined` is greppable
         # on purpose so a CI log can be searched for it.

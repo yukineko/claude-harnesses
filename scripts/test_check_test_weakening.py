@@ -534,6 +534,81 @@ class Acknowledgment(GateTestCase):
         repo.commit("docs: unrelated follow-up commit")
         self.assertClean(*self.run_gate(repo.root))
 
+    def test_staged_but_uncommitted_weakening_blocks_without_a_pending_message(self):
+        """The deadlock this class's `--pending-msg` sibling exists to break.
+
+        git runs `pre-commit` BEFORE any commit message exists, and on a
+        branch's first commit `base..HEAD` is empty, so a marker in the message
+        being written cannot be seen. Without help the gate blocks and the only
+        way past is `--no-verify`.
+        """
+        repo = self.make_repo()
+        repo.write(TEST_PATH, TESTS_RS_ASSERTION_REMOVED)
+        repo.git("add", "-A")  # staged, deliberately NOT committed
+        self.assertBlocks(*self.run_gate(repo.root), kind="assertion-removed")
+
+    def test_pending_message_acknowledges_a_staged_weakening(self):
+        repo = self.make_repo()
+        repo.write(TEST_PATH, TESTS_RS_ASSERTION_REMOVED)
+        repo.git("add", "-A")
+        msg = repo.root / "pending-msg.txt"
+        msg.write_text(
+            "chore: drop an obsolete assertion\n\n"
+            f"test-weakening-justified: {TEST_PATH}:assertion-removed "
+            "— the invariant it checked was deleted in the same commit\n",
+            encoding="utf-8",
+        )
+        self.assertClean(*self.run_gate(repo.root, "--pending-msg", str(msg)))
+
+    def test_pending_message_is_exact_too(self):
+        """`--pending-msg` widens WHERE the marker may live, never HOW loose it is."""
+        repo = self.make_repo()
+        repo.write(TEST_PATH, TESTS_RS_ASSERTION_REMOVED)
+        repo.git("add", "-A")
+        msg = repo.root / "pending-msg.txt"
+        msg.write_text(
+            "chore: drop an obsolete assertion\n\n"
+            "test-weakening-justified: crates/other/tests/other.rs:assertion-removed "
+            "— wrong file entirely\n",
+            encoding="utf-8",
+        )
+        self.assertBlocks(
+            *self.run_gate(repo.root, "--pending-msg", str(msg)),
+            kind="assertion-removed",
+        )
+
+    def test_bare_pending_marker_acknowledges_nothing(self):
+        repo = self.make_repo()
+        repo.write(TEST_PATH, TESTS_RS_ASSERTION_REMOVED)
+        repo.git("add", "-A")
+        msg = repo.root / "pending-msg.txt"
+        msg.write_text(
+            "chore: drop an obsolete assertion\n\ntest-weakening-justified:\n",
+            encoding="utf-8",
+        )
+        self.assertBlocks(
+            *self.run_gate(repo.root, "--pending-msg", str(msg)),
+            kind="assertion-removed",
+        )
+
+    def test_unreadable_pending_message_is_undetermined_not_clean(self):
+        """An unreadable message file is "cannot determine", never "acknowledged".
+
+        Resolving it to "no markers found" would be defensible-looking and
+        wrong in the permissive direction: a caller who mistypes the path would
+        get the finding reported, but a caller whose file vanished mid-commit
+        would get whatever the rest of the range said. Neither is a fact about
+        the change, so it resolves to exit 2.
+        """
+        repo = self.make_repo()
+        repo.write(TEST_PATH, TESTS_RS_ASSERTION_REMOVED)
+        repo.git("add", "-A")
+        rc, out, err = self.run_gate(
+            repo.root, "--pending-msg", str(repo.root / "does-not-exist.txt")
+        )
+        self.assertEqual(rc, 2, f"expected undetermined (exit 2)\nSTDOUT:{out}\nSTDERR:{err}")
+        self.assertIn("undetermined", out + err)
+
     def test_justification_for_a_different_path_does_not_acknowledge(self):
         repo = self.make_repo()
         self._weaken(

@@ -29,6 +29,13 @@ binname="${3:-$pkg}"
 target_dir="$(cargo metadata --no-deps --format-version=1 | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
 target_dir="${target_dir:-$PWD/target}"
 
+# When .cargo/config.toml redirects that target-dir to a fixed absolute path,
+# one directory accumulates every build ever made here and nothing reclaims it.
+# Cap its size BEFORE building — cleaning afterwards would throw away the
+# artifacts this run just produced. Silent unless it actually cleans; see
+# scripts/cap-target-dir.sh.
+scripts/cap-target-dir.sh
+
 if [ -n "$target" ]; then
   rustc_triple="$target"
   cargo build --release -p "$pkg" --target "$target"

@@ -110,6 +110,15 @@ if [ -z "$pkgs" ]; then
     exit 0
 fi
 
+# This gate runs on every Stop, so it is the most frequent writer into the
+# target-dir (which .cargo/config.toml may redirect to one fixed absolute path
+# that nothing reclaims). Cap it BEFORE the tests build anything — cleaning after
+# would throw away what this run just compiled and make the next Stop a full
+# rebuild for nothing. Placed after the early exits above so a turn with no
+# crate change pays nothing. No-op unless the cap is exceeded, and it exits 0
+# even when it cannot measure. See scripts/cap-target-dir.sh.
+"$REPO/scripts/cap-target-dir.sh"
+
 echo "test-changed-crates: testing$pkgs"
 failed=""
 for p in $pkgs; do

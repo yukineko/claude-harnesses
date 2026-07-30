@@ -27,6 +27,7 @@ pub mod boundary;
 pub mod code_index;
 pub mod config;
 pub mod daily;
+pub mod degrade;
 pub mod discovery;
 pub mod estimate;
 pub mod fleet;

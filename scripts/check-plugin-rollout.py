@@ -202,6 +202,38 @@ def _git_changed_since(commit, crate):
 SOURCE_CHANGED_SINCE = _git_changed_since
 
 
+def _source_core_version():
+    """`[package].version` of the shared crate in the CURRENT source tree.
+
+    Returns None when it cannot be read. None is not a version: the caller
+    reports it rather than assuming the manifest agrees with something it could
+    not look at.
+    """
+    path = os.path.join(REPO, "crates", "harness-core", "Cargo.toml")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    in_package = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("["):
+            in_package = line == "[package]"
+            continue
+        if in_package and line.startswith("version"):
+            parts = line.split("=", 1)
+            if len(parts) == 2 and parts[0].strip() == "version":
+                v = parts[1].strip().strip('"').strip("'")
+                if v:
+                    return v
+    return None
+
+
+# Rebindable for the same reason as SOURCE_CHANGED_SINCE.
+SOURCE_CORE_VERSION = _source_core_version
+
+
 def _host_suffix():
     """This host's `<os>-<arch>` binary suffix, matching rebuild-plugins.sh's $SUF.
 
@@ -557,6 +589,42 @@ def _provenance_problem(crate, entry):
             f"{crate}: {PROVENANCE_FILE} records no 'commit', so there is nothing "
             "to compare the current source against"
         )
+    # The shared-crate version these bytes contain, as recorded at rollout
+    # (backlog 32170548). harness-core is linked into every plugin binary, so
+    # this is the second half of "the version identifies what shipped": the
+    # plugin's own version covers its own crate, this covers the shared one.
+    #
+    # An ABSENT field is deliberately NOT a problem. It means a manifest written
+    # before this field existed, and the question it answers is already answered
+    # completely by the commit comparison below — SHARED_SOURCE_PATHS includes
+    # crates/harness-core, so a harness-core change since `commit` is reported as
+    # drift with or without this field. So absence loses no coverage; it only
+    # loses the cheaper, self-describing signal. (Stated explicitly because a
+    # silently-skipped check is normally exactly the fail-open this file exists to
+    # prevent — here the fallback is provably not weaker, not merely assumed so.)
+    recorded_core = manifest.get("harness_core_version")
+    if recorded_core == "unknown":
+        return (
+            f"{crate}: {PROVENANCE_FILE} records harness_core_version "
+            f"'unknown' — the rollout could not read the shared crate's version, "
+            "so which harness-core these bytes contain was never established"
+        )
+    if recorded_core is not None:
+        current_core = SOURCE_CORE_VERSION()
+        if current_core is None:
+            return (
+                f"{crate}: cannot read [package].version from "
+                "crates/harness-core/Cargo.toml, so the recorded "
+                f"harness_core_version '{recorded_core}' cannot be checked — "
+                "undetermined is not 'agrees'"
+            )
+        if recorded_core != current_core:
+            return (
+                f"{crate}: deployed binary links harness-core "
+                f"{recorded_core}, but the source tree is now at {current_core} "
+                "<- rollout-plugins.sh not run since that shared-crate change"
+            )
+
     moved = SOURCE_CHANGED_SINCE(commit, crate)
     if moved is None:
         return (

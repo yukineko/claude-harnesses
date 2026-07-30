@@ -105,6 +105,30 @@ version と各 plugin.json の source version を比較し、不一致（＝ rol
 base より**厳密に上がっている**ことを要求し、上がっていなければ exit 1 で該当 plugin と変更ファイルを
 表示する（新規 plugin は base に無いので OK）。**「変更したのに未 bump」を機械的に止めるゲート**。
 
+**共有クレート（`crates/harness-core`）にも同じ規則がかかる**（backlog `32170548`）。harness-core は
+plugin ではないので上のループの対象外だったが、**36 plugin のバイナリに静的にリンクされる**ため、
+harness-core が動いた時点で出荷済みバイナリ 36 本の中身が変わる — にもかかわらず plugin.json は
+どれも動かない。「バイトが変わったのに version が動かない」＝ version が出荷物を同定しない状態なので、
+**harness-core 自身の `[package].version` の bump を要求する**（`crates/harness-core/Cargo.toml` のみ。
+harness-core は plugin.json も marketplace.json も持たないので lockstep 3ファイルの対象ではない）。
+- **リンクされる差分だけ**が bump を要求する。`crates/harness-core/tests/`（独立した integration
+  test target）と `*.md` は構造的にバイナリへ入らないので免除され、**その免除は必ず標準出力に announce
+  される**（黙って narrow しない）。それ以外は — `src/` 内の `#[cfg(test)]` ブロックのように
+  parse なしには判別できないものも含めて — リンク扱いで bump を要求する（§3 の「判定不能は制限側」）。
+- **リンク先 36 plugin の bump は要求しない。** 意味論的には最も純粋な読みだが、harness-core 1 commit
+  あたり 108 ファイル + marketplace.json 36 行が動き、並行セッションと必ず衝突する（§8）。バイト同定は
+  それ無しでも機械的に取れる（下記 `harness_core_version` と `SHARED_SOURCE_PATHS`）。
+- テスト: `scripts/tests/version-bumped-shared-crate.sh`（7 ケース。未 bump が落ちること・tests/ 免除が
+  announce されること・version が読めない場合に fail-closed に倒れることを含む）。
+
+`rebuild-plugins.sh` が書く `.deployed-from.json` には **`harness_core_version`** が入る（そのバイナリが
+リンクした harness-core の version）。`check-plugin-rollout.py` はこれを source tree の値と比較し、
+遅れていれば rollout drift として落とす。読めなかった場合に書かれる `"unknown"` も **問題として扱う**
+（もっともらしい version を捏造しない）。フィールドが**無い**旧 manifest は問題にしない — 同じ問いは
+`SHARED_SOURCE_PATHS`（`crates/harness-core` を含む）による commit 比較が既に完全に答えるので、
+fallback は弱くない（この「弱くない」は仮定ではなく
+`scripts/test_check_plugin_rollout.py::SharedCrateVersion` の両アームで観測してある）。
+
 - 正典3ファイル（バイナリ付きプラグイン）: `crates/<name>/Cargo.toml` の `[package].version` /
   `crates/<name>/.claude-plugin/plugin.json` の `version` / `.claude-plugin/marketplace.json` の
   当該エントリ `version`。**skill-only プラグイン**（Cargo.toml 無し。例: `scout`）は

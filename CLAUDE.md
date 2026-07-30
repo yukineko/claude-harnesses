@@ -355,8 +355,15 @@ merge で統合すればよい。統合できないのは**同じ index / 作業
 据え置きは禁忌。** さらに `scripts/rollout-plugins.sh` を実行しない限り稼働ハーネスには
 一切反映されない（手動 `cp` は禁止 — cache の version dir が乖離し古い版が配布される）。
 
+**`crates/harness-core/` は例外的に扱いが違う**（plugin ではなく、36 plugin にリンクされる共有
+クレート）。plugin.json も marketplace.json も持たないので lockstep 3ファイルの対象ではないが、
+リンクされる差分（`tests/` と `*.md` 以外）を触ったら **`crates/harness-core/Cargo.toml` の
+`[package].version` を micro 上げる**。リンク先 36 plugin の bump は要求しない（1 commit あたり
+108 ファイルが動き並行セッションと必ず衝突するため。§8）。`check-version-bumped.py` が強制する。
+
 強制ゲート3本（commit 前・push 前・CI で回す）: `check-plugin-versions.py`（lockstep）/
-`check-version-bumped.py`（bump-on-change）/ `check-plugin-rollout.py`（rollout 実行済みか）。
+`check-version-bumped.py`（bump-on-change。plugin と harness-core の両方）/
+`check-plugin-rollout.py`（rollout 実行済みか。`.deployed-from.json` の `harness_core_version` も見る）。
 
 反映手順・GATE クレート（blastguard/propguard/specguard/stuckguard/mutategate/overwatch）の
 canary 要件・低レベル構成要素（rebuild-plugins.sh/sync-plugin-assets.sh）・`overwatch

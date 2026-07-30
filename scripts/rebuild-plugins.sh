@@ -207,8 +207,23 @@ write_provenance() {
     dirty=false
   fi
 
-  printf '{"plugin":"%s","commit":"%s","dirty":%s,"deployed_at":%s}\n' \
-    "$pname" "$commit" "$dirty" "$(date +%s)" >"$vdir/.deployed-from.json"
+  # The linked shared-crate version, recorded so the manifest STATES which
+  # harness-core these bytes contain instead of leaving it to be re-derived from
+  # the commit. Unreadable resolves to "unknown", never to a plausible number:
+  # check-plugin-rollout.py treats "unknown" as a problem, and a fabricated
+  # version would be worse than an absent one.
+  #
+  # Asserted as a VALUE by scripts/tests/provenance-core-version.sh (run it by
+  # hand — scripts/tests/*.sh are not wired into a hook). The first version of
+  # this line had a typo in the path; `bash -n` accepted it and every manifest
+  # would have recorded "unknown", the fallback hiding a broken writer.
+  local core_version
+  core_version="$(awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && $1=="version" {gsub(/"/,"",$3); print $3; exit}' \
+    "$REPO/crates/harness-core/Cargo.toml" 2>/dev/null || true)"
+  [ -n "$core_version" ] || core_version="unknown"
+
+  printf '{"plugin":"%s","commit":"%s","dirty":%s,"harness_core_version":"%s","deployed_at":%s}\n' \
+    "$pname" "$commit" "$dirty" "$core_version" "$(date +%s)" >"$vdir/.deployed-from.json"
 }
 
 # --- refresh ---------------------------------------------------------------

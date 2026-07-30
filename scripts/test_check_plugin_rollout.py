@@ -283,7 +283,7 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
 class _FixtureCase(unittest.TestCase):
     """Rebinds the script's path constants at the fixture, restores after."""
 
-    def run_main(self, tmp, *, changed=(), **kwargs):
+    def run_main(self, tmp, *, changed=(), core_version="0.2.1", **kwargs):
         crates, registry_path, settings_path = _make_fixture(Path(tmp), **kwargs)
         saved = (
             cpr.CRATES,
@@ -291,6 +291,7 @@ class _FixtureCase(unittest.TestCase):
             cpr.SETTINGS_PATH,
             getattr(cpr, "SOURCE_CHANGED_SINCE", None),
             getattr(cpr, "PLUGIN_CACHE_ROOT", None),
+            getattr(cpr, "SOURCE_CORE_VERSION", None),
         )
         cpr.CRATES = str(crates)
         cpr.REGISTRY_PATH = str(registry_path)
@@ -300,6 +301,10 @@ class _FixtureCase(unittest.TestCase):
         # plugin cache on the developer's machine and every case would inherit
         # its findings.
         cpr.PLUGIN_CACHE_ROOT = str(Path(tmp) / "cache")
+        # The shared crate's version in the "source tree", stubbed so the
+        # harness_core_version dimension is testable without a real Cargo.toml.
+        # `core_version=None` stands for "could not read it".
+        cpr.SOURCE_CORE_VERSION = lambda: core_version
         out, err = io.StringIO(), io.StringIO()
         try:
             with redirect_stdout(out), redirect_stderr(err):
@@ -311,6 +316,7 @@ class _FixtureCase(unittest.TestCase):
                 cpr.SETTINGS_PATH,
                 cpr.SOURCE_CHANGED_SINCE,
                 cpr.PLUGIN_CACHE_ROOT,
+                cpr.SOURCE_CORE_VERSION,
             ) = saved
         return rc, out.getvalue(), err.getvalue()
 
@@ -1114,6 +1120,127 @@ class BinLauncherPresence(_FixtureCase):
             self.assertEqual(rc, 0, f"out={out}\nerr={err}")
             self.assertNotIn("mutategate", err)
 
+
+
+class SharedCrateVersion(_FixtureCase):
+    """The shared-crate half of "the version identifies what shipped".
+
+    harness-core is statically linked into every plugin binary, so a change there
+    changes ~36 shipped binaries while no plugin's own version moves. The rollout
+    now records which harness-core each binary contains (backlog 32170548); these
+    cases pin what that record is worth.
+    """
+
+    def test_recorded_core_version_behind_source_is_drift(self):
+        # The case the field exists for: harness-core moved and was never rolled
+        # out, so the deployed bytes contain an older shared crate than the tree.
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                provenance={
+                    "condukt": {
+                        "commit": "deadbeef" * 5,
+                        "dirty": False,
+                        "harness_core_version": "0.2.1",
+                    }
+                },
+                core_version="0.2.2",
+            )
+        self.assertNotEqual(
+            rc, 0,
+            f"a binary linking an older harness-core must not pass.\nout={out}\nerr={err}",
+        )
+        self.assertIn("condukt", out + err)
+        self.assertIn("harness-core", out + err)
+
+    def test_recorded_core_version_matching_source_passes(self):
+        # Anti-vacuity control: the assertion above must be about the MISMATCH,
+        # not about the field's mere presence.
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                provenance={
+                    "condukt": {
+                        "commit": "deadbeef" * 5,
+                        "dirty": False,
+                        "harness_core_version": "0.2.2",
+                    }
+                },
+                core_version="0.2.2",
+            )
+        self.assertEqual(
+            rc, 0, f"a matching core version must pass.\nout={out}\nerr={err}"
+        )
+
+    def test_unknown_core_version_is_drift(self):
+        # The writer resolves an unreadable version to the literal "unknown"
+        # rather than fabricating one. That must not read as agreement.
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                provenance={
+                    "condukt": {
+                        "commit": "deadbeef" * 5,
+                        "dirty": False,
+                        "harness_core_version": "unknown",
+                    }
+                },
+            )
+        self.assertNotEqual(
+            rc, 0, f"'unknown' must not pass as a version.\nout={out}\nerr={err}"
+        )
+        self.assertIn("unknown", out + err)
+
+    def test_unreadable_source_core_version_is_reported(self):
+        # A recorded version that cannot be compared against anything is
+        # undetermined, which is not "agrees".
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                provenance={
+                    "condukt": {
+                        "commit": "deadbeef" * 5,
+                        "dirty": False,
+                        "harness_core_version": "0.2.1",
+                    }
+                },
+                core_version=None,
+            )
+        self.assertNotEqual(
+            rc, 0,
+            f"an uncomparable core version must not pass.\nout={out}\nerr={err}",
+        )
+
+    def test_absent_core_version_falls_back_to_the_commit_check(self):
+        # Manifests written before this field existed omit it. That is NOT a
+        # problem, because the commit comparison already covers the same
+        # question: SHARED_SOURCE_PATHS includes crates/harness-core, so a
+        # harness-core change since the recorded commit is reported either way.
+        # Both arms below are asserted, because the claim "the fallback loses no
+        # coverage" is only worth something if the fallback demonstrably still
+        # bites.
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                provenance={"condukt": {"commit": "deadbeef" * 5, "dirty": False}},
+            )
+        self.assertEqual(
+            rc, 0,
+            f"a legacy manifest with no core version must not fail on that "
+            f"alone.\nout={out}\nerr={err}",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                provenance={"condukt": {"commit": "deadbeef" * 5, "dirty": False}},
+                changed=["condukt"],
+            )
+        self.assertNotEqual(
+            rc, 0,
+            f"the fallback must still catch drift, or absence WOULD be a "
+            f"fail-open.\nout={out}\nerr={err}",
+        )
 
 if __name__ == "__main__":
     unittest.main()

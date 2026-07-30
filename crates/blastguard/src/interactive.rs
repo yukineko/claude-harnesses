@@ -47,11 +47,45 @@
 //! them can force asking on with `BLASTGUARD_ASK=always`.
 //!
 //! An interactive `cli` session can still be running under a permission mode
-//! that auto-denies asks (e.g. `bypassPermissions`, or a `dontAsk` setting).
-//! That mode is NOT visible in the hook's environment or in the PreToolUse
-//! stdin payload this crate parses, so it is not detected. The failure there is
-//! an ask silently resolving to a block — i.e. it degrades toward refusal, the
-//! safe direction — never toward allowing an unanalysed command.
+//! that skips permission prompts (`bypassPermissions`,
+//! `--dangerously-skip-permissions`, or a `dontAsk` setting). That mode is NOT
+//! visible in the hook's environment or in the PreToolUse stdin payload this
+//! crate parses, so it is not detected.
+//!
+//! Which direction that failure runs decides whether `Ask` is usable at all: if
+//! a skipped prompt auto-APPROVES, every `Ask` in this crate is a silent Allow
+//! in that mode. Until 2026-07-30 this paragraph asserted the safe direction
+//! with no measurement behind it — the kind of unbacked claim CLAUDE.md §2
+//! forbids. Measured:
+//!
+//! ```text
+//! Claude Code 2.1.197, blastguard 0.2.35 (installed), headless `claude -p`,
+//! measured 2026-07-30. BLASTGUARD_ASK=always forces this crate to emit `ask`
+//! regardless of entrypoint, so what is under test is the CLI's permission
+//! layer, not our own hardening. The probe's only observable effect is creating
+//! a marker file, so "did the tool call run" is answered by the file existing.
+//!
+//!   blastguard  permission mode                 marker created?
+//!   ----------  ------------------------------  ---------------
+//!   allow       bypassPermissions               YES   <- rig control
+//!   deny        bypassPermissions               no
+//!   ask         bypassPermissions               no    <- the measurement
+//!   ask         (default)                       no
+//!   allow       --dangerously-skip-permissions  YES   <- rig control
+//!   deny        --dangerously-skip-permissions  no
+//!   ask         --dangerously-skip-permissions  no    <- the measurement
+//!   allow       bypassPermissions + ASK=always  YES   <- proves the env var
+//!               on a NON-protected target                is not the blocker
+//! ```
+//!
+//! So under both bypass flags a PreToolUse `ask` did NOT execute the tool call:
+//! it degrades toward refusal, not toward allowing an unanalysed command.
+//!
+//! Two limits on that result, stated so the next reader does not over-read it:
+//! it was taken in HEADLESS `claude -p`, not in an interactive TTY started in
+//! bypass mode; and the transcript did not echo this crate's reason string, so
+//! "blastguard was the blocker" is attributed from the control rows (same env,
+//! non-protected target, marker appears) rather than read off a message.
 
 /// Value of the operator override env var.
 const ASK_OVERRIDE_VAR: &str = "BLASTGUARD_ASK";

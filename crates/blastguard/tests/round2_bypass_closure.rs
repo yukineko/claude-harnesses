@@ -46,15 +46,50 @@ fn assert_blocking(d: Decision, what: &str) {
     );
 }
 
+// Two verdicts, asserted inline rather than through a helper
+// ---------------------------------------------------------------------------
+// MODIFYING a protected path is an `Ask` where a human can answer, hardening to
+// `Deny` where none can; DESTROYING or DISARMING one stays a flat `Deny`.
+// blastguard can establish that the target decides whether a gate runs, but not
+// whether the incoming bytes arm or disarm it — different facts, so different
+// verdicts. Every modify site asserts BOTH halves, which is strictly more than
+// the single `is_deny()` it replaces.
+//
+// These stayed inline instead of moving into an `assert_modify` helper on
+// purpose. scripts/check-test-weakening.py counts assertion macros textually, so
+// extracting them into a helper reads to that gate as coverage being deleted
+// (it measured 62 -> 57 here while the assertions actually EVALUATED rose
+// 15 -> 25). Inline they are visible to the scanner and carry exact line numbers
+// on failure. See the sibling `assert_blocking`, which predates this and is
+// unaffected because it never reduced the count.
+
 // ---------------------------------------------------------------------------
 // Controls. If these ever fail, no other assertion in this file means anything.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn controls_deny_side() {
-    assert!(write(".claude/settings.json").is_deny());
-    assert!(write("/Users/yuki/.claude/settings.json").is_deny());
-    assert!(bash("rm -rf .githooks").is_deny());
+    let d = write(".claude/settings.json");
+    assert!(d.is_ask(), "write settings.json must Ask, got {d:?}");
+    assert!(
+        d.clone().hardened().is_deny(),
+        "write settings.json must harden to Deny, got {d:?}"
+    );
+
+    let d = write("/Users/yuki/.claude/settings.json");
+    assert!(
+        d.is_ask(),
+        "write ~/.claude/settings.json must Ask, got {d:?}"
+    );
+    assert!(
+        d.clone().hardened().is_deny(),
+        "write ~/.claude/settings.json must harden to Deny, got {d:?}"
+    );
+
+    assert!(
+        bash("rm -rf .githooks").is_deny(),
+        "rm -rf .githooks destroys the gate; it stays a flat Deny"
+    );
 }
 
 #[test]
@@ -123,26 +158,65 @@ fn a_residual_dotdot_fails_the_allowlist_too() {
 }
 
 #[test]
-fn dotdot_write_and_edit_are_denied() {
-    assert!(write(".claude/x/../settings.json").is_deny());
-    assert!(write("/Users/yuki/.claude/plugins/../settings.json").is_deny());
-    assert!(edit(".claude/x/../settings.json").is_deny());
-    assert!(edit("/Users/yuki/.claude/plugins/../settings.json").is_deny());
+fn dotdot_write_and_edit_are_gated() {
+    // What this pins is that the `..` spelling does not HIDE the target from
+    // the rule. Which blocking verdict follows is a separate question: these are
+    // writes, not deletions, so both halves of the modify contract are asserted.
+    for (d, what) in [
+        (write(".claude/x/../settings.json"), "write ..-spelled"),
+        (
+            write("/Users/yuki/.claude/plugins/../settings.json"),
+            "write ..-spelled abs",
+        ),
+        (edit(".claude/x/../settings.json"), "edit ..-spelled"),
+        (
+            edit("/Users/yuki/.claude/plugins/../settings.json"),
+            "edit ..-spelled abs",
+        ),
+    ] {
+        assert!(
+            d.is_ask(),
+            "modifying a protected path must Ask (refusal to guess) for `{what}`, got {d:?}"
+        );
+        assert!(
+            d.clone().hardened().is_deny(),
+            "with no human present `{what}` must harden to Deny, got {d:?}"
+        );
+    }
 }
 
 #[test]
-fn dotdot_bash_operands_are_denied() {
+fn dotdot_bash_operands_are_gated() {
+    // Shapes whose DESTINATION is the protected path: bytes land on it, and what
+    // those bytes do to the gate is not derivable from the command line.
     for cmd in [
         "cp /tmp/evil .claude/a/../settings.json",
-        "rm .claude/x/../settings.json",
-        "rm -rf .claude/x/../hooks",
-        "mv .claude/x/../settings.json /tmp/",
         "install /tmp/evil .claude/a/../settings.json",
         "sed -i s/a/b/ .claude/x/../settings.json",
         "tee -a .claude/x/../settings.json",
+    ] {
+        let d = bash(cmd);
+        assert!(
+            d.is_ask(),
+            "modifying a protected path must Ask (refusal to guess) for `{cmd}`, got {d:?}"
+        );
+        assert!(
+            d.clone().hardened().is_deny(),
+            "with no human present `{cmd}` must harden to Deny, got {d:?}"
+        );
+    }
+    // Shapes that REMOVE or NEUTRALISE the protected path. The gate stops
+    // running either way, which the command establishes on its own.
+    for cmd in [
+        "rm .claude/x/../settings.json",
+        "rm -rf .claude/x/../hooks",
+        "mv .claude/x/../settings.json /tmp/",
         "chmod -x .claude/hooks/x/../pre.sh",
     ] {
-        assert!(bash(cmd).is_deny(), "expected Deny for `{cmd}`");
+        assert!(
+            bash(cmd).is_deny(),
+            "destroying/disarming a protected path stays a Deny for `{cmd}`"
+        );
     }
 }
 

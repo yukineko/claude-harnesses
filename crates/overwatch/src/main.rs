@@ -26,6 +26,7 @@ pub mod rollback;
 mod rollback_cli;
 pub mod store;
 mod test_freshness;
+pub mod undetermined_metrics;
 pub mod violation;
 mod violation_cli;
 
@@ -296,6 +297,23 @@ enum Command {
     AuditRound {
         #[command(subcommand)]
         action: AuditRoundAction,
+    },
+    /// Aggregate the undetermined-telemetry stream (`harness_core::undetermined`)
+    /// and print how often the gates gave up, grouped by crate and by site.
+    ///
+    /// Reading is fail-closed: an ABSENT ledger prints a zero report ("nothing
+    /// has given up yet" is a real observation), but an UNREADABLE or
+    /// unparseable one is an error rather than a zero, because a partial total
+    /// under-states the very quantity the stream exists to measure.
+    ///
+    /// Always prints the sink state next to the counts. A zero is
+    /// uninterpretable without knowing whether anything was recording.
+    UndeterminedMetrics {
+        #[arg(long)]
+        json: bool,
+        /// Only count give-ups from the last N days (default: all time).
+        #[arg(long)]
+        window_days: Option<i64>,
     },
     /// Read the Continuous-Audit round ledger and print convergence metrics:
     /// per-round new-findings trend, closure-rate (regression tests ÷
@@ -709,6 +727,9 @@ fn main() -> Result<()> {
         },
         Command::AuditMetrics { json, window } => {
             audit_round_cli::metrics(json, window)?;
+        }
+        Command::UndeterminedMetrics { json, window_days } => {
+            undetermined_metrics::run_cli(json, window_days)?;
         }
         Command::RecordDisposition {
             finding_id,

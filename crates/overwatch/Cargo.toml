@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "overwatch"
-version = "0.2.16"
+version = "0.2.17"
 edition = "2021"
 description = "Lease & event store for condukt task orchestration. Manages claim registry, heartbeat lifecycle, and runtime state."
 
@@ -29,6 +29,10 @@ regex = { workspace = true }
 # Drives the verdict-monotonicity property (tests/verdict_monotonicity.rs):
 # degrading the audit-round ledger must never move `converging` toward true.
 proptest = { version = "1", default-features = false, features = ["std"] }
+
+# undetermined_metrics tests need a scratch dir to prove that an ABSENT ledger and
+# an UNREADABLE one resolve differently (Known(empty) vs Undetermined).
+tempfile = "3"
 
 # ワークスペースの [workspace.lints.clippy] を継承する（unwrap_used / expect_used = deny）。
 # 判定を持つ crate では panic は判定不能そのものなので、production 側に unwrap / expect を

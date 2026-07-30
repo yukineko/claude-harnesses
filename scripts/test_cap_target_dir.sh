@@ -27,6 +27,27 @@
 #       straddle 20000 without writing 20GB.
 #
 # ---------------------------------------------------------------------------
+# The two cargo-metadata paths are NOT the same path (adjudicated spec)
+# ---------------------------------------------------------------------------
+# Spec 1 ("fall back to $PWD/target") and spec 6 ("a metadata failure exits
+# quietly") originally read as a contradiction. The ruling that settles it:
+#
+#   metadata rc == 0 but the output carries no target_directory
+#       -> FALL BACK to $PWD/target and evaluate the threshold normally.
+#   metadata rc != 0
+#       -> DO NOT fall back. exit 0 quietly, clean nothing.
+#
+# Rationale: a metadata failure means we are outside a cargo workspace or cargo
+# itself is broken. A $PWD/target found under those conditions is not provably
+# cargo's, and `cargo clean` would fail for the same reason. Cannot-determine
+# must not fire a destructive operation.
+#
+# Both halves are pinned below ("metadata-fail-*" and "no-target_directory-*"),
+# and they are pinned as a PAIR on purpose: an implementation that collapses
+# both metadata outcomes into a single `|| exit 0` satisfies the failure half
+# for the wrong reason, and only the fallback half catches it.
+#
+# ---------------------------------------------------------------------------
 # What this suite does NOT prove (CLAUDE.md: ask this first in review)
 # ---------------------------------------------------------------------------
 #   * It does not prove `cargo clean` frees space. The clean is stubbed; only
@@ -35,12 +56,6 @@
 #     The two fallocate cases bracket it to 19001 < default <= 20002; case
 #     "default-literal" greps the script for the literal and is WHITEBOX — it
 #     would pass on a script that merely mentions 20000 in a comment.
-#   * It does not pin what happens when `cargo metadata` FAILS while a
-#     $PWD/target exists and is over cap. Spec 1 (fall back to $PWD/target) and
-#     spec 6 (metadata failure -> exit quietly) disagree there; case
-#     "metadata-fail-with-pwd-target" therefore asserts ONLY the build-safety
-#     half (exit 0) and reports the clean/no-clean outcome as INFO. That
-#     ambiguity is a spec question for the implementer, not a verdict.
 #   * It does not prove the script is fast, idempotent, or concurrency-safe.
 #   * The build-entrypoint cases prove build-plugin-bin.sh REACHES the cap
 #     script; they do not prove every other build entrypoint does.
@@ -90,6 +105,11 @@ case "${1:-}" in
     if [ "$st" != "0" ]; then
       echo "error: could not find \`Cargo.toml\` in \`$PWD\`" >&2
       exit "$st"
+    fi
+    # rc=0 but no target_directory key: the "取れなければ" half of spec 1.
+    if [ "${STUB_METADATA_NO_TARGET_DIR:-0}" = "1" ]; then
+      printf '%s\n' "{\"packages\":[],\"workspace_members\":[],\"workspace_default_members\":[],\"resolve\":null,\"version\":1,\"workspace_root\":\"$PWD\",\"metadata\":null}"
+      exit 0
     fi
     printf '%s\n' "{\"packages\":[],\"workspace_members\":[],\"workspace_default_members\":[],\"resolve\":null,\"target_directory\":\"${STUB_TARGET_DIR:-}\",\"version\":1,\"workspace_root\":\"$PWD\",\"metadata\":null}"
     exit 0
@@ -189,7 +209,8 @@ run_cap() {
 }
 
 clear_case_env() {
-  unset CARGO_TARGET_CAP_MB STUB_TARGET_DIR STUB_METADATA_STATUS STUB_BIN_NAME
+  unset CARGO_TARGET_CAP_MB STUB_TARGET_DIR STUB_METADATA_STATUS STUB_BIN_NAME \
+        STUB_METADATA_NO_TARGET_DIR
 }
 
 echo "=== explicit cap, real du, real comparison ==============================="
@@ -341,7 +362,7 @@ check_empty      "du failure: cargo clean NOT invoked on a partial measurement" 
 # du's own "Permission denied" may legitimately leak; only a clean REPORT is banned.
 check_not_matches "du failure: does not report a clean" 'clean' "$ERR"
 
-# --- 7. cargo metadata fails, no $PWD/target --------------------------------
+# --- 7. cargo metadata fails (rc != 0), no $PWD/target ----------------------
 clear_case_env
 fr="$(mkfake metafail)"
 export STUB_METADATA_STATUS=1 CARGO_TARGET_CAP_MB=1
@@ -351,29 +372,74 @@ check_empty "metadata failure: cargo clean NOT invoked" "clean log" "$CLEANED"
 check_empty "metadata failure: silent on stderr" "stderr" "$ERR"
 check_empty "metadata failure: silent on stdout" "stdout" "$OUT"
 
-# --- 8. cargo metadata fails WHILE $PWD/target exists and is over cap -------
-# Spec 1 says fall back to $PWD/target; spec 6 says a metadata failure exits
-# quietly. Those two readings disagree about whether a clean should fire here,
-# so only the build-safety half is asserted. The observed behaviour is printed
-# as INFO for the implementer to reconcile — deliberately not a verdict.
+echo ""
+echo "=== the two metadata paths are not the same path ========================"
+
+# --- 8a. CONTROL for 8b -----------------------------------------------------
+# 8b asserts a NEGATIVE ("did not clean"), which passes for free against a
+# script that never cleans anything. This control runs the IDENTICAL fixture
+# with metadata SUCCEEDING: it must clean. Only once this positive holds does
+# 8b's negative carry information.
+clear_case_env
+fr="$(mkfake metafail-control)"
+fill_mb "$fr/target" 9
+export STUB_TARGET_DIR="$fr/target" CARGO_TARGET_CAP_MB=1
+run_cap "$fr"
+check_eq       "metadata-fail CONTROL: exit 0" "0" "$RC"
+check_nonempty "metadata-fail CONTROL: this same fixture DOES clean when metadata succeeds" \
+               "clean log" "$CLEANED"
+
+# --- 8b. metadata FAILS (rc != 0) while an oversized $PWD/target exists -----
+# Adjudicated: no fallback, no clean. A metadata failure means "outside a cargo
+# workspace, or cargo is broken" — $PWD/target is then not provably cargo's, and
+# `cargo clean` would fail for the same reason. Cannot-determine must not fire a
+# destructive operation.
 clear_case_env
 fr="$(mkfake metafail-pwd)"
 fill_mb "$fr/target" 9
 export STUB_METADATA_STATUS=1 CARGO_TARGET_CAP_MB=1
 run_cap "$fr"
-check_eq "metadata failure with \$PWD/target present: exit 0" "0" "$RC"
-if [ -n "$CLEANED" ]; then
-  echo "INFO: metadata-fail + \$PWD/target over cap -> the script DID clean"
-  echo "    (spec-1 fallback reading; not asserted either way)"
-else
-  echo "INFO: metadata-fail + \$PWD/target over cap -> the script did NOT clean"
-  echo "    (spec-6 quiet-exit reading; not asserted either way)"
-fi
+check_eq    "metadata failure + oversized \$PWD/target: exit 0" "0" "$RC"
+check_empty "metadata failure: does NOT fall back, does NOT clean" "clean log" "$CLEANED"
+check_empty "metadata failure: silent on stderr" "stderr" "$ERR"
+check_empty "metadata failure: silent on stdout" "stdout" "$OUT"
+
+# --- 9a. metadata rc=0 but NO target_directory -> fall back AND clean -------
+# The mirror image of 8b, and the case that makes 8b load-bearing: an
+# implementation that folds both metadata outcomes into one `|| exit 0` passes
+# 8b for the wrong reason and fails here. This assertion is POSITIVE, so it
+# cannot pass vacuously.
+clear_case_env
+fr="$(mkfake nofield-over)"
+fill_mb "$fr/target" 9
+size="$(dusize "$fr/target")"
+export STUB_METADATA_NO_TARGET_DIR=1 CARGO_TARGET_CAP_MB=$(( size - 1 ))
+run_cap "$fr"
+check_eq       "no target_directory: exit 0" "0" "$RC"
+check_nonempty "no target_directory: falls back to \$PWD/target and DOES clean" \
+               "clean log" "$CLEANED"
+check_eq       "no target_directory: exactly one stderr line" "1" "$ERRLINES"
+check_contains "no target_directory: stderr names the measured size ($size)" "$size" "$ERR"
+
+# --- 9b. the fallback still respects the threshold --------------------------
+# Same fixture as 9a with the cap flipped to the not-clean side, so this
+# negative is paired with 9a's positive: the fallback path must not degrade
+# into "fell back, therefore clean".
+clear_case_env
+fr="$(mkfake nofield-under)"
+fill_mb "$fr/target" 9
+size="$(dusize "$fr/target")"
+export STUB_METADATA_NO_TARGET_DIR=1 CARGO_TARGET_CAP_MB=$(( size + 1 ))
+run_cap "$fr"
+check_eq    "no target_directory, under cap: exit 0" "0" "$RC"
+check_empty "no target_directory, under cap: fallback still honours the threshold" \
+            "clean log" "$CLEANED"
+check_empty "no target_directory, under cap: silent on stderr" "stderr" "$ERR"
 
 echo ""
 echo "=== wired into the build entrypoint ====================================="
 
-# --- 9. structural: build-plugin-bin.sh mentions the cap script -------------
+# --- 10. structural: build-plugin-bin.sh mentions the cap script ------------
 if grep -q 'cap-target-dir' "$builder" 2>/dev/null; then
   ok "wiring (structural): $builder references cap-target-dir"
 else
@@ -381,7 +447,7 @@ else
       "no reference found — the cap can never run from a build"
 fi
 
-# --- 10. behavioural: a real build-plugin-bin.sh run reaches the cap --------
+# --- 11. behavioural: a real build-plugin-bin.sh run reaches the cap --------
 # Strictly stronger than case 9: it also pins the ORDER. A clean issued AFTER
 # `cargo build` would delete the artifact that was just built, so `clean` must
 # appear before the first `build` in the cargo call log.

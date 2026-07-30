@@ -19,6 +19,58 @@
   （pre-commit と同じ fail-soft 設計。push は絶対に止めない・常に exit 0）。cron 定期実行の雛形は
   `scripts/continuous-audit.cron.example` を参照。
 
+## 記録そのものの定期監査 — `scripts/record-audit.py`（backlog 0f55003a）
+
+上のゲート群はすべて**コード**を検査する。**それらのゲートが書き出す記録**を検査する層は無かった。
+記録は次の監査の入力なので、腐ると次の監査は「役に立たない」ではなく「成立しない」— 書き込みが
+止まった台帳から `clean` を結論することになる。
+
+`record-audit.py` は 4 つの記録健全性を測り、閾値超過を `overwatch review-queue` に上げる:
+
+| 次元 | 何を見るか | 閾値（測定 2026-07-31 / `c3f29681`） |
+|---|---|---|
+| `doc-claim-drift` | docs/ と CLAUDE.md の `path:line` 主張のうち実体と食い違う数 | **ratchet** 140（増加で breach） |
+| `audit-convergence` | `overwatch audit-metrics` の tri-state `converging` | false で breach |
+| `review-queue-depth` | 人間レビュー面に溜まった未処理エントリ数 | 20 |
+| `stale-undisposed` | fix は landed したが disposition が無い finding 数 | 5 |
+| `backlog-rot` | 21日超 pending ＋ 再浮上して再 fail した項目 | 0 |
+
+**なぜこの 4 つか**（どれも実測。仮定ではない）: `check-doc-claims.py` は 140 件のドリフト主張を
+抱えたまま verdict `clean` を返す（全件 exempt で、exempt が clean として描画される）。
+`audit-metrics` は 6 ラウンド連続で `converging: NO`（new findings 5→1→13→0→14→15）だが誰も読まない。
+`review-metrics` は stale 件数を println して exit 0 する（`disposition_cli.rs`）。`backlog fail` は
+項目を退役させず 2 日 defer するだけで、`Task::is_pending` が再び数える（`task.rs`）。
+
+**exit code は三値**: `0` = 全次元を測定して閾値内 / `1` = 閾値超過（finding を記録済み）/
+`2` = **測定できなかった次元がある**。2 が 1 に優先する — 測れなかった次元は通った次元ではない
+（CLAUDE.md 第3節）。probe の非0終了・parse 不能・binary 不在・timeout はすべて `2` であって `0` ではない。
+
+**定期実行は `daily`（ローカル）** — CI schedule は使わない。ゲートを止める権限だけでなく
+**breach の可視性まで外部サービスに預ける**ことになるためで、advisory であっても割に合わない
+（CLAUDE.md 第7節）。`~/.daily/config.toml` に登録済み。雛形は:
+
+```sh
+python3 scripts/record-audit.py --print-daily-task   # 貼り付ける stanza を出力
+python3 scripts/record-audit.py --no-escalate        # 手で1回だけ測る（queue に何も書かない）
+```
+
+> **`~/.daily/config.toml` を新規作成するときの罠**: `daily` はタスクが 1 つも登録されていない間だけ
+> 組み込みの `security`（cargo-deny）タスクへフォールバックする（`crates/daily/src/main.rs` の
+> `effective_tasks`）。record-audit だけを書いた config を作ると **cargo-deny 監査が黙って退役する**。
+> 現行 config は security を明示的に引き継いでいる。
+
+**記録は 2 箇所に残る**: breach は `overwatch review-queue`（`record-audit:<次元>` という finding id。
+既に open なら重複記録しない — `record-finding` は単純 append なので毎日積むと面それ自体が読めなくなる）、
+全実行の数値は `~/.record-audit/observations.jsonl`（append-only の trend 台帳。
+`RECORD_AUDIT_STATE_DIR` で差し替え可）。**台帳への追記に失敗した実行は exit 2** — 記録を残さなかった
+実行は、この job が生む唯一の成果物である trend に穴を空けている。
+
+**store は cwd で解決される（重要）**: `overwatch` も `backlog` も store を cwd から引くので、
+linked worktree から走らせると**全次元が 0 を返す**（存在しない store を「健全」と報告する）。
+`record_audit.record_root()` が `git rev-parse --git-common-dir` で main worktree を解決してそこを読む。
+解決できなければ REPO へフォールバックせず **undetermined** にする。テストは
+`scripts/test_record_audit.py`（45 ケース。13 の fail-open 変異がそれぞれ名前の付いたテストで殺されることを確認済み）。
+
 ## プラグインを改修したときの反映（忘れやすい）
 
 `crates/<name>/` が唯一の正典。`/plugin install` はここを

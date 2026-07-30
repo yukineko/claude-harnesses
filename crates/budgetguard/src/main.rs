@@ -2,7 +2,26 @@
 //!
 //! On every Stop it reads the session transcript, computes the USD cost using
 //! the same pricing table as gauge, and blocks the turn if session or daily
-//! limits are exceeded. Harness errors always exit 0 (never break the turn).
+//! limits are exceeded.
+//!
+//! "Cannot determine" is NOT "within budget". Where this gate cannot measure
+//! what it is asked to measure, it resolves restrictively rather than exiting
+//! 0, because an unmeasured spend read as headroom is indistinguishable from a
+//! passing check:
+//!
+//! * a panic in `gate_run` blocks (`gate::run::run_guarded`, see `gate_command`),
+//!   bounded by `stop_hook_active` so a deterministic crash cannot trap a turn;
+//! * a config file that exists but cannot be read or parsed blocks
+//!   (`gate::config_undetermined_result`);
+//! * an unmeasurable session spend blocks/warns per the armed limits
+//!   (`gate::undetermined_verdict`);
+//! * a day total that could not be serialized against other sessions
+//!   blocks/warns per the armed DAILY limits (`gate::day_undetermined_verdict`).
+//!
+//! Three things still exit 0, and each is a KNOWN answer rather than a
+//! give-up: no config file at all (the operator configured nothing), no
+//! transcript data to price, and `BUDGETGUARD_DISABLE=1` (the operator's
+//! explicit escape hatch, checked before the panic guard so it stays reachable).
 #![deny(clippy::panic)]
 
 mod config;
@@ -13,6 +32,7 @@ mod lock;
 use clap::{Args, Parser, Subcommand};
 
 use harness_core::hook::read_stdin;
+use harness_core::verdict::Determination;
 
 use config::Config;
 
@@ -115,13 +135,21 @@ fn gate_run(hook: Option<harness_core::hook::HookInput>) {
     }
 
     let cwd = input.cwd_or_current();
-    let cfg = Config::load(&cwd);
-    if !cfg.enabled {
-        return;
-    }
-
-    let today = today_str();
-    let result = gate::evaluate(&cfg, &input.session_id, &input.transcript_path, &today);
+    let result = match Config::load_checked(&cwd) {
+        Determination::Known(cfg) => {
+            if !cfg.enabled {
+                return;
+            }
+            let today = today_str();
+            gate::evaluate(&cfg, &input.session_id, &input.transcript_path, &today)
+        }
+        // A config file exists but could not be read or parsed. Which limits the
+        // operator armed is exactly what is unknown, so there is no headroom to
+        // report. Bounded: the `stop_hook_active` guard above returns before
+        // reaching here on re-entry, so this blocks at most once and cannot trap
+        // the turn, and `BUDGETGUARD_DISABLE` is checked outside the panic guard.
+        Determination::Undetermined(why) => Some(gate::config_undetermined_result(why.as_str())),
+    };
     if let Some(check_kind) = gate::block_check_kind(&result) {
         emit_violation(&cwd, &input.session_id, check_kind);
     }
@@ -182,8 +210,32 @@ fn init(force: bool) -> anyhow::Result<()> {
 }
 
 fn status(args: StatusArgs) {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let cfg = Config::load(&cwd);
+    // Falling back to "." on an unreadable cwd would silently report a
+    // DIFFERENT project's config as if it were this one's.
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => {
+            eprintln!("budgetguard: could not resolve the current directory: {e}");
+            std::process::exit(2);
+        }
+    };
+    let cfg = match Config::load_checked(&cwd) {
+        Determination::Known(cfg) => cfg,
+        Determination::Undetermined(why) => {
+            // Print no thresholds and no `pressure` key: 0.00 would read as
+            // "no limit configured" and `pressure:false` as "there is
+            // headroom", when the truth is that neither could be determined.
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "error": why.as_str(), "undetermined": true })
+                );
+            } else {
+                eprintln!("budgetguard: {}", why.as_str());
+            }
+            std::process::exit(2);
+        }
+    };
     let today = today_str();
     let ledger = harness_core::ledger::Ledger::load(&cfg.state_dir);
     let day_usd = ledger.day_total(&today);

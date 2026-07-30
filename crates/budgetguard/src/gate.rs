@@ -2,14 +2,24 @@
 //!
 //! A budget violation emits `{"decision":"block","reason":"…"}` so Claude
 //! receives the overage notice and can wind down gracefully. A warn-only
-//! crossing emits `{"additionalContext":"…"}` (advisory, no block). Harness
-//! errors always exit 0 and allow the stop.
+//! crossing emits `{"additionalContext":"…"}` (advisory, no block).
 //!
-//! **A spend that could not be determined is not a spend of $0.** When this
-//! session's cost cannot be measured (currently: the sibling `subagents/`
-//! transcript dir exists but cannot be enumerated, so sub-agent spend is missing
-//! by an unknown amount), the gate resolves to the restricted side via
-//! [`undetermined_verdict`] instead of `Allow`.
+//! **Something that could not be determined is not a spend of $0.** Every input
+//! this gate needs can fail to be measured, and each failure resolves to the
+//! restricted side rather than to `Allow`:
+//!
+//! * this session's cost (the sibling `subagents/` transcript dir exists but
+//!   cannot be enumerated, so sub-agent spend is missing by an unknown amount),
+//!   via [`undetermined_verdict`];
+//! * the config that says which limits are armed, via
+//!   [`config_undetermined_result`];
+//! * the day total, when the ledger lock could not be acquired and the
+//!   read-modify-write would therefore be unserialized, via
+//!   [`day_undetermined_verdict`].
+//!
+//! Only two paths still exit 0 silently, and both are KNOWN answers rather than
+//! give-ups: no transcript data at all to price, and a config that is genuinely
+//! absent (see `config::Config::load_checked`).
 
 use harness_core::estimate_transcript_cost;
 use harness_core::pricing;
@@ -48,6 +58,25 @@ pub fn evaluate(
     transcript_path: &str,
     today: &str,
 ) -> Option<GateResult> {
+    evaluate_with_store(
+        cfg,
+        session_id,
+        transcript_path,
+        today,
+        &session::default_state_dir(),
+    )
+}
+
+/// `evaluate` with gauge's store injected (same seam, and same reason, as
+/// `session_cost`'s `gauge_state_dir`): the ledger-lock cases need a scratch
+/// store. `evaluate` always passes the real default.
+fn evaluate_with_store(
+    cfg: &Config,
+    session_id: &str,
+    transcript_path: &str,
+    today: &str,
+    gauge_state_dir: &std::path::Path,
+) -> Option<GateResult> {
     // Cost source: prefer gauge's persisted canonical SessionRecord (avoids a
     // full transcript re-parse on every Stop) — but ONLY when it's fresh enough
     // to cover the current turn. budgetguard is a budget GATE, not a passive
@@ -55,12 +84,7 @@ pub fn evaluate(
     // before gauge's, and under-counting the current turn would let a turn
     // slip over budget. So a stale/missing/empty record falls back to the
     // accurate, timely `estimate_transcript_cost` (the pre-existing behavior).
-    let session_usd = match session_cost(
-        cfg,
-        &session::default_state_dir(),
-        session_id,
-        transcript_path,
-    ) {
+    let session_usd = match session_cost(cfg, gauge_state_dir, session_id, transcript_path) {
         // Cost measured. (`Known(None)` = no transcript data at all — nothing to
         // price, which is the pre-existing "allow silently" path.)
         Determination::Known(Some(usd)) => usd,
@@ -83,6 +107,22 @@ pub fn evaluate(
     // whole load → record → save against other concurrent sessions so a
     // simultaneous Stop can't clobber our entry (lost update).
     let _guard = crate::lock::LedgerLock::acquire(&cfg.state_dir);
+    if !_guard.held() {
+        // We could not serialize against other sessions. Performing the
+        // read-modify-write anyway is exactly the lost update `lock.rs`
+        // describes, and its result — an under-counted day total — reads as
+        // headroom. Decline the write and report the day as unmeasured.
+        drop(_guard);
+        return Some(GateResult {
+            session_usd: Some(session_usd),
+            day_usd: None,
+            verdict: day_undetermined_verdict(
+                cfg,
+                session_usd,
+                "ledger lock is held by another session",
+            ),
+        });
+    }
     let day_usd = match Ledger::load_checked(&cfg.state_dir) {
         Ok(mut ledger) => {
             let day_usd = ledger.record(session_id, today, session_usd);
@@ -109,6 +149,60 @@ pub fn evaluate(
         day_usd: Some(day_usd),
         verdict,
     })
+}
+
+/// The verdict when this session's spend IS known but the day total is not.
+///
+/// The two halves are independent, so the known half is still enforced exactly:
+/// a session already over its own block limit reports that precise reason. Only
+/// the day half degrades, and it degrades restrictively — but only if a daily
+/// limit is actually armed. With no daily limit configured there is no
+/// threshold an unknown day total could hide a crossing of, so it gates
+/// nothing and the session verdict stands.
+fn day_undetermined_verdict(cfg: &Config, session_usd: f64, why: &str) -> Verdict {
+    // The session half is exactly measured — enforce it first so the operator
+    // gets the specific reason rather than a generic "could not determine".
+    if cfg.session_block_usd > 0.0 && session_usd >= cfg.session_block_usd {
+        return verdict(cfg, session_usd, 0.0);
+    }
+    let msg = format!(
+        "budgetguard: 本日の合計支出を測定できませんでした（{why}）。\n\
+         未計測の支出は $0 ではありません。作業を保存し、コミットして終了してください。"
+    );
+    if cfg.daily_block_usd > 0.0 {
+        Verdict::Block(msg, "day-total-undetermined")
+    } else if cfg.daily_warn_usd > 0.0 {
+        Verdict::Warn(format!("⚠ {msg}"))
+    } else {
+        // No daily limit armed: the day total gates nothing. Fall through to
+        // the session-only verdict (daily thresholds are 0.0 = disabled).
+        verdict(cfg, session_usd, 0.0)
+    }
+}
+
+/// The result for "a config file exists but could not be read or parsed".
+///
+/// This deliberately does NOT route through `undetermined_verdict`. That
+/// function decides Block vs Warn vs Allow by reading the configured limits —
+/// the very thing that is unknown here. Handing it a `Config::default()` would
+/// see every limit at 0.0, take the "the gate is switched off" branch, and
+/// return `Allow` for precisely the input that motivated this split (measured:
+/// a `budgetguard.toml` with `block_usd = 1.0` and one syntax error yielded
+/// `verdict(999.0, 999.0) == Allow`). An unreadable config is not a disabled
+/// gate; it is a gate that cannot tell whether it is disabled.
+pub fn config_undetermined_result(why: &str) -> GateResult {
+    GateResult {
+        session_usd: None,
+        day_usd: None,
+        verdict: Verdict::Block(
+            format!(
+                "budgetguard: 設定を読み取れませんでした（{why}）。\n\
+                 どの上限が設定されているか判定できないため、上限なしとは扱えません。\n\
+                 設定ファイルを修正するか、BUDGETGUARD_DISABLE=1 で明示的に無効化してください。"
+            ),
+            "config-undetermined",
+        ),
+    }
 }
 
 /// The verdict for "this session's spend could not be measured".
@@ -646,6 +740,171 @@ mod tests {
             verdict(&Config::default(), 999.0, 999.0),
             Verdict::Allow
         ));
+    }
+
+    /// Set up the $30 fixture session and return `(cfg, transcript, store)`.
+    /// Shared by the ledger-lock cases below so the contended and uncontended
+    /// runs differ ONLY in whether the lock is held.
+    #[cfg(unix)]
+    fn lock_fixture(
+        name: &str,
+        cfg_fields: Config,
+    ) -> (Config, std::path::PathBuf, tempfile::TempDir) {
+        let tp = write_transcript(name);
+        let store = tempfile::tempdir().unwrap();
+        let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let mut rec = sample_record(&future);
+        rec.session_id = name.to_string();
+        session::upsert(store.path(), &rec);
+        (cfg_fields, tp, store)
+    }
+
+    /// An unreadable config must block even though a `Config::default()` has
+    /// every limit at 0.0 — and this test pins the TRAP that makes a dedicated
+    /// path necessary: `undetermined_verdict` handed the same default would
+    /// take its "the gate is switched off" branch and return `Allow`. If that
+    /// second assertion ever changes, the rationale written into
+    /// `config_undetermined_result`'s doc comment has gone stale and must be
+    /// rewritten rather than quietly diverging from the code.
+    #[test]
+    fn an_undetermined_config_blocks_despite_zero_default_limits() {
+        let r = config_undetermined_result("budgetguard.toml could not be parsed");
+        assert!(
+            matches!(r.verdict, Verdict::Block(_, "config-undetermined")),
+            "an unreadable config is not a disabled gate"
+        );
+        assert_eq!(r.session_usd, None);
+        assert_eq!(r.day_usd, None);
+        assert!(
+            matches!(
+                undetermined_verdict(&Config::default(), "x"),
+                Verdict::Allow
+            ),
+            "the trap this path exists to avoid must still be real"
+        );
+    }
+
+    /// ANTI-VACUITY CONTROL for the contention cases below: with the lock free,
+    /// this exact fixture measures the day total and allows. Any Block observed
+    /// in the contended twin is therefore caused by the contention.
+    #[cfg(unix)]
+    #[test]
+    fn an_uncontended_ledger_lock_measures_the_day_and_allows() {
+        let ledger_dir = tempfile::tempdir().unwrap();
+        let (cfg, tp, store) = lock_fixture(
+            "lock-free",
+            Config {
+                daily_block_usd: 100.0,
+                state_dir: ledger_dir.path().to_path_buf(),
+                ..Config::default()
+            },
+        );
+        let r = evaluate_with_store(
+            &cfg,
+            "lock-free",
+            tp.to_str().unwrap(),
+            "2026-07-31",
+            store.path(),
+        )
+        .expect("result");
+        assert_eq!(r.day_usd, Some(30.0), "the day total must be measured");
+        assert!(matches!(r.verdict, Verdict::Allow));
+        let _ = std::fs::remove_file(&tp);
+    }
+
+    /// A live lock means we cannot serialize the read-modify-write. The day
+    /// total is then UNMEASURED, and an unmeasured total under an armed daily
+    /// limit must not be reported as headroom.
+    #[cfg(unix)]
+    #[test]
+    fn a_contended_ledger_lock_makes_the_day_undetermined_and_blocks() {
+        let ledger_dir = tempfile::tempdir().unwrap();
+        std::fs::write(ledger_dir.path().join("ledger.lock"), b"").unwrap();
+        let (cfg, tp, store) = lock_fixture(
+            "lock-busy",
+            Config {
+                daily_block_usd: 100.0,
+                state_dir: ledger_dir.path().to_path_buf(),
+                ..Config::default()
+            },
+        );
+        let r = evaluate_with_store(
+            &cfg,
+            "lock-busy",
+            tp.to_str().unwrap(),
+            "2026-07-31",
+            store.path(),
+        )
+        .expect("result");
+        assert_eq!(r.day_usd, None, "an unserialized day total is not measured");
+        assert!(
+            matches!(r.verdict, Verdict::Block(_, "day-total-undetermined")),
+            "an armed daily limit plus an unmeasured day total must block"
+        );
+        assert!(
+            !ledger_dir.path().join("ledger.json").exists(),
+            "the unserialized read-modify-write must be declined, not performed"
+        );
+        let _ = std::fs::remove_file(&tp);
+    }
+
+    /// Guards against overshooting: with NO daily limit armed there is no
+    /// threshold an unknown day total could hide a crossing of, so it gates
+    /// nothing. Without this the fix would block every contended Stop.
+    #[cfg(unix)]
+    #[test]
+    fn a_contended_lock_with_no_daily_limit_armed_still_allows() {
+        let ledger_dir = tempfile::tempdir().unwrap();
+        std::fs::write(ledger_dir.path().join("ledger.lock"), b"").unwrap();
+        let (cfg, tp, store) = lock_fixture(
+            "lock-nolimit",
+            Config {
+                state_dir: ledger_dir.path().to_path_buf(),
+                ..Config::default()
+            },
+        );
+        let r = evaluate_with_store(
+            &cfg,
+            "lock-nolimit",
+            tp.to_str().unwrap(),
+            "2026-07-31",
+            store.path(),
+        )
+        .expect("result");
+        assert!(matches!(r.verdict, Verdict::Allow));
+        let _ = std::fs::remove_file(&tp);
+    }
+
+    /// The session half is measured independently of the ledger, so a session
+    /// already over ITS limit reports that precise reason rather than
+    /// degrading into the generic day-undetermined message.
+    #[cfg(unix)]
+    #[test]
+    fn a_contended_lock_still_reports_a_session_block_precisely() {
+        let ledger_dir = tempfile::tempdir().unwrap();
+        std::fs::write(ledger_dir.path().join("ledger.lock"), b"").unwrap();
+        let (cfg, tp, store) = lock_fixture(
+            "lock-sess",
+            Config {
+                session_block_usd: 10.0,
+                daily_block_usd: 100.0,
+                state_dir: ledger_dir.path().to_path_buf(),
+                ..Config::default()
+            },
+        );
+        let r = evaluate_with_store(
+            &cfg,
+            "lock-sess",
+            tp.to_str().unwrap(),
+            "2026-07-31",
+            store.path(),
+        )
+        .expect("result");
+        assert!(
+            matches!(r.verdict, Verdict::Block(_, "session-budget-exceeded")),
+            "the exactly-known session overage must keep its specific reason"
+        );
+        let _ = std::fs::remove_file(&tp);
     }
 
     /// (c) Enforcement (verdict + day ledger) is unchanged by the cost source:

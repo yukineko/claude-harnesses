@@ -56,6 +56,9 @@
 #     The two fallocate cases bracket it to 19001 < default <= 20002; case
 #     "default-literal" greps the script for the literal and is WHITEBOX — it
 #     would pass on a script that merely mentions 20000 in a comment.
+#   * On the paths where cargo or du fails, it does not prove stderr is EMPTY —
+#     that would be the wrong requirement (see check_no_self_report). It proves
+#     only that the cap script adds no verdict of its own.
 #   * It does not prove the script is fast, idempotent, or concurrency-safe.
 #   * The build-entrypoint cases prove build-plugin-bin.sh REACHES the cap
 #     script; they do not prove every other build entrypoint does.
@@ -162,6 +165,34 @@ check_contains() { # name needle haystack
 check_not_matches() { # name regex text
   if printf '%s' "$3" | grep -Eqi "$2"; then
     bad "$1" "expected NOT to match /$2/i" "in: [$3]"
+  else ok "$1"; fi
+}
+
+# The rule for paths where an EXTERNAL command legitimately writes its own
+# diagnostic to stderr (a failing `cargo metadata`, a failing `du`).
+#
+# "Quietly" means THIS SCRIPT says nothing. It does NOT mean the stderr stream
+# is empty. cargo's and du's own diagnostics must survive: a failing `cargo
+# metadata` signals a broken toolchain or manifest, and suppressing that is not
+# this gate's business. It is also unimplementable in this repo — the
+# fail-open-guard blocks the `2>/dev/null` that an empty-stderr assertion would
+# force. What the script must not do is add a verdict of its own.
+#
+# Asserted two ways so it cannot decay into a check of nothing:
+#   * no "clean" anywhere in stderr — prefix-independent, so renaming the
+#     message prefix cannot silently turn this into a vacuous pass;
+#   * no line carrying the script's own "cap-target-dir:" prefix, which catches
+#     a self-report that manages to avoid the word "clean".
+check_no_self_report() { # name stderr
+  local why=""
+  if printf '%s' "$2" | grep -Eqi 'clean'; then
+    why="mentions a clean"
+  elif printf '%s' "$2" | grep -q 'cap-target-dir:'; then
+    why="carries the script's own 'cap-target-dir:' prefix"
+  fi
+  if [ -n "$why" ]; then
+    bad "$1" "stderr $why; the script must add no verdict of its own here" \
+        "stderr: [$2]"
   else ok "$1"; fi
 }
 
@@ -357,20 +388,22 @@ chmod 000 "$fr/target/locked"
 export STUB_TARGET_DIR="$fr/target" CARGO_TARGET_CAP_MB=1
 run_cap "$fr"
 chmod 755 "$fr/target/locked"
-check_eq         "du failure: exit 0" "0" "$RC"
-check_empty      "du failure: cargo clean NOT invoked on a partial measurement" "clean log" "$CLEANED"
-# du's own "Permission denied" may legitimately leak; only a clean REPORT is banned.
-check_not_matches "du failure: does not report a clean" 'clean' "$ERR"
+check_eq            "du failure: exit 0" "0" "$RC"
+check_empty         "du failure: cargo clean NOT invoked on a partial measurement" "clean log" "$CLEANED"
+# du's own "Permission denied" legitimately leaks; only a self-report is banned.
+check_no_self_report "du failure: adds no verdict of its own to stderr" "$ERR"
 
 # --- 7. cargo metadata fails (rc != 0), no $PWD/target ----------------------
 clear_case_env
 fr="$(mkfake metafail)"
 export STUB_METADATA_STATUS=1 CARGO_TARGET_CAP_MB=1
 run_cap "$fr"
-check_eq    "metadata failure (no \$PWD/target): exit 0" "0" "$RC"
-check_empty "metadata failure: cargo clean NOT invoked" "clean log" "$CLEANED"
-check_empty "metadata failure: silent on stderr" "stderr" "$ERR"
-check_empty "metadata failure: silent on stdout" "stdout" "$OUT"
+check_eq            "metadata failure (no \$PWD/target): exit 0" "0" "$RC"
+check_empty         "metadata failure (no \$PWD/target): cargo clean NOT invoked" "clean log" "$CLEANED"
+# cargo's own "could not find Cargo.toml" is a diagnostic worth keeping; the cap
+# script must merely add nothing to it. See check_no_self_report.
+check_no_self_report "metadata failure (no \$PWD/target): adds no verdict of its own to stderr" "$ERR"
+check_empty         "metadata failure (no \$PWD/target): silent on stdout" "stdout" "$OUT"
 
 echo ""
 echo "=== the two metadata paths are not the same path ========================"
@@ -388,6 +421,15 @@ run_cap "$fr"
 check_eq       "metadata-fail CONTROL: exit 0" "0" "$RC"
 check_nonempty "metadata-fail CONTROL: this same fixture DOES clean when metadata succeeds" \
                "clean log" "$CLEANED"
+# Directly pairs with 8b's check_no_self_report on the identical fixture: here
+# the self-report MUST appear, there it must not. Without this positive, "no
+# self-report" could be satisfied by a script that never reports anything.
+if printf '%s' "$ERR" | grep -Eqi 'clean'; then
+  ok "metadata-fail CONTROL: and it DOES report that clean on stderr"
+else
+  bad "metadata-fail CONTROL: and it DOES report that clean on stderr" \
+      "stderr: [$ERR]"
+fi
 
 # --- 8b. metadata FAILS (rc != 0) while an oversized $PWD/target exists -----
 # Adjudicated: no fallback, no clean. A metadata failure means "outside a cargo
@@ -399,10 +441,11 @@ fr="$(mkfake metafail-pwd)"
 fill_mb "$fr/target" 9
 export STUB_METADATA_STATUS=1 CARGO_TARGET_CAP_MB=1
 run_cap "$fr"
-check_eq    "metadata failure + oversized \$PWD/target: exit 0" "0" "$RC"
-check_empty "metadata failure: does NOT fall back, does NOT clean" "clean log" "$CLEANED"
-check_empty "metadata failure: silent on stderr" "stderr" "$ERR"
-check_empty "metadata failure: silent on stdout" "stdout" "$OUT"
+check_eq            "metadata failure + oversized \$PWD/target: exit 0" "0" "$RC"
+check_empty         "metadata failure + oversized \$PWD/target: does NOT fall back, does NOT clean" \
+                    "clean log" "$CLEANED"
+check_no_self_report "metadata failure + oversized \$PWD/target: adds no verdict of its own to stderr" "$ERR"
+check_empty         "metadata failure + oversized \$PWD/target: silent on stdout" "stdout" "$OUT"
 
 # --- 9a. metadata rc=0 but NO target_directory -> fall back AND clean -------
 # The mirror image of 8b, and the case that makes 8b load-bearing: an

@@ -106,17 +106,48 @@ fn extract_path(ti: Option<&Value>) -> Option<String> {
 /// Write is new/overwrite both. We stay conservative and only Deny the clearly
 /// destructive shapes: replacing a (non-config) file with empty content, or
 /// overwriting git internals. Everything else is allowed.
-/// Deny reason for a tool call that would modify a protected gate/hook/policy
-/// path, or `None` when the target is not one.
+/// Verdict for a tool call that would MODIFY a protected gate/hook/policy path,
+/// or `None` when the target is not one.
 ///
 /// The wording is shared by every call site (Write, Edit/MultiEdit/
-/// NotebookEdit, truncating redirect, append redirect) so that
-/// [`crate::rule_id`] gives the whole class ONE stable signature.
-fn protected_path_deny(action: &str, path: &str) -> Option<Decision> {
+/// NotebookEdit, truncating redirect, append redirect, `cp`/`mv` destination,
+/// `tee`, `sed -i`, `sort -o`, `uniq` out) so that [`crate::rule_id`] gives the
+/// whole class ONE stable signature.
+///
+/// # Why this is an `Ask` and not a `Deny`
+///
+/// The path match is certain; the HARM is not. blastguard can establish that
+/// `.githooks/pre-push` decides whether a gate runs, but it cannot establish
+/// what the incoming bytes DO to it — the resulting content is not derivable
+/// from the tool call alone, and this crate performs no filesystem I/O
+/// (`exclude.rs:409-413`). Adding a crate to a gate's crate list STRENGTHENS the
+/// gate; inserting `exit 0` above it DISARMS it. Both arrive here as "an Edit
+/// targets a protected path".
+///
+/// Collapsing those two into `Deny` recorded "blastguard knows this is bad" for
+/// a case where it knew only "blastguard cannot tell", which is the same
+/// two-answers-for-three-situations defect [`crate::model`] was written to
+/// remove. It also made every such change reachable only by a human editing the
+/// file by hand — which is strictly LESS auditable than an agent's edit, because
+/// a hand edit leaves no diff, no test run and no commit trail.
+///
+/// This is not a softening. [`crate::interactive::ask_available`] resolves `Ask`
+/// to `Deny` in every context where no human can answer — headless `claude -p`,
+/// cron, condukt workers, SDK sessions — so the restrictive resolution CLAUDE.md
+/// requires still holds wherever the autonomous-agent threat model applies. What
+/// changes is only the interactive case, where the human who owns the gate gets
+/// to see the diff and decide.
+///
+/// DESTRUCTION of a protected path is a different question and keeps its `Deny`:
+/// see [`protected_disarm_deny`] and [`protected_tree_deny`], where the outcome
+/// IS established by the command alone (a deleted file stops running; a
+/// recursive delete takes every protected path under it).
+fn protected_path_block(action: &str, path: &str) -> Option<Decision> {
     if exclude::is_protected_path(path) {
-        Some(Decision::deny(format!(
+        Some(Decision::ask(format!(
             "{action} targets a protected gate/config path ({path}) — it controls which hooks, \
-gates or policies run, so blastguard refuses"
+gates or policies run, and blastguard cannot tell from the tool call whether this strengthens \
+or disarms it, so it refuses to guess"
         )))
     } else {
         None
@@ -134,7 +165,7 @@ gates or policies run, so blastguard refuses"
 /// remove them wholesale) and are invisible to a destination-only rule.
 ///
 /// Kept as its own wording — and its own [`crate::rule_id`] id — rather than
-/// folded into [`protected_path_deny`], because "an agent WROTE to the file that
+/// folded into [`protected_path_block`], because "an agent WROTE to the file that
 /// decides whether the gates run" and "an agent made that file stop being read"
 /// are different recurring failures and want different signatures.
 fn protected_disarm_deny(action: &str, path: &str) -> Option<Decision> {
@@ -189,7 +220,7 @@ it controls which hooks, gates or policies run, so blastguard refuses"
 /// instead of both being recorded as "blastguard knows this is bad".
 fn protected_landing_block(action: &str, dir: &str) -> Option<Decision> {
     if exclude::is_protected_path(dir) {
-        return protected_path_deny(action, dir);
+        return protected_path_block(action, dir);
     }
     if exclude::holds_protected_paths(dir) {
         return Some(Decision::ask(format!(
@@ -478,7 +509,7 @@ fn sort_output_file<'a>(rest: &[&'a str]) -> Option<&'a str> {
 /// known, so there is no need to Ask.
 fn analyze_sort(rest: &[&str]) -> Decision {
     match sort_output_file(rest) {
-        Some(out) => protected_path_deny("sort -o", out)
+        Some(out) => protected_path_block("sort -o", out)
             .or_else(|| protected_glob_deny("sort -o", out))
             .unwrap_or(Decision::Allow),
         None => Decision::Allow,
@@ -507,7 +538,7 @@ const UNIQ_VALUE_FLAGS: &[&str] = &[
 fn analyze_uniq(rest: &[&str]) -> Decision {
     let operands = positional_operands(rest, UNIQ_VALUE_FLAGS);
     if let Some(out) = operands.get(1) {
-        if let Some(deny) = protected_path_deny("uniq output", out)
+        if let Some(deny) = protected_path_block("uniq output", out)
             .or_else(|| protected_glob_deny("uniq output", out))
         {
             return deny;
@@ -526,7 +557,7 @@ fn detect_write(ti: Option<&Value>) -> Decision {
     // exemption used to swallow exactly the paths that decide whether the gates
     // run at all. "It is a config file" is the reason to look harder here, not
     // the reason to stop looking.
-    if let Some(deny) = protected_path_deny("Write", &path) {
+    if let Some(deny) = protected_path_block("Write", &path) {
         return deny;
     }
     if exclude::is_config_file(&path) {
@@ -559,7 +590,7 @@ fn detect_edit(ti: Option<&Value>) -> Decision {
         Some(p) => p,
         None => return Decision::Allow,
     };
-    if let Some(deny) = protected_path_deny("Edit", &path) {
+    if let Some(deny) = protected_path_block("Edit", &path) {
         return deny;
     }
     Decision::Allow
@@ -894,7 +925,7 @@ primitive, not a filesystem path",
     // (`> /dev/null`) must not blind the gate to a later truncating redirect in
     // a subsequent `;`/`&&`/`|` segment.
     for target in redirect_targets(cmd) {
-        if let Some(deny) = protected_path_deny("redirect", &target) {
+        if let Some(deny) = protected_path_block("redirect", &target) {
             return deny;
         }
         if !redirect_target_is_safe(&target) {
@@ -912,7 +943,7 @@ primitive, not a filesystem path",
     //     PROTECTED target is denied regardless of the append/truncate
     //     distinction. Ordinary appends (`echo x >> /tmp/log`) stay allowed.
     for target in append_redirect_targets(cmd) {
-        if let Some(deny) = protected_path_deny("append redirect", &target) {
+        if let Some(deny) = protected_path_block("append redirect", &target) {
             return deny;
         }
     }
@@ -1428,6 +1459,22 @@ fn single_redirect_target(seg: &str) -> Option<String> {
     redirect_targets(seg).into_iter().next()
 }
 
+/// Where a redirect-adjacent token ends.
+///
+/// Used by BOTH scans inside [`redirect_targets`] — the fd-dup token scan
+/// (`>&<tok>`) and the redirect *target* scan — because they must agree on the
+/// token boundary. They did not: only the target scan stopped at `)`, so
+/// `x=$(printf hi 2>&1)` yielded the fd token `1)` (not all digits, therefore
+/// "not an fd dup") but the target `1`, and blastguard denied a command that
+/// touches no file. Any terminator added here applies to both by construction.
+///
+/// `)` is a terminator because `$(cmd 2>/dev/null)` / `$(cmd 2>&1)` are the
+/// universal idioms for redirecting inside a command substitution; the closing
+/// paren is shell syntax, never part of the filename or the fd number.
+fn is_redirect_token_end(b: u8) -> bool {
+    b.is_ascii_whitespace() || b == b';' || b == b'|' || b == b'&' || b == b'>' || b == b')'
+}
+
 /// Every single `>` truncating-redirect target on the line, in order, outside
 /// quotes. Skips `>>`, `&>>`, `>&<digit>` (fd dup), quoted `>`, Rust
 /// arrows (`->`) and angle-bracket placeholders (`<value>`); catches every
@@ -1481,13 +1528,13 @@ fn redirect_targets(seg: &str) -> Vec<String> {
                 let tstart = i + 2;
                 let mut k = tstart;
                 while k < bytes.len() {
-                    let ck = bytes[k];
-                    if ck.is_ascii_whitespace()
-                        || ck == b';'
-                        || ck == b'|'
-                        || ck == b'&'
-                        || ck == b'>'
-                    {
+                    // Same terminator set as the target scan below — see
+                    // `is_redirect_token_end`. The two MUST agree: when this
+                    // scan ran longer than that one, `2>&1)` produced the
+                    // fd token `1)` (not all-digits, so "not a dup") while the
+                    // target scan produced the filename `1`, and a command
+                    // that only dups a file descriptor was denied.
+                    if is_redirect_token_end(bytes[k]) {
                         break;
                     }
                     k += 1;
@@ -1537,20 +1584,7 @@ fn redirect_targets(seg: &str) -> Vec<String> {
             }
             let start = j;
             while j < bytes.len() {
-                let cj = bytes[j];
-                // `)` terminates the target too: `$(cmd 2>/dev/null)` is the
-                // universal idiom for silencing stderr inside a command
-                // substitution, and the closing paren is not part of the
-                // filename. Without this, the target token becomes
-                // `/dev/null)`, which fails `redirect_target_is_safe`'s exact
-                // match and denies a command that touches no file at all.
-                if cj.is_ascii_whitespace()
-                    || cj == b';'
-                    || cj == b'|'
-                    || cj == b'&'
-                    || cj == b'>'
-                    || cj == b')'
-                {
+                if is_redirect_token_end(bytes[j]) {
                     break;
                 }
                 j += 1;
@@ -2664,7 +2698,7 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
             // agree.
             let protected = positional_operands(rest, &[])
                 .into_iter()
-                .find_map(|t| protected_path_deny("tee target", t));
+                .find_map(|t| protected_path_block("tee target", t));
             match protected {
                 Some(deny) => deny,
                 None if rest.iter().any(|t| *t == "-a" || *t == "--append") => Decision::Allow,
@@ -3158,7 +3192,7 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
     }
 
     if let Some(dir) = dir {
-        if let Some(deny) = protected_path_deny(&action, &dir) {
+        if let Some(deny) = protected_path_block(&action, &dir) {
             return deny;
         }
         if let Some(deny) = protected_glob_deny(&action, &dir) {
@@ -3167,7 +3201,7 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
         let base = dir.trim_end_matches('/');
         for src in sources {
             let landed = format!("{base}/{}", basename(src));
-            if let Some(deny) = protected_path_deny(&action, &landed) {
+            if let Some(deny) = protected_path_block(&action, &landed) {
                 return deny;
             }
         }
@@ -3175,7 +3209,7 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
     }
 
     match operands.last() {
-        Some(dest) => protected_path_deny(&action, dest)
+        Some(dest) => protected_path_block(&action, dest)
             .or_else(|| protected_glob_deny(&action, dest))
             .unwrap_or(Decision::Allow),
         // One operand or none: nothing is being written over (`cp a` is an
@@ -3222,7 +3256,7 @@ fn analyze_sed(rest: &[&str]) -> Decision {
         return Decision::Allow;
     }
     for operand in positional_operands(rest, SED_VALUE_FLAGS) {
-        if let Some(deny) = protected_path_deny("sed -i target", operand) {
+        if let Some(deny) = protected_path_block("sed -i target", operand) {
             return deny;
         }
     }
@@ -4989,6 +5023,45 @@ mod tests {
         detect("Bash", Some(&json!({ "command": cmd })))
     }
 
+    /// The contract for MODIFYING a protected gate/config path.
+    ///
+    /// Asserts BOTH halves, which is strictly more than the `is_deny()` these
+    /// call sites used to assert:
+    ///
+    ///   * interactive session — `Ask`, so the human who owns the gate sees the
+    ///     diff and decides (a hand edit, the only previous route, leaves no
+    ///     diff, no test run and no commit trail);
+    ///   * anywhere no human can answer — `hardened()` collapses it to `Deny`,
+    ///     so the autonomous-agent threat model is unchanged.
+    ///
+    /// A plain `is_blocking()` here would have been a genuine weakening: it
+    /// passes for `Ask` OR `Deny` and so would keep passing if the verdict later
+    /// regressed to a silent `Allow`-adjacent state in one of the two contexts.
+    #[track_caller]
+    fn assert_protected_modify(d: Decision) {
+        assert!(
+            d.is_ask(),
+            "modifying a protected path must Ask (refusal to guess), got {d:?}"
+        );
+        let hardened = d.clone().hardened();
+        assert!(
+            hardened.is_deny(),
+            "with no human to answer, the Ask must harden to Deny, got {hardened:?} from {d:?}"
+        );
+    }
+
+    /// The contract for DESTROYING or DISARMING a protected path: still a flat
+    /// `Deny`, because the outcome IS established by the command alone (a
+    /// deleted hook stops running; `rm -r` takes every protected path under the
+    /// directory). Nothing is being guessed, so there is nothing to ask about.
+    #[track_caller]
+    fn assert_protected_destroy(d: Decision) {
+        assert!(
+            d.is_deny(),
+            "destroying/disarming a protected path stays a Deny, got {d:?}"
+        );
+    }
+
     // ---- Bash: deny group ----
     #[test]
     fn denies_recursive_and_wildcard_rm() {
@@ -5164,6 +5237,30 @@ mod tests {
         assert_eq!(bash("foo 2>&1"), Decision::Allow);
         // fd CLOSE (`>&-`) touches no file — non-destructive, must NOT over-deny.
         assert_eq!(bash("echo x >&-"), Decision::Allow);
+    }
+
+    #[test]
+    fn fd_dup_closing_a_command_substitution_is_not_a_redirect() {
+        // Regression (2026-07-30): `2>&1` immediately followed by `)` — the
+        // close of a command substitution — was read as a truncating redirect
+        // to a file literally named `1`, denying a command that touches no
+        // file. Real bash performs an fd DUP here.
+        //
+        // Cause was an ASYMMETRY inside `redirect_targets`: the fd-dup token
+        // scan broke on whitespace/`;`/`|`/`&`/`>` but NOT on `)`, so the token
+        // became `1)`, failed the all-digits test, and fell through as a
+        // "filename"; the target scan further down DID break on `)` and so
+        // handed back `1`. The two scans must agree on where a token ends —
+        // that shared terminator set is what this test pins.
+        assert_eq!(single_redirect_target("x=$(printf hi 2>&1)"), None);
+        assert_eq!(bash("x=$(printf hi 2>&1)"), Decision::Allow);
+        assert_eq!(bash("echo $(date 2>&1)"), Decision::Allow);
+        assert_eq!(bash("out=$(cargo test 2>&1)"), Decision::Allow);
+        // fd CLOSE in the same position — also touches no file.
+        assert_eq!(bash("x=$(foo >&-)"), Decision::Allow);
+        // The narrowing must NOT rescue a real digit-PREFIXED FILENAME target:
+        // `>&2x` truncates a file called `2x` in real bash, even at a close.
+        assert!(bash("x=$(echo hi >&2x)").is_deny());
     }
 
     #[test]
@@ -5623,18 +5720,14 @@ mod tests {
             ),
             Decision::Allow
         );
-        // UPDATED (was Decision::Allow): `.claude/settings.json` controls which
-        // hooks/gates run at all, so wiping it must Deny, not fall through the
-        // config-file exemption. See `write_to_protected_config_paths_is_denied`
-        // for the broader set of security-relevant paths this covers.
-        assert!(
-            detect(
-                "Write",
-                Some(&json!({ "file_path": ".claude/settings.json", "content": "" }))
-            )
-            .is_deny(),
-            "emptying .claude/settings.json must be denied, not exempted as a config file"
-        );
+        // `.claude/settings.json` controls which hooks/gates run at all, so
+        // wiping it must NOT fall through the config-file exemption to Allow.
+        // See `write_to_protected_config_paths_is_gated` for the broader set of
+        // security-relevant paths this covers.
+        assert_protected_modify(detect(
+            "Write",
+            Some(&json!({ "file_path": ".claude/settings.json", "content": "" })),
+        ));
     }
 
     #[test]
@@ -6089,10 +6182,11 @@ mod tests {
     // fool — and 0.2.20's `..` resolution does not change that.
     #[test]
     fn d1_temp_prefix_traversal_no_longer_bypasses_redirect_rule() {
+        // Targets that resolve to a SYSTEM path: still a flat Deny — writing
+        // into /etc is established harm, nothing is being guessed.
         for c in [
             "echo pwned > /tmp/../etc/hosts",
             "echo x > /var/tmp/../../etc/hosts",
-            "echo x > /private/tmp/../../Users/yuki/.zshrc",
             "echo x > /var/folders/../../etc/hosts",
             "echo x > /tmp//../etc/hosts",
             // The `/private` twins of the same traversal.
@@ -6101,6 +6195,12 @@ mod tests {
         ] {
             assert!(bash(c).is_deny(), "expected deny: {c}");
         }
+        // A target that resolves to a PROTECTED path is a modify: whether the
+        // write strengthens or disarms is not derivable here, so it gates as an
+        // Ask and hardens to Deny with no human present. What the traversal
+        // regression pins either way is that the `/private/tmp/..` prefix does
+        // not make the target invisible to the rule.
+        assert_protected_modify(bash("echo x > /private/tmp/../../Users/yuki/.zshrc"));
     }
 
     #[test]
@@ -6494,7 +6594,7 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn write_to_protected_config_paths_is_denied() {
+    fn write_to_protected_config_paths_is_gated() {
         for path in [
             "/Users/yuki/.claude/settings.json", // ~/.claude/settings.json
             ".claude/settings.local.json",
@@ -6502,34 +6602,30 @@ mod tests {
             ".claude/hooks.json", // hook wiring under .claude
             "deny.toml",          // repo-root security policy toml
         ] {
-            assert!(
-                detect(
-                    "Write",
-                    Some(&json!({ "file_path": path, "content": "malicious content" }))
-                )
-                .is_deny(),
-                "Write to {path} must be denied, not Allowed as a config file"
-            );
+            assert_protected_modify(detect(
+                "Write",
+                Some(&json!({ "file_path": path, "content": "malicious content" })),
+            ));
         }
     }
 
     #[test]
-    fn write_to_githooks_pre_commit_is_denied() {
+    fn write_to_githooks_pre_commit_is_gated() {
         // `.githooks/` is not `.git/` (is_git_internal only matches paths
-        // containing a literal `.git` directory), so this currently falls all
-        // the way through detect_write's ordinary-file path to Allow.
-        assert!(detect(
+        // containing a literal `.git` directory), so without the protected-path
+        // rule this would fall all the way through detect_write's ordinary-file
+        // path to Allow.
+        assert_protected_modify(detect(
             "Write",
-            Some(&json!({ "file_path": ".githooks/pre-commit", "content": "#!/bin/sh\nexit 0\n" }))
-        )
-        .is_deny());
+            Some(&json!({ "file_path": ".githooks/pre-commit", "content": "#!/bin/sh\nexit 0\n" })),
+        ));
     }
 
     #[test]
-    fn edit_multiedit_notebookedit_to_protected_paths_is_denied() {
-        // Edit/MultiEdit/NotebookEdit currently ALWAYS Allow (detect's wildcard
-        // arm), independent of path. These must Deny once the fix classifies
-        // them instead of blanket-allowing every partial edit.
+    fn edit_multiedit_notebookedit_to_protected_paths_is_gated() {
+        // Without the protected-path rule Edit/MultiEdit/NotebookEdit would hit
+        // detect's wildcard arm and ALWAYS Allow, independent of path. They must
+        // stay gated instead of blanket-allowing every partial edit.
         let protected_paths = [
             ".claude/settings.json",
             "/Users/yuki/.claude/settings.json",
@@ -6537,47 +6633,35 @@ mod tests {
             ".githooks/pre-commit",
         ];
         for path in protected_paths {
-            assert!(
-                detect(
-                    "Edit",
-                    Some(&json!({ "file_path": path, "old_string": "a", "new_string": "b" }))
-                )
-                .is_deny(),
-                "Edit to {path} must be denied"
-            );
-            assert!(
-                detect(
-                    "MultiEdit",
-                    Some(&json!({
-                        "file_path": path,
-                        "edits": [{ "old_string": "a", "new_string": "b" }]
-                    }))
-                )
-                .is_deny(),
-                "MultiEdit to {path} must be denied"
-            );
+            assert_protected_modify(detect(
+                "Edit",
+                Some(&json!({ "file_path": path, "old_string": "a", "new_string": "b" })),
+            ));
+            assert_protected_modify(detect(
+                "MultiEdit",
+                Some(&json!({
+                    "file_path": path,
+                    "edits": [{ "old_string": "a", "new_string": "b" }]
+                })),
+            ));
         }
         // NotebookEdit addresses its target via `notebook_path`, not `file_path`.
-        assert!(
-            detect(
-                "NotebookEdit",
-                Some(&json!({ "notebook_path": ".claude/settings.json", "new_source": "x" }))
-            )
-            .is_deny(),
-            "NotebookEdit to settings.json must be denied"
-        );
+        assert_protected_modify(detect(
+            "NotebookEdit",
+            Some(&json!({ "notebook_path": ".claude/settings.json", "new_source": "x" })),
+        ));
     }
 
     #[test]
-    fn append_redirect_targeting_protected_path_is_denied() {
+    fn append_redirect_targeting_protected_path_is_gated() {
         // Append (`>>`) does not truncate, so it is ordinarily Allow (see
         // `append_and_fd_redirects_are_not_truncation` above) — but appending
         // into a security/hook/settings file is still a way to smuggle in a
         // malicious hook entry or setting, so a protected TARGET must override
-        // the append-is-safe default and Deny.
-        assert!(bash("echo malicious >> ~/.claude/settings.json").is_deny());
-        assert!(bash("echo malicious >> .githooks/pre-commit").is_deny());
-        assert!(bash("echo malicious >> deny.toml").is_deny());
+        // the append-is-safe default and stay gated.
+        assert_protected_modify(bash("echo malicious >> ~/.claude/settings.json"));
+        assert_protected_modify(bash("echo malicious >> .githooks/pre-commit"));
+        assert_protected_modify(bash("echo malicious >> deny.toml"));
     }
 
     #[test]
@@ -6634,7 +6718,7 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn case_variant_protected_paths_are_denied() {
+    fn case_variant_protected_paths_are_gated() {
         // macOS's filesystem is case-INsensitive but `globset` matching is
         // case-sensitive, so these are the SAME file on disk as the lower-case
         // forms already covered elsewhere, yet is_protected_path/is_config_file
@@ -6659,17 +6743,24 @@ mod tests {
                     "Write",
                     Some(&json!({ "file_path": path, "content": "malicious" })),
                 )
-                .is_deny()
+                .is_blocking()
             })
             .collect();
         assert!(
             failing.is_empty(),
-            "case-variant paths not denied (same file on a case-insensitive fs): {failing:?}"
+            "case-variant paths not gated (same file on a case-insensitive fs): {failing:?}"
         );
+        // The collector above only proves the paths are RECOGNISED. Pin the
+        // verdict itself on one representative so a regression to a bare
+        // `is_blocking()`-passing state cannot hide here.
+        assert_protected_modify(detect(
+            "Write",
+            Some(&json!({ "file_path": ".CLAUDE/Settings.json", "content": "malicious" })),
+        ));
     }
 
     #[test]
-    fn double_slash_protected_paths_are_denied() {
+    fn double_slash_protected_paths_are_gated() {
         // POSIX collapses `//` to `/`, but `normalize()` never does — it only
         // unescapes backslashes and strips a leading `./`. `.claude//settings.json`
         // and `.claude/settings.json` name the same file.
@@ -6686,17 +6777,21 @@ mod tests {
                     "Write",
                     Some(&json!({ "file_path": path, "content": "malicious" })),
                 )
-                .is_deny()
+                .is_blocking()
             })
             .collect();
         assert!(
             failing.is_empty(),
-            "double-slash paths not denied (same file once // collapses): {failing:?}"
+            "double-slash paths not gated (same file once // collapses): {failing:?}"
         );
+        assert_protected_modify(detect(
+            "Write",
+            Some(&json!({ "file_path": ".claude//settings.json", "content": "malicious" })),
+        ));
     }
 
     #[test]
-    fn cp_mv_sed_onto_protected_paths_are_denied() {
+    fn cp_mv_sed_onto_protected_paths_are_gated() {
         // `detect.rs`'s command dispatch has arms for `rm`/`git`/`truncate`/
         // `shred`/`dd`/`tee`/… but none for `cp`, `mv`, or `sed -i` — all three
         // fully overwrite their destination and fall through to the default
@@ -6713,12 +6808,17 @@ mod tests {
         ];
         let failing: Vec<&str> = cases
             .into_iter()
-            .filter(|cmd| !bash(cmd).is_deny())
+            .filter(|cmd| !bash(cmd).is_blocking())
             .collect();
         assert!(
             failing.is_empty(),
-            "writes onto a protected path via cp/mv/sed not denied: {failing:?}"
+            "writes onto a protected path via cp/mv/sed not gated: {failing:?}"
         );
+        assert_protected_modify(bash("cp evil.json .claude/settings.json"));
+        assert_protected_modify(bash("sed -i s/a/b/ .claude/settings.json"));
+        // `mv` onto a protected DESTINATION is a modify; moving one AWAY is a
+        // disarm and keeps its flat Deny (see `moving_a_protected_path_away_*`).
+        assert_protected_modify(bash("mv evil.sh .githooks/pre-commit"));
     }
 
     #[test]
@@ -6778,6 +6878,16 @@ mod tests {
 
     #[test]
     fn deleting_a_protected_path_is_denied() {
+        // The modify/destroy split in one place: bytes landing ON the gate file
+        // are a refusal to guess, removing it is an established outcome.
+        assert_protected_modify(detect(
+            "Edit",
+            Some(
+                &json!({ "file_path": ".githooks/pre-commit", "old_string": "a", "new_string": "b" }),
+            ),
+        ));
+        assert_protected_destroy(bash("rm .githooks/pre-commit"));
+
         // `analyze_rm` returns Allow for any rm that is neither recursive nor
         // wildcarded ("below the destructive bar"). That bar is about how MANY
         // files vanish; it says nothing about WHICH. A single non-recursive
@@ -7015,7 +7125,7 @@ protected trees: {failing:?}"
     // ---- Shape 5: tee append ------------------------------------------------
 
     #[test]
-    fn tee_append_onto_a_protected_path_is_denied() {
+    fn tee_append_onto_a_protected_path_is_gated() {
         // The `tee` arm denies the truncating form and returns Allow for
         // `-a`/`--append`, mirroring the `>` vs `>>` distinction. But rule 2b in
         // `detect_bash` already established that for a PROTECTED target the
@@ -7031,12 +7141,13 @@ protected trees: {failing:?}"
         ];
         let failing: Vec<&str> = cases
             .into_iter()
-            .filter(|cmd| !bash(cmd).is_deny())
+            .filter(|cmd| !bash(cmd).is_blocking())
             .collect();
         assert!(
             failing.is_empty(),
-            "tee -a writes to its file argument; a protected target must be denied: {failing:?}"
+            "tee -a writes to its file argument; a protected target must be gated: {failing:?}"
         );
+        assert_protected_modify(bash("tee -a .githooks/pre-commit"));
     }
 
     #[test]

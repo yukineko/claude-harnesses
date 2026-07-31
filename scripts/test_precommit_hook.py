@@ -55,7 +55,6 @@ EXPECTED_SCANNERS = [
     "check-fail-open.py",
     "check-doc-claims.py",
     "check-claudemd-claims.py",
-    "check-test-weakening.py",
     "check-plugin-versions.py",
     "check-version-bumped.py",
     "check-hardcoded-secret.py",
@@ -70,7 +69,6 @@ LABELS = {
     "check-fail-open.py": "fail-open-guard",
     "check-doc-claims.py": "doc-claims",
     "check-claudemd-claims.py": "claudemd-claims",
-    "check-test-weakening.py": "test-weakening",
     "check-plugin-versions.py": "version-lockstep",
     "check-version-bumped.py": "bump-on-change",
     "check-hardcoded-secret.py": "secret-guard",
@@ -165,9 +163,23 @@ class HookHarness:
             "GIT_CONFIG_NOSYSTEM": "1",
         }
 
-        # CONDUKT_BIN is the guard's first candidate, so pointing it at the stub
-        # keeps the lookup off target/ and off PATH -- the throwaway repo has
-        # neither, and the developer's real build must not leak in either.
+        # main-tree-guard is the one gate here that is a Rust binary rather than
+        # a python3 scanner, and it fails CLOSED when it cannot find condukt.
+        # That is correct in production and, for most cases here, beside the
+        # point: the subject under test is the SHELL hook's exit-code plumbing,
+        # not condukt's §8 verdict. The default condukt_exit=0 therefore gives
+        # every such case a stub answering "allowed", so the python-scanner
+        # properties are not all masked by one unrelated block. Tests that care
+        # about condukt's own decision live in crates/condukt/src/maintree.rs.
+        #
+        # This assignment MUST stay conditional. condukt_exit=None is the
+        # cannot-determine input -- no condukt binary anywhere -- and an
+        # unconditional CONDUKT_BIN hands that case a passing stub, turning the
+        # one test that checks the gate blocks when it cannot RUN into a test
+        # that checks nothing. CONDUKT_BIN is the guard's first candidate, so
+        # pointing it at the stub also keeps the lookup off target/ and off PATH
+        # -- the throwaway repo has neither, and the developer's real build must
+        # not leak in either.
         if condukt_exit is not None:
             condukt = self.root / "condukt-stub"
             condukt.write_text(_CONDUKT_STUB.format(code=condukt_exit))
@@ -283,7 +295,7 @@ class UndeterminedBlocksAndIsNamed(HookTestCase):
                 self.assertBlocked(proc, "when %s exits 2" % scanner)
 
     def test_exit_two_stderr_says_undetermined(self):
-        scanner = "check-test-weakening.py"
+        scanner = "check-doc-claims.py"
         h = self.harness(exits={scanner: 2})
         proc = h.run()
         self.assertBlocked(proc)
@@ -294,7 +306,7 @@ class UndeterminedBlocksAndIsNamed(HookTestCase):
 
     def test_exit_one_is_not_labelled_undetermined(self):
         """The distinction must go both ways, or it carries no information."""
-        h = self.harness(exits={"check-test-weakening.py": 1})
+        h = self.harness(exits={"check-doc-claims.py": 1})
         proc = h.run()
         self.assertBlocked(proc)
         self.assertNotIn("UNDETERMINED", proc.stderr)
@@ -351,13 +363,13 @@ class EveryScannerIsRun(HookTestCase):
 
     def test_multiple_failures_are_all_reported(self):
         h = self.harness(
-            exits={"check-prompt-injection.py": 1, "check-test-weakening.py": 2}
+            exits={"check-prompt-injection.py": 1, "check-doc-claims.py": 2}
         )
         proc = h.run()
         self.assertBlocked(proc)
         self.assertEqual(h.ran(), EXPECTED_SCANNERS)
         self.assertIn("injectguard", proc.stderr)
-        self.assertIn("test-weakening", proc.stderr)
+        self.assertIn("doc-claims", proc.stderr)
         self.assertIn("UNDETERMINED", proc.stderr)
 
     def test_hook_source_invokes_exactly_the_expected_scanner_list(self):

@@ -70,18 +70,37 @@ fn write_empty_overwrite_is_denied() {
 }
 
 #[test]
-fn config_file_edit_to_protected_path_is_denied() {
-    // Renamed from `config_file_edit_is_allowed_silently`: this was the
-    // end-to-end twin of the fail-open flipped in the unit tests (detect.rs
-    // `write_with_content_or_to_config_is_allowed`) — an Edit to
-    // `.claude/settings.json` decides which hooks/gates run at all, so it
-    // must now Deny and be surfaced to the agent, not pass through silently.
+fn config_file_edit_to_protected_path_is_gated_in_both_contexts() {
+    // Was `config_file_edit_is_allowed_silently`, then
+    // `config_file_edit_to_protected_path_is_denied`. An Edit to
+    // `.claude/settings.json` decides which hooks/gates run at all, so it must
+    // never pass through silently — but blastguard also cannot tell from the
+    // payload whether the edit STRENGTHENS or DISARMS the gate, so the verdict
+    // is context-dependent and both halves are pinned here.
+    //
+    // The env is set EXPLICITLY rather than inherited: `run()` passes the
+    // caller's environment straight through, so a developer running the suite
+    // from an interactive Claude Code session (CLAUDECODE=1 /
+    // CLAUDE_CODE_ENTRYPOINT=cli) gets a different verdict than CI does. Pinning
+    // `BLASTGUARD_ASK` removes that dependence on who is running the tests.
     let payload = r#"{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":".claude/settings.json"}}"#;
-    let (code, stdout) = run(payload);
+
+    // A human is present to answer: Ask, so the owner of the gate sees the
+    // change and decides. The agent's edit then lands with a diff and a commit.
+    let (code, stdout) = run_with_env(payload, &[("BLASTGUARD_ASK", "always")]);
+    assert_eq!(code, 0, "hook must always exit 0");
+    assert!(
+        stdout.contains(r#""permissionDecision":"ask""#),
+        "with a human present this must Ask, got stdout: {stdout}"
+    );
+
+    // Nobody can answer (headless, cron, condukt worker, SDK): hardened to Deny.
+    // This is the half that keeps the autonomous-agent threat model unchanged.
+    let (code, stdout) = run_with_env(payload, &[("BLASTGUARD_ASK", "never")]);
     assert_eq!(code, 0, "hook must always exit 0");
     assert!(
         stdout.contains(r#""permissionDecision":"deny""#),
-        "expected deny, got stdout: {stdout}"
+        "with no human present the Ask must harden to deny, got stdout: {stdout}"
     );
 }
 
@@ -256,35 +275,76 @@ fn source_venv_activate_is_allowed() {
 // computed but printed as silence is indistinguishable from an Allow).
 
 /// Feed one Bash command through the real binary and return its stdout.
-fn bash_hook(cmd: &str) -> String {
+/// The PreToolUse payload for a Bash `cmd`, without running anything — so a
+/// caller can choose the environment via [`run_with_env`] instead of inheriting
+/// whatever the developer's shell happens to export.
+fn bash_payload(cmd: &str) -> String {
     let escaped = cmd.replace('\\', "\\\\").replace('"', "\\\"");
-    let payload = format!(
+    format!(
         r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{{"command":"{escaped}"}}}}"#
-    );
-    let (code, stdout) = run(&payload);
+    )
+}
+
+fn bash_hook(cmd: &str) -> String {
+    let (code, stdout) = run(&bash_payload(cmd));
     assert_eq!(code, 0, "hook must always exit 0 (cmd: {cmd})");
     stdout
 }
 
 #[test]
 fn disarming_a_protected_path_without_writing_to_it_is_denied() {
-    // One representative of each of the five shapes whose target is a
-    // positively recognised protected path: delete / move away / strip the
-    // exec bit / restore over it / append via tee.
+    // One representative of each of the four DISARM shapes: delete / move away /
+    // strip the exec bit / restore over it. Each one makes the gate stop running
+    // and that outcome follows from the command alone, so the verdict is a flat
+    // Deny with nothing to ask about.
+    //
+    // `BLASTGUARD_ASK=always` is set deliberately: it makes `Ask` available, so
+    // a regression that downgraded any of these to an Ask would show up here
+    // instead of being masked by the headless hardening that turns Ask back into
+    // deny. The assertion is therefore about the VERDICT, not about the context.
+    //
+    // `tee -a` used to be in this list. It is not a disarm — it appends bytes to
+    // the file, which is a MODIFY, and it moved to
+    // `appending_to_a_protected_path_is_gated_in_both_contexts` below.
     let cases = [
         "rm .githooks/pre-commit",
         "mv .githooks/pre-commit /tmp/x",
         "chmod -x .githooks/pre-commit",
         "git checkout -- .claude/settings.json",
-        "tee -a .githooks/pre-commit",
     ];
     let failing: Vec<&str> = cases
         .into_iter()
-        .filter(|cmd| !bash_hook(cmd).contains(r#""permissionDecision":"deny""#))
+        .filter(|cmd| {
+            !run_with_env(&bash_payload(cmd), &[("BLASTGUARD_ASK", "always")])
+                .1
+                .contains(r#""permissionDecision":"deny""#)
+        })
         .collect();
     assert!(
         failing.is_empty(),
-        "these neutralise a gate without writing to it and must surface a deny: {failing:?}"
+        "these neutralise a gate without writing to it and must surface a deny \
+even where an Ask was available: {failing:?}"
+    );
+}
+
+#[test]
+fn appending_to_a_protected_path_is_gated_in_both_contexts() {
+    // `tee -a .githooks/pre-commit` adds bytes to a gate file. Whether those
+    // bytes arm it further or disarm it is not derivable from the command line,
+    // so this is the same refusal-to-guess as an Edit: Ask where a human can
+    // answer, Deny where none can.
+    let cmd = "tee -a .githooks/pre-commit";
+
+    let (_, stdout) = run_with_env(&bash_payload(cmd), &[("BLASTGUARD_ASK", "always")]);
+    assert!(
+        stdout.contains(r#""permissionDecision":"ask""#),
+        "with a human present this must Ask, got stdout: {stdout}"
+    );
+
+    let (_, stdout) = run_with_env(&bash_payload(cmd), &[("BLASTGUARD_ASK", "never")]);
+    assert!(
+        stdout.contains(r#""permissionDecision":"deny""#),
+        "with no human present this must harden to deny, got stdout: {stdout}"
     );
 }
 

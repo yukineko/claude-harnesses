@@ -1585,6 +1585,12 @@ fn run_audit(cli: &Cli, l: &Loaded, paths: &report::Paths, json: bool, filter: &
     // emits nothing.
     emit_audit_violations(&l.repo_root, &findings);
 
+    // Unified review surface: record each structural finding as an overwatch
+    // REVIEW FINDING as well. The violation stream above only reaches the queue
+    // after recurrence (see `emit_audit_findings`), so without this a first-time
+    // drift is invisible in `overwatch review-queue`. Same fail-soft contract.
+    emit_audit_findings(&l.repo_root, &findings);
+
     if json {
         println!(
             "{}",
@@ -1667,6 +1673,70 @@ fn emit_audit_violations(repo_root: &Path, findings: &[auditmap::StructuralFindi
         if let Some(event) = event {
             let _ = overwatch::store::append_violation(repo_root, &event);
         }
+    }
+}
+
+/// Record one overwatch REVIEW FINDING per structural finding, FAIL-SOFT.
+///
+/// Why this exists alongside [`emit_audit_violations`]: the violation stream
+/// only reaches `overwatch review-queue` through the *systemic* path, and
+/// `violation::detect_recurrence` marks a signature systemic only when
+/// `occurrences >= threshold && (distinct_tasks > 1 || distinct_sessions > 1)`.
+/// specguard's `task_key` is `<kind>:<symbol>`, i.e. constant for a given
+/// finding, so `distinct_tasks` is always 1 and the signature has to recur
+/// across separate SESSIONS before it surfaces. A first-time structural drift
+/// therefore never appears in the queue at all, and nothing carries a
+/// per-finding disposition. The review-finding stream is per-item and shows up
+/// immediately, and `review-queue --to-backlog` can bridge it.
+///
+/// Idempotency: `finding_id` is `specguard:<kind>:<key>`, derived only from the
+/// finding, so re-auditing an unchanged repo re-derives the same ids. Already
+/// recorded ids are skipped -- `store::append_review_finding` is a bare append
+/// with no dedupe of its own, so without this every audit run would re-row the
+/// whole finding set.
+///
+/// If the existing findings cannot be read, the ids are re-appended rather than
+/// dropped. That is deliberate: a duplicate row is visible and harmless, while
+/// skipping would silently withhold a real finding from the only surface that
+/// shows it. Losing a finding is the failure that matters here; repeating one
+/// is not.
+///
+/// Like [`emit_audit_violations`] this is a pure side-signal: it MUST NOT change
+/// the audit exit code, the report/envelope contents, or the finding set, and
+/// MUST NOT panic. A clean (empty `findings`) run records nothing.
+fn emit_audit_findings(repo_root: &Path, findings: &[auditmap::StructuralFinding]) {
+    if findings.is_empty() {
+        return;
+    }
+    // `Err` here means the store could not be read, NOT that it is empty; see
+    // the doc comment for why that resolves to "append anyway".
+    let already: std::collections::HashSet<String> =
+        match overwatch::store::read_review_findings(repo_root) {
+            Ok(existing) => existing.into_iter().map(|f| f.finding_id).collect(),
+            Err(_unreadable) => std::collections::HashSet::new(),
+        };
+
+    for f in findings {
+        let finding_id = format!("specguard:{}:{}", f.kind.as_str(), f.key);
+        if already.contains(&finding_id) {
+            continue;
+        }
+        // Severity mirrors what the kind actually asserts. A dangling reference
+        // is a map that points at something gone -- the audit is reading a lie
+        // -- so it outranks the two "missing artefact" kinds.
+        let severity = match f.kind {
+            auditmap::StructuralKind::DanglingReference => "high",
+            auditmap::StructuralKind::Undocumented | auditmap::StructuralKind::Untested => "medium",
+        };
+        let _ = overwatch::store::record_finding(
+            repo_root,
+            finding_id,
+            "specguard".to_string(),
+            Some(severity.to_string()),
+            format!("{}: {}", f.kind.as_str(), f.key),
+            Some(f.key.clone()),
+            Some(f.detail.clone()),
+        );
     }
 }
 
@@ -2084,6 +2154,114 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         out
+    }
+
+    // -- overwatch REVIEW-FINDING emission (the unified review queue) -------
+
+    #[test]
+    fn emit_audit_findings_records_one_review_finding_per_structural_finding() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        let findings = vec![
+            finding(auditmap::StructuralKind::Undocumented, "crate::foo::Bar"),
+            finding(
+                auditmap::StructuralKind::DanglingReference,
+                "crate::gone::Ref",
+            ),
+        ];
+
+        let recorded = with_home(tmp.path(), || {
+            emit_audit_findings(&repo, &findings);
+            overwatch::store::read_review_findings(&repo).unwrap()
+        });
+
+        assert_eq!(recorded.len(), 2, "one row per structural finding");
+        let ids: Vec<&str> = recorded.iter().map(|f| f.finding_id.as_str()).collect();
+        assert!(
+            ids.contains(&"specguard:undocumented:crate::foo::Bar"),
+            "{ids:?}"
+        );
+        assert!(
+            ids.contains(&"specguard:dangling-reference:crate::gone::Ref"),
+            "{ids:?}"
+        );
+        for f in &recorded {
+            assert_eq!(f.source, "specguard");
+            assert!(f.file.is_some(), "the map-entry key must survive as `file`");
+        }
+        // A dangling reference means the map is reading a lie; it must outrank
+        // the "missing artefact" kinds rather than share their severity.
+        let dangling = recorded
+            .iter()
+            .find(|f| f.finding_id.contains("dangling-reference"))
+            .unwrap();
+        assert_eq!(dangling.severity.as_deref(), Some("high"));
+        let undocumented = recorded
+            .iter()
+            .find(|f| f.finding_id.contains("undocumented"))
+            .unwrap();
+        assert_eq!(undocumented.severity.as_deref(), Some("medium"));
+    }
+
+    /// `append_review_finding` is a bare append with no dedupe of its own, so a
+    /// second audit of an unchanged repo would re-row the whole finding set and
+    /// the queue would grow without anything having gone wrong.
+    #[test]
+    fn re_auditing_an_unchanged_repo_adds_no_duplicate_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let findings = vec![finding(auditmap::StructuralKind::Untested, "crate::a::B")];
+
+        let recorded = with_home(tmp.path(), || {
+            emit_audit_findings(&repo, &findings);
+            emit_audit_findings(&repo, &findings);
+            emit_audit_findings(&repo, &findings);
+            overwatch::store::read_review_findings(&repo).unwrap()
+        });
+        assert_eq!(recorded.len(), 1, "three runs, one row: {recorded:?}");
+    }
+
+    /// ANTI-VACUITY CONTROL for the dedupe test: the skip must key off the
+    /// finding id, not suppress everything after the first write. A NEW finding
+    /// arriving on a later run must still be recorded.
+    #[test]
+    fn a_new_finding_on_a_later_run_is_still_recorded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        let recorded = with_home(tmp.path(), || {
+            emit_audit_findings(
+                &repo,
+                &[finding(auditmap::StructuralKind::Untested, "crate::a::B")],
+            );
+            emit_audit_findings(
+                &repo,
+                &[
+                    finding(auditmap::StructuralKind::Untested, "crate::a::B"),
+                    finding(auditmap::StructuralKind::Undocumented, "crate::c::D"),
+                ],
+            );
+            overwatch::store::read_review_findings(&repo).unwrap()
+        });
+        assert_eq!(recorded.len(), 2, "{recorded:?}");
+    }
+
+    /// A clean audit must leave the review stream untouched — the queue is for
+    /// things that need a human, and an empty run needs nobody.
+    #[test]
+    fn a_clean_audit_records_no_review_findings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let recorded = with_home(tmp.path(), || {
+            emit_audit_findings(&repo, &[]);
+            overwatch::store::read_review_findings(&repo).unwrap_or_default()
+        });
+        assert!(recorded.is_empty(), "{recorded:?}");
     }
 
     #[test]

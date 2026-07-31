@@ -24,6 +24,7 @@
 //! explicit escape hatch, checked before the panic guard so it stays reachable).
 #![deny(clippy::panic)]
 
+mod cache;
 mod config;
 mod gate;
 mod install;
@@ -261,6 +262,12 @@ fn status(args: StatusArgs) {
     println!("session.block_usd:  {:.2}", cfg.session_block_usd);
     println!("daily.warn_usd:     {:.2}", cfg.daily_warn_usd);
     println!("daily.block_usd:    {:.2}", cfg.daily_block_usd);
+    println!(
+        "cache.min_rate:     {:.2} (effective {:.2})",
+        cfg.cache_hit_min_rate,
+        cache::effective_threshold(cfg.cache_hit_min_rate)
+    );
+    println!("cache.min_tokens:   {}", cfg.cache_hit_min_tokens);
     println!();
     println!("today ({today}):     ${day_usd:.4} spent");
 }
@@ -355,6 +362,7 @@ mod violation_emission_tests {
                 session_usd: Some(0.0),
                 day_usd: Some(0.0),
                 verdict: gate::Verdict::Allow,
+                cache: None,
             })),
             None
         );
@@ -363,6 +371,7 @@ mod violation_emission_tests {
                 session_usd: Some(1.0),
                 day_usd: Some(1.0),
                 verdict: gate::Verdict::Block("over budget".to_string(), "session-budget-exceeded"),
+                cache: None,
             })),
             Some("session-budget-exceeded")
         );

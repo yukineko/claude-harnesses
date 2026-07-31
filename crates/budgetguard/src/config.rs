@@ -24,6 +24,17 @@ struct FileConfig {
     /// Override the built-in price table for specific models.
     #[serde(default)]
     price: Vec<PriceOverrideCfg>,
+    #[serde(default)]
+    cache: CacheLevel,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct CacheLevel {
+    /// Hit-rate floor (0.0–1.0). Out of range → the built-in default; a
+    /// threshold cannot be used to switch the check off (CLAUDE.md §3).
+    min_rate: Option<f64>,
+    /// Input tokens required before the rate is judged at all.
+    min_tokens: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -52,6 +63,14 @@ pub struct Config {
     pub daily_block_usd: f64,
     pub state_dir: PathBuf,
     pub price_overrides: Vec<PriceOverride>,
+    /// Hit-rate floor below which a session is reported degraded. Unlike the
+    /// USD limits above, `0.0` does NOT mean "disabled" here: no rate is ever
+    /// below zero, so honouring it would be a floorless clamp — the shape
+    /// CLAUDE.md §3 names as "always pass". Out-of-range values fall back to
+    /// [`crate::cache::DEFAULT_MIN_HIT_RATE`]; see `cache::effective_threshold`.
+    pub cache_hit_min_rate: f64,
+    /// `input + cache_read` tokens required before the rate is judged at all.
+    pub cache_hit_min_tokens: u64,
 }
 
 pub fn base_dir() -> PathBuf {
@@ -68,6 +87,8 @@ impl Default for Config {
             daily_block_usd: 0.0,
             state_dir: base_dir().join("state"),
             price_overrides: Vec::new(),
+            cache_hit_min_rate: crate::cache::DEFAULT_MIN_HIT_RATE,
+            cache_hit_min_tokens: crate::cache::DEFAULT_MIN_INPUT_TOKENS,
         }
     }
 }
@@ -149,6 +170,16 @@ impl Config {
                 output: p.output,
             })
             .collect();
+        // Carried through verbatim, NOT sanitized here: `cache::assess` clamps
+        // at the point of use so that no caller can reach the comparison with an
+        // unvalidated threshold. Sanitizing here as well would put the rule in
+        // two places, and the copy that drifts is the one that stops clamping.
+        if let Some(v) = fc.cache.min_rate {
+            cfg.cache_hit_min_rate = v;
+        }
+        if let Some(v) = fc.cache.min_tokens {
+            cfg.cache_hit_min_tokens = v;
+        }
 
         Determination::Known(cfg)
     }

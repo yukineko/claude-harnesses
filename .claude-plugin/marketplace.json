@@ -83,7 +83,7 @@
     {
       "name": "budgetguard",
       "description": "v0.1.16: verdict-path audit (docs/audit-budgetguard-verdict-paths.md) closed seven fail-open paths. A budgetguard.toml that exists but cannot be read or PARSED no longer degrades to Config::default() — whose all-zero limits mean 'no limit', so one TOML typo silently disarmed the gate (measured: verdict(999,999)==Allow); config loading is now tri-state and an unreadable config blocks. A ledger lock that could not be acquired no longer proceeds with an unserialized read-modify-write; the day total is reported unmeasured instead of as headroom. An unreadable lock file is no longer assumed stale and stolen from a live session. A genuinely ABSENT config still means 'configured nothing' and still allows. v0.1.13: new `emit_violation(root, session, check_kind)` records an `overwatch` `ViolationSource::Budgetguard` event when a Stop is blocked for exceeding session/daily budget, feeding the unified review-queue. Real-time cost budget gate for Claude Code: on Stop, read the session transcript, compute USD cost, and block the turn when session or daily limits are exceeded — feeding the overage back so the agent winds down gracefully. Subscription-native (one Stop hook + bundled Rust binary, no API key). v0.1.11: Stop hook now runs under harness-core's run_guarded panic barrier (fail-closed block on crash instead of silent allow).",
-      "version": "0.1.16",
+      "version": "0.1.17",
       "category": "cost",
       "keywords": [
         "hooks",

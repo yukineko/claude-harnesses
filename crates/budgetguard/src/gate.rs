@@ -20,6 +20,13 @@
 //! Only two paths still exit 0 silently, and both are KNOWN answers rather than
 //! give-ups: no transcript data at all to price, and a config that is genuinely
 //! absent (see `config::Config::load_checked`).
+//!
+//! Alongside the budget verdict this gate also carries a cache-hit health
+//! ([`crate::cache`]). It is advisory — a cold cache costs money but violates no
+//! limit the operator set — so a degraded rate is promoted to `Warn` only when
+//! the budget verdict is otherwise `Allow`. Every state, including "the check
+//! did not run", is printed on the operator line, because a cache state that
+//! renders as nothing is read as a pass.
 
 use harness_core::estimate_transcript_cost;
 use harness_core::pricing;
@@ -38,6 +45,12 @@ pub struct GateResult {
     /// cost is unknown (the ledger is deliberately left untouched then).
     pub day_usd: Option<f64>,
     pub verdict: Verdict,
+    /// Cache-hit health for this session. `None` means the check did not RUN
+    /// (no gauge record yet, or the cost path gave up before reaching it) — it
+    /// is never "the cache is fine". `emit_and_exit` prints a line for `None`
+    /// too, so a state that was not evaluated cannot be mistaken for a pass by
+    /// its absence from the log.
+    pub cache: Option<crate::cache::CacheHealth>,
 }
 
 pub enum Verdict {
@@ -99,6 +112,9 @@ fn evaluate_with_store(
                 session_usd: None,
                 day_usd: None,
                 verdict: undetermined_verdict(cfg, why.as_str()),
+                // The cost path gave up before the cache check ran. `None` is
+                // "not evaluated", printed as such -- not a silent pass.
+                cache: None,
             });
         }
     };
@@ -116,6 +132,7 @@ fn evaluate_with_store(
         return Some(GateResult {
             session_usd: Some(session_usd),
             day_usd: None,
+            cache: cache_health(cfg, gauge_state_dir, session_id),
             verdict: day_undetermined_verdict(
                 cfg,
                 session_usd,
@@ -148,7 +165,28 @@ fn evaluate_with_store(
         session_usd: Some(session_usd),
         day_usd: Some(day_usd),
         verdict,
+        cache: cache_health(cfg, gauge_state_dir, session_id),
     })
+}
+
+/// Judge this session's cache-hit health from gauge's persisted record.
+///
+/// Returns `None` when there is no record to read — "the check did not run",
+/// which the emit path prints explicitly. Note the deliberate asymmetry with
+/// `session_cost`: freshness does not matter here. A hit RATE is a ratio, so a
+/// record that lags one turn still answers the question correctly, whereas an
+/// under-counted cost would let a turn slip over budget.
+fn cache_health(
+    cfg: &Config,
+    gauge_state_dir: &std::path::Path,
+    session_id: &str,
+) -> Option<crate::cache::CacheHealth> {
+    let rec = session::load_one(gauge_state_dir, session_id)?;
+    Some(crate::cache::assess(
+        &rec.models,
+        cfg.cache_hit_min_rate,
+        cfg.cache_hit_min_tokens,
+    ))
 }
 
 /// The verdict when this session's spend IS known but the day total is not.
@@ -194,6 +232,9 @@ pub fn config_undetermined_result(why: &str) -> GateResult {
     GateResult {
         session_usd: None,
         day_usd: None,
+        // No readable config means no threshold, so there is nothing to judge
+        // the rate against. Reported as "not evaluated", never as healthy.
+        cache: None,
         verdict: Verdict::Block(
             format!(
                 "budgetguard: 設定を読み取れませんでした（{why}）。\n\
@@ -386,7 +427,28 @@ pub fn emit_and_exit(result: Option<GateResult>) -> ! {
                 usd(r.session_usd),
                 usd(r.day_usd)
             );
-            match r.verdict {
+            // Always printed, every state, including "did not run". A cache
+            // state that renders as nothing would be read as "fine" — the same
+            // silence-is-a-pass defect this check exists to remove.
+            eprintln!(
+                "budgetguard: {}",
+                match &r.cache {
+                    Some(h) => h.describe(),
+                    None => "cache not evaluated (no gauge record for this session)".to_string(),
+                }
+            );
+            // A degraded hit rate is advisory, not a block: it costs money, it
+            // does not violate a limit the operator set. But it must reach the
+            // user, so it is promoted to the same `additionalContext` channel a
+            // budget warning uses when nothing louder is already being said. A
+            // Warn or Block already speaks; appending would bury both.
+            let verdict = match (r.verdict, &r.cache) {
+                (Verdict::Allow, Some(h)) if h.is_degraded() => {
+                    Verdict::Warn(format!("budgetguard: {}", h.describe()))
+                }
+                (v, _) => v,
+            };
+            match verdict {
                 Verdict::Allow => std::process::exit(0),
                 Verdict::Warn(msg) => {
                     println!("{}", json!({ "additionalContext": msg }));
@@ -757,6 +819,80 @@ mod tests {
         rec.session_id = name.to_string();
         session::upsert(store.path(), &rec);
         (cfg_fields, tp, store)
+    }
+
+    /// The gate-level half of the cache watch: the verdict site must actually
+    /// carry the health, not just be able to compute it. Fixture is a record
+    /// whose whole input is uncached.
+    #[cfg(unix)]
+    #[test]
+    fn a_collapsed_cache_rate_reaches_the_gate_result_and_warns() {
+        let ledger_dir = tempfile::tempdir().unwrap();
+        let (cfg, tp, store) = lock_fixture(
+            "cache-cold",
+            Config {
+                state_dir: ledger_dir.path().to_path_buf(),
+                ..Config::default()
+            },
+        );
+        // `sample_record` is 1M input / 0 cache_read = a 0% hit rate.
+        let r = evaluate_with_store(
+            &cfg,
+            "cache-cold",
+            tp.to_str().unwrap(),
+            "2026-07-31",
+            store.path(),
+        )
+        .expect("result");
+        assert!(
+            r.cache.as_ref().is_some_and(|h| h.is_degraded()),
+            "the gate result must carry the degraded health, got {:?}",
+            r.cache
+        );
+        let _ = std::fs::remove_file(&tp);
+    }
+
+    /// ANTI-VACUITY CONTROL for the test above: the same fixture with a cached
+    /// record must NOT be degraded. Without this, "it reported degraded" is
+    /// consistent with a check that reports degraded unconditionally.
+    #[cfg(unix)]
+    #[test]
+    fn a_warm_cache_rate_reaches_the_gate_result_and_does_not_warn() {
+        let ledger_dir = tempfile::tempdir().unwrap();
+        let (cfg, tp, store) = lock_fixture(
+            "cache-warm",
+            Config {
+                state_dir: ledger_dir.path().to_path_buf(),
+                ..Config::default()
+            },
+        );
+        // Overwrite the fixture record with a warm one: 1k fresh input against
+        // 1M cached reads.
+        let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let mut rec = sample_record(&future);
+        rec.session_id = "cache-warm".to_string();
+        let mut warm = opus_models(1_000, 1_000_000);
+        for u in warm.values_mut() {
+            u.cache_read = 1_000_000;
+        }
+        rec.models = warm;
+        session::upsert(store.path(), &rec);
+
+        let r = evaluate_with_store(
+            &cfg,
+            "cache-warm",
+            tp.to_str().unwrap(),
+            "2026-07-31",
+            store.path(),
+        )
+        .expect("result");
+        assert!(
+            matches!(r.cache, Some(crate::cache::CacheHealth::Healthy { .. })),
+            "a warm session must read as healthy, got {:?}",
+            r.cache
+        );
+        assert!(matches!(r.verdict, Verdict::Allow));
+        let _ = std::fs::remove_file(&tp);
     }
 
     /// An unreadable config must block even though a `Config::default()` has

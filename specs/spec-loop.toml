@@ -1,0 +1,170 @@
+#
+# specforge Spec IR — 手書き（agent draft ではない）。
+#
+# この spec 自身が「condukt 可能な仕様書」の実例であり、cycle の停止基準の実演でもある。
+# 各 [[requirement]] は condukt の 1 タスクに 1:1 で写る:
+#   requirement.statement   → task.title
+#   requirement.acceptance  → task.done_criteria（逐語。再導出しない）
+#   requirement.canon       → task の参照ファイル
+# したがって「この spec は condukt 可能か」は
+#   Spec::contract_violations() が空か（specguard/src/forge/ir.rs:162）
+# という機械判定に還元される。散文の設計背景は docs/DESIGN-spec-loop.md。
+#
+# status = "draft"。ratify は人間の儀式なので、この harness が自分で押さない。
+#   specforge ratify --id spec-loop -m "<理由>"
+#
+
+[spec]
+id = "spec-loop"
+title = "spec→backlog→flow の閉ループと、その停止基準"
+status = "draft"
+provenance_commit = "0ad0d0555168d0ca709a4002cbbdc0f602121b9a"
+date = "2026-07-31"
+canon = [
+  "CLAUDE.md#3",
+  "CLAUDE.md#6",
+  "CLAUDE.md#8",
+  "crates/specguard/src/forge/main.rs",
+  "crates/specguard/src/forge/ir.rs",
+  "crates/flow/skills/flow/SKILL.md",
+]
+
+# ---------------------------------------------------------------------------
+# R0 — 停止基準そのもの。他のすべての requirement より先に読むこと。
+# ---------------------------------------------------------------------------
+[[requirement]]
+id = "R0-termination-is-the-contract-floor"
+statement = """
+flow→specforge→backlog→flow の cycle の停止条件を「divert 回数」ではなく
+「ratify の契約 floor を通ったか」に置く。specforge が draft した spec が
+Spec::contract_violations() を空にできたときだけ requirement が backlog に出て
+実行側へ抜ける。空にできない spec は ratify が拒否し、sentinel を上げて人間に返る。
+回数カウンタは追加しない。
+"""
+acceptance = [
+  "contract_violations() が非空の spec に対し `specforge ratify --id <id>` は非0で終了し、backlog 項目を1件も追加しない（既存の拒否経路 forge/main.rs:355-362 を出口の前段として観測する）",
+  "同じ task が2回 spec-gap 判定されても、flow は回数を根拠に分岐しない。2回目の divert で draft が floor を通れば通常どおり backlog へ出る",
+  "floor を通せない draft は sentinel を上げて停止し、その事実（どの requirement のどの G が欠けたか）が stderr に列挙される",
+  "この spec 自身（specs/spec-loop.toml）が contract_violations() = 空 を満たす。満たさないなら仕様書として不成立とみなす",
+]
+canon = [
+  "crates/specguard/src/forge/ir.rs#contract_violations",
+  "crates/specguard/src/forge/main.rs#ratify",
+  "CLAUDE.md#3",
+]
+falsifiable = true
+
+# ---------------------------------------------------------------------------
+# R1 — 出口（backlog 2dd5180f 本体）
+# ---------------------------------------------------------------------------
+[[requirement]]
+id = "R1-ratify-emits-backlog-items"
+statement = """
+specforge ratify が成功した spec について、requirement 1件につき backlog 項目を
+1件積む。積む主体は Rust コード（散文の指示ではない）。
+"""
+acceptance = [
+  "N 個の requirement を持つ ratified spec について、ratify 直後の `backlog list --status pending` に当該 spec 由来の項目がちょうど N 件ある",
+  "同じ spec を再度 ratify しても追加は0件（冪等）。冪等キーは spec id + requirement id で、title 文字列一致に依存しない",
+  "backlog への追加が失敗した場合、ratify は成功を印字しない（部分適用を成功として報告しない）",
+  "specforge の出口を Rust から呼んでいることを、src/forge/ 配下の grep で確認できる（現状は comment 1件のみ: implement.rs:331）",
+]
+canon = [
+  "crates/specguard/src/forge/main.rs#ratify",
+  "crates/specguard/src/forge/ir.rs#Spec",
+  "CLAUDE.md#6",
+]
+falsifiable = true
+
+# ---------------------------------------------------------------------------
+# R2 — 出口の積み荷（acceptance の逐語搬送）
+# ---------------------------------------------------------------------------
+[[requirement]]
+id = "R2-acceptance-travels-verbatim"
+statement = """
+backlog 項目は spec id・requirement id・acceptance を運ぶ。acceptance は
+condukt interpreter の done_criteria として逐語で使える形で入り、下流が
+再導出しない。
+"""
+acceptance = [
+  "積まれた項目の notes に requirement.acceptance の全要素が逐語で含まれる（要約・言い換えをしない）",
+  "項目に spec id と requirement id の両方が tag または notes として入り、そこから元の spec ファイルを一意に引ける",
+  "condukt が当該項目を分解したとき、done_criteria が acceptance と文字列一致する（interpreter が新しい合格条件を発明していないことを観測する）",
+]
+canon = [
+  "crates/specguard/src/forge/ir.rs#Requirement",
+  "crates/flow/skills/flow/SKILL.md",
+]
+falsifiable = true
+
+# ---------------------------------------------------------------------------
+# R3 — spec-gap の検出器を三値にする（backlog d7330aef）
+# ---------------------------------------------------------------------------
+[[requirement]]
+id = "R3-brief-emits-tri-state-verdict"
+statement = """
+specguard brief が散文に加えて機械判定可能な verdict を出す。covered /
+not-covered / undetermined の三値であり、undetermined を not-covered へ潰さない。
+not-covered は specforge への divert を起こすので、判定不能がそこへ落ちると
+「読めなかった」が「仕様が無い」に化ける。
+"""
+acceptance = [
+  "`specguard brief --json` の出力に3状態を取りうる verdict フィールドがある",
+  "spec-map store を読めない状態（権限 or 破損）で brief を走らせると verdict が undetermined になり、not-covered にはならない",
+  "verdict は散文と同じ scope 解決から導かれる（並走する第2実装ではない）ことを、両者が同一関数を通ることで示す",
+  "undetermined は flow の divert を起こさず、人間へ surface する経路に入る",
+]
+canon = [
+  "crates/specguard/src/main.rs#Brief",
+  "crates/harness-core/src/verdict.rs",
+  "crates/blastguard/src/model.rs",
+  "CLAUDE.md#3",
+]
+falsifiable = true
+
+# ---------------------------------------------------------------------------
+# R4 — flow の4番目の source（backlog 09148819）
+# ---------------------------------------------------------------------------
+[[requirement]]
+id = "R4-flow-spec-gap-source"
+statement = """
+/flow に spec-gap を4番目の source として足す。3つの trigger
+（condukt interpreter の open_questions / task の confidence:low /
+specguard brief の verdict=not-covered）のいずれかで、condukt へ盲目投入せず
+specforge へ戻す。人間ゲートは condukt policy answer 経由にして監査可能にする。
+"""
+acceptance = [
+  "open_questions が出た task について、flow が condukt 実装フェーズへ進まず specforge draft を起動する",
+  "divert の可否は `condukt policy answer`（risk medium / reversible high / confidence low）を通り、`condukt policy answers` に記録が残る。素の AskUserQuestion は使わない",
+  "verdict=undetermined（R3）では divert しない",
+  "divert 後に ratify が通れば、その spec 由来の項目が backlog に現れ、flow が次の周回でそれを拾う（R0 の停止基準がここで効く）",
+]
+canon = [
+  "crates/flow/skills/flow/SKILL.md",
+  "crates/specguard/src/forge/main.rs",
+  "CLAUDE.md#6",
+]
+falsifiable = true
+
+# ---------------------------------------------------------------------------
+# R5 — 実装器の退役（backlog 197c9fa0）。R1 の後にしか着手できない。
+# ---------------------------------------------------------------------------
+[[requirement]]
+id = "R5-retire-forge-executor"
+statement = """
+specforge の実装器（implement / evidence / agree / merge）を退役させ、実装を
+condukt に一本化する。gather / draft / prompt / ratify は source 側なので残す。
+R1 の出口が存在する前にこれを landing させない。
+"""
+acceptance = [
+  "src/forge/ 配下に `git worktree add` を呼ぶコードが1つも残っていない",
+  "退役した4サブコマンドは削除されているか、非0終了で /flow を指すメッセージを出す（黙って何もしない縮退にしない）",
+  "gather から merge まで1本の spec を通した実行が、backlog と condukt を経由して完了することを1回実演する",
+  "impl-prompt の処遇（context provider として残す / 一緒に消す）が docs/DESIGN-spec-loop.md に明記され、コードがその記述と一致する",
+]
+canon = [
+  "crates/specguard/src/forge/implement.rs",
+  "crates/specguard/src/forge/main.rs",
+  "CLAUDE.md#8",
+]
+falsifiable = true

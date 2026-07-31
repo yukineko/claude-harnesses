@@ -219,5 +219,52 @@ class PremiseTableIsActuallyChecked(unittest.TestCase):
             repo.close()
 
 
+class RealHooksAreExecutableInTheIndex(unittest.TestCase):
+    """This repository's own `.githooks/*` must be committed mode 100755.
+
+    Everything above runs against a throwaway repo, so it says nothing about the
+    hooks this repository actually ships. That gap is not hypothetical: measured
+    2026-07-28, `.githooks/commit-msg` was committed 100644 while every other
+    hook was 100755. Git skips a non-executable hook and says so only as a
+    `hint:` line buried in the commit output, so the commit still succeeded and
+    looked normal. check-test-weakening.py had just been MOVED into that hook
+    from pre-commit; the move therefore did not relocate the gate, it deleted
+    it, and nothing was red.
+
+    The mode is read from the INDEX rather than the working tree because the
+    index is what a fresh clone gets. A local `chmod +x` makes the working tree
+    pass while every other checkout stays unguarded — the failure mode that hides
+    this defect from the person best placed to notice it.
+    """
+
+    def test_every_githook_is_mode_100755(self) -> None:
+        repo_root = Path(__file__).resolve().parent.parent
+        out = subprocess.run(
+            ["git", "ls-files", "-s", "--", ".githooks/"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            out.returncode, 0,
+            "git ls-files failed, so the modes could not be read; a check that "
+            "could not run has not passed:\n%s" % out.stderr,
+        )
+        entries = [ln.split("\t", 1) for ln in out.stdout.splitlines() if ln]
+        self.assertTrue(
+            entries,
+            "git ls-files listed no files under .githooks/ — an empty result "
+            "would make every assertion below pass vacuously",
+        )
+        for meta, path in entries:
+            mode = meta.split()[0]
+            self.assertEqual(
+                mode, "100755",
+                "%s is committed mode %s; git silently SKIPS a hook that is not "
+                "executable, so this gate does not run in any fresh clone. Fix "
+                "with: git update-index --chmod=+x %s" % (path, mode, path),
+            )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

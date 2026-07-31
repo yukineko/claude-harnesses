@@ -188,8 +188,8 @@ autoflow 監査の `crates/autoflow/src/lock.rs:81` と同じ、**grep の見た
 
 | 位置 | 逐語 | なぜ restrictive か |
 |---|---|---|
-| `crates/budgetguard/src/config.rs:189` | `env_bool("BUDGETGUARD_DISABLE").unwrap_or(false)` | `false` は「無効化**されていない**」＝ゲートは**armed のまま**。未設定・不正値でゲートは切れない |
-| `crates/budgetguard/src/gate.rs:285-296` | `record_is_fresh` が `.ok()` 失敗時に `return false` | `false` は「gauge の記録は信用しない」＝**より正確な transcript 再計算へ**フォールバック。過少計上を防ぐ |
+| `crates/budgetguard/src/config.rs:220` | `env_bool("BUDGETGUARD_DISABLE").unwrap_or(false)` | `false` は「無効化**されていない**」＝ゲートは**armed のまま**。未設定・不正値でゲートは切れない |
+| `crates/budgetguard/src/gate.rs:326-337` | `record_is_fresh` が `.ok()` 失敗時に `return false` | `false` は「gauge の記録は信用しない」＝**より正確な transcript 再計算へ**フォールバック。過少計上を防ぐ |
 | `crates/budgetguard/src/gate.rs:92-93` | `Determination::Undetermined(why) => ... undetermined_verdict(cfg, ...)` | 既に三値化済み（先行作業）。session 費用の測定不能は armed な上限に応じて Block/Warn |
 | `crates/budgetguard/src/gate.rs:122-132` | ledger 破損時に**上書きせず** `session_usd` を day total とする | 上書きは当日の累積を消す＝fail open。保存して自セッション分を下限とするのは保守的 |
 | `crates/budgetguard/src/lock.rs:113-114` | `mtime.elapsed().map(...).unwrap_or(false)` / `Err(_) => false` | `false` は「stale ではない」＝**奪わない**。未来 mtime や取得失敗でロックを壊さない |
@@ -203,9 +203,9 @@ autoflow 監査の `crates/autoflow/src/lock.rs:81` と同じ、**grep の見た
 |---|---|---|
 | 設定ファイル不在 | `Known(default)` ＝全上限 0.0 ＝ Allow | `crates/budgetguard/src/config.rs:1-5` の module header。`an_absent_config_is_known_default_not_undetermined` |
 | 全上限 0.0 | 任意の費用で Allow | `zero_threshold_means_disabled` |
-| transcript データ無し | 費用化できるデータが無い。exit 0 | `crates/budgetguard/src/gate.rs:91` `Determination::Known(None) => return None,` と `emit_and_exit` の None 分岐 |
-| hook 入力の空フィールド | exit 0 | `crates/budgetguard/src/main.rs:126`、統合テスト `gate_with_empty_fields_exits_zero` |
-| `stop_hook_active` 再入 | block しない | `crates/budgetguard/src/main.rs:129-133`（再 block で turn を閉じられなくなるのを防ぐ bounded escape） |
+| transcript データ無し | 費用化できるデータが無い。exit 0 | `crates/budgetguard/src/gate.rs:104` `Determination::Known(None) => return None,` と `emit_and_exit` の None 分岐 |
+| hook 入力の空フィールド | exit 0 | `crates/budgetguard/src/main.rs:127`、統合テスト `gate_with_empty_fields_exits_zero` |
+| `stop_hook_active` 再入 | block しない | `crates/budgetguard/src/main.rs:134-136`（再 block で turn を閉じられなくなるのを防ぐ bounded escape） |
 | `BUDGETGUARD_DISABLE=1` | exit 0 | `crates/budgetguard/src/main.rs:109-111`。panic guard の**外側**で評価され、常に到達可能 |
 
 **D と P の違いは「許可するか」ではなく「許可を*決めた*か」である。** D は operator の意図か

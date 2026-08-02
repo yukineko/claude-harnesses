@@ -72,7 +72,11 @@ pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
                     ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
                     detect_bash(c, 0)
                 }
-                None => Decision::Allow,
+                // A Bash call IS in jurisdiction, and the command could not be
+                // read out of it (absent key, non-string value, schema drift).
+                // That is "failed to determine", not "nothing to judge" — see
+                // [`UNREADABLE_OPERAND`].
+                None => unreadable_operand("Bash", "tool_input.command"),
             }
         }
         "Write" => detect_write(tool_input),
@@ -83,8 +87,55 @@ pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
         // and "partial" says nothing about blast radius. Classifying the TARGET
         // is what distinguishes the two.
         "Edit" | "MultiEdit" | "NotebookEdit" => detect_edit(tool_input),
+        // An UNMATCHED TOOL is a different situation and stays a silent Allow:
+        // blastguard claims no jurisdiction over Read/Grep/WebFetch/Task, so
+        // there is genuinely nothing here to judge. Do not fold this arm into
+        // the unreadable-operand case above — turning it into an Ask would
+        // prompt on every read in the session, which is a broken gate, not a
+        // stricter one.
         _ => Decision::Allow,
     }
+}
+
+/// The shared wording for "this call is mine to judge and I could not read its
+/// operand", so [`crate::rule_id`] gives the whole class ONE stable signature.
+///
+/// Deliberately ONE id across Bash/Write/Edit: they are the same recurring
+/// failure — blastguard's idea of the payload schema no longer matches what it
+/// is being sent — and splitting by tool would fragment the very signature that
+/// makes the drift visible when it recurs.
+pub(crate) const UNREADABLE_OPERAND: &str = "blastguard could not read";
+
+/// Verdict for a call blastguard has jurisdiction over whose operand it could
+/// not extract.
+///
+/// # Why `Ask` and not `Allow`
+///
+/// This is the crate's own front door failing the test the crate exists to
+/// enforce. `model.rs:5` names the defect: a two-valued form "forced every
+/// construct blastguard cannot analyse into `Allow`, i.e. 'I don't understand
+/// this' was recorded as 'this is fine'". The 25-odd sub-analysers in this file
+/// were all converted to say `Ask` for constructs they cannot parse — but the
+/// entry points, where the input itself is unreadable, were left binary. An
+/// analyser that refuses to guess about a nested `$(...)` while its front door
+/// waves through a payload it could not parse at all is not fail-closed; it is
+/// fail-closed in the part that was looked at.
+///
+/// # Why `Ask` and not `Deny`
+///
+/// Same reason as [`protected_path_block`]: the unreadability is certain, the
+/// HARM is not. A payload shape blastguard does not recognise is usually a
+/// version skew between the hook and Claude Code, not an attack. `Ask` puts it
+/// to the human when one is present, and `Decision::hardened` collapses it to
+/// `Deny` in every headless/agent context where nobody can answer — so the
+/// autonomous threat model gets the strict answer either way.
+fn unreadable_operand(tool: &str, field: &str) -> Decision {
+    Decision::ask(format!(
+        "{UNREADABLE_OPERAND} the operand of this {tool} call ({field} is \
+         missing, empty, or not a string), so it was never analysed — refusing \
+         to guess. If this recurs, blastguard's payload schema has drifted from \
+         what Claude Code sends and needs updating."
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -550,7 +601,7 @@ fn analyze_uniq(rest: &[&str]) -> Decision {
 fn detect_write(ti: Option<&Value>) -> Decision {
     let path = match extract_path(ti) {
         Some(p) => p,
-        None => return Decision::Allow,
+        None => return unreadable_operand("Write", "file_path"),
     };
     // BEFORE the config-file allowlist, not after: `.claude/**`, `*.toml` and
     // `settings.local.json` are all matched by `is_config_file`, so the
@@ -588,7 +639,7 @@ fn detect_write(ti: Option<&Value>) -> Decision {
 fn detect_edit(ti: Option<&Value>) -> Decision {
     let path = match extract_path(ti) {
         Some(p) => p,
-        None => return Decision::Allow,
+        None => return unreadable_operand("Edit", "file_path/notebook_path"),
     };
     if let Some(deny) = protected_path_block("Edit", &path) {
         return deny;
@@ -5739,14 +5790,152 @@ mod tests {
         .is_deny());
     }
 
+    /// An UNMATCHED tool is allowed — and only an unmatched tool.
+    ///
+    /// This test used to be `missing_or_unknown_input_is_allowed` and asserted
+    /// three things under one name:
+    ///
+    /// ```text
+    /// assert_eq!(detect("Bash", None), Decision::Allow);                  // removed
+    /// assert_eq!(detect("Read", Some(&json!({"file_path":"x"}))), Allow); // kept
+    /// assert_eq!(detect("Write", Some(&json!({}))), Decision::Allow);     // removed
+    /// ```
+    ///
+    /// The middle one is a real specification: `Read` is not a tool blastguard
+    /// judges, so `Allow` is the accurate answer and folding it in would make
+    /// the hook prompt on every file read.
+    ///
+    /// The other two were not a specification. They were the fail-open written
+    /// down AS one: `Bash` and `Write` ARE tools blastguard judges, and both
+    /// payloads are ones whose operand it could not read. Asserting `Allow`
+    /// there fixed "I could not analyse this" as "this is fine" — the exact
+    /// shape CLAUDE.md 2 cites in `assert!(checks_verdict(&[]))`, where a test
+    /// that verified nothing pinned an empty-set fail-open as the contract.
+    /// A test can only ever certify the behaviour it asserts; when the
+    /// behaviour is wrong, the test is a lock on the defect.
+    ///
+    /// Those two cases did not lose coverage — they gained the opposite
+    /// assertion, in `a_bash_call_whose_command_cannot_be_read_is_asked_not_allowed`
+    /// and `a_write_whose_path_cannot_be_read_is_asked_not_allowed` below.
     #[test]
-    fn missing_or_unknown_input_is_allowed() {
-        assert_eq!(detect("Bash", None), Decision::Allow);
+    fn an_unmatched_tool_is_allowed() {
         assert_eq!(
             detect("Read", Some(&json!({ "file_path": "x" }))),
             Decision::Allow
         );
-        assert_eq!(detect("Write", Some(&json!({}))), Decision::Allow);
+        assert_eq!(
+            detect("Grep", Some(&json!({ "pattern": "x" }))),
+            Decision::Allow
+        );
+        assert_eq!(detect("WebFetch", None), Decision::Allow);
+    }
+
+    // ---- entry-boundary: unreadable OPERAND is not "nothing to judge" -------
+    //
+    // The distinction these pin, which `missing_or_unknown_input_is_allowed`
+    // above conflates into one rule:
+    //
+    //   * an UNMATCHED TOOL (Read, Grep, WebFetch) -> Allow is correct.
+    //     blastguard has no jurisdiction; there is genuinely nothing to judge.
+    //   * a MATCHED TOOL whose OPERAND cannot be read -> Allow is a fail-open.
+    //     blastguard has jurisdiction over this call and failed to exercise it.
+    //     That is "I don't understand this" recorded as "this is fine" — the
+    //     defect `model.rs:5` says the third answer exists to prevent, applied
+    //     to this crate's own front door.
+
+    #[test]
+    fn a_bash_call_whose_command_cannot_be_read_is_asked_not_allowed() {
+        // No tool_input at all.
+        assert!(detect("Bash", None).is_ask(), "Bash with no tool_input");
+        // tool_input present but carrying no `command` key.
+        assert!(
+            detect("Bash", Some(&json!({}))).is_ask(),
+            "Bash with no command key"
+        );
+        // `command` present but not a string — schema drift, or a payload
+        // shaped to slip past the `as_str()`.
+        assert!(
+            detect("Bash", Some(&json!({ "command": 123 }))).is_ask(),
+            "Bash with a non-string command"
+        );
+        assert!(
+            detect("Bash", Some(&json!({ "command": ["rm", "-rf", "/"] }))).is_ask(),
+            "Bash with an array command"
+        );
+    }
+
+    #[test]
+    fn a_write_whose_path_cannot_be_read_is_asked_not_allowed() {
+        assert!(detect("Write", None).is_ask(), "Write with no tool_input");
+        assert!(
+            detect("Write", Some(&json!({}))).is_ask(),
+            "Write with no path key"
+        );
+        assert!(
+            detect("Write", Some(&json!({ "file_path": 7 }))).is_ask(),
+            "Write with a non-string path"
+        );
+        // An empty path string is equally unreadable: extract_path already
+        // rejects it, and "" names no file to classify.
+        assert!(
+            detect("Write", Some(&json!({ "file_path": "" }))).is_ask(),
+            "Write with an empty path"
+        );
+    }
+
+    #[test]
+    fn an_edit_whose_path_cannot_be_read_is_asked_not_allowed() {
+        for tool in ["Edit", "MultiEdit", "NotebookEdit"] {
+            assert!(detect(tool, None).is_ask(), "{tool} with no tool_input");
+            assert!(
+                detect(tool, Some(&json!({}))).is_ask(),
+                "{tool} with no path key"
+            );
+        }
+    }
+
+    /// ANTI-VACUITY CONTROL 1 — the DELIBERATE permissive spec.
+    ///
+    /// A tool blastguard does not claim jurisdiction over must stay a silent
+    /// Allow. If the fix above were "Ask whenever anything is missing", this
+    /// would turn every Read and Grep in the session into a prompt, which is
+    /// not a stricter gate but a broken one.
+    #[test]
+    fn an_unmatched_tool_is_still_allowed_even_with_no_input() {
+        for tool in ["Read", "Grep", "Glob", "WebFetch", "Task", "TodoWrite"] {
+            assert_eq!(detect(tool, None), Decision::Allow, "{tool} with no input");
+            assert_eq!(
+                detect(tool, Some(&json!({ "file_path": "x" }))),
+                Decision::Allow,
+                "{tool} with input"
+            );
+        }
+    }
+
+    /// ANTI-VACUITY CONTROL 2 — a READABLE operand still gets its real verdict.
+    ///
+    /// Proves the entry-boundary change did not short-circuit the analyser: an
+    /// ordinary command is still Allow and a destructive one is still Deny, so
+    /// the new Ask cannot be masking a blanket "Ask everything".
+    #[test]
+    fn a_readable_operand_still_reaches_the_real_analysis() {
+        assert_eq!(
+            detect("Bash", Some(&json!({ "command": "ls -la" }))),
+            Decision::Allow
+        );
+        assert!(detect("Bash", Some(&json!({ "command": "rm -rf /" }))).is_deny());
+        assert_eq!(
+            detect(
+                "Write",
+                Some(&json!({ "file_path": "src/x.rs", "content": "fn main() {}" }))
+            ),
+            Decision::Allow
+        );
+        assert!(detect(
+            "Write",
+            Some(&json!({ "file_path": ".git/config", "content": "x" }))
+        )
+        .is_deny());
     }
 
     // ---- UTF-8 boundary safety (regression: multi-byte text must not panic) ----

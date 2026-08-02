@@ -3,11 +3,24 @@
 A Claude Code **PreToolUse** hook that **denies project-destroying operations**
 before they run. It is a single self-contained Rust binary that reads the pending
 tool call from stdin, decides allow/deny/ask with a pure function, and — on
-anything but an allow — emits the PreToolUse JSON. Empty/invalid input and an
-unmatched tool are cases where it determined there is nothing to judge, so it
-stays silent (allow, exit 0). An internal panic during analysis is a different
-case — it is *undetermined*, not *safe* — so it is caught (`catch_unwind`) and
-resolved to a **deny**, never to a silent allow.
+anything but an allow — emits the PreToolUse JSON. **Empty** stdin and an
+**unmatched tool** are cases where it determined there is nothing to judge, so
+it stays silent (allow, exit 0).
+
+Three cases are *undetermined*, not *safe*, and none of them is a silent allow:
+
+| case | resolves to |
+|---|---|
+| an internal panic during analysis | **deny** (`catch_unwind`) |
+| stdin non-empty but unparseable | **ask** → hardened to deny where no human can answer |
+| a matched tool whose operand (`tool_input.command`, `file_path`) is missing or not a string | **ask** → hardened |
+
+Until 2026-08-02 the last two were silent allows, and this paragraph said
+"Empty/invalid input … determined there is nothing to judge" — which described
+the first case correctly and used it to cover the other two. A tool call *was*
+being made and blastguard could not read it; that is the definition of failing
+to determine. See `src/main.rs` for the entry boundary and
+`detect::unreadable_operand` for the per-tool one.
 
 **Subscription-native:** one hook + one bundled binary, no API key.
 

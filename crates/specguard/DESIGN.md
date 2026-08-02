@@ -4,8 +4,9 @@
 各段を specguard で監査して閉じる生成側ハーネスの設計。**
 
 このドキュメントは設計の正典。**②normalize / ③ratify / ④prompt-build / ⑤parallel-impl /
-⑥evidence+agree / ⑦merge は `src/forge/` に実装済み**(`specforge draft|ratify|impl-prompt|
+⑥evidence+agree / ⑦merge は `src/forge/` に実装済み**(`specforge draft|ratify|queue|impl-prompt|
 implement|evidence|agree|merge`)。③⑥ の機械監査は specguard を無改造で呼ぶ前提のまま。
+③ratify は昇格と同時に requirement を backlog へ積む(§5.4)ので、出口は散文ではなくコードにある。
 `specguard`(監査=逆方向)の思想と契約をそのまま継承し、*生成=順方向* を定義する。
 
 ---
@@ -152,6 +153,37 @@ draft spec ──③specguard D2 で機械チェック(沈黙/矛盾/重複が�
 - 機械(D2 監査)は **契約違反**(矛盾・沈黙)だけ弾く。**良し悪し(政策)**の判断は人間が ratify で負う。
   これは specguard の `accept_prompt` が「契約=必須 placeholder は機械、政策=理由は人間」と分けているのと同型。
 - **ratified spec だけが ④prompt 生成・⑤実装の入力になれる**(未昇格なら exit 6 で拒否)。
+
+### 5.4 ratify の出口 — requirement を backlog に積む
+
+`ratify` は spec を昇格させた直後、**requirement 1 件につき backlog item を 1 件起票**する
+(`src/forge/queue.rs`)。これが無いあいだ、ratified spec には**キューへの経路が実装として
+存在せず**、「人間が `backlog add` を手で叩く」という散文だけが handoff だった。specforge が
+source(課題の供給側)であるためには、合意の完了がそのまま実行キューへの投入でなければならない。
+
+- **item の中身**: title は `[<spec id>:<req id>] <statement>`、notes には statement に加えて
+  **acceptance を逐語で** `done_criteria` ブロックとして載せる。condukt の interpreter が
+  statement から再導出せずに済ませるため — 再導出は requirement が黙って牙を失う場所である。
+- **冪等性**: 各 item に `req:<spec id>:<req id>` という identity tag を打ち、起票前に
+  `backlog list --json` の tag 集合と突き合わせる。tag は **2 つの id だけ**から導かれるので、
+  statement を書き換えても item は重複しない。spec id で namespace してあるので、別 spec の
+  同名 requirement(どの spec にもある `R0`)とは衝突しない。
+  `--status` で絞らないのは意図的で、`done` の item も listing に残ること(実測 2026-08-02)を
+  利用して**完了した requirement が再昇格で蘇らない**ようにしている。
+- **判定不能は起票しない**(CLAUDE.md §3): `backlog` が無い / 非ゼロ終了 / listing が
+  parse 不能 のいずれでも、「キューは空」とも「既に積んである」とも決めつけず **exit 9
+  (`EXIT_QUEUE_FAILED`)** で失敗させる。前者は重複を生み、後者は人間が合意した requirement を
+  黙って捨てる。**批准そのものは既に spec ファイルに書かれているので失われない**ため、
+  キューが復帰したら `specforge queue --id <id>` で起票だけをやり直せる。
+  これは散文の約束ではなく**型で強制**されている: subprocess は
+  `harness_core::boundary::run` を通り、stdout は `CommandOutput::stdout_on_success`
+  からしか取り出せない。この accessor は「どの終了コードなら走り切ったとみなすか」を
+  引数で要求するので、「終了コードを見忘れた」が 1 文字の脱落として書けない。
+  `enqueue_with` の戻り値も `Determination<Enqueued>` であり、`unwrap_or` も `ok` も
+  `Default` も存在しない(`require` が唯一の取り出し口)。
+- `specforge queue` は未批准 spec を **exit 6** で拒否する(キューは合意の下流にある)。
+  起票せずに批准だけしたい場合は `ratify --no-queue` と明示する — 黙って積まないのではなく、
+  積まなかったことを出力に残す。
 
 ### 5.1 正典の権威階層と矛盾エスカレーション
 

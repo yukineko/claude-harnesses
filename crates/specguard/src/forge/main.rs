@@ -5,7 +5,9 @@
 //!
 //! This binary drives the generation pipeline end to end:
 //!   ②normalize  → `draft`        (rigor pre-flight G1–G4; sentinel on shortfall)
-//!   ③ratify     → `ratify`       (human consent ceremony, pins canon commit)
+//!   ③ratify     → `ratify`       (human consent ceremony, pins canon commit,
+//!                                  then queues one backlog item per requirement;
+//!                                  `queue` retries that step alone)
 //!   ④prompt     → `impl-prompt`  (render one impl prompt per requirement)
 //!   ⑤impl       → `implement`    (parallel impl agents, one git worktree each)
 //!   ⑥evidence   → `evidence`/`agree`  (typed evidence gate + human agreement)
@@ -27,6 +29,7 @@ mod implement;
 mod ir;
 mod parse;
 mod prompt;
+mod queue;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -40,9 +43,10 @@ const EXIT_OK: u8 = 0;
 const EXIT_USAGE: u8 = 2;
 const EXIT_NO_MARKER: u8 = 3;
 const EXIT_AGENT_FAILED: u8 = 4;
-/// Reserved: a future `implement` refuses an unratified/changed spec (DESIGN.md
-/// §5, §9-3). Defined here so the contract stays disjoint as the pipeline grows.
-#[allow(dead_code)]
+/// The spec is not ratified (or was edited after ratification). `queue` refuses
+/// to hand unratified requirements to the backlog — the queue is downstream of
+/// consent, so an unratified spec must not produce work. Also reserved for a
+/// future `implement` refusing the same (DESIGN.md §5, §9-3).
 const EXIT_UNRATIFIED_SPEC: u8 = 6;
 /// ① gather found no material to ground the topic (DESIGN-INTAKE.md §8): no
 /// bundle is written and `needs_user: yes` is emitted so the human is pulled in
@@ -56,6 +60,17 @@ const EXIT_INTAKE_SHORTFALL: u8 = 7;
 /// specguard's `EXIT_TESTAUDIT_UNDETERMINED=8` cannot-determine (round #7),
 /// carried into the forge intake stage. Disjoint from every value above.
 const EXIT_INTAKE_INCOMPLETE: u8 = 8;
+/// The spec IS ratified but its requirements could NOT be queued: the `backlog`
+/// CLI was missing, exited non-zero, or its listing could not be parsed. The
+/// ratification stands (it is recorded in the spec file); only the handoff
+/// failed, and `specforge queue --id <id>` retries it once the queue is
+/// reachable. Distinct from every value above so a scheduler can tell
+/// "consent refused" (6) from "consent given, handoff broke" (9).
+///
+/// This is NOT a fail-soft: it is loud and non-zero precisely because a ratified
+/// spec whose requirements silently never reached the queue looks exactly like a
+/// spec nobody needed to implement.
+const EXIT_QUEUE_FAILED: u8 = 9;
 
 #[derive(Parser)]
 #[command(
@@ -111,13 +126,32 @@ enum Command {
         #[arg(long)]
         canon: Vec<String>,
     },
-    /// Promote a draft spec to ratified (human consent ceremony, DESIGN.md §5).
+    /// Promote a draft spec to ratified (human consent ceremony, DESIGN.md §5),
+    /// then queue one backlog item per requirement.
     Ratify {
         #[arg(long)]
         id: String,
         /// Why this spec is accepted (recorded in the ratification record).
         #[arg(short = 'm', long = "reason")]
         reason: String,
+        /// Priority for the queued items.
+        #[arg(long, default_value = "p1")]
+        priority: String,
+        /// Ratify WITHOUT queueing the requirements. Opting out is explicit so a
+        /// spec that produced no work says so out loud rather than looking like
+        /// one nobody needed. `specforge queue --id <id>` queues it later.
+        #[arg(long)]
+        no_queue: bool,
+    },
+    /// Queue one backlog item per requirement of a ratified spec. Idempotent —
+    /// re-running adds nothing. `ratify` runs this automatically; this is the
+    /// retry when the queue was unreachable at ratification time.
+    Queue {
+        #[arg(long)]
+        id: String,
+        /// Priority for the queued items.
+        #[arg(long, default_value = "p1")]
+        priority: String,
     },
     /// Clear the sentinel after a human has handled the escalation.
     Ack,
@@ -224,7 +258,13 @@ fn run(cli: &Cli) -> Result<u8> {
             print!("{out}");
             Ok(EXIT_OK)
         }
-        Command::Ratify { id, reason } => ratify(&l, id, reason),
+        Command::Ratify {
+            id,
+            reason,
+            priority,
+            no_queue,
+        } => ratify(&l, id, reason, priority, *no_queue),
+        Command::Queue { id, priority } => queue_cmd(&l, id, priority),
         Command::Ack => ack(&l),
         Command::ImplPrompt { id } => cmd_impl_prompt(&l, id),
         Command::Implement { id } => cmd_implement(&l, id),
@@ -336,8 +376,14 @@ fn draft(l: &Loaded, id: &str, title: &str, req: Option<&Path>, canon: &[String]
     Ok(EXIT_OK)
 }
 
-/// Promote draft → ratified: contract-check, then pin consent (DESIGN.md §5).
-fn ratify(l: &Loaded, id: &str, reason: &str) -> Result<u8> {
+/// Promote draft → ratified: contract-check, then pin consent (DESIGN.md §5),
+/// then hand the requirements to the queue.
+///
+/// The queue step runs AFTER the spec file is written, so a queue failure never
+/// costs the ratification — it is reported as [`EXIT_QUEUE_FAILED`] and retried
+/// with `specforge queue`. The reverse order would make an unreachable queue
+/// silently discard a human's consent ceremony.
+fn ratify(l: &Loaded, id: &str, reason: &str, priority: &str, no_queue: bool) -> Result<u8> {
     if reason.trim().is_empty() {
         anyhow::bail!("批准には理由が必要です (-m \"...\")");
     }
@@ -378,7 +424,65 @@ fn ratify(l: &Loaded, id: &str, reason: &str) -> Result<u8> {
     println!("  canon commit に pin (canon_commit: {head})");
     println!("  理由: {reason}");
     println!("  以後、内容を編集すると fingerprint が変わり再批准が必要 (DESIGN.md §5)。");
-    Ok(EXIT_OK)
+
+    if no_queue {
+        println!(
+            "  --no-queue のため requirement を backlog に積まなかった \
+             (積むには `specforge queue --id {id}`)。"
+        );
+        return Ok(EXIT_OK);
+    }
+    enqueue_and_report(l, &spec, priority, id)
+}
+
+/// Queue a ratified spec's requirements. Shared by `ratify` and `queue` so both
+/// paths report the same counts and resolve failure the same way.
+fn enqueue_and_report(l: &Loaded, spec: &ir::Spec, priority: &str, id: &str) -> Result<u8> {
+    use harness_core::verdict::Determination;
+    let project = l.repo_root.to_string_lossy().to_string();
+    let mut runner = queue::CliRunner;
+    match queue::enqueue_with(spec, &project, priority, &mut runner) {
+        Determination::Known(out) => {
+            println!(
+                "  backlog: {} 件を起票 / {} 件は起票済み (計 {} requirement)",
+                out.queued.len(),
+                out.already.len(),
+                spec.requirements.len()
+            );
+            for rid in &out.queued {
+                println!("    + {id}:{rid}");
+            }
+            Ok(EXIT_OK)
+        }
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "specforge: requirement を backlog に積めなかった: {}",
+                why.as_str()
+            );
+            eprintln!(
+                "  spec は批准済み。キューが復帰したら `specforge queue --id {id}` で再試行する。"
+            );
+            Ok(EXIT_QUEUE_FAILED)
+        }
+    }
+}
+
+/// `queue` — the standalone retry of ratify's handoff.
+fn queue_cmd(l: &Loaded, id: &str, priority: &str) -> Result<u8> {
+    let path = spec_path(l, id);
+    if !path.exists() {
+        anyhow::bail!("spec が無い: {}", path.display());
+    }
+    let spec = ir::Spec::load(&path)?;
+    if spec.spec.status != "ratified" {
+        eprintln!(
+            "specforge: spec {id} は ratified ではない (status: {}) — 起票しない。",
+            spec.spec.status
+        );
+        eprintln!("  キューは合意の下流にある。先に `specforge ratify --id {id} -m \"理由\"`。");
+        return Ok(EXIT_UNRATIFIED_SPEC);
+    }
+    enqueue_and_report(l, &spec, priority, id)
 }
 
 /// Clear the sentinel (idempotent).

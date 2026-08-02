@@ -8,6 +8,7 @@
 use std::sync::OnceLock;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use harness_core::verdict::Determination;
 
 /// Glob patterns whose matches are always allowed (treated as config files).
 const ALLOW_GLOBS: &[&str] = &[
@@ -163,18 +164,75 @@ fn protected_dir_patterns() -> Vec<String> {
     out
 }
 
-fn build_set(patterns: &[&str], case_insensitive: bool) -> GlobSet {
+/// Compile one pattern list into a matcher, or say that it could not be.
+///
+/// The previous body dropped failures on the floor twice — `if let Ok(g) = …`
+/// past a pattern that would not compile, then
+/// `b.build().unwrap_or_else(|_| GlobSet::empty())` past a set that would not
+/// build. Both erasures produce a SMALLER matcher, and a smaller PROTECTED
+/// matcher is a more permissive gate: the paths whose pattern failed to compile
+/// simply stop being protected. "Patterns are compile-time constants; a build
+/// error would be a bug" was the comment that justified it, and it is true — but
+/// a bug that disarms the gate silently is the expensive kind, not the
+/// negligible kind.
+///
+/// Measured (2026-08-02, blastguard 0.2.39): changing `"**/deny.toml"` to
+/// `"**/deny.toml["` — one character, one line — moved `rm -rf
+/// sub/dir/deny.toml` and `rm -rf /abs/path/deny.toml` from `deny` to a SILENT
+/// exit 0, which is an allow. `rm -rf deny.toml` still denied (the un-corrupted
+/// half of the pair), `donegate.toml` and `.claude/settings.json` still denied,
+/// and `crates/foo/Cargo.toml` stayed exempt — so the injection disarmed exactly
+/// the entry it corrupted and nothing else, with no diagnostic on stdout, on
+/// stderr or in the exit code. **All 366 tests in this crate passed in that
+/// state.** Nothing in the crate could tell a fully loaded list from a partially
+/// loaded one.
+///
+/// This is the same defect [`crate::diffrisk::SensitiveConfig::build`] already
+/// names verbatim in its own docstring ("This used to `if let Ok` past a bad
+/// `Glob::new` and `unwrap_or_else(|_| GlobSet::empty())` a bad `build()`"). The
+/// fix landed there and not on this twin — the mirror gap that is this crate's
+/// recurring failure mode.
+///
+/// So no failure is swallowed: either every pattern compiled, or the result is
+/// [`Determination::Undetermined`] naming the offending pattern and list. Each
+/// caller resolves that to ITS OWN restrictive side, which is not the same
+/// direction for every list — see [`glob_set`] versus [`protected_set`].
+///
+/// RESIDUAL, stated rather than glossed: resolving the protected side to `true`
+/// makes EVERY operand look protected, so an uncompilable list denies
+/// everything, not just the entries it lost. That is blunt. The precise answer
+/// would be [`crate::model::Decision::Ask`] ("blastguard could not load its own
+/// protected list") but these predicates return `bool` and feed ~20 call sites
+/// in `detect`, so threading a third value through them is a larger change than
+/// this fix. The bluntness is bounded by
+/// `the_shipped_pattern_lists_load_in_full`, which fails on the commit that
+/// introduces the bad pattern — a shipped build cannot reach the deny-everything
+/// state without that test having been skipped.
+fn build_set(patterns: &[&str], case_insensitive: bool, list: &str) -> Determination<GlobSet> {
     let mut b = GlobSetBuilder::new();
     for pat in patterns {
-        // Patterns are compile-time constants; a build error would be a bug.
-        if let Ok(g) = GlobBuilder::new(pat)
+        match GlobBuilder::new(pat)
             .case_insensitive(case_insensitive)
             .build()
         {
-            b.add(g);
+            Ok(g) => {
+                b.add(g);
+            }
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "blastguard {list}: pattern `{pat}` does not compile ({e}), so the list was \
+                     never fully loaded"
+                ));
+            }
         }
     }
-    b.build().unwrap_or_else(|_| GlobSet::empty())
+    match b.build() {
+        Ok(set) => Determination::Known(set),
+        Err(e) => Determination::undetermined(format!(
+            "blastguard {list}: the pattern set would not build ({e}), so nothing was matched \
+             against it"
+        )),
+    }
 }
 
 /// The allowlist is matched CASE-SENSITIVELY, deliberately.
@@ -185,9 +243,10 @@ fn build_set(patterns: &[&str], case_insensitive: bool) -> GlobSet {
 /// protected set is folded instead (see [`protected_set`]) because folding
 /// *there* denies more. Same filesystem fact, opposite direction — the
 /// asymmetry is the point, not an oversight.
-fn glob_set() -> &'static GlobSet {
-    static SET: OnceLock<GlobSet> = OnceLock::new();
-    SET.get_or_init(|| build_set(ALLOW_GLOBS, false))
+/// Undetermined here resolves to "exempt NOTHING" — see [`is_config_file`].
+fn glob_set() -> &'static Determination<GlobSet> {
+    static SET: OnceLock<Determination<GlobSet>> = OnceLock::new();
+    SET.get_or_init(|| build_set(ALLOW_GLOBS, false, "ALLOW_GLOBS"))
 }
 
 /// The protected set is matched CASE-INSENSITIVELY.
@@ -198,9 +257,12 @@ fn glob_set() -> &'static GlobSet {
 /// letter walked straight past the protected check and back into the
 /// `is_config_file` allowlist. Folding here is the restrictive direction (it can
 /// only ever deny MORE), which is the side "cannot determine" must resolve to.
-fn protected_set() -> &'static GlobSet {
-    static SET: OnceLock<GlobSet> = OnceLock::new();
-    SET.get_or_init(|| build_set(PROTECTED_GLOBS, true))
+/// Undetermined here resolves to "treat EVERYTHING as protected" — see
+/// [`is_protected_path`]. Opposite direction to [`glob_set`], same reason: both
+/// move away from the permissive answer.
+fn protected_set() -> &'static Determination<GlobSet> {
+    static SET: OnceLock<Determination<GlobSet>> = OnceLock::new();
+    SET.get_or_init(|| build_set(PROTECTED_GLOBS, true, "PROTECTED_GLOBS"))
 }
 
 /// Collapse the syntactic no-ops POSIX collapses: strip surrounding quotes,
@@ -350,7 +412,14 @@ pub fn is_config_file(path: &str) -> bool {
     if norm.is_empty() || has_unresolved_parent(&norm) {
         return false;
     }
-    glob_set().is_match(&norm)
+    match glob_set() {
+        Determination::Known(set) => set.is_match(&norm),
+        // The allowlist could not be compiled, so nothing was tested against
+        // it. Exempting on that basis would waive the rules for every path at
+        // once; refusing the exemption only sends paths to the rules, which is
+        // where an unrecognised path already goes.
+        Determination::Undetermined(_) => false,
+    }
 }
 
 /// True when `path` is a gate/hook/policy file whose modification disarms a
@@ -370,12 +439,22 @@ pub fn is_config_file(path: &str) -> bool {
 /// have thrown away (`.claude/hooks/sub/..` matches `.claude/hooks/**` only
 /// before resolution). Checking one alone would trade one hole for another.
 pub fn is_protected_path(path: &str) -> bool {
+    let set = match protected_set() {
+        Determination::Known(set) => set,
+        // The protected list could not be compiled, so NO path was tested
+        // against it. Answering `false` would report "not a gate file" about a
+        // list that was never consulted — the exact conflation this crate's
+        // `Decision::Ask` exists to refuse. Answering `true` over-denies loudly
+        // instead: every operand looks like a gate file until the list is
+        // fixed, and the reason is on the undetermined telemetry stream.
+        Determination::Undetermined(_) => return true,
+    };
     let collapsed = collapse(path);
-    if !collapsed.is_empty() && protected_set().is_match(&collapsed) {
+    if !collapsed.is_empty() && set.is_match(&collapsed) {
         return true;
     }
     let resolved = resolve_parents(&collapsed);
-    !resolved.is_empty() && resolved != collapsed && protected_set().is_match(&resolved)
+    !resolved.is_empty() && resolved != collapsed && set.is_match(&resolved)
 }
 
 /// True when `path` names, or lexically contains, anything protected — the union
@@ -395,12 +474,15 @@ pub fn touches_protected(path: &str) -> bool {
 /// The derived directory set, matched CASE-INSENSITIVELY for the same reason as
 /// [`protected_set`]: folding here can only ever classify MORE paths as
 /// containers of protected files, which is the restrictive direction.
-fn protected_dir_set() -> &'static GlobSet {
-    static SET: OnceLock<GlobSet> = OnceLock::new();
+///
+/// Undetermined resolves to "treat EVERYTHING as a container of protected
+/// paths", for the same reason as [`protected_set`].
+fn protected_dir_set() -> &'static Determination<GlobSet> {
+    static SET: OnceLock<Determination<GlobSet>> = OnceLock::new();
     SET.get_or_init(|| {
         let pats = protected_dir_patterns();
         let refs: Vec<&str> = pats.iter().map(String::as_str).collect();
-        build_set(&refs, true)
+        build_set(&refs, true, "PROTECTED_GLOBS (derived directory prefixes)")
     })
 }
 
@@ -419,11 +501,17 @@ fn protected_dir_set() -> &'static GlobSet {
 /// Matched against both the collapsed and the `..`-resolved spelling for the
 /// same reason as [`is_protected_path`].
 pub fn holds_protected_paths(path: &str) -> bool {
+    let set = match protected_dir_set() {
+        Determination::Known(set) => set,
+        // Same polarity as `is_protected_path`: a list that was never compiled
+        // has not cleared anything.
+        Determination::Undetermined(_) => return true,
+    };
     let collapsed = collapse(path);
     let resolved = resolve_parents(&collapsed);
     for cand in [collapsed.as_str(), resolved.as_str()] {
         let trimmed = cand.trim_end_matches('/');
-        if !trimmed.is_empty() && protected_dir_set().is_match(trimmed) {
+        if !trimmed.is_empty() && set.is_match(trimmed) {
             return true;
         }
     }
@@ -441,6 +529,10 @@ pub fn is_git_internal(path: &str) -> bool {
 }
 
 #[cfg(test)]
+// Same carve-out as `rule_id`'s test module: a test that reaches an arm it is
+// asserting cannot be reached has nothing to return, and `deny(clippy::panic)`
+// is aimed at production verdict paths, not at test failure reporting.
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
 
@@ -556,5 +648,71 @@ mod tests {
         assert!(is_git_internal("worktree/.git/HEAD"));
         assert!(!is_git_internal("src/git.rs"));
         assert!(!is_git_internal("gitignore"));
+    }
+
+    /// A pattern that will not compile must not leave a SMALLER matcher behind.
+    ///
+    /// This is the unit-level statement of the measured defect: the old body
+    /// dropped such a pattern with `if let Ok`, so the returned matcher was a
+    /// list minus one entry and nothing recorded which entry. The assertion is
+    /// on the DETERMINATION rather than on the match result, because "did not
+    /// match" is exactly the answer a partially loaded list gives — the whole
+    /// point is that the two must stop being the same value.
+    #[test]
+    fn a_pattern_that_does_not_compile_yields_undetermined_not_a_smaller_set() {
+        let bad = build_set(&["**/deny.toml[", ".claude/settings.json"], true, "TEST");
+        assert!(matches!(bad, Determination::Undetermined(_)));
+    }
+
+    /// Anti-vacuity control for the test above: the same call shape on a
+    /// well-formed list must still produce a matcher that MATCHES. Without this,
+    /// a `build_set` that returned `Undetermined` unconditionally would pass the
+    /// test above and disarm nothing-in-particular while looking rigorous.
+    #[test]
+    fn a_well_formed_pattern_list_still_builds_and_matches() {
+        match build_set(&["**/deny.toml", ".claude/settings.json"], true, "TEST") {
+            Determination::Known(set) => {
+                assert!(set.is_match("sub/dir/deny.toml"));
+                assert!(set.is_match(".claude/settings.json"));
+                assert!(!set.is_match("crates/foo/Cargo.toml"));
+            }
+            Determination::Undetermined(_) => panic!("a well-formed list must build"),
+        }
+    }
+
+    /// Every pattern this crate ships must actually reach its matcher.
+    ///
+    /// Measured on 0.2.39: corrupting ONE character of `"**/deny.toml"` moved
+    /// `rm -rf sub/dir/deny.toml` from `deny` to a silent allow while all 366
+    /// tests in this crate still passed. Nothing asserted that the lists load in
+    /// full, so nothing could notice one entry going missing. This is that
+    /// assertion — it is about the CONSTANTS, so it fails on the commit that
+    /// introduces a typo rather than on whatever later commit happens to test
+    /// the path that typo unprotected.
+    #[test]
+    fn the_shipped_pattern_lists_load_in_full() {
+        for (name, pats, fold) in [
+            ("ALLOW_GLOBS", ALLOW_GLOBS.to_vec(), false),
+            ("PROTECTED_GLOBS", PROTECTED_GLOBS.to_vec(), true),
+        ] {
+            match build_set(&pats, fold, name) {
+                Determination::Known(set) => assert_eq!(
+                    set.len(),
+                    pats.len(),
+                    "{name}: {} of {} patterns reached the matcher",
+                    set.len(),
+                    pats.len()
+                ),
+                Determination::Undetermined(_) => {
+                    panic!("{name} contains a pattern that does not compile")
+                }
+            }
+        }
+        let derived = protected_dir_patterns();
+        let refs: Vec<&str> = derived.iter().map(String::as_str).collect();
+        match build_set(&refs, true, "derived") {
+            Determination::Known(set) => assert_eq!(set.len(), refs.len()),
+            Determination::Undetermined(_) => panic!("derived directory prefixes do not compile"),
+        }
     }
 }

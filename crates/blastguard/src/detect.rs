@@ -106,6 +106,42 @@ pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
 /// makes the drift visible when it recurs.
 pub(crate) const UNREADABLE_OPERAND: &str = "blastguard could not read";
 
+/// The phrase every `unknown_wrapper_ask` reason carries, so the recursion can
+/// recognise its OWN ask coming back from the tail.
+///
+/// # Why this is a permission list, and what that costs
+///
+/// The safer-looking polarity is the opposite one: forward every nested Ask
+/// except a named few. It was tried first, and it over-blocks. Two measured
+/// false positives killed it:
+///
+///   * `echo $(date 2>&1)` became an Ask. In tail position the analyser reads
+///     `$(date` as a command word and raises the unresolvable-expansion Ask —
+///     a real doubt when an expansion is in COMMAND position, a misread when it
+///     is in ARGUMENT position, and this frame cannot tell which.
+///   * `echo hi` wrapped in 7 quote-only `sh -c` layers became an Ask, via the
+///     depth-exhaustion Ask. `tests/backslash_escape_nesting_fail_open.rs`
+///     pins that as ALLOW, and is right to: blocking there means gating on the
+///     over-escaped SHAPE rather than on any destructive command word.
+///
+/// So the forward set is deliberately the ONE class that is unambiguous: an
+/// unrecognised verb with a destructive line behind it. That is the sentence
+/// this function itself emits, and dropping it was the whole defect.
+///
+/// The cost is stated rather than hidden: every OTHER nested Ask class still
+/// collapses to `Allow` in this frame, including depth exhaustion. That is not
+/// a regression — before this change the recursion tested `.is_deny()` and so
+/// dropped all of them — but it is a KNOWN PERMISSIVE SET, not a cleared one,
+/// and a new Ask class added later will be dropped here silently. Closing it
+/// needs the expansion Ask to distinguish command position from argument
+/// position, which is a different piece of work.
+///
+/// Matching on the reason string is how `rule_id` already classifies decisions
+/// in this crate, so this is the existing idiom rather than a new mechanism, and
+/// `two_unknown_wrappers_are_not_safer_than_one` pins it — a reword that broke
+/// the match fails a test rather than failing open.
+pub(crate) const UNKNOWN_VERB_ASK: &str = "is not a command blastguard recognises";
+
 /// Verdict for a call blastguard has jurisdiction over whose operand it could
 /// not extract.
 ///
@@ -2513,17 +2549,62 @@ fn unknown_wrapper_ask(tokens: &[&str], depth: usize) -> Decision {
     if tail.trim().is_empty() {
         return Decision::Allow;
     }
-    // Only a positively DESTRUCTIVE tail asks. An Ask from the tail is not
-    // propagated: it would already have been reported by whichever construct
-    // produced it if that construct were reachable, and re-reporting it here
-    // would ask about a wrapper we have no evidence executes anything.
-    if detect_bash(&tail, depth + 1).is_deny() {
-        let head = tokens[idx];
-        return Decision::ask(format!(
-            "`{head}` is not a command blastguard recognises, and what follows it parses as a destructive command line — blastguard cannot tell whether `{head}` runs it"
-        ));
+    // A DESTRUCTIVE tail asks — and so does an UNDETERMINED one.
+    //
+    // This used to read `if detect_bash(&tail, depth + 1).is_deny()`, with the
+    // comment: "An Ask from the tail is not propagated: it would already have
+    // been reported by whichever construct produced it if that construct were
+    // reachable." That is a claim about reachability, and it is false.
+    // Measured on 0.2.38, before this change:
+    //
+    //     dlx rm -rf /                   -> ask
+    //     pnpm dlx rm -rf /              -> ALLOW
+    //     cargo run rm -rf /             -> ALLOW
+    //     myrunner myrunner rm -rf /     -> ALLOW
+    //     a b rm -rf /                   -> ALLOW
+    //
+    // Nothing reports the inner Ask, because the only construct that would have
+    // is THIS one, one frame down, and its answer was being discarded here. So
+    // prefixing any unrecognised token defeated the unknown-wrapper rule
+    // outright, and the comment above documented that as deliberate.
+    //
+    // The nested Ask is not a weaker signal than a Deny. It is the same
+    // sentence this function itself emits — "there is a destructive command
+    // line here and I cannot tell whether this verb runs it" — so collapsing it
+    // to Allow converts "could not determine" into "fine" (CLAUDE.md 3),
+    // through the crate's own recursion rather than through a raw IO edge.
+    //
+    // An `Allow` tail is still an Allow: `a b ls` analyses `b ls`, gets Allow,
+    // and stays Allow. Only the undetermined answer propagates, so this widens
+    // what is questioned without widening what is refused.
+    //
+    // NOT every nested Ask propagates, and the first attempt at this fix showed
+    // why. Propagating all of them made `echo $(date 2>&1)` an Ask: the tail
+    // `$(date 2>&1)` raises the UNRESOLVABLE-EXPANSION Ask, because in tail
+    // position the analyser reads `$(date` as a command word. That doubt is
+    // real when an expansion sits in COMMAND position and a misread when it
+    // sits in ARGUMENT position, and this frame cannot tell which — so
+    // forwarding it would ask about ordinary work on the strength of a
+    // distinction not being made.
+    //
+    // A nested ask from THIS SAME RULE propagates; see `UNKNOWN_VERB_ASK` for
+    // why the forward set is that one class and what the other classes still
+    // cost.
+    match detect_bash(&tail, depth + 1) {
+        Decision::Deny(_) => {
+            let head = tokens[idx];
+            Decision::ask(format!(
+                "`{head}` is not a command blastguard recognises, and what follows it parses as a destructive command line — blastguard cannot tell whether `{head}` runs it"
+            ))
+        }
+        Decision::Ask(inner) if inner.contains(UNKNOWN_VERB_ASK) => {
+            let head = tokens[idx];
+            Decision::ask(format!(
+                "`{head}` is not a command blastguard recognises, and neither is what follows it — {inner}"
+            ))
+        }
+        Decision::Ask(_) | Decision::Allow => Decision::Allow,
     }
-    Decision::Allow
 }
 
 fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
@@ -6602,16 +6683,61 @@ mod tests {
         assert_eq!(acc.finish(), Decision::Allow);
     }
 
+    /// Exactly ONE tail is re-analysed per frame — still true, and still the
+    /// thing worth pinning.
+    ///
+    /// This test previously also asserted
+    /// `assert_eq!(bash("just nuke shred secret"), Decision::Allow)`, described
+    /// as "documented narrowness … that case was, and remains, the pre-existing
+    /// Allow", justified by: "Fanning out per position is what made the
+    /// recursion exponential in D4, so widening this needs a bounded design,
+    /// not a one-line change."
+    ///
+    /// The narrowness was real; the ALLOW was not part of it. Two separate
+    /// properties had been welded together:
+    ///
+    ///   * HOW MANY tails are examined (one per frame) — a cost property, and
+    ///     the one the D4 rationale is about.
+    ///   * WHAT IS DONE with the single result — a verdict property, which the
+    ///     cost rationale says nothing about.
+    ///
+    /// Only the second changed. `detect_bash(&tail, depth + 1)` is still called
+    /// exactly once per frame; the unknown-verb Ask is now forwarded instead of
+    /// discarded. Measured on this host, release build, N unknown wrappers in
+    /// front of `rm -rf /`, after the change:
+    ///
+    /// ```text
+    ///   depth   2       90 us -> ask        depth  32      621 us -> ALLOW
+    ///   depth   8      248 us -> ask        depth 128     3666 us -> ALLOW
+    ///   depth  16      354 us -> ALLOW      depth 256     7349 us -> ALLOW
+    /// ```
+    ///
+    /// Cost is linear in depth, so the D4 blow-up does not apply to this change.
+    ///
+    /// The ALLOW from depth 16 on is NOT this change: past the recursion cap the
+    /// tail raises the depth-exhaustion Ask, which this frame does not forward
+    /// (see `UNKNOWN_VERB_ASK` for the two measured false positives that
+    /// forwarding it caused). That class was already collapsing to Allow before
+    /// this change and still is — recorded here so the table is not read as a
+    /// clean bill of health.
+    ///
+    /// What the old assertion cost: `just nuke shred secret` answered Allow, and
+    /// so did `pnpm dlx rm -rf /`, `cargo run rm -rf /` and `a b rm -rf /` —
+    /// while ONE unknown verb in front of the same line correctly Asked.
+    /// Prefixing any second unrecognised token defeated the rule outright. A
+    /// test asserting the Allow made that a specification (CLAUDE.md 2, the
+    /// `assert!(checks_verdict(&[]))` shape).
     #[test]
-    fn the_ask_rule_examines_only_one_tail_by_design() {
-        // Documented narrowness, pinned so it stays a deliberate limit rather
-        // than drifting into an accident: exactly ONE tail is re-analysed, and
-        // only a DENY from it asks. A nested unknown head (`just` → `nuke` →
-        // `shred`) therefore does NOT chain into an ask — that case was, and
-        // remains, the pre-existing Allow. Fanning out per position is what made
-        // the recursion exponential in D4, so widening this needs a bounded
-        // design, not a one-line change.
-        assert_eq!(bash("just nuke shred secret"), Decision::Allow);
+    fn the_ask_rule_examines_only_one_tail_per_frame() {
+        // The nested-unknown-head case now Asks rather than allowing.
+        assert!(bash("just nuke shred secret").is_ask());
+
+        // The narrowness this test exists for: ONE tail per frame, not a
+        // fan-out over every position. `nuke` is examined as the tail of
+        // `just`; `secret` is never treated as a command word of its own, so a
+        // line whose only destructive-looking token sits in a non-tail position
+        // is not dragged in.
+        assert_eq!(bash("just build secret"), Decision::Allow);
     }
 
     #[test]

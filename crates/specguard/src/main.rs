@@ -56,6 +56,12 @@ const EXIT_TESTAUDIT_FINDINGS: u8 = 7;
 /// incomplete scan must fail closed (cannot-determine → RED), never masquerade
 /// as "no skipped tests". Twin doctrine to [`EXIT_AGENT_FAILED`].
 const EXIT_TESTAUDIT_UNDETERMINED: u8 = 8;
+/// `specguard ack` verified the fix but could NOT record the disposition of the
+/// findings the sentinel covered (the overwatch store was unwritable, or its
+/// lock was contended past the deadline). The sentinel is left RAISED: clearing
+/// it would discard the ids and with them the only evidence those findings were
+/// ever closed. Pass `--force` to clear anyway, accepting the lost record.
+const EXIT_DISPOSITION_UNRECORDED: u8 = 9;
 
 #[derive(Parser)]
 #[command(
@@ -114,10 +120,22 @@ enum Command {
     ///
     /// By default, requires at least one new git commit since the sentinel was
     /// raised (proving a fix was made). Use `--force` to bypass that check.
+    ///
+    /// Clearing also records an overwatch disposition for each review finding
+    /// the sentinel covers, so `overwatch review-metrics` can compute a closure
+    /// rate for spec findings.
     Ack {
         /// Skip the "no fix commit found" guard and clear the sentinel anyway.
+        /// Also downgrades an unrecordable disposition from a refusal to a
+        /// warning.
         #[arg(long)]
         force: bool,
+        /// State the disposition explicitly instead of deriving it from the
+        /// fix-commit guard: `confirmed` | `dismissed` | `false-positive`.
+        /// Needed for `false-positive` in particular — "the finding was wrong"
+        /// is a judgement no observable of this command can stand in for.
+        #[arg(long)]
+        verdict: Option<String>,
     },
     /// Scaffold specguard into a repo: starter config + Claude Code SessionStart
     /// hook. Idempotent; existing config kept unless `--force`.
@@ -297,8 +315,8 @@ fn run(cli: &Cli) -> Result<u8> {
     let paths = report::paths(&l.cfg, &l.repo_root, &l.date);
 
     // `ack` only touches the sentinel; no scope/agent work needed.
-    if let Some(Command::Ack { force }) = cli.command {
-        return ack(&paths, &l.repo_root, force);
+    if let Some(Command::Ack { force, verdict }) = &cli.command {
+        return ack(&paths, &l.repo_root, *force, verdict.as_deref());
     }
 
     // `testaudit` scans for tests not being run; no agent work.
@@ -989,7 +1007,11 @@ fn finish(
         // the unfixed drift in the next run's diff so it is re-detected; a human
         // releases it with `specguard ack` once handled.
         let summary = merge_summary(&parsed);
-        report::write_sentinel(paths, &l.date, &report_rel, &summary, &head)?;
+        // Put each flagged shard on the unified review queue and stamp the ids
+        // into the sentinel, so the eventual `ack` can dispose of them by id
+        // instead of clearing an anonymous flag.
+        let covers = emit_drift_findings(&l.repo_root, &report_rel, &parsed);
+        report::write_sentinel(paths, &l.date, &report_rel, &summary, &head, &covers)?;
         println!(
             "specguard: 修正候補あり -> {} (report: {}); baseline は据え置き (ack するまで再検出)",
             paths.sentinel.display(),
@@ -1341,7 +1363,27 @@ fn run_testaudit(repo_root: &std::path::Path, json: bool) -> Result<u8> {
     Ok(EXIT_TESTAUDIT_FINDINGS)
 }
 
-fn ack(paths: &report::Paths, repo_root: &std::path::Path, force: bool) -> Result<u8> {
+/// Clear the sentinel, recording what that clearance resolved.
+///
+/// Order matters: the dispositions are written BEFORE the sentinel file is
+/// removed, and a failure to write them refuses the clearance (`--force`
+/// overrides). Once the sentinel is gone the covered ids are gone with it, so a
+/// clearance that removed the file and then failed to record would destroy the
+/// only evidence the findings were ever closed — the queue would keep showing
+/// them open forever while the human who fixed them has no way to say so again.
+/// An unrecordable disposition is a cannot-determine, and it resolves to
+/// "leave the sentinel raised".
+fn ack(
+    paths: &report::Paths,
+    repo_root: &std::path::Path,
+    force: bool,
+    verdict_override: Option<&str>,
+) -> Result<u8> {
+    // Parsed up front so a typo is rejected before anything is cleared.
+    let verdict_override = match verdict_override {
+        Some(raw) => Some(overwatch::disposition::DispositionVerdict::parse_cli(raw)?),
+        None => None,
+    };
     // If the sentinel exists, check whether a fix commit was made since it was raised.
     if !force && paths.sentinel.exists() {
         let content = match harness_core::boundary::read_to_string(&paths.sentinel) {
@@ -1387,6 +1429,93 @@ fn ack(paths: &report::Paths, repo_root: &std::path::Path, force: bool) -> Resul
                 );
                 eprintln!("  修正をコミットしてから `specguard ack` を実行するか、意図的に解除するなら `specguard ack --force`");
                 return Ok(EXIT_NO_FIX_COMMIT);
+            }
+        }
+    }
+    // Record what this clearance resolves BEFORE removing the file that names
+    // it. See this function's doc comment for why the order is not incidental.
+    let sentinel_content = match harness_core::boundary::read_to_string(&paths.sentinel) {
+        harness_core::verdict::Determination::Known(Some(content)) => Some(content),
+        // No sentinel at all — the remove below reports it; there is nothing to
+        // dispose of and nothing to warn about.
+        harness_core::verdict::Determination::Known(None) => None,
+        // Only reachable under `--force` (the guard above already refuses an
+        // unreadable sentinel otherwise). We cannot name what is being cleared,
+        // and saying nothing would read exactly like a clean clearance.
+        harness_core::verdict::Determination::Undetermined(why) => {
+            eprintln!(
+                "specguard: sentinel ({}) を読めないため covered finding を特定できない ({why})",
+                paths.sentinel.display()
+            );
+            Some(String::new())
+        }
+    };
+    if let Some(content) = sentinel_content {
+        let covered = report::sentinel_covered_ids(&content);
+        if covered.is_empty() {
+            // NOT the same as "nothing needed disposing": an empty `covers` is
+            // also every sentinel raised before the field existed. Said out loud
+            // because a silent clearance here is how the closure rate went
+            // missing in the first place.
+            eprintln!(
+                "specguard: この sentinel は covered finding を記録していない (covers: 行なし) ため disposition を残せない。この 1 件は closure rate の分母にも分子にも入らない"
+            );
+        } else {
+            // Derived from what was actually observed, not from a claim about
+            // the human's intent: reaching here WITHOUT `--force` means the
+            // fix-commit guard above passed, so a fix was committed after the
+            // raise (confirmed). `--force` cleared it with no such commit
+            // verified, which is a review that chose not to act (dismissed).
+            // `--verdict` exists because neither reading can express "the
+            // finding was wrong" — only the human can say that.
+            let verdict = verdict_override.unwrap_or(if force {
+                overwatch::disposition::DispositionVerdict::Dismissed
+            } else {
+                overwatch::disposition::DispositionVerdict::Confirmed
+            });
+            let mut unrecorded: Vec<String> = Vec::new();
+            for id in &covered {
+                let d = overwatch::disposition::Disposition::new(
+                    id.clone(),
+                    verdict,
+                    "specguard-ack".to_string(),
+                    overwatch::store::now(),
+                );
+                match overwatch::store::append_disposition(repo_root, &d) {
+                    Ok(overwatch::store::AppendOutcome::Recorded) => {}
+                    // A contended HARD-SKIP persists NOTHING; treating it as
+                    // success is the phantom-write the AppendOutcome type exists
+                    // to prevent.
+                    Ok(overwatch::store::AppendOutcome::SkippedContended) => {
+                        unrecorded.push(format!("{id} (store lock contended)"))
+                    }
+                    Err(e) => unrecorded.push(format!("{id} ({e})")),
+                }
+            }
+            if !unrecorded.is_empty() {
+                if !force {
+                    eprintln!(
+                        "specguard: disposition を記録できなかったため安全側で ack を拒否 (sentinel は据え置き):"
+                    );
+                    for u in &unrecorded {
+                        eprintln!("  - {u}");
+                    }
+                    eprintln!("  時間をおいて `specguard ack` を再実行するか、記録を諦めて解除するなら `specguard ack --force`");
+                    return Ok(EXIT_DISPOSITION_UNRECORDED);
+                }
+                eprintln!(
+                    "specguard: --force のため sentinel は解除するが、次の disposition は記録できていない:"
+                );
+                for u in &unrecorded {
+                    eprintln!("  - {u}");
+                }
+            } else {
+                println!(
+                    "specguard: disposition {} 件を記録 ({}): {}",
+                    covered.len(),
+                    verdict.label(),
+                    covered.join(", ")
+                );
             }
         }
     }
@@ -1738,6 +1867,80 @@ fn emit_audit_findings(repo_root: &Path, findings: &[auditmap::StructuralFinding
             Some(f.detail.clone()),
         );
     }
+}
+
+/// Record one overwatch review finding per shard that flagged for human review,
+/// and return the ids the sentinel about to be raised covers.
+///
+/// This is the OTHER producer from [`emit_audit_findings`]: that one serves
+/// `specguard audit` (deterministic structural findings, no sentinel), this one
+/// serves the `run`/`ingest` shard audit (agent findings, which is what actually
+/// raises the sentinel). Until this existed the sentinel path recorded no review
+/// finding at all, so `ack` had nothing it could dispose of and the closure rate
+/// for spec findings was not merely unrecorded but undefined.
+///
+/// The returned ids include ones already present in the store. Membership in the
+/// store answers "has this finding been queued before"; the sentinel's `covers`
+/// answers "what does clearing this sentinel resolve" — a finding queued by an
+/// earlier run and still unfixed is covered by today's sentinel too, and
+/// dropping it would under-count exactly the findings that took longest to fix.
+///
+/// A shard whose verdict was INDETERMINATE (`parse::Parsed::indeterminate`) is
+/// recorded under its own kind and outranks a stated drift on severity: a
+/// stated finding is scoped and can be triaged, whereas "the audit ran and could
+/// not say" leaves the extent of the problem unknown, so it cannot be triaged
+/// down. Collapsing the two would also make the queue claim the audit found
+/// drift it never actually found.
+///
+/// Fail-soft on the RECORDING like its sibling — a store that cannot be written
+/// must not change the audit's exit code — but note the ids are returned
+/// regardless, so the sentinel still states what it covers even when the queue
+/// write was lost.
+fn emit_drift_findings(
+    repo_root: &Path,
+    report_rel: &str,
+    parsed: &[(String, parse::Parsed)],
+) -> Vec<String> {
+    // `Err` means the store could not be read, NOT that it is empty — same
+    // reasoning as `emit_audit_findings`: re-appending is visible and harmless,
+    // withholding a finding is neither.
+    let already: std::collections::HashSet<String> =
+        match overwatch::store::read_review_findings(repo_root) {
+            Ok(existing) => existing.into_iter().map(|f| f.finding_id).collect(),
+            Err(_unreadable) => std::collections::HashSet::new(),
+        };
+
+    let mut covers = Vec::new();
+    for (label, p) in parsed {
+        if !p.needs_user {
+            continue;
+        }
+        let (kind, severity) = if p.indeterminate {
+            ("audit-indeterminate", "high")
+        } else {
+            ("spec-drift", "medium")
+        };
+        let finding_id = format!("specguard:{kind}:{label}");
+        covers.push(finding_id.clone());
+        if already.contains(&finding_id) {
+            continue;
+        }
+        let detail = if p.summary.trim().is_empty() {
+            "(要約なし)".to_string()
+        } else {
+            p.summary.trim().to_string()
+        };
+        let _ = overwatch::store::record_finding(
+            repo_root,
+            finding_id,
+            "specguard".to_string(),
+            Some(severity.to_string()),
+            format!("{kind}: {label}"),
+            Some(report_rel.to_string()),
+            Some(detail),
+        );
+    }
+    covers
 }
 
 /// Human-readable dump of the map for `specguard map list`.
@@ -2264,6 +2467,244 @@ mod tests {
         assert!(recorded.is_empty(), "{recorded:?}");
     }
 
+    // -- the sentinel's covered findings, and their disposition on ack --------
+
+    fn shard(
+        label: &str,
+        needs_user: bool,
+        indeterminate: bool,
+        summary: &str,
+    ) -> (String, parse::Parsed) {
+        (
+            label.to_string(),
+            parse::Parsed {
+                report: String::new(),
+                needs_user,
+                summary: summary.to_string(),
+                marker_found: true,
+                indeterminate,
+            },
+        )
+    }
+
+    fn sentinel_paths(repo: &Path) -> report::Paths {
+        report::Paths {
+            report: repo.join("reports/2026-08-01.md"),
+            last_ref: repo.join("reports/.last-ref"),
+            sentinel: repo.join(".specguard-pending"),
+        }
+    }
+
+    #[test]
+    fn emit_drift_findings_queues_each_flagged_shard_and_returns_its_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let parsed = vec![
+            shard("logging", true, false, "doc says X, code does Y"),
+            shard("invariants", false, false, ""),
+            shard("decisions", true, true, ""),
+        ];
+
+        let (covers, recorded) = with_home(tmp.path(), || {
+            let c = emit_drift_findings(&repo, "reports/2026-08-01.md", &parsed);
+            (c, overwatch::store::read_review_findings(&repo).unwrap())
+        });
+
+        assert_eq!(
+            covers,
+            vec![
+                "specguard:spec-drift:logging".to_string(),
+                "specguard:audit-indeterminate:decisions".to_string(),
+            ],
+            "the clean shard must not be covered"
+        );
+        assert_eq!(recorded.len(), 2, "{recorded:?}");
+        // An indeterminate verdict is its own kind and outranks stated drift:
+        // collapsing them would claim the audit found drift it never found.
+        let indet = recorded
+            .iter()
+            .find(|f| f.finding_id.contains("audit-indeterminate"))
+            .unwrap();
+        assert_eq!(indet.severity.as_deref(), Some("high"));
+        let drift = recorded
+            .iter()
+            .find(|f| f.finding_id.contains("spec-drift"))
+            .unwrap();
+        assert_eq!(drift.severity.as_deref(), Some("medium"));
+        assert_eq!(drift.rationale.as_deref(), Some("doc says X, code does Y"));
+        assert_eq!(drift.file.as_deref(), Some("reports/2026-08-01.md"));
+    }
+
+    /// ANTI-VACUITY CONTROL: a run where every shard came back clean must queue
+    /// nothing and cover nothing — otherwise the assertions above would pass for
+    /// an emitter that indiscriminately queues every shard.
+    #[test]
+    fn a_clean_run_covers_nothing_and_queues_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let parsed = vec![shard("logging", false, false, "")];
+        let (covers, recorded) = with_home(tmp.path(), || {
+            let c = emit_drift_findings(&repo, "r.md", &parsed);
+            (
+                c,
+                overwatch::store::read_review_findings(&repo).unwrap_or_default(),
+            )
+        });
+        assert!(covers.is_empty(), "{covers:?}");
+        assert!(recorded.is_empty(), "{recorded:?}");
+    }
+
+    /// A finding queued by an earlier run and still unfixed is covered by
+    /// today's sentinel too. Dropping it because it is already in the store
+    /// would under-count exactly the findings that took longest to close.
+    #[test]
+    fn an_already_queued_finding_is_still_covered_but_not_re_rowed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let parsed = vec![shard("logging", true, false, "drift")];
+        let (second_covers, recorded) = with_home(tmp.path(), || {
+            emit_drift_findings(&repo, "r.md", &parsed);
+            let c = emit_drift_findings(&repo, "r.md", &parsed);
+            (c, overwatch::store::read_review_findings(&repo).unwrap())
+        });
+        assert_eq!(
+            second_covers,
+            vec!["specguard:spec-drift:logging".to_string()]
+        );
+        assert_eq!(recorded.len(), 1, "two runs, one row: {recorded:?}");
+    }
+
+    #[test]
+    fn ack_records_a_confirmed_disposition_for_each_covered_finding() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let paths = sentinel_paths(&repo);
+        let ids = vec![
+            "specguard:spec-drift:logging".to_string(),
+            "specguard:spec-drift:invariants".to_string(),
+        ];
+        // Deliberately no `raised_at`: that keeps the fix-commit guard (which
+        // shells out to git) out of this test while still exercising the
+        // non-`--force` path, which is the one that derives `confirmed`.
+        report::write_sentinel(&paths, "2026-08-01", "r.md", "drift", "", &ids).unwrap();
+
+        let (code, dispositions) = with_home(tmp.path(), || {
+            let c = ack(&paths, &repo, false, None).unwrap();
+            (c, overwatch::store::read_dispositions(&repo).unwrap())
+        });
+
+        assert_eq!(code, EXIT_OK);
+        assert_eq!(dispositions.len(), 2, "{dispositions:?}");
+        for d in &dispositions {
+            assert_eq!(
+                d.verdict,
+                overwatch::disposition::DispositionVerdict::Confirmed
+            );
+            assert_eq!(d.reviewer, "specguard-ack");
+            assert!(ids.contains(&d.finding_id), "{d:?}");
+        }
+        assert!(!paths.sentinel.exists(), "the sentinel is still cleared");
+    }
+
+    /// `--force` cleared the sentinel with no fix commit verified, so the honest
+    /// record is "reviewed, not acted on" — not the same claim as `confirmed`.
+    #[test]
+    fn ack_force_records_a_dismissed_disposition() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let paths = sentinel_paths(&repo);
+        let ids = vec!["specguard:spec-drift:logging".to_string()];
+        report::write_sentinel(&paths, "2026-08-01", "r.md", "drift", "abc123", &ids).unwrap();
+
+        let dispositions = with_home(tmp.path(), || {
+            ack(&paths, &repo, true, None).unwrap();
+            overwatch::store::read_dispositions(&repo).unwrap()
+        });
+        assert_eq!(dispositions.len(), 1);
+        assert_eq!(
+            dispositions[0].verdict,
+            overwatch::disposition::DispositionVerdict::Dismissed
+        );
+    }
+
+    /// No observable of `ack` can stand in for "the finding was wrong", so the
+    /// human's explicit verdict must win over the derived one.
+    #[test]
+    fn an_explicit_verdict_overrides_the_derived_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let paths = sentinel_paths(&repo);
+        let ids = vec!["specguard:spec-drift:logging".to_string()];
+        report::write_sentinel(&paths, "2026-08-01", "r.md", "drift", "", &ids).unwrap();
+
+        let dispositions = with_home(tmp.path(), || {
+            ack(&paths, &repo, false, Some("false-positive")).unwrap();
+            overwatch::store::read_dispositions(&repo).unwrap()
+        });
+        assert_eq!(
+            dispositions[0].verdict,
+            overwatch::disposition::DispositionVerdict::FalsePositive
+        );
+    }
+
+    /// A typo must be rejected BEFORE anything is cleared — a clearance that
+    /// then fails to record is the outcome this whole ordering exists to avoid.
+    #[test]
+    fn an_unknown_verdict_is_rejected_and_leaves_the_sentinel_raised() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let paths = sentinel_paths(&repo);
+        report::write_sentinel(
+            &paths,
+            "2026-08-01",
+            "r.md",
+            "drift",
+            "",
+            &["specguard:spec-drift:logging".to_string()],
+        )
+        .unwrap();
+        let err = with_home(tmp.path(), || ack(&paths, &repo, false, Some("confirm")));
+        assert!(err.is_err(), "expected a rejected verdict");
+        assert!(
+            paths.sentinel.exists(),
+            "nothing may be cleared on a reject"
+        );
+    }
+
+    /// CONTROL for the disposition tests: an old-format sentinel (no `covers:`)
+    /// still clears — refusing every pre-existing sentinel would be a worse
+    /// failure — but it records nothing, and that is what the operator is told.
+    #[test]
+    fn an_old_format_sentinel_clears_without_a_disposition() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let paths = sentinel_paths(&repo);
+        std::fs::write(
+            &paths.sentinel,
+            "date: 2026-06-01\nreport: r.md\nsummary: drift\n",
+        )
+        .unwrap();
+
+        let (code, dispositions) = with_home(tmp.path(), || {
+            let c = ack(&paths, &repo, false, None).unwrap();
+            (
+                c,
+                overwatch::store::read_dispositions(&repo).unwrap_or_default(),
+            )
+        });
+        assert_eq!(code, EXIT_OK);
+        assert!(dispositions.is_empty(), "{dispositions:?}");
+        assert!(!paths.sentinel.exists());
+    }
+
     #[test]
     fn emit_audit_violations_appends_signed_violation_per_finding() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2384,7 +2825,7 @@ mod tests {
     fn ack_no_sentinel_succeeds() {
         let dir = tempfile::tempdir().unwrap();
         let paths = make_paths(dir.path().join("sentinel.txt"));
-        let result = ack(&paths, &repo_root(), false).unwrap();
+        let result = ack(&paths, &repo_root(), false, None).unwrap();
         assert_eq!(result, EXIT_OK);
     }
 
@@ -2396,7 +2837,7 @@ mod tests {
         let head = scope::current_head(&repo_root()).unwrap_or_else(|_| "abc123".to_string());
         std::fs::write(&sentinel, format!("date: 2026-06-26\nraised_at: {head}\n")).unwrap();
         let paths = make_paths(sentinel.clone());
-        let result = ack(&paths, &repo_root(), true).unwrap();
+        let result = ack(&paths, &repo_root(), true, None).unwrap();
         assert_eq!(result, EXIT_OK);
         assert!(!sentinel.exists(), "sentinel should have been removed");
     }
@@ -2408,7 +2849,7 @@ mod tests {
         let head = scope::current_head(&repo_root()).unwrap_or_else(|_| "abc123".to_string());
         std::fs::write(&sentinel, format!("date: 2026-06-26\nraised_at: {head}\n")).unwrap();
         let paths = make_paths(sentinel.clone());
-        let result = ack(&paths, &repo_root(), false).unwrap();
+        let result = ack(&paths, &repo_root(), false, None).unwrap();
         assert_eq!(result, EXIT_NO_FIX_COMMIT);
         assert!(sentinel.exists(), "sentinel should NOT have been removed");
     }
@@ -2428,7 +2869,7 @@ mod tests {
         .unwrap();
         let paths = make_paths(sentinel.clone());
         assert!(scope::current_head(non_git_dir.path()).is_err());
-        let result = ack(&paths, non_git_dir.path(), false).unwrap();
+        let result = ack(&paths, non_git_dir.path(), false, None).unwrap();
         assert_eq!(result, EXIT_NO_FIX_COMMIT);
         assert!(
             sentinel.exists(),
@@ -2447,7 +2888,7 @@ mod tests {
         )
         .unwrap();
         let paths = make_paths(sentinel.clone());
-        let result = ack(&paths, &repo_root(), false).unwrap();
+        let result = ack(&paths, &repo_root(), false, None).unwrap();
         assert_eq!(result, EXIT_OK);
         assert!(!sentinel.exists(), "sentinel should have been removed");
     }
@@ -2463,7 +2904,7 @@ mod tests {
         )
         .unwrap();
         let paths = make_paths(sentinel.clone());
-        let result = ack(&paths, &repo_root(), false).unwrap();
+        let result = ack(&paths, &repo_root(), false, None).unwrap();
         assert_eq!(result, EXIT_OK);
         assert!(!sentinel.exists(), "sentinel should have been removed");
     }
@@ -2495,7 +2936,7 @@ mod tests {
         // exercising the "git recovered" scenario, not the CA-specguard-003
         // (current_head errors during ack) path.
         assert!(scope::current_head(&repo_root()).is_ok());
-        let result = ack(&paths, &repo_root(), false).unwrap();
+        let result = ack(&paths, &repo_root(), false, None).unwrap();
         assert_eq!(result, EXIT_NO_FIX_COMMIT);
         assert!(
             sentinel.exists(),
@@ -2518,7 +2959,7 @@ mod tests {
         )
         .unwrap();
         let paths = make_paths(sentinel.clone());
-        let result = ack(&paths, &repo_root(), true).unwrap();
+        let result = ack(&paths, &repo_root(), true, None).unwrap();
         assert_eq!(result, EXIT_OK);
         assert!(!sentinel.exists(), "sentinel should have been removed");
     }
@@ -2539,7 +2980,7 @@ mod tests {
         std::fs::write(&sentinel, "raised_at: deadbeef\n").unwrap();
         std::fs::set_permissions(&sentinel, std::fs::Permissions::from_mode(0o000)).unwrap();
         let paths = make_paths(sentinel.clone());
-        let result = ack(&paths, &repo_root(), false).unwrap();
+        let result = ack(&paths, &repo_root(), false, None).unwrap();
         // Restore permissions before any assertion/tempdir cleanup so the test
         // never leaks an unreadable file behind it.
         std::fs::set_permissions(&sentinel, std::fs::Permissions::from_mode(0o644)).ok();

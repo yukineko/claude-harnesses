@@ -169,6 +169,7 @@ specguard brief "<task>" --prompt  # ブリーフィングプロンプトのみ�
 specguard pending                  # sentinel があれば fix-offer を出力 (SessionStart hook)
 specguard ack                      # 対応済みの sentinel をクリア (sentinel 後に fix commit が必要)
 specguard ack --force              # fix-commit チェックを飛ばして無条件にクリア
+specguard ack --verdict false-positive  # disposition を明示指定 (confirmed|dismissed|false-positive)
 specguard testaudit                # 実装済みだが実行されていないテストを検出 (findings あれば exit 7)
 specguard testaudit --json         # 同上を機械可読 JSON で出力
 specguard decide "<title>"         # 決定ログ(ADR)を生成
@@ -187,6 +188,18 @@ specguard --config examples/aegis.toml run
 新しい commit が少なくとも 1 つ積まれるまでクリアを拒否する (ドリフトを ack する前に修正が
 実際に commit されていることを保証)。rebase / cherry-pick などで sentinel 発生前に修正が
 入っていた場合は `specguard ack --force` でこのチェックを飛ばす。
+
+`ack` の disposition 記録: sentinel を立てるとき、`needs_user` を返した shard ごとに overwatch の
+review finding (`specguard:spec-drift:<label>` / 判定不能なら `specguard:audit-indeterminate:<label>`)
+を積み、その id を sentinel の `covers:` 行に書く。`ack` はクリアの**前に** id ごとの disposition を
+記録するので、`overwatch review-metrics` が spec finding の **closure rate**（disposition が付いた
+finding ÷ 既知 finding）を出せる。verdict は観測から導く — `--force` 無し（＝ fix-commit ゲートを
+通った）なら `confirmed`、`--force` なら `dismissed`。「finding 自体が誤りだった」はどの観測でも
+代替できないので `--verdict false-positive` で人間が明示する。
+
+記録に失敗したら sentinel は**据え置き**（exit 9）。先にクリアしてしまうと covered id ごと消えて、
+その finding が閉じられた証跡が永久に失われるため。`covers:` を持たない旧形式 sentinel はクリアは
+できるが disposition は残らず、その旨を明示的に出力する（黙って通さない）。
 
 `testaudit` は全 `.rs` ファイルを走査し、(a) `#[ignore]` 付きのテスト、(b) コンパイルされない
 `#[cfg(…)]` ブロック内のテスト、(c) どの親からも `mod` 宣言されていない `#[test]` を含む
@@ -310,6 +323,7 @@ AEGIS の元実装を再現する設定例は `examples/aegis.toml`。
 | 6 | `ack` が sentinel 発生後の修正コミットを見つけられない。`--force` で上書き可 |
 | 7 | `testaudit` が実装済みだが実行されていないテストを検出 |
 | 8 | `testaudit` が判定不能 — 読めないディレクトリ/`.rs` があり走査が不完全。GREEN と偽らず fail closed（不明は RED） |
+| 9 | `ack` が sentinel の covered finding の disposition を記録できなかった（overwatch store が書けない / lock 競合）。sentinel は**据え置き**。`--force` で記録を諦めてクリア可 |
 
 一次情報は `src/main.rs` の `EXIT_*` 定数。エージェント由来の終了コードはそのまま伝播せず、
 常に `4` に集約し各 shard の実コードを stderr に出す。

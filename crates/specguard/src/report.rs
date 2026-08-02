@@ -98,12 +98,22 @@ pub const POISONED_RAISED_AT: &str = "UNRESOLVABLE-HEAD-AT-RAISE";
 /// verify a fix commit was made before clearing the sentinel. If `raised_at`
 /// is [`POISONED_RAISED_AT`] (HEAD could not be resolved when raising), the
 /// sentinel can only ever be cleared with `--force` (see [`has_new_commits`]).
+///
+/// `covers` is the set of `overwatch` review-finding ids this raise surfaced —
+/// the mapping `ack` needs to record a disposition per finding when it clears
+/// the sentinel. Without it a clearance is unattributable: the sentinel is a
+/// single boolean flag, so "a human handled this" could not be joined back to
+/// *which* findings were handled, and the closure rate for spec findings was
+/// not computable at all. Each id is written on its own `covers:` line rather
+/// than as one delimited field because a shard label is user-supplied config
+/// text and may contain any separator we would have picked.
 pub fn write_sentinel(
     paths: &Paths,
     date: &str,
     report_rel: &str,
     summary: &str,
     raised_at: &str,
+    covers: &[String],
 ) -> Result<()> {
     if let Some(dir) = paths.sentinel.parent() {
         std::fs::create_dir_all(dir).ok();
@@ -113,11 +123,34 @@ pub fn write_sentinel(
     } else {
         summary.trim()
     };
-    let body =
+    let mut body =
         format!("date: {date}\nreport: {report_rel}\nsummary: {summary}\nraised_at: {raised_at}\n");
+    for id in covers {
+        let id = id.trim();
+        if !id.is_empty() {
+            body.push_str(&format!("covers: {id}\n"));
+        }
+    }
     std::fs::write(&paths.sentinel, body)
         .with_context(|| format!("writing sentinel {}", paths.sentinel.display()))?;
     Ok(())
+}
+
+/// The review-finding ids a sentinel says it covers (one per `covers:` line).
+///
+/// An EMPTY result is genuinely ambiguous and callers must not read it as
+/// "nothing to dispose": it is equally "this sentinel predates the `covers:`
+/// field" (every sentinel raised before this feature) and "the raise recorded
+/// no findings". [`ack`](crate::main) therefore reports the empty case out loud
+/// instead of clearing silently — a clearance that records nothing while
+/// *looking* like a normal one is exactly how the closure rate went missing.
+pub fn sentinel_covered_ids(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| line.strip_prefix("covers:"))
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect()
 }
 
 /// Extract the `raised_at` commit from a sentinel file's contents.
@@ -193,6 +226,7 @@ mod tests {
             "reports/spec-audit/2026-06-17.md",
             "fix X",
             "abc123",
+            &[],
         )
         .unwrap();
         let s = fs::read_to_string(&p.sentinel).unwrap();
@@ -206,7 +240,7 @@ mod tests {
     fn empty_summary_becomes_placeholder() {
         let tmp = tempfile::tempdir().unwrap();
         let p = paths(&cfg(), tmp.path(), "2026-06-17");
-        write_sentinel(&p, "2026-06-17", "r.md", "   ", "deadbeef").unwrap();
+        write_sentinel(&p, "2026-06-17", "r.md", "   ", "deadbeef", &[]).unwrap();
         assert!(fs::read_to_string(&p.sentinel)
             .unwrap()
             .contains("(要約なし)"));
@@ -216,9 +250,47 @@ mod tests {
     fn sentinel_raised_at_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
         let p = paths(&cfg(), tmp.path(), "2026-06-26");
-        write_sentinel(&p, "2026-06-26", "r.md", "drift", "abc123def").unwrap();
+        write_sentinel(&p, "2026-06-26", "r.md", "drift", "abc123def", &[]).unwrap();
         let s = fs::read_to_string(&p.sentinel).unwrap();
         assert_eq!(sentinel_raised_at(&s), Some("abc123def".to_string()));
+    }
+
+    #[test]
+    fn covered_ids_round_trip_through_the_sentinel_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = paths(&cfg(), tmp.path(), "2026-08-01");
+        let ids = vec![
+            "specguard:spec-drift:logging".to_string(),
+            "specguard:audit-indeterminate:invariants".to_string(),
+        ];
+        write_sentinel(&p, "2026-08-01", "r.md", "drift", "abc123", &ids).unwrap();
+        let s = fs::read_to_string(&p.sentinel).unwrap();
+        assert_eq!(sentinel_covered_ids(&s), ids);
+        // The pre-existing fields must survive the addition unchanged — `ack`
+        // still resolves its fix-commit guard from the same sentinel.
+        assert_eq!(sentinel_raised_at(&s), Some("abc123".to_string()));
+    }
+
+    /// A label carrying the separator we would otherwise have delimited on.
+    /// One id per line is what makes this parse rather than split into two.
+    #[test]
+    fn a_label_containing_a_comma_survives_as_one_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = paths(&cfg(), tmp.path(), "2026-08-01");
+        let ids = vec!["specguard:spec-drift:auth, session".to_string()];
+        write_sentinel(&p, "2026-08-01", "r.md", "drift", "abc123", &ids).unwrap();
+        let s = fs::read_to_string(&p.sentinel).unwrap();
+        assert_eq!(sentinel_covered_ids(&s), ids);
+    }
+
+    /// ANTI-VACUITY CONTROL: the reader must return ids only when the sentinel
+    /// actually has them. An old-format sentinel yields an empty vec, which is
+    /// the ambiguous case `ack` has to report out loud rather than treat as
+    /// "nothing to dispose".
+    #[test]
+    fn an_old_format_sentinel_reports_no_covered_ids() {
+        let old = "date: 2026-06-01\nreport: r.md\nsummary: drift\nraised_at: abc\n";
+        assert!(sentinel_covered_ids(old).is_empty());
     }
 
     #[test]

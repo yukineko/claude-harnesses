@@ -103,6 +103,11 @@ pub fn metrics(json: bool) -> Result<()> {
     let fp_rate = disposition::false_positive_rate(&dispositions);
     let agreement = disposition::agreement_rate(&dispositions);
     let median_latency = disposition::median_latency_secs(&dispositions, &findings);
+    // Closure is measured against the FINDINGS, not the dispositions, so it is
+    // the one figure here that is meaningful when nothing has been dispositioned
+    // at all — that is precisely the "queued and never closed" state.
+    let closure = disposition::closure_rate(&dispositions, &findings);
+    let closure_by_source = disposition::closure_by_source(&dispositions, &findings);
 
     let confirmed = dispositions
         .iter()
@@ -138,13 +143,41 @@ pub fn metrics(json: bool) -> Result<()> {
                     "false_positive": false_positive,
                 },
                 "stale_undisposed_with_fix_commit": stale_undisposed,
+                "closure_rate": closure,
+                "closure_by_source": closure_by_source
+                    .iter()
+                    .map(|(source, (closed, of))| {
+                        (
+                            source.clone(),
+                            serde_json::json!({
+                                "closed": closed,
+                                "total": of,
+                                "rate": if *of == 0 { None } else { Some(*closed as f64 / *of as f64) },
+                            }),
+                        )
+                    })
+                    .collect::<serde_json::Map<String, serde_json::Value>>(),
             }))?
         );
         return Ok(());
     }
 
+    let fmt_closure = |closed: usize, of: usize| {
+        if of == 0 {
+            "n/a".to_string()
+        } else {
+            format!("{:.2} ({closed}/{of})", closed as f64 / of as f64)
+        }
+    };
+
     if total == 0 {
         println!("(no dispositions recorded yet — run overwatch record-disposition)");
+        // Still report closure: "N findings queued, 0 closed" is a measurement,
+        // and suppressing it here would make an entirely unclosed queue look the
+        // same as an empty one.
+        for (source, (closed, of)) in &closure_by_source {
+            println!("  closure [{source}]: {}", fmt_closure(*closed, *of));
+        }
         if stale_undisposed > 0 {
             println!(
                 "  WARNING: {stale_undisposed} finding(s) have a landed fix commit but no disposition yet — run `overwatch reconcile-fixed`"
@@ -170,6 +203,10 @@ pub fn metrics(json: bool) -> Result<()> {
     println!(
         "  by verdict: confirmed={confirmed} dismissed={dismissed} false_positive={false_positive}"
     );
+    println!("  closure rate:           {}", fmt_rate(closure));
+    for (source, (closed, of)) in &closure_by_source {
+        println!("    [{source}]: {}", fmt_closure(*closed, *of));
+    }
     if stale_undisposed > 0 {
         println!(
             "  WARNING: {stale_undisposed} finding(s) have a landed fix commit but no disposition yet — run `overwatch reconcile-fixed`"

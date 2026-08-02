@@ -9,8 +9,12 @@
 /// long items sit unresolved before disposition.
 ///
 /// This module defines the schema (`Disposition`) and PURE metric functions
-/// that compute false-positive rate / agreement rate / median latency from a
-/// disposition ledger joined against the findings store. It mirrors
+/// that compute false-positive rate / agreement rate / median latency /
+/// closure rate from a disposition ledger joined against the findings store.
+/// Closure is the one measured against the FINDINGS rather than the ledger, so
+/// it is defined even when nothing has been dispositioned at all — which is
+/// exactly the state ("queued, never closed") the other three cannot express.
+/// It mirrors
 /// `audit_round.rs`: data + pure computation only, no I/O (see `store.rs` for
 /// the append-only JSONL persistence and `disposition_cli.rs` for the
 /// fail-soft CLI glue).
@@ -127,6 +131,61 @@ pub fn agreement_rate(dispositions: &[Disposition]) -> Option<f64> {
     rate(confirmed, dispositions.len())
 }
 
+/// Closure counts per finding `source`: `source -> (closed, total)`.
+///
+/// A finding is CLOSED when a disposition exists for its `finding_id` — any
+/// verdict, since `dismissed` and `false_positive` are resolutions too. Every
+/// other finding is OPEN. The denominator is the DISTINCT finding ids in
+/// `findings`, and the numerator is computed by INTERSECTION rather than by
+/// counting dispositions: a disposition whose `finding_id` joins to no known
+/// finding (a hand-recorded id, a typo, a finding whose stream was lost) would
+/// otherwise inflate the numerator and could push the rate above 1.0 —
+/// "measured better than perfect", which is how a metric stops being read.
+///
+/// Split by source on purpose. A single fleet-wide number cannot answer "are
+/// THIS producer's findings ever getting closed", which is the question that
+/// went unanswerable while one producer recorded no dispositions at all.
+///
+/// Not to be confused with [`crate::audit_round::closure_rate`], a different
+/// ratio over a different denominator (regression tests per confirmed finding
+/// within one Continuous-Audit round).
+pub fn closure_by_source(
+    dispositions: &[Disposition],
+    findings: &[ReviewFinding],
+) -> std::collections::BTreeMap<String, (usize, usize)> {
+    let disposed: std::collections::HashSet<&str> =
+        dispositions.iter().map(|d| d.finding_id.as_str()).collect();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut out: std::collections::BTreeMap<String, (usize, usize)> =
+        std::collections::BTreeMap::new();
+    for f in findings {
+        // The same finding can appear twice (hot plus archive, or a re-append);
+        // counting it twice would distort both sides of the ratio.
+        if !seen.insert(f.finding_id.as_str()) {
+            continue;
+        }
+        let entry = out.entry(f.source.clone()).or_insert((0, 0));
+        entry.1 += 1;
+        if disposed.contains(f.finding_id.as_str()) {
+            entry.0 += 1;
+        }
+    }
+    out
+}
+
+/// Closure rate = findings with a disposition / all known findings, in `[0,1]`.
+///
+/// `None` when no findings are known at all — undefined, NOT zero. Zero would
+/// read as "nothing is ever closed", which is a damning claim to make about an
+/// empty store; the two must stay distinguishable. See [`closure_by_source`]
+/// for how the numerator avoids counting unjoinable dispositions.
+pub fn closure_rate(dispositions: &[Disposition], findings: &[ReviewFinding]) -> Option<f64> {
+    let by_source = closure_by_source(dispositions, findings);
+    let closed: usize = by_source.values().map(|(c, _)| *c).sum();
+    let total: usize = by_source.values().map(|(_, t)| *t).sum();
+    rate(closed, total)
+}
+
 /// Median latency (seconds) from a finding entering the review queue to its
 /// disposition, across all dispositions that join to a known finding.
 ///
@@ -196,6 +255,84 @@ mod tests {
 
     fn disp(id: &str, verdict: DispositionVerdict, resolved_ts: i64) -> Disposition {
         Disposition::new(id.to_string(), verdict, "alice".to_string(), resolved_ts)
+    }
+
+    fn finding_from(id: &str, source: &str) -> ReviewFinding {
+        ReviewFinding::new(
+            id.to_string(),
+            source.to_string(),
+            None,
+            "s".to_string(),
+            None,
+            None,
+            10,
+        )
+    }
+
+    #[test]
+    fn closure_splits_by_source_and_counts_every_verdict_as_closed() {
+        let findings = vec![
+            finding_from("specguard:spec-drift:a", "specguard"),
+            finding_from("specguard:spec-drift:b", "specguard"),
+            finding_from("rg-1", "reviewgate"),
+        ];
+        // Dismissed and false-positive are resolutions too — a finding a human
+        // reviewed and rejected is closed, not still waiting.
+        let dispositions = vec![
+            disp("specguard:spec-drift:a", DispositionVerdict::Confirmed, 20),
+            disp("rg-1", DispositionVerdict::FalsePositive, 20),
+        ];
+        let by_source = closure_by_source(&dispositions, &findings);
+        assert_eq!(by_source.get("specguard"), Some(&(1, 2)));
+        assert_eq!(by_source.get("reviewgate"), Some(&(1, 1)));
+        assert_eq!(closure_rate(&dispositions, &findings), Some(2.0 / 3.0));
+    }
+
+    /// A disposition that joins to no known finding must not inflate the
+    /// numerator — the rate has to stay inside `[0,1]` or it stops being read.
+    #[test]
+    fn an_unjoinable_disposition_cannot_push_the_rate_above_one() {
+        let findings = vec![finding_from("f-1", "specguard")];
+        let dispositions = vec![
+            disp("f-1", DispositionVerdict::Confirmed, 20),
+            disp("ghost-typo", DispositionVerdict::Confirmed, 20),
+            disp("another-ghost", DispositionVerdict::Dismissed, 20),
+        ];
+        assert_eq!(closure_rate(&dispositions, &findings), Some(1.0));
+    }
+
+    /// The same finding appearing twice (hot plus archive, or a re-append) must
+    /// not be counted twice on either side of the ratio.
+    #[test]
+    fn a_duplicated_finding_row_is_counted_once() {
+        let findings = vec![
+            finding_from("f-1", "specguard"),
+            finding_from("f-1", "specguard"),
+            finding_from("f-2", "specguard"),
+        ];
+        let dispositions = vec![disp("f-1", DispositionVerdict::Confirmed, 20)];
+        assert_eq!(closure_by_source(&dispositions, &findings), {
+            let mut m = std::collections::BTreeMap::new();
+            m.insert("specguard".to_string(), (1, 2));
+            m
+        });
+    }
+
+    /// ANTI-VACUITY CONTROL: no findings at all is UNDEFINED. Kept separate from
+    /// the zero case below so it stays true of a metric that computes nothing —
+    /// it is the assertion that must NOT distinguish a working implementation.
+    #[test]
+    fn closure_of_an_empty_store_is_undefined() {
+        assert_eq!(closure_rate(&[], &[]), None);
+    }
+
+    /// ...whereas findings that exist and were never dispositioned is a real
+    /// 0.0, not `None`. Collapsing the two would hide an entirely unclosed
+    /// queue behind the same "n/a" an empty store prints.
+    #[test]
+    fn findings_with_no_dispositions_are_a_real_zero_not_undefined() {
+        let findings = vec![finding_from("f-1", "specguard")];
+        assert_eq!(closure_rate(&[], &findings), Some(0.0));
     }
 
     #[test]

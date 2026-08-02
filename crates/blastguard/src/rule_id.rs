@@ -31,6 +31,16 @@ allowing it unanalysed. Re-run with a simpler command, or report this.";
 
 /// Classify a deny `reason` string into a stable rule id.
 pub fn rule_id(reason: &str) -> &'static str {
+    // Entry boundary: the call was blastguard's to judge and its operand could
+    // not be read. Its own id, and FIRST, because a recurring one means
+    // something no other signature can say: blastguard's idea of the payload
+    // schema has drifted from what Claude Code actually sends, and every call
+    // of that shape is going unanalysed. That is a fleet-health signal about
+    // the gate itself, not a verdict about any one command — filing it under a
+    // command-shaped id would bury it.
+    if reason.contains(crate::detect::UNREADABLE_OPERAND) {
+        return "unreadable-operand";
+    }
     // Write handling.
     if reason.contains("overwrite git internals") {
         return "write-git-internals";

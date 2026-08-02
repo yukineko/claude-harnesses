@@ -1,6 +1,8 @@
 # blastguard — per-gate verdict-path audit
 
-測定日 2026-08-02 / 測定点 `5b47d3ff`（監査対象は `812d0d95` 以前の 0.2.37）/ blastguard 0.2.37 → 0.2.39
+測定日 2026-08-02 / 測定点 `5b47d3ff`（監査対象は `812d0d95` 以前の 0.2.37）/ blastguard 0.2.37 → 0.2.40
+
+第2ラウンド（§3.3）は測定点 `7245e9d2` / 監査対象 0.2.39。
 
 > **この監査は DoD9 の分子を動かさない。** 完了条件は「未監査の verdict 経路 0本」であり、
 > 本監査の到達点は **196 production サイトのうち機械列挙は完了、分類は部分的**である。
@@ -137,6 +139,63 @@ depth  16      354 us       depth 256     7349 us
 
 線形。D4 の論拠はこの変更には当たらない。
 
+### 3.3 protected glob リストが部分ロードされても無音だった（0.2.40、`exclude.rs`）
+
+**この1件は、前回の監査が「カテゴリとして却下」した側から出た。** §5 の旧版は未分類の残余を
+「主に parser helper の accumulator と sub-predicate」と要約していたが、census が挙げた
+<!-- doc-claim-exempt: 0.2.39 時点の行番号。本コミットで当該行は書き換わっている（それがこの節の主題） -->
+`crates/blastguard/src/exclude.rs:177` の `unwrap_or_else` は**その要約に名前すら現れていなかった**。
+カテゴリでの却下は個別の検証ではない（CLAUDE.md 第6節）。
+
+```rust
+// before
+if let Ok(g) = GlobBuilder::new(pat).case_insensitive(case_insensitive).build() {
+    b.add(g);
+}
+// ...
+b.build().unwrap_or_else(|_| GlobSet::empty())
+```
+
+両方の erasure が**より小さい matcher** を作る。そして PROTECTED 側で小さい matcher とは
+**より permissive なゲート**である — コンパイルに失敗したパターンが指していたパスが、単に
+保護されなくなる。当時のコメントは `// Patterns are compile-time constants; a build error would be a bug.`
+であり、これは**真**だが、「無音でゲートを解除するバグ」は無視してよいバグではない。
+
+**測定値（0.2.39、`"**/deny.toml"` を `"**/deny.toml["` に。1文字・1行）**:
+
+| コマンド | 注入前 | 注入後 |
+|---|---|---|
+| `rm -rf deny.toml` | deny | deny（対の壊していない方） |
+| `rm -rf sub/dir/deny.toml` | deny | **SILENT exit 0 ＝ allow** |
+| `rm -rf /abs/path/deny.toml` | deny | **SILENT exit 0 ＝ allow** |
+| `rm -rf sub/dir/donegate.toml` | deny | deny（対照） |
+| `rm -rf .claude/settings.json` | deny | deny（対照） |
+| `rm -rf crates/foo/Cargo.toml` | allow | allow（アンチ空虚の対照） |
+
+stdout・stderr・exit code のどこにも診断は出ない。そして**この状態で crate のテスト 366 本が
+全て green だった** — リストが全ロードされたか一部だったかを、crate 内の誰も区別できなかった。
+
+**同一の欠陥は `crates/blastguard/src/diffrisk.rs:83` が自分の docstring で逐語的に名指し済み**
+だった（"This used to `if let Ok` past a bad `Glob::new` and `unwrap_or_else(|_| GlobSet::empty())`
+a bad `build()`"）。修正は片方の鏡にだけ着地し、双子は開いたままだった — この crate の
+反復する failure mode（mirror gap）そのもの。
+
+**修正**: `build_set` は `Determination<GlobSet>` を返し、各呼び出し側が**それぞれの制限側**へ解決する:
+
+| 呼び出し側 | Undetermined の解決先 | なぜそれが制限側か |
+|---|---|---|
+| `is_config_file`（ALLOW） | `false` | 免除しない。ルールへ落ちるだけ |
+| `is_protected_path`（PROTECTED） | `true` | 照合していないリストで「ゲートファイルではない」と答えない |
+| `holds_protected_paths`（派生 dir） | `true` | 同上 |
+
+**方向が逆で規範は同一**。同じ注入に対し、修正後は 0 failed ではなく **60 failed** になり、
+`the_shipped_pattern_lists_load_in_full` が問題のリスト名を出して落ちる。
+
+**残余は散文で伏せずに docstring に明記した**: PROTECTED 側を `true` に倒すと、失った項目だけでなく
+**全オペランドが protected に見える**（blanket deny）。正確な答えは `Decision::Ask` だが、これらの
+述語は `bool` を返し `detect` の約20箇所から呼ばれるため、三値化はこの修正より大きい変更になる。
+blanket deny に到達しうるのは上記テストを skip した build だけ、という形で境界を置いた。
+
 ## 4. 棄却した候補（記録する — CLAUDE.md 第6節）
 
 **棄却にも発見と同じ立証責任を課す。** 記録しないと次の読み手が再提起する。
@@ -159,11 +218,16 @@ depth  16      354 us       depth 256     7349 us
   `Risk::Low` + `reversible: true` へ落ちる**。消費側（condukt の gate/policy）ではこれが
   AutoExec 条件そのものなので、「blastguard が解析できなかったコマンド」が人間承認なしで
   実行されうる。**backlog `ed941047`**（policy 判断を含むため本監査では変更しない）。
-- **`detect.rs` の未分類サイト** — census が挙げた約 120 の permissive-or-collapsing terminal の
-  うち、個別に逐語引用つきで分類したのは `Decision` 産出サイトと本文書が挙げたものに留まる。
-  残りは主に parser helper の accumulator 初期化（`let mut out = Vec::new()`）と
-  sub-predicate の `_ => false` であり、**カテゴリとしては verdict 経路ではないと判断したが、
-  個別には検証していない**。これが §冒頭で「分子を動かさない」と書いた理由である。
+- **未分類サイト（この節の旧版は誤っていた）** — census が挙げた約 120 の permissive-or-collapsing
+  terminal のうち、個別に逐語引用つきで分類したのは `Decision` 産出サイトと本文書が挙げたものに留まる。
+  旧版はこの残余を「主に parser helper の accumulator 初期化（`let mut out = Vec::new()`）と
+  sub-predicate の `_ => false`」と要約し、**カテゴリとしては verdict 経路ではない**と却下していた。
+  この要約は**残余の内容を正しく述べていなかった** —
+<!-- doc-claim-exempt: 0.2.39 時点の行番号。本コミットで当該行は書き換わっている（それがこの節の主題） -->
+  残余には `crates/blastguard/src/exclude.rs:177` の
+  `unwrap_or_else(|_| GlobSet::empty())` が含まれており、それは §3.3 の live な fail-open だった。
+  **カテゴリでの却下は個別の検証ではない**（CLAUDE.md 第6節: 棄却にも発見と同じ立証責任）。
+  残る未分類サイトは今も未分類であり、**同じ理由でもう一度カテゴリ却下しない**。
 - **`crates/blastguard/src/detect.rs:527`**
   `fn sort_output_file<'a>(rest: &[&'a str]) -> Option<&'a str> {`
   — `-o` / `--output` が値なしで行末に来ると

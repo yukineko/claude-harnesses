@@ -655,7 +655,7 @@
     {
       "name": "stuckguard",
       "description": "v0.1.25: verdict-monotonicity の proptest を追加した（backlog a7d41587、テストのみ・production の挙動は不変）。永続化されたセッション履歴を truncate / corrupt / empty / chmod 000 しても「詰まっていない」へ倒れないことを性質として固定する。この経路は既に fail-closed（`main::watch` は Undetermined な load を nudge に解決する）なので修正ではなく ratchet であり、将来 `SessionState::default()` を静かに戻す編集をその編集について書かれていないテストが捕まえる。通ること自体は証拠にならないので、fail-closed 側を剥がした版を同一ファイル内に置いて性質が実際に落ちることを示す mutation テストと、4 種の degradation が全て実際に効いていることを確認する coverage テストを併置した（no-op になった degradation が黙って skip され続けるのを防ぐ）。 Stuck-loop detector + escalation for Claude Code: a PostToolUse hook that spots repeated identical actions and edit thrash, then injects an escalating nudge to change approach or ask the user for help. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.25",
+      "version": "0.1.26",
       "category": "quality",
       "keywords": [
         "hooks",

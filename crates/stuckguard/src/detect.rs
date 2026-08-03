@@ -203,8 +203,13 @@ pub struct ProgressAdvisory {
 /// - **state-hash stability**: fraction of the window whose `sig` equals the
 ///   current event's `sig` — high persistence of the identical action/state.
 /// - **error recurrence**: among errored events in the window, the fraction
-///   that share the current event's `failed_test_digest` (0 when the current
-///   event isn't an error, or there's no digest to compare).
+///   that share the current event's `failed_test_digest`. This signal is
+///   **unavailable** (not zero) when the current event carries no digest, and
+///   is then excluded from the mean rather than averaged in as 0.0 — see the
+///   comment at the `score` computation for why treating it as a measurement
+///   made the advisory unreachable for every non-error loop. The
+///   `error_recurrence_signal` FIELD still reports 0.0 in that case, so read
+///   the field as "recurrence contribution", not as "recurrence was measured".
 ///
 /// `progress_score` is the unweighted mean of the three signals actually
 /// available and does not attempt to replace or preempt `detect()` — callers
@@ -229,23 +234,39 @@ pub fn progress_score(window: &[Event], cfg: &Config) -> Option<ProgressAdvisory
     // (c) error recurrence: among errored events, how many share the
     // current event's failed_test_digest. 0.0 when the current event has no
     // digest (not an error, or an error we couldn't fingerprint).
-    let error_recurrence_signal = match &cur.failed_test_digest {
-        Some(digest) => {
-            let errored: Vec<&Event> = window.iter().filter(|e| e.error).collect();
-            if errored.is_empty() {
-                0.0
-            } else {
-                let matching = errored
-                    .iter()
-                    .filter(|e| e.failed_test_digest.as_deref() == Some(digest.as_str()))
-                    .count();
-                matching as f64 / errored.len() as f64
-            }
+    // `None` here is NOT a measured zero — it means the current event carries
+    // no digest, so recurrence could not be evaluated at all. Keeping the two
+    // apart is the whole point: a measured 0.0 (a digest exists and nothing in
+    // the window matches it) is evidence of progress and belongs in the mean,
+    // while "not evaluated" must not be averaged in as if it were.
+    let error_recurrence: Option<f64> = cur.failed_test_digest.as_ref().map(|digest| {
+        let errored: Vec<&Event> = window.iter().filter(|e| e.error).collect();
+        if errored.is_empty() {
+            0.0
+        } else {
+            let matching = errored
+                .iter()
+                .filter(|e| e.failed_test_digest.as_deref() == Some(digest.as_str()))
+                .count();
+            matching as f64 / errored.len() as f64
         }
-        None => 0.0,
-    };
+    });
+    // Reported as 0.0 when unavailable so the struct field keeps its shape for
+    // existing readers; the score below no longer treats that as a measurement.
+    let error_recurrence_signal = error_recurrence.unwrap_or(0.0);
 
-    let score = (diversity_signal + stability_signal + error_recurrence_signal) / 3.0;
+    // "the unweighted mean of the three signals ACTUALLY AVAILABLE" — which is
+    // what this function's docstring has always promised and what the previous
+    // unconditional `/ 3.0` did not do. Dividing by 3 when only two signals
+    // exist caps the score at `(2 - 1/len) / 3`, whose supremum is 2/3 — below
+    // the default `progress_score_threshold` of 0.75. The advisory was
+    // therefore UNREACHABLE for every window whose current event has no error
+    // digest, i.e. every non-error loop: exactly the repeated-Read/Grep/Edit
+    // shape this advisory exists to notice. Silence read as "making progress".
+    let mut signals = vec![diversity_signal, stability_signal];
+    signals.extend(error_recurrence);
+    #[allow(clippy::cast_precision_loss)]
+    let score = signals.iter().sum::<f64>() / signals.len() as f64;
 
     Some(ProgressAdvisory {
         score,
@@ -269,6 +290,80 @@ mod tests {
         let mut e = build(tool, Some(&input), None, true).unwrap();
         e.seq = seq;
         e
+    }
+
+    /// The most stalled window expressible without an error digest: every
+    /// event identical, so diversity and stability are both at their maximum.
+    /// If the advisory cannot fire HERE, it cannot fire at all for any
+    /// non-error loop — which is the loop shape stuckguard exists to catch.
+    #[test]
+    fn an_all_identical_non_error_window_is_scored_as_stalling() {
+        let c = cfg();
+        let cmd = json!({"command": "cargo test"});
+        let w: Vec<Event> = (0..12).map(|i| ev(i, "Bash", cmd.clone())).collect();
+        let adv = progress_score(&w, &c).expect("window is long enough to judge");
+        assert!(
+            adv.error_recurrence_signal == 0.0 && w.last().unwrap().failed_test_digest.is_none(),
+            "fixture precondition: this window must have NO error digest"
+        );
+        assert!(
+            adv.score >= c.progress_score_threshold,
+            "a maximally repetitive non-error window scored {} but the advisory fires at {}; \
+             averaging an UNAVAILABLE third signal in as 0.0 caps the score at ~2/3 and makes \
+             the advisory unreachable for every non-error loop",
+            adv.score,
+            c.progress_score_threshold
+        );
+    }
+
+    /// ANTI-VACUITY CONTROL. A `progress_score` that returned 1.0 — or simply
+    /// dropped the third signal always — would satisfy the test above while
+    /// declaring every window stalled. A genuinely diverse window must stay
+    /// well below the threshold.
+    #[test]
+    fn a_diverse_window_is_not_scored_as_stalling() {
+        let c = cfg();
+        let w: Vec<Event> = (0..12)
+            .map(|i| {
+                ev(
+                    i,
+                    "Bash",
+                    json!({"command": format!("cargo test -p crate{i}")}),
+                )
+            })
+            .collect();
+        let adv = progress_score(&w, &c).expect("window is long enough to judge");
+        assert!(
+            adv.score < c.progress_score_threshold,
+            "a window of 12 distinct actions scored {} (>= threshold {}); the advisory would \
+             fire on healthy, varied work",
+            adv.score,
+            c.progress_score_threshold
+        );
+    }
+
+    /// NON-REGRESSION for the three-signal path: when the current event DOES
+    /// carry a digest the signal is available and must still be averaged in,
+    /// so a recurring error remains a contributor rather than being dropped.
+    #[test]
+    fn a_recurring_error_digest_still_contributes_its_signal() {
+        let c = cfg();
+        let cmd = json!({"command": "cargo test"});
+        let mut w: Vec<Event> = (0..12).map(|i| ev(i, "Bash", cmd.clone())).collect();
+        for e in w.iter_mut() {
+            e.error = true;
+            e.failed_test_digest = Some("same-failure".to_string());
+        }
+        let adv = progress_score(&w, &c).expect("window is long enough to judge");
+        assert_eq!(
+            adv.error_recurrence_signal, 1.0,
+            "every errored event shares the digest, so recurrence is total"
+        );
+        assert!(
+            adv.score >= c.progress_score_threshold,
+            "an all-identical window with a fully recurring error scored {}",
+            adv.score
+        );
     }
 
     #[test]

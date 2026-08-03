@@ -156,16 +156,65 @@ fn failure_reason_class(outcome: &GateOutcome) -> &'static str {
     }
 }
 
-/// Record a fleet-level violation for a FAILed gate, fail-soft: never
-/// changes the gate's exit code or stdout/stderr, and never panics when the
-/// overwatch store is unwritable (e.g. sandboxed/read-only HOME, missing
-/// repo root). A PASS never calls this, so a PASS emits nothing.
+/// Record a fleet-level violation for a FAILed gate, fail-soft: never changes
+/// the gate's exit code or stdout, and never panics when the overwatch store is
+/// unwritable (e.g. sandboxed/read-only HOME, missing repo root). A PASS never
+/// calls this, so a PASS emits nothing.
+///
+/// Fail-soft means the EXIT CODE is unaffected. It does NOT mean the failure is
+/// invisible, and that distinction is the whole point of this wrapper. The
+/// previous version swallowed both failure paths outright — `Err(_) => return`
+/// on the cwd lookup and `let _ = append_violation(..)` on the write — with the
+/// comment "any store I/O failure is swallowed, not surfaced". Per CLAUDE.md §1
+/// a module only earns the no-judgement carve-out when it has no downstream
+/// consumer, or when the gap shows up as an explicit `unknown`. This one has a
+/// consumer and showed nothing:
+///
+/// ```text
+/// append_violation -> violation ledger -> scan_violations
+///   -> detect_recurrence -> filter(is_systemic)
+///     -> review_queue::build_queue -> bridge -> backlog add (p0)
+/// ```
+///
+/// A dropped write lowers the recurrence count, so a genuinely systemic failure
+/// can stay under the threshold and never reach the queue. The READ side is
+/// already careful about this — `bridge.rs` refuses to report an unreadable
+/// ledger as "zero systemic violations" — but no amount of care on the read side
+/// can recover an event that was never written. The reader sees a perfectly
+/// readable ledger and correctly reports zero. That is the mirror gap (§6): the
+/// fix landed on the reader and not on the writer.
+///
+/// So the write still cannot fail the gate, but it can no longer fail in
+/// silence: [`emit_violation_at`] returns why, and this wrapper prints it next
+/// to the FAIL line the gate is already emitting.
 fn emit_violation(outcome: &GateOutcome, outcomes_path: &Path) {
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
-        Err(_) => return,
+        Err(e) => {
+            eprintln!(
+                "  (note: this FAIL was NOT recorded to the fleet violation ledger — \
+                 the working directory could not be resolved: {e}. The gate's verdict \
+                 above stands; only the cross-run recurrence signal was lost.)"
+            );
+            return;
+        }
     };
+    if let Err(why) = emit_violation_at(&cwd, outcome, outcomes_path) {
+        eprintln!(
+            "  (note: this FAIL was NOT recorded to the fleet violation ledger — {why}. \
+             The gate's verdict above stands; only the cross-run recurrence signal was lost.)"
+        );
+    }
+}
 
+/// The testable core of [`emit_violation`], with the working directory injected
+/// rather than read from the process, and the store failure RETURNED rather than
+/// dropped. Returns `Err(reason)` when the event could not be persisted.
+fn emit_violation_at(
+    cwd: &Path,
+    outcome: &GateOutcome,
+    outcomes_path: &Path,
+) -> Result<(), String> {
     let discriminator = failure_reason_class(outcome);
     let raw = overwatch::violation::RawViolation {
         mutation_operator: Some(discriminator),
@@ -186,9 +235,12 @@ fn emit_violation(outcome: &GateOutcome, outcomes_path: &Path) {
         Some(outcome.reason.clone()),
     );
 
-    // Best-effort: any store I/O failure is swallowed, not surfaced.
-    if let Some(event) = event {
-        let _ = overwatch::store::append_violation(&cwd, &event);
+    // `build_event` returning None is not a failure: it means this event has no
+    // bucketable signature, so there is deliberately nothing to record.
+    match event {
+        Some(event) => overwatch::store::append_violation(cwd, &event)
+            .map_err(|e| format!("the overwatch violation store could not be written: {e}")),
+        None => Ok(()),
     }
 }
 
@@ -204,6 +256,94 @@ mod tests {
             passed: false,
             reason: "test".to_string(),
         }
+    }
+
+    // ── The violation write must not fail in SILENCE (audit finding F-1/F-2,
+    //    docs/audit-mutategate-verdict-paths.md §3). The gate's exit code is
+    //    deliberately unaffected; what changed is that a lost record is now
+    //    reported instead of dropped.
+    //
+    //    HOME is process-global, so these two tests serialise on their own lock
+    //    and always restore it. No other test in this crate reads HOME. ──────
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Run `f` with `$HOME` pointed at `home`, restoring the previous value
+    /// afterwards even if `f` panics.
+    fn with_home<T>(home: &Path, f: impl FnOnce() -> T) -> T {
+        let guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        match prev {
+            Some(p) => std::env::set_var("HOME", p),
+            None => std::env::remove_var("HOME"),
+        }
+        drop(guard);
+        match out {
+            Ok(v) => v,
+            Err(p) => std::panic::resume_unwind(p),
+        }
+    }
+
+    #[test]
+    fn an_unwritable_store_is_reported_not_swallowed() {
+        let tmp = tempfile::tempdir().unwrap();
+        // HOME points at a FILE, so the store's `create_dir_all` cannot succeed.
+        let home_file = tmp.path().join("home-is-a-file");
+        std::fs::write(&home_file, b"not a directory").unwrap();
+
+        let err = with_home(&home_file, || {
+            emit_violation_at(
+                tmp.path(),
+                &outcome(Some(0.5)),
+                Path::new("mutants.out/o.json"),
+            )
+        })
+        .expect_err("an unwritable store must be reported, not swallowed");
+
+        assert!(
+            err.contains("could not be written"),
+            "the reason must say what was lost, got: {err}"
+        );
+    }
+
+    /// ANTI-VACUITY CONTROL. Without this, an `emit_violation_at` that returned
+    /// `Err` unconditionally — or that never wrote anything at all — would
+    /// satisfy the test above while recording nothing, ever. A writable store
+    /// must still return `Ok`.
+    #[test]
+    fn a_writable_store_still_records_and_returns_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home_dir = tmp.path().join("home");
+        std::fs::create_dir_all(&home_dir).unwrap();
+
+        // The ledger path is resolved INSIDE the sandbox: `violations_path`
+        // reads $HOME, so computing it after `with_home` returns would point at
+        // the developer's real home and assert against a file this test never
+        // wrote (which is exactly how this test first failed).
+        let (res, ledger) = with_home(&home_dir, || {
+            let res = emit_violation_at(
+                tmp.path(),
+                &outcome(Some(0.5)),
+                Path::new("mutants.out/o.json"),
+            );
+            let ledger = overwatch::store::violations_path(tmp.path()).unwrap();
+            (res, ledger)
+        });
+
+        assert!(res.is_ok(), "a writable store must succeed, got: {res:?}");
+        // And it must actually have written something — an `Ok` that persisted
+        // nothing is the same silence in a different costume.
+        assert!(
+            ledger.exists(),
+            "expected a violation ledger at {}",
+            ledger.display()
+        );
+        assert!(
+            ledger.starts_with(&home_dir),
+            "the test wrote outside its sandbox: {}",
+            ledger.display()
+        );
     }
 
     #[test]

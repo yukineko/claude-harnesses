@@ -154,12 +154,28 @@ fn pass_outcome_appends_no_violation() {
 }
 
 #[test]
-fn exit_code_and_output_unchanged_with_vs_without_emit_on_fail() {
+fn emit_failure_does_not_gate_the_gate_but_is_announced() {
     // "without emit" = a HOME where the overwatch store directory cannot be
     // created (a file sits where the dir needs to go), forcing
-    // append_violation's create_dir_all/write to fail. The gate's exit code
-    // and stdout/stderr must be identical either way — emit is fail-soft and
+    // append_violation's create_dir_all/write to fail. Emit is fail-soft and
     // must not gate the gate.
+    //
+    // CONTRACT CHANGE, deliberate (audit finding F-1/F-2,
+    // docs/audit-mutategate-verdict-paths.md §3). This test previously asserted
+    // that stderr was byte-identical with and without a working store. That
+    // assertion WAS the fail-open: it pinned the property that a lost
+    // fleet-violation record is indistinguishable from a recorded one, and the
+    // violation ledger has downstream consumers (recurrence detection ->
+    // systemic -> backlog p0) that read a short ledger as a low recurrence
+    // count. "never changes stderr" is not what fail-soft has to mean; "never
+    // changes the VERDICT" is.
+    //
+    // So the invariant is re-scoped, not relaxed away — and it gains an
+    // assertion it did not have:
+    //   * exit code                 — still byte-identical (the real invariant)
+    //   * stdout                    — still byte-identical
+    //   * the FAIL line on stderr   — still byte-identical (prefix)
+    //   * NEW: the loss must be ANNOUNCED on stderr when the store is unwritable
     let sb = Sandbox::new("exit-code-stable", SAMPLE_FAIL);
     let baseline = sb.run();
     assert_eq!(baseline.status.code(), Some(1));
@@ -179,9 +195,29 @@ fn exit_code_and_output_unchanged_with_vs_without_emit_on_fail() {
         blocked_out.stdout, baseline.stdout,
         "stdout must be unaffected"
     );
-    assert_eq!(
-        blocked_out.stderr, baseline.stderr,
-        "stderr must be unaffected"
+
+    let base_err = String::from_utf8_lossy(&baseline.stderr).into_owned();
+    let blocked_err = String::from_utf8_lossy(&blocked_out.stderr).into_owned();
+
+    // The verdict itself is reported identically: everything the working-store
+    // run said on stderr is still said, verbatim, and still first.
+    assert!(
+        blocked_err.starts_with(&base_err),
+        "the FAIL verdict must be reported identically.\n  with store: {base_err:?}\n  without:    {blocked_err:?}"
+    );
+
+    // A working store says nothing extra...
+    assert!(
+        !base_err.contains("NOT recorded"),
+        "a successful record must not claim a loss: {base_err:?}"
+    );
+    // ...and a broken one must not stay silent about what it lost.
+    let note = blocked_err
+        .strip_prefix(&base_err)
+        .expect("checked by the starts_with assertion above");
+    assert!(
+        note.contains("NOT recorded to the fleet violation ledger"),
+        "a dropped violation record must be announced, not swallowed; got: {note:?}"
     );
 }
 

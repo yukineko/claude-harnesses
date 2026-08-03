@@ -148,6 +148,26 @@ pub struct Config {
     /// window. Default 0.90. Only meaningful when `auto_compact_enabled` is true.
     /// env: `CTXROT_AUTO_COMPACT_AT_PERCENTAGE`
     pub auto_compact_at_percentage: f64,
+
+    // ---- parent→child Read handoff (`hooks::handoffguard`) ---------------------
+    /// Master switch. When true: `Read`s at/above `handoff_min_bytes` are cached
+    /// per-session, and a later `Task` this SAME session dispatches has its
+    /// prompt enriched with cached content for any resolved path it mentions.
+    /// Never crosses sessions (see `hooks::handoffguard` module docs on scope).
+    pub handoff_enabled: bool,
+    /// A `Read` whose content is at least this many bytes is worth caching (below
+    /// this, re-reading is cheap enough that the cache isn't worth the disk IO).
+    pub handoff_min_bytes: u64,
+    /// Cap on a single cached entry's content (chars), independent of the source
+    /// file's real size — bounds the cache's per-entry footprint.
+    pub handoff_max_entry_bytes: u64,
+    /// Cap on total injected content (chars) for one `Task` dispatch, across all
+    /// matched cached files — bounds how much a single subagent prompt can grow.
+    pub handoff_max_inject_bytes: u64,
+    /// Ring-buffer cap: once the handoff cache file exceeds this many JSONL
+    /// lines (across all sessions), the oldest lines are dropped. 0 disables the
+    /// cap (unbounded growth — not recommended).
+    pub handoff_cache_lines: usize,
 }
 
 /// On-disk form (`~/.ctxrot/config.toml`); every field optional.
@@ -184,6 +204,11 @@ struct FileConfig {
     auto_compact_enabled: Option<bool>,
     auto_compact_at_percentage: Option<f64>,
     toolguard_nudge_cap: Option<u64>,
+    handoff_enabled: Option<bool>,
+    handoff_min_bytes: Option<u64>,
+    handoff_max_entry_bytes: Option<u64>,
+    handoff_max_inject_bytes: Option<u64>,
+    handoff_cache_lines: Option<usize>,
 }
 
 /// The `~/.ctxrot` base directory.
@@ -243,6 +268,11 @@ impl Default for Config {
             auto_distill_on_band: true,
             auto_compact_enabled: false,
             auto_compact_at_percentage: 0.90,
+            handoff_enabled: true,
+            handoff_min_bytes: 20_000,
+            handoff_max_entry_bytes: 200_000,
+            handoff_max_inject_bytes: 200_000,
+            handoff_cache_lines: 50,
         }
     }
 }
@@ -354,6 +384,21 @@ impl Config {
                 if let Some(v) = fc.auto_compact_at_percentage {
                     cfg.auto_compact_at_percentage = v;
                 }
+                if let Some(v) = fc.handoff_enabled {
+                    cfg.handoff_enabled = v;
+                }
+                if let Some(v) = fc.handoff_min_bytes {
+                    cfg.handoff_min_bytes = v;
+                }
+                if let Some(v) = fc.handoff_max_entry_bytes {
+                    cfg.handoff_max_entry_bytes = v;
+                }
+                if let Some(v) = fc.handoff_max_inject_bytes {
+                    cfg.handoff_max_inject_bytes = v;
+                }
+                if let Some(v) = fc.handoff_cache_lines {
+                    cfg.handoff_cache_lines = v;
+                }
             }
         }
 
@@ -410,6 +455,21 @@ impl Config {
             if let Ok(f) = v.trim().parse::<f64>() {
                 cfg.auto_compact_at_percentage = f;
             }
+        }
+        if let Some(v) = env_bool("CTXROT_HANDOFF_ENABLE") {
+            cfg.handoff_enabled = v;
+        }
+        if let Some(v) = env_u64("CTXROT_HANDOFF_MIN_BYTES") {
+            cfg.handoff_min_bytes = v;
+        }
+        if let Some(v) = env_u64("CTXROT_HANDOFF_MAX_ENTRY_BYTES") {
+            cfg.handoff_max_entry_bytes = v;
+        }
+        if let Some(v) = env_u64("CTXROT_HANDOFF_MAX_INJECT_BYTES") {
+            cfg.handoff_max_inject_bytes = v;
+        }
+        if let Some(v) = env_u64("CTXROT_HANDOFF_CACHE_LINES") {
+            cfg.handoff_cache_lines = v as usize;
         }
 
         // bands must be ascending and within (0,1]; sanitize defensively

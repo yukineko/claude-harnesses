@@ -14,9 +14,12 @@
 //!     `analyse` (a panic becomes a deny / a fail-closed placeholder),
 //!     `statusline` renders an explicit `unknown` band instead of a blank bar,
 //!     and the store-reading CLI paths go through `known_or_exit` (exit 1).
-//!   * **pure observability** — `guard` / `rescue` / `restore` / `distill-bg`:
-//!     conditional prose injected into context with no machine consumer, so
-//!     absence is not read as a verdict. These keep `run_hook`'s exit 0.
+//!   * **pure observability** — `guard` / `rescue` / `restore` / `distill-bg` /
+//!     `handoff-record` / `handoff`: conditional prose (or, for the last two, an
+//!     optional `updatedInput` enrichment) with no machine consumer reading
+//!     absence as a verdict — a `Task` that gets no cache splice runs exactly as
+//!     it would if this hook were never installed (see `hooks::handoffguard`
+//!     module docs, "Failure mode"). These keep `run_hook`'s exit 0.
 //!
 //! `bin/ctxrot` (the launcher) applies the same split when no per-platform
 //! binary exists; see its header and README.ja.md "ランチャの分類表".
@@ -61,6 +64,13 @@ enum Command {
     Preguard,
     /// PostToolUse hook: warn on huge tool output.
     Toolguard,
+    /// PostToolUse hook: cache a large `Read`'s content for this session, so a
+    /// `Task` this session later dispatches can reuse it (see
+    /// `hooks::handoffguard`).
+    HandoffRecord,
+    /// PreToolUse hook: splice cached `Read` content into a `Task` prompt when it
+    /// mentions a path this session already read (see `hooks::handoffguard`).
+    Handoff,
     /// Stop hook: block the turn (ask Claude to run /compact) when context
     /// usage exceeds `auto_compact_at_percentage`. Exits 0 immediately when
     /// `stop_hook_active` is true (re-entry guard) or `auto_compact_enabled`
@@ -402,6 +412,40 @@ fn main() {
                 // Only emit JSON when something beyond hookEventName was set.
                 if hook_output.len() > 1 {
                     let out = serde_json::json!({ "hookSpecificOutput": hook_output });
+                    println!("{out}");
+                }
+            }
+        }),
+        Command::HandoffRecord => run_hook(|| {
+            if Config::disabled() {
+                return;
+            }
+            let raw = read_stdin();
+            if let Some(input) = HookInput::parse(&raw) {
+                let cfg = Config::load();
+                // Side-effect only (writes the cache); no hook output either way
+                // — see hooks::handoffguard module docs, "Failure mode".
+                hooks::handoffguard::record(&input, &cfg);
+            }
+        }),
+        Command::Handoff => run_hook(|| {
+            if Config::disabled() {
+                return;
+            }
+            let raw = read_stdin();
+            if let Some(input) = HookInput::parse(&raw) {
+                let cfg = Config::load();
+                // No inner panic barrier needed here: on panic, `run_hook`'s
+                // outer catch already yields "print nothing", which is the
+                // correct default for this hook (the Task simply runs with its
+                // original prompt — see module docs, "Failure mode").
+                if let Some(updated_input) = hooks::handoffguard::run(&input, &cfg) {
+                    let out = serde_json::json!({
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "updatedInput": updated_input,
+                        }
+                    });
                     println!("{out}");
                 }
             }

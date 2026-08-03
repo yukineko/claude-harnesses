@@ -17,13 +17,25 @@
 //! cumulative call-count ceiling. Only a stalled-progress streak reaching
 //! `cfg.stuck_threshold` escalates, and even then it stays VISIBLE (blocks with
 //! an escalation message, worded by autonomy) rather than silently standing
-//! down. An empty pending/open set is the only legitimate stop (→ done/allow).
+//! down. An empty pending/open set is one legitimate stop (→ done/allow); the
+//! other is the user explicitly asking to stop THIS Stop (see below) — every
+//! other path blocks.
 //!
 //! Independently of the above (Tier 2 delegation-record advisory): on every
 //! `record_requested`/`continuing` Stop, if this session's transcript shows
 //! `/flow` drove a condukt run to completion without ever calling
 //! `fugu-router record` for it, block once with a fail-soft nudge (deduped via
 //! `SessionState::delegation_audit_warned`) — see `delegation_audit`.
+//!
+//! Also independently: before any of the above runs, if the user's own most
+//! recent transcript signal (a typed message, or their answer to an
+//! `AskUserQuestion`) was an explicit stop instruction, this Stop is allowed
+//! through untouched — no state transition, no block. This is a per-Stop
+//! escape hatch, not a session-wide latch: it does not set `Phase::Done`, so
+//! if the user resumes ordinary work later in the same session, autoflow's
+//! normal nagging resumes exactly as before. See `stop_intent` for exactly
+//! what counts as an explicit stop and why an absent/ambiguous signal never
+//! triggers it.
 
 mod backlog;
 mod compass;
@@ -33,6 +45,7 @@ mod delegation_audit;
 mod insights;
 mod lock;
 mod state;
+mod stop_intent;
 
 use clap::{Parser, Subcommand};
 use harness_core::hook::{read_stdin, run_hook, HookInput};
@@ -148,6 +161,19 @@ fn stop_run(input: HookInput) {
         // session down; and a liveness answer we could not obtain counts as
         // "active" (see lock::backlog_driver_active).
         if lock::backlog_driver_active(&cwd) {
+            return;
+        }
+
+        // Stand down for THIS Stop only when the user's own most recent
+        // signal (a typed message, or their answer to an AskUserQuestion)
+        // was an explicit stop instruction — see `stop_intent` for exactly
+        // what counts as one and why an undetermined/absent signal never
+        // triggers this. Deliberately NOT latched into `Phase::Done`: an
+        // explicit stop acknowledges *this* Stop, not every future one in
+        // the session, so if the user resumes ordinary work later, autoflow
+        // resumes its normal nagging on backlog/condukt state exactly as
+        // before.
+        if stop_intent::user_requested_stop(&input.transcript_path) {
             return;
         }
         let mut s = state::load(&cfg.state_dir, &session_id);

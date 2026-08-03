@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "autoflow"
-version = "0.1.18"
+version = "0.1.19"
 edition = "2021"
 description = "Session-end auto-flow: record + condukt continuation gate for Claude Code."
 

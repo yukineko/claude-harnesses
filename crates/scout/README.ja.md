@@ -18,6 +18,7 @@ scout はサブスクリプション完結（**skill のみ、バイナリなし
 
 - **抜け漏れのある場当たり監査。** 「何が足りない？」を一回の問いで済ませると、セキュリティ・安全性・CI・テスト・docs といった横断的な観点が網羅されない。scout は固定の 5 レンズに sub-agent を並列展開し、観点の取りこぼしを防ぐ。
 - **証拠のない施策（幻覚）。** 根拠のない「やった方がよさそうなこと」を施策として積むと、backlog がノイズで埋まる。scout はすべての施策に逐語引用・`file:line` 参照・Web ソース URL のいずれかを必須とし、証拠の無い候補は採用しない。
+- **仕様/テストを見ない誤判定。** コードの引用は真でも、それが仕様上意図した挙動やテストで既にカバー済みの挙動であれば「課題」ではない。scout は統合フェーズで各候補を `specguard` の spec-map（仕様↔実装↔テストの索引）に照合し、既に意図的/カバー済みと分かる候補を落とす（specguard 未導入なら fail-soft で従来どおり）。
 - **無秩序な書き込み。** 監査ツールが勝手にファイルを編集したり全件を積んだりすると制御が効かない。scout の書き込みは `backlog add` のみで、施策の確定には `AskUserQuestion`（HOTL）による明示的な合意を必ず挟む。
 - **コストの暴走。** 5 レンズ全開（特に Web を使う L3）は狭いスコープには過剰だ。scout はスコープ規模（追跡ファイル数）に応じてレンズ数を決定論的に縮約し、縮約理由をサマリに明示する（静かな打ち切りはしない）。
 
@@ -41,7 +42,7 @@ compass では拾えない複数の独立した施策が欲しいとき、ある
 | スコープ受領＋縮約 | 監査スコープを取り、規模（追跡ファイル数）に応じてレンズ数を決定論的に縮約（小 → L1/L5、中 → L1/L2/L4/L5、大 → 全 5）。コスト制御。 |
 | 決定論的レビュー | `git log` / `cargo test` / `compass gap` / `backlog list` / `cargo deny` などで事実を read-only 収集し、全 sub-agent に渡す。 |
 | 5 レンズ並列調査 | read-only sub-agent が逐語証拠つきの施策候補（JSON）を返す。 |
-| 統合 | 重複排除・証拠フィルタの後、スコアリングは決定論バイナリ `compass score` に委譲（LLM は候補ごとに `goal_proximity` だけを見積もり、`severity`/`effort`/`lens`/`goal_proximity` を渡してランキングさせる。L2/L5 の重み上げはスコアラー側に内蔵済み）。`compass score` が無い／未対応なら `(severity × goal への近さ) ÷ effort` の手計算にフォールバック。`p0/p1/p2` タグ付与。 |
+| 統合 | 重複排除・証拠フィルタの後、`specguard map list` で候補の touched file を spec-map と照合し、`spec_doc`/`test_files` が既にその挙動を意図的・カバー済みとしていれば候補を落とす（specguard 未導入なら fail-soft で省略）。続けてスコアリングは決定論バイナリ `compass score` に委譲（LLM は候補ごとに `goal_proximity` だけを見積もり、`severity`/`effort`/`lens`/`goal_proximity` を渡してランキングさせる。L2/L5 の重み上げはスコアラー側に内蔵済み）。`compass score` が無い／未対応なら `(severity × goal への近さ) ÷ effort` の手計算にフォールバック。`p0/p1/p2` タグ付与。 |
 | 合意（HOTL） | 既定は `AskUserQuestion`（multiSelect）で backlog に積む施策をユーザーが選ぶ。autonomy ゲート: `condukt state autonomy-check` が autonomous を返したら選別 Ask を省き、スコア上位 N 件（既定 top 8、`p0`/`p1` 優先）を自動採用する。 |
 | 書き出し＋引き渡し | 承認施策を `backlog add`（`--tag scout`、証拠と完了条件を `--notes` に記録）し、`/flow` へ引き渡す。既定は propose-then-confirm、autonomous なら 1 件以上積んだときに `/flow` を自動起動する。 |
 

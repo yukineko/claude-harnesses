@@ -137,7 +137,17 @@ L3 は「他プロジェクトが現にやっている」根拠の URL を必ず
 
 1. **重複排除** — 同じ施策を別レンズが挙げたら 1 件に畳み、`lens` を併記。
 2. **証拠フィルタ** — evidence の無い/弱い候補を落とす。
-3. **スコアリング** — 算術ランキングは自分（LLM）で手計算せず、決定論バイナリ `compass score` に委ねる。
+3. **spec-map 整合チェック** — 生き残った候補ごとに、evidence の `path:line` が指すファイルを
+   `specguard map list --filter <touched-path> --json` で引く（`specguard` 未導入／非 0 終了／
+   `.specguard/spec-map.toml` 未初期化なら **fail-soft でこのステップ全体を省略**し次へ進む —
+   specguard は scout の必須依存ではない）。一致 entry に `spec_doc` があれば Read し、`test_files`
+   があれば該当テストの assertion を確認する。候補が主張する「問題」が `spec_doc` に明記された
+   意図的な挙動、または既存テストが green のままカバーしている挙動と一致するなら、**その候補を落とす**
+   （確信が持てない場合は落とさず `note` に「spec/test 上は意図的の可能性、要確認」と付記して残す）。
+   逆に spec/test と矛盾していれば、evidence に spec_doc の該当箇所も追記して残す。
+   **spec-map に一致 entry が無い場合は候補を落とさず通常どおり残す**（未収録＝「無関係」ではなく
+   「判定材料なし」であり、材料が無いことを却下理由にしない）。
+4. **スコアリング** — 算術ランキングは自分（LLM）で手計算せず、決定論バイナリ `compass score` に委ねる。
    生き残った候補ごとに次を実行し、`goal_proximity` だけを見積もる（残りは自分で計算しない）:
    ```bash
    compass score --severity <candidate.severity> --effort <candidate.effort> \
@@ -152,7 +162,7 @@ L3 は「他プロジェクトが現にやっている」根拠の URL を必ず
    - **fail-soft**: `compass` バイナリが無い／非 0 終了／`score` サブコマンド未対応（旧 compass）の場合は、
      従来どおり自分（LLM）で `(severity × goal への近さ) ÷ effort` を手計算し、
      **セキュリティ(L2)・安全性(L5) は重みを上げる**手動判断にフォールバックする（後方互換・never break a turn）。
-4. **優先度付け** — `p0`(即対応) / `p1`(近いうち) / `p2`(いつか) のタグを付与。
+5. **優先度付け** — `p0`(即対応) / `p1`(近いうち) / `p2`(いつか) のタグを付与。
 
 ### Phase 4 — 合意（AskUserQuestion / HOTL）
 

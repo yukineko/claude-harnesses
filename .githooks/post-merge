@@ -23,4 +23,17 @@ set -u
 parents="$(git rev-parse HEAD^@ 2>/dev/null | grep -c .)" || exit 0
 [ "${parents:-0}" -lt 2 ] && exit 0
 
+# Advisory, fail-soft spec-map refresh. specguard's spec-map
+# (.specguard/spec-map.toml) only stays accurate if `map sync` runs after each
+# merge (crates/specguard/README.ja.md "spec-map を新鮮に保つ"); this repo
+# left that opt-in cron/hook fragment uncopied, so the map (and anything that
+# scores candidates against it, e.g. scout Phase 3) silently went stale as
+# tests/impl changed. This step is best-effort and never affects this hook's
+# exit code or the exec below — a failed/absent sync just leaves the map
+# stale until the next merge or a manual `specguard map sync`.
+if command -v specguard >/dev/null 2>&1; then
+  mkdir -p "$HOME/.specguard" 2>/dev/null || true
+  specguard map sync >>"$HOME/.specguard/map-sync.log" 2>&1 || true
+fi
+
 exec "$(dirname "$0")/post-commit"

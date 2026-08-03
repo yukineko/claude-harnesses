@@ -1,0 +1,16 @@
+# Force LF for scripts that are exec'd directly via their shebang line.
+# A CRLF shebang (`#!/bin/sh\r`) is read as an interpreter path literally
+# ending in \r, which does not exist, so exec fails outright — this is not a
+# style preference, it is the difference between a hook running and not
+# running at all.
+#
+# Measured (2026-08-03): with core.autocrlf=true (a common Windows git
+# default/installer default) and no .gitattributes, a checkout of this repo
+# converts .githooks/* to CRLF on disk even though the committed blobs are
+# LF-only. Every `git commit` then fails with
+# "fatal: cannot exec '.githooks/pre-commit': No such file or directory"
+# under strict POSIX exec (confirmed on WSL2); the gate does not silently
+# allow the commit through — it blocks all commits outright, so this is a
+# total-breakage bug, not a fail-open.
+.githooks/* text eol=lf
+*.sh text eol=lf

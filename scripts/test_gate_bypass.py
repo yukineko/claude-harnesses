@@ -65,15 +65,23 @@ HOOKS = (
     "pre-merge-commit",
     "post-merge",
     "pre-push",
+    "commit-msg",
 )
 
 SCANNERS = [
     "check-prompt-injection.py",
     "check-fail-open.py",
     "check-doc-claims.py",
-    "check-test-weakening.py",
+    "check-claudemd-claims.py",
     "check-plugin-versions.py",
     "check-version-bumped.py",
+    "check-hardcoded-secret.py",
+    "check-raw-io-ratchet.py",
+    "check-worktree-isolation.py",
+    # check-test-weakening.py runs last: it fires from .githooks/commit-msg,
+    # which git invokes only after pre-commit (and every scanner above) has
+    # already succeeded — see commit-msg's own header for why it moved there.
+    "check-test-weakening.py",
 ]
 
 # A stub scanner: records that it ran, then exits with the code baked in here.
@@ -86,6 +94,20 @@ if log:
     with open(log, "a") as fh:
         fh.write({name!r} + "\\n")
 sys.exit({code})
+"""
+
+# main-tree-guard (.githooks/pre-commit, CLAUDE.md #8) shells out to a real
+# `condukt guard main-tree` and blocks (exit 1) if it can't find one — this
+# harness never built/vendored the condukt binary, so every seed commit in
+# every test used to fail here before pre-commit ever reached the scanners
+# above. The guard's own documented pass condition is "... or when no peer
+# session is reported"; a throwaway single-process temp repo never has a peer
+# session, so a stub that always exits 0 is not loosening the gate, it is the
+# correct verdict for this harness's repos. Real main-tree-guard behavior is
+# unit-tested separately in crates/condukt/src/maintree.rs.
+_CONDUKT_STUB = """#!/usr/bin/env python3
+import sys
+sys.exit(0)
 """
 
 
@@ -141,6 +163,11 @@ class GateHarness:
             shutil.copy2(_SCRIPTS_DIR / "gate-bypass.py", scripts / "gate-bypass.py")
         for scanner in SCANNERS:
             self.set_stub(scanner, 0)
+
+        condukt_stub = scripts / "condukt-stub"
+        condukt_stub.write_text(_CONDUKT_STUB)
+        condukt_stub.chmod(0o755)
+        self.env["CONDUKT_BIN"] = str(condukt_stub)
 
         self.git("config", "core.hooksPath", ".githooks")
         self.git("config", "commit.gpgsign", "false")
@@ -1761,34 +1788,31 @@ class KnownDefectsDenyNoVerify(DenyNoVerify):
     SCRIPT = Path(os.environ.get("DENY_HOOK_UNDER_TEST",
                                  str(_SCRIPTS_DIR / "deny-no-verify.py")))
 
-    def test_DEFECT_REGRESSION_gpg_sign_swallows_the_bypass_flag(self):
-        """DEFECT (severity: HIGH — a REGRESSION introduced by 2cf0caea, the
+    def test_gpg_sign_does_not_swallow_the_bypass_flag(self):
+        """Fixed (was a HIGH-severity REGRESSION introduced by 2cf0caea, the
         commit that fixed the previous round's findings).
 
-        `OPTS_WITH_VALUE` is skipped with a blanket `k += 2`, on the assumption
-        that every option in it takes its value as a SEPARATE token.  Two do
-        not.  From git's own help:
+        `OPTS_WITH_VALUE` used to be skipped with a blanket `k += 2`, on the
+        assumption that every option in it takes its value as a SEPARATE
+        token. Two did not. From git's own help:
 
             -S, --gpg-sign[=<key-id>]
 
         The value is OPTIONAL and ATTACHED (`-S<keyid>`, `--gpg-sign=<keyid>`);
-        git never consumes the following token.  The hook does, so whatever
-        comes next is swallowed — including the bypass flag:
+        git never consumes the following token. The hook used to, so whatever
+        came next was swallowed — including the bypass flag:
 
-            git commit -S --no-verify -m ok   -> hook exit 0
-            git commit -S -n -m ok            -> hook exit 0
-            git commit --gpg-sign -n -m ok    -> hook exit 0
+            git commit -S --no-verify -m ok   -> hook exit 0 (bypass allowed)
+            git commit -S -n -m ok            -> hook exit 0 (bypass allowed)
+            git commit --gpg-sign -n -m ok    -> hook exit 0 (bypass allowed)
 
-        Confirmed against real git with a stand-in `gpg.program`: all three
-        COMMITTED with exit 0 and the pre-commit hook never ran.  Bisected
-        across all four versions of this file — refused by the original, by
-        365941f8 and by 5453b4bc; allowed only from 2cf0caea.
-
-        Suggested fix: `-S`/`--gpg-sign` must not be in OPTS_WITH_VALUE, since
-        an attached value needs no skip.  The general rule is that only options
-        whose value is a mandatory SEPARATE token may be skipped; an optional or
-        attached value must not consume the next token.  Not implemented here —
-        the verifier does not certify their own repair.
+        `-S`/`--gpg-sign` are no longer in `scripts/deny-no-verify.py`'s
+        OPTS_WITH_VALUE (see that file's comment above the tuple, which
+        documents this exact history) — an attached-value option needs no
+        skip, so the hook now sees the bypass flag normally and denies. This
+        test used to assert the pre-fix (bypass-allowed) behavior verbatim;
+        inverted here, per its own prior docstring ("When fixed this must
+        become assertDenied"), now that the fix has landed.
         """
         for command in (
             "git commit -S --no-verify -m ok",
@@ -1797,15 +1821,10 @@ class KnownDefectsDenyNoVerify(DenyNoVerify):
             "git commit -m ok -S -n",
         ):
             with self.subTest(command=command):
-                proc = self.bash(command)
-                self.assertEqual(
-                    proc.returncode,
-                    0,
-                    "DEFECT PINNED: %r is a real bypass and is allowed. When "
-                    "fixed this must become assertDenied." % command,
-                )
+                self.assertDenied(command)
         # The boundary: an option whose value really IS a separate token must
-        # still be skipped, so a fix cannot be claimed by deleting the skip.
+        # still be skipped, so the fix above did not overreach into denying
+        # ordinary uses of those options.
         self.assertDenied("git commit -C HEAD -n -m ok")
         self.assertAllowed("git commit -m -n")
 

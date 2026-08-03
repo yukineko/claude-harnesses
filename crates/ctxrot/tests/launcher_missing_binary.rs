@@ -205,7 +205,7 @@ fn statusline_missing_binary_renders_unknown_not_blank() {
 /// than pretend it decided.
 #[test]
 fn observability_hooks_stay_exit_zero_but_are_not_silent() {
-    for sub in ["guard", "rescue", "restore"] {
+    for sub in ["guard", "rescue", "restore", "handoff", "handoff-record"] {
         let r = run(&[sub], r#"{"session_id":"s1"}"#);
         assert_eq!(r.code, 0, "{sub} must not break the turn: {r:?}");
         assert!(

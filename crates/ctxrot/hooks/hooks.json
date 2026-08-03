@@ -28,6 +28,12 @@
         "hooks": [
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/ctxrot preguard", "timeout": 10 }
         ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/ctxrot handoff", "timeout": 10 }
+        ]
       }
     ],
     "PostToolUse": [
@@ -35,6 +41,12 @@
         "matcher": "Read|Bash|Grep|Glob|WebFetch|BashOutput|NotebookRead",
         "hooks": [
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/ctxrot toolguard", "timeout": 10 }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/ctxrot handoff-record", "timeout": 10 }
         ]
       }
     ],

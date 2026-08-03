@@ -28,7 +28,10 @@
 #
 #   non-verdict (injected prose, no machine consumer) — exit 0, but never
 #   silent: the stderr diagnostic below is the "did not run" signal.
-#     guard / rescue / restore / distill-bg
+#     guard / rescue / restore / distill-bg / handoff / handoff-record
+#       (handoff/handoff-record: a Task/Read that gets no cache splice/record
+#       here is identical to a session where these hooks were never installed
+#       — see crates/ctxrot/src/hooks/handoffguard.rs "Failure mode")
 #
 #   everything else (note / metrics / ctx / usage / eval / install / init / …)
 #   is consumed by skills, scripts and humans, where an EMPTY result reads as
@@ -99,10 +102,18 @@ case "${1:-}" in
     printf 'ctxrot ?%% ▚▚▚▚ unknown (no %s binary)\n' "$os-$arch"
     exit 0
     ;;
-  guard|rescue|restore|distill-bg)
+  guard|rescue|restore|distill-bg|handoff|handoff-record)
     # Non-verdict observability: their output is prose injected into context
-    # with no machine consumer, so absence is not read as a verdict. The stderr
-    # line above already states that they did not run.
+    # (or, for handoff/handoff-record, an optional cache splice/write with no
+    # machine consumer reading its absence as a verdict — a Task/Read that gets
+    # no splice/record runs exactly as it would with no binary at all). The
+    # stderr line above already states that they did not run. This must NOT
+    # fall through to the `exit 1` default below, which this script reserves
+    # for CLI/skill-consumed commands (never for a hook event) — handoff fires
+    # on PreToolUse:Task, and every hook branch in this script exits 0 by
+    # convention (a decision, when one is needed, is always carried in the JSON
+    # body, never in the exit code); breaking that convention here would be
+    # untested territory this script has otherwise deliberately avoided.
     exit 0
     ;;
   *)

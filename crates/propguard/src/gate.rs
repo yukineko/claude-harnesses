@@ -73,12 +73,24 @@ pub enum Decision {
 }
 
 /// Files that changed *and* are worth checking (match include, not exclude).
+///
+/// Both filter lists are operator-supplied (`config.rs` overwrites the shipped
+/// defaults from `include` / `exclude` in the config file), so a pattern that
+/// does not compile is reachable, not hypothetical. When either list is
+/// `Undetermined` this resolves to the restrictive side — CHECK MORE, filter
+/// less — and says so on stderr rather than quietly matching on the survivors.
 pub fn checkable_files(cfg: &Config, changed: &[String]) -> Vec<String> {
-    let inc = build_set(&cfg.include);
-    let exc = build_set(&cfg.exclude);
+    // Resolve each list to its own restrictive direction. Both land on "do not
+    // filter", but for opposite reasons: a half-loaded `include` would drop
+    // files it was supposed to select, and a half-loaded `exclude` would keep
+    // excluding on patterns the operator can no longer fully see.
+    let inc = resolve_filter(build_set(&cfg.include), "include");
+    let exc = resolve_filter(build_set(&cfg.exclude), "exclude");
     changed
         .iter()
         .filter(|f| {
+            // `None` from either side now means only "no filter configured" or
+            // "the filter could not be trusted" — never "loaded, partially".
             inc.as_ref().map(|s| s.is_match(f)).unwrap_or(true)
                 && !exc.as_ref().map(|s| s.is_match(f)).unwrap_or(false)
         })
@@ -86,19 +98,67 @@ pub fn checkable_files(cfg: &Config, changed: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn build_set(globs: &[String]) -> Option<globset::GlobSet> {
+/// Collapse a filter list's `Determination` to the matcher `checkable_files`
+/// applies, announcing an `Undetermined` instead of swallowing it. Dropping the
+/// filter is the restrictive answer here: propguard blocks on unchecked
+/// properties, so checking a file it did not need to check is noise, whereas
+/// skipping one it did need to check is a silent bypass.
+fn resolve_filter(
+    set: Determination<Option<globset::GlobSet>>,
+    which: &str,
+) -> Option<globset::GlobSet> {
+    match set {
+        Determination::Known(s) => s,
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "propguard: WARNING the `{which}` filter list could not be compiled in full \
+                 ({why}) — ignoring the whole list and checking every changed file rather than \
+                 filtering on the patterns that happened to survive. Fix the pattern (see \
+                 `propguard status`)."
+            );
+            None
+        }
+    }
+}
+
+/// Compile a filter list. Three answers, not two:
+///
+/// * `Known(None)`      — no patterns configured; there is no filter to apply.
+/// * `Known(Some(set))` — every pattern compiled and reached the matcher.
+/// * `Undetermined`     — at least one pattern did not compile, or the set
+///   failed to build. **A partially loaded set is never returned.**
+///
+/// The previous form `if let Ok(glob) = Glob::new(g)` + `b.build().ok()` erased
+/// both failures, and for `include` that erasure is the permissive direction:
+/// each dropped pattern removes files from the checked set, and once the
+/// survivors fall under `min_changed_files`, `evaluate` returns
+/// `allow("no-code-changes")` — "nothing here to check" about a change set
+/// propguard merely failed to match. Same shape, same fix, as
+/// `blastguard::exclude::build_set` (9ed33ba6) and `blastguard::diffrisk`
+/// before it; this is the third instance of that mirror gap.
+fn build_set(globs: &[String]) -> Determination<Option<globset::GlobSet>> {
     let mut b = GlobSetBuilder::new();
     let mut any = false;
     for g in globs {
-        if let Ok(glob) = Glob::new(g) {
-            b.add(glob);
-            any = true;
+        match Glob::new(g) {
+            Ok(glob) => {
+                b.add(glob);
+                any = true;
+            }
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "glob pattern {g:?} does not compile: {e}"
+                ));
+            }
         }
     }
     if !any {
-        return None;
+        return Determination::Known(None);
     }
-    b.build().ok()
+    match b.build() {
+        Ok(set) => Determination::Known(Some(set)),
+        Err(e) => Determination::undetermined(format!("the glob set failed to build: {e}")),
+    }
 }
 
 fn hash_props(diff: &str, props: &[Property]) -> String {
@@ -856,6 +916,97 @@ mod tests {
             checkable_files(&cfg, &changed),
             vec!["src/main.rs".to_string()]
         );
+    }
+
+    /// A filter list that only PARTIALLY compiles must not silently shrink the
+    /// checked set. `include` is the permissive direction: every pattern that
+    /// fails to compile is one more file that stops being checked, and once the
+    /// survivors drop below `min_changed_files`, `evaluate` returns
+    /// `allow("no-code-changes")` — propguard reporting "nothing to check" about
+    /// a change set it merely failed to match.
+    #[test]
+    fn a_partially_uncompilable_include_list_does_not_silently_narrow_the_checked_set() {
+        let cfg = Config {
+            // The second pattern has an unclosed character class and cannot
+            // compile. The FIRST one still does, so the list loads partially.
+            include: vec!["**/*.rs".to_string(), "**/*.[py".to_string()],
+            exclude: vec![],
+            ..Config::default()
+        };
+        let changed = vec!["src/main.rs".to_string(), "scripts/run.py".to_string()];
+        // `run.py` is exactly what the broken pattern was meant to select. It
+        // must NOT vanish just because the pattern did.
+        assert_eq!(
+            checkable_files(&cfg, &changed),
+            changed,
+            "a partially loaded include list narrowed the checked set instead of \
+             resolving to the restrictive side"
+        );
+    }
+
+    /// Same rule, opposite list. A partially loaded `exclude` must not keep
+    /// filtering with the survivors — an exclusion the operator can no longer
+    /// see is an exclusion that is not trustworthy.
+    #[test]
+    fn a_partially_uncompilable_exclude_list_stops_excluding_rather_than_half_excluding() {
+        let cfg = Config {
+            include: vec![],
+            exclude: vec!["**/target/**".to_string(), "**/*.[py".to_string()],
+            ..Config::default()
+        };
+        let changed = vec!["src/main.rs".to_string(), "target/x.rs".to_string()];
+        assert_eq!(
+            checkable_files(&cfg, &changed),
+            changed,
+            "a partially loaded exclude list kept excluding on its surviving \
+             patterns; the restrictive answer is to exclude nothing"
+        );
+    }
+
+    /// ANTI-VACUITY CONTROL for both tests above. A `build_set` that returned
+    /// Undetermined unconditionally — or a `checkable_files` that stopped
+    /// filtering altogether — would satisfy both of them while disabling the
+    /// filter entirely. This one fails in that state.
+    #[test]
+    fn a_well_formed_filter_list_still_filters() {
+        let cfg = Config {
+            include: vec!["**/*.rs".to_string()],
+            exclude: vec!["**/target/**".to_string()],
+            ..Config::default()
+        };
+        let changed = vec![
+            "src/main.rs".to_string(),
+            "README.md".to_string(),
+            "target/x.rs".to_string(),
+        ];
+        assert_eq!(
+            checkable_files(&cfg, &changed),
+            vec!["src/main.rs".to_string()],
+            "a well-formed list must still filter; otherwise the two tests above \
+             are satisfied by a gate that checks everything unconditionally"
+        );
+    }
+
+    /// The property that was missing entirely: every pattern propguard SHIPS
+    /// reaches its matcher. Without this, a typo in `default_include` /
+    /// `default_exclude` fails on whichever later commit happens to exercise
+    /// the path it unfiltered, not on the commit that introduces it.
+    #[test]
+    fn the_shipped_default_filter_lists_load_in_full() {
+        let cfg = Config::default();
+        for (name, globs) in [("include", &cfg.include), ("exclude", &cfg.exclude)] {
+            for g in globs {
+                assert!(
+                    globset::Glob::new(g).is_ok(),
+                    "shipped default {name} list contains a pattern that does not \
+                     compile: {g:?}"
+                );
+            }
+            assert!(
+                matches!(build_set(globs), Determination::Known(Some(_))),
+                "shipped default {name} list does not load in full"
+            );
+        }
     }
 
     // ── the threshold enforcement point ────────────────────────────────────

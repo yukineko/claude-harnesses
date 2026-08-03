@@ -292,13 +292,20 @@ mod tests {
         // hung process running afterwards" contract, independent of
         // boundary's own unit test for the same mechanism.
         std::thread::sleep(Duration::from_millis(200));
+        // `pgrep -f` (NOT `-fc`): the count flag `-c` is a Linux procps
+        // extension that macOS's pgrep rejects with exit 2 + a usage message.
+        // The boundary correctly reported that as Undetermined, so this test —
+        // the only regression coverage for CA-propguard-006's "must not leave
+        // the hung process running" contract — could never run on macOS and the
+        // contract was UNVERIFIED there. Counting lines ourselves is portable:
+        // exit 0 means matches were printed, exit 1 means none were.
         let still_running = expect_known(harness_core::boundary::run(
-            Command::new("pgrep").arg("-fc").arg(&marker),
+            Command::new("pgrep").arg("-f").arg(&marker),
         ));
-        let count: i64 = expect_known(still_running.stdout_allowing(&[0, 1]))
-            .trim()
-            .parse()
-            .unwrap_or(-1);
+        let count = expect_known(still_running.stdout_allowing(&[0, 1]))
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .count();
         assert_eq!(
             count, 0,
             "run_git must not leave a timed-out git invocation (marker {marker}) running"

@@ -190,8 +190,19 @@ specguard --config examples/aegis.toml run
 入っていた場合は `specguard ack --force` でこのチェックを飛ばす。
 
 `ack` の disposition 記録: sentinel を立てるとき、`needs_user` を返した shard ごとに overwatch の
-review finding (`specguard:spec-drift:<label>` / 判定不能なら `specguard:audit-indeterminate:<label>`)
-を積み、その id を sentinel の `covers:` 行に書く。`ack` はクリアの**前に** id ごとの disposition を
+review finding を積み、その id を sentinel の `covers:` 行に書く。kind は shard の verdict で
+3 通りに分かれる (優先順位はこの順):
+
+| shard の状態 | finding id | severity | backlog 優先度 |
+|---|---|---|---|
+| 判定不能 (`needs_user` が読めなかった) | `specguard:audit-indeterminate:<label>` | `high` | p0 |
+| 矛盾がすべて分類 `C: 正典が陳腐化` (auditor が `doc_only: yes` と宣言) | `specguard:spec-doc-stale:<label>` | `low` | p2 |
+| それ以外 (分類 B / 判別不能 / 不明 を含む) | `specguard:spec-drift:<label>` | `medium` | p1 |
+
+`spec-doc-stale` は**取り下げではない** — 実装が動いて doc が追いついていない状態は doc 更新の
+作業であって欠陥ではないので、記録は残したまま欠陥とは別の棚 (p2) に置く。auditor が
+`doc_only` を宣言しなかった / 宣言が読めなかった場合は従来どおり `spec-drift` になる
+(下げる側の答えは厳密な `yes` でしか得られない)。`ack` はクリアの**前に** id ごとの disposition を
 記録するので、`overwatch review-metrics` が spec finding の **closure rate**（disposition が付いた
 finding ÷ 既知 finding）を出せる。verdict は観測から導く — `--force` 無し（＝ fix-commit ゲートを
 通った）なら `confirmed`、`--force` なら `dismissed`。「finding 自体が誤りだった」はどの観測でも

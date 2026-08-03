@@ -132,6 +132,16 @@ fn fold_refute(audit: &Parsed, r: &Parsed) -> Parsed {
         // marker but no clear verdict, keep it sticky rather than trusting a
         // silently-defaulted clean.
         indeterminate: r.indeterminate,
+        // The A/B/C class is the AUDITOR's statement about what kind of
+        // contradiction this is; the skeptic is asked whether the finding
+        // stands, not to re-classify it, and so never emits `doc_only` of its
+        // own. Reading `r.doc_only` here would therefore silently promote every
+        // surviving class-C finding back to plain drift and undo the split.
+        //
+        // The one thing that revokes the class is the skeptic failing to state
+        // a verdict at all: that is a cannot-determine, and a cannot-determine
+        // does not get to hand out the lower tier.
+        doc_only: audit.doc_only && !r.indeterminate,
     }
 }
 
@@ -148,6 +158,14 @@ fn fold_inconclusive(audit: &Parsed) -> Parsed {
         summary: audit.summary.clone(),
         marker_found: true,
         indeterminate: audit.indeterminate,
+        // Findings are kept verbatim here, but the CLASS is dropped to the
+        // restrictive default on purpose: the refutation did not complete, so
+        // nothing has confirmed that this shard really is class-C-only, and an
+        // unconfirmed classification must not buy the lower tier. The cost is a
+        // stale-doc finding filed one tier hotter when the skeptic breaks —
+        // noisier, never quieter, which is the direction this repository takes
+        // when it cannot determine.
+        doc_only: false,
     }
 }
 
@@ -201,6 +219,9 @@ fn completeness(
                         // appended entry (never re-refuted), so it need not be
                         // marked indeterminate.
                         indeterminate: false,
+                        // "the completeness critic broke" is not a statement
+                        // that everything found was a stale doc.
+                        doc_only: false,
                     },
                 );
             }
@@ -220,6 +241,7 @@ mod tests {
             summary: summary.to_string(),
             marker_found: true,
             indeterminate: false,
+            doc_only: false,
         }
     }
 
@@ -315,6 +337,7 @@ mod tests {
             summary: "indeterminate".to_string(),
             marker_found: true,
             indeterminate: true,
+            doc_only: false,
         };
         let expected = make();
         let cfg = min_cfg();
@@ -356,6 +379,7 @@ mod tests {
             summary: "indeterminate".to_string(),
             marker_found: true,
             indeterminate: true,
+            doc_only: false,
         };
         let out = fold_inconclusive(&audit);
         assert!(out.needs_user);

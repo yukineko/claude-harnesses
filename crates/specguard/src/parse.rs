@@ -7,8 +7,13 @@
 //! ```text
 //! <<<SPEC_AUDIT>>>
 //! needs_user: <yes|no>
+//! doc_only: <yes|no>      # optional; absent means "no" (see `Parsed::doc_only`)
 //! summary: <one line>
 //! ```
+//!
+//! `doc_only` is optional by design: reports written against the older
+//! three-line contract, and the `spec-audit` template which has no A/B/C
+//! classification to state, both omit it and are parsed exactly as before.
 
 /// The marker token that delimits the trailer. Kept identical between the
 /// prompt template and the parser.
@@ -34,6 +39,30 @@ pub struct Parsed {
     /// has nothing to refute here, so an indeterminate verdict must never be
     /// dropped back to clean.
     pub indeterminate: bool,
+    /// True when the auditor stated that EVERY contradiction in this shard is
+    /// class `C: 正典が陳腐化` — the implementation moved and the canon doc has
+    /// not caught up yet — with no class `B` (code violates the canon), no
+    /// `判別不能`, and no `不明`.
+    ///
+    /// This exists to stop one bit from carrying four answers. `audit-prompt.md`
+    /// asks the auditor to classify every contradiction into A/B/C/判別不能 and
+    /// says of C that it is a "doc 更新候補", but until this field existed
+    /// nothing downstream parsed that column: `needs_user` was the only thing
+    /// that survived, so "the doc needs a refresh" and "the code is wrong"
+    /// arrived at the backlog as the same kind at the same severity. Class C is
+    /// the routine, expected consequence of shipping — the doc lags by
+    /// construction — so filing it as a defect is what fills the queue with
+    /// work that is not a defect.
+    ///
+    /// Polarity, and why it is the mirror image of [`Self::indeterminate`]:
+    /// `doc_only` is the DOWNGRADING answer, so it is parsed STRICTLY. Absent,
+    /// empty, unrecognised, or hedged values all resolve to `false`, which is
+    /// exactly the pre-existing behaviour (a plain `spec-drift` finding). The
+    /// permissive reading has to be earned by the bare contract token; the
+    /// restrictive reading is the default. `needs_user` is strict on its CLEAN
+    /// side for the same reason — in both cases the strict side is whichever
+    /// one lets a finding out of sight.
+    pub doc_only: bool,
 }
 
 /// Parse agent stdout. When the marker is missing, `marker_found` is false and
@@ -55,6 +84,7 @@ pub fn parse(stdout: &str) -> Parsed {
             summary: String::new(),
             marker_found: false,
             indeterminate: false,
+            doc_only: false,
         };
     };
 
@@ -110,12 +140,29 @@ pub fn parse(stdout: &str) -> Parsed {
 
     let summary = field(trailer, "summary").unwrap_or_default();
 
+    // `doc_only` is parsed with the SAME asymmetry as `needs_user` and the
+    // OPPOSITE polarity, because the safe direction is opposite. There, being
+    // liberal about `yes` could only over-surface; here `yes` is the token that
+    // moves a finding DOWN a tier, so only the bare, unhedged `yes` earns it.
+    // "yes, mostly" / "probably" / "maybe" / an absent line all resolve to
+    // `false`, which reproduces the behaviour that existed before this field.
+    //
+    // And an indeterminate verdict revokes it outright: a shard that could not
+    // state what it found cannot also state that everything it found was a
+    // stale doc. Without this clause the new low tier would become a route for
+    // a cannot-determine to reach p2.
+    let doc_only = !indeterminate
+        && field(trailer, "doc_only")
+            .map(|v| v.trim().to_ascii_lowercase())
+            .is_some_and(|v| v == "yes");
+
     Parsed {
         report,
         needs_user,
         summary,
         marker_found: true,
         indeterminate,
+        doc_only,
     }
 }
 
@@ -317,6 +364,86 @@ mod tests {
         assert!(
             !p.indeterminate,
             "a missing marker is a separate condition, not indeterminate"
+        );
+    }
+
+    // -- doc_only: keeping the A/B/C classification alive past the parser -----
+
+    #[test]
+    fn doc_only_yes_is_read_from_the_trailer() {
+        // The auditor stated every contradiction in this shard is class C
+        // (canon stale, implementation newer). That is a doc-refresh task, not
+        // a defect, and the distinction has to survive the parser to be usable.
+        let s = "r\n<<<SPEC_AUDIT>>>\nneeds_user: yes\ndoc_only: yes\nsummary: canon lags impl";
+        let p = parse(s);
+        assert!(
+            p.needs_user,
+            "class C still needs a human — it is not clean"
+        );
+        assert!(p.doc_only);
+    }
+
+    /// ANTI-VACUITY CONTROL for the test above: a shard that states `doc_only:
+    /// no` must NOT be flagged. Without this, a parser that hardcoded
+    /// `doc_only = true` would satisfy the previous test while silently
+    /// downgrading every real defect in the repository.
+    #[test]
+    fn doc_only_no_is_not_flagged() {
+        let s = "r\n<<<SPEC_AUDIT>>>\nneeds_user: yes\ndoc_only: no\nsummary: code violates canon";
+        let p = parse(s);
+        assert!(p.needs_user);
+        assert!(!p.doc_only);
+    }
+
+    /// The whole point of the field is to move a finding to a lower tier, so an
+    /// unreadable value must NOT reach that tier. Unlike `needs_user`, where the
+    /// LIBERAL side is safe, here the liberal side is the one that hides work:
+    /// only the bare token `yes` earns the downgrade.
+    #[test]
+    fn an_unparseable_doc_only_value_does_not_earn_the_downgrade() {
+        for val in [
+            "maybe",
+            "yes, mostly",
+            "probably",
+            "unknown",
+            "",
+            "yes/no",
+            "はい",
+            "true",
+        ] {
+            let s = format!("r\n<<<SPEC_AUDIT>>>\nneeds_user: yes\ndoc_only: {val}\nsummary: x");
+            let p = parse(&s);
+            assert!(
+                !p.doc_only,
+                "{val:?} must not be read as a stated class-C-only shard"
+            );
+        }
+    }
+
+    /// Backward compatibility, stated as a test rather than assumed: a report
+    /// written against the old trailer contract has no `doc_only:` line at all,
+    /// and must behave exactly as it did before this field existed.
+    #[test]
+    fn an_absent_doc_only_line_keeps_the_old_behaviour() {
+        let s = "r\n<<<SPEC_AUDIT>>>\nneeds_user: yes\nsummary: drift";
+        let p = parse(s);
+        assert!(p.needs_user);
+        assert!(!p.doc_only);
+    }
+
+    /// A shard that could not state a verdict cannot simultaneously state that
+    /// everything in it was class C. Indeterminate wins, and this is asserted at
+    /// the parser as well as at the emitter so the invariant does not rest on
+    /// one call site keeping the precedence straight.
+    #[test]
+    fn an_indeterminate_verdict_is_never_also_doc_only() {
+        let s = "r\n<<<SPEC_AUDIT>>>\nneeds_user: maybe\ndoc_only: yes\nsummary: could not compare";
+        let p = parse(s);
+        assert!(p.needs_user);
+        assert!(p.indeterminate);
+        assert!(
+            !p.doc_only,
+            "an audit that could not say what it found cannot claim it found only stale docs"
         );
     }
 }

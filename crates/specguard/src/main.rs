@@ -1915,8 +1915,19 @@ fn emit_drift_findings(
         if !p.needs_user {
             continue;
         }
+        // Three kinds, not one flag. The order of the arms IS the precedence and
+        // is asserted by tests: "could not say" outranks "only stale docs",
+        // which outranks nothing.
         let (kind, severity) = if p.indeterminate {
             ("audit-indeterminate", "high")
+        } else if p.doc_only {
+            // Every contradiction in this shard was class C (`正典が陳腐化`):
+            // the implementation moved and the canon doc has not caught up.
+            // Still queued — it is real work and dropping it would be exactly
+            // the silent suppression this crate exists to prevent — but under
+            // its own kind at `low`, which `severity_to_priority` files at p2
+            // instead of alongside defects at p1.
+            ("spec-doc-stale", "low")
         } else {
             ("spec-drift", "medium")
         };
@@ -2483,8 +2494,18 @@ mod tests {
                 summary: summary.to_string(),
                 marker_found: true,
                 indeterminate,
+                doc_only: false,
             },
         )
+    }
+
+    /// A shard whose contradictions the auditor classified as class C only
+    /// (`正典が陳腐化` — the implementation moved, the canon doc has not caught
+    /// up). Same as [`shard`] otherwise.
+    fn doc_only_shard(label: &str, summary: &str) -> (String, parse::Parsed) {
+        let (l, mut p) = shard(label, true, false, summary);
+        p.doc_only = true;
+        (l, p)
     }
 
     fn sentinel_paths(repo: &Path) -> report::Paths {
@@ -2534,6 +2555,86 @@ mod tests {
         assert_eq!(drift.severity.as_deref(), Some("medium"));
         assert_eq!(drift.rationale.as_deref(), Some("doc says X, code does Y"));
         assert_eq!(drift.file.as_deref(), Some("reports/2026-08-01.md"));
+    }
+
+    /// A class-C-only shard is still queued — it is real work — but under its
+    /// OWN kind and at `low`, so `severity_to_priority` files it at p2 instead of
+    /// competing with defects at p1.
+    ///
+    /// This is the finding the user actually hits: the implementation and its
+    /// tests are refreshed as a matter of course, the canon doc lags by
+    /// construction, and before this split every one of those lags entered the
+    /// backlog as a `spec-drift` finding indistinguishable from "the code
+    /// violates the canon".
+    #[test]
+    fn a_class_c_only_shard_is_queued_as_a_doc_refresh_not_as_drift() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let parsed = vec![doc_only_shard("logging", "canon lags the new behaviour")];
+
+        let (covers, recorded) = with_home(tmp.path(), || {
+            let c = emit_drift_findings(&repo, "reports/2026-08-01.md", &parsed);
+            (c, overwatch::store::read_review_findings(&repo).unwrap())
+        });
+
+        assert_eq!(covers, vec!["specguard:spec-doc-stale:logging".to_string()]);
+        assert_eq!(recorded.len(), 1, "it must still be recorded, not dropped");
+        assert_eq!(recorded[0].severity.as_deref(), Some("low"));
+        assert_eq!(
+            recorded[0].rationale.as_deref(),
+            Some("canon lags the new behaviour"),
+            "the auditor's summary must survive the reclassification"
+        );
+    }
+
+    /// ANTI-VACUITY CONTROL for the test above. An emitter that unconditionally
+    /// wrote `spec-doc-stale`/`low` would satisfy it while downgrading every
+    /// real defect in the repository to p2 — the exact failure this change must
+    /// not introduce. A shard that did NOT state class-C-only keeps `spec-drift`
+    /// at `medium`.
+    #[test]
+    fn a_shard_that_did_not_state_class_c_only_keeps_its_medium_drift_finding() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let parsed = vec![shard("logging", true, false, "code violates the canon")];
+
+        let (covers, recorded) = with_home(tmp.path(), || {
+            let c = emit_drift_findings(&repo, "reports/2026-08-01.md", &parsed);
+            (c, overwatch::store::read_review_findings(&repo).unwrap())
+        });
+
+        assert_eq!(covers, vec!["specguard:spec-drift:logging".to_string()]);
+        assert_eq!(recorded[0].severity.as_deref(), Some("medium"));
+    }
+
+    /// Precedence, asserted at the emitter as well as at the parser: "the audit
+    /// could not say what it found" outranks "everything it found was a stale
+    /// doc". Were this the other way round, the new low tier would become a
+    /// route for an undetermined verdict to reach p2 — a cannot-determine
+    /// resolving to the permissive side, which is the defect class this
+    /// repository exists to prevent.
+    #[test]
+    fn an_indeterminate_shard_outranks_the_doc_only_downgrade() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        // Constructed directly rather than through `parse`, so that the emitter
+        // is pinned independently of the parser also refusing this combination.
+        let mut parsed = vec![shard("decisions", true, true, "could not compare")];
+        parsed[0].1.doc_only = true;
+
+        let (covers, recorded) = with_home(tmp.path(), || {
+            let c = emit_drift_findings(&repo, "reports/2026-08-01.md", &parsed);
+            (c, overwatch::store::read_review_findings(&repo).unwrap())
+        });
+
+        assert_eq!(
+            covers,
+            vec!["specguard:audit-indeterminate:decisions".to_string()]
+        );
+        assert_eq!(recorded[0].severity.as_deref(), Some("high"));
     }
 
     /// ANTI-VACUITY CONTROL: a run where every shard came back clean must queue

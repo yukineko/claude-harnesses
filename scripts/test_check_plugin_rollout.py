@@ -1532,19 +1532,46 @@ class ParkedDeclaration(unittest.TestCase):
 
 
 class ParkedRealDeclaration(unittest.TestCase):
-    """The declaration this repo actually ships must be valid and taintguard must
-    be in it — the park is a live operational decision (backlog a6f165cd), not a
-    test fixture, so a silent loss of it would re-arm the gate."""
+    """The declaration this repo actually ships must be VALID — a malformed one is
+    fail-closed as rc=4, because a typo'd park parks nothing while reading as though
+    it had (backlog a6f165cd).
 
-    def test_the_shipped_declaration_parses_and_parks_taintguard(self):
+    This deliberately does NOT assert WHICH plugins are parked. It used to require
+    taintguard specifically, reasoning that losing that entry would re-arm the gate.
+    That coupled the mechanism's test suite to a transient operational fact, and it
+    went RED the moment the park legitimately ended: taintguard was rolled out at
+    0.1.10 on 2026-08-04 once eb39308e / 9a28b98c were fixed, so its DEPLOYMENT park
+    no longer applied. The observe-only posture that replaced it is carried by env
+    TAINTGUARD_OBSERVE_ONLY and backlog 6ab40021 — not by this file, which is a
+    statement about deployment only. Re-pinning a roster here would reintroduce a
+    test that fails for being correct."""
+
+    def test_the_shipped_declaration_is_valid(self):
+        path = Path(cpr.REPO) / "scripts" / "parked-plugins.json"
+        self.assertTrue(path.is_file(), f"shipped declaration is missing: {path}")
         plugins, _unverifiable = cpr.scan_plugins()
-        parked, problems = cpr.load_parked(
-            plugins, path=str(Path(cpr.REPO) / "scripts" / "parked-plugins.json")
-        )
+        parked, problems = cpr.load_parked(plugins, path=str(path))
         self.assertEqual(problems, [], f"the shipped declaration is invalid: {problems}")
-        self.assertIn("taintguard", parked)
-        self.assertIn("eb39308e", parked["taintguard"]["reason"])
-        self.assertIn("revisit", parked["taintguard"])
+        # Whatever IS declared must carry the fields the loader requires, so an entry
+        # can never read as a park while missing its own justification.
+        for name, entry in parked.items():
+            self.assertIn("reason", entry, f"{name} is parked with no reason")
+            self.assertIn("parked_at", entry, f"{name} is parked with no parked_at")
+            self.assertIn(name, plugins, f"{name} is parked but is not a real plugin")
+
+    def test_the_loader_actually_validates_at_this_call_site(self):
+        """Positive control for the assertion above: `problems == []` has to mean the
+        file was inspected, not that an ignored path resolved to 'nothing wrong'. The
+        same call must report a problem when handed a bad entry."""
+        plugins, _unverifiable = cpr.scan_plugins()
+        with tempfile.TemporaryDirectory() as td:
+            bad = Path(td) / "parked-plugins.json"
+            bad.write_text(
+                '{"parked": {"taintguard": {"reason": "missing parked_at"}}}',
+                encoding="utf-8",
+            )
+            _parked, problems = cpr.load_parked(plugins, path=str(bad))
+        self.assertNotEqual(problems, [], "loader accepted an entry with no parked_at")
 
 
 class PartitionParked(unittest.TestCase):

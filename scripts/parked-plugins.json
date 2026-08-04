@@ -12,13 +12,14 @@
     "crates/; a typo is reported, not ignored, because a typo'd park parks",
     "nothing while reading as though it had.",
     "Deleting an entry is how a park ends. Resolve the reason FIRST, then delete",
-    "— not the other way round (backlog a6f165cd)."
+    "— not the other way round (backlog a6f165cd).",
+    "Currently empty. taintguard was parked here on 2026-08-04 while its false",
+    "positive eb39308e was open; it was rolled out at 0.1.10 the same day once",
+    "that and 9a28b98c were fixed, so the park was resolved and removed. Its",
+    "remaining observe-only posture is carried by env TAINTGUARD_OBSERVE_ONLY",
+    "and backlog 6ab40021 — not by this file, which is about DEPLOYMENT only.",
+    "The checker itself warns when an entry suppresses nothing: a stale park",
+    "silences a future red."
   ],
-  "parked": {
-    "taintguard": {
-      "reason": "誤検知 eb39308e が未修正のため観測待ち。arm すると既知の誤検知でユーザーの編集作業がブロックされる (2026-08-04 に実際に発生)。plugin cache 側の launcher は実行ビットを外して強制を止めてある。",
-      "parked_at": "2026-08-04",
-      "revisit": "backlog eb39308e (誤検知の修正) が閉じたら、まず --canary で rollout して誤検知率を計測し、それが 0 と確認できてからこのエントリを削除する"
-    }
-  }
+  "parked": {}
 }

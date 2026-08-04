@@ -41,6 +41,14 @@
 //!   `commondir`/back-pointer that will not resolve — means *cannot determine*,
 //!   which yields `Untrusted`. There is no `unwrap_or(true)`-shaped step and no
 //!   "unknown ⇒ probably the same repo" arm (CLAUDE.md §3).
+//! * **An unreadable input is not an absent one.** Every read in
+//!   [`git_common_dir`] goes through [`harness_core::boundary::read_to_string`],
+//!   so a `.git` (or back-pointer, or `commondir`) that exists but cannot be read
+//!   arrives as `Undetermined` instead of as an `io::Error` indistinguishable
+//!   from `NotFound`. It resolves to `None` ⇒ `Untrusted`, and never to "skip
+//!   this level and ask an ancestor", which would hand the path the trust of a
+//!   repository it never proved membership of. Asserted by
+//!   `an_unreadable_dot_git_file_is_untrusted_not_skipped`.
 //! * **Both sides must resolve, and must be EQUAL.** A different repository has a
 //!   different common dir, so another project on the same machine stays
 //!   `Untrusted`. If `root` is not in a repository at all, the rule cannot fire
@@ -68,6 +76,9 @@
 //! PostToolUse matcher.)
 
 use std::path::{Component, Path, PathBuf};
+
+use harness_core::boundary;
+use harness_core::verdict::Determination;
 
 /// Trust verdict for a single path, relative to a project root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,10 +118,11 @@ fn normalize_lexical(path: &Path) -> PathBuf {
 ///
 /// Returns `None` for *cannot determine*, which callers must treat as "not the
 /// same repository" (see the module docs): no `.git` at or above `start`, a `.git`
-/// entry that is neither a regular file nor a directory, a `.git` file that does
-/// not carry a resolvable `gitdir:` line, a linked-worktree admin dir whose
-/// back-pointer does not name the `.git` file that led here, or a path that will
-/// not canonicalize.
+/// entry that is neither a regular file nor a directory, a `.git` entry that
+/// exists but cannot be READ, a `.git` file that does not carry a resolvable
+/// `gitdir:` line, a linked-worktree admin dir whose back-pointer or `commondir`
+/// is missing or unreadable, a back-pointer that does not name the `.git` file
+/// that led here, or a path that will not canonicalize.
 ///
 /// The two on-disk shapes, both handled:
 ///
@@ -122,7 +134,17 @@ fn normalize_lexical(path: &Path) -> PathBuf {
 ///   different worktrees agree on one identity; the `gitdir` back-pointer is what
 ///   makes the claim unforgeable without write access to `<repo>/.git`.
 ///
-/// Read with plain `std::fs` rather than by shelling out to
+/// Every file read here goes through [`harness_core::boundary::read_to_string`],
+/// which returns `Determination<Option<String>>` and so keeps "the file is not
+/// there" (`Known(None)`) apart from "the file is there and I could not read it"
+/// (`Undetermined`). Both answer `None` from this function, but they have to be
+/// written as separate arms rather than collapsed by a `.ok()?`, which is what
+/// stops a later edit from "recovering" from an unreadable `.git` by continuing
+/// the ancestor walk. (`symlink_metadata` below stays raw `std::fs`: metadata is
+/// not one of the three fallible boundaries `boundary` wraps, and its failure is
+/// already handled as "no `.git` here, keep walking".)
+///
+/// Resolved from the on-disk files rather than by shelling out to
 /// `git rev-parse --git-common-dir`: this runs inside a PreToolUse/PostToolUse
 /// hook on every matching tool call, and `harness_core::discovery::git_toplevel`
 /// (the existing subprocess-based resolver) answers a different question
@@ -147,7 +169,27 @@ fn git_common_dir(start: &Path) -> Option<PathBuf> {
             // and attribute this path to some ancestor repository.
             return None;
         }
-        let text = std::fs::read_to_string(&dot_git).ok()?;
+        // Read through `harness_core::boundary`, never `std::fs` directly (the
+        // raw-IO ratchet polices this crate): the raw call reports "absent" and
+        // "there but unreadable" as two kinds of one `io::Error`, and the
+        // `.ok()?` that used to stand here flattened both into one `None`.
+        // `boundary::read_to_string` hands them over as distinct values, and
+        // both still resolve to `None` — because for this function `None` IS the
+        // fail-closed answer (cannot determine ⇒ `same_repository` is `false` ⇒
+        // `Untrusted`). Spelling the two arms out separately is the point: it
+        // records that "unreadable" was considered and deliberately NOT allowed
+        // to continue the ancestor walk, which would attribute this path to some
+        // ancestor's repository — the very hazard the `!meta.is_file()` arm
+        // above already refuses.
+        let text = match boundary::read_to_string(&dot_git) {
+            Determination::Known(Some(text)) => text,
+            // Raced away between `symlink_metadata` and this read: there is no
+            // `.git` here after all, so nothing identifies a repository.
+            Determination::Known(None) => return None,
+            // Permission denied, an I/O fault, non-UTF-8 contents: the entry is
+            // there and opaque. An unread `.git` has not been read.
+            Determination::Undetermined(_) => return None,
+        };
         let pointer = text
             .lines()
             .find_map(|line| line.trim().strip_prefix("gitdir:"))?
@@ -165,16 +207,32 @@ fn git_common_dir(start: &Path) -> Option<PathBuf> {
 
         // UNFORGEABILITY: `<gitdir>/gitdir` must name the `.git` file just read.
         // Only a writer of `<repo>/.git/worktrees/<name>/` can satisfy this.
-        let back = std::fs::read_to_string(gitdir.join("gitdir")).ok()?;
+        // Absent (this admin dir never registered a worktree) and unreadable
+        // (there, but opaque) are both "membership not proven": a back-pointer
+        // that could not be read has not been checked, and an unchecked
+        // unforgeability control must not be reported as a passed one.
+        let back = match boundary::read_to_string(&gitdir.join("gitdir")) {
+            Determination::Known(Some(back)) => back,
+            Determination::Known(None) | Determination::Undetermined(_) => return None,
+        };
         let back = Path::new(back.trim()).canonicalize().ok()?;
         if back != dot_git.canonicalize().ok()? {
             return None;
         }
 
-        // `commondir` is stored relative to the admin dir. Absent means the admin
-        // dir is itself the common dir.
-        let common = match std::fs::read_to_string(gitdir.join("commondir")) {
-            Ok(rel) => {
+        // `commondir` is stored relative to the admin dir, and must be READ to
+        // learn the shared identity — there is no substitute for it. The `Err(_)
+        // => gitdir` arm that used to stand here ("absent means the admin dir is
+        // itself the common dir") also swallowed *unreadable*, i.e. it answered
+        // an unread file with a per-worktree admin dir standing in for the
+        // repository-wide identity. Reaching this line already required a `.git`
+        // FILE whose back-pointer resolved, i.e. a git-registered linked
+        // worktree, and `git worktree add` writes `commondir` beside the very
+        // `gitdir` back-pointer just read — so "absent" is not a shape git
+        // produces here, and guessing on either flavour of failure is a guess in
+        // the fail-open direction. Both are `None`.
+        let common = match boundary::read_to_string(&gitdir.join("commondir")) {
+            Determination::Known(Some(rel)) => {
                 let rel = rel.trim();
                 if rel.is_empty() {
                     return None;
@@ -186,7 +244,7 @@ fn git_common_dir(start: &Path) -> Option<PathBuf> {
                     gitdir.join(rel_path)
                 }
             }
-            Err(_) => gitdir,
+            Determination::Known(None) | Determination::Undetermined(_) => return None,
         };
         return common.canonicalize().ok();
     }
@@ -282,6 +340,13 @@ pub fn classify(root: &Path, target: &str) -> Trust {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn chmod(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            .unwrap_or_else(|e| panic!("chmod {mode:o} {}: {e}", path.display()));
+    }
 
     fn temp_root(name: &str) -> tempfile::TempDir {
         tempfile::Builder::new()
@@ -601,5 +666,84 @@ mod tests {
                 "a `.git` file body of {body:?} must fail closed"
             );
         }
+    }
+
+    /// A `.git` that is THERE BUT UNREADABLE is not an absent one, and must stop
+    /// the walk rather than be skipped.
+    ///
+    /// This is the distinction [`harness_core::boundary::read_to_string`] exists
+    /// to preserve. `std::fs::read_to_string(..).ok()?` reported
+    /// `PermissionDenied` and `NotFound` as the same `None`, and the obvious way
+    /// to "recover" from a failed read — `continue` the ancestor loop, exactly
+    /// what the `symlink_metadata` failure two lines earlier legitimately does —
+    /// is a fail-OPEN here: the directory keeps its own, unread `.git`, yet the
+    /// path is attributed to some ancestor's repository. The fixture is that
+    /// shape: `<linked>/nested/.git` is unreadable while `<linked>/.git` one level
+    /// up is a genuine worktree of `<main>`'s repository, so skipping the opaque
+    /// file hands `<linked>/nested/f.txt` the trust of a repository it never
+    /// proved membership of. This assertion is the one that discriminates — it
+    /// FAILS (`Trusted`) if `Undetermined` is treated as "keep going".
+    ///
+    /// Requires a non-root uid: root bypasses the mode bits, so the premise is
+    /// asserted as a precondition rather than silently passing without it (same
+    /// discipline as `boundary.rs`'s own unreadable-file tests).
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_dot_git_file_is_untrusted_not_skipped() {
+        let (_holder, main, linked) = repo_with_linked_worktree("unreadable-dotgit");
+        let nested = linked.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let target = nested.join("f.txt");
+        std::fs::write(&target, "x").unwrap();
+
+        // ANTI-VACUITY: with NO `.git` in `nested`, the walk reaches
+        // `<linked>/.git` and the same-repository rule really does fire. So the
+        // `Untrusted` below is caused by the unreadable file, not by `nested`
+        // being unreachable or the fixture being broken.
+        assert_eq!(
+            classify(&main, &target.to_string_lossy()),
+            Trust::Trusted,
+            "precondition: absent `.git` ⇒ the walk finds the real worktree above"
+        );
+
+        let opaque = nested.join(".git");
+        // Contents that WOULD parse, so the verdict cannot be blamed on the body
+        // being garbage (`an_unparseable_dot_git_file_is_untrusted` covers that):
+        // the only reason this fails closed is that it could not be read at all.
+        std::fs::write(&opaque, "gitdir: /nonexistent/worktrees/x\n").unwrap();
+        chmod(&opaque, 0o000);
+        let denied = std::fs::read_to_string(&opaque).is_err();
+        let verdict = classify(&main, &target.to_string_lossy());
+        chmod(&opaque, 0o644); // restore before asserting, so cleanup cannot trip
+
+        assert!(
+            denied,
+            "precondition: chmod 000 must deny this uid (running as root?)"
+        );
+        assert_eq!(
+            verdict,
+            Trust::Untrusted,
+            "an unreadable `.git` is cannot-determine — it must not be skipped and \
+             the path credited to the repository of an ancestor"
+        );
+
+        // The plain shape as well: the worktree's OWN `.git` unreadable. Weaker
+        // evidence (nothing above `<linked>` is a repository, so a "keep going"
+        // bug would also land on `Untrusted` here) — stated, not passed off as
+        // discriminating — but it is the literal claim "an unreadable `.git`
+        // yields Untrusted" at the level git actually writes the file.
+        let own = linked.join(".git");
+        let saved = std::fs::read_to_string(&own).unwrap();
+        chmod(&own, 0o000);
+        let denied_own = std::fs::read_to_string(&own).is_err();
+        let verdict_own = classify(&main, &linked.join("a.rs").to_string_lossy());
+        chmod(&own, 0o644);
+        assert!(denied_own, "precondition: chmod 000 must deny this uid");
+        assert_eq!(
+            std::fs::read_to_string(&own).unwrap(),
+            saved,
+            "the fixture's `.git` must be intact — only its permissions changed"
+        );
+        assert_eq!(verdict_own, Trust::Untrusted);
     }
 }

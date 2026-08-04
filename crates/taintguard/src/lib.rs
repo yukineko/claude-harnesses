@@ -9,7 +9,10 @@
 //!
 //! Provenance-scoped least privilege: once a turn consumes untrusted-
 //! provenance content (a `WebFetch`/`WebSearch` result, or a `Read` outside
-//! the project root), write-class tools (`Bash`/`Write`/`Edit`/`MultiEdit`/
+//! the session's TRUST DOMAIN — its `cwd`, the other git worktrees of that
+//! same repository, and any root declared through
+//! [`classify::TRUSTED_ROOTS_ENV`]; see [`classify`] for why the domain is not
+//! the process cwd), write-class tools (`Bash`/`Write`/`Edit`/`MultiEdit`/
 //! `NotebookEdit`) are downgraded to `ask` (interactive) or `deny` (headless)
 //! for the rest of that turn. A clean `Stop` (the turn ends without further
 //! taint) restores the session to normal.

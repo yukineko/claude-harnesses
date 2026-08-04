@@ -103,8 +103,14 @@ fn decide_mark(input: &HookInput) -> Result<(), String> {
     let session = input.session_id.as_str();
     match input.tool_name.as_str() {
         "WebFetch" | "WebSearch" => state::mark(&cwd, session, "web"),
+        // The trust domain is the SESSION's domain — `cwd`, the other working
+        // trees of `cwd`'s repository, and any root the operator declared —
+        // not the process cwd alone. Reading a linked worktree is reading this
+        // session's own project (CLAUDE.md §8 forces every edit into one), and
+        // classifying that as external content is what deadlocked headless
+        // sessions; see `classify`'s module docs for the measurement.
         "Read" => match input.target() {
-            Some(target) => match classify::classify(&cwd, &target) {
+            Some(target) => match classify::classify_in_domain(&cwd, &target) {
                 classify::Trust::Trusted => Ok(()),
                 classify::Trust::Untrusted | classify::Trust::Indeterminate => {
                     state::mark(&cwd, session, "external-read")

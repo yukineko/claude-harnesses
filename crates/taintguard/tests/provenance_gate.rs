@@ -387,6 +387,244 @@ fn in_repo_read_does_not_taint_the_session() {
     );
 }
 
+// ── the trust domain is the repository + declared roots, not the cwd (0.1.9) ─
+//
+// These drive the REAL binary because the unit tests in `classify.rs` cannot
+// see the wiring: `decide_mark` could keep calling the single-root `classify`
+// and every unit test of the domain would still be green. The measured
+// deadlock (backlog 270f36fa) was exactly a wiring-visible fact — a `Read` of
+// the session worktree tainting — so it is asserted here, end to end.
+
+/// git in `dir`, asserting success, with the developer's own git config
+/// neutralised so the fixture is the same everywhere.
+fn git_ok(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "taintguard-test")
+        .env("GIT_AUTHOR_EMAIL", "taintguard@example.invalid")
+        .env("GIT_COMMITTER_NAME", "taintguard-test")
+        .env("GIT_COMMITTER_EMAIL", "taintguard@example.invalid")
+        .output()
+        .expect("git runs (a missing git is a real failure, not a skip)");
+    assert!(
+        out.status.success(),
+        "git {args:?} in {} failed: {}",
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Make `dir` a repository with one commit (a worktree needs a HEAD).
+fn init_repo_at(dir: &Path) {
+    git_ok(dir, &["init", "-q", "-b", "main"]);
+    std::fs::write(dir.join("seed.txt"), "seed").expect("write seed");
+    git_ok(dir, &["add", "seed.txt"]);
+    git_ok(dir, &["commit", "-q", "-m", "seed", "--no-gpg-sign"]);
+}
+
+/// `run` clears the environment, which would also hide `git` from the binary —
+/// and a binary that cannot run `git` falls back to the strict domain, so a
+/// test that forgot PATH would be measuring the fallback while believing it
+/// measured the widening.
+fn path_env() -> String {
+    std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string())
+}
+
+/// Did a `mark` leave this session tainted? Asked through the real `gate`.
+fn session_is_tainted(f: &Fixture, extra_env: &[(&str, &str)]) -> bool {
+    let mut env: Vec<(&str, &str)> = vec![];
+    env.extend_from_slice(INTERACTIVE_ENV);
+    env.extend_from_slice(extra_env);
+    let (code, stdout, _) = run(
+        "gate",
+        &gate_payload(
+            "Edit",
+            serde_json::json!({"file_path": "seed.txt"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0);
+    !stdout.trim().is_empty()
+}
+
+#[test]
+fn read_of_a_linked_worktree_of_the_same_repo_does_not_taint() {
+    let f = fixture("linked-worktree-read");
+    init_repo_at(&f.cwd);
+    let elsewhere = tempfile::Builder::new()
+        .prefix("taintguard-e2e-linked-worktrees-")
+        .tempdir()
+        .expect("tempdir");
+    let wt = elsewhere.path().join("wt");
+    git_ok(
+        &f.cwd,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            &wt.to_string_lossy(),
+        ],
+    );
+
+    let path = path_env();
+    let env: &[(&str, &str)] = &[("PATH", path.as_str())];
+    let (code, _, stderr) = run(
+        "mark",
+        &mark_payload(
+            "Read",
+            serde_json::json!({"file_path": wt.join("seed.txt").to_string_lossy()}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        env,
+    );
+    assert_eq!(code, 0, "mark must always exit 0 (stderr: {stderr})");
+
+    assert!(
+        !session_is_tainted(&f, env),
+        "CLAUDE.md §8 forces every edit into a linked worktree; reading one is \
+         reading this session's own project, and tainting on it is the \
+         measured deadlock (backlog 270f36fa)"
+    );
+}
+
+/// ANTI-VACUITY CONTROL for the test above, through the same wiring: an
+/// unrelated repository sitting right next to ours still taints.
+#[test]
+fn read_of_an_unrelated_repository_next_door_still_taints() {
+    let f = fixture("unrelated-repo-read");
+    init_repo_at(&f.cwd);
+    let elsewhere = tempfile::Builder::new()
+        .prefix("taintguard-e2e-unrelated-repos-")
+        .tempdir()
+        .expect("tempdir");
+    // Our worktree and theirs, in one directory: same shape, different repo.
+    let my_wt = elsewhere.path().join("mine-wt");
+    git_ok(
+        &f.cwd,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            &my_wt.to_string_lossy(),
+        ],
+    );
+    let theirs = elsewhere.path().join("theirs");
+    std::fs::create_dir_all(&theirs).expect("mkdir");
+    init_repo_at(&theirs);
+    let their_wt = elsewhere.path().join("theirs-wt");
+    git_ok(
+        &theirs,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "their-feature",
+            &their_wt.to_string_lossy(),
+        ],
+    );
+
+    let path = path_env();
+    let env: &[(&str, &str)] = &[("PATH", path.as_str())];
+    let (code, _, _) = run(
+        "mark",
+        &mark_payload(
+            "Read",
+            serde_json::json!({"file_path": their_wt.join("seed.txt").to_string_lossy()}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        env,
+    );
+    assert_eq!(code, 0);
+
+    assert!(
+        session_is_tainted(&f, env),
+        "another repository is another trust domain, however close it sits — \
+         if this ever goes silent, the widening has become 'trust every \
+         sibling directory'"
+    );
+}
+
+#[test]
+fn a_declared_trusted_root_does_not_taint_but_an_undeclared_one_does() {
+    let f = fixture("declared-root-read");
+    let scratch = tempfile::Builder::new()
+        .prefix("taintguard-e2e-scratchpad-")
+        .tempdir()
+        .expect("tempdir");
+    let note = scratch.path().join("note.md");
+    std::fs::write(&note, "scratch").expect("write scratch file");
+
+    // Control first: with nothing declared, this read taints (it is genuinely
+    // outside the project) — so the next assertion cannot pass vacuously.
+    let path = path_env();
+    let bare: &[(&str, &str)] = &[("PATH", path.as_str())];
+    let (code, _, _) = run(
+        "mark",
+        &mark_payload(
+            "Read",
+            serde_json::json!({"file_path": note.to_string_lossy()}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        bare,
+    );
+    assert_eq!(code, 0);
+    assert!(
+        session_is_tainted(&f, bare),
+        "an undeclared outside root must still taint"
+    );
+
+    // Now the same read, in a fresh session, with the root declared.
+    let f2 = fixture("declared-root-read-2");
+    let scratch_root = scratch.path().to_string_lossy().into_owned();
+    let with_knob: &[(&str, &str)] = &[
+        ("PATH", path.as_str()),
+        ("TAINTGUARD_TRUSTED_ROOTS", scratch_root.as_str()),
+    ];
+    let (code, _, _) = run(
+        "mark",
+        &mark_payload(
+            "Read",
+            serde_json::json!({"file_path": note.to_string_lossy()}),
+            &f2.cwd,
+            &f2.session,
+        ),
+        &f2.cwd,
+        &f2.state_dir,
+        with_knob,
+    );
+    assert_eq!(code, 0);
+    assert!(
+        !session_is_tainted(&f2, with_knob),
+        "a root the operator declared through TAINTGUARD_TRUSTED_ROOTS is \
+         inside the trust domain — that knob is the only way the scratchpad \
+         (an additional working directory no hook channel announces) can be \
+         covered"
+    );
+}
+
 #[test]
 fn clear_after_stop_restores_a_clean_gate() {
     let f = fixture("clear-restores");

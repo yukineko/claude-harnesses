@@ -25,10 +25,11 @@ least-privilege を機械的に強制する。エージェントが騙されて�
 ### mark（PostToolUse）
 
 - `WebFetch` / `WebSearch` の結果は常に信頼できない出所として扱う（source: `web`）。
-- `Read` はターゲットパスをプロジェクトルート（`cwd`）基準で分類する
-  （`src/classify.rs`）:
-  - ルート配下に解決される → 信頼できる（no-op）。
-  - ルート外（`/tmp`、ホームディレクトリ、他プロジェクト、`..` での脱出）→
+- `Read` はターゲットパスを**信頼領域（trust domain）**基準で分類する
+  （`src/classify.rs`。0.1.9 で「プロセスの `cwd` 単体」から再定義した。後述の
+  「信頼領域とは何か」を参照）:
+  - 信頼領域の中に解決される → 信頼できる（no-op）。
+  - 領域外（`/tmp`、ホームディレクトリ、**別の**プロジェクト、`..` での脱出）→
     信頼できない（source: `external-read`）。
   - パスが判定不能（file_path が空/欠落、シンボリックリンクの解決不能等）→
     **fail-closed**（信頼できないものとして mark）。
@@ -63,6 +64,93 @@ least-privilege を機械的に強制する。エージェントが騙されて�
   戻す。
 - 削除に失敗した場合は stderr に出すだけで exit 0（**tainted のまま残る方が
   安全側**なので、消せなかったことを許可の失敗として扱わない）。
+
+## 信頼領域（trust domain）とは何か — 0.1.9 で再定義
+
+`Read` の分類基準は **プロセスの `cwd` 単体ではない**。実装（`src/classify.rs`）
+での定義は次の 3 つの和集合であり、この README はその実装を記述している。
+
+| # | 領域 | 判定方法 |
+|---|---|---|
+| (a) | hook payload の `cwd` | 従来どおり（canonicalize して配下判定） |
+| (b) | **`cwd` と同一リポジトリの git worktree** | `git rev-parse --git-common-dir` で解決した **common dir が一致する**ことを観測して判定 |
+| (c) | `TAINTGUARD_TRUSTED_ROOTS` で明示宣言されたルート | 環境変数（コロン区切りの絶対パス） |
+
+### なぜ (b) が要るのか（0.1.8 の測定された欠陥）
+
+CLAUDE.md §8 は「編集は必ず worktree で行う」ことを絶対義務にしている。つまり
+**セッションが自分の worktree を `Read` することは避けられない**。0.1.8 はそれを
+`cwd` 外＝外部 content として `external-read` で mark していたため、どのセッションも
+開始直後の数ツールコールで tainted になり、書き込み系ツールが `Stop` まで
+`ask`/`deny` に落ちた（headless では解除できないためデッドロック。backlog
+`270f36fa`）。これは「ゲートがリスクを正しく報告していた」のではなく
+**ゲートの定義そのものが対象を取り違えていた**。2026-08-05 の測定（デプロイ済み
+バイナリ・`TAINTGUARD_STATE_DIR` 隔離・in-repo `Read` と `Grep` を対照として同一
+run 内で silent であることを確認）で verdict が変わったのは次の 2 行だけである:
+
+- セッション worktree の `Read`: `ask`/`deny` → **silent**
+- 宣言済み scratchpad の `Read`（(c) で宣言した場合のみ）: `ask`/`deny` → **silent**
+
+`WebFetch`/`WebSearch`、`file_path` の無い `Read`、`/tmp` 等の外部パス、
+**別リポジトリ**（隣のディレクトリにあっても）は 0.1.8 と同じく tainted のままである。
+
+### 「見た目が worktree」では信頼されない
+
+(b) は **パスの形や親子関係では一切判定しない**。git が登録している working tree
+一覧（common dir 側のレジストリ）に載っており、**かつ**その場所が今も同じ
+common dir を報告することを確認して初めて信頼する。したがって:
+
+- 隣に置かれた**無関係なリポジトリ**、およびその worktree → 信頼しない。
+- 登録済み worktree のディレクトリを消して**別のリポジトリを同じパスに置いた**
+  場合 → 信頼しない（パス形状しか残っていないため）。
+
+この 2 つは単体テストで固定してある（`unrelated_repository_at_a_sibling_path_is_untrusted`、
+`a_registered_path_now_holding_a_foreign_repository_is_untrusted`）。前者は
+「レジストリが解決できていた（＝広げる側のコードが生きていた）」ことも同時に
+assert しており、機能が無いから通っているのではないことを固定している。
+
+### git プローブが失敗したら領域は広げない
+
+`git` が起動できない・非0終了・common dir が canonicalize できない・working tree が
+1 つも取れない — いずれの場合も **レジストリは `None` になり、worktree は一切
+信頼されない**（＝ (a) と (c) だけ）。判定不能を「たぶん同じリポジトリだろう」に
+倒すことはしない（CLAUDE.md §3）。subprocess の**終了ステータスは判定に使っている**
+（stdout だけを読んで失敗を答えと取り違えない）。
+
+なお (c) はこのプローブの派生物ではなく運用者の明示宣言なので、git 側の失敗では
+落ちない（無関係な subprocess 失敗が、運用者から見えている宣言を黙って取り消す
+ほうが有害なため）。この線引きは意図的な設計判断であり、実装の分岐にも
+コメントで記してある。
+
+### `TAINTGUARD_TRUSTED_ROOTS`（(c) の設定方法）
+
+```sh
+# コロン区切り・絶対パスのみ。scratchpad 等「追加の作業ディレクトリ」を宣言する。
+export TAINTGUARD_TRUSTED_ROOTS=/private/tmp/claude-502:/Users/me/shared-notes
+```
+
+- 無視される（＝領域を広げない）エントリ: 空、相対パス（hook **プロセス**の cwd
+  基準で解決されてしまい `mark`/`gate`/`clear` の 3 プロセス間でぶれるため）、
+  未展開の `~`、および `/`（`/` はファイルシステム全体を信頼領域にする＝値で
+  ゲートを無効化することになるため）。不正なエントリがあっても、同じ変数内の
+  正当なエントリは巻き添えで落とさない。
+- **なぜ環境変数なのか（測定結果、2026-08-05）**: harness が「追加の作業
+  ディレクトリ」を hook に伝える経路は**存在しない**。列挙して確認済み —
+  `harness_core::hook::HookInput` に該当フィールドは無く、`CLAUDE_*` 系の環境変数も
+  それを運んでおらず、`~/.claude/settings.json` の `permissions` は `allow` と
+  `deny` の 2 キーしか持たない（`additionalDirectories` は存在しない）。
+  自動検出は「見落としていた」のではなく**やりようが無い**。将来そのような経路が
+  追加されたら、この環境変数より優先してそちらを使い、この knob は削除するべき。
+
+### この節が主張して**いない**こと
+
+上記は「信頼領域の定義」についての記述であり、**このクレートが監査済み・完全・
+正しいという主張ではない**。特に、別途起票済みの permissive 方向の欠陥
+（backlog `5b0e9fe1`）は **ここでは直していない**: PostToolUse の matcher は
+`WebFetch|WebSearch|Read` で、`decide_mark` は catch-all の `Ok(())` を持つため、
+**外部パスへの `Grep`、シェル経由の外部ファイル読み取り、シェル経由の URL 取得は
+いずれも外部 content を取り込みながら mark されない**。0.1.9 はその穴を狭めても
+広げてもいない。
 
 ## observe-only モード（計測専用・既定では無効）
 

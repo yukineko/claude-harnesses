@@ -1,9 +1,9 @@
 [package]
 name = "taintguard"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 rust-version.workspace = true
-description = "Provenance-scoped least-privilege gate: detects a turn that consumed untrusted-provenance content (WebFetch/WebSearch/an external Read) and downgrades write-class tools (Bash/Write/Edit/MultiEdit/NotebookEdit) to ask/deny for the rest of that turn; restores after a clean Stop."
+description = "Provenance-scoped least-privilege gate: detects a turn that consumed untrusted-provenance content (WebFetch/WebSearch/a Read outside the session's trust domain — its cwd, the other git worktrees of that same repository, and any root declared through TAINTGUARD_TRUSTED_ROOTS) and downgrades write-class tools (Bash/Write/Edit/MultiEdit/NotebookEdit) to ask/deny for the rest of that turn; restores after a clean Stop."
 license = "MIT"
 
 [[bin]]

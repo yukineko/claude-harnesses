@@ -281,7 +281,10 @@ fn run_in(cwd: &Path) -> Result<()> {
         }
     };
     let rollbacks = store::read_rollbacks(cwd).unwrap_or_default();
-    let escalations = review_escalation::read_open_escalations(cwd);
+    // Still the two-valued shim: an unreadable escalation queue drains as zero
+    // rows here. Migrating this call site to `scan_open_escalations` (warn on
+    // `Undetermined`, as the ViolationScan arm above already does) is task t3.
+    let escalations = review_escalation::read_open_escalations_best_effort(cwd);
     // Open blocked merges (real conflicts + gated overlaps) drain too, keyed as
     // `merge-conflict:<conflict_id>` in bridged_entries.jsonl (fail-soft).
     let merge_conflicts = store::open_merge_conflicts(cwd).unwrap_or_default();

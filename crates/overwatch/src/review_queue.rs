@@ -505,9 +505,12 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<()> {
         }
     };
 
-    // Source 4: condukt's durable escalation queue, foreign-read by path
-    // (fail-soft: absent condukt / no open escalations contributes nothing).
-    let escalations = review_escalation::read_open_escalations(&cwd);
+    // Source 4: condukt's durable escalation queue, foreign-read by path.
+    // Absent condukt / no open escalations contributes nothing — but so does an
+    // escalation queue that could not be READ, because this is still the
+    // two-valued shim. Migrating it to `scan_open_escalations` and warning on
+    // `Undetermined` (as the [ai-finding] source above already does) is task t3.
+    let escalations = review_escalation::read_open_escalations_best_effort(&cwd);
 
     // Source 5: OPEN blocked merges (real conflicts + gated mid-flight overlaps),
     // fail-soft (absent/empty store contributes nothing).

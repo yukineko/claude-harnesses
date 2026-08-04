@@ -10,14 +10,26 @@ fail-open を『後から検出する』のをやめ、『そもそも書けな�
 - DoD6: 生 IO 呼び出しの baseline が boundary ラッパ経由へ移行され単調減少する — この軸は converged=達成として固定。現況 baseline=60（実測 2026-07-31 HEAD 30f6d7b5、count==baseline、floor held）。以後の勾配は raw-IO ではなく DoD9 へ移す。
 - DoD7: fail-open reader が三値 Determination へ移行され確定数が単調増加する。既知集合 M1-M4 は 4/4 確定で全て main に landed。
 - DoD8: fail-open reader は raw-IO ratchet に現れない意味的 Result 崩壊も含むため、可能な箇所は boundary 経由へ寄せて DoD6 と同時前進させる。
-- DoD9: 各 gate crate の verdict 経路が三値（harness_core::verdict）で表現され、silence・空集合・panic・IO・parse・subprocess 失敗を restrictive へ解決する。per-gate 監査で『未監査の verdict 経路 0本』を crate ごとの完了条件とする。【計測単位（2026-07-31 に定義。C3 未達を解消）】分母 ＝ harness_core::verdict を参照するクレート集合。実測 22（再測定: grep -rln で harness_core::verdict:: を crate の src 配下から数え、crate 名で uniq）。分子 ＝ per-gate 監査ドキュメントが存在するクレート数。実測 6（schemaguard, autoflow, budgetguard, mutategate, propguard, stuckguard）。現況 6 of 22。【点の修正は監査に数えない】mutategate floorless-clamp(cde2212c)・condukt silent-verifier(dd3aad81)・blastguard cwd-bypass(ea1355f5) は個別欠陥の修正であって『全 verdict 経路を列挙し監査した』ではない。監査済みと数えるのは逐語引用つきの監査ドキュメントがある crate だけ（docs/audit-schemaguard-verdict-paths.md, docs/autoflow-verdict-audit.md, docs/audit-budgetguard-verdict-paths.md, docs/audit-mutategate-verdict-paths.md, docs/audit-propguard-verdict-paths.md, docs/audit-stuckguard-verdict-paths.md）。各確定は利害のない agent が fault injection で RED→GREEN(F→P)。
+- DoD9: 各 gate crate の verdict 経路が三値（harness_core::verdict）で表現され、silence・空集合・panic・IO・parse・subprocess 失敗を restrictive へ解決する。per-gate 監査で『未監査の verdict 経路 0本』を crate ごとの完了条件とする。【計測単位（2026-07-31 に定義。C3 未達を解消）】分母 ＝ harness_core::verdict を参照するクレート集合。実測 22（再測定: grep -rln で harness_core::verdict:: を crate の src 配下から数え、crate 名で uniq）。分子 ＝ per-gate 監査ドキュメントが存在するクレート数。実測 7（schemaguard, autoflow, budgetguard, mutategate, propguard, stuckguard, reviewgate）。現況 7 of 22。【点の修正は監査に数えない】mutategate floorless-clamp(cde2212c)・condukt silent-verifier(dd3aad81)・blastguard cwd-bypass(ea1355f5) は個別欠陥の修正であって『全 verdict 経路を列挙し監査した』ではない。監査済みと数えるのは逐語引用つきの監査ドキュメントがある crate だけ（docs/audit-schemaguard-verdict-paths.md, docs/autoflow-verdict-audit.md, docs/audit-budgetguard-verdict-paths.md, docs/audit-mutategate-verdict-paths.md, docs/audit-propguard-verdict-paths.md, docs/audit-stuckguard-verdict-paths.md, docs/audit-reviewgate-verdict-paths.md）。各確定は利害のない agent が fault injection で RED→GREEN(F→P)。【分子は監査ドキュメントの存在で数える＝是正の landed とは別軸】reviewgate の監査は permissive 経路を 8 件見つけて 1 件も是正していないが、分子には数える（propguard も F-2/F-3 を未是正のまま backlog へ回して数えている）。是正の進捗は分子ではなく backlog 側で追う。
 - DoD10: 新規 gate crate（taintguard 等）は誕生時点から verdict 三値化の作法で実装される。taintguard は0.1.0で新規作成、0.1.1で3ホール閉鎖、3rd trigger配線済み。enabledPlugins 未登録で inert（backlog e4687aad で追跡）。
 
 ## measuring_stick
 擁護可能性 × ゴールへの接近距離 ÷ コスト（各確定は利害のない agent の RED oracle を fault injection で先に観測してから GREEN 化して確定＝F→P。build≠validate）
 
 ## current_gap
-DoD9 は 6 of 22（stuckguard の監査が 2026-08-04 に landed し分子が 5→6。GATE crate としては 3 本目で、同日に propguard と 2 本進んだ）。ゴールとの最大の差は『verdict 経路を持つと分かっているのに、一度も列挙されていない crate が 16 本ある』こと。分母は 2026-07-31 に定義済み（harness_core::verdict 参照クレート、実測 22）。stuckguard の監査は 35 サイトを未分類 0 で分類し、fail-open を 1 件発見して修正した — progress advisory が『測れなかった第三 signal』を測定値 0.0 として平均に入れており、score の上界が 2/3 ＝ 既定閾値 0.75 未満に固定されていた。つまり error digest を持たない全ループ（Read/Grep/Edit の繰り返し＝この advisory が捕まえるべき形そのもの）で数学的に発火不能だった。docstring は正しい仕様を書いており実装だけが違った＝ CLAUDE.md 第4節の事案。次の一手は blastguard に戻ること。120 サイト中およそ 118 が個別未分類のまま据え置かれており、かつカテゴリ棄却が実在の欠陥を隠した当事者である。残る未監査 GATE crate は specguard と overwatch。
+DoD9 は 7 of 22。ゴールとの最大の差は『verdict 経路を持つと分かっているのに、一度も列挙されていない crate が 15 本ある』こと。分母は 2026-07-31 に定義済み（harness_core::verdict 参照クレート、実測 22。2026-08-04 に再測定して 22 で不変）。
+
+5→6 は stuckguard の監査（2026-08-04 landed、本セッション）。35 サイトを未分類 0 で分類し fail-open を 1 件発見・修正した — progress advisory が『測れなかった第三 signal』を測定値 0.0 として平均に入れており、score の上界が 2/3 ＝ 既定閾値 0.75 未満に固定されていた。つまり error digest を持たない全ループ（Read/Grep/Edit の繰り返し＝この advisory が捕まえるべき形そのもの）で数学的に発火不能だった。docstring は正しい仕様を書いており実装だけが違った＝ CLAUDE.md 第4節の事案。
+
+6→7 は reviewgate の監査で、**別セッション**が 2026-08-04 に landed させたもの（本セッションはそれを分子へ反映しただけで、監査自体は行っていない）。分子の更新が遅れて charter が実測を過小申告していたのを是正した。この監査は手法として本セッションの 2 本より強い: 判定を産む関数と消費 call site を全列挙したうえで、疑わしい経路をリリースビルドしたバイナリへの**ブラックボックス fault injection 8 本**で観測している（PATH 先頭の fake git で内容取得だけを失敗させる、reviewer に非 UTF-8 を出力させる、glob を 1 個だけ壊す 等）。判断ではなく観測に落とす手本として、以降の per-gate 監査はこの水準を既定にする。
+
+**ただし reviewgate は 8 件すべて未是正**であり、しかもその P1（diff 取得失敗が『空 diff ＝ 変更なし』に潰れ無診断で allow）は propguard の F-2（backlog 1217fa4f）と**同一の shape** である。同じ欠陥が別 crate に独立して存在することが観測で確認された＝これは per-crate の個別欠陥ではなく**横断パターン**。監査を 1 crate ずつ進める現在の進め方は、このパターンを crate ごとに再発見し続けることになる。
+
+次の一手の候補は 2 つあり、どちらを取るかは人間の判断に返す:
+(a) blastguard の監査（従来の予定。census 実測 131 サイト — scripts/census-verdict-terminals.py blastguard、2026-08-04、測定点 1f0cf124。charter の前版は 120 と書いていたが再現しなかったので置き換えた）。カテゴリ棄却が実在の欠陥を隠した当事者であり、個別分類の価値は高い。
+(b) 『diff/scan 取得失敗が空集合に潰れて allow になる』横断パターンの一括是正。reviewgate P1・propguard F-2 で 2 crate 確認済みで、監査済み 7 crate を横断で当たれば更に出る見込み。
+
+残る未監査 GATE crate は blastguard・specguard・overwatch。
 
 ## next_action
 blastguard の verdict 経路を per-gate 監査する（未監査の verdict 経路 0本 が完了条件）。blastguard を先に取る理由: CLAUDE.md 第3節が三値の正典例として crates/blastguard/src/model.rs:5『Three answers, not two.』を名指ししており、『二値型そのものが原因』という主張の当の実装が一度も全経路を列挙されていない。さらに blastguard は繰り返し mirror-gap（片側の構文だけ塞がれる）が見つかっている crate なので、点の修正ではなく列挙が効く。手順は budgetguard 監査と同型: (1) 全 verdict 経路を逐語引用つきで列挙し permissive な既知集合を明示、(2) 利害のない agent が fault injection で RED を先に観測、(3) 三値化して GREEN、(4) 意図的な permissive 仕様は壊さない、(5) 散文と実挙動の食い違いは同一コミットで是正、(6) docs/audit-blastguard-verdict-paths.md を追加（これが分子を動かす完了条件）。

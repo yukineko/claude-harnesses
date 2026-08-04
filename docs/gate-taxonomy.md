@@ -42,8 +42,9 @@
 | `check-plugin-versions.py`（version-lockstep） | 実装正しさ | pre-commit / CI（`version-lockstep.yml`） | 3ファイルの version 文字列が一致するかだけを見る機械的整合チェック |
 | `check-version-bumped.py`（bump-on-change） | 実装正しさ | pre-commit / CI（`version-lockstep.yml`） | base ref との version 比較という機械的な bump-on-change チェック |
 | `check-bench-regression.py` | テスト適合性 | CI（`bench-regression.yml`） | benchkit の SWE-bench 実行結果から回帰（regression）を検出する、テスト実行結果ベースの判定 |
-| `check-gate-crates-sync.py` | 実装正しさ | CI（`gate-crates-sync.yml`。および pre-push が参照する GATE_CRATES 集合の元） | GATE_CRATES 集合が複数ソース間で一致するかを機械照合する |
-| `check-plugin-rollout.py` | 実装正しさ | pre-push（advisory）/ CI（`gate-crates-sync.yml` はテストのみ実行、本体は pre-push 駆動） | source version と registry version の文字列比較のみの機械判定 |
+| `check-gate-crates-sync.py`（gate-crates-sync） | 実装正しさ | **pre-commit**（2026-08-04 に配線。それまで駆動元は実在しない `gate-crates-sync.yml` の記述だけで、実質どこからも実行されていなかった。だから捕まえるはずのドリフトが在庫として残り続けた。backlog fb6b1796） | GATE_CRATES 集合が 11 ソース間で一致するかを機械照合する。正典は `scripts/rollout-plugins.sh` の `GATE_CRATES=` 行 |
+| `check-launcher-exec-bit.py`（launcher-exec-bit） | 実装正しさ | pre-commit | `crates/<crate>/bin/<name>` launcher が git **index** で 100755 かを検査する。working tree の mode は `core.fileMode=false` のため信用できない。100644 で配布された launcher は `Permission denied` で暗転し、hook が起動しないので finding も出ない = red ではなく dark になる（backlog 8cb3bc22） |
+| `check-plugin-rollout.py` | 実装正しさ | pre-push（advisory）/ CI（`gate-crates-sync.yml` はテストのみ実行、本体は pre-push 駆動） | source version と registry version の文字列比較のみの機械判定。「意図的に parked」という第3状態を `scripts/parked-plugins.json` で宣言でき、宣言済み plugin の rollout/enablement 所見は red ではなく「PARKED ON PURPOSE」として（抑止した所見を逐語表示したうえで）報告される（backlog a6f165cd） |
 | `check-ci-red.py` | 実装正しさ | pre-push（advisory）/ CI（`gate-crates-sync.yml` はテストのみ実行、本体は pre-push 駆動） | GitHub Actions の run 履歴から連続 red 回数を数えるだけの機械判定 |
 
 ## トリガー種別の凡例
@@ -61,9 +62,11 @@
   (`.github/workflows/gate-crates-sync.yml`) では対応する `test_check_plugin_rollout.py` /
   `test_check_ci_red.py`（ユニットテスト）のみが実行され、本体スクリプト自体の実運用駆動は
   `.githooks/pre-push` に限られる（測定日 2026-07-23、`.github/workflows/` grep による）。
-- Continuous-Audit（GATE_CRATES = blastguard / propguard / specguard / stuckguard / mutategate の
-  敵対的レビュー）は本表のような常時ゲートではなく opt-in の別ループなので、この一覧には含めない
-  （`docs/OVERVIEW.md` の該当節を参照）。
+- Continuous-Audit（audit target crate の敵対的レビュー）は本表のような常時ゲートではなく opt-in の
+  別ループなので、この一覧には含めない（`docs/OVERVIEW.md` の該当節を参照）。**ここに crate 名を
+  列挙しない**のは意図的: かつて 5 件を書き並べていて `overwatch` と `taintguard` を落としたまま
+  陳腐化していた。target 集合の正典は `scripts/continuous-audit.sh` の `DEFAULT_TARGETS=`（GATE_CRATES
+  の superset）で、`check-gate-crates-sync.py` が機械照合する。ポインタは中身を持たないのでドリフトしない。
 
 ## 階層混在監査（2026-07-23）
 

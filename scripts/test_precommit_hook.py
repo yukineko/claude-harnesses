@@ -60,6 +60,8 @@ EXPECTED_SCANNERS = [
     "check-hardcoded-secret.py",
     "check-raw-io-ratchet.py",
     "check-worktree-isolation.py",
+    "check-gate-crates-sync.py",
+    "check-launcher-exec-bit.py",
 ]
 
 # Label the hook prints for each scanner, used to check the message names the
@@ -74,6 +76,8 @@ LABELS = {
     "check-hardcoded-secret.py": "secret-guard",
     "check-raw-io-ratchet.py": "raw-io-ratchet",
     "check-worktree-isolation.py": "worktree-isolation",
+    "check-gate-crates-sync.py": "gate-crates-sync",
+    "check-launcher-exec-bit.py": "launcher-exec-bit",
 }
 
 _STUB = """#!/usr/bin/env python3

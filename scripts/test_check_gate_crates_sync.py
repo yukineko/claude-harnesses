@@ -51,6 +51,10 @@ def _make_fixture_repo(
     mutation_missing=(),
     fail_open_extra=(),
     fail_open_missing=(),
+    ratchet_extra=(),
+    ratchet_missing=(),
+    claudemd_extra=(),
+    claudemd_missing=(),
     hint_comment="",
     rust_comment="",
     hint_prefix="",
@@ -88,6 +92,8 @@ def _make_fixture_repo(
     overview_set = apply(CANONICAL_SET, overview_extra, overview_missing)
     mutation_set = apply(CANONICAL_SET, mutation_extra, mutation_missing)
     fail_open_set = apply(CANONICAL_SET, fail_open_extra, fail_open_missing)
+    ratchet_set = apply(CANONICAL_SET, ratchet_extra, ratchet_missing)
+    claudemd_set = apply(CANONICAL_SET, claudemd_extra, claudemd_missing)
 
     _write(tmp / "scripts" / "rollout-plugins.sh", f'#!/bin/sh\nGATE_CRATES="{CANONICAL}"\n')
     _write(
@@ -150,6 +156,25 @@ def _make_fixture_repo(
         "GATE_CRATES = (\n"
         + "".join(f'    "{c}",\n' for c in sorted(fail_open_set))
         + ")\n",
+    )
+    # The raw-stdlib-I/O ratchet's scan scope — a fourth standalone Python source
+    # with the same module-level-tuple shape. Registered after it was found
+    # missing `taintguard` while reporting a green floor (backlog fb6b1796).
+    _write(
+        tmp / "scripts" / "check-raw-io-ratchet.py",
+        "GATE_CRATES = (\n"
+        + "".join(f'    "{c}",\n' for c in sorted(ratchet_set))
+        + ")\n",
+    )
+    # CLAUDE.md's prose list. Japanese phrasing on purpose: the file spells the
+    # concept as "GATE クレート" and never writes the identifier GATE_CRATES, so
+    # this pins that claudemd_crates() — not overview_md_crates() — is what reads
+    # it. Drifted to 6 in the same incident.
+    _write(
+        tmp / "CLAUDE.md",
+        "## plugin の version と反映\n\n"
+        f"反映手順・GATE クレート（{'/'.join(sorted(claudemd_set))}）の canary 要件の詳細は\n"
+        "docs/repo-operations.md を参照。\n",
     )
     return tmp
 
@@ -249,6 +274,69 @@ class DriftDetection(unittest.TestCase):
             self.assertFalse(ok)
             by_path = _by_path(parsed)
             self.assertNotIn("stuckguard", by_path["scripts/check-fail-open.py"])
+
+    def test_raw_io_ratchet_missing_a_crate_is_detected(self):
+        """scripts/check-raw-io-ratchet.py's GATE_CRATES IS its scan scope
+        (`iter_target_files()` walks crates/<c>/src for exactly these), so a
+        missing crate means that crate's raw stdlib I/O is never ratcheted while
+        the gate keeps printing "floor held". Measured missing `taintguard`
+        (backlog fb6b1796); untracked here at the time, so nothing noticed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), ratchet_missing=("stuckguard",))
+            ok, _canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertFalse(ok)
+            self.assertNotIn("stuckguard", _by_path(parsed)["scripts/check-raw-io-ratchet.py"])
+
+    def test_raw_io_ratchet_extra_crate_is_detected(self):
+        """Exact relation, so a SURPLUS crate is drift too: the ratchet would
+        walk a crate that is no longer a GATE crate and pin a floor over it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), ratchet_extra=("backlog",))
+            ok, _canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertFalse(ok)
+            self.assertIn("backlog", _by_path(parsed)["scripts/check-raw-io-ratchet.py"])
+
+    def test_claudemd_missing_a_crate_is_detected(self):
+        """CLAUDE.md is the norm file every session reads first, so a stale list
+        there is the copy most likely to be believed. Also drifted to 6 in
+        backlog fb6b1796 while untracked."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), claudemd_missing=("overwatch",))
+            ok, _canonical, parsed = cgcs.check(repo=str(repo))
+            self.assertFalse(ok)
+            self.assertNotIn("overwatch", _by_path(parsed)["CLAUDE.md"])
+
+    def test_claudemd_extractor_reads_japanese_prose_not_the_identifier(self):
+        """Pins WHY CLAUDE.md needs its own extractor rather than reusing
+        overview_md_crates(): CLAUDE.md writes `GATE クレート（…）` and never the
+        identifier `GATE_CRATES`, so the OVERVIEW regex finds nothing there. If
+        someone "simplifies" the two into one, this goes red."""
+        text = "反映手順・GATE クレート（blastguard/propguard/overwatch）の canary 要件"
+        self.assertEqual(
+            cgcs.claudemd_crates(text), {"blastguard", "propguard", "overwatch"}
+        )
+        self.assertIsNone(cgcs.overview_md_crates(text))
+
+    def test_claudemd_absent_list_is_drift_not_a_pass(self):
+        """No parsable list == no answer. Fail-closed: None, which check()
+        treats as drift, rather than an empty set that might compare equal by
+        luck."""
+        self.assertIsNone(cgcs.claudemd_crates("GATE クレートについては docs 参照"))
+        self.assertIsNone(cgcs.claudemd_crates("何も書いていない"))
+
+    def test_every_registered_source_parses_in_the_real_repo(self):
+        """Every registered SOURCES path must exist AND parse in the real repo.
+
+        The 2026-08-04 recurrence (backlog fb6b1796) was a ROSTER failure, not a
+        comparison failure: the drifted copies were simply not registered, so the
+        checker printed a green "consistent across 9 sources" over live drift. A
+        source that silently stops parsing (renamed constant, reflowed prose)
+        degrades the same way — the count in the OK line keeps rising while the
+        set behind it shrinks. This pins the roster itself."""
+        _ok, _canonical, parsed = cgcs.check(repo=str(REPO_ROOT))
+        unparsed = [path for path, _mode, crates in parsed if crates is None]
+        self.assertEqual(unparsed, [], f"registered sources that did not parse: {unparsed}")
+        self.assertEqual(len(parsed), len(cgcs.SOURCES))
 
     def test_rollout_hint_missing_a_crate_is_detected(self):
         """Regression: check-plugin-rollout.py's GATE list shipped for a while

@@ -1,0 +1,24 @@
+{
+  "_README": [
+    "Plugins deliberately left un-rolled-out / un-enabled. Read by",
+    "scripts/check-plugin-rollout.py (see its load_parked docstring).",
+    "An entry moves that plugin's rollout/enablement findings out of the red",
+    "lists into a 'PARKED ON PURPOSE' report. It does NOT change the exit code,",
+    "and it does not excuse source-tree defects (a missing bin/<crate> launcher)",
+    "or a removable superseded cache dir.",
+    "Required per entry: reason, parked_at (YYYY-MM-DD). Optional: revisit — the",
+    "starting point for reconsidering the park (a backlog id, a doc, a signal to",
+    "watch for). The key must name a crate dir or a plugin.json name under",
+    "crates/; a typo is reported, not ignored, because a typo'd park parks",
+    "nothing while reading as though it had.",
+    "Deleting an entry is how a park ends. Resolve the reason FIRST, then delete",
+    "— not the other way round (backlog a6f165cd)."
+  ],
+  "parked": {
+    "taintguard": {
+      "reason": "誤検知 eb39308e が未修正のため観測待ち。arm すると既知の誤検知でユーザーの編集作業がブロックされる (2026-08-04 に実際に発生)。plugin cache 側の launcher は実行ビットを外して強制を止めてある。",
+      "parked_at": "2026-08-04",
+      "revisit": "backlog eb39308e (誤検知の修正) が閉じたら、まず --canary で rollout して誤検知率を計測し、それが 0 と確認できてからこのエントリを削除する"
+    }
+  }
+}

@@ -283,7 +283,7 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
 class _FixtureCase(unittest.TestCase):
     """Rebinds the script's path constants at the fixture, restores after."""
 
-    def run_main(self, tmp, *, changed=(), core_version="0.2.1", **kwargs):
+    def run_main(self, tmp, *, changed=(), core_version="0.2.1", parked=None, **kwargs):
         crates, registry_path, settings_path = _make_fixture(Path(tmp), **kwargs)
         saved = (
             cpr.CRATES,
@@ -292,10 +292,21 @@ class _FixtureCase(unittest.TestCase):
             getattr(cpr, "SOURCE_CHANGED_SINCE", None),
             getattr(cpr, "PLUGIN_CACHE_ROOT", None),
             getattr(cpr, "SOURCE_CORE_VERSION", None),
+            cpr.PARKED_PATH,
         )
         cpr.CRATES = str(crates)
         cpr.REGISTRY_PATH = str(registry_path)
         cpr.SETTINGS_PATH = str(settings_path)
+        # Point the parked declaration at the fixture, ALWAYS. Left at its
+        # default it resolves to the real scripts/parked-plugins.json, whose
+        # entries name real crates (`taintguard`) that also exist in
+        # FIXTURE_PLUGINS — so the repo's own parks leaked into every fixture
+        # case and silently reclassified its findings. `parked=None` writes no
+        # file at all, i.e. the "nothing is parked" default.
+        parked_path = Path(tmp) / "parked-plugins.json"
+        if parked is not None:
+            parked_path.write_text(json.dumps(parked, indent=2), encoding="utf-8")
+        cpr.PARKED_PATH = str(parked_path)
         cpr.SOURCE_CHANGED_SINCE = _changed_stub(changed)
         # Without this the stale-version-dir dimension would inspect the REAL
         # plugin cache on the developer's machine and every case would inherit
@@ -317,6 +328,7 @@ class _FixtureCase(unittest.TestCase):
                 cpr.SOURCE_CHANGED_SINCE,
                 cpr.PLUGIN_CACHE_ROOT,
                 cpr.SOURCE_CORE_VERSION,
+                cpr.PARKED_PATH,
             ) = saved
         return rc, out.getvalue(), err.getvalue()
 
@@ -1241,6 +1253,327 @@ class SharedCrateVersion(_FixtureCase):
             f"the fallback must still catch drift, or absence WOULD be a "
             f"fail-open.\nout={out}\nerr={err}",
         )
+
+
+def _park(name="taintguard", **over):
+    """A minimal VALID parked declaration for one plugin."""
+    entry = {"reason": "false positive under measurement", "parked_at": "2026-08-04"}
+    entry.update(over)
+    return {"parked": {name: entry}}
+
+
+class Parked(_FixtureCase):
+    """The third state: deliberately not rolled out / not enabled.
+
+    Backlog a6f165cd. Before this existed the checker was binary, so a plugin
+    parked on purpose reported red on every run with no reachable green — and on
+    2026-08-04 that permanent red was read as a malfunction, taintguard was armed
+    to clear it, and its known false positive blocked the user's editing work.
+    """
+
+    def test_without_a_park_the_drift_is_red(self):
+        """The control arm. Everything below is only meaningful if this is red —
+        otherwise the parked cases would be passing for the wrong reason."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(
+                tmp, registry_versions={**FIXTURE_PLUGINS, "taintguard": None}
+            )
+        self.assertEqual(rc, cpr.RC_ROLLOUT)
+        self.assertIn("ROLLOUT DRIFT", err)
+        self.assertIn("taintguard", err)
+
+    def test_parked_plugin_rollout_drift_is_not_red(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(
+                tmp, registry_versions={**FIXTURE_PLUGINS, "taintguard": None}, parked=_park()
+            )
+        self.assertEqual(rc, cpr.RC_OK, err)
+        self.assertIn("PARKED ON PURPOSE", err)
+        self.assertNotIn("ROLLOUT DRIFT", err)
+
+    def test_parked_gate_crate_disabled_is_not_red(self):
+        """The other dimension a park speaks to. A parked GATE crate absent from
+        enabledPlugins is the state parking DESCRIBES, so it must not be the hard
+        enablement failure it is for an unparked one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(
+                tmp, enabled_absent=("taintguard",), parked=_park()
+            )
+        self.assertEqual(rc, cpr.RC_OK, err)
+        self.assertNotIn("DISABLED OR UNVERIFIABLE GATE CRATE", err)
+
+    def test_unparked_gate_crate_disabled_is_still_red(self):
+        """A park is per-plugin, not a blanket amnesty: parking taintguard must
+        not excuse propguard."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(
+                tmp, enabled_absent=("propguard",), parked=_park()
+            )
+        self.assertEqual(rc, cpr.RC_ENABLEMENT, err)
+        self.assertIn("propguard", err)
+
+    def test_the_report_prints_reason_date_and_revisit(self):
+        """A park with no visible reason is indistinguishable from one nobody
+        remembers making — which is how the incident started."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _rc, _out, err = self.run_main(
+                tmp,
+                registry_versions={**FIXTURE_PLUGINS, "taintguard": None},
+                parked=_park(revisit="backlog eb39308e"),
+            )
+        self.assertIn("false positive under measurement", err)
+        self.assertIn("parked since 2026-08-04", err)
+        self.assertIn("revisit: backlog eb39308e", err)
+
+    def test_the_report_prints_the_suppressed_finding_verbatim(self):
+        """A park silences a detection. Hiding WHAT it silenced would make this
+        feature the fail-open it exists to avoid."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _rc, _out, err = self.run_main(
+                tmp, registry_versions={**FIXTURE_PLUGINS, "taintguard": None}, parked=_park()
+            )
+        self.assertIn("suppressing 1 finding(s)", err)
+        self.assertIn("never installed", err)
+
+    def test_the_report_warns_the_reader_not_to_arm_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _rc, _out, err = self.run_main(
+                tmp, registry_versions={**FIXTURE_PLUGINS, "taintguard": None}, parked=_park()
+            )
+        self.assertIn("Do NOT 'fix' these by rolling them out", err)
+
+    def test_a_park_suppressing_nothing_says_so(self):
+        """A stale park is not a failure (being live is the good state) but it
+        must not be silent: left in place it would silence a FUTURE red that
+        nobody declared."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(tmp, parked=_park())
+        self.assertEqual(rc, cpr.RC_OK, err)
+        self.assertIn("suppressing NOTHING", err)
+
+    def test_green_line_does_not_claim_the_parked_plugin_is_deployed(self):
+        """A park must never be laundered into a green. The OK line is a claim
+        about a population, so the parked plugin has to be excluded from it and
+        named."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _rc, out, _err = self.run_main(
+                tmp, registry_versions={**FIXTURE_PLUGINS, "taintguard": None}, parked=_park()
+            )
+        self.assertIn(f"{len(FIXTURE_PLUGINS) - 1} plugins deployed", out)
+        self.assertIn("1 parked, reported above: taintguard", out)
+
+    def test_parked_does_not_excuse_a_missing_bin_launcher(self):
+        """Scope boundary: a park is a statement about DEPLOYMENT. A missing
+        bin/<crate> launcher is a source-tree defect that holds whether or not
+        the plugin is currently armed, so it stays red."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(
+                tmp, no_bin_launcher=("taintguard",), parked=_park()
+            )
+        self.assertEqual(rc, cpr.RC_ROLLOUT, err)
+        self.assertIn("launcher script", err)
+
+    def test_parked_does_not_excuse_an_unreadable_plugin_json(self):
+        """Same boundary on the other side: `unverifiable` is a broken source
+        tree, never an intentional state.
+
+        Also pins that the park is not misreported as a TYPO here. A crate whose
+        plugin.json is corrupt is absent from the parsed plugin list, so keying
+        the typo guard on that list alone sent the reader to repair
+        parked-plugins.json (nothing wrong with it) and let a bogus PARKED_CONFIG
+        outrank the real finding."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(
+                tmp, corrupt_plugin_json=("taintguard",), parked=_park()
+            )
+        self.assertEqual(rc, cpr.RC_UNVERIFIABLE, err)
+        self.assertNotIn("matches no plugin", err)
+
+    def test_absent_declaration_is_the_default_and_not_a_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(tmp, parked=None)
+        self.assertEqual(rc, cpr.RC_OK, err)
+        self.assertNotIn("PARKED", err)
+        self.assertNotIn("PARKED", out)
+
+    def test_unusable_declaration_exit_code_outranks_the_others(self):
+        """When the file that says which reds are intentional is unusable, acting
+        on any other remedy first risks arming something parked on purpose."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, _out, err = self.run_main(
+                tmp,
+                registry_versions={**FIXTURE_PLUGINS, "taintguard": None},
+                parked={"parked": {"nosuchplugin": {"reason": "x", "parked_at": "2026-08-04"}}},
+            )
+        self.assertEqual(rc, cpr.RC_PARKED_CONFIG, err)
+        self.assertIn("UNUSABLE PARKED DECLARATION", err)
+        # ...and the red it could not classify is still shown, not swallowed.
+        self.assertIn("ROLLOUT DRIFT", err)
+
+
+class ParkedDeclaration(unittest.TestCase):
+    """load_parked() validation.
+
+    Every rejection below would, if it instead resolved to "nothing is parked",
+    print a red with no explanation attached — resurrecting the exact misreading
+    this feature exists to prevent. And every rejection that instead resolved to
+    "parked" would silence a red nobody declared.
+    """
+
+    def _load(self, decl):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "p.json"
+            path.write_text(json.dumps(decl), encoding="utf-8")
+            return cpr.load_parked(
+                [(c, c, v) for c, v in FIXTURE_PLUGINS.items()], path=str(path)
+            )
+
+    def test_absent_file_is_not_a_problem(self):
+        """Nothing parked is the normal case and the default this repo sits at."""
+        self.assertEqual(cpr.load_parked([], path="/nonexistent/p.json"), ({}, []))
+
+    def test_malformed_json_is_reported_and_parks_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "p.json"
+            path.write_text("{not json", encoding="utf-8")
+            parked, problems = cpr.load_parked(
+                [("taintguard", "taintguard", "0.1.2")], path=str(path)
+            )
+        self.assertEqual(parked, {})
+        self.assertEqual(len(problems), 1)
+        self.assertIn("unparseable", problems[0])
+
+    def test_wrong_top_level_shape_is_reported(self):
+        parked, problems = self._load(["taintguard"])
+        self.assertEqual(parked, {})
+        self.assertEqual(len(problems), 1)
+
+    def test_missing_parked_key_is_reported(self):
+        parked, problems = self._load({"plugins": {}})
+        self.assertEqual(parked, {})
+        self.assertEqual(len(problems), 1)
+
+    def test_valid_entry_is_accepted(self):
+        parked, problems = self._load(_park())
+        self.assertEqual(list(parked), ["taintguard"])
+        self.assertEqual(problems, [])
+
+    def test_extra_top_level_keys_are_allowed(self):
+        """The real file carries a _README array; that must not be a problem."""
+        decl = dict(_park())
+        decl["_README"] = ["a note"]
+        parked, problems = self._load(decl)
+        self.assertEqual(list(parked), ["taintguard"])
+        self.assertEqual(problems, [])
+
+    def test_entry_without_a_reason_is_rejected(self):
+        parked, problems = self._load(_park(reason=""))
+        self.assertEqual(parked, {})
+        self.assertIn("reason", problems[0])
+
+    def test_entry_without_a_parked_at_is_rejected(self):
+        parked, problems = self._load({"parked": {"taintguard": {"reason": "x"}}})
+        self.assertEqual(parked, {})
+        self.assertIn("parked_at", problems[0])
+
+    def test_non_date_parked_at_is_rejected(self):
+        """How long the park has stood is the question this field answers, so an
+        unparseable one answers nothing."""
+        parked, problems = self._load(_park(parked_at="last tuesday"))
+        self.assertEqual(parked, {})
+        self.assertIn("YYYY-MM-DD", problems[0])
+
+    def test_non_object_entry_is_rejected(self):
+        parked, problems = self._load({"parked": {"taintguard": "because"}})
+        self.assertEqual(parked, {})
+        self.assertIn("must be an object", problems[0])
+
+    def test_unknown_plugin_name_is_rejected_not_ignored(self):
+        """A typo'd park parks NOTHING while reading as though it had, so the red
+        persists and whoever wrote the entry believes it was handled. That is
+        worse than no park at all, so it is reported."""
+        parked, problems = self._load(_park(name="taintgaurd"))
+        self.assertEqual(parked, {})
+        self.assertIn("matches no plugin", problems[0])
+
+    def test_plugin_name_differing_from_the_crate_dir_is_accepted(self):
+        """The registry keys off the plugin NAME, which can differ from the crate
+        dir; either spelling must be a valid park key."""
+        parked, problems = cpr.load_parked(
+            [("run-book", "runbook", "1.0.0")],
+            path=self._write({"parked": {"runbook": {"reason": "x", "parked_at": "2026-08-04"}}}),
+        )
+        self.assertEqual(list(parked), ["runbook"])
+        self.assertEqual(problems, [])
+
+    def test_a_valid_entry_beside_an_invalid_one_still_parks(self):
+        """Per-entry validation: one bad entry must not silently discard a good
+        one, which would un-park something on purpose."""
+        parked, problems = self._load(
+            {
+                "parked": {
+                    "taintguard": {"reason": "x", "parked_at": "2026-08-04"},
+                    "nosuchplugin": {"reason": "y", "parked_at": "2026-08-04"},
+                }
+            }
+        )
+        self.assertEqual(list(parked), ["taintguard"])
+        self.assertEqual(len(problems), 1)
+
+    _written = []
+
+    def _write(self, decl):
+        tmp = tempfile.TemporaryDirectory()
+        self._written.append(tmp)
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "p.json"
+        path.write_text(json.dumps(decl), encoding="utf-8")
+        return str(path)
+
+
+class ParkedRealDeclaration(unittest.TestCase):
+    """The declaration this repo actually ships must be valid and taintguard must
+    be in it — the park is a live operational decision (backlog a6f165cd), not a
+    test fixture, so a silent loss of it would re-arm the gate."""
+
+    def test_the_shipped_declaration_parses_and_parks_taintguard(self):
+        plugins, _unverifiable = cpr.scan_plugins()
+        parked, problems = cpr.load_parked(
+            plugins, path=str(Path(cpr.REPO) / "scripts" / "parked-plugins.json")
+        )
+        self.assertEqual(problems, [], f"the shipped declaration is invalid: {problems}")
+        self.assertIn("taintguard", parked)
+        self.assertIn("eb39308e", parked["taintguard"]["reason"])
+        self.assertIn("revisit", parked["taintguard"])
+
+
+class PartitionParked(unittest.TestCase):
+    """The prefix rule that decides which findings a park covers."""
+
+    def test_a_plugins_own_finding_is_suppressed(self):
+        red, suppressed = cpr.partition_parked(
+            ["taintguard: source=1 registry=0"], {"taintguard": {}}
+        )
+        self.assertEqual(red, [])
+        self.assertEqual(len(suppressed["taintguard"]), 1)
+
+    def test_a_fleet_wide_finding_that_merely_names_the_crate_stays_red(self):
+        """The superseded-version-dir line names crates INSIDE its text. A
+        removable cache dir is removable whether or not the plugin is parked, so
+        a substring match here would quietly excuse it."""
+        line = "2 superseded plugin version dir(s) still in the cache: taintguard/0.1.7"
+        red, suppressed = cpr.partition_parked([line], {"taintguard": {}})
+        self.assertEqual(red, [line])
+        self.assertEqual(suppressed["taintguard"], [])
+
+    def test_another_plugins_finding_stays_red(self):
+        red, _s = cpr.partition_parked(["propguard: not enabled"], {"taintguard": {}})
+        self.assertEqual(len(red), 1)
+
+    def test_no_park_leaves_everything_red(self):
+        red, suppressed = cpr.partition_parked(["a: x", "b: y"], {})
+        self.assertEqual(len(red), 2)
+        self.assertEqual(suppressed, {})
 
 if __name__ == "__main__":
     unittest.main()

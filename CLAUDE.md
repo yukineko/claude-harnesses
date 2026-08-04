@@ -361,14 +361,25 @@ merge で統合すればよい。統合できないのは**同じ index / 作業
 `[package].version` を micro 上げる**。リンク先 36 plugin の bump は要求しない（1 commit あたり
 108 ファイルが動き並行セッションと必ず衝突するため。§8）。`check-version-bumped.py` が強制する。
 
-強制ゲート3本（commit 前・push 前・CI で回す）: `check-plugin-versions.py`（lockstep）/
+強制ゲート4本（commit 前・push 前・CI で回す）: `check-plugin-versions.py`（lockstep）/
 `check-version-bumped.py`（bump-on-change。plugin と harness-core の両方）/
-`check-plugin-rollout.py`（rollout 実行済みか。`.deployed-from.json` の `harness_core_version` も見る）。
+`check-plugin-rollout.py`（rollout 実行済みか。`.deployed-from.json` の `harness_core_version` も見る）/
+`check-launcher-exec-bit.py`（`crates/<c>/bin/<name>` launcher が git **index** で 100755 か。
+`core.fileMode=false` なので working tree の mode は信用できない。100644 のまま配布された launcher は
+`Permission denied` で暗転し、hook が起動しない = finding も出ないので red ではなく dark になる）。
 
-反映手順・GATE クレート（blastguard/propguard/specguard/stuckguard/mutategate/overwatch）の
-canary 要件・低レベル構成要素（rebuild-plugins.sh/sync-plugin-assets.sh）・`overwatch
+**「意図的に parked」は宣言する**。計測待ち等で意図的に rollout / enable しない plugin は
+`scripts/parked-plugins.json` に理由・`parked_at`・再検討の起点（`revisit`）を書く。宣言した plugin の
+rollout/enablement 所見は red ではなく「PARKED ON PURPOSE」として（抑止した所見を逐語表示したうえで）
+報告される。**逆に、宣言のない red を「たぶん意図的だろう」と解釈して rollout / enable で消してはいけない**
+（2026-08-04 にそれをやって、既知の誤検知でユーザーの編集作業をブロックした）。
+
+反映手順・GATE クレート（blastguard/propguard/specguard/stuckguard/taintguard/mutategate/overwatch）
+の canary 要件・低レベル構成要素（rebuild-plugins.sh/sync-plugin-assets.sh）・`overwatch
 review-queue`（統合レビュー窓口）の詳細は [`docs/repo-operations.md`](docs/repo-operations.md)
-を参照。
+を参照。この列挙は `scripts/check-gate-crates-sync.py` の SOURCES に登録された正典コピーの
+1 つであり、`scripts/rollout-plugins.sh` の `GATE_CRATES=` と機械照合される（勝手に増減させると
+`gate-crates-sync` ゲートが commit を止める）。
 
 ## さらに読む（docs/）
 

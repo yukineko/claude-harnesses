@@ -1,6 +1,6 @@
 {
   "name": "hypothesis",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "v0.1.8: the store's load->mutate->save cycle is now protected by an exclusive file lock (`StoreLock`, ported from backlog::lock/condukt::lock::RunLock/overwatch::lock::LeaseLock) so two concurrent processes mutating the store (e.g. `validate`/`reject`/`confidence`) can no longer lose one update to a last-writer-wins race; a multi-process regression test proves the fix (and that it fails without the lock). PDO hypothesis lifecycle management — create, validate, and track discovery hypotheses aligned with compass goals.",
   "author": {
     "name": "yukineko"

@@ -95,6 +95,14 @@ case "$triple" in
   *)         arch=unknown ;;
 esac
 SUF="$os-$arch"
+# cargo/rustc append .exe to every build output on Windows; the deployed cache
+# filename and the launcher's own `binary-$os-$arch$ext` lookup follow suit
+# (see crates/*/bin/<name>). Without this, every "$REL/$binname" / cache-glob
+# below silently misses on Windows: [ -x ] happens to auto-resolve .exe via
+# the MSYS access() shim, but cp/ls/basename globbing do not, so builds
+# "succeed" while zero bytes actually land in the cache (measured 2026-08-04).
+EXT=""
+[ "$os" = windows ] && EXT=".exe"
 
 echo "repo:        $REPO"
 echo "build dir:   $REL"
@@ -236,11 +244,11 @@ write_provenance() {
 # --- refresh ---------------------------------------------------------------
 updated_cache=0 updated_repo=0 updated_hooks=0 missing="" checked=0 skipped_filter=0
 shopt -s nullglob
-for binfile in "$CACHE"/*/*/bin/*-"$SUF"; do
+for binfile in "$CACHE"/*/*/bin/*-"$SUF$EXT"; do
   checked=$((checked+1))
-  base=$(basename "$binfile")     # e.g. condukt-<os>-<arch>
-  binname=${base%-$SUF}           # e.g. condukt
-  src="$REL/$binname"
+  base=$(basename "$binfile")     # e.g. condukt-<os>-<arch>[.exe]
+  binname=${base%-$SUF$EXT}       # e.g. condukt
+  src="$REL/$binname$EXT"
 
   version_dir="$(dirname "$(dirname "$binfile")")"   # $CACHE/<plugin-name>/<version>
   plugin_name="$(basename "$(dirname "$version_dir")")"
@@ -334,23 +342,23 @@ for i in "${!plugin_names[@]}"; do
   for f in "$bindir"/*; do
     b=$(basename "$f")
     case "$b" in
-      *-darwin-arm64|*-darwin-x86_64|*-linux-x86_64|*-linux-arm64|*-windows-x86_64|*-windows-arm64)
+      *-darwin-arm64|*-darwin-x86_64|*-linux-x86_64|*-linux-arm64|*-windows-x86_64.exe|*-windows-arm64.exe)
         continue ;;
     esac
     binname="$b"; break
   done
   [ -n "$binname" ] || continue
-  hostbin="$bindir/$binname-$SUF"
+  hostbin="$bindir/$binname-$SUF$EXT"
   [ -e "$hostbin" ] && continue         # host bin already present (main loop handled it)
-  src="$REL/$binname"
+  src="$REL/$binname$EXT"
   [ -x "$src" ] || continue             # only seed a plugin we actually built this run
   checked=$((checked+1))
   if [ $dry = 1 ]; then
-    echo "cache  would seed $binname-$SUF (fresh version dir $pname/$ver)"
+    echo "cache  would seed $binname-$SUF$EXT (fresh version dir $pname/$ver)"
   else
     cp -f "$src" "$hostbin"; chmod +x "$hostbin"
     write_provenance "$CACHE/$pname/$ver" "$pname"
-    echo "cache  seeded $binname-$SUF (fresh version dir $pname/$ver)"
+    echo "cache  seeded $binname-$SUF$EXT (fresh version dir $pname/$ver)"
   fi
   updated_cache=$((updated_cache+1))
 done

@@ -111,22 +111,30 @@ case "$triple" in
   *)         arch=unknown ;;
 esac
 SUF="$os-$arch"
-echo "host suffix: $SUF"
+# Mirror rebuild-plugins.sh's own EXT handling: cargo/rustc append .exe to
+# every Windows build output, and the fixture below stands in for "a binary
+# cargo just built" — an extensionless fake on a windows host does not match
+# what rebuild-plugins.sh actually globs/execs, so the fixture would silently
+# stop exercising Part B on Windows without this (measured 2026-08-04: Part B
+# reported "cache bins scanned: 0" and failed on this host before this fix).
+EXT=""
+[ "$os" = windows ] && EXT=".exe"
+echo "host suffix: $SUF$EXT"
 
 # Fake "freshly built" binaries under a private CARGO_TARGET_DIR (so no real
 # `cargo build` is needed — --dry-run never invokes cargo build anyway, only
 # `cargo metadata` to resolve the target dir, which honors this env override).
 FAKE_TARGET="$TMP/fake-target"
 mkdir -p "$FAKE_TARGET/release"
-printf 'FAKE-A-NEW\n' > "$FAKE_TARGET/release/fakepluginA"
-printf 'FAKE-B-NEW\n' > "$FAKE_TARGET/release/fakepluginB"
-chmod +x "$FAKE_TARGET/release/fakepluginA" "$FAKE_TARGET/release/fakepluginB"
+printf 'FAKE-A-NEW\n' > "$FAKE_TARGET/release/fakepluginA$EXT"
+printf 'FAKE-B-NEW\n' > "$FAKE_TARGET/release/fakepluginB$EXT"
+chmod +x "$FAKE_TARGET/release/fakepluginA$EXT" "$FAKE_TARGET/release/fakepluginB$EXT"
 
 FAKE_CACHE="$TMP/fake-cache"
 mkdir -p "$FAKE_CACHE/fakepluginA/1.0.0/bin" "$FAKE_CACHE/fakepluginB/1.0.0/bin"
-printf 'FAKE-A-OLD\n' > "$FAKE_CACHE/fakepluginA/1.0.0/bin/fakepluginA-$SUF"
-printf 'FAKE-B-OLD\n' > "$FAKE_CACHE/fakepluginB/1.0.0/bin/fakepluginB-$SUF"
-chmod +x "$FAKE_CACHE/fakepluginA/1.0.0/bin/fakepluginA-$SUF" "$FAKE_CACHE/fakepluginB/1.0.0/bin/fakepluginB-$SUF"
+printf 'FAKE-A-OLD\n' > "$FAKE_CACHE/fakepluginA/1.0.0/bin/fakepluginA-$SUF$EXT"
+printf 'FAKE-B-OLD\n' > "$FAKE_CACHE/fakepluginB/1.0.0/bin/fakepluginB-$SUF$EXT"
+chmod +x "$FAKE_CACHE/fakepluginA/1.0.0/bin/fakepluginA-$SUF$EXT" "$FAKE_CACHE/fakepluginB/1.0.0/bin/fakepluginB-$SUF$EXT"
 
 # --- with --only=fakepluginA: only A is reported as updatable, B is skipped --
 OUT="$(CARGO_TARGET_DIR="$FAKE_TARGET" CLAUDE_PLUGIN_CACHE="$FAKE_CACHE" \
@@ -134,7 +142,7 @@ OUT="$(CARGO_TARGET_DIR="$FAKE_TARGET" CLAUDE_PLUGIN_CACHE="$FAKE_CACHE" \
 RC=$?
 echo "$OUT" | sed 's/^/    /'
 [ "$RC" -eq 0 ] || fail "rebuild-plugins.sh --only=fakepluginA --dry-run should exit 0 (got $RC)"
-grep -q "cache  would update fakepluginA-$SUF" <<<"$OUT" \
+grep -q "cache  would update fakepluginA-$SUF$EXT" <<<"$OUT" \
   || fail "expected fakepluginA to be reported as would-update"
 pass "--only=fakepluginA: targeted plugin IS reported as would-update"
 grep -q "fakepluginB" <<<"$OUT" \
@@ -151,16 +159,16 @@ OUT2="$(CARGO_TARGET_DIR="$FAKE_TARGET" CLAUDE_PLUGIN_CACHE="$FAKE_CACHE" \
 RC2=$?
 echo "$OUT2" | sed 's/^/    /'
 [ "$RC2" -eq 0 ] || fail "rebuild-plugins.sh --dry-run (no --only) should exit 0 (got $RC2)"
-grep -q "cache  would update fakepluginA-$SUF" <<<"$OUT2" \
+grep -q "cache  would update fakepluginA-$SUF$EXT" <<<"$OUT2" \
   || fail "baseline (no --only): fakepluginA should still be would-update"
-grep -q "cache  would update fakepluginB-$SUF" <<<"$OUT2" \
+grep -q "cache  would update fakepluginB-$SUF$EXT" <<<"$OUT2" \
   || fail "baseline (no --only): fakepluginB should ALSO be would-update (default = unrestricted, unchanged)"
 pass "no --only (default): BOTH plugins reported as would-update — historic behavior preserved"
 
 # --- nothing under the fake cache was actually mutated (dry-run) ------------
-[ "$(cat "$FAKE_CACHE/fakepluginA/1.0.0/bin/fakepluginA-$SUF")" = "FAKE-A-OLD" ] \
+[ "$(cat "$FAKE_CACHE/fakepluginA/1.0.0/bin/fakepluginA-$SUF$EXT")" = "FAKE-A-OLD" ] \
   || fail "fakepluginA cache binary was mutated despite --dry-run"
-[ "$(cat "$FAKE_CACHE/fakepluginB/1.0.0/bin/fakepluginB-$SUF")" = "FAKE-B-OLD" ] \
+[ "$(cat "$FAKE_CACHE/fakepluginB/1.0.0/bin/fakepluginB-$SUF$EXT")" = "FAKE-B-OLD" ] \
   || fail "fakepluginB cache binary was mutated despite --dry-run"
 pass "fake cache binaries untouched (--dry-run never copies)"
 

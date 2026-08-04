@@ -203,7 +203,7 @@ echo
 # --- fail closed before touching anything if the registry is unparseable ----
 # (don't half-apply: a copy must never happen if we can't safely repoint the
 # registry afterwards)
-if ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$REGISTRY" 2>/dev/null; then
+if ! python3 -c "import json,sys; json.load(open(sys.argv[1], encoding='utf-8'))" "$REGISTRY" 2>/dev/null; then
   echo "installed_plugins.json is not valid JSON: $REGISTRY" >&2
   echo "refusing to proceed (fix it, or restore from a .bak-* backup, then retry)" >&2
   exit 1
@@ -212,7 +212,17 @@ fi
 # --- validate --plugin filter against the marketplace -----------------------
 all_names="$(python3 - "$MARKETPLACE" <<'PY'
 import json, sys
-mp = json.load(open(sys.argv[1]))
+# stdout defaults to text-mode CRLF translation on native Windows Python, which
+# would glue a trailing \r onto every line this prints. Every bash consumer
+# below reads these lines with `read -r` (strips \n only, not \r) or splits a
+# comma-joined string built from them, so an untranslated \r silently corrupts
+# every plugin NAME downstream -- e.g. `in_only()`'s exact-match case pattern
+# then matches nothing, and a scoped rebuild copies/seeds zero binaries while
+# reporting success (measured 2026-08-04: this alone caused --only=<41 names>
+# to skip all 41 plugins with no error). Force LF so the plain string compares
+# bash relies on here actually hold.
+sys.stdout.reconfigure(newline="\n")
+mp = json.load(open(sys.argv[1], encoding="utf-8"))
 for p in mp.get("plugins", []):
     n = p.get("name")
     if n:
@@ -261,15 +271,19 @@ fi
 plan() {
   python3 - "$REPO" "$CACHE" "$OWNER" "$REGISTRY" "$force" ${only_plugins[@]+"${only_plugins[@]}"} <<'PY'
 import json, os, sys
+# See the matching comment in all_names' heredoc above: force LF so the TSV
+# rows this prints (each `read -r`'d by callers, and split into fields via
+# `IFS=$'\t' read -r`) don't carry a trailing \r on their LAST field.
+sys.stdout.reconfigure(newline="\n")
 
 repo, cache, owner, registry_path, force = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5] == "1"
 only = set(sys.argv[6:])
 
-mp = json.load(open(os.path.join(repo, ".claude-plugin", "marketplace.json")))
+mp = json.load(open(os.path.join(repo, ".claude-plugin", "marketplace.json"), encoding="utf-8"))
 reg_plugins = {}
 if os.path.isfile(registry_path):
     try:
-        reg_plugins = json.load(open(registry_path)).get("plugins", {}) or {}
+        reg_plugins = json.load(open(registry_path, encoding="utf-8")).get("plugins", {}) or {}
     except Exception:
         reg_plugins = {}
 
@@ -286,7 +300,7 @@ for p in mp.get("plugins", []):
     pjver = None
     if os.path.isfile(pj_path):
         try:
-            pjver = json.load(open(pj_path)).get("version")
+            pjver = json.load(open(pj_path, encoding="utf-8")).get("version")
         except Exception:
             pjver = None
 
@@ -327,6 +341,7 @@ copy_plugin_dir() {
 registry_patch() {
   python3 - "$@" <<'PY'
 import json, os, shutil, sys, tempfile, time
+sys.stdout.reconfigure(newline="\n")
 
 args = sys.argv[1:]
 dry = "--dry-run" in args
@@ -346,7 +361,7 @@ if not os.path.isfile(registry_path):
     print(f"registry not found: {registry_path}", file=sys.stderr)
     sys.exit(1)
 
-with open(registry_path) as f:
+with open(registry_path, encoding="utf-8") as f:
     reg = json.load(f)
 plugins = reg.setdefault("plugins", {})
 
@@ -404,14 +419,14 @@ try:
 
     d = os.path.dirname(registry_path) or "."
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".installed_plugins.", suffix=".json.tmp")
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(reg, f, indent=2)
         f.write("\n")
-    with open(tmp) as f:
+    with open(tmp, encoding="utf-8") as f:
         json.load(f)  # validate before swap
     os.replace(tmp, registry_path)
     tmp = None
-    with open(registry_path) as f:
+    with open(registry_path, encoding="utf-8") as f:
         json.load(f)  # validate the file that is now live
 except Exception as e:
     if tmp and os.path.exists(tmp):
@@ -439,6 +454,7 @@ rollback_target_lookup() {
   local rbplan_json="$1" name="$2"
   RBPLAN_JSON_ENV="$rbplan_json" python3 - "$name" <<'PY'
 import json, os, sys
+sys.stdout.reconfigure(newline="\n")
 name = sys.argv[1]
 p = json.loads(os.environ["RBPLAN_JSON_ENV"])
 for t in p.get("targets", []):
@@ -465,6 +481,7 @@ PY
 build_state_json() {
   python3 - "$@" <<'PY'
 import json, sys
+sys.stdout.reconfigure(newline="\n")
 prior, canary = [], []
 for line in sys.argv[1:]:
     if not line:

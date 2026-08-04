@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "taskprog"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "Multi-session progress file for Claude Code. Injects .claude/progress.md at SessionStart so the agent knows what is pending; at Stop it prompts the agent to keep the file current, enabling seamless human-on-the-loop handoff across sessions."
 

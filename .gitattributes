@@ -1,3 +1,16 @@
+# Normalize every tracked file to LF in the repository. All 1160 tracked files
+# are text (verified 2026-08-04: `git grep -I` matches every one of them, and
+# the only binaries here — the per-platform plugin binaries — are gitignored,
+# see .gitignore:34-37), so there is nothing for text=auto to misdetect.
+#
+# Without this, a CRLF-writing tool can convert tracked files in place and the
+# conversion is invisible to review: measured 2026-08-04, 72 tracked files were
+# CRLF-ified with ZERO content change (`git diff --ignore-cr-at-eol` reported no
+# hunks for any of them), so `git status` showed 72 "modified" files that were
+# byte-identical modulo \r. That noise both hides real edits and gets committed
+# verbatim by any `git add -A`.
+* text=auto
+
 # Force LF for scripts that are exec'd directly via their shebang line.
 # A CRLF shebang (`#!/bin/sh\r`) is read as an interpreter path literally
 # ending in \r, which does not exist, so exec fails outright — this is not a
@@ -14,3 +27,24 @@
 # total-breakage bug, not a fail-open.
 .githooks/* text eol=lf
 *.sh text eol=lf
+
+# The plugin launcher dispatchers are shell scripts with NO .sh extension
+# (crates/<name>/bin/<name>), so the *.sh rule above never covered them.
+# Measured (2026-08-04): crates/ctxrot/bin/ctxrot was the one launcher of 39
+# that got CRLF-ified, and every invocation then died with
+# "cannot execute: required file not found" (exec resolving the interpreter as
+# `/bin/sh\r`), rc=127 — which took the ctxrot Stop/PostToolUse hooks out of
+# service. Note rc=127 is NOT the fail-closed path that
+# crates/ctxrot/tests/launcher_missing_binary.rs pins: the launcher never ran
+# at all, so none of its own protocol-aware handling applied.
+crates/*/bin/* text eol=lf
+
+# ...but the per-platform binaries staged next to those dispatchers are ELF,
+# not text. They are gitignored today, so this only matters if one is ever
+# force-added — keep eol conversion off them regardless. In .gitattributes the
+# LAST matching pattern wins, so these must stay below the rule above.
+crates/*/bin/*-linux-x86_64 binary
+crates/*/bin/*-linux-arm64 binary
+crates/*/bin/*-darwin-x86_64 binary
+crates/*/bin/*-darwin-arm64 binary
+crates/*/bin/*-windows-x86_64.exe binary

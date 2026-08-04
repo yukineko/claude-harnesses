@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "trajectoryeval"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2021"
 description = "Trajectory-match verifier: checks the PATH a worker took (its ordered tool-call sequence) against an expected trajectory spec — the trajectory sibling of an output verifier. Inspired by langchain-ai/agentevals."
 license = "MIT"

@@ -1329,7 +1329,7 @@ dependencies = [
 
 [[package]]
 name = "taintguard"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "clap",
  "harness-core",

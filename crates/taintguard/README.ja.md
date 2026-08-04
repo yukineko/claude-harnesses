@@ -25,16 +25,54 @@ least-privilege を機械的に強制する。エージェントが騙されて�
 ### mark（PostToolUse）
 
 - `WebFetch` / `WebSearch` の結果は常に信頼できない出所として扱う（source: `web`）。
-- `Read` はターゲットパスをプロジェクトルート（`cwd`）基準で分類する
-  （`src/classify.rs`）:
-  - ルート配下に解決される → 信頼できる（no-op）。
-  - ルート外（`/tmp`、ホームディレクトリ、他プロジェクト、`..` での脱出）→
-    信頼できない（source: `external-read`）。
+- `Read` はターゲットパスを**そのプロジェクト**（`cwd` の配下、または `cwd` と
+  **同一 git リポジトリ**）基準で分類する（`src/classify.rs`）:
+  - `cwd` 配下に解決される → 信頼できる（no-op）。
+  - `cwd` 配下ではないが、**`cwd` と同じリポジトリの worktree** に解決される →
+    信頼できる（no-op）。0.1.9 で追加（backlog eb39308e）。
+  - それ以外（`/tmp`、ホームディレクトリ、**別の**リポジトリ、git 管理外、
+    `..` での脱出）→ 信頼できない（source: `external-read`）。
   - パスが判定不能（file_path が空/欠落、シンボリックリンクの解決不能等）→
     **fail-closed**（信頼できないものとして mark）。
 - 解析自体が panic した場合も fail-closed（source: `internal-error` で
   強制的に mark）。「解析に失敗したので何もしない」は「解析して問題なしと判断した」
   と区別がつかず、それは fail-open になるため。
+
+#### 同一リポジトリの worktree を信頼する理由（0.1.9 / eb39308e）
+
+0.1.8 まで `Trusted` への経路は `starts_with(cwd)` だけだった。しかし
+condukt/flow の subagent は **linked git worktree**（`/mnt/c/tmp/aegis-worktrees/<topic>`、
+`~/harness-wt/<topic>`、`…/.harness-worktrees/session-<id>`）を作業場所として
+渡される一方、hook payload の `cwd` はセッションのプロジェクトルート（main
+checkout）のままである。そのため subagent が「編集するために作られた木」を
+最初に `Read` した時点で `Untrusted` → `external-read` で mark され、次の
+`Edit`/`Write` が `ask` に格下げされていた。subagent には `ask` に答える人間が
+いないので、実質的に**編集不能**になる。
+
+linked worktree は第三者の content ではなく、同一リポジトリ（同じ objects、
+同じ履歴、同じ作者）を 2 回 checkout したものなので、信頼側に分類する。
+
+**これが fail-open でない理由**（詳細は `src/classify.rs` の module docs）:
+
+- **積極的な同一性確認のみ。** git common dir（main checkout の `.git`、linked
+  worktree では `.git` ファイル → `gitdir:` → `commondir`）を両側で解決し、
+  **両方が解決できて等しいときだけ** 信頼する。解決できない（`.git` が無い/
+  壊れている/canonicalize 不能）は「判定不能」→ `Untrusted`（CLAUDE.md §3）。
+- **別リポジトリは common dir が違う**ので従来どおり `Untrusted`。`cwd` が
+  git 管理外なら、この規則は発火せず `starts_with` だけが残る。
+- **手書きの `.git` ファイルでは偽装できない。** git は linked worktree を
+  `<gitdir>/gitdir` という**逆ポインタ**で登録するので、それが「今読んだ
+  `.git` ファイル」を指していることを要求している。偽装には対象リポジトリの
+  `.git` への書き込み権限が必要であり、そこまで持つ攻撃者に対してこの分類器は
+  そもそも防御線ではない。
+- **`~/.claude/` は許可リストに入れていない**（eb39308e の調査で検討した上で
+  却下）。operator が書いた設定（`settings.json`/`agents/`/`skills/`）と、
+  `projects/<key>/<id>.jsonl` のセッション transcript（WebFetch/WebSearch の
+  出力を逐語で含む＝まさにこの crate が追跡している provenance）と、
+  `plugins/cache/`・`plugins/marketplaces/`（第三者由来のコード）が同居して
+  おり、単一の信頼領域ではない。なお subagent の編集不能の原因でもなかった:
+  skill/agent/`CLAUDE.md` は harness が読み込むもので `Read` ツールを通らない
+  ため `mark` の matcher に到達しない。
 
 ### gate（PreToolUse）
 
@@ -47,6 +85,18 @@ least-privilege を機械的に強制する。エージェントが騙されて�
   解除できない block になるため）。
 - taint marker が読めない/壊れている場合も **fail-closed**（`ask`/`deny` 側）。
   「判定できなかった」を「問題なし（silent allow）」に潰さない。
+- **hook payload が空でないのにパースできない場合も fail-closed**（`ask`/`deny`）。
+  0.1.9 で修正（backlog 9a28b98c）。`gate` は verdict を持つのに
+  `harness_core::hook::run_hook` の終端 `exit(0)` の下で動くため、それまでは
+  「payload を読めなかった」が **stdout 無し＝silent allow** になっていた。
+  「hook はユーザーのターンを壊してはならない」という契約は**プロセス**の話
+  （crash しない・非0 で終わらない）であって**判定**の話ではなく、`gate` では
+  「exit 0 で判定を print する」以外の意味を持たない。理由文は「payload を
+  読めなかった」と述べるだけで、taint を発見したとは主張しない（判定していない
+  ことを判定したように書かない）。
+  なお **stdin が空**の場合は従来どおり silent（そもそも payload を渡されて
+  いない＝hook として起動されていない、という別のケース。blastguard / ctxrot と
+  同じ切り分け）。
 - tainted でなければ何も出力しない（silent allow）。
 - 以上は既定の **enforce** posture の挙動。`TAINTGUARD_OBSERVE_ONLY=1` の
   **observe-only** posture では、**既知の taint（`Tainted`）に限り** `permissionDecision` を

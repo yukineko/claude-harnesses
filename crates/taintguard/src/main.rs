@@ -4,10 +4,25 @@
 //! taintguard — a Claude Code hook trio implementing a provenance-scoped
 //! least-privilege gate.
 //!
-//! Contract (shared by every plugin in this repo): a hook must NEVER break the
-//! user's turn. The three HOOK subcommands (`mark`/`gate`/`clear`) read a hook
-//! payload from stdin and always exit 0 (`harness_core::hook::run_hook`). The
-//! fourth subcommand, `tally`, is **not** a hook — see [`run_tally`].
+//! Contract (shared by every plugin in this repo): a hook must never break the
+//! user's turn *by crashing or by exiting non-zero*. The three HOOK subcommands
+//! (`mark`/`gate`/`clear`) read a hook payload from stdin and always exit 0
+//! (`harness_core::hook::run_hook`). The fourth subcommand, `tally`, is **not** a
+//! hook — see [`run_tally`].
+//!
+//! **That contract is about the PROCESS, not about the VERDICT, and the two used
+//! to be conflated here** (backlog 9a28b98c). `gate` carries a permission
+//! decision, and `run_hook`'s terminal `exit(0)` means an empty stdout is not a
+//! neutral outcome — Claude Code reads it as "this hook has no objection", i.e. an
+//! allow. So for `gate`, "never break the turn" may only ever mean "exit 0 and
+//! print the decision"; it must never be read as "when in doubt, print nothing".
+//! Every cannot-determine on `gate`'s path therefore resolves to a printed
+//! `ask`/`deny` (CLAUDE.md §3): an unreadable taint marker (`Check::Undetermined`),
+//! a panic in the analysis (the barrier below), and — the case 9a28b98c names — a
+//! NON-EMPTY hook payload that could not be parsed at all
+//! ([`gate_on_unparseable_payload`]). An EMPTY stdin remains silent, because that
+//! is not a payload this process failed to understand but no payload at all; the
+//! split mirrors `blastguard::main::run` and `ctxrot`'s hooks.
 //!
 //! * `mark`  (PostToolUse, matcher `WebFetch|WebSearch|Read`) — after a tool
 //!   call that may have introduced untrusted-provenance content into context,
@@ -67,25 +82,64 @@ fn main() {
     match cli.command {
         Command::Mark => run_hook(|| {
             let raw = read_stdin();
-            if let Some(input) = HookInput::parse(&raw) {
-                analyse_mark(&input);
+            match HookInput::parse(&raw) {
+                Some(input) => analyse_mark(&input),
+                // KNOWN RESIDUAL, stated rather than hidden. `mark` cannot fail
+                // closed here the way `gate` does: a fail-closed mark needs the
+                // `cwd` and `session_id` this payload failed to yield, and
+                // marking some *other* bucket (`current_dir()` + the shared
+                // `"default"` session) would plant a taint that the real
+                // session's Stop `clear` can never remove — a permanent, silently
+                // wrong block. Inventing a lenient side-parser to recover the
+                // session id would be re-implementing the parser that just
+                // failed. So this arm records nothing, and the honest consequence
+                // is that a `gate` later in the same turn may see `Clean`. It is
+                // at least LOUD: the diagnostic below is the only signal, so it
+                // must not be dropped.
+                None if !raw.trim().is_empty() => eprintln!(
+                    "[taintguard] mark received a NON-EMPTY hook payload it could not parse \
+                     ({} bytes); no taint was recorded, so a later `gate` in this turn may see \
+                     a clean session. This is a known limitation of the mark side: the payload \
+                     that failed to parse is also what carries the cwd/session the marker would \
+                     be keyed by.",
+                    raw.len()
+                ),
+                // Empty stdin: not invoked as a hook at all. Nothing to say.
+                None => {}
             }
         }),
         Command::Gate => run_hook(|| {
             let raw = read_stdin();
-            if let Some(input) = HookInput::parse(&raw) {
-                emit_gate(&input, analyse_gate(&input));
+            match HookInput::parse(&raw) {
+                Some(input) => emit_gate(&input, analyse_gate(&input)),
+                // A payload arrived and could not be read: cannot-determine on a
+                // VERDICT path, so it must be printed as ask/deny, never left to
+                // `run_hook`'s exit(0) silent allow. See the module docs.
+                None if !raw.trim().is_empty() => gate_on_unparseable_payload(raw.len()),
+                None => {}
             }
         }),
         Command::Clear => run_hook(|| {
             let raw = read_stdin();
-            if let Some(input) = HookInput::parse(&raw) {
-                let cwd = input.cwd_or_current();
-                if let Err(reason) = state::clear(&cwd, &input.session_id) {
-                    eprintln!(
-                        "[taintguard] clear failed (staying tainted, the safe side): {reason}"
-                    );
+            match HookInput::parse(&raw) {
+                Some(input) => {
+                    let cwd = input.cwd_or_current();
+                    if let Err(reason) = state::clear(&cwd, &input.session_id) {
+                        eprintln!(
+                            "[taintguard] clear failed (staying tainted, the safe side): {reason}"
+                        );
+                    }
                 }
+                // Not clearing IS the safe side (the marker stays, so the gate
+                // keeps enforcing), so unlike `mark` this needs no fail-closed
+                // action — only to be visible.
+                None if !raw.trim().is_empty() => eprintln!(
+                    "[taintguard] clear received a NON-EMPTY hook payload it could not parse \
+                     ({} bytes); no marker was cleared, so this session stays tainted (the safe \
+                     side) until a parseable Stop payload arrives.",
+                    raw.len()
+                ),
+                None => {}
             }
         }),
         // Deliberately NOT `run_hook` — see `run_tally`'s docs.
@@ -157,6 +211,43 @@ fn build_decision(reason: &str) -> String {
     } else {
         hookio::deny_json(reason)
     }
+}
+
+/// Emit `gate`'s fail-closed decision for a NON-EMPTY hook payload that could
+/// not be parsed into a [`HookInput`] (backlog 9a28b98c).
+///
+/// This is a cannot-determine, and on this subcommand it is the *worst* kind:
+/// with no `cwd` and no `session_id` there is not even a taint marker to look up,
+/// so the process cannot form an opinion about the session at all. Before this
+/// existed, `main`'s `if let Some(input)` simply fell through, `run_hook` exited
+/// 0 with empty stdout, and Claude Code proceeded with the write-class tool —
+/// a silent allow reached by a parse failure, which is precisely the collapse
+/// CLAUDE.md §3 forbids.
+///
+/// The reason deliberately says the payload could not be READ and does **not**
+/// claim a taint finding: reporting "this turn consumed untrusted content" would
+/// be asserting something this process never determined (CLAUDE.md §4). It also
+/// prints the byte count, because "unparseable" plus a length is the only
+/// diagnostic available when the payload itself cannot be trusted to echo.
+///
+/// `build_decision` hardens the `ask` to `deny` when no human is detected — and
+/// headless/subagent is the common context for this path, so the hardening is not
+/// theoretical.
+fn gate_on_unparseable_payload(raw_len: usize) {
+    eprintln!(
+        "[taintguard] gate received a NON-EMPTY hook payload it could not parse ({raw_len} \
+         bytes); failing closed (ask/deny) rather than exiting 0 with no decision, which \
+         Claude Code would read as an allow."
+    );
+    println!(
+        "{}",
+        build_decision(
+            "[taintguard] could not parse this hook's payload, so this session's taint state \
+             could not even be looked up (no cwd, no session id); failing closed (treating \
+             this tool call as unverified). This is NOT a taint finding — nothing was \
+             determined about this turn's provenance."
+        )
+    );
 }
 
 fn format_sources(sources: &[String]) -> String {
@@ -501,12 +592,22 @@ mod tests {
     /// by default within one binary). Every test that calls [`temp_env`] holds
     /// this for its whole body via the returned guard.
     ///
-    /// The two panic-barrier tests do NOT call `temp_env` and therefore do NOT
-    /// hold this lock: they inject a closure that panics before any state or
-    /// env read happens, so they must not — and do not — depend on the state
-    /// dir or on any env var. If a future panic-barrier test needs either, it
-    /// has to take `temp_env` like the rest, or it becomes a test whose verdict
-    /// is decided by the ambient environment.
+    /// It also guards `TAINTGUARD_OBSERVE_ONLY`, for the same reason: one lock,
+    /// not one per variable, because two independent locks would not exclude each
+    /// other.
+    ///
+    /// [`analyse_gate_panic_barrier_fails_closed`] does NOT call [`temp_env`] and
+    /// does NOT hold this lock: it injects a closure that panics before any state
+    /// or env read happens, so it must not — and does not — depend on the state dir
+    /// or on any env var.
+    ///
+    /// [`panic_enforces_under_both_real_postures`] is the deliberate exception. It
+    /// takes this lock DIRECTLY (not via `temp_env`, since it needs no state dir)
+    /// because it sets `TAINTGUARD_OBSERVE_ONLY` for real — that is the whole point
+    /// of it, and the reason it can assert posture-independence instead of merely
+    /// documenting it. Any other panic-barrier test that needs the state dir or an
+    /// env var must likewise take the lock, or its verdict is decided by the
+    /// ambient environment of whoever ran `cargo test`.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn temp_env(
@@ -947,44 +1048,107 @@ mod tests {
         );
     }
 
-    /// A caught panic fails closed to ask/deny, and does so **posture-
-    /// independently by construction**: [`analyse_gate_barrier`] never reads a
-    /// posture at all — the posture read lives *inside* the closure it guards
-    /// (`decide_gate` → `observe::posture()`), so a panic on that path cannot
-    /// have produced a posture for the barrier to honour. That structural fact
-    /// is the safety property worth pinning here, and it is what makes a panic
-    /// enforce no matter what `TAINTGUARD_OBSERVE_ONLY` says.
+    /// Set `TAINTGUARD_OBSERVE_ONLY` to `value` (or remove it for `None`) for the
+    /// life of the returned guard, restoring the previous value on drop so a
+    /// panicking assertion cannot leak an observe-only posture into later tests.
     ///
-    /// WHAT THIS TEST DOES NOT DO: it does not exercise the observe-only posture.
-    /// It sets no environment variable and hands the barrier no posture, so it is
-    /// deliberately identical in reach to
-    /// [`analyse_gate_panic_barrier_fails_closed`] above — the two differ only in
-    /// which regression a reader would look here for. An earlier version of this
-    /// test claimed to cover observe-only via a dead
-    /// `let _ = observe::Posture::ObserveOnly;` statement (removed: it bound
-    /// nothing, influenced nothing, and the verdict was in fact decided by the
-    /// ambient environment of whoever ran `cargo test`).
+    /// The caller must already hold [`ENV_LOCK`]: this mutates process-global
+    /// state.
+    struct ObserveOnlyEnv(Option<String>);
+
+    impl ObserveOnlyEnv {
+        fn set(value: Option<&str>) -> Self {
+            let previous = std::env::var(observe::OBSERVE_ONLY_ENV).ok();
+            match value {
+                Some(v) => std::env::set_var(observe::OBSERVE_ONLY_ENV, v),
+                None => std::env::remove_var(observe::OBSERVE_ONLY_ENV),
+            }
+            ObserveOnlyEnv(previous)
+        }
+    }
+
+    impl Drop for ObserveOnlyEnv {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => std::env::set_var(observe::OBSERVE_ONLY_ENV, v),
+                None => std::env::remove_var(observe::OBSERVE_ONLY_ENV),
+            }
+        }
+    }
+
+    /// A caught panic fails closed to ask/deny **under the real observe-only
+    /// posture as well as the real enforce posture** (backlog 2708deac).
     ///
-    /// Observe-only-posture behaviour is covered end-to-end, with the real env
-    /// var set in a child process, by
-    /// `undetermined_state_with_the_real_observe_only_env_set_is_reported_not_silent`
-    /// in `crates/taintguard/tests/provenance_gate.rs`. That test also records
-    /// that the panic arm itself is NOT reachable from outside the process, which
-    /// is why it stays pinned here.
+    /// ## What was empty about the previous versions
     ///
-    /// Renamed from `panic_enforces_even_under_observe_only` (the old name is
-    /// still quoted in that `provenance_gate.rs` docstring; grep both).
+    /// The original `panic_enforces_even_under_observe_only` "covered" observe-only
+    /// with a dead `let _ = observe::Posture::ObserveOnly;` statement — it bound
+    /// nothing and influenced nothing, so the verdict was decided by whatever
+    /// `TAINTGUARD_OBSERVE_ONLY` happened to be in the shell of whoever ran
+    /// `cargo test`. The replacement dropped the dead line and honestly documented
+    /// that it therefore did *not* exercise the posture at all — correct prose, but
+    /// it left the name's claim untested: nothing in the suite established that a
+    /// panic enforces when the process really is in observe-only.
+    ///
+    /// ## What makes this one effective
+    ///
+    /// It drives [`analyse_gate_barrier`] — the production barrier — once per REAL
+    /// posture, with `TAINTGUARD_OBSERVE_ONLY` actually set in this process, and it
+    /// asserts via [`observe::posture`] that the posture it claims to be testing is
+    /// the one in force. Without that positive control the loop would be two
+    /// identical iterations and could pass even if the env var were never applied.
+    ///
+    /// So it now fails against three distinct regressions, where the previous
+    /// version failed against only the first:
+    ///
+    /// 1. the barrier's `Err` arm returning `Silent` (or dropping the decision);
+    /// 2. the barrier growing a posture read and honouring it — returning
+    ///    `Observe` under observe-only, which `assert_enforced` rejects;
+    /// 3. `posture()` ceasing to reflect the env var (the control fails).
+    ///
+    /// It holds [`ENV_LOCK`] because it mutates a process-global env var — the one
+    /// exception to the note on that lock's docs about the panic-barrier tests not
+    /// needing it, and stated here so the two are not read as contradictory.
     #[test]
-    fn panic_enforces_regardless_of_posture_because_the_barrier_never_reads_it() {
-        let prev = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // `analyse_gate`'s real barrier, driven by a panicking decision fn.
-            analyse_gate_with(|_: &HookInput| -> GateAction {
-                panic!("boom before any posture could be read")
-            })
-        }));
-        std::panic::set_hook(prev);
-        assert_enforced(&out.unwrap());
+    fn panic_enforces_under_both_real_postures() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        for (raw, expected) in [
+            (None, observe::Posture::Enforce),
+            (
+                Some(observe::OBSERVE_ONLY_OPT_IN),
+                observe::Posture::ObserveOnly,
+            ),
+        ] {
+            let _env = ObserveOnlyEnv::set(raw);
+            // POSITIVE CONTROL: prove the process really is in the posture this
+            // iteration claims to test. Without it the loop is vacuously two
+            // copies of the same run.
+            assert_eq!(
+                observe::posture(),
+                expected,
+                "the env fixture did not take effect: with {raw:?} the process must be in \
+                 {expected:?}"
+            );
+
+            let prev = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // `analyse_gate`'s real barrier, driven by a panicking decision fn.
+                analyse_gate_with(|_: &HookInput| -> GateAction {
+                    panic!("boom before any posture could be read")
+                })
+            }));
+            std::panic::set_hook(prev);
+
+            let action = out.unwrap();
+            assert_enforced(&action);
+            assert!(
+                matches!(action, GateAction::Enforce(_)),
+                "a panic must resolve to Enforce even when the process is in {expected:?} — \
+                 a panic means the analysis never completed, so neither the taint state nor \
+                 the posture it was supposed to honour was determined; got {action:?}"
+            );
+        }
     }
 }

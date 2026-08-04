@@ -8,9 +8,28 @@
 /// within a severity band), documented once here.
 ///
 /// The merge itself is a pure, deterministic function over the three input
-/// slices ([`build_queue`]); the CLI shell ([`run`]) reads the stores fail-soft
-/// (a missing/empty source contributes nothing rather than erroring the whole
-/// command) and renders either a human-readable list or a JSON array.
+/// slices ([`build_queue`]); the CLI shell ([`run`]) reads the stores and
+/// renders either a human-readable list or a JSON array.
+///
+/// # A source that was READ and held nothing vs one that could not be read
+///
+/// A missing source contributes nothing — that is a real observation of zero.
+/// A source that could not be READ is a different answer, and this command
+/// keeps the two apart on all three of its channels (t3):
+///
+/// * **stderr** — a `WARNING` naming the ledger and saying the source is
+///   omitted;
+/// * **stdout, human** — an `[undetermined-source]` row at the top of the list,
+///   and the "queue empty" sentence is only ever printed when every source was
+///   actually read (so it can never name a source it could not see as absent);
+/// * **stdout, `--json`** — the SAME row, in band, in the same array
+///   ([`EntryKind::UndeterminedSource`]), plus exit code 3.
+///
+/// The JSON shape is deliberately unchanged (still a bare array of rows, each
+/// with a `kind`): the in-band row means `length == 0` can no longer be read as
+/// "clean" by any consumer, without breaking the ones that already filter on
+/// `kind`. Those kind-filtering consumers WOULD still skip the marker row, so
+/// the exit code carries the same fact a second way — see [`SourceHealth`].
 use crate::merge_conflict::MergeConflictEntry;
 use crate::review_escalation::{self, ConduktEscalation};
 use crate::review_finding::{AuditVerdict, ReviewFinding};
@@ -18,6 +37,7 @@ use crate::rollback::RollbackEvent;
 use crate::store;
 use crate::violation::{self, RecurrencePolicy, SignatureRecurrence};
 use anyhow::Result;
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 
 /// The source type of a review-queue entry. Serialized as the `kind`
@@ -39,6 +59,18 @@ pub enum EntryKind {
     /// real git 3-way conflict OR a gated mid-flight actual-diff overlap
     /// (decision A), recorded in `merge_conflicts.jsonl`, still unresolved.
     MergeConflict,
+    /// NOT an item found in a source — the record that one of the five sources
+    /// could not be read (or held a line that could not be decoded), so its
+    /// items are missing from this queue.
+    ///
+    /// It rides IN BAND, in the same array as the real rows, because a queue
+    /// rendered from an unreadable ledger is byte-identical to a clean one
+    /// otherwise: a `--json` consumer checking `length == 0`, or a human
+    /// reading "review queue empty", would take "I could not look" for "there
+    /// is nothing there". Emitted only by [`run`] — never by [`build_queue`],
+    /// so it can never be mistaken for a source record, and the backlog drain
+    /// ([`crate::bridge`]) never sees one.
+    UndeterminedSource,
 }
 
 impl EntryKind {
@@ -50,6 +82,167 @@ impl EntryKind {
             EntryKind::AiFinding => "ai-finding",
             EntryKind::Escalation => "escalation",
             EntryKind::MergeConflict => "merge-conflict",
+            EntryKind::UndeterminedSource => "undetermined-source",
+        }
+    }
+}
+
+/// Whether every source behind a rendered/drained queue was actually READ.
+///
+/// Returned by the commands that consume the review queue so the CLI shell can
+/// map "I could not read one of my sources" to a distinct exit code (3, the
+/// same convention `canary-gate` uses for "this is an answer, not a crash"),
+/// instead of the exit 0 that a shell reads as "ran fine, nothing to see".
+/// There is deliberately no `Default` and no `From<bool>`: the value must be
+/// derived from what the reads actually returned.
+#[must_use = "the caller must map an incomplete queue to a non-zero exit"]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceHealth {
+    /// Every source was read (some may legitimately have held nothing).
+    AllRead,
+    /// At least one source could not be read, or could not be filtered.
+    SomeUndetermined,
+}
+
+impl SourceHealth {
+    /// Process exit code: 0 when the answer is complete, 3 when it is not.
+    pub fn exit_code(self) -> i32 {
+        match self {
+            SourceHealth::AllRead => 0,
+            SourceHealth::SomeUndetermined => 3,
+        }
+    }
+}
+
+/// Static identity of one review-queue source, so the warning text, the in-band
+/// marker row and the empty-queue prose all name it the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceMeta {
+    /// The queue kind tag whose rows this source produces.
+    pub tag: &'static str,
+    /// Human label for the ledger, used in the warning.
+    pub ledger: &'static str,
+    /// The file name, used as the marker row's `identifier`.
+    pub file: &'static str,
+    /// Plural noun for the items this source holds ("canary rollbacks"), used
+    /// by the empty-queue prose, which names only the sources it actually read.
+    pub noun: &'static str,
+}
+
+/// Source 1: systemic gate violations.
+pub const SRC_SYSTEMIC: SourceMeta = SourceMeta {
+    tag: "systemic",
+    ledger: "the violation ledger (violations.jsonl)",
+    file: "violations.jsonl",
+    noun: "systemic violations",
+};
+/// Source 2: canary rollback events.
+pub const SRC_ROLLBACK: SourceMeta = SourceMeta {
+    tag: "rollback",
+    ledger: "the rollback ledger (rollbacks.jsonl)",
+    file: "rollbacks.jsonl",
+    noun: "rollbacks",
+};
+/// Source 3: AI/adversarial review findings.
+pub const SRC_AI_FINDING: SourceMeta = SourceMeta {
+    tag: "ai-finding",
+    ledger: "the review-findings ledger (review_findings.jsonl)",
+    file: "review_findings.jsonl",
+    noun: "findings",
+};
+/// Source 4: condukt's durable escalation queue (foreign read by path).
+pub const SRC_ESCALATION: SourceMeta = SourceMeta {
+    tag: "escalation",
+    ledger: "condukt's escalation queue (escalations.json)",
+    file: "escalations.json",
+    noun: "escalations",
+};
+/// Source 5: open blocked merges.
+pub const SRC_MERGE_CONFLICT: SourceMeta = SourceMeta {
+    tag: "merge-conflict",
+    ledger: "the blocked-merge ledger (merge_conflicts.jsonl)",
+    file: "merge_conflicts.jsonl",
+    noun: "merge conflicts",
+};
+/// The join partner of source 5. Not a source of rows of its own: it only
+/// FILTERS source 5 (resolved conflicts drop out).
+pub const SRC_MERGE_RESOLUTION: SourceMeta = SourceMeta {
+    tag: "merge-conflict",
+    ledger: "the merge-conflict resolution ledger (merge_conflict_resolutions.jsonl)",
+    file: "merge_conflict_resolutions.jsonl",
+    noun: "merge conflicts",
+};
+
+/// What an undetermined read did to the queue. The two are NOT the same event
+/// and must not be reported as one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceEffect {
+    /// The source contributed NO rows: its items, if any, are missing here.
+    Omitted,
+    /// The source's rows ARE shown, but the ledger that filters them could not
+    /// be read, so rows that no longer belong may be listed (over-reporting).
+    ShownUnfiltered,
+}
+
+/// One source that could not be determined, carried from the reads to every
+/// rendering channel so none of them has to re-derive the wording.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndeterminedSource {
+    /// Which source (and how it is named everywhere).
+    pub meta: SourceMeta,
+    /// What its being undetermined did to this queue.
+    pub effect: SourceEffect,
+    /// Why it could not be determined, forwarded from the reader.
+    pub why: String,
+}
+
+impl UndeterminedSource {
+    /// The stderr WARNING for this source. Says which ledger, what happened to
+    /// the source, and — for the omitted case — that this is NOT a report of
+    /// zero (the sentence source 1 and 3 have carried since they were migrated).
+    pub fn warning(&self) -> String {
+        match self.effect {
+            SourceEffect::Omitted => format!(
+                "overwatch review-queue: WARNING — {} could not be read or held an \
+                 undecodable line ({}); the [{}] source is OMITTED from this queue. \
+                 This is NOT a report of zero {}.",
+                self.meta.ledger, self.why, self.meta.tag, self.meta.noun
+            ),
+            SourceEffect::ShownUnfiltered => format!(
+                "overwatch review-queue: WARNING — {} could not be read or held an \
+                 undecodable line ({}); every entry is therefore shown as UNRESOLVED. \
+                 No [{}] row is hidden by this, but an already-resolved one may be \
+                 listed.",
+                self.meta.ledger, self.why, self.meta.tag
+            ),
+        }
+    }
+
+    /// The in-band marker row (see [`EntryKind::UndeterminedSource`]).
+    /// `High` severity and `ts = now` so it leads the queue and is never shed
+    /// by `--since`/`--limit`.
+    pub fn row(&self, now: i64) -> ReviewQueueEntry {
+        let summary = match self.effect {
+            SourceEffect::Omitted => format!(
+                "[{}] SOURCE NOT SHOWN — {} could not be read or held an undecodable \
+                 line; its items are MISSING from this queue (this is not a report of \
+                 zero): {}",
+                self.meta.tag, self.meta.ledger, self.why
+            ),
+            SourceEffect::ShownUnfiltered => format!(
+                "[{}] SOURCE NOT FILTERED — {} could not be read or held an undecodable \
+                 line; every entry is shown as unresolved, so an already-resolved one \
+                 may be listed: {}",
+                self.meta.tag, self.meta.ledger, self.why
+            ),
+        };
+        ReviewQueueEntry {
+            kind: EntryKind::UndeterminedSource,
+            severity: Severity::High,
+            ts: now,
+            summary,
+            identifier: self.meta.file.to_string(),
+            occurrences: 1,
         }
     }
 }
@@ -445,76 +638,180 @@ pub fn build_queue(
     rows
 }
 
-/// Read all three sources (fail-soft), merge, and render the unified queue.
+/// Resolve one scanned source for rendering: `Known(rows)` contributes its rows
+/// (an empty vec is a real "read it, it held nothing"); `Undetermined(why)`
+/// contributes NO rows and instead records an [`UndeterminedSource`] in `sink`,
+/// which is what every rendering channel reads to say the source is missing.
+///
+/// Deliberately NOT a `unwrap_or_default()`: the whole point is that the empty
+/// vec returned here is accompanied by a record saying it is not an observation
+/// of zero.
+fn resolve_source<T>(
+    scan: Determination<Vec<T>>,
+    meta: SourceMeta,
+    sink: &mut Vec<UndeterminedSource>,
+) -> Vec<T> {
+    match scan {
+        Determination::Known(rows) => rows,
+        Determination::Undetermined(why) => {
+            sink.push(UndeterminedSource {
+                meta,
+                effect: SourceEffect::Omitted,
+                why: why.as_str().to_string(),
+            });
+            Vec::new()
+        }
+    }
+}
+
+/// The prose for a queue with no rows at all. It may only name the sources that
+/// were ACTUALLY READ — hence the argument.
+///
+/// In practice `undetermined` is always empty when this is called, because an
+/// undetermined source contributes a marker row and the row list is therefore
+/// not empty (see [`assemble`], whose test pins that invariant). The parameter
+/// exists so this function cannot be MADE to lie by a future caller: if any
+/// source was undetermined it says so instead of listing it as absent.
+fn empty_queue_line(undetermined: &[UndeterminedSource]) -> String {
+    if undetermined.is_empty() {
+        return "(review queue empty — no systemic violations, rollbacks, findings, escalations, or merge conflicts)"
+            .to_string();
+    }
+    let read: Vec<&str> = [
+        SRC_SYSTEMIC,
+        SRC_ROLLBACK,
+        SRC_AI_FINDING,
+        SRC_ESCALATION,
+        SRC_MERGE_CONFLICT,
+    ]
+    .iter()
+    .filter(|m| !undetermined.iter().any(|u| u.meta.tag == m.tag))
+    .map(|m| m.noun)
+    .collect();
+    if read.is_empty() {
+        return "(NO source could be read — see the UNDETERMINED source(s) above; this is NOT \
+                a report that the queue is empty)"
+            .to_string();
+    }
+    format!(
+        "(no {} — but see the UNDETERMINED source(s) above; this is NOT a report that the \
+         queue is empty)",
+        read.join(", ")
+    )
+}
+
+/// Assemble the final row list: the real rows (already ordered, filtered and
+/// capped) with one marker row per undetermined source PREPENDED.
+///
+/// Prepending after the cap is deliberate. A marker row is not a queue item
+/// competing for the top-K: it is the statement that the top-K may be missing
+/// items, so `--since` and `--limit` must not be able to shed it (that would
+/// re-create the silent degrade this whole path exists to remove).
+fn assemble(
+    rows: Vec<ReviewQueueEntry>,
+    undetermined: &[UndeterminedSource],
+    now: i64,
+) -> Vec<ReviewQueueEntry> {
+    let mut out: Vec<ReviewQueueEntry> = undetermined.iter().map(|u| u.row(now)).collect();
+    out.extend(rows);
+    out
+}
+
+/// Read all five sources, merge, and render the unified queue.
 ///
 /// `since` filters to entries with `ts >= since` when supplied; `limit` caps
 /// the number of rows shown (after ordering), keeping the top-K RISKIEST rows
 /// since [`build_queue`] now sorts severity-first. In non-JSON mode, if rows
 /// were shed by `limit` a trailing line reports how many lower-risk items
 /// were deferred so nothing is silently lost.
-pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<()> {
+///
+/// Returns the [`SourceHealth`] of the read so the CLI can exit non-zero when
+/// the rendered queue is incomplete. This command renders and returns no
+/// verdict about the CODE — but "I could not read a source" is a verdict about
+/// the ANSWER, and swallowing it would leave the two states identical to a
+/// script (CLAUDE.md §1: 沈黙は許容される degrade ではない).
+pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<SourceHealth> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
+    let mut undetermined: Vec<UndeterminedSource> = Vec::new();
 
     // Source 1: systemic violations (reuse the item-B recurrence path).
-    //
-    // This command renders; it returns no verdict. So an undetermined ledger
-    // degrades to "this source is NOT SHOWN" — announced on stderr — and never
-    // to "there are no systemic violations". The distinction matters because a
-    // silently-omitted source is byte-identical to a clean one (CLAUDE.md §1:
-    // 沈黙は許容される degrade ではない).
-    let (systemic, violations_undetermined) = match store::scan_violations(&cwd) {
+    // `ViolationScan` is this module's own tri-state (it predates the shared
+    // `Determination` and carries no reason payload), so it is matched here
+    // rather than routed through `resolve_source`.
+    let systemic: Vec<SignatureRecurrence> = match store::scan_violations(&cwd) {
         // Absent = no violation was ever recorded: a real, trustworthy empty.
-        store::ViolationScan::Absent => (Vec::new(), false),
-        store::ViolationScan::Events(events) => (
+        store::ViolationScan::Absent => Vec::new(),
+        store::ViolationScan::Events(events) => {
             violation::detect_recurrence(&events, now, RecurrencePolicy::default())
                 .into_iter()
                 .filter(|r| r.is_systemic)
-                .collect::<Vec<SignatureRecurrence>>(),
-            false,
-        ),
+                .collect()
+        }
         store::ViolationScan::Undetermined => {
-            eprintln!(
-                "overwatch review-queue: WARNING — the violation ledger could not be read \
-                 or held an undecodable line; the [systemic] source is OMITTED from this \
-                 queue. This is NOT a report of zero systemic violations."
-            );
-            (Vec::new(), true)
+            undetermined.push(UndeterminedSource {
+                meta: SRC_SYSTEMIC,
+                effect: SourceEffect::Omitted,
+                // `ViolationScan::Undetermined` carries no reason (and mints no
+                // `Determination`, so nothing is double-counted by naming it
+                // here); the two causes it folds together are stated instead.
+                why: "unreadable file, or a line that failed to parse".to_string(),
+            });
+            Vec::new()
         }
     };
 
     // Source 2: canary rollback events.
-    let rollbacks = store::read_rollbacks(&cwd).unwrap_or_default();
+    let rollbacks = resolve_source(
+        store::scan_rollbacks(&cwd)?,
+        SRC_ROLLBACK,
+        &mut undetermined,
+    );
 
-    // Source 3: AI-review findings, via the tri-state boundary reader (mirrors
-    // Source 1 above). An Undetermined scan must NOT collapse to empty: the
-    // ledger could hold a real, already-CONFIRMED adversarial finding that
-    // simply failed to read back, and the review queue exists precisely to
-    // surface that — never to silently drop it.
-    let (findings, findings_undetermined) = match store::scan_review_findings(&cwd) {
+    // Source 3: AI-review findings. An Undetermined scan must NOT collapse to
+    // empty: the ledger could hold a real, already-CONFIRMED adversarial
+    // finding that simply failed to read back, and the review queue exists
+    // precisely to surface that — never to silently drop it.
+    let findings: Vec<ReviewFinding> = match store::scan_review_findings(&cwd) {
         // Absent = no finding was ever recorded: a real, trustworthy empty.
-        store::ReviewFindingScan::Absent => (Vec::new(), false),
-        store::ReviewFindingScan::Findings(findings) => (findings, false),
+        store::ReviewFindingScan::Absent => Vec::new(),
+        store::ReviewFindingScan::Findings(findings) => findings,
         store::ReviewFindingScan::Undetermined(reason) => {
-            eprintln!(
-                "overwatch review-queue: WARNING — the review-findings ledger could not be \
-                 read or held an undecodable line ({reason}); the [ai-finding] source is \
-                 OMITTED from this queue. This is NOT a report of zero AI-review findings."
-            );
-            (Vec::new(), true)
+            undetermined.push(UndeterminedSource {
+                meta: SRC_AI_FINDING,
+                effect: SourceEffect::Omitted,
+                why: reason,
+            });
+            Vec::new()
         }
     };
 
-    // Source 4: condukt's durable escalation queue, foreign-read by path.
-    // Absent condukt / no open escalations contributes nothing — but so does an
-    // escalation queue that could not be READ, because this is still the
-    // two-valued shim. Migrating it to `scan_open_escalations` and warning on
-    // `Undetermined` (as the [ai-finding] source above already does) is task t3.
-    let escalations = review_escalation::read_open_escalations_best_effort(&cwd);
+    // Source 4: condukt's durable escalation queue, foreign-read by path. An
+    // absent condukt (or no open ask) is a real zero; a queue that could not be
+    // read is a HUMAN QUESTION we cannot see, and is announced.
+    let escalations = resolve_source(
+        review_escalation::scan_open_escalations(&cwd),
+        SRC_ESCALATION,
+        &mut undetermined,
+    );
 
-    // Source 5: OPEN blocked merges (real conflicts + gated mid-flight overlaps),
-    // fail-soft (absent/empty store contributes nothing).
-    let merge_conflicts = store::open_merge_conflicts(&cwd).unwrap_or_default();
+    // Source 5: OPEN blocked merges (real conflicts + gated mid-flight
+    // overlaps). Two ledgers, failing in opposite directions — see
+    // `store::scan_open_merge_conflicts`: an unreadable ENTRY ledger omits the
+    // source, an unreadable RESOLUTION ledger shows every entry unfiltered.
+    let merge_scan = store::scan_open_merge_conflicts(&cwd)?;
+    if let Some(why) = merge_scan.resolutions_undetermined {
+        undetermined.push(UndeterminedSource {
+            meta: SRC_MERGE_RESOLUTION,
+            effect: SourceEffect::ShownUnfiltered,
+            why,
+        });
+    }
+    let merge_conflicts = resolve_source(merge_scan.open, SRC_MERGE_CONFLICT, &mut undetermined);
+
+    for u in &undetermined {
+        eprintln!("{}", u.warning());
+    }
 
     let mut rows = build_queue(
         &systemic,
@@ -535,40 +832,27 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<()> {
     if let Some(n) = limit {
         rows.truncate(n);
     }
+    let rows = assemble(rows, &undetermined, now);
+
+    let health = if undetermined.is_empty() {
+        SourceHealth::AllRead
+    } else {
+        SourceHealth::SomeUndetermined
+    };
 
     if json {
-        // Keep JSON output as the bare array — no shed-count noise injected.
+        // Still the bare array of rows: the undetermined sources are IN it, as
+        // `kind: "undetermined-source"` rows, so `length == 0` cannot be read
+        // as "clean" and consumers that filter on `kind` keep working. The
+        // non-zero exit (SourceHealth) covers those filtering consumers, which
+        // would otherwise drop the marker row on the floor.
         println!("{}", serde_json::to_string_pretty(&rows)?);
-        return Ok(());
-    }
-
-    if violations_undetermined {
-        println!(
-            "[systemic] SOURCE NOT SHOWN — the violation ledger is unreadable or holds an \
-             undecodable line; systemic violations could not be determined."
-        );
-    }
-    if findings_undetermined {
-        println!(
-            "[ai-finding] SOURCE NOT SHOWN — the review-findings ledger is unreadable or \
-             holds an undecodable line; AI-review findings could not be determined."
-        );
+        return Ok(health);
     }
 
     if rows.is_empty() {
-        // Only claim a source is empty when it was actually read; an
-        // UNDETERMINED source must never be folded into "queue empty".
-        if violations_undetermined || findings_undetermined {
-            println!(
-                "(no rollbacks, escalations, or merge conflicts — see UNDETERMINED source(s) \
-                 above; this is NOT a report that the queue is empty)"
-            );
-        } else {
-            println!(
-                "(review queue empty — no systemic violations, rollbacks, findings, escalations, or merge conflicts)"
-            );
-        }
-        return Ok(());
+        println!("{}", empty_queue_line(&undetermined));
+        return Ok(health);
     }
     for r in &rows {
         println!(
@@ -582,7 +866,7 @@ pub fn run(json: bool, since: Option<i64>, limit: Option<usize>) -> Result<()> {
     if shed > 0 {
         println!("({shed} lower-risk item(s) below the cut deferred)");
     }
-    Ok(())
+    Ok(health)
 }
 
 #[cfg(test)]
@@ -1152,6 +1436,165 @@ mod tests {
     fn merge_conflict_entry_kind_serializes_kebab_case() {
         let j = serde_json::to_string(&EntryKind::MergeConflict).unwrap();
         assert_eq!(j, "\"merge-conflict\"");
+    }
+
+    // --- undetermined sources (t3) -------------------------------------------
+
+    fn undet(meta: SourceMeta, effect: SourceEffect) -> UndeterminedSource {
+        UndeterminedSource {
+            meta,
+            effect,
+            why: "the ledger could not be read".to_string(),
+        }
+    }
+
+    /// `Known` contributes its rows and records nothing; `Undetermined`
+    /// contributes no rows but records WHY, so no channel can render the empty
+    /// vec as an observation of zero.
+    #[test]
+    fn resolve_source_records_undetermined_instead_of_collapsing_to_empty() {
+        let mut sink = Vec::new();
+        let rows = resolve_source(
+            Determination::known(vec![rb("overwatch", 10)]),
+            SRC_ROLLBACK,
+            &mut sink,
+        );
+        assert_eq!(rows.len(), 1, "a read source contributes its rows");
+        assert!(sink.is_empty(), "a read source records nothing");
+
+        let rows: Vec<RollbackEvent> =
+            resolve_source(Determination::undetermined("boom"), SRC_ROLLBACK, &mut sink);
+        assert!(rows.is_empty());
+        assert_eq!(sink.len(), 1, "an unread source must be recorded");
+        assert_eq!(sink[0].meta.tag, "rollback");
+        assert_eq!(sink[0].effect, SourceEffect::Omitted);
+        assert!(
+            sink[0].why.contains("boom"),
+            "the reason must be forwarded: {}",
+            sink[0].why
+        );
+    }
+
+    /// The keystone invariant: while any source is undetermined the row list is
+    /// NEVER empty, so the "queue empty" prose is unreachable — and `--since` /
+    /// `--limit` cannot shed the marker row that says so. `limit = 0` and a
+    /// `since` in the far future are the two ways a caller can empty the real
+    /// rows; neither may take the marker with them.
+    #[test]
+    fn an_undetermined_source_always_leaves_a_row_behind() {
+        let undetermined = vec![undet(SRC_ROLLBACK, SourceEffect::Omitted)];
+
+        // No real rows at all (the case that used to print "queue empty").
+        let rows = assemble(Vec::new(), &undetermined, 999);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, EntryKind::UndeterminedSource);
+        assert_eq!(rows[0].severity, Severity::High);
+        assert_eq!(rows[0].ts, 999, "stamped now, so --since cannot shed it");
+        assert_eq!(rows[0].identifier, "rollbacks.jsonl");
+
+        // Real rows truncated to nothing by `--limit 0`: the marker survives
+        // because it is prepended AFTER the cap.
+        let mut capped = build_queue(&[], &[rb("p", 10)], &[], &[], &[]);
+        // `--limit 0` reaches `run` as this exact call (a variable, not a
+        // literal, so clippy sees the cap for what it is).
+        let limit: usize = 0;
+        capped.truncate(limit);
+        let rows = assemble(capped, &undetermined, 999);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, EntryKind::UndeterminedSource);
+    }
+
+    /// ANTI-VACUITY control for the invariant above: with every source read,
+    /// `assemble` adds nothing at all — the marker must not become permanent
+    /// furniture that fires on a healthy store.
+    #[test]
+    fn a_fully_read_queue_gets_no_marker_rows() {
+        let real = build_queue(&[], &[rb("p", 10)], &[], &[], &[]);
+        let rows = assemble(real.clone(), &[], 999);
+        assert_eq!(rows, real, "nothing may be injected when all sources read");
+        assert!(assemble(Vec::new(), &[], 999).is_empty());
+    }
+
+    /// The empty-queue sentence may only name sources that were actually read.
+    #[test]
+    fn empty_queue_line_never_names_a_source_it_could_not_read() {
+        // Everything read → the historical sentence, unchanged.
+        let all_read = empty_queue_line(&[]);
+        assert!(
+            all_read.contains("review queue empty")
+                && all_read.contains("systemic violations")
+                && all_read.contains("rollbacks")
+                && all_read.contains("merge conflicts"),
+            "a genuinely empty queue still enumerates its sources: {all_read}"
+        );
+
+        // Rollbacks undetermined → the word must be gone from the "no ..." list.
+        let line = empty_queue_line(&[undet(SRC_ROLLBACK, SourceEffect::Omitted)]);
+        assert!(
+            !line.contains("rollbacks"),
+            "an unread source must not be named as absent: {line}"
+        );
+        assert!(
+            line.contains("findings") && line.contains("escalations"),
+            "the sources that WERE read are still reported empty: {line}"
+        );
+        assert!(
+            line.contains("NOT a report that the queue is empty"),
+            "the caveat must be present: {line}"
+        );
+
+        // Nothing readable at all → no source may be named as absent.
+        let all_undetermined: Vec<UndeterminedSource> = [
+            SRC_SYSTEMIC,
+            SRC_ROLLBACK,
+            SRC_AI_FINDING,
+            SRC_ESCALATION,
+            SRC_MERGE_CONFLICT,
+        ]
+        .into_iter()
+        .map(|m| undet(m, SourceEffect::Omitted))
+        .collect();
+        let line = empty_queue_line(&all_undetermined);
+        assert!(
+            line.contains("NO source could be read"),
+            "with nothing read, the line must say exactly that: {line}"
+        );
+    }
+
+    /// The two effects are different events and must not render as one: an
+    /// omitted source hides rows, an unfiltered one shows too many.
+    #[test]
+    fn omitted_and_unfiltered_sources_are_reported_differently() {
+        let omitted = undet(SRC_ROLLBACK, SourceEffect::Omitted);
+        assert!(omitted.warning().contains("OMITTED"));
+        assert!(omitted.warning().contains("NOT a report of zero rollbacks"));
+        assert!(omitted.row(1).summary.contains("SOURCE NOT SHOWN"));
+
+        let unfiltered = undet(SRC_MERGE_RESOLUTION, SourceEffect::ShownUnfiltered);
+        assert!(
+            unfiltered.warning().contains("UNRESOLVED")
+                && !unfiltered.warning().contains("OMITTED"),
+            "an unfiltered source is not an omitted one: {}",
+            unfiltered.warning()
+        );
+        assert!(unfiltered.row(1).summary.contains("SOURCE NOT FILTERED"));
+        assert_eq!(
+            unfiltered.row(1).identifier,
+            "merge_conflict_resolutions.jsonl"
+        );
+    }
+
+    #[test]
+    fn undetermined_source_kind_serializes_kebab_case() {
+        // The `kind` a `--json` consumer greps for.
+        let j = serde_json::to_string(&EntryKind::UndeterminedSource).unwrap();
+        assert_eq!(j, "\"undetermined-source\"");
+    }
+
+    #[test]
+    fn source_health_maps_undetermined_to_exit_three() {
+        assert_eq!(SourceHealth::AllRead.exit_code(), 0);
+        assert_eq!(SourceHealth::SomeUndetermined.exit_code(), 3);
     }
 
     /// Backward-compat: an existing 3-source scenario with `escalations = &[]`

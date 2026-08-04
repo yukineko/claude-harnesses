@@ -174,21 +174,20 @@ pub fn scan_open_escalations(cwd: &Path) -> Determination<Vec<ConduktEscalation>
 /// BEST-EFFORT read: [`scan_open_escalations`] with the undetermined arm
 /// flattened back to an empty vec.
 ///
-/// It therefore CANNOT distinguish "condukt has no open escalations" from "the
-/// escalation queue could not be read", and a caller that renders its result as
-/// the escalation source will report a lost human question as no question. That
-/// collapse is the whole reason [`scan_open_escalations`] exists; this function
-/// is the two-valued shim the pre-existing `review-queue` / `--to-backlog` call
-/// sites still use, kept only until they handle the third answer themselves
-/// (they must warn on `Undetermined` the way `bridge.rs` already does for
-/// `ViolationScan::Undetermined`, rather than silently drop the source).
-/// Nothing NEW should call it.
+/// It CANNOT distinguish "condukt has no open escalations" from "the escalation
+/// queue could not be read", and a caller that renders its result as the
+/// escalation source reports a lost human question as no question. That
+/// collapse is the whole reason [`scan_open_escalations`] exists.
 ///
-/// The name says `best_effort` on purpose: the plain `read_open_escalations`
-/// this replaced looked like an ordinary read at its call sites while doing
-/// exactly this. One behaviour DID change even here — an unreadable or corrupt
-/// registry is now recorded as an `Undetermined` observation (visible in
-/// `overwatch undetermined-metrics`) instead of passing in silence.
+/// **`#[cfg(test)]` since t3: it has no production caller left.** It was the
+/// two-valued shim `review-queue` and `--to-backlog` used while they were being
+/// migrated; both now handle the third answer themselves (they warn and omit
+/// the source), so the shim survives only as the test-only witness that the two
+/// contracts are deliberately DIFFERENT — `..._collapses_where_the_scan_does_not`
+/// asserts the collapse beside the scan's tri-state answer. Compiling it out of
+/// the binary is what keeps the doc true: no future call site can reach for it
+/// on the strength of a comment asking it not to.
+#[cfg(test)]
 pub fn read_open_escalations_best_effort(cwd: &Path) -> Vec<ConduktEscalation> {
     match scan_open_escalations(cwd) {
         Determination::Known(rows) => rows,

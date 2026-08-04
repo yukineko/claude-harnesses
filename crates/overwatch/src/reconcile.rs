@@ -12,9 +12,28 @@
 //! (`CA-<crate>-<NNN>`, the convention already used by `bridge.rs` /
 //! `continuous-audit.sh`) and auto-record a CONFIRMED disposition for any
 //! referenced finding that is on the store but not yet disposed.
+//!
+//! # The two ledgers this joins, and what an unreadable one means (t3)
+//!
+//! The decision needs BOTH the findings ledger (is this id a real finding?) and
+//! the disposition ledger (is it already closed?). Reading either as an empty
+//! set does not just lose a statistic:
+//!
+//! * an empty FINDINGS set means every referenced id is "unknown" → nothing is
+//!   reconciled, while the report says "0 finding(s) reconciled" — a sentence a
+//!   human reads as "nothing needed doing";
+//! * an empty DISPOSITION set means every finding looks undisposed → the same
+//!   finding is disposed again, and `append_disposition`'s own dedup cannot
+//!   catch it (it re-reads the same unreadable ledger), so the metrics that are
+//!   computed from this ledger get skewed by duplicates.
+//!
+//! So both are read tri-state, and an `Undetermined` answer means this run
+//! writes NOTHING, says so, and exits 3 — never "0 reconciled".
 use crate::disposition::{Disposition, DispositionVerdict};
+use crate::review_queue::SourceHealth;
 use crate::store;
 use anyhow::Result;
+use harness_core::verdict::Determination;
 use regex::Regex;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -155,47 +174,135 @@ fn parse_git_log(text: &str) -> Vec<CommitRef> {
         .collect()
 }
 
+/// Read the two ledgers the reconcile decision joins, tri-state.
+///
+/// Returns `None` when EITHER could not be read in full (each is announced on
+/// stderr and named in `undetermined`), because the join is meaningless without
+/// both — see the module note above for what each collapse would do.
+fn reconcile_inputs(
+    cwd: &Path,
+    undetermined: &mut Vec<&'static str>,
+) -> Option<(BTreeSet<String>, BTreeSet<String>)> {
+    let known_finding_ids = match store::scan_review_findings_all(cwd) {
+        Ok(Determination::Known(rows)) => Some(
+            rows.into_iter()
+                .map(|f| f.finding_id)
+                .collect::<BTreeSet<String>>(),
+        ),
+        Ok(Determination::Undetermined(why)) => {
+            eprintln!(
+                "overwatch reconcile-fixed: WARNING — the review-findings history (hot store \
+                 plus archive) could not be read or held an undecodable line ({why}); NO \
+                 finding was reconciled. This is NOT a report that nothing needed \
+                 reconciling."
+            );
+            undetermined.push("review_findings.jsonl");
+            None
+        }
+        Err(e) => {
+            eprintln!(
+                "overwatch reconcile-fixed: WARNING — the review-findings history could not \
+                 be located ({e}); NO finding was reconciled."
+            );
+            undetermined.push("review_findings.jsonl");
+            None
+        }
+    };
+    let already_disposed = match store::scan_dispositions(cwd) {
+        Ok(Determination::Known(rows)) => Some(
+            rows.into_iter()
+                .map(|d| d.finding_id)
+                .collect::<BTreeSet<String>>(),
+        ),
+        Ok(Determination::Undetermined(why)) => {
+            eprintln!(
+                "overwatch reconcile-fixed: WARNING — the disposition ledger could not be \
+                 read or held an undecodable line ({why}); NO finding was reconciled. \
+                 Proceeding would re-dispose findings that are already closed."
+            );
+            undetermined.push("dispositions.jsonl");
+            None
+        }
+        Err(e) => {
+            eprintln!(
+                "overwatch reconcile-fixed: WARNING — the disposition ledger could not be \
+                 located ({e}); NO finding was reconciled."
+            );
+            undetermined.push("dispositions.jsonl");
+            None
+        }
+    };
+    match (known_finding_ids, already_disposed) {
+        (Some(known), Some(disposed)) => Some((known, disposed)),
+        _ => None,
+    }
+}
+
 /// Count findings that already have a landed fix commit (referenced within
 /// `range`) but no disposition yet — the `review-metrics` early-warning
 /// signal for the same "fix landed, nobody ran record-disposition" gap
 /// `reconcile-fixed` closes (recurs every round `reconcile-fixed` isn't run
 /// over, e.g. because it scans too short a range). Pure recomputation of
-/// `compute_reconcile_dispositions`'s output size — never writes. Fail-soft:
-/// a git or store read failure degrades to 0, matching `run()`.
-pub fn stale_undisposed_count(cwd: &Path, range: ReconcileRange) -> usize {
+/// `compute_reconcile_dispositions`'s output size — never writes.
+///
+/// Tri-state: an unreadable ledger is `Undetermined`, NOT `Known(0)`. A zero
+/// here is rendered as "no stale finding" (the warning line is suppressed), so
+/// collapsing the two would turn a broken store into an all-clear.
+pub fn stale_undisposed_count(cwd: &Path, range: ReconcileRange) -> Determination<usize> {
     let commits = git_log_commits(cwd, &range);
-    let known_finding_ids: BTreeSet<String> = store::read_review_findings_all(cwd)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|f| f.finding_id)
-        .collect();
-    let already_disposed: BTreeSet<String> = store::read_dispositions(cwd)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|d| d.finding_id)
-        .collect();
-    compute_reconcile_dispositions(&commits, &known_finding_ids, &already_disposed, 0).len()
+    let mut undetermined: Vec<&'static str> = Vec::new();
+    match reconcile_inputs(cwd, &mut undetermined) {
+        Some((known_finding_ids, already_disposed)) => Determination::known(
+            compute_reconcile_dispositions(&commits, &known_finding_ids, &already_disposed, 0)
+                .len(),
+        ),
+        None => Determination::undetermined(format!(
+            "the stale-undisposed count joins ledgers that could not be read: {}",
+            undetermined.join(", ")
+        )),
+    }
 }
 
-/// CLI entry point for `overwatch reconcile-fixed`. Fail-soft end-to-end:
-/// a git failure or an unreadable store both degrade to "0 processed",
-/// never an `Err` — this command must never break a pre-push hook or an
-/// audit round.
-pub fn run(range: ReconcileRange, dry_run: bool, json: bool) -> Result<()> {
+/// CLI entry point for `overwatch reconcile-fixed`.
+///
+/// Fail-soft on GIT: a git failure degrades to "0 commits scanned", which the
+/// output states as the count it is. NOT fail-soft on the STORE: an unreadable
+/// findings or disposition ledger writes nothing, is announced, and returns
+/// [`SourceHealth::SomeUndetermined`] (exit 3) rather than reporting
+/// "0 finding(s) reconciled".
+pub fn run(range: ReconcileRange, dry_run: bool, json: bool) -> Result<SourceHealth> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
 
     let commits = git_log_commits(&cwd, &range);
-    let known_finding_ids: BTreeSet<String> = store::read_review_findings_all(&cwd)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|f| f.finding_id)
-        .collect();
-    let already_disposed: BTreeSet<String> = store::read_dispositions(&cwd)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|d| d.finding_id)
-        .collect();
+    let mut undetermined: Vec<&'static str> = Vec::new();
+    let (known_finding_ids, already_disposed) = match reconcile_inputs(&cwd, &mut undetermined) {
+        Some(inputs) => inputs,
+        None => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "commits_scanned": commits.len(),
+                        // Not "reconciled: []" alone: with a non-empty
+                        // `undetermined_sources` the empty list means "could
+                        // not tell", not "nothing to do".
+                        "reconciled": Vec::<String>::new(),
+                        "dry_run": dry_run,
+                        "undetermined_sources": undetermined,
+                    }))?
+                );
+            } else {
+                println!(
+                    "reconcile-fixed: scanned {} commit(s), NOTHING was reconciled — {} could \
+                     not be read (this is NOT a report that no finding needed reconciling)",
+                    commits.len(),
+                    undetermined.join(", ")
+                );
+            }
+            return Ok(SourceHealth::SomeUndetermined);
+        }
+    };
 
     let new_dispositions =
         compute_reconcile_dispositions(&commits, &known_finding_ids, &already_disposed, now);
@@ -220,9 +327,12 @@ pub fn run(range: ReconcileRange, dry_run: bool, json: bool) -> Result<()> {
                 "commits_scanned": commits.len(),
                 "reconciled": new_dispositions.iter().map(|d| d.finding_id.clone()).collect::<Vec<_>>(),
                 "dry_run": dry_run,
+                // Always present so the key's absence never has to be
+                // interpreted; empty here means both ledgers were read.
+                "undetermined_sources": Vec::<String>::new(),
             }))?
         );
-        return Ok(());
+        return Ok(SourceHealth::AllRead);
     }
 
     if new_dispositions.is_empty() {
@@ -245,7 +355,7 @@ pub fn run(range: ReconcileRange, dry_run: bool, json: bool) -> Result<()> {
             println!("  {} -> confirmed ({})", d.finding_id, d.reviewer);
         }
     }
-    Ok(())
+    Ok(SourceHealth::AllRead)
 }
 
 #[cfg(test)]

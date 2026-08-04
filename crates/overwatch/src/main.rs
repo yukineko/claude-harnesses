@@ -537,6 +537,21 @@ fn resolve_policy(threshold: Option<usize>, window_secs: Option<i64>) -> Recurre
     }
 }
 
+/// Map a command's [`SourceHealth`] onto the process exit code.
+///
+/// The review-surface commands print their answer to stdout and their reasons
+/// to stderr — but a `--json` consumer sees only stdout, and one that filters
+/// on `kind` skips even the in-band `undetermined-source` row. Exit 3 (the same
+/// "this is an answer, not a crash" convention `canary-gate` uses) is the one
+/// channel such a consumer cannot miss: `set -e`, `if overwatch ...`, and
+/// `continuous-audit.sh`'s `run_ow` wrapper all react to it. Exit 0 with a
+/// short queue would be the silent degrade this whole path removes.
+fn exit_on_undetermined_sources(health: review_queue::SourceHealth) {
+    if health == review_queue::SourceHealth::SomeUndetermined {
+        std::process::exit(health.exit_code());
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -739,7 +754,7 @@ fn main() -> Result<()> {
             disposition_cli::record(finding_id, &verdict, reviewer, store::now())?;
         }
         Command::ReviewMetrics { json } => {
-            disposition_cli::metrics(json)?;
+            exit_on_undetermined_sources(disposition_cli::metrics(json)?);
         }
         Command::ResolveMergeConflict {
             id,
@@ -755,11 +770,12 @@ fn main() -> Result<()> {
             limit,
             to_backlog,
         } => {
-            if to_backlog {
-                bridge::to_backlog()?;
+            let health = if to_backlog {
+                bridge::to_backlog()?
             } else {
-                review_queue::run(json, since, limit)?;
-            }
+                review_queue::run(json, since, limit)?
+            };
+            exit_on_undetermined_sources(health);
         }
         Command::AutoApproved {
             json,
@@ -786,7 +802,7 @@ fn main() -> Result<()> {
             } else {
                 reconcile::ReconcileRange::LastN(last_n.unwrap_or(50))
             };
-            reconcile::run(range, dry_run, json)?;
+            exit_on_undetermined_sources(reconcile::run(range, dry_run, json)?);
         }
     }
     Ok(())

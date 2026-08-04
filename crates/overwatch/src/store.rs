@@ -703,6 +703,23 @@ pub fn read_bridged_findings(cwd: &Path) -> Result<Vec<String>> {
 /// (`Known(vec![])`); one that could not be read in full is `Undetermined(why)`
 /// rather than a short set that would re-forward findings already in the
 /// backlog.
+///
+/// DIRECTION (t3 judgement — this ledger is NOT in the same class as the
+/// finding/rollback/escalation ledgers, so it gets its own answer):
+///
+/// * collapsing it to EMPTY means "nothing was ever bridged" → every confirmed
+///   finding is forwarded AGAIN. The idempotency ledger exists precisely to
+///   stop that, so the collapse silently disables the guard it is. The damage
+///   is duplicate backlog tasks a human must reconcile by hand — and duplicates
+///   are not self-healing.
+/// * treating it as "assume everything is already bridged" means this run
+///   forwards NOTHING from the stream. Nothing is lost: the source ledgers are
+///   append-only and `--to-backlog` re-derives its rows every run, so the next
+///   run with a readable ledger forwards exactly the same items.
+///
+/// One direction needs a human to clean up, the other needs a re-run. So the
+/// consumer ([`crate::bridge`]) SKIPS the stream and says so loudly; it must
+/// never proceed with an empty already-bridged set.
 pub fn scan_bridged_findings(cwd: &Path) -> Result<Determination<Vec<String>>> {
     Ok(
         scan_jsonl::<BridgedFinding>(&bridged_findings_path(cwd)?, "bridged_findings.jsonl")
@@ -787,6 +804,10 @@ pub fn read_bridged_entries(cwd: &Path) -> Result<Vec<String>> {
 }
 
 /// Tri-state read of the bridged-entry idempotency ledger (see [`scan_jsonl`]).
+/// Same DIRECTION judgement as [`scan_bridged_findings`]: an undetermined
+/// already-bridged set must make the consumer SKIP the stream (re-runnable),
+/// never proceed as if nothing had ever been bridged (duplicate backlog tasks
+/// a human has to reconcile).
 pub fn scan_bridged_entries(cwd: &Path) -> Result<Determination<Vec<String>>> {
     Ok(
         scan_jsonl::<BridgedEntry>(&bridged_entries_path(cwd)?, "bridged_entries.jsonl")
@@ -1592,6 +1613,16 @@ pub fn append_merge_conflict_resolution(
 /// partially-undecodable ledger reads as (or short of) an empty vec, i.e. "this
 /// conflict is still unresolved". Use [`scan_merge_conflict_resolutions`] where
 /// that drives a decision.
+///
+/// DIRECTION (t3 judgement, and why this reader is not simply banned): losing a
+/// resolution makes a conflict look STILL OPEN. That over-reports — a human is
+/// shown a blocked merge that may already be settled — and it never hides a
+/// blocked merge, so the collapse here falls on the conservative side. It is
+/// still not free: an over-reported conflict can be re-bridged into the backlog
+/// and re-held by a driver. So [`scan_open_merge_conflicts`] does treat this
+/// ledger's answer as tri-state, keeps the entries VISIBLE when it is
+/// undetermined, and hands the caller a reason to say so — rather than either
+/// hiding the entries (the losing direction) or pretending the join was clean.
 pub fn read_merge_conflict_resolutions(cwd: &Path) -> Result<Vec<MergeConflictResolution>> {
     Ok(read_jsonl_best_effort(
         &merge_conflict_resolutions_path(cwd)?,
@@ -1612,10 +1643,63 @@ pub fn scan_merge_conflict_resolutions(
 /// The OPEN blocked-merge set: entries with no resolution (fail-soft read of
 /// both streams, joined by `conflict_id`). This is what `review-queue`
 /// surfaces as `[merge-conflict]` rows.
+///
+/// BEST-EFFORT on BOTH streams, and the two collapse in OPPOSITE directions —
+/// which is why [`scan_open_merge_conflicts`] exists and why anything that
+/// renders or drains this set should call that instead:
+///
+/// * an unreadable ENTRY ledger reads as "no merge is blocked" (a real work
+///   stoppage vanishes — the losing direction);
+/// * an unreadable RESOLUTION ledger reads as "nothing is resolved" (a settled
+///   conflict is shown again — the conservative direction).
 pub fn open_merge_conflicts(cwd: &Path) -> Result<Vec<MergeConflictEntry>> {
     let entries = read_merge_conflicts(cwd)?;
     let resolutions = read_merge_conflict_resolutions(cwd)?;
     Ok(crate::merge_conflict::open_entries(&entries, &resolutions))
+}
+
+/// The tri-state answer for the OPEN blocked-merge set, keeping the two ledgers'
+/// determinations APART because they fail in opposite directions (see
+/// [`scan_open_merge_conflicts`]).
+#[derive(Debug)]
+pub struct OpenMergeConflictScan {
+    /// The open (unresolved) entries. `Undetermined` when the ENTRY ledger
+    /// (`merge_conflicts.jsonl`) could not be read in full — the caller must not
+    /// render that as "no merge is blocked".
+    pub open: Determination<Vec<MergeConflictEntry>>,
+    /// `Some(why)` when the RESOLUTION ledger could not be read in full. The
+    /// entries above are then joined against NO resolutions, i.e. every entry is
+    /// reported open: nothing is hidden, but an already-resolved conflict may be
+    /// listed. The caller is expected to SAY this rather than pass the join off
+    /// as clean.
+    pub resolutions_undetermined: Option<String>,
+}
+
+/// Tri-state [`open_merge_conflicts`]: the sanctioned reader for the review
+/// surface and the backlog drain.
+///
+/// The direction judgement, written down because the two halves are NOT
+/// symmetric:
+///
+/// * ENTRY ledger undetermined → `open: Undetermined`. Reading it as an empty
+///   set is "no merge is blocked", the exact answer that lets a held merge pass
+///   unnoticed. The caller must omit-and-announce, never claim zero.
+/// * RESOLUTION ledger undetermined → the entries are still returned, joined
+///   against an EMPTY resolution set, and `resolutions_undetermined` carries
+///   why. Dropping to "nothing is resolved" over-reports (a resolved conflict
+///   reappears) and cannot hide a blocked merge, so withholding the whole
+///   source here would trade a conservative error for the losing one.
+pub fn scan_open_merge_conflicts(cwd: &Path) -> Result<OpenMergeConflictScan> {
+    let (resolutions, resolutions_undetermined) = match scan_merge_conflict_resolutions(cwd)? {
+        Determination::Known(rows) => (rows, None),
+        Determination::Undetermined(why) => (Vec::new(), Some(why.as_str().to_string())),
+    };
+    let open = scan_merge_conflicts(cwd)?
+        .map(|entries| crate::merge_conflict::open_entries(&entries, &resolutions));
+    Ok(OpenMergeConflictScan {
+        open,
+        resolutions_undetermined,
+    })
 }
 
 /// Look up the resolution for a `conflict_id`, if any (for the condukt
@@ -3074,6 +3158,68 @@ mod tests {
         assert_undetermined(
             scan_merge_conflict_resolutions(&dir).unwrap(),
             "unreadable merge_conflict_resolutions.jsonl",
+        );
+
+        restore_home(prev_home);
+    }
+
+    /// The OPEN blocked-merge join reads TWO ledgers that fail in OPPOSITE
+    /// directions, and `scan_open_merge_conflicts` must keep them apart:
+    ///
+    /// * entries undetermined → the whole answer is undetermined (reading it as
+    ///   "no merge is blocked" is the losing direction);
+    /// * resolutions undetermined → the entries are still returned (nothing is
+    ///   hidden) but the caller is TOLD, because the filter did not run.
+    ///
+    /// The clean and absent arms are the anti-vacuity controls: an
+    /// implementation that answered undetermined for everything would satisfy
+    /// the two failure arms while blinding the review surface.
+    #[test]
+    fn open_merge_conflict_scan_separates_the_two_ledgers_directions() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        // Absent: nothing was ever recorded — a real, trustworthy empty.
+        let dir = fresh_ledger_home("open-mc-absent");
+        let scan = scan_open_merge_conflicts(&dir).unwrap();
+        assert_known_len(scan.open, 0, "absent merge_conflicts.jsonl");
+        assert!(scan.resolutions_undetermined.is_none());
+
+        // Clean: one entry, no resolution → one OPEN conflict (control).
+        let dir = fresh_ledger_home("open-mc-clean");
+        append_merge_conflict(&dir, &merge_conflict_entry("c-1", 1)).unwrap();
+        let scan = scan_open_merge_conflicts(&dir).unwrap();
+        assert_known_len(scan.open, 1, "one unresolved conflict");
+        assert!(scan.resolutions_undetermined.is_none());
+
+        // Clean + resolved: the filter still works (control — the join must not
+        // become a no-op just because it grew a third answer).
+        append_merge_conflict_resolution(&dir, &merge_conflict_resolution("c-1", 2)).unwrap();
+        let scan = scan_open_merge_conflicts(&dir).unwrap();
+        assert_known_len(scan.open, 0, "the resolved conflict drops out");
+        assert!(scan.resolutions_undetermined.is_none());
+
+        // ENTRY ledger undetermined → the whole set is undetermined.
+        let dir = fresh_ledger_home("open-mc-entries-corrupt");
+        append_merge_conflict(&dir, &merge_conflict_entry("c-2", 1)).unwrap();
+        append_undecodable_line(&merge_conflicts_path(&dir).unwrap());
+        let scan = scan_open_merge_conflicts(&dir).unwrap();
+        assert_undetermined(scan.open, "merge_conflicts.jsonl with an undecodable line");
+
+        // RESOLUTION ledger undetermined → entries STILL returned, and said so.
+        let dir = fresh_ledger_home("open-mc-resolutions-corrupt");
+        append_merge_conflict(&dir, &merge_conflict_entry("c-3", 1)).unwrap();
+        write_unreadable(&merge_conflict_resolutions_path(&dir).unwrap());
+        let scan = scan_open_merge_conflicts(&dir).unwrap();
+        assert_known_len(
+            scan.open,
+            1,
+            "an unreadable RESOLUTION ledger must not hide the conflict — it \
+             over-reports, which is the conservative direction",
+        );
+        assert!(
+            scan.resolutions_undetermined.is_some(),
+            "the un-run filter must be reported, not passed off as a clean join"
         );
 
         restore_home(prev_home);

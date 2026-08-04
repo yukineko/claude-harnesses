@@ -1,6 +1,6 @@
 {
   "name": "gauge",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "description": "Local LLMOps telemetry for Claude Code: a Stop hook that reads each session's transcript and records token usage, cache hits, tool calls, latency, and estimated cost to a local store — then `gauge report` rolls it up by project, model, and day. `gauge subagents` attributes cost to each individual sub-agent (Task) live from its transcript, so callers like condukt can record true per-task cost instead of a lumped session total. v0.3.9: `gauge subagents --json` now also emits `tokens_input`/`tokens_output` per sub-agent, so callers can record real token usage alongside cost. Observability for your own agent runs, subscription-native (one hook + bundled Rust binary, no API key, nothing leaves the machine).",
   "author": {
     "name": "yukineko"

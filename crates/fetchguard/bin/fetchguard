@@ -19,6 +19,7 @@ root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 case "$(uname -s)" in
   Linux)  os=linux ;;
   Darwin) os=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
   *)      os="$(uname -s)" ;;
 esac
 case "$(uname -m)" in
@@ -27,7 +28,10 @@ case "$(uname -m)" in
   *)              arch="$(uname -m)" ;;
 esac
 
-binary="$root/fetchguard-$os-$arch"
+ext=""
+[ "$os" = windows ] && ext=".exe"
+
+binary="$root/fetchguard-$os-$arch$ext"
 if [ -x "$binary" ]; then
   exec "$binary" "$@"
 fi

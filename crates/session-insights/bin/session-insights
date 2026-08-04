@@ -9,6 +9,7 @@ root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 case "$(uname -s)" in
   Linux)  os=linux ;;
   Darwin) os=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
   *)      os="$(uname -s)" ;;
 esac
 case "$(uname -m)" in
@@ -17,7 +18,10 @@ case "$(uname -m)" in
   *)              arch="$(uname -m)" ;;
 esac
 
-binary="$root/session-insights-$os-$arch"
+ext=""
+[ "$os" = windows ] && ext=".exe"
+
+binary="$root/session-insights-$os-$arch$ext"
 if [ ! -x "$binary" ]; then
   echo "session-insights: no bundled binary for $os-$arch ($binary). Build it with scripts/build-plugin-bin.sh on that platform." >&2
   exit 0

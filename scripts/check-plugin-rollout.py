@@ -160,6 +160,15 @@ PLATFORM_SUFFIXES = (
     "linux-arm64",
     "windows-x86_64",
     "windows-arm64",
+    # cargo/rustc append .exe to every Windows build output, and
+    # rebuild-plugins.sh deploys under that exact name (see its own EXT
+    # handling) — so a correctly-deployed Windows binary never matches the two
+    # bare suffixes above. Without these, _is_rebuild_artifact() misclassifies
+    # a legitimately deployed <name>-windows-*.exe as an unaccounted stray file
+    # (measured 2026-08-04: every GATE crate's real deployed .exe was reported
+    # as "not a mirror" drift).
+    "windows-x86_64.exe",
+    "windows-arm64.exe",
 )
 
 # Crates every plugin binary statically links. A change to one of these changes
@@ -309,7 +318,12 @@ def _host_binary_deployed(install):
         return None
     except OSError:
         return None
-    return any(e.endswith("-" + HOST_SUFFIX) for e in entries)
+    # See the matching PLATFORM_SUFFIXES comment above: on Windows the deployed
+    # filename carries a trailing .exe that HOST_SUFFIX alone does not match.
+    return any(
+        e.endswith("-" + HOST_SUFFIX) or e.endswith("-" + HOST_SUFFIX + ".exe")
+        for e in entries
+    )
 REGISTRY_PATH = os.environ.get(
     "CLAUDE_PLUGIN_REGISTRY", os.path.expanduser("~/.claude/plugins/installed_plugins.json")
 )

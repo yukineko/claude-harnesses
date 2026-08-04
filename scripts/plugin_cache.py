@@ -66,14 +66,49 @@ class Holders:
         )
 
 
+def _pid_alive_windows(pid):
+    """Windows has no signal-0 existence probe: `os.kill(pid, 0)` on Windows
+    does not raise ProcessLookupError for a dead pid — CPython maps it to a
+    bare OSError (WinError 87, "the parameter is incorrect") indistinguishable
+    from a real failure, so pid_alive()'s except chain fell through to `None`
+    for every pid, always (measured 2026-08-04: every prune run on this
+    platform reported 100% of stale dirs as undetermined-held, so nothing was
+    ever prunable and check-plugin-rollout.py could never report clean).
+    OpenProcess is the actual Win32 existence probe: a live pid returns a
+    handle (closed immediately, we only wanted the answer); a dead pid fails
+    with ERROR_INVALID_PARAMETER (87); a live pid we lack rights to query
+    (owned by another user) fails with ERROR_ACCESS_DENIED (5) — still alive,
+    same EPERM-is-alive reasoning as the POSIX branch below. Any other error
+    is genuinely undetermined.
+    """
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if handle:
+        kernel32.CloseHandle(handle)
+        return True
+    err = ctypes.get_last_error()
+    if err == 5:  # ERROR_ACCESS_DENIED
+        return True
+    if err == 87:  # ERROR_INVALID_PARAMETER
+        return False
+    return None
+
+
 def pid_alive(pid):
     """Is `pid` a live process? True / False / None (cannot tell).
 
     Signal 0 performs the permission and existence checks without delivering
     anything. EPERM means the process exists but belongs to someone else, which
     is still ALIVE — reading that as dead is how a liveness check turns into a
-    delete-someone-else's-running-plugin bug.
+    delete-someone-else's-running-plugin bug. Windows has no working signal-0
+    probe, so it is dispatched to _pid_alive_windows instead (see its
+    docstring).
     """
+    if os.name == "nt":
+        return _pid_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

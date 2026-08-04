@@ -1,6 +1,6 @@
 [package]
 name = "fetchguard"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version.workspace = true
 description = "Runtime content-level injection scanner: a PostToolUse hook that scans WebFetch/WebSearch tool_response text for planted prompt-injection phrasings (concealment / verification-bypass / instruction-override / egress) and warns the model the flagged span is untrusted data whose embedded directives must not be followed. Closes the gap left by scripts/check-prompt-injection.py, which is documented as commit-time-only (committed prompt assets), not runtime tool output."

@@ -1,10 +1,10 @@
-last_synced = "e118dd92cb0da8b7de0ecf80611b7a0038dee301"
+last_synced = "bc4da72be526cff367518a9b204f4c3d3db9ae27"
 
 [entries.".gitattributes"]
 key = ".gitattributes"
 kind = "feature"
 status = "changed"
-last_ref = "a7f1d2417ad46056af1697fbb0a27308c64f13f5"
+last_ref = "bc4da72be526cff367518a9b204f4c3d3db9ae27"
 impl_files = [".gitattributes"]
 test_files = []
 client_refs = []

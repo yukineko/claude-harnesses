@@ -87,8 +87,23 @@ pub struct RunRow {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProgressView {
     /// Overwatch ledger: per-session rosters of live leases.
+    ///
+    /// An empty vec means "the ledger was read and holds no live leases".
+    /// It does NOT mean "the ledger could not be read" — that case is carried
+    /// by [`ProgressView::sessions_undetermined`], which must be consulted
+    /// before reading emptiness as absence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sessions: Vec<SessionRoster>,
+    /// Why the lease ledger could not be read, when it could not be.
+    ///
+    /// `None` = the ledger was read (`sessions` is then a measurement).
+    /// `Some(reason)` = the ledger was NOT read, so `sessions` is empty for
+    /// lack of information rather than for lack of sessions. Serialized so a
+    /// JSON consumer can tell the two apart; `overwatch status` renders it as
+    /// an explicit `unknown` instead of the `(none)` that means "nobody is
+    /// working here".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions_undetermined: Option<String>,
     /// Backlog summary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backlog: Option<BacklogSummary>,
@@ -242,16 +257,45 @@ fn shell_soft(cmd: &str, args: &[&str]) -> Option<String> {
     }
 }
 
+/// Fold a lease-ledger load result into the view.
+///
+/// Split out from [`build`] so the load FAILURE path is reachable from a test
+/// without touching the real `~/.overwatch` store: `build` shells out to four
+/// other binaries, so testing it end-to-end would measure the environment
+/// rather than this decision.
+///
+/// `store::load_leases` already distinguishes the three answers correctly — a
+/// missing file is `Ok(empty)`, corrupt JSON and an unreadable file are both
+/// `Err` — so the only question here is whether the caller PRESERVES that
+/// distinction or collapses it.
+pub(crate) fn apply_leases(
+    view: &mut ProgressView,
+    loaded: anyhow::Result<LeaseRegistry>,
+    now: i64,
+) {
+    match loaded {
+        Ok(mut leases) => {
+            store::reap_stale(&mut leases, now);
+            view.sessions = roster_from_leases(&leases, now);
+            view.sessions_undetermined = None;
+        }
+        // `sessions` deliberately stays empty — there is nothing to report —
+        // but the REASON is carried alongside it so that emptiness is never
+        // mistaken for a measurement. Dropping this arm was the fail-open.
+        Err(e) => {
+            view.sessions = Vec::new();
+            view.sessions_undetermined = Some(e.to_string());
+        }
+    }
+}
+
 /// Build the full ProgressView (infallible, fail-soft).
 pub fn build(cwd: &Path) -> ProgressView {
     let now = store::now();
     let mut view = ProgressView::default();
 
     // 1. Overwatch ledger: load live leases, reap stale, build session rosters.
-    if let Ok(mut leases) = store::load_leases(cwd) {
-        store::reap_stale(&mut leases, now);
-        view.sessions = roster_from_leases(&leases, now);
-    }
+    apply_leases(&mut view, store::load_leases(cwd), now);
 
     // 2. Backlog: try `backlog list --json`, fall back to plain text parsing.
     if let Some(json_output) = shell_soft("backlog", &["list", "--json"]) {
@@ -354,6 +398,68 @@ mod tests {
     use super::*;
     use crate::store::Lease;
     use std::collections::BTreeMap;
+
+    /// RED before the fix. `store::load_leases` already returns `Err` for a
+    /// corrupt or unreadable ledger; the defect was that `build` dropped it
+    /// with `if let Ok`, leaving `sessions` at its `Default` — so "could not
+    /// read" produced byte-identical output to "read it, nobody is here".
+    #[test]
+    fn an_unreadable_lease_ledger_is_not_reported_as_no_sessions() {
+        let mut view = ProgressView::default();
+        apply_leases(
+            &mut view,
+            Err(anyhow::anyhow!(
+                "leases.json could not be read at /x/leases.json: permission denied"
+            )),
+            0,
+        );
+        assert!(
+            view.sessions_undetermined.is_some(),
+            "a ledger that could not be read must be distinguishable from an \
+             empty one; sessions_undetermined was None, so a reader sees the \
+             same '(none)' that means nobody is working here"
+        );
+    }
+
+    /// Anti-vacuity control. An implementation that marked EVERYTHING
+    /// undetermined would satisfy the test above while destroying the signal:
+    /// every status render would say "unknown" and the roster would become
+    /// useless. A ledger that was read and holds nothing is a MEASUREMENT and
+    /// must stay a measurement.
+    #[test]
+    fn a_genuinely_empty_ledger_is_still_reported_as_empty_not_unknown() {
+        let mut view = ProgressView::default();
+        apply_leases(&mut view, Ok(LeaseRegistry::new()), 0);
+        assert!(
+            view.sessions_undetermined.is_none(),
+            "an empty-but-readable ledger must remain a measurement"
+        );
+        assert!(view.sessions.is_empty());
+    }
+
+    /// Non-regression: the ordinary populated path still produces a roster.
+    #[test]
+    fn a_populated_ledger_still_produces_its_roster() {
+        let mut leases = LeaseRegistry::new();
+        leases.insert(
+            "k1".to_string(),
+            Lease {
+                key: "k1".to_string(),
+                title: "Task 1".to_string(),
+                session_id: "sess-a".to_string(),
+                run_id: "run-1".to_string(),
+                claimed_at: 100,
+                heartbeat_at: 100,
+                scope: Vec::new(),
+                done_criteria: None,
+            },
+        );
+        let mut view = ProgressView::default();
+        apply_leases(&mut view, Ok(leases), 100);
+        assert!(view.sessions_undetermined.is_none());
+        assert_eq!(view.sessions.len(), 1);
+        assert_eq!(view.sessions[0].session_id, "sess-a");
+    }
 
     #[test]
     fn test_roster_from_leases_empty() {

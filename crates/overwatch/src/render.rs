@@ -21,7 +21,10 @@ pub fn status(json: bool) -> Result<()> {
     let mut out = String::new();
 
     out.push_str("== Sessions ==\n");
-    out.push_str(&format_roster(&view.sessions));
+    out.push_str(&format_roster(
+        &view.sessions,
+        view.sessions_undetermined.as_deref(),
+    ));
     out.push('\n');
 
     out.push_str("== PDO hypotheses ==\n");
@@ -53,12 +56,23 @@ pub fn sessions(json: bool) -> Result<()> {
         return Ok(());
     }
 
-    print!("{}", format_roster(&view.sessions));
+    print!(
+        "{}",
+        format_roster(&view.sessions, view.sessions_undetermined.as_deref())
+    );
     Ok(())
 }
 
 /// Format the per-session lease roster as a readable table.
-fn format_roster(sessions: &[SessionRoster]) -> String {
+fn format_roster(sessions: &[SessionRoster], undetermined: Option<&str>) -> String {
+    // Checked BEFORE emptiness: "(none)" is read by a human (and by the LLM
+    // reading the SessionStart hook output) as "no other session is working
+    // here", which is the exact conclusion CLAUDE.md section 8 forbids drawing
+    // without evidence. A ledger we could not read is not evidence of absence,
+    // so it must not borrow that sentence.
+    if let Some(reason) = undetermined {
+        return format!("(unknown — the lease ledger could not be read: {reason})\n");
+    }
     if sessions.is_empty() {
         return "(none)\n".to_string();
     }
@@ -159,9 +173,24 @@ mod tests {
     use crate::aggregate::LeaseInfo;
     use std::collections::BTreeMap;
 
+    /// The rendered surface is what a human (and the LLM reading the
+    /// SessionStart hook) actually consumes, so the distinction has to survive
+    /// all the way to the text — not just to the struct field.
+    #[test]
+    fn an_unreadable_ledger_renders_unknown_rather_than_none() {
+        let out = format_roster(&[], Some("permission denied"));
+        assert!(
+            !out.contains("(none)"),
+            "an unreadable ledger must not borrow the sentence that means \
+             'nobody is working here'; got: {out}"
+        );
+        assert!(out.contains("unknown"), "got: {out}");
+        assert!(out.contains("permission denied"), "got: {out}");
+    }
+
     #[test]
     fn test_format_roster_empty() {
-        assert_eq!(format_roster(&[]), "(none)\n");
+        assert_eq!(format_roster(&[], None), "(none)\n");
     }
 
     #[test]
@@ -171,7 +200,7 @@ mod tests {
             leases: vec![],
             live_count: 0,
         }];
-        let out = format_roster(&sessions);
+        let out = format_roster(&sessions, None);
         assert!(out.contains("session s1"));
         assert!(out.contains("(no leases)"));
     }
@@ -196,7 +225,7 @@ mod tests {
             ],
             live_count: 1,
         }];
-        let out = format_roster(&sessions);
+        let out = format_roster(&sessions, None);
         assert!(out.contains("[live] task-1"));
         assert!(out.contains("[stale] task-2"));
     }

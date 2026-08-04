@@ -510,6 +510,13 @@ mod tests {
         // back to the default location, or `--json` after disabling recording
         // would try to open a file called "off" and report zero.
         let cwd = Path::new("/tmp/whatever");
+        // ONE acquisition for the whole test, taken BEFORE the expected value is
+        // computed: `default_sink_path` resolves through `$HOME`, so a test in
+        // another module that sandboxes `$HOME` between that line and
+        // `ledger_path` below would make the two disagree and fail this test for
+        // a reason that has nothing to do with the env override it checks.
+        // (Re-locking per iteration would deadlock — `Mutex` is not reentrant.)
+        let _g = env_lock();
         let default = undetermined::default_sink_path(cwd);
         for (val, want) in [
             (Some("off"), default.clone()),
@@ -519,7 +526,6 @@ mod tests {
                 PathBuf::from("/tmp/explicit.jsonl"),
             ),
         ] {
-            let _g = env_lock();
             let prev = std::env::var_os(undetermined::SINK_ENV);
             match val {
                 Some(v) => std::env::set_var(undetermined::SINK_ENV, v),
@@ -534,8 +540,20 @@ mod tests {
         }
     }
 
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// The process-global env lock — deliberately the CRATE-WIDE
+    /// [`crate::store::HOME_ENV_LOCK`], not a module-local mutex.
+    ///
+    /// These tests read a `$HOME`-derived path, and `$HOME` is process-global:
+    /// a module-local mutex would serialize this module against itself while
+    /// leaving it racing every `$HOME`-sandboxing test in `store`, `aggregate`,
+    /// `canary_cli` and `audit_round_cli` — all of which already share the one
+    /// crate-wide lock for exactly this reason (see the note on
+    /// `store::HOME_ENV_LOCK`). Observed: with a module-local lock this module's
+    /// override test failed roughly 1 run in 5 once `store`'s ledger tests
+    /// started sandboxing `$HOME` more often.
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        crate::store::HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 }

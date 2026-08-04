@@ -212,13 +212,20 @@ fi
 # --- validate --plugin filter against the marketplace -----------------------
 all_names="$(python3 - "$MARKETPLACE" <<'PY'
 import json, sys
+# NOTE TO EDITORS: this heredoc sits inside a $( ) command substitution, and
+# bash 3.2 (the /bin/bash macOS still ships) scans $( ) WITHOUT skipping
+# heredoc bodies. A lone apostrophe anywhere below therefore opens a quote that
+# never closes and breaks `bash -n` on the WHOLE file -- reported far away, at
+# the next $'...' (line ~992), which is why it reads as unrelated. Keep single
+# quotes balanced in here. scripts/check-shell-syntax.py enforces this.
+#
 # stdout defaults to text-mode CRLF translation on native Windows Python, which
 # would glue a trailing \r onto every line this prints. Every bash consumer
 # below reads these lines with `read -r` (strips \n only, not \r) or splits a
 # comma-joined string built from them, so an untranslated \r silently corrupts
-# every plugin NAME downstream -- e.g. `in_only()`'s exact-match case pattern
-# then matches nothing, and a scoped rebuild copies/seeds zero binaries while
-# reporting success (measured 2026-08-04: this alone caused --only=<41 names>
+# every plugin NAME downstream -- e.g. the exact-match case pattern in
+# `in_only()` then matches nothing, and a scoped rebuild copies/seeds zero
+# binaries while reporting success (measured 2026-08-04: this alone caused --only=<41 names>
 # to skip all 41 plugins with no error). Force LF so the plain string compares
 # bash relies on here actually hold.
 sys.stdout.reconfigure(newline="\n")

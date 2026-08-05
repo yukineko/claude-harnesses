@@ -3,9 +3,12 @@
 //! A turn that consumed untrusted-provenance content (a WebFetch/WebSearch
 //! result, or a `Read` of a file outside the project root) is recorded here so
 //! the `gate` subcommand can downgrade write-class tools for the rest of that
-//! turn. The marker lives at a `context_state_dir`-style path
-//! (`harness_core::store::context_state_dir`'s convention, mirrored here with
-//! taintguard's own base dir): `<state base>/<project_key>/<session>/taint.json`.
+//! turn. The marker lives at `<state base>/sessions/<session>/taint.json`.
+//!
+//! The path is keyed by SESSION ALONE, deliberately: taint is a property of a
+//! turn, and a `cwd` component let the marking hook and the gating hook address
+//! different files when `cd` moved the payload's `cwd` between them, which read
+//! as clean. See [`state_dir`] for the measurement (backlog 90d1ca1d).
 //!
 //! Fail-closed by construction: [`check`] (and its `bool` convenience
 //! [`is_tainted`]) treats an unreadable or unparseable marker as tainted, never
@@ -123,18 +126,45 @@ fn state_base() -> PathBuf {
         .unwrap_or_else(|| harness_core::config::base_dir("taintguard").join("state"))
 }
 
-/// Session-scoped state dir for `cwd`/`session`, canonicalizing `cwd` first so
-/// symlink/relative differences in the caller's cwd resolve to the same key
-/// (mirrors `harness_core::store::context_state_dir`). An empty session id
-/// maps to the shared `"default"` session bucket.
-fn state_dir(cwd: &Path, session: &str) -> PathBuf {
+/// Session-scoped state dir for `session`. An empty session id maps to the
+/// shared `"default"` session bucket.
+///
+/// # Why there is no `cwd` component (backlog 90d1ca1d)
+///
+/// Through 0.1.10 this was `<base>/<project_key(cwd)>/<session>/`, where `cwd`
+/// came from the hook payload. Taint is a property of a **turn**, not of a
+/// directory, and the two hooks that write and read the marker do not see the
+/// same `cwd`: Claude Code's `Bash` tool persists `cd` across calls, so a
+/// `cd` anywhere between the `Read` that marked and the `Bash` that gates
+/// moved the lookup into a different `project_key` bucket, found no marker
+/// there, and returned `Clean` — a silent allow.
+///
+/// Measured against the real 0.1.10 binary before this fix
+/// (`TAINTGUARD_STATE_DIR` isolated, one session id `EXP1` throughout):
+/// `mark` with `cwd=A` + a `Read` outside `A` ⇒ `gate` with `cwd=A` answered
+/// `permissionDecision: "deny"`, while `gate` with `cwd=B` answered with an
+/// empty stdout and exit 0 (allow). The anti-vacuity control — `mark` with
+/// `cwd=B`, then `gate` with `cwd=B` — denied, proving the silence at `B` was
+/// caused by the key mismatch and not by `B` being unreachable. On the
+/// machine that found this, `~/.taintguard/state/` held 32 distinct project
+/// keys for a handful of real projects.
+///
+/// This is not a cannot-determine collapse (CLAUDE.md §3) but something the
+/// invariant does not even cover: the gate looked in the wrong place and
+/// reported clean. Keying by session alone removes the dimension that could
+/// disagree — there is exactly one bucket per session, so a mark and the
+/// gate that consumes it cannot address different files.
+///
+/// `sessions` cannot collide with a [`project_state_dir`] sibling: every
+/// `project_key` carries a `-<hash>` suffix, so the bare literal is not a
+/// value that derivation can produce.
+fn state_dir(session: &str) -> PathBuf {
     let session = if session.is_empty() {
         safe_session("default")
     } else {
         safe_session(session)
     };
-    let cwd_canonical = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-    state_base().join(project_key(&cwd_canonical)).join(session)
+    state_base().join("sessions").join(session)
 }
 
 /// Project-scoped (NOT session-scoped) state dir for `cwd`, reusing the exact
@@ -155,8 +185,8 @@ pub fn project_state_dir(cwd: &Path) -> PathBuf {
 const MARKER_FILENAME: &str = "taint.json";
 
 /// Full path to this session's taint marker.
-fn marker_path(cwd: &Path, session: &str) -> PathBuf {
-    state_dir(cwd, session).join(MARKER_FILENAME)
+fn marker_path(session: &str) -> PathBuf {
+    state_dir(session).join(MARKER_FILENAME)
 }
 
 /// [`marker_path`] exposed for the binary target's tests, which live in a
@@ -165,8 +195,8 @@ fn marker_path(cwd: &Path, session: &str) -> PathBuf {
 /// fault-injection this module's own `corrupt_marker_is_undetermined_and_fails_closed`
 /// test uses. Not part of the runtime contract.
 #[doc(hidden)]
-pub fn marker_path_for_test(cwd: &Path, session: &str) -> PathBuf {
-    marker_path(cwd, session)
+pub fn marker_path_for_test(session: &str) -> PathBuf {
+    marker_path(session)
 }
 
 /// Probe whether `dir` is actually writable right now, by creating it (if
@@ -223,12 +253,12 @@ fn read_state(path: &Path) -> Determination<Option<TaintState>> {
     }
 }
 
-/// Check this session's taint state for `cwd`.
+/// Check this session's taint state.
 ///
 /// See the module docs for why the absent-marker branch additionally probes
 /// store writability before trusting the absence.
-pub fn check(cwd: &Path, session: &str) -> Check {
-    let dir = state_dir(cwd, session);
+pub fn check(session: &str) -> Check {
+    let dir = state_dir(session);
     let marker = dir.join(MARKER_FILENAME);
     match read_state(&marker) {
         Determination::Known(None) => {
@@ -264,8 +294,8 @@ pub fn check(cwd: &Path, session: &str) -> Check {
 /// `true` unless [`check`] returns `Clean` — the fail-closed bool convenience
 /// the `gate` subcommand's happy path uses. Both `Tainted` and `Undetermined`
 /// are `true`.
-pub fn is_tainted(cwd: &Path, session: &str) -> bool {
-    !matches!(check(cwd, session), Check::Clean)
+pub fn is_tainted(session: &str) -> bool {
+    !matches!(check(session), Check::Clean)
 }
 
 /// Mark this session as tainted by `source` (e.g. `"web"`, `"external-read"`).
@@ -287,8 +317,8 @@ pub fn is_tainted(cwd: &Path, session: &str) -> bool {
 /// probe (the dir is still unwritable) resolves to `Undetermined` (tainted),
 /// not `Clean`. So a lost mark degrades to "gate fails closed", never to a
 /// silent allow, independent of whether this `Err` was logged or ignored.
-pub fn mark(cwd: &Path, session: &str, source: &str) -> Result<(), String> {
-    let path = marker_path(cwd, session);
+pub fn mark(session: &str, source: &str) -> Result<(), String> {
+    let path = marker_path(session);
     let mut state = match read_state(&path) {
         Determination::Known(Some(existing)) => existing,
         // Absent or unreadable: start fresh rather than fail the mark — a
@@ -317,8 +347,8 @@ pub fn mark(cwd: &Path, session: &str, source: &str) -> Result<(), String> {
 /// clear). An IO failure other than "not found" is returned as `Err` for the
 /// caller to log to stderr; the marker is left in place on that path — staying
 /// tainted is the safe side of a failed clear, never the reverse.
-pub fn clear(cwd: &Path, session: &str) -> Result<(), String> {
-    let path = marker_path(cwd, session);
+pub fn clear(session: &str) -> Result<(), String> {
+    let path = marker_path(session);
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -341,7 +371,10 @@ mod tests {
     struct Env {
         _guard: std::sync::MutexGuard<'static, ()>,
         _dir: tempfile::TempDir,
-        cwd: PathBuf,
+        /// Kept (but no longer read) so the fixture still creates a realistic
+        /// project dir under the temp state base. The marker path no longer
+        /// has a cwd component — see [`state_dir`] — so no test passes it in.
+        _cwd: PathBuf,
         session: String,
     }
 
@@ -357,7 +390,7 @@ mod tests {
         Env {
             _guard: guard,
             _dir: dir,
-            cwd,
+            _cwd: cwd,
             session: format!("sess-{name}"),
         }
     }
@@ -365,28 +398,28 @@ mod tests {
     #[test]
     fn clean_session_is_not_tainted() {
         let e = env("clean");
-        assert!(matches!(check(&e.cwd, &e.session), Check::Clean));
-        assert!(!is_tainted(&e.cwd, &e.session));
+        assert!(matches!(check(&e.session), Check::Clean));
+        assert!(!is_tainted(&e.session));
     }
 
     #[test]
     fn mark_then_check_is_tainted_with_source() {
         let e = env("mark");
-        mark(&e.cwd, &e.session, "web").expect("mark should succeed");
-        match check(&e.cwd, &e.session) {
+        mark(&e.session, "web").expect("mark should succeed");
+        match check(&e.session) {
             Check::Tainted(sources) => assert_eq!(sources, vec!["web".to_string()]),
             other => panic!("expected Tainted, got {other:?}"),
         }
-        assert!(is_tainted(&e.cwd, &e.session));
+        assert!(is_tainted(&e.session));
     }
 
     #[test]
     fn mark_accumulates_distinct_sources() {
         let e = env("accum");
-        mark(&e.cwd, &e.session, "web").unwrap();
-        mark(&e.cwd, &e.session, "external-read").unwrap();
-        mark(&e.cwd, &e.session, "web").unwrap(); // duplicate, no-op
-        match check(&e.cwd, &e.session) {
+        mark(&e.session, "web").unwrap();
+        mark(&e.session, "external-read").unwrap();
+        mark(&e.session, "web").unwrap(); // duplicate, no-op
+        match check(&e.session) {
             Check::Tainted(sources) => {
                 assert_eq!(
                     sources,
@@ -400,37 +433,37 @@ mod tests {
     #[test]
     fn clear_restores_clean() {
         let e = env("clear");
-        mark(&e.cwd, &e.session, "web").unwrap();
-        assert!(is_tainted(&e.cwd, &e.session));
-        clear(&e.cwd, &e.session).expect("clear should succeed");
-        assert!(matches!(check(&e.cwd, &e.session), Check::Clean));
+        mark(&e.session, "web").unwrap();
+        assert!(is_tainted(&e.session));
+        clear(&e.session).expect("clear should succeed");
+        assert!(matches!(check(&e.session), Check::Clean));
     }
 
     #[test]
     fn clear_of_an_already_clean_session_is_ok() {
         let e = env("clear-noop");
-        clear(&e.cwd, &e.session).expect("clearing an absent marker is success");
+        clear(&e.session).expect("clearing an absent marker is success");
     }
 
     #[test]
     fn corrupt_marker_is_undetermined_and_fails_closed() {
         let e = env("corrupt");
-        let path = marker_path(&e.cwd, &e.session);
+        let path = marker_path(&e.session);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"{ not json").unwrap();
-        assert!(matches!(check(&e.cwd, &e.session), Check::Undetermined(_)));
+        assert!(matches!(check(&e.session), Check::Undetermined(_)));
         assert!(
-            is_tainted(&e.cwd, &e.session),
+            is_tainted(&e.session),
             "a corrupt marker must fail closed to tainted"
         );
     }
 
     #[test]
     fn different_sessions_do_not_share_taint() {
-        let e = env("multi");
-        mark(&e.cwd, "session-A", "web").unwrap();
-        assert!(is_tainted(&e.cwd, "session-A"));
-        assert!(!is_tainted(&e.cwd, "session-B"));
+        let _e = env("multi");
+        mark("session-A", "web").unwrap();
+        assert!(is_tainted("session-A"));
+        assert!(!is_tainted("session-B"));
     }
 
     /// FIX #3: a valid-JSON, wrong-schema marker (missing the required
@@ -439,12 +472,12 @@ mod tests {
     #[test]
     fn wrong_schema_marker_is_undetermined_and_fails_closed() {
         let e = env("wrong-schema");
-        let path = marker_path(&e.cwd, &e.session);
+        let path = marker_path(&e.session);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, br#"{"foo":123}"#).unwrap();
-        assert!(matches!(check(&e.cwd, &e.session), Check::Undetermined(_)));
+        assert!(matches!(check(&e.session), Check::Undetermined(_)));
         assert!(
-            is_tainted(&e.cwd, &e.session),
+            is_tainted(&e.session),
             "a marker missing the required `tainted` field must fail closed"
         );
     }
@@ -455,8 +488,8 @@ mod tests {
     #[test]
     fn absent_marker_in_a_writable_store_is_still_clean() {
         let e = env("writable-control");
-        assert!(matches!(check(&e.cwd, &e.session), Check::Clean));
-        assert!(!is_tainted(&e.cwd, &e.session));
+        assert!(matches!(check(&e.session), Check::Clean));
+        assert!(!is_tainted(&e.session));
     }
 
     /// FIX #1 (PRIMARY): an absent marker in an UNWRITABLE store must NOT be
@@ -478,12 +511,12 @@ mod tests {
         std::fs::set_permissions(&state_root, std::fs::Permissions::from_mode(0o555)).unwrap();
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let outcome = check(&e.cwd, &e.session);
+            let outcome = check(&e.session);
             assert!(
                 matches!(outcome, Check::Undetermined(_)),
                 "expected Undetermined, got {outcome:?}"
             );
-            assert!(is_tainted(&e.cwd, &e.session));
+            assert!(is_tainted(&e.session));
         }));
 
         // Restore write permission unconditionally so `Env`'s `TempDir` can

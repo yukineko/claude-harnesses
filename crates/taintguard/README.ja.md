@@ -18,7 +18,7 @@ least-privilege を機械的に強制する。エージェントが騙されて�
 | サブコマンド | event | matcher | 役割 |
 |---|---|---|---|
 | `taintguard mark`  | PostToolUse | `WebFetch\|WebSearch\|Read` | 出所を判定し taint marker を記録 |
-| `taintguard gate`  | PreToolUse  | `Bash\|Write\|Edit\|MultiEdit\|NotebookEdit` | tainted なら ask/deny |
+| `taintguard gate`  | PreToolUse  | `Bash\|Write\|Edit\|MultiEdit\|NotebookEdit` | tainted なら ask/deny。ただし **静的に write しないと判定できた `Bash`** は taint state を見ずに素通し（0.2.0 以降、後述） |
 | `taintguard clear` | Stop        | (全体)                        | クリーンなターン終了で marker を解除 |
 | `taintguard tally` | **hook ではない**（CLI readout） | — | observe-only 台帳の件数を人間向けに出力（`--json` で機械可読）。stdin を読まず、読み取り失敗時は **exit 非0**。詳細は後述の「`tally` で読む」 |
 
@@ -281,16 +281,91 @@ $ taintguard tally --json
 非0 のときは「0 件だった」ではなく「数えられなかった」であり、その run は観測として
 使えない。
 
+## read-only な `Bash` は gate されない（0.2.0 以降 / backlog a4b59893）
+
+hooks.json の PreToolUse matcher は今も `Bash|Write|Edit|MultiEdit|NotebookEdit` のままだが、
+`gate` は **`Bash` の `command` が静的に write しないと判定できた場合、taint state を一切見ずに
+silent（＝素通し）を返す**。判定は `crates/taintguard/src/readonly.rs` の `is_readonly_bash`。
+
+**なぜ必要だったか（実測）**: 0.1.10 までは matcher が `Bash` 全体だったため、外部ファイルを
+1 つ `Read` した時点で `git status` / `git log` / `git worktree list` まで deny された。
+gate 自身の文言は「**write-class** tools are downgraded」と言っているのに実挙動は Bash 全体で、
+**tainted な turn は自分を診断することすらできなかった**。非対話の worker（condukt / flow）には
+Stop 以外の復帰手段が無く、backlog 96075670 の worker 3 体が再投入でも同じ壁に当たった。
+
+**これは不変条件の緩和ではない**。write できないコマンドは write-class tool ではない。また taint を
+消費するのは `mark` の PostToolUse matcher（`WebFetch|WebSearch|Read`）であって `Bash` を見ていないので、
+tainted な turn が「読める量」もこの変更では変わらない。
+
+**判定は fail-closed（CLAUDE.md §3）**: 「positively read-only と分かるか？」だけを問い、
+分からないものはすべて `false`＝従来どおり gate する。具体的には —
+
+- 未知のプログラム、未知の `git` サブコマンド、パス修飾されたプログラム（`./ls` `/usr/bin/ls`）→ gate。
+- `;` `&` `>` `<` `` ` `` `$` `(` `)` `{` `}` 改行 を含む → gate（リダイレクト・コマンド置換・連結）。
+- クォート（`'` `"`）を含む → gate。危険だからではなく、この tokenizer が正しく分解できないから
+  （**判定不能を「安全」に写さない**）。
+- `|` のパイプラインは**全ステージが read-only のときだけ** read-only。`||` は空セグメントとして落ちる。
+- インタプリタ（`sh` `bash` `python` `node` `perl`）、`sed`、`find`、`xargs` は**意図的に表に無い**
+  （read-only な名前をした汎用実行器）。
+- `git worktree` は `list` の 1 形だけ read-only（`add` / `remove` / `prune` / `repair` は mutate）。
+
+### 引数も denylist ではなく allowlist（実装当初からの変更）
+
+**当初の実装はプログラム名を allowlist し、フラグだけを denylist していた**
+（`--output` / `-o` / `--exec` / `--config` を全プログラム一律で拒否）。この**ハイブリッドから
+13 件の write/exec 到達経路が漏れた** — 実装者の自己レビューで 7 件、独立検証者でさらに 6 件、
+毎回「今度こそ網羅した」と宣言した直後に次が出た（測定日 2026-08-05）。最も重かったのは
+`uniq in.txt victim.txt` で、**victim.txt が実際に上書きされることを検証者が破壊的に実証**した。
+`uniq` の第2 *位置引数*が出力先なので、フラグの表をどれだけ厚くしても捕まらない。
+他は `rg --pre <cmd>` / `rg --hostname-bin=<cmd>` / `sort --compress-program=PROG` /
+`git grep -O<pager>`（`-o` の前方一致が case-sensitive で `-O` が素通り）/
+`git ls-remote <url>`（tainted turn からの外向き通信）。
+
+denylist は必要な性質を**表明できない**。「この列挙に含まれるフラグは無い」は「write しない」ではなく
+「私が思いついた writer は無い」であり、**列挙が完了したことを観測する手段が無い**。これは
+CLAUDE.md §3 が拒否する形そのもので、§6 の「実装者は permissive 側に倒れる」が 13 対 0 という
+スコアで実証された形になっている。そこで引数側もプログラム側と同じ allowlist へ反転した:
+
+- `--long` は**そのプログラムの表に名前がある**ものだけ。`--long=value` 形も**名前で**照合するので、
+  `--pre` / `--upload-pack` / `--compress-program` / `--open-files-in-pager` は
+  「危険と認識されたから」ではなく「**表に無いから**」拒否される。
+- `-abc` バンドルは**1 文字ずつ**そのプログラムの表に照合する。ASCII 数字だけは表に載せずに許可
+  （`head -5` / `sort -k2`。数字は直前の文字への引数であって動詞ではない）。
+  これにより `-O` は `git` で拒否しつつ `-o` は `grep`（only-matching）で許可し `sort`（出力先）で
+  拒否できる — 一律の前方一致では表現できず、両方向に代償を払っていた区別。
+- 位置引数は**数える**。N 番目が出力先になるプログラムは N-1 で頭打ちにする（`uniq` は 1、
+  `pwd` / `whoami` / `uname` は 0）。
+- `git ls-remote` は表から**削除**した。ローカルには何も書かないので当初の admission rule
+  （「inspect するだけ」）は通っていたが、呼び出し側が選んだリモートに接続する＝
+  **untrusted な内容を消費したせいで tainted になっている turn からの外向きチャネル**である。
+
+表に無いものの答えは常に `false`＝gate。**エントリの追加は理由を書く意図的な行為**であり、
+書き忘れのコストは「コマンドが 1 つ gate される」であって「黙って write が通る」ではない。
+
+### 既知の残存（0.2.0 では直さず明示する）
+
+- `git show` / `log` / `diff` / `blame` は repo 設定の `textconv` / `diff.external` を実行しうる。
+  対象 repo は turn が既に作業している当のプロジェクトなので *tainted な内容*が開くチャネルでは
+  ないが、表の中のコマンドが何かを exec する経路ではある。
+- `git status` は `.git/index` の stat cache を更新し `index.lock` を取るので、厳密には write する。
+  ユーザデータではなく内部簿記だが、admission rule に carve-out が無いので明示しておく。
+
 ## 状態の保存先
 
-`$TAINTGUARD_STATE_DIR/<project_key>/<session>/taint.json`
+`$TAINTGUARD_STATE_DIR/sessions/<session>/taint.json`
 （`TAINTGUARD_STATE_DIR` 未設定時は `~/.taintguard/state`）。
-`project_key`/セッションディレクトリの命名規則は
-`harness_core::store::context_state_dir` と同じ慣習（cwd を canonicalize
-してから project key を作る）。
 
-observe-only の台帳のみ **project 単位**（`<project_key>/observe-only.jsonl`）で、
-session ディレクトリの下ではない（理由は上記「計測値の読み方」）。
+**0.2.0 で `<project_key>` の次元を外した**（backlog 90d1ca1d）。0.1.10 までは
+`<project_key(cwd)>/<session>/taint.json` で、`cwd` は hook payload 由来だった。
+Claude Code の `Bash` ツールは `cd` が呼び出し間で永続するため、mark した `Read` と
+gate する `Bash` の間に `cd` が挟まると **gate が別バケットを見て marker を見つけられず
+`Clean` を返す**＝ silent allow になっていた。taint は turn の性質であってディレクトリの
+性質ではないので、食い違いうる次元そのものを削除した。**アップグレード時、旧レイアウトの
+marker は孤児になる（＝一度だけ taint がリセットされる）。**
+
+observe-only の台帳のみ **project 単位**（`<project_key>/observe-only.jsonl`）のままで、
+session ディレクトリの下ではない（理由は上記「計測値の読み方」）。こちらは cwd ドリフトで
+台帳が分裂しうるが、判定ではなく観測であり fail-open を作らないため 0.2.0 では変えていない。
 
 ## fail-closed の設計
 

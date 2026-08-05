@@ -154,6 +154,22 @@ fn stop_payload(cwd: &Path, session: &str) -> String {
     .to_string()
 }
 
+/// The stand-in for "an arbitrary write-class Bash command" throughout this
+/// file.
+///
+/// It used to be `echo hi`, and it had to change in 0.2.0: `echo` is on
+/// `readonly::is_readonly_bash`'s allowlist, so `echo hi` now short-circuits to
+/// a silent allow BEFORE the taint state is ever consulted. Every test below
+/// that fed `echo hi` to `gate` and asserted `ask`/`deny` would have been
+/// asserting the allowlist rather than the taint gate — and, worse, every test
+/// that fed it and asserted SILENCE would have kept passing while proving
+/// nothing at all. `touch out.txt` is on no table, so the taint state decides.
+///
+/// The read-only fast path itself is covered on purpose, not by accident, in
+/// `readonly`'s unit tests and in `src/main.rs`'s
+/// `read_only_bash_is_silent_even_when_the_session_is_tainted`.
+const WRITE_CLASS_BASH: &str = "touch out.txt";
+
 const INTERACTIVE_ENV: &[(&str, &str)] = &[("CLAUDECODE", "1"), ("CLAUDE_CODE_ENTRYPOINT", "cli")];
 const HEADLESS_ENV: &[(&str, &str)] = &[("CLAUDECODE", "1"), ("CLAUDE_CODE_ENTRYPOINT", "sdk-cli")];
 
@@ -192,7 +208,7 @@ fn webfetch_then_bash_asks_when_interactive() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -229,7 +245,7 @@ fn webfetch_then_bash_denies_when_headless() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -410,7 +426,7 @@ fn clear_after_stop_restores_a_clean_gate() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -437,7 +453,7 @@ fn clear_after_stop_restores_a_clean_gate() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -731,7 +747,7 @@ fn corrupt_marker_fails_closed_to_ask_or_deny() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -766,7 +782,7 @@ fn read_with_no_file_path_fails_closed() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -795,7 +811,7 @@ fn healthy_writable_empty_store_allows_silently() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -857,7 +873,7 @@ fn unwritable_state_store_fails_closed_despite_a_lost_mark() {
             "gate",
             &gate_payload(
                 "Bash",
-                serde_json::json!({"command": "echo hi"}),
+                serde_json::json!({"command": WRITE_CLASS_BASH}),
                 &f.cwd,
                 &f.session,
             ),
@@ -911,7 +927,7 @@ fn wrong_schema_marker_fails_closed_to_ask_or_deny() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -1115,7 +1131,7 @@ fn observe_only_suppression_is_visible_on_stdout_with_a_top_level_system_message
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -1374,7 +1390,7 @@ fn stop_hook_clear_cannot_wipe_the_project_scoped_ledger() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -1431,7 +1447,7 @@ fn stop_hook_clear_cannot_wipe_the_project_scoped_ledger() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -1536,7 +1552,7 @@ fn observe_only_must_not_suppress_a_cannot_determine_corrupt_marker() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -1612,7 +1628,7 @@ fn observe_only_enforced_cannot_determine_appends_no_ledger_line() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -1756,7 +1772,7 @@ fn observe_only_still_suppresses_a_genuinely_tainted_session_and_records_exactly
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -1873,7 +1889,7 @@ fn a_suppressed_taint_is_not_byte_identical_to_a_clean_turn_on_stdout() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &clean_session,
         ),
@@ -1900,7 +1916,7 @@ fn a_suppressed_taint_is_not_byte_identical_to_a_clean_turn_on_stdout() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &tainted_session,
         ),
@@ -1986,7 +2002,7 @@ fn one_ledger_records_the_suppressed_taint_but_not_the_enforced_cannot_determine
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &undet_session,
         ),
@@ -2028,7 +2044,7 @@ fn one_ledger_records_the_suppressed_taint_but_not_the_enforced_cannot_determine
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &taint_session,
         ),
@@ -2114,7 +2130,7 @@ fn observe_only_enforced_cannot_determine_reason_names_the_unhonoured_posture() 
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -2239,4 +2255,129 @@ fn ledger_append_failure_is_reported_on_stderr_and_still_shows_the_suppression()
         stderr.contains("observe-only"),
         "the diagnostic must name the observe-only ledger it lost, got stderr: {stderr:?}"
     );
+}
+
+// ── read-only Bash allowlist, through the real binary (backlog a4b59893) ────
+
+/// A tainted turn must still be able to DIAGNOSE itself. Driven end-to-end
+/// because the read-only verdict is the one that produces `GateAction::Silent`,
+/// and silence is exactly the outcome a unit test on `decide_gate_with` cannot
+/// distinguish from "the hook never ran": only the real binary can show that it
+/// exited 0 having deliberately printed nothing.
+///
+/// Both directions live in ONE test body, against ONE marker, on purpose. The
+/// silence below is only evidence of the allowlist if the very same session is
+/// simultaneously enforcing for a write-class command — otherwise a `mark` that
+/// quietly failed to land would produce the identical stdout.
+#[test]
+fn a_tainted_turn_can_still_run_read_only_bash_but_not_write_class_bash() {
+    let f = fixture("readonly-allowlist");
+    let (code, _, stderr) = run(
+        "mark",
+        &mark_payload(
+            "WebFetch",
+            serde_json::json!({"url": "https://example.com"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &[],
+    );
+    assert_eq!(code, 0, "mark must always exit 0; stderr: {stderr}");
+
+    // ANTI-VACUITY FIRST, so the session is proven tainted before anything is
+    // asserted to be silent.
+    let (code, stdout, _) = run(
+        "gate",
+        &gate_payload(
+            "Bash",
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        HEADLESS_ENV,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        permission_decision(&stdout).as_deref(),
+        Some("deny"),
+        "precondition: this session must really be tainted, so the silences below are \
+         attributable to the allowlist; got {stdout:?}"
+    );
+
+    for command in [
+        "git status",
+        "git log --oneline",
+        "git diff",
+        "git worktree list",
+        "pwd",
+    ] {
+        let (code, stdout, stderr) = run(
+            "gate",
+            &gate_payload(
+                "Bash",
+                serde_json::json!({ "command": command }),
+                &f.cwd,
+                &f.session,
+            ),
+            &f.cwd,
+            &f.state_dir,
+            HEADLESS_ENV,
+        );
+        assert_eq!(code, 0, "gate must always exit 0 for {command:?}");
+        assert_eq!(
+            stdout.trim(),
+            "",
+            "a tainted turn must still be able to run {command:?} — it is how the turn \
+             diagnoses itself; got stdout {stdout:?} / stderr {stderr:?}"
+        );
+    }
+}
+
+/// FAIL-CLOSED (CLAUDE.md §3) through the real binary: a `Bash` payload whose
+/// `command` cannot be READ as a string was never classified, so it must reach
+/// the taint check and enforce. The fast path may only ever be entered by a
+/// command that was positively recognised.
+#[test]
+fn a_bash_payload_with_an_unreadable_command_still_enforces() {
+    let f = fixture("readonly-unreadable-command");
+    let (code, _, _) = run(
+        "mark",
+        &mark_payload(
+            "WebSearch",
+            serde_json::json!({"query": "x"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &[],
+    );
+    assert_eq!(code, 0);
+
+    for tool_input in [
+        serde_json::json!({}),
+        serde_json::json!({"command": 42}),
+        serde_json::json!({"command": null}),
+        serde_json::json!({"command": ["git", "status"]}),
+        serde_json::json!({"cmd": "git status"}),
+    ] {
+        let (code, stdout, _) = run(
+            "gate",
+            &gate_payload("Bash", tool_input.clone(), &f.cwd, &f.session),
+            &f.cwd,
+            &f.state_dir,
+            HEADLESS_ENV,
+        );
+        assert_eq!(code, 0);
+        assert_eq!(
+            permission_decision(&stdout).as_deref(),
+            Some("deny"),
+            "a command that could not be read is not a command known to be read-only \
+             ({tool_input}); got {stdout:?}"
+        );
+    }
 }

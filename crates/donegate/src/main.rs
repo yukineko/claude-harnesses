@@ -215,15 +215,29 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         // The trace goes to the overwatch violation ledger rather than to a new
         // mechanism: donegate already writes every BLOCK there (see the
         // `Outcome::Blocked` call below), overwatch is this repo's project-wide
-        // review surface (`overwatch violations` / `review-queue`, and
-        // `review-queue --to-backlog`), and the ledger is an append-only file
-        // under `~/.overwatch/<project>/` — durable across processes and
-        // queryable by both a human and a script.
+        // review surface, and the ledger is an append-only file under
+        // `~/.overwatch/<project>/` — durable across processes and queryable by
+        // both a human and a script.
         //
         // `Outcome::GaveUp` gives it its own signature (`donegate:giveup:<check>`,
         // never `donegate:<check>`), so a give-up can never be read as just
-        // another block; and because recurrence is per-signature, a check that
-        // keeps exhausting the cap escalates as a systemic issue on its own.
+        // another block.
+        //
+        // WHICH COMMAND SHOWS IT — measured, not assumed (probe of this branch,
+        // 2026-08-06: an isolated HOME, four Stops against a `cmd = "exit 1"`
+        // check, then the overwatch CLI over that store):
+        //
+        //   `overwatch violations` → lists it immediately, as its own row:
+        //     `donegate:giveup:typecheck  occurrences=1` alongside
+        //     `donegate:typecheck  occurrences=3`. This is the query to use.
+        //
+        //   `overwatch review-queue` → does NOT show a single give-up. That
+        //     surface carries only signatures already escalated to SYSTEMIC
+        //     (`is_systemic`, default 3 occurrences in 24h), and the probe's
+        //     `review-queue --json` was `[]`. It starts carrying a check that
+        //     keeps exhausting the cap once recurrence crosses the threshold —
+        //     which is a property worth having, but it is not the first-occurrence
+        //     channel and must not be described as one.
         emit_violations(&root, &session, &failing, Outcome::GaveUp);
         eprintln!(
             "donegate: {} required check(s) still failing after {} attempts ({}). \

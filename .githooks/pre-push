@@ -300,6 +300,19 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 GIT_COMMON="$(git rev-parse --git-common-dir 2>/dev/null)"
+# MUST be absolute. `git rev-parse --git-common-dir` answers RELATIVELY (".git")
+# when invoked from the main working tree and ABSOLUTELY from a linked worktree.
+# A relative value poisons CARGO_TARGET_DIR: cargo resolves it against the
+# throwaway worktree's cwd and tries to mkdir ".git" there, where git has already
+# put its worktree-pointer FILE, so the check dies with "File exists (os error
+# 17)" and reports a hook defect as a type error. Caught on this hook's first
+# real push (2026-08-06) precisely because the pre-landing F-to-P pair had only
+# been observed from a linked worktree — one of the two invocation contexts.
+case "${GIT_COMMON:-}" in
+    "" ) ;;
+    /* ) ;;
+    *  ) GIT_COMMON="$(cd "$GIT_COMMON" 2>/dev/null && pwd)" ;;
+esac
 if [ -z "${GIT_COMMON:-}" ]; then
     echo "" >&2
     echo "pre-push: could not resolve the git common dir, so the type-check worktree" >&2

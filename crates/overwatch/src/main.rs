@@ -396,8 +396,13 @@ enum Command {
         /// rollback, or condukt escalation) is forwarded via `backlog add`.
         /// Idempotent — findings on `bridged_findings.jsonl` (bare finding-id),
         /// the other three streams on `bridged_entries.jsonl`
-        /// (`<kind>:<identifier>`). Fail-soft: a missing store / absent backlog
-        /// / failed add is warned and skipped; the command still succeeds.
+        /// (`<kind>:<identifier>`). Fail-soft on the BACKLOG side: an absent
+        /// `backlog` binary or a failed `backlog add` is warned and skipped,
+        /// and the command still succeeds. NOT fail-soft on the STORE side: a
+        /// ledger that could not be READ makes the drain skip that stream, say
+        /// which one in `undetermined_sources`, and exit 3 — "0 bridged"
+        /// because nothing needed bridging and "0 bridged" because part of the
+        /// queue was invisible must not reach a script as the same answer.
         #[arg(long = "to-backlog")]
         to_backlog: bool,
     },
@@ -534,6 +539,21 @@ fn resolve_policy(threshold: Option<usize>, window_secs: Option<i64>) -> Recurre
     RecurrencePolicy {
         threshold: threshold.unwrap_or(default.threshold),
         window_secs: window_secs.unwrap_or(default.window_secs),
+    }
+}
+
+/// Map a command's [`SourceHealth`] onto the process exit code.
+///
+/// The review-surface commands print their answer to stdout and their reasons
+/// to stderr — but a `--json` consumer sees only stdout, and one that filters
+/// on `kind` skips even the in-band `undetermined-source` row. Exit 3 (the same
+/// "this is an answer, not a crash" convention `canary-gate` uses) is the one
+/// channel such a consumer cannot miss: `set -e`, `if overwatch ...`, and
+/// `continuous-audit.sh`'s `run_ow` wrapper all react to it. Exit 0 with a
+/// short queue would be the silent degrade this whole path removes.
+fn exit_on_undetermined_sources(health: review_queue::SourceHealth) {
+    if health == review_queue::SourceHealth::SomeUndetermined {
+        std::process::exit(health.exit_code());
     }
 }
 
@@ -739,7 +759,7 @@ fn main() -> Result<()> {
             disposition_cli::record(finding_id, &verdict, reviewer, store::now())?;
         }
         Command::ReviewMetrics { json } => {
-            disposition_cli::metrics(json)?;
+            exit_on_undetermined_sources(disposition_cli::metrics(json)?);
         }
         Command::ResolveMergeConflict {
             id,
@@ -755,11 +775,12 @@ fn main() -> Result<()> {
             limit,
             to_backlog,
         } => {
-            if to_backlog {
-                bridge::to_backlog()?;
+            let health = if to_backlog {
+                bridge::to_backlog()?
             } else {
-                review_queue::run(json, since, limit)?;
-            }
+                review_queue::run(json, since, limit)?
+            };
+            exit_on_undetermined_sources(health);
         }
         Command::AutoApproved {
             json,
@@ -786,7 +807,7 @@ fn main() -> Result<()> {
             } else {
                 reconcile::ReconcileRange::LastN(last_n.unwrap_or(50))
             };
-            reconcile::run(range, dry_run, json)?;
+            exit_on_undetermined_sources(reconcile::run(range, dry_run, json)?);
         }
     }
     Ok(())

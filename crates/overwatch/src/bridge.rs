@@ -28,16 +28,26 @@
 /// with their kind tag, so the backlog stays filterable (`backlog list --tag
 /// rollback`).
 ///
-/// **Fail-soft (never-break-a-turn):** a missing/empty/corrupt store, an absent
-/// `backlog` binary, or a non-zero `backlog add` are each warned and skipped —
-/// the command as a whole always succeeds (exit 0).
+/// **Fail-soft:** an absent `backlog` binary or a non-zero `backlog add` are
+/// each warned and skipped — the drain never errors out mid-way, so one bad
+/// item cannot strand the rest.
+///
+/// **A source that could not be READ is not fail-soft into silence (t3).** Every
+/// ledger here is read with its tri-state `scan_*` reader, and an `Undetermined`
+/// answer means this run bridges NOTHING from that stream, says so on stderr,
+/// names it in the JSON summary (`undetermined_sources`), and makes the command
+/// exit 3. Bridging nothing is the safe direction — the source ledgers are
+/// append-only and the queue is re-derived every run, so a later run with a
+/// readable store forwards exactly the same items — but it must not be
+/// mistaken for "there was nothing to bridge".
 use crate::review_escalation;
 use crate::review_finding::ReviewFinding;
-use crate::review_queue::{self, EntryKind, ReviewQueueEntry, Severity};
+use crate::review_queue::{self, EntryKind, ReviewQueueEntry, Severity, SourceHealth};
 use crate::store;
 use crate::test_freshness::{self, IgnoredTestLookup, TestFreshness};
 use crate::violation::{self, RecurrencePolicy};
 use anyhow::Result;
+use harness_core::verdict::Determination;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -116,6 +126,12 @@ struct PlannedAdd {
 fn plan_entry_adds(rows: &[ReviewQueueEntry], already: &HashSet<String>) -> Vec<PlannedAdd> {
     rows.iter()
         .filter(|r| r.kind != EntryKind::AiFinding)
+        // An `UndeterminedSource` row is not an item found in a source, it is
+        // the record that a source could not be read; bridging it would file a
+        // backlog task about the STORE under the review-queue's own tags. Only
+        // `review_queue::run` ever mints one (never `build_queue`, which is
+        // what feeds this planner), so this filter is a guard, not a live path.
+        .filter(|r| r.kind != EntryKind::UndeterminedSource)
         .filter_map(|r| {
             let key = format!("{}:{}", r.kind.tag(), r.identifier);
             if already.contains(&key) {
@@ -234,17 +250,83 @@ fn plan_finding_bridges<'a>(
 }
 
 /// Read the confirmed findings, forward each not-yet-bridged one to the backlog,
-/// and record the successful bridges. Always returns `Ok(())` (fail-soft).
-pub fn to_backlog() -> Result<()> {
+/// and record the successful bridges. Returns the [`SourceHealth`] of the reads
+/// so the CLI exits 3 when a stream was skipped because its ledger could not be
+/// read.
+pub fn to_backlog() -> Result<SourceHealth> {
     let cwd = std::env::current_dir()?;
     run_in(&cwd)
 }
 
+/// Resolve one scanned SOURCE ledger for the drain: `Known(rows)` contributes
+/// its rows, `Undetermined` contributes none and is announced + recorded.
+/// `consequence` names what was skipped, in the ledger's own words.
+fn drain_source<T>(
+    scan: Determination<Vec<T>>,
+    ledger: &'static str,
+    consequence: &str,
+    undetermined: &mut Vec<&'static str>,
+) -> Vec<T> {
+    match scan {
+        Determination::Known(rows) => rows,
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "overwatch --to-backlog: WARNING — {ledger} could not be read or held an \
+                 undecodable line ({why}); {consequence}. This is NOT a report that the \
+                 source is empty; re-run once the store is readable."
+            );
+            undetermined.push(ledger);
+            Vec::new()
+        }
+    }
+}
+
+/// Resolve one IDEMPOTENCY ledger. Unlike a source, an undetermined answer here
+/// does not mean "no rows": it means the already-bridged set is unknown, and
+/// proceeding with an empty one would re-forward everything (see
+/// `store::scan_bridged_findings`'s DIRECTION note). `None` therefore means
+/// "skip this stream entirely this run".
+fn drain_ledger(
+    scan: Determination<Vec<String>>,
+    ledger: &'static str,
+    stream: &str,
+    undetermined: &mut Vec<&'static str>,
+) -> Option<HashSet<String>> {
+    match scan {
+        Determination::Known(keys) => Some(keys.into_iter().collect()),
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "overwatch --to-backlog: WARNING — the idempotency ledger {ledger} could not \
+                 be read or held an undecodable line ({why}); the {stream} stream is SKIPPED \
+                 this run. Proceeding would re-forward items already in the backlog, which a \
+                 human then has to reconcile; skipping is re-runnable."
+            );
+            undetermined.push(ledger);
+            None
+        }
+    }
+}
+
 /// The bridge over an explicit project dir (factored out so the logic is
 /// testable without depending on the process cwd).
-fn run_in(cwd: &Path) -> Result<()> {
+fn run_in(cwd: &Path) -> Result<SourceHealth> {
+    let mut undetermined: Vec<&'static str> = Vec::new();
+
     // 1. Confirmed findings, collapsed to newest-per-id.
-    let findings = store::read_review_findings(cwd).unwrap_or_default();
+    let findings: Vec<ReviewFinding> = match store::scan_review_findings(cwd) {
+        store::ReviewFindingScan::Absent => Vec::new(),
+        store::ReviewFindingScan::Findings(rows) => rows,
+        store::ReviewFindingScan::Undetermined(why) => {
+            eprintln!(
+                "overwatch --to-backlog: WARNING — the review-findings ledger could not be \
+                 read or held an undecodable line ({why}); NO finding was bridged from it. \
+                 This is NOT a report of zero confirmed findings; re-run once the store is \
+                 readable."
+            );
+            undetermined.push("review_findings.jsonl");
+            Vec::new()
+        }
+    };
     let deduped = review_queue::dedup_findings(&findings);
 
     // 1b. The other three review-queue streams — systemic gate violations,
@@ -277,33 +359,78 @@ fn run_in(cwd: &Path) -> Result<()> {
                  from it. This is NOT a report of zero systemic violations; re-run once \
                  the store is readable."
             );
+            undetermined.push("violations.jsonl");
             Vec::new()
         }
     };
-    let rollbacks = store::read_rollbacks(cwd).unwrap_or_default();
-    let escalations = review_escalation::read_open_escalations(cwd);
+    let rollbacks = drain_source(
+        store::scan_rollbacks(cwd)?,
+        "rollbacks.jsonl",
+        "NO rollback entry was bridged from it",
+        &mut undetermined,
+    );
+    let escalations = drain_source(
+        review_escalation::scan_open_escalations(cwd),
+        "escalations.json",
+        "NO escalation was bridged from it (a human question stays unfiled)",
+        &mut undetermined,
+    );
     // Open blocked merges (real conflicts + gated overlaps) drain too, keyed as
-    // `merge-conflict:<conflict_id>` in bridged_entries.jsonl (fail-soft).
-    let merge_conflicts = store::open_merge_conflicts(cwd).unwrap_or_default();
+    // `merge-conflict:<conflict_id>` in bridged_entries.jsonl. The RESOLUTION
+    // half fails in the opposite direction (every entry shows as unresolved),
+    // which over-files rather than losing a blocked merge — announced, not
+    // suppressed. See `store::scan_open_merge_conflicts`.
+    let merge_scan = store::scan_open_merge_conflicts(cwd)?;
+    if let Some(why) = merge_scan.resolutions_undetermined {
+        eprintln!(
+            "overwatch --to-backlog: WARNING — the merge-conflict resolution ledger could \
+             not be read or held an undecodable line ({why}); every blocked merge is \
+             treated as UNRESOLVED, so an already-resolved conflict may be filed."
+        );
+        undetermined.push("merge_conflict_resolutions.jsonl");
+    }
+    let merge_conflicts = drain_source(
+        merge_scan.open,
+        "merge_conflicts.jsonl",
+        "NO blocked merge was bridged from it",
+        &mut undetermined,
+    );
     let entry_rows =
         review_queue::build_queue(&systemic, &rollbacks, &[], &escalations, &merge_conflicts);
 
     // 2. Already-bridged sets — findings keyed on bare finding_id (also the
     // review-metrics "resolved" source), non-finding entries keyed on the
-    // composite `<kind-tag>:<identifier>` in their own separate ledger.
-    let already_findings: HashSet<String> = store::read_bridged_findings(cwd)
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-    let already_entries: HashSet<String> = store::read_bridged_entries(cwd)
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-    let planned = plan_entry_adds(&entry_rows, &already_entries);
+    // composite `<kind-tag>:<identifier>` in their own separate ledger. An
+    // UNDETERMINED idempotency ledger skips its stream: see `drain_ledger`.
+    let already_findings = drain_ledger(
+        store::scan_bridged_findings(cwd)?,
+        "bridged_findings.jsonl",
+        "AI-finding",
+        &mut undetermined,
+    );
+    let already_entries = drain_ledger(
+        store::scan_bridged_entries(cwd)?,
+        "bridged_entries.jsonl",
+        "systemic/rollback/escalation/merge-conflict",
+        &mut undetermined,
+    );
+    let planned = already_entries
+        .as_ref()
+        .map(|already| plan_entry_adds(&entry_rows, already))
+        .unwrap_or_default();
 
     // Which deduped findings still need bridging — keyed on the STABLE
     // fingerprint, not the rotating dedup representative id (CA-overwatch-01).
-    let to_bridge = plan_finding_bridges(&deduped, &findings, &already_findings);
+    let to_bridge = already_findings
+        .as_ref()
+        .map(|already| plan_finding_bridges(&deduped, &findings, already))
+        .unwrap_or_default();
+
+    let health = if undetermined.is_empty() {
+        SourceHealth::AllRead
+    } else {
+        SourceHealth::SomeUndetermined
+    };
 
     // 3. Backlog binary (fail-soft when absent).
     let backlog = match resolve_backlog_bin() {
@@ -319,10 +446,11 @@ fn run_in(cwd: &Path) -> Result<()> {
                     "considered": deduped.len(),
                     "entries_bridged": 0,
                     "entries_considered": planned.len(),
-                    "skipped": "backlog-unavailable"
+                    "skipped": "backlog-unavailable",
+                    "undetermined_sources": undetermined,
                 })
             );
-            return Ok(());
+            return Ok(health);
         }
     };
 
@@ -450,9 +578,14 @@ fn run_in(cwd: &Path) -> Result<()> {
             "considered": deduped.len(),
             "entries_bridged": entries_bridged_now,
             "entries_considered": planned.len(),
+            // Named ledgers, not a bare count: `"bridged": 0` with an empty
+            // list is "nothing needed bridging", with a non-empty one it is
+            // "this run could not see part of the queue" (and the command
+            // exits 3). Additive key — the object shape is unchanged.
+            "undetermined_sources": undetermined,
         })
     );
-    Ok(())
+    Ok(health)
 }
 
 #[cfg(test)]
@@ -653,6 +786,57 @@ mod tests {
         // The already-bridged rollback is skipped; the fresh systemic remains.
         assert_eq!(planned.len(), 1);
         assert_eq!(planned[0].key, "systemic:blastguard:x");
+    }
+
+    /// An `undetermined-source` marker row is the record that a LEDGER could
+    /// not be read, not an item found in one. Filing it as a backlog task would
+    /// turn a store problem into review work tagged as a rollback/escalation.
+    #[test]
+    fn plan_entry_adds_excludes_undetermined_source_rows() {
+        let rows = vec![
+            entry(
+                EntryKind::UndeterminedSource,
+                Severity::High,
+                "rollbacks.jsonl",
+                "[rollback] SOURCE NOT SHOWN — ...",
+            ),
+            entry(EntryKind::Rollback, Severity::High, "overwatch", "rb"),
+        ];
+        let planned = plan_entry_adds(&rows, &HashSet::new());
+        assert_eq!(planned.len(), 1, "only the real row may be bridged");
+        assert_eq!(planned[0].tag, "rollback");
+    }
+
+    /// ANTI-VACUITY control for `drain_ledger`: a READ idempotency ledger still
+    /// yields its keys (the stream is not skipped just because the reader grew
+    /// a third answer), while an undetermined one skips the stream entirely
+    /// rather than proceeding with an empty already-bridged set (which would
+    /// re-forward everything — see `store::scan_bridged_findings`).
+    #[test]
+    fn an_undetermined_idempotency_ledger_skips_the_stream_a_read_one_does_not() {
+        let mut undetermined = Vec::new();
+        let already = drain_ledger(
+            Determination::known(vec!["rollback:overwatch".to_string()]),
+            "bridged_entries.jsonl",
+            "test",
+            &mut undetermined,
+        )
+        .expect("a READ ledger must yield its keys");
+        assert!(already.contains("rollback:overwatch"));
+        assert!(undetermined.is_empty());
+
+        let skipped = drain_ledger(
+            Determination::undetermined("boom"),
+            "bridged_entries.jsonl",
+            "test",
+            &mut undetermined,
+        );
+        assert!(
+            skipped.is_none(),
+            "an unreadable idempotency ledger must skip the stream, not read as \
+             'nothing was ever bridged'"
+        );
+        assert_eq!(undetermined, vec!["bridged_entries.jsonl"]);
     }
 
     #[test]

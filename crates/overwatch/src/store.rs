@@ -189,23 +189,120 @@ pub fn append_event(cwd: &Path, event: &LifecycleEvent) -> Result<()> {
     Ok(())
 }
 
-/// Read all events from events.jsonl. Returns an empty vec if the file doesn't exist or is empty.
-pub fn read_events(cwd: &Path) -> Result<Vec<LifecycleEvent>> {
-    let path = events_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => {
-            let mut events = Vec::new();
-            for line in txt.lines() {
-                if !line.is_empty() {
-                    if let Ok(event) = serde_json::from_str::<LifecycleEvent>(line) {
-                        events.push(event);
-                    }
+// ── Tri-state ledger reads ───────────────────────────────────────────────────
+//
+// Every append-only ledger in this module used to be read the same two-valued
+// way: `Err(_) => Ok(Vec::new())` for the file, `if let Ok(x) = from_str(line)`
+// for each line. Both halves map "I could not read this" onto the same bytes as
+// "there is nothing here", and every consumer downstream reads the second.
+//
+// WHICH tri-state type: the SHARED `harness_core::verdict::Determination<T>`
+// (already used in this file by `load_leases` and `read_audit_rounds`), not a
+// new enum per reader. `Determination` says exactly the two things these
+// ledgers need — `Known(rows)` for an observation, `Undetermined(why)` for an
+// opacity that carries its reason — and an absent append-only ledger is
+// honestly `Known(vec![])`: nothing was ever appended, which is a real
+// measurement of zero.
+//
+// The two bespoke enums here ([`ViolationScan`], [`ReviewFindingScan`]) keep
+// their separate `Absent` variant because their call sites BRANCH on it: the
+// canary gate must not roll back a first deploy, so "never written" and "read
+// clean, held nothing" are different answers THERE. No such call site exists
+// for the ledgers below, so they do not get a third variant that nobody reads.
+
+/// Decode every non-blank line of a JSONL ledger.
+///
+/// Returns the records that DID decode, together with the reason this pass
+/// cannot be called complete (the first undecodable line, with its 1-based line
+/// number). Both halves come from one place on purpose: the tri-state `scan_*`
+/// readers and the legacy best-effort `read_*` readers share this decode and
+/// differ only in what they do with a `Some(reason)`, so the two can never
+/// drift into disagreeing about what the file holds.
+fn decode_jsonl_lines<T: serde::de::DeserializeOwned>(
+    txt: &str,
+    path: &Path,
+    ledger: &str,
+) -> (Vec<T>, Option<String>) {
+    let mut records = Vec::new();
+    let mut undecodable: Option<String> = None;
+    for (i, line) in txt.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<T>(line) {
+            Ok(r) => records.push(r),
+            Err(e) => {
+                if undecodable.is_none() {
+                    undecodable = Some(format!(
+                        "{ledger} at {} holds an undecodable line (line {}): {e}. The records \
+                         that did decode are a PARTIAL view and would be indistinguishable from \
+                         a complete one.",
+                        path.display(),
+                        i + 1
+                    ));
                 }
             }
-            Ok(events)
         }
-        Err(_) => Ok(Vec::new()),
     }
+    (records, undecodable)
+}
+
+/// Tri-state read of an append-only JSONL ledger — the sanctioned reader when
+/// the answer feeds a decision.
+///
+/// * absent file → `Known(vec![])`. Nothing was ever appended; that is a real
+///   observation of zero, not a failure (see the module note above).
+/// * present and fully decodable → `Known(rows)`.
+/// * present but unreadable (permissions, non-UTF-8, I/O) → `Undetermined`,
+///   forwarded from [`harness_core::boundary::read_to_string`].
+/// * present but holding even ONE undecodable line → `Undetermined`. A dropped
+///   line is not "one fewer record": it may be the exact record the caller was
+///   about to conclude did not exist.
+fn scan_jsonl<T: serde::de::DeserializeOwned>(path: &Path, ledger: &str) -> Determination<Vec<T>> {
+    match harness_core::boundary::read_to_string(path) {
+        Determination::Known(None) => Determination::known(Vec::new()),
+        Determination::Known(Some(txt)) => {
+            let (records, undecodable) = decode_jsonl_lines(&txt, path, ledger);
+            match undecodable {
+                None => Determination::known(records),
+                Some(why) => Determination::undetermined(why),
+            }
+        }
+        // Forwarded, deliberately not re-minted: the boundary already recorded
+        // this `Undetermined` once, and forwarding must not double-count it.
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
+}
+
+/// Best-effort read of an append-only JSONL ledger: the historical two-valued
+/// contract, kept for the consumers that still expect it (t3 migrates them).
+///
+/// It returns whatever decoded and an empty vec for a file it could not read —
+/// which is exactly the collapse `scan_jsonl` exists to avoid. Every public
+/// `read_*` wrapper around this says so in its own doc and names the `scan_*`
+/// sibling to use instead; nothing that makes a DECISION should call one.
+fn read_jsonl_best_effort<T: serde::de::DeserializeOwned>(path: &Path, ledger: &str) -> Vec<T> {
+    match harness_core::boundary::read_to_string(path) {
+        Determination::Known(Some(txt)) => decode_jsonl_lines(&txt, path, ledger).0,
+        Determination::Known(None) | Determination::Undetermined(_) => Vec::new(),
+    }
+}
+
+/// Read all events from events.jsonl, BEST-EFFORT: an absent, unreadable or
+/// partially-undecodable ledger all come back as (or short of) an empty vec, so
+/// a caller cannot tell "no events" from "could not read the events".
+/// Undetermined-aware consumers must use [`scan_events`]; this two-valued
+/// reader is kept only for the existing callers that already treat an
+/// unreadable ledger as empty by contract.
+pub fn read_events(cwd: &Path) -> Result<Vec<LifecycleEvent>> {
+    Ok(read_jsonl_best_effort(&events_path(cwd)?, "events.jsonl"))
+}
+
+/// Tri-state read of events.jsonl (see [`scan_jsonl`]): a never-written ledger
+/// is `Known(vec![])`, while an unreadable one — or one holding an undecodable
+/// line — is `Undetermined(why)` and never a shortened event history.
+pub fn scan_events(cwd: &Path) -> Result<Determination<Vec<LifecycleEvent>>> {
+    Ok(scan_jsonl(&events_path(cwd)?, "events.jsonl"))
 }
 
 /// A signature is bucketable (safe to correlate on) only if it has a
@@ -365,25 +462,22 @@ pub fn append_rollback(cwd: &Path, event: &RollbackEvent) -> Result<()> {
     Ok(())
 }
 
-/// Read all canary rollback events from rollbacks.jsonl. Returns an empty vec
-/// if the file doesn't exist or is empty (fail-soft, same contract as
-/// `read_events`).
+/// Read all canary rollback events from rollbacks.jsonl, BEST-EFFORT (same
+/// two-valued contract as [`read_events`], and the same blind spot: an
+/// unreadable ledger is indistinguishable from "no rollback ever happened").
+/// Use [`scan_rollbacks`] anywhere that answer is acted on.
 pub fn read_rollbacks(cwd: &Path) -> Result<Vec<RollbackEvent>> {
-    let path = rollbacks_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => {
-            let mut events = Vec::new();
-            for line in txt.lines() {
-                if !line.is_empty() {
-                    if let Ok(event) = serde_json::from_str::<RollbackEvent>(line) {
-                        events.push(event);
-                    }
-                }
-            }
-            Ok(events)
-        }
-        Err(_) => Ok(Vec::new()),
-    }
+    Ok(read_jsonl_best_effort(
+        &rollbacks_path(cwd)?,
+        "rollbacks.jsonl",
+    ))
+}
+
+/// Tri-state read of rollbacks.jsonl (see [`scan_jsonl`]). "No rollback has
+/// ever been recorded" is a genuine `Known(vec![])`; an unreadable or
+/// partially-undecodable ledger is `Undetermined(why)`.
+pub fn scan_rollbacks(cwd: &Path) -> Result<Determination<Vec<RollbackEvent>>> {
+    Ok(scan_jsonl(&rollbacks_path(cwd)?, "rollbacks.jsonl"))
 }
 
 /// Path to the review_findings.jsonl file (append-only, AI/adversarial review
@@ -444,26 +538,16 @@ pub fn record_finding(
 /// yet, this is the normal case and the review-queue degrades gracefully.
 ///
 /// Kept for consumers that already treat "unreadable" as "empty" by contract
-/// (`read_review_findings_all`, `compact`, `bridge`). The review-queue VERDICT
-/// path does NOT use this reader — see [`scan_review_findings`], which keeps
-/// "never written" distinct from "unreadable/corrupt" so a confirmed finding
-/// can never be silently dropped by a permission glitch.
+/// (`read_review_findings_all`, `compact`, `bridge`); an undecodable line is
+/// likewise skipped rather than surfaced. The review-queue VERDICT path does
+/// NOT use this reader — see [`scan_review_findings`], which keeps "never
+/// written" distinct from "unreadable/corrupt" so a confirmed finding can never
+/// be silently dropped by a permission glitch.
 pub fn read_review_findings(cwd: &Path) -> Result<Vec<ReviewFinding>> {
-    let path = review_findings_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => {
-            let mut findings = Vec::new();
-            for line in txt.lines() {
-                if !line.is_empty() {
-                    if let Ok(f) = serde_json::from_str::<ReviewFinding>(line) {
-                        findings.push(f);
-                    }
-                }
-            }
-            Ok(findings)
-        }
-        Err(_) => Ok(Vec::new()),
-    }
+    Ok(read_jsonl_best_effort(
+        &review_findings_path(cwd)?,
+        "review_findings.jsonl",
+    ))
 }
 
 /// Three-valued result of reading the AI-review findings stream, mirroring
@@ -599,25 +683,48 @@ pub fn append_bridged_finding(cwd: &Path, finding_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Read the set of already-bridged finding-ids from bridged_findings.jsonl.
-/// Returns an empty vec if the file doesn't exist or is empty (fail-soft, same
-/// contract as `read_review_findings`). Corrupt lines are skipped.
+/// Read the set of already-bridged finding-ids from bridged_findings.jsonl,
+/// BEST-EFFORT: absent, unreadable and partially-undecodable ledgers all read
+/// as (or short of) an empty set, i.e. "this finding was never bridged" — which
+/// for an idempotency key means "forward it again". Use
+/// [`scan_bridged_findings`] where that matters.
 pub fn read_bridged_findings(cwd: &Path) -> Result<Vec<String>> {
-    let path = bridged_findings_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => {
-            let mut ids = Vec::new();
-            for line in txt.lines() {
-                if !line.is_empty() {
-                    if let Ok(r) = serde_json::from_str::<BridgedFinding>(line) {
-                        ids.push(r.finding_id);
-                    }
-                }
-            }
-            Ok(ids)
-        }
-        Err(_) => Ok(Vec::new()),
-    }
+    Ok(read_jsonl_best_effort::<BridgedFinding>(
+        &bridged_findings_path(cwd)?,
+        "bridged_findings.jsonl",
+    )
+    .into_iter()
+    .map(|r| r.finding_id)
+    .collect())
+}
+
+/// Tri-state read of the bridged-finding idempotency ledger (see
+/// [`scan_jsonl`]). A never-written ledger genuinely holds no bridged ids
+/// (`Known(vec![])`); one that could not be read in full is `Undetermined(why)`
+/// rather than a short set that would re-forward findings already in the
+/// backlog.
+///
+/// DIRECTION (t3 judgement — this ledger is NOT in the same class as the
+/// finding/rollback/escalation ledgers, so it gets its own answer):
+///
+/// * collapsing it to EMPTY means "nothing was ever bridged" → every confirmed
+///   finding is forwarded AGAIN. The idempotency ledger exists precisely to
+///   stop that, so the collapse silently disables the guard it is. The damage
+///   is duplicate backlog tasks a human must reconcile by hand — and duplicates
+///   are not self-healing.
+/// * treating it as "assume everything is already bridged" means this run
+///   forwards NOTHING from the stream. Nothing is lost: the source ledgers are
+///   append-only and `--to-backlog` re-derives its rows every run, so the next
+///   run with a readable ledger forwards exactly the same items.
+///
+/// One direction needs a human to clean up, the other needs a re-run. So the
+/// consumer ([`crate::bridge`]) SKIPS the stream and says so loudly; it must
+/// never proceed with an empty already-bridged set.
+pub fn scan_bridged_findings(cwd: &Path) -> Result<Determination<Vec<String>>> {
+    Ok(
+        scan_jsonl::<BridgedFinding>(&bridged_findings_path(cwd)?, "bridged_findings.jsonl")
+            .map(|rows| rows.into_iter().map(|r| r.finding_id).collect()),
+    )
 }
 
 /// One record in the bridged-entries ledger: a non-finding review-queue entry
@@ -681,24 +788,31 @@ pub fn append_bridged_entry(cwd: &Path, key: &str) -> Result<()> {
 }
 
 /// Read the set of already-bridged non-finding entry keys from
-/// bridged_entries.jsonl. Empty vec if the file is absent/empty (fail-soft,
-/// same contract as [`read_bridged_findings`]). Corrupt lines are skipped.
+/// bridged_entries.jsonl, BEST-EFFORT (same two-valued contract, and same blind
+/// spot, as [`read_bridged_findings`]). Use [`scan_bridged_entries`] where the
+/// difference between "never bridged" and "could not tell" matters.
 pub fn read_bridged_entries(cwd: &Path) -> Result<Vec<String>> {
-    let path = bridged_entries_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => {
-            let mut keys = Vec::new();
-            for line in txt.lines() {
-                if !line.is_empty() {
-                    if let Ok(r) = serde_json::from_str::<BridgedEntry>(line) {
-                        keys.push(r.key);
-                    }
-                }
-            }
-            Ok(keys)
-        }
-        Err(_) => Ok(Vec::new()),
-    }
+    Ok(
+        read_jsonl_best_effort::<BridgedEntry>(
+            &bridged_entries_path(cwd)?,
+            "bridged_entries.jsonl",
+        )
+        .into_iter()
+        .map(|r| r.key)
+        .collect(),
+    )
+}
+
+/// Tri-state read of the bridged-entry idempotency ledger (see [`scan_jsonl`]).
+/// Same DIRECTION judgement as [`scan_bridged_findings`]: an undetermined
+/// already-bridged set must make the consumer SKIP the stream (re-runnable),
+/// never proceed as if nothing had ever been bridged (duplicate backlog tasks
+/// a human has to reconcile).
+pub fn scan_bridged_entries(cwd: &Path) -> Result<Determination<Vec<String>>> {
+    Ok(
+        scan_jsonl::<BridgedEntry>(&bridged_entries_path(cwd)?, "bridged_entries.jsonl")
+            .map(|rows| rows.into_iter().map(|r| r.key).collect()),
+    )
 }
 
 /// Path to the audit_rounds.jsonl file (append-only, Continuous-Audit round
@@ -875,26 +989,23 @@ fn append_disposition_with_deadline(
     Ok(AppendOutcome::Recorded)
 }
 
-/// Read all dispositions from dispositions.jsonl. Returns an empty vec if the
-/// file doesn't exist or is empty (fail-soft, same contract as
-/// `read_review_findings`). Corrupt lines are skipped rather than failing the
-/// whole read.
+/// Read all dispositions from dispositions.jsonl, BEST-EFFORT (same two-valued
+/// contract as [`read_review_findings`]): an absent, unreadable or
+/// partially-undecodable ledger reads as (or short of) an empty vec, so a
+/// finding a human ALREADY dispositioned can come back as undispositioned. Use
+/// [`scan_dispositions`] wherever that drives a decision.
 pub fn read_dispositions(cwd: &Path) -> Result<Vec<Disposition>> {
-    let path = dispositions_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => {
-            let mut dispositions = Vec::new();
-            for line in txt.lines() {
-                if !line.is_empty() {
-                    if let Ok(d) = serde_json::from_str::<Disposition>(line) {
-                        dispositions.push(d);
-                    }
-                }
-            }
-            Ok(dispositions)
-        }
-        Err(_) => Ok(Vec::new()),
-    }
+    Ok(read_jsonl_best_effort(
+        &dispositions_path(cwd)?,
+        "dispositions.jsonl",
+    ))
+}
+
+/// Tri-state read of dispositions.jsonl (see [`scan_jsonl`]): "nobody has
+/// dispositioned anything yet" stays a genuine `Known(vec![])`, while a ledger
+/// that could not be read in full is `Undetermined(why)`.
+pub fn scan_dispositions(cwd: &Path) -> Result<Determination<Vec<Disposition>>> {
+    Ok(scan_jsonl(&dispositions_path(cwd)?, "dispositions.jsonl"))
 }
 
 // ── Mid-flight runtime-conflict detection (design 625aa170 A) ────────────────
@@ -913,13 +1024,42 @@ pub fn runtime_conflicts_path(cwd: &Path) -> Result<PathBuf> {
     Ok(storage_root(cwd)?.join("runtime_conflicts.jsonl"))
 }
 
-/// Fail-soft load of the active-changeset registry: a missing or corrupt file
-/// is treated as an empty registry (same contract as `load_leases`).
+/// Load the in-flight changeset registry, keeping a genuinely-absent
+/// `active_changesets.json` (nothing in flight — the normal cold start) DISTINCT
+/// from one that exists but could not be trusted. Mirrors [`load_leases`], for
+/// the same two reasons:
+///
+/// 1. This registry IS the mid-flight overlap detector. An empty registry means
+///    "no other task is touching these files", so folding an unreadable or
+///    corrupt file into an empty one answers the conflict question with a
+///    confident "no conflict" that was never measured.
+/// 2. Every caller here is a read-modify-write that saves the registry back
+///    ([`record_changeset_and_detect`], [`mark_changeset_merged`],
+///    [`mark_branch_merged`], [`prune_stale_changesets`]). An empty stand-in
+///    would be written over the real file, deleting every peer's in-flight
+///    changeset.
+///
+/// So only an absent file yields `Ok(ChangesetRegistry::default())`; unreadable
+/// or corrupt yields `Err`, aborting the mutator before it can write anything
+/// back. Callers that must not fail on detection already treat an `Err` as "no
+/// overlap detected" (only a POSITIVE detection holds a merge) — and now do so
+/// without clobbering the registry on the way.
 pub fn load_active_changesets(cwd: &Path) -> Result<ChangesetRegistry> {
     let path = active_changesets_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => Ok(serde_json::from_str(&txt).unwrap_or_default()),
-        Err(_) => Ok(ChangesetRegistry::default()),
+    match harness_core::boundary::read_to_string(&path) {
+        Determination::Known(None) => Ok(ChangesetRegistry::default()),
+        Determination::Known(Some(txt)) => serde_json::from_str(&txt).map_err(|e| {
+            anyhow::anyhow!(
+                "active_changesets.json present but corrupt at {}: {e}. The in-flight set is \
+                 unknown, not empty.",
+                path.display()
+            )
+        }),
+        Determination::Undetermined(reason) => anyhow::bail!(
+            "active_changesets.json could not be read at {}: {reason}. The in-flight set is \
+             unknown, not empty.",
+            path.display()
+        ),
     }
 }
 
@@ -953,23 +1093,26 @@ pub fn append_runtime_conflict(cwd: &Path, event: &RuntimeConflictEvent) -> Resu
     Ok(())
 }
 
-/// Read all runtime-conflict events (fail-soft, corrupt lines skipped).
+/// Read all runtime-conflict events, BEST-EFFORT: an unreadable or
+/// partially-undecodable ledger reads as (or short of) an empty vec, i.e. "no
+/// overlap was ever detected". Use [`scan_runtime_conflicts`] where that is
+/// acted on.
 pub fn read_runtime_conflicts(cwd: &Path) -> Result<Vec<RuntimeConflictEvent>> {
-    let path = runtime_conflicts_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => {
-            let mut events = Vec::new();
-            for line in txt.lines() {
-                if !line.is_empty() {
-                    if let Ok(ev) = serde_json::from_str::<RuntimeConflictEvent>(line) {
-                        events.push(ev);
-                    }
-                }
-            }
-            Ok(events)
-        }
-        Err(_) => Ok(Vec::new()),
-    }
+    Ok(read_jsonl_best_effort(
+        &runtime_conflicts_path(cwd)?,
+        "runtime_conflicts.jsonl",
+    ))
+}
+
+/// Tri-state read of runtime_conflicts.jsonl (see [`scan_jsonl`]): a
+/// never-written ledger is a genuine `Known(vec![])` ("no overlap has been
+/// detected"), while one that could not be read in full is `Undetermined(why)`
+/// and must not be reported as a clean history.
+pub fn scan_runtime_conflicts(cwd: &Path) -> Result<Determination<Vec<RuntimeConflictEvent>>> {
+    Ok(scan_jsonl(
+        &runtime_conflicts_path(cwd)?,
+        "runtime_conflicts.jsonl",
+    ))
 }
 
 /// Record `changeset` into the project-global registry AND cross-check it
@@ -1138,22 +1281,47 @@ fn review_findings_archive_path(cwd: &Path) -> Result<PathBuf> {
 /// archive (hot records first, then archive, each in its own on-disk/append
 /// order). This is the full-history view the review-metrics latency join
 /// needs (`disposition_cli::metrics`) so that compacting a resolved finding
-/// out of the hot file never orphans its disposition. Fail-soft, same
-/// contract as [`read_review_findings`]: a missing archive contributes
-/// nothing, corrupt lines are skipped.
+/// out of the hot file never orphans its disposition.
+///
+/// BEST-EFFORT on BOTH halves, same two-valued contract as
+/// [`read_review_findings`]: a missing archive contributes nothing, and an
+/// unreadable one — or an undecodable line in either file — contributes nothing
+/// too, silently. Consumers that act on the full history must use
+/// [`scan_review_findings_all`], which keeps those cases apart.
 pub fn read_review_findings_all(cwd: &Path) -> Result<Vec<ReviewFinding>> {
     let mut all = read_review_findings(cwd)?;
-    let archive_path = review_findings_archive_path(cwd)?;
-    if let Ok(txt) = std::fs::read_to_string(&archive_path) {
-        for line in txt.lines() {
-            if !line.is_empty() {
-                if let Ok(f) = serde_json::from_str::<ReviewFinding>(line) {
-                    all.push(f);
-                }
-            }
-        }
-    }
+    all.extend(read_jsonl_best_effort::<ReviewFinding>(
+        &review_findings_archive_path(cwd)?,
+        "review_findings_archive.jsonl",
+    ));
     Ok(all)
+}
+
+/// Tri-state read of the FULL review-finding history (hot store then cold
+/// archive), the undetermined-preserving sibling of [`read_review_findings_all`].
+///
+/// Either half being unreadable — or holding one undecodable line — makes the
+/// WHOLE history `Undetermined(why)`: a full-history answer assembled from a
+/// half that could not be read is a partial history indistinguishable from a
+/// complete one, and the join it feeds (review-metrics latency) would report a
+/// finding as never-recorded. Both halves absent is `Known(vec![])`, a genuine
+/// "nothing has ever been recorded".
+pub fn scan_review_findings_all(cwd: &Path) -> Result<Determination<Vec<ReviewFinding>>> {
+    let hot = scan_jsonl::<ReviewFinding>(&review_findings_path(cwd)?, "review_findings.jsonl");
+    let archive = scan_jsonl::<ReviewFinding>(
+        &review_findings_archive_path(cwd)?,
+        "review_findings_archive.jsonl",
+    );
+    Ok(match (hot, archive) {
+        (Determination::Known(mut hot), Determination::Known(archive)) => {
+            hot.extend(archive);
+            Determination::Known(hot)
+        }
+        // Forwarded, not re-minted (see `scan_jsonl`).
+        (Determination::Undetermined(why), _) | (_, Determination::Undetermined(why)) => {
+            Determination::Undetermined(why)
+        }
+    })
 }
 
 /// Partition `findings` into `(open, archived)`: a record goes to `archived`
@@ -1229,12 +1397,12 @@ pub struct CompactionReport {
 /// Fail-soft: a missing hot file is a no-op reporting all-zero counts (never
 /// creates files nor errors). A missing existing archive is likewise a
 /// legitimate no-op contribution (first compaction ever). But an existing
-/// archive that cannot be READ (permission-denied, non-UTF-8, etc.) is
-/// distinct from absent and must not be treated as if it held zero records:
-/// this now ABORTS with `Err` before either file is rewritten, so an
-/// unreadable-but-present archive is never silently discarded and then
-/// clobbered by `write_jsonl_atomic` with only the newly-archived batch.
-/// Never panics.
+/// archive that cannot be read IN FULL — unreadable (permission-denied,
+/// non-UTF-8, …) OR holding a line that cannot be decoded — is distinct from
+/// absent and must not be treated as if it held (only) the records that came
+/// back: this ABORTS with `Err` before either file is rewritten, so an archive
+/// that was not fully read is never silently discarded and then clobbered by
+/// `write_jsonl_atomic` with a batch missing those records. Never panics.
 pub fn compact_review_findings(cwd: &Path) -> Result<CompactionReport> {
     let hot_path = review_findings_path(cwd)?;
     if !hot_path.exists() {
@@ -1273,31 +1441,20 @@ pub fn compact_review_findings(cwd: &Path) -> Result<CompactionReport> {
     let (open, archived) = partition_findings(&findings, &resolved_ids);
 
     let archive_path = review_findings_archive_path(cwd)?;
-    // Read via the shared boundary tri-state (mirrors `scan_review_findings`)
-    // so "absent" (legit, first compaction) and "unreadable" (untrustworthy)
-    // are drawn by the boundary type rather than collapsed by a raw
-    // `Err(_) => Vec::new()`, which would silently discard an existing-but-
-    // unreadable archive and then let `write_jsonl_atomic` below overwrite it
-    // with only the newly-archived batch — destroying every previously
-    // archived finding.
-    let existing_archive: Vec<ReviewFinding> = match harness_core::boundary::read_to_string(
+    // Read via the shared tri-state scan so "absent" (legit, first compaction)
+    // stays distinct from "could not be read in full" (untrustworthy). Both the
+    // unreadable-FILE case and the undecodable-LINE case abort here, because
+    // this value is what `write_jsonl_atomic` rewrites the archive FROM: a
+    // silently dropped record is not merely uncounted, it is deleted from the
+    // cold store on the next line.
+    let existing_archive: Vec<ReviewFinding> = match scan_jsonl::<ReviewFinding>(
         &archive_path,
+        "review_findings_archive.jsonl",
     ) {
-        harness_core::verdict::Determination::Known(None) => Vec::new(),
-        harness_core::verdict::Determination::Known(Some(txt)) => {
-            let mut v = Vec::new();
-            for line in txt.lines() {
-                if !line.is_empty() {
-                    if let Ok(f) = serde_json::from_str::<ReviewFinding>(line) {
-                        v.push(f);
-                    }
-                }
-            }
-            v
-        }
-        harness_core::verdict::Determination::Undetermined(reason) => {
+        Determination::Known(v) => v,
+        Determination::Undetermined(reason) => {
             anyhow::bail!(
-                "cannot compact review findings: the existing archive at {} exists but is unreadable ({reason}); aborting before any write to avoid discarding it",
+                "cannot compact review findings: the existing archive at {} could not be read in full ({reason}); aborting before any write to avoid discarding it",
                 archive_path.display()
             );
         }
@@ -1386,23 +1543,25 @@ pub fn append_merge_conflict(cwd: &Path, entry: &MergeConflictEntry) -> Result<(
     Ok(())
 }
 
-/// Read all blocked-merge entries (fail-soft, corrupt lines skipped).
+/// Read all blocked-merge entries, BEST-EFFORT: an unreadable or
+/// partially-undecodable ledger reads as (or short of) an empty vec — "no merge
+/// is blocked" — which is exactly the answer that lets a held merge through.
+/// Use [`scan_merge_conflicts`] where the answer is acted on.
 pub fn read_merge_conflicts(cwd: &Path) -> Result<Vec<MergeConflictEntry>> {
-    let path = merge_conflicts_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => {
-            let mut entries = Vec::new();
-            for line in txt.lines() {
-                if !line.is_empty() {
-                    if let Ok(e) = serde_json::from_str::<MergeConflictEntry>(line) {
-                        entries.push(e);
-                    }
-                }
-            }
-            Ok(entries)
-        }
-        Err(_) => Ok(Vec::new()),
-    }
+    Ok(read_jsonl_best_effort(
+        &merge_conflicts_path(cwd)?,
+        "merge_conflicts.jsonl",
+    ))
+}
+
+/// Tri-state read of merge_conflicts.jsonl (see [`scan_jsonl`]): "no merge has
+/// ever been blocked" stays a genuine `Known(vec![])`, while a ledger that
+/// could not be read in full is `Undetermined(why)`.
+pub fn scan_merge_conflicts(cwd: &Path) -> Result<Determination<Vec<MergeConflictEntry>>> {
+    Ok(scan_jsonl(
+        &merge_conflicts_path(cwd)?,
+        "merge_conflicts.jsonl",
+    ))
 }
 
 /// Append one resolution to `merge_conflict_resolutions.jsonl`.
@@ -1450,32 +1609,97 @@ pub fn append_merge_conflict_resolution(
     Ok(AppendOutcome::Recorded)
 }
 
-/// Read all merge-conflict resolutions (fail-soft, corrupt lines skipped).
+/// Read all merge-conflict resolutions, BEST-EFFORT: an unreadable or
+/// partially-undecodable ledger reads as (or short of) an empty vec, i.e. "this
+/// conflict is still unresolved". Use [`scan_merge_conflict_resolutions`] where
+/// that drives a decision.
+///
+/// DIRECTION (t3 judgement, and why this reader is not simply banned): losing a
+/// resolution makes a conflict look STILL OPEN. That over-reports — a human is
+/// shown a blocked merge that may already be settled — and it never hides a
+/// blocked merge, so the collapse here falls on the conservative side. It is
+/// still not free: an over-reported conflict can be re-bridged into the backlog
+/// and re-held by a driver. So [`scan_open_merge_conflicts`] does treat this
+/// ledger's answer as tri-state, keeps the entries VISIBLE when it is
+/// undetermined, and hands the caller a reason to say so — rather than either
+/// hiding the entries (the losing direction) or pretending the join was clean.
 pub fn read_merge_conflict_resolutions(cwd: &Path) -> Result<Vec<MergeConflictResolution>> {
-    let path = merge_conflict_resolutions_path(cwd)?;
-    match std::fs::read_to_string(&path) {
-        Ok(txt) => {
-            let mut resolutions = Vec::new();
-            for line in txt.lines() {
-                if !line.is_empty() {
-                    if let Ok(r) = serde_json::from_str::<MergeConflictResolution>(line) {
-                        resolutions.push(r);
-                    }
-                }
-            }
-            Ok(resolutions)
-        }
-        Err(_) => Ok(Vec::new()),
-    }
+    Ok(read_jsonl_best_effort(
+        &merge_conflict_resolutions_path(cwd)?,
+        "merge_conflict_resolutions.jsonl",
+    ))
+}
+
+/// Tri-state read of merge_conflict_resolutions.jsonl (see [`scan_jsonl`]).
+pub fn scan_merge_conflict_resolutions(
+    cwd: &Path,
+) -> Result<Determination<Vec<MergeConflictResolution>>> {
+    Ok(scan_jsonl(
+        &merge_conflict_resolutions_path(cwd)?,
+        "merge_conflict_resolutions.jsonl",
+    ))
 }
 
 /// The OPEN blocked-merge set: entries with no resolution (fail-soft read of
 /// both streams, joined by `conflict_id`). This is what `review-queue`
 /// surfaces as `[merge-conflict]` rows.
+///
+/// BEST-EFFORT on BOTH streams, and the two collapse in OPPOSITE directions —
+/// which is why [`scan_open_merge_conflicts`] exists and why anything that
+/// renders or drains this set should call that instead:
+///
+/// * an unreadable ENTRY ledger reads as "no merge is blocked" (a real work
+///   stoppage vanishes — the losing direction);
+/// * an unreadable RESOLUTION ledger reads as "nothing is resolved" (a settled
+///   conflict is shown again — the conservative direction).
 pub fn open_merge_conflicts(cwd: &Path) -> Result<Vec<MergeConflictEntry>> {
     let entries = read_merge_conflicts(cwd)?;
     let resolutions = read_merge_conflict_resolutions(cwd)?;
     Ok(crate::merge_conflict::open_entries(&entries, &resolutions))
+}
+
+/// The tri-state answer for the OPEN blocked-merge set, keeping the two ledgers'
+/// determinations APART because they fail in opposite directions (see
+/// [`scan_open_merge_conflicts`]).
+#[derive(Debug)]
+pub struct OpenMergeConflictScan {
+    /// The open (unresolved) entries. `Undetermined` when the ENTRY ledger
+    /// (`merge_conflicts.jsonl`) could not be read in full — the caller must not
+    /// render that as "no merge is blocked".
+    pub open: Determination<Vec<MergeConflictEntry>>,
+    /// `Some(why)` when the RESOLUTION ledger could not be read in full. The
+    /// entries above are then joined against NO resolutions, i.e. every entry is
+    /// reported open: nothing is hidden, but an already-resolved conflict may be
+    /// listed. The caller is expected to SAY this rather than pass the join off
+    /// as clean.
+    pub resolutions_undetermined: Option<String>,
+}
+
+/// Tri-state [`open_merge_conflicts`]: the sanctioned reader for the review
+/// surface and the backlog drain.
+///
+/// The direction judgement, written down because the two halves are NOT
+/// symmetric:
+///
+/// * ENTRY ledger undetermined → `open: Undetermined`. Reading it as an empty
+///   set is "no merge is blocked", the exact answer that lets a held merge pass
+///   unnoticed. The caller must omit-and-announce, never claim zero.
+/// * RESOLUTION ledger undetermined → the entries are still returned, joined
+///   against an EMPTY resolution set, and `resolutions_undetermined` carries
+///   why. Dropping to "nothing is resolved" over-reports (a resolved conflict
+///   reappears) and cannot hide a blocked merge, so withholding the whole
+///   source here would trade a conservative error for the losing one.
+pub fn scan_open_merge_conflicts(cwd: &Path) -> Result<OpenMergeConflictScan> {
+    let (resolutions, resolutions_undetermined) = match scan_merge_conflict_resolutions(cwd)? {
+        Determination::Known(rows) => (rows, None),
+        Determination::Undetermined(why) => (Vec::new(), Some(why.as_str().to_string())),
+    };
+    let open = scan_merge_conflicts(cwd)?
+        .map(|entries| crate::merge_conflict::open_entries(&entries, &resolutions));
+    Ok(OpenMergeConflictScan {
+        open,
+        resolutions_undetermined,
+    })
 }
 
 /// Look up the resolution for a `conflict_id`, if any (for the condukt
@@ -1564,7 +1788,7 @@ mod tests {
     // fresh rollout.
     #[test]
     fn scan_violations_absent_when_file_missing() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let (dir, prev_home) = scan_test_home();
         assert!(matches!(scan_violations(&dir), ViolationScan::Absent));
         restore_home(prev_home);
@@ -1575,7 +1799,7 @@ mod tests {
     // holding no events still yields `Events(empty)`, never `Undetermined`).
     #[test]
     fn scan_violations_events_when_all_lines_parse() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let (dir, prev_home) = scan_test_home();
         append_violation(&dir, &viol_event("blastguard:rm-rf", 1_700_000_000)).unwrap();
         append_violation(&dir, &viol_event("blastguard:rm-rf", 1_700_000_001)).unwrap();
@@ -1594,7 +1818,7 @@ mod tests {
     // violation the fleet gate must not go blind to.
     #[test]
     fn scan_violations_undetermined_on_unparseable_line() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let (dir, prev_home) = scan_test_home();
         // One valid event, then a corrupt (non-JSON / schema-drifted) line.
         append_violation(&dir, &viol_event("blastguard:rm-rf", 1_700_000_000)).unwrap();
@@ -1640,7 +1864,7 @@ mod tests {
     // so a single write is not atomic at the OS level (widens the corrupt window).
     #[test]
     fn concurrent_save_leases_never_publishes_corrupt_registry() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-store-test-concurrent-leases-{}-{}",
@@ -1713,7 +1937,7 @@ mod tests {
     // two become Err.
     #[test]
     fn load_leases_surfaces_corrupt_or_unreadable_registry_as_err() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-store-test-corrupt-leases-{}-{}",
@@ -1758,7 +1982,7 @@ mod tests {
         use crate::disposition::{Disposition, DispositionVerdict};
         use crate::lock::LeaseLock;
 
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-store-test-append-skip-{}-{}",
@@ -2010,7 +2234,7 @@ mod tests {
 
     #[test]
     fn read_review_findings_all_concatenates_archive_after_hot() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-store-test-all-{}-{}",
@@ -2055,7 +2279,7 @@ mod tests {
 
     #[test]
     fn bridged_entries_ledger_roundtrips_and_skips_corrupt_lines() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-store-test-entries-{}-{}",
@@ -2108,7 +2332,7 @@ mod tests {
     #[test]
     fn concurrent_append_survives_compact_review_findings() {
         use crate::lock::LeaseLock;
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-compact-race-{}-{}",
@@ -2175,9 +2399,20 @@ mod tests {
     // bytes. GREEN: the boundary tri-state read distinguishes Undetermined
     // (unreadable) from Known(None) (absent) and bails out before either
     // `write_jsonl_atomic` call runs, leaving the archive bytes untouched.
+    //
+    // ANTI-VACUITY, and where it actually lives (third-party audit, t4): this
+    // test asserts only that compaction ABORTS, so an implementation that
+    // aborted unconditionally would satisfy it. Measured by mutation
+    // (`compact_review_findings` made to `bail!` on every call): this test and
+    // its `..._undecodable_archive_line` sibling both stayed GREEN, while 13
+    // others went red — `concurrent_append_survives_compact_review_findings`
+    // here and `compact_findings_archives_resolved_and_keeps_hot_bounded_to_open`
+    // in `tests/compact_findings_cli.rs` are the controls that carry the
+    // opposite polarity. They are in different files, so the pairing is named
+    // here rather than left to be rediscovered.
     #[test]
     fn compact_review_findings_aborts_on_unreadable_archive() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-compact-unreadable-archive-{}-{}",
@@ -2233,7 +2468,7 @@ mod tests {
     // "x" lines land. GREEN: lock + in-lock recheck => exactly one.
     #[test]
     fn concurrent_bridged_finding_append_does_not_double_add() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-bridged-race-{}-{}",
@@ -2282,7 +2517,7 @@ mod tests {
     fn concurrent_disposition_append_dedupes_on_finding_id() {
         use crate::disposition::{Disposition, DispositionVerdict};
 
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-disp-race-{}-{}",
@@ -2357,7 +2592,7 @@ mod tests {
     /// `runtime_conflicts.jsonl`. Store isolation via a per-test sandboxed HOME.
     #[test]
     fn record_changeset_and_detect_round_trips_overlap() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-changeset-rt-{}-{}",
@@ -2412,7 +2647,7 @@ mod tests {
     /// flagged. Also asserts `prune_stale_changesets` compacts merged entries.
     #[test]
     fn mark_branch_merged_excludes_a_landed_branch_from_detection() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-branch-merged-{}-{}",
@@ -2462,7 +2697,7 @@ mod tests {
     /// The `OVERWATCH_TEST_CHANGESET_DELAY_MS` widener forces the interleave.
     #[test]
     fn concurrent_record_changeset_never_loses_an_upsert() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-changeset-conc-{}-{}",
@@ -2497,5 +2732,648 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Tri-state ledger readers ─────────────────────────────────────────────
+    //
+    // Every `scan_*` reader must answer in THREE parts, never two:
+    //
+    //   absent ledger          -> `Known(empty)`  a genuine measurement of zero
+    //   clean ledger           -> `Known(rows)`   ANTI-VACUITY CONTROL
+    //   one undecodable line   -> `Undetermined`  never a silently-short `Known`
+    //   present but unreadable -> `Undetermined`  never an empty `Known`
+    //
+    // The middle two arms are a matched pair on purpose. An implementation that
+    // answered `Undetermined` for EVERYTHING would satisfy the corrupt and
+    // unreadable arms while destroying the signal (every reader would go blind),
+    // so each test asserts the clean ledger still reads its rows back; and an
+    // absent ledger must stay a real, usable empty or "undetermined" becomes the
+    // permanent answer and stops meaning anything.
+
+    /// Take the crate-wide `$HOME` lock, recovering from POISON.
+    ///
+    /// A test that fails an assertion panics while holding [`HOME_ENV_LOCK`],
+    /// which poisons it for every later `$HOME`-sandboxing test in the same
+    /// process. `.lock().unwrap()` then turns each of those into a
+    /// `PoisonError` failure that says nothing about the property it checks —
+    /// one real red is reported as twenty, and the true verdict of these tests
+    /// is buried. The mutex guards a process-global env var, not invariants of
+    /// a data structure, and each test sets `$HOME` itself before touching the
+    /// store, so a poisoned lock leaves nothing inconsistent to protect against.
+    fn home_lock() -> std::sync::MutexGuard<'static, ()> {
+        HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A fresh sandboxed `$HOME` (so `storage_root` resolves into a temp dir and
+    /// the real `~/.overwatch` is never touched). Callers MUST hold
+    /// [`HOME_ENV_LOCK`] (via [`home_lock`]) and restore the previous `$HOME`
+    /// themselves.
+    fn fresh_ledger_home(tag: &str) -> std::path::PathBuf {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "overwatch-ledger-{tag}-{}-{}-{}",
+            std::process::id(),
+            now_unix_nanos(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("HOME", &dir);
+        dir
+    }
+
+    /// Append a line that is present and non-blank but cannot be decoded
+    /// (schema drift / corruption).
+    fn append_undecodable_line(path: &std::path::Path) {
+        use std::io::Write as _;
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        writeln!(f, "{{not-valid-json-schema-drift").unwrap();
+    }
+
+    /// Make `path` EXIST but be unreadable as text: non-UTF-8 bytes make
+    /// `read_to_string` return `InvalidData`, which the shared boundary
+    /// classifies as `Undetermined` (present but opaque) rather than
+    /// `Known(None)` (absent). Deterministic for every user, unlike a
+    /// `chmod 000` (a no-op when running as root).
+    fn write_unreadable(path: &std::path::Path) {
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        std::fs::write(path, [0xFFu8, 0xFE, 0xFD]).unwrap();
+    }
+
+    #[track_caller]
+    fn assert_known_len<T: std::fmt::Debug>(d: Determination<Vec<T>>, want: usize, what: &str) {
+        // `None` stands for "answered Undetermined", so the assertion prints the
+        // whole determination either way. (Written without `panic!` because the
+        // workspace denies `clippy::panic` for this crate, tests included.)
+        let got = match &d {
+            Determination::Known(v) => Some(v.len()),
+            Determination::Undetermined(_) => None,
+        };
+        assert_eq!(
+            got,
+            Some(want),
+            "{what}: expected Known({want}) — a ledger that WAS read is a measurement — got {d:?}"
+        );
+    }
+
+    #[track_caller]
+    fn assert_undetermined<T: std::fmt::Debug>(d: Determination<Vec<T>>, what: &str) {
+        assert!(
+            matches!(d, Determination::Undetermined(_)),
+            "{what}: a ledger that could not be read IN FULL must not answer Known — \
+             \"could not read\" is not \"nothing was recorded\" — got {d:?}"
+        );
+    }
+
+    fn lifecycle_event(key: &str, ts: i64) -> LifecycleEvent {
+        LifecycleEvent::started(
+            key.to_string(),
+            "title".to_string(),
+            "sess".to_string(),
+            "run".to_string(),
+            ts,
+        )
+    }
+
+    fn rollback_event(plugin: &str, ts: i64) -> RollbackEvent {
+        RollbackEvent::new(
+            plugin.to_string(),
+            Some("0.1.0".to_string()),
+            "0.1.1".to_string(),
+            0,
+            crate::rollback::RollbackReason::Raw,
+            ts,
+            None,
+        )
+    }
+
+    fn disposition(finding_id: &str) -> Disposition {
+        use crate::disposition::DispositionVerdict;
+        Disposition {
+            finding_id: finding_id.to_string(),
+            verdict: DispositionVerdict::Confirmed,
+            reviewer: "tester".to_string(),
+            resolved_ts: 1_700_000_000,
+        }
+    }
+
+    fn runtime_conflict_event(task_a: &str, ts: i64) -> RuntimeConflictEvent {
+        RuntimeConflictEvent {
+            run_id: "run".to_string(),
+            task_key_a: task_a.to_string(),
+            task_key_b: "other".to_string(),
+            overlapping_files: vec!["a.rs".to_string()],
+            base_ref: "base".to_string(),
+            session_id: "sess".to_string(),
+            ts,
+            detail: "overlap".to_string(),
+        }
+    }
+
+    fn merge_conflict_entry(conflict_id: &str, ts: i64) -> MergeConflictEntry {
+        MergeConflictEntry {
+            conflict_id: conflict_id.to_string(),
+            origin: crate::merge_conflict::ConflictOrigin::RuntimeOverlap,
+            run_id: "run".to_string(),
+            branch: "condukt/t1".to_string(),
+            default_branch: "main".to_string(),
+            base_ref: "base".to_string(),
+            conflicted_files: vec!["a.rs".to_string()],
+            diff_ours: String::new(),
+            diff_theirs: String::new(),
+            ts,
+        }
+    }
+
+    fn merge_conflict_resolution(conflict_id: &str, ts: i64) -> MergeConflictResolution {
+        MergeConflictResolution {
+            conflict_id: conflict_id.to_string(),
+            choice: crate::merge_conflict::ResolveChoice::Theirs,
+            decided_by: crate::merge_conflict::DecidedBy::Policy,
+            note: None,
+            ts,
+        }
+    }
+
+    #[test]
+    fn events_ledger_scan_is_tri_state() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("events-absent");
+        assert_known_len(scan_events(&dir).unwrap(), 0, "absent events.jsonl");
+
+        let dir = fresh_ledger_home("events-clean");
+        append_event(&dir, &lifecycle_event("k1", 1)).unwrap();
+        append_event(&dir, &lifecycle_event("k2", 2)).unwrap();
+        // ANTI-VACUITY: a readable ledger is still a measurement.
+        assert_known_len(scan_events(&dir).unwrap(), 2, "clean events.jsonl");
+
+        append_undecodable_line(&events_path(&dir).unwrap());
+        assert_undetermined(scan_events(&dir).unwrap(), "events.jsonl, undecodable line");
+        assert_eq!(
+            read_events(&dir).unwrap().len(),
+            2,
+            "the legacy best-effort reader keeps its documented behaviour (t3 migrates callers)"
+        );
+
+        let dir = fresh_ledger_home("events-opaque");
+        write_unreadable(&events_path(&dir).unwrap());
+        assert_undetermined(scan_events(&dir).unwrap(), "unreadable events.jsonl");
+
+        restore_home(prev_home);
+    }
+
+    #[test]
+    fn rollbacks_ledger_scan_is_tri_state() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("rollbacks-absent");
+        assert_known_len(scan_rollbacks(&dir).unwrap(), 0, "absent rollbacks.jsonl");
+
+        let dir = fresh_ledger_home("rollbacks-clean");
+        append_rollback(&dir, &rollback_event("blastguard", 1)).unwrap();
+        assert_known_len(scan_rollbacks(&dir).unwrap(), 1, "clean rollbacks.jsonl");
+
+        append_undecodable_line(&rollbacks_path(&dir).unwrap());
+        assert_undetermined(
+            scan_rollbacks(&dir).unwrap(),
+            "rollbacks.jsonl, undecodable line",
+        );
+
+        let dir = fresh_ledger_home("rollbacks-opaque");
+        write_unreadable(&rollbacks_path(&dir).unwrap());
+        assert_undetermined(scan_rollbacks(&dir).unwrap(), "unreadable rollbacks.jsonl");
+
+        restore_home(prev_home);
+    }
+
+    #[test]
+    fn bridged_findings_ledger_scan_is_tri_state() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("bridged-findings-absent");
+        assert_known_len(
+            scan_bridged_findings(&dir).unwrap(),
+            0,
+            "absent bridged_findings.jsonl",
+        );
+
+        let dir = fresh_ledger_home("bridged-findings-clean");
+        append_bridged_finding(&dir, "f-1").unwrap();
+        append_bridged_finding(&dir, "f-2").unwrap();
+        assert_known_len(
+            scan_bridged_findings(&dir).unwrap(),
+            2,
+            "clean bridged_findings.jsonl",
+        );
+
+        append_undecodable_line(&bridged_findings_path(&dir).unwrap());
+        assert_undetermined(
+            scan_bridged_findings(&dir).unwrap(),
+            "bridged_findings.jsonl, undecodable line",
+        );
+
+        let dir = fresh_ledger_home("bridged-findings-opaque");
+        write_unreadable(&bridged_findings_path(&dir).unwrap());
+        assert_undetermined(
+            scan_bridged_findings(&dir).unwrap(),
+            "unreadable bridged_findings.jsonl",
+        );
+
+        restore_home(prev_home);
+    }
+
+    #[test]
+    fn bridged_entries_ledger_scan_is_tri_state() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("bridged-entries-absent");
+        assert_known_len(
+            scan_bridged_entries(&dir).unwrap(),
+            0,
+            "absent bridged_entries.jsonl",
+        );
+
+        let dir = fresh_ledger_home("bridged-entries-clean");
+        append_bridged_entry(&dir, "systemic:sig").unwrap();
+        assert_known_len(
+            scan_bridged_entries(&dir).unwrap(),
+            1,
+            "clean bridged_entries.jsonl",
+        );
+
+        append_undecodable_line(&bridged_entries_path(&dir).unwrap());
+        assert_undetermined(
+            scan_bridged_entries(&dir).unwrap(),
+            "bridged_entries.jsonl, undecodable line",
+        );
+
+        let dir = fresh_ledger_home("bridged-entries-opaque");
+        write_unreadable(&bridged_entries_path(&dir).unwrap());
+        assert_undetermined(
+            scan_bridged_entries(&dir).unwrap(),
+            "unreadable bridged_entries.jsonl",
+        );
+
+        restore_home(prev_home);
+    }
+
+    #[test]
+    fn dispositions_ledger_scan_is_tri_state() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("dispositions-absent");
+        assert_known_len(
+            scan_dispositions(&dir).unwrap(),
+            0,
+            "absent dispositions.jsonl",
+        );
+
+        let dir = fresh_ledger_home("dispositions-clean");
+        append_disposition(&dir, &disposition("f-1")).unwrap();
+        assert_known_len(
+            scan_dispositions(&dir).unwrap(),
+            1,
+            "clean dispositions.jsonl",
+        );
+
+        append_undecodable_line(&dispositions_path(&dir).unwrap());
+        assert_undetermined(
+            scan_dispositions(&dir).unwrap(),
+            "dispositions.jsonl, undecodable line",
+        );
+
+        let dir = fresh_ledger_home("dispositions-opaque");
+        write_unreadable(&dispositions_path(&dir).unwrap());
+        assert_undetermined(
+            scan_dispositions(&dir).unwrap(),
+            "unreadable dispositions.jsonl",
+        );
+
+        restore_home(prev_home);
+    }
+
+    #[test]
+    fn runtime_conflicts_ledger_scan_is_tri_state() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("runtime-conflicts-absent");
+        assert_known_len(
+            scan_runtime_conflicts(&dir).unwrap(),
+            0,
+            "absent runtime_conflicts.jsonl",
+        );
+
+        let dir = fresh_ledger_home("runtime-conflicts-clean");
+        append_runtime_conflict(&dir, &runtime_conflict_event("runX/ta", 1)).unwrap();
+        assert_known_len(
+            scan_runtime_conflicts(&dir).unwrap(),
+            1,
+            "clean runtime_conflicts.jsonl",
+        );
+
+        append_undecodable_line(&runtime_conflicts_path(&dir).unwrap());
+        assert_undetermined(
+            scan_runtime_conflicts(&dir).unwrap(),
+            "runtime_conflicts.jsonl, undecodable line",
+        );
+
+        let dir = fresh_ledger_home("runtime-conflicts-opaque");
+        write_unreadable(&runtime_conflicts_path(&dir).unwrap());
+        assert_undetermined(
+            scan_runtime_conflicts(&dir).unwrap(),
+            "unreadable runtime_conflicts.jsonl",
+        );
+
+        restore_home(prev_home);
+    }
+
+    #[test]
+    fn merge_conflicts_ledger_scan_is_tri_state() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("merge-conflicts-absent");
+        assert_known_len(
+            scan_merge_conflicts(&dir).unwrap(),
+            0,
+            "absent merge_conflicts.jsonl",
+        );
+
+        let dir = fresh_ledger_home("merge-conflicts-clean");
+        append_merge_conflict(&dir, &merge_conflict_entry("c-1", 1)).unwrap();
+        assert_known_len(
+            scan_merge_conflicts(&dir).unwrap(),
+            1,
+            "clean merge_conflicts.jsonl",
+        );
+
+        append_undecodable_line(&merge_conflicts_path(&dir).unwrap());
+        assert_undetermined(
+            scan_merge_conflicts(&dir).unwrap(),
+            "merge_conflicts.jsonl, undecodable line",
+        );
+
+        let dir = fresh_ledger_home("merge-conflicts-opaque");
+        write_unreadable(&merge_conflicts_path(&dir).unwrap());
+        assert_undetermined(
+            scan_merge_conflicts(&dir).unwrap(),
+            "unreadable merge_conflicts.jsonl",
+        );
+
+        restore_home(prev_home);
+    }
+
+    #[test]
+    fn merge_conflict_resolutions_ledger_scan_is_tri_state() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("merge-resolutions-absent");
+        assert_known_len(
+            scan_merge_conflict_resolutions(&dir).unwrap(),
+            0,
+            "absent merge_conflict_resolutions.jsonl",
+        );
+
+        let dir = fresh_ledger_home("merge-resolutions-clean");
+        append_merge_conflict_resolution(&dir, &merge_conflict_resolution("c-1", 1)).unwrap();
+        assert_known_len(
+            scan_merge_conflict_resolutions(&dir).unwrap(),
+            1,
+            "clean merge_conflict_resolutions.jsonl",
+        );
+
+        append_undecodable_line(&merge_conflict_resolutions_path(&dir).unwrap());
+        assert_undetermined(
+            scan_merge_conflict_resolutions(&dir).unwrap(),
+            "merge_conflict_resolutions.jsonl, undecodable line",
+        );
+
+        let dir = fresh_ledger_home("merge-resolutions-opaque");
+        write_unreadable(&merge_conflict_resolutions_path(&dir).unwrap());
+        assert_undetermined(
+            scan_merge_conflict_resolutions(&dir).unwrap(),
+            "unreadable merge_conflict_resolutions.jsonl",
+        );
+
+        restore_home(prev_home);
+    }
+
+    /// The OPEN blocked-merge join reads TWO ledgers that fail in OPPOSITE
+    /// directions, and `scan_open_merge_conflicts` must keep them apart:
+    ///
+    /// * entries undetermined → the whole answer is undetermined (reading it as
+    ///   "no merge is blocked" is the losing direction);
+    /// * resolutions undetermined → the entries are still returned (nothing is
+    ///   hidden) but the caller is TOLD, because the filter did not run.
+    ///
+    /// The clean and absent arms are the anti-vacuity controls: an
+    /// implementation that answered undetermined for everything would satisfy
+    /// the two failure arms while blinding the review surface.
+    #[test]
+    fn open_merge_conflict_scan_separates_the_two_ledgers_directions() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        // Absent: nothing was ever recorded — a real, trustworthy empty.
+        let dir = fresh_ledger_home("open-mc-absent");
+        let scan = scan_open_merge_conflicts(&dir).unwrap();
+        assert_known_len(scan.open, 0, "absent merge_conflicts.jsonl");
+        assert!(scan.resolutions_undetermined.is_none());
+
+        // Clean: one entry, no resolution → one OPEN conflict (control).
+        let dir = fresh_ledger_home("open-mc-clean");
+        append_merge_conflict(&dir, &merge_conflict_entry("c-1", 1)).unwrap();
+        let scan = scan_open_merge_conflicts(&dir).unwrap();
+        assert_known_len(scan.open, 1, "one unresolved conflict");
+        assert!(scan.resolutions_undetermined.is_none());
+
+        // Clean + resolved: the filter still works (control — the join must not
+        // become a no-op just because it grew a third answer).
+        append_merge_conflict_resolution(&dir, &merge_conflict_resolution("c-1", 2)).unwrap();
+        let scan = scan_open_merge_conflicts(&dir).unwrap();
+        assert_known_len(scan.open, 0, "the resolved conflict drops out");
+        assert!(scan.resolutions_undetermined.is_none());
+
+        // ENTRY ledger undetermined → the whole set is undetermined.
+        let dir = fresh_ledger_home("open-mc-entries-corrupt");
+        append_merge_conflict(&dir, &merge_conflict_entry("c-2", 1)).unwrap();
+        append_undecodable_line(&merge_conflicts_path(&dir).unwrap());
+        let scan = scan_open_merge_conflicts(&dir).unwrap();
+        assert_undetermined(scan.open, "merge_conflicts.jsonl with an undecodable line");
+
+        // RESOLUTION ledger undetermined → entries STILL returned, and said so.
+        let dir = fresh_ledger_home("open-mc-resolutions-corrupt");
+        append_merge_conflict(&dir, &merge_conflict_entry("c-3", 1)).unwrap();
+        write_unreadable(&merge_conflict_resolutions_path(&dir).unwrap());
+        let scan = scan_open_merge_conflicts(&dir).unwrap();
+        assert_known_len(
+            scan.open,
+            1,
+            "an unreadable RESOLUTION ledger must not hide the conflict — it \
+             over-reports, which is the conservative direction",
+        );
+        assert!(
+            scan.resolutions_undetermined.is_some(),
+            "the un-run filter must be reported, not passed off as a clean join"
+        );
+
+        restore_home(prev_home);
+    }
+
+    /// The full-history (hot + cold archive) view must be tri-state on BOTH
+    /// halves: the archive read was a bare `if let Ok(txt)` that dropped an
+    /// unreadable archive entirely, and its decode loop dropped bad lines.
+    #[test]
+    fn review_findings_all_scan_is_tri_state_over_hot_and_archive() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("findings-all-absent");
+        assert_known_len(
+            scan_review_findings_all(&dir).unwrap(),
+            0,
+            "absent hot store and archive",
+        );
+
+        let dir = fresh_ledger_home("findings-all-clean");
+        append_review_finding(&dir, &finding("a", 1)).unwrap();
+        let archive = review_findings_archive_path(&dir).unwrap();
+        std::fs::create_dir_all(archive.parent().unwrap()).unwrap();
+        std::fs::write(
+            &archive,
+            format!("{}\n", serde_json::to_string(&finding("b", 2)).unwrap()),
+        )
+        .unwrap();
+        assert_known_len(
+            scan_review_findings_all(&dir).unwrap(),
+            2,
+            "clean hot store plus archive",
+        );
+
+        // An undecodable ARCHIVE line makes the full history untrustworthy.
+        append_undecodable_line(&archive);
+        assert_undetermined(
+            scan_review_findings_all(&dir).unwrap(),
+            "archive with an undecodable line",
+        );
+
+        // So does an undecodable HOT line (the other half of the same join).
+        let dir = fresh_ledger_home("findings-all-hot-corrupt");
+        append_review_finding(&dir, &finding("a", 1)).unwrap();
+        append_undecodable_line(&review_findings_path(&dir).unwrap());
+        assert_undetermined(
+            scan_review_findings_all(&dir).unwrap(),
+            "hot store with an undecodable line",
+        );
+
+        // And an archive that exists but cannot be read at all.
+        let dir = fresh_ledger_home("findings-all-opaque");
+        append_review_finding(&dir, &finding("a", 1)).unwrap();
+        write_unreadable(&review_findings_archive_path(&dir).unwrap());
+        assert_undetermined(
+            scan_review_findings_all(&dir).unwrap(),
+            "unreadable archive",
+        );
+
+        restore_home(prev_home);
+    }
+
+    /// `load_active_changesets` feeds mid-flight overlap detection AND a
+    /// read-modify-write that saves the registry back. Folding an unreadable or
+    /// corrupt registry into an empty one therefore did two things at once:
+    /// reported "no in-flight work to conflict with", and then clobbered every
+    /// peer's changeset on the next save. Mirrors `load_leases`: only a
+    /// genuinely-absent file is an empty registry; anything else is `Err`.
+    #[test]
+    fn load_active_changesets_separates_absent_from_unreadable() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("changesets-absent");
+        assert!(
+            load_active_changesets(&dir).unwrap().is_empty(),
+            "an absent registry is a genuine cold start, not an error"
+        );
+
+        // ANTI-VACUITY: a readable registry still loads its entries.
+        let dir = fresh_ledger_home("changesets-clean");
+        record_changeset_and_detect(&dir, &changeset("runX/ta", &["a.rs"], now())).unwrap();
+        assert_eq!(
+            load_active_changesets(&dir).unwrap().len(),
+            1,
+            "a readable registry is a measurement and must load"
+        );
+
+        let dir = fresh_ledger_home("changesets-corrupt");
+        let path = active_changesets_path(&dir).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{not-valid-json").unwrap();
+        assert!(
+            load_active_changesets(&dir).is_err(),
+            "a corrupt registry must not load as an empty one — the RMW would clobber every peer"
+        );
+
+        let dir = fresh_ledger_home("changesets-opaque");
+        write_unreadable(&active_changesets_path(&dir).unwrap());
+        assert!(
+            load_active_changesets(&dir).is_err(),
+            "an unreadable registry must not load as an empty one"
+        );
+
+        restore_home(prev_home);
+    }
+
+    /// Compaction REWRITES the archive from what it decoded. Silently skipping
+    /// an undecodable archive line therefore deletes it from the cold store for
+    /// good — the same destructive shape as the already-fixed unreadable-archive
+    /// case (`compact_review_findings_aborts_on_unreadable_archive`), one mirror
+    /// over.
+    #[test]
+    // Same anti-vacuity caveat as `..._aborts_on_unreadable_archive` above: the
+    // control that refuses an always-aborting compaction is in another test.
+    fn compact_review_findings_aborts_on_undecodable_archive_line() {
+        let _guard = home_lock();
+        let prev_home = std::env::var_os("HOME");
+
+        let dir = fresh_ledger_home("compact-undecodable-archive");
+        append_review_finding(&dir, &finding("r1", 1)).unwrap();
+        append_bridged_finding(&dir, "r1").unwrap();
+
+        let archive_path = review_findings_archive_path(&dir).unwrap();
+        std::fs::create_dir_all(archive_path.parent().unwrap()).unwrap();
+        let archive_before = format!(
+            "{}\nnot-valid-json-schema-drift\n",
+            serde_json::to_string(&finding("old", 0)).unwrap()
+        );
+        std::fs::write(&archive_path, &archive_before).unwrap();
+
+        assert!(
+            compact_review_findings(&dir).is_err(),
+            "compaction must abort when an existing archive line cannot be decoded, \
+             rather than rewrite the archive without it"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&archive_path).unwrap(),
+            archive_before,
+            "the archive must survive untouched"
+        );
+
+        restore_home(prev_home);
     }
 }

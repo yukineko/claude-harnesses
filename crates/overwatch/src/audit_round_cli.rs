@@ -476,7 +476,10 @@ mod tests {
         use harness_core::verdict::Determination;
         use std::os::unix::fs::PermissionsExt;
 
-        let _guard = store::HOME_ENV_LOCK.lock().unwrap();
+        // Poison-recovering; see `store::home_lock`.
+        let _guard = store::HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-audit-unreadable-{}-{}",
@@ -541,7 +544,10 @@ mod tests {
 
     #[test]
     fn concurrent_record_append_survives_audit_round_close_rewrite() {
-        let _guard = store::HOME_ENV_LOCK.lock().unwrap();
+        // Poison-recovering; see `store::home_lock`.
+        let _guard = store::HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-audit-close-race-{}-{}",

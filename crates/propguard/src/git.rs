@@ -28,17 +28,40 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Run `git <args>` in `root` with a bounded wait. Returns `None` on spawn
 /// failure, non-zero exit, timeout, **or a stdout that could not be read**
 /// (the pipe erroring, or still being held open by a lingering descendant
-/// when the read budget expires) — matching this module's existing
-/// "fail gracefully / treat as git-unavailable" convention (callers already
-/// tolerate `None`/empty output for those cases). The bound, the
-/// process-group kill on timeout (so no orphaned `git` process — or, if
-/// `git` were ever shell-wrapped, none of its descendants either — is left
-/// behind), and the bounded stdout read all now live in
-/// `boundary::run_with_timeout` (CA-propguard-004/005 moved there; see
-/// `harness_core::boundary` for the shared implementation and its own
-/// tests). The unreadable-stdout case reaching `None` is not incidental: it
-/// is what keeps "git printed nothing" distinguishable from "git's output
-/// never arrived" here — see `ChangeScan`.
+/// when the read budget expires). The bound, the process-group kill on
+/// timeout (so no orphaned `git` process — or, if `git` were ever
+/// shell-wrapped, none of its descendants either — is left behind), and the
+/// bounded stdout read all live in `boundary::run_with_timeout`
+/// (CA-propguard-004/005 moved there; see `harness_core::boundary` for the
+/// shared implementation and its own tests).
+///
+/// **`None` erases why the command produced no text, and only one of this
+/// module's callers recovers it.** An earlier revision of this comment called
+/// the erasure benign — "matching this module's existing fail gracefully /
+/// treat as git-unavailable convention (callers already tolerate `None`/empty
+/// output for those cases)". That parenthetical is false on the decision path,
+/// and was measured to be false against the real `git`:
+///
+/// * [`changed_files`] is the caller that was hardened, and it does recover.
+///   [`collect`] maps `None` to `false`, [`scan_changed`] maps that to
+///   [`ChangeScan::Failed`], and the gate resolves `Failed` to a block. An
+///   unread changed-set can no longer read as a clean tree.
+/// * [`run_diff`] (the `diff` and `diff --cached` reads) and the untracked
+///   `ls-files` read inside [`diff_text`] both still drop `None` on the floor
+///   via `if let Some(text)`. A `git diff` that could not be read contributes
+///   nothing to the diff string and leaves no trace of having failed. A
+///   tracked file whose working-tree content is not valid UTF-8 produces
+///   exactly that shape: `changed_files` answers `Files(["bad.rs"])` while
+///   `diff_text` answers `text: ""` with `truncated: false`, and `gate.rs`'s
+///   `if diff.trim().is_empty() { return allow("empty-diff", st) }` ALLOWS.
+///   The control with valid UTF-8 in the same file gives a 131-byte diff and
+///   a BLOCK.
+///
+/// Those two are known-open and deliberately NOT fixed here — they are queued
+/// as backlog `87dbfbb8` (the empty-diff allow) and backlog `d8e22b26` (a
+/// diff missing a failed read still reporting `truncated: false`). This
+/// comment records the limitation rather than implying `run_git`'s callers are
+/// uniformly covered.
 fn run_git(root: &Path, args: &[&str]) -> Option<String> {
     run_git_bin(Path::new(GIT), root, args)
 }

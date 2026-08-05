@@ -127,9 +127,27 @@ impl CommandOutput {
         self.code
     }
 
-    /// Whatever the process wrote to stderr. Safe to expose unconditionally
-    /// because it is diagnostic text, not a checker's answer — nobody derives a
-    /// verdict from it.
+    /// Whatever the process wrote to stderr.
+    ///
+    /// Exposed unconditionally, unlike `stdout`, because no caller derives a
+    /// verdict from its *contents*: it is diagnostic text. That is the whole
+    /// of the claim, and it is narrower than it reads. Since harness-core
+    /// 0.2.3 the *unreadability* of stderr decides the entire call on its own
+    /// — [`run_with_timeout`] gives both pipes the same weight, so a stderr
+    /// that errors or whose bounded read never reaches EOF returns
+    /// `Undetermined` even when stdout arrived intact and the exit code is in
+    /// hand. stderr does not produce a verdict; failing to read it withholds
+    /// one.
+    ///
+    /// That reaches callers who asked not to have stderr at all.
+    /// `propguard::git::run_git_bin` sets `.stderr(Stdio::null())`, and
+    /// [`run_with_timeout_and_stdin`] overrides it unconditionally with
+    /// `cmd.stdout(Stdio::piped()).stderr(Stdio::piped())`, so a `git` writing
+    /// non-UTF-8 to stderr makes propguard's changed-file scan `Failed` and
+    /// blocks its gate — over a stream propguard explicitly discarded. The
+    /// direction is the required one (CLAUDE.md §3: cannot-determine resolves
+    /// to the restricted side), and this paragraph exists so the prose stops
+    /// calling stderr inert when it is not.
     pub fn stderr(&self) -> &str {
         &self.stderr
     }
@@ -888,6 +906,116 @@ mod tests {
             "",
             "a silent child is Known(\"\") — the fix must not turn every empty stdout into a \
              give-up"
+        );
+    }
+
+    // ---- run_with_timeout: stderr carries the same weight -------------------
+    //
+    // The stderr half of the block above, and it is here because that half had
+    // a measured kill rate of ZERO. Reverting *only* the stderr arm of
+    // `run_with_timeout_and_stdin` to the pre-0.2.3 fail-open
+    // (`Determination::Undetermined(_) => String::new()`) left harness-core at
+    // 261 passed / 0 failed and propguard at 66 + 4 + 11 passed / 0 failed:
+    // both fault tests above inject on stdout only, so nothing anywhere
+    // defended the behaviour the docs on `run_with_timeout` commit to. These
+    // three mirror the stdout shape — two faults (the read erroring, and the
+    // bounded join expiring) plus the anti-vacuity partners that stop
+    // "Undetermined for everything" from satisfying them.
+
+    /// A child that exits 0 after writing non-UTF-8 bytes to STDERR, with a
+    /// perfectly readable (empty) stdout. Everything about the process's own
+    /// status is in hand, which is exactly what would make a `Known` here look
+    /// trustworthy — and its `stderr` field would be `""`, an observation the
+    /// call never made.
+    #[test]
+    fn run_with_timeout_unreadable_stderr_bytes_are_undetermined_not_empty() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("printf '\\377\\376' >&2; exit 0");
+        let why = expect_undetermined(run_with_timeout(&mut cmd, Duration::from_secs(5)));
+        assert!(
+            why.contains("stderr"),
+            "the reason must name which stream could not be read, and it must be stderr — \
+             stdout was read fine here: {why}"
+        );
+        assert!(
+            why.contains("exited 0"),
+            "the reason must say the process itself DID exit (0) — that is exactly what makes \
+             an empty stderr look trustworthy: {why}"
+        );
+    }
+
+    /// The second fault route, and it is a genuinely distinct arm: the bounded
+    /// join expiring (`recv_timeout` erroring) rather than the read itself
+    /// erroring. The backgrounded descendant's stdout is redirected to
+    /// `/dev/null` on purpose — without that it would hold the stdout pipe
+    /// open too, the stdout read would expire first, and this test would pass
+    /// on the stdout arm while proving nothing about stderr.
+    #[cfg(unix)]
+    #[test]
+    fn run_with_timeout_stderr_pipe_held_open_after_clean_exit_is_undetermined_not_empty() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("printf 'real output\n'; printf 'warn\n' >&2; (sleep 9 >/dev/null &); exit 0");
+
+        // Same reasoning as the stdout twin: not a 100ms-scale budget, because
+        // the same value bounds the `wait_timeout` on the child and a too-tight
+        // one makes THAT fire first — also `Undetermined`, so the test would
+        // pass for the wrong reason. The `stderr` assertion is the second guard
+        // against that: the process-level timeout message names no stream.
+        let budget = Duration::from_millis(1500);
+        let start = std::time::Instant::now();
+        let outcome = run_with_timeout(&mut cmd, budget);
+        let elapsed = start.elapsed();
+
+        let why = expect_undetermined(outcome);
+        assert!(
+            why.contains("stderr"),
+            "the reason must name stderr (and NOT be the process-level timeout, which names no \
+             stream, nor the stdout read, which reached EOF): {why}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(9),
+            "the stderr read must stay bounded by `timeout` rather than waiting out the \
+             descendant holding the pipe, took {elapsed:?}"
+        );
+    }
+
+    /// ANTI-VACUITY CONTROL for the two above: a child whose stderr really is
+    /// readable must still be `Known`, and must still carry the actual text.
+    /// Without this, an implementation that answers `Undetermined` for every
+    /// stderr satisfies both fault tests.
+    #[test]
+    fn run_with_timeout_readable_stderr_is_known_and_complete() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("printf 'to stdout\n'; printf 'diagnostic line\n' >&2; exit 0");
+        let out = expect_known(run_with_timeout(&mut cmd, Duration::from_secs(5)));
+        assert_eq!(out.code(), 0);
+        assert_eq!(
+            out.stderr(),
+            "diagnostic line\n",
+            "a readable stderr must arrive intact and complete"
+        );
+        assert_eq!(
+            expect_known(out.stdout_on_success()),
+            "to stdout\n",
+            "and the stderr handling must not disturb stdout"
+        );
+    }
+
+    /// The other half of the control: a child that genuinely writes nothing to
+    /// stderr is `Known("")`. Empty stderr is a real observation; only an
+    /// unread one is undetermined.
+    #[test]
+    fn run_with_timeout_genuinely_empty_stderr_is_known_empty() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("printf 'only stdout\n'; exit 0");
+        let out = expect_known(run_with_timeout(&mut cmd, Duration::from_secs(5)));
+        assert_eq!(
+            out.stderr(),
+            "",
+            "a child with nothing to say on stderr is Known(\"\") — the fix must not turn every \
+             empty stderr into a give-up"
         );
     }
 

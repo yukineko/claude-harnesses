@@ -536,10 +536,44 @@ pub fn save_decomposition(cfg: &Config, cwd: &Path, run_id: &str, json: &str) ->
 }
 
 /// Load the raw decomposition JSON for an existing run. Fails if not found.
+///
+/// Two-state on purpose, and therefore **not suitable for a caller that renders
+/// a verdict**: the `Err` merges "no such run" with "the file is there but
+/// could not be read". Every caller that only displays or aggregates is fine
+/// with that. A caller whose output is consumed as a judgment must use
+/// [`load_decomposition_determined`] instead, which keeps the two apart.
 pub fn load_decomposition(cfg: &Config, cwd: &Path, run_id: &str) -> Result<String> {
     let path = decomposition_path(cfg, cwd, run_id);
     std::fs::read_to_string(&path)
         .with_context(|| format!("no decomposition for run '{run_id}' at {}", path.display()))
+}
+
+/// The decomposition JSON for `run_id` as a tri-state: `Known(Some(json))` when
+/// it was read, `Known(None)` when there genuinely is no such decomposition
+/// (ENOENT — a real observation of absence), and `Undetermined(why)` when
+/// something exists but could not be read (permissions, an I/O fault, non-UTF-8
+/// contents).
+///
+/// [`load_decomposition`]'s plain `Result` cannot express the middle answer: by
+/// the time an `Err` reaches a caller, ENOENT and a read failure are the same
+/// value. That is harmless for a caller that prints, and wrong for a caller
+/// that decides — `gate_exec` reported an unreadable decomposition exactly like
+/// an absent one, so an operator could not tell an unexamined gate from an
+/// empty one (backlog `6d451627`).
+///
+/// Deliberately added ALONGSIDE `load_decomposition` rather than replacing it:
+/// a census on 2026-08-06 at `f08fa5f0`
+/// (`grep -rn 'load_decomposition' --include=*.rs crates/`) found 17 call sites
+/// outside the definition, of which exactly one — `gate_exec` — renders a
+/// verdict. Converting all 17 would churn 16 display/aggregate sites for no
+/// change in what they can express. Move a site here when, and only when, its
+/// output starts feeding a judgment.
+pub fn load_decomposition_determined(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+) -> Determination<Option<String>> {
+    harness_core::boundary::read_to_string(&decomposition_path(cfg, cwd, run_id))
 }
 
 // ── Replan decision log ─────────────────────────────────────────────────────

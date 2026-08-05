@@ -5,9 +5,10 @@
 //! does NOT mean "git unavailable": an unreachable git over a real repo is
 //! `Failed`, not `NotRepo`, via `harness_core::git_probe`. (The caller then has no
 //! generated code to check and allows the stop), `Failed` means a git command
-//! errored inside a real repo (the changeset is UNDETERMINED — the gate fails
+//! errored inside a real repo — including one that exited 0 but whose stdout
+//! could not be read — (the changeset is UNDETERMINED — the gate fails
 //! closed / blocks rather than treat it as clean), and `Files(v)` is the
-//! (possibly-empty) changed set.
+//! (possibly-empty) changed set that was actually read.
 
 use harness_core::boundary;
 use harness_core::git_probe::{probe_repo, RepoProbe};
@@ -25,7 +26,9 @@ use std::time::Duration;
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Run `git <args>` in `root` with a bounded wait. Returns `None` on spawn
-/// failure, non-zero exit, or timeout — matching this module's existing
+/// failure, non-zero exit, timeout, **or a stdout that could not be read**
+/// (the pipe erroring, or still being held open by a lingering descendant
+/// when the read budget expires) — matching this module's existing
 /// "fail gracefully / treat as git-unavailable" convention (callers already
 /// tolerate `None`/empty output for those cases). The bound, the
 /// process-group kill on timeout (so no orphaned `git` process — or, if
@@ -33,9 +36,27 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// behind), and the bounded stdout read all now live in
 /// `boundary::run_with_timeout` (CA-propguard-004/005 moved there; see
 /// `harness_core::boundary` for the shared implementation and its own
-/// tests).
+/// tests). The unreadable-stdout case reaching `None` is not incidental: it
+/// is what keeps "git printed nothing" distinguishable from "git's output
+/// never arrived" here — see `ChangeScan`.
 fn run_git(root: &Path, args: &[&str]) -> Option<String> {
-    let mut cmd = Command::new("git");
+    run_git_bin(Path::new(GIT), root, args)
+}
+
+/// The program `run_git` invokes in production. Named so the seam below reads
+/// as "the git binary", rather than a bare string literal repeated twice.
+const GIT: &str = "git";
+
+/// [`run_git`] with the invoked binary supplied by the caller.
+///
+/// The extra parameter exists for one reason: to make a subprocess failure
+/// mode *injectable* from a test. There is no way to make the real `git` exit
+/// 0 while its stdout cannot be read, so the regression coverage for exactly
+/// that shape (a child whose status is observable and whose output is not)
+/// hands in a stand-in binary here. Production has one call site and it
+/// passes [`GIT`].
+fn run_git_bin(git: &Path, root: &Path, args: &[&str]) -> Option<String> {
+    let mut cmd = Command::new(git);
     cmd.current_dir(root)
         .args(args)
         .stdin(Stdio::null())
@@ -55,9 +76,19 @@ fn run_git(root: &Path, args: &[&str]) -> Option<String> {
 /// scope" (`NotRepo` → allow) from "a git command errored" (`Failed` →
 /// undetermined → the gate fails closed / blocks), so a collapsed-empty scan
 /// can never read as "nothing changed → allow". `Files(v)` is a success; an
-/// EMPTY `Files` (a clean repo: `git diff` exits 0 with no output) is a genuine
-/// no-changes → allow, NOT `Failed`. Note: `run_git` maps a *timeout* to the
-/// same failure signal, so a hung git also fails the gate closed (bounded &
+/// EMPTY `Files` is a genuine no-changes → allow, NOT `Failed`.
+///
+/// That last sentence is only true because of what an empty `Files` now
+/// *requires*: every sub-command spawned, exited 0, **and its stdout was read
+/// through to EOF**. Until harness-core 0.2.3 the third clause was missing —
+/// `boundary`'s bounded pipe read discarded a read error and folded a
+/// read-budget expiry into an empty string, so a `git` that exited 0 while its
+/// output never arrived produced `Files(vec![])`, i.e. the *identical* value a
+/// clean repo produces. "I read the changed set and it was empty" and "I never
+/// got the changed set" were the same bytes here. The boundary now answers
+/// `Undetermined` for both of those, `run_git` maps that to `None`, and
+/// `collect` maps `None` to `Failed`. A *timeout* on the process itself takes
+/// the same route, so a hung git also fails the gate closed (bounded &
 /// escapable in `gate.rs`), never silently allows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChangeScan {
@@ -69,9 +100,15 @@ pub enum ChangeScan {
 /// Changed paths relative to the repo root: tracked changes vs HEAD, staged
 /// changes, and untracked-but-not-ignored files. Returns `NotRepo` when there
 /// is no git repo, `Failed` when any sub-command errored (spawn failure /
-/// non-zero exit / timeout) inside a real repo, or `Files(v)` on success
-/// (possibly empty).
+/// non-zero exit / timeout / unreadable stdout) inside a real repo, or
+/// `Files(v)` on success (possibly empty).
 pub fn changed_files(root: &Path) -> ChangeScan {
+    scan_changed(root, Path::new(GIT))
+}
+
+/// [`changed_files`] with the invoked git binary injectable — the same seam,
+/// and for the same reason, as [`run_git_bin`].
+fn scan_changed(root: &Path, git: &Path) -> ChangeScan {
     match probe_repo(root) {
         RepoProbe::Repo => {}
         // Genuinely out of scope: git said so, or git could not answer and no
@@ -83,11 +120,13 @@ pub fn changed_files(root: &Path) -> ChangeScan {
     }
     let mut out = Vec::new();
     // If ANY sub-command errors, the changed set is undetermined → fail closed.
-    // A clean repo's commands all exit 0 with empty stdout → Files(vec![]).
-    let ok = collect(root, &["diff", "--name-only"], &mut out)
-        && collect(root, &["diff", "--cached", "--name-only"], &mut out)
+    // A clean repo's commands all exit 0 with empty stdout *that was actually
+    // read to EOF* → Files(vec![]); an output that never arrived is not that.
+    let ok = collect(root, git, &["diff", "--name-only"], &mut out)
+        && collect(root, git, &["diff", "--cached", "--name-only"], &mut out)
         && collect(
             root,
+            git,
             &["ls-files", "--others", "--exclude-standard"],
             &mut out,
         );
@@ -100,12 +139,14 @@ pub fn changed_files(root: &Path) -> ChangeScan {
 }
 
 /// Run one `git` sub-command, appending its trimmed non-empty stdout lines to
-/// `out`. Returns `true` on success, `false` when `run_git` reported failure
-/// (spawn error / non-zero exit / timeout) — the caller maps `false` to
-/// `ChangeScan::Failed`. A successful command with EMPTY stdout still returns
-/// `true` (clean ≠ failed).
-fn collect(root: &Path, args: &[&str], out: &mut Vec<String>) -> bool {
-    match run_git(root, args) {
+/// `out`. Returns `true` on success, `false` when `run_git_bin` reported
+/// failure (spawn error / non-zero exit / timeout / stdout that could not be
+/// read) — the caller maps `false` to `ChangeScan::Failed`. A successful
+/// command whose stdout was read to EOF and was EMPTY still returns `true`
+/// (clean ≠ failed); an empty *because unread* stdout does not reach this
+/// arm at all, it arrives as `None`.
+fn collect(root: &Path, git: &Path, args: &[&str], out: &mut Vec<String>) -> bool {
+    match run_git_bin(git, root, args) {
         Some(text) => {
             for line in text.lines() {
                 let line = line.trim();
@@ -445,14 +486,149 @@ mod tests {
 
         let mut out = Vec::new();
         assert!(
-            collect(root, &["diff", "--name-only"], &mut out),
+            collect(root, Path::new(GIT), &["diff", "--name-only"], &mut out),
             "an empty-but-successful git command must report true (not Failed)"
         );
         assert!(out.is_empty());
         assert!(
-            !collect(root, &["diff", "--no-such-flag-xyzzy"], &mut out),
+            !collect(
+                root,
+                Path::new(GIT),
+                &["diff", "--no-such-flag-xyzzy"],
+                &mut out
+            ),
             "a non-zero git exit must report false so the scan fails closed"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    // ── exit 0 with an UNREADABLE stdout must not read as a clean repo ─────
+    //
+    // The shape these three tests pin down is one the real `git` cannot be
+    // made to produce, which is why the binary is injected: a child whose
+    // exit *status* is observable (0) while its *output* is not. Before the
+    // harness-core 0.2.3 boundary fix that answer collapsed to an empty
+    // stdout, so `changed_files` returned `Files(vec![])` — byte-identical to
+    // the answer a genuinely clean repo gives, and read downstream as
+    // "nothing changed → allow".
+    //
+    // The injected fault here is a stdout the read itself *rejects* (bytes
+    // that are not valid UTF-8), chosen because it is deterministic: the
+    // child exits at once and the pipe reaches EOF at once, so the outcome
+    // cannot drift with machine load. The other route to an unreadable pipe —
+    // a read that never reaches EOF inside the budget — funnels into the very
+    // same `Determination::Undetermined` one layer down, and is covered where
+    // it can be driven without a wall-clock race, in harness-core's
+    // `boundary::tests::run_with_timeout_pipe_held_open_after_clean_exit_is_
+    // undetermined_not_empty`. What is asserted HERE is propguard's mapping:
+    // an undetermined stdout must reach `ChangeScan::Failed`.
+    //
+    // They are written as a set on purpose. `..._is_failed_not_empty_files`
+    // alone would still pass if every scan through this seam failed, so the
+    // other two are its anti-vacuity partners: the SAME stand-in binary,
+    // differing only in whether stdout is readable, must still produce
+    // `Files(["src/lib.rs"])` and `Files(vec![])` respectively.
+
+    /// A real git repo (so `probe_repo` answers `Repo`), with no commits —
+    /// the change-scan sub-commands are served by the injected binary, not by
+    /// this repo's contents.
+    #[cfg(unix)]
+    fn init_repo() -> std::path::PathBuf {
+        let root = scratch_dir();
+        assert!(Command::new("git")
+            .current_dir(&root)
+            .args(["init", "-q"])
+            .status()
+            .expect("git init")
+            .success());
+        root
+    }
+
+    /// Write an executable stand-in for the `git` binary whose body is `body`,
+    /// and hand back its path.
+    #[cfg(unix)]
+    fn fake_git(dir: &Path, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join("fake-git");
+        std::fs::write(&p, format!("#!/bin/sh\n{body}")).expect("write fake git");
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        p
+    }
+
+    /// THE claim: a `git` that exits 0 while its stdout cannot be read is a
+    /// changeset this gate did NOT observe. It must be `Failed`, and
+    /// specifically must not be the `Files(vec![])` that
+    /// `git_with_readable_but_empty_stdout_is_still_empty_files` shows a clean
+    /// repo produces.
+    #[cfg(unix)]
+    #[test]
+    fn git_that_exits_zero_with_unreadable_stdout_is_failed_not_empty_files() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = init_repo();
+        let bin = scratch_dir();
+        // Exits 0 having written two bytes that are not valid UTF-8, so the
+        // pipe read fails. Pre-fix this scan returned `Files(vec![])` — the
+        // written bytes were dropped on the floor and the caller was told the
+        // repo was clean.
+        let git = fake_git(&bin, "printf '\\377\\376'\nexit 0\n");
+
+        assert_eq!(
+            scan_changed(&root, &git),
+            ChangeScan::Failed,
+            "a git that exited 0 but whose stdout could not be read is an UNOBSERVED changeset; \
+             answering Files(..) here makes it indistinguishable from a clean repo"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&bin);
+    }
+
+    /// Anti-vacuity partner #1: the same injected-binary seam, same exit 0,
+    /// readable stdout — the printed path must still arrive as `Files`.
+    #[cfg(unix)]
+    #[test]
+    fn git_with_readable_stdout_still_yields_the_files_it_printed() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = init_repo();
+        let bin = scratch_dir();
+        let git = fake_git(&bin, "printf 'src/lib.rs\\n'\nexit 0\n");
+
+        assert_eq!(
+            scan_changed(&root, &git),
+            ChangeScan::Files(vec!["src/lib.rs".to_string()]),
+            "a readable stdout must still be parsed into the changed set — otherwise the \
+             sibling test above would pass merely by everything failing"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&bin);
+    }
+
+    /// Anti-vacuity partner #2, and the exact contrast the fix turns on: empty
+    /// stdout that WAS read is still a successful empty scan. `Failed` is
+    /// reserved for output that could not be read, not for output that was
+    /// legitimately empty.
+    #[cfg(unix)]
+    #[test]
+    fn git_with_readable_but_empty_stdout_is_still_empty_files() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = init_repo();
+        let bin = scratch_dir();
+        let git = fake_git(&bin, "exit 0\n");
+
+        assert_eq!(
+            scan_changed(&root, &git),
+            ChangeScan::Files(Vec::new()),
+            "an empty stdout that was actually read is a clean scan, not a failure"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&bin);
     }
 }

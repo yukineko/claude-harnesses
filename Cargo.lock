@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -935,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "chrono",

@@ -19,6 +19,7 @@ use crate::config::Config;
 use crate::state;
 use blastguard::classify::{classify_change, Risk, RiskAssessment};
 use blastguard::diffrisk::SensitiveConfig;
+use harness_core::verdict::{Determination, Required};
 use std::path::Path;
 
 /// The two-state verdict emitted by [`decide_gate_exec`]: run the gated task
@@ -59,29 +60,62 @@ fn risk_slug(risk: Risk) -> &'static str {
     }
 }
 
-/// Gather the `{risk, reversible}` signals for one gated task, FAIL-CLOSED: an
-/// unloadable run, a missing/corrupt decomposition, a task id that isn't in the
-/// decomposition, **or a risk classification that could not be determined**
-/// yields `None` — which the caller degrades to [`GateExec::Escalate`], the
-/// restricted side. Never panics. Classifies the SAME action text the schedule
-/// force-gate does via [`crate::schedule::task_action_text`] — no duplicated
-/// join logic.
+/// The three answers [`gather_assessment`] can give, kept distinct rather than
+/// flattened to `Option<RiskAssessment>`: `Missing` (no assessment was
+/// produced) and `Undetermined` ("the classification was attempted and could
+/// not be measured", carrying why) used to erase to the same `None`. Both
+/// still degrade to [`GateExec::Escalate`] in [`run_gate_check`] — the
+/// restricted side, unchanged — but only `Undetermined` carries a reason,
+/// which `run_gate_check` now surfaces instead of dropping.
 ///
-/// The `None`-on-undetermined arm matters: [`classify_change`] returns a
+/// KNOWN GAP — the split is complete for *classification*, not for *loading*.
+/// `Missing` still merges two different answers: "there is genuinely nothing
+/// to assess" (no such run/task) and "there is something, but it could not be
+/// read" (an IO error, or a decomposition that does not parse). The merge is
+/// upstream of this type: [`state::load_decomposition`] returns a plain
+/// `Result` over `std::fs::read_to_string`, so ENOENT and a read failure are
+/// indistinguishable by the time they arrive here. Not a fail-open — every
+/// one of those paths escalates — but a load failure is reported with a `null`
+/// `undetermined_reason` and `risk=unknown reversible=unknown`, i.e. as if
+/// nothing needed assessing. Tracked as backlog `6d451627`; fixing it means
+/// making the *loader* tri-state, not adding a fourth variant here.
+enum GatherOutcome {
+    /// A risk was measured.
+    Assessed(RiskAssessment),
+    /// No assessment was produced: no such run/decomposition/task, or a
+    /// decomposition that could not be read or parsed. See the KNOWN GAP on
+    /// [`GatherOutcome`] — these two are not yet distinguishable.
+    Missing,
+    /// The classification could not be determined; carries why.
+    Undetermined(String),
+}
+
+/// Gather the `{risk, reversible}` signals for one gated task, FAIL-CLOSED: an
+/// unloadable run, a missing/corrupt decomposition, or a task id that isn't in
+/// the decomposition yields [`GatherOutcome::Missing`] (see the KNOWN GAP on
+/// [`GatherOutcome`]: those are not distinguished from each other); **a risk
+/// classification that could not be determined** yields
+/// [`GatherOutcome::Undetermined`] with the reason. Both degrade to
+/// [`GateExec::Escalate`] in the caller — the restricted side. Never panics.
+/// Classifies the SAME action text the schedule force-gate does via
+/// [`crate::schedule::task_action_text`] — no duplicated join logic.
+///
+/// The `Undetermined` arm matters: [`classify_change`] returns a
 /// [`Determination`] because its sensitive-path signal can fail to compile
 /// (a bad configured glob). Reading that as a permissive Low/reversible
 /// assessment would auto-exec a task whose risk was never actually measured, so
 /// the undetermined arm joins the existing missing-signal path to Escalate
 /// rather than producing an assessment.
-fn gather_assessment(
-    cfg: &Config,
-    cwd: &Path,
-    run_id: &str,
-    task_id: &str,
-) -> Option<RiskAssessment> {
-    let raw = state::load_decomposition(cfg, cwd, run_id).ok()?;
-    let dec = serde_json::from_str::<crate::model::Decomposition>(&raw).ok()?;
-    let task = dec.tasks.iter().find(|t| t.id == task_id)?;
+fn gather_assessment(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> GatherOutcome {
+    let Ok(raw) = state::load_decomposition(cfg, cwd, run_id) else {
+        return GatherOutcome::Missing;
+    };
+    let Ok(dec) = serde_json::from_str::<crate::model::Decomposition>(&raw) else {
+        return GatherOutcome::Missing;
+    };
+    let Some(task) = dec.tasks.iter().find(|t| t.id == task_id) else {
+        return GatherOutcome::Missing;
+    };
     // BOUNDED SCOPE: at gate-check time there is no diff yet (the task hasn't
     // executed), so we only wire the sensitive-path glob signal (which needs
     // only `paths`) via `classify_change`. The public-symbol-diff signal
@@ -89,29 +123,85 @@ fn gather_assessment(
     // matching classify_change's documented additive/backward-compatible
     // behavior. `touched_files` is condukt's own task field, so this is free.
     let sensitive = SensitiveConfig::default();
-    resolve_assessment(classify_change(
+    match resolve_assessment(classify_change(
         &crate::schedule::task_action_text(task),
         &task.touched_files,
         "",
         &sensitive,
-    ))
+    )) {
+        Resolved::Assessed(a) => GatherOutcome::Assessed(a),
+        Resolved::Undetermined(reason) => GatherOutcome::Undetermined(reason),
+    }
 }
 
-/// Resolve a risk classification into the `Option<RiskAssessment>` the gate
-/// consumes: `Known(a)` → `Some(a)`, `Undetermined` → **`None`**, which
-/// [`run_gate_check`] degrades to [`GateExec::Escalate`].
+/// What [`resolve_assessment`] answers: a measured [`RiskAssessment`], or the
+/// reason a classification could not be determined. Deliberately its own
+/// two-arm type rather than `Result<RiskAssessment, String>`: `Result` would
+/// hand a later reader `.ok()` — the exact erasure this fix removes from
+/// [`resolve_assessment`] itself — so a `Resolved` cannot be flattened back to
+/// `Option` by a one-line follow-up edit; a caller must match both arms again.
+enum Resolved {
+    /// The check ran and produced a measured value.
+    Assessed(RiskAssessment),
+    /// The check could not be run to a conclusion; carries why.
+    Undetermined(String),
+}
+
+/// Resolve a risk classification's [`Determination`] into [`Resolved`]:
+/// `Known(a)` → `Resolved::Assessed(a)`, `Undetermined(why)` →
+/// `Resolved::Undetermined(why)` (the reason kept, not dropped), which
+/// [`gather_assessment`]/[`run_gate_check`] degrade to [`GateExec::Escalate`]
+/// — unchanged from before this fix.
 ///
 /// Extracted as a pure function so this FAIL-CLOSED arm is directly testable:
 /// [`gather_assessment`] builds its own `SensitiveConfig::default()`, which
 /// always compiles, so the undetermined branch cannot be reached by feeding
 /// `gather_assessment` a decomposition — only by a misconfigured glob list.
-/// `require()` is `Determination`'s only extractor; there is deliberately no
-/// `unwrap_or`-style path that could substitute a permissive Low/reversible
-/// assessment for a risk that was never measured.
-fn resolve_assessment(
-    d: harness_core::verdict::Determination<RiskAssessment>,
-) -> Option<RiskAssessment> {
-    d.require().ok()
+/// `require()` is `Determination`'s only extractor, returning
+/// [`Required`] (not `std::Result`, which would reintroduce `.ok()` /
+/// `unwrap_or*`); both `Required` arms are matched explicitly here, so there
+/// is genuinely no `unwrap_or`-style path that could substitute a permissive
+/// Low/reversible assessment for a risk that was never measured — the
+/// docstring now matches what this function actually does, no `.ok()`
+/// anywhere in the chain.
+fn resolve_assessment(d: Determination<RiskAssessment>) -> Resolved {
+    match d.require() {
+        Required::Determined(a) => Resolved::Assessed(a),
+        Required::Blocked(verdict) => {
+            let reason = verdict
+                .reason()
+                .map(|r| r.as_str().to_string())
+                .unwrap_or_else(|| "risk classification could not be determined".to_string());
+            Resolved::Undetermined(reason)
+        }
+    }
+}
+
+/// Decide the [`GateExec`] verdict for one gathered outcome, plus the signals
+/// to surface: `(risk, reversible)` when an assessment was measured (`None`
+/// otherwise), and the classification's reason when — and only when — it
+/// could not be determined. Pure and deterministic: the same `outcome` and
+/// `policy_is_auto` always yield the same tuple.
+///
+/// Fail-closed: both "nothing to assess" ([`GatherOutcome::Missing`]) and
+/// "could not be determined" ([`GatherOutcome::Undetermined`]) degrade to
+/// [`GateExec::Escalate`] — the restricted side, unchanged by this fix. Only
+/// `Undetermined` carries a reason, which the old `.ok()`-based
+/// `resolve_assessment` used to drop on the floor by flattening it into the
+/// same `None` as `Missing`; this keeps it instead of erasing it.
+fn decide_from_outcome(
+    outcome: &GatherOutcome,
+    policy_is_auto: bool,
+) -> (GateExec, Option<&RiskAssessment>, Option<&str>) {
+    match outcome {
+        GatherOutcome::Assessed(a) => (
+            decide_gate_exec(a.risk, a.reversible, policy_is_auto),
+            Some(a),
+            None,
+        ),
+        GatherOutcome::Missing => (GateExec::Escalate, None, None),
+        GatherOutcome::Undetermined(reason) => (GateExec::Escalate, None, Some(reason.as_str())),
+    }
 }
 
 /// Handler for `condukt gate check --run RID --task TASKID`. Gathers the
@@ -127,28 +217,28 @@ fn resolve_assessment(
 /// stop so a caller can `if ! condukt gate check --run RID --task T; then
 /// escalate; fi`.
 pub fn run_gate_check(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> i32 {
-    let assessment = gather_assessment(cfg, cwd, run_id, task_id);
+    let outcome = gather_assessment(cfg, cwd, run_id, task_id);
     let policy_is_auto = crate::policy_is_autonomous(cfg);
 
-    // Fail-soft: a missing signal (assessment None) degrades to Escalate.
-    let verdict = match &assessment {
-        Some(a) => decide_gate_exec(a.risk, a.reversible, policy_is_auto),
-        None => GateExec::Escalate,
-    };
+    let (verdict, assessment, undetermined_reason) = decide_from_outcome(&outcome, policy_is_auto);
     let verdict_str = match verdict {
         GateExec::AutoExec => "auto_exec",
         GateExec::Escalate => "escalate",
     };
-    let risk = assessment.as_ref().map(|a| risk_slug(a.risk).to_string());
-    let reversible = assessment.as_ref().map(|a| a.reversible);
+    let risk = assessment.map(|a| risk_slug(a.risk).to_string());
+    let reversible = assessment.map(|a| a.reversible);
 
     // Observable stdout JSON (verdict + every gathered signal + the task id).
+    // `undetermined_reason` is `null` unless the classification itself could
+    // not be determined, in which case it carries the `Verdict::Undetermined`
+    // reason that used to be silently dropped by `.ok()`.
     let out = serde_json::json!({
         "verdict": verdict_str,
         "risk": risk,
         "reversible": reversible,
         "policy_is_auto": policy_is_auto,
         "task": task_id,
+        "undetermined_reason": undetermined_reason,
     });
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
 
@@ -191,14 +281,23 @@ pub fn run_gate_check(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> 
         } else {
             "medium"
         };
-        let summary = format!(
-            "gate-check escalated: task {task_id} risk={} reversible={} policy_is_auto={}",
-            risk.as_deref().unwrap_or("unknown"),
-            reversible
-                .map(|b| b.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            policy_is_auto,
-        );
+        let summary = match undetermined_reason {
+            // A classification that could not be determined gets its own
+            // summary shape carrying the reason — previously silently
+            // erased by the `.ok()` this fix removes.
+            Some(reason) => format!(
+                "gate-check escalated: task {task_id} risk classification could not be \
+                 determined ({reason}); policy_is_auto={policy_is_auto}"
+            ),
+            None => format!(
+                "gate-check escalated: task {task_id} risk={} reversible={} policy_is_auto={}",
+                risk.as_deref().unwrap_or("unknown"),
+                reversible
+                    .map(|b| b.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                policy_is_auto,
+            ),
+        };
         let _ = overwatch::store::record_finding(
             cwd,
             finding_id,
@@ -210,6 +309,13 @@ pub fn run_gate_check(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> 
         );
     }
 
+    exit_code_for(verdict)
+}
+
+/// The process exit code for a [`GateExec`] verdict: `0` for `AutoExec`,
+/// non-zero (`1`) for `Escalate` — preserving the human stop so a caller can
+/// `if ! condukt gate check --run RID --task T; then escalate; fi`.
+fn exit_code_for(verdict: GateExec) -> i32 {
     match verdict {
         GateExec::AutoExec => 0,
         GateExec::Escalate => 1,
@@ -223,24 +329,61 @@ mod tests {
     use harness_core::verdict::Determination;
 
     #[test]
-    fn undetermined_classification_never_auto_execs() {
+    fn undetermined_classification_never_auto_execs_and_keeps_its_reason() {
         // FAIL-CLOSED: a risk that could not be measured must NOT arrive as a
         // Low/reversible assessment (which, under an auto policy, would
-        // auto-exec). It resolves to None -> the caller's Escalate arm.
+        // auto-exec). It resolves to `Resolved::Undetermined`, not a value —
+        // and, unlike the old `.ok()`-based erasure, the reason string
+        // travels with it instead of being dropped.
         let d: Determination<RiskAssessment> =
             Determination::undetermined("invalid sensitive glob `[`");
         let resolved = resolve_assessment(d);
-        assert!(
-            resolved.is_none(),
-            "an undetermined classification must not yield an assessment; got {resolved:?}"
-        );
-        // And the verdict the caller derives from None is Escalate, even when
-        // the autonomy policy is fully auto.
-        let verdict = match &resolved {
-            Some(a) => decide_gate_exec(a.risk, a.reversible, true),
-            None => GateExec::Escalate,
+        let reason = match resolved {
+            Resolved::Undetermined(reason) => reason,
+            Resolved::Assessed(a) => {
+                panic!("an undetermined classification must not yield an assessment; got {a:?}")
+            }
         };
+        assert!(
+            reason.contains("invalid sensitive glob"),
+            "the Determination's reason must survive resolve_assessment unchanged; got {reason:?}"
+        );
+
+        // The full outcome->decision pipeline: Undetermined resolves to
+        // Escalate, even under a fully-auto policy, AND the reason reaches
+        // the caller-visible tuple `decide_from_outcome` builds (previously
+        // impossible: the old `Option<RiskAssessment>` shape had nowhere to
+        // put it). Escalate also maps to a non-zero exit code.
+        let outcome = GatherOutcome::Undetermined(reason.clone());
+        let (verdict, assessment, undetermined_reason) = decide_from_outcome(&outcome, true);
         assert_eq!(verdict, GateExec::Escalate);
+        assert!(
+            assessment.is_none(),
+            "an undetermined outcome must not surface a fabricated assessment"
+        );
+        assert_eq!(
+            undetermined_reason,
+            Some(reason.as_str()),
+            "the undetermined reason must reach the caller, not be erased"
+        );
+        assert_eq!(
+            exit_code_for(verdict),
+            1,
+            "an undetermined classification must escalate with a non-zero exit code"
+        );
+    }
+
+    #[test]
+    fn missing_outcome_escalates_without_a_reason() {
+        // Distinguish "nothing to assess" from "could not be determined":
+        // Missing degrades to Escalate too, but carries no reason (there is
+        // none to give — unlike Undetermined).
+        let (verdict, assessment, undetermined_reason) =
+            decide_from_outcome(&GatherOutcome::Missing, true);
+        assert_eq!(verdict, GateExec::Escalate);
+        assert!(assessment.is_none());
+        assert_eq!(undetermined_reason, None);
+        assert_eq!(exit_code_for(verdict), 1);
     }
 
     #[test]
@@ -251,10 +394,14 @@ mod tests {
             risk: Risk::Low,
             reversible: true,
         };
-        assert_eq!(
-            resolve_assessment(Determination::Known(a.clone())),
-            Some(a.clone())
-        );
+        match resolve_assessment(Determination::Known(a.clone())) {
+            Resolved::Assessed(resolved) => assert_eq!(resolved, a),
+            Resolved::Undetermined(reason) => {
+                panic!(
+                    "a Known determination must resolve to Assessed; got Undetermined({reason:?})"
+                )
+            }
+        }
         assert_eq!(
             decide_gate_exec(a.risk, a.reversible, true),
             GateExec::AutoExec

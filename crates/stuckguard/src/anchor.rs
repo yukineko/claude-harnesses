@@ -16,6 +16,7 @@
 use std::process::Command;
 
 use harness_core::boundary;
+use harness_core::verdict::Required;
 use serde::Deserialize;
 
 use crate::sig::Event;
@@ -48,16 +49,24 @@ pub fn parse_anchor(json: &str) -> Option<SessionAnchor> {
 /// at all" (`Undetermined`) is distinguished from "overwatch ran and said no
 /// lease" (`Known`, non-zero exit) at the call site — but stuckguard is a pure
 /// advisory hook (never blocks), so both degrade the same way this function
-/// always has: a silent `None`, same as before this migration.
+/// always has: a silent `None`, same as before this migration. Deliberately
+/// left silent (not tightened to a diagnostic like `config::load`'s
+/// unreadable-file branch) pending backlog 1469673b, which tracks whether
+/// this silence is safe: it is UNVERIFIED whether this function's
+/// `Undetermined` matters downstream to overwatch lease reap, so the
+/// behavior is held fixed here rather than changed alongside this
+/// `Determination::require`-sealing migration.
 pub fn fetch_session_anchor(session_id: &str) -> Option<SessionAnchor> {
     let mut cmd = Command::new("overwatch");
     cmd.args(["lease", "--session", session_id, "--json"]);
-    let stdout = boundary::run(&mut cmd)
-        .require()
-        .ok()?
-        .stdout_on_success()
-        .require()
-        .ok()?;
+    let output = match boundary::run(&mut cmd).require() {
+        Required::Determined(output) => output,
+        Required::Blocked(_) => return None,
+    };
+    let stdout = match output.stdout_on_success().require() {
+        Required::Determined(stdout) => stdout,
+        Required::Blocked(_) => return None,
+    };
     parse_anchor(&stdout)
 }
 

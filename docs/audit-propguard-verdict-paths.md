@@ -185,7 +185,16 @@ pattern で除外を続ける。
 正当な除外（lockfile・vendored）まで無効化し、検査ノイズが増える。制限側では
 あるが無害ではない。per-pattern に縮退させる方が精密で、それは本修正のスコープ外。
 
-### F-2（起票 1217fa4f・未修正）— `diff_text` が git 失敗を消し、空 diff が「変更なし」として通る
+### F-2（起票 1217fa4f・**修正済み** / backlog 87dbfbb8・d8e22b26）— `diff_text` が git 失敗を消し、空 diff が「変更なし」として通る
+
+> **状態更新（propguard 0.1.38）**: 本項は修正された。`diff_text` は
+> `Determination<DiffText>` を返すようになり、`git diff` / `git diff --cached` /
+> untracked の `ls-files` / untracked ファイル本体の読み取りのいずれかが判定不能なら
+> `Undetermined` を**転送**する（再 mint しない）。`evaluate` は `Mode` 分岐の**手前**で
+> それを `decide_diff_failed` に写し、`diff-read-failed` として bounded に block する。
+> 「部分的に読めた diff を完全な diff として渡す」経路（backlog d8e22b26）も同時に閉じた —
+> 最初に失敗した読み取りが答え全体を決めるので、穴の空いた `DiffText` はそもそも生成されない。
+> 以下は起票当時の記述であり、経路の説明として残す。
 
 `run_diff` は `if let Some(text) = run_git(root, &args)` で失敗を捨てる。
 `git diff` と `git diff --cached` が両方失敗し untracked も無ければ、
@@ -203,7 +212,14 @@ diff は空文字列になり、`evaluate` が `allow("empty-diff", st)` を返�
 その説明が適用されていない経路が残っている。
 
 修正には `DiffText` に三値を持たせ `decide_scan_failed` 相当の新アームを通す必要があり、
-本コミットのスコープを超えるため起票した。
+本コミットのスコープを超えるため起票した。（← その後 propguard 0.1.38 でまさにこの形で修正。
+`decide_diff_failed` が `decide_scan_failed` の相似形として追加された。）
+
+**未修正のミラー**: `crates/reviewgate/src/git.rs` の `diff_text` は同型のまま。
+`docs/audit-reviewgate-verdict-paths.md` の P1 が同じ穴を逐語で記録している
+（`DiffText` が運ぶのは `truncated: bool` だけ → `allow("empty-diff")`）。
+propguard 側だけを直すのは「片側ミラーだけ直す」既知のアンチパターンなので、
+reviewgate 側は別クレート・別 version bump が要るため本コミットでは触っていない。
 
 ### F-3（起票 3ca750b9・未修正）— `mode` の綴り間違いが独立検査を黙って自己申告へ降格させる
 

@@ -82,6 +82,12 @@ trapped. Fail-closed but bounded:
   (bounded), then give up loudly — a broken checker never becomes a bypass.
 - A truncated (too-large) diff has an unchecked tail → **block** (bounded), then
   give up loudly.
+- A diff that could not be **read** — any of `git diff`, `git diff --cached`,
+  the untracked `ls-files`, or an untracked file's body failing to run or to
+  decode → **block** (bounded, tag `diff-read-failed`), then give up loudly.
+  This covers the partial case too: if one of those reads succeeds and another
+  does not, the readable half is *not* handed onward as if it were the whole
+  diff. An unread diff is undetermined, never "empty ⇒ nothing changed".
 - A genuine harness panic → fail-closed **block** on the first stop (a crashed
   gate cannot certify the stop is safe); only a second consecutive crash on the
   post-block re-entry (`stop_hook_active`) is allowed through, bounding the

@@ -9,8 +9,12 @@
 //!
 //! These wrappers return [`Determination`], so the flattening step has to be
 //! written out loud. There is no `unwrap_or` to reach for: the only extractor is
-//! `require`, which yields `Result<T, Verdict>` and makes `?` — fail closed —
-//! the shortest thing a caller can type.
+//! `require`, which yields [`Required<T>`](crate::verdict::Required) — this
+//! crate's own type, so it has no `unwrap_or` / `unwrap_or_default` / `ok` /
+//! `is_ok` either. Resolving one means writing both arms, and the blocked arm
+//! arrives holding a fail-closed `Verdict` with the reason intact, so returning
+//! it is the shortest thing a caller can type. (A caller can still hand-write a
+//! permissive default in that arm; the type makes it explicit, not impossible.)
 //!
 //! The distinction each wrapper draws is between *absence* and *opacity*:
 //!

@@ -140,7 +140,8 @@ impl Aggregate {
     /// being complete (a budget gate, a persisted canonical record).
     ///
     /// `Undetermined` carries the same reason [`subagent_scan`](Self::subagent_scan)
-    /// holds, so `?` on `require()` short-circuits to a fail-closed verdict.
+    /// holds, so `require()`'s blocked arm hands the caller a fail-closed
+    /// verdict with that reason already attached.
     pub fn complete(self) -> Determination<Self> {
         match &self.subagent_scan {
             Determination::Known(()) => Determination::Known(self),

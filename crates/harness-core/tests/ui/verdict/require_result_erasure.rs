@@ -1,29 +1,33 @@
-//! `Determination::require()` (verdict.rs:407) returns `std::Result<T,
-//! Verdict>`. `Determination` itself seals the permissive extractors
-//! (`unwrap_or` / `ok` / `unwrap_or_default` — see determination_unwrap_or.rs),
-//! but that seal is one layer too shallow: `Result`'s *own* inherent methods
-//! reopen exactly the same hole one call later, and `Result::unwrap_or` has no
-//! way to bound the `Err` side because it is `std`, not this crate.
+//! `Determination::require()` must not hand the caller a type whose own
+//! inherent methods re-open the collapse `Determination` refuses to offer.
 //!
-//! THIS IS A KNOWN-RED NEGATIVE CONTROL, not a typo. All three forms below
-//! compile successfully TODAY (measured against boundary::read_dir_entries,
-//! whose Undetermined arm is the fail-closed "could not list the directory"
-//! answer): `unwrap_or_default()` and `unwrap_or(Vec::new())` silently collapse
-//! Undetermined into an empty Vec (read as "directory has no entries", i.e.
-//! clean, not "could not read the directory"), and `is_ok()` collapses the
-//! whole Verdict into a bool that reads Undetermined as `false` ("not ok"),
-//! indistinguishable from a legitimate absence.
+//! HISTORY (kept, because the fixture's value is that it was red first):
+//! `require()` used to return `std::Result<T, Verdict>`. `Determination` seals
+//! the permissive extractors (`unwrap_or` / `ok` / `unwrap_or_default` — see
+//! determination_unwrap_or.rs), but that seal was one layer too shallow —
+//! `Result`'s own inherent methods reopened exactly the same hole one call
+//! later, and this crate cannot remove or bound them because they are `std`'s.
+//! All three forms below COMPILED SUCCESSFULLY at that point, so this fixture
+//! was committed as a KNOWN-RED negative control (trybuild reported "expected
+//! test case to fail to compile, but it succeeded"), and that red was the
+//! observation proving the erasure was real and reachable.
 //!
-//! Because `compile_fail` fixtures are expected to FAIL to compile, and these
-//! three currently succeed, `cargo test -p harness-core --test
-//! verdict_compile_fail` is expected to report this fixture as a trybuild
-//! failure ("expected test to fail to compile, but it compiled successfully").
-//! That failure is the intended observation of this fixture — it is the RED
-//! that proves the erasure is real and still open at the `require()` call
-//! site. Do NOT add a `.stderr` snapshot or otherwise weaken this fixture to
-//! make it pass; it must stay red until `require()`'s `Result<T, Verdict>` is
-//! replaced or wrapped by a type that cannot be collapsed by `unwrap_or` /
-//! `unwrap_or_default` / `is_ok`.
+//! It is now GREEN because `require()` returns `harness_core::verdict::Required`,
+//! which has no `unwrap_or`, `unwrap_or_default`, `unwrap_or_else`, `ok`, or
+//! `is_ok` — every form below is an E0599, recorded in the `.stderr` snapshot
+//! beside this file. The three forms are unchanged from the red revision; only
+//! this prose was updated. Measured against `boundary::read_dir_entries`, whose
+//! Undetermined arm is the fail-closed "could not list the directory" answer:
+//! `unwrap_or_default()` / `unwrap_or(Vec::new())` would collapse it into an
+//! empty Vec (read downstream as "directory has no entries", i.e. clean), and
+//! `is_ok()` would flatten the whole Verdict into a bool where "undetermined"
+//! and "legitimately absent" are the same `false`.
+//!
+//! Do NOT weaken this fixture (deleting a form, or relaxing the `.stderr` to a
+//! non-E0599 error) to make it pass. What it does NOT claim to cover: a
+//! hand-written `match ... { Required::Blocked(_) => Vec::new() }` is still
+//! writeable by design — see the `Required` docs; that residue belongs to a
+//! lexical gate (backlog b4baf3d7), not to this type.
 
 use harness_core::boundary;
 use std::path::{Path, PathBuf};

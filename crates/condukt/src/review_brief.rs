@@ -22,6 +22,7 @@
 
 use crate::precedent::{match_precedent, Precedent, PrecedentMatch};
 use blastguard::diffrisk::SensitiveConfig;
+use harness_core::verdict::Required;
 use overwatch::violation::{ViolationEvent, ViolationSource};
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -184,12 +185,12 @@ pub fn build_review_brief(
             .any_sensitive(std::slice::from_ref(f))
             .require()
         {
-            Ok(true) => {
+            Required::Determined(true) => {
                 measured_sensitive = true;
                 sensitive_files.push(f.clone());
             }
-            Ok(false) => {}
-            Err(verdict) => {
+            Required::Determined(false) => {}
+            Required::Blocked(verdict) => {
                 if undetermined_why.is_none() {
                     undetermined_why = Some(
                         verdict

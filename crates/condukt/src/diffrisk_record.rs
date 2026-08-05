@@ -253,8 +253,12 @@ pub(crate) fn record_post_execution_diff_risk(
     // recorded under its own signature instead, making the misconfiguration
     // visible in overwatch rather than silently disabling this whole hook.
     let (base, full) = match (base.require(), full.require()) {
-        (Ok(b), Ok(f)) => (b, f),
-        (Err(verdict), _) | (_, Err(verdict)) => {
+        (
+            harness_core::verdict::Required::Determined(b),
+            harness_core::verdict::Required::Determined(f),
+        ) => (b, f),
+        (harness_core::verdict::Required::Blocked(verdict), _)
+        | (_, harness_core::verdict::Required::Blocked(verdict)) => {
             let why = verdict
                 .reason()
                 .map(|r| r.as_str().to_string())

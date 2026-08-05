@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use globset::{Glob, GlobSetBuilder};
-use harness_core::verdict::{Determination, Reason, Verdict};
+use harness_core::verdict::{Determination, Reason, Required, Verdict};
 
 use crate::config::{Check, Config};
 use crate::runner::{self, Outcome};
@@ -134,8 +134,8 @@ pub fn evaluate(cfg: &Config, root: &Path) -> GateReport {
     // code at all. Here it resolves to `None` = no scope = every check applies,
     // which is the restrictive side (widening, never narrowing, the check set).
     let changed: Option<Vec<String>> = match scope.clone().require() {
-        Ok(files) => files,
-        Err(undetermined) => {
+        Required::Determined(files) => files,
+        Required::Blocked(undetermined) => {
             debug_assert!(undetermined.blocks(), "an undetermined scope must block");
             None
         }

@@ -396,8 +396,13 @@ enum Command {
         /// rollback, or condukt escalation) is forwarded via `backlog add`.
         /// Idempotent — findings on `bridged_findings.jsonl` (bare finding-id),
         /// the other three streams on `bridged_entries.jsonl`
-        /// (`<kind>:<identifier>`). Fail-soft: a missing store / absent backlog
-        /// / failed add is warned and skipped; the command still succeeds.
+        /// (`<kind>:<identifier>`). Fail-soft on the BACKLOG side: an absent
+        /// `backlog` binary or a failed `backlog add` is warned and skipped,
+        /// and the command still succeeds. NOT fail-soft on the STORE side: a
+        /// ledger that could not be READ makes the drain skip that stream, say
+        /// which one in `undetermined_sources`, and exit 3 — "0 bridged"
+        /// because nothing needed bridging and "0 bridged" because part of the
+        /// queue was invisible must not reach a script as the same answer.
         #[arg(long = "to-backlog")]
         to_backlog: bool,
     },

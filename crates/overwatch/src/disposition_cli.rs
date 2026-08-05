@@ -195,6 +195,19 @@ pub fn metrics(json: bool) -> Result<SourceHealth> {
     // Tri-state (t3): a count that could not be computed is NOT zero. Zero
     // suppresses the warning line below, so folding the two would render a
     // broken store as "no stale finding".
+    //
+    // NOT COVERED BY ANY TEST, and this is why (third-party audit, t4): the
+    // `Undetermined` arm below is UNREACHABLE from this call site short of a
+    // TOCTOU race. `stale_undisposed_count` joins `scan_review_findings_all`
+    // and `scan_dispositions` — the exact two readers this function already
+    // resolved to `Known` above, on the same `cwd`; either being undetermined
+    // would have returned `SomeUndetermined` before we got here. So there is no
+    // pre-seeded store state that reaches it, and no test asserts
+    // `STALE_UNDETERMINED_LINE` or the `null` stale count in a `--json` body
+    // where the other keys are numbers. The branch is kept as the guard for a
+    // store that changes MID-RUN (the ledgers are appended to concurrently by
+    // other overwatch processes), which is the case a test here cannot stage
+    // deterministically. Treat it as unverified, not as verified-by-obviousness.
     let stale_scan =
         reconcile::stale_undisposed_count(&cwd, ReconcileRange::LastN(STALE_SCAN_LAST_N));
     let stale_undisposed: Option<usize> = match &stale_scan {

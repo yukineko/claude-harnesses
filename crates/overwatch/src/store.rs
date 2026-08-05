@@ -1788,7 +1788,7 @@ mod tests {
     // fresh rollout.
     #[test]
     fn scan_violations_absent_when_file_missing() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let (dir, prev_home) = scan_test_home();
         assert!(matches!(scan_violations(&dir), ViolationScan::Absent));
         restore_home(prev_home);
@@ -1799,7 +1799,7 @@ mod tests {
     // holding no events still yields `Events(empty)`, never `Undetermined`).
     #[test]
     fn scan_violations_events_when_all_lines_parse() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let (dir, prev_home) = scan_test_home();
         append_violation(&dir, &viol_event("blastguard:rm-rf", 1_700_000_000)).unwrap();
         append_violation(&dir, &viol_event("blastguard:rm-rf", 1_700_000_001)).unwrap();
@@ -1818,7 +1818,7 @@ mod tests {
     // violation the fleet gate must not go blind to.
     #[test]
     fn scan_violations_undetermined_on_unparseable_line() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let (dir, prev_home) = scan_test_home();
         // One valid event, then a corrupt (non-JSON / schema-drifted) line.
         append_violation(&dir, &viol_event("blastguard:rm-rf", 1_700_000_000)).unwrap();
@@ -1864,7 +1864,7 @@ mod tests {
     // so a single write is not atomic at the OS level (widens the corrupt window).
     #[test]
     fn concurrent_save_leases_never_publishes_corrupt_registry() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-store-test-concurrent-leases-{}-{}",
@@ -1937,7 +1937,7 @@ mod tests {
     // two become Err.
     #[test]
     fn load_leases_surfaces_corrupt_or_unreadable_registry_as_err() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-store-test-corrupt-leases-{}-{}",
@@ -1982,7 +1982,7 @@ mod tests {
         use crate::disposition::{Disposition, DispositionVerdict};
         use crate::lock::LeaseLock;
 
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-store-test-append-skip-{}-{}",
@@ -2234,7 +2234,7 @@ mod tests {
 
     #[test]
     fn read_review_findings_all_concatenates_archive_after_hot() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-store-test-all-{}-{}",
@@ -2279,7 +2279,7 @@ mod tests {
 
     #[test]
     fn bridged_entries_ledger_roundtrips_and_skips_corrupt_lines() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-store-test-entries-{}-{}",
@@ -2332,7 +2332,7 @@ mod tests {
     #[test]
     fn concurrent_append_survives_compact_review_findings() {
         use crate::lock::LeaseLock;
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-compact-race-{}-{}",
@@ -2399,9 +2399,20 @@ mod tests {
     // bytes. GREEN: the boundary tri-state read distinguishes Undetermined
     // (unreadable) from Known(None) (absent) and bails out before either
     // `write_jsonl_atomic` call runs, leaving the archive bytes untouched.
+    //
+    // ANTI-VACUITY, and where it actually lives (third-party audit, t4): this
+    // test asserts only that compaction ABORTS, so an implementation that
+    // aborted unconditionally would satisfy it. Measured by mutation
+    // (`compact_review_findings` made to `bail!` on every call): this test and
+    // its `..._undecodable_archive_line` sibling both stayed GREEN, while 13
+    // others went red — `concurrent_append_survives_compact_review_findings`
+    // here and `compact_findings_archives_resolved_and_keeps_hot_bounded_to_open`
+    // in `tests/compact_findings_cli.rs` are the controls that carry the
+    // opposite polarity. They are in different files, so the pairing is named
+    // here rather than left to be rediscovered.
     #[test]
     fn compact_review_findings_aborts_on_unreadable_archive() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-compact-unreadable-archive-{}-{}",
@@ -2457,7 +2468,7 @@ mod tests {
     // "x" lines land. GREEN: lock + in-lock recheck => exactly one.
     #[test]
     fn concurrent_bridged_finding_append_does_not_double_add() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-bridged-race-{}-{}",
@@ -2506,7 +2517,7 @@ mod tests {
     fn concurrent_disposition_append_dedupes_on_finding_id() {
         use crate::disposition::{Disposition, DispositionVerdict};
 
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-disp-race-{}-{}",
@@ -2581,7 +2592,7 @@ mod tests {
     /// `runtime_conflicts.jsonl`. Store isolation via a per-test sandboxed HOME.
     #[test]
     fn record_changeset_and_detect_round_trips_overlap() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-changeset-rt-{}-{}",
@@ -2636,7 +2647,7 @@ mod tests {
     /// flagged. Also asserts `prune_stale_changesets` compacts merged entries.
     #[test]
     fn mark_branch_merged_excludes_a_landed_branch_from_detection() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-branch-merged-{}-{}",
@@ -2686,7 +2697,7 @@ mod tests {
     /// The `OVERWATCH_TEST_CHANGESET_DELAY_MS` widener forces the interleave.
     #[test]
     fn concurrent_record_changeset_never_loses_an_upsert() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
+        let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
         let dir = std::env::temp_dir().join(format!(
             "overwatch-changeset-conc-{}-{}",
@@ -3334,6 +3345,8 @@ mod tests {
     /// case (`compact_review_findings_aborts_on_unreadable_archive`), one mirror
     /// over.
     #[test]
+    // Same anti-vacuity caveat as `..._aborts_on_unreadable_archive` above: the
+    // control that refuses an always-aborting compaction is in another test.
     fn compact_review_findings_aborts_on_undecodable_archive_line() {
         let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");

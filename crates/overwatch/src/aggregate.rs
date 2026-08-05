@@ -910,7 +910,12 @@ mod tests {
 
     impl HomeSandbox {
         fn new(tag: &str) -> Self {
-            let guard = HOME_ENV_LOCK.lock().unwrap();
+            // Poison-RECOVERING (`unwrap_or_else(into_inner)`), not `unwrap()`: a
+            // test that fails an assertion while holding this process-global
+            // `$HOME` lock poisons it, and every LATER `$HOME` test in the binary
+            // then dies with a `PoisonError` that says nothing about the property
+            // it checks — one real red reported as a pile of noise.
+            let guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let prev_home = std::env::var_os("HOME");
             let dir = std::env::temp_dir().join(format!(
                 "overwatch-aggregate-test-{tag}-{}-{}",

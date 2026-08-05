@@ -121,8 +121,22 @@ pub enum ReconcileRange {
 /// Run `git log` over `range` and parse it into `CommitRef`s. Fail-soft: ANY
 /// failure (git not installed, cwd not a repo, non-zero exit, non-utf8
 /// output) yields an empty vec rather than an `Err` — a git-level failure
-/// means "0 commits reconciled", never a panic or a propagated error, so
-/// `reconcile-fixed` always exits 0.
+/// means "0 commits scanned", never a panic or a propagated error, and on its
+/// own it does not make [`run`] exit non-zero.
+///
+/// This sentence used to end "so `reconcile-fixed` always exits 0", which
+/// stopped being true when the STORE reads became tri-state: an unreadable
+/// findings or disposition ledger now exits 3. The scope of this fail-soft is
+/// the GIT read only.
+///
+/// **Known, unfixed here:** this is still a two-valued read. "git is not
+/// installed / this is not a repo" and "the range genuinely holds no commit"
+/// both arrive as `Vec::new()`, and the caller states the result as a count
+/// ("scanned 0 commit(s)") rather than as "nothing to do" — which is why it
+/// was judged the conservative side and left alone. It is nonetheless the one
+/// remaining input to the reconcile decision that cannot say "I could not
+/// look"; `reconcile_fixed_fail_soft_when_not_a_git_repo` pins the CURRENT
+/// behaviour, not a claim that the behaviour is right.
 fn git_log_commits(cwd: &Path, range: &ReconcileRange) -> Vec<CommitRef> {
     let mut cmd = Command::new("git");
     cmd.current_dir(cwd)

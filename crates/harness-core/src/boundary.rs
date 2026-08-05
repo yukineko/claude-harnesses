@@ -20,6 +20,7 @@
 //! | the path is there but unreadable | `Undetermined` — carries why |
 //! | the process ran and exited non-zero | `Known` — the code is the caller's to judge |
 //! | the process could not be run, or was killed by a signal | `Undetermined` |
+//! | the process exited, but its output could not be read | `Undetermined` |
 //!
 //! A missing path is genuinely empty; an unreadable one is not. Conflating them
 //! is the single most common shape of fail-open in this repo, which is why
@@ -126,9 +127,27 @@ impl CommandOutput {
         self.code
     }
 
-    /// Whatever the process wrote to stderr. Safe to expose unconditionally
-    /// because it is diagnostic text, not a checker's answer — nobody derives a
-    /// verdict from it.
+    /// Whatever the process wrote to stderr.
+    ///
+    /// Exposed unconditionally, unlike `stdout`, because no caller derives a
+    /// verdict from its *contents*: it is diagnostic text. That is the whole
+    /// of the claim, and it is narrower than it reads. Since harness-core
+    /// 0.2.3 the *unreadability* of stderr decides the entire call on its own
+    /// — [`run_with_timeout`] gives both pipes the same weight, so a stderr
+    /// that errors or whose bounded read never reaches EOF returns
+    /// `Undetermined` even when stdout arrived intact and the exit code is in
+    /// hand. stderr does not produce a verdict; failing to read it withholds
+    /// one.
+    ///
+    /// That reaches callers who asked not to have stderr at all.
+    /// `propguard::git::run_git_bin` sets `.stderr(Stdio::null())`, and
+    /// [`run_with_timeout_and_stdin`] overrides it unconditionally with
+    /// `cmd.stdout(Stdio::piped()).stderr(Stdio::piped())`, so a `git` writing
+    /// non-UTF-8 to stderr makes propguard's changed-file scan `Failed` and
+    /// blocks its gate — over a stream propguard explicitly discarded. The
+    /// direction is the required one (CLAUDE.md §3: cannot-determine resolves
+    /// to the restricted side), and this paragraph exists so the prose stops
+    /// calling stderr inert when it is not.
     pub fn stderr(&self) -> &str {
         &self.stderr
     }
@@ -207,9 +226,11 @@ pub fn run(cmd: &mut Command) -> Determination<CommandOutput> {
 /// `git`, a shell-wrapped checker command that backgrounds a grandchild —
 /// must not be able to block the caller forever. `Undetermined` covers every
 /// way this can fail to produce a trustworthy result: spawn failure, the wait
-/// itself erroring, a signal (no exit code), and timeout. `Known` only when
-/// the process ran to completion within `timeout`, whatever its exit code —
-/// judging the code is still the caller's job via [`CommandOutput`].
+/// itself erroring, a signal (no exit code), timeout, and an exit whose
+/// stdout/stderr could not be read (see [`read_pipe_bounded`]). `Known` only
+/// when the process ran to completion within `timeout` **and both of its
+/// output streams were read**, whatever its exit code — judging the code is
+/// still the caller's job via [`CommandOutput`].
 ///
 /// On Unix the child is placed in its own process group
 /// (`process_group(0)`) before spawn, so a timeout can kill the whole tree
@@ -225,8 +246,11 @@ pub fn run(cmd: &mut Command) -> Determination<CommandOutput> {
 /// backgrounded/detached grandchild can still hold it open, and a bare
 /// `read_to_string` would then block indefinitely even after `wait_timeout`
 /// reports the child gone. If the read itself cannot be joined within the
-/// timeout, the call is `Undetermined` rather than silently returning a
-/// partial read as if it were complete output.
+/// timeout, or fails outright, the call is `Undetermined` rather than
+/// silently returning a partial or empty read as if it were complete output.
+/// stderr is read the same way and given the same weight: it is diagnostic
+/// text, but a `CommandOutput` that reported it as empty when it could not be
+/// read would be stating an observation it never made.
 pub fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Determination<CommandOutput> {
     run_with_timeout_and_stdin(cmd, timeout, None)
 }
@@ -292,8 +316,23 @@ pub fn run_with_timeout_and_stdin(
                      read"
                 ));
             };
-            let stdout = read_pipe_bounded(child.stdout.take(), timeout);
-            let stderr = read_pipe_bounded(child.stderr.take(), timeout);
+            // An exit code with unreadable output is not a complete
+            // observation of what the process did, so `Known` is not
+            // available here: both streams have to have actually been read.
+            // The `Undetermined` arms FORWARD the payload rather than
+            // building a new one — `read_pipe_bounded` already recorded that
+            // give-up at its origin, and re-minting here would count one
+            // event twice as it bubbles up.
+            let stdout =
+                match read_pipe_bounded(child.stdout.take(), timeout, "stdout", &display, code) {
+                    Determination::Known(text) => text,
+                    Determination::Undetermined(why) => return Determination::Undetermined(why),
+                };
+            let stderr =
+                match read_pipe_bounded(child.stderr.take(), timeout, "stderr", &display, code) {
+                    Determination::Known(text) => text,
+                    Determination::Undetermined(why) => return Determination::Undetermined(why),
+                };
             Determination::known(CommandOutput {
                 code,
                 stdout,
@@ -343,25 +382,73 @@ fn kill_process_tree(child: &mut std::process::Child) {
 
 /// Read a child's stdout/stderr pipe to completion, but never block past
 /// `timeout`: the read happens on a background thread, joined with a bound
-/// instead of calling `read_to_string` inline. If the join itself times out
-/// (some lingering process still holds the pipe's write end open), whatever
-/// was read so far is returned rather than hanging further — the read
-/// thread is detached and leaked in that case. This is a best-effort
-/// completion of an already-`Known` result (the exit status, which drives
-/// the `Determination`, has already been observed by the caller); it does
-/// not itself decide `Known` vs `Undetermined`.
-fn read_pipe_bounded<R: io::Read + Send + 'static>(pipe: Option<R>, timeout: Duration) -> String {
+/// instead of calling `read_to_string` inline.
+///
+/// The return type is the point. An exit status observed by `wait_timeout`
+/// says the process *ran*; it says nothing about whether its output arrived,
+/// and this function is where that second question is answered. Two ways it
+/// can fail, both `Undetermined`:
+///
+/// * **the read errors** — including the `InvalidData` that non-UTF-8 output
+///   produces, exactly as [`read_to_string`] (the file wrapper above) treats
+///   it. Note the deliberate divergence from [`run`], which lossily converts:
+///   there, the whole `Vec<u8>` is in hand and the lossy text is a complete
+///   rendering of it; here the bytes are gone with the failed read, so the
+///   choice is between "could not read" and a fabricated empty string.
+/// * **the join expires** — some lingering descendant still holds the pipe's
+///   write end open, so EOF never comes. The read thread is detached and
+///   leaked in that case, and whatever it had accumulated is *not* returned:
+///   a partial read presented as complete output is indistinguishable from a
+///   process that printed nothing.
+///
+/// `Known(String::new())` is reserved for the two genuinely empty
+/// observations: a pipe that was never captured (`None`), and a read that
+/// completed with nothing in it.
+///
+/// Until harness-core 0.2.3 this returned a bare `String`, discarding the read
+/// error (`let _ = p.read_to_string(..)`) and folding an expired join into
+/// `unwrap_or_default()`. Both landed inside a `Determination::known(..)`, so
+/// the value announced itself as an observation while carrying a fabricated
+/// one — the precise fail-open shape this module was written to end, three
+/// days after the norm that named it. Its own callers' docs already claimed
+/// this behavior ("the call is `Undetermined` rather than silently returning a
+/// partial read"); the code did not do it.
+fn read_pipe_bounded<R: io::Read + Send + 'static>(
+    pipe: Option<R>,
+    timeout: Duration,
+    which: &str,
+    display: &str,
+    code: i32,
+) -> Determination<String> {
     use std::sync::mpsc;
     let Some(mut p) = pipe else {
-        return String::new();
+        return Determination::known(String::new());
     };
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut out = String::new();
-        let _ = p.read_to_string(&mut out);
-        let _ = tx.send(out);
+        // The error, not the buffer: `read_to_string` guarantees `out` is
+        // left unchanged when it fails, so what sits in it at that point is
+        // not a short read of the output, it is nothing at all.
+        let read = p
+            .read_to_string(&mut out)
+            .map(|_| out)
+            .map_err(|e| e.to_string());
+        let _ = tx.send(read);
     });
-    rx.recv_timeout(timeout).unwrap_or_default()
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(text)) => Determination::known(text),
+        Ok(Err(e)) => Determination::undetermined(format!(
+            "{display} exited {code} but its {which} could not be read: {e} — reporting the exit \
+             status while dropping the output would present an unread stream as an empty one"
+        )),
+        Err(e) => Determination::undetermined(format!(
+            "{display} exited {code} but its {which} could not be read within {timeout:?} ({e}); \
+             a lingering descendant most likely still holds the write end of the pipe. Whatever \
+             arrived is a partial read, and returning it as complete output would be \
+             indistinguishable from a process that printed nothing"
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -699,17 +786,236 @@ mod tests {
         // excludes itself from its own results by default) nor any process
         // started before this test picked its pid-derived marker.
         std::thread::sleep(Duration::from_millis(200));
-        let still_running = expect_known(run(Command::new("pgrep").arg("-fc").arg(&marker)));
-        // `pgrep -c` prints a count and exits 1 when the count is 0 — so read
-        // stdout regardless of the exit code rather than only on success.
-        let count: i64 = expect_known(still_running.stdout_allowing(&[0, 1]))
-            .trim()
-            .parse()
-            .unwrap_or(-1);
+        // `pgrep -f` (NOT `-fc`): the count flag `-c` is a Linux procps
+        // extension that macOS's pgrep rejects with exit 2 + a usage message.
+        // The boundary correctly reported that as Undetermined, so on macOS
+        // this test — the only coverage of the process-group-kill contract
+        // here — did not fail the contract, it failed to RUN, and the
+        // contract was UNVERIFIED on this platform. Counting the lines
+        // ourselves is portable: exit 0 means matches were printed, exit 1
+        // means none were. (propguard's mirror of this same probe was already
+        // fixed this way; this is the twin that was left behind.)
+        let still_running = expect_known(run(Command::new("pgrep").arg("-f").arg(&marker)));
+        let count = expect_known(still_running.stdout_allowing(&[0, 1]))
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .count();
         assert_eq!(
             count, 0,
             "the process group (including the backgrounded grandchild carrying marker {marker}) \
              must be killed, not left running"
+        );
+    }
+
+    // ---- run_with_timeout: the OUTPUT is part of the observation ------------
+    //
+    // `wait_timeout` answering with an exit code says the process *ran*; it
+    // says nothing about whether its output arrived. These four tests pin the
+    // difference. The first two inject the two ways a pipe read can fail to
+    // deliver (the read itself erroring, and the read never reaching EOF
+    // within the budget) and demand `Undetermined`; the last two are their
+    // anti-vacuity partners — the same command minus the fault must still be
+    // `Known` with its full stdout, and a genuinely silent command must still
+    // be `Known` with an empty one. Without that pair, "everything is
+    // Undetermined now" would satisfy the first two.
+
+    /// A child that exits 0 while writing bytes that are not valid UTF-8: the
+    /// read of its stdout pipe *errors* (`InvalidData`). Reporting `Known`
+    /// with an empty stdout here would state that a checker printed nothing
+    /// when in fact it printed something unreadable — the same conflation
+    /// `read_to_string` (the file wrapper above) already refuses.
+    #[test]
+    fn run_with_timeout_unreadable_stdout_bytes_are_undetermined_not_empty() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("printf '\\377\\376'; exit 0");
+        let why = expect_undetermined(run_with_timeout(&mut cmd, Duration::from_secs(5)));
+        assert!(
+            why.contains("stdout"),
+            "the reason must name which stream could not be read: {why}"
+        );
+        assert!(
+            why.contains("exited 0"),
+            "the reason must say the process itself DID exit (0) — that is exactly what makes \
+             an empty stdout look trustworthy: {why}"
+        );
+    }
+
+    /// A child that exits 0 while a backgrounded descendant keeps the write
+    /// end of the stdout pipe open: the read cannot reach EOF, so the bounded
+    /// join expires. Whatever the child managed to print is a *partial* read
+    /// at best, and before this was `Undetermined` it was returned as an empty
+    /// `Known` — a checker's output silently replaced by "".
+    #[cfg(unix)]
+    #[test]
+    fn run_with_timeout_pipe_held_open_after_clean_exit_is_undetermined_not_empty() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("printf 'real output\n'; (sleep 9 &); exit 0");
+
+        // Deliberately not a 100ms-scale budget: the same value bounds the
+        // `wait_timeout` on the child, and under a loaded test runner a
+        // too-tight budget makes THAT fire first — which is also
+        // `Undetermined`, so the test would pass for the wrong reason. The
+        // `stdout` assertion below is the second guard against that: the
+        // process-timeout message does not mention a stream.
+        let budget = Duration::from_millis(1500);
+        let start = std::time::Instant::now();
+        let outcome = run_with_timeout(&mut cmd, budget);
+        let elapsed = start.elapsed();
+
+        let why = expect_undetermined(outcome);
+        assert!(
+            why.contains("stdout"),
+            "the reason must name which stream could not be read (and NOT be the \
+             process-level timeout): {why}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(9),
+            "the read must stay bounded by `timeout` rather than waiting out the descendant \
+             holding the pipe, took {elapsed:?}"
+        );
+    }
+
+    /// Anti-vacuity partner: the same command as the test above with the
+    /// pipe-holder removed must still be `Known` and must still carry every
+    /// byte. (A generous budget on purpose — this path never waits on the
+    /// clock, so a tight one would only add load-flakiness.)
+    #[test]
+    fn run_with_timeout_readable_stdout_is_known_and_complete() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("printf 'real output\n'; exit 0");
+        let out = expect_known(run_with_timeout(&mut cmd, Duration::from_secs(5)));
+        assert_eq!(out.code(), 0);
+        assert_eq!(
+            expect_known(out.stdout_on_success()),
+            "real output\n",
+            "a readable pipe must deliver the full output, not a truncated or empty one"
+        );
+    }
+
+    /// Anti-vacuity partner: a command that really does print nothing is
+    /// `Known("")`. Empty output is still a legitimate observation — only
+    /// output that could not be read is undetermined.
+    #[test]
+    fn run_with_timeout_genuinely_silent_child_is_known_empty() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("exit 0");
+        let out = expect_known(run_with_timeout(&mut cmd, Duration::from_secs(5)));
+        assert_eq!(
+            expect_known(out.stdout_on_success()),
+            "",
+            "a silent child is Known(\"\") — the fix must not turn every empty stdout into a \
+             give-up"
+        );
+    }
+
+    // ---- run_with_timeout: stderr carries the same weight -------------------
+    //
+    // The stderr half of the block above, and it is here because that half had
+    // a measured kill rate of ZERO. Reverting *only* the stderr arm of
+    // `run_with_timeout_and_stdin` to the pre-0.2.3 fail-open
+    // (`Determination::Undetermined(_) => String::new()`) left harness-core at
+    // 261 passed / 0 failed and propguard at 66 + 4 + 11 passed / 0 failed:
+    // both fault tests above inject on stdout only, so nothing anywhere
+    // defended the behaviour the docs on `run_with_timeout` commit to. These
+    // three mirror the stdout shape — two faults (the read erroring, and the
+    // bounded join expiring) plus the anti-vacuity partners that stop
+    // "Undetermined for everything" from satisfying them.
+
+    /// A child that exits 0 after writing non-UTF-8 bytes to STDERR, with a
+    /// perfectly readable (empty) stdout. Everything about the process's own
+    /// status is in hand, which is exactly what would make a `Known` here look
+    /// trustworthy — and its `stderr` field would be `""`, an observation the
+    /// call never made.
+    #[test]
+    fn run_with_timeout_unreadable_stderr_bytes_are_undetermined_not_empty() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("printf '\\377\\376' >&2; exit 0");
+        let why = expect_undetermined(run_with_timeout(&mut cmd, Duration::from_secs(5)));
+        assert!(
+            why.contains("stderr"),
+            "the reason must name which stream could not be read, and it must be stderr — \
+             stdout was read fine here: {why}"
+        );
+        assert!(
+            why.contains("exited 0"),
+            "the reason must say the process itself DID exit (0) — that is exactly what makes \
+             an empty stderr look trustworthy: {why}"
+        );
+    }
+
+    /// The second fault route, and it is a genuinely distinct arm: the bounded
+    /// join expiring (`recv_timeout` erroring) rather than the read itself
+    /// erroring. The backgrounded descendant's stdout is redirected to
+    /// `/dev/null` on purpose — without that it would hold the stdout pipe
+    /// open too, the stdout read would expire first, and this test would pass
+    /// on the stdout arm while proving nothing about stderr.
+    #[cfg(unix)]
+    #[test]
+    fn run_with_timeout_stderr_pipe_held_open_after_clean_exit_is_undetermined_not_empty() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("printf 'real output\n'; printf 'warn\n' >&2; (sleep 9 >/dev/null &); exit 0");
+
+        // Same reasoning as the stdout twin: not a 100ms-scale budget, because
+        // the same value bounds the `wait_timeout` on the child and a too-tight
+        // one makes THAT fire first — also `Undetermined`, so the test would
+        // pass for the wrong reason. The `stderr` assertion is the second guard
+        // against that: the process-level timeout message names no stream.
+        let budget = Duration::from_millis(1500);
+        let start = std::time::Instant::now();
+        let outcome = run_with_timeout(&mut cmd, budget);
+        let elapsed = start.elapsed();
+
+        let why = expect_undetermined(outcome);
+        assert!(
+            why.contains("stderr"),
+            "the reason must name stderr (and NOT be the process-level timeout, which names no \
+             stream, nor the stdout read, which reached EOF): {why}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(9),
+            "the stderr read must stay bounded by `timeout` rather than waiting out the \
+             descendant holding the pipe, took {elapsed:?}"
+        );
+    }
+
+    /// ANTI-VACUITY CONTROL for the two above: a child whose stderr really is
+    /// readable must still be `Known`, and must still carry the actual text.
+    /// Without this, an implementation that answers `Undetermined` for every
+    /// stderr satisfies both fault tests.
+    #[test]
+    fn run_with_timeout_readable_stderr_is_known_and_complete() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("printf 'to stdout\n'; printf 'diagnostic line\n' >&2; exit 0");
+        let out = expect_known(run_with_timeout(&mut cmd, Duration::from_secs(5)));
+        assert_eq!(out.code(), 0);
+        assert_eq!(
+            out.stderr(),
+            "diagnostic line\n",
+            "a readable stderr must arrive intact and complete"
+        );
+        assert_eq!(
+            expect_known(out.stdout_on_success()),
+            "to stdout\n",
+            "and the stderr handling must not disturb stdout"
+        );
+    }
+
+    /// The other half of the control: a child that genuinely writes nothing to
+    /// stderr is `Known("")`. Empty stderr is a real observation; only an
+    /// unread one is undetermined.
+    #[test]
+    fn run_with_timeout_genuinely_empty_stderr_is_known_empty() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("printf 'only stdout\n'; exit 0");
+        let out = expect_known(run_with_timeout(&mut cmd, Duration::from_secs(5)));
+        assert_eq!(
+            out.stderr(),
+            "",
+            "a child with nothing to say on stderr is Known(\"\") — the fix must not turn every \
+             empty stderr into a give-up"
         );
     }
 

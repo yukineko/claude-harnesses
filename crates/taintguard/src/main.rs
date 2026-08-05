@@ -4,10 +4,25 @@
 //! taintguard — a Claude Code hook trio implementing a provenance-scoped
 //! least-privilege gate.
 //!
-//! Contract (shared by every plugin in this repo): a hook must NEVER break the
-//! user's turn. The three HOOK subcommands (`mark`/`gate`/`clear`) read a hook
-//! payload from stdin and always exit 0 (`harness_core::hook::run_hook`). The
-//! fourth subcommand, `tally`, is **not** a hook — see [`run_tally`].
+//! Contract (shared by every plugin in this repo): a hook must never break the
+//! user's turn *by crashing or by exiting non-zero*. The three HOOK subcommands
+//! (`mark`/`gate`/`clear`) read a hook payload from stdin and always exit 0
+//! (`harness_core::hook::run_hook`). The fourth subcommand, `tally`, is **not** a
+//! hook — see [`run_tally`].
+//!
+//! **That contract is about the PROCESS, not about the VERDICT, and the two used
+//! to be conflated here** (backlog 9a28b98c). `gate` carries a permission
+//! decision, and `run_hook`'s terminal `exit(0)` means an empty stdout is not a
+//! neutral outcome — Claude Code reads it as "this hook has no objection", i.e. an
+//! allow. So for `gate`, "never break the turn" may only ever mean "exit 0 and
+//! print the decision"; it must never be read as "when in doubt, print nothing".
+//! Every cannot-determine on `gate`'s path therefore resolves to a printed
+//! `ask`/`deny` (CLAUDE.md §3): an unreadable taint marker (`Check::Undetermined`),
+//! a panic in the analysis (the barrier below), and — the case 9a28b98c names — a
+//! NON-EMPTY hook payload that could not be parsed at all
+//! ([`gate_on_unparseable_payload`]). An EMPTY stdin remains silent, because that
+//! is not a payload this process failed to understand but no payload at all; the
+//! split mirrors `blastguard::main::run` and `ctxrot`'s hooks.
 //!
 //! * `mark`  (PostToolUse, matcher `WebFetch|WebSearch|Read`) — after a tool
 //!   call that may have introduced untrusted-provenance content into context,
@@ -32,7 +47,7 @@
 use clap::{Parser, Subcommand};
 
 use harness_core::hook::{read_stdin, run_hook, HookInput};
-use taintguard::{classify, hookio, interactive, observe, state};
+use taintguard::{classify, hookio, interactive, observe, readonly, state};
 
 #[derive(Parser)]
 #[command(
@@ -67,25 +82,66 @@ fn main() {
     match cli.command {
         Command::Mark => run_hook(|| {
             let raw = read_stdin();
-            if let Some(input) = HookInput::parse(&raw) {
-                analyse_mark(&input);
+            match HookInput::parse(&raw) {
+                Some(input) => analyse_mark(&input),
+                // KNOWN RESIDUAL, stated rather than hidden. `mark` cannot fail
+                // closed here the way `gate` does: a fail-closed mark needs the
+                // `session_id` this payload failed to yield, and marking the
+                // shared `"default"` session bucket instead would plant a taint
+                // that the real session's Stop `clear` can never remove — a
+                // permanent, silently wrong block. (Since 0.2.0 the marker is
+                // keyed by session ALONE, so that bucket is now shared across
+                // every project on the machine rather than merely across one —
+                // the residual got wider, not narrower, which is the reason this
+                // arm still records nothing.) Inventing a lenient side-parser to
+                // recover the session id would be re-implementing the parser that
+                // just failed. So this arm records nothing, and the honest
+                // consequence is that a `gate` later in the same turn may see
+                // `Clean`. It is at least LOUD: the diagnostic below is the only
+                // signal, so it must not be dropped.
+                None if !raw.trim().is_empty() => eprintln!(
+                    "[taintguard] mark received a NON-EMPTY hook payload it could not parse \
+                     ({} bytes); no taint was recorded, so a later `gate` in this turn may see \
+                     a clean session. This is a known limitation of the mark side: the payload \
+                     that failed to parse is also what carries the session id the marker would \
+                     be keyed by.",
+                    raw.len()
+                ),
+                // Empty stdin: not invoked as a hook at all. Nothing to say.
+                None => {}
             }
         }),
         Command::Gate => run_hook(|| {
             let raw = read_stdin();
-            if let Some(input) = HookInput::parse(&raw) {
-                emit_gate(&input, analyse_gate(&input));
+            match HookInput::parse(&raw) {
+                Some(input) => emit_gate(&input, analyse_gate(&input)),
+                // A payload arrived and could not be read: cannot-determine on a
+                // VERDICT path, so it must be printed as ask/deny, never left to
+                // `run_hook`'s exit(0) silent allow. See the module docs.
+                None if !raw.trim().is_empty() => gate_on_unparseable_payload(raw.len()),
+                None => {}
             }
         }),
         Command::Clear => run_hook(|| {
             let raw = read_stdin();
-            if let Some(input) = HookInput::parse(&raw) {
-                let cwd = input.cwd_or_current();
-                if let Err(reason) = state::clear(&cwd, &input.session_id) {
-                    eprintln!(
-                        "[taintguard] clear failed (staying tainted, the safe side): {reason}"
-                    );
+            match HookInput::parse(&raw) {
+                Some(input) => {
+                    if let Err(reason) = state::clear(&input.session_id) {
+                        eprintln!(
+                            "[taintguard] clear failed (staying tainted, the safe side): {reason}"
+                        );
+                    }
                 }
+                // Not clearing IS the safe side (the marker stays, so the gate
+                // keeps enforcing), so unlike `mark` this needs no fail-closed
+                // action — only to be visible.
+                None if !raw.trim().is_empty() => eprintln!(
+                    "[taintguard] clear received a NON-EMPTY hook payload it could not parse \
+                     ({} bytes); no marker was cleared, so this session stays tainted (the safe \
+                     side) until a parseable Stop payload arrives.",
+                    raw.len()
+                ),
+                None => {}
             }
         }),
         // Deliberately NOT `run_hook` — see `run_tally`'s docs.
@@ -102,23 +158,20 @@ fn decide_mark(input: &HookInput) -> Result<(), String> {
     let cwd = input.cwd_or_current();
     let session = input.session_id.as_str();
     match input.tool_name.as_str() {
-        "WebFetch" | "WebSearch" => state::mark(&cwd, session, "web"),
-        // The trust domain is the SESSION's domain — `cwd`, the other working
-        // trees of `cwd`'s repository, and any root the operator declared —
-        // not the process cwd alone. Reading a linked worktree is reading this
-        // session's own project (CLAUDE.md §8 forces every edit into one), and
-        // classifying that as external content is what deadlocked headless
-        // sessions; see `classify`'s module docs for the measurement.
+        "WebFetch" | "WebSearch" => state::mark(session, "web"),
         "Read" => match input.target() {
-            Some(target) => match classify::classify_in_domain(&cwd, &target) {
+            // `cwd` still decides WHETHER a read is external (the classifier is
+            // inherently relative to the project); it no longer decides WHERE
+            // the resulting mark is stored — see `state::state_dir`.
+            Some(target) => match classify::classify(&cwd, &target) {
                 classify::Trust::Trusted => Ok(()),
                 classify::Trust::Untrusted | classify::Trust::Indeterminate => {
-                    state::mark(&cwd, session, "external-read")
+                    state::mark(session, "external-read")
                 }
             },
             // A Read with no extractable file_path is indeterminate — fail
             // closed the same as an indeterminate path, not a silent no-op.
-            None => state::mark(&cwd, session, "external-read"),
+            None => state::mark(session, "external-read"),
         },
         _ => Ok(()),
     }
@@ -132,7 +185,6 @@ fn decide_mark(input: &HookInput) -> Result<(), String> {
 /// caught panic we force a mark with source `"internal-error"` so the `gate`
 /// subcommand treats the rest of this turn as tainted rather than clean.
 fn analyse_mark(input: &HookInput) {
-    let cwd = input.cwd_or_current();
     let session = input.session_id.clone();
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decide_mark(input))) {
         Ok(Ok(())) => {}
@@ -143,7 +195,7 @@ fn analyse_mark(input: &HookInput) {
             eprintln!(
                 "[taintguard] internal error while analysing a tool call; failing closed (marking tainted)"
             );
-            if let Err(reason) = state::mark(&cwd, &session, "internal-error") {
+            if let Err(reason) = state::mark(&session, "internal-error") {
                 eprintln!("[taintguard] fail-closed mark also failed: {reason}");
             }
         }
@@ -163,6 +215,43 @@ fn build_decision(reason: &str) -> String {
     } else {
         hookio::deny_json(reason)
     }
+}
+
+/// Emit `gate`'s fail-closed decision for a NON-EMPTY hook payload that could
+/// not be parsed into a [`HookInput`] (backlog 9a28b98c).
+///
+/// This is a cannot-determine, and on this subcommand it is the *worst* kind:
+/// with no `cwd` and no `session_id` there is not even a taint marker to look up,
+/// so the process cannot form an opinion about the session at all. Before this
+/// existed, `main`'s `if let Some(input)` simply fell through, `run_hook` exited
+/// 0 with empty stdout, and Claude Code proceeded with the write-class tool —
+/// a silent allow reached by a parse failure, which is precisely the collapse
+/// CLAUDE.md §3 forbids.
+///
+/// The reason deliberately says the payload could not be READ and does **not**
+/// claim a taint finding: reporting "this turn consumed untrusted content" would
+/// be asserting something this process never determined (CLAUDE.md §4). It also
+/// prints the byte count, because "unparseable" plus a length is the only
+/// diagnostic available when the payload itself cannot be trusted to echo.
+///
+/// `build_decision` hardens the `ask` to `deny` when no human is detected — and
+/// headless/subagent is the common context for this path, so the hardening is not
+/// theoretical.
+fn gate_on_unparseable_payload(raw_len: usize) {
+    eprintln!(
+        "[taintguard] gate received a NON-EMPTY hook payload it could not parse ({raw_len} \
+         bytes); failing closed (ask/deny) rather than exiting 0 with no decision, which \
+         Claude Code would read as an allow."
+    );
+    println!(
+        "{}",
+        build_decision(
+            "[taintguard] could not parse this hook's payload, so this session's taint state \
+             could not even be looked up (no cwd, no session id); failing closed (treating \
+             this tool call as unverified). This is NOT a taint finding — nothing was \
+             determined about this turn's provenance."
+        )
+    );
 }
 
 fn format_sources(sources: &[String]) -> String {
@@ -215,6 +304,16 @@ fn decide_gate(input: &HookInput) -> GateAction {
     decide_gate_with(input, observe::posture())
 }
 
+/// The `Bash` tool's `command` string, when the payload actually carries one.
+///
+/// `None` for a missing field, a non-string field, or a payload with no
+/// `tool_input` at all — every one of which flows to the taint check rather
+/// than to the read-only fast path, because a command that could not be read
+/// has not been classified (CLAUDE.md §3).
+fn readonly_command(input: &HookInput) -> Option<&str> {
+    input.tool_input.as_ref()?.get("command")?.as_str()
+}
+
 /// [`decide_gate`] with the posture injected, so tests can drive both postures
 /// without mutating the process-global environment.
 ///
@@ -222,9 +321,20 @@ fn decide_gate(input: &HookInput) -> GateAction {
 /// `Check::Tainted`. `Check::Clean` is silent in either posture, and
 /// `Check::Undetermined` enforces in either posture; see that arm's comment.
 fn decide_gate_with(input: &HookInput, posture: observe::Posture) -> GateAction {
-    let cwd = input.cwd_or_current();
     let tool = input.tool_name.as_str();
-    match state::check(&cwd, &input.session_id) {
+    // A `Bash` invocation that is statically known to write nothing is not a
+    // write-class tool, so the taint state is not consulted for it at all
+    // (backlog a4b59893). This is a narrowing of the MATCHER, not of the
+    // invariant: the gate's own message has always promised to downgrade
+    // "write-class tools", while the hook matched the whole `Bash` tool, which
+    // left a tainted turn unable to run `git status` — unable to diagnose
+    // itself, and with no route back for a non-interactive worker.
+    // `is_readonly_bash` answers `false` for everything it does not positively
+    // recognise, so an unrecognised command is gated exactly as before.
+    if tool == "Bash" && readonly_command(input).is_some_and(readonly::is_readonly_bash) {
+        return GateAction::Silent;
+    }
+    match state::check(&input.session_id) {
         // A clean check is the ONLY route to silence, in either posture.
         state::Check::Clean => GateAction::Silent,
         state::Check::Tainted(sources) => {
@@ -507,12 +617,22 @@ mod tests {
     /// by default within one binary). Every test that calls [`temp_env`] holds
     /// this for its whole body via the returned guard.
     ///
-    /// The two panic-barrier tests do NOT call `temp_env` and therefore do NOT
-    /// hold this lock: they inject a closure that panics before any state or
-    /// env read happens, so they must not — and do not — depend on the state
-    /// dir or on any env var. If a future panic-barrier test needs either, it
-    /// has to take `temp_env` like the rest, or it becomes a test whose verdict
-    /// is decided by the ambient environment.
+    /// It also guards `TAINTGUARD_OBSERVE_ONLY`, for the same reason: one lock,
+    /// not one per variable, because two independent locks would not exclude each
+    /// other.
+    ///
+    /// [`analyse_gate_panic_barrier_fails_closed`] does NOT call [`temp_env`] and
+    /// does NOT hold this lock: it injects a closure that panics before any state
+    /// or env read happens, so it must not — and does not — depend on the state dir
+    /// or on any env var.
+    ///
+    /// [`panic_enforces_under_both_real_postures`] is the deliberate exception. It
+    /// takes this lock DIRECTLY (not via `temp_env`, since it needs no state dir)
+    /// because it sets `TAINTGUARD_OBSERVE_ONLY` for real — that is the whole point
+    /// of it, and the reason it can assert posture-independence instead of merely
+    /// documenting it. Any other panic-barrier test that needs the state dir or an
+    /// env var must likewise take the lock, or its verdict is decided by the
+    /// ambient environment of whoever ran `cargo test`.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn temp_env(
@@ -567,7 +687,13 @@ mod tests {
         );
         decide_mark(&mark_input).unwrap();
 
-        let gate_input = hook_input("Bash", json!({"command": "echo hi"}), &cwd, session);
+        // `touch out.txt`, NOT the `echo hi` this test used through 0.1.10.
+        // `echo` is on `readonly`'s allowlist as of 0.2.0, so `echo hi` now
+        // short-circuits to `Silent` BEFORE the taint state is consulted —
+        // this test would have been asserting the allowlist, not the taint
+        // gate. The assertion is unchanged; only the stand-in for "an
+        // arbitrary write-class Bash command" is.
+        let gate_input = hook_input("Bash", json!({"command": "touch out.txt"}), &cwd, session);
         assert_enforced(&decide_gate_with(&gate_input, ENFORCE));
     }
 
@@ -633,7 +759,7 @@ mod tests {
             ENFORCE,
         ));
 
-        state::clear(&cwd, session).unwrap();
+        state::clear(session).unwrap();
         assert_eq!(
             decide_gate_with(
                 &hook_input("Bash", json!({"command": "x"}), &cwd, session),
@@ -676,7 +802,17 @@ mod tests {
     #[test]
     fn observe_only_leaves_the_clean_path_silent_and_unrecorded() {
         let (_guard, _dir, cwd) = temp_env("observe-clean");
-        let gate_input = hook_input("Bash", json!({"command": "ls"}), &cwd, "s-observe-clean");
+        // `touch out.txt`, NOT the `ls` this test used through 0.1.10: `ls` is
+        // on `readonly`'s allowlist as of 0.2.0, so it would reach `Silent` via
+        // the read-only fast path without ever consulting the taint state —
+        // making an ANTI-VACUITY test vacuous, which is the one thing it may
+        // not be. The assertion is unchanged.
+        let gate_input = hook_input(
+            "Bash",
+            json!({"command": "touch out.txt"}),
+            &cwd,
+            "s-observe-clean",
+        );
         assert_eq!(
             decide_gate_with(&gate_input, observe::Posture::ObserveOnly),
             GateAction::Silent,
@@ -848,7 +984,7 @@ mod tests {
     fn undetermined_enforces_under_both_postures_and_records_no_ledger_line() {
         let (_guard, _dir, cwd) = temp_env("observe-undet");
         let session = "s-observe-undet";
-        let marker = state::marker_path_for_test(&cwd, session);
+        let marker = state::marker_path_for_test(session);
         std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
         std::fs::write(&marker, b"{ not json").unwrap();
 
@@ -953,44 +1089,352 @@ mod tests {
         );
     }
 
-    /// A caught panic fails closed to ask/deny, and does so **posture-
-    /// independently by construction**: [`analyse_gate_barrier`] never reads a
-    /// posture at all — the posture read lives *inside* the closure it guards
-    /// (`decide_gate` → `observe::posture()`), so a panic on that path cannot
-    /// have produced a posture for the barrier to honour. That structural fact
-    /// is the safety property worth pinning here, and it is what makes a panic
-    /// enforce no matter what `TAINTGUARD_OBSERVE_ONLY` says.
+    /// Set `TAINTGUARD_OBSERVE_ONLY` to `value` (or remove it for `None`) for the
+    /// life of the returned guard, restoring the previous value on drop so a
+    /// panicking assertion cannot leak an observe-only posture into later tests.
     ///
-    /// WHAT THIS TEST DOES NOT DO: it does not exercise the observe-only posture.
-    /// It sets no environment variable and hands the barrier no posture, so it is
-    /// deliberately identical in reach to
-    /// [`analyse_gate_panic_barrier_fails_closed`] above — the two differ only in
-    /// which regression a reader would look here for. An earlier version of this
-    /// test claimed to cover observe-only via a dead
-    /// `let _ = observe::Posture::ObserveOnly;` statement (removed: it bound
-    /// nothing, influenced nothing, and the verdict was in fact decided by the
-    /// ambient environment of whoever ran `cargo test`).
+    /// The caller must already hold [`ENV_LOCK`]: this mutates process-global
+    /// state.
+    struct ObserveOnlyEnv(Option<String>);
+
+    impl ObserveOnlyEnv {
+        fn set(value: Option<&str>) -> Self {
+            let previous = std::env::var(observe::OBSERVE_ONLY_ENV).ok();
+            match value {
+                Some(v) => std::env::set_var(observe::OBSERVE_ONLY_ENV, v),
+                None => std::env::remove_var(observe::OBSERVE_ONLY_ENV),
+            }
+            ObserveOnlyEnv(previous)
+        }
+    }
+
+    impl Drop for ObserveOnlyEnv {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => std::env::set_var(observe::OBSERVE_ONLY_ENV, v),
+                None => std::env::remove_var(observe::OBSERVE_ONLY_ENV),
+            }
+        }
+    }
+
+    /// A caught panic fails closed to ask/deny **under the real observe-only
+    /// posture as well as the real enforce posture** (backlog 2708deac).
     ///
-    /// Observe-only-posture behaviour is covered end-to-end, with the real env
-    /// var set in a child process, by
-    /// `undetermined_state_with_the_real_observe_only_env_set_is_reported_not_silent`
-    /// in `crates/taintguard/tests/provenance_gate.rs`. That test also records
-    /// that the panic arm itself is NOT reachable from outside the process, which
-    /// is why it stays pinned here.
+    /// ## What was empty about the previous versions
     ///
-    /// Renamed from `panic_enforces_even_under_observe_only` (the old name is
-    /// still quoted in that `provenance_gate.rs` docstring; grep both).
+    /// The original `panic_enforces_even_under_observe_only` "covered" observe-only
+    /// with a dead `let _ = observe::Posture::ObserveOnly;` statement — it bound
+    /// nothing and influenced nothing, so the verdict was decided by whatever
+    /// `TAINTGUARD_OBSERVE_ONLY` happened to be in the shell of whoever ran
+    /// `cargo test`. The replacement dropped the dead line and honestly documented
+    /// that it therefore did *not* exercise the posture at all — correct prose, but
+    /// it left the name's claim untested: nothing in the suite established that a
+    /// panic enforces when the process really is in observe-only.
+    ///
+    /// ## What makes this one effective
+    ///
+    /// It drives [`analyse_gate_barrier`] — the production barrier — once per REAL
+    /// posture, with `TAINTGUARD_OBSERVE_ONLY` actually set in this process, and it
+    /// asserts via [`observe::posture`] that the posture it claims to be testing is
+    /// the one in force. Without that positive control the loop would be two
+    /// identical iterations and could pass even if the env var were never applied.
+    ///
+    /// So it now fails against three distinct regressions, where the previous
+    /// version failed against only the first:
+    ///
+    /// 1. the barrier's `Err` arm returning `Silent` (or dropping the decision);
+    /// 2. the barrier growing a posture read and honouring it — returning
+    ///    `Observe` under observe-only, which `assert_enforced` rejects;
+    /// 3. `posture()` ceasing to reflect the env var (the control fails).
+    ///
+    /// It holds [`ENV_LOCK`] because it mutates a process-global env var — the one
+    /// exception to the note on that lock's docs about the panic-barrier tests not
+    /// needing it, and stated here so the two are not read as contradictory.
     #[test]
-    fn panic_enforces_regardless_of_posture_because_the_barrier_never_reads_it() {
-        let prev = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // `analyse_gate`'s real barrier, driven by a panicking decision fn.
-            analyse_gate_with(|_: &HookInput| -> GateAction {
-                panic!("boom before any posture could be read")
-            })
-        }));
-        std::panic::set_hook(prev);
-        assert_enforced(&out.unwrap());
+    fn panic_enforces_under_both_real_postures() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        for (raw, expected) in [
+            (None, observe::Posture::Enforce),
+            (
+                Some(observe::OBSERVE_ONLY_OPT_IN),
+                observe::Posture::ObserveOnly,
+            ),
+        ] {
+            let _env = ObserveOnlyEnv::set(raw);
+            // POSITIVE CONTROL: prove the process really is in the posture this
+            // iteration claims to test. Without it the loop is vacuously two
+            // copies of the same run.
+            assert_eq!(
+                observe::posture(),
+                expected,
+                "the env fixture did not take effect: with {raw:?} the process must be in \
+                 {expected:?}"
+            );
+
+            let prev = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // `analyse_gate`'s real barrier, driven by a panicking decision fn.
+                analyse_gate_with(|_: &HookInput| -> GateAction {
+                    panic!("boom before any posture could be read")
+                })
+            }));
+            std::panic::set_hook(prev);
+
+            let action = out.unwrap();
+            assert_enforced(&action);
+            assert!(
+                matches!(action, GateAction::Enforce(_)),
+                "a panic must resolve to Enforce even when the process is in {expected:?} — \
+                 a panic means the analysis never completed, so neither the taint state nor \
+                 the posture it was supposed to honour was determined; got {action:?}"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // read-only Bash allowlist at the GATE (backlog a4b59893)
+    // -----------------------------------------------------------------------
+
+    /// Taint `session` via a real `WebFetch` mark and prove the marker landed,
+    /// so every "…is Silent" assertion below is known to be about the read-only
+    /// fast path rather than about a session that was never tainted.
+    fn taint_and_confirm(cwd: &std::path::Path, session: &str) {
+        decide_mark(&hook_input(
+            "WebFetch",
+            json!({"url": "https://example.com"}),
+            cwd,
+            session,
+        ))
+        .unwrap();
+        assert!(
+            state::is_tainted(session),
+            "fixture precondition: {session} must actually be tainted before these assertions"
+        );
+    }
+
+    /// A tainted turn must still be able to DIAGNOSE itself: a Bash command
+    /// statically known to write nothing is not a write-class tool, so the gate
+    /// stays silent for it.
+    #[test]
+    fn read_only_bash_is_silent_even_when_the_session_is_tainted() {
+        let (_guard, _dir, cwd) = temp_env("readonly-silent");
+        let session = "s-readonly-silent";
+        taint_and_confirm(&cwd, session);
+
+        for command in [
+            "git status",
+            "git log --oneline",
+            "git diff",
+            "git worktree list",
+            "ls -la",
+            "pwd",
+            "git status | wc -l",
+        ] {
+            let gate_input = hook_input("Bash", json!({ "command": command }), &cwd, session);
+            assert_eq!(
+                decide_gate_with(&gate_input, ENFORCE),
+                GateAction::Silent,
+                "a tainted turn must still be able to run {command:?}"
+            );
+        }
+    }
+
+    /// ANTI-VACUITY for the test above, and the load-bearing half of this pair:
+    /// the SAME tainted session, in the SAME fixture, still enforces for
+    /// everything that is not on the allowlist. Without this, an
+    /// `is_readonly_bash` that returned `true` for every input — or a gate that
+    /// had simply stopped checking taint at all — would pass the test above.
+    #[test]
+    fn the_same_tainted_session_still_enforces_for_write_class_tools() {
+        let (_guard, _dir, cwd) = temp_env("readonly-antivacuity");
+        let session = "s-readonly-antivacuity";
+        taint_and_confirm(&cwd, session);
+
+        // Write-class Bash: not on the allowlist, so the taint state decides.
+        for command in [
+            "touch out.txt",
+            "rm -rf x",
+            "git checkout main",
+            "cargo test",
+        ] {
+            let gate_input = hook_input("Bash", json!({ "command": command }), &cwd, session);
+            assert_enforced(&decide_gate_with(&gate_input, ENFORCE));
+        }
+
+        // Non-Bash write-class tools: the fast path is keyed on the tool being
+        // `Bash`, so a `command` field on another tool must not borrow it.
+        assert_enforced(&decide_gate_with(
+            &hook_input("Write", json!({"file_path": "a.rs"}), &cwd, session),
+            ENFORCE,
+        ));
+        assert_enforced(&decide_gate_with(
+            &hook_input("Edit", json!({"file_path": "a.rs"}), &cwd, session),
+            ENFORCE,
+        ));
+        assert_enforced(&decide_gate_with(
+            &hook_input("Write", json!({"command": "git status"}), &cwd, session),
+            ENFORCE,
+        ));
+    }
+
+    /// FAIL-CLOSED (CLAUDE.md §3): a `Bash` payload whose `command` could not be
+    /// READ is not a command that was classified as read-only. Every shape that
+    /// yields no `&str` — absent field, wrong type, `null`, no `tool_input` at
+    /// all — must flow to the taint check and enforce, never to the fast path.
+    #[test]
+    fn bash_with_an_unreadable_command_enforces_when_tainted() {
+        let (_guard, _dir, cwd) = temp_env("readonly-unreadable");
+        let session = "s-readonly-unreadable";
+        taint_and_confirm(&cwd, session);
+
+        for tool_input in [
+            json!({}),
+            json!({"command": 42}),
+            json!({"command": null}),
+            json!({"command": ["git", "status"]}),
+            json!({"command": {"argv": "git status"}}),
+            json!({"cmd": "git status"}),
+        ] {
+            let gate_input = hook_input("Bash", tool_input.clone(), &cwd, session);
+            assert_enforced(&decide_gate_with(&gate_input, ENFORCE));
+        }
+
+        // No `tool_input` key at all — not reachable through `hook_input`.
+        let no_tool_input = HookInput {
+            tool_name: "Bash".to_string(),
+            tool_input: None,
+            cwd: cwd.to_string_lossy().into_owned(),
+            session_id: session.to_string(),
+            ..Default::default()
+        };
+        assert_enforced(&decide_gate_with(&no_tool_input, ENFORCE));
+    }
+
+    /// The read-only fast path must not become a way to launder a
+    /// cannot-determine: with an UNREADABLE marker the session's taint state is
+    /// `Undetermined`, and a read-only command is still silent — because the
+    /// fast path never consults the marker at all. This test exists to make
+    /// that ordering EXPLICIT rather than incidental, since it is the one place
+    /// where `Silent` is reached without a `Check::Clean`.
+    ///
+    /// The control is in the same body: with the same corrupt marker, a
+    /// write-class command enforces, so the silence above is attributable to the
+    /// allowlist and not to the marker having been repaired or ignored globally.
+    #[test]
+    fn the_fast_path_precedes_the_taint_check_and_a_corrupt_marker_still_enforces_write_class() {
+        let (_guard, _dir, cwd) = temp_env("readonly-corrupt");
+        let session = "s-readonly-corrupt";
+        let marker = state::marker_path_for_test(session);
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"{ not json").unwrap();
+        assert!(
+            matches!(state::check(session), state::Check::Undetermined(_)),
+            "fixture precondition: the marker must be unreadable"
+        );
+
+        assert_eq!(
+            decide_gate_with(
+                &hook_input("Bash", json!({"command": "git status"}), &cwd, session),
+                ENFORCE
+            ),
+            GateAction::Silent,
+            "the read-only fast path is evaluated before the marker is read"
+        );
+        assert_enforced(&decide_gate_with(
+            &hook_input("Bash", json!({"command": "touch out.txt"}), &cwd, session),
+            ENFORCE,
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // session-scoped marker: the cwd dimension is gone (backlog 90d1ca1d)
+    // -----------------------------------------------------------------------
+
+    /// A mark made while the payload's `cwd` was A must be visible to a gate
+    /// whose payload `cwd` is B. Through 0.1.10 the marker path carried a
+    /// `project_key(cwd)` component, so a `cd` between the marking `Read` and
+    /// the gating tool call moved the lookup into a different bucket and the
+    /// gate answered `Clean` — a silent allow.
+    ///
+    /// This is the in-process half of the proof. The end-to-end half — where
+    /// `mark` and `gate` are separate PROCESSES with different working
+    /// directories, which is the only shape that can catch a regression keyed on
+    /// `current_dir()` rather than on the payload — is
+    /// `crates/taintguard/tests/session_scoped_marker.rs`.
+    #[test]
+    fn a_mark_under_one_cwd_is_seen_by_a_gate_under_another_cwd() {
+        let (_guard, dir, cwd_a) = temp_env("cross-cwd");
+        let cwd_b = dir.path().join("other-project");
+        std::fs::create_dir_all(&cwd_b).unwrap();
+        let session = "s-cross-cwd";
+
+        // Mark from A, via a `Read` of a file outside A — so `cwd` genuinely
+        // participates in the classification, exactly as in the real bug.
+        let outside = tempfile::Builder::new()
+            .prefix("taintguard-cross-cwd-external-")
+            .tempdir()
+            .unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "s").unwrap();
+        decide_mark(&hook_input(
+            "Read",
+            json!({"file_path": secret.to_string_lossy()}),
+            &cwd_a,
+            session,
+        ))
+        .unwrap();
+
+        // Gate from B — a directory outside A.
+        assert!(
+            !cwd_b.starts_with(&cwd_a),
+            "fixture precondition: B must not be inside A"
+        );
+        assert_enforced(&decide_gate_with(
+            &hook_input("Bash", json!({"command": "touch out.txt"}), &cwd_b, session),
+            ENFORCE,
+        ));
+
+        // Control: the same gate from A enforces too, so the assertion above is
+        // not passing because B happens to be a special case.
+        assert_enforced(&decide_gate_with(
+            &hook_input("Bash", json!({"command": "touch out.txt"}), &cwd_a, session),
+            ENFORCE,
+        ));
+    }
+
+    /// ANTI-VACUITY for the test above: the marker is keyed by SESSION, so a
+    /// DIFFERENT session id in the same store is still clean. Without this, an
+    /// implementation that reported every session tainted would pass.
+    #[test]
+    fn a_different_session_in_the_same_store_is_still_clean() {
+        let (_guard, dir, cwd_a) = temp_env("cross-cwd-control");
+        let cwd_b = dir.path().join("other-project");
+        std::fs::create_dir_all(&cwd_b).unwrap();
+
+        decide_mark(&hook_input(
+            "WebFetch",
+            json!({"url": "https://example.com"}),
+            &cwd_a,
+            "s-marked",
+        ))
+        .unwrap();
+
+        for cwd in [&cwd_a, &cwd_b] {
+            assert_eq!(
+                decide_gate_with(
+                    &hook_input(
+                        "Bash",
+                        json!({"command": "touch out.txt"}),
+                        cwd,
+                        "s-unmarked"
+                    ),
+                    ENFORCE
+                ),
+                GateAction::Silent,
+                "an unmarked session must stay clean regardless of cwd"
+            );
+        }
     }
 }

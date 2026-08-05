@@ -52,6 +52,23 @@ fixes and a caller that conflates them sends the reader to the wrong command —
       class-specific remedy per code, and both of those remedies are wrong
       here. pre-push's catch-all branch prints this script's full output
       instead, which names the actual problem.)
+  4 — PARKED_CONFIG class: scripts/parked-plugins.json exists but cannot be
+      trusted (unparseable, wrong shape, an entry with no reason/parked_at, or a
+      name matching no plugin). Fix: repair that file. Outranks every other
+      class — see the tail of main() for why.
+
+3. PARKED (third state, not a failure at all). A plugin can be deliberately
+   left un-rolled-out / un-enabled, and before scripts/parked-plugins.json
+   existed there was no way to say so: the checker was binary, and a plugin
+   parked on purpose reported red forever with no reachable green. That is not a
+   cosmetic problem. On 2026-08-04 the permanent red on taintguard was read as a
+   malfunction, the crate was armed to clear it, and its known false positive
+   then blocked the user's editing work (backlog a6f165cd). A declared park moves
+   that plugin's rollout/enablement findings out of the red lists and into a
+   PARKED ON PURPOSE report that prints the reason, the date it was parked, an
+   optional revisit pointer, and — verbatim — every finding it is suppressing. It
+   does NOT affect the exit code in either direction, and it does not touch the
+   source-tree or cache checks (see main()).
 
 The rollout dimension checks FOUR things, because a matching version string is
 not evidence that anything in that directory is current:
@@ -123,6 +140,7 @@ Run from the repo root:  python3 scripts/check-plugin-rollout.py
 """
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -137,6 +155,11 @@ RC_OK = 0
 RC_ROLLOUT = 1
 RC_ENABLEMENT = 2
 RC_UNVERIFIABLE = 3
+# The parked DECLARATION itself is unusable (see load_parked). Its own class
+# because its remedy is neither of the three above: nothing is wrong with the
+# fleet, the file that says which reds are intentional cannot be trusted — so
+# this run cannot tell an intentional red from a real one in either direction.
+RC_PARKED_CONFIG = 4
 
 REPO = os.getcwd()
 CRATES = os.path.join(REPO, "crates")
@@ -392,6 +415,175 @@ def _load_json(path):
             return OK, json.load(f)
     except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
         return MALFORMED, str(exc)
+
+
+PARKED_PATH = os.environ.get(
+    "PARKED_PLUGINS", os.path.join(REPO, "scripts", "parked-plugins.json")
+)
+
+# Keys a parked entry must carry. `reason` because a park with no stated reason
+# is indistinguishable from a park someone forgot about, and the next reader —
+# the one deciding whether the red is a fault — is exactly who needs it.
+# `parked_at` because "how long has this been parked" is the only question that
+# tells an operator whether the park is still current, and a park with no start
+# date can never be judged stale.
+PARKED_REQUIRED = ("reason", "parked_at")
+PARKED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def load_parked(plugins, path=None):
+    """Return (parked, config_problems) from the parked-plugins declaration.
+
+    `parked` maps crate/plugin name -> entry dict. `config_problems` is a list of
+    human-readable reasons the DECLARATION cannot be trusted.
+
+    Why this file exists (backlog a6f165cd)
+    ---------------------------------------
+    This checker used to be binary: a plugin was either live or a failure. There
+    is a third real state — deliberately NOT rolled out, because arming it right
+    now would do harm. taintguard is the case that forced this: it is committed
+    at 0.1.8, its launcher is intentionally left un-rolled-out while a known
+    false positive is measured, and so the rollout dimension reported red on
+    every single run with no way for it to ever go green short of arming the
+    gate.
+
+    A permanent red is not a harmless nuisance, it is an ACTIVE hazard, and this
+    is measured, not theoretical: on 2026-08-04 the red was read as a
+    malfunction, taintguard was force-enabled to clear it, and the known false
+    positive then blocked the user's editing. The gate did not fail; the
+    checker's inability to say "this red is on purpose" is what failed.
+
+    Fail-closed on every unusable shape rather than defaulting to "nothing is
+    parked". A declaration that cannot be parsed is the one state where this
+    file's whole purpose — distinguishing intentional reds from real ones — is
+    unavailable, and silently treating it as empty would resurrect the exact
+    misreading above (a red with no explanation attached). The one shape that is
+    NOT a problem is an ABSENT file: nothing parked is the normal case and the
+    default this repo should sit at.
+
+    A name that matches no scanned plugin is a hard problem, not a shrug: a
+    typo'd park silently parks NOTHING, so the red persists, and the operator who
+    wrote the entry believes it was handled. That is worse than no park at all.
+    """
+    path = path or PARKED_PATH
+    state, data = _load_json(path)
+    if state == ABSENT:
+        return {}, []
+    if state == MALFORMED:
+        return {}, [
+            f"{path} is present but unparseable ({data}). Whether any red below "
+            "is intentional cannot be determined, so no red is treated as "
+            "intentional and this run reports the declaration itself as broken."
+        ]
+    if not isinstance(data, dict) or not isinstance(data.get("parked"), dict):
+        return {}, [
+            f"{path} must be an object with a \"parked\" object in it, got "
+            f"{type(data).__name__} / {type(data.get('parked') if isinstance(data, dict) else None).__name__}. "
+            "Nothing is parked by an unreadable declaration."
+        ]
+
+    # "Real" means a crate DIR under crates/ or a plugin.json name — not merely a
+    # plugin the scan managed to PARSE. A crate whose plugin.json is corrupt is
+    # absent from `plugins`, and keying the typo guard on that list alone made a
+    # park on such a crate report as a misspelling: the reader was sent to repair
+    # parked-plugins.json (where nothing was wrong) instead of the plugin.json
+    # that actually broke, and the real UNVERIFIABLE finding was outranked by a
+    # bogus PARKED_CONFIG one.
+    known = set()
+    if os.path.isdir(CRATES):
+        known.update(
+            name for name in os.listdir(CRATES)
+            if os.path.isdir(os.path.join(CRATES, name))
+        )
+    for crate, pname, _src_ver in plugins:
+        known.add(crate)
+        if pname:
+            known.add(pname)
+
+    parked, problems = {}, []
+    for name, entry in sorted(data["parked"].items()):
+        if not isinstance(entry, dict):
+            problems.append(
+                f"{path}: parked entry \"{name}\" must be an object with "
+                f"{'/'.join(PARKED_REQUIRED)}, got {type(entry).__name__}."
+            )
+            continue
+        missing = [
+            k for k in PARKED_REQUIRED
+            if not isinstance(entry.get(k), str) or not entry[k].strip()
+        ]
+        if missing:
+            problems.append(
+                f"{path}: parked entry \"{name}\" is missing a non-empty "
+                f"{', '.join(missing)}. A park with no stated {missing[0]} cannot "
+                "be told apart from one nobody remembers making."
+            )
+            continue
+        if not PARKED_DATE_RE.match(entry["parked_at"]):
+            problems.append(
+                f"{path}: parked entry \"{name}\" has parked_at="
+                f"{entry['parked_at']!r}, which is not a YYYY-MM-DD date. How long "
+                "the park has stood is the question this field answers, so an "
+                "unparseable one answers nothing."
+            )
+            continue
+        if name not in known:
+            problems.append(
+                f"{path}: parked entry \"{name}\" matches no plugin under crates/ "
+                "(neither a crate dir nor a plugin.json name). A misspelled entry "
+                "parks nothing while reading as though it had, so it is reported "
+                "instead of ignored."
+            )
+            continue
+        parked[name] = entry
+    return parked, problems
+
+
+def parked_report(name, entry, suppressed):
+    """One human-readable line-block for a parked plugin.
+
+    Prints the SUPPRESSED findings verbatim rather than only their count. A park
+    silences a detection; hiding what was silenced would turn this feature into
+    the fail-open it exists to avoid, and the operator deciding whether the park
+    is still right needs to see what it is currently covering for.
+    """
+    lines = [
+        f"{name}: parked since {entry['parked_at']} — {entry['reason']}"
+    ]
+    revisit = entry.get("revisit")
+    if isinstance(revisit, str) and revisit.strip():
+        lines.append(f"    revisit: {revisit.strip()}")
+    if suppressed:
+        lines.append(f"    suppressing {len(suppressed)} finding(s) that would otherwise be red:")
+        lines.extend(f"      * {s}" for s in suppressed)
+    else:
+        lines.append(
+            "    NOTE: this park is currently suppressing NOTHING — the plugin is "
+            "live and green. Remove the entry so a future red is not silenced by a "
+            "declaration nobody re-read."
+        )
+    return "\n".join(lines)
+
+
+def partition_parked(problems, parked):
+    """Split `problems` into (still_red, {name: [suppressed, ...]}).
+
+    Problem strings for a specific plugin are all built as `f"{crate}: ..."`, so
+    a leading `"<parked name>: "` is what identifies one. Matching on that exact
+    prefix (not a substring search) keeps fleet-wide findings — the superseded-
+    version-dir line, which merely NAMES crates inside it — on the red side where
+    they belong: a removable cache dir is removable whether or not the plugin is
+    parked, and parking must not quietly excuse it.
+    """
+    still_red, suppressed = [], {name: [] for name in parked}
+    for problem in problems:
+        for name in parked:
+            if problem.startswith(f"{name}: "):
+                suppressed[name].append(problem)
+                break
+        else:
+            still_red.append(problem)
+    return still_red, suppressed
 
 
 def scan_plugins():
@@ -989,6 +1181,8 @@ def main():
             "silently dropped."
         )
 
+    parked, parked_config = load_parked(plugins)
+
     rollout_problems, rollout_checked = check_rollout(plugins)
     gate_failures, warnings, (enabled_checked, gates_seen) = check_enabled(plugins)
 
@@ -1011,6 +1205,31 @@ def main():
     # rollout verdict + exit code rather than given a sixth code.
     launcher_problems, launcher_checked = check_bin_launchers(plugins)
 
+    # Reclassify parked plugins' findings out of the red lists — AFTER every
+    # dimension has produced its findings, so a park can only ever move a
+    # finding, never prevent one from being computed. Filtering `plugins` up
+    # front instead would mean the checker never learns what the park is
+    # covering for, and the report below could not print it.
+    #
+    # Deliberately BEFORE launcher_problems/stale_problems/pin_problems are
+    # folded into `rollout_problems`, so those three stay red for a parked plugin
+    # too. A park is a statement about DEPLOYMENT ("do not arm this yet"); it
+    # says nothing about source-tree invariants (a missing bin/<crate> launcher
+    # is a defect whether or not the plugin is armed) or about the cache (a
+    # removable superseded dir is removable either way). `unverifiable` is left
+    # alone for the same reason: a plugin.json that cannot be read is a broken
+    # source tree, not an intentional state.
+    parked_suppressed = {name: [] for name in parked}
+    if parked:
+        if rollout_problems:
+            rollout_problems, suppressed = partition_parked(rollout_problems, parked)
+            for name, items in suppressed.items():
+                parked_suppressed[name].extend(items)
+        if gate_failures:
+            gate_failures, suppressed = partition_parked(gate_failures, parked)
+            for name, items in suppressed.items():
+                parked_suppressed[name].extend(items)
+
     if rollout_problems is None:
         print(f"installed_plugins.json not found: {REGISTRY_PATH}", file=sys.stderr)
         print("(set CLAUDE_PLUGIN_REGISTRY to override, or install at least one plugin first)", file=sys.stderr)
@@ -1030,6 +1249,23 @@ def main():
         print("(set CLAUDE_SETTINGS to override)", file=sys.stderr)
         print("SKIP: no settings to check enabledPlugins against (not a failure)")
 
+    if parked:
+        print(
+            f"\nPARKED ON PURPOSE ({len(parked)} plugin(s) declared in "
+            f"{PARKED_PATH} — NOT a failure, and NOT a green either):",
+            file=sys.stderr,
+        )
+        for name in sorted(parked):
+            print(f"  - {parked_report(name, parked[name], parked_suppressed[name])}", file=sys.stderr)
+        print(
+            "\nDo NOT 'fix' these by rolling them out or enabling them. That is "
+            "what happened on 2026-08-04 (backlog a6f165cd): the red was read as "
+            "a malfunction, taintguard was armed to clear it, and a known false "
+            "positive then blocked real work. Clearing a park means resolving the "
+            "reason above and deleting the entry — in that order.",
+            file=sys.stderr,
+        )
+
     # Warnings never affect the exit code — disabling a non-gate plugin is a
     # legitimate user choice, so this informs without blocking.
     if warnings:
@@ -1047,24 +1283,59 @@ def main():
     # means some crate under crates/ could not be inspected at all: the counts
     # below would then describe a smaller fleet than exists, which reads exactly
     # like a clean run.
+    # A park must never be laundered into a green. Every OK line below is a claim
+    # about a POPULATION, so each one subtracts the plugins whose findings were
+    # moved to the parked report and names the remainder — otherwise "41 plugins
+    # deployed at their source version" would be printed over a plugin that is
+    # deliberately NOT deployed at its source version, which is the same class of
+    # lie as printing it over a plugin the scan lost.
+    def _minus_parked(total, names):
+        """(reported_total, suffix) with parked members of `names` excluded."""
+        hit = sorted(n for n in names if n in parked)
+        if not hit:
+            return total, ""
+        return total - len(hit), f" ({len(hit)} parked, reported above: {', '.join(hit)})"
+
+    all_names = [n for crate, pname, _v in plugins for n in (crate, pname) if n]
     if rollout_problems is not None and not rollout_problems and not unverifiable:
         held = (
             f"; {stale_checked} superseded dir(s) remain, all held by a live session"
             if stale_checked
             else "; no superseded version dir left in the cache"
         )
+        shown, parked_note = _minus_parked(rollout_checked, set(all_names))
         print(
-            f"OK: {rollout_checked} plugins deployed at their source version "
+            f"OK: {shown} plugins deployed at their source version "
             f"and file-for-file identical to their crate (no rollout drift){held}"
+            f"{parked_note}"
         )
     if (
         gate_failures is not None
         and not gate_failures
         and gates_seen == len(EXPECTED_GATE_PLUGINS)
     ):
+        shown, parked_note = _minus_parked(gates_seen, set(EXPECTED_GATE_PLUGINS))
+        checked_shown, _ = _minus_parked(enabled_checked, set(all_names))
         print(
-            f"OK: all {gates_seen} GATE plugin(s) enabled "
-            f"({enabled_checked} plugins checked against enabledPlugins)"
+            f"OK: all {shown} GATE plugin(s) enabled "
+            f"({checked_shown} plugins checked against enabledPlugins){parked_note}"
+        )
+
+    if parked_config:
+        print(
+            f"\nUNUSABLE PARKED DECLARATION ({len(parked_config)} problem(s)): the "
+            "file that says which reds are intentional cannot be trusted, so NO "
+            "red below was treated as intentional:",
+            file=sys.stderr,
+        )
+        for p in parked_config:
+            print(f"  - {p}", file=sys.stderr)
+        print(
+            f"\nFix: repair {PARKED_PATH}. Each entry needs a non-empty "
+            f"{'/'.join(PARKED_REQUIRED)} and a name that matches a plugin under "
+            "crates/. Deleting the file entirely is also valid — it means nothing "
+            "is parked.",
+            file=sys.stderr,
         )
 
     if unverifiable:
@@ -1121,6 +1392,14 @@ def main():
     # first is acting on an incomplete picture. It is also the only class whose
     # fix is neither rollout-plugins.sh nor a settings.json edit, which is
     # exactly why it needs its own code rather than borrowing one of theirs.
+    #
+    # PARKED_CONFIG outranks everything, for the same reason UNVERIFIABLE
+    # outranks the two dimensions, one level up: when the parked declaration is
+    # unusable, the reader cannot tell which of the reds below were meant to be
+    # there. Acting on any of the other remedies first risks arming something
+    # that was parked on purpose — the 2026-08-04 incident exactly.
+    if parked_config:
+        return RC_PARKED_CONFIG
     if unverifiable:
         return RC_UNVERIFIABLE
     if rollout_problems:

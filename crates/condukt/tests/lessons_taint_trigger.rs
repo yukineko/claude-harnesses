@@ -120,7 +120,10 @@ fn nonempty_hit_taints_the_session_with_lessons_source() {
     // Isolate taintguard's own `check` reads the same env override this test
     // set for the spawned process.
     std::env::set_var("TAINTGUARD_STATE_DIR", &fx.taint_dir);
-    match taintguard::state::check(&fx.repo, run) {
+    // taintguard 0.2.0 dropped `check`'s cwd argument (backlog 90d1ca1d): the
+    // marker is keyed by session alone. What this test asserts is unchanged —
+    // the same session is Tainted/Clean — only the cwd dimension is gone.
+    match taintguard::state::check(run) {
         taintguard::state::Check::Tainted(sources) => {
             assert!(
                 sources.iter().any(|s| s == "lessons"),
@@ -150,7 +153,10 @@ fn zero_hit_does_not_taint_the_session() {
     );
 
     std::env::set_var("TAINTGUARD_STATE_DIR", &fx.taint_dir);
-    match taintguard::state::check(&fx.repo, run) {
+    // taintguard 0.2.0 dropped `check`'s cwd argument (backlog 90d1ca1d): the
+    // marker is keyed by session alone. What this test asserts is unchanged —
+    // the same session is Tainted/Clean — only the cwd dimension is gone.
+    match taintguard::state::check(run) {
         taintguard::state::Check::Clean => {}
         other => panic!(
             "a zero-hit retrieval must NOT taint the session (preserves the [] no-op contract), got {other:?}"

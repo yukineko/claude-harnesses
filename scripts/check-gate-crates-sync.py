@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the GATE_CRATES crate set is consistent across its 9 hardcoded sources.
+"""Verify the GATE_CRATES crate set is consistent across its 11 hardcoded sources.
 
 Two related-but-distinct concepts are hardcoded across these sources:
   - "GATE crates": fleet defense gates that require a canary rollout
@@ -61,7 +61,31 @@ Sources and how each must relate to the canonical GATE_CRATES set:
     consolidation pass because it was live-enforcing (not "zero-observed");
     tracking it here does not change enforcement, only drift detection.
 
+  - scripts/check-raw-io-ratchet.py  module-level GATE_CRATES = (...) tuple —
+    must equal canonical EXACTLY. This is the raw-stdlib-I/O ratchet's scan
+    scope: `iter_target_files()` walks `crates/<c>/src/**/*.rs` for exactly
+    these crates, so a stale copy shrinks the ratchet's universe and the "floor
+    held" line it prints describes a smaller fleet than exists. Found missing
+    `taintguard` (backlog fb6b1796), i.e. the newest GATE crate's src/ was never
+    ratcheted at all while the gate reported green.
+  - CLAUDE.md  the "GATE クレート（a/b/c）" prose parenthetical in the plugin
+    version/rollout section — must equal canonical EXACTLY. Same reasoning as
+    docs/OVERVIEW.md, one level more load-bearing: CLAUDE.md is the norm file
+    every session reads first, so a stale list there is the copy most likely to
+    be believed. It also drifted to 6 in the same incident.
+
 See docs/fix-gate-crates-drift.md for the incident that motivated this checker.
+
+The 2026-08-04 recurrence (backlog fb6b1796) was not a failure of the comparison
+logic but of its ROSTER: three of the four places a reader/tool actually consults
+(.githooks/pre-push, scripts/check-raw-io-ratchet.py, CLAUDE.md) said 6 while
+canonical said 7, and only the first of those three was a registered source. The
+other two were invisible here, so the checker printed a green "consistent across
+9 sources" over live drift. Two lessons are baked in below: every NEW hardcoded
+copy must be appended to SOURCES in the same commit that creates it, and this
+script must be RUN by a hook — it spent this whole period wired to nothing but a
+CI workflow file that does not exist in this repo, which is why the drift it was
+built to catch survived in-tree for weeks. It is now a .githooks/pre-commit gate.
 
 Exit 0 if all sources satisfy their required relation, 1 on any drift.
 Run from the repo root:  python3 scripts/check-gate-crates-sync.py
@@ -224,6 +248,24 @@ def rust_const_crates(text):
     return crates or None
 
 
+def claudemd_crates(text):
+    """Extract crate names from CLAUDE.md's prose "GATE クレート（a/b/c）" list.
+
+    Deliberately keyed on the Japanese phrase `GATE クレート` rather than on the
+    identifier `GATE_CRATES` that overview_md_crates() looks for: CLAUDE.md
+    spells the concept in prose and mentions the identifier nowhere, so reusing
+    the OVERVIEW extractor here would return None (parsed as "drift") for a file
+    that is perfectly in sync. Prose, like OVERVIEW's, so `_sole_match` is not
+    applied — but a missing or empty match still returns None and the caller
+    treats that as drift rather than as an absent file.
+    """
+    m = re.search(r"GATE\s*クレート\s*(?:（|\()([^）)]+)(?:）|\))", text)
+    if not m:
+        return None
+    crates = set(x.strip() for x in m.group(1).split("/") if x.strip())
+    return crates or None
+
+
 def skill_md_crates(text):
     """Extract crate names from the "## 対象 crate (既定)" section's backtick CSV."""
     m = re.search(r"##\s*対象\s*crate\s*\(既定\)\s*\n+.*?`([a-z0-9_,-]+)`", text, re.S)
@@ -270,6 +312,8 @@ SOURCES = [
     ),
     ("docs/OVERVIEW.md", overview_md_crates, "exact"),
     ("scripts/check-fail-open.py", python_const_crates, "exact"),
+    ("scripts/check-raw-io-ratchet.py", python_const_crates, "exact"),
+    ("CLAUDE.md", claudemd_crates, "exact"),
 ]
 
 

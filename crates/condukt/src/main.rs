@@ -2097,8 +2097,13 @@ fn run_user(cmd: Command) -> Result<()> {
                 // diverges for a non-live manual/CI invocation. Not changed
                 // here (the skill's fallback is also load-bearing for the
                 // retrieval ledger — out of scope for this task).
+                // The `cwd` argument this call used to pass was dropped in
+                // taintguard 0.2.0: keying the marker by cwd let a `cd` between
+                // the mark and the gate lose it silently (backlog 90d1ca1d).
+                // The marker is keyed by session alone now, which is what this
+                // call site wanted anyway — the taint belongs to the turn.
                 if event.hit {
-                    if let Err(e) = taintguard::state::mark(&cwd, &event.run_id, "lessons") {
+                    if let Err(e) = taintguard::state::mark(&event.run_id, "lessons") {
                         eprintln!("warning: could not record lessons taint mark: {e}");
                     }
                 }

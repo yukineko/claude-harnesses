@@ -85,7 +85,7 @@ else
     exit 1
 fi
 
-GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|mutategate|overwatch)/'
+GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|taintguard|mutategate|overwatch)/'
 
 # Crates whose SKILL specs carry the autonomy gate contracts asserted by
 # scripts/e2e-autonomy.sh (scout selection/hand-off, condukt agreement, flow
@@ -252,6 +252,21 @@ EOF
 enablement: see the Fix line above — this class is NOT fixed by a rollout.
 A GATE crate that is installed but not listed in enabledPlugins is inert: its
 hooks never fire, so the gate reports nothing and guards nothing.
+
+This is advisory only — the push is not blocked.
+EOF
+            ;;
+        4)
+            # Parked-declaration class. scripts/parked-plugins.json is what says
+            # which of the reds above are intentional; while it is unusable, that
+            # question has no answer, and the wrong guess is the expensive one —
+            # arming a plugin that was parked on purpose is what caused the
+            # 2026-08-04 incident (backlog a6f165cd).
+            cat >&2 <<'EOF'
+
+parked declaration: scripts/parked-plugins.json could not be used, so NONE of the
+reds above were treated as intentional. Do not act on them until that file parses
+— repair it (or delete it, which means nothing is parked) and re-run.
 
 This is advisory only — the push is not blocked.
 EOF

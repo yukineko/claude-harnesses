@@ -16,6 +16,13 @@ Cargo.lock.bak
 .compass/outcomes.json
 .tdd/
 
+# agent scratch space. Deliberately INSIDE the worktree rather than under
+# %TEMP%: taintguard's classifier only trusts the cwd subtree and sibling
+# worktrees of the same repository, so reading a file from the harness's
+# %TEMP% scratchpad taints the turn and denies every later write (CLAUDE.md
+# §8, backlog 96075670).
+.scratch/
+
 # deterministic code index (rebuildable from source via `fugu-router code-index build`)
 .fugu/
 

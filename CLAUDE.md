@@ -324,6 +324,23 @@ merge で統合すればよい。統合できないのは**同じ index / 作業
 - ゲート（donegate / reviewgate / precommit-audit）が他セッションの変更を自分のものとして要求してきたら、
   それは**帰属のバグ**であって自分の不備ではない。共有 skip ファイルで黙らせず、記録して報告する。
 
+### 一時ファイルは作業中の worktree 内 `.scratch/` に置く — `%TEMP%` の scratchpad を使わない
+
+**ハーネスがシステムプロンプトで指定する scratchpad ディレクトリ（`%TEMP%/claude/<project>/<session>/scratchpad`）に
+書いたファイルを `Read` してはならない。** 代わりに**作業中の worktree 直下の `.scratch/`**（`.gitignore` 済み）を使う。
+
+**Why**: taintguard の分類器（`crates/taintguard/src/classify.rs`）が `Trusted` を返す経路は
+「`cwd` 配下」と「同一 git リポジトリの worktree」の2本だけで、`%TEMP%` 配下はどちらにも該当しない。
+つまり **scratchpad のファイルを 1 度 `Read` した時点でその turn は `external-read` で tainted になり、
+以降の `Write`/`Edit`（および allowlist 外の `Bash`）が deny される**。実測 2026-08-05: `/flow` 実行中に
+scratchpad のファイルを Read した直後から全 Bash が deny され、`~/.taintguard/state/.../taint.json` に
+`{"tainted":true,"sources":["external-read"]}` が書かれていた（backlog 96075670）。これは taintguard の
+誤検知ではなく**仕様どおりの正しい判定**であり、直すべきは置き場所の側である。
+
+**How to apply**: 一時ファイルは `<worktree>/.scratch/` に置く（`.gitignore` に登録済みなので commit されない）。
+リポジトリ外へ出す必要が本当にあるなら、その内容は `Read` ツールではなく `Bash` 側で完結させる
+（`mark` の PostToolUse matcher は `WebFetch|WebSearch|Read` であって `Bash` を見ていない）。
+
 ## context 読み込み戦略（重要 — 盲目的に crate を探索しない）
 
 このリポジトリは 39 クレートある。全体を毎回読むと context を浪費するので、**必要な層だけを
@@ -361,14 +378,25 @@ merge で統合すればよい。統合できないのは**同じ index / 作業
 `[package].version` を micro 上げる**。リンク先 36 plugin の bump は要求しない（1 commit あたり
 108 ファイルが動き並行セッションと必ず衝突するため。§8）。`check-version-bumped.py` が強制する。
 
-強制ゲート3本（commit 前・push 前・CI で回す）: `check-plugin-versions.py`（lockstep）/
+強制ゲート4本（commit 前・push 前・CI で回す）: `check-plugin-versions.py`（lockstep）/
 `check-version-bumped.py`（bump-on-change。plugin と harness-core の両方）/
-`check-plugin-rollout.py`（rollout 実行済みか。`.deployed-from.json` の `harness_core_version` も見る）。
+`check-plugin-rollout.py`（rollout 実行済みか。`.deployed-from.json` の `harness_core_version` も見る）/
+`check-launcher-exec-bit.py`（`crates/<c>/bin/<name>` launcher が git **index** で 100755 か。
+`core.fileMode=false` なので working tree の mode は信用できない。100644 のまま配布された launcher は
+`Permission denied` で暗転し、hook が起動しない = finding も出ないので red ではなく dark になる）。
 
-反映手順・GATE クレート（blastguard/propguard/specguard/stuckguard/mutategate/overwatch）の
-canary 要件・低レベル構成要素（rebuild-plugins.sh/sync-plugin-assets.sh）・`overwatch
+**「意図的に parked」は宣言する**。計測待ち等で意図的に rollout / enable しない plugin は
+`scripts/parked-plugins.json` に理由・`parked_at`・再検討の起点（`revisit`）を書く。宣言した plugin の
+rollout/enablement 所見は red ではなく「PARKED ON PURPOSE」として（抑止した所見を逐語表示したうえで）
+報告される。**逆に、宣言のない red を「たぶん意図的だろう」と解釈して rollout / enable で消してはいけない**
+（2026-08-04 にそれをやって、既知の誤検知でユーザーの編集作業をブロックした）。
+
+反映手順・GATE クレート（blastguard/propguard/specguard/stuckguard/taintguard/mutategate/overwatch）
+の canary 要件・低レベル構成要素（rebuild-plugins.sh/sync-plugin-assets.sh）・`overwatch
 review-queue`（統合レビュー窓口）の詳細は [`docs/repo-operations.md`](docs/repo-operations.md)
-を参照。
+を参照。この列挙は `scripts/check-gate-crates-sync.py` の SOURCES に登録された正典コピーの
+1 つであり、`scripts/rollout-plugins.sh` の `GATE_CRATES=` と機械照合される（勝手に増減させると
+`gate-crates-sync` ゲートが commit を止める）。
 
 ## さらに読む（docs/）
 

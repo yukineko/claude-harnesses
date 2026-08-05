@@ -480,6 +480,118 @@ mod tests {
         );
     }
 
+    /// Set [`OBSERVE_ONLY_ENV`] to `value` (or remove it for `None`) for the life
+    /// of the guard, restoring the previous value on drop. The caller must hold
+    /// [`crate::state::ENV_LOCK`] (via [`crate::state::env_lock_for_test`]).
+    struct RealEnv(Option<String>);
+
+    impl RealEnv {
+        fn set(value: Option<&str>) -> Self {
+            let previous = std::env::var(OBSERVE_ONLY_ENV).ok();
+            match value {
+                Some(v) => std::env::set_var(OBSERVE_ONLY_ENV, v),
+                None => std::env::remove_var(OBSERVE_ONLY_ENV),
+            }
+            RealEnv(previous)
+        }
+    }
+
+    impl Drop for RealEnv {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => std::env::set_var(OBSERVE_ONLY_ENV, v),
+                None => std::env::remove_var(OBSERVE_ONLY_ENV),
+            }
+        }
+    }
+
+    /// [`posture`] — the ONLY reader of the real [`OBSERVE_ONLY_ENV`] — gets a
+    /// direct in-process test caller (backlog 703ba566).
+    ///
+    /// ## Why this exists when `only_the_exact_opt_in_value_selects_observe_only`
+    /// already covers the same value table
+    ///
+    /// It does not cover the same code. That test calls [`resolve`] with a literal,
+    /// so `posture()` had **zero** test callers in the whole crate: a fault-injection
+    /// audit put a loose truthy parse *inside `posture()`* while leaving `resolve()`
+    /// exact, and the entire unit suite stayed GREEN even though against the real
+    /// binary `TAINTGUARD_OBSERVE_ONLY=false` then disabled the gate. The
+    /// end-to-end coverage that closes that hole lives in
+    /// `tests/provenance_gate.rs::the_real_observe_only_env_var_fails_closed_for_every_non_opt_in_value`
+    /// (child process, real env), and it remains the load-bearing one because it is
+    /// the only place `run_hook` and the real binary are in the loop.
+    ///
+    /// This test is the cheap in-process companion: it pins the env READ itself, so
+    /// a regression is localised to `posture()` here rather than having to be
+    /// inferred from a child process's stdout, and `posture()` can no longer be
+    /// edited without any test executing it.
+    ///
+    /// The `Some("1")` case is the positive control: without it a `posture()` that
+    /// returned `Enforce` unconditionally (ignoring the env entirely) would satisfy
+    /// every other row.
+    #[test]
+    fn posture_reads_the_real_env_var_and_fails_closed_for_every_non_opt_in_value() {
+        let _lock = crate::state::env_lock_for_test();
+        let before = std::env::var(OBSERVE_ONLY_ENV).ok();
+
+        // Positive control first, so a broken fixture (or an env var this process
+        // cannot actually set) fails loudly instead of making the rest vacuous.
+        {
+            let _env = RealEnv::set(Some(OBSERVE_ONLY_OPT_IN));
+            assert_eq!(
+                posture(),
+                Posture::ObserveOnly,
+                "the exact opt-in value MUST select observe-only through the real env var, \
+                 otherwise every assertion below passes for the wrong reason"
+            );
+        }
+
+        for raw in [
+            None,
+            Some(""),
+            Some(" "),
+            Some("0"),
+            Some("2"),
+            Some("01"),
+            Some("1.0"),
+            Some(" 1"),
+            Some("1 "),
+            Some("\t1"),
+            Some("1\n"),
+            Some("true"),
+            Some("TRUE"),
+            Some("True"),
+            Some("yes"),
+            Some("y"),
+            Some("on"),
+            Some("false"),
+            Some("off"),
+            Some("no"),
+            Some("observe"),
+            Some("OBSERVE_ONLY"),
+            Some("-1"),
+            Some("11"),
+        ] {
+            let _env = RealEnv::set(raw);
+            assert_eq!(
+                posture(),
+                Posture::Enforce,
+                "{raw:?} in {OBSERVE_ONLY_ENV} must NOT opt into observe-only — every \
+                 non-exact value has to fail closed to Enforce"
+            );
+        }
+
+        // And the var is left exactly as it was found — asserted, not assumed. A
+        // leaked `TAINTGUARD_OBSERVE_ONLY=1` would silently weaken every later test
+        // in this binary that reads the real posture, and `RealEnv`'s restore is the
+        // only thing preventing it.
+        assert_eq!(
+            std::env::var(OBSERVE_ONLY_ENV).ok(),
+            before,
+            "this test must restore {OBSERVE_ONLY_ENV} to its original value"
+        );
+    }
+
     fn env(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::Builder::new()
             .prefix(&format!("taintguard-observe-{name}-"))

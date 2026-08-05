@@ -59,6 +59,21 @@
 #                                                 north_star "close the
 #                                                 fail-open ENTRANCE with types
 #                                                 and lints")
+#   gate-crates-sync   check-gate-crates-sync.py  the GATE_CRATES set disagreeing
+#                                                 across the 11 places it is
+#                                                 hardcoded. Existed unwired for
+#                                                 weeks (its only caller was a CI
+#                                                 workflow file this repo does
+#                                                 not have), during which
+#                                                 taintguard went missing from 3
+#                                                 of them; backlog fb6b1796
+#   launcher-exec-bit  check-launcher-exec-bit.py a crates/<c>/bin/<name> plugin
+#                                                 launcher recorded 100644 in the
+#                                                 GIT INDEX. Deployed that way it
+#                                                 fails Permission denied and the
+#                                                 plugin's hooks never run, so the
+#                                                 gate goes DARK, not red
+#                                                 (backlog 8cb3bc22)
 #
 # Plus one Rust gate (not python3):
 #   main-tree-guard    condukt guard main-tree    a commit from the SHARED primary
@@ -151,6 +166,8 @@ run check-version-bumped.py   bump-on-change
 run check-hardcoded-secret.py secret-guard
 run check-raw-io-ratchet.py   raw-io-ratchet
 run check-worktree-isolation.py worktree-isolation
+run check-gate-crates-sync.py gate-crates-sync
+run check-launcher-exec-bit.py launcher-exec-bit
 
 # main-tree-guard — CLAUDE.md §8, the one gate here that is Rust rather than
 # python3, because its decision is a tri-state over injectable inputs and is
@@ -238,6 +255,16 @@ Remediation hints:
                     scripts/check-raw-io-ratchet.py --update-baseline` and
                     commit the updated scripts/check-raw-io-ratchet.baseline
                     (raising the pin is visible in review, not hidden).
+  gate-crates-sync  the GATE_CRATES set disagrees across the places it is
+                    hardcoded. scripts/rollout-plugins.sh's GATE_CRATES= line is
+                    canonical; bring the reported source to match it (or, if you
+                    just ADDED a new hardcoded copy, register it in that
+                    checker's SOURCES list in this same commit).
+  launcher-exec-bit a crates/<crate>/bin/<name> launcher is not 100755 in the
+                    git INDEX. `git update-index --chmod=+x <path>`; a plain
+                    `chmod +x` does nothing here, since this repo sets
+                    core.fileMode=false and git therefore ignores the working
+                    tree's mode entirely.
   main-tree-guard   commit from a worktree instead of the shared primary tree
                     (`condukt worktree create`, or `git stash` + `git worktree
                     add`). Merges and rebases in the main tree already pass. If

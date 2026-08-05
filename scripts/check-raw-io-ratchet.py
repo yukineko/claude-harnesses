@@ -97,11 +97,17 @@ BASELINE_FILE = REPO / "scripts" / "check-raw-io-ratchet.baseline"
 # Tuple syntax (not list) for the same reason check-fail-open.py's copy is a
 # tuple: `check-gate-crates-sync.py`'s `python_const_crates()` extractor only
 # recognizes `GATE_CRATES = (...)`.
+#
+# Registered in that checker's SOURCES as an "exact" source (backlog fb6b1796):
+# this copy had silently lost `taintguard`, so every raw stdlib I/O call in the
+# newest GATE crate's `src/` was outside the ratchet's scope entirely — the floor
+# it printed was a floor over 6 crates while the fleet had 7.
 GATE_CRATES = (
     "blastguard",
     "propguard",
     "specguard",
     "stuckguard",
+    "taintguard",
     "mutategate",
     "overwatch",
 )

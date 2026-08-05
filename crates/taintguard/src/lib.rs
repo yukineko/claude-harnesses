@@ -9,13 +9,24 @@
 //!
 //! Provenance-scoped least privilege: once a turn consumes untrusted-
 //! provenance content (a `WebFetch`/`WebSearch` result, or a `Read` outside
-//! the session's TRUST DOMAIN — its `cwd`, the other git worktrees of that
-//! same repository, and any root declared through
-//! [`classify::TRUSTED_ROOTS_ENV`]; see [`classify`] for why the domain is not
-//! the process cwd), write-class tools (`Bash`/`Write`/`Edit`/`MultiEdit`/
+//! the project root), write-class tools (`Bash`/`Write`/`Edit`/`MultiEdit`/
 //! `NotebookEdit`) are downgraded to `ask` (interactive) or `deny` (headless)
 //! for the rest of that turn. A clean `Stop` (the turn ends without further
 //! taint) restores the session to normal.
+//!
+//! **One carve-out, added in 0.2.0 (backlog a4b59893):** a `Bash` invocation
+//! that [`readonly::is_readonly_bash`] positively recognises as write-free does
+//! not consult the taint state at all. The sentence above was the promise the
+//! crate always made ("*write-class* tools"), while the hook matched the whole
+//! `Bash` tool — so a tainted turn could not run `git status` to diagnose
+//! itself, and a non-interactive worker had no route back except a human
+//! re-invocation. Allowing a command that cannot write is not a hole in the
+//! invariant: it is the invariant, finally applied to what it says. Everything
+//! `is_readonly_bash` does not positively recognise is gated exactly as before.
+//!
+//! The taint marker is keyed by **session id alone** since 0.2.0; see
+//! [`state::state_dir`] for the fail-open that removing the `cwd` dimension
+//! closes (backlog 90d1ca1d).
 //!
 //! Three hooks, plus a fourth subcommand that is NOT a hook:
 //!   * `mark`  (PostToolUse, matcher `WebFetch|WebSearch|Read`) — records the
@@ -53,4 +64,5 @@ pub mod classify;
 pub mod hookio;
 pub mod interactive;
 pub mod observe;
+pub mod readonly;
 pub mod state;

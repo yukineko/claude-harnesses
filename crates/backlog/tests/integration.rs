@@ -145,32 +145,63 @@ fn list_without_project_or_all_scopes_to_cwd_project_only() {
 }
 
 #[test]
-fn list_all_flag_returns_cross_project_results() {
-    // `--all` must reproduce the OLD default (project-omitted) behavior:
-    // every project's pending tasks, regardless of cwd.
+fn list_all_flag_returns_every_project_in_the_resolved_store() {
+    // `--all` is scoped to ONE store. The store is resolved per repo
+    // (`<root>/.backlog/tasks.toml`), so "every project" means every project
+    // key recorded in THAT file — NOT a cross-repo search, which has no index
+    // to walk.
+    //
+    // A repo-resolved store cannot exercise this: every project path inside
+    // one repo collapses to that repo's root, so such a store holds exactly
+    // one key and `--all` would be indistinguishable from the default (that is
+    // the design consequence, not a gap in the test). The stores that DO hold
+    // several keys are the ones reached without repo resolution — a pinned
+    // `store_dir` and the legacy fallback. A pinned store is used here because
+    // it fixes the path for every subcommand regardless of cwd, so the test
+    // cannot pass or fail for reasons of where `cargo test` was invoked.
     let home = temp_home("list-all-flag");
-    let cwd_a = temp_home("list-all-flag-repo-a");
-    std::fs::create_dir_all(cwd_a.join(".git")).unwrap();
-    let project_a = cwd_a.canonicalize().unwrap().to_string_lossy().into_owned();
+    let pinned = temp_home("list-all-flag-store");
+    std::fs::create_dir_all(home.join(".backlog")).unwrap();
+    std::fs::write(
+        home.join(".backlog").join("config.toml"),
+        format!("store_dir = {:?}\n", pinned.to_string_lossy()),
+    )
+    .unwrap();
 
     let (add_a, _) = run(
-        &["add", "--title", "Task A", "--project", &project_a],
+        &["add", "--title", "Task A", "--project", "/proj/a"],
         "",
         &home,
     );
     assert_eq!(add_a, 0, "add A must succeed");
     let (add_b, _) = run(
-        &["add", "--title", "Task B", "--project", "/other/project"],
+        &["add", "--title", "Task B", "--project", "/proj/b"],
         "",
         &home,
     );
     assert_eq!(add_b, 0, "add B must succeed");
+    assert!(
+        pinned.join("tasks.toml").exists(),
+        "both adds must have landed in the pinned store, else the rest of this \
+         test would be asserting against the wrong file"
+    );
 
-    let (code, stdout) = run_in(&["list", "--all"], "", &home, Some(&cwd_a));
+    let (code, stdout) = run(&["list", "--all"], "", &home);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("Task A") && stdout.contains("Task B"),
-        "--all must return every project's tasks, got: {stdout}"
+        "--all must return every project in the resolved store, got: {stdout}"
+    );
+
+    // Anti-vacuity: the same store, same cwd, WITHOUT `--all` must not return
+    // them. Neither `/proj/a` nor `/proj/b` is the cwd's project, so a `--all`
+    // that was ignored entirely would leave this list empty — and the
+    // assertion above would then have to fail.
+    let (code, scoped) = run(&["list"], "", &home);
+    assert_eq!(code, 0);
+    assert!(
+        !scoped.contains("Task A") && !scoped.contains("Task B"),
+        "default scope must stay project-scoped, got: {scoped}"
     );
 }
 

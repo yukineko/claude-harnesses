@@ -29,13 +29,16 @@ pub fn run(input: &HookInput) -> Option<String> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    if let Ok(count) = store::requeue_expired(&cfg.tasks_path(), now) {
+    // The session's own repo root selects the store, so a SessionStart in
+    // project A never reads (or requeues) project B's queue.
+    let tasks_path = cfg.tasks_path_for(Some(&root));
+    if let Ok(count) = store::requeue_expired(&tasks_path, now) {
         if count >= 1 {
             eprintln!("{} 件の保留タスクが再キューされました", count);
         }
     }
 
-    let tasks = store::list(&cfg.tasks_path(), None, Some(&root), None).ok()?;
+    let tasks = store::list(&tasks_path, None, Some(&root), None).ok()?;
 
     // pending または failed のタスクのみ対象 (is_pending() で判定)
     let mut pending: Vec<_> = tasks.into_iter().filter(|t| t.is_pending()).collect();

@@ -236,7 +236,10 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
       weight 無指定は既定 0.0＝従来の (priority, created_at) 順（後方互換）。weight は順序を変えるだけで priority は上書きしない。
       クロスプロジェクトで繰り返し検出される作業種別は `docs/backlog-tag-taxonomy.md` の規約タグ（例:
       `worktree-hygiene` / `deploy-verify` / `network-infra`）も併せて付ける。
-4. backlog も空なら **hypothesis（新規 discovery: open 仮説）**:
+4. **`open` 仮説（新規 discovery）は、ユーザーが明示的にそれを回せと言ったときだけ**引く。
+   **backlog が空になったことを理由に自動でここへ降りてはいけない** — それは「仕事が無いので
+   仕事を作る」であり、下の 5 の停止判定に反する。自動ループでは open 仮説は
+   **残課題として報告するだけ**にして 5 へ進む。明示指示がある場合のみ以下を使う:
    ```bash
    hypothesis list --status open    # confidence 降順（同点 created_at 昇順）でソート済み。空なら次へ
    ```
@@ -252,9 +255,26 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
    - `RAT` が**空**（高リスクの未テスト assumption が無い＝既に de-risk 済み）→ 従来どおり
      その**仮説を検証する実験**（full build）を課題文にする。
    いずれも仮説 ID を控える。`hypothesis` バイナリが無い / 0 件 / `rat` 未対応なら従来どおり full build に流す。
-5. compass 主筋・measure（観測可能なもの）・backlog・open 仮説のいずれも**実行可能なものが無い**
-   → **ループを抜けて Step 4 へ**（awaiting-measurement にまだ観測不能な仮説が残っていても、
-   それは「計測待ち」として残課題に計上しループは終える）。
+5. **停止判定 — 仕事が無いなら繰り返さない。** 継続してよいのは次の 3 つが**実際に一手を出したとき**だけ:
+   **(i) compass 主筋**（Step 1 の `to_condukt` が未消化）、**(ii) measure step**（3-1 の 2 で
+   **今observable**な awaiting-measurement 仮説）、**(iii) backlog の pending**。
+   この 3 つがどれも空なら → **ループを抜けて Step 4 へ**。
+
+   **`open` 仮説だけを根拠にループを継続してはいけない**（3-1 の 4 は上の 3 つが空のときの
+   継続理由にならない）。open 仮説は「これから作れる仕事」であって「積まれている仕事」ではないので、
+   これを継続条件に入れると**キューが空でもループが永久に新しい仕事を発明し続ける**。
+   残っている open 仮説と、まだ観測不能な awaiting-measurement は、**残課題として報告するだけ**にして
+   ループは終える。
+
+   **Why**: 停止条件が 4 source の AND だった頃は、backlog が空でも compass と open 仮説が
+   一手を出し続ける限り回り続けた。ユーザーから見ると「有効な backlog が無いのに繰り返している」
+   状態になる。自律モードで求められているのは「**タスクがある限り続ける**」であって
+   「**タスクを作り続ける**」ではない。逆に、pending が残っているのに早期に止めるのも同じくらい悪い
+   （自律モードが仕事を放置する）ので、**上の 3 つのどれかが一手を出す限りは止めない**こと。
+
+   **空を「空」と断定する前に一度取り直す**: `backlog next --claim` はロックを取れなかったとき
+   fail-closed に何も返さない（＝「キューが空」ではなく「今は取れない」）。`no pending tasks` が
+   返っても 1 度は取り直してから停止判定する。
 6. ピックしたタスクを**課題文**に組み立てる:
    - **単一課題**（compass 主筋 / measure / hypothesis / 単発 backlog）→ タイトル＋ notes（仕様・制約・参照ファイル）で従来どおり 1 課題文。
    - **backlog バッチ（3 の a/b で複数残った場合）→ 1 つの課題文に、各 backlog item を「独立した top-level タスク」として列挙**する。
@@ -471,6 +491,12 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
 
 ## ハードルール
 
+- **仕事が無いのに繰り返さない（停止条件は compass 主筋 / measure / backlog pending の 3 つだけ）。**
+  この 3 つがどれも一手を出さないなら Step 4 へ抜ける。**`open` 仮説は継続理由にならない** —
+  それは「積まれている仕事」ではなく「これから作れる仕事」なので、継続条件に入れると
+  キューが空でもループが永久に新しい仕事を発明し続ける。残った open 仮説と観測不能な
+  awaiting-measurement は**報告するだけ**。逆に pending が残っているのに早期に止めるのも同じくらい悪い
+  （自律モードが仕事を放置する）ので、3 つのどれかが一手を出す限りは止めない。詳細は Step 3-1 の 5。
 - **ユーザーの課題から逸脱しない。着手した課題は、終わるまでそれだけをやる。**
   作業中に別の問題（より重要に見えるもの・途中で詰まった原因・気づいた欠陥）が現れても、
   **そこへ乗り換えない**。判定基準は常に「いまユーザーの prompt に忠実か」であり、

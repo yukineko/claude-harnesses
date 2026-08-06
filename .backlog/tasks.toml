@@ -205,7 +205,7 @@ tags = [
     "flow",
     "p0",
 ]
-status = "pending"
+status = "done"
 notes = """
 実測 2026-08-06、worktree /Users/yuki/src/.harness-worktrees/session-b9a78b46、backlog 0.2.13。
 
@@ -217,7 +217,7 @@ notes = """
 
 完了条件: (1) worktree の cwd から、その worktree が属する git リポジトリ本体の project スコープが解決されること (gitfile 経由の common dir から主 worktree を求める形が harness_core::trust::resolve に既にある — 同じ手が使える)。(2) 解決できなかった場合に空リストを返さないこと — 判定不能として区別可能に返し、下流が「残件なし」と読めないようにする。(3) worktree の cwd から pending が返ることを観測するテスト。"""
 created_at = 1786024586
-updated_at = 1786024586
+updated_at = 1786041740
 weight = 0.0
 issue_number = 199
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/199"

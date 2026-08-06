@@ -849,3 +849,304 @@ fn next_fails_closed_when_the_project_scope_cannot_be_determined() {
         claim_code, claim_out, claim_err
     );
 }
+
+/// Seed a store from a caller-supplied `tasks.toml` body verbatim. Lets a
+/// test pin the exact on-disk shape (including fields a newer binary adds,
+/// or the absence of them in a legacy file).
+fn seed_tasks_toml_raw(store_dir: &std::path::Path, body: &str) {
+    std::fs::create_dir_all(store_dir).unwrap();
+    std::fs::write(store_dir.join("tasks.toml"), body).unwrap();
+}
+
+/// Test (g), write side: when `canonicalize_project` degrades because the
+/// project identity could not be determined, the task that gets written must
+/// CARRY that fact.
+///
+/// `add` deliberately does not block on an undetermined scope — blocking
+/// would lose the finding being filed, which is worse. But the degrade
+/// currently leaves no trace on the stored task: the fallback label is
+/// written into `project` and is indistinguishable from a label that was
+/// genuinely resolved. A later reader (this checkout once its `.git` link is
+/// repaired, or the main tree this worktree belongs to) filters on `project`
+/// and the task simply is not there — the silent disappearance this test
+/// exists to prevent. The marker is what makes "this label is a guess"
+/// recoverable downstream.
+#[test]
+fn add_under_an_undetermined_scope_marks_the_stored_task() {
+    assert!(
+        git_available(),
+        "git is required for project-identity tests but is not available in PATH"
+    );
+
+    let home = temp_home("undetermined-write-marker");
+    let broken_dir = temp_dir("undetermined-write-marker-dir");
+    std::fs::write(
+        broken_dir.join(".git"),
+        "gitdir: /definitely/nonexistent-xyz-q7f3k9z2/.git/worktrees/broken\n",
+    )
+    .unwrap();
+
+    let broken_str = broken_dir.to_string_lossy().into_owned();
+    let (add_code, _add_out, add_err) = run_in(
+        &[
+            "add",
+            "--title",
+            "Filed under a guess",
+            "--project",
+            &broken_str,
+        ],
+        "",
+        &home,
+        &broken_dir,
+    );
+
+    // The degrade itself stays: filing must not be blocked.
+    assert_eq!(
+        add_code, 0,
+        "add must still succeed under an undetermined scope (blocking would \
+         lose the finding being filed); stderr: {}",
+        add_err
+    );
+    assert!(
+        add_err.contains("could not resolve project scope"),
+        "precondition: this cwd must actually exercise the undetermined \
+         degrade path (that is what makes this test about the marker rather \
+         than about a resolvable add), got stderr:\n{}",
+        add_err
+    );
+
+    let stored = std::fs::read_to_string(broken_dir.join(".backlog").join("tasks.toml"))
+        .expect("add must have written a store");
+
+    // Anti-vacuity: the task really was written.
+    assert!(
+        stored.contains("Filed under a guess"),
+        "anti-vacuity check failed: the task must be in the store, got:\n{}",
+        stored
+    );
+
+    assert!(
+        stored.contains("project_unresolved = true"),
+        "a task written while project identity was UNDETERMINED carries no \
+         trace of that in the store, so nothing downstream can tell a guessed \
+         `project` label apart from a resolved one — the task can silently \
+         vanish from another checkout's default filtered list with no way to \
+         recover it. Expected a `project_unresolved = true` marker in:\n{}",
+        stored
+    );
+}
+
+/// Test (h), read side: a task marked as written under an undetermined scope
+/// must NOT be silently dropped by the default (project-filtered) list, and
+/// must be rendered distinguishably rather than blended in.
+///
+/// The control in the same store is a task whose `project` also does not
+/// match this checkout but which WAS resolved: that one must still be
+/// filtered out, otherwise "do not drop the marked one" would have been
+/// implemented as "stop filtering", which is a different (and much worse)
+/// change.
+#[test]
+fn default_list_does_not_silently_drop_a_task_written_under_an_undetermined_scope() {
+    assert!(
+        git_available(),
+        "git is required for project-identity tests but is not available in PATH"
+    );
+
+    let home = temp_home("undetermined-read-visible");
+    let repo = temp_dir("undetermined-read-visible-repo");
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success(),
+        "git init failed"
+    );
+
+    let canonical = repo.canonicalize().unwrap();
+    let elsewhere = canonical
+        .parent()
+        .unwrap()
+        .join("a-totally-different-checkout");
+    let elsewhere = elsewhere.to_string_lossy();
+
+    // Three tasks in THIS checkout's store:
+    //   - one that belongs here (must be listed, as always)
+    //   - one that belongs elsewhere and was RESOLVED (must stay filtered out)
+    //   - one that belongs "elsewhere" only because the label was a guess
+    //     (must NOT be silently dropped)
+    seed_tasks_toml_raw(
+        &repo.join(".backlog"),
+        &format!(
+            r#"[[task]]
+id = "aaaa0001"
+title = "Local resolved task"
+project = "{local}"
+tags = []
+status = "pending"
+notes = ""
+created_at = 1000
+updated_at = 1000
+weight = 0.0
+
+[[task]]
+id = "aaaa0002"
+title = "Foreign resolved task"
+project = "{elsewhere}"
+tags = []
+status = "pending"
+notes = ""
+created_at = 1000
+updated_at = 1000
+weight = 0.0
+
+[[task]]
+id = "aaaa0003"
+title = "Foreign guessed task"
+project = "{elsewhere}"
+tags = []
+status = "pending"
+notes = ""
+created_at = 1000
+updated_at = 1000
+weight = 0.0
+project_unresolved = true
+"#,
+            local = canonical.to_string_lossy(),
+            elsewhere = elsewhere,
+        ),
+    );
+
+    // Anti-vacuity: all three are physically present and parse.
+    let (all_code, all_out, all_err) = run_in(&["list", "--all"], "", &home, &repo);
+    assert_eq!(all_code, 0, "list --all must succeed; stderr: {}", all_err);
+    for t in [
+        "Local resolved task",
+        "Foreign resolved task",
+        "Foreign guessed task",
+    ] {
+        assert!(
+            all_out.contains(t),
+            "anti-vacuity check failed: {:?} must be physically present in the \
+             store (via --all), got:\n{}",
+            t,
+            all_out
+        );
+    }
+
+    let (code, out, err) = run_in(&["list"], "", &home, &repo);
+    assert_eq!(code, 0, "default list must succeed; stderr: {}", err);
+
+    assert!(
+        out.contains("Local resolved task"),
+        "regression: the default list must still show this project's own \
+         tasks, got:\n{}",
+        out
+    );
+    assert!(
+        !out.contains("Foreign resolved task"),
+        "the default list stopped filtering entirely — a task that genuinely \
+         belongs to another checkout AND whose project label was resolved \
+         must still be filtered out. Dropping the filter is not an acceptable \
+         way to stop losing undetermined tasks.\nGot:\n{}",
+        out
+    );
+    assert!(
+        out.contains("Foreign guessed task"),
+        "a task written while project identity was UNDETERMINED was silently \
+         dropped by the default (filtered) list: its `project` label is a \
+         guess, so filtering on it hides the task with no diagnostic, which is \
+         exactly the \"cannot determine\" -> \"nothing here\" collapse this \
+         repo's gate invariant forbids.\nGot:\n{}",
+        out
+    );
+    assert!(
+        out.to_lowercase().contains("unresolved"),
+        "the undetermined-scope task is listed but rendered exactly like a \
+         normally-scoped one, so a reader cannot tell that its project label \
+         is a guess. It must be distinguishable (the string \"unresolved\" is \
+         expected somewhere in the rendering).\nGot:\n{}",
+        out
+    );
+}
+
+/// Test (i), backward compatibility: a `tasks.toml` written by an older
+/// binary has no marker field at all, and must keep loading unchanged.
+///
+/// This is the constraint that makes the marker safe to add: a new field
+/// that is not `#[serde(default)]` would make every pre-existing store fail
+/// to parse, turning a visibility fix into total data loss.
+#[test]
+fn a_legacy_tasks_toml_without_the_marker_still_loads() {
+    assert!(
+        git_available(),
+        "git is required for project-identity tests but is not available in PATH"
+    );
+
+    let home = temp_home("legacy-no-marker");
+    let repo = temp_dir("legacy-no-marker-repo");
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success(),
+        "git init failed"
+    );
+    let canonical = repo.canonicalize().unwrap();
+
+    // Exactly the shape an older binary wrote: no `project_unresolved` key.
+    seed_tasks_toml_raw(
+        &repo.join(".backlog"),
+        &format!(
+            r#"[[task]]
+id = "1e9acy01"
+title = "Task from an older binary"
+project = "{local}"
+tags = []
+status = "pending"
+notes = ""
+created_at = 1000
+updated_at = 1000
+weight = 0.0
+"#,
+            local = canonical.to_string_lossy(),
+        ),
+    );
+
+    let (code, out, err) = run_in(&["list"], "", &home, &repo);
+    assert_eq!(
+        code, 0,
+        "a legacy tasks.toml (no marker field) must still load; stderr: {}",
+        err
+    );
+    assert!(
+        out.contains("Task from an older binary"),
+        "the legacy task must be listed unchanged, got:\n{}",
+        out
+    );
+    // A legacy task must default to "resolved", not to "unresolved" — the
+    // absent field means "this binary never recorded either way", and
+    // rendering every legacy task as a guess would make the marker useless.
+    assert!(
+        !out.to_lowercase().contains("unresolved"),
+        "a legacy task (marker field absent) was rendered as unresolved; the \
+         default for a missing field must be `false`, otherwise every \
+         pre-existing task is flagged and the marker carries no signal.\nGot:\n{}",
+        out
+    );
+
+    let (jcode, jout, jerr) = run_in(&["list", "--json"], "", &home, &repo);
+    assert_eq!(
+        jcode, 0,
+        "a legacy tasks.toml must also serialize to --json; stderr: {}",
+        jerr
+    );
+    assert!(
+        jout.contains("Task from an older binary"),
+        "the legacy task must appear in --json, got:\n{}",
+        jout
+    );
+}

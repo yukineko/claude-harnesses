@@ -510,9 +510,22 @@ fn run(cli: Cli) -> Result<()> {
                     } else {
                         t.status.clone()
                     };
+                    // A task written while its project identity was
+                    // UNDETERMINED is listed even when its (guessed) project
+                    // label does not match this scope — see `store::list`.
+                    // It must not blend in with the tasks that genuinely
+                    // scope here, so the row states that its project is a
+                    // guess and names the label that was guessed. Rendered
+                    // ONLY for marked tasks: a legacy store (no marker field)
+                    // therefore looks exactly as it did before.
+                    let scope_str = if t.project_unresolved {
+                        format!("  [project unresolved: {}]", t.project)
+                    } else {
+                        String::new()
+                    };
                     println!(
-                        "{:<10} {:<10} {:<10} {}",
-                        t.id, priority_str, status_str, t.title
+                        "{:<10} {:<10} {:<10} {}{}",
+                        t.id, priority_str, status_str, t.title, scope_str
                     );
                 }
             }

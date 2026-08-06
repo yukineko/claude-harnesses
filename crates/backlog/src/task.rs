@@ -22,6 +22,37 @@ pub struct Task {
     pub id: String,
     pub title: String,
     pub project: String,
+    /// True when `project` above is a FALLBACK GUESS rather than a resolved
+    /// identity: the write that created this task named a location that really
+    /// exists but whose canonical project identity could not be determined (a
+    /// dangling worktree `.git` link, an unreadable gitfile, a path whose very
+    /// existence could not be checked), so
+    /// `store::canonicalize_project_with_marker` substituted the plain
+    /// git-toplevel label instead of blocking the write.
+    ///
+    /// NOT set for a path that is definitively ABSENT on this machine (a
+    /// cross-machine label such as `C:/Users/.../harness`, or another
+    /// checkout's path): nothing was guessed there — the caller's explicit
+    /// label was adopted verbatim and every checkout normalizes it the same
+    /// way, so it cannot go missing the way a guess can. See
+    /// `store::canonicalize_project_with_marker`'s doc comment.
+    ///
+    /// It exists because the degrade is otherwise invisible: a guessed label is
+    /// byte-identical in shape to a resolved one, so another checkout's default
+    /// (project-filtered) `list` would drop the task with no diagnostic —
+    /// "cannot determine" collapsing into "nothing here" (CLAUDE.md §3).
+    /// `store::list` therefore keeps a task with this flag set even when its
+    /// `project` does not match the filter, and `main.rs` renders it marked
+    /// `unresolved`.
+    ///
+    /// Absent in tasks.toml files written before this field existed;
+    /// `#[serde(default)]` loads those as `false`. `false` is the correct
+    /// default here even though this repo normally defaults to the restrictive
+    /// side: the absent field means "the writing binary never recorded either
+    /// way", and treating every pre-existing task as a guess would flag the
+    /// whole store and leave the marker carrying no signal at all.
+    #[serde(default)]
+    pub project_unresolved: bool,
     #[serde(default)]
     pub tags: Vec<String>,
     pub status: String,
@@ -146,6 +177,7 @@ mod tests {
             id: "00000000".to_string(),
             title: "test".to_string(),
             project: "/tmp/proj".to_string(),
+            project_unresolved: false,
             tags: tags.into_iter().map(|s| s.to_string()).collect(),
             status: status.to_string(),
             notes: String::new(),

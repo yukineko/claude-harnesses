@@ -386,3 +386,16 @@ updated_at = 1786046798
 weight = 0.0
 issue_number = 215
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/215"
+
+[[task]]
+id = "5742e1d5"
+title = "specguard spec-map の自己追尾ドリフトは fast-forward merge で止まる（ea6f27b1 の観測結果）"
+project = "/Users/yuki/src/harness"
+tags = []
+status = "pending"
+notes = "観測 2026-08-07、測定点 main 1b35d662 -> 31f1fe99。.githooks/post-merge は先頭で HEAD^@ の親数を数え、2 未満なら exit 0 する（ファイル冒頭の注記: fast-forward merge はコミットを作らないので certify 対象が無い）。specguard map sync はその early-exit の後段にあるため ff merge では走らない。実測: dirty だった spec-map をワークツリーのブランチへ commit し main へ --ff-only で取り込んだところ git status は clean のままで再ドリフトしなかった。--no-ff で取り込むと post-merge が走り last_synced が新しい merge commit を指して再び dirty になる（これが ea6f27b1 の追尾ループ）。したがって回避策は存在する: spec-map 同期コミットは ff で取り込む。ただし ff できない状況（main が先に進んでいる）では成立しないので恒久策は別途要る。last_synced が常に 1 コミット古くなる点は残る。"
+created_at = 1786047274
+updated_at = 1786047274
+weight = 0.0
+issue_number = 217
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/217"

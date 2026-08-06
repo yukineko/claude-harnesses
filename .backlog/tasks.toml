@@ -308,6 +308,7 @@ updated_at = 1786034097
 weight = 0.0
 issue_number = 205
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/205"
+
 [[task]]
 id = "5700ba25"
 title = "blastguard: 行外で定義された shell 関数の呼び出しが展開 head resolver の残存 fail-open"
@@ -359,3 +360,16 @@ updated_at = 1786045822
 weight = 0.0
 issue_number = 213
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/213"
+
+[[task]]
+id = "5b29d11e"
+title = "『取得失敗が空集合に潰れて allow』横断パターンの一括是正 (compass の次の一手)"
+project = "/Users/yuki/src/harness"
+tags = ["p1"]
+status = "pending"
+notes = "2026-08-07 の compass 再オリエンテーションで人間が裁定した次の ONE 右サイズの一手。DoD9 の完了条件の軸（是正完了）を実際に動かす唯一の候補。同一 shape は reviewgate P1（diff 取得失敗が空 diff = 変更なしへ潰れ無診断で allow）と propguard F-2 で2 crate 確認済み。手順: (1) shape を機械検出可能な述語として書き下す（走査/diff/subprocess の取得失敗が空コレクションへ落ち、その空が下流で対象なし=合格と読まれる形）、(2) 監査済み 7 crate を横断で当て逐語引用つきで列挙（辿れなかったは UNVERIFIED であって不在の証明ではない）、(3) 各ヒットを利害のない別 agent が fault injection で RED 先行観測してから是正 (F->P)、(4) 是正後に同じ述語を再実行して単調減少を観測。述語が 0 件を返したときは clean ではなく『この述語では見つからなかった』と報告すること。"
+created_at = 1786046693
+updated_at = 1786046693
+weight = 0.0
+issue_number = 214
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/214"

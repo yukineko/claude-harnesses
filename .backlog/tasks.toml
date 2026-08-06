@@ -205,3 +205,106 @@ updated_at = 1786024586
 weight = 0.0
 issue_number = 199
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/199"
+
+[[task]]
+id = "801d0bda"
+title = "cargo test --workspace が 3 回中 1 回、テスト結果を出さずに 1 target を落とす (再現せず・原因未特定)"
+project = "/Users/yuki/src/harness"
+tags = [
+    "test",
+    "flaky",
+    "harness-core",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-08-06、worktree session-b9a78b46、HEAD 90385f84 (= origin/main)。
+
+run1: `cargo build --workspace --all-targets` (rc=0) の直後に `cargo test --workspace --no-fail-fast` を実行 → 出力末尾に `error: 1 target failed:`。
+run2: 同じコマンドを単独で実行 → rc=0、`test result: FAILED` も `failures:` も `panicked at` も 0 件。
+
+判定不能として扱う根拠と、そこから読める形:
+run1 の出力には `test result: FAILED` が 1 行も無い。この行は当時のフィルタ `^(error|test result|failures:|---- )` に一致するので、出ていれば残っていたはず。したがって「テストが赤くなった」のではなく、**どのテストバイナリも結果行を出さないまま target が落ちた** — プロセスの異常終了 (abort/シグナル) か、結果を出す前の停止が疑われる。直前の `--all-targets` build は rc=0 なのでリンク失敗ではない。
+
+target 名は当時のフィルタが落としており不明 (`error: 1 target failed:` の次行はインデントされていて一致しなかった)。これは計測側の不備であり、次に測るときはフィルタを掛けない。
+
+疑うべき差分: run1 のテスト実行中に、別プロセスとして `backlog driver register` と `backlog add`、および `cargo fmt --all -- --check` を走らせていた。共有状態 (driver レジストリ / backlog ストア / target ディレクトリ) を読むテストが非 hermetic である可能性がある。ただしこれは仮説であって観測ではない。
+
+完了条件: (1) 落ちた target を特定する (フィルタ無しで反復実行し、`error: 1 target failed:` の次行を読む)。(2) 特定できたら、共有状態への依存を除いて hermetic にする。(3) 反復実行しても再現しない場合は、その事実と試行回数を記録して閉じる — 「再現しなかった」を「問題なし」と書かない。"""
+created_at = 1786025050
+updated_at = 1786025050
+weight = 0.0
+issue_number = 200
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/200"
+
+[[task]]
+id = "8836b370"
+title = "harness-core の trust テスト 2 本が HOME を復元せず、プロセスの残りに削除済み tempdir を指す HOME を残す"
+project = "/Users/yuki/src/harness"
+tags = [
+    "test",
+    "harness-core",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-08-06、crates/harness-core/src/trust.rs。
+
+`trust_roundtrip_and_env_override` (:266 付近) と `resolve_inherits_trust_from_the_main_worktree_but_only_when_it_is_trusted` (:330 付近) はどちらも `std::env::set_var("HOME", home.path())` を打つが、テスト末尾で元の HOME に戻していない。`home` は `tempfile::tempdir()` なのでテスト終了時に削除される。したがって以後、同じプロセス内で `harness_core::config::home()` を読むテストは **存在しないディレクトリ**を HOME として観測する。
+
+比較対象: 同じ crate の `config::tests::home_prefers_home_env_var_over_dirs_home_dir` は `var_os` で退避し、末尾で `set_var`/`remove_var` により復元している。作法は crate 内に既にあり、trust の 2 本だけが従っていない。
+
+今回の flake 修正 (crate 全体で 1 本の `crate::test_env::lock()` に寄せた変更) は **順序**を直列化するので、この漏れは順序競合としては顕在化しなくなった。しかし「テストが後続へ汚染を残す」こと自体は残っており、別の潜在的 flake の種である。今回の変更のスコープ外として意図的に分離した (元のタスクを塞いでいたのは競合であって復元漏れではないため)。
+
+完了条件: 両テストが HOME を退避・復元すること。panic 経路でも戻るよう、スコープガード (Drop 実装) か、復元を担う小さなヘルパを config::tests の作法と共通化する形が望ましい。"""
+created_at = 1786025495
+updated_at = 1786025495
+weight = 0.0
+issue_number = 201
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/201"
+
+[[task]]
+id = "3ccedd83"
+title = "test_env::lock の再入をコンパイル時/実行時に検出する機構がない"
+project = "/Users/yuki/src/harness"
+tags = [
+    "test-infra",
+    "p2",
+]
+status = "pending"
+notes = "harness-core の crate-wide test_env::lock は std Mutex なので再入すると panic ではなく deadlock する。症状は「名前のある失敗」ではなく「テストバイナリが終わらない」なので、CI では stuck / unrelated と読まれる。現状の防止策は lib.rs の doc comment の 1 文だけで、CLAUDE.md 第6節が禁じる「気をつける」に置いた対策そのもの。案: thread_local の保持フラグを立て、同一スレッドからの 2 回目の lock() で assert! を落として deadlock を named panic に変える。実装本体より、事前に RED を観測する方法（fix 前は当該テストが hang する＝通常の RED として観測できない）を先に決める必要がある。"
+created_at = 1786026351
+updated_at = 1786026351
+weight = 0.0
+issue_number = 202
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/202"
+
+[[task]]
+id = "b71c72a7"
+title = "テストが固定 /tmp パスを使うため、2 本の cargo test が同時に走ると互いを壊す"
+project = "/Users/yuki/src/harness"
+tags = [
+    "test-infra",
+    "worktree-hygiene",
+    "p1",
+]
+status = "pending"
+notes = '実測 2026-08-06、測定点 90385f84 + harness-core 未コミット差分。cargo test --workspace を 2 プロセス同時に走らせたところ、fugu-router の store::tests::import_episodes_deduplicates が summary.read で left 4 / right 2 を出した。原因は固定パス std::env::temp_dir().join("fugu-router-import-ep-test") を両プロセスが共有し、双方が src.jsonl へ append したこと。同様の固定パスは import_episodes_dry_run_writes_nothing と dedup_episodes_removes_duplicates_preserves_order にもある。donegate/tests/integration.rs:13 の isolated_dir は pid を混ぜているのでプロセス間は分離されるが、同一プロセス内で同じ tag を複数テストが使うと remove_dir_all と create_dir_all が競合し AlreadyExists で落ちる（run1 で観測）。ctxrot の violation_emission_tests::emit_violation_records_a_ctxrot_event も 0 対 1 で落ちた（要調査）。これは CLAUDE.md 第8節が並行 worktree セッションを義務づけていることと直接衝突する: 別セッションが別 worktree で cargo test を回すだけで、こちらのスイートが壊れる（target/ は分かれても /tmp は分かれない）。修正案は固定パスをやめて tempfile::tempdir へ寄せること。'
+created_at = 1786027340
+updated_at = 1786027340
+weight = 0.0
+issue_number = 203
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/203"
+
+[[task]]
+id = "594f4e56"
+title = "blastguard resolve_expanded_command_word: 条件付き実行の代入 (&& / ||) を Literal に落とさない"
+project = "/Users/yuki/src/harness"
+tags = ["p1"]
+status = "pending"
+notes = ""
+created_at = 1786034097
+updated_at = 1786034097
+weight = 0.0
+issue_number = 205
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/205"

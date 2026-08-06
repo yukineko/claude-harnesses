@@ -55,13 +55,14 @@
 
 use blastguard::model::Decision;
 use blastguard::rule_id::INTERNAL_ERROR_REASON;
-use blastguard::{detect, hookio, interactive, rule_id};
+use blastguard::{detect, hookio, interactive, retro, rule_id};
 use harness_core::hook::{self, HookInput};
 use std::process::exit;
 
 fn main() {
-    // Minimal CLI surface: version/help short-circuit before touching stdin.
-    for arg in std::env::args().skip(1) {
+    // Minimal CLI surface: version/help/retro short-circuit before touching stdin.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    for (i, arg) in args.iter().enumerate() {
         match arg.as_str() {
             "--version" | "-V" => {
                 println!("blastguard {}", env!("CARGO_PKG_VERSION"));
@@ -71,6 +72,9 @@ fn main() {
                 print_help();
                 exit(0);
             }
+            "retro" => {
+                exit(run_retro(&args[i + 1..]));
+            }
             _ => {}
         }
     }
@@ -78,6 +82,61 @@ fn main() {
     // by `run` itself and turned into a deny; `run_hook`'s own catch remains the
     // outer backstop for anything outside that scope (stdin read, JSON print).
     hook::run_hook(run);
+}
+
+/// `blastguard retro` — review past gate interventions and what became of them.
+///
+/// # Exit status is a verdict, not a formality
+///
+/// `2` when the corpus could not be read. A reviewer scripting this must be
+/// able to tell "no gate ever stopped anything" from "I read nothing", and an
+/// exit 0 printing an empty table conflates them — the same fail-open the
+/// report body refuses (see [`blastguard::retro`]).
+fn run_retro(rest: &[String]) -> i32 {
+    let mut dir: Option<std::path::PathBuf> = None;
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--dir" => match it.next() {
+                Some(v) => dir = Some(std::path::PathBuf::from(v)),
+                None => {
+                    eprintln!("blastguard retro: --dir needs a path");
+                    return 2;
+                }
+            },
+            "--project" => match it.next() {
+                Some(v) => dir = retro::transcript_dir_for(std::path::Path::new(v)),
+                None => {
+                    eprintln!("blastguard retro: --project needs a path");
+                    return 2;
+                }
+            },
+            other => {
+                eprintln!("blastguard retro: unknown argument `{other}`");
+                return 2;
+            }
+        }
+    }
+    let dir = match dir.or_else(|| {
+        std::env::current_dir()
+            .ok()
+            .and_then(|c| retro::transcript_dir_for(&c))
+    }) {
+        Some(d) => d,
+        None => {
+            eprintln!(
+                "blastguard retro: could not locate a transcript directory — pass --dir explicitly"
+            );
+            return 2;
+        }
+    };
+    let report = retro::build_report(retro::scan_dir(&dir));
+    print!("{}", retro::render(&report));
+    if report.is_undetermined() {
+        eprintln!("(looked in {})", dir.display());
+        return 2;
+    }
+    0
 }
 
 fn print_help() {

@@ -25,3 +25,106 @@ notes = '実測 2026-08-06。(a) .cargo/config.toml の target-dir = "/tmp/condu
 created_at = 1785983822
 updated_at = 1785983822
 weight = 0.0
+
+[[task]]
+id = "8acb117a"
+title = "superseded な plugin version dir の wrapper が新バイナリを実行している疑い — version pin と canary rollback が実効しているか未判定"
+project = "/Users/yuki/src/harness"
+tags = [
+    "rollout",
+    "deploy-verify",
+    "p1",
+]
+status = "pending"
+notes = "実測 2026-08-06、測定点 a4b24edc、rollout 直後: ~/.claude/plugins/cache/yukineko/donegate/0.1.7/bin/donegate status を叩くと、0.1.24 で入れたばかりの新挙動 (trust: trusted (inherited -- this is a worktree of ...)) が出力された。0.1.7 は superseded な version dir であり、live session が掴んでいるため prune 対象外として保持されている (rollout ログ: 83 superseded dir(s) remain, all held by a live session)。つまり version dir 名が、そこで実行されるコードを一意に特定していない可能性がある。考えられる読みは2つで、どちらかは未判定: (a) rebuild-plugins.sh が既存の全 version dir へバイナリを swap しており、0.1.7 に pin された稼働セッションが黙って新コードを実行している。これが本当なら version pin の契約が破れており、canary rollback (前の version dir へ re-point する設計) も実効しないことになる ため GATE crate の安全機構に直結する。(b) bin/<name> が単一の共有バイナリへ解決する shim にすぎず、version dir はアセットのみを持つ。この場合 pin の意味はもともとアセット限定であり、想定内。判定方法: 各 version dir の bin/<name> の実体 (シンボリックリンクか実ファイルか、inode、mtime) を測り、rebuild-plugins.sh が書き込む対象を読むこと。あわせて canary の rollback 経路が実際に旧コードへ戻せるかを、フォールト注入で観測すること (rollback したのに新コードが動くなら、それは rollback したふりである)。注意: check-plugin-rollout.py は rc=0 (41 plugin が file-for-file 一致) を返しており、この検証はこの現象を捕まえていない。"
+created_at = 1786023356
+updated_at = 1786023356
+weight = 0.0
+issue_number = 190
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/190"
+
+[[task]]
+id = "b2977afb"
+title = "condukt と scout の SKILL.md にも逸脱禁止・常時起票の不変条件を入れる (flow は d215649a で完了)"
+project = "/Users/yuki/src/harness"
+tags = [
+    "flow",
+    "harness",
+    "p1",
+]
+status = "pending"
+notes = "commit d215649a で flow の SKILL.md に2つのループ不変条件を明文化した: (1) ユーザー課題から逸脱しない・着手した課題は終わるまでそれだけをやる・見つけた別課題は backlog add して戻る、(2) 気づいたことは常に起票し、起票するかどうかを判断しない (実在の課題かは後でチケットから判定する)。condukt と scout は同じループ形と同じ失敗モードを持つが、3つの skill を1コミットで変えると3プラグインが同一 lockstep bump に乗り並行セッションと衝突する (CLAUDE.md 第8節) ため flow のみに留めた。完了条件: condukt の SKILL.md と scout の SKILL.md にも同等の不変条件を入れ、それぞれ独立したコミットで3ファイル lockstep bump する。注意: 文面をそのままコピーしない — condukt は executor なので「worker が別の問題を見つけたときの扱い」、scout は発見専用なので「発見を実装に化けさせない」という各 skill 固有の失敗モードに合わせて書くこと。あわせて、この2規範が実際に守られたかを事後に観測する手段が現状無い (自己申告のみ) ことも検討対象とする — CLAUDE.md 第6節は規範の遵守を自己申告に依存させないことを要求している。"
+created_at = 1786023563
+updated_at = 1786023563
+weight = 0.0
+issue_number = 191
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/191"
+
+[[task]]
+id = "a498a074"
+title = "blastguard の展開 ask を、同一コマンド内の literal 代入とループ変数だけ解決して減らす (環境由来は Ask 維持)"
+project = "/Users/yuki/src/harness"
+tags = []
+status = "pending"
+notes = ""
+created_at = 1786024025
+updated_at = 1786024025
+weight = 0.0
+issue_number = 192
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/192"
+
+[[task]]
+id = "21cd115e"
+title = "blastguard の語分割をクォート境界尊重にし、引用符内の散文が保護パス ask を起こすのを止める"
+project = "/Users/yuki/src/harness"
+tags = []
+status = "pending"
+notes = ""
+created_at = 1786024026
+updated_at = 1786024026
+weight = 0.0
+issue_number = 193
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/193"
+
+[[task]]
+id = "c6bf41db"
+title = "blastguard retro に per-rule 承認率のラウンド間トレンドを追加し、ルール精度の劣化を継続監視する"
+project = "/Users/yuki/src/harness"
+tags = []
+status = "pending"
+notes = ""
+created_at = 1786024034
+updated_at = 1786024034
+weight = 0.0
+issue_number = 194
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/194"
+
+[[task]]
+id = "d2d607e1"
+title = "blastguard の上書きリダイレクト deny が、存在しないファイルにも既存ファイル上書きと主張する件を切り分ける"
+project = "/Users/yuki/src/harness"
+tags = []
+status = "pending"
+notes = ""
+created_at = 1786024035
+updated_at = 1786024035
+weight = 0.0
+issue_number = 195
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/195"
+
+[[task]]
+id = "5ba13c3e"
+title = "backlog のキュー移行が既存 162 件を取り残し、新ストアが空同然になっている (未完了作業が黙って完了扱いになる)"
+project = "/Users/yuki/src/harness"
+tags = [
+    "backlog",
+    "fail-open",
+    "p0",
+]
+status = "pending"
+notes = "実測 2026-08-06、測定点 8340afc8、backlog 0.2.14 を rollout した直後。backlog のキューを ~/.backlog/tasks.toml から repo 内 .backlog/tasks.toml へ移す変更 (main の 8d729129) が、既存タスクを移行していない。観測値: ls -la ~/.backlog/tasks.toml は 669648 バイト、ls -la .backlog/tasks.toml は 2173 バイト。backlog list --project /Users/yuki/src/harness --status pending は移行前 162 件を返していたが、移行後は 2 件しか返さない。本セッションで積んだ 5 件のうち 4cacdfae と 241e7a47 と d8d0778c は旧ストアに取り残され、新ストアからは存在しないものとして扱われる (backlog done d8d0778c が task not found で失敗した)。これは単なるデータ移行漏れではなく判定の問題である: 下流 (autoflow の Stop hook / daily / flow の停止判定 / SessionStart の注入) はいずれも「キューが空か」を backlog list の結果で判断するため、160 件の未完了作業が黙って完了扱いになる。空集合が合格として読まれる典型 (CLAUDE.md 第3節)。判定不能どころか、判定が誤った側に確定している。完了条件: (1) 旧ストアの内容を新ストアへ移行する経路を用意し、移行が起きたことを観測で固定する、(2) 移行前に「旧ストアに項目があるのに新ストアが空/少ない」状態を検出して block するか少なくとも警告する経路を入れる (黙って空を返さない)、(3) 既に旧ストアに取り残された項目を回収する。注意: 旧ストアはクロスプロジェクトなので、repo 内ストアへ移すときに project フィールドで振り分ける必要がある。"
+created_at = 1786024055
+updated_at = 1786024055
+weight = 0.0
+issue_number = 196
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/196"

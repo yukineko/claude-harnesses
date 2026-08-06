@@ -1603,13 +1603,34 @@ enum CommandWordOrigin {
     ///     restrictive but only this one is true: the assignment is not absent
     ///     from the line, and a caller told "there is nothing" would state
     ///     something the text contradicts.
+    ///   * it is a here-document BODY rather than code
+    ///     ([`opens_here_document`]). The same shape as the guarded case, and
+    ///     worse: a `NAME=value` typed into a body never ran at all.
+    ///   * something AFTER it rebinds the name in a spelling the scan cannot
+    ///     read ([`segment_may_rebind`]) — `export BIN=…`, `{ BIN=…; }`,
+    ///     `BIN=… # comment`, `for BIN in …`, `BIN+=…`, `unset`, `eval`,
+    ///     `source`. The readable assignment is then not the current value but
+    ///     a stale one, which is the same defect as the guarded case wearing a
+    ///     different hat: the text names two programs.
     ///   * the right-hand side contains an expansion of its own
     ///     (`BIN=$(which foo)`, `` BIN=`which foo` ``);
+    ///   * it is an ARRAY (`BIN=(/bin/rm)`). `$BIN` expands to the first
+    ///     element, and picking that element out would depend on `IFS`, on
+    ///     `[0]`-vs-`[@]` and on whether the use is quoted — none of which this
+    ///     enum's producer models. The parenthesised text itself is not a
+    ///     program name.
     ///   * its quoting does not balance, or it contains a backslash, neither of
     ///     which [`unquote_literal_value`] resolves to one literal;
     ///   * it is empty (`X=`), for which the word expands to nothing and some
     ///     LATER token becomes the program — a token this function was not
     ///     asked about.
+    ///
+    /// NOT covered, and stated because a reader would otherwise assume it is:
+    /// a call to a shell FUNCTION defined off this line (`BIN=/bin/echo;
+    /// myfunc; $BIN …`). A function call is textually identical to running an
+    /// external command, which cannot touch the parent shell's variables, so
+    /// separating them needs knowledge this file does not have. A function
+    /// DEFINED on the same line is covered, via the assignment its body carries.
     AssignedButUnknowable,
 }
 
@@ -1805,12 +1826,65 @@ fn assignments_reach_parent_shell(segs: &[SeparatedSegment], idx: usize) -> bool
 /// AFTER a completed `if … fi` is refused too. Tracking where a construct ends
 /// needs real grammar, and the error direction of guessing wrong there is
 /// permissive.
+///
+/// A HERE-DOCUMENT opened earlier on the line disqualifies later segments for a
+/// third reason, and a worse one than the other two: the text after
+/// `cat <<EOF` is not guarded code, it is not code at all. [`split_segments`]
+/// splits the body on its newlines like any other segment, so a `NAME=value`
+/// TYPED INTO A BODY reads as a pure assignment list and is indistinguishable
+/// from a real one. Measured: `BIN=A` / `cat <<EOF` / `BIN=B` / `EOF` /
+/// `$BIN marker` prints the body line verbatim and then runs `A` — the body
+/// assigned nothing. Reporting `B` there is not a stale literal but an invented
+/// one, so the scan refuses anything standing after a here-document opener
+/// ([`opens_here_document`]), with the same coarseness as above: it does not
+/// look for the closing delimiter.
 fn assignment_execution_is_unconditional(segs: &[SeparatedSegment], idx: usize) -> bool {
     // `take` rather than a slice: an out-of-range `idx` then scans the whole
     // line instead of panicking, which is also the restrictive direction.
     !segs.iter().take(idx).any(|s| {
-        matches!(s.sep_after, SegmentSep::Conditional) || opens_unmodelled_construct(&s.text)
+        matches!(s.sep_after, SegmentSep::Conditional)
+            || opens_unmodelled_construct(&s.text)
+            || opens_here_document(&s.text)
     })
+}
+
+/// True when this segment opens a HERE-DOCUMENT (`<<WORD`, `<<-WORD`,
+/// `<<'WORD'`), so the lines that follow it are a data body rather than
+/// commands.
+///
+/// `<<<` is a here-STRING, which is deliberately excluded: its operand is on
+/// the same line and no following line is consumed, so the next segment really
+/// is code.
+///
+/// Quote-aware, because a `<<` inside quotes is data (`echo "a << b"`).
+fn opens_here_document(seg: &str) -> bool {
+    let chars: Vec<char> = seg.chars().collect();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+            i += 1;
+            continue;
+        }
+        if c == '"' && !in_s {
+            in_d = !in_d;
+            i += 1;
+            continue;
+        }
+        if !in_s && !in_d && c == '<' && chars.get(i + 1) == Some(&'<') {
+            if chars.get(i + 2) == Some(&'<') {
+                // Here-string: consume all three so the trailing pair of this
+                // `<<<` is not re-read as a here-document opener.
+                i += 3;
+                continue;
+            }
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// True when this segment opens a compound command whose body may run zero
@@ -1946,6 +2020,124 @@ fn unquote_literal_value(raw: &str) -> Option<String> {
     Some(out)
 }
 
+/// True when `word` gives `name` a new value: the plain `NAME=value` spelling
+/// and bash's append form `NAME+=value`.
+///
+/// The append form matters because [`is_assignment`] rejects it — the character
+/// before the `=` is not alphanumeric — so a segment consisting only of
+/// `BIN+=/rm` is not a "pure assignment list" and was skipped entirely. Skipped
+/// is not harmless here: it leaves an EARLIER assignment standing as the
+/// answer. Measured: `BIN=<dir>; BIN+=/progB; $BIN marker` prints `PROG_B`, so
+/// the program really is the concatenation and not the half the resolver read.
+fn word_binds_name(word: &str, name: &str) -> bool {
+    match word.strip_prefix(name) {
+        Some(rest) => rest.starts_with('=') || rest.starts_with("+="),
+        None => false,
+    }
+}
+
+/// Builtins that bind a variable whose NAME is given as a bare operand rather
+/// than through an `=`, so [`word_binds_name`] alone cannot see them.
+///
+/// The `=`-taking declaration builtins (`export`, `declare`, …) are here too:
+/// `export BIN=x` is caught by `word_binds_name` on its second word, but
+/// `export BIN` with a separate assignment is not, and listing them costs
+/// nothing.
+fn binds_name_as_operand(head: &str) -> bool {
+    matches!(
+        head,
+        "unset"
+            | "read"
+            | "readarray"
+            | "mapfile"
+            | "printf"
+            | "getopts"
+            | "let"
+            | "for"
+            | "select"
+            | "declare"
+            | "typeset"
+            | "local"
+            | "export"
+            | "readonly"
+    )
+}
+
+/// True when this segment may give `name` a value that
+/// [`resolve_expanded_command_word`]'s pure-assignment-list scan does not
+/// record — so a literal read from an EARLIER segment is stale, not current.
+///
+/// Only called for a segment that is NOT a pure assignment list. The scan used
+/// to `continue` past those silently, on the reading that ignoring a segment can
+/// only lose a resolution. That reading is wrong whenever another assignment to
+/// the same name exists: ignoring the second one does not leave the resolver
+/// with nothing, it leaves it holding the first one and calling it the program.
+/// Every shape below was run through `bash -c` with two marker programs, and in
+/// each the program that ran was the one the scan discarded:
+///
+///   * `export`/`declare`/`readonly`/`typeset`/`local BIN=…` — `PROG_B`;
+///   * a brace group, `{ BIN=…; }` — `PROG_B` (a brace group runs in the
+///     current shell, which is why [`opens_unmodelled_construct`] rightly
+///     leaves `{` off its list; the consequence for THIS scan is the opposite
+///     of harmless);
+///   * a trailing comment, `BIN=… # switch` — `PROG_B`. `#` starts a comment,
+///     so the segment is a bare assignment list and the value PERSISTS. Note
+///     this is the exact opposite of the transient command-prefix shape
+///     `BIN=… cmd`, which a whitespace splitter cannot tell it from;
+///   * `for BIN in …` — `PROG_B`, the control variable outlives the loop;
+///   * `eval`/`source`/`.` — `PROG_B`. These need no mention of the name at
+///     all, which is why they are matched on the HEAD;
+///   * `unset BIN` — `marker: command not found`, i.e. the word expanded to
+///     nothing and some later token became the program;
+///   * `read BIN` and `printf -v BIN` — `PROG_B`.
+///
+/// Answering true only makes the caller refuse to name a program, so the
+/// coarseness here (a `printf` mentioning `BIN` anywhere, a `local` at top
+/// level where bash would error) costs resolutions and never invents one.
+fn segment_may_rebind(seg: &str, name: &str) -> bool {
+    let words = quote_aware_words(seg);
+    let Some(first) = words.first() else {
+        return false;
+    };
+    let head = normalized_command(first);
+    if matches!(head.as_str(), "eval" | "source" | ".") {
+        return true;
+    }
+    if binds_name_as_operand(&head)
+        && words[1..].iter().any(|w| {
+            // Quote removal applies here and NOT to the general test below,
+            // because the two spellings behave differently. `export "BIN=x"`
+            // and `export 'BIN'=x` both really do assign — measured, both print
+            // `PROG_B` — since the quotes are removed before `export` sees its
+            // argument. A quoted word standing ALONE does not: `"BIN=x"` is a
+            // command word, and bash reports `BIN=x: No such file or directory`
+            // while `BIN` keeps its old value.
+            let plain = unquote_literal_value(w).unwrap_or_else(|| w.to_string());
+            plain == name || word_binds_name(&plain, name)
+        })
+    {
+        return true;
+    }
+    // A LEADING run of assignments is a command prefix — transient — but only
+    // when a command really follows it. Anything binding the name outside that
+    // run (`export BIN=x`, `{ BIN=x`, `then BIN=x`) is not a prefix.
+    let lead = words.iter().take_while(|w| is_assignment(w)).count();
+    if words[lead..].iter().any(|w| word_binds_name(w, name)) {
+        return true;
+    }
+    // …and if what follows the run is a `#` comment (or nothing), there is no
+    // command for the prefix to be transient FOR: the shell sees a bare
+    // assignment list and the value persists.
+    let followed_by_command = words
+        .get(lead)
+        .map(|w| !w.starts_with('#'))
+        .unwrap_or(false);
+    if !followed_by_command && words[..lead].iter().any(|w| word_binds_name(w, name)) {
+        return true;
+    }
+    false
+}
+
 /// True for a name a shell would accept on the left of `=`.
 fn is_shell_identifier(name: &str) -> bool {
     let mut chars = name.chars();
@@ -2034,11 +2226,20 @@ fn referenced_variable_name(word: &str) -> Option<String> {
 /// assignment and the USE is irrelevant and is not tested, which is what keeps
 /// the corpus's dominant `BIN=…` / `cd … && "$BIN" …` shape resolvable.
 ///
-/// Deliberately NOT handled, each costing a resolution and never inventing one:
-/// `export NAME=value` / `declare` / `local` (the segment is not a pure
-/// assignment list, so it is ignored and the answer stays
-/// `NoReachingAssignment`), and values whose quoting does not balance or that
-/// contain a backslash (see [`unquote_literal_value`], which refuses both).
+/// Values whose quoting does not balance or that contain a backslash are
+/// deliberately not resolved (see [`unquote_literal_value`], which refuses
+/// both); that costs a resolution and never invents one.
+///
+/// A segment that is NOT a pure assignment list is not simply skipped. An
+/// earlier revision of this comment said `export NAME=value` / `declare` /
+/// `local` were "ignored, so the answer stays `NoReachingAssignment`", which
+/// was only true of a line that assigns the name NOWHERE else. With any other
+/// assignment present, ignoring the second one does not leave this function
+/// with nothing to say — it leaves it holding the FIRST value and reporting it
+/// as the program, and measurement says that is the wrong one:
+/// `BIN=A; export BIN=B; $BIN marker` runs `B`. Such a segment is now tested by
+/// [`segment_may_rebind`], and one standing after the winning assignment makes
+/// the answer `AssignedButUnknowable`.
 ///
 /// How the caller gets `seg_idx`: [`detect_bash`] enumerates its
 /// `for seg in split_segments(cmd)` loop, which produces exactly the index this
@@ -2063,12 +2264,21 @@ fn resolve_expanded_command_word(cmd: &str, seg_idx: usize, word: &str) -> Comma
     // whether the value may be believed depends on where the assignment sits,
     // so keeping only the text would discard the deciding fact.
     let mut latest: Option<(usize, String)> = None;
+    // The last segment that may give `name` a value in a shape this scan does
+    // NOT record (see `segment_may_rebind`). Skipping such a segment is only
+    // harmless when there is nothing else to report; when a readable assignment
+    // exists too, skipping means answering with a value the shell has since
+    // replaced.
+    let mut latest_rebind: Option<usize> = None;
     for idx in 0..seg_idx {
         if !assignments_reach_parent_shell(&segs, idx) {
             continue;
         }
         let words = quote_aware_words(&segs[idx].text);
         if words.is_empty() || !words.iter().all(|w| is_assignment(w)) {
+            if segment_may_rebind(&segs[idx].text, &name) {
+                latest_rebind = Some(idx);
+            }
             continue;
         }
         for w in &words {
@@ -2083,6 +2293,28 @@ fn resolve_expanded_command_word(cmd: &str, seg_idx: usize, word: &str) -> Comma
     let Some((assign_idx, raw_value)) = latest else {
         return CommandWordOrigin::NoReachingAssignment;
     };
+    if latest_rebind.map(|r| r > assign_idx).unwrap_or(false) {
+        // Something after the winning assignment rebinds the name in a way the
+        // scan above cannot read. The assignment is not absent and its text is
+        // perfectly readable — it simply is not the current value any more, so
+        // this is `AssignedButUnknowable` for the same reason a guarded
+        // assignment is. A rebinding BEFORE the winner is irrelevant: the
+        // winner overwrote it, which is what "the last one wins" means.
+        return CommandWordOrigin::AssignedButUnknowable;
+    }
+    if raw_value.starts_with('(') {
+        // An ARRAY assignment. `quote_aware_words` tracks parentheses, so
+        // `BIN=(/bin/rm)` arrives here in one piece and `unquote_literal_value`
+        // would hand back the text `(/bin/rm)` — which is not a program name.
+        // The rewritten head `(/bin/rm)` has basename `rm)`, matches no rule
+        // arm, and reaches the catch-all Allow with the program unexamined.
+        // Measured: `BIN=(B); $BIN marker` prints `PROG_B`, so `$BIN` really
+        // does expand to the first element and the program really does run.
+        // Reading the first element out is not attempted — the value would then
+        // depend on `IFS`, on the `[0]`-vs-`[@]` distinction and on whether the
+        // use is quoted, none of which this function models.
+        return CommandWordOrigin::AssignedButUnknowable;
+    }
     if !assignment_execution_is_unconditional(&segs, assign_idx) {
         // An assignment IS here and its text may even be perfectly readable —
         // what is missing is whether it ran, so the line names two programs and
@@ -3007,6 +3239,61 @@ fn is_recognized_command(cmd: &str) -> bool {
         || takes_shell_command_flag(cmd)
 }
 
+/// True when resolving the command word gained this segment a relative path
+/// operand that [`advance_cwd_and_rewrite`] would have rewritten had it known
+/// the head — i.e. the substitution really did come too late for the cwd pass.
+///
+/// Narrow ON PURPOSE. [`verb_targets`] has an opinion for exactly four heads
+/// (`rm`, `unlink`, `rmdir`, `chmod`), so for every other resolved program the
+/// cwd pass would have rewritten nothing and there is nothing to have lost.
+/// That is what keeps the corpus's dominant shape
+/// (`BIN=/path/to/condukt` … `cd "$SB" && "$BIN" guard main-tree --json`)
+/// allowed: `condukt` is not one of the four, its operands are not path
+/// targets, and `the_corpus_shape_a_literal_binary_path_invoked_behind_an_and_
+/// is_allowed` pins that.
+fn cwd_rewrite_was_lost(before: &[&str], after: &[&str]) -> bool {
+    let targets = |toks: &[&str]| -> Vec<String> {
+        match toks.split_first() {
+            Some((head_tok, rest)) => {
+                let head = normalized_command(strip_edge_parens(head_tok));
+                verb_targets(&head, rest)
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            }
+            None => Vec::new(),
+        }
+    };
+    let before = targets(before);
+    targets(after).into_iter().any(|t| {
+        if before.contains(&t) {
+            return false;
+        }
+        let clean = strip_edge_parens(&t);
+        !clean.is_empty() && is_relative_operand(clean) && !has_unresolvable_expansion(clean)
+    })
+}
+
+/// True when a segment STRICTLY BEFORE `seg_idx` moves the shell's working
+/// directory, so the cwd rewriting [`advance_cwd_and_rewrite`] applies is part
+/// of what this line means.
+///
+/// `popd` counts: it also changes the directory, to one this file tracks as
+/// [`CwdState::Unknown`].
+fn line_changes_cwd_before(line: &str, seg_idx: usize) -> bool {
+    split_segments(line).iter().take(seg_idx).any(|s| {
+        s.split_whitespace()
+            .next()
+            .map(|w| {
+                matches!(
+                    normalized_command(strip_edge_parens(w)).as_str(),
+                    "cd" | "pushd" | "popd"
+                )
+            })
+            .unwrap_or(false)
+    })
+}
+
 /// ASK-2: an unrecognised command word standing in front of something that
 /// parses as a DESTRUCTIVE command line.
 ///
@@ -3094,7 +3381,33 @@ fn unknown_wrapper_ask(tokens: &[&str], depth: usize, line: &str, seg_idx: usize
                 // line and sits at index 0 of it. Passing the ORIGINAL
                 // `(line, seg_idx)` would be wrong: the tokens no longer come
                 // from that position.
-                return analyze_segment(&resolved, depth + 1, &resolved, 0);
+                let verdict = analyze_segment(&resolved, depth + 1, &resolved, 0);
+                // …but one thing the tokens DID carry from that position is
+                // gone, and it is not recoverable here. `advance_cwd_and_rewrite`
+                // rewrites a segment's relative operands against the cwd an
+                // earlier `cd`/`pushd` established, and it does so only for a
+                // head `verb_targets` recognises. `$BIN` is not one, so by the
+                // time the head is resolved the operand has already lost its
+                // directory prefix. Verified: `cd .githooks; rm pre-commit` is
+                // DENIED, while `cd .githooks; BIN=/bin/rm; $BIN pre-commit`
+                // re-judges the bare `rm pre-commit` and reached Allow —
+                // resolving the head made the verdict WEAKER than spelling it
+                // out. The cwd state lives in `detect_bash`'s loop and is not
+                // threaded this far, so this arm cannot redo that rewrite; what
+                // it can do is refuse to call the result clean. A Deny still
+                // wins (it was found on strictly less information than the real
+                // command has); anything softer falls back to the Ask this arm
+                // owed before the head was resolved.
+                if !verdict.is_deny()
+                    && cwd_rewrite_was_lost(tokens, &rewritten)
+                    && line_changes_cwd_before(line, seg_idx)
+                {
+                    let head = tokens[idx];
+                    return Decision::ask(format!(
+                        "the command word `{head}` resolves to `{program}`, but an earlier `cd`/`pushd` on this line moved the working directory and this segment's relative operands were never resolved against it"
+                    ));
+                }
+                return verdict;
             }
             // Both restrictive answers keep the pre-existing Ask. They are
             // reported separately by the resolver because they are different
@@ -8745,5 +9058,360 @@ and must not be Allowed: {failing:?}"
             resolve_first_expansion_word("BIN=/bin/rm; true | $BIN -rf /path"),
             lit("/bin/rm")
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // ADVERSARIAL SECOND-AUTHOR TESTS for the expansion-valued command-word
+    // resolver (cb8a2a56), written by an author with no interest in that
+    // commit passing — CLAUDE.md §2(a).
+    //
+    // Every command string below was run through `bash -c` (GNU bash 3.2.57,
+    // arm64-apple-darwin25) with `/bin/rm` and `/bin/echo` replaced by two
+    // marker programs that print which one of them ran, so each expectation is
+    // pinned to OBSERVED shell behaviour and not to a reading of the code. The
+    // observed output is quoted on each test.
+    //
+    // The failure that matters is a verdict sliding towards Allow. Each shape
+    // below assigns a BENIGN program (`/bin/echo`) in the spelling the resolver
+    // CAN read and the destructive one (`/bin/rm`) in a spelling it cannot, so
+    // a missing guard shows up as `allow` — with the values the other way round
+    // the same hole shows up as `deny` and is invisible.
+    // -----------------------------------------------------------------------
+
+    /// The resolver reads the LAST `NAME=value` it can parse and ignores every
+    /// segment that is not a pure assignment list. When such a segment REBINDS
+    /// the same name, ignoring it does not leave the resolver with nothing — it
+    /// leaves it with a STALE literal, which it then reports as the program.
+    ///
+    /// `resolve_expanded_command_word`'s own doc comment claims the opposite
+    /// for the `export` spelling: "`export NAME=value` / `declare` / `local`
+    /// (the segment is not a pure assignment list, so it is ignored and the
+    /// answer stays `NoReachingAssignment`)". That is only true when there is
+    /// no OTHER assignment on the line. With one, the answer is not
+    /// `NoReachingAssignment`; it is a literal that the shell has since
+    /// overwritten.
+    ///
+    /// Observed (marker programs substituted for the two paths):
+    ///   `BIN=A; export BIN=B; $BIN marker`     → `PROG_B marker`
+    ///   `BIN=A; declare BIN=B; $BIN marker`    → `PROG_B marker`
+    ///   `BIN=A; readonly BIN=B; $BIN marker`   → `PROG_B marker`
+    ///   `BIN=A; typeset BIN=B; $BIN marker`    → `PROG_B marker`
+    /// i.e. in every one of them the program that runs is the SECOND value,
+    /// the one the resolver discards.
+    #[test]
+    fn a_later_rebinding_of_the_name_is_not_readable_and_must_not_leave_a_stale_literal() {
+        for cmd in [
+            "BIN=/bin/echo; export BIN=/bin/rm; $BIN -rf /some/path",
+            "BIN=/bin/echo; declare BIN=/bin/rm; $BIN -rf /some/path",
+            "BIN=/bin/echo; readonly BIN=/bin/rm; $BIN -rf /some/path",
+            "BIN=/bin/echo; typeset BIN=/bin/rm; $BIN -rf /some/path",
+        ] {
+            assert_eq!(
+                resolve_first_expansion_word(cmd),
+                CommandWordOrigin::AssignedButUnknowable,
+                "for {cmd:?}"
+            );
+            let d = bash(cmd);
+            assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+        }
+    }
+
+    /// A brace group runs in the CURRENT shell, so an assignment inside one
+    /// really does reach later segments — which is exactly why
+    /// `opens_unmodelled_construct` deliberately leaves `{` off its keyword
+    /// list. The consequence was not followed through: the segment `{ BIN=…`
+    /// is not a pure assignment list either, so the assignment it carries is
+    /// dropped and an earlier one wins.
+    ///
+    /// Observed: `BIN=A; { BIN=B; }; $BIN marker` → `PROG_B marker`, and the
+    /// newline-formatted spelling `BIN=A` / `{ BIN=B; }` / `$BIN marker` too.
+    #[test]
+    fn an_assignment_inside_a_brace_group_is_not_dropped_in_favour_of_an_earlier_one() {
+        for cmd in [
+            "BIN=/bin/echo; { BIN=/bin/rm; }; $BIN -rf /some/path",
+            "BIN=/bin/echo\n{ BIN=/bin/rm; }\n$BIN -rf /some/path",
+        ] {
+            let d = bash(cmd);
+            assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+        }
+    }
+
+    /// `#` at the start of a word begins a comment, so `BIN=/bin/rm # switch`
+    /// is a BARE assignment list — the value persists. The resolver's
+    /// `quote_aware_words` has no notion of a comment, so the segment reads as
+    /// `[BIN=/bin/rm, #, switch]`, fails the pure-assignment-list test, and is
+    /// discarded in favour of the earlier value.
+    ///
+    /// Note this is NOT the transient command-prefix shape (`BIN=v cmd`), which
+    /// the resolver models correctly and which the invariance pin below keeps.
+    /// The two look identical to a whitespace splitter and behave oppositely.
+    ///
+    /// Observed: `BIN=A` / `BIN=B # switch` / `$BIN marker` → `PROG_B marker`.
+    #[test]
+    fn an_assignment_with_a_trailing_comment_is_a_real_assignment_not_a_command_prefix() {
+        let cmd = "BIN=/bin/echo\nBIN=/bin/rm # switch\n$BIN -rf /some/path";
+        assert_eq!(
+            resolve_first_expansion_word(cmd),
+            CommandWordOrigin::AssignedButUnknowable,
+            "for {cmd:?}"
+        );
+        let d = bash(cmd);
+        assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+    }
+
+    /// `opens_unmodelled_construct` is scanned only over the segments BEFORE
+    /// the winning assignment, so a construct that binds the name AFTER it is
+    /// invisible. A `for` loop's control variable outlives the loop.
+    ///
+    /// Observed: `BIN=A` / `for BIN in B` / `do` / `true` / `done` /
+    /// `$BIN marker` → `PROG_B marker`.
+    #[test]
+    fn a_for_loop_control_variable_rebinds_the_name_after_the_assignment() {
+        let cmd = "BIN=/bin/echo\nfor BIN in /bin/rm\ndo\ntrue\ndone\n$BIN -rf /some/path";
+        let d = bash(cmd);
+        assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+    }
+
+    /// `eval` and `source`/`.` can assign anything, and the name they assign
+    /// need not appear in the text at all. `unset` removes a binding the
+    /// resolver reports as live.
+    ///
+    /// Observed:
+    ///   `BIN=A; eval 'BIN=B'; $BIN marker` → `PROG_B marker`;
+    ///   `BIN=A; source setenv.sh; $BIN marker` → `PROG_B marker`, and the `.`
+    ///   spelling too (`setenv.sh` holding just `BIN=B`);
+    ///   `BIN=A; unset BIN; $BIN marker`    → `bash: marker: command not found`
+    ///   (the word expanded to nothing, so the program is `marker`, not A);
+    ///   `BIN=A; echo B | { read BIN; $BIN marker; }` → `PROG_B marker`, and
+    ///   with no stdin `read` clears it instead (`marker: command not found`) —
+    ///   either way the program is not A;
+    ///   `BIN=A; printf -v BIN '%s' B; $BIN marker` → `PROG_B marker`.
+    #[test]
+    fn a_builtin_that_can_rebind_the_name_makes_an_earlier_literal_unreadable() {
+        for cmd in [
+            "BIN=/bin/echo; eval 'BIN=/bin/rm'; $BIN -rf /some/path",
+            "BIN=/bin/echo; source /tmp/setenv; $BIN -rf /some/path",
+            "BIN=/bin/echo; . /tmp/setenv; $BIN -rf /some/path",
+            "BIN=/bin/echo; unset BIN; $BIN -rf /some/path",
+            "BIN=/bin/echo; read BIN; $BIN -rf /some/path",
+            "BIN=/bin/echo; printf -v BIN '%s' /bin/rm; $BIN -rf /some/path",
+        ] {
+            assert_eq!(
+                resolve_first_expansion_word(cmd),
+                CommandWordOrigin::AssignedButUnknowable,
+                "for {cmd:?}"
+            );
+            let d = bash(cmd);
+            assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+        }
+    }
+
+    /// bash's append form. `is_assignment` requires the name to be alphanumeric
+    /// up to the `=`, so `BIN+=x` fails it and the whole segment is skipped —
+    /// leaving the earlier value standing even though the shell has changed it.
+    ///
+    /// Observed: `BIN=<dir>; BIN+=/progB; $BIN marker` → `PROG_B marker`, so
+    /// the program really is the concatenation and not the readable half. In
+    /// the case below that concatenation is `/bin` + `/rm`.
+    #[test]
+    fn the_append_assignment_form_is_a_rebinding_the_resolver_cannot_read() {
+        let cmd = "BIN=/bin; BIN+=/rm; $BIN -rf /some/path";
+        assert_eq!(
+            resolve_first_expansion_word(cmd),
+            CommandWordOrigin::AssignedButUnknowable,
+            "for {cmd:?}"
+        );
+        let d = bash(cmd);
+        assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+    }
+
+    /// A here-document BODY is data, never code. The resolver sees the body's
+    /// lines as ordinary newline-separated segments, so a `NAME=value` typed
+    /// inside one reads as a pure assignment list and WINS over the real
+    /// assignment above it.
+    ///
+    /// This is the one shape here where the invented literal is not merely
+    /// stale but was never an assignment at all.
+    ///
+    /// Observed: `BIN=A` / `cat <<EOF` / `BIN=B` / `EOF` / `$BIN marker` prints
+    /// the body line verbatim and then `PROG_A marker` — the body assigned
+    /// nothing, and A is still the program. (The quoted-delimiter spelling
+    /// `<<'EOF'` behaves the same.)
+    #[test]
+    fn an_assignment_typed_inside_a_here_document_body_is_data_and_never_ran() {
+        for cmd in [
+            "BIN=/bin/rm\ncat <<EOF\nBIN=/bin/echo\nEOF\n$BIN -rf /some/path",
+            "BIN=/bin/rm\ncat <<'EOF'\nBIN=/bin/echo\nEOF\n$BIN -rf /some/path",
+            "BIN=/bin/rm\ncat <<-EOF\nBIN=/bin/echo\nEOF\n$BIN -rf /some/path",
+        ] {
+            assert_eq!(
+                resolve_first_expansion_word(cmd),
+                CommandWordOrigin::AssignedButUnknowable,
+                "for {cmd:?}"
+            );
+            let d = bash(cmd);
+            assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+        }
+    }
+
+    /// An ARRAY assignment. `quote_aware_words` tracks parentheses, so
+    /// `BIN=(/bin/rm)` survives as one word and `unquote_literal_value` happily
+    /// hands back the text `(/bin/rm)` — which is not a program name. The
+    /// rewritten head `(/bin/rm)` has basename `rm)`, matches no rule arm, and
+    /// the segment reaches the catch-all Allow with the program unexamined.
+    ///
+    /// Observed: `BIN=(B); $BIN marker` → `PROG_B marker`, i.e. `$BIN` expands
+    /// to the FIRST ELEMENT and the destructive program really does run.
+    #[test]
+    fn an_array_assignment_is_not_a_literal_program_name() {
+        for cmd in [
+            "BIN=(/bin/rm); $BIN -rf /some/path",
+            "BIN=(/bin/echo /bin/rm); $BIN -rf /some/path",
+        ] {
+            assert_eq!(
+                resolve_first_expansion_word(cmd),
+                CommandWordOrigin::AssignedButUnknowable,
+                "for {cmd:?}"
+            );
+            let d = bash(cmd);
+            assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+        }
+    }
+
+    /// The substitutive re-judge drops the CWD the rest of `detect_bash` had
+    /// tracked. `advance_cwd_and_rewrite` rewrites a segment's relative
+    /// operands only for a head `verb_targets` recognises, and `$BIN` is not
+    /// one — so by the time the head is resolved to `rm`, the operand has
+    /// already lost its `.githooks/` prefix, and the re-judged
+    /// `rm pre-commit` is a bare basename that matches no protected glob.
+    ///
+    /// The same line with the head spelled literally is DENIED
+    /// (`cd .githooks; rm pre-commit`), which is what makes this a hole rather
+    /// than a limitation: resolving the head made the verdict WEAKER than not
+    /// resolving it, and weaker than spelling it out.
+    ///
+    /// `ask`, not `deny`: the re-judge genuinely cannot see the operand's real
+    /// path, so refusing to guess is the honest answer. What it must not do is
+    /// Allow.
+    #[test]
+    fn resolving_the_head_must_not_lose_the_cwd_that_the_literal_spelling_keeps() {
+        let literal = "cd .githooks; rm pre-commit";
+        assert_eq!(
+            verdict_name(&bash(literal)),
+            "deny",
+            "control: the literal spelling must stay denied"
+        );
+        let cmd = "cd .githooks; BIN=/bin/rm; $BIN pre-commit";
+        let d = bash(cmd);
+        assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+    }
+
+    // --- INVARIANCE PINS ---------------------------------------------------
+    // These passed against the tree as it stood BEFORE the fixes above; they
+    // are here to keep the fixes from over-reaching, not to report a find.
+
+    /// The transient command-prefix shape must stay resolvable. `BIN=v cmd`
+    /// sets `BIN` only for `cmd`, so an EARLIER assignment is still the
+    /// program — measured: `BIN=A; BIN=B true; $BIN marker` → `PROG_A marker`.
+    /// A whitespace splitter cannot tell this segment from the trailing-comment
+    /// one above, and they resolve oppositely, so the boundary is pinned.
+    #[test]
+    fn invariance_a_command_prefix_assignment_still_does_not_clobber_the_earlier_one() {
+        let cmd = "BIN=/bin/rm; BIN=/bin/echo true; $BIN -rf /some/path";
+        assert_eq!(resolve_first_expansion_word(cmd), lit("/bin/rm"));
+        let d = bash(cmd);
+        assert_eq!(verdict_name(&d), "deny", "for {cmd:?}, got {d:?}");
+    }
+
+    /// The corpus's dominant shape must stay resolvable end to end: a `cd` in
+    /// the SAME segment as the use is not an earlier cwd change, so the
+    /// cwd guard above must not fire on it.
+    #[test]
+    fn invariance_the_corpus_shape_still_resolves_end_to_end() {
+        let cmd = "BIN=/bin/rm\ncd \"$SB\" && \"$BIN\" -rf /some/path";
+        let d = bash(cmd);
+        assert_eq!(verdict_name(&d), "deny", "for {cmd:?}, got {d:?}");
+    }
+
+    /// Single quotes suppress expansion entirely: `'$BIN' args` asks the shell
+    /// for a program literally named `$BIN`. The resolver must not answer with
+    /// the value of a variable that is never consulted.
+    #[test]
+    fn invariance_a_single_quoted_head_is_never_resolved_to_a_variable_value() {
+        let cmd = "BIN=/bin/echo; '$BIN' -rf /some/path";
+        assert_eq!(
+            resolve_first_expansion_word(cmd),
+            CommandWordOrigin::NoReachingAssignment
+        );
+        let d = bash(cmd);
+        assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+    }
+
+    /// Quote removal happens before a declaration builtin sees its argument, so
+    /// `export "BIN=/bin/rm"` and `export 'BIN'=/bin/rm` are real assignments —
+    /// measured, both print `PROG_B`. A rebinding test that compares raw tokens
+    /// misses both and leaves the earlier literal standing.
+    #[test]
+    fn a_rebinding_whose_quotes_are_removed_by_the_builtin_is_still_a_rebinding() {
+        for cmd in [
+            "BIN=/bin/echo; export \"BIN=/bin/rm\"; $BIN -rf /some/path",
+            "BIN=/bin/echo; export 'BIN'=/bin/rm; $BIN -rf /some/path",
+            "BIN=/bin/echo; declare -x BIN=\"/bin/rm\"; $BIN -rf /some/path",
+            "BIN=/bin/echo; unset -v BIN; $BIN -rf /some/path",
+        ] {
+            assert_eq!(
+                resolve_first_expansion_word(cmd),
+                CommandWordOrigin::AssignedButUnknowable,
+                "for {cmd:?}"
+            );
+            let d = bash(cmd);
+            assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+        }
+    }
+
+    /// The `;`-formatted compound command and a function body. Both put the
+    /// rebinding in a segment whose first word is not an assignment
+    /// (`then BIN=…`, `f() { BIN=…`), so the pure-assignment-list scan skipped
+    /// them — and skipping is not neutral when an earlier assignment exists.
+    ///
+    /// Observed: `BIN=A; if true; then BIN=B; fi; $BIN marker` → `PROG_B
+    /// marker`, and `BIN=A; f() { BIN=B; }; f; $BIN marker` → `PROG_B marker`.
+    ///
+    /// The function case is only closed for a function DEFINED on the same
+    /// line. A call to a function defined anywhere else (`BIN=A; myfunc;
+    /// $BIN marker`) is textually indistinguishable from an external command
+    /// and remains an open limitation, not something these tests claim.
+    #[test]
+    fn a_rebinding_inside_a_compound_command_or_a_function_body_is_not_skipped() {
+        for cmd in [
+            "BIN=/bin/echo; if true; then BIN=/bin/rm; fi; $BIN -rf /some/path",
+            "BIN=/bin/echo; f() { BIN=/bin/rm; }; f; $BIN -rf /some/path",
+        ] {
+            let d = bash(cmd);
+            assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+        }
+    }
+
+    /// A quoted word standing ALONE is a command, not an assignment: the
+    /// characters before the `=` are quoted, so bash reports
+    /// `BIN=/bin/rm: No such file or directory` and `BIN` keeps its old value —
+    /// measured, `PROG_A marker`. This is the boundary of the quote removal the
+    /// test above requires, and it must not be applied here.
+    #[test]
+    fn invariance_a_wholly_quoted_word_is_a_command_not_a_rebinding() {
+        let cmd = "BIN=/bin/echo; \"BIN=/bin/rm\"; $BIN -rf /some/path";
+        assert_eq!(resolve_first_expansion_word(cmd), lit("/bin/echo"));
+        let d = bash(cmd);
+        assert_eq!(verdict_name(&d), "allow", "for {cmd:?}, got {d:?}");
+    }
+
+    /// A here-STRING consumes no following line, so the segment after it really
+    /// is code and must stay resolvable. Only `<<` opens a body.
+    #[test]
+    fn invariance_a_here_string_does_not_hide_the_next_segment() {
+        let cmd = "BIN=/bin/rm; cat <<<'x'; $BIN -rf /some/path";
+        assert_eq!(resolve_first_expansion_word(cmd), lit("/bin/rm"));
+        let d = bash(cmd);
+        assert_eq!(verdict_name(&d), "deny", "for {cmd:?}, got {d:?}");
     }
 }

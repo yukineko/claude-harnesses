@@ -34,9 +34,26 @@
 //!    (every gate is forced to say what the new answer means), so the attribute
 //!    that would suppress it is deliberately absent.
 //! 4. **[`Determination<T>`] has exactly one extractor: [`Determination::require`]**
-//!    returning `Result<T, Verdict>`. There is no `unwrap_or`, no `ok()`, no
-//!    `unwrap_or_default` — so "could not determine" cannot be swapped for a
-//!    permissive default, and `?` makes fail-closed the *shortest* path.
+//!    returning [`Required<T>`] — deliberately **not** `std::Result`. Neither
+//!    type has `unwrap_or`, `ok()`, `unwrap_or_default`, `unwrap_or_else`, or
+//!    `is_ok`, so "could not determine" cannot be swapped for a permissive
+//!    default by any *method call*; the caller has to `match` both arms, and the
+//!    undetermined arm hands over an already-fail-closed [`Verdict`] carrying its
+//!    reason. `Result` was the original return type and it leaked the seal one
+//!    call deeper — `.require().unwrap_or_default()` reopened the exact collapse
+//!    `Determination` refuses to grow, using `std`'s inherent methods, which this
+//!    crate cannot remove (pinned red-then-green by
+//!    `tests/ui/verdict/require_result_erasure.rs`).
+//!
+//!    **What this does not seal**, stated plainly so no reader mistakes the
+//!    scope: a hand-written `match d.require() { Determined(v) => v, Blocked(_)
+//!    => Vec::new() }` still substitutes a permissive default, and no type can
+//!    forbid it — the caller wrote that default themselves. The type's job is to
+//!    make the collapse unreachable *by accident* and to force the deliberate
+//!    one to appear in a diff as an explicit arm; catching that residue is a
+//!    separate, lexical gate's job (backlog b4baf3d7). There is also no `?`
+//!    support: `std::ops::Try` is unstable (E0658, rust#84277), and `.require()?`
+//!    appears nowhere in this repo, so nothing is lost.
 //! 5. **Every channel conversion sends `Undetermined` to the restricted side,**
 //!    and no conversion mapping it to the permissive side exists. The blocking
 //!    channel differs per gate (a Stop hook blocks via a JSON `decision` field
@@ -365,11 +382,17 @@ impl Verdict {
 /// never the same empty value for both.
 ///
 /// It has exactly one extractor, [`require`](Determination::require), returning
-/// `Result<T, Verdict>`. There is intentionally **no** `unwrap_or`, `ok`,
-/// `unwrap_or_default`, or `Default`: those are the very APIs that turn "could
-/// not determine" into a permissive value, so they do not exist here. `?` on the
-/// result propagates a [`Verdict::Undetermined`], making fail-closed the
-/// shortest path a caller can write.
+/// [`Required<T>`] — this crate's own type, not `std::Result`. There is
+/// intentionally **no** `unwrap_or`, `ok`, `unwrap_or_default`, or `Default` on
+/// *either* type: those are the very APIs that turn "could not determine" into a
+/// permissive value, so they do not exist here, and the extractor no longer
+/// hands the caller a `std` type whose inherent methods this crate cannot
+/// remove. Resolving a `Required` therefore means writing both arms, with the
+/// undetermined arm receiving a ready-made fail-closed [`Verdict`].
+///
+/// The seal is over *method calls*, not over intent: a caller who writes
+/// `Required::Blocked(_) => Vec::new()` by hand still collapses the answer. See
+/// [`Required`] for why that residue is deliberately left to a lexical gate.
 #[must_use = "a Determination must be resolved with `require`, not dropped"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Determination<T> {
@@ -399,15 +422,22 @@ impl<T> Determination<T> {
         Determination::Undetermined(Undet(reason))
     }
 
-    /// The one and only extractor. `Known(v)` → `Ok(v)`; `Undetermined(why)` →
-    /// `Err(Verdict::Undetermined(why))`. Using `?` therefore short-circuits a
-    /// caller to a fail-closed `Undetermined` verdict with no extra code — the
-    /// permissive path (substitute a default and continue) simply is not
-    /// expressible, because no `unwrap_or`/`ok`/`unwrap_or_default` exists.
-    pub fn require(self) -> Result<T, Verdict> {
+    /// The one and only extractor. `Known(v)` → [`Required::Determined`]`(v)`;
+    /// `Undetermined(why)` → [`Required::Blocked`] carrying the fail-closed
+    /// `Verdict::Undetermined(why)` — the reason travels with it, so a caller
+    /// that returns the blocked verdict loses nothing.
+    ///
+    /// The return type is [`Required`], **not** `std::Result`: `Result` would
+    /// hand the caller `unwrap_or` / `unwrap_or_default` / `ok` / `is_ok`, whose
+    /// whole effect is to turn "could not determine" back into a permissive
+    /// value one call after `Determination` refused to offer exactly those. The
+    /// permissive path is therefore not expressible as a method call on either
+    /// type; the caller must `match` and say, in the diff, what the undetermined
+    /// answer means.
+    pub fn require(self) -> Required<T> {
         match self {
-            Determination::Known(v) => Ok(v),
-            Determination::Undetermined(why) => Err(Verdict::Undetermined(why)),
+            Determination::Known(v) => Required::Determined(v),
+            Determination::Undetermined(why) => Required::Blocked(Verdict::Undetermined(why)),
         }
     }
 
@@ -419,6 +449,84 @@ impl<T> Determination<T> {
         match self {
             Determination::Known(v) => Determination::Known(f(v)),
             Determination::Undetermined(why) => Determination::Undetermined(why),
+        }
+    }
+}
+
+/// What [`Determination::require`] returns: the observed value, or the
+/// fail-closed [`Verdict`] that stands in for "could not determine".
+///
+/// **Why this is not `std::Result`.** It used to be, and that placed the seal
+/// one call too shallow. [`Determination`] refuses to grow an `unwrap_or` — but
+/// `Result` already has one, plus `unwrap_or_default`, `unwrap_or_else`, `ok`
+/// and `is_ok`, and they are `std`'s inherent methods, which this crate cannot
+/// remove or bound. So `d.require().unwrap_or_default()` re-opened the exact
+/// collapse the refusal existed to prevent: a `read_dir` that could not be read
+/// became an empty `Vec` (read downstream as "the directory is empty", i.e.
+/// clean), and `.is_ok()` flattened the whole verdict into a bool where
+/// "undetermined" and "legitimately absent" are the same `false`.
+/// `Required` simply has none of those methods, so each of those forms is an
+/// `E0599`. `tests/ui/verdict/require_result_erasure.rs` pins that as a compiler
+/// error (it was a committed RED fixture until this type existed).
+///
+/// **What it deliberately does NOT seal.** A hand-written
+///
+/// ```ignore
+/// match d.require() {
+///     Required::Determined(v) => v,
+///     Required::Blocked(_) => Vec::new(), // still a permissive default
+/// }
+/// ```
+///
+/// collapses the answer just as thoroughly, and no type can forbid it — the
+/// caller supplied that default themselves. Sealing it would mean forbidding the
+/// blocked arm from producing a `T` at all, which would also forbid the
+/// legitimate uses (a caller that has a genuinely conservative fallback), so the
+/// API stops here on purpose. The type buys two things instead: the collapse is
+/// unreachable *by accident* (no method spells it), and a deliberate one shows
+/// up in a diff as an explicit arm a reviewer or a lexical gate can see
+/// (backlog b4baf3d7).
+///
+/// **No `?`.** Implementing `std::ops::Try` would need the unstable trait
+/// (E0658, rust#84277). Nothing is lost: `.require()?` occurs nowhere in this
+/// repo — every existing call site already writes the two arms.
+#[must_use = "a Required carries either the value or a blocking verdict; both arms must be handled"]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Required<T> {
+    /// The check ran and observed this value (which may be legitimately empty).
+    Determined(T),
+    /// The check could not run to a conclusion. Carries the already fail-closed
+    /// [`Verdict::Undetermined`], reason intact, so the caller's shortest honest
+    /// move is to return it.
+    Blocked(Verdict),
+}
+
+impl<T> Required<T> {
+    /// The value, panicking with `msg` and the blocking reason when the
+    /// determination could not be made.
+    ///
+    /// This is **not** a permissive escape hatch and is not the counterpart of
+    /// `unwrap_or`: it produces no value on the blocked path, it aborts. In a
+    /// gate that matters — the Stop-hook panic barrier
+    /// ([`crate::gate::run::run_guarded`]) resolves a panic to *block*, the
+    /// restricted side — so this stays fail-closed. It exists for tests and for
+    /// the rare call site where an undetermined answer is a genuine bug rather
+    /// than a runtime possibility.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `self` is [`Required::Blocked`].
+    #[track_caller]
+    pub fn expect(self, msg: &str) -> T {
+        match self {
+            Required::Determined(v) => v,
+            Required::Blocked(verdict) => {
+                let why = match verdict.reason() {
+                    Some(r) => r.as_str().to_string(),
+                    None => format!("{verdict:?}"),
+                };
+                panic!("{msg}: {why}")
+            }
         }
     }
 }
@@ -473,13 +581,13 @@ mod tests {
     }
 
     #[test]
-    fn require_is_fail_closed_via_question_mark() {
-        // `?` on an Undetermined determination short-circuits to a fail-closed
-        // Undetermined verdict — the shortest path a caller can write.
+    fn require_hands_the_undetermined_arm_a_fail_closed_verdict() {
+        // `require` forces both arms; the blocked arm arrives as a ready-made
+        // fail-closed verdict, so returning it is the shortest honest path.
         fn use_it(d: Determination<Vec<Reason>>) -> Verdict {
             let found = match d.require() {
-                Ok(v) => v,
-                Err(verdict) => return verdict, // fail closed
+                Required::Determined(v) => v,
+                Required::Blocked(verdict) => return verdict, // fail closed
             };
             Verdict::from_findings(found)
         }
@@ -491,6 +599,44 @@ mod tests {
             use_it(Determination::Known(vec![])),
             Verdict::Clean(_)
         ));
+    }
+
+    #[test]
+    fn require_blocked_carries_the_reason_downstream() {
+        // The seal must not cost information: the blocked arm still knows WHY,
+        // otherwise the caller is handed a bare "blocked" with no cause.
+        let d: Determination<u8> = Determination::undetermined("perm denied on /x");
+        match d.require() {
+            Required::Blocked(v) => {
+                assert!(v.blocks(), "the blocked arm must carry a blocking verdict");
+                assert_eq!(
+                    v.reason().map(Reason::as_str),
+                    Some("perm denied on /x"),
+                    "the reason must survive `require`"
+                );
+                assert!(matches!(v, Verdict::Undetermined(_)));
+            }
+            Required::Determined(_) => panic!("expected Blocked"),
+        }
+    }
+
+    #[test]
+    fn require_determined_yields_the_observed_value() {
+        match Determination::Known(7u8).require() {
+            Required::Determined(v) => assert_eq!(v, 7),
+            Required::Blocked(v) => panic!("expected Determined, got {v:?}"),
+        }
+        assert_eq!(Determination::Known(7u8).require().expect("known"), 7);
+    }
+
+    #[test]
+    #[should_panic(expected = "needed the listing: ledger unreadable")]
+    fn required_expect_aborts_on_blocked_rather_than_substituting_a_value() {
+        // `expect` is the only extractor shortcut, and it produces NO value on
+        // the blocked path — it panics, which the Stop-hook panic barrier
+        // resolves to `block`. It is not an `unwrap_or` in disguise.
+        let d: Determination<u8> = Determination::undetermined("ledger unreadable");
+        let _ = d.require().expect("needed the listing");
     }
 
     #[test]

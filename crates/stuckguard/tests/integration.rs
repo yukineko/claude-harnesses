@@ -536,3 +536,136 @@ fn escalation_with_unwritable_lessons_store_never_panics_hook() {
         "escalation message must still be emitted even though the lesson write is dropped: {out2}"
     );
 }
+
+/// Run `stuckguard <args>` like [`run`] but keep stderr, which is where the
+/// unreadable-config diagnostic lands.
+fn run_capturing_stderr(args: &[&str], payload: &str) -> (i32, String, String) {
+    let bin = env!("CARGO_BIN_EXE_stuckguard");
+    let home = temp_home();
+    // A DIRECTORY where the project config file is expected: `exists()` is
+    // true, but reading it fails with something other than NotFound, which is
+    // exactly the `Determination::Undetermined` -> `Required::Blocked` case.
+    std::fs::create_dir_all(home.join("stuckguard.toml")).expect("create unreadable config");
+    let mut child = Command::new(bin)
+        .args(args)
+        .current_dir(&home)
+        .env("HOME", &home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary spawns");
+    if let Some(mut child_stdin) = child.stdin.take() {
+        let _ = child_stdin.write_all(payload.as_bytes());
+    }
+    let out = child.wait_with_output().expect("binary runs");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// Closes the gap an adversarial verifier found by MUTATION TESTING: with the
+/// unit tests alone, replacing `Config::load`'s real sink
+/// (`&mut |msg| eprintln!("{msg}")`) with a no-op `&mut |_| {}` left every
+/// stuckguard test green. The unit tests call `load_with_diagnostics` directly
+/// with their own collecting sink, so none of them exercise the one line that
+/// wires the production path to stderr — the only path `main.rs` ever takes.
+///
+/// This test runs the real binary in a directory whose `stuckguard.toml` is
+/// unreadable and asserts the diagnostic reaches the process's stderr, so that
+/// wiring is no longer unprotected. RED was observed by re-applying the
+/// verifier's mutation before landing this.
+#[test]
+fn unreadable_config_diagnostic_reaches_the_real_binarys_stderr() {
+    let (code, _stdout, stderr) = run_capturing_stderr(&["status"], "");
+    assert_eq!(code, 0, "status must still succeed on a default config");
+    assert!(
+        stderr.contains("could not read config"),
+        "the unreadable-config diagnostic must reach the real binary's stderr, \
+         not just the unit tests' injected sink; got stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("stuckguard.toml"),
+        "the diagnostic must name the config path; got stderr: {stderr:?}"
+    );
+}
+
+/// Closes the same "production wiring" gap as
+/// `unreadable_config_diagnostic_reaches_the_real_binarys_stderr`, but for
+/// the anchor lookup's `Undetermined` branch (backlog 1469673b, resolved —
+/// see `crates/stuckguard/src/anchor.rs`'s module docs). `watch` calls
+/// `anchor::fetch_session_anchor` by default: `heartbeat_piggyback_enabled`
+/// defaults on (`Config::default`), so a plain default-config `watch` call
+/// already reaches it — no special `stuckguard.toml` needed.
+///
+/// The real `stuckguard` binary is spawned with `PATH` overridden to exclude
+/// every real `overwatch` (including this dev machine's own plugin-cache
+/// `bin/` dirs, which put a real, working `overwatch` on `PATH` normally —
+/// verified via `which overwatch` when this test was authored) and `HOME`
+/// pointed at a fixture whose `~/.claude/plugins/cache/yukineko/overwatch`
+/// directory exists but is unreadable (`chmod 000`). That forces
+/// `resolve_overwatch_binary`'s PATH probe to miss and its plugin-cache
+/// listing to hit `Undetermined`, so `fetch_session_anchor` must print a
+/// diagnostic naming the session id to the REAL process's stderr — not just
+/// an injected test sink, which is exactly the gap mutation testing found
+/// for the config-diagnostic wiring above.
+#[cfg(unix)]
+#[test]
+fn undetermined_overwatch_anchor_diagnostic_reaches_the_real_binarys_stderr() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = temp_home();
+    let cache_dir = home
+        .join(".claude")
+        .join("plugins")
+        .join("cache")
+        .join("yukineko")
+        .join("overwatch");
+    std::fs::create_dir_all(&cache_dir).expect("create cache dir");
+    std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(0o000))
+        .expect("chmod 000 the cache dir");
+    let denied = std::fs::read_dir(&cache_dir).is_err();
+
+    let bin = env!("CARGO_BIN_EXE_stuckguard");
+    let payload = r#"{"hook_event_name":"PostToolUse","session_id":"anchor-it","tool_name":"Read","tool_input":{"file_path":"a.rs"}}"#;
+    let mut child = Command::new(bin)
+        .args(["watch"])
+        .current_dir(&home)
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary spawns");
+    if let Some(mut child_stdin) = child.stdin.take() {
+        let _ = child_stdin.write_all(payload.as_bytes());
+    }
+    let out = child.wait_with_output().expect("binary runs");
+
+    // Restore perms before any assert so the temp dir can be cleaned up even
+    // if an assertion below panics.
+    let _ = std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(0o755));
+
+    assert!(
+        denied,
+        "precondition: chmod 000 must deny this uid (running as root?)"
+    );
+    assert_eq!(
+        out.status.code().unwrap_or(-1),
+        0,
+        "PostToolUse hook must always exit 0, even on an undetermined anchor lookup"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("could not query overwatch"),
+        "the undetermined-anchor diagnostic must reach the real binary's stderr, not just \
+         the unit tests' injected sink; got stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("anchor-it"),
+        "the diagnostic must name the session id; got stderr: {stderr:?}"
+    );
+}

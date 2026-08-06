@@ -123,6 +123,81 @@ RS_READDIR_LET_ELSE = re.compile(r"\blet\s+Ok\s*\(.*\bread_dir\s*\(.*\belse\b")
 RS_FLATTEN = re.compile(r"\.flatten\s*\(\s*\)")
 RS_READDIR = re.compile(r"\bread_dir\s*\(")
 
+# ── the empty-collection fallback class (backlog b0cacd15, added 2026-08-06) ──
+#
+# The two read_dir shapes above are the ones this scanner shipped with, and the
+# pinned baseline of 0 was read for a long time as "zero fail-open". It was not:
+# it was "zero of those two shapes". The class below is the one CLAUDE.md §3
+# names outright — エラー時に空の集合を返さない — because downstream reads an
+# empty result as "nothing to inspect, therefore clean". It is scored on the
+# ADVISORY / `--ratchet` surface only (see ADVISORY_ONLY_PATTERNS).
+
+# `Err(_) => Vec::new()` / `Err(_) => Ok(Vec::new())` / `Err(e) => X::default()`
+# — the error is discarded and an EMPTY value takes its place. The fixed forms
+# (`Err(e) => Err(e)`, `Err(e) => Determination::undetermined(..)`) do not match:
+# they substitute nothing, they propagate or name the third state.
+RS_ERR_ARM_EMPTY = re.compile(
+    r"\bErr\s*\(\s*[_A-Za-z]\w*\s*\)\s*=>\s*"
+    r"(?:Ok\s*\(\s*|Some\s*\(\s*)?"
+    r"(?:Vec::new\s*\(\s*\)|String::new\s*\(\s*\)|HashMap::new\s*\(\s*\)"
+    r"|HashSet::new\s*\(\s*\)|BTreeMap::new\s*\(\s*\)|BTreeSet::new\s*\(\s*\)"
+    r"|VecDeque::new\s*\(\s*\)|vec!\s*\[\s*\]"
+    r"|Default::default\s*\(\s*\)|[A-Za-z_]\w*::default\s*\(\s*\))"
+)
+
+# `.unwrap_or_default()` / `.unwrap_or(false)` / `.unwrap_or(Vec::new())` on the
+# result of a filesystem read — flagged only when one of the IO calls below sits
+# within the window above (RECEIVER-AWARE, same discipline as `.flatten()`), so
+# `s.parse().unwrap_or_default()` is not a false positive. Named verbatim in
+# b0cacd15: harness-status `plugins.rs::dir_nonempty` (unreadable dir → the same
+# `false` as an empty one) and `path_shadow.rs::list_binary_names`.
+RS_UNWRAP_OR_EMPTY = re.compile(
+    r"\.unwrap_or_default\s*\(\s*\)"
+    r"|\.unwrap_or\s*\(\s*(?:false|0|Vec::new\s*\(\s*\)|String::new\s*\(\s*\)"
+    r"|vec!\s*\[\s*\]|Default::default\s*\(\s*\))\s*\)"
+    r"|\.unwrap_or_else\s*\(\s*\|_\|\s*(?:Vec::new\s*\(\s*\)|String::new\s*\(\s*\)"
+    r"|vec!\s*\[\s*\])"
+)
+RS_IO_CALL = re.compile(
+    r"\b(?:read_dir|read_to_string|read_link|metadata|symlink_metadata"
+    r"|canonicalize|File::open|fs::read)\s*\("
+)
+
+# Form B — the per-record variant of the same erasure: a loop that parses lines
+# and pushes only the `Ok` ones, so a truncated/corrupt ledger comes back as a
+# SHORTER history rather than an unreadable one. Requires the loop above AND the
+# push below, so a plain `if let Ok(cfg) = toml::from_str(..)` is not matched.
+RS_IF_LET_OK = re.compile(r"\bif\s+let\s+Ok\s*\(")
+RS_FOR_LOOP = re.compile(r"\bfor\s+\w+\s+in\b")
+RS_PUSH = re.compile(r"\.(?:push|insert|extend)\s*\(")
+LOOP_WINDOW = 4
+PUSH_WINDOW = 3
+
+# Pattern names scored on the ADVISORY / `--ratchet` surface but deliberately
+# kept OUT of the merge-blocking gate-surface verdict (decision of 2026-08-06).
+#
+# Rationale, recorded so a later reader does not "tidy" it away: this class fires
+# on ~9 pre-existing overwatch sites at once. Putting it in the blocking path
+# would make the only way through a commit an ALLOWLIST entry per site — which
+# converts the reviewed-exception hatch into the default escape route, exactly
+# what CLAUDE.md §5 forbids ("skip 機構は理由を書いて一度だけ。恒常的な迂回に
+# 使わない"). The burn-down pressure is the baseline diff instead: a NEW instance
+# raises the live count above the pin and `--ratchet` fails, while removing one
+# forces a visible, reviewed edit to the pinned number. Hits are still PRINTED on
+# every run, tagged `advisory`; they are silent nowhere.
+ADVISORY_ONLY_PATTERNS = frozenset(
+    {"err-arm-empty-fallback", "read-unwrap-or-empty", "loop-parse-drop"}
+)
+
+
+def blocking_hits(hits: list[tuple[int, str, str]]) -> list[tuple[int, str, str]]:
+    """The subset of `hits` that counts toward a merge-BLOCKING verdict.
+
+    Drops the advisory-only class (see ADVISORY_ONLY_PATTERNS). This is the ONLY
+    filter: `all_crates_count`/`--ratchet` deliberately do not call it, so an
+    advisory-class regression still moves the pinned number."""
+    return [h for h in hits if h[2] not in ADVISORY_ONLY_PATTERNS]
+
 # ── shell patterns ──────────────────────────────────────────────────────────
 
 # A command substitution `$(… 2>/dev/null …)` or `` `… 2>/dev/null …` `` — the
@@ -265,6 +340,20 @@ def scan_rust(lines: list[str]) -> list[tuple[int, str, str]]:
             lo = max(0, idx - READDIR_WINDOW)
             if any(RS_READDIR.search(code[j]) for j in range(lo, idx + 1)):
                 hits.append((idx + 1, lines[idx].rstrip("\n"), "readdir-flatten-swallow"))
+        # ── advisory class (b0cacd15): an error erased into an EMPTY value ──
+        if RS_ERR_ARM_EMPTY.search(c):
+            hits.append((idx + 1, lines[idx].rstrip("\n"), "err-arm-empty-fallback"))
+        if RS_UNWRAP_OR_EMPTY.search(c):
+            lo = max(0, idx - READDIR_WINDOW)
+            if any(RS_IO_CALL.search(code[j]) for j in range(lo, idx + 1)):
+                hits.append((idx + 1, lines[idx].rstrip("\n"), "read-unwrap-or-empty"))
+        if RS_IF_LET_OK.search(c):
+            lo = max(0, idx - LOOP_WINDOW)
+            hi = min(len(code), idx + 1 + PUSH_WINDOW)
+            in_loop = any(RS_FOR_LOOP.search(code[j]) for j in range(lo, idx))
+            collects = any(RS_PUSH.search(code[j]) for j in range(idx + 1, hi))
+            if in_loop and collects:
+                hits.append((idx + 1, lines[idx].rstrip("\n"), "loop-parse-drop"))
     return hits
 
 
@@ -504,12 +593,28 @@ def main(argv: list[str]) -> int:
             )
             return 1
     total = 0
+    advisory_class = 0
     for path in files:
         for lineno, text, name in scan_file(path):
             rel = path.relative_to(REPO) if REPO in path.parents else path
             loc = str(lineno) if lineno != UNREADABLE else "?"
-            print(f"{rel}:{loc}: [{name}] {text.strip()}")
-            total += 1
+            # Every hit is PRINTED, including the advisory class — it is scored
+            # differently, never hidden. Only the blocking subset moves `total`
+            # (and therefore the exit code); see ADVISORY_ONLY_PATTERNS.
+            tag = " (advisory)" if name in ADVISORY_ONLY_PATTERNS else ""
+            print(f"{rel}:{loc}: [{name}]{tag} {text.strip()}")
+            if name in ADVISORY_ONLY_PATTERNS:
+                advisory_class += 1
+            else:
+                total += 1
+    if advisory_class:
+        print(
+            f"\nfail-open-guard: {advisory_class} hit(s) of the empty-collection "
+            f"fallback class (b0cacd15). Scored on the --ratchet burn-down, NOT "
+            f"on this verdict — see ADVISORY_ONLY_PATTERNS for why no ALLOWLIST "
+            f"entry is the right answer here.",
+            file=sys.stderr,
+        )
     scope = "all crates (advisory)" if all_crates else "gate surface"
     if total:
         print(

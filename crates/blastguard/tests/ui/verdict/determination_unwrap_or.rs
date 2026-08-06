@@ -2,7 +2,7 @@
 //! vantage point as well (it consumes `Determination<bool>` via
 //! `SensitiveConfig::any_sensitive`).
 //!
-//! Its only extractor is `require()` (-> `Result`). The permissive escape
+//! Its only extractor is `require()` (-> `Required<T>`). The permissive escape
 //! hatches -- `unwrap_or`, `ok`, `unwrap_or_default` -- must not exist.
 //! Intended failure: no such method on `Determination<T>` (E0599), NOT a
 //! trait-bound or typo error. Each call uses a fresh binding so the errors

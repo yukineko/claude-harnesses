@@ -1,0 +1,17 @@
+error[E0599]: no method named `unwrap_or_default` found for enum `Required<T>` in the current scope
+  --> tests/ui/verdict/require_result_erasure.rs:39:67
+   |
+39 |     let a: Vec<PathBuf> = boundary::read_dir_entries(p).require().unwrap_or_default();
+   |                                                                   ^^^^^^^^^^^^^^^^^ method not found in `Required<Vec<PathBuf>>`
+
+error[E0599]: no method named `unwrap_or` found for enum `Required<T>` in the current scope
+  --> tests/ui/verdict/require_result_erasure.rs:43:67
+   |
+43 |     let b: Vec<PathBuf> = boundary::read_dir_entries(p).require().unwrap_or(Vec::new());
+   |                                                                   ^^^^^^^^^ method not found in `Required<Vec<PathBuf>>`
+
+error[E0599]: no method named `is_ok` found for enum `Required<T>` in the current scope
+  --> tests/ui/verdict/require_result_erasure.rs:48:59
+   |
+48 |     let c: bool = boundary::read_dir_entries(p).require().is_ok();
+   |                                                           ^^^^^ method not found in `Required<Vec<PathBuf>>`

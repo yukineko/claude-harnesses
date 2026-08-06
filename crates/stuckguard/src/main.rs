@@ -113,10 +113,19 @@ fn watch() {
     let session = input.session_key();
 
     // PDO anchor side-channels (§4.4/§4.6b). Read the session's live anchor once
-    // if either feature is enabled; both degrade to a silent no-op when the
-    // session holds no lease or overwatch is absent.
+    // if either feature is enabled. `fetch_session_anchor` distinguishes a live
+    // lease from "no lease held" from "could not determine" (see anchor.rs's
+    // module docs for why that third answer matters); for THIS call site both
+    // "no lease" and "could not determine" mean the same thing (no anchor,
+    // heartbeat piggyback skipped below) — stuckguard is a pure advisory hook
+    // and never blocks — but "could not determine" is not silent OVERALL: it
+    // has already printed a diagnostic to stderr inside `fetch_session_anchor`
+    // before returning here.
     let anchor = if cfg.heartbeat_piggyback_enabled || cfg.scope_drift_enabled {
-        anchor::fetch_session_anchor(&session)
+        match anchor::fetch_session_anchor(&session) {
+            anchor::AnchorLookup::Leased(a) => Some(a),
+            anchor::AnchorLookup::NoLease | anchor::AnchorLookup::Undetermined(_) => None,
+        }
     } else {
         None
     };

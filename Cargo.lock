@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "clap",
@@ -162,7 +162,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.42"
+version = "0.2.44"
 dependencies = [
  "globset",
  "harness-core",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.120"
+version = "0.7.123"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -468,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.22"
+version = "0.1.24"
 dependencies = [
  "anyhow",
  "chrono",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1148,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "schemaguard"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "clap",
@@ -1276,7 +1276,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "specguard"
-version = "0.2.50"
+version = "0.2.51"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -1300,7 +1300,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "stuckguard"
-version = "0.1.27"
+version = "0.1.30"
 dependencies = [
  "anyhow",
  "chrono",

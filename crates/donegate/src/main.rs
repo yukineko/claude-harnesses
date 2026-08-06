@@ -9,9 +9,19 @@
 #![deny(clippy::panic)]
 //!
 //! Failure modes are split deliberately:
-//!   * a *harness* error (bad config, no checks, our own bug) → exit 0, allow the
-//!     stop. We must never trap a turn because donegate itself broke.
 //!   * a *check* failure → block on purpose, with an actionable reason.
+//!   * a *refusal / inability to judge* — the project declares checks in a
+//!     `donegate.toml` this root is not trusted to run, or a config file that
+//!     cannot be read — → **also blocks** (as `Verdict::Undetermined`), naming
+//!     the file and the remedy. Until backlog `3135ebb9` these landed on
+//!     `checks: 0` and allowed every stop, i.e. a refusal to judge was emitted
+//!     as a clean verdict. See [`config::Declaration`].
+//!   * *nothing declared* (no `donegate.toml`, no `~/.donegate/config.toml`) →
+//!     exit 0, allow. This is an observation of absence, not a refusal: donegate
+//!     is installed once and fires in every project on the machine, so a project
+//!     that never opted in is not judged at all.
+//!   * *our own bug* (a panic) → the `harness_core::gate::run` barrier, which
+//!     fails CLOSED (blocks once, bounded by `stop_hook_active`).
 
 mod config;
 mod gate;
@@ -86,6 +96,10 @@ fn main() {
 
 /// Add the current project root to the shared workspace-trust list so its
 /// project-local `donegate.toml` commands are honored on Stop.
+///
+/// Trusting a repository's MAIN working tree is enough for its linked git
+/// worktrees: `harness_core::trust::resolve` inherits trust across that one hop
+/// (see its docs for why that is not a loosening).
 fn trust_cmd() -> anyhow::Result<()> {
     let root = std::env::current_dir()?;
     let key = harness_core::trust::add(&root)?;
@@ -146,26 +160,39 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
-    let cfg = Config::load(&root);
-    if !cfg.enabled || cfg.checks.is_empty() {
+    let (cfg, declaration) = Config::resolve(&root);
+    if !cfg.enabled {
+        // An explicit opt-out written in a config we were entitled to read.
         if interactive {
-            eprintln!(
-                "donegate: nothing to do — {}",
-                if !cfg.enabled {
-                    "disabled in config".to_string()
-                } else {
-                    format!(
-                        "no [[check]] configured (looked for {})",
-                        Config::project_path(&root).display()
-                    )
-                }
-            );
+            eprintln!("donegate: nothing to do — disabled in config");
         }
         harness_core::hook_latency::record("donegate", "", __start.elapsed().as_millis() as u64);
         std::process::exit(0);
     }
 
     let session = input.session_key();
+
+    // The declaration is resolved BEFORE `checks.is_empty()`, because those two
+    // questions used to share one answer: "I am refusing to run the checks this
+    // project declared" rendered as `checks: 0`, i.e. as "allow every stop".
+    if declaration.is_refusal() {
+        refuse(&cfg, &declaration, &root, &session, interactive, __start);
+    }
+
+    if cfg.checks.is_empty() {
+        // A real observation: nothing was declared (Absent), or a config we DID
+        // read declares no `[[check]]`. donegate is opt-in per project, so this
+        // allows — see `Declaration::Absent`'s docs for why that is not the same
+        // concession as allowing on a refusal.
+        if interactive {
+            eprintln!(
+                "donegate: nothing to do — {}",
+                declaration_note(&root, &declaration)
+            );
+        }
+        harness_core::hook_latency::record("donegate", "", __start.elapsed().as_millis() as u64);
+        std::process::exit(0);
+    }
 
     // one-shot escape hatch
     if let Some(reason) = harness_core::gate::run::consume_skip(&root, ".donegate-skip") {
@@ -251,6 +278,135 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     std::process::exit(0);
 }
 
+/// One line for the `nothing to do` notice, naming WHICH determined answer we
+/// got. The two refusal arms are unreachable here (the caller resolved them
+/// first) but are still worded as refusals rather than as "nothing to do", so a
+/// future reordering cannot make a refusal read as an absence.
+fn declaration_note(root: &Path, d: &config::Declaration) -> String {
+    match d {
+        config::Declaration::Absent => format!(
+            "no config declared (looked for {} and {})",
+            Config::project_path(root).display(),
+            Config::home_path().display()
+        ),
+        config::Declaration::Loaded(p) => format!("{} declares no [[check]]", p.display()),
+        config::Declaration::RefusedUntrusted { project_path } => format!(
+            "REFUSING to run the checks declared in {} (project not trusted)",
+            project_path.display()
+        ),
+        config::Declaration::Unreadable { path, why } => {
+            format!(
+                "REFUSING to judge: {} could not be read ({why})",
+                path.display()
+            )
+        }
+    }
+}
+
+/// The model-facing text for a refusal. Names the file and the remedy, because a
+/// block the operator cannot act on is just a trap.
+fn refusal_reason(d: &config::Declaration, attempt: u32, max: u32) -> String {
+    let head = match d {
+        config::Declaration::RefusedUntrusted { project_path } => format!(
+            "🚦 donegate: REFUSING TO JUDGE — this project is not trusted (attempt {attempt}/{max}).\n\n\
+             {} declares acceptance checks, but this project root is not on the workspace-trust \
+             list, so donegate will not run them. That is a refusal to judge, NOT a pass: donegate \
+             cannot tell you whether this project's own checks are green.\n\n\
+             Remedy — run once, in this project root:\n    donegate trust\n\n\
+             If this root is a git worktree, trusting its MAIN working tree is enough; worktrees \
+             inherit that trust.",
+            project_path.display()
+        ),
+        config::Declaration::Unreadable { path, why } => format!(
+            "🚦 donegate: REFUSING TO JUDGE — {} could not be read (attempt {attempt}/{max}).\n\
+             \n    {why}\n\n\
+             A config donegate cannot read is not a config that declares zero checks — it may \
+             declare ten required ones. Fix (or remove) the file, then finish.",
+            path.display()
+        ),
+        // Unreachable: only `is_refusal()` answers reach here. Resolved to the
+        // restricted side rather than to a reassuring string.
+        config::Declaration::Absent | config::Declaration::Loaded(_) => format!(
+            "🚦 donegate: REFUSING TO JUDGE — internal error: a non-refusal declaration reached \
+             the refusal path (attempt {attempt}/{max}). Treated as undetermined."
+        ),
+    };
+    format!(
+        "{head}\n\nOther ways out: DONEGATE_DISABLE=1 (turn donegate off), HARNESS_TRUST_ALL=1 \
+         (trust every project), or a `.donegate-skip` file in the project root with a one-line \
+         reason (consumed once)."
+    )
+}
+
+/// The refusal path: donegate could not judge, so it must not let the stop
+/// through. Blocks via the shared tri-state's `Undetermined` arm — which is
+/// exactly what this is, and which records one telemetry event per give-up so
+/// the fleet can see how often the gate is blocking on ignorance.
+///
+/// **Bounded, and this is stated rather than hidden.** The block is routed
+/// through the gate's pre-existing `max_attempts` counter, so after N stops in
+/// one session donegate gives up loudly and allows. An agent cannot fix a trust
+/// refusal by working harder (it needs an operator to run `donegate trust`), and
+/// an unbounded block on a Stop hook traps the session with no way out. That is
+/// the same bounded concession `max_attempts` already makes for genuinely
+/// failing checks, reused deliberately rather than invented here — it is a
+/// bounded fail-open, it is logged (`giveup`) and printed every time, and it is
+/// the residual risk of this design.
+fn refuse(
+    cfg: &Config,
+    declaration: &config::Declaration,
+    root: &Path,
+    session: &str,
+    interactive: bool,
+    start: std::time::Instant,
+) -> ! {
+    // The one-shot escape hatch still applies to a refusal.
+    if let Some(reason) = harness_core::gate::run::consume_skip(root, ".donegate-skip") {
+        state::reset(&cfg.state_dir, session);
+        log_event(cfg, session, "skip", &[], 0);
+        eprintln!("donegate: .donegate-skip consumed — allowing stop ({reason})");
+        harness_core::hook_latency::record("donegate", session, start.elapsed().as_millis() as u64);
+        std::process::exit(0);
+    }
+
+    let attempt = state::bump(&cfg.state_dir, session, cfg.reset_after_secs);
+    if attempt > cfg.max_attempts {
+        state::reset(&cfg.state_dir, session);
+        log_event(cfg, session, "giveup-refusal", &[], attempt);
+        eprintln!(
+            "donegate: still unable to judge after {} attempts — {}. Allowing stop; NOTHING WAS \
+             VERIFIED.",
+            cfg.max_attempts,
+            declaration_note(root, declaration)
+        );
+        harness_core::hook_latency::record("donegate", session, start.elapsed().as_millis() as u64);
+        std::process::exit(0);
+    }
+
+    log_event(cfg, session, "refused", &[], attempt);
+    let reason = refusal_reason(declaration, attempt, cfg.max_attempts);
+    // `undetermined`, not `violation`: donegate is not asserting the project is
+    // broken, it is asserting it could not tell.
+    let verdict = harness_core::verdict::Verdict::undetermined(reason.clone());
+
+    if interactive {
+        eprintln!("{reason}");
+        harness_core::hook_latency::record("donegate", session, start.elapsed().as_millis() as u64);
+        std::process::exit(1);
+    }
+    match verdict.stop_decision() {
+        Some(decision) => println!("{decision}"),
+        // Unreachable for an Undetermined; still resolved to the restricted side
+        // rather than to silence, which the Stop protocol reads as "allow".
+        None => println!(
+            "{}",
+            json!({ "decision": "block", "reason": "donegate: could not judge this project" })
+        ),
+    }
+    harness_core::hook_latency::record("donegate", session, start.elapsed().as_millis() as u64);
+    std::process::exit(0);
+}
+
 /// Record one fleet-level violation per failing check, for cross-gate
 /// correlated-error detection (`overwatch::violation`). Fail-soft: never
 /// changes the gate's exit code/stdout, never panics if the overwatch store
@@ -296,31 +452,66 @@ fn log_event(cfg: &Config, session: &str, verdict: &str, names: &[String], attem
     harness_core::gate::run::append_jsonl(&cfg.state_dir, &entry);
 }
 
+/// The operator's view. It must state what the gate is going to DO, and the four
+/// declaration answers do not share one action — printing `checks: 0` under a
+/// refusal (as this did before backlog 3135ebb9) told the operator the gate would
+/// allow every stop while it was in fact refusing to run a declared check set.
 fn status() {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
-    let proj = Config::project_path(&root);
-    let trusted = harness_core::trust::is_trusted(&root);
-    let src = if proj.exists() && trusted {
-        proj.clone()
-    } else if Config::home_path().exists() {
-        Config::home_path()
-    } else {
-        Path::new("(defaults — no config file)").to_path_buf()
-    };
-    println!("config:        {}", src.display());
-    if proj.exists() && !trusted {
-        println!(
-            "trust:         UNTRUSTED — {} is ignored (run `donegate trust`)",
-            proj.display()
-        );
+    let (cfg, declaration) = Config::resolve(&root);
+    match &declaration {
+        config::Declaration::Loaded(p) => println!("config:        {}", p.display()),
+        config::Declaration::Absent => println!("config:        (defaults — no config file)"),
+        config::Declaration::RefusedUntrusted { project_path } => {
+            println!(
+                "config:        (defaults — {} is REFUSED)",
+                project_path.display()
+            )
+        }
+        config::Declaration::Unreadable { path, .. } => {
+            println!(
+                "config:        (defaults — {} is UNREADABLE)",
+                path.display()
+            )
+        }
+    }
+    match harness_core::trust::resolve(&root) {
+        harness_core::trust::Trust::Direct => println!("trust:         trusted (explicit)"),
+        harness_core::trust::Trust::InheritedFromMainWorktree(main) => println!(
+            "trust:         trusted (inherited — this is a worktree of {})",
+            main.display()
+        ),
+        harness_core::trust::Trust::Untrusted => println!("trust:         UNTRUSTED"),
     }
     println!("enabled:       {}", cfg.enabled);
     println!("max_attempts:  {}", cfg.max_attempts);
     println!("state_dir:     {}", cfg.state_dir.display());
+
+    if declaration.is_refusal() {
+        println!("checks:        (unknown — donegate is refusing to judge this project)");
+        println!(
+            "verdict:       BLOCK — {}",
+            declaration_note(&root, &declaration)
+        );
+        match &declaration {
+            config::Declaration::RefusedUntrusted { .. } => println!(
+                "  remedy:      run `donegate trust` here (or trust the main working tree if this \
+                 is a worktree)"
+            ),
+            config::Declaration::Unreadable { why, .. } => println!("  parse error: {why}"),
+            _ => {}
+        }
+        println!(
+            "  bound:       after {} consecutive blocks in one session donegate gives up and \
+             allows the stop, having verified NOTHING",
+            cfg.max_attempts
+        );
+        return;
+    }
+
     println!("checks:        {}", cfg.checks.len());
     if cfg.checks.is_empty() {
-        println!("  (none — the gate will allow every stop; run `donegate init`)");
+        println!("  (none declared — the gate will allow every stop; run `donegate init`)");
         return;
     }
     match git::changed_files(&root) {

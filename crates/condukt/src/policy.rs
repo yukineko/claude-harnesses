@@ -185,6 +185,48 @@ pub fn decide_untestable(risk: Level, reversibility: Level, confidence: Level) -
     }
 }
 
+/// Policy posture for a **permission approval** — a YES/NO "may I proceed?"
+/// gate, as opposed to a judgment gate that asks the human to *choose* something.
+///
+/// Standing authorization (user directive, 2026-08-07): while self-driving, a
+/// permission approval is pre-granted — the human does not want to be asked
+/// "shall I proceed?" over and over. So this clamps an `Escalate` verdict DOWN
+/// to `Auto`. It is the ONLY downward clamp in this module, and it is
+/// deliberately narrow:
+///
+/// - **`Block` is preserved, never relaxed.** A high-risk irreversible action
+///   still hard-stops (`decide`'s hard stop), because the standing grant covers
+///   "stop asking me for permission", not "do the catastrophic thing". The
+///   deterministic gates that actually enforce safety — blastguard, taintguard,
+///   donegate, the pre-commit/pre-push hooks — sit at a different layer entirely
+///   and are untouched by this function; they remain the real stop.
+/// - **It is opt-in per callsite.** A gate only loses its prompt if the caller
+///   explicitly frames it as an approval. Judgment gates (pivot, merge-conflict
+///   resolution, untestable decisions, a blocked worker, open questions) do NOT
+///   pass this framing and keep escalating — the human explicitly kept those.
+/// - **It is inert outside autonomous mode.** The caller (`run_policy` in
+///   `main.rs`) applies this posture only when the run is autonomous; a
+///   non-autonomous run keeps every consent prompt. That condition is enforced
+///   in the binary, not left to skill prose.
+/// - **Every auto-granted approval is journaled** to `gate-decisions.jsonl` and
+///   readable via `condukt policy answers`. The gate is not silently deleted; it
+///   is answered on the record.
+///
+/// Pure; total; no panics. Restrictiveness is monotone: this maps
+/// `Auto→Auto`, `Escalate→Auto`, `Block→Block`, which is order-preserving, so
+/// [`decide`]'s monotonicity in risk/reversibility/confidence survives
+/// composition.
+pub fn decide_approval(risk: Level, reversibility: Level, confidence: Level) -> Decision {
+    match decide(risk, reversibility, confidence) {
+        // The standing grant: stop asking permission for what is merely gated.
+        Decision::Escalate => Decision::Auto,
+        // `Auto` was already unattended; `Block` is the hard stop and NEVER
+        // relaxes — a standing "yes" is not consent to an irreversible
+        // catastrophe.
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod proptests {
     //! Property-based floor for [`decide`]: monotonicity and the irreversible
@@ -516,6 +558,161 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn approval_clamps_escalate_to_auto_and_never_relaxes_block() {
+        // The standing 2026-08-07 grant: a permission gate stops asking. Every
+        // input `decide` Escalates must become Auto; every Block must pass
+        // through UNCHANGED (the hard stop is not covered by the grant); every
+        // Auto stays Auto.
+        let mut escalates_seen = 0;
+        let mut blocks_seen = 0;
+        for r in ALL {
+            for v in ALL {
+                for c in ALL {
+                    let base = decide(r, v, c);
+                    let approval = decide_approval(r, v, c);
+                    match base {
+                        Decision::Escalate => {
+                            escalates_seen += 1;
+                            assert_eq!(
+                                approval,
+                                Decision::Auto,
+                                "an approval Escalate must clamp DOWN to Auto \
+                                 (r={r:?} v={v:?} c={c:?})"
+                            );
+                        }
+                        Decision::Block => {
+                            blocks_seen += 1;
+                            assert_eq!(
+                                approval,
+                                Decision::Block,
+                                "a Block must NEVER relax under the approval posture \
+                                 (r={r:?} v={v:?} c={c:?})"
+                            );
+                        }
+                        Decision::Auto => assert_eq!(
+                            approval,
+                            Decision::Auto,
+                            "an Auto must stay Auto (r={r:?} v={v:?} c={c:?})"
+                        ),
+                    }
+                }
+            }
+        }
+        // Non-vacuity: the 27-input space really does contain both classes, so
+        // neither branch above passed by never being exercised.
+        assert!(
+            escalates_seen > 0,
+            "no Escalate input exercised -- the clamp assertion was vacuous"
+        );
+        assert!(
+            blocks_seen > 0,
+            "no Block input exercised -- the preservation assertion was vacuous"
+        );
+    }
+
+    #[test]
+    fn approval_preserves_the_irreversible_hard_stop() {
+        // The one thing the standing grant does NOT cover: you cannot pre-approve
+        // a high-risk irreversible action, at any confidence.
+        for c in ALL {
+            assert_eq!(
+                decide_approval(Level::High, Level::Low, c),
+                Decision::Block,
+                "high risk + irreversible must still Block under approval (conf {c:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn approval_is_the_mirror_of_untestable_never_more_restrictive_than_decide() {
+        // `decide_untestable`/`decide_conflict_resolution` only ever RAISE
+        // restrictiveness; `decide_approval` is the sole posture that may LOWER
+        // it, and it must never raise. Pins the direction so a future edit
+        // cannot quietly turn this into another escalating clamp.
+        for r in ALL {
+            for v in ALL {
+                for c in ALL {
+                    let base = decide(r, v, c).restrictiveness();
+                    let approval = decide_approval(r, v, c).restrictiveness();
+                    assert!(
+                        approval <= base,
+                        "decide_approval must never be MORE restrictive than decide \
+                         (r={r:?} v={v:?} c={c:?}): base={base} approval={approval}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn approval_stays_monotone_in_every_axis() {
+        // Collapsing {Auto, Escalate} -> Auto is order-preserving, so `decide`'s
+        // monotonicity must survive. If a future edit made the clamp
+        // conditional on some axis, this catches the resulting non-monotonicity.
+        for v in ALL {
+            for c in ALL {
+                let lo = decide_approval(Level::Low, v, c).restrictiveness();
+                let mid = decide_approval(Level::Medium, v, c).restrictiveness();
+                let hi = decide_approval(Level::High, v, c).restrictiveness();
+                assert!(
+                    lo <= mid && mid <= hi,
+                    "risk not monotone at v={v:?} c={c:?}"
+                );
+            }
+        }
+        for r in ALL {
+            for c in ALL {
+                let high = decide_approval(r, Level::High, c).restrictiveness();
+                let med = decide_approval(r, Level::Medium, c).restrictiveness();
+                let low = decide_approval(r, Level::Low, c).restrictiveness();
+                assert!(
+                    high <= med && med <= low,
+                    "reversibility not monotone at r={r:?} c={c:?}"
+                );
+            }
+        }
+        for r in ALL {
+            for v in ALL {
+                let high = decide_approval(r, v, Level::High).restrictiveness();
+                let med = decide_approval(r, v, Level::Medium).restrictiveness();
+                let low = decide_approval(r, v, Level::Low).restrictiveness();
+                assert!(
+                    high <= med && med <= low,
+                    "confidence not monotone at r={r:?} v={v:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn approval_is_total_and_never_panics() {
+        for r in ALL {
+            for v in ALL {
+                for c in ALL {
+                    let d = decide_approval(r, v, c);
+                    assert!(matches!(
+                        d,
+                        Decision::Auto | Decision::Escalate | Decision::Block
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn approval_and_untestable_are_opposite_postures_on_the_same_input() {
+        // The ambiguous middle: `decide` Escalates. Framed as an untestable
+        // decision it stays Escalate (§2 keeps the 質疑 channel); framed as a
+        // permission approval it becomes Auto (standing grant). Documents that
+        // the two framings are NOT interchangeable, so a callsite picking the
+        // wrong one is a visible semantic error, not a shrug.
+        let (r, v, c) = (Level::Medium, Level::Medium, Level::Medium);
+        assert_eq!(decide(r, v, c), Decision::Escalate);
+        assert_eq!(decide_untestable(r, v, c), Decision::Escalate);
+        assert_eq!(decide_approval(r, v, c), Decision::Auto);
     }
 
     #[test]

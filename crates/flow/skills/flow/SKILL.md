@@ -108,25 +108,62 @@ esac
 - **exit 3（block）** → 実行を拒否して停止する。
 - **その他（exit 1 不正入力 / exit 127）** → 安全側にフォールバックして `AskUserQuestion` を出す（never break a turn）。
 
+#### 権限認可（YES/NO）と 判断要求（Ask）を分ける — `--approval`
+
+**ユーザー常設許諾（2026-08-07）**: 自律走行中の**「進めてよいか」という YES/NO の権限認可は
+事前に許諾済み**であり、二度と人間に聞かない。聞いてよいのは**人間に選択・設計判断を求める Ask** だけである。
+この 2 種を混同しないために、**権限認可のゲートには `--approval` を付ける**:
+
+```bash
+condukt policy answer --approval \
+  --risk <...> --reversible <...> --confidence <...> \
+  --question "<進めてよいか>" --option "<進む>" --option "<やめる>" --recommend 0
+```
+
+`--approval` は policy engine で**唯一の下向き clamp**（`escalate` → `auto`）であり、次の 4 点で狭く縛られている
+（すべて `crates/condukt/tests/autonomy_invariant.rs` の 1d 節が binary 境界で機械検査する）:
+
+1. **`block` は絶対に緩めない。** risk=high かつ reversible=low の hard stop は `--approval` を付けても block のまま。
+   「もう許可を聞くな」は「取り返しのつかないことをやれ」ではない。
+2. **非自律モードでは完全に不活性。** 自律判定は **skill の散文ではなくバイナリ側**（`policy_is_autonomous`）が行うので、
+   skill が autonomy-check を忘れても合意ゲートは消えない。
+3. **callsite ごとの opt-in。** 付けなかったゲートは従来どおり escalate する。下表の「判断要求」行には**付けない**。
+4. **`--untestable` / `--conflict`（上向き clamp）が常に優先。** 常設許諾は §2 の「測れないなら人に聞く」も
+   merge conflict の pick-a-side も**上書きしない**。
+
+**実際に流れを止めるのは deterministic gate の側である** — blastguard / taintguard / donegate /
+pre-commit・pre-push フック。`--approval` はそれらに一切触れない（層が違う）。ユーザーの
+「blastguard とかで止められない限り」はこの構造を指している: **人間への YES/NO は消え、機械の判定は残る。**
+
 各ゲートに与える risk/reversibility/confidence と既定（`--recommend`）:
 
-| human gate | risk | reversible | confidence | 典型 verdict | 自答時の既定（recommend） |
-|---|---|---|---|---|---|
-| **排他ロック競合**（Step 2・他セッションが明示的に `lock acquire` 済み。driver の並走では発生しない） | low | high | high | auto | **stand down**（報告して clean exit。`--force` 自動奪取はしない） |
-| **resume 選択**（複数候補） | low | high | high | auto | 3-1 の優先度 pick 規則の先頭 |
-| **pivot-check**（Step 4・`pivot`） | medium | high | low | **escalate** | —（genuine な戦略判断なので人に聞く。既定案＝継続/persevere） |
-| **循環ブレーカー trip**（早期脱出・`condukt circuit check`） | low | high | high | auto | **clean stop**（ループを止め Step 4 へ） |
+| human gate | 種別 | risk | reversible | confidence | `--approval` | 典型 verdict | 自答時の既定（recommend） |
+|---|---|---|---|---|---|---|---|
+| **排他ロック競合**（Step 2・他セッションが明示的に `lock acquire` 済み。driver の並走では発生しない） | 権限認可 | low | high | high | 付ける | auto | **stand down**（報告して clean exit。`--force` 自動奪取はしない） |
+| **resume 選択**（複数候補） | 権限認可 | low | high | high | 付ける | auto | 3-1 の優先度 pick 規則の先頭 |
+| **deploy/push の GATED 承認**（3-3 sink・Step 4） | 権限認可 | medium | medium | medium | **付ける** | auto（常設許諾） | **承認して進む**（block を返した場合のみ停止） |
+| **condukt Phase 3 の合意**（「この schedule で進む?」） | 権限認可 | schedule 由来 | high | schedule 由来 | **付ける** | auto | 提示した schedule のまま進む |
+| **pivot-check**（Step 4・`pivot`） | **判断要求** | medium | high | low | 付けない | **escalate** | —（genuine な戦略判断なので人に聞く。既定案＝継続/persevere） |
+| **worker が blocked**（condukt Phase 5） | **判断要求** | medium | medium | low | 付けない | **escalate** | —（実装が詰まった＝人間の判断が要る） |
+| **merge conflict の pick-a-side** | **判断要求** | — | — | — | `--conflict` | **escalate** | —（自動 pick は last-writer-wins） |
+| **測れない決定**（CLAUDE.md §2） | **判断要求** | — | — | — | `--untestable` | **escalate** | —（測れないという事実こそ人間が知るべき情報） |
+| **循環ブレーカー trip**（早期脱出・`condukt circuit check`） | 決定論 stop | — | — | — | — | **人にも policy にも聞かない clean stop** | —（ループを止め Step 4 へ） |
 
-> pivot は **escalate（残す 質疑）**＝ streak 閾値超えは「戦略が効いていない」という genuine な判断材料なので人間に返す。
-> それ以外の routine なゲートは **auto** で自答され Yes/No は消える。verdict は `policy::decide`
-> （`risk − reversible − confidence` の決定論スコア: `≤ -2`→auto / `≥ 1`→block / それ以外→escalate。
-> ただし risk=high かつ reversible=low は無条件 block）が確定するので、ここで挙動を hardcode しない。
+> **種別の見分け方**: 「はい/いいえで答えられ、答えが『はい』だと分かっているもの」＝**権限認可**（`--approval`）。
+> 「どちらを選ぶべきか／これは正しいのか、を人間に問うもの」＝**判断要求**（付けない）。
+> 迷ったら**付けない**（＝従来どおり聞く）。付け忘れは冗長な質問で済むが、付け間違いは判断の消失になる。
+>
+> verdict は `policy::decide`（`risk − reversible − confidence` の決定論スコア: `≤ -2`→auto /
+> `≥ 1`→block / それ以外→escalate。ただし risk=high かつ reversible=low は無条件 block）と
+> `policy::decide_approval` が確定するので、ここで挙動を hardcode しない。
 
-**安全不変条件（自律でも残す停止）**: 自律モードで残る human stop は **(a) worker が blocked**
-（condukt がエスカレーション）、**(b) deploy/push の GATED 承認**、**(c) pivot**（上表で escalate に倒す
-genuine な戦略判断）、および **policy answer が escalate/block を返したゲート**。それ以外の routine な human gate は
-policy-answer の auto で自答され Yes/No は消える（監査ログに残る）。**budgetguard の予算超過による早期脱出（Step 4）は
-どのモードでも維持**する。
+**安全不変条件（自律でも残す停止）**: 自律モードで残る human stop は **(a) worker が blocked**、
+**(b) pivot**（genuine な戦略判断）、**(c) merge conflict の pick-a-side と §2 の測れない決定**、
+および **policy answer が block を返したゲート**。**deploy/push の GATED 承認は 2026-08-07 の常設許諾により
+auto へ移した**（block が返れば止まる。実際の防護は blastguard 等の deterministic gate が担う）。
+その他の routine な human gate も policy-answer の auto で自答され Yes/No は消える（**全件が
+`gate-decisions.jsonl` に残り `condukt policy answers` で監査できる** — ゲートは削除ではなく記録付きで自答される）。
+**budgetguard の予算超過による早期脱出（Step 4）はどのモードでも維持**する。
 
 ### Step 1 — compass ゲート（盲目実行の防止）
 
@@ -167,7 +204,8 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
 - **例外 — 誰かが明示的に排他ロックを取っている場合**（`backlog lock status` の `kind` が
   `exclusive-lock` で `stale` でない）: これは人間が「全セッションを締め出す」意図で
   `backlog lock acquire` を打った状態なので尊重する。**Step 0.5 の policy-answer routing** に通す
-  （`--risk low --reversible high --confidence high`、`--question "他セッションが排他ロック中。どうする?"`、
+  （権限認可なので `--approval` を付ける。`--risk low --reversible high --confidence high`、
+  `--question "他セッションが排他ロック中。どうする?"`、
   `--option "stand down" --option "wait" --option "force-steal" --recommend 0` → 既定 verdict は auto）:
   - **auto（exit 0）** → `chosen`（＝stand down）を採用: 自動奪取はせず「排他ロック保持中のため見送り」と
     報告して**clean exit**。自答は監査ログに残る。
@@ -529,11 +567,17 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
 - **driver 登録の解除を絶対に飛ばさない**（早期脱出・エラー時も）。解除漏れは `autoflow` /
   `daily` を最大 30 分止める。
 - **自律モードでは human gate を `condukt policy answer` に通す（Step 0.5）**: `autonomy-check` exit 0 のとき、
-  各ゲート（排他ロック競合 / resume 選択 / pivot）を per-gate の risk×reversible×confidence で
-  `policy answer` に掛け、**auto は自答（Ask 撤去・監査ログに追記）／ escalate は従来 Ask（残す 質疑）／ block は拒否**。
+  各ゲートを per-gate の risk×reversible×confidence で `policy answer` に掛け、
+  **auto は自答（Ask 撤去・監査ログに追記）／ escalate は従来 Ask（残す 質疑）／ block は拒否**。
   なお **failure-streak/予算/stall の早期脱出は policy answer ではなく決定論の `condukt circuit check` に集約**されており、
-  trip すれば人にも policy にも聞かず clean stop する（上記「早期脱出」）。routine なゲート（排他ロック競合＝stand down、
-  resume＝優先 pick 先頭、循環ブレーカー trip＝clean stop）は auto で消え、
-  **pivot は escalate**（genuine な戦略判断）として残る。自律で残る停止は **(a) pivot** **(b) worker blocked**
-  **(c) deploy/push の GATED 承認** **(d) budgetguard 早期脱出**、および policy が escalate/block を返したゲート。
-  exit 1（既定・非自律）は**従来どおり全 Ask を維持**（後方互換）。存在しない版（exit 127）は非自律とみなす。
+  trip すれば人にも policy にも聞かず clean stop する（上記「早期脱出」）。
+- **YES/NO の権限認可には `--approval` を付け、判断を求める Ask には付けない（Step 0.5 の表）**。
+  権限認可（排他ロック競合＝stand down、resume＝優先 pick 先頭、**deploy/push の GATED 承認**、
+  condukt Phase 3 の合意）は 2026-08-07 の常設許諾により auto で消える。
+  判断要求（**pivot** / **worker blocked** / merge conflict の pick-a-side / §2 の測れない決定）は
+  escalate のまま残す。**迷ったら `--approval` を付けない** — 付け忘れは冗長な質問で済むが、
+  付け間違いは人間の判断を消す。
+  自律で残る停止は **(a) worker blocked** **(b) pivot** **(c) conflict/untestable の判断要求**
+  **(d) budgetguard 早期脱出**、および policy が **block** を返したゲート。
+  exit 1（既定・非自律）は**従来どおり全 Ask を維持**（後方互換。`--approval` もそこでは不活性）。
+  存在しない版（exit 127）は非自律とみなす。

@@ -128,3 +128,19 @@ updated_at = 1786024055
 weight = 0.0
 issue_number = 196
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/196"
+
+[[task]]
+id = "f78490e1"
+title = "backlog add --project がトラック済みの main ツリーのファイルを直接書き換え、第8節に違反する"
+project = "/Users/yuki/src/.harness-worktrees/session-b9a78b46"
+tags = [
+    "worktree-hygiene",
+    "p0",
+]
+status = "pending"
+notes = "実測 2026-08-07。backlog のストアは /Users/yuki/src/harness/.backlog/tasks.toml で、git check-ignore は rc=1、ls-files --error-unmatch は成功する = トラック済み。したがって backlog add --project /Users/yuki/src/harness は main の作業ツリーのトラック済みファイルを直接変更する。本セッションで 2 件 (3ccedd83, b71c72a7) を起票した結果、main が git status で dirty になった。--project を worktree にすると worktree 側のコピーに書かれるが、その場合キューが worktree ごとに分裂する (既知の e840c8b2 の裏返し)。第8節とキュー設計が構造的に衝突しており、どちらを選んでも一方の不変条件を破る。main の dirty を revert していないのは、並行セッションが同じファイルに正当な起票をしている可能性があり、revert 自体も第8節が禁じる main ツリーの変更だからである。判断を人間に返す。"
+created_at = 1786028548
+updated_at = 1786028548
+weight = 0.0
+issue_number = 204
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/204"

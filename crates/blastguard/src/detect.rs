@@ -1084,7 +1084,12 @@ primitive, not a filesystem path",
 
     let mut cwd = CwdState::Root;
     let mut aliases: HashMap<String, String> = HashMap::new();
-    for seg in split_segments(cmd) {
+    // ENUMERATED, so `unknown_wrapper_ask` can ask `resolve_expanded_command_word`
+    // what an expansion-valued command word in THIS segment was assigned by an
+    // EARLIER one. `advance_cwd_and_rewrite` below rewrites a segment's text but
+    // maps one segment to one segment, so `seg_idx` stays the segment's index in
+    // `split_segments(cmd)` — which is what that resolver's parameter means.
+    for (seg_idx, seg) in split_segments(cmd).into_iter().enumerate() {
         let (effective_seg, extra, next_cwd) = advance_cwd_and_rewrite(&seg, &cwd, &mut aliases);
         cwd = next_cwd;
         if let Some(extra_decision) = extra {
@@ -1092,7 +1097,7 @@ primitive, not a filesystem path",
                 return deny;
             }
         }
-        if let Some(deny) = acc.record(analyze_segment(&effective_seg, depth)) {
+        if let Some(deny) = acc.record(analyze_segment(&effective_seg, depth, cmd, seg_idx)) {
             return deny;
         }
         // High-blast Ask tier (C): an outside-tree rm/unlink. Judged on
@@ -1540,13 +1545,17 @@ fn split_segments_paren_aware(cmd: &str) -> Vec<String> {
 // ---------------------------------------------------------------------------
 // Reading an expansion-valued COMMAND WORD back off the same command line.
 //
-// NOTHING IN THIS SECTION IS WIRED INTO A DECISION YET. Every item below is
-// `#[cfg(test)]`, so it is compiled only for the test binary and no arm of
-// `detect_bash`/`analyze_segment`/`unknown_wrapper_ask`/`analyze_shell_payload`
-// calls it; the shipped gate behaves exactly as it did before this section
-// existed. Removing the `#[cfg(test)]` attributes and threading the segment
-// index through is a separate, later change (see the module note on
-// `resolve_expanded_command_word`).
+// WIRED INTO EXACTLY ONE DECISION ARM: the CA-blastguard-017 head check in
+// [`unknown_wrapper_ask`]. [`detect_bash`] enumerates its `split_segments(cmd)`
+// loop and threads `(cmd, seg_idx)` through [`analyze_segment`] to that arm.
+// No other rule in this file consults anything below.
+//
+// That arm uses the answer SUBSTITUTIVELY, never as a skip: a
+// [`CommandWordOrigin::Literal`] replaces the expansion token and the rewritten
+// segment is re-judged by the full rule engine, so a head that resolves to a
+// destructive program comes out DENY. Merely suppressing the ask on finding a
+// literal would re-open CA-blastguard-017 in a new place — the tail alone
+// (`-rf /path`) is a flag and a bare path, which does not parse as destructive.
 // ---------------------------------------------------------------------------
 
 /// What the TEXT of a command line says about the program that a command word
@@ -1559,7 +1568,6 @@ fn split_segments_paren_aware(cmd: &str) -> Vec<String> {
 /// there is nothing" from "I looked and could not read it". Only
 /// [`CommandWordOrigin::Literal`] carries a program name; the other two say, in
 /// two different ways, that the text does not name a program.
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CommandWordOrigin {
     /// (1) An assignment that reaches this use gives the name this literal
@@ -1583,8 +1591,9 @@ enum CommandWordOrigin {
     NoReachingAssignment,
     /// (3) An assignment DOES reach this use, but the text still does not name
     /// a program. Every way that happens:
-    ///   * its execution is guarded by a `&&`/`||` earlier on the line, so
-    ///     whether it ran is an exit status the text does not contain (see
+    ///   * its execution is guarded — by a `&&`/`||`, or by a compound command
+    ///     or subshell opened earlier on the line — so whether it ran in THIS
+    ///     shell is a run-time fact the text does not contain (see
     ///     [`assignment_execution_is_unconditional`]). This case differs from
     ///     the others below in that the VALUE may be perfectly readable; the
     ///     line simply names two programs — the assigned one and whatever the
@@ -1611,7 +1620,6 @@ enum CommandWordOrigin {
 ///
 /// Each variant below was verified against `bash -c` rather than assumed; the
 /// observed output is quoted on the variant.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SegmentSep {
     /// `;` or a newline: what follows runs in the SAME shell and runs
@@ -1647,7 +1655,6 @@ enum SegmentSep {
 }
 
 /// One [`split_segments`] segment plus the separator that followed it.
-#[cfg(test)]
 struct SeparatedSegment {
     text: String,
     sep_after: SegmentSep,
@@ -1663,7 +1670,6 @@ struct SeparatedSegment {
 /// `split_segments`' output — which is what makes a segment INDEX taken from
 /// one usable in the other. `separated_segmentation_agrees_with_split_segments`
 /// pins that correspondence.
-#[cfg(test)]
 fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment> {
     let chars: Vec<char> = cmd.chars().collect();
     let mut segs: Vec<SeparatedSegment> = Vec::new();
@@ -1738,7 +1744,6 @@ fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment> {
 /// The false side is the restrictive one here: "not the parent shell" makes the
 /// caller ignore the segment's assignments, which can only preserve an Ask. An
 /// out-of-range index therefore answers false rather than panicking.
-#[cfg(test)]
 fn assignments_reach_parent_shell(segs: &[SeparatedSegment], idx: usize) -> bool {
     let Some(seg) = segs.get(idx) else {
         return false;
@@ -1784,24 +1789,57 @@ fn assignments_reach_parent_shell(segs: &[SeparatedSegment], idx: usize) -> bool
 /// error direction of guessing wrong there is permissive. So the coarse rule
 /// stands: it forgoes a resolution, and never invents one.
 ///
-/// KNOWN LIMIT, in the same direction as everything else this scan cannot see:
-/// `&&`/`||` are not the only way execution becomes conditional. A newline-
-/// formatted compound command (`if foo`, newline, `then`, newline, `BIN=x`,
-/// newline, `fi`) puts a pure assignment segment under a condition this
-/// function does not model, and answers true for it. The `;`-formatted
-/// spellings are already excluded upstream, by the pure-assignment-list rule in
-/// [`resolve_expanded_command_word`] (`then BIN=x` is not an assignment list),
-/// but the newline spellings are not. Nothing in this module is wired into a
-/// decision yet, so this costs no gate anything today; it must be closed before
-/// [`CommandWordOrigin::Literal`] is allowed to suppress an Ask.
-#[cfg(test)]
+/// `&&`/`||` are not the only way execution stops being guaranteed, so the scan
+/// also refuses anything standing after a segment that OPENS a compound command
+/// or a subshell ([`opens_unmodelled_construct`]). A NEWLINE-formatted compound
+/// command (`if foo`, newline, `then`, newline, `BIN=x`, newline, `fi`) hands
+/// [`split_segments`] a body segment that is a pure assignment list with an
+/// ordinary separator on both sides and nothing at all marking it as guarded —
+/// it looks exactly like a top-level `BIN=x`. (The `;`-formatted spellings were
+/// already excluded upstream by the pure-assignment-list rule in
+/// [`resolve_expanded_command_word`]: `then BIN=x` is not an assignment list.
+/// Only the newline spellings need this scan.)
+///
+/// That check is coarse in the same direction as the separator one: it never
+/// looks for the `fi`/`done`/`)` that closes the construct, so an assignment
+/// AFTER a completed `if … fi` is refused too. Tracking where a construct ends
+/// needs real grammar, and the error direction of guessing wrong there is
+/// permissive.
 fn assignment_execution_is_unconditional(segs: &[SeparatedSegment], idx: usize) -> bool {
     // `take` rather than a slice: an out-of-range `idx` then scans the whole
     // line instead of panicking, which is also the restrictive direction.
-    !segs
-        .iter()
-        .take(idx)
-        .any(|s| matches!(s.sep_after, SegmentSep::Conditional))
+    !segs.iter().take(idx).any(|s| {
+        matches!(s.sep_after, SegmentSep::Conditional) || opens_unmodelled_construct(&s.text)
+    })
+}
+
+/// True when this segment opens a compound command whose body may run zero
+/// times, or may run in a child shell — either way, a later assignment is not
+/// something the line's text says happened in THIS shell.
+///
+/// Only the OPENING keywords are listed. The closing ones (`fi`, `done`,
+/// `esac`) need no entry: a segment cannot be inside a construct whose opener
+/// this scan did not already pass over.
+///
+/// This is a first-word test, so the keywords are recognised only where a shell
+/// would treat them as keywords. `echo if` and `grep -q done` are ordinary
+/// commands and are not flagged.
+fn opens_unmodelled_construct(seg: &str) -> bool {
+    let Some(first) = seg.split_whitespace().next() else {
+        return false;
+    };
+    // A subshell's `(` may be glued to the first command word inside it
+    // (`(cd x`), so this is a prefix test rather than an equality one. A brace
+    // group (`{`) is deliberately absent: it runs in the current shell,
+    // unconditionally, so an assignment inside one really does reach later
+    // segments.
+    if first.starts_with('(') {
+        return true;
+    }
+    matches!(
+        first,
+        "if" | "then" | "elif" | "else" | "while" | "until" | "for" | "do" | "case" | "select"
+    )
 }
 
 /// Split a segment into words on whitespace that is OUTSIDE quotes, backticks
@@ -1817,7 +1855,6 @@ fn assignment_execution_is_unconditional(segs: &[SeparatedSegment], idx: usize) 
 /// caller then ignores an assignment that really is there. That is restrictive,
 /// not permissive — but it answers `NoReachingAssignment` for a name the line
 /// visibly DOES assign, which is the wrong one of the two restrictive answers.
-#[cfg(test)]
 fn quote_aware_words(seg: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -1886,7 +1923,6 @@ fn quote_aware_words(seg: &str) -> Vec<String> {
 ///     a function whose `Some` is the only permissive answer. This costs a
 ///     resolution it could have made; it never invents one.
 ///   * unbalanced quoting, which the shell would not run as written anyway.
-#[cfg(test)]
 fn unquote_literal_value(raw: &str) -> Option<String> {
     if raw.contains('\\') {
         return None;
@@ -1911,7 +1947,6 @@ fn unquote_literal_value(raw: &str) -> Option<String> {
 }
 
 /// True for a name a shell would accept on the left of `=`.
-#[cfg(test)]
 fn is_shell_identifier(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
@@ -1940,7 +1975,6 @@ fn is_shell_identifier(name: &str) -> bool {
 ///     (`${BIN:-x}`), positional/special parameters (`$1`, `$@`), and any word
 ///     with text glued around the reference (`pre$BIN`, `$A$B`) — in each case
 ///     the value is either not a variable or not just a variable.
-#[cfg(test)]
 fn referenced_variable_name(word: &str) -> Option<String> {
     let inner = if word.len() >= 2 && word.starts_with('"') && word.ends_with('"') {
         let mid = &word[1..word.len() - 1];
@@ -2006,16 +2040,17 @@ fn referenced_variable_name(word: &str) -> Option<String> {
 /// `NoReachingAssignment`), and values whose quoting does not balance or that
 /// contain a backslash (see [`unquote_literal_value`], which refuses both).
 ///
-/// Threading note for the caller that will eventually use this: it needs the
-/// WHOLE command line and the segment index, neither of which
-/// `unknown_wrapper_ask(tokens, depth)` has today. The shortest path is
-/// `detect_bash`'s `for seg in split_segments(cmd)` loop (which already
-/// produces exactly the index this parameter means) passing `(cmd, seg_idx)`
-/// into `analyze_segment`, which passes them to `unknown_wrapper_ask`.
-/// `analyze_shell_payload` needs no threading at all: `unresolvable_command_word`
-/// already walks `split_segments(payload)` itself and can hand over its own
-/// enumeration index.
-#[cfg(test)]
+/// How the caller gets `seg_idx`: [`detect_bash`] enumerates its
+/// `for seg in split_segments(cmd)` loop, which produces exactly the index this
+/// parameter means, and threads `(cmd, seg_idx)` through [`analyze_segment`] to
+/// [`unknown_wrapper_ask`]. That index survives the trip because
+/// [`advance_cwd_and_rewrite`] maps one segment to one segment — it rewrites a
+/// segment's TEXT but never splits or merges one, so the loop position and the
+/// `split_segments` position stay the same number.
+///
+/// [`analyze_shell_payload`] is deliberately NOT wired to this:
+/// `unresolvable_command_word` walks `split_segments(payload)` itself and keeps
+/// its pre-existing Ask.
 fn resolve_expanded_command_word(cmd: &str, seg_idx: usize, word: &str) -> CommandWordOrigin {
     let Some(name) = referenced_variable_name(word) else {
         return CommandWordOrigin::NoReachingAssignment;
@@ -2852,7 +2887,14 @@ fn inline_command_payloads(rest: &[&str], pos: usize, inline: &str) -> Vec<Strin
     payloads_after(&synthetic, 0)
 }
 
-fn analyze_segment(seg: &str, depth: usize) -> Decision {
+/// Judge ONE `;`/`&&`/`|`-separated segment of a command line.
+///
+/// `line`/`seg_idx` locate this segment inside the command line it came from,
+/// and exist for one consumer only: [`unknown_wrapper_ask`]'s head check, which
+/// needs the EARLIER segments to read an expansion-valued command word back off
+/// the line (see [`resolve_expanded_command_word`]). Nothing else here uses
+/// them, and `seg` remains the only thing judged.
+fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize) -> Decision {
     let tokens: Vec<&str> = seg.split_whitespace().collect();
     let mut acc = VerdictAcc::default();
 
@@ -2917,7 +2959,7 @@ fn analyze_segment(seg: &str, depth: usize) -> Decision {
 
     // ASK-2: an UNRECOGNISED wrapper standing in front of a destructive command
     // line. See `unknown_wrapper_ask`.
-    if let Some(deny) = acc.record(unknown_wrapper_ask(&tokens, depth)) {
+    if let Some(deny) = acc.record(unknown_wrapper_ask(&tokens, depth, line, seg_idx)) {
         return deny;
     }
 
@@ -2998,7 +3040,7 @@ fn is_recognized_command(cmd: &str) -> bool {
 ///
 /// Missing an ask because the real payload sat at a position this scan skipped
 /// is not a regression — that case was, and remains, the pre-existing Allow.
-fn unknown_wrapper_ask(tokens: &[&str], depth: usize) -> Decision {
+fn unknown_wrapper_ask(tokens: &[&str], depth: usize, line: &str, seg_idx: usize) -> Decision {
     if depth >= MAX_SHELL_DEPTH {
         return depth_exhausted();
     }
@@ -3019,11 +3061,52 @@ fn unknown_wrapper_ask(tokens: &[&str], depth: usize) -> Decision {
     // about for shell-eval payloads (`sh -c "$CMD"`) — the top-level command
     // word deserves the same treatment, checked on the RAW token for the same
     // reason `unresolvable_command_word` does (see its own comment).
+    //
+    // "Unresolvable" is where this arm STARTS, not where it ends: the same
+    // command line very often assigns the name a literal a few segments
+    // earlier (`BIN=/path/to/tool` … `"$BIN" status`), and then the program
+    // this runs IS in the text. `resolve_expanded_command_word` answers that
+    // in three values, and only its `Literal` is permissive enough to act on.
     if has_unresolvable_expansion(tokens[idx]) {
-        let head = tokens[idx];
-        return Decision::ask(format!(
-            "the command word `{head}` is an expansion whose value only exists at run time — blastguard cannot tell what program this runs"
-        ));
+        match resolve_expanded_command_word(line, seg_idx, tokens[idx]) {
+            // SUBSTITUTIVE, never a skip. The resolved program replaces the
+            // expansion token and the rewritten segment goes back through the
+            // full rule engine, so `RM=/bin/rm; $RM -rf /path` reaches the same
+            // DENY that `rm -rf /path` does.
+            //
+            // Suppressing the ask here instead — "a literal was found, so stop
+            // asking" — would re-open CA-blastguard-017 under a new name: the
+            // tail this function goes on to examine is only the ARGUMENTS, and
+            // `-rf /path` is a flag and a bare path that does not parse as
+            // destructive on its own. That is precisely how the unexamined head
+            // reached Allow in the first place.
+            //
+            // The recursion terminates: `Literal` is only returned for a value
+            // that `has_unresolvable_expansion` rejected, so the rewritten head
+            // cannot re-enter this arm. `depth + 1` respects `MAX_SHELL_DEPTH`
+            // like every other re-analysis in this file, and the guard at the
+            // top of this function is the one that stops the descent.
+            CommandWordOrigin::Literal(program) => {
+                let mut rewritten: Vec<&str> = tokens.to_vec();
+                rewritten[idx] = program.as_str();
+                let resolved = rewritten.join(" ");
+                // The rewritten text is one whole segment, so it is its own
+                // line and sits at index 0 of it. Passing the ORIGINAL
+                // `(line, seg_idx)` would be wrong: the tokens no longer come
+                // from that position.
+                return analyze_segment(&resolved, depth + 1, &resolved, 0);
+            }
+            // Both restrictive answers keep the pre-existing Ask. They are
+            // reported separately by the resolver because they are different
+            // facts, but this arm owes the same thing to each: it still cannot
+            // name the program.
+            CommandWordOrigin::NoReachingAssignment | CommandWordOrigin::AssignedButUnknowable => {
+                let head = tokens[idx];
+                return Decision::ask(format!(
+                    "the command word `{head}` is an expansion whose value only exists at run time — blastguard cannot tell what program this runs"
+                ));
+            }
+        }
     }
     if is_recognized_command(&normalized_command(tokens[idx])) {
         return Decision::Allow;
@@ -7160,6 +7243,128 @@ mod tests {
             let d = bash(c);
             assert!(d.is_ask(), "expected ask for {c}, got {d:?}");
             assert!(d.hardened().is_deny());
+        }
+    }
+
+    /// Name the three-valued verdict, so a test can pin exactly ONE of the
+    /// three. `is_ask()`/`is_deny()` each say nothing about the other two, and
+    /// the interesting failure mode here is precisely a verdict sliding one
+    /// step towards Allow.
+    fn verdict_name(d: &Decision) -> &'static str {
+        match d {
+            Decision::Allow => "allow",
+            Decision::Ask(_) => "ask",
+            Decision::Deny(_) => "deny",
+        }
+    }
+
+    #[test]
+    fn a_head_assigned_a_literal_earlier_on_the_line_denies_when_that_program_is_destructive() {
+        // The whole point of resolving the head is that the resolution is
+        // SUBSTITUTIVE, not a skip: `$RM` is replaced by the text the line
+        // assigns it and the result is re-judged by the full rule engine.
+        //
+        // Merely SUPPRESSING the ask on finding a literal would re-open
+        // CA-blastguard-017 in a new place. The tail alone (`-rf /some/path`)
+        // is a flag and a bare path — it does not parse as destructive, which
+        // is exactly why an unexamined head reached Allow in the first place.
+        // So Deny, and specifically not Ask and not Allow.
+        let cmd = "RM=/bin/rm; $RM -rf /some/path";
+        let d = bash(cmd);
+        assert_eq!(verdict_name(&d), "deny", "for {cmd:?}, got {d:?}");
+    }
+
+    #[test]
+    fn a_head_whose_value_the_line_does_not_pin_down_still_asks() {
+        // Each row is one exact command line and the one verdict it must
+        // produce. Every row here is a way the line FAILS to name the program,
+        // and each must stay the pre-existing Ask (CA-blastguard-017 stays
+        // closed) rather than being resolved into an Allow.
+        for cmd in [
+            // No assignment at all — the original CA-blastguard-017 case.
+            "$RM -rf /some/path",
+            // Assigned, but the right-hand side is itself an expansion, in
+            // both spellings.
+            "RM=$(which rm); $RM -rf /some/path",
+            "RM=`which rm`; $RM -rf /some/path",
+            // Assigned only AFTER the use: nothing reaches it.
+            "$RM -rf /some/path; RM=/bin/rm",
+            // Conditionally guarded assignment: whether it ran is `foo`'s exit
+            // status, which is not in the text. The value is perfectly
+            // readable and must still not be believed.
+            "foo && RM=/bin/rm; $RM -rf /some/path",
+            "foo || RM=/bin/rm; $RM -rf /some/path",
+            // The same guard with a BENIGN value. These two rows are the ones
+            // that pin the FAIL-OPEN direction: with a destructive value the
+            // missing guard shows up as a Deny, which is restrictive and so
+            // invisible, whereas here it would turn the pre-existing Ask into
+            // an Allow.
+            "foo && BIN=/bin/echo; $BIN hello",
+            "foo || BIN=/bin/echo; $BIN hello",
+            // Same-segment prefix assignment: the shell expands the word
+            // BEFORE applying the prefix, so `$RM` is not `/bin/rm` here.
+            // Verified: `bash -c 'RM=/bin/echo $RM prefixtest'` reports
+            // `prefixtest: command not found`.
+            "RM=/bin/rm $RM -rf /some/path",
+            // Across a pipe: both stages are subshells, so the assignment does
+            // not survive into the stage that uses it. Verified: `bash -c
+            // 'RM=/bin/echo | echo "[$RM]"'` prints `[]`.
+            "RM=/bin/rm | $RM -rf /some/path",
+        ] {
+            let d = bash(cmd);
+            assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+            // And with nobody to answer it must land on refusal, never allow.
+            assert!(d.hardened().is_deny(), "for {cmd:?}");
+        }
+    }
+
+    #[test]
+    fn the_corpus_shape_a_literal_binary_path_invoked_behind_an_and_is_allowed() {
+        // This is the shape the whole resolution exists for: 70 of the 115
+        // measured `unresolvable-command-word` interventions in this repo's own
+        // transcripts (2026-08-07, `blastguard retro --rule-id
+        // unresolvable-command-word`) are a release binary assigned literally on
+        // its own line and then invoked with a read-only subcommand.
+        //
+        // Note where the `&&` sits: between the ASSIGNMENT and the USE. It
+        // decides whether the COMMAND runs, not whether `BIN` was assigned, so
+        // it must NOT block the resolution. A rule that tested the use's
+        // separator instead of the assignment's would turn every one of these
+        // 70 back into an ask, which is the entire cost of getting the position
+        // wrong.
+        let cmd = "BIN=/Users/yuki/src/harness/target/release/condukt\n\
+                   cd \"$SB\" && \"$BIN\" guard main-tree --json";
+        let d = bash(cmd);
+        assert_eq!(verdict_name(&d), "allow", "for {cmd:?}, got {d:?}");
+    }
+
+    #[test]
+    fn an_assignment_under_a_newline_formatted_conditional_is_not_read_as_a_literal() {
+        // `&&`/`||` are not the only way execution becomes conditional. A
+        // compound command written across NEWLINES puts a segment that looks
+        // like a pure assignment list under a condition that a flat separator
+        // scan does not see: `split_segments` splits on the newlines, so
+        // `BIN=/bin/echo` arrives as its own segment with a `;`-equivalent
+        // separator on both sides and nothing marking it as guarded.
+        //
+        // The `;`-formatted spellings are already excluded upstream (`then
+        // BIN=x` is not a pure assignment list), so only these newline
+        // spellings need the keyword scan.
+        //
+        // The value here is deliberately BENIGN. With a destructive value the
+        // hole would surface as a Deny — more restrictive, so invisible. It is
+        // a benign value that exposes it, by turning the pre-existing Ask into
+        // an Allow.
+        for cmd in [
+            "if foo\nthen\nBIN=/bin/echo\nfi\n$BIN hello",
+            "while foo\ndo\nBIN=/bin/echo\ndone\n$BIN hello",
+            "for f in a b\ndo\nBIN=/bin/echo\ndone\n$BIN hello",
+            // A subshell spanning segments: the assignment runs, but in a child
+            // shell, so it never reaches the use.
+            "(\nBIN=/bin/echo\n)\n$BIN hello",
+        ] {
+            let d = bash(cmd);
+            assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
         }
     }
 

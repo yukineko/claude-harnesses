@@ -7,8 +7,9 @@
 ## 目的
 
 blastguard は Claude Code の **PreToolUse** フックである。エージェントが実行しようと
-しているツール呼び出しを stdin から受け取り、純粋関数で allow / deny を判定し、
-**deny のときだけ** PreToolUse の `deny` JSON を出力して、その操作を実行前に握り潰す。
+しているツール呼び出しを stdin から受け取り、純粋関数で **allow / ask / deny** の
+三値を判定し、**allow 以外のときに** PreToolUse の JSON を出力して、その操作を実行前に
+止める（`deny` は握り潰し、`ask` は人間に判断を渡す）。
 
 判定対象は `Bash` / `Edit` / `Write` / `MultiEdit` / `NotebookEdit` の各ツール。
 止めるのは「明らかに破壊的で、取り消しが難しい」操作に限られる。
@@ -24,9 +25,24 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
   および **git 内部**（`.git/**`）を上書きする Write は deny。Edit / MultiEdit /
   NotebookEdit は部分編集なので常に allow。
 
-設計は意図的に**保守的**である。曖昧なものはすべて allow に倒すので、通常作業の邪魔を
-しない。非再帰の `rm file.txt`、追記（`>>`）、fd リダイレクト（`2>&1`, `>&2`）、
-`/dev/null` 等への切り詰めリダイレクトはいずれも通す。
+通常作業の邪魔をしないよう、明確に無害な形は通す — 非再帰の `rm file.txt`、追記
+（`>>`）、fd リダイレクト（`2>&1`, `>&2`）、`/dev/null` 等への切り詰めリダイレクト
+はいずれも allow である。
+
+**ただし「曖昧なものは allow」ではない。** この段落はかつて「設計は意図的に保守的で
+あり、曖昧なものはすべて allow に倒す」と書いていたが、それは `Ask` 導入前の二値時代の
+記述であり、実挙動と正反対になっていた。解析できない構文を allow に倒す設計こそ
+`model.rs` が名指しで廃した fail-open であり（CLAUDE.md 3 の模範例として引用されている）、
+現在は `Decision::Ask` に解決する — コマンドについての判定ではなく、判定を推測することの
+拒否である。散文が実挙動より安全側に見える話を語るのは CLAUDE.md 4 が禁じる罠なので、
+ここに実挙動を書く。
+
+なお `ask` は**人間が答えられる場合にのみ**出力される。headless / agent 主導の
+セッションでは答える人がいないため `Decision::hardened` で `deny` へ強化される
+（allow へは倒さない）。
+
+介入が実際に何を防いだかは `blastguard retro` で事後検証できる（本 README 末尾の
+「事後検証」節を参照）。
 
 さらに、リポジトリの**設定ファイル**に対する編集 / 削除は、形が破壊的に見えても
 `.claude/**`、`**/package.json`、`**/*.toml` / `*.yaml` / `*.yml` / `*.lock`、
@@ -207,3 +223,36 @@ cargo build --release -p blastguard   # -> target/release/blastguard
 make bins                             # 各プラットフォーム向け同梱バイナリを更新
 cargo test -p blastguard              # ユニット + 統合テスト
 ```
+
+## 事後検証（`blastguard retro`）
+
+ゲート自身のログは「ゲートが何を言ったか」しか答えない。ゲートが割に合っているかを
+決めるのは次の問いである — **止めた操作は本当に起きなかったのか、それとも人間が
+承認して結局実行されたのか**。承認は violation store に痕跡を残さないので、この失敗
+モードは従来まったく見えなかった。
+
+`blastguard retro` は Claude Code の transcript 内の PreToolUse 判定と、同じ
+`toolUseID` の `tool_result` を突き合わせてこれに答える。
+
+```sh
+blastguard retro                              # cwd から対象プロジェクトを推定
+blastguard retro --project /path/to/repo
+blastguard retro --dir ~/.claude/projects/-path-to-repo
+```
+
+介入ごとに三値の outcome が付く — `executed-anyway`（人間が yes と答えた＝その回
+ゲートは何も阻止していない）／ `not-executed` ／ `unknown`。**`tool_result` が無い
+ことを阻止として数えない**: 途中で放棄された turn や切り詰められた transcript が、
+そのままゲートの見かけ上の価値を水増しするため。
+
+PreToolUse JSON を出さず非ゼロ終了で止める script ゲート（`guard-maintree-bash.py`
+等）も解析対象に含む。母集団を blastguard 専用にすると「止めたゲート」の比較が
+成立しないため。
+
+transcript を1件も読めなかった場合は空の表ではなく `UNDETERMINED` を出して **exit 2**
+にする。「測れなかった」が「問題なし」として描画されるのは、このクレート自体が消す
+ために存在する fail-open そのものである。
+
+**主張しないこと**: 承認は「その回このゲートが何も阻止しなかった」ことだけを立て、
+止めたのが誤りだったことは立てない。また、言い換えて再実行された迂回は検出できない
+ので、阻止件数は**上限**である。この2つの但し書きは数字と同じ出力に必ず同梱される。

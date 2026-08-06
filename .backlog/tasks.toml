@@ -373,3 +373,16 @@ updated_at = 1786046693
 weight = 0.0
 issue_number = 214
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/214"
+
+[[task]]
+id = "ea6f27b1"
+title = "specguard の spec-map 同期が main の作業ツリーを常時 dirty にする (§8 と構造的に衝突)"
+project = "/Users/yuki/src/harness"
+tags = ["p2"]
+status = "pending"
+notes = "post-merge フックが .specguard/spec-map.toml の last_synced を main の新 HEAD へ書き換えるため、merge のたびに main が dirty になる。CLAUDE.md §8 は main で非 merge commit を禁じているので、この差分を main で commit できない。worktree で commit すると last_synced が worktree HEAD ではなく main HEAD を指す値になり、merge 後にまた drift する（自分の尻尾を追う）。観測 2026-08-07、測定点 b204c4ed。git log に chore(specguard): sync spec-map last_synced to X という commit が複数あり、いずれも main 上で打たれている＝§8 の例外運用が常態化している。"
+created_at = 1786046798
+updated_at = 1786046798
+weight = 0.0
+issue_number = 215
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/215"

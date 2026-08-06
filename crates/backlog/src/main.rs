@@ -81,8 +81,10 @@ enum Command {
         #[arg(long)]
         json: bool,
 
-        /// Return every project's tasks, not just the cwd-resolved one.
-        /// Reproduces the pre-existing (project-omitted) default. Ignored if
+        /// Return every project IN THIS STORE, not just the cwd-resolved one.
+        /// The store is per repo (`<root>/.backlog/tasks.toml`), so this is
+        /// NOT a cross-repo search: tasks filed against a different repo live
+        /// in that repo's own file and there is no index to walk. Ignored if
         /// `--project` is also given (`--project` wins, not a union).
         #[arg(long)]
         all: bool,
@@ -303,9 +305,26 @@ fn main() {
     }
 }
 
+/// The project a task-queue subcommand's tasks belong to, when it names one.
+///
+/// Only the queue subcommands appear here. `lock`/`driver` are deliberately
+/// ABSENT: their state stays under `~/.backlog` because a lock must not live in
+/// the tree it guards — it would become a tracked file, and a stale one would
+/// then ship to every clone.
+fn command_project(cmd: &Command) -> Option<&str> {
+    match cmd {
+        Command::Add { project, .. } => Some(project.as_str()),
+        Command::List { project, .. } | Command::Next { project, .. } => project.as_deref(),
+        _ => None,
+    }
+}
+
 fn run(cli: Cli) -> Result<()> {
     let cfg = config::Config::load();
-    let tasks_path = cfg.tasks_path();
+    // Resolve the store from the task's OWN project when the subcommand names
+    // one, else from the cwd — see Config::tasks_path_for. Computed BEFORE the
+    // match because `cli.command` is moved into it.
+    let tasks_path = cfg.tasks_path_for(command_project(&cli.command));
 
     match cli.command {
         Command::Add {
@@ -362,12 +381,16 @@ fn run(cli: Cli) -> Result<()> {
             if let Some(w) = task::status_warning(status.as_deref()) {
                 eprintln!("{w}");
             }
-            // Default scope is the cwd-resolved project, not cross-project
+            // Default scope is the cwd-resolved project
             // (backlog-list-default-scope): an explicit `--project` always
-            // wins; `--all` opts back into the old cross-project default;
-            // otherwise resolve cwd to its repo root the same way
-            // `canonicalize_project` does, so this matches what `add
-            // --project "$PWD"` would have stored.
+            // wins; `--all` drops the project filter, which now means "every
+            // project in THIS store" rather than the old cross-project
+            // default — the store itself is per repo, so a repo-resolved one
+            // holds a single project key and `--all` shows the same tasks as
+            // the default there; it still widens a pinned or legacy store,
+            // which are the ones that hold several keys. Otherwise resolve cwd
+            // to its repo root the same way `canonicalize_project` does, so
+            // this matches what `add --project "$PWD"` would have stored.
             let effective_project = if project.is_some() {
                 project
             } else if all {

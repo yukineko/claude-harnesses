@@ -128,3 +128,29 @@ updated_at = 1786024055
 weight = 0.0
 issue_number = 196
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/196"
+
+[[task]]
+id = "e88d2e4d"
+title = "condukt の stop hook が running のタスクを pending と報告し、state probe は生存判定不能のまま返る"
+project = "/Users/yuki/src/harness"
+tags = ["condukt,p2"]
+status = "pending"
+notes = "実測 2026-08-06 22:49 JST、run-20260806-062115-17609。Stop hook は「残課題が 2 件あります: t1 (pending) / t2 (pending)」と表示したが、condukt state show は両方 status=running を返す。表示語彙が state と食い違っており、pending と読んだ側は「未着手だから安全に dispatch できる」と解釈しうる。さらに condukt state probe は両タスクとも verdict=undetermined を返し、生存を判定できていない。worktree の最終更新は t1 が Aug 6 07:32、t2 が Aug 6 07:18 で約15時間停止している一方、task の updated_at は 1786024127 (約20分前) で、誰かが state だけを触っている。15時間停止した worktree と20分前の updated_at の組み合わせは、progress ではなく bookkeeping が更新されていることを示唆する。判定不能を pending と表示するのは fail-open 方向の縮退 (CLAUDE.md 3) にあたる可能性がある。要検証: (a) stop hook の語彙が state のどのフィールドから来ているか、(b) probe が undetermined を返す条件、(c) updated_at を触っているのが何か。ユーザ判断で本 run 自体には触っていない。"
+created_at = 1786024216
+updated_at = 1786024242
+weight = 0.0
+issue_number = 197
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/197"
+
+[[task]]
+id = "66fb376a"
+title = "harness-core boundary の read_dir_entries が NotFound を空リストに写すため、呼び出し側が不在と空を自力で見分ける必要がある"
+project = "/Users/yuki/src/harness"
+tags = ["harness-core,p3"]
+status = "pending"
+notes = "crates/harness-core/src/boundary.rs:53 read_dir_entries は NotFound を Determination::known(Vec::new()) に写す。docstring は理由を明記している (存在しないディレクトリは本当に何も含まない)。妥当な契約だが、不在と空を区別したい呼び出し側は自力で見分ける必要があり、その必要性がシグネチャからは読み取れない。実例 2026-08-06: blastguard retro の scan_dir は「--dir の打ち間違い」を「listed したが transcript が無かった」と表示してしまうため、Known(vec![]) かつ is_dir() が false のときだけ dir_unreadable を立てる後付け判定を書いた (crates/blastguard/src/retro.rs)。同じ判定を各呼び出し側が書き直すことになる。検討: Known(vec![]) を返す前に不在を表現できる型 (Determination<Option<Vec<PathBuf>>> あるいは専用の Absent) にするか、少なくとも「不在と空を区別する必要がある呼び出し側はこう書け」を docstring に足すか。既存呼び出し側の棚卸しが先。"
+created_at = 1786024218
+updated_at = 1786024256
+weight = 0.0
+issue_number = 198
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/198"

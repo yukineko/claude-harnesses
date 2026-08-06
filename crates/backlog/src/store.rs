@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -1022,14 +1023,163 @@ pub fn list(
 /// unrelated directory that coincidentally shares the name. `project_matches`
 /// separately bridges bare labels already in the store against absolute
 /// paths at read time.
+///
+/// A path-shaped value that names a LINKED WORKTREE (its `.git` is a file, not
+/// a directory) is further normalized to the MAIN working tree it belongs to
+/// via [`canonical_project_id`] — so `--project <worktree>` and
+/// `--project <that worktree's main tree>` land on the identical stored
+/// string, and a task recorded from either checkout is visible from the
+/// other's default `list` scope (which resolves the SAME way — see
+/// `main.rs`'s `List` handler). This normalization is deliberately
+/// best-effort: when the worktree's main tree cannot actually be resolved
+/// (`canonical_project_id` returns `Undetermined` — e.g. a dangling `.git`
+/// link), `add`/`edit` must still succeed (write-time canonicalization has
+/// never been allowed to block a write), so this falls back to the plain
+/// git-toplevel resolution `resolve_repo_root` already provided — but NOT
+/// silently: a diagnostic naming the reason goes to stderr first, since a
+/// task stored under this unresolved fallback label may not match the
+/// canonicalized string a peer checkout later filters by, and so may not
+/// appear in that checkout's default (filtered) `list` (see CLAUDE.md §3 —
+/// an undetermined outcome must never look identical to a resolved one).
 pub(crate) fn canonicalize_project(project: &str) -> String {
     if !(project.starts_with('/') || project.starts_with('.') || project.starts_with('~')) {
         return project.to_string();
     }
     let expanded = harness_core::config::expand_tilde(project);
-    harness_core::discovery::resolve_repo_root(&expanded)
-        .to_string_lossy()
-        .into_owned()
+    match canonical_project_id(&expanded) {
+        Determination::Known(root) => root.to_string_lossy().into_owned(),
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "warning: could not resolve project scope for {} ({}); falling back to the \
+                 unresolved repo-toplevel label — this task may not appear under the default \
+                 (filtered) `list` from other checkouts",
+                expanded.display(),
+                why.as_str()
+            );
+            harness_core::discovery::resolve_repo_root(&expanded)
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+}
+
+/// This checkout's canonical repo identity (CA-backlog-008 / CLAUDE.md §8's
+/// worktree-isolation follow-through): `Known` when project scope was
+/// actually resolved; `Undetermined` when resolution was attempted but could
+/// not reach a conclusion. This is deliberately NEVER a silent fallback to
+/// the raw, unresolved `cwd` — the caller decides what an undetermined scope
+/// means (`canonicalize_project` degrades gracefully; `main.rs`'s `list`
+/// default scope hard-errors, since an empty filtered result there is
+/// indistinguishable from a genuinely empty queue — see that call site).
+///
+/// Filesystem-only (no `git` subprocess), mirroring
+/// `harness_core::trust::resolve`'s worktree-inheritance algorithm exactly —
+/// the SAME verified (not assumed) `gitdir:` walk, ported here because that
+/// function is private to `harness-core`.
+///
+/// Resolution:
+///   1. Nearest ancestor of `cwd` (inclusive) holding a `.git` entry — the
+///      IDENTICAL scan `config::repo_root` uses to pick the store's
+///      LOCATION (a separate concern: that scan decides which file
+///      `tasks.toml` is; this one decides what project IDENTITY a resolved
+///      checkout maps to). No ancestor found: this checkout isn't inside any
+///      repo at all — a documented, intentional case (see
+///      `Config::tasks_path_for`'s doc comment on its own legacy `~/.backlog`
+///      fallback), not a "cannot determine" defect — so this is `Known(cwd)`
+///      (canonicalized) rather than `Undetermined`, UNLESS canonicalizing
+///      `cwd` itself fails (a genuine IO "could not determine").
+///   2. `.git` is a DIRECTORY: this checkout IS a main working tree; its own
+///      canonicalized root is the identity.
+///   3. `.git` is a FILE (a linked worktree): resolve to the MAIN working
+///      tree it belongs to via [`main_worktree_of`]. A dangling worktree
+///      link, an unusual `GIT_DIR` layout, or an unreadable gitfile all make
+///      that resolution fail — and are exactly the "cannot determine" case
+///      this function exists to surface as `Undetermined` rather than
+///      silently falling back to this checkout's own (wrong) path.
+pub(crate) fn canonical_project_id(cwd: &Path) -> Determination<PathBuf> {
+    let Some(root) = crate::config::repo_root(cwd) else {
+        return match cwd.canonicalize() {
+            Ok(c) => Determination::known(c),
+            Err(e) => Determination::undetermined(format!(
+                "{} is outside any repo and could not itself be canonicalized: {e}",
+                cwd.display()
+            )),
+        };
+    };
+    let dot_git = root.join(".git");
+    match std::fs::symlink_metadata(&dot_git) {
+        Ok(meta) if meta.is_file() => match main_worktree_of(&root) {
+            Some(main) => match main.canonicalize() {
+                Ok(c) => Determination::known(c),
+                Err(e) => Determination::undetermined(format!(
+                    "{}'s main working tree {} could not be canonicalized: {e}",
+                    root.display(),
+                    main.display()
+                )),
+            },
+            None => Determination::undetermined(format!(
+                "{} is a linked worktree whose main working tree could not be resolved \
+                 from its `.git` file (dangling link or unusual layout)",
+                root.display()
+            )),
+        },
+        Ok(_) => match root.canonicalize() {
+            Ok(c) => Determination::known(c),
+            Err(e) => Determination::undetermined(format!(
+                "repo root {} could not be canonicalized: {e}",
+                root.display()
+            )),
+        },
+        Err(e) => Determination::undetermined(format!("could not stat {}: {e}", dot_git.display())),
+    }
+}
+
+/// If `root` is a **linked** git worktree, the main working tree it belongs
+/// to. Ported from `harness_core::trust::main_worktree_of` (private to that
+/// crate) — see its doc comment for the full rationale; this is the identical
+/// algorithm: read the `gitdir:` gitfile, walk up
+/// `.../<common-git-dir>/worktrees/<name>`, and VERIFY the inference (not
+/// assume it from path shape alone) by canonicalizing both the common git dir
+/// and the candidate main tree's own `.git` and requiring them to be equal.
+/// Any IO failure, an unusual layout, or a `GIT_DIR` that doesn't exist
+/// (a dangling worktree link) all yield `None` — the restricted side, since
+/// [`canonical_project_id`] treats `None` as "cannot determine".
+fn main_worktree_of(root: &Path) -> Option<PathBuf> {
+    let dot_git = root.join(".git");
+    if !std::fs::symlink_metadata(&dot_git).ok()?.is_file() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&dot_git).ok()?;
+    let target = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("gitdir:"))?
+        .trim();
+    if target.is_empty() {
+        return None;
+    }
+    let target = Path::new(target);
+    let git_dir = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        root.join(target)
+    };
+
+    // .../<common-git-dir>/worktrees/<name>
+    let worktrees = git_dir.parent()?;
+    if worktrees.file_name()? != "worktrees" {
+        return None;
+    }
+    let common = worktrees.parent()?;
+    let candidate = common.parent()?;
+
+    // Verify the inference instead of trusting the path shape: the
+    // candidate's own `.git` must BE this common git dir.
+    let common_key = std::fs::canonicalize(common).ok()?;
+    let candidate_key = std::fs::canonicalize(candidate.join(".git")).ok()?;
+    if common_key != candidate_key {
+        return None;
+    }
+    Some(candidate.to_path_buf())
 }
 
 /// project_filter のマッチング:

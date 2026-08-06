@@ -98,7 +98,13 @@ impl Config {
 /// repo's CLAUDE.md §8 requires work to happen in worktrees, so a worktree
 /// resolving to the main tree's store would push edits into a tree the session
 /// is not allowed to touch).
-fn repo_root(start: &std::path::Path) -> Option<PathBuf> {
+///
+/// `pub(crate)`: also used by `store::canonical_project_id`, which needs the
+/// IDENTICAL ancestor scan to decide project *identity* (as opposed to this
+/// module's use of it to decide the store's *location*) — see that function's
+/// doc comment for why the two are deliberately kept as separate concerns
+/// sharing one scan.
+pub(crate) fn repo_root(start: &std::path::Path) -> Option<PathBuf> {
     let mut dir = start.to_path_buf();
     loop {
         if dir.join(".git").exists() {

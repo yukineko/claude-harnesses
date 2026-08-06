@@ -12,7 +12,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use harness_core::boundary;
 use harness_core::hook::{read_stdin, run_hook, HookInput};
-use harness_core::verdict::Determination;
+use harness_core::verdict::{Determination, Required};
 use serde_json::json;
 use std::time::Duration;
 
@@ -305,26 +305,21 @@ fn main() {
     }
 }
 
-/// The project a task-queue subcommand's tasks belong to, when it names one.
-///
-/// Only the queue subcommands appear here. `lock`/`driver` are deliberately
-/// ABSENT: their state stays under `~/.backlog` because a lock must not live in
-/// the tree it guards — it would become a tracked file, and a stale one would
-/// then ship to every clone.
-fn command_project(cmd: &Command) -> Option<&str> {
-    match cmd {
-        Command::Add { project, .. } => Some(project.as_str()),
-        Command::List { project, .. } | Command::Next { project, .. } => project.as_deref(),
-        _ => None,
-    }
-}
-
 fn run(cli: Cli) -> Result<()> {
     let cfg = config::Config::load();
-    // Resolve the store from the task's OWN project when the subcommand names
-    // one, else from the cwd — see Config::tasks_path_for. Computed BEFORE the
-    // match because `cli.command` is moved into it.
-    let tasks_path = cfg.tasks_path_for(command_project(&cli.command));
+    // The store's LOCATION is always resolved from THIS PROCESS'S OWN cwd,
+    // never from `--project` (CLAUDE.md §8). `--project` names which project a
+    // task BELONGS to — a value the caller supplies and this binary does not
+    // control — not where the running checkout's own tasks.toml lives. Passing
+    // `command_project(&cli.command)` here used to let `--project <main tree>`
+    // from a linked worktree resolve the STORE to the main tree's own repo
+    // root (`Config::store_dir_for` walks up from the given project path), so
+    // a worktree session's `backlog add --project <main>` wrote straight into
+    // a tree §8 forbids touching. `None` makes `Config::tasks_path_for` fall
+    // through to `std::env::current_dir()` unconditionally, i.e. always the
+    // checkout actually running this process. Computed BEFORE the match
+    // because `cli.command` is moved into it.
+    let tasks_path = cfg.tasks_path_for(None);
 
     match cli.command {
         Command::Add {
@@ -389,19 +384,43 @@ fn run(cli: Cli) -> Result<()> {
             // holds a single project key and `--all` shows the same tasks as
             // the default there; it still widens a pinned or legacy store,
             // which are the ones that hold several keys. Otherwise resolve cwd
-            // to its repo root the same way `canonicalize_project` does, so
-            // this matches what `add --project "$PWD"` would have stored.
+            // to its CANONICAL project identity via `store::canonical_project_id`
+            // — a linked worktree normalizes to the MAIN working tree it
+            // belongs to (mirroring `canonicalize_project`'s write-side
+            // normalization), so this matches what `add --project <main tree>`
+            // would have stored even when this process is running from a
+            // worktree, not the main tree itself.
+            //
+            // A checkout whose project scope cannot actually be determined (a
+            // dangling worktree `.git` link, an unreadable gitfile, …) MUST
+            // NOT silently degrade to an empty `[]` result: that is
+            // indistinguishable from a genuinely empty queue to a downstream
+            // reader (e.g. autoflow's `find_open`, which already treats a
+            // non-zero `backlog list` exit as `Determination::Undetermined`
+            // rather than "no work" — see `crates/autoflow/src/backlog.rs`).
+            // So an undetermined scope here is surfaced as a hard error
+            // (non-zero exit, diagnostic on stderr, nothing on stdout) instead
+            // of a printed empty result.
             let effective_project = if project.is_some() {
                 project
             } else if all {
                 None
             } else {
                 let cwd = std::env::current_dir()?;
-                Some(
-                    harness_core::discovery::resolve_repo_root(&cwd)
-                        .to_string_lossy()
-                        .into_owned(),
-                )
+                match store::canonical_project_id(&cwd).require() {
+                    Required::Determined(root) => Some(root.to_string_lossy().into_owned()),
+                    Required::Blocked(verdict) => {
+                        let why = verdict
+                            .reason()
+                            .map(|r| r.as_str().to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        return Err(anyhow::anyhow!(
+                            "cannot determine this checkout's project scope for the default \
+                             `backlog list` (pass --project explicitly, or --all to bypass \
+                             scoping entirely): {why}"
+                        ));
+                    }
+                }
             };
             let tasks = store::list(
                 &tasks_path,

@@ -48,10 +48,10 @@ table rows — or trailing text on the delimiter row — breaks GFM table render
 
 | Step | FILE:LINE | Verbatim code |
 |---|---|---|
-| Copy each plugin in the stage | `scripts/rollout-plugins.sh:761` | `      canary_copy_row "$pn_row"` |
-| Collect registry args if the row needs a registry update | `scripts/rollout-plugins.sh:763-765` | ```      if [ "$needs_registry" = "1" ] || [ "$force" = 1 ]; then\n        stage_reg_args+=("$name" "$version" "$target")\n      fi``` |
-| Batch-commit the stage's registry pointer (dry-run variant) | `scripts/rollout-plugins.sh:767-769` | ```    if [ "${#stage_reg_args[@]}" -gt 0 ]; then\n      if [ "$dry" = 1 ]; then\n        registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --dry-run "${stage_reg_args[@]}" | sed 's/^/  /'``` |
-| Batch-commit the stage's registry pointer (real, non-dry-run) | `scripts/rollout-plugins.sh:770-771` | ```      else\n        registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "${stage_reg_args[@]}" | sed 's/^/  /'``` |
+| Copy each plugin in the stage | `scripts/rollout-plugins.sh:819` | `      canary_copy_row "$pn_row"` |
+| Collect registry args if the row needs a registry update | `scripts/rollout-plugins.sh:821-823` | ```      if [ "$needs_registry" = "1" ] || [ "$force" = 1 ]; then\n        stage_reg_args+=("$name" "$version" "$target")\n      fi``` |
+| Batch-commit the stage's registry pointer (dry-run variant) | `scripts/rollout-plugins.sh:825-827` | ```    if [ "${#stage_reg_args[@]}" -gt 0 ]; then\n      if [ "$dry" = 1 ]; then\n        registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" --dry-run "${stage_reg_args[@]}" | sed 's/^/  /'``` |
+| Batch-commit the stage's registry pointer (real, non-dry-run) | `scripts/rollout-plugins.sh:828-829` | ```      else\n        registry_patch "$REGISTRY" "$OWNER" "$GIT_SHA" "${stage_reg_args[@]}" | sed 's/^/  /'``` |
 
 So "apply a stage" = `canary_copy_row` (plain-copies the plugin dir into its cache version dir) +
 `registry_patch` (repoints `installed_plugins.json` at that new version dir) — this happens on

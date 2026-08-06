@@ -1,0 +1,27 @@
+[[task]]
+id = "0ba79281"
+title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
+project = "C:/Users/hiroyuki_nakayama/src/harness"
+tags = [
+    "docs",
+    "p2",
+]
+status = "pending"
+notes = '実測 2026-08-06 windows-x86_64: ~/.cargo/env は存在しない (ls で No such file)。cargo 自体は PATH 上にあり動作するので実害は無いが、CLAUDE.md「ビルド / テスト / ゲート」節の「cargo コマンドの前に . "$HOME/.cargo/env" を通す」という指示は誤り。指示どおり実行すると source が失敗する (set -e 下なら停止)。Windows/WSL/Linux のどれで成立する前提なのかを明記するか、条件付き ([ -f ] ガード) に直す。'
+created_at = 1785983806
+updated_at = 1785983806
+weight = 0.0
+
+[[task]]
+id = "6d59e6eb"
+title = "target-dir が shell/worktree ごとに分裂し、cap-target-dir.sh の上限が効かない"
+project = "C:/Users/hiroyuki_nakayama/src/harness"
+tags = [
+    "build",
+    "p1",
+]
+status = "pending"
+notes = '実測 2026-08-06。(a) .cargo/config.toml の target-dir = "/tmp/condukt-build" は Windows cargo からは C:\tmp\condukt-build に、WSL からは /tmp/condukt-build に解決される。コメントは「WSL で C: ドライブを空けるため」と説明しているが、Windows 側ではその意図が達成されていない。(b) scripts/cap-target-dir.sh の CARGO_TARGET_CAP_MB は独立した 2 ディレクトリに分かれて適用されるので、実質の上限は宣言の 2 倍になる。(c) .cargo/ は untracked なので git worktree には存在せず、worktree でのビルドは <worktree>/target に落ちる (今回 rollout の canary 検証で GREEN を出すのに overwatch を worktree 内で再ビルドする一手が余分に必要になった)。対応案: config.toml をトラックする / 絶対パスをやめる / cap-target-dir.sh が実際の target_directory を cargo metadata から引く、のいずれか。関連: 12cdfed4 (rollout の overwatch 検出を cargo metadata ベースに直した際に判明)。'
+created_at = 1785983822
+updated_at = 1785983822
+weight = 0.0

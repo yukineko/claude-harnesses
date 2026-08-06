@@ -16,6 +16,13 @@ Cargo.lock.bak
 .compass/outcomes.json
 .tdd/
 
+# agent scratch space. Deliberately INSIDE the worktree rather than under
+# %TEMP%: taintguard's classifier only trusts the cwd subtree and sibling
+# worktrees of the same repository, so reading a file from the harness's
+# %TEMP% scratchpad taints the turn and denies every later write (CLAUDE.md
+# §8, backlog 96075670).
+.scratch/
+
 # deterministic code index (rebuildable from source via `fugu-router code-index build`)
 .fugu/
 
@@ -35,3 +42,10 @@ crates/*/bin/*-darwin-arm64
 crates/*/bin/*-darwin-x86_64
 crates/*/bin/*-linux-arm64
 crates/*/bin/*-linux-x86_64
+
+# backlog per-project store: tasks.toml itself IS tracked (the queue ships with
+# the work it describes), but its sibling lock and write-temps are runtime
+# artifacts of store.rs (tasks_lock_path / save tmp) that land in the same dir.
+# A committed lock would ship stale to every clone.
+.backlog/*.lock
+.backlog/.*.tmp.*

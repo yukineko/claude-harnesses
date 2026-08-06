@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "anyhow",
  "clap",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.122"
+version = "0.7.123"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -865,7 +865,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.22"
+version = "0.2.24"
 dependencies = [
  "anyhow",
  "clap",
@@ -935,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.35"
+version = "0.1.37"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1329,7 +1329,7 @@ dependencies = [
 
 [[package]]
 name = "taintguard"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "clap",
  "harness-core",

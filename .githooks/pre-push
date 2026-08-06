@@ -85,7 +85,7 @@ else
     exit 1
 fi
 
-GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|mutategate|overwatch)/'
+GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|taintguard|mutategate|overwatch)/'
 
 # Crates whose SKILL specs carry the autonomy gate contracts asserted by
 # scripts/e2e-autonomy.sh (scout selection/hand-off, condukt agreement, flow
@@ -100,6 +100,9 @@ AUTONOMY_PATTERN='^crates/(condukt|scout|flow|backlog)/'
 # just-in-case skip (never fail the push over inability to compute a diff).
 changed=""
 saw_ref=0
+# The tips actually being pushed. Collected here because the type check below
+# must judge WHAT IS BEING PUSHED, not whatever happens to be on disk.
+pushed_shas=""
 
 while read -r local_ref local_sha remote_ref remote_sha; do
     [ -z "${local_sha:-}" ] && continue
@@ -108,6 +111,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     case "$local_sha" in
         0000000000000000000000000000000000000000) continue ;;
     esac
+    pushed_shas="$pushed_shas $local_sha"
     has_remote=0
     if [ -n "${remote_sha:-}" ]; then
         case "$remote_sha" in
@@ -252,10 +256,130 @@ hooks never fire, so the gate reports nothing and guards nothing.
 This is advisory only — the push is not blocked.
 EOF
             ;;
+        4)
+            # Parked-declaration class. scripts/parked-plugins.json is what says
+            # which of the reds above are intentional; while it is unusable, that
+            # question has no answer, and the wrong guess is the expensive one —
+            # arming a plugin that was parked on purpose is what caused the
+            # 2026-08-04 incident (backlog a6f165cd).
+            cat >&2 <<'EOF'
+
+parked declaration: scripts/parked-plugins.json could not be used, so NONE of the
+reds above were treated as intentional. Do not act on them until that file parses
+— repair it (or delete it, which means nothing is parked) and re-run.
+
+This is advisory only — the push is not blocked.
+EOF
+            ;;
         *)
             printf '\n%s\n' "rollout check: unrecognized exit code $rollout_rc — see its output above. This is advisory only; the push is not blocked." >&2
             ;;
     esac
 fi
 
+# --- the second blocking check: the compiler ---------------------------------
+# The one surface `--no-verify` cannot jump is the compiler, and until this block
+# landed nothing in this repo ran it. The three `cargo` hits in
+# .githooks/pre-commit are a comment and two remediation strings; this file had
+# none at all, and every gate pre-commit runs (injectguard, fail-open-guard,
+# doc-claims, claudemd-claims, version-lockstep, bump-on-change, secret-guard,
+# raw-io-ratchet, worktree-isolation) is a Python text scanner. donegate DOES run
+# cargo, but it is a Stop hook bounded by max_attempts
+# (crates/donegate/src/main.rs:202-217 prints "Allowing stop" and exits 0 once the
+# attempt budget is spent, so a persistent type error passes on the 4th Stop), and
+# it only arms on a trusted root (crates/donegate/src/config.rs:111
+# trust::is_trusted) — while CLAUDE.md 8 mandates that all work happen in a FRESH
+# worktree, which is never in ~/.harness/trust.toml. On the mandated path donegate
+# therefore runs zero checks. A three-strikes advisory that is inert on the
+# required workflow is not an enforcement surface.
+#
+# WHAT IS JUDGED: the tip commit of each pushed ref, checked out into a throwaway
+# detached worktree. NOT the working tree. Checking the tree on disk would mean a
+# dirty tree yields a verdict about content that is not being pushed — printing a
+# caveat and pushing anyway is exactly the "undetermined rendered as clean" this
+# repo's gates exist to stop (CLAUDE.md 3). Measured cost of doing it properly
+# (2026-08-06, this workspace, 39 crates): 20s and 681M into an empty target dir,
+# ~0s warm. That is affordable, so the accurate check is the one that ships.
+#
+# FAIL-CLOSED throughout: no cargo, no git-common-dir, no worktree, no resolvable
+# sha => block. A toolchain we cannot run is not a clean workspace.
+
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "" >&2
+    echo "pre-push: cargo not found, so the pushed commits could not be type-checked" >&2
+    echo "— blocking rather than assuming they compile. Install the rustup toolchain," >&2
+    echo "or make it visible to git hooks (. \"\$HOME/.cargo/env\")." >&2
+    exit 1
+fi
+
+GIT_COMMON="$(git rev-parse --git-common-dir 2>/dev/null)"
+# MUST be absolute. `git rev-parse --git-common-dir` answers RELATIVELY (".git")
+# when invoked from the main working tree and ABSOLUTELY from a linked worktree.
+# A relative value poisons CARGO_TARGET_DIR: cargo resolves it against the
+# throwaway worktree's cwd and tries to mkdir ".git" there, where git has already
+# put its worktree-pointer FILE, so the check dies with "File exists (os error
+# 17)" and reports a hook defect as a type error. Caught on this hook's first
+# real push (2026-08-06) precisely because the pre-landing F-to-P pair had only
+# been observed from a linked worktree — one of the two invocation contexts.
+case "${GIT_COMMON:-}" in
+    "" ) ;;
+    /* ) ;;
+    *  ) GIT_COMMON="$(cd "$GIT_COMMON" 2>/dev/null && pwd)" ;;
+esac
+if [ -z "${GIT_COMMON:-}" ]; then
+    echo "" >&2
+    echo "pre-push: could not resolve the git common dir, so the type-check worktree" >&2
+    echo "cannot be created — blocking rather than skipping the compiler." >&2
+    exit 1
+fi
+
+# Persistent and shared across pushes so repeat runs are warm (~0s instead of
+# ~20s). Concurrent sessions contend on cargo's own lock and wait, which is the
+# correct behaviour.
+TYPECHECK_TARGET="$GIT_COMMON/prepush-typecheck-target"
+# Unique per invocation so two sessions pushing at once do not fight over a path.
+TYPECHECK_TREE="$GIT_COMMON/prepush-typecheck.$$"
+
+cleanup_typecheck_tree() {
+    if [ -d "$TYPECHECK_TREE" ]; then
+        git worktree remove --force "$TYPECHECK_TREE" >/dev/null 2>&1 || true
+    fi
+}
+trap cleanup_typecheck_tree EXIT INT TERM
+
+# No ref-update lines arrived (manual invocation) — fall back to HEAD, which is
+# still a determinate commit. Never fall back to "skip".
+if [ -z "${pushed_shas:-}" ]; then
+    pushed_shas="$(git rev-parse HEAD 2>/dev/null)"
+    if [ -z "$pushed_shas" ]; then
+        echo "" >&2
+        echo "pre-push: no pushed ref and no resolvable HEAD — nothing determinate to" >&2
+        echo "type-check, so blocking rather than reporting a pass." >&2
+        exit 1
+    fi
+fi
+
+for sha in $pushed_shas; do
+    cleanup_typecheck_tree
+    if ! git worktree add --detach "$TYPECHECK_TREE" "$sha" >/dev/null 2>&1; then
+        echo "" >&2
+        echo "pre-push: could not create a worktree at $sha to type-check it —" >&2
+        echo "blocking. 'could not determine' is not 'compiles'." >&2
+        exit 1
+    fi
+    echo "" >&2
+    echo "pre-push: type-checking $(git rev-parse --short "$sha") (cargo check --workspace --all-targets)..." >&2
+    if ! ( cd "$TYPECHECK_TREE" && CARGO_TARGET_DIR="$TYPECHECK_TARGET" \
+             cargo check --workspace --all-targets --quiet >&2 ); then
+        echo "" >&2
+        echo "pre-push: BLOCKED — commit $(git rev-parse --short "$sha") does not" >&2
+        echo "type-check (errors above). This is the only gate in this repo that runs" >&2
+        echo "the compiler; fix the errors rather than routing around it." >&2
+        exit 1
+    fi
+done
+
+cleanup_typecheck_tree
 exit 0

@@ -382,7 +382,10 @@ mod tests {
     #[test]
     fn gate_from_registry_rolls_back_on_undetermined_store() {
         use crate::violation::{ViolationEvent, ViolationSource};
-        let _g = crate::store::HOME_ENV_LOCK.lock().unwrap();
+        // Poison-recovering; see `store::home_lock`.
+        let _g = crate::store::HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let prev_home = std::env::var_os("HOME");
         let dir = unique_test_dir("gate-undetermined");
         std::env::set_var("HOME", &dir);
@@ -434,7 +437,10 @@ mod tests {
     // Undetermined at the gate.
     #[test]
     fn gate_from_registry_proceeds_on_absent_store() {
-        let _g = crate::store::HOME_ENV_LOCK.lock().unwrap();
+        // Poison-recovering; see `store::home_lock`.
+        let _g = crate::store::HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let prev_home = std::env::var_os("HOME");
         let dir = unique_test_dir("gate-absent");
         std::env::set_var("HOME", &dir);

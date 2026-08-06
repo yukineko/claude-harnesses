@@ -11,10 +11,18 @@
 /// is reported to stderr rather than propagated. An UNKNOWN `--verdict`
 /// string, by contrast, is a genuine input error and is rejected with `Err`
 /// (mirrors `DispositionVerdict::parse_cli`).
+/// The metrics side is a REPORT, and a report computed from a ledger that could
+/// not be read is not a low number — it is no number (t3). `metrics` therefore
+/// reads both ledgers tri-state and, when either is undetermined, prints no
+/// rate at all: the JSON keys stay present with `null` values (so no consumer
+/// reads a `0` that was never measured) alongside an `undetermined_sources`
+/// list, and the command exits 3.
 use crate::disposition::{self, Disposition, DispositionVerdict};
 use crate::reconcile::{self, ReconcileRange};
+use crate::review_queue::SourceHealth;
 use crate::store::{self, AppendOutcome};
 use anyhow::Result;
+use harness_core::verdict::Determination;
 
 /// Commit-range `reconcile-fixed` itself uses from `continuous-audit.sh`
 /// (`--last-n 200`) — kept identical here so `stale_undisposed_with_fix_commit`
@@ -91,13 +99,70 @@ fn disposition_result(
 /// print the review-effectiveness report: false-positive rate, agreement
 /// rate, median latency (seconds), and a per-verdict breakdown. Fail-soft: a
 /// missing/empty store yields a zero/`None` report rather than an error.
-pub fn metrics(json: bool) -> Result<()> {
+pub fn metrics(json: bool) -> Result<SourceHealth> {
     let cwd = std::env::current_dir()?;
-    let dispositions = store::read_dispositions(&cwd).unwrap_or_default();
+    let mut undetermined: Vec<&'static str> = Vec::new();
+    let dispositions = match store::scan_dispositions(&cwd)? {
+        Determination::Known(rows) => Some(rows),
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "overwatch review-metrics: WARNING — the disposition ledger could not be read \
+                 or held an undecodable line ({why}); NO rate is computed from it. This is \
+                 NOT a report of zero dispositions."
+            );
+            undetermined.push("dispositions.jsonl");
+            None
+        }
+    };
     // Full history (hot plus archive): `compact_review_findings` may have moved
     // a resolved finding's record out of the hot store, but the latency join
-    // below still needs it — see `store::read_review_findings_all`.
-    let findings = store::read_review_findings_all(&cwd).unwrap_or_default();
+    // below still needs it — see `store::scan_review_findings_all`.
+    let findings = match store::scan_review_findings_all(&cwd)? {
+        Determination::Known(rows) => Some(rows),
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "overwatch review-metrics: WARNING — the review-findings history (hot store \
+                 plus archive) could not be read or held an undecodable line ({why}); NO \
+                 closure rate is computed from it. This is NOT a report of zero findings."
+            );
+            undetermined.push("review_findings.jsonl");
+            None
+        }
+    };
+
+    let (dispositions, findings) = match (dispositions, findings) {
+        (Some(d), Some(f)) => (d, f),
+        // Refuse to print numbers derived from a ledger we could not read: a
+        // zero here is indistinguishable from a measured zero, and the
+        // measured zero ("queued and never closed") is a real signal this
+        // report exists to show.
+        _ => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "total": serde_json::Value::Null,
+                        "false_positive_rate": serde_json::Value::Null,
+                        "agreement_rate": serde_json::Value::Null,
+                        "median_latency_secs": serde_json::Value::Null,
+                        "by_verdict": serde_json::Value::Null,
+                        "stale_undisposed_with_fix_commit": serde_json::Value::Null,
+                        "closure_rate": serde_json::Value::Null,
+                        "closure_by_source": serde_json::Value::Null,
+                        "undetermined_sources": undetermined,
+                    }))?
+                );
+            } else {
+                println!(
+                    "Review-effectiveness report: UNDETERMINED — {} could not be read, so no \
+                     rate is computed (this is NOT a report of zero dispositions or zero \
+                     findings)",
+                    undetermined.join(", ")
+                );
+            }
+            return Ok(SourceHealth::SomeUndetermined);
+        }
+    };
 
     let total = dispositions.len();
     let fp_rate = disposition::false_positive_rate(&dispositions);
@@ -126,8 +191,43 @@ pub fn metrics(json: bool) -> Result<()> {
     // stale-backlog gap (2026-07-17 incident): findings a `reconcile-fixed`
     // run right now would confirm, recomputed read-only so it's visible even
     // when reconcile-fixed hasn't run this round.
-    let stale_undisposed =
+    //
+    // Tri-state (t3): a count that could not be computed is NOT zero. Zero
+    // suppresses the warning line below, so folding the two would render a
+    // broken store as "no stale finding".
+    //
+    // NOT COVERED BY ANY TEST, and this is why (third-party audit, t4): the
+    // `Undetermined` arm below is UNREACHABLE from this call site short of a
+    // TOCTOU race. `stale_undisposed_count` joins `scan_review_findings_all`
+    // and `scan_dispositions` — the exact two readers this function already
+    // resolved to `Known` above, on the same `cwd`; either being undetermined
+    // would have returned `SomeUndetermined` before we got here. So there is no
+    // pre-seeded store state that reaches it, and no test asserts
+    // `STALE_UNDETERMINED_LINE` or the `null` stale count in a `--json` body
+    // where the other keys are numbers. The branch is kept as the guard for a
+    // store that changes MID-RUN (the ledgers are appended to concurrently by
+    // other overwatch processes), which is the case a test here cannot stage
+    // deterministically. Treat it as unverified, not as verified-by-obviousness.
+    let stale_scan =
         reconcile::stale_undisposed_count(&cwd, ReconcileRange::LastN(STALE_SCAN_LAST_N));
+    let stale_undisposed: Option<usize> = match &stale_scan {
+        Determination::Known(n) => Some(*n),
+        Determination::Undetermined(_) => {
+            // `stale_undisposed_count` already announced which ledger failed.
+            undetermined.push("stale-undisposed join");
+            None
+        }
+    };
+    let health = if undetermined.is_empty() {
+        SourceHealth::AllRead
+    } else {
+        SourceHealth::SomeUndetermined
+    };
+    /// The line rendered in place of the stale-undisposed warning when the
+    /// count could not be computed — never the silence a `0` produces.
+    const STALE_UNDETERMINED_LINE: &str =
+        "  WARNING: the stale-undisposed count could NOT be computed (a joined ledger \
+         could not be read) — this is not a report of zero";
 
     if json {
         println!(
@@ -142,6 +242,8 @@ pub fn metrics(json: bool) -> Result<()> {
                     "dismissed": dismissed,
                     "false_positive": false_positive,
                 },
+                // `null` (never 0) when the join could not be computed; the
+                // `undetermined_sources` list below names why.
                 "stale_undisposed_with_fix_commit": stale_undisposed,
                 "closure_rate": closure,
                 "closure_by_source": closure_by_source
@@ -157,9 +259,12 @@ pub fn metrics(json: bool) -> Result<()> {
                         )
                     })
                     .collect::<serde_json::Map<String, serde_json::Value>>(),
+                // Always present (empty when every ledger was read), so a
+                // consumer never has to interpret the key's absence.
+                "undetermined_sources": undetermined,
             }))?
         );
-        return Ok(());
+        return Ok(health);
     }
 
     let fmt_closure = |closed: usize, of: usize| {
@@ -178,12 +283,14 @@ pub fn metrics(json: bool) -> Result<()> {
         for (source, (closed, of)) in &closure_by_source {
             println!("  closure [{source}]: {}", fmt_closure(*closed, *of));
         }
-        if stale_undisposed > 0 {
-            println!(
-                "  WARNING: {stale_undisposed} finding(s) have a landed fix commit but no disposition yet — run `overwatch reconcile-fixed`"
-            );
+        match stale_undisposed {
+            Some(n) if n > 0 => println!(
+                "  WARNING: {n} finding(s) have a landed fix commit but no disposition yet — run `overwatch reconcile-fixed`"
+            ),
+            Some(_) => {}
+            None => println!("{STALE_UNDETERMINED_LINE}"),
         }
-        return Ok(());
+        return Ok(health);
     }
 
     let fmt_rate = |r: Option<f64>| {
@@ -207,12 +314,14 @@ pub fn metrics(json: bool) -> Result<()> {
     for (source, (closed, of)) in &closure_by_source {
         println!("    [{source}]: {}", fmt_closure(*closed, *of));
     }
-    if stale_undisposed > 0 {
-        println!(
-            "  WARNING: {stale_undisposed} finding(s) have a landed fix commit but no disposition yet — run `overwatch reconcile-fixed`"
-        );
+    match stale_undisposed {
+        Some(n) if n > 0 => println!(
+            "  WARNING: {n} finding(s) have a landed fix commit but no disposition yet — run `overwatch reconcile-fixed`"
+        ),
+        Some(_) => {}
+        None => println!("{STALE_UNDETERMINED_LINE}"),
     }
-    Ok(())
+    Ok(health)
 }
 
 #[cfg(test)]

@@ -134,7 +134,7 @@ Stop hook であり、`git commit` を intercept しない。したがって:
 
 ## 6. 新ゲートの設計入力
 
-### `run()` ヘルパの契約（`.githooks/pre-commit:112-138`）
+### `run()` ヘルパの契約（`.githooks/pre-commit:127-153`）
 
 新ゲートはこの形に乗るだけで契約を継承できる:
 

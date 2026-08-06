@@ -154,6 +154,22 @@ fn stop_payload(cwd: &Path, session: &str) -> String {
     .to_string()
 }
 
+/// The stand-in for "an arbitrary write-class Bash command" throughout this
+/// file.
+///
+/// It used to be `echo hi`, and it had to change in 0.2.0: `echo` is on
+/// `readonly::is_readonly_bash`'s allowlist, so `echo hi` now short-circuits to
+/// a silent allow BEFORE the taint state is ever consulted. Every test below
+/// that fed `echo hi` to `gate` and asserted `ask`/`deny` would have been
+/// asserting the allowlist rather than the taint gate — and, worse, every test
+/// that fed it and asserted SILENCE would have kept passing while proving
+/// nothing at all. `touch out.txt` is on no table, so the taint state decides.
+///
+/// The read-only fast path itself is covered on purpose, not by accident, in
+/// `readonly`'s unit tests and in `src/main.rs`'s
+/// `read_only_bash_is_silent_even_when_the_session_is_tainted`.
+const WRITE_CLASS_BASH: &str = "touch out.txt";
+
 const INTERACTIVE_ENV: &[(&str, &str)] = &[("CLAUDECODE", "1"), ("CLAUDE_CODE_ENTRYPOINT", "cli")];
 const HEADLESS_ENV: &[(&str, &str)] = &[("CLAUDECODE", "1"), ("CLAUDE_CODE_ENTRYPOINT", "sdk-cli")];
 
@@ -192,7 +208,7 @@ fn webfetch_then_bash_asks_when_interactive() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -229,7 +245,7 @@ fn webfetch_then_bash_denies_when_headless() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -410,7 +426,7 @@ fn clear_after_stop_restores_a_clean_gate() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -437,7 +453,7 @@ fn clear_after_stop_restores_a_clean_gate() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -452,6 +468,15 @@ fn clear_after_stop_restores_a_clean_gate() {
     );
 }
 
+/// EMPTY stdin stays silent on every subcommand — and that is a different case
+/// from a NON-EMPTY payload that could not be parsed (see
+/// [`unparseable_stdin_on_gate_fails_closed_instead_of_allowing_silently`]).
+///
+/// Empty means this process was handed nothing to judge at all: Claude Code
+/// always writes a payload, so an empty read is "not invoked as a hook" (a bare
+/// `taintguard gate` at a shell, a probe), not "a hook payload I failed to
+/// understand". Same split as `blastguard::main::run` and `ctxrot`'s hooks, which
+/// both return silently on empty and emit a fail-closed answer on unparseable.
 #[test]
 fn empty_stdin_is_silent_on_every_subcommand() {
     let f = fixture("empty-stdin");
@@ -463,6 +488,230 @@ fn empty_stdin_is_silent_on_every_subcommand() {
             "{sub} on empty stdin must stay silent, got: {stdout:?}"
         );
     }
+}
+
+// ── same-repository git worktrees must not taint (backlog eb39308e) ──────────
+
+/// Run `git`, panicking with stderr on failure so a broken fixture can never
+/// masquerade as the property under test holding.
+fn git(args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("git must be on PATH to run this test");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A real repo with one commit inside `holder`, plus a real linked worktree
+/// created as a SIBLING of it (the condukt/flow shape). Returns
+/// `(main_checkout, linked_worktree)`.
+fn init_repo_and_linked_worktree(holder: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let main = holder.join("repo");
+    std::fs::create_dir_all(&main).unwrap();
+    let main_s = main.to_string_lossy().into_owned();
+    git(&["-C", &main_s, "init", "-q", "-b", "main"]);
+    std::fs::write(main.join("a.rs"), "fn main() {}").unwrap();
+    git(&["-C", &main_s, "add", "-A"]);
+    git(&[
+        "-C",
+        &main_s,
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-qm",
+        "init",
+    ]);
+    let linked = holder.join("linked");
+    let linked_s = linked.to_string_lossy().into_owned();
+    git(&[
+        "-C", &main_s, "worktree", "add", "-q", &linked_s, "-b", "topic", "main",
+    ]);
+    (main, linked)
+}
+
+/// THE eb39308e REGRESSION, end to end through the real binary.
+///
+/// Reproduces exactly what made condukt/flow subagents unable to edit: the hook
+/// payload's `cwd` is the session's project root (the main checkout), the
+/// subagent `Read`s an absolute path inside a linked worktree that is not under
+/// that root, and then tries to `Edit` in that worktree.
+///
+/// RED before the fix: `mark` classified the read `Untrusted`, recorded
+/// `external-read`, and this `gate` returned
+/// `permissionDecision: "ask"` — in a subagent there is no human to answer an
+/// `ask`, so the edit simply never happened.
+///
+/// The control that keeps this from being "trust everything" lives in
+/// [`a_read_in_an_unrelated_git_repo_still_taints`] directly below.
+#[test]
+fn a_read_in_a_sibling_git_worktree_of_the_same_repo_does_not_taint() {
+    let f = fixture("same-repo-worktree");
+    let (main, linked) = init_repo_and_linked_worktree(&f.cwd);
+    let target = linked.join("a.rs");
+
+    let (code, _, _) = run(
+        "mark",
+        &mark_payload(
+            "Read",
+            serde_json::json!({"file_path": target.to_string_lossy()}),
+            &main,
+            &f.session,
+        ),
+        &main,
+        &f.state_dir,
+        &[],
+    );
+    assert_eq!(code, 0);
+
+    let (code, stdout, _) = run(
+        "gate",
+        &gate_payload(
+            "Edit",
+            serde_json::json!({"file_path": target.to_string_lossy()}),
+            &main,
+            &f.session,
+        ),
+        &main,
+        &f.state_dir,
+        INTERACTIVE_ENV,
+    );
+    assert_eq!(code, 0);
+    assert!(
+        stdout.trim().is_empty(),
+        "reading a file in a linked worktree of the SAME repository is the operator's \
+         own checkout, not untrusted-provenance content — the gate must stay silent, \
+         got: {stdout:?}"
+    );
+}
+
+/// CONTROL for the test above: a `Read` in an UNRELATED git repository must
+/// still taint. Without this, "the target is inside some git repo" would satisfy
+/// the test above while classifying every other project on the machine as
+/// trusted.
+#[test]
+fn a_read_in_an_unrelated_git_repo_still_taints() {
+    let f = fixture("other-repo-worktree");
+    let ours = f.cwd.join("ours");
+    let theirs = f.cwd.join("theirs");
+    std::fs::create_dir_all(&ours).unwrap();
+    std::fs::create_dir_all(&theirs).unwrap();
+    let (main, _linked) = init_repo_and_linked_worktree(&ours);
+    let (other_main, other_linked) = init_repo_and_linked_worktree(&theirs);
+
+    for target in [other_main.join("a.rs"), other_linked.join("a.rs")] {
+        let session = format!("{}-{}", f.session, target.display().to_string().len());
+        let (code, _, _) = run(
+            "mark",
+            &mark_payload(
+                "Read",
+                serde_json::json!({"file_path": target.to_string_lossy()}),
+                &main,
+                &session,
+            ),
+            &main,
+            &f.state_dir,
+            &[],
+        );
+        assert_eq!(code, 0);
+
+        let (code, stdout, _) = run(
+            "gate",
+            &gate_payload(
+                "Edit",
+                serde_json::json!({"file_path": "a.rs"}),
+                &main,
+                &session,
+            ),
+            &main,
+            &f.state_dir,
+            INTERACTIVE_ENV,
+        );
+        assert_eq!(code, 0);
+        let decision = permission_decision(&stdout);
+        assert!(
+            decision.as_deref() == Some("ask") || decision.as_deref() == Some("deny"),
+            "reading {} — a DIFFERENT repository — must still taint the session, got: {stdout:?}",
+            target.display()
+        );
+    }
+}
+
+// ── fail-closed: an unparseable hook payload (backlog 9a28b98c) ──────────────
+
+/// `gate` carries a VERDICT, so "I was handed a payload and could not parse it"
+/// must resolve to the restricted side, not to the silent allow that
+/// `harness_core::hook::run_hook`'s `exit(0)` produces when nothing is printed.
+///
+/// RED before the fix: every one of these payloads produced exit 0 with EMPTY
+/// stdout, which Claude Code reads as "this hook has no opinion" — i.e. an
+/// allow. Measured directly against the real binary, which is the only place the
+/// `run_hook` wrapper is in the loop.
+///
+/// Mirrors `blastguard::main::run`'s `UNREADABLE_PAYLOAD` arm (empty → silent,
+/// non-empty-unparseable → ask, hardened to deny with no human).
+#[test]
+fn unparseable_stdin_on_gate_fails_closed_instead_of_allowing_silently() {
+    let f = fixture("unparseable-gate");
+    // Every one of these is NON-EMPTY (so it is a payload, not an absent one)
+    // and cannot become a `HookInput`.
+    let payloads = [
+        "not json at all",
+        "{ \"tool_name\": ",      // truncated object
+        "[]",                     // valid JSON, wrong shape
+        "\"a string\"",           // valid JSON, wrong shape
+        "42",                     // valid JSON, wrong shape
+        "{\"tool_name\": 12345}", // right key, wrong type
+        "\u{0}\u{1}\u{2}",        // binary noise
+    ];
+    for payload in payloads {
+        let (code, stdout, _) = run("gate", payload, &f.cwd, &f.state_dir, INTERACTIVE_ENV);
+        assert_eq!(code, 0, "gate must still always exit 0 ({payload:?})");
+        let decision = permission_decision(&stdout);
+        assert!(
+            decision.as_deref() == Some("ask") || decision.as_deref() == Some("deny"),
+            "an unparseable NON-EMPTY gate payload is cannot-determine and must fail \
+             closed to ask/deny; got exit {code} and stdout {stdout:?} for {payload:?}"
+        );
+        let reason = serde_json::from_str::<serde_json::Value>(stdout.trim()).unwrap()
+            ["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .expect("a fail-closed decision must carry a reason")
+            .to_string();
+        assert!(
+            reason.contains("could not"),
+            "the reason must say the payload could not be read, not invent a taint \
+             finding: {reason}"
+        );
+    }
+}
+
+/// The same unparseable payload with NO human present hardens the `ask` to a
+/// `deny` — an `ask` nobody can answer is not a pause, and this path is reached
+/// most often in exactly the headless/subagent context that cannot answer one.
+#[test]
+fn unparseable_stdin_on_gate_hardens_to_deny_when_headless() {
+    let f = fixture("unparseable-gate-headless");
+    let (code, stdout, _) = run(
+        "gate",
+        "not json at all",
+        &f.cwd,
+        &f.state_dir,
+        HEADLESS_ENV,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        permission_decision(&stdout).as_deref(),
+        Some("deny"),
+        "no human ⇒ the fail-closed ask must harden to deny, got: {stdout:?}"
+    );
 }
 
 // ── fail-closed: indeterminate state / indeterminate path ───────────────────
@@ -498,7 +747,7 @@ fn corrupt_marker_fails_closed_to_ask_or_deny() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -533,7 +782,7 @@ fn read_with_no_file_path_fails_closed() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -562,7 +811,7 @@ fn healthy_writable_empty_store_allows_silently() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -624,7 +873,7 @@ fn unwritable_state_store_fails_closed_despite_a_lost_mark() {
             "gate",
             &gate_payload(
                 "Bash",
-                serde_json::json!({"command": "echo hi"}),
+                serde_json::json!({"command": WRITE_CLASS_BASH}),
                 &f.cwd,
                 &f.session,
             ),
@@ -678,7 +927,7 @@ fn wrong_schema_marker_fails_closed_to_ask_or_deny() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -882,7 +1131,7 @@ fn observe_only_suppression_is_visible_on_stdout_with_a_top_level_system_message
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -969,12 +1218,28 @@ fn the_real_observe_only_env_var_fails_closed_for_every_non_opt_in_value() {
     let f = fixture("observe-env-failclosed");
 
     // `None` = the var absent entirely; `Some("")` = present but empty.
+    //
+    // The list is chosen so that EVERY plausible loosening of the exact `"1"`
+    // comparison is killed by at least one row: trimming (`" 1"`, `"1 "`,
+    // `"\t1"`, `"1\n"` — the shape a `TAINTGUARD_OBSERVE_ONLY=$(...)` shell
+    // substitution produces), case-folding (`"TRUE"`), truthy-string parsing
+    // (`"true"`, `"yes"`, `"on"`), numeric parsing (`"01"`, `"1.0"`),
+    // "any non-empty value" (`"false"`, `"off"`, `"no"`), and "the var is present
+    // at all" (`"0"`, `""`).
     let non_opt_in: &[Option<&str>] = &[
         Some(" 1"),
+        Some("1 "),
+        Some("\t1"),
+        Some("1\n"),
         Some("true"),
+        Some("TRUE"),
         Some("01"),
+        Some("1.0"),
         Some("yes"),
+        Some("on"),
         Some("false"),
+        Some("off"),
+        Some("no"),
         Some("0"),
         Some(""),
         None,
@@ -1125,7 +1390,7 @@ fn stop_hook_clear_cannot_wipe_the_project_scoped_ledger() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -1182,7 +1447,7 @@ fn stop_hook_clear_cannot_wipe_the_project_scoped_ledger() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -1287,7 +1552,7 @@ fn observe_only_must_not_suppress_a_cannot_determine_corrupt_marker() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -1363,7 +1628,7 @@ fn observe_only_enforced_cannot_determine_appends_no_ledger_line() {
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -1507,7 +1772,7 @@ fn observe_only_still_suppresses_a_genuinely_tainted_session_and_records_exactly
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -1597,6 +1862,93 @@ fn observe_only_with_a_clean_session_is_still_silent() {
     );
 }
 
+/// KILLS FAULT 38b14814 AT ITS OWN WORDING: "tainted+suppressed is byte-for-byte
+/// identical to clean".
+///
+/// The two existing tests each pin one side — `observe_only_with_a_clean_session_is_still_silent`
+/// asserts the clean side is empty, `observe_only_suppression_is_visible_on_stdout_with_a_top_level_system_message`
+/// asserts the suppressed side has the right shape — but nothing put the two
+/// **byte strings** next to each other, which is the property the backlog item
+/// actually names. A reader checking "can these two be confused downstream?" had
+/// to reason across two files. This asserts it directly, in ONE fixture, with ONE
+/// posture and ONE binary: same env, same cwd, two sessions, and the raw stdout
+/// of each compared.
+///
+/// HOW THIS FAILS against a wrong implementation: delete or condition away
+/// `emit_gate`'s `Observe`-arm `println!` and the two byte strings become equal
+/// (both empty), so `assert_ne!` fires with both sides shown.
+#[test]
+fn a_suppressed_taint_is_not_byte_identical_to_a_clean_turn_on_stdout() {
+    let f = fixture("observe-byte-differential");
+    let env = observe_only_env();
+    let clean_session = format!("{}-clean", f.session);
+    let tainted_session = format!("{}-tainted", f.session);
+
+    // (a) clean.
+    let (_, clean_stdout, _) = run(
+        "gate",
+        &gate_payload(
+            "Bash",
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
+            &f.cwd,
+            &clean_session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+
+    // (b) tainted, and therefore SUPPRESSED under this posture.
+    let (code, _, _) = run(
+        "mark",
+        &mark_payload(
+            "WebFetch",
+            serde_json::json!({"url": "https://example.com"}),
+            &f.cwd,
+            &tainted_session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+    assert_eq!(code, 0);
+    let (_, tainted_stdout, _) = run(
+        "gate",
+        &gate_payload(
+            "Bash",
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
+            &f.cwd,
+            &tainted_session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &env,
+    );
+
+    assert_ne!(
+        clean_stdout.as_bytes(),
+        tainted_stdout.as_bytes(),
+        "a SUPPRESSED taint must not be byte-identical to a clean turn on stdout — \
+         otherwise observe-only is indistinguishable from finding nothing. \
+         clean={clean_stdout:?} tainted={tainted_stdout:?}"
+    );
+    // Directional, so the assertion above cannot be satisfied by making the
+    // CLEAN turn start printing something.
+    assert!(
+        clean_stdout.is_empty(),
+        "the clean turn must print NOTHING AT ALL (not even whitespace), got: {clean_stdout:?}"
+    );
+    assert!(
+        !tainted_stdout.trim().is_empty(),
+        "the suppressed turn must print the observe-only warning, got: {tainted_stdout:?}"
+    );
+    assert_eq!(
+        ledger_tally(&f),
+        (1, 0),
+        "exactly the suppressed half must have appended a ledger line"
+    );
+}
+
 /// THE DIFFERENTIAL, in ONE project and therefore ONE ledger: the same binary,
 /// the same env var, the same `cwd` — and two sessions that must be treated
 /// DIFFERENTLY.
@@ -1650,7 +2002,7 @@ fn one_ledger_records_the_suppressed_taint_but_not_the_enforced_cannot_determine
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &undet_session,
         ),
@@ -1692,7 +2044,7 @@ fn one_ledger_records_the_suppressed_taint_but_not_the_enforced_cannot_determine
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &taint_session,
         ),
@@ -1778,7 +2130,7 @@ fn observe_only_enforced_cannot_determine_reason_names_the_unhonoured_posture() 
         "gate",
         &gate_payload(
             "Bash",
-            serde_json::json!({"command": "echo hi"}),
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
             &f.cwd,
             &f.session,
         ),
@@ -1903,4 +2255,129 @@ fn ledger_append_failure_is_reported_on_stderr_and_still_shows_the_suppression()
         stderr.contains("observe-only"),
         "the diagnostic must name the observe-only ledger it lost, got stderr: {stderr:?}"
     );
+}
+
+// ── read-only Bash allowlist, through the real binary (backlog a4b59893) ────
+
+/// A tainted turn must still be able to DIAGNOSE itself. Driven end-to-end
+/// because the read-only verdict is the one that produces `GateAction::Silent`,
+/// and silence is exactly the outcome a unit test on `decide_gate_with` cannot
+/// distinguish from "the hook never ran": only the real binary can show that it
+/// exited 0 having deliberately printed nothing.
+///
+/// Both directions live in ONE test body, against ONE marker, on purpose. The
+/// silence below is only evidence of the allowlist if the very same session is
+/// simultaneously enforcing for a write-class command — otherwise a `mark` that
+/// quietly failed to land would produce the identical stdout.
+#[test]
+fn a_tainted_turn_can_still_run_read_only_bash_but_not_write_class_bash() {
+    let f = fixture("readonly-allowlist");
+    let (code, _, stderr) = run(
+        "mark",
+        &mark_payload(
+            "WebFetch",
+            serde_json::json!({"url": "https://example.com"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &[],
+    );
+    assert_eq!(code, 0, "mark must always exit 0; stderr: {stderr}");
+
+    // ANTI-VACUITY FIRST, so the session is proven tainted before anything is
+    // asserted to be silent.
+    let (code, stdout, _) = run(
+        "gate",
+        &gate_payload(
+            "Bash",
+            serde_json::json!({"command": WRITE_CLASS_BASH}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        HEADLESS_ENV,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        permission_decision(&stdout).as_deref(),
+        Some("deny"),
+        "precondition: this session must really be tainted, so the silences below are \
+         attributable to the allowlist; got {stdout:?}"
+    );
+
+    for command in [
+        "git status",
+        "git log --oneline",
+        "git diff",
+        "git worktree list",
+        "pwd",
+    ] {
+        let (code, stdout, stderr) = run(
+            "gate",
+            &gate_payload(
+                "Bash",
+                serde_json::json!({ "command": command }),
+                &f.cwd,
+                &f.session,
+            ),
+            &f.cwd,
+            &f.state_dir,
+            HEADLESS_ENV,
+        );
+        assert_eq!(code, 0, "gate must always exit 0 for {command:?}");
+        assert_eq!(
+            stdout.trim(),
+            "",
+            "a tainted turn must still be able to run {command:?} — it is how the turn \
+             diagnoses itself; got stdout {stdout:?} / stderr {stderr:?}"
+        );
+    }
+}
+
+/// FAIL-CLOSED (CLAUDE.md §3) through the real binary: a `Bash` payload whose
+/// `command` cannot be READ as a string was never classified, so it must reach
+/// the taint check and enforce. The fast path may only ever be entered by a
+/// command that was positively recognised.
+#[test]
+fn a_bash_payload_with_an_unreadable_command_still_enforces() {
+    let f = fixture("readonly-unreadable-command");
+    let (code, _, _) = run(
+        "mark",
+        &mark_payload(
+            "WebSearch",
+            serde_json::json!({"query": "x"}),
+            &f.cwd,
+            &f.session,
+        ),
+        &f.cwd,
+        &f.state_dir,
+        &[],
+    );
+    assert_eq!(code, 0);
+
+    for tool_input in [
+        serde_json::json!({}),
+        serde_json::json!({"command": 42}),
+        serde_json::json!({"command": null}),
+        serde_json::json!({"command": ["git", "status"]}),
+        serde_json::json!({"cmd": "git status"}),
+    ] {
+        let (code, stdout, _) = run(
+            "gate",
+            &gate_payload("Bash", tool_input.clone(), &f.cwd, &f.session),
+            &f.cwd,
+            &f.state_dir,
+            HEADLESS_ENV,
+        );
+        assert_eq!(code, 0);
+        assert_eq!(
+            permission_decision(&stdout).as_deref(),
+            Some("deny"),
+            "a command that could not be read is not a command known to be read-only \
+             ({tool_input}); got {stdout:?}"
+        );
+    }
 }

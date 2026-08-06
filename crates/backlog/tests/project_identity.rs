@@ -174,6 +174,31 @@ weight = 0.0
     std::fs::write(store_dir.join("tasks.toml"), toml).unwrap();
 }
 
+/// Seed a store holding SEVERAL tasks, each with its own project key and
+/// weight. Ordering within `backlog next` is weight-descending, so a caller
+/// can make a specific project's task sort first and thereby tell a
+/// cwd-scoped pick apart from a store-wide one.
+fn seed_tasks_toml_multi(store_dir: &std::path::Path, tasks: &[(&str, &str, &str, f64)]) {
+    std::fs::create_dir_all(store_dir).unwrap();
+    let mut toml = String::new();
+    for (id, title, project, weight) in tasks {
+        toml.push_str(&format!(
+            r#"[[task]]
+id = "{id}"
+title = "{title}"
+project = "{project}"
+tags = []
+status = "pending"
+notes = ""
+created_at = 1000
+updated_at = 1000
+weight = {weight:?}
+"#
+        ));
+    }
+    std::fs::write(store_dir.join("tasks.toml"), toml).unwrap();
+}
+
 /// Test (a): Tasks added via --project <main> from a worktree must write to
 /// worktree's .backlog, NOT the main tree's .backlog. This is a critical
 /// §8 violation if it fails.
@@ -605,5 +630,222 @@ fn broken_git_link_does_not_silently_hide_an_existing_task() {
         empty_code,
         empty_out,
         empty_err
+    );
+}
+
+/// Test (e): `backlog next` must carry the SAME cwd-derived default project
+/// scope that `backlog list` has.
+///
+/// `list` resolves a bare (no `--project`, no `--all`) invocation to the
+/// cwd's canonical project identity; `next` used to pass its `Option`
+/// straight through to `store::next`, which means a bare `next` ranged over
+/// EVERY project key in the resolved store. That is observable whenever one
+/// store holds more than one project key (a pinned or legacy store, or a
+/// store that accumulated `add --project <other>` writes): the two commands
+/// disagree about what "this project" means, and `next` can hand a driver a
+/// task belonging to a different checkout entirely.
+///
+/// The discriminator here is deliberately NOT insertion order: the foreign
+/// project's task is given a HIGHER weight, so a store-wide pick returns the
+/// foreign task while a correctly cwd-scoped pick returns the local one.
+/// Ordering alone can otherwise make a store-wide `next` look scoped by
+/// coincidence.
+#[test]
+fn next_without_project_scopes_to_the_cwd_project_like_list_does() {
+    assert!(
+        git_available(),
+        "git is required for project-identity tests but is not available in PATH"
+    );
+
+    let home = temp_home("next-default-scope");
+    let local_repo = temp_dir("next-default-scope-local");
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&local_repo)
+            .status()
+            .unwrap()
+            .success(),
+        "git init failed for the local repo"
+    );
+
+    let local_canonical = local_repo.canonicalize().unwrap();
+    let local_project = local_canonical.to_string_lossy().into_owned();
+    let foreign_project = local_canonical
+        .parent()
+        .unwrap()
+        .join("some-other-checkout-entirely")
+        .to_string_lossy()
+        .into_owned();
+
+    // One store, two project keys. The FOREIGN task outranks the local one
+    // by weight, so a store-wide pick necessarily returns the foreign task.
+    seed_tasks_toml_multi(
+        &local_repo.join(".backlog"),
+        &[
+            ("10cal000", "Local task", &local_project, 0.0),
+            ("f0re1gn0", "Foreign task", &foreign_project, 99.0),
+        ],
+    );
+
+    // Anti-vacuity: both tasks really are in THIS checkout's store, and the
+    // foreign one really does outrank the local one. Without this, a `next`
+    // that returned the local task because the foreign task was missing
+    // (or unrankable) would pass vacuously.
+    let (all_code, all_out, all_err) = run_in(&["list", "--all"], "", &home, &local_repo);
+    assert_eq!(all_code, 0, "list --all must succeed; stderr: {}", all_err);
+    assert!(
+        all_out.contains("Local task") && all_out.contains("Foreign task"),
+        "anti-vacuity check failed: both tasks must be physically present in \
+         this checkout's store (via --all, which bypasses the project filter \
+         under test), got:\n{}",
+        all_out
+    );
+    let (fall_code, fall_out, _) = run_in(
+        &["next", "--project", &foreign_project],
+        "",
+        &home,
+        &local_repo,
+    );
+    assert_eq!(fall_code, 0, "next --project <foreign> must succeed");
+    assert!(
+        fall_out.contains("Foreign task"),
+        "anti-vacuity check failed: the foreign task must be reachable and \
+         rankable in this store when explicitly asked for, got:\n{}",
+        fall_out
+    );
+
+    // The assertion under test: a bare `next` must scope to the cwd project,
+    // exactly as a bare `list` does.
+    let (list_code, list_out, list_err) = run_in(&["list", "--json"], "", &home, &local_repo);
+    assert_eq!(list_code, 0, "list must succeed; stderr: {}", list_err);
+    assert!(
+        list_out.contains("Local task") && !list_out.contains("Foreign task"),
+        "precondition: a bare `list` is cwd-scoped (this is the behaviour \
+         `next` is being held to), got:\n{}",
+        list_out
+    );
+
+    let (next_code, next_out, next_err) = run_in(&["next"], "", &home, &local_repo);
+    assert_eq!(
+        next_code, 0,
+        "a bare `next` in a resolvable checkout must succeed; stderr: {}",
+        next_err
+    );
+    assert!(
+        next_out.contains("Local task") && !next_out.contains("Foreign task"),
+        "a bare `backlog next` ranged over EVERY project in the resolved \
+         store and handed back a task belonging to a different checkout, \
+         while a bare `backlog list` in the SAME cwd correctly scoped to this \
+         project. The two commands must agree on what \"this project\" means, \
+         otherwise a driver that picks with `next` acts on another \
+         checkout's work.\n  \
+         bare next  (cwd={:?}): exit_code={} stdout={}\n  \
+         bare list  (cwd={:?}): exit_code={} stdout={}",
+        local_repo,
+        next_code,
+        next_out,
+        local_repo,
+        list_code,
+        list_out
+    );
+}
+
+/// Test (f): the `next` counterpart of test (d).
+///
+/// When project scope cannot be determined, `list` fails closed (non-zero
+/// exit + diagnostic) precisely so a downstream reader cannot mistake
+/// "cannot determine" for "nothing to do". `next` must resolve the same
+/// undetermined condition the same restrictive way — printing "no pending
+/// tasks" (or, worse, some other project's task) on exit 0 is the fail-open
+/// this repo's gate invariant forbids.
+#[test]
+fn next_fails_closed_when_the_project_scope_cannot_be_determined() {
+    assert!(
+        git_available(),
+        "git is required for project-identity tests but is not available in PATH"
+    );
+
+    let home = temp_home("next-undetermined");
+
+    // The CONTROL: a healthy, resolvable checkout that genuinely owns no
+    // store. This is what "nothing to do" legitimately looks like, and it
+    // must stay exit 0 — the assertion below is about telling the
+    // undetermined case apart from THIS, not about making `next` noisy.
+    let empty_repo = temp_dir("next-undetermined-control");
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&empty_repo)
+            .status()
+            .unwrap()
+            .success(),
+        "git init failed for the control repo"
+    );
+    let (ctl_code, ctl_out, ctl_err) = run_in(&["next"], "", &home, &empty_repo);
+    assert_eq!(
+        ctl_code, 0,
+        "control setup is broken: a healthy, resolvable checkout with no \
+         store must still be a clean exit-0 \"nothing to do\"; stderr: {}",
+        ctl_err
+    );
+
+    // The undetermined case: a dangling worktree `.git` link, so
+    // `git rev-parse --show-toplevel` fails, while a real task sits in this
+    // checkout's own store recorded under some other canonical root.
+    let broken_dir = temp_dir("next-undetermined-broken");
+    std::fs::write(
+        broken_dir.join(".git"),
+        "gitdir: /definitely/nonexistent-xyz-q7f3k9z2/.git/worktrees/broken\n",
+    )
+    .unwrap();
+    let stale_project = broken_dir.parent().unwrap().join("some-old-canonical-root");
+    seed_tasks_toml(
+        &broken_dir.join(".backlog"),
+        "beefcafe",
+        "Stranded next task",
+        &stale_project.to_string_lossy(),
+    );
+
+    // Anti-vacuity: the task genuinely exists in this checkout's store.
+    let (all_code, all_out, all_err) = run_in(&["list", "--all"], "", &home, &broken_dir);
+    assert_eq!(all_code, 0, "list --all must succeed; stderr: {}", all_err);
+    assert!(
+        all_out.contains("Stranded next task"),
+        "anti-vacuity check failed: the seeded task must be physically \
+         present in this checkout's store, got:\n{}",
+        all_out
+    );
+
+    // Pin that `list` really does fail closed here, so this test states the
+    // gap between the two commands rather than assuming it.
+    let (list_code, _, _) = run_in(&["list", "--json"], "", &home, &broken_dir);
+    assert_ne!(
+        list_code, 0,
+        "precondition: `list` fails closed on an undetermined scope (this is \
+         the behaviour `next` is being held to)"
+    );
+
+    let (next_code, next_out, next_err) = run_in(&["next"], "", &home, &broken_dir);
+    assert_ne!(
+        next_code, 0,
+        "`backlog next` resolved an UNDETERMINED project scope to a normal \
+         exit-0 result, so a downstream driver cannot tell \"I could not \
+         determine which project this is\" apart from \"there is nothing to \
+         do\" — the same fail-open `list` was already fixed for.\n  \
+         undetermined next (cwd={:?}): exit_code={} stdout={:?} stderr={}\n  \
+         genuinely-empty control      : exit_code={} stdout={:?}",
+        broken_dir, next_code, next_out, next_err, ctl_code, ctl_out
+    );
+
+    // And the same must hold for the `--claim` path, which is what real
+    // drivers (e.g. /flow) actually call.
+    let (claim_code, claim_out, claim_err) = run_in(&["next", "--claim"], "", &home, &broken_dir);
+    assert_ne!(
+        claim_code, 0,
+        "`backlog next --claim` (the path drivers actually use) still \
+         resolved an undetermined project scope to exit 0.\n  \
+         exit_code={} stdout={:?} stderr={}",
+        claim_code, claim_out, claim_err
     );
 }

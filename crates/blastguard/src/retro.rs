@@ -619,11 +619,192 @@ pub fn render(report: &Report) -> String {
     s
 }
 
+/// Collapse every run of whitespace (including embedded newlines) to a single
+/// space, and trim the ends.
+///
+/// Used on `command` in [`render_list`] rather than a bare
+/// `.replace('\n', " ")`: a real recorded command can be multi-line shell
+/// (`BIN=/path\nSB=/path\ncd "$SB" && …`), and squeezing whole runs — not just
+/// newline characters — means two recordings of the same logical command that
+/// differ only in incidental line-wrap or indentation still compare EQUAL as
+/// single-line strings. That equality is the point: the mode this feeds is a
+/// diff of two listings by intervention identity, and identity should track
+/// what was run, not how the transcript happened to wrap it.
+///
+/// `gate` and `rule_id` do not need this treatment: `gate` is already reduced
+/// through [`gate_name_from_command`], which strips every whitespace
+/// character before the name is taken, so it can never carry a newline into
+/// this render. `rule_id` is always one of [`crate::rule_id::rule_id`]'s fixed
+/// `&'static str` literals (or the hardcoded `"script-block"` /
+/// `"external-gate"` fallbacks) — checked, not assumed — none of which contain
+/// whitespace at all.
+///
+/// A whitespace-ONLY input squeezes to `""`. That is a legitimate result of
+/// this function, not a bug in it: it is the caller in [`render_list`] that
+/// must not print the empty string bare, and it doesn't — it maps that case
+/// to [`COMMAND_BLANK`], distinct from the `None` case's [`COMMAND_UNKNOWN`].
+fn squeeze_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn truncate(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         return s.to_string();
     }
     s.chars().take(n.saturating_sub(1)).collect::<String>() + "…"
+}
+
+/// Marker printed in place of a command that the transcript never recorded.
+///
+/// `render_list` must never print a blank in this column: a blank reads as
+/// "no command", which is a claim about the intervention this module cannot
+/// make (the transcript may simply not have carried a `tool_use` block for
+/// that id — see `collect_tool_use_commands`). Absent stays visibly absent.
+///
+/// This is a claim about the TRANSCRIPT ("no operand was ever recorded for
+/// this id"), which is a different fact from [`COMMAND_BLANK`] ("an operand
+/// was recorded, and it was blank") — see that constant's docstring for why
+/// the two must not share text.
+const COMMAND_UNKNOWN: &str = "<command not recorded>";
+
+/// Marker printed when a command WAS recorded but is empty once squeezed.
+///
+/// `collect_tool_use_commands` only drops an operand when `cmd.is_empty()`
+/// (i.e. zero bytes). A whitespace-only recorded command — `"   \n\t  "` —
+/// is not empty by that check, so it survives into `Intervention.command` as
+/// `Some("   \n\t  ")`, and `squeeze_whitespace` (which trims and collapses
+/// runs of whitespace) turns that into `""`. Left unhandled, the row would
+/// print `cmd= reason=…`: exactly the blank [`COMMAND_UNKNOWN`]'s own
+/// docstring promises this column never prints.
+///
+/// Deliberately a DIFFERENT string from `COMMAND_UNKNOWN` rather than
+/// reusing it: "no `tool_use` block exists for this id" and "a `tool_use`
+/// block exists and its `command`/`file_path` field is blank" are different
+/// facts about the transcript, and a reviewer diffing two listings by
+/// intervention identity is entitled to tell them apart (the same reasoning
+/// [`Outcome::Unknown`] uses to stay separate from `NotExecuted`).
+const COMMAND_BLANK: &str = "<command recorded blank>";
+
+/// Render one row per intervention, instead of `render`'s per-rule counts.
+///
+/// # Why this exists alongside `render`
+///
+/// `build_report` folds every [`Intervention`] into a [`RuleStats`] counter.
+/// That answers "how many, and how did they end" but not "which ones" — and
+/// `crate::rule_id::rule_id` maps MORE THAN ONE decision arm in `detect.rs`
+/// onto the same id (at minimum `unknown_wrapper_ask` and
+/// `analyze_shell_payload` both produce a reason containing "whose value only
+/// exists at run time", both mapped to `unresolvable-command-word`). So a
+/// count for that id is a sum over arms the id itself cannot separate, and
+/// telling "the right 80 of 115 disappeared" from "80 arbitrary ones
+/// disappeared" needs the identity of each intervention, not its tally. This
+/// prints the RAW `reason` text for that — the id groups, the reason
+/// distinguishes within the group.
+///
+/// `rule_filter`, when `Some`, keeps only interventions whose `rule_id`
+/// matches exactly — narrowing the listing to the one rule under review
+/// without hand-grepping the full corpus.
+pub fn render_list(report: &Report, rule_filter: Option<&str>) -> String {
+    let mut s = String::new();
+    if report.is_undetermined() {
+        // Same refusal as `render`, and for the same reason: a listing with
+        // zero rows because nothing was read must not be visually
+        // indistinguishable from a listing with zero rows because nothing was
+        // ever stopped. Both would otherwise print "no interventions".
+        s.push_str(
+            "gate retrospective: UNDETERMINED — no transcript was read.\n\
+             This is not a report of zero interventions; nothing was measured.\n",
+        );
+        s.push_str(if report.scan.dir_unreadable {
+            "cause: the transcript directory was not listed — it is absent, or unreadable.\n"
+        } else {
+            "cause: the directory was listed but held no *.jsonl transcript.\n"
+        });
+        return s;
+    }
+    let matched: Vec<&Intervention> = report
+        .scan
+        .interventions
+        .iter()
+        .filter(|iv| rule_filter.is_none_or(|f| iv.rule_id == f))
+        .collect();
+    s.push_str(&format!(
+        "gate retrospective (listing) — {} of {} intervention(s) across {} transcript(s)\n\n",
+        matched.len(),
+        report.scan.interventions.len(),
+        report.scan.files_read
+    ));
+    if matched.is_empty() {
+        // Not clean: a filter that matches nothing (typo'd --rule-id, or a
+        // rule that genuinely never fired) is a fact about the query, and
+        // must read as one — never as a blank that could pass for "no
+        // interventions found" the way an unpopulated table would.
+        s.push_str("No intervention matched this listing.\n\n");
+    } else {
+        for iv in &matched {
+            // Reasons are free text pulled from a hook's stdout or a script's
+            // stderr and can embed newlines (and, from a CRLF-recorded
+            // transcript, a bare `\r`); replace both so each intervention
+            // stays exactly one printed row, as the done criteria require.
+            //
+            // This is NOT the same treatment as `command` below
+            // (`squeeze_whitespace`, which also collapses interior runs of
+            // whitespace to one space): `command`'s full squeeze exists so
+            // two recordings of the same logical command compare EQUAL
+            // despite incidental re-wrapping — that is the identity
+            // `render_list` promises for diffing two listings. `reason` is
+            // prose meant for a human to read, not compared for identity
+            // across runs, so collapsing its internal spacing would only
+            // destroy formatting for no benefit; it only needs the two
+            // characters that could turn one row into more than one line.
+            let reason = iv
+                .reason
+                .replace("\r\n", "\n")
+                .replace('\r', "\n")
+                .replace('\n', " ");
+            // Commands recorded from the transcript are real multi-line shell
+            // (e.g. `BIN=/path\nSB=/path\ncd "$SB" && …`), not free text with
+            // occasional embedded newlines. Left uncollapsed, one intervention
+            // spans an unpredictable number of output lines, and some
+            // continuation lines start with the word "blastguard" — a
+            // line-oriented reader (or a line-count-based diff, which is the
+            // whole point of this mode: the next task diffs two listings by
+            // intervention identity) cannot tell that apart from a new row.
+            // `squeeze_whitespace` rather than a bare newline replacement: two
+            // recordings of the same logical command can still differ in
+            // incidental formatting (a blank continuation line, a re-wrapped
+            // transcript) without differing in what was actually run, and the
+            // whole point of identity comparison is to treat those as the
+            // same command rather than reporting a phantom change.
+            //
+            // Absent (`None`) and "recorded but blank after squeezing" are
+            // both refused, but with DIFFERENT markers — see `COMMAND_BLANK`
+            // for why they must not read as the same fact.
+            let command = match iv.command.as_deref() {
+                None => COMMAND_UNKNOWN.to_string(),
+                Some(raw) => {
+                    let squeezed = squeeze_whitespace(raw);
+                    if squeezed.is_empty() {
+                        COMMAND_BLANK.to_string()
+                    } else {
+                        squeezed
+                    }
+                }
+            };
+            s.push_str(&format!(
+                "{:<21} {:<28} {:<15} cmd={command} reason={reason}\n",
+                truncate(&iv.gate, 21),
+                truncate(&iv.rule_id, 28),
+                iv.outcome.label(),
+            ));
+        }
+        s.push('\n');
+    }
+    s.push_str("caveats:\n");
+    for c in report.caveats() {
+        s.push_str(&format!("  - {c}\n"));
+    }
+    s
 }
 
 #[cfg(test)]
@@ -865,5 +1046,198 @@ guard-maintree-bash.py\"]: Refused: `touch x` mutates this project's MAIN workin
         let report = build_report(scan_lines(&[hook_line("t1", "deny", "x")]));
         assert!(report.caveats().iter().any(|c| c.contains("UPPER bound")));
         assert!(render(&report).contains("UPPER bound"));
+    }
+
+    #[test]
+    fn listing_carries_the_command_and_the_rule_id_the_table_folds_away() {
+        // `build_report`'s table can only say "115 interventions for this
+        // id"; it cannot say which 115. This is the identity-level check that
+        // the listing actually carries both keys needed to answer that: the
+        // stable id (to find the rule) and the exact command (to compare it
+        // against another run's listing).
+        let lines = vec![
+            hook_line("t1", "ask", EXPANSION),
+            tool_use_line("t1", "\"$OW\" status --unique-marker-xyz"),
+            tool_result_line("t1", "ok, ran fine"),
+        ];
+        let report = build_report(scan_lines(&lines));
+        let out = render_list(&report, None);
+        assert!(
+            out.contains("\"$OW\" status --unique-marker-xyz"),
+            "listing did not carry the recorded command: {out}"
+        );
+        assert!(
+            out.contains("unresolvable-command-word"),
+            "listing did not carry the rule id: {out}"
+        );
+    }
+
+    #[test]
+    fn listing_marks_a_missing_command_explicitly_never_blank() {
+        // Same principle as the rest of this crate: absent must not render as
+        // clean. A deny with no `tool_use` block for its id has no recorded
+        // command, and the listing must say so rather than leaving the field
+        // empty (which reads as "there was no command").
+        //
+        // Pinned to the SPECIFIC row that lacks a command, not just "the
+        // marker appears somewhere in the output": an implementation that
+        // printed the marker on every row — including one that DOES have a
+        // recorded command — would pass a bare `out.contains(...)` check.
+        // Two interventions here, one with a command and one without, so the
+        // marker must land on exactly the one that has none.
+        let lines = vec![
+            hook_line("t1", "deny", "rm -rf would delete the project"),
+            hook_line("t2", "ask", EXPANSION),
+            tool_use_line("t2", "\"$OW\" status --present-marker-abc"),
+            tool_result_line("t2", "ok, ran fine"),
+        ];
+        let report = build_report(scan_lines(&lines));
+        let out = render_list(&report, None);
+        let deny_row = out
+            .lines()
+            .find(|l| l.contains("rm -rf would delete the project"))
+            .expect("deny row missing from listing");
+        assert!(
+            deny_row.contains(COMMAND_UNKNOWN),
+            "row with no recorded command did not carry the marker: {deny_row}"
+        );
+        let ask_row = out
+            .lines()
+            .find(|l| l.contains("present-marker-abc"))
+            .expect("ask row missing from listing");
+        assert!(
+            !ask_row.contains(COMMAND_UNKNOWN),
+            "row WITH a recorded command wrongly carried the absent-command marker: {ask_row}"
+        );
+    }
+
+    #[test]
+    fn listing_marks_a_whitespace_only_recorded_command_distinctly_from_absent() {
+        // `collect_tool_use_commands` only drops a command when
+        // `cmd.is_empty()`; a WHITESPACE-ONLY recorded command ("   \n\t  ")
+        // is not empty by that check, so it survives into `Intervention` as
+        // `Some("   \n\t  ")`. `squeeze_whitespace` then collapses it to `""`,
+        // and the row prints `cmd= reason=...` — the exact blank this module
+        // exists to refuse (COMMAND_UNKNOWN's own docstring promises this
+        // column is "never" blank).
+        //
+        // This is also a DIFFERENT fact from no command at all: here the
+        // transcript DID carry a `tool_use` block for this id, its `command`
+        // field was simply blank. `COMMAND_BLANK` says that; `COMMAND_UNKNOWN`
+        // (asserted absent below) would overstate — it would claim no operand
+        // was ever recorded, when one was, and it was empty.
+        let lines = vec![
+            hook_line("t1", "ask", EXPANSION),
+            tool_use_line("t1", "   \n\t  "),
+            tool_result_line("t1", "ok, ran fine"),
+        ];
+        let report = build_report(scan_lines(&lines));
+        let out = render_list(&report, None);
+        assert!(
+            !out.contains("cmd= reason="),
+            "blank command column leaked through as an empty string: {out}"
+        );
+        assert!(out.contains(COMMAND_BLANK), "{out}");
+        assert!(
+            !out.contains(COMMAND_UNKNOWN),
+            "whitespace-only recorded command must not read as \"not recorded\": {out}"
+        );
+    }
+
+    #[test]
+    fn listing_mode_prints_the_caveats_block() {
+        // done_criteria (c): listing mode must carry the same caveats as the
+        // table, not just the per-row facts. Verified directly here instead
+        // of only by a human running the binary by hand.
+        let report = build_report(scan_lines(&[hook_line("t1", "deny", "x")]));
+        let out = render_list(&report, None);
+        assert!(out.contains("caveats:"), "{out}");
+        assert!(out.contains("UPPER bound"), "{out}");
+        assert!(out.contains("approved != wrong"), "{out}");
+    }
+
+    #[test]
+    fn reason_carriage_returns_do_not_survive_into_the_listing() {
+        // `command` goes through `squeeze_whitespace` (splits on ANY Unicode
+        // whitespace, `\r` included). `reason` only had `.replace('\n', " ")`,
+        // so a bare `\r` — e.g. from a CRLF-recorded reason — survived into
+        // the printed row. The corpus this ships against has zero CR bytes
+        // today, so this is not a live line-count bug like the multiline
+        // command one above, but the asymmetry between the two fields was
+        // unjustified: neither field's contract wants a control character in
+        // a listing meant to be one row per line.
+        let lines = vec![hook_line("t1", "deny", "line one\r\nline two")];
+        let out = render_list(&build_report(scan_lines(&lines)), None);
+        assert!(
+            !out.contains('\r'),
+            "carriage return leaked into row: {out:?}"
+        );
+        assert!(out.contains("line one line two"), "{out}");
+    }
+
+    #[test]
+    fn listing_rule_filter_narrows_to_the_matching_rule() {
+        let lines = vec![
+            hook_line("t1", "ask", EXPANSION),
+            tool_use_line("t1", "\"$OW\" a"),
+            hook_line("t2", "deny", "rm -rf would delete the project"),
+        ];
+        let report = build_report(scan_lines(&lines));
+        let out = render_list(&report, Some("unresolvable-command-word"));
+        assert!(out.contains("\"$OW\" a"));
+        assert!(!out.contains("rm -rf would delete the project"));
+    }
+
+    #[test]
+    fn a_command_with_embedded_newlines_stays_one_line_in_the_listing() {
+        // Found by running the built binary against the real corpus:
+        // `retro --rule-id unresolvable-command-word` reported "115 of 208
+        // intervention(s)", but `grep -c '^blastguard'` over the same output
+        // counted 121 — the listing was not one row per intervention. Cause:
+        // newlines in `reason` were collapsed, but newlines in `command` were
+        // not, and real recorded commands are multi-line shell
+        // (`BIN=/path\nSB=/path\ncd "$SB" && …`). Some continuation lines
+        // even start with the word "blastguard", making them
+        // indistinguishable from a new row to a line-oriented reader — which
+        // is exactly what the next task's identity-diff needs to be able to
+        // do.
+        //
+        // Asserted as a LINE-COUNT DELTA rather than a prefix-match count: a
+        // prefix filter like `starts_with("blastguard")` only catches the
+        // failure when a continuation line happens to collide with another
+        // row's gate name (as it did in the real corpus by coincidence). The
+        // actual defect is that the row's line count is unpredictable, so the
+        // real test is "does adding ONE intervention add ONE line" — which
+        // fails whether or not a continuation line happens to start with
+        // "blastguard".
+        let baseline_lines = vec![hook_line("t0", "deny", "rm -rf would delete the project")];
+        let baseline_out = render_list(&build_report(scan_lines(&baseline_lines)), None);
+        let baseline_count = baseline_out.lines().count();
+
+        let multiline_command = "BIN=/path/to/bin\nSB=/path/to/sandbox\ncd \"$SB\" && \"$BIN\" run";
+        let mut with_multiline = baseline_lines.clone();
+        with_multiline.push(hook_line("t1", "ask", EXPANSION));
+        with_multiline.push(tool_use_line("t1", multiline_command));
+        with_multiline.push(tool_result_line("t1", "ok, ran fine"));
+        let with_multiline_out = render_list(&build_report(scan_lines(&with_multiline)), None);
+        let with_multiline_count = with_multiline_out.lines().count();
+
+        assert_eq!(
+            with_multiline_count,
+            baseline_count + 1,
+            "adding one intervention (with a multi-line recorded command) must \
+grow the listing by exactly one line, not one per embedded newline.\n\
+baseline:\n{baseline_out}\nwith multiline command:\n{with_multiline_out}"
+        );
+    }
+
+    #[test]
+    fn listing_still_refuses_when_nothing_was_read() {
+        // Listing mode must keep the same UNDETERMINED refusal as the table,
+        // and for the same reason: zero rows because nothing was read must
+        // not print the same as zero rows because nothing was stopped.
+        let out = render_list(&build_report(Scan::default()), None);
+        assert!(out.contains("UNDETERMINED"));
+        assert!(!out.contains("0 intervention(s)"));
     }
 }

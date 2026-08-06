@@ -308,3 +308,54 @@ updated_at = 1786034097
 weight = 0.0
 issue_number = 205
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/205"
+[[task]]
+id = "5700ba25"
+title = "blastguard: 行外で定義された shell 関数の呼び出しが展開 head resolver の残存 fail-open"
+project = "/Users/yuki/src/harness"
+tags = ["p1"]
+status = "pending"
+notes = "0.2.48 の第二著者監査で報告され、意図的に pin していない残存。BIN=/bin/echo; myfunc; $BIN -rf /path で myfunc が関数なら BIN を再束縛できるが、外部コマンドとテキスト上区別できない。外部コマンドは親シェルの変数を触れないので、分離には detect.rs が持たない知識が要る。CommandWordOrigin::AssignedButUnknowable の docstring に非カバーとして明記済み。allow を assert するテストは無い。"
+created_at = 1786045039
+updated_at = 1786045039
+weight = 0.0
+issue_number = 210
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/210"
+
+[[task]]
+id = "bbacb00d"
+title = 'blastguard: 展開 head resolver の UNVERIFIED 2件（rewritten.join(" ") の意味破壊・MAX_SHELL_DEPTH 相互作用）'
+project = "/Users/yuki/src/harness"
+tags = ["p2"]
+status = "pending"
+notes = '0.2.48 の第二著者が到達できなかった＝棄却ではない（CLAUDE.md §6）。(1) 置換再判定は rewritten.join(" ") で行を作り直すため、空白・埋め込みクォート・区切りを含む値で意味が壊れる/生まれる可能性。探索したが Ask->Allow は見つからず、空間は尽くしていない。(2) このアーム経由で MAX_SHELL_DEPTH を使い切る行は構成していない。'
+created_at = 1786045040
+updated_at = 1786045040
+weight = 0.0
+issue_number = 211
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/211"
+
+[[task]]
+id = "3e0a8bdf"
+title = "blastguard: 配列代入 BIN=(/bin/rm) を要素0として解決するか、一様 Ask のままにするか"
+project = "/Users/yuki/src/harness"
+tags = ["p3"]
+status = "pending"
+notes = '0.2.48 で deny -> ask に移動した唯一の非制限方向の変化。旧 deny は偶然（basename("(/bin/rm") がたまたま rm）で、空白入り綴りは修正前から ask だった＝既に不整合。要素0抽出には [1]= 添字と空配列のモデル化が要る。現状は一様 Ask（非対話では Deny に硬化）。'
+created_at = 1786045041
+updated_at = 1786045041
+weight = 0.0
+issue_number = 212
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/212"
+
+[[task]]
+id = "2fb05132"
+title = 'blastguard: 展開 head が語の一部のとき ("$D/bin/tool") は解決を諦めている — 実測9件の残余'
+project = "/Users/yuki/src/harness"
+tags = ["p2"]
+status = "pending"
+notes = '0.2.49 の再判定計測 (2026-08-07、測定点 e306331c、.scratch/rejudge_corpus.py と .scratch/gap_70_vs_45.py) で、旧見積り70に対し実際に解決したのは49 (45 allow + 4 別 ask)。差 21 の内訳: export/declare 10 (0.2.48 が塞いだ stale-literal 経路なので正しく拒否)、glued-prefix 9、前置代入 1、条件付き 1。glued-prefix は D=/path; "$D/bin/donegate" status のような形で、referenced_variable_name が『参照の周りにテキストが貼り付いた語』を意図的に None にしているため。原理的には D が literal なら結合して解決できる。やるなら置換再判定と同じ substitutive な形で行い、部分置換が新しい語境界を作らないことをテストで固定すること。'
+created_at = 1786045822
+updated_at = 1786045822
+weight = 0.0
+issue_number = 213
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/213"

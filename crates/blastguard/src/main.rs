@@ -84,7 +84,70 @@ fn main() {
     hook::run_hook(run);
 }
 
+/// Parsed form of `blastguard retro`'s CLI arguments.
+///
+/// Split out of `run_retro` as a pure function (`Result` instead of
+/// `eprintln!` + `return 2`, no printing, no filesystem access) specifically
+/// so the flag-parsing logic — most notably "`--rule-id` alone implies
+/// `--list`" — is reachable from a unit test. `run_retro` was previously the
+/// only caller of this logic, and `main.rs` had no test module at all: that
+/// rule shipped with zero coverage, and a regression to the old "print the
+/// unfiltered table" behaviour would have kept the suite green.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct RetroArgs {
+    /// Last `--dir <path>` or resolved `--project <path>` seen, in the order
+    /// the flags were given (matches the original mutable-variable behaviour:
+    /// whichever of `--dir`/`--project` appears LAST wins).
+    dir: Option<std::path::PathBuf>,
+    /// Listing mode — already folded together with the `--rule-id`-implies-
+    /// `--list` rule below, so callers never need to re-derive it.
+    list: bool,
+    rule_filter: Option<String>,
+}
+
+fn parse_retro_args(rest: &[String]) -> Result<RetroArgs, String> {
+    let mut dir: Option<std::path::PathBuf> = None;
+    let mut list = false;
+    let mut rule_filter: Option<String> = None;
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--dir" => match it.next() {
+                Some(v) => dir = Some(std::path::PathBuf::from(v)),
+                None => return Err("blastguard retro: --dir needs a path".to_string()),
+            },
+            "--project" => match it.next() {
+                Some(v) => dir = retro::transcript_dir_for(std::path::Path::new(v)),
+                None => return Err("blastguard retro: --project needs a path".to_string()),
+            },
+            "--list" => list = true,
+            "--rule-id" => match it.next() {
+                Some(v) => rule_filter = Some(v.clone()),
+                None => return Err("blastguard retro: --rule-id needs a rule id".to_string()),
+            },
+            other => return Err(format!("blastguard retro: unknown argument `{other}`")),
+        }
+    }
+    // `--rule-id` only means something in listing mode. Accepting it alone and
+    // silently printing the UNFILTERED table would hand the reviewer a report
+    // that reads as narrowed to one rule when it is not — the same class of
+    // defect as a blank command field reading as "no command".
+    let list = list || rule_filter.is_some();
+    Ok(RetroArgs {
+        dir,
+        list,
+        rule_filter,
+    })
+}
+
 /// `blastguard retro` — review past gate interventions and what became of them.
+///
+/// `--list` switches from the per-rule count table to one row per
+/// intervention (gate, rule id, outcome, raw reason, recorded command); pair
+/// it with `--rule-id <id>` to narrow the listing to a single rule, e.g. to
+/// compare which specific interventions a fix made a rule stop raising
+/// (see [`blastguard::retro::render_list`]). `--rule-id` alone (no explicit
+/// `--list`) also switches to listing mode — see [`parse_retro_args`].
 ///
 /// # Exit status is a verdict, not a formality
 ///
@@ -93,31 +156,14 @@ fn main() {
 /// exit 0 printing an empty table conflates them — the same fail-open the
 /// report body refuses (see [`blastguard::retro`]).
 fn run_retro(rest: &[String]) -> i32 {
-    let mut dir: Option<std::path::PathBuf> = None;
-    let mut it = rest.iter();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--dir" => match it.next() {
-                Some(v) => dir = Some(std::path::PathBuf::from(v)),
-                None => {
-                    eprintln!("blastguard retro: --dir needs a path");
-                    return 2;
-                }
-            },
-            "--project" => match it.next() {
-                Some(v) => dir = retro::transcript_dir_for(std::path::Path::new(v)),
-                None => {
-                    eprintln!("blastguard retro: --project needs a path");
-                    return 2;
-                }
-            },
-            other => {
-                eprintln!("blastguard retro: unknown argument `{other}`");
-                return 2;
-            }
+    let args = match parse_retro_args(rest) {
+        Ok(a) => a,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return 2;
         }
-    }
-    let dir = match dir.or_else(|| {
+    };
+    let dir = match args.dir.or_else(|| {
         std::env::current_dir()
             .ok()
             .and_then(|c| retro::transcript_dir_for(&c))
@@ -131,7 +177,12 @@ fn run_retro(rest: &[String]) -> i32 {
         }
     };
     let report = retro::build_report(retro::scan_dir(&dir));
-    print!("{}", retro::render(&report));
+    let out = if args.list {
+        retro::render_list(&report, args.rule_filter.as_deref())
+    } else {
+        retro::render(&report)
+    };
+    print!("{out}");
     if report.is_undetermined() {
         eprintln!("(looked in {})", dir.display());
         return 2;
@@ -291,5 +342,71 @@ fn record_violation(input: &HookInput, reason: &str) {
     let cwd = input.cwd_or_current();
     if let Some(event) = event {
         let _ = overwatch::store::append_violation(&cwd, &event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rule_id_alone_implies_listing_mode() {
+        // Added after the original `retro --list` work landed, and shipped
+        // with zero coverage: `run_retro` is never called by any test and
+        // `main.rs` had no test module at all, so a regression to "print the
+        // unfiltered table when only --rule-id is given" would have kept the
+        // suite green. Reachable now only because the flag logic was pulled
+        // out of `run_retro` into `parse_retro_args`, a pure function with no
+        // I/O — `run_retro` itself still isn't under test (it prints to
+        // stdout/stderr and touches the transcript directory), and that gap
+        // is called out below rather than papered over.
+        let args =
+            parse_retro_args(&["--rule-id".to_string(), "some-rule".to_string()]).expect("parses");
+        assert!(args.list, "bare --rule-id must imply listing mode");
+        assert_eq!(args.rule_filter.as_deref(), Some("some-rule"));
+    }
+
+    #[test]
+    fn explicit_list_flag_still_works_without_rule_id() {
+        let args = parse_retro_args(&["--list".to_string()]).expect("parses");
+        assert!(args.list);
+        assert_eq!(args.rule_filter, None);
+    }
+
+    #[test]
+    fn neither_flag_leaves_table_mode() {
+        let args = parse_retro_args(&[]).expect("parses");
+        assert!(!args.list);
+    }
+
+    #[test]
+    fn rule_id_without_a_value_is_a_parse_error_not_a_panic() {
+        let err = parse_retro_args(&["--rule-id".to_string()]).unwrap_err();
+        assert!(err.contains("--rule-id needs a rule id"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_flag_is_rejected() {
+        let err = parse_retro_args(&["--bogus".to_string()]).unwrap_err();
+        assert!(err.contains("unknown argument"), "{err}");
+    }
+
+    #[test]
+    fn dir_and_rule_id_compose() {
+        // Guards against a refactor that accidentally drops --dir when
+        // --rule-id is also present (they are independent fields on
+        // `RetroArgs`, filled by different match arms in the same loop).
+        let args = parse_retro_args(&[
+            "--dir".to_string(),
+            "/tmp/some-transcripts".to_string(),
+            "--rule-id".to_string(),
+            "x".to_string(),
+        ])
+        .expect("parses");
+        assert!(args.list);
+        assert_eq!(
+            args.dir.as_deref(),
+            Some(std::path::Path::new("/tmp/some-transcripts"))
+        );
     }
 }

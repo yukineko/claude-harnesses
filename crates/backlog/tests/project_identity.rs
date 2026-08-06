@@ -385,16 +385,17 @@ fn list_sees_same_task_from_main_tree_cwd() {
 /// at A cannot notice that. Any change that renders emptiness uniformly
 /// therefore still fails here.
 ///
-/// What this control does NOT pin down (stated so the prose does not claim
-/// more than the code checks): the control checkout owns no store at all,
-/// whereas the broken checkout owns a store whose single task is filtered
-/// out. So a fix that keys on "the store was non-empty but the filter
-/// removed everything" would also pass, without ever consulting whether
-/// scope resolution succeeded. That is a strictly better outcome than
-/// today's silent `[]` and still satisfies (d), but it is a different
-/// discriminator than "undetermined"; asserting the latter specifically
-/// would need a third arm (a healthy checkout with a filtered-out task),
-/// which is out of scope for this test.
+/// A third arm (observation C, below) closes the gap described in the
+/// previous paragraph of this comment's earlier revision: a healthy,
+/// resolvable checkout whose store is non-empty but whose single task is
+/// legitimately filtered out (its `project` field does not match this
+/// checkout's own canonical path) is asserted `assert_eq!` against the
+/// SAME genuinely-empty control (observation B). This pins the
+/// discriminator to *resolvability*, not to "store present + filter
+/// removed everything": an implementation that instead keys on store
+/// presence would make observation C diverge from B (because C's store is
+/// non-empty) even though C is, observably, just as legitimately empty as
+/// B — and that divergence is exactly what the `assert_eq!` below catches.
 #[test]
 fn broken_git_link_does_not_silently_hide_an_existing_task() {
     assert!(
@@ -512,5 +513,97 @@ fn broken_git_link_does_not_silently_hide_an_existing_task() {
          undetermined scope (cwd={:?}): exit_code={} stdout={:?} stderr={}\n  \
          genuinely empty  (cwd={:?}): exit_code={} stdout={:?} stderr={}",
         broken_dir, list_code, list_out, list_err, empty_repo, empty_code, empty_out, empty_err
+    );
+
+    // ---- Observation C: resolvable scope, store present, but genuinely
+    // filtered to empty ----
+    //
+    // A HEALTHY (real `git init`, resolvable) checkout whose own store
+    // physically contains one task — proven via --all below — but whose
+    // recorded `project` field does NOT match this checkout's own canonical
+    // path, so the default project filter correctly, legitimately drops it.
+    // Unlike the broken checkout (observation A), resolution here succeeds;
+    // unlike the control (observation B), this checkout's store is
+    // non-empty. If a fix discriminates on "the store is non-empty but the
+    // filter removed everything" instead of on resolvability, this arm
+    // would diverge from B even though it is, observably, just as
+    // legitimately empty as B — which is exactly what the assert_eq! below
+    // is designed to catch.
+    let filtered_repo = temp_dir("healthy-filtered-repo");
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&filtered_repo)
+            .status()
+            .unwrap()
+            .success(),
+        "git init failed for the healthy filtered-empty repo"
+    );
+
+    // Seed a REAL task in this checkout's own store, recorded under some
+    // OTHER canonical project path (deliberately different from
+    // `filtered_repo` itself), so the default project filter has a genuine,
+    // resolvable reason to drop it.
+    let filtered_repo_canonical = filtered_repo.canonicalize().unwrap();
+    let other_project = filtered_repo_canonical
+        .parent()
+        .unwrap()
+        .join("some-other-canonical-root-for-observation-c");
+    seed_tasks_toml(
+        &filtered_repo.join(".backlog"),
+        "c0ffee00",
+        "Filtered-out task",
+        &other_project.to_string_lossy(),
+    );
+
+    // Anti-vacuity: prove the task genuinely, physically exists in this
+    // checkout's own store (mirrors the anti-vacuity check for observation
+    // A above) — `--all` drops the project filter entirely and must see it.
+    let (c_all_code, c_all_out, c_all_err) = run_in(&["list", "--all"], "", &home, &filtered_repo);
+    assert_eq!(
+        c_all_code, 0,
+        "list --all must succeed for the healthy filtered-empty repo; stderr: {}",
+        c_all_err
+    );
+    assert!(
+        c_all_out.contains("Filtered-out task"),
+        "anti-vacuity check failed: the seeded task for observation C must be \
+         physically present in this checkout's own store (via --all, which \
+         bypasses the project filter under test), got:\n{}",
+        c_all_out
+    );
+
+    let (filtered_code, filtered_out, filtered_err) =
+        run_in(&["list", "--json"], "", &home, &filtered_repo);
+    assert_eq!(
+        filtered_code, 0,
+        "list must succeed for the healthy filtered-empty repo; stderr: {}",
+        filtered_err
+    );
+
+    let filtered_empty_observation = (filtered_code, filtered_out.trim().to_string());
+
+    assert_eq!(
+        filtered_empty_observation,
+        genuinely_empty_observation,
+        "a RESOLVABLE project scope whose store contains a task that is \
+         legitimately filtered out (its recorded `project` does not match \
+         this checkout's own canonical path) must be observationally \
+         indistinguishable from a genuinely empty queue — both are \
+         \"correctly empty\", not \"cannot determine\". If this fails, the \
+         implementation is discriminating on STORE PRESENCE (store non-empty \
+         but filter removed everything) rather than on resolvability, which \
+         would incorrectly also treat this legitimately-empty case as an \
+         undetermined-scope error.\n  \
+         healthy filtered-empty (cwd={:?}): exit_code={} stdout={:?} stderr={}\n  \
+         genuinely empty        (cwd={:?}): exit_code={} stdout={:?} stderr={}",
+        filtered_repo,
+        filtered_code,
+        filtered_out,
+        filtered_err,
+        empty_repo,
+        empty_code,
+        empty_out,
+        empty_err
     );
 }

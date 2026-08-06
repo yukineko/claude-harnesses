@@ -166,6 +166,20 @@ done
 # --- locate the overwatch binary (canary planning/gating) --------------------
 # Only needed for --canary. Prefer an explicit override, then PATH, then a
 # freshly built target binary. Deterministic core lives in overwatch.
+#
+# The built-binary lookup ASKS CARGO where it writes instead of assuming
+# $REPO/target: CARGO_TARGET_DIR or a `target-dir` override in
+# .cargo/config.toml relocates it, and this repo sets the latter, so the old
+# $REPO/target guess missed on every host that honours it. That miss was not
+# cosmetic — GATE crates REQUIRE --canary, and --canary refuses to run without
+# this binary, so the whole rollout was unreachable without hand-passing
+# OVERWATCH_BIN (measured 2026-08-06 on windows-x86_64: cargo writes to
+# C:/tmp/condukt-build per .cargo/config.toml, $REPO/target/release/overwatch
+# does not exist, and `--plugin overwatch --canary --dry-run` exited 1).
+# Same technique as scripts/build-plugin-bin.sh. When cargo is absent or
+# metadata fails we keep the historical $REPO/target guess; an unresolvable
+# binary still returns 1, so the caller refuses the staged rollout rather than
+# proceeding ungated.
 resolve_overwatch_bin() {
   if [ -n "${OVERWATCH_BIN:-}" ] && [ -x "${OVERWATCH_BIN}" ]; then
     echo "$OVERWATCH_BIN"; return 0
@@ -173,7 +187,32 @@ resolve_overwatch_bin() {
   if command -v overwatch >/dev/null 2>&1; then
     command -v overwatch; return 0
   fi
-  for cand in "$REPO/target/release/overwatch" "$REPO/target/debug/overwatch"; do
+  local tdir=""
+  if command -v cargo >/dev/null 2>&1; then
+    # The value is a JSON string, so a Windows path arrives with its
+    # separators DOUBLED (`C:\\Users\\…`); the second sed decodes them back.
+    # MSYS/Git Bash happens to collapse `\\` to `\` when it resolves a path, so
+    # this is not what makes the lookup work here — but it keeps the resolved
+    # path honest in the `using overwatch binary:` log line, and it stops the
+    # doubling from reaching a host that does not collapse.
+    tdir="$(cd "$REPO" && cargo metadata --no-deps --format-version=1 2>/dev/null \
+            | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' \
+            | sed 's/\\\\/\\/g')"
+  fi
+  tdir="${tdir:-$REPO/target}"
+  # `.exe` is spelled out rather than left to [ -x ]: MSYS/Git Bash resolves it
+  # only INCIDENTALLY (see rebuild-plugins.sh's EXT note), so a host without
+  # that fallback would miss a perfectly good Windows build. It is listed AFTER
+  # the plain name on purpose — a WSL/Linux shell sharing one target dir with
+  # Windows builds is a real configuration here, and an .exe-first order made
+  # that shell select the un-runnable Windows binary (measured 2026-08-06:
+  # `[ -x .../release/overwatch.exe ]` HIT from WSL). Plain-first keeps every
+  # host on its own build, and Windows still resolves via the incidental
+  # suffix fallback, with the explicit .exe entry as the backstop.
+  for cand in "$tdir/release/overwatch" "$tdir/release/overwatch.exe" \
+              "$tdir/debug/overwatch" "$tdir/debug/overwatch.exe" \
+              "$REPO/target/release/overwatch" "$REPO/target/release/overwatch.exe" \
+              "$REPO/target/debug/overwatch" "$REPO/target/debug/overwatch.exe"; do
     [ -x "$cand" ] && { echo "$cand"; return 0; }
   done
   return 1

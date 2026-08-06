@@ -36,9 +36,36 @@ tags = [
     "p1",
 ]
 status = "pending"
-notes = "実測 2026-08-06、測定点 a4b24edc、rollout 直後: ~/.claude/plugins/cache/yukineko/donegate/0.1.7/bin/donegate status を叩くと、0.1.24 で入れたばかりの新挙動 (trust: trusted (inherited -- this is a worktree of ...)) が出力された。0.1.7 は superseded な version dir であり、live session が掴んでいるため prune 対象外として保持されている (rollout ログ: 83 superseded dir(s) remain, all held by a live session)。つまり version dir 名が、そこで実行されるコードを一意に特定していない可能性がある。考えられる読みは2つで、どちらかは未判定: (a) rebuild-plugins.sh が既存の全 version dir へバイナリを swap しており、0.1.7 に pin された稼働セッションが黙って新コードを実行している。これが本当なら version pin の契約が破れており、canary rollback (前の version dir へ re-point する設計) も実効しないことになる ため GATE crate の安全機構に直結する。(b) bin/<name> が単一の共有バイナリへ解決する shim にすぎず、version dir はアセットのみを持つ。この場合 pin の意味はもともとアセット限定であり、想定内。判定方法: 各 version dir の bin/<name> の実体 (シンボリックリンクか実ファイルか、inode、mtime) を測り、rebuild-plugins.sh が書き込む対象を読むこと。あわせて canary の rollback 経路が実際に旧コードへ戻せるかを、フォールト注入で観測すること (rollback したのに新コードが動くなら、それは rollback したふりである)。注意: check-plugin-rollout.py は rc=0 (41 plugin が file-for-file 一致) を返しており、この検証はこの現象を捕まえていない。"
+notes = """
+実測 2026-08-06、測定点 a4b24edc、rollout 直後: ~/.claude/plugins/cache/yukineko/donegate/0.1.7/bin/donegate status を叩くと、0.1.24 で入れたばかりの新挙動 (trust: trusted (inherited -- this is a worktree of ...)) が出力された。0.1.7 は superseded な version dir であり、live session が掴んでいるため prune 対象外として保持されている (rollout ログ: 83 superseded dir(s) remain, all held by a live session)。つまり version dir 名が、そこで実行されるコードを一意に特定していない可能性がある。考えられる読みは2つで、どちらかは未判定: (a) rebuild-plugins.sh が既存の全 version dir へバイナリを swap しており、0.1.7 に pin された稼働セッションが黙って新コードを実行している。これが本当なら version pin の契約が破れており、canary rollback (前の version dir へ re-point する設計) も実効しないことになる ため GATE crate の安全機構に直結する。(b) bin/<name> が単一の共有バイナリへ解決する shim にすぎず、version dir はアセットのみを持つ。この場合 pin の意味はもともとアセット限定であり、想定内。判定方法: 各 version dir の bin/<name> の実体 (シンボリックリンクか実ファイルか、inode、mtime) を測り、rebuild-plugins.sh が書き込む対象を読むこと。あわせて canary の rollback 経路が実際に旧コードへ戻せるかを、フォールト注入で観測すること (rollback したのに新コードが動くなら、それは rollback したふりである)。注意: check-plugin-rollout.py は rc=0 (41 plugin が file-for-file 一致) を返しており、この検証はこの現象を捕まえていない。
+
+
+--- 2026-08-07 追記: 読み (a) が観測で確定した。疑いではない ---
+
+観測手順と値（測定点 b53ef5b2、backlog を --plugin backlog で反映した直後）:
+1. shasum -a 256 を 0.2.13 と 0.2.16 の bin/backlog-darwin-arm64 に対して実行したところ、
+   両者は 1d75986d76f9ef125a9c71150a40605f9a1b52c183232757ad27b79eaa645815 で完全一致した。
+   これは「ビルドが再現可能か」の主張ではなく、ディスク上の 2 ファイルが同一かどうかの同一性比較である。
+2. ls -la ~/.claude/plugins/cache/yukineko/backlog/*/bin/backlog-darwin-arm64 は 4 つの version dir
+   （0.1.6 / 0.2.12 / 0.2.13 / 0.2.16）すべてが size 1238512、mtime Aug 7 03:41 を返した。
+   Aug 7 03:41 は本セッションの rollout の実行時刻である。
+3. したがって rollout は superseded な version dir のバイナリも上書きしている。
+   0.1.6 に pin された稼働セッションは 0.2.16 のコードを実行している。
+
+含意（本チケットの起票時に「これが本当なら」と書かれていた側が成立した）:
+- version dir 名は、そこで実行されるコードを一意に特定していない。version pin の契約は破れている。
+- canary rollback は「前の version dir へ re-point する」設計なので、re-point しても同じ新バイナリを
+  実行することになり、ロールバックしたふりになる。GATE crate の安全機構に直結する。
+- check-plugin-rollout.py は rc=0（41 plugin が file-for-file 一致）を返しており、この現象を
+  捕まえていない。それどころか「全 version dir が同一である」ことが一致条件を満たす方向に働く。
+
+未確認のまま残していること:
+- rebuild-plugins.sh / sync-plugin-assets.sh のどちらが superseded dir へ書いているかは特定していない。
+- backlog 以外の plugin でも同じかは測っていない（backlog 1 本の観測である）。
+- rollback を実際にフォールト注入で試して「旧コードへ戻らない」ことは観測していない。
+  上の 1-3 は「同一バイナリが置かれている」ことの観測であり、rollback 経路そのものの観測ではない。"""
 created_at = 1786023356
-updated_at = 1786023356
+updated_at = 1786043241
 weight = 0.0
 issue_number = 190
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/190"

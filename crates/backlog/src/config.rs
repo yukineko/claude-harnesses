@@ -46,35 +46,49 @@ impl Config {
         cfg
     }
 
-    /// The store for one project: `<repo root>/.backlog/tasks.toml`.
+    /// The store for one checkout: `<repo root>/.backlog/tasks.toml`.
     ///
     /// backlog is cross-project, so a single global file merged every
     /// project's queue into one path that no repo could review, commit, or
-    /// ship with the work it describes. Resolving the store from the task's
-    /// OWN project keeps each queue inside the tree it talks about, where it
-    /// is an ordinary tracked file.
+    /// ship with the work it describes. Resolving the store per repo keeps
+    /// each queue inside the tree it talks about, where it is an ordinary
+    /// tracked file.
+    ///
+    /// `start` is the path the ancestor scan begins from — it is NOT a
+    /// "which project's queue do I want to read" selector. Callers must pass
+    /// a path belonging to their OWN checkout, or `None` to mean the cwd:
+    ///   - the CLI (`main.rs`) always passes `None`. It deliberately does not
+    ///     forward `--project`: a worktree running `add --project <main tree>`
+    ///     would otherwise resolve the store to the main tree and write that
+    ///     tree's tracked `tasks.toml`, which CLAUDE.md §8 forbids. Selecting
+    ///     WHICH tasks you see is `project` identity's job (`store::list`'s
+    ///     filter), and is a separate axis from WHERE the file lives.
+    ///   - the SessionStart hook passes `Some(root)` derived from the hook's
+    ///     own cwd, which is the same cwd anchoring, spelled explicitly.
     ///
     /// Resolution order, and what each step means:
     ///   1. `store_dir` pinned in `config.toml` — an operator who named a
-    ///      location keeps it. Per-project resolution is the DEFAULT, not an
+    ///      location keeps it. Per-repo resolution is the DEFAULT, not an
     ///      override.
-    ///   2. the repo root containing `project` (or the cwd when the
-    ///      subcommand carries no project) — `<root>/.backlog`.
+    ///   2. the repo root containing `start` (or the cwd when `start` is
+    ///      `None`) — `<root>/.backlog`.
     ///   3. no repo root found — the legacy `~/.backlog`.
     ///
     /// Step 3 is deliberately not an error. A path with no repo root cannot be
     /// resolved into a project store, and inventing one would scatter tasks
     /// into whatever directory the caller happened to stand in; the legacy
     /// path at least leaves them where every existing reader already looks.
-    pub fn tasks_path_for(&self, project: Option<&str>) -> PathBuf {
-        self.store_dir_for(project).join("tasks.toml")
+    pub fn tasks_path_for(&self, start: Option<&str>) -> PathBuf {
+        self.store_dir_for(start).join("tasks.toml")
     }
 
-    pub fn store_dir_for(&self, project: Option<&str>) -> PathBuf {
+    /// See `tasks_path_for` for what `start` means and why it is not a
+    /// "which project's queue" selector.
+    pub fn store_dir_for(&self, start: Option<&str>) -> PathBuf {
         if self.store_dir_pinned {
             return self.store_dir.clone();
         }
-        let start = project
+        let start = start
             .map(PathBuf::from)
             .or_else(|| std::env::current_dir().ok());
         match start.as_deref().and_then(repo_root) {

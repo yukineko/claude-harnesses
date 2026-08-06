@@ -1,4 +1,4 @@
-last_synced = "7a2ec031263a138eb01d1637f2d3327ee388fd8a"
+last_synced = "ecd8b9478b8a1a6dcafa87236a9ef793608e706a"
 
 [entries.".gitattributes"]
 key = ".gitattributes"
@@ -1169,7 +1169,7 @@ key = "crates/condukt/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "changed"
-last_ref = "be81466a298b9d24e44abea4e7653004062c057d"
+last_ref = "ecd8b9478b8a1a6dcafa87236a9ef793608e706a"
 impl_files = ["crates/condukt/src/main.rs"]
 test_files = []
 client_refs = []
@@ -1208,7 +1208,7 @@ key = "crates/condukt/src/policy.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "changed"
-last_ref = "a7f1d2417ad46056af1697fbb0a27308c64f13f5"
+last_ref = "ecd8b9478b8a1a6dcafa87236a9ef793608e706a"
 impl_files = ["crates/condukt/src/policy.rs"]
 test_files = []
 client_refs = []
@@ -1371,7 +1371,7 @@ key = "crates/condukt/tests/autonomy_invariant.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "changed"
-last_ref = "a7f1d2417ad46056af1697fbb0a27308c64f13f5"
+last_ref = "ecd8b9478b8a1a6dcafa87236a9ef793608e706a"
 impl_files = []
 test_files = ["crates/condukt/tests/autonomy_invariant.rs"]
 client_refs = []

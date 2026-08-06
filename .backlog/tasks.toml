@@ -221,3 +221,55 @@ updated_at = 1786024586
 weight = 0.0
 issue_number = 199
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/199"
+
+[[task]]
+id = "79ecf4dc"
+title = "backlog canonicalize_project の write 側は判定不能でも未解決ラベルで保存を続ける"
+project = "/Users/yuki/src/harness"
+tags = ["1"]
+status = "pending"
+notes = "run-20260807-005024-18629 の残課題。store.rs の canonicalize_project は canonical_project_id が Undetermined のとき stderr へ診断を出したうえで resolve_repo_root へフォールバックし write を継続する。add をブロックすると finding 自体が失われるため degrade は正当化されたが、保存されたタスクに判定不能だった痕跡が残らないため別 checkout の既定 filtered list に現れない可能性がある。task に marker を持たせるか list 側で未解決ラベルを別扱いするかを検討する。"
+created_at = 1786040386
+updated_at = 1786040386
+weight = 0.0
+issue_number = 206
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/206"
+
+[[task]]
+id = "ca186c31"
+title = "backlog 軸C オラクルの対照は store 有無で判別しており判定不能性そのものに固定されていない"
+project = "/Users/yuki/src/harness"
+tags = ["2"]
+status = "pending"
+notes = "tests/project_identity.rs の broken_git_link_does_not_silently_hide_an_existing_task は、健全 repo かつ store 無しの対照と、壊れた .git リンクかつ store 有りの側を比較する。したがって store の有無だけを判別子にする修正でも緑になり、判定不能性を一度も参照しない。独立 verifier 2名がこの限界を確認し doc comment にも明記済み。第3の腕 (健全 repo かつ store 有りでフィルタ落ち) を足すと判別子を resolvability に固定できる。"
+created_at = 1786040415
+updated_at = 1786040415
+weight = 0.0
+issue_number = 207
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/207"
+
+[[task]]
+id = "29a4bcc3"
+title = "backlog next は list と違い cwd 由来の既定 project スコープを持たない"
+project = "/Users/yuki/src/harness"
+tags = ["2"]
+status = "pending"
+notes = "run-20260807-005024-18629 で軸C を list に入れた際に気づいた。main.rs の Next ハンドラは project を Option のまま store::next へ渡すだけで、list のような cwd 解決の既定スコープを持たない。したがって軸C の判定不能経路も通らない。意図的な設計なのか未対応なのかを確認する。意図的ならその旨を docstring に明記する。"
+created_at = 1786040416
+updated_at = 1786040416
+weight = 0.0
+issue_number = 208
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/208"
+
+[[task]]
+id = "bc25f8f4"
+title = "condukt の verifier subagent が無応答のまま完了通知を出さない事象"
+project = "/Users/yuki/src/harness"
+tags = ["2"]
+status = "pending"
+notes = "run-20260807-005024-18629 で observed。opus verifier の1体が出力ファイル 357226 バイトで約20分間まったく変化せず、完了通知も来ず、SendMessage での催促にも応答しなかった。沈黙は判定ではないので新しい verifier を立て直して判定を得た (CLAUDE.md 第3節)。condukt 側に verifier の無応答を検出する仕組みがない場合、沈黙が pass として扱われる経路が生まれうるので確認する。skill には consensus vote と adversarial adjudicate の expected による欠落検出はあるが、単一 verifier 経路にはない。"
+created_at = 1786040426
+updated_at = 1786040426
+weight = 0.0
+issue_number = 209
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/209"

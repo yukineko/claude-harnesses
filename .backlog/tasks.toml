@@ -8944,3 +8944,112 @@ updated_at = 1786049187
 weight = 0.0
 issue_number = 223
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/223"
+
+[[task]]
+id = "58022668"
+title = "flow に drain オプションを新設し、実行スコープを「1つのタスクと関連するタスク」に定義する"
+project = "/Users/yuki/src/harness"
+tags = ["p1"]
+status = "pending"
+notes = """
+2026-08-07 の会話でユーザーが確定させた設計。着手前にここへ落とす。
+
+## 何を作るか
+
+/flow に drain オプションを足す。**別コマンドではなくオプション**（ユーザー選択）。
+無印 /flow の既定挙動は変えない。
+
+別コマンドを採らなかった理由: driver register / next --claim / claim-task /
+sink（done と fail）/ release-task / heartbeat という並行性の要を二重に持つことになり、
+片方だけ直る乖離バグの温床になるため。実測前例として marketplace claim の
+over-serialize が同じ型で起きている。
+
+## 実行スコープの定義（2026-08-07 にユーザーが上書きした）
+
+**「1つのタスクと、それに関連するタスクの解決まで」**。
+
+- 関連する残件は **すべて** 処理する。
+- 無関係な残件は **実行しない**。
+
+当初案の「backlog が空になるまで回す」は**破棄**された。pending が 208 件あり、
+毎回それを丸ごと抱え込む形になるため。
+
+## 失敗時の扱い（ユーザー選択）
+
+item が失敗したら backlog fail で落として次の item へ進む。連続失敗で止めない。
+
+根拠: fail も pending を減らすので、関連クラスタは必ず単調減少し無限ループにならない。
+これは autoflow が v0.1.16 で回数上限を progress ベースへ置き換えたのと同じ理屈。
+最後に失敗一覧をまとめて報告する。
+
+## 維持する停止条件（緩めない）
+
+- 予算超過（budgetguard の早期脱出はどのモードでも不変）
+- stall（既定 1800 秒）
+- ユーザー中断
+- condukt circuit check のうち **failure-streak だけ** drain では解除する。
+  budget と stall は維持する。
+
+## 未決（着手前に決める）
+
+「関連」をどう判定するか。散文で LLM が決めると CLAUDE.md 第6節が禁じる自己申告に戻る。
+決定論の判定手段が要るので別 ticket af239090 に切り出した。**それが決まるまで実装に入らない。**
+
+## 前提
+
+condukt 0.7.124 / flow 0.2.5 で入れた policy answer の approval クランプ
+（権限認可は常設許諾・判断要求は Ask を残す）と組み合わせて動く。
+drain 中に残る human stop は pivot / worker blocked / untestable のみ。
+"""
+created_at = 1786049824
+updated_at = 1786049826
+weight = 0.0
+issue_number = 224
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/224"
+
+[[task]]
+id = "af239090"
+title = "backlog に決定論的な関連タスク判定を持たせる（drain のスコープ境界を散文で決めない）"
+project = "/Users/yuki/src/harness"
+tags = ["p1"]
+status = "pending"
+notes = """
+2026-08-07、flow の drain スコープ設計から派生。親は 58022668。
+
+drain の実行スコープが「1つのタスクと関連するタスク」に決まったが、backlog には
+**「関連」を決定論的に判定する手段が無い**。LLM の散文判断で境界を決めると、
+どこまで実行したかがその場の判断に依存し、CLAUDE.md 第6節
+（規範の遵守を実装者の自己申告に依存させない）に反する。
+
+## 使えそうな決定論シグナル
+
+1. **notes 内の task id 相互参照** — この repo では「0ab44b59 から派生」の形で実際に
+   使われている。双方向に辿れば推移閉包が取れる。最も強い。
+2. **tag の一致** — docs/backlog-tag-taxonomy.md の規約タグ。中程度。
+3. **title と notes の字句重なり** — 弱い。閾値の置き方次第で無関係を巻き込む。
+
+## 判定不能の倒し方（CLAUDE.md 第3節）
+
+関連かどうか**判定できない item は「関連ではない」側に倒す**（実行しない）。
+スコープ拡大のほうが非可逆なので、除外が制限側である。
+
+ただし**黙って落とさない**。「関連未判定のため対象外」として逐語で列挙し報告する。
+沈黙は許容される degrade ではない（第3節・3b1eb24 の statusline と同型）。
+
+## 成果物の形（案）
+
+backlog に related サブコマンドを足し、JSON を返す。seed の id、related の配列
+（id と判定根拠の signal つき）、undetermined の配列。
+読み取り失敗時に**空配列の clean を返さない** — 非0終了と undetermined で返す。
+
+## テストの持ち主（CLAUDE.md 第2節 a）
+
+判定ロジックを書いた主体がそのテストを書かない。利害関係のない Agent に書かせる。
+特に「undetermined を related に含めない」アームは、実装が空アームでもコンパイルが
+通るので**それ専用の behavioural test が要る**（forwarding arms have zero kill rate と同型）。
+"""
+created_at = 1786049825
+updated_at = 1786049826
+weight = 0.0
+issue_number = 225
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/225"

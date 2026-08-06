@@ -8584,6 +8584,7 @@ updated_at = 1786047843
 weight = 0.0
 issue_number = 219
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/219"
+
 [[task]]
 id = "801d0bda"
 title = "cargo test --workspace が 3 回中 1 回、テスト結果を出さずに 1 target を落とす (再現せず・原因未特定)"
@@ -8861,6 +8862,7 @@ updated_at = 1786048739
 weight = 0.0
 issue_number = 221
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/221"
+
 [[task]]
 id = "5742e1d5"
 title = "specguard spec-map の自己追尾ドリフトは fast-forward merge で止まる（ea6f27b1 の観測結果）"
@@ -8873,3 +8875,40 @@ updated_at = 1786047274
 weight = 0.0
 issue_number = 217
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/217"
+
+[[task]]
+id = "45f14716"
+title = "condukt bin テストで 8 回中 1 回の fail を観測（テスト名を取り損ねた・未同定）"
+project = "/Users/yuki/src/harness"
+tags = ["p2"]
+status = "pending"
+notes = """
+観測 2026-08-07、測定点 ecd8b947（main を worktree へ merge した直後）、
+コマンド `cargo test -p condukt`。
+
+- 1 回目: `test result: FAILED. 728 passed; 1 failed`（bin ターゲット）。
+- 直後の再実行と、その後の連続 5 回、いずれも `729 passed; 0 failed`。計 7 連続 green。
+
+**どのテストが落ちたかは記録できていない。** 失敗した実行の出力を捨ててしまい、
+再実行時には既に green だったため `failures:` セクションを回収できなかった。
+したがってこれは「既知の timing flake が再現した」ではなく**未同定の 1 件**である
+（CLAUDE.md 第2節: 判断で埋めない。同定していないものを同定したと書かない）。
+
+状況証拠: 失敗時に他セッションの cargo test が並走していたかは未確認。事後に
+`ps ax | grep -c '[c]argo test'` は 0 だったが、これは事後の観測であって
+失敗時点の観測ではない。別の Claude Code セッション（pid 8421/8422）は稼働中だった。
+固定 /tmp fixture を共有する2つの cargo test が互いを壊す既知パターンに該当しうるが、
+これも推測であって観測ではない。
+
+関連: condukt run run-20260721-220121 が
+「condukt worktree::git_fast_subprocess のタイミング依存フレーク調査」を進行中。
+同一事象の可能性はあるが、テスト名が無いので同定はできない。
+
+次にやること: 失敗を再現できたら**出力をファイルへ落としてから**判定する
+（`cargo test -p condukt --bin condukt > out.txt 2>&1` のように）。
+ループで回して初回失敗時に停止し、`failures:` を保全するのが最小の手順。"""
+created_at = 1786049058
+updated_at = 1786049059
+weight = 0.0
+issue_number = 222
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/222"

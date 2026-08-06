@@ -1112,15 +1112,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Guards tests that mutate the process-global `CONTEXT_GOVERNOR_STATE_DIR`
-    /// env var so they never race each other (harness-core tests run in
-    /// parallel by default).
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // Tests that mutate the process-global `CONTEXT_GOVERNOR_STATE_DIR` hold
+    // crate::test_env::lock(). It is crate-wide on purpose: env vars are
+    // per-process, so a lock private to this module would let a test in
+    // another module set_var underneath these ones.
 
     #[test]
     fn context_ledger_base_only_honors_absolute_state_dir() {
         const VAR: &str = "CONTEXT_GOVERNOR_STATE_DIR";
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env::lock();
         let prev = std::env::var(VAR).ok();
 
         // Relative path → must be ignored, falling back to the home-based default.

@@ -244,3 +244,16 @@ updated_at = 1786045041
 weight = 0.0
 issue_number = 212
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/212"
+
+[[task]]
+id = "2fb05132"
+title = 'blastguard: 展開 head が語の一部のとき ("$D/bin/tool") は解決を諦めている — 実測9件の残余'
+project = "/Users/yuki/src/harness"
+tags = ["p2"]
+status = "pending"
+notes = '0.2.49 の再判定計測 (2026-08-07、測定点 e306331c、.scratch/rejudge_corpus.py と .scratch/gap_70_vs_45.py) で、旧見積り70に対し実際に解決したのは49 (45 allow + 4 別 ask)。差 21 の内訳: export/declare 10 (0.2.48 が塞いだ stale-literal 経路なので正しく拒否)、glued-prefix 9、前置代入 1、条件付き 1。glued-prefix は D=/path; "$D/bin/donegate" status のような形で、referenced_variable_name が『参照の周りにテキストが貼り付いた語』を意図的に None にしているため。原理的には D が literal なら結合して解決できる。やるなら置換再判定と同じ substitutive な形で行い、部分置換が新しい語境界を作らないことをテストで固定すること。'
+created_at = 1786045822
+updated_at = 1786045822
+weight = 0.0
+issue_number = 213
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/213"

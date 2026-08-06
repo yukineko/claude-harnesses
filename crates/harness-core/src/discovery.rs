@@ -523,6 +523,11 @@ mod tests {
 
     #[test]
     fn record_path_shares_one_store_across_subdirs_of_one_repo() {
+        // record_path() resolves HOME (via config::base_dir("compass")), and
+        // the assertion below resolves it TWICE — once per call. A concurrent
+        // set_var("HOME", ..) between them gives the two sides different
+        // prefixes and fails a test that is about project keying, not HOME.
+        let _guard = crate::test_env::lock();
         // Two distinct cwds under the SAME git repo root (the repo root itself
         // and a nested subdir) must map to the SAME record_path — that's the
         // canonical-root keying that lets sibling worktrees/subdirs dedup.

@@ -51,20 +51,24 @@ pub fn env_bool(key: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    // home() reads the process-wide HOME env var, so tests that mutate it must
-    // not run concurrently with each other (mirrors beacon::config's precedent).
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // home() reads the process-wide HOME env var. The guard is
+    // crate::test_env::lock() — crate-wide, not module-private: a lock here
+    // would serialize only config's own cases, and HOME is read by trust too.
 
     #[test]
     fn base_dir_is_dotprefixed_under_home() {
+        // Readers need the guard too, not just mutators: both sides of this
+        // assertion resolve HOME independently (once inside base_dir, once in
+        // home()), so a concurrent set_var between them fails a test that is
+        // otherwise a tautology.
+        let _guard = crate::test_env::lock();
         assert_eq!(base_dir("ctxrot"), home().join(".ctxrot"));
     }
 
     #[test]
     fn home_prefers_home_env_var_over_dirs_home_dir() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env::lock();
         let prev = std::env::var_os("HOME");
 
         std::env::set_var("HOME", "/tmp/harness-core-test-home");
@@ -84,6 +88,9 @@ mod tests {
 
     #[test]
     fn expand_tilde_handles_home_forms() {
+        // Same reason as base_dir_is_dotprefixed_under_home: two independent
+        // HOME resolutions per assertion.
+        let _guard = crate::test_env::lock();
         assert_eq!(expand_tilde("~"), home());
         assert_eq!(expand_tilde("~/store"), home().join("store"));
         assert_eq!(expand_tilde("/abs/path"), PathBuf::from("/abs/path"));
@@ -91,6 +98,14 @@ mod tests {
 
     #[test]
     fn env_parsers_are_lenient() {
+        // Distinct keys are not a reason to skip the guard. `setenv` may
+        // reallocate the whole `environ` block, so a write here can corrupt a
+        // concurrent `getenv` for an *unrelated* key -- which is exactly what
+        // the guarded HOME tests are doing. (That hazard is why edition 2024
+        // makes `std::env::set_var` unsafe.) The invariant this lock buys is
+        // "every env mutation in this crate's tests holds it"; one exemption
+        // makes the invariant unenforceable and ungreppable.
+        let _guard = crate::test_env::lock();
         std::env::set_var("HARNESS_TEST_U64", " 42 ");
         std::env::set_var("HARNESS_TEST_BOOL", "off");
         assert_eq!(env_u64("HARNESS_TEST_U64"), Some(42));

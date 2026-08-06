@@ -8584,3 +8584,196 @@ updated_at = 1786047843
 weight = 0.0
 issue_number = 219
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/219"
+[[task]]
+id = "801d0bda"
+title = "cargo test --workspace が 3 回中 1 回、テスト結果を出さずに 1 target を落とす (再現せず・原因未特定)"
+project = "/Users/yuki/src/harness"
+tags = [
+    "test",
+    "flaky",
+    "harness-core",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-08-06、worktree session-b9a78b46、HEAD 90385f84 (= origin/main)。
+
+run1: `cargo build --workspace --all-targets` (rc=0) の直後に `cargo test --workspace --no-fail-fast` を実行 → 出力末尾に `error: 1 target failed:`。
+run2: 同じコマンドを単独で実行 → rc=0、`test result: FAILED` も `failures:` も `panicked at` も 0 件。
+
+判定不能として扱う根拠と、そこから読める形:
+run1 の出力には `test result: FAILED` が 1 行も無い。この行は当時のフィルタ `^(error|test result|failures:|---- )` に一致するので、出ていれば残っていたはず。したがって「テストが赤くなった」のではなく、**どのテストバイナリも結果行を出さないまま target が落ちた** — プロセスの異常終了 (abort/シグナル) か、結果を出す前の停止が疑われる。直前の `--all-targets` build は rc=0 なのでリンク失敗ではない。
+
+target 名は当時のフィルタが落としており不明 (`error: 1 target failed:` の次行はインデントされていて一致しなかった)。これは計測側の不備であり、次に測るときはフィルタを掛けない。
+
+疑うべき差分: run1 のテスト実行中に、別プロセスとして `backlog driver register` と `backlog add`、および `cargo fmt --all -- --check` を走らせていた。共有状態 (driver レジストリ / backlog ストア / target ディレクトリ) を読むテストが非 hermetic である可能性がある。ただしこれは仮説であって観測ではない。
+
+完了条件: (1) 落ちた target を特定する (フィルタ無しで反復実行し、`error: 1 target failed:` の次行を読む)。(2) 特定できたら、共有状態への依存を除いて hermetic にする。(3) 反復実行しても再現しない場合は、その事実と試行回数を記録して閉じる — 「再現しなかった」を「問題なし」と書かない。"""
+created_at = 1786025050
+updated_at = 1786025050
+weight = 0.0
+issue_number = 200
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/200"
+
+[[task]]
+id = "8836b370"
+title = "harness-core の trust テスト 2 本が HOME を復元せず、プロセスの残りに削除済み tempdir を指す HOME を残す"
+project = "/Users/yuki/src/harness"
+tags = [
+    "test",
+    "harness-core",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-08-06、crates/harness-core/src/trust.rs。
+
+`trust_roundtrip_and_env_override` (:266 付近) と `resolve_inherits_trust_from_the_main_worktree_but_only_when_it_is_trusted` (:330 付近) はどちらも `std::env::set_var("HOME", home.path())` を打つが、テスト末尾で元の HOME に戻していない。`home` は `tempfile::tempdir()` なのでテスト終了時に削除される。したがって以後、同じプロセス内で `harness_core::config::home()` を読むテストは **存在しないディレクトリ**を HOME として観測する。
+
+比較対象: 同じ crate の `config::tests::home_prefers_home_env_var_over_dirs_home_dir` は `var_os` で退避し、末尾で `set_var`/`remove_var` により復元している。作法は crate 内に既にあり、trust の 2 本だけが従っていない。
+
+今回の flake 修正 (crate 全体で 1 本の `crate::test_env::lock()` に寄せた変更) は **順序**を直列化するので、この漏れは順序競合としては顕在化しなくなった。しかし「テストが後続へ汚染を残す」こと自体は残っており、別の潜在的 flake の種である。今回の変更のスコープ外として意図的に分離した (元のタスクを塞いでいたのは競合であって復元漏れではないため)。
+
+完了条件: 両テストが HOME を退避・復元すること。panic 経路でも戻るよう、スコープガード (Drop 実装) か、復元を担う小さなヘルパを config::tests の作法と共通化する形が望ましい。"""
+created_at = 1786025495
+updated_at = 1786025495
+weight = 0.0
+issue_number = 201
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/201"
+
+[[task]]
+id = "3ccedd83"
+title = "test_env::lock の再入をコンパイル時/実行時に検出する機構がない"
+project = "/Users/yuki/src/harness"
+tags = [
+    "test-infra",
+    "p2",
+]
+status = "pending"
+notes = "harness-core の crate-wide test_env::lock は std Mutex なので再入すると panic ではなく deadlock する。症状は「名前のある失敗」ではなく「テストバイナリが終わらない」なので、CI では stuck / unrelated と読まれる。現状の防止策は lib.rs の doc comment の 1 文だけで、CLAUDE.md 第6節が禁じる「気をつける」に置いた対策そのもの。案: thread_local の保持フラグを立て、同一スレッドからの 2 回目の lock() で assert! を落として deadlock を named panic に変える。実装本体より、事前に RED を観測する方法（fix 前は当該テストが hang する＝通常の RED として観測できない）を先に決める必要がある。"
+created_at = 1786026351
+updated_at = 1786026351
+weight = 0.0
+issue_number = 202
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/202"
+
+[[task]]
+id = "b71c72a7"
+title = "テストが固定 /tmp パスを使うため、2 本の cargo test が同時に走ると互いを壊す"
+project = "/Users/yuki/src/harness"
+tags = [
+    "test-infra",
+    "worktree-hygiene",
+    "p1",
+]
+status = "pending"
+notes = '実測 2026-08-06、測定点 90385f84 + harness-core 未コミット差分。cargo test --workspace を 2 プロセス同時に走らせたところ、fugu-router の store::tests::import_episodes_deduplicates が summary.read で left 4 / right 2 を出した。原因は固定パス std::env::temp_dir().join("fugu-router-import-ep-test") を両プロセスが共有し、双方が src.jsonl へ append したこと。同様の固定パスは import_episodes_dry_run_writes_nothing と dedup_episodes_removes_duplicates_preserves_order にもある。donegate/tests/integration.rs:13 の isolated_dir は pid を混ぜているのでプロセス間は分離されるが、同一プロセス内で同じ tag を複数テストが使うと remove_dir_all と create_dir_all が競合し AlreadyExists で落ちる（run1 で観測）。ctxrot の violation_emission_tests::emit_violation_records_a_ctxrot_event も 0 対 1 で落ちた（要調査）。これは CLAUDE.md 第8節が並行 worktree セッションを義務づけていることと直接衝突する: 別セッションが別 worktree で cargo test を回すだけで、こちらのスイートが壊れる（target/ は分かれても /tmp は分かれない）。修正案は固定パスをやめて tempfile::tempdir へ寄せること。'
+created_at = 1786027340
+updated_at = 1786027340
+weight = 0.0
+issue_number = 203
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/203"
+
+[[task]]
+id = "594f4e56"
+title = "blastguard resolve_expanded_command_word: 条件付き実行の代入 (&& / ||) を Literal に落とさない"
+project = "/Users/yuki/src/harness"
+tags = ["p1"]
+status = "pending"
+notes = ""
+created_at = 1786034097
+updated_at = 1786034097
+weight = 0.0
+issue_number = 205
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/205"
+
+[[task]]
+id = "5700ba25"
+title = "blastguard: 行外で定義された shell 関数の呼び出しが展開 head resolver の残存 fail-open"
+project = "/Users/yuki/src/harness"
+tags = ["p1"]
+status = "pending"
+notes = "0.2.48 の第二著者監査で報告され、意図的に pin していない残存。BIN=/bin/echo; myfunc; $BIN -rf /path で myfunc が関数なら BIN を再束縛できるが、外部コマンドとテキスト上区別できない。外部コマンドは親シェルの変数を触れないので、分離には detect.rs が持たない知識が要る。CommandWordOrigin::AssignedButUnknowable の docstring に非カバーとして明記済み。allow を assert するテストは無い。"
+created_at = 1786045039
+updated_at = 1786045039
+weight = 0.0
+issue_number = 210
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/210"
+
+[[task]]
+id = "bbacb00d"
+title = 'blastguard: 展開 head resolver の UNVERIFIED 2件（rewritten.join(" ") の意味破壊・MAX_SHELL_DEPTH 相互作用）'
+project = "/Users/yuki/src/harness"
+tags = ["p2"]
+status = "pending"
+notes = '0.2.48 の第二著者が到達できなかった＝棄却ではない（CLAUDE.md §6）。(1) 置換再判定は rewritten.join(" ") で行を作り直すため、空白・埋め込みクォート・区切りを含む値で意味が壊れる/生まれる可能性。探索したが Ask->Allow は見つからず、空間は尽くしていない。(2) このアーム経由で MAX_SHELL_DEPTH を使い切る行は構成していない。'
+created_at = 1786045040
+updated_at = 1786045040
+weight = 0.0
+issue_number = 211
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/211"
+
+[[task]]
+id = "3e0a8bdf"
+title = "blastguard: 配列代入 BIN=(/bin/rm) を要素0として解決するか、一様 Ask のままにするか"
+project = "/Users/yuki/src/harness"
+tags = ["p3"]
+status = "pending"
+notes = '0.2.48 で deny -> ask に移動した唯一の非制限方向の変化。旧 deny は偶然（basename("(/bin/rm") がたまたま rm）で、空白入り綴りは修正前から ask だった＝既に不整合。要素0抽出には [1]= 添字と空配列のモデル化が要る。現状は一様 Ask（非対話では Deny に硬化）。'
+created_at = 1786045041
+updated_at = 1786045041
+weight = 0.0
+issue_number = 212
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/212"
+
+[[task]]
+id = "2fb05132"
+title = 'blastguard: 展開 head が語の一部のとき ("$D/bin/tool") は解決を諦めている — 実測9件の残余'
+project = "/Users/yuki/src/harness"
+tags = ["p2"]
+status = "pending"
+notes = '0.2.49 の再判定計測 (2026-08-07、測定点 e306331c、.scratch/rejudge_corpus.py と .scratch/gap_70_vs_45.py) で、旧見積り70に対し実際に解決したのは49 (45 allow + 4 別 ask)。差 21 の内訳: export/declare 10 (0.2.48 が塞いだ stale-literal 経路なので正しく拒否)、glued-prefix 9、前置代入 1、条件付き 1。glued-prefix は D=/path; "$D/bin/donegate" status のような形で、referenced_variable_name が『参照の周りにテキストが貼り付いた語』を意図的に None にしているため。原理的には D が literal なら結合して解決できる。やるなら置換再判定と同じ substitutive な形で行い、部分置換が新しい語境界を作らないことをテストで固定すること。'
+created_at = 1786045822
+updated_at = 1786045822
+weight = 0.0
+issue_number = 213
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/213"
+
+[[task]]
+id = "5b29d11e"
+title = "『取得失敗が空集合に潰れて allow』横断パターンの一括是正 (compass の次の一手)"
+project = "/Users/yuki/src/harness"
+tags = ["p1"]
+status = "pending"
+notes = "2026-08-07 の compass 再オリエンテーションで人間が裁定した次の ONE 右サイズの一手。DoD9 の完了条件の軸（是正完了）を実際に動かす唯一の候補。同一 shape は reviewgate P1（diff 取得失敗が空 diff = 変更なしへ潰れ無診断で allow）と propguard F-2 で2 crate 確認済み。手順: (1) shape を機械検出可能な述語として書き下す（走査/diff/subprocess の取得失敗が空コレクションへ落ち、その空が下流で対象なし=合格と読まれる形）、(2) 監査済み 7 crate を横断で当て逐語引用つきで列挙（辿れなかったは UNVERIFIED であって不在の証明ではない）、(3) 各ヒットを利害のない別 agent が fault injection で RED 先行観測してから是正 (F->P)、(4) 是正後に同じ述語を再実行して単調減少を観測。述語が 0 件を返したときは clean ではなく『この述語では見つからなかった』と報告すること。"
+created_at = 1786046693
+updated_at = 1786046693
+weight = 0.0
+issue_number = 214
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/214"
+
+[[task]]
+id = "ea6f27b1"
+title = "specguard の spec-map 同期が main の作業ツリーを常時 dirty にする (§8 と構造的に衝突)"
+project = "/Users/yuki/src/harness"
+tags = ["p2"]
+status = "pending"
+notes = "post-merge フックが .specguard/spec-map.toml の last_synced を main の新 HEAD へ書き換えるため、merge のたびに main が dirty になる。CLAUDE.md §8 は main で非 merge commit を禁じているので、この差分を main で commit できない。worktree で commit すると last_synced が worktree HEAD ではなく main HEAD を指す値になり、merge 後にまた drift する（自分の尻尾を追う）。観測 2026-08-07、測定点 b204c4ed。git log に chore(specguard): sync spec-map last_synced to X という commit が複数あり、いずれも main 上で打たれている＝§8 の例外運用が常態化している。"
+created_at = 1786046798
+updated_at = 1786046798
+weight = 0.0
+issue_number = 215
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/215"
+
+[[task]]
+id = "5742e1d5"
+title = "specguard spec-map の自己追尾ドリフトは fast-forward merge で止まる（ea6f27b1 の観測結果）"
+project = "/Users/yuki/src/harness"
+tags = []
+status = "pending"
+notes = "観測 2026-08-07、測定点 main 1b35d662 -> 31f1fe99。.githooks/post-merge は先頭で HEAD^@ の親数を数え、2 未満なら exit 0 する（ファイル冒頭の注記: fast-forward merge はコミットを作らないので certify 対象が無い）。specguard map sync はその early-exit の後段にあるため ff merge では走らない。実測: dirty だった spec-map をワークツリーのブランチへ commit し main へ --ff-only で取り込んだところ git status は clean のままで再ドリフトしなかった。--no-ff で取り込むと post-merge が走り last_synced が新しい merge commit を指して再び dirty になる（これが ea6f27b1 の追尾ループ）。したがって回避策は存在する: spec-map 同期コミットは ff で取り込む。ただし ff できない状況（main が先に進んでいる）では成立しないので恒久策は別途要る。last_synced が常に 1 コミット古くなる点は残る。"
+created_at = 1786047274
+updated_at = 1786047274
+weight = 0.0
+issue_number = 217
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/217"

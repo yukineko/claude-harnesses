@@ -386,3 +386,100 @@ updated_at = 1786046798
 weight = 0.0
 issue_number = 215
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/215"
+
+[[task]]
+id = "0ab44b59"
+title = "harness-core 0.2.6 が main に不在: 42 plugin の配布済みバイナリが未マージ branch 由来"
+project = "/Users/yuki/src/harness"
+tags = [
+    "deploy-verify",
+    "p1",
+]
+status = "done"
+notes = """
+実測 2026-08-07（測定点 1b35d662、コマンド python3 scripts/check-plugin-rollout.py）:
+42 件が stale と報告される。全件が同一形で「配布済みバイナリは harness-core 0.2.6 を
+リンクしているが、ソースツリーは 0.2.5」。
+
+原因の観測: harness-core 0.2.6 は main に存在しない。git log --all で追うと
+branch session-b9a78b46（main 未マージ、11 コミット）にのみ存在する。つまり別セッションが
+main へ到達していないコードからビルドしたバイナリを ~/.claude/plugins/cache へ配布した。
+overwatch status によれば当該セッションは condukt run を複数抱えて稼働中（pid 45640 /
+25737 / 64104、いずれも live）。
+
+これは rollout の失敗ではなく、配布物の provenance が main の履歴に無いという整合の欠落。
+ゲートは正しく検出しており、赤を消すために fleet 全体を再配布してはならない（実行すると
+稼働中セッションの成果物を 0.2.5 リンク版へ巻き戻し、そのセッションが 0.2.6 の挙動を
+前提に測定中なら測定が無効になる）。2026-08-07 のユーザー裁定で「打たずに起票」を選択。
+
+なお blastguard は stale リストに含まれない。provenance は 93a524d5（main の祖先）、
+harness_core 0.2.5 でソースと一致しており、0.2.50 は canary 付きで配布済み。
+
+次に取るべき手順（この起票の done 条件の候補）:
+1. session-b9a78b46 の保有セッションが生きているうちに、当該 branch を main へ統合するか
+   破棄するかを決める。決めるのは人間（CLAUDE.md 第8節の統合は main の作業ツリーで行う）。
+2. 統合したなら harness-core が 0.2.6 になり 42 件は自然に解消するので、
+   check-plugin-rollout.py を再実行して 0 件を観測する。
+3. 破棄するなら、0.2.6 リンクの配布物は「ソースに存在しないコード」なので
+   scripts/rollout-plugins.sh で main 由来へ再配布し直す必要がある。
+
+派生した論点: 配布物の provenance が未マージ branch を指す状態を、rollout ゲート自身が
+「stale」ではなく「orphan provenance」として区別できるか。現状は version 比較のみなので、
+巻き戻しが正解なケースと危険なケースが同じ赤に潰れている。
+
+【2026-08-07 解決 — 起票時の前提は消滅した】branch session-b9a78b46 は PR #220 として
+main へマージされた（main の 7a2ec031 "Merge pull request #220 from yukineko/session-b9a78b46"）。
+したがって起票時に選択肢として挙げた「統合するか破棄するか」は統合で決着している。
+
+再実測 2026-08-07（測定点 7a2ec031、コマンド python3 scripts/check-plugin-rollout.py）:
+stale は 42 件から 2 件へ減った。しかも残る 2 件は種類が違う。
+
+  - backlog: source=0.2.19 registry=0.2.16（rollout 未実行）
+  - blastguard: 配布済みバイナリが harness-core 0.2.5 をリンク、ソースツリーは 0.2.6
+
+harness-core は main で 0.2.6 になっており、**向きが反転した**。起票時は
+「配布物のほうが新しく、ソースに存在しないコードを配っている」（orphan provenance）
+だったが、今は「ソースのほうが新しく配布が追いついていない」という通常の未 rollout 状態である。
+前者は巻き戻しが危険、後者は rollout が正解 — 同じ赤に見えて処方が逆であり、
+これが下の派生論点の実例そのものになった。
+
+残る 2 件は通常の rollout で解消する。ただしこのセッションでは rollout を実行していない
+（ユーザーの 2026-08-07 の裁定「打たずに起票」は 42 件時点の fleet 全体再配布に対するもので、
+向きが反転した現在は前提が変わっている。実行するかはユーザーの判断に返す）。"""
+created_at = 1786047233
+updated_at = 1786048738
+weight = 0.0
+issue_number = 216
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/216"
+
+[[task]]
+id = "e8aad6e6"
+title = "rollout ゲートが stale と orphan provenance を区別できない（巻き戻しが正解のケースと危険なケースが同じ赤に潰れる）"
+project = "/Users/yuki/src/harness"
+tags = [
+    "deploy-verify",
+    "p2",
+]
+status = "pending"
+notes = """
+0ab44b59 から派生。check-plugin-rollout.py は配布済みバイナリがリンクする
+harness-core version とソースツリーの version を比較するだけなので、次の 2 つを同じ赤として報告する:
+
+  (A) ソースのほうが新しい = 配布が追いついていない → rollout が正解。
+  (B) 配布物のほうが新しい = ソースに存在しないコードを配っている（orphan provenance）
+      → rollout は巻き戻しであり、稼働中セッションの成果物を破壊しうる。危険。
+
+2026-08-07 に両方が実際に観測された。同日午前は (B) が 42 件（配布 0.2.6 / ソース 0.2.5、
+0.2.6 は未マージ branch session-b9a78b46 にのみ存在）で、ユーザーは「打たずに起票」を選んだ。
+PR #220 のマージ後は (A) が 2 件（ソース 0.2.6 / 配布 0.2.5）になり、処方が逆転した。
+**赤の見た目は同じで、正しい対処が正反対である。**
+
+やること: version の大小関係を判定に入れ、(A) と (B) を別のメッセージ・別の推奨アクションとして
+報告する。(B) では「rollout は巻き戻しになる」と明示し、その version がソース履歴に存在するか
+（未マージ branch 由来か）も併せて報告する。判定不能（version を読めない等）は
+CLAUDE.md 第3節どおり制限側に倒し、clean を名乗らせない。"""
+created_at = 1786048738
+updated_at = 1786048739
+weight = 0.0
+issue_number = 221
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/221"

@@ -381,7 +381,7 @@
     {
       "name": "flow",
       "description": "Unified source→executor driver for Claude Code: a /flow skill that binds the task SOURCES (compass next-move + backlog queue) to the EXECUTOR (condukt, model-routed by fugu-router) in one HOTL loop — gate on compass freshness, pick the highest-priority task, hand it to condukt, verify, mark done, repeat. A SessionStart hook proposes /flow every session when open work exists (propose-then-confirm). Subscription-native (skill + hook + bundled Rust binary, no API key). v0.1.12: Step 3-2 now documents a default fork-wrapping bias for /condukt invocations (exception: xs-class single-file tasks where the user wants interactive visibility) and a manual `fugu-router record --delegation fork|inline` logging convention, feeding a new open hypothesis measuring fork-vs-inline cost/duration. v0.1.13: the manual delegation-recording convention now includes a self-check step — after `fugu-router record --delegation`, call `fugu-router audit-recent --class flow-delegation --within <secs>` and retry/warn on a miss, instead of trusting the record call landed. v0.1.14: Step 3-4's per-cycle heartbeat now also refreshes the backlog lock itself (`backlog lock heartbeat --session-id <id>`), not just the condukt claim registry — closing a gap where a long-running loop could lose its cross-session backlog lock to a stale-TTL reap even though it was still actively working (fail-soft if `backlog` is absent/fails). v0.2.1: Step 3-3's backlog add convention now also references docs/backlog-tag-taxonomy.md for cross-project work-category tags.",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "category": "orchestration",
       "keywords": [
         "flow",

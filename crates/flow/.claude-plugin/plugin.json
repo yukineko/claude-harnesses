@@ -1,6 +1,6 @@
 {
   "name": "flow",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Unified source→executor driver for Claude Code: a /flow skill that binds the task SOURCES (compass next-move + backlog queue) to the EXECUTOR (condukt, model-routed by fugu-router) in one HOTL loop — gate on compass freshness, pick the highest-priority task, hand it to condukt, verify, mark done, repeat. A SessionStart hook proposes /flow every session when open work exists (propose-then-confirm). Subscription-native (skill + hook + bundled Rust binary, no API key).",
   "author": {
     "name": "yukineko"

@@ -1537,6 +1537,543 @@ fn split_segments_paren_aware(cmd: &str) -> Vec<String> {
     segs
 }
 
+// ---------------------------------------------------------------------------
+// Reading an expansion-valued COMMAND WORD back off the same command line.
+//
+// NOTHING IN THIS SECTION IS WIRED INTO A DECISION YET. Every item below is
+// `#[cfg(test)]`, so it is compiled only for the test binary and no arm of
+// `detect_bash`/`analyze_segment`/`unknown_wrapper_ask`/`analyze_shell_payload`
+// calls it; the shipped gate behaves exactly as it did before this section
+// existed. Removing the `#[cfg(test)]` attributes and threading the segment
+// index through is a separate, later change (see the module note on
+// `resolve_expanded_command_word`).
+// ---------------------------------------------------------------------------
+
+/// What the TEXT of a command line says about the program that a command word
+/// which is itself an expansion (`$BIN`, `${BIN}`, `"$BIN"`) will run.
+///
+/// Three answers, not two — the same reason `Decision::Ask` exists (see
+/// `model.rs`): an `Option<String>` would collapse "nothing on this line
+/// assigns that name" and "something assigns it, but to text I cannot read"
+/// into one `None`, and a caller holding that `None` cannot tell "I looked and
+/// there is nothing" from "I looked and could not read it". Only
+/// [`CommandWordOrigin::Literal`] carries a program name; the other two say, in
+/// two different ways, that the text does not name a program.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CommandWordOrigin {
+    /// (1) An assignment that reaches this use gives the name this literal
+    /// text; the text contains no expansion of its own; and the line's own
+    /// structure says that assignment RAN.
+    ///
+    /// That last clause is why an assignment guarded by `&&`/`||` does not
+    /// arrive here. An earlier revision reported one as a literal and recorded,
+    /// as a KNOWN LIMIT, that the variant therefore meant "IF the assignment
+    /// ran, the program is this text". That conditional is the whole problem:
+    /// it makes the only permissive answer this enum has depend on an exit
+    /// status that no amount of reading the line recovers. The condition is now
+    /// checked instead of documented ([`assignment_execution_is_unconditional`]),
+    /// so this variant means what it appears to mean — the program is this text.
+    Literal(String),
+    /// (2) No assignment that reaches this use gives the name a value — either
+    /// nothing on the line assigns it before the use in a position whose
+    /// assignment survives, or the word is not a plain single-variable
+    /// reference at all (`$(which foo)`, `${BIN:-x}`, `pre$BIN`, `$1`), so
+    /// there is no name to look up.
+    NoReachingAssignment,
+    /// (3) An assignment DOES reach this use, but the text still does not name
+    /// a program. Every way that happens:
+    ///   * its execution is guarded by a `&&`/`||` earlier on the line, so
+    ///     whether it ran is an exit status the text does not contain (see
+    ///     [`assignment_execution_is_unconditional`]). This case differs from
+    ///     the others below in that the VALUE may be perfectly readable; the
+    ///     line simply names two programs — the assigned one and whatever the
+    ///     environment already held — and choosing between them would be a
+    ///     guess. It is reported here rather than as
+    ///     [`CommandWordOrigin::NoReachingAssignment`] because both are
+    ///     restrictive but only this one is true: the assignment is not absent
+    ///     from the line, and a caller told "there is nothing" would state
+    ///     something the text contradicts.
+    ///   * the right-hand side contains an expansion of its own
+    ///     (`BIN=$(which foo)`, `` BIN=`which foo` ``);
+    ///   * its quoting does not balance, or it contains a backslash, neither of
+    ///     which [`unquote_literal_value`] resolves to one literal;
+    ///   * it is empty (`X=`), for which the word expands to nothing and some
+    ///     LATER token becomes the program — a token this function was not
+    ///     asked about.
+    AssignedButUnknowable,
+}
+
+/// The separator that FOLLOWS a segment. [`split_segments`] discards it, and
+/// for variable scope that loss is fatal: the separators do not all behave the
+/// same way, so "an assignment appears earlier on the line" is not the same
+/// question as "an assignment reaches this use".
+///
+/// Each variant below was verified against `bash -c` rather than assumed; the
+/// observed output is quoted on the variant.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SegmentSep {
+    /// `;` or a newline: what follows runs in the SAME shell and runs
+    /// UNCONDITIONALLY.
+    /// `bash -c 'RM=/bin/echo; $RM reached'` prints `reached`, and the newline
+    /// spelling does too.
+    Sequential,
+    /// `&&` or `||`: what follows also runs in the same shell — `bash -c 'true
+    /// && RM=/bin/echo; $RM reached'` prints `reached`, and so does `false ||
+    /// RM=/bin/echo; $RM reached` — but WHETHER it runs is decided by the exit
+    /// status of what precedes it, which is not in the text.
+    /// `bash -c 'false && RM=/bin/echo; echo "word=[$RM]"'` prints `word=[]`:
+    /// the same characters as the passing case, the same shell, and no
+    /// assignment.
+    ///
+    /// A separate variant, not a note on [`SegmentSep::Sequential`], because
+    /// the two answer different questions and the answers differ. For SCOPE
+    /// they are alike ([`assignments_reach_parent_shell`] accepts both); for
+    /// EXECUTION they are not ([`assignment_execution_is_unconditional`]
+    /// rejects this one). Folding them together is what let a guarded
+    /// assignment be reported as a literal program name.
+    Conditional,
+    /// `|`: every stage of a pipeline runs in its own subshell, so an
+    /// assignment in a stage does not survive into the parent shell.
+    /// `bash -c 'RM=/bin/echo | echo "word=[$RM]"'` prints `word=[]`.
+    Pipe,
+    /// `&`: the segment before it is backgrounded into its own subshell, so its
+    /// assignment does not survive either.
+    /// `bash -c 'RM=/bin/echo & echo "word=[$RM]"'` prints `word=[]`.
+    Background,
+    /// Nothing follows: this is the last segment of the line.
+    EndOfLine,
+}
+
+/// One [`split_segments`] segment plus the separator that followed it.
+#[cfg(test)]
+struct SeparatedSegment {
+    text: String,
+    sep_after: SegmentSep,
+}
+
+/// [`split_segments`] with the separator KEPT.
+///
+/// Deliberately a second function rather than a change to [`split_segments`]:
+/// that function's signature and output are depended on by many decision arms,
+/// and none of them wants the separator. The scanning loop here is the same one
+/// (same quote tracking, same two-char operators, same char-not-byte
+/// iteration), so the `text` fields are equal, element for element, to
+/// `split_segments`' output — which is what makes a segment INDEX taken from
+/// one usable in the other. `separated_segmentation_agrees_with_split_segments`
+/// pins that correspondence.
+#[cfg(test)]
+fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment> {
+    let chars: Vec<char> = cmd.chars().collect();
+    let mut segs: Vec<SeparatedSegment> = Vec::new();
+    let mut cur = String::new();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+            cur.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '"' && !in_s {
+            in_d = !in_d;
+            cur.push(c);
+            i += 1;
+            continue;
+        }
+        if !in_s && !in_d {
+            let two_char_conditional = (c == '&' && chars.get(i + 1) == Some(&'&'))
+                || (c == '|' && chars.get(i + 1) == Some(&'|'));
+            if two_char_conditional {
+                segs.push(SeparatedSegment {
+                    text: std::mem::take(&mut cur),
+                    sep_after: SegmentSep::Conditional,
+                });
+                i += 2;
+                continue;
+            }
+            let one_char = match c {
+                ';' | '\n' => Some(SegmentSep::Sequential),
+                '|' => Some(SegmentSep::Pipe),
+                '&' => Some(SegmentSep::Background),
+                _ => None,
+            };
+            if let Some(sep) = one_char {
+                segs.push(SeparatedSegment {
+                    text: std::mem::take(&mut cur),
+                    sep_after: sep,
+                });
+                i += 1;
+                continue;
+            }
+        }
+        cur.push(c);
+        i += 1;
+    }
+    segs.push(SeparatedSegment {
+        text: cur,
+        sep_after: SegmentSep::EndOfLine,
+    });
+    segs
+}
+
+/// True only when segment `idx` is executed by the parent shell itself, so an
+/// assignment standing alone in it is still set for every later segment.
+///
+/// Both subshell shapes are excluded, and both were measured (see
+/// [`SegmentSep`]): a segment that is a pipeline stage — whether because a `|`
+/// follows it or because a `|` precedes it — and a segment that a trailing `&`
+/// backgrounds.
+///
+/// This is a question about SCOPE only — "if this assignment runs, does its
+/// value outlive its segment" — so [`SegmentSep::Conditional`] counts as
+/// reaching, exactly like [`SegmentSep::Sequential`]: `bash -c 'true &&
+/// RM=/bin/echo; $RM reached'` prints `reached`. Whether the assignment runs at
+/// all is the separate question [`assignment_execution_is_unconditional`]
+/// answers, and a caller that wants a literal must pass BOTH.
+///
+/// The false side is the restrictive one here: "not the parent shell" makes the
+/// caller ignore the segment's assignments, which can only preserve an Ask. An
+/// out-of-range index therefore answers false rather than panicking.
+#[cfg(test)]
+fn assignments_reach_parent_shell(segs: &[SeparatedSegment], idx: usize) -> bool {
+    let Some(seg) = segs.get(idx) else {
+        return false;
+    };
+    if matches!(seg.sep_after, SegmentSep::Pipe | SegmentSep::Background) {
+        return false;
+    }
+    if idx > 0 && matches!(segs[idx - 1].sep_after, SegmentSep::Pipe) {
+        return false;
+    }
+    true
+}
+
+/// True only when the TEXT alone guarantees that segment `idx` runs at all.
+///
+/// `&&` and `||` make what follows them depend on the exit status of what
+/// precedes them, and an exit status is a RUN-TIME fact that reading the line
+/// cannot recover. For an assignment that means the line describes two
+/// different programs — the assigned one if the guard let it run, whatever the
+/// environment already held if it did not — so a resolver that ignored this
+/// would put its single permissive answer on an unobservable.
+///
+/// WHICH POSITION IS TESTED MATTERS, and it is the assignment's, not the use's.
+/// In the corpus's dominant shape
+///
+/// ```text
+/// BIN=/path/to/tool
+/// cd "$SB" && "$BIN" guard main-tree --json
+/// ```
+///
+/// the `&&` stands between the assignment and the use. It decides whether the
+/// COMMAND runs, which the caller is free not to care about: if that command
+/// runs at all, its program is the one `BIN` was unconditionally given. Testing
+/// the use's separator instead would refuse this shape — 70 of the 115 measured
+/// interventions, i.e. every one this function was written to resolve.
+///
+/// DELIBERATELY COARSE, stated because it costs resolutions a sharper rule
+/// would keep: this asks whether a conditional separator appears ANYWHERE
+/// before `idx`, not whether the nearest and-or list still encloses it. In
+/// `a && b; BIN=x` the `;` ends the and-or list, so the shell really does run
+/// `BIN=x` on both branches, and this still answers false. Tracking where each
+/// and-or list ends would need real grammar, not a flat separator scan, and the
+/// error direction of guessing wrong there is permissive. So the coarse rule
+/// stands: it forgoes a resolution, and never invents one.
+///
+/// KNOWN LIMIT, in the same direction as everything else this scan cannot see:
+/// `&&`/`||` are not the only way execution becomes conditional. A newline-
+/// formatted compound command (`if foo`, newline, `then`, newline, `BIN=x`,
+/// newline, `fi`) puts a pure assignment segment under a condition this
+/// function does not model, and answers true for it. The `;`-formatted
+/// spellings are already excluded upstream, by the pure-assignment-list rule in
+/// [`resolve_expanded_command_word`] (`then BIN=x` is not an assignment list),
+/// but the newline spellings are not. Nothing in this module is wired into a
+/// decision yet, so this costs no gate anything today; it must be closed before
+/// [`CommandWordOrigin::Literal`] is allowed to suppress an Ask.
+#[cfg(test)]
+fn assignment_execution_is_unconditional(segs: &[SeparatedSegment], idx: usize) -> bool {
+    // `take` rather than a slice: an out-of-range `idx` then scans the whole
+    // line instead of panicking, which is also the restrictive direction.
+    !segs
+        .iter()
+        .take(idx)
+        .any(|s| matches!(s.sep_after, SegmentSep::Conditional))
+}
+
+/// Split a segment into words on whitespace that is OUTSIDE quotes, backticks
+/// and `(…)`, keeping those characters in the word.
+///
+/// `split_whitespace` cannot be used for this, and neither can a quote-only
+/// scan. Both break a word that contains a space inside a construct:
+///   * `BIN="/a b/tool"` → `BIN="/a` + `b/tool"` under `split_whitespace`;
+///   * `BIN=$(which foo)` → `BIN=$(which` + `foo)` under a quote-only scan,
+///     since parentheses are not quotes.
+///
+/// In each case the segment stops looking like a pure assignment list, and the
+/// caller then ignores an assignment that really is there. That is restrictive,
+/// not permissive — but it answers `NoReachingAssignment` for a name the line
+/// visibly DOES assign, which is the wrong one of the two restrictive answers.
+#[cfg(test)]
+fn quote_aware_words(seg: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let (mut in_s, mut in_d, mut in_backtick) = (false, false, false);
+    let mut paren_depth: u32 = 0;
+    let mut chars = seg.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' && !in_s {
+            // Keep BOTH characters: the escape is not interpreted here, it only
+            // stops the escaped character from ending the word or toggling a
+            // quote. `unquote_literal_value` refuses any value containing one.
+            cur.push(c);
+            if let Some(next) = chars.next() {
+                cur.push(next);
+            }
+            continue;
+        }
+        if c == '\'' && !in_d && !in_backtick {
+            in_s = !in_s;
+            cur.push(c);
+            continue;
+        }
+        if c == '"' && !in_s && !in_backtick {
+            in_d = !in_d;
+            cur.push(c);
+            continue;
+        }
+        if c == '`' && !in_s {
+            in_backtick = !in_backtick;
+            cur.push(c);
+            continue;
+        }
+        if !in_s && !in_d && !in_backtick {
+            if c == '(' {
+                paren_depth += 1;
+                cur.push(c);
+                continue;
+            }
+            if c == ')' {
+                paren_depth = paren_depth.saturating_sub(1);
+                cur.push(c);
+                continue;
+            }
+            if c.is_whitespace() && paren_depth == 0 {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+                continue;
+            }
+        }
+        cur.push(c);
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// The literal text a quoted right-hand side stands for, or `None` when the
+/// text does not determine one.
+///
+/// Refuses (returns `None` for):
+///   * any value containing a backslash. Backslash means three different things
+///     depending on context — `X=a\b` is `ab`, `X="a\b"` is `a\b`, `X='a\b'` is
+///     `a\b` — and modelling three rules to gain a rare case is a bad trade for
+///     a function whose `Some` is the only permissive answer. This costs a
+///     resolution it could have made; it never invents one.
+///   * unbalanced quoting, which the shell would not run as written anyway.
+#[cfg(test)]
+fn unquote_literal_value(raw: &str) -> Option<String> {
+    if raw.contains('\\') {
+        return None;
+    }
+    let mut out = String::new();
+    let (mut in_s, mut in_d) = (false, false);
+    for c in raw.chars() {
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+            continue;
+        }
+        if c == '"' && !in_s {
+            in_d = !in_d;
+            continue;
+        }
+        out.push(c);
+    }
+    if in_s || in_d {
+        return None;
+    }
+    Some(out)
+}
+
+/// True for a name a shell would accept on the left of `=`.
+#[cfg(test)]
+fn is_shell_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The variable name a command word REFERS to, when the word is a plain single
+/// reference and nothing else.
+///
+/// Accepts `$NAME`, `${NAME}` and the double-quoted forms `"$NAME"` /
+/// `"${NAME}"`, which expand identically.
+///
+/// Returns `None` — never a name — for everything else, including:
+///   * a backslash-escaped dollar (`\$FOO`, `"\$FOO"`). This agrees with
+///     [`has_unresolvable_expansion`]'s own escape handling, where `\` makes the
+///     next character literal, so `\$FOO` is a literal dollar and not a
+///     reference at all. There is no separate backslash check below because
+///     none is needed: a `\` before the `$` fails the prefix match, and a `\`
+///     anywhere in the name fails [`is_shell_identifier`]. (Measured — adding
+///     an early `word.contains('\\')` return changes no test in this section.)
+///   * a single-quoted word (`'$FOO'`), which the shell does not expand.
+///   * command substitution (`$(…)`, backticks), expansion modifiers
+///     (`${BIN:-x}`), positional/special parameters (`$1`, `$@`), and any word
+///     with text glued around the reference (`pre$BIN`, `$A$B`) — in each case
+///     the value is either not a variable or not just a variable.
+#[cfg(test)]
+fn referenced_variable_name(word: &str) -> Option<String> {
+    let inner = if word.len() >= 2 && word.starts_with('"') && word.ends_with('"') {
+        let mid = &word[1..word.len() - 1];
+        if mid.contains('"') {
+            return None;
+        }
+        mid
+    } else {
+        word
+    };
+    let name = match inner.strip_prefix("${") {
+        Some(braced) => braced.strip_suffix('}')?,
+        None => inner.strip_prefix('$')?,
+    };
+    if is_shell_identifier(name) {
+        Some(name.to_string())
+    } else {
+        None
+    }
+}
+
+/// Answer, for a command word that [`has_unresolvable_expansion`] flagged,
+/// which of [`CommandWordOrigin`]'s three things the command line's own text
+/// says.
+///
+/// `seg_idx` is the index of `word`'s segment in `split_segments(cmd)`, and
+/// `word` is the RAW token (quotes included), for the same reason
+/// `unresolvable_command_word` compares the raw token: one level of quoting is
+/// stripped elsewhere and `"$CMD"` must still read as a reference.
+///
+/// An assignment counts only when ALL of the following hold, each of which was
+/// measured against `bash -c` rather than assumed:
+///
+///   * it is in a segment STRICTLY BEFORE `seg_idx`. A same-segment assignment
+///     is a command PREFIX, and the shell expands the word before applying the
+///     prefix: `bash -c 'RM=/bin/echo $RM prefixtest'` reports
+///     `bash: prefixtest: command not found`, i.e. `$RM` expanded to the empty
+///     string and never to `/bin/echo`; with an earlier `RM=/bin/cat` in scope,
+///     `RM=/bin/echo $RM prefix2` runs `cat`, the OLD value.
+///   * its segment is executed by the parent shell
+///     ([`assignments_reach_parent_shell`]).
+///   * its segment is a pure assignment list — every word in it is a
+///     `NAME=value`. A `NAME=value` in front of a COMMAND is transient:
+///     `bash -c 'RM=/bin/echo true; echo "[$RM]"'` prints `[]`, and `/bin/sh`
+///     agrees. Reading such a prefix as a lasting assignment would be exactly
+///     the permissive error this function exists to avoid.
+///
+/// The LAST such assignment wins, since each later one overwrites the earlier.
+///
+/// One further condition applies to that winner alone, and it is about
+/// EXECUTION rather than scope: no `&&`/`||` may stand before it
+/// ([`assignment_execution_is_unconditional`]). A guarded winner answers
+/// `AssignedButUnknowable` however readable its value is — including when an
+/// earlier UNGUARDED assignment to the same name exists, because then the two
+/// branches genuinely run two different programs and the text does not say
+/// which. Note the position this tests: a conditional between the winning
+/// assignment and the USE is irrelevant and is not tested, which is what keeps
+/// the corpus's dominant `BIN=…` / `cd … && "$BIN" …` shape resolvable.
+///
+/// Deliberately NOT handled, each costing a resolution and never inventing one:
+/// `export NAME=value` / `declare` / `local` (the segment is not a pure
+/// assignment list, so it is ignored and the answer stays
+/// `NoReachingAssignment`), and values whose quoting does not balance or that
+/// contain a backslash (see [`unquote_literal_value`], which refuses both).
+///
+/// Threading note for the caller that will eventually use this: it needs the
+/// WHOLE command line and the segment index, neither of which
+/// `unknown_wrapper_ask(tokens, depth)` has today. The shortest path is
+/// `detect_bash`'s `for seg in split_segments(cmd)` loop (which already
+/// produces exactly the index this parameter means) passing `(cmd, seg_idx)`
+/// into `analyze_segment`, which passes them to `unknown_wrapper_ask`.
+/// `analyze_shell_payload` needs no threading at all: `unresolvable_command_word`
+/// already walks `split_segments(payload)` itself and can hand over its own
+/// enumeration index.
+#[cfg(test)]
+fn resolve_expanded_command_word(cmd: &str, seg_idx: usize, word: &str) -> CommandWordOrigin {
+    let Some(name) = referenced_variable_name(word) else {
+        return CommandWordOrigin::NoReachingAssignment;
+    };
+    let segs = split_segments_with_separators(cmd);
+    if seg_idx >= segs.len() {
+        return CommandWordOrigin::NoReachingAssignment;
+    }
+    // The winning assignment's SEGMENT INDEX is carried alongside its value:
+    // whether the value may be believed depends on where the assignment sits,
+    // so keeping only the text would discard the deciding fact.
+    let mut latest: Option<(usize, String)> = None;
+    for idx in 0..seg_idx {
+        if !assignments_reach_parent_shell(&segs, idx) {
+            continue;
+        }
+        let words = quote_aware_words(&segs[idx].text);
+        if words.is_empty() || !words.iter().all(|w| is_assignment(w)) {
+            continue;
+        }
+        for w in &words {
+            let Some(eq) = w.find('=') else {
+                continue;
+            };
+            if w[..eq] == name {
+                latest = Some((idx, w[eq + 1..].to_string()));
+            }
+        }
+    }
+    let Some((assign_idx, raw_value)) = latest else {
+        return CommandWordOrigin::NoReachingAssignment;
+    };
+    if !assignment_execution_is_unconditional(&segs, assign_idx) {
+        // An assignment IS here and its text may even be perfectly readable —
+        // what is missing is whether it ran, so the line names two programs and
+        // this function may not pick one. `AssignedButUnknowable`, not
+        // `NoReachingAssignment`: the assignment is not absent, it is
+        // unbelievable.
+        return CommandWordOrigin::AssignedButUnknowable;
+    }
+    if has_unresolvable_expansion(&raw_value) {
+        return CommandWordOrigin::AssignedButUnknowable;
+    }
+    let Some(value) = unquote_literal_value(&raw_value) else {
+        return CommandWordOrigin::AssignedButUnknowable;
+    };
+    if value.is_empty() {
+        // `X=; $X foo` runs `foo`: the word expands to nothing and DISAPPEARS,
+        // so the program is a token this function was never asked about.
+        // Verified: `bash -c 'X=; $X echo vanished'` prints `vanished` and exits
+        // 0. An empty program name is not a program, and answering `Literal("")`
+        // would hand a caller a program name for a command whose program it has
+        // not seen — so the empty value resolves to the restrictive side.
+        return CommandWordOrigin::AssignedButUnknowable;
+    }
+    CommandWordOrigin::Literal(value)
+}
+
 /// Find the first single `>` redirect outside quotes and return its target
 /// token. Returns None for `>>`, `&>>`, `>&<digit>` (fd dup) and quoted `>`
 /// (but `&>`, `>&<filename>` — the combined stdout+stderr truncating forms —
@@ -7526,5 +8063,482 @@ and must not be Allowed: {failing:?}"
         ] {
             assert_eq!(bash(cmd), Decision::Allow, "expected allow: {cmd}");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // `resolve_expanded_command_word` — reading an expansion-valued command
+    // word back off the same line. Nothing here exercises a Decision: the
+    // function is not wired into one yet (see its module note).
+    // -----------------------------------------------------------------------
+
+    /// Resolve the first command-word position on `cmd` that
+    /// `has_unresolvable_expansion` flags, exactly as the eventual caller will:
+    /// the segment index handed to `resolve_expanded_command_word` is the index
+    /// of the `split_segments` segment the word came from.
+    fn resolve_first_expansion_word(cmd: &str) -> CommandWordOrigin {
+        split_segments(cmd)
+            .iter()
+            .enumerate()
+            .find_map(|(seg_idx, seg)| {
+                let tokens: Vec<&str> = seg.split_whitespace().collect();
+                command_candidates(&tokens)
+                    .into_iter()
+                    .find(|&pos| has_unresolvable_expansion(tokens[pos]))
+                    .map(|pos| resolve_expanded_command_word(cmd, seg_idx, tokens[pos]))
+            })
+            .expect("test input must carry a command word with an unresolvable expansion")
+    }
+
+    /// The expected-value side of the assertions below, spelled once.
+    fn lit(value: &str) -> CommandWordOrigin {
+        CommandWordOrigin::Literal(value.to_string())
+    }
+
+    #[test]
+    fn separated_segmentation_agrees_with_split_segments() {
+        // The whole point of the `seg_idx` parameter is that an index taken
+        // from `split_segments` means the same segment in
+        // `split_segments_with_separators`. If the two ever disagree, every
+        // reachability answer is computed against the wrong segment, so this
+        // correspondence is pinned rather than assumed.
+        for cmd in [
+            "",
+            "ls",
+            "RM=/bin/rm; $RM -rf /path",
+            "a && b || c ; d | e & f",
+            "echo 'a;b' && echo \"c|d\"",
+            "echo 低頻度 && ls 監査",
+            "x=1\ny=2\n$x",
+            "a|b|c",
+            "cd \"$SB\" && \"$BIN\" guard main-tree --json",
+        ] {
+            let plain = split_segments(cmd);
+            let kept: Vec<String> = split_segments_with_separators(cmd)
+                .into_iter()
+                .map(|s| s.text)
+                .collect();
+            assert_eq!(plain, kept, "segmentation diverged for {cmd:?}");
+        }
+    }
+
+    #[test]
+    fn assignment_in_a_preceding_sequential_segment_resolves_to_its_literal() {
+        // `;`, newline, `&&` and `||` all keep the assignment in the SAME
+        // shell — measured, see `SegmentSep::Sequential` and
+        // `SegmentSep::Conditional`. The `&&`/`||` lines resolve because the
+        // conditional follows the assignment; it is a conditional BEFORE one
+        // that makes it unbelievable
+        // (`an_assignment_guarded_by_a_conditional_is_never_a_literal`).
+        for cmd in [
+            "RM=/bin/rm; $RM -rf /path",
+            "RM=/bin/rm\n$RM -rf /path",
+            "RM=/bin/rm && $RM -rf /path",
+            "RM=/bin/rm || $RM -rf /path",
+        ] {
+            assert_eq!(
+                resolve_first_expansion_word(cmd),
+                lit("/bin/rm"),
+                "for {cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_corpus_shape_resolves_to_the_assigned_program_path() {
+        // The shape 70 of the 115 measured `unresolvable-command-word`
+        // interventions actually have: a literal path assigned on its own line,
+        // used as the command word two segments later behind a `cd`.
+        //
+        // 70, not the 80 an earlier revision of this comment claimed. The
+        // corpus (`blastguard retro --rule-id unresolvable-command-word
+        // --list`, 115 interventions, measured 2026-08-07 by the reviewer who
+        // required the conditional-guard rule below) splits as: 70 literal
+        // assignment with no `&&`/`||` anywhere before it — this shape, and the
+        // only one that resolves; 9 literal assignment but conditionally
+        // guarded, which `an_assignment_guarded_by_a_conditional_is_never_a_
+        // literal` keeps on the restrictive side; 23 whose right-hand side is
+        // itself an expansion; 7 whose flagged word is not a variable
+        // reference; 6 with no assignment of that name on the line.
+        let cmd = "BIN=/Users/y/.condukt/worktrees/w/target/release/condukt\n\
+                   cd \"$SB\" && \"$BIN\" guard main-tree --json";
+        assert_eq!(
+            resolve_first_expansion_word(cmd),
+            lit("/Users/y/.condukt/worktrees/w/target/release/condukt")
+        );
+    }
+
+    #[test]
+    fn an_assignment_guarded_by_a_conditional_is_never_a_literal() {
+        // `foo && BIN=/bin/rm` runs the assignment only when `foo` succeeded,
+        // and `foo`'s exit status is nowhere in the text. So the program `$BIN`
+        // names is `/bin/rm` on one branch and whatever the ENVIRONMENT already
+        // holds on the other — two different programs, with nothing on the line
+        // to choose between them. Answering `Literal` would rest this
+        // function's most permissive answer on an unobservable.
+        for cmd in [
+            "foo && BIN=/bin/rm; $BIN -rf /x",
+            "foo || BIN=/bin/rm; $BIN -rf /x",
+        ] {
+            let got = resolve_first_expansion_word(cmd);
+            assert!(
+                !matches!(got, CommandWordOrigin::Literal(_)),
+                "a conditionally-guarded assignment must not resolve: {cmd:?} gave {got:?}"
+            );
+            // And specifically the restrictive answer that is TRUE. An
+            // assignment to this name really is on the line, in the parent
+            // shell, before the use; what cannot be read is whether it RAN.
+            // `NoReachingAssignment` means "I looked and there is nothing",
+            // which would be false about this text — the value `/bin/rm` is
+            // right there, it just is not the only possible program.
+            assert_eq!(got, CommandWordOrigin::AssignedButUnknowable, "for {cmd:?}");
+        }
+    }
+
+    #[test]
+    fn the_conditional_that_disqualifies_precedes_the_assignment_not_the_use() {
+        // Two positions, and only one of them is about whether the assignment
+        // ran. The corpus's dominant shape puts the `&&` between the assignment
+        // and the USE: the assignment is unguarded, so it is still resolvable,
+        // and a rule that looked at the use's separator instead would answer
+        // restrictively for all 70 of the 70 resolvable interventions while
+        // buying no safety at all.
+        assert_eq!(
+            resolve_first_expansion_word("BIN=/path/tool\ncd \"$SB\" && \"$BIN\" status"),
+            lit("/path/tool")
+        );
+        // The same two ingredients with the conditional moved to the other side
+        // of the assignment. Now it is the assignment's own execution that
+        // depends on an exit status, and the answer must flip.
+        assert_eq!(
+            resolve_first_expansion_word("foo && BIN=/path/tool; \"$BIN\" status"),
+            CommandWordOrigin::AssignedButUnknowable
+        );
+    }
+
+    #[test]
+    fn a_reassignment_is_unknowable_when_the_last_reaching_one_is_guarded() {
+        // Two candidate programs, one per branch: `/bin/b` if `foo` succeeded,
+        // `/bin/a` if it did not. Both are literals and both are readable, and
+        // that is exactly why neither may be answered — picking either one is a
+        // guess about `foo`'s exit status. "The last reaching assignment wins"
+        // therefore does not mean "the last reaching assignment's text is the
+        // answer": when the winner is guarded, the LINE has no single answer.
+        assert_eq!(
+            resolve_first_expansion_word("BIN=/bin/a; foo && BIN=/bin/b; $BIN x"),
+            CommandWordOrigin::AssignedButUnknowable
+        );
+        // The mirror image, pinned to make the rule's coarseness visible rather
+        // than leaving it to be discovered. Here `BIN=/bin/b` follows a `;`, so
+        // the shell really does run it on both branches and `/bin/b` really is
+        // the program. This function still refuses, because it asks whether a
+        // conditional appears ANYWHERE earlier on the line rather than tracking
+        // where each and-or list ends (see
+        // `assignment_execution_is_unconditional`). That costs a resolution;
+        // it never invents one.
+        assert_eq!(
+            resolve_first_expansion_word("foo && BIN=/bin/a; BIN=/bin/b; $BIN x"),
+            CommandWordOrigin::AssignedButUnknowable
+        );
+    }
+
+    #[test]
+    fn an_assignment_across_a_pipe_or_an_ampersand_does_not_reach() {
+        // Each stage of a pipeline, and a backgrounded command, runs in its own
+        // subshell; the assignment dies with it. Measured — `bash -c
+        // 'RM=/bin/echo | echo "[$RM]"'` and the `&` spelling both print `[]`.
+        for cmd in [
+            "RM=/bin/rm | $RM -rf /path",
+            "RM=/bin/rm & $RM -rf /path",
+            // Also the far side of a pipeline: `RM=…` here is the pipeline's
+            // right-hand stage, so it is a subshell too even though a `;`
+            // follows it.
+            "true | RM=/bin/rm ; $RM -rf /path",
+        ] {
+            assert_eq!(
+                resolve_first_expansion_word(cmd),
+                CommandWordOrigin::NoReachingAssignment,
+                "for {cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_same_segment_prefix_assignment_does_not_resolve_the_word() {
+        // The shell expands `$RM` BEFORE applying the prefix assignment.
+        // Measured: `bash -c 'RM=/bin/echo $RM prefixtest'` reports
+        // `prefixtest: command not found`, so `$RM` was empty, not `/bin/echo`.
+        assert_eq!(
+            resolve_first_expansion_word("RM=/bin/rm $RM -rf /path"),
+            CommandWordOrigin::NoReachingAssignment
+        );
+    }
+
+    #[test]
+    fn only_segments_strictly_before_the_use_are_scanned() {
+        // MEASURED, and the reason this test exists as its own case: widening
+        // the scan from `0..seg_idx` to `0..=seg_idx` leaves every other test in
+        // this section green. The prefix-assignment shapes cannot pin the bound,
+        // because a segment that CONTAINS the use has a command word in it and
+        // is therefore never a pure assignment list — the assignment-list rule
+        // already excludes it, so the two rules are redundant for well-formed
+        // input. The bound is pinned here on the one shape that separates them:
+        // a pure assignment segment named as the use's OWN segment.
+        assert_eq!(
+            resolve_expanded_command_word("BIN=/bin/rm; $BIN x", 0, "$BIN"),
+            CommandWordOrigin::NoReachingAssignment
+        );
+    }
+
+    #[test]
+    fn a_prefix_assignment_to_a_command_does_not_survive_its_segment() {
+        // `NAME=value cmd` sets the variable only for `cmd`. Measured:
+        // `bash -c 'RM=/bin/echo true; echo "[$RM]"'` prints `[]` (and
+        // `/bin/sh` agrees). Treating that segment as a lasting assignment
+        // would resolve a word the shell leaves unset.
+        assert_eq!(
+            resolve_first_expansion_word("RM=/bin/rm true; $RM -rf /path"),
+            CommandWordOrigin::NoReachingAssignment
+        );
+    }
+
+    #[test]
+    fn an_assignment_only_after_the_use_does_not_reach_it() {
+        assert_eq!(
+            resolve_first_expansion_word("$RM -rf /path; RM=/bin/rm"),
+            CommandWordOrigin::NoReachingAssignment
+        );
+    }
+
+    #[test]
+    fn every_plain_reference_spelling_names_the_same_variable() {
+        for word in ["$FOO", "${FOO}", "\"$FOO\"", "\"${FOO}\""] {
+            assert_eq!(
+                referenced_variable_name(word).as_deref(),
+                Some("FOO"),
+                "for {word:?}"
+            );
+        }
+        // And the words that name no variable at all. Asserted here at the unit
+        // level, not only through a command line: a positional parameter such as
+        // `$1` cannot be assigned by any line `is_assignment` accepts (that
+        // function rejects a digit-initial name too), so through a command line
+        // a wrongly-accepted `$1` would still answer `NoReachingAssignment` and
+        // no integration case could tell the two apart.
+        for word in [
+            "$1",
+            "$@",
+            "$?",
+            "$-",
+            "${1}",
+            "$",
+            "${}",
+            "pre$FOO",
+            "$FOO$BAR",
+            "'$FOO'",
+            "$(which foo)",
+            "`which foo`",
+            "FOO",
+            "",
+        ] {
+            assert_eq!(referenced_variable_name(word), None, "for {word:?}");
+        }
+        for cmd in [
+            "FOO=/bin/rm; $FOO -rf /path",
+            "FOO=/bin/rm; ${FOO} -rf /path",
+            "FOO=/bin/rm; \"$FOO\" -rf /path",
+            "FOO=/bin/rm; \"${FOO}\" -rf /path",
+        ] {
+            assert_eq!(
+                resolve_first_expansion_word(cmd),
+                lit("/bin/rm"),
+                "for {cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_backslash_escaped_dollar_is_not_a_reference_at_all() {
+        // Consistent with `has_unresolvable_expansion`, whose `\\` arm makes the
+        // next character literal: `\$FOO` is a literal dollar sign, so it is
+        // not flagged as an expansion in the first place and names no variable.
+        assert!(
+            !has_unresolvable_expansion("\\$FOO"),
+            "precondition: the escape handling this test is consistent with"
+        );
+        assert_eq!(referenced_variable_name("\\$FOO"), None);
+        // And if a caller asked anyway, the answer is never a literal.
+        assert_eq!(
+            resolve_expanded_command_word("FOO=/bin/rm; \\$FOO -rf /path", 1, "\\$FOO"),
+            CommandWordOrigin::NoReachingAssignment
+        );
+    }
+
+    #[test]
+    fn a_right_hand_side_that_is_itself_an_expansion_is_never_a_literal() {
+        // Asked directly at the use's segment index rather than through
+        // `resolve_first_expansion_word`, because that helper reproduces
+        // `detect.rs`'s existing `split_whitespace` tokenisation, which breaks a
+        // backticked value in two and finds its second half FIRST. Pinned here
+        // as the pre-existing artifact it is, so this test is not silently
+        // asserting about a different word than it names:
+        assert_eq!(
+            "BIN=`which foo`".split_whitespace().collect::<Vec<_>>(),
+            vec!["BIN=`which", "foo`"]
+        );
+        for cmd in [
+            "BIN=$(which foo); $BIN --json",
+            "BIN=`which foo`; $BIN --json",
+            "BIN=$OTHER; $BIN --json",
+            "BIN=${OTHER}; $BIN --json",
+            "BIN=/opt/$ARCH/tool; $BIN --json",
+        ] {
+            assert_eq!(
+                resolve_expanded_command_word(cmd, 1, "$BIN"),
+                CommandWordOrigin::AssignedButUnknowable,
+                "for {cmd:?}"
+            );
+        }
+        // Anti-vacuity for the loop above: the same shape with a LITERAL value
+        // at the same index does resolve, so these answers come from the
+        // right-hand side and not from the segment being skipped for some
+        // unrelated reason.
+        assert_eq!(
+            resolve_expanded_command_word("BIN=/bin/rm; $BIN --json", 1, "$BIN"),
+            CommandWordOrigin::Literal("/bin/rm".to_string())
+        );
+    }
+
+    #[test]
+    fn a_quoted_value_containing_a_space_survives_as_one_literal() {
+        assert_eq!(
+            resolve_first_expansion_word("BIN=\"/a b/tool\"; $BIN --json"),
+            lit("/a b/tool")
+        );
+        assert_eq!(
+            resolve_first_expansion_word("BIN='/a b/tool'; $BIN --json"),
+            lit("/a b/tool")
+        );
+    }
+
+    #[test]
+    fn the_last_reaching_assignment_wins() {
+        assert_eq!(
+            resolve_first_expansion_word("BIN=/bin/a; BIN=/bin/b; $BIN x"),
+            lit("/bin/b")
+        );
+        // Two assignments in one pure-assignment segment: the later one wins,
+        // as it does in the shell (`bash -c 'A=1 A=2; echo $A'` prints `2`).
+        assert_eq!(
+            resolve_first_expansion_word("BIN=/bin/a BIN=/bin/b; $BIN x"),
+            lit("/bin/b")
+        );
+        // LAST REACHING, not last written: the `/bin/b` assignment below is a
+        // pipeline stage, so it never escapes its subshell and the earlier
+        // `/bin/a` is still the value the word takes.
+        assert_eq!(
+            resolve_first_expansion_word("BIN=/bin/a; BIN=/bin/b | true; $BIN x"),
+            lit("/bin/a")
+        );
+    }
+
+    #[test]
+    fn a_reachable_empty_assignment_is_not_a_program_name() {
+        // `bash -c 'X=; $X echo vanished'` prints `vanished`: the word expands
+        // to nothing and DISAPPEARS, so the program is `echo` — a token this
+        // function was not asked about. Answering `Literal("")` would hand back
+        // a program name for a command whose program was never seen.
+        assert_eq!(
+            resolve_first_expansion_word("X=; $X echo vanished"),
+            CommandWordOrigin::AssignedButUnknowable
+        );
+        assert_eq!(
+            resolve_first_expansion_word("X=\"\"; $X echo vanished"),
+            CommandWordOrigin::AssignedButUnknowable
+        );
+    }
+
+    #[test]
+    fn an_unparseable_or_ambiguous_word_is_never_a_literal() {
+        // Every one of these must stay on the restrictive side. The two
+        // restrictive answers are distinguished, so this asserts only that
+        // neither is `Literal` — which is the property that matters, since
+        // `Literal` is the sole answer that could ever suppress an Ask.
+        //
+        // Anti-vacuity: every line below DOES carry a reaching literal
+        // assignment to `BIN`, so a broken word-shape check would answer
+        // `Literal("/bin/rm")` here rather than falling through to a
+        // restrictive answer for want of an assignment.
+        for word in [
+            "${BIN:-/bin/ls}",
+            "pre$BIN",
+            "$BIN$BIN",
+            "$1",
+            "$@",
+            "$(which BIN)",
+            "`which BIN`",
+            // Single quotes suppress expansion, so this is a literal word
+            // spelled `$BIN`, not a reference to BIN.
+            "'$BIN'",
+        ] {
+            let cmd = format!("BIN=/bin/rm; {word} x");
+            let got = resolve_expanded_command_word(&cmd, 1, word);
+            assert!(
+                !matches!(got, CommandWordOrigin::Literal(_)),
+                "expected a restrictive answer for {word:?}, got {got:?}"
+            );
+        }
+        // A value whose escaping is not modelled: assigned, but unreadable.
+        assert_eq!(
+            resolve_first_expansion_word("BIN=/a\\ b/tool; $BIN x"),
+            CommandWordOrigin::AssignedButUnknowable
+        );
+        // A segment index past the end of the line is answered, not panicked
+        // on, and answered on the restrictive side.
+        assert_eq!(
+            resolve_expanded_command_word("BIN=/bin/rm; $BIN x", 99, "$BIN"),
+            CommandWordOrigin::NoReachingAssignment
+        );
+        // Unbalanced quoting in a value determines no literal. Exercised on
+        // `unquote_literal_value` directly: `split_segments` is quote-aware, so
+        // a segment whose quotes do not balance has already swallowed the
+        // separator that would have made it a preceding segment, and the
+        // command-line route cannot reach this arm.
+        assert_eq!(unquote_literal_value("\"/bin/rm"), None);
+        assert_eq!(unquote_literal_value("'/bin/rm"), None);
+        assert_eq!(unquote_literal_value("/a\\ b"), None);
+        assert_eq!(
+            unquote_literal_value("\"/a b/tool\""),
+            Some("/a b/tool".to_string())
+        );
+    }
+
+    #[test]
+    fn an_export_or_declare_segment_is_not_read_as_an_assignment() {
+        // Deliberate omission, pinned so it is visible rather than silent: the
+        // segment is not a pure assignment list, so it is ignored. This costs a
+        // resolution (`export BIN=/bin/rm` really does set BIN) and never
+        // invents one.
+        for cmd in [
+            "export BIN=/bin/rm; $BIN x",
+            "declare BIN=/bin/rm; $BIN x",
+            "local BIN=/bin/rm; $BIN x",
+        ] {
+            assert_eq!(
+                resolve_first_expansion_word(cmd),
+                CommandWordOrigin::NoReachingAssignment,
+                "for {cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_use_inside_a_subshell_still_sees_the_parent_assignment() {
+        // Only the ASSIGNMENT's placement matters: a subshell inherits its
+        // parent's variables. Measured: `bash -c 'A=/bin/echo; true | $A ok'`
+        // prints `ok`.
+        assert_eq!(
+            resolve_first_expansion_word("BIN=/bin/rm; true | $BIN -rf /path"),
+            lit("/bin/rm")
+        );
     }
 }

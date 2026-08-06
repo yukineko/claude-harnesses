@@ -122,9 +122,33 @@ tags = [
     "p0",
 ]
 status = "pending"
-notes = "実測 2026-08-06、測定点 8340afc8、backlog 0.2.14 を rollout した直後。backlog のキューを ~/.backlog/tasks.toml から repo 内 .backlog/tasks.toml へ移す変更 (main の 8d729129) が、既存タスクを移行していない。観測値: ls -la ~/.backlog/tasks.toml は 669648 バイト、ls -la .backlog/tasks.toml は 2173 バイト。backlog list --project /Users/yuki/src/harness --status pending は移行前 162 件を返していたが、移行後は 2 件しか返さない。本セッションで積んだ 5 件のうち 4cacdfae と 241e7a47 と d8d0778c は旧ストアに取り残され、新ストアからは存在しないものとして扱われる (backlog done d8d0778c が task not found で失敗した)。これは単なるデータ移行漏れではなく判定の問題である: 下流 (autoflow の Stop hook / daily / flow の停止判定 / SessionStart の注入) はいずれも「キューが空か」を backlog list の結果で判断するため、160 件の未完了作業が黙って完了扱いになる。空集合が合格として読まれる典型 (CLAUDE.md 第3節)。判定不能どころか、判定が誤った側に確定している。完了条件: (1) 旧ストアの内容を新ストアへ移行する経路を用意し、移行が起きたことを観測で固定する、(2) 移行前に「旧ストアに項目があるのに新ストアが空/少ない」状態を検出して block するか少なくとも警告する経路を入れる (黙って空を返さない)、(3) 既に旧ストアに取り残された項目を回収する。注意: 旧ストアはクロスプロジェクトなので、repo 内ストアへ移すときに project フィールドで振り分ける必要がある。"
+notes = """
+実測 2026-08-06、測定点 8340afc8、backlog 0.2.14 を rollout した直後。backlog のキューを ~/.backlog/tasks.toml から repo 内 .backlog/tasks.toml へ移す変更 (main の 8d729129) が、既存タスクを移行していない。観測値: ls -la ~/.backlog/tasks.toml は 669648 バイト、ls -la .backlog/tasks.toml は 2173 バイト。backlog list --project /Users/yuki/src/harness --status pending は移行前 162 件を返していたが、移行後は 2 件しか返さない。本セッションで積んだ 5 件のうち 4cacdfae と 241e7a47 と d8d0778c は旧ストアに取り残され、新ストアからは存在しないものとして扱われる (backlog done d8d0778c が task not found で失敗した)。これは単なるデータ移行漏れではなく判定の問題である: 下流 (autoflow の Stop hook / daily / flow の停止判定 / SessionStart の注入) はいずれも「キューが空か」を backlog list の結果で判断するため、160 件の未完了作業が黙って完了扱いになる。空集合が合格として読まれる典型 (CLAUDE.md 第3節)。判定不能どころか、判定が誤った側に確定している。完了条件: (1) 旧ストアの内容を新ストアへ移行する経路を用意し、移行が起きたことを観測で固定する、(2) 移行前に「旧ストアに項目があるのに新ストアが空/少ない」状態を検出して block するか少なくとも警告する経路を入れる (黙って空を返さない)、(3) 既に旧ストアに取り残された項目を回収する。注意: 旧ストアはクロスプロジェクトなので、repo 内ストアへ移すときに project フィールドで振り分ける必要がある。
+
+--- 棚卸し追記 (2026-08-06、測定点 043e757d、read-only。上の起票時ノートは原文のまま保存) ---
+
+規模: home ストア 668 件中 pending 213 件。repo ストアは 11 件。
+project キー別の pending 内訳:
+  164  harness 移行候補 (/Users/yuki/src/harness 154 + harness 8 + claude-harnesses 2 — 表記ゆれ3種)
+   35  他プロジェクト (iro 31, vtuber-app 4) — repo ストアを持たないので移行先が別問題
+   12  一時ディレクトリ (/var/folders 配下) — 移行対象外
+    2  worktree パス (/Users/yuki/src/.harness-worktrees/session-1faeac72) — stale、そのままでは移行不可
+
+移行リスクは想定より低い: repo ストアとの重複が title 一致 0 件・ID 一致 0 件、home ストア内の重複も 0 件。単純追記で二重起票は起きない。障害は表記ゆれ3種の正規化と、一時/worktree パス 14 件の除外だけ。起票時ノートの注意「project フィールドで振り分ける必要がある」はこの3種+除外14件が具体像。
+
+見えなくなっている内容の重さ: 移行候補 164 件の優先度内訳は p0 が 3、p1 が 91、p2 が 55、p3 が 5、無印 10。作成月は 2026-07 が 101、2026-08 が 63 で、古くて無効化した山ではなく直近1か月の現役キュー。
+不可視の p0 3件:
+  5151605e コンパイラは強制面になっていない — merge 前にワークスペースを型検査するものが1つも無い
+  6aaec283 taintguard t2 commit d24f02d5 は敵対的パネルが block した版 — そのまま merge しないこと
+  87dbfbb8 propguard: diff 取得に失敗した非UTF-8 の変更が空 diff に潰れて ALLOW になる
+
+腐敗は双方向である: 本チケットの表題は「未完了作業が黙って完了扱いになる」だが、逆も起きている。5151605e (型検査の強制面が無い) は main の f98de400 で pre-push 型検査が入っており実質着手済みだが、旧ストア側は pending のまま誰も閉じていない。分離したストアは「やっていない仕事を隠す」だけでなく「やった仕事を開いたまま残す」ので、どちらの向きにもキューが事実と乖離する。完了条件 (3) の回収時はこの向きも見ること。
+
+CLI に migrate サブコマンドは無い (add/list/next/done/fail/edit/session-start/install/uninstall/lock/driver)。ユーザ判断 2026-08-06: 今回は可視化のみ、移行は未実施。
+
+作業上の注意 (この追記自体で踏んだ): backlog edit --notes は追記ではなく置換である。一度この起票時ノートを丸ごと上書きしてしまい、git から復元した。既存ノートのあるチケットを編集するときは、先に原文を取得して連結すること。"""
 created_at = 1786024055
-updated_at = 1786024055
+updated_at = 1786024865
 weight = 0.0
 issue_number = 196
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/196"
@@ -144,3 +168,56 @@ updated_at = 1786028548
 weight = 0.0
 issue_number = 204
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/204"
+
+[[task]]
+id = "e88d2e4d"
+title = "condukt の stop hook が running のタスクを pending と報告し、state probe は生存判定不能のまま返る"
+project = "/Users/yuki/src/harness"
+tags = ["condukt,p2"]
+status = "pending"
+notes = "実測 2026-08-06 22:49 JST、run-20260806-062115-17609。Stop hook は「残課題が 2 件あります: t1 (pending) / t2 (pending)」と表示したが、condukt state show は両方 status=running を返す。表示語彙が state と食い違っており、pending と読んだ側は「未着手だから安全に dispatch できる」と解釈しうる。さらに condukt state probe は両タスクとも verdict=undetermined を返し、生存を判定できていない。worktree の最終更新は t1 が Aug 6 07:32、t2 が Aug 6 07:18 で約15時間停止している一方、task の updated_at は 1786024127 (約20分前) で、誰かが state だけを触っている。15時間停止した worktree と20分前の updated_at の組み合わせは、progress ではなく bookkeeping が更新されていることを示唆する。判定不能を pending と表示するのは fail-open 方向の縮退 (CLAUDE.md 3) にあたる可能性がある。要検証: (a) stop hook の語彙が state のどのフィールドから来ているか、(b) probe が undetermined を返す条件、(c) updated_at を触っているのが何か。ユーザ判断で本 run 自体には触っていない。"
+created_at = 1786024216
+updated_at = 1786024242
+weight = 0.0
+issue_number = 197
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/197"
+
+[[task]]
+id = "66fb376a"
+title = "harness-core boundary の read_dir_entries が NotFound を空リストに写すため、呼び出し側が不在と空を自力で見分ける必要がある"
+project = "/Users/yuki/src/harness"
+tags = ["harness-core,p3"]
+status = "pending"
+notes = "crates/harness-core/src/boundary.rs:53 read_dir_entries は NotFound を Determination::known(Vec::new()) に写す。docstring は理由を明記している (存在しないディレクトリは本当に何も含まない)。妥当な契約だが、不在と空を区別したい呼び出し側は自力で見分ける必要があり、その必要性がシグネチャからは読み取れない。実例 2026-08-06: blastguard retro の scan_dir は「--dir の打ち間違い」を「listed したが transcript が無かった」と表示してしまうため、Known(vec![]) かつ is_dir() が false のときだけ dir_unreadable を立てる後付け判定を書いた (crates/blastguard/src/retro.rs)。同じ判定を各呼び出し側が書き直すことになる。検討: Known(vec![]) を返す前に不在を表現できる型 (Determination<Option<Vec<PathBuf>>> あるいは専用の Absent) にするか、少なくとも「不在と空を区別する必要がある呼び出し側はこう書け」を docstring に足すか。既存呼び出し側の棚卸しが先。"
+created_at = 1786024218
+updated_at = 1786024256
+weight = 0.0
+issue_number = 198
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/198"
+
+[[task]]
+id = "e840c8b2"
+title = "backlog のキューが worktree から空に見える — flow の停止判定が構造的に常時「キューなし」になる"
+project = "/Users/yuki/src/harness"
+tags = [
+    "backlog",
+    "worktree-hygiene",
+    "flow",
+    "p0",
+]
+status = "pending"
+notes = """
+実測 2026-08-06、worktree /Users/yuki/src/.harness-worktrees/session-b9a78b46、backlog 0.2.13。
+
+観測: worktree から `backlog list --status pending` は "no tasks"、`backlog list --json` は `[]`。同じ瞬間に main tree (/Users/yuki/src/harness) から同じコマンドを打つと pending 9 件が返る。worktree から `--project /Users/yuki/src/harness` を明示すると同じ 9 件が返る。したがって原因はストアの不在ではなく project スコープ: task の project フィールドには main tree のパスが記録されるが、list は既定で cwd を project とみなすため、worktree からは決して一致しない。
+
+なぜ重大か: CLAUDE.md 第8節は作業を worktree で行うことを絶対義務としている。flow の SKILL.md は Step 2 以降すべて `--project "$PWD"` を渡す。つまり *規範どおりに運用した場合に限り* キューが必ず空に見える。空集合が「残件なし」として消費される第3節の形そのもので、判定不能ですらなく誤った側に確定している。
+
+さらに eb127a5b で flow の停止判定を三源 (compass 主筋 / 今 observable な measure / backlog pending) に絞ったため、この誤読は直接「まだ 9 件あるのに正常終了」に化ける。停止判定の正しさがこのバグに依存している。
+
+完了条件: (1) worktree の cwd から、その worktree が属する git リポジトリ本体の project スコープが解決されること (gitfile 経由の common dir から主 worktree を求める形が harness_core::trust::resolve に既にある — 同じ手が使える)。(2) 解決できなかった場合に空リストを返さないこと — 判定不能として区別可能に返し、下流が「残件なし」と読めないようにする。(3) worktree の cwd から pending が返ることを観測するテスト。"""
+created_at = 1786024586
+updated_at = 1786024586
+weight = 0.0
+issue_number = 199
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/199"

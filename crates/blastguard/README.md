@@ -65,10 +65,25 @@ Truncating redirects to `/dev/null`, `/dev/stdout`, `/dev/stderr` are also fine.
 
 ## Design bias
 
-The detector is deliberately **conservative**: it only denies *clearly*
-destructive, hard-to-undo patterns. Anything ambiguous falls through to allow, so
-blastguard stays out of the way of ordinary work. A single non-recursive
-`rm file.txt`, appends (`>>`), and fd redirects (`2>&1`, `>&2`) are all allowed.
+The detector only **denies** *clearly* destructive, hard-to-undo patterns, and
+stays out of the way of ordinary work: a single non-recursive `rm file.txt`,
+appends (`>>`), and fd redirects (`2>&1`, `>&2`) are all allowed.
+
+**Ambiguity does not fall through to allow.** This paragraph used to say it did,
+which was the pre-`Ask` two-valued behaviour and the opposite of what ships:
+forcing every construct the analyser cannot read into `Allow` is the fail-open
+`model.rs` exists to name and remove (CLAUDE.md 3 cites it as the worked
+example). Unanalysable constructs resolve to `Decision::Ask` — not a verdict
+about the command, a refusal to guess about one. Prose that describes a safer
+system than the code implements is the trap CLAUDE.md 4 forbids, so the
+behaviour is stated here instead.
+
+An `ask` is only emitted where a human can answer it; in a headless or
+agent-driven session `Decision::hardened` collapses it to a `deny`, never to an
+allow.
+
+What an intervention actually prevented is reviewable after the fact with
+`blastguard retro` (see [Retrospective](#retrospective)).
 
 ## Why it exists
 
@@ -111,3 +126,33 @@ for the host platform, the launcher prints a warning to stderr and exits 0 — a
 known fail-open gap distinct from the deny-on-panic behaviour above: with no
 binary to run, there is no analyser present to resolve the "undetermined" case
 to a deny in the first place.
+
+## Retrospective
+
+A gate's own log answers "what did it say", never "did it prevent anything".
+`blastguard retro` answers the second by joining each PreToolUse verdict in the
+Claude Code transcript to the `tool_result` for the same `toolUseID`:
+
+```sh
+blastguard retro                              # this project, inferred from cwd
+blastguard retro --project /path/to/repo
+blastguard retro --dir ~/.claude/projects/-path-to-repo
+```
+
+Each intervention gets a tri-state outcome — `executed-anyway` (a human said
+yes, so the gate prevented nothing that time), `not-executed`, or `unknown`. A
+missing `tool_result` is never counted as a prevention: an abandoned turn or a
+truncated transcript would otherwise inflate the gate's apparent value.
+
+Gates that block by exiting non-zero rather than printing PreToolUse JSON
+(`guard-maintree-bash.py` and friends) are parsed too, so the review compares
+every gate that stopped a call on the same footing.
+
+Reading no transcripts prints `UNDETERMINED` and exits **2** rather than an
+empty table — "I measured nothing" must not render as "nothing was wrong",
+which is the failure mode this whole crate is built to remove.
+
+Two things the report deliberately does not claim: an approval does **not**
+establish that stopping was wrong (only that nothing was prevented), and a
+command the agent rephrased and re-ran is **not** detected — so prevention
+counts are an upper bound. Both qualifiers are printed with the numbers.

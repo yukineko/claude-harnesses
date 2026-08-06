@@ -16,4 +16,5 @@ pub mod exclude;
 pub mod hookio;
 pub mod interactive;
 pub mod model;
+pub mod retro;
 pub mod rule_id;

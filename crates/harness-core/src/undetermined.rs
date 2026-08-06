@@ -264,6 +264,10 @@ mod tests {
 
     #[test]
     fn cargo_is_the_documented_test_discriminator() {
+        // Reads SINK_ENV via sink_state() without setting it, so it still needs
+        // the guard: a concurrent temp_env() in this module would have it set
+        // to a path or "off" and this assertion would read that instead.
+        let _guard = crate::test_env::lock();
         // Both halves of the claim in the module docs. If cargo ever stops
         // setting CARGO for test binaries, this fails rather than silently
         // turning production recording into test-polluted recording.
@@ -319,13 +323,13 @@ mod tests {
             .starts_with("active"));
     }
 
-    /// Serializes the tests that mutate the process-global environment, so
-    /// concurrent cases cannot observe each other's `set_var`.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // Serialization comes from crate::test_env::lock(), which is crate-wide.
+    // A module-private mutex here would stop these cases racing each other and
+    // nothing else, while reading as though the whole hazard were covered.
 
     /// Set an env var for the duration of `f`, then restore.
     fn temp_env(key: &str, val: Option<&str>, f: impl FnOnce()) {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env::lock();
         let prev = std::env::var_os(key);
         match val {
             Some(v) => std::env::set_var(key, v),

@@ -254,10 +254,15 @@ fn write_file(file: &TrustFile) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
-    // Tests mutate the process-global HOME and HARNESS_TRUST_ALL env, so they
-    // must not run concurrently. A single #[test] drives the whole sequence.
+    // Tests mutate the process-global HOME and HARNESS_TRUST_ALL, so they must
+    // not run concurrently -- with each other OR with any other module's env
+    // tests. Keeping the whole sequence in one #[test] only bought the first
+    // half of that, and this comment used to claim the rest; config::tests
+    // moves HOME too, and did it under a different lock. The guard below is
+    // what actually holds. See crate::test_env for the measured failure.
     #[test]
     fn trust_roundtrip_and_env_override() {
+        let _guard = crate::test_env::lock();
         let home = tempfile::tempdir().unwrap();
         let proj = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", home.path());
@@ -311,10 +316,13 @@ mod tests {
             .unwrap_or(false)
     }
 
-    /// Worktree inheritance, both directions, in one serialized `#[test]` (it
-    /// mutates the process-global `HOME`, like the roundtrip test above).
+    /// Worktree inheritance, both directions, in one `#[test]` -- serialized
+    /// against every other env-mutating test by `crate::test_env::lock()`, not
+    /// by being a single function (it mutates the process-global `HOME`, like
+    /// the roundtrip test above).
     #[test]
     fn resolve_inherits_trust_from_the_main_worktree_but_only_when_it_is_trusted() {
+        let _guard = crate::test_env::lock();
         if !git_available() {
             eprintln!("SKIPPED resolve_inherits_...: git unavailable");
             return;

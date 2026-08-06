@@ -22,9 +22,23 @@ fn temp_home(tag: &str) -> PathBuf {
 }
 
 fn spawn(args: &[&str], home: &Path) -> Child {
+    // Pin the child's cwd to the same isolated `home` dir every call site
+    // already builds. The task store's LOCATION is resolved from the child
+    // process's OWN cwd (not from `--project`, not from `HOME`) — see
+    // `crates/backlog/src/config.rs::store_dir_for`. Left unset, every
+    // spawned process here would silently inherit this test binary's own
+    // cwd (the real harness repo checkout it was built and run from) and
+    // land `add`/`next --claim` writes in that repo's TRACKED
+    // `.backlog/tasks.toml`, corrupting the real queue. `home` itself has no
+    // `.git` above it (a fresh dir under the system temp root), so this also
+    // makes every driver-registry command here consistent with the isolated
+    // `HOME` it already uses — none of those commands are cwd-sensitive
+    // (`driver`/`lock` resolve via `base_dir("backlog")`, keyed off `HOME`
+    // only), so pinning cwd changes no other test's behavior.
     Command::new(env!("CARGO_BIN_EXE_backlog"))
         .args(args)
         .env("HOME", home)
+        .current_dir(home)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

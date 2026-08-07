@@ -2,6 +2,7 @@
 id = "0ba79281"
 title = 'CLAUDE.md: Windows で成立しない cargo 手順 (. "$HOME/.cargo/env") を直す'
 project = "C:/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
 tags = [
     "docs",
     "p2",
@@ -16,6 +17,7 @@ weight = 0.0
 id = "6d59e6eb"
 title = "target-dir が shell/worktree ごとに分裂し、cap-target-dir.sh の上限が効かない"
 project = "C:/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
 tags = [
     "build",
     "p1",
@@ -30,6 +32,7 @@ weight = 0.0
 id = "8acb117a"
 title = "superseded な plugin version dir の wrapper が新バイナリを実行している疑い — version pin と canary rollback が実効しているか未判定"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "rollout",
     "deploy-verify",
@@ -74,6 +77,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/190"
 id = "b2977afb"
 title = "condukt と scout の SKILL.md にも逸脱禁止・常時起票の不変条件を入れる (flow は d215649a で完了)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "flow",
     "harness",
@@ -91,6 +95,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/191"
 id = "a498a074"
 title = "blastguard の展開 ask を、同一コマンド内の literal 代入とループ変数だけ解決して減らす (環境由来は Ask 維持)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "pending"
 notes = ""
@@ -104,6 +109,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/192"
 id = "21cd115e"
 title = "blastguard の語分割をクォート境界尊重にし、引用符内の散文が保護パス ask を起こすのを止める"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "pending"
 notes = ""
@@ -117,6 +123,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/193"
 id = "c6bf41db"
 title = "blastguard retro に per-rule 承認率のラウンド間トレンドを追加し、ルール精度の劣化を継続監視する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "pending"
 notes = ""
@@ -130,6 +137,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/194"
 id = "d2d607e1"
 title = "blastguard の上書きリダイレクト deny が、存在しないファイルにも既存ファイル上書きと主張する件を切り分ける"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "pending"
 notes = ""
@@ -143,6 +151,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/195"
 id = "5ba13c3e"
 title = "backlog のキュー移行が既存 162 件を取り残し、新ストアが空同然になっている (未完了作業が黙って完了扱いになる)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "backlog",
     "fail-open",
@@ -184,6 +193,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/196"
 id = "f78490e1"
 title = "backlog add --project がトラック済みの main ツリーのファイルを直接書き換え、第8節に違反する"
 project = "/Users/yuki/src/.harness-worktrees/session-b9a78b46"
+project_unresolved = false
 tags = [
     "worktree-hygiene",
     "p0",
@@ -200,6 +210,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/204"
 id = "e88d2e4d"
 title = "condukt の stop hook が running のタスクを pending と報告し、state probe は生存判定不能のまま返る"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["condukt,p2"]
 status = "pending"
 notes = "実測 2026-08-06 22:49 JST、run-20260806-062115-17609。Stop hook は「残課題が 2 件あります: t1 (pending) / t2 (pending)」と表示したが、condukt state show は両方 status=running を返す。表示語彙が state と食い違っており、pending と読んだ側は「未着手だから安全に dispatch できる」と解釈しうる。さらに condukt state probe は両タスクとも verdict=undetermined を返し、生存を判定できていない。worktree の最終更新は t1 が Aug 6 07:32、t2 が Aug 6 07:18 で約15時間停止している一方、task の updated_at は 1786024127 (約20分前) で、誰かが state だけを触っている。15時間停止した worktree と20分前の updated_at の組み合わせは、progress ではなく bookkeeping が更新されていることを示唆する。判定不能を pending と表示するのは fail-open 方向の縮退 (CLAUDE.md 3) にあたる可能性がある。要検証: (a) stop hook の語彙が state のどのフィールドから来ているか、(b) probe が undetermined を返す条件、(c) updated_at を触っているのが何か。ユーザ判断で本 run 自体には触っていない。"
@@ -213,6 +224,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/197"
 id = "66fb376a"
 title = "harness-core boundary の read_dir_entries が NotFound を空リストに写すため、呼び出し側が不在と空を自力で見分ける必要がある"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["harness-core,p3"]
 status = "pending"
 notes = "crates/harness-core/src/boundary.rs:53 read_dir_entries は NotFound を Determination::known(Vec::new()) に写す。docstring は理由を明記している (存在しないディレクトリは本当に何も含まない)。妥当な契約だが、不在と空を区別したい呼び出し側は自力で見分ける必要があり、その必要性がシグネチャからは読み取れない。実例 2026-08-06: blastguard retro の scan_dir は「--dir の打ち間違い」を「listed したが transcript が無かった」と表示してしまうため、Known(vec![]) かつ is_dir() が false のときだけ dir_unreadable を立てる後付け判定を書いた (crates/blastguard/src/retro.rs)。同じ判定を各呼び出し側が書き直すことになる。検討: Known(vec![]) を返す前に不在を表現できる型 (Determination<Option<Vec<PathBuf>>> あるいは専用の Absent) にするか、少なくとも「不在と空を区別する必要がある呼び出し側はこう書け」を docstring に足すか。既存呼び出し側の棚卸しが先。"
@@ -226,6 +238,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/198"
 id = "e840c8b2"
 title = "backlog のキューが worktree から空に見える — flow の停止判定が構造的に常時「キューなし」になる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "backlog",
     "worktree-hygiene",
@@ -253,6 +266,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/199"
 id = "79ecf4dc"
 title = "backlog canonicalize_project の write 側は判定不能でも未解決ラベルで保存を続ける"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["1"]
 status = "pending"
 notes = "run-20260807-005024-18629 の残課題。store.rs の canonicalize_project は canonical_project_id が Undetermined のとき stderr へ診断を出したうえで resolve_repo_root へフォールバックし write を継続する。add をブロックすると finding 自体が失われるため degrade は正当化されたが、保存されたタスクに判定不能だった痕跡が残らないため別 checkout の既定 filtered list に現れない可能性がある。task に marker を持たせるか list 側で未解決ラベルを別扱いするかを検討する。"
@@ -266,6 +280,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/206"
 id = "ca186c31"
 title = "backlog 軸C オラクルの対照は store 有無で判別しており判定不能性そのものに固定されていない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["2"]
 status = "pending"
 notes = "tests/project_identity.rs の broken_git_link_does_not_silently_hide_an_existing_task は、健全 repo かつ store 無しの対照と、壊れた .git リンクかつ store 有りの側を比較する。したがって store の有無だけを判別子にする修正でも緑になり、判定不能性を一度も参照しない。独立 verifier 2名がこの限界を確認し doc comment にも明記済み。第3の腕 (健全 repo かつ store 有りでフィルタ落ち) を足すと判別子を resolvability に固定できる。"
@@ -279,6 +294,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/207"
 id = "29a4bcc3"
 title = "backlog next は list と違い cwd 由来の既定 project スコープを持たない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["2"]
 status = "pending"
 notes = "run-20260807-005024-18629 で軸C を list に入れた際に気づいた。main.rs の Next ハンドラは project を Option のまま store::next へ渡すだけで、list のような cwd 解決の既定スコープを持たない。したがって軸C の判定不能経路も通らない。意図的な設計なのか未対応なのかを確認する。意図的ならその旨を docstring に明記する。"
@@ -292,6 +308,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/208"
 id = "bc25f8f4"
 title = "condukt の verifier subagent が無応答のまま完了通知を出さない事象"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["2"]
 status = "pending"
 notes = "run-20260807-005024-18629 で observed。opus verifier の1体が出力ファイル 357226 バイトで約20分間まったく変化せず、完了通知も来ず、SendMessage での催促にも応答しなかった。沈黙は判定ではないので新しい verifier を立て直して判定を得た (CLAUDE.md 第3節)。condukt 側に verifier の無応答を検出する仕組みがない場合、沈黙が pass として扱われる経路が生まれうるので確認する。skill には consensus vote と adversarial adjudicate の expected による欠落検出はあるが、単一 verifier 経路にはない。"
@@ -305,6 +322,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/209"
 id = "3a0aabd7"
 title = "プロジェクト設定経由のRCEを緩和 (trust prompt / allowlist)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L2",
     "scout",
@@ -320,6 +338,7 @@ weight = 0.0
 id = "2385ac39"
 title = "budgetguard ledger.json をアトミック書込み+ロック化しテスト追加"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "L1",
@@ -336,6 +355,7 @@ weight = 0.0
 id = "b4923e62"
 title = "gate フック(donegate/reviewgate/precommit-audit)をpanicガードで包む"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -351,6 +371,7 @@ weight = 0.0
 id = "54a0c7b4"
 title = "condukt worktree の topic/branch を sanitize (traversal/git injection)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L2",
     "scout",
@@ -366,6 +387,7 @@ weight = 0.0
 id = "09efdce2"
 title = "CI に clippy -D warnings + rustfmt --check ゲートを追加"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "L4",
@@ -382,6 +404,7 @@ weight = 0.0
 id = "0dde5a1f"
 title = "project_key/fnv1a32 を共有クレート化し複製を排除"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -397,6 +420,7 @@ weight = 0.0
 id = "5a08b335"
 title = "Cargo.toml と plugin.json の version 整合を CI 検証"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -412,6 +436,7 @@ weight = 0.0
 id = "498edaa5"
 title = "シェル起動を harness-core 共通ヘルパに集約 (cross-platform)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -427,6 +452,7 @@ weight = 0.0
 id = "71ffe552"
 title = "CHANGELOG + release-plz でリリース自動化"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "L4",
@@ -446,6 +472,7 @@ weight = 0.0
 id = "9b9c21de"
 title = "dependabot/renovate で依存自動更新を導入"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -461,6 +488,7 @@ weight = 0.0
 id = "7d485127"
 title = "marketplace.json に discovery fields (category/keywords/license/homepage)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -476,6 +504,7 @@ weight = 0.0
 id = "5d245871"
 title = "DailyGuard が cargo-deny 不在を可視化 (監査未実施を錯覚させない)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L2",
     "scout",
@@ -491,6 +520,7 @@ weight = 0.0
 id = "677c9689"
 title = "cargo fmt --all で全体整形し CI に fmt --check ゲート追加"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -506,6 +536,7 @@ weight = 0.0
 id = "091e3106"
 title = "autoflow に backlog lock + compass ゲートを共有させる (二重 condukt 実行防止)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -522,6 +553,7 @@ weight = 0.0
 id = "65303eb7"
 title = "/backlog スキルループを /flow に一本化し backlog は queue+binary に限定"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -538,6 +570,7 @@ weight = 0.0
 id = "00b36628"
 title = "SessionStart の backlog ナッジを単一経路 (flow) に統合"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -554,6 +587,7 @@ weight = 0.0
 id = "babb1c00"
 title = "fugu-router の playbook サブコマンドを改名 (playbook plugin と命名衝突)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -570,6 +604,7 @@ weight = 0.0
 id = "155535aa"
 title = "Stop ゲートの本体ループ+state+runner を harness_core::gate に括り出す (donegate/reviewgate/tdd)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -586,6 +621,7 @@ weight = 0.0
 id = "53f7c890"
 title = "consume_skip と log_event(JSONL追記) を harness_core ヘルパーに集約"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -602,6 +638,7 @@ weight = 0.0
 id = "7aff1327"
 title = "precommit-audit を共有ゲート契約に合わせる or 設計差を明文化"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -618,6 +655,7 @@ weight = 0.0
 id = "e8affe20"
 title = "playbook/run-book の注入 substrate (config3層+char budget) を harness_core に共有 (統合はしない)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L2",
     "scout",
@@ -634,6 +672,7 @@ weight = 0.0
 id = "b38b398c"
 title = "二重 backlog (standalone backlog vs session-insights backlog) を一本化"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -650,6 +689,7 @@ weight = 0.0
 id = "4c2f93bb"
 title = "セッションコスト/turns/tools を単一情報源化 (transcript 3重パース解消)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -666,6 +706,7 @@ weight = 0.0
 id = "cdb2f051"
 title = "harness-status の他plugin型ミラーを共有型に置換しコスト算出経路を統一"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -682,6 +723,7 @@ weight = 0.0
 id = "3aed8596"
 title = "gauge の pricing.rs/transcript.rs re-export シムを削除"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L2",
     "scout",
@@ -698,6 +740,7 @@ weight = 0.0
 id = "89efa84b"
 title = "autoflow に compass freshness ゲートを追加 (driver restructure と統合)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -714,6 +757,7 @@ weight = 0.0
 id = "742ce8e5"
 title = "Fix hypothesis list --status no-op filter"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -731,6 +775,7 @@ weight = 0.0
 id = "67efb82c"
 title = "Stop condukt auto-validating hypotheses on gate PASS; require measured evidence"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "L2",
@@ -748,6 +793,7 @@ weight = 0.0
 id = "5bcfd912"
 title = "Add hypothesis as a third /flow SOURCE"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -764,6 +810,7 @@ weight = 0.0
 id = "66d0968a"
 title = "Evaluate move outcome against compass measuring_stick (close the measurement loop)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L2",
     "scout",
@@ -780,6 +827,7 @@ weight = 0.0
 id = "366bf65d"
 title = "Add experiment/spike task class to condukt with discard-as-learning + findings"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -796,6 +844,7 @@ weight = 0.0
 id = "95756f5e"
 title = "Add an opportunity layer (OST) between north_star and tasks"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -812,6 +861,7 @@ weight = 0.0
 id = "0ecee94c"
 title = "Track North Star input metrics + outcome-based done_criteria"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -831,6 +881,7 @@ weight = 0.0
 id = "6d068768"
 title = "Add a parallel discovery track to flow (dual-track agile)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -850,6 +901,7 @@ weight = 0.0
 id = "65a9f8d9"
 title = "Score opportunities by outcome impact in flow/backlog ordering"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -866,6 +918,7 @@ weight = 0.0
 id = "f2fa042c"
 title = "Add a recurring discovery cadence for stale hypotheses"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -885,6 +938,7 @@ weight = 0.0
 id = "12c7726f"
 title = "Add AwaitingMeasurement hypothesis status set on condukt merge"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L2",
     "scout",
@@ -902,6 +956,7 @@ weight = 0.0
 id = "2b18a458"
 title = "Experiment tasks: findings field + worktree discard-as-learning"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -919,6 +974,7 @@ weight = 0.0
 id = "3e11b916"
 title = "flow/compass sink が完了 move に compass outcome を自動呼び出し + verdict を diff から LLM 判定"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "pdo",
     "measurement",
@@ -934,6 +990,7 @@ weight = 0.0
 id = "b5a1e4c9"
 title = "hypothesis に kill/success 基準を事前登録 (build前にfalsifiable化)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "pdo",
     "scout",
@@ -949,6 +1006,7 @@ weight = 0.0
 id = "f95c3d9c"
 title = "riskiest-assumption test (RAT) ゲートを build前に追加"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "pdo",
     "scout",
@@ -964,6 +1022,7 @@ weight = 0.0
 id = "6efdd9fe"
 title = "pivot-or-persevere ゲートを flow ループ終端に追加"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "pdo",
     "scout",
@@ -979,6 +1038,7 @@ weight = 0.0
 id = "a2c5a2ab"
 title = "hypothesis に confidence/evidence-strength を持たせ discovery 順序を駆動"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "pdo",
     "scout",
@@ -994,6 +1054,7 @@ weight = 0.0
 id = "68540cc5"
 title = "condukt の interpreter/researcher を opus 固定から sonnet 既定へ（曖昧時のみ opus 昇格）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -1010,6 +1071,7 @@ weight = 0.0
 id = "9f0d8d5f"
 title = "condukt Phase6 で機械判定可能な done_criteria / reproduction_tests は LLM verifier を起動せず決定論判定する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -1026,6 +1088,7 @@ weight = 0.0
 id = "8b1738f8"
 title = "gauge に per-agent/per-skill のコスト帰属を追加（メイン vs sub-agent の内訳）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -1042,6 +1105,7 @@ weight = 0.0
 id = "3f15701c"
 title = "gauge でキャッシュ読込/書込を分離表示しヒット率を出す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -1058,6 +1122,7 @@ weight = 0.0
 id = "f0a8d435"
 title = "budgetguard の残予算を fugu-router のモデル選択にフィードバック（budget-aware downgrade）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -1074,6 +1139,7 @@ weight = 0.0
 id = "ba84f51c"
 title = "scout の 5レンズ固定 fan-out をスコープ規模でゲートする（特に Web を使う L3）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -1090,6 +1156,7 @@ weight = 0.0
 id = "8c55b593"
 title = "fugu-router prior の trivial 判定を file_count>5 より先に評価する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -1106,6 +1173,7 @@ weight = 0.0
 id = "0da8cfae"
 title = "precommit-audit: project config 読込に trust ゲートを追加"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "security",
     "consolidation",
@@ -1121,6 +1189,7 @@ weight = 0.0
 id = "0eb48ad0"
 title = "evalkit プラグイン: オフライン golden 回帰評価ハーネス + CI eval.yml"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "llmops",
@@ -1137,6 +1206,7 @@ weight = 0.0
 id = "c807fa76"
 title = "tracekit プラグイン: condukt run の span ツリートレース + OTel GenAI export"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "llmops",
@@ -1153,6 +1223,7 @@ weight = 0.0
 id = "4b4898a3"
 title = "fugu-router label サブコマンド: 人手フィードバックで verifier 自己ラベルを上書き"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "llmops",
@@ -1169,6 +1240,7 @@ weight = 0.0
 id = "840dd14a"
 title = "schemaguard: source→executor 境界で構造化 JSON を schema 検証 + 1回 re-ask"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "llmops",
@@ -1185,6 +1257,7 @@ weight = 0.0
 id = "a02bf1e1"
 title = "trajectoryeval: condukt Phase6 verifier の sibling で worker の tool-call 経路を検証"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "llmops",
@@ -1201,6 +1274,7 @@ weight = 0.0
 id = "f3708deb"
 title = "curate: fugu episodes/playbooks を versioned golden 評価データセットへ昇格"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "llmops",
@@ -1217,6 +1291,7 @@ weight = 0.0
 id = "84ee4ceb"
 title = "skill-fingerprint + カナリア: outcome を SKILL 版で層別化し golden-replay 差分"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "llmops",
@@ -1233,6 +1308,7 @@ weight = 0.0
 id = "1320715f"
 title = "規範/always ノートを切り詰め・脱落から免除する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -1248,6 +1324,7 @@ weight = 0.0
 id = "b009e120"
 title = "context-governor Phase2: DefaultInjector/Classifier を ToC-first/heading-addressable retrieval として実装"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -1263,6 +1340,7 @@ weight = 0.0
 id = "2997f08f"
 title = "tree-sitter repo map(PageRank) / シンボル単位読み出しを導入する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -1281,6 +1359,7 @@ weight = 0.0
 id = "282e2a2c"
 title = "context-governor Phase2a: DefaultGroomer (ToolResultGroomer) を実装"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "L4",
@@ -1296,6 +1375,7 @@ weight = 0.0
 id = "e951c60a"
 title = "context-governor: implement dead Phase-2 handlers (rehydrator/checkpointer/guard/backing)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "internal",
     "scout",
@@ -1312,6 +1392,7 @@ weight = 0.0
 id = "4bddfd4a"
 title = "context-governor: wire action ledger so groom/inject emit saved-token metrics (I6)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "internal",
     "scout",
@@ -1328,6 +1409,7 @@ weight = 0.0
 id = "64e1287c"
 title = "context-governor: add prompt-caching cache breakpoints (cost lever, not token lever)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "industry",
     "scout",
@@ -1349,6 +1431,7 @@ weight = 0.0
 id = "966ae7aa"
 title = "context-governor: order injected context to avoid lost-in-the-middle"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "industry",
     "scout",
@@ -1370,6 +1453,7 @@ weight = 0.0
 id = "8ebfa49c"
 title = "ctxrot/governor: truncate large tool outputs instead of only nudging (+cap repeated nudges)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "internal",
     "scout",
@@ -1386,6 +1470,7 @@ weight = 0.0
 id = "442f03c0"
 title = "context-governor: dedup repeated per-turn reference injection (seen-state)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "internal",
     "scout",
@@ -1402,6 +1487,7 @@ weight = 0.0
 id = "abf30980"
 title = "context-governor: make groom budget window-pressure-aware (not fixed per-result cap)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "internal",
     "scout",
@@ -1418,6 +1504,7 @@ weight = 0.0
 id = "ed0292c2"
 title = "context-governor/ctxrot: guard never-break-a-turn against future panic=abort (CI assertion)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "robustness",
     "scout",
@@ -1434,6 +1521,7 @@ weight = 0.0
 id = "6840de18"
 title = "blastguard: shell 評価バイパス(eval/source/exec, sh -c, find -exec sh -c, 先頭空白)を塞ぐ"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L2",
     "scout",
@@ -1449,6 +1537,7 @@ weight = 30.0
 id = "76af787b"
 title = "context-governor: never-break-a-turn を破る .expect() を fail-soft 化"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "L5",
@@ -1465,6 +1554,7 @@ weight = 29.0
 id = "b0dacea8"
 title = "CI に panic=abort 拒否ガードを追加し unwind 不変条件をロック"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -1480,6 +1570,7 @@ weight = 28.0
 id = "67ca66c3"
 title = "CI にコードカバレッジ計測(cargo-llvm-cov)+badge を追加"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "L4",
@@ -1496,6 +1587,7 @@ weight = 20.0
 id = "84e67849"
 title = "リリース版数バンプ+CHANGELOG 自動化(release-plz/git-cliff)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "L4",
@@ -1512,6 +1604,7 @@ weight = 19.0
 id = "ae9fb11b"
 title = "backlog SessionStart の requeue_expired を lock で直列化(TOCTOU)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -1527,6 +1620,7 @@ weight = 18.0
 id = "19d04155"
 title = "hook stdin JSON 解析に再帰深さ制限を追加(DoS)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L2",
     "scout",
@@ -1542,6 +1636,7 @@ weight = 17.0
 id = "3a30268a"
 title = "specguard agent command を検証(shell メタ文字拒否)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L2",
     "scout",
@@ -1557,6 +1652,7 @@ weight = 10.0
 id = "c02b9285"
 title = "単一ファイル状態を atomic write 化(compass carve / ctxrot band)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -1572,6 +1668,7 @@ weight = 9.0
 id = "77b7bf3f"
 title = "clap を workspace.dependencies へ集約"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -1587,6 +1684,7 @@ weight = 8.0
 id = "6dd15ea7"
 title = "context-governor ledger truncation+rollup の往復統合テスト"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -1602,6 +1700,7 @@ weight = 7.0
 id = "a0122db3"
 title = "session-insights report --context のレッジャ join 修復 (RED test)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -1617,6 +1716,7 @@ weight = 0.0
 id = "733499ce"
 title = "specguard shard 並列プールの Mutex poisoning panic を塞ぐ (never-break-a-turn)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -1632,6 +1732,7 @@ weight = 0.0
 id = "e8e3dee9"
 title = "共有 harness_core::store::ledger_path を抽出し writer/reader ドリフトを排除"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -1647,6 +1748,7 @@ weight = 0.0
 id = "664ed1c4"
 title = "ctxrot distill marker を atomic + fsync 書込みに"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -1662,6 +1764,7 @@ weight = 0.0
 id = "46c0c53b"
 title = "fugu-router にコスト調整型モデルルーティングを追加 (RouteLLM/FrugalGPT)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -1680,6 +1783,7 @@ weight = 0.0
 id = "48c332b0"
 title = "ctxrot に圧力閾値での tool-result/thinking ブロック自動クリアを追加"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -1698,6 +1802,7 @@ weight = 0.0
 id = "bc15d2bb"
 title = "harness-core に agent 呼び出し可能な memory-tool API を追加"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -1716,6 +1821,7 @@ weight = 0.0
 id = "2a89aa1e"
 title = "ゲート検証を multi-judge debate 化 (donegate/reviewgate/specguard)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -1734,6 +1840,7 @@ weight = 0.0
 id = "d3c22bc9"
 title = "構造化ロギング(tracing)を導入し println!/eprintln! を置換"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -1752,6 +1859,7 @@ weight = 0.0
 id = "cfc67177"
 title = "flow→condukt→fugu-router の横断 E2E 統合テストを追加"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -1767,6 +1875,7 @@ weight = 0.0
 id = "d889d391"
 title = "env 由来のパス/ref 構成要素を検証 (SPECGUARD_NOW/BASELINE_REF/CG_STATE_DIR)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L2",
     "scout",
@@ -1782,6 +1891,7 @@ weight = 0.0
 id = "13f38dc6"
 title = "状態ファイルを 0o600 権限で作成し temp 命名を tempfile 化"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L2",
     "scout",
@@ -1797,6 +1907,7 @@ weight = 0.0
 id = "b209f2d9"
 title = "F->P gate: treat transition:unknown / no-proofs as fallback, not reject"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "condukt",
     "correctness-spine",
@@ -1812,6 +1923,7 @@ weight = 0.0
 id = "93910733"
 title = "gitignore .tdd/ proof artifacts (per-run red/green JSON)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "hygiene",
     "p2",
@@ -1826,6 +1938,7 @@ weight = 0.0
 id = "010e5fd2"
 title = "Add central autonomy-policy engine (condukt policy decide): risk x reversibility x confidence -> auto|escalate|block"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "autonomy",
     "scout",
@@ -1842,6 +1955,7 @@ weight = 0.0
 id = "b88bfedb"
 title = "Add durable checkpoint/journal/rollback to condukt (charter #7) - the safety net that justifies removing human gates"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "autonomy",
     "scout",
@@ -1858,6 +1972,7 @@ weight = 0.0
 id = "e9e04569"
 title = "Extend blastguard into a graded risk/reversibility classifier + derive class:gated deterministically"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "autonomy",
     "scout",
@@ -1874,6 +1989,7 @@ weight = 0.0
 id = "5f7d706b"
 title = "Add non-interactive AskUserQuestion shim that self-answers the recommended option when policy=auto"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "autonomy",
     "scout",
@@ -1889,6 +2005,7 @@ weight = 0.0
 id = "529461e9"
 title = "Replace self-reported confidence (high|med|low) with a calibrated score from historical pass-rates"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "autonomy",
     "scout",
@@ -1904,6 +2021,7 @@ weight = 0.0
 id = "cf72d55a"
 title = "Add a durable async escalation channel (structured 質疑) for the two surviving human stops"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "autonomy",
     "scout",
@@ -1919,6 +2037,7 @@ weight = 0.0
 id = "a933c38a"
 title = "Formalize circuit-breaker stop-conditions in one deterministic gate (cost, failure-streak, loop-detection)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "autonomy",
     "scout",
@@ -1935,6 +2054,7 @@ weight = 0.0
 id = "1059481c"
 title = "Allow policy-approved auto-exec of GATED tasks classified reversible+low-risk (the one remove-gate)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "autonomy",
     "scout",
@@ -1950,6 +2070,7 @@ weight = 0.0
 id = "98be79b2"
 title = "Wire condukt/scout/flow AskUserQuestion gates through 'condukt policy answer'"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -1966,6 +2087,7 @@ weight = 0.0
 id = "176e572e"
 title = "blastguard classify: '->' and '<x>' in task prose false-trip the '>' truncating-redirect force-gate"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = "During flow run of backlog 529461e9, condukt schedule force-gated two benign code-edit tasks as 'high-risk irreversible'. Root cause: schedule.rs task_action_text (title+done_criteria+touched_files) is fed to blastguard::classify -> detect::detect(Bash) -> single_redirect_target (crates/blastguard/src/detect.rs:164), which treats '>' with a preceding '-' (Rust 'fn() -> T' arrows) or a preceding letter ('<t>' placeholders) as a single truncating '>' redirect and DENYs, so classify returns High+irreversible. Fix: in single_redirect_target, skip when prev byte is '-' (arrow) and treat '<ident>' placeholder brackets as non-redirect (or have classify not route descriptive done_criteria prose through the Bash command detector at all). Add unit tests: prose containing 'fn foo() -> Bar' and '--flag <value>' must classify Low/reversible (benign_lookalikes). Workaround used this run: reworded done_criteria to drop '->'/'<>'."
@@ -1977,6 +2099,7 @@ weight = 0.0
 id = "e9025f5f"
 title = "session-insights skill のハードコード binary パス(0.2.3)を version 非依存に直す(CLAUDE_PLUGIN_ROOT/glob)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = ""
@@ -1988,6 +2111,7 @@ weight = 0.0
 id = "4334a82b"
 title = "condukt calibrated_confidence test flag_supplied_but_probe_unusable_falls_back is env-coupled (assumes fugu-router absent/empty; fails when ambient episode store is populated) — make hermetic"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = ""
@@ -1999,6 +2123,7 @@ weight = 0.0
 id = "8c101b62"
 title = "他セッション由来の plugin drift (condukt/flow/compass/gauge 等) を一括 rollout するか判断・実行"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = ""
@@ -2010,6 +2135,7 @@ weight = 0.0
 id = "08e153e9"
 title = "harness 同梱シェル資産の bash4 依存(declare -A/mapfile/大小変換)を横断確認しbash3.2互換化"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = ""
@@ -2021,6 +2147,7 @@ weight = 0.0
 id = "99b03c0b"
 title = "blastguard: 後段セグメントのtruncating redirectを検査(最初の>だけ見るfail-open) CA-blastguard-01 detect.rs:94 +回帰テスト"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = ""
@@ -2032,6 +2159,7 @@ weight = 0.0
 id = "2275ee67"
 title = "blastguard: rm wildcard operandがconfig globにself-matchするfail-openを塞ぐ(rm -rf *.toml許可) CA-blastguard-02 detect.rs:419 +回帰テスト"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = ""
@@ -2043,6 +2171,7 @@ weight = 0.0
 id = "1bc96be4"
 title = "propguard: FAIL diffのalready-verifiedバイパス(subprocess fail-open)を塞ぐ CA-propguard-01 gate.rs:159 +回帰テスト"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = ""
@@ -2054,6 +2183,7 @@ weight = 0.0
 id = "be3bc4e5"
 title = "propguard: PROP行のアンカー付き一致でcross-property汚染を防ぐ CA-propguard-02 gate.rs:514 +回帰テスト"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = ""
@@ -2065,6 +2195,7 @@ weight = 0.0
 id = "466b1591"
 title = "specguard: polarity gateに主語スワップ検知を追加(認可反転の自動批准を防ぐ) CA-specguard-01 similarity.rs:248 +回帰テスト"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = ""
@@ -2076,6 +2207,7 @@ weight = 0.0
 id = "2f627b27"
 title = "continuous-audit: review-queue→backlog 自動ブリッジ（CONFIRMED finding を backlog へ流し /flow で自動修正できるようにする＝発見→修正の動線を閉じる）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = ""
@@ -2087,6 +2219,7 @@ weight = 0.0
 id = "aedb5459"
 title = "continuous-audit.sh: --finding 無しの dry-run が bash3.2 で空 FINDINGS[@] unbound で落ちるのを修正（continuous-audit-operating-note 改修2）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = ""
@@ -2098,6 +2231,7 @@ weight = 0.0
 id = "6984694c"
 title = "continuous-audit: audit-round --round の契約不一致（SKILL 例=2026W28 文字列 vs binary=数値）を統一"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = ""
@@ -2109,6 +2243,7 @@ weight = 0.0
 id = "64a4c9ee"
 title = "review: リスク階層化e2e検証に visual diff/perceptual hash サンプリングを追加(review-redesign item11・旧itemF・未着手)。コアフロー出力のpHashをratified precedentと比較し閾値超過のみ人間へ"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = ""
@@ -2120,6 +2255,7 @@ weight = 0.0
 id = "4e710da1"
 title = "review: blastguard/propguard向け静的call-graph解析を追加(review-redesign item1の未カバー分)。変更シンボルの呼び出し元を機械列挙しdiffrisk::classify_diffのリスクシグナルに供給"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = ""
@@ -2131,6 +2267,7 @@ weight = 0.0
 id = "2ce97505"
 title = "rollout-plugins.sh/rebuild-plugins.sh: 新規version dirにhost darwin-arm64バイナリを自動配置するよう恒久修正(現状は毎回手動cargo build+cpが必要)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = ""
@@ -2142,6 +2279,7 @@ weight = 0.0
 id = "6bc37d3b"
 title = "similarity_threshold の clamp 下限が 0.0 で floor が無く 0.0 で jaccard>=0.0 恒真 → near-repeat フィルタ無効化"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = "finding-id:CA-stuckguard-03 file:crates/stuckguard/src/config.rs:166 severity:low"
@@ -2153,6 +2291,7 @@ weight = 0.0
 id = "fdcb0232"
 title = "drift する near-repeat 家族で cluster_core key が毎回変化し escalate count がリセット (escalation fail-open, threshold<1.0 時)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = "finding-id:CA-stuckguard-01 file:crates/stuckguard/src/detect.rs:146 severity:high"
@@ -2164,6 +2303,7 @@ weight = 0.0
 id = "7b9483e4"
 title = "閾値近傍で {:.1}% 丸めが 80.0% < 80.0% の自己矛盾表示 (判定は正しい, 表示のみ)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = "finding-id:CA-mutategate-02 file:crates/mutategate/src/lib.rs:180 severity:low"
@@ -2175,6 +2315,7 @@ weight = 0.0
 id = "fe1f5c25"
 title = "reset_after_secs が sanitize で未検証, 0/負値で give-up 機構が無効化しブロックループから抜けられない (home config は trust 不要)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = "finding-id:CA-propguard-02 file:crates/propguard/src/config.rs:298 severity:med"
@@ -2186,6 +2327,7 @@ weight = 0.0
 id = "228c4e8c"
 title = "jaccard 両空→1.0 特例が空白のみ body の非正規化ツール (Read/Grep/Glob) で別 sig を near-repeat 誤判定 (退化条件, spurious nudge)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = "finding-id:CA-stuckguard-02 file:crates/stuckguard/src/detect.rs:50 severity:med"
@@ -2197,6 +2339,7 @@ weight = 0.0
 id = "6a53627e"
 title = "POLARITY_TOKENS が縮約否定形 (cannot/cant/wont) を認識せず極性反転が signature に現れない → 反転ポリシーが人間承認なしで自動再批准されうる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = "finding-id:CA-specguard-01 file:crates/specguard/src/similarity.rs:56 severity:high"
@@ -2208,6 +2351,7 @@ weight = 0.0
 id = "2ea9050a"
 title = "rm の wildcard 判定が * のみで ? と [ グロブを見逃す (has_glob_meta が既にあるのに主判定に未使用)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = "finding-id:CA-blastguard-02 file:crates/blastguard/src/detect.rs:446 severity:high"
@@ -2219,6 +2363,7 @@ weight = 0.0
 id = "3b7f0e64"
 title = "未知 summary 値が viable 分母から無音で消え見かけ kill-rate が実態より高く出うる (検知手段なし, fail-open)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = "finding-id:CA-mutategate-01 file:crates/mutategate/src/lib.rs:117 severity:med"
@@ -2230,6 +2375,7 @@ weight = 0.0
 id = "22d3f55b"
 title = "xargs 経由 (find"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = "finding-id:CA-blastguard-01 file:xargs rm -rf, xargs -I{} sh -c) が完全バイパス: xargs 分岐が無くコマンド引数を再解析しない|crates/blastguard/src/detect.rs:381 severity:high"
@@ -2241,6 +2387,7 @@ weight = 0.0
 id = "caacbb2b"
 title = "subprocess mode の below-threshold Block で PASS した property まで overwatch fleet 違反に記録 (prop_ids が satisfied で絞られない, systemic 相関を汚染)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = "finding-id:CA-propguard-01 file:crates/propguard/src/gate.rs:238 severity:med"
@@ -2252,6 +2399,7 @@ weight = 0.0
 id = "03e28c13"
 title = "1> 明示 stdout truncating redirect が fd-dup 扱いで見逃し (> と意味同一なのに prev.is_ascii_digit でスキップ)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = "finding-id:CA-blastguard-03 file:crates/blastguard/src/detect.rs:198 severity:high"
@@ -2263,6 +2411,7 @@ weight = 0.0
 id = "da04890b"
 title = "review-queue: risk-rank by severity + top-K review budget (not recency)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -2278,6 +2427,7 @@ weight = 0.0
 id = "33b4ef6e"
 title = "route needs-human/gate-check Escalate verdicts into a durable human queue"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -2293,6 +2443,7 @@ weight = 0.0
 id = "220329e4"
 title = "deterministic reviewer digest (review-brief) per change from static signals"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -2308,6 +2459,7 @@ weight = 0.0
 id = "5c06c45f"
 title = "propguard: systemic checker-outage give-ups must escalate, not fail-OPEN"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -2323,6 +2475,7 @@ weight = 0.0
 id = "727cc104"
 title = "cross-diff fingerprint dedup + per-source collapse + escalate backpressure"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -2338,6 +2491,7 @@ weight = 0.0
 id = "01e1d3c4"
 title = "review-effectiveness metrics: finding disposition store + FP/agreement/latency"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -2353,6 +2507,7 @@ weight = 0.0
 id = "44d5a2bb"
 title = "novelty/precedent detection to auto-downgrade routine diffs to spot-check"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -2368,6 +2523,7 @@ weight = 0.0
 id = "a92d3c72"
 title = "bridge condukt escalations.json and overwatch review-queue into one surface"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -2383,6 +2539,7 @@ weight = 0.0
 id = "c3dcbd6d"
 title = "review-worthiness heuristic (size/net-deletion/missing-rationale) axis"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -2398,6 +2555,7 @@ weight = 0.0
 id = "e896fba8"
 title = "surface auto-approved population on the human review queue"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -2413,6 +2571,7 @@ weight = 0.0
 id = "3d96b07f"
 title = "deterministic hunk grouping / review-order optimization"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L3",
     "scout",
@@ -2428,6 +2587,7 @@ weight = 0.0
 id = "c03cf8d7"
 title = "compaction/rotation for append-only findings JSONL"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -2443,6 +2603,7 @@ weight = 0.0
 id = "68b658e1"
 title = "review-brief sensitive-path driver should use repo_sensitive_config (not SensitiveConfig::default)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "followup",
@@ -2458,6 +2619,7 @@ weight = 0.0
 id = "26de4204"
 title = "strengthen disposition_metrics integration test: overwrite only timestamps, keep CLI-written verdicts"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "overwatch",
     "test-strength",
@@ -2473,6 +2635,7 @@ weight = 0.0
 id = "16dc9ad4"
 title = "tighten has_task_link: exclude git short-SHA collision (require backlog/run-id context)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "review-worthiness",
     "follow-up",
@@ -2488,6 +2651,7 @@ weight = 0.0
 id = "7d2218ea"
 title = "finder と verifier が同一モデル: MUST 違反 (finder=claude-opus-4-8, verifier=claude-opus-4-8) — model diversity 要件 (生成と検証の盲点共有を防ぐ) を満たさない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p0",
@@ -2502,6 +2666,7 @@ weight = 0.0
 id = "18433703"
 title = "`&>` combined stdout+stderr redirect truncates target but is skipped as fd-dup form so the truncating-redirect deny is bypassed"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p0",
@@ -2516,6 +2681,7 @@ weight = 0.0
 id = "229618fe"
 title = "git restore . discards working-tree changes but analyze_git only handles clean/reset/checkout and falls through to Allow (git checkout -- . is denied)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p0",
@@ -2530,6 +2696,7 @@ weight = 0.0
 id = "bfe1447e"
 title = "git stash clear/drop irreversibly deletes stashes but is unmatched in analyze_git and falls through to Allow"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p1",
@@ -2544,6 +2711,7 @@ weight = 0.0
 id = "7781648a"
 title = "checker-unavailable Block reports full derived prop_ids (not narrowed like the fixed below-threshold path) into property_id-keyed systemic correlation"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p1",
@@ -2558,6 +2726,7 @@ weight = 0.0
 id = "350a7438"
 title = "diff-truncated Block reports full prop_ids as violations though truncation checked nothing, same correlation pollution"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p1",
@@ -2572,6 +2741,7 @@ weight = 0.0
 id = "626cac44"
 title = "cross-clause object-swap on neg axis (always/never) passes polarity_preserved=true at sim 0.95; BACKSTOP_AXES excludes neg so inverted policy auto-ratifies without human"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p0",
@@ -2586,6 +2756,7 @@ weight = 0.0
 id = "ebf3ef8b"
 title = "object_bindings binds polarity token to nearest content token (shared verb) so swapped object nouns never collide as a head and the swap is invisible"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p0",
@@ -2600,6 +2771,7 @@ weight = 0.0
 id = "9590c79e"
 title = "polarity_preserved compares only heads present in both texts (intersection) so the differing swapped-object head is never checked"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p0",
@@ -2614,6 +2786,7 @@ weight = 0.0
 id = "d069a830"
 title = "auto-ratify re-pins the precedent to the just-approved text with no cumulative-drift limit or streak counter, so sub-threshold edits walk the meta-canon arbitrarily far from the human baseline"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p0",
@@ -2628,6 +2801,7 @@ weight = 0.0
 id = "ee189441"
 title = "progress_score_threshold clamp is floorless (0.0 passes) while progress_score is strictly positive, making the advisory gate a tautology at threshold 0.0"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p1",
@@ -2642,6 +2816,7 @@ weight = 0.0
 id = "fa2b7d0c"
 title = "specguard: fix object_bindings/polarity_preserved root-cause for neg-axis object-swap WITHOUT the modal-axis false-positive (defense-in-depth; security already handled by BACKSTOP_AXES). Naive fix (commit 97850cd, reverted) widened neg-axis binding to 2 forward heads -> polarity_preserved correctly returns false for the swap, BUT collides with the modal axis (must/should) single-forward-head on common 'must always X'/'should never Y' phrasing: inserting a benign adverb ('must always promptly deploy') rebinds the modal head to the adverb, flipping polarity_preserved=false on a 1-neg-token edit the count backstop does NOT mask -> spurious human escalation. Narrow it: exclude modal-axis heads from the neg-axis widened reach, or only widen when the intervening token isn't adjacent to another axis's polarity token. Add a RED test pinning the 'must always X'+adverb benign edit stays Precedented/auto-ratifies."
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = ""
@@ -2653,6 +2828,7 @@ weight = 0.0
 id = "f0964621"
 title = "git global option with a separate-token value (git -C dir, or -c key=val, before the subcommand) makes the value token be read as the subcommand, so every git deny (reset/clean/checkout/stash) falls through to Allow"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p0",
@@ -2667,6 +2843,7 @@ weight = 0.0
 id = "2e581bec"
 title = "the gt-then-ampersand-then-filename redirect (bash mirror of ampersand-gt) truncates stdout+stderr into a file but is unconditionally skipped by the next-is-ampersand fd-dup clause, so it is Allowed"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p1",
@@ -2681,6 +2858,7 @@ weight = 0.0
 id = "e53275c3"
 title = "a subprocess checker PASS verdict whose reason prose contains the substring fail (failure/failed/cannot fail) is misparsed as FAIL, so a satisfied property is undercounted and reported violated to the fleet-correlation store"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p1",
@@ -2695,6 +2873,7 @@ weight = 0.0
 id = "5d18ee33"
 title = "a property the subprocess checker emitted no verdict line for is reported violated, conflating never-evaluated with checked-and-failed, at per-property grain (finer than the CA-propguard-03/04 fix)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p1",
@@ -2709,6 +2888,7 @@ weight = 0.0
 id = "61daa870"
 title = "modal-axis (and audit-axis) cross-clause object swap auto-ratifies: the neg-axis fix (forward-head widening plus backstop) was not applied to modal and BACKSTOP_AXES excludes modal, so a required/optional object swap inverts the obligation while polarity_preserved returns true"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p0",
@@ -2723,6 +2903,7 @@ weight = 0.0
 id = "df4cdbeb"
 title = "oscillation_threshold is floored with max(1) but not clamped with min(window) unlike its sibling thresholds, so a threshold at or above window silently disables oscillation detection because reversals are bounded by window minus 1"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p1",
@@ -2737,6 +2918,7 @@ weight = 0.0
 id = "158100b9"
 title = "the PASS branch renders a self-contradictory reason like kill-rate 79.99 percent at-or-above 80.0 percent when KILL_RATE_EPSILON bridges a hair-below-threshold rate (PASS-direction mirror of CA-mutategate-02)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p1",
@@ -2751,6 +2933,7 @@ weight = 0.0
 id = "c10c8c92"
 title = "the CLI mutants line prints the viable breakdown as caught/timeout/missed and omits unknown, so the breakdown does not sum to the viable count when any mutant has an unknown summary"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p2",
@@ -2765,6 +2948,7 @@ weight = 0.0
 id = "8e08c7c4"
 title = "review-queue to-backlog idempotency keys only on the fingerprint-group representative id, which rotates to the newest ts each round, so a recurring finding re-recorded under a fresh id re-bridges a duplicate backlog task"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p1",
@@ -2779,6 +2963,7 @@ weight = 0.0
 id = "a91c5de7"
 title = "store save() does write plus rename with no sync_all or dir fsync (unlike lock.rs), so a crash in the write window can truncate tasks.toml and lose all tasks"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p1",
@@ -2793,6 +2978,7 @@ weight = 0.0
 id = "cc2503f6"
 title = "check_duplicate blocks only pending/failed, so a task set to claimed by next_claim does not block a re-add and is_claimed_elsewhere consults condukt separate ledger, allowing a duplicate of in-progress work"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p1",
@@ -2807,6 +2993,7 @@ weight = 0.0
 id = "2914ec28"
 title = "the fixed temp filename plus the fail-soft unprotected save path lets two degraded writers clobber the shared temp, causing a lost update or a spurious rename ENOENT (lock.rs suffixes pid and nanos, store.rs does not)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p2",
@@ -2821,6 +3008,7 @@ weight = 0.0
 id = "f67316cd"
 title = "edit --status writes an unvalidated raw status (no status_warning unlike list), so a typo such as open strands the task out of next and next_claim with requeue_expired unable to rescue it"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p2",
@@ -2835,6 +3023,7 @@ weight = 0.0
 id = "a8185da8"
 title = "a stale claimed task is reclaimable only via next_claim; plain next and requeue_expired never rescue it, so a crashed claimant strands its task in claimed indefinitely"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "continuous-audit",
     "p2",
@@ -2849,6 +3038,7 @@ weight = 0.0
 id = "82c297c8"
 title = "systemic signature recurred 39x across 1 task(s)/3 session(s)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "systemic",
     "p0",
@@ -2863,6 +3053,7 @@ weight = 0.0
 id = "887c47a7"
 title = "systemic signature recurred 8x across 1 task(s)/2 session(s)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "systemic",
     "p0",
@@ -2877,6 +3068,7 @@ weight = 0.0
 id = "c17f7abb"
 title = "systemic signature recurred 12x across 1 task(s)/3 session(s)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "systemic",
     "p0",
@@ -2891,6 +3083,7 @@ weight = 0.0
 id = "be9ca43d"
 title = "systemic signature recurred 3x across 3 task(s)/1 session(s)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "systemic",
     "p0",
@@ -2905,6 +3098,7 @@ weight = 0.0
 id = "75051e01"
 title = "overwatch: make review_queue::finding_fingerprint pub(crate) and have bridge.rs call it, removing the hand-duplicated copy (latent drift risk if either edited)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = ""
@@ -2916,6 +3110,7 @@ weight = 0.0
 id = "7916a97d"
 title = "Lock overwatch lease mutators run/end/heartbeat/reap under LeaseLock (only begin locks today)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -2932,6 +3127,7 @@ weight = 0.0
 id = "37a9a2c6"
 title = "schedule.rs: route tasks with empty touched_files to serial not parallel"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -2948,6 +3144,7 @@ weight = 0.0
 id = "33737796"
 title = "schedule.rs: force-serialize touched_files that violate the repo-relative convention instead of only warning"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -2964,6 +3161,7 @@ weight = 0.0
 id = "8effd7fe"
 title = "worktree.create(): git worktree prune before the branch-checked-out gate"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -2980,6 +3178,7 @@ weight = 0.0
 id = "c701e75f"
 title = "worktree.merge(): guard against concurrent runs mutating the primary repo default branch"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -2996,6 +3195,7 @@ weight = 0.0
 id = "bced1742"
 title = "Add overwatch lease end/reap-vs-begin concurrency test"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3012,6 +3212,7 @@ weight = 0.0
 id = "44346235"
 title = "Bound the fail-soft proceed-unlocked degrade so a 10s-contended RMW cannot double-write"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3028,6 +3229,7 @@ weight = 0.0
 id = "d26443d1"
 title = "Serialize overwatch reconcile-fixed disposition appends (dedupe on finding-id)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3044,6 +3246,7 @@ weight = 0.0
 id = "0ee61602"
 title = "Lock overwatch control reassign leases.json RMW under LeaseLock (6th mutator twin of 7916a97d)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3060,6 +3263,7 @@ weight = 0.0
 id = "6266f453"
 title = "Lock overwatch shared-ledger RMW paths: audit-round close, compact_review_findings, bridged check-append"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3076,6 +3280,7 @@ weight = 0.0
 id = "fc03d26d"
 title = "Close schedule.rs conflict-detection twins: leading-wildcard glob, case-fold, shared-glob-valued entry"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3092,6 +3297,7 @@ weight = 0.0
 id = "96d987f5"
 title = "Port unique temp-file naming (CA-backlog-003) to condukt claim.rs/state.rs and overwatch save paths"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3108,6 +3314,7 @@ weight = 0.0
 id = "625aa170"
 title = "並列作業の runtime conflict 検知 + 事後の合意ベース conflict 解消（prevention の twin）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "conflict",
     "detection",
@@ -3126,6 +3333,7 @@ weight = 0.0
 id = "5e7b0841"
 title = "44346235 follow-up: wire acquire_or_skip into production RMW callers (condukt state.rs/claim.rs/main.rs, overwatch, hypothesis)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "conflict",
     "follow-up",
@@ -3143,6 +3351,7 @@ weight = 0.0
 id = "dd6d4257"
 title = "rollout: condukt 0.7.73 / overwatch 0.1.46 / hypothesis 0.1.9 を live cache へ反映（GATE は canary、要ユーザー承認）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "rollout",
     "deploy",
@@ -3159,6 +3368,7 @@ weight = 0.0
 id = "91b4a26b"
 title = "625aa170 follow-up: filter RuntimeOverlap holds by run-liveness (abandoned-then-reused branch edge)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "conflict",
     "follow-up",
@@ -3179,6 +3389,7 @@ weight = 0.0
 id = "65469e09"
 title = "schedule() drops a lone parallel task to 0 batches for pathological ids (prop test single_parallel_task_one_batch, seed id=scp)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "conflict",
     "schedule",
@@ -3197,6 +3408,7 @@ weight = 0.0
 id = "b1117683"
 title = "5e7b0841 review nits: append_disposition returns Ok on contended-skip (untruthful recorded:true) + stale with_run_locked docstring"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "conflict",
     "follow-up",
@@ -3215,6 +3427,7 @@ weight = 0.0
 id = "e117d351"
 title = "91b4a26b (v2): filter RuntimeOverlap holds by run-liveness using a SHARED identity space (prior impl keyed off overwatch leases = disjoint id space, gate silently off)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "conflict",
     "follow-up",
@@ -3233,6 +3446,7 @@ weight = 0.0
 id = "b22160c3"
 title = "gate-crates-sync.yml が GitHub Actions で green になるか次回 push 後に確認"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = ""
@@ -3244,6 +3458,7 @@ weight = 0.0
 id = "cba17102"
 title = "pre-push の AUTONOMY_PATTERN advisory のノイズ量を評価し、多ければ対象を絞る"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "pending"
 notes = ""
@@ -3255,6 +3470,7 @@ weight = 0.0
 id = "e5623f14"
 title = "ctxrot preguard/toolguard: panic時に silent allow になる穴を deny に倒す (blastguard と同型)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = ""
@@ -3266,6 +3482,7 @@ weight = 0.0
 id = "a85b1d2c"
 title = "fail-open #1 injectguard: 非UTF-8/読取失敗のprompt資産がCLEAN扱い (check-prompt-injection.py:228 read_text except→[])。非バイパスCIゲート。VERIFIED。surrogateescapeで走査 or 読取失敗をhard-fail"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = ""
@@ -3277,6 +3494,7 @@ weight = 0.0
 id = "eb8844dc"
 title = "fail-open #2 propguard: checker非ゼロ終了でもstdout非空ならPROP結果を信頼 (gate.rs:632 !success && empty のみError)。editgateと同型。VERIFIED code"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = ""
@@ -3288,6 +3506,7 @@ weight = 0.0
 id = "8271c1a1"
 title = "fail-open #3 tdd/propguard/reviewgate: git diff失敗→空diff→allow (tdd git.rs:82-106 VERIFIED, propguard git.rs:172, reviewgate git.rs:103 同一コード)。git有りでscoped誤認"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = ""
@@ -3299,6 +3518,7 @@ weight = 0.0
 id = "03bc2fbe"
 title = "fail-open #4 overwatch canary: 読取不能/schema-drift violations store→observed=0→PROCEED (store.rs:235 Err→Ok(empty), canary_cli.rs:146 unwrap_or_default)。GATEクレート。VERIFIED"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = ""
@@ -3310,6 +3530,7 @@ weight = 0.0
 id = "c8a962dd"
 title = "fail-open #5 rollout-plugins.sh:737 gate-eval rc≠0,3を全てPROCEEDに書換 (rc=2/127含む)。overwatch自己更新時にclap rc=2で全stage自動pass。#4の下流。VERIFIED"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = ""
@@ -3321,6 +3542,7 @@ weight = 0.0
 id = "ae027186"
 title = "fail-open #6 test-changed-crates.sh:45 git diff失敗silence→空dirs→0テストでPASS。donegate test-changed実ゲート。VERIFIED。同ファイルのcargo-absent枝はfail-closed済み(twin)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = ""
@@ -3332,6 +3554,7 @@ weight = 0.0
 id = "61599e06"
 title = "fail-open #7 specguard: 照合不能auditがneeds_user=no(clean)に。prompt(audit-prompt.md:107等)+parse.rs:55 starts_with(yes)else false+欠落field既定false。verify.rs/decision.rsのtwinはfail-closed済み"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "pending"
 notes = ""
@@ -3343,6 +3566,7 @@ weight = 0.0
 id = "589b250d"
 title = "fail-open #8 ctxrot statusline: used_percentage(1M窓)をbudget窓にband判定→200k/200kでもband0緑 (main.rs:845)。hooks/stop.rsのtwinは修正済。statusLine配線先で実害"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "pending"
 notes = ""
@@ -3354,6 +3578,7 @@ weight = 0.0
 id = "99b71596"
 title = "fail-open #9 precommit-audit main.rs:123 panic→exit0(allow)。blastguard#3と同型(あちらはpanic→DENY化済)。block可能hookなのでblock-on-panicが対。advisory linterで低優先"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = ""
@@ -3365,6 +3590,7 @@ weight = 0.0
 id = "d6bf269f"
 title = "fail-open #10 backlog next_claim: with_tasks_lock(store.rs:334)がlock Option破棄→競合/FS失敗で無保護。6並行で同一task 3プロセスに。silent degradeが本質"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = ""
@@ -3376,6 +3602,7 @@ weight = 0.0
 id = "7a1beb86"
 title = "condukt merge-hold liveness: add run-state active-run cross-check (empty touched_files / post-verified claim-release edge)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = "e117d351 hardening residual (adversarial-verifier axis 3). hold_placed_by_live_run keys liveness purely on the claim registry; a LIVE run that placed a RuntimeOverlap hold but holds no claim under run_id (empty decomposition touched_files, since claims key off declared touched_files while the hold is placed off the actual git diff; or claims released at the verified transition with an open hold lingering) reads as Dead and its hold drops. Close it with a second POSITIVE liveness signal: is run_id a currently-active non-terminal run in state::RunState? See worktree.rs hold_placed_by_live_run 'Known residual' doc + claim.rs run_liveness."
@@ -3387,6 +3614,7 @@ weight = 0.0
 id = "845475af"
 title = "tdd added_lines: untracked-file read failure silently drops added lines (under-count → could allow untested code)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p3"]
 status = "pending"
 notes = "Pre-existing, surfaced by 8271c1a1 adversarial verify (out of scope of that fix). git.rs added_lines: ls-files --others succeeds but read_to_string(file) errors (TOCTOU delete / permission race) → that file's added lines silently dropped → added_impl_lines under-counts → gate may allow untested code. Narrow race. Options: treat a read error on an ls-files-reported untracked file as AddedScan::Failed (fail closed), or count it as evidence-of-change. Only promote a genuine read failure, not a since-deleted file (ENOENT ok)."
@@ -3398,6 +3626,7 @@ weight = 0.0
 id = "0fe96299"
 title = 'specguard scope.rs: no_file_in_multiple_hits proptest invariant violated on duplicate filenames (e.g. ["chy","aaa","chy"]) — a file appears in >1 scope hit; latent, seed cc b18539dc'
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = ""
@@ -3409,6 +3638,7 @@ weight = 0.0
 id = "d85a173c"
 title = 'ctxrot/harness-core: transcript estimate_tokens byte-proxy (_src=="bytes") renders a confident low GREEN band for a corrupt/truncated transcript — the discarded _src signal should downgrade low byte-proxy estimates to low-confidence/unknown in usage::line callers (statusline + usage twin). Same cannot-determine->green family as 589b250d, one layer down.'
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = ""
@@ -3420,6 +3650,7 @@ weight = 0.0
 id = "1ddd37e9"
 title = "donegate の git スキャン失敗を undetermined として fail-closed にする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3436,6 +3667,7 @@ weight = 0.0
 id = "7d3db473"
 title = "is_git_repo の spawn 失敗を NotRepo(=allow) に潰さない（4 crate 横断）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3452,6 +3684,7 @@ weight = 0.0
 id = "0d338c7d"
 title = "precommit-audit の git ラッパで非ゼロ終了を無視するのをやめる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3468,6 +3701,7 @@ weight = 0.0
 id = "4b7b80d3"
 title = "blastguard の再帰深度上限を budget 枯渇と同じく blocking にする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3484,6 +3718,7 @@ weight = 0.0
 id = "f650ddd5"
 title = "condukt oracle の tdd サブプロセス終了ステータスを検証する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3500,6 +3735,7 @@ weight = 0.0
 id = "81888b5a"
 title = "enforce_edit_gate の malformed verdict の既定値を restrictive にする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3519,6 +3755,7 @@ weight = 0.0
 id = "cde2212c"
 title = "mutategate の min-kill-rate に実効的な下限を設ける"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3538,6 +3775,7 @@ weight = 0.0
 id = "13dba04c"
 title = "全 Stop ゲート共有の panic バリア（run_guarded / run_hook）が allow に落ちるのを塞ぐ"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3554,6 +3792,7 @@ weight = 0.0
 id = "9a5e3c28"
 title = "specguard forge/gather の走査を testaudit と同じ fail-closed 形に揃える"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3574,6 +3813,7 @@ weight = 0.0
 id = "ac643e72"
 title = "editgate の cargo 起動失敗を allow に潰さない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3590,6 +3830,7 @@ weight = 0.0
 id = "100af807"
 title = "空の checks 集合を all_passed:true と報告しない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3610,6 +3851,7 @@ weight = 0.0
 id = "b418b786"
 title = "mutation-gate.sh で cargo-mutants の終了ステータスを判定に使う"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3626,6 +3868,7 @@ weight = 0.0
 id = "01695cc0"
 title = "canary rollout の最終ステージにも health gate を掛ける"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3642,6 +3885,7 @@ weight = 0.0
 id = "c6a2ea52"
 title = "CLAUDE.md / GLOSSARY に「判定不能は必ず制限側に解決する」を不変条件として明文化する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -3658,6 +3902,7 @@ weight = 0.0
 id = "fb32631c"
 title = "scripts/check-fail-open.py を injectguard パターンで新設し merge-blocking CI にする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -3674,6 +3919,7 @@ weight = 0.0
 id = "7ecf3797"
 title = "clippy の unwrap_used/expect_used/panic deny を local ゲート(pre-commit)で強制する — required status check 化は不採用"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -3697,6 +3943,7 @@ weight = 0.0
 id = "5b33b4cd"
 title = "continuous-audit に「ミラー掃討」を必須ステップ化し regression_tests_added < confirmed のラウンドを記録拒否する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -3720,6 +3967,7 @@ weight = 0.0
 id = "2d2b8b63"
 title = "harness-core に共有 Verdict 三値型を新設し全ゲートを移行させる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -3739,6 +3987,7 @@ weight = 0.0
 id = "b9f27e00"
 title = "disposition/reconcile ループを閉じる（警告 println を実効的なゲートに変える）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -3755,6 +4004,7 @@ weight = 0.0
 id = "1879da71"
 title = "ctxrot stop.rs/guard.rs: behavioral gates (compact-nudge, escalation, reanchor, session-anchor) key on estimate_tokens band and silently consume the bytes-proxy — a truncated/corrupt transcript reads low → UNDER-nudges (behavioral fail-open, distinct from the render fix in 589b250d/d85a173c). Thread the src and treat a low bytes-proxy conservatively at the nudge thresholds."
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = ""
@@ -3766,6 +4016,7 @@ weight = 0.0
 id = "42b7c9af"
 title = "harness-core::verdict — fail-open を「書けない」型契約にする（コンパイル時強制・決定論）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "typegate",
     "scout",
@@ -3785,6 +4036,7 @@ weight = 0.0
 id = "add65925"
 title = "ゲート crate から生の IO/subprocess 呼び出しを型で封鎖する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "typegate",
     "scout",
@@ -3801,6 +4053,7 @@ weight = 0.0
 id = "9a43b1d1"
 title = "mutation gate を判定対象に配線する（テストを判定するゲートが対象に届いていない）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -3817,6 +4070,7 @@ weight = 0.0
 id = "84df3855"
 title = "テスト弱体化を差分で検出するゲートを追加する（実装とテストを同一ゲートで判断しない）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -3836,6 +4090,7 @@ weight = 0.0
 id = "a7d41587"
 title = "単調性プロパティ: 入力の質を下げて verdict が permissive 側へ動かないことを proptest で強制する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3852,6 +4107,7 @@ weight = 0.0
 id = "66e305b5"
 title = "フォールト注入ハーネス: 環境を変異させて undetermined 経路を機械的に踏む"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3868,6 +4124,7 @@ weight = 0.0
 id = "6d493e39"
 title = "undetermined 経路にテレメトリを入れ、判定不能の発生量を本番で観測可能にする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -3884,6 +4141,7 @@ weight = 0.0
 id = "7e5e6cb8"
 title = "テスト弱体化を差分で検出し、警告ではなくブロックする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -3931,6 +4189,7 @@ weight = 0.0
 id = "cab72d94"
 title = "condukt verify の空 checks を vacuous pass にせず Undetermined として扱う"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -3947,6 +4206,7 @@ weight = 0.0
 id = "c1d4e18f"
 title = "CLAUDE.md の主張が実コードと一致するかを機械検査する (記録の定期監査・第一層)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -3967,6 +4227,7 @@ weight = 0.0
 id = "6af99c5c"
 title = "敵対的レビューの verdict を三値化し、反証にも立証責任を課す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -3983,6 +4244,7 @@ weight = 0.0
 id = "0f55003a"
 title = "記録 (backlog / audit ledger / disposition / 規範文書) の定期監査を仕組みにする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -3999,6 +4261,7 @@ weight = 0.0
 id = "1f08abaa"
 title = "harness-core::verdict — fail-open を書けない型契約にする (要件5訂正版)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "typegate",
     "scout",
@@ -4015,6 +4278,7 @@ weight = 0.0
 id = "2522b0ba"
 title = "enforce_edit_gate の malformed verdict 既定値を restrictive にする (棄却の誤りにより復活)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -4031,6 +4295,7 @@ weight = 0.0
 id = "7ab39215"
 title = "fail-closed 化に伴う脱出口の保全 — 脱出口を panic guard の外に出す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -4047,6 +4312,7 @@ weight = 0.0
 id = "e65054c0"
 title = "ゲート横断の脱出口・attempt 予算の消費が独立に進む問題"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -4063,6 +4329,7 @@ weight = 0.0
 id = "50ad2c1e"
 title = "overwatch test_freshness.rs: read_dir walk swallows unreadable subtree (let Ok=read_dir else{continue}+.flatten()) — fail-open twin of #7/#11, caught by check-fail-open.py; make the .rs walk fail closed + remove from ALLOWLIST"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = ""
@@ -4074,6 +4341,7 @@ weight = 0.0
 id = "cc398585"
 title = "burn down repo-wide read_dir-walk swallows surfaced by check-fail-open.py --all (~34 sites across compass/condukt/ctxrot/deepwiki/difflog/fugu-router/gauge/harness-core/harness-status/playbook/runbook/session-insights/ship/tracekit); harness-core ones are baked into every bin"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = ""
@@ -4085,6 +4353,7 @@ weight = 0.0
 id = "1e44bfd9"
 title = "reviewgate/precommit-audit が他セッションの差分を自分の変更として要求する（共有 skip への圧力＝fail-open vector）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "failopen",
     "reviewgate",
@@ -4128,6 +4397,7 @@ weight = 0.0
 id = "3fe6612e"
 title = "enforce_fp_gate の fallback 既定値 true と、tdd 不在時の Allow を再検討する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "failopen",
     "L5",
@@ -4143,6 +4413,7 @@ weight = 0.0
 id = "895655c7"
 title = "worktree::git_fast_subprocess のタイミング依存フレークを調べる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "flake",
     "p2",
@@ -4162,6 +4433,7 @@ weight = 0.0
 id = "fd578107"
 title = "oracle の PATH 注入統合テストが cfg(unix) 限定"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "failopen",
     "p2",
@@ -4176,6 +4448,7 @@ weight = 0.0
 id = "bcb3c91c"
 title = "mutation gate: calibrate blastguard/propguard/stuckguard/overwatch as pilots (extend mutation-pilots.sh + mutation-gate.sh case + triggers) so GATE_CRATE changes fire the kill-rate gate against themselves"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = ""
@@ -4187,6 +4460,7 @@ weight = 0.0
 id = "32170548"
 title = "harness-core の変更が全プラグイン binary を変えるのに version bump を要求しない (check-version-bumped の盲点)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = "2026-07-26 更新: 検出側は解決済み。65c1b3ff の provenance manifest により、harness-core が動いた時点で全プラグインが drift として報告されるようになった（manifest の commit 以降 crates/<plugin> または crates/harness-core が変わったかを git に問う）。残る未解決は bump 側 = check-version-bumped.py が harness-core の変更に対して各プラグインの version bump を依然要求しない点。検出があるので緊急度は下がるが、version 文字列が「配布済みバイト」を指し示さない状態自体は残る。"
@@ -4198,6 +4472,7 @@ weight = 0.0
 id = "5b8235fa"
 title = "cargo test 中に実 stdin を read する harness-core のテストが環境次第でハングする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "観測: cargo test --workspace をバックグラウンド(stdin が閉じないパイプ)で走らせると harness_core::hook::tests::headless_and_piped_guards_are_callable_and_pure が read_stdin_if_piped -> read_to_end(stdin) で 38 分ブロックした。sample(1) でスタック採取済み。</dev/null で再実行すると 3333 passed で完走。 / なぜ問題か: ハングするテストは結果を報告しないので、検証装置そのものが fail-open になる(CI ではタイムアウト kill が インフラ起因のフレークとして片付けられやすい)。判定不能を判定に落とせていない典型 / 証拠: crates/harness-core/src/hook.rs:486 -> :187 read_stdin_if_piped -> :158 read_stdin / 完了条件: このテストが ambient stdin に依存せず決定論的に終了する(stdin を注入可能にするか、is_terminal 判定をテスト用に差し替える)ことを、閉じていない stdin 下でも完走する形で固定する"
@@ -4209,6 +4484,7 @@ weight = 0.0
 id = "138607bc"
 title = "blastguard: flock --command=<payload> の attached long form が depth 0 で Allow になる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = """観測: detect("Bash", {"command":"flock /tmp/l --command='rm -rf /'"}) が depth 0 で Allow を返す。payloads_after はフラグ位置より後ろのトークンしか見ないため、= で値が連結された長形式 --command=<payload> では payload が一切取り出されない。短形式 flock -c '...' は正しく解析される / 発見経路: 4b7b80d3 のテスト作成中に副次的に発見（テストには使っていない・未修正） / 完了条件: --command=<payload> 形式の payload が抽出され、rm -rf / を含むものが deny/ask されることをテストで固定する。--opt=value 形式を取る他のフラグにも同型が無いか確認する"""
@@ -4220,6 +4496,7 @@ weight = 0.0
 id = "99b506b7"
 title = "blastguard: バックスラッシュ退避した二重引用符のネストで rm -rf / が深度4で Allow される"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "security",
     "p0",
@@ -4234,6 +4511,7 @@ weight = 0.0
 id = "74de0bc3"
 title = "CLAUDE.md/docs の不正確なパス引用 3 件を直す (check-doc-claims が検出)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = "check-doc-claims.py が実リポジトリで検出した実在の不一致。CLAUDE.md:22 の `harness-core/src/gate/run.rs:12` は crates/ 接頭辞が欠落しており存在しないパス。docs/plugin-dependency-graph.md:137 と :255 の `SKILL.md:93` / `SKILL.md:463` はリポジトリルートに存在しない裸のパス（どの plugin の SKILL.md か不明）。/ 完了条件: check-doc-claims.py が exit 0 になる。ゲートを CI required にする前に必要。"
@@ -4245,6 +4523,7 @@ weight = 0.0
 id = "eda212a0"
 title = "overwatch record-finding の --verdict を必須にする（省略時 confirmed 既定を廃止）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "ユーザー裁定 2026-07-21: 省略時に confirmed を記録する現状は、棄却が起きないので fail-open ではないが、UNVERIFIED が既定では決して発生しないことを意味し、同日 CLAUDE.md に明文化した「確実性を捏造しない」不変条件と齟齬する。--verdict 省略は入力エラー(exit 非0)にし、記録者に毎回判断を強制する。既存の全呼び出し箇所(SKILL.md / scripts/continuous-audit.sh / docs/specs/overwatch.md の例を含む)を洗い出して更新すること。証拠: 1a2e89ea で三値化した AuditVerdict の既定経路。完了条件: --verdict なしの record-finding が非0で落ち、テストがその赤を先に観測していること"
@@ -4256,6 +4535,7 @@ weight = 0.0
 id = "210f3e97"
 title = "overwatch finding 81888b5a / cde2212c を実コードに対して再監査する（notes だけで判定され未再検証）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = "1a2e89ea の三値化に伴う再分類作業で、この 2 件は記録された notes のみから判定され、実コードに対する再確認は明示的に行われていない。担当 Agent 自身が「re-affirmed ではなく un-re-audited として扱え」と申告した。証拠: 2026-07-21 condukt バッチ (6af99c5c) の完了報告。完了条件: 各 finding の全消費経路を実コードで辿り、逐語引用を添えて CONFIRMED / REFUTED / UNVERIFIED のいずれかに再分類されること"
@@ -4267,6 +4547,7 @@ weight = 0.0
 id = "3e3f8511"
 title = "check-doc-claims.py の CI workflow を追加する（paths: フィルタ禁止）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = '94364b09 で実装・統合、740990fc で実リポジトリの不一致 3 件を解消したので現在 exit 0。.github/workflows/ への job 追加だけが未了。test-weakening.yml に倣うこと。証拠: pre-push が "this repo has no required status checks, so a red workflow stays red until someone looks" と警告する。完了条件: workflow が main への push / PR で走り、doc-claims が exit 1 のとき job が赤くなること。paths: フィルタは付けない（required にした際にパスフィルタで skip されると永久 pending になりゲートとして機能しない）。fetch-depth は doc-claims には不要（diff ベースではない）'
@@ -4278,6 +4559,7 @@ weight = 0.0
 id = "f92945d3"
 title = "condukt shadow_run flake: finish_discards_shadow_worktree_and_never_merges_it が多重プロセス高負荷で確実に落ちる (crates/condukt/src/shadow_run.rs:167 / :139)。t2 のフレーク調査中の副次観測 2026-07-21: 3並列フルスイート + CPU/fork 負荷で再現性あり。git_fast_subprocess と違い、こちらは実際に再現する本物の並行脆弱性。"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = ""
@@ -4289,6 +4571,7 @@ weight = 0.0
 id = "30ba309e"
 title = "condukt state check-oracle が fallback:true に黙って縮退する（F→P を tdd バイナリ経由で記録しないと機械検証オラクルが実効せず旧 done_criteria ゲートで通る）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = ""
@@ -4300,6 +4583,7 @@ weight = 0.0
 id = "7c28a8da"
 title = "doc-claims / test-weakening を branch protection の required status check に登録する（未登録の間は赤くても merge できる）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = """
@@ -4339,6 +4623,7 @@ weight = 0.0
 id = "032d28a7"
 title = "共有 $TMPDIR を掴むテストのミラー掃討: repo.parent() や固定名 temp サブディレクトリを使うテストを grep し、f92945d3 と同型の並行フレークを潰す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = ""
@@ -4350,6 +4635,7 @@ weight = 0.0
 id = "1ddb13ab"
 title = "compass check_dod_refs がドット始まりの実在パスを missing と誤報する (freshness.rs:137 の trim_matches が先頭の '.' も削るため .github/ .compass/ .claude/ が全て偽陽性。:143 のコメント通り意図は末尾ピリオド除去のみ → trim_end_matches に分離する)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = ""
@@ -4361,6 +4647,7 @@ weight = 0.0
 id = "fa652014"
 title = "condukt diffrisk_record: DIFFRISK_UNDETERMINED_RULE_ID 分岐に end-to-end テストが無い (repo_sensitive_config が非注入・固定 glob のため駆動不能) — 9f77614d"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "pending"
 notes = ""
@@ -4372,6 +4659,7 @@ weight = 0.0
 id = "a5d9bdd8"
 title = "condukt gate_exec: undetermined 分岐の end-to-end 反実仮想テストが無い (SensitiveConfig::default は常にコンパイル可のため公開入口から到達不能) — 9f77614d"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "pending"
 notes = ""
@@ -4383,6 +4671,7 @@ weight = 0.0
 id = "22cfd3cc"
 title = "blastguard tests/overwatch_violation.rs: tempdir() が pid+nanos 名なので同一プロセス内の並列テスト同士で衝突しうる (2テストが同じ HOME を共有し violations.jsonl が2行になり deny_appends_one_violation_line が落ちる)。原子カウンタ等で一意化する。多クレート並列実行時に再現 (2026-07-22 観測、既存バグ・ce98b0a3 以来未変更)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "pending"
 notes = ""
@@ -4394,6 +4683,7 @@ weight = 0.0
 id = "b0cacd15"
 title = "check-fail-open.py が 'エラーを捨てて空集合へ倒す' クラスを検出できない: blastguard diffrisk の実在 fail-open (if let Ok(Glob::new) 握りつぶし + build().unwrap_or_else(GlobSet::empty)) は 34件のどれにも含まれていなかった (9f77614d で修正済み・修正前後とも blastguard は 0 件)。空コレクション fallback パターンを検査に追加する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "pending"
 notes = """
@@ -4430,6 +4720,7 @@ weight = 0.0
 id = "71b7b1bc"
 title = "condukt/flow の sink が main への直接 push 前提のまま — ruleset 有効化後は push が必ず弾かれるので、branch push + gh pr create + auto-merge の経路を持たせる（既定無効の opt-in にし、CodeCommit 等 required-status-check の無いホストでは従来経路に縮退させる）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = ""
@@ -4441,6 +4732,7 @@ weight = 0.0
 id = "5ddcc99c"
 title = "check-fail-open ratchet: CI で base-branch baseline と比較し RAISE を検出（方向の単調性を script で enforce）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "pending"
 notes = ""
@@ -4452,6 +4744,7 @@ weight = 0.0
 id = "c057c7e7"
 title = "PR が required status check で BLOCKED になっていることが誰にも見えない — overwatch review-queue に [pr-blocked] ストリームを足す（open PR のうち required check が FAILURE / 未報告で止まっているものを列挙。ruleset 導入で新たに生まれた停止要因なのに可視化が無く、人間が聞くまで気づけなかった実例あり: PR #24）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = ""
@@ -4463,6 +4756,7 @@ weight = 0.0
 id = "5d008358"
 title = "condukt/flow の完了ゲートが PR の CI 結果を見ていない — worker が PR を作って終了すると、required check が赤くても『完了』として報告される（PR #24 で発生）。sink の前に PR の mergeStateStatus を確認する経路が要る"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = ""
@@ -4474,6 +4768,7 @@ weight = 0.0
 id = "15cee27a"
 title = "【方針転換】ゲートの主戦場を pre-commit（blocking）に移す — 4 スキャナ(fail-open/doc-claims/test-weakening/version-lockstep)を commit 時に block する opt-in フックにし、GitHub ruleset は最終防衛線に降格。理由: (1) commit 時なら書いた agent がその場で直せる（今の構成は push→CI→BLOCKED が誰にも見えず PR #24 で実害）(2) required check は origin/main しか守らず、成果物が最初に着地する local main が無防備 (3) CodeCommit 等 GitHub 以外でも効く。既定は無効(opt-in)。local が --no-verify で外せる点は ruleset が backstop なので許容する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p0"]
 status = "done"
 notes = """
@@ -4519,6 +4814,7 @@ weight = 0.0
 id = "f68ebcad"
 title = "check-test-weakening.py の _matching_brace が escaped-backslash char リテラルで brace 計数を desync させ、store.rs を触る全 PR を exit 2 (判定不能) でブロックする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "done"
 notes = "[VERIFIED STALE 2026-07-29 - closed] Fixed by 96a42e82. Verification did NOT accept the auditing agent's evidence: it claimed the first brace of store.rs (index 471) previously returned None, and I DISPROVED that - the pre-fix scanner also returns 485 there, because that brace is a use-statement that closes before any escaped-backslash literal. Correct oracle instead: cfg_test_modules(), the real consumer whose raise makes the gate exit 2. Differential on the actual pre-fix scanner extracted from 96a42e82 parent: OLD raises Undetermined unbalanced braces in cfg-test module on crates/harness-core/src/store.rs; NEW extracts 25100 chars of test surface cleanly. The probe therefore discriminates - it is not vacuous. Also: a whole-file differential over all 199 braces shows old-None 4 versus new-None 1, and the single remaining None is a brace inside a string literal that the real call site never passes in. Fix carries a comment naming the exact i+2 versus i+3 bug, plus 2 regression tests; full suite 44/44 OK."
@@ -4530,6 +4826,7 @@ weight = 0.0
 id = "b0a794f6"
 title = "donegate の 2 テストが ubuntu CI で panic して smoke を落としている (git 実行の PATH 依存)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "ci",
     "donegate",
@@ -4553,6 +4850,7 @@ weight = 0.0
 id = "b0abdd46"
 title = "semver-checks が overwatch の public フィールド追加 4 件で major 要求して 15 連続失敗"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "ci",
     "semver",
@@ -4578,6 +4876,7 @@ weight = 0.0
 id = "29b10335"
 title = "pre-push の CI ヘルスチェッカが dependabot-updates の trigger を読めず UNDETERMINED のまま常設化している"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "ci",
     "fail-open",
@@ -4593,6 +4892,7 @@ weight = 0.0
 id = "16c308de"
 title = "coverage workflow の 1 連続失敗を 3-run 閾値に達する前に潰す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "ci",
     "p2",
@@ -4607,6 +4907,7 @@ weight = 0.0
 id = "6267bfbe"
 title = "bypass ledger が git commit --amend を誤って「未検証コミット」と記録する（証明書が HEAD に束縛されているため）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "gate",
     "fail-positive",
@@ -4645,6 +4946,7 @@ weight = 0.0
 id = "12e28818"
 title = "condukt state check-criteria が多項目 done_criteria を1コマンドに縮約して skip_verifier:true を返す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = """
@@ -4692,6 +4994,7 @@ weight = 0.0
 id = "6a9f4ac1"
 title = "rollout drift 37件: donegate 0.1.15 の verdict 型移行が稼働キャッシュ(registry 0.1.11)に未反映"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = """
@@ -4727,6 +5030,7 @@ weight = 0.0
 id = "4883ad97"
 title = "check-version-bumped.py が clean tree + 既定 base=HEAD で1件も検査せず exit 0 し「39 plugins scanned」と表示する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = """
@@ -4767,6 +5071,7 @@ weight = 0.0
 id = "19ccedd8"
 title = "donegate trybuild control は gate.rs を実際にコンパイルしない(bin-only)。散文リンクのみで drift 検出機構が無い"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = """
@@ -4813,6 +5118,7 @@ weight = 0.0
 id = "c3a98510"
 title = "hook のテスト3本 (test_precommit_hook / test_gate_bypass / test_git_hook_coverage) がどこからも実行されない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "同じクラスが scripts/tests/*.sh にもある: version-bumped-bin-only.sh / version-bumped-shared-crate.sh / provenance-core-version.sh / canary-*.sh 等はどのフックからも runner からも呼ばれず、テスト対象スクリプトの docstring からのみ参照される手動実行のみ。実測 2026-07-30 (main ab74a0be 直後): grep -rln version-bumped-bin-only は check-version-bumped.py と自分自身の2件のみ。wiring には .githooks への書き込みが必要 (現在 permission deny)。"
@@ -4824,6 +5130,7 @@ weight = 0.0
 id = "17057070"
 title = "workspace-lints の対照実験を再現可能なスクリプトにする (今は scratchpad 限りで、lint がまだ機能しているか誰も再確認できない)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = ""
@@ -4835,6 +5142,7 @@ weight = 0.0
 id = "0213f7a9"
 title = "condukt の worktree/branch をセッション横断で名前空間化する (condukt/<t.id> -> run_id 込み) — 並列 worktree の前提条件"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -4850,6 +5158,7 @@ weight = 0.0
 id = "15b682d2"
 title = "condukt の main-working-tree 共有経路を解消する (skill shell の git add/commit が run.lock だけで直列化されている)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -4865,6 +5174,7 @@ weight = 0.0
 id = "262cb246"
 title = "/flow に concurrent モードを入れ、pick を backlog list から next_claim へ切り替える"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -4880,6 +5190,7 @@ weight = 0.0
 id = "f7b018f8"
 title = "backlog キューに類似度クラスタリングを入れ、似たタスクの並列重複実行を止める"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -4895,6 +5206,7 @@ weight = 0.0
 id = "e73a1fd5"
 title = "backlog Task に scope/touched_files を持たせ、ファイル非衝突なグループ分割を可能にする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -4910,6 +5222,7 @@ weight = 0.0
 id = "68d73e6f"
 title = "autoflow/daily が run.lock を driver liveness 信号として使っている — 代替信号を用意する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -4925,6 +5238,7 @@ weight = 0.0
 id = "91e503c8"
 title = "donegate の required check が workspace 全体を見るため、他セッションの赤が全セッションを止める (共有 skip ファイルへの構造的圧力 = fail-open vector)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -4941,6 +5255,7 @@ weight = 0.0
 id = "0b6cb4c1"
 title = "CLAUDE.md 第8節 (worktree 義務化) を機械的に強制する — 並行セッションが live なとき main 作業ツリーへの編集をブロックするゲート"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -4956,6 +5271,7 @@ weight = 0.0
 id = "15eb3f94"
 title = "donegate/reviewgate の required check を自分の worktree スコープに絞る (workspace 全体スキャンをやめる)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -4971,6 +5287,7 @@ weight = 0.0
 id = "2d3cbda2"
 title = "死んだセッションの worktree/branch を回収する GC が無い — worktree 義務化の前提として必須"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -4986,6 +5303,7 @@ weight = 0.0
 id = "167cf55e"
 title = "shadow-run exec が名前空間なしの worktree::create を呼んでいる (0213f7a9 のミラーギャップ)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5001,6 +5319,7 @@ weight = 0.0
 id = "67a2275a"
 title = "harness-core boundary: read_dir_entries の途中エントリ失敗アームが1本もテストに守られていない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = """
@@ -5019,6 +5338,7 @@ weight = 0.0
 id = "2dedd498"
 title = "condukt worktree::tests::git_fast_subprocess_returns_output_without_timing_out が時間依存で flake する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = """
@@ -5033,6 +5353,7 @@ weight = 0.0
 id = "2904dc6c"
 title = "worktree create の --run 省略が黙って旧レイアウトに縮退する — 並列セッション下では機械的に拒否する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5048,6 +5369,7 @@ weight = 0.0
 id = "b6a80342"
 title = "rollout drift の検出を push ではなく session start に置き直す (advisory 化の受け皿)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5063,6 +5385,7 @@ weight = 0.0
 id = "66557497"
 title = "worktree::merge / resolve_merge / prune の repo-primary ロックが fail-soft のまま — 縮退して unlocked で進む (15b682d2 のミラーギャップ)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5078,6 +5401,7 @@ weight = 0.0
 id = "1c17d5f5"
 title = "repo-primary ロックは state_dir (HOME) 由来なので cross-HOME セッションを直列化しない — 実運用で HOME が共有されるか未測定"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5093,6 +5417,7 @@ weight = 0.0
 id = "be9011a6"
 title = "pr poll --execute が merge 拒否を exit 0 で描画する fail-soft を是正する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = "e1955d52 で worktree::merge はロック取得不能時に Err を返すようになったが、main.rs の pr poll --execute (約 3193 行) はその Err を 'CI green but merge of ... failed; left work as local commits (fail-soft)' と表示して exit 0 で終わる。制限側の結果自体は守られている (何も merge されない) が、終了ステータスが成功と区別できないため下流スクリプトは合格と読む。加えて main.rs:1451 の docstring に 'fail-soft: never breaks the turn' が残っており、CLAUDE.md が verdict 経路の赤信号と名指しする語である。完了条件: ロック取得不能に由来する merge 失敗が非 0 終了で区別され、docstring が実挙動と一致すること。exit semantics を全 merge エラー (conflict/hold 含む) で変えるかは設計判断なので、そこは切り分けて決めること。"
@@ -5104,6 +5429,7 @@ weight = 0.0
 id = "5972e447"
 title = "overwatch aggregate が読めない lease ledger を空と同一 JSON に潰す (main-tree guard の liveness 入力が判定不能を無しと読む)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = "crates/overwatch/src/aggregate.rs:251 の if let Ok(mut leases) = store::load_leases(cwd) により、ledger が読めない場合と lease が0件の場合が同一の JSON になる (sessions キーが skip_serializing_if で消える)。10975f4e で入った condukt guard main-tree はこれを liveness 入力の1本に使っており、判定不能を peer 無しと読む。もう1本の backlog lock status は独立なので完全な fail-open ではないが、穴は実在する。完了条件: load_leases の失敗が空と区別できる形で JSON に現れ、guard 側がそれを Undetermined として block することをテストで観測する。"
@@ -5115,6 +5441,7 @@ weight = 0.0
 id = "a3b9b69f"
 title = "condukt 0.7.92 未満のバイナリしか無いツリーで全 commit が main-tree guard により block される (新規 clone/worktree/CI の初回コスト)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = "10975f4e で .githooks/pre-commit が condukt guard main-tree を呼ぶようになった。hook のバイナリ解決は CONDUKT_BIN → REPO/target/release/condukt → REPO/target/debug/condukt → PATH。guard サブコマンドを持たない版 (0.7.92 未満) は exit 2 = UNDETERMINED = block になる。これは fail-closed として意図どおりだが、新しく切った worktree・新規 clone・CI では最初に condukt をビルドするまで全 commit が止まる。実測: 本セッションの並行 worktree はベースが古く、通知しなければ止まっていた。完了条件: 判定不能の理由がバイナリ古さである場合に、その旨と復旧手順が1行で分かる形で表示されること、および PATH 版が古いだけのケースを減らす導線 (rollout もしくは事前ビルド) が決まっていること。緩めて通すのは不可。"
@@ -5126,6 +5453,7 @@ weight = 0.0
 id = "35d61d23"
 title = "condukt lock::tests::repo_primary_lock_serializes_concurrent_rmw_no_lost_update が高負荷時に落ちる (4回中1回)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "e19d501a の作業中に cargo test --workspace を4回回したうち1回で失敗 (2035 passed / 1 failed)。他3回と、隔離/直列での11回連続実行では pass。失敗させた変更は backlog/autoflow/daily/flow のみで condukt はそれらに依存しないため、condukt のテストバイナリは差分の有無で同一。したがって原因は変更ではなくマシン負荷への感度である。完了条件: 負荷を掛けた状態で決定論的に再現させ、テストが実時間のタイミングに依存しているのか lock 実装側にレースがあるのかを事実として切り分けること。落ちるのを見なかったことにしない。テストを緩める・retry でごまかすのは不可。"
@@ -5137,6 +5465,7 @@ weight = 0.0
 id = "992667e2"
 title = "build-binaries が main で 4連続赤 — 修正コミット 96fb6750 は push 待ち (push できれば緑になるはず)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p0"]
 status = "done"
 notes = "build & commit plugin binaries ワークフローが 2026-07-22 以降 4連続失敗 (run 29996015985)。失敗ステップは smoke の cargo test --workspace ただ1つ (ubuntu-latest と macos-14 両方)。失敗内容は donegate と harness-core の trybuild .stderr が古い rustc の std-note body を含んでおり現行 rustc と不一致だったこと。ローカルで再生成して緑を確認し 96fb6750 として local main に merge 済み。macos-14 CI は本マシンと同じ rustc 1.97.1 なので一致するはず。ただし origin が赤である間 pre-push の chronic-red-CI ゲートが push をブロックするため、修正が origin に届かないデッドロック。push できれば解消する見込み。要: push 後に CI が実際に緑になることを観測して確認 (予測ではなく観測)。"
@@ -5148,6 +5477,7 @@ weight = 0.0
 id = "3f90ae93"
 title = "main-tree guard の merge テストが macos-14 CI で決定論的に落ちる — pre-merge-commit が dirname に依存し narrowed PATH で壊れる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p0"]
 status = "done"
 notes = "run 30034338036 で build-binaries が macos-14 のみ赤。ubuntu-latest は緑 (trybuild 修正は効いた)。失敗テスト: a_clean_no_ff_merge_completes_in_the_primary_tree_with_a_peer_live (crates/condukt/tests/main_tree_guard_merge.rs:201)。CI ログの根因: pre-merge-commit: line 26: dirname: command not found → exec /pre-commit: No such file or directory。.githooks/pre-merge-commit の exec dirname 0 /pre-commit が、テストが stub liveness を注入するため PATH を絞った際に dirname (coreutil) を含めておらず、 が空になり /pre-commit を exec して失敗。ローカル mac と ubuntu では narrowed PATH がたまたま dirname に届いたので緑、macos-14 CI では届かず赤。私がverifyして 10975f4e で merge したが local=CI でない環境差を見落とした典型。修正案: hook 側を外部コマンド非依存の shell 展開 /bin/pre-commit に置換すれば PATH に関わらず堅牢 (dirname 依存を除去)。加えてテストの narrowed PATH 構成も検証。完了条件: macos-14 CI で当該テストが緑になることを観測 (予測で終わらせない)。"
@@ -5159,6 +5489,7 @@ weight = 0.0
 id = "8c5d46fa"
 title = "cargo test --workspace が負荷依存で非決定的に落ちる — compass timeout テストが CPU 負荷下で赤"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "実測 (2026-07-24): 他ジョブで CPU 飽和中に cargo test --workspace を3回回すと 3/3 で compass::tests::compass_invocation_faster_than_timeout_still_returns_output が落ちた (exit 101)。無負荷の CI (ubuntu/macos) では同テストは ok。これは compass 呼び出しが timeout 前に返ることを assert する速度依存テストで、マシン負荷でプロセス起動が遅れると閾値を超えて落ちる。condukt の repo_primary_lock_serializes_concurrent_rmw_no_lost_update (35d61d23) と同じ負荷依存クラス (こちらは isolated 30/30 pass で再現せず)。判定がマシン速度に依存する検査は非決定論ゲートで、緑/赤が環境で変わる。完了条件: これら timeout/並行テストの閾値を負荷耐性のある形にするか、負荷下でも決定論になるよう設計し直し、負荷を掛けた状態で決定的に緑を観測する。"
@@ -5170,6 +5501,7 @@ weight = 0.0
 id = "822c7209"
 title = "autoflow の condukt 継続ループが autonomy-check を参照せず回数上限で human-ask に止まる — 自律時は確認なしで継続"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -5186,6 +5518,7 @@ weight = 0.0
 id = "9aa0031f"
 title = "autoflow の backlog 継続が max_backlog_prompts=2 で open キューを残したまま黙って Done する — 進捗がある限りドレイン継続"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -5202,6 +5535,7 @@ weight = 0.0
 id = "903a0d28"
 title = "policy answer が §2『テスト不能なら人間に ask』の停止を auto 自答で飛ばせる — 当該 class を構造的に Escalate へ clamp する不変条件とテスト"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5218,6 +5552,7 @@ weight = 0.0
 id = "9976b845"
 title = "統一 autonomy スイッチ/プロファイルが無く autoflow・ctxrot・skills が別々 — 1スイッチで一貫して keep-executing にする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -5234,6 +5569,7 @@ weight = 0.0
 id = "0e5e3545"
 title = "継続 vs 停止の telemetry が無い(escalate/block が journal されず stop-to-ask 率が測れない) — 全 verdict を journal し集計面を出す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -5250,6 +5586,7 @@ weight = 0.0
 id = "54c56d24"
 title = "ctxrot の Stop-block(/compact 要求で継続中断)を自律時は distill-and-continue に置換 — ただし auto-compact 処理は未検証なので測定された model-window 信号で gate"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5266,6 +5603,7 @@ weight = 0.0
 id = "1bac3de6"
 title = "autoflow の condukt 分岐に give-up hatch が無く stuck タスクを無限 re-dispatch(worker 重複 stack) — 進捗ベース give-up と同一 worktree 再割当防止"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5282,6 +5620,7 @@ weight = 0.0
 id = "dd321c52"
 title = "SessionStart の /flow で開始しますか の確認を自律時は自動起動に(真の不明点=charter stale 等のみ確認)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -5298,6 +5637,7 @@ weight = 0.0
 id = "1c66598a"
 title = "BoundedAllow: 両方の stop で決定論 panic するゲートが黙って allow され続ける — 反復 BoundedAllow を可観測にする回帰テスト"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5314,6 +5654,7 @@ weight = 0.0
 id = "3f6f4bc9"
 title = "policy_is_autonomous が Medium/Medium 固定 baseline の粗い global lever — 未分類決定が autonomous=true で Auto 昇格しないよう per-action risk 経由を強制"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5330,6 +5671,7 @@ weight = 0.0
 id = "422d256a"
 title = "停止判定の統一契約: 停止は『与えられたタスクの完了』時のみ、残件・タスク途中では止まらない(回数プロキシ廃止) — autoflow(condukt/backlog 分岐)と condukt 完了ゲートに共通適用"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -5346,6 +5688,7 @@ weight = 0.0
 id = "949c3e23"
 title = "session-insights の record を『成果物の複製』から『認知の記録』へ — 認知変化/自己批判セクション追加＋distill プロンプトに複製禁止を明示"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "session-insights",
     "record",
@@ -5362,6 +5705,7 @@ weight = 0.0
 id = "6028507d"
 title = "mutation workflow chronically red: 30min GHA timeout cancels the job (blocks pre-push hook)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "ci",
     "infra",
@@ -5379,6 +5723,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/26"
 id = "ec3cbca3"
 title = "docs GHA-purge: gate-taxonomy.md CI-trigger layer + 7 plugin.json changelog refs to deleted smoke workflow/check-ci-red.py"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "docs",
     "p2",
@@ -5395,6 +5740,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/27"
 id = "910780b0"
 title = "overwatch read_review_findings_all の archive 生読取りを boundary 三値へ移行する (DoD6/DoD7)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "compact スライス(0.2.11)の姉妹。store.rs:1109 の if let Ok(txt)=std::fs::read_to_string(archive) を boundary::read_to_string 三値へ。争点: 呼び出し側 reconcile.rs:167/189 が明文の fail-soft 契約(pre-push フック/監査ラウンドを絶対に壊さない、失敗は 0 へ縮退)を持ち unwrap_or_default。Undetermined を Err 伝播すると契約が変わる。裁定が必要: reconcile 出力は verdict か observability か(CLAUDE.md 第1節 carve-out)。disposition_cli.rs:100 の unwrap_or_default も同様。裁定してから移行し ratchet を更に下げる。"
@@ -5408,6 +5754,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/28"
 id = "22b69f6a"
 title = "F→P オラクルが reproduction_tests 未宣言の fix/feature タスクを静かに免除する — tdd 実proof が存在しても check_oracle が宣言欠落で required:false に短絡（fail-open 疑い）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "audit",
     "condukt",
@@ -5425,6 +5772,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/29"
 id = "44d5af11"
 title = "condukt/flow/scout の §2『テスト不能なら人間に ask』ゲートを policy answer --untestable 経由に配線する（機構は 0.7.108 で存在、未配線）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "condukt",
     "autonomy",
@@ -5442,6 +5790,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/30"
 id = "7a4f1721"
 title = "blastguard: 設定・hook・guard config ファイルへの Write/redirect 自動Allow を撤去する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -5459,6 +5808,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/31"
 id = "c3b41a93"
 title = "blastguard: Edit/MultiEdit/NotebookEdit を protected パスで分類する(blanket Allow をやめる)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -5476,6 +5826,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/32"
 id = "7d8cff11"
 title = "blastguard: git-hook 永続化を塞ぐ(.githooks/* への Write と git config core.hooksPath)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -5493,6 +5844,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/33"
 id = "3f5eb943"
 title = "blastguard: egress/remote-exec 検出を追加(curl|bash, base64 -d|sh, /dev/tcp, 外向き curl/wget/nc/scp, git push)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -5510,6 +5862,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/34"
 id = "616e2439"
 title = "blastguard: irreversible/high-blast 層を新設し autonomous でも確認へ fail-closed させる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -5527,6 +5880,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/35"
 id = "a93a4bff"
 title = "check-prompt-injection.py: 追加行の攻撃者近接な self-declared defense marker を信用しない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -5544,6 +5898,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/36"
 id = "5517842e"
 title = "provenance-scoped least privilege: untrusted content が context に入った turn を read-only tool set へ落とす"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -5561,6 +5916,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/37"
 id = "18506c09"
 title = "runtime injection scan: WebFetch/Read 由来の untrusted テキストを context 投入前に走査する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -5578,6 +5934,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/38"
 id = "83b315ca"
 title = "spotlighting/datamarking: untrusted span を prose marker でなく token レベルの marking で隔離する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -5598,6 +5955,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/39"
 id = "346c3d20"
 title = "verifier/worker: interpreter 供給の checks[]/reproduction_tests コマンド実行を allowlist/sandbox で制約する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -5615,6 +5973,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/40"
 id = "7ea9ed81"
 title = "cross-project lessons の provenance/quarantine と agents/skills .md の protected 化"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -5632,6 +5991,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/41"
 id = "60a24f9a"
 title = "北極星(XL): dual-LLM/CaMeL quarantine — planner が raw untrusted bytes を一切見ない構成 + subagent 返り値の data-envelope"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -5649,6 +6009,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/42"
 id = "bee3e5c9"
 title = "fugu-router に mode 軸(fast/normal/high)を追加し、duration の未計測と0秒を三値で区別し、condukt の phase 内訳を計測可能にする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fugu-router",
     "condukt",
@@ -5676,6 +6037,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/43"
 id = "a81061d0"
 title = "blastguard: disarm-by-non-write クラスを塞ぐ(rm/mv-away/chmod -x/git checkout --/tee -a/cp -r 中身)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -5693,6 +6055,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/44"
 id = "dd3aad81"
 title = "adversarial/consensus に --expected を必須化し、沈黙した sub-agent の票欠損を pass に写さない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5711,6 +6074,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/45"
 id = "b637936f"
 title = "stuck_task_ids を三値化し、Running かつ updated_at 欠落を Undetermined として別出しする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5729,6 +6093,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/46"
 id = "e3fe81d5"
 title = "condukt と hypothesis の pid_alive を Determination 化する (overwatch は修正済みでミラーギャップ)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5747,6 +6112,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/47"
 id = "9bfa8cf0"
 title = "claim registry のパース失敗を空集合に潰さず、判定不能として claim を拒否する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5765,6 +6131,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/48"
 id = "81f284c4"
 title = "gauge subagents が turns==0 の sub-agent を欠落させず、起動済み未産出として返す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -5783,6 +6150,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/49"
 id = "5daf0b60"
 title = "abandon --all-stuck が生存中 worker の worktree を切り離すのを止める"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5801,6 +6169,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/50"
 id = "cd624e4c"
 title = "Task 実行中に claim heartbeat が進まない構造を塞ぐ"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -5819,6 +6188,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/51"
 id = "e8c03e9e"
 title = "condukt に SubagentStop を配線し、子の終了と無活動を state に反映する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -5837,6 +6207,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/52"
 id = "42ad4688"
 title = "harness-core usage.rs の track_ts=false を外し、sub-agent の first/last activity を記録する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -5855,6 +6226,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/53"
 id = "53c825f6"
 title = "circuit check と overwatch status が未計測値を 0 として出すのを止める"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -5873,6 +6245,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/54"
 id = "38002446"
 title = "condukt state probe を追加し、running タスクの transcript 活動から生存を返す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -5891,6 +6264,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/55"
 id = "ef00584b"
 title = "condukt status の running 行に経過時間を表示する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -5909,6 +6283,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/56"
 id = "45f2bb7f"
 title = "blastguard: 2>&1 を $( ) の中で使うと '> 1 truncates' 誤検知になる (pre-existing false positive)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "blastguard",
     "false-positive",
@@ -5926,6 +6301,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/57"
 id = "ea1355f5"
 title = "blastguard: cwd モデルが無く 'cd DIR && rm basename' で保護パス判定を全て回避できる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "blastguard",
     "injection",
@@ -5944,6 +6320,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/58"
 id = "628b6594"
 title = "blastguard: git restore <任意パス> が保護パス以外も blanket Deny (pre-existing over-block)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "blastguard",
     "false-positive",
@@ -5961,6 +6338,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/59"
 id = "28acc92b"
 title = "compass charter: raw-IO ratchet の数値が3箇所で不一致 (DoD6=67, current_gap=65, 実測=60)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "compass",
     "measurement",
@@ -5978,6 +6356,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/60"
 id = "afcdaf57"
 title = "overwatch fmt 違反を修正（cargo fmt --all --check が main で赤）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "p1",
@@ -5994,6 +6373,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/61"
 id = "098c118a"
 title = "autoflow: is_autonomous() の EscalateStuck 分岐に自動テストが無い (main.rs:231/320 は手動検証のみ)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "autonomy",
     "scout",
@@ -6012,6 +6392,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/62"
 id = "f5da9422"
 title = "flow の compass ゲート(Step 1)を autonomy-graded にする — 機械的 gap は自動解決、矛盾/欠落だけ escalate"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "flow",
     "scout",
@@ -6030,6 +6411,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/63"
 id = "92314988"
 title = "blastguard: egress scan must descend into command-substitution (dollar-paren + backtick) inside a process-sub body"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "injection",
@@ -6049,6 +6431,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/64"
 id = "0e5d94f9"
 title = "schemaguard validate: enum check silently skips non-string values (latent fail-open, DoD9)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "schemaguard",
     "fail-open",
@@ -6067,6 +6450,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/65"
 id = "2ca03efc"
 title = "autoflow compass gate: charter_freshness None conflates absent with undetermined, blind-drives on a hung compass (reachable fail-open, DoD9)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "autoflow",
     "fail-open",
@@ -6085,6 +6469,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/66"
 id = "9543cbca"
 title = "schemaguard metrics::counts が読み取り失敗を空マップへ潰す — 未読 store が No rejects recorded yet と表示される"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "dod9",
     "fail-open",
@@ -6102,6 +6487,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/67"
 id = "27926f7e"
 title = "schemaguard parse_counts が IO error と malformed 行を黙って捨て、過少カウントを事実として提示する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "dod9",
     "fail-open",
@@ -6119,6 +6505,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/68"
 id = "2bf2b023"
 title = "schemaguard schema::validate が非 string 値に対し宣言済み enum_values 制約を黙って適用しない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "dod9",
     "fail-open",
@@ -6136,6 +6523,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/69"
 id = "60b7c0f3"
 title = "check-plugin-rollout.py が version 文字列一致だけを OK としている — 配布バイナリの sha256 照合を足す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "rollout",
@@ -6153,6 +6541,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/70"
 id = "64a79b46"
 title = "ビルドの決定性を対照実験で確認する (sha256 照合をゲート化する前提)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "rollout",
     "p2",
@@ -6169,6 +6558,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/71"
 id = "4f9516be"
 title = "schemaguard 0.1.8 のテストを利害のない agent に再検証させる (CLAUDE.md 2-a 未充足)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "dod9",
     "p2",
@@ -6185,6 +6575,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/72"
 id = "727b41ee"
 title = "check-plugin-rollout.py に asset 次元 (skills/agents/hooks/commands) の検証を足す — 現在は bump-on-change ゲートの健全性に依存しているだけで独立した検査が無い"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "done"
 notes = "DONE 2026-07-26 (commit 01d46c8a + c457a074): asset 次元をゲート化した。当初の想定 (skills/agents/hooks/commands の4dir比較) より広く、配布先が crates/<name> の完全なミラーであることを検査する形にした。rollout が rsync -a --delete --exclude target/ .git/ .in_use/ で crate 全体を配る以上、正しい定義はミラーであり、4dir は恣意的な切り取りだったため。許容差分は推測せず全39プラグインで実測して確定 (source 側欠落0 / 内容差異0 / cache 側余剰は .deployed-from.json 37件と bin/<name>-<platform> 91件のみ)。判定不能 (walk 失敗・比較不能) は drift 側。さらに古い version dir の検査と剪定 (prune-plugin-cache.py、共有ロジック plugin_cache.py) を追加し、rollout 自身が drift を残したまま done を名乗らないよう exit code を gate の判定に従わせた。"
@@ -6198,6 +6589,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/73"
 id = "211076d4"
 title = "blastguard: here-string remote-exec (bash/sh <<< cmdsub-fetch) stays ALLOW and runs fetched code"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "injection",
     "blastguard",
@@ -6217,6 +6609,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/74"
 id = "64508ec7"
 title = "状態表示に進捗測定を型で強制する: backlog lock status が progress verdict 無しに liveness を描画不能にする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "progress-liveness",
     "fail-open",
@@ -6234,6 +6627,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/75"
 id = "9ee2b216"
 title = "blastguard: nested double-quoted here-string (bash <<< of nested here-string of fetch) stays ALLOW"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "injection",
     "blastguard",
@@ -6253,6 +6647,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/76"
 id = "0bcb491e"
 title = "blastguard: paren-depth operand scan is not quote-aware inside command-substitution — embedded close-paren in a quoted string re-truncates and lets a nested here-string fetch evade Deny"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "injection",
     "blastguard",
@@ -6271,6 +6666,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/77"
 id = "f1163635"
 title = "blastguard high-blast tier A: catch the leading-plus refspec force form of history-rewrite push"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "injection",
     "scout",
@@ -6288,6 +6684,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/78"
 id = "1ab31978"
 title = "guard-maintree-bash.py: split multi-line Bash on newline so a newline-joined worktree command is not mis-flagged as a main-tree mutation"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "robustness",
     "p2",
@@ -6304,6 +6701,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/79"
 id = "68483cdd"
 title = "taintguard: add cross-project-lessons trigger to the provenance least-privilege gate (needs feasibility check first)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "injection",
     "scout",
@@ -6321,6 +6719,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/80"
 id = "f14c18be"
 title = "condukt worktree merge: 存在しない branch 名を merge-conflict (0 files) として記録し exit 0 で返す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "実測 2026-07-28 (run-20260728-015338-90001)。condukt worktree merge --branch condukt/RID/RID/topic のように解決できない branch 名を渡すと、overwatch review-queue に '[merge-conflict] merge of ... into main held: 0 file(s) [(unknown files)]' を記録し、コマンド自体は exit 0 を返した。branch が存在しないのは判定不能 (cannot determine) であって conflict ではない。0 file の conflict は意味を成さず、exit 0 は呼び出し側に成功と読まれる (実際 git log を見るまで merge されていないことに気づけなかった)。CLAUDE.md 第3節の 'IO 失敗・パース不能・空集合は clean ではない。必ず block か ask に解決する' に該当。期待挙動: 解決できない branch ref は非0終了で 'branch not found' として報告し、conflict ledger を汚さない。再現: RID=... ; condukt worktree merge --branch condukt/$RID/$RID/topic"
@@ -6334,6 +6733,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/81"
 id = "d17107ad"
 title = "schemaguard: Undetermined から exit 2 が登録済み5スキーマ経由で end-to-end 到達不能 (三値の第3値が実質死んでいる)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "schemaguard",
     "p1",
@@ -6350,6 +6750,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/82"
 id = "622e33ca"
 title = "docs/autoflow-verdict-audit.md の 4 表が doc-claim-exempt マーカー挿入で grid 描画を失っている"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "docs",
     "p3",
@@ -6366,6 +6767,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/83"
 id = "67e95a19"
 title = "DoD9 の次の勾配: 低採用 gate (budgetguard / gauge / reviewgate) の verdict 経路 fail-closed 監査"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "2026-07-28 時点で verdict 未採用 gate は 0 本になった (schemaguard 1601b835 / autoflow cec3a431 で解消)。残る勾配は harness_core::verdict の低採用 gate 各1 file: budgetguard / gauge / reviewgate。確立した手順は 監査 (read-only・docs/ へ出力・crates 無変更) から RED 先行観測、三値化 GREEN、micro bump、--plugin スコープの rollout までの2フェーズで、worker と verifier を別モデルにする。task text には必ず 既に fail-closed な経路のリスト を不合格条件として明記すること (誤検出で意図的設計を壊すのを防ぐため。autoflow の lock.rs:81 が実例)"
@@ -6379,6 +6781,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/84"
 id = "f029190c"
 title = "canary rollout の health gate 監査: 単一ステージ canary が health gate を 0 回しか通らない (bash 3.2 前提は誤りと実測)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "done"
 notes = "訂正 (実測 2026-07-28, 測定点 b7f9178b): 元タイトルの前提『canary path が bash 3.2 で動かない』は誤り。scripts/rollout-plugins.sh:589 の row_for_name が declare -A を線形走査へ置換済み (コメント :586-587)。実測: bash 3.2 / assoc array 非対応の当機で rollout-plugins.sh --plugin schemaguard --canary --dry-run が 'done (canary).' まで完走。canary テスト 4 本中 canary-gate-crates と canary-gate-eval-failclosed は rc=0。残る真の残渣は 2 本 (canary-dryrun / canary-rollback) が GNU stat -c を使うため当機で rc=1 になる点のみで、canary ロジック自体の失敗ではない。より重い発見は 01695cc0 側へ: 単一プラグイン canary は nstages=1 になり :758 の s < nstages-1 が 0<0 で偽になるため health-gate を一度も通らない (grep -c 'health-gate:' = 0 を実測)。gate crate を --plugin で 1 本に絞る運用は canary 要件を名目上満たしつつ健全性を一切検証しない。"
@@ -6392,6 +6795,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/85"
 id = "1d59cf7f"
 title = "blastguard classify: scripts/rollout-plugins.sh を触る全タスクが filename 由来で force-gate される (tier1 needle rollout が has_word 境界に合致)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "blastguard",
     "p2",
@@ -6408,6 +6812,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/86"
 id = "d038263b"
 title = "tdd strict_separation が発火せず、実装者が自分の実装を検証するテストを書いた状態を通した (CLAUDE.md 第2節(a) の機械強制が scripts/ 配下で効かない)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "tdd",
     "p2",
@@ -6424,6 +6829,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/87"
 id = "1b51115e"
 title = "check-fail-open.py の read_dir 検出が 2 形状のみで unwrap_or / unwrap_or_default 形の swallow を取りこぼす (baseline 0 は 0 fail-open を意味しない)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "p1",
@@ -6440,6 +6846,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/88"
 id = "0796137b"
 title = "canary テスト2本 (canary-dryrun.sh / canary-rollback.sh) が GNU coreutils 依存で macOS BSD 環境では実行できない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "rollout",
     "p2",
@@ -6456,6 +6863,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/89"
 id = "b19aad51"
 title = "clippy deny lint の被覆を残り34 crate へ広げる — 特に判定を持つ budgetguard/donegate/reviewgate/schemaguard と harness-core"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "clippy",
     "fail-open",
@@ -6482,6 +6890,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/90"
 id = "3832ba25"
 title = "check-clippy-lints: manifest build path escaping the crate dir is a demonstrated false negative"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "clippy",
     "fail-open",
@@ -6499,6 +6908,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/91"
 id = "60466beb"
 title = "check-clippy-lints: include!() of a repo file outside the crate dir is not followed (TOML-only selector)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = 'Discovered while fixing 3832ba25 (de2e9829). _external_sources reads manifests only, so it sees package.build / lib.path / target path entries. A non-manifest source reference such as include!("../../foo.rs") compiles that file into the crate under its deny table but is invisible to a TOML-only selector, so editing only foo.rs would not select the crate. This is by construction, not an oversight, and is written down in the scanner docstring. NOT yet demonstrated with a failing fixture the way 3832ba25 was - the claim rests on how the selector is built, not on an observed pass-with-violation. First step is to reproduce it as a RED case, since a real one would justify the cost of scanning Rust source and a non-reproducible one would not. Note include_str! is already documented as harmless: it embeds inert text rather than parsed Rust.'
@@ -6512,6 +6922,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/92"
 id = "d34715d8"
 title = "overwatch audit-round record: store-write failure prints recorded:false and exits 0 (empty-set-reads-as-clean)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = "Found while implementing 5b33b4cd (0558db6f), deliberately NOT widened into that change. In audit_round_cli::record, a failed store::append_audit_round prints {recorded:false, reason:store-write-failed} and returns Ok(()) — exit 0. The round did not reach the ledger, so convergence metrics are computed over a silently incomplete history, and continuous-audit.sh now routes this call through run_ow_gate, which only reacts to a NON-ZERO exit — so this path still sails past. Same family as CLAUDE.md section 3 (an IO failure is not a clean result). Note the tension to resolve deliberately: the module treats reporting failures as fail-soft on purpose so an unwritable ledger does not destroy a round's work, and that is defensible; what is not defensible is reporting success. Options are exit non-zero, or keep exit 0 but make the omission visible to audit-metrics rather than invisible."
@@ -6525,6 +6936,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/93"
 id = "1b525a2c"
 title = "5b33b4cd の効果測定: 2 ラウンド連続で converging:true を観測する (build != validate)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "Measurement half of 5b33b4cd, split out because it cannot be satisfied by shipping — it needs two real Continuous-Audit rounds run under the new rules. Shipped in 0558db6f (overwatch 0.2.15, deployed and live-verified): audit-round record refuses regression_tests_added < confirmed, continuous-audit.sh stops on it via run_ow_gate, SKILL.md Step 3.5 mirror sweep is mandatory. What remains is purely observation: run two rounds and check audit-metrics reports converging:true both times. Baseline to beat, from the ledger that motivated the item: new_findings 5,1,13,0,14,15 with converging:false and round 2026W29 at confirmed:10 / regression_tests_added:0. Caveat when reading the result: closure_rate is now an acceptance precondition and will read 1.0 for every new round, so it carries no signal — judge convergence ONLY by the new_findings trend, which is what is_converging actually uses. A rise in new_findings is not automatically failure either: Step 3.5 is expected to surface twins that previously went unharvested, so an early round may legitimately go UP before it comes down."
@@ -6538,6 +6950,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/94"
 id = "8fe62654"
 title = "overwatch audit-round ledger has no integrity check: a boundary truncation reads as a shorter history"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "p2",
@@ -6563,6 +6976,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/95"
 id = "e42cbcb0"
 title = "harness-core boundary test fails on this mac: pgrep -fc is a usage error, not a count"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "test-infra",
     "p2",
@@ -6592,6 +7006,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/96"
 id = "1e783882"
 title = "overwatch lease lookup fails in production: bare overwatch is not on PATH (found by undetermined telemetry)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = 'First finding from the new undetermined-metrics stream (backlog 6d493e39), observed within minutes of deploying it. 2 events in the last 7 days at crates/harness-core/src/boundary.rs:186, reason: cannot run "overwatch lease --session <id> --json": No such file or directory (os error 2). Something spawns a bare "overwatch" that is not on PATH, so the lease lookup resolves to Undetermined every time it runs. Fail-closed, so nothing is wrong per se, but the lookup never succeeds and the caller has been silently degrading. Find the caller and give it the plugin-cache absolute path (the same way other cross-plugin execs resolve), or make the absence an explicit skip rather than a per-run give-up. Verify with: overwatch undetermined-metrics --window-days 7'
@@ -6605,6 +7020,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/97"
 id = "4297c742"
 title = "Record a week of undetermined-metrics observations as compass evidence (from 2026-08-06)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = "Carried out of 6d493e39, whose third done criterion was a week of observed values recorded as compass evidence. That is time-gated: the instrument shipped 2026-07-30 and the week has not elapsed. On or after 2026-08-06, run: overwatch undetermined-metrics --window-days 7 --json, then record the by-crate and by-site distribution as compass evidence. The point of the week is to answer which undetermined branches are actually hot in production, so the remaining 60 raw-IO ratchet sites can be prioritised by observed frequency instead of by reading order. Note the sink line in the output before trusting any zero."
@@ -6618,6 +7034,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/98"
 id = "d3245d99"
 title = "daily の load_config が読めない config を黙って組み込み既定へ縮退させる (fail-open)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = "crates/daily/src/main.rs の load_config は std::fs::read_to_string の Err(_) をすべて Config::default() に写す。permission error や I/O error で既存 config が読めない場合、enabled=false も登録済みタスクも無視され、組み込み security タスクだけが走る。parse_config は不正 TOML に対して stderr へ警告を出すのに、read 失敗は無言。判定不能を既定(=検査したふり)へ写している。観測 2026-07-31 / main 30f6d7b5。修正には daily の version bump と rollout が要る。"
@@ -6631,6 +7048,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/99"
 id = "196b811b"
 title = "overwatch store.rs の review_findings docstring が同一ファイル内で自己矛盾している"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = "crates/overwatch/src/store.rs:391 は 'today there is no producer (see review_finding.rs), so this file is normally absent' と書くが、同ファイル 413-415 行は condukt の gate-exec escalate path を 'the first real producer of this stream' と呼び、実際 review-queue には gate-exec 由来の ai-finding が 40 件以上ある (観測 2026-07-31 / main 30f6d7b5)。scripts/record-audit.py も producer として加わった。CLAUDE.md 第4節: 散文が実装と食い違うと次のレビュアーを騙す。GATE crate なので bump と canary rollout が要る。"
@@ -6644,6 +7062,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/100"
 id = "2d7fac3d"
 title = "cargo-deny 未インストールのため daily の security タスクが毎日 fail している"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p3"]
 status = "pending"
 notes = "~/.daily/reports.jsonl に 2026-07-28 以降 毎日 {task:security, status:fail, code:101, detail:'error: no such command: deny'}。日次の依存監査 (advisories/bans/sources/licenses) が少なくとも3日間 1度も成立していない。cargo install cargo-deny で解消するはずだが、ユーザーの環境変更なので独断で入れない。観測 2026-07-31。"
@@ -6657,6 +7076,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/101"
 id = "a1cc21f2"
 title = "budgetguard install: home_dir 解決失敗が settings.json を ./ へ書き、成功を報告する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = 'install.rs:12-13 の dirs::home_dir().unwrap_or_else(PathBuf::from(".")) が、home 解決失敗時にカレント配下へ .claude/settings.json を書いたうえで Installed Stop hook と成功を印字する。operator は設置されたと読むが実際のハーネスにはフックが無い＝fleet 規模の fail-open。verdict 経路ではなく設置経路なので budgetguard verdict 監査(2026-07-31)のスコープ外として繰り延べた。同監査の docs/audit-budgetguard-verdict-paths.md 第7節に記載。'
@@ -6670,6 +7090,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/102"
 id = "1f922949"
 title = "budgetguard install: current_exe 失敗で裸名 budgetguard へ落ちる (1e783882 と同一クラス)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = 'install.rs:19-22 の current_exe().ok() ... unwrap_or_else("budgetguard") が PATH 依存の裸名へフォールバックする。PATH に無ければフックは起動できない。既存 backlog 1e783882 (harness-core/src/boundary.rs:186 の裸 overwatch) と同一クラスなので、両者を一括で扱うのが妥当。budgetguard verdict 監査(2026-07-31)の第7節に記載。'
@@ -6683,6 +7104,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/103"
 id = "ac2ba31d"
 title = "guard-maintree-edit.py needs a MERGE_HEAD carve-out"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = "CLAUDE.md 8 permits exactly one operation on the main working tree: merge / conflict resolution. But scripts/guard-maintree-edit.py (PreToolUse) refuses ALL Edit/Write to the main tree with no exception, including while a merge is in progress. Its own deny message says merge/conflict-resolution are the ONLY operations allowed on main, so prose and behaviour disagree (CLAUDE.md 4). Observed 2026-07-28 resolving the budgetguard merge: the only way to resolve a semantic conflict was to write the file from a python script run via Bash, which the hook does not inspect. That path is worse than the one it blocks - unreviewed, and it trains the author to route edits through Bash. Fix: allow Edit/Write when .git/MERGE_HEAD (or CHERRY_PICK_HEAD / REBASE_HEAD) exists AND the target is an unmerged path per git diff --name-only --diff-filter=U, keeping cannot-determine on the deny side as now. Note the pre-commit backstop check-worktree-isolation.py already has the merge carve-out, so the two gates currently disagree about what main permits."
@@ -6696,6 +7118,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/104"
 id = "13596fb6"
 title = "test_precommit_hook harness: semantic merge conflict class (both sides stub the same seam)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p3"]
 status = "pending"
 notes = 'Observed 2026-07-28. Two branches independently added a condukt stub to HookHarness at different offsets. git merged both textually with no conflict; the surviving unconditional CONDUKT_BIN assignment silently disarmed test_absent_condukt_binary_blocks. Each side was green alone; only the merge was red. Measured: origin/main 13 OK, ours 16 OK, merged 16 with 1 FAIL. Generalisable: a test HARNESS is a shared mutable seam, and two sides configuring the same seam produce a defect git cannot see. Worth a cheap structural check - assert in setUp that the number of places writing self.env["CONDUKT_BIN"] is exactly one - so the next duplicate is caught by a test rather than by a downstream failure whose cause is three files away.'
@@ -6709,6 +7132,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/105"
 id = "ea68627b"
 title = "editgate: a shared CARGO_TARGET_DIR can make a broken crate check clean"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "p2",
@@ -6732,6 +7156,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/106"
 id = "b43fe86b"
 title = "cache hit rate is measured but nothing watches it"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -6754,6 +7179,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/107"
 id = "5a4630a5"
 title = "gauge collapses the 5m/1h cache-write split (diagnostic only - the TTL is NOT selectable)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -6784,6 +7210,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/108"
 id = "93323c20"
 title = "no measured price for a token of injected context"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -6808,6 +7235,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/109"
 id = "457b44f1"
 title = "specguard findings never reach the unified review queue - the only major producer that does not"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -6920,6 +7348,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/110"
 id = "e664320a"
 title = "specforge is a second executor that bypasses backlog, condukt and overwatch entirely"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -6946,6 +7375,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/111"
 id = "2dd5180f"
 title = "specforge: ratify した spec の requirement を backlog に積む出口を作る"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -7030,6 +7460,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/112"
 id = "09148819"
 title = "flow: spec-gap を4番目の source にして specforge へ戻す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -7067,6 +7498,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/113"
 id = "d7330aef"
 title = "specguard brief の出力を機械判定可能にする（canon 有無の verdict）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -7097,6 +7529,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/114"
 id = "197c9fa0"
 title = "specforge の実装器（implement/evidence/agree/merge）を退役させる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -7132,6 +7565,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/115"
 id = "7c27050b"
 title = "review queue は事実上 write-only — 43 findings が queue 済みで disposition 0 件 (closure 0.00)。reconcile-fixed の運用導線か、bridge 時の自動 disposition が要る"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "review-queue",
     "p1",
@@ -7148,6 +7582,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/116"
 id = "d8d25af9"
 title = "backlog に終端状態『やらない (wontfix)』が無い — done は完了を偽り、fail は defer_until で必ず再キューされる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "backlog",
     "vocab",
@@ -7165,6 +7600,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/117"
 id = "4cbfbbfc"
 title = "check-test-weakening: NET-per-file assertion counting masks a real deletion"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "gate",
     "fail-open",
@@ -7182,6 +7618,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/118"
 id = "ed941047"
 title = "blastguard classify: an Ask from detect is scored Low-risk reversible, which is what gates auto-exec"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "gate",
     "fail-open",
@@ -7200,6 +7637,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/119"
 id = "1ee8aa12"
 title = "specguard: doc_only を shard 単位から finding 単位へ細分化する（C と B が混在する shard は全体が p1 のまま）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "specguard",
     "p2",
@@ -7216,6 +7654,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/120"
 id = "1217fa4f"
 title = "propguard: diff_text が git 失敗を消し、空 diff が empty-diff として allow される (changed_files 側だけ fail-closed 化されたミラーギャップ)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "run_diff は if let Some(text) = run_git(..) で失敗を捨てる。git diff と git diff --cached が両方失敗し untracked も無ければ diff は空になり evaluate が allow(empty-diff) を返す。docs/audit-propguard-verdict-paths.md の F-2。修正には DiffText に三値を持たせ decide_scan_failed 相当の新アームが要る。証拠: gate.rs の scan_failed_reason 自身がこの穴を日本語で説明している。"
@@ -7229,6 +7668,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/121"
 id = "3ca750b9"
 title = "propguard: mode の綴り間違いが Subprocess を無診断で Inject へ降格させる (Mode::parse の catchall が沈黙)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = "Mode::parse の _ => Mode::Inject が未知の mode 文字列を全て Inject に写す。Inject は trust-after-one-block で Subprocess の独立検査より弱いので、typo が独立検査を自己申告へ黙って降格させる。安全側の既定自体は妥当で、問題は沈黙。announce 1行で足りる。docs/audit-propguard-verdict-paths.md の F-3。"
@@ -7242,6 +7682,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/122"
 id = "4b4454ef"
 title = "taintguard (GATE crate) を enabledPlugins に登録する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = ""
@@ -7255,6 +7696,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/123"
 id = "0f876834"
 title = "gauge crate の DoD9 verdict 経路監査 (reviewgate は完了、gauge が残り)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "親 backlog item 67e95a19 (hashkey 3358a647274b19d0) が gauge と reviewgate の2クレートを DoD9 verdict-path 監査対象として挙げていた。reviewgate は docs/audit-reviewgate-verdict-paths.md (773行, P1-P8の8件fail-open確認) として完了済み。本item は残りの gauge クレートを対象とする。テンプレートは docs/audit-blastguard-verdict-paths.md / docs/audit-budgetguard-verdict-paths.md / docs/audit-reviewgate-verdict-paths.md を踏襲する: verdict を生成/消費する箇所を逐語引用し、P(Producer)/R(Router)/D(Decider) の3-way分類を行い、fail-open が確認されたものは fault-injection で修正を証明し、独立モデルによる検証を経る。対象は crates/gauge/src/ の verdict-producing/consuming ロジック。"
@@ -7268,6 +7710,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/124"
 id = "270f36fa"
 title = "taintguard: trusted region is cwd only, so worktree and scratchpad reads taint every turn"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "injection",
     "taintguard",
@@ -7305,6 +7748,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/125"
 id = "3357c2e2"
 title = "reviewgate P1: diff 取得失敗が empty-diff に潰れ無診断で allow (propguard F-2 と同一 shape の横断パターン)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "reviewgate",
@@ -7322,6 +7766,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/126"
 id = "277440b1"
 title = "reviewgate P2-P8: 監査で実測された残り 7 件の permissive 経路が未是正のまま doc にしかない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "reviewgate",
@@ -7339,6 +7784,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/127"
 id = "edca3d7c"
 title = "rollout-plugins.sh が bash 3.2 で構文エラー: 全 rollout 経路が停止しデプロイ不能 (pull 後に発生)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "deploy-verify",
     "p0",
@@ -7355,6 +7801,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/128"
 id = "5b0e9fe1"
 title = "taintguard: mark matcher covers Read only, so Grep/Bash/Glob import external content untainted"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "injection",
     "taintguard",
@@ -7387,6 +7834,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/129"
 id = "3a8e3b73"
 title = "gate protection contract: every gate must state what it protects, from what, on what grounds"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "gates",
     "p1",
@@ -7412,6 +7860,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/130"
 id = "26d84958"
 title = "gate outcome ledger: score each gate by its comply/override/escalate rate, mirroring review-metrics"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "gates",
     "p1",
@@ -7444,6 +7893,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/131"
 id = "233447c8"
 title = "taintguard: TAINTGUARD_TRUSTED_ROOTS can be planted in a shell rc for a future session"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "taintguard",
     "injection",
@@ -7461,6 +7911,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/132"
 id = "56991fca"
 title = "taintguard と fetchguard の PreToolUse 入口が parse 不能な payload を沈黙で許可する (blastguard が修正済みのミラーギャップ)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -7478,6 +7929,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/133"
 id = "d03dad3d"
 title = "taintguard classify の canonicalize 失敗が Trusted に潰れ、セッションが tainted にならない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -7495,6 +7947,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/134"
 id = "0c3296a5"
 title = "harness-core boundary の read_pipe_bounded が pipe 読み取り失敗を空文字列にし exit 0 のまま Known を名乗る"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -7512,6 +7965,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/135"
 id = "034b6620"
 title = "どの git hook も cargo を呼んでいない — check-clippy-lints.py を配線し verdict を持つクレートに workspace lints を継承させる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -7529,6 +7983,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/136"
 id = "56df8ad7"
 title = "boundary の payload 型を封印し require の後段で permissive な既定値を型として書けなくする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -7546,6 +8001,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/137"
 id = "a75ad752"
 title = "DoD9 の分子を監査ドキュメントの存在から是正の landed へ戻す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -7563,6 +8019,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/138"
 id = "2a3b033c"
 title = "既定 REFUTED を既定 UNVERIFIED へ — 実在する fail-open を落とした指示が3つの docs で現役"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -7580,6 +8037,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/139"
 id = "8696dd7e"
 title = "fault injection をゲート化する — boundary に FaultPlan、degrade に assert_fails_closed、採用クレート数をラチェット"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -7597,6 +8055,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/140"
 id = "309c8aca"
 title = "DoD6 の converged 宣言を撤回する — 残り60サイトで計数が止まっただけ"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -7614,6 +8073,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/141"
 id = "6de70510"
 title = "specguard の新しいテスト3本が unwrap_or_default で自分を反証不能にしている"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L1",
     "scout",
@@ -7631,6 +8091,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/142"
 id = "a5a14d24"
 title = "backlog タスクを repo 管理にし、repo優先＋machine フォールバックの二層ストアにする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "backlog",
     "flow",
@@ -7648,6 +8109,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/143"
 id = "5151605e"
 title = "コンパイラは強制面になっていない — merge 前にワークスペースを型検査するものが1つも無い"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -7666,6 +8128,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/144"
 id = "6e36fe15"
 title = "Verdict の Clean に Check provenance token を要求する (敵対的検証で2点修正済み)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -7684,6 +8147,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/145"
 id = "64e52a8d"
 title = "spec-map の impl-test 関係が 562 entry 中 0 件で、構造的に到達不能"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -7702,6 +8166,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/146"
 id = "0c277117"
 title = "docs/specs が map からも canon からも外れており、specguard はどこでも block しない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -7720,6 +8185,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/147"
 id = "80a46e9f"
 title = "overwatch に決定論の裁定を入れ、REFUTED を witness 無しで成立させない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -7738,6 +8204,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/148"
 id = "a6e9512d"
 title = "check-doc-claims の射程が docs/specs に対してゼロ — 検証可能 claim が44ファイル全部で0件"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -7756,6 +8223,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/149"
 id = "6becbf8d"
 title = "specguard の tracked 200件は7月の単一バッチで、resolve に検証が1つも無い"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -7774,6 +8242,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/150"
 id = "068337fd"
 title = "実行可能な仕様行 — rows.toml と check-spec-rows と coverage ratchet (C7 デッドロック修正込み)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L4",
     "scout",
@@ -7792,6 +8261,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/151"
 id = "264990c9"
 title = "blastguard Decision::Allow を Checked 付きにする (敵対的検証で件数と error code を訂正)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "L5",
     "scout",
@@ -7810,6 +8280,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/152"
 id = "6aaec283"
 title = "taintguard t2 commit d24f02d5 は敵対的パネルが block した版 — そのまま merge しないこと"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "taintguard",
     "injection",
@@ -7831,6 +8302,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/153"
 id = "84eccf38"
 title = "overwatch reconcile.rs: git read is still two-valued (any failure yields empty, reported as 0 commits scanned)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "p2",
@@ -7847,6 +8319,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/154"
 id = "421e7990"
 title = "overwatch review-metrics: stale-undisposed Undetermined arm is unreachable from its call site (unverified)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "p3",
@@ -7863,6 +8336,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/155"
 id = "b4baf3d7"
 title = "Err 腕で既定値を自作する形を local gate で検出する（型で塞げない残余の第二層）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "gate",
@@ -7880,6 +8354,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/156"
 id = "1469673b"
 title = "stuckguard anchor の判定不能は overwatch の lease reap に波及する (UNVERIFIED 解消・実測で確認) — 生存中セッションの lease が黙って剥がされうる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "stuckguard",
@@ -7920,6 +8395,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/157"
 id = "6d451627"
 title = "condukt gate-check の decomposition 読み込みが「無い」と「読めない」を併合している（分類は三値化済み、読み込みは二値のまま）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "condukt",
@@ -7956,6 +8432,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/158"
 id = "aadbd19a"
 title = "harness-core 0.2.3 の fleet 再配布が未実施 — 36 plugin の deployed binary が 0.2.2 のまま"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "deploy-verify",
     "p1",
@@ -7972,6 +8449,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/159"
 id = "03450b7c"
 title = "worktree から積んだ backlog item が本体プロジェクトのキューに現れない (project key が worktree パスになる)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "worktree-hygiene",
     "p1",
@@ -7988,6 +8466,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/160"
 id = "ebf8c83b"
 title = "condukt run-20260806-062115-17609 の t1 (60aa42b7 boundary tri-state) と t2 (6bf133a4 DoD9 charter) が未検証・未merge — 利害関係のない agent で検証してから main へ merge し、harness-core bump に伴う rollout (propguard は GATE なので canary) まで行う"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p0"]
 status = "done"
 notes = ""
@@ -8001,6 +8480,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/161"
 id = "39c4f200"
 title = "pre-push 型検査の共有 target dir (.git/prepush-typecheck-target) が並行セッションの同時 push で cargo ロック競合しないか実測する — 現状は未観察"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = ""
@@ -8014,6 +8494,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/162"
 id = "7598cd9e"
 title = "DoD9 の是正完了数を 7 of 22 から実測値 3 of 22 へ下げるか、ユーザーの判断を得て確定させる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = ""
@@ -8027,6 +8508,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/163"
 id = "9ee7e798"
 title = "taintguard: merge 7bc09647 で落とした TAINTGUARD_TRUSTED_ROOTS を 0.2.0 の上へ移植する — repo 外の信頼ルートをオペレータが宣言する唯一の経路で、HookInput にも CLAUDE_ 系 env にも settings.json にも代替チャネルが無い (旧実装は commit fe13e4cd)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = ""
@@ -8040,6 +8522,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/164"
 id = "87a1d74a"
 title = "check-test-weakening が doc コメント内の属性らしき文字列を実属性として数える — readonly_known_defects.rs の「ignore するな」という散文が ignore-added として BLOCK された (merge be81466a で ack 済み)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = ""
@@ -8053,6 +8536,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/165"
 id = "2133b6fe"
 title = "check-fail-open.py の --ratchet がどのフックからも呼ばれていない — 空集合クラスは計測できても強制されていない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "p1",
@@ -8074,6 +8558,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/166"
 id = "61e08bca"
 title = "check-gate-crates-sync.py が失敗しているのに、どのフックからも呼ばれていない (.githooks/pre-push の GATE_CRATES から taintguard が欠落)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "scout",
     "p1",
@@ -8095,6 +8580,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/167"
 id = "3e7d5df8"
 title = "condukt schema_precheck が schema 未登録と JSON パース不能をどちらも Ok(()) に潰す (schemaguard 監査 §5-5 の未是正項目)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "利害のない検証 agent が t2 (6bf133a4) の DoD9 再測定中に発見し、こちらで独立に確認した (測定日 2026-08-06、測定点 7bc09647)。crates/condukt/src/main.rs:4859-4864 の schema_precheck は let Some(schema) = schemaguard::registry::get(schema_name) else { return Ok(()) } と let Ok(value) = serde_json::from_str else { return Ok(()) } の2本で、schema が未登録の場合も入力 JSON がパースできない場合も検証をスキップして成功を返す。schema_precheck_each (:4873) も同型。判定不能を clean に写す典型で、CLAUDE.md 3 の対象。さらに condukt の SKILL.md は Phase 2 で schemaguard が検出された場合は check 失敗を無視できないと明記しているので散文と実挙動も食い違う。これが schemaguard を DoD9 の (ii) 是正完了 に入れない実際の理由であり、charter が書いていた read-only 監査で1行も変更していない は現行コードに対して誤り (schemaguard 自体は 0.1.10 で §5-6/7/8 をクローズ済み)。完了条件: 未登録 schema とパース不能をそれぞれ判定不能として扱い、呼び出し側が clean と読めない形にする。RED を先に観測すること"
@@ -8108,6 +8594,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/168"
 id = "87dbfbb8"
 title = "propguard: diff 取得に失敗した非UTF-8 の変更が空 diff に潰れて ALLOW になる (changed_files は変更ありと言っているのに)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p0"]
 status = "pending"
 notes = "検証済み — 利害関係のない agent が mutation testing で測定。ブランチ fix/propguard-empty-diff の 9a2eb9f0、worktree /Users/yuki/src/.harness-worktrees/w-propguard。fix 自体は本物で gate 層の decision arm は3テストで kill される。だが merge 保留。[F1 p1] git.rs:271-273 の ls-files Undetermined 転送が kill rate ゼロ — その腕を pre-fix 相当の空ブロックに戻して97テスト全緑。untracked 経路から本 item の fail-open が再び開く: changed_files=Files[new.rs] / run_diff x2=Known 空 / ls-files 握り潰し → others 空 → Known DiffText text 空 → gate.rs:245 で allow empty-diff。[F2 p2] 4本の feed read のうち #3 は無カバー、#4 は fix と同時に書かれ RED 未観測のテスト1本のみ。[F4 p2] gate.rs:2192-2196 の docstring が偽 — a_genuinely_clean_repo_still_allows は repo_with_committed が clean なので gate.rs:219-221 で no-code-changes 早期 return し diff_text を一度も呼ばない。実際に clean から Known を固定しているのは git.rs:957 の diff_text_of_an_unchanged_file_is_known_and_empty_not_undetermined。[F5] reviewgate ミラーは同型ではない: from_utf8_lossy を使うので本 fault は再現せず timeout 境界も無い — 別起票 f71ac81a。修正エージェントは API セッション上限で中断、2026-08-06。"
@@ -8121,6 +8608,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/169"
 id = "d8e22b26"
 title = "propguard: 一部の git サブコマンドの diff が読めなくても truncated=false のまま完全な diff として checker に渡される"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "87dbfbb8 と同一ブランチ (9a2eb9f0) で実装済み。検証者が Mode::Subprocess の到達性を実測で確定 (実 all-PASS checker で properties-satisfied/ALLOW に到達し、partial diff では diff-read-failed で block)。merge は 87dbfbb8 の F1/F4 と同時。"
@@ -8134,6 +8622,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/170"
 id = "f6784177"
 title = "ctxrot の find_overwatch_binary が stuckguard で直した 2 欠陥をそのまま持っている (mirror gap)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "mirror-gap",
     "p1",
@@ -8159,6 +8648,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/171"
 id = "5b75ea9d"
 title = "overwatch の exit 1 が「lease 無し」と内部エラーを併合しているので、呼び手が区別できない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = """
@@ -8179,6 +8669,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/172"
 id = "8e565740"
 title = "stuckguard の anchor 修正で PostToolUse の subprocess 起動が毎 tool call 1 回から 2 回に増えた"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = """
@@ -8199,6 +8690,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/173"
 id = "811f10a4"
 title = "stuckguard のテストが env var を 2 つの別々の Mutex で守っており、モジュール間では直列化されていない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = """
@@ -8219,6 +8711,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/174"
 id = "3135ebb9"
 title = "trust store に .harness-worktrees 配下が 0 件で、第8節が義務づける作業場所でgate の project 設定が読まれない — donegate はそこで fail-open に倒れる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "p0",
@@ -8289,6 +8782,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/175"
 id = "5b89f0f6"
 title = "verdict.rs の「method call としては書けない」は拡張トレイトで反証される (散文が実挙動より強い)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "p1",
@@ -8314,6 +8808,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/176"
 id = "f12c2168"
 title = "check-fail-open.py が Required::Blocked への改名で残余の第二層に盲目になった (836a1aa3 が 47 サイトを改名)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "p1",
@@ -8344,6 +8839,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/177"
 id = "4eeac10f"
 title = "blastguard の trybuild pass fixture が require の封印を pin していない (donegate は pin している = mirror gap)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "mirror-gap",
     "p2",
@@ -8371,6 +8867,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/178"
 id = "e269274f"
 title = "Determination を直接 match する 40+ 箇所の Undetermined 腕が全数監査されていない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "p2",
@@ -8398,6 +8895,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/179"
 id = "b16f5465"
 title = "session-worktree-init.py が作る worktree は trusted にならない — condukt 側 (5151605e part 2) と同形の mirror gap"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "verified",
     "p1",
@@ -8414,6 +8912,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/180"
 id = "a3cdc2fc"
 title = "worktree の trust エントリが破棄時に削除されず ~/.harness/trust.toml が単調増加する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = "commit 6780b204 で worktree::create が新規 worktree を trust list に登録するようになったが、worktree::remove / discard は対称の trust::remove を呼ばない。結果として trust.toml は既に存在しないパスのエントリを溜め続ける。影響は現時点では小さい: is_trusted は線形走査だが件数は小さく、エントリの指すディレクトリは存在しないので何の config も読めない (inert)。また condukt は topic を再利用するので、同じパスが再作成されたときは既存エントリが使われ挙動は一致する。残るのは (a) ファイルの単調増加と (b) worktree_base 配下の削除済みパスに別のものが作られた場合に既に trusted である、という2点。対称化する場合の論点: remove 側で trust::remove が失敗したときの failure direction。ここは「余分に trusted なまま」= permissive 側なので、握り潰さず少なくとも申告が要る。5151605e part 2 のスコープ外なので分離した。"
@@ -8427,6 +8926,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/181"
 id = "d5838b6e"
 title = "condukt worktree create が失敗しても trust エントリが永続的に残る (F2)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "verified",
     "p1",
@@ -8443,6 +8943,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/182"
 id = "10b72c4d"
 title = "trust::add の read-back 検証がノーテスト かつ TOCTOU (F5)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "verified",
     "p2",
@@ -8459,6 +8960,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/183"
 id = "e773be5e"
 title = "specguard forge も worktree を trust 登録せずに作る (F9 / 第3のミラー)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "verified",
     "p2",
@@ -8475,6 +8977,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/184"
 id = "ee08c7c0"
 title = "propguard: diff-read-failed-giveup の ALLOW が violation を残さず escalate もされない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "verified",
     "p1",
@@ -8491,6 +8994,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/185"
 id = "f71ac81a"
 title = "reviewgate の diff_text はタイムアウト境界を通らない生 Command::output"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "verified",
     "p1",
@@ -8507,6 +9011,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/186"
 id = "4cacdfae"
 title = "harness_core::trust の worktree 継承を残り 5 consumer へ展開するか判定する (reviewgate/precommit-audit/propguard/tdd/beacon)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "fail-open",
     "trust",
@@ -8524,6 +9029,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/187"
 id = "241e7a47"
 title = "check-test-weakening がコメント内の #[ignore] / #[should_panic] を属性として数え、誤検出でブロックする"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "gate",
     "false-positive",
@@ -8541,6 +9047,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/188"
 id = "d8d0778c"
 title = "flow: backlog が空のとき compass/hypothesis を根拠にループを継続せず停止する (停止条件を compass+backlog の2つに絞る)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "flow",
     "p1",
@@ -8557,6 +9064,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/189"
 id = "2c0d149b"
 title = "project_unresolved は write 時のみ算出され、後から腐っても再判定されない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "review",
     "p2",
@@ -8573,6 +9081,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/218"
 id = "691fa4de"
 title = "移送済み490件を含む既存タスクは project_unresolved 欠落で一律 false になる"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "review",
     "p1",
@@ -8589,6 +9098,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/219"
 id = "801d0bda"
 title = "cargo test --workspace が 3 回中 1 回、テスト結果を出さずに 1 target を落とす (再現せず・原因未特定)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "test",
     "flaky",
@@ -8620,6 +9130,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/200"
 id = "8836b370"
 title = "harness-core の trust テスト 2 本が HOME を復元せず、プロセスの残りに削除済み tempdir を指す HOME を残す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "test",
     "harness-core",
@@ -8646,6 +9157,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/201"
 id = "3ccedd83"
 title = "test_env::lock の再入をコンパイル時/実行時に検出する機構がない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "test-infra",
     "p2",
@@ -8662,6 +9174,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/202"
 id = "b71c72a7"
 title = "テストが固定 /tmp パスを使うため、2 本の cargo test が同時に走ると互いを壊す"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "test-infra",
     "worktree-hygiene",
@@ -8679,6 +9192,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/203"
 id = "594f4e56"
 title = "blastguard resolve_expanded_command_word: 条件付き実行の代入 (&& / ||) を Literal に落とさない"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = ""
@@ -8692,6 +9206,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/205"
 id = "5700ba25"
 title = "blastguard: 行外で定義された shell 関数の呼び出しが展開 head resolver の残存 fail-open"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "0.2.48 の第二著者監査で報告され、意図的に pin していない残存。BIN=/bin/echo; myfunc; $BIN -rf /path で myfunc が関数なら BIN を再束縛できるが、外部コマンドとテキスト上区別できない。外部コマンドは親シェルの変数を触れないので、分離には detect.rs が持たない知識が要る。CommandWordOrigin::AssignedButUnknowable の docstring に非カバーとして明記済み。allow を assert するテストは無い。"
@@ -8705,6 +9220,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/210"
 id = "bbacb00d"
 title = 'blastguard: 展開 head resolver の UNVERIFIED 2件（rewritten.join(" ") の意味破壊・MAX_SHELL_DEPTH 相互作用）'
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = '0.2.48 の第二著者が到達できなかった＝棄却ではない（CLAUDE.md §6）。(1) 置換再判定は rewritten.join(" ") で行を作り直すため、空白・埋め込みクォート・区切りを含む値で意味が壊れる/生まれる可能性。探索したが Ask->Allow は見つからず、空間は尽くしていない。(2) このアーム経由で MAX_SHELL_DEPTH を使い切る行は構成していない。'
@@ -8718,6 +9234,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/211"
 id = "3e0a8bdf"
 title = "blastguard: 配列代入 BIN=(/bin/rm) を要素0として解決するか、一様 Ask のままにするか"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p3"]
 status = "pending"
 notes = '0.2.48 で deny -> ask に移動した唯一の非制限方向の変化。旧 deny は偶然（basename("(/bin/rm") がたまたま rm）で、空白入り綴りは修正前から ask だった＝既に不整合。要素0抽出には [1]= 添字と空配列のモデル化が要る。現状は一様 Ask（非対話では Deny に硬化）。'
@@ -8731,6 +9248,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/212"
 id = "2fb05132"
 title = 'blastguard: 展開 head が語の一部のとき ("$D/bin/tool") は解決を諦めている — 実測9件の残余'
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = '0.2.49 の再判定計測 (2026-08-07、測定点 e306331c、.scratch/rejudge_corpus.py と .scratch/gap_70_vs_45.py) で、旧見積り70に対し実際に解決したのは49 (45 allow + 4 別 ask)。差 21 の内訳: export/declare 10 (0.2.48 が塞いだ stale-literal 経路なので正しく拒否)、glued-prefix 9、前置代入 1、条件付き 1。glued-prefix は D=/path; "$D/bin/donegate" status のような形で、referenced_variable_name が『参照の周りにテキストが貼り付いた語』を意図的に None にしているため。原理的には D が literal なら結合して解決できる。やるなら置換再判定と同じ substitutive な形で行い、部分置換が新しい語境界を作らないことをテストで固定すること。'
@@ -8744,6 +9262,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/213"
 id = "5b29d11e"
 title = "『取得失敗が空集合に潰れて allow』横断パターンの一括是正 (compass の次の一手)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = "2026-08-07 の compass 再オリエンテーションで人間が裁定した次の ONE 右サイズの一手。DoD9 の完了条件の軸（是正完了）を実際に動かす唯一の候補。同一 shape は reviewgate P1（diff 取得失敗が空 diff = 変更なしへ潰れ無診断で allow）と propguard F-2 で2 crate 確認済み。手順: (1) shape を機械検出可能な述語として書き下す（走査/diff/subprocess の取得失敗が空コレクションへ落ち、その空が下流で対象なし=合格と読まれる形）、(2) 監査済み 7 crate を横断で当て逐語引用つきで列挙（辿れなかったは UNVERIFIED であって不在の証明ではない）、(3) 各ヒットを利害のない別 agent が fault injection で RED 先行観測してから是正 (F->P)、(4) 是正後に同じ述語を再実行して単調減少を観測。述語が 0 件を返したときは clean ではなく『この述語では見つからなかった』と報告すること。"
@@ -8757,6 +9276,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/214"
 id = "ea6f27b1"
 title = "specguard の spec-map 同期が main の作業ツリーを常時 dirty にする (§8 と構造的に衝突)"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = "post-merge フックが .specguard/spec-map.toml の last_synced を main の新 HEAD へ書き換えるため、merge のたびに main が dirty になる。CLAUDE.md §8 は main で非 merge commit を禁じているので、この差分を main で commit できない。worktree で commit すると last_synced が worktree HEAD ではなく main HEAD を指す値になり、merge 後にまた drift する（自分の尻尾を追う）。観測 2026-08-07、測定点 b204c4ed。git log に chore(specguard): sync spec-map last_synced to X という commit が複数あり、いずれも main 上で打たれている＝§8 の例外運用が常態化している。"
@@ -8770,6 +9290,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/215"
 id = "0ab44b59"
 title = "harness-core 0.2.6 が main に不在: 42 plugin の配布済みバイナリが未マージ branch 由来"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "deploy-verify",
     "p1",
@@ -8835,6 +9356,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/216"
 id = "e8aad6e6"
 title = "rollout ゲートが stale と orphan provenance を区別できない（巻き戻しが正解のケースと危険なケースが同じ赤に潰れる）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = [
     "deploy-verify",
     "p2",
@@ -8867,6 +9389,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/221"
 id = "5742e1d5"
 title = "specguard spec-map の自己追尾ドリフトは fast-forward merge で止まる（ea6f27b1 の観測結果）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = []
 status = "pending"
 notes = "観測 2026-08-07、測定点 main 1b35d662 -> 31f1fe99。.githooks/post-merge は先頭で HEAD^@ の親数を数え、2 未満なら exit 0 する（ファイル冒頭の注記: fast-forward merge はコミットを作らないので certify 対象が無い）。specguard map sync はその early-exit の後段にあるため ff merge では走らない。実測: dirty だった spec-map をワークツリーのブランチへ commit し main へ --ff-only で取り込んだところ git status は clean のままで再ドリフトしなかった。--no-ff で取り込むと post-merge が走り last_synced が新しい merge commit を指して再び dirty になる（これが ea6f27b1 の追尾ループ）。したがって回避策は存在する: spec-map 同期コミットは ff で取り込む。ただし ff できない状況（main が先に進んでいる）では成立しないので恒久策は別途要る。last_synced が常に 1 コミット古くなる点は残る。"
@@ -8880,6 +9403,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/217"
 id = "45f14716"
 title = "condukt bin テストで 8 回中 1 回の fail を観測（テスト名を取り損ねた・未同定）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = """
@@ -8917,6 +9441,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/222"
 id = "b63cbdf0"
 title = "autoflow README.ja.md が撤去済みの回数上限（4回/5回目で確認）を今も仕様として書いている"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p2"]
 status = "pending"
 notes = """
@@ -8949,6 +9474,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/223"
 id = "58022668"
 title = "flow に drain オプションを新設し、実行スコープを「1つのタスクと関連するタスク」に定義する"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = """
@@ -9011,6 +9537,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/224"
 id = "af239090"
 title = "backlog に決定論的な関連タスク判定を持たせる（drain のスコープ境界を散文で決めない）"
 project = "/Users/yuki/src/harness"
+project_unresolved = false
 tags = ["p1"]
 status = "pending"
 notes = """
@@ -9053,3 +9580,39 @@ updated_at = 1786049826
 weight = 0.0
 issue_number = 225
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/225"
+
+[[task]]
+id = "c51acbdc"
+title = "rollout の canary が overwatch 暗転時に JSONDecodeError でクラッシュする — 判定不能として refuse に倒し、resolve_overwatch_bin が PATH の暗転 launcher を優先しないようにする"
+project = "C:/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1786070195
+updated_at = 1786070195
+weight = 0.0
+
+[[task]]
+id = "4442a2e7"
+title = "ship が enabled=false のまま scripts/parked-plugins.json に parked 宣言が無い — 宣言するか enable する"
+project = "C:/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1786070195
+updated_at = 1786070195
+weight = 0.0
+
+[[task]]
+id = "3b9f1665"
+title = "build-plugin-bin.sh (cargo build -p) と rebuild-plugins.sh (--workspace) の feature unification 差で repo/cache の bin が永久 drift しうる — 更新経路を --stage-repo に一本化する"
+project = "C:/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1786070195
+updated_at = 1786070195
+weight = 0.0

@@ -14,6 +14,19 @@ Claude Code 向けの、**プロジェクト全体の実行レジストリ**。R
 
 単一 Rust バイナリと 2 つのフック（SessionStart + Stop）だけで動き、サブスクリプションネイティブである。追加の API key も要らない。
 
+### status ビューの `(none)` と `(unknown)`
+
+`overwatch status` の各セクションは、空のとき `(none)` を出す。これは「**見た上で、無かった**」
+という観測を意味するので、**実際に観測できた source にしか出さない**。読めなかった source —
+壊れた/読めない lease 台帳、不在または非0終了のヘルパーバイナリ、デコードできない JSON — は
+`(unknown: <理由>)` を出し、該当 source を列挙した WARNING を stderr に出す。
+
+この区別が最も効くのは **Sessions** ペインである。ここでの `(none)` は「他に live なセッションは
+いない」という主張であり、CLAUDE.md §8 が「決して仮定するな」と言っている当の事実であり、
+condukt の main-tree guard が main の共有作業ツリーへの commit を許可する前に読む liveness 入力
+そのものでもある。したがって `status --json` にも機械可読な `undetermined` 配列
+（`[{source, reason}]`）を持たせた。全 source を観測できたときはキーごと省略される。
+
 ## 管理対象
 
 プロジェクトごと、`~/.overwatch/<project-key>/overwatch/` に以下を置く：

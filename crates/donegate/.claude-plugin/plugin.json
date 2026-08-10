@@ -1,6 +1,6 @@
 {
   "name": "donegate",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "description": "v0.1.21: re-blesses the verdict compile-fail trybuild golden stderr again — CI's `dtolnay/rust-toolchain@stable` installs rustc without the `rust-src` component, which omits the multi-line snippet in `note: the method ... exists on the type ...` diagnostics; a local toolchain with `rust-src` installed renders the longer form and silently re-diverges the golden. Reproduced by installing a `--profile minimal` (no rust-src) toolchain matching CI exactly. No contract change. v0.1.20: re-blesses the verdict compile-fail trybuild golden stderr (rustc note-formatting drift only, no contract change). Completion-verification gate for Claude Code: on Stop, run your acceptance commands as subprocesses and block the stop until every required check is green, feeding failures back for an auto-fix loop. Subscription-native (one hook + bundled Rust binary, no API key).",
   "author": {
     "name": "yukineko"

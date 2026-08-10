@@ -231,13 +231,21 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         //     `donegate:giveup:typecheck  occurrences=1` alongside
         //     `donegate:typecheck  occurrences=3`. This is the query to use.
         //
-        //   `overwatch review-queue` → does NOT show a single give-up. That
-        //     surface carries only signatures already escalated to SYSTEMIC
-        //     (`is_systemic`, default 3 occurrences in 24h), and the probe's
-        //     `review-queue --json` was `[]`. It starts carrying a check that
-        //     keeps exhausting the cap once recurrence crosses the threshold —
-        //     which is a property worth having, but it is not the first-occurrence
-        //     channel and must not be described as one.
+        //   `overwatch review-queue` → does NOT show a give-up from a single
+        //     session, EVER — not on the first one and not on the hundredth.
+        //     That surface carries only signatures escalated to SYSTEMIC, and
+        //     `is_systemic` is `occurrences >= threshold && (distinct_tasks > 1
+        //     || distinct_sessions > 1)` (`crates/overwatch/src/violation.rs`).
+        //     `emit_violations` below passes the session key as BOTH the
+        //     task_key and the session_id, so within one session both counts are
+        //     pinned at 1 and the second conjunct is false however high
+        //     `occurrences` climbs. Measured, not assumed (probe 2026-08-11,
+        //     three give-ups in one session): `review-queue --json` was `[]`.
+        //     A give-up reaches review-queue only once the SAME check gives up
+        //     in two or more distinct sessions. An earlier version of this
+        //     comment said it "starts carrying a check that keeps exhausting the
+        //     cap once recurrence crosses the threshold"; that was false — the
+        //     threshold alone never suffices.
         emit_violations(&root, &session, &failing, Outcome::GaveUp);
         eprintln!(
             "donegate: {} required check(s) still failing after {} attempts ({}). \

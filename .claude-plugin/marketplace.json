@@ -307,7 +307,7 @@
     {
       "name": "donegate",
       "description": "v0.1.21: re-bless the verdict compile-fail trybuild golden stderr again — CI's `dtolnay/rust-toolchain@stable` has no `rust-src` component, which changes how rustc renders `note:` snippets pointing into std/core; a local toolchain with rust-src installed produces the longer form and silently re-diverges the golden. Reproduced against a `--profile minimal` toolchain matching CI exactly. No contract change. v0.1.20: re-bless the verdict compile-fail trybuild golden stderr again (rustc now emits additional note-body lines for E0599; the compile-fail invariant is unchanged, same category of drift as v0.1.18). v0.1.18: re-bless the verdict trybuild .stderr (removed stale std-lib note bodies that a newer rustc no longer renders; the compile-fail invariant is unchanged). v0.1.17: new `emit_violations(root, session, failing: &[String])` records one `overwatch` `ViolationSource::Donegate` event per failing check name (fmt/clippy/test) after `gate_run` blocks a Stop, feeding the unified review-queue. Completion-verification gate for Claude Code: on Stop, run your acceptance commands as subprocesses and block the stop until every required check is green, feeding failures back for an auto-fix loop. Subscription-native (one hook + bundled Rust binary, no API key). v0.1.8: added #![deny(clippy::panic)] at crate root.",
-      "version": "0.1.24",
+      "version": "0.1.25",
       "category": "quality",
       "keywords": [
         "hooks",

@@ -43,3 +43,28 @@
 //! ungated sidesteps the ambiguity entirely rather than asking the scanner
 //! to special-case it.
 pub(crate) static PATH_ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+/// The same problem for `$HOME`, which several stores key off
+/// (`harness_core::config::home()` → `~/.harness/trust.toml`,
+/// `~/.overwatch/…`). It used to be a module-local `HOME_LOCK` inside
+/// `worktree::worktree_remove_tests`, which serialized only that module's
+/// merge tests against each other. `worktree::worktree_trust_tests` swaps
+/// `$HOME` too (to keep workspace-trust registration off the real
+/// `~/.harness/trust.toml`), and a module-local lock cannot exclude a swap
+/// happening in a *different* module — the exact shape of miss that
+/// `PATH_ENV_LOCK`'s doc comment describes. Hoisted here so every `$HOME`
+/// mutator in this crate takes ONE lock.
+///
+/// A plain `Mutex`, not an `RwLock`: unlike PATH there is no set of pure
+/// *consumers* that would benefit from shared access — every user of this lock
+/// mutates `$HOME`.
+///
+/// Ungated (no cfg(test) attribute) for the same reason as `PATH_ENV_LOCK`: an
+/// uncontended static lock costs nothing outside tests, and a bare cfg(test) on
+/// a non-module item is the shape this repo's test-weakening scanner correctly
+/// refuses to guess about. Unlike `PATH_ENV_LOCK` — which has a real non-test
+/// consumer in `worktree::run_git_bounded_with` — every user of this one is a
+/// test, so the non-test build sees it as dead. The allow below is narrow and
+/// suppresses only that: it is not a lint waiver on any judging code path.
+#[allow(dead_code)]
+pub(crate) static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

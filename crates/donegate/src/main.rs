@@ -230,9 +230,55 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     if attempt > cfg.max_attempts {
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "giveup", &failing, attempt);
+        // DURABLE SENTINEL (backlog 5151605e part 3). The stop is still allowed
+        // here — that is deliberate and unchanged, so a genuinely stuck agent is
+        // never trapped. What must not survive is the give-up being INVISIBLE:
+        // until now the only trace was this stderr line (gone with the
+        // transcript) and a JSONL line in donegate's own private state dir that
+        // no tool reads. Downstream — a human, a script, the next session — had
+        // no way to tell "the gate enforced and the checks went green" from
+        // "the gate stopped enforcing while the checks were still red".
+        //
+        // The trace goes to the overwatch violation ledger rather than to a new
+        // mechanism: donegate already writes every BLOCK there (see the
+        // `Outcome::Blocked` call below), overwatch is this repo's project-wide
+        // review surface, and the ledger is an append-only file under
+        // `~/.overwatch/<project>/` — durable across processes and queryable by
+        // both a human and a script.
+        //
+        // `Outcome::GaveUp` gives it its own signature (`donegate:giveup:<check>`,
+        // never `donegate:<check>`), so a give-up can never be read as just
+        // another block.
+        //
+        // WHICH COMMAND SHOWS IT — measured, not assumed (probe of this branch,
+        // 2026-08-06: an isolated HOME, four Stops against a `cmd = "exit 1"`
+        // check, then the overwatch CLI over that store):
+        //
+        //   `overwatch violations` → lists it immediately, as its own row:
+        //     `donegate:giveup:typecheck  occurrences=1` alongside
+        //     `donegate:typecheck  occurrences=3`. This is the query to use.
+        //
+        //   `overwatch review-queue` → does NOT show a give-up from a single
+        //     session, EVER — not on the first one and not on the hundredth.
+        //     That surface carries only signatures escalated to SYSTEMIC, and
+        //     `is_systemic` is `occurrences >= threshold && (distinct_tasks > 1
+        //     || distinct_sessions > 1)` (`crates/overwatch/src/violation.rs`).
+        //     `emit_violations` below passes the session key as BOTH the
+        //     task_key and the session_id, so within one session both counts are
+        //     pinned at 1 and the second conjunct is false however high
+        //     `occurrences` climbs. Measured, not assumed (probe 2026-08-11,
+        //     three give-ups in one session): `review-queue --json` was `[]`.
+        //     A give-up reaches review-queue only once the SAME check gives up
+        //     in two or more distinct sessions. An earlier version of this
+        //     comment said it "starts carrying a check that keeps exhausting the
+        //     cap once recurrence crosses the threshold"; that was false — the
+        //     threshold alone never suffices.
+        emit_violations(&root, &session, &failing, Outcome::GaveUp);
         eprintln!(
             "donegate: {} required check(s) still failing after {} attempts ({}). \
-             Allowing stop — fix manually.",
+             Allowing stop — fix manually. This give-up is recorded as \
+             `donegate:giveup:<check>` in the overwatch violation ledger \
+             (`overwatch violations`); the checks are still RED.",
             failing.len(),
             cfg.max_attempts,
             failing.join(", ")
@@ -246,7 +292,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
 
     log_event(&cfg, &session, "blocked", &failing, attempt);
-    emit_violations(&root, &session, &failing);
+    emit_violations(&root, &session, &failing, Outcome::Blocked);
     let reason = gate::block_reason(&report, attempt, cfg.max_attempts);
 
     if interactive {
@@ -276,6 +322,35 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
     harness_core::hook_latency::record("donegate", &session, __start.elapsed().as_millis() as u64);
     std::process::exit(0);
+}
+
+/// Why donegate is recording these checks — the two are NOT the same event and
+/// must never share a signature.
+///
+/// A `Blocked` event says "the gate judged and enforced". A `GaveUp` event says
+/// "the gate judged, found the same checks still failing, and stopped
+/// enforcing" — the stop is allowed anyway (attempt cap), so this event is the
+/// only durable statement that the checks are still red. Collapsing the two
+/// would put the give-up back where it started: indistinguishable from a pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Blocked,
+    GaveUp,
+}
+
+impl Outcome {
+    /// The `check_kind` discriminator recorded for check `name`. The give-up
+    /// prefix rides inside the discriminator (yielding `donegate:giveup:<name>`
+    /// vs `donegate:<name>`) rather than in a separate field, because
+    /// `overwatch`'s recurrence detection buckets purely by signature: a
+    /// separate field would be invisible to it, and a check that keeps
+    /// exhausting the cap would never escalate as its own systemic issue.
+    fn check_kind(self, name: &str) -> String {
+        match self {
+            Outcome::Blocked => name.to_string(),
+            Outcome::GaveUp => format!("giveup:{name}"),
+        }
+    }
 }
 
 /// One line for the `nothing to do` notice, naming WHICH determined answer we
@@ -408,18 +483,27 @@ fn refuse(
 }
 
 /// Record one fleet-level violation per failing check, for cross-gate
-/// correlated-error detection (`overwatch::violation`). Fail-soft: never
-/// changes the gate's exit code/stdout, never panics if the overwatch store
-/// is unwritable (mirrors mutategate's `emit_violation`,
-/// crates/mutategate/src/main.rs). `task_key` is set to the session id
-/// (rather than a distinct per-attempt id) because a Stop-hook gate has no
-/// separate "task" concept below the session/turn it fires in — unlike
-/// condukt's per-worker tasks, one donegate invocation IS the unit.
-fn emit_violations(root: &std::path::Path, session: &str, failing: &[String]) {
+/// correlated-error detection (`overwatch::violation`). Fail-soft with respect
+/// to CONTROL FLOW: never changes the gate's exit code/stdout, never panics if
+/// the overwatch store is unwritable (mirrors mutategate's `emit_violation`,
+/// crates/mutategate/src/main.rs). `task_key` is set to the session id (rather
+/// than a distinct per-attempt id) because a Stop-hook gate has no separate
+/// "task" concept below the session/turn it fires in — unlike condukt's
+/// per-worker tasks, one donegate invocation IS the unit.
+///
+/// It is NOT fail-soft with respect to VISIBILITY. A failed append used to be
+/// erased by `let _ = …`, which for `Outcome::GaveUp` would silently drop the
+/// only durable trace that the gate stopped enforcing — the exact erasure this
+/// function is now here to prevent. The write is still best-effort (the stop
+/// decision is not this function's to make), but a write that did not land, or
+/// an event that could not be built at all, now says so on stderr instead of
+/// leaving the caller believing a sentinel exists.
+fn emit_violations(root: &std::path::Path, session: &str, failing: &[String], outcome: Outcome) {
     let now = overwatch::store::now();
     for name in failing {
+        let kind = outcome.check_kind(name);
         let raw = overwatch::violation::RawViolation {
-            check_kind: Some(name.as_str()),
+            check_kind: Some(kind.as_str()),
             ..Default::default()
         };
         let event = overwatch::violation::build_event(
@@ -430,8 +514,23 @@ fn emit_violations(root: &std::path::Path, session: &str, failing: &[String]) {
             now,
             None,
         );
-        if let Some(event) = event {
-            let _ = overwatch::store::append_violation(root, &event);
+        match event {
+            Some(event) => {
+                if let Err(e) = overwatch::store::append_violation(root, &event) {
+                    eprintln!(
+                        "donegate: WARNING could not record the `{}` event for check '{name}' in \
+                         the overwatch violation ledger: {e}. This run is NOT represented there.",
+                        event.signature
+                    );
+                }
+            }
+            // `build_event` returns None only for a blank discriminator, which
+            // config loading already filters out — but if it ever happens the
+            // event is dropped, and a dropped give-up sentinel must not be silent.
+            None => eprintln!(
+                "donegate: WARNING check name '{name}' produced no recordable violation \
+                 signature ({outcome:?}); nothing was written to the overwatch ledger."
+            ),
         }
     }
 }
@@ -683,7 +782,7 @@ cmd = "make test"
 
 #[cfg(test)]
 mod violation_emission_tests {
-    use super::emit_violations;
+    use super::{emit_violations, Outcome};
     use crate::config::HOME_ENV_LOCK;
 
     // `overwatch::store::append_violation`/`scan_violations` resolve their
@@ -708,6 +807,7 @@ mod violation_emission_tests {
             &root,
             "session-x",
             &["build".to_string(), "lint".to_string()],
+            Outcome::Blocked,
         );
 
         let events = overwatch::store::scan_violations(&root)
@@ -728,6 +828,40 @@ mod violation_emission_tests {
         assert!(events.iter().any(|e| e.signature == "donegate:lint"));
     }
 
+    /// A give-up must not be recordable as an ordinary block: the two carry
+    /// DIFFERENT signatures, so no consumer of the ledger can read "the gate
+    /// stopped enforcing" as "the gate blocked once more".
+    #[test]
+    fn giveup_events_carry_their_own_signature() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_home = std::env::var_os("HOME");
+        let temp_home =
+            std::env::temp_dir().join(format!("donegate-emit-giveup-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_home);
+        std::fs::create_dir_all(&temp_home).expect("create temp HOME");
+        std::env::set_var("HOME", &temp_home);
+
+        let root = temp_home.join("project");
+        std::fs::create_dir_all(&root).expect("create project root");
+        emit_violations(&root, "session-x", &["build".to_string()], Outcome::GaveUp);
+
+        let events = overwatch::store::scan_violations(&root)
+            .events_or_empty()
+            .expect("read_violations");
+
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&temp_home);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].signature, "donegate:giveup:build",
+            "a give-up must be distinguishable from the `donegate:build` block signature"
+        );
+    }
+
     #[test]
     fn emit_violations_with_no_failures_records_nothing() {
         let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -741,7 +875,7 @@ mod violation_emission_tests {
 
         let root = temp_home.join("project");
         std::fs::create_dir_all(&root).expect("create project root");
-        emit_violations(&root, "session-x", &[]);
+        emit_violations(&root, "session-x", &[], Outcome::Blocked);
 
         let events = overwatch::store::scan_violations(&root)
             .events_or_empty()

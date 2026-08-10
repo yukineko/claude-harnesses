@@ -8116,10 +8116,10 @@ tags = [
     "verified",
     "p0",
 ]
-status = "claimed"
+status = "done"
 notes = "検証済み (利害関係のない agent が実バイナリで end-to-end 再現)。ブランチ fix/trust-and-sentinel (6780b204 + e19ccb1b, worktree /Users/yuki/src/.harness-worktrees/w-trustsentinel) は主張どおり動くが merge 保留。修正が必要な発見: [F1 HIGH] worktree.rs:489 のゲートが harness_core::trust::is_trusted() で、これは trust.rs:70-72 の trust_all() 短絡を含むため HARNESS_TRUST_ALL=1 の下で untrusted repo からも trust::add が永続エントリを書く。実測 PROBE1: env var を外した後も worktree_trusted=true / repo_trusted=false、かつその worktree は untrusted repo の donegate.toml (cmd は sh -c 経由) を持つ。コメント worktree.rs:447 の PROPAGATION, NEVER ESCALATION に反する。修正案: is_trusted ではなくリスト membership でゲートする。[F3 MED] main.rs:237-239 の散文が偽 — 実測で単一セッションは3回 give-up しても review-queue --json が [] (is_systemic は閾値 AND distinct_tasks>1||sessions>1 を要求し、donegate は task_key=session id)。[F4 MED] mutation M8 (append_violation エラーの握り潰しへ戻す) が cargo test -p donegate exit 0 で生存 = 新しい可視化経路にテストが無い。加えてその channel は stderr で、同じ変更が main.rs:210-211 で不十分と宣言したもの。[F6/F7 LOW] コメントの過大主張2件。修正エージェントは API セッション上限で中断 (2026-08-06)。"
 created_at = 1785926760
-updated_at = 1786375796
+updated_at = 1786376730
 weight = 0.0
 issue_number = 144
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/144"
@@ -9713,3 +9713,17 @@ updated_at = 1786376360
 weight = 0.0
 issue_number = 235
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/235"
+
+[[task]]
+id = "a5bc063a"
+title = "donegate の refuse() 側 give-up (attempt cap 到達) が durable な外部痕跡を残さない — checks-red 側だけ 538a8ac8 で強化され、判定不能側が取り残された"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "独立検証者が指摘し main agent が再現確認した (2026-08-11、測定点 a0865475)。donegate には give-up が2経路ある。(1) checks が赤いまま attempt cap に達した経路は crates/donegate/src/main.rs:276 で emit_violations(&root, &session, &failing, Outcome::GaveUp) を呼び、giveup: プレフィクス付きの独自 signature で overwatch へ durable に記録する (538a8ac8 が入れた強化)。(2) 判定不能 (untrusted / config 読めず) で refuse() に入り attempt cap に達した経路は log_event(cfg, session, giveup-refusal, &[], attempt) を呼ぶだけで exit 0 する。実測: grep -n emit_violations crates/donegate/src/main.rs のヒットは 276 と 295 (と定義 501・テスト) のみで、refuse() の本体には1件も無い。refuse() は stop を許可しつつ Allowing stop; NOTHING WAS VERIFIED. を stderr へ出すが、それは donegate 自身の private JSONL と stderr だけで、どのツールも読まない。これは 538a8ac8 が明示的に問題視した状態そのものである — 強化が checks-red 側だけに入り、判定不能側 (本来より重い方) が取り残された。既知クラス gate-crate-audit-mirror-gaps (直前に landed した修正の双子を必ず監査する) の実例。注意 (一行では直せない): emit_violations は check 名の配列を要求し、refuse() には失敗した check が存在しない。空配列を渡すと emit_violations_with_no_failures_records_nothing のとおり何も記録されないので、判定不能を表現する signature (例 giveup-refusal:<declaration kind>) の設計が要る。完了条件: (1) refuse() の attempt-cap 到達が overwatch から観測可能な durable 痕跡を残すこと、(2) その経路を空ブロックへ戻すと赤くなる behavioural test があること (RED を先に観測)、(3) 空の failing で何も記録しない既存の不変条件を壊さないこと。関連 5151605e。"
+created_at = 1786376688
+updated_at = 1786376688
+weight = 0.0
+issue_number = 236
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/236"

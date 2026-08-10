@@ -1,4 +1,4 @@
-last_synced = "d48c71334210baec776bbbf82a406079765ce0ea"
+last_synced = "f264904f40738da87bd158b6420b11a2441e138c"
 
 [entries.".gitattributes"]
 key = ".gitattributes"
@@ -1097,7 +1097,7 @@ client_refs = []
 key = "crates/condukt/src/env_lock.rs"
 kind = "feature"
 status = "changed"
-last_ref = "a7f1d2417ad46056af1697fbb0a27308c64f13f5"
+last_ref = "f264904f40738da87bd158b6420b11a2441e138c"
 impl_files = ["crates/condukt/src/env_lock.rs"]
 test_files = []
 client_refs = []
@@ -1379,7 +1379,7 @@ key = "crates/condukt/src/worktree.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "changed"
-last_ref = "a7f1d2417ad46056af1697fbb0a27308c64f13f5"
+last_ref = "f264904f40738da87bd158b6420b11a2441e138c"
 impl_files = ["crates/condukt/src/worktree.rs"]
 test_files = []
 client_refs = []
@@ -2207,7 +2207,7 @@ key = "crates/donegate/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/donegate.md"
 status = "changed"
-last_ref = "a4b24edc01a2f176e6eebff6a58ff6efbeb07e10"
+last_ref = "f264904f40738da87bd158b6420b11a2441e138c"
 impl_files = ["crates/donegate/src/main.rs"]
 test_files = []
 client_refs = []
@@ -2240,6 +2240,15 @@ status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
 impl_files = ["crates/donegate/src/state.rs"]
 test_files = []
+client_refs = []
+
+[entries."crates/donegate/tests/giveup_sentinel.rs"]
+key = "crates/donegate/tests/giveup_sentinel.rs"
+kind = "feature"
+status = "changed"
+last_ref = "f264904f40738da87bd158b6420b11a2441e138c"
+impl_files = []
+test_files = ["crates/donegate/tests/giveup_sentinel.rs"]
 client_refs = []
 
 [entries."crates/donegate/tests/integration.rs"]
@@ -3065,7 +3074,7 @@ key = "crates/harness-core/src/trust.rs"
 kind = "feature"
 spec_doc = "docs/specs/harness-core.md"
 status = "changed"
-last_ref = "7a2ec031263a138eb01d1637f2d3327ee388fd8a"
+last_ref = "f264904f40738da87bd158b6420b11a2441e138c"
 impl_files = ["crates/harness-core/src/trust.rs"]
 test_files = []
 client_refs = []

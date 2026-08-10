@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.121"
+version = "0.7.122"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "chrono",

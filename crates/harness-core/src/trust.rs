@@ -64,15 +64,39 @@ pub fn list() -> Vec<PathBuf> {
     load_file().trusted.into_iter().map(PathBuf::from).collect()
 }
 
+/// Is this project root actually recorded in `~/.harness/trust.toml`?
+///
+/// Membership ONLY: unlike [`is_trusted`] this deliberately does **not** consult
+/// the `HARNESS_TRUST_ALL` escape hatch, so it answers "did a human durably
+/// trust this root?" rather than "may commands from this root be honored right
+/// now?".
+///
+/// Use this — never [`is_trusted`] — when the answer decides whether to **write**
+/// a durable trust entry. `HARNESS_TRUST_ALL` is a *transient*, per-process
+/// hatch; gating a write on it lets a single run with the variable set mint a
+/// **permanent** grant that outlives the variable (observed in
+/// `condukt`'s worktree-trust propagation, backlog 5151605e F1: a worktree cut
+/// from an untrusted repo stayed trusted after the variable was gone).
+/// Propagating trust is not the same operation as granting it.
+///
+/// Reading (i.e. deciding whether to honor a project config in this process) is
+/// the case the hatch exists for and should keep using [`is_trusted`].
+pub fn is_listed(root: &Path) -> bool {
+    let key = normalize(root);
+    load_file().trusted.iter().any(|t| Path::new(t) == key)
+}
+
 /// Is this project root trusted to run commands sourced from its project-local
 /// config? `HARNESS_TRUST_ALL` short-circuits to `true`; otherwise the root must
 /// be present (canonicalized) in `~/.harness/trust.toml`. Default: `false`.
+///
+/// This is the predicate for *honoring* a project config in the current process.
+/// For anything that persists a grant, use [`is_listed`].
 pub fn is_trusted(root: &Path) -> bool {
     if trust_all() {
         return true;
     }
-    let key = normalize(root);
-    load_file().trusted.iter().any(|t| Path::new(t) == key)
+    is_listed(root)
 }
 
 /// Add a project root to the trust list (idempotent). Returns the canonical key
@@ -121,9 +145,16 @@ mod tests {
     use super::*;
 
     // Tests mutate the process-global HOME and HARNESS_TRUST_ALL env, so they
-    // must not run concurrently. A single #[test] drives the whole sequence.
+    // must not run concurrently: each takes this lock for its whole body. (It
+    // was a single #[test] before a second one was needed; the lock, not the
+    // count, is what enforces the serialization.)
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn trust_roundtrip_and_env_override() {
+        let _g = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = tempfile::tempdir().unwrap();
         let proj = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", home.path());
@@ -158,5 +189,42 @@ mod tests {
         std::env::set_var("HARNESS_TRUST_ALL", "0");
         assert!(!is_trusted(root), "HARNESS_TRUST_ALL=0 must not trust");
         std::env::remove_var("HARNESS_TRUST_ALL");
+    }
+
+    /// `is_listed` is the *membership* predicate: the transient env hatch must
+    /// not be able to answer it. Callers that decide whether to WRITE a durable
+    /// trust entry gate on this, so a `true` here from `HARNESS_TRUST_ALL`
+    /// would turn a per-process hatch into a permanent grant (backlog 5151605e
+    /// F1). Shares the env-mutating single-test discipline of the test above.
+    #[test]
+    fn is_listed_ignores_the_env_escape_hatch() {
+        let _g = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let home = tempfile::tempdir().unwrap();
+        let proj = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", home.path());
+        std::env::remove_var("HARNESS_TRUST_ALL");
+
+        let root = proj.path();
+        assert!(!is_listed(root), "fresh project must not be listed");
+
+        // The hatch flips `is_trusted` but must NOT flip membership.
+        std::env::set_var("HARNESS_TRUST_ALL", "1");
+        assert!(is_trusted(root), "apparatus: the hatch must be in effect");
+        assert!(
+            !is_listed(root),
+            "HARNESS_TRUST_ALL made an unlisted root look listed: a transient hatch would then \
+             authorize writing a permanent grant"
+        );
+
+        // And with the hatch still on, a genuinely listed root IS listed
+        // (anti-vacuity: `is_listed` is not just a constant `false`).
+        add(root).unwrap();
+        assert!(is_listed(root), "an added root must be listed");
+        std::env::remove_var("HARNESS_TRUST_ALL");
+        assert!(is_listed(root), "…with or without the hatch");
+        remove(root).unwrap();
+        assert!(!is_listed(root), "a removed root must not be listed");
     }
 }

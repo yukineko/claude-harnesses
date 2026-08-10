@@ -451,6 +451,25 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
     // it is untrusted precisely so that merely opening/cloning it cannot run
     // them. That would be a worse hole than the one being closed here.
     //
+    // THE GATE IS MEMBERSHIP (`trust::is_listed`), NOT `trust::is_trusted`.
+    // `is_trusted` short-circuits to `true` under `HARNESS_TRUST_ALL`
+    // (`crates/harness-core/src/trust.rs`), so gating this WRITE on it let one
+    // run with that variable set persist a grant that outlives the variable:
+    // the worktree of an untrusted repo stayed in `trust.toml` forever, i.e.
+    // exactly the escalation the paragraph above forbids, committed by the code
+    // under the paragraph (backlog 5151605e F1 — measured, not argued:
+    // `worktree_trust_tests::trust_all_env_hatch_must_not_persist_a_grant_for_an_untrusted_repo`
+    // observed `is_trusted(worktree) == true` with the variable removed while
+    // `is_trusted(repo) == false`). A transient hatch must not mint durable
+    // state. Nothing is lost by declining to record it: while the hatch is set
+    // every root is trusted anyway, and once it is gone the worktree is as
+    // (un)trusted as its source — which is the invariant.
+    //
+    // The read-back below is `is_listed` for the same reason: under
+    // `HARNESS_TRUST_ALL`, `is_trusted` returns `true` without reading the
+    // file, so it could not observe a lost write at all (CLAUDE.md §2 — an
+    // unobserved write is not an observation).
+    //
     // FAILURE DIRECTION — deliberate, per CLAUDE.md §3 ("cannot determine"
     // resolves to the restricted side). The two arms point OPPOSITE ways
     // because the restricted side is not the same thing in both:
@@ -486,7 +505,7 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
     // delegates to `create`, and `shadow_run::exec` calls `create` directly.
     // Placing the registration in `create` closes both by construction rather
     // than leaving the second as a mirror gap (cf. backlog 167cf55e).
-    if harness_core::trust::is_trusted(&repo_canon) {
+    if harness_core::trust::is_listed(&repo_canon) {
         harness_core::trust::add(&path_canon).with_context(|| {
             format!(
                 "could not record the new worktree {} in the workspace-trust list ({}); \
@@ -496,7 +515,7 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
                 harness_core::trust::trust_path().display()
             )
         })?;
-        if !harness_core::trust::is_trusted(&path_canon) {
+        if !harness_core::trust::is_listed(&path_canon) {
             bail!(
                 "workspace-trust registration for {} reported success but the entry could not \
                  be read back from {} (concurrent write?); refusing rather than returning an \
@@ -2885,6 +2904,41 @@ mod worktree_trust_tests {
         out
     }
 
+    /// Like [`with_home`], but with the `HARNESS_TRUST_ALL` escape hatch
+    /// ENGAGED for the duration of `f`. Both variables are restored afterwards
+    /// (including the "was unset" case).
+    fn with_home_trust_all<R>(home: &Path, f: impl FnOnce() -> R) -> R {
+        let _g = crate::env_lock::HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev_home = std::env::var_os("HOME");
+        let prev_all = std::env::var_os("HARNESS_TRUST_ALL");
+        std::env::set_var("HOME", home);
+        std::env::set_var("HARNESS_TRUST_ALL", "1");
+        let out = f();
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match prev_all {
+            Some(v) => std::env::set_var("HARNESS_TRUST_ALL", v),
+            None => std::env::remove_var("HARNESS_TRUST_ALL"),
+        }
+        out
+    }
+
+    /// Is `p` present in the PERSISTED trust list? Compares canonical paths
+    /// because the list stores canonicalized keys while a tempdir path on
+    /// macOS is reached through the `/var` → `/private/var` symlink. Reads the
+    /// list directly on purpose: `is_trusted` cannot answer this question
+    /// under `HARNESS_TRUST_ALL`, which is exactly what these tests are about.
+    fn listed(p: &Path) -> bool {
+        let key = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        trust::list()
+            .iter()
+            .any(|t| std::fs::canonicalize(t).unwrap_or_else(|_| t.clone()) == key)
+    }
+
     fn init_repo(dir: &Path) {
         git(dir, &["init", "-b", "main"]).unwrap();
         git(dir, &["config", "user.email", "test@example.com"]).unwrap();
@@ -3041,6 +3095,92 @@ mod worktree_trust_tests {
                     );
                 }
             }
+        });
+    }
+
+    /// THE FINDING (backlog 5151605e F1): the propagation gate must key off
+    /// LIST MEMBERSHIP, not `is_trusted`.
+    ///
+    /// `trust::is_trusted` short-circuits to `true` whenever `HARNESS_TRUST_ALL`
+    /// is set (`crates/harness-core/src/trust.rs`), so gating a WRITE on it lets
+    /// the transient env hatch mint a PERMANENT grant: cut a worktree of an
+    /// untrusted repo once with the variable set and the worktree stays trusted
+    /// forever, after the variable is gone — while the source repo remains
+    /// untrusted. That is the "trust-GRANTING operation" the comment above
+    /// `create`'s gate ("PROPAGATION, NEVER ESCALATION") says must not exist,
+    /// and it is strictly worse than the hole that gate closed: a
+    /// `donegate.toml` in an untrusted project carries `cmd` strings run via
+    /// `sh -c`.
+    ///
+    /// Observed 2026-08-11 before the fix: the worktree was in the persisted
+    /// list and `is_trusted(worktree) == true` with the env var removed, while
+    /// `is_trusted(repo) == false`.
+    #[test]
+    fn trust_all_env_hatch_must_not_persist_a_grant_for_an_untrusted_repo() {
+        let (_tmp, home, repo, base) = scaffold();
+        with_home_trust_all(&home, || {
+            // Apparatus: the repo is NOT in the list, but the env hatch is in
+            // effect — so `is_trusted` says yes while membership says no.
+            assert!(!listed(&repo), "apparatus: repo must not be listed");
+            assert!(
+                trust::is_trusted(&repo),
+                "apparatus: HARNESS_TRUST_ALL must be in effect for this test to mean anything"
+            );
+
+            let path = create(&repo, &base, "t1", "condukt/t1")
+                .expect("an untrusted repo must still be able to have worktrees");
+
+            assert!(
+                !listed(&path),
+                "cutting a worktree under HARNESS_TRUST_ALL wrote a PERMANENT trust entry for a \
+                 worktree of an UNTRUSTED repo: the env escape hatch became a durable grant. \
+                 trust list: {:?}",
+                trust::list()
+            );
+
+            // And the durable consequence, stated directly: once the transient
+            // hatch is gone the worktree must be exactly as (un)trusted as its
+            // source. We hold the HOME/env lock here, so mutating the var
+            // inside the closure is safe; the helper restores it.
+            std::env::remove_var("HARNESS_TRUST_ALL");
+            assert!(
+                !trust::is_trusted(&path),
+                "with HARNESS_TRUST_ALL removed the worktree is still trusted while its source \
+                 repo is not — the hatch outlived its own process. trust list: {:?}",
+                trust::list()
+            );
+            assert!(
+                !trust::is_trusted(&repo),
+                "apparatus: the source repo must still be untrusted"
+            );
+        });
+    }
+
+    /// ANTI-VACUITY CONTROL for the test above: the fix must not collapse into
+    /// "never register". A repo that IS genuinely listed still propagates its
+    /// trust to a freshly cut worktree even while `HARNESS_TRUST_ALL` happens
+    /// to be set — the env hatch neither grants nor revokes propagation.
+    #[test]
+    fn a_listed_repo_still_propagates_trust_while_trust_all_is_set() {
+        let (_tmp, home, repo, base) = scaffold();
+        with_home_trust_all(&home, || {
+            trust::add(&repo).expect("seed the repo as trusted");
+            assert!(listed(&repo), "apparatus: repo must be listed");
+
+            let path = create(&repo, &base, "t1", "condukt/t1").expect("create worktree");
+
+            assert!(
+                listed(&path),
+                "a worktree of a LISTED repo must still be recorded (the fix must gate on \
+                 membership, not refuse everything); trust list: {:?}",
+                trust::list()
+            );
+            std::env::remove_var("HARNESS_TRUST_ALL");
+            assert!(
+                trust::is_trusted(&path),
+                "and it must stay trusted once the env hatch is gone; trust list: {:?}",
+                trust::list()
+            );
         });
     }
 }

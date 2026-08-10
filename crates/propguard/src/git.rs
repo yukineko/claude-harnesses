@@ -31,6 +31,11 @@ use std::time::Duration;
 /// read-only, and expected to finish in well under a second).
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The program this module invokes in production. Named so the seam below reads
+/// as "the git binary", rather than a bare string literal repeated at every
+/// entry point.
+const GIT: &str = "git";
+
 /// Run `git <args>` in `root` with a bounded wait. Answers
 /// [`Determination<String>`]: `Known(stdout)` when the command ran to a
 /// conclusion and its stdout was decoded through to EOF, `Undetermined(why)`
@@ -76,22 +81,13 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// `harness_core::boundary`; this module never mints a fresh one, so the
 /// give-up telemetry counts each event exactly once (see
 /// `harness_core::verdict`'s note on minting vs forwarding).
-fn run_git(root: &Path, args: &[&str]) -> Determination<String> {
-    run_git_bin(Path::new(GIT), root, args)
-}
-
-/// The program `run_git` invokes in production. Named so the seam below reads
-/// as "the git binary", rather than a bare string literal repeated twice.
-const GIT: &str = "git";
-
-/// [`run_git`] with the invoked binary supplied by the caller.
 ///
-/// The extra parameter exists for one reason: to make a subprocess failure
-/// mode *injectable* from a test. There is no way to make the real `git` exit
-/// 0 while its stdout cannot be read, so the regression coverage for exactly
-/// that shape (a child whose status is observable and whose output is not)
-/// hands in a stand-in binary here. Production has one call site and it
-/// passes [`GIT`].
+/// **The `git` parameter is a test seam.** It exists for one reason: to make a
+/// subprocess failure mode *injectable*. There is no way to make the real `git`
+/// exit 0 while its stdout cannot be read, so the regression coverage for
+/// exactly that shape (a child whose status is observable and whose output is
+/// not) hands in a stand-in binary here. Both production entry points
+/// ([`changed_files`] and [`diff_text`]) pass [`GIT`].
 fn run_git_bin(git: &Path, root: &Path, args: &[&str]) -> Determination<String> {
     let mut cmd = Command::new(git);
     cmd.current_dir(root)
@@ -125,7 +121,7 @@ fn run_git_bin(git: &Path, root: &Path, args: &[&str]) -> Determination<String> 
 /// output never arrived produced `Files(vec![])`, i.e. the *identical* value a
 /// clean repo produces. "I read the changed set and it was empty" and "I never
 /// got the changed set" were the same bytes here. The boundary now answers
-/// `Undetermined` for both of those, `run_git` forwards that `Undetermined`,
+/// `Undetermined` for both of those, `run_git_bin` forwards that `Undetermined`,
 /// and `collect` maps it to `Failed`. A *timeout* on the process itself takes
 /// the same route, so a hung git also fails the gate closed (bounded &
 /// escapable in `gate.rs`), never silently allows.
@@ -244,13 +240,35 @@ pub struct DiffText {
 /// all.** Returning "here is most of it" and expecting the caller to notice is
 /// the shape that failed; the first failed read decides the whole answer.
 pub fn diff_text(root: &Path, files: &[String], max_bytes: usize) -> Determination<DiffText> {
+    diff_text_with(Path::new(GIT), root, files, max_bytes)
+}
+
+/// [`diff_text`] with the invoked git binary supplied by the caller — the same
+/// seam, and for the same reason, as [`run_git_bin`] and [`scan_changed`].
+///
+/// It buys one thing the real `git` cannot give: a run in which the two
+/// `git diff` reads succeed and the untracked `ls-files` read does NOT. That
+/// combination is what the `Undetermined` forwarding arm below exists for, and
+/// until it was injectable that arm had a measured kill rate of ZERO — replacing
+/// it with the pre-fix `Undetermined(_) => {}` (leave `others` empty) kept all
+/// 97 tests green. The obvious real-git fault, an untracked path whose name is
+/// not valid UTF-8, cannot be built on this repo's platform: APFS rejects the
+/// filename outright (`Errno 92: Illegal byte sequence`, measured 2026-08-10),
+/// and with `core.quotePath` on its default `true` git escapes such bytes
+/// anyway. Production has one call site and it passes [`GIT`].
+fn diff_text_with(
+    git: &Path,
+    root: &Path,
+    files: &[String],
+    max_bytes: usize,
+) -> Determination<DiffText> {
     let mut s = String::new();
 
-    if let Determination::Undetermined(why) = run_diff(root, &["diff", "--"], files, &mut s) {
+    if let Determination::Undetermined(why) = run_diff(git, root, &["diff", "--"], files, &mut s) {
         return Determination::Undetermined(why);
     }
     if let Determination::Undetermined(why) =
-        run_diff(root, &["diff", "--cached", "--"], files, &mut s)
+        run_diff(git, root, &["diff", "--cached", "--"], files, &mut s)
     {
         return Determination::Undetermined(why);
     }
@@ -259,7 +277,7 @@ pub fn diff_text(root: &Path, files: &[String], max_bytes: usize) -> Determinati
     let mut others = Vec::new();
     let mut args: Vec<&str> = vec!["ls-files", "--others", "--exclude-standard", "--"];
     args.extend(files.iter().map(String::as_str));
-    match run_git(root, &args) {
+    match run_git_bin(git, root, &args) {
         Determination::Known(text) => {
             for line in text.lines() {
                 let line = line.trim();
@@ -269,7 +287,12 @@ pub fn diff_text(root: &Path, files: &[String], max_bytes: usize) -> Determinati
             }
         }
         // We cannot tell whether there were untracked files to include. That
-        // is an unobserved part of the change, not an absent one.
+        // is an unobserved part of the change, not an absent one. Measured:
+        // dropping this failure instead (`Undetermined(_) => {}`) makes
+        // `diff_text` answer `Known("")` for an untracked change it never
+        // scanned, which `gate.rs` allows as `empty-diff` — see
+        // `diff_text_with_an_unreadable_untracked_scan_is_undetermined_not_an_
+        // empty_diff`, which was observed RED against exactly that shape.
         Determination::Undetermined(why) => return Determination::Undetermined(why),
     }
     for f in others {
@@ -294,7 +317,11 @@ pub fn diff_text(root: &Path, files: &[String], max_bytes: usize) -> Determinati
             // NOT observed: the file exists and could not be read (permission
             // denied, not valid UTF-8, …). Skipping it here is exactly the
             // hole `87dbfbb8` measured one layer up — the diff would go on to
-            // be judged without this file's contents in it.
+            // be judged without this file's contents in it: dropping it leaves
+            // the section HEADER standing over an empty body, and the gate goes
+            // on to judge that as the whole new file (observed RED as a
+            // `below-threshold` block in `gate.rs`'s
+            // `an_untracked_file_whose_body_could_not_be_read_blocks_as_undetermined`).
             Determination::Undetermined(why) => return Determination::Undetermined(why),
         }
         if s.len() > max_bytes {
@@ -307,14 +334,20 @@ pub fn diff_text(root: &Path, files: &[String], max_bytes: usize) -> Determinati
 
 /// Append one `git diff` variant's output to `out`. `Known(())` means the
 /// command ran and its whole output landed in `out`; `Undetermined(why)`
-/// forwards [`run_git`]'s reason and means `out` is missing this variant's
+/// forwards [`run_git_bin`]'s reason and means `out` is missing this variant's
 /// hunks entirely. The caller MUST NOT continue building a diff on top of an
 /// `Undetermined` — that is precisely how a partial diff used to be presented
 /// as complete (backlog `d8e22b26`).
-fn run_diff(root: &Path, base: &[&str], files: &[String], out: &mut String) -> Determination<()> {
+fn run_diff(
+    git: &Path,
+    root: &Path,
+    base: &[&str],
+    files: &[String],
+    out: &mut String,
+) -> Determination<()> {
     let mut args: Vec<&str> = base.to_vec();
     args.extend(files.iter().map(String::as_str));
-    match run_git(root, &args) {
+    match run_git_bin(git, root, &args) {
         Determination::Known(text) => {
             out.push_str(&text);
             Determination::Known(())
@@ -374,18 +407,18 @@ mod tests {
     //
     // Every git call in this module fed evaluate() with no timeout at all
     // before this fix, so a hung/slow `git` invocation blocked the whole Stop
-    // hook indefinitely. `run_git` (the single choke point all git calls in
+    // hook indefinitely. `run_git_bin` (the single choke point all git calls in
     // this module now go through) must return promptly with a graceful
     // fallback (`Undetermined`, which every caller resolves to the restrictive
     // side) instead of hanging past `GIT_TIMEOUT`, and must not leave the hung
     // process running afterwards.
     #[test]
     fn hung_git_invocation_returns_promptly_with_graceful_fallback() {
-        // Not a real git repo, but `run_git` doesn't care what program name
+        // Not a real git repo, but `run_git_bin` doesn't care what program name
         // it invokes — it operates on `Command::new("git")` only. To
         // exercise the *timeout* path itself (rather than "git exited
         // quickly because the dir isn't a repo"), reach for the same
-        // machinery `run_git` uses — `boundary::run_with_timeout` — directly
+        // machinery `run_git_bin` uses — `boundary::run_with_timeout` — directly
         // here, against a deliberately hanging shell command standing in for
         // a stuck `git`, with a short local timeout override so the test
         // doesn't have to wait out the production `GIT_TIMEOUT` (10s) or
@@ -422,14 +455,14 @@ mod tests {
         );
         assert!(
             elapsed < Duration::from_secs(5),
-            "run_git (via boundary::run_with_timeout) must return promptly on timeout, took \
+            "run_git_bin (via boundary::run_with_timeout) must return promptly on timeout, took \
              {elapsed:?} (GIT_TIMEOUT is only used for the real `git` binary in production; this \
              test drives the same code path with a short local timeout override to stay fast)"
         );
 
         // Give the group-kill a moment to actually land, then confirm the
         // hung process is really gone — not merely abandoned to linger in
-        // the background while this call returned. This is run_git's own
+        // the background while this call returned. This is run_git_bin's own
         // regression coverage for CA-propguard-006's "must not leave the
         // hung process running afterwards" contract, independent of
         // boundary's own unit test for the same mechanism.
@@ -450,7 +483,7 @@ mod tests {
             .count();
         assert_eq!(
             count, 0,
-            "run_git must not leave a timed-out git invocation (marker {marker}) running"
+            "run_git_bin must not leave a timed-out git invocation (marker {marker}) running"
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
@@ -469,7 +502,7 @@ mod tests {
     /// evaluate()'s git-dependent step (`changed_files`) must itself return
     /// promptly rather than hang, given a `root` where `git` can't even run
     /// (simulating "git unavailable") — the graceful-fallback contract this
-    /// finding requires end-to-end, not just at the `run_git` choke point.
+    /// finding requires end-to-end, not just at the `run_git_bin` choke point.
     #[test]
     fn changed_files_returns_promptly_when_git_unavailable() {
         let tmp = std::env::temp_dir().join(format!(
@@ -969,5 +1002,142 @@ mod tests {
         );
         assert!(!d.truncated);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ── The THIRD read feeding `diff_text`: the untracked `ls-files` scan ───
+    //
+    // Measured before these tests were written: replacing that read's
+    // forwarding arm with the pre-fix shape —
+    //
+    //     Determination::Undetermined(_) => {}   // leave `others` empty
+    //
+    // left the whole propguard suite (97 tests) GREEN. The arm's kill rate was
+    // ZERO; the fix for backlog 87dbfbb8 was unguarded at this read, and the
+    // fail-open it closes reopens through it: `changed_files` answers
+    // `Files(["new.rs"])` for an untracked file, both `git diff` reads answer a
+    // legitimately EMPTY string (an untracked path has no diff), the `ls-files`
+    // read fails, and with its failure dropped `others` is empty — so the
+    // combined diff is `Known("")` and `gate.rs`'s
+    // `if diff.trim().is_empty() { return allow("empty-diff", st) }` ALLOWS a
+    // change it never looked at.
+    //
+    // Why a stand-in binary: this fault needs the two `diff` reads to SUCCEED
+    // while the `ls-files` read FAILS, which the real `git` will not do on
+    // demand. The one real-git route (an untracked path whose name is not valid
+    // UTF-8) is unbuildable here — APFS refuses the filename outright (`Errno
+    // 92: Illegal byte sequence`, measured 2026-08-10) and `core.quotePath`'s
+    // default `true` would escape the bytes even where it is buildable.
+    //
+    // Written as a set, like the `scan_changed` trio above: the fault test
+    // alone would still pass if every scan through this seam were undetermined,
+    // so its two partners use the SAME stand-in binary and differ only in what
+    // the `ls-files` read prints.
+
+    /// A stand-in `git` that serves the two `diff` reads with a readable, empty
+    /// stdout and answers the untracked `ls-files` read with `ls_files_body`.
+    #[cfg(unix)]
+    fn fake_git_for_ls_files(dir: &Path, ls_files_body: &str) -> std::path::PathBuf {
+        fake_git(
+            dir,
+            &format!("case \"$1\" in\n  ls-files) {ls_files_body} ;;\n  *) exit 0 ;;\nesac\n"),
+        )
+    }
+
+    /// THE claim (backlog 87dbfbb8, reached through the untracked scan): a
+    /// `ls-files` whose output could not be read means we do not know whether
+    /// there were untracked files to include. That is an UNOBSERVED part of the
+    /// change, so the diff must be `Undetermined` — never the `Known` empty
+    /// string that `diff_text_of_an_unchanged_file_is_known_and_empty_not_
+    /// undetermined` shows a genuinely empty change produces, and which the
+    /// gate allows as `empty-diff`.
+    #[cfg(unix)]
+    #[test]
+    fn diff_text_with_an_unreadable_untracked_scan_is_undetermined_not_an_empty_diff() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with(&[("keep.rs", b"fn keep() {}\n")]);
+        // An untracked file that IS there and IS readable, so nothing but the
+        // dropped `ls-files` failure can account for it going missing.
+        std::fs::write(root.join("new.rs"), GOOD_BYTES).expect("write untracked");
+        let bin = scratch_dir();
+        // exit 0 having printed two bytes that are not valid UTF-8: the child's
+        // status is observable, its output is not.
+        let git = fake_git_for_ls_files(&bin, "printf '\\377\\376'; exit 0");
+
+        expect_undetermined(
+            diff_text_with(&git, &root, &["new.rs".to_string()], 100_000),
+            "an untracked scan that could not be read leaves the untracked half of the change \
+             unobserved; answering with an empty diff makes it indistinguishable from 'there was \
+             nothing untracked', which gate.rs allows as empty-diff",
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&bin);
+    }
+
+    /// Anti-vacuity partner #1: the same stand-in binary, the same exit 0,
+    /// readable stdout — the listed untracked file must still be inlined. Without
+    /// this, an implementation that answered `Undetermined` for every run through
+    /// this seam would pass the test above.
+    #[cfg(unix)]
+    #[test]
+    fn diff_text_with_a_readable_untracked_scan_still_inlines_what_it_listed() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with(&[("keep.rs", b"fn keep() {}\n")]);
+        std::fs::write(root.join("new.rs"), GOOD_BYTES).expect("write untracked");
+        let bin = scratch_dir();
+        let git = fake_git_for_ls_files(&bin, "printf 'new.rs\\n'; exit 0");
+
+        let d = expect_known(diff_text_with(
+            &git,
+            &root,
+            &["new.rs".to_string()],
+            100_000,
+        ));
+        assert!(
+            d.text.contains("=== new file: new.rs ===") && d.text.contains("replaced"),
+            "a readable untracked scan must still be parsed and its files inlined — otherwise \
+             the fault test above would pass merely by everything being undetermined: {:?}",
+            d.text
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&bin);
+    }
+
+    /// Anti-vacuity partner #2, and the exact contrast the fix turns on: an
+    /// `ls-files` that printed nothing and WAS read is a successful "no
+    /// untracked files here", so the combined diff is `Known` and empty.
+    /// `Undetermined` is reserved for output that could not be read.
+    #[cfg(unix)]
+    #[test]
+    fn diff_text_with_a_readable_but_empty_untracked_scan_is_a_known_empty_diff() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with(&[("keep.rs", b"fn keep() {}\n")]);
+        std::fs::write(root.join("new.rs"), GOOD_BYTES).expect("write untracked");
+        let bin = scratch_dir();
+        let git = fake_git_for_ls_files(&bin, "exit 0");
+
+        let d = expect_known(diff_text_with(
+            &git,
+            &root,
+            &["new.rs".to_string()],
+            100_000,
+        ));
+        assert!(
+            d.text.trim().is_empty(),
+            "an untracked scan that printed nothing and was read to EOF is an observed 'nothing \
+             untracked', not a failure: {:?}",
+            d.text
+        );
+        assert!(!d.truncated);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&bin);
     }
 }

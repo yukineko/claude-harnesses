@@ -2190,9 +2190,18 @@ PROP output-schema: PASS";
     }
 
     /// Anti-vacuity control #2, and the requirement that this fix must not
-    /// break: a real repo with nothing changed still allows through the
-    /// ordinary path. If the fix ever resolved "clean" to "undetermined" this
-    /// is the test that catches it.
+    /// break: a real repo with nothing changed still allows.
+    ///
+    /// What it does NOT show, contrary to what this comment used to claim: it
+    /// does not catch a fix that resolved a clean *diff* to "undetermined".
+    /// `repo_with_committed` leaves the tree clean, so `changed_files` answers
+    /// `Files(vec![])`, `files.len() < cfg.min_changed_files` returns
+    /// `no-code-changes` — the tag asserted below — and `diff_text` is never
+    /// called at all. Measured, not argued: with a `panic!` at the top of
+    /// `diff_text` this test still PASSES, while
+    /// `git::tests::diff_text_of_an_unchanged_file_is_known_and_empty_not_undetermined`
+    /// panics. That `git.rs` test is what actually pins "clean stays Known";
+    /// this one pins the earlier, no-changes allow.
     #[test]
     fn a_genuinely_clean_repo_still_allows() {
         if !git_available() {
@@ -2250,6 +2259,91 @@ PROP output-schema: PASS";
                     last_hash.is_empty(),
                     "an incomplete diff must never be certified into already-verified"
                 );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The FOURTH read feeding the diff — the BODY of an untracked file —
+    /// driven end to end. `changed_files` answers `Files(["new.rs"])`, both
+    /// `git diff` reads answer a legitimately empty string (an untracked path
+    /// has no diff), `ls-files` lists `new.rs`, and its contents cannot be
+    /// decoded. Pre-fix that read was `if let Some(content)`, so the file's body
+    /// was dropped and the rendered diff was the section HEADER over an empty
+    /// body — announced as complete (`truncated: false`) and judged as if the
+    /// gate had seen the new file's code. The decision must come from the
+    /// incompleteness guard instead.
+    ///
+    /// Provenance, since it is the point of adding this test: the existing
+    /// `git.rs` pin on this read
+    /// (`diff_text_with_an_undecodable_untracked_file_is_undetermined`) was
+    /// written WITH the fix and could never have been observed failing — the
+    /// pre-fix `diff_text` returned a bare `DiffText`, so a test asserting on a
+    /// `Determination` did not compile against it. This one is behavioural: it
+    /// asserts on the DECISION, so the pre-fix shape (skip the unreadable body,
+    /// keep going) can be — and was — observed RED here, as
+    /// `below-threshold`.
+    #[test]
+    fn an_untracked_file_whose_body_could_not_be_read_blocks_as_undetermined() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with_committed(&[("keep.rs", "fn keep() {}\n")]);
+        std::fs::write(root.join("new.rs"), UNDECODABLE_SOURCE).expect("write untracked");
+
+        match evaluate(&diffread_cfg(), &root, &fresh_state()) {
+            Decision::Allow { tag, .. } => panic!(
+                "an untracked file whose body could not be read must not be allowed; got allow \
+                 tag={tag}"
+            ),
+            Decision::Block {
+                tag,
+                last_hash,
+                properties,
+                ..
+            } => {
+                assert_eq!(
+                    tag, "diff-read-failed",
+                    "the block must come from the incompleteness guard. A `below-threshold` \
+                     block here is the pre-fix behaviour: it means the gate went on to JUDGE a \
+                     diff whose only trace of new.rs was a section header with no code under it"
+                );
+                assert!(
+                    last_hash.is_empty(),
+                    "must not certify a diff whose new file's body it never observed"
+                );
+                assert!(
+                    properties.is_empty(),
+                    "nothing was checked — no per-property violation may be attributed, got \
+                     {properties:?}"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Anti-vacuity control for the test above: the SAME untracked file, the
+    /// same everything, decodable bytes. The body is inlined, so the ordinary
+    /// decision (inject mode's unverified-diff block over `new.rs`) must come
+    /// back — otherwise the fault test would pass merely by every untracked
+    /// file blocking.
+    #[test]
+    fn a_readable_untracked_file_still_takes_the_ordinary_path() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with_committed(&[("keep.rs", "fn keep() {}\n")]);
+        std::fs::write(root.join("new.rs"), DECODABLE_SOURCE).expect("write untracked");
+
+        match evaluate(&diffread_cfg(), &root, &fresh_state()) {
+            Decision::Block { tag, files, .. } => {
+                assert_eq!(tag, "below-threshold");
+                assert_eq!(files, vec!["new.rs".to_string()]);
+            }
+            Decision::Allow { tag, .. } => {
+                panic!("inject mode blocks a new unverified diff; got allow tag={tag}")
             }
         }
         let _ = std::fs::remove_dir_all(&root);

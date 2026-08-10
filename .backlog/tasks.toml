@@ -184,7 +184,7 @@ CLI に migrate サブコマンドは無い (add/list/next/done/fail/edit/sessio
 
 作業上の注意 (この追記自体で踏んだ): backlog edit --notes は追記ではなく置換である。一度この起票時ノートを丸ごと上書きしてしまい、git から復元した。既存ノートのあるチケットを編集するときは、先に原文を取得して連結すること。"""
 created_at = 1786024055
-updated_at = 1786372754
+updated_at = 1786375536
 weight = 0.0
 issue_number = 196
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/196"
@@ -8119,7 +8119,7 @@ tags = [
 status = "pending"
 notes = "検証済み (利害関係のない agent が実バイナリで end-to-end 再現)。ブランチ fix/trust-and-sentinel (6780b204 + e19ccb1b, worktree /Users/yuki/src/.harness-worktrees/w-trustsentinel) は主張どおり動くが merge 保留。修正が必要な発見: [F1 HIGH] worktree.rs:489 のゲートが harness_core::trust::is_trusted() で、これは trust.rs:70-72 の trust_all() 短絡を含むため HARNESS_TRUST_ALL=1 の下で untrusted repo からも trust::add が永続エントリを書く。実測 PROBE1: env var を外した後も worktree_trusted=true / repo_trusted=false、かつその worktree は untrusted repo の donegate.toml (cmd は sh -c 経由) を持つ。コメント worktree.rs:447 の PROPAGATION, NEVER ESCALATION に反する。修正案: is_trusted ではなくリスト membership でゲートする。[F3 MED] main.rs:237-239 の散文が偽 — 実測で単一セッションは3回 give-up しても review-queue --json が [] (is_systemic は閾値 AND distinct_tasks>1||sessions>1 を要求し、donegate は task_key=session id)。[F4 MED] mutation M8 (append_violation エラーの握り潰しへ戻す) が cargo test -p donegate exit 0 で生存 = 新しい可視化経路にテストが無い。加えてその channel は stderr で、同じ変更が main.rs:210-211 で不十分と宣言したもの。[F6/F7 LOW] コメントの過大主張2件。修正エージェントは API セッション上限で中断 (2026-08-06)。"
 created_at = 1785926760
-updated_at = 1786372754
+updated_at = 1786375536
 weight = 0.0
 issue_number = 144
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/144"
@@ -8293,7 +8293,7 @@ notes = """
 --- 事実確認 (flow 2026-08-06, session 0ff5fc74) ---
 d24f02d5 は superseded ではなく additive である。main の taintguard は別系統で 0.2.0 まで進んだが、d24f02d5 が足しているのは新規の rationale.rs (391行)・README.ja.md (169行)・tests/provenance_gate.rs (442行)・tests/rationale_readme.rs (107行) で、main 側に対応物が無い。つまり earlier の taintguard 衝突 (fe13e4cd vs 77a0c6e7 が同じ欠陥を同じ機構で直していた件) とは状況が違い、丸ごと採用も丸ごと破棄も正しくない。なお d24f02d5 も自称 0.1.10 だが、main の 0.1.10 は 60c20552 (git_common_dir を boundary 経由に) であって別物 — 同じ版番号が2系統に存在する。着手時は 0.2.0 への rebase が要る。敵対的パネルの block 理由は本 notes 上部を参照。今サイクルは context 逼迫のためバッチから外した (縮小ではなく順序付け)。"""
 created_at = 1785926923
-updated_at = 1786372754
+updated_at = 1786374495
 weight = 0.0
 issue_number = 153
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/153"
@@ -9665,3 +9665,37 @@ updated_at = 1786374292
 weight = 0.0
 issue_number = 232
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/232"
+
+[[task]]
+id = "03d69e1a"
+title = "fix/trust-and-sentinel と fix/backlog-store-divergence が未 merge — 前者は古い main 由来で9ファイル conflict"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "merge-integration",
+    "p1",
+]
+status = "pending"
+notes = "observation 2026-08-11, 測定点 010de418。2本の branch に実装済みだが main に入っていない。(A) fix/trust-and-sentinel (82b960f9 + 538a8ac8, worktree w-trustsentinel): 5151605e の F1/F3/F4 を閉じた。F1 は harness_core::trust::is_listed (trust_all 短絡を含まない membership 述語) を新設し、condukt の worktree 伝播ゲートと read-back を is_trusted から is_listed へ移した。is_trusted の意味は不変 (trust_all || is_listed) で、他5箇所の呼び出し元は read 判定なので影響なし。実測 green: condukt worktree_trust_tests 22件 / donegate 6件+1件 / harness-core trust 2件。**merge 未了の理由**: この branch は古い main から切られており condukt を 0.7.121 から 0.7.122 へ上げているが main は既に 0.7.124。merge すると9ファイルが conflict する (marketplace.json / Cargo.lock / condukt と donegate の plugin.json と Cargo.toml / donegate main.rs / harness-core Cargo.toml と trust.rs)。うち trust.rs と donegate main.rs は版番号ではなく内容の conflict。**現在の main へ rebase してから merge すること。** 版番号は rebase 後に main の現況から取り直す (condukt は 0.7.125、donegate は 0.1.26、harness-core は 0.2.6 が起点になる見込みだが実測すること)。(B) fix/backlog-store-divergence (edd5977b, worktree w-storediv): 5ba13c3e の完了条件(2)。crates/backlog/src/divergence.rs を新設し、旧 home ストアに当該 project の pending があるのに解決ストアが空のとき黙って空を返さない三値 (Absent / Unreadable / Scanned) を list と next と session-start に配線した。解決ストアが空のときだけ非0で block し、作業がある場合は exit 0 + stderr 警告に留める (非0にすると overwatch の shell_soft が (none) を描画し condukt の 2>/dev/null || true が実項目を捨てるため)。この判断根拠の消費者表は divergence.rs のモジュール doc にある。backlog 208件 green。こちらは main から切ったので conflict しない見込みだが未検証。**どちらも rollout 未実行**なので稼働ハーネスには未反映。harness-core が 0.2.5 へ上がるため (A) を入れると fleet 全体の再配布が要る。"
+created_at = 1786375536
+updated_at = 1786375536
+weight = 0.0
+issue_number = 233
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/233"
+
+[[task]]
+id = "1027d0f9"
+title = "ccdb762a の回収漏れ 1件 — home ストアに harness の pending f234d93f が残っている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p2",
+]
+status = "pending"
+notes = "observation 2026-08-11、新しい divergence 検出器を実機で走らせて検出した本物 (誤検知ではない)。~/.backlog/tasks.toml に project=harness の pending f234d93f (backlog canonicalize_project_with_marker の存在確認失敗ブランチに kill-rate ゼロのテスト欠落, p2) が残る。ccdb762a が490件を回収した後の取り残し。5ba13c3e の完了条件(3) の残務。回収すれば閉じる。"
+created_at = 1786375538
+updated_at = 1786375538
+weight = 0.0
+issue_number = 234
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/234"

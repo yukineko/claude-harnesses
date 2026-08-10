@@ -1,4 +1,5 @@
 mod config;
+mod divergence;
 mod driver;
 mod github;
 mod hooks;
@@ -364,6 +365,52 @@ fn default_project_scope(
     }
 }
 
+/// The project the divergence check asks about — always THIS CHECKOUT, even
+/// when the listing was widened.
+///
+/// `--all` widens which tasks are *listed* from the resolved store; it does not
+/// change the question `divergence::check` answers ("is this checkout's work
+/// sitting in a store I am not reading"), so it must not silently turn into a
+/// bypass of that check. An explicit `--project` is different: the caller named
+/// the project they are asking about, so that is the scope compared.
+///
+/// `None` only when the listing is unscoped AND this checkout's identity could
+/// not be determined; the legacy store is then compared unscoped, which can
+/// only make the check MORE conservative, never less.
+fn divergence_scope(effective_project: Option<&str>) -> Option<String> {
+    if let Some(p) = effective_project {
+        return Some(p.to_string());
+    }
+    let cwd = std::env::current_dir().ok()?;
+    match store::canonical_project_id(&cwd).require() {
+        Required::Determined(root) => Some(root.to_string_lossy().into_owned()),
+        Required::Blocked(_) => None,
+    }
+}
+
+/// Refuse to answer "the queue is empty" when the answer is really "you are
+/// reading a different file" (backlog 5ba13c3e).
+///
+/// `Undetermined` becomes `Err`, which `main` reports as a non-zero exit with
+/// the reason on stderr and nothing on stdout — the identical shape
+/// `default_project_scope` already uses for an undetermined project scope, and
+/// the shape `autoflow::backlog::find_open` reads as
+/// `Determination::Undetermined` instead of "no work". `Warn` stays on exit 0
+/// on purpose: see `divergence`'s module docs for the consumer-by-consumer
+/// reason a non-zero exit there would DESTROY real items rather than protect
+/// them.
+fn guard_store_divergence(tasks_path: &std::path::Path, project: Option<&str>) -> Result<()> {
+    let scope = divergence_scope(project);
+    match divergence::check(tasks_path, scope.as_deref()) {
+        divergence::Divergence::None => Ok(()),
+        divergence::Divergence::Warn(msg) => {
+            eprintln!("{msg}");
+            Ok(())
+        }
+        divergence::Divergence::Undetermined(msg) => Err(anyhow::anyhow!(msg)),
+    }
+}
+
 fn run(cli: Cli) -> Result<()> {
     let cfg = config::Config::load();
     // The store's LOCATION is always resolved from THIS PROCESS'S OWN cwd,
@@ -471,6 +518,12 @@ fn run(cli: Cli) -> Result<()> {
                 effective_project.as_deref(),
                 status.as_deref(),
             )?;
+            // Before anything is printed: an empty listing produced from a
+            // store that is not where this checkout's work actually lives must
+            // not be rendered as an ordinary empty queue (backlog 5ba13c3e).
+            // Placed ahead of BOTH renderers so neither `[]` nor `no tasks`
+            // can escape on stdout when the answer is untrustworthy.
+            guard_store_divergence(&tasks_path, effective_project.as_deref())?;
 
             if as_json {
                 // Machine-readable array (consumed by autoflow). Each task keeps
@@ -561,6 +614,12 @@ fn run(cli: Cli) -> Result<()> {
             // so the scope is resolved BEFORE the branch rather than inside
             // the read-only arm.
             let effective_project = default_project_scope(project, all, "next")?;
+            // `next` is the question a DRIVER asks ("is there work?"), so
+            // `no pending tasks` out of a store that is not this checkout's is
+            // the most expensive false answer in the crate. Checked BEFORE the
+            // claim so a diverged store neither reports emptiness nor mutates
+            // the wrong file (backlog 5ba13c3e).
+            guard_store_divergence(&tasks_path, effective_project.as_deref())?;
             let task = if claim {
                 store::next_claim(&tasks_path, tag.as_deref(), effective_project.as_deref())?
             } else {

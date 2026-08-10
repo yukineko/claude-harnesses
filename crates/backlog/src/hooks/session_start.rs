@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use harness_core::hook::HookInput;
 
 use crate::config::Config;
+use crate::divergence;
 use crate::store;
 
 /// SessionStart hook のメイン処理。
@@ -46,11 +47,23 @@ pub fn run(input: &HookInput) -> Option<String> {
     // 優先度順 (priority() 昇順)、同優先度は created_at 昇順
     pending.sort_by_key(|t| (t.priority(), t.created_at));
 
+    // Store divergence (backlog 5ba13c3e). This hook's own failure mode is the
+    // silent one: injecting NOTHING is how a session was told "no queue" while
+    // 490 items sat in the legacy store, and unlike the CLI there is no exit
+    // code and no stderr the agent ever sees — `additionalContext` is the only
+    // channel that reaches it. So the notice is injected here, and injected
+    // EVEN WHEN there is nothing else to say (the empty case is precisely the
+    // one that needs it).
+    let notice = divergence::check(&tasks_path, Some(&root))
+        .message()
+        .map(|m| format!("## Backlog \u{2014} store divergence\n\n{m}\n\n"));
+
     if pending.is_empty() {
-        return None;
+        return notice;
     }
 
-    let mut out = String::from("## Backlog \u{2014} pending tasks for this project\n\n");
+    let mut out = notice.unwrap_or_default();
+    out.push_str("## Backlog \u{2014} pending tasks for this project\n\n");
 
     for task in &pending {
         let priority_str = match task.priority() {

@@ -1343,7 +1343,13 @@ fn main_worktree_of(root: &Path) -> Option<PathBuf> {
 
 /// project_filter のマッチング:
 /// Task.project が filter と完全一致、または filter で始まる場合にマッチ。
-fn project_matches(task_project: &str, filter: &str) -> bool {
+///
+/// `pub(crate)`: `divergence::scan_legacy` compares the legacy store's tasks
+/// against a checkout with the IDENTICAL rule `list` uses, so the two can never
+/// drift on what "belongs to this project" means — a divergence report computed
+/// with looser matching than the listing it is warning about would flag work
+/// that `list` would have shown anyway.
+pub(crate) fn project_matches(task_project: &str, filter: &str) -> bool {
     if task_project == filter {
         return true;
     }

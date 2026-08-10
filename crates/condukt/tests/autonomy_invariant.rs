@@ -3,11 +3,32 @@
 //! Ground truth (established in the condukt SKILL Phase 3 work and restated
 //! verbatim in `crates/flow/skills/flow/SKILL.md`):
 //!
-//!   When autonomy is ON, self-driving proceeds WITHOUT confirmation EXCEPT two
+//!   When autonomy is ON, self-driving proceeds WITHOUT confirmation EXCEPT the
 //!   sanctioned stops that remain even when `autonomous = true`:
-//!     (a) a condukt **worker blocked** (genuinely stuck), and
-//!     (b) a **deploy/push GATED** approval (outward-facing side effects).
-//!   `--dry-run` stops and GATED approvals are invariant regardless of autonomy.
+//!     (a) a condukt **worker blocked** (genuinely stuck),
+//!     (b) **pivot** (a genuine strategic judgment), and
+//!     (c) the judgment framings — merge-conflict pick-a-side (`--conflict`) and
+//!         an untestable decision (`--untestable`, CLAUDE.md §2).
+//!   `--dry-run` stops are invariant regardless of autonomy.
+//!
+//! REVISED 2026-08-07 by explicit user directive. The **deploy/push GATED
+//! approval** used to be sanctioned stop (b): a human was asked "may I proceed?"
+//! before every outward-facing side effect. The user withdrew that prompt —
+//! "flow で実行したときは、今後すべて YES/NO の権限認可は行わず全て許諾したい。
+//! blastguard とかで止められない限り。あと設計などで判断をもとめる場合の Ask は
+//! うけいれる。" — so the axis that governs a prompt is no longer risk alone but
+//! **what kind of question it is**:
+//!
+//!   - a **permission approval** ("may I proceed?", answer known to be yes) is
+//!     pre-granted and self-answers, via the `--approval` framing flag;
+//!   - a **judgment request** ("which should it be?", "is this right?") still
+//!     asks the human, and deliberately does NOT carry `--approval`.
+//!
+//! What actually stops a dangerous action is therefore the DETERMINISTIC gate
+//! layer — blastguard / taintguard / donegate / the pre-commit and pre-push
+//! hooks — plus the policy engine's own `block` verdict, which `--approval`
+//! cannot relax. Section 1d pins those guardrails at the binary boundary; this
+//! file is the reason a future edit cannot quietly widen the grant.
 //!
 //! This file mechanically enforces that invariant from two angles:
 //!
@@ -24,10 +45,11 @@
 //!      frozen ALLOWLIST (see `ASK_ALLOWLIST` for the per-file rationale). Adding a
 //!      NEW `AskUserQuestion` prompt anywhere — or deleting an audited one — changes
 //!      a count and turns this test RED, forcing a human to re-audit whether the new
-//!      prompt is (a) degraded-under-autonomy, (b) a sanctioned worker-blocked stop,
-//!      or (c) a sanctioned GATED approval. We additionally pin the ground-truth
-//!      prose (the invariant statement, the autonomy switch, and the two sanctioned
-//!      stops) so it cannot be silently weakened.
+//!      prompt is (a) a permission approval that should be pre-granted via
+//!      `--approval`, (b) a sanctioned worker-blocked stop, or (c) another genuine
+//!      judgment request. We additionally pin the ground-truth prose (the invariant
+//!      statement, the autonomy switch, the residual stops, and the `--approval`
+//!      framing) so it cannot be silently weakened — or silently widened.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -133,9 +155,15 @@ fn autonomy_check_env_false_overrides_config_true() {
 // 1b. CODE CONTRACT: GATED tasks are never auto-scheduled
 // ---------------------------------------------------------------------------
 //
-// The (b) sanctioned stop (deploy/push GATED approval) has a code backbone:
-// `condukt schedule` must route every `class:"gated"` task into the `gated`
-// list and NEVER into a parallel batch, so autonomy can never auto-run it.
+// The GATED carve-out has a code backbone that OUTLIVES the 2026-08-07 move of
+// its human approval to `--approval`: `condukt schedule` must route every
+// `class:"gated"` task into the `gated` list and NEVER into a parallel batch.
+// Pre-granting the *approval* did not pre-grant the *execution* — a gated task
+// still leaves the batch and still has to clear `condukt gate check`, whose
+// blastguard classification is what actually decides. This is the concrete form
+// of "止めるのは人間の Yes/No ではなく deterministic gate の側", so if this
+// assertion ever goes red the standing grant has widened into something the
+// user did not authorize.
 
 #[test]
 fn gated_task_is_isolated_and_never_batched() {
@@ -269,6 +297,182 @@ fn policy_answer_untestable_clamps_auto_to_escalate_never_self_answers() {
         !tmp.path().join("gate-decisions.jsonl").exists(),
         "an escalated untestable decision must not be journaled as a self-answer"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 1d. CODE CONTRACT: `policy answer --approval` self-answers, but only when
+//     autonomous, and never relaxes a `block`
+// ---------------------------------------------------------------------------
+//
+// The 2026-08-07 standing grant: a YES/NO permission gate stops prompting while
+// self-driving. `--approval` is the ONLY downward clamp in the policy engine, so
+// its three guardrails are pinned here at the binary boundary:
+//   (i)   autonomous + escalate-shaped input -> self-answers `auto`,
+//   (ii)  NON-autonomous -> completely inert, still escalates,
+//   (iii) a `block` verdict is never relaxed, autonomous or not,
+//   (iv)  --untestable (a raising clamp) beats --approval.
+// Each asserts the EXACT stdout JSON, not just the exit code: a clap error on an
+// old binary also exits 2, so an exit-code-only assertion would pass vacuously
+// against a build that has never heard of `--approval`.
+
+/// Run `condukt policy answer` on a caller-chosen risk/reversibility triple with
+/// a controlled HOME and explicit `CONDUKT_AUTONOMOUS`. Returns (exit, stdout).
+fn run_policy_answer_approval(
+    dir: &Path,
+    risk: &str,
+    reversible: &str,
+    confidence: &str,
+    autonomous: bool,
+    extra: &[&str],
+) -> (i32, String) {
+    let mut cmd = Command::new(condukt_bin());
+    cmd.args([
+        "policy",
+        "answer",
+        "--risk",
+        risk,
+        "--reversible",
+        reversible,
+        "--confidence",
+        confidence,
+        "--question",
+        "Proceed with the deploy?",
+        "--option",
+        "yes",
+        "--option",
+        "no",
+        "--recommend",
+        "0",
+        "--journal-dir",
+    ])
+    .arg(dir)
+    .env("HOME", dir)
+    .env("CONDUKT_AUTONOMOUS", if autonomous { "1" } else { "0" });
+    cmd.args(extra);
+    let out = cmd.output().expect("condukt policy answer should run");
+    let code = out.status.code().expect("process exits with a code");
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (code, stdout)
+}
+
+#[test]
+fn policy_answer_baseline_escalates_the_ambiguous_middle() {
+    // Non-vacuity anchor: WITHOUT --approval, the ambiguous middle escalates
+    // even when autonomous. So the next test's `auto` is caused by the flag,
+    // not by the input already being safe.
+    let tmp = tempfile::tempdir().unwrap();
+    let (code, out) =
+        run_policy_answer_approval(tmp.path(), "medium", "medium", "medium", true, &[]);
+    assert_eq!(code, 2, "baseline must escalate; got {out:?}");
+    assert_eq!(out, r#"{"answered":false,"policy":"escalate"}"#);
+}
+
+#[test]
+fn policy_answer_approval_self_answers_when_autonomous() {
+    // The standing grant in action: the same input that escalates above
+    // self-answers once framed as a permission approval.
+    let tmp = tempfile::tempdir().unwrap();
+    let (code, out) = run_policy_answer_approval(
+        tmp.path(),
+        "medium",
+        "medium",
+        "medium",
+        true,
+        &["--approval"],
+    );
+    assert_eq!(
+        code, 0,
+        "--approval must self-answer under autonomy; got {out:?}"
+    );
+    assert!(
+        out.contains(r#""answered":true"#) && out.contains(r#""policy":"auto""#),
+        "must print the auto self-answer JSON; got {out:?}"
+    );
+    // The gate is answered ON THE RECORD, not deleted: every auto-granted
+    // approval lands in the audit trail `condukt policy answers` reads.
+    assert!(
+        tmp.path().join("gate-decisions.jsonl").exists(),
+        "an auto-granted approval must be journaled for audit"
+    );
+}
+
+#[test]
+fn policy_answer_approval_is_inert_when_not_autonomous() {
+    // A non-autonomous run keeps every consent prompt. This condition lives in
+    // the BINARY, so a skill cannot lose its prompt by forgetting to check
+    // autonomy first.
+    let tmp = tempfile::tempdir().unwrap();
+    let (code, out) = run_policy_answer_approval(
+        tmp.path(),
+        "medium",
+        "medium",
+        "medium",
+        false,
+        &["--approval"],
+    );
+    assert_eq!(
+        code, 2,
+        "--approval must be inert when not autonomous; got {out:?}"
+    );
+    assert_eq!(
+        out, r#"{"answered":false,"policy":"escalate"}"#,
+        "must print the escalate JSON (an exact match also rules out a clap error)"
+    );
+    assert!(
+        !tmp.path().join("gate-decisions.jsonl").exists(),
+        "an escalated approval must not be journaled as a self-answer"
+    );
+}
+
+#[test]
+fn policy_answer_approval_never_relaxes_the_irreversible_block() {
+    // The one thing the standing grant does NOT cover. High risk + irreversible
+    // hard-blocks even when autonomous and explicitly framed as an approval:
+    // "stop asking me for permission" is not consent to a catastrophe.
+    let tmp = tempfile::tempdir().unwrap();
+    let (code, out) =
+        run_policy_answer_approval(tmp.path(), "high", "low", "high", true, &["--approval"]);
+    assert_eq!(code, 3, "a block must survive --approval; got {out:?}");
+    assert_eq!(out, r#"{"answered":false,"policy":"block"}"#);
+    assert!(
+        !tmp.path().join("gate-decisions.jsonl").exists(),
+        "a blocked approval must not be journaled as a self-answer"
+    );
+}
+
+#[test]
+fn policy_answer_untestable_beats_approval() {
+    // Precedence: the raising clamps win. §2's "untestable -> ask a human" gate
+    // is NOT covered by a standing permission grant, so passing both flags
+    // escalates rather than self-answering.
+    let tmp = tempfile::tempdir().unwrap();
+    let (code, out) = run_policy_answer_approval(
+        tmp.path(),
+        "low",
+        "high",
+        "high",
+        true,
+        &["--approval", "--untestable"],
+    );
+    assert_eq!(code, 2, "--untestable must beat --approval; got {out:?}");
+    assert_eq!(out, r#"{"answered":false,"policy":"escalate"}"#);
+}
+
+#[test]
+fn policy_answer_conflict_beats_approval() {
+    // Same precedence for merge-conflict resolution: an auto pick-a-side is
+    // last-writer-wins, and a permission grant does not authorize it.
+    let tmp = tempfile::tempdir().unwrap();
+    let (code, out) = run_policy_answer_approval(
+        tmp.path(),
+        "low",
+        "high",
+        "high",
+        true,
+        &["--approval", "--conflict"],
+    );
+    assert_eq!(code, 2, "--conflict must beat --approval; got {out:?}");
+    assert_eq!(out, r#"{"answered":false,"policy":"escalate"}"#);
 }
 
 // ---------------------------------------------------------------------------
@@ -472,16 +676,37 @@ fn invariant_prose_anchors_are_present() {
         );
     }
 
-    // (ii) flow states the residual-stops invariant verbatim: the ONLY stops
-    // that survive autonomy are (a) worker blocked and (b) deploy/push GATED.
+    // (ii) flow states the residual-stops invariant verbatim: worker-blocked and
+    // pivot survive autonomy as judgment requests.
     let flow = read("flow/skills/flow/SKILL.md");
     assert!(
         flow.contains("worker blocked"),
         "flow SKILL must name the (a) worker-blocked residual stop"
     );
     assert!(
+        flow.contains("pivot"),
+        "flow SKILL must name the (b) pivot residual stop (a genuine judgment)"
+    );
+    // The deploy/push GATED approval MOVED from a residual stop to a pre-granted
+    // permission (2026-08-07). flow must still name it — silently dropping the
+    // gate from the docs is exactly how a reader would lose track of where the
+    // enforcement went — and must say explicitly that `--approval` is what
+    // carries it, so the prose cannot drift back into claiming a prompt that no
+    // longer fires.
+    assert!(
         flow.contains("GATED") && flow.contains("deploy/push"),
-        "flow SKILL must name the (b) deploy/push GATED residual stop"
+        "flow SKILL must still name the deploy/push GATED gate"
+    );
+    assert!(
+        flow.contains("--approval"),
+        "flow SKILL must document the `--approval` permission framing that \
+         replaced the deploy/push GATED prompt"
+    );
+    // The one thing the standing grant does NOT cover must be stated where a
+    // reader of the skill will see it.
+    assert!(
+        flow.contains("block") && flow.contains("常設許諾"),
+        "flow SKILL must state that the standing grant does not relax `block`"
     );
 
     // (iii) condukt keeps the worker-blocked escalation AND the GATED carve-out.
@@ -495,6 +720,13 @@ fn invariant_prose_anchors_are_present() {
     assert!(
         condukt.contains("gated") && condukt.contains("deploy"),
         "condukt SKILL must keep the deploy/gated approval carve-out"
+    );
+    // Phase 3 consent is a permission approval and must carry the framing flag;
+    // if this string vanishes the skill has silently gone back to prompting (or,
+    // worse, to auto-answering without declaring why).
+    assert!(
+        condukt.contains("--approval"),
+        "condukt SKILL must route the Phase 3 consent gate through `--approval`"
     );
     // The --dry-run stop is invariant regardless of autonomy.
     assert!(

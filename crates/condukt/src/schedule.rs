@@ -372,8 +372,10 @@ fn resolve_force_gate(
     d: harness_core::verdict::Determination<blastguard::classify::RiskAssessment>,
 ) -> (bool, Option<String>) {
     match d.require() {
-        Ok(a) => (a.requires_gate() || a.risk >= Risk::Medium, None),
-        Err(verdict) => (
+        harness_core::verdict::Required::Determined(a) => {
+            (a.requires_gate() || a.risk >= Risk::Medium, None)
+        }
+        harness_core::verdict::Required::Blocked(verdict) => (
             true,
             Some(
                 verdict

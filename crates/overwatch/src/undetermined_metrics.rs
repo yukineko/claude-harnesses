@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use harness_core::undetermined::{self, SinkState};
-use harness_core::verdict::Determination;
+use harness_core::verdict::{Determination, Required};
 use serde::{Deserialize, Serialize};
 
 /// One recorded give-up.
@@ -275,8 +275,8 @@ pub fn run_cli(json: bool, window_days: Option<i64>) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     let path = ledger_path(&cwd);
     let records = match load(&path).require() {
-        Ok(r) => r,
-        Err(v) => anyhow::bail!(
+        Required::Determined(r) => r,
+        Required::Blocked(v) => anyhow::bail!(
             "cannot report undetermined metrics: {}",
             v.reason()
                 .map(harness_core::verdict::Reason::as_str)

@@ -69,6 +69,9 @@ SOURCE（課題の供給）              EXECUTOR（解決手段の実行）
 `$ARGUMENTS` に課題文があれば → **Step 3（その課題文で condukt 実行）へ直行**。ループはせず1件だけ実行して終了（明示課題は「今これをやれ」の意味）。
 引数が空なら → Step 1 へ（source から自動ピックするループ）。
 
+**どちらの経路でも、着手した課題が終わるまでそれだけをやる**（「ハードルール」の逸脱禁止・常時起票を参照）。
+途中で見つけた別の問題は `backlog add` して**その課題に戻る**。乗り換えない。
+
 ### Step 0.5 — 自律ゲート（`condukt policy answer` で per-gate graded 判定）
 
 ループ中に人間へ問い合わせる（`AskUserQuestion`）箇所は、**自律モードでは各ゲート固有の
@@ -105,25 +108,62 @@ esac
 - **exit 3（block）** → 実行を拒否して停止する。
 - **その他（exit 1 不正入力 / exit 127）** → 安全側にフォールバックして `AskUserQuestion` を出す（never break a turn）。
 
+#### 権限認可（YES/NO）と 判断要求（Ask）を分ける — `--approval`
+
+**ユーザー常設許諾（2026-08-07）**: 自律走行中の**「進めてよいか」という YES/NO の権限認可は
+事前に許諾済み**であり、二度と人間に聞かない。聞いてよいのは**人間に選択・設計判断を求める Ask** だけである。
+この 2 種を混同しないために、**権限認可のゲートには `--approval` を付ける**:
+
+```bash
+condukt policy answer --approval \
+  --risk <...> --reversible <...> --confidence <...> \
+  --question "<進めてよいか>" --option "<進む>" --option "<やめる>" --recommend 0
+```
+
+`--approval` は policy engine で**唯一の下向き clamp**（`escalate` → `auto`）であり、次の 4 点で狭く縛られている
+（すべて `crates/condukt/tests/autonomy_invariant.rs` の 1d 節が binary 境界で機械検査する）:
+
+1. **`block` は絶対に緩めない。** risk=high かつ reversible=low の hard stop は `--approval` を付けても block のまま。
+   「もう許可を聞くな」は「取り返しのつかないことをやれ」ではない。
+2. **非自律モードでは完全に不活性。** 自律判定は **skill の散文ではなくバイナリ側**（`policy_is_autonomous`）が行うので、
+   skill が autonomy-check を忘れても合意ゲートは消えない。
+3. **callsite ごとの opt-in。** 付けなかったゲートは従来どおり escalate する。下表の「判断要求」行には**付けない**。
+4. **`--untestable` / `--conflict`（上向き clamp）が常に優先。** 常設許諾は §2 の「測れないなら人に聞く」も
+   merge conflict の pick-a-side も**上書きしない**。
+
+**実際に流れを止めるのは deterministic gate の側である** — blastguard / taintguard / donegate /
+pre-commit・pre-push フック。`--approval` はそれらに一切触れない（層が違う）。ユーザーの
+「blastguard とかで止められない限り」はこの構造を指している: **人間への YES/NO は消え、機械の判定は残る。**
+
 各ゲートに与える risk/reversibility/confidence と既定（`--recommend`）:
 
-| human gate | risk | reversible | confidence | 典型 verdict | 自答時の既定（recommend） |
-|---|---|---|---|---|---|
-| **排他ロック競合**（Step 2・他セッションが明示的に `lock acquire` 済み。driver の並走では発生しない） | low | high | high | auto | **stand down**（報告して clean exit。`--force` 自動奪取はしない） |
-| **resume 選択**（複数候補） | low | high | high | auto | 3-1 の優先度 pick 規則の先頭 |
-| **pivot-check**（Step 4・`pivot`） | medium | high | low | **escalate** | —（genuine な戦略判断なので人に聞く。既定案＝継続/persevere） |
-| **循環ブレーカー trip**（早期脱出・`condukt circuit check`） | low | high | high | auto | **clean stop**（ループを止め Step 4 へ） |
+| human gate | 種別 | risk | reversible | confidence | `--approval` | 典型 verdict | 自答時の既定（recommend） |
+|---|---|---|---|---|---|---|---|
+| **排他ロック競合**（Step 2・他セッションが明示的に `lock acquire` 済み。driver の並走では発生しない） | 権限認可 | low | high | high | 付ける | auto | **stand down**（報告して clean exit。`--force` 自動奪取はしない） |
+| **resume 選択**（複数候補） | 権限認可 | low | high | high | 付ける | auto | 3-1 の優先度 pick 規則の先頭 |
+| **deploy/push の GATED 承認**（3-3 sink・Step 4） | 権限認可 | medium | medium | medium | **付ける** | auto（常設許諾） | **承認して進む**（block を返した場合のみ停止） |
+| **condukt Phase 3 の合意**（「この schedule で進む?」） | 権限認可 | schedule 由来 | high | schedule 由来 | **付ける** | auto | 提示した schedule のまま進む |
+| **pivot-check**（Step 4・`pivot`） | **判断要求** | medium | high | low | 付けない | **escalate** | —（genuine な戦略判断なので人に聞く。既定案＝継続/persevere） |
+| **worker が blocked**（condukt Phase 5） | **判断要求** | medium | medium | low | 付けない | **escalate** | —（実装が詰まった＝人間の判断が要る） |
+| **merge conflict の pick-a-side** | **判断要求** | — | — | — | `--conflict` | **escalate** | —（自動 pick は last-writer-wins） |
+| **測れない決定**（CLAUDE.md §2） | **判断要求** | — | — | — | `--untestable` | **escalate** | —（測れないという事実こそ人間が知るべき情報） |
+| **循環ブレーカー trip**（早期脱出・`condukt circuit check`） | 決定論 stop | — | — | — | — | **人にも policy にも聞かない clean stop** | —（ループを止め Step 4 へ） |
 
-> pivot は **escalate（残す 質疑）**＝ streak 閾値超えは「戦略が効いていない」という genuine な判断材料なので人間に返す。
-> それ以外の routine なゲートは **auto** で自答され Yes/No は消える。verdict は `policy::decide`
-> （`risk − reversible − confidence` の決定論スコア: `≤ -2`→auto / `≥ 1`→block / それ以外→escalate。
-> ただし risk=high かつ reversible=low は無条件 block）が確定するので、ここで挙動を hardcode しない。
+> **種別の見分け方**: 「はい/いいえで答えられ、答えが『はい』だと分かっているもの」＝**権限認可**（`--approval`）。
+> 「どちらを選ぶべきか／これは正しいのか、を人間に問うもの」＝**判断要求**（付けない）。
+> 迷ったら**付けない**（＝従来どおり聞く）。付け忘れは冗長な質問で済むが、付け間違いは判断の消失になる。
+>
+> verdict は `policy::decide`（`risk − reversible − confidence` の決定論スコア: `≤ -2`→auto /
+> `≥ 1`→block / それ以外→escalate。ただし risk=high かつ reversible=low は無条件 block）と
+> `policy::decide_approval` が確定するので、ここで挙動を hardcode しない。
 
-**安全不変条件（自律でも残す停止）**: 自律モードで残る human stop は **(a) worker が blocked**
-（condukt がエスカレーション）、**(b) deploy/push の GATED 承認**、**(c) pivot**（上表で escalate に倒す
-genuine な戦略判断）、および **policy answer が escalate/block を返したゲート**。それ以外の routine な human gate は
-policy-answer の auto で自答され Yes/No は消える（監査ログに残る）。**budgetguard の予算超過による早期脱出（Step 4）は
-どのモードでも維持**する。
+**安全不変条件（自律でも残す停止）**: 自律モードで残る human stop は **(a) worker が blocked**、
+**(b) pivot**（genuine な戦略判断）、**(c) merge conflict の pick-a-side と §2 の測れない決定**、
+および **policy answer が block を返したゲート**。**deploy/push の GATED 承認は 2026-08-07 の常設許諾により
+auto へ移した**（block が返れば止まる。実際の防護は blastguard 等の deterministic gate が担う）。
+その他の routine な human gate も policy-answer の auto で自答され Yes/No は消える（**全件が
+`gate-decisions.jsonl` に残り `condukt policy answers` で監査できる** — ゲートは削除ではなく記録付きで自答される）。
+**budgetguard の予算超過による早期脱出（Step 4）はどのモードでも維持**する。
 
 ### Step 1 — compass ゲート（盲目実行の防止）
 
@@ -164,7 +204,8 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
 - **例外 — 誰かが明示的に排他ロックを取っている場合**（`backlog lock status` の `kind` が
   `exclusive-lock` で `stale` でない）: これは人間が「全セッションを締め出す」意図で
   `backlog lock acquire` を打った状態なので尊重する。**Step 0.5 の policy-answer routing** に通す
-  （`--risk low --reversible high --confidence high`、`--question "他セッションが排他ロック中。どうする?"`、
+  （権限認可なので `--approval` を付ける。`--risk low --reversible high --confidence high`、
+  `--question "他セッションが排他ロック中。どうする?"`、
   `--option "stand down" --option "wait" --option "force-steal" --recommend 0` → 既定 verdict は auto）:
   - **auto（exit 0）** → `chosen`（＝stand down）を採用: 自動奪取はせず「排他ロック保持中のため見送り」と
     報告して**clean exit**。自答は監査ログに残る。
@@ -233,7 +274,10 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
       weight 無指定は既定 0.0＝従来の (priority, created_at) 順（後方互換）。weight は順序を変えるだけで priority は上書きしない。
       クロスプロジェクトで繰り返し検出される作業種別は `docs/backlog-tag-taxonomy.md` の規約タグ（例:
       `worktree-hygiene` / `deploy-verify` / `network-infra`）も併せて付ける。
-4. backlog も空なら **hypothesis（新規 discovery: open 仮説）**:
+4. **`open` 仮説（新規 discovery）は、ユーザーが明示的にそれを回せと言ったときだけ**引く。
+   **backlog が空になったことを理由に自動でここへ降りてはいけない** — それは「仕事が無いので
+   仕事を作る」であり、下の 5 の停止判定に反する。自動ループでは open 仮説は
+   **残課題として報告するだけ**にして 5 へ進む。明示指示がある場合のみ以下を使う:
    ```bash
    hypothesis list --status open    # confidence 降順（同点 created_at 昇順）でソート済み。空なら次へ
    ```
@@ -249,9 +293,26 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
    - `RAT` が**空**（高リスクの未テスト assumption が無い＝既に de-risk 済み）→ 従来どおり
      その**仮説を検証する実験**（full build）を課題文にする。
    いずれも仮説 ID を控える。`hypothesis` バイナリが無い / 0 件 / `rat` 未対応なら従来どおり full build に流す。
-5. compass 主筋・measure（観測可能なもの）・backlog・open 仮説のいずれも**実行可能なものが無い**
-   → **ループを抜けて Step 4 へ**（awaiting-measurement にまだ観測不能な仮説が残っていても、
-   それは「計測待ち」として残課題に計上しループは終える）。
+5. **停止判定 — 仕事が無いなら繰り返さない。** 継続してよいのは次の 3 つが**実際に一手を出したとき**だけ:
+   **(i) compass 主筋**（Step 1 の `to_condukt` が未消化）、**(ii) measure step**（3-1 の 2 で
+   **今observable**な awaiting-measurement 仮説）、**(iii) backlog の pending**。
+   この 3 つがどれも空なら → **ループを抜けて Step 4 へ**。
+
+   **`open` 仮説だけを根拠にループを継続してはいけない**（3-1 の 4 は上の 3 つが空のときの
+   継続理由にならない）。open 仮説は「これから作れる仕事」であって「積まれている仕事」ではないので、
+   これを継続条件に入れると**キューが空でもループが永久に新しい仕事を発明し続ける**。
+   残っている open 仮説と、まだ観測不能な awaiting-measurement は、**残課題として報告するだけ**にして
+   ループは終える。
+
+   **Why**: 停止条件が 4 source の AND だった頃は、backlog が空でも compass と open 仮説が
+   一手を出し続ける限り回り続けた。ユーザーから見ると「有効な backlog が無いのに繰り返している」
+   状態になる。自律モードで求められているのは「**タスクがある限り続ける**」であって
+   「**タスクを作り続ける**」ではない。逆に、pending が残っているのに早期に止めるのも同じくらい悪い
+   （自律モードが仕事を放置する）ので、**上の 3 つのどれかが一手を出す限りは止めない**こと。
+
+   **空を「空」と断定する前に一度取り直す**: `backlog next --claim` はロックを取れなかったとき
+   fail-closed に何も返さない（＝「キューが空」ではなく「今は取れない」）。`no pending tasks` が
+   返っても 1 度は取り直してから停止判定する。
 6. ピックしたタスクを**課題文**に組み立てる:
    - **単一課題**（compass 主筋 / measure / hypothesis / 単発 backlog）→ タイトル＋ notes（仕様・制約・参照ファイル）で従来どおり 1 課題文。
    - **backlog バッチ（3 の a/b で複数残った場合）→ 1 つの課題文に、各 backlog item を「独立した top-level タスク」として列挙**する。
@@ -468,6 +529,32 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
 
 ## ハードルール
 
+- **仕事が無いのに繰り返さない（停止条件は compass 主筋 / measure / backlog pending の 3 つだけ）。**
+  この 3 つがどれも一手を出さないなら Step 4 へ抜ける。**`open` 仮説は継続理由にならない** —
+  それは「積まれている仕事」ではなく「これから作れる仕事」なので、継続条件に入れると
+  キューが空でもループが永久に新しい仕事を発明し続ける。残った open 仮説と観測不能な
+  awaiting-measurement は**報告するだけ**。逆に pending が残っているのに早期に止めるのも同じくらい悪い
+  （自律モードが仕事を放置する）ので、3 つのどれかが一手を出す限りは止めない。詳細は Step 3-1 の 5。
+- **ユーザーの課題から逸脱しない。着手した課題は、終わるまでそれだけをやる。**
+  作業中に別の問題（より重要に見えるもの・途中で詰まった原因・気づいた欠陥）が現れても、
+  **そこへ乗り換えない**。判定基準は常に「いまユーザーの prompt に忠実か」であり、
+  それが解決するまではその課題に注力する。見つけた別課題は**その場で `backlog add` して戻る**。
+  課題が完了してから、自律モードであれば次の backlog を処理する（＝順序であって、並行ではない）。
+  **Why**: 逸脱は個々の判断としては常に正当に見える（「これを直さないと進めない」「こちらの方が重要だ」）。
+  だが逸脱が積み重なると、ユーザーから見て「結局いま何をしているのか」が失われ、
+  最初の課題は未完のまま残る。実際に起きた形: rollout 中に見つけた別クレートの欠陥を追いかけ、
+  rollout 自体は drift が残ったまま「完了」と報告されかけた。
+  **逸脱してよい唯一の例外は、その問題を解決しないと元の課題が物理的に前に進まない場合**であり、
+  そのときも「元の課題のために何を迂回しているか」を明示してから行い、済み次第すぐ戻る。
+- **気づいたことは常に起票する。起票するかどうかを判断しない。**
+  「些細だ」「意図的な仕様かもしれない」「今回のスコープ外だ」を理由に `backlog add` を省かない。
+  **それが本当に課題かどうかは、後でチケットから判定する。**
+  **Why**: 起票しないという判断は、**観測が最も新しく最も未検証な瞬間**に下される予測である。
+  省いた時点で唯一の永続記録が消えるので、その問いは二度と決着しない
+  （CLAUDE.md 第2節「判断は予測にすぎない」・第6節の自己許可そのもの）。
+  不要な 1 件のコストはキューの 1 行、落とした 1 件のコストは誰にも見えないまま残る。非対称であり、常に起票側が安い。
+  **起票の中身**: 逐語の実測値・測定点（rev と日付）・判定不能なら**両方の読み**（(a) 実在の欠陥 / (b) 意図的な仕様）と、
+  **どちらかを見分ける方法**を書く。起票は着手ではないので、書いたら元の課題へ戻る。
 - **source/executor の役割を混ぜない**: 課題の選定は compass/backlog、実行は condukt。`/flow` 自身は判定とループだけ。
 - **キューを独占しない**: `/flow` は同じ project で並走してよい（排他は task 単位＝`next --claim` +
   `condukt state claim-task`）。他セッションが driver 登録済みでも見送らない。**待つのは解ではない。**
@@ -480,11 +567,17 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
 - **driver 登録の解除を絶対に飛ばさない**（早期脱出・エラー時も）。解除漏れは `autoflow` /
   `daily` を最大 30 分止める。
 - **自律モードでは human gate を `condukt policy answer` に通す（Step 0.5）**: `autonomy-check` exit 0 のとき、
-  各ゲート（排他ロック競合 / resume 選択 / pivot）を per-gate の risk×reversible×confidence で
-  `policy answer` に掛け、**auto は自答（Ask 撤去・監査ログに追記）／ escalate は従来 Ask（残す 質疑）／ block は拒否**。
+  各ゲートを per-gate の risk×reversible×confidence で `policy answer` に掛け、
+  **auto は自答（Ask 撤去・監査ログに追記）／ escalate は従来 Ask（残す 質疑）／ block は拒否**。
   なお **failure-streak/予算/stall の早期脱出は policy answer ではなく決定論の `condukt circuit check` に集約**されており、
-  trip すれば人にも policy にも聞かず clean stop する（上記「早期脱出」）。routine なゲート（排他ロック競合＝stand down、
-  resume＝優先 pick 先頭、循環ブレーカー trip＝clean stop）は auto で消え、
-  **pivot は escalate**（genuine な戦略判断）として残る。自律で残る停止は **(a) pivot** **(b) worker blocked**
-  **(c) deploy/push の GATED 承認** **(d) budgetguard 早期脱出**、および policy が escalate/block を返したゲート。
-  exit 1（既定・非自律）は**従来どおり全 Ask を維持**（後方互換）。存在しない版（exit 127）は非自律とみなす。
+  trip すれば人にも policy にも聞かず clean stop する（上記「早期脱出」）。
+- **YES/NO の権限認可には `--approval` を付け、判断を求める Ask には付けない（Step 0.5 の表）**。
+  権限認可（排他ロック競合＝stand down、resume＝優先 pick 先頭、**deploy/push の GATED 承認**、
+  condukt Phase 3 の合意）は 2026-08-07 の常設許諾により auto で消える。
+  判断要求（**pivot** / **worker blocked** / merge conflict の pick-a-side / §2 の測れない決定）は
+  escalate のまま残す。**迷ったら `--approval` を付けない** — 付け忘れは冗長な質問で済むが、
+  付け間違いは人間の判断を消す。
+  自律で残る停止は **(a) worker blocked** **(b) pivot** **(c) conflict/untestable の判断要求**
+  **(d) budgetguard 早期脱出**、および policy が **block** を返したゲート。
+  exit 1（既定・非自律）は**従来どおり全 Ask を維持**（後方互換。`--approval` もそこでは不活性）。
+  存在しない版（exit 127）は非自律とみなす。

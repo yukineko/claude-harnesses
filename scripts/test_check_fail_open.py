@@ -134,12 +134,35 @@ class FalsePositiveDiscipline(unittest.TestCase):
 
 class GateSurfaceRegressionFloor(unittest.TestCase):
     def test_gate_surface_scans_clean(self):
+        # `blocking_hits` (not raw `scan_file`) is the right expression of this
+        # test's intent — "the merge-BLOCKING gate surface is clean" — now that
+        # the empty-collection fallback class is scored on the --ratchet burn-down
+        # instead of on this verdict. The companion test below asserts the
+        # advisory class is genuinely non-empty here, so this filter can never
+        # quietly become a way to report clean by detecting nothing.
         dirty = []
         for p in fo.iter_target_files(all_crates=False):
-            hits = fo.scan_file(p)
+            hits = fo.blocking_hits(fo.scan_file(p))
             if hits:
                 dirty.append((str(p.relative_to(fo.REPO)), hits))
         self.assertEqual(dirty, [], f"gate surface not clean: {dirty}")
+
+    def test_the_advisory_filter_is_not_vacuous_on_the_gate_surface(self):
+        # Anti-vacuity control for the filter above. The gate surface DOES hold
+        # empty-collection fallbacks today (overwatch/src/store.rs alone has
+        # several). If this ever reaches zero, the burn-down actually finished —
+        # at which point the class should be promoted into the blocking verdict,
+        # not left as a filter that hides nothing.
+        advisory = 0
+        for p in fo.iter_target_files(all_crates=False):
+            hits = fo.scan_file(p)
+            advisory += len(hits) - len(fo.blocking_hits(hits))
+        self.assertGreater(
+            advisory, 0,
+            "the advisory class matched NOTHING on the gate surface — either the "
+            "burn-down is complete (promote the class to blocking) or the "
+            "patterns silently stopped matching",
+        )
 
     def test_main_gate_surface_exit_zero(self):
         self.assertEqual(fo.main(["check-fail-open.py"]), 0)
@@ -448,3 +471,153 @@ class UpdateBaselineRepins(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class EmptyCollectionFallbackClass(unittest.TestCase):
+    """The class backlog b0cacd15 filed: 'an error is discarded and an EMPTY
+    collection is returned', which downstream reads as 'nothing to inspect →
+    clean'. CLAUDE.md §3 names it explicitly ('エラー時に空の集合を返さない').
+
+    Before this class was added, `check-fail-open.baseline` sat at 0 while the
+    workspace held dozens of instances — the pinned 0 meant 'zero of the two
+    read_dir shapes', not 'zero fail-open'. These tests are the RED that proves
+    the scanner did not see the class at all.
+    """
+
+    def test_err_arm_substitutes_an_empty_vec(self):
+        # `crates/overwatch/src/store.rs` shape: any read failure (permission,
+        # IO) becomes the same empty history as a legitimately absent file.
+        src = [
+            "pub fn read_events(cwd: &Path) -> Result<Vec<LifecycleEvent>> {",
+            "    match std::fs::read_to_string(&path) {",
+            "        Ok(txt) => Ok(parse(txt)),",
+            "        Err(_) => Ok(Vec::new()),",
+            "    }",
+            "}",
+        ]
+        self.assertIn("err-arm-empty-fallback", names(fo.scan_rust(src)))
+
+    def test_err_arm_substitutes_a_default(self):
+        src = [
+            "    match load(&path) {",
+            "        Ok(r) => r,",
+            "        Err(_) => Registry::default(),",
+            "    }",
+        ]
+        self.assertIn("err-arm-empty-fallback", names(fo.scan_rust(src)))
+
+    def test_unwrap_or_default_after_a_read(self):
+        # `crates/harness-status/src/path_shadow.rs:100-107` shape, named
+        # verbatim in b0cacd15.
+        src = [
+            "fn list_binary_names(dir: &Path) -> Vec<String> {",
+            "    std::fs::read_dir(dir)",
+            "        .map(|rd| collect(rd))",
+            "        .unwrap_or_default()",
+            "}",
+        ]
+        self.assertIn("read-unwrap-or-empty", names(fo.scan_rust(src)))
+
+    def test_unwrap_or_false_after_a_read(self):
+        # `crates/harness-status/src/plugins.rs:106-108` shape: an unreadable
+        # directory is mapped to the same `false` as a genuinely empty one.
+        src = [
+            "fn dir_nonempty(dir: &Path) -> bool {",
+            "    std::fs::read_dir(dir).map(|mut r| r.next().is_some()).unwrap_or(false)",
+            "}",
+        ]
+        self.assertIn("read-unwrap-or-empty", names(fo.scan_rust(src)))
+
+    def test_if_let_ok_drops_unparseable_records_in_a_loop(self):
+        # Form B: a malformed ledger line is silently skipped, so a corrupt
+        # ledger reads as a SHORTER history rather than an unreadable one.
+        src = [
+            "    let mut events = Vec::new();",
+            "    for line in txt.lines() {",
+            "        if let Ok(event) = serde_json::from_str::<LifecycleEvent>(line) {",
+            "            events.push(event);",
+            "        }",
+            "    }",
+        ]
+        self.assertIn("loop-parse-drop", names(fo.scan_rust(src)))
+
+
+class EmptyCollectionFallbackFalsePositives(unittest.TestCase):
+    """Anti-vacuity controls. A detector that fires on the FIXED forms too would
+    have a meaningless count, and would push authors to disable it."""
+
+    def test_propagating_err_arm_is_not_flagged(self):
+        src = [
+            "    match read(&path) {",
+            "        Ok(v) => Ok(v),",
+            "        Err(e) => Err(e),",
+            "    }",
+        ]
+        self.assertEqual(fo.scan_rust(src), [])
+
+    def test_tri_stated_err_arm_is_not_flagged(self):
+        # The fixed form this repo migrates TO: the error becomes an explicit
+        # third value, not an empty one.
+        src = [
+            "    match read(&path) {",
+            "        Ok(v) => Determination::Known(v),",
+            "        Err(e) => Determination::undetermined(e.to_string()),",
+            "    }",
+        ]
+        self.assertEqual(fo.scan_rust(src), [])
+
+    def test_unwrap_or_default_without_a_read_is_not_flagged(self):
+        # Receiver-aware: `unwrap_or_default` on a parsed number, a config
+        # lookup, etc. is not an IO swallow.
+        src = ["let n: u32 = s.parse().unwrap_or_default();"]
+        self.assertEqual(fo.scan_rust(src), [])
+
+    def test_if_let_ok_outside_a_loop_is_not_flagged(self):
+        src = [
+            "    if let Ok(cfg) = toml::from_str::<FileConfig>(&text) {",
+            "        apply(cfg);",
+            "    }",
+        ]
+        self.assertEqual(fo.scan_rust(src), [])
+
+    def test_err_arm_in_a_comment_is_not_flagged(self):
+        src = ["    // used to be `Err(_) => Ok(Vec::new())`, which reported"]
+        self.assertEqual(fo.scan_rust(src), [])
+
+
+class NewClassIsAdvisoryOnly(unittest.TestCase):
+    """The 2026-08-06 landing decision: the new class enters the ADVISORY /
+    `--ratchet` surface only, NOT the merge-blocking gate-surface verdict.
+
+    Why this is enforced by a test rather than a convention: if the new patterns
+    entered the blocking path they would fire on ~9 pre-existing overwatch sites
+    at once, and the only way to get a commit through would be to fill ALLOWLIST
+    with grandfather entries — turning the reviewed-exception hatch into the
+    default escape route (CLAUDE.md §5). The burn-down pressure is the baseline
+    diff instead, and no allowlist entry is created for this class.
+    """
+
+    def test_new_pattern_names_are_declared_advisory_only(self):
+        self.assertEqual(
+            fo.ADVISORY_ONLY_PATTERNS,
+            frozenset({"err-arm-empty-fallback", "read-unwrap-or-empty",
+                       "loop-parse-drop"}),
+        )
+
+    def test_blocking_scan_drops_the_advisory_class(self):
+        hits = [
+            (1, "Err(_) => Ok(Vec::new()),", "err-arm-empty-fallback"),
+            (2, "let Ok(e) = read_dir(d) else { return };", "readdir-let-else-swallow"),
+        ]
+        self.assertEqual(
+            fo.blocking_hits(hits),
+            [(2, "let Ok(e) = read_dir(d) else { return };",
+              "readdir-let-else-swallow")],
+        )
+
+    def test_advisory_class_still_counts_toward_the_ratchet(self):
+        # `blocking_hits` is the ONLY filter; the ratchet counts raw hits, so a
+        # new instance of the advisory class still moves the pinned number.
+        hits = [(1, "Err(_) => Ok(Vec::new()),", "err-arm-empty-fallback")]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(fo.blocking_hits(hits), [])

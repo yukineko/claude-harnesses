@@ -1,4 +1,5 @@
 mod config;
+mod divergence;
 mod driver;
 mod github;
 mod hooks;
@@ -12,7 +13,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use harness_core::boundary;
 use harness_core::hook::{read_stdin, run_hook, HookInput};
-use harness_core::verdict::Determination;
+use harness_core::verdict::{Determination, Required};
 use serde_json::json;
 use std::time::Duration;
 
@@ -81,14 +82,17 @@ enum Command {
         #[arg(long)]
         json: bool,
 
-        /// Return every project's tasks, not just the cwd-resolved one.
-        /// Reproduces the pre-existing (project-omitted) default. Ignored if
+        /// Return every project IN THIS STORE, not just the cwd-resolved one.
+        /// The store is per repo (`<root>/.backlog/tasks.toml`), so this is
+        /// NOT a cross-repo search: tasks filed against a different repo live
+        /// in that repo's own file and there is no index to walk. Ignored if
         /// `--project` is also given (`--project` wins, not a union).
         #[arg(long)]
         all: bool,
     },
 
-    /// Show the next highest-priority pending task
+    /// Show the next highest-priority pending task. Scoped, by default, to the
+    /// project this checkout resolves to — the same default `list` uses.
     Next {
         /// Filter by tag
         #[arg(long)]
@@ -97,6 +101,15 @@ enum Command {
         /// Filter by project path
         #[arg(long)]
         project: Option<String>,
+
+        /// Rank over every project IN THIS STORE, not just the cwd-resolved
+        /// one. Same meaning as `list --all`: the store is per repo
+        /// (`<root>/.backlog/tasks.toml`), so this is NOT a cross-repo search,
+        /// and it is ignored if `--project` is also given (`--project` wins,
+        /// not a union). Note this can return a task belonging to another
+        /// checkout, which is why it is opt-in.
+        #[arg(long)]
+        all: bool,
 
         /// Atomically reserve the returned task (CA-backlog-001): marks it
         /// `claimed` under the tasks-file lock in the same critical section
@@ -303,9 +316,116 @@ fn main() {
     }
 }
 
+/// Resolve the project filter for the read commands that are scoped to "this
+/// checkout" by default (`list` and `next`).
+///
+/// Precedence, identical for every caller: an explicit `--project` wins; then
+/// `--all` drops the project filter entirely; otherwise the cwd is resolved to
+/// its CANONICAL project identity via `store::canonical_project_id` — a linked
+/// worktree normalizes to the MAIN working tree it belongs to (mirroring
+/// `canonicalize_project`'s write-side normalization), so this matches what
+/// `add --project <main tree>` would have stored even when this process runs
+/// from a worktree rather than the main tree itself.
+///
+/// A checkout whose project scope cannot actually be determined (a dangling
+/// worktree `.git` link, an unreadable gitfile, …) returns `Err`, which
+/// `main` surfaces as a non-zero exit with a diagnostic on stderr. It must NOT
+/// degrade to `None` ("every project in this store") nor to an empty result:
+/// both are indistinguishable, to a downstream reader, from a correctly
+/// answered query, which is the fail-open CLAUDE.md §3 forbids.
+///
+/// `command` names the caller only for the diagnostic text; it does not change
+/// the decision. Sharing this function is what keeps `list` and `next` from
+/// disagreeing about what "this project" means.
+fn default_project_scope(
+    project: Option<String>,
+    all: bool,
+    command: &str,
+) -> Result<Option<String>> {
+    if project.is_some() {
+        return Ok(project);
+    }
+    if all {
+        return Ok(None);
+    }
+    let cwd = std::env::current_dir()?;
+    match store::canonical_project_id(&cwd).require() {
+        Required::Determined(root) => Ok(Some(root.to_string_lossy().into_owned())),
+        Required::Blocked(verdict) => {
+            let why = verdict
+                .reason()
+                .map(|r| r.as_str().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            Err(anyhow::anyhow!(
+                "cannot determine this checkout's project scope for the default \
+                 `backlog {command}` (pass --project explicitly, or --all to bypass \
+                 scoping entirely): {why}"
+            ))
+        }
+    }
+}
+
+/// The project the divergence check asks about — always THIS CHECKOUT, even
+/// when the listing was widened.
+///
+/// `--all` widens which tasks are *listed* from the resolved store; it does not
+/// change the question `divergence::check` answers ("is this checkout's work
+/// sitting in a store I am not reading"), so it must not silently turn into a
+/// bypass of that check. An explicit `--project` is different: the caller named
+/// the project they are asking about, so that is the scope compared.
+///
+/// `None` only when the listing is unscoped AND this checkout's identity could
+/// not be determined; the legacy store is then compared unscoped, which can
+/// only make the check MORE conservative, never less.
+fn divergence_scope(effective_project: Option<&str>) -> Option<String> {
+    if let Some(p) = effective_project {
+        return Some(p.to_string());
+    }
+    let cwd = std::env::current_dir().ok()?;
+    match store::canonical_project_id(&cwd).require() {
+        Required::Determined(root) => Some(root.to_string_lossy().into_owned()),
+        Required::Blocked(_) => None,
+    }
+}
+
+/// Refuse to answer "the queue is empty" when the answer is really "you are
+/// reading a different file" (backlog 5ba13c3e).
+///
+/// `Undetermined` becomes `Err`, which `main` reports as a non-zero exit with
+/// the reason on stderr and nothing on stdout — the identical shape
+/// `default_project_scope` already uses for an undetermined project scope, and
+/// the shape `autoflow::backlog::find_open` reads as
+/// `Determination::Undetermined` instead of "no work". `Warn` stays on exit 0
+/// on purpose: see `divergence`'s module docs for the consumer-by-consumer
+/// reason a non-zero exit there would DESTROY real items rather than protect
+/// them.
+fn guard_store_divergence(tasks_path: &std::path::Path, project: Option<&str>) -> Result<()> {
+    let scope = divergence_scope(project);
+    match divergence::check(tasks_path, scope.as_deref()) {
+        divergence::Divergence::None => Ok(()),
+        divergence::Divergence::Warn(msg) => {
+            eprintln!("{msg}");
+            Ok(())
+        }
+        divergence::Divergence::Undetermined(msg) => Err(anyhow::anyhow!(msg)),
+    }
+}
+
 fn run(cli: Cli) -> Result<()> {
     let cfg = config::Config::load();
-    let tasks_path = cfg.tasks_path();
+    // The store's LOCATION is always resolved from THIS PROCESS'S OWN cwd,
+    // never from `--project` (CLAUDE.md §8). `--project` names which project a
+    // task BELONGS to — a value the caller supplies and this binary does not
+    // control — not where the running checkout's own tasks.toml lives. Passing
+    // `command_project(&cli.command)` here used to let `--project <main tree>`
+    // from a linked worktree resolve the STORE to the main tree's own repo
+    // root (`Config::store_dir_for` walks up from the given project path), so
+    // a worktree session's `backlog add --project <main>` wrote straight into
+    // a tree §8 forbids touching. `None` makes `Config::tasks_path_for` fall
+    // through to `std::env::current_dir()` unconditionally, i.e. always the
+    // checkout actually running this process. Computed BEFORE the match
+    // because `cli.command` is moved into it.
+    let tasks_path = cfg.tasks_path_for(None);
 
     match cli.command {
         Command::Add {
@@ -362,30 +482,48 @@ fn run(cli: Cli) -> Result<()> {
             if let Some(w) = task::status_warning(status.as_deref()) {
                 eprintln!("{w}");
             }
-            // Default scope is the cwd-resolved project, not cross-project
+            // Default scope is the cwd-resolved project
             // (backlog-list-default-scope): an explicit `--project` always
-            // wins; `--all` opts back into the old cross-project default;
-            // otherwise resolve cwd to its repo root the same way
-            // `canonicalize_project` does, so this matches what `add
-            // --project "$PWD"` would have stored.
-            let effective_project = if project.is_some() {
-                project
-            } else if all {
-                None
-            } else {
-                let cwd = std::env::current_dir()?;
-                Some(
-                    harness_core::discovery::resolve_repo_root(&cwd)
-                        .to_string_lossy()
-                        .into_owned(),
-                )
-            };
+            // wins; `--all` drops the project filter, which now means "every
+            // project in THIS store" rather than the old cross-project
+            // default — the store itself is per repo, so a repo-resolved one
+            // holds a single project key and `--all` shows the same tasks as
+            // the default there; it still widens a pinned or legacy store,
+            // which are the ones that hold several keys. Otherwise resolve cwd
+            // to its CANONICAL project identity via `store::canonical_project_id`
+            // — a linked worktree normalizes to the MAIN working tree it
+            // belongs to (mirroring `canonicalize_project`'s write-side
+            // normalization), so this matches what `add --project <main tree>`
+            // would have stored even when this process is running from a
+            // worktree, not the main tree itself.
+            //
+            // A checkout whose project scope cannot actually be determined (a
+            // dangling worktree `.git` link, an unreadable gitfile, …) MUST
+            // NOT silently degrade to an empty `[]` result: that is
+            // indistinguishable from a genuinely empty queue to a downstream
+            // reader (e.g. autoflow's `find_open`, which already treats a
+            // non-zero `backlog list` exit as `Determination::Undetermined`
+            // rather than "no work" — see `crates/autoflow/src/backlog.rs`).
+            // So an undetermined scope here is surfaced as a hard error
+            // (non-zero exit, diagnostic on stderr, nothing on stdout) instead
+            // of a printed empty result.
+            //
+            // The precedence and the undetermined-scope error both live in
+            // `default_project_scope`, shared with `next` so the two commands
+            // cannot drift apart on what "this project" means.
+            let effective_project = default_project_scope(project, all, "list")?;
             let tasks = store::list(
                 &tasks_path,
                 tag.as_deref(),
                 effective_project.as_deref(),
                 status.as_deref(),
             )?;
+            // Before anything is printed: an empty listing produced from a
+            // store that is not where this checkout's work actually lives must
+            // not be rendered as an ordinary empty queue (backlog 5ba13c3e).
+            // Placed ahead of BOTH renderers so neither `[]` nor `no tasks`
+            // can escape on stdout when the answer is untrustworthy.
+            guard_store_divergence(&tasks_path, effective_project.as_deref())?;
 
             if as_json {
                 // Machine-readable array (consumed by autoflow). Each task keeps
@@ -425,9 +563,22 @@ fn run(cli: Cli) -> Result<()> {
                     } else {
                         t.status.clone()
                     };
+                    // A task written while its project identity was
+                    // UNDETERMINED is listed even when its (guessed) project
+                    // label does not match this scope — see `store::list`.
+                    // It must not blend in with the tasks that genuinely
+                    // scope here, so the row states that its project is a
+                    // guess and names the label that was guessed. Rendered
+                    // ONLY for marked tasks: a legacy store (no marker field)
+                    // therefore looks exactly as it did before.
+                    let scope_str = if t.project_unresolved {
+                        format!("  [project unresolved: {}]", t.project)
+                    } else {
+                        String::new()
+                    };
                     println!(
-                        "{:<10} {:<10} {:<10} {}",
-                        t.id, priority_str, status_str, t.title
+                        "{:<10} {:<10} {:<10} {}{}",
+                        t.id, priority_str, status_str, t.title, scope_str
                     );
                 }
             }
@@ -437,11 +588,42 @@ fn run(cli: Cli) -> Result<()> {
             tag,
             project,
             claim,
+            all,
         } => {
+            // `next` carries the SAME cwd-derived default project scope as
+            // `list` (`default_project_scope`), and for the same two reasons.
+            //
+            // 1. Agreement. `next` used to hand its `Option<String>` straight
+            //    to `store::next`, so a bare `next` ranged over EVERY project
+            //    key in the resolved store while a bare `list` in the same cwd
+            //    scoped to this checkout. A store holds several keys whenever
+            //    it is pinned or legacy, or once an `add --project <other>`
+            //    lands in it — and then `next` can hand a driver a task
+            //    belonging to a different checkout entirely. Ranking makes
+            //    this worse than a listing bug: the higher-weighted foreign
+            //    task is exactly the one that gets picked.
+            // 2. Fail-closed. An undetermined scope must not become "no
+            //    pending tasks" on exit 0. Drivers read this output to decide
+            //    whether there is work; "I could not determine which project
+            //    this is" and "there is nothing to do" have to stay
+            //    distinguishable (CLAUDE.md §3). `default_project_scope`
+            //    returns `Err`, which `main` reports as a non-zero exit with a
+            //    stderr diagnostic — the same shape `list` already had.
+            //
+            // Both apply to `--claim` too, which is the path real drivers use,
+            // so the scope is resolved BEFORE the branch rather than inside
+            // the read-only arm.
+            let effective_project = default_project_scope(project, all, "next")?;
+            // `next` is the question a DRIVER asks ("is there work?"), so
+            // `no pending tasks` out of a store that is not this checkout's is
+            // the most expensive false answer in the crate. Checked BEFORE the
+            // claim so a diverged store neither reports emptiness nor mutates
+            // the wrong file (backlog 5ba13c3e).
+            guard_store_divergence(&tasks_path, effective_project.as_deref())?;
             let task = if claim {
-                store::next_claim(&tasks_path, tag.as_deref(), project.as_deref())?
+                store::next_claim(&tasks_path, tag.as_deref(), effective_project.as_deref())?
             } else {
-                store::next(&tasks_path, tag.as_deref(), project.as_deref())?
+                store::next(&tasks_path, tag.as_deref(), effective_project.as_deref())?
             };
             match task {
                 Some(t) => {

@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use harness_core::boundary;
+use harness_core::verdict::{Required, Verdict};
 use serde::Deserialize;
 
 // Re-exported so existing `crate::config::expand_tilde` call sites keep working.
@@ -111,6 +112,24 @@ pub fn base_dir() -> PathBuf {
     harness_core::config::base_dir("stuckguard")
 }
 
+/// Diagnostic text for a config file that exists but could not be read
+/// (`Required::Blocked` out of `boundary::read_to_string`). Pure — so the
+/// "what gets printed" question is unit-testable without capturing stderr.
+/// Names the path and the verdict's reason so a reader can never mistake
+/// "config load failed, defaults kicked in" for "config was read and simply
+/// had no overrides".
+fn describe_unreadable_config(path: &Path, verdict: &Verdict) -> String {
+    let why = verdict
+        .reason()
+        .map(|r| r.as_str())
+        .unwrap_or("unknown reason");
+    format!(
+        "stuckguard: could not read config {} ({}); falling back to defaults",
+        path.display(),
+        why
+    )
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -153,7 +172,22 @@ impl Config {
         base_dir().join("config.toml")
     }
 
+    /// Load config, printing any "config file exists but could not be read"
+    /// diagnostic to stderr. Thin wrapper over
+    /// [`Config::load_with_diagnostics`]; see there for the RED/GREEN seam
+    /// this split exists to create.
     pub fn load(root: &Path) -> Self {
+        Config::load_with_diagnostics(root, &mut |msg| eprintln!("{msg}"))
+    }
+
+    /// The real implementation behind [`Config::load`], with the diagnostic
+    /// sink taken as a parameter instead of hardcoded to `eprintln!`. This
+    /// exists so a test can observe *whether the diagnostic fires* (not just
+    /// that the helper that formats it produces good text, and not just that
+    /// the fallback-to-defaults behavior is reachable — both of which stayed
+    /// green even with the `eprintln!` deleted). `load()` is the only real
+    /// caller; tests call this directly with a `Vec`-collecting sink.
+    pub fn load_with_diagnostics(root: &Path, diag: &mut dyn FnMut(String)) -> Self {
         let mut cfg = Config::default();
         let chosen = {
             let p = Config::project_path(root);
@@ -165,12 +199,26 @@ impl Config {
             }
         };
         if let Some(path) = chosen {
-            // Both "file vanished between exists() and here" (Known(None)) and
-            // "file is there but unreadable" (Undetermined) fall through to
-            // built-in defaults, same as the raw `std::fs::read_to_string(..).ok()`
-            // this replaced: stuckguard is a pure advisory hook (never blocks), so
-            // config-load failure degrades to defaults rather than escalating.
-            if let Some(text) = boundary::read_to_string(&path).require().ok().flatten() {
+            // `Required::Determined(None)` ("file vanished between exists()
+            // and here") and `Required::Determined(Some(text))` (file read
+            // fine) both fall through to normal handling below without any
+            // diagnostic: a config file that legitimately does not exist (or
+            // stopped existing) is not a judgment failure, it is an
+            // observation. `Required::Blocked` ("file is there but could not
+            // be read" — permission denied, IO error) is different: it is a
+            // judgment failure, and stuckguard is a pure advisory hook (never
+            // blocks), so it still degrades to defaults, but it must not do so
+            // silently (CLAUDE.md §3) — emit a diagnostic naming the path and
+            // the reason so "config is default" is never misread as "config
+            // was read and had no overrides".
+            let text = match boundary::read_to_string(&path).require() {
+                Required::Determined(text) => text,
+                Required::Blocked(verdict) => {
+                    diag(describe_unreadable_config(&path, &verdict));
+                    None
+                }
+            };
+            if let Some(text) = text {
                 if let Ok(fc) = toml::from_str::<FileConfig>(&text) {
                     if let Some(v) = fc.enabled {
                         cfg.enabled = v;
@@ -268,6 +316,101 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Proves `describe_unreadable_config` names both the path and the
+    /// blocking reason, so the printed diagnostic can never be mistaken for
+    /// "config was read and had no overrides" (the failure mode the removed
+    /// `.require().ok().flatten()` had: it discarded the `Verdict` entirely).
+    #[test]
+    fn describe_unreadable_config_names_path_and_reason() {
+        let path = Path::new("/some/stuckguard.toml");
+        let verdict = Verdict::undetermined("permission denied (test)");
+        let msg = describe_unreadable_config(path, &verdict);
+        assert!(
+            msg.contains("/some/stuckguard.toml"),
+            "diagnostic must name the path: {msg}"
+        );
+        assert!(
+            msg.contains("permission denied (test)"),
+            "diagnostic must carry the verdict's reason: {msg}"
+        );
+    }
+
+    /// Proves the `Required::Blocked` branch of `Config::load` is actually
+    /// reachable and still resolves to defaults (stuckguard is a pure
+    /// advisory hook, so degrading is correct) — it is only the SILENCE that
+    /// was wrong, not the fallback. A directory in place of the config file
+    /// makes `std::fs::read_to_string` fail with a non-`NotFound` error
+    /// (`IsADirectory`/similar), which `boundary::read_to_string` maps to
+    /// `Undetermined`, i.e. `Required::Blocked` — the same branch a real
+    /// unreadable/permission-denied file would take. This test does not
+    /// capture stderr (the diagnostic itself is covered by
+    /// `describe_unreadable_config_names_path_and_reason` above); it proves
+    /// only that `load()` does not panic and that defaults survive an
+    /// unreadable config file.
+    #[test]
+    fn load_falls_back_to_defaults_when_config_is_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory at the expected config path: exists() is true, but
+        // read_to_string on it is an error other than NotFound -> Undetermined.
+        std::fs::create_dir(Config::project_path(dir.path())).unwrap();
+
+        let cfg = Config::load(dir.path());
+
+        let defaults = Config::default();
+        assert_eq!(cfg.window, defaults.window, "unreadable config -> defaults");
+        assert_eq!(
+            cfg.repeat_threshold, defaults.repeat_threshold,
+            "unreadable config -> defaults"
+        );
+    }
+
+    /// Proves the diagnostic actually FIRES on the `Required::Blocked` path —
+    /// not just that the formatting helper produces good text
+    /// (`describe_unreadable_config_names_path_and_reason` above) and not
+    /// just that defaults survive (`load_falls_back_to_defaults_when_config_is_unreadable`
+    /// above), neither of which would notice the `eprintln!` being deleted.
+    /// Calls `load_with_diagnostics` directly with a `Vec`-collecting sink so
+    /// the emission itself is observable without capturing stderr. Before the
+    /// diagnostic was wired to the `diag` parameter (it called `eprintln!`
+    /// directly, ignoring `diag`) this test was RED: `diags` stayed empty.
+    #[test]
+    fn load_with_diagnostics_emits_one_message_for_unreadable_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(Config::project_path(dir.path())).unwrap();
+
+        let mut diags = Vec::new();
+        let _cfg = Config::load_with_diagnostics(dir.path(), &mut |m| diags.push(m));
+
+        assert_eq!(
+            diags.len(),
+            1,
+            "an unreadable config file must emit exactly one diagnostic; got {diags:?}"
+        );
+        let msg = &diags[0];
+        assert!(
+            msg.contains(&Config::project_path(dir.path()).display().to_string()),
+            "diagnostic must name the config path: {msg}"
+        );
+    }
+
+    /// Anti-vacuity control for the test above: a config that reads
+    /// successfully (even an empty/no-op one) must emit ZERO diagnostics, so
+    /// an implementation that unconditionally pushes a message (regardless of
+    /// whether the file was actually unreadable) does not pass either test.
+    #[test]
+    fn load_with_diagnostics_is_silent_for_a_readable_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(Config::project_path(dir.path()), "enabled = true\n").unwrap();
+
+        let mut diags = Vec::new();
+        let _cfg = Config::load_with_diagnostics(dir.path(), &mut |m| diags.push(m));
+
+        assert!(
+            diags.is_empty(),
+            "a readable config must not emit any diagnostic; got {diags:?}"
+        );
+    }
 
     /// CA-stuckguard-002: a `repeat_threshold` / `progress_min_window` larger
     /// than `window` can never be reached (the detectors only ever see the last

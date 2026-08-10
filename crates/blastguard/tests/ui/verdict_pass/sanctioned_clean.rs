@@ -24,7 +24,7 @@ fn main() {
     // The one sanctioned extractor for a determined value.
     let five: u8 = Determination::Known(5u8)
         .require()
-        .expect("Known must extract to Ok");
+        .expect("Known must extract to Required::Determined");
     assert_eq!(five, 5);
 
     // blastguard's own migrated call site: `any_sensitive` returns a

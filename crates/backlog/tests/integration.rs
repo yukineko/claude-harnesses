@@ -65,9 +65,16 @@ fn help_lists_the_about_line() {
 
 #[test]
 fn list_on_empty_store_says_no_tasks() {
-    // Read-only subcommand against a fresh, isolated store.
+    // Read-only subcommand against a fresh, isolated store. The store's
+    // location is resolved from the CHILD PROCESS's cwd (not `--project`,
+    // not the cwd `cargo test` happens to be invoked from), so this must
+    // pin an explicit cwd outside any repo — otherwise the child inherits
+    // this test binary's own cwd, which sits inside the harness repo
+    // checkout and resolves to that repo's real, non-empty, tracked
+    // `.backlog/tasks.toml`.
     let home = temp_home("list");
-    let (code, stdout) = run(&["list"], "", &home);
+    let cwd = temp_home("list-cwd");
+    let (code, stdout) = run_in(&["list"], "", &home, Some(&cwd));
     assert_eq!(code, 0, "list on an empty store must succeed");
     assert!(
         stdout.contains("no tasks"),
@@ -79,8 +86,15 @@ fn list_on_empty_store_says_no_tasks() {
 fn list_json_emits_machine_readable_array() {
     // The contract autoflow depends on: `list --json` prints a JSON array whose
     // tasks carry `title` and `status`. Add one task, then read it back as JSON.
+    // The store's location is resolved from the child process's own cwd, so
+    // `add` and `list` must share the SAME pinned, isolated, non-repo cwd —
+    // otherwise both silently resolve to this test binary's inherited cwd
+    // (the real harness repo checkout), landing the write in the tracked
+    // `.backlog/tasks.toml` and accumulating across runs, which breaks the
+    // exact-one-task assertion below.
     let home = temp_home("list-json");
-    let (add_code, _) = run(
+    let cwd = temp_home("list-json-cwd");
+    let (add_code, _) = run_in(
         &[
             "add",
             "--title",
@@ -92,13 +106,15 @@ fn list_json_emits_machine_readable_array() {
         ],
         "",
         &home,
+        Some(&cwd),
     );
     assert_eq!(add_code, 0, "add must succeed");
 
-    let (code, stdout) = run(
+    let (code, stdout) = run_in(
         &["list", "--project", "/p", "--status", "pending", "--json"],
         "",
         &home,
+        Some(&cwd),
     );
     assert_eq!(code, 0, "list --json must succeed");
     let v: serde_json::Value = serde_json::from_str(stdout.trim())
@@ -114,21 +130,31 @@ fn list_without_project_or_all_scopes_to_cwd_project_only() {
     // Two tasks in different projects. Bare `list` (no --project, no --all)
     // run from inside project A's git worktree must return only A's task —
     // NOT the old cross-project-default behavior.
+    //
+    // The store's location is resolved from the child process's cwd, not
+    // from `--project`, so BOTH `add` calls must also run pinned to `cwd_a`
+    // — the same cwd the scoped `list` below uses — so all three commands
+    // land in the SAME store. Otherwise the `add`s would silently inherit
+    // this test binary's own cwd (the real harness repo checkout) and write
+    // into its tracked `.backlog/tasks.toml`, while `list` reads from a
+    // different, empty store.
     let home = temp_home("list-scope-cwd");
     let cwd_a = temp_home("list-scope-cwd-repo-a");
     std::fs::create_dir_all(cwd_a.join(".git")).unwrap();
     let project_a = cwd_a.canonicalize().unwrap().to_string_lossy().into_owned();
 
-    let (add_a, _) = run(
+    let (add_a, _) = run_in(
         &["add", "--title", "Task A", "--project", &project_a],
         "",
         &home,
+        Some(&cwd_a),
     );
     assert_eq!(add_a, 0, "add A must succeed");
-    let (add_b, _) = run(
+    let (add_b, _) = run_in(
         &["add", "--title", "Task B", "--project", "/other/project"],
         "",
         &home,
+        Some(&cwd_a),
     );
     assert_eq!(add_b, 0, "add B must succeed");
 
@@ -145,39 +171,29 @@ fn list_without_project_or_all_scopes_to_cwd_project_only() {
 }
 
 #[test]
-fn list_all_flag_returns_cross_project_results() {
-    // `--all` must reproduce the OLD default (project-omitted) behavior:
-    // every project's pending tasks, regardless of cwd.
+fn list_all_flag_returns_every_project_in_the_resolved_store() {
+    // `--all` is scoped to ONE store. The store is resolved per repo
+    // (`<root>/.backlog/tasks.toml`), so "every project" means every project
+    // key recorded in THAT file — NOT a cross-repo search, which has no index
+    // to walk.
+    //
+    // A repo-resolved store cannot exercise this: every project path inside
+    // one repo collapses to that repo's root, so such a store holds exactly
+    // one key and `--all` would be indistinguishable from the default (that is
+    // the design consequence, not a gap in the test). The stores that DO hold
+    // several keys are the ones reached without repo resolution — a pinned
+    // `store_dir` and the legacy fallback. A pinned store is used here because
+    // it fixes the path for every subcommand regardless of cwd, so the test
+    // cannot pass or fail for reasons of where `cargo test` was invoked.
     let home = temp_home("list-all-flag");
-    let cwd_a = temp_home("list-all-flag-repo-a");
-    std::fs::create_dir_all(cwd_a.join(".git")).unwrap();
-    let project_a = cwd_a.canonicalize().unwrap().to_string_lossy().into_owned();
+    let pinned = temp_home("list-all-flag-store");
+    std::fs::create_dir_all(home.join(".backlog")).unwrap();
+    std::fs::write(
+        home.join(".backlog").join("config.toml"),
+        format!("store_dir = {:?}\n", pinned.to_string_lossy()),
+    )
+    .unwrap();
 
-    let (add_a, _) = run(
-        &["add", "--title", "Task A", "--project", &project_a],
-        "",
-        &home,
-    );
-    assert_eq!(add_a, 0, "add A must succeed");
-    let (add_b, _) = run(
-        &["add", "--title", "Task B", "--project", "/other/project"],
-        "",
-        &home,
-    );
-    assert_eq!(add_b, 0, "add B must succeed");
-
-    let (code, stdout) = run_in(&["list", "--all"], "", &home, Some(&cwd_a));
-    assert_eq!(code, 0);
-    assert!(
-        stdout.contains("Task A") && stdout.contains("Task B"),
-        "--all must return every project's tasks, got: {stdout}"
-    );
-}
-
-#[test]
-fn list_project_flag_wins_over_all_when_both_given() {
-    // `--project` and `--all` together: --project must win (not an error).
-    let home = temp_home("list-project-wins");
     let (add_a, _) = run(
         &["add", "--title", "Task A", "--project", "/proj/a"],
         "",
@@ -190,8 +206,63 @@ fn list_project_flag_wins_over_all_when_both_given() {
         &home,
     );
     assert_eq!(add_b, 0, "add B must succeed");
+    assert!(
+        pinned.join("tasks.toml").exists(),
+        "both adds must have landed in the pinned store, else the rest of this \
+         test would be asserting against the wrong file"
+    );
 
-    let (code, stdout) = run(&["list", "--project", "/proj/a", "--all"], "", &home);
+    let (code, stdout) = run(&["list", "--all"], "", &home);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("Task A") && stdout.contains("Task B"),
+        "--all must return every project in the resolved store, got: {stdout}"
+    );
+
+    // Anti-vacuity: the same store, same cwd, WITHOUT `--all` must not return
+    // them. Neither `/proj/a` nor `/proj/b` is the cwd's project, so a `--all`
+    // that was ignored entirely would leave this list empty — and the
+    // assertion above would then have to fail.
+    let (code, scoped) = run(&["list"], "", &home);
+    assert_eq!(code, 0);
+    assert!(
+        !scoped.contains("Task A") && !scoped.contains("Task B"),
+        "default scope must stay project-scoped, got: {scoped}"
+    );
+}
+
+#[test]
+fn list_project_flag_wins_over_all_when_both_given() {
+    // `--project` and `--all` together: --project must win (not an error).
+    //
+    // The store's location is resolved from the child process's cwd, so
+    // every call here is pinned to the same isolated, non-repo `cwd` —
+    // otherwise these `add`s would silently inherit this test binary's own
+    // cwd (the real harness repo checkout) and write into its tracked
+    // `.backlog/tasks.toml`.
+    let home = temp_home("list-project-wins");
+    let cwd = temp_home("list-project-wins-cwd");
+    let (add_a, _) = run_in(
+        &["add", "--title", "Task A", "--project", "/proj/a"],
+        "",
+        &home,
+        Some(&cwd),
+    );
+    assert_eq!(add_a, 0, "add A must succeed");
+    let (add_b, _) = run_in(
+        &["add", "--title", "Task B", "--project", "/proj/b"],
+        "",
+        &home,
+        Some(&cwd),
+    );
+    assert_eq!(add_b, 0, "add B must succeed");
+
+    let (code, stdout) = run_in(
+        &["list", "--project", "/proj/a", "--all"],
+        "",
+        &home,
+        Some(&cwd),
+    );
     assert_eq!(code, 0, "--project + --all must not error");
     assert!(
         stdout.contains("Task A"),

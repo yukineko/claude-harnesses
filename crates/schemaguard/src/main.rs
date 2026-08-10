@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
-use harness_core::verdict::Verdict;
+use harness_core::verdict::{Required, Verdict};
 use schemaguard::{metrics, registry, schema};
 use serde_json::json;
 
@@ -220,8 +220,8 @@ fn cmd_metrics(args: MetricsArgs) -> i32 {
     // counter exists to show. `require()` is the only extractor, so the permissive
     // path is not expressible.
     let counts = match metrics::counts().require() {
-        Ok(c) => c,
-        Err(verdict) => {
+        Required::Determined(c) => c,
+        Required::Blocked(verdict) => {
             let why = verdict
                 .reason()
                 .map(|r| r.as_str().to_string())

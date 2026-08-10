@@ -20,9 +20,12 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    (flow / scout と同一の shim) に通し、`auto`(exit 0) は printed `chosen` を自答 (Ask 撤去・
    `gate-decisions.jsonl` に追記) / `escalate`(exit 2) は従来 `AskUserQuestion` (残す 質疑) /
    `block`(exit 3) は拒否、その他 (exit 1・旧バイナリの clap exit 2・exit 127) は安全側に
-   `AskUserQuestion` へ落とす。合意 (Phase 3) は schedule 由来の risk/confidence で graded 判定し、
-   genuine な判断ゲート — resume 選択 (Phase 0)・`open_questions` (Phase 1)・conflict (Phase 3.5)・
-   worker `blocked` (Phase 5) — は低 confidence/高 risk を与えて **escalate** に倒す (＝人に聞く)。
+   `AskUserQuestion` へ落とす。**「進めてよいか」という YES/NO の権限認可には `--approval` を付ける**
+   (ユーザー常設許諾 2026-08-07: 自律走行中の権限認可は事前許諾済みなので `escalate`→`auto` へ clamp。
+   ただし `block` は緩めず、非 autonomous では不活性)。合意 (Phase 3) がこれに当たり、schedule 由来の
+   risk/confidence を添えて `--approval` 付きで通す。一方 **genuine な判断ゲート — resume 選択 (Phase 0)・
+   `open_questions` (Phase 1)・conflict (Phase 3.5)・worker `blocked` (Phase 5) — には `--approval` を
+   付けず**、低 confidence/高 risk を与えて **escalate** に倒す (＝人に聞く)。**迷ったら付けない**。
    自答履歴は `condukt policy answers` で監査できる。**worker `blocked` と GATED 承認待ちは、インラインで
    loop を止める代わりに durable async escalation channel (`condukt escalate add|list|resolve`) に enqueue
    して out-of-band で解消できる**（HOTL: loop は残りのタスクを続行し、人間が後で `escalate resolve` で答えると
@@ -331,31 +334,36 @@ condukt state autonomy-check   # autonomous なら exit 0 + {"autonomous":true}�
 ```
 - **exit 1 (非 autonomous・既定)／ autonomy-check 未対応 (exit 127)** → 従来どおり。下記の `AskUserQuestion` で
   合意を取る（後方互換。既定では必ず合意 Ask が出る）。
-- **exit 0 (autonomous)** → 合意ゲートを policy-answer に掛ける。**risk/confidence は schedule の内容から導く**
-  (graded: 安全な計画は auto、危うい計画は escalate):
-  - `class:"gated"` タスクを含む、または `confidence:"low"` タスクを含む → `RISK=medium CONF=low`
-    (→ 既定 verdict **escalate** ＝ 合意を人に返す)。
-  - それ以外 (全 parallel/serial かつ confidence high/medium のみ) → `RISK=low CONF=high`
-    (→ 既定 verdict **auto** ＝ 合意 Ask を省略)。
+- **exit 0 (autonomous)** → 合意ゲートを policy-answer に掛ける。合意は「進めてよいか」という
+  **YES/NO の権限認可**なので **`--approval` を付ける** (ユーザー常設許諾 2026-08-07: 自律走行中の
+  権限認可は事前許諾済み。詳細は flow SKILL の「権限認可と判断要求を分ける」節)。
+  **risk/confidence は schedule の内容から導く** (graded: 危うい計画ほど高 risk・低 confidence を渡す):
+  - `class:"gated"` タスクを含む、または `confidence:"low"` タスクを含む → `RISK=medium CONF=low`。
+  - それ以外 (全 parallel/serial かつ confidence high/medium のみ) → `RISK=low CONF=high`。
   ```bash
   # gated タスク／low-confidence タスクの有無で $RISK・$CONF を決める（上記ルール）。
-  OUT=$(condukt policy answer --risk "$RISK" --reversible high --confidence "$CONF" \
+  OUT=$(condukt policy answer --approval --risk "$RISK" --reversible high --confidence "$CONF" \
           --question "この schedule で実装に進む?" \
           --option "この計画で進む" --option "計画を見直す" --recommend 0 2>/dev/null)
   case $? in
     0) : ;;  # auto: 合意 Ask を省略し schedule (並列バッチ / serial / gated) をそのまま採用して Phase 3.5 へ（自答は監査ログに残る）
-    2) : ;;  # escalate: 下記の AskUserQuestion で合意を取る（gated/low-confidence を含む計画は人に返る）
-    3) : ;;  # block: 実装に進まず停止する
+    2) : ;;  # escalate: 下記の AskUserQuestion で合意を取る（非 autonomous では --approval は不活性なので必ずここへ来る）
+    3) : ;;  # block: 実装に進まず停止する（--approval でも block は緩まない）
     *) : ;;  # 旧バイナリ（`answer` 無しの clap exit 2 も case 2 に落ちて安全）/ 不正入力 → 安全側 = AskUserQuestion
   esac
   ```
-  auto で省略しても次は autonomy でも縮退させない（安全側の不変）:
+  `--approval` は **`escalate` → `auto` の下向き clamp** だが、次は autonomy でも縮退させない（安全側の不変）:
+  - **`block` は緩めない。** risk=high かつ reversible=low の hard stop は `--approval` を付けても block のまま。
+  - **非 autonomous では完全に不活性**（バイナリ側が `policy_is_autonomous` で判定するので、この skill が
+    autonomy-check を忘れても合意 Ask は消えない）。
   - `--dry-run` は autonomy でも**必ずここで停止**する（合意省略は「停止しない」ではない）。
-  - `class: "gated"` タスク (deploy/push 等) は autonomy でも原則 実装・承認の対象外 (Phase 8 でユーザー承認)。
-    ただし **remove-gate の例外**: `condukt gate check` が Low risk かつ reversible と判定した gated タスクだけは
-    checkpoint+journal 付きで auto 実行しうる (irreversible/high-risk は必ず escalate)。
-  - `confidence: low`/`medium` のタスクは合意を省略しても**ログに明示**し、後段の Phase 6 検証ゲートで担保する
-    (なお上記ルールでは low-confidence を含む計画は escalate になり合意 Ask が出る)。
+  - `class: "gated"` タスク (deploy/push 等) の**実行**は Phase 8 の `condukt gate check` が決める。
+    **承認そのもの**は常設許諾で auto になるが、`gate check` が Low risk かつ reversible と判定しない限り
+    実行はされない (irreversible/high-risk は escalate のまま)。つまり**止めるのは人間の Yes/No ではなく
+    deterministic gate (blastguard classify) の側**である。
+  - `confidence: low`/`medium` のタスクは合意を省略しても**ログに明示**し、後段の Phase 6 検証ゲートで担保する。
+  - **worker `blocked` (Phase 5) は権限認可ではなく判断要求**なので `--approval` を付けず、
+    従来どおり escalate させる（自律でも残す停止）。
   自答・エスカレートの履歴は `condukt policy answers` で監査できる。
 
 合意を取る場合 (非 autonomous):

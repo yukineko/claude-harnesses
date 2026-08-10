@@ -257,6 +257,9 @@ pub fn enqueue_with<R: BacklogRunner>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the tests destructure `require()`'s result; production code here
+    // stays on `Determination`, so importing this at module scope would warn.
+    use harness_core::verdict::Required;
 
     fn spec_with(ids: &[&str]) -> ir::Spec {
         ir::Spec {
@@ -359,13 +362,20 @@ mod tests {
     }
 
     /// Assert `Undetermined` and hand over its reason text.
+    ///
+    /// The panic is the assertion: `Required` deliberately has no `unwrap_err`,
+    /// so a test that wanted the blocked side has to say what it does with the
+    /// determined side rather than get a silent default.
+    #[allow(clippy::panic)]
     fn undetermined(d: Determination<Enqueued>) -> String {
-        d.require()
-            .expect_err("expected Undetermined")
-            .reason()
-            .expect("an Undetermined verdict carries a reason")
-            .as_str()
-            .to_string()
+        match d.require() {
+            Required::Determined(v) => panic!("expected Undetermined, got Determined({v:?})"),
+            Required::Blocked(verdict) => verdict
+                .reason()
+                .expect("an Undetermined verdict carries a reason")
+                .as_str()
+                .to_string(),
+        }
     }
 
     fn tags_of(stdout: &str) -> HashSet<String> {

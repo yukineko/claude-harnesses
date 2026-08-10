@@ -243,6 +243,16 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("whose value only exists at run time") {
         return "unresolvable-command-word";
     }
+    // Kept separate from `unresolvable-command-word` even though both come out
+    // of the same arm: this one says the head WAS resolved and the resolution
+    // then lost the working directory an earlier `cd` had established, so the
+    // segment's relative operands were judged against the wrong tree. That is a
+    // gap in the resolver's own plumbing, not a property of the command, and it
+    // has a different fix — folding it into the other id would hide how often
+    // the resolution is being thrown away.
+    if reason.contains("moved the working directory and this segment's relative operands") {
+        return "resolved-head-lost-cwd";
+    }
     if reason.contains("is not a command blastguard recognises") {
         return "unrecognised-wrapper";
     }
@@ -423,6 +433,14 @@ mod tests {
             ),
             // rm -d/--dir on a protected container.
             ("Bash", json!({ "command": "rm -d .claude" })),
+            // Round 5 (adversarial second author of the expansion-valued
+            // command-word resolver). Resolving the head can lose a `cd` the
+            // rest of the line established, so the arm refuses rather than
+            // judging the operands against the wrong tree.
+            (
+                "Bash",
+                json!({ "command": "cd .githooks; BIN=/bin/rm; $BIN pre-commit" }),
+            ),
         ];
 
         for (tool, input) in cases {
@@ -433,6 +451,26 @@ mod tests {
                 "reason {reason:?} (from {tool} {input}) did not classify to a stable rule id"
             );
         }
+    }
+
+    #[test]
+    fn a_resolution_that_lost_the_cwd_gets_its_own_id_not_the_unresolvable_one() {
+        // `every_detect_deny_path_maps_to_a_known_rule_id` only proves this
+        // reason is not "unknown"; it would stay green if the arm were folded
+        // into `unresolvable-command-word`. The two say different things — one
+        // is "the text does not name the program", the other is "it does, and I
+        // threw away the directory it would have run in" — and `retro` counts
+        // by id, so collapsing them would make the second invisible inside the
+        // first. Pin the id itself.
+        let reason = deny_reason(
+            "Bash",
+            json!({ "command": "cd .githooks; BIN=/bin/rm; $BIN pre-commit" }),
+        );
+        assert_eq!(
+            rule_id(&reason),
+            "resolved-head-lost-cwd",
+            "reason: {reason:?}"
+        );
     }
 
     #[test]

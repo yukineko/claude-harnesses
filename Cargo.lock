@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.2.13"
+version = "0.2.20"
 dependencies = [
  "anyhow",
  "clap",
@@ -162,7 +162,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.41"
+version = "0.2.50"
 dependencies = [
  "globset",
  "harness-core",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.122"
+version = "0.7.125"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -468,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "anyhow",
  "chrono",
@@ -538,7 +538,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flow"
-version = "0.2.2"
+version = "0.2.5"
 dependencies = [
  "clap",
  "serde",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.5"
+version = "0.2.7"
 dependencies = [
  "anyhow",
  "chrono",
@@ -865,7 +865,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "clap",
@@ -935,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.37"
+version = "0.1.39"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1148,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "schemaguard"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "clap",
@@ -1276,7 +1276,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "specguard"
-version = "0.2.50"
+version = "0.2.51"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -1300,7 +1300,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "stuckguard"
-version = "0.1.27"
+version = "0.1.30"
 dependencies = [
  "anyhow",
  "chrono",

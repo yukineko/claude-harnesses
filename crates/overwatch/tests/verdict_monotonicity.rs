@@ -50,7 +50,7 @@
 //! filed, not swept up.
 
 use harness_core::degrade::{explain_break, Degradation};
-use harness_core::verdict::Determination;
+use harness_core::verdict::{Determination, Required};
 use overwatch::audit_round::{self, AuditRound, DEFAULT_CONVERGENCE_WINDOW};
 use proptest::prelude::*;
 
@@ -61,7 +61,24 @@ use proptest::prelude::*;
 /// `harness_core::degrade` needs: `None` and `Some(false)` are both restrictive,
 /// `Some(true)` is the permissive one.
 fn converging_verdict(ledger: &str) -> Option<bool> {
-    let rounds = audit_round::parse_rounds(ledger).require().ok()?;
+    // `require()`'s `Required` has no `unwrap_err`/`.ok()`, so both arms are
+    // matched explicitly here. `Blocked` is NOT a "should never happen"
+    // corner this test would rather crash on: it is the exact case this
+    // file's property drives on purpose — a non-boundary truncate/corrupt
+    // degradation yields bytes `parse_rounds` cannot read (see
+    // `an_unparseable_record_is_undetermined_not_a_shorter_history` below),
+    // and the module docs above name this outcome explicitly ("the report
+    // may go undetermined ... but it must never become true"). Panicking on
+    // `Blocked` would abort the monotonicity property on that documented,
+    // expected path instead of exercising it, and — per this file's own
+    // header comment — resolving "could not read" to anything other than the
+    // restrictive `None` is exactly the fail-open this test exists to catch.
+    // So `Blocked` maps to `None`, the same restrictive answer the old
+    // `.require().ok()?` produced; nothing about the oracle's meaning changes.
+    let rounds = match audit_round::parse_rounds(ledger).require() {
+        Required::Determined(rounds) => rounds,
+        Required::Blocked(_verdict) => return None,
+    };
     // `converging` is itself `Option<bool>` — `None` when there are too few
     // rounds to read a trend — so the two ways of failing to reach a verdict
     // (unreadable ledger, unanswerable question) flatten to the same

@@ -73,7 +73,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use harness_core::boundary;
-use harness_core::verdict::{Determination, Reason, Verdict};
+use harness_core::verdict::{Determination, Reason, Required, Verdict};
 
 /// The environment variable that carries a human's stated reason for bypassing
 /// this gate. Session-scoped by construction: it lives in one process's
@@ -366,8 +366,8 @@ fn adjudicate(obs: Observations) -> Adjudication {
     } = obs;
 
     let role = match tree_role.require() {
-        Ok(r) => r,
-        Err(v) => return Adjudication::verdict(v),
+        Required::Determined(r) => r,
+        Required::Blocked(v) => return Adjudication::verdict(v),
     };
     if role == TreeRole::Linked {
         // Exclusion 1: a linked worktree has its own index. This is the
@@ -377,8 +377,8 @@ fn adjudicate(obs: Observations) -> Adjudication {
     }
 
     let integration = match integration.require() {
-        Ok(i) => i,
-        Err(v) => return Adjudication::verdict(v),
+        Required::Determined(i) => i,
+        Required::Blocked(v) => return Adjudication::verdict(v),
     };
     if let Some(integration) = integration {
         // Exclusion 2: §8 permits integration in the primary tree, and a gate
@@ -389,8 +389,8 @@ fn adjudicate(obs: Observations) -> Adjudication {
     }
 
     let staged = match staged_paths.require() {
-        Ok(s) => s,
-        Err(v) => return Adjudication::verdict(v),
+        Required::Determined(s) => s,
+        Required::Blocked(v) => return Adjudication::verdict(v),
     };
     if staged.is_empty() {
         // Exclusion 3: no shared-index content is being committed.
@@ -398,8 +398,8 @@ fn adjudicate(obs: Observations) -> Adjudication {
     }
 
     let peers = match peers.require() {
-        Ok(p) => p,
-        Err(v) => return Adjudication::verdict(v),
+        Required::Determined(p) => p,
+        Required::Blocked(v) => return Adjudication::verdict(v),
     };
 
     // Exclusion 4 is the empty-findings case below: observed, no peer.
@@ -434,8 +434,8 @@ fn adjudicate(obs: Observations) -> Adjudication {
 /// not knowing which tree this is means not knowing whether the gate applies.
 pub fn observe_tree_role(repo: &Path) -> Determination<TreeRole> {
     let own = match git_line(repo, &["rev-parse", "--absolute-git-dir"]).require() {
-        Ok(v) => v,
-        Err(v) => {
+        Required::Determined(v) => v,
+        Required::Blocked(v) => {
             return Determination::undetermined(format!(
                 "cannot resolve --absolute-git-dir ({}); which working tree this is cannot be told",
                 v.reason().map_or("no reason", Reason::as_str)
@@ -443,8 +443,8 @@ pub fn observe_tree_role(repo: &Path) -> Determination<TreeRole> {
         }
     };
     let common = match git_line(repo, &["rev-parse", "--git-common-dir"]).require() {
-        Ok(v) => v,
-        Err(v) => {
+        Required::Determined(v) => v,
+        Required::Blocked(v) => {
             return Determination::undetermined(format!(
                 "cannot resolve --git-common-dir ({}); which working tree this is cannot be told",
                 v.reason().map_or("no reason", Reason::as_str)
@@ -507,8 +507,8 @@ pub fn observe_integration(
     }
 
     let git_dir = match git_line(repo, &["rev-parse", "--absolute-git-dir"]).require() {
-        Ok(v) => PathBuf::from(v),
-        Err(v) => {
+        Required::Determined(v) => PathBuf::from(v),
+        Required::Blocked(v) => {
             return Determination::undetermined(format!(
                 "cannot resolve --absolute-git-dir ({}); an in-progress integration cannot be \
                  ruled out",
@@ -523,14 +523,14 @@ pub fn observe_integration(
         ("REVERT_HEAD", IntegrationKind::Revert),
     ] {
         match boundary::read_to_string(&git_dir.join(name)).require() {
-            Ok(Some(_)) => {
+            Required::Determined(Some(_)) => {
                 return Determination::known(Some(Integration {
                     kind,
                     evidence: IntegrationEvidence::OnDisk(name),
                 }))
             }
-            Ok(None) => {}
-            Err(_) => {
+            Required::Determined(None) => {}
+            Required::Blocked(_) => {
                 return Determination::undetermined(format!(
                     "cannot read {name}; an in-progress integration cannot be ruled out"
                 ))
@@ -564,8 +564,8 @@ pub fn observe_integration(
 /// Paths staged for the pending commit.
 pub fn observe_staged(repo: &Path) -> Determination<Vec<String>> {
     match git_lines(repo, &["diff", "--cached", "--name-only"]).require() {
-        Ok(lines) => Determination::known(lines),
-        Err(v) => Determination::undetermined(format!(
+        Required::Determined(lines) => Determination::known(lines),
+        Required::Blocked(v) => Determination::undetermined(format!(
             "`git diff --cached --name-only` did not run to a conclusion ({}); what this \
              commit contains is unknown",
             v.reason().map_or("no reason", Reason::as_str)
@@ -586,9 +586,11 @@ pub fn observe_peers(repo: &Path, self_session: Option<&str>) -> Determination<V
     let mut peers = Vec::new();
 
     let overwatch_json = match run_tool(repo, "overwatch", &["status", "--json"]).require() {
-        Ok(s) => s,
-        Err(Verdict::Undetermined(r)) => return Determination::Undetermined(r),
-        Err(_) => return Determination::undetermined("overwatch status --json: no result"),
+        Required::Determined(s) => s,
+        Required::Blocked(Verdict::Undetermined(r)) => return Determination::Undetermined(r),
+        Required::Blocked(_) => {
+            return Determination::undetermined("overwatch status --json: no result")
+        }
     };
     match parse_overwatch_sessions(&overwatch_json, self_session) {
         Determination::Known(mut found) => peers.append(&mut found),
@@ -598,9 +600,11 @@ pub fn observe_peers(repo: &Path, self_session: Option<&str>) -> Determination<V
     let repo_arg = repo.display().to_string();
     let backlog_json =
         match run_tool(repo, "backlog", &["lock", "status", "--project", &repo_arg]).require() {
-            Ok(s) => s,
-            Err(Verdict::Undetermined(r)) => return Determination::Undetermined(r),
-            Err(_) => return Determination::undetermined("backlog lock status: no result"),
+            Required::Determined(s) => s,
+            Required::Blocked(Verdict::Undetermined(r)) => return Determination::Undetermined(r),
+            Required::Blocked(_) => {
+                return Determination::undetermined("backlog lock status: no result")
+            }
         };
     match parse_backlog_lock(&backlog_json, self_session) {
         Determination::Known(Some(peer)) => peers.push(peer),
@@ -732,9 +736,9 @@ fn run_tool(repo: &Path, program: &str, args: &[&str]) -> Determination<String> 
     let mut cmd = Command::new(program);
     cmd.args(args).current_dir(repo);
     match boundary::run(&mut cmd).require() {
-        Ok(out) => out.stdout_on_success(),
-        Err(Verdict::Undetermined(r)) => Determination::Undetermined(r),
-        Err(_) => Determination::undetermined(format!("{program}: no result")),
+        Required::Determined(out) => out.stdout_on_success(),
+        Required::Blocked(Verdict::Undetermined(r)) => Determination::Undetermined(r),
+        Required::Blocked(_) => Determination::undetermined(format!("{program}: no result")),
     }
 }
 
@@ -797,8 +801,8 @@ fn toplevel(cwd: &Path) -> Determination<PathBuf> {
 pub fn run_guard(cwd: &Path, json: bool) -> i32 {
     let override_raw = std::env::var(OVERRIDE_ENV).ok();
     let root = match toplevel(cwd).require() {
-        Ok(p) => p,
-        Err(verdict) => {
+        Required::Determined(p) => p,
+        Required::Blocked(verdict) => {
             // Not inside a work tree, or git could not answer: which tree this
             // is cannot be told, which blocks (the override still applies).
             let decision = Decision {

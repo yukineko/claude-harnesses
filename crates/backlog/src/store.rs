@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -399,7 +400,11 @@ pub fn add_with_weight(
 ) -> Result<String> {
     let is_bare =
         !(project.starts_with('/') || project.starts_with('.') || project.starts_with('~'));
-    let project = &canonicalize_project(project);
+    let CanonicalProject {
+        label: project,
+        unresolved: project_unresolved,
+    } = canonicalize_project_with_marker(project);
+    let project = &project;
     with_tasks_lock(path, || {
         let mut tasks = load(path)?;
         if is_bare {
@@ -413,6 +418,9 @@ pub fn add_with_weight(
             id: id.clone(),
             title: title.to_string(),
             project: project.to_string(),
+            // Carry the undetermined-scope degrade onto the record itself, so
+            // a guessed label never reads as a resolved one later.
+            project_unresolved,
             tags,
             status: STATUS_PENDING.to_string(),
             notes: notes.to_string(),
@@ -598,6 +606,15 @@ pub fn next(
 /// Selects the single highest-priority eligible task from `tasks` (shared by
 /// [`next`] and [`next_claim`] so both use IDENTICAL candidate-selection and
 /// ordering logic).
+///
+/// Unlike [`list`], this does NOT exempt `project_unresolved` tasks from
+/// `project_filter`. The two commands differ in what a wrong answer costs: a
+/// listing that hides a task loses information (so an unresolved label must
+/// not filter it out), whereas `next` HANDS a task to a driver that will act
+/// on it — dispatching work on a guessed project label could run it in the
+/// wrong checkout entirely. Excluding an unresolved task here is the
+/// restrictive side, and it is not silent: the task is still visible (and
+/// marked) in `list`.
 fn pick_next<'a>(
     tasks: &'a [Task],
     now: i64,
@@ -928,7 +945,11 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
 ) -> Result<String> {
     let is_bare =
         !(project.starts_with('/') || project.starts_with('.') || project.starts_with('~'));
-    let project = &canonicalize_project(project);
+    let CanonicalProject {
+        label: project,
+        unresolved: project_unresolved,
+    } = canonicalize_project_with_marker(project);
+    let project = &project;
     with_tasks_lock(path, || {
         let mut tasks = load(path)?;
         if is_bare {
@@ -942,6 +963,10 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
             id: id.clone(),
             title: title.to_string(),
             project: project.to_string(),
+            // Same marker as `add_with_weight`: every write path records the
+            // undetermined-scope degrade, otherwise the binary's real entry
+            // point (this one) would be the fail-open hole.
+            project_unresolved,
             tags,
             status: STATUS_PENDING.to_string(),
             notes: notes.to_string(),
@@ -970,6 +995,14 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
 }
 
 /// タスク一覧を返す。フィルタは all None で全件。
+///
+/// One deliberate exception to `project_filter`: a task marked
+/// `project_unresolved` (written while its project identity was UNDETERMINED,
+/// so its stored label is a fallback guess) is NOT filtered out on that
+/// guessed label — it is listed regardless, and `main.rs` renders it as
+/// `unresolved` so a reader can tell it apart. Filtering it would hide the
+/// task from every checkout with no diagnostic. Tasks without the marker are
+/// filtered exactly as before.
 pub fn list(
     path: &Path,
     tag_filter: Option<&str>,
@@ -994,7 +1027,17 @@ pub fn list(
             None => true,
         })
         .filter(|t| match project_filter {
-            Some(proj) => project_matches(&t.project, proj),
+            // A task whose `project` was recorded UNDETERMINED (see
+            // `Task::project_unresolved`) is exempt from this filter: its
+            // label is a guess, so a non-match proves nothing about where the
+            // task belongs, and dropping it here would turn "could not
+            // determine the project" into "there is nothing here" — the
+            // collapse CLAUDE.md §3 forbids. Note this exempts only the
+            // explicitly-marked tasks; every other task is filtered exactly as
+            // before, so this is not a weakening of the filter itself.
+            // `main.rs` renders the exempted rows as `unresolved` so they are
+            // never mistaken for tasks that genuinely scope here.
+            Some(proj) => t.project_unresolved || project_matches(&t.project, proj),
             None => true,
         })
         .filter(|t| match status_filter {
@@ -1010,6 +1053,35 @@ pub fn list(
 
 // ---- helpers ----------------------------------------------------------------
 
+/// The outcome of normalizing a `--project` value: the canonical label, plus
+/// whether that label was actually RESOLVED or is a fallback GUESS substituted
+/// for an identity that could not be determined. Two answers, because
+/// collapsing them into the label alone is precisely what made a guessed
+/// project indistinguishable from a resolved one downstream (CLAUDE.md §3).
+/// Produced by [`canonicalize_project_with_marker`].
+pub(crate) struct CanonicalProject {
+    /// The project label to store (or filter with). When `unresolved` is set
+    /// this is the plain git-toplevel fallback, NOT a resolved identity.
+    pub(crate) label: String,
+    /// **Definition, and the whole contract of this field: `true` exactly when
+    /// a GUESS WAS SUBSTITUTED** — this checkout's identity could not be
+    /// determined, so `label` holds a fallback that may not be what a peer
+    /// checkout later filters by.
+    ///
+    /// It is deliberately NOT "anything unusual happened". In particular a
+    /// path that is DEFINITIVELY ABSENT on this machine does not set it: no
+    /// guess was substituted there, the caller's own explicit label was
+    /// adopted verbatim, and every checkout normalizes it identically, so it
+    /// can never go missing the way a guess can. Conflating absent with
+    /// undetermined would flag every legitimate cross-machine label (this
+    /// repo's own store holds `C:/Users/.../harness`) and leave the marker
+    /// carrying no signal — the `Absent` / `Undetermined` / `Known` distinction
+    /// CLAUDE.md §3 names explicitly.
+    ///
+    /// Never set for a bare label or a successfully resolved path.
+    pub(crate) unresolved: bool,
+}
+
 /// Normalize a `--project` value before it is stored (backlog id b92a7a77):
 /// a path-shaped value (starts with `/`, `.`, or `~`) is resolved to its
 /// canonical git repo root — mirroring `harness_core::discovery`'s own
@@ -1022,19 +1094,262 @@ pub fn list(
 /// unrelated directory that coincidentally shares the name. `project_matches`
 /// separately bridges bare labels already in the store against absolute
 /// paths at read time.
-pub(crate) fn canonicalize_project(project: &str) -> String {
+///
+/// A path-shaped value that names a LINKED WORKTREE (its `.git` is a file, not
+/// a directory) is further normalized to the MAIN working tree it belongs to
+/// via [`canonical_project_id`] — so `--project <worktree>` and
+/// `--project <that worktree's main tree>` land on the identical stored
+/// string, and a task recorded from either checkout is visible from the
+/// other's default `list` scope (which resolves the SAME way — see
+/// `main.rs`'s `List` handler). This normalization is deliberately
+/// best-effort: when the worktree's main tree cannot actually be resolved
+/// (`canonical_project_id` returns `Undetermined` — e.g. a dangling `.git`
+/// link), `add`/`edit` must still succeed (write-time canonicalization has
+/// never been allowed to block a write), so this falls back to the plain
+/// git-toplevel resolution `resolve_repo_root` already provided — but NOT
+/// silently: a diagnostic naming the reason goes to stderr first, since a
+/// task stored under this unresolved fallback label may not match the
+/// canonicalized string a peer checkout later filters by, and so may not
+/// appear in that checkout's default (filtered) `list` (see CLAUDE.md §3 —
+/// an undetermined outcome must never look identical to a resolved one).
+///
+/// **ABSENT IS NOT UNDETERMINED.** A path that does not exist on this machine
+/// is checked FIRST and is not an undetermined scope at all: there is nothing
+/// here to resolve, so no guess is substituted — the caller's explicit label
+/// is adopted (via the same `resolve_repo_root` lexical normalization both the
+/// write and the read side apply, so the two always agree) and reported as
+/// resolved, silently. This is the normal, supported cross-machine case: the
+/// store is shared, and a label like `C:/Users/.../harness` or another
+/// checkout's path is meaningful even where it cannot be stat'ed. Emitting the
+/// undetermined-scope warning here would be prose that contradicts the code
+/// (nothing was "falling back to an unresolved label"), and marking it would
+/// flag every such task forever.
+///
+/// The discriminator is "existence was DISPROVEN", not "existence could not be
+/// checked": a `symlink_metadata` error other than `NotFound` (permissions, an
+/// IO fault) means we cannot tell whether the path is there, which is itself an
+/// undetermined outcome and resolves to the RESTRICTIVE side (marked, with a
+/// diagnostic) rather than being waved through as absent.
+/// The stderr diagnostic alone is NOT enough, though: it is gone the moment
+/// the command exits, while the guessed label lives on in the store looking
+/// exactly like a resolved one. So this returns the degrade as DATA —
+/// [`CanonicalProject::unresolved`] — and every write path persists it onto
+/// the task (`Task::project_unresolved`), which is what lets `list` keep the
+/// task visible and render it as a guess instead of silently filtering it out.
+pub(crate) fn canonicalize_project_with_marker(project: &str) -> CanonicalProject {
     if !(project.starts_with('/') || project.starts_with('.') || project.starts_with('~')) {
-        return project.to_string();
+        return CanonicalProject {
+            label: project.to_string(),
+            unresolved: false,
+        };
     }
     let expanded = harness_core::config::expand_tilde(project);
-    harness_core::discovery::resolve_repo_root(&expanded)
+
+    // ABSENT vs UNDETERMINED, decided before any identity resolution is
+    // attempted (see this function's doc comment). `symlink_metadata` — not
+    // `exists()` — because `exists()` follows symlinks and so answers "false"
+    // for a DANGLING symlink, which is a path that is really there and whose
+    // identity genuinely cannot be resolved. That case must reach the
+    // undetermined branch below, not be mistaken for absent.
+    match std::fs::symlink_metadata(&expanded) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Existence DISPROVEN: nothing to resolve, nothing guessed.
+            return CanonicalProject {
+                label: repo_toplevel_label(&expanded),
+                unresolved: false,
+            };
+        }
+        Err(e) => {
+            // Existence could not be CHECKED (permissions, IO fault). "Cannot
+            // determine" is not "absent" — resolve to the restrictive side.
+            eprintln!(
+                "warning: could not resolve project scope for {} (could not determine whether it \
+                 exists: {e}); falling back to the unresolved repo-toplevel label — this task may \
+                 not appear under the default (filtered) `list` from other checkouts",
+                expanded.display(),
+            );
+            return CanonicalProject {
+                label: repo_toplevel_label(&expanded),
+                unresolved: true,
+            };
+        }
+        Ok(_) => {}
+    }
+
+    match canonical_project_id(&expanded) {
+        Determination::Known(root) => CanonicalProject {
+            label: root.to_string_lossy().into_owned(),
+            unresolved: false,
+        },
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "warning: could not resolve project scope for {} ({}); falling back to the \
+                 unresolved repo-toplevel label — this task may not appear under the default \
+                 (filtered) `list` from other checkouts",
+                expanded.display(),
+                why.as_str()
+            );
+            CanonicalProject {
+                label: repo_toplevel_label(&expanded),
+                unresolved: true,
+            }
+        }
+    }
+}
+
+/// The plain git-toplevel fallback label, shared by every branch of
+/// [`canonicalize_project_with_marker`] that does not have a resolved identity
+/// to use. For an absent path `resolve_repo_root` bottoms out in a purely
+/// lexical normalization (no stat, no `git`), which is what makes the write
+/// side and the read side agree on the SAME string for a path neither of them
+/// can see.
+fn repo_toplevel_label(expanded: &Path) -> String {
+    harness_core::discovery::resolve_repo_root(expanded)
         .to_string_lossy()
         .into_owned()
 }
 
+/// Label-only view of [`canonicalize_project_with_marker`], for the callers
+/// that consume a canonical label WITHOUT persisting it: the read-side
+/// `--project` filters in [`list`]/[`next`]/[`next_claim`] and
+/// `lock::project_slug`. Dropping the `unresolved` bit is safe *only* here —
+/// nothing durable is written under the guessed label by these callers, and
+/// the stderr diagnostic from the shared implementation still fires — so
+/// "cannot determine" never reaches a persisted record looking resolved.
+/// Any NEW caller that stores what this returns must use
+/// [`canonicalize_project_with_marker`] instead.
+pub(crate) fn canonicalize_project(project: &str) -> String {
+    canonicalize_project_with_marker(project).label
+}
+
+/// This checkout's canonical repo identity (CA-backlog-008 / CLAUDE.md §8's
+/// worktree-isolation follow-through): `Known` when project scope was
+/// actually resolved; `Undetermined` when resolution was attempted but could
+/// not reach a conclusion. This is deliberately NEVER a silent fallback to
+/// the raw, unresolved `cwd` — the caller decides what an undetermined scope
+/// means (`canonicalize_project` degrades gracefully; `main.rs`'s `list`
+/// default scope hard-errors, since an empty filtered result there is
+/// indistinguishable from a genuinely empty queue — see that call site).
+///
+/// Filesystem-only (no `git` subprocess), mirroring
+/// `harness_core::trust::resolve`'s worktree-inheritance algorithm exactly —
+/// the SAME verified (not assumed) `gitdir:` walk, ported here because that
+/// function is private to `harness-core`.
+///
+/// Resolution:
+///   1. Nearest ancestor of `cwd` (inclusive) holding a `.git` entry — the
+///      IDENTICAL scan `config::repo_root` uses to pick the store's
+///      LOCATION (a separate concern: that scan decides which file
+///      `tasks.toml` is; this one decides what project IDENTITY a resolved
+///      checkout maps to). No ancestor found: this checkout isn't inside any
+///      repo at all — a documented, intentional case (see
+///      `Config::tasks_path_for`'s doc comment on its own legacy `~/.backlog`
+///      fallback), not a "cannot determine" defect — so this is `Known(cwd)`
+///      (canonicalized) rather than `Undetermined`, UNLESS canonicalizing
+///      `cwd` itself fails (a genuine IO "could not determine").
+///   2. `.git` is a DIRECTORY: this checkout IS a main working tree; its own
+///      canonicalized root is the identity.
+///   3. `.git` is a FILE (a linked worktree): resolve to the MAIN working
+///      tree it belongs to via [`main_worktree_of`]. A dangling worktree
+///      link, an unusual `GIT_DIR` layout, or an unreadable gitfile all make
+///      that resolution fail — and are exactly the "cannot determine" case
+///      this function exists to surface as `Undetermined` rather than
+///      silently falling back to this checkout's own (wrong) path.
+pub(crate) fn canonical_project_id(cwd: &Path) -> Determination<PathBuf> {
+    let Some(root) = crate::config::repo_root(cwd) else {
+        return match cwd.canonicalize() {
+            Ok(c) => Determination::known(c),
+            Err(e) => Determination::undetermined(format!(
+                "{} is outside any repo and could not itself be canonicalized: {e}",
+                cwd.display()
+            )),
+        };
+    };
+    let dot_git = root.join(".git");
+    match std::fs::symlink_metadata(&dot_git) {
+        Ok(meta) if meta.is_file() => match main_worktree_of(&root) {
+            Some(main) => match main.canonicalize() {
+                Ok(c) => Determination::known(c),
+                Err(e) => Determination::undetermined(format!(
+                    "{}'s main working tree {} could not be canonicalized: {e}",
+                    root.display(),
+                    main.display()
+                )),
+            },
+            None => Determination::undetermined(format!(
+                "{} is a linked worktree whose main working tree could not be resolved \
+                 from its `.git` file (dangling link or unusual layout)",
+                root.display()
+            )),
+        },
+        Ok(_) => match root.canonicalize() {
+            Ok(c) => Determination::known(c),
+            Err(e) => Determination::undetermined(format!(
+                "repo root {} could not be canonicalized: {e}",
+                root.display()
+            )),
+        },
+        Err(e) => Determination::undetermined(format!("could not stat {}: {e}", dot_git.display())),
+    }
+}
+
+/// If `root` is a **linked** git worktree, the main working tree it belongs
+/// to. Ported from `harness_core::trust::main_worktree_of` (private to that
+/// crate) — see its doc comment for the full rationale; this is the identical
+/// algorithm: read the `gitdir:` gitfile, walk up
+/// `.../<common-git-dir>/worktrees/<name>`, and VERIFY the inference (not
+/// assume it from path shape alone) by canonicalizing both the common git dir
+/// and the candidate main tree's own `.git` and requiring them to be equal.
+/// Any IO failure, an unusual layout, or a `GIT_DIR` that doesn't exist
+/// (a dangling worktree link) all yield `None` — the restricted side, since
+/// [`canonical_project_id`] treats `None` as "cannot determine".
+fn main_worktree_of(root: &Path) -> Option<PathBuf> {
+    let dot_git = root.join(".git");
+    if !std::fs::symlink_metadata(&dot_git).ok()?.is_file() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&dot_git).ok()?;
+    let target = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("gitdir:"))?
+        .trim();
+    if target.is_empty() {
+        return None;
+    }
+    let target = Path::new(target);
+    let git_dir = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        root.join(target)
+    };
+
+    // .../<common-git-dir>/worktrees/<name>
+    let worktrees = git_dir.parent()?;
+    if worktrees.file_name()? != "worktrees" {
+        return None;
+    }
+    let common = worktrees.parent()?;
+    let candidate = common.parent()?;
+
+    // Verify the inference instead of trusting the path shape: the
+    // candidate's own `.git` must BE this common git dir.
+    let common_key = std::fs::canonicalize(common).ok()?;
+    let candidate_key = std::fs::canonicalize(candidate.join(".git")).ok()?;
+    if common_key != candidate_key {
+        return None;
+    }
+    Some(candidate.to_path_buf())
+}
+
 /// project_filter のマッチング:
 /// Task.project が filter と完全一致、または filter で始まる場合にマッチ。
-fn project_matches(task_project: &str, filter: &str) -> bool {
+///
+/// `pub(crate)`: `divergence::scan_legacy` compares the legacy store's tasks
+/// against a checkout with the IDENTICAL rule `list` uses, so the two can never
+/// drift on what "belongs to this project" means — a divergence report computed
+/// with looser matching than the listing it is warning about would flag work
+/// that `list` would have shown anyway.
+pub(crate) fn project_matches(task_project: &str, filter: &str) -> bool {
     if task_project == filter {
         return true;
     }
@@ -1564,6 +1879,7 @@ mod tests {
                     id: format!("exp{i}"),
                     title: format!("expired-{i}"),
                     project: "/repo".to_string(),
+                    project_unresolved: false,
                     tags: vec![],
                     status: STATUS_FAILED.to_string(),
                     notes: String::new(),
@@ -2127,6 +2443,7 @@ mod tests {
                     id: format!("seed{iter}-{i}"),
                     title: format!("seeded-{iter}-{i}"),
                     project: "/repo".to_string(),
+                    project_unresolved: false,
                     tags: vec![],
                     status: STATUS_PENDING.to_string(),
                     notes: String::new(),
@@ -2484,6 +2801,7 @@ mod tests {
                             id: format!("w{w}-{i}"),
                             title: format!("writer-{w}-task-{i}"),
                             project: "/repo".to_string(),
+                            project_unresolved: false,
                             tags: vec![],
                             status: STATUS_PENDING.to_string(),
                             notes: String::new(),
@@ -2556,6 +2874,7 @@ mod tests {
                 id: "aaaa1111".to_string(),
                 title: "A".to_string(),
                 project: "/repo".to_string(),
+                project_unresolved: false,
                 tags: vec![],
                 status: STATUS_PENDING.to_string(),
                 notes: String::new(),
@@ -2664,6 +2983,7 @@ mod tests {
                 id: "stale".to_string(),
                 title: "stale-claim".to_string(),
                 project: "/repo".to_string(),
+                project_unresolved: false,
                 tags: vec![],
                 status: STATUS_CLAIMED.to_string(),
                 notes: String::new(),
@@ -2678,6 +2998,7 @@ mod tests {
                 id: "fresh".to_string(),
                 title: "fresh-claim".to_string(),
                 project: "/repo".to_string(),
+                project_unresolved: false,
                 tags: vec![],
                 status: STATUS_CLAIMED.to_string(),
                 notes: String::new(),

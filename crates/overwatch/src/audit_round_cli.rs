@@ -30,6 +30,7 @@ use crate::lock::LeaseLock;
 use crate::review_finding::ReviewFinding;
 use crate::store;
 use anyhow::Result;
+use harness_core::verdict::Required;
 use std::path::Path;
 
 /// Record one Continuous-Audit round's metrics. Called by
@@ -277,8 +278,8 @@ fn close_at(cwd: &Path, round: &str, tests: u64) -> Result<CloseOutcome> {
     // we failed to parse. `unwrap_or_default()` used to make that the quiet
     // default path.
     let rounds = match store::read_audit_rounds(cwd)?.require() {
-        Ok(r) => r,
-        Err(v) => {
+        Required::Determined(r) => r,
+        Required::Blocked(v) => {
             anyhow::bail!(
                 "refusing to close round {round:?}: {}. Closing rewrites the \
                  whole ledger, so proceeding from a partial read would drop \
@@ -323,8 +324,8 @@ pub fn metrics(json: bool, window: Option<usize>) -> Result<()> {
     // metrics over `unwrap_or_default()`'s empty vec is how `converging: true`
     // became reachable by damaging the file.
     let rounds = match store::read_audit_rounds(&cwd)?.require() {
-        Ok(r) => r,
-        Err(v) => {
+        Required::Determined(r) => r,
+        Required::Blocked(v) => {
             anyhow::bail!(
                 "cannot report audit metrics: {}",
                 v.reason()

@@ -22,7 +22,10 @@
 //! unparseable output) does NOT allow silently: it blocks up to `max_attempts`
 //! with a loud, escapable reason, then gives up loudly, so a broken checker can
 //! never become a bypass. A truncated diff (unchecked tail) is treated the same
-//! way. A genuine *tool* error still exits 0 via the panic guard in `main`.
+//! way, and so is a diff that could not be READ in full — including one where
+//! only some of the reads feeding it succeeded, which is never handed onward as
+//! though it were the whole change (see [`decide_diff_failed`]). A genuine
+//! *tool* error still exits 0 via the panic guard in `main`.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -216,10 +219,29 @@ pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> D
     if files.len() < cfg.min_changed_files {
         return allow("no-code-changes", st);
     }
+    // The diff itself is three-valued. `Undetermined` means at least one read
+    // feeding it did not run to a conclusion, so what we hold is either
+    // nothing or a fragment — and a fragment is the more dangerous of the two,
+    // because it looks like a whole diff. Neither may be judged. Fail closed
+    // (bounded & escapable), exactly like the failed-scan guard above.
     let crate::git::DiffText {
         text: diff,
         truncated,
-    } = crate::git::diff_text(root, &files, cfg.max_diff_bytes);
+    } = match crate::git::diff_text(root, &files, cfg.max_diff_bytes) {
+        Determination::Known(d) => d,
+        Determination::Undetermined(why) => {
+            let prior_attempts = if now() - st.last_ts > cfg.reset_after_secs {
+                0
+            } else {
+                st.attempts
+            };
+            return decide_diff_failed(cfg, why.as_str(), files, prior_attempts);
+        }
+    };
+    // Reached ONLY when every read succeeded and the combined diff really was
+    // empty — e.g. the change was reverted between `changed_files` and this
+    // call. It is no longer the resting place of an unread diff: that answer
+    // is `Undetermined` above and blocks. There is nothing to check, so allow.
     if diff.trim().is_empty() {
         return allow("empty-diff", st);
     }
@@ -603,6 +625,84 @@ fn decide_scan_failed(cfg: &Config, prior_attempts: u32) -> Decision {
         attempts,
         last_hash: String::new(),
     }
+}
+
+/// The diff could not be read in full, so there is nothing trustworthy to
+/// check the properties against. Fail *closed* (but bounded), modeled exactly
+/// on [`decide_scan_failed`] — the sibling one step earlier in the pipeline.
+///
+/// This closes backlog `87dbfbb8` and `d8e22b26`. The two shapes it catches
+/// are different in how loud they are and identical in how they used to end:
+///
+/// * **Nothing readable.** A tracked file whose working-tree content is not
+///   valid UTF-8 (and has no NUL, so `git` emits it as a textual diff) made
+///   the whole `git diff` undecodable. `diff_text` returned `text: ""`, and
+///   `evaluate`'s `empty-diff` arm ALLOWED the stop — while `changed_files`
+///   was simultaneously answering `Files(["bad.rs"])`. The gate said "no
+///   changes here" about a change it had already been told existed.
+/// * **Half readable.** One sub-command readable, another not: the surviving
+///   half was returned with `truncated: false`, i.e. presented as the COMPLETE
+///   diff. `truncated` is the only incompleteness signal `evaluate` has, so
+///   the omission was invisible and the properties were judged against a diff
+///   missing a file.
+///
+/// `files` is carried into the block purely so the message can name what was
+/// *supposed* to be checked; NO per-property violation is attributed (nothing
+/// was checked, so attributing property ids would pollute the property-keyed
+/// fleet-correlation store — CA-propguard-03/04) and NO hash is recorded
+/// (there is no diff to certify, so `already_verified` must not arm).
+fn decide_diff_failed(
+    cfg: &Config,
+    why: &str,
+    files: Vec<String>,
+    prior_attempts: u32,
+) -> Decision {
+    let attempts = prior_attempts + 1;
+    if attempts > cfg.max_attempts {
+        eprintln!(
+            "propguard: WARNING the diff still could not be read in full after {max} \
+             attempt(s) ({why}) — allowing the stop with the change UNOBSERVED (properties \
+             UNVERIFIED). Fix the unreadable content (see `propguard status`) or set \
+             PROPGUARD_DISABLE=1.",
+            max = cfg.max_attempts,
+        );
+        return Decision::Allow {
+            tag: "diff-read-failed-giveup",
+            attempts: 0,
+            last_hash: String::new(),
+        };
+    }
+    Decision::Block {
+        reason: diff_failed_reason(why, &files, attempts, cfg.max_attempts),
+        tag: "diff-read-failed",
+        files,
+        properties: Vec::new(),
+        attempts,
+        last_hash: String::new(),
+    }
+}
+
+fn diff_failed_reason(why: &str, files: &[String], attempt: u32, max: u32) -> String {
+    format!(
+        "🚧 propguard: 変更の diff を最後まで読めませんでした (round {attempt}/{max}).\n\n\
+         `git` は変更ありと答えている ({n} files) のに、その diff を取得する読み取りの少なくとも1つが\
+         最後まで完了しませんでした:\n  {why}\n\n\
+         対象ファイル:\n{list}\n\
+         読めなかった diff は「空の diff」でも「完全な diff」でもありません。空として扱えば未検査の変更が\
+         そのまま通り、部分的に読めた分を完全な diff として checker に渡せば、欠けたファイルを見ないまま\
+         PASS を出しかねません。判定不能な状態で停止を許可しないため、この停止を一時的にブロックしています。\
+         {max}回連続で解消しなければ警告を出して通過を許可します (永久にはブロックしません)。\n\n\
+         前に進むには次のいずれか:\n\
+         - 読めない内容を解消する (典型例: 追跡対象ファイルの内容が UTF-8 として不正、`git` のエラー、\
+         タイムアウト)。`propguard status` で対象 repo を確認。\n\
+         - このチェックを1回だけスキップ: project root に `.propguard-skip` を作成 (理由を1行)。\n\
+         - propguard を完全に無効化: 環境変数 PROPGUARD_DISABLE=1。",
+        attempt = attempt,
+        max = max,
+        why = why,
+        n = files.len(),
+        list = file_list(files),
+    )
 }
 
 fn scan_failed_reason(attempt: u32, max: u32) -> String {
@@ -1631,6 +1731,71 @@ mod tests {
         }
     }
 
+    // ── an unread / half-read diff must not become a silent allow either ────
+
+    /// The pure decision half of the fix: `Undetermined` from `diff_text` →
+    /// BLOCK with its own tag, an escapable reason that repeats WHY, no
+    /// recorded hash, and no per-property violations attributed.
+    #[test]
+    fn unreadable_diff_blocks_with_its_own_tag_and_says_why() {
+        let cfg = cfg_default(); // max_attempts = 2
+        let d = decide_diff_failed(
+            &cfg,
+            "stdout was not valid UTF-8",
+            vec!["src/x.rs".to_string()],
+            0,
+        );
+        match d {
+            Decision::Allow { tag, .. } => panic!(
+                "a diff that could not be read must not be silently allowed; got allow tag={tag}"
+            ),
+            Decision::Block {
+                tag,
+                reason,
+                last_hash,
+                properties,
+                files,
+                attempts: _,
+            } => {
+                assert_eq!(tag, "diff-read-failed");
+                assert!(last_hash.is_empty(), "must not certify an unobserved diff");
+                assert!(
+                    properties.is_empty(),
+                    "nothing was checked — no per-property violation may be attributed, got \
+                     {properties:?}"
+                );
+                assert_eq!(files, vec!["src/x.rs".to_string()]);
+                assert!(
+                    reason.contains("stdout was not valid UTF-8"),
+                    "the reason must carry the underlying cause, not just 'blocked': {reason}"
+                );
+                assert!(
+                    reason.contains("PROPGUARD_DISABLE") && reason.contains(".propguard-skip"),
+                    "the block must stay escapable: {reason}"
+                );
+            }
+        }
+    }
+
+    /// Bounded, never trapped — same contract as the failed-scan guard: after
+    /// `max_attempts` consecutive unreadable diffs we give up and allow, but
+    /// under a DISTINCT tag so a give-up is never mistaken for a passing check.
+    #[test]
+    fn unreadable_diff_gives_up_after_max_attempts_but_never_traps() {
+        let cfg = cfg_default(); // max_attempts = 2
+        let d = decide_diff_failed(&cfg, "boom", vec!["src/x.rs".to_string()], cfg.max_attempts);
+        match d {
+            Decision::Allow { tag, last_hash, .. } => {
+                assert_eq!(tag, "diff-read-failed-giveup");
+                assert!(last_hash.is_empty());
+            }
+            Decision::Block { .. } => panic!(
+                "must give up after max_attempts so a permanently unreadable diff never traps \
+                 the turn"
+            ),
+        }
+    }
+
     #[test]
     fn effective_threshold_is_clamped_to_property_count() {
         let cfg = Config {
@@ -1845,5 +2010,464 @@ PROP output-schema: PASS";
             "only the checked-and-FAILED property is violated; the never-evaluated \
              property must not be reported (or pollute the correlation store)"
         );
+    }
+
+    // ── backlog 87dbfbb8 / d8e22b26: a diff that could not be READ must never
+    //    reach an allow, and a diff only PARTIALLY read must never be handed
+    //    downstream as if it were complete. ──────────────────────────────────
+    //
+    // These drive `evaluate` end to end against the REAL `git` binary, because
+    // the fail-open they pin is an interaction between two of its steps:
+    // `changed_files` correctly answers "these files changed" and `diff_text`
+    // then fails to observe them. Asserting only on `diff_text`'s own return
+    // value would not show that the *decision* flipped, which is the thing that
+    // was measured.
+    //
+    // The injected fault is a tracked file whose working-tree content is not
+    // valid UTF-8 and contains no NUL byte, so `git` classifies it as TEXT and
+    // emits those bytes inside a normal textual diff — which propguard's
+    // bounded pipe read then cannot decode. It needs no stand-in binary: the
+    // real `git` produces it.
+    //
+    // Every fault test below is paired with an anti-vacuity control that
+    // differs ONLY in whether the bytes are decodable. Without them an
+    // implementation that answered "undetermined" for every repo would pass.
+
+    fn git_available() -> bool {
+        Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// A fresh scratch directory (mirrors `git.rs`'s test style; no `tempfile`
+    /// dev-dependency). The caller removes it.
+    fn scratch_dir() -> std::path::PathBuf {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let p = std::env::temp_dir().join(format!(
+            "propguard-gate-diffread-test-{}-{}-{}",
+            std::process::id(),
+            line!(),
+            n
+        ));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).expect("create scratch dir");
+        p
+    }
+
+    #[track_caller]
+    fn git_in(root: &Path, args: &[&str]) {
+        let ok = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("spawn git")
+            .success();
+        assert!(ok, "git {args:?} failed in {}", root.display());
+    }
+
+    /// An initialised repo with `files` committed, so later edits show up as
+    /// changes against HEAD.
+    fn repo_with_committed(files: &[(&str, &str)]) -> std::path::PathBuf {
+        let root = scratch_dir();
+        git_in(&root, &["init", "-q"]);
+        git_in(&root, &["config", "user.email", "t@t.com"]);
+        git_in(&root, &["config", "user.name", "t"]);
+        for (name, body) in files {
+            std::fs::write(root.join(name), body).expect("write file");
+            git_in(&root, &["add", name]);
+        }
+        git_in(&root, &["commit", "-qm", "init"]);
+        root
+    }
+
+    /// Bytes that are not valid UTF-8 and contain NO NUL, so `git` treats the
+    /// file as text and puts them straight into the diff body.
+    const UNDECODABLE_SOURCE: &[u8] = b"fn main() {\n    let s = \"\xff\xfe\xfd\";\n}\n";
+
+    /// The decodable counterpart, same shape and same file, so the only
+    /// difference between a fault run and its control is the byte sequence.
+    const DECODABLE_SOURCE: &str = "fn main() {\n    let s = \"replaced\";\n}\n";
+
+    fn diffread_cfg() -> Config {
+        Config {
+            mode: Mode::Inject,
+            include: vec!["**/*.rs".to_string()],
+            exclude: vec![],
+            min_changed_files: 1,
+            done_criteria: "the gate must never allow a stop on a diff it could not read"
+                .to_string(),
+            ..Config::default()
+        }
+    }
+
+    fn fresh_state() -> crate::state::SessionState {
+        crate::state::SessionState {
+            attempts: 0,
+            last_hash: String::new(),
+            // Far enough in the past that the attempt counter resets.
+            last_ts: 0,
+        }
+    }
+
+    /// THE measured fail-open (backlog 87dbfbb8). `changed_files` answers
+    /// `Files(["bad.rs"])`, `git diff` emits a textual diff propguard cannot
+    /// decode, and before the fix `diff_text` returned `text: ""` /
+    /// `truncated: false` so `evaluate` hit
+    /// `if diff.trim().is_empty() { return allow("empty-diff") }`. An unread
+    /// diff must be UNDETERMINED and block, never allow.
+    #[test]
+    fn a_diff_that_could_not_be_read_blocks_it_does_not_allow_as_empty() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with_committed(&[("bad.rs", "fn main() {}\n")]);
+        std::fs::write(root.join("bad.rs"), UNDECODABLE_SOURCE).expect("write undecodable");
+
+        match evaluate(&diffread_cfg(), &root, &fresh_state()) {
+            Decision::Allow { tag, .. } => panic!(
+                "a diff that could not be read must not be allowed as if it were empty; \
+                 got allow tag={tag}"
+            ),
+            Decision::Block {
+                tag,
+                reason,
+                last_hash,
+                properties,
+                ..
+            } => {
+                assert_eq!(tag, "diff-read-failed");
+                assert!(
+                    last_hash.is_empty(),
+                    "must not certify a diff it never observed"
+                );
+                assert!(
+                    properties.is_empty(),
+                    "nothing was checked — no per-property violation may be attributed, got \
+                     {properties:?}"
+                );
+                assert!(
+                    reason.contains("PROPGUARD_DISABLE") && reason.contains(".propguard-skip"),
+                    "the block must stay escapable and say why: {reason}"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Anti-vacuity control #1 for the test above: the SAME repo, the SAME
+    /// file, the SAME edit — only the bytes are decodable. The diff is read,
+    /// so the ordinary decision (inject mode's unverified-diff block) must
+    /// come back, not the undetermined one.
+    #[test]
+    fn a_readable_diff_still_takes_the_ordinary_path() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with_committed(&[("bad.rs", "fn main() {}\n")]);
+        std::fs::write(root.join("bad.rs"), DECODABLE_SOURCE).expect("write decodable");
+
+        match evaluate(&diffread_cfg(), &root, &fresh_state()) {
+            Decision::Block { tag, files, .. } => {
+                assert_eq!(
+                    tag, "below-threshold",
+                    "a readable diff must reach the real check, not the undetermined guard — \
+                     otherwise the sibling fault test would pass merely by everything blocking"
+                );
+                assert_eq!(files, vec!["bad.rs".to_string()]);
+            }
+            Decision::Allow { tag, .. } => {
+                panic!("inject mode blocks a new unverified diff; got allow tag={tag}")
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Anti-vacuity control #2, and the requirement that this fix must not
+    /// break: a real repo with nothing changed still allows.
+    ///
+    /// What it does NOT show, contrary to what this comment used to claim: it
+    /// does not catch a fix that resolved a clean *diff* to "undetermined".
+    /// `repo_with_committed` leaves the tree clean, so `changed_files` answers
+    /// `Files(vec![])`, `files.len() < cfg.min_changed_files` returns
+    /// `no-code-changes` — the tag asserted below — and `diff_text` is never
+    /// called at all. Measured, not argued: with a `panic!` at the top of
+    /// `diff_text` this test still PASSES, while
+    /// `git::tests::diff_text_of_an_unchanged_file_is_known_and_empty_not_undetermined`
+    /// panics. That `git.rs` test is what actually pins "clean stays Known";
+    /// this one pins the earlier, no-changes allow.
+    #[test]
+    fn a_genuinely_clean_repo_still_allows() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with_committed(&[("bad.rs", "fn main() {}\n")]);
+
+        match evaluate(&diffread_cfg(), &root, &fresh_state()) {
+            Decision::Allow { tag, .. } => assert_eq!(
+                tag, "no-code-changes",
+                "a clean repo must allow via the ordinary no-changes path"
+            ),
+            Decision::Block { tag, reason, .. } => {
+                panic!("a genuinely clean repo must not block; got tag={tag} reason={reason}")
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// backlog d8e22b26: only PART of the diff could be read. `git diff`
+    /// succeeds for the unstaged change to `a.rs` while `git diff --cached`
+    /// cannot be decoded for the staged `b.rs`, and `run_diff` dropped that
+    /// failure on the floor — producing a diff that mentions `a.rs`, omits
+    /// `b.rs`, and carries `truncated: false`, i.e. announces itself COMPLETE.
+    /// `truncated` is the gate's only incompleteness signal, so nothing
+    /// downstream could tell. The decision must be the undetermined one, not a
+    /// verdict reached over a diff missing a file.
+    #[test]
+    fn a_partially_read_diff_is_not_handed_on_as_complete() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with_committed(&[("a.rs", "fn a() {}\n"), ("b.rs", "fn b() {}\n")]);
+        // a.rs: an ordinary, readable, UNSTAGED edit.
+        std::fs::write(root.join("a.rs"), "fn a() { let x = 1; }\n").expect("write a.rs");
+        // b.rs: STAGED with undecodable bytes, so `git diff --cached` is the
+        // sub-command whose output cannot be read.
+        std::fs::write(root.join("b.rs"), UNDECODABLE_SOURCE).expect("write b.rs");
+        git_in(&root, &["add", "b.rs"]);
+
+        match evaluate(&diffread_cfg(), &root, &fresh_state()) {
+            Decision::Allow { tag, .. } => {
+                panic!("a partially-read diff must not be allowed; got allow tag={tag}")
+            }
+            Decision::Block { tag, last_hash, .. } => {
+                assert_eq!(
+                    tag, "diff-read-failed",
+                    "the block must come from the incompleteness guard. A `below-threshold` \
+                     block here would mean the gate judged a diff that silently omitted b.rs \
+                     — the same verdict for 'checked and short' as for 'never saw half of it'"
+                );
+                assert!(
+                    last_hash.is_empty(),
+                    "an incomplete diff must never be certified into already-verified"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The FOURTH read feeding the diff — the BODY of an untracked file —
+    /// driven end to end. `changed_files` answers `Files(["new.rs"])`, both
+    /// `git diff` reads answer a legitimately empty string (an untracked path
+    /// has no diff), `ls-files` lists `new.rs`, and its contents cannot be
+    /// decoded. Pre-fix that read was `if let Some(content)`, so the file's body
+    /// was dropped and the rendered diff was the section HEADER over an empty
+    /// body — announced as complete (`truncated: false`) and judged as if the
+    /// gate had seen the new file's code. The decision must come from the
+    /// incompleteness guard instead.
+    ///
+    /// Provenance, since it is the point of adding this test: the existing
+    /// `git.rs` pin on this read
+    /// (`diff_text_with_an_undecodable_untracked_file_is_undetermined`) was
+    /// written WITH the fix and could never have been observed failing — the
+    /// pre-fix `diff_text` returned a bare `DiffText`, so a test asserting on a
+    /// `Determination` did not compile against it. This one is behavioural: it
+    /// asserts on the DECISION, so the pre-fix shape (skip the unreadable body,
+    /// keep going) can be — and was — observed RED here, as
+    /// `below-threshold`.
+    #[test]
+    fn an_untracked_file_whose_body_could_not_be_read_blocks_as_undetermined() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with_committed(&[("keep.rs", "fn keep() {}\n")]);
+        std::fs::write(root.join("new.rs"), UNDECODABLE_SOURCE).expect("write untracked");
+
+        match evaluate(&diffread_cfg(), &root, &fresh_state()) {
+            Decision::Allow { tag, .. } => panic!(
+                "an untracked file whose body could not be read must not be allowed; got allow \
+                 tag={tag}"
+            ),
+            Decision::Block {
+                tag,
+                last_hash,
+                properties,
+                ..
+            } => {
+                assert_eq!(
+                    tag, "diff-read-failed",
+                    "the block must come from the incompleteness guard. A `below-threshold` \
+                     block here is the pre-fix behaviour: it means the gate went on to JUDGE a \
+                     diff whose only trace of new.rs was a section header with no code under it"
+                );
+                assert!(
+                    last_hash.is_empty(),
+                    "must not certify a diff whose new file's body it never observed"
+                );
+                assert!(
+                    properties.is_empty(),
+                    "nothing was checked — no per-property violation may be attributed, got \
+                     {properties:?}"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Anti-vacuity control for the test above: the SAME untracked file, the
+    /// same everything, decodable bytes. The body is inlined, so the ordinary
+    /// decision (inject mode's unverified-diff block over `new.rs`) must come
+    /// back — otherwise the fault test would pass merely by every untracked
+    /// file blocking.
+    #[test]
+    fn a_readable_untracked_file_still_takes_the_ordinary_path() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with_committed(&[("keep.rs", "fn keep() {}\n")]);
+        std::fs::write(root.join("new.rs"), DECODABLE_SOURCE).expect("write untracked");
+
+        match evaluate(&diffread_cfg(), &root, &fresh_state()) {
+            Decision::Block { tag, files, .. } => {
+                assert_eq!(tag, "below-threshold");
+                assert_eq!(files, vec!["new.rs".to_string()]);
+            }
+            Decision::Allow { tag, .. } => {
+                panic!("inject mode blocks a new unverified diff; got allow tag={tag}")
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A checker script that PASSes every property in the catalog, so
+    /// `Mode::Subprocess` reaches `properties-satisfied` — an ALLOW. Written
+    /// outside the repo under test so it is not itself a changed file.
+    #[cfg(unix)]
+    fn all_pass_checker(dir: &Path) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        // `cat > /dev/null` drains the prompt so the checker never dies on a
+        // full stdin pipe; then one verdict line per catalog property.
+        let mut body = String::from("#!/bin/sh\ncat > /dev/null\n");
+        for p in CATALOG.iter() {
+            body.push_str(&format!("echo 'PROP {}: PASS'\n", p.id));
+        }
+        let path = dir.join("all-pass-checker.sh");
+        std::fs::write(&path, body).expect("write checker");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path.to_string_lossy().into_owned()
+    }
+
+    /// The last step of backlog d8e22b26, which the original verifier recorded
+    /// honestly as UNVERIFIED (not refuted) because it had no real
+    /// `checker_cmd`: in `Mode::Subprocess` a partial diff would be handed to
+    /// the checker, and a checker that PASSes would produce an ALLOW.
+    ///
+    /// This settles it by measurement in both directions. Here: the partial
+    /// diff plus a checker that passes EVERYTHING must still block, because
+    /// the incompleteness guard sits before the `match cfg.mode` split and the
+    /// checker is never reached.
+    #[cfg(unix)]
+    #[test]
+    fn a_partially_read_diff_blocks_in_subprocess_mode_before_the_checker_runs() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with_committed(&[("a.rs", "fn a() {}\n"), ("b.rs", "fn b() {}\n")]);
+        std::fs::write(root.join("a.rs"), "fn a() { let x = 1; }\n").expect("write a.rs");
+        std::fs::write(root.join("b.rs"), UNDECODABLE_SOURCE).expect("write b.rs");
+        git_in(&root, &["add", "b.rs"]);
+
+        let bin = scratch_dir();
+        let cfg = Config {
+            mode: Mode::Subprocess,
+            checker_cmd: all_pass_checker(&bin),
+            ..diffread_cfg()
+        };
+
+        match evaluate(&cfg, &root, &fresh_state()) {
+            Decision::Allow { tag, .. } => panic!(
+                "a checker that PASSes everything must never be handed a diff missing b.rs; \
+                 got allow tag={tag}"
+            ),
+            Decision::Block { tag, .. } => assert_eq!(tag, "diff-read-failed"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&bin);
+    }
+
+    /// The other direction, and the anti-vacuity partner the test above needs:
+    /// with the SAME all-PASS checker and a fully readable two-sided diff,
+    /// `Mode::Subprocess` really does reach `properties-satisfied` and ALLOW.
+    /// So the block above is a guard that prevented a reachable allow, not an
+    /// assertion about a path that could never have allowed anyway.
+    #[cfg(unix)]
+    #[test]
+    fn subprocess_mode_really_can_allow_when_the_diff_is_fully_read() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with_committed(&[("a.rs", "fn a() {}\n"), ("b.rs", "fn b() {}\n")]);
+        std::fs::write(root.join("a.rs"), "fn a() { let x = 1; }\n").expect("write a.rs");
+        std::fs::write(root.join("b.rs"), DECODABLE_SOURCE).expect("write b.rs");
+        git_in(&root, &["add", "b.rs"]);
+
+        let bin = scratch_dir();
+        let cfg = Config {
+            mode: Mode::Subprocess,
+            checker_cmd: all_pass_checker(&bin),
+            ..diffread_cfg()
+        };
+
+        match evaluate(&cfg, &root, &fresh_state()) {
+            Decision::Allow { tag, .. } => assert_eq!(
+                tag, "properties-satisfied",
+                "the subprocess allow must be reachable, otherwise the sibling test guards \
+                 nothing"
+            ),
+            Decision::Block { tag, reason, .. } => panic!(
+                "an all-PASS checker over a fully readable diff must allow; got tag={tag} \
+                 reason={reason}"
+            ),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&bin);
+    }
+
+    /// Anti-vacuity control for the partial-diff test: the identical two-file,
+    /// staged-plus-unstaged setup with decodable bytes must still reach the
+    /// ordinary decision over BOTH files.
+    #[test]
+    fn a_fully_read_two_sided_diff_still_takes_the_ordinary_path() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let root = repo_with_committed(&[("a.rs", "fn a() {}\n"), ("b.rs", "fn b() {}\n")]);
+        std::fs::write(root.join("a.rs"), "fn a() { let x = 1; }\n").expect("write a.rs");
+        std::fs::write(root.join("b.rs"), DECODABLE_SOURCE).expect("write b.rs");
+        git_in(&root, &["add", "b.rs"]);
+
+        match evaluate(&diffread_cfg(), &root, &fresh_state()) {
+            Decision::Block { tag, files, .. } => {
+                assert_eq!(tag, "below-threshold");
+                assert_eq!(files, vec!["a.rs".to_string(), "b.rs".to_string()]);
+            }
+            Decision::Allow { tag, .. } => {
+                panic!("inject mode blocks a new unverified diff; got allow tag={tag}")
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

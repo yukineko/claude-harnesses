@@ -1126,6 +1126,17 @@ enum PolicyAction {
         /// `escalate`. Takes precedence over --conflict (both clamp identically).
         #[arg(long)]
         untestable: bool,
+        /// Frame this as a **permission approval** — a YES/NO "may I proceed?"
+        /// gate rather than a judgment the human must make. Standing user
+        /// authorization (2026-08-07): while self-driving, permission is
+        /// pre-granted, so an otherwise-`escalate` verdict clamps DOWN to
+        /// `auto`. The `block` hard stop is NEVER relaxed, and the flag is
+        /// INERT unless the run is autonomous (same predicate as
+        /// `state autonomy-check`), so a non-autonomous run keeps every prompt.
+        /// --untestable and --conflict both take precedence: a raising clamp
+        /// always wins over this lowering one.
+        #[arg(long)]
+        approval: bool,
     },
     /// Non-interactively answer one question using the graded-autonomy policy.
     /// On an `auto` verdict, prints `{"answered":true,"policy":"auto","chosen":
@@ -1182,6 +1193,16 @@ enum PolicyAction {
         /// Takes precedence over --conflict (both clamp identically).
         #[arg(long)]
         untestable: bool,
+        /// Frame this as a **permission approval** — a YES/NO "may I proceed?"
+        /// gate rather than a judgment the human must make. Standing user
+        /// authorization (2026-08-07): while self-driving, permission is
+        /// pre-granted, so an otherwise-`escalate` verdict self-answers with the
+        /// recommended option (journaled like any other auto). The `block` hard
+        /// stop is NEVER relaxed, and the flag is INERT unless the run is
+        /// autonomous, so a non-autonomous run still prompts. --untestable and
+        /// --conflict take precedence: a raising clamp always wins.
+        #[arg(long)]
+        approval: bool,
     },
     /// Print the auto-answer audit trail (JSONL): every question the policy
     /// self-answered without prompting a human. The review surface for
@@ -2797,6 +2818,38 @@ fn run_precedent(cfg: &Config, cwd: &Path, action: PrecedentAction) -> Result<()
     Ok(())
 }
 
+/// Resolve the framing flags to a verdict. Shared by `policy decide` and
+/// `policy answer` so the two can never drift apart on precedence.
+///
+/// Precedence is deliberate and one-directional: the RAISING clamps
+/// (`--untestable` §2, `--conflict`) always win over the LOWERING one
+/// (`--approval`). A callsite that passes both is saying "this is a judgment
+/// AND permission was granted" — and a granted permission never converts a
+/// judgment into a self-answer.
+///
+/// `--approval` is additionally inert unless the run is autonomous, using the
+/// same `policy_is_autonomous` predicate `state autonomy-check` exposes. That
+/// condition lives HERE, in the binary, rather than in skill prose, so a skill
+/// cannot lose its consent prompt by forgetting to check autonomy first.
+fn resolve_policy_verdict(
+    risk: policy::Level,
+    reversible: policy::Level,
+    confidence: policy::Level,
+    conflict: bool,
+    untestable: bool,
+    approval: bool,
+) -> policy::Decision {
+    if untestable {
+        policy::decide_untestable(risk, reversible, confidence)
+    } else if conflict {
+        policy::decide_conflict_resolution(risk, reversible, confidence)
+    } else if approval && policy_is_autonomous(&config::Config::load()) {
+        policy::decide_approval(risk, reversible, confidence)
+    } else {
+        policy::decide(risk, reversible, confidence)
+    }
+}
+
 fn run_policy(action: PolicyAction) -> ! {
     match action {
         PolicyAction::Decide {
@@ -2808,6 +2861,7 @@ fn run_policy(action: PolicyAction) -> ! {
             class,
             conflict,
             untestable,
+            approval,
         } => {
             let (risk, reversible, mut confidence) =
                 parse_policy_levels(&risk, &reversible, &confidence);
@@ -2819,15 +2873,12 @@ fn run_policy(action: PolicyAction) -> ! {
                 confidence = cal;
             }
             // An untestable decision (§2) or a merge-conflict resolution may only
-            // escalate/block (never auto). --untestable takes precedence; both
-            // clamp Auto→Escalate identically, so the result is the same either way.
-            let decision = if untestable {
-                policy::decide_untestable(risk, reversible, confidence)
-            } else if conflict {
-                policy::decide_conflict_resolution(risk, reversible, confidence)
-            } else {
-                policy::decide(risk, reversible, confidence)
-            };
+            // escalate/block (never auto); a permission approval may clamp the
+            // other way (escalate→auto) but only when autonomous, and never
+            // relaxes a block. See `resolve_policy_verdict` for the precedence.
+            let decision = resolve_policy_verdict(
+                risk, reversible, confidence, conflict, untestable, approval,
+            );
             println!("{decision}");
             let code = match decision {
                 policy::Decision::Auto => 0,
@@ -2849,6 +2900,7 @@ fn run_policy(action: PolicyAction) -> ! {
             class,
             conflict,
             untestable,
+            approval,
         } => {
             let (risk, reversible, mut confidence) =
                 parse_policy_levels(&risk, &reversible, &confidence);
@@ -2858,15 +2910,13 @@ fn run_policy(action: PolicyAction) -> ! {
                 confidence = cal;
             }
             // An untestable decision (§2) or a merge-conflict resolution never
-            // self-answers (auto→escalate), so a human always decides.
-            // --untestable takes precedence; both clamp Auto→Escalate identically.
-            let decision = if untestable {
-                policy::decide_untestable(risk, reversible, confidence)
-            } else if conflict {
-                policy::decide_conflict_resolution(risk, reversible, confidence)
-            } else {
-                policy::decide(risk, reversible, confidence)
-            };
+            // self-answers (auto→escalate), so a human always decides. A
+            // permission approval self-answers instead (escalate→auto) when the
+            // run is autonomous, and still refuses on `block`. See
+            // `resolve_policy_verdict` for the precedence between them.
+            let decision = resolve_policy_verdict(
+                risk, reversible, confidence, conflict, untestable, approval,
+            );
             let outcome = gatelog::answer_outcome(decision, &options, recommend);
             match &outcome {
                 gatelog::AnswerOutcome::Answered {

@@ -1,4 +1,4 @@
-last_synced = "9152989da82f244e201a3e744d36cbf194259ceb"
+last_synced = "d48c71334210baec776bbbf82a406079765ce0ea"
 
 [entries.".gitattributes"]
 key = ".gitattributes"
@@ -145,6 +145,15 @@ impl_files = ["crates/backlog/src/config.rs"]
 test_files = []
 client_refs = []
 
+[entries."crates/backlog/src/divergence.rs"]
+key = "crates/backlog/src/divergence.rs"
+kind = "feature"
+status = "changed"
+last_ref = "d48c71334210baec776bbbf82a406079765ce0ea"
+impl_files = ["crates/backlog/src/divergence.rs"]
+test_files = []
+client_refs = []
+
 [entries."crates/backlog/src/driver.rs"]
 key = "crates/backlog/src/driver.rs"
 kind = "feature"
@@ -178,7 +187,7 @@ key = "crates/backlog/src/hooks/session_start.rs"
 kind = "feature"
 spec_doc = "docs/specs/backlog.md"
 status = "changed"
-last_ref = "a4b24edc01a2f176e6eebff6a58ff6efbeb07e10"
+last_ref = "d48c71334210baec776bbbf82a406079765ce0ea"
 impl_files = ["crates/backlog/src/hooks/session_start.rs"]
 test_files = []
 client_refs = []
@@ -217,7 +226,7 @@ key = "crates/backlog/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/backlog.md"
 status = "changed"
-last_ref = "7a2ec031263a138eb01d1637f2d3327ee388fd8a"
+last_ref = "d48c71334210baec776bbbf82a406079765ce0ea"
 impl_files = ["crates/backlog/src/main.rs"]
 test_files = []
 client_refs = []
@@ -227,7 +236,7 @@ key = "crates/backlog/src/store.rs"
 kind = "feature"
 spec_doc = "docs/specs/backlog.md"
 status = "changed"
-last_ref = "7a2ec031263a138eb01d1637f2d3327ee388fd8a"
+last_ref = "d48c71334210baec776bbbf82a406079765ce0ea"
 impl_files = ["crates/backlog/src/store.rs"]
 test_files = []
 client_refs = []
@@ -277,6 +286,15 @@ status = "changed"
 last_ref = "7a2ec031263a138eb01d1637f2d3327ee388fd8a"
 impl_files = []
 test_files = ["crates/backlog/tests/project_identity.rs"]
+client_refs = []
+
+[entries."crates/backlog/tests/store_divergence.rs"]
+key = "crates/backlog/tests/store_divergence.rs"
+kind = "feature"
+status = "changed"
+last_ref = "d48c71334210baec776bbbf82a406079765ce0ea"
+impl_files = []
+test_files = ["crates/backlog/tests/store_divergence.rs"]
 client_refs = []
 
 [entries."crates/beacon/src/config.rs"]

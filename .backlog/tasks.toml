@@ -157,7 +157,7 @@ tags = [
     "fail-open",
     "p0",
 ]
-status = "pending"
+status = "done"
 notes = """
 実測 2026-08-06、測定点 8340afc8、backlog 0.2.14 を rollout した直後。backlog のキューを ~/.backlog/tasks.toml から repo 内 .backlog/tasks.toml へ移す変更 (main の 8d729129) が、既存タスクを移行していない。観測値: ls -la ~/.backlog/tasks.toml は 669648 バイト、ls -la .backlog/tasks.toml は 2173 バイト。backlog list --project /Users/yuki/src/harness --status pending は移行前 162 件を返していたが、移行後は 2 件しか返さない。本セッションで積んだ 5 件のうち 4cacdfae と 241e7a47 と d8d0778c は旧ストアに取り残され、新ストアからは存在しないものとして扱われる (backlog done d8d0778c が task not found で失敗した)。これは単なるデータ移行漏れではなく判定の問題である: 下流 (autoflow の Stop hook / daily / flow の停止判定 / SessionStart の注入) はいずれも「キューが空か」を backlog list の結果で判断するため、160 件の未完了作業が黙って完了扱いになる。空集合が合格として読まれる典型 (CLAUDE.md 第3節)。判定不能どころか、判定が誤った側に確定している。完了条件: (1) 旧ストアの内容を新ストアへ移行する経路を用意し、移行が起きたことを観測で固定する、(2) 移行前に「旧ストアに項目があるのに新ストアが空/少ない」状態を検出して block するか少なくとも警告する経路を入れる (黙って空を返さない)、(3) 既に旧ストアに取り残された項目を回収する。注意: 旧ストアはクロスプロジェクトなので、repo 内ストアへ移すときに project フィールドで振り分ける必要がある。
 
@@ -184,7 +184,7 @@ CLI に migrate サブコマンドは無い (add/list/next/done/fail/edit/sessio
 
 作業上の注意 (この追記自体で踏んだ): backlog edit --notes は追記ではなく置換である。一度この起票時ノートを丸ごと上書きしてしまい、git から復元した。既存ノートのあるチケットを編集するときは、先に原文を取得して連結すること。"""
 created_at = 1786024055
-updated_at = 1786375536
+updated_at = 1786376369
 weight = 0.0
 issue_number = 196
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/196"
@@ -8116,10 +8116,10 @@ tags = [
     "verified",
     "p0",
 ]
-status = "pending"
+status = "claimed"
 notes = "検証済み (利害関係のない agent が実バイナリで end-to-end 再現)。ブランチ fix/trust-and-sentinel (6780b204 + e19ccb1b, worktree /Users/yuki/src/.harness-worktrees/w-trustsentinel) は主張どおり動くが merge 保留。修正が必要な発見: [F1 HIGH] worktree.rs:489 のゲートが harness_core::trust::is_trusted() で、これは trust.rs:70-72 の trust_all() 短絡を含むため HARNESS_TRUST_ALL=1 の下で untrusted repo からも trust::add が永続エントリを書く。実測 PROBE1: env var を外した後も worktree_trusted=true / repo_trusted=false、かつその worktree は untrusted repo の donegate.toml (cmd は sh -c 経由) を持つ。コメント worktree.rs:447 の PROPAGATION, NEVER ESCALATION に反する。修正案: is_trusted ではなくリスト membership でゲートする。[F3 MED] main.rs:237-239 の散文が偽 — 実測で単一セッションは3回 give-up しても review-queue --json が [] (is_systemic は閾値 AND distinct_tasks>1||sessions>1 を要求し、donegate は task_key=session id)。[F4 MED] mutation M8 (append_violation エラーの握り潰しへ戻す) が cargo test -p donegate exit 0 で生存 = 新しい可視化経路にテストが無い。加えてその channel は stderr で、同じ変更が main.rs:210-211 で不十分と宣言したもの。[F6/F7 LOW] コメントの過大主張2件。修正エージェントは API セッション上限で中断 (2026-08-06)。"
 created_at = 1785926760
-updated_at = 1786375536
+updated_at = 1786375796
 weight = 0.0
 issue_number = 144
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/144"
@@ -8293,7 +8293,7 @@ notes = """
 --- 事実確認 (flow 2026-08-06, session 0ff5fc74) ---
 d24f02d5 は superseded ではなく additive である。main の taintguard は別系統で 0.2.0 まで進んだが、d24f02d5 が足しているのは新規の rationale.rs (391行)・README.ja.md (169行)・tests/provenance_gate.rs (442行)・tests/rationale_readme.rs (107行) で、main 側に対応物が無い。つまり earlier の taintguard 衝突 (fe13e4cd vs 77a0c6e7 が同じ欠陥を同じ機構で直していた件) とは状況が違い、丸ごと採用も丸ごと破棄も正しくない。なお d24f02d5 も自称 0.1.10 だが、main の 0.1.10 は 60c20552 (git_common_dir を boundary 経由に) であって別物 — 同じ版番号が2系統に存在する。着手時は 0.2.0 への rebase が要る。敵対的パネルの block 理由は本 notes 上部を参照。今サイクルは context 逼迫のためバッチから外した (縮小ではなく順序付け)。"""
 created_at = 1785926923
-updated_at = 1786374495
+updated_at = 1786375818
 weight = 0.0
 issue_number = 153
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/153"
@@ -9587,10 +9587,10 @@ title = "backlog launcher が host バイナリ欠落時に exit 0 + 無出力�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "claimed"
 notes = "observation 2026-08-10, session start は Backlog:(none) と表示したが repo ストアの pending は 40 件超あった。原因: この session の PATH は ~/.claude/plugins/cache/yukineko/backlog/0.2.16/bin に固定され、その dir には launcher スクリプトだけが在って host バイナリ backlog-darwin-arm64 が無い。launcher は binary 不在時に stderr へ1行出して exit 0 する。launcher 内のコメントが理由を逐語で書いている: it exits 0 silently so a hook NEVER breaks the users turn。これは CLAUDE.md 第1節が verdict 経路の赤信号として名指ししている当の一文であり、第3節の判定不能を制限側へ に真っ向から反する。判定不能 (バイナリが無いので queue を読めなかった) が 空 (pending 0 件) へ写っている。影響: (a) SessionStart banner が偽の (none) を出す、(b) flow の Step 3-1 停止判定が no pending tasks を空キューと読んで自律ループを黙って終了する、(c) autoflow と daily の driver 在否判定も同じ経路。実測: 0.1.6 と 0.2.13 と 0.2.19 の各 bin dir には host バイナリが在り、0.2.16 だけ欠落 (dir mtime 2026-08-07 05:11)。PATH 上の他 37 plugin dir には欠落なし (走査済み)。判定不能な点: 0.2.16 の dir がバイナリ未 seed のまま作られたのか、後から消されたのかは未同定。見分ける方法は 0.2.16 の dir を作った時点の再現と prune スクリプトの削除対象判定を読むこと。修正方向は launcher の exit 0 を非0へ倒すこと (hook 側が壊れるのを恐れるなら hook 側で握るべきで、launcher が全 consumer に対して空を返すのは誤り)。関連 8acb117a と b6a80342 と aadbd19a。"
 created_at = 1786372248
-updated_at = 1786372248
+updated_at = 1786375796
 weight = 0.0
 issue_number = 228
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/228"
@@ -9699,3 +9699,17 @@ updated_at = 1786375538
 weight = 0.0
 issue_number = 234
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/234"
+
+[[task]]
+id = "7ec6fca5"
+title = "merge commit が pre-commit を green で通過しても bypass ledger に outstanding として記録され push が止まる (6267bfbe の amend と同一クラス)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-08-11、測定点 d48c7133。git merge --no-ff fix/backlog-store-divergence を main で実行し、pre-commit の全ゲートが green で通った (逐語: OK: 41 plugins version-consistent / OK: no changed plugin left un-bumped vs HEAD (41 plugins scanned) / raw-io-ratchet: count == baseline (48) / main-tree-guard: allowed -- Merge in progress / check-test-weakening: no unacknowledged test weakening)。にもかかわらず直後の scripts/gate-bypass.py --json は verdict outstanding を返し、entries に当の d48c7133 が入っている。post-commit の案内文どおりなら この状態では git push が block される。原因の仮説: 証明書が tree と judged HEAD の両方に束縛されているため、merge では hook 実行時の HEAD (4fbfefc4) と生成された commit の親子関係が食い違い、証明書が当該 commit に紐づかない。これは 6267bfbe (git commit --amend が同じ理由で誤記録される) と同一クラスであり、amend だけの問題ではないことを示す実測である。判定不能ではなく判定が誤った側に確定している: 実際には検査済みの commit が 未検証 として記録されている。影響が amend より重いのは、CLAUDE.md 8 が main で許すのは統合 (merge) だけなので、規範どおりに作業すると毎回これを踏む点。完了条件: (1) merge commit が green な pre-commit を通ったとき ledger に載らないこと、(2) 逆に本当に --no-verify された merge は載ること (アンチ空虚性)、(3) 既に outstanding な d48c7133 を解消する手順を書くこと。見分ける方法: --no-verify した merge と 通常の merge を同条件で作り ledger を比較する。関連 6267bfbe、amend-always-trips-bypass-ledger。"
+created_at = 1786376360
+updated_at = 1786376360
+weight = 0.0
+issue_number = 235
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/235"

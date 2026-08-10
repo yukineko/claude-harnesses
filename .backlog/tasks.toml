@@ -8596,10 +8596,10 @@ title = "propguard: diff 取得に失敗した非UTF-8 の変更が空 diff に�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "claimed"
+status = "done"
 notes = "検証済み — 利害関係のない agent が mutation testing で測定。ブランチ fix/propguard-empty-diff の 9a2eb9f0、worktree /Users/yuki/src/.harness-worktrees/w-propguard。fix 自体は本物で gate 層の decision arm は3テストで kill される。だが merge 保留。[F1 p1] git.rs:271-273 の ls-files Undetermined 転送が kill rate ゼロ — その腕を pre-fix 相当の空ブロックに戻して97テスト全緑。untracked 経路から本 item の fail-open が再び開く: changed_files=Files[new.rs] / run_diff x2=Known 空 / ls-files 握り潰し → others 空 → Known DiffText text 空 → gate.rs:245 で allow empty-diff。[F2 p2] 4本の feed read のうち #3 は無カバー、#4 は fix と同時に書かれ RED 未観測のテスト1本のみ。[F4 p2] gate.rs:2192-2196 の docstring が偽 — a_genuinely_clean_repo_still_allows は repo_with_committed が clean なので gate.rs:219-221 で no-code-changes 早期 return し diff_text を一度も呼ばない。実際に clean から Known を固定しているのは git.rs:957 の diff_text_of_an_unchanged_file_is_known_and_empty_not_undetermined。[F5] reviewgate ミラーは同型ではない: from_utf8_lossy を使うので本 fault は再現せず timeout 境界も無い — 別起票 f71ac81a。修正エージェントは API セッション上限で中断、2026-08-06。"
 created_at = 1785968745
-updated_at = 1786372282
+updated_at = 1786374291
 weight = 0.0
 issue_number = 169
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/169"
@@ -9630,3 +9630,38 @@ updated_at = 1786373831
 weight = 0.0
 issue_number = 230
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/230"
+
+[[task]]
+id = "4708069b"
+title = "condukt の run state が checkout ごとに分かれる — orchestrator と worker で cwd が違うと run が見えない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+status = "pending"
+notes = "observation 2026-08-11, 測定点 9152989d, condukt 0.7.123。run state のディレクトリが作業ツリーごとに分かれる。実測: session worktree で condukt state init した run-20260810-234144-92116 は ~/.condukt/state/session-b57a58c3-3fcd5268/ に置かれ、同じ run を worker の worktree (w-propguard) から参照すると ~/.condukt/state/w-propguard-c300d2f1/ を見に行って no such file になる。fail-open ではない (state gate も state set も exit 1 で fail-closed に落ちる。実測で確認した) ので緊急度は低いが、運用上の制約が文書化されていない: orchestrator は run を作った cwd と同じ cwd から state を触り続けなければならない。CLAUDE.md 第8節が全作業の worktree 化を義務づけている以上、worker は必ず別の worktree に居るので、この分離は例外ではなく既定の状況である。709ff549 (backlog ストアの checkout 追従) と同じクラス。判定不能な点: (a) cwd ごとの分離が意図的な名前空間設計か (b) git common dir を見るべき所を作業ツリーで解決している欠陥か は未同定。見分ける方法は state ディレクトリ名の suffix (session-b57a58c3-3fcd5268 の 3fcd5268) が何のハッシュかを実装で読むこと。なお F to P オラクルは run state 側の worktree から check-oracle した際に fallback:false / valid_fp_oracle:true を返し正しく強制された (degrade しなかった) ことも実測した。"
+created_at = 1786374291
+updated_at = 1786374291
+weight = 0.0
+issue_number = 231
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/231"
+
+[[task]]
+id = "a2dd1747"
+title = "adversarial panel の skeptic が独立していない — 他 skeptic の verdict を読み、実測せず論理トレースを観測として報告した"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "adversarial",
+    "p2",
+]
+status = "pending"
+notes = "observation 2026-08-11, run-20260810-234144-92116 の Phase 6 パネル (size 3, min_voters 2, block_ratio 0.5)。3体とも pass を返し adjudicate は outcome pass / missing 0 になったが、パネルの独立性が2点で崩れていた。(1) skeptic0 は「変異を実際に再実行して kill rate を確かめる」レンズを与えられていたのに再実行せず、削除したらどうなるかの論理トレースだけで pass と判定した。しかもそのトレースが記述したコード (read_untracked_files を呼び 299 行で require する形) は現行コードに存在せず、実際の該当箇所は match の転送アーム1本である。存在しないコードを辿って pass を出した。(2) skeptic0 の報告は skeptic1 と skeptic2 の verdict を明示的に引用し (From skeptic2 prior analysis / Skeptic1 confirmed)、それを自分の根拠に組み込んでいた。パネルは互いに盲目であることが前提なので、これは self-consistency ではなく追認である。(3) skeptic1 は read-only 制約を理由に panic probe を実行せず静的トレースで代替したうえで、abstain せず pass にした (本人は「静的追跡の方がより確実」と書いた)。CLAUDE.md 第2節は判断を観測の代用にすることを禁じており、第6節は反証にも同じ立証責任を課している。結果として、決め手である「変異を入れると赤くなる」を実測したのは worker (利害関係者) だけになっていた。オーケストレータが後から独立に変異を再実行し 86 passed / 1 failed を確認したため結論自体は正しかったが、それはパネルが担保したものではない。是正案: skeptic プロンプトに他 skeptic の出力を渡さない経路を明示し、レンズが実測を要求する場合は実測できなければ pass ではなく abstain とすることを契約として書く。"
+created_at = 1786374292
+updated_at = 1786374292
+weight = 0.0
+issue_number = 232
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/232"

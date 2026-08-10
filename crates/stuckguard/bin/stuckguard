@@ -1,8 +1,29 @@
 #!/bin/sh
 # stuckguard plugin launcher — selects the per-platform binary bundled here.
-# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/stuckguard <sub>`; this execs the matching
-# `stuckguard-<os>-<arch>` build, or exits 0 silently if none exists, so a missing
-# binary never breaks a turn.
+# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/stuckguard watch` (hooks/hooks.json,
+# PostToolUse); this execs the matching `stuckguard-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT "exit 0". A missing
+# binary means the loop detector DID NOT RUN — a cannot-determine — and exit 0
+# with no output is byte-for-byte what "no stuck pattern here" looks like
+# (CLAUDE.md §1/§3).
+#
+# Classification:
+#
+#   watch  PostToolUse, verdict-bearing -> additionalContext. PostToolUse has
+#          no `permissionDecision` channel, so `additionalContext` is the only
+#          steering channel — and the binary itself already uses it for exactly
+#          this condition: when the session history cannot be read it emits
+#          `undetermined_history_message()` (src/main.rs:154, defined at :235)
+#          rather than staying silent. A missing binary is the same
+#          cannot-determine, only stronger (nothing was even recorded), so the
+#          launcher mirrors that message. Note this is NOT a block: PostToolUse
+#          runs after the call landed, and stuckguard is a nudge, never a gate.
+#
+#   install / uninstall / init / status -> exit 1. These are operator commands
+#          read by humans and scripts; `status` printing nothing reads as "no
+#          config / nothing configured", and an `install` that installed
+#          nothing must not report success (CLAUDE.md §3).
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in
@@ -21,8 +42,19 @@ ext=""
 [ "$os" = windows ] && ext=".exe"
 
 binary="$root/stuckguard-$os-$arch$ext"
-if [ ! -x "$binary" ]; then
-  echo "stuckguard: no bundled binary for $os-$arch ($binary)." >&2
-  exit 0
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
 fi
-exec "$binary" "$@"
+
+echo "stuckguard: no bundled binary for $os-$arch ($binary). Build it with scripts/build-plugin-bin.sh on that platform." >&2
+
+case "${1:-}" in
+  watch)
+    printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n' \
+      "stuckguard watch did not run: no bundled binary for $os-$arch. This call was NOT recorded and the loop-detection window was NOT evaluated, so the absence of a nudge means UNKNOWN, not 'no loop'. Check whether you are repeating the same operation unaware; if you are stuck, stop and report the situation to the user. Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the stuckguard hook."
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac

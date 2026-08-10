@@ -1,10 +1,52 @@
 #!/bin/sh
 # backlog plugin launcher — selects the per-platform binary bundled in this dir.
 #
-# The /backlog and /flow skills call `backlog <sub>` (lock/next/done/fail/list);
-# this dispatcher execs the matching `backlog-<os>-<arch>` build. If no build
-# exists for the host platform, it exits 0 silently so a hook NEVER breaks the
-# user's turn.
+# The /backlog and /flow skills call `backlog <sub>` (list/next/lock/done/…);
+# this dispatcher execs the matching `backlog-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT "exit 0". This launcher
+# used to exit 0 with an empty stdout, and its own comment stated the intent
+# verbatim: "it exits 0 silently so a hook NEVER breaks the user's turn" — the
+# exact sentence CLAUDE.md §1 names as the red flag for verdict-carrying code.
+# The result was that "the binary is missing so I could not read the queue" was
+# rendered downstream as "the queue is empty" (CLAUDE.md §3: cannot-determine
+# must resolve to the restrictive side).
+#
+# Measured 2026-08-10, measurement point d48c7133, same cwd and same instant,
+# varying only which launcher was on PATH:
+#   * broken launcher (0.2.16, host binary absent) -> `overwatch status` printed
+#     "Backlog pending: 0"; the SessionStart banner printed "== Backlog ==
+#     (none)".
+#   * working launcher (0.2.19) -> the same `overwatch status` printed
+#     "Backlog pending: 219".
+#
+# There is NO per-subcommand split here, because there is no hook to split on:
+# `crates/backlog/hooks/` does not exist, so backlog is never invoked as a hook
+# and has no hook-event vocabulary (JSON decision fields) to speak. Every
+# consumer is a CLI/skill caller that reads stdout as DATA, and for all of them
+# an empty result reads as "no work":
+#
+#   * crates/flow/src/main.rs `query_backlog_pending`  — `list --json`; gates on
+#     `status.success()`, so a non-zero exit correctly reaches the "binary not
+#     available" fallback instead of the "0 pending" directive.
+#   * crates/overwatch/src/aggregate.rs `build` step 2 — `list --json` via
+#     `shell_soft`, which gates on `status.success()`; this is the measured
+#     "Backlog pending: 0" above.
+#   * crates/overwatch/src/bridge.rs                   — `add` (--to-backlog).
+#   * crates/autoflow/src/backlog.rs `find_backlog_binary` — `--version` as an
+#     installed-probe.
+#   * crates/daily/src/main.rs                         — `lock status` as a
+#     driver-liveness probe.
+#   * crates/specguard/src/forge/queue.rs              — `add` via boundary::run.
+#   * crates/condukt/src/claim.rs `backlog_pending`    — `list --json`.
+#   * skills/commands: crates/backlog/skills/backlog, crates/flow/skills/flow
+#     (Step 3-1's stop predicate reads "no pending tasks" as an empty queue and
+#     ends the autonomous loop), crates/condukt/skills/condukt,
+#     crates/overwatch/skills/continuous-audit.
+#
+# So the whole surface is verdict-carrying and the resolution is uniform: print
+# NOTHING on stdout (never fabricate an empty list) and exit non-zero, which is
+# the one signal every consumer above already knows how to read as "no answer".
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in
@@ -23,8 +65,9 @@ ext=""
 [ "$os" = windows ] && ext=".exe"
 
 binary="$root/backlog-$os-$arch$ext"
-if [ ! -x "$binary" ]; then
-  echo "backlog: no bundled binary for $os-$arch ($binary). Build it with scripts/build-plugin-bin.sh on that platform." >&2
-  exit 0
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
 fi
-exec "$binary" "$@"
+
+echo "backlog: no bundled binary for $os-$arch ($binary). The queue was NOT READ, so its contents are UNKNOWN — this is not an empty queue. Build it with scripts/build-plugin-bin.sh on that platform, or remove backlog from PATH so callers can see it is absent." >&2
+exit 1

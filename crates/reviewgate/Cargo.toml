@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "reviewgate"
-version = "0.1.19"
+version = "0.1.20"
 edition = "2021"
 description = "Code-review gate for Claude Code. On Stop it reviews the diff before the agent can declare done: either by injecting a review rubric for the running agent to self-review (no API key), or by spawning an independent reviewer command. Findings are fed back for a fix loop."
 license = "MIT"
@@ -22,3 +22,9 @@ chrono = { workspace = true }
 clap = { workspace = true }
 dirs = "5"
 anyhow = { workspace = true }
+
+[dev-dependencies]
+# tests/launcher_missing_binary.rs runs bin/reviewgate from a scratch dir that
+# provably has no `reviewgate-<os>-<arch>` sibling, so the missing-binary branch
+# is exercised even on a host whose build IS bundled in the repo's bin/.
+tempfile = { workspace = true }

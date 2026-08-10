@@ -1,9 +1,38 @@
 #!/bin/sh
 # overwatch plugin launcher — selects the per-platform binary bundled in this dir.
 #
-# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/overwatch <sub>`; this dispatcher execs the
-# matching `overwatch-<os>-<arch>` build. If no build exists for the host platform
-# it exits 0 silently, so a missing binary never traps a turn.
+# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/overwatch status` on BOTH SessionStart
+# and Stop (hooks/hooks.json); the rest of the surface is an operator/skill CLI.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT "exit 0". `overwatch
+# status` is the FIRST measured consumer of backlog item a33f644f: at d48c7133,
+# with the same cwd and the same instant, it printed "Backlog pending: 0"
+# against a 219-item queue purely because the backlog launcher below it exited 0
+# with no stdout. Its own missing-binary path had the identical shape one level
+# up — exit 0 with an empty stdout, which is what "nothing to report" looks
+# like.
+#
+# Classification:
+#
+#   status  SessionStart + Stop, and also a plain operator command -> an
+#           explicit UNKNOWN banner on stdout, exit 0. This is the `unknown`
+#           band, not a blank one: a blank status bar is read as headroom
+#           (CLAUDE.md §1, commit 3b1eb24; ctxrot's statusline fallback does the
+#           same). Exit 0 is required for the SessionStart stdout to reach
+#           context at all — a non-zero exit there would suppress the very
+#           sentence that carries the warning.
+#
+#   everything else -> exit 1. This surface is verdict-carrying by exit code and
+#   by emptiness:
+#     * canary-gate — its consumer treats EVERY code outside {0,3} as "CANNOT
+#       EVALUATE … failing CLOSED" (scripts/rollout-plugins.sh:915), so a
+#       non-zero exit is both restrictive and already handled; exit 0 would have
+#       been read as "canary healthy, proceed".
+#     * review-queue / violations / escalations / undetermined-metrics /
+#       audit-metrics / sessions — finding lists, where an empty stdout reads as
+#       "no findings" (this is the same shape as the backlog defect).
+#     * begin / end / heartbeat / record-* — ledger writes; reporting success
+#       for a write that never happened is what leaves a stale lease behind.
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in
@@ -22,8 +51,25 @@ ext=""
 [ "$os" = windows ] && ext=".exe"
 
 binary="$root/overwatch-$os-$arch$ext"
-if [ ! -x "$binary" ]; then
-  echo "overwatch: no bundled binary for $os-$arch ($binary)." >&2
-  exit 0
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
 fi
-exec "$binary" "$@"
+
+echo "overwatch: no bundled binary for $os-$arch ($binary)." >&2
+
+case "${1:-}" in
+  status)
+    echo "overwatch status did NOT run: no bundled binary for $os-$arch."
+    echo "  sessions:    unknown"
+    echo "  backlog:     unknown"
+    echo "  hypotheses:  unknown"
+    echo "  condukt runs: unknown"
+    echo "This is UNKNOWN, not empty — do NOT read the absence of a session, a"
+    echo "backlog item or a finding here as evidence that there is none."
+    echo "Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the overwatch hooks."
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac

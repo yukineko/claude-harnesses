@@ -2,9 +2,32 @@
 # precommit-audit plugin launcher — selects the per-platform binary bundled in
 # this dir.
 #
-# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/precommit-audit <args>`; this dispatcher
-# execs the matching `precommit-audit-<os>-<arch>` build. If no build exists for
-# the host platform it exits 0 silently, so a missing binary never traps a turn.
+# The Stop hook calls `${CLAUDE_PLUGIN_ROOT}/bin/precommit-audit --mode stop`
+# (hooks/hooks.json); a git pre-commit invocation uses `--mode precommit`. This
+# dispatcher execs the matching `precommit-audit-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT "exit 0". Unlike the
+# JSON-speaking hooks, this crate carries its verdict in the EXIT CODE, so
+# exit 0 is not merely silence — it is literally the PASS verdict. The crate
+# says so itself in the caught-panic barrier (src/main.rs, `blocking_exit_for_
+# mode`): "a caught panic used to fall back to exit(0) — but exit 0 IS a
+# clean/allow verdict, so any crash in the audit reported the working set it
+# had just FAILED to scan as clean". A missing binary is the same
+# cannot-determine as that caught panic, so this fallback mirrors
+# `blocking_exit_for_mode` byte-for-byte:
+#
+#   stop (and its SessionEnd variant, the default when neither --mode nor
+#        AUDIT_MODE is set — see `resolve_mode`)         -> exit 2  (blocks the stop)
+#   precommit                                            -> exit 1  (aborts the commit)
+#
+# and it applies the SAME recursion guard the binary applies at src/main.rs:206
+# (`if hook.stop_hook_active { exit(0) }`), so the block is bounded to one and a
+# missing binary can never trap the session in a block loop.
+#
+# The remaining surface is `trust` (an operator write command that grants trust
+# to a repo's .precommit-audit.toml) plus --help/--version. Those are consumed
+# by humans and scripts, where exit 0 would read as "the root is now trusted";
+# they exit non-zero (CLAUDE.md §3).
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in
@@ -23,8 +46,48 @@ ext=""
 [ "$os" = windows ] && ext=".exe"
 
 binary="$root/precommit-audit-$os-$arch$ext"
-if [ ! -x "$binary" ]; then
-  echo "precommit-audit: no bundled binary for $os-$arch ($binary)." >&2
-  exit 0
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
 fi
-exec "$binary" "$@"
+
+echo "precommit-audit: no bundled binary for $os-$arch ($binary)." >&2
+
+fix="Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the precommit-audit hook."
+
+# `trust` and the informational flags are CLI, not a hook: no verdict to give.
+case "${1:-}" in
+  trust|-h|--help|-V|--version)
+    echo "precommit-audit: '$1' did NOT run (no binary), so nothing was trusted, printed or verified. $fix" >&2
+    exit 1
+    ;;
+esac
+
+# Mirror `resolve_mode`: explicit --mode wins over AUDIT_MODE, default "stop".
+mode="${AUDIT_MODE:-stop}"
+[ -n "$mode" ] || mode=stop
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--mode" ]; then
+    mode="$a"
+  fi
+  prev="$a"
+done
+
+if [ "$mode" = "precommit" ]; then
+  echo "precommit-audit: the pre-commit audit did NOT run for $os-$arch, so this working set is UNSCANNED, not clean — aborting the commit (blocking_exit_for_mode(precommit) = 1). $fix" >&2
+  exit 1
+fi
+
+# stop / SessionEnd. Honour the binary's own recursion guard so the block is
+# bounded to one; without a live event on stdin there is nothing to guard on and
+# the restrictive answer stands.
+if [ ! -t 0 ]; then
+  payload="$(cat)"
+  if printf '%s' "$payload" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
+    echo "precommit-audit: stop re-entry with no binary — allowing this stop (the fail-closed block was already surfaced once; the audit still has NOT run)." >&2
+    exit 0
+  fi
+fi
+
+echo "precommit-audit: the audit did NOT run for $os-$arch, so this working set is UNSCANNED, not clean (blocked fail-closed once — the next stop is allowed through so the session can never be trapped). $fix" >&2
+exit 2

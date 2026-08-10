@@ -1,4 +1,4 @@
-last_synced = "ecd8b9478b8a1a6dcafa87236a9ef793608e706a"
+last_synced = "9152989da82f244e201a3e744d36cbf194259ceb"
 
 [entries.".gitattributes"]
 key = ".gitattributes"
@@ -4246,7 +4246,7 @@ key = "crates/propguard/src/gate.rs"
 kind = "feature"
 spec_doc = "docs/specs/propguard.md"
 status = "changed"
-last_ref = "4ad42f039e1ddfd86d65f6b0ac72c181e7c4d495"
+last_ref = "7d9f1efd37e17474b4aab50a5fb629c347a6c5f9"
 impl_files = ["crates/propguard/src/gate.rs"]
 test_files = []
 client_refs = []
@@ -4256,7 +4256,7 @@ key = "crates/propguard/src/git.rs"
 kind = "feature"
 spec_doc = "docs/specs/propguard.md"
 status = "changed"
-last_ref = "3c630f9e66bf6e7f920e4d5272775bad93471422"
+last_ref = "7d9f1efd37e17474b4aab50a5fb629c347a6c5f9"
 impl_files = ["crates/propguard/src/git.rs"]
 test_files = []
 client_refs = []

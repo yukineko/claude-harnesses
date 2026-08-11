@@ -9813,3 +9813,36 @@ updated_at = 1786441576
 weight = 0.0
 issue_number = 240
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/240"
+
+[[task]]
+id = "8b871bb1"
+title = "condukt state probe の進捗シグナルが task に紐づいていない — repo 全体の git HEAD を見るため、他セッションが commit するだけで死んだ run が progressing になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "crash-resilience",
+    "p0",
+]
+status = "pending"
+notes = """
+実測 2026-08-11、測定点 88ae1435。5日前 (2026-08-06 06:21) の run-20260806-062115-17609 に対して condukt state probe を実行すると、t1 と t2 の両方が verdict=progressing を返した。しかし逐語の内訳を見ると、根拠にしている git-head は 88ae14356bc2e76c95951241d4db245027209e66 = 本セッションが 93 秒前に main へ積んだ commit であり、当該 task の worktree HEAD (a42401bf / 40228e2e) ではない。
+
+原因はコードに明記されている。crates/condukt/src/state.rs:1134-1135 逐語:
+    // git HEAD is a run-level (repo-wide) signal shared by every task.
+    let head = progress::git_head_signal(&repo_root(cwd));
+progress::fingerprint_from_signals は git-head と task-updated-at を合成するので、repo のどこかで誰かが commit するたび fingerprint が変わり、凍結した task も progressing に写る。CLAUDE.md 第8節は「別セッションは常に存在する前提で動く」を最上位の不変条件に置いているので、この repo で HEAD が止まることは事実上ない。
+
+これは probe_run 自身の docstring (state.rs:1128-1129 逐語「let a genuinely-frozen task converge to stalled. A single probe of a task with no prior snapshot is undetermined by construction (fail-closed)」) と食い違う。凍結した task は repo が静止していない限り stalled へ収束しない。散文が実挙動と違う (第4節)。
+
+これがユーザー依頼 e99f61e4 の核心そのものである: 生死不明が known へ解決しない理由が、判定器が「その task の進捗」ではなく「repo の進捗」を測っていることにある。方向としては保全側 (GC が消さない) なので危険側ではないが、unknown が永久に unknown のままになるため、依頼の「生きているかわからないという状態そのものをなくすか減らす」を構造的に達成不能にしている。
+
+もう1つの未解明の観測 (判断で埋めない): 同 run の task の updated_at は 1786441628 = 2026-08-11 18:47:08 に書き換わっていた。run は 5 日前のものである。書き換えた主体は特定できていない。condukt state list / state resume-context / state probe の3つを順に実行して updated_at が動かないことは確認済み (いずれも 1786441628 のまま) なので、これら read 系ではない。時刻は本セッションの Stop hook が発火した瞬間と一致し、hook は当時 t1/t2 を pending と報告したが state 上は running だったので、Stop 経路のどこかが state set 相当 (crates/condukt/src/main.rs:3653 が status 設定時に updated_at を now で上書きする) を呼んだ可能性がある。ただし未証明であり、経路を特定するまで断定しない。もし Stop hook が触っているなら、task-updated-at も git-head と同様に「無関係な活動で若返る」ことになり、2本ある進捗シグナルの両方が汚染されていることになる。
+
+完了条件: (1) 進捗判定が当該 task の worktree に閉じたシグナル (worktree HEAD、worktree 内ファイルの mtime、その task 固有の transcript) で行われること。repo 全体の HEAD を task の生存証拠に使わないこと。(2) 凍結した task が、repo が活動中でも stalled へ収束することを behavioural test で観測する。RED を先に観測すること。(3) アンチ空虚性の対照: 本当に進捗している task が progressing のままであることを同時に観測する。(4) updated_at を無関係な経路が上書きしていないかを特定し、していれば分離する。(5) docstring を実挙動へ合わせる (同一コミットで)。
+
+本セッションでの手当て: 当該 run の t1/t2 は成果物が既に main に入っていることを確認 (t1 は crates/harness-core/src/boundary.rs の read_pipe_bounded が Determination を返す形で landed、docstring が過去形で旧 fail-open を記述。t2 は .compass/charter.md の DoD9 が 2026-08-06 改定済み)。branch は main に対して 0 commits ahead、worktree の未追跡物は消費済みの commit message ファイル 1 個のみ。よって verified としてマークし worktree と branch を回収した。ただしこれは人手による1回限りの照合であって機構ではない。関連: e99f61e4、2d3cbda2、5daf0b60、b637936f。"""
+created_at = 1786441861
+updated_at = 1786441861
+weight = 0.0
+issue_number = 241
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/241"

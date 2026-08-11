@@ -9900,3 +9900,106 @@ updated_at = 1786451504
 weight = 0.0
 issue_number = 244
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/244"
+
+[[task]]
+id = "356bd51d"
+title = "condukt: 2 worker が同一 worktree/index を共有した (dead 判定が誤りで再投入)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "liveness",
+    "p0",
+]
+status = "pending"
+notes = "実測 2026-08-12 03:44-03:55 JST。orchestrator が t2-condukt-reconcile の worker を dead と判定して 2 人目 (私) を同じ worktree /Users/yuki/.condukt/worktrees/run-20260811-230435-19389-t2-condukt-reconcile に投入したが、1 人目は生きていた。証跡: 私が何も操作していない 2 分間 (03:53:02 -> 03:55:07) に wt_reconcile.rs / state.rs / worktree.rs の sha が変化し、restore.rs が新たに modified として現れた。さらに私の Edit が適用された時点でファイル内容が私の Read 時点と異なっていた (is_sidecar -> state::is_run_state_sidecar に置き換わっていた)。lsof で cwd がその worktree の claude プロセス (pid 66412) を観測。CLAUDE.md 8 が言う「git が救えない唯一の競合」= 同一 index の共有が、worktree 分離をしていてもオーケストレータ側の liveness 誤判定で発生する。今回は orchestrator が介入して 1 人目を stand down させたため実害は出ていないが、機構としては dead 判定が pid でも progress でもない何かに基づいていた可能性が高い。backlog e99f61e4 で作った condukt worktree reconcile の判定 (progress 由来 3 値) を、worker の再投入判定そのものにも適用できるかを検討する。"
+created_at = 1786472066
+updated_at = 1786472066
+weight = 0.0
+issue_number = 250
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/250"
+
+[[task]]
+id = "a2ce1a14"
+title = "condukt: admin dir が壊れた worktree は removable にも preservable にもならず人手救出しか出口がない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+status = "pending"
+notes = "2026-08-12 実測 (backlog e99f61e4 / commit 74e3a879 の副産物)。git admin dir (.git/worktrees/<name>) を失った worktree は、その中で git が動かないので dirtiness が Undetermined になる。GC 方向の制限側は「消さない」なので自動削除はされない (正しい) が、同じ理由で content_tree (read-tree HEAD -> add -A -> write-tree) も走らないため --preserve でも退避できない。結果として reconcile は理由付きで報告するだけになり、出口が人手の救出のみになる。案: admin dir を再生成する (git worktree repair) か、HEAD 無しの parentless commit として全ファイルを退避する経路を用意する。"
+created_at = 1786472089
+updated_at = 1786472089
+weight = 0.0
+issue_number = 251
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/251"
+
+[[task]]
+id = "874bd03c"
+title = "condukt worktree reconcile --preserve が .gitignore 対象ファイルを退避しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+status = "pending"
+notes = "2026-08-12 (commit 74e3a879)。保全は temp index に git add -A する実装なので .gitignore が効き、無視されたファイル (.scratch/ ・ローカル .env ・ビルド成果物など) は refs/preserved/<name>-<hash> の tree に入らない。dirtiness 判定に使う git status --porcelain も既定で ignored を出さないので両者は一貫しているが、「保全済みだから消してよい」が意味するのは「trackable な作業が失われない」であって「ディレクトリが byte 再現できる」ではない。docstring には明記済み。ignored も退避する --include-ignored を足すか、preserved レポートに ignored ファイル数を出して operator に見せるかを検討する。"
+created_at = 1786472091
+updated_at = 1786472091
+weight = 0.0
+issue_number = 252
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/252"
+
+[[task]]
+id = "c69d1b77"
+title = "condukt worktree reconcile --json の resume 面に消費者がいない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+status = "pending"
+notes = "2026-08-12 (commit 74e3a879)。backlog e99f61e4 の完了条件のうち reconcile/GC 側 (b) は実装したが、resume 側 (a) は未配線。--json は「どの worktree が未完了作業や preserved を抱えているか」を機械可読で出すが、それを読む側が無い。候補: hooks/restore.rs (SessionStart) が reportable_unregistered_dirs のパス列挙ではなく reconcile の verdict を出す / overwatch review-queue に流す / refs/preserved を一覧する condukt worktree preserved。"
+created_at = 1786472093
+updated_at = 1786472093
+weight = 0.0
+issue_number = 253
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/253"
+
+[[task]]
+id = "abf513e1"
+title = "condukt: worktree ブランチ名に run id が二重に入る (condukt/<run>/<run>/<task>)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+status = "pending"
+notes = "2026-08-12 実測。worktree run-20260811-230435-19389-t2-condukt-reconcile の実ブランチは condukt/run-20260811-230435-19389/run-20260811-230435-19389/t2-condukt-reconcile で、run id が 2 回入っている。オーケストレータ側が既に <run>/<task> を渡しているところに worktree::create の --run namespace 付与が重ねてかかっている疑い (worktree.rs の create() が <prefix>/<run>/<name> を作る)。実害は名前の冗長だけだが、branch 名で run を照合する処理があると効く。"
+created_at = 1786472109
+updated_at = 1786472109
+weight = 0.0
+issue_number = 254
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/254"
+
+[[task]]
+id = "42478392"
+title = "condukt: 実 state root に 2410 個の namespace が溜まっている (大半がテスト由来の -tmpXXXX)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+status = "pending"
+notes = "2026-08-12 実測: ls ~/.condukt/state | wc -l -> 2410。大半が -tmp0dBERN-f4c87ed9 のような tempdir 由来の project key で、テストが $HOME を差し替えずに走った残骸に見える。今回追加した wt_reconcile::scan_state_root は全 namespace を走査するので、この数がそのまま 1 回の reconcile の read_dir コストになる (現状 1 秒未満で問題は出ていないが、増え続ける)。加えて、この中の json が 1 つでも壊れると scan が incomplete になり全 worktree が Undetermined に落ちる (方向としては安全側だが、常時 Undetermined はゲートを形骸化させる)。掃除と、テストが state_dir を temp に閉じ込めているかの確認。"
+created_at = 1786472110
+updated_at = 1786472110
+weight = 0.0
+issue_number = 255
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/255"

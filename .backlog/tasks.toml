@@ -9823,7 +9823,7 @@ tags = [
     "crash-resilience",
     "p0",
 ]
-status = "pending"
+status = "done"
 notes = """
 実測 2026-08-11、測定点 88ae1435。5日前 (2026-08-06 06:21) の run-20260806-062115-17609 に対して condukt state probe を実行すると、t1 と t2 の両方が verdict=progressing を返した。しかし逐語の内訳を見ると、根拠にしている git-head は 88ae14356bc2e76c95951241d4db245027209e66 = 本セッションが 93 秒前に main へ積んだ commit であり、当該 task の worktree HEAD (a42401bf / 40228e2e) ではない。
 
@@ -9842,7 +9842,7 @@ progress::fingerprint_from_signals は git-head と task-updated-at を合成す
 
 本セッションでの手当て: 当該 run の t1/t2 は成果物が既に main に入っていることを確認 (t1 は crates/harness-core/src/boundary.rs の read_pipe_bounded が Determination を返す形で landed、docstring が過去形で旧 fail-open を記述。t2 は .compass/charter.md の DoD9 が 2026-08-06 改定済み)。branch は main に対して 0 commits ahead、worktree の未追跡物は消費済みの commit message ファイル 1 個のみ。よって verified としてマークし worktree と branch を回収した。ただしこれは人手による1回限りの照合であって機構ではない。関連: e99f61e4、2d3cbda2、5daf0b60、b637936f。"""
 created_at = 1786441861
-updated_at = 1786441861
+updated_at = 1786451907
 weight = 0.0
 issue_number = 241
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/241"

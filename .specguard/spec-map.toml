@@ -1,4 +1,4 @@
-last_synced = "f264904f40738da87bd158b6420b11a2441e138c"
+last_synced = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
 
 [entries.".gitattributes"]
 key = ".gitattributes"
@@ -115,6 +115,15 @@ status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
 impl_files = []
 test_files = ["crates/autoflow/tests/integration.rs"]
+client_refs = []
+
+[entries."crates/autoflow/tests/launcher_missing_binary.rs"]
+key = "crates/autoflow/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/autoflow/tests/launcher_missing_binary.rs"]
 client_refs = []
 
 [entries."crates/autoflow/tests/precompact_lock.rs"]
@@ -268,6 +277,15 @@ status = "changed"
 last_ref = "7a2ec031263a138eb01d1637f2d3327ee388fd8a"
 impl_files = []
 test_files = ["crates/backlog/tests/integration.rs"]
+client_refs = []
+
+[entries."crates/backlog/tests/launcher_missing_binary.rs"]
+key = "crates/backlog/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/backlog/tests/launcher_missing_binary.rs"]
 client_refs = []
 
 [entries."crates/backlog/tests/lock_heartbeat_ttl.rs"]
@@ -824,6 +842,15 @@ status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
 impl_files = []
 test_files = ["crates/budgetguard/tests/integration.rs"]
+client_refs = []
+
+[entries."crates/budgetguard/tests/launcher_missing_binary.rs"]
+key = "crates/budgetguard/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/budgetguard/tests/launcher_missing_binary.rs"]
 client_refs = []
 
 [entries."crates/compass/src/breadcrumb.rs"]
@@ -1483,6 +1510,15 @@ impl_files = []
 test_files = ["crates/condukt/tests/gate_exec_cli.rs"]
 client_refs = []
 
+[entries."crates/condukt/tests/launcher_missing_binary.rs"]
+key = "crates/condukt/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/condukt/tests/launcher_missing_binary.rs"]
+client_refs = []
+
 [entries."crates/condukt/tests/lessons_taint_trigger.rs"]
 key = "crates/condukt/tests/lessons_taint_trigger.rs"
 kind = "feature"
@@ -2094,6 +2130,15 @@ impl_files = []
 test_files = ["crates/deepwiki/tests/integration.rs"]
 client_refs = []
 
+[entries."crates/deepwiki/tests/launcher_missing_binary.rs"]
+key = "crates/deepwiki/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/deepwiki/tests/launcher_missing_binary.rs"]
+client_refs = []
+
 [entries."crates/difflog/src/config.rs"]
 key = "crates/difflog/src/config.rs"
 kind = "feature"
@@ -2259,6 +2304,15 @@ status = "changed"
 last_ref = "a4b24edc01a2f176e6eebff6a58ff6efbeb07e10"
 impl_files = []
 test_files = ["crates/donegate/tests/integration.rs"]
+client_refs = []
+
+[entries."crates/donegate/tests/launcher_missing_binary.rs"]
+key = "crates/donegate/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/donegate/tests/launcher_missing_binary.rs"]
 client_refs = []
 
 [entries."crates/donegate/tests/ui/verdict/determination_unwrap_or.rs"]
@@ -2455,6 +2509,15 @@ status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
 impl_files = []
 test_files = ["crates/flow/tests/integration.rs"]
+client_refs = []
+
+[entries."crates/flow/tests/launcher_missing_binary.rs"]
+key = "crates/flow/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/flow/tests/launcher_missing_binary.rs"]
 client_refs = []
 
 [entries."crates/flow/tests/skill_queue_contract.rs"]
@@ -3441,6 +3504,15 @@ impl_files = []
 test_files = ["crates/harness-status/tests/integration.rs"]
 client_refs = []
 
+[entries."crates/harness-status/tests/launcher_missing_binary.rs"]
+key = "crates/harness-status/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/harness-status/tests/launcher_missing_binary.rs"]
+client_refs = []
+
 [entries."crates/hypothesis/src/config.rs"]
 key = "crates/hypothesis/src/config.rs"
 kind = "feature"
@@ -3971,6 +4043,15 @@ impl_files = []
 test_files = []
 client_refs = []
 
+[entries."crates/overwatch/tests/launcher_missing_binary.rs"]
+key = "crates/overwatch/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/overwatch/tests/launcher_missing_binary.rs"]
+client_refs = []
+
 [entries."crates/overwatch/tests/lease_concurrency.rs"]
 key = "crates/overwatch/tests/lease_concurrency.rs"
 kind = "feature"
@@ -4239,6 +4320,15 @@ impl_files = []
 test_files = ["crates/precommit-audit/tests/integration.rs"]
 client_refs = []
 
+[entries."crates/precommit-audit/tests/launcher_missing_binary.rs"]
+key = "crates/precommit-audit/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/precommit-audit/tests/launcher_missing_binary.rs"]
+client_refs = []
+
 [entries."crates/precommit-audit/tests/panic_fails_closed.rs"]
 key = "crates/precommit-audit/tests/panic_fails_closed.rs"
 kind = "feature"
@@ -4345,6 +4435,15 @@ status = "changed"
 last_ref = "a7f1d2417ad46056af1697fbb0a27308c64f13f5"
 impl_files = []
 test_files = ["crates/propguard/tests/integration.rs"]
+client_refs = []
+
+[entries."crates/propguard/tests/launcher_missing_binary.rs"]
+key = "crates/propguard/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/propguard/tests/launcher_missing_binary.rs"]
 client_refs = []
 
 [entries."crates/replaykit/src/main.rs"]
@@ -4494,6 +4593,15 @@ status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
 impl_files = []
 test_files = ["crates/reviewgate/tests/integration.rs"]
+client_refs = []
+
+[entries."crates/reviewgate/tests/launcher_missing_binary.rs"]
+key = "crates/reviewgate/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/reviewgate/tests/launcher_missing_binary.rs"]
 client_refs = []
 
 [entries."crates/runbook/Cargo.lock"]
@@ -5149,6 +5257,15 @@ impl_files = []
 test_files = ["crates/stuckguard/tests/integration.rs"]
 client_refs = []
 
+[entries."crates/stuckguard/tests/launcher_missing_binary.rs"]
+key = "crates/stuckguard/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/stuckguard/tests/launcher_missing_binary.rs"]
+client_refs = []
+
 [entries."crates/taintguard/src/classify.rs"]
 key = "crates/taintguard/src/classify.rs"
 kind = "feature"
@@ -5454,6 +5571,15 @@ impl_files = []
 test_files = ["crates/tdd/tests/integration.rs"]
 client_refs = []
 
+[entries."crates/tdd/tests/launcher_missing_binary.rs"]
+key = "crates/tdd/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/tdd/tests/launcher_missing_binary.rs"]
+client_refs = []
+
 [entries."crates/tracekit/src/main.rs"]
 key = "crates/tracekit/src/main.rs"
 kind = "feature"
@@ -5502,6 +5628,15 @@ status = "tracked"
 last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
 impl_files = []
 test_files = ["crates/tracekit/tests/integration.rs"]
+client_refs = []
+
+[entries."crates/tracekit/tests/launcher_missing_binary.rs"]
+key = "crates/tracekit/tests/launcher_missing_binary.rs"
+kind = "feature"
+status = "changed"
+last_ref = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+impl_files = []
+test_files = ["crates/tracekit/tests/launcher_missing_binary.rs"]
 client_refs = []
 
 [entries."crates/trajectoryeval/src/extract.rs"]

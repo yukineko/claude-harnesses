@@ -1060,7 +1060,9 @@ pub fn stuck_task_ids(run: &RunState, stuck_ttl_secs: u64) -> Vec<String> {
 /// One durable progress signal's reading for a task, for the `state probe` view.
 #[derive(Debug, Clone, Serialize)]
 pub struct SignalSample {
-    /// Signal identity (e.g. `git-head`, `task-updated-at`).
+    /// Signal identity. Both signals emitted by [`probe_run`] are **task-scoped**:
+    /// `task-worktree-head` (git HEAD of THAT task's own worktree — not of the
+    /// repo, which every task shares) and `task-updated-at`.
     pub name: String,
     /// Whether the signal was readable this sample. An unreadable signal is
     /// `Undetermined` and (per the fail-closed combiner) forces the whole task
@@ -1076,13 +1078,17 @@ pub struct TaskProbe {
     pub task_id: String,
     pub agent_id: Option<String>,
     pub status: Status,
+    /// This task's own signals: `task-worktree-head` + `task-updated-at`.
     pub signals: Vec<SignalSample>,
     /// `now - updated_at` (seconds) — age since this task last durably advanced.
     /// `None` for legacy tasks with no `updated_at`.
     pub last_progress_age_secs: Option<i64>,
     /// `progressing` | `stalled` | `undetermined`. Multi-sample: the first probe
     /// (no prior snapshot) and any probe before the window elapses are
-    /// `undetermined` by construction — reap authority is `stalled` ONLY.
+    /// `undetermined` by construction. A task with **no worktree** is likewise
+    /// `undetermined` — there is no task-scoped signal to read for it (§3), and
+    /// that is not softened into `progressing`. This report is print-only, so it
+    /// carries no reap authority of its own; the reap gate is `claim_progress`.
     pub verdict: String,
 }
 
@@ -1118,24 +1124,68 @@ fn signal_sample(name: &str, d: &Determination<Vec<u8>>) -> SignalSample {
     }
 }
 
-/// Probe the PROGRESS (not liveness) of every RUNNING task in a run: sample the
-/// durable signals (git HEAD of the repo + the task's `updated_at`) into the
-/// shared multi-sample progress store and report each task's verdict, signals,
-/// and age since last durable advance.
+/// Probe the PROGRESS (not liveness) of every RUNNING task in a run: sample each
+/// task's durable signals into the shared multi-sample progress store and report
+/// its verdict, signals, and age since last durable advance.
+///
+/// # The signals are TASK-SCOPED, not repo-wide
+///
+/// Both signals are read per task, inside the loop:
+///
+/// * `task-worktree-head` — git HEAD of **that task's own worktree**
+///   (`TaskState.worktree`), not of the repo containing `cwd`.
+/// * `task-updated-at` — that task's `updated_at`.
+///
+/// This used to sample `git_head_signal(&repo_root(cwd))`, a repo-wide signal
+/// shared by every task. Under CLAUDE.md §8 other sessions are always committing
+/// to the same repo, so that signal advanced for reasons having nothing to do
+/// with the probed task, and a genuinely frozen task reported `progressing`
+/// forever — it could never converge to `stalled` (measured 2026-08-06:
+/// `condukt state probe` returned `progressing` for a dead run). A commit made
+/// elsewhere in the shared repo is not evidence that THIS task advanced.
+///
+/// # A task with no worktree is `undetermined` (CLAUDE.md §3)
+///
+/// A RUNNING task whose `worktree` is `None` (serial / fast-path /
+/// single-worktree mode) has **no task-scoped durable signal at all**. That is
+/// "cannot determine", so `task-worktree-head` is `Undetermined` and — since
+/// [`progress::fingerprint_from_signals`] is fail-closed on any unreadable
+/// signal — the task's verdict is `undetermined`. It deliberately does NOT fall
+/// back to the repo-wide HEAD: that fallback is exactly the defect above, and it
+/// resolves "I cannot see this task" to the permissive `progressing`.
+///
+/// # What this does NOT detect (residual, stated rather than glossed over)
+///
+/// A worker that is editing files in its worktree **without committing** moves
+/// neither the worktree HEAD nor `updated_at`, so once the window elapses it now
+/// reads `stalled` even though it is working. This report is **print-only
+/// observability** (`StateAction::Probe` in `main.rs` only prints it; it reaps
+/// nothing and gates nothing), so that misreading costs a human a wrong glance,
+/// not a stolen worktree. Closing it would need a working-tree-mtime signal,
+/// which is deliberately not added here. The reap-authoritative twin is
+/// `claim::claim_progress`, which is a different multi-signal gate and is
+/// unchanged by this function.
 ///
 /// This is the observability twin of the reap gate — it does not reap anything,
 /// but it samples the SAME engine, so repeated probes across the window are what
-/// let a genuinely-frozen task converge to `stalled`. A single probe of a task
-/// with no prior snapshot is `undetermined` by construction (fail-closed).
+/// let a task whose own worktree is frozen converge to `stalled`. A single probe
+/// of a task with no prior snapshot is `undetermined` by construction
+/// (fail-closed).
 pub fn probe_run(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> Result<RunProbe> {
     let rs = RunState::load(cfg, cwd, run_id)?;
     let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
     let store = crate::claim::progress_store_dir(cfg, cwd);
-    // git HEAD is a run-level (repo-wide) signal shared by every task.
-    let head = progress::git_head_signal(&repo_root(cwd));
 
     let mut tasks = Vec::new();
     for t in rs.tasks.iter().filter(|t| t.status == Status::Running) {
+        // Task-scoped: this task's OWN worktree HEAD. No worktree ⇒ no
+        // task-scoped signal ⇒ Undetermined (§3), never a repo-wide fallback.
+        let head = match t.worktree.as_deref() {
+            Some(wt) => progress::git_head_signal(Path::new(wt)),
+            None => Determination::undetermined(
+                "task has no worktree — no task-scoped progress signal exists for it",
+            ),
+        };
         let updated = match t.updated_at {
             Some(ts) => Determination::Known(ts.to_string().into_bytes()),
             None => Determination::undetermined(
@@ -1143,11 +1193,11 @@ pub fn probe_run(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> Result<Run
             ),
         };
         let signals = vec![
-            signal_sample("git-head", &head),
+            signal_sample("task-worktree-head", &head),
             signal_sample("task-updated-at", &updated),
         ];
         let current = progress::fingerprint_from_signals(vec![
-            ("git-head", head.clone()),
+            ("task-worktree-head", head),
             ("task-updated-at", updated),
         ]);
         let key = format!("probe:{run_id}:{}", t.id);
@@ -2538,13 +2588,15 @@ mod tests {
         // First sample of a task with no prior snapshot is undetermined — the
         // engine cannot yet claim progress OR stall (fail-closed by construction).
         assert_eq!(t.verdict, "undetermined");
-        // Both durable signals are reported by name.
+        // Both durable signals are reported by name. The head signal is
+        // task-scoped (that task's own worktree), so it is named for what it is.
         let names: Vec<&str> = t.signals.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&"git-head"));
+        assert!(names.contains(&"task-worktree-head"));
         assert!(names.contains(&"task-updated-at"));
-        // task-updated-at is readable (Some(500)); git-head may be un/readable
-        // depending on whether tmp is inside a repo — the verdict is undetermined
-        // either way (no prior snapshot), which is the point being pinned.
+        // task-updated-at is readable (Some(500)); task-worktree-head is
+        // unreadable here because this task has no worktree recorded — the
+        // verdict is undetermined either way (no prior snapshot), which is the
+        // point being pinned.
         let upd = t
             .signals
             .iter()
@@ -2588,6 +2640,202 @@ mod tests {
             .unwrap();
         assert!(!upd.readable);
         assert_eq!(t.verdict, "undetermined");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── probe: the progress signal must be scoped to the TASK, not the repo ──
+    //
+    // Backlog 8b871bb1. `probe_run` folds `git_head_signal(&repo_root(cwd))`
+    // into every task's fingerprint. That HEAD is repo-wide, and CLAUDE.md §8
+    // guarantees other sessions are always committing to the same repo, so the
+    // shared signal advances for reasons that have nothing to do with the task
+    // being probed. The three tests below pin the observable contract on the
+    // stable surface (`probe_run` + `TaskProbe.verdict`):
+    //
+    //   A. task worktree FROZEN, repo HEAD MOVES     ⇒ "stalled"
+    //   B. task worktree MOVES,  repo HEAD FROZEN    ⇒ "progressing"  (anti-vacuity)
+    //   C. task has NO worktree, repo HEAD MOVES     ⇒ "undetermined" (§3)
+    //
+    // B is what stops "always answer stalled" from passing A, and C is what
+    // stops the cannot-determine case from collapsing into the permissive
+    // "progressing".
+
+    /// Add one empty commit so the repo's HEAD sha advances. Fails loudly if
+    /// git itself is unusable (e.g. the Xcode-license hazard) rather than
+    /// letting an un-run git read as "nothing advanced".
+    fn git_advance_head(repo: &Path) {
+        use crate::worktree::git;
+        let before = git(repo, &["rev-parse", "HEAD"])
+            .expect("git rev-parse HEAD must work in the fixture repo");
+        git(repo, &["commit", "--allow-empty", "-m", "advance"])
+            .expect("git commit --allow-empty must work in the fixture repo");
+        let after = git(repo, &["rev-parse", "HEAD"]).expect("git rev-parse HEAD after commit");
+        assert_ne!(
+            before.trim(),
+            after.trim(),
+            "fixture precondition: an empty commit must move HEAD in {}",
+            repo.display()
+        );
+    }
+
+    /// Build a probe fixture: a git repo at `tmp` (so `repo_root(tmp) == tmp`,
+    /// i.e. the CURRENT code samples a repo this test controls) plus an
+    /// optional separate git repo standing in for the task's own worktree.
+    /// Persists a run with exactly one RUNNING task whose `updated_at` is
+    /// frozen, and returns `(cfg, worktree_path)`.
+    fn probe_fixture(tmp: &Path, run_id: &str, with_worktree: bool) -> (Config, Option<PathBuf>) {
+        // The cwd repo must exist BEFORE anything derives a project key from it.
+        init_git_repo(tmp);
+        // Observed, not assumed: this is what `probe_run` feeds to
+        // `git_head_signal` today, so the test genuinely controls that signal.
+        assert_eq!(
+            repo_root(tmp),
+            tmp.to_path_buf(),
+            "fixture precondition: repo_root(cwd) must resolve to the fixture repo"
+        );
+
+        let wt = if with_worktree {
+            let wt = tmp.join("task-worktree");
+            init_git_repo(&wt);
+            assert_eq!(
+                repo_root(&wt),
+                wt,
+                "fixture precondition: the task worktree must be its own git root"
+            );
+            Some(wt)
+        } else {
+            None
+        };
+
+        let cfg = make_test_cfg(tmp);
+        let rs = RunState {
+            run_id: run_id.into(),
+            goal: "g".into(),
+            tasks: vec![TaskState {
+                id: "t-frozen".into(),
+                status: Status::Running,
+                worktree: wt.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                // Frozen across both probes: the OTHER durable signal must not
+                // change for a legitimate reason, or the test proves nothing.
+                updated_at: Some(9_000),
+                ..Default::default()
+            }],
+            paused: false,
+            terminal_label: None,
+            recorded_at: None,
+        };
+        rs.save(&cfg, tmp).unwrap();
+        (cfg, wt)
+    }
+
+    fn only_verdict(report: &RunProbe) -> String {
+        assert_eq!(
+            report.tasks.len(),
+            1,
+            "fixture has exactly one RUNNING task"
+        );
+        report.tasks[0].verdict.clone()
+    }
+
+    /// (A) The defect. The task's own worktree is FROZEN across the whole
+    /// window while the repo containing `cwd` gains a commit between the two
+    /// probes. Repo-wide HEAD is not evidence about this task, so the verdict
+    /// must converge to `stalled`.
+    #[test]
+    fn probe_task_frozen_worktree_is_stalled_even_when_repo_head_advances() {
+        let tmp = make_tmp_dir("probe-scoped-stall");
+        let (cfg, wt) = probe_fixture(&tmp, "runS", true);
+        let wt = wt.unwrap();
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+
+        // First sample: undetermined by construction (no prior snapshot).
+        let first = probe_run(&cfg, &tmp, "runS", t0).unwrap();
+        assert_eq!(
+            only_verdict(&first),
+            "undetermined",
+            "a first probe with no prior snapshot must be undetermined"
+        );
+
+        // A *different* session commits to the shared repo. The task's own
+        // worktree does NOT move.
+        let wt_head_before = crate::worktree::git(&wt, &["rev-parse", "HEAD"]).unwrap();
+        git_advance_head(&tmp);
+        let wt_head_after = crate::worktree::git(&wt, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(
+            wt_head_before.trim(),
+            wt_head_after.trim(),
+            "fixture precondition: the task worktree must stay frozen"
+        );
+
+        let second = probe_run(&cfg, &tmp, "runS", t0 + window).unwrap();
+        assert_eq!(
+            only_verdict(&second),
+            "stalled",
+            "the task's own worktree was frozen for a full window; a commit made \
+             elsewhere in the shared repo is not evidence that THIS task advanced"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// (B) Anti-vacuity control for (A): with the repo-wide HEAD frozen, a real
+    /// commit inside the task's OWN worktree must read as `progressing`. This
+    /// is what makes "just always return stalled" an unacceptable fix.
+    #[test]
+    fn probe_task_advancing_worktree_is_progressing_when_repo_head_frozen() {
+        let tmp = make_tmp_dir("probe-scoped-progress");
+        let (cfg, wt) = probe_fixture(&tmp, "runG", true);
+        let wt = wt.unwrap();
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+
+        let first = probe_run(&cfg, &tmp, "runG", t0).unwrap();
+        assert_eq!(only_verdict(&first), "undetermined");
+
+        // This task does durable work; nothing else commits to the shared repo.
+        let repo_head_before = crate::worktree::git(&tmp, &["rev-parse", "HEAD"]).unwrap();
+        git_advance_head(&wt);
+        let repo_head_after = crate::worktree::git(&tmp, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(
+            repo_head_before.trim(),
+            repo_head_after.trim(),
+            "fixture precondition: the shared repo HEAD must stay frozen"
+        );
+
+        let second = probe_run(&cfg, &tmp, "runG", t0 + window).unwrap();
+        assert_eq!(
+            only_verdict(&second),
+            "progressing",
+            "the task committed in its own worktree, so it is demonstrably alive"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// (C) §3: a RUNNING task with no recorded worktree has no task-scoped
+    /// progress signal at all. "Cannot determine" must NOT collapse into the
+    /// permissive `progressing` just because the shared repo happened to move.
+    /// Asserted on the verdict word only — never on the reason prose.
+    #[test]
+    fn probe_task_without_worktree_is_undetermined_not_progressing() {
+        let tmp = make_tmp_dir("probe-no-worktree");
+        let (cfg, wt) = probe_fixture(&tmp, "runN", false);
+        assert!(wt.is_none());
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+
+        let first = probe_run(&cfg, &tmp, "runN", t0).unwrap();
+        assert_eq!(only_verdict(&first), "undetermined");
+
+        // Someone else commits to the shared repo.
+        git_advance_head(&tmp);
+
+        let second = probe_run(&cfg, &tmp, "runN", t0 + window).unwrap();
+        assert_eq!(
+            only_verdict(&second),
+            "undetermined",
+            "no worktree ⇒ no task-scoped signal ⇒ cannot determine; a repo-wide \
+             commit must not be read as this task making progress"
+        );
         std::fs::remove_dir_all(&tmp).ok();
     }
 

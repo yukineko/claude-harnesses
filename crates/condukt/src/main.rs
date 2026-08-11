@@ -758,10 +758,17 @@ enum StateAction {
     },
     /// Probe the multi-sample PROGRESS (not liveness) of a run's RUNNING tasks:
     /// per task, the durable signals, the age since last durable advance, and the
-    /// three-valued verdict (progressing|stalled|undetermined). Samples the same
-    /// engine the claim reap gate uses, so repeated probes across the window are
-    /// what let a genuinely-frozen task converge to `stalled` — a single probe of
-    /// a task with no prior snapshot is `undetermined` by construction.
+    /// three-valued verdict (progressing|stalled|undetermined). The signals are
+    /// TASK-SCOPED — the git HEAD of that task's OWN worktree plus its
+    /// updated_at — so a commit made elsewhere in the shared repo is not read as
+    /// this task advancing. Samples the same engine the claim reap gate uses, so
+    /// repeated probes across the window are what let a task whose own worktree
+    /// is frozen converge to `stalled`; a single probe of a task with no prior
+    /// snapshot is `undetermined` by construction. A RUNNING task with no
+    /// recorded worktree has no task-scoped signal at all and is reported
+    /// `undetermined` (never `progressing`). Print-only: it reaps nothing. It
+    /// also cannot see a worker editing files without committing — that reads as
+    /// `stalled` after the window.
     Probe {
         #[arg(long)]
         run: String,

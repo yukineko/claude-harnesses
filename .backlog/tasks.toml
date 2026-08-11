@@ -9727,3 +9727,40 @@ updated_at = 1786376688
 weight = 0.0
 issue_number = 236
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/236"
+
+[[task]]
+id = "e99f61e4"
+title = "セッション異常終了への対応: (a) 中断作業を次セッションが resume できること (b) 死んだセッションの残骸を fail-closed に GC できること"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+status = "pending"
+notes = """
+ユーザー直の依頼 2026-08-11 (session b57a58c3)。逐語: session が途中終了することが多々ある。異常終了に対応できるようにしてほしい。主眼はユーザー選択により (a) 再開できること=作業を失わない と (b) 残骸を安全に掃除できること=GC の両方。原因側 (Claude Code 本体のクラッシュ/API 上限) は範囲外とした。
+
+追加方針 (2026-08-11、ユーザー逐語)「生きているかわからないという状態そのものをなくすか減らしてほしい。worktree と condukt を照合させるなどする。もちろん main でもする」= 生死不明を fail-closed で受け流すだけでなく、複数情報源の照合によって unknown を known へ変換することを求めている。
+
+実測 1 (2026-08-11 測定点 023305c8): git worktree list は 51 件、うち .harness-worktrees/session-* が 35 件。未コミット変更を抱えたまま放置された worktree が 1 件 (session-b9a78b46、14 ファイル dirty) — 死んだセッションの作業が誰にも拾われず埋まっている実例。
+
+実測 2 (commit 基準の GC が構造的に見落とす): 上記 35 個の session-* worktree の HEAD は 35/35 すべて main の祖先である。つまり commit 到達可能性だけを見る GC は 35/35 を削除可能と判定する。ところが session-b9a78b46 (最終更新 2026-08-07 05:30、transcript は既に消滅) は main に存在しない untracked 4 ファイル 2404 行を保持していた: crates/backlog/src/migrate.rs 802 行 / crates/backlog/tests/migrate.rs 975 行 / crates/backlog/tests/project_scope_undetermined.rs 256 行 / crates/backlog/tests/session_start_warnings.rs 371 行。加えて tracked 10 ファイルに 374 insertions / 21 deletions。内容は backlog の home store から repo store への移行機能で 5ba13c3e の完了条件 (3) そのもの。main の divergence.rs は検出のみで migrate.rs を持たない。結論: 損失面は branch ではなく作業ツリーであり、commit 基準の GC はそれを一切見ていない。
+
+救出済み: 本セッションで refs/preserved/session-b9a78b46 (commit fd9a6591、parent da5b3dda) として object 化した。作業ツリーは一時 index 経由で構築したため無改変 (救出後も 14 entries dirty のまま)。手順は temp index に read-tree HEAD、add -A、write-tree、commit-tree、refs/preserved/ へ update-ref。自動化の雛形として使える。
+
+実測 3 (生死判定): pid は使えない。run state に記録される pid は one-shot CLI のものなので読む時点で常に死んでおり、crates/condukt/src/claim.rs:252-259 がその理由を明記している。condukt のどこにも pid チェックは無い (当初 pid で判定していると誤認したが独立調査で反証された)。判定は進捗証跡 (transcript の mtime、worktree の更新、backlog lock probe / condukt state probe) で行う。
+
+実測 4 (計算済みだが誰も消費していない三値): condukt state probe は正しい三値 verdict を計算している (crates/condukt/src/state.rs:1128-1180) が、唯一の呼び出し元は crates/condukt/src/main.rs:3851 の printer であり、判定を消費する経路がゼロである。照合の材料は既に存在し、配線だけが無い。
+
+実測 5 (判定不能が不可逆削除へ直結している 2 箇所): (a) condukt state abandon --all-stuck は liveness も progress も dirty も一切見ずに status を Pending へ戻し worktree/branch/updated_at を捨てる (crates/condukt/src/main.rs:4129-4170)。対象選定の state::stuck_task_ids は二値で .unwrap_or(false) に潰れている (state.rs:1048-1056)。(b) worktree::orphans() は判定不能 (None) をそのまま orphans へ push し (crates/condukt/src/worktree.rs:2102)、main.rs:3094 が std::fs::remove_dir_all する。
+
+実測 6 (本 item 自身が症例になった): この起票そのものが最初 session worktree の未コミット .backlog/tasks.toml にだけ書かれ、main からは存在しないものとして観測された。同じ内容を存在しないと誤認して 45532dbe (issue 238) を重複起票し、後から worktree 側の未コミット store に本 item が居ることが分かった。store が checkout 追従する (709ff549) 結果、起票という記録行為自体がセッション異常終了で失われうる。45532dbe は本 item に統合して破棄した (issue 238 は 237 の重複)。
+
+設計上の最重要制約 (CLAUDE.md 3 と 8、向きの反転): ゲートでは判定不能は制限側=ユーザーを block する側に倒すが、GC では制限側とは削除しない側である。削除だけが不可逆なので生死不明は必ず保全側へ倒す。この反転を明文化しないと第 3 節を字面どおり適用した実装が逆向きに壊れる。
+
+既存の関連起票 4 件が回復機構の欠陥を個別に記録している: 2d3cbda2 (死んだセッションの worktree/branch を回収する GC が無い)、5daf0b60 (abandon --all-stuck が生存中 worker の worktree を切り離す)、b637936f (stuck_task_ids の三値化: Running かつ updated_at 欠落は Undetermined であって stuck ではない)、1bac3de6 (autoflow の condukt 分岐に give-up hatch が無く stuck を無限 re-dispatch)。つまり回復機構は存在するが生死判定が壊れているという形。
+
+完了条件: (1) SessionStart で 前回の未完了はこれ が提示され resume 導線が出ること。(2) on-disk の実体 (git worktree list) と condukt の run state と main の三者を照合し、各 worktree について live / dead / undetermined の三値を返す reconcile 経路が存在すること。単一情報源の推測ではなく複数情報源の照合で unknown を減らすこと。(3) 生存中セッションの worktree を GC が絶対に触らないこと (アンチ空虚性: 生存中を模した対照実験で 触らない ことを観測)。(4) 未コミット作業を持つ worktree は dead 判定でも削除せず、先に git object として保全してから初めて削除可能とすること。tracked の変更と untracked の両方を対象にすること。(5) 判定不能を 削除可 へ写す経路がゼロであること。undetermined を削除側に倒さないことを behavioural test で固定し RED を先に観測すること (空アームはコンパイルが通り Determination への assert は RED を観測できない、という既知クラス)。(6) probe の三値 verdict を実際に消費する消費者を作る。printer 以外の消費者がゼロである現状を解消する。(7) main 側も対象にする: main の作業ツリーが他セッションの未コミット変更を抱えている状態を照合対象に含める。"""
+created_at = 1786403442
+updated_at = 1786421527
+weight = 0.0
+issue_number = 237
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/237"

@@ -93,6 +93,33 @@ Each element of `backlog list --json` carries a `hashkey` field (computed from
 title + project, not stored) so upstream drivers like `/flow` can gate on
 `condukt state is-claimed` for free.
 
+## Cross-checkout claim exclusion (`next --claim`)
+
+The store follows the checkout on purpose: `<repo root>/.backlog/tasks.toml`,
+where a linked worktree counts as its own root (CLAUDE.md §8 forbids a worktree
+writing the main tree's tracked file). Two checkouts of one project therefore
+hold two files that diverge — and the claim's mutual exclusion used to be a
+lockfile beside the store, i.e. per checkout, so both handed out the SAME task.
+
+`next --claim` now takes a second, WIDER lock first, and records the claim in a
+machine-global ledger keyed by project IDENTITY, not by store location:
+
+- ledger: `~/.backlog/claims/<project-slug>.json` (`<project-slug>` is the same
+  FNV-1a project hash `backlog lock` uses; a linked worktree normalizes to its
+  main working tree, so every checkout of one project shares one ledger)
+- lock order, never inverted: `~/.backlog/claims/<slug>.lock` (project-wide),
+  then `<store>.tasks.toml.lock` (this checkout)
+- an entry stops excluding after 1h (`CLAIM_STALE_SECS`), matching the store's
+  own stale-claim reclaim, so a dead claimant cannot strand a task everywhere;
+  entries are kept for 7 days for a human reading the file
+
+Every undetermined condition on this path **refuses the claim** and exits
+non-zero with the reason on stderr — never `no pending tasks` on exit 0, which
+a driver reads as "there is no work". That covers: the ledger directory not
+being creatable, the ledger lock not being acquired, the ledger being
+unreadable/unparseable/unwritable, the tasks-file lock not being held, and a
+project identity that cannot be resolved. A refusal is not an empty queue.
+
 ## Build
 
 ```sh

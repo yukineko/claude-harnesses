@@ -9846,3 +9846,57 @@ updated_at = 1786441861
 weight = 0.0
 issue_number = 241
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/241"
+
+[[task]]
+id = "aa6d6e43"
+title = "claim_progress も repo 全体の git HEAD を holder の生存証拠に使っている (reap 権限あり)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "failopen",
+    "condukt",
+    "p0",
+]
+status = "pending"
+notes = "8b871bb1 で state.rs の probe_run は task の worktree に閉じたシグナルへ移した。しかし crates/condukt/src/claim.rs:292 の claim_progress は今も progress::git_head_signal(repo_root(cwd)) を 3 シグナルのうち 1 本として使っている。CLAUDE.md 8 で別セッションが常に commit する前提なので、この signal は常に動き、fingerprint は毎回変化し、Progressing に倒れる。probe_run と違い claim_progress は reap 権限を持つ (Known(Stalled) のときだけ reap する側なので、常時 Progressing は「死んだ holder の claim を永久に剥がせない」方向の fail-open)。measured: 未測定。まず「repo HEAD だけが動いていて他 2 本が凍っている状況で claim_progress が Progressing を返す」behavioural test を書いて RED を観測すること。発見者は 8b871bb1 の implementer と verifier。"
+created_at = 1786451479
+updated_at = 1786451479
+weight = 0.0
+issue_number = 242
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/242"
+
+[[task]]
+id = "a6608aa0"
+title = "condukt の precedent/escalate テスト fixture が pid 名の共有 temp dir を再入し cargo test -p condukt が確率的に赤くなる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky",
+    "condukt",
+    "p1",
+]
+status = "pending"
+notes = "2026-08-11、独立 verifier が 10 回の full unit-suite 実行のうち 1 回で再現。落ちたのは escalate::tests::add_creates_new_open_record_after_resolve / precedent::tests::record_appends_multiple / precedent::tests::record_persists_and_is_retrievable の 3 本 (735 passed / 3 failed)。原因: crates/condukt/src/precedent.rs:271 と crates/condukt/src/escalate.rs:222 が fixture dir を temp_dir()/condukt-<kind>-<tag>-<pid>-<seq> という pid 由来の名前で create_dir_all しており、既存 dir に黙って再入する。後始末もしないため temp には condukt-precedent-* が 1548 件、condukt-escalate-* が 3092 件残っており、いくつかは古い precedents.json を保持している。pid が再利用されると assert_eq!(all.len(), 1) が残骸を数えて落ちる。state.rs:2266 が mkdtemp で既に直したのと同じハザード。回帰ではない (precedent.rs/escalate.rs は HEAD~1 と byte 同一)。修正方針: mkdtemp 相当のユニーク dir を使い、残骸を掃除する。"
+created_at = 1786451503
+updated_at = 1786451503
+weight = 0.0
+issue_number = 243
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/243"
+
+[[task]]
+id = "47eedff9"
+title = "oracle::tests::no_reproduction_tests_falls_back_even_when_required が 1 度だけ落ちた件の原因が未同定"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flaky",
+    "condukt",
+    "p2",
+]
+status = "pending"
+notes = "2026-08-11、8b871bb1 の implementer が full-suite 1 回目で crates/condukt/src/oracle.rs:248 の失敗を観測したが、assertion の payload を捕まえる前に再現しなくなった (以後 9 連続 pass)。独立 verifier は 40 回の単独実行と 10 回の full-suite で再現せず、root cause は UNVERIFIED (benign とは判定していない)。verifier が調べた「bare task id t1 と共有 ~/.tdd/state を他テストと共有している」という仮説は経路を追って REFUTED: proof_dir は root 相対の .tdd、~/.tdd/config.toml は存在せず、~/.tdd/state/log.jsonl に t1 のヒットは 0 件、root は毎回 TempDir。requires_oracle=true では valid_fp_oracle の assert しか落ちようがなく、それには temp dir が持ちえない proof file が必要。したがって別の原因が残っている。次にやること: 落ちたときの out payload を必ず出力する形に assert を変え、再発を待って事実を取る。"
+created_at = 1786451504
+updated_at = 1786451504
+weight = 0.0
+issue_number = 244
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/244"

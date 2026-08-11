@@ -9764,3 +9764,52 @@ updated_at = 1786421527
 weight = 0.0
 issue_number = 237
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/237"
+
+[[task]]
+id = "2353885b"
+title = "overwatch status が worktree の cwd から pending: 0 を出す — 読めなかったことが本物のゼロと区別できない数字で描画される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p1",
+]
+status = "pending"
+notes = """
+対照実験 2026-08-11、測定点 24def906、rollout 直後 (overwatch 0.2.26 / backlog 0.2.21、いずれも host バイナリ在り、launcher の exit 0 修正 8990fb6c 適用済み)。同じバイナリ・同じ瞬間・cwd だけを変えた:
+  cwd = /Users/yuki/src/harness              overwatch status は pending: 219 / done: 315
+  cwd = .harness-worktrees/session-b57a58c3  overwatch status は pending: 0
+後者の cwd で backlog list --status pending 自身は 205 行を返す。つまりキューは空ではない。backlog を PATH に載せても載せなくても worktree 側は 0 のままなので、launcher の欠落 (a33f644f) でも PATH でもない。
+
+これは a33f644f の修正では治らない consumer 側の fail-open である。launcher は正しく非0で失敗を伝えられるようになったが、overwatch::render::format_backlog は読めなかった状態を pending: 0 という数字に描画するため、下流 (SessionStart バナー・flow の停止判定・autoflow) からは本物のゼロと区別できない。CLAUDE.md 第1節が statusline の空表示について指摘したのと同型で、沈黙ではなく 0 という具体的な値であるぶんむしろ悪い。
+
+完了条件: (1) 読めなかった場合に pending: 0 ではなく unknown と明示すること (harness_core::verdict::Determination の Undetermined を描画側まで運ぶ)。(2) 本物の 0 件と読めなかった場合が出力で区別できることを behavioural test で固定し、RED を先に観測すること。(3) worktree の cwd から 0 になる原因そのもの (project 解決かストア解決か) を特定して直すこと — 既存 239 (backlog のキューが worktree から空に見える) と同じ根で、こちらは表示側。
+
+注意: 219 と 205 も一致していない。数字を継承せず、直す際に両方を測り直すこと。関連: a33f644f (launcher 側、修正済み)、239、709ff549。"""
+created_at = 1786441575
+updated_at = 1786441575
+weight = 0.0
+issue_number = 239
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/239"
+
+[[task]]
+id = "9c3c04f6"
+title = "guard-maintree-bash.py が worktree 内の .scratch パスへの mkdir/cp を main ツリーの変更として誤って拒否する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+status = "pending"
+notes = """
+実測 2026-08-11、測定点 24def906。cwd = /Users/yuki/src/harness の状態で、絶対パスの mkdir -p /Users/yuki/src/.harness-worktrees/session-b57a58c3/.scratch/probe を実行すると PreToolUse hook が Refused: mkdir -p ... mutates this project MAIN working tree と言って拒否した。対象パスは登録済みの git worktree の中であり、かつ .scratch/ は .gitignore 済みなので main のツリーではない。cd で当該 worktree へ移ってから同じ相対パスで実行すると通る。変数に入れた形 (S=/Users/... という代入だけの行) でも同様に拒否された。
+
+つまり判定が cwd に依存しており、絶対パスが指す実体が worktree かどうかを見ていない可能性がある。fail-closed 側の誤検知なので危険側ではないが、CLAUDE.md 第8節が義務づける worktree 作業の中で一時ファイルを扱う導線 (同節が .scratch/ を明示的に推奨している) を塞ぐため、規範どおりに動く方が面倒になるという逆インセンティブになる。
+
+完了条件: (1) 絶対パスが登録済み worktree 配下を指す場合は cwd に関わらず allow されること。(2) 逆に main のツリーを指す場合は cwd が worktree でも deny されること (アンチ空虚性)。(3) 両方を behavioural test で固定し RED を先に観測すること。判定不能は従来どおり deny のままにすること。"""
+created_at = 1786441576
+updated_at = 1786441576
+weight = 0.0
+issue_number = 240
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/240"

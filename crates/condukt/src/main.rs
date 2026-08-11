@@ -44,6 +44,7 @@ mod status;
 mod store;
 mod verify;
 mod worktree;
+mod wt_reconcile;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -597,10 +598,49 @@ enum WtAction {
         #[arg(long)]
         task: String,
     },
-    /// Report orphan worktrees under worktree_base (--remove to delete them).
+    /// Cross-check the worktrees on disk against condukt's run state and the
+    /// primary tree, and report a three-valued live/dead/undetermined verdict
+    /// per worktree — plus whether each holds uncommitted work and whether it
+    /// may be deleted.
+    ///
+    /// This is the answer to "I cannot tell whether that worktree is alive".
+    /// Deletion is the only irreversible operation involved, so every
+    /// undetermined input resolves to KEEP: an unattributable directory, an
+    /// unreadable run-state file, or a `git status` that will not run all make
+    /// a worktree non-removable. The primary (main) working tree is
+    /// reconciled and reported like any other, and is never removable.
+    Reconcile {
+        /// Emit the full machine-readable report (the resume surface: which
+        /// worktrees still hold unfinished or preserved work).
+        #[arg(long)]
+        json: bool,
+        /// Commit the full content (tracked AND untracked) of every dead,
+        /// dirty worktree of this repo to `refs/preserved/<name>` before
+        /// judging it, so that deleting it cannot lose work. Uses a throwaway
+        /// index: the working tree is not modified.
+        #[arg(long)]
+        preserve: bool,
+        /// Print the removability decision for EVERY combination of its
+        /// inputs and exit. condukt has no library target, so this is how the
+        /// integration test drives the pure decision function across its whole
+        /// input space.
+        #[arg(long)]
+        decision_table: bool,
+    },
+    /// Report worktrees under worktree_base that git does not register, and
+    /// delete the ones the reconcile gate says are safe (`--remove`).
+    ///
+    /// Deletion is reachable ONLY through `wt_reconcile::is_removable`: a
+    /// directory that cannot be attributed, that a running task occupies, or
+    /// whose uncommitted content cannot be read (or has not been preserved) is
+    /// reported with the reason it was kept, and left on disk.
     Cleanup {
         #[arg(long)]
         remove: bool,
+        /// Preserve dead-but-dirty content to `refs/preserved/<name>` first,
+        /// which is what makes such a worktree removable at all.
+        #[arg(long)]
+        preserve: bool,
     },
     /// List registered worktrees (path<TAB>branch).
     List,
@@ -3074,7 +3114,30 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                  (worktree removed, branch force-deleted, learning recorded in findings)"
             );
         }
-        WtAction::Cleanup { remove } => {
+        WtAction::Reconcile {
+            json,
+            preserve,
+            decision_table,
+        } => {
+            if decision_table {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&wt_reconcile::decision_table())?
+                );
+                return Ok(());
+            }
+            // The same repo-scoped lock `cleanup` takes: `--preserve` writes
+            // refs into the primary repo, and the report must not be computed
+            // while a peer is adding/removing worktrees underneath it.
+            let _repo_lock = lock::acquire_repo_primary(cfg, &repo)?;
+            let report = wt_reconcile::reconcile(cfg, cwd, &repo, preserve)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", wt_reconcile::render(&report));
+            }
+        }
+        WtAction::Cleanup { remove, preserve } => {
             // `git worktree prune` mutates the primary repo — take the shared
             // repo-scoped lock so it serializes with a concurrent merge/prune in
             // another run rather than racing. Held across the whole
@@ -3087,23 +3150,64 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
             // idempotent maintenance command, so erroring out just means "run it
             // again when the repo is quiet"; nothing is left half-done.
             //
-            // The orphan listing is taken INSIDE the critical section on purpose:
-            // computing it before the lock would be a TOCTOU — the list could be
-            // stale by the time the dirs are deleted.
+            // The reconciliation is taken INSIDE the critical section on purpose:
+            // computing it before the lock would be a TOCTOU — the verdict could
+            // be stale by the time the dirs are deleted.
             let _repo_lock = lock::acquire_repo_primary(cfg, &repo)?;
-            let orphans = worktree::orphans(&repo, &cfg.worktree_base)?;
+            let report = wt_reconcile::reconcile(cfg, cwd, &repo, preserve)?;
             let _ = worktree::git(&repo, &["worktree", "prune"]);
-            if orphans.is_empty() {
-                eprintln!("no orphan worktrees under {}", cfg.worktree_base.display());
+            // Only directories git does not register are cleanup's business; a
+            // registered worktree is removed through `git worktree remove`
+            // (`worktree remove`), not by deleting a directory behind git's back.
+            let candidates: Vec<&wt_reconcile::Entry> = report
+                .entries
+                .iter()
+                .filter(|e| e.role == wt_reconcile::Role::Unregistered.as_str())
+                .collect();
+            if candidates.is_empty() {
+                eprintln!(
+                    "no unregistered directories under {}",
+                    cfg.worktree_base.display()
+                );
             }
-            for o in orphans {
-                if remove {
-                    std::fs::remove_dir_all(&o)
-                        .with_context(|| format!("removing {}", o.display()))?;
-                    eprintln!("removed orphan {}", o.display());
-                } else {
-                    eprintln!("orphan (pass --remove to delete): {}", o.display());
+            for e in candidates {
+                // The gate, and only the gate, authorizes a delete. Everything
+                // it keeps is reported WITH the reason it was kept: silence
+                // about a kept directory would leave "checked and alive"
+                // indistinguishable from "could not check".
+                if !e.removable {
+                    eprintln!(
+                        "kept {} (occupancy={} dirty={} attribution={} preserved={}){}",
+                        e.path,
+                        e.occupancy.value,
+                        e.dirty.value,
+                        e.attribution.value,
+                        e.preserved.preserved,
+                        e.attribution
+                            .reason
+                            .as_ref()
+                            .or(e.occupancy.reason.as_ref())
+                            .or(e.dirty.reason.as_ref())
+                            .or(e.preserved.reason.as_ref())
+                            .map(|r| format!("\n  reason: {r}"))
+                            .unwrap_or_default()
+                    );
+                    continue;
                 }
+                if remove {
+                    std::fs::remove_dir_all(&e.path)
+                        .with_context(|| format!("removing {}", e.path))?;
+                    eprintln!("removed {}", e.path);
+                } else {
+                    eprintln!("removable (pass --remove to delete): {}", e.path);
+                }
+            }
+            for c in &report.dangling_claims {
+                eprintln!(
+                    "dangling claim: run {} task {} (namespace {}) records worktree {} \
+                     which does not exist on disk",
+                    c.run_id, c.task_id, c.state_namespace, c.claimed_worktree
+                );
             }
         }
         WtAction::List => {

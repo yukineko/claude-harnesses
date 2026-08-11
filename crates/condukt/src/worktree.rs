@@ -34,7 +34,21 @@ struct GitOutput {
 /// callers can produce an actionable error instead of silently returning
 /// empty output.
 fn run_git_bounded(dir: &Path, args: &[&str]) -> Result<GitOutput> {
-    run_git_bounded_with(Path::new("git"), dir, args, GIT_TIMEOUT)
+    run_git_bounded_with(Path::new("git"), dir, args, GIT_TIMEOUT, &[])
+}
+
+/// `git <args>` in `dir` with extra environment variables, bounded by the same
+/// [`GIT_TIMEOUT`] as [`git`]. Exists for the preservation path, which drives
+/// `read-tree`/`add`/`write-tree` against a **throwaway `GIT_INDEX_FILE`** so
+/// the worktree's real index (and therefore the user's working tree state) is
+/// never touched.
+pub fn git_env(dir: &Path, args: &[&str], envs: &[(&str, &Path)]) -> Result<String> {
+    git_output_to_result(
+        run_git_bounded_with(Path::new("git"), dir, args, GIT_TIMEOUT, envs)?,
+        dir,
+        args,
+        GIT_TIMEOUT,
+    )
 }
 
 /// Same as [`run_git_bounded`] but with the git binary path and timeout as
@@ -49,6 +63,7 @@ fn run_git_bounded_with(
     dir: &Path,
     args: &[&str],
     timeout: Duration,
+    envs: &[(&str, &Path)],
 ) -> Result<GitOutput> {
     // Every real git spawn in this crate funnels through here, so this is the
     // one place that needs to defend against `crate::env_lock`'s PATH-mutating
@@ -72,6 +87,9 @@ fn run_git_bounded_with(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -1963,6 +1981,27 @@ pub fn discard(repo: &Path, path: &Path, branch: Option<&str>) -> Result<()> {
 
 /// (path, branch) pairs for every registered worktree except the primary.
 pub fn list(repo: &Path) -> Result<Vec<(PathBuf, Option<String>)>> {
+    Ok(list_all(repo)?
+        .into_iter()
+        .filter(|(_, _, is_primary)| !*is_primary)
+        .map(|(p, b, _)| (p, b))
+        .collect())
+}
+
+/// `(path, branch, is_primary)` for EVERY registered worktree, **including the
+/// primary working tree**.
+///
+/// [`list`] deliberately drops the primary (every caller that creates/removes
+/// worktrees must never see it), but a reconciliation of on-disk state against
+/// condukt's run state has to enumerate the primary too — "もちろん main でも
+/// する". The primary is identified exactly as [`list`] identifies it: by
+/// canonical-path equality with `git rev-parse --show-toplevel`. A path that
+/// cannot be canonicalized (the dir was removed under us) compares unequal and
+/// is therefore reported as non-primary, which is the conservative side for
+/// every consumer here: the primary is never a deletion candidate, so
+/// misclassifying it would be the dangerous direction, and a *vanished* dir
+/// cannot be the primary of a repo we just ran git in.
+pub fn list_all(repo: &Path) -> Result<Vec<(PathBuf, Option<String>, bool)>> {
     let listing = git(repo, &["worktree", "list", "--porcelain"])?;
     // `.ok()` is intentional here and below: a worktree dir that was already
     // removed (the common cleanup case) cannot be canonicalized, and `None` is a
@@ -1977,9 +2016,7 @@ pub fn list(repo: &Path) -> Result<Vec<(PathBuf, Option<String>)>> {
             // flush previous
             if let Some(path) = cur_path.take() {
                 let is_primary = path.canonicalize().ok() == primary;
-                if !is_primary {
-                    out.push((path, cur_branch.take()));
-                }
+                out.push((path, cur_branch.take(), is_primary));
             }
             cur_branch = None;
             cur_path = Some(PathBuf::from(p));
@@ -1988,9 +2025,7 @@ pub fn list(repo: &Path) -> Result<Vec<(PathBuf, Option<String>)>> {
         } else if line.is_empty() {
             if let Some(path) = cur_path.take() {
                 let is_primary = path.canonicalize().ok() == primary;
-                if !is_primary {
-                    out.push((path, cur_branch.take()));
-                }
+                out.push((path, cur_branch.take(), is_primary));
             }
         }
     }
@@ -2026,10 +2061,13 @@ fn resolve_gitdir_pointer(git_file: &Path) -> Option<PathBuf> {
 ///   `.git` common dir.
 /// - A `.git` *directory* (a plain clone dropped into `worktree_base`, not a
 ///   linked worktree) resolves to itself.
-/// - No `.git` at all (or an unreadable/malformed pointer) yields `None` —
-///   the caller treats that conservatively as condukt-created debris rather
-///   than silently ignoring it.
-fn owning_repo_git_dir(candidate: &Path) -> Option<PathBuf> {
+/// - No `.git` at all (or an unreadable/malformed pointer) yields `None`,
+///   which means exactly one thing: **this directory cannot be attributed to
+///   any repository**. It does NOT mean "condukt debris" and it is not a
+///   licence to delete. Callers must map `None` to an undetermined
+///   attribution, which the removability gate resolves to "keep"
+///   ([`crate::wt_reconcile::is_removable`]).
+pub(crate) fn owning_repo_git_dir(candidate: &Path) -> Option<PathBuf> {
     let dot_git = candidate.join(".git");
     if dot_git.is_dir() {
         return dot_git.canonicalize().ok();
@@ -2050,34 +2088,45 @@ fn owning_repo_git_dir(candidate: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Worktree dirs physically under `worktree_base` that git no longer tracks
-/// **for `repo`**.
+/// Directories physically under `worktree_base` that git does **not** register
+/// as a worktree of `repo`.
 ///
-/// `worktree_base` may be shared across multiple, unrelated repositories on
-/// the same machine (a common setup when several projects park their
-/// worktrees under the same scratch dir). A candidate directory is only
-/// reported as an orphan if it actually belongs to `repo` (its `.git`
-/// resolves under `repo`'s own `.git` common dir) and isn't in `repo`'s
-/// registered worktree list. A directory whose `.git` resolves to a
-/// *different* repo is silently skipped — it's not condukt's concern.
-/// A directory with no `.git` at all is treated conservatively as an orphan
-/// (it really is unattributable debris, most likely condukt-created).
-pub fn orphans(repo: &Path, worktree_base: &Path) -> Result<Vec<PathBuf>> {
+/// This is an ENUMERATION, not a verdict: it answers "what is on disk that git
+/// does not know about", and deliberately answers nothing about whether any of
+/// it may be deleted. Attribution (does it belong to `repo`, to some other
+/// repo, or to nothing we can identify?) is computed by
+/// [`crate::wt_reconcile::attribution`] as a three-valued
+/// `Determination`, and deletability by
+/// [`crate::wt_reconcile::is_removable`].
+///
+/// # What this used to be, and why it changed
+///
+/// The predecessor (`orphans`) returned a bare `Vec<PathBuf>` that its single
+/// caller deleted with `remove_dir_all`. Its final arm pushed every directory
+/// whose `.git` could not be resolved — i.e. every directory it could **not
+/// attribute at all** — straight onto that deletion list, with a comment
+/// calling it "conservative". It was the opposite of conservative: for a GC,
+/// the restrictive side is *do not delete*, because deletion is the only
+/// irreversible operation involved. Measured 2026-08-11 against the shipped
+/// binary: a directory containing an unrecoverable file and no `.git` was
+/// deleted by `condukt worktree cleanup --remove` ("removed orphan
+/// .../ghost-dir"). Returning the bare paths made that fail-open easy to
+/// write, so the function no longer returns a list that reads as "safe to
+/// delete".
+///
+/// `worktree_base` may be shared across several unrelated repositories on one
+/// machine, so this list can legitimately contain another project's live
+/// worktrees; that is exactly why the caller must run every entry through the
+/// attribution + removability gate rather than treating this as debris.
+pub fn unregistered_dirs(repo: &Path, worktree_base: &Path) -> Result<Vec<PathBuf>> {
     if !worktree_base.exists() {
         return Ok(Vec::new());
     }
-    let registered: Vec<PathBuf> = list(repo)?
+    let registered: Vec<PathBuf> = list_all(repo)?
         .into_iter()
-        .filter_map(|(p, _)| p.canonicalize().ok())
+        .filter_map(|(p, _, _)| p.canonicalize().ok())
         .collect();
-    let repo_git_dir = git(
-        repo,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )
-    .ok()
-    .map(PathBuf::from)
-    .and_then(|p| p.canonicalize().ok());
-    let mut orphans = Vec::new();
+    let mut out = Vec::new();
     for entry in std::fs::read_dir(worktree_base)
         .with_context(|| format!("reading {}", worktree_base.display()))?
     {
@@ -2089,20 +2138,24 @@ pub fn orphans(repo: &Path, worktree_base: &Path) -> Result<Vec<PathBuf>> {
         if registered.contains(&canon) {
             continue;
         }
-        match owning_repo_git_dir(&path) {
-            Some(owner) => {
-                // Only flag it if it belongs to `repo` itself; a directory
-                // owned by some other repo sharing this worktree_base is not
-                // condukt's concern and is silently skipped.
-                if repo_git_dir.as_ref() == Some(&owner) {
-                    orphans.push(path);
-                }
-            }
-            // No `.git` at all (or malformed): conservative — condukt debris.
-            None => orphans.push(path),
-        }
+        out.push(path);
     }
-    Ok(orphans)
+    out.sort();
+    Ok(out)
+}
+
+/// The canonical `.git` common dir of `repo`, used to decide whether a
+/// candidate directory belongs to this repository. `None` = could not be
+/// determined (git failed, or the path does not canonicalize), which callers
+/// must treat as "attribution unknown", never as "belongs to us".
+pub(crate) fn repo_git_common_dir(repo: &Path) -> Option<PathBuf> {
+    git(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .ok()
+    .map(PathBuf::from)
+    .and_then(|p| p.canonicalize().ok())
 }
 
 /// Does a worktree have uncommitted changes (tracked or untracked)?
@@ -2410,7 +2463,10 @@ mod tests {
         );
     }
 
-    /// orphans() returns directories under worktree_base not tracked by git.
+    /// `unregistered_dirs()` returns directories under worktree_base that git
+    /// does not track. It says nothing about whether they may be deleted —
+    /// that is `wt_reconcile::is_removable`'s job, and for THIS directory (no
+    /// `.git`, therefore unattributable) the answer there is "keep".
     #[test]
     fn orphans_detects_unregistered_dir() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2425,7 +2481,7 @@ mod tests {
         let ghost = wt_base.join("ghost-dir");
         fs::create_dir_all(&ghost).unwrap();
 
-        let found = orphans(&repo, &wt_base).unwrap();
+        let found = unregistered_dirs(&repo, &wt_base).unwrap();
         assert!(
             found.iter().any(|p| p.ends_with("ghost-dir")),
             "ghost-dir should be reported as orphan; got: {:?}",
@@ -2456,7 +2512,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = orphans(&repo, &wt_base).unwrap();
+        let found = unregistered_dirs(&repo, &wt_base).unwrap();
         assert!(
             !found.iter().any(|p| p.ends_with("registered")),
             "registered worktree should not be listed as orphan; got: {:?}",
@@ -2464,12 +2520,26 @@ mod tests {
         );
     }
 
-    /// orphans() must ignore a directory under a *shared* worktree_base that
-    /// is actually a live worktree of a completely different repository.
-    /// Regression for the bug where a shared worktree_base (e.g.
-    /// `/mnt/c/tmp/aegis-worktrees` used by both `harness` and an unrelated
-    /// `ai-aegis` checkout) caused condukt to misreport the other project's
-    /// legitimate worktrees as orphans belonging to `repo`.
+    /// A directory under a *shared* worktree_base that is actually a live
+    /// worktree of a completely different repository must never be treated as
+    /// `repo`'s to delete. Regression for the bug where a shared worktree_base
+    /// (e.g. `/mnt/c/tmp/aegis-worktrees` used by both `harness` and an
+    /// unrelated `ai-aegis` checkout) caused condukt to misreport the other
+    /// project's legitimate worktrees as orphans belonging to `repo`.
+    ///
+    /// # This assertion MOVED, and the old one was weaker than it looked
+    ///
+    /// It used to read "`orphans()` does not return this path", conflating two
+    /// separate questions — *is it on disk unregistered?* and *may we delete
+    /// it?* — into one list, and it is precisely that conflation which let the
+    /// unattributable case (`None => orphans.push(path)`) become a deletion.
+    /// The enumeration ([`unregistered_dirs`]) now answers only the first
+    /// question, so this directory legitimately APPEARS in it; the protection
+    /// asserted here has moved to where the irreversible decision is actually
+    /// made. Asserting on the enumeration alone would today pass while
+    /// `cleanup --remove` deleted the directory, which is why the assertion is
+    /// on [`crate::wt_reconcile::is_removable`] instead — a behavioural claim
+    /// about the delete, not about a list's membership.
     #[test]
     fn orphans_ignores_other_repos_worktree() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2503,11 +2573,40 @@ mod tests {
         )
         .unwrap();
 
-        let found = orphans(&repo, &wt_base).unwrap();
+        let found = unregistered_dirs(&repo, &wt_base).unwrap();
+        // The enumeration DOES contain it: git-of-`repo` does not register it,
+        // and pretending otherwise is how the previous shape hid the question.
         assert!(
-            !found.iter().any(|p| p.ends_with("other-repos-worktree")),
-            "a live worktree belonging to a different repo must not be reported as an orphan of `repo`; got: {:?}",
-            found
+            found.iter().any(|p| p.ends_with("other-repos-worktree")),
+            "the enumeration reports what git does not register, including \
+             another repo's worktree; got: {found:?}"
+        );
+
+        // …and the decision that matters refuses it, by ATTRIBUTION rather
+        // than by omission from a list.
+        let repo_git_dir = repo_git_common_dir(&repo);
+        let attribution = crate::wt_reconcile::attribution(&other_wt_path, repo_git_dir.as_ref());
+        assert!(
+            matches!(
+                attribution,
+                harness_core::verdict::Determination::Known(
+                    crate::wt_reconcile::Attribution::OtherRepo
+                )
+            ),
+            "a live worktree of another repo must be attributed to that repo, \
+             got {attribution:?}"
+        );
+        assert!(
+            !crate::wt_reconcile::is_removable(
+                crate::wt_reconcile::Role::Unregistered,
+                &attribution,
+                // Even under the most permissive possible companions —
+                // provably unoccupied and provably clean — the answer is no.
+                &harness_core::verdict::Determination::Known(crate::wt_reconcile::Occupancy::Dead),
+                &harness_core::verdict::Determination::Known(false),
+                true,
+            ),
+            "another repository's worktree must never be removable by us"
         );
     }
 
@@ -2555,7 +2654,7 @@ mod tests {
             "git should no longer register the stale worktree after its admin dir is removed"
         );
 
-        let found = orphans(&repo, &wt_base).unwrap();
+        let found = unregistered_dirs(&repo, &wt_base).unwrap();
         assert!(
             found.iter().any(|p| p.ends_with("stale")),
             "a stale, unregistered worktree that still belongs to `repo` must be reported as orphan; got: {:?}",
@@ -2617,6 +2716,7 @@ mod tests {
             &cwd,
             &["rev-parse", "--show-toplevel"],
             short_timeout,
+            &[],
         )
         .expect("run_git_bounded_with itself should not error on timeout");
         let elapsed = start.elapsed();
@@ -2642,7 +2742,7 @@ mod tests {
         let cwd = tmp.path().join("cwd");
         fs::create_dir_all(&cwd).unwrap();
 
-        let out = run_git_bounded_with(&fake_git, &cwd, &["status"], Duration::from_secs(3))
+        let out = run_git_bounded_with(&fake_git, &cwd, &["status"], Duration::from_secs(3), &[])
             .expect("bounded run itself ok");
         assert!(
             !out.timed_out,
@@ -2671,7 +2771,7 @@ mod tests {
 
         let short_timeout = Duration::from_millis(300);
         let args: &[&str] = &["status"];
-        let out = run_git_bounded_with(&fake_git, &cwd, args, short_timeout)
+        let out = run_git_bounded_with(&fake_git, &cwd, args, short_timeout, &[])
             .expect("bounded run itself should not error");
         assert!(out.timed_out, "expected the fake git call to time out");
 

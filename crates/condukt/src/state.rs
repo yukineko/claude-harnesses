@@ -454,7 +454,7 @@ pub fn resume_run(cfg: &Config, cwd: &Path, run_id: &str) -> Result<()> {
 /// (escalate.rs), and `execution-state.json` (claim.rs, not yet wired but same
 /// directory). None of these deserialize as `RunState`; a directory scan that
 /// tries anyway misreports them as corrupt run state (backlog 1af91627).
-fn is_run_state_sidecar(fname: &str) -> bool {
+pub(crate) fn is_run_state_sidecar(fname: &str) -> bool {
     fname.ends_with(".decomposition.json")
         || fname.ends_with(".checkpoints.json")
         || matches!(
@@ -1507,7 +1507,7 @@ pub fn gate_reasons(cfg: &Config, cwd: &Path, run: &RunState) -> Vec<String> {
     // Any orphan worktree under the base is also a leak.
     // If detection itself fails we cannot confirm the absence of orphans, so
     // surface the error as a gate reason instead of passing silently.
-    match worktree::orphans(&repo, &cfg.worktree_base) {
+    match crate::wt_reconcile::reportable_unregistered_dirs(&repo, &cfg.worktree_base) {
         Ok(orphans) => {
             for o in orphans {
                 reasons.push(format!("orphan worktree on disk: {}", o.display()));

@@ -5,7 +5,6 @@
 use crate::config::Config;
 use crate::state;
 use crate::store::repo_root;
-use crate::worktree;
 use std::path::PathBuf;
 
 pub fn run(cwd: &str) {
@@ -18,7 +17,8 @@ pub fn run(cwd: &str) {
 
     let runs = state::open_runs(&cfg, &cwd_path);
     let repo = repo_root(&cwd_path);
-    let orphans = worktree::orphans(&repo, &cfg.worktree_base).unwrap_or_default();
+    let orphans = crate::wt_reconcile::reportable_unregistered_dirs(&repo, &cfg.worktree_base)
+        .unwrap_or_default();
 
     let active_runs: Vec<_> = runs.iter().filter(|r| !r.paused).collect();
     let paused_runs: Vec<_> = runs.iter().filter(|r| r.paused).collect();

@@ -1,9 +1,57 @@
 #!/bin/sh
 # condukt plugin launcher — selects the per-platform binary bundled in this dir.
 #
-# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/condukt <sub>`; this dispatcher execs the
-# matching `condukt-<os>-<arch>` build. If no build exists for the host platform,
-# it exits 0 silently so a hook NEVER breaks the user's turn.
+# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/condukt <sub>` (hooks/hooks.json:
+# SessionStart `restore`, Stop `state record-run --all`, PostToolUse `editgate`);
+# the /condukt skill and worker agents call the much larger CLI surface. This
+# dispatcher execs the matching `condukt-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT a blanket "exit 0". For
+# condukt that is not merely silence — several subcommands carry their verdict
+# IN THE EXIT CODE, and 0 is the permissive value of that vocabulary:
+#
+#   * `policy answer` / `policy decide`: "0=auto, 2=escalate, 3=block"
+#     (src/main.rs:1089-1091). Exiting 0 self-answered every autonomy gate with
+#     `auto`, the most permissive verdict there is, without having decided
+#     anything. CLAUDE.md §2 is explicit that a thing that cannot be measured
+#     "auto で自答してはならない".
+#   * `gate check`: "EXITS NONZERO on escalate" (src/main.rs:146-148); callers
+#     do `if ! condukt gate check …; then escalate; fi`.
+#   * `state gate` / `state check-oracle` / `verify`: exit 0 == the run/oracle
+#     passed.
+#
+# The /condukt skill already routes any UNEXPECTED code to the safe side
+# ("旧バイナリ … / 不正入力 → 安全側 = AskUserQuestion", skills/condukt/SKILL.md),
+# so a non-zero exit is both the restrictive answer and one the consumer
+# already handles.
+#
+# Classification of the hook subcommands:
+#
+#   editgate  PostToolUse -> additionalContext marking the edit UNCHECKED.
+#             The binary answers `{"decision":"block"}` (run_editgate,
+#             src/main.rs:1655), but an unbounded block here would trap the
+#             session: Stop hooks bound a fail-closed block with
+#             `stop_hook_active` and PostToolUse has no equivalent, so a
+#             missing binary would reject EVERY Edit/Write/MultiEdit forever.
+#             The repo's two existing PostToolUse fallbacks (bin/fetchguard
+#             `scan`, bin/ctxrot `toolguard`) resolve exactly this shape the
+#             same way — mark the result unchecked rather than stay silent —
+#             and that is what is mirrored here.
+#
+#   restore   SessionStart -> raw stdout (hooks::restore injects stdout as
+#             context and is SILENT when there is nothing to resume, so silence
+#             reads as "no open runs, no orphan worktrees"). Once per session,
+#             so a line of prose is cheap and is the only channel available.
+#
+#   state record-run  Stop -> exit 0, but never silent. This is a pure recorder,
+#             not a gate. Its absence is self-fail-closed: the gates that
+#             consume run-state (`state gate`, `state check-oracle`,
+#             `state reconcile`) read an unrecorded task as INCOMPLETE, which is
+#             the restrictive direction. Exiting non-zero here would instead
+#             report a failed hook on every single stop, so the stderr line
+#             above is the "did not run" signal.
+#
+#   everything else -> exit 1.
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in
@@ -22,8 +70,34 @@ ext=""
 [ "$os" = windows ] && ext=".exe"
 
 binary="$root/condukt-$os-$arch$ext"
-if [ ! -x "$binary" ]; then
-  echo "condukt: no bundled binary for $os-$arch ($binary). Build it with scripts/build-plugin-bin.sh on that platform." >&2
-  exit 0
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
 fi
-exec "$binary" "$@"
+
+echo "condukt: no bundled binary for $os-$arch ($binary)." >&2
+
+fix="Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the condukt hooks."
+
+case "${1:-}" in
+  editgate)
+    printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n' \
+      "condukt editgate did not run: no bundled binary for $os-$arch. This edit was NOT compile-checked, so the crate is UNCHECKED, not known to compile — do not read the absence of a diagnostic as a passing cargo check. Run it yourself before moving on. $fix"
+    exit 0
+    ;;
+  restore)
+    echo "condukt restore did not run: no bundled binary for $os-$arch. The run state was NOT read, so open runs and orphan worktrees are UNKNOWN — this is not the same as having nothing to resume. $fix"
+    exit 0
+    ;;
+  state)
+    # Only the Stop-hook recorder keeps exit 0; every other `state` action is a
+    # gate or a listing whose empty output reads as real data.
+    if [ "${2:-}" = "record-run" ]; then
+      echo "condukt: state record-run did not run (no binary) — this turn's run state was NOT recorded. The gates that read run-state (state gate / check-oracle / reconcile) treat an unrecorded task as INCOMPLETE, so this fails closed on its own. $fix" >&2
+      exit 0
+    fi
+    exit 1
+    ;;
+  *)
+    exit 1
+    ;;
+esac

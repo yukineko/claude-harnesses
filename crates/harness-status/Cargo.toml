@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "harness-status"
-version = "0.1.14"
+version = "0.1.15"
 edition = "2021"
 description = "Unified human-on-the-loop status dashboard for Claude Code. A /status command aggregates budgetguard's spend ledger, gauge's session records (recent sessions + cost), and taskprog's progress file into one view. Subscription-native (binary + command, no API key). A lightweight SessionStart hook warns if a registered hook's binary is missing from disk, or if a stray PATH binary shadows a plugin-cache copy."
 
@@ -17,3 +17,9 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+# tests/launcher_missing_binary.rs runs bin/harness-status from a scratch dir that
+# provably has no `harness-status-<os>-<arch>` sibling, so the missing-binary branch is
+# exercised even on a host whose build IS bundled in the repo's bin/.
+tempfile = { workspace = true }

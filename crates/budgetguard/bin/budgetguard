@@ -1,9 +1,34 @@
 #!/bin/sh
 # budgetguard plugin launcher — selects the per-platform binary bundled in this dir.
 #
-# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/budgetguard <sub>`; this dispatcher execs
-# the matching `budgetguard-<os>-<arch>` build. If no build exists for the host
-# platform it exits 0 silently, so a missing binary never traps a turn.
+# The Stop hook calls `${CLAUDE_PLUGIN_ROOT}/bin/budgetguard gate`
+# (crates/budgetguard/hooks/hooks.json); this dispatcher execs the matching
+# `budgetguard-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT "exit 0". A missing
+# binary means the gate DID NOT RUN — a cannot-determine — and for a Stop hook
+# exit 0 with no stdout is byte-for-byte what a PASSING gate looks like, so the
+# turn ended as if `budgetguard gate` had run and found nothing to block. That
+# is CLAUDE.md §1 ("it exits 0 silently so a hook NEVER breaks the user's turn"
+# is the named red flag for verdict-carrying code) and §3 ("cannot determine"
+# must resolve to the restrictive side).
+#
+# Classification of this launcher's surface:
+#
+#   verdict-bearing (silence would be read as "the gate passed"):
+#     gate   Stop   -> {"decision":"block"} on the FIRST stop, bounded by
+#               `stop_hook_active` exactly like harness_core::gate::run::
+#               run_guarded's panic barrier (crates/harness-core/src/gate/run.rs)
+#               — the post-block re-entry is allowed through, so a missing
+#               binary can never trap the session in a block loop. The decision
+#               rides stdout JSON, never the exit code: this script keeps the
+#               convention that hook branches exit 0 and carry the verdict in
+#               the body.
+#
+#   everything else (status / init / install / uninstall) is consumed by humans, skills and scripts,
+#   where an EMPTY stdout reads as a real answer (`status` printing no number reads as zero spend). Those exit
+#   non-zero — an error must not return an empty set (CLAUDE.md §3), mirroring
+#   bin/taintguard and bin/ctxrot.
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in
@@ -22,8 +47,39 @@ ext=""
 [ "$os" = windows ] && ext=".exe"
 
 binary="$root/budgetguard-$os-$arch$ext"
-if [ ! -x "$binary" ]; then
-  echo "budgetguard: no bundled binary for $os-$arch ($binary)." >&2
-  exit 0
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
 fi
-exec "$binary" "$@"
+
+echo "budgetguard: no bundled binary for $os-$arch ($binary)." >&2
+
+fix="Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the budgetguard Stop hook."
+
+case "${1:-}" in
+  gate)
+    # Read the Stop event ourselves — no binary will. A TTY on stdin, or an
+    # empty stdin, means this is a manual invocation with no live turn, so
+    # there is no verdict to give: report an error rather than fabricating a
+    # decision (this mirrors PanicAction::InteractiveError). The `-t 0` test
+    # comes first so an interactive run can never block on `cat`.
+    if [ -t 0 ]; then
+      echo "budgetguard: no Stop event (stdin is a terminal) — a decision will NOT be fabricated for a manual invocation. $fix" >&2
+      exit 1
+    fi
+    payload="$(cat)"
+    if [ -z "$(printf '%s' "$payload" | tr -d '[:space:]')" ]; then
+      echo "budgetguard: no Stop event on stdin — a decision will NOT be fabricated for a manual invocation. $fix" >&2
+      exit 1
+    fi
+    if printf '%s' "$payload" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
+      echo "budgetguard: stop re-entry with no binary — allowing this stop (the fail-closed block was already surfaced once; session and daily cost against the configured limits still has NOT run)." >&2
+      exit 0
+    fi
+    printf '{"decision":"block","reason":"%s"}\n' \
+      "budgetguard gate did not run: no bundled binary for $os-$arch, so session and daily cost against the configured limits was NOT evaluated. This stop is therefore UNCHECKED, not approved (blocked fail-closed once — the next stop is allowed through so the session can never be trapped). $fix"
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac

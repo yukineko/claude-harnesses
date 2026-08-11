@@ -84,7 +84,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "clap",
  "harness-core",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "anyhow",
  "clap",
@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "anyhow",
  "chrono",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.125"
+version = "0.7.126"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -409,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "deepwiki"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -468,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "anyhow",
  "chrono",
@@ -538,11 +538,12 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flow"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -689,13 +690,14 @@ dependencies = [
 
 [[package]]
 name = "harness-status"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "clap",
  "harness-core",
  "serde",
  "serde_json",
+ "tempfile",
  "toml 0.8.23",
 ]
 
@@ -865,7 +867,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.25"
+version = "0.2.26"
 dependencies = [
  "anyhow",
  "clap",
@@ -911,7 +913,7 @@ dependencies = [
 
 [[package]]
 name = "precommit-audit"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "globset",
  "harness-core",
@@ -935,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.39"
+version = "0.1.40"
 dependencies = [
  "anyhow",
  "chrono",
@@ -947,6 +949,7 @@ dependencies = [
  "overwatch",
  "serde",
  "serde_json",
+ "tempfile",
  "toml 0.8.23",
 ]
 
@@ -1086,7 +1089,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1097,6 +1100,7 @@ dependencies = [
  "overwatch",
  "serde",
  "serde_json",
+ "tempfile",
  "toml 0.8.23",
  "wait-timeout",
 ]
@@ -1300,7 +1304,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "stuckguard"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1359,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1514,7 +1518,7 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tracekit"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "clap",

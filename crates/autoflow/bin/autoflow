@@ -1,5 +1,54 @@
 #!/bin/sh
 # autoflow plugin launcher — selects the per-platform binary bundled in this dir.
+#
+# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/autoflow <sub>`; this dispatcher execs
+# the matching `autoflow-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT a blanket "exit 0". A
+# missing binary means the hook DID NOT RUN — a cannot-determine — and exit 0
+# with no output is byte-for-byte what a clean run looks like (CLAUDE.md §1/§3;
+# the old comment here said "it exits 0 silently so a hook NEVER breaks the
+# user's turn", the exact sentence §1 names as the red flag). This dispatcher
+# resolves the unknown on the restrictive side of each subcommand's OWN
+# protocol, mirroring crates/ctxrot/bin/ctxrot and crates/taintguard/bin/
+# taintguard.
+#
+# Classification (all four subcommands are hook entrypoints; hooks.json):
+#
+#   verdict-bearing (silence would be read as "nothing to flag"):
+#     stop           Stop          -> {"decision":"block"}. `stop_command`
+#                    (src/main.rs:128, emitting at :435) is a blocking gate, so
+#                    no stdout = the turn ends as if the progress/loop state
+#                    machine had run and passed. Bounded by `stop_hook_active`
+#                    exactly like harness_core::gate::run::run_guarded's panic
+#                    barrier: the post-block re-entry is allowed through, so a
+#                    missing binary can never trap the session.
+#     session-start  SessionStart  -> additionalContext. The binary itself
+#                    already distinguishes the three answers here
+#                    (`session_start_command`, src/main.rs:531-563):
+#                    `Known(empty)` stays silent, but `Undetermined` prints
+#                    "バックログのキューを確認できませんでした（判定不能）…
+#                    未完了課題が無いという意味ではありません". A missing binary
+#                    IS that Undetermined case, so the launcher speaks the same
+#                    sentence; staying silent would collapse it back into the
+#                    `Known(empty)` shape, which reads as "no pending work" —
+#                    impact (b)/(c) of backlog item a33f644f.
+#
+#   non-verdict (exit 0, but never silent — the stderr line below is the
+#   "did not run" signal):
+#     pre-compact    PreCompact       writes a resume-flow marker
+#     prompt-submit  UserPromptSubmit consumes that marker
+#                    These two are a writer and its ONLY reader, and both live
+#                    in this one binary: `prompt_submit_run` (src/main.rs:620)
+#                    reads only what `pre-compact` wrote. When the binary is
+#                    missing, neither runs, so there is no consumer left to
+#                    mistake the absent marker for "nothing to resume" — the
+#                    session behaves exactly as one where these hooks were
+#                    never installed. Fabricating stdout here would instead
+#                    inject a line into EVERY user prompt.
+#
+#   anything else -> exit 1 (an unrecognised invocation must not look like a
+#   clean empty result).
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in
@@ -18,8 +67,43 @@ ext=""
 [ "$os" = windows ] && ext=".exe"
 
 binary="$root/autoflow-$os-$arch$ext"
-if [ ! -x "$binary" ]; then
-  echo "autoflow: no bundled binary for $os-$arch ($binary)." >&2
-  exit 0
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
 fi
-exec "$binary" "$@"
+
+echo "autoflow: no bundled binary for $os-$arch ($binary)." >&2
+
+fix="Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the autoflow hooks."
+
+case "${1:-}" in
+  stop)
+    if [ -t 0 ]; then
+      echo "autoflow: no Stop event (stdin is a terminal) — a decision will NOT be fabricated for a manual invocation. $fix" >&2
+      exit 1
+    fi
+    payload="$(cat)"
+    if [ -z "$(printf '%s' "$payload" | tr -d '[:space:]')" ]; then
+      echo "autoflow: no Stop event on stdin — a decision will NOT be fabricated for a manual invocation. $fix" >&2
+      exit 1
+    fi
+    if printf '%s' "$payload" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
+      echo "autoflow: stop re-entry with no binary — allowing this stop (the fail-closed block was already surfaced once; the loop/progress state machine still has NOT run)." >&2
+      exit 0
+    fi
+    printf '{"decision":"block","reason":"%s"}\n' \
+      "autoflow stop did not run: no bundled binary for $os-$arch, so the record/condukt progress state machine was NOT evaluated. This stop is therefore UNCHECKED, not approved (blocked fail-closed once — the next stop is allowed through so the session can never be trapped). $fix"
+    exit 0
+    ;;
+  session-start)
+    printf '{"additionalContext":"%s"}\n' \
+      "autoflow session-start did not run: no bundled binary for $os-$arch, so the backlog queue was NOT read and the compass charter was NOT checked. This is UNDETERMINED, and it does NOT mean there is no open work — do not treat the absence of a /flow proposal as an empty queue. $fix"
+    exit 0
+    ;;
+  pre-compact|prompt-submit)
+    echo "autoflow: $1 did not run (no binary) — no resume-flow marker was written or consumed. Since pre-compact is the only writer and prompt-submit the only reader, and both are this same missing binary, nothing downstream can misread the absence. $fix" >&2
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac

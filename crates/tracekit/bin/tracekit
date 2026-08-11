@@ -1,10 +1,23 @@
 #!/bin/sh
 # tracekit plugin launcher — selects the per-platform binary bundled in this dir.
 #
-# tracekit is a soft-dependency observability sink: condukt's state-set calls
-# `tracekit record` opportunistically. If no binary exists for the host it exits
-# 0 silently, so a missing build never breaks a condukt run (mirrors the
-# lifecycle-hook plugins; contrast evalkit, a gate, which exits 1).
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT "exit 0". tracekit has no
+# hook wiring at all (crates/tracekit/hooks/ does not exist), so there is no
+# hook-event vocabulary to speak and no turn to protect. Its consumers are:
+#
+#   * the human CLI / `/tracekit`-style manual invocation — `list`, `trace
+#     <run>` and `export` all print a SPAN SET, so an empty stdout with exit 0
+#     reads as "this run has no spans", not as "the span store was never
+#     opened" (CLAUDE.md §1/§3).
+#   * replaykit — which reads ~/.tracekit/<run_id>/spans.jsonl straight off
+#     disk (crates/replaykit/README.md), NOT through this binary, so it is
+#     unaffected either way.
+#
+# The previous version of this comment justified `exit 0` by claiming
+# "condukt's state-set calls `tracekit record` opportunistically". That is not
+# true of the code: `grep -rn tracekit crates/condukt/src/` returns ZERO hits
+# (measured 2026-08-11 at d48c7133). The claim is removed rather than kept as a
+# safe-sounding story (CLAUDE.md §4).
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in
@@ -23,8 +36,9 @@ ext=""
 [ "$os" = windows ] && ext=".exe"
 
 binary="$root/tracekit-$os-$arch$ext"
-if [ ! -x "$binary" ]; then
-  echo "tracekit: no bundled binary for $os-$arch ($binary)." >&2
-  exit 0
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
 fi
-exec "$binary" "$@"
+
+echo "tracekit: no bundled binary for $os-$arch ($binary). Nothing was recorded or read, so the span set is UNKNOWN — this is not an empty trace. Build it with scripts/build-plugin-bin.sh on that platform." >&2
+exit 1

@@ -123,9 +123,16 @@ impl Fixture {
     }
 
     fn condukt(&self, args: &[&str]) -> Output {
+        self.condukt_in(&self.repo, args)
+    }
+
+    /// Same, but run from an arbitrary directory. Under CLAUDE.md §8 every
+    /// session works inside a LINKED worktree, so "reconcile invoked from a
+    /// linked worktree" is the normal case, not an exotic one.
+    fn condukt_in(&self, dir: &Path, args: &[&str]) -> Output {
         Command::new(bin())
             .args(args)
-            .current_dir(&self.repo)
+            .current_dir(dir)
             .env("HOME", &self.home)
             .env("CONDUKT_WORKTREE_BASE", &self.wt_base)
             .env_remove("CONDUKT_DISABLE")
@@ -134,9 +141,13 @@ impl Fixture {
     }
 
     fn reconcile_json(&self, extra: &[&str]) -> serde_json::Value {
+        self.reconcile_json_in(&self.repo, extra)
+    }
+
+    fn reconcile_json_in(&self, dir: &Path, extra: &[&str]) -> serde_json::Value {
         let mut args = vec!["worktree", "reconcile", "--json"];
         args.extend_from_slice(extra);
-        let out = self.condukt(&args);
+        let out = self.condukt_in(dir, &args);
         assert!(
             out.status.success(),
             "`condukt worktree reconcile --json` failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}",
@@ -536,6 +547,62 @@ fn primary_tree_is_never_removable() {
         !removable(&report, "repo"),
         "the primary tree is never removable, in any state; entry: {}",
         entry(&report, "repo")
+    );
+}
+
+/// The primary tree must be identified as the primary **no matter which
+/// worktree the command is invoked from**.
+///
+/// Measured 2026-08-12 against the first cut of this feature, run from inside
+/// a linked worktree of this very repository: `/Users/yuki/src/harness` — the
+/// real main working tree — came back `role: registered`, and the LINKED
+/// worktree the command happened to run in came back `role: primary`. The
+/// cause is that primary-detection compared against `git rev-parse
+/// --show-toplevel`, which answers "the worktree I am standing in", not "this
+/// repository's main working tree".
+///
+/// This is not a cosmetic mislabelling. `is_removable` gives `Role::Primary`
+/// an unconditional `false`; demoting main to `registered` hands main's
+/// absolute protection back to the ordinary occupancy/dirty path, so a clean
+/// main with no condukt task claiming it reads `removable: true`. And under
+/// CLAUDE.md §8 every session works inside a linked worktree, so the broken
+/// case is the NORMAL invocation, not an edge one — which is exactly what
+/// "もちろん main でもする" was asking to cover.
+#[test]
+fn primary_is_identified_when_invoked_from_a_linked_worktree() {
+    let f = Fixture::new("primary-from-linked");
+    let linked = f.add_worktree("wt-vantage", "feat/vantage");
+
+    let report = f.reconcile_json_in(&linked, &[]);
+    let main_entry = entry(&report, "repo");
+    assert_eq!(
+        main_entry["role"], "primary",
+        "the repository's main working tree must be identified as the primary \
+         even when reconcile runs from a linked worktree; entry: {main_entry}"
+    );
+    assert!(
+        !removable(&report, "repo"),
+        "main must keep its unconditional protection from every vantage point; \
+         entry: {main_entry}"
+    );
+
+    // Exactly one entry may claim the primary role, otherwise "which one is
+    // main?" is answered twice and the protection stops meaning anything.
+    let primaries: Vec<&str> = report["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["role"] == "primary")
+        .map(|e| e["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        primaries.len(),
+        1,
+        "exactly one entry is the primary tree; got {primaries:?}"
+    );
+    assert!(
+        primaries[0].ends_with("repo"),
+        "the primary is the main working tree, not the vantage point; got {primaries:?}"
     );
 }
 

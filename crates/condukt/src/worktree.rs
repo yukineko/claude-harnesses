@@ -2003,20 +2003,30 @@ pub fn list(repo: &Path) -> Result<Vec<(PathBuf, Option<String>)>> {
 /// cannot be the primary of a repo we just ran git in.
 pub fn list_all(repo: &Path) -> Result<Vec<(PathBuf, Option<String>, bool)>> {
     let listing = git(repo, &["worktree", "list", "--porcelain"])?;
-    // `.ok()` is intentional here and below: a worktree dir that was already
-    // removed (the common cleanup case) cannot be canonicalized, and `None` is a
-    // valid "not the primary" outcome for the equality check. This is NOT a
-    // swallowed error to loud-fail — unlike the mkdir paths in create()/init().
-    let primary = toplevel(repo)?.canonicalize().ok();
+    let primaries = primary_witnesses(repo, &listing);
     let mut out = Vec::new();
     let mut cur_path: Option<PathBuf> = None;
     let mut cur_branch: Option<String> = None;
+    let flush =
+        |out: &mut Vec<(PathBuf, Option<String>, bool)>, path: PathBuf, branch: Option<String>| {
+            // `.ok()` is intentional: a worktree dir that was already removed (the
+            // common cleanup case) cannot be canonicalized. It then matches no
+            // witness and is reported non-primary, which is safe in the only
+            // direction that matters — a vanished directory is not the main
+            // working tree of a repo we just ran git in. This is NOT a swallowed
+            // error to loud-fail, unlike the mkdir paths in create()/init().
+            let is_primary = path
+                .canonicalize()
+                .ok()
+                .map(|c| primaries.contains(&c))
+                .unwrap_or(false);
+            out.push((path, branch, is_primary));
+        };
     for line in listing.lines().chain(std::iter::once("")) {
         if let Some(p) = line.strip_prefix("worktree ") {
             // flush previous
             if let Some(path) = cur_path.take() {
-                let is_primary = path.canonicalize().ok() == primary;
-                out.push((path, cur_branch.take(), is_primary));
+                flush(&mut out, path, cur_branch.take());
             }
             cur_branch = None;
             cur_path = Some(PathBuf::from(p));
@@ -2024,12 +2034,64 @@ pub fn list_all(repo: &Path) -> Result<Vec<(PathBuf, Option<String>, bool)>> {
             cur_branch = Some(b.to_string());
         } else if line.is_empty() {
             if let Some(path) = cur_path.take() {
-                let is_primary = path.canonicalize().ok() == primary;
-                out.push((path, cur_branch.take(), is_primary));
+                flush(&mut out, path, cur_branch.take());
             }
         }
     }
     Ok(out)
+}
+
+/// Every canonical path that some witness says is this repository's MAIN
+/// working tree.
+///
+/// # Why this is not `git rev-parse --show-toplevel`
+///
+/// It used to be, and that was wrong: `--show-toplevel` answers "the worktree
+/// I am standing in", not "this repository's main working tree". Under
+/// CLAUDE.md §8 every session works inside a LINKED worktree, so the standard
+/// invocation stood in a linked worktree — and main was then reported as an
+/// ordinary linked worktree while the vantage point was reported as main.
+/// Measured 2026-08-12 from a linked worktree of this repo:
+/// `/Users/yuki/src/harness` came back `role: registered`, `removable: true`.
+/// Since [`crate::wt_reconcile::is_removable`] gives the primary an
+/// unconditional `false`, that mislabelling handed main's absolute protection
+/// back to the ordinary occupancy/dirty path.
+///
+/// # Why a SET, and why the union
+///
+/// Two independent witnesses are consulted:
+///
+/// * the parent of `--git-common-dir` (`<main>/.git` → `<main>`), which is
+///   vantage-independent, and
+/// * the FIRST entry of `git worktree list --porcelain`, which git documents
+///   as the main worktree.
+///
+/// They are UNIONed rather than reconciled, because the two failure directions
+/// are not symmetric: an extra primary costs a directory that cannot be
+/// auto-deleted (recoverable — a human deletes it), while a missing primary
+/// costs main's protection (irreversible). If the witnesses ever disagree, the
+/// union keeps both protected. An empty set is possible only if BOTH witnesses
+/// fail; every path then reports non-primary, which is why it is not the sole
+/// protection — [`crate::wt_reconcile`] still gates on occupancy and dirtiness.
+fn primary_witnesses(repo: &Path, listing: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(main) = repo_git_common_dir(repo)
+        .as_deref()
+        .and_then(Path::parent)
+        .and_then(|p| p.canonicalize().ok())
+    {
+        out.push(main);
+    }
+    if let Some(first) = listing
+        .lines()
+        .find_map(|l| l.strip_prefix("worktree "))
+        .and_then(|p| Path::new(p).canonicalize().ok())
+    {
+        if !out.contains(&first) {
+            out.push(first);
+        }
+    }
+    out
 }
 
 /// Resolve the `gitdir:` a worktree-style `.git` *file* points at, if any.

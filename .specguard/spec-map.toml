@@ -1,4 +1,4 @@
-last_synced = "8990fb6c8e9d762a067faeb3f31cf0e23c725f27"
+last_synced = "408f68da34418dcdc2fc92292eac224de72a30ca"
 
 [entries.".gitattributes"]
 key = ".gitattributes"
@@ -1214,7 +1214,7 @@ key = "crates/condukt/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "changed"
-last_ref = "ecd8b9478b8a1a6dcafa87236a9ef793608e706a"
+last_ref = "408f68da34418dcdc2fc92292eac224de72a30ca"
 impl_files = ["crates/condukt/src/main.rs"]
 test_files = []
 client_refs = []
@@ -1366,7 +1366,7 @@ key = "crates/condukt/src/state.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "changed"
-last_ref = "a4b24edc01a2f176e6eebff6a58ff6efbeb07e10"
+last_ref = "408f68da34418dcdc2fc92292eac224de72a30ca"
 impl_files = ["crates/condukt/src/state.rs"]
 test_files = []
 client_refs = []

@@ -216,9 +216,22 @@ fn save_with_syncer<S: DurabilitySyncer>(path: &Path, tasks: &[Task], syncer: &S
 // run.lock (exclusive, errors on a live holder). Wrapping the unattended
 // SessionStart requeue in the global lock would skip requeue whenever a real
 // `/flow` session held it, and make an interactive session see a phantom
-// "another session active". This lock is keyed on the tasks-file path, is
-// BLOCKING (bounded), and is fail-soft (degrades to unprotected best-effort
-// rather than erroring), so it never breaks a turn.
+// "another session active". This lock is keyed on the tasks-file path and is
+// BLOCKING (bounded).
+//
+// What happens when the bounded acquire does NOT succeed is per-caller, and
+// the two behaviours are NOT interchangeable:
+//   - FAIL CLOSED (`with_tasks_lock_aware` + refuse on `false`): the caller
+//     returns an error/refusal naming the missing mutual exclusion. Used where
+//     a lost update is silent and undetectable downstream — the production
+//     `add` path (`add_with_weight_and_github_push`) and a claim's
+//     read-modify-write (`next_claim_with`). Measured reason for `add`:
+//     backlog bd6d81df, where two adds printed `added: <id>` and exited 0
+//     while their records existed in no store.
+//   - Runs the closure UNPROTECTED (`with_tasks_lock`): the remaining
+//     mutators (`requeue_expired`, `mark_*`, `edit`, and the `#[cfg(test)]`
+//     `add_with_weight`). Under contention these CAN lose an update and
+//     report success; that is a known defect of those paths, not a guarantee.
 
 /// Sibling lockfile path for a tasks file (e.g. `tasks.toml` -> `tasks.toml.lock`).
 fn tasks_lock_path(path: &Path) -> PathBuf {
@@ -296,8 +309,13 @@ fn tasks_lock_is_stale(lock_path: &Path) -> bool {
 /// Returns `Some(guard)` on success, or `None` if the lock could not be acquired
 /// within the budget ([`TASKS_LOCK_MAX_ATTEMPTS`] × [`TASKS_LOCK_SLEEP`], sized
 /// for queuing behind many concurrent legitimate holders — see that constant's
-/// doc comment) — the caller must then degrade to a best-effort unprotected
-/// operation (fail-soft) rather than erroring.
+/// doc comment).
+///
+/// `None` means "mutual exclusion could NOT be established", which is not the
+/// same as "no concurrent writer exists". What the caller does with it differs
+/// per caller: the production `add` path and a claim's read-modify-write refuse
+/// (see [`with_tasks_lock_aware`]); the mutators still on [`with_tasks_lock`]
+/// proceed unprotected and can therefore lose an update.
 fn try_acquire_tasks_lock(path: &Path) -> Option<TasksLockGuard> {
     let lock_path = tasks_lock_path(path);
     if let Some(parent) = lock_path.parent() {
@@ -327,27 +345,51 @@ fn try_acquire_tasks_lock(path: &Path) -> Option<TasksLockGuard> {
     None
 }
 
-/// Run `f` while holding the tasks-file-scoped advisory lock. If the lock cannot
-/// be acquired within the bounded budget, degrade to running `f` UNPROTECTED
-/// (fail-soft: never return `Err` purely because of lock contention). The guard
-/// is dropped — and thus the lock released — on every exit path, including when
-/// `f` returns `Err` or panics-unwinds.
+/// Run `f` while holding the tasks-file-scoped advisory lock — IF it can be
+/// acquired. If the bounded acquire budget is exhausted, `f` is run
+/// UNPROTECTED and cannot tell the difference, so this function guarantees
+/// only "serialized against other `with_tasks_lock` callers WHEN the lock was
+/// available". It does NOT guarantee mutual exclusion, and a caller that
+/// mutates through it can therefore have its read-modify-write clobbered by a
+/// concurrent writer while still returning `Ok`.
+///
+/// That is why the production `add` path and a claim's read-modify-write do
+/// NOT use this: they use [`with_tasks_lock_aware`] and refuse. Remaining
+/// users (`requeue_expired`, `mark_*`, `edit`, and the `#[cfg(test)]`
+/// `add_with_weight`) accept the unprotected fallback; for them a lost update
+/// under contention is possible and undiagnosed, which is a defect of those
+/// paths rather than something this function makes safe.
+///
+/// The guard is dropped — and thus the lock released — on every exit path,
+/// including when `f` returns `Err` or panics-unwinds.
 fn with_tasks_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    // `_guard` is `Some` when we hold the lock, `None` on fail-soft degrade.
+    // `_guard` is `Some` when we hold the lock, `None` when the bounded acquire
+    // did not succeed and `f` therefore runs unprotected (`f` cannot tell).
     // Either way it drops (releasing the lock if held) when this fn returns.
     let _guard = try_acquire_tasks_lock(path);
     f()
 }
 
 /// Like [`with_tasks_lock`], but the closure is TOLD whether the exclusive lock
-/// is actually held (`true`) or the acquire degraded (`false`). Best-effort
-/// mutators use plain [`with_tasks_lock`] and ignore this — a lost update under
-/// contention is tolerable for them. Operations where mutual exclusion is a
-/// CORRECTNESS requirement (a claim's read-modify-write, which double-dispatches
-/// the SAME task to concurrent callers if it races) use this and FAIL CLOSED on
-/// `false` rather than running the RMW unprotected. The guard drops (releasing
-/// the lock if held) on every exit path, including `f` returning `Err` or
-/// unwinding.
+/// is actually held (`true`) or the acquire did not succeed (`false`), so it can
+/// FAIL CLOSED instead of performing an unprotected read-modify-write.
+///
+/// Callers that fail closed on `false` (this is the complete list):
+///   - [`add_with_weight_and_github_push`] — the production `add` path. Returns
+///     `Err` naming the un-acquired lock. Measured motivation: backlog
+///     bd6d81df, where `add` reported `added: <id>` and exited 0 for records
+///     that existed in no store; `add` is the only mechanism in this repo for
+///     recording a finding, so a lost add is undetectable downstream.
+///   - [`next_claim_with`] — a claim's read-modify-write, which would
+///     double-dispatch the SAME task to concurrent callers if it raced.
+///     Refuses via `Determination::Undetermined`.
+///
+/// The other mutators still call plain [`with_tasks_lock`] and are therefore
+/// NOT fail-closed: under contention they can lose an update and still report
+/// success. This is stated as the current behaviour, not as an acceptable one.
+///
+/// The guard drops (releasing the lock if held) on every exit path, including
+/// `f` returning `Err` or unwinding.
 fn with_tasks_lock_aware<T>(path: &Path, f: impl FnOnce(bool) -> Result<T>) -> Result<T> {
     let guard = try_acquire_tasks_lock(path);
     f(guard.is_some())
@@ -380,12 +422,19 @@ pub fn add(
 /// holds this title+project's [`crate::task::hashkey`]. CLI surfaces this as
 /// `backlog add --force`.
 ///
-/// The binary now calls [`add_with_weight_and_github_push`] directly (it folds
-/// in a fail-soft GitHub-issue push on top of this exact logic), so this
-/// plain, push-free entry point is kept `#[cfg(test)]`-reachable: it remains
-/// the direct target of this module's own weight-ordering/duplicate-guard/
-/// concurrency tests, which don't need a `run` closure to exercise those
-/// behaviors.
+/// The binary calls [`add_with_weight_and_github_push`] directly (it folds in a
+/// fail-soft GitHub-issue push on top of this logic), so this plain, push-free
+/// entry point is `#[cfg(test)]`-only: it is not compiled into the shipped
+/// binary and is the direct target of this module's own weight-ordering/
+/// duplicate-guard/concurrency tests, which don't need a `run` closure.
+///
+/// It is NOT the production `add` path and does NOT share its two bd6d81df
+/// belts: it still runs its read-modify-write through plain [`with_tasks_lock`]
+/// (so the RMW proceeds unprotected when the lock is unavailable) and it does
+/// not re-read the store to confirm the write. It can therefore return `Ok(id)`
+/// for a write that was lost. Anything asserting what `backlog add` reports
+/// must go through [`add_with_weight_and_github_push`], which is what `main.rs`
+/// calls.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn add_with_weight(
@@ -1010,10 +1059,27 @@ pub fn edit(
 /// (non-zero exit) — `add_with_weight`'s local-only add still succeeds; only
 /// a `Created{url}` outcome additionally sets `issue_number`/`issue_url`
 /// (parsed via [`crate::github::parse_issue_number`]) before the SAME save.
-/// All of `add_with_weight`'s existing guards (bare-label ambiguity rejection,
-/// duplicate-content guard, tasks-file locking) are reused unchanged — this
-/// function performs the identical read-modify-write, just with the GitHub
-/// push folded into the same critical section before `save`.
+/// All of `add_with_weight`'s guards (bare-label ambiguity rejection,
+/// duplicate-content guard) are reused unchanged, and the GitHub push is folded
+/// into the same critical section before `save`.
+///
+/// Locking differs from `add_with_weight` (backlog bd6d81df) and this is the
+/// production `add` path, so this is the behaviour that matters: an `Ok(id)`
+/// here is what makes `main.rs` print `added: {id}` and exit 0, so it must mean
+/// the record is in the store. Two independent belts enforce that:
+///   1. FAIL CLOSED on mutual exclusion: the critical section runs under
+///      [`with_tasks_lock_aware`] and returns `Err` when the lock was not
+///      acquired within the bounded budget, instead of performing the
+///      read-modify-write unprotected. An unprotected RMW is what let a
+///      concurrent degraded writer save a stale snapshot over a just-added
+///      task while its adder had already reported success.
+///   2. VERIFY THE WRITE: after `save`, the store is RELOADED FROM DISK and the
+///      new id must be present ([`confirm_added_id_is_on_disk`]). This catches
+///      a clobber (or a save that did not land) that happened anyway, and means
+///      success is never reported from the in-memory `Vec` alone.
+///
+/// Both errors name what actually happened so the caller can retry; neither is
+/// collapsed into a bool.
 #[allow(clippy::too_many_arguments)]
 pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>(
     path: &Path,
@@ -1034,7 +1100,22 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
         unresolved: project_unresolved,
     } = canonicalize_project_with_marker(project);
     let project = &project;
-    with_tasks_lock(path, || {
+    with_tasks_lock_aware(path, |locked| {
+        // Belt 1 (backlog bd6d81df): without the exclusive lock this add's
+        // read-modify-write can be clobbered by a concurrent degraded writer
+        // and nothing downstream can tell. "Could not establish mutual
+        // exclusion" is not "added", so refuse and say so.
+        if !locked {
+            return Err(anyhow!(
+                "backlog add refused: the tasks-file lock {} could not be acquired within {}ms \
+                 ({} attempts x {}ms), so this add's read-modify-write would run without mutual \
+                 exclusion and could be silently lost; nothing was added — retry",
+                tasks_lock_path(path).display(),
+                TASKS_LOCK_MAX_ATTEMPTS as u128 * TASKS_LOCK_SLEEP.as_millis(),
+                TASKS_LOCK_MAX_ATTEMPTS,
+                TASKS_LOCK_SLEEP.as_millis(),
+            ));
+        }
         let mut tasks = load(path)?;
         if is_bare {
             reject_ambiguous_bare_label(&tasks, project)?;
@@ -1074,8 +1155,41 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
 
         tasks.push(task);
         save(path, &tasks)?;
+        // Belt 2: report success only about what a fresh read of the file
+        // actually shows. Done while the lock is still held, so a well-behaved
+        // concurrent writer cannot have moved the file underneath the check.
+        confirm_added_id_is_on_disk(path, &id)?;
         Ok(id)
     })
+}
+
+/// Reload the store FROM DISK and require `id` to be present, so `add` can only
+/// report success about a write that is observable to the next reader.
+///
+/// Returns `Err` both when the reload itself fails and when the reload succeeds
+/// but does not contain `id` (the measured backlog bd6d81df shape: the record
+/// was saved, then a concurrent degraded writer's stale snapshot replaced it).
+/// A load failure is NOT treated as "probably fine": an unverifiable write is
+/// reported as unverified, naming the store path and what was seen.
+fn confirm_added_id_is_on_disk(path: &Path, id: &str) -> Result<()> {
+    let reloaded = load(path).with_context(|| {
+        format!(
+            "backlog add saved task {id} to {} but the store could not be re-read to confirm it; \
+             treat the add as unconfirmed and re-check before retrying",
+            path.display()
+        )
+    })?;
+    if reloaded.iter().any(|t| t.id == id) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "backlog add saved task {id} to {} but a fresh load of that file does not contain it — \
+         the write did not survive (a concurrent writer replaced the file), so the task is NOT \
+         in the store as of that read; retry. Store now holds {} task(s): {:?}",
+        path.display(),
+        reloaded.len(),
+        reloaded.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+    ))
 }
 
 /// タスク一覧を返す。フィルタは all None で全件。

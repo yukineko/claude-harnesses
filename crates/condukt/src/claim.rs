@@ -1656,4 +1656,343 @@ mod tests {
         assert_eq!(live.files["src/a.rs"].run_id, "runA");
         assert!(live.task_claims.is_empty());
     }
+
+    // ── the reap gate's head signal must be RUN-scoped, not repo-wide ───────
+    //
+    // [`claim_progress`] folds three durable signals into one fingerprint, and
+    // [`retain_claim`] reaps a heartbeat-stale claim ONLY on `Known(Stalled)`.
+    // Signal 1 is today `progress::git_head_signal(&repo_root(cwd))` — the
+    // WHOLE project repo's HEAD. Under CLAUDE.md §8 other sessions always exist
+    // and always commit to that repo, so this signal advances for reasons that
+    // have nothing to do with the claim's holder: the fingerprint never
+    // freezes, the verdict never reaches `Stalled`, and a DEAD holder's claim
+    // can never be reclaimed. That is a fail-open — a permanently un-reapable
+    // claim — and it is the twin of the already-fixed `state::probe_run` defect
+    // (commit f906094c), except that this one holds reap authority.
+    //
+    // These tests exercise the REAL signal path: none of them uses
+    // `test_hook::with_forced`, which early-returns before a single signal is
+    // read and would therefore prove nothing about the scoping. The other two
+    // signals (session transcript, run max `updated_at`) are materialised and
+    // held FROZEN so the head signal is the only thing that can move the
+    // fingerprint — that is what makes each assertion discriminating.
+    //
+    //   A1   run worktree FROZEN, project repo HEAD MOVES  ⇒ Known(Stalled)
+    //   A4i  run worktree MOVES,  project repo HEAD FROZEN ⇒ Known(Progressing)
+    //   A4ii run records NO task worktree                  ⇒ Undetermined, kept
+    //   A3   run's recorded worktree is unreadable         ⇒ Undetermined, kept
+
+    /// `$HOME` pinned to `home` for as long as the guard lives, serialized
+    /// against every other `$HOME` mutator in this crate via
+    /// `crate::env_lock::HOME_ENV_LOCK`. Restoration happens in `Drop`, so a
+    /// FAILING assertion (these tests are expected to fail before the fix)
+    /// cannot leave the process pointing at a temp home and poison the rest of
+    /// the suite.
+    struct HomeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+
+    fn pin_home(home: &Path) -> HomeGuard {
+        let lock = crate::env_lock::HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        HomeGuard { _lock: lock, prev }
+    }
+
+    /// Minimal git repo with one commit and a repo-LOCAL identity (so commits
+    /// work regardless of what `$HOME` is pinned to).
+    fn init_git_repo(dir: &Path) {
+        use crate::worktree::git;
+        std::fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "-b", "main"]).unwrap();
+        git(dir, &["config", "user.email", "test@example.com"]).unwrap();
+        git(dir, &["config", "user.name", "Test"]).unwrap();
+        std::fs::write(dir.join("base.txt"), "base\n").unwrap();
+        git(dir, &["add", "."]).unwrap();
+        git(dir, &["commit", "-m", "init"]).unwrap();
+    }
+
+    fn head_of(repo: &Path) -> String {
+        crate::worktree::git(repo, &["rev-parse", "HEAD"])
+            .unwrap_or_else(|e| panic!("git rev-parse HEAD in {}: {e}", repo.display()))
+            .trim()
+            .to_string()
+    }
+
+    /// Advance `repo`'s HEAD with one empty commit, asserting the sha actually
+    /// moved. A git that silently did nothing must fail loudly here rather than
+    /// read downstream as "nothing advanced".
+    fn git_advance_head(repo: &Path) {
+        let before = head_of(repo);
+        crate::worktree::git(repo, &["commit", "--allow-empty", "-m", "advance"])
+            .unwrap_or_else(|e| panic!("git commit --allow-empty in {}: {e}", repo.display()));
+        assert_ne!(
+            before,
+            head_of(repo),
+            "fixture precondition: an empty commit must move HEAD in {}",
+            repo.display()
+        );
+    }
+
+    /// The session id every fixture below uses; its transcript is seeded once
+    /// and never rewritten, so the transcript signal is READABLE but frozen.
+    const FIXTURE_SESSION: &str = "sess-fixture";
+
+    /// Build the claim-progress fixture under `tmp` and return `(cfg, claim,
+    /// home)`:
+    ///
+    /// * `tmp` is itself a git repo, so `repo_root(tmp) == tmp` — the repo-wide
+    ///   HEAD the CURRENT code samples is one the test can move at will.
+    /// * a run `run_id` with exactly one RUNNING task whose `worktree` field is
+    ///   `worktree` verbatim (this function does NOT create it — a caller that
+    ///   wants a real one calls [`init_git_repo`] itself, which is how the
+    ///   "recorded but unreadable" case is expressed) and whose `updated_at` is
+    ///   FROZEN at a fixed value.
+    /// * a frozen session transcript at `<home>/.claude/projects/*/<sid>.jsonl`.
+    /// * a heartbeat-stale [`Claim`] owned by that run (`heartbeat_at: 0`), so
+    ///   [`retain_claim`] actually reaches the progress verdict.
+    fn progress_fixture(
+        tmp: &Path,
+        run_id: &str,
+        worktree: Option<&Path>,
+    ) -> (Config, Claim, PathBuf) {
+        init_git_repo(tmp);
+        // Observed, not assumed: this is the path the CURRENT code hands to
+        // `git_head_signal`, so the test genuinely controls that signal.
+        assert_eq!(
+            repo_root(tmp),
+            tmp.to_path_buf(),
+            "fixture precondition: repo_root(cwd) must resolve to the fixture repo"
+        );
+
+        let home = tmp.join("home");
+        let proj = home.join(".claude").join("projects").join("-fixture");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(
+            proj.join(format!("{FIXTURE_SESSION}.jsonl")),
+            "{\"seed\":1}\n",
+        )
+        .unwrap();
+
+        let cfg = make_cfg(tmp);
+        let rs = crate::state::RunState {
+            run_id: run_id.to_string(),
+            goal: "g".into(),
+            tasks: vec![crate::state::TaskState {
+                id: "t-only".into(),
+                status: crate::state::Status::Running,
+                worktree: worktree.map(|p| p.to_string_lossy().into_owned()),
+                // Frozen for the whole test: the OTHER durable signal must not
+                // move for a legitimate reason, or the test proves nothing.
+                updated_at: Some(9_000),
+                ..Default::default()
+            }],
+            paused: false,
+            terminal_label: None,
+            recorded_at: None,
+        };
+        rs.save(&cfg, tmp).unwrap();
+
+        let claim = Claim {
+            run_id: run_id.to_string(),
+            session_id: Some(FIXTURE_SESSION.to_string()),
+            pid: 424_242,
+            claimed_at: 0,
+            heartbeat_at: 0,
+            title: None,
+        };
+        (cfg, claim, home)
+    }
+
+    /// (A1) The defect, stated as the verdict it must produce. The run's own
+    /// worktree HEAD and its task `updated_at` are frozen for a full window
+    /// while ANOTHER session commits to the shared project repo. A commit made
+    /// elsewhere in the repo is not evidence that THIS run advanced, so the
+    /// verdict must converge to `Known(Stalled)` — the only value that lets a
+    /// dead holder's claim ever be reclaimed.
+    #[test]
+    fn claim_progress_stalled_when_run_worktree_frozen_though_repo_head_advances() {
+        let tmp = make_tmp_dir("claim-scope-stall");
+        let wt = tmp.join("run-worktree");
+        init_git_repo(&wt);
+        let (cfg, claim, home) = progress_fixture(&tmp, "runFrozen", Some(&wt));
+        assert_eq!(
+            repo_root(&wt),
+            wt,
+            "fixture precondition: the run's worktree must be its own git root"
+        );
+        let _h = pin_home(&home);
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+
+        // Sample 1 anchors the fingerprint. With no prior snapshot this is
+        // Undetermined by construction; if it is not, the fixture is broken
+        // (e.g. a signal was unreadable in a way the test did not intend).
+        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        assert!(
+            matches!(v1, Determination::Undetermined(_)),
+            "first sample (no prior snapshot) must be Undetermined, got {v1:?}"
+        );
+
+        // A DIFFERENT session commits to the shared project repo.
+        let wt_before = head_of(&wt);
+        git_advance_head(&tmp);
+        assert_eq!(
+            wt_before,
+            head_of(&wt),
+            "fixture precondition: the run's own worktree must stay frozen"
+        );
+
+        let v2 = claim_progress(&cfg, &tmp, &claim, t0 + window);
+        assert_eq!(
+            v2,
+            Determination::Known(Liveness::Stalled),
+            "the run's own worktree and its task updated_at were frozen for a full \
+             window; a commit made elsewhere in the shared project repo is not \
+             evidence that THIS run advanced"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// (A4-i) The arm where the run HAS a task worktree: that worktree's HEAD
+    /// is the run-scoped head signal, so a real commit inside it reads as
+    /// `Known(Progressing)` even though the shared project repo is frozen.
+    /// This is the anti-vacuity control for (A1): "always answer Stalled" is
+    /// not an acceptable fix, because it would force-steal a live holder.
+    #[test]
+    fn claim_progress_progressing_when_run_worktree_commits_though_repo_head_frozen() {
+        let tmp = make_tmp_dir("claim-scope-progress");
+        let wt = tmp.join("run-worktree");
+        init_git_repo(&wt);
+        let (cfg, claim, home) = progress_fixture(&tmp, "runBusy", Some(&wt));
+        let _h = pin_home(&home);
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+
+        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        assert!(
+            matches!(v1, Determination::Undetermined(_)),
+            "first sample (no prior snapshot) must be Undetermined, got {v1:?}"
+        );
+
+        // The holder does durable work in its OWN worktree; nothing else
+        // commits to the shared project repo.
+        let repo_before = head_of(&tmp);
+        git_advance_head(&wt);
+        assert_eq!(
+            repo_before,
+            head_of(&tmp),
+            "fixture precondition: the shared project repo HEAD must stay frozen"
+        );
+
+        let v2 = claim_progress(&cfg, &tmp, &claim, t0 + window);
+        assert_eq!(
+            v2,
+            Determination::Known(Liveness::Progressing),
+            "the holder committed inside the run's own worktree, so it is \
+             demonstrably alive and its claim must never be reaped"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// (A4-ii) The arm where the run records NO task worktree at all (serial /
+    /// fast-path / single-worktree mode). There is no run-scoped durable head
+    /// signal to read, which is "cannot determine" — NOT "frozen", and NOT a
+    /// fall back to the repo-wide HEAD (that fallback is the defect itself).
+    /// Asserted behaviourally at the reap layer too, because `Stalled` is the
+    /// only verdict that fires a reap: writing "cannot read" as "frozen" would
+    /// steal the claim.
+    #[test]
+    fn claim_progress_without_run_worktree_is_undetermined_and_keeps_the_claim() {
+        let tmp = make_tmp_dir("claim-scope-no-worktree");
+        let (cfg, claim, home) = progress_fixture(&tmp, "runNoWt", None);
+        let _h = pin_home(&home);
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+
+        // Nothing moves anywhere: the shared repo HEAD is frozen too, so the
+        // ONLY thing that can keep this out of `Stalled` is refusing to answer.
+        let repo_head = head_of(&tmp);
+        let _ = claim_progress(&cfg, &tmp, &claim, t0);
+        let now = t0 + window;
+        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        assert_eq!(
+            repo_head,
+            head_of(&tmp),
+            "fixture precondition: nothing may commit during this test"
+        );
+        assert!(
+            matches!(v2, Determination::Undetermined(_)),
+            "a run with no recorded task worktree has no run-scoped head signal \
+             at all; 'cannot determine' must not be written as 'frozen' (got {v2:?})"
+        );
+
+        // The safety property, not just the enum value: the reap must not fire.
+        let kept = retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
+            claim_progress(&cfg, &tmp, c, now)
+        });
+        assert!(
+            kept,
+            "a heartbeat-stale claim whose run-scoped progress is Undetermined \
+             must be KEPT — only a confirmed Known(Stalled) may reap"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// (A3) The protective-Undetermined pin: the run DOES record a worktree,
+    /// but the path is unreadable (removed / never a git repo). An unreadable
+    /// signal must resolve to `Undetermined`, never to `Known(Stalled)` — and
+    /// the consequence at the reap layer is that the claim survives.
+    #[test]
+    fn claim_progress_with_unreadable_run_worktree_is_undetermined_and_keeps_the_claim() {
+        let tmp = make_tmp_dir("claim-scope-unreadable-wt");
+        // Recorded in run state but never created: the worktree was removed
+        // out from under the run (or never materialised).
+        let gone = tmp.join("worktree-that-is-not-a-repo");
+        let (cfg, claim, home) = progress_fixture(&tmp, "runGoneWt", Some(&gone));
+        assert!(
+            !gone.exists(),
+            "fixture precondition: the recorded worktree must not exist"
+        );
+        let _h = pin_home(&home);
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+
+        let repo_head = head_of(&tmp);
+        let _ = claim_progress(&cfg, &tmp, &claim, t0);
+        let now = t0 + window;
+        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        assert_eq!(
+            repo_head,
+            head_of(&tmp),
+            "fixture precondition: nothing may commit during this test"
+        );
+        assert!(
+            matches!(v2, Determination::Undetermined(_)),
+            "an unreadable run-scoped head signal is 'cannot determine'; reading \
+             it as 'frozen' would hand reap authority to a failed read (got {v2:?})"
+        );
+
+        let kept = retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
+            claim_progress(&cfg, &tmp, c, now)
+        });
+        assert!(
+            kept,
+            "a heartbeat-stale claim whose run-scoped head signal could not be \
+             read must be KEPT, never force-stolen"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }

@@ -8291,9 +8291,20 @@ notes = """
 
 
 --- 事実確認 (flow 2026-08-06, session 0ff5fc74) ---
-d24f02d5 は superseded ではなく additive である。main の taintguard は別系統で 0.2.0 まで進んだが、d24f02d5 が足しているのは新規の rationale.rs (391行)・README.ja.md (169行)・tests/provenance_gate.rs (442行)・tests/rationale_readme.rs (107行) で、main 側に対応物が無い。つまり earlier の taintguard 衝突 (fe13e4cd vs 77a0c6e7 が同じ欠陥を同じ機構で直していた件) とは状況が違い、丸ごと採用も丸ごと破棄も正しくない。なお d24f02d5 も自称 0.1.10 だが、main の 0.1.10 は 60c20552 (git_common_dir を boundary 経由に) であって別物 — 同じ版番号が2系統に存在する。着手時は 0.2.0 への rebase が要る。敵対的パネルの block 理由は本 notes 上部を参照。今サイクルは context 逼迫のためバッチから外した (縮小ではなく順序付け)。"""
+d24f02d5 は superseded ではなく additive である。main の taintguard は別系統で 0.2.0 まで進んだが、d24f02d5 が足しているのは新規の rationale.rs (391行)・README.ja.md (169行)・tests/provenance_gate.rs (442行)・tests/rationale_readme.rs (107行) で、main 側に対応物が無い。つまり earlier の taintguard 衝突 (fe13e4cd vs 77a0c6e7 が同じ欠陥を同じ機構で直していた件) とは状況が違い、丸ごと採用も丸ごと破棄も正しくない。なお d24f02d5 も自称 0.1.10 だが、main の 0.1.10 は 60c20552 (git_common_dir を boundary 経由に) であって別物 — 同じ版番号が2系統に存在する。着手時は 0.2.0 への rebase が要る。敵対的パネルの block 理由は本 notes 上部を参照。今サイクルは context 逼迫のためバッチから外した (縮小ではなく順序付け)。
+
+--- 進め方の裁定 (ユーザー 2026-08-12) ---
+採用: まず敵対的パネルの block 理由を復元する。理由が分からないまま merge するのも
+破棄するのも、CLAUDE.md 6 が禁じる「批判を無検証で受け入れる / 無検証で棄却する」の
+両側になる。復元元の候補: 2026-08-05 の session transcript (branch
+run-20260805-055008-64104/t2 を生んだ run)、condukt の run state / verifier 出力、
+overwatch の finding ストア。復元できたら notes に逐語で書き戻し、その内容をもって
+改めて着手可否を判定する。復元できなかった場合は「復元不能」と明記して人間に再度
+裁定を仰ぐこと — 推測で block 理由を再構成してはならない。
+なお本 notes の上部が空である件は backlog 73fb8e81 で追跡している。
+"""
 created_at = 1785926923
-updated_at = 1786496450
+updated_at = 1786499132
 weight = 0.0
 issue_number = 153
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/153"
@@ -9992,9 +10003,22 @@ tags = [
     "p0",
 ]
 status = "pending"
-notes = "2026-08-12 実測 (commit 74e3a879 / ee2d4d03)。実 repo で reconcile を回すと state_scan は readable で namespaces=2417 runs=150 だが running_tasks=0 で、結果 55 entries 中 47 が removable=true になった。occupancy の Dead は「完全に読めた走査で claim している running task が無かった」という意味しか持たないので、condukt が作っていない worktree —— CLAUDE.md 8 に従って /flow などが作る .harness-worktrees/session-* や、手で git worktree add したもの —— は生きていても常に dead に落ちる。今日実害が無いのは cleanup --remove が role==Unregistered しか消さず、これら 47 は全て registered だからであり、removable フラグ自体は誤った許可を出している。将来 registered も消す消費者が付いた瞬間に生きたセッションの worktree が消える。案: claim されていない worktree については condukt run state を「情報なし」として扱い、worktree 自身の活動 signal (worktree-activity は実装済み) や session transcript を独立の witness にして、claim 無し = Dead ではなく Undetermined に倒す。ただし現在の anti-vacuity control (dead_clean_worktree_is_removable) がこの設計を固定しているので、設計判断として人間に上げる。 統合者による独立確認 (2026-08-12、測定点 6fc4fdee、linked worktree を vantage にして deploy 済みではなくビルド直後のバイナリで実行): entries 56 件、うち primary 1 件 (/Users/yuki/src/harness、removable=false — ee2d4d03 の修正は効いている)、registered 55 件、removable=true が 49 件、そして occupancy は 56 件すべてが dead だった。決定的な観測: この統合作業をしていた worktree 自身 (run-20260811-230435-19389-t2-condukt-reconcile) が occupancy=dead / removable=true と 報告された。私はその中に立ってビルドとテストを回している最中だった。同時に、いま使っているセッション worktree (session-b57a58c3) も occupancy=dead であり、removable=false になっているのは dirty だったからにすぎない。つまり Dead は「生きていない」の証拠ではなく「condukt の RUNNING task が claim していない」以上のことを言えていない。これは判定不能を permissive へ写した (型の規律は正しい) のではなく、証拠が支えない known 値を主張している問題である。"
+notes = """
+2026-08-12 実測 (commit 74e3a879 / ee2d4d03)。実 repo で reconcile を回すと state_scan は readable で namespaces=2417 runs=150 だが running_tasks=0 で、結果 55 entries 中 47 が removable=true になった。occupancy の Dead は「完全に読めた走査で claim している running task が無かった」という意味しか持たないので、condukt が作っていない worktree —— CLAUDE.md 8 に従って /flow などが作る .harness-worktrees/session-* や、手で git worktree add したもの —— は生きていても常に dead に落ちる。今日実害が無いのは cleanup --remove が role==Unregistered しか消さず、これら 47 は全て registered だからであり、removable フラグ自体は誤った許可を出している。将来 registered も消す消費者が付いた瞬間に生きたセッションの worktree が消える。案: claim されていない worktree については condukt run state を「情報なし」として扱い、worktree 自身の活動 signal (worktree-activity は実装済み) や session transcript を独立の witness にして、claim 無し = Dead ではなく Undetermined に倒す。ただし現在の anti-vacuity control (dead_clean_worktree_is_removable) がこの設計を固定しているので、設計判断として人間に上げる。 統合者による独立確認 (2026-08-12、測定点 6fc4fdee、linked worktree を vantage にして deploy 済みではなくビルド直後のバイナリで実行): entries 56 件、うち primary 1 件 (/Users/yuki/src/harness、removable=false — ee2d4d03 の修正は効いている)、registered 55 件、removable=true が 49 件、そして occupancy は 56 件すべてが dead だった。決定的な観測: この統合作業をしていた worktree 自身 (run-20260811-230435-19389-t2-condukt-reconcile) が occupancy=dead / removable=true と 報告された。私はその中に立ってビルドとテストを回している最中だった。同時に、いま使っているセッション worktree (session-b57a58c3) も occupancy=dead であり、removable=false になっているのは dirty だったからにすぎない。つまり Dead は「生きていない」の証拠ではなく「condukt の RUNNING task が claim していない」以上のことを言えていない。これは判定不能を permissive へ写した (型の規律は正しい) のではなく、証拠が支えない known 値を主張している問題である。
+
+--- 設計判断 (ユーザー裁定 2026-08-12) ---
+採用: claim 無しを Undetermined に倒す。condukt run state が claim していない
+worktree については run state を「情報なし」として扱い、worktree 自身の活動
+signal (worktree-activity は実装済み) や session transcript を独立の witness に
+する。どの witness も得られなければ occupancy は Undetermined とし、削除しない。
+根拠: GC では判定不能は「消さない」が制限側であり (削除だけが不可逆)、CLAUDE.md 3
+の方向と一致する。代償として auto-removable は減る (回収は手動か追加 witness 待ち)。
+着手時の注意: 既存の anti-vacuity control dead_clean_worktree_is_removable が
+現行セマンティクスを仕様として固定しているので、これを書き換える必要がある。
+書き換えるときは「何を証明しないテストになったか」を先に問うこと。
+"""
 created_at = 1786472512
-updated_at = 1786496451
+updated_at = 1786499132
 weight = 0.0
 issue_number = 256
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/256"
@@ -10154,3 +10178,32 @@ updated_at = 1786496420
 weight = 0.0
 issue_number = 263
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/263"
+
+[[task]]
+id = "73fb8e81"
+title = "6aaec283 の notes が自分の上部を参照しているが、その上部は空である (敵対的パネルの block 理由が失われている)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-08-12、測定点 1ef71cc5。6aaec283 の notes は末尾近くで「敵対的パネルの block 理由は本 notes 上部を参照」と書いているが、notes 全体は 570 バイトで、先頭は改行 2 個の直後に「--- 事実確認 (flow 2026-08-06, session 0ff5fc74) ---」が来る。つまり参照先の上部セクションは存在しない。/Users/yuki/.backlog/tasks.toml.pre-prune-20260807 のスナップショットでも同じ 570 バイト・同じ先頭改行 2 個であり、少なくとも 2026-08-07 の時点で既に失われていた。先頭に改行が 2 つ残っていることは、そこに何かがあって上書きされた痕跡と読める。影響: 6aaec283 は p0 でキュー先頭に居座っているが、着手の可否を決める唯一の情報 (なぜパネルが block したか) が無いので、このチケットは書かれたとおりには実行不能である。人間に裁定を仰ごうにも、何を裁定するのかが記録されていない。これは bd6d81df と同じクラス (notes の read-modify-write で古い版が新しい版を上書きした) の可能性が高いが、同一チケット内の部分消失なので add ではなく edit の追記経路が疑わしい。見分ける方法: backlog edit の notes 追記が既存 notes を prepend/append のどちらでどう扱うかを読み、既存内容を落としうる経路があるかを確認する。関連: bd6d81df, 5ba13c3e。d24f02d5 自体は commit として現存し (2026-08-05, branch run-20260805-055008-64104/t2)、main の taintguard は 0.2.0 まで進んでいる。
+
+--- 機構を同定した (2026-08-12、測定点 1ef71cc5) ---
+仮説ではなく確認済み: backlog edit --help は --notes を "New notes" と説明しており、
+実際に既存 notes を置換する (追記ではない)。したがって、既存 notes を読まずに
+自分の段落だけを --notes へ渡した呼び出しは、それ以前の内容を無言で破棄する。
+6aaec283 の block 理由の消失はこの経路で説明できる。bd6d81df (add の lost update)
+とは別の機構であり、ロックでは塞げない — 呼び出し側が全文を渡している以上、
+ストアから見れば正当な書き込みである。
+直す方向の候補: (1) --notes-append を足して追記を第一級にする (2) --notes が既存を
+置換することを help と docstring で明示する (3) 置換時に旧 notes を失うことを
+警告する。いずれにせよ「気をつける」に置かない — 現に失われている。
+回避策 (今すぐ使えるもの): .scratch/append-notes.py のように読み出して連結し全文を
+渡す。同スクリプトは追記が着地したことと旧内容が残っていることの両方を assert する。
+"""
+created_at = 1786499031
+updated_at = 1786499132
+weight = 0.0
+issue_number = 264
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/264"

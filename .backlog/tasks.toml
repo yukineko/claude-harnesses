@@ -8291,9 +8291,20 @@ notes = """
 
 
 --- 事実確認 (flow 2026-08-06, session 0ff5fc74) ---
-d24f02d5 は superseded ではなく additive である。main の taintguard は別系統で 0.2.0 まで進んだが、d24f02d5 が足しているのは新規の rationale.rs (391行)・README.ja.md (169行)・tests/provenance_gate.rs (442行)・tests/rationale_readme.rs (107行) で、main 側に対応物が無い。つまり earlier の taintguard 衝突 (fe13e4cd vs 77a0c6e7 が同じ欠陥を同じ機構で直していた件) とは状況が違い、丸ごと採用も丸ごと破棄も正しくない。なお d24f02d5 も自称 0.1.10 だが、main の 0.1.10 は 60c20552 (git_common_dir を boundary 経由に) であって別物 — 同じ版番号が2系統に存在する。着手時は 0.2.0 への rebase が要る。敵対的パネルの block 理由は本 notes 上部を参照。今サイクルは context 逼迫のためバッチから外した (縮小ではなく順序付け)。"""
+d24f02d5 は superseded ではなく additive である。main の taintguard は別系統で 0.2.0 まで進んだが、d24f02d5 が足しているのは新規の rationale.rs (391行)・README.ja.md (169行)・tests/provenance_gate.rs (442行)・tests/rationale_readme.rs (107行) で、main 側に対応物が無い。つまり earlier の taintguard 衝突 (fe13e4cd vs 77a0c6e7 が同じ欠陥を同じ機構で直していた件) とは状況が違い、丸ごと採用も丸ごと破棄も正しくない。なお d24f02d5 も自称 0.1.10 だが、main の 0.1.10 は 60c20552 (git_common_dir を boundary 経由に) であって別物 — 同じ版番号が2系統に存在する。着手時は 0.2.0 への rebase が要る。敵対的パネルの block 理由は本 notes 上部を参照。今サイクルは context 逼迫のためバッチから外した (縮小ではなく順序付け)。
+
+--- 進め方の裁定 (ユーザー 2026-08-12) ---
+採用: まず敵対的パネルの block 理由を復元する。理由が分からないまま merge するのも
+破棄するのも、CLAUDE.md 6 が禁じる「批判を無検証で受け入れる / 無検証で棄却する」の
+両側になる。復元元の候補: 2026-08-05 の session transcript (branch
+run-20260805-055008-64104/t2 を生んだ run)、condukt の run state / verifier 出力、
+overwatch の finding ストア。復元できたら notes に逐語で書き戻し、その内容をもって
+改めて着手可否を判定する。復元できなかった場合は「復元不能」と明記して人間に再度
+裁定を仰ぐこと — 推測で block 理由を再構成してはならない。
+なお本 notes の上部が空である件は backlog 73fb8e81 で追跡している。
+"""
 created_at = 1785926923
-updated_at = 1786375818
+updated_at = 1786499132
 weight = 0.0
 issue_number = 153
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/153"
@@ -9737,7 +9748,7 @@ tags = ["p0"]
 status = "pending"
 notes = "部分完了 (2026-08-12, condukt 0.7.129, merge 6fc4fdee)。(b) GC 側だけが着地した: condukt worktree reconcile が git worktree list と全 run-state namespace と作業ツリーの三者照合を行い live/dead/undetermined を返す。is_removable はワイルドカード無しの網羅 match で、あらゆる Undetermined と Role::Primary は keep に解決する。dirty な worktree は refs/preserved へ退避されるまで削除に到達しない。統合前に kill rate を独立再測定した: Role::Primary の arm 削除は E0004 コンパイルエラー、Undetermined 3 arm と preserved arm と primary_witnesses の退行はすべて KILLED、対照 (is_removable 常に false) は 2 件を殺した。(a) resume 側は未着手である。--json が resume の surface として存在するが消費者が 1 つも無い (0cf3775c で追跡)。したがって本 item は done ではない。残っているのは (a) のみ。"
 created_at = 1786403442
-updated_at = 1786495032
+updated_at = 1786496451
 weight = 0.0
 issue_number = 237
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/237"
@@ -9834,10 +9845,10 @@ tags = [
     "condukt",
     "p0",
 ]
-status = "pending"
+status = "claimed"
 notes = "8b871bb1 で state.rs の probe_run は task の worktree に閉じたシグナルへ移した。しかし crates/condukt/src/claim.rs:292 の claim_progress は今も progress::git_head_signal(repo_root(cwd)) を 3 シグナルのうち 1 本として使っている。CLAUDE.md 8 で別セッションが常に commit する前提なので、この signal は常に動き、fingerprint は毎回変化し、Progressing に倒れる。probe_run と違い claim_progress は reap 権限を持つ (Known(Stalled) のときだけ reap する側なので、常時 Progressing は「死んだ holder の claim を永久に剥がせない」方向の fail-open)。measured: 未測定。まず「repo HEAD だけが動いていて他 2 本が凍っている状況で claim_progress が Progressing を返す」behavioural test を書いて RED を観測すること。発見者は 8b871bb1 の implementer と verifier。"
 created_at = 1786451479
-updated_at = 1786451479
+updated_at = 1786496438
 weight = 0.0
 issue_number = 242
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/242"
@@ -9888,10 +9899,10 @@ tags = [
     "liveness",
     "p0",
 ]
-status = "pending"
+status = "claimed"
 notes = "実測 2026-08-12 03:44-03:55 JST。orchestrator が t2-condukt-reconcile の worker を dead と判定して 2 人目 (私) を同じ worktree /Users/yuki/.condukt/worktrees/run-20260811-230435-19389-t2-condukt-reconcile に投入したが、1 人目は生きていた。証跡: 私が何も操作していない 2 分間 (03:53:02 -> 03:55:07) に wt_reconcile.rs / state.rs / worktree.rs の sha が変化し、restore.rs が新たに modified として現れた。さらに私の Edit が適用された時点でファイル内容が私の Read 時点と異なっていた (is_sidecar -> state::is_run_state_sidecar に置き換わっていた)。lsof で cwd がその worktree の claude プロセス (pid 66412) を観測。CLAUDE.md 8 が言う「git が救えない唯一の競合」= 同一 index の共有が、worktree 分離をしていてもオーケストレータ側の liveness 誤判定で発生する。今回は orchestrator が介入して 1 人目を stand down させたため実害は出ていないが、機構としては dead 判定が pid でも progress でもない何かに基づいていた可能性が高い。backlog e99f61e4 で作った condukt worktree reconcile の判定 (progress 由来 3 値) を、worker の再投入判定そのものにも適用できるかを検討する。"
 created_at = 1786472066
-updated_at = 1786472066
+updated_at = 1786496438
 weight = 0.0
 issue_number = 250
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/250"
@@ -9992,9 +10003,22 @@ tags = [
     "p0",
 ]
 status = "pending"
-notes = "2026-08-12 実測 (commit 74e3a879 / ee2d4d03)。実 repo で reconcile を回すと state_scan は readable で namespaces=2417 runs=150 だが running_tasks=0 で、結果 55 entries 中 47 が removable=true になった。occupancy の Dead は「完全に読めた走査で claim している running task が無かった」という意味しか持たないので、condukt が作っていない worktree —— CLAUDE.md 8 に従って /flow などが作る .harness-worktrees/session-* や、手で git worktree add したもの —— は生きていても常に dead に落ちる。今日実害が無いのは cleanup --remove が role==Unregistered しか消さず、これら 47 は全て registered だからであり、removable フラグ自体は誤った許可を出している。将来 registered も消す消費者が付いた瞬間に生きたセッションの worktree が消える。案: claim されていない worktree については condukt run state を「情報なし」として扱い、worktree 自身の活動 signal (worktree-activity は実装済み) や session transcript を独立の witness にして、claim 無し = Dead ではなく Undetermined に倒す。ただし現在の anti-vacuity control (dead_clean_worktree_is_removable) がこの設計を固定しているので、設計判断として人間に上げる。 統合者による独立確認 (2026-08-12、測定点 6fc4fdee、linked worktree を vantage にして deploy 済みではなくビルド直後のバイナリで実行): entries 56 件、うち primary 1 件 (/Users/yuki/src/harness、removable=false — ee2d4d03 の修正は効いている)、registered 55 件、removable=true が 49 件、そして occupancy は 56 件すべてが dead だった。決定的な観測: この統合作業をしていた worktree 自身 (run-20260811-230435-19389-t2-condukt-reconcile) が occupancy=dead / removable=true と 報告された。私はその中に立ってビルドとテストを回している最中だった。同時に、いま使っているセッション worktree (session-b57a58c3) も occupancy=dead であり、removable=false になっているのは dirty だったからにすぎない。つまり Dead は「生きていない」の証拠ではなく「condukt の RUNNING task が claim していない」以上のことを言えていない。これは判定不能を permissive へ写した (型の規律は正しい) のではなく、証拠が支えない known 値を主張している問題である。"
+notes = """
+2026-08-12 実測 (commit 74e3a879 / ee2d4d03)。実 repo で reconcile を回すと state_scan は readable で namespaces=2417 runs=150 だが running_tasks=0 で、結果 55 entries 中 47 が removable=true になった。occupancy の Dead は「完全に読めた走査で claim している running task が無かった」という意味しか持たないので、condukt が作っていない worktree —— CLAUDE.md 8 に従って /flow などが作る .harness-worktrees/session-* や、手で git worktree add したもの —— は生きていても常に dead に落ちる。今日実害が無いのは cleanup --remove が role==Unregistered しか消さず、これら 47 は全て registered だからであり、removable フラグ自体は誤った許可を出している。将来 registered も消す消費者が付いた瞬間に生きたセッションの worktree が消える。案: claim されていない worktree については condukt run state を「情報なし」として扱い、worktree 自身の活動 signal (worktree-activity は実装済み) や session transcript を独立の witness にして、claim 無し = Dead ではなく Undetermined に倒す。ただし現在の anti-vacuity control (dead_clean_worktree_is_removable) がこの設計を固定しているので、設計判断として人間に上げる。 統合者による独立確認 (2026-08-12、測定点 6fc4fdee、linked worktree を vantage にして deploy 済みではなくビルド直後のバイナリで実行): entries 56 件、うち primary 1 件 (/Users/yuki/src/harness、removable=false — ee2d4d03 の修正は効いている)、registered 55 件、removable=true が 49 件、そして occupancy は 56 件すべてが dead だった。決定的な観測: この統合作業をしていた worktree 自身 (run-20260811-230435-19389-t2-condukt-reconcile) が occupancy=dead / removable=true と 報告された。私はその中に立ってビルドとテストを回している最中だった。同時に、いま使っているセッション worktree (session-b57a58c3) も occupancy=dead であり、removable=false になっているのは dirty だったからにすぎない。つまり Dead は「生きていない」の証拠ではなく「condukt の RUNNING task が claim していない」以上のことを言えていない。これは判定不能を permissive へ写した (型の規律は正しい) のではなく、証拠が支えない known 値を主張している問題である。
+
+--- 設計判断 (ユーザー裁定 2026-08-12) ---
+採用: claim 無しを Undetermined に倒す。condukt run state が claim していない
+worktree については run state を「情報なし」として扱い、worktree 自身の活動
+signal (worktree-activity は実装済み) や session transcript を独立の witness に
+する。どの witness も得られなければ occupancy は Undetermined とし、削除しない。
+根拠: GC では判定不能は「消さない」が制限側であり (削除だけが不可逆)、CLAUDE.md 3
+の方向と一致する。代償として auto-removable は減る (回収は手動か追加 witness 待ち)。
+着手時の注意: 既存の anti-vacuity control dead_clean_worktree_is_removable が
+現行セマンティクスを仕様として固定しているので、これを書き換える必要がある。
+書き換えるときは「何を証明しないテストになったか」を先に問うこと。
+"""
 created_at = 1786472512
-updated_at = 1786495094
+updated_at = 1786499132
 weight = 0.0
 issue_number = 256
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/256"
@@ -10060,10 +10084,10 @@ tags = [
     "failopen",
     "p0",
 ]
-status = "pending"
+status = "claimed"
 notes = "observation 2026-08-12, run run-20260811-230435-19389 の実行中に観測。backlog 0.2.21 の実バイナリ (repo target/release)。実測: 同一 cwd (/Users/yuki/src/.harness-worktrees/session-b57a58c3) から backlog add を4回実行した。1回目 b1b0f319 と 2回目 11d2a214 はいずれも added / updated を stdout で報告し exit 0 だった。その後 3回目 0cf3775c と 4回目 09d17bb6 を実行した。最後に全ストアを grep したところ、当該 worktree の .backlog/tasks.toml の git diff に現れる新規 id は 0cf3775c と 09d17bb6 の2件のみで、b1b0f319 と 11d2a214 はどこにも存在しない。探索範囲は ~/.backlog/tasks.toml、main の .backlog/tasks.toml、.harness-worktrees/*/.backlog/tasks.toml、.condukt/worktrees/*/.backlog/tasks.toml の全部で、いずれもヒット 0。つまり add は成功を報告したが書き込みは永続化されなかった。11d2a214 については add の後に backlog edit も実行し updated: 11d2a214 を報告させているので、少なくともその時点ではストアに存在していた。したがって単なる書き込み失敗ではなく、後続の read-modify-write が古い版を読んで上書きした lost update である。なぜ重大か: backlog add は本リポジトリで所見を残す唯一の機構であり、CLAUDE.md と MEMORY の always-file-findings が全エージェントに義務づけている。その機構が成功を報告しながら黙って捨てるなら、記録という行為そのものが信用できない。しかも失敗が exit code にも stderr にも一切現れないので、下流は捨てられたことを知りようがない (3節の判定不能を clean へ写す形そのもの)。709ff549 の checkout 追従ストア分岐と同じ根から出ている可能性が高いが、本件は同一 cwd 内で起きているので分岐だけでは説明できない。同時に別プロセス (本 run の t1 worker と t2 worker、および並行セッション) が同じ project の store を触っていたことは確実である。判定不能な点: 上書きした主体が (a) 同一 worktree 内の別プロセス (b) git 操作による checkout や restore (c) store 側の atomic rename の競合 のどれかは未同定。見分ける方法は tasks.toml の書き込みを fs_usage か opensnoop で追跡しながら add を並行実行して再現すること。関連: 709ff549 (本 run で claim 側は project 単位の ledger で塞いだが、add 側の read-modify-write は手つかず), 5ba13c3e, e99f61e4 の実測6 (起票が worktree の未コミットストアにだけ書かれて main から見えなかった件)。"
 created_at = 1786486894
-updated_at = 1786486894
+updated_at = 1786496438
 weight = 0.0
 issue_number = 260
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/260"
@@ -10126,3 +10150,263 @@ updated_at = 1786459308
 weight = 0.0
 issue_number = 247
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/247"
+
+[[task]]
+id = "d7b19e8d"
+title = "bd6d81df の消失機構の第一人称候補: 統合時の resolve-tasks.py が committed 内容で working tree の tasks.toml を上書きした"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "自己申告。2026-08-12 の t1/t2 統合中、私は .scratch/resolve-tasks.py を実行した。これは git show HEAD:.backlog/tasks.toml と git show main:.backlog/tasks.toml の union を作り、open(tasks.toml, w).write(merged) で working tree を丸ごと上書きする。両辺とも COMMITTED 内容なので、その瞬間に working tree にだけ存在した未コミットの add は痕跡なく消える。bd6d81df が測定した b1b0f319 と 11d2a214 の消失は、この経路 (note の候補 b: git 操作による checkout/restore) で説明できる可能性がある。ただし時刻の突き合わせはしていないので同定ではなく候補である。見分ける方法: bd6d81df の 4 回の add の時刻と、統合中の resolve 実行時刻・各 worktree での git checkout -- 実行時刻を transcript から突き合わせる。重要なのは、これが真なら根本原因はロック競合ではなく store が未コミットの working tree ファイルであり git 操作が日常的にそれを巻き戻すという設計側にあること (5ba13c3e / e99f61e4 の実測6 と同根)。ロックはプロセス間の RMW しか守らず、git checkout からは守らない。"
+created_at = 1786496402
+updated_at = 1786496402
+weight = 0.0
+issue_number = 262
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/262"
+
+[[task]]
+id = "0b24bff5"
+title = "ef806c37 が実際に flow をブロックした: PATH の backlog launcher が 0.2.16 を指し no bundled binary で全 backlog 操作が落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-08-12、測定点 1ef71cc5。which -a backlog は /Users/yuki/.claude/plugins/cache/yukineko/backlog/0.2.16/bin/backlog のみを返す。実行すると backlog: no bundled binary for darwin-arm64 (.../0.2.16/bin/backlog-darwin-arm64) で失敗する。cache には 0.1.6 / 0.2.16 / 0.2.23 の3版があり、0.2.23 にだけ backlog-darwin-arm64 が存在する (rollout 済み)。PATH の当該エントリは ~/.zshrc ~/.zprofile ~/.zshenv のいずれにも無いので、シェル profile ではなくセッション環境側が注入している。影響: flow ループがキューを読めない = source が死ぬ。今回は絶対パスで 0.2.23 を直接叩いて回避したが、これは迂回であって修正ではない。既存の ef806c37 は同じ観察の起票だが、そこでは実害が出ていなかった。重要なのは launcher が判定不能ではなく明確に失敗している (exit 非0 + stderr) 点で、これは fail-closed として正しい挙動である。直すべきは PATH 注入が rollout 後の版に追従しないこと。見分ける方法: rollout-plugins.sh が PATH エントリを更新するのか、それともセッション起動時に固定されるのかを確認する。"
+created_at = 1786496420
+updated_at = 1786496420
+weight = 0.0
+issue_number = 263
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/263"
+
+[[task]]
+id = "73fb8e81"
+title = "6aaec283 の notes が自分の上部を参照しているが、その上部は空である (敵対的パネルの block 理由が失われている)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-08-12、測定点 1ef71cc5。6aaec283 の notes は末尾近くで「敵対的パネルの block 理由は本 notes 上部を参照」と書いているが、notes 全体は 570 バイトで、先頭は改行 2 個の直後に「--- 事実確認 (flow 2026-08-06, session 0ff5fc74) ---」が来る。つまり参照先の上部セクションは存在しない。/Users/yuki/.backlog/tasks.toml.pre-prune-20260807 のスナップショットでも同じ 570 バイト・同じ先頭改行 2 個であり、少なくとも 2026-08-07 の時点で既に失われていた。先頭に改行が 2 つ残っていることは、そこに何かがあって上書きされた痕跡と読める。影響: 6aaec283 は p0 でキュー先頭に居座っているが、着手の可否を決める唯一の情報 (なぜパネルが block したか) が無いので、このチケットは書かれたとおりには実行不能である。人間に裁定を仰ごうにも、何を裁定するのかが記録されていない。これは bd6d81df と同じクラス (notes の read-modify-write で古い版が新しい版を上書きした) の可能性が高いが、同一チケット内の部分消失なので add ではなく edit の追記経路が疑わしい。見分ける方法: backlog edit の notes 追記が既存 notes を prepend/append のどちらでどう扱うかを読み、既存内容を落としうる経路があるかを確認する。関連: bd6d81df, 5ba13c3e。d24f02d5 自体は commit として現存し (2026-08-05, branch run-20260805-055008-64104/t2)、main の taintguard は 0.2.0 まで進んでいる。
+
+--- 機構を同定した (2026-08-12、測定点 1ef71cc5) ---
+仮説ではなく確認済み: backlog edit --help は --notes を "New notes" と説明しており、
+実際に既存 notes を置換する (追記ではない)。したがって、既存 notes を読まずに
+自分の段落だけを --notes へ渡した呼び出しは、それ以前の内容を無言で破棄する。
+6aaec283 の block 理由の消失はこの経路で説明できる。bd6d81df (add の lost update)
+とは別の機構であり、ロックでは塞げない — 呼び出し側が全文を渡している以上、
+ストアから見れば正当な書き込みである。
+直す方向の候補: (1) --notes-append を足して追記を第一級にする (2) --notes が既存を
+置換することを help と docstring で明示する (3) 置換時に旧 notes を失うことを
+警告する。いずれにせよ「気をつける」に置かない — 現に失われている。
+回避策 (今すぐ使えるもの): .scratch/append-notes.py のように読み出して連結し全文を
+渡す。同スクリプトは追記が着地したことと旧内容が残っていることの両方を assert する。
+"""
+created_at = 1786499031
+updated_at = 1786499132
+weight = 0.0
+issue_number = 264
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/264"
+
+[[task]]
+id = "a53fd016"
+title = "statusline-command.sh が Opus 5 の窓を 200k と誤って決め打ちしている (実測 301,463 トークンで反証)。ctxrot 側は 300k を正しく読んでおり2つのメーターが食い違う"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "context-metering",
+    "p1",
+]
+status = "done"
+notes = """
+実測 2026-08-12、測定点 1ef71cc5。ユーザーからの指摘 (分母が 200k なのはおかしい、300k では) を検証した結果、指摘は正しかった。
+
+同定した場所: /Users/yuki/.claude/statusline-command.sh (リポジトリ外のユーザー設定。settings.json の statusLine が bash でこれを呼んでいる)。当該箇所は model id での2分岐で、1m を含む id なら 1000000、それ以外は全て 200000 に落ちる。claude-opus-5 は 1m を含まないので 200k 側に落ちる。
+
+反証の実測: 本セッションの transcript から、statusline と同じ式 (isSidechain でない assistant turn の input_tokens + cache_creation_input_tokens + cache_read_input_tokens) の最大値を取ると 301,463 トークンだった (1149 turn を走査)。200,000 の 150.7 パーセントであり、200k 窓では物理的に成立しない。したがって 200k は誤りとして反証済み。スクリプトは pct を used*100/window で出すので、この時点で ctx: 150 パーセント (301k/200k) という無意味な表示になっていた。
+
+重要な精密化: 301,463 は 300,000 を超えているので、真の窓は 300k ですらなく 301,463 より大きい。つまり 300000 も真の窓ではなく安全側の budget である。ctxrot の main.rs が context_window を effective cap / target であって model の真の窓ではないと明記しているのと同じ位置づけになる。
+
+食い違い: ユーザーの ~/.ctxrot/config.toml は context_window = 300000 を設定済みで、deploy 済み ctxrot 0.5.23 はこれを正しく honor する (probe: used_percentage 50 と 150k トークンを与えると ~150k/300k と表示した)。つまり同じ画面に出る2つの文脈メーターが別々の分母を使っている。
+
+なぜ単純な定数差し替えで済ませてはいけないか: 当該 case 文の catch-all は全モデルを 200000 に落とす。300000 に置き換えても catch-all である以上、次に窓の違うモデルが来たときに同じ誤りが再発する。CLAUDE.md 3 と 3b1eb24 の教訓 (statusline の沈黙や誤値は余裕ありと読まれる fail-open) からすると、窓が同定できないモデルについては誤った分母を出すのではなく unknown を明示すべきである。ctxrot には既に unknown_line がその目的で存在する。
+
+案: (1) statusline をユーザー手書きスクリプトから ctxrot statusline へ寄せて分母の定義を1箇所にする (2) スクリプトを残すなら model id から窓を引く表を持ち、未知の id は unknown と表示する。いずれにせよ 2 メーター体制のままにしない。
+
+--- ユーザーによる訂正 (2026-08-12) ---
+私の当初の解釈は誤っていた。真の窓は 1M であり、300000 はユーザーが意図的に
+設定した 30 パーセントの上限 (budget) である。300k は窓の推定値ではない。
+したがって「真の窓は 301,463 より大きい」という私の記述は正しいが、そこから
+「300k も真の窓ではない」と書いたのは的外れだった。ctxrot が context_window を
+effective cap / target であって model の真の窓ではないと定義しているのは、
+まさにこの使い方のためであり、budget メーターが 100 パーセントを超えて表示
+されるのも設計どおりである。実測の 301,463 は「窓の証拠」ではなく「budget を
+超過した」という意味しか持たない。反証されたのは 200k だけである。
+
+--- 修正した (2026-08-12、案 1 を採用) ---
+/Users/yuki/.claude/statusline-command.sh を、分母を自分で決めるのをやめて
+ctxrot statusline に委譲する形へ書き換えた。旧版は
+/Users/yuki/.claude/statusline-command.sh.bak-20260812 に退避してある。
+定数を 300000 に差し替える案は採らなかった。当該 case は catch-all なので、
+次に budget の違うモデルが来たときに同じ誤りが黙って再発する。定義を 1 つ
+消すのが目的であって、2 つ目の定義を正しくすることではない。
+
+実測した挙動 (旧版 / 新版の比較、測定点 1ef71cc5):
+  A 実セッション    旧 ctx: 102 パーセント (205k/200k) 赤 / 新 ctxrot 69 パーセント ~206k/300k 緑
+  B transcript が読めない  旧 ctx: - / 新 赤の ctxrot ?% unknown
+  C セッション未開始      旧 ctx: - / 新 ctx: - (回帰なし)
+  D 1m 系の model id      旧 ctx: 20 パーセント (205k/1M) / 新 ~206k/300k
+  E ctxrot 不在           新 赤の ctx: unknown (ctxrot not found)
+
+B は当初気づいていなかった 2 つ目の fail-open である。旧版は transcript が
+読めない場合と、そもそもセッションが無い場合を、どちらも ctx: - として同じ
+表示にしていた。壊れた読み取りと待機中が区別できないのは、3b1eb24 が閉じた
+はずのクラスと同型である。新版は前者を明示的な unknown にする。
+
+D は挙動変更である。1m 系の model id はこれまで 1M を分母にしていたが、今後は
+全モデルが単一の 300k budget に対して測られる。30 パーセント上限という意図には
+合致するが、旧 1m アームは死んだことを記録しておく。
+
+ctxrot 側は元から正しく、変更していない。deploy 済み 0.5.23 は
+~/.ctxrot/config.toml の context_window = 300000 を honor し、transcript が
+読めない場合と stdin が parse 不能な場合の両方で赤の unknown を返す (どちらも
+exit 0 なので、ラッパー側は exit code ではなく出力の空判定で健全性を見る必要が
+ある。新版はそうしている)。実測 31ms / 8MB transcript。
+"""
+created_at = 1786500405
+updated_at = 1786512061
+weight = 0.0
+issue_number = 265
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/265"
+
+[[task]]
+id = "b6cf486d"
+title = "condukt: worker liveness proxies (transcript mtime, lsof cwd, clean worktree) all read dead while the worker is provably alive"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+Measured 2026-08-12 while orchestrating run p0trio-1 (two condukt-worker subagents in their own worktrees).
+
+Three independent proxy signals ALL indicated the workers were dead, while two positive signals proved they were alive and progressing:
+
+DEAD-reading proxies:
+1. Agent transcript output-file mtime: last write 10:47, still 10:47 after 20 min of quiet.
+2. lsof -a -d cwd -c claude filtered to the worktree path: returned NO pids for either worktree.
+3. git log main..HEAD and git status --short in the worktree: both empty (no commits, clean tree) for 20+ min.
+
+ALIVE-proving signals observed at the same moment:
+1. t1 worker had written .tdd/t1-claim-scope.red.json at 11:06 -- i.e. 19 MINUTES AFTER its transcript mtime had stopped advancing.
+2. t3 worker had live rustc processes with --out-dir pointing inside its own worktree target/debug/deps.
+
+Why this matters: this is the same defect class as backlog 356bd51d and as condukt state.rs stuck_task_ids. A liveness predicate built on any of the three dead-reading proxies would have concluded dead and authorized a re-dispatch onto a live worktree -- reproducing the two-workers-one-index incident. Note in particular that lsof cwd is NOT reliable: the 356bd51d report used it and DID find a pid, but here it finds none for workers that are unambiguously alive, so its absence proves nothing.
+
+Actionable: any progress or liveness gate must key off signals BOUND to the worker's own durable output (its worktree target/ mtime, its .tdd proof files, its own child processes), never off transcript mtime, lsof cwd, or worktree cleanliness. Suggest documenting the reliable-signal list next to condukt wt_reconcile.rs Frozen-is-not-dead section, which already argues the principle but does not enumerate which probes actually satisfy it."""
+created_at = 1786500446
+updated_at = 1786500446
+weight = 0.0
+issue_number = 266
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/266"
+
+[[task]]
+id = "cf58e2fc"
+title = "condukt claim.rs: run_task_progress_signal maps an ABSENT updated_at to Known(0) instead of Undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "crates/condukt/src/claim.rs, fn run_task_progress_signal (around line 322). It computes rs.tasks.iter().filter_map(t.updated_at).max().unwrap_or(0) and wraps the result in Determination::Known. When the run state loads cleanly but NO task carries an updated_at (legacy run states, or a run whose tasks were never transitioned), the unwrap_or(0) mints a Known frozen value of zero. That is an ABSENCE being written as an OBSERVATION: nothing was observed to be frozen, yet the signal contributes a stable byte string to the fingerprint and therefore helps the verdict reach Known(Stalled), which is the ONLY verdict that fires the reap in retain_claim. Per CLAUDE.md section 3 the empty case is cannot-determine and must resolve to Determination::undetermined, exactly as the adjacent Err arm already does for an unloadable run state. Same function family as the run-scoped head-signal defect being fixed under task t1-claim-scope, but a DIFFERENT arm and not in that task scope. Suggested pin: a run state that loads fine but whose tasks all have updated_at None must yield Undetermined from claim_progress and must keep a heartbeat-stale claim in retain_claim. Noticed by the t1-claim-scope test-writer while reading the signal readers; not verified by an executed test yet."
+created_at = 1786501930
+updated_at = 1786501930
+weight = 0.0
+issue_number = 267
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/267"
+
+[[task]]
+id = "207d0362"
+title = "marketplace.json plugin description keeps citing an older version than the version field, and no gate catches it"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "Observed while micro-bumping condukt 0.7.129 to 0.7.130 for a test-only commit on branch condukt/p0trio-1/t1-claim-scope. The repo-root .claude-plugin/marketplace.json condukt entry now reads version 0.7.130 while its description field still opens with the string v0.7.129 followed by that release's notes. The three gated fields (Cargo.toml package version, plugin.json version, marketplace.json version) are checked for lockstep by check-plugin-versions.py, but the description prose is not checked against the version at all, so it silently drifts every time a bump does not also rewrite the release notes. This is the prose-vs-implementation mismatch class that CLAUDE.md section 4 names, one layer out from code: a reader of the marketplace entry cannot tell whether the described behaviour is the shipped behaviour. Two possible resolutions, both need a human decision: either declare the description a cumulative changelog whose leading version tag is NOT expected to equal the current version and say so somewhere machine-checkable, or add a gate requiring the leading vX.Y.Z token of description to equal version. Filing rather than fixing because rewriting another plugin release-notes blob was out of the scope of the commit that noticed it."
+created_at = 1786501942
+updated_at = 1786501942
+weight = 0.0
+issue_number = 268
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/268"
+
+[[task]]
+id = "ba8789e0"
+title = "backlog: tasks-lock acquire budget is measured ~10.0s, not the ~8s its docstring claims, so the margin below the 10s stale-reap window is zero"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "測定 (2026-08-12, worktree p0trio-1-t3-backlog-add-verified, commit ead274ef): store.rs の TASKS_LOCK_MAX_ATTEMPTS (1600) x TASKS_LOCK_SLEEP (5ms) を実際に使い切らせるテストを 3 回走らせたところ、経過時間は 9.951s / 9.967s / 10.003s だった。sleep の overshoot (5ms 公称が実測 ~6.2ms) のため、実際の budget は公称 8s ではなく約 10s である。TASKS_LOCK_MAX_ATTEMPTS の doc comment は 'attempts x sleep = 8s worst case' と書き、さらに 'The budget must stay a comfortable margin BELOW TASKS_LOCK_STALE_SECS (10s) so a queued-behind-many-live-holders waiter is never mistaken for one waiting on a crashed holder and made to reap+barge in early' と主張しているが、実測値 ~10.0s は 10s を下回っておらず margin は存在しない (むしろ同時か超過)。実 holder は lockfile の mtime を作成時から更新しないので、10s 待った waiter は生きている holder の lock を stale とみなして reap し critical section に割り込みうる — この定数がまさに防ぐと書いている race である。docstring と実挙動の矛盾 (CLAUDE.md 第6節 LLM の職務1)。測定方法: 外部 holder が lockfile を保持し background thread で mtime を refresh する fault injection 下で add_with_weight_and_github_push を呼び、Instant::now() の経過を記録した (crates/backlog/src/store.rs の add_must_not_report_success_when_the_tasks_lock_is_unavailable)。"
+created_at = 1786512063
+updated_at = 1786512063
+weight = 0.0
+issue_number = 269
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/269"
+
+[[task]]
+id = "73d26006"
+title = "backlog: edit and mark_done and mark_failed and requeue_expired share the same unprotected lock degrade as add, so their writes can also be silently lost"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "bd6d81df は add を対象にしているが、同じ fail-open は store.rs の他の mutator にもそのまま存在する: edit / mark_done / mark_failed / requeue_expired はいずれも with_tasks_lock を使い、lock を budget 内に取れないと read-modify-write を UNPROTECTED で実行して Ok を返す (with_tasks_lock の doc: 'degrade to running f UNPROTECTED (fail-soft: never return Err purely because of lock contention)')。つまり backlog done / backlog fail / backlog edit も、成功したと報告しつつ後続の degraded writer に上書きされうる。add だけ verified-write にすると、失われる経路は残ったまま検出だけが片肺になる (CLAUDE.md 第6節: 直近の修正の twin を必ず監査する)。add の修正が landed した後、同じ verified-write 契約を他の mutator にも適用するか、少なくとも lock 未取得を呼び出し元に伝えるかを決める必要がある。参照: crates/backlog/src/store.rs の with_tasks_lock 定義 (about line 335) と各 mutator。"
+created_at = 1786543315
+updated_at = 1786543315
+weight = 0.0
+issue_number = 270
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/270"
+
+[[task]]
+id = "b14d433c"
+title = "backlog: try_acquire_tasks_lock maps an unexpected filesystem error to the same silent None as ordinary contention"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "crates/backlog/src/store.rs の try_acquire_tasks_lock は、AlreadyExists 以外の予期しない IO エラー (EACCES, ENOSPC, EROFS 等) を 'Err(_) => return None' で即座に None にしている。呼び出し元は None を 'budget 内に取れなかった (contention)' としか解釈できず、'そもそもロックの取得機構が壊れている' と区別できない。CLAUDE.md 第3節の判定不能 (IO 失敗) を制限側に解決する要求に照らすと、少なくとも三値 (取得成功 / contention で degrade / IO エラーで判定不能) にして、IO エラーは fail-closed に倒すべきか検討が必要。bd6d81df / ba8789e0 と同じ lock 周辺だが別軸の所見として起票する。"
+created_at = 1786543346
+updated_at = 1786543346
+weight = 0.0
+issue_number = 271
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/271"
+
+[[task]]
+id = "d7e1ac30"
+title = "backlog: lock acquire budget measures 9.97s against a 10s stale-reap threshold, so a LIVE holder gets reaped and two writers barge into the same RMW"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+status = "pending"
+notes = """
+Measured 2026-08-12, measurement point 1ef71cc5, crates/backlog/src/store.rs.
+
+THE PROSE ASSERTS AN INVARIANT THE CODE DOES NOT HOLD (CLAUDE.md section 4).
+
+store.rs:246 claims: Bounded blocking-acquire budget: attempts x sleep approximately 8s worst case.
+store.rs:257 claims: The budget must stay a comfortable margin BELOW TASKS_LOCK_STALE_SECS (10s) so a queued-behind-many-live-holders waiter is never mistaken for one waiting on a crashed holder and made to reap+barge in early.
+
+MEASURED REALITY. The nominal arithmetic is TASKS_LOCK_MAX_ATTEMPTS 1600 x TASKS_LOCK_SLEEP 5ms = 8.0s, but that arithmetic counts ONLY the sleep. Each attempt also pays an OpenOptions create_new syscall plus a tasks_lock_is_stale metadata stat, so real per-iteration cost is about 6.2ms. Independently observed elapsed budget: 9.967965208s. That number was produced by a different agent (the t3 test-writer for run p0trio-1) in the panic message of store::tests::add_must_not_report_success_when_the_tasks_lock_is_unavailable, which holds the lockfile for the whole budget and prints the measured wait. It is an observation, not my estimate.
+
+So the actual margin is 10.000 - 9.968 = about 0.03s, i.e. 0.3 percent -- not a comfortable margin. On a loaded machine, or for any waiter that starts even tens of milliseconds later, the budget CROSSES the 10s stale threshold.
+
+CONSEQUENCE (exactly the harm the comment itself names as the stale-lock reap window race). A waiter reaches the end of its budget at ~9.97s. At 10.0s the LIVE holder's lockfile satisfies tasks_lock_is_stale, so the waiter removes it and takes the lock via create_new. Both parties now hold what each believes is the exclusive lock and both run read-modify-write on tasks.toml. The later save clobbers the earlier one. This is a direct mechanism for the bd6d81df lost update.
+
+WHY THE bd6d81df FIX DOES NOT CLOSE THIS. The t3 fix makes add fail CLOSED when acquisition fails (returns Err instead of running unprotected) and re-reads after save. Neither helps here, because in this race BOTH writers successfully acquire -- neither takes the degraded path. The post-save reload can only catch the clobber if it happens to land before the reload, so it is a mitigation with a race window, not a fix.
+
+SUGGESTED DIRECTION (not verified by an executed test). Two independent problems: (1) the budget must be derived from measured elapsed wall-clock, not from an attempt count multiplied by sleep duration, because the latter systematically undercounts syscall cost; (2) stale-reap must not be keyed on lockfile mtime alone -- an alive holder should be refreshing something, or the reap should require a positive liveness signal, mirroring the progress-gated reap in condukt claim.rs retain_claim which requires a confirmed Known(Stalled) verdict rather than mere staleness. Related: backlog b6cf486d on which liveness probes are actually sound.
+
+NOT DONE: I did not write a test reproducing the two-writers-barge sequence. It needs deterministic control of the 10s boundary, so it likely needs the threshold and budget injectable rather than const."""
+created_at = 1786543402
+updated_at = 1786543402
+weight = 0.0
+issue_number = 272
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/272"

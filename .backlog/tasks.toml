@@ -10278,3 +10278,135 @@ updated_at = 1786512061
 weight = 0.0
 issue_number = 265
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/265"
+
+[[task]]
+id = "b6cf486d"
+title = "condukt: worker liveness proxies (transcript mtime, lsof cwd, clean worktree) all read dead while the worker is provably alive"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+Measured 2026-08-12 while orchestrating run p0trio-1 (two condukt-worker subagents in their own worktrees).
+
+Three independent proxy signals ALL indicated the workers were dead, while two positive signals proved they were alive and progressing:
+
+DEAD-reading proxies:
+1. Agent transcript output-file mtime: last write 10:47, still 10:47 after 20 min of quiet.
+2. lsof -a -d cwd -c claude filtered to the worktree path: returned NO pids for either worktree.
+3. git log main..HEAD and git status --short in the worktree: both empty (no commits, clean tree) for 20+ min.
+
+ALIVE-proving signals observed at the same moment:
+1. t1 worker had written .tdd/t1-claim-scope.red.json at 11:06 -- i.e. 19 MINUTES AFTER its transcript mtime had stopped advancing.
+2. t3 worker had live rustc processes with --out-dir pointing inside its own worktree target/debug/deps.
+
+Why this matters: this is the same defect class as backlog 356bd51d and as condukt state.rs stuck_task_ids. A liveness predicate built on any of the three dead-reading proxies would have concluded dead and authorized a re-dispatch onto a live worktree -- reproducing the two-workers-one-index incident. Note in particular that lsof cwd is NOT reliable: the 356bd51d report used it and DID find a pid, but here it finds none for workers that are unambiguously alive, so its absence proves nothing.
+
+Actionable: any progress or liveness gate must key off signals BOUND to the worker's own durable output (its worktree target/ mtime, its .tdd proof files, its own child processes), never off transcript mtime, lsof cwd, or worktree cleanliness. Suggest documenting the reliable-signal list next to condukt wt_reconcile.rs Frozen-is-not-dead section, which already argues the principle but does not enumerate which probes actually satisfy it."""
+created_at = 1786500446
+updated_at = 1786500446
+weight = 0.0
+issue_number = 266
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/266"
+
+[[task]]
+id = "cf58e2fc"
+title = "condukt claim.rs: run_task_progress_signal maps an ABSENT updated_at to Known(0) instead of Undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "crates/condukt/src/claim.rs, fn run_task_progress_signal (around line 322). It computes rs.tasks.iter().filter_map(t.updated_at).max().unwrap_or(0) and wraps the result in Determination::Known. When the run state loads cleanly but NO task carries an updated_at (legacy run states, or a run whose tasks were never transitioned), the unwrap_or(0) mints a Known frozen value of zero. That is an ABSENCE being written as an OBSERVATION: nothing was observed to be frozen, yet the signal contributes a stable byte string to the fingerprint and therefore helps the verdict reach Known(Stalled), which is the ONLY verdict that fires the reap in retain_claim. Per CLAUDE.md section 3 the empty case is cannot-determine and must resolve to Determination::undetermined, exactly as the adjacent Err arm already does for an unloadable run state. Same function family as the run-scoped head-signal defect being fixed under task t1-claim-scope, but a DIFFERENT arm and not in that task scope. Suggested pin: a run state that loads fine but whose tasks all have updated_at None must yield Undetermined from claim_progress and must keep a heartbeat-stale claim in retain_claim. Noticed by the t1-claim-scope test-writer while reading the signal readers; not verified by an executed test yet."
+created_at = 1786501930
+updated_at = 1786501930
+weight = 0.0
+issue_number = 267
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/267"
+
+[[task]]
+id = "207d0362"
+title = "marketplace.json plugin description keeps citing an older version than the version field, and no gate catches it"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "Observed while micro-bumping condukt 0.7.129 to 0.7.130 for a test-only commit on branch condukt/p0trio-1/t1-claim-scope. The repo-root .claude-plugin/marketplace.json condukt entry now reads version 0.7.130 while its description field still opens with the string v0.7.129 followed by that release's notes. The three gated fields (Cargo.toml package version, plugin.json version, marketplace.json version) are checked for lockstep by check-plugin-versions.py, but the description prose is not checked against the version at all, so it silently drifts every time a bump does not also rewrite the release notes. This is the prose-vs-implementation mismatch class that CLAUDE.md section 4 names, one layer out from code: a reader of the marketplace entry cannot tell whether the described behaviour is the shipped behaviour. Two possible resolutions, both need a human decision: either declare the description a cumulative changelog whose leading version tag is NOT expected to equal the current version and say so somewhere machine-checkable, or add a gate requiring the leading vX.Y.Z token of description to equal version. Filing rather than fixing because rewriting another plugin release-notes blob was out of the scope of the commit that noticed it."
+created_at = 1786501942
+updated_at = 1786501942
+weight = 0.0
+issue_number = 268
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/268"
+
+[[task]]
+id = "ba8789e0"
+title = "backlog: tasks-lock acquire budget is measured ~10.0s, not the ~8s its docstring claims, so the margin below the 10s stale-reap window is zero"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "測定 (2026-08-12, worktree p0trio-1-t3-backlog-add-verified, commit ead274ef): store.rs の TASKS_LOCK_MAX_ATTEMPTS (1600) x TASKS_LOCK_SLEEP (5ms) を実際に使い切らせるテストを 3 回走らせたところ、経過時間は 9.951s / 9.967s / 10.003s だった。sleep の overshoot (5ms 公称が実測 ~6.2ms) のため、実際の budget は公称 8s ではなく約 10s である。TASKS_LOCK_MAX_ATTEMPTS の doc comment は 'attempts x sleep = 8s worst case' と書き、さらに 'The budget must stay a comfortable margin BELOW TASKS_LOCK_STALE_SECS (10s) so a queued-behind-many-live-holders waiter is never mistaken for one waiting on a crashed holder and made to reap+barge in early' と主張しているが、実測値 ~10.0s は 10s を下回っておらず margin は存在しない (むしろ同時か超過)。実 holder は lockfile の mtime を作成時から更新しないので、10s 待った waiter は生きている holder の lock を stale とみなして reap し critical section に割り込みうる — この定数がまさに防ぐと書いている race である。docstring と実挙動の矛盾 (CLAUDE.md 第6節 LLM の職務1)。測定方法: 外部 holder が lockfile を保持し background thread で mtime を refresh する fault injection 下で add_with_weight_and_github_push を呼び、Instant::now() の経過を記録した (crates/backlog/src/store.rs の add_must_not_report_success_when_the_tasks_lock_is_unavailable)。"
+created_at = 1786512063
+updated_at = 1786512063
+weight = 0.0
+issue_number = 269
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/269"
+
+[[task]]
+id = "73d26006"
+title = "backlog: edit and mark_done and mark_failed and requeue_expired share the same unprotected lock degrade as add, so their writes can also be silently lost"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "bd6d81df は add を対象にしているが、同じ fail-open は store.rs の他の mutator にもそのまま存在する: edit / mark_done / mark_failed / requeue_expired はいずれも with_tasks_lock を使い、lock を budget 内に取れないと read-modify-write を UNPROTECTED で実行して Ok を返す (with_tasks_lock の doc: 'degrade to running f UNPROTECTED (fail-soft: never return Err purely because of lock contention)')。つまり backlog done / backlog fail / backlog edit も、成功したと報告しつつ後続の degraded writer に上書きされうる。add だけ verified-write にすると、失われる経路は残ったまま検出だけが片肺になる (CLAUDE.md 第6節: 直近の修正の twin を必ず監査する)。add の修正が landed した後、同じ verified-write 契約を他の mutator にも適用するか、少なくとも lock 未取得を呼び出し元に伝えるかを決める必要がある。参照: crates/backlog/src/store.rs の with_tasks_lock 定義 (about line 335) と各 mutator。"
+created_at = 1786543315
+updated_at = 1786543315
+weight = 0.0
+issue_number = 270
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/270"
+
+[[task]]
+id = "b14d433c"
+title = "backlog: try_acquire_tasks_lock maps an unexpected filesystem error to the same silent None as ordinary contention"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "crates/backlog/src/store.rs の try_acquire_tasks_lock は、AlreadyExists 以外の予期しない IO エラー (EACCES, ENOSPC, EROFS 等) を 'Err(_) => return None' で即座に None にしている。呼び出し元は None を 'budget 内に取れなかった (contention)' としか解釈できず、'そもそもロックの取得機構が壊れている' と区別できない。CLAUDE.md 第3節の判定不能 (IO 失敗) を制限側に解決する要求に照らすと、少なくとも三値 (取得成功 / contention で degrade / IO エラーで判定不能) にして、IO エラーは fail-closed に倒すべきか検討が必要。bd6d81df / ba8789e0 と同じ lock 周辺だが別軸の所見として起票する。"
+created_at = 1786543346
+updated_at = 1786543346
+weight = 0.0
+issue_number = 271
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/271"
+
+[[task]]
+id = "d7e1ac30"
+title = "backlog: lock acquire budget measures 9.97s against a 10s stale-reap threshold, so a LIVE holder gets reaped and two writers barge into the same RMW"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+status = "pending"
+notes = """
+Measured 2026-08-12, measurement point 1ef71cc5, crates/backlog/src/store.rs.
+
+THE PROSE ASSERTS AN INVARIANT THE CODE DOES NOT HOLD (CLAUDE.md section 4).
+
+store.rs:246 claims: Bounded blocking-acquire budget: attempts x sleep approximately 8s worst case.
+store.rs:257 claims: The budget must stay a comfortable margin BELOW TASKS_LOCK_STALE_SECS (10s) so a queued-behind-many-live-holders waiter is never mistaken for one waiting on a crashed holder and made to reap+barge in early.
+
+MEASURED REALITY. The nominal arithmetic is TASKS_LOCK_MAX_ATTEMPTS 1600 x TASKS_LOCK_SLEEP 5ms = 8.0s, but that arithmetic counts ONLY the sleep. Each attempt also pays an OpenOptions create_new syscall plus a tasks_lock_is_stale metadata stat, so real per-iteration cost is about 6.2ms. Independently observed elapsed budget: 9.967965208s. That number was produced by a different agent (the t3 test-writer for run p0trio-1) in the panic message of store::tests::add_must_not_report_success_when_the_tasks_lock_is_unavailable, which holds the lockfile for the whole budget and prints the measured wait. It is an observation, not my estimate.
+
+So the actual margin is 10.000 - 9.968 = about 0.03s, i.e. 0.3 percent -- not a comfortable margin. On a loaded machine, or for any waiter that starts even tens of milliseconds later, the budget CROSSES the 10s stale threshold.
+
+CONSEQUENCE (exactly the harm the comment itself names as the stale-lock reap window race). A waiter reaches the end of its budget at ~9.97s. At 10.0s the LIVE holder's lockfile satisfies tasks_lock_is_stale, so the waiter removes it and takes the lock via create_new. Both parties now hold what each believes is the exclusive lock and both run read-modify-write on tasks.toml. The later save clobbers the earlier one. This is a direct mechanism for the bd6d81df lost update.
+
+WHY THE bd6d81df FIX DOES NOT CLOSE THIS. The t3 fix makes add fail CLOSED when acquisition fails (returns Err instead of running unprotected) and re-reads after save. Neither helps here, because in this race BOTH writers successfully acquire -- neither takes the degraded path. The post-save reload can only catch the clobber if it happens to land before the reload, so it is a mitigation with a race window, not a fix.
+
+SUGGESTED DIRECTION (not verified by an executed test). Two independent problems: (1) the budget must be derived from measured elapsed wall-clock, not from an attempt count multiplied by sleep duration, because the latter systematically undercounts syscall cost; (2) stale-reap must not be keyed on lockfile mtime alone -- an alive holder should be refreshing something, or the reap should require a positive liveness signal, mirroring the progress-gated reap in condukt claim.rs retain_claim which requires a confirmed Known(Stalled) verdict rather than mere staleness. Related: backlog b6cf486d on which liveness probes are actually sound.
+
+NOT DONE: I did not write a test reproducing the two-writers-barge sequence. It needs deterministic control of the 10s boundary, so it likely needs the threshold and budget injectable rather than const."""
+created_at = 1786543402
+updated_at = 1786543402
+weight = 0.0
+issue_number = 272
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/272"

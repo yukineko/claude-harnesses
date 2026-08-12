@@ -10003,3 +10003,89 @@ updated_at = 1786472110
 weight = 0.0
 issue_number = 255
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/255"
+
+[[task]]
+id = "0cf3775c"
+title = "condukt worktree reconcile の removable フィールドが crate 外の消費者にとって罠になる (Role フィルタが JSON schema に現れない)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+status = "pending"
+notes = "observation 2026-08-12, 測定点 ee2d4d03 (condukt 0.7.129), 独立 verifier による実測。fe84d350 の隣接面であり、そちらは判定ロジック側、本件は消費面の話。実測: worktree reconcile --json は 55 entry を返し、うち 49 が removable:true。全 49 が role:registered で、role:unregistered は現時点で 0 件。うち 37 件が .harness-worktrees/session-* である。削除到達性は検証済みで安全側: crates/condukt/src/ 内の remove_dir_all を全件 grep したところ、production の呼び出しは main.rs:3198 の1本のみで、その手前 main.rs:3162-3166 が role == Unregistered で filter してから if !e.removable で continue する。したがって registered な 49 件は candidates に入らず削除経路に到達しない。問題はそこではなく、removable:true という値が --json に出ていることそのものにある。この Role フィルタは main.rs の clap doc comment にしか書かれておらず JSON schema には現れないので、--json を jq に通して自前で rm する外部消費者 (scripts/ 配下や skill) は removable:true を「消してよい」と読む。しかも --json は本機能が resume surface と位置づけているものなので、外部消費者が付く前提の出力である。verifier は crates/condukt/src/ の外は調べていないので、実際にそういう消費者が既に存在するかは UNVERIFIED。是正案は3つのいずれか: (a) フィールド名を removable から cleanup_eligible 等へ変えて主語を明示する (b) JSON に role フィルタの事実を載せる (削除対象は unregistered のみ、と同じ JSON に書く) (c) registered かつ claim 無しを Dead ではなく Undetermined へ倒す (これは fe84d350 の本体で、既存 test dead_clean_worktree_is_removable がその挙動を pin しているので設計判断が要る)。判定不能な点: crate 外に removable を読む消費者が既に居るかは未調査。見分ける方法は scripts/ と crates/*/skills/ を worktree reconcile と removable で grep すること。関連: fe84d350, e99f61e4."
+created_at = 1786473458
+updated_at = 1786473458
+weight = 0.0
+issue_number = 257
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/257"
+
+[[task]]
+id = "09d17bb6"
+title = "condukt primary_witnesses の union は片方ずつでも全テストが通る — 2証人が食い違う場合が未テスト"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+status = "pending"
+notes = "observation 2026-08-12, 測定点 ee2d4d03, 独立 verifier の mutation 実測。ee2d4d03 は primary 判定を vantage 依存の git rev-parse --show-toplevel から、2つの vantage 非依存な証人の union へ移した (crates/condukt/src/worktree.rs:2076-2095 primary_witnesses): git rev-parse --git-common-dir の親と、git worktree list --porcelain の先頭 entry。mutation 実測: P1 (union を元の単一 --show-toplevel へ戻す) は primary_is_identified_when_invoked_from_a_linked_worktree をちょうど1件殺した (過不足なく的確)。P4 (全 worktree を primary 扱いにする空虚実装) は dead_clean_worktree_is_removable を含む5件を殺した (アンチ空虚性は機能している)。したがって fix 自体は load-bearing で空虚ではない。しかし P2 (--git-common-dir 証人だけ残す) と P3 (worktree list 証人だけ残す) はどちらも 16/16 全通過で kill 0 だった。つまり union にした意味 (2証人が食い違う状況での defense-in-depth) は現在のテストでは一切検証されていない。両証人は単独でも vantage 非依存なので、テストされている全シナリオでは片方で足りてしまう。実装者が union を選んだ理由は commit message によれば「余分な primary はディレクトリ1個を人手で消す損害 (回復可能) だが primary の欠落は main を失う (回復不能) なので非対称に union へ倒す」であり、方針としては正しい。欠けているのは、その非対称性が効く状況 (2証人が実際に異なる値を返す repo 構成) を作るテストである。判定不能な点: 2証人が食い違う git 構成が実在しうるか (例えば .git ファイルが壊れている、common dir が symlink、submodule 配下) は未調査。verifier は git の文書化された保証から議論しただけで、実構成を作っていない (UNVERIFIED と明示している)。関連: e99f61e4."
+created_at = 1786473459
+updated_at = 1786473459
+weight = 0.0
+issue_number = 258
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/258"
+
+[[task]]
+id = "ef806c37"
+title = "backlog の PATH 上 launcher が 0.2.16 を指しており darwin-arm64 バイナリが無いため backlog CLI が全滅している"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+status = "pending"
+notes = "observation 2026-08-11, 測定点 32370792 (main)。REFILED 2026-08-12: 本 item は最初 b1b0f319 として起票されたが、その後どのストアからも消失した (下記の lost-update 起票を参照)。PATH 上の backlog を叩くと全サブコマンドが失敗する: backlog: no bundled binary for darwin-arm64 (/Users/yuki/.claude/plugins/cache/yukineko/backlog/0.2.16/bin/backlog-darwin-arm64). 実測: cache の version dir を ls すると 0.1.6 と 0.2.13 と 0.2.21 には backlog-darwin-arm64 が存在する (いずれも 1238592 バイト) が、0.2.16 の bin には launcher スクリプト backlog (938 バイト) しか無い。registry がその 0.2.16 を指している。crate 側の宣言バージョンは 0.2.21 (本 run で 0.2.22 へ bump) なので registry の指す先と crate が乖離している。影響: backlog list / next --claim / add / done がユーザーにもエージェントにも一切使えない。flow と condukt の SKILL は backlog CLI を前提に手順を書いているのでその導線が丸ごと死ぬ。回避策は repo の target/release/backlog を直接叩くこと (本セッションはそうした)。既知クラス: rollout が新しい version dir に host の darwin-arm64 バイナリを seed し損ねる件。launcher の exec bit ゲート check-launcher-exec-bit.py は mode しか見ておらずバイナリの不在は見ていない。判定不能な点: registry が 0.2.16 を指す理由が rollout 失敗か意図的 pin かは未同定。見分ける方法は installPath 配下の .deployed-from.json を読むこと。"
+created_at = 1786486865
+updated_at = 1786486865
+weight = 0.0
+issue_number = 259
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/259"
+
+[[task]]
+id = "bd6d81df"
+title = "backlog add が報告した task が後続の add で消える — 実測でストアから2件が消失した (lost update)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "failopen",
+    "p0",
+]
+status = "pending"
+notes = "observation 2026-08-12, run run-20260811-230435-19389 の実行中に観測。backlog 0.2.21 の実バイナリ (repo target/release)。実測: 同一 cwd (/Users/yuki/src/.harness-worktrees/session-b57a58c3) から backlog add を4回実行した。1回目 b1b0f319 と 2回目 11d2a214 はいずれも added / updated を stdout で報告し exit 0 だった。その後 3回目 0cf3775c と 4回目 09d17bb6 を実行した。最後に全ストアを grep したところ、当該 worktree の .backlog/tasks.toml の git diff に現れる新規 id は 0cf3775c と 09d17bb6 の2件のみで、b1b0f319 と 11d2a214 はどこにも存在しない。探索範囲は ~/.backlog/tasks.toml、main の .backlog/tasks.toml、.harness-worktrees/*/.backlog/tasks.toml、.condukt/worktrees/*/.backlog/tasks.toml の全部で、いずれもヒット 0。つまり add は成功を報告したが書き込みは永続化されなかった。11d2a214 については add の後に backlog edit も実行し updated: 11d2a214 を報告させているので、少なくともその時点ではストアに存在していた。したがって単なる書き込み失敗ではなく、後続の read-modify-write が古い版を読んで上書きした lost update である。なぜ重大か: backlog add は本リポジトリで所見を残す唯一の機構であり、CLAUDE.md と MEMORY の always-file-findings が全エージェントに義務づけている。その機構が成功を報告しながら黙って捨てるなら、記録という行為そのものが信用できない。しかも失敗が exit code にも stderr にも一切現れないので、下流は捨てられたことを知りようがない (3節の判定不能を clean へ写す形そのもの)。709ff549 の checkout 追従ストア分岐と同じ根から出ている可能性が高いが、本件は同一 cwd 内で起きているので分岐だけでは説明できない。同時に別プロセス (本 run の t1 worker と t2 worker、および並行セッション) が同じ project の store を触っていたことは確実である。判定不能な点: 上書きした主体が (a) 同一 worktree 内の別プロセス (b) git 操作による checkout や restore (c) store 側の atomic rename の競合 のどれかは未同定。見分ける方法は tasks.toml の書き込みを fs_usage か opensnoop で追跡しながら add を並行実行して再現すること。関連: 709ff549 (本 run で claim 側は project 単位の ledger で塞いだが、add 側の read-modify-write は手つかず), 5ba13c3e, e99f61e4 の実測6 (起票が worktree の未コミットストアにだけ書かれて main から見えなかった件)。"
+created_at = 1786486894
+updated_at = 1786486894
+weight = 0.0
+issue_number = 260
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/260"
+
+[[task]]
+id = "e8cd12de"
+title = "subagent の生死を間接シグナルで判定すると false dead を出す — 4シグナル収束の判定が実測で反証された"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+status = "pending"
+notes = "observation 2026-08-12, run run-20260811-230435-19389。REFILED: 最初 11d2a214 として起票したが消失した (bd6d81df 参照)。orchestrator が opus worker と sonnet verifier を dead と判定した根拠は次の4つの独立シグナルの収束: (1) worktree 内の非 .git ファイルの最新 mtime が約2時間進んでいない (epoch 1786460104 と 1786459932、観測時刻 1786467527)。(2) cargo と rustc のプロセスが 0 個。(3) SendMessage による直接 probe に対し9分間 (30秒間隔18回) 応答も tool round も無し。(4) Task tool の完了通知が来ない。反証: その後 verifier が正常に完走し完全な報告 (mutation kill rate 5/5、225/225 passed) を返した。所要 11126168 ms = 約3.09時間。worker も同様に完走した。つまり判定時点で両方生きており、4シグナルすべてが false negative だった。原因は agent が長時間 read と思考のみを行いファイル書き込みも subprocess 起動もしない区間が存在するため。ファイル mtime とプロセス存在は作業の証拠ではあっても生存の証拠ではない。重要な理由: e99f61e4 が作る live/dead/undetermined 三値照合は、まさにこの種の間接シグナルの収束で生死を決める設計である。本件はその設計が実測で false dead を出した1例であり、GC 側の方向反転 (判定不能は削除しない) が原則論ではなく必須であることの実証になる。同じ heuristic が worktree GC に使われ undetermined を削除側へ倒していたら、生きている worker の worktree を消していた。実害: 誤判定にもとづき duplicate worker と duplicate verifier を1体ずつ再投入し、同一 worktree に2体が同時に存在する状態を作った (356bd51d)。t1 側は冗長投入のみで実害なし。教訓: orchestrator には subagent の生存を直接問い合わせる一次手段が無い。SendMessage は next tool round で配送されるため応答が無いことは死の証拠にならず長考と区別できない。したがって subagent の生死は原理的に undetermined であり、undetermined を dead へ倒す再投入は必ず二重実行を生む。正しい設計は再投入前に worktree を分離するか、再投入をやめて待つか、ハーネスが一次的な生存 API を提供するか。判定不能な点: 2時間のファイル無活動が純粋な思考か API retry 待ちか rate limit stall かは未同定。見分ける方法は subagent transcript の該当時間帯の entry 間隔を読むこと。関連: e99f61e4, 356bd51d, aa6d6e43."
+created_at = 1786493488
+updated_at = 1786493488
+weight = 0.0
+issue_number = 261
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/261"

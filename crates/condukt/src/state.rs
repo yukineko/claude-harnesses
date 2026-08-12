@@ -3388,8 +3388,15 @@ mod tests {
     // ── stuck_task_ids tests ──────────────────────────────────────────────
 
     fn make_run_with_tasks(tasks: Vec<TaskState>) -> RunState {
+        make_run_with_tasks_id("run-stuck-test", tasks)
+    }
+
+    /// Same, with an explicit run id. The progress engine keys its multi-sample
+    /// snapshots by run id, so every fixture that samples progress uses its own
+    /// id rather than sharing one namespace across tests.
+    fn make_run_with_tasks_id(run_id: &str, tasks: Vec<TaskState>) -> RunState {
         RunState {
-            run_id: "run-stuck-test".into(),
+            run_id: run_id.into(),
             goal: "stuck detection".into(),
             tasks,
             paused: false,
@@ -3398,86 +3405,341 @@ mod tests {
         }
     }
 
-    /// A Running task whose updated_at is older than the TTL must appear in the result.
+    /// The ONE seam through which every stuck-detection test below calls the
+    /// production selector, and the ONLY line the upcoming signature change may
+    /// be absorbed in.
+    ///
+    /// Today's selector is a PURE TTL predicate — `stuck_task_ids(run, ttl)` —
+    /// and reads neither `cfg`/`cwd` (where the progress snapshots live) nor
+    /// `now`. The progress-gated selector must read all three, because deciding
+    /// "is this worker dead?" requires sampling that task's OWN worktree HEAD
+    /// across the multi-sample window, so the production signature will change.
+    /// Every test below is therefore written against the FUTURE call shape and
+    /// routed through here: the implementer re-points exactly this one call, and
+    /// no assertion or fixture below moves with it.
+    ///
+    /// **This adapter must stay a pure forwarder.** Putting the progress gate
+    /// HERE instead of inside `stuck_task_ids` would turn every test below green
+    /// while `state abandon --all-stuck` (`main.rs`, the only production caller)
+    /// kept re-dispatching live workers — tests that are green about a gate no
+    /// production caller reaches.
+    fn stuck_ids_under_test(
+        cfg: &Config,
+        cwd: &Path,
+        run: &RunState,
+        ttl: u64,
+        now: i64,
+    ) -> Vec<String> {
+        // Read by the gated selector; the current TTL-only one takes neither.
+        let _ = (cfg, cwd, now);
+        stuck_task_ids(run, ttl)
+    }
+
+    fn head_of(repo: &Path) -> String {
+        crate::worktree::git(repo, &["rev-parse", "HEAD"])
+            .unwrap_or_else(|e| panic!("git rev-parse HEAD in {}: {e}", repo.display()))
+            .trim()
+            .to_string()
+    }
+
+    /// A RUNNING task pointing at `worktree` (recorded verbatim — this does NOT
+    /// create it, which is how the "recorded but unreadable" arm is expressed)
+    /// whose `updated_at` is fixed at `updated_at`.
+    fn running_task(id: &str, worktree: Option<&Path>, updated_at: Option<i64>) -> TaskState {
+        TaskState {
+            id: id.into(),
+            status: Status::Running,
+            worktree: worktree.map(|p| p.to_string_lossy().into_owned()),
+            branch: Some(format!("feat/{id}")),
+            updated_at,
+            ..Default::default()
+        }
+    }
+
+    /// The multi-sample window every progress-gated fixture below drives `now`
+    /// across (never a sleep). Read through `window_secs` so a
+    /// `HARNESS_PROGRESS_WINDOW_SECS` override moves the fixture with the engine.
+    fn progress_window() -> i64 {
+        progress::window_secs(progress::DEFAULT_WINDOW_SECS)
+    }
+
+    /// A Running task whose updated_at is older than the TTL, **and whose own
+    /// worktree HEAD is frozen across the whole window**, must appear in the
+    /// result.
+    ///
+    /// The fixture gained a real frozen git worktree: under the pure-TTL
+    /// selector a task with `worktree: None` was stuck, but a task with no
+    /// worktree has no task-scoped progress signal at all, which is
+    /// "cannot determine" and therefore NOT abandonable
+    /// (`stuck_task_ids_task_without_worktree_past_ttl_is_not_stuck` pins that
+    /// arm). The assertion here is unchanged — this test still asserts the
+    /// POSITIVE outcome, that a task past TTL is selected — it just states the
+    /// determinable case in which "past TTL" is the whole story.
     #[test]
     fn stuck_task_ids_ttl_exceeded() {
+        let tmp = make_tmp_dir("stuck-ttl-exceeded");
+        let cfg = make_test_cfg(&tmp);
+        let wt = tmp.join("wt-frozen");
+        init_git_repo(&wt);
         let ttl: u64 = 60;
-        // Set updated_at to 2× TTL ago so it is definitely past the threshold.
-        let old_ts = now_secs() - (ttl as i64 * 2);
-        let run = make_run_with_tasks(vec![TaskState {
-            id: "stuck-task".into(),
-            status: Status::Running,
-            worktree: None,
-            branch: None,
-            updated_at: Some(old_ts),
-            model: None,
-            cost_usd: None,
-            branch_sha: None,
-            fp_oracle_valid: None,
-            findings: None,
-            hashkey: None,
-            claimed_at: None,
-            started_at: None,
-            agent_id: None,
-            ..Default::default()
-        }]);
-        let ids = stuck_task_ids(&run, ttl);
+        let t0 = now_secs();
+        // Set updated_at to 2× TTL ago so it is definitely past the threshold
+        // under BOTH clocks: the wall clock the TTL-only selector reads, and the
+        // injected `now` the gated one will.
+        let old_ts = t0 - (ttl as i64 * 2);
+        let run = make_run_with_tasks_id(
+            "run-stuck-ttl-exceeded",
+            vec![running_task("stuck-task", Some(&wt), Some(old_ts))],
+        );
+        run.save(&cfg, &tmp).unwrap();
+
+        let head_before = head_of(&wt);
+        // Sample 1 anchors the fingerprint; the verdict only exists on sample 2.
+        let _ = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0);
+        let ids = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0 + progress_window());
+        assert_eq!(
+            head_before,
+            head_of(&wt),
+            "fixture precondition: the task's worktree HEAD must stay frozen"
+        );
         assert_eq!(ids, vec!["stuck-task".to_string()]);
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     /// A Running task whose updated_at is recent must NOT appear in the result.
+    ///
+    /// The fixture gained a real, FROZEN worktree so the test cannot pass for
+    /// the wrong reason: with the progress gate installed this task's progress
+    /// verdict is `Known(Stalled)` (abandonable), so the only thing keeping it
+    /// out of the result is the TTL arm this test is about.
     #[test]
     fn stuck_task_ids_ttl_not_exceeded() {
+        let tmp = make_tmp_dir("stuck-ttl-not-exceeded");
+        let cfg = make_test_cfg(&tmp);
+        let wt = tmp.join("wt-frozen");
+        init_git_repo(&wt);
         let ttl: u64 = 3600;
-        // Set updated_at to just 10 seconds ago — well within TTL.
-        let recent_ts = now_secs() - 10;
-        let run = make_run_with_tasks(vec![TaskState {
-            id: "active-task".into(),
-            status: Status::Running,
-            worktree: None,
-            branch: None,
-            updated_at: Some(recent_ts),
-            model: None,
-            cost_usd: None,
-            branch_sha: None,
-            fp_oracle_valid: None,
-            findings: None,
-            hashkey: None,
-            claimed_at: None,
-            started_at: None,
-            agent_id: None,
-            ..Default::default()
-        }]);
-        let ids = stuck_task_ids(&run, ttl);
+        let t0 = now_secs();
+        // Set updated_at to just 10 seconds ago — well within TTL, and still
+        // within it at `t0 + window`.
+        let recent_ts = t0 - 10;
+        let run = make_run_with_tasks_id(
+            "run-stuck-ttl-not-exceeded",
+            vec![running_task("active-task", Some(&wt), Some(recent_ts))],
+        );
+        run.save(&cfg, &tmp).unwrap();
+
+        let _ = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0);
+        let ids = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0 + progress_window());
         assert!(ids.is_empty(), "recent Running task must not be stuck");
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
-    /// A Running task with updated_at == None (legacy data) must NOT be considered stuck.
+    /// A Running task with updated_at == None (legacy data) must NOT be
+    /// considered stuck.
+    ///
+    /// The fixture gained a real, frozen worktree only so the task is a
+    /// realistic worker rather than a bare struct; note the arm is
+    /// over-determined once the progress gate exists (a task with no
+    /// `updated_at` has an unreadable `task-updated-at` signal too), which is
+    /// stated rather than glossed: the assertion is unchanged and true under
+    /// both selectors.
     #[test]
     fn stuck_task_ids_none_updated_at_not_stuck() {
+        let tmp = make_tmp_dir("stuck-none-updated-at");
+        let cfg = make_test_cfg(&tmp);
+        let wt = tmp.join("wt-frozen");
+        init_git_repo(&wt);
         let ttl: u64 = 60;
-        let run = make_run_with_tasks(vec![TaskState {
-            id: "legacy-task".into(),
-            status: Status::Running,
-            worktree: None,
-            branch: None,
-            updated_at: None,
-            model: None,
-            cost_usd: None,
-            branch_sha: None,
-            fp_oracle_valid: None,
-            findings: None,
-            hashkey: None,
-            claimed_at: None,
-            started_at: None,
-            agent_id: None,
-            ..Default::default()
-        }]);
-        let ids = stuck_task_ids(&run, ttl);
+        let t0 = now_secs();
+        let run = make_run_with_tasks_id(
+            "run-stuck-none-updated-at",
+            vec![running_task("legacy-task", Some(&wt), None)],
+        );
+        run.save(&cfg, &tmp).unwrap();
+
+        let _ = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0);
+        let ids = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0 + progress_window());
         assert!(
             ids.is_empty(),
             "Running task with no timestamp must not be stuck"
         );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── progress-gated stuck detection (backlog 356bd51d) ─────────────────
+    //
+    // `stuck_task_ids` authorises `state abandon --all-stuck`, which resets a
+    // task to Pending and clears its worktree/branch so the skill re-dispatches
+    // it. A PURE TTL predicate therefore hands a SECOND worker the worktree of
+    // a first worker that is merely quiet — the shared-index corruption
+    // CLAUDE.md §8 names as the one conflict git cannot resolve. Its own twins
+    // already refuse exactly this: `wt_reconcile` ("a worker that is thinking,
+    // or editing files without committing, is stalled by this measure and is
+    // very much alive") and `claim::retain_claim` (heartbeat-staleness is
+    // NECESSARY but NOT SUFFICIENT; the reap additionally requires a confirmed
+    // `Known(Stalled)`, and both `Progressing` and `Undetermined` keep the
+    // claim). These tests hold the bulk selector to that same contract.
+
+    /// (356bd51d — the headline) A RUNNING task past the TTL whose OWN worktree
+    /// HEAD ADVANCES across the window is a demonstrably LIVE worker and must
+    /// NOT be selected as stuck.
+    ///
+    /// `updated_at` advances only on an explicit status/field transition, so a
+    /// worker that spends longer than `stuck_ttl_secs` (default 1800s) thinking
+    /// and committing inside its worktree looks silent to the TTL and alive to
+    /// every durable signal. Selecting it hands its worktree to a second worker.
+    #[test]
+    fn stuck_task_ids_advancing_worktree_past_ttl_is_not_stuck() {
+        let tmp = make_tmp_dir("stuck-progressing");
+        let cfg = make_test_cfg(&tmp);
+        let wt = tmp.join("wt-busy");
+        init_git_repo(&wt);
+        let ttl: u64 = 60;
+        let t0 = now_secs();
+        let run = make_run_with_tasks_id(
+            "run-stuck-progressing",
+            // 4× TTL of silence: this worker is as "stuck" as the TTL can say.
+            vec![running_task("busy", Some(&wt), Some(t0 - (ttl as i64 * 4)))],
+        );
+        run.save(&cfg, &tmp).unwrap();
+
+        // Sample 1 anchors the progress fingerprint (Undetermined by
+        // construction — one observation can never mean "frozen").
+        let _ = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0);
+        // The worker does durable, observable work in its OWN worktree.
+        git_advance_head(&wt);
+        let ids = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0 + progress_window());
+
+        assert!(
+            !ids.contains(&"busy".to_string()),
+            "a task whose own worktree HEAD advanced across the window is a LIVE \
+             worker; selecting it as stuck resets it to Pending and re-dispatches \
+             a SECOND worker into that worktree (backlog 356bd51d). got {ids:?}"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Fail-closed (CLAUDE.md §3): a RUNNING task past the TTL whose recorded
+    /// worktree cannot be READ (removed, or never a git repo) is
+    /// `Undetermined`, and "cannot determine" is not "dead" — it must NOT be
+    /// selected as stuck.
+    ///
+    /// A failed read must never be summed into a value that then reads as
+    /// frozen and authorises a re-dispatch. The human override
+    /// (`state abandon --task <id>`) stays ungated, so a genuinely dead worker
+    /// whose worktree was deleted is still recoverable — by a human naming it,
+    /// not by a predicate guessing.
+    #[test]
+    fn stuck_task_ids_unreadable_worktree_past_ttl_is_not_stuck() {
+        let tmp = make_tmp_dir("stuck-unreadable-wt");
+        let cfg = make_test_cfg(&tmp);
+        // Recorded in run state but never created.
+        let gone = tmp.join("worktree-that-is-not-a-repo");
+        assert!(
+            !gone.exists(),
+            "fixture precondition: the recorded worktree must not exist"
+        );
+        let ttl: u64 = 60;
+        let t0 = now_secs();
+        let run = make_run_with_tasks_id(
+            "run-stuck-unreadable-wt",
+            vec![running_task(
+                "gone-wt",
+                Some(&gone),
+                Some(t0 - (ttl as i64 * 4)),
+            )],
+        );
+        run.save(&cfg, &tmp).unwrap();
+
+        let _ = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0);
+        let ids = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0 + progress_window());
+
+        assert!(
+            !ids.contains(&"gone-wt".to_string()),
+            "an unreadable worktree HEAD is 'cannot determine', never 'frozen'; \
+             reading it as stuck hands re-dispatch authority to a failed read. \
+             got {ids:?}"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Fail-closed (CLAUDE.md §3), second Undetermined arm: a RUNNING task past
+    /// the TTL that records NO worktree at all (serial / fast-path /
+    /// single-worktree mode) has no task-scoped durable signal to read, so its
+    /// progress is `Undetermined` and it must NOT be selected as stuck.
+    ///
+    /// This is the same reading `state::probe_run` and `claim::claim_progress`
+    /// already give the no-worktree case, and it deliberately does NOT fall back
+    /// to a repo-wide HEAD — under §8 other sessions always commit to the shared
+    /// repo, so that fallback resolves "I cannot see this task" into a signal
+    /// somebody else controls.
+    #[test]
+    fn stuck_task_ids_task_without_worktree_past_ttl_is_not_stuck() {
+        let tmp = make_tmp_dir("stuck-no-wt");
+        let cfg = make_test_cfg(&tmp);
+        let ttl: u64 = 60;
+        let t0 = now_secs();
+        let run = make_run_with_tasks_id(
+            "run-stuck-no-wt",
+            vec![running_task(
+                "serial-task",
+                None,
+                Some(t0 - (ttl as i64 * 4)),
+            )],
+        );
+        run.save(&cfg, &tmp).unwrap();
+
+        let _ = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0);
+        let ids = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0 + progress_window());
+
+        assert!(
+            !ids.contains(&"serial-task".to_string()),
+            "a task recording no worktree has no task-scoped progress signal at \
+             all; that is 'cannot determine', and the bulk re-dispatch path must \
+             not resolve it to 'dead'. got {ids:?}"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// **ANTI-VACUITY CONTROL — not a RED probe.** This passes both before and
+    /// after the progress gate, and it is what stops the gate being "fixed" by
+    /// returning an empty set.
+    ///
+    /// A RUNNING task past the TTL whose own worktree HEAD is genuinely FROZEN
+    /// for the full window is confirmed `Known(Stalled)` and MUST still be
+    /// selected: that is the only verdict on which a truly abandoned worktree is
+    /// ever recovered by the bulk path.
+    #[test]
+    fn stuck_task_ids_frozen_worktree_past_ttl_is_stuck_control() {
+        let tmp = make_tmp_dir("stuck-frozen-control");
+        let cfg = make_test_cfg(&tmp);
+        let wt = tmp.join("wt-frozen");
+        init_git_repo(&wt);
+        let ttl: u64 = 60;
+        let t0 = now_secs();
+        let run = make_run_with_tasks_id(
+            "run-stuck-frozen-control",
+            vec![running_task("dead", Some(&wt), Some(t0 - (ttl as i64 * 4)))],
+        );
+        run.save(&cfg, &tmp).unwrap();
+
+        let head_before = head_of(&wt);
+        let _ = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0);
+        let ids = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0 + progress_window());
+        assert_eq!(
+            head_before,
+            head_of(&wt),
+            "fixture precondition: nothing may commit in the worktree during this test"
+        );
+
+        assert!(
+            ids.contains(&"dead".to_string()),
+            "a task past the TTL whose own worktree HEAD was frozen for the full \
+             window is confirmed stalled and MUST remain abandonable — a gate that \
+             answers 'nothing is ever stuck' is not a fix. got {ids:?}"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     // ── abandon_task helper ───────────────────────────────────────────────
@@ -3602,67 +3864,55 @@ mod tests {
         }
     }
 
-    /// --all-stuck abandons all stuck tasks (Running + TTL exceeded).
+    /// --all-stuck abandons all stuck tasks (Running + TTL exceeded + confirmed
+    /// non-progressing).
+    ///
+    /// The three tasks used to point at `/wt/stuck1`, `/wt/stuck2`, `/wt/active`
+    /// — paths that do not exist. Under the progress gate an unreadable worktree
+    /// is `Undetermined` ⇒ NOT stuck, so the fixture would have asserted
+    /// "2 stuck" about three tasks that were all being refused for the wrong
+    /// reason. Each now gets a REAL git worktree with a FROZEN HEAD, which is
+    /// the shape in which "past the TTL" genuinely means abandonable. The
+    /// assertions are unchanged.
     #[test]
     fn state_abandon_all_stuck_resets_to_pending() {
+        let tmp = make_tmp_dir("abandon-all-stuck");
+        let cfg = make_test_cfg(&tmp);
+        let wt1 = tmp.join("wt-stuck1");
+        let wt2 = tmp.join("wt-stuck2");
+        let wt_active = tmp.join("wt-active");
+        for wt in [&wt1, &wt2, &wt_active] {
+            init_git_repo(wt);
+        }
         let ttl: u64 = 60;
-        let old_ts = now_secs() - (ttl as i64 * 2);
-        let recent_ts = now_secs() - 10;
-        let mut run = make_run_with_tasks(vec![
-            TaskState {
-                id: "stuck-1".into(),
-                status: Status::Running,
-                worktree: Some("/wt/stuck1".into()),
-                branch: Some("feat/stuck1".into()),
-                updated_at: Some(old_ts),
-                model: None,
-                cost_usd: None,
-                branch_sha: None,
-                fp_oracle_valid: None,
-                findings: None,
-                hashkey: None,
-                claimed_at: None,
-                started_at: None,
-                agent_id: None,
-                ..Default::default()
-            },
-            TaskState {
-                id: "stuck-2".into(),
-                status: Status::Running,
-                worktree: Some("/wt/stuck2".into()),
-                branch: Some("feat/stuck2".into()),
-                updated_at: Some(old_ts),
-                model: None,
-                cost_usd: None,
-                branch_sha: None,
-                fp_oracle_valid: None,
-                findings: None,
-                hashkey: None,
-                claimed_at: None,
-                started_at: None,
-                agent_id: None,
-                ..Default::default()
-            },
-            TaskState {
-                id: "active".into(),
-                status: Status::Running,
-                worktree: Some("/wt/active".into()),
-                branch: Some("feat/active".into()),
-                updated_at: Some(recent_ts),
-                model: None,
-                cost_usd: None,
-                branch_sha: None,
-                fp_oracle_valid: None,
-                findings: None,
-                hashkey: None,
-                claimed_at: None,
-                started_at: None,
-                agent_id: None,
-                ..Default::default()
-            },
-        ]);
+        let t0 = now_secs();
+        let old_ts = t0 - (ttl as i64 * 2);
+        let recent_ts = t0 - 10;
+        let mut run = make_run_with_tasks_id(
+            "run-abandon-all-stuck",
+            vec![
+                running_task("stuck-1", Some(&wt1), Some(old_ts)),
+                running_task("stuck-2", Some(&wt2), Some(old_ts)),
+                running_task("active", Some(&wt_active), Some(recent_ts)),
+            ],
+        );
+        run.save(&cfg, &tmp).unwrap();
 
-        let ids = stuck_task_ids(&run, ttl);
+        let heads_before: Vec<String> = [&wt1, &wt2, &wt_active]
+            .iter()
+            .map(|w| head_of(w))
+            .collect();
+        // Sample 1 anchors each task's fingerprint; the verdict lands on sample 2.
+        let _ = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0);
+        let ids = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0 + progress_window());
+        let heads_after: Vec<String> = [&wt1, &wt2, &wt_active]
+            .iter()
+            .map(|w| head_of(w))
+            .collect();
+        assert_eq!(
+            heads_before, heads_after,
+            "fixture precondition: every worktree HEAD must stay frozen"
+        );
         assert_eq!(ids.len(), 2, "only the two old tasks should be stuck");
 
         for id in &ids {
@@ -3687,6 +3937,7 @@ mod tests {
         let ta = run.tasks.iter().find(|t| t.id == "active").unwrap();
         assert_eq!(ta.status, Status::Running);
         assert!(ta.worktree.is_some());
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     /// Specifying a non-existent task id must be caught (no task found in run).
@@ -3772,68 +4023,39 @@ mod tests {
     }
 
     /// Non-Running tasks must never appear, even if their timestamp is ancient.
+    ///
+    /// Each task now points at a REAL, FROZEN git worktree so the test cannot
+    /// pass for the wrong reason: were the status filter dropped, every one of
+    /// these is past the TTL with a confirmed-frozen worktree, i.e. exactly the
+    /// shape the progress gate calls abandonable. The status arm is the only
+    /// thing keeping the result empty.
     #[test]
     fn stuck_task_ids_only_running_tasks_are_candidates() {
+        let tmp = make_tmp_dir("stuck-only-running");
+        let cfg = make_test_cfg(&tmp);
+        let wt = tmp.join("wt-frozen");
+        init_git_repo(&wt);
         let ttl: u64 = 60;
-        let ancient_ts = now_secs() - 9999;
-        let run = make_run_with_tasks(vec![
-            TaskState {
-                id: "pending-old".into(),
-                status: Status::Pending,
-                worktree: None,
-                branch: None,
-                updated_at: Some(ancient_ts),
-                model: None,
-                cost_usd: None,
-                branch_sha: None,
-                fp_oracle_valid: None,
-                findings: None,
-                hashkey: None,
-                claimed_at: None,
-                started_at: None,
-                agent_id: None,
-                ..Default::default()
-            },
-            TaskState {
-                id: "done-old".into(),
-                status: Status::Done,
-                worktree: None,
-                branch: None,
-                updated_at: Some(ancient_ts),
-                model: None,
-                cost_usd: None,
-                branch_sha: None,
-                fp_oracle_valid: None,
-                findings: None,
-                hashkey: None,
-                claimed_at: None,
-                started_at: None,
-                agent_id: None,
-                ..Default::default()
-            },
-            TaskState {
-                id: "verified-old".into(),
-                status: Status::Verified,
-                worktree: None,
-                branch: None,
-                updated_at: Some(ancient_ts),
-                model: None,
-                cost_usd: None,
-                branch_sha: None,
-                fp_oracle_valid: None,
-                findings: None,
-                hashkey: None,
-                claimed_at: None,
-                started_at: None,
-                agent_id: None,
-                ..Default::default()
-            },
-        ]);
-        let ids = stuck_task_ids(&run, ttl);
+        let t0 = now_secs();
+        let ancient_ts = t0 - 9999;
+        let mut tasks = vec![
+            running_task("pending-old", Some(&wt), Some(ancient_ts)),
+            running_task("done-old", Some(&wt), Some(ancient_ts)),
+            running_task("verified-old", Some(&wt), Some(ancient_ts)),
+        ];
+        tasks[0].status = Status::Pending;
+        tasks[1].status = Status::Done;
+        tasks[2].status = Status::Verified;
+        let run = make_run_with_tasks_id("run-stuck-only-running", tasks);
+        run.save(&cfg, &tmp).unwrap();
+
+        let _ = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0);
+        let ids = stuck_ids_under_test(&cfg, &tmp, &run, ttl, t0 + progress_window());
         assert!(
             ids.is_empty(),
             "only Running tasks should be candidates for stuck detection"
         );
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     // ── loop core tests ────────────────────────────────────────────────────

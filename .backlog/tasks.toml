@@ -10410,3 +10410,29 @@ updated_at = 1786543402
 weight = 0.0
 issue_number = 272
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/272"
+
+[[task]]
+id = "1e6f00ae"
+title = "condukt worker の backlog add が worktree ではなく main のストアに着地し、main の作業ツリーを dirty にする (CLAUDE.md 8 の違反を構造的に誘発)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-08-12、測定点 1ef71cc5 から 5c477373。走行中の condukt worker 2 体が backlog add で残した所見 7 件 (b6cf486d / cf58e2fc / 207d0362 / ba8789e0 / 73d26006 / b14d433c / d7e1ac30) が、各 worker の worktree ではなく /Users/yuki/src/harness/.backlog/tasks.toml に着地していた。結果として main の作業ツリーが未コミット 100 行で dirty になり、stop-verify-worktree.py が turn の終了を block した (ゲートは正しく働いた)。
+
+原因の候補: subagent の Bash cwd は project root を既定にするため、worker が worktree へ cd せずに backlog add を打つと store 解決が main の checkout を向く。私自身の add は worktree へ cd してから打っていたので worktree の store に入っており、同一バイナリで着地先が分かれることは確認済み。
+
+なぜ重大か: (1) CLAUDE.md 8 は main の作業ツリーでの編集を禁じているが、この経路は worker が意図せずそれを行う。しかも worker 自身は worktree で作業していると認識している。(2) main では非 merge commit ができないので、所見は誰かが退避するまで未コミットのまま残る。(3) その未コミット状態が、まさに d7b19e8d / bd6d81df の消失経路 (git 操作が working tree を巻き戻す) に晒される。今回は退避前に独立した永続コピーを 2 つ作って union で検証したので 1 件も失っていないが、気づかず git checkout を打てば 7 件が消えていた。(4) 並行セッションが main を触れば conflict になる。
+
+直す方向の候補: (a) backlog の store 解決を cwd ではなく git の worktree 境界で行い、worktree 内から呼ばれたら必ずその worktree の store を使う (b) condukt worker のプロンプト規約として backlog add の前に worktree へ cd することを機械的に強制する (c) そもそも所見のストアを worktree ごとに分けず machine-global にする (709ff549 が claim 側でやったのと同じ方向)。(c) は 5ba13c3e と e99f61e4 の実測6 が指す本筋でもある。
+
+見分ける方法: worker の worktree から backlog add を打った場合と、project root から打った場合で、書き込み先ファイルを fs_usage で追跡して比較する。関連: 5ba13c3e, bd6d81df, d7b19e8d, e99f61e4 の実測6, 1e44bfd9 (他セッションの差分を自分のものとして要求する帰属バグ)。"""
+created_at = 1786548307
+updated_at = 1786548307
+weight = 0.0
+issue_number = 277
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/277"

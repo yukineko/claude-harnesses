@@ -10003,3 +10003,21 @@ updated_at = 1786472110
 weight = 0.0
 issue_number = 255
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/255"
+
+[[task]]
+id = "fe84d350"
+title = "condukt worktree reconcile: condukt run state が claim しない worktree は無条件に dead になる (session-* 系が該当)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "liveness",
+    "p0",
+]
+status = "pending"
+notes = "2026-08-12 実測 (commit 74e3a879 / ee2d4d03)。実 repo で reconcile を回すと state_scan は readable で namespaces=2417 runs=150 だが running_tasks=0 で、結果 55 entries 中 47 が removable=true になった。occupancy の Dead は「完全に読めた走査で claim している running task が無かった」という意味しか持たないので、condukt が作っていない worktree —— CLAUDE.md 8 に従って /flow などが作る .harness-worktrees/session-* や、手で git worktree add したもの —— は生きていても常に dead に落ちる。今日実害が無いのは cleanup --remove が role==Unregistered しか消さず、これら 47 は全て registered だからであり、removable フラグ自体は誤った許可を出している。将来 registered も消す消費者が付いた瞬間に生きたセッションの worktree が消える。案: claim されていない worktree については condukt run state を「情報なし」として扱い、worktree 自身の活動 signal (worktree-activity は実装済み) や session transcript を独立の witness にして、claim 無し = Dead ではなく Undetermined に倒す。ただし現在の anti-vacuity control (dead_clean_worktree_is_removable) がこの設計を固定しているので、設計判断として人間に上げる。"
+created_at = 1786472512
+updated_at = 1786472512
+weight = 0.0
+issue_number = 256
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/256"

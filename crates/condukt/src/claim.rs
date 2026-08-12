@@ -276,29 +276,60 @@ pub(crate) fn progress_store_dir(cfg: &Config, cwd: &Path) -> PathBuf {
 ///
 /// A heartbeat lapsing past the stuck-TTL proves only that the session went
 /// QUIET, not that it DIED — the reap must not force-steal a holder that is
-/// still doing durable work. This samples three durable signals (git HEAD of the
-/// project repo, the owning session's transcript growth, and the run's max task
-/// `updated_at` advancing) across the [`progress`] window and returns:
-/// `Known(Stalled)` only when ALL readable signals are frozen for the full
-/// window; `Known(Progressing)` when any advanced; `Undetermined` when a signal
-/// is unreadable, there is no prior sample yet, or the window has not elapsed.
-/// Reap fires ONLY on `Known(Stalled)` — Progressing and Undetermined both
-/// preserve the claim (fail-closed).
+/// still doing durable work. This samples three durable signals across the
+/// [`progress`] window and returns: `Known(Stalled)` only when the whole
+/// fingerprint is frozen for the full window; `Known(Progressing)` when any
+/// signal advanced; `Undetermined` when a signal is unreadable, there is no
+/// prior sample yet, or the window has not elapsed. Reap fires ONLY on
+/// `Known(Stalled)` — Progressing and Undetermined both preserve the claim
+/// (fail-closed).
+///
+/// # Every signal is RUN-scoped, never repo-wide
+///
+/// The three signals are:
+///
+/// * `run-worktree-heads` — git HEAD of each worktree **this run's own tasks**
+///   record ([`run_worktree_head_signal`]).
+/// * `transcript` — the owning session's transcript growth.
+/// * `run-tasks` — the max `updated_at` across this run's tasks.
+///
+/// The head signal used to be `git_head_signal(&repo_root(cwd))`, the HEAD of
+/// the **whole project repo**. Under CLAUDE.md §8 other sessions always exist
+/// and always commit to that repo, so that signal moved for reasons having
+/// nothing to do with this claim's holder, and it cut both ways: a DEAD holder
+/// read `Known(Progressing)` forever and could never be reclaimed, while a LIVE
+/// holder that had committed inside its own worktree read `Known(Stalled)` when
+/// the shared repo happened to be quiet — and this gate, unlike its `state
+/// probe` twin, holds reap authority, so that force-stole a demonstrably alive
+/// holder's claim. A commit made elsewhere in the shared repo is neither
+/// evidence that this run advanced nor evidence that it did not.
+///
+/// The run state is loaded ONCE here and feeds both run-scoped signals; a run
+/// state that cannot be read leaves both of them `Undetermined` (the claim is
+/// kept).
 fn claim_progress(cfg: &Config, cwd: &Path, c: &Claim, now: i64) -> Determination<Liveness> {
     #[cfg(test)]
     if let Some(forced) = test_hook::forced_progress() {
         return forced;
     }
-    let head = progress::git_head_signal(&repo_root(cwd));
+    // One load, both run-scoped signals — and therefore exactly one
+    // load-failure arm: without the run state NEITHER of them can be read.
+    let (head, task_progress) = match crate::state::RunState::load(cfg, cwd, &c.run_id) {
+        Ok(rs) => (run_worktree_head_signal(&rs), run_task_progress_signal(&rs)),
+        Err(e) => {
+            let unreadable: Determination<Vec<u8>> =
+                Determination::undetermined(format!("run state for {} unreadable: {e}", c.run_id));
+            (unreadable.clone(), unreadable)
+        }
+    };
     let transcript = match c.session_id.as_deref() {
         Some(sid) => progress::session_transcript_signal(sid),
         None => Determination::undetermined(
             "claim has no owning session id — transcript progress unreadable",
         ),
     };
-    let task_progress = run_task_progress_signal(cfg, cwd, &c.run_id);
     let current = progress::fingerprint_from_signals(vec![
-        ("git-head", head),
+        ("run-worktree-heads", head),
         ("transcript", transcript),
         ("run-tasks", task_progress),
     ]);
@@ -312,26 +343,77 @@ fn claim_progress(cfg: &Config, cwd: &Path, c: &Claim, now: i64) -> Determinatio
     )
 }
 
-/// Durable run-progress signal: the maximum `updated_at` across the run's tasks.
+/// RUN-scoped durable head signal: the git HEAD of every worktree that `run`'s
+/// own tasks record, folded into one deterministic value.
+///
+/// This is the run-scoped counterpart of `state::probe_run`'s task-scoped
+/// `task-worktree-head`: a claim is held per RUN, and `c.run_id` covers ALL of
+/// that run's tasks, so the holder is progressing if ANY of its worktrees
+/// advanced. The HEADs are taken in task-id order and each is folded in
+/// **alongside its task id**, so the value is stable across run-state
+/// reorderings and two tasks that swap HEADs cannot alias to the same value.
+///
+/// Two "cannot determine" arms, both protective (CLAUDE.md §3):
+///
+/// * **No task records a worktree** (serial / fast-path / single-worktree mode) ⇒
+///   `Undetermined`. There is no run-scoped durable head signal to read at all.
+///   It deliberately does NOT fall back to the repo-wide HEAD — that fallback is
+///   the defect described on [`claim_progress`], and it resolves "I cannot see
+///   this run" to a signal that another session controls.
+/// * **Any recorded worktree is unreadable** (removed, or never a git repo) ⇒
+///   `Undetermined` for the whole signal, not "that one contributed nothing". A
+///   failed read must never be summed into a value that can then read as frozen
+///   and fire a reap.
+fn run_worktree_head_signal(run: &crate::state::RunState) -> Determination<Vec<u8>> {
+    let mut worktrees: Vec<(&str, &str)> = run
+        .tasks
+        .iter()
+        .filter_map(|t| t.worktree.as_deref().map(|wt| (t.id.as_str(), wt)))
+        .collect();
+    // Deterministic order: the run state's task order is not a stable input.
+    worktrees.sort_by(|a, b| a.0.cmp(b.0));
+    if worktrees.is_empty() {
+        return Determination::undetermined(format!(
+            "run {} records no task worktree — no run-scoped head signal exists for it",
+            run.run_id
+        ));
+    }
+    let mut heads: Vec<(&str, Vec<u8>)> = Vec::with_capacity(worktrees.len());
+    for (task_id, wt) in worktrees {
+        match progress::git_head_signal(Path::new(wt)) {
+            Determination::Known(sha) => heads.push((task_id, sha)),
+            // Fail-closed: one unreadable worktree HEAD makes the run-scoped
+            // signal unreadable, never a partial "rest of them are frozen".
+            Determination::Undetermined(why) => return Determination::Undetermined(why),
+        }
+    }
+    // Length-prefixed by construction, so `(task, sha)` pairs cannot be
+    // re-parsed into a different pairing by a delimiter in an id.
+    Determination::Known(
+        progress::ProgressFingerprint::from_entries(&heads)
+            .as_str()
+            .as_bytes()
+            .to_vec(),
+    )
+}
+
+/// Durable run-progress signal: the maximum `updated_at` across `run`'s tasks.
 ///
 /// This is deliberately NOT the run-state file mtime — heartbeats rewrite that
 /// file without changing any task, so file mtime tracks LIVENESS, not progress.
 /// `TaskState.updated_at` only advances on a real status/field transition, so
-/// its max is a true "durable work advanced" signal. An unloadable run state is
-/// `Undetermined` (protective — an unreadable signal must never read as frozen).
-fn run_task_progress_signal(cfg: &Config, cwd: &Path, run_id: &str) -> Determination<Vec<u8>> {
-    match crate::state::RunState::load(cfg, cwd, run_id) {
-        Ok(rs) => {
-            let max_updated = rs
-                .tasks
-                .iter()
-                .filter_map(|t| t.updated_at)
-                .max()
-                .unwrap_or(0);
-            Determination::Known(max_updated.to_string().into_bytes())
-        }
-        Err(e) => Determination::undetermined(format!("run state for {run_id} unreadable: {e}")),
-    }
+/// its max is a true "durable work advanced" signal. The run state is loaded by
+/// the caller ([`claim_progress`]), which maps an unloadable run state to
+/// `Undetermined` for this signal AND for [`run_worktree_head_signal`]
+/// (protective — an unreadable signal must never read as frozen).
+fn run_task_progress_signal(run: &crate::state::RunState) -> Determination<Vec<u8>> {
+    let max_updated = run
+        .tasks
+        .iter()
+        .filter_map(|t| t.updated_at)
+        .max()
+        .unwrap_or(0);
+    Determination::Known(max_updated.to_string().into_bytes())
 }
 
 /// Decide whether a claim survives a reap. A claim with a FRESH heartbeat is

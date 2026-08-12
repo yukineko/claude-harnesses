@@ -58,8 +58,10 @@
 //!
 //! # What this does NOT consume
 //!
-//! Neither `claim::claim_progress` (which samples a REPO-WIDE git HEAD while
-//! holding reap authority — backlog `aa6d6e43`) nor `state::stuck_task_ids`
+//! Neither `claim::claim_progress` (a RUN-scoped, claim-registry-shaped verdict
+//! that holds reap authority over claims, not over directories; it sampled a
+//! REPO-WIDE git HEAD until backlog `aa6d6e43` was fixed) nor
+//! `state::stuck_task_ids`
 //! (an `updated_at` age filter with no liveness signal at all). The only thing
 //! borrowed from `claim` is `progress_store_dir`, a path helper, so that this
 //! module's samples land in the same store as the rest of the engine.

@@ -86,4 +86,26 @@ backlog uninstall                                            # 再び除去す�
 `backlog list --json` の各要素には `hashkey` フィールドが含まれる (title + project から計算、保存はされない)。
 `/flow` など上位 driver がこれを使って `condukt state is-claimed` によるゲートを追加コストなしに行える。
 
+### checkout 間の claim 排他 (`next --claim`)
+
+store は意図的に checkout に追従する (`<repo root>/.backlog/tasks.toml`。linked worktree は
+それ自体が root。CLAUDE.md §8 が worktree から main のトラックファイルを書くことを禁じるため)。
+したがって同一プロジェクトの 2 つの checkout は乖離した 2 つのファイルを持つ。claim の排他は
+store の隣に置く lockfile = checkout 単位だったので、両者が **同じタスク** を配ってしまっていた。
+
+`next --claim` は今、より **広い** ロックを先に取り、claim を store の場所ではなく project の
+**identity** で鍵付けした machine-global な ledger に記録する:
+
+- ledger: `~/.backlog/claims/<project-slug>.json` (`<project-slug>` は `backlog lock` と同じ
+  FNV-1a の project ハッシュ。linked worktree は main working tree に正規化されるので、同一
+  プロジェクトの全 checkout が 1 つの ledger を共有する)
+- ロック順序 (逆順にしないこと): `~/.backlog/claims/<slug>.lock` (project 全体) → `<store>.lock` (この checkout)
+- entry は 1h (`CLAIM_STALE_SECS`) で除外をやめる。store 側の stale-claim 再取得と同じ窓なので、
+  死んだ claimant が全 checkout でタスクを永久にロックすることはない。記録自体は 7 日保持する。
+
+このパス上の判定不能はすべて **claim を拒否** し、理由を stderr に出して非0終了する。exit 0 +
+`no pending tasks` (= driver は「仕事がない」と読む) には決して倒さない。対象は: ledger ディレクトリを
+作れない / ledger ロックを取れない / ledger が読めない・パースできない・書けない / tasks-file ロックを
+保持できない / project identity を解決できない。**拒否は空のキューではない。**
+
 同梱の `bin/backlog-*` バイナリがプラグインの出荷物なので、エンドユーザーは cargo も API キーも不要。skill や hook が依存する挙動を変えたら、ワークスペースをビルド（`cargo build --workspace --release`）して再コミットする。

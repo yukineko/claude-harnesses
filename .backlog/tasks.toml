@@ -10005,6 +10005,23 @@ issue_number = 255
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/255"
 
 [[task]]
+id = "fe84d350"
+title = "condukt worktree reconcile: condukt run state が claim しない worktree は無条件に dead になる (session-* 系が該当)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "liveness",
+    "p0",
+]
+status = "pending"
+notes = "2026-08-12 実測 (commit 74e3a879 / ee2d4d03)。実 repo で reconcile を回すと state_scan は readable で namespaces=2417 runs=150 だが running_tasks=0 で、結果 55 entries 中 47 が removable=true になった。occupancy の Dead は「完全に読めた走査で claim している running task が無かった」という意味しか持たないので、condukt が作っていない worktree —— CLAUDE.md 8 に従って /flow などが作る .harness-worktrees/session-* や、手で git worktree add したもの —— は生きていても常に dead に落ちる。今日実害が無いのは cleanup --remove が role==Unregistered しか消さず、これら 47 は全て registered だからであり、removable フラグ自体は誤った許可を出している。将来 registered も消す消費者が付いた瞬間に生きたセッションの worktree が消える。案: claim されていない worktree については condukt run state を「情報なし」として扱い、worktree 自身の活動 signal (worktree-activity は実装済み) や session transcript を独立の witness にして、claim 無し = Dead ではなく Undetermined に倒す。ただし現在の anti-vacuity control (dead_clean_worktree_is_removable) がこの設計を固定しているので、設計判断として人間に上げる。"
+created_at = 1786472512
+updated_at = 1786472512
+weight = 0.0
+issue_number = 256
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/256"
+[[task]]
 id = "0cf3775c"
 title = "condukt worktree reconcile の removable フィールドが crate 外の消費者にとって罠になる (Role フィルタが JSON schema に現れない)"
 project = "/Users/yuki/src/harness"
@@ -10089,3 +10106,46 @@ updated_at = 1786493488
 weight = 0.0
 issue_number = 261
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/261"
+
+[[task]]
+id = "287ada8f"
+title = "backlog claim ledger: cwd 外 legacy store からの --project 無し claim は別 slug になり排他が効かない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "709ff549 の修正で next --claim は ~/.backlog/claims/<project-slug>.json で排他するが、slug の元は effective_project (無ければ cwd の canonical identity)。リポジトリ外の cwd から --project 無しで走らせると identity はその cwd になり、同じ project の task を別 ledger 経由で claim しうる。--project を明示すれば同一 slug に落ちる。要検討: ledger の鍵を task の project ラベル側からも導出するか、リポジトリ外 cwd + --project 無しの claim を拒否するか。"
+created_at = 1786459291
+updated_at = 1786459291
+weight = 0.0
+issue_number = 245
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/245"
+
+[[task]]
+id = "86d680ce"
+title = "backlog done/fail が claim ledger の entry を刈らないので最大1時間残る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "709ff549 で追加した ~/.backlog/claims/<slug>.json の entry は CLAIM_STALE_SECS (1h) 経過まで除外し続け、7日で削除される。done/fail は ledger を触らないので、完了済み task の entry も 1h 残る。実害は「完了した task を再度配らない」なので現状は保守側だが、fail → defer 後の再取得や、意図的な requeue との相互作用は未検証。"
+created_at = 1786459307
+updated_at = 1786459307
+weight = 0.0
+issue_number = 246
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/246"
+
+[[task]]
+id = "420f1eec"
+title = "backlog の unit test が実 condukt state is-claimed に依存する (HOME 差し替えで隔離できない)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "store::check_duplicate → is_claimed_elsewhere は PATH 上の実 condukt を spawn する。HOME を差し替えても隔離されないため、unit test の add がマシン状態に依存しうる (fail-soft なので現状は false negative 方向)。709ff549 の作業中に、同一 title+project を使う並列テストが互いの一時 store を踏む flake を観測し (自作テスト側を修正済み)、その調査中に気付いた。テスト用に is_claimed_elsewhere の seam を切るのが望ましい。"
+created_at = 1786459308
+updated_at = 1786459308
+weight = 0.0
+issue_number = 247
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/247"
+

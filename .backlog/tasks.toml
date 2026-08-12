@@ -8293,7 +8293,7 @@ notes = """
 --- 事実確認 (flow 2026-08-06, session 0ff5fc74) ---
 d24f02d5 は superseded ではなく additive である。main の taintguard は別系統で 0.2.0 まで進んだが、d24f02d5 が足しているのは新規の rationale.rs (391行)・README.ja.md (169行)・tests/provenance_gate.rs (442行)・tests/rationale_readme.rs (107行) で、main 側に対応物が無い。つまり earlier の taintguard 衝突 (fe13e4cd vs 77a0c6e7 が同じ欠陥を同じ機構で直していた件) とは状況が違い、丸ごと採用も丸ごと破棄も正しくない。なお d24f02d5 も自称 0.1.10 だが、main の 0.1.10 は 60c20552 (git_common_dir を boundary 経由に) であって別物 — 同じ版番号が2系統に存在する。着手時は 0.2.0 への rebase が要る。敵対的パネルの block 理由は本 notes 上部を参照。今サイクルは context 逼迫のためバッチから外した (縮小ではなく順序付け)。"""
 created_at = 1785926923
-updated_at = 1786375818
+updated_at = 1786496450
 weight = 0.0
 issue_number = 153
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/153"
@@ -9737,7 +9737,7 @@ tags = ["p0"]
 status = "pending"
 notes = "部分完了 (2026-08-12, condukt 0.7.129, merge 6fc4fdee)。(b) GC 側だけが着地した: condukt worktree reconcile が git worktree list と全 run-state namespace と作業ツリーの三者照合を行い live/dead/undetermined を返す。is_removable はワイルドカード無しの網羅 match で、あらゆる Undetermined と Role::Primary は keep に解決する。dirty な worktree は refs/preserved へ退避されるまで削除に到達しない。統合前に kill rate を独立再測定した: Role::Primary の arm 削除は E0004 コンパイルエラー、Undetermined 3 arm と preserved arm と primary_witnesses の退行はすべて KILLED、対照 (is_removable 常に false) は 2 件を殺した。(a) resume 側は未着手である。--json が resume の surface として存在するが消費者が 1 つも無い (0cf3775c で追跡)。したがって本 item は done ではない。残っているのは (a) のみ。"
 created_at = 1786403442
-updated_at = 1786495032
+updated_at = 1786496451
 weight = 0.0
 issue_number = 237
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/237"
@@ -9834,10 +9834,10 @@ tags = [
     "condukt",
     "p0",
 ]
-status = "pending"
+status = "claimed"
 notes = "8b871bb1 で state.rs の probe_run は task の worktree に閉じたシグナルへ移した。しかし crates/condukt/src/claim.rs:292 の claim_progress は今も progress::git_head_signal(repo_root(cwd)) を 3 シグナルのうち 1 本として使っている。CLAUDE.md 8 で別セッションが常に commit する前提なので、この signal は常に動き、fingerprint は毎回変化し、Progressing に倒れる。probe_run と違い claim_progress は reap 権限を持つ (Known(Stalled) のときだけ reap する側なので、常時 Progressing は「死んだ holder の claim を永久に剥がせない」方向の fail-open)。measured: 未測定。まず「repo HEAD だけが動いていて他 2 本が凍っている状況で claim_progress が Progressing を返す」behavioural test を書いて RED を観測すること。発見者は 8b871bb1 の implementer と verifier。"
 created_at = 1786451479
-updated_at = 1786451479
+updated_at = 1786496438
 weight = 0.0
 issue_number = 242
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/242"
@@ -9888,10 +9888,10 @@ tags = [
     "liveness",
     "p0",
 ]
-status = "pending"
+status = "claimed"
 notes = "実測 2026-08-12 03:44-03:55 JST。orchestrator が t2-condukt-reconcile の worker を dead と判定して 2 人目 (私) を同じ worktree /Users/yuki/.condukt/worktrees/run-20260811-230435-19389-t2-condukt-reconcile に投入したが、1 人目は生きていた。証跡: 私が何も操作していない 2 分間 (03:53:02 -> 03:55:07) に wt_reconcile.rs / state.rs / worktree.rs の sha が変化し、restore.rs が新たに modified として現れた。さらに私の Edit が適用された時点でファイル内容が私の Read 時点と異なっていた (is_sidecar -> state::is_run_state_sidecar に置き換わっていた)。lsof で cwd がその worktree の claude プロセス (pid 66412) を観測。CLAUDE.md 8 が言う「git が救えない唯一の競合」= 同一 index の共有が、worktree 分離をしていてもオーケストレータ側の liveness 誤判定で発生する。今回は orchestrator が介入して 1 人目を stand down させたため実害は出ていないが、機構としては dead 判定が pid でも progress でもない何かに基づいていた可能性が高い。backlog e99f61e4 で作った condukt worktree reconcile の判定 (progress 由来 3 値) を、worker の再投入判定そのものにも適用できるかを検討する。"
 created_at = 1786472066
-updated_at = 1786472066
+updated_at = 1786496438
 weight = 0.0
 issue_number = 250
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/250"
@@ -9994,7 +9994,7 @@ tags = [
 status = "pending"
 notes = "2026-08-12 実測 (commit 74e3a879 / ee2d4d03)。実 repo で reconcile を回すと state_scan は readable で namespaces=2417 runs=150 だが running_tasks=0 で、結果 55 entries 中 47 が removable=true になった。occupancy の Dead は「完全に読めた走査で claim している running task が無かった」という意味しか持たないので、condukt が作っていない worktree —— CLAUDE.md 8 に従って /flow などが作る .harness-worktrees/session-* や、手で git worktree add したもの —— は生きていても常に dead に落ちる。今日実害が無いのは cleanup --remove が role==Unregistered しか消さず、これら 47 は全て registered だからであり、removable フラグ自体は誤った許可を出している。将来 registered も消す消費者が付いた瞬間に生きたセッションの worktree が消える。案: claim されていない worktree については condukt run state を「情報なし」として扱い、worktree 自身の活動 signal (worktree-activity は実装済み) や session transcript を独立の witness にして、claim 無し = Dead ではなく Undetermined に倒す。ただし現在の anti-vacuity control (dead_clean_worktree_is_removable) がこの設計を固定しているので、設計判断として人間に上げる。 統合者による独立確認 (2026-08-12、測定点 6fc4fdee、linked worktree を vantage にして deploy 済みではなくビルド直後のバイナリで実行): entries 56 件、うち primary 1 件 (/Users/yuki/src/harness、removable=false — ee2d4d03 の修正は効いている)、registered 55 件、removable=true が 49 件、そして occupancy は 56 件すべてが dead だった。決定的な観測: この統合作業をしていた worktree 自身 (run-20260811-230435-19389-t2-condukt-reconcile) が occupancy=dead / removable=true と 報告された。私はその中に立ってビルドとテストを回している最中だった。同時に、いま使っているセッション worktree (session-b57a58c3) も occupancy=dead であり、removable=false になっているのは dirty だったからにすぎない。つまり Dead は「生きていない」の証拠ではなく「condukt の RUNNING task が claim していない」以上のことを言えていない。これは判定不能を permissive へ写した (型の規律は正しい) のではなく、証拠が支えない known 値を主張している問題である。"
 created_at = 1786472512
-updated_at = 1786495094
+updated_at = 1786496451
 weight = 0.0
 issue_number = 256
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/256"
@@ -10060,10 +10060,10 @@ tags = [
     "failopen",
     "p0",
 ]
-status = "pending"
+status = "claimed"
 notes = "observation 2026-08-12, run run-20260811-230435-19389 の実行中に観測。backlog 0.2.21 の実バイナリ (repo target/release)。実測: 同一 cwd (/Users/yuki/src/.harness-worktrees/session-b57a58c3) から backlog add を4回実行した。1回目 b1b0f319 と 2回目 11d2a214 はいずれも added / updated を stdout で報告し exit 0 だった。その後 3回目 0cf3775c と 4回目 09d17bb6 を実行した。最後に全ストアを grep したところ、当該 worktree の .backlog/tasks.toml の git diff に現れる新規 id は 0cf3775c と 09d17bb6 の2件のみで、b1b0f319 と 11d2a214 はどこにも存在しない。探索範囲は ~/.backlog/tasks.toml、main の .backlog/tasks.toml、.harness-worktrees/*/.backlog/tasks.toml、.condukt/worktrees/*/.backlog/tasks.toml の全部で、いずれもヒット 0。つまり add は成功を報告したが書き込みは永続化されなかった。11d2a214 については add の後に backlog edit も実行し updated: 11d2a214 を報告させているので、少なくともその時点ではストアに存在していた。したがって単なる書き込み失敗ではなく、後続の read-modify-write が古い版を読んで上書きした lost update である。なぜ重大か: backlog add は本リポジトリで所見を残す唯一の機構であり、CLAUDE.md と MEMORY の always-file-findings が全エージェントに義務づけている。その機構が成功を報告しながら黙って捨てるなら、記録という行為そのものが信用できない。しかも失敗が exit code にも stderr にも一切現れないので、下流は捨てられたことを知りようがない (3節の判定不能を clean へ写す形そのもの)。709ff549 の checkout 追従ストア分岐と同じ根から出ている可能性が高いが、本件は同一 cwd 内で起きているので分岐だけでは説明できない。同時に別プロセス (本 run の t1 worker と t2 worker、および並行セッション) が同じ project の store を触っていたことは確実である。判定不能な点: 上書きした主体が (a) 同一 worktree 内の別プロセス (b) git 操作による checkout や restore (c) store 側の atomic rename の競合 のどれかは未同定。見分ける方法は tasks.toml の書き込みを fs_usage か opensnoop で追跡しながら add を並行実行して再現すること。関連: 709ff549 (本 run で claim 側は project 単位の ledger で塞いだが、add 側の read-modify-write は手つかず), 5ba13c3e, e99f61e4 の実測6 (起票が worktree の未コミットストアにだけ書かれて main から見えなかった件)。"
 created_at = 1786486894
-updated_at = 1786486894
+updated_at = 1786496438
 weight = 0.0
 issue_number = 260
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/260"
@@ -10126,3 +10126,31 @@ updated_at = 1786459308
 weight = 0.0
 issue_number = 247
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/247"
+
+[[task]]
+id = "d7b19e8d"
+title = "bd6d81df の消失機構の第一人称候補: 統合時の resolve-tasks.py が committed 内容で working tree の tasks.toml を上書きした"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "自己申告。2026-08-12 の t1/t2 統合中、私は .scratch/resolve-tasks.py を実行した。これは git show HEAD:.backlog/tasks.toml と git show main:.backlog/tasks.toml の union を作り、open(tasks.toml, w).write(merged) で working tree を丸ごと上書きする。両辺とも COMMITTED 内容なので、その瞬間に working tree にだけ存在した未コミットの add は痕跡なく消える。bd6d81df が測定した b1b0f319 と 11d2a214 の消失は、この経路 (note の候補 b: git 操作による checkout/restore) で説明できる可能性がある。ただし時刻の突き合わせはしていないので同定ではなく候補である。見分ける方法: bd6d81df の 4 回の add の時刻と、統合中の resolve 実行時刻・各 worktree での git checkout -- 実行時刻を transcript から突き合わせる。重要なのは、これが真なら根本原因はロック競合ではなく store が未コミットの working tree ファイルであり git 操作が日常的にそれを巻き戻すという設計側にあること (5ba13c3e / e99f61e4 の実測6 と同根)。ロックはプロセス間の RMW しか守らず、git checkout からは守らない。"
+created_at = 1786496402
+updated_at = 1786496402
+weight = 0.0
+issue_number = 262
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/262"
+
+[[task]]
+id = "0b24bff5"
+title = "ef806c37 が実際に flow をブロックした: PATH の backlog launcher が 0.2.16 を指し no bundled binary で全 backlog 操作が落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-08-12、測定点 1ef71cc5。which -a backlog は /Users/yuki/.claude/plugins/cache/yukineko/backlog/0.2.16/bin/backlog のみを返す。実行すると backlog: no bundled binary for darwin-arm64 (.../0.2.16/bin/backlog-darwin-arm64) で失敗する。cache には 0.1.6 / 0.2.16 / 0.2.23 の3版があり、0.2.23 にだけ backlog-darwin-arm64 が存在する (rollout 済み)。PATH の当該エントリは ~/.zshrc ~/.zprofile ~/.zshenv のいずれにも無いので、シェル profile ではなくセッション環境側が注入している。影響: flow ループがキューを読めない = source が死ぬ。今回は絶対パスで 0.2.23 を直接叩いて回避したが、これは迂回であって修正ではない。既存の ef806c37 は同じ観察の起票だが、そこでは実害が出ていなかった。重要なのは launcher が判定不能ではなく明確に失敗している (exit 非0 + stderr) 点で、これは fail-closed として正しい挙動である。直すべきは PATH 注入が rollout 後の版に追従しないこと。見分ける方法: rollout-plugins.sh が PATH エントリを更新するのか、それともセッション起動時に固定されるのかを確認する。"
+created_at = 1786496420
+updated_at = 1786496420
+weight = 0.0
+issue_number = 263
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/263"

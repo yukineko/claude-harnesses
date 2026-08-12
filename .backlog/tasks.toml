@@ -10207,3 +10207,74 @@ updated_at = 1786499132
 weight = 0.0
 issue_number = 264
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/264"
+
+[[task]]
+id = "a53fd016"
+title = "statusline-command.sh が Opus 5 の窓を 200k と誤って決め打ちしている (実測 301,463 トークンで反証)。ctxrot 側は 300k を正しく読んでおり2つのメーターが食い違う"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "context-metering",
+    "p1",
+]
+status = "done"
+notes = """
+実測 2026-08-12、測定点 1ef71cc5。ユーザーからの指摘 (分母が 200k なのはおかしい、300k では) を検証した結果、指摘は正しかった。
+
+同定した場所: /Users/yuki/.claude/statusline-command.sh (リポジトリ外のユーザー設定。settings.json の statusLine が bash でこれを呼んでいる)。当該箇所は model id での2分岐で、1m を含む id なら 1000000、それ以外は全て 200000 に落ちる。claude-opus-5 は 1m を含まないので 200k 側に落ちる。
+
+反証の実測: 本セッションの transcript から、statusline と同じ式 (isSidechain でない assistant turn の input_tokens + cache_creation_input_tokens + cache_read_input_tokens) の最大値を取ると 301,463 トークンだった (1149 turn を走査)。200,000 の 150.7 パーセントであり、200k 窓では物理的に成立しない。したがって 200k は誤りとして反証済み。スクリプトは pct を used*100/window で出すので、この時点で ctx: 150 パーセント (301k/200k) という無意味な表示になっていた。
+
+重要な精密化: 301,463 は 300,000 を超えているので、真の窓は 300k ですらなく 301,463 より大きい。つまり 300000 も真の窓ではなく安全側の budget である。ctxrot の main.rs が context_window を effective cap / target であって model の真の窓ではないと明記しているのと同じ位置づけになる。
+
+食い違い: ユーザーの ~/.ctxrot/config.toml は context_window = 300000 を設定済みで、deploy 済み ctxrot 0.5.23 はこれを正しく honor する (probe: used_percentage 50 と 150k トークンを与えると ~150k/300k と表示した)。つまり同じ画面に出る2つの文脈メーターが別々の分母を使っている。
+
+なぜ単純な定数差し替えで済ませてはいけないか: 当該 case 文の catch-all は全モデルを 200000 に落とす。300000 に置き換えても catch-all である以上、次に窓の違うモデルが来たときに同じ誤りが再発する。CLAUDE.md 3 と 3b1eb24 の教訓 (statusline の沈黙や誤値は余裕ありと読まれる fail-open) からすると、窓が同定できないモデルについては誤った分母を出すのではなく unknown を明示すべきである。ctxrot には既に unknown_line がその目的で存在する。
+
+案: (1) statusline をユーザー手書きスクリプトから ctxrot statusline へ寄せて分母の定義を1箇所にする (2) スクリプトを残すなら model id から窓を引く表を持ち、未知の id は unknown と表示する。いずれにせよ 2 メーター体制のままにしない。
+
+--- ユーザーによる訂正 (2026-08-12) ---
+私の当初の解釈は誤っていた。真の窓は 1M であり、300000 はユーザーが意図的に
+設定した 30 パーセントの上限 (budget) である。300k は窓の推定値ではない。
+したがって「真の窓は 301,463 より大きい」という私の記述は正しいが、そこから
+「300k も真の窓ではない」と書いたのは的外れだった。ctxrot が context_window を
+effective cap / target であって model の真の窓ではないと定義しているのは、
+まさにこの使い方のためであり、budget メーターが 100 パーセントを超えて表示
+されるのも設計どおりである。実測の 301,463 は「窓の証拠」ではなく「budget を
+超過した」という意味しか持たない。反証されたのは 200k だけである。
+
+--- 修正した (2026-08-12、案 1 を採用) ---
+/Users/yuki/.claude/statusline-command.sh を、分母を自分で決めるのをやめて
+ctxrot statusline に委譲する形へ書き換えた。旧版は
+/Users/yuki/.claude/statusline-command.sh.bak-20260812 に退避してある。
+定数を 300000 に差し替える案は採らなかった。当該 case は catch-all なので、
+次に budget の違うモデルが来たときに同じ誤りが黙って再発する。定義を 1 つ
+消すのが目的であって、2 つ目の定義を正しくすることではない。
+
+実測した挙動 (旧版 / 新版の比較、測定点 1ef71cc5):
+  A 実セッション    旧 ctx: 102 パーセント (205k/200k) 赤 / 新 ctxrot 69 パーセント ~206k/300k 緑
+  B transcript が読めない  旧 ctx: - / 新 赤の ctxrot ?% unknown
+  C セッション未開始      旧 ctx: - / 新 ctx: - (回帰なし)
+  D 1m 系の model id      旧 ctx: 20 パーセント (205k/1M) / 新 ~206k/300k
+  E ctxrot 不在           新 赤の ctx: unknown (ctxrot not found)
+
+B は当初気づいていなかった 2 つ目の fail-open である。旧版は transcript が
+読めない場合と、そもそもセッションが無い場合を、どちらも ctx: - として同じ
+表示にしていた。壊れた読み取りと待機中が区別できないのは、3b1eb24 が閉じた
+はずのクラスと同型である。新版は前者を明示的な unknown にする。
+
+D は挙動変更である。1m 系の model id はこれまで 1M を分母にしていたが、今後は
+全モデルが単一の 300k budget に対して測られる。30 パーセント上限という意図には
+合致するが、旧 1m アームは死んだことを記録しておく。
+
+ctxrot 側は元から正しく、変更していない。deploy 済み 0.5.23 は
+~/.ctxrot/config.toml の context_window = 300000 を honor し、transcript が
+読めない場合と stdin が parse 不能な場合の両方で赤の unknown を返す (どちらも
+exit 0 なので、ラッパー側は exit code ではなく出力の空判定で健全性を見る必要が
+ある。新版はそうしている)。実測 31ms / 8MB transcript。
+"""
+created_at = 1786500405
+updated_at = 1786512061
+weight = 0.0
+issue_number = 265
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/265"

@@ -1,4 +1,4 @@
-last_synced = "408f68da34418dcdc2fc92292eac224de72a30ca"
+last_synced = "6e52d71dae8beb4bec1dc74fc69a3dfe3eabddf9"
 
 [entries.".gitattributes"]
 key = ".gitattributes"
@@ -144,6 +144,15 @@ impl_files = []
 test_files = ["crates/autoflow/tests/undetermined_stop.rs"]
 client_refs = []
 
+[entries."crates/backlog/src/claim_ledger.rs"]
+key = "crates/backlog/src/claim_ledger.rs"
+kind = "feature"
+status = "changed"
+last_ref = "22962eb4d798a4c5b334a5285bd9b48c352f9b5f"
+impl_files = ["crates/backlog/src/claim_ledger.rs"]
+test_files = []
+client_refs = []
+
 [entries."crates/backlog/src/config.rs"]
 key = "crates/backlog/src/config.rs"
 kind = "feature"
@@ -235,7 +244,7 @@ key = "crates/backlog/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/backlog.md"
 status = "changed"
-last_ref = "d48c71334210baec776bbbf82a406079765ce0ea"
+last_ref = "22962eb4d798a4c5b334a5285bd9b48c352f9b5f"
 impl_files = ["crates/backlog/src/main.rs"]
 test_files = []
 client_refs = []
@@ -245,7 +254,7 @@ key = "crates/backlog/src/store.rs"
 kind = "feature"
 spec_doc = "docs/specs/backlog.md"
 status = "changed"
-last_ref = "d48c71334210baec776bbbf82a406079765ce0ea"
+last_ref = "22962eb4d798a4c5b334a5285bd9b48c352f9b5f"
 impl_files = ["crates/backlog/src/store.rs"]
 test_files = []
 client_refs = []
@@ -267,6 +276,15 @@ status = "changed"
 last_ref = "7a2ec031263a138eb01d1637f2d3327ee388fd8a"
 impl_files = []
 test_files = ["crates/backlog/tests/concurrent_drivers.rs"]
+client_refs = []
+
+[entries."crates/backlog/tests/cross_checkout_claim.rs"]
+key = "crates/backlog/tests/cross_checkout_claim.rs"
+kind = "feature"
+status = "changed"
+last_ref = "22962eb4d798a4c5b334a5285bd9b48c352f9b5f"
+impl_files = []
+test_files = ["crates/backlog/tests/cross_checkout_claim.rs"]
 client_refs = []
 
 [entries."crates/backlog/tests/integration.rs"]
@@ -1163,8 +1181,8 @@ client_refs = []
 key = "crates/condukt/src/hooks/restore.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
-status = "tracked"
-last_ref = "8d32025fb5ee1dc4fa627d7a266d34e00ec1e5f5"
+status = "changed"
+last_ref = "b896ae0c9e2494f6d2d0f3db59bd3165a7a4f271"
 impl_files = ["crates/condukt/src/hooks/restore.rs"]
 test_files = []
 client_refs = []
@@ -1214,7 +1232,7 @@ key = "crates/condukt/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "changed"
-last_ref = "408f68da34418dcdc2fc92292eac224de72a30ca"
+last_ref = "b896ae0c9e2494f6d2d0f3db59bd3165a7a4f271"
 impl_files = ["crates/condukt/src/main.rs"]
 test_files = []
 client_refs = []
@@ -1366,7 +1384,7 @@ key = "crates/condukt/src/state.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "changed"
-last_ref = "408f68da34418dcdc2fc92292eac224de72a30ca"
+last_ref = "b896ae0c9e2494f6d2d0f3db59bd3165a7a4f271"
 impl_files = ["crates/condukt/src/state.rs"]
 test_files = []
 client_refs = []
@@ -1406,8 +1424,17 @@ key = "crates/condukt/src/worktree.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "changed"
-last_ref = "f264904f40738da87bd158b6420b11a2441e138c"
+last_ref = "b896ae0c9e2494f6d2d0f3db59bd3165a7a4f271"
 impl_files = ["crates/condukt/src/worktree.rs"]
+test_files = []
+client_refs = []
+
+[entries."crates/condukt/src/wt_reconcile.rs"]
+key = "crates/condukt/src/wt_reconcile.rs"
+kind = "feature"
+status = "changed"
+last_ref = "b896ae0c9e2494f6d2d0f3db59bd3165a7a4f271"
+impl_files = ["crates/condukt/src/wt_reconcile.rs"]
 test_files = []
 client_refs = []
 
@@ -1711,6 +1738,15 @@ status = "changed"
 last_ref = "a7f1d2417ad46056af1697fbb0a27308c64f13f5"
 impl_files = []
 test_files = ["crates/condukt/tests/worktree_namespace_concurrency.rs"]
+client_refs = []
+
+[entries."crates/condukt/tests/worktree_reconcile.rs"]
+key = "crates/condukt/tests/worktree_reconcile.rs"
+kind = "feature"
+status = "changed"
+last_ref = "b896ae0c9e2494f6d2d0f3db59bd3165a7a4f271"
+impl_files = []
+test_files = ["crates/condukt/tests/worktree_reconcile.rs"]
 client_refs = []
 
 [entries."crates/context-governor/src/backing.rs"]

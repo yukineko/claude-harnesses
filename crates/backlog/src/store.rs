@@ -659,19 +659,70 @@ pub const CLAIM_STALE_SECS: i64 = 3600;
 /// in which case it is treated as eligible again (stale-claim reclaim) so a
 /// crashed claimer can't strand a task forever.
 ///
-/// Returns the claimed task (with its in-memory `status` already updated to
-/// `claimed` to match what was persisted), or `None` if no eligible task
-/// exists.
+/// `excluded` names task ids that some OTHER checkout of this project has
+/// already claimed (see [`crate::claim_ledger`]); they are dropped from the
+/// candidate pool even though this checkout's own store still shows them
+/// pending — which is precisely the diverged state two checkouts are in.
+///
+/// `reserve` is invoked INSIDE the critical section, after a candidate has
+/// been selected and BEFORE the local store is written, so the project-wide
+/// record always exists before the local one does. A reservation that fails
+/// aborts the claim WITHOUT touching the local store: a claim visible only in
+/// this checkout is invisible to every other one, which is the double-dispatch
+/// this whole path exists to prevent.
+///
+/// Three answers, not two:
+///   - `Known(Some(task))` — claimed, and persisted.
+///   - `Known(None)` — nothing eligible. An OBSERVATION: the queue is empty
+///     for this filter.
+///   - `Undetermined(why)` — REFUSED. The mutual exclusion could not be
+///     guaranteed (tasks-file lock not held, reservation not recordable). The
+///     caller must not render this as an empty queue; `main.rs` exits non-zero
+///     with the reason on stderr.
+///
+/// `Err` stays reserved for genuine store IO failures (load/save), which
+/// `main` already surfaces as a non-zero exit.
+pub(crate) fn next_claim_with(
+    path: &Path,
+    tag_filter: Option<&str>,
+    project_filter: Option<&str>,
+    excluded: &std::collections::HashSet<String>,
+    reserve: &mut dyn FnMut(&Task) -> std::result::Result<(), String>,
+) -> Result<Determination<Option<Task>>> {
+    // CA-backlog-006: same read-side canonicalization as `next`/`list`.
+    let project_filter = project_filter.map(canonicalize_project);
+    with_tasks_lock_aware(path, |locked| {
+        claim_next_locked(
+            path,
+            tag_filter,
+            project_filter.as_deref(),
+            locked,
+            excluded,
+            reserve,
+        )
+    })
+}
+
+/// Claim from this store alone, with no project-wide exclusion and no
+/// reservation. Test-only: production always goes through
+/// [`crate::claim_ledger::claim_next`], which wraps this in the project-scoped
+/// ledger critical section. Exposing a ledger-free claim to the binary is what
+/// made the cross-checkout double-claim possible in the first place, so it is
+/// deliberately not reachable from `main`.
+#[cfg(test)]
 pub fn next_claim(
     path: &Path,
     tag_filter: Option<&str>,
     project_filter: Option<&str>,
-) -> Result<Option<Task>> {
-    // CA-backlog-006: same read-side canonicalization as `next`/`list`.
-    let project_filter = project_filter.map(canonicalize_project);
-    with_tasks_lock_aware(path, |locked| {
-        claim_next_locked(path, tag_filter, project_filter.as_deref(), locked)
-    })
+) -> Result<Determination<Option<Task>>> {
+    let mut no_reservation = |_: &Task| Ok(());
+    next_claim_with(
+        path,
+        tag_filter,
+        project_filter,
+        &std::collections::HashSet::new(),
+        &mut no_reservation,
+    )
 }
 
 /// The claim read-modify-write, split out so the fail-closed contract is
@@ -682,19 +733,29 @@ pub fn next_claim(
 /// read-modify-write is mutually exclusive, and an unprotected claim reads the
 /// same pending task in two concurrent callers and marks it `claimed` in both —
 /// dispatching ONE task to multiple processes (the silent double-claim this
-/// guard exists to prevent). So when `!locked` we DECLINE — return `Ok(None)`,
-/// "nothing claimed right now" — rather than race an unprotected RMW. Declining
-/// is the safe degrade (the caller simply retries on its next tick; contention
-/// is bounded by the acquire budget), and it keeps to the doctrine that when
-/// safety cannot be guaranteed the safe action is to NOT act.
+/// guard exists to prevent). So when `!locked` we REFUSE.
+///
+/// The refusal is `Undetermined`, NOT `Known(None)`. It used to be `Ok(None)`,
+/// which a caller cannot tell apart from "the queue is empty" — `main.rs`
+/// printed `no pending tasks` on exit 0 and a driver read that as "there is no
+/// work" (CLAUDE.md §3: the permissive answer to a question we never answered).
+/// The caller may still retry on its next tick; what it may no longer do is
+/// mistake a refusal for an empty queue.
 fn claim_next_locked(
     path: &Path,
     tag_filter: Option<&str>,
     project_filter: Option<&str>,
     locked: bool,
-) -> Result<Option<Task>> {
+    excluded: &std::collections::HashSet<String>,
+    reserve: &mut dyn FnMut(&Task) -> std::result::Result<(), String>,
+) -> Result<Determination<Option<Task>>> {
     if !locked {
-        return Ok(None);
+        return Ok(Determination::undetermined(format!(
+            "the tasks-file lock for {} could not be acquired, so this claim's \
+             read-modify-write cannot be made mutually exclusive; refusing to claim rather than \
+             risk handing the same task to two callers",
+            path.display()
+        )));
     }
     {
         let now = now_unix();
@@ -712,6 +773,9 @@ fn claim_next_locked(
                             && now.saturating_sub(t.updated_at) >= CLAIM_STALE_SECS)
                 })
                 .filter(|t| !t.is_deferred(now))
+                // Already claimed by ANOTHER CHECKOUT of this project: its own
+                // store says pending, the project-wide ledger says otherwise.
+                .filter(|t| !excluded.contains(&t.id))
                 .filter(|t| match tag_filter {
                     Some(tag) => t.tags.iter().any(|tg| tg == tag),
                     None => true,
@@ -726,7 +790,7 @@ fn claim_next_locked(
         };
 
         let Some(id) = winner_id else {
-            return Ok(None);
+            return Ok(Determination::known(None));
         };
 
         let task = tasks
@@ -736,8 +800,28 @@ fn claim_next_locked(
         task.status = STATUS_CLAIMED.to_string();
         task.updated_at = now;
         let claimed = task.clone();
-        save(path, &tasks)?;
-        Ok(Some(claimed))
+
+        // Reserve project-wide FIRST. `tasks` has been mutated in memory only;
+        // returning here leaves the store on disk untouched, so a failed
+        // reservation claims nothing anywhere.
+        if let Err(why) = reserve(&claimed) {
+            return Ok(Determination::undetermined(format!(
+                "task {} could not be reserved project-wide ({why}); refusing to claim it in {} \
+                 alone, since a claim recorded in one checkout only is invisible to every other \
+                 checkout of this project",
+                claimed.id,
+                path.display()
+            )));
+        }
+
+        save(path, &tasks).with_context(|| {
+            format!(
+                "the project-wide reservation for task {} is already recorded and will keep the \
+                 task excluded until it ages out ({CLAIM_STALE_SECS}s)",
+                claimed.id
+            )
+        })?;
+        Ok(Determination::known(Some(claimed)))
     }
 }
 
@@ -2225,22 +2309,39 @@ mod tests {
         assert_eq!(b.status, "pending");
     }
 
-    /// Concurrency budget for [`claim_one_with_retry`]. A `None` from
-    /// `next_claim` is ambiguous — it means EITHER "the queue is empty" OR
-    /// "I declined because I could not take the tasks-file lock this instant"
-    /// (the documented fail-closed decline). A test that treats the first
-    /// `None` as "empty" would therefore fail intermittently under contention
+    /// Concurrency budget for [`claim_one_with_retry`]. A claim that yields no
+    /// task is ambiguous — `Known(None)` means "the queue is empty" while
+    /// `Undetermined` means "I refused because I could not take the tasks-file
+    /// lock this instant" (the documented fail-closed refusal). A test that
+    /// treated either as "empty" would fail intermittently under contention
     /// while proving nothing, so retry a bounded number of times.
     const CLAIM_RETRIES: usize = 500;
 
+    /// The claimed task, or `None` when this call yielded none — for whichever
+    /// reason. Only the retry loop below uses this; every assertion-bearing
+    /// test uses [`claimed_or_panic`], which does NOT let a refusal pass as an
+    /// empty queue.
     fn claim_one_with_retry(path: &Path, project: Option<&str>) -> Option<Task> {
         for _ in 0..CLAIM_RETRIES {
-            if let Ok(Some(t)) = next_claim(path, None, project) {
+            if let Ok(Determination::Known(Some(t))) = next_claim(path, None, project) {
                 return Some(t);
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         None
+    }
+
+    /// The OBSERVED outcome of a claim: `Some(task)` or a genuinely empty
+    /// queue. A refusal (`Undetermined`) panics — collapsing it into `None`
+    /// here would rebuild, inside the tests, the very fail-open the production
+    /// path just stopped doing.
+    fn claimed_or_panic(outcome: Result<Determination<Option<Task>>>) -> Option<Task> {
+        match outcome.expect("claim must not error").require() {
+            harness_core::verdict::Required::Determined(t) => t,
+            harness_core::verdict::Required::Blocked(v) => {
+                panic!("the claim was REFUSED, which is not an empty queue: {v:?}")
+            }
+        }
     }
 
     /// The monopoly this whole change is about: several drivers pulling from
@@ -2384,7 +2485,9 @@ mod tests {
                 let id = id.clone();
                 handles.push(std::thread::spawn(move || {
                     barrier.wait();
-                    if let Ok(Some(t)) = next_claim(path.as_path(), None, None) {
+                    if let Ok(Determination::Known(Some(t))) =
+                        next_claim(path.as_path(), None, None)
+                    {
                         if t.id == id {
                             winners.fetch_add(1, Ordering::SeqCst);
                         }
@@ -2499,8 +2602,17 @@ mod tests {
                 handles.push(std::thread::spawn(move || {
                     barrier.wait();
                     match next_claim(path.as_path(), None, None) {
-                        Ok(Some(t)) => winners.lock().unwrap().push(t.id),
-                        Ok(None) => {}
+                        Ok(Determination::Known(Some(t))) => winners.lock().unwrap().push(t.id),
+                        Ok(Determination::Known(None)) => {}
+                        // A REFUSAL under contention (the tasks-file lock could
+                        // not be taken within the budget) is the documented
+                        // fail-closed degrade, exactly as the pre-tri-state
+                        // `Ok(None)` decline was: not an error, and counted as
+                        // neither a winner nor an error. Genuine store IO
+                        // failures still arrive as `Err` below, so the
+                        // "must never error under contention" assertion keeps
+                        // its original strength.
+                        Ok(Determination::Undetermined(_)) => {}
                         Err(_) => {
                             claim_errors.fetch_add(1, Ordering::SeqCst);
                         }
@@ -2572,12 +2684,12 @@ mod tests {
     fn next_claim_excludes_already_claimed_task() {
         let path = tmp_path();
         add(&path, "Task", "/repo", vec![], "", 100).unwrap();
-        let first = next_claim(&path, None, None).unwrap();
+        let first = claimed_or_panic(next_claim(&path, None, None));
         assert!(first.is_some());
-        assert_eq!(first.unwrap().status, "claimed");
+        assert_eq!(first.expect("first claim").status, "claimed");
 
         // A second claim call must NOT re-offer the already-claimed task.
-        let second = next_claim(&path, None, None).unwrap();
+        let second = claimed_or_panic(next_claim(&path, None, None));
         assert!(
             second.is_none(),
             "a claimed task must not be handed out again"
@@ -2590,7 +2702,7 @@ mod tests {
         // `is_pending()`), so `next` and `next_claim` agree on what's eligible.
         let path = tmp_path();
         add(&path, "Task", "/repo", vec![], "", 100).unwrap();
-        next_claim(&path, None, None).unwrap();
+        assert!(claimed_or_panic(next_claim(&path, None, None)).is_some());
         assert!(next(&path, None, None).unwrap().is_none());
     }
 
@@ -2598,7 +2710,7 @@ mod tests {
     fn next_claim_reclaims_stale_claim() {
         let path = tmp_path();
         let id = add(&path, "Task", "/repo", vec![], "", 100).unwrap();
-        next_claim(&path, None, None).unwrap();
+        assert!(claimed_or_panic(next_claim(&path, None, None)).is_some());
 
         // Force the claim to look old by rewriting updated_at directly.
         let mut tasks = load(&path).unwrap();
@@ -2606,44 +2718,111 @@ mod tests {
         save(&path, &tasks).unwrap();
 
         // A stale claim (older than CLAIM_STALE_SECS) must be reclaimable.
-        let reclaimed = next_claim(&path, None, None).unwrap();
-        assert!(
-            reclaimed.is_some(),
+        let reclaimed = claimed_or_panic(next_claim(&path, None, None));
+        assert_eq!(
+            reclaimed.map(|t| t.id),
+            Some(id),
             "a stale claim must be reclaimable, not stuck forever"
         );
-        assert_eq!(reclaimed.unwrap().id, id);
     }
 
-    /// FAIL-CLOSED claim gate (d6bf269f): when the exclusive tasks-lock is NOT
-    /// held, the claim read-modify-write must DECLINE (return `Ok(None)`) rather
-    /// than run unprotected and double-claim the same task to concurrent
-    /// callers. Driven deterministically through the `locked` seam — a real
-    /// lock-contention test would burn the ~8s acquire budget. RED against the
-    /// old `with_tasks_lock` path, which ran the claim body unconditionally and
-    /// would mark the task `claimed` even with no lock held.
+    /// FAIL-CLOSED claim gate (d6bf269f, tightened for backlog 709ff549): when
+    /// the exclusive tasks-lock is NOT held, the claim read-modify-write must
+    /// REFUSE rather than run unprotected and double-claim the same task to
+    /// concurrent callers. Driven deterministically through the `locked` seam —
+    /// a real lock-contention test would burn the ~8s acquire budget.
+    ///
+    /// **The assertion changed, and the old one encoded a fail-open.** It used
+    /// to require `Ok(None)`, i.e. the refusal had to be spelled as "no task" —
+    /// byte-identical to a genuinely empty queue, which `main.rs` rendered as
+    /// `no pending tasks` on exit 0 and a driver read as "there is no work".
+    /// The refusal must now be `Undetermined` with a reason. `Known(None)` is
+    /// now explicitly FORBIDDEN here, so the old behaviour cannot come back.
     #[test]
-    fn next_claim_declines_when_lock_not_held_instead_of_racing_unprotected() {
+    fn next_claim_refuses_when_lock_not_held_instead_of_racing_unprotected() {
         let path = tmp_path();
         add(&path, "Task", "/repo", vec![], "", 100).unwrap();
 
-        // Lock not held → must decline, and must NOT mutate the task on disk.
-        let declined = claim_next_locked(&path, None, None, false).unwrap();
-        assert!(
-            declined.is_none(),
-            "an unlocked claim must fail closed (decline), never race an unprotected RMW"
-        );
+        let mut no_reservation = |_: &Task| Ok(());
+        let empty = std::collections::HashSet::new();
+
+        // Lock not held → must REFUSE (not "no task"), and must NOT mutate the
+        // task on disk.
+        let refused =
+            claim_next_locked(&path, None, None, false, &empty, &mut no_reservation).unwrap();
+        match refused {
+            Determination::Known(t) => panic!(
+                "an unlocked claim must fail closed with a REASON, not answer {t:?} — that is \
+                 indistinguishable from an empty queue"
+            ),
+            Determination::Undetermined(why) => assert!(
+                why.as_str().contains("lock"),
+                "the refusal must say what could not be determined: {why}"
+            ),
+        }
         assert!(
             load(&path).unwrap()[0].is_pending(),
-            "the task must stay pending when the claim was declined for lack of the lock"
+            "the task must stay pending when the claim was refused for lack of the lock"
         );
 
         // Sanity: with the lock held the same call claims normally.
-        let claimed = claim_next_locked(&path, None, None, true).unwrap();
+        let claimed =
+            claim_next_locked(&path, None, None, true, &empty, &mut no_reservation).unwrap();
         assert!(
-            claimed.is_some(),
+            claimed_or_panic(Ok(claimed)).is_some(),
             "with the lock held the claim proceeds as before"
         );
         assert_eq!(load(&path).unwrap()[0].status, "claimed");
+    }
+
+    /// A reservation that cannot be recorded must abort the claim and leave the
+    /// local store untouched: a claim persisted only here is invisible to every
+    /// other checkout of this project, which is the double-dispatch the ledger
+    /// exists to prevent (backlog 709ff549).
+    #[test]
+    fn a_failed_reservation_refuses_and_leaves_the_store_untouched() {
+        let path = tmp_path();
+        add(&path, "Task", "/repo", vec![], "", 100).unwrap();
+
+        let mut failing = |_: &Task| Err("ledger is on fire".to_string());
+        let empty = std::collections::HashSet::new();
+        let out = claim_next_locked(&path, None, None, true, &empty, &mut failing).unwrap();
+        match out {
+            Determination::Known(t) => {
+                panic!("a failed reservation must refuse, not answer {t:?}")
+            }
+            Determination::Undetermined(why) => assert!(
+                why.as_str().contains("ledger is on fire"),
+                "the underlying reason must survive: {why}"
+            ),
+        }
+        assert!(
+            load(&path).unwrap()[0].is_pending(),
+            "nothing may be claimed locally when the project-wide reservation failed"
+        );
+    }
+
+    /// An id already claimed by another checkout is not handed out again, even
+    /// though THIS store still shows it pending (the diverged state).
+    #[test]
+    fn an_excluded_id_is_not_handed_out_even_when_locally_pending() {
+        let path = tmp_path();
+        let id = add(&path, "Task", "/repo", vec![], "", 100).unwrap();
+
+        let mut no_reservation = |_: &Task| Ok(());
+        let mut excluded = std::collections::HashSet::new();
+        excluded.insert(id.clone());
+        let out = claim_next_locked(&path, None, None, true, &excluded, &mut no_reservation);
+        assert!(
+            claimed_or_panic(out).is_none(),
+            "a task claimed in another checkout must not be re-offered here"
+        );
+        assert!(load(&path).unwrap()[0].is_pending());
+
+        // ANTI-VACUITY: with an empty exclusion set the same call claims it.
+        let empty = std::collections::HashSet::new();
+        let out = claim_next_locked(&path, None, None, true, &empty, &mut no_reservation);
+        assert_eq!(claimed_or_panic(out).map(|t| t.id), Some(id));
     }
 
     #[test]
@@ -2651,7 +2830,7 @@ mod tests {
         let path = tmp_path();
         add(&path, "Low", "/repo", vec!["p2".into()], "", 100).unwrap();
         add(&path, "High", "/repo", vec!["p0".into()], "", 200).unwrap();
-        let t = next_claim(&path, None, None).unwrap().unwrap();
+        let t = claimed_or_panic(next_claim(&path, None, None)).expect("a task must be claimed");
         assert_eq!(t.title, "High");
     }
 
@@ -2661,7 +2840,8 @@ mod tests {
         // claimed task by id regardless of its current (claimed) status.
         let path = tmp_path();
         let id = add(&path, "Task", "/repo", vec![], "", 100).unwrap();
-        let claimed = next_claim(&path, None, None).unwrap().unwrap();
+        let claimed =
+            claimed_or_panic(next_claim(&path, None, None)).expect("a task must be claimed");
         assert_eq!(claimed.id, id);
         mark_done(&path, &id).unwrap();
         let tasks = load(&path).unwrap();
@@ -2920,7 +3100,8 @@ mod tests {
         let path = tmp_path();
         add(&path, "Fix login", "/repo", vec![], "", 100).unwrap();
         // Reserve it via next_claim → status becomes `claimed`.
-        let claimed = next_claim(&path, None, None).unwrap().unwrap();
+        let claimed =
+            claimed_or_panic(next_claim(&path, None, None)).expect("a task must be claimed");
         assert_eq!(claimed.status, "claimed");
 
         let err = add(&path, "Fix login", "/repo", vec![], "", 200)

@@ -1,3 +1,4 @@
+mod claim_ledger;
 mod config;
 mod divergence;
 mod driver;
@@ -365,6 +366,56 @@ fn default_project_scope(
     }
 }
 
+/// The project IDENTITY the claim ledger is keyed by — the one string every
+/// checkout of this project must agree on, or the ledger splits per checkout
+/// and stops excluding anything (the defect it exists to close, one level up).
+///
+/// It is deliberately NOT the store's location (that follows the checkout by
+/// design) and NOT the raw `--project` string (two checkouts spell the same
+/// project differently). Both branches below end at a string that
+/// `lock::project_slug` hashes, and `project_slug` canonicalizes again, so a
+/// worktree and its main tree land on the identical slug:
+///   - an explicit `--project`: canonicalized WITH the resolved/guessed
+///     marker. A GUESSED label is refused — keying the ledger by a guess would
+///     silently give this checkout a private ledger, i.e. no exclusion at all,
+///     which is exactly the shape of the bug (`unresolved` here means a
+///     substituted fallback, not merely "the path is absent" — an absent
+///     cross-machine label normalizes identically everywhere and is fine).
+///   - the default scope (`--all`, where there is no `--project` to key on, or
+///     any other unscoped claim): this checkout's own canonical identity,
+///     which normalizes a linked worktree to its main working tree.
+///
+/// An identity that cannot be determined returns `Err` — a non-zero exit with
+/// the reason on stderr — rather than claiming under a guessed key.
+fn claim_identity(effective_project: Option<&str>) -> Result<String> {
+    let Some(p) = effective_project else {
+        let cwd = std::env::current_dir()?;
+        return match store::canonical_project_id(&cwd).require() {
+            Required::Determined(root) => Ok(root.to_string_lossy().into_owned()),
+            Required::Blocked(verdict) => {
+                let why = match verdict.reason() {
+                    Some(r) => r.as_str().to_string(),
+                    None => "unknown".to_string(),
+                };
+                Err(anyhow::anyhow!(
+                    "cannot determine this checkout's project identity, so a claim could not be \
+                     recorded project-wide and would be invisible to other checkouts; refusing \
+                     to claim: {why}"
+                ))
+            }
+        };
+    };
+    let canonical = store::canonicalize_project_with_marker(p);
+    if canonical.unresolved {
+        return Err(anyhow::anyhow!(
+            "the project identity for {p} could not be resolved (a fallback label was \
+             substituted), so a claim recorded under it may not be seen by other checkouts of \
+             the same project; refusing to claim"
+        ));
+    }
+    Ok(canonical.label)
+}
+
 /// The project the divergence check asks about — always THIS CHECKOUT, even
 /// when the listing was widened.
 ///
@@ -621,7 +672,37 @@ fn run(cli: Cli) -> Result<()> {
             // the wrong file (backlog 5ba13c3e).
             guard_store_divergence(&tasks_path, effective_project.as_deref())?;
             let task = if claim {
-                store::next_claim(&tasks_path, tag.as_deref(), effective_project.as_deref())?
+                // The claim is project-GLOBAL, not store-local: the store
+                // follows the checkout by design, so a claim recorded only in
+                // this checkout's `tasks.toml` is invisible to every other
+                // checkout of the same project and both are handed the same
+                // task (backlog 709ff549). `claim_ledger` records it under
+                // `~/.backlog/claims/<project-slug>.json` instead.
+                let identity = claim_identity(effective_project.as_deref())?;
+                let claimed = claim_ledger::claim_next(
+                    &tasks_path,
+                    tag.as_deref(),
+                    effective_project.as_deref(),
+                    &identity,
+                    None,
+                )?;
+                match claimed {
+                    Determination::Known(t) => t,
+                    // REFUSED, not empty. Non-zero exit, reason on stderr,
+                    // nothing on stdout — the identical shape
+                    // `guard_store_divergence` uses, and the shape
+                    // `autoflow::backlog::find_open` reads as
+                    // `Determination::Undetermined` rather than "no work".
+                    // Rendering this as `no pending tasks` on exit 0 is the
+                    // fail-open this whole path exists to close.
+                    Determination::Undetermined(why) => {
+                        return Err(anyhow::anyhow!(
+                            "backlog next --claim REFUSED to claim (this is NOT \
+                             \"no pending tasks\" — nothing was claimed and the queue was not \
+                             judged empty): {why}"
+                        ));
+                    }
+                }
             } else {
                 store::next(&tasks_path, tag.as_deref(), effective_project.as_deref())?
             };
@@ -1070,6 +1151,74 @@ mod git_remote_url_timeout_tests {
         assert!(
             elapsed < Duration::from_secs(5),
             "must return promptly on timeout, took {elapsed:?}"
+        );
+    }
+}
+
+/// `claim_identity` refusing a GUESSED project label had a kill rate of ZERO:
+/// deleting the `canonical.unresolved` refusal left all 225 tests green
+/// (measured 2026-08-12 on `2b8abcc6`). That arm is load-bearing — keying the
+/// project-wide ledger by a guessed slug gives this checkout a PRIVATE ledger,
+/// i.e. no cross-checkout exclusion at all, which is the very defect
+/// `709ff549` closes. An arm with no test is an arm that can be deleted by
+/// accident, so it gets its own behavioural test here.
+#[cfg(test)]
+mod claim_identity_tests {
+    use super::*;
+
+    /// A path that EXISTS but whose identity cannot be resolved must refuse
+    /// the claim, not claim under the substituted fallback label.
+    ///
+    /// The undetermined-ness is injected physically: the project path lives
+    /// inside a mode-000 directory, so `symlink_metadata` returns EACCES —
+    /// "could not determine whether it exists", which is neither absent nor
+    /// resolved.
+    #[test]
+    fn an_unresolvable_project_label_refuses_the_claim_rather_than_guessing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = std::env::temp_dir().join(format!(
+            "backlog-claim-identity-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let outer = base.join("outer");
+        let inner = outer.join("proj");
+        std::fs::create_dir_all(&inner).expect("fixture dirs");
+
+        // Deny traversal so that stat-ing `inner` fails with EACCES rather
+        // than NotFound. Root ignores this, so the assertion below is skipped
+        // rather than falsely passing if the probe does not actually degrade.
+        std::fs::set_permissions(&outer, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod 000");
+        let degraded = std::fs::symlink_metadata(&inner)
+            .err()
+            .is_some_and(|e| e.kind() != std::io::ErrorKind::NotFound);
+
+        let got = claim_identity(Some(&inner.to_string_lossy()));
+
+        // Restore before asserting so a failure still cleans up.
+        let _ = std::fs::set_permissions(&outer, std::fs::Permissions::from_mode(0o700));
+        let _ = std::fs::remove_dir_all(&base);
+
+        if !degraded {
+            eprintln!(
+                "skipped: this environment can stat inside a mode-000 dir (running as root?)"
+            );
+            return;
+        }
+        let err = got.expect_err(
+            "an unresolvable project label must REFUSE the claim: claiming under the substituted \
+             fallback label keys the ledger to a private slug, so no other checkout of the \
+             project ever sees the claim (backlog 709ff549)",
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("refusing to claim"),
+            "the refusal must say so verbatim, got: {msg}"
         );
     }
 }

@@ -9900,9 +9900,34 @@ tags = [
     "p0",
 ]
 status = "claimed"
-notes = "実測 2026-08-12 03:44-03:55 JST。orchestrator が t2-condukt-reconcile の worker を dead と判定して 2 人目 (私) を同じ worktree /Users/yuki/.condukt/worktrees/run-20260811-230435-19389-t2-condukt-reconcile に投入したが、1 人目は生きていた。証跡: 私が何も操作していない 2 分間 (03:53:02 -> 03:55:07) に wt_reconcile.rs / state.rs / worktree.rs の sha が変化し、restore.rs が新たに modified として現れた。さらに私の Edit が適用された時点でファイル内容が私の Read 時点と異なっていた (is_sidecar -> state::is_run_state_sidecar に置き換わっていた)。lsof で cwd がその worktree の claude プロセス (pid 66412) を観測。CLAUDE.md 8 が言う「git が救えない唯一の競合」= 同一 index の共有が、worktree 分離をしていてもオーケストレータ側の liveness 誤判定で発生する。今回は orchestrator が介入して 1 人目を stand down させたため実害は出ていないが、機構としては dead 判定が pid でも progress でもない何かに基づいていた可能性が高い。backlog e99f61e4 で作った condukt worktree reconcile の判定 (progress 由来 3 値) を、worker の再投入判定そのものにも適用できるかを検討する。"
+notes = """
+実測 2026-08-12 03:44-03:55 JST。orchestrator が t2-condukt-reconcile の worker を dead と判定して 2 人目 (私) を同じ worktree /Users/yuki/.condukt/worktrees/run-20260811-230435-19389-t2-condukt-reconcile に投入したが、1 人目は生きていた。証跡: 私が何も操作していない 2 分間 (03:53:02 -> 03:55:07) に wt_reconcile.rs / state.rs / worktree.rs の sha が変化し、restore.rs が新たに modified として現れた。さらに私の Edit が適用された時点でファイル内容が私の Read 時点と異なっていた (is_sidecar -> state::is_run_state_sidecar に置き換わっていた)。lsof で cwd がその worktree の claude プロセス (pid 66412) を観測。CLAUDE.md 8 が言う「git が救えない唯一の競合」= 同一 index の共有が、worktree 分離をしていてもオーケストレータ側の liveness 誤判定で発生する。今回は orchestrator が介入して 1 人目を stand down させたため実害は出ていないが、機構としては dead 判定が pid でも progress でもない何かに基づいていた可能性が高い。backlog e99f61e4 で作った condukt worktree reconcile の判定 (progress 由来 3 値) を、worker の再投入判定そのものにも適用できるかを検討する。
+
+--- 統合者の観測 (2026-08-13): 実装 agent は API エラーで途中死したが成果は残っている ---
+t2 implementer subagent (ac96c749a6d34eb08) は "Connection closed mid-response" で
+terminated した。したがって **agent からの完了報告は存在しない**。以下は報告ではなく、
+私が worktree を read-only で観測した事実である。
+
+branch p0trio-1/t2-redispatch の commit (main からの差分、新しい順):
+  9885b536 docs(condukt): --all-stuck が TTL のみの掃除だという operator 向け散文を訂正
+  c57c3f20 fix(condukt): bulk re-dispatch の述語を確認済みの非進捗で gate する (356bd51d)
+  4f9a4735 test(condukt): re-dispatch の述語を progress gate に固定する (356bd51d)
+  39b210d7 merge: t1-claim-scope into t2-redispatch (serial dependency)
+
+つまり RED (test) を先に commit してから GREEN (fix) を commit する順序が守られており、
+CLAUDE.md 2-b の F to P 順序は commit graph の上で観測できる。worktree の未コミット差分は
+.specguard/spec-map.toml 1 件のみ (hook 生成物)。3 ファイルの version lockstep は HEAD 時点で
+Cargo.toml / plugin.json / marketplace.json すべて 0.7.134 で一致している。
+
+死んだ agent が orphan の cargo を残していないことを ps で確認済み (measure worktree での
+私の測定と fixture を共有して壊し合う事故=killed-task-leaves-orphan-loop を避けるため)。
+生きていた cargo は 1 本 (私のもの) だけだった。
+
+**未検証**: kill rate は私がこれから独立に測る。agent の自己申告が存在しない以上、
+「テストが通った」以上のことは何も主張できない。
+"""
 created_at = 1786472066
-updated_at = 1786496438
+updated_at = 1786603920
 weight = 0.0
 issue_number = 250
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/250"
@@ -10506,9 +10531,37 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = []
 status = "pending"
-notes = "測定日 2026-08-12、測定点 639813db (branch condukt/p0trio-1/t1-claim-scope)。claim.rs の run_worktree_head_signal は (1) worktree を task id 順に sort し (2) 各 HEAD を task id と一緒に fold する、という 2 つの決定論プロパティを持つが、実装者が自分で測った kill rate はどちらも 0 だった。構造的 mutation: M4 = fold から task id を落として SHA だけ結合 -> 4 テスト全て通過。M5 = sort_by の行を削除 -> 4 テスト全て通過。原因は 4 テスト (claim_progress_ 系) の fixture progress_fixture が worktree を持つ task を 1 つしか作らないため、順序も alias も観測点に現れないこと。必要なのは worktree を持つ task 2 つ以上の fixture で (a) run state 内の task 順を入れ替えても fingerprint が変わらないこと (b) 2 task が HEAD を交換したとき fingerprint が変わること を pin するテスト。CLAUDE.md 2-a により実装者は自分の実装を検証するテストを書けないので、別 agent が書く必要がある。現状これらのプロパティは判断であって観測ではない。"
+notes = """
+測定日 2026-08-12、測定点 639813db (branch condukt/p0trio-1/t1-claim-scope)。claim.rs の run_worktree_head_signal は (1) worktree を task id 順に sort し (2) 各 HEAD を task id と一緒に fold する、という 2 つの決定論プロパティを持つが、実装者が自分で測った kill rate はどちらも 0 だった。構造的 mutation: M4 = fold から task id を落として SHA だけ結合 -> 4 テスト全て通過。M5 = sort_by の行を削除 -> 4 テスト全て通過。原因は 4 テスト (claim_progress_ 系) の fixture progress_fixture が worktree を持つ task を 1 つしか作らないため、順序も alias も観測点に現れないこと。必要なのは worktree を持つ task 2 つ以上の fixture で (a) run state 内の task 順を入れ替えても fingerprint が変わらないこと (b) 2 task が HEAD を交換したとき fingerprint が変わること を pin するテスト。CLAUDE.md 2-a により実装者は自分の実装を検証するテストを書けないので、別 agent が書く必要がある。現状これらのプロパティは判断であって観測ではない。
+
+--- 統合者による独立再測定 (2026-08-13、測定点 639813db) ---
+worker の自己申告は正しかった。agent の worktree は一切触らず、639813db を自分の
+detached worktree (/Users/yuki/src/.harness-worktrees/measure-t1) へ checkout して
+独立に測った。
+
+  BASELINE                                          914 passed / 0 failed
+  MT1 修正本体を revert (head を repo 全体へ戻す)    4 failed  KILLED
+        claim_progress_stalled_when_run_worktree_frozen_though_repo_head_advances
+        claim_progress_progressing_when_run_worktree_commits_though_repo_head_frozen
+        claim_progress_without_run_worktree_is_undetermined_and_keeps_the_claim
+        claim_progress_with_unreadable_run_worktree_is_undetermined_and_keeps_the_claim
+  MT2 sort_by 削除 (task 順の正規化を消す)          914 passed / 0 failed  SURVIVED
+  MT3 fold から task id を落とす (SHA のみ)         914 passed / 0 failed  SURVIVED
+  MT4 空 worktree アームを repo-wide fallback へ    1 failed  KILLED
+  MT5 読めない worktree アームを skip へ            1 failed  KILLED
+  MT6 対照 (head シグナルが常に Undetermined)       2 failed  KILLED
+
+MT6 が 2 件を殺すので keep 側は空虚ではない。MT1/MT4/MT5 が殺されるので、修正の
+本体 (run スコープ化) と 2 本の保護アーム (CLAUDE.md 3) はいずれも検証済みである。
+未検証なのは worker が申告したとおり MT2/MT3 の 2 つの決定論プロパティだけで、
+自己申告 (M4/M5) と私の独立測定 (MT3/MT2) は完全に一致した。
+
+したがって欠けているのは「worktree を持つ task が 2 つ以上ある fixture」1 つだけで、
+修正そのものの誤りではない。次の一手はそのテストを書くこと (私は t1 の実装者では
+ないので CLAUDE.md 2-a の利害分離は満たす)。
+"""
 created_at = 1786543958
-updated_at = 1786543958
+updated_at = 1786580012
 weight = 0.0
 issue_number = 275
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/275"

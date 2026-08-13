@@ -10444,9 +10444,43 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = []
 status = "pending"
-notes = "測定 2026-08-12, commit d2cc68fa (worktree p0trio-1-t3-backlog-add-verified). bd6d81df の修正で add に 2 つの belt を入れた: (1) with_tasks_lock_aware で mutual exclusion 不成立時に Err, (2) save 後に load し直して id の存在を確認 (confirm_added_id_is_on_disk)。実測した mutation kill rate: belt2 を構造的に削除した M1 は crate 全体 229 test のうち 1 件も落とさなかった (0 kill)。理由は belt1 が先に Err を返すため、既存の add_reporting_success_must_mean_the_id_is_in_a_fresh_load_of_the_store の含意 (Ok なら fresh load に居ること) が vacuous になること。つまり belt2 は現状どのテストにも観測されておらず、消しても誰も気づかない。必要なのは belt1 を通過した状態 (lock は取得済み) で save 後に store が別内容へ差し替わる状況を注入し、add が Err を返すことを観測する behavioural test。実装者が自分でテストを書くことは CLAUDE.md 2-a により禁止のため未実施。DoD: M1 相当の構造削除で少なくとも 1 件 named test が落ちること"
+notes = """
+測定 2026-08-12, commit d2cc68fa (worktree p0trio-1-t3-backlog-add-verified). bd6d81df の修正で add に 2 つの belt を入れた: (1) with_tasks_lock_aware で mutual exclusion 不成立時に Err, (2) save 後に load し直して id の存在を確認 (confirm_added_id_is_on_disk)。実測した mutation kill rate: belt2 を構造的に削除した M1 は crate 全体 229 test のうち 1 件も落とさなかった (0 kill)。理由は belt1 が先に Err を返すため、既存の add_reporting_success_must_mean_the_id_is_in_a_fresh_load_of_the_store の含意 (Ok なら fresh load に居ること) が vacuous になること。つまり belt2 は現状どのテストにも観測されておらず、消しても誰も気づかない。必要なのは belt1 を通過した状態 (lock は取得済み) で save 後に store が別内容へ差し替わる状況を注入し、add が Err を返すことを観測する behavioural test。実装者が自分でテストを書くことは CLAUDE.md 2-a により禁止のため未実施。DoD: M1 相当の構造削除で少なくとも 1 件 named test が落ちること
+
+--- 統合者による独立再測定 (2026-08-13、測定点 d2cc68fa) ---
+worker の自己申告は正しかった。私は agent の worktree を一切触らず、d2cc68fa を
+自分の detached worktree (/Users/yuki/src/.harness-worktrees/measure-t3) へ
+checkout して独立に測った。走行中かもしれない worker と同一 index を共有しない
+ためで、356bd51d の再現を避ける措置である。
+
+  BASELINE                                        229 passed / 0 failed
+  MB1 belt1 削除 (lock 不成立でも refuse しない)   180 passed / 2 failed  KILLED
+        add_must_not_report_success_when_the_tasks_lock_is_unavailable
+        add_reporting_success_must_mean_the_id_is_in_a_fresh_load_of_the_store
+  MB2 belt2 削除 (post-save の confirm 呼び出しを消す)  229 passed / 0 failed  SURVIVED
+  MB3 belt2 無力化 (confirm が常に成功を返す)          229 passed / 0 failed  SURVIVED
+  MB4 対照 (add が無条件 refuse)                  176 passed / 6 failed  KILLED
+
+MB4 が 6 件を殺すので keep 側のテストは空虚ではない。したがって MB2/MB3 の生存は
+テスト不足の証拠であって測定の失敗ではない。belt2 は呼び出し側の削除でも中身の
+無力化でも 229 件全緑のまま通る = 1 本もテストに守られていない。
+
+belt1 は検証済みである (MB1 が 2 件で殺される)。実測された欠陥 bd6d81df を実際に
+塞いでいるのは belt1 なので、修正そのものは有効である。belt2 は多重防御であり、
+現状は未検証のまま。
+
+belt2 を殺せるテストが書きにくい理由 (次に着手する人への申し送り): belt2 が捕まえるのは
+「save は成功したが直後の再読み込みに id が無い」状態である。belt1 がロックを保持したまま
+confirm まで回るので、ロック内では原理的にこの状態を作れない。作れるのはロックを持たない
+外部 (git checkout や degraded writer) が割り込んだ場合だけで、それは時間依存なので
+決定論的テストにならない。したがって claim.rs の test_hook::forced_progress と同型の
+テスト専用シーム (save と confirm の間で store を壊せるフック) を入れるのが筋だと考える。
+シームを入れれば MB2 と MB3 の両方が殺せる。
+
+未 merge。この測定結果をもって merge 可否を判断すること。
+"""
 created_at = 1786543909
-updated_at = 1786543909
+updated_at = 1786579629
 weight = 0.0
 issue_number = 273
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/273"

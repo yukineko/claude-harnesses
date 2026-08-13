@@ -8426,7 +8426,7 @@ outcome block。全文レポート (29KB、逐語引用と再実行可能な抽�
 調査部分が終わっただけなので pending に戻す。
 """
 created_at = 1785926923
-updated_at = 1786640985
+updated_at = 1786641721
 weight = 0.0
 issue_number = 153
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/153"
@@ -11177,3 +11177,24 @@ updated_at = 1786641085
 weight = 0.0
 issue_number = 336
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/336"
+
+[[task]]
+id = "c4fe6df9"
+title = "backlog next --claim が「恒常的な制約」item を実行タスクとして配り続ける — 制約と作業を型で分ける"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-08-14、測定点 cf1f7cb2。/flow の Step 3-1 で backlog next --claim を打つと 6aaec283 (taintguard d24f02d5 は敵対的パネルが block した版 — そのまま merge しないこと) が返る。これは**完了しうる作業ではなく恒常的な制約**であり、着手対象ではない。done にすればキューからは消えるが、同時に警告そのものが視界から消えるので close もできない。結果として next --claim はこの item を永久に配り続け、driver は毎回それを見てから手動で pending へ戻すことになる (今回そうした)。
+
+判定不能ではなく実在の設計欠落と読む: backlog の item には (a) 完了しうる作業 と (b) 恒常的に真であってほしい制約/不変条件 の2種類が混ざっているが、型/status 語彙が (a) しか想定していない。status は pending|done|failed の3値のみ (crates/backlog/src/task.rs の STATUSES)。cancelled は store に6件実在するのに edit が拒否する (0dafa254) という別件もあり、語彙不足は同じ根。
+
+考えられる方向 (どれを採るかは未決): (i) status/kind に constraint 相当を足し next --claim の候補から除外する、(ii) tag で除外する運用にする (機械的除外がないと同じことが起きるので tag だけでは弱い)、(iii) 制約は backlog ではなく別ストア (CLAUDE.md や compass charter の invariant) へ移す。
+
+見分ける方法: next --claim を2回連続で打ち、間に何もしなければ同じ id が返るかを見る。返るなら (a)/(b) の混在が実害として再現している。"""
+created_at = 1786641721
+updated_at = 1786641721
+weight = 0.0
+issue_number = 337
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/337"

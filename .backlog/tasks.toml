@@ -1443,13 +1443,13 @@ tags = [
     "p1",
     "wontfix",
 ]
-status = "failed"
+status = "claimed"
 notes = """
 U-shaped attention bias under-attends middle (>30% degradation vs edges); place highest-relevance chunks at start AND end, bury least-relevant in middle. Cheap, separate ordering pass over already-selected chunks. 証拠: https://docs.haystack.deepset.ai/reference/rankers-api (LostInTheMiddleRanker). 完了条件: injected spec/retrieved chunks emitted in edge-weighted order (rank1 first, rank2 last, lowest centered) via one ordering pass.
 Inapplicable to context-governor's hook architecture as scoped. Lost-in-the-middle edge-ordering requires a MULTI-CHUNK relevance-ranked injection; the injector emits exactly ONE best-scoring section (injector.rs:92-106 max_by_key), and the rehydrator emits normative pins with no query to rank by. Adding top-K multi-chunk retrieval to create ranked chunks fights the crate's explicit size-minimization axis (lib.rs 'minimize resident normative text'), and edge-ordering resident pins would risk burying Verbatim content mid-context, contradicting I2 lossless-recall. Deferred by user decision to pursue grounded safety/autonomy p1s. Recommend reclassify as guidance-only or retarget if multi-chunk retrieval is ever introduced.
 調査済み・実装不能につき guidance-only として close (ユーザー裁定 2026-08-02)。edge-ordering は multi-chunk の relevance-ranked injection を前提とするが、injector は最高スコア 1 section のみ、rehydrator は ranking する query を持たない。top-K 導入は crate の size-minimization 軸と I2 lossless-recall に反する。詳細は notes に保持。"""
 created_at = 1782753890
-updated_at = 1785634509
+updated_at = 1786643241
 defer_until = 1785807264
 weight = 0.0
 
@@ -7571,7 +7571,7 @@ tags = [
     "spec-loop",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = """
 DECIDED 2026-07-31 by the user. /flow gains a return path: when a picked task turns out to lack a spec, flow does not push it through condukt blindly - it routes back to specforge, which drafts and ratifies, which queues requirements (item 2dd5180f), and flow runs again.
 
@@ -7593,7 +7593,7 @@ SPEC 2026-07-31: this item is now requirement R4-flow-spec-gap-source of specs/s
 
 RETRACTED 2026-07-31 - the termination rule in the paragraph above. This note originally proposed: a task diverted to specforge once is marked, and a second spec-gap detection on the same task escalates to a human instead of diverting again. That is a count, and a count is a proxy: it does not measure the thing we need to know, which is whether the spec is executable yet. Replaced by requirement R0 of specs/spec-loop.toml - the cycle exits on the ratify contract floor (Spec::contract_violations() empty, crates/specguard/src/forge/ir.rs:162). A spec that clears the floor produces condukt-runnable requirements and the loop leaves through execution; one that cannot is refused by ratify and goes to a human. Measured both directions 2026-07-31 at 0ad0d055: the real spec ratifies exit 0, an acceptance-empty control is refused exit 2 naming the three G violations. Do NOT add a divert counter. The residual divergence risk (a task that keeps producing floor-passing specs that do not resolve it) is left OPEN on purpose - see DESIGN section 3.2: measure divert count and done rate of divert-derived requirements after R4 ships, then decide."""
 created_at = 1785499715
-updated_at = 1785971334
+updated_at = 1786643241
 weight = 0.55
 issue_number = 113
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/113"
@@ -10261,7 +10261,7 @@ pin しているものは 1 本も無い。裁定が追加する第3の経路 (�
 Undetermined に倒す。この経路を突く behavioural test を done criteria に含めた。
 """
 created_at = 1786472512
-updated_at = 1786642295
+updated_at = 1786643241
 weight = 0.0
 issue_number = 256
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/256"
@@ -10628,7 +10628,7 @@ title = "backlog: lock acquire budget measures 9.97s against a 10s stale-reap th
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "claimed"
 notes = """
 Measured 2026-08-12, measurement point 1ef71cc5, crates/backlog/src/store.rs.
 
@@ -10649,7 +10649,7 @@ SUGGESTED DIRECTION (not verified by an executed test). Two independent problems
 
 NOT DONE: I did not write a test reproducing the two-writers-barge sequence. It needs deterministic control of the 10s boundary, so it likely needs the threshold and budget injectable rather than const."""
 created_at = 1786543402
-updated_at = 1786543402
+updated_at = 1786643241
 weight = 0.0
 issue_number = 272
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/272"
@@ -11307,3 +11307,52 @@ updated_at = 1786641876
 weight = 0.0
 issue_number = 338
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/338"
+
+[[task]]
+id = "710bc8c7"
+title = "Agent の output transcript ファイルサイズを進捗シグナルとして読むのは誤り — 実測で live な agent を kill した"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 2026-08-14、測定点 6ece7c72。**自分が犯した誤りの記録**であり、次に同じ推論をする者を止めるために起票する。
+
+背景: background agent を dispatch した後、その進捗を
+/private/tmp/claude-502/<proj>/<session>/tasks/<agentId>.output の**ファイルサイズの増加**で測ろうとした。
+02:30:58 に 129 バイト (JSON 1 行の途中で切れている) で作られ、15 分後も 129 バイトのままだった。
+12 秒プローブと 45 秒プローブを 2 回打って、いずれも増分ゼロ。condukt の run state も
+作られておらず、branch も無かった。この 3 点から stalled と判断して TaskStop で kill した。
+
+**判断は誤りだった。** kill した瞬間に返ってきた agent の最終行は逐語で
+'Now dispatching t1 — the test author.' であり、**agent は生きて前進していた**。
+実際に run-20260814-023742-67810 を init し、worktree
+/Users/yuki/.condukt/worktrees/run-20260814-023742-67810-t1 と同名 branch を作り終えていた
+(branch は main と同じ 6ece7c72 で commit 0 件だったので、失われた成果は setup の約 15 分ぶんだけ)。
+
+**根本原因**: この output ファイルは stream されない。tool の説明文にも
+'the full subagent JSONL transcript' としか書かれておらず、**逐次 flush されるとは書かれていない**。
+つまりファイルサイズは agent の進捗を測っていない。私は
+「観測できない」を「前進していない」と読んだ。これは CLAUDE.md 第3節が禁じる
+判定不能の permissive 側への解決の**鏡像**であり、しかも皮肉なことに、
+そのとき実装させようとしていた当のタスク (e99f61e4(b): 凍った fingerprint は死の証明ではない) と
+**まったく同じ誤り**である。自分のツーリングに対して逆向きに適用してしまった。
+
+**両方の読み**: (a) 実在の欠陥 — この output ファイルが進捗観測の手段として提示されている
+(tool 結果が output_file を明示する) にもかかわらず、進捗を表さないので誤読を誘発する。
+(b) 意図的な仕様 — transcript は完了時のアーカイブであって進捗 API ではなく、進捗は
+task-notification でのみ通知される設計。
+
+**見分ける方法**: 別の background agent を dispatch し、その agent が確実に長時間動く作業
+(例: 大きな cargo build) をしている最中に output ファイルのサイズを 30 秒間隔で 5 回測る。
+単調増加するなら (a) 側 (今回はたまたま buffer 境界に当たった)。ずっと不変で完了時に
+一気に書かれるなら (b) 側 (仕様であり、進捗シグナルとして使ってはならないことが確定する)。
+
+**当面の運用**: agent の liveness を output ファイルのサイズで判定しない。
+判定できないなら kill しない (kill は不可逆で、TaskStop に undo は無い)。
+再 dispatch は重複 worker を積むので、なおさら推測で殺さない。"""
+created_at = 1786643275
+updated_at = 1786643275
+weight = 0.0
+issue_number = 339
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/339"

@@ -12,6 +12,22 @@ A distributed multi-session system requires coordination. overwatch keeps a sing
 
 Subscription-native: one Rust binary, two hooks (SessionStart + Stop), no API key.
 
+### `(none)` vs `(unknown)` in the status view
+
+Every section of `overwatch status` prints `(none)` when it is empty. That reads
+as "checked, found nothing", so it is only printed when the source was actually
+observed. A source that could **not** be read — an unreadable/corrupt lease
+ledger, a helper binary that is absent or exited non-zero, undecodable JSON —
+renders `(unknown: <reason>)` instead, and a WARNING listing every such source
+goes to stderr.
+
+The distinction matters most in the **Sessions** pane: `(none)` there is the
+claim "no other session is live", which CLAUDE.md §8 tells every session not to
+assume, and which condukt's main-tree guard reads as a liveness input before
+allowing a commit in main's shared working tree. `status --json` therefore also
+carries a machine-readable `undetermined` array (`[{source, reason}]`), omitted
+entirely when every source was observed.
+
 ## What it manages
 
 A per-project registry at `~/.overwatch/<project-key>/overwatch/`:

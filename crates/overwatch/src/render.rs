@@ -1,7 +1,51 @@
 /// Status rendering and output formatting.
-use crate::aggregate::{self, BacklogSummary, HypoBuckets, RunRow, SessionRoster};
+///
+/// # `(none)` must mean "checked, found nothing"
+///
+/// Every section of this report renders an empty collection as `(none)`. That is
+/// only honest while emptiness is an observation. When a source could not be
+/// read at all, `(none)` states a fact nobody established — and it states the
+/// *reassuring* one, so nothing downstream ever questions it. The sections
+/// therefore consult [`aggregate::ProgressView::undetermined`] first and print
+/// `(unknown: …)` instead; the reason is carried into the line so a reader can
+/// act on it without re-running anything.
+///
+/// This is the same correction the statusline took in `3b1eb24` (CLAUDE.md §1):
+/// a blank render was being read as "plenty of headroom".
+use crate::aggregate::{
+    self, BacklogSummary, HypoBuckets, ProgressView, RunRow, SessionRoster, SOURCE_BACKLOG,
+    SOURCE_COMPASS_GAP, SOURCE_HYPOTHESES, SOURCE_RUNS, SOURCE_SESSIONS,
+};
 use anyhow::Result;
 use std::fmt::Write as _;
+
+/// Render the placeholder for a section: `(unknown: …)` when that source could
+/// not be observed, otherwise the caller's own "genuinely empty" text.
+fn placeholder(view: &ProgressView, source: &str, empty_text: &str) -> String {
+    match view.undetermined_reason(source) {
+        Some(reason) => format!("(unknown: {reason})\n"),
+        None => empty_text.to_string(),
+    }
+}
+
+/// Emit the loud stderr summary when any source was undetermined.
+///
+/// stdout carries the report a human skims; this goes to stderr so an
+/// undetermined source is also visible to anything capturing hook diagnostics,
+/// and so it cannot be mistaken for part of the report body.
+fn warn_undetermined(view: &ProgressView) {
+    if !view.has_undetermined() {
+        return;
+    }
+    eprintln!(
+        "overwatch status: WARNING — {} status source(s) could NOT be observed. \
+         The sections below marked `(unknown)` are NOT reports of zero.",
+        view.undetermined.len()
+    );
+    for u in &view.undetermined {
+        eprintln!("  [{}] {}", u.source, u.reason);
+    }
+}
 
 /// Render the full human-readable progress report, or JSON if `json` is true.
 ///
@@ -21,28 +65,26 @@ pub fn status(json: bool) -> Result<()> {
     let mut out = String::new();
 
     out.push_str("== Sessions ==\n");
-    out.push_str(&format_roster(
-        &view.sessions,
-        view.sessions_undetermined.as_deref(),
-    ));
+    out.push_str(&format_roster(&view, &view.sessions));
     out.push('\n');
 
     out.push_str("== PDO hypotheses ==\n");
-    out.push_str(&format_hypotheses(view.hypotheses.as_ref()));
+    out.push_str(&format_hypotheses(&view, view.hypotheses.as_ref()));
     out.push('\n');
 
     out.push_str("== Backlog ==\n");
-    out.push_str(&format_backlog(view.backlog.as_ref()));
+    out.push_str(&format_backlog(&view, view.backlog.as_ref()));
     out.push('\n');
 
     out.push_str("== Condukt runs ==\n");
-    out.push_str(&format_runs(&view.runs));
+    out.push_str(&format_runs(&view, &view.runs));
     out.push('\n');
 
     out.push_str("== Compass gap ==\n");
-    out.push_str(&format_compass_gap(view.compass_gap.as_deref()));
+    out.push_str(&format_compass_gap(&view, view.compass_gap.as_deref()));
 
     print!("{out}");
+    warn_undetermined(&view);
     Ok(())
 }
 
@@ -52,29 +94,24 @@ pub fn sessions(json: bool) -> Result<()> {
     let view = aggregate::build(&cwd);
 
     if json {
+        // The roster alone cannot express "unreadable ledger", so an
+        // undetermined roster is surfaced on stderr rather than being implied by
+        // an empty array. Callers scripting against this should prefer
+        // `status --json`, whose `undetermined` key is machine-readable.
         println!("{}", serde_json::to_string_pretty(&view.sessions)?);
+        warn_undetermined(&view);
         return Ok(());
     }
 
-    print!(
-        "{}",
-        format_roster(&view.sessions, view.sessions_undetermined.as_deref())
-    );
+    print!("{}", format_roster(&view, &view.sessions));
+    warn_undetermined(&view);
     Ok(())
 }
 
 /// Format the per-session lease roster as a readable table.
-fn format_roster(sessions: &[SessionRoster], undetermined: Option<&str>) -> String {
-    // Checked BEFORE emptiness: "(none)" is read by a human (and by the LLM
-    // reading the SessionStart hook output) as "no other session is working
-    // here", which is the exact conclusion CLAUDE.md section 8 forbids drawing
-    // without evidence. A ledger we could not read is not evidence of absence,
-    // so it must not borrow that sentence.
-    if let Some(reason) = undetermined {
-        return format!("(unknown — the lease ledger could not be read: {reason})\n");
-    }
+fn format_roster(view: &ProgressView, sessions: &[SessionRoster]) -> String {
     if sessions.is_empty() {
-        return "(none)\n".to_string();
+        return placeholder(view, SOURCE_SESSIONS, "(none)\n");
     }
 
     let mut out = String::new();
@@ -101,9 +138,9 @@ fn format_roster(sessions: &[SessionRoster], undetermined: Option<&str>) -> Stri
 }
 
 /// Format the PDO hypothesis bucket counts, emphasizing awaiting-measurement.
-fn format_hypotheses(hypotheses: Option<&HypoBuckets>) -> String {
+fn format_hypotheses(view: &ProgressView, hypotheses: Option<&HypoBuckets>) -> String {
     match hypotheses {
-        None => "(none)\n".to_string(),
+        None => placeholder(view, SOURCE_HYPOTHESES, "(none)\n"),
         Some(buckets) => {
             let mut out = String::new();
             let _ = writeln!(out, "  open:                 {}", buckets.open);
@@ -120,9 +157,9 @@ fn format_hypotheses(hypotheses: Option<&HypoBuckets>) -> String {
 }
 
 /// Format the backlog summary (pending/done/deferred + priority breakdown).
-fn format_backlog(backlog: Option<&BacklogSummary>) -> String {
+fn format_backlog(view: &ProgressView, backlog: Option<&BacklogSummary>) -> String {
     match backlog {
-        None => "(none)\n".to_string(),
+        None => placeholder(view, SOURCE_BACKLOG, "(none)\n"),
         Some(summary) => {
             let mut out = String::new();
             let _ = writeln!(out, "  pending:  {}", summary.pending);
@@ -142,9 +179,9 @@ fn format_backlog(backlog: Option<&BacklogSummary>) -> String {
 }
 
 /// Format open condukt runs as `run_id  done/total  goal`.
-fn format_runs(runs: &[RunRow]) -> String {
+fn format_runs(view: &ProgressView, runs: &[RunRow]) -> String {
     if runs.is_empty() {
-        return "(none)\n".to_string();
+        return placeholder(view, SOURCE_RUNS, "(none)\n");
     }
 
     let mut out = String::new();
@@ -160,9 +197,9 @@ fn format_runs(runs: &[RunRow]) -> String {
 }
 
 /// Format the compass gap string, if present.
-fn format_compass_gap(gap: Option<&str>) -> String {
+fn format_compass_gap(view: &ProgressView, gap: Option<&str>) -> String {
     match gap {
-        None => "(none)\n".to_string(),
+        None => placeholder(view, SOURCE_COMPASS_GAP, "(none)\n"),
         Some(gap) => format!("  {gap}\n"),
     }
 }
@@ -173,24 +210,88 @@ mod tests {
     use crate::aggregate::LeaseInfo;
     use std::collections::BTreeMap;
 
-    /// The rendered surface is what a human (and the LLM reading the
-    /// SessionStart hook) actually consumes, so the distinction has to survive
-    /// all the way to the text — not just to the struct field.
-    #[test]
-    fn an_unreadable_ledger_renders_unknown_rather_than_none() {
-        let out = format_roster(&[], Some("permission denied"));
-        assert!(
-            !out.contains("(none)"),
-            "an unreadable ledger must not borrow the sentence that means \
-             'nobody is working here'; got: {out}"
-        );
-        assert!(out.contains("unknown"), "got: {out}");
-        assert!(out.contains("permission denied"), "got: {out}");
+    /// A view in which every source WAS observed and all of them were empty.
+    fn observed_empty() -> ProgressView {
+        ProgressView::default()
+    }
+
+    /// A view in which `source` could not be observed.
+    fn unobserved(source: &str) -> ProgressView {
+        let mut v = ProgressView::default();
+        v.mark_undetermined(source, "boom");
+        v
     }
 
     #[test]
     fn test_format_roster_empty() {
-        assert_eq!(format_roster(&[], None), "(none)\n");
+        assert_eq!(format_roster(&observed_empty(), &[]), "(none)\n");
+    }
+
+    // ── Regression: `(none)` must not be printed for an unobserved source ────
+    //
+    // Before this, `aggregate::build` bound its lease load with `if let Ok(..)`,
+    // so a corrupt `leases.json` produced the same empty roster as an absent
+    // one, and this renderer printed byte-identical `(none)` for both. Measured
+    // end-to-end against the real binary: a truncated `leases.json` holding one
+    // LIVE lease from another session rendered exactly the same five `(none)`
+    // sections, exit 0, as a store that had never been written.
+    //
+    // `(none)` in the Sessions section is the claim "no other session is live" —
+    // the fact CLAUDE.md §8 tells every session NOT to assume, and the liveness
+    // input condukt's main-tree guard reads before permitting a commit in main's
+    // shared working tree (`condukt/src/maintree.rs`, which documents this very
+    // flattening as "a real residual hole, not a safe degradation").
+
+    #[test]
+    fn undetermined_sessions_render_unknown_not_none() {
+        let out = format_roster(&unobserved(SOURCE_SESSIONS), &[]);
+        assert!(
+            out.starts_with("(unknown:"),
+            "an unreadable lease ledger must not render as an observation, got {out:?}"
+        );
+        assert_ne!(out, "(none)\n");
+    }
+
+    #[test]
+    fn undetermined_render_carries_the_reason() {
+        let mut v = ProgressView::default();
+        v.mark_undetermined(SOURCE_SESSIONS, "leases.json present but corrupt");
+        assert!(format_roster(&v, &[]).contains("leases.json present but corrupt"));
+    }
+
+    #[test]
+    fn undetermined_backlog_renders_unknown_not_none() {
+        let out = format_backlog(&unobserved(SOURCE_BACKLOG), None);
+        assert!(out.starts_with("(unknown:"), "got {out:?}");
+    }
+
+    #[test]
+    fn undetermined_hypotheses_render_unknown_not_none() {
+        let out = format_hypotheses(&unobserved(SOURCE_HYPOTHESES), None);
+        assert!(out.starts_with("(unknown:"), "got {out:?}");
+    }
+
+    #[test]
+    fn undetermined_runs_render_unknown_not_none() {
+        let out = format_runs(&unobserved(SOURCE_RUNS), &[]);
+        assert!(out.starts_with("(unknown:"), "got {out:?}");
+    }
+
+    #[test]
+    fn undetermined_compass_gap_renders_unknown_not_none() {
+        let out = format_compass_gap(&unobserved(SOURCE_COMPASS_GAP), None);
+        assert!(out.starts_with("(unknown:"), "got {out:?}");
+    }
+
+    /// An undetermined mark on one source must not leak into the others: the
+    /// point of the fix is a per-source distinction, so a blanket `(unknown)`
+    /// everywhere would be a different (over-)report, not a correct one.
+    #[test]
+    fn undetermined_is_scoped_to_its_own_source() {
+        let v = unobserved(SOURCE_SESSIONS);
+        assert_eq!(format_backlog(&v, None), "(none)\n");
+        assert_eq!(format_runs(&v, &[]), "(none)\n");
+        assert_eq!(format_compass_gap(&v, None), "(none)\n");
     }
 
     #[test]
@@ -200,7 +301,7 @@ mod tests {
             leases: vec![],
             live_count: 0,
         }];
-        let out = format_roster(&sessions, None);
+        let out = format_roster(&observed_empty(), &sessions);
         assert!(out.contains("session s1"));
         assert!(out.contains("(no leases)"));
     }
@@ -225,14 +326,14 @@ mod tests {
             ],
             live_count: 1,
         }];
-        let out = format_roster(&sessions, None);
+        let out = format_roster(&observed_empty(), &sessions);
         assert!(out.contains("[live] task-1"));
         assert!(out.contains("[stale] task-2"));
     }
 
     #[test]
     fn test_format_hypotheses_none() {
-        assert_eq!(format_hypotheses(None), "(none)\n");
+        assert_eq!(format_hypotheses(&observed_empty(), None), "(none)\n");
     }
 
     #[test]
@@ -243,7 +344,7 @@ mod tests {
             validated: 5,
             rejected: 0,
         };
-        let out = format_hypotheses(Some(&buckets));
+        let out = format_hypotheses(&observed_empty(), Some(&buckets));
         assert!(out.contains("open:"));
         assert!(out.contains("awaiting-measurement"));
         assert!(out.contains('1'));
@@ -251,7 +352,7 @@ mod tests {
 
     #[test]
     fn test_format_backlog_none() {
-        assert_eq!(format_backlog(None), "(none)\n");
+        assert_eq!(format_backlog(&observed_empty(), None), "(none)\n");
     }
 
     #[test]
@@ -264,7 +365,7 @@ mod tests {
             deferred: 1,
             pending_by_priority,
         };
-        let out = format_backlog(Some(&summary));
+        let out = format_backlog(&observed_empty(), Some(&summary));
         assert!(out.contains("pending:  5"));
         assert!(out.contains("P0: 3"));
     }
@@ -277,13 +378,13 @@ mod tests {
             deferred: 0,
             pending_by_priority: BTreeMap::new(),
         };
-        let out = format_backlog(Some(&summary));
+        let out = format_backlog(&observed_empty(), Some(&summary));
         assert!(out.contains("by priority: (none)"));
     }
 
     #[test]
     fn test_format_runs_empty() {
-        assert_eq!(format_runs(&[]), "(none)\n");
+        assert_eq!(format_runs(&observed_empty(), &[]), "(none)\n");
     }
 
     #[test]
@@ -294,18 +395,18 @@ mod tests {
             total: 5,
             goal: Some("ship it".to_string()),
         }];
-        let out = format_runs(&runs);
+        let out = format_runs(&observed_empty(), &runs);
         assert!(out.contains("run-1  3/5  ship it"));
     }
 
     #[test]
     fn test_format_compass_gap_none() {
-        assert_eq!(format_compass_gap(None), "(none)\n");
+        assert_eq!(format_compass_gap(&observed_empty(), None), "(none)\n");
     }
 
     #[test]
     fn test_format_compass_gap_some() {
-        let out = format_compass_gap(Some("need more coverage"));
+        let out = format_compass_gap(&observed_empty(), Some("need more coverage"));
         assert!(out.contains("need more coverage"));
     }
 }

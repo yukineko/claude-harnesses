@@ -90,20 +90,11 @@ pub struct ProgressView {
     ///
     /// An empty vec means "the ledger was read and holds no live leases".
     /// It does NOT mean "the ledger could not be read" — that case is carried
-    /// by [`ProgressView::sessions_undetermined`], which must be consulted
-    /// before reading emptiness as absence.
+    /// by an [`UndeterminedSource`] with key [`SOURCE_SESSIONS`] in
+    /// [`ProgressView::undetermined`], which must be consulted before reading
+    /// emptiness as absence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sessions: Vec<SessionRoster>,
-    /// Why the lease ledger could not be read, when it could not be.
-    ///
-    /// `None` = the ledger was read (`sessions` is then a measurement).
-    /// `Some(reason)` = the ledger was NOT read, so `sessions` is empty for
-    /// lack of information rather than for lack of sessions. Serialized so a
-    /// JSON consumer can tell the two apart; `overwatch status` renders it as
-    /// an explicit `unknown` instead of the `(none)` that means "nobody is
-    /// working here".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sessions_undetermined: Option<String>,
     /// Backlog summary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backlog: Option<BacklogSummary>,
@@ -116,6 +107,73 @@ pub struct ProgressView {
     /// Compass gap (north_star / current gap).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compass_gap: Option<String>,
+    /// Sources that could NOT be observed on this build, and why.
+    ///
+    /// This is the field that keeps every other field honest. Each of them is a
+    /// count or a list, and an empty one is rendered as `(none)` — which reads
+    /// as "checked, found nothing". Without this list there is no way for a
+    /// reader (human or machine) to tell that apart from "could not check", and
+    /// the whole view is then a fail-open: the quietest possible output is also
+    /// the most reassuring one. Presence of an entry here means the matching
+    /// field's emptiness is NOT an observation.
+    ///
+    /// `skip_serializing_if` keeps the key absent (rather than `[]`) on the
+    /// happy path, so `overwatch status --json` is unchanged byte-for-byte when
+    /// everything was readable; `default` pairs with it for the cache
+    /// round-trip, like every other collection field above.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub undetermined: Vec<UndeterminedSource>,
+}
+
+/// Machine key for the session-roster source.
+pub const SOURCE_SESSIONS: &str = "sessions";
+/// Machine key for the backlog source.
+pub const SOURCE_BACKLOG: &str = "backlog";
+/// Machine key for the PDO-hypotheses source.
+pub const SOURCE_HYPOTHESES: &str = "hypotheses";
+/// Machine key for the condukt-runs source.
+pub const SOURCE_RUNS: &str = "runs";
+/// Machine key for the compass-gap source.
+pub const SOURCE_COMPASS_GAP: &str = "compass_gap";
+
+/// One status source that could not be observed, and why.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UndeterminedSource {
+    /// Stable machine key — one of the `SOURCE_*` constants.
+    pub source: String,
+    /// Human-readable reason, carried so the render can say *why* it is unknown
+    /// rather than merely that it is.
+    pub reason: String,
+}
+
+impl ProgressView {
+    /// Record that `source` could not be observed. Idempotent per source: the
+    /// first reason wins, so a caller cannot accidentally overwrite the root
+    /// cause with a downstream symptom.
+    pub fn mark_undetermined(&mut self, source: &str, reason: impl Into<String>) {
+        if self.undetermined.iter().any(|u| u.source == source) {
+            return;
+        }
+        self.undetermined.push(UndeterminedSource {
+            source: source.to_string(),
+            reason: reason.into(),
+        });
+    }
+
+    /// The reason `source` is unknown, or `None` if it was observed.
+    #[must_use]
+    pub fn undetermined_reason(&self, source: &str) -> Option<&str> {
+        self.undetermined
+            .iter()
+            .find(|u| u.source == source)
+            .map(|u| u.reason.as_str())
+    }
+
+    /// True iff at least one source could not be observed.
+    #[must_use]
+    pub fn has_undetermined(&self) -> bool {
+        !self.undetermined.is_empty()
+    }
 }
 
 /// Build a session roster from a lease registry.
@@ -152,7 +210,11 @@ pub fn roster_from_leases(leases: &LeaseRegistry, now: i64) -> Vec<SessionRoster
 
 /// Parse backlog JSON (from `backlog list --json`).
 /// Expected format: array of items with fields like {key, title, status, priority}.
-pub fn parse_backlog(json: &str) -> BacklogSummary {
+///
+/// Undecodable JSON is `Err`, NOT an empty summary: "the backlog tool emitted
+/// something we cannot read" and "the backlog is empty" are different facts and
+/// `pending: 0` states the second one.
+pub fn parse_backlog(json: &str) -> Result<BacklogSummary, String> {
     #[derive(Deserialize)]
     struct BacklogItem {
         #[serde(default)]
@@ -161,75 +223,79 @@ pub fn parse_backlog(json: &str) -> BacklogSummary {
         priority: Option<String>,
     }
 
-    match serde_json::from_str::<Vec<BacklogItem>>(json) {
-        Ok(items) => {
-            let mut summary = BacklogSummary::default();
-            let mut pending_by_priority: BTreeMap<String, usize> = BTreeMap::new();
+    let items = serde_json::from_str::<Vec<BacklogItem>>(json)
+        .map_err(|e| format!("`backlog list --json` emitted undecodable JSON: {e}"))?;
 
-            for item in items {
-                match item.status.as_deref() {
-                    Some("done") => summary.done += 1,
-                    Some("deferred") => summary.deferred += 1,
-                    _ => {
-                        summary.pending += 1;
-                        if let Some(pri) = item.priority {
-                            *pending_by_priority.entry(pri).or_insert(0) += 1;
-                        }
-                    }
+    let mut summary = BacklogSummary::default();
+    let mut pending_by_priority: BTreeMap<String, usize> = BTreeMap::new();
+
+    for item in items {
+        match item.status.as_deref() {
+            Some("done") => summary.done += 1,
+            Some("deferred") => summary.deferred += 1,
+            _ => {
+                summary.pending += 1;
+                if let Some(pri) = item.priority {
+                    *pending_by_priority.entry(pri).or_insert(0) += 1;
                 }
             }
-
-            summary.pending_by_priority = pending_by_priority;
-            summary
         }
-        Err(_) => BacklogSummary::default(),
     }
+
+    summary.pending_by_priority = pending_by_priority;
+    Ok(summary)
 }
 
 /// Parse PDO hypothesis JSON (from `hypothesis list --json`).
 /// Expected format: array of items with a field like {status: "open"|"awaiting-measurement"|"validated"|"rejected"}.
-pub fn bucket_hypotheses(json: &str) -> HypoBuckets {
+/// Undecodable JSON is `Err`, NOT empty buckets — see [`parse_backlog`].
+pub fn bucket_hypotheses(json: &str) -> Result<HypoBuckets, String> {
     #[derive(Deserialize)]
     struct HypoItem {
         #[serde(default)]
         status: Option<String>,
     }
 
-    match serde_json::from_str::<Vec<HypoItem>>(json) {
-        Ok(items) => {
-            let mut buckets = HypoBuckets::default();
-            for item in items {
-                match item.status.as_deref() {
-                    Some("open") => buckets.open += 1,
-                    Some("awaiting-measurement") => buckets.awaiting_measurement += 1,
-                    Some("validated") => buckets.validated += 1,
-                    Some("rejected") => buckets.rejected += 1,
-                    _ => {}
-                }
-            }
-            buckets
+    let items = serde_json::from_str::<Vec<HypoItem>>(json)
+        .map_err(|e| format!("`hypothesis list --json` emitted undecodable JSON: {e}"))?;
+
+    let mut buckets = HypoBuckets::default();
+    for item in items {
+        match item.status.as_deref() {
+            Some("open") => buckets.open += 1,
+            Some("awaiting-measurement") => buckets.awaiting_measurement += 1,
+            Some("validated") => buckets.validated += 1,
+            Some("rejected") => buckets.rejected += 1,
+            _ => {}
         }
-        Err(_) => HypoBuckets::default(),
     }
+    Ok(buckets)
 }
 
 /// Parse condukt runs TSV (from `condukt state list`).
 /// Expected format: tab-separated, one run per line: `run_id<TAB>done/total<TAB>goal`
-pub fn parse_condukt_runs(tsv: &str) -> Vec<RunRow> {
+///
+/// A line whose `done/total` field does not parse is `Err`, not a silent `0/0`:
+/// the old `unwrap_or(0)` rendered a malformed row as "no progress", which reads
+/// as a real observation about the run.
+pub fn parse_condukt_runs(tsv: &str) -> Result<Vec<RunRow>, String> {
     let mut rows = Vec::new();
     for line in tsv.lines() {
         let parts: Vec<&str> = line.split('\t').collect();
         if parts.len() >= 2 {
             let run_id = parts[0].trim().to_string();
-            let progress_parts: Vec<&str> = parts[1].split('/').collect();
-            let done = progress_parts
-                .first()
-                .and_then(|s| s.trim().parse::<usize>().ok())
-                .unwrap_or(0);
-            let total = progress_parts
-                .get(1)
-                .and_then(|s| s.trim().parse::<usize>().ok())
-                .unwrap_or(0);
+            let (done_str, total_str) = parts[1].split_once('/').ok_or_else(|| {
+                format!("`condukt state list` row {run_id:?}: progress field is not `done/total`")
+            })?;
+            let parse = |s: &str, which: &str| {
+                s.trim().parse::<usize>().map_err(|e| {
+                    format!(
+                        "`condukt state list` row {run_id:?}: {which} count is unparseable: {e}"
+                    )
+                })
+            };
+            let done = parse(done_str, "done")?;
+            let total = parse(total_str, "total")?;
             let goal = parts
                 .get(2)
                 .map(|s| s.trim().to_string())
@@ -242,18 +308,48 @@ pub fn parse_condukt_runs(tsv: &str) -> Vec<RunRow> {
             });
         }
     }
-    rows
+    Ok(rows)
 }
 
-/// Shell a command, returning stdout if successful, else None (fail-soft).
-fn shell_soft(cmd: &str, args: &[&str]) -> Option<String> {
+/// The outcome of shelling one status source.
+///
+/// Three states, not two. The retired `shell_soft` returned `Option<String>`
+/// and so collapsed "the tool is not installed", "the tool ran and failed", and
+/// "the tool emitted non-UTF-8" into the same `None` that the caller then
+/// rendered as `(none)` — indistinguishable from "the tool ran and found
+/// nothing". Only `Output` is an observation; both other arms are refusals to
+/// guess, and carry why (CLAUDE.md §3).
+enum SourceOutput {
+    /// The command ran to a successful exit and produced this stdout.
+    Output(String),
+    /// The source could not be observed. Carries the reason for the render.
+    Undetermined(String),
+}
+
+/// Shell one status source. Never folds a failure into an empty observation.
+fn shell_source(cmd: &str, args: &[&str]) -> SourceOutput {
     use std::process::Command;
 
-    let output = Command::new(cmd).args(args).output().ok()?;
-    if output.status.success() {
-        String::from_utf8(output.stdout).ok()
-    } else {
-        None
+    let output = match Command::new(cmd).args(args).output() {
+        Ok(o) => o,
+        Err(e) => {
+            return SourceOutput::Undetermined(format!(
+                "`{cmd}` could not be run ({e}); this is NOT a report that {cmd} is empty"
+            ));
+        }
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.trim().lines().next().unwrap_or("(no stderr)");
+        return SourceOutput::Undetermined(format!(
+            "`{cmd} {}` exited {} ({detail})",
+            args.join(" "),
+            output.status
+        ));
+    }
+    match String::from_utf8(output.stdout) {
+        Ok(s) => SourceOutput::Output(s),
+        Err(e) => SourceOutput::Undetermined(format!("`{cmd}` emitted non-UTF-8 stdout: {e}")),
     }
 }
 
@@ -267,7 +363,12 @@ fn shell_soft(cmd: &str, args: &[&str]) -> Option<String> {
 /// `store::load_leases` already distinguishes the three answers correctly — a
 /// missing file is `Ok(empty)`, corrupt JSON and an unreadable file are both
 /// `Err` — so the only question here is whether the caller PRESERVES that
-/// distinction or collapses it.
+/// distinction or collapses it. Binding it with `if let Ok(..)` — as `build`
+/// once did — threw that distinction away and left `sessions` empty for BOTH,
+/// which renders as `(none)` = "no other session is live". That is the single
+/// most load-bearing fact in this output: CLAUDE.md §8 says to assume another
+/// session always exists, and condukt's main-tree guard reads this roster as a
+/// liveness input before allowing a commit in main's shared working tree.
 pub(crate) fn apply_leases(
     view: &mut ProgressView,
     loaded: anyhow::Result<LeaseRegistry>,
@@ -277,47 +378,74 @@ pub(crate) fn apply_leases(
         Ok(mut leases) => {
             store::reap_stale(&mut leases, now);
             view.sessions = roster_from_leases(&leases, now);
-            view.sessions_undetermined = None;
         }
         // `sessions` deliberately stays empty — there is nothing to report —
         // but the REASON is carried alongside it so that emptiness is never
         // mistaken for a measurement. Dropping this arm was the fail-open.
         Err(e) => {
             view.sessions = Vec::new();
-            view.sessions_undetermined = Some(e.to_string());
+            view.mark_undetermined(
+                SOURCE_SESSIONS,
+                format!("the lease ledger could not be read ({e}); live sessions are UNKNOWN"),
+            );
         }
     }
 }
 
-/// Build the full ProgressView (infallible, fail-soft).
+/// Build the full ProgressView.
+///
+/// Infallible in the sense that it always returns a view (this runs from the
+/// SessionStart/Stop hooks and must not abort a turn), but NOT fail-soft in the
+/// sense of substituting empties: every source that could not be observed is
+/// recorded in [`ProgressView::undetermined`] so the renderer prints `(unknown)`
+/// rather than `(none)`.
 pub fn build(cwd: &Path) -> ProgressView {
     let now = store::now();
     let mut view = ProgressView::default();
 
     // 1. Overwatch ledger: load live leases, reap stale, build session rosters.
+    //
+    // The absent-vs-unreadable split lives in `apply_leases` so the FAILURE
+    // path stays reachable from a test without touching the real store.
     apply_leases(&mut view, store::load_leases(cwd), now);
 
-    // 2. Backlog: try `backlog list --json`, fall back to plain text parsing.
-    if let Some(json_output) = shell_soft("backlog", &["list", "--json"]) {
-        view.backlog = Some(parse_backlog(&json_output));
+    // 2. Backlog: `backlog list --json`.
+    match shell_source("backlog", &["list", "--json"]) {
+        SourceOutput::Output(json) => match parse_backlog(&json) {
+            Ok(summary) => view.backlog = Some(summary),
+            Err(why) => view.mark_undetermined(SOURCE_BACKLOG, why),
+        },
+        SourceOutput::Undetermined(why) => view.mark_undetermined(SOURCE_BACKLOG, why),
     }
 
-    // 3. PDO hypotheses: try `hypothesis list --json`.
-    if let Some(json_output) = shell_soft("hypothesis", &["list", "--json"]) {
-        view.hypotheses = Some(bucket_hypotheses(&json_output));
+    // 3. PDO hypotheses: `hypothesis list --json`.
+    match shell_source("hypothesis", &["list", "--json"]) {
+        SourceOutput::Output(json) => match bucket_hypotheses(&json) {
+            Ok(buckets) => view.hypotheses = Some(buckets),
+            Err(why) => view.mark_undetermined(SOURCE_HYPOTHESES, why),
+        },
+        SourceOutput::Undetermined(why) => view.mark_undetermined(SOURCE_HYPOTHESES, why),
     }
 
-    // 4. Condukt runs: shell `condukt state list` (TAB-separated).
-    if let Some(output) = shell_soft("condukt", &["state", "list"]) {
-        view.runs = parse_condukt_runs(&output);
+    // 4. Condukt runs: `condukt state list` (TAB-separated).
+    match shell_source("condukt", &["state", "list"]) {
+        SourceOutput::Output(tsv) => match parse_condukt_runs(&tsv) {
+            Ok(rows) => view.runs = rows,
+            Err(why) => view.mark_undetermined(SOURCE_RUNS, why),
+        },
+        SourceOutput::Undetermined(why) => view.mark_undetermined(SOURCE_RUNS, why),
     }
 
-    // 5. Compass gap: shell `compass gap` (plain text, optional).
-    if let Some(gap) = shell_soft("compass", &["gap"]) {
-        let gap_str = gap.trim().to_string();
-        if !gap_str.is_empty() {
-            view.compass_gap = Some(gap_str);
+    // 5. Compass gap: `compass gap` (plain text). An empty stdout here IS a real
+    // observation ("no gap"), so it stays `None` without an undetermined mark.
+    match shell_source("compass", &["gap"]) {
+        SourceOutput::Output(gap) => {
+            let gap_str = gap.trim().to_string();
+            if !gap_str.is_empty() {
+                view.compass_gap = Some(gap_str);
+            }
         }
+        SourceOutput::Undetermined(why) => view.mark_undetermined(SOURCE_COMPASS_GAP, why),
     }
 
     view
@@ -414,10 +542,12 @@ mod tests {
             0,
         );
         assert!(
-            view.sessions_undetermined.is_some(),
+            view.undetermined
+                .iter()
+                .any(|u| u.source == SOURCE_SESSIONS),
             "a ledger that could not be read must be distinguishable from an \
-             empty one; sessions_undetermined was None, so a reader sees the \
-             same '(none)' that means nobody is working here"
+             empty one; no SOURCE_SESSIONS entry was recorded, so a reader sees \
+             the same '(none)' that means nobody is working here"
         );
     }
 
@@ -431,7 +561,10 @@ mod tests {
         let mut view = ProgressView::default();
         apply_leases(&mut view, Ok(LeaseRegistry::new()), 0);
         assert!(
-            view.sessions_undetermined.is_none(),
+            !view
+                .undetermined
+                .iter()
+                .any(|u| u.source == SOURCE_SESSIONS),
             "an empty-but-readable ledger must remain a measurement"
         );
         assert!(view.sessions.is_empty());
@@ -456,7 +589,10 @@ mod tests {
         );
         let mut view = ProgressView::default();
         apply_leases(&mut view, Ok(leases), 100);
-        assert!(view.sessions_undetermined.is_none());
+        assert!(!view
+            .undetermined
+            .iter()
+            .any(|u| u.source == SOURCE_SESSIONS));
         assert_eq!(view.sessions.len(), 1);
         assert_eq!(view.sessions[0].session_id, "sess-a");
     }
@@ -598,7 +734,7 @@ mod tests {
     #[test]
     fn test_parse_backlog_empty() {
         let json = "[]";
-        let summary = parse_backlog(json);
+        let summary = parse_backlog(json).expect("valid fixture JSON");
         assert_eq!(summary.pending, 0);
         assert_eq!(summary.done, 0);
         assert_eq!(summary.deferred, 0);
@@ -615,7 +751,7 @@ mod tests {
             {"status": "deferred", "priority": "P2"}
         ]"#;
 
-        let summary = parse_backlog(json);
+        let summary = parse_backlog(json).expect("valid fixture JSON");
         assert_eq!(summary.done, 2);
         assert_eq!(summary.pending, 3);
         assert_eq!(summary.deferred, 1);
@@ -631,26 +767,32 @@ mod tests {
             {"status": "deferred"}
         ]"#;
 
-        let summary = parse_backlog(json);
+        let summary = parse_backlog(json).expect("valid fixture JSON");
         assert_eq!(summary.pending, 1);
         assert_eq!(summary.done, 1);
         assert_eq!(summary.deferred, 1);
         assert!(summary.pending_by_priority.is_empty());
     }
 
+    // These three `_invalid_json` tests previously asserted that garbage input
+    // yields `pending: 0` / all-zero buckets — i.e. they wrote the fail-open
+    // down as the contract, so the assertion itself was what kept it in place
+    // (CLAUDE.md §2: an assert can fix a defect as a specification). The
+    // observation is unchanged; only the expected answer is: undecodable input
+    // is `Err`, and the caller marks the source undetermined.
+
     #[test]
-    fn test_parse_backlog_invalid_json() {
-        let json = "not valid json";
-        let summary = parse_backlog(json);
-        assert_eq!(summary.pending, 0);
-        assert_eq!(summary.done, 0);
-        assert_eq!(summary.deferred, 0);
+    fn test_parse_backlog_invalid_json_is_error_not_zero() {
+        assert!(
+            parse_backlog("not valid json").is_err(),
+            "undecodable backlog JSON must not read as an empty backlog"
+        );
     }
 
     #[test]
     fn test_bucket_hypotheses_empty() {
         let json = "[]";
-        let buckets = bucket_hypotheses(json);
+        let buckets = bucket_hypotheses(json).expect("valid fixture JSON");
         assert_eq!(buckets.open, 0);
         assert_eq!(buckets.awaiting_measurement, 0);
         assert_eq!(buckets.validated, 0);
@@ -669,7 +811,7 @@ mod tests {
             {"status": "rejected"}
         ]"#;
 
-        let buckets = bucket_hypotheses(json);
+        let buckets = bucket_hypotheses(json).expect("valid fixture JSON");
         assert_eq!(buckets.open, 2);
         assert_eq!(buckets.awaiting_measurement, 1);
         assert_eq!(buckets.validated, 3);
@@ -677,26 +819,113 @@ mod tests {
     }
 
     #[test]
-    fn test_bucket_hypotheses_invalid_json() {
-        let json = "not json";
-        let buckets = bucket_hypotheses(json);
-        assert_eq!(buckets.open, 0);
-        assert_eq!(buckets.awaiting_measurement, 0);
-        assert_eq!(buckets.validated, 0);
-        assert_eq!(buckets.rejected, 0);
+    fn test_bucket_hypotheses_invalid_json_is_error_not_zero() {
+        assert!(
+            bucket_hypotheses("not json").is_err(),
+            "undecodable hypothesis JSON must not read as zero open hypotheses"
+        );
+    }
+
+    #[test]
+    fn test_parse_condukt_runs_unparseable_progress_is_error_not_zero() {
+        // The retired `unwrap_or(0)` turned this row into a confident `0/0`.
+        assert!(
+            parse_condukt_runs("run-001\tabc/def\tGoal").is_err(),
+            "an unparseable progress field must not read as a run at 0/0"
+        );
+        assert!(
+            parse_condukt_runs("run-001\t3\tGoal").is_err(),
+            "a progress field with no `/` must not read as a run at 0/0"
+        );
+    }
+
+    /// The empty case must stay a real observation — the fix must not make
+    /// everything undetermined, which would be a different wrong answer.
+    #[test]
+    fn genuinely_empty_sources_stay_known() {
+        assert_eq!(parse_backlog("[]").unwrap().pending, 0);
+        assert_eq!(bucket_hypotheses("[]").unwrap().open, 0);
+        assert!(parse_condukt_runs("").unwrap().is_empty());
+    }
+
+    // ── ProgressView undetermined bookkeeping ───────────────────────────────
+
+    #[test]
+    fn default_view_has_nothing_undetermined() {
+        assert!(!ProgressView::default().has_undetermined());
+        assert_eq!(
+            ProgressView::default().undetermined_reason(SOURCE_SESSIONS),
+            None
+        );
+    }
+
+    #[test]
+    fn mark_undetermined_is_queryable_per_source() {
+        let mut v = ProgressView::default();
+        v.mark_undetermined(SOURCE_SESSIONS, "ledger unreadable");
+        assert!(v.has_undetermined());
+        assert_eq!(
+            v.undetermined_reason(SOURCE_SESSIONS),
+            Some("ledger unreadable")
+        );
+        assert_eq!(v.undetermined_reason(SOURCE_BACKLOG), None);
+    }
+
+    #[test]
+    fn mark_undetermined_keeps_the_first_reason() {
+        let mut v = ProgressView::default();
+        v.mark_undetermined(SOURCE_BACKLOG, "root cause");
+        v.mark_undetermined(SOURCE_BACKLOG, "downstream symptom");
+        assert_eq!(v.undetermined.len(), 1);
+        assert_eq!(v.undetermined_reason(SOURCE_BACKLOG), Some("root cause"));
+    }
+
+    /// The status cache round-trips a whole `ProgressView` through JSON on every
+    /// write/read (`build_cached`). If `undetermined` did not survive that trip,
+    /// a cached view would silently revert to the fail-open render for the
+    /// entire TTL — the fix would hold on a cold build and evaporate on a warm
+    /// one, which is worse than not having it (it would look fixed).
+    #[test]
+    fn undetermined_survives_the_status_cache_round_trip() {
+        let mut v = ProgressView::default();
+        v.mark_undetermined(SOURCE_SESSIONS, "leases.json present but corrupt");
+        let json = serde_json::to_string(&v).unwrap();
+        let back: ProgressView = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.undetermined_reason(SOURCE_SESSIONS),
+            Some("leases.json present but corrupt")
+        );
+    }
+
+    /// `--json` is the machine surface condukt's main-tree guard reads. The key
+    /// must be absent on the clean path (so the existing contract is unchanged)
+    /// and present the moment a source is unobservable (so a consumer CAN tell,
+    /// which the old shape made impossible).
+    #[test]
+    fn json_omits_undetermined_when_clean_and_emits_it_when_not() {
+        let clean = serde_json::to_value(ProgressView::default()).unwrap();
+        assert!(clean.get("undetermined").is_none());
+
+        let mut v = ProgressView::default();
+        v.mark_undetermined(SOURCE_SESSIONS, "unreadable");
+        let dirty = serde_json::to_value(&v).unwrap();
+        assert_eq!(
+            dirty["undetermined"][0]["source"].as_str(),
+            Some(SOURCE_SESSIONS)
+        );
     }
 
     #[test]
     fn test_parse_condukt_runs_empty() {
         let tsv = "";
-        let runs = parse_condukt_runs(tsv);
+        let runs = parse_condukt_runs(tsv).expect("valid fixture TSV");
         assert!(runs.is_empty());
     }
 
     #[test]
     fn test_parse_condukt_runs_single() {
         let tsv = "run-001\t5/10\tBuild feature X";
-        let runs = parse_condukt_runs(tsv);
+        let runs = parse_condukt_runs(tsv).expect("valid fixture TSV");
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].run_id, "run-001");
         assert_eq!(runs[0].done, 5);
@@ -707,7 +936,7 @@ mod tests {
     #[test]
     fn test_parse_condukt_runs_multiple() {
         let tsv = "run-001\t5/10\tPhase 1\nrun-002\t2/5\t\nrun-003\t0/3\tInitial";
-        let runs = parse_condukt_runs(tsv);
+        let runs = parse_condukt_runs(tsv).expect("valid fixture TSV");
         assert_eq!(runs.len(), 3);
 
         assert_eq!(runs[0].run_id, "run-001");
@@ -729,7 +958,7 @@ mod tests {
     #[test]
     fn test_parse_condukt_runs_no_goal() {
         let tsv = "run-001\t3/7";
-        let runs = parse_condukt_runs(tsv);
+        let runs = parse_condukt_runs(tsv).expect("valid fixture TSV");
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].run_id, "run-001");
         assert_eq!(runs[0].done, 3);
@@ -741,7 +970,7 @@ mod tests {
     fn test_parse_condukt_runs_malformed() {
         // Line with only run_id (missing progress) should be skipped
         let tsv = "run-001\nrun-002\t5/10\tGoal";
-        let runs = parse_condukt_runs(tsv);
+        let runs = parse_condukt_runs(tsv).expect("valid fixture TSV");
         assert_eq!(runs.len(), 1); // Only run-002 is valid
         assert_eq!(runs[0].run_id, "run-002");
     }
@@ -860,7 +1089,7 @@ mod tests {
             {"status": "done", "priority": "P1"}
         ]"#;
 
-        let summary = parse_backlog(json);
+        let summary = parse_backlog(json).expect("valid fixture JSON");
         assert_eq!(summary.pending, 1);
         assert_eq!(summary.done, 1);
     }

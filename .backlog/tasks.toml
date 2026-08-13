@@ -10993,3 +10993,39 @@ updated_at = 1786637812
 weight = 0.0
 issue_number = 335
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/335"
+
+[[task]]
+id = "c51acbdc"
+title = "rollout の canary が overwatch 暗転時に JSONDecodeError でクラッシュする — 判定不能として refuse に倒し、resolve_overwatch_bin が PATH の暗転 launcher を優先しないようにする"
+project = "C:/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1786070195
+updated_at = 1786070195
+weight = 0.0
+
+[[task]]
+id = "4442a2e7"
+title = "ship が enabled=false のまま scripts/parked-plugins.json に parked 宣言が無い — 宣言するか enable する"
+project = "C:/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1786070195
+updated_at = 1786070195
+weight = 0.0
+
+[[task]]
+id = "3b9f1665"
+title = "build-plugin-bin.sh (cargo build -p) と rebuild-plugins.sh (--workspace) の feature unification 差で repo/cache の bin が永久 drift しうる — 更新経路を --stage-repo に一本化する"
+project = "C:/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1786070195
+updated_at = 1786070195
+weight = 0.0

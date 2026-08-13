@@ -11356,3 +11356,51 @@ updated_at = 1786643275
 weight = 0.0
 issue_number = 339
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/339"
+
+[[task]]
+id = "a4966045"
+title = "backlog home store に project パスが解決できなかった junk エントリが 7 件残る (temp dir 6件 + 素の iro 1件)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 2026-08-14、測定点 7d15919d。measurement: /Users/yuki/.backlog/tasks.toml を tomllib で直接パースし、status が pending か claimed のものを project 別に集計した (.scratch/mech-dupes.py)。
+
+open entries in home store across ALL projects: 48
+      25  /Users/yuki/src/iro
+       6  iro                                    <-- 素のキー。/Users/yuki/src/iro と重複した別プロジェクト扱いになっている
+       4  /var/folders/0z/.../T/tmp.CV0j2uLIk2   <-- temp dir
+       1  /private/var/folders/0z/.../T/.tmpu5T5yJ
+       1  /private/var/folders/0z/.../T/.tmp2ttQHs
+       1  /private/var/folders/0z/.../T/.tmpsImyOr
+       1  /private/var/folders/0z/.../T/.tmpu8t8fl
+
+計 7 件 (temp dir 系 6 件 + 素の iro キー1件…iro は 6 件なので合計は 12 件だが、iro の 6 件は
+実プロジェクトの項目が別キーに落ちた可能性が高いので扱いが異なる。temp dir 系 6 件は
+テスト実行かサンドボックスの残骸で、実プロジェクトのキューには永久に現れない)。
+
+**なぜ問題か**: これらは **どの実プロジェクトのキューからも見えない**。backlog list も
+next --claim も project キーで絞るので、temp dir をキーに持つ項目は誰にも着手されないまま
+永久に残る。素の iro キーの 6 件は /Users/yuki/src/iro のキューから漏れており、
+そのプロジェクトで「キューは空」と読まれうる (5ba13c3e と同型の、ただし小型の fail-open)。
+
+**両方の読み**: (a) 実在の欠陥 — project パスの正規化が失敗したとき、backlog は
+それを検出せず temp dir や素の名前をそのままキーにして書き込んでいる。canonicalize が
+判定不能を permissive に扱っている疑い (関連: f234d93f が canonicalize_project_with_marker の
+存在確認失敗ブランチに kill-rate ゼロを報告している — 同じ関数である可能性が高い)。
+(b) 意図的/無害 — テスト由来のゴミであり、実運用では起きない。
+
+**見分ける方法**: temp dir をキーに持つ 6 件の created_at を見て、それが cargo test の
+実行時刻と一致するかを確認する。一致すればテスト由来 (b)。一致せず通常のセッション時刻なら、
+実運用で project 解決が失敗しており (a)。素の iro キーの 6 件についても同様に、
+どの経路が --project を渡さずに add したのかを created_at と突き合わせる。
+
+**掃除の是非は先に判定を要する**: temp dir 系は消してよさそうに見えるが、
+(a) 側だった場合それは実在の作業項目が誤ったキーに落ちた証拠なので、
+消すと 5ba13c3e と同じ「見えないまま失われる」を再演する。判定してから掃除すること。"""
+created_at = 1786643704
+updated_at = 1786643704
+weight = 0.0
+issue_number = 340
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/340"

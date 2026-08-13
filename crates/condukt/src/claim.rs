@@ -2077,4 +2077,188 @@ mod tests {
         );
         std::fs::remove_dir_all(&tmp).ok();
     }
+
+    // ── the run-scoped head signal's two multi-worktree properties ─────────
+    //
+    // `run_worktree_head_signal` folds every worktree its run records into one
+    // value, and it does two things to make that fold well-defined:
+    //
+    //   (1) it sorts the worktrees by task id, so the run state's task ORDER is
+    //       not an input; and
+    //   (2) it folds each HEAD together with the task id that owns it, so a
+    //       HEAD is bound to a task rather than floating free in a sequence.
+    //
+    // Both were unprotected: with the existing fixture every run records
+    // exactly ONE worktree, so neither ordering nor identity can show up at the
+    // observation point. Measured independently at 639813db by deleting each
+    // construct — `worktrees.sort_by(...)` removed, and the task id dropped
+    // from the fold — the whole 914-test suite stayed green both times (backlog
+    // 22a72fdf). A construct no test can kill is a judgment, not an
+    // observation, so each gets its own discriminating test below.
+    //
+    // Both go through `claim_progress`, not the helper, because that is where
+    // reap authority lives, and both hold the OTHER two signals frozen (the
+    // transcript is seeded once; every `updated_at` is pinned to 9_000) so the
+    // head signal is the only thing that can move the fingerprint.
+
+    /// Rewrite `run_id`'s state so that exactly `entries` record a worktree, in
+    /// the given order, with every `updated_at` FROZEN. The freeze is what
+    /// makes these tests discriminating: if the run-tasks signal could move for
+    /// a legitimate reason, a verdict change would prove nothing about the head
+    /// signal.
+    fn save_run_worktrees(cfg: &Config, cwd: &Path, run_id: &str, entries: &[(&str, &Path)]) {
+        let rs = crate::state::RunState {
+            run_id: run_id.to_string(),
+            goal: "g".into(),
+            tasks: entries
+                .iter()
+                .map(|(id, wt)| crate::state::TaskState {
+                    id: (*id).to_string(),
+                    status: crate::state::Status::Running,
+                    worktree: Some(wt.to_string_lossy().into_owned()),
+                    updated_at: Some(9_000),
+                    ..Default::default()
+                })
+                .collect(),
+            paused: false,
+            terminal_label: None,
+            recorded_at: None,
+        };
+        rs.save(cfg, cwd).unwrap();
+    }
+
+    /// (B1) Property (1): the run state's task ORDER must not be an input.
+    ///
+    /// Two worktrees, both frozen, and between the two samples the run state is
+    /// rewritten with its tasks in the opposite order — a pure reordering, no
+    /// commit anywhere, no `updated_at` change. Nothing advanced, so the
+    /// verdict must be `Known(Stalled)`.
+    ///
+    /// Without the `sort_by`, the fold walks the run state's own task order, a
+    /// reordering alone changes the fingerprint, and a genuinely frozen holder
+    /// reads as `Progressing` — an un-reapable claim, which is the very
+    /// fail-open this fix exists to close, re-entering through the back door.
+    #[test]
+    fn claim_progress_head_signal_ignores_run_state_task_ordering() {
+        let tmp = make_tmp_dir("claim-scope-order");
+        let wt_a = tmp.join("wt-a");
+        let wt_b = tmp.join("wt-b");
+        init_git_repo(&wt_a);
+        init_git_repo(&wt_b);
+        // Two repos initialised in the same second produce the IDENTICAL commit
+        // sha (same tree, message, author and timestamp), so B needs one extra
+        // commit to be distinguishable at all.
+        git_advance_head(&wt_b);
+        assert_ne!(
+            head_of(&wt_a),
+            head_of(&wt_b),
+            "fixture precondition: the two worktrees must have distinct HEADs, \
+             or a reordering could not change the fold even without the sort"
+        );
+        let (cfg, claim, home) = progress_fixture(&tmp, "runOrder", Some(&wt_a));
+        save_run_worktrees(&cfg, &tmp, "runOrder", &[("t-a", &wt_a), ("t-b", &wt_b)]);
+        let _h = pin_home(&home);
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+
+        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        assert!(
+            matches!(v1, Determination::Undetermined(_)),
+            "first sample (no prior snapshot) must be Undetermined, got {v1:?}"
+        );
+
+        let (repo_head, a_head, b_head) = (head_of(&tmp), head_of(&wt_a), head_of(&wt_b));
+        // The ONLY change: the same two tasks, written in the opposite order.
+        save_run_worktrees(&cfg, &tmp, "runOrder", &[("t-b", &wt_b), ("t-a", &wt_a)]);
+
+        let v2 = claim_progress(&cfg, &tmp, &claim, t0 + window);
+        assert_eq!(
+            (repo_head, a_head, b_head),
+            (head_of(&tmp), head_of(&wt_a), head_of(&wt_b)),
+            "fixture precondition: no HEAD may move during this test"
+        );
+        assert_eq!(
+            v2,
+            Determination::Known(Liveness::Stalled),
+            "reordering the run state's task list is not durable work; if task \
+             order is an input to the head signal, a frozen holder never reaches \
+             Stalled and its claim can never be reclaimed"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// (B2) Property (2): each HEAD is bound to the task id that owns it.
+    ///
+    /// The run's single worktree-bearing task changes from `t-a` (worktree A)
+    /// to `t-b` (worktree B) — and B is a CLONE of A, so it sits on the
+    /// identical commit sha. The run's worktree composition changed, which is
+    /// durable work, so the verdict must be `Known(Progressing)` and the claim
+    /// must survive.
+    ///
+    /// Without the task id in the fold both samples reduce to the same lone
+    /// sha, the run reads as frozen, and the reap force-steals the claim of a
+    /// holder that had just moved its work into a new worktree. A fresh condukt
+    /// worktree is branched from the same base commit, so "different task, same
+    /// HEAD" is the normal case here, not a contrived one.
+    #[test]
+    fn claim_progress_head_signal_binds_each_head_to_its_owning_task() {
+        let tmp = make_tmp_dir("claim-scope-identity");
+        let wt_a = tmp.join("wt-a");
+        let wt_b = tmp.join("wt-b");
+        init_git_repo(&wt_a);
+        crate::worktree::git(
+            &tmp,
+            &["clone", &wt_a.to_string_lossy(), &wt_b.to_string_lossy()],
+        )
+        .unwrap_or_else(|e| panic!("git clone {} -> {}: {e}", wt_a.display(), wt_b.display()));
+        assert_eq!(
+            head_of(&wt_a),
+            head_of(&wt_b),
+            "fixture precondition: the clone must sit on the IDENTICAL commit, \
+             or the sha alone would already distinguish the two samples"
+        );
+
+        let (cfg, claim, home) = progress_fixture(&tmp, "runIdent", Some(&wt_a));
+        save_run_worktrees(&cfg, &tmp, "runIdent", &[("t-a", &wt_a)]);
+        let _h = pin_home(&home);
+        let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
+        let t0 = 10_000i64;
+
+        let v1 = claim_progress(&cfg, &tmp, &claim, t0);
+        assert!(
+            matches!(v1, Determination::Undetermined(_)),
+            "first sample (no prior snapshot) must be Undetermined, got {v1:?}"
+        );
+
+        let repo_head = head_of(&tmp);
+        // The run's work moves to a different task, whose fresh worktree is
+        // branched from the same base commit.
+        save_run_worktrees(&cfg, &tmp, "runIdent", &[("t-b", &wt_b)]);
+
+        let now = t0 + window;
+        let v2 = claim_progress(&cfg, &tmp, &claim, now);
+        assert_eq!(
+            repo_head,
+            head_of(&tmp),
+            "fixture precondition: nothing may commit to the shared repo here"
+        );
+        assert_eq!(
+            v2,
+            Determination::Known(Liveness::Progressing),
+            "the run swapped its recorded worktree for a different task's; if a \
+             HEAD is not bound to its owning task, two different worktrees on \
+             the same base commit alias and the holder reads as frozen (got {v2:?})"
+        );
+
+        // The consequence, not just the enum value.
+        let kept = retain_claim(&claim, now, ttl_secs(&cfg), &|c| {
+            claim_progress(&cfg, &tmp, c, now)
+        });
+        assert!(
+            kept,
+            "a holder whose run-scoped worktree set changed is demonstrably \
+             alive; its claim must never be force-stolen"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }

@@ -11198,3 +11198,32 @@ updated_at = 1786641721
 weight = 0.0
 issue_number = 337
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/337"
+
+[[task]]
+id = "03ed9600"
+title = "Continuous-Audit の cumulative unverified が 6 ラウンド 48 件で 0 — 三値の UNVERIFIED 経路が一度も使われていない疑い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-08-14、測定点 cdf863d4。scripts/continuous-audit.sh --dry-run の read-only メトリクスより:
+
+    rounds recorded: 6 / total new findings: 48 / cumulative confirmed: 41
+    cumulative unverified: 0 (undetermined - still open)
+    converging (last 3 rounds): NO
+
+**48 件の指摘のうち UNVERIFIED が 1 件も無い。** SKILL.md は UNVERIFIED を『既定』と定めており (『既定は REFUTED ではない。既定は UNVERIFIED』)、その理由として CLAUDE.md 第6節の実測事例 (2026-07-21 specguard forge/gather.rs の実在する fail-open が、検証者が消費経路を1本しか辿らなかったため誤って棄却された) を挙げている。REFUTED を名乗るには消費経路の全列挙と各経路の逐語引用という重い立証責任が課され、1本でも辿れなければ UNVERIFIED に倒すことになっている。
+
+その運用が実際に行われていれば UNVERIFIED は 0 にはなりにくい。0/48 は次の2つの読みのどちらか:
+  (a) 実在の欠陥 — verifier が三値を使っておらず二値 (confirmed/refuted) で運用している。棄却された 7 件 (48-41) が立証責任を満たさないまま REFUTED になっている可能性がある。これは監査対象のゲートが持つ fail-open (判定不能を clean へ潰す) と同型が、監査ループ自身に存在することを意味する。
+  (b) 意図的/正常 — 全件が本当に決着した。48 件すべてで消費経路の全列挙が出来たということ。
+
+**見分ける方法**: 過去ラウンドで REFUTED になった 7 件の verifier 出力を読み、消費経路の全列挙と逐語引用が実際に添えられているかを確認する。添えられていなければ (a)。ledger には REFUTED は記録されない (SKILL.md 'REFUTED はスクリプトに渡さない') ので、証跡は round の記録ではなく当時の transcript 側にしか無い可能性があり、その場合は『検証できない』こと自体が (a) 側の傍証になる (棄却の立証責任が記録に残らない設計なら、立証責任は実効的に存在しない)。
+
+あわせて converging:NO が継続中 (new_findings 5→1→13→0→14→15)。SKILL.md はこの振動の原因を Step 3.5 ミラー掃討の欠落と説明しているが、UNVERIFIED が 0 であることも同じ振動を生みうる (誤って棄却された指摘は次ラウンドで新規として再収穫される)。両者は排他ではない。"""
+created_at = 1786641876
+updated_at = 1786641876
+weight = 0.0
+issue_number = 338
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/338"

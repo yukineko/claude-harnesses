@@ -10809,9 +10809,48 @@ hook 生成の同期ポインタであり人間の作業成果ではないこと
 
 見分け方: (a)/(b) は specguard 側の変更で、Stop ゲートを緩めない。(c) だけがゲートを
 緩める方向なので、採用するなら除外集合を hook 生成物に限定できることを機械で示す必要がある。
+
+--- 追記 (2026-08-14、測定点 26a0da73): 残差は 1 行とは限らない ---
+
+本 item の当初の観測は「残差は last_synced の 1 行だけ」であり、回避策も
+「1 行だけであることを確認してから discard する」という条件付きで書いていた。
+**その条件は狭すぎた。**
+
+backlog 0.2.26 の merge (26a0da73) 後に観測した残差は **5 行**:
+
+    -last_synced = "24f651ea..."      +last_synced = "26a0da73..."
+    -last_ref    = "a7f1d241..."      +last_ref    = "26a0da73..."
+    -last_ref    = "22962eb4..."      +last_ref    = "26a0da73..."
+    -last_ref    = "83cc25b6..."      +last_ref    = "26a0da73..."
+    -last_ref    = "7a2ec031..."      +last_ref    = "26a0da73..."
+
+内訳は last_synced 1 行 + **その merge で変更された 4 ファイル**
+(crates/backlog/src の github.rs / main.rs / store.rs / task.rs) の
+per-file last_ref である。つまり残差の行数は「その merge が触ったファイル数
++ 1」に比例して増える。1 行というのは「触ったファイルが 0 個の merge」の
+特殊ケースに過ぎなかった。
+
+**性質は変わっていない**: 5 行すべてが commit sha へのポインタで、
+すべて **今まさに作られた merge commit 自身の sha** を指す。つまり
+authored な内容は 1 行も含まれず、self-referential である点は同じ。
+したがって discard の判定基準は「1 行か」ではなく
+**「変更行がすべて sha ポインタで、かつ新しい値がすべて HEAD 自身か」**
+に置き換えるべきである。この基準なら行数に依存しない。
+
+**判定基準を機械化できる**: 上の条件は git diff から決定論的に検査できる
+(変更行が `last_synced = ` / `last_ref = ` で始まり、+ 側の値が全て
+`git rev-parse HEAD` と一致するか)。修正候補 (c)「Stop ゲート側で hook
+生成物を除外する」を採るなら、除外集合をファイル名で持つのではなく
+**この述語で持つ**べき — ファイル名ベースだと spec-map.toml に authored な
+編集が混ざったときも素通りするが、述語ベースなら sha ポインタ以外の差分が
+1 行でもあれば通常どおり block する。3 の「判定不能を許可へ写さない」を
+満たしたまま (c) を実装できる余地がここにある。
+
+本日この残差を踏んだ回数: 3 回 (24f651ea 系 1 回、87cd53b1 系 1 回、
+26a0da73 系 1 回)。いずれも discard で回避しており、修正はしていない。
 """
 created_at = 1786635719
-updated_at = 1786635755
+updated_at = 1786638786
 weight = 0.0
 issue_number = 280
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/280"

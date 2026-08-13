@@ -8286,7 +8286,7 @@ tags = [
     "injection",
     "p0",
 ]
-status = "pending"
+status = "claimed"
 notes = """
 
 
@@ -8304,7 +8304,7 @@ overwatch の finding ストア。復元できたら notes に逐語で書き戻
 なお本 notes の上部が空である件は backlog 73fb8e81 で追跡している。
 """
 created_at = 1785926923
-updated_at = 1786499132
+updated_at = 1786635870
 weight = 0.0
 issue_number = 153
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/153"
@@ -9745,10 +9745,10 @@ title = "セッション異常終了への対応: (a) 中断作業を次セッ�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "claimed"
 notes = "部分完了 (2026-08-12, condukt 0.7.129, merge 6fc4fdee)。(b) GC 側だけが着地した: condukt worktree reconcile が git worktree list と全 run-state namespace と作業ツリーの三者照合を行い live/dead/undetermined を返す。is_removable はワイルドカード無しの網羅 match で、あらゆる Undetermined と Role::Primary は keep に解決する。dirty な worktree は refs/preserved へ退避されるまで削除に到達しない。統合前に kill rate を独立再測定した: Role::Primary の arm 削除は E0004 コンパイルエラー、Undetermined 3 arm と preserved arm と primary_witnesses の退行はすべて KILLED、対照 (is_removable 常に false) は 2 件を殺した。(a) resume 側は未着手である。--json が resume の surface として存在するが消費者が 1 つも無い (0cf3775c で追跡)。したがって本 item は done ではない。残っているのは (a) のみ。"
 created_at = 1786403442
-updated_at = 1786496451
+updated_at = 1786635870
 weight = 0.0
 issue_number = 237
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/237"
@@ -10027,7 +10027,7 @@ tags = [
     "liveness",
     "p0",
 ]
-status = "pending"
+status = "claimed"
 notes = """
 2026-08-12 実測 (commit 74e3a879 / ee2d4d03)。実 repo で reconcile を回すと state_scan は readable で namespaces=2417 runs=150 だが running_tasks=0 で、結果 55 entries 中 47 が removable=true になった。occupancy の Dead は「完全に読めた走査で claim している running task が無かった」という意味しか持たないので、condukt が作っていない worktree —— CLAUDE.md 8 に従って /flow などが作る .harness-worktrees/session-* や、手で git worktree add したもの —— は生きていても常に dead に落ちる。今日実害が無いのは cleanup --remove が role==Unregistered しか消さず、これら 47 は全て registered だからであり、removable フラグ自体は誤った許可を出している。将来 registered も消す消費者が付いた瞬間に生きたセッションの worktree が消える。案: claim されていない worktree については condukt run state を「情報なし」として扱い、worktree 自身の活動 signal (worktree-activity は実装済み) や session transcript を独立の witness にして、claim 無し = Dead ではなく Undetermined に倒す。ただし現在の anti-vacuity control (dead_clean_worktree_is_removable) がこの設計を固定しているので、設計判断として人間に上げる。 統合者による独立確認 (2026-08-12、測定点 6fc4fdee、linked worktree を vantage にして deploy 済みではなくビルド直後のバイナリで実行): entries 56 件、うち primary 1 件 (/Users/yuki/src/harness、removable=false — ee2d4d03 の修正は効いている)、registered 55 件、removable=true が 49 件、そして occupancy は 56 件すべてが dead だった。決定的な観測: この統合作業をしていた worktree 自身 (run-20260811-230435-19389-t2-condukt-reconcile) が occupancy=dead / removable=true と 報告された。私はその中に立ってビルドとテストを回している最中だった。同時に、いま使っているセッション worktree (session-b57a58c3) も occupancy=dead であり、removable=false になっているのは dirty だったからにすぎない。つまり Dead は「生きていない」の証拠ではなく「condukt の RUNNING task が claim していない」以上のことを言えていない。これは判定不能を permissive へ写した (型の規律は正しい) のではなく、証拠が支えない known 値を主張している問題である。
 
@@ -10043,7 +10043,7 @@ signal (worktree-activity は実装済み) や session transcript を独立の w
 書き換えるときは「何を証明しないテストになったか」を先に問うこと。
 """
 created_at = 1786472512
-updated_at = 1786499132
+updated_at = 1786635870
 weight = 0.0
 issue_number = 256
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/256"

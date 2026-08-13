@@ -16,6 +16,7 @@ use harness_core::boundary;
 use harness_core::hook::{read_stdin, run_hook, HookInput};
 use harness_core::verdict::{Determination, Required};
 use serde_json::json;
+use std::path::Path;
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -135,6 +136,18 @@ enum Command {
         /// Failure reason
         #[arg(long)]
         reason: Option<String>,
+    },
+
+    /// Reconcile this store against its GitHub issues (one-way: local wins)
+    Sync {
+        /// Perform the reconciliation. Without this flag `sync` only reports
+        /// the drift and touches nothing — GitHub-visible writes are opt-in.
+        #[arg(long)]
+        apply: bool,
+
+        /// Cap how many actions to perform in one run (0 = no cap).
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
     },
 
     /// Edit a task's fields
@@ -732,6 +745,109 @@ fn run(cli: Cli) -> Result<()> {
         Command::Done { id } => {
             store::mark_done(&tasks_path, &id)?;
             println!("done: {id}");
+            // Mirror the completion to GitHub. `mark_done` above has already
+            // committed the local truth, so this cannot fail the command — but
+            // it also must not fail SILENTLY, which is precisely how 60 done
+            // tasks ended up behind 60 open issues. A failure prints and
+            // leaves `issue_closed_at` unset, so `backlog sync` retries it.
+            mirror_close_for(&tasks_path, &id);
+        }
+
+        Command::Sync { apply, limit } => {
+            let tasks = store::load(&tasks_path)?;
+            let mut plan = store::sync_plan(&tasks);
+            if limit > 0 && plan.len() > limit {
+                plan.truncate(limit);
+            }
+            let creates = plan
+                .iter()
+                .filter(|a| matches!(a, store::SyncAction::Create { .. }))
+                .count();
+            let closes = plan.len() - creates;
+            println!("sync plan: {creates} issue(s) to create, {closes} issue(s) to close");
+            if !apply {
+                for action in plan.iter().take(20) {
+                    match action {
+                        store::SyncAction::Create { id, title, .. } => {
+                            println!("  create  {id}  {title}");
+                        }
+                        store::SyncAction::Close { id, number, reason } => {
+                            println!("  close   #{number}  {id}  ({})", reason.as_gh_reason());
+                        }
+                    }
+                }
+                if plan.len() > 20 {
+                    println!("  ... and {} more", plan.len() - 20);
+                }
+                println!("(dry run; pass --apply to perform)");
+                return Ok(());
+            }
+
+            // The `gh` calls run OUTSIDE the tasks lock on purpose: at ~1s per
+            // round-trip, holding it across a full reconciliation would block
+            // every other session's add/next --claim for minutes. Confirmed
+            // outcomes are folded back under the lock afterwards, against a
+            // freshly-loaded store.
+            let remote_url = git_remote_origin_url(&store_repo_root(&tasks_path));
+            let mut outcomes = Vec::new();
+            let mut failures: Vec<String> = Vec::new();
+            for action in &plan {
+                match action {
+                    store::SyncAction::Create { id, title, notes } => {
+                        match github::decide_issue_create(&remote_url, title, notes, gh_probe) {
+                            github::IssueOutcome::Created { url } => {
+                                match github::parse_issue_number(&url) {
+                                    Some(number) => {
+                                        println!("created #{number} for {id}");
+                                        outcomes.push(store::SyncOutcome::Created {
+                                            id: id.clone(),
+                                            number,
+                                            url,
+                                        });
+                                    }
+                                    None => failures.push(format!(
+                                        "{id}: created issue but could not parse number from {url:?}"
+                                    )),
+                                }
+                            }
+                            github::IssueOutcome::DegradedLocalOnly { reason } => {
+                                failures.push(format!("{id}: create failed: {reason}"));
+                            }
+                        }
+                    }
+                    store::SyncAction::Close { id, number, reason } => {
+                        match github::decide_issue_close(&remote_url, *number, *reason, gh_probe) {
+                            github::CloseOutcome::Closed => {
+                                println!("closed #{number} for {id}");
+                                outcomes.push(store::SyncOutcome::Closed { id: id.clone() });
+                            }
+                            github::CloseOutcome::NotClosed { reason } => {
+                                failures.push(format!("{id}: close #{number} failed: {reason}"));
+                            }
+                        }
+                    }
+                }
+            }
+            let updated = store::record_sync_outcomes(&tasks_path, &outcomes, now_unix())?;
+            println!("sync: {} confirmed, {} recorded", outcomes.len(), updated);
+            if !failures.is_empty() {
+                eprintln!(
+                    "sync: {} action(s) FAILED and were not recorded:",
+                    failures.len()
+                );
+                for f in &failures {
+                    eprintln!("  {f}");
+                }
+                // A partially-applied reconciliation that exits 0 reads as
+                // "the mirror is in sync". It is not — say so in the exit code
+                // as well as on stderr (CLAUDE.md §3), and re-running picks the
+                // failures up again because nothing was recorded for them.
+                return Err(anyhow::anyhow!(
+                    "{} of {} sync action(s) did not complete; re-run `backlog sync --apply` to retry",
+                    failures.len(),
+                    plan.len()
+                ));
+            }
         }
 
         Command::Fail { id, reason } => {
@@ -966,6 +1082,67 @@ fn git_remote_origin_url(project: &str) -> String {
             Determination::Undetermined(_) => String::new(),
         },
         Determination::Undetermined(_) => String::new(),
+    }
+}
+
+/// The repo root a resolved store belongs to, as a string for
+/// `git_remote_origin_url`. A store always lives at
+/// `<root>/.backlog/tasks.toml`, so the root is two parents up.
+///
+/// Derived from the store PATH rather than from any task's `project` field on
+/// purpose: `project` labels are written by whichever checkout made the task
+/// and legitimately name other worktrees of the same repo — and, for a
+/// cross-machine label such as `C:/Users/.../harness`, a path that does not
+/// exist here at all. Asking git about those yields an empty remote, which
+/// would fail-soft the whole reconciliation into "not a GitHub remote" and
+/// silently do nothing.
+fn store_repo_root(tasks_path: &Path) -> String {
+    tasks_path
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Close the GitHub issue mirroring task `id`, if the store says there is one
+/// to close. Prints what happened either way; never returns an error, because
+/// the caller has already committed the local state change and the mirror is
+/// downstream of it. A failure deliberately records NOTHING, so the task keeps
+/// its `issue_closed_at: None` and the next `backlog sync` retries.
+fn mirror_close_for(tasks_path: &Path, id: &str) {
+    let Ok(tasks) = store::load(tasks_path) else {
+        eprintln!("warning: could not re-read the store to close {id}'s issue; run `backlog sync`");
+        return;
+    };
+    let plan: Vec<_> = store::sync_plan(&tasks)
+        .into_iter()
+        .filter(|a| a.task_id() == id)
+        .collect();
+    let remote_url = git_remote_origin_url(&store_repo_root(tasks_path));
+    for action in plan {
+        if let store::SyncAction::Close { number, reason, .. } = action {
+            match github::decide_issue_close(&remote_url, number, reason, gh_probe) {
+                github::CloseOutcome::Closed => {
+                    match store::record_sync_outcomes(
+                        tasks_path,
+                        &[store::SyncOutcome::Closed { id: id.to_string() }],
+                        now_unix(),
+                    ) {
+                        Ok(_) => println!("closed issue #{number}"),
+                        Err(e) => eprintln!(
+                            "warning: closed issue #{number} but could not record it ({e}); \
+                             `backlog sync` will retry the close (a no-op on an already-closed issue)"
+                        ),
+                    }
+                }
+                github::CloseOutcome::NotClosed { reason } => {
+                    eprintln!(
+                        "warning: issue #{number} left OPEN: {reason}; \
+                         run `backlog sync --apply` to retry"
+                    );
+                }
+            }
+        }
     }
 }
 

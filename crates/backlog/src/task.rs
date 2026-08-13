@@ -81,6 +81,25 @@ pub struct Task {
     /// files; treated as None (not yet pushed).
     #[serde(default)]
     pub issue_url: Option<String>,
+    /// When this task's GitHub issue was observed **closed** by us (unix
+    /// seconds), or `None` if it has not been.
+    ///
+    /// This field is deliberately the *only* record that the close happened,
+    /// and its absence is what drives the retry. A close can fail for reasons
+    /// that have nothing to do with the task being finished (gh absent, no
+    /// network, auth expired, rate limit). Recording "done" locally while
+    /// silently dropping that failure is how 60 finished tasks came to sit
+    /// behind 60 still-open issues (measured 2026-08-14): the local store said
+    /// the work was over and nothing anywhere said the mirror had not been
+    /// updated. So the failure is not stored as a flag that could itself be
+    /// wrong — it is stored as the *absence* of a confirmation, which
+    /// `store::sync_plan` re-derives from scratch on every run. A close that
+    /// did not happen is therefore indistinguishable from one never attempted,
+    /// and both are retried, which is the safe direction: closing an
+    /// already-closed issue is a no-op, whereas a lost close is invisible
+    /// forever.
+    #[serde(default)]
+    pub issue_closed_at: Option<i64>,
 }
 
 impl Task {
@@ -187,6 +206,7 @@ mod tests {
             weight: 0.0,
             issue_number: None,
             issue_url: None,
+            issue_closed_at: None,
         }
     }
 
@@ -401,5 +421,53 @@ mod tests {
         let t: Task = serde_json::from_str(json).expect("deserialize without issue fields");
         assert!(t.issue_number.is_none());
         assert!(t.issue_url.is_none());
+    }
+
+    // =============================================================================
+
+    /// Back-compat: a tasks.toml record written before `issue_closed_at`
+    /// existed must load as `None` — i.e. "we have no confirmation that this
+    /// issue was closed", which is what drives the retry. A `#[serde(default)]`
+    /// on an `Option` is the right default here precisely because the
+    /// restrictive reading (retry the close; closing twice is a no-op) IS the
+    /// `None` reading.
+    /// Dies if `#[serde(default)]` is dropped from `issue_closed_at` (every
+    /// legacy record then fails to deserialize — the whole store stops
+    /// loading).
+    #[test]
+    fn serde_roundtrip_without_issue_closed_at() {
+        let json = r#"{
+            "id": "abcd1234",
+            "title": "old task",
+            "project": "/tmp/p",
+            "tags": [],
+            "status": "done",
+            "notes": "",
+            "created_at": 0,
+            "updated_at": 0,
+            "issue_number": 42,
+            "issue_url": "https://github.com/owner/repo/issues/42"
+        }"#;
+        let t: Task = serde_json::from_str(json).expect("deserialize without issue_closed_at");
+        assert_eq!(t.issue_number, Some(42));
+        assert!(
+            t.issue_closed_at.is_none(),
+            "an absent issue_closed_at must read as None (unconfirmed), so the close is retried"
+        );
+    }
+
+    /// A record that DOES carry the field round-trips through serde with the
+    /// value intact — the stamp must survive a save/load cycle or every sync
+    /// re-closes every issue.
+    /// Dies if the field is marked `#[serde(skip)]`.
+    #[test]
+    fn issue_closed_at_roundtrips_through_serde() {
+        let mut t = make_task(vec![], "done");
+        t.issue_number = Some(42);
+        t.issue_closed_at = Some(1_800_000_000);
+        let json = serde_json::to_string(&t).unwrap();
+        let back: Task = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.issue_closed_at, Some(1_800_000_000));
+        assert_eq!(back.issue_number, Some(42));
     }
 }

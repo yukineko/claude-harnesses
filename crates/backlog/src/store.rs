@@ -479,6 +479,7 @@ pub fn add_with_weight(
             weight,
             issue_number: None,
             issue_url: None,
+            issue_closed_at: None,
         };
         tasks.push(task);
         save(path, &tasks)?;
@@ -960,6 +961,177 @@ pub fn mark_done(path: &Path, id: &str) -> Result<()> {
     })
 }
 
+/// The status a task must hold for its GitHub issue to be closed as
+/// "not planned".
+///
+/// **No current CLI path writes this value.** `edit --status` validates
+/// against [`crate::task::STATUSES`] (`pending | done | failed`) and rejects
+/// `cancelled` outright — verified 2026-08-14:
+///
+/// ```text
+/// $ backlog edit 5df88c1d --status cancelled
+/// Error: warning: unknown status 'cancelled'; valid values are pending | done | failed
+/// ```
+///
+/// It is spelled here anyway, and honestly rather than as an import, because
+/// the value nonetheless EXISTS in real stores: this repo's holds 6 such
+/// records (measured the same day, 577 tasks). They predate the current
+/// validation or were hand-written, and `sync_plan` must reconcile records
+/// that are actually there, not only ones the current binary can produce.
+///
+/// So the `NotPlanned` close arm is presently reachable only from a
+/// hand-edited store. That is a gap in the status vocabulary, not in this
+/// module — `task::STATUSES` claims to list "all recognised status values"
+/// while the store demonstrably carries two more (`cancelled`, `claimed`).
+/// Tracked as backlog `0dafa254`; when that is resolved the arm becomes
+/// reachable with no change here.
+pub const STATUS_CANCELLED: &str = "cancelled";
+
+/// One unit of GitHub mirror work, derived from the store's own contents.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SyncAction {
+    /// Live work with no issue behind it yet.
+    Create {
+        id: String,
+        title: String,
+        notes: String,
+    },
+    /// Finished work whose issue has not been confirmed closed.
+    Close {
+        id: String,
+        number: u64,
+        reason: crate::github::CloseReason,
+    },
+}
+
+impl SyncAction {
+    /// The task id this action operates on.
+    pub fn task_id(&self) -> &str {
+        match self {
+            SyncAction::Create { id, .. } | SyncAction::Close { id, .. } => id,
+        }
+    }
+}
+
+/// Derive the full set of GitHub mirror work implied by `tasks`. Pure: no IO,
+/// no `gh`, no clock, no panics — the whole plan is a function of the store's
+/// contents, so it can be re-derived from scratch on every run and never
+/// depends on remembering that a previous run failed.
+///
+/// **Scope is the store file itself.** `config::tasks_path_for` resolves the
+/// store per repo root, so every task in a given `tasks.toml` belongs to the
+/// repo whose issues we are mirroring; there is deliberately no extra project
+/// filter, which would silently drop tasks written from another checkout of
+/// the SAME repo (a `.harness-worktrees/session-*` worktree label, or a
+/// cross-machine `C:/Users/.../harness` label — both measured present in this
+/// repo's store on 2026-08-14, 52 of them holding real unpushed work).
+///
+/// Two rules, both one-directional (local is authoritative; GitHub is a
+/// mirror, never an input — CLAUDE.md §7):
+///
+/// - **Create** for a `pending` task with no `issue_number`. Deliberately NOT
+///   for `done`/`cancelled`/`failed`: filing an issue for work that is already
+///   over is noise, and `failed` tasks are deferred retries whose issue would
+///   churn open/closed on every cycle.
+/// - **Close** for a `done` (→ `completed`) or `cancelled` (→ `not planned`)
+///   task that HAS an `issue_number` and has NO `issue_closed_at`. `failed` is
+///   excluded on purpose: a failed task is unfinished work that will be
+///   retried, so its issue must stay open.
+///
+/// Order follows the store's own task order, so the plan is deterministic for
+/// a given file rather than depending on hash iteration.
+pub fn sync_plan(tasks: &[Task]) -> Vec<SyncAction> {
+    let mut plan = Vec::new();
+    for t in tasks {
+        match (t.status.as_str(), t.issue_number, t.issue_closed_at) {
+            (STATUS_PENDING, None, _) => plan.push(SyncAction::Create {
+                id: t.id.clone(),
+                title: t.title.clone(),
+                notes: t.notes.clone(),
+            }),
+            (STATUS_DONE, Some(n), None) => plan.push(SyncAction::Close {
+                id: t.id.clone(),
+                number: n,
+                reason: crate::github::CloseReason::Completed,
+            }),
+            (STATUS_CANCELLED, Some(n), None) => plan.push(SyncAction::Close {
+                id: t.id.clone(),
+                number: n,
+                reason: crate::github::CloseReason::NotPlanned,
+            }),
+            _ => {}
+        }
+    }
+    plan
+}
+
+/// A mirror action that GitHub actually confirmed. Only confirmations reach
+/// the store — a failed `gh` call produces no `SyncOutcome` at all, so the
+/// corresponding task keeps the exact shape that put it in the plan and the
+/// next `sync_plan` picks it up again.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SyncOutcome {
+    Created {
+        id: String,
+        number: u64,
+        url: String,
+    },
+    Closed {
+        id: String,
+    },
+}
+
+impl SyncOutcome {
+    /// The task id this outcome belongs to.
+    pub fn task_id(&self) -> &str {
+        match self {
+            SyncOutcome::Created { id, .. } | SyncOutcome::Closed { id } => id,
+        }
+    }
+}
+
+/// Persist confirmed mirror outcomes. Returns how many OUTCOMES were applied
+/// — not how many distinct tasks changed. The two coincide for every plan
+/// `sync_plan` produces (its match arms are mutually exclusive, so it never
+/// emits two actions for one task), but a caller that hand-builds a slice
+/// containing the same id twice gets 2 back from a single task's update. The
+/// count is stated this way rather than deduplicated because it is reported to
+/// the user as "N recorded" alongside "N confirmed", and those two should be
+/// the same number.
+///
+/// Re-reads the store under the tasks lock rather than trusting the snapshot
+/// the plan was built from, so a concurrent writer's changes are not clobbered
+/// (the gh calls happen OUTSIDE the lock — 112 network round-trips would
+/// otherwise hold every other session's `add`/`next --claim` for minutes).
+/// An outcome whose id is no longer present is counted as skipped, not an
+/// error: the task may legitimately have been removed between the two phases.
+pub fn record_sync_outcomes(path: &Path, outcomes: &[SyncOutcome], now: i64) -> Result<usize> {
+    if outcomes.is_empty() {
+        return Ok(0);
+    }
+    with_tasks_lock(path, || {
+        let mut tasks = load(path)?;
+        let mut updated = 0usize;
+        for outcome in outcomes {
+            let Some(task) = tasks.iter_mut().find(|t| t.id == outcome.task_id()) else {
+                continue;
+            };
+            match outcome {
+                SyncOutcome::Created { number, url, .. } => {
+                    task.issue_number = Some(*number);
+                    task.issue_url = Some(url.clone());
+                }
+                SyncOutcome::Closed { .. } => {
+                    task.issue_closed_at = Some(now);
+                }
+            }
+            updated += 1;
+        }
+        save(path, &tasks)?;
+        Ok(updated)
+    })
+}
+
 /// id で特定のタスクを failed に更新。reason を notes に追記。
 /// defer_until を now + 172800 (2日) に設定してタスクを一時保留にする。
 ///
@@ -1141,6 +1313,7 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
             weight,
             issue_number: None,
             issue_url: None,
+            issue_closed_at: None,
         };
 
         // Fail-soft GitHub push: never abort the add on a non-GitHub remote,
@@ -2087,6 +2260,7 @@ mod tests {
                     weight: 0.0,
                     issue_number: None,
                     issue_url: None,
+                    issue_closed_at: None,
                 });
             }
             save(&path, &seed).unwrap();
@@ -2670,6 +2844,7 @@ mod tests {
                     weight: 0.0,
                     issue_number: None,
                     issue_url: None,
+                    issue_closed_at: None,
                 });
             }
             save(&path, &seed).unwrap();
@@ -3105,6 +3280,7 @@ mod tests {
                             weight: 0.0,
                             issue_number: None,
                             issue_url: None,
+                            issue_closed_at: None,
                         });
                     }
                     barrier.wait();
@@ -3178,6 +3354,7 @@ mod tests {
                 weight: 0.0,
                 issue_number: None,
                 issue_url: None,
+                issue_closed_at: None,
             }],
             &rec,
         )
@@ -3288,6 +3465,7 @@ mod tests {
                 weight: 0.0,
                 issue_number: None,
                 issue_url: None,
+                issue_closed_at: None,
             },
             Task {
                 id: "fresh".to_string(),
@@ -3303,6 +3481,7 @@ mod tests {
                 weight: 0.0,
                 issue_number: None,
                 issue_url: None,
+                issue_closed_at: None,
             },
         ];
         save(&path, &seed).unwrap();
@@ -3695,6 +3874,7 @@ mod tests {
                 weight: 0.0,
                 issue_number: None,
                 issue_url: None,
+                issue_closed_at: None,
             }],
         )
         .unwrap();
@@ -3781,4 +3961,432 @@ mod tests {
             tasks_lock_path(&path).display(),
         );
     }
+
+    //
+    // Available in scope via `use super::*;`: Task, STATUS_PENDING, STATUS_DONE,
+    // STATUS_FAILED, STATUS_CANCELLED, SyncAction, SyncOutcome, sync_plan,
+    // record_sync_outcomes, load, save, and the existing `tmp_path()` helper.
+    // =============================================================================
+
+    // --- GitHub mirror sync: sync_plan / record_sync_outcomes ---------------
+
+    /// Build a Task in exactly the shape `sync_plan` matches on. Only the four
+    /// fields the plan is a function of (status, issue_number, issue_closed_at,
+    /// id) plus title/notes (which Create carries) are parameterised; every
+    /// other field is a fixed, irrelevant constant so a failing assertion can
+    /// only be about the mirror logic.
+    fn sync_task(
+        id: &str,
+        status: &str,
+        issue_number: Option<u64>,
+        issue_closed_at: Option<i64>,
+    ) -> Task {
+        Task {
+            id: id.to_string(),
+            title: format!("title-{id}"),
+            project: "/repo".to_string(),
+            project_unresolved: false,
+            tags: vec![],
+            status: status.to_string(),
+            notes: format!("notes-{id}"),
+            created_at: 100,
+            updated_at: 100,
+            defer_until: None,
+            weight: 0.0,
+            issue_number,
+            issue_url: None,
+            issue_closed_at,
+        }
+    }
+
+    /// A `pending` task with no issue behind it is the ONLY create case.
+    /// Dies if the `(STATUS_PENDING, None, _)` arm is removed (or if
+    /// `sync_plan` returns an empty Vec for everything). Also pins that
+    /// Create carries the task's own title and notes, not placeholders.
+    #[test]
+    fn sync_plan_creates_for_pending_without_issue() {
+        let plan = sync_plan(&[sync_task("aaa", STATUS_PENDING, None, None)]);
+        assert_eq!(
+            plan,
+            vec![SyncAction::Create {
+                id: "aaa".to_string(),
+                title: "title-aaa".to_string(),
+                notes: "notes-aaa".to_string(),
+            }],
+            "a pending task with no issue must be planned for creation"
+        );
+    }
+
+    /// `done` + issue + never-confirmed-closed ⇒ close as `Completed`.
+    /// Dies if the `(STATUS_DONE, Some(n), None)` arm is removed, or if the
+    /// reason is swapped to NotPlanned, or if sync_plan returns empty.
+    #[test]
+    fn sync_plan_closes_done_as_completed() {
+        let plan = sync_plan(&[sync_task("bbb", STATUS_DONE, Some(42), None)]);
+        assert_eq!(
+            plan,
+            vec![SyncAction::Close {
+                id: "bbb".to_string(),
+                number: 42,
+                reason: crate::github::CloseReason::Completed,
+            }],
+            "a done task with an open issue must be planned for a `completed` close"
+        );
+    }
+
+    /// `cancelled` + issue + never-confirmed-closed ⇒ close as `NotPlanned`.
+    /// Dies if the `(STATUS_CANCELLED, Some(n), None)` arm is removed or its
+    /// reason is swapped to Completed. Abandoned work must not be recorded on
+    /// GitHub as completed.
+    #[test]
+    fn sync_plan_closes_cancelled_as_not_planned() {
+        let plan = sync_plan(&[sync_task("ccc", STATUS_CANCELLED, Some(7), None)]);
+        assert_eq!(
+            plan,
+            vec![SyncAction::Close {
+                id: "ccc".to_string(),
+                number: 7,
+                reason: crate::github::CloseReason::NotPlanned,
+            }],
+            "a cancelled task's issue must be closed as `not planned`, not `completed`"
+        );
+    }
+
+    /// IDEMPOTENCE GUARD. A done task whose close was already confirmed
+    /// (`issue_closed_at = Some(t)`) must produce NO action — otherwise every
+    /// `backlog sync` re-closes every issue it ever closed, forever.
+    /// Dies the moment the `None` in `(STATUS_DONE, Some(n), None)` is
+    /// widened to `_` (the exact anti-vacuity mutation "drop the
+    /// issue_closed_at guard"). Covers the cancelled arm too.
+    #[test]
+    fn sync_plan_never_closes_an_already_closed_issue() {
+        let plan = sync_plan(&[
+            sync_task("done-closed", STATUS_DONE, Some(42), Some(1_700_000_000)),
+            sync_task(
+                "cancelled-closed",
+                STATUS_CANCELLED,
+                Some(43),
+                Some(1_700_000_000),
+            ),
+        ]);
+        assert!(
+            plan.is_empty(),
+            "an issue we already confirmed closed must never be closed twice; got {plan:?}"
+        );
+    }
+
+    /// `failed` is unfinished work that will be retried, so its issue MUST
+    /// stay open. Dies if a `(STATUS_FAILED, Some(n), None)` close arm is
+    /// added (the anti-vacuity mutation "failed tasks included in the close
+    /// set"), and also if `failed` were routed to Create (its issue already
+    /// exists).
+    #[test]
+    fn sync_plan_never_touches_failed_tasks() {
+        let plan = sync_plan(&[
+            sync_task("fail-with-issue", STATUS_FAILED, Some(99), None),
+            sync_task("fail-closed-stamp", STATUS_FAILED, Some(98), Some(123)),
+        ]);
+        assert!(
+            plan.is_empty(),
+            "a failed task's issue must stay open (unfinished work); got {plan:?}"
+        );
+    }
+
+    /// The two remaining no-op shapes: a pending task that is ALREADY
+    /// mirrored (has an issue) must not be created again, and a done task
+    /// with NO issue has nothing to close.
+    /// Dies if `(STATUS_PENDING, None, _)` is loosened to `(STATUS_PENDING, _, _)`
+    /// (duplicate issue per task on every run), or if the close arms drop
+    /// their `Some(n)` requirement.
+    #[test]
+    fn sync_plan_skips_already_mirrored_pending_and_issueless_done() {
+        let plan = sync_plan(&[
+            sync_task("pending-mirrored", STATUS_PENDING, Some(5), None),
+            sync_task("done-no-issue", STATUS_DONE, None, None),
+            sync_task("cancelled-no-issue", STATUS_CANCELLED, None, None),
+        ]);
+        assert!(
+            plan.is_empty(),
+            "already-mirrored pending / issueless done must yield no action; got {plan:?}"
+        );
+    }
+
+    /// Full-mix ordering: the plan follows the STORE's own task order, and
+    /// contains exactly the actionable tasks — no more, no fewer.
+    /// This is the single strongest anti-vacuity test: it dies if sync_plan
+    /// returns an empty Vec, if it returns every task, if the closed-stamp
+    /// guard is dropped (`skip-closed` would appear), if `failed` is added to
+    /// the close set (`skip-failed` would appear), or if the plan is
+    /// reordered/grouped by kind instead of following store order.
+    #[test]
+    fn sync_plan_follows_store_order_and_selects_exactly_the_actionable_tasks() {
+        let tasks = vec![
+            sync_task("skip-failed", STATUS_FAILED, Some(1), None),
+            sync_task("create-1", STATUS_PENDING, None, None),
+            sync_task("skip-closed", STATUS_DONE, Some(2), Some(1_700_000_000)),
+            sync_task("close-cancelled", STATUS_CANCELLED, Some(3), None),
+            sync_task("skip-mirrored", STATUS_PENDING, Some(4), None),
+            sync_task("close-done", STATUS_DONE, Some(5), None),
+            sync_task("create-2", STATUS_PENDING, None, None),
+        ];
+        let plan = sync_plan(&tasks);
+        let ids: Vec<&str> = plan.iter().map(|a| a.task_id()).collect();
+        assert_eq!(
+            ids,
+            vec!["create-1", "close-cancelled", "close-done", "create-2"],
+            "plan must be exactly the actionable tasks, in store order; got {plan:?}"
+        );
+        assert!(
+            matches!(
+                plan[1],
+                SyncAction::Close {
+                    number: 3,
+                    reason: crate::github::CloseReason::NotPlanned,
+                    ..
+                }
+            ),
+            "cancelled → not planned, number carried through; got {:?}",
+            plan[1]
+        );
+        assert!(
+            matches!(
+                plan[2],
+                SyncAction::Close {
+                    number: 5,
+                    reason: crate::github::CloseReason::Completed,
+                    ..
+                }
+            ),
+            "done → completed, number carried through; got {:?}",
+            plan[2]
+        );
+    }
+
+    /// A confirmed close stamps `issue_closed_at = now` and touches NOTHING
+    /// else — in particular it must NOT rewrite `status` (the local store is
+    /// authoritative; the mirror is downstream).
+    /// Dies if the `SyncOutcome::Closed` arm stops writing `issue_closed_at`,
+    /// if it writes a clock value other than the injected `now`, if it also
+    /// mutates status, or if the return count stops counting closes.
+    #[test]
+    fn record_sync_outcomes_closed_stamps_timestamp_and_leaves_status_alone() {
+        let path = tmp_path();
+        save(
+            &path,
+            &[
+                sync_task("ddd", STATUS_DONE, Some(42), None),
+                sync_task("other", STATUS_PENDING, None, None),
+            ],
+        )
+        .unwrap();
+
+        let n = record_sync_outcomes(
+            &path,
+            &[SyncOutcome::Closed {
+                id: "ddd".to_string(),
+            }],
+            1_800_000_000,
+        )
+        .unwrap();
+        assert_eq!(n, 1, "exactly one task must be reported updated");
+
+        let tasks = load(&path).unwrap();
+        let t = tasks.iter().find(|t| t.id == "ddd").unwrap();
+        assert_eq!(
+            t.issue_closed_at,
+            Some(1_800_000_000),
+            "a confirmed close must stamp the INJECTED now, not a wall clock"
+        );
+        assert_eq!(
+            t.status, "done",
+            "recording a close must not rewrite the task's status"
+        );
+        assert_eq!(
+            t.issue_number,
+            Some(42),
+            "a close must not disturb the issue number"
+        );
+        let other = tasks.iter().find(|t| t.id == "other").unwrap();
+        assert_eq!(
+            other.issue_closed_at, None,
+            "an unrelated task must not be stamped"
+        );
+    }
+
+    /// A confirmed create stamps `issue_number` + `issue_url` and does not
+    /// pre-stamp `issue_closed_at` (a brand-new issue is open).
+    /// Dies if the `SyncOutcome::Created` arm stops writing either field, or
+    /// if it also writes `issue_closed_at` (which would make the very next
+    /// close a permanent no-op — a silently unclosable issue).
+    #[test]
+    fn record_sync_outcomes_created_stamps_number_and_url() {
+        let path = tmp_path();
+        save(&path, &[sync_task("eee", STATUS_PENDING, None, None)]).unwrap();
+
+        let n = record_sync_outcomes(
+            &path,
+            &[SyncOutcome::Created {
+                id: "eee".to_string(),
+                number: 77,
+                url: "https://github.com/owner/repo/issues/77".to_string(),
+            }],
+            1_800_000_000,
+        )
+        .unwrap();
+        assert_eq!(n, 1);
+
+        let t = load(&path).unwrap().into_iter().next().unwrap();
+        assert_eq!(t.issue_number, Some(77));
+        assert_eq!(
+            t.issue_url.as_deref(),
+            Some("https://github.com/owner/repo/issues/77")
+        );
+        assert_eq!(
+            t.issue_closed_at, None,
+            "a newly created issue is OPEN; stamping it closed would make the close a no-op forever"
+        );
+        assert_eq!(t.status, "pending", "a create must not rewrite status");
+    }
+
+    /// An outcome naming an id that is no longer in the store is SKIPPED —
+    /// not an error, and not applied to some other task — and the surrounding
+    /// tasks are left byte-identical.
+    /// Dies if the `let Some(task) = ... else { continue }` lookup is replaced
+    /// by an `unwrap`/`ok_or` (Err instead of skip), if the miss is counted in
+    /// the return value, or if the outcome is misapplied to a neighbour.
+    #[test]
+    fn record_sync_outcomes_skips_unknown_id_without_corrupting_others() {
+        let path = tmp_path();
+        save(
+            &path,
+            &[
+                sync_task("keep-1", STATUS_DONE, Some(1), None),
+                sync_task("real", STATUS_DONE, Some(2), None),
+                sync_task("keep-2", STATUS_PENDING, None, None),
+            ],
+        )
+        .unwrap();
+
+        let n = record_sync_outcomes(
+            &path,
+            &[
+                SyncOutcome::Closed {
+                    id: "ghost".to_string(),
+                },
+                SyncOutcome::Closed {
+                    id: "real".to_string(),
+                },
+                SyncOutcome::Created {
+                    id: "also-ghost".to_string(),
+                    number: 999,
+                    url: "https://github.com/owner/repo/issues/999".to_string(),
+                },
+            ],
+            1_800_000_000,
+        )
+        .expect("an outcome for a vanished task is skipped, never an error");
+        assert_eq!(n, 1, "only the task that actually exists is counted");
+
+        let tasks = load(&path).unwrap();
+        assert_eq!(tasks.len(), 3, "no task may be added or dropped");
+        let real = tasks.iter().find(|t| t.id == "real").unwrap();
+        assert_eq!(real.issue_closed_at, Some(1_800_000_000));
+        for (id, expected_number) in [("keep-1", Some(1u64)), ("keep-2", None)] {
+            let t = tasks.iter().find(|t| t.id == id).unwrap();
+            assert_eq!(
+                t.issue_closed_at, None,
+                "{id} must not absorb an outcome addressed to a missing id"
+            );
+            assert_eq!(
+                t.issue_number, expected_number,
+                "{id}'s issue_number must be untouched (a ghost Created must not land here)"
+            );
+            assert_eq!(t.issue_url, None, "{id}'s issue_url must be untouched");
+        }
+    }
+
+    /// An empty outcome slice updates nothing and reports 0 — and does not
+    /// even materialise the store file.
+    /// Dies if the `if outcomes.is_empty() { return Ok(0) }` short-circuit is
+    /// removed: the fall-through takes the lock and `save`s, creating (and,
+    /// on a store written by a concurrent writer between plan and record,
+    /// rewriting) the file for no reason.
+    #[test]
+    fn record_sync_outcomes_empty_is_a_zero_update_no_op() {
+        let path = tmp_path();
+        let n = record_sync_outcomes(&path, &[], 1_800_000_000).unwrap();
+        assert_eq!(n, 0, "an empty outcome slice updates nothing");
+        assert!(
+            !path.exists(),
+            "an empty outcome slice must not write the store at all"
+        );
+    }
+
+    /// END-TO-END IDEMPOTENCE: plan → record → re-plan yields nothing the
+    /// second time. This is the property the whole `issue_closed_at` field
+    /// exists for (task.rs: "closing an already-closed issue is a no-op,
+    /// whereas a lost close is invisible forever" — the retry must stop once
+    /// the close IS confirmed).
+    /// Dies if the `issue_closed_at` guard in sync_plan is dropped, or if
+    /// record_sync_outcomes does not persist the stamp.
+    #[test]
+    fn sync_plan_then_record_then_replan_is_empty() {
+        let path = tmp_path();
+        save(
+            &path,
+            &[
+                sync_task("fff", STATUS_DONE, Some(42), None),
+                sync_task("ggg", STATUS_CANCELLED, Some(43), None),
+            ],
+        )
+        .unwrap();
+
+        let plan = sync_plan(&load(&path).unwrap());
+        assert_eq!(plan.len(), 2, "both closes must be planned the first time");
+
+        let outcomes: Vec<SyncOutcome> = plan
+            .iter()
+            .map(|a| SyncOutcome::Closed {
+                id: a.task_id().to_string(),
+            })
+            .collect();
+        assert_eq!(
+            record_sync_outcomes(&path, &outcomes, 1_800_000_000).unwrap(),
+            2
+        );
+
+        let replan = sync_plan(&load(&path).unwrap());
+        assert!(
+            replan.is_empty(),
+            "a confirmed close must not be replanned on the next sync; got {replan:?}"
+        );
+    }
+
+    /// A close that was NOT confirmed produces no outcome, so the task keeps
+    /// the exact shape that put it in the plan and the NEXT sync retries it.
+    /// (The complement of the test above: the retry must survive.)
+    /// Dies if `record_sync_outcomes` were ever changed to stamp on the
+    /// strength of the plan rather than the confirmation, or if sync_plan
+    /// stopped re-deriving the plan from the store's contents.
+    #[test]
+    fn unconfirmed_close_is_retried_on_the_next_sync() {
+        let path = tmp_path();
+        save(&path, &[sync_task("hhh", STATUS_DONE, Some(42), None)]).unwrap();
+
+        // gh failed → the caller pushes NO outcome.
+        assert_eq!(record_sync_outcomes(&path, &[], 1_800_000_000).unwrap(), 0);
+
+        let replan = sync_plan(&load(&path).unwrap());
+        assert_eq!(
+            replan,
+            vec![SyncAction::Close {
+                id: "hhh".to_string(),
+                number: 42,
+                reason: crate::github::CloseReason::Completed,
+            }],
+            "a close that was never confirmed must be retried"
+        );
+    }
+
+    // =============================================================================
 }

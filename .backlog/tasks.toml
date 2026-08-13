@@ -10492,3 +10492,31 @@ updated_at = 1786543988
 weight = 0.0
 issue_number = 276
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/276"
+
+[[task]]
+id = "0dc6546f"
+title = "condukt: uncommitted-edit blind spot gains reap authority once the bulk abandon path is progress-gated"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "state.rs probe_run documents a residual it justifies by being print-only: a worker that edits files in its worktree WITHOUT committing moves neither the worktree HEAD nor updated_at, so once the window elapses it reads stalled even though it is working. The docstring says that misreading costs a human a wrong glance, not a stolen worktree, because StateAction::Probe only prints. If stuck_task_ids (state abandon --all-stuck) is now gated on that same task-scoped signal pair, the residual stops being print-only: an editing-but-not-committing worker reads Known(Stalled) and its task is reset to Pending with worktree cleared, i.e. re-dispatch of a second worker into the live worktree. Either the gate needs a third signal (working-tree mtime, or git status porcelain digest) so that uncommitted edits count as progress, or probe_run's residual paragraph becomes false prose the moment the gate lands and must be rewritten in the same commit (CLAUDE.md section 4). Noticed while writing the tests for task t2-redispatch-predicate; the RED tests pin only the committing worker, so this arm is currently unpinned in either direction."
+created_at = 1786549276
+updated_at = 1786549276
+weight = 0.0
+issue_number = 278
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/278"
+
+[[task]]
+id = "7ca0336b"
+title = "condukt: state abandon decision logic is inline in main.rs, so its unit tests replicate it instead of testing it"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "The StateAction::Abandon arm in crates/condukt/src/main.rs around line 4240 holds two decisions inline: the explicit path validates that the named task is running or failed, and the bulk path calls state::stuck_task_ids. Neither is a callable function, so the four state_abandon_* unit tests in state.rs cannot invoke production code. They re-implement the status guard and the Pending reset inside the test body and then assert on their own copy, which proves nothing about the shipped binary and would stay green if the main.rs arm were deleted. Extracting a pure decision function (task id plus status, returning abandon or a typed refusal) would let those tests bind to production. Noticed while writing tests for t2-redispatch-predicate; worked around there by adding crates/condukt/tests/abandon_progress_gate_e2e.rs which spawns the real binary, but the existing unit tests remain self-referential."
+created_at = 1786549285
+updated_at = 1786549285
+weight = 0.0
+issue_number = 279
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/279"

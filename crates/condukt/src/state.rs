@@ -1041,18 +1041,97 @@ pub fn discard_experiment(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str)
 
 // ── Stuck detection ───────────────────────────────────────────────────────
 
-/// Returns task ids that are stuck: status=Running and updated_at is older than stuck_ttl_secs.
+/// Multi-sample store key prefix for the BULK abandon gate's progress series,
+/// deliberately distinct from [`PROBE_PROGRESS_KEY_PREFIX`]. The two consumers
+/// read the same signals but keep separate freeze clocks, so running
+/// `condukt state probe` never advances the clock the reap-authoritative
+/// selector reads (i.e. `probe_run` stays genuinely print-only).
+const STUCK_GATE_PROGRESS_KEY_PREFIX: &str = "stuck";
+
+/// Returns the task ids the BULK re-dispatch path (`state abandon --all-stuck`)
+/// may abandon: status=Running, `updated_at` older than `stuck_ttl_secs`, **and**
+/// a confirmed `Known(Stalled)` progress verdict for that task.
 ///
-/// Tasks whose `updated_at` is `None` (legacy data without timestamp) are **not**
-/// considered stuck — absence of evidence is not evidence of being stuck.
-pub fn stuck_task_ids(run: &RunState, stuck_ttl_secs: u64) -> Vec<String> {
-    let threshold = now_secs() - stuck_ttl_secs as i64;
+/// # TTL-staleness is NECESSARY but NOT SUFFICIENT (backlog `356bd51d`)
+///
+/// This used to be a PURE TTL predicate. `TaskState.updated_at` advances only on
+/// an explicit status/field transition, so a worker that spends longer than
+/// `stuck_ttl_secs` (default 1800s) thinking and committing inside its worktree
+/// is silent to the TTL while being alive by every durable signal. Every id this
+/// returns is reset to `Pending` with its `worktree`/`branch` cleared
+/// (`StateAction::Abandon` in `main.rs`), after which the skill re-dispatches it
+/// — so a wrong answer here puts a SECOND worker into a live worker's worktree,
+/// the shared-index collision CLAUDE.md §8 names as the one conflict git cannot
+/// resolve. It was observed (`356bd51d`).
+///
+/// The rule is therefore the one [`crate::claim::retain_claim`] already applies
+/// to claims: staleness only makes a task ELIGIBLE, and the reap fires only on a
+/// confirmed `Known(Stalled)` from the multi-sample progress engine.
+/// `Known(Progressing)` and `Undetermined` both mean "do not abandon"
+/// (fail-closed, CLAUDE.md §3) — see [`stuck_progress_is_abandonable`].
+///
+/// Tasks whose `updated_at` is `None` (legacy data without timestamp) are still
+/// **not** stuck — absence of evidence is not evidence of being stuck — and the
+/// progress verdict of such a task is `Undetermined` anyway (its
+/// `task-updated-at` signal is unreadable), so both filters agree.
+///
+/// # What this does NOT see (residual, stated rather than glossed over)
+///
+/// The signals are `probe_run`'s task-scoped pair, and neither of them moves for
+/// a worker that is *thinking*, or *editing files in its worktree without
+/// committing*. Such a worker hardens to `Known(Stalled)` once the window
+/// elapses and IS abandoned here — the very re-dispatch this gate exists to
+/// prevent, for the subset of live workers that have not yet committed. Closing
+/// it needs a third signal that sees uncommitted work (working-tree mtime / a
+/// `git status` digest); that signal is deliberately NOT added here because no
+/// test pins it, and it is tracked as backlog `0dc6546f`. The gate as it stands
+/// protects the *committing* worker only.
+///
+/// The EXPLICIT override `state abandon --task <id>` is deliberately UNGATED and
+/// does not call this: a human naming one task is how a genuinely dead worker
+/// whose worktree was deleted (`Undetermined` forever here) is still recovered.
+pub fn stuck_task_ids(
+    cfg: &Config,
+    cwd: &Path,
+    run: &RunState,
+    stuck_ttl_secs: u64,
+    now: i64,
+) -> Vec<String> {
+    let threshold = now - stuck_ttl_secs as i64;
     run.tasks
         .iter()
         .filter(|t| t.status == Status::Running)
         .filter(|t| t.updated_at.map(|ts| ts < threshold).unwrap_or(false))
+        .filter(|t| {
+            let (_, verdict) = task_progress(
+                cfg,
+                cwd,
+                STUCK_GATE_PROGRESS_KEY_PREFIX,
+                &run.run_id,
+                t,
+                now,
+            );
+            stuck_progress_is_abandonable(&verdict)
+        })
         .map(|t| t.id.clone())
         .collect()
+}
+
+/// May a TTL-stale task be bulk-abandoned on this progress verdict? Matched
+/// exhaustively with **no wildcard arm**, so a new [`progress::Liveness`]
+/// variant is a compile error rather than a silently permissive default.
+///
+/// Only a confirmed `Known(Stalled)` authorises the abandon. `Progressing` is a
+/// demonstrably live worker, and `Undetermined` — an unreadable worktree HEAD, a
+/// task with no worktree at all, a first observation, or a window that has not
+/// elapsed — is "cannot determine", which is never "dead" (CLAUDE.md §3). This
+/// is the same rule as [`crate::claim::retain_claim`], stated in the positive.
+fn stuck_progress_is_abandonable(v: &Determination<progress::Liveness>) -> bool {
+    match v {
+        Determination::Known(progress::Liveness::Stalled) => true,
+        Determination::Known(progress::Liveness::Progressing) => false,
+        Determination::Undetermined(_) => false,
+    }
 }
 
 // ── Progress probe (observability) ────────────────────────────────────────
@@ -1087,8 +1166,10 @@ pub struct TaskProbe {
     /// (no prior snapshot) and any probe before the window elapses are
     /// `undetermined` by construction. A task with **no worktree** is likewise
     /// `undetermined` — there is no task-scoped signal to read for it (§3), and
-    /// that is not softened into `progressing`. This report is print-only, so it
-    /// carries no reap authority of its own; the reap gate is `claim_progress`.
+    /// that is not softened into `progressing`. This report is print-only and
+    /// keeps its own freeze clock, so it carries no reap authority of its own;
+    /// the gates that do are `claim_progress` (claims) and `stuck_task_ids`
+    /// (bulk abandon), the latter reading this same task-scoped signal pair.
     pub verdict: String,
 }
 
@@ -1124,6 +1205,75 @@ fn signal_sample(name: &str, d: &Determination<Vec<u8>>) -> SignalSample {
     }
 }
 
+/// Multi-sample store key prefix for [`probe_run`]'s own progress series. See
+/// [`STUCK_GATE_PROGRESS_KEY_PREFIX`] for why the two consumers do not share one.
+const PROBE_PROGRESS_KEY_PREFIX: &str = "probe";
+
+/// The ONE place a task's TASK-SCOPED progress verdict is assembled: read this
+/// task's own signals, fold them (fail-closed) into a fingerprint, advance the
+/// multi-sample state machine by one step, and return both the per-signal
+/// readings (for the `state probe` view) and the verdict.
+///
+/// Two consumers share it so they cannot drift apart: the print-only
+/// [`probe_run`] and the reap-authoritative [`stuck_task_ids`]. They pass
+/// DIFFERENT `key_prefix`es ([`PROBE_PROGRESS_KEY_PREFIX`] /
+/// [`STUCK_GATE_PROGRESS_KEY_PREFIX`]) so each keeps its own freeze clock —
+/// printing a probe must not advance the clock that authorises a re-dispatch.
+///
+/// # The signals are TASK-SCOPED, not repo-wide
+///
+/// * `task-worktree-head` — git HEAD of **that task's own worktree**
+///   (`TaskState.worktree`), not of the repo containing `cwd`. Under CLAUDE.md
+///   §8 other sessions always commit to the shared repo, so a repo-wide HEAD
+///   moves for reasons having nothing to do with this task.
+/// * `task-updated-at` — that task's `updated_at`.
+///
+/// A task with **no worktree** (serial / fast-path / single-worktree mode) has
+/// no task-scoped durable signal at all: that is `Undetermined` (§3), and it
+/// deliberately does NOT fall back to the repo-wide HEAD, which would resolve
+/// "I cannot see this task" into a signal somebody else controls. Because
+/// [`progress::fingerprint_from_signals`] is fail-closed on any unreadable
+/// signal, one unreadable signal makes the whole verdict `Undetermined` — it
+/// never reads as "frozen".
+fn task_progress(
+    cfg: &Config,
+    cwd: &Path,
+    key_prefix: &str,
+    run_id: &str,
+    t: &TaskState,
+    now: i64,
+) -> (Vec<SignalSample>, Determination<progress::Liveness>) {
+    let head = match t.worktree.as_deref() {
+        Some(wt) => progress::git_head_signal(Path::new(wt)),
+        None => Determination::undetermined(
+            "task has no worktree — no task-scoped progress signal exists for it",
+        ),
+    };
+    let updated = match t.updated_at {
+        Some(ts) => Determination::Known(ts.to_string().into_bytes()),
+        None => Determination::undetermined(
+            "task has no updated_at (legacy) — durable progress unreadable",
+        ),
+    };
+    let signals = vec![
+        signal_sample("task-worktree-head", &head),
+        signal_sample("task-updated-at", &updated),
+    ];
+    let current = progress::fingerprint_from_signals(vec![
+        ("task-worktree-head", head),
+        ("task-updated-at", updated),
+    ]);
+    let key = format!("{key_prefix}:{run_id}:{}", t.id);
+    let verdict = progress::sample(
+        &crate::claim::progress_store_dir(cfg, cwd),
+        &key,
+        current,
+        now,
+        progress::window_secs(progress::DEFAULT_WINDOW_SECS),
+    );
+    (signals, verdict)
+}
+
 /// Probe the PROGRESS (not liveness) of every RUNNING task in a run: sample each
 /// task's durable signals into the shared multi-sample progress store and report
 /// its verdict, signals, and age since last durable advance.
@@ -1154,17 +1304,26 @@ fn signal_sample(name: &str, d: &Determination<Vec<u8>>) -> SignalSample {
 /// back to the repo-wide HEAD: that fallback is exactly the defect above, and it
 /// resolves "I cannot see this task" to the permissive `progressing`.
 ///
-/// # What this does NOT detect (residual, stated rather than glossed over)
+/// # What this does NOT detect (residual — and it is NO LONGER print-only)
 ///
-/// A worker that is editing files in its worktree **without committing** moves
-/// neither the worktree HEAD nor `updated_at`, so once the window elapses it now
-/// reads `stalled` even though it is working. This report is **print-only
-/// observability** (`StateAction::Probe` in `main.rs` only prints it; it reaps
-/// nothing and gates nothing), so that misreading costs a human a wrong glance,
-/// not a stolen worktree. Closing it would need a working-tree-mtime signal,
-/// which is deliberately not added here. The reap-authoritative twin is
-/// `claim::claim_progress`, which is a different multi-signal gate and is
-/// unchanged by this function.
+/// A worker that is thinking, or editing files in its worktree **without
+/// committing**, moves neither the worktree HEAD nor `updated_at`, so once the
+/// window elapses it reads `stalled` even though it is working.
+///
+/// This paragraph used to justify that misreading by saying it "costs a human a
+/// wrong glance, not a stolen worktree", because `StateAction::Probe` only
+/// prints. **That justification is dead.** [`stuck_task_ids`] — the selector
+/// behind `state abandon --all-stuck`, which resets a task to `Pending`, clears
+/// its worktree and gets it re-dispatched — is now gated on the SAME task-scoped
+/// signal pair, assembled by the SAME [`task_progress`]. This function still
+/// reaps nothing itself (and keeps a separate freeze clock, see
+/// [`PROBE_PROGRESS_KEY_PREFIX`]), but the blind spot the two share now has reap
+/// consequences on the other side: a not-yet-committing worker reads `stalled`
+/// there and loses its worktree. Closing it needs a third signal that sees
+/// uncommitted work (working-tree mtime / a `git status` digest); it is
+/// deliberately not added yet because no test pins it, and it is tracked as
+/// backlog `0dc6546f`. The other reap-authoritative twin is
+/// `claim::claim_progress`, a run-scoped gate unchanged by this function.
 ///
 /// This is the observability twin of the reap gate — it does not reap anything,
 /// but it samples the SAME engine, so repeated probes across the window are what
@@ -1174,34 +1333,10 @@ fn signal_sample(name: &str, d: &Determination<Vec<u8>>) -> SignalSample {
 pub fn probe_run(cfg: &Config, cwd: &Path, run_id: &str, now: i64) -> Result<RunProbe> {
     let rs = RunState::load(cfg, cwd, run_id)?;
     let window = progress::window_secs(progress::DEFAULT_WINDOW_SECS);
-    let store = crate::claim::progress_store_dir(cfg, cwd);
 
     let mut tasks = Vec::new();
     for t in rs.tasks.iter().filter(|t| t.status == Status::Running) {
-        // Task-scoped: this task's OWN worktree HEAD. No worktree ⇒ no
-        // task-scoped signal ⇒ Undetermined (§3), never a repo-wide fallback.
-        let head = match t.worktree.as_deref() {
-            Some(wt) => progress::git_head_signal(Path::new(wt)),
-            None => Determination::undetermined(
-                "task has no worktree — no task-scoped progress signal exists for it",
-            ),
-        };
-        let updated = match t.updated_at {
-            Some(ts) => Determination::Known(ts.to_string().into_bytes()),
-            None => Determination::undetermined(
-                "task has no updated_at (legacy) — durable progress unreadable",
-            ),
-        };
-        let signals = vec![
-            signal_sample("task-worktree-head", &head),
-            signal_sample("task-updated-at", &updated),
-        ];
-        let current = progress::fingerprint_from_signals(vec![
-            ("task-worktree-head", head),
-            ("task-updated-at", updated),
-        ]);
-        let key = format!("probe:{run_id}:{}", t.id);
-        let verdict = progress::sample(&store, &key, current, now, window);
+        let (signals, verdict) = task_progress(cfg, cwd, PROBE_PROGRESS_KEY_PREFIX, run_id, t, now);
         tasks.push(TaskProbe {
             task_id: t.id.clone(),
             agent_id: t.agent_id.clone(),
@@ -3430,9 +3565,7 @@ mod tests {
         ttl: u64,
         now: i64,
     ) -> Vec<String> {
-        // Read by the gated selector; the current TTL-only one takes neither.
-        let _ = (cfg, cwd, now);
-        stuck_task_ids(run, ttl)
+        stuck_task_ids(cfg, cwd, run, ttl, now)
     }
 
     fn head_of(repo: &Path) -> String {

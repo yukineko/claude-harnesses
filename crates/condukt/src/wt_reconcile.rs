@@ -62,7 +62,10 @@
 //! that holds reap authority over claims, not over directories; it sampled a
 //! REPO-WIDE git HEAD until backlog `aa6d6e43` was fixed) nor
 //! `state::stuck_task_ids`
-//! (an `updated_at` age filter with no liveness signal at all). The only thing
+//! (an `updated_at` age filter that, since backlog `356bd51d`, additionally
+//! requires a confirmed `Known(Stalled)` TASK-scoped progress verdict before it
+//! authorises `state abandon --all-stuck` — a different gate over a different
+//! subject, still not consumed here). The only thing
 //! borrowed from `claim` is `progress_store_dir`, a path helper, so that this
 //! module's samples land in the same store as the rest of the engine.
 

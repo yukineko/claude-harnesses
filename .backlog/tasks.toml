@@ -10900,9 +10900,38 @@ Issues を Read and write にするしかない。
   (a) PAT に Issues: Read and write を付与する (推奨。sync が完全に機能する)
   (b) close を諦める。その場合 sync の close 経路は永久に 403 を返し続けるので、
       「同期している」という記述自体が偽になる — 撤去するか、
-      未対応であることをコマンドのヘルプに明記する必要がある。"""
+      未対応であることをコマンドのヘルプに明記する必要がある。
+
+--- 追記 (2026-08-14、測定点 ec389f2d): 再試行したが同じ 403。retry 経路は検証済み ---
+
+ユーザー指示で `backlog sync --apply` を再実行した。**PAT の権限は付与されておらず、
+結果は初回と同一**:
+
+    5ba13c3e: close #196 failed: gh issue close failed:
+      GraphQL: Resource not accessible by personal access token (closeIssue)
+
+`gh auth status` は初回と同じ fine-grained PAT (github_pat_11AAAYUNQ0...) を示す。
+別の credential へ切り替わってはいない。したがって blocker は不変で、
+必要なのは同じ人手のアクション (Issues: Read and write の付与)。
+
+**ただし今回、retry 経路そのものを実測で検証した** — これは初回には無かった観測:
+
+  (a) 部分適用の exit code は **1** (非0)。初回はパイプ越しに読んでいたため
+      `tail` の status を見ており 0 に見えていた。subprocess で直接測り直した。
+  (b) 失敗した close は **何も記録しない**: issue_closed_at を持つ task 数は
+      実行前後とも **0** のまま。
+  (c) 再 plan は依然 **0 create / 60 close**。つまり 60 件すべてが retryable のまま残る。
+
+この 3 点は commit message が主張していた設計そのもので、**主張ではなく観測として
+確認できた**。権限付与後は `backlog sync --apply` 一発で 60 件が解消する
+(冪等・再実行安全であることが (b)(c) で裏付けられた)。
+
+なお 60 件すべてを試行してはいない。1 件の canary が 403 を返した時点で残り 59 件も
+同一原因で失敗することが確定しているため、無駄な round-trip を打っていない
+(「やっていないことはやっていない」と記録する)。
+"""
 created_at = 1786637809
-updated_at = 1786637809
+updated_at = 1786639471
 weight = 0.0
 issue_number = 333
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/333"

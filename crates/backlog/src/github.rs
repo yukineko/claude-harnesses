@@ -118,6 +118,91 @@ pub fn parse_issue_number(url: &str) -> Option<u64> {
     url.rsplit('/').next()?.parse().ok()
 }
 
+/// Why an issue is being closed. Maps to `gh issue close --reason`, whose
+/// accepted values are exactly `completed` and `"not planned"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseReason {
+    /// The task was finished (`backlog done`).
+    Completed,
+    /// The task was abandoned (`status = "cancelled"`).
+    NotPlanned,
+}
+
+impl CloseReason {
+    /// The literal `gh issue close --reason` value.
+    pub fn as_gh_reason(self) -> &'static str {
+        match self {
+            CloseReason::Completed => "completed",
+            CloseReason::NotPlanned => "not planned",
+        }
+    }
+}
+
+/// Deterministically format the argv for `gh issue close`. Pure, no side effects.
+///
+/// Shape: `["issue","close","<number>","--reason",<reason>]`.
+pub fn build_issue_close_args(number: u64, reason: CloseReason) -> Vec<String> {
+    vec![
+        "issue".to_string(),
+        "close".to_string(),
+        number.to_string(),
+        "--reason".to_string(),
+        reason.as_gh_reason().to_string(),
+    ]
+}
+
+/// The outcome of the `gh issue close` step.
+///
+/// Unlike [`IssueOutcome`], this type has **no "degraded, carry on" arm that
+/// the caller may treat as success**. `gh issue create` can degrade to
+/// local-only because the task itself still exists and is still queued —
+/// nothing is lost. A close is the opposite: the local store has already moved
+/// on to `done`, so a close that silently does not happen leaves an open issue
+/// that nothing will ever revisit. That asymmetry is the whole reason this is a
+/// separate type, and why [`CloseOutcome::NotClosed`] carries its reason
+/// instead of collapsing into a bool (CLAUDE.md §3: "could not close" is not
+/// "closed").
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "outcome")]
+pub enum CloseOutcome {
+    /// gh executed `issue close` and reported success.
+    Closed,
+    /// The issue was NOT closed. The caller must not record a close: it leaves
+    /// `issue_closed_at` unset so the next `backlog sync` retries.
+    NotClosed { reason: String },
+}
+
+/// Decide the outcome of a `gh issue close` invocation from its injected
+/// result. Never spawns a process itself; never panics.
+///
+/// Every non-success path — non-GitHub remote, gh absent (`None`), gh ran and
+/// failed (`Some((false, _))`) — resolves to [`CloseOutcome::NotClosed`], i.e.
+/// the restrictive side: the mirror is assumed still open until GitHub says
+/// otherwise. Only an affirmative `Some((true, _))` yields `Closed`.
+pub fn decide_issue_close<R: Fn(&[&str]) -> Option<(bool, String)>>(
+    remote_url: &str,
+    number: u64,
+    reason: CloseReason,
+    run: R,
+) -> CloseOutcome {
+    if !is_github_remote(remote_url) {
+        return CloseOutcome::NotClosed {
+            reason: "remote is not github.com; nothing to close".to_string(),
+        };
+    }
+    let args = build_issue_close_args(number, reason);
+    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    match run(&argv) {
+        None => CloseOutcome::NotClosed {
+            reason: "gh CLI not found; issue left open".to_string(),
+        },
+        Some((false, output)) => CloseOutcome::NotClosed {
+            reason: format!("gh issue close failed: {}", output.trim()),
+        },
+        Some((true, _)) => CloseOutcome::Closed,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,4 +366,191 @@ mod tests {
             }
         );
     }
+
+    //
+    // Available in scope via `use super::*;`: decide_issue_close,
+    // build_issue_close_args, CloseReason, CloseOutcome.
+    // Mirrors the style of the existing decide_issue_create tests (panicking
+    // runner to prove non-invocation; argv asserted inside the runner).
+    // =============================================================================
+
+    // --- gh issue close ------------------------------------------------------
+
+    /// The `--reason` values are fixed by gh's CLI contract: exactly
+    /// `completed` and `not planned` (with the space). Dies if either literal
+    /// is changed — gh rejects anything else, so a typo here turns every
+    /// close into a NotClosed at runtime with no local test failure.
+    #[test]
+    fn close_reason_maps_to_the_exact_gh_literals() {
+        assert_eq!(CloseReason::Completed.as_gh_reason(), "completed");
+        assert_eq!(CloseReason::NotPlanned.as_gh_reason(), "not planned");
+    }
+
+    /// Exact argv shape for both reasons, including the number's position.
+    /// Dies if the argv order changes, if `--reason` is dropped, or if the
+    /// issue number stops being rendered as its own positional argument.
+    #[test]
+    fn build_issue_close_args_is_deterministic() {
+        assert_eq!(
+            build_issue_close_args(42, CloseReason::Completed),
+            vec![
+                "issue".to_string(),
+                "close".to_string(),
+                "42".to_string(),
+                "--reason".to_string(),
+                "completed".to_string(),
+            ]
+        );
+        assert_eq!(
+            build_issue_close_args(7, CloseReason::NotPlanned),
+            vec![
+                "issue".to_string(),
+                "close".to_string(),
+                "7".to_string(),
+                "--reason".to_string(),
+                "not planned".to_string(),
+            ]
+        );
+    }
+
+    /// A non-GitHub remote must resolve to NotClosed WITHOUT invoking `run`
+    /// at all — we never shell out to gh against someone else's forge.
+    /// Dies if the `is_github_remote` guard is removed (the runner panics),
+    /// and dies if `decide_issue_close` returns `Closed` unconditionally.
+    #[test]
+    fn close_non_github_remote_is_not_closed_without_running_gh() {
+        let outcome = decide_issue_close(
+            "https://gitlab.com/owner/repo.git",
+            42,
+            CloseReason::Completed,
+            |_argv| panic!("run must not be called for a non-github remote"),
+        );
+        match outcome {
+            CloseOutcome::NotClosed { reason } => assert!(
+                reason.contains("not github.com"),
+                "reason must explain the remote is not github.com: {reason:?}"
+            ),
+            other => panic!("non-github remote must not be Closed, got {other:?}"),
+        }
+    }
+
+    /// Same invariant, proved by RECORDING invocation rather than panicking —
+    /// a runner that swallowed the panic (or a future `catch_unwind`) cannot
+    /// hide a spurious gh call from this one.
+    /// Dies if the `is_github_remote` guard is removed.
+    #[test]
+    fn close_non_github_remote_records_zero_runner_calls() {
+        use std::cell::Cell;
+        let calls = Cell::new(0usize);
+        let outcome = decide_issue_close(
+            "git@gitlab.com:owner/repo.git",
+            42,
+            CloseReason::NotPlanned,
+            |_argv| {
+                calls.set(calls.get() + 1);
+                Some((true, String::new()))
+            },
+        );
+        assert_eq!(
+            calls.get(),
+            0,
+            "gh must not be invoked for a non-github remote"
+        );
+        assert!(
+            matches!(outcome, CloseOutcome::NotClosed { .. }),
+            "non-github remote must not be Closed, got {outcome:?}"
+        );
+    }
+
+    /// gh absent (runner returns None) ⇒ NotClosed, i.e. the issue is assumed
+    /// STILL OPEN so the next sync retries (CLAUDE.md §3: "could not close"
+    /// is not "closed").
+    /// Dies if the `None` arm is changed to `Closed`, and dies if
+    /// `decide_issue_close` returns `Closed` unconditionally.
+    #[test]
+    fn close_gh_absent_is_not_closed() {
+        let outcome = decide_issue_close(
+            "https://github.com/owner/repo.git",
+            42,
+            CloseReason::Completed,
+            |_argv| None,
+        );
+        match outcome {
+            CloseOutcome::NotClosed { reason } => assert!(
+                reason.contains("not found"),
+                "reason must explain gh is absent: {reason:?}"
+            ),
+            other => panic!("gh-absent must not be Closed, got {other:?}"),
+        }
+    }
+
+    /// gh ran and exited non-zero ⇒ NotClosed, and the reason CARRIES gh's
+    /// output so the failure is diagnosable rather than a bare bool.
+    /// Dies if the exit status is ignored (the `Some((false, _))` arm folded
+    /// into the success arm) — the exact fail-open this type exists to
+    /// prevent — and dies if the output is dropped from the reason.
+    #[test]
+    fn close_gh_failure_is_not_closed_and_carries_the_output() {
+        let outcome = decide_issue_close(
+            "https://github.com/owner/repo.git",
+            42,
+            CloseReason::Completed,
+            |_argv| Some((false, "HTTP 403: resource not accessible\n".to_string())),
+        );
+        match outcome {
+            CloseOutcome::NotClosed { reason } => {
+                assert!(
+                    reason.contains("gh issue close failed"),
+                    "reason must say the close failed: {reason:?}"
+                );
+                assert!(
+                    reason.contains("resource not accessible"),
+                    "reason must carry gh's own output: {reason:?}"
+                );
+            }
+            other => panic!("a non-zero gh exit must not be Closed, got {other:?}"),
+        }
+    }
+
+    /// gh success ⇒ Closed, AND the argv handed to gh is exactly
+    /// ["issue","close","42","--reason","completed"].
+    /// Dies if `decide_issue_close` returns `NotClosed` unconditionally, and
+    /// dies if the argv construction drifts (asserted inside the runner).
+    #[test]
+    fn close_success_yields_closed_with_completed_argv() {
+        let outcome = decide_issue_close(
+            "https://github.com/owner/repo.git",
+            42,
+            CloseReason::Completed,
+            |argv| {
+                assert_eq!(argv, ["issue", "close", "42", "--reason", "completed"]);
+                Some((
+                    true,
+                    "https://github.com/owner/repo/issues/42\n".to_string(),
+                ))
+            },
+        );
+        assert_eq!(outcome, CloseOutcome::Closed);
+    }
+
+    /// The NotPlanned reason must reach gh as the literal `not planned` (two
+    /// words, one argv element), and success still yields Closed.
+    /// Dies if `decide_issue_close` returns `NotClosed` unconditionally, if
+    /// the reason is hard-wired to `completed`, or if `not planned` is split
+    /// into two argv elements / hyphenated.
+    #[test]
+    fn close_success_yields_closed_with_not_planned_argv() {
+        let outcome = decide_issue_close(
+            "git@github.com:owner/repo.git",
+            7,
+            CloseReason::NotPlanned,
+            |argv| {
+                assert_eq!(argv, ["issue", "close", "7", "--reason", "not planned"]);
+                Some((true, String::new()))
+            },
+        );
+        assert_eq!(outcome, CloseOutcome::Closed);
+    }
+
+    // =============================================================================
 }

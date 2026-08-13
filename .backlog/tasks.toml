@@ -12,6 +12,8 @@ notes = '実測 2026-08-06 windows-x86_64: ~/.cargo/env は存在しない (ls �
 created_at = 1785983806
 updated_at = 1785983806
 weight = 0.0
+issue_number = 281
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/281"
 
 [[task]]
 id = "6d59e6eb"
@@ -27,6 +29,8 @@ notes = '実測 2026-08-06。(a) .cargo/config.toml の target-dir = "/tmp/condu
 created_at = 1785983822
 updated_at = 1785983822
 weight = 0.0
+issue_number = 282
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/282"
 
 [[task]]
 id = "8acb117a"
@@ -3465,6 +3469,8 @@ notes = ""
 created_at = 1784554661
 updated_at = 1784554661
 weight = 0.0
+issue_number = 283
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/283"
 
 [[task]]
 id = "e5623f14"
@@ -3561,6 +3567,8 @@ notes = ""
 created_at = 1784579474
 updated_at = 1784579474
 weight = 0.0
+issue_number = 284
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/284"
 
 [[task]]
 id = "589b250d"
@@ -3573,6 +3581,8 @@ notes = ""
 created_at = 1784579474
 updated_at = 1784579474
 weight = 0.0
+issue_number = 285
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/285"
 
 [[task]]
 id = "99b71596"
@@ -3609,6 +3619,8 @@ notes = "e117d351 hardening residual (adversarial-verifier axis 3). hold_placed_
 created_at = 1784583600
 updated_at = 1784583600
 weight = 0.0
+issue_number = 286
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/286"
 
 [[task]]
 id = "845475af"
@@ -3621,6 +3633,8 @@ notes = "Pre-existing, surfaced by 8271c1a1 adversarial verify (out of scope of 
 created_at = 1784588341
 updated_at = 1784588341
 weight = 0.0
+issue_number = 287
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/287"
 
 [[task]]
 id = "0fe96299"
@@ -3633,6 +3647,8 @@ notes = ""
 created_at = 1784601774
 updated_at = 1784601774
 weight = 0.0
+issue_number = 288
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/288"
 
 [[task]]
 id = "d85a173c"
@@ -3999,6 +4015,8 @@ notes = """確認済み finding が修正コミットまで到達しても dispo
 created_at = 1784603235
 updated_at = 1784603235
 weight = 0.0
+issue_number = 289
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/289"
 
 [[task]]
 id = "1879da71"
@@ -4290,6 +4308,8 @@ notes = "81888b5a の復活（これで棄却誤り2回目）。第一検証者�
 created_at = 1784606616
 updated_at = 1785279948
 weight = 0.0
+issue_number = 290
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/290"
 
 [[task]]
 id = "7ab39215"
@@ -4324,6 +4344,8 @@ notes = "合成ハザード。gate は別プロセスで相互不可視 (docs/st
 created_at = 1784606616
 updated_at = 1784606616
 weight = 0.0
+issue_number = 291
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/291"
 
 [[task]]
 id = "50ad2c1e"
@@ -4392,6 +4414,8 @@ working tree を検査するため、実際には存在しないドリフトで�
 created_at = 1784607099
 updated_at = 1784747310
 weight = 0.0
+issue_number = 292
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/292"
 
 [[task]]
 id = "3fe6612e"
@@ -4455,6 +4479,8 @@ notes = ""
 created_at = 1784611504
 updated_at = 1784611504
 weight = 0.0
+issue_number = 293
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/293"
 
 [[task]]
 id = "32170548"
@@ -4479,6 +4505,8 @@ notes = "観測: cargo test --workspace をバックグラウンド(stdin が閉
 created_at = 1784627338
 updated_at = 1784627338
 weight = 0.0
+issue_number = 294
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/294"
 
 [[task]]
 id = "138607bc"
@@ -4530,6 +4558,8 @@ notes = "ユーザー裁定 2026-07-21: 省略時に confirmed を記録する�
 created_at = 1784638238
 updated_at = 1784638238
 weight = 0.0
+issue_number = 295
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/295"
 
 [[task]]
 id = "210f3e97"
@@ -4578,6 +4608,8 @@ notes = ""
 created_at = 1784642695
 updated_at = 1784642695
 weight = 0.0
+issue_number = 296
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/296"
 
 [[task]]
 id = "7c28a8da"
@@ -4630,6 +4662,8 @@ notes = ""
 created_at = 1784642695
 updated_at = 1784642695
 weight = 0.0
+issue_number = 297
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/297"
 
 [[task]]
 id = "1ddb13ab"
@@ -4654,6 +4688,8 @@ notes = ""
 created_at = 1784650680
 updated_at = 1784650680
 weight = 0.0
+issue_number = 298
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/298"
 
 [[task]]
 id = "a5d9bdd8"
@@ -4666,6 +4702,8 @@ notes = ""
 created_at = 1784650680
 updated_at = 1784650680
 weight = 0.0
+issue_number = 299
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/299"
 
 [[task]]
 id = "22cfd3cc"
@@ -4678,6 +4716,8 @@ notes = ""
 created_at = 1784651321
 updated_at = 1784651321
 weight = 0.0
+issue_number = 300
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/300"
 
 [[task]]
 id = "b0cacd15"
@@ -4715,6 +4755,8 @@ b4baf3d7 は「型封印 905ab2de が塞げない残余の第二層」という�
 created_at = 1784651471
 updated_at = 1785967342
 weight = 0.0
+issue_number = 301
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/301"
 
 [[task]]
 id = "71b7b1bc"
@@ -4727,6 +4769,8 @@ notes = ""
 created_at = 1784652930
 updated_at = 1784652930
 weight = 0.0
+issue_number = 302
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/302"
 
 [[task]]
 id = "5ddcc99c"
@@ -4739,6 +4783,8 @@ notes = ""
 created_at = 1784653267
 updated_at = 1784653267
 weight = 0.0
+issue_number = 303
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/303"
 
 [[task]]
 id = "c057c7e7"
@@ -4751,6 +4797,8 @@ notes = ""
 created_at = 1784658081
 updated_at = 1784658081
 weight = 0.0
+issue_number = 304
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/304"
 
 [[task]]
 id = "5d008358"
@@ -4763,6 +4811,8 @@ notes = ""
 created_at = 1784658081
 updated_at = 1784658081
 weight = 0.0
+issue_number = 305
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/305"
 
 [[task]]
 id = "15cee27a"
@@ -4941,6 +4991,8 @@ test_certificate_does_not_survive_head_moving が意図的に固定している�
 created_at = 1784673254
 updated_at = 1784673254
 weight = 0.0
+issue_number = 306
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/306"
 
 [[task]]
 id = "12e28818"
@@ -4989,6 +5041,8 @@ done_criteria が複数の独立項目を含む場合は項目数と抽出コマ
 created_at = 1784723291
 updated_at = 1784723291
 weight = 0.0
+issue_number = 307
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/307"
 
 [[task]]
 id = "6a9f4ac1"
@@ -5066,6 +5120,8 @@ CLAUDE.md 3.(空集合を合格と読ませない)および『沈黙は許容さ
 created_at = 1784723404
 updated_at = 1784723404
 weight = 0.0
+issue_number = 308
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/308"
 
 [[task]]
 id = "19ccedd8"
@@ -5113,6 +5169,8 @@ done_criteria は満たしており本タスクは pass。以下は『このス�
 created_at = 1784724116
 updated_at = 1784724153
 weight = 0.0
+issue_number = 309
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/309"
 
 [[task]]
 id = "c3a98510"
@@ -5125,6 +5183,8 @@ notes = "同じクラスが scripts/tests/*.sh にもある: version-bumped-bin-
 created_at = 1784724729
 updated_at = 1785424114
 weight = 0.0
+issue_number = 310
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/310"
 
 [[task]]
 id = "17057070"
@@ -5137,6 +5197,8 @@ notes = ""
 created_at = 1784728446
 updated_at = 1784728446
 weight = 0.0
+issue_number = 311
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/311"
 
 [[task]]
 id = "0213f7a9"
@@ -5201,6 +5263,8 @@ notes = "根拠: 類似度判定は既に実装済みで未適用 — overwatch/
 created_at = 1784745779
 updated_at = 1784745779
 weight = 0.0
+issue_number = 312
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/312"
 
 [[task]]
 id = "e73a1fd5"
@@ -5217,6 +5281,8 @@ notes = "根拠: crates/backlog/src/task.rs:21-43 に scope も touched_files �
 created_at = 1784745779
 updated_at = 1784745779
 weight = 0.0
+issue_number = 313
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/313"
 
 [[task]]
 id = "68d73e6f"
@@ -5250,6 +5316,8 @@ notes = "実測 (2026-07-23, 本セッション): 私は crates/harness-core を
 created_at = 1784746143
 updated_at = 1784746143
 weight = 0.0
+issue_number = 314
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/314"
 
 [[task]]
 id = "0b6cb4c1"
@@ -5282,6 +5350,8 @@ notes = "根拠: 91e503c8 で記録した帰属バグの是正側。cargo fmt --
 created_at = 1784746561
 updated_at = 1784746561
 weight = 0.0
+issue_number = 315
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/315"
 
 [[task]]
 id = "2d3cbda2"
@@ -5298,6 +5368,8 @@ notes = "根拠: condukt state abandon は run-state のポインタしか消さ
 created_at = 1784746580
 updated_at = 1784746580
 weight = 0.0
+issue_number = 316
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/316"
 
 [[task]]
 id = "167cf55e"
@@ -5314,6 +5386,8 @@ notes = "根拠: crates/condukt/src/main.rs:2078 が worktree::create(&repo, &cf
 created_at = 1784747164
 updated_at = 1784747164
 weight = 0.0
+issue_number = 317
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/317"
 
 [[task]]
 id = "67a2275a"
@@ -5333,6 +5407,8 @@ notes = """
 created_at = 1784747178
 updated_at = 1784747178
 weight = 0.0
+issue_number = 318
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/318"
 
 [[task]]
 id = "2dedd498"
@@ -5348,6 +5424,8 @@ donegate の test-changed チェックがこれで落ちるため、harness-core
 created_at = 1784747178
 updated_at = 1784747178
 weight = 0.0
+issue_number = 319
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/319"
 
 [[task]]
 id = "2904dc6c"
@@ -5364,6 +5442,8 @@ notes = "根拠: 0213f7a9 で入れた create_namespaced は run が None のと
 created_at = 1784747525
 updated_at = 1784747525
 weight = 0.0
+issue_number = 320
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/320"
 
 [[task]]
 id = "b6a80342"
@@ -5380,6 +5460,8 @@ notes = "根拠: .githooks/pre-push の rollout drift rc=1 は 2026-07-23 に BL
 created_at = 1784749265
 updated_at = 1784749265
 weight = 0.0
+issue_number = 321
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/321"
 
 [[task]]
 id = "66557497"
@@ -5412,6 +5494,8 @@ notes = "根拠: 15b682d2 の実装者の申告。REPO_PRIMARY_LOCK のロック
 created_at = 1784749369
 updated_at = 1784749369
 weight = 0.0
+issue_number = 322
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/322"
 
 [[task]]
 id = "be9011a6"
@@ -5460,6 +5544,8 @@ notes = "e19d501a の作業中に cargo test --workspace を4回回したうち1
 created_at = 1784755092
 updated_at = 1784755092
 weight = 0.0
+issue_number = 323
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/323"
 
 [[task]]
 id = "992667e2"
@@ -5496,6 +5582,8 @@ notes = "実測 (2026-07-24): 他ジョブで CPU 飽和中に cargo test --work
 created_at = 1784832249
 updated_at = 1784832249
 weight = 0.0
+issue_number = 324
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/324"
 
 [[task]]
 id = "822c7209"
@@ -5564,6 +5652,8 @@ notes = "継続自律には condukt スイッチ・autoflow の継続挙動・ct
 created_at = 1784835986
 updated_at = 1784835986
 weight = 0.0
+issue_number = 325
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/325"
 
 [[task]]
 id = "0e5e3545"
@@ -5581,6 +5671,8 @@ notes = "自律を『さらに効果的に』するには stop-to-ask vs keep-go
 created_at = 1784835986
 updated_at = 1784835986
 weight = 0.0
+issue_number = 326
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/326"
 
 [[task]]
 id = "54c56d24"
@@ -5598,6 +5690,8 @@ notes = "テーマは context-rot を停止理由にしない(窓は auto-compac
 created_at = 1784835986
 updated_at = 1784835986
 weight = 0.0
+issue_number = 327
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/327"
 
 [[task]]
 id = "1bac3de6"
@@ -5615,6 +5709,8 @@ notes = "stop_run の backlog 分岐には give-up(backlog_prompts 上限で Don
 created_at = 1784835986
 updated_at = 1784835986
 weight = 0.0
+issue_number = 328
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/328"
 
 [[task]]
 id = "dd321c52"
@@ -5632,6 +5728,8 @@ notes = "セッション開始時に open backlog があると『/flow で開始
 created_at = 1784836009
 updated_at = 1784836009
 weight = 0.0
+issue_number = 329
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/329"
 
 [[task]]
 id = "1c66598a"
@@ -5649,6 +5747,8 @@ notes = "verdict-path の panic barrier は最初の stop では fail-closed(blo
 created_at = 1784836009
 updated_at = 1784836009
 weight = 0.0
+issue_number = 330
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/330"
 
 [[task]]
 id = "3f6f4bc9"
@@ -5666,6 +5766,8 @@ notes = "policy_is_autonomous は cfg.autonomous bool を confidence=High/Low �
 created_at = 1784836009
 updated_at = 1784836009
 weight = 0.0
+issue_number = 331
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/331"
 
 [[task]]
 id = "422d256a"
@@ -5700,6 +5802,8 @@ notes = "問題: 現行の record 型は成果物(backlog/code)を別フォー�
 created_at = 1784836915
 updated_at = 1784836915
 weight = 0.0
+issue_number = 332
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/332"
 
 [[task]]
 id = "6028507d"
@@ -10711,3 +10815,113 @@ updated_at = 1786635755
 weight = 0.0
 issue_number = 280
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/280"
+
+[[task]]
+id = "5df88c1d"
+title = "GitHub PAT が issue の更新権限を持たず、backlog sync の close が全件 403 になる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+測定日 2026-08-14、測定点 backlog 0.2.26 (worktree session-b57a58c3)。
+
+`backlog sync --apply` の close 側が 60 件すべて失敗する。逐語:
+
+    gh issue close 196 --reason completed
+    GraphQL: Resource not accessible by personal access token (closeIssue)
+
+GraphQL 固有ではない。REST も同じく 403:
+
+    gh api -X PATCH repos/yukineko/claude-harnesses/issues/196 -f state=closed
+    {"message":"Resource not accessible by personal access token","status":"403"}
+
+決定的な切り分け: **自分で作ったばかりの issue すら更新できない**。#282 を
+`gh issue create` 経由で作成した直後に、タイトルを現在値と同一のまま PATCH した
+(値を変えない no-op 書き込み) ところ、同じ 403 が返った。つまり
+「close だけが禁じられている」のでも「他人の issue だから」でもなく、
+このトークンは **issue の create はできるが update は一切できない**。
+
+一方 `gh api repos/yukineko/claude-harnesses --jq .permissions` は
+{"admin":true,"maintain":true,"pull":true,"push":true,"triage":true} を返す
+— これは *ユーザーの* repo 権限であってトークンに付与されたスコープではないので、
+これを根拠に「権限はある」と読んではいけない (今回それで一度誤読しかけた)。
+
+影響: 完了済み 60 件の issue が open のまま残る。コード側は正しく fail-closed
+しており、失敗した close については issue_closed_at を書かないので、権限が
+付いた後に `backlog sync --apply` を再実行すれば全件が自動で回収される
+(既に閉じている issue への close は no-op なので二重実行も安全)。
+
+**これは CLAUDE.md 7 が名指しする状況そのもの**: 外部サービスが権限を握っており、
+こちら側では解除できない。手元でできるのは「閉じられていない」ことを可視に
+保つところまでで、実際の付与は人間が github.com の fine-grained PAT 設定で
+Issues を Read and write にするしかない。
+
+判定不能ではなく確定した観測なので、選択肢は 2 つ:
+  (a) PAT に Issues: Read and write を付与する (推奨。sync が完全に機能する)
+  (b) close を諦める。その場合 sync の close 経路は永久に 403 を返し続けるので、
+      「同期している」という記述自体が偽になる — 撤去するか、
+      未対応であることをコマンドのヘルプに明記する必要がある。"""
+created_at = 1786637809
+updated_at = 1786637809
+weight = 0.0
+issue_number = 333
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/333"
+
+[[task]]
+id = "0dafa254"
+title = 'task::STATUSES が実際に書かれる "cancelled" / "claimed" を含まず、正しい status が unknown 警告を出す'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+測定日 2026-08-14、測定点 backlog 0.2.26。
+
+crates/backlog/src/task.rs の STATUSES は 3 値しか持たない:
+
+    pub const STATUSES: [&str; 3] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED];
+
+しかし実ストア .backlog/tasks.toml には他に 2 つの status が実在する
+(577 件の内訳、同日実測):
+    done 322 / pending 238 / failed 9 / claimed 5 / cancelled 6
+
+`claimed` は `next --claim` が書き、`cancelled` は `edit --status` 経由で入る。
+task::status_warning は STATUSES に無い値を「unknown status」として警告するので、
+`backlog list --status cancelled` や `--status claimed` は**実在する正しい
+status を指定しているのに警告を出す**。逆に言うと、この警告は「タイポの検出」
+という本来の役目に対して偽陽性を出しており、警告の信頼性を下げている。
+
+なお本日の sync 実装ではこの定数を使わず store.rs 側に
+`pub const STATUS_CANCELLED` を別途置いた (STATUSES に足すと
+`--status` の受理集合や list のフィルタ挙動まで同時に変わってしまい、
+sync のスコープを越えるため)。**つまり今、status 語彙の正典が 2 箇所に
+分裂している** — これ自体が本 item で解消すべき対象である。
+
+両方の読みを残す:
+  (a) 実在の欠陥 = STATUSES が語彙の正典を名乗りながら実態を網羅していない。
+  (b) 意図的 = STATUSES は「ライフサイクルの主要3状態」だけを列挙する定数で、
+      claimed/cancelled は補助状態として意図的に外している。
+見分け方: status_warning の docstring と STATUSES の docstring は
+「全ての認識される status 値」(All recognised status values) と書いており、
+(b) の読みとは食い違う。docstring が実態と食い違っている時点で
+どちらにせよ直す対象になる (実装とコメントの食い違いは同一コミットで直す規範)。"""
+created_at = 1786637811
+updated_at = 1786637811
+weight = 0.0
+issue_number = 334
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/334"
+
+[[task]]
+id = "5aaecbf6"
+title = "condukt reconcile: rule what positively establishes worktree DEATH (fe84d350 is blocked on it)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "Found while implementing fe84d350 (unclaimed worktree occupancy to Undetermined). The 2026-08-12 ruling settles liveness for unclaimed worktrees but is silent on death. Strict reading makes Occupancy::Dead unreachable from reconcile, because the claimed-but-not-progressing arm already resolves to Undetermined (frozen is not dead, crates/condukt/src/wt_reconcile.rs:899). Consequences beyond the accepted drop in auto-removable: the preserved match in reconcile requires Known(Occupancy::Dead) in every arm, so --preserve becomes a no-op and the content-rescue safety net becomes dead code; and two currently-green tests cannot pass, dirty_worktree_is_preserved_before_it_becomes_removable and stale_preserved_ref_does_not_authorize_deletion. RED tests are committed at 375587a2 on branch condukt/run-20260814-005232-58819/run-20260814-005232-58819/t2-occupancy-undetermined with no implementation. Options are recorded in condukt escalate for run run-20260814-005232-58819 task t2-occupancy-undetermined. Do not retarget the two preservation tests without a ruling."
+created_at = 1786637812
+updated_at = 1786637812
+weight = 0.0
+issue_number = 335
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/335"

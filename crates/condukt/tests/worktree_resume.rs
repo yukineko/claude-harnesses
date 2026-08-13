@@ -26,9 +26,9 @@
 //! worktree off as "nothing to resume here" loses the work just as surely as
 //! deleting it. So:
 //!
-//! * `held`         — positively occupied. Never offered.
-//! * `resumable`    — positively unoccupied AND condukt run state holds a
-//!                    non-terminal task recorded at this path.
+//! * `held` — positively occupied. Never offered.
+//! * `resumable` — positively unoccupied AND condukt run state holds a
+//!   non-terminal task recorded at this path.
 //! * `undetermined` — everything else. Neither resumed nor discarded.
 //!
 //! # Why these runs are real
@@ -366,7 +366,8 @@ fn resume_candidates_consumes_the_same_report_as_reconcile() {
         "both views must be about the same repository"
     );
     assert_eq!(
-        resume["state_scan"], recon["state_scan"],
+        resume["state_scan"],
+        recon["state_scan"],
         "resume-candidates must forward the reconcile report's `state_scan` \
          VERBATIM — a separately derived scan is a second source of truth that \
          can disagree with the one the GC acts on.\nresume: {}\nreconcile: {}",
@@ -394,9 +395,9 @@ fn resume_candidates_consumes_the_same_report_as_reconcile() {
          on disk: {resume}"
     );
     for c in list {
-        let v = c["verdict"].as_str().unwrap_or_else(|| {
-            panic!("every candidate carries a string `verdict`; got: {c}")
-        });
+        let v = c["verdict"]
+            .as_str()
+            .unwrap_or_else(|| panic!("every candidate carries a string `verdict`; got: {c}"));
         assert!(
             matches!(v, "resumable" | "held" | "undetermined"),
             "the verdict is three-valued and nothing else; got {v:?} in {c}"
@@ -416,7 +417,8 @@ fn resume_candidates_consumes_the_same_report_as_reconcile() {
     // The branch is carried through from the report so the operator can see
     // what would be resumed.
     assert_eq!(
-        candidate(&resume, "wt-idle")["branch"], "feat/idle",
+        candidate(&resume, "wt-idle")["branch"],
+        "feat/idle",
         "candidate: {}",
         candidate(&resume, "wt-idle")
     );
@@ -687,7 +689,10 @@ fn resume_candidates_mutates_nothing() {
     );
 
     let state_before = std::fs::read(&state_path).unwrap();
-    let refs_before = run_git(&f.repo, &["for-each-ref", "--format=%(refname) %(objectname)"]);
+    let refs_before = run_git(
+        &f.repo,
+        &["for-each-ref", "--format=%(refname) %(objectname)"],
+    );
     let registry_before = run_git(&f.repo, &["worktree", "list", "--porcelain"]);
     let head_before = run_git(&wt, &["rev-parse", "HEAD"]);
     let status_before = run_git(&wt, &["status", "--porcelain"]);
@@ -714,7 +719,10 @@ fn resume_candidates_mutates_nothing() {
          discovery command must not decide anything on the operator's behalf"
     );
     assert_eq!(
-        run_git(&f.repo, &["for-each-ref", "--format=%(refname) %(objectname)"]),
+        run_git(
+            &f.repo,
+            &["for-each-ref", "--format=%(refname) %(objectname)"]
+        ),
         refs_before,
         "resume-candidates created or deleted a ref"
     );

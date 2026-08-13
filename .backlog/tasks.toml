@@ -11462,3 +11462,122 @@ updated_at = 1786643734
 weight = 0.0
 issue_number = 341
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/341"
+
+[[task]]
+id = "23869ff7"
+title = "context-governor: the rehydrator never runs on compact, so the pin-survival invariant I1 it exists to deliver is not wired"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "context-governor",
+    "doc-claims",
+    "p1",
+]
+status = "pending"
+notes = """
+Found 2026-08-14 while auditing 966ae7aa applicability (measurement point ee214481). Self-evidencing from the crate itself; no external knowledge needed.
+
+crates/context-governor/hooks/hooks.json registers SessionStart with matcher "startup|resume|clear". The value "compact" is EXCLUDED.
+
+Three docstrings assert the opposite:
+  crates/context-governor/src/defaults/rehydrator.rs:1-3  "so pins survive compaction (I1) ... Most relevant on source == compact"
+  crates/context-governor/src/handlers.rs:63-64            "so pins survive compaction (I1)"
+  crates/context-governor/src/types.rs:20-24               "long-lived pins are re-injected at SessionStart(compact) so they survive compaction"
+
+And the crate documents "compact" as a valid SessionStart source itself:
+  crates/context-governor/src/io.rs:13-14
+
+NET EFFECT: PreCompact snapshots pins to disk, compaction runs, and nothing re-injects them. I1
+(lossless recall of pinned/verbatim content across compaction) is not delivered in-session. The
+mechanism the crate is built around is disconnected at the hook registration, not in the logic.
+
+docs/coexistence-with-ctxrot.md around line 110 repeats the false claim ("recoverable afterward ...
+CG via the SessionStart rehydrator").
+
+This is CLAUDE.md section 4: prose asserting behavior the implementation does not have, in the exact
+shape that deceives the next reviewer. Fix is either to add compact to the matcher (and prove the
+rehydration behaviourally) or to correct all four prose sites in the same commit.
+
+NOT DONE: no fix attempted, no test written. Reported by the t4 investigator of run
+run-20260814-025356-78549; that agent made no source change by design."""
+created_at = 1786644197
+updated_at = 1786644197
+weight = 0.0
+issue_number = 342
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/342"
+
+[[task]]
+id = "565fb2a8"
+title = "context-governor: the coexistence test for SessionStart(compact) bypasses the hook matcher, so it can never observe that the rehydrator is unwired"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "context-governor",
+    "test-vacuity",
+    "p1",
+]
+status = "pending"
+notes = """
+Found 2026-08-14 alongside the rehydrator wiring gap (measurement point ee214481).
+
+crates/context-governor/tests/context_governor_coexistence_with_ctxrot.rs:190-210,
+test session_start_on_compact_source_exits_zero, is docstringed "this is exactly where CG rehydrator
+is *most* active".
+
+What it actually does: invokes the BINARY DIRECTLY with {"source": "compact"}, which BYPASSES the
+hooks.json matcher entirely, and then asserts only exit == 0, against an EMPTY store.
+
+So the test cannot fail when the matcher excludes compact (the wiring defect), and it cannot fail
+when rehydration emits nothing (empty store + exit-code-only assertion). It is green for reasons
+unrelated to the property its docstring claims.
+
+This is the CLAUDE.md section 2 pattern named in the repo guide: a test that verifies nothing has its
+assert fixed as the specification, and review then reads the green as coverage. The question to ask
+first is "what does this test NOT prove".
+
+Related: the wiring defect this test masks is filed separately in the same batch.
+
+NOT DONE: no fix, no replacement test. Reported by the t4 investigator of run
+run-20260814-025356-78549."""
+created_at = 1786644198
+updated_at = 1786644198
+weight = 0.0
+issue_number = 343
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/343"
+
+[[task]]
+id = "84a45113"
+title = "context-governor: comments describe a post-cap injected-size metric but neither injection path implements any cap"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "context-governor",
+    "doc-claims",
+    "p2",
+]
+status = "pending"
+notes = """
+Found 2026-08-14 (measurement point ee214481).
+
+crates/context-governor/src/bin/context-governor.rs:65 says it records "the post-cap injected
+additionalContext size".
+crates/harness-core/src/inject_metrics.rs:4-5 says "Each has its own per-injector char cap."
+
+context-governor implements NO cap on either injection path (the injector emits the whole matched
+section or the whole ToC; the rehydrator joins all pinned blocks). "post-cap" therefore describes a
+stage that does not exist, and a reader of the metric will believe the value is bounded when it is
+not.
+
+Low severity on its own, but it is the same docstring-vs-implementation class as the other two
+context-governor items filed in this batch, and it touches a metric other tooling reads
+(harness-status inject).
+
+Determine whether the right fix is to implement the cap or to correct both comments. Do not silently
+drop the word.
+
+NOT DONE: no fix. Reported by the t4 investigator of run run-20260814-025356-78549."""
+created_at = 1786644199
+updated_at = 1786644199
+weight = 0.0
+issue_number = 344
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/344"

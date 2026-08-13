@@ -10438,7 +10438,7 @@ issue_url = "https://github.com/yukineko/claude-harnesses/issues/272"
 
 [[task]]
 id = "1e6f00ae"
-title = "condukt worker の backlog add が worktree ではなく main のストアに着地し、main の作業ツリーを dirty にする (CLAUDE.md 8 の違反を構造的に誘発)"
+title = "backlog/compass の store 解決が cwd 依存のため、main から呼ぶ全ての状態書き込み (worker の add だけでなく flow driver 自身の next --claim / done / compass outcome) が main の作業ツリーに着地し、CLAUDE.md 8 違反を構造的に誘発する"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = [
@@ -10455,9 +10455,61 @@ notes = """
 
 直す方向の候補: (a) backlog の store 解決を cwd ではなく git の worktree 境界で行い、worktree 内から呼ばれたら必ずその worktree の store を使う (b) condukt worker のプロンプト規約として backlog add の前に worktree へ cd することを機械的に強制する (c) そもそも所見のストアを worktree ごとに分けず machine-global にする (709ff549 が claim 側でやったのと同じ方向)。(c) は 5ba13c3e と e99f61e4 の実測6 が指す本筋でもある。
 
-見分ける方法: worker の worktree から backlog add を打った場合と、project root から打った場合で、書き込み先ファイルを fs_usage で追跡して比較する。関連: 5ba13c3e, bd6d81df, d7b19e8d, e99f61e4 の実測6, 1e44bfd9 (他セッションの差分を自分のものとして要求する帰属バグ)。"""
+見分ける方法: worker の worktree から backlog add を打った場合と、project root から打った場合で、書き込み先ファイルを fs_usage で追跡して比較する。関連: 5ba13c3e, bd6d81df, d7b19e8d, e99f61e4 の実測6, 1e44bfd9 (他セッションの差分を自分のものとして要求する帰属バグ)。
+
+--- スコープ訂正 (2026-08-14、測定点 87cd53b1): worker 固有でも add 固有でもない ---
+
+**旧タイトルと旧本文は原因を 2 重に狭く書いていた。** 「condukt worker の backlog add」
+としていたが、今日の実測でどちらの限定も成り立たないことが分かった。
+
+**新しい観測 (今回は worker ではなく統合者=flow driver 自身が踏んだ)**:
+/flow のループ中に私が `backlog next --claim --project /Users/yuki/src/harness` を
+cwd=/Users/yuki/src/harness (= main の checkout) から 3 回叩いた。結果、3 件の
+pending→claimed 遷移が main の .backlog/tasks.toml に着地し、main の作業ツリーが
+dirty になって stop-verify-worktree.py が turn 終了を block した。
+
+  実測差分 (git diff .backlog/tasks.toml、他の行は 1 行も動いていない):
+    -status = "pending"    +status = "claimed"     x3
+    -updated_at = 1786499132 / 1786496451 / 1786499132
+    +updated_at = 1786635870                       x3
+
+つまり:
+  * **subagent ではない。** 私 (main loop) が直接叩いたコマンドである。
+  * **`add` ではない。** `next --claim` という読み取り兼予約の書き込みである。
+  * **偶発ではない。** /flow SKILL.md が Step 3-1a で処方している手順そのもの。
+
+**したがって旧本文の「原因の候補: subagent の Bash cwd は project root を既定にする」は
+1 事例の説明であって原因ではない。** 本当の構造は:
+
+  store は checkout に追従する (repo root ごとに .backlog/tasks.toml、linked worktree は
+  それ自身が root)。一方 /flow の記帳ステップ —— Step 3-1a `next --claim`、3-1c
+  `backlog add`、3-3 `backlog done`/`fail`、および `compass outcome` —— は driver の
+  cwd で走る。セッションを repo root で開始していれば driver の cwd は main である。
+  **よって skill が処方する手順を素直に実行するたびに、毎イテレーション §8 に違反する。**
+
+**この観測が falsify したもの**: 旧本文の修正候補 (b)「condukt worker のプロンプト規約と
+して backlog add の前に worktree へ cd させる」は**単独では不十分**である。driver 自身を
+カバーしないし、規約 = 自己申告依存なので CLAUDE.md 6 が禁じる置き方でもある。
+残る候補 (a) store 解決を git worktree 境界で行う / (c) machine-global 化 の 2 つは
+今も有効で、どちらも呼び出し側の行儀に依存しない点が (b) と違う。
+
+**同一バイナリで着地先が分かれることの再確認**: 同じ turn 内で、私が worktree へ cd して
+から叩いた `backlog done` x3 と `backlog edit --notes` は worktree 側の store に入り、
+main には 1 行も書かれなかった。cwd だけが違いである (旧本文の観測と一致)。
+
+**今回の退避**: 失うと困る実状態なので破棄せず、main の tasks.toml を worktree へコピー
+して差分が上記 3 遷移だけであることを確認したうえで commit (ba9d9d38) し、main へ
+merge (87cd53b1) して戻した。merge 後の main で `grep -c 'status = "claimed"'` = 3 を確認。
+**これは毎イテレーション必要な手作業であり、回避であって修正ではない。**
+
+**追加で判明した副作用**: この round-trip の merge が post-merge hook を起こし、
+.specguard/spec-map.toml の last_synced が再び動いて main が dirty になる
+(48bdc55b のデッドロック)。つまり本 item を踏むたびに 48bdc55b も必ず踏む。
+2 件は独立ではなく連鎖するので、片方だけ直しても /flow の 1 イテレーションは
+clean に終われない。
+"""
 created_at = 1786548307
-updated_at = 1786548307
+updated_at = 1786636359
 weight = 0.0
 issue_number = 277
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/277"

@@ -9867,7 +9867,7 @@ title = "セッション異常終了への対応: (a) 中断作業を次セッ�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "claimed"
 notes = """
 部分完了 (2026-08-12, condukt 0.7.129, merge 6fc4fdee)。(b) GC 側だけが着地した: condukt worktree reconcile が git worktree list と全 run-state namespace と作業ツリーの三者照合を行い live/dead/undetermined を返す。is_removable はワイルドカード無しの網羅 match で、あらゆる Undetermined と Role::Primary は keep に解決する。dirty な worktree は refs/preserved へ退避されるまで削除に到達しない。統合前に kill rate を独立再測定した: Role::Primary の arm 削除は E0004 コンパイルエラー、Undetermined 3 arm と preserved arm と primary_witnesses の退行はすべて KILLED、対照 (is_removable 常に false) は 2 件を殺した。(a) resume 側は未着手である。--json が resume の surface として存在するが消費者が 1 つも無い (0cf3775c で追跡)。したがって本 item は done ではない。残っているのは (a) のみ。
 
@@ -9890,7 +9890,7 @@ death criterion ruling 待ちで、それが決まるまで実装できない。
 終わったように見える。
 """
 created_at = 1786403442
-updated_at = 1786640985
+updated_at = 1786642092
 weight = 0.0
 issue_number = 237
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/237"
@@ -10219,9 +10219,49 @@ RED の期待値がどちらの側を pin しているかで書き直しの要�
 要求する。本裁定で Dead が到達可能なままなので、tripwire だった
 interrupted_failed_task_worktree_is_resumable は**生きたまま**である
 (worker が警告していた「production で到達不能になる」懸念は本裁定で解消した)。
+
+--- 読み直し結果 (2026-08-14): 375587a2 の RED テストは裁定と矛盾しない ---
+
+裁定が「実装前に読み直す必要がある」と残した宿題を実施した。**判断ではなく観測**である
+(`git show 375587a2 -- crates/condukt/tests/worktree_reconcile.rs` の追加行を逐語で読んだ)。
+
+**結論: retarget は不要。3 本とも裁定 (停滞 ∧ 窓経過 ∧ transcript 不在 = Dead) と整合する。**
+
+  * `unclaimed_clean_worktree_with_no_witness_is_not_removable` — state root は readable かつ
+    runs=0、worktree は fixture 内で新規作成。**初回プローブなのでアンカーが無く**、活動の
+    「停滞」を確立できず window も経過していない。したがって裁定下でも Undetermined。整合。
+  * `unclaimed_worktree_occupancy_is_undetermined_not_dead` — 単発プローブ。同上。整合。
+  * `unclaimed_worktree_with_advancing_activity_is_live` — 2 プローブ目で worktree 内に
+    ファイルが増え活動が前進して Live。裁定の第1分岐そのもの。整合。
+
+3 本はいずれも **undetermined 側と live 側**を pin しており、「Dead は到達不能」を
+pin しているものは 1 本も無い。裁定が追加する第3の経路 (停滞 ∧ 窓経過 ∧ transcript 不在)
+を通る fixture が存在しないだけである。
+
+**ただし 375587a2 は anti-vacuity control `dead_clean_worktree_is_removable` を削除している。**
+削除された性質は「clean な worktree が dead かつ removable=true に**到達できる**」であり、
+これは GC 全体が空虚 (何も消せない = Undetermined を返し続ける定数実装) でないことを示す
+唯一の end-to-end 対照だった。テスト作成者自身が doc comment で
+「What this test STOPS proving, stated rather than glossed over」として正直に明記している
+(隠蔽ではない)。裁定によって Dead は到達可能なままなので、**この性質は新しい形で
+復活させなければならない** — 注入した窓 (`HARNESS_PROGRESS_WINDOW_SECS`) のもとで
+停滞 ∧ 窓経過 ∧ transcript 確認して不在の clean worktree が Dead + removable に到達することを
+固定するテスト。これを実装タスクの done criteria に入れた。
+
+**裁定が言っていた「progress window を注入可能にする改修」は既に払われている** (実測):
+`harness_core::progress::window_secs()` が環境変数 `HARNESS_PROGRESS_WINDOW_SECS`
+(定数 `progress::WINDOW_ENV`, crates/harness-core/src/progress.rs:81) を読み、
+`crates/condukt/src/wt_reconcile.rs:1320` が既にそれを経由している。新しい注入機構は要らない。
+
+**実装に追加した最重要の fail-closed 制約** (裁定の文面には無いが、無いと連言が縮退する):
+第3項「transcript 証拠なし」は **「調べて、無かった」** でなければならない。
+「調べられなかった」(session id を導出できない・ファイルが読めない) を「無かった」と読むと、
+第3項は常に成立して連言が実質2項へ縮退し、本 item が直している当の fail-open が
+形を変えて復活する (CLAUDE.md 第3節)。transcript witness が判定不能なら occupancy は
+Undetermined に倒す。この経路を突く behavioural test を done criteria に含めた。
 """
 created_at = 1786472512
-updated_at = 1786641342
+updated_at = 1786642295
 weight = 0.0
 issue_number = 256
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/256"
@@ -11088,9 +11128,49 @@ RED の期待値がどちらの側を pin しているかで書き直しの要�
 要求する。本裁定で Dead が到達可能なままなので、tripwire だった
 interrupted_failed_task_worktree_is_resumable は**生きたまま**である
 (worker が警告していた「production で到達不能になる」懸念は本裁定で解消した)。
+
+--- 読み直し結果 (2026-08-14): 375587a2 の RED テストは裁定と矛盾しない ---
+
+裁定が「実装前に読み直す必要がある」と残した宿題を実施した。**判断ではなく観測**である
+(`git show 375587a2 -- crates/condukt/tests/worktree_reconcile.rs` の追加行を逐語で読んだ)。
+
+**結論: retarget は不要。3 本とも裁定 (停滞 ∧ 窓経過 ∧ transcript 不在 = Dead) と整合する。**
+
+  * `unclaimed_clean_worktree_with_no_witness_is_not_removable` — state root は readable かつ
+    runs=0、worktree は fixture 内で新規作成。**初回プローブなのでアンカーが無く**、活動の
+    「停滞」を確立できず window も経過していない。したがって裁定下でも Undetermined。整合。
+  * `unclaimed_worktree_occupancy_is_undetermined_not_dead` — 単発プローブ。同上。整合。
+  * `unclaimed_worktree_with_advancing_activity_is_live` — 2 プローブ目で worktree 内に
+    ファイルが増え活動が前進して Live。裁定の第1分岐そのもの。整合。
+
+3 本はいずれも **undetermined 側と live 側**を pin しており、「Dead は到達不能」を
+pin しているものは 1 本も無い。裁定が追加する第3の経路 (停滞 ∧ 窓経過 ∧ transcript 不在)
+を通る fixture が存在しないだけである。
+
+**ただし 375587a2 は anti-vacuity control `dead_clean_worktree_is_removable` を削除している。**
+削除された性質は「clean な worktree が dead かつ removable=true に**到達できる**」であり、
+これは GC 全体が空虚 (何も消せない = Undetermined を返し続ける定数実装) でないことを示す
+唯一の end-to-end 対照だった。テスト作成者自身が doc comment で
+「What this test STOPS proving, stated rather than glossed over」として正直に明記している
+(隠蔽ではない)。裁定によって Dead は到達可能なままなので、**この性質は新しい形で
+復活させなければならない** — 注入した窓 (`HARNESS_PROGRESS_WINDOW_SECS`) のもとで
+停滞 ∧ 窓経過 ∧ transcript 確認して不在の clean worktree が Dead + removable に到達することを
+固定するテスト。これを実装タスクの done criteria に入れた。
+
+**裁定が言っていた「progress window を注入可能にする改修」は既に払われている** (実測):
+`harness_core::progress::window_secs()` が環境変数 `HARNESS_PROGRESS_WINDOW_SECS`
+(定数 `progress::WINDOW_ENV`, crates/harness-core/src/progress.rs:81) を読み、
+`crates/condukt/src/wt_reconcile.rs:1320` が既にそれを経由している。新しい注入機構は要らない。
+
+**実装に追加した最重要の fail-closed 制約** (裁定の文面には無いが、無いと連言が縮退する):
+第3項「transcript 証拠なし」は **「調べて、無かった」** でなければならない。
+「調べられなかった」(session id を導出できない・ファイルが読めない) を「無かった」と読むと、
+第3項は常に成立して連言が実質2項へ縮退し、本 item が直している当の fail-open が
+形を変えて復活する (CLAUDE.md 第3節)。transcript witness が判定不能なら occupancy は
+Undetermined に倒す。この経路を突く behavioural test を done criteria に含めた。
 """
 created_at = 1786637812
-updated_at = 1786641342
+updated_at = 1786642295
 weight = 0.0
 issue_number = 335
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/335"

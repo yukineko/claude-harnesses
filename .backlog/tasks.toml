@@ -10607,3 +10607,55 @@ updated_at = 1786549285
 weight = 0.0
 issue_number = 279
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/279"
+
+[[task]]
+id = "48bdc55b"
+title = "specguard の post-merge spec-map 同期が main の作業ツリーを恒久的に dirty にし、Stop ゲートと 8 の worktree 義務が相互にデッドロックする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+観測日 2026-08-14、測定点 c0334260 (main)。
+
+現象: .specguard/spec-map.toml の先頭行 last_synced は「最後に同期した commit の sha」で、
+post-merge hook が merge のたびにこれを **その merge commit 自身の sha** へ書き換える。
+したがって:
+
+  merge する ⇒ post-merge が last_synced = <その merge の sha> を書く ⇒ 作業ツリーが dirty
+  ⇒ CLAUDE.md 8 により main では commit できないので worktree で commit して merge
+  ⇒ その merge に対して post-merge がまた書く ⇒ dirty
+
+これは収束しない。commit した瞬間に、その commit 自身を指すべき値へずれるため、
+**last_synced が HEAD と一致した状態を commit することは構造的に不可能**である。
+
+実測した具体列 (すべて本日):
+  24f651ea を merge  ⇒ last_synced = 24f651ea (15 行の last_ref 更新を伴う実質差分)
+  worktree で commit (8304ac6a) ⇒ main へ merge (c0334260)
+  ⇒ 残差は last_synced の 1 行のみ: 24f651ea から c0334260 へ
+
+この 1 行残差が scripts/stop-verify-worktree.py の Stop ゲートに引っかかり、
+「main が dirty のまま turn を終えるな」で停止をブロックする。一方 8 は
+「main で commit するな」と要求する。**2 つの正しいゲートが相互にデッドロックする。**
+
+今回の回避: 差分が last_synced 1 行だけであることを確認したうえで
+`git checkout -- .specguard/spec-map.toml` で捨てた。捨ててよい根拠は、これが
+hook 生成の同期ポインタであり人間の作業成果ではないこと、および次回の post-merge が
+必ず書き直すこと。**ただしこれは回避であって修正ではない。**
+
+考えられる筋 (どれが正しいかは未判定):
+  (a) post-merge が last_synced を書いた結果が「その差分しか無い」場合は書かない
+      (自己参照ポインタの自明な更新を抑止する)。
+  (b) last_synced を .gitignore 対象の別ファイル (.specguard/.last-synced 等) へ出し、
+      commit 対象の spec-map.toml からは外す。
+  (c) Stop ゲート側で hook 生成物の既知集合を dirty 判定から除外する。ただしこれは
+      「判定不能を許可へ写す」方向なので 3 に照らして最後の手段。
+
+見分け方: (a)/(b) は specguard 側の変更で、Stop ゲートを緩めない。(c) だけがゲートを
+緩める方向なので、採用するなら除外集合を hook 生成物に限定できることを機械で示す必要がある。
+"""
+created_at = 1786635719
+updated_at = 1786635755
+weight = 0.0
+issue_number = 280
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/280"

@@ -10194,9 +10194,34 @@ RED テストのみ commit 済み (375587a2、実装なし)。escalation esc-bc0
 stale_preserved_ref_does_not_authorize_deletion が通せなくなる。
 この 2 本を retarget するのは「通すためにテストを緩める」と区別できないので触っていない。
 claim を解放して pending に戻す (人間の裁定待ちを claimed のまま握らない)。
+
+--- 裁定 (ユーザー, 2026-08-14): worktree DEATH の積極的判定基準が決まった ---
+
+**Dead ⇐ 活動の停滞 ∧ progress window の経過 ∧ transcript 証拠なし** (3点の連言)。
+
+esc-bc08e8bd の 3 択のうち第 1 案が選ばれた。したがって:
+
+  * `Occupancy::Dead` は reconcile から**到達可能なまま**である。
+  * `--preserve` は no-op にならず、content-rescue の安全網も dead code にならない。
+  * 現在 green な 2 本 — dirty_worktree_is_preserved_before_it_becomes_removable と
+    stale_preserved_ref_does_not_authorize_deletion — は**そのまま通り続ける**。
+    retarget も削除もしない (これが「通すためにテストを緩める」との区別だった)。
+  * 実装には **progress window を注入可能にする**改修が要る (テストが実時間の経過を
+    待たずに死を再現できるようにするため)。これが本裁定の唯一の追加コスト。
+
+**未解決として残るもの**: 375587a2 の RED テストは「claim なし worktree は
+undetermined」を固定しており、本裁定と矛盾しないかを**実装前に読み直す必要がある**。
+裁定は liveness 側 (2026-08-12) と death 側 (本裁定) の両方を確定させたので、
+RED の期待値がどちらの側を pin しているかで書き直しの要否が変わる。
+これは判断ではなく観測で決めること (テストを読んでから)。
+
+また t3 側との結合: resume_verdict の `resumable` アームは Known(Occupancy::Dead) を
+要求する。本裁定で Dead が到達可能なままなので、tripwire だった
+interrupted_failed_task_worktree_is_resumable は**生きたまま**である
+(worker が警告していた「production で到達不能になる」懸念は本裁定で解消した)。
 """
 created_at = 1786472512
-updated_at = 1786640985
+updated_at = 1786641342
 weight = 0.0
 issue_number = 256
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/256"
@@ -11036,9 +11061,36 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = []
 status = "pending"
-notes = "Found while implementing fe84d350 (unclaimed worktree occupancy to Undetermined). The 2026-08-12 ruling settles liveness for unclaimed worktrees but is silent on death. Strict reading makes Occupancy::Dead unreachable from reconcile, because the claimed-but-not-progressing arm already resolves to Undetermined (frozen is not dead, crates/condukt/src/wt_reconcile.rs:899). Consequences beyond the accepted drop in auto-removable: the preserved match in reconcile requires Known(Occupancy::Dead) in every arm, so --preserve becomes a no-op and the content-rescue safety net becomes dead code; and two currently-green tests cannot pass, dirty_worktree_is_preserved_before_it_becomes_removable and stale_preserved_ref_does_not_authorize_deletion. RED tests are committed at 375587a2 on branch condukt/run-20260814-005232-58819/run-20260814-005232-58819/t2-occupancy-undetermined with no implementation. Options are recorded in condukt escalate for run run-20260814-005232-58819 task t2-occupancy-undetermined. Do not retarget the two preservation tests without a ruling."
+notes = """
+Found while implementing fe84d350 (unclaimed worktree occupancy to Undetermined). The 2026-08-12 ruling settles liveness for unclaimed worktrees but is silent on death. Strict reading makes Occupancy::Dead unreachable from reconcile, because the claimed-but-not-progressing arm already resolves to Undetermined (frozen is not dead, crates/condukt/src/wt_reconcile.rs:899). Consequences beyond the accepted drop in auto-removable: the preserved match in reconcile requires Known(Occupancy::Dead) in every arm, so --preserve becomes a no-op and the content-rescue safety net becomes dead code; and two currently-green tests cannot pass, dirty_worktree_is_preserved_before_it_becomes_removable and stale_preserved_ref_does_not_authorize_deletion. RED tests are committed at 375587a2 on branch condukt/run-20260814-005232-58819/run-20260814-005232-58819/t2-occupancy-undetermined with no implementation. Options are recorded in condukt escalate for run run-20260814-005232-58819 task t2-occupancy-undetermined. Do not retarget the two preservation tests without a ruling.
+
+--- 裁定 (ユーザー, 2026-08-14): worktree DEATH の積極的判定基準が決まった ---
+
+**Dead ⇐ 活動の停滞 ∧ progress window の経過 ∧ transcript 証拠なし** (3点の連言)。
+
+esc-bc08e8bd の 3 択のうち第 1 案が選ばれた。したがって:
+
+  * `Occupancy::Dead` は reconcile から**到達可能なまま**である。
+  * `--preserve` は no-op にならず、content-rescue の安全網も dead code にならない。
+  * 現在 green な 2 本 — dirty_worktree_is_preserved_before_it_becomes_removable と
+    stale_preserved_ref_does_not_authorize_deletion — は**そのまま通り続ける**。
+    retarget も削除もしない (これが「通すためにテストを緩める」との区別だった)。
+  * 実装には **progress window を注入可能にする**改修が要る (テストが実時間の経過を
+    待たずに死を再現できるようにするため)。これが本裁定の唯一の追加コスト。
+
+**未解決として残るもの**: 375587a2 の RED テストは「claim なし worktree は
+undetermined」を固定しており、本裁定と矛盾しないかを**実装前に読み直す必要がある**。
+裁定は liveness 側 (2026-08-12) と death 側 (本裁定) の両方を確定させたので、
+RED の期待値がどちらの側を pin しているかで書き直しの要否が変わる。
+これは判断ではなく観測で決めること (テストを読んでから)。
+
+また t3 側との結合: resume_verdict の `resumable` アームは Known(Occupancy::Dead) を
+要求する。本裁定で Dead が到達可能なままなので、tripwire だった
+interrupted_failed_task_worktree_is_resumable は**生きたまま**である
+(worker が警告していた「production で到達不能になる」懸念は本裁定で解消した)。
+"""
 created_at = 1786637812
-updated_at = 1786637812
+updated_at = 1786641342
 weight = 0.0
 issue_number = 335
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/335"

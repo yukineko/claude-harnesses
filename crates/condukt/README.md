@@ -210,7 +210,7 @@ All config file keys can be overridden at runtime with environment variables.
 | `CONDUKT_ADVERSARIAL` | `false` | Set to `1`/`true` to enable the adversarial refutation panel (overrides `[adversarial] enabled`). Opt-in cost guard; off by default. A GATE-crate-touching change forces the panel regardless of this switch. |
 | `CONDUKT_AUTONOMOUS` | `false` | Set to `1`/`true` to run autonomously (degrades human gates; overrides config `autonomous`). Read by `state autonomy-check`. |
 | `CONDUKT_SINGLE_WORKTREE` | `false` | Set to `1`/`true` to run all tasks in the main tree (no per-task worktree/merge; overrides config `single_worktree`). Read by `state worktree-mode-check`. |
-| `CONDUKT_STUCK_TTL_SECS` | `1800` | Age (seconds) past which a `running` task is considered stuck and eligible for `state abandon --all-stuck`. |
+| `CONDUKT_STUCK_TTL_SECS` | `1800` | Age (seconds) past which a `running` task becomes a CANDIDATE for `state abandon --all-stuck`. TTL-staleness is necessary, not sufficient: the bulk path abandons only a task whose progress is a confirmed `Known(Stalled)` (backlog `356bd51d`). |
 | `CONDUKT_WORKER_SANDBOX` | `false` | Set to `1`/`true` to run a worker's build/test through the sandboxed docker exec backend (overrides `[worker] sandbox_enabled`). Read by `sandbox run`. |
 | `CONDUKT_WORKER_SANDBOX_IMAGE` | _(unset)_ | Override the container image for sandboxed worker execution (overrides `[worker] docker_image`). |
 | `CONDUKT_SHADOW_RUN_DIR` | `~/.condukt` | Directory holding the shadow-run enable flag (`shadow_run.json`). Override in tests so they never touch the real `~/.condukt`. |

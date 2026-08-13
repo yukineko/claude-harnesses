@@ -84,7 +84,12 @@ condukt state abandon --run $RID --all-stuck
 condukt state set --run $RID --task <t.id> --status pending
 ```
 
-`--all-stuck` は TTL 超過（最終更新から 30 分超）の `running` タスクのみを対象とします。
+`--all-stuck` の候補は TTL 超過（最終更新から 30 分超）の `running` タスクですが、TTL 超過は
+**必要条件にすぎません**（backlog `356bd51d`）。実際に pending へ戻すのは、そのタスク自身の
+worktree HEAD と `updated_at` を multi-sample で観測して `Known(Stalled)` が確定したタスクだけで、
+`Progressing` も `Undetermined` も戻しません（fail-closed）。1 回目の呼び出しでは何も戻らないのが
+正常です（1 回の観測は「凍結」を意味しない）。worktree が消えた本当に死んだ worker は
+`Undetermined` のままなので、人間が明示する `--task <id>`（意図的にゲート無し）で戻します。
 pending に戻したタスクは Phase 5 で通常通り再投入します。
 
 ---
@@ -571,7 +576,7 @@ cancelled (terminal) ← AskUserQuestion でユーザーがキャンセル
 | `condukt state reconcile --run <rid>` | branch がマージ済みまたは削除済みのタスクを自動 verified に昇格 |
 | `condukt state resume-context --run <rid>` | pending / failed / done タスクを JSON で返す（再開用）|
 | `condukt state test --run <rid>` | プロジェクトのテストスイートを実行（auto-detect: cargo/npm/pytest）|
-| `condukt state abandon --run <rid> --all-stuck` | TTL 超過の running タスクを pending に戻す |
+| `condukt state abandon --run <rid> --all-stuck` | TTL 超過 **かつ** 進捗が `Known(Stalled)` と確定した running タスクを pending に戻す（multi-sample。`Progressing`/`Undetermined` は戻さない）|
 | `condukt state conflict-check --file <json>` | 他セッションとのファイル競合 / 目的競合を確認 |
 | `condukt state cancel --run <rid> --task <tid>` | タスクを cancelled（terminal）に設定 |
 | `condukt state list-tasks` | キャンセル可能なタスク（pending/running/done）を一覧取得 |

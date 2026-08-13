@@ -78,9 +78,24 @@ condukt state abandon --run $RID --all-stuck   # stuck タスクを pending に�
 # コマンドが無い場合は個別に戻す:
 condukt state set --run $RID --task <t.id> --status pending
 ```
-pending に戻したタスクは Phase 0-alt → Phase 5 で通常通り再投入する。`--all-stuck` は TTL 超過
-(デフォルト: 最終更新から 30 分超) の `running` タスクのみを対象とする。現在実行中の worker が
-ある場合は誤って停止しないよう、実行中 Task の有無を確認してから実行する。
+pending に戻したタスクは Phase 0-alt → Phase 5 で通常通り再投入する。
+
+`--all-stuck` の対象は **TTL 超過だけでは決まらない** (backlog `356bd51d`)。TTL 超過
+(デフォルト: 最終更新から 30 分超) は候補になる条件にすぎず、実際に pending へ戻すのは
+そのタスク自身の worktree HEAD と `updated_at` を multi-sample で観測して **`Known(Stalled)`
+が確定した**タスクだけである。`Progressing` (worktree で commit が進んでいる) も
+`Undetermined` (worktree が読めない・worktree を持たない・観測が 1 回目・window 未経過) も
+**戻さない** (fail-closed)。したがって:
+
+- **1 回目の呼び出しでは何も戻らないのが正常**である (1 回の観測は「凍結」を意味しない)。
+  window (既定 90 秒、`HARNESS_PROGRESS_WINDOW_SECS` で上書き可) を空けて再度呼ぶ。
+- 「`nothing to abandon` が返る = コマンドが壊れている」ではない。生きている worker を
+  巻き添えにしないための設計である。
+- 本当に死んだ worker で worktree が消えている場合は `Undetermined` が続き bulk では戻らない。
+  その場合は人間が明示する `condukt state abandon --run $RID --task <id>` を使う
+  (こちらは意図的に **ゲート無し**)。
+
+現在実行中の worker がある場合は誤って停止しないよう、実行中 Task の有無を確認してから実行する。
 
 ### Phase 0-alt — Resume (中断 run の再開)
 
@@ -1340,7 +1355,9 @@ condukt state cancel --run <run_id> --task <task_id>
 - 子が共有ファイルに触りたがる → 分類ミス。serial 降格して main で実装。
 - worktree 残置 → Phase 7 で必ず閉じる。`condukt state gate` が残置を検出する。
 - **stuck worker** → `condukt state abandon --run $RID --task <id>` で `pending` に戻し Phase 5 へ
-  再投入する。`--all-stuck` で TTL 超過の running タスクをまとめて pending に戻せる。Phase 0 の
+  再投入する (この明示指定は人間の override であり意図的にゲート無し)。`--all-stuck` は TTL 超過
+  かつ **進捗が `Known(Stalled)` と確定した** running タスクだけをまとめて戻す (multi-sample な
+  ので 1 回目は何も戻らないのが正常。詳細は Phase 0 の STUCK タスク節)。Phase 0 の
   open run チェック時に running タスクを検出したら、Task の有無を確認後に実行する。
 - **merge 衝突** → Phase 7 で `condukt worktree merge` が pre-flight 衝突を検出した場合、worktree
   内で手動マージ解消後に Phase 7 リトライするか、大きな衝突は再実装として Phase 5 に戻す。詳細は

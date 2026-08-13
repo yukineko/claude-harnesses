@@ -9845,10 +9845,10 @@ tags = [
     "condukt",
     "p0",
 ]
-status = "claimed"
+status = "done"
 notes = "8b871bb1 で state.rs の probe_run は task の worktree に閉じたシグナルへ移した。しかし crates/condukt/src/claim.rs:292 の claim_progress は今も progress::git_head_signal(repo_root(cwd)) を 3 シグナルのうち 1 本として使っている。CLAUDE.md 8 で別セッションが常に commit する前提なので、この signal は常に動き、fingerprint は毎回変化し、Progressing に倒れる。probe_run と違い claim_progress は reap 権限を持つ (Known(Stalled) のときだけ reap する側なので、常時 Progressing は「死んだ holder の claim を永久に剥がせない」方向の fail-open)。measured: 未測定。まず「repo HEAD だけが動いていて他 2 本が凍っている状況で claim_progress が Progressing を返す」behavioural test を書いて RED を観測すること。発見者は 8b871bb1 の implementer と verifier。"
 created_at = 1786451479
-updated_at = 1786496438
+updated_at = 1786635396
 weight = 0.0
 issue_number = 242
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/242"
@@ -9899,7 +9899,7 @@ tags = [
     "liveness",
     "p0",
 ]
-status = "claimed"
+status = "done"
 notes = """
 実測 2026-08-12 03:44-03:55 JST。orchestrator が t2-condukt-reconcile の worker を dead と判定して 2 人目 (私) を同じ worktree /Users/yuki/.condukt/worktrees/run-20260811-230435-19389-t2-condukt-reconcile に投入したが、1 人目は生きていた。証跡: 私が何も操作していない 2 分間 (03:53:02 -> 03:55:07) に wt_reconcile.rs / state.rs / worktree.rs の sha が変化し、restore.rs が新たに modified として現れた。さらに私の Edit が適用された時点でファイル内容が私の Read 時点と異なっていた (is_sidecar -> state::is_run_state_sidecar に置き換わっていた)。lsof で cwd がその worktree の claude プロセス (pid 66412) を観測。CLAUDE.md 8 が言う「git が救えない唯一の競合」= 同一 index の共有が、worktree 分離をしていてもオーケストレータ側の liveness 誤判定で発生する。今回は orchestrator が介入して 1 人目を stand down させたため実害は出ていないが、機構としては dead 判定が pid でも progress でもない何かに基づいていた可能性が高い。backlog e99f61e4 で作った condukt worktree reconcile の判定 (progress 由来 3 値) を、worker の再投入判定そのものにも適用できるかを検討する。
 
@@ -9927,7 +9927,7 @@ Cargo.toml / plugin.json / marketplace.json すべて 0.7.134 で一致してい
 「テストが通った」以上のことは何も主張できない。
 """
 created_at = 1786472066
-updated_at = 1786603920
+updated_at = 1786635396
 weight = 0.0
 issue_number = 250
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/250"
@@ -10109,10 +10109,10 @@ tags = [
     "failopen",
     "p0",
 ]
-status = "claimed"
+status = "done"
 notes = "observation 2026-08-12, run run-20260811-230435-19389 の実行中に観測。backlog 0.2.21 の実バイナリ (repo target/release)。実測: 同一 cwd (/Users/yuki/src/.harness-worktrees/session-b57a58c3) から backlog add を4回実行した。1回目 b1b0f319 と 2回目 11d2a214 はいずれも added / updated を stdout で報告し exit 0 だった。その後 3回目 0cf3775c と 4回目 09d17bb6 を実行した。最後に全ストアを grep したところ、当該 worktree の .backlog/tasks.toml の git diff に現れる新規 id は 0cf3775c と 09d17bb6 の2件のみで、b1b0f319 と 11d2a214 はどこにも存在しない。探索範囲は ~/.backlog/tasks.toml、main の .backlog/tasks.toml、.harness-worktrees/*/.backlog/tasks.toml、.condukt/worktrees/*/.backlog/tasks.toml の全部で、いずれもヒット 0。つまり add は成功を報告したが書き込みは永続化されなかった。11d2a214 については add の後に backlog edit も実行し updated: 11d2a214 を報告させているので、少なくともその時点ではストアに存在していた。したがって単なる書き込み失敗ではなく、後続の read-modify-write が古い版を読んで上書きした lost update である。なぜ重大か: backlog add は本リポジトリで所見を残す唯一の機構であり、CLAUDE.md と MEMORY の always-file-findings が全エージェントに義務づけている。その機構が成功を報告しながら黙って捨てるなら、記録という行為そのものが信用できない。しかも失敗が exit code にも stderr にも一切現れないので、下流は捨てられたことを知りようがない (3節の判定不能を clean へ写す形そのもの)。709ff549 の checkout 追従ストア分岐と同じ根から出ている可能性が高いが、本件は同一 cwd 内で起きているので分岐だけでは説明できない。同時に別プロセス (本 run の t1 worker と t2 worker、および並行セッション) が同じ project の store を触っていたことは確実である。判定不能な点: 上書きした主体が (a) 同一 worktree 内の別プロセス (b) git 操作による checkout や restore (c) store 側の atomic rename の競合 のどれかは未同定。見分ける方法は tasks.toml の書き込みを fs_usage か opensnoop で追跡しながら add を並行実行して再現すること。関連: 709ff549 (本 run で claim 側は project 単位の ledger で塞いだが、add 側の read-modify-write は手つかず), 5ba13c3e, e99f61e4 の実測6 (起票が worktree の未コミットストアにだけ書かれて main から見えなかった件)。"
 created_at = 1786486894
-updated_at = 1786496438
+updated_at = 1786635396
 weight = 0.0
 issue_number = 260
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/260"

@@ -627,6 +627,40 @@ enum WtAction {
         #[arg(long)]
         decision_table: bool,
     },
+    /// Discover which worktrees an interrupted session's work can be picked up
+    /// from, by consuming the SAME reconciliation the GC consumes.
+    ///
+    /// `worktree reconcile` asks "may I delete this?"; this asks the opposite,
+    /// "may the next session PICK THIS UP?", and the restrictive side is a
+    /// third thing: **neither resume nor discard**. Resuming a worktree someone
+    /// may still be inside puts two sessions in one git index (CLAUDE.md §8 —
+    /// the one conflict git cannot resolve), so anything short of positively
+    /// "nobody is there" is not offered; and writing a worktree off as "nothing
+    /// to resume" loses the work as surely as deleting it, so a non-offer
+    /// reports no disposal verdict at all.
+    ///
+    /// PRINT-ONLY: it resumes nothing, deletes nothing, writes no run state,
+    /// creates or deletes no ref, and modifies no working tree or index.
+    /// Stated exactly rather than as a blanket "writes nothing", because two
+    /// writes DO happen and a docstring that hid them would be the drift this
+    /// repo treats as a defect: the shared multi-sample progress engine
+    /// persists a sample per claimed worktree (that is how "is it still
+    /// moving?" is answerable at all), and comparing a worktree against an
+    /// EXISTING `refs/preserved/...` ref writes unreferenced git objects
+    /// through a throwaway index. Neither is reachable from the resume verdict
+    /// and neither touches the work itself.
+    ///
+    /// Discovery answers WHICH run; the emitted `condukt state resume-context
+    /// --run <id>` answers what is left IN that run.
+    ResumeCandidates {
+        /// Emit the machine-readable report.
+        #[arg(long)]
+        json: bool,
+        /// Print the resume verdict for EVERY combination of its inputs and
+        /// exit — the resume mirror of `reconcile --decision-table`.
+        #[arg(long)]
+        decision_table: bool,
+    },
     /// Report worktrees under worktree_base that git does not register, and
     /// delete the ones the reconcile gate says are safe (`--remove`).
     ///
@@ -3135,6 +3169,42 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 print!("{}", wt_reconcile::render(&report));
+            }
+        }
+        WtAction::ResumeCandidates {
+            json,
+            decision_table,
+        } => {
+            if decision_table {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&wt_reconcile::resume_decision_table())?
+                );
+                return Ok(());
+            }
+            // The SAME repo-scoped lock the `reconcile` arm takes, for the same
+            // reason it takes it: the report must not be computed while a peer
+            // is adding or removing worktrees underneath it. A torn read here
+            // is not a harmless stale print — it is either offering a worktree
+            // that has just been removed, or failing to mention one that has
+            // just appeared, and both are answers about liveness that were
+            // never actually observed. This command writes nothing, so the lock
+            // is taken purely for a coherent read; refusing when it is
+            // contended (`?`) is right for a print-only discovery command —
+            // "run it again when the repo is quiet" costs nothing and leaves
+            // nothing half-done.
+            let _repo_lock = lock::acquire_repo_primary(cfg, &repo)?;
+            // `preserve: false` — preservation writes refs into the repo, which
+            // a print-only command must never do.
+            let report = wt_reconcile::reconcile(cfg, cwd, &repo, false)?;
+            // A pure projection of that very report: the resume view and the GC
+            // view cannot disagree about a directory because there is only one
+            // reading of the two sources.
+            let resume = wt_reconcile::resume_report(&report);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resume)?);
+            } else {
+                print!("{}", wt_reconcile::render_resume(&resume));
             }
         }
         WtAction::Cleanup { remove, preserve } => {

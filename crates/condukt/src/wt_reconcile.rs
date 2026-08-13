@@ -56,6 +56,27 @@
 //! `$HOME` would otherwise make "no runs exist" look like "nothing is alive",
 //! which is the exact collapse this module refuses.
 //!
+//! # Two consumers, two opposite restrictive directions, ONE cross-check
+//!
+//! The same reconciliation answers two questions, and they must be answered
+//! from the same reading of the two sources or they can disagree — one
+//! concluding "dead, delete it" while the other concluded "alive, hands off":
+//!
+//! 1. **May I delete this?** — [`is_removable`], restrictive side "do not
+//!    delete".
+//! 2. **May the next session PICK THIS UP?** — [`resume_verdict`], restrictive
+//!    side "do not resume AND do not discard". Resuming a worktree somebody may
+//!    still be inside is the shared-index collision CLAUDE.md §8 names as the
+//!    one conflict git cannot resolve, so anything short of *positively nobody
+//!    is there* is not offered; and quietly writing a worktree off as "nothing
+//!    to resume" loses the work as surely as deleting it, so a non-offer is
+//!    never a statement that the directory is disposable.
+//!
+//! Both are pure, both are matched exhaustively with no wildcard arm, and both
+//! are computed in [`reconcile`] from the same `Determination`s. `condukt
+//! worktree resume-candidates` is a pure projection ([`resume_report`]) of the
+//! very report `worktree reconcile --json` prints — it re-derives nothing.
+//!
 //! # What this does NOT consume
 //!
 //! Neither `claim::claim_progress` (a RUN-scoped, claim-registry-shaped verdict
@@ -144,6 +165,60 @@ impl Occupancy {
     }
 }
 
+/// Whether condukt's run state records work at a path that is not finished.
+///
+/// This is the *resume* counterpart of [`Occupancy`]: occupancy answers "is
+/// anybody in there NOW", this answers "is there anything LEFT to do here".
+/// As with the other domains, the third answer — "I could not tell" — is
+/// carried by `Determination::Undetermined` and never by a variant here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unfinished {
+    /// At least one task whose status is non-terminal records this path as its
+    /// worktree, **and** the run holding it can be loaded from this checkout,
+    /// so the `condukt state resume-context --run <id>` handoff this command
+    /// offers really runs here. Both halves are observed, not predicted.
+    Present,
+    /// A fully readable scan of every run namespace found no such task. This
+    /// says "nothing to hand off", NOT "this directory is disposable".
+    Absent,
+}
+
+impl Unfinished {
+    fn as_str(self) -> &'static str {
+        match self {
+            Unfinished::Present => "present",
+            Unfinished::Absent => "absent",
+        }
+    }
+}
+
+/// **The** resume decision: may the next session pick this worktree up?
+///
+/// Three-valued for the same reason `blastguard::Decision` is: two values would
+/// force "I cannot tell whether somebody is in there" into either "help
+/// yourself" or "this is finished", and both of those lose work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeVerdict {
+    /// Positively unoccupied AND holding unfinished work that can be handed
+    /// off from here.
+    Resumable,
+    /// Positively occupied. Never offered.
+    Held,
+    /// Everything else. Neither resumed nor discarded — this is a refusal to
+    /// answer, not an answer about the directory.
+    Undetermined,
+}
+
+impl ResumeVerdict {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ResumeVerdict::Resumable => "resumable",
+            ResumeVerdict::Held => "held",
+            ResumeVerdict::Undetermined => "undetermined",
+        }
+    }
+}
+
 /// **The** deletion decision. Pure, total, and exhaustively matched.
 ///
 /// Read it as: a directory may be deleted only when every one of these is
@@ -191,6 +266,100 @@ pub fn is_removable(
     }
 }
 
+/// **The** resume decision. Pure, total, and exhaustively matched — the mirror
+/// image of [`is_removable`] over the same inputs.
+///
+/// Read it as: a worktree is offered to the next session only when every input
+/// is positively known and permissive — nothing is working in it *right now*,
+/// it is not the primary tree, it provably belongs to this repo, and condukt's
+/// run state records unfinished work there that this checkout can actually hand
+/// off. Anything else is [`ResumeVerdict::Undetermined`], except the one case
+/// we positively know is occupied, which is [`ResumeVerdict::Held`].
+///
+/// # Why the restrictive side is "neither resume NOR discard"
+///
+/// For a gate, "cannot determine" blocks the user; for the GC ([`is_removable`])
+/// it is "do not delete". Here the destructive act is **resuming**: two sessions
+/// sharing one worktree share one index, which CLAUDE.md §8 names as the single
+/// conflict git cannot resolve by merging. So an occupancy that is merely
+/// *undetermined* — a claimed-but-not-observed-progressing task, a run-state
+/// scan that could not be read in full — must not be offered.
+///
+/// But the opposite collapse loses just as much: calling such a worktree
+/// "nothing to resume" writes the work off. `Undetermined` is therefore a
+/// refusal to answer and NOT a disposal verdict; nothing in the resume surface
+/// reports anything as discardable. `is_removable` remains the only thing that
+/// can authorise a delete, and it resolves these very same inputs to *keep*.
+///
+/// # Why `Occupancy` is consulted first
+///
+/// `Live` outranks every other input: it does not matter who owns the directory
+/// or what work is recorded in it — somebody is in there. Answering `Held`
+/// rather than `Undetermined` in that case is deliberate: "I know somebody is
+/// there" and "I cannot tell" are different facts, and collapsing them would
+/// let a future change relax the restrictive side with no test noticing.
+///
+/// There is deliberately no `_ =>` arm anywhere in this function. Adding a
+/// variant to [`Role`], [`Attribution`], [`Occupancy`], [`Unfinished`] or
+/// `Determination` must break this match at compile time and force whoever
+/// added it to say what the new answer means for an offer that could collide
+/// two sessions in one index.
+pub fn resume_verdict(
+    role: Role,
+    attribution: &Determination<Attribution>,
+    occupancy: &Determination<Occupancy>,
+    unfinished: &Determination<Unfinished>,
+) -> ResumeVerdict {
+    match occupancy {
+        // Somebody is positively in there. Nothing below can override that.
+        Determination::Known(Occupancy::Live) => ResumeVerdict::Held,
+        // "Frozen is not dead": a claimed worktree whose fingerprint did not
+        // advance is undetermined, and undetermined is not an offer.
+        Determination::Undetermined(_) => ResumeVerdict::Undetermined,
+        Determination::Known(Occupancy::Dead) => match role {
+            // "もちろん main でもする" — main is classified and reported like
+            // any other tree, but it is never OFFERED: work happens in
+            // worktrees (CLAUDE.md §8), and main is the integration tree.
+            Role::Primary => ResumeVerdict::Undetermined,
+            Role::Registered | Role::Unregistered => match attribution {
+                Determination::Undetermined(_) => ResumeVerdict::Undetermined,
+                Determination::Known(Attribution::OtherRepo) => ResumeVerdict::Undetermined,
+                Determination::Known(Attribution::ThisRepo) => match unfinished {
+                    Determination::Undetermined(_) => ResumeVerdict::Undetermined,
+                    Determination::Known(Unfinished::Absent) => ResumeVerdict::Undetermined,
+                    Determination::Known(Unfinished::Present) => ResumeVerdict::Resumable,
+                },
+            },
+        },
+    }
+}
+
+/// Is this status finished work rather than interrupted work?
+///
+/// Exhaustive with no wildcard on purpose: a new [`Status`] variant must be
+/// classified explicitly. Defaulting it to "unfinished" would point the next
+/// session at runs with nothing left to do; defaulting it to "terminal" would
+/// hide interrupted work. Neither is a safe guess, so neither is allowed.
+fn is_terminal(status: Status) -> bool {
+    match status {
+        Status::Pending | Status::Running | Status::Done | Status::Failed => false,
+        Status::Verified | Status::Cancelled | Status::Discarded => true,
+    }
+}
+
+/// The status word as run state spells it (matching `state resume-context`).
+fn status_word(status: Status) -> &'static str {
+    match status {
+        Status::Pending => "pending",
+        Status::Running => "running",
+        Status::Done => "done",
+        Status::Failed => "failed",
+        Status::Verified => "verified",
+        Status::Cancelled => "cancelled",
+        Status::Discarded => "discarded",
+    }
+}
+
 // ── Report shapes (the `--json` surface) ───────────────────────────────────
 
 /// A three-valued answer rendered for JSON: `value` is the decided answer (a
@@ -235,6 +404,66 @@ impl Judged {
             Determination::Undetermined(r) => Judged::undetermined(r.as_str()),
         }
     }
+    fn from_unfinished(d: &Determination<Unfinished>) -> Self {
+        match d {
+            Determination::Known(u) => Judged::known(u.as_str().into()),
+            Determination::Undetermined(r) => Judged::undetermined(r.as_str()),
+        }
+    }
+}
+
+/// The resume classification of one directory: [`resume_verdict`]'s output plus
+/// the reason it was reached and, when there is one, the handoff.
+///
+/// `reason` is a plain `String` and is never empty. Silence about a worktree
+/// that is not offered would leave "checked and held" indistinguishable from
+/// "could not check" — the exact collapse this module exists to remove.
+///
+/// There is deliberately NO disposal field here (`removable`/`discardable`):
+/// deciding a directory is disposable is [`is_removable`]'s job, and the resume
+/// surface has no authority over it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResumeJudgement {
+    /// `resumable` | `held` | `undetermined`.
+    pub verdict: &'static str,
+    pub reason: String,
+    /// The run recording work at this path, when one is known — carried for
+    /// `held` and `undetermined` too, so the operator can see WHO holds it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    /// Present only on `resumable`: the existing run-scoped command that says
+    /// what is left in that run. Discovery answers WHICH run; this command
+    /// answers what is left IN it. Offering it for a worktree we would not
+    /// resume would be an invitation to collide.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume_command: Option<String>,
+}
+
+/// One row of `worktree resume-candidates`: a judged worktree, offered or not.
+///
+/// Every judged worktree appears, including the ones the classifier refuses to
+/// offer, so "not offered" is never confused with "not looked at".
+#[derive(Debug, Clone, Serialize)]
+pub struct ResumeCandidate {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(flatten)]
+    pub judgement: ResumeJudgement,
+}
+
+/// The `worktree resume-candidates --json` surface: a pure projection of
+/// [`Report`], carrying its `state_scan` verbatim.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResumeReport {
+    pub repo: String,
+    /// Forwarded from the reconcile report, NOT re-derived: a second scan is a
+    /// second source of truth that can disagree with the one the GC acts on.
+    pub state_scan: StateScan,
+    pub candidates: Vec<ResumeCandidate>,
+    pub resumable_count: usize,
 }
 
 /// The preservation status of one directory's uncommitted content.
@@ -293,6 +522,14 @@ pub struct Entry {
     /// The output of [`is_removable`] for this entry — the ONLY field any
     /// caller may act on when deleting.
     pub removable: bool,
+    /// Does condukt's run state record unfinished, handoff-able work here?
+    /// (`present` | `absent` | `undetermined`.) The resume-side input, kept
+    /// beside the deletion-side inputs because both verdicts come from this
+    /// one cross-check.
+    pub unfinished: Judged,
+    /// The output of [`resume_verdict`] for this entry — the ONLY field any
+    /// caller may act on when offering a worktree to a session.
+    pub resume: ResumeJudgement,
     pub claims: Vec<Claim>,
 }
 
@@ -337,10 +574,25 @@ struct TaskClaim {
     updated_at: Option<i64>,
 }
 
+/// A task that is not finished (status not `verified`/`cancelled`/`discarded`)
+/// and records a worktree — i.e. work the next session could pick up. A RUNNING
+/// task is unfinished too, and also appears in [`RunIndex::by_worktree`]; the
+/// two indexes answer different questions about it ("is it moving" vs "is there
+/// anything left").
+#[derive(Debug, Clone)]
+struct UnfinishedTask {
+    run_id: String,
+    task_id: String,
+    namespace: String,
+    status: &'static str,
+}
+
 /// The result of scanning every run namespace under the state root.
 struct RunIndex {
     /// canonical worktree path -> the RUNNING tasks claiming it.
     by_worktree: BTreeMap<PathBuf, Vec<TaskClaim>>,
+    /// canonical worktree path -> the NON-TERMINAL tasks recorded at it.
+    unfinished_by_worktree: BTreeMap<PathBuf, Vec<UnfinishedTask>>,
     /// False when ANY namespace or run file could not be read or parsed, or
     /// the state root itself is absent/unreadable. While false, "no task
     /// claims this path" proves nothing.
@@ -373,6 +625,7 @@ fn looks_like_run_state(value: &serde_json::Value) -> bool {
 fn scan_state_root(state_root: &Path) -> RunIndex {
     let mut idx = RunIndex {
         by_worktree: BTreeMap::new(),
+        unfinished_by_worktree: BTreeMap::new(),
         complete: true,
         reason: None,
         namespaces: 0,
@@ -483,20 +736,39 @@ fn scan_state_root(state_root: &Path) -> RunIndex {
                 }
             };
             idx.runs += 1;
-            for t in rs.tasks.iter().filter(|t| t.status == Status::Running) {
+            for t in &rs.tasks {
                 let Some(wt) = t.worktree.as_deref() else {
                     continue;
                 };
-                idx.running_tasks += 1;
                 let raw = PathBuf::from(wt);
-                let canon = raw.canonicalize().unwrap_or(raw.clone());
-                idx.by_worktree.entry(canon).or_default().push(TaskClaim {
-                    run_id: rs.run_id.clone(),
-                    task_id: t.id.clone(),
-                    namespace: ns_name.clone(),
-                    worktree: raw,
-                    updated_at: t.updated_at,
-                });
+                let canon = raw.canonicalize().unwrap_or_else(|_| raw.clone());
+                if t.status == Status::Running {
+                    idx.running_tasks += 1;
+                    idx.by_worktree
+                        .entry(canon.clone())
+                        .or_default()
+                        .push(TaskClaim {
+                            run_id: rs.run_id.clone(),
+                            task_id: t.id.clone(),
+                            namespace: ns_name.clone(),
+                            worktree: raw,
+                            updated_at: t.updated_at,
+                        });
+                }
+                // The resume index. Running tasks belong here too: "is anybody
+                // moving" and "is there anything left" are different questions,
+                // and a task can be unfinished while its worktree is occupied.
+                if !is_terminal(t.status) {
+                    idx.unfinished_by_worktree
+                        .entry(canon)
+                        .or_default()
+                        .push(UnfinishedTask {
+                            run_id: rs.run_id.clone(),
+                            task_id: t.id.clone(),
+                            namespace: ns_name.clone(),
+                            status: status_word(t.status),
+                        });
+                }
             }
         }
     }
@@ -832,6 +1104,211 @@ pub fn preserve(path: &Path, repo: &Path, now: i64) -> Preserved {
     }
 }
 
+// ── The resume-side input, and how a verdict explains itself ───────────────
+
+/// Can `condukt state resume-context --run <run_id>` actually run from THIS
+/// checkout?
+///
+/// Observed, not predicted (CLAUDE.md §2). Run state is namespaced per checkout,
+/// so a run recorded from another checkout is invisible to the very command
+/// this surface offers, and `resume-context` additionally needs the saved
+/// decomposition. We load exactly what it loads and nothing more: what the
+/// command PRINTS is deliberately not re-derived here — that would be a second
+/// implementation of it, free to drift.
+fn handoff_is_runnable(cfg: &Config, cwd: &Path, run_id: &str) -> bool {
+    if RunState::load(cfg, cwd, run_id).is_err() {
+        return false;
+    }
+    match state::load_decomposition(cfg, cwd, run_id) {
+        Ok(raw) => serde_json::from_str::<crate::model::Decomposition>(&raw).is_ok(),
+        Err(_) => false,
+    }
+}
+
+/// The resume-side input for one directory: is there unfinished work recorded
+/// here that this checkout can hand off? Returns the task that answers it (kept
+/// even when the answer is undetermined, so the operator can see WHICH run the
+/// disagreement is about).
+fn unfinished_at(
+    index: &RunIndex,
+    canon: &Path,
+    cfg: &Config,
+    cwd: &Path,
+) -> (Determination<Unfinished>, Option<UnfinishedTask>) {
+    let mut here: Vec<UnfinishedTask> = index
+        .unfinished_by_worktree
+        .get(canon)
+        .cloned()
+        .unwrap_or_default();
+    // Deterministic ordering: directory read order is not.
+    here.sort_by(|a, b| (&a.run_id, &a.task_id).cmp(&(&b.run_id, &b.task_id)));
+
+    if !index.complete {
+        // Both directions are unavailable at once: a run we could not read
+        // might record work here, and one we did read might be the stale half.
+        return (
+            Determination::undetermined(format!(
+                "condukt's run state could not be read in full ({}), so neither \
+                 'there is unfinished work here' nor 'there is none' can be \
+                 concluded",
+                index
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "reason unavailable".into())
+            )),
+            here.into_iter().next(),
+        );
+    }
+    if here.is_empty() {
+        return (Determination::Known(Unfinished::Absent), None);
+    }
+    if let Some(i) = here
+        .iter()
+        .position(|t| handoff_is_runnable(cfg, cwd, &t.run_id))
+    {
+        let t = here.swap_remove(i);
+        return (Determination::Known(Unfinished::Present), Some(t));
+    }
+    let n = here.len();
+    let mut where_: Vec<&str> = here.iter().map(|t| t.namespace.as_str()).collect();
+    where_.sort_unstable();
+    where_.dedup();
+    (
+        Determination::undetermined(format!(
+            "{n} unfinished task(s) are recorded here, but no run recording them \
+             can be loaded from this checkout — they live in state namespace(s) \
+             {} (run state is namespaced per checkout and `condukt state \
+             resume-context` is scoped to this one). The work is neither \
+             offerable from here nor finished",
+            where_.join(", ")
+        )),
+        here.into_iter().next(),
+    )
+}
+
+/// Why [`resume_verdict`] answered what it answered, in the same order it
+/// consults its inputs, so the sentence always names the input that actually
+/// decided. Never empty: a candidate that says nothing leaves "checked and
+/// held" indistinguishable from "could not check".
+fn resume_reason(
+    verdict: ResumeVerdict,
+    role: Role,
+    attribution: &Determination<Attribution>,
+    occupancy: &Determination<Occupancy>,
+    unfinished: &Determination<Unfinished>,
+    task: Option<&UnfinishedTask>,
+    claims: &[Claim],
+) -> String {
+    match verdict {
+        ResumeVerdict::Held => {
+            let who: Vec<String> = claims
+                .iter()
+                .filter(|c| c.progress == "progressing")
+                .map(|c| format!("{}::{}", c.run_id, c.task_id))
+                .collect();
+            let who = if who.is_empty() {
+                "a running task".to_string()
+            } else {
+                who.join(", ")
+            };
+            format!(
+                "{who} is progressing in this worktree — it is occupied, and \
+                 handing it to a second session would put two sessions in one \
+                 git index"
+            )
+        }
+        ResumeVerdict::Resumable => match task {
+            Some(t) => format!(
+                "nothing is working here (a fully readable scan of every run \
+                 namespace found no running task claiming this path) and task \
+                 {} of run {} is {} — interrupted work, not finished work",
+                t.task_id, t.run_id, t.status
+            ),
+            None => "nothing is working here and condukt's run state records \
+                     unfinished work at this path"
+                .to_string(),
+        },
+        ResumeVerdict::Undetermined => {
+            if let Determination::Undetermined(r) = occupancy {
+                return r.as_str().to_string();
+            }
+            if role == Role::Primary {
+                return "the primary working tree is never offered for resume: \
+                        work happens in worktrees (CLAUDE.md §8) and main is the \
+                        integration tree, not a session's workspace"
+                    .to_string();
+            }
+            if let Determination::Undetermined(r) = attribution {
+                return r.as_str().to_string();
+            }
+            if matches!(attribution, Determination::Known(Attribution::OtherRepo)) {
+                return "belongs to another repository sharing this worktree base \
+                        — not this repo's work to offer"
+                    .to_string();
+            }
+            if let Determination::Undetermined(r) = unfinished {
+                return r.as_str().to_string();
+            }
+            if matches!(unfinished, Determination::Known(Unfinished::Absent)) {
+                return "no unfinished task is recorded at this path, so there is \
+                        nothing to hand off — which is NOT a statement that this \
+                        directory is disposable (`condukt worktree reconcile` \
+                        decides that question)"
+                    .to_string();
+            }
+            "not offered, and not written off".to_string()
+        }
+    }
+}
+
+/// [`resume_verdict`] plus its explanation and, when the verdict is
+/// `resumable`, the existing run-scoped command that continues the work.
+fn resume_judgement(
+    role: Role,
+    attribution: &Determination<Attribution>,
+    occupancy: &Determination<Occupancy>,
+    unfinished: &Determination<Unfinished>,
+    task: Option<&UnfinishedTask>,
+    claims: &[Claim],
+) -> ResumeJudgement {
+    let verdict = resume_verdict(role, attribution, occupancy, unfinished);
+    let reason = resume_reason(
+        verdict,
+        role,
+        attribution,
+        occupancy,
+        unfinished,
+        task,
+        claims,
+    );
+    // For `held`, name the task that is actually moving; otherwise the task the
+    // resume input was decided on.
+    let who: Option<(String, String)> = match verdict {
+        ResumeVerdict::Held => claims
+            .iter()
+            .find(|c| c.progress == "progressing")
+            .map(|c| (c.run_id.clone(), c.task_id.clone()))
+            .or_else(|| task.map(|t| (t.run_id.clone(), t.task_id.clone()))),
+        ResumeVerdict::Resumable | ResumeVerdict::Undetermined => {
+            task.map(|t| (t.run_id.clone(), t.task_id.clone()))
+        }
+    };
+    ResumeJudgement {
+        verdict: verdict.as_str(),
+        reason,
+        run_id: who.as_ref().map(|(r, _)| r.clone()),
+        task_id: who.as_ref().map(|(_, t)| t.clone()),
+        resume_command: match verdict {
+            ResumeVerdict::Resumable => who
+                .as_ref()
+                .map(|(r, _)| format!("condukt state resume-context --run {r}")),
+            // An offer attached to a worktree we would not resume is an
+            // invitation to collide.
+            ResumeVerdict::Held | ResumeVerdict::Undetermined => None,
+        },
+    }
+}
+
 // ── The reconciliation itself ──────────────────────────────────────────────
 
 /// Cross-check the on-disk worktrees against condukt's run state and decide,
@@ -941,6 +1418,17 @@ pub fn reconcile(cfg: &Config, cwd: &Path, repo: &Path, preserve_dirty: bool) ->
         };
 
         let removable = is_removable(role, &attribution, &occupancy, &dirty, preserved.preserved);
+        // The SECOND question, answered from the same inputs so the two can
+        // never disagree about the same directory (see the module header).
+        let (unfinished, unfinished_task) = unfinished_at(&index, &canon, cfg, cwd);
+        let resume = resume_judgement(
+            role,
+            &attribution,
+            &occupancy,
+            &unfinished,
+            unfinished_task.as_ref(),
+            &claims,
+        );
         entries.push(Entry {
             path: canon.to_string_lossy().to_string(),
             role: role.as_str(),
@@ -950,6 +1438,8 @@ pub fn reconcile(cfg: &Config, cwd: &Path, repo: &Path, preserve_dirty: bool) ->
             dirty: Judged::from_dirty(&dirty),
             preserved,
             removable,
+            unfinished: Judged::from_unfinished(&unfinished),
+            resume,
             claims,
         });
     }
@@ -1079,6 +1569,109 @@ pub fn render(report: &Report) -> String {
     out
 }
 
+// ── The resume view (`worktree resume-candidates`) ─────────────────────────
+
+/// Project a reconcile [`Report`] into the resume view. PURE: it reads the
+/// report and nothing else — no second scan of the state root, no second git
+/// invocation — which is what makes "the GC and the resume path agree about
+/// this directory" true by construction rather than by hope.
+///
+/// Every judged worktree appears, offered or not, plus every dangling claim
+/// (run state pointing at a directory that is not on disk). A dangling claim is
+/// a disagreement between the two sources: it may be neither resumed nor
+/// written off, so it is carried through as an `undetermined` candidate rather
+/// than dropped.
+pub fn resume_report(report: &Report) -> ResumeReport {
+    let mut candidates: Vec<ResumeCandidate> = report
+        .entries
+        .iter()
+        .map(|e| ResumeCandidate {
+            path: e.path.clone(),
+            branch: e.branch.clone(),
+            judgement: e.resume.clone(),
+        })
+        .collect();
+
+    for c in &report.dangling_claims {
+        candidates.push(ResumeCandidate {
+            path: c.claimed_worktree.clone(),
+            branch: None,
+            judgement: ResumeJudgement {
+                verdict: ResumeVerdict::Undetermined.as_str(),
+                reason: format!(
+                    "condukt's run state records task {} of run {} (namespace {}) \
+                     as working here, but the directory is not on disk: the two \
+                     sources disagree, so this can be neither resumed nor \
+                     written off",
+                    c.task_id, c.run_id, c.state_namespace
+                ),
+                run_id: Some(c.run_id.clone()),
+                task_id: Some(c.task_id.clone()),
+                resume_command: None,
+            },
+        });
+    }
+
+    let resumable_count = candidates
+        .iter()
+        .filter(|c| c.judgement.verdict == ResumeVerdict::Resumable.as_str())
+        .count();
+    ResumeReport {
+        repo: report.repo.clone(),
+        state_scan: report.state_scan.clone(),
+        candidates,
+        resumable_count,
+    }
+}
+
+/// Human-readable rendering of the resume view: one block per judged worktree,
+/// always naming the reason — including for the ones that are not offered,
+/// because "not offered" and "not looked at" must not look the same.
+pub fn render_resume(report: &ResumeReport) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "repo {} — run state: {}{}\n",
+        report.repo,
+        if report.state_scan.readable {
+            format!(
+                "{} namespace(s), {} run(s), {} running task(s) with a worktree",
+                report.state_scan.namespaces,
+                report.state_scan.runs,
+                report.state_scan.running_tasks
+            )
+        } else {
+            "NOT FULLY READABLE — nothing may be offered".to_string()
+        },
+        report
+            .state_scan
+            .reason
+            .as_ref()
+            .map(|r| format!(" [{r}]"))
+            .unwrap_or_default()
+    ));
+    for c in &report.candidates {
+        out.push_str(&format!(
+            "{:<13} {:<24} {}\n  {}\n",
+            c.judgement.verdict,
+            c.branch.clone().unwrap_or_else(|| "-".into()),
+            c.path,
+            c.judgement.reason
+        ));
+        if let (Some(r), Some(t)) = (&c.judgement.run_id, &c.judgement.task_id) {
+            out.push_str(&format!("  run {r} task {t}\n"));
+        }
+        if let Some(cmd) = &c.judgement.resume_command {
+            out.push_str(&format!("  resume with: {cmd}\n"));
+        }
+    }
+    out.push_str(&format!(
+        "{} of {} judged worktree(s) can be resumed\n",
+        report.resumable_count,
+        report.candidates.len()
+    ));
+    out
+}
+
 // ── The decision table (`--decision-table`) ────────────────────────────────
 
 /// Every combination of [`is_removable`]'s inputs, with the decision the real
@@ -1139,6 +1732,59 @@ pub fn decision_table() -> serde_json::Value {
     serde_json::json!({ "rows": rows })
 }
 
+/// Every combination of [`resume_verdict`]'s inputs, with the verdict the real
+/// classifier produced for it — the resume mirror of [`decision_table`].
+///
+/// Same reason as there: the whole input space must be observable from outside
+/// the pure function, and the assertion must be on the emitted VERDICT rather
+/// than on the shape of a `Determination` (a shape assertion on an
+/// `Undetermined` arm can never be observed RED).
+pub fn resume_decision_table() -> serde_json::Value {
+    let roles = [Role::Primary, Role::Registered, Role::Unregistered];
+    let attributions: Vec<(&str, Determination<Attribution>)> = vec![
+        ("this-repo", Determination::Known(Attribution::ThisRepo)),
+        ("other-repo", Determination::Known(Attribution::OtherRepo)),
+        (
+            "undetermined",
+            Determination::undetermined("resume-decision-table probe: attribution"),
+        ),
+    ];
+    let occupancies: Vec<(&str, Determination<Occupancy>)> = vec![
+        ("live", Determination::Known(Occupancy::Live)),
+        ("dead", Determination::Known(Occupancy::Dead)),
+        (
+            "undetermined",
+            Determination::undetermined("resume-decision-table probe: occupancy"),
+        ),
+    ];
+    let unfinished: Vec<(&str, Determination<Unfinished>)> = vec![
+        ("present", Determination::Known(Unfinished::Present)),
+        ("absent", Determination::Known(Unfinished::Absent)),
+        (
+            "undetermined",
+            Determination::undetermined("resume-decision-table probe: unfinished"),
+        ),
+    ];
+
+    let mut rows = Vec::new();
+    for role in roles {
+        for (aname, a) in &attributions {
+            for (oname, o) in &occupancies {
+                for (uname, u) in &unfinished {
+                    rows.push(serde_json::json!({
+                        "role": role.as_str(),
+                        "attribution": aname,
+                        "occupancy": oname,
+                        "unfinished": uname,
+                        "verdict": resume_verdict(role, a, o, u).as_str(),
+                    }));
+                }
+            }
+        }
+    }
+    serde_json::json!({ "rows": rows })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1177,6 +1823,87 @@ mod tests {
         assert!(
             removable_seen > 0,
             "the decision function never says yes — the assertions above prove nothing"
+        );
+    }
+
+    /// The RESUME classifier, stated as a property rather than a table: no
+    /// input combination containing an undetermined answer is ever offered for
+    /// resume.
+    ///
+    /// # What this test requires of the implementation (written test-first,
+    /// before the classifier exists — CLAUDE.md §2(b))
+    ///
+    /// A public `resume_decision_table() -> serde_json::Value` in this module,
+    /// exactly mirroring [`decision_table`]: it drives the pure resume
+    /// classifier over its whole input space and returns
+    /// `{"rows": [ { <one key per input>: <string>, "verdict": "resumable" |
+    /// "held" | "undetermined" }, ... ]}`. Every key other than `verdict` is an
+    /// input column, and the string `"undetermined"` in any of them means that
+    /// input was `Determination::Undetermined`.
+    ///
+    /// The assertions are deliberately about the emitted VERDICT STRINGS and
+    /// not about the shape of a `Determination`: an `Undetermined` arm written
+    /// `=> {}` compiles, and a shape assertion on it can never be observed RED.
+    ///
+    /// Until `resume_decision_table` exists this test does not compile. That is
+    /// the intended RED for a classifier that has not been written; the
+    /// behavioural RED for the feature itself lives in
+    /// `tests/worktree_resume.rs`, which compiles and fails on behaviour alone.
+    #[test]
+    fn no_undetermined_input_is_ever_resumable() {
+        let table = resume_decision_table();
+        let rows = table["rows"]
+            .as_array()
+            .expect("the resume decision table has rows");
+        assert!(!rows.is_empty(), "the table must cover the input space");
+
+        let mut undetermined_seen = 0;
+        let mut resumable_seen = 0;
+        let mut held_seen = 0;
+        for r in rows {
+            let obj = r.as_object().expect("each row is an object");
+            let verdict = obj["verdict"].as_str().expect("each row has a verdict");
+            assert!(
+                matches!(verdict, "resumable" | "held" | "undetermined"),
+                "the resume verdict is three-valued and nothing else; row: {r}"
+            );
+            let has_und = obj
+                .iter()
+                .filter(|(k, _)| k.as_str() != "verdict")
+                .any(|(_, v)| v == "undetermined");
+            if has_und {
+                undetermined_seen += 1;
+                assert_ne!(
+                    verdict, "resumable",
+                    "an undetermined input must never be offered for resume — \
+                     handing a worktree we cannot vouch for to a second session \
+                     is the shared-index collision, and it is not recoverable by \
+                     merge; row: {r}"
+                );
+            }
+            match verdict {
+                "resumable" => resumable_seen += 1,
+                "held" => held_seen += 1,
+                _ => {}
+            }
+        }
+        assert!(
+            undetermined_seen > 0,
+            "anti-vacuity: the table must actually contain undetermined inputs"
+        );
+        // Anti-vacuity, both directions. A classifier returning `undetermined`
+        // unconditionally would satisfy every assertion above while attaching no
+        // resume path to anything; one that never says `held` would not be
+        // distinguishing "someone is there" from "I cannot tell".
+        assert!(
+            resumable_seen > 0,
+            "the classifier never offers anything — the assertions above prove \
+             nothing"
+        );
+        assert!(
+            held_seen > 0,
+            "the classifier never says `held`: 'positively occupied' has \
+             collapsed into 'cannot tell'"
         );
     }
 

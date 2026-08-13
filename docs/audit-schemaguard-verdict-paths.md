@@ -139,8 +139,8 @@ production 経路）:
 | A | `crates/schemaguard/src/schema.rs:175` | 「let mut sub = validate(elem, field.items, &elem_path);」 | `validate()` 自身からの再帰呼び出し（配列要素。§1 分類 #9）。戻り値は次行の append で親の violation リストへ合流する |
 <!-- doc-claim-exempt: historical quote — this audit is a snapshot of the pre-fix tree; `cmd_check` now calls `schema::validate_report` and resolves it through `check_verdict` (schemaguard 0.1.9), which is exactly the change this row's finding asked for -->
 | B | `crates/schemaguard/src/main.rs:121` | 「let violations = schema::validate(&value, &schema.fields, "");」 | **schemaguard 自身の CLI `cmd_check`**。§4.2 |
-| C | `crates/condukt/src/main.rs:5026` | 「let violations = schemaguard::schema::validate(&value, &schema.fields, "");」 | condukt `schema_precheck`。§4.1 |
-| D | `crates/condukt/src/main.rs:5040` | 「let mut sub = schemaguard::schema::validate(v, &schema.fields, &format!("[{i}]"));」 | condukt `schema_precheck_each`。§4.1 |
+| C | `crates/condukt/src/main.rs:5100` | 「let violations = schemaguard::schema::validate(&value, &schema.fields, "");」 | condukt `schema_precheck`。§4.1 |
+| D | `crates/condukt/src/main.rs:5114` | 「let mut sub = schemaguard::schema::validate(v, &schema.fields, &format!("[{i}]"));」 | condukt `schema_precheck_each`。§4.1 |
 
 `schemaguard` を依存に持つ crate は condukt のみである（実測: `grep -rn "schemaguard" crates/*/Cargo.toml`
 → 自クレートの `[package]`/`[lib]`/`[[bin]]` 名を除くと `crates/condukt/Cargo.toml:18`

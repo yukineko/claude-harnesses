@@ -1,4 +1,4 @@
-last_synced = "5c477373b409dec4d4ea8767addf788e74dd4d41"
+last_synced = "24f651eaf80182a5f7ad575764be762fcf10e38f"
 
 [entries.".gitattributes"]
 key = ".gitattributes"
@@ -254,7 +254,7 @@ key = "crates/backlog/src/store.rs"
 kind = "feature"
 spec_doc = "docs/specs/backlog.md"
 status = "changed"
-last_ref = "22962eb4d798a4c5b334a5285bd9b48c352f9b5f"
+last_ref = "83cc25b67900e5dd1ac8bb69b6c93d9490b0e2cc"
 impl_files = ["crates/backlog/src/store.rs"]
 test_files = []
 client_refs = []
@@ -1093,7 +1093,7 @@ key = "crates/condukt/src/claim.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "changed"
-last_ref = "a7f1d2417ad46056af1697fbb0a27308c64f13f5"
+last_ref = "83cc25b67900e5dd1ac8bb69b6c93d9490b0e2cc"
 impl_files = ["crates/condukt/src/claim.rs"]
 test_files = []
 client_refs = []
@@ -1232,7 +1232,7 @@ key = "crates/condukt/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "changed"
-last_ref = "b896ae0c9e2494f6d2d0f3db59bd3165a7a4f271"
+last_ref = "304c73f6ad277b9b73185aa29df0c5d82d21a435"
 impl_files = ["crates/condukt/src/main.rs"]
 test_files = []
 client_refs = []
@@ -1384,7 +1384,7 @@ key = "crates/condukt/src/state.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "changed"
-last_ref = "b896ae0c9e2494f6d2d0f3db59bd3165a7a4f271"
+last_ref = "304c73f6ad277b9b73185aa29df0c5d82d21a435"
 impl_files = ["crates/condukt/src/state.rs"]
 test_files = []
 client_refs = []
@@ -1433,9 +1433,18 @@ client_refs = []
 key = "crates/condukt/src/wt_reconcile.rs"
 kind = "feature"
 status = "changed"
-last_ref = "b896ae0c9e2494f6d2d0f3db59bd3165a7a4f271"
+last_ref = "304c73f6ad277b9b73185aa29df0c5d82d21a435"
 impl_files = ["crates/condukt/src/wt_reconcile.rs"]
 test_files = []
+client_refs = []
+
+[entries."crates/condukt/tests/abandon_progress_gate_e2e.rs"]
+key = "crates/condukt/tests/abandon_progress_gate_e2e.rs"
+kind = "feature"
+status = "changed"
+last_ref = "304c73f6ad277b9b73185aa29df0c5d82d21a435"
+impl_files = []
+test_files = ["crates/condukt/tests/abandon_progress_gate_e2e.rs"]
 client_refs = []
 
 [entries."crates/condukt/tests/autonomy_invariant.rs"]

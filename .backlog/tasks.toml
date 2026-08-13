@@ -11404,3 +11404,61 @@ updated_at = 1786643704
 weight = 0.0
 issue_number = 340
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/340"
+
+[[task]]
+id = "663ea9ad"
+title = "condukt: the file-claim gate calls a claim live when the holder pid is dead and the heartbeat is 40h stale, wedging every later run"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "claim",
+    "p1",
+]
+status = "pending"
+notes = """
+Observed 2026-08-14, measurement point ee214481, during a fresh condukt run init.
+
+condukt state set --status running refused two tasks with "task skipped - N file(s) already claimed by a live run". The claim registry (condukt state claims) named three holders:
+
+  crates/condukt/tests/worktree_reconcile.rs -> run-20260814-023742-67810, holder_pid 68483
+  crates/backlog/src/store.rs                -> p0trio-1, holder_pid 94820
+  crates/backlog/Cargo.toml                  -> p0trio-1, holder_pid 94820
+  crates/backlog/.claude-plugin/plugin.json  -> p0trio-1, holder_pid 94820
+  crates/condukt/src/claim.rs                -> p0trio-1, holder_pid 94789
+
+MEASURED: all three pids are dead. "ps -p 68483 / 94820 / 94789" returns no such process for each.
+MEASURED: p0trio-1 claimed_at = heartbeat_at = 1786499161, wall clock at observation = 1786643679.
+That is 144518 seconds, about 40 hours, and the heartbeat was NEVER refreshed after the claim
+(claimed_at and heartbeat_at are byte-identical).
+
+So the predicate behind the word "live" in that refusal message is satisfied by a claim whose
+holder process has been gone for 40 hours. The gate is not fail-open here (it blocks, which is the
+safe side), but it is UNBOUNDED: nothing ages the claim out, so every future run that touches those
+files is refused forever until a human runs condukt state release. That converts a crashed worker
+into a permanent repo-wide wedge on those paths.
+
+Note the asymmetry worth checking: crates/condukt/src/claim.rs is still held by dead pid 94789 and
+was NOT released in this session, so that path is still wedged right now.
+
+Two things to determine (I did not test either):
+1. Does the claim liveness check consult the pid at all, or only the presence of the record? If it
+   does consult it, a dead pid should not read as live. If it does not, the field is decorative.
+2. There is already a progress-gated liveness engine in this workspace (harness_core::progress
+   sample/classify, used by condukt claim.rs retain_claim and by wt_reconcile) that resolves
+   cannot-determine to Undetermined rather than to a permanent block. The claim registry appears not
+   to use it. Reaping should require a positive Known(Stalled) verdict, not mere age - but equally,
+   a claim should not be able to assert liveness forever with no heartbeat.
+
+Related: backlog b6cf486d (which liveness probes are sound), memory note maintree-guard stale lock
+(the lock pid is a one-shot CLI pid and is always dead, so ps proves nothing about the SESSION).
+That memory note is the reason this needs a design answer rather than a naive ps check: the right
+signal is probably heartbeat freshness plus a progress verdict, not pid existence.
+
+NOT DONE: I did not write a test. I unblocked my run with condukt state release on the dead-holder
+claims and continued with the original task."""
+created_at = 1786643734
+updated_at = 1786643734
+weight = 0.0
+issue_number = 341
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/341"

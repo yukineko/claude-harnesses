@@ -11994,3 +11994,15 @@ notes = """実測 2026-08-17、測定点 734002fa、backlog 0.2.27。'backlog ne
 created_at = 1786950477
 updated_at = 1786950477
 weight = 0.0
+
+[[task]]
+id = "a0b21a50"
+title = "main と worktree の .git に 0 バイトの index.lock が残留する (出所不明)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "実測 2026-08-17、測定点 734002fa〜5819090d。2 箇所で stale な index.lock に遭遇した: (1) worktree 側 /mnt/c/.../harness/.git/worktrees/session-52834a1f/index.lock (0 バイト、16:04 作成、遭遇時 16:09) — commit を fatal: Unable to create ... File exists で阻止した。(2) main 側 /mnt/c/.../harness/.git/index.lock (0 バイト、16:01 作成、遭遇時 16:11) — git merge --ff-only を阻止した。どちらも遭遇時点で ps -eo pid,etimes,cmd に git プロセスは 1 件も無く、0 バイトだった。並行して claude セッションが 3 本生きていた (pid 3307/6813/10168、経過 16639/13390/7799 秒)。出所不明: 私自身の git 呼び出しは全て正常終了しており、16:01 と 16:04 に何が lock を作ったか同定できていない。候補は (a) backlog の GitHub sync 経路 (done 時に gh issue close を試みて失敗している。'Resource not accessible by personal access token') (b) 他セッションの hook が main で git を叩いた (CLAUDE.md §8 が禁じている経路) (c) WSL2 の /mnt/c (9p/drvfs) 上で git が lock 解放に失敗する既知の挙動。(c) なら本 repo 全体で再発し続けるので影響が大きい。見分け方: 再発時に lsof で保持プロセスを確認し、同時に他セッションの transcript で同時刻の git 実行を突き合わせる。また /mnt/c 以外 (WSL ネイティブ fs) に clone して同じ操作を回し再現するかを見る。ユーザー裁定 (2026-08-17) により main の lock は stale と判断して削除し merge を実行した。削除は判断であって観測ではないので、index が壊れていないかは次に main を触るセッションが git fsck で確認すること。"
+created_at = 1786950781
+updated_at = 1786950781
+weight = 0.0

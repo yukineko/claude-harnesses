@@ -11751,7 +11751,7 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
 status = "pending"
-notes = """
+notes = '''
 実測 2026-08-17、測定点 f1131a36、WSL2 linux-x86_64。
 
 【観測】
@@ -11770,9 +11770,44 @@ notes = """
 見分け方: scripts/rollout-plugins.sh と ~/.claude/settings.json の PATH 設定を読み、~/.cargo/bin へ install する経路が現在も存在するか確認する。存在しないなら (a)。
 
 【関連】5ba13c3e（store 分岐、可視化のみで移行しないとユーザー決定済み）、a4966045（home store の junk project キー 7 件）。
-【副次観測】SessionStart hook は "pending: 119" と報告しており、これは 91 とも 247 とも一致しない。hook がどの store をどの project フィルタで読んだのかは未確認（この起票のスコープ外だが、3 つ目の数字が存在すること自体を記録しておく）。"""
+【副次観測】SessionStart hook は "pending: 119" と報告しており、これは 91 とも 247 とも一致しない。hook がどの store をどの project フィルタで読んだのかは未確認（この起票のスコープ外だが、3 つ目の数字が存在すること自体を記録しておく）。
+
+--- 実害の実測 (2026-08-17, 測定点 d06c3608): ゲートスクリプトが stale binary を測っていた ---
+
+PATH shadowing が「見えにくい」だけでなく**検証系そのものを無効化している**実例を観測した。
+
+`scripts/e2e-autonomy.sh` (pre-push が advisory として案内し、backlog を含む
+human-0 chain の契約を検査するスクリプト) を実行したところ、自身が解決したパスを
+逐語で報告した:
+
+    condukt = /home/hiroyuki_nakayama/.claude/plugins/cache/yukineko/condukt/0.7.138/bin/condukt
+    backlog = /home/hiroyuki_nakayama/.cargo/bin/backlog
+
+**condukt は plugin cache の現行版を引いているのに、backlog だけ ~/.cargo/bin の
+2026-07-23 版を引いている。** つまり「backlog を含む chain を検査する」と称する
+スクリプトが、実際には出荷されていない 8 ヶ月前のバイナリを検査している。
+この不一致はスクリプトが自分で印字しているのに、これまで誰も読んでいなかった。
+
+本セッションで backlog 0.2.27 (tasks lock の fail-open 修正) を rollout したが、
+このスクリプト経由の検査は依然として 0.2.19 相当を見る。CLAUDE.md の
+「ゲートは『実装されているか』ではなく『実際に走るバイナリがどれか』まで
+確認しないと効いていない」がそのまま当てはまる。
+
+なお今回の実行は autonomy 無効で SKIP に終わったので、この stale binary で
+何かが誤判定された証拠は無い (SKIP は判定していない)。**問題は判定が誤ったことでは
+なく、判定していたら誤った対象を測っていたこと**である。
+
+**是正の候補** (91fa24df 本体の判断に加えて):
+  * `scripts/e2e-autonomy.sh` の binary 解決を condukt と同じ plugin-cache 優先へ揃える。
+    condukt 側が正しく解決できているのだから、同じ手順を backlog にも適用すればよい。
+  * より根本的には `~/.cargo/bin` の stale な 3 本 (backlog / hypothesis / fugu-router)
+    を削除する。これが 91fa24df 本体の判断事項。
+
+**未検証**: 他のスクリプト (scripts/ 配下、各 crate の hooks) が同様に bare `backlog` を
+引いていないか。見分け方: `grep -rn 'command -v backlog\|which backlog\|[^/]backlog ' scripts/ crates/*/hooks/`。
+'''
 created_at = 1786943298
-updated_at = 1786943298
+updated_at = 1786951292
 weight = 0.0
 
 [[task]]

@@ -12041,3 +12041,17 @@ notes = "実測 2026-08-17、測定点 734002fa〜5819090d。2 箇所で stale �
 created_at = 1786950781
 updated_at = 1786950781
 weight = 0.0
+
+[[task]]
+id = "787922b3"
+title = "backlog done/fail が別 store の id を 'task not found' と報告する (store 不一致を id 誤りと区別不能)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "実測 2026-08-17。task 1f6e04fd は ~/.backlog/tasks.toml (global store) に project=/mnt/.../aegis で存在するが、cwd=/mnt/.../harness (repo store あり) および cwd=/mnt/.../aegis から 'backlog done 1f6e04fd' はいずれも 'Error: task not found: 1f6e04fd' を返した。cwd=$HOME からのみ 'done: 1f6e04fd' に成功。問題は 2 点: (1) 'その store に無い' と 'そもそも存在しない id' が同一メッセージで区別不能 = 判定不能を否定に写している (CLAUDE.md 3)。overwatch の backlog 集計は同じ状況を 'An empty result here would be indistinguishable from a genuinely empty queue' として正しく unknown 報告しているのに、done/fail 側は落ちていない。(2) store 選択を上書きする flag が無い (backlog done --help はオプション皆無)。副作用として cwd=aegis での実行が空の /mnt/.../aegis/.backlog/ を作り、以後 aegis からの backlog 呼び出しが空 store に固定される罠になる (本 session で作成・撤去済み)."
+created_at = 1786951673
+updated_at = 1786951673
+weight = 0.0
+issue_number = 352
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/352"

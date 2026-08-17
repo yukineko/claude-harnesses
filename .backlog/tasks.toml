@@ -12041,3 +12041,15 @@ notes = "実測 2026-08-17、測定点 734002fa〜5819090d。2 箇所で stale �
 created_at = 1786950781
 updated_at = 1786950781
 weight = 0.0
+
+[[task]]
+id = "23ea3f77"
+title = "compass charter が「RED テストは 375587a2 に委託済み」と主張するが当該 commit は存在しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-08-17、測定点 2d744145。`compass gap` の dod 最終要素 (2026-08-17 再測の節) が逐語で「RED テストは 375587a2 に委託済みで 2026-08-14 に裁定との整合を読み直し確認済み」と書いている。しかし当該 commit は共有 odb に存在しない: `git cat-file -t 375587a2` → `fatal: Not a valid object name 375587a2`、`git branch -a --contains 375587a2` → `error: malformed object name`、`refs/preserved` も 0 件 (`git for-each-ref | grep -i preserv` が無出力)。測定 vantage は linked worktree で main と同一 odb を共有しているため「この worktree から見えないだけ」ではない。さらに現行ツリーの状態がこれを裏付ける: crates/condukt/tests/worktree_reconcile.rs には削除されたはずの `dead_clean_worktree_is_removable` が今も存在し、375587a2 が追加したはずの 3 本 (unclaimed_clean_worktree_with_no_witness_is_not_removable / unclaimed_worktree_occupancy_is_undetermined_not_dead / unclaimed_worktree_with_advancing_activity_is_live) は 1 本も存在しない。つまり 375587a2 は **merge されたことがなく**、main は fix 前の状態のままである。影響: charter は steering document なので、これを読んだ次のセッションは『RED は済んでいるので実装だけすればよい』と誤読する。CLAUDE.md 第4節 (散文が実挙動と食い違う = 次のレビュアーを騙す仕掛け) が charter 自身に発生している形。是正: 当該記述を『RED テストは失われており書き直しが必要』へ改める。関連 1b19e6d2 (消失の追跡)、fe84d350 (本体)。なお本セッションは fe84d350 の実装を fresh RED から起こす形で着手済みなので、実体の側は前進する。"
+created_at = 1786951864
+updated_at = 1786951864
+weight = 0.0

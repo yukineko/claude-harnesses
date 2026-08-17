@@ -8426,7 +8426,7 @@ outcome block。全文レポート (29KB、逐語引用と再実行可能な抽�
 調査部分が終わっただけなので pending に戻す。
 """
 created_at = 1785926923
-updated_at = 1786943352
+updated_at = 1786950379
 weight = 0.0
 issue_number = 153
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/153"
@@ -9890,7 +9890,7 @@ death criterion ruling 待ちで、それが決まるまで実装できない。
 終わったように見える。
 """
 created_at = 1786403442
-updated_at = 1786943352
+updated_at = 1786950454
 weight = 0.0
 issue_number = 237
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/237"
@@ -10628,7 +10628,7 @@ title = "backlog: lock acquire budget measures 9.97s against a 10s stale-reap th
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "claimed"
+status = "done"
 notes = """
 Measured 2026-08-12, measurement point 1ef71cc5, crates/backlog/src/store.rs.
 
@@ -10811,7 +10811,7 @@ nominal を超過する」という**構造的な主張**に置き換えた。�
 259 tests green / clippy clean / fmt 済 / cargo doc warning 0。
 surviving だった mutation 5 は RED を観測して塞いだので kill rate は 5/5 見込み。"""
 created_at = 1786543402
-updated_at = 1786949441
+updated_at = 1786950274
 weight = 0.0
 issue_number = 272
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/272"
@@ -11834,9 +11834,44 @@ crates/condukt/tests/worktree_reconcile.rs:427 に現存し green である (実
 retarget する」が正しい作業になる。**この差は「通すためにテストを緩める」との区別に直結するので、
 着手前に人間の確認を取ること。**
 
-【関連】fe84d350 (本体)、e99f61e4(b)、2d3cbda2、5daf0b60、b637936f、91fa24df。"""
+【関連】fe84d350 (本体)、e99f61e4(b)、2d3cbda2、5daf0b60、b637936f、91fa24df。
+
+--- 独立確認 (2026-08-17, 測定点 734002fa): 消失は事実である ---
+
+flow セッション 52834a1f が fe84d350 に着手しようとして、その前提として本 item の
+主張を**独立に検証**した。結果、主張は正しい。
+
+    $ git cat-file -t 375587a2
+    fatal: Not a valid object name 375587a2
+    $ git branch -a --contains 375587a2
+    error: malformed object name 375587a2
+    $ git for-each-ref --format='%(refname)' | grep -i preserv
+    (出力なし)
+
+測定した vantage は linked worktree (.harness-worktrees/session-52834a1f) であり、
+main と**同一の object database を共有**している。したがって「この worktree からは
+見えないだけ」ではなく、共有 odb から失われている。refs/preserved も存在しない。
+
+**fe84d350 への影響 (順序の依存)**: fe84d350 は 2026-08-14 のユーザー裁定
+(Dead ⇐ 停滞 ∧ progress window 経過 ∧ transcript 証拠なし) で**設計判断としては
+unblocked** になっているが、その裁定が「実装前に読み直せ」と指定した RED テスト 3 本が
+本件で失われているため、実装に着手できない。F→P オラクルの証跡が無い状態で GREEN を
+書くのは CLAUDE.md 2(b)「落ちることを確認していないテストは何も証明しない」に反する。
+
+救いは、fe84d350 の notes に 3 本の**テスト名と各々が pin する性質が逐語で残っている**
+こと (unclaimed_clean_worktree_with_no_witness_is_not_removable /
+unclaimed_worktree_occupancy_is_undetermined_not_dead /
+unclaimed_worktree_with_advancing_activity_is_live)。さらに削除された anti-vacuity
+control (dead_clean_worktree_is_removable) とその削除理由も記録されている。よって
+**復元ではなく書き直しは可能**である。ただし書き直したものは「かつて RED だったテスト」
+ではないので、改めて RED を観測してから実装すること (前の RED 観測は証跡ごと失われている)。
+
+**未検証**: 375587a2 が他マシン (mac 側の /Users/yuki/src/harness) の odb に残っている
+可能性は調べていない。残っていれば書き直しではなく回収できる。確認方法は mac 側で
+同じ `git cat-file -t 375587a2` を打つこと。
+"""
 created_at = 1786943936
-updated_at = 1786943936
+updated_at = 1786950547
 weight = 0.0
 
 [[task]]
@@ -11922,4 +11957,40 @@ status = "pending"
 notes = "d7e1ac30 で tasks lock の reap 条件に『holder が Gone』を追加した。pid を書くのは 0.2.27 以降なので、0.2.27 未満の backlog がクラッシュして残した lockfile は body が空 → tasks_lock_holder が Unknown → 永久に reap されない。従来は 10s 経過で自己回復していた挙動が、rollout 後は手動削除が必要になる。到達条件は『古い版がロック保持中にクラッシュ』かつ『その後 rollout』なので狭いが、起きると恒久的に詰まる。緩和として add の拒否メッセージに lockfile の読み方と空 body の原因を明記済み(store.rs の backlog add refused)。判断: (a)これで十分 / (b)ワンショットの移行処理が要る。(b)なら『空 body かつ mtime が rollout 時刻より古い』を一度だけ reap する等が候補だが、空 body への例外は Unknown never-reap の不変条件に穴を開けるので慎重に。測定点 rev: d7e1ac30 作業ツリー、2026-08-17。敵対的検証 agent の finding E 由来。"
 created_at = 1786949337
 updated_at = 1786949337
+weight = 0.0
+
+[[task]]
+id = "06baf54d"
+title = "guard-maintree-bash.py がセッション cwd が worktree の場合を誤検知する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = '''実測 2026-08-17 (rev 734002fa 直前): worktree /mnt/c/.../\.harness-worktrees/session-52834a1f 内で cwd も pwd も git rev-parse --show-toplevel も全て当該 worktree を指す状態で、素の 'git commit -F- <<MSG' が『Refused: mutates this project's MAIN working tree』で拒否された。EnterWorktree はセッションが既にその worktree に居ることを確認済み (Cannot enter worktree: ... is the current working directory)。原因: scripts/guard-maintree-bash.py の doc 行 23 が『relative paths resolve against the main tree root (the session's cwd)』とする通り、相対パスと無引数コマンドを常に $CLAUDE_PROJECT_DIR (= main tree) に対して解決し、worktree での作業は 'cd <wt> && ...' か 'git -C <wt> ...' という**再アンカー形**でしか認識しない (_reanchored_outside)。セッションの cwd が既に worktree の場合を勘定していない。回避策として 'git -C <絶対 worktree パス> commit -F <絶対パス>' と明示すれば通る (実際にそうして 734002fa を commit した)。これは正しいゲートの誤検知＝帰属のバグ (CLAUDE.md §8 の『帰属のバグであって自分の不備ではない』に該当) であり、共有 skip ファイルで黙らせていない。修正案: _main_root() の前に『hook 自身の cwd が main の linked worktree なら、その worktree を解決基準にする』分岐を置く (git rev-parse --show-toplevel が $CLAUDE_PROJECT_DIR と異なり、かつ git worktree list に含まれる場合)。fail-closed は保つこと — 判定不能なら従来どおり refuse。'''
+created_at = 1786950222
+updated_at = 1786950222
+weight = 0.0
+
+[[task]]
+id = "9efdfabd"
+title = "rollout drift: 20 plugin の deployed tree が source の mirror でない (plugin.json/Cargo.toml)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "実測 2026-08-17、rev 734002fa、コマンド: python3 scripts/check-plugin-rollout.py → 'ROLLOUT DRIFT (23 problem(s) across 41 plugins checked)'。うち backlog の 1 件は本セッションで解消済み (0.2.27 を rollout)。残る約 20 件は beacon/benchkit/compass/context-governor/ctxrot/curate/daily/difflog/evalkit/fetchguard/fugu-router/gauge/hypothesis/playbook/replaykit/runbook/session-insights/ship/taskprog/trajectoryeval で、いずれも同じ形: 'deployed tree is not a mirror of crates/<name> — 2 deployed file(s) differ from source: .claude-plugin/plugin.json, Cargo.toml'。taintguard だけは 11 ファイル差分 (README.ja.md +8 more) で毛色が違う。全 plugin に同一の 2 ファイルが効いていることから、workspace 共通の変更 (rust-version.workspace / license.workspace の導入等) が rollout されないまま据え置かれた既存 drift と推測されるが**未検証**。ゲートの指示通り 'scripts/rollout-plugins.sh --plugin <name> --force' が必要 (平の rollout は同一バージョンでは no-op)。判断が必要な点: (a) 一括 --force で全部揃えるか / (b) GATE crate (taintguard) は canary 要件があるので分けるか。本セッションは d7e1ac30 のスコープ外なので触っていない (CLAUDE.md 逸脱禁止)。なお taintguard の 11 ファイル差分は GATE crate なので優先度が高い可能性があり、先に中身を確認すべき。"
+created_at = 1786950249
+updated_at = 1786950249
+weight = 0.0
+
+[[task]]
+id = "548e79dc"
+title = "backlog: status 'claimed' を next --claim は書くが edit/list は unknown として拒否する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """実測 2026-08-17、測定点 734002fa、backlog 0.2.27。'backlog next --claim' は選んだ task の status を 'claimed' に落とす (出力 JSON に "status": "claimed")。ところが同じバイナリで 'backlog edit <id> --status claimed' は 'Error: warning: unknown status claimed; valid values are pending | done | failed' で失敗し、'backlog list --status claimed' も同じ warning を出す (ただし list は警告のうえで結果を返す)。つまり書き込み側の語彙と検証側の語彙が食い違っており、claim した task を CLI から明示的に claimed へ戻す手段が無い。実害: flow の手順が『claim-skip ゲートで他セッションが claim 済みなら backlog edit <id> --status pending でキューに戻す』と pending への復帰だけを規定しているため今日は回避できているが、claimed を明示的に設定したい経路 (別セッションの claim を引き継ぐ・手動復旧) が塞がっている。また list の警告は毎回ノイズとして出る。(a) 実在の欠陥 → status 語彙を 1 箇所に集約して claimed を valid に含める / (b) 意図的 → claimed は store 内部専用で CLI から設定させない設計、ならば list の警告を出さないようにし edit のエラーメッセージに『claimed は next --claim が管理する内部状態』と明示する。見分け方: status を検証している関数 (task.rs の status_warning 系) と next --claim の書き込み箇所を突き合わせ、claimed が意図的に除外されているかコメントを確認する。"""
+created_at = 1786950477
+updated_at = 1786950477
 weight = 0.0

@@ -49,3 +49,28 @@ crates/*/bin/*-linux-x86_64
 # A committed lock would ship stale to every clone.
 .backlog/*.lock
 .backlog/.*.tmp.*
+
+# specguard spec-map: a machine-local derived cache, NOT a source artifact.
+# `.githooks/post-merge` runs `specguard map sync`, which writes
+# `last_synced = <the merge commit that just landed>`. Tracking it therefore
+# cannot converge: committing the stamp creates a new HEAD, which the next
+# post-merge stamps again — measured twice in a row on 2026-08-17
+# (091689e8 -> ea9c4b7e). A tracked file that is dirty after every merge
+# collides with the CLAUDE.md §8 stop gate and pressures sessions toward the
+# standing bypasses §5 forbids.
+#
+# Untracking means a fresh clone starts with NO map, so the empty-map path had
+# to be checked before doing this rather than assumed. Measured 2026-08-17 with
+# specguard 0.2.51 in a throwaway repo carrying only specguard.toml:
+#   $ specguard audit
+#   specguard audit: 0 entries mapped, 0 audit shard(s), 0 structural finding(s)
+#     (map is empty — run `specguard map build` first to populate ...)
+#   rc=0
+# The stdout verdict does NOT collapse to clean — `main.rs:1755` guards the
+# "no structural gaps" line behind `!map.is_empty()`, so absent reads as
+# "map is empty", not as "audited and fine". The EXIT CODE does collapse
+# (rc=0 for both empty and clean); no hook or script consumes it today
+# (`.githooks/post-merge` only runs `map sync ... || true`), so this untracking
+# does not arm anything, but the exit-code channel is filed as a latent
+# fail-open — see the backlog entry alongside 86e0ff73.
+.specguard/spec-map.toml

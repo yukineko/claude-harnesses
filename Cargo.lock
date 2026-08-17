@@ -100,11 +100,12 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.2.26"
+version = "0.2.27"
 dependencies = [
  "anyhow",
  "clap",
  "harness-core",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

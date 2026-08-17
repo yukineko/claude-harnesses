@@ -240,22 +240,32 @@ fn tasks_lock_path(path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// A lockfile older than this (by mtime) is treated as abandoned by a crashed
-/// holder and reaped, so a dead holder never deadlocks the SessionStart hook.
+/// How old a lockfile's mtime must be before it may be reaped — a NECESSARY
+/// condition, never a sufficient one.
+///
+/// Age alone does not license a reap: see [`tasks_lock_is_abandoned_with`],
+/// which also requires the recorded holder to be provably gone. This summary
+/// line says so because rustdoc renders only the first paragraph in the item
+/// list, where an "old ⇒ reaped" reading is exactly the mistake `d7e1ac30`
+/// was filed for.
 ///
 /// CA-backlog-003: the critical section is USUALLY a single load-modify-save
 /// (sub-millisecond), but `add`/`add_with_weight` can additionally shell out
 /// to `condukt state is-claimed` via [`is_claimed_elsewhere`], which is bounded
 /// at [`IS_CLAIMED_TIMEOUT`] (300ms) but can legitimately take close to that
-/// long under load. The stale-reap window must stay a comfortable multiple
-/// (not just ~16x) of BOTH that bound AND the blocking-acquire retry budget
-/// below ([`TASKS_LOCK_MAX_ATTEMPTS`] × [`TASKS_LOCK_SLEEP`]), so a live
-/// holder legitimately taking the full `is_claimed` bound is never mistaken
-/// for a crashed one and reaped mid-critical-section by a waiting racer
-/// (which would cause a lost update on tasks.toml — the "stale-lock reap
-/// window race").
+/// long under load. The stale-reap window is therefore kept a comfortable
+/// multiple of BOTH that bound AND the blocking-acquire budget below
+/// ([`TASKS_LOCK_BUDGET`]).
+///
+/// Age is NOT sufficient to reap on its own, and this constant must not be
+/// read as if it were: see [`tasks_lock_is_abandoned_with`], which requires a
+/// dead holder in addition to an old lockfile. Sizing alone cannot make an
+/// mtime-only test safe, because nothing refreshes the mtime while a holder
+/// works — so "old" measures how long the holder has HELD, not whether it
+/// died, and any window can be outlived by a legitimately slow critical
+/// section (backlog `d7e1ac30`).
 const TASKS_LOCK_STALE_SECS: u64 = 10;
-/// Bounded blocking-acquire budget: attempts × sleep ≈ 8s worst case.
+/// Bounded blocking-acquire budget, measured as ELAPSED WALL-CLOCK TIME.
 ///
 /// CA-backlog-003 originally sized this to comfortably exceed a SINGLE
 /// legitimate holder's worst-case critical section ([`IS_CLAIMED_TIMEOUT`],
@@ -264,14 +274,80 @@ const TASKS_LOCK_STALE_SECS: u64 = 10;
 /// lock via `is_claimed_elsewhere`), a waiter can queue behind several such
 /// holders in a row — up to roughly N × 300ms serialized — not just one. At
 /// N=20 (this crate's own `add_and_claim_no_lost_update_under_heavy_contention`
-/// stress test: 10 adders + 10 claimers) that's ~6s worst case, which blew
-/// through the old ~2s budget and made waiters degrade to unprotected
-/// best-effort mid-queue — the lost-update race that test exists to catch.
-/// The budget must stay a comfortable margin BELOW [`TASKS_LOCK_STALE_SECS`]
-/// (10s) so a queued-behind-many-live-holders waiter is never mistaken for
-/// one waiting on a crashed holder and made to reap+barge in early.
-const TASKS_LOCK_MAX_ATTEMPTS: u32 = 1600;
+/// stress test: 10 adders + 10 claimers) that's ~6s worst case.
+///
+/// # Why this is a Duration and not `attempts × sleep`
+///
+/// It used to be an attempt count (1600) times a sleep (5ms), documented as
+/// "≈8s worst case". That arithmetic counted ONLY the sleep: each attempt also
+/// pays an `OpenOptions::create_new` syscall and a metadata stat, so the real
+/// budget was the nominal one PLUS 1600 × (whatever those two syscalls cost on
+/// this filesystem) — an overrun that is unbounded in the documentation and
+/// varies per machine, and that on a slow enough filesystem reaches the
+/// [`TASKS_LOCK_STALE_SECS`] window the sizing was supposed to stay under
+/// (backlog `d7e1ac30`).
+///
+/// Deriving the bound from elapsed time instead makes the documented budget
+/// the actual budget on any machine, regardless of how expensive the syscalls
+/// happen to be there. That is the whole reason for the change; no fixed
+/// overrun figure is quoted here because it is a property of the filesystem
+/// rather than of this code, and a number with no reproducible measurement
+/// point rots into folklore.
+///
+/// This budget is NOT what keeps a live holder safe — the holder conjunct in
+/// [`tasks_lock_is_abandoned_with`] does that, and it holds no matter how the
+/// budget compares to the stale window. Sizing the budget under that window
+/// only bounds how long a caller waits before being told it could not acquire.
+const TASKS_LOCK_BUDGET: Duration = Duration::from_secs(8);
 const TASKS_LOCK_SLEEP: Duration = Duration::from_millis(5);
+
+/// The three timing values the tasks-lock protocol is built on, bundled so a
+/// test can drive the protocol at a smaller scale than the 10-second one
+/// production runs at.
+///
+/// This is a SEAM, not configuration. Production has exactly one instance —
+/// [`TASKS_LOCK_POLICY`], whose fields are the constants above, verbatim. The
+/// `_with` functions do take a policy, but the only non-test caller of any of
+/// them is [`try_acquire_tasks_lock`], which takes no policy argument and
+/// passes that single constant; `tasks_lock_is_abandoned_with` is reached only
+/// through it. So no production call path can substitute different values or
+/// widen the stale-reap window. Only `#[cfg(test)]` code constructs another policy, and
+/// only so a test can exercise the `age >= stale_secs` comparison against a
+/// real elapsed interval without spending 10 real seconds doing it.
+#[derive(Clone, Copy, Debug)]
+struct TasksLockPolicy {
+    /// Lockfile mtime age at or beyond which the lock MAY be reaped — a
+    /// necessary condition, not a sufficient one (see
+    /// [`tasks_lock_is_abandoned_with`]).
+    stale_secs: u64,
+    /// Bounded blocking-acquire budget as elapsed wall-clock time.
+    budget: Duration,
+    /// Sleep between attempts.
+    sleep: Duration,
+    /// How a reap removes the lockfile. Production is `std::fs::remove_file`;
+    /// a test substitutes a FAILING remove to exercise the path where the reap
+    /// decides the lock is abandoned but cannot actually free it (a lockfile
+    /// owned by another user in a sticky directory such as `/tmp` gives
+    /// exactly that: `create_new` reports `AlreadyExists`, `remove_file`
+    /// reports `EPERM`).
+    remove: fn(&Path) -> std::io::Result<()>,
+}
+
+/// Production's reaper. A named `fn` because `std::fs::remove_file` is generic
+/// over `AsRef<Path>` and so cannot coerce to a plain function pointer.
+fn remove_lockfile(p: &Path) -> std::io::Result<()> {
+    std::fs::remove_file(p)
+}
+
+/// The production policy: [`TASKS_LOCK_STALE_SECS`] (10s),
+/// [`TASKS_LOCK_BUDGET`] (8s) and [`TASKS_LOCK_SLEEP`] (5ms), taken directly
+/// from those constants so the seam cannot drift away from them.
+const TASKS_LOCK_POLICY: TasksLockPolicy = TasksLockPolicy {
+    stale_secs: TASKS_LOCK_STALE_SECS,
+    budget: TASKS_LOCK_BUDGET,
+    sleep: TASKS_LOCK_SLEEP,
+    remove: remove_lockfile,
+};
 
 /// RAII guard for the tasks-file-scoped advisory lock. Removes the lockfile on
 /// EVERY drop path — Ok return, Err return, or panic-unwind — so the lock is
@@ -286,19 +362,143 @@ impl Drop for TasksLockGuard {
     }
 }
 
-/// Is the lockfile obviously stale (older than [`TASKS_LOCK_STALE_SECS`])?
-fn tasks_lock_is_stale(lock_path: &Path) -> bool {
+/// Whether the process that wrote a tasks lockfile is still running.
+///
+/// Three-valued on purpose (CLAUDE.md §3). `Unknown` is NOT `Gone`: reaping is
+/// destructive to mutual exclusion, so "I could not tell whether the holder is
+/// alive" must never be spent as permission to steal the lock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TasksLockHolder {
+    /// The recorded pid is running.
+    Alive,
+    /// The recorded pid was read and is definitively not running.
+    Gone,
+    /// No pid recorded, unparseable, or the liveness probe itself failed.
+    Unknown,
+}
+
+/// Is `pid` running? Three-valued — a probe that could not answer returns
+/// `Unknown` rather than collapsing to "dead".
+///
+/// # Why `kill(pid, 0)` and not `/proc`
+///
+/// This used to read `/proc/<pid>` on Linux and shell out to `kill -0`
+/// elsewhere. Both routes lost the distinction this type exists to keep:
+///
+///   - `Path::exists()` returns `false` on ANY metadata error, so under
+///     `/proc` mounted with `hidepid=2` another user's LIVE process is
+///     invisible and was read as gone — a reap of a live holder.
+///   - `kill -0` as a SUBPROCESS reports ESRCH ("no such process") and EPERM
+///     ("exists, but not yours to signal") with the same non-zero exit status,
+///     and the old code mapped that shared status to `Gone`. On macOS, where
+///     that was the only branch, this reaped a live holder owned by another
+///     user — precisely the defect `d7e1ac30` exists to fix.
+///
+/// `kill(2)` with signal 0 delivers nothing and performs only the existence
+/// and permission checks, and its errno is POSIX-specified, so one code path
+/// now serves Linux and macOS alike. The platform-specific branch that could
+/// not be executed here is gone rather than merely re-documented.
+///
+/// NB: `condukt`'s `lock.rs::pid_alive` ends in `.unwrap_or(false)`, i.e. a
+/// failed probe reads as "not alive". For a REAP decision that is the
+/// permissive side, so it is deliberately not reused here (tracked as backlog
+/// `64ce9501`).
+fn tasks_lock_pid_state(pid: u32) -> TasksLockHolder {
+    #[cfg(unix)]
+    {
+        // SAFETY: signal 0 performs only the existence/permission checks and
+        // delivers no signal, so this cannot affect the target or this process.
+        if unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+            return TasksLockHolder::Alive;
+        }
+        tasks_lock_holder_from_kill(std::io::Error::last_os_error().raw_os_error())
+    }
+    #[cfg(not(unix))]
+    {
+        // No portable existence probe. `Unknown` is the restrictive answer:
+        // the lock is never reaped rather than wrongly reaped (CLAUDE.md §3).
+        let _ = pid;
+        TasksLockHolder::Unknown
+    }
+}
+
+/// Map the errno of a FAILED `kill(pid, 0)` to a holder state.
+///
+/// Split out as a pure function so the mapping — including the arm that needs
+/// a process owned by another user to produce naturally — is unit-testable
+/// without arranging the corresponding OS condition (CLAUDE.md §2: settle it
+/// with a test, not with a judgement about what the kernel would do).
+///
+/// The three arms are not symmetric, and the asymmetry is the point:
+///   - `ESRCH` is the ONLY evidence that licenses a reap. Nothing else proves
+///     absence.
+///   - `EPERM` proves the process EXISTS — the kernel had to find it in order
+///     to refuse us. It is positive evidence of liveness, so it maps to
+///     `Alive`, not to `Unknown` and certainly not to `Gone`.
+///   - anything else, including a missing errno, is a probe that did not
+///     answer: `Unknown`.
+#[cfg(unix)]
+fn tasks_lock_holder_from_kill(errno: Option<i32>) -> TasksLockHolder {
+    match errno {
+        Some(e) if e == libc::ESRCH => TasksLockHolder::Gone,
+        Some(e) if e == libc::EPERM => TasksLockHolder::Alive,
+        _ => TasksLockHolder::Unknown,
+    }
+}
+
+/// Read the holder recorded in a tasks lockfile and probe whether it still
+/// runs. A lockfile with no readable pid is `Unknown`, never `Gone`.
+///
+/// Unlike [`crate::lock::LockInfo::pid`] — which that module documents as
+/// useless for staleness because the one-shot `backlog` CLI has already exited
+/// by the time a later command reads its lock — the pid in a TASKS lockfile is
+/// sound evidence. This lock's entire lifetime is inside one process: it is
+/// taken and released by [`TasksLockGuard`] within a single critical section,
+/// on every drop path including panic-unwind. So a recorded pid that is still
+/// running means the holder is still in its critical section, and one that is
+/// gone means the process died holding it. The two locks differ in lifetime,
+/// which is why the same evidence is sound here and unsound there.
+fn tasks_lock_holder(lock_path: &Path) -> TasksLockHolder {
+    let Ok(txt) = std::fs::read_to_string(lock_path) else {
+        return TasksLockHolder::Unknown;
+    };
+    match txt.trim().parse::<u32>() {
+        Ok(pid) => tasks_lock_pid_state(pid),
+        Err(_) => TasksLockHolder::Unknown,
+    }
+}
+
+/// May this lockfile be reaped as abandoned?
+///
+/// Reaping requires BOTH conjuncts:
+///   1. the lockfile's mtime is at least `policy.stale_secs` old, AND
+///   2. the process that wrote it is [`TasksLockHolder::Gone`].
+///
+/// Conjunct 2 is the fix for backlog `d7e1ac30`. Age alone cannot distinguish
+/// "the holder crashed" from "the holder is still inside a slow critical
+/// section": nothing refreshes the lockfile's mtime after `create_new` sets it,
+/// so mtime age measures HOW LONG THE CURRENT HOLDER HAS HELD, not whether it
+/// died. With age as the only test, a waiter reaps a live holder and both run
+/// read-modify-write on tasks.toml believing they hold it exclusively — the
+/// lost update of backlog `bd6d81df`.
+///
+/// A crashed holder is still recovered: its pid is genuinely gone, so both
+/// conjuncts hold and the lock is reaped, which is what keeps a dead holder
+/// from deadlocking the SessionStart hook. What is no longer possible is
+/// reaping on an UNKNOWN holder.
+fn tasks_lock_is_abandoned_with(lock_path: &Path, policy: TasksLockPolicy) -> bool {
     let Ok(meta) = std::fs::metadata(lock_path) else {
         return false;
     };
     let Ok(modified) = meta.modified() else {
         return false;
     };
-    match modified.elapsed() {
-        Ok(age) => age.as_secs() >= TASKS_LOCK_STALE_SECS,
+    let old_enough = match modified.elapsed() {
+        Ok(age) => age.as_secs() >= policy.stale_secs,
         // Clock skew (mtime in the future): don't reap.
         Err(_) => false,
-    }
+    };
+    old_enough && tasks_lock_holder(lock_path) == TasksLockHolder::Gone
 }
 
 /// Try to acquire the tasks-file-scoped advisory lock, BLOCKING (bounded) until
@@ -307,7 +507,7 @@ fn tasks_lock_is_stale(lock_path: &Path) -> bool {
 /// obviously-stale lockfile (crashed holder) is reaped so it never deadlocks.
 ///
 /// Returns `Some(guard)` on success, or `None` if the lock could not be acquired
-/// within the budget ([`TASKS_LOCK_MAX_ATTEMPTS`] × [`TASKS_LOCK_SLEEP`], sized
+/// within the budget ([`TASKS_LOCK_BUDGET`] of elapsed wall-clock time, sized
 /// for queuing behind many concurrent legitimate holders — see that constant's
 /// doc comment).
 ///
@@ -317,25 +517,58 @@ fn tasks_lock_is_stale(lock_path: &Path) -> bool {
 /// (see [`with_tasks_lock_aware`]); the mutators still on [`with_tasks_lock`]
 /// proceed unprotected and can therefore lose an update.
 fn try_acquire_tasks_lock(path: &Path) -> Option<TasksLockGuard> {
+    try_acquire_tasks_lock_with(path, TASKS_LOCK_POLICY)
+}
+
+/// [`try_acquire_tasks_lock`] against an explicit [`TasksLockPolicy`]. The
+/// behaviour is unchanged; the policy is only threaded through so a test can
+/// scale the stale window and the retry budget down (see [`TasksLockPolicy`]).
+fn try_acquire_tasks_lock_with(path: &Path, policy: TasksLockPolicy) -> Option<TasksLockGuard> {
     let lock_path = tasks_lock_path(path);
     if let Some(parent) = lock_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    for _ in 0..TASKS_LOCK_MAX_ATTEMPTS {
+    // Bound on MEASURED elapsed time, not on an attempt count: the per-attempt
+    // syscall cost is machine-dependent, so `attempts × sleep` systematically
+    // undercounts the real wait and let the budget drift into the stale-reap
+    // window (backlog `d7e1ac30`).
+    let started = std::time::Instant::now();
+    while started.elapsed() < policy.budget {
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&lock_path)
         {
-            // We won the atomic create — we hold the lock.
-            Ok(_f) => return Some(TasksLockGuard { path: lock_path }),
+            // We won the atomic create — we hold the lock. Record our pid so a
+            // later waiter can tell "this holder crashed" from "this holder is
+            // still working" instead of guessing from mtime age alone
+            // (backlog `d7e1ac30`). Best-effort: a write that fails leaves an
+            // unreadable holder, which `tasks_lock_holder` reports as
+            // `Unknown` — the restrictive side, so the lock is simply never
+            // reaped rather than wrongly reaped.
+            Ok(mut f) => {
+                use std::io::Write;
+                let _ = write!(f, "{}", std::process::id());
+                let _ = f.flush();
+                return Some(TasksLockGuard { path: lock_path });
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Held by someone else. Reap it if abandoned, else wait & retry.
-                if tasks_lock_is_stale(&lock_path) {
-                    let _ = std::fs::remove_file(&lock_path);
+                if tasks_lock_is_abandoned_with(&lock_path, policy)
+                    && (policy.remove)(&lock_path).is_ok()
+                {
+                    // Reaped: the lockfile is GONE, so retry immediately to
+                    // take it. Skipping the sleep is justified only because
+                    // something actually changed.
                     continue;
                 }
-                std::thread::sleep(TASKS_LOCK_SLEEP);
+                // Either the holder is live/unknown, or the reap could not
+                // remove the lockfile (another user's file in a sticky
+                // directory gives `AlreadyExists` on create and `EPERM` on
+                // remove). Nothing changed, so sleep before retrying —
+                // `continue`ing here spins the CPU for the whole elapsed-time
+                // budget (measured: 26,497 iterations in 300ms).
+                std::thread::sleep(policy.sleep);
                 continue;
             }
             // Unexpected FS error — degrade to best-effort (never error out).
@@ -562,7 +795,7 @@ fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
 /// tasks.toml. Bounding this well under that stale-reap window (over an order
 /// of magnitude under 10s) means a hang here can never itself be the cause of
 /// a lock-steal: the call always gives up long before the lock could look
-/// stale. Separately, [`TASKS_LOCK_MAX_ATTEMPTS`] × [`TASKS_LOCK_SLEEP`] (the
+/// stale. Separately, [`TASKS_LOCK_BUDGET`] (the
 /// blocking-acquire retry budget for a WAITING racer) is kept comfortably
 /// ABOVE this bound, so a racer never gives up waiting — and falls back to
 /// unprotected fail-soft execution — while the current holder is still
@@ -1279,13 +1512,17 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
         // exclusion" is not "added", so refuse and say so.
         if !locked {
             return Err(anyhow!(
-                "backlog add refused: the tasks-file lock {} could not be acquired within {}ms \
-                 ({} attempts x {}ms), so this add's read-modify-write would run without mutual \
-                 exclusion and could be silently lost; nothing was added — retry",
+                "backlog add refused: the tasks-file lock {} could not be acquired within {}s, \
+                 so this add's read-modify-write would run without mutual exclusion and could \
+                 be silently lost; nothing was added — retry. If this persists, read that \
+                 lockfile: it holds the process id of its owner. A lock is reclaimed \
+                 automatically ONLY when that pid is provably gone, so it is kept forever when \
+                 the file is empty (written by a backlog older than 0.2.27, or a failed write), \
+                 when the body is not a pid, or when the pid has been reused by an unrelated \
+                 live process. Check whether that process is really a running backlog; if it is \
+                 not, remove the lockfile by hand.",
                 tasks_lock_path(path).display(),
-                TASKS_LOCK_MAX_ATTEMPTS as u128 * TASKS_LOCK_SLEEP.as_millis(),
-                TASKS_LOCK_MAX_ATTEMPTS,
-                TASKS_LOCK_SLEEP.as_millis(),
+                TASKS_LOCK_BUDGET.as_secs_f32(),
             ));
         }
         let mut tasks = load(path)?;
@@ -3698,9 +3935,10 @@ mod tests {
     /// A tasks-file lockfile held the way a live holder in ANOTHER process
     /// holds it: created with `create_new` (so `try_acquire_tasks_lock`'s
     /// O_EXCL create always loses with `AlreadyExists`) and its mtime refreshed
-    /// by a background thread, so `tasks_lock_is_stale` (mtime age >=
-    /// `TASKS_LOCK_STALE_SECS`) never reaps it. A caller therefore burns the
-    /// whole `TASKS_LOCK_MAX_ATTEMPTS` × `TASKS_LOCK_SLEEP` budget (~8s) and
+    /// by a background thread, so it never reaches `TASKS_LOCK_STALE_SECS` of
+    /// age. (Its body is not a pid either, so the holder reads as `Unknown`;
+    /// both conjuncts independently forbid reaping it.) A caller therefore burns the
+    /// whole `TASKS_LOCK_BUDGET` (8s of elapsed wall-clock time) and
     /// degrades to running unprotected — exactly the state the measured
     /// disappearance happened in.
     ///
@@ -3741,8 +3979,8 @@ mod tests {
                     while !stop.load(Ordering::SeqCst) {
                         std::thread::sleep(Duration::from_millis(200));
                         match std::fs::OpenOptions::new().write(true).open(&lock_path) {
-                            // Writing bumps mtime, so the holder never looks
-                            // abandoned to `tasks_lock_is_stale`.
+                            // Writing bumps mtime, so the lockfile never
+                            // reaches the stale-reap age.
                             Ok(mut f) => {
                                 let _ = f.write_all(b"held-by-test");
                             }
@@ -3790,13 +4028,15 @@ mod tests {
     /// read-modify-write can be clobbered by any concurrent degraded writer and
     /// nothing downstream can tell, so it MUST NOT report success.
     ///
-    /// Today it returns `Ok(id)` — "could not determine that the write is
-    /// exclusive" rendered as "added" (CLAUDE.md §3) — so this is RED now.
+    /// Observed RED before the fix: it returned `Ok(id)` — "could not determine
+    /// that the write is exclusive" rendered as "added" (CLAUDE.md §3).
     ///
-    /// Cost: the call burns the full `TASKS_LOCK_MAX_ATTEMPTS` (1600) ×
-    /// `TASKS_LOCK_SLEEP` (5ms) ≈ 8s budget by design. That is the real budget;
-    /// shortening it would mean weakening the test or editing production
-    /// constants, so the test pays the ~8s.
+    /// Cost: the call burns the full `TASKS_LOCK_BUDGET` (8s) by design. That
+    /// is the real budget; shortening it would mean weakening the test or
+    /// editing production constants, so the test pays the ~8s. It prints the
+    /// measured wait only in its FAILURE message, so do not treat this test as
+    /// a way to observe the budget while it passes — measure it deliberately
+    /// if you need the number.
     #[test]
     fn add_must_not_report_success_when_the_tasks_lock_is_unavailable() {
         let path = tmp_path();
@@ -3836,6 +4076,365 @@ mod tests {
              the write it just claimed can be clobbered by any concurrent degraded writer with \
              no diagnostic (backlog bd6d81df). Store now holds {} task(s).",
             stored.len(),
+        );
+    }
+
+    /// A LIVE holder must never be reaped (backlog `d7e1ac30`).
+    ///
+    /// The abandonment test USED TO read ONLY the lockfile's mtime — and the
+    /// production holder ([`TasksLockGuard`]) never touches that mtime after
+    /// `create_new` sets it. So "this lockfile's mtime is old" meant "the
+    /// current holder has held the lock for a while", NOT "the holder crashed".
+    /// A waiter arriving after a live holder had held for `stale_secs` removed
+    /// that holder's lockfile and took the lock; both parties then ran
+    /// read-modify-write on tasks.toml believing they held it exclusively — the
+    /// lost update of backlog `bd6d81df`.
+    ///
+    /// [`tasks_lock_is_abandoned_with`] now requires a provably-gone holder as
+    /// well, which is what this test pins. Note that the fix does not depend on
+    /// how the acquire budget compares to the stale window: a live holder is
+    /// `Alive` and is never reaped however long the waiter stays in the loop.
+    ///
+    /// Note what this suite's own [`HeldTasksLock`] helper does: it re-writes
+    /// the lockfile every 200ms so the holder never looks old enough to reap.
+    /// That models a HEARTBEATING holder, which production does not have. That
+    /// is why this mechanism had no coverage — every existing test that holds a
+    /// lock hid the defect.
+    ///
+    /// Scaled down through [`TasksLockPolicy`] so the window is exercised in ~1s
+    /// of real time. The comparison under test (`age >= stale_secs`) and the
+    /// code path are the production ones; only the magnitudes shrink.
+    ///
+    /// Observed RED before the fix: the second acquire SUCCEEDED while the
+    /// first guard was still alive. It passes now because reaping requires the
+    /// holder conjunct; restoring the age-only test turns it red again.
+    #[test]
+    fn a_live_holder_that_holds_longer_than_the_stale_window_must_not_be_reaped() {
+        let path = tmp_path();
+        let policy = TasksLockPolicy {
+            stale_secs: 1,
+            budget: Duration::from_secs(2),
+            sleep: Duration::from_millis(5),
+            remove: remove_lockfile,
+        };
+
+        let holder = try_acquire_tasks_lock_with(&path, policy)
+            .expect("nothing else holds this tmp path, so the first acquire must win");
+        let lock_path = tasks_lock_path(&path);
+        assert!(
+            lock_path.exists(),
+            "precondition: the holder's lockfile must exist at {}",
+            lock_path.display(),
+        );
+
+        // The holder is ALIVE for the whole test — its guard is never dropped.
+        // It simply holds longer than the stale window, as a real critical
+        // section under load can, and (like production) never refreshes mtime.
+        std::thread::sleep(Duration::from_millis(1_100));
+
+        assert!(
+            lock_path.exists(),
+            "fault injection lapsed: the live holder's lockfile vanished before the second \
+             acquire, so this run did not exercise the reap path",
+        );
+
+        let barged = try_acquire_tasks_lock_with(&path, policy);
+        let barged_in = barged.is_some();
+        drop(barged);
+        drop(holder);
+
+        assert!(
+            !barged_in,
+            "a second acquire took the tasks lock while the first holder was STILL ALIVE (its \
+             guard had not been dropped). The reap is keyed on lockfile mtime alone and a live \
+             holder never refreshes it, so holding longer than stale_secs is indistinguishable \
+             from having crashed. Both parties now run read-modify-write on tasks.toml believing \
+             they hold it exclusively, and the later save clobbers the earlier one — backlog \
+             bd6d81df via d7e1ac30. Reaping must require positive evidence that the holder is \
+             GONE, not merely that its lockfile is old.",
+        );
+    }
+
+    /// ANTI-VACUITY CONTROL for
+    /// [`a_live_holder_that_holds_longer_than_the_stale_window_must_not_be_reaped`].
+    ///
+    /// That test only says the lock must NOT be stolen. An implementation that
+    /// never reaps anything satisfies it completely — and would deadlock the
+    /// SessionStart hook forever behind any crashed holder, which is the exact
+    /// harm [`TASKS_LOCK_STALE_SECS`] exists to prevent. So the reap path must
+    /// be shown to still FIRE when the holder is genuinely gone.
+    ///
+    /// The holder here is a real process that really exited, so its pid is
+    /// definitively dead rather than merely assumed dead.
+    #[test]
+    fn a_lockfile_whose_holder_really_died_is_still_reaped() {
+        let path = tmp_path();
+        let policy = TasksLockPolicy {
+            stale_secs: 1,
+            budget: Duration::from_secs(2),
+            sleep: Duration::from_millis(5),
+            remove: remove_lockfile,
+        };
+
+        // A pid that is genuinely dead: spawn a process, wait for it to exit.
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("spawn a short-lived child");
+        let dead_pid = child.id();
+        child.wait().expect("child exits");
+
+        let lock_path = tasks_lock_path(&path);
+        std::fs::create_dir_all(lock_path.parent().expect("lock parent")).expect("mkdir");
+        std::fs::write(&lock_path, dead_pid.to_string()).expect("write crashed holder's lockfile");
+
+        assert_eq!(
+            tasks_lock_holder(&lock_path),
+            TasksLockHolder::Gone,
+            "precondition: pid {dead_pid} exited and was reaped, so the probe must report Gone; \
+             if it reports Alive the pid was recycled and this run proves nothing",
+        );
+
+        // Age past the (scaled) stale window, as a crashed holder's lockfile
+        // would be.
+        std::thread::sleep(Duration::from_millis(1_100));
+
+        let acquired = try_acquire_tasks_lock_with(&path, policy);
+        let ok = acquired.is_some();
+        drop(acquired);
+
+        assert!(
+            ok,
+            "a lockfile left behind by a process that genuinely exited was NOT reaped, so the \
+             tasks lock now deadlocks every later caller behind a dead holder. The liveness \
+             conjunct added for d7e1ac30 must narrow reaping to unknown/live holders, not \
+             disable it.",
+        );
+    }
+
+    /// EPERM from `kill(pid, 0)` means the process EXISTS and is not ours to
+    /// signal. The kernel had to find it in order to refuse us, so it is
+    /// positive evidence of liveness.
+    ///
+    /// This is the arm the previous implementation got backwards: its non-Linux
+    /// branch shelled out to `kill -0` and mapped every non-zero exit to
+    /// `Gone`, which cannot tell ESRCH from EPERM. On macOS that reaped a live
+    /// holder owned by another user — the exact defect `d7e1ac30` is about,
+    /// reintroduced on the one platform the Linux `/proc` branch did not cover.
+    #[test]
+    fn a_live_process_we_are_not_allowed_to_signal_is_alive_not_gone() {
+        assert_eq!(
+            tasks_lock_holder_from_kill(Some(libc::EPERM)),
+            TasksLockHolder::Alive,
+        );
+        assert_eq!(
+            tasks_lock_holder_from_kill(Some(libc::ESRCH)),
+            TasksLockHolder::Gone,
+            "ESRCH is the only errno that proves absence, so it is the only one that may reap",
+        );
+        // A probe that did not answer is never permission to reap.
+        assert_eq!(
+            tasks_lock_holder_from_kill(Some(libc::EINVAL)),
+            TasksLockHolder::Unknown,
+        );
+        assert_eq!(tasks_lock_holder_from_kill(None), TasksLockHolder::Unknown);
+
+        // ...and against the real kernel, not just the mapping. pid 1 is owned
+        // by root and always running, so a non-root test run reaches this
+        // through a genuine EPERM (verified on this box: uid 1000,
+        // `kill(1, 0)` -> errno 1). Running as root it returns 0 instead;
+        // either way the answer must be `Alive`, never `Gone`.
+        assert_ne!(
+            tasks_lock_pid_state(1),
+            TasksLockHolder::Gone,
+            "pid 1 is always running; reporting it Gone would license reaping a live holder",
+        );
+        assert_eq!(tasks_lock_pid_state(1), TasksLockHolder::Alive);
+    }
+
+    /// End-to-end companion to the mapping test above: a lockfile naming a live
+    /// process we may not signal must survive the reaper no matter how old it
+    /// is. Drives the real acquire loop, so it fails if the conjunct, the
+    /// probe, or the errno mapping regresses.
+    #[test]
+    fn an_old_lockfile_naming_an_unsignalable_live_process_is_never_reaped() {
+        let path = tmp_path();
+        let policy = TasksLockPolicy {
+            stale_secs: 0, // every lockfile is old enough; only liveness can save it
+            budget: Duration::from_millis(100),
+            sleep: Duration::from_millis(5),
+            remove: remove_lockfile,
+        };
+
+        let lock_path = tasks_lock_path(&path);
+        std::fs::create_dir_all(lock_path.parent().expect("lock parent")).expect("mkdir");
+        std::fs::write(&lock_path, "1").expect("write lockfile naming pid 1");
+
+        let acquired = try_acquire_tasks_lock_with(&path, policy);
+        let ok = acquired.is_some();
+        drop(acquired);
+
+        assert!(
+            !ok,
+            "a lockfile naming pid 1 — a live process this test may not signal — was reaped and \
+             the lock taken. A permission error on the liveness probe was spent as proof that \
+             the holder died (CLAUDE.md §3).",
+        );
+    }
+
+    /// The acquire path must RECORD our pid, or every later waiter reads an
+    /// empty lockfile as `Unknown` and the lock can never be reaped again.
+    ///
+    /// Exists because a mutation that deletes the `write!` left the whole suite
+    /// green: the reaping control fabricates its lockfile with `fs::write`, so
+    /// nothing exercised the production write. Without it a crashed holder
+    /// leaves an unreadable lockfile and the tasks lock wedges permanently —
+    /// the failure mode the reaper exists to prevent, reached by the opposite
+    /// route.
+    #[test]
+    fn the_acquire_path_records_our_pid_so_a_crashed_holder_is_recognisable() {
+        let path = tmp_path();
+        let lock_path = tasks_lock_path(&path);
+
+        let guard = try_acquire_tasks_lock_with(&path, TASKS_LOCK_POLICY)
+            .expect("precondition: an uncontended lock must be acquirable");
+
+        let body = std::fs::read_to_string(&lock_path).expect("lockfile must exist while held");
+        assert_eq!(
+            body.trim().parse::<u32>().ok(),
+            Some(std::process::id()),
+            "the acquire path wrote {body:?} instead of our pid {}; a later waiter cannot tell a \
+             crashed holder from a live one, so the lock is never reclaimable",
+            std::process::id(),
+        );
+        assert_eq!(
+            tasks_lock_holder(&lock_path),
+            TasksLockHolder::Alive,
+            "our own live lock must read back as Alive, not Unknown",
+        );
+
+        drop(guard);
+    }
+
+    /// The `Unknown` holder must stay on the restrictive side. A lockfile with
+    /// no readable pid (an older `backlog` wrote it, or the pid write failed)
+    /// is not evidence that the holder crashed, so age alone must not reap it.
+    ///
+    /// Without this, `tasks_lock_holder` could be "simplified" to treat an
+    /// unparseable lockfile as `Gone` and every other test here would still
+    /// pass, restoring the original defect for exactly the lockfiles whose
+    /// holder we know least about (CLAUDE.md §3).
+    #[test]
+    fn a_lockfile_with_no_readable_holder_is_not_reaped_on_age_alone() {
+        let path = tmp_path();
+        let policy = TasksLockPolicy {
+            stale_secs: 1,
+            budget: Duration::from_millis(100),
+            sleep: Duration::from_millis(5),
+            remove: remove_lockfile,
+        };
+
+        let lock_path = tasks_lock_path(&path);
+        std::fs::create_dir_all(lock_path.parent().expect("lock parent")).expect("mkdir");
+        std::fs::write(&lock_path, "held-by-something-that-wrote-no-pid").expect("write lockfile");
+
+        assert_eq!(
+            tasks_lock_holder(&lock_path),
+            TasksLockHolder::Unknown,
+            "precondition: an unparseable lockfile body must read as Unknown",
+        );
+
+        std::thread::sleep(Duration::from_millis(1_100));
+
+        let acquired = try_acquire_tasks_lock_with(&path, policy);
+        let ok = acquired.is_some();
+        drop(acquired);
+
+        assert!(
+            !ok,
+            "an old lockfile whose holder could NOT be determined was reaped and the lock taken. \
+             'I could not tell whether the holder is alive' was spent as permission to steal \
+             mutual exclusion (CLAUDE.md §3).",
+        );
+    }
+
+    static FAILING_REMOVE_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    /// A reaper that always fails, counting how many times the acquire loop
+    /// asked it to free the lockfile. Models a lockfile owned by ANOTHER user
+    /// in a sticky directory (`/tmp`): `create_new` reports `AlreadyExists`, so
+    /// the loop keeps reaching the reap branch, but `remove_file` reports
+    /// `EPERM` so the file never actually goes away.
+    fn always_failing_remove(_p: &Path) -> std::io::Result<()> {
+        FAILING_REMOVE_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "injected: reap cannot remove this lockfile",
+        ))
+    }
+
+    /// A reap that decides the lock is abandoned but CANNOT remove it must not
+    /// spin the CPU for the whole budget.
+    ///
+    /// The reap branch `continue`s straight back to the top of the loop, which
+    /// is correct when the removal SUCCEEDED (retry immediately and take the
+    /// freed lock) but is a hot spin when it failed: nothing changed, and the
+    /// `continue` skips the sleep.
+    ///
+    /// This was survivable while the budget was an attempt COUNT — 1600
+    /// iterations of a no-op spin finish in milliseconds. Changing the budget
+    /// to elapsed wall-clock time for `d7e1ac30` turned it into a full
+    /// [`TASKS_LOCK_BUDGET`] (8s) of 100%-CPU spinning, i.e. this regression
+    /// was introduced BY that fix, which is why the control lives beside it.
+    ///
+    /// The bound is generous on purpose: with a 5ms sleep an honest loop makes
+    /// ~budget/sleep attempts (300ms/5ms ≈ 60); a spinning loop makes many
+    /// thousands. Anything under a few hundred proves the sleep is paid.
+    #[test]
+    fn a_reap_that_cannot_remove_the_lockfile_must_not_spin_the_cpu() {
+        let path = tmp_path();
+        let lock_path = tasks_lock_path(&path);
+        std::fs::create_dir_all(lock_path.parent().expect("lock parent")).expect("mkdir");
+
+        // A holder that is genuinely gone, so both conjuncts of
+        // `tasks_lock_is_abandoned_with` hold and the reap branch is entered
+        // on every attempt.
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("spawn a short-lived child");
+        let dead_pid = child.id();
+        child.wait().expect("child exits");
+        std::fs::write(&lock_path, dead_pid.to_string()).expect("write lockfile");
+        assert_eq!(
+            tasks_lock_holder(&lock_path),
+            TasksLockHolder::Gone,
+            "precondition: the recorded holder must read as Gone, or the reap branch is never \
+             entered and this test proves nothing",
+        );
+
+        let policy = TasksLockPolicy {
+            stale_secs: 0, // always old enough
+            budget: Duration::from_millis(300),
+            sleep: Duration::from_millis(5),
+            remove: always_failing_remove,
+        };
+
+        FAILING_REMOVE_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let started = std::time::Instant::now();
+        let got = try_acquire_tasks_lock_with(&path, policy);
+        let elapsed = started.elapsed();
+        let attempts = FAILING_REMOVE_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+        drop(got);
+
+        assert!(
+            attempts <= 300,
+            "the acquire loop made {attempts} reap attempts in {elapsed:?} against a 300ms \
+             budget with a 5ms sleep (an honest loop makes ~60). The reap branch `continue`s \
+             without sleeping when the removal FAILED, so an unremovable lockfile spins the CPU \
+             for the whole budget — which d7e1ac30's wall-clock budget stretched from \
+             milliseconds to the full 8s in production.",
         );
     }
 

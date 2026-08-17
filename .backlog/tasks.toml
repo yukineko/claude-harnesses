@@ -8426,7 +8426,7 @@ outcome block。全文レポート (29KB、逐語引用と再実行可能な抽�
 調査部分が終わっただけなので pending に戻す。
 """
 created_at = 1785926923
-updated_at = 1786641721
+updated_at = 1786943352
 weight = 0.0
 issue_number = 153
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/153"
@@ -9867,7 +9867,7 @@ title = "セッション異常終了への対応: (a) 中断作業を次セッ�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "claimed"
+status = "pending"
 notes = """
 部分完了 (2026-08-12, condukt 0.7.129, merge 6fc4fdee)。(b) GC 側だけが着地した: condukt worktree reconcile が git worktree list と全 run-state namespace と作業ツリーの三者照合を行い live/dead/undetermined を返す。is_removable はワイルドカード無しの網羅 match で、あらゆる Undetermined と Role::Primary は keep に解決する。dirty な worktree は refs/preserved へ退避されるまで削除に到達しない。統合前に kill rate を独立再測定した: Role::Primary の arm 削除は E0004 コンパイルエラー、Undetermined 3 arm と preserved arm と primary_witnesses の退行はすべて KILLED、対照 (is_removable 常に false) は 2 件を殺した。(a) resume 側は未着手である。--json が resume の surface として存在するが消費者が 1 つも無い (0cf3775c で追跡)。したがって本 item は done ではない。残っているのは (a) のみ。
 
@@ -9890,7 +9890,7 @@ death criterion ruling 待ちで、それが決まるまで実装できない。
 終わったように見える。
 """
 created_at = 1786403442
-updated_at = 1786642092
+updated_at = 1786943352
 weight = 0.0
 issue_number = 237
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/237"
@@ -10261,7 +10261,7 @@ pin しているものは 1 本も無い。裁定が追加する第3の経路 (�
 Undetermined に倒す。この経路を突く behavioural test を done criteria に含めた。
 """
 created_at = 1786472512
-updated_at = 1786643241
+updated_at = 1786947309
 weight = 0.0
 issue_number = 256
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/256"
@@ -10647,9 +10647,171 @@ WHY THE bd6d81df FIX DOES NOT CLOSE THIS. The t3 fix makes add fail CLOSED when 
 
 SUGGESTED DIRECTION (not verified by an executed test). Two independent problems: (1) the budget must be derived from measured elapsed wall-clock, not from an attempt count multiplied by sleep duration, because the latter systematically undercounts syscall cost; (2) stale-reap must not be keyed on lockfile mtime alone -- an alive holder should be refreshing something, or the reap should require a positive liveness signal, mirroring the progress-gated reap in condukt claim.rs retain_claim which requires a confirmed Known(Stalled) verdict rather than mere staleness. Related: backlog b6cf486d on which liveness probes are actually sound.
 
-NOT DONE: I did not write a test reproducing the two-writers-barge sequence. It needs deterministic control of the 10s boundary, so it likely needs the threshold and budget injectable rather than const."""
+NOT DONE: I did not write a test reproducing the two-writers-barge sequence. It needs deterministic control of the 10s boundary, so it likely needs the threshold and budget injectable rather than const.
+
+--- 進捗 (2026-08-17, session 52834a1f, 測定点 f1131a36): 実装済み・未コミット・検証中 ---
+
+**作業は worktree `/mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-52834a1f` に
+uncommitted で存在する。** 別セッションが着手する前にこの worktree を確認すること
+(捨てる場合も、下記の RED テストだけは価値があるので回収を検討)。
+
+【観測: RED を先に取った】production の code path 上で 1.14s で再現。逐語:
+  "a second acquire took the tasks lock while the first holder was STILL ALIVE
+   (its guard had not been dropped)... test result: FAILED. 0 passed; 1 failed"
+
+【一次原因はチケット記述より一段深い】起票は budget 算術 (9.968s vs 10s) の問題として
+書かれているが、実際の一次原因は `tasks_lock_is_stale` が **mtime だけ**で判定していたこと。
+mtime は `create_new` 後に誰も更新しないので「古い」は「**現 holder が長く保持している**」で
+あって「死んだ」ではない。budget margin は「1 回の acquire 呼び出し内でそこへ到達できるか」を
+決める二次要因にすぎない。したがって budget を直すだけでは閉じない。
+
+【既存テストが欠陥を隠していた】テストヘルパ `HeldTasksLock` は lockfile を 200ms ごとに
+書き直しており、コメント逐語で「the holder never looks abandoned to tasks_lock_is_stale」と
+書いてある。つまり suite は heartbeat する holder しかモデル化しておらず、production の
+holder は heartbeat しない。ロックを保持する既存テスト全部がこの欠陥を覆い隠していた。
+また `bounded_wait_gives_up_before_stale_reap_window` は名前に反して acquire budget を
+見ておらず、`is_claimed` subprocess の 300ms 境界しか検査していない。
+
+【実装】crates/backlog/src/store.rs:
+ 1. 三値 `TasksLockHolder` (Alive / Gone / Unknown) と `tasks_lock_pid_state` / `tasks_lock_holder`。
+ 2. acquire 成功時に holder の pid を lockfile へ記録。
+ 3. `tasks_lock_is_abandoned_with` = 「mtime が古い **かつ** holder が Gone」の連言。
+    Unknown (pid 読めない・parse 不能・プローブ失敗) は **絶対に reap しない**。
+ 4. budget を `attempts × sleep` から **実測 elapsed の Duration (8s)** へ変更。
+    これにより「8s、10s より comfortable margin」という既存の散文が嘘から真になった。
+    user-facing エラーメッセージが偽の算術を引用していた件も同時に修正。
+ 5. 新規テスト 3 本: a_live_holder_that_holds_longer_than_the_stale_window_must_not_be_reaped
+    (headline, RED→GREEN) / a_lockfile_whose_holder_really_died_is_still_reaped (**アンチ空虚の対照**:
+    これが無いと「何も reap しない」実装が満点で通り deadlock する) /
+    a_lockfile_with_no_readable_holder_is_not_reaped_on_age_alone。
+
+【計測】cargo test -p backlog = 255 passed / 0 failed。clippy clean。
+version lockstep 0.2.26 -> 0.2.27 (3 ファイル)、check-plugin-versions.py と
+check-version-bumped.py の両ゲート通過。**rollout は未実施**。
+
+【残っている作業 — 引き継ぐならここから】
+ (a) **doc comment 内の架空チケット ID を直す (必須)**。`tasks_lock_pid_state` の doc に
+     「tracked as backlog 2b6d54c9」と書いたが、この ID は起票前に書いた架空のもの。
+     実 ID は **64ce9501**。直さないと CLAUDE.md 第4節の「実挙動と違う散文」そのものになる。
+ (b) 敵対的検証 (別 agent, kill-rate / vacuity / pid 議論の妥当性 / deadlock リスク) の結果反映。
+     **この検証はユーザーがセッションを止めた時点で完了していない。結果は未確認。**
+ (c) commit と scripts/rollout-plugins.sh。
+
+【検証で最も疑うべき点】`crates/backlog/src/lock.rs:30-49` は backlog の **exclusive lock** に
+ついて「pid は staleness の判定に使えない (一発 CLI なので読む頃には必ず死んでいる)」と明記し、
+回帰テスト fresh_heartbeat_blocks_second_acquire_even_when_recorded_pid_is_already_dead まで
+持っている。本修正は「**tasks lock は寿命が 1 プロセス内に閉じているので pid は sound**」と
+論じているが、**tasks lockfile が書いたプロセスより長生きして後続プロセスに読まれる経路が
+1 本でもあれば、同じ誤りを繰り返している**ことになる。ここは未検証。
+
+【トレードオフ (要観察)】Unknown を never-reap にしたので、pid が読めない lockfile は自動
+回収されない。silent な lost-update を silent な deadlock と交換した形。エラーメッセージに
+手動削除の案内は入れたが、この判断自体が検証対象。
+
+
+--- 追記 (2026-08-17, 敵対的検証が実 regression を1件発見): hot spin ---
+
+架空チケット ID `2b6d54c9` は実 ID **64ce9501** へ訂正済み (前回の残課題を消化)。
+
+【敵対的検証 agent の成果 — ユーザーがセッションを止めたため verdict 自体は未完だが、
+agent が残した probe から実在の regression を1件回収した】
+
+`try_acquire_tasks_lock_with` の reap 分岐は `remove_file` の後 **sleep せずに `continue`** する。
+removal が成功したなら正しい (ロックが空いたので即リトライすべき) が、**removal が失敗した場合は
+何も変わっていないのに sleep を飛ばす**ので hot spin になる。
+
+到達経路 (実在): sticky bit の付いたディレクトリ (/tmp 等) に **別ユーザ所有の lockfile** がある場合、
+`create_new` は AlreadyExists を返し (= reap 分岐に入る)、`remove_file` は EPERM を返す (= 削除できない)。
+
+**これは本 item の修正が作り込んだ regression である。** budget が attempt 数 (1600) だった頃は
+spin しても 1600 回で終わり数十 ms で抜けたが、budget を実測 elapsed (8s) に変えたことで
+**8 秒間 100% CPU で回り続ける**ようになった。
+
+実測 (RED): budget 300ms / sleep 5ms / 死んだ holder / 常に失敗する remove を注入して
+**26,497 回**の reap 試行 (正常なら ~60 回)。production の 8s budget に換算すると約 70 万回。
+
+修正: `is_abandoned && remove().is_ok()` のときだけ sleep を飛ばして `continue`。
+それ以外 (holder が live/unknown、または削除できなかった) は sleep してから再試行。
+
+テスト: `a_reap_that_cannot_remove_the_lockfile_must_not_spin_the_cpu` (RED 先行で観測済み)。
+`TasksLockPolicy` に `remove: fn(&Path) -> io::Result<()>` の seam を追加して注入可能にした
+(production は `remove_lockfile` = `std::fs::remove_file` 固定)。
+
+【現況】cargo test -p backlog = 256 passed / 0 failed、clippy clean、fmt 済み。
+version 0.2.27 lockstep 済み。**まだ未コミット・rollout 未実施。**
+
+【検証の残り — 未実施】敵対的 agent は kill-rate / vacuity / pid 議論の妥当性 / deadlock リスクを
+検査する予定だったが、**完了前に停止したので verdict は無い**。特に未検証のまま残っているのは:
+ * mutation kill-rate (各 arm を permissive 側へ widen して全部 KILLED になるか)
+ * 「tasks lock の pid は sound / exclusive lock の pid は unsound」という寿命ベースの議論の妥当性
+   (tasks lockfile が書いたプロセスより長生きして後続プロセスに読まれる経路が 1 本でもあれば同じ誤り)
+ * Unknown never-reap が deadlock を生まないか
+これらは**未検証**であって「問題なし」ではない。
+
+
+## 敵対的検証の結果 (2026-08-17) — verdict: HOLES_FOUND / kill rate 4/5
+
+上の「未実施」は解消。検証者は実装者とは別 agent (CLAUDE.md §2(a))。CLAUDE.md §6
+「批判もまた検査対象」に従い、9 件の指摘を**採用前に実装者が独立に再現確認**し、
+確認できたものだけを採用した。
+
+### 実在の欠陥として確認 → 修正済み
+
+1. **surviving mutation**: `write!(f, "{}", process::id())` を削除しても全テストが green のまま
+   = production の pid 書き込みが未カバーだった。reap 側のテストが lockfile を `fs::write` で
+   捏造していたため。→ `the_acquire_path_records_our_pid_so_a_crashed_holder_is_recognisable`
+   を追加。**RED 実測**: 変異適用時 `the acquire path wrote "" instead of our pid 22423`。
+
+2. **非 Linux 分岐の fail-open (実在)**: `kill -0` を subprocess で撃ち非 0 終了を一律 `Gone` に
+   写していた。`kill -0` は ESRCH (不在) と EPERM (**生きているが他ユーザ所有**) を同じ終了
+   ステータスで返すため、macOS で**生きた holder を reap** する = 本チケットが直す欠陥そのものを、
+   Linux の /proc 分岐が覆っていなかった唯一のプラットフォームで再現していた。しかもコメントは
+   「must not treat it as reapable unless it is genuinely gone」と逆を主張していた (§4)。
+
+3. **`Path::exists()` が判定不能を「不在」へ潰す (実在)**: `exists()` は EACCES を含む任意の
+   metadata エラーで `false` を返す。`/proc` を `hidepid=2` で mount したホストでは他ユーザの
+   **生きた**プロセスが不可視 → `false` → `/proc/self` は見える → `Gone` → 生きた holder を reap。
+
+   2 と 3 は**同じ修正で消えた**: `/proc` と subprocess をやめ `libc::kill(pid, 0)` + errno へ統一。
+   errno は POSIX 規定なので Linux と macOS が**同一コードパス**になり、「ここでは実行できない
+   プラットフォーム分岐」が消滅した (再文書化ではなく除去)。
+   ESRCH→Gone / **EPERM→Alive** (カーネルが見つけられたからこそ拒否した = 生存の積極的証拠) /
+   その他→Unknown。**実測** (uid=1000): `kill(1,0)` → errno 1 = EPERM、
+   `kill(999999,0)` → errno 3 = ESRCH。pid 1 を使った実カーネル経路のテストを追加。
+   **RED 実測**: EPERM→Gone に変異させると 2 件が落ちる
+   (`a_live_process_we_are_not_allowed_to_signal_is_alive_not_gone` /
+   `an_old_lockfile_naming_an_unsignalable_live_process_is_never_reaped`)。
+
+### 散文が実挙動と食い違っていた (§4) → 同一コミットで修正
+
+- `TASKS_LOCK_STALE_SECS` の rustdoc **要約行**が依然「古い ⇒ reap」と主張していた
+  (要約行は rustdoc の一覧に出る唯一の行なので、11 行後の訂正では届かない)。
+- `tasks_lock_is_stale` への intra-doc link 切れ。`cargo doc` の warning で実測確認 → 修正後 0 件。
+- テストの doc comment 4 箇所が修正前の挙動を現在形で記述 (「Today the second acquire
+  SUCCEEDS ... RED」が GREEN になった今も残っていた)。
+- budget と stale window の margin を、fix 後は安全性を担っていないのに「now real」と記述。
+  holder 連言がある以上 budget がどうであれ生きた holder は reap されないので、内部矛盾。解消。
+
+### 測定値の腐敗 (§「測定値」) — 自分が書いた数字が再現しなかった
+
+doc に書いた `9.967965208s` を検証者が再現できなかった (旧 1600 回ループを復元して実測
+`8.332424091s`)。9 桁を測定コマンド・rev・測定日なしで書いており規範違反。しかも出典とした
+テストは**失敗メッセージの中でしか**その値を印字しないので green の今は再観測できない。
+→ 固定値の引用をやめ「per-iteration の syscall コストはファイルシステム依存で、その分だけ
+nominal を超過する」という**構造的な主張**に置き換えた。数字を継承せず捨てた。
+
+### 別途起票 (このチケットでは直さない)
+
+- `with_tasks_lock` 系 mutator の非 fail-closed (requeue_expired / mark_* / edit が
+  ロック未取得でも実行し成功を返す) → **929739fe**。既存の欠陥で、source を読んで確認済み。
+- 旧版が残した空 lockfile が Unknown で永久に reap されない rollout hazard → **8181d5e4**。
+
+### 現状
+
+259 tests green / clippy clean / fmt 済 / cargo doc warning 0。
+surviving だった mutation 5 は RED を観測して塞いだので kill rate は 5/5 見込み。"""
 created_at = 1786543402
-updated_at = 1786643241
+updated_at = 1786949441
 weight = 0.0
 issue_number = 272
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/272"
@@ -11581,3 +11743,183 @@ updated_at = 1786644199
 weight = 0.0
 issue_number = 344
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/344"
+
+[[task]]
+id = "91fa24df"
+title = "~/.cargo/bin の 2026-07-23 版 backlog/hypothesis/fugu-router が plugin cache 版を PATH で shadow し、backlog の store divergence ガードが無効化されている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+status = "pending"
+notes = """
+実測 2026-08-17、測定点 f1131a36、WSL2 linux-x86_64。
+
+【観測】
+1. `command -v backlog` → /home/hiroyuki_nakayama/.cargo/bin/backlog（`ls -la` で 2026-07-23 18:05、1438128 bytes）。plugin cache には 0.2.26 が存在する（~/.claude/plugins/cache/yukineko/backlog/0.2.26/bin/backlog）。PATH は ~/.cargo/bin が plugin bin dir より前にあるため、bare `backlog` は常に 7/23 版に解決される。
+2. 同様に shadow されているのは hypothesis（cargo 7/23 版 vs cache 0.1.12）と fugu-router（cargo 7/23 版 vs cache 0.1.26）。condukt / compass / overwatch は ~/.cargo/bin に無いので cache 版が使われている。
+3. 7/23 版 backlog は per-repo store 解決（config.rs の tasks_path_for → <repo root>/.backlog/tasks.toml）を持たず ~/.backlog/tasks.toml のみを読む。実測: worktree cwd からも /tmp からも同一の 91 件を返し、その内訳に harness project は 1 件も無い（`backlog list --status pending --json | jq -r ".[].project" | sort | uniq -c` → ai-aegis 61 / aegis 25 / 空 3 / その他 2）。
+4. 一方 repo store（<root>/.backlog/tasks.toml、git tracked）には project="/Users/yuki/src/harness" の pending が 247 件ある（0.2.26 版で `list --project /Users/yuki/src/harness --status pending --json | jq length` → 247）。
+5. 0.2.26 版はこの分岐を fail-closed で検出する。worktree cwd で `list --status pending` を打つと逐語で: "Error: backlog: this project store ... holds no queued work, but the legacy store /home/hiroyuki_nakayama/.backlog/tasks.toml holds 28 queued task(s) for the SAME project. An empty result here would be indistinguishable from a genuinely empty queue, so it is not reported as one."
+
+【なぜ p0 か】
+5ba13c3e で入れた divergence ガードは「空の結果と本当に空のキューを区別できない」ことを明示的に block する fail-closed 実装だが、PATH shadowing によりその実体に到達しない。bare `backlog` を呼ぶ全消費者（/flow skill の next --claim、autoflow の Stop hook、daily、SessionStart hook）は 7/23 版に落ち、harness の 247 件を「pending 0 件＝キューが空」として読む。これは CLAUDE.md 第3節の「空集合は下流で検査対象なし＝合格と読まれる」そのもので、ガードを書いたのに配布経路で無効化されている形。
+
+【判定不能な点（両方の読みを残す）】
+(a) 実在の欠陥 — ~/.cargo/bin の 3 バイナリが `cargo install` の残骸で、削除/更新されるべき。
+(b) 意図的 — 何らかの理由で cargo 版を優先させている。
+見分け方: scripts/rollout-plugins.sh と ~/.claude/settings.json の PATH 設定を読み、~/.cargo/bin へ install する経路が現在も存在するか確認する。存在しないなら (a)。
+
+【関連】5ba13c3e（store 分岐、可視化のみで移行しないとユーザー決定済み）、a4966045（home store の junk project キー 7 件）。
+【副次観測】SessionStart hook は "pending: 119" と報告しており、これは 91 とも 247 とも一致しない。hook がどの store をどの project フィルタで読んだのかは未確認（この起票のスコープ外だが、3 つ目の数字が存在すること自体を記録しておく）。"""
+created_at = 1786943298
+updated_at = 1786943298
+weight = 0.0
+
+[[task]]
+id = "1b19e6d2"
+title = "fe84d350 の RED テスト (commit 375587a2 / branch t2-occupancy-undetermined) が消失している — 未 merge の condukt branch ごと失われ、refs/preserved にも退避が無い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+status = "pending"
+notes = """
+実測 2026-08-17、測定点 f1131a36 (local == origin/main、ahead/behind = 0/0)、WSL2 linux-x86_64、worktree session-52834a1f。
+
+【何が起きているか】
+fe84d350 (compass charter が名指しする liveness 軸の ONE) の notes と .compass/charter.md は逐語で
+「RED テストのみ commit 済み (375587a2、実装なし)」「RED テストは 375587a2 に委託済みで 2026-08-14 に裁定との整合を読み直し確認済み」
+と記録している。repo store の別 item はさらに具体的に
+「RED tests are committed at 375587a2 on branch condukt/run-20260814-005232-58819/run-20260814-005232-58819/t2-occupancy-undetermined with no implementation」
+と書いている。**この commit と branch は現存しない。**
+
+【観測 (すべて再実行可能)】
+1. `git cat-file -t 375587a2` → fatal: Not a valid object name 375587a2
+2. `git rev-parse --disambiguate=375587` → 出力ゼロ (worktree 側・main チェックアウト側の両方)
+3. `git branch -a --list "*20260814-005232-58819*"` → 出力ゼロ。`git branch -a | grep -i "occupancy|undetermined"` → 出力ゼロ
+4. `git for-each-ref refs/preserved` → 出力ゼロ (dirty-worktree 退避先に何も無い)
+5. `git rev-list --left-right --count HEAD...origin/main` → `0\t0` (未 fetch の remote に居るのではない)
+6. ディスク上にも無い: `~/.condukt/worktrees/*20260814*` / `/mnt/c/tmp/aegis-worktrees/*20260814*` / `find ~/.condukt /mnt/c/tmp -name "*20260814-005232*"` すべて 0 件
+7. 3 本の RED テスト名は working tree のどこにも存在しない:
+   `grep -rn "unclaimed_worktree_occupancy_is_undetermined_not_dead|unclaimed_clean_worktree_with_no_witness|unclaimed_worktree_with_advancing_activity" --include=*.rs .` → 0 ヒット
+8. 同じ run の t3 は merge されている (f7456175 = "Merge branch condukt/run-20260814-005232-58819/.../t3-resume-consumer")。**t2 だけが未 merge のまま branch ごと消えた。**
+
+【なぜ p0 か — これは記録の腐敗であり、かつ本件が直そうとしている当の欠陥の実例である】
+(a) 記録の腐敗: charter と ticket は「RED は済んでいる」という前提で ONE の進捗を語っており、
+    2026-08-14 の「裁定との整合を読み直し確認済み」という**検証の記録が再現不能**になっている
+    (存在しない commit を読んだことになる)。CLAUDE.md 第4節が最も重く禁じる「確かめていないことを
+    確かめたかのように報告する」の在庫版。次に着手する者は「RED は書かれている」と信じて始める。
+(b) 実例: 未 merge の condukt worktree branch に載った成果が、退避も無く失われている。これは
+    2d3cbda2 (dead session の worktree と branch を回収する GC が無い)・5daf0b60 (abandon --all-stuck が
+    生存 worker を dirty/liveness 未確認で切り離す)・e99f61e4(b) が扱っている harm そのもの。
+    **つまり fe84d350 の作業が、fe84d350 が直そうとしている欠陥によって消えた。**
+
+【判定不能な点 (両方の読みを残す)】
+(a) 実在の消失 — worktree GC / `condukt state abandon --all-stuck` / `worktree remove` が未 merge branch を
+    liveness 未確認のまま削除した。
+(b) 記録違い — 375587a2 という ID が最初から誤り (別 clone のローカル commit を転記した、あるいは
+    commit されずに worktree ごと捨てられたのを commit 済みと誤記した)。
+見分け方: `~/.condukt/state/*/run-20260814-005232-58819.json` を全 session namespace 横断で探し、t2 の
+status と worktree/branch フィールドを読む (本 worktree の namespace には該当 run state が無い:
+`condukt state show --run run-20260814-005232-58819` → No such file or directory)。
+gauge/tracekit の当該 run の span、および 2026-08-14 の session transcript も一次ソースになる。
+
+【この起票の帰結 — fe84d350 に着手する者への申し送り】
+fe84d350 の done criteria 4「375587a2 の RED 3 本を GREEN にする」は**そのままでは実行不能**。
+RED を書くところからやり直す必要がある。幸い ticket notes が 3 本それぞれが何を pin していたかを
+逐語で記述しているので再構成は可能だが、**再構成した RED は「読み直して裁定と整合を確認した」既存資産ではなく
+新規に RED を観測し直すもの**として扱うこと (CLAUDE.md 第2節: 落ちることを確認していないテストは何も証明しない)。
+また done criteria 3 の前提も誤っている: `dead_clean_worktree_is_removable` は**削除されていない**。
+crates/condukt/tests/worktree_reconcile.rs:427 に現存し green である (実測 2026-08-17)。
+したがって「削除された対照を新しい形で復活させる」ではなく「現存する対照を 3 点連言を満たす形へ
+retarget する」が正しい作業になる。**この差は「通すためにテストを緩める」との区別に直結するので、
+着手前に人間の確認を取ること。**
+
+【関連】fe84d350 (本体)、e99f61e4(b)、2d3cbda2、5daf0b60、b637936f、91fa24df。"""
+created_at = 1786943936
+updated_at = 1786943936
+weight = 0.0
+
+[[task]]
+id = "2b1065a1"
+title = "condukt schedule の force-gate が否定文脈のデプロイ語を拾う — 「rollout しない」と書いたタスクが deploy として force-gated される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 2026-08-17、測定点 f1131a36。crates/condukt/src/schedule.rs:475 の resolve_force_gate(classify_change(&task_action_text(t), ...)) は blastguard の分類器に task の title+done_criteria を素の文字列として渡す。分類器は substring ベースで否定を解さないため、done_criteria に「scripts/rollout-plugins.sh の実行は t3 の担当なのでこのタスクでは実行しない」と**やらないこと**を明記したタスク t2 が
+  warnings: "task t2 force-gated: high-risk irreversible action (declared class Serial)"
+として gated に隔離された。当該文字列を「配布工程は後続タスク t3 の担当」と書き換える (同義・deploy 語を含まない) だけで force-gate は消え、schedule は serial:[t1,t2] / gated:[t3] になった。
+
+【なぜ記録するか】この挙動には 2 つの読みがあり、どちらも実害の向きが違う:
+(a) 意図的で正しい — deploy 語が出るタスクは中身に関わらず人間に見せる、という保守的設計。false positive のコストは「余計に 1 回聞かれる」だけなので許容、という立場。
+(b) 実在の欠陥 — タスク記述は自然言語なので「Xをするな」と書くほど gate に掛かりやすくなる。結果として **書き手が gate を避けるために deploy 語を書かなくなる**圧力が生じ、スコープ外である旨の明示的な注意書きが記述から消える。これは gate が記述の質を下げる方向に働くので、CLAUDE.md 第6節の「検出側を厚くする」意図と逆行する。
+
+見分け方: blastguard::classify に否定検出があるか、または task_action_text が done_criteria 全文ではなく action 句だけを渡す設計になっているかを読む。前者が無く後者も全文渡しなら (b) 寄り。
+なお本件では **gate を無効化していない** — 実際の deploy (scripts/rollout-plugins.sh の実行) は t3 として class:"gated" のまま残し、t2 からは配布工程を実際に取り除いた上で語を書き換えた。「通すために緩めた」のではなく「タスク分割を実態に合わせた」ケースとして記録する。
+
+関連: d7e1ac30 (この分割が生まれた元タスク)。"""
+created_at = 1786944196
+updated_at = 1786944196
+weight = 0.0
+
+[[task]]
+id = "64ce9501"
+title = "condukt lock.rs の pid_alive が .unwrap_or(false) で終わる — 判定不能な liveness プローブが「死んでいる」に潰れる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 2026-08-17、測定点 f1131a36。crates/condukt/src/lock.rs:128-142。
+
+fn pid_alive(pid: u32) -> bool は Linux では /proc/<pid> の存在を見て、無ければ `kill -0` にフォールバックし、
+最後が `.status().map(|s| s.success()).unwrap_or(false)` で終わる。つまり **kill コマンドの起動自体に失敗した
+(spawn できない・PATH に無い・fork 失敗)** ケースが `false`＝「プロセスは生きていない」に写る。
+
+【なぜ問題か】この返り値が **reap / steal の判定に使われる**なら、unwrap_or(false) は制限側ではなく
+permissive 側である。「holder が生きているか判定できなかった」が「holder は死んだ」として扱われ、
+生きている holder のロックが奪われうる。CLAUDE.md 第3節「Result/Option を bool へ潰すとき、unwrap_or の
+既定値は必ず制限側」に該当する形。
+
+【判定不能な点 — 両方の読みを残す】
+(a) 実在の欠陥 — pid_alive の呼び出し元が reap/steal を判定しており、unwrap_or(false) が生きた holder の
+    ロック奪取を許す。この場合 Determination 三値化 (Alive / Gone / Unknown) が要る。
+(b) 影響なし — 呼び出し元が「生きていることの確認」にしか使っておらず、false が制限側に当たる文脈しかない。
+見分け方: `grep -rn "pid_alive" crates/condukt/src/` で全呼び出し元を列挙し、返り値 false が
+「奪ってよい」へ流れる経路が 1 本でもあるかを追う。**まだ追っていないので未判定** (この起票は観測の記録であって
+欠陥の断定ではない)。
+
+【発見の経緯】backlog d7e1ac30 (tasks-file lock が生きた holder を reap する) の修正中、同種の liveness
+プローブの先例として参照した際に気づいた。d7e1ac30 側では同じ関数を再利用せず、三値の TasksLockHolder
+(Alive/Gone/Unknown) を新規に書いた — Unknown を Gone に潰さないため。crates/backlog/src/store.rs の
+tasks_lock_pid_state の doc comment がこの item を参照している。
+
+【関連】d7e1ac30、b6cf486d (どの liveness probe が健全か)。"""
+created_at = 1786947295
+updated_at = 1786947295
+weight = 0.0
+
+[[task]]
+id = "929739fe"
+title = "with_tasks_lock の非 fail-closed 系 mutator が黙って無保護実行する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "crates/backlog/src/store.rs:620-622 が逐語で認めている既知の fail-open: fail-closed なのは add_with_weight_and_github_push と next_claim_with の 2 本だけで、requeue_expired / mark_* / edit は素の with_tasks_lock を通る。ロック取得に失敗しても f() をそのまま実行し、成功を報告する。d7e1ac30 で budget を elapsed 8s にしたため、この経路は『8秒待たされた末に無保護で実行し ok を返す』になる(待ち時間が伸びただけで判定は変わらない)。CLAUDE.md §3 の『判定不能は制限側』違反。(a)実在の欠陥 → with_tasks_lock_aware へ寄せて Undetermined を返す / (b)意図的 → なぜ add と claim だけ守れば十分かを型か doc で示す。見分け方: これらの mutator の lost update が下流で検出可能かを問う(add は bd6d81df で検出不能と実証済み)。測定点 rev: d7e1ac30 作業ツリー、2026-08-17。敵対的検証 agent の finding E 由来、実装者が独立に source を読んで確認済み。"
+created_at = 1786949325
+updated_at = 1786949325
+weight = 0.0
+
+[[task]]
+id = "8181d5e4"
+title = "0.2.27 未満が残した空 lockfile は Unknown で永久に reap されない (rollout hazard)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "d7e1ac30 で tasks lock の reap 条件に『holder が Gone』を追加した。pid を書くのは 0.2.27 以降なので、0.2.27 未満の backlog がクラッシュして残した lockfile は body が空 → tasks_lock_holder が Unknown → 永久に reap されない。従来は 10s 経過で自己回復していた挙動が、rollout 後は手動削除が必要になる。到達条件は『古い版がロック保持中にクラッシュ』かつ『その後 rollout』なので狭いが、起きると恒久的に詰まる。緩和として add の拒否メッセージに lockfile の読み方と空 body の原因を明記済み(store.rs の backlog add refused)。判断: (a)これで十分 / (b)ワンショットの移行処理が要る。(b)なら『空 body かつ mtime が rollout 時刻より古い』を一度だけ reap する等が候補だが、空 body への例外は Unknown never-reap の不変条件に穴を開けるので慎重に。測定点 rev: d7e1ac30 作業ツリー、2026-08-17。敵対的検証 agent の finding E 由来。"
+created_at = 1786949337
+updated_at = 1786949337
+weight = 0.0

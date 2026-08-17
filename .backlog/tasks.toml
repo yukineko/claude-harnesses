@@ -12053,3 +12053,40 @@ notes = "実測 2026-08-17、測定点 2d744145。`compass gap` の dod 最終�
 created_at = 1786951864
 updated_at = 1786951864
 weight = 0.0
+
+[[task]]
+id = "a597b491"
+title = "condukt 0.7.139 が payload 無しで rollout され linux で dark になっている"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-08-17 16:30 (このセッションの外で行われた rollout)。
+
+~/.claude/plugins/cache/yukineko/condukt/0.7.139/bin/ には launcher shim
+(condukt, 4867 bytes) しか無く、payload の condukt-linux-x86_64 が存在しない。実行すると:
+
+    condukt: no bundled binary for linux-x86_64 (.../0.7.139/bin/condukt-linux-x86_64).
+    exit=1
+
+一つ前の 0.7.138 は正常に動く。対照: compass 0.1.17 は bin/ に launcher と
+compass-linux-x86_64 の両方を持ち compass --version が通る。
+
+これは red ではなく dark である。launcher は exit 1 と診断を出すが、呼び出し側
+(SessionStart hook) は "condukt runs: unknown" と表示するだけで判定はしない。
+launcher-exec-bit ゲートは git index の mode を見るが、plugin cache に payload が
+landed したかは検査していない。
+
+未検証: 他 plugin にも同じ欠落があるか / この rollout を行った別セッションが失敗を検知していたか。
+
+是正の候補: check-plugin-rollout.py に「配布先の <name>-<target-triple> が実在し
+実行可能か」の検査を追加する。"""
+created_at = 1786953564
+updated_at = 1786953564
+weight = 0.0
+issue_number = 355
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/355"

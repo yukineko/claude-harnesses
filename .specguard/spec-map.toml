@@ -1,4 +1,4 @@
-last_synced = "f745617592a7101dd60737f0ae187d937a29e757"
+last_synced = "091689e8172ab21d718e4ee0a840bec984dbd565"
 
 [entries.".gitattributes"]
 key = ".gitattributes"
@@ -254,7 +254,7 @@ key = "crates/backlog/src/store.rs"
 kind = "feature"
 spec_doc = "docs/specs/backlog.md"
 status = "changed"
-last_ref = "f745617592a7101dd60737f0ae187d937a29e757"
+last_ref = "091689e8172ab21d718e4ee0a840bec984dbd565"
 impl_files = ["crates/backlog/src/store.rs"]
 test_files = []
 client_refs = []

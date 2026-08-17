@@ -12062,10 +12062,24 @@ title = "specguard の post-merge stamp が自己参照で収束せず、main tr
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = "実測 2026-08-17。.specguard/spec-map.toml の last_synced に post-merge hook が『今できた merge commit の SHA』を書く。したがって その変更を commit する -> 新しい HEAD ができる -> hook が再び新 HEAD を刻む -> また dirty、という不動点に到達できないループになる。連続 2 回観測: merge 091689e8 の後 last_synced=091689e8 が dirty として現れ、それを commit して merge ea9c4b7e した直後に last_synced=ea9c4b7e が再び dirty になった。実害: (1) CLAUDE.md 8 の Stop ゲート (scripts/stop-verify-worktree.py) が『main tree に未コミット変更あり』で毎回 block するが、worktree へ移して commit しても解消しない = ゲートが原理的に満たせない条件を課している。(2) 満たせないゲートは 5. が禁じる恒常的迂回 (skip ファイル・--no-verify) への構造的な圧力になる。修正方針の候補: last_synced を「同期対象の内容 SHA」にする / stamp を commit 対象外 (.gitignore or 生成物ディレクトリ) にする / post-merge ではなく明示的な specguard sync コマンドでのみ更新する。どれを取るかは設計判断なので人間に返す。"
 created_at = 1786952133
-updated_at = 1786952133
+updated_at = 1786952885
 weight = 0.0
 issue_number = 353
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/353"
+
+[[task]]
+id = "03f563ba"
+title = "specguard audit の exit code が空 map と clean を区別しない (rc=0 で同一)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "実測 2026-08-17, specguard 0.2.51。specguard.toml だけを置いた使い捨て repo で 'specguard audit' を実行: stdout は '0 entries mapped, 0 audit shard(s), 0 structural finding(s)' + '(map is empty — run specguard map build first ...)' を出し、main.rs:1755 の !map.is_empty() ガードにより 'no structural gaps' の clean 行は出ない。ここまでは正しい三値。だが rc=0 であり、clean な audit と終了ステータスが同一で、下流が exit code だけを見ると『検査した結果ゼロ件』と『そもそも検査対象が無い』を区別できない (CLAUDE.md 3: 空集合は clean ではない)。現時点で exit code を消費する hook/script は無い (.githooks/post-merge は 'specguard map sync ... || true' のみ) ので実害は未武装だが、spec-map を untrack した (.gitignore, 同 commit) ことで空 map は fresh clone の既定状態になったため露出は上がった。修正候補: 空 map に専用の非0 exit code を割り当てる (testaudit が findings に 7 を使っているのと同様)。"
+created_at = 1786952886
+updated_at = 1786952886
+weight = 0.0
+issue_number = 354
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/354"

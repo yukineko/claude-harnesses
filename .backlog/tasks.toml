@@ -12055,3 +12055,17 @@ updated_at = 1786951673
 weight = 0.0
 issue_number = 352
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/352"
+
+[[task]]
+id = "86e0ff73"
+title = "specguard の post-merge stamp が自己参照で収束せず、main tree が merge のたびに必ず dirty になる (§8 の Stop ゲートと構造衝突)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-08-17。.specguard/spec-map.toml の last_synced に post-merge hook が『今できた merge commit の SHA』を書く。したがって その変更を commit する -> 新しい HEAD ができる -> hook が再び新 HEAD を刻む -> また dirty、という不動点に到達できないループになる。連続 2 回観測: merge 091689e8 の後 last_synced=091689e8 が dirty として現れ、それを commit して merge ea9c4b7e した直後に last_synced=ea9c4b7e が再び dirty になった。実害: (1) CLAUDE.md 8 の Stop ゲート (scripts/stop-verify-worktree.py) が『main tree に未コミット変更あり』で毎回 block するが、worktree へ移して commit しても解消しない = ゲートが原理的に満たせない条件を課している。(2) 満たせないゲートは 5. が禁じる恒常的迂回 (skip ファイル・--no-verify) への構造的な圧力になる。修正方針の候補: last_synced を「同期対象の内容 SHA」にする / stamp を commit 対象外 (.gitignore or 生成物ディレクトリ) にする / post-merge ではなく明示的な specguard sync コマンドでのみ更新する。どれを取るかは設計判断なので人間に返す。"
+created_at = 1786952133
+updated_at = 1786952133
+weight = 0.0
+issue_number = 353
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/353"

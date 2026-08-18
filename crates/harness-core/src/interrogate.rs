@@ -21,6 +21,142 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::verdict::Determination;
+
+/// Rule 1 tag: the write-surface question was never asked (`write_paths: None`).
+pub const SCOPE_WRITE_PATHS_UNASKED: &str = "scope:write_paths_unasked";
+/// Rule 2 tag: the write-surface question was answered "nothing"
+/// (`write_paths: Some(vec![])`), which is a refusal to declare a write surface.
+pub const SCOPE_WRITE_PATHS_EMPTY: &str = "scope:write_paths_empty";
+/// Rule 3 tag: the read-surface question was never asked (`read_paths: None`).
+pub const SCOPE_READ_PATHS_UNASKED: &str = "scope:read_paths_unasked";
+/// Rule 4 tag: some entry in either set is empty or whitespace-only.
+pub const SCOPE_BLANK_ENTRY: &str = "scope:blank_entry";
+
+/// A scope a hypothesis intends to touch, *before* it is known to be complete.
+///
+/// Freely constructible on purpose: an unresolved draft is a legitimate value,
+/// and pretending otherwise would push callers into fabricating a declaration.
+/// `None` and `Some(vec![])` are deliberately distinct — see [`ScopeDraft::declare`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScopeDraft {
+    /// `None` = the question was never asked. `Some(vec![])` = asked and
+    /// answered "nothing", which is a refusal to declare a write surface.
+    pub write_paths: Option<Vec<String>>,
+    /// `None` = the question was never asked. `Some(vec![])` = asked and
+    /// answered "nothing", which is accepted (reading nothing is a real answer).
+    pub read_paths: Option<Vec<String>>,
+}
+
+/// A scope known to be fully declared.
+///
+/// Every field is private and there is **no** public constructor, no `Default`,
+/// no `From<ScopeDraft>`, and no `new`. The only way to obtain this type is
+/// [`ScopeDraft::declare`], which returns [`Determination`] and answers
+/// `Undetermined` for every unresolved draft. An unresolved scope is therefore
+/// *unrepresentable*, not merely rejected at runtime.
+///
+/// Consequently a consumer that takes a `ScopeDeclaration` by value or reference
+/// (rather than two `Vec<String>`s) cannot be reached with a scope nobody
+/// resolved — the type is the proof that the four rules below were applied.
+#[must_use]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeDeclaration {
+    write_paths: Vec<String>,
+    read_paths: Vec<String>,
+}
+
+impl ScopeDeclaration {
+    /// The declared write surface, verbatim: same elements, same order,
+    /// duplicates intact. [`ScopeDraft::declare`] performs no normalization, so
+    /// this is element-for-element what the caller declared.
+    #[must_use]
+    pub fn write_paths(&self) -> &[String] {
+        &self.write_paths
+    }
+
+    /// The declared read surface, verbatim — see [`ScopeDeclaration::write_paths`].
+    /// May be legitimately empty: "reads nothing" is a determined answer.
+    #[must_use]
+    pub fn read_paths(&self) -> &[String] {
+        &self.read_paths
+    }
+}
+
+impl ScopeDraft {
+    /// Resolve this draft. **Pure — no IO of any kind.**
+    ///
+    /// Returns `Determination::Undetermined` (never a permissive empty
+    /// declaration) when any of the following holds:
+    ///   1. `write_paths` is `None`          — the question was never asked
+    ///   2. `write_paths` is `Some(vec![])`  — no measurable write surface
+    ///   3. `read_paths` is `None`           — the question was never asked
+    ///   4. any entry in either set is empty or whitespace-only
+    ///
+    /// `read_paths == Some(vec![])` is **accepted**: "reads nothing" is a
+    /// determined answer, unlike "writes nothing".
+    ///
+    /// The `Undetermined` reason carries exactly one machine-readable rule tag
+    /// ([`SCOPE_WRITE_PATHS_UNASKED`], [`SCOPE_WRITE_PATHS_EMPTY`],
+    /// [`SCOPE_READ_PATHS_UNASKED`], [`SCOPE_BLANK_ENTRY`]) so a caller can
+    /// observe *which* rule fired without parsing prose. When several rules
+    /// apply at once the tags are checked in the order listed above and only the
+    /// first match is reported — the precedence is fixed so the tag is a stable
+    /// observable rather than an implementation detail.
+    ///
+    /// No normalization is performed: entries are not trimmed, de-duplicated,
+    /// sorted, or resolved against the filesystem. A declaration is a record of
+    /// what the caller said it would touch, and silently rewriting it would make
+    /// the recorded scope and the declared scope two different things. (Path
+    /// resolution would also be IO, which this module does not do.) An entry
+    /// with surrounding whitespace but non-blank content is a real entry and is
+    /// kept with its padding; an entry that is *only* whitespace is rule 4.
+    pub fn declare(self) -> Determination<ScopeDeclaration> {
+        let write_paths = match self.write_paths {
+            None => {
+                return Determination::undetermined(format!(
+                    "{SCOPE_WRITE_PATHS_UNASKED}: the write-surface question was never \
+                     asked, so there is no answer to record — an unasked question is \
+                     not an empty answer"
+                ));
+            }
+            Some(paths) if paths.is_empty() => {
+                return Determination::undetermined(format!(
+                    "{SCOPE_WRITE_PATHS_EMPTY}: the write-surface question was answered \
+                     \"nothing\", which is a refusal to declare a write surface rather \
+                     than a declared scope of zero files"
+                ));
+            }
+            Some(paths) => paths,
+        };
+
+        let read_paths = match self.read_paths {
+            None => {
+                return Determination::undetermined(format!(
+                    "{SCOPE_READ_PATHS_UNASKED}: the read-surface question was never \
+                     asked; unlike an answered-empty read set, silence is not an answer"
+                ));
+            }
+            Some(paths) => paths,
+        };
+
+        for (set, paths) in [("write_paths", &write_paths), ("read_paths", &read_paths)] {
+            if let Some(index) = paths.iter().position(|p| p.trim().is_empty()) {
+                return Determination::undetermined(format!(
+                    "{SCOPE_BLANK_ENTRY}: {set}[{index}] is empty or whitespace-only; a \
+                     blank path is not a declared path, and accepting one would let a \
+                     placeholder satisfy the surface requirement"
+                ));
+            }
+        }
+
+        Determination::known(ScopeDeclaration {
+            write_paths,
+            read_paths,
+        })
+    }
+}
+
 /// Provenance strength of a piece of gathered material. Used only as a tiebreak
 /// HINT when presenting defaults to a human — never to auto-resolve conflicts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

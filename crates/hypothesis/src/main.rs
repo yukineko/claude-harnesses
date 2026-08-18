@@ -1,4 +1,5 @@
 mod config;
+mod draft;
 mod goal_link;
 mod hypothesis;
 mod install;
@@ -30,6 +31,34 @@ fn parse_measurement(s: &str) -> Result<(String, f64)> {
     Ok((metric.to_string(), value))
 }
 
+/// Fold the two scope flags for one surface into the three answers
+/// `ScopeDraft` distinguishes: `None` (never asked), `Some(vec![])` (asked,
+/// answered "nothing"), `Some(paths)` (answered).
+///
+/// The two flags contradicting each other is refused rather than resolved by
+/// precedence: picking a winner would silently record an answer the operator did
+/// not give.
+fn scope_answer(
+    paths: &[String],
+    answered_none: bool,
+    surface: &str,
+) -> Result<Option<Vec<String>>> {
+    if answered_none && !paths.is_empty() {
+        anyhow::bail!(
+            "--no-{surface}-paths contradicts --{surface}-path; say either that this \
+             task touches nothing on the {surface} side or which paths it touches, \
+             not both"
+        );
+    }
+    if !paths.is_empty() {
+        return Ok(Some(paths.to_vec()));
+    }
+    if answered_none {
+        return Ok(Some(Vec::new()));
+    }
+    Ok(None)
+}
+
 #[derive(Parser)]
 #[command(name = "hypothesis", about = "PDO hypothesis lifecycle management")]
 struct Cli {
@@ -54,6 +83,37 @@ enum Command {
         /// sooner). Omit to use the default (0.5).
         #[arg(long)]
         confidence: Option<f64>,
+    },
+    /// Interrogate an ambiguous task text: list what is still unresolved
+    /// (scope, success/kill criteria, goal link) and record the hypothesis only
+    /// once nothing is left open. While anything is open nothing is written.
+    Draft {
+        text: String,
+        #[arg(long)]
+        goal: Option<String>,
+        /// Pre-registered success criterion, e.g. --success "activation >= 0.4"
+        #[arg(long)]
+        success: Option<String>,
+        /// Pre-registered kill criterion, e.g. --kill "activation <= 0.2"
+        #[arg(long)]
+        kill: Option<String>,
+        /// A path this task will write. Repeatable.
+        #[arg(long = "write-path", value_name = "PATH")]
+        write_path: Vec<String>,
+        /// Answer the write-surface question with "nothing". Deliberately
+        /// separate from simply omitting `--write-path`, which means the question
+        /// was never asked: `draft` refuses both, but names which one happened
+        /// (`scope:write_paths_empty` vs `scope:write_paths_unasked`) so the
+        /// operator is told whether they were silent or wrong.
+        #[arg(long)]
+        no_write_paths: bool,
+        /// A path this task will read. Repeatable.
+        #[arg(long = "read-path", value_name = "PATH")]
+        read_path: Vec<String>,
+        /// Answer the read-surface question with "nothing". Unlike the write
+        /// side this is *accepted*: reading nothing is a determinable answer.
+        #[arg(long)]
+        no_read_paths: bool,
     },
     /// Mark a hypothesis as validated
     Validate {
@@ -147,6 +207,32 @@ fn run() -> Result<()> {
                 st.set_confidence(&id, c)?;
             }
             println!("{id}");
+        }
+        Command::Draft {
+            text,
+            goal,
+            success,
+            kill,
+            write_path,
+            no_write_paths,
+            read_path,
+            no_read_paths,
+        } => {
+            let write_paths = scope_answer(&write_path, no_write_paths, "write")?;
+            let read_paths = scope_answer(&read_path, no_read_paths, "read")?;
+            let success = success.as_deref().map(Criterion::parse).transpose()?;
+            let kill = kill.as_deref().map(Criterion::parse).transpose()?;
+            draft::run(
+                &cfg,
+                draft::DraftArgs {
+                    text,
+                    goal,
+                    success,
+                    kill,
+                    write_paths,
+                    read_paths,
+                },
+            )?;
         }
         Command::Validate {
             id,
@@ -262,9 +348,25 @@ fn run() -> Result<()> {
                     .riskiest_assumption()
                     .map(|a| format!(" [RAT: {}]", a.text))
                     .unwrap_or_default();
+                // Whether this bet's blast radius was ever stated. Rendered in
+                // BOTH directions on purpose: an omitted marker for the
+                // no-declared-scope case would read as "nothing to report here",
+                // and "nobody declared what this touches" is precisely what a
+                // reader needs to see. There is no arm that substitutes an empty
+                // declaration for the undetermined one.
+                let scope_info = match h.declared_scope().require() {
+                    harness_core::verdict::Required::Determined(scope) => format!(
+                        " [scope: {}w/{}r]",
+                        scope.write_paths().len(),
+                        scope.read_paths().len()
+                    ),
+                    harness_core::verdict::Required::Blocked(_) => {
+                        " [scope: undeclared]".to_string()
+                    }
+                };
                 println!(
-                    "[{}] (conf {:.2}) {} — {}{}{}{}",
-                    h.status, h.confidence, h.id, h.text, crit_info, rat_info, run_info
+                    "[{}] (conf {:.2}) {} — {}{}{}{}{}",
+                    h.status, h.confidence, h.id, h.text, crit_info, scope_info, rat_info, run_info
                 );
             }
         }

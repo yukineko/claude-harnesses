@@ -1,4 +1,6 @@
 use anyhow::Result;
+use harness_core::interrogate::{ScopeDeclaration, ScopeDraft};
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -402,6 +404,34 @@ pub struct Hypothesis {
     /// timestamp — build ≠ validate; we don't guess when the past shipped).
     #[serde(default)]
     pub shipped_at: Option<String>,
+    /// The write surface this bet declared it would touch, as recorded.
+    ///
+    /// `None` = the question was never asked (every record written before the
+    /// `draft` flow existed, and every record created by `add`). `Some(vec![])`
+    /// = asked and answered "nothing". The two are kept apart because
+    /// [`ScopeDraft::declare`] answers them differently, and collapsing them
+    /// would turn "nobody asked" into a recorded answer.
+    ///
+    /// `#[serde(default)]` is **redundant** on an `Option` field and is written
+    /// anyway, for two reasons. It matches the convention every other optional
+    /// field in this struct already follows, and — more importantly — it stops the
+    /// next reader from concluding that backward compatibility here was *earned*
+    /// by the attribute. It was not: serde's derive supplies `None` for a missing
+    /// `Option` field with or without it (measured — see the report for t3, where
+    /// removing it left `hypothesis_deserialize_pre_t3_full_toml_record` green,
+    /// while a non-`Option` field without it failed with "missing field"). A
+    /// future change of these fields to a non-`Option` type would therefore need
+    /// this attribute for real; leaving it in place means that change does not
+    /// silently break every legacy store.
+    #[serde(default)]
+    pub scope_write_paths: Option<Vec<String>>,
+    /// The read surface this bet declared it would touch — see
+    /// [`Hypothesis::scope_write_paths`]. `Some(vec![])` is a real answer here:
+    /// reading nothing is determinable, writing nothing is not.
+    ///
+    /// On `#[serde(default)]` here, see [`Hypothesis::scope_write_paths`].
+    #[serde(default)]
+    pub scope_read_paths: Option<Vec<String>>,
 }
 
 /// Neutral default confidence for hypotheses created or loaded without one.
@@ -441,7 +471,43 @@ impl Hypothesis {
             created_at: now.clone(),
             updated_at: now,
             shipped_at: None,
+            // Unasked, not answered-empty: `add` does not interrogate a scope,
+            // so recording `Some(vec![])` here would fabricate an answer.
+            scope_write_paths: None,
+            scope_read_paths: None,
         }
+    }
+
+    /// The record constructor for the `draft` flow (`hypothesis draft`).
+    ///
+    /// Value-identical to [`Hypothesis::new`] today, and that is the design
+    /// rather than an oversight: what `draft` produces is the *list of open
+    /// questions*, not a differently-shaped record. It exists as a separate named
+    /// entry point because the drafted record is exactly where a future edit
+    /// would be tempted to invent a fifth lifecycle value ("predicted",
+    /// "predicted-auto") for "drafted but not yet answered". There is none, and
+    /// there must not be: the four-value vocabulary already spells this state
+    /// [`Status::Open`], and a status that no consumer knows how to read is worse
+    /// than a coarse one. Scope is left *unasked*; the caller fills it in only
+    /// after [`harness_core::interrogate::ScopeDraft::declare`] has resolved it
+    /// (see [`crate::store::Store::add_draft`], which will not accept anything
+    /// less).
+    pub fn draft(text: impl Into<String>, linked_goal: Option<String>) -> Self {
+        Self::new(text, linked_goal)
+    }
+
+    /// This record's scope, resolved through the one sanctioned path.
+    ///
+    /// Answers `Undetermined` for every record whose scope questions were not
+    /// fully answered — which is every legacy record and every record created by
+    /// `add`. It never substitutes an empty declaration, so a caller that needs a
+    /// declared scope is forced to handle "this record does not have one".
+    pub fn declared_scope(&self) -> Determination<ScopeDeclaration> {
+        ScopeDraft {
+            write_paths: self.scope_write_paths.clone(),
+            read_paths: self.scope_read_paths.clone(),
+        }
+        .declare()
     }
 }
 
@@ -1023,6 +1089,15 @@ tested = false
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             shipped_at: None,
+            // Added by t3's implementation, which is exactly the mechanism this
+            // test exists for: a struct literal cannot omit a field, so the new
+            // field had to be written out here by hand. NOTE, against the
+            // paragraph above: `#[serde(default)]` does NOT exempt a field from
+            // a struct literal — serde attributes affect deserialization only.
+            // So this literal is a *stronger* trap than documented: ANY added
+            // field, defaulted or not, breaks it. See the report/backlog note.
+            scope_write_paths: None,
+            scope_read_paths: None,
             // No `metric_surface: ...` line here. If the struct definition
             // gains that field without a serde default, this literal fails to
             // compile ("missing field `metric_surface`"), surfacing the

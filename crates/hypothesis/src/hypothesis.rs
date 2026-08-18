@@ -849,4 +849,186 @@ mod tests {
         assert!(h.kill_criterion.is_none());
         assert!(h.assumptions.is_empty());
     }
+
+    // ── t3 done_criteria (2): Status stays at exactly 4 variants ────────────
+    //
+    // t3 done_criteria item 2: "新規レコードの status は既存 4 値の Open のみを
+    // 使い、predicted 等を追加していない". This exhaustive match is the
+    // compile-time half of that pin: if a future edit adds a fifth `Status`
+    // variant (e.g. `Predicted` / `PredictedAuto`), this `match` becomes
+    // non-exhaustive and the crate fails to compile — the reviewer cannot
+    // silently widen the enum without this test (and every other exhaustive
+    // match on `Status` in this crate) demanding an update.
+    //
+    // What this does NOT prove: it says nothing about *which* status a
+    // `draft`-created record actually gets at runtime — that is pinned
+    // separately by `draft_created_record_status_is_open` below. A `Status`
+    // enum that still has exactly 4 variants but whose semantics have been
+    // silently changed (e.g. `Open` renamed to mean something else) would
+    // still pass this test.
+    #[test]
+    fn status_has_exactly_four_variants() {
+        fn assert_only_four_variants(s: &Status) -> &'static str {
+            match s {
+                Status::Open => "open",
+                Status::AwaitingMeasurement => "awaiting-measurement",
+                Status::Validated => "validated",
+                Status::Rejected => "rejected",
+                // Deliberately no wildcard `_ =>` arm: adding `Predicted` or
+                // `PredictedAuto` must break this match at compile time.
+            }
+        }
+        assert_eq!(assert_only_four_variants(&Status::Open), "open");
+        assert_eq!(
+            assert_only_four_variants(&Status::AwaitingMeasurement),
+            "awaiting-measurement"
+        );
+        assert_eq!(assert_only_four_variants(&Status::Validated), "validated");
+        assert_eq!(assert_only_four_variants(&Status::Rejected), "rejected");
+    }
+
+    // t3 done_criteria item 2, runtime half: a hypothesis produced by the not-
+    // yet-existing `draft` flow must land in `Status::Open` — never a
+    // `predicted`/`predicted-auto` value that doesn't exist in this enum.
+    // There is no `hypothesis::draft(...)` constructor yet, so this fails to
+    // compile until one exists (a design decision left to the implementer, not
+    // guessed here). Once it exists, the assertion is a plain runtime check.
+    //
+    // What this does NOT prove: it does not exercise the CLI end-to-end (the
+    // integration test `draft_lists_open_items_for_an_ambiguous_task` in
+    // tests/integration.rs covers that); it only pins the in-process
+    // constructor's status, whatever that constructor ends up being named.
+    #[test]
+    fn draft_created_record_status_is_open() {
+        let h = Hypothesis::draft("some ambiguous task text", None);
+        assert_eq!(h.status, Status::Open);
+    }
+
+    // ── t3 done_criteria (5): legacy TOML still deserializes ────────────────
+    //
+    // t3 done_criteria item 5: "既存の ~/.hypothesis/hypotheses.toml 形式の
+    // レコードが serde default で読める (後方互換)". This fixture is the exact
+    // on-disk TOML shape `Store::save` (crates/hypothesis/src/store.rs) writes
+    // today for a hypothesis with criteria, assumptions, and a shipped_at
+    // stamp set — i.e. the richest legacy record shape that exists before t3.
+    // It must keep deserializing once scope/draft fields are added, via
+    // `#[serde(default)]` on every new field.
+    //
+    // What this does NOT prove: it does not prove every possible legacy
+    // record shape deserializes (e.g. records missing `confidence`, or the
+    // bare-minimum legacy shape, are already covered by the older
+    // `hypothesis_deserialize_legacy_without_evidence_and_goal` /
+    // `hypothesis_deserialize_legacy_without_criteria` tests above) — it adds
+    // the *richest* pre-t3 shape as an additional fixed point, not a
+    // combinatorial sweep over every field-presence combination.
+    //
+    // Unlike the other t3 tests in this file, this one is NOT expected to fail
+    // today (there is nothing to add yet, so nothing can regress it yet) — it
+    // is a regression trap that starts green and is meant to go, and stay, red
+    // the moment a scope/draft field is added to `Hypothesis` without
+    // `#[serde(default)]`. It contributes to the suite-level RED for t3 only
+    // via the other tests in this module/crate that reference not-yet-existing
+    // API; `tdd red` observes the whole crate's test binary failing to build.
+    #[test]
+    fn hypothesis_deserialize_pre_t3_full_toml_record() {
+        let toml_str = r#"
+id = "abcd1234"
+text = "faster onboarding lifts activation"
+status = "awaiting_measurement"
+evidence = ["evidence A"]
+linked_goal = "goal-abc"
+condukt_run = "run-1"
+confidence = 0.7
+created_at = "2026-06-26T13:00:00Z"
+updated_at = "2026-06-27T09:00:00Z"
+shipped_at = "2026-06-27T09:00:00Z"
+
+[success_criterion]
+metric = "activation"
+comparator = "ge"
+threshold = 0.4
+
+[kill_criterion]
+metric = "activation"
+comparator = "le"
+threshold = 0.2
+
+[[assumptions]]
+text = "users have this problem"
+risk = "high"
+evidence = "none"
+tested = false
+"#;
+        let h: Hypothesis = toml::from_str(toml_str).expect("deserialize pre-t3 full record");
+        assert_eq!(h.id, "abcd1234");
+        assert_eq!(h.status, Status::AwaitingMeasurement);
+        assert_eq!(h.linked_goal.as_deref(), Some("goal-abc"));
+        assert_eq!(h.condukt_run.as_deref(), Some("run-1"));
+        assert_eq!(h.confidence, 0.7);
+        assert_eq!(h.shipped_at.as_deref(), Some("2026-06-27T09:00:00Z"));
+        assert_eq!(
+            h.success_criterion.as_ref().map(|c| c.to_string()),
+            Some("activation >= 0.4".to_string())
+        );
+        assert_eq!(
+            h.kill_criterion.as_ref().map(|c| c.to_string()),
+            Some("activation <= 0.2".to_string())
+        );
+        assert_eq!(h.assumptions.len(), 1);
+    }
+
+    // ── t3 done_criteria (6): no new `metric_surface` field ─────────────────
+    //
+    // t3 done_criteria item 6: "metric_surface を新設せず既存の
+    // success_criterion/kill_criterion を使う". Rust has no runtime reflection
+    // to assert "this struct has no field named X", so this is pinned the same
+    // way the repo already pins struct shape elsewhere: an exhaustive
+    // field-pattern construction. If a future edit adds a `metric_surface`
+    // field to `Hypothesis` *without* `#[serde(default)]` (or without updating
+    // this literal), this struct literal fails to compile with "missing field
+    // metric_surface" or "no field metric_surface on type ..." — either way,
+    // this test forces the author to touch this line and see the field they
+    // just added, and to confront the fact that success/kill criteria already
+    // exist for this purpose. Success/kill criteria coverage is exercised by
+    // `test_criteria_persist` (store.rs) and `criterion_*` tests above.
+    //
+    // What this does NOT prove: this is a compile-time speed bump, not a
+    // guarantee. A determined author can add `metric_surface: Option<String>`
+    // with `#[serde(default)]` and this struct literal keeps compiling
+    // unchanged (the field just defaults to `None` here) — the test cannot
+    // force a *reviewer* to notice, only make the shape visible in a diff at
+    // the moment the field is added to this struct literal's surrounding type
+    // definition. It also says nothing about `metric_surface` appearing on
+    // some *other* type (e.g. a new `ScopeDeclaration`) instead of on
+    // `Hypothesis` directly.
+    //
+    // Also unlike most other t3 tests here, this one is NOT expected to fail
+    // today — there is no `metric_surface` field to trip over yet, so this
+    // starts green. It is a regression trap for the implementation phase, not
+    // evidence of the missing feature; the RED for t3 comes from the other
+    // tests in this suite that call not-yet-existing API and fail to compile.
+    #[test]
+    fn hypothesis_field_set_has_no_metric_surface() {
+        let h = Hypothesis {
+            id: "id".to_string(),
+            text: "t".to_string(),
+            status: Status::Open,
+            evidence: vec![],
+            linked_goal: None,
+            condukt_run: None,
+            success_criterion: None,
+            kill_criterion: None,
+            assumptions: vec![],
+            confidence: 0.5,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+            shipped_at: None,
+            // No `metric_surface: ...` line here. If the struct definition
+            // gains that field without a serde default, this literal fails to
+            // compile ("missing field `metric_surface`"), surfacing the
+            // change to whoever runs this test.
+        };
+        assert!(h.success_criterion.is_none());
+        assert!(h.kill_criterion.is_none());
+    }
 }

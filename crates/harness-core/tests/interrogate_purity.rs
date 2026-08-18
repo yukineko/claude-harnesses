@@ -107,6 +107,8 @@ fn forbidden_token_scan_detects_planted_io_and_ignores_doc_comments() {
         !code_only.contains("//!"),
         "doc-comment line must be stripped"
     );
-    let hit = FORBIDDEN_IO_TOKENS.iter().any(|tok| code_only.contains(tok));
+    let hit = FORBIDDEN_IO_TOKENS
+        .iter()
+        .any(|tok| code_only.contains(tok));
     assert!(hit, "planted std::fs call in code must be detected");
 }

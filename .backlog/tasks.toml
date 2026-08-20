@@ -11808,6 +11808,62 @@ human-0 chain の契約を検査するスクリプト) を実行したところ�
 
 **未検証**: 他のスクリプト (scripts/ 配下、各 crate の hooks) が同様に bare `backlog` を
 引いていないか。見分け方: `grep -rn 'command -v backlog\|which backlog\|[^/]backlog ' scripts/ crates/*/hooks/`。
+
+--- 追記 2026-08-20 (測定点 3e3a9a48、WSL2): shadow は今も生きており、legacy ストアは今も書かれている ---
+
+【まだ直っていないことの観測】
+
+    $ type -a backlog
+    backlog is /home/hiroyuki_nakayama/.cargo/bin/backlog          <- 2026-07-23 18:05、1438128 bytes
+    backlog is /home/.../plugins/cache/yukineko/backlog/0.2.27/bin/backlog
+
+    $ backlog list --status pending | wc -l                          -> 185 (legacy 全件、project 無視)
+    $ .../0.2.27/bin/backlog list --status pending | wc -l            ->  14 (repo ストア、project 絞り)
+
+起票時 (2026-08-17) は cache が 0.2.26 だったが 0.2.27 でも同じ。PATH 順は不変。
+
+【新しい事実: これは残留物ではなく、shadow されたバイナリが今も legacy へ書いている】
+
+移設対象になった harness の pending 54 件の created_at は 2026-07 が 18 件、2026-08 が 36 件で、
+最新は 6354ae7a の 2026-08-20 07:23Z。ccdb762a が 490 件を回収した 2026-08-11 より後である。
+legacy ファイルの mtime は 2026-08-20 17:57。決定的な 1 例として、本セッションで自分が打った
+`backlog done 772dff08` の結果は legacy 側にしか存在しない (`grep -c 772dff08`: legacy 1 / repo 0)。
+つまり shadow は「古い読み取り」だけでなく「新規書き込みの行き先」でもあり、回収しても回収しても
+埋め戻される構造になっている。
+
+【移設によって、この p0 の実害が一段上がった】
+
+2026-08-20 に harness の pending 54 件を legacy から repo ストアへ移設した (commit 3e3a9a48)。
+その直後の実測:
+
+    $ backlog list --status pending | wc -l          -> 128   (= legacy の残り 127 + header)
+    $ backlog list --status pending | grep -c 6354ae7a -> 0   (移設した item は 1 件も見えない)
+
+bare `backlog` を呼ぶ全消費者 (flow skill の next --claim、autoflow の Stop hook、daily、
+overwatch aggregate の shell_soft 経由の SessionStart バナー) は、この shadow が残る限り
+移設した 54 件を「存在しないもの」として読む。移設前は「legacy に居るのに repo が空」で
+divergence ガードが (0.2.27 側では) 発火していたが、移設後は legacy 側に harness の項目が
+無くなるので **stale 側からは発火すべき差分そのものが消える** — 沈黙が「キューが空」に見える形が
+より強くなった。
+
+【試みて、できなかったこと (やっていないことは、やっていないと書く)】
+
+修正 (`cp ~/.claude/plugins/cache/yukineko/backlog/0.2.27/bin/backlog-linux-x86_64
+~/.cargo/bin/backlog`) を実行しようとしたが、**Claude Code の permission classifier が
+このコマンドを拒否した** ("Blocked by classifier")。PATH 上の実行ファイルの上書きは
+classifier の管轄であり、別ツールで迂回するのは拒否の意図に反するので行っていない。
+したがって **PATH 上の backlog は依然として 2026-07-23 版のままである。**
+バックアップだけは取得済み: `~/.cargo/bin/backlog.bak-stale-20260820`。
+
+【修正案 2 つ (どちらもユーザーの実行が必要)】
+
+  (1) `cp ~/.claude/plugins/cache/yukineko/backlog/0.2.27/bin/backlog-linux-x86_64 ~/.cargo/bin/backlog`
+      — 即効だが、次の bump で再び stale 化する (このチケットが再発する)。
+  (2) `rm ~/.cargo/bin/backlog` (hypothesis / fugu-router も同様)
+      — PATH は plugin bin dir へ落ち、Claude Code がセッションごとに現行 version dir を
+      解決するので rollout に追従する。**こちらが本筋。**
+      ただし Claude session 外の素の shell には plugin bin dir が PATH に無いため、
+      そこでは bare `backlog` が使えなくなる。その運用を捨てて良いかはユーザー判断。
 '''
 created_at = 1786943298
 updated_at = 1786951292
@@ -12281,9 +12337,7 @@ id = "6ab40021"
 title = "taintguard の trigger 発火率を observe-only で実測し、有効化を判断する (build≠validate)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 6ab40021 --status pending"
 created_at = 1785301258
@@ -12295,9 +12349,7 @@ id = "fb6b1796"
 title = "GATE crate 定義が4箇所で不一致 — taintguard が3箇所で欠落 (ratchet:101-106 / pre-push:88 / CLAUDE.md:361 は6件、rollout-plugins.sh:128 だけ7件)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = """
 実装完了・検証済み・未 merge (2026-08-04, session-07084856)。
@@ -12320,9 +12372,7 @@ id = "7e61998a"
 title = "docs/gate-taxonomy.md と docs/autoflow-verdict-audit.md の stale citation 約13件を修正 (check-doc-claims が [exempt] で検出)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p3",
-]
+tags = ["p3"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 7e61998a --status pending"
 created_at = 1785303114
@@ -12334,9 +12384,7 @@ id = "60cf39ab"
 title = "stuckguard が inject→RED→revert の TDD プロトコルを revert-thrash と誤検知する (F→P オラクルと衝突)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 60cf39ab --status pending"
 created_at = 1785303115
@@ -12348,9 +12396,7 @@ id = "938757e3"
 title = "テスト docstring が検証していない性質を主張している (enforce_is_the_catch_all_not_a_default / absent_or_garbage_env_still_enforces) — §4 の嘘コメントと同型"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 938757e3 --status pending"
 created_at = 1785304313
@@ -12362,9 +12408,7 @@ id = "a6f165cd"
 title = "check-plugin-rollout.py が「意図的に parked」を表現できず二値 (enabled / silently guards nothing) — taintguard の計測待ち parked が永久に red になる"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit a6f165cd --status pending"
 created_at = 1785305300
@@ -12376,9 +12420,7 @@ id = "3e2aade5"
 title = "hooks docs の scope 争い未決: permissionDecision 省略が defer 相当か (「exit 0 with no output」限定説あり) / systemMessage が model 不可視か。3 agent の報告が不一致、逐語で段落ごと再読が必要"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 3e2aade5 --status pending"
 created_at = 1785310500
@@ -12390,9 +12432,7 @@ id = "aaff04c5"
 title = "condukt schedule が task 文中の => を blastguard の Bash 検出器に食わせて high-risk irreversible と誤 gate (A/B で確認、矢印だけの差) — 文章を書き換えて gate を回避する圧力になる"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit aaff04c5 --status pending"
 created_at = 1785310501
@@ -12404,9 +12444,7 @@ id = "7e824e70"
 title = "condukt state gate が t2/t4 を verified にできない: tdd oracle に RED 記録が無く、agent は RED 捏造を拒否した。cargo 経由の RED/GREEN を oracle が受け取れない経路の問題"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 7e824e70 --status pending"
 created_at = 1785310502
@@ -12418,9 +12456,7 @@ id = "7ad1eb28"
 title = "guard-maintree-bash.py が worktree 内からの 2>&1 を含む git コマンドを main tree 変更と誤検知 (tokenizer が & を相対パス解決している疑い)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 7ad1eb28 --status pending"
 created_at = 1785311892
@@ -12446,10 +12482,10 @@ crates/blastguard/src/detect.rs:519 detect_write() が、内容も存在も見�
 protected_path_deny() を通す:
 
     // BEFORE the config-file allowlist, not after
-    if let Some(deny) = protected_path_deny(\"Write\", &path) { return deny; }
+    if let Some(deny) = protected_path_deny("Write", &path) { return deny; }
     if exclude::is_config_file(&path) { return Decision::Allow; }
 
-is_protected_path(\".claude/hooks/*\") が true なら即 Deny。新規作成か上書きか、
+is_protected_path(".claude/hooks/*") が true なら即 Deny。新規作成か上書きか、
 中身が何かを一切見ない。Write/Edit/cp/mv/リダイレクト/rm すべて同様。
 Ask にも落ちず hard deny。override 環境変数も exclusion 設定も無い
 (BLASTGUARD_ASK は ask の有無を変えるだけ)。
@@ -12499,9 +12535,7 @@ id = "21b7b1a7"
 title = "check-gate-crates-sync.py を .githooks/pre-commit の run リストに配線する (現在どのフックからも呼ばれず、GATE_CRATES drift が検出されないまま残っている)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 21b7b1a7 --status pending"
 created_at = 1785376999
@@ -12513,9 +12547,7 @@ id = "6803bd45"
 title = "mutategate/fetchguard が ~/.claude/settings.json の enabledPlugins に未登録 — 事故か意図かユーザーに確認する"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = """
 2026-07-30 実測: jq で ~/.claude/settings.json の enabledPlugins を確認したところ fetchguard@yukineko / taintguard@yukineko / mutategate@yukineko の3つが ABSENT。taintguard 分は既存項目 e4687aad が、fetchguard 分は a9ff687e がカバーするので、本項目は mutategate と『そもそも意図的に無効化されているのか』の判断部分に限る。意図なら a9ff687e / e4687aad の前提も崩れる。
@@ -12529,9 +12561,7 @@ id = "079b643f"
 title = "blastguard: 2>&1 の直後が ) だと '1' への truncating redirect と誤検知 (redirect_targets の fd_dup_amp スキャンが ) で break しないが target スキャンは break する非対称。detect.rs:1483-1496 vs 1541-1548)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 079b643f --status pending"
 created_at = 1785377010
@@ -12543,9 +12573,7 @@ id = "6cc3c641"
 title = "statusLine の ctxrot パスがバージョン固定 — bump のたびに stale 化する"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = """
 ~/.claude/settings.json の statusLine.command が /home/.../cache/yukineko/ctxrot/<VERSION>/bin/ctxrot statusline とバージョンを絶対パスに埋め込んでいる。rollout-plugins.sh はこのパスを書き換えないので、ctxrot を bump するたびに (a) statusline が古いバイナリを実行し続け、(b) 旧 version dir が settings.json に pinned 扱いで prune できず、check-plugin-rollout.py が毎回 drift を報告する。OBSERVED 2026-07-30: repo が 0.5.21 の間 statusline は 0.5.20 を指しており、フリート rollout が FAILED を返した。今回は 0.5.21 へ手で書き換えて解消したが、これは対症療法で次の bump で必ず再発する。
@@ -12601,9 +12629,7 @@ id = "6e4c5024"
 title = "backlog の「要人間 / agent不能」注記を棚卸しする (実測 2 件が誤り: blastguard は deny ではなく ask を返す)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 6e4c5024 --status pending"
 created_at = 1785806535
@@ -12615,9 +12641,7 @@ id = "82ba4a00"
 title = "overwatch launcher を fail-closed にする: バイナリ欠落時 rc=0 (実測) で GATE が無音素通り。crates/ctxrot/tests/launcher_missing_binary.rs が定める『欠落は CANNOT-DETERMINE、machine-consumed subcommand は非0』契約に違反"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 82ba4a00 --status pending"
 created_at = 1785809526
@@ -12629,9 +12653,7 @@ id = "dab60741"
 title = "check-plugin-rollout.py を定期実行に配線する: 16 件の rollout drift を検出できていたが誰も走らせておらず guard 系 6 plugin が無音停止していた"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit dab60741 --status pending"
 created_at = 1785809527
@@ -12643,9 +12665,7 @@ id = "352d2bf6"
 title = "overwatch の mirror 不一致が構造的に再発する: build-plugin-bin.sh は 'cargo build -p <crate>' で crates/*/bin/ に stage、rebuild-plugins.sh は 'cargo build --workspace --bins' で cache に配置し、同一 source から異なるバイト列 (md5/size 相違を実測) を生むため check-plugin-rollout.py の file-for-file 比較が必ず落ちる。どちらかの build 経路に寄せる"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 352d2bf6 --status pending"
 created_at = 1785809904
@@ -12657,9 +12677,7 @@ id = "3611eb66"
 title = "build-plugin-bin.sh の冒頭コメント『The committed per-platform binaries are what /plugin install ships』が .gitignore:37 (crates/*/bin/*-linux-x86_64 を無視) と矛盾する。commit されない前提に合わせて記述を直す"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 3611eb66 --status pending"
 created_at = 1785809905
@@ -12715,9 +12733,7 @@ id = "ff95f88e"
 title = "taintguard gate が AEGIS の worker ワークフローと構造的に非互換 — Read を 1 回でもした turn は write 系が全滅し、既存実装を読んで踏襲 + pytest で RED 実測 + git commit ができない"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = """
 2026-08-04 実測。taintguard 0.1.10 の hooks.json: PostToolUse(WebFetch|WebSearch|Read) で taint marker、PreToolUse(Bash|Write|Edit|MultiEdit|NotebookEdit) で tainted なら deny、Stop で解除。condukt run-20260804-161341-14604 の worker 3 体 (+ 再投入 2 体) が全滅し実装 0 件。無効化スイッチは TAINTGUARD_OBSERVE_ONLY=1 (README.ja.md:119 が ゲートを無効化する設定である と明記) だが、プロジェクトの settings ファイルへの env 追加は blastguard が gate 設定の編集として拒否するため Claude 側からは設定できない (正しい挙動)。要ユーザー判断: (a) 人手で env を入れる (hook env はプロセス起動時解決なのでセッション再起動が要る可能性) (b) worker に Read を一切させない設計にして回避する (残作業が Write/Bash のみのタスクには有効) (c) taintguard 側に AEGIS worker 向けの例外を入れる。
@@ -12771,9 +12787,7 @@ id = "2a15dba6"
 title = "stop-verify-worktree.py の git timeout 15s が /mnt/c で不足し、clean な main tree でも UNDETERMINED block になる"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = "実測 2026-08-17 16:01-16:02 (測定点 f1131a36): Stop hook が UNDETERMINED (git status を読めなかった) で block したが、直後に同じ cwd で git status --porcelain を手で実行すると rc=0 かつ出力空 = main tree は clean。つまり dirty 判定ではなく判定不能側で落ちている。同時刻に .git/index.lock (0 byte) が残存し、live な git プロセスは無し。time git status --porcelain = 9.47s。_git() の timeout=15 に対し /mnt/c (WSL2 9p) のレイテンシと並行負荷で超過し subprocess.TimeoutExpired -> None -> block、その際に index.lock を残した、というのが最有力仮説 (未検証)。block 自体は fail-closed として正しい挙動なので、直すのは timeout 値と、timeout 時に自分が残す index.lock の後始末の側。"
 created_at = 1786950165
@@ -12785,9 +12799,7 @@ id = "310a6d56"
 title = "condukt schedule が 'AD アカウントを削除する実装を追加' を high-risk irreversible として force-gate する（キーワード誤検知の疑い）"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = """
 測定: 2026-08-18、condukt 0.7.138、run-20260818-103956-28372。
@@ -12813,9 +12825,7 @@ id = "b0ff8c74"
 title = "backlog のプロジェクトキーが git show-toplevel なので worktree から起票した課題が捨てられるパスに紐づき見えなくなる (CLAUDE.md 第8節との構造矛盾・本セッションで9件が実際に孤立)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = """
 実測 2026-08-18, 測定点 01deeab2。
@@ -12917,9 +12927,7 @@ id = "fb85e502"
 title = "condukt 0.7.139 の plugin cache が不完全 (launcher のみ / プラットフォームバイナリと .deployed-from.json 欠落)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = """
 実測 2026-08-18, 測定点 01deeab2:
@@ -12938,7 +12946,7 @@ Claude Code が marketplace の最新 = 0.7.139 を CLAUDE_PLUGIN_ROOT に解決
 サブコマンドごとに fail-closed を設計している ('everything else -> exit 1'、editgate は
 UNCHECKED マーク、restore は散文出力)。したがって暗転 (dark) ではない。
 一方 command -v condukt は 0.7.138 を返し、condukt state autonomy-check は正常動作した
-({\"autonomous\":false} / exit 1) ので、PATH 経由の skill 呼び出しは 0.7.138 で動いている。
+({"autonomous":false} / exit 1) ので、PATH 経由の skill 呼び出しは 0.7.138 で動いている。
 
 判定不能な2つの読み: (a) rollout-plugins.sh が 0.7.139 の配布途中で失敗し不完全なまま残った実在の欠陥 /
 (b) 0.7.139 は意図的に未配布で、cache dir だけが先行作成された中間状態。
@@ -12959,9 +12967,7 @@ id = "484b01ff"
 title = "condukt Phase 1 の lessons 注入が turn を tainted にし、以降の condukt run 全体が taintguard で ask/deny に降格する"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = """
 実測 2026-08-18, 測定点 01deeab2 (worktree session-e7948728):
@@ -12995,16 +13001,14 @@ id = "26122ad8"
 title = "/flow SKILL.md の 'fork 既定バイアス' が /condukt の不変条件1 (合意は main loop のみ) と両立しない"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = """
 実測 2026-08-18, 測定点 01deeab2。
 
 /flow SKILL.md Step 3-2 は逐語で: 'この /condukt 呼び出しは既定で fork(subagent_type の一種)に包んで実行する。例外はタスクが xs 級・単発ファイルで、ユーザーが経過を対話的に見たいと明示した場合のみ直接(inline)実行'。
 
-一方 /condukt SKILL.md の不変条件1 は逐語で: '合意は main loop のみ — AskUserQuestion はこの skill (main) でしか使えない。合意未了のタスクを実装に渡さない'。かつ Phase 3 は condukt state autonomy-check が非自律 ({\"autonomous\":false} / exit 1) のとき '従来どおり。下記の AskUserQuestion で合意を取る(後方互換。既定では必ず合意 Ask が出る)' と規定。
+一方 /condukt SKILL.md の不変条件1 は逐語で: '合意は main loop のみ — AskUserQuestion はこの skill (main) でしか使えない。合意未了のタスクを実装に渡さない'。かつ Phase 3 は condukt state autonomy-check が非自律 ({"autonomous":false} / exit 1) のとき '従来どおり。下記の AskUserQuestion で合意を取る(後方互換。既定では必ず合意 Ask が出る)' と規定。
 
 fork 契約は 'No follow-up questions' かつ 'Do NOT spawn subagents with the Agent tool' なので、fork 内では (a) Phase 3 の合意 Ask が出せず、(b) Phase 1 interpreter / Phase 5 worker / Phase 6 verifier の subagent 起動もできない。
 
@@ -13027,15 +13031,13 @@ id = "a2591172"
 title = "guard-maintree-bash.py が相対パスを cwd ではなく CLAUDE_PROJECT_DIR (main tree) に解決し、worktree 内の正当な変更を拒否する"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
-notes = """
+notes = '''
 実測 2026-08-18, 測定点 01deeab2。
 
 再現: EnterWorktree ツールで /mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-e7948728 に入った状態 (手動 cd ではない) で、Bash から相対パスの mutation を実行:
-  mkdir -p .scratch && echo ok && ls -d .scratch && grep -n '^\\.scratch' .gitignore
+  mkdir -p .scratch && echo ok && ls -d .scratch && grep -n '^\.scratch' .gitignore
 → guard-maintree-bash.py が Refused: '... mutates this project MAIN working tree'。
 
 しかし同一セッションの同一 Bash から測った事実は worktree であることを示す:
@@ -13046,7 +13048,7 @@ absolute-git-dir != git-common-dir なので check-worktree-isolation.py と同�
 
 対照実験 (同じ turn で実施): Write ツールで **絶対パス** /mnt/c/.../session-e7948728/.scratch/decomp.json に書いた場合は guard-maintree-edit.py が許可し成功した。つまり拒否は『worktree 判定の失敗』ではなく『相対パスの解決先』の問題である可能性が高い。
 
-また Bash 環境では CLAUDE_PROJECT_DIR が unset だが、hook のコマンドラインは python3 \"$CLAUDE_PROJECT_DIR/scripts/guard-maintree-bash.py\" であり hook 側には設定されている (main tree を指しているはず)。
+また Bash 環境では CLAUDE_PROJECT_DIR が unset だが、hook のコマンドラインは python3 "$CLAUDE_PROJECT_DIR/scripts/guard-maintree-bash.py" であり hook 側には設定されている (main tree を指しているはず)。
 
 判定不能な2つの読み: (a) guard が相対パス target を CLAUDE_PROJECT_DIR 基準で解決しており、worktree cwd を見ていない実在の欠陥 / (b) guard が git 判定自体を CLAUDE_PROJECT_DIR で cwd 指定して実行しているため、worktree にいても main tree の判定になる。
 
@@ -13055,7 +13057,7 @@ absolute-git-dir != git-common-dir なので check-worktree-isolation.py と同�
 影響: worktree 内で相対パスの mutation (mkdir/rm/リダイレクト/sed -i 等) が全て拒否される。ユーザーは絶対パスへ書き換えるか専用ツールを使う回避を強いられる。CLAUDE.md 第8節が『ゲートが他セッションの変更を自分のものとして要求してきたら帰属のバグ』と述べる類型であり、共有 skip ファイルで黙らせてはならない。回避策として絶対パスを使ったので作業自体はブロックされていないが、帰属は誤っている。
 
 ---
-再キー: 元 id ae30502a として /mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-e7948728 のプロジェクトキーで起票されていたものを /mnt/c/Users/hiroyuki_nakayama/src/harness へ移送した (2026-08-18)。理由は backlog b0ff8c74 (worktree から起票すると削除予定のパスに紐づく構造矛盾)。"""
+再キー: 元 id ae30502a として /mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-e7948728 のプロジェクトキーで起票されていたものを /mnt/c/Users/hiroyuki_nakayama/src/harness へ移送した (2026-08-18)。理由は backlog b0ff8c74 (worktree から起票すると削除予定のパスに紐づく構造矛盾)。'''
 created_at = 1787033488
 updated_at = 1787033488
 weight = 0.0
@@ -13065,16 +13067,14 @@ id = "5e5cf0a9"
 title = "condukt の serial 経路 (main tree で実装) は CLAUDE.md 第8節に反し、pre-commit の worktree-isolation ゲートで機械的にブロックされて完走不能"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = """
 実測 2026-08-18, 測定点 01deeab2。
 
 再現: 4 タスクの decomposition (各タスクが自分の plugin の version を bump するため全員が .claude-plugin/marketplace.json を touched_files に持つ) を condukt schedule に掛けると全タスクが serial に降格する:
   condukt schedule --file .scratch/decomp.json
-  -> {\"batches\":[],\"serial\":[\"t3\",\"t1\",\"t2\",\"t4\"],\"warnings\":[\"task 't1' file-overlaps another parallel task -> serial (overlap is authoritative over class)\", ... 4件]}
+  -> {"batches":[],"serial":["t3","t1","t2","t4"],"warnings":["task 't1' file-overlaps another parallel task -> serial (overlap is authoritative over class)", ... 4件]}
 
 condukt SKILL.md (0.7.138) は serial の実装方法を逐語で 'serial タスクは worktree に出さず main で順に実装する' と規定し、commit は condukt repo commit で main の作業ツリーに行う。
 
@@ -13101,9 +13101,7 @@ id = "ffd18a4d"
 title = "condukt worktree create が 45s timeout 後も git を完走させ、locked な worktree を残しつつ「作成失敗」と報告する (orphan 蓄積の原因)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = """
 実測 2026-08-18, 測定点 01deeab2, run-20260818-143719-13654。
@@ -13112,10 +13110,10 @@ notes = """
 
 再現: /mnt/c (WSL2 drvfs) のチェックアウトで
   condukt worktree create --run run-20260818-143719-13654 --topic t3 --branch condukt/t3
-→ stderr (逐語): \"condukt: could not create worktree for branch 'condukt/run-20260818-143719-13654/t3' at
+→ stderr (逐語): "condukt: could not create worktree for branch 'condukt/run-20260818-143719-13654/t3' at
    /mnt/c/tmp/aegis-worktrees/run-20260818-143719-13654-t3: git [worktree, add, -b,
    condukt/run-20260818-143719-13654/t3, --, /mnt/c/tmp/aegis-worktrees/run-20260818-143719-13654-t3]
-   in <cwd> timed out after 45s and was killed\"
+   in <cwd> timed out after 45s and was killed"
 
 ## 「失敗」報告に反して残っていたもの (すべて観測値)
 
@@ -13207,9 +13205,7 @@ id = "05ff628c"
 title = "SessionStart hook が condukt/compass を 'No such file or directory' と報告するが実際は PATH 上にある"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = """
 実測 2026-08-18, 測定点 01deeab2: SessionStart hook 出力に '(unknown: `condukt` could not be run (No such file or directory (os error 2)); this is NOT a report that condukt is empty)' と '(unknown: `compass` could not be run ...)' が出る。しかし同一セッションの Bash から command -v condukt は /home/hiroyuki_nakayama/.claude/plugins/cache/yukineko/condukt/0.7.138/bin/condukt を返し、compass も 0.1.17/bin/compass を返す。両方とも PATH 上に実在する。
@@ -13229,9 +13225,7 @@ id = "407228d6"
 title = "hypothesis の awaiting_debt() は fail-soft (パース不能で oldest=0) なので Stop ゲートから再利用すると fail-open になる"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = """
 実測 2026-08-18, 測定点 01deeab2: crates/hypothesis/src/hooks/session_start.rs:172
@@ -13261,9 +13255,7 @@ id = "23d35b19"
 title = "tdd の strict_separation が既定無効なため、CLAUDE.md 第2節(a) 「テストは利害関係のない Agent が書く」が機械強制されていない"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = """
 実測 2026-08-18, 測定点 01deeab2。
@@ -13298,9 +13290,7 @@ id = "6290d67f"
 title = "main が赤い: integration-tests の contract_a_pending_item_is_announced が決定論的に落ちる (flow propose が pending 1 件ある状態で exit 0 かつ stdout 空 = 沈黙を「作業なし」に写している)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = """
 実測 2026-08-18, 測定点 01deeab2 (main の HEAD)。
@@ -13313,7 +13303,7 @@ notes = """
 
   thread 'contract_a_pending_item_is_announced' (5243) panicked at
     crates/integration-tests/tests/e2e.rs:196:5:
-  propose must report the pending count '1 件', got: \"\"
+  propose must report the pending count '1 件', got: ""
   test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out;
     finished in 0.93s
 
@@ -13385,9 +13375,7 @@ id = "47972db9"
 title = "CLAUDE.md:361 が fmt/clippy の強制点を CI と書いているが §7 で CI は全面禁止され、実際の強制点は donegate.toml (Stop 時) である"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = """
 実測 2026-08-18, 測定点 01deeab2。
@@ -13400,8 +13388,8 @@ CLAUDE.md:361 の逐語: 「CI ゲートは **fmt + clippy を強制**する。�
   grep -n fmt   .githooks/pre-commit  -> ヒット無し
   grep -n fmt   .githooks/pre-push    -> ヒット無し
   grep -n clippy .githooks/pre-commit .githooks/pre-push -> ヒット無し
-  donegate.toml:29-30  name = \"fmt\"    cmd = cargo fmt --all -- --check
-  donegate.toml:35-36  name = \"clippy\" cmd = cargo clippy --workspace --all-targets -- -D warnings
+  donegate.toml:29-30  name = "fmt"    cmd = cargo fmt --all -- --check
+  donegate.toml:35-36  name = "clippy" cmd = cargo clippy --workspace --all-targets -- -D warnings
 
 つまり fmt/clippy は機械強制されている。強制点は donegate (Stop ゲート) であって CI ではない。
 CLAUDE.md:299 は既に「donegate の required check は workspace 全体 (cargo fmt --all / cargo clippy --workspace) を見る」と正しく書いているので、:361 だけが古い。
@@ -13422,9 +13410,7 @@ id = "ff17a108"
 title = "harness 拡張 T1-T4 の実装を完了する (condukt run run-20260818-143719-13654 / t3 はテストのみで実装 0 行)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = """
 2026-08-18 セッション e7948728 の残作業。RID とスコープが worktree 内の .scratch/RESUME.md にしか無く、worktree 削除で失われるため backlog に固定する。
@@ -13452,9 +13438,7 @@ id = "a8f0b77f"
 title = "/session-insights:record が repo 外の Obsidian ノートを Read するため taintguard 有効時に保存できない (observe-only に依存している)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = """
 実測 2026-08-18, セッション e7948728。
@@ -13480,9 +13464,7 @@ id = "449fc610"
 title = "taintguard の taint は自セッションの Read 以外からも populate される (lessons 源を実測)"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p1",
-]
+tags = ["p1"]
 status = "pending"
 notes = "実測 2026-08-18, 測定点 01deeab2。observe-only ledger /home/hiroyuki_nakayama/.taintguard/state/session-e7948728-c2f0fa5e/observe-only.jsonl の 55 エントリのうち 14:26:13-14:48:32 の 50 件は sources=lessons であり、当該 subagent は lessons ストアを一度も読んでいない。つまり taint はそのセッションの ID を共有する親セッションまたは hook によっても書かれる。含意: CLAUDE.md の 一時ファイルは worktree の .scratch に置けば Trusted だから安全 という指示は不十分で、自分が外部を一切読まなくても親経由で turn が汚れうる。TAINTGUARD_OBSERVE_ONLY=1 が外れた環境では同じ手順が deny されえる。判定不能として残す点: 15:18:32 に sources が external-read へ切り替わった具体的な原因パスは ledger がツール名と源ラベルとセッション ID しか持たないため特定できていない。見分ける方法: ledger に源となった Read の解決済みパスを記録するフィールドを足せば A(自分の .scratch Read) と B(親の repo 外 Read) を分離できる。関連 a8f0b77f。"
 created_at = 1787034955
@@ -13494,9 +13476,7 @@ id = "25c5f26a"
 title = "observe-only では taint.json が書かれないため tainted 判定の根拠が観測不能"
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
-tags = [
-    "p2",
-]
+tags = ["p2"]
 status = "pending"
 notes = "実測 2026-08-18。/home/hiroyuki_nakayama/.taintguard/state/sessions/e7948728-ff5d-448a-a619-74802ac249ef/ は空 (mtime のみ更新)。state 配下の taint.json は 24 個すべて sessions/<id>/taint.json の深さ 3 で、プロジェクト単位のものは無い。observe-only モードでは ledger にのみ追記して taint.json を書かないように見えるが、それでは check 側が何を読んで tainted と判定したのかを外部から追跡できない。これは判定の入力が観測不能という意味で CLAUDE.md 第2節の 判断ではなく観測 に反する。少なくとも observe-only の ledger エントリに、判定に使った state ファイルのパスと読み取った sources の出所を含めるべき。起票時点で これがバグか意図的な設計かは判定できていない ので両方の読みを残す: (a) observe-only は state を汚さない設計で意図的 (b) 判定根拠が消えているので欠陥。見分ける方法: crates/taintguard の check 経路が observe-only 時に taint state をどこから読むかをコードで辿る。"
 created_at = 1787034964
@@ -13574,3 +13554,45 @@ notes = ""
 created_at = 1787210594
 updated_at = 1787210594
 weight = 0.0
+
+[[task]]
+id = "7d8ab7fe"
+title = "specforge の spec ratify が tempdir から machine-local backlog ストアへ実起票する (/tmp/.tmpXXXX project の junk 2 件を実測)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = '実測 2026-08-20、測定点 dba4e50d、WSL2。machine-local ストア ~/.backlog/tasks.toml の pending に project="/tmp/.tmpsYSvwG" と project="/tmp/.tmpWIjVKj" の 2 件があり、どちらも title が "[login:R1] 同一IPから60s内に5回失敗で429"、notes は逐語で "specforge が spec login の requirement R1 から自動起票 (ratify 時)"。つまり specforge の ratify 経路が tempdir を cwd として実行され、repo root が見つからないため config.rs の tasks_path_for が step 3 (legacy ~/.backlog へのフォールバック) に落ち、テストのフィクスチャがユーザーの実キューへ着地している。実害: 実プロジェクトのキューには永久に現れない junk が溜まり続ける (a4966045 が mac 側で同クラス 6 件を計上済み。今回の 2 件は WSL 側で、同じ現象が両マシンで起きている)。tasks_path_for の step 3 は「repo root が無い path を発明しない」ための意図的な設計なので、直すべきは呼び出し側 — テスト/ratify が実ストアへ書かないよう HOME か store_dir を隔離すること。判定不能な点: (a) specforge のテストが隔離を忘れている実装欠陥か (b) ratify を tempdir で回す運用そのものが想定外か。見分ける方法: crates/specforge の ratify テストが HOME/BACKLOG の store_dir をどう設定しているかを読み、実 add を呼ぶ経路が test 専用か本番共通かを確認する。関連: a4966045 (junk エントリの掃除)、e664320a (specforge が backlog/condukt/overwatch を迂回する executor である件)、5ba13c3e。今回の harness 移設 (54 件) ではこの 2 件は harness の問題ではないので移設せず legacy に残した。'
+created_at = 1787217060
+updated_at = 1787217060
+weight = 0.0
+issue_number = 372
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/372"
+
+[[task]]
+id = "d182ed78"
+title = "machine-local backlog ストアに aegis 65 / ai-aegis 61 の pending が残る — repo 別ストアへ移す経路が CLI に無い"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-08-20、測定点 dba4e50d。harness の 54 件を repo ストアへ移設した後の ~/.backlog/tasks.toml は 855 件 (pending 127 / done 725 / failed 3)。pending 127 の内訳は /mnt/c/Users/hiroyuki_nakayama/src/aegis 65、/mnt/c/Users/hiroyuki_nakayama/src/ai-aegis 61、project 空 2 (e1a0c880 aegis_logs の validationAction、a8506b1a payload.severity=warning の産出者)、/tmp junk 2 (7d8ab7fe で別途起票)。これらは harness ではないので今回移設していないが、5ba13c3e で入れた divergence 検出は「そのプロジェクトのストアが空なのに legacy に居る」ときに発火する設計なので、aegis/ai-aegis の checkout で backlog を叩いたときに同じ罠が残っている。障害: CLI に migrate サブコマンドが無い (add/list/next/done/fail/edit/session-start/install/uninstall/lock/driver — 5ba13c3e の棚卸しで既に記録済み)。移設は毎回スクリプト手作業になり、その手作業自体が bd6d81df (lost update) のリスク経路になる。完了条件の案: (1) backlog migrate --to-repo <root> を実装し、project ラベルで振り分けて追記＋legacy から削除まで 1 コマンドにする (id 衝突・title 衝突チェックと、削除前に移設先に存在することの確認を内蔵する)、(2) aegis / ai-aegis の 126 件を各 repo の .backlog へ移す。注意: aegis 側は 2 repo (aegis と ai-aegis) が別 project キーなので、それぞれの repo root へ振り分ける必要がある。関連: 5ba13c3e (移行の本体)、1027d0f9 (mac 側の回収漏れ f234d93f — WSL からは mac の ~/.backlog を観測できないので未判定のまま)、91fa24df (PATH shadowing で legacy が今も書かれている)。"
+created_at = 1787217082
+updated_at = 1787217082
+weight = 0.0
+issue_number = 373
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/373"
+
+[[task]]
+id = "81dfaae4"
+title = "repo ストアは git 共有なのに project ラベルが絶対パスなので、マシンをまたぐと既定 list から消える (mac ラベルの pending 258 件が WSL の既定 list に出ない)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = '実測 2026-08-20、測定点 3e3a9a48、WSL2 linux-x86_64、backlog 0.2.27。repo ストア .backlog/tasks.toml (git tracked、669 件) の pending 275 件の project 別内訳: /Users/yuki/src/harness 258、/mnt/c/Users/hiroyuki_nakayama/src/harness 12 (+ 今回の移設で 54 追加)、C:/Users/hiroyuki_nakayama/src/harness 5。WSL から 0.2.27 の list --status pending を打つと 66 行 (= /mnt/c ラベルのみ) で、mac ラベルの 258 件は既定の project フィルタで落ちる。逐語の設計意図 (crates/backlog/src/store.rs の canonicalize_project_with_marker の doc): 存在しない path は「ABSENT IS NOT UNDETERMINED」として caller のラベルをそのまま採用し、警告も出さず resolved として扱う — これは「クロスマシンで store を共有する正常系」と明記されている。つまり silent に落ちるのは仕様どおりの挙動である。だが 5ba13c3e が塞いだのは「別ファイルを読んでいたので空に見えた」であって、今度は「同じファイルを読んでいるのに project ラベルで 258 件が見えない」という同クラスの不可視が残っている。divergence.rs は legacy ストアとの差分しか見ないので、この不可視は検出対象外 (実測: 移設後の list は divergence 警告を出さない一方、258 件は依然出ない)。判定不能な点: (a) マシンごとに別キューとして扱うのが意図で、統合の必要は無い (b) 同一 repo なので 1 キューとして見えるべき。見分ける方法: 5ba13c3e / a5a14d24 (repo 優先＋machine フォールバックの二層ストア) の設計意図と、project 識別を絶対パスにしている理由 (canonical_project_id) を突き合わせ、repo 内ストアでも path を identity に使う必要があるかを判定すること。案: repo 内ストアでは project ラベルを repo 相対の固定名 (例 "." や repo 名) に正規化する。関連: 5ba13c3e、a5a14d24、b0ff8c74、03450b7c、91fa24df。'
+created_at = 1787217105
+updated_at = 1787217105
+weight = 0.0
+issue_number = 374
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/374"

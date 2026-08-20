@@ -12083,3 +12083,45 @@ updated_at = 1786952886
 weight = 0.0
 issue_number = 354
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/354"
+
+[[task]]
+id = "a22a47cb"
+title = "ネイティブ auto-compact が発火しないリグレッションの原因特定 (過去は発火、現在せず)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1787188462
+updated_at = 1787188462
+weight = 0.0
+issue_number = 362
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/362"
+
+[[task]]
+id = "8e348859"
+title = "ctxrot main.rs:1162 の虚偽コメントを訂正 (モデルは /compact を実行できない・CLAUDE.md §4)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1787188464
+updated_at = 1787188464
+weight = 0.0
+issue_number = 363
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/363"
+
+[[task]]
+id = "60128a42"
+title = "ctxrot の auto_compact_* をネイティブ設定委譲へ移行 or 撤去 (nudge は compaction を起こせない)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1787188469
+updated_at = 1787188469
+weight = 0.0
+issue_number = 364
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/364"

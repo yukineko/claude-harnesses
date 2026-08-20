@@ -32,8 +32,19 @@ fn run_with_home(payload: &str, home: &std::path::Path) -> (i32, String) {
     )
 }
 
+/// A payload whose verdict is a flat DENY, and stays one.
+///
+/// The target is deliberately OUTSIDE every safe root (see `blastguard::scope`):
+/// `rm -rf build` — the previous fixture — resolves inside the payload's own
+/// `cwd`, so since 0.2.51 it is a confined-blast-radius `Ask`. That would have
+/// turned every `"permissionDecision":"deny"` assertion below into a test of the
+/// location model rather than of the violation record, so the fixture names a
+/// system directory instead. `/usr/lib` is a real path on the hosts this suite
+/// runs on, which matters: the placement check resolves real paths, and an
+/// unresolvable one would answer "undetermined" and reach the same Deny for the
+/// wrong reason.
 fn deny_payload() -> String {
-    r#"{"session_id":"sess-1","cwd":"/tmp/blastguard-violation-test-project","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}"#.to_string()
+    r#"{"session_id":"sess-1","cwd":"/tmp/blastguard-violation-test-project","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"rm -rf /usr/lib"}}"#.to_string()
 }
 
 /// Locate the violations.jsonl file overwatch would write for a given HOME +

@@ -50,6 +50,14 @@ It matches `Bash`, `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`.
   overwrites **git internals** (`.git/**`) → denied.
 - **Edit / MultiEdit / NotebookEdit** are partial edits → always allowed.
 
+**This table lists shapes, not verdicts.** Since 0.2.51 the delete/truncate
+rows above (`rm`, `find -delete`, `truncate`, `shred`, `>`, `git clean -f`,
+`chmod -R`, `chown -R`) resolve to an `ask` instead of a `deny` when — and only
+when — every target can be *proven* to sit inside the project tree or `/tmp`;
+see [The location axis](#the-location-axis-blast-radius--0251). Anything that
+cannot be proven, leaves those roots, or touches a protected path is denied
+exactly as before.
+
 ## What it excludes (never blocks)
 
 Routine edits/deletes of repo **config files** are always allowed, even when the
@@ -84,6 +92,55 @@ allow.
 
 What an intervention actually prevented is reviewable after the fact with
 `blastguard retro` (see [Retrospective](#retrospective)).
+
+## The location axis (blast radius) — 0.2.51
+
+**Through 0.2.50 the rules judged the SHAPE of a command and never its
+LOCATION.** Measured on 0.2.50, real PreToolUse payloads piped into the hook
+binary:
+
+```text
+rm -rf target   -> deny: recursive rm (-r) can delete an entire directory tree
+rm -rf /tmp/foo -> deny: recursive rm (-r) can delete an entire directory tree
+rm -rf /usr/lib -> deny: recursive rm (-r) can delete an entire directory tree
+rm -rf /        -> deny: recursive rm (-r) can delete an entire directory tree
+```
+
+One verdict and one reason for four blast radii that differ by orders of
+magnitude. That is not a strict gate but an uninformative one, and an operator
+who cannot clear `rm -rf target` does not stop deleting `target` — they reach for
+a route with LESS analysis behind it (a python `shutil.rmtree`, a generated shell
+script, a bypass-permissions session). The false positives were pushing work out
+of the gate's sight.
+
+So 0.2.51 adds an **allowlist of safe roots** (not a denylist of dangerous paths:
+a denylist resolves the unlisted case to allow, which CLAUDE.md 3 forbids).
+Placement is three-valued in `src/scope.rs` — `Inside` / `IsRoot` / `Outside`,
+plus `Undetermined` — and **only `Inside` may relax a verdict**.
+
+- **Safe roots**: the session's `cwd` (its worktree), `CLAUDE_PROJECT_DIR`, and
+  `/tmp` / `/var/tmp` (plus `$TMPDIR`). `/`, `/usr`, `/mnt/c/Users`, `$HOME` and
+  friends can never become one (`NEVER_A_ROOT`, plus a two-component minimum).
+- **What relaxes**: when EVERY target resolves to a strict descendant of a safe
+  root, the `deny` becomes an **`ask`** — never an `allow`. Covered verbs:
+  recursive/wildcard `rm`, `find -delete` / `-exec rm`, `truncate` / `shred`,
+  truncating `>` redirects, `git clean -f`, `chmod -R` / `chown -R`.
+- **What does not** (each pinned by a test in `tests/scoped_destructive.rs`):
+  anything outside every safe root; anything that is not a literal path (`$VAR`,
+  `~`, `` `pwd` ``, `*`, `{}`); an unresolvable `cd`; a relative operand a `cd`
+  takes out of the tree; **a safe root itself** (`rm -rf .` takes `.git` with
+  it); **protected gate paths** (`.git`, `.claude/settings.json`,
+  `.githooks/**` are not excused by being nearby); **a symlink that leaves the
+  tree** (real paths are resolved first); and an unfiltered whole-tree walk such
+  as `find . -delete`.
+- **`ask` only where a human can answer.** In headless runs, condukt workers and
+  cron, `Decision::hardened` turns it straight back into a `deny`, so the
+  **autonomous-agent threat model is identical to 0.2.50**. What this buys is a
+  one-keypress confirmation for an interactive operator, and nothing else.
+- Library use (`detect::detect`) stays location-blind. The real-path resolution
+  is an injected `scope::RealPathResolver` that only the hook binary supplies, so
+  `detect` is still pure and condukt / specguard / daily's `sh -c` verdicts are
+  unchanged.
 
 ## Why it exists
 

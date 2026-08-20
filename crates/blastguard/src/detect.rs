@@ -55,10 +55,18 @@ use serde_json::Value;
 
 use crate::exclude;
 use crate::model::Decision;
-use harness_core::verdict::Verdict;
+use crate::scope::{Placement, SafeRoots};
+use harness_core::verdict::{Determination, Verdict};
 
-/// Top-level entry: dispatch on the tool name.
-pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
+/// Top-level entry WITH a location model: same dispatch as [`detect`], but the
+/// destructive-shape rules may resolve their targets and, for targets provably
+/// confined to a safe root, return an `Ask` instead of a `Deny`.
+///
+/// The hook binary calls this one (it knows the session's cwd and can
+/// canonicalise paths); [`detect`] is the no-model form every other consumer
+/// keeps using. See [`crate::scope`] for why the relaxation cannot leak into
+/// unattended execution.
+pub fn detect_scoped(tool_name: &str, tool_input: Option<&Value>, scope: &SafeRoots) -> Decision {
     match tool_name {
         "Bash" => {
             let cmd = tool_input
@@ -70,7 +78,7 @@ pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
                     // top-level entry point, so each tool call gets a full
                     // budget and no state leaks between calls.
                     ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
-                    detect_bash(c, 0)
+                    detect_bash(c, 0, &Ctx::new(scope))
                 }
                 // A Bash call IS in jurisdiction, and the command could not be
                 // read out of it (absent key, non-string value, schema drift).
@@ -95,6 +103,345 @@ pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
         // stricter one.
         _ => Decision::Allow,
     }
+}
+
+/// Top-level entry: dispatch on the tool name, with NO location model.
+///
+/// Every destructive-shape rule answers exactly as it did before
+/// [`crate::scope`] existed, because [`SafeRoots::none`] makes every placement
+/// question `Undetermined`. This is the entry point for every library consumer
+/// that hands commands to `sh -c` with no human present (condukt's check
+/// runner, specguard's forge, daily's task runner): they get the strict gate,
+/// unchanged.
+pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
+    detect_scoped(tool_name, tool_input, &SafeRoots::none())
+}
+
+/// The location model, plus the working directory the CURRENT segment resolves
+/// its relative operands against.
+///
+/// # Why there are two bases and not one
+///
+/// [`rewrite_relative_operands`] already rewrites the relative operands of the
+/// verbs [`verb_targets`] knows (`rm`, `unlink`/`rmdir`, `chmod`) into
+/// `<tracked dir>/<operand>` before any rule sees them — so for THOSE verbs the
+/// operand is already expressed relative to the session's own cwd, and using
+/// the tracked directory as the base again would double-prefix it. Every other
+/// verb (`find`, `truncate`, `shred`, `git clean`) is left untouched by that
+/// rewrite, so its relative operand really is relative to the tracked
+/// directory.
+///
+/// Getting this wrong is not cosmetic in either direction, which is why it is
+/// modelled explicitly rather than approximated:
+///
+///   * one base for everything (the session cwd) would judge
+///     `cd /usr && truncate -s 0 lib/x` against the project tree and call it
+///     confined — a weakening;
+///   * one base for everything (the tracked dir) would judge the REWRITTEN
+///     `cd crates && rm -rf ../../etc` (rewritten to `crates/../../etc`)
+///     against `<project>/crates` and land on `<project>/etc` — also a
+///     weakening, and a subtler one.
+#[derive(Clone)]
+struct Ctx<'a> {
+    scope: &'a SafeRoots,
+    /// Base for operands `rewrite_relative_operands` has already re-expressed
+    /// (the [`verb_targets`] verbs). `None` = not known, so relative operands
+    /// of those verbs cannot be placed.
+    rewritten_base: Option<&'a str>,
+    /// Base for operands that rewrite left alone. `None` = not known.
+    raw_base: Option<String>,
+}
+
+impl<'a> Ctx<'a> {
+    /// The context for a segment at the start of a command line: no `cd` seen
+    /// yet, so both bases are the session's own working directory.
+    fn new(scope: &'a SafeRoots) -> Ctx<'a> {
+        Ctx {
+            scope,
+            rewritten_base: scope.session_cwd(),
+            raw_base: scope.session_cwd().map(str::to_string),
+        }
+    }
+
+    /// The context after a `cd`/`pushd` this analysis RESOLVED to `dir`.
+    fn after_cd(&self, dir: &str) -> Ctx<'a> {
+        let raw_base = if dir.starts_with('/') {
+            Some(dir.to_string())
+        } else {
+            self.rewritten_base
+                .map(|base| format!("{}/{}", base.trim_end_matches('/'), dir))
+        };
+        Ctx {
+            scope: self.scope,
+            rewritten_base: self.rewritten_base,
+            raw_base,
+        }
+    }
+
+    /// The context after a directory change this analysis could NOT resolve
+    /// (`cd $VAR`, `cd -`, `popd`): no relative operand can be placed any more.
+    /// Absolute operands are unaffected — their placement never depended on a
+    /// base.
+    fn after_unknown_cd(&self) -> Ctx<'a> {
+        Ctx {
+            scope: self.scope,
+            rewritten_base: None,
+            raw_base: None,
+        }
+    }
+
+    /// The base to resolve a relative operand of `verb` against.
+    fn base_for(&self, verb: &str) -> Option<&str> {
+        if verb_operands_are_rewritten(verb) {
+            self.rewritten_base
+        } else {
+            self.raw_base.as_deref()
+        }
+    }
+
+    /// The safe root that contains EVERY one of `operands` as a strict
+    /// descendant, or `None` if any operand is elsewhere, is a root itself, or
+    /// could not be resolved.
+    ///
+    /// `None` is the fail-closed answer for all three of those, and the caller
+    /// must keep the Deny it already had. An empty operand list is `None` too:
+    /// "nothing to place" is not "placed inside".
+    fn confined_root<S: AsRef<str>>(&self, verb: &str, operands: &[S]) -> Option<String> {
+        self.confined(verb, operands, false)
+    }
+
+    /// Like [`Ctx::confined_root`], but a safe root ITSELF is acceptable.
+    ///
+    /// Only for verbs whose operand is not the thing destroyed: `git clean`
+    /// never removes tracked files or `.git`, and a `find` search root is
+    /// walked rather than deleted (and `find` adds its own condition on top —
+    /// see `find_is_narrowed`). `rm` must never use this: `rm -rf <project>`
+    /// takes `.git` with it, which is precisely what [`Placement::IsRoot`]
+    /// exists to keep distinguishable.
+    fn confined_root_or_root_itself<S: AsRef<str>>(
+        &self,
+        verb: &str,
+        operands: &[S],
+    ) -> Option<String> {
+        self.confined(verb, operands, true)
+    }
+
+    fn confined<S: AsRef<str>>(
+        &self,
+        verb: &str,
+        operands: &[S],
+        root_itself_ok: bool,
+    ) -> Option<String> {
+        if operands.is_empty() {
+            return None;
+        }
+        let base = self.base_for(verb);
+        let mut found: Option<String> = None;
+        for operand in operands {
+            let operand = operand.as_ref();
+            // The single choke point for "location cannot buy anything here".
+            // Every protected path IS inside this project tree, so a placement
+            // check alone would hand `truncate -s 0 .claude/settings.json` an
+            // Ask on the grounds that the file is conveniently nearby. The
+            // verb-specific rules above still emit their own, more precise
+            // Deny; this line is what stops the relaxation from reaching them
+            // at all, for every verb, including ones added later.
+            if exclude::touches_protected(operand) {
+                return None;
+            }
+            let placement = match self.scope.classify(operand, base) {
+                Determination::Known(p) => p,
+                Determination::Undetermined(_) => return None,
+            };
+            let root = match placement {
+                Placement::Inside { root, .. } => root,
+                Placement::IsRoot { root } if root_itself_ok => root,
+                Placement::IsRoot { .. } | Placement::Outside { .. } => return None,
+            };
+            // Different safe roots on one command line is fine (a `/tmp`
+            // target next to a project one); the reason string names the first.
+            found.get_or_insert(root);
+        }
+        found
+    }
+}
+
+/// True for the verbs whose relative operands [`rewrite_relative_operands`]
+/// has already re-expressed against the session cwd.
+///
+/// Kept as its own list rather than derived from [`verb_targets`] at runtime
+/// (that function needs a token slice to answer), and pinned to it by
+/// `verb_rewrite_list_matches_verb_targets` in the test module below — if a verb
+/// is added to `verb_targets` and not here, that test fails rather than this
+/// module silently resolving its operands against the wrong base.
+/// The verdict for a rule whose only objection is the SHAPE of the command:
+/// an Ask when every target resolved strictly inside a safe root, otherwise the
+/// Deny that rule always returned.
+///
+/// `verb` selects the base for relative operands (see [`Ctx::base_for`]);
+/// `action` is what the Ask calls the operation.
+fn shape_deny_or_confined_ask<S: AsRef<str>>(
+    ctx: &Ctx<'_>,
+    verb: &str,
+    action: &str,
+    targets: &[S],
+    deny_reason: &str,
+) -> Decision {
+    match ctx.confined_root(verb, targets) {
+        Some(root) => confined_ask(action, &root, targets),
+        None => Decision::deny(deny_reason),
+    }
+}
+
+impl Decision {
+    /// Second chance for a rule whose operand is NOT the thing destroyed
+    /// (`chmod -R`, `chown -R`): if the shape-only Deny stands, retry the
+    /// placement accepting a safe root itself.
+    ///
+    /// Written as a post-hoc widening rather than a flag on
+    /// [`shape_deny_or_confined_ask`] so the narrow rule stays the default: a
+    /// verb that must NOT accept its own root (every deleting verb) cannot pick
+    /// this up by forgetting to pass `false`.
+    fn or_root_itself<S: AsRef<str>>(
+        self,
+        ctx: &Ctx<'_>,
+        verb: &str,
+        action: &str,
+        targets: &[S],
+    ) -> Decision {
+        match self {
+            Decision::Deny(reason) => match ctx.confined_root_or_root_itself(verb, targets) {
+                Some(root) => confined_ask(action, &root, targets),
+                None => Decision::Deny(reason),
+            },
+            other => other,
+        }
+    }
+}
+
+/// find's own global options, which sit BEFORE the search roots and are not
+/// roots themselves.
+///
+/// `-D` takes a separate value; the rest do not. Getting this wrong is a
+/// weakening, not a cosmetic slip: reading `find -L /usr -delete` as
+/// "no search root given, so the root is `.`" would place the walk in the
+/// project tree while it really walks `/usr`.
+fn find_search_roots<'a>(rest: &[&'a str]) -> Option<Vec<&'a str>> {
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "-H" | "-L" | "-P" => i += 1,
+            "-D" => i += 2,
+            t if t.starts_with("-O") => i += 1,
+            _ => break,
+        }
+    }
+    let mut roots: Vec<&'a str> = Vec::new();
+    while i < rest.len() {
+        let t = rest[i];
+        if t.is_empty() {
+            return None;
+        }
+        if t.starts_with('-') || matches!(t, "(" | ")" | "!" | ",") {
+            break;
+        }
+        roots.push(t);
+        i += 1;
+    }
+    if roots.is_empty() {
+        // GNU find defaults to the current directory when no path is given.
+        Some(vec!["."])
+    } else {
+        Some(roots)
+    }
+}
+
+/// Predicates that make a `find` expression name a SUBSET of the tree rather
+/// than all of it.
+///
+/// Used only for the search-root-IS-a-safe-root case: `find . -name '*.o'
+/// -delete` is ordinary work, `find . -delete` empties the project. Neither is
+/// "safe" in an absolute sense — an approved Ask can still delete plenty — but
+/// the second is unbounded within the tree and stays a refusal.
+const NARROWING_PREDICATES: &[&str] = &[
+    "-name",
+    "-iname",
+    "-path",
+    "-ipath",
+    "-wholename",
+    "-iwholename",
+    "-regex",
+    "-iregex",
+    "-lname",
+    "-ilname",
+    "-mtime",
+    "-mmin",
+    "-ctime",
+    "-cmin",
+    "-atime",
+    "-amin",
+    "-newer",
+    "-newermt",
+    "-anewer",
+    "-cnewer",
+    "-size",
+    "-empty",
+    "-user",
+    "-uid",
+    "-group",
+    "-gid",
+    "-perm",
+    "-type",
+    "-xtype",
+    "-links",
+    "-inum",
+    "-samefile",
+];
+
+/// True when the expression carries at least one [`NARROWING_PREDICATES`] entry.
+fn find_is_narrowed(rest: &[&str]) -> bool {
+    rest.iter().any(|t| NARROWING_PREDICATES.contains(t))
+}
+
+/// The safe root every `find` search root sits in, or `None`.
+///
+/// Two tiers, and the second is the one that needs justifying: a search root
+/// that IS a safe root walks the whole tree (`.git` included), so it only
+/// counts as bounded work when the expression names a subset of it.
+fn find_confined_root(rest: &[&str], ctx: &Ctx<'_>) -> Option<String> {
+    let roots = find_search_roots(rest)?;
+    if let Some(root) = ctx.confined_root("find", &roots) {
+        return Some(root);
+    }
+    if find_is_narrowed(rest) {
+        return ctx.confined_root_or_root_itself("find", &roots);
+    }
+    None
+}
+
+fn verb_operands_are_rewritten(verb: &str) -> bool {
+    matches!(verb, "rm" | "unlink" | "rmdir" | "chmod")
+}
+
+/// The `Ask` for a destructive command whose every target resolved inside a
+/// safe root.
+///
+/// The wording is load-bearing in two ways: it names the ROOT (so the operator
+/// can see what "confined" was measured against, rather than trusting the
+/// word), and it carries the fixed phrase `is confined to`, which
+/// [`crate::rule_id`] keys the `scoped-destructive-confined` id on.
+fn confined_ask<S: AsRef<str>>(action: &str, root: &str, targets: &[S]) -> Decision {
+    Decision::ask(format!(
+        "{action} is confined to {root} — a safe root for this session (its project tree, its \
+worktree, or a temp dir), and every target ({}) resolved to a real path strictly inside it, \
+symlinks included. The blast radius is bounded, so this is a question rather than a refusal: \
+approve it if that is the tree you meant.",
+        targets
+            .iter()
+            .map(|t| t.as_ref())
+            .collect::<Vec<&str>>()
+            .join(" ")
+    ))
 }
 
 /// The shared wording for "this call is mine to judge and I could not read its
@@ -874,8 +1221,8 @@ fn unresolvable_command_word(cmd: &str) -> Option<String> {
 /// Deny is checked FIRST so a payload that is both destructive and partly
 /// unresolvable (`sh -c "rm -rf $DIR"` — command word `rm`, resolvable) keeps
 /// its Deny.
-fn analyze_shell_payload(payload: &str, depth: usize) -> Decision {
-    let d = detect_bash(payload, depth + 1);
+fn analyze_shell_payload(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    let d = detect_bash(payload, depth + 1, ctx);
     if d.is_blocking() {
         return d;
     }
@@ -940,7 +1287,7 @@ fn depth_exhausted() -> Decision {
 /// shell-eval wrappers, identical to the `dash_c_payloads`/`command_candidates`
 /// widening. Benign eval regions with no destructive word (`echo hi` nested to
 /// any depth) de-noise to a stream that matches no rule arm and stay ALLOW.
-fn denoised_eval_rescan(region: &str, depth: usize) -> Decision {
+fn denoised_eval_rescan(region: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // Only backslash escaping can defeat `first_shell_word` into truncating a
     // payload; without it the structured extraction already sees the region
     // correctly, so skip to preserve exact prior behaviour (and avoid de-noising
@@ -964,14 +1311,14 @@ fn denoised_eval_rescan(region: &str, depth: usize) -> Decision {
     // exec-wrapper widening in `command_candidates`: whichever position the real
     // shell would exec is guaranteed to be among them.
     for idx in 0..tokens.len() {
-        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth)) {
+        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth, ctx)) {
             return deny;
         }
     }
     acc.finish()
 }
 
-fn detect_bash(cmd: &str, depth: usize) -> Decision {
+fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // D4: when the budget is exhausted we never Allow. A command too complex to
     // analyse within a bounded amount of work must not be waved through
     // unanalysed — an unanalysed destructive command is exactly the fail-open
@@ -1011,11 +1358,31 @@ primitive, not a filesystem path",
     // *every* redirect on the line, not just the first: a safe early redirect
     // (`> /dev/null`) must not blind the gate to a later truncating redirect in
     // a subsequent `;`/`&&`/`|` segment.
+    // Asks recorded by the two line-level scans below (they run before the
+    // `VerdictAcc` the per-segment loop uses exists). They must NOT
+    // short-circuit: `echo x > target/log && rm -rf /usr` has a confined
+    // redirect AND an unconfined delete, and the Deny has to win.
+    let mut line_level_asks: Vec<Decision> = Vec::new();
     for target in redirect_targets(cmd) {
         if let Some(deny) = protected_path_block("redirect", &target) {
             return deny;
         }
         if !redirect_target_is_safe(&target) {
+            // LOCATION axis. Gated on the line containing no `cd`/`pushd`/
+            // `popd` at all: this scan runs BEFORE the per-segment cwd walk
+            // below, so it has no per-segment base to resolve a relative
+            // target against, and guessing one is how
+            // `cd /usr && echo x > lib/f` would come out "confined".
+            if !line_changes_cwd_before(cmd, usize::MAX) {
+                if let Some(root) = ctx.confined_root("redirect", &[target.as_str()]) {
+                    line_level_asks.push(confined_ask(
+                        "truncating redirect",
+                        &root,
+                        &[target.as_str()],
+                    ));
+                    continue;
+                }
+            }
             return Decision::deny(format!(
                 "'> {target}' truncates and overwrites an existing file"
             ));
@@ -1056,6 +1423,13 @@ primitive, not a filesystem path",
     // in an EARLIER segment is visible to a LATER one; see
     // `advance_cwd_and_rewrite`.
     let mut acc = VerdictAcc::default();
+    // Fold in the line-level Asks collected above, now that there is an
+    // accumulator to rank them against.
+    for ask in line_level_asks {
+        if let Some(deny) = acc.record(ask) {
+            return deny;
+        }
+    }
 
     // 2c. Egress across `|` pipelines: a fetch/decode stage feeding a
     // shell/interpreter stage downstream of it. Run BEFORE the per-segment
@@ -1090,6 +1464,16 @@ primitive, not a filesystem path",
     // maps one segment to one segment, so `seg_idx` stays the segment's index in
     // `split_segments(cmd)` — which is what that resolver's parameter means.
     for (seg_idx, seg) in split_segments(cmd).into_iter().enumerate() {
+        // The base for THIS segment's relative operands is the cwd state as it
+        // stands BEFORE the segment runs — the same state
+        // `advance_cwd_and_rewrite` rewrites the segment against — so it is
+        // computed before `cwd` is advanced. See `Ctx` for why a resolved `cd`
+        // moves only one of the two bases.
+        let seg_ctx = match &cwd {
+            CwdState::Root => ctx.clone(),
+            CwdState::Known(dir) => ctx.after_cd(dir),
+            CwdState::Unknown => ctx.after_unknown_cd(),
+        };
         let (effective_seg, extra, next_cwd) = advance_cwd_and_rewrite(&seg, &cwd, &mut aliases);
         cwd = next_cwd;
         if let Some(extra_decision) = extra {
@@ -1097,7 +1481,13 @@ primitive, not a filesystem path",
                 return deny;
             }
         }
-        if let Some(deny) = acc.record(analyze_segment(&effective_seg, depth, cmd, seg_idx)) {
+        if let Some(deny) = acc.record(analyze_segment(
+            &effective_seg,
+            depth,
+            cmd,
+            seg_idx,
+            &seg_ctx,
+        )) {
             return deny;
         }
         // High-blast Ask tier (C): an outside-tree rm/unlink. Judged on
@@ -1402,16 +1792,27 @@ fn redirect_target_is_safe(target: &str) -> bool {
 // prefix test and thereby disabled the ENTIRE truncating-redirect rule for
 // ANY target on the line.
 //
-// It was NOT replaced with a `..`-resolving version, and 0.2.20 does not
+// It was NOT replaced with a `..`-resolving version, and 0.2.20 did not
 // reinstate it even though `normalize` DOES resolve `..` now. Those are two
 // separate questions: resolving `..` removes one of the ways the carve-out
 // could be fooled, it does not make a convenience carve-out on the permissive
-// side of a gate a good idea (`~`, `$TMPDIR` and symlinks are all still
-// unresolvable here). The repo's governing rule is that a gate which fails open
-// is worse than no gate. The pre-existing (sound) behaviour stands:
-// `> /tmp/log` is DENIED. That is a false positive, which is the acceptable
-// side of the trade — the user can rephrase (`>> /tmp/log`, `2>&1`,
-// `/dev/null`) or approve manually.
+// side of a gate a good idea (`~`, `$TMPDIR` and symlinks were all still
+// unresolvable here).
+//
+// 0.2.51 UPDATE — read this together with `crate::scope`, which answers the
+// four objections above by name (`..` lexically resolved with any residue
+// Undetermined; `~`/`$VAR`/globs/`{}` refused as non-paths; `$TMPDIR` read from
+// the hook's own environment instead of expanded out of the command line;
+// symlinks resolved through an injected canonicaliser). The outcome differs
+// too, and that is the part that matters here: the deleted predicate produced
+// an **Allow**, whereas a confined placement produces an **Ask**, which
+// `crate::interactive` hardens straight back to a Deny wherever no human can
+// answer. So `> /tmp/log` is no longer a flat refusal in an interactive
+// session — it is a one-keypress question — while remaining a Deny in every
+// headless/agent context, which is where the old carve-out's fail-open would
+// have mattered. `> $TMPDIR/log` and `> /tmp/../etc/hosts` are still refused:
+// the first is an unexpanded variable, the second normalises to `/etc/hosts`
+// and lands outside every safe root.
 
 /// Quote-aware split of a command line into individual simple-command segments
 /// on `;`, newline, `&&`, `||`, `|`, `&`.
@@ -3126,7 +3527,7 @@ fn inline_command_payloads(rest: &[&str], pos: usize, inline: &str) -> Vec<Strin
 /// needs the EARLIER segments to read an expansion-valued command word back off
 /// the line (see [`resolve_expanded_command_word`]). Nothing else here uses
 /// them, and `seg` remains the only thing judged.
-fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize) -> Decision {
+fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ctx<'_>) -> Decision {
     let tokens: Vec<&str> = seg.split_whitespace().collect();
     let mut acc = VerdictAcc::default();
 
@@ -3161,14 +3562,14 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize) -> Decis
                 for payload in payloads {
                     // Shell-eval position: an unresolvable command word here is
                     // an Ask, not a silent Allow.
-                    if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth)) {
+                    if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
                         return deny;
                     }
                 }
                 // Backstop for backslash-over-escaped `flock -c` payloads that
                 // defeat the structured extraction above (99b506b7, twin of the
                 // shell `-c` arm). See `denoised_eval_rescan`.
-                if let Some(deny) = acc.record(denoised_eval_rescan(&rest.join(" "), depth)) {
+                if let Some(deny) = acc.record(denoised_eval_rescan(&rest.join(" "), depth, ctx)) {
                     return deny;
                 }
             }
@@ -3184,14 +3585,14 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize) -> Decis
     // D3: analyse EVERY candidate command-word position; deny if ANY is
     // destructive. See `command_candidates`.
     for idx in command_candidates(&tokens) {
-        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth)) {
+        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth, ctx)) {
             return deny;
         }
     }
 
     // ASK-2: an UNRECOGNISED wrapper standing in front of a destructive command
     // line. See `unknown_wrapper_ask`.
-    if let Some(deny) = acc.record(unknown_wrapper_ask(&tokens, depth, line, seg_idx)) {
+    if let Some(deny) = acc.record(unknown_wrapper_ask(&tokens, depth, line, seg_idx, ctx)) {
         return deny;
     }
 
@@ -3327,7 +3728,13 @@ fn line_changes_cwd_before(line: &str, seg_idx: usize) -> bool {
 ///
 /// Missing an ask because the real payload sat at a position this scan skipped
 /// is not a regression — that case was, and remains, the pre-existing Allow.
-fn unknown_wrapper_ask(tokens: &[&str], depth: usize, line: &str, seg_idx: usize) -> Decision {
+fn unknown_wrapper_ask(
+    tokens: &[&str],
+    depth: usize,
+    line: &str,
+    seg_idx: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
     if depth >= MAX_SHELL_DEPTH {
         return depth_exhausted();
     }
@@ -3381,7 +3788,7 @@ fn unknown_wrapper_ask(tokens: &[&str], depth: usize, line: &str, seg_idx: usize
                 // line and sits at index 0 of it. Passing the ORIGINAL
                 // `(line, seg_idx)` would be wrong: the tokens no longer come
                 // from that position.
-                let verdict = analyze_segment(&resolved, depth + 1, &resolved, 0);
+                let verdict = analyze_segment(&resolved, depth + 1, &resolved, 0, ctx);
                 // …but one thing the tokens DID carry from that position is
                 // gone, and it is not recoverable here. `advance_cwd_and_rewrite`
                 // rewrites a segment's relative operands against the cwd an
@@ -3484,7 +3891,7 @@ fn unknown_wrapper_ask(tokens: &[&str], depth: usize, line: &str, seg_idx: usize
     }
     // A DESTRUCTIVE tail asks — and so does an UNDETERMINED one.
     //
-    // This used to read `if detect_bash(&tail, depth + 1).is_deny()`, with the
+    // This used to read `if detect_bash(&tail, depth + 1, ctx).is_deny()`, with the
     // comment: "An Ask from the tail is not propagated: it would already have
     // been reported by whichever construct produced it if that construct were
     // reachable." That is a claim about reachability, and it is false.
@@ -3523,7 +3930,7 @@ fn unknown_wrapper_ask(tokens: &[&str], depth: usize, line: &str, seg_idx: usize
     // A nested ask from THIS SAME RULE propagates; see `UNKNOWN_VERB_ASK` for
     // why the forward set is that one class and what the other classes still
     // cost.
-    match detect_bash(&tail, depth + 1) {
+    match detect_bash(&tail, depth + 1, ctx) {
         Decision::Deny(_) => {
             let head = tokens[idx];
             Decision::ask(format!(
@@ -3540,7 +3947,7 @@ fn unknown_wrapper_ask(tokens: &[&str], depth: usize, line: &str, seg_idx: usize
     }
 }
 
-fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
+fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // CA-blastguard-013 (verified bypass): the command word must be UNQUOTED
     // before basename matching. `\rm -rf /some/path` (the standard alias-bypass
     // idiom) and `"rm" -rf /some/path` previously matched no rule arm and fell
@@ -3616,12 +4023,12 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
         if matches!(cmd, "eval" | "exec" | "source" | ".") && !rest.is_empty() {
             let joined = rest.join(" ");
             let inline = strip_wrapping_quotes(&joined);
-            if let Some(deny) = acc.record(analyze_shell_payload(inline, depth)) {
+            if let Some(deny) = acc.record(analyze_shell_payload(inline, depth, ctx)) {
                 return deny;
             }
             // Backstop for backslash-over-escaped payloads (99b506b7). See
             // `denoised_eval_rescan`.
-            if let Some(deny) = acc.record(denoised_eval_rescan(&joined, depth)) {
+            if let Some(deny) = acc.record(denoised_eval_rescan(&joined, depth, ctx)) {
                 return deny;
             }
         }
@@ -3629,13 +4036,13 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
         // ASK-1: likewise a shell-evaluation position — `bash -c "$CMD"` asks.
         if is_shell(cmd) {
             for payload in dash_c_payloads(rest) {
-                if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth)) {
+                if let Some(deny) = acc.record(analyze_shell_payload(&payload, depth, ctx)) {
                     return deny;
                 }
             }
             // Backstop for backslash-over-escaped payloads that defeat the
             // structured extraction above (99b506b7). See `denoised_eval_rescan`.
-            if let Some(deny) = acc.record(denoised_eval_rescan(&rest.join(" "), depth)) {
+            if let Some(deny) = acc.record(denoised_eval_rescan(&rest.join(" "), depth, ctx)) {
                 return deny;
             }
         }
@@ -3657,9 +4064,9 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
         // denied. Recognising a segment whose command word is an exec predicate
         // and routing it back through `analyze_find` restores the multi-exec
         // scan for the `\;` form without depending on where the split fell.
-        "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], depth),
-        "rm" => analyze_rm(rest),
-        "git" => analyze_git(rest),
+        "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], depth, ctx),
+        "rm" => analyze_rm(rest, ctx),
+        "git" => analyze_git(rest, ctx),
         // Round 2 (adversarial verifier): every rule in this dispatch was about
         // DELETING or TRUNCATING, so the ordinary ways of REPLACING a file's
         // contents — copying/moving/linking something over it, or rewriting it
@@ -3684,10 +4091,33 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
         "sort" => analyze_sort(rest),
         "uniq" => analyze_uniq(rest),
         "sed" => analyze_sed(rest),
-        "find" => analyze_find(rest, depth),
-        "xargs" => analyze_xargs(rest, depth),
-        "truncate" => Decision::deny("truncate can shrink a file to zero bytes"),
-        "shred" => Decision::deny("shred destroys file contents irreversibly"),
+        "find" => analyze_find(rest, depth, ctx),
+        "xargs" => analyze_xargs(rest, depth, ctx),
+        // Both of these were location-blind: `truncate -s 0 target/log.txt`
+        // and `truncate -s 0 /usr/lib/libc.so` were the same verdict. The
+        // target list is computed the same way every other rule computes one
+        // (`positional_operands`, so a `-s SIZE` value is never mistaken for a
+        // file), and a protected target cannot be relaxed — see `Ctx::confined`.
+        "truncate" => shape_deny_or_confined_ask(
+            ctx,
+            "truncate",
+            "truncate",
+            &positional_operands(
+                rest,
+                &["-s", "--size", "-r", "--reference", "-o", "--io-blocks"],
+            ),
+            "truncate can shrink a file to zero bytes",
+        ),
+        "shred" => shape_deny_or_confined_ask(
+            ctx,
+            "shred",
+            "shred",
+            &positional_operands(
+                rest,
+                &["-n", "--iterations", "-s", "--size", "--random-source"],
+            ),
+            "shred destroys file contents irreversibly",
+        ),
         "dd" => {
             if rest.iter().any(|t| t.starts_with("of=")) {
                 Decision::deny("dd with of= writes raw bytes over a device/file")
@@ -3697,7 +4127,17 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
         }
         "chmod" => {
             if has_short(rest, 'R') || rest.contains(&"--recursive") {
-                Decision::deny("recursive chmod re-permissions a whole tree")
+                // `chmod -R 755 target` and `chmod -R 000 /usr` were one
+                // verdict. A recursive chmod does not delete the tree, so a
+                // safe root ITSELF is acceptable here (unlike `rm`).
+                shape_deny_or_confined_ask(
+                    ctx,
+                    "chmod",
+                    "recursive chmod (-R)",
+                    &chmod_mode_and_targets(rest).1,
+                    "recursive chmod re-permissions a whole tree",
+                )
+                .or_root_itself(ctx, "chmod", "recursive chmod (-R)", &chmod_mode_and_targets(rest).1)
             } else {
                 // Round 3, shape 3 of the disarm-by-non-write class. Like the
                 // `rm` arm, this rule measured BLAST RADIUS (`-R`) and never
@@ -3744,7 +4184,22 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
         }
         "chown" => {
             if has_short(rest, 'R') || rest.contains(&"--recursive") {
-                Decision::deny("recursive chown re-owns a whole tree")
+                // The first positional operand of `chown` is the OWNER spec
+                // (`yuki`, `yuki:staff`), not a path — dropping it is what
+                // keeps `chown -R yuki target` from being judged as a chmod of
+                // a file called `yuki`. An operand list that is only the owner
+                // (no path at all) leaves nothing to place, and
+                // `Ctx::confined` answers `None` for an empty list.
+                let operands = positional_operands(rest, &[]);
+                let targets = operands.get(1..).unwrap_or(&[]);
+                shape_deny_or_confined_ask(
+                    ctx,
+                    "chown",
+                    "recursive chown (-R)",
+                    targets,
+                    "recursive chown re-owns a whole tree",
+                )
+                .or_root_itself(ctx, "chown", "recursive chown (-R)", targets)
             } else {
                 Decision::Allow
             }
@@ -3994,7 +4449,7 @@ fn mode_removes_read(mode: &str) -> bool {
     removes
 }
 
-fn analyze_rm(rest: &[&str]) -> Decision {
+fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     let recursive = rest
         .iter()
         .any(|t| (is_short_flag(t) && (t.contains('r') || t.contains('R'))) || *t == "--recursive");
@@ -4074,11 +4529,54 @@ fn analyze_rm(rest: &[&str]) -> Decision {
         return Decision::Allow;
     }
 
+    // LOCATION axis (see `crate::scope`), placed deliberately:
+    //   * AFTER the protected-path precedence at the top of this function, so
+    //     deleting a gate config stays a flat Deny wherever it lives;
+    //   * AFTER the config-file exemption above, which is an Allow and
+    //     therefore outranks the Ask below;
+    //   * BEFORE the shape-only Deny, which is exactly the verdict it replaces
+    //     — and only for targets that resolved strictly INSIDE a safe root.
+    //     `Placement::IsRoot` is not accepted here: `rm -rf <project>` takes
+    //     `.git` and every gate config with it.
+    let action = if recursive {
+        "recursive rm (-r)"
+    } else {
+        "wildcard rm"
+    };
+    if let Some(targets) = placeable_targets(&operands) {
+        if let Some(root) = ctx.confined_root("rm", &targets) {
+            return confined_ask(action, &root, &operands);
+        }
+    }
+
     if recursive {
         Decision::deny("recursive rm (-r) can delete an entire directory tree")
     } else {
         Decision::deny("rm with a wildcard can delete many files at once")
     }
+}
+
+/// The operands to hand a placement check, or `None` when at least one of them
+/// cannot be placed at all.
+///
+/// A glob is never resolved by this crate, so a wildcard operand is placed by
+/// the literal directory prefix it can only ever expand INSIDE (`target/*` ->
+/// `target`). A wildcard with no literal prefix (`*`, `./*`) has no such
+/// bound — `glob_literal_prefix` returns `None` — and the whole operand list is
+/// then unplaceable, which leaves the caller's Deny standing.
+fn placeable_targets<'a>(operands: &[&'a str]) -> Option<Vec<std::borrow::Cow<'a, str>>> {
+    if operands.is_empty() {
+        return None;
+    }
+    let mut out: Vec<std::borrow::Cow<'a, str>> = Vec::new();
+    for o in operands {
+        if has_glob_meta(o) {
+            out.push(std::borrow::Cow::Owned(glob_literal_prefix(o)?));
+        } else {
+            out.push(std::borrow::Cow::Borrowed(*o));
+        }
+    }
+    Some(out)
 }
 
 /// Positional operands of a simple command: tokens that are neither the
@@ -4427,7 +4925,7 @@ fn sets_hookspath_inline(globals: &[&str]) -> bool {
     })
 }
 
-fn analyze_git(rest: &[&str]) -> Decision {
+fn analyze_git(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     let idx = match git_subcommand_index(rest) {
         Some(i) => i,
         // No subcommand: still inspect the globals. A bare
@@ -4454,8 +4952,24 @@ fn analyze_git(rest: &[&str]) -> Decision {
             let has_f = has_short(rest, 'f') || rest.contains(&"--force");
             let has_d = has_short(rest, 'd');
             let has_x = has_short(rest, 'x');
+            // `git clean` never touches a tracked file or `.git` itself, so
+            // unlike `rm` it may accept a safe root as its own target — which
+            // is the common form, since the pathspec-less `git clean -fdx`
+            // means "this repository".
+            let pathspec = positional_operands(&rest[idx + 1..], &["-e", "--exclude"]);
+            let clean_targets: Vec<&str> = if pathspec.is_empty() {
+                vec!["."]
+            } else {
+                pathspec
+            };
+            let clean_confined = ctx.confined_root_or_root_itself("git", &clean_targets);
             if has_f && (has_d || has_x) {
-                Decision::deny("git clean -f with -d/-x deletes untracked files & dirs")
+                match &clean_confined {
+                    Some(root) => confined_ask("git clean -f with -d/-x", root, &clean_targets),
+                    None => {
+                        Decision::deny("git clean -f with -d/-x deletes untracked files & dirs")
+                    }
+                }
             } else if has_f {
                 // Round 2: the `&& (has_d || has_x)` conjunction read as if `-d`
                 // were what made the command destructive. It is not — it only
@@ -4463,7 +4977,10 @@ fn analyze_git(rest: &[&str]) -> Decision {
                 // deletes every untracked FILE under the pathspec, irreversibly
                 // (they are untracked, so git has no copy). `-n`/`--dry-run`
                 // carries no `f` and is unaffected.
-                Decision::deny("git clean -f deletes untracked files irreversibly")
+                match &clean_confined {
+                    Some(root) => confined_ask("git clean -f", root, &clean_targets),
+                    None => Decision::deny("git clean -f deletes untracked files irreversibly"),
+                }
             } else {
                 Decision::Allow
             }
@@ -4665,11 +5182,23 @@ working tree, like git clean",
     }
 }
 
-fn analyze_find(rest: &[&str], depth: usize) -> Decision {
-    if rest.contains(&"-delete") {
-        return Decision::deny("find -delete removes every matching file");
-    }
+fn analyze_find(rest: &[&str], depth: usize, ctx: &Ctx<'_>) -> Decision {
+    // The search roots bound everything `find` can touch, so they are what
+    // decides whether this invocation is confined. Computed once, up front,
+    // because both the `-delete` arm and every `-exec` arm need the same
+    // answer — and because the `-exec` re-analysis below substitutes the
+    // per-match placeholder with a path inside the same root.
+    let confined = find_confined_root(rest, ctx);
     let mut acc = VerdictAcc::default();
+    if rest.contains(&"-delete") {
+        match &confined {
+            Some(root) => {
+                let roots = find_search_roots(rest).unwrap_or_default();
+                let _ = acc.record(confined_ask("find -delete", root, &roots));
+            }
+            None => return Decision::deny("find -delete removes every matching file"),
+        }
+    }
     // Every -exec/-execdir/-ok/-okdir on the line, not just the first: a benign
     // early `-exec grep …` must not hide a later `-exec rm …`.
     for pos in rest
@@ -4726,7 +5255,20 @@ fn analyze_find(rest: &[&str], depth: usize) -> Decision {
             // where a token named `rm` is a string being searched for, never a
             // program being run.
             if c == "rm" {
-                return Decision::deny("find -exec rm removes every matching file");
+                match &confined {
+                    // NOT a `return`: the payload may name absolute targets of
+                    // its own (`-exec rm -rf /usr/lib`), and those are judged
+                    // by the re-analysis below. Recording the Ask and carrying
+                    // on is what keeps that Deny reachable — `VerdictAcc` ranks
+                    // a Deny found later above this Ask.
+                    Some(root) => {
+                        let roots = find_search_roots(rest).unwrap_or_default();
+                        let _ = acc.record(confined_ask("find -exec rm", root, &roots));
+                    }
+                    None => {
+                        return Decision::deny("find -exec rm removes every matching file");
+                    }
+                }
             }
         }
 
@@ -4757,9 +5299,40 @@ fn analyze_find(rest: &[&str], depth: usize) -> Decision {
         // `wrapper_leading_operands`. That residue is strictly smaller than
         // before this fix, and it is the same residue the top-level path has.
         if depth < MAX_SHELL_DEPTH {
-            let inline = tail.join(" ");
+            // `{}` stands for a path `find` matched, and a match is always
+            // UNDER one of the search roots. So when those roots are confined,
+            // substituting a synthetic path inside the same safe root lets the
+            // ordinary rules judge this payload with a PLACEABLE operand:
+            // `-exec rm -rf {}` inside the project becomes an Ask, while
+            // `-exec rm -rf /usr/lib` — an absolute target of its own — stays a
+            // Deny. With no confined root the placeholder is left exactly as it
+            // is, and `scope` refuses to place it at all.
+            // `split_segments` splits on `;`, so a `\;`-terminated -exec
+            // arrives here with its escape orphaned as a trailing `\` token
+            // (and a `+`-terminated one with a trailing `+`). That token is
+            // find's own punctuation, not an argument to the payload — left in
+            // place it becomes an rm OPERAND, and an operand that is a bare
+            // backslash can never be placed, so a perfectly confined
+            // `-exec rm -rf {} \;` sank back to a Deny by way of its own
+            // syntax. Measured before the strip: Deny("recursive rm (-r) can
+            // delete an entire directory tree").
+            let tail = match tail.last() {
+                Some(&"\\") | Some(&";") | Some(&"+") => &tail[..tail.len() - 1],
+                _ => tail,
+            };
+            let inline = match &confined {
+                Some(root) => tail
+                    .iter()
+                    .map(|t| match *t {
+                        "{}" | "'{}'" | "\"{}\"" => format!("{root}/blastguard-find-match"),
+                        other => other.to_string(),
+                    })
+                    .collect::<Vec<String>>()
+                    .join(" "),
+                None => tail.join(" "),
+            };
             if !inline.trim().is_empty() {
-                if let Some(deny) = acc.record(detect_bash(&inline, depth + 1)) {
+                if let Some(deny) = acc.record(detect_bash(&inline, depth + 1, ctx)) {
                     return deny;
                 }
             }
@@ -4779,7 +5352,7 @@ fn analyze_find(rest: &[&str], depth: usize) -> Decision {
 /// payload (`find … | xargs rm -rf`, `xargs -I{} sh -c "rm -rf {}"`) fell through
 /// to the catch-all Allow arm. Re-analyse the inner command through `detect_bash`
 /// so it reuses the rm / shell-`-c` / find logic (and the recursion bound).
-fn analyze_xargs(rest: &[&str], depth: usize) -> Decision {
+fn analyze_xargs(rest: &[&str], depth: usize, ctx: &Ctx<'_>) -> Decision {
     if depth >= MAX_SHELL_DEPTH {
         return depth_exhausted();
     }
@@ -4789,7 +5362,7 @@ fn analyze_xargs(rest: &[&str], depth: usize) -> Decision {
             if inner.trim().is_empty() {
                 Decision::Allow
             } else {
-                detect_bash(&inner, depth + 1)
+                detect_bash(&inner, depth + 1, ctx)
             }
         }
         None => Decision::Allow,
@@ -6083,6 +6656,35 @@ to explain where `..` lands — blastguard cannot confirm the target and refuses
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// `verb_operands_are_rewritten` is a hand-written mirror of which verbs
+    /// `verb_targets` actually rewrites, and picking the wrong side of that
+    /// mirror resolves a relative operand against the wrong directory — a
+    /// weakening, per `Ctx`'s doc comment. So the mirror is pinned rather than
+    /// trusted: every verb this crate dispatches on is asked both questions and
+    /// the answers must agree.
+    #[test]
+    fn verb_rewrite_list_matches_verb_targets() {
+        // Any token shape works as the probe: `verb_targets` returns a
+        // non-empty set for the verbs it rewrites and an empty one for the
+        // rest, and it is the emptiness that decides.
+        let probe = ["755", "some-target"];
+        for verb in [
+            "rm", "unlink", "rmdir", "chmod", "chown", "find", "truncate", "shred", "git", "cp",
+            "mv", "ln", "install", "dd", "tee", "sort", "uniq", "sed", "xargs", "curl", "wget",
+            "nc",
+        ] {
+            let rewritten = !verb_targets(verb, &probe).is_empty();
+            assert_eq!(
+                rewritten,
+                verb_operands_are_rewritten(verb),
+                "`{verb}`: verb_targets says rewritten={rewritten}, but \
+                 verb_operands_are_rewritten says {}. A relative operand of this \
+                 verb would be resolved against the wrong base.",
+                verb_operands_are_rewritten(verb)
+            );
+        }
+    }
 
     fn bash(cmd: &str) -> Decision {
         detect("Bash", Some(&json!({ "command": cmd })))
@@ -7756,7 +8358,7 @@ mod tests {
     ///   * WHAT IS DONE with the single result — a verdict property, which the
     ///     cost rationale says nothing about.
     ///
-    /// Only the second changed. `detect_bash(&tail, depth + 1)` is still called
+    /// Only the second changed. `detect_bash(&tail, depth + 1, ctx)` is still called
     /// exactly once per frame; the unknown-verb Ask is now forwarded instead of
     /// discarded. Measured on this host, release build, N unknown wrappers in
     /// front of `rm -rf /`, after the change:

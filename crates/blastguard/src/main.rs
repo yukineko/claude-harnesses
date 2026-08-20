@@ -55,6 +55,7 @@
 
 use blastguard::model::Decision;
 use blastguard::rule_id::INTERNAL_ERROR_REASON;
+use blastguard::scope::SafeRoots;
 use blastguard::{detect, hookio, interactive, retro, rule_id};
 use harness_core::hook::{self, HookInput};
 use std::process::exit;
@@ -310,10 +311,95 @@ fn emit(decision: Decision, input: Option<&HookInput>) {
 fn analyse(input: &HookInput) -> Decision {
     let tool = input.tool_name.clone();
     let tool_input = input.tool_input.clone();
-    let result = std::panic::catch_unwind(move || detect::detect(&tool, tool_input.as_ref()));
+    // Built OUTSIDE the barrier deliberately: it touches the filesystem
+    // (`canonicalize`) and the environment, and neither belongs inside the
+    // catch_unwind whose job is to convert an ANALYSIS crash into a deny.
+    // `safe_roots` itself cannot panic — every fallible step is an
+    // `Option`/`Result` resolved to the restrictive side — and if it somehow
+    // did, `hook::run_hook`'s outer barrier still catches it.
+    let scope = safe_roots(input);
+    let result =
+        std::panic::catch_unwind(move || detect::detect_scoped(&tool, tool_input.as_ref(), &scope));
     match result {
         Ok(decision) => decision,
         Err(_) => Decision::deny(INTERNAL_ERROR_REASON),
+    }
+}
+
+/// The session's location model: which trees this session may destroy things
+/// INSIDE without a flat refusal.
+///
+/// Only the binary can build this — it is the only part of the crate that may
+/// read the environment or the filesystem. Everything it passes is a fact about
+/// the session, never about the command being judged:
+///
+///   * the PreToolUse payload's `cwd` — where the session is working (a git
+///     worktree, typically);
+///   * `CLAUDE_PROJECT_DIR` — the project root Claude Code exports to every
+///     hook, which differs from `cwd` in a worktree session and is equally
+///     legitimate;
+///   * `HOME` — passed only so [`SafeRoots::new`] can REFUSE to treat the home
+///     directory as a root;
+///   * `TMPDIR` — added to the fixed temp roots. Note the asymmetry that makes
+///     this sound: reading `$TMPDIR` out of the hook's own environment is not
+///     the same act as expanding the literal string `$TMPDIR` found in a
+///     command, which `scope` always refuses to do.
+///
+/// A missing or empty `cwd` yields a model with only the temp roots in it, and
+/// an unresolvable one yields no model at all — both of which simply keep the
+/// pre-0.2.51 verdicts.
+fn safe_roots(input: &HookInput) -> SafeRoots {
+    let cwd = input.cwd.trim();
+    let project = std::env::var("CLAUDE_PROJECT_DIR").ok();
+    let home = std::env::var("HOME").ok();
+    let tmpdir = std::env::var("TMPDIR").ok();
+    SafeRoots::new(
+        if cwd.is_empty() { None } else { Some(cwd) },
+        project.as_deref(),
+        home.as_deref(),
+        tmpdir.as_deref(),
+        Some(real_path),
+    )
+}
+
+/// Resolve `path` to its real path — symlinked components included — WITHOUT
+/// requiring that `path` itself exists.
+///
+/// `std::fs::canonicalize` fails outright on a missing path, and a destructive
+/// target that does not exist is completely ordinary (`rm -rf target` in a
+/// freshly cloned tree). So this canonicalises the deepest EXISTING ancestor and
+/// re-attaches the components below it: the symlink question is answered for
+/// every component that exists, which is every component that could redirect
+/// the operation somewhere else.
+///
+/// `None` on failure, which `scope` reads as `Undetermined` — i.e. the caller
+/// keeps its Deny. Notable consequences, both on the restrictive side:
+///
+///   * a FINAL component that is itself a symlink is resolved to its target, so
+///     `rm -rf link-to-usr` is judged at `/usr` even though deleting a symlink
+///     does not touch what it points at. That over-denies (`rm` of a symlink
+///     inside the project reads as leaving the tree), which is exactly the
+///     direction this crate errs in, and is no worse than the flat Deny that
+///     shape had before;
+///   * a path whose every ancestor is unreadable resolves to nothing and stays
+///     refused.
+fn real_path(path: &str) -> Option<String> {
+    let mut cur = std::path::PathBuf::from(path);
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    // Each iteration pops exactly one component, so this terminates at `/`.
+    loop {
+        if let Ok(real) = cur.canonicalize() {
+            let mut out = real;
+            for name in tail.iter().rev() {
+                out.push(name);
+            }
+            return out.to_str().map(str::to_string);
+        }
+        let name = cur.file_name()?.to_os_string();
+        if !cur.pop() {
+            return None;
+        }
+        tail.push(name);
     }
 }
 

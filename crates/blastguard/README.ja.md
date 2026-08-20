@@ -25,6 +25,13 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
   および **git 内部**（`.git/**`）を上書きする Write は deny。Edit / MultiEdit /
   NotebookEdit は部分編集なので常に allow。
 
+**この一覧は「形」であって「判定」ではない。** 上記のうち削除・切り詰め系
+（`rm` / `find -delete` / `truncate` / `shred` / `>` / `git clean -f` /
+`chmod -R` / `chown -R`）は、**対象がプロジェクト配下か `/tmp` 配下だと証明できた
+場合にかぎり** `deny` ではなく `ask` になる（下の
+[場所（blast radius）で判定する](#場所blast-radiusで判定する--0251) 節）。
+証明できないもの・外に出るもの・保護パスは従来どおり `deny` である。
+
 通常作業の邪魔をしないよう、明確に無害な形は通す — 非再帰の `rm file.txt`、追記
 （`>>`）、fd リダイレクト（`2>&1`, `>&2`）、`/dev/null` 等への切り詰めリダイレクト
 はいずれも allow である。
@@ -51,6 +58,52 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
 `.githooks/**` など、どのゲート・フックが動くか自体を決めるファイルはこの除外の
 **対象外**であり、常に deny になる（守護者自身を無効化する経路を塞ぐため、
 この一群は設定ファイル除外より優先される）。
+
+## 場所（blast radius）で判定する — 0.2.51
+
+**0.2.50 までのルールは「形」だけを見ており、「どこ」を見ていなかった。** 実測
+（0.2.50 のフック本体に実際の PreToolUse ペイロードを流した結果）:
+
+```text
+rm -rf target   -> deny: recursive rm (-r) can delete an entire directory tree
+rm -rf /tmp/foo -> deny: recursive rm (-r) can delete an entire directory tree
+rm -rf /usr/lib -> deny: recursive rm (-r) can delete an entire directory tree
+rm -rf /        -> deny: recursive rm (-r) can delete an entire directory tree
+```
+
+被害範囲が桁違いの4つが同じ判定・同じ理由文になる。これは厳しいゲートではなく
+**情報を持たないゲート**であり、`rm -rf target` を通せない操作者は削除をやめるのでは
+なく、**より解析の薄い経路**（python の `shutil.rmtree`、生成したシェルスクリプト、
+`--dangerously-skip-permissions`）へ回る。つまり誤検知は無料ではなく、ゲート自身の
+視界から作業を追い出していた。
+
+そこで **安全ルート（safe root）の allowlist** を導入した（危険パスの denylist では
+ない — 未列挙が allow へ倒れる denylist は CLAUDE.md 3 に反する）。判定は
+`src/scope.rs` の三値（`Inside` / `IsRoot` / `Outside` ＋ `Undetermined`）で、
+**`Inside` だけが判定を緩められる**。
+
+- **安全ルート**: セッションの `cwd`（＝作業中の worktree）、`CLAUDE_PROJECT_DIR`、
+  `/tmp`・`/var/tmp`（＋環境変数 `TMPDIR`）。`/`・`/usr`・`/mnt/c/Users`・`$HOME`
+  などは安全ルートになれない（`NEVER_A_ROOT` と 2 コンポーネント下限）。
+- **緩和される判定**: 対象が**すべて**安全ルートの*厳密な*配下に解決できたときだけ、
+  `deny` → **`ask`** に変わる（`allow` にはならない）。対象コマンドは 再帰/ワイルド
+  カード `rm`、`find -delete` / `-exec rm`、`truncate` / `shred`、切り詰め `>`
+  リダイレクト、`git clean -f`、`chmod -R` / `chown -R`。
+- **緩和されないもの**（すべて実測でテストに固定済み — `tests/scoped_destructive.rs`）:
+  安全ルートの外（`/usr/lib`, `/`, `/mnt/c/Users`, `$HOME`）／リテラルなパスでない
+  もの（`$VAR`, `~`, `` `pwd` ``, `*`, `{}`）／解決できない `cd`（`cd $VAR && rm -rf
+  target`）／`cd` で外に出る相対パス（`cd /usr && rm -rf lib`）／**安全ルートそれ自身**
+  （`rm -rf .` は `.git` ごと消えるので deny のまま）／**保護パス**（`.git`,
+  `.claude/settings.json`, `.githooks/**` は場所で免罪されない）／**symlink で外へ
+  出るもの**（実パスを解決してから判定する）／`find . -delete` のように絞り込み述語を
+  持たない全走査。
+- **`ask` は人間がいる場合のみ**。headless / condukt worker / cron では
+  `Decision::hardened` が `deny` へ戻すので、**自律エージェントに対する脅威モデルは
+  0.2.50 と同一**。この機能が買うのは「対話中の操作者のワンキー確認」だけである。
+- ライブラリ利用（`detect::detect`）は**位置モデルなし**のまま。実パス解決は
+  フック本体が注入する resolver（`scope::RealPathResolver`）だけが行うので、
+  `detect` は従来どおり純粋関数であり、condukt / specguard / daily の
+  `sh -c` 経路の判定は一切変わらない。
 
 ## どうして必要か
 

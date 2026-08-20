@@ -41,6 +41,21 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains(crate::detect::UNREADABLE_OPERAND) {
         return "unreadable-operand";
     }
+    // The location axis (`crate::scope`): a destructive shape whose every
+    // target resolved strictly inside a safe root. ONE id for the whole class
+    // (rm, find, truncate, shred, git clean, chmod/chown, `>` redirect) on
+    // purpose: what recurs here is not "an rm was asked about", it is "work
+    // inside this project keeps needing a confirmation", and that is the signal
+    // worth seeing accumulate. Placed near the top because the reasons embed
+    // the verb's own wording and would otherwise be filed under it.
+    //
+    // Keyed on the fixed phrase `detect::confined_ask` always emits. If that
+    // wording changes and this does not, the id silently degrades to
+    // "unknown" — which is why `confined_ask`'s doc comment names this
+    // dependency in the other direction too.
+    if reason.contains("is confined to") {
+        return "scoped-destructive-confined";
+    }
     // Write handling.
     if reason.contains("overwrite git internals") {
         return "write-git-internals";

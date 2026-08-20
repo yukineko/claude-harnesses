@@ -231,13 +231,18 @@ fn genuinely_empty_world_still_latches_done_silently() {
     );
 }
 
-/// Audit §4.2 (P-2): the queue was asked for `--status pending` and answered
-/// with items, but none carry that status — the two sides disagree about the
-/// vocabulary, so the reply could not be interpreted. Filtering it down to an
-/// empty vec and latching `done` reports "no work" on the strength of an answer
-/// we failed to read.
+/// RETIREMENT PIN (2026-08-20). autoflow no longer reads the backlog queue, so
+/// an answer it cannot interpret is not an "undetermined" it has to resolve —
+/// there is no question being asked. This used to be audit §4.2 (P-2): the queue
+/// was asked for `--status pending`, answered with items carrying some other
+/// status, and blocking was the only honest response to a reply that could not be
+/// read.
+///
+/// The input is unchanged and the expectation is inverted, which is the point: on
+/// the previous revision this same stub produced a block. If the queue reader is
+/// ever re-wired, this goes red.
 #[test]
-fn backlog_answering_in_an_unknown_status_vocabulary_does_not_latch_done() {
+fn an_uninterpretable_backlog_answer_is_no_longer_consulted() {
     let env = Env::new("vocabulary");
     let bin_dir = env.home.join("stub-bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
@@ -250,14 +255,15 @@ fn backlog_answering_in_an_unknown_status_vocabulary_does_not_latch_done() {
 
     let (code, stdout, stderr) = env.stop_with_path(&bin_dir);
     assert_eq!(code, 0, "a Stop hook always exits 0; stderr: {stderr}");
-    assert_ne!(
+    assert!(
+        stdout.trim().is_empty(),
+        "the queue is not autoflow's business any more — nothing may be emitted \
+         about it, got stdout: {stdout:?}"
+    );
+    assert_eq!(
         env.phase().as_deref(),
         Some("done"),
-        "an uninterpretable queue answer latched Phase::Done (stdout: {stdout:?})"
-    );
-    assert!(
-        blocks(&stdout),
-        "an uninterpretable queue answer must be surfaced; got stdout: {stdout:?}"
+        "with no condukt task pending the Stop is the one legitimate stop"
     );
 }
 
@@ -322,12 +328,19 @@ fn write_stub_backlog(dir: &Path, list_json: &str) {
     }
 }
 
-/// ANTI-VACUITY CONTROL 3. The same stub `backlog`, answering in the vocabulary
-/// autoflow does expect, must drive the queue normally — proving the test above
-/// fails on the *vocabulary*, not merely on the presence of a stub binary.
+/// THE RETIREMENT ITSELF (2026-08-20, user instruction). A readable queue with a
+/// pending item — the case that used to block every single turn with "残課題
+/// バックログに N 件…/backlog を実行してください" — must now produce NOTHING.
+///
+/// Measured on the previous revision (`0ce4894a`): this exact stub blocked and
+/// left the phase `continuing`. The assertion is inverted here on the same input,
+/// so it could not have passed before the arm was removed. `Real task` is checked
+/// by absence rather than presence for the same reason: a nudge that merely
+/// changed its wording would still be a nudge, and `blocks()` alone would not
+/// catch a block whose reason no longer names the task.
 #[test]
-fn backlog_answering_with_pending_items_still_drives_the_queue() {
-    let env = Env::new("vocabulary-control");
+fn a_pending_backlog_queue_no_longer_nudges() {
+    let env = Env::new("queue-retired");
     let bin_dir = env.home.join("stub-bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     write_stub_backlog(
@@ -338,10 +351,18 @@ fn backlog_answering_with_pending_items_still_drives_the_queue() {
     let (code, stdout, stderr) = env.stop_with_path(&bin_dir);
     assert_eq!(code, 0, "a Stop hook always exits 0; stderr: {stderr}");
     assert!(
-        blocks(&stdout) && stdout.contains("Real task"),
-        "a readable, pending queue must drive /backlog, got: {stdout:?}"
+        !blocks(&stdout),
+        "a pending queue must not block the Stop any more, got: {stdout:?}"
     );
-    assert_eq!(env.phase().as_deref(), Some("continuing"));
+    assert!(
+        !stdout.contains("Real task") && !stdout.contains("/backlog") && !stdout.contains("/flow"),
+        "no re-worded nudge either — the queue must not be mentioned at all, got: {stdout:?}"
+    );
+    assert_eq!(
+        env.phase().as_deref(),
+        Some("done"),
+        "an empty condukt pending set now latches Done regardless of the queue"
+    );
 }
 
 /// ANTI-VACUITY CONTROL 2. A well-formed run-state with a pending task must

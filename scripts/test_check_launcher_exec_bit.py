@@ -240,7 +240,7 @@ class RealRepoState(unittest.TestCase):
     def test_the_scope_finds_every_plugin_that_ships_a_binary(self):
         """A count assertion, so the scope cannot quietly shrink to a subset and
         keep reporting green over it. 39 = 41 plugins minus the two that are
-        skills-only (daily-report, scout) and ship no binary."""
+        skills-only (daily-report, scout, flow) and ship no binary."""
         found = cleb.launchers(cleb.index_entries(repo=str(REPO_ROOT)))
         self.assertEqual(len(found), 39, [p for _m, p in found])
 

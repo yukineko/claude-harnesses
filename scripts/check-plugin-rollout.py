@@ -84,7 +84,7 @@ not evidence that anything in that directory is current:
       target/, .git/ and .in_use/, so a complete rollout leaves a full mirror
       plus the artifacts rebuild adds. Checking only (b) was too narrow a
       reading of "is this rolled out": a plugin's payload is its skills, agents,
-      hooks, commands and manifests, and for the two skill-only plugins that
+      hooks, commands and manifests, and for the three skill-only plugins that
       payload is ALL there is, so (b) said nothing about them at all.
   (d) NO SUPERSEDED DIRS — the cache keeps no removable version dir other than
       the current one. Measured before this existed: 265 superseded dirs, 1.29
@@ -113,8 +113,10 @@ indistinguishable from "verified current".
 
 (b) applies only to plugins that HAVE a binary, and that is decided from the
 SOURCE (does crates/<name> declare a bin target?), never from whether one is
-present in the deployed tree. Two plugins — daily-report and scout — are skills
-and hooks only, with no Rust crate at all; they have no compiled artifact whose
+present in the deployed tree. Three plugins — daily-report, scout and flow
+(skills-only since 0.2.7, when its one hook was retired and the crate went with
+it) — are skills and hooks only, with no Rust crate at all; they have no compiled
+artifact whose
 provenance could drift, and no rollout could ever write a manifest for them, so
 demanding one reported permanent unfixable drift. That exemption is the sole
 branch of (b) that passes with no manifest and it is deliberately narrow: a
@@ -301,8 +303,8 @@ def _crate_ships_binary(crate):
     decide whether a binary was expected would let that failure certify itself.
 
     A plugin may legitimately ship no binary at all (skills/ and hooks/ only,
-    with no Rust crate under crates/<name> — daily-report and scout are the two
-    such plugins today). Those have no compiled artifact whose provenance could
+    with no Rust crate under crates/<name> — daily-report, scout and flow are the
+    three such plugins today). Those have no compiled artifact whose provenance could
     drift, and are the sole case allowed to pass with no manifest.
     """
     crate_dir = os.path.join(CRATES, crate)
@@ -905,7 +907,8 @@ def _asset_problem(crate, entry):
     so a complete rollout leaves the install dir a full mirror of crates/<name>,
     plus the two artifacts rebuild-plugins.sh adds afterwards. A plugin's real
     payload is its skills, agents, hooks, commands and manifests; for the two
-    skill-only plugins that payload is ALL there is, and the binary dimension
+    skill-only plugins that payload is ALL there is (flow became the third in
+    0.2.7), and the binary dimension
     says nothing about any of it. A stale skill file is a stale rollout.
 
     The allowed delta was not assumed — it was measured across all 39 plugins on

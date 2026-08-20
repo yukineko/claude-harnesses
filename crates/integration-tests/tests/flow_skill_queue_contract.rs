@@ -1,5 +1,8 @@
 //! Pins the `/flow` SKILL's queue-driving contract as *text*.
 //!
+//! Lived in `crates/flow/tests/` until 2026-08-20, when `flow` became a
+//! skills-only plugin and stopped being a Rust package.
+//!
 //! # What this test does and does not prove
 //!
 //! `SKILL.md` is a prompt, not enforcement. **This test cannot prove that an LLM
@@ -22,8 +25,18 @@
 
 use std::path::PathBuf;
 
+/// `crates/flow/skills/flow/SKILL.md`, resolved from THIS crate's manifest dir.
+///
+/// The test used to live in `crates/flow` and read `skills/flow/SKILL.md`
+/// relative to that package. `flow` is a skills-only plugin since 2026-08-20 (its
+/// binary was the retired `propose` nudge and nothing else), so there is no
+/// `crates/flow` package to host a test any more — but the contract this pins is
+/// about the skill TEXT, not the binary, so it survives here instead of being
+/// deleted with the package.
 fn skill() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("flow")
         .join("skills")
         .join("flow")
         .join("SKILL.md");

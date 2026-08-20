@@ -1,6 +1,6 @@
 ---
 name: flow
-description: 課題の供給（compass の次の一手 / backlog のキュー）から解決手段の実行（condukt、fugu-router がモデル選択）までを1本のループで貫く統合 driver。source→executor を束ねる「フレームワーク層」。SessionStart で開いている仕事があれば自動で提案され（承認後に起動）、手動でも `/flow` で起動できる。判定（どの source を引くか・止め時）は LLM、状態維持・task 単位の claim・モデル選択は既存バイナリ（compass/backlog/condukt/fugu-router）が担う。同じ project を複数セッションが同時に回せる（キュー全体はロックしない）。
+description: 課題の供給（compass の次の一手 / backlog のキュー）から解決手段の実行（condukt、fugu-router がモデル選択）までを1本のループで貫く統合 driver。source→executor を束ねる「フレームワーク層」。**ユーザーが明示的に起動したときだけ走る**（2026-08-20 に SessionStart の自動提案を廃止したため、こちらから提案することはしない）。判定（どの source を引くか・止め時）は LLM、状態維持・task 単位の claim・モデル選択は既存バイナリ（compass/backlog/condukt/fugu-router）が担う。同じ project を複数セッションが同時に回せる（キュー全体はロックしない）。
 argument-hint: "[任意: 直接の課題文。省略時は compass→backlog から自動でピック]"
 allowed-tools: Task, AskUserQuestion, Bash(backlog:*), Bash(compass:*), Bash(condukt:*), Bash(fugu-router:*), Bash(hypothesis:*), Bash(overwatch:*), Bash(git:*), Read
 ---
@@ -46,9 +46,15 @@ SOURCE（課題の供給）              EXECUTOR（解決手段の実行）
 
 ## いつ使うか（/flow について）
 
-- SessionStart で「開いている仕事がある」と提案され、ユーザーが承認したとき（L2: propose-then-confirm）。
-- 「次の課題を自分で選んで実行し続けてほしい」とき（手動 `/flow`）。
+- 「次の課題を自分で選んで実行し続けてほしい」とユーザーが言ったとき（`/flow`）。
 - `$ARGUMENTS` に課題文を直接渡せば、source 選択を飛ばしてその課題を condukt に流す。
+
+**自分から `/flow` を提案してはならない。** 0.2.6 までは SessionStart hook が
+「開いている仕事があれば AskUserQuestion で `/flow` を確認せよ」というディレクティブを
+注入していたが（L2: propose-then-confirm）、**2026-08-20 にユーザーの指示で廃止した**
+（autoflow 側の同種の 2 経路も同時に撤去）。backlog に pending が積まれていることは
+それ自体では起動理由にならない。廃止したディレクティブを推測で再現するのは、
+撤去そのものを無効化する行為である。
 
 ## 競合しない理由（重要）
 

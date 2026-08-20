@@ -392,15 +392,20 @@ RED を書く前に、契約を変えるべきか否かの判断が要る。
 
 ## 5. スコープ外: `crates/autoflow/src/compass.rs` の `charter_freshness`
 
+<!-- doc-claim-exempt: historical quote — `crates/autoflow/src/compass.rs` was DELETED in autoflow 0.1.22 (2026-08-20) together with the backlog auto-drive whose charter-freshness gate was its only caller. This section records why that module was ruled out of scope when the audit ran at 1601b835; the quotes are preserved verbatim as that record rather than rewritten to match a tree that no longer contains the file. -->
 `crates/autoflow/src/compass.rs:45` 「pub fn charter_freshness(cwd: &Path) -> Option<Verdict> {」 の
 `None`（compass 不在・エラー・解釈不能・timeout）は「判定不能→呼び出し側は従来どおり進む」へ写るが、
 これは **docstring で fail-soft 契約が明示されている**ため本監査のスコープ外とし、**変更提案を含めない**。
 
 根拠の逐語引用:
 
+<!-- doc-claim-exempt: historical quote — `crates/autoflow/src/compass.rs` was DELETED in autoflow 0.1.22 (2026-08-20) together with the backlog auto-drive whose charter-freshness gate was its only caller. This section records why that module was ruled out of scope when the audit ran at 1601b835; the quotes are preserved verbatim as that record rather than rewritten to match a tree that no longer contains the file. -->
 - `crates/autoflow/src/compass.rs:11` 「return `None`, and the caller preserves today's behavior — a repo that」
+<!-- doc-claim-exempt: historical quote — `crates/autoflow/src/compass.rs` was DELETED in autoflow 0.1.22 (2026-08-20) together with the backlog auto-drive whose charter-freshness gate was its only caller. This section records why that module was ruled out of scope when the audit ran at 1601b835; the quotes are preserved verbatim as that record rather than rewritten to match a tree that no longer contains the file. -->
 - `crates/autoflow/src/compass.rs:12` 「doesn't use compass keeps auto-driving as before. This module only READS」
+<!-- doc-claim-exempt: historical quote — `crates/autoflow/src/compass.rs` was DELETED in autoflow 0.1.22 (2026-08-20) together with the backlog auto-drive whose charter-freshness gate was its only caller. This section records why that module was ruled out of scope when the audit ran at 1601b835; the quotes are preserved verbatim as that record rather than rewritten to match a tree that no longer contains the file. -->
 - `crates/autoflow/src/compass.rs:42` 「`None` means "can't tell" — compass absent, errored, or emitted unparseable」
+<!-- doc-claim-exempt: historical quote — `crates/autoflow/src/compass.rs` was DELETED in autoflow 0.1.22 (2026-08-20) together with the backlog auto-drive whose charter-freshness gate was its only caller. This section records why that module was ruled out of scope when the audit ran at 1601b835; the quotes are preserved verbatim as that record rather than rewritten to match a tree that no longer contains the file. -->
 - `crates/autoflow/src/compass.rs:43` 「output — and the caller should preserve its prior behavior (proceed). A」
 
 <!-- doc-claim-exempt: historical quote — pre-fix state measured at commit 1601b835 (autoflow 0.1.16); this path was fixed in autoflow 0.1.17, so the cited line no longer reads as recorded. The finding text is preserved verbatim as the record of that state. -->

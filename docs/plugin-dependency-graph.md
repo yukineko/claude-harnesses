@@ -194,7 +194,7 @@ the DAG edges above). Sorted alphabetically.
 
 | Plugin | Activation scope | Entry point (trigger) | Called-by (sibling plugins) |
 |---|---|---|---|
-| autoflow | always-on | `SessionStart`, `Stop` hooks | — |
+| autoflow | always-on | `Stop`, `PreCompact`, `UserPromptSubmit` hooks | — |
 | backlog | manual | `/backlog` skill; `backlog` CLI | flow, scout, condukt |
 | beacon | always-on | `Notification`, `Stop` hooks | — |
 | blastguard | always-on | `PreToolUse` hook | — |
@@ -209,7 +209,7 @@ the DAG edges above). Sorted alphabetically.
 | difflog | always-on | `SessionEnd`, `SessionStart` hooks; `/difflog` skill | — |
 | donegate | always-on | `Stop` hook | — |
 | evalkit | manual | CLI only | condukt (indirect / CI consumer) |
-| flow | always-on | `SessionStart` hook; `/flow` skill | scout |
+| flow | manual | `/flow` skill (skills-only plugin since 0.2.7 — the SessionStart `propose` hook was retired) | scout |
 | fugu-router | always-on | `UserPromptSubmit` hook; `/fugu-router` skill; `fugu-router` CLI | condukt, flow |
 | gauge | always-on | `Stop` hook; `gauge` CLI | condukt |
 | harness-status | always-on (silent unless unhealthy) | `SessionStart` hook (hook-binary health check, silent when healthy); CLI only; `/status` skill | — (library / inspection dashboard) |

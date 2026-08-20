@@ -79,8 +79,8 @@ LLM は「解釈・実装・判断」だけを担う。スケジューリング�
 **source → executor を 1 本のループで束ねる統合 driver（autopilot 層）**。課題の供給（compass の次の一手 / backlog のキュー / 直渡しの課題文）から解決手段の実行（condukt、fugu-router がモデル選択）までを貫く。判定（どの source を引くか・止め時）は LLM、状態維持・ロック・モデル選択は既存バイナリ（compass / backlog / condukt / fugu-router）が担い、flow 自身は新しい状態を持たない。`/backlog` の上位互換（compass ゲート＋複数 source を足したもの）で、backlog ロックを共有して直列化する。
 
 - **スキル**: `/flow [課題文]`（引数があれば source 選択を飛ばして condukt に直行）
-- **フック**: SessionStart（`flow propose` — 開いている仕事があれば `/flow` を propose-then-confirm で提案）
-- **バイナリ**: 提案ディレクティブを注入するだけの薄いスキャフォールド。タスク数は再計算せず、compass / backlog / condukt が注入済みの state を束ねる
+- **フック**: 無し。**`/flow` はユーザーが明示的に起動したときだけ走る。** 0.2.6 までは SessionStart の `flow propose` が「開いている仕事があれば `/flow` を propose-then-confirm で提案せよ」を注入していたが、2026-08-20 にユーザーの指示で廃止した（autoflow 側の同種 2 経路も同時に撤去）。backlog に pending があること自体は起動理由にならない
+- **バイナリ**: 無し（`propose` が唯一のサブコマンドだったので、廃止と同時にバイナリ・launcher・Cargo パッケージも削除。flow は scout / daily-report と同じ skills-only plugin）
 
 #### scout
 **広域監査による施策生成 SOURCE**。プロジェクトを5レンズ（現在の課題 / セキュリティ / 業界・他プロジェクト標準 / 不足施策 / 安全性）で **read-only sub-agent を並列起動**して偵察し、逐語引用つきの施策候補を統合・重複排除・スコアリングして backlog に積み、`/flow` に実行を引き渡す。compass が「一手に絞る単一ゴールの勾配」なら、scout は「広く挙げて backlog に積む」相補的 source。判断（監査・施策選別）は LLM + sub-agent、保存は backlog、実行は flow/condukt。scout 自身は read-only で実装しない。
@@ -248,7 +248,7 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
       └──────────────┬──────────────┘
                      ↓ backlog（確定キュー）に積む
 [driver]
-  flow（source→executor を束ねるループ。SessionStart で /flow を提案）
+  flow（source→executor を束ねるループ。ユーザーが /flow と打ったときだけ走る）
       ↓ 課題文
   condukt（実行の背骨）
       ├─ [前段] playbook / runbook / ctxrot / taskprog が context を整備
@@ -268,11 +268,11 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
 
 | Hook | 発火タイミング | 主な登録プラグイン |
 |---|---|---|
-| SessionStart | セッション開始時 | autoflow, compass, condukt(restore), context-governor, ctxrot(restore), daily, difflog, flow(propose), hypothesis, specguard, taskprog |
-| UserPromptSubmit | プロンプト送信前 | context-governor, ctxrot(guard), fugu-router, playbook, runbook |
+| SessionStart | セッション開始時 | compass, condukt(restore), context-governor, ctxrot(restore), daily, difflog, hypothesis, specguard, taskprog |
+| UserPromptSubmit | プロンプト送信前 | autoflow, context-governor, ctxrot(guard), fugu-router, playbook, runbook |
 | PreToolUse | ツール実行前 | blastguard, ctxrot(preguard) |
 | PostToolUse | ツール実行後 | context-governor, ctxrot(toolguard), session-insights, stuckguard |
-| PreCompact | /compact 直前 | context-governor, ctxrot(rescue) |
+| PreCompact | /compact 直前 | autoflow, context-governor, ctxrot(rescue) |
 | Stop | ターン終了前 | autoflow, budgetguard, condukt, context-governor, ctxrot(stop), donegate, precommit-audit, propguard, reviewgate, tdd |
 | SubagentStop | サブエージェント終了時 | context-governor |
 | SessionEnd | セッション終了時 | beacon, compass, difflog, gauge, session-insights, taskprog |

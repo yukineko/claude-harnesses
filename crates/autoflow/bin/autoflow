@@ -13,7 +13,7 @@
 # protocol, mirroring crates/ctxrot/bin/ctxrot and crates/taintguard/bin/
 # taintguard.
 #
-# Classification (all four subcommands are hook entrypoints; hooks.json):
+# Classification (all three subcommands are hook entrypoints; hooks.json):
 #
 #   verdict-bearing (silence would be read as "nothing to flag"):
 #     stop           Stop          -> {"decision":"block"}. `stop_command`
@@ -23,16 +23,15 @@
 #                    exactly like harness_core::gate::run::run_guarded's panic
 #                    barrier: the post-block re-entry is allowed through, so a
 #                    missing binary can never trap the session.
-#     session-start  SessionStart  -> additionalContext. The binary itself
-#                    already distinguishes the three answers here
-#                    (`session_start_command`, src/main.rs:531-563):
-#                    `Known(empty)` stays silent, but `Undetermined` prints
-#                    "バックログのキューを確認できませんでした（判定不能）…
-#                    未完了課題が無いという意味ではありません". A missing binary
-#                    IS that Undetermined case, so the launcher speaks the same
-#                    sentence; staying silent would collapse it back into the
-#                    `Known(empty)` shape, which reads as "no pending work" —
-#                    impact (b)/(c) of backlog item a33f644f.
+#                    (RETIRED 2026-08-20: `session-start` used to be classified
+#                    here too, because `session_start_command` proposed `/flow`
+#                    from the backlog queue and a missing binary had to speak its
+#                    Undetermined sentence rather than fall silent. The
+#                    subcommand and its hook are gone on the user's instruction,
+#                    so the arg now falls through to the catch-all `exit 1`
+#                    below. That is the honest answer for an invocation nothing
+#                    makes: a hook that no longer exists must not be given a
+#                    successful-looking reply.)
 #
 #   non-verdict (exit 0, but never silent — the stderr line below is the
 #   "did not run" signal):
@@ -92,11 +91,6 @@ case "${1:-}" in
     fi
     printf '{"decision":"block","reason":"%s"}\n' \
       "autoflow stop did not run: no bundled binary for $os-$arch, so the record/condukt progress state machine was NOT evaluated. This stop is therefore UNCHECKED, not approved (blocked fail-closed once — the next stop is allowed through so the session can never be trapped). $fix"
-    exit 0
-    ;;
-  session-start)
-    printf '{"additionalContext":"%s"}\n' \
-      "autoflow session-start did not run: no bundled binary for $os-$arch, so the backlog queue was NOT read and the compass charter was NOT checked. This is UNDETERMINED, and it does NOT mean there is no open work — do not treat the absence of a /flow proposal as an empty queue. $fix"
     exit 0
     ;;
   pre-compact|prompt-submit)

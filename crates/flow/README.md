@@ -44,7 +44,7 @@ concurrently.
 
 ## The `/flow` loop
 
-The skill drives the loop; the binary only injects the SessionStart proposal directive.
+The skill drives the loop. There is no binary any more — see [The hook, retired](#the-hook-retired).
 
 ```
 0. 引数分岐 — 課題文があれば source 選択を飛ばして condukt に直行（1 件だけ実行）
@@ -124,28 +124,33 @@ worker escalation, **(b)** deploy/push's GATED approval, **(c)** the pivot decis
 | compass ゲートが再スコープを示す | ループを止め `/compass` を促す |
 | `backlog next` が予期しないエラー | 報告して Step 4 へ |
 
-## The hook
+## The hook, retired
 
-Deterministic, non-blocking, exits 0 on any error (a driver hook must never break a turn):
+**flow has no hook. `/flow` runs when, and only when, you invoke it.**
 
-| Hook | Event | What it does |
-|---|---|---|
-| **`flow propose`** | `SessionStart` (startup/resume/clear) | injects an **L2 propose-then-confirm** directive: if this session has open work (a compass next move, open backlog items, or an unfinished condukt run), the agent proactively offers `/flow` with a single `AskUserQuestion`. It does **not** recompute task counts — compass `nudge`, backlog `session-start`, and condukt `restore` already inject their own state; `propose` just adds the directive that ties them together. |
+Through 0.2.6 a `flow propose` SessionStart hook injected an L2
+propose-then-confirm directive every session the backlog had pending items: *"before
+starting other work, ask the user with a single AskUserQuestion whether to start
+`/flow`."* **It was retired on the user's instruction (2026-08-20)**, together with
+autoflow's two paths that said the same thing — its SessionStart "バックログに N 件…
+/flow で開始しますか？" and its Stop-hook arm that blocked every single turn with
+"/backlog を実行してください".
 
-## Subcommand surface
+The reason is what a nudge is worth. Two plugins were making the same request, one of
+them on every turn, and repetition is not detection: the tenth "there are N items"
+carries no information the first did not. Whether to drain the queue is the operator's
+call, and typing `/flow` *is* that call.
 
-The binary is intentionally thin:
-
-| Subcommand | Purpose |
-|---|---|
-| `flow propose` | SessionStart hook: inject the propose-then-confirm directive |
+flow is therefore a **skills-only plugin** now (the shape `scout` and `daily-report`
+already ship) — no binary, no launcher, no hook, not a Cargo crate. The `/flow` skill's
+contents are unchanged.
 
 ## Install
 
 ### As a Claude Code plugin (recommended)
 
-The plugin bundles the hook (`hooks/hooks.json`), the `/flow` skill, and a prebuilt
-binary — so it runs entirely on your Claude **subscription**, no API key.
+The plugin bundles the `/flow` skill and nothing else — it runs entirely on your Claude
+**subscription**, no API key, and there is no binary to build for your platform.
 
 ```text
 # in Claude Code:
@@ -153,44 +158,33 @@ binary — so it runs entirely on your Claude **subscription**, no API key.
 /plugin install flow@yukineko
 ```
 
-The hook calls `${CLAUDE_PLUGIN_ROOT}/bin/flow propose`. `bin/flow` is a small POSIX
-launcher that selects the right per-platform binary (`bin/flow-<os>-<arch>`); if a host
-has no matching binary it exits 0 silently and prints a one-line build hint to stderr.
-
 > `flow` requires its sources/executor (`compass`, `backlog`, `condukt`, and optionally
 > `fugu-router`) to be installed — it is the driver that binds them, not a standalone.
 
-### Build from source
-
-```sh
-scripts/build-plugin-bin.sh flow                       # host platform
-scripts/build-plugin-bin.sh flow x86_64-apple-darwin   # cross-target the Intel Mac build
-git add bin/ && git update-index --chmod=+x bin/flow bin/flow-*
-```
-
 ## Platform support
 
-| Host | File | Status |
-|---|---|---|
-| Linux x86_64 | `bin/flow-linux-x86_64` | bundled |
-| macOS Apple Silicon | `bin/flow-darwin-arm64` | bundled |
-| macOS Intel | `bin/flow-darwin-x86_64` | built in CI on a macOS runner |
+Nothing to build, so nothing to be platform-specific about.
 
 ## Plugin layout
 
 ```
-.claude-plugin/plugin.json     # plugin manifest (version 0.1.6)
-hooks/hooks.json               # SessionStart=propose → ${CLAUDE_PLUGIN_ROOT}/bin/flow
+.claude-plugin/plugin.json     # plugin manifest
 skills/flow/SKILL.md           # the /flow skill (drives the source→executor loop)
-bin/flow                       # POSIX launcher → flow-<os>-<arch>
-bin/flow-<os>-<arch>           # prebuilt binaries
-src/main.rs … Cargo.toml       # the Rust crate
 ```
+
+Through 0.2.6 it also shipped `hooks/hooks.json`, `bin/flow` (a POSIX launcher),
+`bin/flow-<os>-<arch>`, `src/main.rs` and `Cargo.toml`. All of it existed to serve
+`flow propose`, and went with it.
 
 ## Development
 
+Not a Cargo crate, so `cargo` is not involved in shipping it. The `/flow` skill's
+queue-driving contract is still pinned as text by
+`crates/integration-tests/tests/flow_skill_queue_contract.rs` (moved there from
+`crates/flow/tests/`):
+
 ```sh
-cargo build -p flow
+cargo test -p integration-tests --test flow_skill_queue_contract
 ```
 
 ## License

@@ -1,8 +1,10 @@
 //! Cross-crate E2E integration tests pinning the flow-pipeline "integration
 //! contract". Every test spawns the REAL built workspace binaries via
 //! `std::process::Command` — no in-process linking, no mocks — so a regression
-//! in how `flow` shells out to `backlog`, or how `fugu-router route` /
-//! `condukt schedule` / `condukt state` shape their I/O, breaks a test here.
+//! in how `fugu-router route` / `condukt schedule` / `condukt state` shape their
+//! I/O breaks a test here. (Until 2026-08-20 it also covered how `flow propose`
+//! shelled out to `backlog`; that binary and its nudge are retired — see
+//! Contract A below.)
 //!
 //! Binary discovery ([`bin`]): if a required sibling binary has not been
 //! built, local (non-CI) runs print a skip note and return green — a
@@ -11,7 +13,7 @@
 //! Actions and most CI providers do), a missing binary is instead a hard
 //! `panic!` failure — see [`skip_or_panic`] — so a broken build step can never
 //! silently downgrade this suite to a no-op in the gate. Build
-//! the bins first (`cargo build -p flow -p backlog -p fugu-router -p condukt`)
+//! the bins first (`cargo build -p backlog -p fugu-router -p condukt`)
 //! for the tests to actually exercise the contract instead of skipping.
 //!
 //! Isolation: every test uses `tempfile::TempDir` for both the project dir and
@@ -73,135 +75,21 @@ fn skip_or_panic(test_name: &str, msg: &str) {
     eprintln!("SKIP {test_name}: {msg}");
 }
 
-/// The directory that holds the built binaries (parent of a resolved binary).
-/// Used to prepend to a child's `PATH` so `flow` can find `backlog` by name.
-fn bin_dir() -> Option<PathBuf> {
-    bin("flow").and_then(|p| p.parent().map(PathBuf::from))
-}
-
-/// Build a child `PATH` value with `dir` prepended to the inherited `PATH`.
-fn path_with(dir: &std::path::Path) -> std::ffi::OsString {
-    let mut prefix = dir.as_os_str().to_os_string();
-    if let Some(existing) = std::env::var_os("PATH") {
-        prefix.push(":");
-        prefix.push(existing);
-    }
-    prefix
-}
-
 // ---------------------------------------------------------------------------
-// Contract A — directive injection (`flow propose`)
+// Contract A — RETIRED 2026-08-20 (`flow propose`)
 //
-// `flow propose` (fn propose in crates/flow/src/main.rs) shells out to the
-// `backlog` binary on PATH:
-//     backlog list --project <cwd> --status pending --json
-// and injects conditionally:
-//   * 0 pending items         → prints NOTHING (stay silent).
-//   * N >= 1 pending items    → prints "[flow] バックログに {N} 件 ... '{title}' ..."
-//   * backlog absent/errored  → prints the static English DIRECTIVE const.
+// Two tests here pinned the SessionStart directive injection: 0 pending items →
+// silent, N ≥ 1 → "[flow] バックログに {N} 件 … '{title}' …", backlog absent → a
+// static fallback directive. The nudge was retired on the user's instruction and
+// `flow` is a skills-only plugin now with no binary at all, so there is no
+// `flow propose` to spawn. Deleted because the subject is gone, NOT because it
+// went red.
+//
+// What still covers the neighbourhood: `flow_skill_queue_contract.rs` (moved out
+// of `crates/flow` in the same change) pins the /flow SKILL's queue-driving text,
+// and Contract B below still spawns the real backlog/fugu-router/condukt
+// binaries, so the inter-binary contracts this file exists for are unaffected.
 // ---------------------------------------------------------------------------
-
-/// Empty project (no backlog items) → `flow propose` prints nothing.
-///
-/// Runs `flow propose` with CWD = a fresh tempdir and a fresh `$HOME` (so the
-/// spawned `backlog` sees an empty store), with the bin dir prepended to PATH so
-/// `flow` finds the real `backlog`. Asserts stdout (trimmed) is empty.
-#[test]
-fn contract_a_empty_project_is_silent() {
-    let (Some(flow), Some(dir)) = (bin("flow"), bin_dir()) else {
-        skip_or_panic(
-            "contract_a_empty_project_is_silent",
-            "flow binary not built",
-        );
-        return;
-    };
-    let proj = TempDir::new().expect("tempdir proj");
-    let home = TempDir::new().expect("tempdir home");
-
-    let out = Command::new(&flow)
-        .arg("propose")
-        .current_dir(proj.path())
-        .env("HOME", home.path())
-        .env("PATH", path_with(&dir))
-        .output()
-        .expect("spawn flow propose");
-
-    assert!(
-        out.status.success(),
-        "flow propose must exit 0 (never break a turn); status={:?} stderr={}",
-        out.status,
-        String::from_utf8_lossy(&out.stderr),
-    );
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.trim().is_empty(),
-        "empty project must produce silent stdout, got: {stdout:?}",
-    );
-}
-
-/// Pending item present → `flow propose` prints the count and the task title.
-///
-/// Seeds the backlog with a real `backlog add --title ZZTASK --project <proj>
-/// --priority p1` (verified flags), sharing an isolated `$HOME` between the seed
-/// and the `flow propose` run (both read `$HOME/.backlog`). Asserts the injected
-/// summary contains the count `1 件` and the substring `ZZTASK`.
-#[test]
-fn contract_a_pending_item_is_announced() {
-    let (Some(flow), Some(backlog), Some(dir)) = (bin("flow"), bin("backlog"), bin_dir()) else {
-        skip_or_panic(
-            "contract_a_pending_item_is_announced",
-            "flow/backlog binary not built",
-        );
-        return;
-    };
-    let proj = TempDir::new().expect("tempdir proj");
-    let home = TempDir::new().expect("tempdir home");
-    // Canonicalize: on macOS `$TMPDIR` lives under `/var/...` which is a symlink
-    // to `/private/var/...`. `flow` scopes its backlog query by
-    // `std::env::current_dir()`, which returns the physical (canonical) path, so
-    // `backlog add --project` must use the same canonical form or the item won't
-    // be visible to `flow propose`.
-    let proj_canon = proj.path().canonicalize().expect("canonicalize proj");
-    let proj_str = proj_canon.to_string_lossy().to_string();
-
-    let add = Command::new(&backlog)
-        .args([
-            "add",
-            "--title",
-            "ZZTASK",
-            "--project",
-            &proj_str,
-            "--priority",
-            "p1",
-        ])
-        .env("HOME", home.path())
-        .output()
-        .expect("spawn backlog add");
-    assert!(
-        add.status.success(),
-        "backlog add must succeed; stderr={}",
-        String::from_utf8_lossy(&add.stderr),
-    );
-
-    let out = Command::new(&flow)
-        .arg("propose")
-        .current_dir(&proj_canon)
-        .env("HOME", home.path())
-        .env("PATH", path_with(&dir))
-        .output()
-        .expect("spawn flow propose");
-    assert!(out.status.success(), "flow propose must exit 0");
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("1 件"),
-        "propose must report the pending count '1 件', got: {stdout:?}",
-    );
-    assert!(
-        stdout.contains("ZZTASK"),
-        "propose must name the top task 'ZZTASK', got: {stdout:?}",
-    );
-}
 
 // ---------------------------------------------------------------------------
 // Contract B — routing + schedule + state

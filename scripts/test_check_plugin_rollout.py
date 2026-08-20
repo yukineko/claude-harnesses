@@ -897,7 +897,7 @@ class DeployedFileMirror(_FixtureCase):
 
     Checking only the compiled artifact was too narrow a reading of "is this
     rolled out". A plugin's payload is its skills, agents, hooks, commands and
-    manifests; for the two skill-only plugins that payload is ALL there is, and
+    manifests; for the three skill-only plugins that payload is ALL there is, and
     the provenance dimension says nothing about any of it. A stale skill file is
     a stale rollout.
     """

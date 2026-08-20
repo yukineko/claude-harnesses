@@ -4,22 +4,26 @@
 //!   idle → [enough work?] → block: /record → record_requested
 //!   record_requested | continuing → [condukt pending?]
 //!     yes → block: /condukt (condukt tasks) → continuing
-//!     no  → [backlog open?]
-//!       yes → [compass charter fresh?]   (soft dep; absent ⇒ treated as fresh)
-//!             fresh → block: /backlog <next item> → continuing
-//!             stale → block: nudge /compass → done (stand down, don't drive)
-//!       no  → done (allow)
+//!     no  → done (allow)
 //!   done → allow
 //!
-//! Continuation is progress-based, not count-based: both the condukt (pending)
-//! and backlog (open queue) branches call `state::decide_progress`. While the
-//! set keeps shrinking, autoflow keeps continuing (blocking) — there is no
-//! cumulative call-count ceiling. Only a stalled-progress streak reaching
-//! `cfg.stuck_threshold` escalates, and even then it stays VISIBLE (blocks with
-//! an escalation message, worded by autonomy) rather than silently standing
-//! down. An empty pending/open set is one legitimate stop (→ done/allow); the
-//! other is the user explicitly asking to stop THIS Stop (see below) — every
-//! other path blocks.
+//! **The backlog queue is not part of this machine.** It was until 2026-08-20:
+//! an empty condukt pending set fell through to `[backlog open?]`, which blocked
+//! with "/backlog を実行してください" behind a compass-freshness gate, and a
+//! SessionStart hook proposed "/flow で開始しますか？" for the same queue. Both
+//! were RETIRED on the user's instruction — see the retirement notes at the
+//! former call sites for what the change does and does not move. autoflow now
+//! drives only a condukt run that is already in flight; deciding to work the
+//! queue is the operator's call, made by invoking /flow or /backlog.
+//!
+//! Continuation is progress-based, not count-based: the condukt (pending) branch
+//! calls `state::decide_progress`. While the set keeps shrinking, autoflow keeps
+//! continuing (blocking) — there is no cumulative call-count ceiling. Only a
+//! stalled-progress streak reaching `cfg.stuck_threshold` escalates, and even
+//! then it stays VISIBLE (blocks with an escalation message, worded by autonomy)
+//! rather than silently standing down. An empty pending set is one legitimate
+//! stop (→ done/allow); the other is the user explicitly asking to stop THIS
+//! Stop (see below) — every other path blocks.
 //!
 //! Independently of the above (Tier 2 delegation-record advisory): on every
 //! `record_requested`/`continuing` Stop, if this session's transcript shows
@@ -38,7 +42,6 @@
 //! triggers it.
 
 mod backlog;
-mod compass;
 mod condukt;
 mod config;
 mod delegation_audit;
@@ -70,9 +73,6 @@ struct Cli {
 enum Command {
     /// Stop hook: run the record→condukt state machine.
     Stop,
-    /// SessionStart hook: inject a /flow proposal when pending backlog items exist.
-    /// Silent when queue is empty and charter is fresh — never breaks a turn.
-    SessionStart,
     /// PreCompact hook: if the flow loop is running in THIS session (this session
     /// is a registered driver of the project) and not opted out, drop a
     /// resume-flow marker so the
@@ -89,7 +89,6 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::Stop => stop_command(),
-        Command::SessionStart => session_start_command(),
         Command::PreCompact => pre_compact_command(),
         Command::PromptSubmit => prompt_submit_command(),
     }
@@ -306,106 +305,28 @@ fn stop_run(input: HookInput) {
                         }
                     }
                 } else {
-                    // condukt 完了 → backlog を確認
-                    let open = match backlog::find_open(&cwd) {
-                        Determination::Known(open) => open,
-                        // The queue could not be read. `Phase::Done` below is a
-                        // latch — it silences autoflow for the rest of the
-                        // session — so it must rest on an OBSERVED-empty queue.
-                        // A failure to observe blocks visibly instead, and the
-                        // phase is left as-is so a later readable answer still
-                        // decides.
-                        Determination::Undetermined(why) => {
-                            block_undetermined(
-                                &cwd,
-                                &session_id,
-                                "backlog-queue-undetermined",
-                                "backlog のキューを読み取れませんでした",
-                                why.as_str(),
-                            );
-                            return;
-                        }
-                    };
-                    if open.is_empty() {
-                        // The one legitimate stop: we asked, and there is
-                        // nothing left.
-                        s.phase = Phase::Done;
-                        state::save(&cfg.state_dir, &session_id, &s);
-                    } else {
-                        // About to auto-drive the backlog queue. Honor flow's
-                        // invariant — never blind-drive a stale charter. Consult
-                        // compass; if it reports the charter isn't sharp, nudge
-                        // toward /compass and STAND DOWN instead of driving.
-                        // compass is a soft dep: absent / unparseable => proceed
-                        // as before (a repo that doesn't use compass is unaffected).
-                        if let Some(v) = compass::charter_freshness(&cwd) {
-                            if !v.fresh {
-                                s.phase = Phase::Done;
-                                state::save(&cfg.state_dir, &session_id, &s);
-                                let why = v
-                                    .reason
-                                    .unwrap_or_else(|| "charter が鮮明ではありません".to_string());
-                                block(
-                                    &cwd,
-                                    &session_id,
-                                    "compass-stale",
-                                    &format!(
-                                        "compass: {why}\n\n自動でバックログを流す前に /compass で再オリエンテーションしてください（鮮明化後に /flow か /backlog を再開）。"
-                                    ),
-                                );
-                                return;
-                            }
-                        }
-
-                        // Progress-based continuation for the open queue.
-                        // Never silently drops to Done with a non-empty queue —
-                        // a stalled-progress streak escalates VISIBLY instead.
-                        let (decision, next_prev, next_streak) = state::decide_progress(
-                            open.len() as u32,
-                            s.backlog_prev_open,
-                            s.backlog_no_progress_streak,
-                            cfg.stuck_threshold,
-                        );
-                        s.backlog_prev_open = next_prev;
-                        s.backlog_no_progress_streak = next_streak;
-                        s.phase = Phase::Continuing;
-                        state::save(&cfg.state_dir, &session_id, &s);
-
-                        let next = &open[0];
-                        let remaining = open.len();
-                        match decision {
-                            StopDecision::Continue => {
-                                let msg = format!(
-                                    "残課題バックログに {} 件の未完了課題があります。\n\n次の課題 [{}]: {}\n\n/backlog を実行してください。",
-                                    remaining, next.id, next.text
-                                );
-                                block(&cwd, &session_id, "backlog-next-pending", &msg);
-                            }
-                            StopDecision::EscalateStuck => {
-                                let reason = if is_autonomous() {
-                                    format!(
-                                        "自律継続中: open キューが {} 回連続で減っていません（進捗停滞を検知）。未完了 {} 件（次: [{}] {}）。/backlog か skill が失敗している可能性を out-of-band で調べつつ継続します。",
-                                        cfg.stuck_threshold, remaining, next.id, next.text
-                                    )
-                                } else {
-                                    format!(
-                                        "open キューが {} 回連続で減っていません（進捗停滞）。未完了 {} 件（次: [{}] {}）。/backlog か skill が失敗している可能性があります。継続するか調べるかユーザーに確認してください。",
-                                        cfg.stuck_threshold, remaining, next.id, next.text
-                                    )
-                                };
-                                block(&cwd, &session_id, "backlog-next-stuck", &reason);
-                            }
-                            // open is non-empty here, so decide_progress never
-                            // returns DoneEmpty; handle defensively as Continue.
-                            StopDecision::DoneEmpty => {
-                                let msg = format!(
-                                    "残課題バックログに {} 件の未完了課題があります。\n\n次の課題 [{}]: {}\n\n/backlog を実行してください。",
-                                    remaining, next.id, next.text
-                                );
-                                block(&cwd, &session_id, "backlog-next-pending", &msg);
-                            }
-                        }
-                    }
+                    // The condukt run has no pending task. This is the one
+                    // legitimate stop: allow it and latch.
+                    //
+                    // RETIRED 2026-08-20 (user instruction): what used to be
+                    // here read the backlog queue and, if it was non-empty,
+                    // BLOCKED the stop with "/backlog を実行してください" —
+                    // every turn, until the queue emptied. A compass-freshness
+                    // gate sat in front of it so a stale charter stood the
+                    // driving down instead. Both are gone, along with the
+                    // SessionStart "/flow で開始しますか？" proposal that said
+                    // the same thing at the other end of the session.
+                    //
+                    // The latch's premise moved and is still an OBSERVATION,
+                    // not an assumption: it was "condukt empty AND backlog
+                    // empty", it is now "this condukt run has no pending
+                    // task". The `Determination::Undetermined` arm on that
+                    // observation blocks (above), so `Done` is never reached
+                    // by failing to look. autoflow no longer reads the backlog
+                    // queue at all on this path — the queue is the /flow and
+                    // /backlog skills' business when the user invokes them.
+                    s.phase = Phase::Done;
+                    state::save(&cfg.state_dir, &session_id, &s);
                 }
             }
             Phase::Done => {}
@@ -502,69 +423,27 @@ fn emit_violation(cwd: &std::path::Path, session: &str, check_kind: &str) {
     }
 }
 
-fn session_start_command() -> ! {
-    run_hook(|| {
-        let raw = read_stdin();
-        let input = HookInput::parse(&raw).unwrap_or_default();
-        let cwd = input.cwd_or_current();
-
-        // Check compass charter freshness before proposing backlog work.
-        // Nudge toward /compass if the charter is stale — blind-driving a stale
-        // charter is worse than staying silent.
-        if let Some(v) = compass::charter_freshness(&cwd) {
-            if !v.fresh {
-                let why = v
-                    .reason
-                    .unwrap_or_else(|| "charter が鮮明ではありません".to_string());
-                println!(
-                    "{}",
-                    json!({
-                        "additionalContext": format!(
-                            "compass: {why}\n/compass で再接地してから /flow を実行してください。"
-                        )
-                    })
-                );
-                return;
-            }
-        }
-
-        // Check backlog for pending items and propose /flow when work exists.
-        match backlog::find_open(&cwd) {
-            Determination::Known(open) => {
-                if !open.is_empty() {
-                    let n = open.len();
-                    let first = &open[0];
-                    println!(
-                        "{}",
-                        json!({
-                            "additionalContext": format!(
-                                "バックログに {} 件 (最優先: '{}')。/flow で開始しますか？",
-                                n, first.text
-                            )
-                        })
-                    );
-                }
-                // 0 pending + charter fresh → stay silent
-            }
-            // SessionStart cannot block, so the restrictive answer here is to
-            // report the failure rather than stay silent: silence is read as
-            // "the queue is empty", which is precisely what we could not
-            // establish. (An absent `backlog` is `Known(vec![])`, not this arm,
-            // so machines without backlog stay quiet as before.)
-            Determination::Undetermined(why) => {
-                println!(
-                    "{}",
-                    json!({
-                        "additionalContext": format!(
-                            "autoflow: バックログのキューを確認できませんでした（判定不能）: {why}\n\
-                             未完了課題が無いという意味ではありません。"
-                        )
-                    })
-                );
-            }
-        }
-    })
-}
+// RETIRED 2026-08-20 (user instruction): `session_start_command` used to be
+// here, wired to the `SessionStart` hook. It read the backlog queue and, when
+// items were pending, injected "バックログに {n} 件 (最優先: '{title}')。/flow で
+// 開始しますか？"; when compass reported a stale charter it injected "/compass で
+// 再接地してから /flow を実行してください。" instead. Both are gone with the
+// hook, and so is the Stop hook's backlog arm that repeated the same request at
+// the other end of the session.
+//
+// Nothing replaces it, deliberately. This was a PROPOSAL, not a gate: it had no
+// verdict to preserve and nothing downstream read its silence as "the queue is
+// empty" (the Stop hook re-observed on its own). So retiring it removes noise
+// without moving any decision to the permissive side — which is why it can be
+// deleted outright rather than degraded into a quieter nudge. The backlog crate
+// still injects its own queue state at SessionStart; what is gone is the
+// instruction to act on it.
+//
+// `autoflow prompt-submit` still re-injects a resume instruction after a
+// `/compact`, but only for a flow loop ALREADY RUNNING in this session (gated on
+// this session being a registered driver — see `pre_compact_run`). That is
+// resuming work the user started, not proposing work they did not ask for, so it
+// stays.
 
 /// Instruction re-injected on the first prompt after a `/compact`, mirroring the
 /// SessionStart `/flow` proposal wording. Kept as one const so the hook and its

@@ -12,7 +12,7 @@ denied`, and — because a hook that cannot start produces no finding — the ga
 reports nothing at all. It goes dark, not red.
 
 Measured (2026-08-04, backlog 8cb3bc22): of the 39 launchers under crates/*/bin/
-(41 plugins, two of which are skills-only and ship no binary), exactly one —
+(41 plugins, three of which are skills-only and ship no binary), exactly one —
 `crates/taintguard/bin/taintguard` — was staged 100644 while the other 38 were
 100755. It was found BY HAND, after the gate had been silently inert; nothing in
 the repo could detect a 1-in-39 deviation. `check-plugin-rollout.py` was the

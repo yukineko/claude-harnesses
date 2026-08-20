@@ -12125,3 +12125,73 @@ updated_at = 1787188469
 weight = 0.0
 issue_number = 364
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/364"
+
+[[task]]
+id = "bb12a9b6"
+title = "check-plugin-rollout.py の mirror 判定が .gitignore を見ず、ランタイム生成物 (crates/*/.claude/progress.md) を未デプロイ source として誤検知する"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1787189177
+updated_at = 1787189177
+weight = 0.0
+issue_number = 365
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/365"
+
+[[task]]
+id = "6e23d450"
+title = "taintguard: /record (session-insights) の Obsidian vault Read が構造的に turn を tainted にする — observe-only を enforcement 化する前に Trusted 判定か例外を決める"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1787189188
+updated_at = 1787189188
+weight = 0.0
+issue_number = 366
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/366"
+
+[[task]]
+id = "28b6df2c"
+title = ".backlog/tasks.toml が main 作業ツリーにあるため任意セッションの backlog add が main を dirty にし Stop ゲートを踏む"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1787189190
+updated_at = 1787189190
+weight = 0.0
+issue_number = 367
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/367"
+
+[[task]]
+id = "2faad055"
+title = "session-insights の turn 数が自己矛盾 (数値サマリ turns:2 / コスト 83 turns) — 集計経路のどちらかが誤り"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1787189191
+updated_at = 1787189191
+weight = 0.0
+issue_number = 368
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/368"
+
+[[task]]
+id = "4159ee85"
+title = "~/.claude/plugins/installed_plugins.json.bak-* が200個超蓄積 — retention/掃除機構が無い"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1787189193
+updated_at = 1787189193
+weight = 0.0
+issue_number = 369
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/369"

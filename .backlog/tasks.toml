@@ -12195,3 +12195,17 @@ updated_at = 1787189193
 weight = 0.0
 issue_number = 369
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/369"
+
+[[task]]
+id = "4ffc77b5"
+title = "fugu-router の code-index per-run temp dir (/tmp/fugu-router-code-index-plainbuild-*) が retention 無しで蓄積する — 実測 89 個 / 約18M (2026-07-10〜08-18 生成, 測定日 2026-08-20, 測定点 aa285d69, 測定コマンド: ls -d /tmp/fugu-router-code-index-plainbuild-* | wc -l)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1787189803
+updated_at = 1787189803
+weight = 0.0
+issue_number = 370
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/370"

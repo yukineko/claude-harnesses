@@ -98,13 +98,17 @@ def _changed_stub(changed_crates=()):
     return _fn
 
 
-def _mirror_crate(crate_dir, install, *, skip=(), modify=(), extra=()):
+def _mirror_crate(crate_dir, install, *, skip=(), modify=(), extra=(), crlf=(),
+                  binary=()):
     """Copy the crate tree into the install dir the way a rollout rsync would.
 
-    `skip` / `modify` / `extra` deliberately break the mirror so a case can pin
-    what the checker does about each kind of divergence.
+    `skip` / `modify` / `extra` / `crlf` deliberately break the mirror so a case
+    can pin what the checker does about each kind of divergence. `crlf` rewrites
+    the DEPLOYED copy with CRLF endings — what a rollout run from a CRLF checkout
+    produces — and `binary` marks a file whose source side carries a NUL byte, so
+    a case can pin that binaries are not given the text relaxation.
     """
-    skip, modify = set(skip), set(modify)
+    skip, modify, crlf, binary = set(skip), set(modify), set(crlf), set(binary)
     for dirpath, _dirnames, filenames in os.walk(crate_dir):
         rel_dir = os.path.relpath(dirpath, crate_dir)
         rel_dir = "" if rel_dir == "." else rel_dir
@@ -117,6 +121,10 @@ def _mirror_crate(crate_dir, install, *, skip=(), modify=(), extra=()):
             data = Path(dirpath, f).read_bytes()
             if rel in modify:
                 data = data + b"\n# deployed copy has drifted\n"
+            if rel in binary:
+                data = data.replace(b"\n", b"\x00\n", 1)
+            if rel in crlf:
+                data = data.replace(b"\n", b"\r\n")
             dst.write_bytes(data)
     for rel in extra:
         dst = install / rel
@@ -134,7 +142,7 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                   install_paths=True,
                   skill_only=(), no_host_binary=(), force_host_binary=(),
                   asset_missing=None, asset_modified=None, asset_extra=None,
-                  source_extra=None,
+                  asset_crlf=None, asset_binary=None, source_extra=None,
                   cached_versions=None, settings_extra=None, no_bin_launcher=()):
     """Build a fixture repo + registry + settings under `tmp`.
 
@@ -178,6 +186,8 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
     asset_missing = dict(asset_missing or {})
     asset_modified = dict(asset_modified or {})
     asset_extra = dict(asset_extra or {})
+    asset_crlf = dict(asset_crlf or {})
+    asset_binary = dict(asset_binary or {})
     source_extra = dict(source_extra or {})
     versions = dict(versions or FIXTURE_PLUGINS)
     crates = tmp / "crates"
@@ -251,7 +261,9 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                               skip=tuple(asset_missing.get(c, ()))
                               + tuple(source_extra.get(c, ())),
                               modify=asset_modified.get(c, ()),
-                              extra=asset_extra.get(c, ()))
+                              extra=asset_extra.get(c, ()),
+                              crlf=asset_crlf.get(c, ()),
+                              binary=asset_binary.get(c, ()))
                 manifest = provenance.get(c, _DEFAULT_PROVENANCE)
                 if provenance_text is not None and c in provenance:
                     (install / ".deployed-from.json").write_text(
@@ -1069,6 +1081,106 @@ class DeployedFileMirror(_FixtureCase):
         self.assertEqual(
             rc, 0,
             f"rebuild artifacts must not be drift.\nout={out}\nerr={err}",
+        )
+
+
+class LineEndingRepresentation(_FixtureCase):
+    """CRLF-vs-LF is a checkout artifact, not a payload difference.
+
+    Measured 2026-08-20 at b7302987: the main clone's working tree holds
+    `crates/*/Cargo.toml` with CRLF, a linked worktree of the SAME commit holds
+    LF, and `git ls-files --eol` reports `i/lf w/lf attr/text=auto` — git treats
+    the two checkouts as identical. The deployed cache was rsynced from the main
+    tree, so running this checker from a worktree reported 20 plugins as drifted
+    on `.claude-plugin/plugin.json` and `Cargo.toml`, all of them
+    representation-only.
+
+    Since CLAUDE.md 8 requires all work to happen in a worktree, "the checker is
+    unusable from a worktree" is not a corner case — it is where it runs.
+
+    Two things must hold at once, and they pull in opposite directions:
+      * it must not be DRIFT (nothing is wrong with the payload), and
+      * it must not be SILENT (the bytes differ; silence reads as verified).
+    So the class is reported as a visible NOTE and the exit code stays 0.
+
+    The cases below rewrite `src/main.rs`, which the fixture actually writes.
+    Written first against `Cargo.toml` — a path the fixture creates on NEITHER
+    side — where three of the four cases failed for the wrong reason and one
+    passed vacuously. Same trap as `CrateLocalRuntimeArtifacts`: a fixture that
+    names a file nobody has tests nothing.
+
+    The anti-vacuity controls are `test_content_drift_plus_crlf_is_still_drift`
+    (a real edit hiding behind a CRLF rewrite must still be caught) and the
+    existing `DeployedFileMirror.test_deployed_file_differing_from_source_is_drift`.
+    """
+
+    def test_crlf_only_difference_is_not_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, asset_crlf={"condukt": ["src/main.rs"]}
+            )
+        self.assertEqual(
+            rc, 0,
+            "a deployed file differing only in line endings must not be "
+            f"rollout drift.\nout={out}\nerr={err}",
+        )
+        self.assertNotIn("differ from source", out + err)
+
+    def test_crlf_only_difference_is_still_reported(self):
+        """Not drift, but not silence either."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, asset_crlf={"condukt": ["src/main.rs"]}
+            )
+        both = out + err
+        self.assertEqual(rc, 0, both)
+        self.assertIn("condukt", both)
+        self.assertIn("src/main.rs", both)
+        self.assertIn("line ending", both.lower())
+
+    def test_green_line_does_not_claim_byte_identity(self):
+        """The OK line is what a reader uses to skip the NOTE above it.
+
+        "file-for-file identical to their crate" is a byte-level claim. With a
+        line-ending finding outstanding it is false as written, so the sentence
+        has to carry its own exception.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, asset_crlf={"condukt": ["src/main.rs"]}
+            )
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("no rollout drift", out)
+        self.assertNotIn("file-for-file identical to their crate (", out)
+        self.assertIn("apart from the line-ending", out)
+
+    def test_content_drift_plus_crlf_is_still_drift(self):
+        """A real edit must not hide behind a line-ending rewrite."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                asset_modified={"condukt": ["src/main.rs"]},
+                asset_crlf={"condukt": ["src/main.rs"]},
+            )
+        self.assertNotEqual(
+            rc, 0,
+            "a content change is still drift when the deployed copy was also "
+            f"rewritten with CRLF.\nout={out}\nerr={err}",
+        )
+        self.assertIn("differ from source", out + err)
+
+    def test_binary_file_gets_no_text_relaxation(self):
+        """Normalising \r\n inside a binary could mask a real difference."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                asset_binary={"condukt": ["src/main.rs"]},
+                asset_crlf={"condukt": ["src/main.rs"]},
+            )
+        self.assertNotEqual(
+            rc, 0,
+            "a file carrying a NUL byte must be compared byte-for-byte.\n"
+            f"out={out}\nerr={err}",
         )
 
 

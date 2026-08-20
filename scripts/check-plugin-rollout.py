@@ -185,6 +185,15 @@ PROVENANCE_FILE = ".deployed-from.json"
 # test_check_plugin_rollout.CrateLocalRuntimeArtifacts.
 DEPLOY_EXCLUDED_TOP = ("target", ".git", ".in_use", ".claude")
 
+# Deployed text files whose bytes differ from the crate's ONLY by line endings.
+# Not drift (the payload is identical; git itself calls the two checkouts equal)
+# and not clean either (the bytes really do differ), so the class is reported
+# separately and does not touch the exit code. Populated by `_asset_problem`,
+# drained by `main`. Module-level because `_asset_problem` returns one string
+# and its callers append that to the blocking list — a second return value would
+# have to be threaded through every caller and test for a non-blocking note.
+EOL_ONLY = []
+
 # The <os>-<arch> suffixes a plugin binary can carry. Binaries are generated,
 # never committed for every platform, so bin/<name>-<suffix> is allowed to exist
 # in the deployed tree without a counterpart in the crate.
@@ -950,14 +959,34 @@ def _asset_problem(crate, entry):
     missing = sorted(set(src) - set(dst))
     extra = sorted(r for r in set(dst) - set(src) if not _is_rebuild_artifact(r))
     differing = []
+    eol_only = []
     unreadable = []
     for rel in sorted(set(src) & set(dst)):
         try:
             with open(src[rel], "rb") as a, open(dst[rel], "rb") as b:
-                if a.read() != b.read():
-                    differing.append(rel)
+                sa, sb = a.read(), b.read()
         except OSError as exc:
             unreadable.append(f"{rel} ({exc})")
+            continue
+        if sa == sb:
+            continue
+        # A CRLF-vs-LF difference is a property of the CHECKOUT, not of the
+        # payload: `git ls-files --eol` reports i/lf w/lf attr/text=auto for
+        # these files, and two checkouts of one commit can legitimately differ
+        # here (measured 2026-08-20 at b7302987: the main clone holds CRLF, a
+        # linked worktree of the same commit holds LF, and the cache was rsynced
+        # from the main clone — so running this from a worktree reported 20
+        # plugins as drifted, all representation-only). Byte-exactness is kept
+        # for anything with a NUL byte: normalising inside a binary could make a
+        # real difference disappear.
+        if b"\x00" not in sa and b"\x00" not in sb and (
+            sa.replace(b"\r\n", b"\n") == sb.replace(b"\r\n", b"\n")
+        ):
+            eol_only.append(rel)
+            continue
+        differing.append(rel)
+    if eol_only:
+        EOL_ONLY.append((crate, eol_only))
 
     def _sample(items):
         head = ", ".join(items[:3])
@@ -1185,7 +1214,13 @@ def check_enabled(plugins):
     return gate_failures, warnings, (checked, gates_seen)
 
 
+def cpr_eol_only():
+    """The line-ending-only findings collected during this run."""
+    return EOL_ONLY
+
+
 def main():
+    EOL_ONLY.clear()
     plugins, unverifiable = scan_plugins()
     # Unconditional, before either dimension can decide to skip itself.
     for crate in unaccounted_gate_plugins(plugins):
@@ -1281,6 +1316,30 @@ def main():
             file=sys.stderr,
         )
 
+    # Line-ending-only differences: reported, never blocking. Printed BEFORE the
+    # green rollout line below so a reader cannot take "no rollout drift" as
+    # "deployed bytes == source bytes" without seeing this.
+    if cpr_eol_only():
+        total = sum(len(rels) for _c, rels in cpr_eol_only())
+        print(
+            f"NOTE ({total} deployed file(s) across {len(cpr_eol_only())} plugin(s) "
+            "differ from the crate ONLY in line endings — not drift, not "
+            "byte-identical either):",
+            file=sys.stderr,
+        )
+        for crate, rels in cpr_eol_only():
+            shown = ", ".join(rels[:3]) + (f", +{len(rels) - 3} more" if len(rels) > 3 else "")
+            print(f"  - {crate}: {shown}", file=sys.stderr)
+        print(
+            "Cause: two checkouts of the same commit can differ here (git calls "
+            "them identical: `git ls-files --eol` reports i/lf w/lf "
+            "attr/text=auto), and the cache was rsynced from whichever tree ran "
+            "the rollout. No rollout is needed. To make the bytes match too, "
+            "check the trees out with the same line endings and re-run "
+            "scripts/rollout-plugins.sh --plugin <name> --force.",
+            file=sys.stderr,
+        )
+
     # Warnings never affect the exit code — disabling a non-gate plugin is a
     # legitimate user choice, so this informs without blocking.
     if warnings:
@@ -1319,9 +1378,19 @@ def main():
             else "; no superseded version dir left in the cache"
         )
         shown, parked_note = _minus_parked(rollout_checked, set(all_names))
+        # The claim is byte-level, so it must name its own exception when the
+        # line-ending class fired — otherwise this sentence is what a reader uses
+        # to skip the NOTE printed above it.
+        identical = (
+            "and file-for-file identical to their crate apart from the "
+            f"line-ending difference(s) noted above in {len(cpr_eol_only())} "
+            "plugin(s)"
+            if cpr_eol_only()
+            else "and file-for-file identical to their crate"
+        )
         print(
             f"OK: {shown} plugins deployed at their source version "
-            f"and file-for-file identical to their crate (no rollout drift){held}"
+            f"{identical} (no rollout drift){held}"
             f"{parked_note}"
         )
     if (

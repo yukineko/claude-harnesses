@@ -11753,7 +11753,7 @@ title = "~/.cargo/bin の 2026-07-23 版 backlog/hypothesis/fugu-router が plug
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "done"
 notes = '''
 実測 2026-08-17、測定点 f1131a36、WSL2 linux-x86_64。
 
@@ -11864,9 +11864,43 @@ classifier の管轄であり、別ツールで迂回するのは拒否の意図
       解決するので rollout に追従する。**こちらが本筋。**
       ただし Claude session 外の素の shell には plugin bin dir が PATH に無いため、
       そこでは bare `backlog` が使えなくなる。その運用を捨てて良いかはユーザー判断。
+
+--- 解決 2026-08-20 (測定点 b85b90fb): shadow を削除。ただし対象外の 3 本が残る ---
+
+ユーザー判断 (2026-08-20、AskUserQuestion): 修正案 (2) を採用し
+`rm ~/.cargo/bin/{backlog,hypothesis,fugu-router}` を実行した
+(削除前にそれぞれ `.bak-stale-20260820` としてバックアップ)。
+
+解決の観測:
+
+    $ type -a backlog
+    backlog is /home/.../plugins/cache/yukineko/backlog/0.2.27/bin/backlog   <- 1 番目がこれになった
+    $ type -a hypothesis  -> .../hypothesis/0.1.12/bin/hypothesis
+    $ type -a fugu-router -> .../fugu-router/0.1.26/bin/fugu-router
+    $ backlog list --status pending | wc -l          -> 70  (repo ストア。移設前の stale 版は 185)
+    $ backlog list --status pending | grep -c 6354ae7a -> 1  (移設した item が bare backlog から見える)
+    $ hypothesis list --status open | head -1        -> [open] (conf 0.50) 186f7a66 ... (動作確認)
+
+これで bare `backlog` を呼ぶ全消費者 (flow の next --claim / autoflow の Stop hook / daily /
+overwatch aggregate 経由の SessionStart バナー / scripts/e2e-autonomy.sh) が 0.2.27 に到達し、
+5ba13c3e の divergence ガードが実体に届く。Claude Code はセッションごとに plugin の現行
+version dir を PATH へ解決するので、以後の bump にも追従する (上書き案 (1) と違って再 stale 化しない)。
+
+【このチケットが**カバーしていない**残り: 同じ 2026-07-23 版が 3 本残っている】
+
+`ls -la ~/.cargo/bin/` の実測 (2026-08-20 18:02) では、Jul 23 18:04-18:05 の harness バイナリは
+6 本あった。本チケットが名指ししたのは 3 本だけで、残る 3 本は削除していない:
+
+    autoflow    1060784  Jul 23 18:05
+    daily       2310536  Jul 23 18:05
+    reviewgate  2442960  Jul 23 18:04
+
+これらは hooks.json から絶対パスで起動されるため hook 経路では shadow の影響を受けないが、
+bare 名で呼ぶスクリプト/skill は 2026-07-23 版に落ちる。ユーザーが承認したのは 3 本の削除
+だったので、残り 3 本は独立の item として起票した (下記)。**「たぶん同じだろう」で消していない。**
 '''
 created_at = 1786943298
-updated_at = 1786951292
+updated_at = 1787217508
 weight = 0.0
 
 [[task]]
@@ -13596,3 +13630,17 @@ updated_at = 1787217105
 weight = 0.0
 issue_number = 374
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/374"
+
+[[task]]
+id = "ddc2e088"
+title = "~/.cargo/bin に 2026-07-23 版の autoflow / daily / reviewgate が残り、bare 名で呼ぶ経路を shadow する (91fa24df の対象外 3 本)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "実測 2026-08-20 18:02、測定点 b85b90fb、WSL2。`ls -la ~/.cargo/bin/` に Jul 23 18:04-18:05 の harness バイナリが 6 本あった。91fa24df が名指しして削除したのは backlog / hypothesis / fugu-router の 3 本のみで、残る 3 本は手つかず: autoflow (1060784 bytes, Jul 23 18:05) / daily (2310536, Jul 23 18:05) / reviewgate (2442960, Jul 23 18:04)。いずれも plugin として rollout 済みの現行版が plugin cache 側に存在する (autoflow は本セッションで 0.1.22 を rollout した)。hook 経路は hooks.json が絶対パスで起動するので影響を受けないが、bare 名で呼ぶ scripts / skill / 手打ちは 2026-07-23 版に落ちる。実害が観測できているかは未確認 (backlog では store 解決の差として実害が観測されたが、この 3 本については 7/23 版と現行版の挙動差を測っていない)。判定不能な点: (a) 3 本とも削除して plugin launcher へ落とすべき (b) Claude session 外の素の shell で使う運用があるので残すべき。見分ける方法: これらを bare 名で呼ぶ経路 (scripts/*.sh、skills の SKILL.md、crontab) を grep し、Claude session 外から呼ばれるものがあるか確認する。なお 91fa24df では「たぶん同じだろう」で消さず、ユーザーが承認した 3 本に限って削除した。関連: 91fa24df (本件の親。解決済み)、rollout-plugins.sh が ~/.cargo/bin を更新する経路を持たないという根本原因は 91fa24df の notes に記録済み。"
+created_at = 1787217503
+updated_at = 1787217503
+weight = 0.0
+issue_number = 375
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/375"

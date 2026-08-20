@@ -173,7 +173,17 @@ PROVENANCE_FILE = ".deployed-from.json"
 # Top-level dirs rollout-plugins.sh's rsync excludes, so they are never expected
 # in a deployed tree and must be excluded from both sides of the comparison.
 # `.in_use/` is a runtime marker dir written by live sessions, not payload.
-DEPLOY_EXCLUDED_TOP = ("target", ".git", ".in_use")
+# `.claude/` is the same kind of thing: `.gitignore` declares `crates/*/.claude/`
+# "crate-local runtime progress artifacts (taskprog etc.) — never track", and
+# `git ls-files 'crates/*/.claude/*'` returns 0 files, so nothing in it is
+# payload. It was NOT excluded until 2026-08-20, and the consequence was
+# concrete: taskprog seeded crates/ctxrot/.claude/progress.md (a content-free
+# skeleton naming another session) and this check reported "1 source file(s) not
+# deployed", pointing its reader at `--force` — i.e. at copying one session's
+# scratch state into the shared plugin cache. This list is kept identical to the
+# script's rsync excludes by
+# test_check_plugin_rollout.CrateLocalRuntimeArtifacts.
+DEPLOY_EXCLUDED_TOP = ("target", ".git", ".in_use", ".claude")
 
 # The <os>-<arch> suffixes a plugin binary can carry. Binaries are generated,
 # never committed for every platform, so bin/<name>-<suffix> is allowed to exist
@@ -858,8 +868,9 @@ def _walk_files(root):
     deployed side reads as "files are missing". Both are wrong answers dressed
     as data, so the walk raises and this returns undetermined instead.
 
-    The three dirs rollout-plugins.sh excludes are excluded here too, at the top
-    level only, exactly as its rsync does: `--exclude '/target/'` is anchored.
+    The dirs rollout-plugins.sh excludes are excluded here too, at the top level
+    only, exactly as its rsync does: `--exclude '/target/'` is anchored. The two
+    lists are not merely intended to agree — a test compares them.
     """
     out = {}
 
@@ -902,7 +913,8 @@ def _asset_problem(crate, entry):
     Checking only the binary was too narrow a reading of "is this rolled out".
     rollout-plugins.sh deploys a plugin with
 
-        rsync -a --delete --exclude '/target/' --exclude '/.git/' --exclude '/.in_use/'
+        rsync -a --delete --exclude '/target/' --exclude '/.git/' \
+              --exclude '/.in_use/' --exclude '/.claude/'
 
     so a complete rollout leaves the install dir a full mirror of crates/<name>,
     plus the two artifacts rebuild-plugins.sh adds afterwards. A plugin's real

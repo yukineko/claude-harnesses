@@ -89,7 +89,8 @@
 #     never one whose hold status could not be determined. Never touches other
 #     plugins' registry entries, never touches the registry's top-level
 #     "version" field.
-#   - Excludes target/, .git/, and .in_use/ (a runtime lock dir the Claude
+#   - Excludes target/, .git/, .claude/ (crate-local taskprog progress
+#     artifacts — gitignored, never payload), and .in_use/ (a runtime lock dir the Claude
 #     Code plugin loader creates *inside* a live cache version dir — not part
 #     of repo source, must survive a --force recopy of an in-use version).
 #   - Registry write is atomic (temp file + os.replace) and backed up first
@@ -381,16 +382,20 @@ PY
 }
 
 # --- copy a repo plugin dir into a cache version dir -------------------------
-# Excludes target/, .git/, .in_use/ (see header). rsync preferred; cp -a fallback.
+# Excludes target/, .git/, .in_use/, .claude/ (see header). rsync preferred;
+# cp -a fallback. The exclude set is mirrored by check-plugin-rollout.py's
+# DEPLOY_EXCLUDED_TOP and the two are compared by a test — a dir dropped from the
+# copy but still expected by the check reports permanent, unfixable drift.
 copy_plugin_dir() {
   local src="$1" dst="$2"
   mkdir -p "$dst"
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete --exclude '/target/' --exclude '/.git/' --exclude '/.in_use/' "$src/" "$dst/"
+    rsync -a --delete --exclude '/target/' --exclude '/.git/' \
+          --exclude '/.in_use/' --exclude '/.claude/' "$src/" "$dst/"
   else
     find "$dst" -mindepth 1 -maxdepth 1 ! -name '.in_use' -exec rm -rf {} +
     cp -a "$src/." "$dst/"
-    rm -rf "${dst:?}/target" "${dst:?}/.git"
+    rm -rf "${dst:?}/target" "${dst:?}/.git" "${dst:?}/.claude"
   fi
 }
 
@@ -1067,7 +1072,7 @@ while IFS=$'\t' read -r name version src target needs_copy needs_registry mismat
   if [ "$needs_copy" = "1" ]; then
     changed=1
     if [ "$dry" = 1 ]; then
-      echo "[dry-run] would copy $srcdir/ -> $target/ (rsync -a --delete, exclude target/ .git/ .in_use/)"
+      echo "[dry-run] would copy $srcdir/ -> $target/ (rsync -a --delete, exclude target/ .git/ .in_use/ .claude/)"
     else
       copy_plugin_dir "$srcdir" "$target"
       echo "copied $name -> $target"

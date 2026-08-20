@@ -21,6 +21,7 @@ import io
 import json
 import os
 import platform
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -133,6 +134,7 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                   install_paths=True,
                   skill_only=(), no_host_binary=(), force_host_binary=(),
                   asset_missing=None, asset_modified=None, asset_extra=None,
+                  source_extra=None,
                   cached_versions=None, settings_extra=None, no_bin_launcher=()):
     """Build a fixture repo + registry + settings under `tmp`.
 
@@ -164,10 +166,19 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
     no_bin_launcher    — crates that declare a binary but ship no source-side
                          crates/<crate>/bin/<crate> launcher script (the real
                          taintguard-before-this-task gap).
+    source_extra       — crate -> rel paths written into the SOURCE crate and
+                         deliberately NOT mirrored into the deployed tree. This
+                         is the shape an rsync `--exclude` produces, and the
+                         real case is crates/<c>/.claude/progress.md: a
+                         gitignored runtime artifact seeded by taskprog's Stop
+                         hook (`.gitignore`: "crate-local runtime progress
+                         artifacts (taskprog etc.) — never track"), which is not
+                         plugin payload and must not be deployed.
     """
     asset_missing = dict(asset_missing or {})
     asset_modified = dict(asset_modified or {})
     asset_extra = dict(asset_extra or {})
+    source_extra = dict(source_extra or {})
     versions = dict(versions or FIXTURE_PLUGINS)
     crates = tmp / "crates"
     for crate in versions:
@@ -197,6 +208,11 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
             _write_json(pj, {"name": crate})
             continue
         _write_json(pj, {"name": crate, "version": ver})
+    for crate, rels in source_extra.items():
+        for rel in rels:
+            f = crates / crate / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("crate-local runtime artifact\n", encoding="utf-8")
     # A non-plugin crate must be skipped entirely by both dimensions.
     (crates / "harness-core").mkdir(parents=True, exist_ok=True)
 
@@ -232,7 +248,8 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                 # it had an empty deployed tree and the asset assertions would
                 # fire everywhere instead of only where a case broke the mirror.
                 _mirror_crate(crates / c, install,
-                              skip=asset_missing.get(c, ()),
+                              skip=tuple(asset_missing.get(c, ()))
+                              + tuple(source_extra.get(c, ())),
                               modify=asset_modified.get(c, ()),
                               extra=asset_extra.get(c, ()))
                 manifest = provenance.get(c, _DEFAULT_PROVENANCE)
@@ -805,6 +822,104 @@ class BinaryProvenance(_FixtureCase):
             rc, 0, f"a malformed manifest must not pass.\nout={out}\nerr={err}"
         )
         self.assertIn("overwatch", out + err)
+
+
+class CrateLocalRuntimeArtifacts(_FixtureCase):
+    """A gitignored artifact inside a crate is not plugin payload.
+
+    Measured 2026-08-20: taskprog's Stop hook seeded
+    `crates/ctxrot/.claude/progress.md` in the main working tree (a content-free
+    skeleton naming another session), and this checker reported
+
+        ctxrot: deployed tree is not a mirror of crates/ctxrot — 1 source
+        file(s) not deployed: .claude/progress.md
+
+    with the fix line `rollout-plugins.sh --plugin ctxrot --force`. Following
+    that hint would have COPIED one session's scratch state into the shared
+    plugin cache — the checker was steering its reader toward the wrong action,
+    because it treated "whatever is lying in the crate dir" as the payload.
+
+    `.gitignore` already answers what the payload is: `crates/*/.claude/` is
+    declared "crate-local runtime progress artifacts (taskprog etc.) — never
+    track", and `git ls-files 'crates/*/.claude/*'` returns 0 files. So the
+    exclusion belongs on BOTH sides — the rsync must not deploy it, and this
+    comparison must not expect it — exactly as target/, .git/ and .in_use/ are
+    already handled.
+
+    The anti-vacuity control for this class is
+    `DeployedFileMirror.test_source_file_never_deployed_is_drift`: a TRACKED
+    payload file (`.claude-plugin/plugin.json`) absent from the deployed tree
+    must stay drift. Without it, widening the exclusion could quietly disable the
+    whole dimension.
+
+    The cases below run against `condukt`, not `ctxrot`: the fixture fleet is
+    FIXTURE_PLUGINS, and a crate outside it gets no install path, so nothing
+    compares it. Both cases were written against `ctxrot` first and PASSED before
+    any fix — the signature of a test that checks nothing. Recorded here because
+    the same trap catches the next author: a green run on an unfixed checker is
+    evidence about the test, not about the code.
+    """
+
+    def test_gitignored_crate_local_artifact_is_not_drift(self):
+        """Source has .claude/progress.md, deployed does not: not drift."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, source_extra={"condukt": [".claude/progress.md"]}
+            )
+        self.assertEqual(
+            rc, 0,
+            "a gitignored crate-local runtime artifact must not be reported as "
+            f"rollout drift.\nout={out}\nerr={err}",
+        )
+        self.assertNotIn(".claude/progress.md", out + err)
+
+    def test_leftover_deployed_artifact_is_not_reported_as_extra(self):
+        """The other side of the same exclusion.
+
+        A version dir rolled out before the exclusion existed can still carry a
+        copied `.claude/progress.md`. With the dir excluded from both walks it is
+        out of scope, not an unaccounted extra — the same treatment `.in_use/`
+        already gets.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, asset_extra={"condukt": [".claude/progress.md"]}
+            )
+        self.assertEqual(
+            rc, 0,
+            "a leftover deployed copy of an excluded runtime artifact must not "
+            f"be reported as an extra file.\nout={out}\nerr={err}",
+        )
+        self.assertNotIn(".claude/progress.md", out + err)
+
+    def test_excluded_dirs_match_the_rollout_script(self):
+        """DEPLOY_EXCLUDED_TOP must equal rollout-plugins.sh's rsync excludes.
+
+        The checker's docstring claims the two lists mirror each other, and that
+        claim is what makes the exclusion safe: a dir excluded from the copy but
+        not from the comparison reports permanent drift, and a dir excluded from
+        the comparison but not from the copy hides a real deployment. Prose
+        cannot hold that; this test can. Regression guard, not a RED-first
+        assertion — it was green before this change and must stay green.
+        """
+        # Join `\`-continuations first: the excludes span two physical lines,
+        # and reading one of them would compare half a command.
+        script = (_HERE / "rollout-plugins.sh").read_text(encoding="utf-8")
+        script = re.sub(r"\\\n\s*", " ", script)
+        lines = [ln for ln in script.splitlines()
+                 if "rsync -a --delete" in ln and "--exclude" in ln]
+        self.assertEqual(
+            len(lines), 1,
+            "expected exactly one rsync copy command to compare against; "
+            f"found {len(lines)}",
+        )
+        shell_excludes = set(re.findall(r"--exclude '/([^/']+)/'", lines[0]))
+        self.assertEqual(
+            shell_excludes, set(cpr.DEPLOY_EXCLUDED_TOP),
+            "the rsync excludes in rollout-plugins.sh and the checker's "
+            f"DEPLOY_EXCLUDED_TOP disagree: shell={sorted(shell_excludes)} "
+            f"checker={sorted(cpr.DEPLOY_EXCLUDED_TOP)}",
+        )
 
 
 class SkillOnlyPlugins(_FixtureCase):

@@ -25,9 +25,12 @@ tags = [
     "p1",
 ]
 status = "pending"
-notes = '実測 2026-08-06。(a) .cargo/config.toml の target-dir = "/tmp/condukt-build" は Windows cargo からは C:\tmp\condukt-build に、WSL からは /tmp/condukt-build に解決される。コメントは「WSL で C: ドライブを空けるため」と説明しているが、Windows 側ではその意図が達成されていない。(b) scripts/cap-target-dir.sh の CARGO_TARGET_CAP_MB は独立した 2 ディレクトリに分かれて適用されるので、実質の上限は宣言の 2 倍になる。(c) .cargo/ は untracked なので git worktree には存在せず、worktree でのビルドは <worktree>/target に落ちる (今回 rollout の canary 検証で GREEN を出すのに overwatch を worktree 内で再ビルドする一手が余分に必要になった)。対応案: config.toml をトラックする / 絶対パスをやめる / cap-target-dir.sh が実際の target_directory を cargo metadata から引く、のいずれか。関連: 12cdfed4 (rollout の overwatch 検出を cargo metadata ベースに直した際に判明)。'
+notes = '''
+実測 2026-08-06。(a) .cargo/config.toml の target-dir = "/tmp/condukt-build" は Windows cargo からは C:\tmp\condukt-build に、WSL からは /tmp/condukt-build に解決される。コメントは「WSL で C: ドライブを空けるため」と説明しているが、Windows 側ではその意図が達成されていない。(b) scripts/cap-target-dir.sh の CARGO_TARGET_CAP_MB は独立した 2 ディレクトリに分かれて適用されるので、実質の上限は宣言の 2 倍になる。(c) .cargo/ は untracked なので git worktree には存在せず、worktree でのビルドは <worktree>/target に落ちる (今回 rollout の canary 検証で GREEN を出すのに overwatch を worktree 内で再ビルドする一手が余分に必要になった)。対応案: config.toml をトラックする / 絶対パスをやめる / cap-target-dir.sh が実際の target_directory を cargo metadata から引く、のいずれか。関連: 12cdfed4 (rollout の overwatch 検出を cargo metadata ベースに直した際に判明)。
+
+2026-08-20 追記 (測定点 1d843a47): (c) の規模を実測 — condukt-worktrees/run-20260818-143719-13654-t3/target = 16G、.harness-worktrees/*/target 合計 = 23G、計 39G。main tree の target/ は 0 (config.toml があるため /tmp/condukt-build へ正しく退避されている)。ext4 使用量 76G の過半がこれ。CLAUDE.md 8 の worktree 義務化 (session worktree 26 本) と相乗し、C: は 443G/461G = 97% 使用・空き 19G まで到達。cap-target-dir.sh は /tmp/condukt-build しか見ないのでこの 39G は検出不能。関連: 2fb49f5c (vhdx が sparse 無効なため、この 39G を消しても C: は回復しない)。'''
 created_at = 1785983822
-updated_at = 1785983822
+updated_at = 1787190554
 weight = 0.0
 issue_number = 282
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/282"
@@ -12209,3 +12212,17 @@ updated_at = 1787189803
 weight = 0.0
 issue_number = 370
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/370"
+
+[[task]]
+id = "2fb49f5c"
+title = "WSL2 の ext4.vhdx が sparse 無効のため WSL 内で何を削除しても C: に空間が返らない — fstrim は 922.2 GiB trimmed と報告するが vhdx は不変 (実測 2026-08-20)。sparseVhd 有効化 or wsl --shutdown + compact vdisk が必要"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "重複起票の振り替え: 当初 target-dir 伝播の件で起票したが 6d59e6eb と重複していたため、未起票だった本件へ差し替えた。fstrim 前後で vhdx サイズ・C: 空きともに不変であることを実測 (142646181888 bytes -> 142646181888 bytes、C: 18G -> 18G)。C: は 443G/461G = 97% 使用。.wslconfig は存在しない (sparseVhd 未設定)。したがって『削除すれば C: が空く』は誤りで、削除は compact の前段としてのみ意味を持つ。"
+created_at = 1787190454
+updated_at = 1787190554
+weight = 0.0
+issue_number = 371
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/371"

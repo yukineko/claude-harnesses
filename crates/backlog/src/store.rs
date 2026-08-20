@@ -1251,7 +1251,7 @@ impl SyncAction {
 /// contents, so it can be re-derived from scratch on every run and never
 /// depends on remembering that a previous run failed.
 ///
-/// **Scope is the store file itself.** `config::tasks_path_for` resolves the
+/// **Scope is the store file itself.** `config::locate` resolves the
 /// store per repo root, so every task in a given `tasks.toml` belongs to the
 /// repo whose issues we are mirroring; there is deliberately no extra project
 /// filter, which would silently drop tasks written from another checkout of
@@ -1850,11 +1850,13 @@ pub(crate) fn canonicalize_project(project: &str) -> String {
 ///      LOCATION (a separate concern: that scan decides which file
 ///      `tasks.toml` is; this one decides what project IDENTITY a resolved
 ///      checkout maps to). No ancestor found: this checkout isn't inside any
-///      repo at all — a documented, intentional case (see
-///      `Config::tasks_path_for`'s doc comment on its own legacy `~/.backlog`
-///      fallback), not a "cannot determine" defect — so this is `Known(cwd)`
-///      (canonicalized) rather than `Undetermined`, UNLESS canonicalizing
-///      `cwd` itself fails (a genuine IO "could not determine").
+///      repo at all — which is an OBSERVATION ("there is no repo here"), not a
+///      failure to observe, so this is `Known(cwd)` (canonicalized) rather
+///      than `Undetermined`, UNLESS canonicalizing `cwd` itself fails (a
+///      genuine IO "could not determine"). Note this identity no longer
+///      selects a store for such a cwd: `Config::locate` returns
+///      `StoreLocation::NoProject` there and the CLI refuses before any
+///      identity is needed.
 ///   2. `.git` is a DIRECTORY: this checkout IS a main working tree; its own
 ///      canonicalized root is the identity.
 ///   3. `.git` is a FILE (a linked worktree): resolve to the MAIN working

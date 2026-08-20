@@ -34,7 +34,7 @@ backlog はこの失敗モードを潰す。一度キューに積めば、
 | サブコマンド | 役割 |
 |---|---|
 | `add` | タスクを追加 (`--title`, `--project`, `--tag`, `--priority p0/p1/p2`, `--notes`, `--weight`, `--force`) |
-| `list` | タスク一覧。`--tag` / `--project` / `--status` で絞り込み |
+| `list` | store のタスク一覧。`--tag` / `--status` で絞り込み。repo store では `--project` は絞り込みではなく **assertion**（下の「スコープ」参照）|
 | `next` | 次の最高優先度の pending タスクを JSON で出力 |
 | `done <id>` | タスクを完了マーク |
 | `fail <id>` | タスクを失敗マーク (`--reason`)。再実行を 2 日先送りする |
@@ -85,6 +85,28 @@ backlog uninstall                                            # 再び除去す�
 
 `backlog list --json` の各要素には `hashkey` フィールドが含まれる (title + project から計算、保存はされない)。
 `/flow` など上位 driver がこれを使って `condukt state is-claimed` によるゲートを追加コストなしに行える。
+
+### スコープ: repo ごとに 1 キュー、ファイル自体がスコープ
+
+store は repo ごとに解決される (`<repo root>/.backlog/tasks.toml`。ほかのファイルと同じように
+merge される tracked file)。したがってその中身はその repo のタスクだけであり、以下 2 点は意図的:
+
+- **read は project フィルタを掛けない。** どの checkout が書いたものであっても、ファイル内の
+  全タスクがスコープ内。書いた checkout の絶対パスで行を絞り込むと、1 つの repo のキューが
+  **マシンごとに分裂**する（実測 2026-08-20、本 repo の store: pending 258 件が macOS の
+  checkout パス、66 件が WSL のパスでラベルされ、どちらから `list` しても自分側しか見えなかった）。
+  よって `--project` は「どの store のことを言っているか」の **assertion** になる — この repo を
+  指すなら何も変わらず、別の repo を指すのは（絞り込み結果ではなく）エラー。`--all` は受理され、
+  repo store ではそれが既定の挙動。
+- **repo root が上に無い cwd には store が無い。** `add`/`list`/`next` は理由を述べて拒否し、
+  cross-project な `~/.backlog` へフォールバックしない。そのフォールバックが、tempdir で走った
+  プロセスが fixture を本物のキューへ書き込んだ経路であり、そういう cwd からの read が
+  別プロジェクトの作業で答えられていた経路である。共有 store を明示的に使いたい場合は
+  `~/.backlog/config.toml` で `store_dir` を pin する（pinned store は複数 project を持ちうるので、
+  そこでは `--project` は従来どおりのフィルタ）。
+
+`project` フィールド自体は残る（誰が起票したかを示し、そのラベルが推測だった場合は `list` が
+`[project unresolved: …]` と表示する）が、**何が見えるかを決めるものではなくなった**。
 
 ### checkout 間の claim 排他 (`next --claim`)
 

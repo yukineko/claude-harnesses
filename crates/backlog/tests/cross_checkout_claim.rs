@@ -1,7 +1,7 @@
 //! Cross-checkout claim exclusion: two CHECKOUTS of the same project must not
 //! be handed the same task (backlog 709ff549).
 //!
-//! The store follows the checkout on purpose (`config::store_dir_for`;
+//! The store follows the checkout on purpose (`config::locate`;
 //! CLAUDE.md §8 forbids a worktree writing the main tree's tracked file), so
 //! two checkouts of the same repo hold two `.backlog/tasks.toml` files that
 //! diverge. The claim's mutual exclusion, however, was keyed on the RESOLVED

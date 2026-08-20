@@ -369,60 +369,36 @@ fn list_sees_same_task_from_main_tree_cwd() {
     );
 }
 
-/// Test (d): Fail-closed defect — when a checkout's `.git` link is broken (a
-/// dangling worktree pointer: `gitdir:` names a path that no longer exists),
-/// `backlog list`'s default cwd-scoped project resolution cannot actually
-/// determine the checkout's canonical project identity. A REAL,
-/// already-persisted task recorded in that checkout's own `tasks.toml` must
-/// not silently disappear into an empty ("no tasks" / `[]`) result
-/// indistinguishable from a genuinely empty queue.
+/// Test (d), INVERTED 2026-08-20: a checkout whose `.git` link is dangling
+/// (`gitdir:` names a path that no longer exists) can no longer hide a task
+/// that is physically sitting in its own store.
 ///
-/// This is deliberately NOT the "no `.git` anywhere above cwd" case (that
-/// path is a DOCUMENTED, intentional non-error default — `Config::
-/// tasks_path_for`'s doc comment: a path with no repo root cannot be
-/// resolved into a project store, so it falls back to the legacy
-/// `~/.backlog`, which is by design, not a "cannot determine" defect). Here
-/// `.git` DOES exist and DOES resolve the on-disk store correctly (the task
-/// is physically sitting in `<cwd>/.backlog/tasks.toml`, proven below via
-/// `--all`) — the defect is specifically that `list`'s effective-project
-/// filter (`harness_core::discovery::resolve_repo_root`, which shells out to
-/// `git rev-parse --show-toplevel`) silently swallows that command's failure
-/// and falls back to the raw cwd, filtering out a task recorded under a
-/// different (now-unreachable) canonical path with no error, no warning, and
-/// no distinguishing marker versus a genuinely empty queue.
+/// The original defect: `list`'s default scope resolved the cwd to a canonical
+/// project identity and filtered rows by it, so when that resolution failed,
+/// a task recorded under a different (now-unreachable) label vanished into an
+/// ordinary empty result. The fix at the time made the failure AUDIBLE — a
+/// non-zero exit instead of `[]` — because the filter was taken as given.
+///
+/// The filter is what changed. A repo store is now the scope itself (see
+/// `tests/project_scope.rs`), so listing this checkout's own file resolves no
+/// identity at all and a dangling link cannot hide anything: the defect is
+/// removed at the root rather than made audible. What this test pins is
+/// therefore inverted — the task is LISTED — plus the one place an identity is
+/// still load-bearing and still fails closed: `next --claim`, whose ledger key
+/// IS the project identity (`main::claim_identity`), and which is the call a
+/// real driver makes.
 ///
 /// # Why this test carries a CONTROL
 ///
-/// The claim under test is a claim of DISTINGUISHABILITY: observation A
-/// ("scope could not be determined") must differ from observation B
-/// ("genuinely zero tasks"). `A != B` cannot be asserted by observing A
-/// alone — so this test also runs B, under the SAME isolated HOME: a healthy
-/// `git init` checkout that owns no store at all. That control is first
-/// pinned to the genuinely-empty baseline (`exit 0` + `[]`) so it cannot
-/// silently drift, and only then is the broken checkout's observable pair
-/// `(exit code, trimmed stdout)` asserted to differ from it.
-///
-/// The control is what makes this oracle reject the DEGENERATE class of
-/// fix. Without it, "make an empty result always exit non-zero" or "always
-/// print a marker" would turn the test green while leaving the two cases
-/// every bit as indistinguishable as before — because such a change moves B
-/// by exactly as much as it moves A, and an assertion that only ever looks
-/// at A cannot notice that. Any change that renders emptiness uniformly
-/// therefore still fails here.
-///
-/// A third arm (observation C, below) closes the gap described in the
-/// previous paragraph of this comment's earlier revision: a healthy,
-/// resolvable checkout whose store is non-empty but whose single task is
-/// legitimately filtered out (its `project` field does not match this
-/// checkout's own canonical path) is asserted `assert_eq!` against the
-/// SAME genuinely-empty control (observation B). This pins the
-/// discriminator to *resolvability*, not to "store present + filter
-/// removed everything": an implementation that instead keys on store
-/// presence would make observation C diverge from B (because C's store is
-/// non-empty) even though C is, observably, just as legitimately empty as
-/// B — and that divergence is exactly what the `assert_eq!` below catches.
+/// The surviving claim is still a claim of DISTINGUISHABILITY — "could not
+/// determine" must not render as "nothing to do" — and `A != B` cannot be
+/// asserted by observing A alone. So the healthy, resolvable, genuinely-empty
+/// checkout is kept as B, and kept pinned to its own baseline first so it
+/// cannot silently drift and make the comparison vacuous. It also still
+/// rejects the degenerate fix: making emptiness uniformly noisy would move B
+/// by as much as A and fail here.
 #[test]
-fn broken_git_link_does_not_silently_hide_an_existing_task() {
+fn a_dangling_git_link_no_longer_hides_an_existing_task() {
     assert!(
         git_available(),
         "git is required for project-identity tests but is not available in PATH"
@@ -433,22 +409,19 @@ fn broken_git_link_does_not_silently_hide_an_existing_task() {
 
     // A `.git` FILE (not directory) whose `gitdir:` target does not exist —
     // a dangling worktree link (e.g. its main tree was deleted or moved).
-    // `.git` still `exists()` (config.rs's store-resolution only checks
-    // existence), so the LOCAL `.backlog` is still where the store
-    // physically resolves to — but `git rev-parse --show-toplevel` run
-    // against this cwd fails (not a valid repository), which is the actual
-    // "cannot determine" condition this test targets.
+    // `.git` still `exists()`, so this IS a repo store as far as
+    // `config::locate` is concerned, while `git rev-parse --show-toplevel`
+    // run against this cwd fails — the actual "cannot determine" condition.
     std::fs::write(
         broken_dir.join(".git"),
         "gitdir: /definitely/nonexistent-xyz-q7f3k9z2/.git/worktrees/broken\n",
     )
     .unwrap();
 
-    // Seed a REAL task directly into this checkout's own store, recorded
-    // under some OTHER canonical project path (as it would have been before
-    // whatever broke the `.git` link) — deliberately different from
-    // `broken_dir` itself, so a naive "fall back to raw cwd" resolution does
-    // NOT coincidentally match it.
+    // A REAL task in this checkout's own store, recorded under some OTHER
+    // canonical project path (as it would have been before whatever broke the
+    // `.git` link) — deliberately different from `broken_dir` itself, so a
+    // naive "fall back to raw cwd" resolution does NOT coincidentally match.
     let stale_project = broken_dir.parent().unwrap().join("some-old-canonical-root");
     seed_tasks_toml(
         &broken_dir.join(".backlog"),
@@ -457,30 +430,35 @@ fn broken_git_link_does_not_silently_hide_an_existing_task() {
         &stale_project.to_string_lossy(),
     );
 
-    // Anti-vacuity: prove the task genuinely, physically exists in this
-    // checkout's own store (not that we mis-seeded an empty file) — `--all`
-    // drops the project filter entirely and must see it.
+    // Anti-vacuity: the task genuinely, physically exists in this checkout's
+    // own store (not a mis-seeded empty file).
     let (all_code, all_out, all_err) = run_in(&["list", "--all"], "", &home, &broken_dir);
     assert_eq!(all_code, 0, "list --all must succeed; stderr: {}", all_err);
     assert!(
         all_out.contains("Stranded task"),
         "anti-vacuity check failed: the seeded task must be physically present \
-         in this checkout's store (via --all, which bypasses the project \
-         filter under test), got:\n{}",
+         in this checkout's store, got:\n{}",
         all_out
     );
 
+    // ---- The inverted assertion: the DEFAULT list shows it ----
+    let (list_code, list_out, list_err) = run_in(&["list", "--json"], "", &home, &broken_dir);
+    assert_eq!(
+        list_code, 0,
+        "the default list must succeed: no project identity is needed to read \
+         this checkout's own store; stderr: {}",
+        list_err
+    );
+    assert!(
+        list_out.contains("Stranded task"),
+        "a task physically present in this checkout's own store must appear in \
+         the DEFAULT listing. A repo store is the scope, so there is no label \
+         to filter it out by — and a dangling `.git` link therefore cannot \
+         hide it, audibly or otherwise.\nGot:\n{}",
+        list_out
+    );
+
     // ---- The CONTROL: observation B, "genuinely zero tasks" ----
-    //
-    // A healthy checkout (real `git init`, so `git rev-parse
-    // --show-toplevel` succeeds and the project scope IS determinable) that
-    // simply owns no store. Run under the SAME isolated HOME as the broken
-    // checkout, so any fix that changes how emptiness is rendered globally
-    // moves this observation too. It differs from the broken checkout in two
-    // respects — resolvability, and owning no store rather than a store
-    // whose one task is filtered out — see this test's doc comment for which
-    // of the two the assertion below can and cannot attribute the difference
-    // to. This is the thing the broken checkout must be distinguishable FROM.
     let empty_repo = temp_dir("genuinely-empty-repo");
     assert!(
         Command::new("git")
@@ -498,160 +476,128 @@ fn broken_git_link_does_not_silently_hide_an_existing_task() {
     );
 
     let (empty_code, empty_out, empty_err) = run_in(&["list", "--json"], "", &home, &empty_repo);
-
-    // Pin the control to the genuinely-empty baseline so it cannot silently
-    // drift into something else and make the comparison below vacuously
-    // true. If this ever fires, the control stopped being a control.
     assert!(
         empty_code == 0 && empty_out.trim() == "[]",
         "control setup is broken: a healthy, resolvable checkout with zero \
          tasks must be observed as exit 0 + `[]` (that IS the \"genuinely \
-         empty queue\" baseline this test compares against). Got:\n  \
-         exit_code: {}\n  stdout: {:?}\n  stderr: {}",
+         empty queue\" baseline). Got:\n  exit_code: {}\n  stdout: {:?}\n  \
+         stderr: {}",
         empty_code,
         empty_out,
         empty_err
     );
 
-    // ---- Observation A: scope cannot be determined ----
-    //
-    // The DEFAULT (no --project, no --all) scoped list, run where project
-    // resolution demonstrably fails.
-    let (list_code, list_out, list_err) = run_in(&["list", "--json"], "", &home, &broken_dir);
-
-    // The actual assertion, and it is exactly the comparison the prose above
-    // claims: the observable pair a downstream reader gets from the
-    // undetermined case must DIFFER from the pair it gets from a genuinely
-    // empty queue. Nothing weaker is asserted here, and nothing stronger is
-    // claimed: stderr is deliberately excluded from the compared pair, since
-    // a caller that parses `--json` reads exit code and stdout.
-    let undetermined_observation = (list_code, list_out.trim().to_string());
     let genuinely_empty_observation = (empty_code, empty_out.trim().to_string());
-
     assert_ne!(
-        undetermined_observation, genuinely_empty_observation,
-        "an unresolvable (dangling .git link) project scope produces the SAME \
-         observable (exit code, stdout) pair as a genuinely empty queue, so a \
-         downstream reader (e.g. autoflow) cannot tell the two apart — yet the \
-         task demonstrably exists on disk (proven via --all above), while the \
-         control checkout genuinely has zero tasks.\n  \
-         undetermined scope (cwd={:?}): exit_code={} stdout={:?} stderr={}\n  \
-         genuinely empty  (cwd={:?}): exit_code={} stdout={:?} stderr={}",
-        broken_dir, list_code, list_out, list_err, empty_repo, empty_code, empty_out, empty_err
+        (list_code, list_out.trim().to_string()),
+        genuinely_empty_observation,
+        "the broken checkout's listing is observationally identical to a \
+         genuinely empty queue, so the task on disk is unreachable either way"
     );
 
-    // ---- Observation C: resolvable scope, store present, but genuinely
-    // filtered to empty ----
+    // ---- Where identity IS still load-bearing: the claim ledger ----
     //
-    // A HEALTHY (real `git init`, resolvable) checkout whose own store
-    // physically contains one task — proven via --all below — but whose
-    // recorded `project` field does NOT match this checkout's own canonical
-    // path, so the default project filter correctly, legitimately drops it.
-    // Unlike the broken checkout (observation A), resolution here succeeds;
-    // unlike the control (observation B), this checkout's store is
-    // non-empty. If a fix discriminates on "the store is non-empty but the
-    // filter removed everything" instead of on resolvability, this arm
-    // would diverge from B even though it is, observably, just as
-    // legitimately empty as B — which is exactly what the assert_eq! below
-    // is designed to catch.
-    let filtered_repo = temp_dir("healthy-filtered-repo");
+    // `next --claim` keys the cross-checkout ledger by project identity, so an
+    // undetermined identity there is a genuine "cannot determine" and must not
+    // be reported as "nothing to do" (the control shows what that looks like).
+    let (claim_code, claim_out, claim_err) = run_in(&["next", "--claim"], "", &home, &broken_dir);
+    let (ctl_code, ctl_out, ctl_err) = run_in(&["next", "--claim"], "", &home, &empty_repo);
+    assert_eq!(
+        ctl_code, 0,
+        "control setup is broken: a healthy checkout with nothing queued must \
+         stay a clean exit-0 \"nothing to do\"; stderr: {}",
+        ctl_err
+    );
+    assert_ne!(
+        (claim_code, claim_out.trim().to_string()),
+        (ctl_code, ctl_out.trim().to_string()),
+        "`next --claim` under an UNDETERMINED project identity is \
+         observationally identical to a genuinely empty queue, so a driver \
+         cannot tell \"I could not determine which project this is\" from \
+         \"there is nothing to do\" — and the claim it would record is keyed \
+         by a guess, i.e. invisible to every other checkout.\n  \
+         undetermined (cwd={:?}): exit_code={} stdout={:?} stderr={}\n  \
+         control      (cwd={:?}): exit_code={} stdout={:?}",
+        broken_dir,
+        claim_code,
+        claim_out,
+        claim_err,
+        empty_repo,
+        ctl_code,
+        ctl_out
+    );
+
+    // ---- Observation C, also inverted: another checkout's label ----
+    //
+    // A HEALTHY checkout whose store holds one row labelled with a DIFFERENT
+    // path. That row used to be "legitimately filtered out" and asserted
+    // indistinguishable from the empty control. It is not foreign at all: a
+    // repo store is tracked and shared through git, so such a row is this same
+    // repo's work written from another checkout — the 258 pending tasks
+    // measured invisible on 2026-08-20. It must be LISTED.
+    let other_checkout_repo = temp_dir("other-checkout-label-repo");
     assert!(
         Command::new("git")
             .args(["init", "-q"])
-            .current_dir(&filtered_repo)
+            .current_dir(&other_checkout_repo)
             .status()
             .unwrap()
             .success(),
-        "git init failed for the healthy filtered-empty repo"
+        "git init failed for the other-checkout-label repo"
     );
-
-    // Seed a REAL task in this checkout's own store, recorded under some
-    // OTHER canonical project path (deliberately different from
-    // `filtered_repo` itself), so the default project filter has a genuine,
-    // resolvable reason to drop it.
-    let filtered_repo_canonical = filtered_repo.canonicalize().unwrap();
-    let other_project = filtered_repo_canonical
+    let other_project = other_checkout_repo
+        .canonicalize()
+        .unwrap()
         .parent()
         .unwrap()
         .join("some-other-canonical-root-for-observation-c");
     seed_tasks_toml(
-        &filtered_repo.join(".backlog"),
+        &other_checkout_repo.join(".backlog"),
         "c0ffee00",
-        "Filtered-out task",
+        "Other-checkout task",
         &other_project.to_string_lossy(),
     );
 
-    // Anti-vacuity: prove the task genuinely, physically exists in this
-    // checkout's own store (mirrors the anti-vacuity check for observation
-    // A above) — `--all` drops the project filter entirely and must see it.
-    let (c_all_code, c_all_out, c_all_err) = run_in(&["list", "--all"], "", &home, &filtered_repo);
+    let (c_code, c_out, c_err) = run_in(&["list", "--json"], "", &home, &other_checkout_repo);
     assert_eq!(
-        c_all_code, 0,
-        "list --all must succeed for the healthy filtered-empty repo; stderr: {}",
-        c_all_err
+        c_code, 0,
+        "list must succeed for the other-checkout-label repo; stderr: {}",
+        c_err
     );
     assert!(
-        c_all_out.contains("Filtered-out task"),
-        "anti-vacuity check failed: the seeded task for observation C must be \
-         physically present in this checkout's own store (via --all, which \
-         bypasses the project filter under test), got:\n{}",
-        c_all_out
+        c_out.contains("Other-checkout task"),
+        "a row in THIS repo's own tracked store, labelled with another \
+         checkout's path, must be listed: the store is the scope, and \
+         filtering by checkout path is what split one repo's queue into one \
+         queue per machine.\nGot:\n{}",
+        c_out
     );
-
-    let (filtered_code, filtered_out, filtered_err) =
-        run_in(&["list", "--json"], "", &home, &filtered_repo);
-    assert_eq!(
-        filtered_code, 0,
-        "list must succeed for the healthy filtered-empty repo; stderr: {}",
-        filtered_err
-    );
-
-    let filtered_empty_observation = (filtered_code, filtered_out.trim().to_string());
-
-    assert_eq!(
-        filtered_empty_observation,
+    assert_ne!(
+        (c_code, c_out.trim().to_string()),
         genuinely_empty_observation,
-        "a RESOLVABLE project scope whose store contains a task that is \
-         legitimately filtered out (its recorded `project` does not match \
-         this checkout's own canonical path) must be observationally \
-         indistinguishable from a genuinely empty queue — both are \
-         \"correctly empty\", not \"cannot determine\". If this fails, the \
-         implementation is discriminating on STORE PRESENCE (store non-empty \
-         but filter removed everything) rather than on resolvability, which \
-         would incorrectly also treat this legitimately-empty case as an \
-         undetermined-scope error.\n  \
-         healthy filtered-empty (cwd={:?}): exit_code={} stdout={:?} stderr={}\n  \
-         genuinely empty        (cwd={:?}): exit_code={} stdout={:?} stderr={}",
-        filtered_repo,
-        filtered_code,
-        filtered_out,
-        filtered_err,
-        empty_repo,
-        empty_code,
-        empty_out,
-        empty_err
+        "the other-checkout row is still being filtered out — this listing is \
+         indistinguishable from a genuinely empty queue"
     );
 }
 
-/// Test (e): `backlog next` must carry the SAME cwd-derived default project
-/// scope that `backlog list` has.
+/// Test (e): `backlog next` and `backlog list` must AGREE on what "this
+/// project" means.
 ///
-/// `list` resolves a bare (no `--project`, no `--all`) invocation to the
-/// cwd's canonical project identity; `next` used to pass its `Option`
-/// straight through to `store::next`, which means a bare `next` ranged over
-/// EVERY project key in the resolved store. That is observable whenever one
-/// store holds more than one project key (a pinned or legacy store, or a
-/// store that accumulated `add --project <other>` writes): the two commands
-/// disagree about what "this project" means, and `next` can hand a driver a
-/// task belonging to a different checkout entirely.
+/// That is the durable claim, and it survived the 2026-08-20 scope change
+/// intact — only the answer moved. `next` used to pass its `Option` straight
+/// to `store::next` while `list` applied a cwd-derived project filter, so the
+/// two disagreed whenever one store held more than one project key: a driver
+/// picking with `next` could act on another checkout's work. Now a repo store
+/// IS the scope for both, so both range over the whole file, and the row
+/// labelled with another checkout's path is this repo's own work rather than
+/// something to skip (`tests/project_scope.rs`).
 ///
-/// The discriminator here is deliberately NOT insertion order: the foreign
-/// project's task is given a HIGHER weight, so a store-wide pick returns the
-/// foreign task while a correctly cwd-scoped pick returns the local one.
-/// Ordering alone can otherwise make a store-wide `next` look scoped by
-/// coincidence.
+/// The discriminator is deliberately NOT insertion order: the other-checkout
+/// task carries a HIGHER weight, so a correctly store-wide pick returns it and
+/// a still-filtered pick returns the local one. Ordering alone could otherwise
+/// make either behaviour look right by coincidence.
 #[test]
-fn next_without_project_scopes_to_the_cwd_project_like_list_does() {
+fn next_and_list_agree_on_scope_for_a_repo_store() {
     assert!(
         git_available(),
         "git is required for project-identity tests but is not available in PATH"
@@ -671,61 +617,45 @@ fn next_without_project_scopes_to_the_cwd_project_like_list_does() {
 
     let local_canonical = local_repo.canonicalize().unwrap();
     let local_project = local_canonical.to_string_lossy().into_owned();
-    let foreign_project = local_canonical
+    let other_checkout = local_canonical
         .parent()
         .unwrap()
         .join("some-other-checkout-entirely")
         .to_string_lossy()
         .into_owned();
 
-    // One store, two project keys. The FOREIGN task outranks the local one
-    // by weight, so a store-wide pick necessarily returns the foreign task.
+    // One store, two labels. The other-checkout task outranks the local one by
+    // weight, so a store-wide pick necessarily returns it.
     seed_tasks_toml_multi(
         &local_repo.join(".backlog"),
         &[
             ("10cal000", "Local task", &local_project, 0.0),
-            ("f0re1gn0", "Foreign task", &foreign_project, 99.0),
+            ("f0re1gn0", "Other-checkout task", &other_checkout, 99.0),
         ],
     );
 
-    // Anti-vacuity: both tasks really are in THIS checkout's store, and the
-    // foreign one really does outrank the local one. Without this, a `next`
-    // that returned the local task because the foreign task was missing
-    // (or unrankable) would pass vacuously.
+    // Anti-vacuity: both rows really are in THIS checkout's store.
     let (all_code, all_out, all_err) = run_in(&["list", "--all"], "", &home, &local_repo);
     assert_eq!(all_code, 0, "list --all must succeed; stderr: {}", all_err);
     assert!(
-        all_out.contains("Local task") && all_out.contains("Foreign task"),
+        all_out.contains("Local task") && all_out.contains("Other-checkout task"),
         "anti-vacuity check failed: both tasks must be physically present in \
-         this checkout's store (via --all, which bypasses the project filter \
-         under test), got:\n{}",
+         this checkout's store, got:\n{}",
         all_out
     );
-    let (fall_code, fall_out, _) = run_in(
-        &["next", "--project", &foreign_project],
-        "",
-        &home,
-        &local_repo,
-    );
-    assert_eq!(fall_code, 0, "next --project <foreign> must succeed");
-    assert!(
-        fall_out.contains("Foreign task"),
-        "anti-vacuity check failed: the foreign task must be reachable and \
-         rankable in this store when explicitly asked for, got:\n{}",
-        fall_out
-    );
 
-    // The assertion under test: a bare `next` must scope to the cwd project,
-    // exactly as a bare `list` does.
+    // Both commands see the whole store...
     let (list_code, list_out, list_err) = run_in(&["list", "--json"], "", &home, &local_repo);
     assert_eq!(list_code, 0, "list must succeed; stderr: {}", list_err);
     assert!(
-        list_out.contains("Local task") && !list_out.contains("Foreign task"),
-        "precondition: a bare `list` is cwd-scoped (this is the behaviour \
-         `next` is being held to), got:\n{}",
+        list_out.contains("Local task") && list_out.contains("Other-checkout task"),
+        "a repo store is the scope, so the default list must show every row in \
+         it — including one written from another checkout of the same repo, \
+         got:\n{}",
         list_out
     );
 
+    // ...and `next` ranks over that same set, which is the agreement claim.
     let (next_code, next_out, next_err) = run_in(&["next"], "", &home, &local_repo);
     assert_eq!(
         next_code, 0,
@@ -733,13 +663,12 @@ fn next_without_project_scopes_to_the_cwd_project_like_list_does() {
         next_err
     );
     assert!(
-        next_out.contains("Local task") && !next_out.contains("Foreign task"),
-        "a bare `backlog next` ranged over EVERY project in the resolved \
-         store and handed back a task belonging to a different checkout, \
-         while a bare `backlog list` in the SAME cwd correctly scoped to this \
-         project. The two commands must agree on what \"this project\" means, \
-         otherwise a driver that picks with `next` acts on another \
-         checkout's work.\n  \
+        next_out.contains("Other-checkout task") && !next_out.contains("Local task"),
+        "`next` and `list` disagree about what \"this project\" means: the \
+         listing above ranges over the whole store, so `next` must rank over \
+         the same set and return the highest-weighted row in it. A driver that \
+         picks with `next` must not be handed a different set than the one a \
+         reader sees.\n  \
          bare next  (cwd={:?}): exit_code={} stdout={}\n  \
          bare list  (cwd={:?}): exit_code={} stdout={}",
         local_repo,
@@ -749,18 +678,43 @@ fn next_without_project_scopes_to_the_cwd_project_like_list_does() {
         list_code,
         list_out
     );
+
+    // And the agreement extends to the refusal: naming a project this store
+    // cannot be scoped to is an error on `next` too, not a filtered answer.
+    let (foreign_code, foreign_out, foreign_err) = run_in(
+        &["next", "--project", &other_checkout],
+        "",
+        &home,
+        &local_repo,
+    );
+    assert_ne!(
+        foreign_code, 0,
+        "`next --project <another repo>` must refuse, like `list` does: this \
+         store cannot be scoped to another project, and answering from it \
+         anyway would answer a different question than the one asked. \
+         stdout={:?} stderr={}",
+        foreign_out, foreign_err
+    );
+    assert!(
+        foreign_out.trim().is_empty(),
+        "a refused `next` must print nothing on stdout, got: {}",
+        foreign_out
+    );
 }
 
-/// Test (f): the `next` counterpart of test (d).
+/// Test (f): the `next` counterpart of test (d), re-pinned 2026-08-20.
 ///
-/// When project scope cannot be determined, `list` fails closed (non-zero
-/// exit + diagnostic) precisely so a downstream reader cannot mistake
-/// "cannot determine" for "nothing to do". `next` must resolve the same
-/// undetermined condition the same restrictive way — printing "no pending
-/// tasks" (or, worse, some other project's task) on exit 0 is the fail-open
-/// this repo's gate invariant forbids.
+/// The undetermined condition (a dangling worktree `.git` link) no longer
+/// affects the READ: a repo store is the scope, so listing or ranking this
+/// checkout's own file needs no identity and the task is handed out rather
+/// than hidden. It is still load-bearing for `next --claim`, whose
+/// cross-checkout ledger is KEYED by the project identity: a claim recorded
+/// under a guessed key is invisible to every other checkout, i.e. no exclusion
+/// at all. So the claim path must still refuse rather than print "no pending
+/// tasks" on exit 0 — and the control shows what that legitimate exit 0 looks
+/// like, so the two cannot be conflated.
 #[test]
-fn next_fails_closed_when_the_project_scope_cannot_be_determined() {
+fn next_claim_fails_closed_when_the_project_identity_cannot_be_determined() {
     assert!(
         git_available(),
         "git is required for project-identity tests but is not available in PATH"
@@ -817,36 +771,51 @@ fn next_fails_closed_when_the_project_scope_cannot_be_determined() {
         all_out
     );
 
-    // Pin that `list` really does fail closed here, so this test states the
-    // gap between the two commands rather than assuming it.
-    let (list_code, _, _) = run_in(&["list", "--json"], "", &home, &broken_dir);
-    assert_ne!(
+    // The READ side no longer depends on the identity, so it hands the task
+    // over instead of failing closed. Pinned here (rather than left
+    // unmentioned) because the old version of this test asserted the
+    // opposite, and a reader needs to see which way it went.
+    let (list_code, list_out, list_err) = run_in(&["list", "--json"], "", &home, &broken_dir);
+    assert_eq!(
         list_code, 0,
-        "precondition: `list` fails closed on an undetermined scope (this is \
-         the behaviour `next` is being held to)"
+        "the default list needs no identity for a repo store; stderr: {}",
+        list_err
+    );
+    assert!(
+        list_out.contains("Stranded next task"),
+        "the task must be listed, not hidden, got:\n{}",
+        list_out
+    );
+    let (bare_code, bare_out, bare_err) = run_in(&["next"], "", &home, &broken_dir);
+    assert_eq!(
+        bare_code, 0,
+        "a bare `next` ranks over this store without needing an identity; \
+         stderr: {}",
+        bare_err
+    );
+    assert!(
+        bare_out.contains("Stranded next task"),
+        "a bare `next` must hand out the task in this checkout's own store, \
+         got:\n{}",
+        bare_out
     );
 
-    let (next_code, next_out, next_err) = run_in(&["next"], "", &home, &broken_dir);
-    assert_ne!(
-        next_code, 0,
-        "`backlog next` resolved an UNDETERMINED project scope to a normal \
-         exit-0 result, so a downstream driver cannot tell \"I could not \
-         determine which project this is\" apart from \"there is nothing to \
-         do\" — the same fail-open `list` was already fixed for.\n  \
-         undetermined next (cwd={:?}): exit_code={} stdout={:?} stderr={}\n  \
-         genuinely-empty control      : exit_code={} stdout={:?}",
-        broken_dir, next_code, next_out, next_err, ctl_code, ctl_out
-    );
-
-    // And the same must hold for the `--claim` path, which is what real
-    // drivers (e.g. /flow) actually call.
+    // The CLAIM side still needs the identity as its ledger key, and still
+    // refuses. This is the path real drivers (e.g. /flow) call.
     let (claim_code, claim_out, claim_err) = run_in(&["next", "--claim"], "", &home, &broken_dir);
     assert_ne!(
         claim_code, 0,
-        "`backlog next --claim` (the path drivers actually use) still \
-         resolved an undetermined project scope to exit 0.\n  \
-         exit_code={} stdout={:?} stderr={}",
-        claim_code, claim_out, claim_err
+        "`backlog next --claim` resolved an UNDETERMINED project identity to \
+         exit 0, so the claim it recorded is keyed by a guess and excludes no \
+         other checkout, while a driver reads the result as ordinary work.\n  \
+         exit_code={} stdout={:?} stderr={}\n  \
+         genuinely-empty control: exit_code={} stdout={:?}",
+        claim_code, claim_out, claim_err, ctl_code, ctl_out
+    );
+    assert!(
+        claim_out.trim().is_empty(),
+        "a refused claim must print nothing on stdout, got: {}",
+        claim_out
     );
 }
 
@@ -1044,12 +1013,18 @@ project_unresolved = true
          tasks, got:\n{}",
         out
     );
+    // INVERTED 2026-08-20. This asserted that the resolved-but-different
+    // label stayed filtered out, as the control proving "do not drop the
+    // marked one" had not been implemented as "stop filtering". Stopping the
+    // filtering is now exactly the change: a repo store is tracked and shared
+    // through git, so a row labelled with another checkout's path is this same
+    // repo's work (`tests/project_scope.rs`). The marker's value is unaffected
+    // — it was never the filter, it is the RENDERING, asserted below.
     assert!(
-        !out.contains("Foreign resolved task"),
-        "the default list stopped filtering entirely — a task that genuinely \
-         belongs to another checkout AND whose project label was resolved \
-         must still be filtered out. Dropping the filter is not an acceptable \
-         way to stop losing undetermined tasks.\nGot:\n{}",
+        out.contains("Foreign resolved task"),
+        "a row labelled with another checkout of this same repo must be listed \
+         — a repo store is the scope, and filtering by checkout path is what \
+         split one repo's queue into one queue per machine.\nGot:\n{}",
         out
     );
     assert!(

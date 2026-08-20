@@ -32,14 +32,39 @@ pub fn run(input: &HookInput) -> Option<String> {
         .unwrap_or(0);
     // The session's own repo root selects the store, so a SessionStart in
     // project A never reads (or requeues) project B's queue.
-    let tasks_path = cfg.tasks_path_for(Some(&root));
+    //
+    // A cwd with no repo root above it has no project store at all. Returning
+    // `None` here would render that as "nothing queued" — and this hook has no
+    // exit code and no stderr the agent ever sees, so `additionalContext` is
+    // the ONLY channel that can say otherwise (the same reason the divergence
+    // notice below is injected even when there is nothing else to say). So the
+    // refusal is injected as text instead of swallowed.
+    let location = cfg.locate(Some(&cwd_str));
+    let tasks_path = match location.tasks_path() {
+        Ok(p) => p,
+        Err(why) => {
+            return Some(format!(
+                "## Backlog \u{2014} no project store for this session\n\n{why}\n\n"
+            ));
+        }
+    };
     if let Ok(count) = store::requeue_expired(&tasks_path, now) {
         if count >= 1 {
             eprintln!("{} 件の保留タスクが再キューされました", count);
         }
     }
 
-    let tasks = store::list(&tasks_path, None, Some(&root), None).ok()?;
+    // A repo store IS the scope: it is a tracked, repo-local file, so every
+    // task in it belongs to this repo whichever checkout wrote it. Filtering
+    // by the label of the checkout this session happens to be running in is
+    // what hid one machine's queue from the other (see `main`'s
+    // `read_project_scope`). A pinned store may hold several projects, so
+    // there the label is still the only separator.
+    let scope = match location.project_root() {
+        Some(_) => None,
+        None => Some(root.as_str()),
+    };
+    let tasks = store::list(&tasks_path, None, scope, None).ok()?;
 
     // pending または failed のタスクのみ対象 (is_pending() で判定)
     let mut pending: Vec<_> = tasks.into_iter().filter(|t| t.is_pending()).collect();
@@ -54,7 +79,7 @@ pub fn run(input: &HookInput) -> Option<String> {
     // channel that reaches it. So the notice is injected here, and injected
     // EVEN WHEN there is nothing else to say (the empty case is precisely the
     // one that needs it).
-    let notice = divergence::check(&tasks_path, Some(&root))
+    let notice = divergence::check(&tasks_path, Some(&root), scope)
         .message()
         .map(|m| format!("## Backlog \u{2014} store divergence\n\n{m}\n\n"));
 

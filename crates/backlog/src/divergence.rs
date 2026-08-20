@@ -2,7 +2,7 @@
 //! the wrong file" (backlog 5ba13c3e, completion criterion 2).
 //!
 //! The queue used to live in one global `~/.backlog/tasks.toml`. It now
-//! resolves per repo (`config::tasks_path_for` → `<root>/.backlog/tasks.toml`).
+//! resolves per repo (`config::locate` → `<root>/.backlog/tasks.toml`).
 //! Nothing migrated the old file when that changed, so for months a reader
 //! standing in this repo got a perfectly ordinary `no tasks` / `[]` while 490
 //! items — including three p0s — sat in the legacy store. The answer was not
@@ -252,18 +252,44 @@ pub fn legacy_path() -> PathBuf {
 /// legacy store (a cwd outside any repo, or an operator-pinned `store_dir`
 /// naming it): a store cannot diverge from itself, and comparing it to itself
 /// would warn about precisely the tasks it just listed.
-pub fn check(resolved_path: &Path, project: Option<&str>) -> Divergence {
+///
+/// The two stores are counted under the scopes their callers actually read
+/// them under. They are not the same question, and collapsing them into one
+/// `project` (as a single-scope `check` did until 2026-08-20) was safe only
+/// while both stores were filtered identically:
+///
+///   * the LEGACY store is cross-project by construction, so it must be
+///     filtered — an unfiltered count there would report another project's
+///     backlog as this checkout's missing work;
+///   * a REPO store is the scope (see `main`'s `read_project_scope`), so its
+///     reader applies NO row filter. Counting it with one would make
+///     `resolved_pending` smaller than what was actually listed, and
+///     [`assess`] escalates to [`Divergence::Undetermined`] — a non-zero exit
+///     with nothing on stdout — precisely when that count is 0. A listing
+///     holding 66 real tasks would then be destroyed by the guard meant to
+///     protect it, which is the failure this module's docs rule out for
+///     [`Divergence::Warn`]. Measured shape (2026-08-20, this repo): every
+///     pending task labelled `/Users/...` or `/mnt/c/...`, a `list` from the
+///     other checkout filtering to 0.
+///
+/// `resolved_project` is therefore `None` for a repo store and the checkout's
+/// own identity for a pinned/legacy one.
+pub fn check(
+    resolved_path: &Path,
+    legacy_project: Option<&str>,
+    resolved_project: Option<&str>,
+) -> Divergence {
     let legacy = legacy_path();
     if same_file(resolved_path, &legacy) {
         return Divergence::None;
     }
-    let scanned = scan_legacy(&legacy, project);
+    let scanned = scan_legacy(&legacy, legacy_project);
     if scanned == LegacyStore::Absent {
         // The overwhelmingly common case on a fresh machine: one `stat`, no
         // parse of the (potentially large) resolved store.
         return Divergence::None;
     }
-    let resolved = resolved_pending(resolved_path, project);
+    let resolved = resolved_pending(resolved_path, resolved_project);
     assess(&legacy, resolved_path, resolved, &scanned)
 }
 

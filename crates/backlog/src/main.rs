@@ -351,6 +351,152 @@ fn main() {
 /// `command` names the caller only for the diagnostic text; it does not change
 /// the decision. Sharing this function is what keeps `list` and `next` from
 /// disagreeing about what "this project" means.
+/// The project scope for a read, given WHERE the store is.
+///
+/// The two cases are different questions, not two settings of one:
+///
+///   * a REPO store (`<root>/.backlog/tasks.toml`) is tracked and shared
+///     through git, and by construction holds that repo's tasks and nothing
+///     else. So **the file is the scope** and there is no row filter. The
+///     `project` field still records which checkout wrote a task, but using it
+///     as a filter split one project into one queue per machine: measured
+///     2026-08-20 in this repo's own store, 258 pending tasks were labelled
+///     `/Users/yuki/src/harness` and 66 `/mnt/c/Users/.../harness`, and a
+///     `list` from either checkout silently dropped the other's — the same
+///     collapse 5ba13c3e closed one level up, with the scope wrong instead of
+///     the file.
+///   * a PINNED store may legitimately hold several projects (it is the
+///     pre-per-repo shape), so there the label is the only separator and the
+///     old cwd-derived filter stays exactly as it was.
+///
+/// For a repo store an explicit `--project` becomes an ASSERTION about which
+/// store the caller meant, checked by [`assert_read_scopes_to`]: it cannot
+/// select a subset (there are no subsets), and answering a question about
+/// another repo with a filtered listing of this one is the same fail-open in
+/// miniature. `--all` is accepted and means what it already meant — no row
+/// filter — which for a repo store is the default.
+fn read_project_scope(
+    location: &config::StoreLocation,
+    project: Option<String>,
+    all: bool,
+    command: &str,
+) -> Result<Option<String>> {
+    match location.project_root() {
+        Some(root) => {
+            if let Some(p) = project {
+                assert_read_scopes_to(root, &p)?;
+            }
+            Ok(None)
+        }
+        // Pinned (cross-project) or no store at all. The latter never gets
+        // here: the arms resolve `store_path()?` first, which refuses.
+        None => default_project_scope(project, all, command),
+    }
+}
+
+/// Whether a `--project` agrees with the project a repo store belongs to.
+///
+/// Three answers, not two, because "these are different projects" and "I could
+/// not work out whether they are" are different facts with different correct
+/// responses (see [`assert_read_scopes_to`] / [`assert_write_scopes_to`]).
+enum ScopeCheck {
+    /// Both identities resolved and refer to the same project.
+    Matches,
+    /// Both identities resolved and refer to DIFFERENT projects.
+    Mismatch(String),
+    /// At least one identity could not be resolved, so the comparison was not
+    /// performed. Carries what could not be resolved and why.
+    Unverifiable(String),
+}
+
+/// Compare a `--project` against the project a repo store belongs to.
+///
+/// Both sides are reduced to a canonical project IDENTITY first, so a linked
+/// worktree and its main tree compare equal (`/flow` passes
+/// `--project "$PWD"` from a worktree while the store is that worktree's).
+fn check_store_scope(store_root: &std::path::Path, asked: &str) -> ScopeCheck {
+    let store_identity = match store::canonical_project_id(store_root).require() {
+        Required::Determined(root) => root.to_string_lossy().into_owned(),
+        Required::Blocked(verdict) => {
+            let why = verdict
+                .reason()
+                .map(|r| r.as_str().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            return ScopeCheck::Unverifiable(format!(
+                "cannot determine which project the store at {} belongs to, so `--project \
+                 {asked}` could not be checked against it: {why}",
+                store_root.display()
+            ));
+        }
+    };
+    let canonical = store::canonicalize_project_with_marker(asked);
+    if canonical.unresolved {
+        return ScopeCheck::Unverifiable(format!(
+            "the project identity for {asked} could not be resolved (a fallback label was \
+             substituted), so it could not be checked against this store's project \
+             {store_identity}"
+        ));
+    }
+    if store::project_matches(&canonical.label, &store_identity)
+        || store::project_matches(&store_identity, &canonical.label)
+    {
+        return ScopeCheck::Matches;
+    }
+    ScopeCheck::Mismatch(format!(
+        "this store belongs to project {store_identity} ({}), so it cannot hold tasks for \
+         --project {asked} (resolved to {}). backlog keeps one queue per repo, so every task \
+         in this store is in scope already — drop --project, or run from the checkout of the \
+         project you mean.",
+        store_root.display(),
+        canonical.label
+    ))
+}
+
+/// A READ refuses unless the assertion actually held.
+///
+/// A mismatch is an `Err`, not an empty listing: "this store is a different
+/// project" and "this project has nothing queued" must not render the same
+/// (CLAUDE.md §3). `Unverifiable` refuses for the same reason — the caller
+/// asked a checkable question, and answering with this store's contents while
+/// unable to check it would present a guess as the answer. Nothing is lost by
+/// refusing: dropping `--project` asks the question this store CAN answer.
+fn assert_read_scopes_to(store_root: &std::path::Path, asked: &str) -> Result<()> {
+    match check_store_scope(store_root, asked) {
+        ScopeCheck::Matches => Ok(()),
+        ScopeCheck::Mismatch(why) | ScopeCheck::Unverifiable(why) => Err(anyhow::anyhow!(why)),
+    }
+}
+
+/// A WRITE refuses a PROVEN mismatch only.
+///
+/// The mismatch case is the mirror of the read fault: with the store as the
+/// scope, a row written here under another repo's label would be listed as this
+/// repo's work, so it is refused.
+///
+/// `Unverifiable` is deliberately NOT refused, and this is the one place the
+/// two directions diverge. `add` has never been allowed to block on an
+/// undetermined identity — blocking loses the finding being filed, which is
+/// strictly worse than filing it — and the uncertainty is already expressible
+/// as DATA rather than as silence: `canonicalize_project_with_marker` warns on
+/// stderr and `store::add_*` persists `project_unresolved = true`, which
+/// `list` renders as `[project unresolved: <label>]`. That is the third value
+/// being carried, not collapsed, so §3 is satisfied without destroying the
+/// write. What would violate §3 is letting it pass in SILENCE, so the reason
+/// is stated here too.
+fn assert_write_scopes_to(store_root: &std::path::Path, asked: &str) -> Result<()> {
+    match check_store_scope(store_root, asked) {
+        ScopeCheck::Matches => Ok(()),
+        ScopeCheck::Mismatch(why) => Err(anyhow::anyhow!(why)),
+        ScopeCheck::Unverifiable(why) => {
+            eprintln!(
+                "warning: {why}; filing it anyway (a blocked `add` loses the finding), marked \
+                 as an unresolved label"
+            );
+            Ok(())
+        }
+    }
+}
+
 fn default_project_scope(
     project: Option<String>,
     all: bool,
@@ -463,9 +609,21 @@ fn divergence_scope(effective_project: Option<&str>) -> Option<String> {
 /// on purpose: see `divergence`'s module docs for the consumer-by-consumer
 /// reason a non-zero exit there would DESTROY real items rather than protect
 /// them.
-fn guard_store_divergence(tasks_path: &std::path::Path, project: Option<&str>) -> Result<()> {
+fn guard_store_divergence(
+    location: &config::StoreLocation,
+    tasks_path: &std::path::Path,
+    project: Option<&str>,
+) -> Result<()> {
     let scope = divergence_scope(project);
-    match divergence::check(tasks_path, scope.as_deref()) {
+    // The resolved store is counted under the scope its READER used, which for
+    // a repo store is no filter at all. See `divergence::check`:
+    // counting it under `scope` while the listing was unfiltered lets the
+    // guard hard-error on a listing that held real work.
+    let resolved_scope = match location.project_root() {
+        Some(_) => None,
+        None => scope.as_deref(),
+    };
+    match divergence::check(tasks_path, scope.as_deref(), resolved_scope) {
         divergence::Divergence::None => Ok(()),
         divergence::Divergence::Warn(msg) => {
             eprintln!("{msg}");
@@ -483,13 +641,25 @@ fn run(cli: Cli) -> Result<()> {
     // control — not where the running checkout's own tasks.toml lives. Passing
     // `command_project(&cli.command)` here used to let `--project <main tree>`
     // from a linked worktree resolve the STORE to the main tree's own repo
-    // root (`Config::store_dir_for` walks up from the given project path), so
+    // root (`Config::locate` walks up from the given project path), so
     // a worktree session's `backlog add --project <main>` wrote straight into
-    // a tree §8 forbids touching. `None` makes `Config::tasks_path_for` fall
+    // a tree §8 forbids touching. `None` makes `Config::locate` fall
     // through to `std::env::current_dir()` unconditionally, i.e. always the
     // checkout actually running this process. Computed BEFORE the match
     // because `cli.command` is moved into it.
-    let tasks_path = cfg.tasks_path_for(None);
+    //
+    // The LOCATION, not the path: `locate` can answer "there is no project
+    // store here" (a cwd with no repo root above it), and that has to reach
+    // the arms that touch the store as a refusal rather than as the
+    // cross-project `~/.backlog` (see `config::StoreLocation`). Resolution to
+    // an actual path is therefore per-arm and fallible: `install` /
+    // `uninstall` / `lock` / `driver` never read the queue and must keep
+    // working from any directory, so making this a hard error up here would
+    // break them for no reason.
+    let location = cfg.locate(None);
+    let store_path = || -> Result<std::path::PathBuf> {
+        location.tasks_path().map_err(|why| anyhow::anyhow!(why))
+    };
 
     match cli.command {
         Command::Add {
@@ -501,6 +671,14 @@ fn run(cli: Cli) -> Result<()> {
             weight,
             force,
         } => {
+            let tasks_path = store_path()?;
+            // With the store as the scope (see `read_project_scope`), a task
+            // written here under ANOTHER repo's label would be listed as this
+            // repo's work — the same fault mirrored onto the write side. So
+            // the write asserts what the read asserts.
+            if let Some(root) = location.project_root() {
+                assert_write_scopes_to(root, &project)?;
+            }
             // priority is a shortcut for adding a priority tag
             if let Some(p) = priority {
                 if !tags.contains(&p) {
@@ -539,6 +717,7 @@ fn run(cli: Cli) -> Result<()> {
             json: as_json,
             all,
         } => {
+            let tasks_path = store_path()?;
             // A typo'd status used to silently match nothing ("no tasks"),
             // indistinguishable from a genuinely empty queue. Warn loudly so an
             // unknown filter value (e.g. the wrong `open`) is obvious. The check
@@ -575,7 +754,7 @@ fn run(cli: Cli) -> Result<()> {
             // The precedence and the undetermined-scope error both live in
             // `default_project_scope`, shared with `next` so the two commands
             // cannot drift apart on what "this project" means.
-            let effective_project = default_project_scope(project, all, "list")?;
+            let effective_project = read_project_scope(&location, project, all, "list")?;
             let tasks = store::list(
                 &tasks_path,
                 tag.as_deref(),
@@ -587,7 +766,7 @@ fn run(cli: Cli) -> Result<()> {
             // not be rendered as an ordinary empty queue (backlog 5ba13c3e).
             // Placed ahead of BOTH renderers so neither `[]` nor `no tasks`
             // can escape on stdout when the answer is untrustworthy.
-            guard_store_divergence(&tasks_path, effective_project.as_deref())?;
+            guard_store_divergence(&location, &tasks_path, effective_project.as_deref())?;
 
             if as_json {
                 // Machine-readable array (consumed by autoflow). Each task keeps
@@ -654,6 +833,7 @@ fn run(cli: Cli) -> Result<()> {
             claim,
             all,
         } => {
+            let tasks_path = store_path()?;
             // `next` carries the SAME cwd-derived default project scope as
             // `list` (`default_project_scope`), and for the same two reasons.
             //
@@ -677,13 +857,13 @@ fn run(cli: Cli) -> Result<()> {
             // Both apply to `--claim` too, which is the path real drivers use,
             // so the scope is resolved BEFORE the branch rather than inside
             // the read-only arm.
-            let effective_project = default_project_scope(project, all, "next")?;
+            let effective_project = read_project_scope(&location, project, all, "next")?;
             // `next` is the question a DRIVER asks ("is there work?"), so
             // `no pending tasks` out of a store that is not this checkout's is
             // the most expensive false answer in the crate. Checked BEFORE the
             // claim so a diverged store neither reports emptiness nor mutates
             // the wrong file (backlog 5ba13c3e).
-            guard_store_divergence(&tasks_path, effective_project.as_deref())?;
+            guard_store_divergence(&location, &tasks_path, effective_project.as_deref())?;
             let task = if claim {
                 // The claim is project-GLOBAL, not store-local: the store
                 // follows the checkout by design, so a claim recorded only in
@@ -743,6 +923,7 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Done { id } => {
+            let tasks_path = store_path()?;
             store::mark_done(&tasks_path, &id)?;
             println!("done: {id}");
             // Mirror the completion to GitHub. `mark_done` above has already
@@ -754,6 +935,7 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Sync { apply, limit } => {
+            let tasks_path = store_path()?;
             let tasks = store::load(&tasks_path)?;
             let mut plan = store::sync_plan(&tasks);
             if limit > 0 && plan.len() > limit {
@@ -851,6 +1033,7 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Fail { id, reason } => {
+            let tasks_path = store_path()?;
             store::mark_failed(&tasks_path, &id, reason.as_deref())?;
             // mark_failed は defer_until を now + 172800 (2日後) に設定する。
             // 設定した defer_until を読み取って表示する。
@@ -877,6 +1060,7 @@ fn run(cli: Cli) -> Result<()> {
             notes,
             status,
         } => {
+            let tasks_path = store_path()?;
             let tags_opt = if tags.is_empty() { None } else { Some(tags) };
             store::edit(
                 &tasks_path,

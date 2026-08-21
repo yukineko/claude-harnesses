@@ -43,6 +43,7 @@ pub mod interrogate;
 pub mod ledger;
 pub mod lessons;
 pub mod metrics;
+pub mod plugin_bin;
 pub mod pricing;
 pub mod progress;
 pub mod projkey;

@@ -8429,7 +8429,7 @@ outcome block。全文レポート (29KB、逐語引用と再実行可能な抽�
 調査部分が終わっただけなので pending に戻す。
 """
 created_at = 1785926923
-updated_at = 1786950379
+updated_at = 1787272913
 weight = 0.0
 issue_number = 153
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/153"
@@ -9893,7 +9893,7 @@ death criterion ruling 待ちで、それが決まるまで実装できない。
 終わったように見える。
 """
 created_at = 1786403442
-updated_at = 1786950454
+updated_at = 1787273410
 weight = 0.0
 issue_number = 237
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/237"
@@ -13679,3 +13679,293 @@ updated_at = 1787271810
 weight = 0.0
 issue_number = 377
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/377"
+
+[[task]]
+id = "c6ae7851"
+title = "fugu-router: PDO 仮説 f5f9522a を閉じるための計測装備が 4 項目のうち 2 項目で未実装のまま (+766 episodes 経過後も 0 件)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "measurement",
+    "fugu-router",
+    "p2",
+]
+status = "pending"
+notes = """
+flow の measure step (3-1 の 2) で f5f9522a の観測可能性を判定した結果。まだ観測不能だが、その理由が「データ蓄積待ち」ではなく「フィールドがストアのスキーマに存在しない」ことを実測で確定した。仮説を閉じるには蓄積ではなく実装が必要。
+
+測定コマンド: python3 .scratch/measure_f5f9522a.py (store=~/.fugu-router/record-repo/episodes.jsonl)
+測定日 2026-08-21、測定点 4beaca80、episodes=1303 (仮説起票時は 537)
+
+  (1) suggested_model  : 0/1303 非null — キー自体がどの行にも存在しない
+  (2) route_basis      : 7/1303 (bandit 6 / manual 1) — 起票時 2/537 から実質不変
+  (3) tokens_input     : 0/1303 — キー自体が存在しない
+      tokens_output    : 0/1303 — 同上
+  (4) role             : 1303/1303 (worker 1284 / verifier 19) — 起票時 0/537 verifier から前進、ただし 1.5%
+
+つまり (1) と (3) は「まだ集まっていない」ではなく「記録する経路が無い」。+766 episodes 増えても 0 のままなのがその証拠。(2) は 7 件で override-vs-followed の自然実験には足りない。(4) だけ部分的に動いた。
+
+次の一手: fugu-router record / route の書き込み経路に suggested_model と tokens_input/tokens_output を追加する (record が受け取っていないのか、受け取って捨てているのかは未確認 — まず crates/fugu-router/src の record 経路を読むこと)。それが入るまで f5f9522a は awaiting-measurement のまま閉じられない。
+
+判定不能な点: (2) の route_basis が 7 件しか無い理由が「bandit 経路をほとんど通っていない」のか「通ったが記録していない」のかは本測定では区別できていない。"""
+created_at = 1787272852
+updated_at = 1787272852
+weight = 0.0
+issue_number = 378
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/378"
+
+[[task]]
+id = "6f629b2b"
+title = "backlog driver register の project キーが worktree パスのまま正規化されない — CLAUDE.md 8 節と組み合わせると autoflow/daily が driver を検出できない可能性"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "worktree-hygiene",
+    "p2",
+]
+status = "pending"
+notes = '''
+観測 (2026-08-21、測定点 4beaca80、backlog 0.3.1):
+
+  backlog driver register --session-id 9cff59ab-... --project /mnt/c/.../.harness-worktrees/session-9cff59ab
+  -> {"project": "/mnt/c/.../.harness-worktrees/session-9cff59ab", ...}
+
+project が worktree パスのまま返る。tasks ストア側は store::canonical_project_id が linked worktree を main working tree へ正規化するのに、driver registry (~/.backlog/drivers/<project ハッシュ>/) はしていないように見える。
+
+なぜ問題になりうるか: CLAUDE.md 8 節は「作業は必ず worktree で行う」を絶対義務としており、/flow スキルは --project \"\/mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-9cff59ab\" を指定する。したがって全ての flow セッションは worktree パスのキーで登録される。一方 autoflow (Stop hook) と daily は「この project で driver が動いているか」を読む側であり、main のツリーから (あるいは別 worktree から) 問い合わせると別のハッシュを引く。結果として driver 稼働中なのに未検出 → 二重駆動。
+
+判定不能 (両方の読みを残す):
+  (a) 実在の欠陥 — driver registry も canonical_project_id を通すべき。
+  (b) 意図的な仕様 — driver は「この作業ツリー」単位の排他であって project 単位ではない、という設計。
+
+見分ける方法: crates/backlog/src の driver registry のキー生成が store::canonical_project_id を通るかを読む。通らないなら、autoflow/daily 側が実際にどのパスで問い合わせるかを 1 本たどる (main のツリーから問い合わせる経路が存在すれば (a) が確定する)。まだ実行していない。'''
+created_at = 1787272876
+updated_at = 1787272876
+weight = 0.0
+issue_number = 379
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/379"
+
+[[task]]
+id = "2db9981f"
+title = "backlog list --status claimed が「unknown status」と警告しながら正しくフィルタする — 警告と実挙動が食い違う"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p2",
+]
+status = "pending"
+notes = """
+観測 (2026-08-21、測定点 4beaca80、backlog 0.3.1):
+
+  $ backlog list --status claimed
+  warning: unknown status 'claimed'; valid values are pending | done | failed
+  ID         PRIORITY   STATUS     TITLE
+  e99f61e4   p0         claimed    セッション異常終了への対応: ...
+  09148819   p1         claimed    flow: spec-gap を4番目の source にして specforge へ戻す
+  966ae7aa   p1         claimed    context-governor: order injected context ...
+
+警告は 'claimed' を不正値だと言っているが、実際には claimed の 3 件だけを正しく返している (pending は 1 件も混ざっていない)。'claimed' は next --claim が実際に書き込む status であり、ストアの正規の値である。
+
+なぜ問題か: CLAUDE.md 4 節「docstring / コメントで実挙動と違う話を書く」の実行時版。この警告を読んだ利用者 (人間も LLM も) は「claimed でのフィルタは効いていない → 出力を信用するな」と読む。逆に「警告が出たのに結果が返る」のを見て、フィルタが無視されて全件返っていると誤読する余地もある (実際は効いている)。どちらの誤読も観測を歪める。
+
+判定不能ではない (実挙動は上のとおり観測済み)。直す場所は 2 択で、どちらが正しいかは設計判断:
+  (a) valid values の列挙に claimed を加える (list は claimed を一級市民として扱う)
+  (b) 警告を出すなら本当にフィルタしない (今の実装は警告と挙動が不整合)
+
+(a) が自然に見えるが、claimed を list の既定に含めるか (今 --status なしで claimed が出るのか) も併せて確認が必要。まだ読んでいない。"""
+created_at = 1787272973
+updated_at = 1787272973
+weight = 0.0
+issue_number = 380
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/380"
+
+[[task]]
+id = "4f790457"
+title = "fe84d350 の RED テスト commit 375587a2 が repo から消失している — branch も object も到達不能 (fe84d350/5aaecbf6/DoD12 が参照する前提が失われた)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "liveness",
+    "worktree-hygiene",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-08-21、測定点 4beaca80、vantage = worktree session-9cff59ab:
+
+  $ git cat-file -t 375587a2
+  fatal: Not a valid object name 375587a2
+  $ git branch -a | grep -i '20260814|occupancy'
+  (0 hits)
+  $ git log --oneline -1 375587a2
+  fatal: ambiguous argument '375587a2': unknown revision or path not in the working tree
+  $ git fsck --lost-found     # dangling ですらない
+
+つまり commit も branch も存在しない。
+
+何を参照していたか (いずれも 375587a2 を「済み」として前提にしている):
+  * backlog fe84d350 notes: 「RED テストのみ commit 済み (375587a2、実装なし)」
+  * backlog 5aaecbf6 notes: 「RED tests are committed at 375587a2 on branch
+    condukt/run-20260814-005232-58819/run-20260814-005232-58819/t2-occupancy-undetermined」
+  * .compass/charter.md DoD12: 「RED テストは 375587a2 に委託済みで 2026-08-14 に裁定との整合を読み直し確認済み」
+  * 同 notes の「読み直し結果 (2026-08-14)」は git show 375587a2 -- crates/condukt/tests/worktree_reconcile.rs
+    を逐語で読んだと記録している
+
+現ツリーの状態は 375587a2 適用前と整合する: テスト関数 dead_clean_worktree_is_removable が
+crates/condukt/tests/worktree_reconcile.rs:427 に**まだ存在する** (375587a2 はこれを削除した commit)。
+逆に 375587a2 が追加した 3 本 (unclaimed_clean_worktree_with_no_witness_is_not_removable /
+unclaimed_worktree_occupancy_is_undetermined_not_dead / unclaimed_worktree_with_advancing_activity_is_live)
+は 1 本も存在しない。
+
+なぜ重い問題か: 消えたのは「死んだセッションの残骸を安全に GC する」ための RED テストであり、
+消えた原因はまさに worktree/branch の回収である疑いが強い (e99f61e4 / 2d3cbda2 が扱う当の欠陥)。
+CLAUDE.md 2 節(b)「落ちることを確認していないテストは何も証明しない」の証跡が失われたので、
+実装を書く側は RED をもう一度先に観測し直す必要がある。
+
+判定不能 (両方の読みを残す):
+  (a) branch が GC / prune / abandon --all-stuck で回収された (2d3cbda2 / 5daf0b60 の実害の実例)
+  (b) そもそも push されず、その worktree が別マシン・別チェックアウトにしか無かった
+      (fe84d350 notes の project キーは /Users/yuki/src/harness = macOS 側)
+
+見分ける方法: mac 側チェックアウトで git cat-file -t 375587a2 を実行する。存在すれば (b)、
+存在しなければ (a) 寄り。**WSL 側からは観測不能**なのでここでは決着させていない。
+なお .harness-worktrees/fe84d350 (branch fe84d350-death-criterion) は存在するが 2d744145
+(main の祖先) を指しており、death-criterion の実装 commit は 1 つも載っていない。
+
+対応: fe84d350 の実装に着手する者は「375587a2 を土台にする」前提を捨て、RED を書き直して
+先に落ちることを観測すること。上記 4 参照箇所の記述も同時に直す (CLAUDE.md 4 節)。"""
+created_at = 1787273181
+updated_at = 1787273217
+weight = 0.0
+issue_number = 381
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/381"
+
+[[task]]
+id = "27c731a1"
+title = "fe84d350 実装設計 (調査完了・未実装): unclaimed worktree の occupancy を 3点連言へ — 逐語の変更点と RED テスト計画"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "liveness",
+    "p1",
+]
+status = "pending"
+notes = """
+flow (2026-08-21, session 9cff59ab, 測定点 4beaca80) で fe84d350 / 5aaecbf6 / e99f61e4(b) のコードを読み、
+2026-08-14 の裁定 (Dead <= 活動の停滞 かつ progress window 経過 かつ transcript 証拠なし) を
+現行コードへ落とす設計を確定した。**実装は 1 行も書いていない** (context 枯渇でここで停止)。
+375587a2 が消えている件は 4f790457。
+
+== 直す 1 箇所 (逐語) ==
+
+crates/condukt/src/wt_reconcile.rs:1374-1397 の occupancy 決定。現状:
+
+    let occupancy: Determination<Occupancy> = if any_progressing {
+        Determination::Known(Occupancy::Live)
+    } else if !claims_here.is_empty() {
+        Determination::undetermined(...)          // frozen is not dead (正しい)
+    } else if index.complete {
+        Determination::Known(Occupancy::Dead)     // <-- ここが fe84d350 の欠陥
+    } else {
+        Determination::undetermined(...)
+    };
+
+index.complete が真 = 「run state を完全に読めた」だけで Dead を主張している。claim が
+無い worktree (CLAUDE.md 8 節が常態とする .harness-worktrees/session-* が全部これ) は
+生きていても常に Dead になる。
+
+== 置き換える中身 ==
+
+claim が無いので claim_progress_verdict は使えない。worktree 自身のシグナルで sample する:
+
+    progress::sample(store, key, progress::fingerprint_from_signals(vec![
+        ("worktree-head",     progress::git_head_signal(path)),
+        ("worktree-activity", worktree_activity_signal(path)),   // 既存 :825
+    ]), now, window)
+
+その Determination<Liveness> と transcript witness の積で決める:
+
+    Known(Progressing)                       -> Live
+    Undetermined(r)                          -> Undetermined(r)
+    Known(Stalled) かつ witness Known(Absent)  -> Dead        <- 3点連言の成立点
+    Known(Stalled) かつ witness Known(Present) -> Undetermined (transcript があるので死の証拠にならない)
+    Known(Stalled) かつ witness Undetermined   -> Undetermined <- 5aaecbf6 notes が要求する fail-closed
+
+**重要な観測**: 「活動の停滞」と「progress window の経過」は別条件ではない。
+harness_core::progress::classify (progress.rs:191-241) の Known(Liveness::Stalled) が
+既に「fingerprint が window 秒以上、2 サンプル以上にわたって凍結」を意味する
+(first_seen からの elapsed >= window_secs)。よって連言は実質 Stalled かつ transcript-Absent の 2 項。
+裁定が言う「progress window を注入可能にする改修」も**既に払われている**:
+progress::WINDOW_ENV = HARNESS_PROGRESS_WINDOW_SECS (progress.rs:81)、
+window 0 でも 2 サンプル必須なので単発観測が Stalled になることはない。
+
+== 新規に要る 1 つの関数 (harness-core) ==
+
+既存の progress::transcript_signal_in (progress.rs:380) は**流用できない**。
+「projects dir が読めない」と「読めたが見つからない」を**どちらも Undetermined に潰す**ため、
+Known(Absent) を表現できない。progress 用途としてはそれが正しい (不在は凍結の証拠にならない) が、
+死の第3項には三値が必要。したがって追加する:
+
+    pub enum TranscriptWitness { Present, Absent }
+    pub fn transcript_witness_in(projects_dir: &Path, session_prefix: &str)
+        -> Determination<TranscriptWitness>
+    pub fn session_transcript_witness(session_prefix: &str) -> Determination<TranscriptWitness>
+
+fail-closed の要点 (ここを緩めると連言が 2 項へ縮退して元の fail-open が復活する):
+  * session_prefix が空 (worktree 名から導出できない) -> Undetermined
+  * HOME 未設定 / projects dir が read_dir 失敗 -> Undetermined
+  * **project サブディレクトリの read_dir が 1 つでも失敗したら Undetermined**
+    (探索空間の一部が読めなかったのに Absent を主張しない)
+  * どこかに <prefix>*.jsonl があれば Known(Present)
+  * 全部読めて 1 件も無ければ Known(Absent)
+
+prefix マッチが必要な理由: worktree 名は session-<8hex> で、これは session id の**先頭 8 桁**
+にすぎない (実例: session-9cff59ab / id 9cff59ab-de17-4468-91c1-33589ee43e81)。
+transcript_signal_in の完全一致 <id>.jsonl では当たらない。
+condukt 由来の run-*-t<N> worktree は session id を導出できないので Undetermined = 削除しない
+(裁定が明示的に受け入れた auto-removable の減少そのもの)。
+
+== テスト計画 (RED を先に観測すること) ==
+
+crates/condukt/tests/worktree_reconcile.rs は**実 git と実 condukt バイナリの subprocess**で
+回っており (Fixture::condukt_in は .env("HOME", home) を渡す)、env 注入がプロセス毎に閉じるので
+グローバル env の競合が無い。Fixture::new は home/.condukt/state を作るが
+**home/.claude/projects は作らない** = 現状は witness が Undetermined になる。
+
+  1. dead_clean_worktree_is_removable (現行 :427) は**必ず落ちる**。単発 probe はアンカーが無く
+     Undetermined になるため。これが 375587a2 が削除した対照そのもの。**削除ではなく書き換える**:
+     home/.claude/projects を空で作り、HARNESS_PROGRESS_WINDOW_SECS=0 で 2 回 reconcile し、
+     2 回目で occupancy=dead かつ removable=true に到達することを固定する
+     (= GC 全体が空虚でないことを示す唯一の end-to-end 対照を新しい形で復活させる)。
+  2. 追加: unclaimed_stalled_worktree_with_unreadable_projects_dir_is_undetermined
+     (projects dir を作らない -> 2 probe 後も dead にならない = 第3項の fail-closed)
+  3. 追加: unclaimed_worktree_with_a_transcript_is_not_dead
+     (projects/<slug>/<prefix>....jsonl を置く -> Present -> 削除不可)
+  4. 追加: unclaimed_worktree_with_advancing_activity_is_live
+     (2 probe の間に worktree 内でコミット -> Progressing)
+  5. 既存 green を割らないこと: dirty_worktree_is_preserved_before_it_becomes_removable と
+     stale_preserved_ref_does_not_authorize_deletion は Known(Occupancy::Dead) を要求する。
+     この 2 本は現在 dirty ケースで dead を経由しているので、上の変更で Dead が
+     到達しにくくなると**落ちる可能性が高い**。裁定は「この 2 本はそのまま通り続ける」と
+     明言しているので、落ちたら retarget せず (通すためにテストを緩める禁止) fixture 側で
+     3 点連言を満たす形 (projects dir を空で作る + window 0 + 2 probe) に整えること。
+     **これは未確認の予測である** — 実装前に実際に走らせて確認すること。
+
+== 触るファイル ==
+  crates/harness-core/src/progress.rs      (witness 3 関数 + unit test)
+  crates/condukt/src/wt_reconcile.rs       (:1374 の arm + session prefix 導出)
+  crates/condukt/tests/worktree_reconcile.rs (上の 1-4)
+  version: harness-core micro bump + condukt 3 ファイル lockstep + rollout-plugins.sh
+
+== 満たしていない規範 ==
+CLAUDE.md 2 節(a) (テストは利害関係のない Agent が書く) は、本セッションの常設制約
+(subagent を起動しない) のため満たせない。実装者は別 agent にテストを書かせること。"""
+created_at = 1787273400
+updated_at = 1787273400
+weight = 0.0
+issue_number = 382
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/382"

@@ -13983,3 +13983,17 @@ updated_at = 1787279003
 weight = 0.0
 issue_number = 383
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/383"
+
+[[task]]
+id = "90a358d3"
+title = "check-shell-syntax.sh の負の対照 4 件が落ちない — この構文ゲートは非 0 を返せない"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-08-21、測定点 f9bba02a、WSL2。bash scripts/tests/check-shell-syntax.sh の出力: FAIL expected exit 1 for the broken script got 0 / FAIL expected exit 1 for the extensionless broken script got 0 / FAIL expected exit 2 for an empty script set got 0 / FAIL expected exit 2 outside a git repo got 0 — 計 4 case 失敗。4 件すべて「checker が落ちるべき場面で落ちない」形であり、つまりこの構文ゲートは非 0 を返せない＝何も enforce していない可能性が高い。同 run の唯一の ok は this repository tracked shell scripts all parse (exit 0) で、これは正常系だけを見ている。既存の赤であることの根拠: f9bba02a は scripts/rebuild-plugins.sh 1 本と新規テスト 1 本しか触っておらず (git diff --name-only で確認)、check-shell-syntax.sh とその対象 checker は無変更。判定不能な点: (a) checker 側の実装が exit code を落としているのか (b) テスト側の期待値が古いのか を読んでいない。見分ける方法: 意図的に構文エラーのある .sh を temp に置いて checker を直接呼び、exit code を見る。CLAUDE.md 第1節と第4節の対象 (赤を黙らせるのではなく、落ちないゲートは検出していない)。"
+created_at = 1787282600
+updated_at = 1787282600
+weight = 0.0
+issue_number = 384
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/384"

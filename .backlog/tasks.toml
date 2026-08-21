@@ -13969,3 +13969,17 @@ updated_at = 1787273400
 weight = 0.0
 issue_number = 382
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/382"
+
+[[task]]
+id = "abba6f0d"
+title = "hook から harness バイナリを bare 名で spawn する残り 10 箇所 (overwatch status と同じ PATH 非継承の欠陥)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-08-21、測定点 cd2576bd、WSL2 linux-x86_64。親: overwatch 0.2.28 (commit e2a22f3b) で overwatch status の 4 source を harness_core::plugin_bin::resolve へ移した。同じ欠陥形が他に 10 箇所ある。機構: hook 子プロセスは plugin の bin dir を PATH に継承しない (claude プロセスの /proc/PID/environ に plugins/cache/yukineko が 0 件。PATH 追加は Bash tool の shell 内だけ)。したがって hook 経路の bare 名 spawn は login PATH だけを見る。~/.cargo/bin の 2026-07-23 版コピーが偶然支えていたが 91fa24df と bb046648 で削除済み。残る箇所 (Command::new で harness バイナリ名を直に渡している箇所を機械列挙): crates/autoflow/src/main.rs:345 condukt / crates/backlog/src/store.rs:816 condukt / crates/condukt/src/claim.rs:888 backlog / crates/ctxrot/src/hooks/guard.rs:657 overwatch / crates/daily/src/main.rs:219 backlog / crates/specguard/src/forge/queue.rs:171 backlog / crates/stuckguard/src/anchor.rs:130 overwatch / crates/stuckguard/src/anchor.rs:288 condukt / crates/stuckguard/src/anchor.rs:293 overwatch / crates/autoflow/src/backlog.rs:26 find_backlog_binary (これは cache fallback を持つが順序が PATH 優先で、91fa24df の stale shadow を勝たせる向き。また candidates.sort() が字句順なので 0.1.9 を 0.1.12 より新しいと判定する — この欠陥は plugin_bin の RED として実測済み)。判定不能な点: この 10 箇所それぞれの実害は測っていない (overwatch の実測を外挿していない)。特に stuckguard/anchor.rs の overwatch probe と ctxrot guard の overwatch probe は spawn 失敗時の既定値が permissive 側かどうかを個別に読む必要がある — sentinel 無しの allow に潰れているなら p0 へ昇格。見分ける方法: 各箇所の Err アームが何に解決するかを読み、restrictive でなければ昇格する。修正は harness_core::plugin_bin::resolve への置換 (三値を消さずに消費する)。各 crate の version bump と rollout が必要なので crate 単位で分割してよい。"
+created_at = 1787279003
+updated_at = 1787279003
+weight = 0.0
+issue_number = 383
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/383"

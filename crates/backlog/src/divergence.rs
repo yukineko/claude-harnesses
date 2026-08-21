@@ -266,11 +266,13 @@ pub fn legacy_path() -> PathBuf {
 ///     `resolved_pending` smaller than what was actually listed, and
 ///     [`assess`] escalates to [`Divergence::Undetermined`] — a non-zero exit
 ///     with nothing on stdout — precisely when that count is 0. A listing
-///     holding 66 real tasks would then be destroyed by the guard meant to
+///     holding real tasks would then be destroyed by the guard meant to
 ///     protect it, which is the failure this module's docs rule out for
-///     [`Divergence::Warn`]. Measured shape (2026-08-20, this repo): every
-///     pending task labelled `/Users/...` or `/mnt/c/...`, a `list` from the
-///     other checkout filtering to 0.
+///     [`Divergence::Warn`]. That is not hypothetical here: at measurement
+///     point `89feaddb` (2026-08-20) this repo's store held 340 pending-or-
+///     failed rows, of which only 70 carried this checkout's own label — so
+///     the filtered count for the other checkout is 0 while the listing shows
+///     hundreds.
 ///
 /// `resolved_project` is therefore `None` for a repo store and the checkout's
 /// own identity for a pinned/legacy one.

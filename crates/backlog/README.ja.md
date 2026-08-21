@@ -93,8 +93,21 @@ merge される tracked file)。したがってその中身はその repo のタ
 
 - **read は project フィルタを掛けない。** どの checkout が書いたものであっても、ファイル内の
   全タスクがスコープ内。書いた checkout の絶対パスで行を絞り込むと、1 つの repo のキューが
-  **マシンごとに分裂**する（実測 2026-08-20、本 repo の store: pending 258 件が macOS の
-  checkout パス、66 件が WSL のパスでラベルされ、どちらから `list` しても自分側しか見えなかった）。
+  **マシンごとに分裂**する。本 repo の store で pending/failed をラベル別に数えると:
+
+  | 測定点 | macOS ラベル | WSL ラベル | `C:/…` ラベル |
+  |---|---|---|---|
+  | `bb046648` (2026-08-20) | 258 | 66 | 5 |
+  | `89feaddb` (2026-08-20) | 265 | 70 | 5 |
+
+  WSL の checkout からの `list` は WSL ラベルだけを拾い、残りを黙って落としていた
+  （どれも、いま読んでいるまさにその repo のタスク）。再測定コマンド:
+
+  ```sh
+  python3 -c "import collections,tomllib; d=tomllib.load(open('.backlog/tasks.toml','rb')); \
+    print(collections.Counter(t['project'] for t in d['task'] if t['status'] in ('pending','failed')).most_common())"
+  ```
+
   よって `--project` は「どの store のことを言っているか」の **assertion** になる — この repo を
   指すなら何も変わらず、別の repo を指すのは（絞り込み結果ではなく）エラー。`--all` は受理され、
   repo store ではそれが既定の挙動。

@@ -533,8 +533,9 @@ fn a_dangling_git_link_no_longer_hides_an_existing_task() {
     // path. That row used to be "legitimately filtered out" and asserted
     // indistinguishable from the empty control. It is not foreign at all: a
     // repo store is tracked and shared through git, so such a row is this same
-    // repo's work written from another checkout — the 258 pending tasks
-    // measured invisible on 2026-08-20. It must be LISTED.
+    // repo's work written from another checkout — the 258 rows measured
+    // invisible from the WSL checkout at point `bb046648` (2026-08-20; 265 at
+    // `89feaddb`). It must be LISTED.
     let other_checkout_repo = temp_dir("other-checkout-label-repo");
     assert!(
         Command::new("git")

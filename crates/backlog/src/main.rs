@@ -359,12 +359,15 @@ fn main() {
 ///     through git, and by construction holds that repo's tasks and nothing
 ///     else. So **the file is the scope** and there is no row filter. The
 ///     `project` field still records which checkout wrote a task, but using it
-///     as a filter split one project into one queue per machine: measured
-///     2026-08-20 in this repo's own store, 258 pending tasks were labelled
-///     `/Users/yuki/src/harness` and 66 `/mnt/c/Users/.../harness`, and a
-///     `list` from either checkout silently dropped the other's — the same
-///     collapse 5ba13c3e closed one level up, with the scope wrong instead of
-///     the file.
+///     as a filter split one project into one queue per machine. In this
+///     repo's own store, pending-or-failed rows by label: 258 under
+///     `/Users/yuki/src/harness` and 66 under `/mnt/c/Users/.../harness` at
+///     measurement point `bb046648` (2026-08-20), 265 and 70 at `89feaddb`
+///     the same day. A `list` from either checkout silently dropped the
+///     other's — the same collapse 5ba13c3e closed one level up, with the
+///     scope wrong instead of the file. See `crates/backlog/README.md` for
+///     the re-measurement command; do not copy these figures forward without
+///     re-running it.
 ///   * a PINNED store may legitimately hold several projects (it is the
 ///     pre-per-repo shape), so there the label is the only separator and the
 ///     old cwd-derived filter stays exactly as it was.

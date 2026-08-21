@@ -13644,3 +13644,38 @@ updated_at = 1787217503
 weight = 0.0
 issue_number = 375
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/375"
+
+[[task]]
+id = "120d7758"
+title = "backlog divergence: 旧ストア側のカウントが別 checkout ラベルを取りこぼす (0.3.0 の残り)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p2",
+]
+status = "pending"
+notes = "0.3.0 で read 側の行フィルタは撤去したが、divergence::check の LEGACY 側は今も project_matches で絞り込む。legacy store は cross-project なので絞り込み自体は必要だが、project_matches は 2 つの絶対パス間を橋渡しできない (両方に / が含まれると bare_name_matches_path が false)。よって legacy store に /Users/yuki/src/harness ラベルで残っている「この repo の作業」は matched に数えられず、移行を促す警告が過小申告になる。過大ではなく過小なので新たな fail-open ではないが、5ba13c3e が閉じたはずの穴が legacy 側に残っている。案: 同一 basename の行を unresolved バケット (Warn のみ・escalate しない) に数える。ただし unresolved の意味が project_unresolved フラグと重複するので、別フィールドが必要。実測 2026-08-20 測定点 89feaddb: legacy ~/.backlog/tasks.toml の pending 127 件のうち何件が該当するかは測っていない。"
+created_at = 1787271791
+updated_at = 1787271791
+weight = 0.0
+issue_number = 376
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/376"
+
+[[task]]
+id = "03700a8a"
+title = "backlog store::tests::add_and_claim_no_lost_update_under_heavy_contention が全数実行時に 1 度落ちた (flake か実欠陥か未判定)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "flaky",
+    "p2",
+]
+status = "pending"
+notes = "実測 2026-08-20、測定点 89feaddb の作業中。cargo test -p backlog (全数・並列) の 1 回目で 'iter 0: concurrently-added task concurrent-add-0-5 was lost (lost-update race)' で落ちた (crates/backlog/src/store.rs:3171)。単体実行では ok、その後の全数実行 4 回では再現しなかった。0.3.0 の変更は store.rs の書き込み経路に一切触れていない (git diff -U0 の非コメント行が 0 件であることを確認済み) ので、この変更が原因ではない。ただし『たぶん flake』は判断であって観測ではない。この assertion は実在の lost-update を検出するものなので、負荷下で落ちるなら (a) テスト側のタイムアウト/予算不足か (b) tasks-file lock の retry budget が全数並列の負荷で足りないかのどちらか。0.1.12 で budget を ~2s→~8s に上げた履歴があり、8s は 10s の stale-reap 窓の下という設計上の上限に張り付いているので、単純に上げる方向の余地は小さい。次の一手: このテストだけを N 回・他テストと並列で回して再現率を測る。"
+created_at = 1787271810
+updated_at = 1787271810
+weight = 0.0
+issue_number = 377
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/377"

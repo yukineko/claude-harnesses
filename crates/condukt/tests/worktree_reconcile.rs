@@ -80,6 +80,12 @@ impl Fixture {
         // not readable here", which the implementation resolves to
         // undetermined (never to "no runs ⇒ everything is dead").
         std::fs::create_dir_all(home.join(".condukt").join("state")).unwrap();
+        // Claude Code's per-project transcript root. Present-but-EMPTY is a
+        // known absence ("we looked; no session has ever worked here"); its
+        // ABSENCE is unreadability, which the death rule resolves to
+        // undetermined. Creating it here is what makes the anti-vacuity
+        // control (`dead_clean_worktree_is_removable`) reachable at all.
+        std::fs::create_dir_all(home.join(".claude").join("projects")).unwrap();
 
         run_git(&repo, &["init", "-q", "-b", "main"]);
         run_git(&repo, &["config", "user.email", "t@t.t"]);
@@ -130,18 +136,78 @@ impl Fixture {
     /// session works inside a LINKED worktree, so "reconcile invoked from a
     /// linked worktree" is the normal case, not an exotic one.
     fn condukt_in(&self, dir: &Path, args: &[&str]) -> Output {
-        Command::new(bin())
-            .args(args)
+        self.condukt_env_in(dir, args, &[])
+    }
+
+    fn condukt_env_in(&self, dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let mut cmd = Command::new(bin());
+        cmd.args(args)
             .current_dir(dir)
             .env("HOME", &self.home)
             .env("CONDUKT_WORKTREE_BASE", &self.wt_base)
-            .env_remove("CONDUKT_DISABLE")
-            .output()
-            .expect("condukt runs")
+            .env_remove("CONDUKT_DISABLE");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd.output().expect("condukt runs")
+    }
+
+    /// `~/.claude/projects/<encoded>` — the directory Claude Code writes a
+    /// session's transcript into when `wt` is that session's cwd.
+    ///
+    /// The encoding is re-derived here **independently of the implementation**
+    /// (every byte outside `[A-Za-z0-9]` becomes `-`) so the two can be seen
+    /// to disagree. Measured 2026-08-21 against this machine's real store:
+    /// the worktree
+    /// `/mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-24b59ce3`
+    /// is stored as
+    /// `-mnt-c-Users-hiroyuki-nakayama-src--harness-worktrees-session-24b59ce3`.
+    fn transcript_dir(&self, wt: &Path) -> PathBuf {
+        let canon = wt.canonicalize().unwrap_or_else(|_| wt.to_path_buf());
+        let encoded: String = canon
+            .to_string_lossy()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        self.home.join(".claude").join("projects").join(encoded)
     }
 
     fn reconcile_json(&self, extra: &[&str]) -> serde_json::Value {
         self.reconcile_json_in(&self.repo, extra)
+    }
+
+    /// One probe with the multi-sample window collapsed to zero seconds.
+    ///
+    /// A zero window does NOT turn one observation into a freeze — the engine
+    /// still requires two samples with an unchanged fingerprint — so this only
+    /// removes the wall-clock wait, never the multi-sample requirement.
+    fn reconcile_json_w0(&self, extra: &[&str]) -> serde_json::Value {
+        let mut args = vec!["worktree", "reconcile", "--json"];
+        args.extend_from_slice(extra);
+        let out = self.condukt_env_in(&self.repo, &args, &[("HARNESS_PROGRESS_WINDOW_SECS", "0")]);
+        assert!(
+            out.status.success(),
+            "`condukt worktree reconcile --json` failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+            panic!(
+                "reconcile --json emitted unparseable JSON: {e}\nstdout:\n{}",
+                String::from_utf8_lossy(&out.stdout)
+            )
+        })
+    }
+
+    /// Two probes, returning the second: the first anchors the progress
+    /// snapshot, the second is the earliest one that can observe a frozen
+    /// fingerprint. Any test that needs a positively DEAD worktree must settle
+    /// it, because death is now established rather than inferred from the
+    /// absence of a claim.
+    fn reconcile_json_settled(&self, extra: &[&str]) -> serde_json::Value {
+        let _ = self.reconcile_json_w0(extra);
+        self.reconcile_json_w0(extra)
     }
 
     fn reconcile_json_in(&self, dir: &Path, extra: &[&str]) -> serde_json::Value {
@@ -338,15 +404,22 @@ fn dirty_worktree_is_preserved_before_it_becomes_removable() {
 
     let status_before = run_git(&wt, &["status", "--porcelain"]);
 
-    let report = f.reconcile_json(&[]);
+    // Anchor the progress snapshot first: an unclaimed worktree is
+    // undetermined on a first probe now that the absence of a claim is no
+    // longer read as death. Asserting `dead` here keeps the dirty gate under
+    // test for the reason it exists — it must hold even against a worktree
+    // whose death is positively established, not merely undetermined.
+    let _ = f.reconcile_json_w0(&[]);
+    let report = f.reconcile_json_w0(&[]);
     let e = entry(&report, "wt-dirty");
+    assert_eq!(e["occupancy"]["value"], "dead", "entry: {e}");
     assert_eq!(e["dirty"]["value"], true, "entry: {e}");
     assert!(
         !removable(&report, "wt-dirty"),
         "a dirty worktree must not be removable before its content is preserved; entry: {e}"
     );
 
-    let report = f.reconcile_json(&["--preserve"]);
+    let report = f.reconcile_json_w0(&["--preserve"]);
     let e = entry(&report, "wt-dirty");
     assert_eq!(
         e["preserved"]["preserved"], true,
@@ -400,13 +473,13 @@ fn stale_preserved_ref_does_not_authorize_deletion() {
     let wt = f.add_worktree("wt-stale-pres", "feat/stale-pres");
     std::fs::write(wt.join("first.txt"), "first\n").unwrap();
 
-    let report = f.reconcile_json(&["--preserve"]);
+    let report = f.reconcile_json_settled(&["--preserve"]);
     assert!(removable(&report, "wt-stale-pres"));
 
     // More work lands after the preservation.
     std::fs::write(wt.join("second.txt"), "second\n").unwrap();
 
-    let report = f.reconcile_json(&[]);
+    let report = f.reconcile_json_w0(&[]);
     let e = entry(&report, "wt-stale-pres");
     assert_eq!(
         e["preserved"]["preserved"], false,
@@ -423,18 +496,194 @@ fn stale_preserved_ref_does_not_authorize_deletion() {
 /// (a) A genuinely dead, clean, attributable worktree IS removable. Without
 /// this, an implementation answering "undetermined" to everything would pass
 /// every other test in this file.
+///
+/// This is the control that keeps the DEATH rule from degenerating into "never
+/// delete anything". All three conjuncts are supplied for real, none injected:
+/// the worktree's own signals are frozen (nothing touches it between the two
+/// probes), the window has elapsed (collapsed to 0 via
+/// `HARNESS_PROGRESS_WINDOW_SECS`, which still requires two samples), and the
+/// transcript store is readable and contains no directory for this path —
+/// looked up and found absent, not left unlooked-up.
 #[test]
 fn dead_clean_worktree_is_removable() {
     let f = Fixture::new("dead-clean");
-    let _wt = f.add_worktree("wt-clean", "feat/clean");
+    let wt = f.add_worktree("wt-clean", "feat/clean");
+    assert!(
+        f.home.join(".claude").join("projects").is_dir(),
+        "the transcript store must be READABLE for an absence to be an observation"
+    );
+    assert!(
+        !f.transcript_dir(&wt).exists(),
+        "no session has ever worked in this worktree"
+    );
 
-    let report = f.reconcile_json(&[]);
+    let report = f.reconcile_json_settled(&[]);
     let e = entry(&report, "wt-clean");
     assert_eq!(e["occupancy"]["value"], "dead", "entry: {e}");
     assert_eq!(e["dirty"]["value"], false, "entry: {e}");
     assert!(
         removable(&report, "wt-clean"),
         "a dead, clean, attributable worktree must be removable; entry: {e}"
+    );
+}
+
+// -- 3c. The DEATH rule: an absent claim is not proof of death --------------
+//
+// The defect this closes, verbatim from the code it replaces: a fully readable
+// run-state scan that found no claim went straight to
+// `Determination::Known(Occupancy::Dead)`. The absence of a *record* is not an
+// observation of the *directory*. Under CLAUDE.md section 8 every session works
+// inside a worktree, and a session driven by `/flow`, `/compass` or a bare
+// `EnterWorktree` registers no condukt claim at all — so the unclaimed case is
+// the common case, not an exotic one. Measured 2026-08-21 on this machine:
+// 66 `session-*` worktrees exist and condukt's run state claims none of them,
+// while `~/.claude/projects` holds transcript directories for 13 of them.
+//
+// Death is therefore established from the worktree itself: its own signals
+// frozen across the multi-sample window AND no session transcript growing
+// against its path.
+
+/// A single probe cannot see a freeze, so an unclaimed worktree is
+/// undetermined on the first pass — where the old rule said `dead` and handed
+/// out `removable: true` immediately.
+#[test]
+fn unclaimed_worktree_is_undetermined_on_a_first_probe_not_dead() {
+    let f = Fixture::new("unclaimed-first");
+    let _wt = f.add_worktree("wt-unclaimed", "feat/unclaimed");
+
+    let report = f.reconcile_json_w0(&[]);
+    let e = entry(&report, "wt-unclaimed");
+    assert_eq!(
+        e["occupancy"]["value"], "undetermined",
+        "one observation cannot establish a freeze; entry: {e}"
+    );
+    // Pin WHICH undetermined: "undetermined" is reachable for several reasons
+    // and a test satisfied by any of them proves nothing about this one.
+    let reason = e["occupancy"]["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("first progress observation"),
+        "the cause must be the missing prior sample, not something else; reason: {reason}"
+    );
+    assert!(
+        !removable(&report, "wt-unclaimed"),
+        "undetermined occupancy must not authorize deletion; entry: {e}"
+    );
+}
+
+/// The case the old rule got flatly wrong: a live session working in a
+/// worktree that no condukt task claims.
+///
+/// Nothing about git changes between the two probes — that is the whole point.
+/// An agent that is thinking and calling tools moves neither the worktree HEAD
+/// nor the working tree, and its transcript is the only thing that advances.
+/// The transcript therefore has to be a signal in its own right, not a
+/// tie-breaker consulted after the git signals have already decided.
+#[test]
+fn unclaimed_worktree_with_a_growing_transcript_is_live_not_dead() {
+    let f = Fixture::new("unclaimed-live");
+    let wt = f.add_worktree("wt-thinking", "feat/thinking");
+    let tdir = f.transcript_dir(&wt);
+    std::fs::create_dir_all(&tdir).unwrap();
+    let transcript = tdir.join("11111111-2222-3333-4444-555555555555.jsonl");
+    std::fs::write(&transcript, "{\"type\":\"user\"}\n").unwrap();
+
+    let _ = f.reconcile_json_w0(&[]);
+    std::fs::write(
+        &transcript,
+        "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n",
+    )
+    .unwrap();
+
+    let report = f.reconcile_json_w0(&[]);
+    let e = entry(&report, "wt-thinking");
+    assert_eq!(
+        e["occupancy"]["value"], "live",
+        "a growing session transcript is somebody working here; entry: {e}"
+    );
+    assert!(
+        !removable(&report, "wt-thinking"),
+        "a live worktree is never removable; entry: {e}"
+    );
+}
+
+/// The conjunct that must not hold vacuously: if the transcript store cannot
+/// be READ, "no session works here" has not been observed, it has merely not
+/// been looked up. Resolving that to a known absence would silently collapse
+/// the three-term rule back to two terms and resurrect the very fail-open
+/// being fixed, so it must be undetermined even when both git signals are
+/// frozen and the window has elapsed.
+#[test]
+fn unclaimed_worktree_is_undetermined_when_the_transcript_store_is_unreadable() {
+    let f = Fixture::new("unclaimed-blind");
+    let _wt = f.add_worktree("wt-blind", "feat/blind");
+    std::fs::remove_dir_all(f.home.join(".claude")).unwrap();
+
+    let report = f.reconcile_json_settled(&[]);
+    let e = entry(&report, "wt-blind");
+    assert_eq!(
+        e["occupancy"]["value"], "undetermined",
+        "an unreadable transcript store is not an absence of sessions; entry: {e}"
+    );
+    // The load-bearing assertion: it must be undetermined BECAUSE the
+    // transcript store could not be read. Without this the test would pass on
+    // "first progress observation" if `reconcile_json_settled` ever stopped
+    // settling, and would then say nothing at all about the third term.
+    let reason = e["occupancy"]["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("transcript store") && reason.contains("unreadable"),
+        "the cause must be the unreadable transcript store; reason: {reason}"
+    );
+    assert!(!removable(&report, "wt-blind"), "entry: {e}");
+}
+
+/// A FROZEN transcript is not a finished session.
+///
+/// This test inverts the first cut of this rule, and it inverts it on a
+/// measurement rather than an argument. That cut read "transcript exists but
+/// stopped growing" as "the session finished", so that a leftover transcript
+/// would not block reclamation forever. Run against this repository it called
+/// the worktree the running session was working in **dead** on the second
+/// probe, 167 seconds after the first, while that session was executing tools
+/// in it continuously.
+///
+/// The cause, measured 2026-08-21 with three signal observations 1836 seconds
+/// apart while the session made tool calls throughout: the transcript is
+/// flushed at TURN boundaries, not per tool call, and an agentic turn routinely
+/// outlives the window. HEAD, working-tree activity and the transcript's
+/// `(size, mtime)` were byte-identical across all of them.
+///
+/// So a frozen transcript cannot distinguish "finished" from "mid-turn", and
+/// CLAUDE.md section 3 sends that undecidable case to the restrictive side —
+/// for a GC, keep. The accepted cost is that a worktree any session has ever
+/// been bound to is unreclaimable by this rule; `dead_clean_worktree_is_removable`
+/// pins the population that remains reclaimable, so this is not the "never
+/// delete anything" degeneracy.
+#[test]
+fn unclaimed_worktree_whose_transcript_stopped_growing_is_not_dead() {
+    let f = Fixture::new("unclaimed-frozen");
+    let wt = f.add_worktree("wt-frozen", "feat/frozen");
+    let tdir = f.transcript_dir(&wt);
+    std::fs::create_dir_all(&tdir).unwrap();
+    std::fs::write(
+        tdir.join("99999999-8888-7777-6666-555555555555.jsonl"),
+        "{\"type\":\"summary\"}\n",
+    )
+    .unwrap();
+
+    let report = f.reconcile_json_settled(&[]);
+    let e = entry(&report, "wt-frozen");
+    assert_eq!(
+        e["occupancy"]["value"], "undetermined",
+        "a frozen transcript cannot tell a finished session from a mid-turn one; entry: {e}"
+    );
+    let reason = e["occupancy"]["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("turn") && reason.contains("transcript"),
+        "the cause must be the transcript's flush granularity; reason: {reason}"
+    );
+    assert!(
+        !removable(&report, "wt-frozen"),
+        "undetermined occupancy must not authorize deletion; entry: {e}"
     );
 }
 

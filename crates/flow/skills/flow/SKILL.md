@@ -137,7 +137,7 @@ condukt policy answer --approval \
 4. **`--untestable` / `--conflict`（上向き clamp）が常に優先。** 常設許諾は §2 の「測れないなら人に聞く」も
    merge conflict の pick-a-side も**上書きしない**。
 
-**実際に流れを止めるのは deterministic gate の側である** — blastguard / taintguard / donegate /
+**実際に流れを止めるのは deterministic gate の側である** — blastguard / donegate /
 pre-commit・pre-push フック。`--approval` はそれらに一切触れない（層が違う）。ユーザーの
 「blastguard とかで止められない限り」はこの構造を指している: **人間への YES/NO は消え、機械の判定は残る。**
 

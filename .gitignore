@@ -17,10 +17,8 @@ Cargo.lock.bak
 .tdd/
 
 # agent scratch space. Deliberately INSIDE the worktree rather than under
-# %TEMP%: taintguard's classifier only trusts the cwd subtree and sibling
-# worktrees of the same repository, so reading a file from the harness's
-# %TEMP% scratchpad taints the turn and denies every later write (CLAUDE.md
-# §8, backlog 96075670).
+# %TEMP%, so scratch files stay next to the work they belong to and are
+# removed with the worktree instead of outliving it in a system temp dir.
 .scratch/
 
 # deterministic code index (rebuildable from source via `fugu-router code-index build`)

@@ -15,7 +15,9 @@ Measured (2026-08-04, backlog 8cb3bc22): of the 39 launchers under crates/*/bin/
 (41 plugins, three of which are skills-only and ship no binary), exactly one —
 `crates/taintguard/bin/taintguard` — was staged 100644 while the other 38 were
 100755. It was found BY HAND, after the gate had been silently inert; nothing in
-the repo could detect a 1-in-39 deviation. `check-plugin-rollout.py` was the
+the repo could detect a 1-in-39 deviation. (That path no longer exists: the
+crate was removed on 2026-08-24 by user ruling. The measurement above is left
+as it was taken; do not go looking for the file.) `check-plugin-rollout.py` was the
 closest thing and it only asks whether the launcher FILE EXISTS (see
 `_bin_launcher_problem`), never what mode it carries.
 

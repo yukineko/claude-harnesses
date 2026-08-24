@@ -67,7 +67,6 @@ GATE_CRATES = (
     "propguard",
     "specguard",
     "stuckguard",
-    "taintguard",
     "mutategate",
     "overwatch",
 )

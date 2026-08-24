@@ -1,8 +1,8 @@
 //! The `scan` PostToolUse decision: given a hook payload for a matched web
 //! tool, decide whether to inject an untrusted-content warning.
 //!
-//! # Fail-closed contract (non-negotiable, mirrors `taintguard::main`'s
-//! `analyse_mark`/`analyse_gate` barriers)
+//! # Fail-closed contract (non-negotiable; the shape was taken from the
+//! `analyse_mark`/`analyse_gate` barriers of `taintguard`, removed 2026-08-24)
 //!
 //! "Cannot determine" resolves RESTRICTIVE here, never silent-clean:
 //!   * `tool_response` present but of a shape [`extract`] cannot turn into
@@ -25,8 +25,10 @@
 //!     here in the first place, so any other value only reaches `decide`
 //!     via a direct/test call; the consumer is `decide`'s own caller, which
 //!     never emits `additionalContext` for a tool this crate has no mandate
-//!     to look at (external-file `Read` is deferred to `taintguard`'s
-//!     provenance gate — see the crate-level docs in `lib.rs`).
+//!     to look at. NOTE this crate's mandate did not grow when
+//!     `taintguard` was removed (2026-08-24): external-file `Read` is now
+//!     covered by NOTHING, it is not covered here — see [`WEB_TOOLS`] and
+//!     the crate-level docs in `lib.rs`.
 //!   * `tool_response` is genuinely absent (`None`, i.e. the field was
 //!     missing/`null` in the hook payload) — no data arrived to scan, so
 //!     there is nothing to warn about; equally, an [`Extraction::Text`] that
@@ -43,12 +45,22 @@ use crate::hookio::warning_json;
 use crate::scan;
 
 /// Tools this hook's `hooks/hooks.json` matcher (`WebFetch|WebSearch`)
-/// routes here. External-file `Read` is DEFERRED (see crate docs): it needs
-/// path-trust classification, which `taintguard::classify` already owns —
-/// duplicating that here would be a second, driftable copy of the same
-/// judgment. Follow-up: teach this scanner to also consume a `Read` outside
-/// the project root once there is a shared path-trust primitive both crates
-/// can call without one depending on the other.
+/// routes here.
+///
+/// External-file `Read` is NOT covered — and, since 2026-08-24, is not
+/// covered anywhere. Through 0.1.1 this was a deferral: the surface needed
+/// path-trust classification, `taintguard::classify` owned it, and
+/// duplicating that here would have been a second driftable copy of one
+/// judgment. `taintguard` was then removed from the repository by user
+/// ruling, so the deferral has no target. Reading a file from outside the
+/// project root now produces no provenance signal and no content scan, and
+/// nothing downstream restricts the turn afterwards.
+///
+/// This is recorded as an OPEN gap (backlog 1601272b), not a resolved scope
+/// decision. Closing
+/// it means either widening this matcher to `Read` (which needs a path-trust
+/// primitive this crate does not have) or standing a provenance gate back
+/// up. Do not delete this paragraph without one of the two.
 pub const WEB_TOOLS: &[&str] = &["WebFetch", "WebSearch"];
 
 /// What [`extract`] managed to get out of a `tool_response` value.
@@ -204,8 +216,8 @@ pub fn decide(tool_name: &str, tool_response: Option<&Value>) -> Option<String> 
 /// Run [`decide`] behind a panic barrier: a panic anywhere in extraction or
 /// scanning must not fall through to `main`'s outer `run_hook` backstop,
 /// which would silently exit 0 with NO warning — the exact fail-open this
-/// barrier exists to prevent (mirrors `taintguard::main::analyse_mark` /
-/// `ctxrot::hooks::toolguard::analyse`).
+/// barrier exists to prevent (same shape as `ctxrot::hooks::toolguard::analyse`,
+/// and as `analyse_mark` in the removed `taintguard`).
 pub fn analyse(tool_name: &str, tool_response: Option<&Value>) -> Option<String> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         decide(tool_name, tool_response)
@@ -309,7 +321,8 @@ mod tests {
         assert!(line.contains("UNTRUSTED DATA"));
     }
 
-    /// Test-only seam mirroring `taintguard::main`'s `analyse_gate_with`: lets
+    /// Test-only seam, shaped after `analyse_gate_with` in the removed
+    /// `taintguard`: lets
     /// the panic-barrier test inject a panicking closure without needing a
     /// real panic-triggering input through `decide`'s own logic.
     fn analyse_with<F>(f: F) -> Option<String>

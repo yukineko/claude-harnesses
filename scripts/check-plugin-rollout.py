@@ -390,7 +390,6 @@ GATE_CRATES = (
     "propguard",
     "specguard",
     "stuckguard",
-    "taintguard",
     "mutategate",
     "overwatch",
 )
@@ -462,11 +461,13 @@ def load_parked(plugins, path=None):
     ---------------------------------------
     This checker used to be binary: a plugin was either live or a failure. There
     is a third real state — deliberately NOT rolled out, because arming it right
-    now would do harm. taintguard is the case that forced this: it is committed
-    at 0.1.8, its launcher is intentionally left un-rolled-out while a known
-    false positive is measured, and so the rollout dimension reported red on
+    now would do harm. taintguard was the case that forced this: it sat
+    committed at 0.1.8 with its launcher deliberately un-rolled-out while a
+    known false positive was measured, so the rollout dimension reported red on
     every single run with no way for it to ever go green short of arming the
-    gate.
+    gate. (That crate was removed from the repository on 2026-08-24 by user
+    ruling. The third state it forced into existence is not tied to it — the
+    next park will be some other plugin.)
 
     A permanent red is not a harmless nuisance, it is an ACTIVE hazard, and this
     is measured, not theoretical: on 2026-08-04 the red was read as a

@@ -12,15 +12,22 @@ egress）で検査し、ヒットした場合（あるいは検査不能な形�
 `check-prompt-injection.py` 自身の docstring が明言する通り、あの gate が
 守るのは **commit された prompt asset**（skill / agent 定義 / `CLAUDE.md` /
 docs 等）であって、`WebFetch`/`WebSearch` がランタイムに外部から取り込む
-content には一切かかっていない。`taintguard`（sibling crate）は「このターンが
-untrusted な出所の content を取り込んだか」という **provenance（出所）** の
-信号を扱うが、「そのテキストが実際に何を言っているか」という **content** の
-信号は扱わない。fetchguard はその欠けている content 信号を埋める —
-taintguard の代替ではなく、両方が揃って初めて防御が閉じる想定。
+content には一切かかっていない。fetchguard が埋めるのは「そのテキストが実際に
+何を言っているか」という **content** の信号である。
 
-外部ファイルの `Read` はスコープ外（deferred）。「パスが external かどうか」の
-判定は `taintguard::classify` が既に持っている判断であり、ここで再実装すると
-2つの独立した判定がドリフトしうる。
+**この防御は現在閉じていない。**（起票済み: backlog 1601272b） 対になる **provenance（出所）** の信号 —
+「このターンが untrusted な出所の content を取り込んだか」を追跡し、取り込み後の
+write 系ツールを ask/deny へ降格する側 — は `taintguard` が担っていたが、
+その crate は 2026-08-24 のユーザー裁定でリポジトリから撤去された。したがって:
+
+- 外部ファイルの `Read`（プロジェクト外）の provenance を追跡するものは**存在しない**。
+  fetchguard は `WebFetch`/`WebSearch` の tool_response しか見ない。
+- **強制（enforcement）の半分が無い。** fetchguard は警告を注入するだけで、
+  どのツールも降格・拒否しない。「untrusted を取り込んだ turn の write を止める」
+  機構は現在どの crate にも無い。
+
+fetchguard 単体を「prompt-injection 防御は閉じている」と読んではならない。
+未カバー面は backlog に起票済み。
 
 ## hook
 
@@ -37,8 +44,7 @@ taintguard の代替ではなく、両方が揃って初めて防御が閉じる
   一つも持たないオブジェクト（例: `text` を持たない image content block）
   だった場合 → **undecidable** として扱い、警告を出す（判定不能 = untrusted）。
 - スキャン処理自体が panic した場合も、`fetchguard::gate::analyse` の
-  panic barrier が同じ警告に fail-closed する（`taintguard::main` の
-  `analyse_mark`/`analyse_gate` と同型）。
+  panic barrier が同じ警告に fail-closed する。
 
 一方、以下は **正当な clean**（警告なし）として明示的に扱う:
 

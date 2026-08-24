@@ -239,10 +239,18 @@ class RealRepoState(unittest.TestCase):
 
     def test_the_scope_finds_every_plugin_that_ships_a_binary(self):
         """A count assertion, so the scope cannot quietly shrink to a subset and
-        keep reporting green over it. 39 = 41 plugins minus the two that are
-        skills-only (daily-report, scout, flow) and ship no binary."""
+        keep reporting green over it. 37 = 40 plugins minus the THREE that are
+        skills-only (daily-report, scout, flow) and ship no binary.
+
+        Was `39` with a docstring reading "41 plugins minus the two ... (three
+        names)" — self-contradictory, and 41 - 3 is 38, not 39. That constant
+        was already RED at HEAD before taintguard's removal (measured
+        2026-08-24: 38 launchers in the index vs the 39 asserted here), because
+        it was never re-derived when `flow` became the third skills-only plugin.
+        Both errors are corrected together: the population is now 40 plugins
+        after taintguard was retired, and 40 - 3 = 37."""
         found = cleb.launchers(cleb.index_entries(repo=str(REPO_ROOT)))
-        self.assertEqual(len(found), 39, [p for _m, p in found])
+        self.assertEqual(len(found), 37, [p for _m, p in found])
 
 
 if __name__ == "__main__":

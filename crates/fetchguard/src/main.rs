@@ -3,7 +3,8 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 //! fetchguard — a Claude Code `PostToolUse` hook: runtime content-level
 //! prompt-injection scanner for `WebFetch`/`WebSearch` results. See
-//! `lib.rs` for the crate-level "why" and how this relates to `taintguard`.
+//! `lib.rs` for the crate-level "why" and the provenance gap left by the
+//! removal of `taintguard`.
 //!
 //! Contract (shared by every plugin in this repo): a hook must NEVER break
 //! the user's turn. The `scan` subcommand reads a hook payload from stdin
@@ -13,7 +14,7 @@
 //! barrier so a crash in extraction/scanning resolves to the FAIL-CLOSED
 //! warning rather than letting it unwind into `run_hook`'s outer catch,
 //! which would silently exit 0 with no warning at all — an allow. This
-//! mirrors `taintguard::main`'s `analyse_mark`/`analyse_gate` barriers and
+//! mirrors the panic-barrier shape the removed `taintguard::main` used, and
 //! `ctxrot::hooks::toolguard`'s `analyse`.
 
 use clap::{Parser, Subcommand};

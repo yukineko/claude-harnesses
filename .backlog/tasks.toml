@@ -8393,7 +8393,7 @@ tags = [
     "injection",
     "p0",
 ]
-status = "pending"
+status = "done"
 notes = """
 
 
@@ -8427,9 +8427,10 @@ outcome block。全文レポート (29KB、逐語引用と再実行可能な抽�
 **この item は close しない。** 「d24f02d5 をそのまま merge しない」は完了する作業では
 なく恒常的な制約であり、done にするとキューから消えて警告が見えなくなる。
 調査部分が終わっただけなので pending に戻す。
-"""
+
+CLOSE: closed 2026-08-24 (session-24b59ce3) -- subject ceased to exist. This item was a standing constraint 'do not merge d24f02d5 as-is'. crates/taintguard was removed from the repository entirely by user ruling (廃止), so there is no longer any target to merge that commit into. The adversarial block rationale this item carried is preserved verbatim in docs/audit-taintguard-d24f02d5-block-rationale.md, now headed HISTORICAL RECORD -- SUBJECT RETIRED."""
 created_at = 1785926923
-updated_at = 1787272913
+updated_at = 1787536115
 weight = 0.0
 issue_number = 153
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/153"
@@ -10431,7 +10432,7 @@ title = "6aaec283 の notes が自分の上部を参照しているが、その�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = """
 実測 2026-08-12、測定点 1ef71cc5。6aaec283 の notes は末尾近くで「敵対的パネルの block 理由は本 notes 上部を参照」と書いているが、notes 全体は 570 バイトで、先頭は改行 2 個の直後に「--- 事実確認 (flow 2026-08-06, session 0ff5fc74) ---」が来る。つまり参照先の上部セクションは存在しない。/Users/yuki/.backlog/tasks.toml.pre-prune-20260807 のスナップショットでも同じ 570 バイト・同じ先頭改行 2 個であり、少なくとも 2026-08-07 の時点で既に失われていた。先頭に改行が 2 つ残っていることは、そこに何かがあって上書きされた痕跡と読める。影響: 6aaec283 は p0 でキュー先頭に居座っているが、着手の可否を決める唯一の情報 (なぜパネルが block したか) が無いので、このチケットは書かれたとおりには実行不能である。人間に裁定を仰ごうにも、何を裁定するのかが記録されていない。これは bd6d81df と同じクラス (notes の read-modify-write で古い版が新しい版を上書きした) の可能性が高いが、同一チケット内の部分消失なので add ではなく edit の追記経路が疑わしい。見分ける方法: backlog edit の notes 追記が既存 notes を prepend/append のどちらでどう扱うかを読み、既存内容を落としうる経路があるかを確認する。関連: bd6d81df, 5ba13c3e。d24f02d5 自体は commit として現存し (2026-08-05, branch run-20260805-055008-64104/t2)、main の taintguard は 0.2.0 まで進んでいる。
 
@@ -10447,9 +10448,10 @@ notes = """
 警告する。いずれにせよ「気をつける」に置かない — 現に失われている。
 回避策 (今すぐ使えるもの): .scratch/append-notes.py のように読み出して連結し全文を
 渡す。同スクリプトは追記が着地したことと旧内容が残っていることの両方を assert する。
-"""
+
+CLOSE: closed 2026-08-24 (session-24b59ce3) -- subject ceased to exist. This tracked that 6aaec283's notes referenced an upper section that was empty. 6aaec283 is now closed and the missing rationale was recovered into docs/audit-taintguard-d24f02d5-block-rationale.md, so there is no longer a dangling reference to repair."""
 created_at = 1786499031
-updated_at = 1786499132
+updated_at = 1787536118
 weight = 0.0
 issue_number = 264
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/264"
@@ -11382,7 +11384,7 @@ title = "Restore the recovered d24f02d5 adversarial block rationale into backlog
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = []
-status = "pending"
+status = "done"
 notes = '''
 The block rationale lost from 6aaec283 notes has been RECOVERED verbatim from primary sources (2026-08-14), and independently re-verified byte-for-byte by a second agent. Full report with per-quote provenance: /Users/yuki/.condukt/worktrees/run-20260814-005232-58819-t1-rationale-recovery/.scratch/t1-rationale-report.md (worktree of branch condukt/run-20260814-005232-58819/run-20260814-005232-58819/t1-rationale-recovery). Canonical short form, from /Users/yuki/.condukt/state/harness-e77d23c7/run-20260805-055008-64104.json tasks[1].findings.summary: Panel blocked, (A) WAYS_FORWARD advertises a recorded-decision mechanism that does not exist at this commit, a CLAUDE.md section 4 overclaim; (B) attacker-controlled detail is spliced into the refusal with no control-char, newline or ANSI sanitization, so untrusted content can forge taintguard own labels. Highest-fidelity form is the skeptic-1 ballot in session transcript 1faeac72-4ae0-419d-8cb0-be1c610a7255 subagent agent-a4dbac884360e34c6.jsonl record 124; operative form with both required fixes is record 263 of agent-a3d1556e4605b6463.jsonl. Move the report out of that worktree before it is reclaimed, or the recovery is lost a second time. Note: backlog edit --notes REPLACES notes, which is how the text was lost.
 
@@ -11416,9 +11418,10 @@ context に読み込む対象なので、**そのまま置くと「攻撃の記�
       全文は破棄する。既に notes へは入れてある。
 どれを採るかで「証拠として何を保存する義務があるか」の解釈が変わるので、
 自分の判断で埋めずに残す。
-'''
+
+CLOSE: closed 2026-08-24 (session-24b59ce3) -- subject ceased to exist. This asked to restore the recovered d24f02d5 block rationale INTO 6aaec283's notes. The rationale is preserved in docs/audit-taintguard-d24f02d5-block-rationale.md (kept deliberately, with its 3 crates/taintguard/... path citations left byte-for-byte because they sit inside verbatim panel blockquotes). Copying it into a closed item's notes would duplicate a historical record, not protect it.'''
 created_at = 1786640428
-updated_at = 1786641085
+updated_at = 1787536119
 weight = 0.0
 issue_number = 336
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/336"
@@ -12372,10 +12375,44 @@ title = "taintguard の trigger 発火率を observe-only で実測し、有効�
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p2"]
-status = "pending"
-notes = "除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 6ab40021 --status pending"
+status = "done"
+notes = '''
+除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit 6ab40021 --status pending
+
+CLOSE: closed 2026-08-24 (session-24b59ce3) -- subject ceased to exist. This asked for an observe-only measurement of taintguard's trigger fire-rate to decide enablement. There is nothing left to observe or enable. NOTE the measurement never happened, so the fire-rate remains UNMEASURED -- the crate was retired on the user's report that its judgments were too strict in practice, not on a measured rate. Recording that as an unmeasured input, not as a finding.
+
+CORRECTION to the CLOSE note above (same session, 2026-08-24): the sentence
+"the measurement never happened, so the fire-rate remains UNMEASURED" is WRONG.
+The observe-only telemetry this item asked for was being collected all along and
+is still on disk -- 94 files, 2.1 MB, at ~/.taintguard/state/<project-slug>/observe-only.jsonl.
+Nobody ever READ it, which is a different failure from never measuring.
+
+Measured now (2026-08-24), streaming, no file loaded whole:
+  find ~/.taintguard -name observe-only.jsonl -print0 | xargs -0 cat | wc -l
+    -> 6405 records
+  ... | grep -o '"check":"[a-z-]*"' | sort | uniq -c
+    -> 6405 "tainted"   (every single record is a restriction event; there is no
+       other check value in the corpus at all)
+  ... | grep -o '"sources":\[[^]]*\]' | sort | uniq -c
+    -> 6279 ["external-read"]  (98.0%)
+          77 ["web"]
+          49 ["lessons"]
+  ... | grep -o '"tool":"[A-Za-z]*"' | sort | uniq -c
+    -> Bash 4781, Edit 1398, Write 226  (all write-class, i.e. all downgraded)
+
+Reading: the trigger that fired was almost entirely `external-read` -- the same
+one whose false positive is documented in 96075670 (reading a %TEMP% scratchpad
+file tainted the turn and denied every subsequent Bash/Write/Edit). 6405 events
+of which 98% came from that one trigger CORROBORATES the user's report that the
+gate was too strict to be worth its cost; it does not contradict the retirement.
+
+The data is DELIBERATELY NOT DELETED. ~/.taintguard/ is now unreferenced (the
+plugin is un-enabled, its install record is gone and the cache dir is removed),
+so nothing writes or reads it, but it is the only surviving record of how this
+gate behaved in practice. Deleting it would destroy the evidence for the
+decision. Removing it is the user's call, not this session's.'''
 created_at = 1785301258
-updated_at = 1787120517
+updated_at = 1787536712
 weight = 0.0
 
 [[task]]
@@ -12384,7 +12421,7 @@ title = "GATE crate 定義が4箇所で不一致 — taintguard が3箇所で欠
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = """
 実装完了・検証済み・未 merge (2026-08-04, session-07084856)。
 コミット: 52a42020 on branch condukt/run-20260804-101404-8767/run-20260804-101404-8767/t1
@@ -12396,9 +12433,11 @@ worktree: /mnt/c/tmp/aegis-worktrees/run-20260804-101404-8767-t1 (base 6a37e7f1)
 検証済み: sync exit 0 (11 sources) / 36 tests OK / ratchet 60==baseline / CLAUDE.md から taintguard を除く fault injection で exit 1 になることを確認。
 
 merge 後に必須の再検証: core.hooksPath は main の .githooks を指すため、この worktree の commit では新配線が走っていない。main へ merge 後に実 pre-commit 経由でドリフトを注入し non-zero を確認すること。
-除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit fb6b1796 --status pending"""
+除外 (ユーザー指示 2026-08-17): harness backlog は当面対象外。aegis の作業に集中する。復帰は backlog edit fb6b1796 --status pending
+
+CLOSE: closed 2026-08-24 (session-24b59ce3) -- subject ceased to exist, and the root cause is verified fixed. (1) The specific drift ('taintguard missing from 3 of 4 GATE_CRATES copies') is permanently moot: taintguard is not a GATE crate any more, it is not a crate at all. The canonical set is now 6 (blastguard propguard specguard stuckguard mutategate overwatch) and all 11 hardcoded copies were resynced in this change. (2) The root cause this item named -- 'check-gate-crates-sync.py exists and detects real drift but is called by no git hook' -- is fixed at HEAD: measured 2026-08-24, it is wired at .githooks/pre-commit:169 (`run check-gate-crates-sync.py gate-crates-sync`). Anti-vacuity proof that it still bites after shrinking: desyncing .githooks/pre-push made it exit 1 with "GATE_CRATES definition drift detected ... (unexpected ['taintguard'])"; restoring it returned green across 11 sources."""
 created_at = 1785303114
-updated_at = 1787120517
+updated_at = 1787536118
 weight = 0.0
 
 [[task]]
@@ -14137,3 +14176,185 @@ updated_at = 1787533551
 weight = 0.0
 issue_number = 394
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/394"
+
+[[task]]
+id = "5fb3b916"
+title = "d24f02d5 の block 理由 (A)(B) を直して 1109 行 (rationale.rs + tests 549 行) を taintguard 0.2.0 へ採用するか決める"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "done"
+notes = """
+6aaec283 (p0, 恒常的な制約) の実行可能な残余をここに切り出す。6aaec283 自体は notes が逐語で「この item は close しない」と述べる恒常制約なので、着手可能な作業を混ぜたままにすると driver が毎サイクル同じ判断をやり直すことになる。【今回の測定 — 判断の前提を事実に落とした】測定日 2026-08-24、測定点 3c78e915。回収済みの block 理由 (B) は「attacker-controlled detail が拒否メッセージへ control-char / newline / ANSI のサニタイズなしに差し込まれ、untrusted content が taintguard 自身のラベルを偽造できる」である。この欠陥が出荷済み taintguard 0.2.0 にも在るかを実測した結果、**在らない**: (1) crates/taintguard/src/ に detail という識別子は 0 ヒットで、rationale.rs 自体が存在しない (src は classify.rs / hookio.rs / interactive.rs / lib.rs / main.rs / observe.rs / readonly.rs / state.rs の 8 本)。(2) 拒否理由へ外部文字列を join する経路は crates/taintguard/src/main.rs:257 の format_sources だけで、その唯一の consumer は同 main.rs:341 である。(3) その sources を書く production 呼び出しは state::mark の 4 箇所のみで、いずれも引数がコンパイル時リテラルである — main.rs:161 の web、main.rs:169 と main.rs:174 の external-read、main.rs:198 の internal-error。したがって sources が取り得る値はこの 3 リテラルに限られ、攻撃者制御下の文字列は入らない。判定不能な点: sources は marker ファイル (state.rs:280 の Check::Tainted(state.sources)) から読み戻されるため、~/.taintguard/state/ 配下へ任意の JSON を書ける主体は sources を偽造できる。ただしそれは untrusted content ではなく local write 権限を前提とする別の脅威モデルであり、本 item の (B) とは別問題として扱う。【この起票の意味】(B) は live な穴ではないので、緊急度は p0 ではなく p2 が正しい。決めるべきは「d24f02d5 の 1109 行 (rationale.rs 391 行 + README.ja.md 169 行 + tests/provenance_gate.rs 442 行 + tests/rationale_readme.rs 107 行) を、(A) の WAYS_FORWARD overclaim と (B) のサニタイズ欠落を直したうえで taintguard 0.2.0 へ rebase して採用するか」であり、これは人間の裁定を要する scope 判断である (549 行のテストが宙に浮いている一方、敵対的パネルが block した版でもある)。着手する場合の必須事項: taintguard は GATE crate なので rollout は --canary が必要。(B) の是正には、サニタイズが効くことを RED 先行で観測する対照が必須 (制御文字と ANSI を含む source 名がラベルを偽造できないこと)。関連: 6aaec283, docs/audit-taintguard-d24f02d5-block-rationale.md, b71984b9, 73fb8e81
+
+CLOSE: closed 2026-08-24 (session-24b59ce3) -- subject ceased to exist. The decision this item asked for ('fix (A)(B) and decide whether to adopt the 1109 lines into taintguard 0.2.0') has no subject: the crate is gone. Recorded for the record: defect (B) was measured NOT to exist in the shipped 0.2.0 before removal (no `detail` identifier, no rationale.rs; format_sources at main.rs:257 was the only join path, consumed only at main.rs:341, and all 4 production state::mark call sites passed compile-time literals)."""
+created_at = 1787533884
+updated_at = 1787536116
+weight = 0.0
+issue_number = 395
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/395"
+
+[[task]]
+id = "34d04c59"
+title = "backlog: 恒常的な制約を表現する status が無いため、close しない item が pending の先頭を永久に占有して driver へ再配布される"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-08-24、測定点 3c78e915。/flow の Step 3-1 で backlog next --claim を呼んだところ 6aaec283 (p0) が返ったが、この item の notes は逐語で「この item は close しない。『d24f02d5 をそのまま merge しない』は完了する作業ではなく恒常的な制約であり、done にするとキューから消えて警告が見えなくなる」と述べている。つまり設計上 done にならない item が、優先度 p0 ゆえに pending キューの先頭に永久に居座り、next --claim を呼ぶ driver 全員に毎回同じものが配られる。結果として (a) driver は毎サイクル同じ判断をやり直し、(b) その item を pending へ戻すと次の next --claim が同じものを返すため、キューが実質的に前進しない。【CLI に逃げ道が無いことの実測】backlog --help の subcommand は add / list / next / done / fail / sync / edit / session-start / install / uninstall / lock / driver の 12 個で、defer 系の subcommand は無い。backlog edit --help のオプションは --title / --tag / --notes / --status の 4 つだけで、task JSON に存在する defer_until フィールドを設定する手段が無い (6aaec283 の defer_until は null)。overwatch status は deferred というバケツを表示する (実測で deferred: 0) ので status 値としては存在しうるが、defer_until を設定できないため deferred にすると再浮上の起点が無くなり、この item の作者が明示的に避けようとした「警告が見えなくなる」側へ倒れる。つまり現状の CLI では「恒常的な制約として可視のまま、しかしキューの先頭を占有しない」を表現できない。【是正案】(a) status に constraint (または standing) を足し、session-start の注入には含めるが next の候補からは外す。(b) edit に --defer-until を足して deferred + 再浮上起点を表現可能にする。(a) のほうがこの item の意図に近い — 制約は期限で消えるものではないため。いずれの案でも、注入経路に出続けることを確認する対照が必須 (次候補から外したのに注入からも消えたら、それは警告の隠蔽であり CLAUDE.md 第4節に該当する)。判定不能な点: status の許容値が enum として閉じているか自由文字列かは未読。見分ける方法は crates/backlog/src/ の status 定義を読むこと。関連: 6aaec283, 5fb3b916"
+created_at = 1787533909
+updated_at = 1787533909
+weight = 0.0
+issue_number = 396
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/396"
+
+[[task]]
+id = "1601272b"
+title = "taintguard 撤去で開いた prompt-injection 防御の穴を記録する — プロジェクト外ファイルの Read の provenance を追跡するものが 0 本になった"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+起票理由: 2026-08-24 のユーザー裁定で crates/taintguard をリポジトリから撤去した
+(判定が厳しすぎて実害が出たため)。撤去そのものは裁定どおりで正しいが、**撤去された防御を
+記録しないと「黙って継承された穴」になる** (CLAUDE.md 第4節) ので、覆われなくなった面を
+ここに固定する。この項目は「taintguard を戻す」ことを求めるものではない。
+
+実測 (2026-08-24、session-24b59ce3 の worktree、撤去後のツリー):
+
+1. provenance シグナルが 0 本。プロジェクト外パスの `Read` を「外部由来」として印を付ける
+   経路は撤去後どこにも無い。旧 taintguard の PreToolUse `gate` が turn 内の write-class
+   ツールを降格していた挙動も、移設先が無いまま消えた。
+2. fetchguard は代替ではない。hooks.json の matcher は `WebFetch|WebSearch` のみで
+   (crates/fetchguard/hooks/hooks.json)、`Read` は元から対象外。0.1.1 までの
+   docstring は「external-file Read is deferred to taintguard's provenance gate」と
+   *他所が見ている* と書いていた — 撤去でその宛先が消えたので、0.1.2 で
+   `gate.rs` の fail-closed contract と `WEB_TOOLS` の docstring、README.ja.md、
+   `scan`/`main` のモジュール doc を「どこも見ていない」へ訂正済み。
+3. **強制の半分も無い。** fetchguard がやるのは `additionalContext` の警告注入だけで、
+   どのツールも降格・拒否しない (PostToolUse なのでモデルは既に生バイトを読んでいる)。
+   つまり web 経路も「検出して警告」までで、止める部品は無い。
+4. commit-time の scripts/check-prompt-injection.py は committed prompt asset を
+   見るゲートであり、runtime に流れ込むテキストは対象外 (それ自身の docstring が
+   そう書いている)。
+
+したがって現状の防御は「web 出力の内容警告 1 本」だけで、(i) 外部ファイル読み取りの
+provenance、(ii) 読んだ後の write-class 降格、の 2 つが空である。
+
+次の一手の候補 (どれも未着手・どれを採るかは人間裁定):
+ - fetchguard の matcher を `Read` へ広げる。ただし path-trust 判定 (プロジェクト内外の
+   分類) が必要で、この crate はそれを持たない。旧 taintguard::classify が持っていた
+   「cwd 配下 / 同一 repo の worktree のみ Trusted」がその判定だった。
+ - provenance ゲートを別 crate で建て直す。**その場合、撤去理由を先に解く必要がある** —
+   旧実装は cwd/worktree 以外を一律 external とみなしたため、%TEMP% の scratchpad を
+   1 度 Read した時点で turn 全体が tainted になり、以降の Write/Edit/Bash が deny された
+   (backlog 96075670 がその実例)。同じ設計で建て直せば同じ害が出る。
+ - 「穴のまま置く」も裁定としてあり得る。その場合はこの項目を「受容したリスク」として
+   close すること — 黙って放置と、明示的に受容したのを区別するため。"""
+created_at = 1787536534
+updated_at = 1787536534
+weight = 0.0
+issue_number = 397
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/397"
+
+[[task]]
+id = "35968776"
+title = "scripts/ のチェッカ・ユニットテスト (test_check_*.py 13 本ほか) がどの hook からも走らない — 赤いまま気付かれない"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+fb6b1796 と同型の「ゲートが存在することと呼ばれることは別」。今回はゲート本体では
+なく**ゲートのテスト**の側。
+
+実測 (2026-08-24、session-24b59ce3):
+ - `grep -rn 'test_check' .githooks/` → **ヒット 0** (rc=1)。
+ - `ls scripts/test_check_*.py | wc -l` → **13**。test_precommit_hook.py /
+   test_prepush_hook.py / test_gate_bypass.py 等を含めると約 20 本。
+ - `grep -rln 'test_check_' scripts/*.sh` → **0**。走らせるランナースクリプトも無い。
+ - `.github/workflows/` は **存在しない** (docs/gate-taxonomy.md:62 が唯一の実行元として
+   名指ししている場所)。つまり CI 側にも実行者は無い。CLAUDE.md 第7節により
+   GitHub Actions は使用禁止なので、**そこへ配線するのは解ではない** — local に置くこと。
+
+**これが実害を出した証拠 (今回発見)**: scripts/test_check_launcher_exec_bit.py:245 の
+`test_the_scope_finds_every_plugin_that_ships_a_binary` は launcher 数を 39 と assert して
+いたが、HEAD の実数は 38 だった (`git ls-tree -r HEAD | grep -cE '^crates/[^/]+/bin/[^/]+'`)。
+docstring は「41 plugins minus the two」と書きながら 3 つ列挙しており (41-3=38 で 39 でもない)、
+`flow` が 3 本目の skills-only plugin になった時に再導出されなかった。**taintguard 撤去前から
+既に赤**で、誰も走らせていないので誰も気付いていなかった。今回 37 (40 plugins − 3 skills-only)
+へ訂正し、docstring にこの経緯を明記した。
+
+完了条件: (1) これらのテストを local ゲート (.githooks/pre-commit か pre-push) から走らせる。
+(2) 配線後に**まず赤を観測する** — 上記のような陳腐化した定数が他にもある可能性が高く、
+「配線したら緑だった」は配線が空虚である可能性を含む (CLAUDE.md 2.(b))。
+(3) 実行時間を測って hook に載せられるか確認する。載らないなら pre-push 側へ。
+
+追記 (2026-08-24、同セッション): 実際に 21 本すべてを手で走らせた結果を残す。
+「誰も走らせていない」より「走らせたらこうなる」の方が起票として強いため。
+
+19/21 green。RED 2 本:
+ - scripts/test_gate_bypass.py    : Ran 120 tests, FAILED (failures=40)
+ - scripts/test_prepush_hook.py   : Ran 8 tests, FAILED (failures=5)
+
+**この 2 本は taintguard 撤去のせいではない** — 判断ではなく実測で切り分けた。
+`git worktree add --detach /tmp/head-baseline-24b59ce3 HEAD` で HEAD (3c78e915、
+撤去の変更を一切含まないツリー) を作って同じ 2 本を走らせ、**failures=40 / failures=5 と
+同一の値**を得た。したがって既存の赤であり、今回の変更で増えても減ってもいない
+(検証後 worktree は削除済み)。
+
+test_prepush_hook.py の 5 件の直接原因 (stderr の逐語):
+  「pre-push: cargo not found, so the pushed commits could not be type-checked
+   — blocking rather than assuming they compile.」
+テストが組むサンドボックス env に cargo が無いため pre-push が fail-closed で block し、
+`assertAllowed` が落ちる。**ゲートの挙動は仕様どおり正しい**（判定不能を block へ倒している）。
+落ちているのはテスト側の env 構築であり、`PATH=$HOME/.cargo/bin:$PATH` を外から与えても
+テストが env を作り直すため変わらない。残る 3 件は check-plugin-rollout の advisory 分類
+(exit 1/2/3 が block してはいけない) が同じ cargo-not-found で block に飲まれている形。
+
+つまり配線したときに最初に出る赤は「テストハーネスが cargo を渡していない」であり、
+本項目の完了条件 (2)「配線後にまず赤を観測する」は既に満たせる状態にある。
+配線と同時にこの 2 本を green にする必要があるか (それともまず配線して赤を可視化するか) は
+人間裁定。"""
+created_at = 1787536536
+updated_at = 1787537819
+weight = 0.0
+issue_number = 398
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/398"
+
+[[task]]
+id = "0c758844"
+title = "CLAUDE.md の crate / plugin 件数が実測と食い違う (39 クレート → 実測 43、36 plugin / 108 ファイル → 実測 40 / 120)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+CLAUDE.md 自身の 測定値 の節が「測定点の無い数字は次の著者が転記した瞬間に腐る」と
+書いているのに、同じファイルの件数がまさにそれになっている。
+
+実測 (2026-08-24、session-24b59ce3):
+ - `ls -d crates/*/ | wc -l` → **43**。CLAUDE.md の「context 読み込み戦略」節は
+   「このリポジトリは 39 クレートある」と書いている。
+ - `ls crates/*/.claude-plugin/plugin.json | wc -l` → **40**。CLAUDE.md の
+   harness-core の節は「36 plugin にリンクされる」「リンク先 36 plugin」「1 commit あたり
+   108 ファイルが動き」と書いている (108 = 36 × 3 の lockstep 3 ファイル)。
+   40 plugin なら 120 ファイルになる。
+
+**この差分は taintguard 撤去では説明できない** — 撤去は 44→43 / 41→40 の 1 件分であり、
+39 / 36 との差 (4 件・4 件) はそれ以前から開いていた。撤去作業中に測って気付いたので
+起票するが、原因はこの作業ではない。
+
+意図的に埋めていないこと: 「39」「36」「108」が何を分母にしていたのかを復元できなかったため、
+勝手に 43 / 40 / 120 へ書き換えていない (harness-core にリンクされる plugin 数は、
+plugin.json を持つ 40 のうち実際に harness-core へ依存する数であって、40 とは限らない)。
+完了条件は (1) それぞれの分母の定義を決める、(2) 測定コマンドを併記した形へ書き換える、
+(3) その定数がずれたら検出されるようにする — scripts/test_check_claudemd_claims.py が
+既に存在するので、そこへ足せる可能性がある (ただし上の別項目のとおり、そのテスト自体が
+どの hook からも走っていない)。"""
+created_at = 1787536539
+updated_at = 1787536539
+weight = 0.0
+issue_number = 399
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/399"

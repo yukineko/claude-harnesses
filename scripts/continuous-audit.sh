@@ -97,7 +97,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 # backlog itself gates nothing, so it is NOT a GATE crate (no canary
 # requirement on rollout, not in .githooks/pre-push's GATE_PATTERN). This is
 # a strict superset of GATE_CRATES — see scripts/check-gate-crates-sync.py.
-DEFAULT_TARGETS="blastguard,propguard,specguard,stuckguard,taintguard,mutategate,overwatch,backlog"
+DEFAULT_TARGETS="blastguard,propguard,specguard,stuckguard,mutategate,overwatch,backlog"
 
 ROUND=""
 TARGET="$DEFAULT_TARGETS"

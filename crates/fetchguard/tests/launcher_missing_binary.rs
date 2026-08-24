@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! `bin/fetchguard` (the POSIX launcher) — what happens when NO per-platform
 //! binary is bundled for the host. Mirrors
-//! `crates/taintguard/tests/launcher_missing_binary.rs`.
+//! the launcher tests the other plugin crates carry.
 //!
 //! `scan` is PostToolUse with no `permissionDecision` channel, so the
 //! fail-closed signal here is a non-silent `additionalContext` warning

@@ -42,12 +42,12 @@ round ledger・収束メトリクスという**決定論は `scripts/continuous-
 
 ## 対象 crate (既定)
 
-既定の target は fleet の **GATE crates** (blastguard/propguard/specguard/stuckguard/taintguard/mutategate/overwatch =
+既定の target は fleet の **GATE crates** (blastguard/propguard/specguard/stuckguard/mutategate/overwatch =
 `scripts/rollout-plugins.sh` の GATE_CRATES と同期。overwatch はこのループ自身が依存するバイナリであり、
 canary health-gate もこれに依存するため、保護対象のクレートと同じ監査対象に含まれる) に加えて **backlog**
 (audit 対象のみの追加。backlog は積みっぱなしのタスクが腐らないよう定期監査したいが、危険な操作を
 gate/block しないため GATE crate ではない＝canary 必須にはならない)。既定 target の完全な一覧:
-`blastguard,propguard,specguard,stuckguard,taintguard,mutategate,overwatch,backlog`
+`blastguard,propguard,specguard,stuckguard,mutategate,overwatch,backlog`
 (`scripts/continuous-audit.sh` の DEFAULT_TARGETS と同期)。`--target` で上書きできる。
 
 ## 手順

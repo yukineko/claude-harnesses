@@ -9,6 +9,12 @@ Cargo.lock.bak
 
 # precommit-audit runtime telemetry (append-only, machine-local)
 .claude/audit-log.jsonl
+# ... and its block marker. precommit-audit writes this when it BLOCKS and
+# removes it on the next non-blocking run (main.rs set_block_marker /
+# clear_block_marker), so it is per-machine live state, never source. It was
+# accidentally committed once (0521d013) after a blocked attempt staged it:
+# tracked, it would ship to every clone as a permanently-set block marker.
+.claude/.audit-blocked
 
 # ephemeral session/tool state
 .claude/progress.md

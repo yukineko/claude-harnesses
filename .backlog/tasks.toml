@@ -14358,3 +14358,85 @@ updated_at = 1787536539
 weight = 0.0
 issue_number = 399
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/399"
+
+[[task]]
+id = "a8ef3afa"
+title = "rollout-plugins.sh の registry patch が稼働中の Claude Code に上書きされて戻る — check-plugin-rollout.py は永久に drift を報告し、再実行では直らない"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 (2026-08-24、session-24b59ce3、測定点 7c7fa057)。taintguard 撤去の rollout 中に踏んだ。
+
+## 症状
+
+`scripts/rollout-plugins.sh --force --canary` を 2 回走らせても
+`check-plugin-rollout.py` が同じ 5 件を報告し続ける:
+
+    - blastguard: source=0.2.52 registry=0.2.51
+    - condukt:    source=0.7.140 registry=0.7.138
+    - fetchguard: source=0.1.2   registry=0.1.1
+    - flow:       source=0.2.8   registry=0.2.7
+    - overwatch:  source=0.2.29  registry=0.2.27
+
+**キャッシュ側は正しく current である。** 新しい version dir は seed 済みで、
+バイナリも clean tree から焼かれている:
+
+    $ cat ~/.claude/plugins/cache/yukineko/condukt/0.7.140/.deployed-from.json
+    {"plugin":"condukt","commit":"7c7fa0571204970416cb5df8b471c7da28d20555",
+     "dirty":false,"harness_core_version":"0.2.9","deployed_at":1787540047}
+
+ずれているのは **registry (installed_plugins.json) のポインタだけ**。
+
+## 原因 (実測。判断ではない)
+
+rollout は registry を確かに patch している — ログ逐語:
+
+    registry updated fetchguard@yukineko: version '0.1.1' -> '0.1.2' | installPath ...
+    registry patched: /home/hiroyuki_nakayama/.claude/plugins/installed_plugins.json
+
+その最後の patch は **11:50:55** (rollout が取ったバックアップ
+`installed_plugins.json.bak-1787539855` の epoch)。ところが当該ファイルの mtime は
+**11:52:35** — patch の **100 秒後**に何かが書き直している。書き戻された値は
+`prune-plugin-cache.py` が「in use by pid 1275,2870 (= 稼働中の claude プロセス)」と
+報告した version と **完全に一致する**:
+
+    kept blastguard/0.2.51 (in use by pid 1275,2870)
+    kept condukt/0.7.138   (in use by pid 1275,2870)
+    kept fetchguard/0.1.1  (in use by pid 1275,2870)
+    kept flow/0.2.7        (in use by pid 1275,2870)
+    kept overwatch/0.2.27  (in use by pid 1275,2870)
+
+つまり **稼働中の Claude Code が自分の in-memory 状態から registry を書き戻している**
+(`installed_plugins.json.bak-<epoch>` が数百個溜まっているのは、アプリ側も同じ流儀で
+バックアップしてから書き直しているからで、これはその痕跡)。
+
+## なぜ起票するか — これは「もう一度 rollout すれば直る」ではない
+
+- **再実行の罠**: ゲートが赤いので rollout を繰り返したくなるが、走らせるたびに
+  同じレースに負ける。**回数では収束しない。** 実際 2 回走らせて同じ 5 件が残った
+  (2 回目は fleet 全体・release build 込みで数分かかる)。
+- **ゲートは正しく赤い**が、その赤を消す手段がセッション内に無い。CLAUDE.md 第7節が
+  嫌う形 (自分で外せないゲート) の小型版で、外部サービスではなく**同一マシンの
+  別プロセス**が権限を持っている。
+- 直すのは人間の一手 (セッション再起動 / `/plugin update`) であり、
+  **セッション内から観測はできても解決はできない**。だから黙って放置せず起票する。
+
+## 完了条件の候補 (どれを採るかは人間裁定)
+
+1. `check-plugin-rollout.py` が「registry が稼働プロセスの保持版に張り付いている」
+   ケースを **drift ではなく「要再起動」の第三の状態**として報告する
+   (三値化。今は「ロールアウトしていない」と区別できず、実際にはロールアウト済み)。
+   判定材料は既に手元にある — prune が pid を見ているのと同じ情報。
+2. rollout の最後に registry を再検証し、patch が戻されていたら
+   「戻された」ことを明示して終わる (今は patch した時点で成功扱い)。
+3. rollout 側でレースを避ける手段があるならそれ (要調査。アプリの書き込み契機は未読)。
+
+**未読のまま残した点**: 稼働中の Claude Code がどの契機で installed_plugins.json を
+書き直すのかは調べていない。したがって (3) が可能かは判定不能である。"""
+created_at = 1787540592
+updated_at = 1787540592
+weight = 0.0
+issue_number = 400
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/400"

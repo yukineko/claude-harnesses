@@ -10172,7 +10172,7 @@ tags = [
     "liveness",
     "p0",
 ]
-status = "pending"
+status = "done"
 notes = """
 2026-08-12 実測 (commit 74e3a879 / ee2d4d03)。実 repo で reconcile を回すと state_scan は readable で namespaces=2417 runs=150 だが running_tasks=0 で、結果 55 entries 中 47 が removable=true になった。occupancy の Dead は「完全に読めた走査で claim している running task が無かった」という意味しか持たないので、condukt が作っていない worktree —— CLAUDE.md 8 に従って /flow などが作る .harness-worktrees/session-* や、手で git worktree add したもの —— は生きていても常に dead に落ちる。今日実害が無いのは cleanup --remove が role==Unregistered しか消さず、これら 47 は全て registered だからであり、removable フラグ自体は誤った許可を出している。将来 registered も消す消費者が付いた瞬間に生きたセッションの worktree が消える。案: claim されていない worktree については condukt run state を「情報なし」として扱い、worktree 自身の活動 signal (worktree-activity は実装済み) や session transcript を独立の witness にして、claim 無し = Dead ではなく Undetermined に倒す。ただし現在の anti-vacuity control (dead_clean_worktree_is_removable) がこの設計を固定しているので、設計判断として人間に上げる。 統合者による独立確認 (2026-08-12、測定点 6fc4fdee、linked worktree を vantage にして deploy 済みではなくビルド直後のバイナリで実行): entries 56 件、うち primary 1 件 (/Users/yuki/src/harness、removable=false — ee2d4d03 の修正は効いている)、registered 55 件、removable=true が 49 件、そして occupancy は 56 件すべてが dead だった。決定的な観測: この統合作業をしていた worktree 自身 (run-20260811-230435-19389-t2-condukt-reconcile) が occupancy=dead / removable=true と 報告された。私はその中に立ってビルドとテストを回している最中だった。同時に、いま使っているセッション worktree (session-b57a58c3) も occupancy=dead であり、removable=false になっているのは dirty だったからにすぎない。つまり Dead は「生きていない」の証拠ではなく「condukt の RUNNING task が claim していない」以上のことを言えていない。これは判定不能を permissive へ写した (型の規律は正しい) のではなく、証拠が支えない known 値を主張している問題である。
 
@@ -10264,7 +10264,7 @@ pin しているものは 1 本も無い。裁定が追加する第3の経路 (�
 Undetermined に倒す。この経路を突く behavioural test を done criteria に含めた。
 """
 created_at = 1786472512
-updated_at = 1786947309
+updated_at = 1787532087
 weight = 0.0
 issue_number = 256
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/256"
@@ -11265,7 +11265,7 @@ title = "condukt reconcile: rule what positively establishes worktree DEATH (fe8
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = []
-status = "pending"
+status = "done"
 notes = """
 Found while implementing fe84d350 (unclaimed worktree occupancy to Undetermined). The 2026-08-12 ruling settles liveness for unclaimed worktrees but is silent on death. Strict reading makes Occupancy::Dead unreachable from reconcile, because the claimed-but-not-progressing arm already resolves to Undetermined (frozen is not dead, crates/condukt/src/wt_reconcile.rs:899). Consequences beyond the accepted drop in auto-removable: the preserved match in reconcile requires Known(Occupancy::Dead) in every arm, so --preserve becomes a no-op and the content-rescue safety net becomes dead code; and two currently-green tests cannot pass, dirty_worktree_is_preserved_before_it_becomes_removable and stale_preserved_ref_does_not_authorize_deletion. RED tests are committed at 375587a2 on branch condukt/run-20260814-005232-58819/run-20260814-005232-58819/t2-occupancy-undetermined with no implementation. Options are recorded in condukt escalate for run run-20260814-005232-58819 task t2-occupancy-undetermined. Do not retarget the two preservation tests without a ruling.
 
@@ -11335,7 +11335,7 @@ pin しているものは 1 本も無い。裁定が追加する第3の経路 (�
 Undetermined に倒す。この経路を突く behavioural test を done criteria に含めた。
 """
 created_at = 1786637812
-updated_at = 1786642295
+updated_at = 1787532090
 weight = 0.0
 issue_number = 335
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/335"
@@ -13997,3 +13997,129 @@ updated_at = 1787282600
 weight = 0.0
 issue_number = 384
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/384"
+
+[[task]]
+id = "ff260cb2"
+title = "compass の check_dod_refs が DoD 本文中の引用された shell glob をパス参照と誤検出する"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "実測 2026-08-21、測定点 58c779af。DoD13 に f9bba02a の逐語 shell 行を引用したところ、compass evaluate が C2 に「DoD references missing path /crates/」を追加した。引用中の glob（REPO 変数に続く crates 配下の bin glob）を実在パスへの参照として解決しようとしている。CLAUDE.md は逐語引用を要求するので、DoD 本文に shell/コード引用を置けないのは実運用上の制約になる。回避として逐語を current_gap へ移設したが（current_gap は scan されない）、これは置き場所の変更であってゲートの修正ではない。修正案: check_dod_refs はコードフェンス・バッククォート内・shell 変数展開やワイルドカードを含む語をパス参照の候補から除外する。判定不能（パスに見えるが glob なので解決できない）を「missing」に倒しているのが本体で、CLAUDE.md 第3節の観点では誤検出側へ倒れている珍しい例。"
+created_at = 1787299062
+updated_at = 1787299062
+weight = 0.0
+issue_number = 385
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/385"
+
+[[task]]
+id = "e53ea0ad"
+title = "fugu-router: episode が 537 to 1303 へ倍増したのに routing 計測用フィールドの記録率がほぼ 0 のまま"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-08-21、測定点 58c779af。store は /home/hiroyuki_nakayama/.fugu-router/record-repo/episodes.jsonl。wc -l で 1303 件（仮説 f5f9522a が 2026-07-23 に測った時点は 537 件なので +766）。しかし f5f9522a が validate に必要とするフィールドの記録率は: suggested_model 1/1303、route_basis 8/1303（前回 2/537）、role=verifier 19/1303（前回 0）。つまり episode は増えているが計測可能性は増えていない — 反実仮想コストの推定に必要な suggested_model がほぼ全件欠落しているため、データが積むほど「測れないデータ」が積む構造になっている。f5f9522a は awaiting-measurement のまま閉じられない。対処案: record 時に suggested_model と route_basis を必須フィールドにする（欠落を Undetermined として明示し、黙って空で書かない）。build と validate の分離という観点では、出荷（routing の実装）は済んでいるが計測装置が付いていない状態。"
+created_at = 1787299319
+updated_at = 1787299319
+weight = 0.0
+issue_number = 386
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/386"
+
+[[task]]
+id = "33b997e8"
+title = "fugu-router: 稼働ストアの隣に 2026-06-24 の stale episodes.jsonl が残り、誤測定を誘発する"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "実測 2026-08-21、測定点 58c779af。~/.fugu-router/episodes.jsonl は 5260 bytes / 29 行 / mtime 2026-06-24 18:06 の stale ファイル。稼働ストアは ~/.fugu-router/record-repo/episodes.jsonl（357301 bytes / 1303 行 / mtime 2026-08-18）。同名ファイルが親ディレクトリに残っているため、パスを浅く推測すると stale 側を測ってしまう。本セッションで実際に踏んだ: 最初に親側を測って「29 件、route_basis 0 件」という数字を得たが、これは稼働実態ではなかった（正しくは 1303 件 / 8 件）。判定不能な点: (a) 親側が旧レイアウトの遺物で削除して良いのか、(b) 何らかのフォールバック経路が今も読んでいるのか、は未確認。見分ける方法は fugu-router 側の store 解決コードで親パスを参照する経路があるかを読むこと。参照が無いことを確認できたら削除、あれば移行。"
+created_at = 1787299335
+updated_at = 1787299335
+weight = 0.0
+issue_number = 387
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/387"
+
+[[task]]
+id = "032c1b4b"
+title = "fe84d350/5aaecbf6 が依拠する RED commit 375587a2 が全 ref から消失している"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "done"
+notes = "実測 2026-08-21、測定点 58c779af。fe84d350 と 5aaecbf6 の notes は「RED テストは 375587a2 に commit 済み (実装なし)」「branch condukt/run-20260814-005232-58819/.../t2-occupancy-undetermined」と記録しているが、この object はローカルに存在しない: git cat-file -t 375587a2 が fatal: Not a valid object name で exit 128。worktree は object database を共有するので、これは vantage の問題ではなく object 自体の不在である。git branch -a --list で occupancy / 20260814 に一致する branch は 0 件。git log --all --grep=occupancy にも当該 commit は出ない。裏づけの逐語観測 2 点: (a) notes が「375587a2 は anti-vacuity control dead_clean_worktree_is_removable を削除している」と述べているが、実ツリーには crates/condukt/tests/worktree_reconcile.rs:427 に fn dead_clean_worktree_is_removable() が今も存在する。(b) notes が RED として挙げる unclaimed_worktree_occupancy_is_undetermined_not_dead は crates/condukt/tests/ に grep で 0 ヒット。つまりツリーは RED 投入前の状態にある。影響: 両 item の「RED 委託済み・実装するだけ」という前提が崩れており、RED テストは書き直しが必要 (CLAUDE.md 2.(a) により利害のない agent が書くこと)。また notes に記録された「375587a2 の RED を読み直して裁定と矛盾しないことを確認した」という観測は、対象 commit が消えたため再検証できない。裁定 (Dead は 停滞 かつ 窓経過 かつ transcript 不在 の連言) 自体は notes に完全に残っているので設計判断のやり直しは不要。判定不能な点: branch が condukt の run cleanup で prune されたのか、手動削除か、push されずに worktree 削除で失われたのかは未確認。見分ける方法は git reflog と condukt の run state (run-20260814-005232-58819) の残骸を当たること。"
+created_at = 1787299484
+updated_at = 1787532126
+weight = 0.0
+issue_number = 388
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/388"
+
+[[task]]
+id = "32c24a28"
+title = "GC 到達率: セッションが一度でも紐づいた worktree が回収不能になる (DEATH 規則の代償)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "5bb3579f で worktree DEATH を 3 項連言にした際、凍結した transcript を「終了したセッション」と読むのを実測で撤回した (transcript は turn 境界 flush なので 1836 秒凍結しても生きている)。結果、~/.claude/projects に project dir を持つ worktree は永久に Undetermined = 回収不能になる。実測 (2026-08-21、probe 4/5、55 entries): dead 24 / removable 22 なので現時点では縮退していないが、session-* worktree は使われるたびに project dir が増えるので到達率は時間とともに下がる。closing には ツール呼び出し毎に動く占有 signal が要る。候補 2 つ: (a) overwatch の session heartbeat (banner が heartbeat 292s ago を出せているので粒度は足りる。progress ではなく occupancy の証拠として keep 側にのみ使う)、(b) /proc の cwd 走査で worktree 配下を cwd に持つプロセスの有無を直接観測する。どちらも設計判断を含むので人間の裁定が要る。"
+created_at = 1787531861
+updated_at = 1787531861
+weight = 0.0
+issue_number = 389
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/389"
+
+[[task]]
+id = "5c6a3b69"
+title = "askuserquestion_sites_match_frozen_allowlist が HEAD で赤 (flow SKILL.md が allowlist 10 に対し 11 件)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "cargo test -p condukt --test autonomy_invariant で 逐語: AskUserQuestion count changed in flow/skills/flow/SKILL.md (allowlist 10, found 11). Re-audit the new/removed prompt against the two-stop invariant, then update ASK_ALLOWLIST. 当該ファイルの最終変更は 5289312f。allowlist を上げて黙らせてはならない — ゲートの要求は「増えた prompt を two-stop 不変条件に対して再監査する」ことなので、まず 11 件目がどれかを特定し、それが権限認可 (--approval で auto に clamp してよい) なのか判断要求 (人に残す) なのかを裁定する必要がある。pre-commit は cargo test を回さないので commit はブロックしないが、pre-push とフルスイートでは赤になる。観測日 2026-08-21、観測点 5bb3579f。"
+created_at = 1787531897
+updated_at = 1787531897
+weight = 0.0
+issue_number = 390
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/390"
+
+[[task]]
+id = "f232c901"
+title = "oracle::tests::no_reproduction_tests_falls_back_even_when_required がフルスイートでのみ間欠的に落ちる"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "cargo test -p condukt (760 unit tests 並列) で 4 回中 1 回 FAILED、単体指定では 4/4 通る。観測日 2026-08-21、観測点 5bb3579f。check_oracle(true, None, t1, tmp) は tdd バイナリを spawn するので、フルスイート時の負荷で spawn の結果が変わる経路が疑わしいが未検証。間欠 fail は「環境のせい」で通してはいけない類 — 落ちたときに required/valid_fp_oracle/reason の実値を残すよう assert メッセージを厚くするか、tdd の spawn 結果を注入可能にして決定論化する。放置すると F->P オラクルのゲート自体が「たまに落ちるので無視するもの」になる。"
+created_at = 1787531944
+updated_at = 1787531944
+weight = 0.0
+issue_number = 391
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/391"
+
+[[task]]
+id = "1bf9c22a"
+title = "overwatch の rollout drift: source=0.2.28 registry=0.2.27 (GATE crate なので --canary が要る)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "check-plugin-rollout.py の逐語: overwatch: source=0.2.28 registry=0.2.27 <- rollout-plugins.sh not run since bump。観測日 2026-08-21、観測点 5bb3579f。前セッションで 0.2.28 を rollout して green を確認したはずなのに registry pointer が 0.2.27 に戻っている。prune の出力は kept overwatch/0.2.27 (in use by pid 1168,1275,2870) なので live session 3 本が 0.2.27 を掴んでいる。overwatch は GATE crate なので rollout-plugins.sh --plugin overwatch --canary が必要。本セッションでは触っていない — 未宣言の red を「たぶん意図的」と解釈して rollout で消すのを CLAUDE.md が禁じている側の判断なので、なぜ pointer が戻ったのかを先に特定すること。pre-push の rollout ゲートをブロックする。"
+created_at = 1787531998
+updated_at = 1787531998
+weight = 0.0
+issue_number = 392
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/392"
+
+[[task]]
+id = "df3616e0"
+title = "DEATH 規則の残存穴: cwd が worktree の外にあるセッションは transcript で紐づかない"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "5bb3579f の第3項は ~/.claude/projects/<cwd を符号化した名前> の有無で「このパスにセッションが紐づいているか」を見る。したがって cwd が main checkout や別 worktree のままそこを編集/閲覧するセッションは、その worktree に対して紐づきを持たない。編集していれば worktree-activity が動くので保持側に倒れるが、読むだけのセッション (レビュー・探索) は 3 項すべてが凍結しうる。実測はしていない — 起票時点では経路の存在を指摘しているだけで、到達可能性は未検証 (だから REFUTED ではなく未検証として残す)。32c24a28 の occupancy signal (heartbeat / proc cwd) を入れるとこの穴も同時に閉じる。"
+created_at = 1787532028
+updated_at = 1787532028
+weight = 0.0
+issue_number = 393
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/393"

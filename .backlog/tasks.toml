@@ -14123,3 +14123,17 @@ updated_at = 1787532028
 weight = 0.0
 issue_number = 393
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/393"
+
+[[task]]
+id = "71db801a"
+title = "condukt unclaimed_occupancy: transcript store が読めない場合の腕が到達不能で、docstring が主張する役割を果たしていない"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "独立 verifier (利害のない別モデル、CLAUDE.md 2.(a) の充足として起動) がミューテーションで検出。測定日 2026-08-24、測定点 3f6d7ed6 (condukt 0.7.139)。crates/condukt/src/wt_reconcile.rs:1189-1196 の match 腕 (Determination::Known(progress::Liveness::Stalled), Determination::Undetermined(why)) は現在の配線では到達不能である。理由: transcript store が読めない場合、session-transcript シグナル自体が Undetermined になり、それが crates/harness-core/src/progress.rs:148 の fingerprint_from_signals を Undetermined へ落とし、progress.rs:200-201 の classify が liveness を Undetermined で返すため、この match が Known(Stalled) を見ることが構造的に起こらない。実測の裏づけ (ミューテーション M3b): この腕だけを Dead へ写すよう書き換えて cargo test -p condukt --test worktree_reconcile を回すと 20/20 が green のまま = kill 0 件。つまりこの腕は 1 本のテストも支えていない。重要: これは fail-open ではない。出力は依然として正しく Undetermined になり、既存テスト unclaimed_worktree_is_undetermined_when_the_transcript_store_is_unreadable も通る — ただし通る理由が docstring の主張する理由とは別 (上流の fingerprint が潰れるから) である。したがって問題の実体は CLAUDE.md 第4節「docstring / コメントで実挙動と違う話を書く」に該当する: 5bb3579f の docstring は 3 項連言の第3項がこの腕で positively distinguishable だと書いているが、コードはその形では動いていない。是正案は 2 つのいずれか: (a) この腕を unreachable!() にし、なぜ到達しないかの不変条件をコメントで示す (b) transcript-unreadable のケースがこの match に実際に到達するよう再構成し、その到達をテストで固定する。(a) を選ぶ場合、不変条件が将来 progress.rs 側の変更で崩れると panic に変わるので、その panic が fail-closed 側 (keep) に解決することを確認すること。関連: 5bb3579f, fe84d350, 5aaecbf6, 32c24a28"
+created_at = 1787533551
+updated_at = 1787533551
+weight = 0.0
+issue_number = 394
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/394"

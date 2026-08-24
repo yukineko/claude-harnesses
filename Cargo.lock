@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "context-governor"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "harness-core",

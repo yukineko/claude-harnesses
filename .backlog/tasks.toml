@@ -14141,7 +14141,7 @@ title = "overwatch の rollout drift: source=0.2.28 registry=0.2.27 (GATE crate 
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = """
 check-plugin-rollout.py の逐語: overwatch: source=0.2.28 registry=0.2.27 <- rollout-plugins.sh not run since bump。観測日 2026-08-21、観測点 5bb3579f。前セッションで 0.2.28 を rollout して green を確認したはずなのに registry pointer が 0.2.27 に戻っている。prune の出力は kept overwatch/0.2.27 (in use by pid 1168,1275,2870) なので live session 3 本が 0.2.27 を掴んでいる。overwatch は GATE crate なので rollout-plugins.sh --plugin overwatch --canary が必要。本セッションでは触っていない — 未宣言の red を「たぶん意図的」と解釈して rollout で消すのを CLAUDE.md が禁じている側の判断なので、なぜ pointer が戻ったのかを先に特定すること。pre-push の rollout ゲートをブロックする。
 
@@ -14166,9 +14166,46 @@ rollout で消すな」と書いていた。その原因が a8ef3afa として�
 **この item は close しない**: 原因が分かったことと、ポインタが正しくなったことは
 別である。overwatch は依然として source と registry が食い違い、修正はこのマシンで
 誰にも live になっていない。
+
+--- 訂正 (2026-08-24 13:0x、測定点 23794fa5) — 直上の追記は誤りだった ---
+
+直上の追記は「約 100 秒後に書き戻される」「`--force --canary` を 2 回完走させても
+再現する (再実行では直らない)」「解消には人間の操作 (セッション再起動または
+`/plugin update`) が必要」と書いたが、**実測で反証された**。詳細な時系列は
+a8ef3afa の訂正節にある。要点:
+
+- 書き戻しは**周期的なレースではなくイベント駆動**で、直前の `/plugin update` +
+  `/reload-plugins` の非同期 reconcile が着地したものだった。戻された record の
+  `gitCommitSha` がセッション開始時の HEAD (cd2576bd) で、古い in-memory snapshot が
+  権威として書かれていた証拠になっている。
+- 間隔は 100 秒ではなく **20 秒** (patch 13:05:51 → 書き戻し 13:06:11)。
+- **セッション再起動は不要だった。** `/plugin update` と競合しない時点で rollout を
+  走らせたら定着した (13:07:21 の write が 92 秒後も保持、13:09:15 の
+  `--force --canary` で全 40 plugin が parity)。
+
+## close する根拠 (逐語)
+
+本 item が要求していたのは「戻る原因が分かるまで rollout で消すな」であり、原因は
+a8ef3afa として特定済み。そのうえで drift 自体も解消し、ゲートが green を報告した:
+
+    OK: 40 plugins deployed at their source version and file-for-file identical
+        to their crate (no rollout drift); 5 superseded dir(s) remain, all held
+        by a live session
+    OK: all 5 GATE plugin(s) enabled (40 plugins checked against enabledPlugins)
+
+overwatch は source=0.2.29 / registry=0.2.29 で parity (本 item 起票時は
+source=0.2.28 / registry=0.2.27)。13:10:20 の再測定でも保持されている。
+**「未宣言の red を rollout で黙らせた」形ではない** — 原因を特定し、
+ゲートが自分で green を報告したうえで閉じている。
+
+## 引き継ぐ作業 (この close では終わらない)
+
+a8ef3afa は **open のまま**。残るのは提案 (1) で、`check-plugin-rollout.py` が
+「ロールアウトしていない」と「ロールアウトしたが reconcile に戻された」を
+区別できない点 (三値化)。今回は窓に入ったせいで前者として報告されていた。
 """
 created_at = 1787531998
-updated_at = 1787542544
+updated_at = 1787544733
 weight = 0.0
 issue_number = 392
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/392"
@@ -14476,9 +14513,74 @@ rollout は registry を確かに patch している — ログ逐語:
 3. rollout 側でレースを避ける手段があるならそれ (要調査。アプリの書き込み契機は未読)。
 
 **未読のまま残した点**: 稼働中の Claude Code がどの契機で installed_plugins.json を
-書き直すのかは調べていない。したがって (3) が可能かは判定不能である。"""
+書き直すのかは調べていない。したがって (3) が可能かは判定不能である。
+
+--- 訂正 (2026-08-24 13:0x、測定点 23794fa5) — 上の「再実行では直らない」は誤りだった ---
+
+**この item の中心的な主張は実測で反証された。** 上の本文は「回数では収束しない」
+「直すのは人間の一手 (セッション再起動 / `/plugin update`) であり、セッション内から
+解決はできない」と書いているが、どちらも成り立たない。**rollout を /plugin update と
+競合しない時点で走らせれば、そのまま定着する。**
+
+## 実測した時系列 (すべて同一セッション内、再起動なし)
+
+  13:05:51  full rollout (--canary) が registry を patch。deployed_at=1787544351
+  13:06:11  registry が 0.2.51 へ書き戻される (patch の **20 秒後**、100 秒ではない)
+            書き戻された record: lastUpdated=2026-08-24T04:06:11.696Z
+                                 gitCommitSha=cd2576bd (= 本セッション開始時の HEAD)
+  13:07:21  blastguard だけを対象に rollout → 0.2.54 が入る
+  13:08:53  **92 秒後も 0.2.54 のまま。戻らない。** registry の mtime は 13:07:21 で不変
+  13:09:15  full rollout (--force --canary) → check-plugin-rollout.py が
+            「OK: 40 plugins deployed at their source version and file-for-file
+             identical to their crate (no rollout drift)」
+  13:10:20  5 件すべて source 版のまま (blastguard 0.2.54 / condukt 0.7.140 /
+            fetchguard 0.1.2 / flow 0.2.8 / overwatch 0.2.29)
+
+## 書き込み契機 — 上で「未読のまま残した」点の答え
+
+reconcile は**周期的ではなくイベント駆動**である。13:06:11 の書き戻しは、その直前に
+ユーザーが打った `/plugin update` + `/reload-plugins` の非同期 reconcile が着地した
+ものであり、13:05:51 の rollout はその窓の**内側**に入ってしまっていた。
+書き戻された record の `gitCommitSha` がセッション開始時の HEAD (cd2576bd) だったのが
+決定的な証拠 — アプリは古い in-memory snapshot を権威として書いている。
+
+したがって上の本文にある提案 (3)「rollout 側でレースを避ける手段があるか」は
+**判定不能ではなく、答えが出た**: `/plugin update` / `/reload-plugins` と同時に
+走らせないこと。それだけで足りる。
+
+## 併せて見つかった別の罠 — reconcile は新しい version dir を GC 対象に印を付ける
+
+13:06:11 の reconcile は registry を戻すだけでなく、**その瞬間に配布したばかりの
+version dir へ `.orphaned_at` を書いた**:
+
+    $ cat ~/.claude/plugins/cache/yukineko/blastguard/0.2.54/.orphaned_at
+    1787544371697          # = 13:06:11。registry 書き戻しと同一秒
+
+in-memory の registry から見て参照されていない dir なので、prune 対象として印を
+付けている。これは version drift とは**別の finding** に化ける:
+
+    - blastguard: deployed tree is not a mirror of crates/blastguard — 1 deployed
+      file(s) are not in the crate and are not rebuild artifacts: .orphaned_at
+      <- fix with: scripts/rollout-plugins.sh --plugin blastguard --force
+         (a plain rollout is a no-op at an unchanged version and will NOT repair this)
+
+**素の rollout では直らない** (版が変わらないので no-op)。`--force` が必要である。
+ゲートのメッセージ自体がそう言っているので、ここは既に正しく設計されている。
+
+## この item に残る有効な部分
+
+提案 (2)「rollout の最後に registry を再検証する」は**既に実装済み**である —
+rollout は末尾で `check-plugin-rollout.py` を回し、戻されていれば
+「rollout: FAILED — drift remains after this run」で非 0 終了する
+(13:05:51 の run が実際にそう報告した)。patch した時点で成功扱いにはしていない。
+
+提案 (1)「稼働プロセスの保持版に張り付いている状態を三値で報告する」は依然有効。
+今回のように `/plugin update` の窓に入った場合、「ロールアウトしていない」と
+「ロールアウトしたが reconcile に戻された」は出力から区別できない。prune が pid を
+見ているのと同じ情報で区別できるはずである。
+"""
 created_at = 1787540592
-updated_at = 1787540592
+updated_at = 1787544690
 weight = 0.0
 issue_number = 400
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/400"

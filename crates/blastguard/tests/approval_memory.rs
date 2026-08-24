@@ -81,10 +81,19 @@ impl Fixture {
         f
     }
 
+    /// The approval entries on disk.
+    ///
+    /// An absent directory is an EMPTY store; anything else that stops the read
+    /// panics. Returning `Vec::new()` on any error would make control (iv)'s
+    /// `assert!(approved_entries().is_empty())` pass for the wrong reason — the
+    /// empty-collection fallback this repository's `fail-open-guard` names, in a
+    /// test whose whole job is to not be vacuous.
     fn approved_entries(&self) -> Vec<String> {
         let dir = self.store.join("approved");
-        let Ok(rd) = std::fs::read_dir(&dir) else {
-            return Vec::new();
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(e) => panic!("cannot list {}: {e}", dir.display()),
         };
         let mut out: Vec<String> = rd
             .filter_map(Result::ok)

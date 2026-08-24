@@ -284,17 +284,20 @@ impl Store {
     /// Is this exact fingerprint on record as approved?
     pub fn lookup(&self, fingerprint: &str) -> Lookup {
         let path = self.approved_path(fingerprint);
-        let body = match std::fs::read_to_string(&path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Lookup::NotRecorded,
-            Err(e) => {
-                // Present-but-unreadable is NOT absent. Reporting it as
-                // `NotRecorded` would merely ask; reporting it as
-                // `Undetermined` also asks but says why, and keeps a
-                // permission-broken store from reading as a working one.
+        // `boundary::read_to_string` rather than `std::fs`: it already draws the
+        // one distinction this function turns on — `Known(None)` is "absent"
+        // (exactly `NotFound`), and every other error kind, `PermissionDenied`
+        // included, is `Undetermined`. Present-but-unreadable is NOT absent:
+        // reporting it as `NotRecorded` would merely ask, whereas
+        // `Undetermined` also asks but says why, and keeps a permission-broken
+        // store from reading as a working one.
+        let body = match harness_core::boundary::read_to_string(&path) {
+            Determination::Known(Some(b)) => b,
+            Determination::Known(None) => return Lookup::NotRecorded,
+            Determination::Undetermined(why) => {
                 return Lookup::Undetermined(format!(
-                    "approval entry could not be read: {e} ({})",
-                    path.display()
+                    "approval entry could not be read: {}",
+                    why.as_str()
                 ));
             }
         };
@@ -337,14 +340,19 @@ impl Store {
     /// never asked about.
     pub fn promote(&self, key: &str) -> Determination<String> {
         let pending = self.pending_path(key);
-        let body = match std::fs::read_to_string(&pending) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        let body = match harness_core::boundary::read_to_string(&pending) {
+            Determination::Known(Some(b)) => b,
+            Determination::Known(None) => {
                 // Ordinary: the command was allowed outright, so nothing ever
                 // asked and there is nothing to approve.
                 return Determination::undetermined("no pending approval for this command");
             }
-            Err(e) => return Determination::undetermined(format!("pending unreadable: {e}")),
+            Determination::Undetermined(why) => {
+                return Determination::undetermined(format!(
+                    "pending unreadable: {}",
+                    why.as_str()
+                ));
+            }
         };
         let entry: Entry = match serde_json::from_str(&body) {
             Ok(e) => e,

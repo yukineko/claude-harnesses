@@ -109,6 +109,7 @@ fugu-router fingerprint [--dir crates]      # SKILL.md コーパスのバージ�
 fugu-router import --episodes /path/episodes.jsonl [--playbooks ...] [--dry-run]  # 別マシンの stores をマージ
 fugu-router import --dedup                  # ローカル stores の重複除去（content-hash, first-seen 優先）
 fugu-router sync [--pull-only | --push-only]  # record ストアを sync_repo（git）と同期
+                                            # SessionEnd フックとしても自動実行される
 fugu-router init                            # fugu-router.toml を書き出す
 ```
 
@@ -121,7 +122,10 @@ fugu-router init                            # fugu-router.toml を書き出す
 
 ### インストールと配線
 
-プラグイン版はバイナリと UserPromptSubmit フックを同梱する。フックは、プロンプトがコーディング作業に見えるときルーティングメモリの要約を 1 ブロック注入する。API キー不要で**サブスクリプションで完結**する。
+プラグイン版はバイナリと 2 本のフックを同梱する。どちらも `hooks/hooks.json` に宣言され、`${CLAUDE_PLUGIN_ROOT}` 経由で解決される。API キー不要で**サブスクリプションで完結**する。
+
+- `UserPromptSubmit` → `fugu-router prompt`。プロンプトがコーディング作業に見えるときルーティングメモリの要約を 1 ブロック注入する。
+- `SessionEnd` → `fugu-router sync`。record ストアを `sync_repo` から pull し、ローカルの追記を commit & push する（`sync_repo` 未設定なら no-op）。
 
 手動導入する場合は次のとおり。
 
@@ -132,6 +136,8 @@ fugu-router init                  # 設定（任意）
 fugu-router install --dry-run     # settings.json の変更をプレビュー
 fugu-router install               # UserPromptSubmit フックをマージ
 ```
+
+⚠ `install` は**その時点のバイナリの絶対パス**を `~/.claude/settings.json` に焼き込む。このエントリはプラグインと一緒に移動せず `scripts/rollout-plugins.sh` でも更新されないため、バイナリを移動・リネーム・削除した瞬間に黙って腐る。解決できないコマンドを持つフックは exit 127 で死ぬが、`SessionEnd`/`SessionStart` フックの exit code も stderr もエージェントにもユーザーにも届かないので、**red ではなく dark に壊れる**。これは仮定の話ではなく、sync フックが 2026-07-23 から 2026-08-26 まで実際にこうして死んでいた。プラグイン版の導入を推奨する。
 
 削除は `fugu-router uninstall`。`FUGU_ROUTER_DISABLED=1` で無効化（no-op）できる。
 

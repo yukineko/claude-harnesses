@@ -13997,3 +13997,57 @@ updated_at = 1787282600
 weight = 0.0
 issue_number = 384
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/384"
+
+[[task]]
+id = "d693e2f9"
+title = "install subcommand が settings.json へ current_exe() の絶対パスを書く設計を廃止する (必ず腐る配線を plugin 自身が生成している)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "failopen",
+    "hooks",
+    "p1",
+]
+status = "pending"
+notes = "crates/backlog/src/install.rs の binary_path() は std::env::current_exe() を ~/.claude/settings.json へ焼き込み、command_group(..., 5) が timeout を書く。hypothesis/reviewgate/fugu-router の install.rs も同型。実測 2026-08-26 (測定点 58c779af): backlog と hypothesis のバイナリが 2026-08-20 に ~/.cargo/bin/*.bak-stale-20260820 へリネームされた結果、両 SessionStart hook が exit 127 で死んでいたが、SessionStart hook は exit code も stderr も agent に届かないので red ではなく dark になり、「キューが空」と「hook が走っていない」が区別不能になった。完了条件: (1) install/uninstall subcommand を廃止するか、絶対パスではなく ${CLAUDE_PLUGIN_ROOT} を書くようにする。(2) すべての plugin について「hooks/hooks.json に宣言があるか」を機械判定するゲートを precommit に追加する (現状そのゲートは存在せず、backlog の hooks/ 欠落は 1 度も検出されなかった)。(3) settings.json に絶対パスの hook エントリが残っていないことを検査する。"
+created_at = 1787732830
+updated_at = 1787732830
+weight = 0.0
+issue_number = 405
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/405"
+
+[[task]]
+id = "7a1d0ec3"
+title = "~/.claude/settings.json に残る 4 本の絶対パス hook を解決する (fugu-router sync は死亡、reviewgate/autoflow は stale 版が二重実行)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "hooks",
+    "stale",
+    "p1",
+]
+status = "pending"
+notes = "実測 2026-08-26 (測定点 7ea1044f)。settings.json に残るエントリと状態: (1) SessionEnd fugu-router sync (timeout 30) — バイナリは ~/.cargo/bin/fugu-router.bak-stale-20260820 で不在=exit 127。plugin 側 hooks.json は UserPromptSubmit しか宣言しないので in-plugin の代替が無く、record store の remote git 同期が 2026-08-20 以降止まっている (~/.fugu-router/episodes.jsonl 29行 vs record-repo/episodes.jsonl 1328行、record-repo の最終 commit は epoch 1784768258)。(2) SessionEnd reviewgate review (timeout 600) — ~/.cargo/bin に 0.1.16 が実在するので走るが cache は 0.1.20。plugin は Stop に宣言しており SessionEnd ではないので単純な重複ではない。判定を持つ Stop ゲートの 4 版古いコピーが別イベントで走っている。(3) SessionEnd autoflow stop (timeout 10) — 同様に 0.1.13 が走る、cache は 0.1.22。(4) SessionStart autoflow session-start (timeout 5) — session-start subcommand は autoflow 0.1.22 で削除済み (stop/pre-compact/prompt-submit のみ) なので、0.1.13 でしか通らない死んだ product surface。完了条件: 各エントリについて「in-plugin へ移す / 廃止する / 意図的に残す(理由を書く)」を決めて settings.json を整理し、fugu-router sync については SessionEnd 相当を hooks/hooks.json へ宣言するか sync 自体を別経路にする。バックアップ: ~/.claude/settings.json.bak-hookorphans-20260826"
+created_at = 1787733286
+updated_at = 1787733286
+weight = 0.0
+issue_number = 406
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/406"
+
+[[task]]
+id = "545a69be"
+title = "SKILL.md の frontmatter 欠落を precommit で機械判定する (repo 横断ゲート)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "hooks",
+    "gate",
+    "p2",
+]
+status = "pending"
+notes = "crates/hypothesis/tests/skills_frontmatter.rs は hypothesis crate 内しか見ない。frontmatter が無い SKILL.md は Claude Code に登録されず /plugin:skill が not found になるが、ファイルは在り git status は clean で rollout も成功を報告するため plugin 側から不可視 (CLAUDE.md 第3節)。実測 2026-08-26 (58c779af) では全 39 crate で 1 件 (crates/hypothesis/skills/hypothesis/SKILL.md) だったが、検出は手作業の find だった。完了条件: scripts/check-skill-frontmatter.py を追加し .githooks/pre-commit に登録、frontmatter 欠落・name/description 欠落・name とディレクトリ名の不一致を block する。判定不能 (読めない・パースできない) は block へ倒す。"
+created_at = 1787733288
+updated_at = 1787733288
+weight = 0.0
+issue_number = 407
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/407"

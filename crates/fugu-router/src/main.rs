@@ -21,6 +21,7 @@ mod rag;
 mod rng;
 mod semantic;
 mod store;
+mod syncstate;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -499,19 +500,51 @@ fn main() {
                 return;
             }
             let input = HookInput::parse(&read_stdin()).unwrap_or_default();
-            if !inject::looks_actionable(&input.prompt) {
+
+            // A failed `sync` has no other way to be seen: its only caller is
+            // the SessionEnd hook, whose exit code and stderr reach neither
+            // the agent nor the user. Surface it regardless of whether this
+            // prompt looks like coding work — a stale store is not a property
+            // of the prompt.
+            let notice = syncstate::pending();
+
+            let summary = if inject::looks_actionable(&input.prompt) {
+                let eps = store::load(&cfg.store_path());
+                inject::summary(&eps, cfg.inject_limit)
+            } else {
+                None
+            };
+
+            if notice.is_none() && summary.is_none() {
                 return;
             }
-            let eps = store::load(&cfg.store_path());
-            if let Some(ctx) = inject::summary(&eps, cfg.inject_limit) {
+
+            let mut ctx = String::new();
+            if let Some(n) = &notice {
+                ctx.push_str(n);
+            }
+            if let Some(s) = &summary {
+                if !ctx.is_empty() {
+                    ctx.push('\n');
+                }
+                ctx.push_str(s);
+                // Keep the metric measuring the routing summary only, as it
+                // always has — the notice is not injected routing context.
                 harness_core::inject_metrics::record(
                     "fugu-router",
                     &input.session_id,
                     &input.prompt,
-                    ctx.chars().count(),
+                    s.chars().count(),
                 );
-                println!("{}", json!({ "additionalContext": ctx }));
             }
+
+            // `additionalContext` reaches the model, `systemMessage` reaches
+            // the user; a sync that has stopped working needs both.
+            let mut out = json!({ "additionalContext": ctx });
+            if let Some(n) = notice {
+                out["systemMessage"] = json!(n);
+            }
+            println!("{out}");
         }),
         other => {
             if let Err(e) = run_user(other) {
@@ -1154,30 +1187,114 @@ fn spawn_and_wait_timeout(
         .context("collecting subprocess output")
 }
 
+/// Sync the record store with `sync_repo`, and leave a durable trace when it
+/// cannot finish.
+///
+/// The only caller is the `SessionEnd` hook, whose exit code and stderr reach
+/// nobody, so a bare `Err` here is an invisible signal. Every failure is
+/// therefore also written to `syncstate`, which the `UserPromptSubmit` hook
+/// surfaces; a success clears it.
 fn cmd_sync(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<()> {
+    match sync_inner(cfg, pull_only, push_only) {
+        Ok(()) => {
+            syncstate::clear();
+            Ok(())
+        }
+        Err(e) => {
+            syncstate::record(&format!("{e:#}"));
+            Err(e)
+        }
+    }
+}
+
+fn sync_inner(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<()> {
     let repo_url = cfg.sync_repo.as_deref().ok_or_else(|| {
         anyhow::anyhow!("sync_repo is not configured in ~/.fugu-router/config.toml")
     })?;
     let sync_dir = cfg.sync_dir_path();
     let sync_dir_str = sync_dir.to_string_lossy().into_owned();
 
+    // --- clone phase: nothing else is possible without a checkout ---
+    if !sync_dir.join(".git").exists() {
+        anyhow::ensure!(
+            !push_only,
+            "{} is not a git checkout yet; run `fugu-router sync` without \
+             --push-only so it can be cloned from {repo_url} first",
+            sync_dir.display()
+        );
+        eprintln!("cloning {} → {}…", repo_url, sync_dir.display());
+        if let Some(parent) = sync_dir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let out = run_git_with_timeout(&["clone", repo_url, &sync_dir_str], GIT_NETWORK_TIMEOUT)?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            anyhow::bail!("git clone of {repo_url} failed:\nstderr: {stderr}");
+        }
+        eprintln!("cloned; nothing local to push yet.");
+        return Ok(());
+    }
+
+    // --- commit phase, and it MUST come before the pull ---
+    // The store files live inside sync_dir (store_path() points there when
+    // sync_repo is set), so every `record` leaves them as uncommitted
+    // working-tree modifications. Pulling in that state aborts with "Your
+    // local changes to the following files would be overwritten by merge",
+    // which is how sync silently stopped working for 34 days. Committing is a
+    // purely local operation, so it is correct under --pull-only too — and
+    // without it --pull-only cannot get past a dirty tree at all.
+    // Declare the store files as union-merged BEFORE any merge can run. Two
+    // machines appending to the same JSONL produce adjacent additions at the
+    // end of the file, which the default text driver reports as a content
+    // conflict (reproduced: a one-line seed plus one append per machine
+    // conflicts every time). `union` keeps BOTH sides' lines, which is the
+    // only resolution that cannot lose an episode — and the store is already
+    // deduplicated by content hash, so duplicate lines are recoverable with
+    // `fugu-router import --dedup` while a dropped episode is not.
+    ensure_union_merge_attributes(&sync_dir)?;
+    let attrs = sync_dir.join(".gitattributes");
+    if attrs.exists() {
+        let add_attrs = run_git_with_timeout(
+            &["-C", &sync_dir_str, "add", "--", ".gitattributes"],
+            GIT_LOCAL_TIMEOUT,
+        )?;
+        anyhow::ensure!(
+            add_attrs.status.success(),
+            "git add of .gitattributes failed"
+        );
+    }
+
+    let committed = commit_local_records(&sync_dir_str)?;
+
     // --- pull phase ---
+    // `--no-rebase` fast-forwards when it can and merges when the histories
+    // diverged. `--ff-only` cannot express the diverged case, and divergence
+    // is the steady state for an append-only store shared between machines:
+    // the moment a second machine pushes, every --ff-only pull here aborts.
+    // Measured on a copy of the real store: --ff-only exits 128 ("Not
+    // possible to fast-forward") where --no-rebase auto-merges both JSONL
+    // files with no conflict.
     if !push_only {
-        if sync_dir.join(".git").exists() {
-            eprintln!("pulling from remote…");
-            let out = run_git_with_timeout(
-                &["-C", &sync_dir_str, "pull", "--ff-only"],
-                GIT_NETWORK_TIMEOUT,
-            )?;
-            anyhow::ensure!(out.status.success(), "git pull failed");
-        } else {
-            eprintln!("cloning {} → {}…", repo_url, sync_dir.display());
-            if let Some(parent) = sync_dir.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let out =
-                run_git_with_timeout(&["clone", repo_url, &sync_dir_str], GIT_NETWORK_TIMEOUT)?;
-            anyhow::ensure!(out.status.success(), "git clone failed");
+        eprintln!("pulling from remote…");
+        let out = run_git_with_timeout(
+            &[
+                "-C",
+                &sync_dir_str,
+                "pull",
+                "--no-rebase",
+                "--no-edit",
+                "origin",
+                "HEAD",
+            ],
+            GIT_NETWORK_TIMEOUT,
+        )?;
+        if !out.status.success() {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            anyhow::bail!(
+                "git pull failed (the merge may have left conflicts in {sync_dir_str} \
+                 that need resolving by hand):\nstdout: {stdout}\nstderr: {stderr}"
+            );
         }
         eprintln!("pull done.");
     }
@@ -1186,40 +1303,99 @@ fn cmd_sync(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<()
         return Ok(());
     }
 
-    // --- push phase: commit any new records ---
-    // The store files are already inside sync_dir (store_path() points there when
-    // sync_repo is set), so we just need to add & commit anything that changed.
-    let status_out = run_git_with_timeout(
-        &["-C", &sync_dir_str, "status", "--porcelain"],
-        GIT_LOCAL_TIMEOUT,
-    )?;
-    let dirty = !status_out.stdout.is_empty();
-
-    if !dirty {
-        eprintln!("nothing to push (store unchanged).");
+    // --- push phase ---
+    // Skip the network round-trip only when we can *establish* there is
+    // nothing ahead of the upstream. If that cannot be determined (no upstream
+    // configured, rev-list failing), push anyway: attempting the sync is the
+    // restrictive choice, and `git push` is a no-op when it is already
+    // up to date.
+    if !is_ahead_of_upstream(&sync_dir_str).unwrap_or(true) {
+        eprintln!("nothing to push (already up to date with the remote).");
         return Ok(());
     }
 
-    let ts = store::now_secs();
-    let commit_msg = format!("fugu-router sync {ts}");
+    let push = run_git_with_timeout(&["-C", &sync_dir_str, "push"], GIT_NETWORK_TIMEOUT)?;
+    if !push.status.success() {
+        let stderr = String::from_utf8_lossy(&push.stderr);
+        anyhow::bail!("git push failed:\nstderr: {stderr}");
+    }
 
-    let add = run_git_with_timeout(&["-C", &sync_dir_str, "add", "-u"], GIT_LOCAL_TIMEOUT)?;
+    if committed {
+        eprintln!("pushed local records.");
+    } else {
+        eprintln!("pushed (no new local records, but the branch was ahead).");
+    }
+    Ok(())
+}
+
+/// Make sure `sync_dir/.gitattributes` marks the append-only store files as
+/// `merge=union`. Existing content is preserved — only the missing lines are
+/// appended, so a store that already declares them (or declares unrelated
+/// attributes) is left alone.
+fn ensure_union_merge_attributes(sync_dir: &Path) -> Result<()> {
+    const WANTED: [&str; 2] = ["episodes.jsonl merge=union", "playbooks.jsonl merge=union"];
+
+    let path = sync_dir.join(".gitattributes");
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        // Not a missing file: we cannot establish what the attributes say, and
+        // guessing "they're fine" is exactly the conflation this repo forbids.
+        Err(e) => {
+            return Err(e).with_context(|| format!("could not read {}", path.display()));
+        }
+    };
+
+    let missing: Vec<&str> = WANTED
+        .iter()
+        .copied()
+        .filter(|line| !existing.lines().any(|l| l.trim() == *line))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let mut body = existing;
+    if !body.is_empty() && !body.ends_with('\n') {
+        body.push('\n');
+    }
+    if body.is_empty() {
+        body.push_str(
+            "# fugu-router: the record store is append-only JSONL, deduplicated by\n\
+             # content hash (`fugu-router import --dedup`). When two machines append\n\
+             # concurrently the additions land adjacent at end-of-file, which the\n\
+             # default text merge driver reports as a conflict. `union` keeps both\n\
+             # sides' lines: duplicates are recoverable, a dropped episode is not.\n",
+        );
+    }
+    for line in missing {
+        body.push_str(line);
+        body.push('\n');
+    }
+    std::fs::write(&path, body).with_context(|| format!("could not write {}", path.display()))?;
+    Ok(())
+}
+
+/// Commit whatever `record` appended to the tracked store files. Returns
+/// whether a commit was actually created.
+fn commit_local_records(sync_dir_str: &str) -> Result<bool> {
+    let add = run_git_with_timeout(&["-C", sync_dir_str, "add", "-u"], GIT_LOCAL_TIMEOUT)?;
     anyhow::ensure!(add.status.success(), "git add failed");
 
-    // Check if anything is actually staged before committing.
+    // `diff --cached --quiet` exits 0 when nothing is staged.
     let staged = run_git_with_timeout(
-        &["-C", &sync_dir_str, "diff", "--cached", "--quiet"],
+        &["-C", sync_dir_str, "diff", "--cached", "--quiet"],
         GIT_LOCAL_TIMEOUT,
     )?;
     if staged.status.success() {
-        eprintln!("nothing to push (no staged changes after add).");
-        return Ok(());
+        return Ok(false);
     }
 
+    let commit_msg = format!("fugu-router sync {}", store::now_secs());
     let commit = run_git_with_timeout(
         &[
             "-C",
-            &sync_dir_str,
+            sync_dir_str,
             "commit",
             "--no-verify",
             "-m",
@@ -1232,15 +1408,23 @@ fn cmd_sync(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<()
         let stdout = String::from_utf8_lossy(&commit.stdout);
         anyhow::bail!("git commit failed:\nstdout: {stdout}\nstderr: {stderr}");
     }
+    eprintln!("committed: {commit_msg}");
+    Ok(true)
+}
 
-    let push = run_git_with_timeout(&["-C", &sync_dir_str, "push"], GIT_NETWORK_TIMEOUT)?;
-    if !push.status.success() {
-        let stderr = String::from_utf8_lossy(&push.stderr);
-        anyhow::bail!("git push failed:\nstderr: {stderr}");
+/// `Some(true)`/`Some(false)` when the branch's position relative to its
+/// upstream can be established, `None` when it cannot.
+fn is_ahead_of_upstream(sync_dir_str: &str) -> Option<bool> {
+    let out = run_git_with_timeout(
+        &["-C", sync_dir_str, "rev-list", "--count", "@{u}..HEAD"],
+        GIT_LOCAL_TIMEOUT,
+    )
+    .ok()?;
+    if !out.status.success() {
+        return None;
     }
-
-    eprintln!("pushed: {commit_msg}");
-    Ok(())
+    let count: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+    Some(count > 0)
 }
 
 fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {

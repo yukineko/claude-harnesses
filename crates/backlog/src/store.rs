@@ -1136,8 +1136,21 @@ pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
         let mut count = 0usize;
         for task in tasks.iter_mut() {
             let mut changed = false;
+            // A TERMINAL status is not a deferral. `defer_until` is only ever
+            // cleared here and never when a task reaches `done`/`cancelled`, so
+            // a task that was deferred once and later finished keeps a stale
+            // past `defer_until` forever — and requeuing on that field alone
+            // re-opened finished work on every run. Terminal tasks are left
+            // ENTIRELY untouched (the stale field is inert: `next` and
+            // `is_pending` already exclude these statuses) rather than
+            // normalised, so a completion timestamp is never re-stamped and
+            // the count this hook reports never covers work it did not move.
+            // `failed` is deliberately NOT terminal: `fail --defer` is the
+            // retry-later path, and its expiry returning to `pending` is the
+            // whole point (`requeue_expired_restores_pending`).
+            let terminal = task.status == STATUS_DONE || task.status == STATUS_CANCELLED;
             if let Some(defer_until) = task.defer_until {
-                if defer_until <= now {
+                if defer_until <= now && !terminal {
                     task.defer_until = None;
                     task.status = STATUS_PENDING.to_string();
                     changed = true;
@@ -2465,6 +2478,99 @@ mod tests {
         // next でも取得できるようになる
         let t = next(&path, None, None).unwrap();
         assert!(t.is_some());
+    }
+
+    /// `requeue_expired` must not resurrect TERMINAL work.
+    ///
+    /// `defer_until` is only ever CLEARED here, never when a task reaches a
+    /// terminal state, so a task that was deferred once and later completed or
+    /// cancelled keeps a stale `defer_until` in the past forever. The requeue
+    /// branch used to force `status = pending` for every task with an expired
+    /// `defer_until` regardless of status, so each run re-opened finished work.
+    ///
+    /// Measured 2026-08-26 at 58c779af, from ONE invocation against this
+    /// repo's own store (the `backlog session-start` hook's first run after
+    /// being re-wired): 24 tasks were flipped to `pending` — 8 `done`,
+    /// 6 `cancelled`, 8 `failed` and 2 `claimed`. The 8 `failed` and 2
+    /// `claimed` were correct (a deferred retry and the CA-backlog-005 stale
+    /// claim rescue); the 8 `done` and 6 `cancelled` were not. Among them was
+    /// `100af807`, whose fix CLAUDE.md cites as landed in `d30d9b00`.
+    ///
+    /// `failed` and `pending` stay in the test as anti-vacuity controls: a
+    /// guard that requeued NOTHING would also make the two assertions above
+    /// pass, and `failed → pending` is the deliberate deferred-retry path
+    /// pinned by `requeue_expired_restores_pending`.
+    #[test]
+    fn requeue_expired_leaves_done_and_cancelled_terminal() {
+        let path = tmp_path();
+        let now = 10_000i64;
+        let seed_task = |id: &str, status: &str| Task {
+            id: id.to_string(),
+            title: format!("{id}-{status}"),
+            project: "/repo".to_string(),
+            project_unresolved: false,
+            tags: vec![],
+            status: status.to_string(),
+            notes: String::new(),
+            created_at: 100,
+            updated_at: 200,
+            // Every task carries the SAME expired deferral, so status is the
+            // only variable that can explain a difference in outcome.
+            defer_until: Some(now - 1),
+            weight: 0.0,
+            issue_number: None,
+            issue_url: None,
+            issue_closed_at: None,
+        };
+        let seed = vec![
+            seed_task("d", STATUS_DONE),
+            seed_task("c", STATUS_CANCELLED),
+            seed_task("f", STATUS_FAILED),
+            seed_task("p", STATUS_PENDING),
+        ];
+        save(&path, &seed).unwrap();
+
+        let count = requeue_expired(&path, now).unwrap();
+
+        let tasks = load(&path).unwrap();
+        let by_id = |id: &str| {
+            tasks
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap_or_else(|| panic!("task {id} vanished"))
+        };
+        assert_eq!(
+            by_id("d").status,
+            STATUS_DONE,
+            "a done task with a stale defer_until must stay done; requeuing it \
+             re-opens completed work as queued work"
+        );
+        assert_eq!(
+            by_id("c").status,
+            STATUS_CANCELLED,
+            "a cancelled task with a stale defer_until must stay cancelled; \
+             requeuing it silently reverses a human's decision not to do it"
+        );
+        // The completion/cancellation timestamps must not be re-stamped either
+        // — `mark_done` is deliberately idempotent about `updated_at` for the
+        // same reason.
+        assert_eq!(by_id("d").updated_at, 200, "done task re-stamped");
+        assert_eq!(by_id("c").updated_at, 200, "cancelled task re-stamped");
+
+        // Anti-vacuity controls: the deferred-retry path still works.
+        assert_eq!(
+            by_id("f").status,
+            STATUS_PENDING,
+            "a failed task's expired deferral IS a retry and must requeue"
+        );
+        assert_eq!(by_id("p").status, STATUS_PENDING);
+        assert!(by_id("f").defer_until.is_none());
+        assert_eq!(
+            count, 2,
+            "exactly the two non-terminal tasks are requeued, and the count \
+             the SessionStart hook reports must not include the ones it left \
+             alone"
+        );
     }
 
     /// F→P regression oracle for the TOCTOU lost-update race in

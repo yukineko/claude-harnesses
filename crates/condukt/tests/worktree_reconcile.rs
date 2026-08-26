@@ -31,6 +31,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use harness_core::progress;
+
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_condukt")
 }
@@ -130,14 +132,25 @@ impl Fixture {
     /// session works inside a LINKED worktree, so "reconcile invoked from a
     /// linked worktree" is the normal case, not an exotic one.
     fn condukt_in(&self, dir: &Path, args: &[&str]) -> Output {
-        Command::new(bin())
-            .args(args)
+        self.condukt_in_env(dir, args, &[])
+    }
+
+    /// Same, with extra environment variables. The only variable any test here
+    /// sets is [`progress::WINDOW_ENV`] — the multi-sample window override the
+    /// progress engine ALREADY ships for exactly this purpose ("lets an
+    /// end-to-end test collapse it so the reap path is exercised without a 90s
+    /// wait"). No test-only injection point is invented for these runs.
+    fn condukt_in_env(&self, dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let mut cmd = Command::new(bin());
+        cmd.args(args)
             .current_dir(dir)
             .env("HOME", &self.home)
             .env("CONDUKT_WORKTREE_BASE", &self.wt_base)
-            .env_remove("CONDUKT_DISABLE")
-            .output()
-            .expect("condukt runs")
+            .env_remove("CONDUKT_DISABLE");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd.output().expect("condukt runs")
     }
 
     fn reconcile_json(&self, extra: &[&str]) -> serde_json::Value {
@@ -145,9 +158,23 @@ impl Fixture {
     }
 
     fn reconcile_json_in(&self, dir: &Path, extra: &[&str]) -> serde_json::Value {
+        self.reconcile_json_env_in(dir, extra, &[])
+    }
+
+    /// `reconcile --json` from the repo root with extra environment variables.
+    fn reconcile_json_env(&self, extra: &[&str], env: &[(&str, &str)]) -> serde_json::Value {
+        self.reconcile_json_env_in(&self.repo, extra, env)
+    }
+
+    fn reconcile_json_env_in(
+        &self,
+        dir: &Path,
+        extra: &[&str],
+        env: &[(&str, &str)],
+    ) -> serde_json::Value {
         let mut args = vec!["worktree", "reconcile", "--json"];
         args.extend_from_slice(extra);
-        let out = self.condukt_in(dir, &args);
+        let out = self.condukt_in_env(dir, &args, env);
         assert!(
             out.status.success(),
             "`condukt worktree reconcile --json` failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}",
@@ -506,6 +533,197 @@ fn corrupt_run_state_makes_occupancy_undetermined() {
         !removable(&report, "wt-corrupt"),
         "undetermined occupancy must not be removable; entry: {e}"
     );
+}
+
+// ── 3b. "No claim" is not proof of death ───────────────────────────────────
+//
+// A worktree condukt did not create — `/flow`'s `.harness-worktrees/session-*`
+// trees, or anything a human made with `git worktree add` — never writes a
+// condukt claim. Concluding `Dead` from "a fully readable scan found no claim"
+// therefore answers a question about *condukt's own bookkeeping* ("did I make
+// this?") as if it were the question that authorizes deletion ("is anyone
+// working here?"). Measured 2026-08-26 against the shipping binary: the live
+// session worktree this repository was being worked in reported
+// `occupancy: dead` and `removable: true` while a session was editing it.
+//
+// The ruling these four tests pin:
+//
+//   * an absent claim carries NO INFORMATION about the directory, so the run
+//     state resolves to `undetermined`, never to `dead`;
+//   * the worktree's own activity and the session transcript are the
+//     independent witnesses that can speak instead;
+//   * `Dead` requires the CONJUNCTION of (activity stalled) ∧ (the progress
+//     window elapsed) ∧ (the transcript consulted and showing no life).
+//
+// The third conjunct is the one that decays quietly: "could not consult the
+// transcript" (no derivable session id, unreadable store, `$HOME` unset) is
+// NOT "consulted and found nothing". Reading it as such collapses the
+// conjunction back to two terms and restores the same fail-open in a new
+// shape, which is why it gets a test of its own below.
+//
+// Anti-vacuity for this whole section lives in §3(a): some arrangement must
+// still reach `dead`/`removable: true`, or an implementation that decides
+// nothing would satisfy every assertion here.
+
+/// No condukt claim names this worktree, and condukt's run state is perfectly
+/// readable (the fixture's state root exists and holds zero runs), so this is
+/// not the `corrupt_run_state_makes_occupancy_undetermined` case: the scan
+/// succeeded and simply had nothing to say about this directory.
+///
+/// With a single probe no other witness has spoken either — the progress
+/// engine's multi-sample rule makes a first observation `Undetermined` by
+/// construction — so the verdict must be `undetermined`. `dead` here is the
+/// bug: it is a claim of knowledge minted from the absence of bookkeeping.
+#[test]
+fn unclaimed_worktree_occupancy_is_undetermined_not_dead() {
+    let f = Fixture::new("unclaimed-undetermined");
+    let _wt = f.add_worktree("wt-unclaimed", "feat/unclaimed");
+
+    let report = f.reconcile_json(&[]);
+    assert_eq!(
+        report["state_scan"]["readable"], true,
+        "fixture precondition: the run state must be READABLE, so what is under \
+         test is 'nothing claims it', not 'the state could not be read': {report}"
+    );
+
+    let e = entry(&report, "wt-unclaimed");
+    assert_ne!(
+        e["occupancy"]["value"], "dead",
+        "'no condukt claim names this worktree' is a fact about condukt's own \
+         bookkeeping, not about whether anyone is working here; every worktree \
+         condukt did not create is unclaimed by construction; entry: {e}"
+    );
+    assert_eq!(
+        e["occupancy"]["value"], "undetermined",
+        "an unclaimed worktree about which no witness has spoken is \
+         undetermined; entry: {e}"
+    );
+}
+
+/// The same directory, from the side that actually loses data: deletion is the
+/// irreversible direction, so an occupancy nobody could determine must not
+/// authorize it. Cleanliness is not consent — a session that has committed
+/// everything so far is clean and still occupied.
+#[test]
+fn unclaimed_clean_worktree_with_no_witness_is_not_removable() {
+    let f = Fixture::new("unclaimed-not-removable");
+    let _wt = f.add_worktree("wt-unclaimed-clean", "feat/unclaimed-clean");
+
+    let report = f.reconcile_json(&[]);
+    let e = entry(&report, "wt-unclaimed-clean");
+    assert_eq!(
+        e["dirty"]["value"], false,
+        "fixture precondition: the worktree is clean, so the ONLY thing that \
+         could hold the gate shut is occupancy; entry: {e}"
+    );
+    assert_eq!(
+        e["attribution"]["value"], "this-repo",
+        "fixture precondition: git itself registers this worktree; entry: {e}"
+    );
+    assert!(
+        !removable(&report, "wt-unclaimed-clean"),
+        "a clean, attributable worktree that no condukt run claims must not be \
+         deletable on that basis alone — no witness said it was empty; entry: {e}"
+    );
+}
+
+/// The witness that replaces the missing claim: the worktree's own activity.
+///
+/// The progress verdict is not injected. The first probe anchors the
+/// multi-sample snapshot (undetermined by construction), then real work lands
+/// as an UNCOMMITTED file, and the second probe observes the advance. That
+/// uncommitted shape is deliberate: it moves neither HEAD nor any run's
+/// `updated_at`, so it is invisible to every claim-derived signal and is
+/// exactly the worker a claim-based reaper mistakes for a corpse.
+#[test]
+fn unclaimed_worktree_with_advancing_activity_is_live() {
+    let f = Fixture::new("unclaimed-active");
+    let wt = f.add_worktree("wt-active", "feat/active");
+
+    // Probe 1: anchor only. One observation is never a verdict about progress.
+    let report = f.reconcile_json(&[]);
+    assert_ne!(
+        entry(&report, "wt-active")["occupancy"]["value"],
+        "dead",
+        "an unanchored first probe cannot have observed a stall; entry: {}",
+        entry(&report, "wt-active")
+    );
+
+    // Real, uncommitted work — a half-written file, mid-edit.
+    std::fs::write(wt.join("in-progress.rs"), "fn half_written() {\n").unwrap();
+
+    let report = f.reconcile_json(&[]);
+    let e = entry(&report, "wt-active");
+    assert_eq!(
+        e["occupancy"]["value"], "live",
+        "a worktree whose own working-tree activity advanced between two probes \
+         is occupied, whether or not any condukt run claims it; entry: {e}"
+    );
+    // Stated for completeness, not as this test's evidence: the uncommitted
+    // file that supplies the activity also makes the tree dirty, so the gate is
+    // already held shut by preservation. The load-bearing claim above is the
+    // OCCUPANCY verdict, which was observed RED as `dead != live` on
+    // 2026-08-26.
+    assert!(
+        !removable(&report, "wt-active"),
+        "a live worktree is never removable; entry: {e}"
+    );
+}
+
+/// The fail-closed edge of the third conjunct: the activity witness HAS spoken
+/// and said "stalled", the window HAS elapsed — and the transcript witness
+/// could not be consulted at all. That is "I do not know whether a session is
+/// alive here", not "no session is alive here", and it must not resolve to
+/// `dead`.
+///
+/// Both unconsultable shapes are covered in one run, because both are the same
+/// answer:
+///
+/// * `session-1f2e3d4c` has the name `/flow` gives its worktrees, so a session
+///   id IS derivable — this entry cannot be waved away as "undetermined merely
+///   because there was no id to look up". The transcript store is absent, so
+///   the lookup itself is what fails.
+/// * `wt-anonymous` carries no session id at all: the id cannot be derived,
+///   which is equally "could not consult".
+///
+/// The first two conjuncts are made genuinely true rather than assumed: the
+/// progress window is collapsed to 0 through the engine's own `WINDOW_ENV`
+/// override and two probes are taken with no work in between, so the
+/// fingerprint is frozen across a window that has really elapsed. Everything
+/// standing between these entries and `dead` is therefore the transcript
+/// witness alone.
+#[test]
+fn stalled_unclaimed_worktree_with_unconsultable_transcript_is_undetermined() {
+    let f = Fixture::new("unclaimed-transcript");
+    let _named = f.add_worktree("session-1f2e3d4c", "feat/sess");
+    let _anon = f.add_worktree("wt-anonymous", "feat/anon");
+
+    assert!(
+        !f.home.join(".claude").join("projects").exists(),
+        "fixture precondition: the transcript store must be ABSENT, so the \
+         transcript witness is unreadable rather than merely empty"
+    );
+
+    let env = [(progress::WINDOW_ENV, "0")];
+    // Probe 1 anchors the frozen fingerprint; probe 2 sees it unchanged across
+    // a window that has (trivially, but really) elapsed.
+    let _ = f.reconcile_json_env(&[], &env);
+    let report = f.reconcile_json_env(&[], &env);
+
+    for name in ["session-1f2e3d4c", "wt-anonymous"] {
+        let e = entry(&report, name);
+        assert_eq!(
+            e["occupancy"]["value"], "undetermined",
+            "a stalled, unclaimed worktree whose transcript witness could not be \
+             CONSULTED is undetermined; treating 'could not look' as 'looked and \
+             found nothing' turns the three-term conjunction back into two and \
+             re-opens the same hole; entry: {e}"
+        );
+        assert!(
+            !removable(&report, name),
+            "undetermined occupancy must not authorize deletion; entry: {e}"
+        );
+    }
 }
 
 // ── 4. The primary (main) working tree is never removable ──────────────────

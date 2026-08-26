@@ -75,6 +75,7 @@ fugu-router import --episodes /path/episodes.jsonl [--playbooks /path/playbooks.
                                                              # merge another machine's stores (content-hash dedup)
 fugu-router import --dedup                                   # dedup local stores in place
 fugu-router sync [--pull-only | --push-only]                 # sync the record store with sync_repo (git)
+                                                             # also runs automatically as the SessionEnd hook
 fugu-router init                                             # write fugu-router.toml
 fugu-router prompt                                           # UserPromptSubmit hook (injects a summary)
 ```
@@ -222,8 +223,14 @@ breaks. See `crates/condukt/skills/condukt/SKILL.md`.
 ## Install
 
 ### Plugin
-Bundles the binary + the UserPromptSubmit hook. The hook injects a one-block
-routing-memory summary when your prompt looks like coding work.
+Bundles the binary + two hooks, both declared in `hooks/hooks.json` and
+resolved through `${CLAUDE_PLUGIN_ROOT}`:
+
+- `UserPromptSubmit` → `fugu-router prompt`, which injects a one-block
+  routing-memory summary when your prompt looks like coding work.
+- `SessionEnd` → `fugu-router sync`, which pulls the record store from
+  `sync_repo` and commits+pushes local appends back (no-op when `sync_repo`
+  is unset).
 
 ### Manual
 ```
@@ -233,6 +240,15 @@ fugu-router init                       # optional config
 fugu-router install --dry-run          # preview settings.json change
 fugu-router install                    # merge the UserPromptSubmit hook
 ```
+
+⚠ `install` writes the **absolute path of the current binary** into
+`~/.claude/settings.json`. That entry does not travel with the plugin and is
+not refreshed by `scripts/rollout-plugins.sh`, so it silently rots the moment
+the binary is moved, renamed, or removed — a hook whose command does not
+resolve exits 127, and a `SessionEnd`/`SessionStart` hook's exit code and
+stderr reach neither the agent nor the user, so it breaks dark rather than
+red. This is not hypothetical: it is exactly how the sync hook was dead
+between 2026-07-23 and 2026-08-26. Prefer the plugin install.
 Remove with `fugu-router uninstall`. Set `FUGU_ROUTER_DISABLED=1` to no-op.
 
 ## Configuration

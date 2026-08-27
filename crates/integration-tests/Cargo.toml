@@ -15,5 +15,6 @@ publish = false
 [dependencies]
 
 [dev-dependencies]
+harness-core = { path = "../harness-core" }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

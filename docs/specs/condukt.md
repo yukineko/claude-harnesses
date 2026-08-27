@@ -98,7 +98,13 @@
 - **`model`** — decomposition スキーマの正典。`Decomposition`/`Task`/`Batch`/`Schedule`/`Class`（`Parallel`/
   `Serial`/`Gated`）/`Check`/`MechanicalCheck`/`HookInput`。`Task::requires_fp_oracle()`（`kind` 判定）。
 - **`schedule`** — 決定論的スケジューラ。`files_conflict`/`entries_conflict`（保守的衝突判定）・`validate`・
-  `schedule`（force-gate → depth layering → greedy graph coloring）。file-overlap は `class` に対し権威。
+  `schedule`（force-gate → depth layering → greedy graph coloring → **バッチ幅の cap 分割**）。
+  file-overlap は `class` に対し権威。最後の段は引数 `max_parallel`（＝`Config::max_parallel`。
+  `harness_core::parallel` のセッション同時実行上限で、既定かつ上限 3）でカラークラスを切り分ける —
+  **partition であって truncation ではない**（幅の広いクラスは複数バッチになるだけで、タスクは 1 つも落ちない）。
+  cap は**引数で渡す**（env を読むのはこの module ではなく `Config::load` 側。全関数が純関数という
+  この module の契約を保つため）。渡された値は純粋な `harness_core::parallel::clamp` で再 clamp するので、
+  0 も上限超えも通らない。
 - **`state`** — 実行状態の永続化・完了ゲート・stale 修復。`RunState`/`Status`（`Pending`/`Running`/`Failed`/
   `Verified`/`Cancelled`/`Discarded`）・`gate_reasons`・`enforce_fp_gate`・reconcile/resume/record-run。最大 module。
   `TaskState` は cross-run 相関のための per-task identity として `hashkey: Option<String>`（claim registry と同じ

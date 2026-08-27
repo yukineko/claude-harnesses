@@ -256,7 +256,9 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
       tasks-file ロックの中で `claimed` に落とすため、**2 つの driver が同じ task を受け取ることは無い**
       （逆に、これがあるからキュー全体をロックする必要が無い）。
       - 出力が `no pending tasks` になるまで、または **N 件**（既定 N=condukt の `max_parallel`。
-        無指定なら **4**）に達するまで繰り返す。
+        無指定なら **3**）に達するまで繰り返す。**N は 3 を超えてはいけない** — 1 セッションあたりの
+        同時実行上限であり、`condukt schedule` 側も同じ 3 でバッチを切る
+        （`harness_core::parallel::SESSION_MAX_PARALLEL`。config/env は下げられるが上げられない）。
       - 各件の `id` / `title` / `notes` / **`hashkey`**（`next --claim` の出力にも含まれる）を控える
         （sink で **id ごとに** `done`/`fail` する、および claim の解放に必須）。1 件だけなら従来どおり
         単一課題として扱う（N=1）。
@@ -325,7 +327,8 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
      各項目に **id・タイトル・notes・（分かるなら）触るファイル/領域**を明記し、「**これらは互いに独立。非衝突なものは並列に、
      衝突・共有リソースを触るものは直列に scheduleしてよい**」と condukt に明示する（分解時に item 境界を保てるよう、
      item 単位で done_criteria を切ってもらう）。**item id ↔ condukt タスク**の対応を控える（sink で id ごとに書き戻すため）。
-     並列上限は condukt の `max_parallel`（既定 4）が実効的に効くので flow 側で待ち合わせ制御はしない。
+     並列上限は condukt の `max_parallel`（既定かつ上限 **3** ＝1 セッションあたりの同時実行上限）が
+     **決定論的に効く**（`schedule` がバッチ幅をこの値で切る＝散文の約束ではない）ので flow 側で待ち合わせ制御はしない。
 7. **overwatch に anchor を登録**（課題文を組み立てた直後、選んだ source 種別によらず必ず）— これにより
    condukt run を起こさない measure step でも「今どのセッションが何を担当しているか」が project-wide
    レジストリ（`overwatch status`）に乗る:
@@ -569,6 +572,11 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
   あれば順列ではなく 1 回の condukt run に束ねて渡し、**並列/直列の実判定は condukt の `schedule.rs`（ファイル競合・
   Serial/Gated・shared-glob・依存層）に委譲**する。flow 自身は独立候補を束ねるだけで、危険/高コストなら condukt が
   自動で直列化する（conservative＝迷えば直列）。予算逼迫や明白な相互依存が読めるときは flow 側でバッチ幅を絞る（極端は N=1）。
+- **1 セッションの同時実行は最大 3**（`harness_core::parallel::SESSION_MAX_PARALLEL`）: claim するバッチ幅も、
+  condukt が 1 波で走らせる worker 数も、同時に生きている subagent の総数も 3 を超えない。これは
+  **上限であって既定値ではない** — config/env（`max_parallel` / `CONDUKT_MAX_PARALLEL` / `HARNESS_MAX_PARALLEL`）は
+  下げられるが上げられず、`schedule` が幅の広いバッチを 3 ずつに切り分ける（切るだけで**タスクは落とさない**）。
+  上限に当たったら**波に分ける**のであって、複数 condukt run を並走させて迂回しない。
 - **盲目実行しない**: compass ゲートが鮮明でない限り、自動でキューを流し始めない。
 - **driver 登録の解除を絶対に飛ばさない**（早期脱出・エラー時も）。解除漏れは `autoflow` /
   `daily` を最大 30 分止める。

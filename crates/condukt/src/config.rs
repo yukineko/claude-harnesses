@@ -17,7 +17,11 @@ pub struct Config {
     pub default_branch: String,
     /// Globs that force a touching task to run serially (never in parallel).
     pub shared_globs: Vec<String>,
-    /// Soft cap on concurrent workers (advisory; the skill honors it).
+    /// Cap on concurrent workers per session. ENFORCED, not advisory: `schedule`
+    /// splits every parallel batch to at most this width, so the skill cannot
+    /// spawn more than this in one message even if it ignores the number.
+    /// Defaults to — and is clamped to — `harness_core::parallel::SESSION_MAX_PARALLEL`;
+    /// config.toml and `CONDUKT_MAX_PARALLEL` may lower it, never raise it.
     pub max_parallel: usize,
     /// Where run-state files are stored.
     pub state_dir: PathBuf,
@@ -44,8 +48,11 @@ pub struct Config {
     /// so it is opt-in per project (or per high-risk task via `--risk high`).
     /// Read by `condukt consensus plan`. Overridable via `CONDUKT_CONSENSUS`.
     pub consensus_enabled: bool,
-    /// Fan-out width when consensus is enabled. Defaults to 3; clamped to a
-    /// documented ceiling (`consensus::MAX_SAMPLES`) so it can never run away.
+    /// Fan-out width when consensus is enabled. Defaults to 3; clamped to the
+    /// lower of `consensus::MAX_SAMPLES` and the per-session concurrency
+    /// ceiling (`harness_core::parallel::SESSION_MAX_PARALLEL`) so it can never
+    /// run away — these samples are spawned concurrently and spend the same
+    /// session budget as a parallel batch.
     pub consensus_samples: usize,
     /// Agreement threshold below which a task escalates to opus. Defaults to 0.5.
     pub consensus_threshold: f64,
@@ -55,7 +62,10 @@ pub struct Config {
     /// verify cost). Overridable via `CONDUKT_ADVERSARIAL`. A GATE-crate-touching
     /// change forces a panel even when this is off (`adversarial::touches_gate_crate`).
     pub adversarial_enabled: bool,
-    /// Panel width when engaged. Defaults to 3; clamped to `adversarial::MAX_PANEL`.
+    /// Panel width when engaged. Defaults to 3; clamped to the lower of
+    /// `adversarial::MAX_PANEL` and the per-session concurrency ceiling
+    /// (`harness_core::parallel::SESSION_MAX_PARALLEL`) — the skeptics are
+    /// spawned concurrently and spend the same session budget.
     pub adversarial_size: usize,
     /// Effective-voter floor below which the panel fails closed. Defaults to 2.
     pub adversarial_min_voters: usize,
@@ -199,7 +209,7 @@ impl Config {
             worktree_base: base.join("worktrees"),
             default_branch: "main".to_string(),
             shared_globs: Vec::new(),
-            max_parallel: 4,
+            max_parallel: harness_core::parallel::SESSION_MAX_PARALLEL,
             state_dir: base.join("state"),
             test_command: None,
             stuck_ttl_secs: 1800,
@@ -361,6 +371,15 @@ impl Config {
                 cfg.worker_sandbox_image = Some(v);
             }
         }
+
+        // LAST, after config.toml and every env override: the per-session
+        // concurrency ceiling is not negotiable from configuration. A
+        // `max_parallel = 8` in config.toml (or `CONDUKT_MAX_PARALLEL=8`) may
+        // only ever LOWER the cap; clamping here is what makes that true no
+        // matter which override wrote the field. The clamp also floors at 1, so
+        // a `max_parallel = 0` cannot produce a scheduler that never places
+        // work (see `harness_core::parallel::clamp`).
+        cfg.max_parallel = harness_core::parallel::cap_fanout(cfg.max_parallel);
         cfg
     }
 
@@ -517,5 +536,20 @@ pids_limit = 256
         for v in ["", "maybe", "2", "enabled"] {
             assert_eq!(parse_autonomous_env(v), None, "{v:?} should be None");
         }
+    }
+
+    #[test]
+    fn loaded_max_parallel_never_exceeds_the_session_ceiling() {
+        // Holds for ANY user config: the file and the env may lower the cap,
+        // never raise it. Asserting the invariant (rather than the literal
+        // default) keeps the test honest on a machine whose config.toml sets
+        // `max_parallel = 8`.
+        let cfg = Config::load();
+        assert!(
+            cfg.max_parallel <= harness_core::parallel::SESSION_MAX_PARALLEL,
+            "max_parallel {} exceeds the session ceiling",
+            cfg.max_parallel
+        );
+        assert!(cfg.max_parallel >= 1, "a cap of 0 can never place work");
     }
 }

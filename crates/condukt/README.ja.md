@@ -159,7 +159,7 @@ cp -r skills/condukt ~/.claude/skills/        # agents/ も ~/.claude/agents/ �
 ```toml
 worktree_base  = "~/.condukt/worktrees"  # リポジトリの外でなければならない
 default_branch = "main"
-max_parallel   = 4                        # 同時ワーカー数のアドバイザリーソフトキャップ
+max_parallel   = 3                        # 1 セッションの同時ワーカー上限 (schedule がバッチ幅をこの値で切る。3 が上限で、下げられるが上げられない)
 shared_globs   = []                       # このグロブに触れるタスクを強制的に直列実行させる
 autonomous     = false                    # true にすると人間ゲート（Phase 3 の合意）を決定論的な既定へ縮退する
 single_worktree = false                   # true にすると全タスクを main ツリーで実行する（選択的ステージング、タスク毎の worktree/merge なし）

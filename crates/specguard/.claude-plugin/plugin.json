@@ -1,7 +1,7 @@
 {
   "name": "specguard",
-  "version": "0.2.51",
-  "description": "仕様↔実装 整合監査ハーネスを Claude Code から subscription-native に実行する。各 shard を read-only な in-session subagent で監査し (nested claude --print なし)、決定的ハーネス (scope/render/parse/report) は specguard バイナリに委譲する。",
+  "version": "0.2.52",
+  "description": "v0.2.52: shard 監査 subagent の「並列で同時に起動してよい」を最大 3 体ずつの波に変更 (run と spec-audit の両方)。shard は間引かない。 仕様↔実装 整合監査ハーネスを Claude Code から subscription-native に実行する。各 shard を read-only な in-session subagent で監査し (nested claude --print なし)、決定的ハーネス (scope/render/parse/report) は specguard バイナリに委譲する。",
   "author": {
     "name": "yukineko"
   },

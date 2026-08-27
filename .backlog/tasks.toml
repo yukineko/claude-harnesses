@@ -466,13 +466,12 @@ tags = [
     "scout",
     "p2",
 ]
-status = "failed"
+status = "pending"
 notes = """
 CHANGELOG 0件・GitHub Releasesゼロ・tag1個でplugin.json versionを手動管理。version据え置きだと利用者に更新が届かない。/ 証拠: repo全体にCHANGELOG無し / https://release-plz.dev/ / Claude plugin-marketplaces docs(version bump必須) / 完了条件: release-plz workflow導入+Conventional Commits運用+CHANGELOG自動生成+GitHub Releases発行
 Design conflict: release-plz bumps Cargo.toml crate versions, but this repo enforces plugin.json<->Cargo.toml version parity (scripts/check-versions.sh) and does NOT publish to crates.io. A stock release-plz release-PR bumps Cargo.toml only and breaks the parity gate. Needs a decision before implementing: (A) release-plz owns bumps + a post-bump hook syncs each plugin.json, or (B) keep manual version bumps and use git-cliff CHANGELOG + a tag-triggered GitHub Release workflow (fits existing model, locally verifiable). Not auto-committing release CI to main untested."""
 created_at = 1782537551
-updated_at = 1782573748
-defer_until = 1782746548
+updated_at = 1787734763
 weight = 0.0
 
 [[task]]
@@ -1446,14 +1445,13 @@ tags = [
     "p1",
     "wontfix",
 ]
-status = "claimed"
+status = "pending"
 notes = """
 U-shaped attention bias under-attends middle (>30% degradation vs edges); place highest-relevance chunks at start AND end, bury least-relevant in middle. Cheap, separate ordering pass over already-selected chunks. 証拠: https://docs.haystack.deepset.ai/reference/rankers-api (LostInTheMiddleRanker). 完了条件: injected spec/retrieved chunks emitted in edge-weighted order (rank1 first, rank2 last, lowest centered) via one ordering pass.
 Inapplicable to context-governor's hook architecture as scoped. Lost-in-the-middle edge-ordering requires a MULTI-CHUNK relevance-ranked injection; the injector emits exactly ONE best-scoring section (injector.rs:92-106 max_by_key), and the rehydrator emits normative pins with no query to rank by. Adding top-K multi-chunk retrieval to create ranked chunks fights the crate's explicit size-minimization axis (lib.rs 'minimize resident normative text'), and edge-ordering resident pins would risk burying Verbatim content mid-context, contradicting I2 lossless-recall. Deferred by user decision to pursue grounded safety/autonomy p1s. Recommend reclassify as guidance-only or retarget if multi-chunk retrieval is ever introduced.
 調査済み・実装不能につき guidance-only として close (ユーザー裁定 2026-08-02)。edge-ordering は multi-chunk の relevance-ranked injection を前提とするが、injector は最高スコア 1 section のみ、rehydrator は ranking する query を持たない。top-K 導入は crate の size-minimization 軸と I2 lossless-recall に反する。詳細は notes に保持。"""
 created_at = 1782753890
-updated_at = 1786643241
-defer_until = 1785807264
+updated_at = 1787734763
 weight = 0.0
 
 [[task]]
@@ -1777,13 +1775,12 @@ tags = [
     "scout",
     "p1",
 ]
-status = "failed"
+status = "pending"
 notes = """
 現状 k-NN の pass-rate 類似度のみでルーティングしコスト階層を無視。cost-per-pass を学習し min(cost×(1-pass_rate)) で選択すれば品質維持のままコスト削減。低工数・高ROI。/ 証拠(peer): https://lmsys.org/blog/2024-07-01-routellm/ ; repo: crates/fugu-router/src/policy.rs はコスト次元なし / 完了条件: model×task のコストを記録しコスト調整スコア関数でルーティング、record で書き戻し
 Already satisfied — scout evidence stale. Cost-aware routing (RouteLLM/FrugalGPT) is fully implemented in crates/fugu-router/src/policy.rs: ModelStat.total_cost_usd + aggregate() sum cost; decide() picks cheapest tier by lowest cost-per-pass (L242-263); decide_bandit() does cost-efficiency posterior sampling efficiency=sample/(cpp/min_cpp) (L349-409); Record CLI has --cost persisted as cost_usd (main.rs L67/L363); stats reports avg_cost_usd. 21 policy tests green incl. cost_per_pass_prefers_cheaper_tier_*, bandit_cost_adj_favours_cheaper_tier_*, cost_per_pass_skips_tier_with_no_cost_data_gracefully. Nothing to build."""
 created_at = 1782856095
-updated_at = 1782993588
-defer_until = 1783166388
+updated_at = 1787734763
 weight = 0.0
 
 [[task]]
@@ -1796,13 +1793,12 @@ tags = [
     "scout",
     "p1",
 ]
-status = "failed"
+status = "pending"
 notes = """
 context 圧力は検知するが古い tool 出力/過去 thinking を能動的に除去しない(context-rot 緩和の最高ROIレバー)。事実は note store に退避しつつ clear。repo の中核テーゼと整合。/ 証拠(peer): context-engineering の tool-result clearing パターン; repo: ctxrot に clear 機構なし / 完了条件: 圧力%検知→古い tool 出力 clear(事実は保持)→thinking clear を hook で発火
 Architecturally inapplicable to a hook (same class as prompt-caching batch). A Claude Code hook has NO output channel to clear/null resident tool_result or thinking blocks: the only emit surface is decision:block/deny and additionalContext (which ADDS text, never removes). preguard.rs:16 documents 'PreToolUse cannot inject additionalContext'. The only actor that removes content is compaction, which a hook cannot trigger at a custom pressure threshold (see memory compaction-not-hook-triggerable) nor apply selectively block-by-block. Anthropic 'clear tool uses' context-editing is an API-request param the CLIENT sets, unavailable to a subscription-mode plugin hook. Achievable levers already exist: preguard PREVENTS large reads entering context (PreToolUse deny+reason); rescue preserves facts pre-compact; distill is the proactive auto-distill answer. The 'clear resident blocks via hook' framing is not buildable."""
 created_at = 1782856095
-updated_at = 1782993671
-defer_until = 1783166471
+updated_at = 1787734763
 weight = 0.0
 
 [[task]]
@@ -1853,13 +1849,12 @@ tags = [
     "scout",
     "p1",
 ]
-status = "failed"
+status = "pending"
 notes = """
 828 の println!/eprintln! があり tracing:: は 0。span/レベルフィルタ(RUST_LOG)が無く hook 障害の観測性が低い。/ 証拠: grep println!|eprintln! 828 hits, tracing:: 0 hits, workspace.dependencies に tracing 無し / 完了条件: tracing を workspace.deps に追加、hot path の出力を tracing マクロ化、RUST_LOG でレベル制御可能
 Harmful as specified — scout miscounted grep hits without the architecture. In this codebase stdout is a STRUCTURED WIRE PROTOCOL, not incidental logging: hook binaries emit their JSON decision/additionalContext to stdout via println! (ctxrot/main.rs:280,310,331), and CLI commands emit JSON to stdout that the flow/scout/condukt skills capture via $(...) (compass/main.rs:606,689,750; backlog/main.rs:226,320 println! json!({additionalContext})). Converting these println! to tracing::info! (stderr, RUST_LOG-gated, OFF by default) would make every hook emit nothing to stdout and every CLI-JSON contract return empty — breaking the whole PDO loop (backlog next / compass gap / condukt would all get empty strings). 'tracing:: = 0 hits' is correct-by-design. Only a small fraction (internal fail-soft eprintln! diagnostics) is a safe tracing target, and even that needs a stderr-pinned subscriber and is NOT what the done-condition ('hot path の出力を tracing マクロ化') asks. Introducing a global subscriber across ~30 binaries also risks never-break-a-turn for marginal gain. Not buildable as specified."""
 created_at = 1782856113
-updated_at = 1782993790
-defer_until = 1783166590
+updated_at = 1787734763
 weight = 0.0
 
 [[task]]
@@ -3945,7 +3940,7 @@ tags = [
     "failopen",
     "p1",
 ]
-status = "failed"
+status = "pending"
 notes = """
 PARTIAL as of 2026-07-29, merged at b5ed6fdc on main. DONE: scripts/check-clippy-lints.py (per-crate clippy gate over the opt-in deny lints) plus scripts/tests/precommit-clippy-gate.sh, 18 cases, all green from merged main. Independently verified by an adversarial agent on a different model: anti-vacuity, the Undetermined-vs-empty-selection tri-state, working-tree diff UNION untracked (never the index), exit-status-as-verdict, and pre-existing-failure parity all confirmed by mutation. Three prose claims it disproved were corrected in b6b11a5d, and one real false negative it demonstrated is filed as 3832ba25.
 
@@ -3954,8 +3949,7 @@ REMAINING and BLOCKED: the scanner is not wired into .githooks/pre-commit, so it
 Note for whoever does the wiring: scripts/test_precommit_hook.py EXPECTED_SCANNERS is an exact-match list and needs the new scanner added in the same commit. It was stale by four and RED on clean main; refreshed in fd217e59, so it is green now and will go red again the moment a scanner is added without updating it.
 BLOCKED on user action, not on the work. The gate and its 20-case suite are built, verified and merged (de2e9829). The only remaining step is 3 lines: one run line in .githooks/pre-commit plus two EXPECTED_SCANNERS/LABELS entries. That edit is refused by the permission deny list in ~/.claude/settings.json lines 36-37 (Edit/Write on **/.githooks/**), which must not be worked around via Bash. The wiring is already proven correct against copies via the PRECOMMIT_HOOK_UNDER_TEST seam: 16/16 green on the wired hook vs 9 targeted failures on the unwired one. Deferred so the driver stops proposing an item that cannot advance; restore with: backlog edit 7ecf3797 --status pending, the moment the deny is lifted."""
 created_at = 1784603235
-updated_at = 1785340402
-defer_until = 1785513202
+updated_at = 1787734763
 weight = 0.0
 
 [[task]]
@@ -3993,13 +3987,12 @@ tags = [
     "failopen",
     "p2",
 ]
-status = "failed"
+status = "pending"
 notes = """
 「未判定」を「clean」から型で分離する解は既に 4 クレートで独立に再発明されており共有されていないため、新しいゲートは毎回ゼロから再導出して半分は失敗する。bool/Option への暗黙変換路(From<bool>, Default, unwrap_or)を持たない型にすることで construction 段階で潰す / 証拠: crates/harness-core/src/lib.rs:27-52 のモジュール列に verdict なし。再発明 4 件: crates/blastguard/src/model.rs:29 'pub enum Decision { Allow, Deny(String), Ask(String) }' / crates/propguard/src/gate.rs:228 'pub enum CheckOutcome { Verified{..}, Error(String) }' / crates/reviewgate/src/review.rs:451 'enum ReviewerResult { Clean, Issues(String), Error(String) }' / crates/tdd/src/git.rs:26 'pub enum ChangeScan { NotRepo, Failed, Files(Vec<String>) }'（同型が propguard/reviewgate にも別定義で存在） / 完了条件: harness_core::verdict::{Verdict, Undetermined} が存在し #[must_use]・From<bool>/Default 無し。既存 verdict 型が新型の newtype か再エクスポートになり cargo test --workspace green
 42b7c9af (型契約で構築不能化) に統合。同一の証拠・同一の対象で、42b7c9af を実装すれば必然的に閉じる"""
 created_at = 1784603235
-updated_at = 1784605541
-defer_until = 1784778341
+updated_at = 1787734763
 weight = 0.0
 
 [[task]]
@@ -4445,15 +4438,14 @@ tags = [
     "flake",
     "p2",
 ]
-status = "failed"
+status = "pending"
 notes = """
 2026-07-21 観測: cargo test -p condukt --bins のうち worktree::tests::git_fast_subprocess_returns_output_without_timing_out が、全体実行が高負荷で伸びた run (21.58s / 29.19s、通常 7-8s) で "a fast subprocess must not be treated as timed out" で落ちた。低負荷の 3 連続 run では 669 passed で安定。負荷依存のタイミングフレークと *思われる* が未検証 — これは判断であって観測ではない。フレークするテストは「たまに検出しない」ので、テスト側の fail-open にあたる / 完了条件: 高負荷を再現して落ちることを観測した上で、実時間閾値ではなく決定論的な判定に置き換えるか、閾値の根拠を測定値で示す
 
 【2026-07-21 実測 / 再現せず】高負荷 7 レシピ（CPU spin hog / fork-exec storm / near-OOM メモリ圧 / フルスイート 3 並列 / --test-threads 1・16・32 / priority starvation）で最大 9x の wall-clock 遅延（元の失敗時は 3-4x）を作ったが、crates/condukt/src/worktree.rs:2170-2175 のアサーションは一度も落ちなかった。よって修正せず・閾値を緩めず・良性とも断定していない。condukt 完了ゲートは FAIL: task t2 is not verified のまま。仮説（未検証・findingではない）: 閾値 Duration::from_secs(3) が run_git_bounded_with の実タイムアウトとして渡され、wait-timeout のプロセスグローバルな SIGCHLD/mutex 機構と競合している可能性。escalation esc-72fbbf6f で人間の判断待ち。副次発見: shadow_run::tests::finish_discards_shadow_worktree_and_never_merges_it (crates/condukt/src/shadow_run.rs:167/:139) は多プロセス負荷下で確実に再現する別のフレーク（backlog f92945d3 に記録）。
 condukt 完了ゲート FAIL (task t2 未検証)。高負荷 7 レシピ・最大9x遅延で再現せず、判断で ok にしないため未修正のまま人間へ返す (esc-72fbbf6f)"""
 created_at = 1784610149
-updated_at = 1784640561
-defer_until = 1784813361
+updated_at = 1787734763
 weight = 0.0
 
 [[task]]
@@ -6047,13 +6039,12 @@ tags = [
     "injection",
     "p2",
 ]
-status = "failed"
+status = "pending"
 notes = """
 根拠: 現状は prose の UNTRUSTED/従わない marker のみ(condukt-worker.md:25/51, SKILL.md:150-159)。Microsoft spotlighting(arxiv 2403.14720)は datamark/encoding で ASR を約50%から≒0%に。完了: untrusted web/tool content を per-session ランダム datamark で挟んで投入し system prompt で datamarked span を実行しないと指示、埋め込み命令の red-team fixture が tool call を誘発しない test。lens L3
 Parked (user-adjudicated 2026-07-28). Feasibility: token-level datamarking transform is buildable+F-to-P-testable, but (a) efficacy is unmeasurable in this text harness = section2 ask-boundary, no LLM-eval harness; (b) applicable surface is ~empty: runtime WebFetch/WebSearch output cannot be datamarked (PostToolUse hook only warns, model already ingested raw bytes) and all 3 skill-injected contexts (research_brief/lessons_context/code_context) are JSON that token-interleaving corrupts. prose-marker + taintguard(provenance) + fetchguard(content-warn) stack is the realistic ceiling. Redirect injection effort to reachable+measurable deterministic-gate items."""
 created_at = 1784912419
-updated_at = 1785167716
-defer_until = 1785340516
+updated_at = 1787734763
 weight = 0.0
 issue_number = 39
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/39"
@@ -7574,7 +7565,7 @@ tags = [
     "spec-loop",
     "p1",
 ]
-status = "claimed"
+status = "pending"
 notes = """
 DECIDED 2026-07-31 by the user. /flow gains a return path: when a picked task turns out to lack a spec, flow does not push it through condukt blindly - it routes back to specforge, which drafts and ratifies, which queues requirements (item 2dd5180f), and flow runs again.
 
@@ -7596,7 +7587,7 @@ SPEC 2026-07-31: this item is now requirement R4-flow-spec-gap-source of specs/s
 
 RETRACTED 2026-07-31 - the termination rule in the paragraph above. This note originally proposed: a task diverted to specforge once is marked, and a second spec-gap detection on the same task escalates to a human instead of diverting again. That is a count, and a count is a proxy: it does not measure the thing we need to know, which is whether the spec is executable yet. Replaced by requirement R0 of specs/spec-loop.toml - the cycle exits on the ratify contract floor (Spec::contract_violations() empty, crates/specguard/src/forge/ir.rs:162). A spec that clears the floor produces condukt-runnable requirements and the loop leaves through execution; one that cannot is refused by ratify and goes to a human. Measured both directions 2026-07-31 at 0ad0d055: the real spec ratifies exit 0, an acceptance-empty control is refused exit 2 naming the three G violations. Do NOT add a divert counter. The residual divergence risk (a task that keeps producing floor-passing specs that do not resolve it) is left OPEN on purpose - see DESIGN section 3.2: measure divert count and done rate of divert-derived requirements after R4 ships, then decide."""
 created_at = 1785499715
-updated_at = 1786643241
+updated_at = 1787734763
 weight = 0.55
 issue_number = 113
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/113"
@@ -14051,3 +14042,75 @@ updated_at = 1787733288
 weight = 0.0
 issue_number = 407
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/407"
+
+[[task]]
+id = "27ff12fe"
+title = "skill 側 fan-out の同時実行上限は散文だけで、機械的に強制されていない"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "p1",
+]
+status = "pending"
+notes = """
+測定点 2026-08-27 / 本セッションの変更（condukt 0.7.139 ほか）後。
+
+観測: セッション同時実行上限 3 (harness_core::parallel::SESSION_MAX_PARALLEL) は、binary が判定を持つ経路
+(condukt schedule のバッチ幅分割 / Config::load の clamp / consensus samples / adversarial panel) では
+決定論的に強制されている。しかし LLM が Task を N 個同時発行する経路 — scout Phase 2 (レンズごと1体)、
+overwatch continuous-audit Step 1 (crate ごとに finder)、specguard run/spec-audit (shard ごとに auditor)、
+condukt Phase 5/6 (worker + verifier) — は SKILL.md/command md の散文が唯一の抑止であり、
+CLAUDE.md 第6節『対策を気をつけるに置かない』に反した状態のまま残っている。
+crates/integration-tests/tests/session_parallel_cap_contract.rs は散文が消えないことを pin するだけで、
+LLM が従うことは証明しない (doc comment に明記済み)。
+
+案: PreToolUse(Task) で live 数を +1、PostToolUse(Task) で -1 し、live が上限に達していたら deny する hook。
+GATE 相当なので canary 必須。誤検知すると全セッションの subagent 起動を止めるため、
+判定不能時の倒し方 (deny か allow か) を先に決める必要がある — allow に倒すと上限が消え、
+deny に倒すと turn が止まる。この選択自体が人間の判断であり、着手前に ask すること。
+
+見分け方: hook を入れた状態で 4 体目の Task を意図的に発行し、deny されるかを観測する
+(deny されなければ実装が効いていない)。"""
+created_at = 1787796287
+updated_at = 1787796287
+weight = 0.0
+issue_number = 408
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/408"
+
+[[task]]
+id = "4cbce5b5"
+title = "rollout drift: overwatch が dirty-tree ビルドのまま、condukt/overwatch の bin が mirror 不一致"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "p2",
+]
+status = "pending"
+notes = """
+測定点 2026-08-27、main 878b2699 (clean tree) で check-plugin-rollout.py 実行後の残存分。
+
+  - overwatch: deployed binary was built from a DIRTY tree at b4770c6f2b40
+  - overwatch: bin/overwatch-linux-x86_64 が source の mirror でない
+  - condukt: bin/condukt-linux-x86_64 が source の mirror でない (--force 実行後も再現)
+
+経緯: overwatch 0.2.29 の rollout で canary health-gate が rc=1 (no bundled binary for
+linux-x86_64) で fail-closed し stage 0 を rollback。registry は 0.2.29 を指したまま
+bin/ に platform binary が無い = overwatch が dark になった。dirty tree のまま
+rebuild-plugins.sh --only=overwatch で binary を置いて復旧したため、
+.deployed-from.json に dirty マーカーが残っている。
+
+要判断 (人間向け): overwatch を clean な main から rollout し直すと canary が再び
+rc=1 で rollback し、また dark になる可能性がある。既知の復旧手順 (rebuild --only=overwatch)
+はあるが、gate crate を意図的に一時 dark にする操作なので独断で繰り返さない。
+ROLLOUT_GATE_EVAL_FAILSOFT=1 は未使用。
+
+見分け方: canary の rc=1 が (a) 新 version dir に platform binary を置く前に health-gate を
+走らせる順序バグ (= 全 gate crate で毎回起きる) か、(b) overwatch 固有の self-upgrade skew か。
+別 gate crate (specguard 0.2.52) は同じ --canary で通ったので (a) の可能性が高い。"""
+created_at = 1787797889
+updated_at = 1787797889
+weight = 0.0
+issue_number = 409
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/409"

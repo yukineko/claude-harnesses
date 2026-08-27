@@ -580,7 +580,13 @@ condukt state worktree-mode-check   # exit 0 + {"single_worktree":true} → 単�
      当該タスクを resume できる。`escalate` バイナリが無い等で enqueue に失敗したときのみ従来の即時報告に
      fail-soft する。GATED タスクの承認待ちも同様にこの channel に enqueue してよい。
 
-バッチ内は 1 メッセージで複数 `Task` を同時発行して並列化する。worker が完了するたびに即 verifier を起動し、worker 完了の待ち合わせはしない（後続 worker が動いている間に先行タスクの検証が進む）。`serial` タスクは worktree に出さず main で順に実装し、commit は `condukt repo commit` で行う（「主作業ツリーへの commit」参照）。
+バッチ内は 1 メッセージで複数 `Task` を同時発行して並列化する。**バッチ幅は `condukt schedule` が既に
+`max_parallel`（＝1 セッションあたりの同時実行上限。既定かつ上限 **3**）で切ってあるので、バッチをそのまま
+発行すれば上限は自動的に守られる**（幅の広いカラークラスは複数バッチに分割済み。バッチをまたいで
+`Task` をまとめて発行し直してはいけない — それは上限の迂回になる）。worker が完了するたびに即 verifier を
+起動するが、**このとき同時に生きている worker + verifier の合計も 3 を超えないこと**（超えるなら次の worker の
+起動を 1 つ完了するまで待つ）。worker 完了の待ち合わせ自体はしない（後続 worker が動いている間に先行タスクの
+検証が進む）。`serial` タスクは worktree に出さず main で順に実装し、commit は `condukt repo commit` で行う（「主作業ツリーへの commit」参照）。
 
 ---
 
@@ -669,7 +675,7 @@ PLAN_EXIT=$?
 ```
 - **exit 1 (enabled:false・既定)** → 従来どおり **単一実装** (Phase 5 の 1 worker → Phase 6)。追加コストなし。
 - **exit 0 (enabled:true)** → config `[consensus] enabled=true` か `CONDUKT_CONSENSUS=1`、または当該タスクが
-  `--risk high`。このタスクだけ以下の fan-out を回す。`samples` (既定 3・上限 5) と `threshold` (既定 0.5) は
+  `--risk high`。このタスクだけ以下の fan-out を回す。`samples` (既定 3・上限 3＝セッション同時実行上限) と `threshold` (既定 0.5) は
   `$PLAN` から読む。**全 condukt タスクを既定で fan-out しない** (発動は opt-in の高リスクのみ)。
 
 **fan-out 手順** (enabled のタスクのみ):
@@ -717,7 +723,7 @@ PLAN_EXIT=$?
   （既存パスは無変更）。追加コストなし。
 - **exit 0（engage:true）** → GATE_CRATES（blastguard/propguard/specguard/stuckguard/
   mutategate）配下を変更している、または `CONDUKT_ADVERSARIAL=1`/config `[adversarial]
-  enabled=true` のグローバルスイッチ。`$PLAN` の `size`（N、2〜5 にクランプ済み）体の
+  enabled=true` のグローバルスイッチ。`$PLAN` の `size`（N、2〜3 にクランプ済み＝セッション同時実行上限）体の
   独立 skeptic でパネルを張る。
 
 **パネル実行手順（engage 時のみ）**:
@@ -1217,7 +1223,9 @@ if command -v specguard >/dev/null 2>&1 && test -f specguard.toml; then
 
   if [ "$SHARD_COUNT" -gt 0 ]; then
     echo "specguard: $SHARD_COUNT shard(s) を監査中..."
-    # 2. 各 shard を read-only specguard-auditor subagent に並列投入 (Task ツール)
+    # 2. 各 shard を read-only specguard-auditor subagent に投入 (Task ツール)
+    #    並列投入は 1 度に最大 3 体まで (セッション同時実行上限)。shard が 4 つ以上なら
+    #    3 体ずつの波に分けて回す。
     #    各 shard の prompt フィールドをそのまま subagent に渡す。
     #    全 shard の stdout を集めて .specguard-ingest.json に書き出す。
     # 3. ハーネスに結果を戻す

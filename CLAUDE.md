@@ -391,7 +391,7 @@ rollout/enablement 所見は red ではなく「PARKED ON PURPOSE」として（
 報告される。**逆に、宣言のない red を「たぶん意図的だろう」と解釈して rollout / enable で消してはいけない**
 （2026-08-04 にそれをやって、既知の誤検知でユーザーの編集作業をブロックした）。
 
-反映手順・GATE クレート（blastguard/propguard/specguard/stuckguard/taintguard/mutategate/overwatch）
+反映手順・GATE クレート（blastguard/propguard/specguard/stuckguard/taintguard/mutategate/overwatch/parallelguard）
 の canary 要件・低レベル構成要素（rebuild-plugins.sh/sync-plugin-assets.sh）・`overwatch
 review-queue`（統合レビュー窓口）の詳細は [`docs/repo-operations.md`](docs/repo-operations.md)
 を参照。この列挙は `scripts/check-gate-crates-sync.py` の SOURCES に登録された正典コピーの

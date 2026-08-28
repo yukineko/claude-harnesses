@@ -45,6 +45,7 @@ pub const GATE_CRATES: &[&str] = &[
     "taintguard",
     "mutategate",
     "overwatch",
+    "parallelguard",
 ];
 
 #[cfg(test)]

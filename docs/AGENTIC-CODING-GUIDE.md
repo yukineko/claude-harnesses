@@ -117,7 +117,7 @@ condukt install            # SessionStart hook を settings.json に統合
 ```toml
 worktree_base  = "~/.condukt/worktrees"   # 必ずリポジトリ外
 default_branch = "main"
-max_parallel   = 3
+max_parallel   = 4
 shared_globs   = ["**/models.py", "**/migrations/**", "docs/glossary.md"]
 ```
 > `shared_globs` に「全体に効くファイル」を列挙すると、それに触るタスクを `schedule` が自動で

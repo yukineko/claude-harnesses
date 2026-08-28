@@ -338,18 +338,8 @@ pub struct PanelPlan {
 }
 
 /// Compute the panel plan. Engaged iff the global switch is on OR the change is
-/// high-stakes (touched a GATE crate). When engaged, `size` is clamped to
-/// `[2, ceiling]` where `ceiling` is the lower of [`MAX_PANEL`] and the
-/// per-session concurrency cap ([`harness_core::parallel::session_cap`]) — the
-/// skeptics are spawned concurrently and spend the same session budget as a
-/// parallel batch. Reports 1 when not engaged.
-///
-/// PRECEDENCE, same trade-off as [`crate::consensus::plan`]: the floor of 2 wins
-/// over a cap lowered below it. A one-skeptic "panel" is not adversarial — it
-/// would produce a refutation verdict from a single voter — so a cap of 1
-/// narrows the panel to 2 rather than degrading it into a rubber stamp. With the
-/// default ceiling of 3 this arm is unreachable; it only fires under a manual
-/// `HARNESS_MAX_PARALLEL=1`.
+/// high-stakes (touched a GATE crate). `size` is clamped to `[2, MAX_PANEL]` when
+/// engaged (a one-skeptic "panel" is not adversarial); reports 1 when not.
 pub fn plan(
     global_enabled: bool,
     configured_size: usize,
@@ -357,9 +347,8 @@ pub fn plan(
     high_stakes: bool,
 ) -> PanelPlan {
     let engaged = global_enabled || high_stakes;
-    let ceiling = MAX_PANEL.min(harness_core::parallel::session_cap()).max(2);
     let size = if engaged {
-        configured_size.clamp(2, ceiling)
+        configured_size.clamp(2, MAX_PANEL)
     } else {
         1
     };
@@ -662,10 +651,7 @@ mod tests {
 
     #[test]
     fn plan_clamps_size_to_ceiling_and_floor() {
-        // Effective ceiling = the TIGHTER of the cost guard (`MAX_PANEL`) and
-        // the per-session concurrency cap — the skeptics run concurrently.
-        let ceiling = MAX_PANEL.min(harness_core::parallel::session_cap()).max(2);
-        assert_eq!(plan(true, 99, &Policy::default(), false).size, ceiling);
+        assert_eq!(plan(true, 99, &Policy::default(), false).size, MAX_PANEL);
         // A configured 1 is floored to 2 when engaged (1 is not a panel).
         assert_eq!(plan(true, 1, &Policy::default(), false).size, 2);
     }
@@ -701,19 +687,5 @@ mod tests {
         let p = adjudicate(&votes, &Policy::default(), votes.len());
         assert_eq!(p.outcome, "pass");
         assert_eq!(p.missing, 0);
-    }
-
-    #[test]
-    fn panel_width_is_bounded_by_the_session_cap() {
-        // Same budget as any other fan-out: N skeptics are spawned in one
-        // message. `MAX_PANEL` alone bounded it at 5.
-        for requested in [2, 3, 5, 99] {
-            let p = plan(true, requested, &Policy::default(), true);
-            assert!(
-                p.size <= harness_core::parallel::SESSION_MAX_PARALLEL,
-                "panel {} for requested {requested} exceeds the session cap",
-                p.size
-            );
-        }
     }
 }

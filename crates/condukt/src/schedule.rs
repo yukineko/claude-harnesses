@@ -411,26 +411,7 @@ fn resolve_force_gate(
 /// sensitive-path glob) force-gates as well, via [`resolve_force_gate`], and
 /// emits a warning naming the misconfiguration — "could not measure the risk"
 /// is never read as "low risk".
-///
-/// `max_parallel` (`Config::max_parallel`) caps the width of every parallel
-/// batch. A batch IS the fan-out width — the skill spawns every id in one batch
-/// simultaneously — so this is where "at most N concurrent workers per session"
-/// stops being advice and becomes a property of the schedule.
-///
-/// The cap arrives as a PARAMETER, not read from the environment here: this
-/// module's contract is that every function is pure and deterministic (the same
-/// decomposition always yields the same `Schedule`). `Config::load` is where the
-/// environment is consulted, and it clamps the value there. This function still
-/// re-clamps through the pure [`harness_core::parallel::clamp`] rather than
-/// trusting its caller — a passed 0 must not produce a scheduler that can never
-/// place work, and no caller may exceed the session ceiling.
-///
-/// Splitting is a PARTITION, never a truncation: an over-wide colour class is
-/// cut into consecutive chunks that all still run, in dependency-safe order.
-/// The tasks in one colour class are pairwise file-disjoint, so any subset of
-/// it is equally safe to run together — cutting it costs wall-clock, not
-/// correctness.
-pub fn schedule(dec: &Decomposition, shared_globs: &[String], max_parallel: usize) -> Schedule {
+pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
     let mut sched = Schedule::default();
     let shared = build_globset(shared_globs);
     let sensitive = SensitiveConfig::default();
@@ -651,16 +632,9 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String], max_parallel: usiz
     }
     let mut depths: Vec<usize> = by_depth.keys().copied().collect();
     depths.sort_unstable();
-    let cap = harness_core::parallel::clamp(max_parallel);
     for d in depths {
         for ids in color_by_conflict(&by_depth[&d]) {
-            // Cut, do not drop: every chunk is pushed as its own batch, so the
-            // colour class is fully scheduled — just across more waves.
-            for chunk in ids.chunks(cap) {
-                sched.batches.push(Batch {
-                    parallel: chunk.to_vec(),
-                });
-            }
+            sched.batches.push(Batch { parallel: ids });
         }
     }
 
@@ -678,9 +652,6 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String], max_parallel: usiz
 
 #[cfg(test)]
 mod tests {
-    /// The cap tests schedule with: the shipped ceiling, so batch-shape
-    /// assertions describe what a real run produces.
-    const TEST_CAP: usize = harness_core::parallel::SESSION_MAX_PARALLEL;
     use super::*;
     use crate::model::{Class, Decomposition, Task};
 
@@ -790,7 +761,7 @@ mod tests {
             task("a", &["src/a.rs"], &[], Class::Parallel),
             task("b", &["src/b.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert_eq!(s.batches.len(), 1);
         assert_eq!(s.batches[0].parallel, vec!["a", "b"]);
         assert!(s.serial.is_empty());
@@ -806,7 +777,7 @@ mod tests {
             task("a", &["src/a.rs"], &[], Class::Parallel),
             task("b", &["src/a.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert!(s.batches.is_empty());
         assert_eq!(s.serial, vec!["a", "b"]);
     }
@@ -824,7 +795,7 @@ mod tests {
             task("a", &["src/a.rs"], &[], Class::Parallel),
             task("blind", &[], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         let batched: Vec<&String> = s.batches.iter().flat_map(|b| b.parallel.iter()).collect();
         assert!(
             !batched.iter().any(|id| *id == "blind"),
@@ -856,7 +827,7 @@ mod tests {
             task("a", &["/repo/src/a.rs"], &[], Class::Parallel),
             task("b", &["src/a.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         let batched: Vec<&String> = s.batches.iter().flat_map(|b| b.parallel.iter()).collect();
         assert!(
             !batched.iter().any(|id| *id == "a" || *id == "b"),
@@ -889,7 +860,7 @@ mod tests {
             task("clean", &["src/clean.rs"], &[], Class::Parallel),
             task("bad", &["/etc/passwd"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert!(
             s.serial.contains(&"bad".to_string()),
             "convention-violating task must be serial; serial={:?}",
@@ -919,7 +890,7 @@ mod tests {
             task("a", &["src/a.rs"], &[], Class::Parallel),
             task("b", &["src/a.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         // Neither conflicting task may sit on the parallel batches track.
         let batched: Vec<&String> = s.batches.iter().flat_map(|b| b.parallel.iter()).collect();
         assert!(
@@ -953,7 +924,7 @@ mod tests {
             task("b", &["src/shared.rs"], &[], Class::Parallel),
             task("c", &["src/c.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert_eq!(s.serial, vec!["a", "b"]);
         assert_eq!(s.batches.len(), 1);
         assert_eq!(s.batches[0].parallel, vec!["c"]);
@@ -965,7 +936,7 @@ mod tests {
             task("a", &["src/a.rs"], &[], Class::Parallel),
             task("b", &["src/b.rs"], &["a"], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert_eq!(s.batches.len(), 2);
         assert_eq!(s.batches[0].parallel, vec!["a"]);
         assert_eq!(s.batches[1].parallel, vec!["b"]);
@@ -980,7 +951,7 @@ mod tests {
             task("safe", &["src/a.rs"], &[], Class::Parallel),
             task("deploy-prod", &["release.sh"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
 
         assert!(
             s.gated.contains(&"deploy-prod".to_string()),
@@ -1015,7 +986,7 @@ mod tests {
             task("safe", &["src/a.rs"], &[], Class::Parallel),
             task("touch-auth", &["src/auth/login.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
 
         assert!(
             s.gated.contains(&"touch-auth".to_string()),
@@ -1052,7 +1023,7 @@ mod tests {
             task("s", &["models.py"], &[], Class::Serial),
             task("g", &["deploy.sh"], &[], Class::Gated),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert_eq!(s.batches.len(), 1);
         assert_eq!(s.batches[0].parallel, vec!["a"]);
         assert_eq!(s.serial, vec!["s"]);
@@ -1065,7 +1036,7 @@ mod tests {
             task("a", &["src/models.py"], &[], Class::Parallel),
             task("b", &["src/b.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &["**/models.py".into()], TEST_CAP);
+        let s = schedule(&d, &["**/models.py".into()]);
         assert_eq!(s.serial, vec!["a"]);
         assert_eq!(s.batches.len(), 1);
         assert_eq!(s.batches[0].parallel, vec!["b"]);
@@ -1081,7 +1052,7 @@ mod tests {
             task("a", &["src/foo/*.rs"], &[], Class::Parallel),
             task("b", &["src/bar/*.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert_eq!(s.batches.len(), 1);
         assert_eq!(s.batches[0].parallel, vec!["a", "b"]);
         assert!(s.serial.is_empty());
@@ -1100,7 +1071,7 @@ mod tests {
             task("a", &["src/*.rs"], &[], Class::Parallel),
             task("b", &["src/sub/*.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert!(s.batches.is_empty());
         assert_eq!(s.serial, vec!["a", "b"]);
     }
@@ -1115,7 +1086,7 @@ mod tests {
             task("a", &["./src/a.rs"], &[], Class::Parallel),
             task("b", &["src/a.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert!(s.batches.is_empty(), "batches={:?}", s.batches);
         assert_eq!(s.serial, vec!["a", "b"]);
     }
@@ -1127,7 +1098,7 @@ mod tests {
             task("a", &["src//a.rs"], &[], Class::Parallel),
             task("b", &["src/a.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert!(s.batches.is_empty(), "batches={:?}", s.batches);
         assert_eq!(s.serial, vec!["a", "b"]);
     }
@@ -1141,7 +1112,7 @@ mod tests {
             task("a", &["src/*"], &[], Class::Parallel),
             task("b", &["src/a.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert!(s.batches.is_empty());
         assert_eq!(s.serial, vec!["a", "b"]);
     }
@@ -1165,7 +1136,7 @@ mod tests {
             task("a", &["*/foo.rs"], &[], Class::Parallel),
             task("b", &["src/*.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert!(s.batches.is_empty(), "batches={:?}", s.batches);
         assert_eq!(s.serial, vec!["a", "b"]);
 
@@ -1176,7 +1147,7 @@ mod tests {
             task("a", &["src/foo/*.rs"], &[], Class::Parallel),
             task("b", &["src/bar/*.rs"], &[], Class::Parallel),
         ]);
-        let s2 = schedule(&d2, &[], TEST_CAP);
+        let s2 = schedule(&d2, &[]);
         assert_eq!(s2.batches.len(), 1);
         assert_eq!(s2.batches[0].parallel, vec!["a", "b"]);
         assert!(s2.serial.is_empty());
@@ -1194,7 +1165,7 @@ mod tests {
             task("a", &["Src/a.rs"], &[], Class::Parallel),
             task("b", &["src/a.rs"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert!(s.batches.is_empty(), "batches={:?}", s.batches);
         assert_eq!(s.serial, vec!["a", "b"]);
 
@@ -1203,7 +1174,7 @@ mod tests {
             task("a", &["src/a.rs"], &[], Class::Parallel),
             task("b", &["src/b.rs"], &[], Class::Parallel),
         ]);
-        let s2 = schedule(&d2, &[], TEST_CAP);
+        let s2 = schedule(&d2, &[]);
         assert_eq!(s2.batches.len(), 1);
         assert_eq!(s2.batches[0].parallel, vec!["a", "b"]);
         assert!(s2.serial.is_empty());
@@ -1222,7 +1193,7 @@ mod tests {
             task("a", &["src/*.rs"], &[], Class::Parallel),
             task("b", &["docs/x.md"], &[], Class::Parallel),
         ]);
-        let s = schedule(&d, &["src/models.rs".into()], TEST_CAP);
+        let s = schedule(&d, &["src/models.rs".into()]);
         assert!(
             s.serial.contains(&"a".to_string()),
             "glob-valued touched_files overlapping a shared glob must serialize; serial={:?}",
@@ -1275,7 +1246,7 @@ mod tests {
             task("a", &["src/a.rs"], &[], Class::Parallel),
             task("x", &["src/x.rs"], &[], Class::Experiment),
         ]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         // Experiment routed onto its own track, never the auto-merge path.
         assert_eq!(s.experiment, vec!["x"]);
         assert!(!s.batches.iter().any(|b| b.parallel.contains(&"x".into())));
@@ -1303,7 +1274,7 @@ mod tests {
         // defeats string-based conflict comparison against equivalent relative
         // spellings. schedule() must surface this, not stay silent.
         let d = dec(vec![task("a", &["/etc/passwd"], &[], Class::Parallel)]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert!(
             s.warnings
                 .iter()
@@ -1321,7 +1292,7 @@ mod tests {
             &[],
             Class::Parallel,
         )]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert!(
             s.warnings.iter().any(|w| w.contains("repo-relative")),
             "expected a repo-relative-convention warning for a drive-letter path; warnings={:?}",
@@ -1332,7 +1303,7 @@ mod tests {
     #[test]
     fn dot_dot_component_in_touched_files_warns() {
         let d = dec(vec![task("a", &["../../etc/passwd"], &[], Class::Parallel)]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert!(
             s.warnings.iter().any(|w| w.contains("repo-relative")),
             "expected a repo-relative-convention warning for a '..' path; warnings={:?}",
@@ -1343,7 +1314,7 @@ mod tests {
     #[test]
     fn ordinary_relative_path_does_not_warn() {
         let d = dec(vec![task("a", &["src/a.rs"], &[], Class::Parallel)]);
-        let s = schedule(&d, &[], TEST_CAP);
+        let s = schedule(&d, &[]);
         assert!(
             !s.warnings.iter().any(|w| w.contains("repo-relative")),
             "a plain relative path must not trigger the sanity-check warning; warnings={:?}",
@@ -1354,9 +1325,6 @@ mod tests {
 
 #[cfg(test)]
 mod prop_tests {
-    /// The cap tests schedule with: the shipped ceiling, so batch-shape
-    /// assertions describe what a real run produces.
-    const TEST_CAP: usize = harness_core::parallel::SESSION_MAX_PARALLEL;
     use super::*;
     use crate::model::{Class, Decomposition, Task};
     use proptest::prelude::*;
@@ -1393,7 +1361,7 @@ mod prop_tests {
         fn all_tasks_accounted_for(n in 1usize..8) {
             let tasks: Vec<Task> = (0..n).map(|i| pt(&format!("t{i}"), vec![], vec![], Class::Parallel)).collect();
             let in_ids: HashSet<String> = tasks.iter().map(|t| t.id.clone()).collect();
-            let sched = schedule(&pd(tasks), &[], TEST_CAP);
+            let sched = schedule(&pd(tasks), &[]);
             let mut out_ids: Vec<String> = sched.batches.iter()
                 .flat_map(|b| b.parallel.iter().cloned())
                 .chain(sched.serial.iter().cloned())
@@ -1411,7 +1379,7 @@ mod prop_tests {
             let tasks: Vec<Task> = (0..n)
                 .map(|i| pt(&format!("t{i}"), vec![format!("src/f{i}.rs")], vec![], Class::Parallel))
                 .collect();
-            let sched = schedule(&pd(tasks.clone()), &[], TEST_CAP);
+            let sched = schedule(&pd(tasks.clone()), &[]);
             for t in &tasks {
                 let in_batch = sched.batches.iter().any(|b| b.parallel.contains(&t.id));
                 prop_assert!(in_batch, "task {} should be in a batch", t.id);
@@ -1422,7 +1390,7 @@ mod prop_tests {
         #[test]
         fn gated_tasks_always_in_gated(n in 1usize..6) {
             let tasks: Vec<Task> = (0..n).map(|i| pt(&format!("t{i}"), vec![], vec![], Class::Gated)).collect();
-            let sched = schedule(&pd(tasks.clone()), &[], TEST_CAP);
+            let sched = schedule(&pd(tasks.clone()), &[]);
             for t in &tasks {
                 prop_assert!(sched.gated.contains(&t.id));
                 prop_assert!(!sched.serial.contains(&t.id));
@@ -1434,7 +1402,7 @@ mod prop_tests {
         #[test]
         fn serial_tasks_never_in_batches_or_gated(n in 1usize..6) {
             let tasks: Vec<Task> = (0..n).map(|i| pt(&format!("t{i}"), vec![], vec![], Class::Serial)).collect();
-            let sched = schedule(&pd(tasks.clone()), &[], TEST_CAP);
+            let sched = schedule(&pd(tasks.clone()), &[]);
             for t in &tasks {
                 prop_assert!(!sched.gated.contains(&t.id));
                 prop_assert!(!sched.batches.iter().any(|b| b.parallel.contains(&t.id)));
@@ -1448,7 +1416,7 @@ mod prop_tests {
                 .map(|i| pt(&format!("t{i}"), vec![format!("src/f{i}.rs")], vec![], Class::Parallel))
                 .collect();
             let dec = pd(tasks.clone());
-            let sched = schedule(&dec, &[], TEST_CAP);
+            let sched = schedule(&dec, &[]);
             for batch in &sched.batches {
                 let mut seen: HashSet<String> = HashSet::new();
                 for tid in &batch.parallel {
@@ -1467,7 +1435,7 @@ mod prop_tests {
             let c = classes[class_seed as usize % 3];
             let tasks: Vec<Task> = (0..n).map(|i| pt(&format!("t{i}"), vec![], vec![], c)).collect();
             let valid: HashSet<String> = tasks.iter().map(|t| t.id.clone()).collect();
-            let sched = schedule(&pd(tasks), &[], TEST_CAP);
+            let sched = schedule(&pd(tasks), &[]);
             for id in sched.batches.iter().flat_map(|b| &b.parallel)
                 .chain(sched.serial.iter()).chain(sched.gated.iter()) {
                 prop_assert!(valid.contains(id), "unknown id {id} in output");
@@ -1482,7 +1450,7 @@ mod prop_tests {
                 pt("t0", vec![format!("src/{fa}.rs")], vec![], Class::Parallel),
                 pt("t1", vec![format!("src/{fb}.rs")], vec!["t0".into()], Class::Parallel),
             ];
-            let sched = schedule(&pd(tasks), &[], TEST_CAP);
+            let sched = schedule(&pd(tasks), &[]);
             if let (Some(b0), Some(b1)) = (batch_index(&sched, "t0"), batch_index(&sched, "t1")) {
                 prop_assert!(b0 < b1, "t0 batch {b0} >= t1 batch {b1}");
             }
@@ -1494,7 +1462,7 @@ mod prop_tests {
             let tasks: Vec<Task> = (0..n)
                 .map(|i| pt(&format!("t{i}"), vec!["src/shared.rs".into()], vec![], Class::Parallel))
                 .collect();
-            let sched = schedule(&pd(tasks.clone()), &["src/shared.rs".to_string()], TEST_CAP);
+            let sched = schedule(&pd(tasks.clone()), &["src/shared.rs".to_string()]);
             for t in &tasks {
                 let in_serial = sched.serial.contains(&t.id);
                 let in_batch_solo = sched.batches.iter()
@@ -1508,7 +1476,7 @@ mod prop_tests {
         #[test]
         fn no_duplicate_ids_in_output(n in 1usize..8) {
             let tasks: Vec<Task> = (0..n).map(|i| pt(&format!("t{i}"), vec![], vec![], Class::Parallel)).collect();
-            let sched = schedule(&pd(tasks), &[], TEST_CAP);
+            let sched = schedule(&pd(tasks), &[]);
             let all: Vec<String> = sched.batches.iter()
                 .flat_map(|b| b.parallel.iter().cloned())
                 .chain(sched.serial.iter().cloned())
@@ -1526,7 +1494,7 @@ mod prop_tests {
             for i in 0..ns { tasks.push(pt(&format!("s{i}"), vec![], vec![], Class::Serial)); }
             for i in 0..ng { tasks.push(pt(&format!("g{i}"), vec![], vec![], Class::Gated)); }
             let total = tasks.len();
-            let sched = schedule(&pd(tasks), &[], TEST_CAP);
+            let sched = schedule(&pd(tasks), &[]);
             let out_count = sched.batches.iter().map(|b| b.parallel.len()).sum::<usize>()
                 + sched.serial.len() + sched.gated.len();
             prop_assert_eq!(out_count, total);
@@ -1538,7 +1506,7 @@ mod prop_tests {
             let tasks: Vec<Task> = (0..n)
                 .map(|i| pt(&format!("t{i}"), vec!["shared.rs".into()], vec![], Class::Parallel))
                 .collect();
-            let sched = schedule(&pd(tasks), &["shared.rs".to_string()], TEST_CAP);
+            let sched = schedule(&pd(tasks), &["shared.rs".to_string()]);
             prop_assert!(!sched.warnings.is_empty(), "expected demotion warnings");
         }
 
@@ -1563,7 +1531,7 @@ mod prop_tests {
         fn single_parallel_task_one_batch(id in "[a-z]{2,5}") {
             let mut t = pt(&id, vec!["src/only.rs".into()], vec![], Class::Parallel);
             t.title = "implement the feature".into();
-            let sched = schedule(&pd(vec![t]), &[], TEST_CAP);
+            let sched = schedule(&pd(vec![t]), &[]);
             prop_assert_eq!(sched.batches.len(), 1);
             prop_assert_eq!(sched.batches[0].parallel.len(), 1);
             prop_assert!(sched.serial.is_empty());
@@ -1574,84 +1542,9 @@ mod prop_tests {
     /// Empty decomposition → empty schedule (deterministic sanity check).
     #[test]
     fn empty_decomp_empty_schedule() {
-        let sched = schedule(&pd(vec![]), &[], TEST_CAP);
+        let sched = schedule(&pd(vec![]), &[]);
         assert!(sched.batches.is_empty());
         assert!(sched.serial.is_empty());
         assert!(sched.gated.is_empty());
-    }
-}
-
-#[cfg(test)]
-mod session_cap_tests {
-    /// The cap tests schedule with: the shipped ceiling, so batch-shape
-    /// assertions describe what a real run produces.
-    const TEST_CAP: usize = harness_core::parallel::SESSION_MAX_PARALLEL;
-    use super::*;
-    use crate::model::{Class, Decomposition, Task};
-    use harness_core::parallel::SESSION_MAX_PARALLEL;
-
-    fn ptask(id: &str, file: &str) -> Task {
-        Task {
-            id: id.into(),
-            title: id.into(),
-            touched_files: vec![file.to_string()],
-            deps: Vec::new(),
-            class: Class::Parallel,
-            suggested_model: None,
-            done_criteria: None,
-            size: None,
-            target_symbols: Vec::new(),
-            reproduction_tests: None,
-            confidence: None,
-            kind: None,
-            checks: Vec::new(),
-            expected_trajectory: None,
-            is_behavioral: None,
-            mechanical_check: None,
-        }
-    }
-
-    fn disjoint(n: usize) -> Decomposition {
-        Decomposition {
-            goal: "g".into(),
-            tasks: (0..n)
-                .map(|i| ptask(&format!("t{i}"), &format!("src/f{i}.rs")))
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn parallel_batch_never_exceeds_the_session_cap() {
-        // A batch IS the fan-out width: the skill spawns every id in it in one
-        // message. An unbounded batch is an unbounded session, which is what
-        // `max_parallel` only ever *claimed* to prevent ("advisory; the skill
-        // honors it" — i.e. nothing enforced it).
-        let n = SESSION_MAX_PARALLEL + 2;
-        let s = schedule(&disjoint(n), &[], TEST_CAP);
-        for b in &s.batches {
-            assert!(
-                b.parallel.len() <= SESSION_MAX_PARALLEL,
-                "batch of {} exceeds the session cap {SESSION_MAX_PARALLEL}: {:?}",
-                b.parallel.len(),
-                b.parallel
-            );
-        }
-    }
-
-    #[test]
-    fn capping_a_batch_drops_no_task() {
-        // Splitting must be a partition, not a truncation: capping the width is
-        // not a licence to silently stop scheduling work.
-        let n = SESSION_MAX_PARALLEL + 2;
-        let s = schedule(&disjoint(n), &[], TEST_CAP);
-        let mut got: Vec<&String> = s
-            .batches
-            .iter()
-            .flat_map(|b| b.parallel.iter())
-            .chain(s.serial.iter())
-            .collect();
-        got.sort();
-        got.dedup();
-        assert_eq!(got.len(), n, "every task must be scheduled exactly once");
     }
 }

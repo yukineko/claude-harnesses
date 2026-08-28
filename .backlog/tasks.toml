@@ -14743,3 +14743,21 @@ updated_at = 1787540824
 weight = 0.0
 issue_number = 402
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/402"
+
+[[task]]
+id = "36c936bc"
+title = "post-merge が fast-forward を「新しい未検査 merge」と誤判定する (別 worktree で gate 済みの merge commit を bypass ledger に積み、push を止める)"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "hooks",
+    "failpositive",
+    "p1",
+]
+status = "pending"
+notes = '実測 2026-08-28。手順: (1) session worktree 側で conflict を解決して merge commit 79b385b2 を作成 — pre-commit は green (「check-test-weakening: no unacknowledged test weakening」まで通過) で、post-commit が worktree の gate-verified-tree sentinel を消費して静かに終了した。(2) main の作業ツリーで `git merge --ff-only session-9aff7bf8`。ff は commit を 1 つも作らないが、.githooks/post-merge の判定は `parents="$(git rev-parse HEAD^@ | grep -c .)"; [ "$parents" -lt 2 ] && exit 0` であり、HEAD が「たまたま merge commit」になった ff もここを通過して post-commit へ exec される。main の git-dir には sentinel が無い (per-worktree なので当然) ため、既に検査済みの 79b385b2 が gate-bypassed ledger へ「UNGATED COMMIT」として記録され、pre-push が push を止めた。post-merge のコメント自身が「A fast-forward merge creates no commit, so there is nothing to certify and the absent sentinel must not be read as a bypass — that would fire on every `git pull`」と意図を宣言しているので、実装がその意図を満たしていない (parent 数は「この操作が commit を作ったか」の代理変数になっていない)。CLAUDE.md 8 が worktree で実装して main へ merge することを絶対義務にしている以上、main 側は常に ff になり、この誤判定は定常的に発生する = 他 worktree の正当な作業を自分の bypass として記録する帰属のバグ。修正案: post-merge が ff を判定するには HEAD の parent 数ではなく「この操作の前後で HEAD が commit を新規作成したか」を見る必要がある。git は post-merge に squash フラグしか渡さないので、ORIG_HEAD と HEAD の関係 (`git merge-base --is-ancestor ORIG_HEAD HEAD` かつ HEAD の親に ORIG_HEAD が含まれない = ff) を使うか、pre-merge-commit が置いた marker の有無で「実際に merge commit を作った」経路だけを post-commit へ渡す。判定不能は block 側 (ledger へ記録) に倒したままでよいが、ff を「不能」に分類しないこと。回避策 (今回採った): worktree 側で別の green な pre-commit を 1 回走らせて ledger を消す — 設計どおり「検査の副作用としてのクリア」なので bypass ではないが、毎回 1 commit を要求するのは代償である。'
+created_at = 1787905350
+updated_at = 1787905350
+weight = 0.0
+issue_number = 411
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/411"

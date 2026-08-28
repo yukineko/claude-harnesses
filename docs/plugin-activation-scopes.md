@@ -75,7 +75,6 @@ ALWAYS-ON (28)
   session-insights  —  PostToolUse, SessionEnd, Stop
   specguard  —  SessionStart
   stuckguard  —  PostToolUse
-  taintguard  —  PostToolUse, PreToolUse, Stop
   taskprog  —  SessionStart, Stop
   tdd  —  Stop
 

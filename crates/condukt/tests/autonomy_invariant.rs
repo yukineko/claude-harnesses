@@ -25,7 +25,7 @@
 //!     asks the human, and deliberately does NOT carry `--approval`.
 //!
 //! What actually stops a dangerous action is therefore the DETERMINISTIC gate
-//! layer — blastguard / taintguard / donegate / the pre-commit and pre-push
+//! layer — blastguard / donegate / the pre-commit and pre-push
 //! hooks — plus the policy engine's own `block` verdict, which `--approval`
 //! cannot relax. Section 1d pins those guardrails at the binary boundary; this
 //! file is the reason a future edit cannot quietly widen the grant.

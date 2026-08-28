@@ -8,7 +8,7 @@
 # Allow verdict IS silent exit 0 with no stdout (see hookio::decision_line), so
 # a silent exit 0 here is byte-for-byte indistinguishable downstream from
 # "blastguard examined this call and found nothing destructive" (CLAUDE.md
-# §1/§3). Unlike taintguard/ctxrot, blastguard has no gate/mark/clear split —
+# §1/§3). Unlike ctxrot, blastguard has no gate/mark/clear split —
 # it is a single PreToolUse verdict entrypoint — so a missing binary is ALWAYS
 # a missing verdict and must emit one, never stay silent.
 #

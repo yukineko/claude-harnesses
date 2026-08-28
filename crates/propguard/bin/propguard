@@ -28,7 +28,7 @@
 #   everything else (derive / status / trust / init / install / uninstall) is consumed by humans, skills and scripts,
 #   where an EMPTY stdout reads as a real answer (`derive` printing nothing reads as "no properties apply"). Those exit
 #   non-zero — an error must not return an empty set (CLAUDE.md §3), mirroring
-#   bin/taintguard and bin/ctxrot.
+#   bin/ctxrot.
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in

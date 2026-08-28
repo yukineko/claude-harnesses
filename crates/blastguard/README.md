@@ -134,13 +134,127 @@ plus `Undetermined` — and **only `Inside` may relax a verdict**.
   tree** (real paths are resolved first); and an unfiltered whole-tree walk such
   as `find . -delete`.
 - **`ask` only where a human can answer.** In headless runs, condukt workers and
-  cron, `Decision::hardened` turns it straight back into a `deny`, so the
-  **autonomous-agent threat model is identical to 0.2.50**. What this buys is a
-  one-keypress confirmation for an interactive operator, and nothing else.
+  cron, `Decision::hardened` turns it straight back into a `deny`. **0.2.53
+  qualified that sentence**: the approval memory (below) is consulted BEFORE
+  hardening, so a headless run CAN be allowed by an approval a human gave in an
+  interactive session for this exact effect — which is the point of the feature,
+  since the autonomous sessions are the ones drowning in unanswerable asks. That
+  approval is a record of a human decision about these parameters, these real
+  paths and this content, and it lapses the moment any of them moves. **With an
+  empty memory (first use) the threat model is identical to 0.2.50.**
 - Library use (`detect::detect`) stays location-blind. The real-path resolution
   is an injected `scope::RealPathResolver` that only the hook binary supplies, so
   `detect` is still pure and condukt / specguard / daily's `sh -c` verdicts are
   unchanged.
+
+## Approval memory: an `Ask` a human answered is not asked again — 0.2.53
+
+`Ask` is correct and it is also **repetitive**. A command a human approved five
+minutes ago is asked about again on the next run, and the next. That is not a
+cosmetic complaint: it is the exact failure mode that got the sibling crate
+`taintguard` **retired by user ruling on 2026-08-24**, because a gate that asks
+about ordinary work teaches its operator to stop reading the question. 0.2.53
+removes the repetition **without removing the question**.
+
+### The key is the EFFECT, never the script
+
+An approval's fingerprint contains three things. Change any of them and it is a
+different key:
+
+| component | what changing it does | why it is in the key |
+|---|---|---|
+| whitespace-normalised command text | approving `chmod -R 755 sub` says **nothing** about `chmod -R 777 sub` | the effect lives in the parameters |
+| every token's **resolved real path** | re-pointing a symlink after the approval **moves** the key rather than inheriting it | `exclude.rs` deliberately does not canonicalize, so "approve once, then swap the link" would otherwise become available the moment a memory exists |
+| every target's **content hash** | a target that changed under a standing approval is **re-judged** | 「過去に実行されても変更があったときは再度判断すべきである」 |
+
+And it is bounded by WHERE the effect lands: a fingerprint is only computable
+when every token resolves **strictly inside** a safe root
+(`scope::Placement::Inside` — the one variant that module documents as allowed to
+relax a verdict). An effect reaching outside the project is not "approved with
+caveats"; **it is not representable in this store at all.**
+
+### One direction only: `Ask` → `Allow`
+
+The downgrade lives in the **single** `Decision::Ask` arm, so `Deny` is
+structurally out of reach — not "not currently downgraded" but unreachable from
+this function's only mutating arm. It never widens a blast radius and never
+manufactures an approval.
+
+### Recording happens on PostToolUse, the only place a human's "yes" is observable
+
+A `PreToolUse` hook **cannot know what the human answered**. So the store has two
+tiers:
+
+1. **PreToolUse** — no approval on record: return the `ask`, and leave behind a
+   PENDING fingerprint of the world as the human is about to see it.
+2. **PostToolUse** (`blastguard record-approval`) — promote the pending entry.
+   **The tool having actually RUN is the evidence they said yes**: a `Deny` never
+   reaches `PostToolUse`, and a refused `Ask` never runs, so only
+   actually-executed commands are ever recorded.
+
+A pending entry is **never** an approval. Treating it as one would approve every
+command blastguard had merely asked about, including the ones that were refused.
+Promotion **consumes** the pending entry: one ask, one approval.
+
+The same asymmetry is why the fingerprint cannot simply be recomputed at
+`PostToolUse` time — by then the command has already changed the very targets it
+hashes (`rm -rf x` leaves `x` absent), so a recomputed key would describe a state
+no future `PreToolUse` ever observes. The recorder therefore looks the entry up
+by command identity alone and promotes the fingerprint `PreToolUse` computed:
+**the state the human actually looked at.**
+
+### Every unknown resolves to "no approval", i.e. the ask stands (CLAUDE.md §3)
+
+`Lookup` is three-valued (`Approved` / `NotRecorded` / `Undetermined`), not a
+bool. None of the following can produce `Approved`:
+
+- **expansions, substitutions, quoting** (`$VAR`, `` `cmd` ``, `'`, `"`, `\`) —
+  a value that only exists at run time means the same TEXT is not the same
+  EFFECT; and quoting is something the whitespace tokeniser cannot faithfully
+  split, so an **imperfect tokenisation degrades to "ask"** rather than being
+  papered over with a second, driftable copy of `detect`'s parser;
+- any token that does not resolve strictly inside a safe root (`Outside` and
+  `IsRoot` both refuse);
+- a target that exists but cannot be read, or exceeds the 64 MiB hashing cap;
+- store IO failure, an entry that does not parse, or an entry that **does not
+  name the fingerprint it is filed under** (so a truncated or hand-edited file
+  cannot earn an approval from its filename alone);
+- an empty store → `NotRecorded`, i.e. first use, i.e. ask.
+
+**No path returns `Approved` on the strength of something it failed to read.**
+
+### Anti-vacuity controls (`tests/approval_memory.rs`)
+
+Measuring only "it stopped asking" passes when nothing ever asked, so both
+directions are measured. Observed RED before GREEN — four controls failed on
+exactly the four "the memory works" assertions:
+
+| # | control | expected |
+|---|---|---|
+| 0 | baseline with no memory | **asks** (without this, every "does not ask" below is vacuous) |
+| i | second run, same command, same parameters, unchanged target | does not ask |
+| ii | parameters changed (`755`→`777`, extra operand) | **asks again** |
+| iii | target content changed | **asks again** |
+| iv | effect reaching outside the project | **asks however often it runs**, and **no entry is created** in `approved/` |
+| v-a | same sequence against a **different store** | **asks** (proof that (i) is reading the store) |
+| v-b | PostToolUse step **omitted** | **asks** (proof that a pending is not an approval) |
+| — | `Deny` after any number of recorded runs | still `Deny` |
+| — | a command containing an expansion | never recorded |
+
+Not a `TempDir`, on purpose: **`/tmp` is a blastguard safe root**, so a project
+built under it has no "outside" and control (iv) would be unwritable.
+`CARGO_TARGET_TMPDIR` sits under `target/`, which is not a root, so the
+inside/outside distinction survives.
+
+### Where it lives
+
+`~/.blastguard/approvals/{pending,approved}/`, overridable with
+`BLASTGUARD_APPROVALS_DIR` — an override that exists not for convenience but
+because control (v-a) is unwritable without it. One file per approval rather than
+an index: concurrent sessions share this store, an index would need a lock, and
+that lock's failure would have to resolve to `Undetermined` on every read.
+Writes go through temp + rename, so a reader never sees a half-written entry.
+
 
 ## Why it exists
 

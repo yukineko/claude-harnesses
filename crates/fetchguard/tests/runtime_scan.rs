@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end `PostToolUse` decision tests, driven through
 //! `harness_core::hook::HookInput` (the same seam ctxrot's `toolguard` and
-//! taintguard's `mark`/`gate` are exercised through) rather than the pure
+//! the removed taintguard's `mark`/`gate` were exercised through) rather than the pure
 //! `scan::scan` unit tests in `src/scan.rs` — this file is the F->P proof
 //! for the wired hook decision itself (`fetchguard::gate::analyse`), not
 //! just the pattern table underneath it.

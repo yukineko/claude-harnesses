@@ -65,7 +65,6 @@
 | ship | event-scoped | commit・merge・push・plugin-update の出荷儀式を促す（未出荷状態を検出・subscription-native） |
 | specguard | always-on | 仕様↔実装の整合を監査する read-only ハーネス（subscription-native）＋ polarity synonym guard の段階的 ratification ＋ spec-map ストア |
 | stuckguard | always-on | PostToolUse で反復操作・編集スラッシュを検知しエスカレーションする（Jaccard near-repeat ＋ progress-score 3信号 stall advisory ＋ escalation 時の lesson write/retrieve） |
-| taintguard | always-on | provenance-scoped least-privilege ゲート。WebFetch/WebSearch/プロジェクト外 Read で untrusted-provenance を消費したターンを検知し、以降の write 系ツール（Bash/Write/Edit/MultiEdit/NotebookEdit）を ask/deny へ降格、clean な Stop で復帰する（GATE crate） |
 | taskprog | always-on | `.claude/progress.md` をセッション間で同期し HOTL ハンドオフを支援する |
 | tdd | always-on | Stop でテストなし実装を阻止するテストファースト・ゲート（RED before GREEN） |
 | tracekit | manual | condukt run を span 木として記録・描画し OTel GenAI-semconv JSON を export するトレーサ |

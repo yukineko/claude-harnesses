@@ -42,7 +42,6 @@ pub const GATE_CRATES: &[&str] = &[
     "propguard",
     "specguard",
     "stuckguard",
-    "taintguard",
     "mutategate",
     "overwatch",
     "parallelguard",
@@ -53,7 +52,7 @@ mod tests {
     use super::GATE_CRATES;
 
     #[test]
-    fn gate_crates_is_the_known_seven() {
+    fn gate_crates_is_the_known_six() {
         assert_eq!(
             GATE_CRATES,
             &[
@@ -61,7 +60,6 @@ mod tests {
                 "propguard",
                 "specguard",
                 "stuckguard",
-                "taintguard",
                 "mutategate",
                 "overwatch"
             ]

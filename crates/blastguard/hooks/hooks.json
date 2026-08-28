@@ -7,6 +7,14 @@
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard", "timeout": 10 }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/blastguard record-approval", "timeout": 10 }
+        ]
+      }
     ]
   }
 }

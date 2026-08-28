@@ -56,7 +56,7 @@
 use blastguard::model::Decision;
 use blastguard::rule_id::INTERNAL_ERROR_REASON;
 use blastguard::scope::SafeRoots;
-use blastguard::{detect, hookio, interactive, retro, rule_id};
+use blastguard::{approve, detect, hookio, interactive, retro, rule_id};
 use harness_core::hook::{self, HookInput};
 use std::process::exit;
 
@@ -75,6 +75,14 @@ fn main() {
             }
             "retro" => {
                 exit(run_retro(&args[i + 1..]));
+            }
+            "record-approval" => {
+                // PostToolUse. This path has NO verdict: it prints nothing and
+                // decides nothing, so `run_hook`'s panic-to-exit-0 barrier is
+                // not a fail-open here — losing a recording means the next run
+                // asks again, which is the restrictive side.
+                // `run_hook` never returns — it exits 0 itself.
+                hook::run_hook(record_approval);
             }
             _ => {}
         }
@@ -195,7 +203,7 @@ fn print_help() {
     println!(
         "blastguard {ver}\n\
 A Claude Code PreToolUse hook that denies project-destroying operations.\n\n\
-USAGE:\n  blastguard            read a hook payload from stdin (normal mode)\n  blastguard --version  print version\n  blastguard --help     this help\n\n\
+USAGE:\n  blastguard                  read a PreToolUse payload from stdin (normal mode)\n  blastguard record-approval  read a PostToolUse payload from stdin and record\n                              that this exact effect was approved\n  blastguard --version        print version\n  blastguard --help           this help\n\n\
 It denies recursive/wildcard rm, git reset --hard, git clean -fdx, truncate,\n\
 shred, mkfs, dd of=, recursive chmod/chown, find -delete, and single-> file\n\
 overwrites — while exempting repo config files (.claude/**, *.toml, *.lock, …).",
@@ -228,6 +236,7 @@ fn run() {
     };
 
     let decision = analyse(&input);
+    let decision = consult_memory(&input, decision);
 
     emit(decision, Some(&input));
 }
@@ -429,6 +438,190 @@ fn record_violation(input: &HookInput, reason: &str) {
     if let Some(event) = event {
         let _ = overwatch::store::append_violation(&cwd, &event);
     }
+}
+
+/// Where the approval memory lives.
+///
+/// `BLASTGUARD_APPROVALS_DIR` overrides it. That override is not a convenience:
+/// the anti-vacuity control in `tests/approval_memory.rs` that proves the store
+/// is actually being consulted works by pointing a second run at a DIFFERENT
+/// store and requiring the ask to come back, which is unwritable without it.
+fn memo_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("BLASTGUARD_APPROVALS_DIR") {
+        if !dir.trim().is_empty() {
+            return std::path::PathBuf::from(dir.trim());
+        }
+    }
+    harness_core::config::base_dir("blastguard").join("approvals")
+}
+
+/// The Bash command line this payload describes, if it describes one.
+///
+/// The memory covers `Bash` only. `Edit`/`Write`/`MultiEdit` are deliberately
+/// excluded: their "parameters" include the new file CONTENT, so an approval
+/// keyed on the effect would be single-use by construction and the store would
+/// grow one dead entry per edit. The repetitive asking the user reported was
+/// about commands — 「taintguard はbashコマンドそのものを検出していた」 — so
+/// that is the scope, and the narrower scope is the restrictive one.
+fn bash_command(input: &HookInput) -> Option<String> {
+    if input.tool_name != "Bash" {
+        return None;
+    }
+    let command = input.tool_input.as_ref()?.get("command")?.as_str()?;
+    if command.trim().is_empty() {
+        return None;
+    }
+    Some(command.to_string())
+}
+
+/// Downgrade an `Ask` this session has already answered, and stash the pending
+/// fingerprint for the ones it has not.
+///
+/// # What this may and may not do
+///
+/// It matches on `Decision::Ask` and returns every other variant untouched, so
+/// a `Deny` is structurally out of reach — not "not currently downgraded", but
+/// unreachable from this function's only mutating arm. It also never produces
+/// anything stricter than what it was given: an unreadable store or an
+/// unfingerprintable command returns the original `Ask` verbatim.
+///
+/// # Why this runs BEFORE `emit`'s hardening
+///
+/// `emit` hardens `Ask` → `Deny` when no human can answer
+/// ([`interactive::ask_available`]). Consulting the memory first means a
+/// headless run CAN be allowed by a human's earlier approval — which is the
+/// point of the feature (the agent-driven sessions are the ones drowning in
+/// unanswerable asks), and is not a weakening of the headless posture in the
+/// direction that matters: the approval is still evidence of a human decision
+/// about this exact effect, taken in an interactive session, invalidated the
+/// moment the parameters or the targets move.
+fn consult_memory(input: &HookInput, decision: Decision) -> Decision {
+    let Decision::Ask(reason) = decision else {
+        // Allow and Deny are returned as-is. The memory has no upgrade path and
+        // no override path.
+        return decision;
+    };
+    let Some(command) = bash_command(input) else {
+        return Decision::Ask(reason);
+    };
+    let scope = safe_roots(input);
+    let fingerprint = match approve::fingerprint(&input.tool_name, &command, &scope, probe_target) {
+        harness_core::verdict::Determination::Known(fp) => fp,
+        // Not fingerprintable — an expansion, quoting, or an operand that left
+        // the tree. No approval can apply, so the ask stands.
+        harness_core::verdict::Determination::Undetermined(_) => return Decision::Ask(reason),
+    };
+    let store = approve::Store::open(memo_dir());
+    if store.lookup(&fingerprint).is_approved() {
+        return Decision::Allow;
+    }
+    // Not approved (or the store could not say). Ask — and leave behind what
+    // the human is about to look at, so a `PostToolUse` can promote it if they
+    // say yes. A failure to stash costs nothing but another ask.
+    let _ = hook::catch_and_log("blastguard-approval-pending", || {
+        let _ = store.put_pending(
+            &approve::command_key(&input.tool_name, &command),
+            &fingerprint,
+            &command,
+        );
+    });
+    Decision::Ask(reason)
+}
+
+/// `blastguard record-approval` — the `PostToolUse` half.
+///
+/// The tool having RUN is the evidence a human approved it: a `Deny` never
+/// reaches `PostToolUse` at all, and an `Ask` the human refused never runs. So
+/// this promotes the pending fingerprint `consult_memory` stashed, without
+/// needing to know (and without being able to know) what the human clicked.
+///
+/// It records regardless of whether the command SUCCEEDED. Approval is about
+/// permission, not about exit status: a human who approved `chmod -R 755 sub`
+/// approved it whether or not it worked.
+fn record_approval() {
+    let raw = hook::read_stdin();
+    if raw.trim().is_empty() {
+        return;
+    }
+    let Some(input) = HookInput::parse(&raw) else {
+        return;
+    };
+    let Some(command) = bash_command(&input) else {
+        return;
+    };
+    let key = approve::command_key(&input.tool_name, &command);
+    // `promote` is a no-op when nothing is pending, which is the ordinary case:
+    // most tool calls were allowed outright and were never asked about.
+    let _ = approve::Store::open(memo_dir()).promote(&key);
+}
+
+/// How much of a file is read to fingerprint its contents.
+///
+/// A cap is needed because this runs inside a 10-second hook timeout, and it
+/// resolves to the RESTRICTIVE side: a file larger than this is `Undetermined`,
+/// so the command is not approvable rather than being approved on the strength
+/// of a partial read. 64 MiB is far above any config or script a gate command
+/// touches.
+const MAX_HASHED_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The injected [`approve::TargetProbe`]: what is at `path` right now?
+///
+/// Read in fixed-size chunks rather than into one buffer, per the repository's
+/// data-loading rule — the size cap bounds the work, the chunking bounds the
+/// memory.
+fn probe_target(path: &str) -> harness_core::verdict::Determination<String> {
+    use harness_core::verdict::Determination;
+    use std::io::Read;
+
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Absent is a KNOWN state, not an unknown one: `rm -rf target` in a
+            // fresh clone is ordinary, and "the target does not exist" is a
+            // perfectly stable thing to fingerprint. It also means the approval
+            // stops applying the moment the target appears.
+            return Determination::known("absent".to_string());
+        }
+        Err(e) => return Determination::undetermined(format!("metadata failed: {e}")),
+    };
+    if meta.is_dir() {
+        // A directory's CONTENTS are not hashed. Doing so would make every
+        // approval for a project-tree operand expire on the next unrelated file
+        // change, which is the "asks about everything" failure this feature
+        // exists to remove. The bound that still holds is the location one:
+        // `approve::fingerprint` already required the directory to resolve
+        // strictly inside a safe root.
+        return Determination::known("dir".to_string());
+    }
+    if !meta.is_file() {
+        // A socket, fifo or device. Not something whose state this can describe.
+        return Determination::undetermined("target is neither a file nor a directory".to_string());
+    }
+    if meta.len() > MAX_HASHED_BYTES {
+        return Determination::undetermined(format!(
+            "target is {} bytes, above the {MAX_HASHED_BYTES}-byte hashing cap",
+            meta.len()
+        ));
+    }
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) => return Determination::undetermined(format!("open failed: {e}")),
+    };
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                use sha2::Digest;
+                hasher.update(&buf[..n]);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Determination::undetermined(format!("read failed: {e}")),
+        }
+    }
+    use sha2::Digest;
+    Determination::known(format!("file:{:x}", hasher.finalize()))
 }
 
 #[cfg(test)]

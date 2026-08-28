@@ -155,7 +155,7 @@ Stop フックはエージェントがターンを終えようとする前に実
 #### mutategate
 mutation-testing の kill-rate ゲート（cargo-mutants の `outcomes.json` を parse→kill-rate 算出→閾値未満で非ゼロ終了）。テストが「実際に fault を捕捉できるか」を測る。**プラグインではなくワークスペース内製ツール**（`plugin.json` なし・hook なし・CLI 専用）。
 
-GATE_CRATES（blastguard / propguard / specguard / stuckguard / taintguard / mutategate / overwatch / parallelguard）を敵対的にレビューする
+GATE_CRATES（blastguard / propguard / specguard / stuckguard / mutategate / overwatch / parallelguard）を敵対的にレビューする
 Continuous-Audit ラウンド（overwatch の `/continuous-audit`）は opt-in の別ループで、常時ゲートでは
 ない。`git config core.hooksPath .githooks` を有効化していれば `.githooks/pre-push` が GATE_CRATES
 配下の変更 push を検知し `scripts/continuous-audit.sh --dry-run` を advisory で勧める（fail-soft、

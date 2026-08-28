@@ -9,6 +9,12 @@ Cargo.lock.bak
 
 # precommit-audit runtime telemetry (append-only, machine-local)
 .claude/audit-log.jsonl
+# ... and its block marker. precommit-audit writes this when it BLOCKS and
+# removes it on the next non-blocking run (main.rs set_block_marker /
+# clear_block_marker), so it is per-machine live state, never source. It was
+# accidentally committed once (0521d013) after a blocked attempt staged it:
+# tracked, it would ship to every clone as a permanently-set block marker.
+.claude/.audit-blocked
 
 # ephemeral session/tool state
 .claude/progress.md
@@ -17,10 +23,8 @@ Cargo.lock.bak
 .tdd/
 
 # agent scratch space. Deliberately INSIDE the worktree rather than under
-# %TEMP%: taintguard's classifier only trusts the cwd subtree and sibling
-# worktrees of the same repository, so reading a file from the harness's
-# %TEMP% scratchpad taints the turn and denies every later write (CLAUDE.md
-# §8, backlog 96075670).
+# %TEMP%, so scratch files stay next to the work they belong to and are
+# removed with the worktree instead of outliving it in a system temp dir.
 .scratch/
 
 # deterministic code index (rebuildable from source via `fugu-router code-index build`)

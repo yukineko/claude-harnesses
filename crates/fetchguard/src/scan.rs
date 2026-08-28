@@ -216,9 +216,11 @@ fn scan_line(line: &str) -> Option<&'static str> {
 
 /// Scan `text` line-by-line for undefended malicious hits. Pure, no I/O.
 ///
-/// This is the crate's core content signal — orthogonal to `taintguard`'s
-/// provenance signal (WHERE content came from): this asks WHAT the text
-/// SAYS. An empty return means no hit was found in `text` as given; it is
+/// This is the crate's core content signal. It was designed as one half of a
+/// pair: the other half was the provenance signal (WHERE content came from),
+/// owned by `taintguard` until that crate was removed on 2026-08-24. Only the
+/// content half exists now — this asks WHAT the text SAYS, and nothing asks
+/// where it came from. An empty return means no hit was found in `text` as given; it is
 /// the caller's job (see `crate::gate`) to decide whether "no hit" and
 /// "nothing to scan at all" are the same thing (they are not — a tool
 /// response present but unscannable is NOT the same as clean).

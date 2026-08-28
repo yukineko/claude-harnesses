@@ -10,8 +10,7 @@
 # the old comment here said "it exits 0 silently so a hook NEVER breaks the
 # user's turn", the exact sentence §1 names as the red flag). This dispatcher
 # resolves the unknown on the restrictive side of each subcommand's OWN
-# protocol, mirroring crates/ctxrot/bin/ctxrot and crates/taintguard/bin/
-# taintguard.
+# protocol, mirroring crates/ctxrot/bin/ctxrot.
 #
 # Classification (all three subcommands are hook entrypoints; hooks.json):
 #

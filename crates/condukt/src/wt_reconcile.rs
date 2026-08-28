@@ -39,9 +39,33 @@
 //! A task whose progress fingerprint has not advanced reads `Stalled`. That is
 //! **not** mapped to "dead": a worker that is thinking, or editing files
 //! without committing, is stalled by this measure and is very much alive.
-//! `Stalled` therefore resolves to `Undetermined` occupancy, i.e. keep. Only
-//! the complete absence of any RUNNING task claiming the path — established
-//! from a run-state scan that was *fully readable* — yields `Dead`.
+//! `Stalled` therefore resolves to `Undetermined` occupancy, i.e. keep.
+//!
+//! # An absent claim is not proof of death
+//!
+//! The mirror-image collapse is just as easy to write, and this module used to
+//! contain it: a *fully readable* run-state scan that found no claim went
+//! straight to `Known(Occupancy::Dead)`. But the absence of a **record** is not
+//! an observation of the **directory**. Under CLAUDE.md section 8 every session
+//! works inside a worktree, and a session driven by `/flow`, `/compass` or a
+//! bare `EnterWorktree` registers no condukt claim at all — so "unclaimed" is
+//! the common case, not an exotic one (measured 2026-08-21 on this machine:
+//! 66 `session-*` worktrees, condukt claims none of them). Reading "no record"
+//! as "nobody home" therefore pointed the GC straight at live work
+//! (backlog `fe84d350` / `5aaecbf6`).
+//!
+//! Death is now **established** from the directory itself, and only from the
+//! conjunction of three positively observed terms — see
+//! [`unclaimed_occupancy`]: the worktree's own signals frozen, the multi-sample
+//! window elapsed, and no Claude session transcript bound to its path at all.
+//! Not merely a transcript that stopped growing — that was the first cut, and
+//! measurement refuted it within minutes; the docstring of
+//! [`unclaimed_occupancy`] carries the numbers.
+//! Each term is read three-valued and any one of them coming back
+//! `Undetermined` yields `Undetermined` occupancy, i.e. keep. In particular an
+//! unreadable transcript store is *not* an absence of sessions: allowing it to
+//! read as one would make the third term hold vacuously and silently collapse
+//! the rule back to two terms.
 //!
 //! # Cross-checkout scan
 //!
@@ -148,11 +172,24 @@ impl Attribution {
 /// Whether anything is working in a worktree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Occupancy {
-    /// A RUNNING task claims this path and its own progress signals advanced.
+    /// Somebody is working in this directory. Either a RUNNING task claims it
+    /// and that task's own progress signals advanced, or nothing claims it and
+    /// the directory's own signals advanced between two probes — a session that
+    /// registers no claim is still a session.
     Live,
-    /// A fully readable scan of every run namespace found no RUNNING task
-    /// claiming this path. "Fully readable" is load-bearing: one unreadable
-    /// run file downgrades this to `Undetermined`.
+    /// Nobody is working in this directory, **established** rather than
+    /// inferred from silence. Both halves are observed:
+    ///
+    /// 1. A fully readable scan of every run namespace found no RUNNING task
+    ///    claiming this path. "Fully readable" is load-bearing: one unreadable
+    ///    run file downgrades this to `Undetermined`.
+    /// 2. The directory's own progress signals — worktree HEAD and working-tree
+    ///    activity — were observed frozen across the multi-sample window, AND
+    ///    the transcript store was read and holds no session bound to this path
+    ///    at all ([`unclaimed_occupancy`], where the measurement showing why a
+    ///    *frozen* transcript is not enough is recorded).
+    ///
+    /// (1) alone was the old rule and it was wrong; see the module header.
     Dead,
 }
 
@@ -888,6 +925,284 @@ fn claim_progress_verdict(
     progress::sample(store, &key, current, now, window)
 }
 
+/// Claude Code's per-project transcript root (`~/.claude/projects`).
+///
+/// Three-valued because an unresolvable `$HOME` is not an absence of sessions:
+/// it is an inability to look for them, and the whole point of the third term
+/// of the death rule is that it must be *looked up*, not assumed.
+fn claude_projects_root() -> Determination<PathBuf> {
+    match std::env::var_os("HOME") {
+        Some(home) if !home.is_empty() => {
+            Determination::Known(PathBuf::from(home).join(".claude").join("projects"))
+        }
+        _ => Determination::undetermined(
+            "$HOME is unset, so Claude Code's transcript store cannot be located — \
+             whether a session works in this worktree cannot even be looked up",
+        ),
+    }
+}
+
+/// The name Claude Code gives a project's transcript directory: the session's
+/// cwd with every byte outside `[A-Za-z0-9]` replaced by `-`.
+///
+/// Measured 2026-08-21 against this machine's real store — the worktree
+/// `/mnt/c/Users/hiroyuki_nakayama/src/.harness-worktrees/session-24b59ce3` is
+/// stored as
+/// `-mnt-c-Users-hiroyuki-nakayama-src--harness-worktrees-session-24b59ce3`,
+/// and `/mnt/c/WINDOWS/system32` as `-mnt-c-WINDOWS-system32` (case is
+/// preserved, only non-alphanumerics fold). The test fixture re-derives this
+/// rule independently so the two can be seen to disagree.
+///
+/// If this encoding is ever wrong, every lookup misses and the third term
+/// degrades to "no transcript dir" — which is the *frozen* value, so the rule
+/// degenerates to the two git terms. That is strictly stricter than the rule
+/// this replaces (which observed nothing at all), so a mis-derivation cannot
+/// reintroduce the fail-open it closes.
+fn project_transcript_dir_name(path: &Path) -> String {
+    path.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// What the transcript store says about sessions bound to a worktree path.
+///
+/// Two *known* answers, with "could not look" carried by
+/// `Determination::Undetermined` as everywhere else in this module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Transcripts {
+    /// The store was readable and holds no transcript directory for this path:
+    /// no Claude session has ever run with this worktree as its cwd. This is
+    /// the ONLY observation that permits `Dead`.
+    NoneEverRanHere,
+    /// Transcripts exist. The bytes are their `(name, size, mtime)` triples, so
+    /// growth changes them — but their being *frozen* proves nothing (see
+    /// [`unclaimed_occupancy`]).
+    Present(Vec<u8>),
+}
+
+impl Transcripts {
+    /// The bytes to fold into the progress fingerprint. Both variants are
+    /// stable while nothing happens, so this can only ever make a worktree look
+    /// MORE alive, never less.
+    fn signal(&self) -> Vec<u8> {
+        match self {
+            Transcripts::NoneEverRanHere => b"no-transcript-dir".to_vec(),
+            Transcripts::Present(bytes) => bytes.clone(),
+        }
+    }
+}
+
+/// Look up every Claude session transcript bound to `path` as its cwd under
+/// `projects`.
+///
+/// This is the signal that closes the gap the git signals cannot: an agent that
+/// is *thinking* — reading, searching, calling tools — moves neither the
+/// worktree HEAD nor the working tree, yet its transcript does grow as the
+/// conversation advances.
+///
+/// Three-valued, and the distinction is the load-bearing part:
+///
+/// * the store itself unreadable, or a transcript directory that exists but
+///   cannot be read or stat'd ⇒ `Undetermined`. Nothing was looked up.
+/// * the store readable and holding no directory for this path ⇒
+///   `Known(NoneEverRanHere)` — looked up, positively absent.
+/// * transcripts present ⇒ `Known(Present(..))` of their
+///   `(name, size, mtime)` triples.
+fn transcripts_in(projects: &Path, path: &Path) -> Determination<Transcripts> {
+    // The store must be readable for an absence below to be an observation
+    // rather than a guess.
+    if let Err(e) = std::fs::read_dir(projects) {
+        return Determination::undetermined(format!(
+            "Claude Code's transcript store {} is unreadable ({e}), so whether a \
+             session works in {} was never looked up",
+            projects.display(),
+            path.display()
+        ));
+    }
+    let dir = projects.join(project_transcript_dir_name(path));
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        // Looked up and positively absent. A constant, so it can never make the
+        // fingerprint look like it advanced.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Determination::Known(Transcripts::NoneEverRanHere)
+        }
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "transcript directory {} exists but is unreadable ({e})",
+                dir.display()
+            ))
+        }
+    };
+    let mut seen: BTreeMap<String, (u64, u128)> = BTreeMap::new();
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let meta = match std::fs::metadata(&p) {
+            Ok(m) => m,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "transcript {} could not be stat'd ({e}), so its growth is unknown",
+                    p.display()
+                ))
+            }
+        };
+        // A transcript whose mtime cannot be read is a transcript whose growth
+        // cannot be compared. Substituting a constant here would freeze the
+        // signal and push the worktree toward Dead.
+        let mtime = match meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        {
+            Some(d) => d.as_nanos(),
+            None => {
+                return Determination::undetermined(format!(
+                    "transcript {} has no readable mtime, so its growth is unknown",
+                    p.display()
+                ))
+            }
+        };
+        seen.insert(
+            entry.file_name().to_string_lossy().to_string(),
+            (meta.len(), mtime),
+        );
+    }
+    if seen.is_empty() {
+        // A directory with no transcript in it. It exists, so a session was
+        // bound to this path at some point; treat it as presence, not absence.
+        return Determination::Known(Transcripts::Present(b"transcript-dir-empty".to_vec()));
+    }
+    let mut out = String::new();
+    for (name, (len, mtime)) in &seen {
+        out.push_str(&format!("{name}:{len}:{mtime}\n"));
+    }
+    Determination::Known(Transcripts::Present(out.into_bytes()))
+}
+
+/// [`transcripts_in`] against the live `$HOME`.
+fn transcripts_for(path: &Path) -> Determination<Transcripts> {
+    match claude_projects_root() {
+        Determination::Known(root) => transcripts_in(&root, path),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
+}
+
+/// **The DEATH rule** for a worktree that no RUNNING task claims.
+///
+/// The caller has already established the *first* half of death — a fully
+/// readable scan of every run namespace found no claim on this path. That half
+/// used to be the whole rule, and it was a fail-open: it concluded something
+/// about a directory from the absence of a record about it.
+///
+/// Here death is established from the directory itself, as the conjunction of
+/// three terms, none of which may be assumed:
+///
+/// 1. **停滞** — the worktree's own signals (HEAD, working-tree activity) frozen.
+/// 2. **窓経過** — frozen for at least the multi-sample window, across ≥2 probes.
+///    A first probe is `Undetermined` by construction; one observation is not a
+///    freeze.
+/// 3. **transcript 証拠なし** — the transcript store was read and holds no
+///    transcript directory for this path at all: no Claude session has ever run
+///    here. A transcript that merely stopped *growing* does NOT satisfy this —
+///    see below.
+///
+/// (1) and (2) are exactly what `progress::sample` returns as
+/// `Known(Liveness::Stalled)`. The transcript is fed into that fingerprint too,
+/// so growth alone yields `Live`; and because `fingerprint_from_signals` turns
+/// ANY unreadable signal into an `Undetermined` fingerprint, an unreadable
+/// transcript store can never be mistaken for an absence of sessions. If it
+/// could, the third term would hold vacuously and the conjunction would
+/// silently degenerate to two terms.
+///
+/// # Why a frozen transcript is not evidence of death (measured)
+///
+/// The first cut of this rule treated a transcript that had stopped growing as
+/// a finished session, so that a leftover transcript would not block
+/// reclamation forever. Running it against this repository refuted that
+/// immediately: probe 1 of `worktree reconcile` called the worktree this very
+/// session was working in `undetermined`, and probe 2 — 167 seconds later —
+/// called it **dead**, while the session was running tools in it continuously.
+///
+/// The cause, measured directly on 2026-08-21 with three signal observations
+/// 1836 seconds apart while the session was making tool calls throughout: the
+/// transcript is flushed at TURN boundaries, not per tool call, and an agentic
+/// turn routinely outlives the 90s window. `head`, working-tree activity and
+/// the transcript's `(size, mtime)` were byte-identical across all of them.
+///
+/// So a frozen transcript cannot distinguish a finished session from one in the
+/// middle of a long turn, and per CLAUDE.md section 3 that undecidable case
+/// resolves to the restrictive side — which, for a GC, is keep. The cost is
+/// real and is accepted deliberately: a worktree that any session has ever
+/// worked in stays unreclaimable by this rule, so the reclaimable population is
+/// the worktrees that no session was ever bound to. Deleting live work is
+/// irreversible; leaving a directory on disk is not.
+///
+/// The other cost is that reclamation takes two probes spaced a window apart,
+/// where the old rule deleted on the first. `condukt worktree cleanup --remove`
+/// therefore removes nothing the first time it is run against a fresh
+/// directory — by design.
+fn unclaimed_occupancy(
+    store: &Path,
+    path: &Path,
+    now: i64,
+    window: i64,
+) -> Determination<Occupancy> {
+    let transcripts = transcripts_for(path);
+    let signal = match &transcripts {
+        Determination::Known(t) => Determination::Known(t.signal()),
+        Determination::Undetermined(why) => Determination::Undetermined(why.clone()),
+    };
+    let current = progress::fingerprint_from_signals(vec![
+        ("worktree-head", progress::git_head_signal(path)),
+        ("worktree-activity", worktree_activity_signal(path)),
+        ("session-transcript", signal),
+    ]);
+    let key = format!("wt-reconcile:unclaimed:{}", path.display());
+    let liveness = progress::sample(store, &key, current, now, window);
+    match (liveness, transcripts) {
+        // Somebody is working here without having registered a claim.
+        (Determination::Known(progress::Liveness::Progressing), _) => {
+            Determination::Known(Occupancy::Live)
+        }
+        // All three terms hold. This is the only path to `Dead`.
+        (
+            Determination::Known(progress::Liveness::Stalled),
+            Determination::Known(Transcripts::NoneEverRanHere),
+        ) => Determination::Known(Occupancy::Dead),
+        // Frozen signals, but a session has been bound to this path. See the
+        // measurement in this function's docstring: frozen is not finished.
+        (
+            Determination::Known(progress::Liveness::Stalled),
+            Determination::Known(Transcripts::Present(_)),
+        ) => Determination::undetermined(format!(
+            "no running task claims {} and its signals are frozen, but a Claude session \
+             transcript is bound to this path; a transcript is flushed at turn \
+             boundaries, so a frozen one cannot tell a finished session from one in the \
+             middle of a long turn (measured 2026-08-21: 1836s frozen while a session \
+             worked here continuously)",
+            path.display()
+        )),
+        (Determination::Known(progress::Liveness::Stalled), Determination::Undetermined(why)) => {
+            Determination::undetermined(format!(
+                "no running task claims {} and its signals are frozen, but whether a \
+                 session is bound to this path could not be looked up ({})",
+                path.display(),
+                why.as_str()
+            ))
+        }
+        (Determination::Undetermined(why), _) => Determination::undetermined(format!(
+            "no running task claims this worktree, but its own signals do not establish \
+             death either ({}); the absence of a claim is not an observation of the \
+             directory",
+            why.as_str()
+        )),
+    }
+}
+
 fn liveness_word(v: &Determination<progress::Liveness>) -> (String, Option<String>) {
     match v {
         Determination::Known(progress::Liveness::Progressing) => ("progressing".into(), None),
@@ -1383,7 +1698,9 @@ pub fn reconcile(cfg: &Config, cwd: &Path, repo: &Path, preserve_dirty: bool) ->
                 claims_here.len()
             ))
         } else if index.complete {
-            Determination::Known(Occupancy::Dead)
+            // No claim — which is where the fail-open lived. Establish death
+            // from the directory itself or keep it.
+            unclaimed_occupancy(&store, &canon, now, window)
         } else {
             Determination::undetermined(format!(
                 "condukt's run state could not be read in full ({}), so 'no task \

@@ -53,10 +53,14 @@
 #   nothing.
 #
 # GATE CRATES require a canary (Problem-2.3)
-#   The prompt-injection / spec / mutation DEFENSE gates (per docs/GLOSSARY.md:
-#   blastguard, propguard, specguard, stuckguard; also the non-plugin
-#   mutategate) guard the fleet, so rolling one out WITHOUT a canary is an
-#   ERROR. Pass --canary to stage it, or --no-canary to explicitly override.
+#   The fleet-defense gates guard every other session, so rolling one out
+#   WITHOUT a canary is an ERROR. The set is NOT re-enumerated here: read
+#   GATE_CRATES= below, which is the canonical copy this script actually
+#   branches on and which check-gate-crates-sync.py machine-checks against
+#   the other 10 places it is hardcoded. (This comment used to list four
+#   names by hand and had already gone stale -- it omitted `overwatch`, a
+#   GATE crate since 2026-08-04, while GATE_CRATES= carried it. A pointer
+#   cannot drift; a hand-copied list does.) Pass --canary to stage it, or --no-canary to explicitly override.
 #   A rollout with no --plugin filter targets EVERY plugin (which includes gate
 #   crates), so it too requires --canary / --no-canary. Non-gate crates are
 #   unaffected — canary stays optional for them.
@@ -111,7 +115,7 @@ usage() { sed -n '2,80p' "$0"; }
 # --- GATE CRATES (Problem-2.3) ----------------------------------------------
 # The prompt-injection / spec / mutation DEFENSE gates, per docs/GLOSSARY.md
 # (the canonical source: crates classified/described as "gate" — blastguard,
-# propguard, specguard, stuckguard, taintguard — plus the mutation-testing
+# propguard, specguard, stuckguard — plus the mutation-testing
 # kill-rate gate `mutategate`, which is a non-plugin here but listed for
 # completeness). These
 # guard the fleet itself, so they MUST NOT roll out without a canary: when the
@@ -127,7 +131,7 @@ usage() { sed -n '2,80p' "$0"; }
 # rollback/health-gate safety net for the OTHER gate crates with no forcing
 # function to catch it (backlog 50f94a60) — so it gets the same canary
 # requirement as the crates it protects.
-GATE_CRATES="blastguard propguard specguard stuckguard taintguard mutategate overwatch parallelguard"
+GATE_CRATES="blastguard propguard specguard stuckguard mutategate overwatch parallelguard"
 
 is_gate_crate() {
   local want="$1" g

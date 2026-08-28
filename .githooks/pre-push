@@ -85,7 +85,7 @@ else
     exit 1
 fi
 
-GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|taintguard|mutategate|overwatch|parallelguard)/'
+GATE_PATTERN='^crates/(blastguard|propguard|specguard|stuckguard|mutategate|overwatch|parallelguard)/'
 
 # Crates whose SKILL specs carry the autonomy gate contracts asserted by
 # scripts/e2e-autonomy.sh (scout selection/hand-off, condukt agreement, flow

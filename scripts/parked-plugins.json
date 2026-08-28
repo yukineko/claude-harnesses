@@ -13,7 +13,10 @@
     "nothing while reading as though it had.",
     "Deleting an entry is how a park ends. Resolve the reason FIRST, then delete",
     "— not the other way round (backlog a6f165cd).",
-    "Currently empty. The last entry was taintguard, parked 2026-08-04 while its",
+    "The current entry is parallelguard, parked 2026-08-28 for ENABLEMENT only:",
+    "the user ruled it stays `false` in settings.json. It is still rolled out on",
+    "every run, so its bytes stay current; what is parked is arming it.",
+    "The previous entry was taintguard, parked 2026-08-04 while its",
     "false positive eb39308e was open, then unparked the same day when it rolled",
     "out at 0.1.10. That crate was REMOVED from the repo entirely on 2026-08-24",
     "by user ruling, so neither the park nor its observe-only posture exists any",
@@ -21,5 +24,11 @@
     "The checker itself warns when an entry suppresses nothing: a stale park",
     "silences a future red."
   ],
-  "parked": {}
+  "parked": {
+    "parallelguard": {
+      "reason": "ENABLEMENT parked by user ruling 2026-08-28: it stays set to false in ~/.claude/settings.json. The gate is installed and rolled out (its bytes are kept current by every rollout run) but deliberately inert — none of its hooks fire. This park covers ONLY the 'GATE crate is not enabled' finding; a rollout/currency red for parallelguard is still a real red and must not be read as parked. Do not flip it to true to clear the report — that is the 2026-08-04 taintguard mistake this file exists to prevent.",
+      "parked_at": "2026-08-28",
+      "revisit": "The user's own decision is the only trigger. Ask before unparking; there is no metric here that unparks itself."
+    }
+  }
 }

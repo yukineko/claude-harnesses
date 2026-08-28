@@ -1,0 +1,15 @@
+{
+  "name": "parallelguard",
+  "version": "0.1.0",
+  "description": "Per-session concurrency cap for Claude Code. A PreToolUse hook counts the Bash calls and subagents actually in flight for this session and denies the call that would exceed the cap (3 shells and 3 subagents by default); PostToolUse gives the slot back and the ledger is cleared at every turn boundary. Enforcement lives in a bundled binary, not in prose a model may ignore. Subscription-native (no API key).",
+  "author": {
+    "name": "yukineko"
+  },
+  "keywords": [
+    "hooks",
+    "concurrency",
+    "gate",
+    "guardrail",
+    "rust"
+  ]
+}

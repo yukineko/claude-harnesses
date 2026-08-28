@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.141"
+version = "0.7.142"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "anyhow",
  "chrono",
@@ -756,7 +756,6 @@ dependencies = [
 name = "integration-tests"
 version = "0.1.0"
 dependencies = [
- "harness-core",
  "serde_json",
  "tempfile",
 ]
@@ -859,7 +858,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.29"
+version = "0.2.30"
 dependencies = [
  "anyhow",
  "clap",
@@ -872,6 +871,16 @@ dependencies = [
  "tempfile",
  "toml 0.8.23",
  "wait-timeout",
+]
+
+[[package]]
+name = "parallelguard"
+version = "0.1.0"
+dependencies = [
+ "harness-core",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1272,7 +1281,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "specguard"
-version = "0.2.52"
+version = "0.2.53"
 dependencies = [
  "anyhow",
  "blastguard",

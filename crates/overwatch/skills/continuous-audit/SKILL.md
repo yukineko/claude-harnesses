@@ -42,12 +42,12 @@ round ledger・収束メトリクスという**決定論は `scripts/continuous-
 
 ## 対象 crate (既定)
 
-既定の target は fleet の **GATE crates** (blastguard/propguard/specguard/stuckguard/taintguard/mutategate/overwatch =
+既定の target は fleet の **GATE crates** (blastguard/propguard/specguard/stuckguard/taintguard/mutategate/overwatch/parallelguard =
 `scripts/rollout-plugins.sh` の GATE_CRATES と同期。overwatch はこのループ自身が依存するバイナリであり、
 canary health-gate もこれに依存するため、保護対象のクレートと同じ監査対象に含まれる) に加えて **backlog**
 (audit 対象のみの追加。backlog は積みっぱなしのタスクが腐らないよう定期監査したいが、危険な操作を
 gate/block しないため GATE crate ではない＝canary 必須にはならない)。既定 target の完全な一覧:
-`blastguard,propguard,specguard,stuckguard,taintguard,mutategate,overwatch,backlog`
+`blastguard,propguard,specguard,stuckguard,taintguard,mutategate,overwatch,parallelguard,backlog`
 (`scripts/continuous-audit.sh` の DEFAULT_TARGETS と同期)。`--target` で上書きできる。
 
 ## 手順
@@ -60,12 +60,7 @@ gate/block しないため GATE crate ではない＝canary 必須にはなら�
 
 ### Step 1 — finder (敵対的発見)
 
-対象 crate ごとに **`Task` で finder subagent を起動**する (read-only)。**同時起動は最大 3 体まで**
-(1 セッションあたりの同時実行上限＝`harness_core::parallel::SESSION_MAX_PARALLEL`。condukt の
-`max_parallel` と同じ数)。対象 crate が 4 つ以上なら **3 体ずつの波**に分けて回す — Step 2 の verifier も
-同じ budget を使うので、**finder と verifier を合わせて 3 体**を超えないこと。
-**crate を間引いて 3 に収めてはいけない**: 上限は波を分ける理由であって、監査対象を削る理由ではない
-(削れば「監査した」と「監査していない」が区別できなくなる)。各 finder に、
+対象 crate ごとに **`Task` で finder subagent を起動**する (read-only。並列でよい)。各 finder に、
 その crate の `src/` を敵対的に読み、**実在し根拠のある**バグ/退行/見落とし (境界条件・fail-open・
 無音化・near-repeat の window 依存・polarity バイパス等) を **逐語引用 (file:line) つき**で列挙させる。
 

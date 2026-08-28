@@ -70,6 +70,7 @@ GATE_CRATES = (
     "taintguard",
     "mutategate",
     "overwatch",
+    "parallelguard",
 )
 
 

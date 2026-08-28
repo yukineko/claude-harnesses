@@ -14114,3 +14114,17 @@ updated_at = 1787797889
 weight = 0.0
 issue_number = 409
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/409"
+
+[[task]]
+id = "3214f55b"
+title = "condukt: autonomy_invariant の ASK_ALLOWLIST が flow SKILL.md で 10 のまま (実測 11) — main が red"
+project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = "測定: git show 056c51dc:crates/flow/skills/flow/SKILL.md | grep -c AskUserQuestion -> 10 / 同 5289312f -> 11 / HEAD(6ab4d01f) -> 11。ASK_ALLOWLIST は 056c51dc 以降 ('flow/skills/flow/SKILL.md', 10) のまま (crates/condukt/tests/autonomy_invariant.rs:551)。よって cargo test -p condukt --test autonomy_invariant askuserquestion_sites_match_frozen_allowlist は 5289312f 以降 main で red。11 本目は SKILL.md:53 の「開いている仕事があれば AskUserQuestion で /flow を確認せよ というディレクティブを (全廃した)」という散文の言及であり、実際の質問サイトではない。count_asks が行単位の substring 一致なので拾っている。要対応: (a) 53 行目を言及でなく書き換える か (b) allowlist を 11 に更新して「これは廃止済みディレクティブへの言及であり質問サイトではない」根拠を注記する、のいずれか。two-stop invariant への再監査が必要なので独断で変えない。発見: 2026-08-28、parallelguard 実装中の pre-commit sweep で観測。私の変更 (flow SKILL.md の 483a0d6e revert) は AskUserQuestion 行を 1 行も足し引きしていない (git diff HEAD -- crates/flow/skills/flow/SKILL.md で確認済み)。"
+created_at = 1787883029
+updated_at = 1787883029
+weight = 0.0
+issue_number = 410
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/410"

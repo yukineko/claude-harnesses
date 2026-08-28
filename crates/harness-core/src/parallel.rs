@@ -1,28 +1,32 @@
 //! Session-wide concurrency ceiling — how many units of work one Claude session
 //! may have in flight at once.
 //!
-//! Every fan-out in this harness (condukt's parallel batches, its consensus and
-//! adversarial panels, the skill-driven subagent sweeps in scout / specguard /
-//! continuous-audit) spends the SAME budget: one session's concurrent workers.
-//! Before this module each site carried its own ceiling (`max_parallel = 4`,
-//! `MAX_SAMPLES = 5`, `MAX_PANEL = 5`, "5 レンズを1メッセージで並列起動"), so the
-//! real per-session width was the *sum* of whatever happened to fire — a number
-//! no single call site could see, let alone bound.
+//! The number lives here rather than in the crate that enforces it because it
+//! is a policy about a session, not about any one plugin, and because the thing
+//! it bounds (a frozen WSL2 host) is a property of the machine.
 //!
-//! [`SESSION_MAX_PARALLEL`] is that missing number. It is a **ceiling, not a
-//! default**: configuration and environment may lower it, never raise it. A
-//! call site that wants N workers asks [`cap_fanout`] and gets what it is
-//! actually allowed to spawn.
+//! **Who enforces it.** Exactly one consumer: `parallelguard`, whose PreToolUse
+//! hook counts the `Bash` calls and subagents actually in flight and denies the
+//! call that would exceed the cap. Enforcement deliberately does NOT live in
+//! the planners (condukt's scheduler, the fan-out sentences in the skills):
+//! a planner can only bound what it plans, and the number that freezes a
+//! machine is the number of processes *running*, which no planner can see. A
+//! plan-side cap was tried and removed (`483a0d6e`, reverted) — it made batches
+//! narrower without ever being able to say no.
+//!
+//! [`SESSION_MAX_PARALLEL`] is a **ceiling, not a default**: configuration and
+//! environment may lower it, never raise it. A call site asking how wide it may
+//! go calls [`session_cap`].
 //!
 //! **Undetermined resolves to the ceiling, and that is the restrictive answer
 //! here** (CLAUDE.md 3): the invariant this module defends is "never more than
 //! [`SESSION_MAX_PARALLEL`] at once". An unparsable override cannot raise the
 //! cap — [`clamp`] bounds every path above — so falling back to the ceiling
 //! keeps the guarantee intact, while an arbitrary drop to 1 would silently
-//! serialize a whole run on a typo.
+//! serialize a whole session on a typo.
 
-/// Maximum concurrent units of work per Claude session. **A ceiling.** Config
-/// and env may lower it; nothing raises it.
+/// Maximum concurrent units of work per Claude session, per pool. **A ceiling.**
+/// Config and env may lower it; nothing raises it.
 pub const SESSION_MAX_PARALLEL: usize = 3;
 
 /// Environment variable that may LOWER the session cap (values above the
@@ -32,8 +36,8 @@ pub const ENV_OVERRIDE: &str = "HARNESS_MAX_PARALLEL";
 /// Bound `requested` into `[1, SESSION_MAX_PARALLEL]`.
 ///
 /// The floor of 1 is deliberate: a cap of 0 is not "more restrictive", it is a
-/// scheduler that can never place a task. Callers chunk by this value, so 0
-/// would either stall the run or panic on a zero-sized chunk.
+/// session in which no shell may ever run — unrecoverable, and not what any
+/// operator lowering a concurrency limit is asking for.
 #[must_use]
 pub fn clamp(requested: usize) -> usize {
     requested.clamp(1, SESSION_MAX_PARALLEL)
@@ -51,13 +55,6 @@ pub fn session_cap() -> usize {
         },
         Err(_) => SESSION_MAX_PARALLEL,
     }
-}
-
-/// How many workers a call site asking for `requested` may actually spawn:
-/// `min(requested, session_cap())`, never below 1.
-#[must_use]
-pub fn cap_fanout(requested: usize) -> usize {
-    clamp(requested.min(session_cap()))
 }
 
 #[cfg(test)]
@@ -85,15 +82,8 @@ mod tests {
     }
 
     #[test]
-    fn clamp_floors_at_one_so_a_scheduler_can_always_place_work() {
-        // 0 is not "safer"; it is a cap that can never run anything.
+    fn clamp_floors_at_one_so_a_session_can_always_run_something() {
+        // 0 is not "safer"; it is a session that can never run a shell.
         assert_eq!(clamp(0), 1);
-    }
-
-    #[test]
-    fn cap_fanout_lowers_but_never_raises_a_request() {
-        // A caller asking for less than the cap keeps its own smaller number.
-        assert_eq!(cap_fanout(1), 1);
-        assert!(cap_fanout(99) <= SESSION_MAX_PARALLEL);
     }
 }

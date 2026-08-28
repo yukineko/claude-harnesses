@@ -144,7 +144,7 @@ Remove with `condukt uninstall`.
 ```toml
 worktree_base  = "~/.condukt/worktrees"  # MUST be outside any repo
 default_branch = "main"
-max_parallel   = 3                        # ENFORCED per-session cap: schedule splits batches at this width (3 is a ceiling; may be lowered, never raised)
+max_parallel   = 4                        # advisory soft cap on concurrent workers
 shared_globs   = []                       # globs that force a touching task to run serially
 autonomous     = false                    # when true, degrade human gates (Phase 3 agreement) to deterministic defaults
 single_worktree = false                   # when true, run all tasks in the main tree (selective staging, no per-task worktree/merge)

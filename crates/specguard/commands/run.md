@@ -30,12 +30,7 @@ baseline を適切に前進/据え置きする)。
 ## 2. 各 shard を read-only subagent で監査する (判定: subscription)
 
 `shards` の **各要素について** `Task` ツールで `specguard-auditor` subagent を
-起動する。**同時起動は最大 3 体まで** (1 セッションあたりの同時実行上限＝
-`harness_core::parallel::SESSION_MAX_PARALLEL`。condukt の `max_parallel` と同じ数)。
-各 shard は独立・fresh context が設計意図なので**並列してよい**が、shard が 4 つ以上なら
-**3 体ずつの波**に分けて回す。**shard を間引いて 3 に収めてはいけない** — 上限は波を分ける
-理由であって、監査範囲を削る理由ではない (削れば「監査した」と「監査していない」が
-下流から区別できなくなる)。
+起動する。**並列で同時に起動してよい** (各 shard は独立・fresh context が設計意図)。
 
 - subagent への入力プロンプト = その shard の `prompt` フィールドを **一字一句そのまま**。
   要約・改変・抜粋をしない (フォーマットとマーカーの正典はプロンプト側)。

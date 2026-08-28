@@ -1756,7 +1756,7 @@ fn run_user(cmd: Command) -> Result<()> {
             if !errs.is_empty() {
                 bail!("invalid decomposition:\n  - {}", errs.join("\n  - "));
             }
-            let sched = schedule::schedule(&dec, &cfg.shared_globs, cfg.max_parallel);
+            let sched = schedule::schedule(&dec, &cfg.shared_globs);
             println!("{}", serde_json::to_string_pretty(&sched)?);
         }
         Command::Validate { file } => {

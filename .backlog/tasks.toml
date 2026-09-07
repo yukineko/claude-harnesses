@@ -15200,3 +15200,87 @@ notes = """
 created_at = 1788759579
 updated_at = 1788759594
 weight = 0.0
+
+[[task]]
+id = "e3366b5c"
+title = "並行セッションの同時 rollout が互いの配備を prune し合い、GATE crate を dark にする — 実測で specguard/blastguard の 2 本が同時に dark 化した"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 (2026-09-07, 本 repo):
+
+2 セッションが共有 plugin cache (~/.claude/plugins/cache/yukineko) に対して同時に
+rollout を走らせた結果、両 GATE crate が dark になった:
+
+    plugin      registry が指す版   cache の実体
+    specguard   0.2.56             0.2.55   <- 指す先が存在しない
+    blastguard  0.2.55             0.2.54   <- 同上
+
+機序: rollout-plugins.sh は末尾で prune-plugin-cache.py を走らせ、prune は
+「current 版」を *その実行元ツリーの* crates/<name>/.claude-plugin/plugin.json から
+読む。セッション A のツリーが 0.2.56、セッション B のツリーが 0.2.55 のとき、
+B の rollout は A が配備して registry に登録した 0.2.56 を「stale」と判定して削除する。
+registry (installed_plugins.json) は cache と別ファイルなので、指す先が消えても
+更新されない。結果、hook は存在しないパスを exec しようとして起動せず、finding も
+出ない = red ではなく dark。
+
+なぜ既存ガードで防げないか: prune が保持する 2 条件 (live pid の .in_use マーカー /
+settings.json の絶対パス pin) はどちらも「別セッションが今まさに配備した新しい版」を
+守らない。.in_use は旧版側に付き、settings.json は本機では 0 件
+(`grep -c 'cache/yukineko' ~/.claude/settings.json` -> 0)。
+
+修正案 (どれも未検証の案であって結論ではない):
+- prune が削除前に installed_plugins.json を読み、registry が指す版は絶対に消さない
+  (「current でない」と「誰も使っていない」は別物。指されている版の削除は定義上 dark 化)。
+- cache 全体に対する rollout ロックを取る (worktree 分離では防げない — cache は
+  ~/.claude 配下の単一共有資源であって repo の中に無い)。
+- prune の判定不能を制限側へ倒す: 実行元ツリーの版と registry の版が食い違うときは
+  「どちらが current か判定不能」として何も消さない。
+
+暫定復旧手順 (今回実施したもの): registry が期待する版を main ツリーから
+`scripts/rollout-plugins.sh --plugin <name> --canary` で貼り直し、cache が registry の
+指す先を含む状態に戻す。復旧後は binary の --version 起動まで確認すること
+(ファイル存在の確認だけでは dark と区別できない)。"""
+created_at = 1788770875
+updated_at = 1788770875
+weight = 0.0
+
+[[task]]
+id = "b8b003da"
+title = "specguard forge_integration の ratify_promotes_draft_and_pins_consent が ambient PATH 上の backlog binary に依存し、PATH に無い環境で落ちる"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 (2026-09-07):
+
+donegate の test-changed チェックが以下で落ちた:
+
+    ---- ratify_promotes_draft_and_pins_consent stdout ----
+    stderr: specforge: requirement を backlog に積めなかった: 既存キューを読めなかったので
+    起票しない (重複も取りこぼしも防げないため): cannot run backlog list
+    --project /tmp/.tmpmQu8L8 --json: No such file or directory (os error 2)
+    — a checker that never started has not passed
+
+同じテストを PATH に backlog がある自分のシェルで走らせると 11/11 通る
+(`cargo test -p specguard --test forge_integration` -> exit 0)。つまり合否が
+実行環境の ambient PATH で決まる。
+
+被テストコード側は正しい: 「キューを読めなかったので起票しない」は fail-closed で、
+CLAUDE.md 第3節どおり。問題はテストが happy path を assert しながら、その前提である
+backlog binary の存在を宣言も用意もしていないこと。clean な環境 (CI・hook・別マシン)
+では常に落ちるか、あるいは「たまたま PATH にあったから通った」になる。
+
+修正案: テストが自前で stub の backlog を PATH に置いて hermetic にする
+(現在の「あれば通る/なければ落ちる」は、何を測っているのかが環境で変わる)。
+backlog 不在時に skip するのは fail-open なので採らない。
+
+帰属メモ: このテストも forge/queue の実装も本セッションの変更ではない (specguard
+0.2.48 で landed)。donegate が拾ったのは、別セッションのマージで specguard が
+changed set に入ったため。"""
+created_at = 1788770875
+updated_at = 1788770875
+weight = 0.0

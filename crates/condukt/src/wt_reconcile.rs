@@ -1091,6 +1091,195 @@ fn transcripts_for(path: &Path) -> Determination<Transcripts> {
     }
 }
 
+/// How long a backlog driver registration's heartbeat may go unrefreshed
+/// before it stops being evidence that a session is alive.
+///
+/// **Source of truth: `backlog::lock::LOCK_STALE_TTL_SECS`**, which is the
+/// value the writer of these records reaps by. It is `pub(crate)` there and
+/// `backlog` ships no library target, so condukt cannot link it; the value is
+/// duplicated here rather than guessed at, and a drift between the two is a
+/// real bug (see the follow-up filed alongside backlog `7039ad47`).
+///
+/// Erring long is the restrictive direction for a GC: a TTL that is too long
+/// keeps a directory that could have been reclaimed, a TTL that is too short
+/// declares a working session dead.
+const DRIVER_STALE_TTL_SECS: i64 = 1800;
+
+/// What the backlog driver registry says about sessions working in a worktree.
+///
+/// Two *known* answers, with "could not look" and "nothing named this path"
+/// both carried by `Determination::Undetermined` — see [`registrations_in`] for
+/// why the second one is not an answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Registrations {
+    /// At least one registration names this worktree and its heartbeat is
+    /// within [`DRIVER_STALE_TTL_SECS`]. Somebody is working here.
+    LiveHere,
+    /// Registrations name this worktree and every one of them has aged out.
+    /// This is the ONLY observation that permits `Dead`.
+    AllStaleHere,
+}
+
+/// The backlog driver registry root (`~/.backlog/drivers`).
+///
+/// Three-valued for the same reason [`claude_projects_root`] is: an
+/// unresolvable `$HOME` is not an absence of sessions, it is an inability to
+/// look for them.
+fn driver_registry_root() -> Determination<PathBuf> {
+    match std::env::var_os("HOME") {
+        Some(home) if !home.is_empty() => {
+            Determination::Known(PathBuf::from(home).join(".backlog").join("drivers"))
+        }
+        _ => Determination::undetermined(
+            "$HOME is unset, so the session registration store cannot be located",
+        ),
+    }
+}
+
+/// Scan every `*.driver` record under `root` for one naming `path`.
+///
+/// # Why this matches on the record's contents, not on a derived name
+///
+/// The registry is laid out as `<root>/<project slug>/<session slug>.driver`,
+/// and this function does not compute either slug. It walks every bucket and
+/// compares the record's own `project` field against `path`. Re-deriving the
+/// slug would couple condukt to an encoding backlog owns, and that coupling is
+/// exactly how the witness this replaces went vacuous: the transcript term
+/// keys on a slug of the *session's cwd*, and under CLAUDE.md section 8 the cwd
+/// is the main tree while the work happens in a worktree, so the directory it
+/// looks for is never created (measured 2026-09-07, backlog `7039ad47`: 7
+/// transcript directories on a machine with 15 session worktrees, none of them
+/// a worktree path).
+///
+/// # Why "no record" is undetermined and not death
+///
+/// A session doing plain section-8 worktree work registers no driver at all —
+/// only `/flow` and the backlog driver loop do. Measured the same day: one
+/// record for 15 worktrees. Reading absence as death would make the third term
+/// of the death rule hold for every unregistered worktree, which is the
+/// collapse this whole rule exists to prevent. The accepted cost is that
+/// worktrees created before registration became routine stay unreclaimable.
+///
+/// Anything unreadable — the root, a bucket, a record, a record whose shape is
+/// not what is expected — is undetermined rather than skipped: a record that
+/// could not be read might be the live one.
+fn registrations_in(root: &Path, path: &Path, now: i64) -> Determination<Registrations> {
+    let buckets = match std::fs::read_dir(root) {
+        Ok(rd) => rd,
+        // Never registered anything on this machine. That is a readable
+        // absence, and it is still not death — it falls through to the
+        // "nothing named this path" answer below.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Determination::undetermined(format!(
+                "no session registration names {} (the store at {} does not exist)",
+                path.display(),
+                root.display()
+            ));
+        }
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "the session registration store at {} is unreadable ({e})",
+                root.display()
+            ));
+        }
+    };
+
+    let mut found_stale = false;
+    for bucket in buckets {
+        let bucket = match bucket {
+            Ok(b) => b.path(),
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "the session registration store at {} is unreadable ({e})",
+                    root.display()
+                ));
+            }
+        };
+        if !bucket.is_dir() {
+            continue;
+        }
+        let records = match std::fs::read_dir(&bucket) {
+            Ok(rd) => rd,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "the session registration store at {} is unreadable ({e})",
+                    bucket.display()
+                ));
+            }
+        };
+        for record in records {
+            let record = match record {
+                Ok(r) => r.path(),
+                Err(e) => {
+                    return Determination::undetermined(format!(
+                        "the session registration store at {} is unreadable ({e})",
+                        bucket.display()
+                    ));
+                }
+            };
+            if record.extension().and_then(|e| e.to_str()) != Some("driver") {
+                continue;
+            }
+            let raw = match std::fs::read_to_string(&record) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Determination::undetermined(format!(
+                        "the session registration store at {} is unreadable ({e})",
+                        record.display()
+                    ));
+                }
+            };
+            let value: serde_json::Value = match serde_json::from_str(&raw) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Determination::undetermined(format!(
+                        "the session registration at {} is unreadable ({e}), so it cannot be \
+                         ruled out as a registration for this worktree",
+                        record.display()
+                    ));
+                }
+            };
+            let (Some(project), Some(heartbeat)) = (
+                value.get("project").and_then(|v| v.as_str()),
+                value.get("heartbeat_at").and_then(|v| v.as_i64()),
+            ) else {
+                return Determination::undetermined(format!(
+                    "the session registration at {} has no readable project/heartbeat_at, so \
+                     it cannot be ruled out as a registration for this worktree",
+                    record.display()
+                ));
+            };
+            let project = PathBuf::from(project);
+            let project = project.canonicalize().unwrap_or(project);
+            if project != path {
+                continue;
+            }
+            if now.saturating_sub(heartbeat) <= DRIVER_STALE_TTL_SECS {
+                return Determination::Known(Registrations::LiveHere);
+            }
+            found_stale = true;
+        }
+    }
+
+    if found_stale {
+        Determination::Known(Registrations::AllStaleHere)
+    } else {
+        Determination::undetermined(format!(
+            "no session registration names {}, and a session doing ordinary worktree work \
+             registers none — so this is not an observation that nobody is working here",
+            path.display()
+        ))
+    }
+}
+
+/// [`registrations_in`] against the live `$HOME`.
+fn registrations_for(path: &Path, now: i64) -> Determination<Registrations> {
+    match driver_registry_root() {
+        Determination::Known(root) => registrations_in(&root, path, now),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
+}
+
 /// **The DEATH rule** for a worktree that no RUNNING task claims.
 ///
 /// The caller has already established the *first* half of death — a fully
@@ -1099,7 +1288,7 @@ fn transcripts_for(path: &Path) -> Determination<Transcripts> {
 /// about a directory from the absence of a record about it.
 ///
 /// Here death is established from the directory itself, as the conjunction of
-/// three terms, none of which may be assumed:
+/// four terms, none of which may be assumed:
 ///
 /// 1. **停滞** — the worktree's own signals (HEAD, working-tree activity) frozen.
 /// 2. **窓経過** — frozen for at least the multi-sample window, across ≥2 probes.
@@ -1107,8 +1296,12 @@ fn transcripts_for(path: &Path) -> Determination<Transcripts> {
 ///    freeze.
 /// 3. **transcript 証拠なし** — the transcript store was read and holds no
 ///    transcript directory for this path at all: no Claude session has ever run
-///    here. A transcript that merely stopped *growing* does NOT satisfy this —
-///    see below.
+///    here *with this worktree as its cwd*. A transcript that merely stopped
+///    *growing* does NOT satisfy this — see below.
+/// 4. **登録が期限切れ** — the session registration store was read, a
+///    registration naming this worktree exists, and every such registration's
+///    heartbeat is older than [`DRIVER_STALE_TTL_SECS`]
+///    ([`Registrations::AllStaleHere`]).
 ///
 /// (1) and (2) are exactly what `progress::sample` returns as
 /// `Known(Liveness::Stalled)`. The transcript is fed into that fingerprint too,
@@ -1116,7 +1309,35 @@ fn transcripts_for(path: &Path) -> Determination<Transcripts> {
 /// ANY unreadable signal into an `Undetermined` fingerprint, an unreadable
 /// transcript store can never be mistaken for an absence of sessions. If it
 /// could, the third term would hold vacuously and the conjunction would
-/// silently degenerate to two terms.
+/// silently degenerate to fewer terms.
+///
+/// # Why the fourth term exists (measured 2026-09-07, backlog `7039ad47`)
+///
+/// It held vacuously anyway, by a route the paragraph above did not cover.
+/// Term 3 asks whether `~/.claude/projects/<slug>` exists, and the slug encodes
+/// the *session's cwd*. Under CLAUDE.md section 8 the cwd is the main tree and
+/// each command `cd`s into the worktree, so that directory is never created for
+/// a worktree path at all. Term 3 was therefore true for every session
+/// worktree on this machine — measured, `~/.claude/projects` held 7 entries and
+/// none of them was a worktree path — and the conjunction collapsed to "frozen
+/// for 90 seconds", which is what an agent that is reading and thinking looks
+/// like. Three `worktree reconcile` runs spanning the window reported
+/// `13 of 16 entries are removable`, including `session-05717fa8`: the worktree
+/// the measuring session was committing to at that moment.
+///
+/// The registration is cwd-independent — the record carries the worktree path
+/// in its own `project` field and the live session refreshes `heartbeat_at` —
+/// so it cannot go vacuous the same way. It also cannot go vacuous the *other*
+/// way, by absence: [`registrations_in`] resolves "nothing named this path" to
+/// `Undetermined`, not to a known absence, because most sessions register
+/// nothing. The transcript is kept as a liveness signal in the fingerprint,
+/// where it can only ever make a worktree look more alive.
+///
+/// The cost is deliberate and was accepted by the user on 2026-09-07: the 15
+/// worktrees that predate routine registration are `Undetermined` forever under
+/// this rule, so this rule reclaims nothing until worktree creation starts
+/// writing a registration. That is the restrictive side of an irreversible
+/// operation.
 ///
 /// # Why a frozen transcript is not evidence of death (measured)
 ///
@@ -1139,7 +1360,9 @@ fn transcripts_for(path: &Path) -> Determination<Transcripts> {
 /// real and is accepted deliberately: a worktree that any session has ever
 /// worked in stays unreclaimable by this rule, so the reclaimable population is
 /// the worktrees that no session was ever bound to. Deleting live work is
-/// irreversible; leaving a directory on disk is not.
+/// irreversible; leaving a directory on disk is not. Since 2026-09-07 the
+/// reclaimable population is narrower still — the worktrees no session was ever
+/// bound to AND that carry an aged-out registration.
 ///
 /// The other cost is that reclamation takes two probes spaced a window apart,
 /// where the old rule deleted on the first. `condukt worktree cleanup --remove`
@@ -1163,21 +1386,26 @@ fn unclaimed_occupancy(
     ]);
     let key = format!("wt-reconcile:unclaimed:{}", path.display());
     let liveness = progress::sample(store, &key, current, now, window);
-    match (liveness, transcripts) {
+    let registrations = registrations_for(path, now);
+    match (liveness, transcripts, registrations) {
         // Somebody is working here without having registered a claim.
-        (Determination::Known(progress::Liveness::Progressing), _) => {
+        (Determination::Known(progress::Liveness::Progressing), _, _) => {
             Determination::Known(Occupancy::Live)
         }
-        // All three terms hold. This is the only path to `Dead`.
+        // A heartbeat inside the TTL is a positive observation that a session
+        // is alive in this directory, and it outranks every frozen signal —
+        // being frozen is what a thinking agent looks like.
         (
             Determination::Known(progress::Liveness::Stalled),
-            Determination::Known(Transcripts::NoneEverRanHere),
-        ) => Determination::Known(Occupancy::Dead),
+            _,
+            Determination::Known(Registrations::LiveHere),
+        ) => Determination::Known(Occupancy::Live),
         // Frozen signals, but a session has been bound to this path. See the
         // measurement in this function's docstring: frozen is not finished.
         (
             Determination::Known(progress::Liveness::Stalled),
             Determination::Known(Transcripts::Present(_)),
+            _,
         ) => Determination::undetermined(format!(
             "no running task claims {} and its signals are frozen, but a Claude session \
              transcript is bound to this path; a transcript is flushed at turn \
@@ -1186,15 +1414,36 @@ fn unclaimed_occupancy(
              worked here continuously)",
             path.display()
         )),
-        (Determination::Known(progress::Liveness::Stalled), Determination::Undetermined(why)) => {
-            Determination::undetermined(format!(
-                "no running task claims {} and its signals are frozen, but whether a \
-                 session is bound to this path could not be looked up ({})",
-                path.display(),
-                why.as_str()
-            ))
-        }
-        (Determination::Undetermined(why), _) => Determination::undetermined(format!(
+        (
+            Determination::Known(progress::Liveness::Stalled),
+            Determination::Undetermined(why),
+            _,
+        ) => Determination::undetermined(format!(
+            "no running task claims {} and its signals are frozen, but whether a \
+             session is bound to this path could not be looked up ({})",
+            path.display(),
+            why.as_str()
+        )),
+        // All four terms hold. This is the only path to `Dead`.
+        (
+            Determination::Known(progress::Liveness::Stalled),
+            Determination::Known(Transcripts::NoneEverRanHere),
+            Determination::Known(Registrations::AllStaleHere),
+        ) => Determination::Known(Occupancy::Dead),
+        // Frozen, never transcribed here — but nothing established that no
+        // session is working here. Absence of a registration is not an
+        // observation of the directory; see `registrations_in`.
+        (
+            Determination::Known(progress::Liveness::Stalled),
+            Determination::Known(Transcripts::NoneEverRanHere),
+            Determination::Undetermined(why),
+        ) => Determination::undetermined(format!(
+            "no running task claims {} and its signals are frozen, but whether a session \
+             is working here was not established ({})",
+            path.display(),
+            why.as_str()
+        )),
+        (Determination::Undetermined(why), _, _) => Determination::undetermined(format!(
             "no running task claims this worktree, but its own signals do not establish \
              death either ({}); the absence of a claim is not an observation of the \
              directory",

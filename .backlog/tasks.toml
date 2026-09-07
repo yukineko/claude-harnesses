@@ -5371,9 +5371,29 @@ notes = """
 session worktree を dead/removable と判定することが実測されたため
 (13 of 16 entries are removable、うち 1 本は測定した当のセッションが作業中の
 worktree)、この GC を現状の判定の上に書くと 13 本を消す。ユーザー裁定
-(2026-09-07) により、先に 7039ad47 で判定基準を直す。"""
+(2026-09-07) により、先に 7039ad47 で判定基準を直す。
+
+---
+2026-09-07: **ブロッカー 7039ad47 は closed** (condukt 0.7.148)。ただし
+「安全に書けるようになった」であって「書けば効く」ではない。実測を残す:
+
+修正後の同じ機械での reconcile は `0 of 18 entries are removable` を返す。
+`session-05717fa8` は `occupancy=live` になり、残る 15 本は
+`occupancy=undetermined` — driver 登録を持たないため、新しい第4項が
+「そこで誰も作業していない」を立証できない。これは裁定 (2026-09-07) の制約 3 が
+予告した**意図された縮退**である。
+
+したがって本項目の sweeper を今書くと、正しく動作し、かつ何も回収しない。
+実際に回収可能にする前提の一手は別項目にすること:
+
+  worktree 作成時点 (`condukt worktree create` / SessionStart の worktree 用意)
+  で driver 相当の登録を書き、**それ以降に作られた worktree については記録の
+  不在が観測になる**ようにする。既存の 15 本は Undetermined のまま残してよい。
+
+この前提無しに「回収数を増やす」方向で第4項を緩めるのは、7039ad47 で直した
+欠陥をそのまま巻き戻す行為である。"""
 created_at = 1784746580
-updated_at = 1788772729
+updated_at = 1788774081
 weight = 0.0
 issue_number = 316
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/316"
@@ -15522,7 +15542,7 @@ title = "condukt worktree reconcile が LIVE な session worktree を dead/remov
 project = "/home/hiroyuki_nakayama/src/claude-harnesses"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = """
 実測 (2026-09-07, condukt 0.7.146, 本 repo)。2d3cbda2 (dead session の
 worktree/branch GC) の右サイズを測る過程で観測した。**GC を書く前にこれを閉じないと、
@@ -15657,7 +15677,175 @@ rc=2。escalate なので AskUserQuestion で人間に返し、上の 2 点が�
 6. **RED を先に観測すること。** 本項目の実測 (session-05717fa8 が
    occupancy=dead removable=true) を再現する behavioural test を先に書き、
    それが RED であることを観測してから GREEN にする。テストは CLAUDE.md 2.(a) に
-   従い利害のない agent に書かせる。"""
+   従い利害のない agent に書かせる。
+
+---
+## 実装完了 (2026-09-07, condukt 0.7.148, ブランチ fix/reconcile-session-witness)
+
+裁定どおり第3項を session heartbeat レジストリへ置き換えた。実測のみを書く。
+
+### RED を先に観測した (裁定の制約 6)
+
+実装前に 4 本の behavioural test を書き、実行した。verbatim:
+
+    test result: FAILED. 20 passed; 4 failed
+    failures:
+        live_session_registration_keeps_a_frozen_clean_worktree
+        no_session_registration_is_undetermined_not_dead
+        only_the_heartbeat_age_separates_live_from_dead
+        unreadable_session_registry_is_undetermined_not_dead
+
+うち本項目の実測を再現するものの失敗内容 (verbatim):
+
+    assertion `left == right` failed: a session registration heartbeating
+    inside the TTL is somebody working here;
+    entry: {... "occupancy":{"value":"dead"} ... "removable":true ...}
+      left: String("dead")
+     right: "live"
+
+実装後: `test result: ok. 24 passed; 0 failed` (RC=0)。
+
+### 実装
+
+`crates/condukt/src/wt_reconcile.rs`:
+
+- `DRIVER_STALE_TTL_SECS: i64 = 1800` (source of truth は
+  `backlog::lock::LOCK_STALE_TTL_SECS`。backlog に lib.rs が無く定数が
+  `pub(crate)` なので link できず手写し。**ドリフト検出手段が無い件は
+  6e30b6fc として起票**した)。
+- `enum Registrations { LiveHere, AllStaleHere }` — 二値ではなく
+  `Determination` で包む三値。
+- `registrations_in(root, path, now)` — `~/.backlog/drivers/*/*.driver` を
+  **全走査し、記録自身の `project` フィールド**で突き合わせる。slug を
+  再導出しない: それが transcript witness を空虚にした当の結合だから。
+- `unclaimed_occupancy` を 4 項連言へ書き換え。
+
+判定表 (裁定の制約 1/2 のとおり):
+
+    Progressing                                     -> Live
+    Stalled ∧ LiveHere                              -> Live
+    Stalled ∧ transcript Present                    -> Undetermined (既存)
+    Stalled ∧ transcript 読めず                     -> Undetermined (既存)
+    Stalled ∧ NoneEverRanHere ∧ AllStaleHere        -> Dead   ← 唯一の death 経路
+    Stalled ∧ NoneEverRanHere ∧ レジストリ Undetermined -> Undetermined
+    liveness Undetermined                           -> Undetermined (既存)
+
+**記録の不在は Undetermined**、レジストリが読めないのも Undetermined。
+
+### 制約 4 は採用しなかった (理由を明示する)
+
+裁定の notes 4 は「pid の生存を heartbeat TTL より強い witness として併用を
+検討してよい」と書いていたが、採用しなかった。`crates/backlog/src/driver.rs` の
+`pid` フィールドの doc が逐語で否定しているため:
+
+    Observability only — NOT used to judge liveness ... `backlog` is a
+    one-shot CLI, so the recorded pid is already dead by the time anyone
+    reads the file. Liveness is judged by `heartbeat_at`.
+
+記録された pid は backlog CLI プロセスのものであってセッションのものではない。
+pid の生存を見ると、再利用された無関係なプロセスを witness にすることになる。
+
+### アンチ空虚の対照 (制約 5)
+
+`only_the_heartbeat_age_separates_live_from_dead`: 他の一切が同一の 2 本の
+worktree で `heartbeat_at` だけを反転させ、verdict が live / dead に**分かれる**
+ことを固定する。レジストリを一切読まない実装はこれを通せない。
+`dead_clean_worktree_is_removable` (期限切れ記録 + 全項成立 -> removable) も維持。
+
+### 既存テストの fixture 変更 (弱化ではない。明示する)
+
+5 本の既存テストに期限切れ記録を追加した。いずれも「死を積極的に立証する」
+fixture が必要なテストであり、追加しないと Undetermined に落ちて**別の理由で**
+アサーションが通ってしまう (= 何も証明しない) ため:
+
+  worktree_reconcile.rs: dead_clean_worktree_is_removable /
+    dirty_worktree_is_preserved_before_it_becomes_removable /
+    stale_preserved_ref_does_not_authorize_deletion
+  worktree_resume.rs: interrupted_failed_task_worktree_is_resumable /
+    resume_command_hands_off_to_state_resume_context
+
+後ろ 2 本は実装後に RED になって発見した (自分で予測したのではない)。
+2026-08-14 裁定が守っている 2 本 (dirty_worktree_... / stale_preserved_ref_...)
+は fixture を強める向きの変更のみで、アサーションは 1 行も緩めていない。
+
+### 実機での検証 (done criterion F)
+
+修正前 (0.7.146、本項目の起票時の実測):
+
+    registered   session-05717fa8  occupancy=dead  dirty=false  removable=true
+    13 of 16 entries are removable
+
+修正後 (0.7.148、同じ機械、窓をまたいだ 2 プローブ):
+
+    registered   session-05717fa8  occupancy=live  dirty=false  removable=false
+    0 of 18 entries are removable
+
+他の 15 本は `occupancy=undetermined`。これは**裁定の制約 3 が予告した正しい縮退**
+であり、回収可能にする一手 (worktree 作成時点での登録) は別項目のままにする。
+
+### ゲート (bare exit code で確認)
+
+    cargo fmt --all -- --check   -> 0
+    cargo clippy -p condukt --all-targets -> 0
+    cargo test -p condukt --no-fail-fast  -> 0 (FAILED 行なし)
+
+version は 0.7.147 -> 0.7.148 を 3 ファイル lockstep で bump 済み。
+**rollout は未実施** (稼働ハーネスの cache には反映されていない)。"""
 created_at = 1788772560
-updated_at = 1788772729
+updated_at = 1788774057
+weight = 0.0
+
+[[task]]
+id = "6e30b6fc"
+title = "condukt::wt_reconcile::DRIVER_STALE_TTL_SECS が backlog::lock::LOCK_STALE_TTL_SECS の手写しになっている — ドリフトを止める機械的な手段が無い"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+7039ad47 の修正 (condukt 0.7.148) で発生した既知の重複。判断ではなく実測で
+記録する。
+
+## 事実 (測定日 2026-09-07、測定点 fix/reconcile-session-witness)
+
+- `crates/backlog/src/lock.rs:73` : `pub(crate) const LOCK_STALE_TTL_SECS: i64 = 1800;`
+  これが driver 記録を書く側 (backlog) が reap に使う値であり、source of truth
+  (`lock.rs:76` が `now.saturating_sub(info.heartbeat_at) > LOCK_STALE_TTL_SECS`)。
+- `crates/condukt/src/wt_reconcile.rs` : `const DRIVER_STALE_TTL_SECS: i64 = 1800;`
+  これが記録を読む側 (condukt) が「heartbeat が古い = death の第4項が成立」と
+  判定する値。
+- condukt は backlog を link できない: `ls crates/backlog/src/lib.rs` -> No such
+  file (binary crate のみ)、定数は `pub(crate)`、`crates/condukt/Cargo.toml` の
+  依存に backlog は無い。以上 3 点は実行して確認した。
+
+## なぜ重いか — ずれる方向によって非対称
+
+- condukt 側が短くなる (例 300) -> backlog がまだ生きているとみなす登録を condukt が
+  「期限切れ」と読む。**生きているセッションの worktree が dead と判定される** —
+  7039ad47 で直したばかりの欠陥が、定数のドリフトという別の入口から再発する。
+- condukt 側が長くなる -> 回収が遅れるだけ (制限側)。
+
+つまりこの重複は片方向にだけ fail-open へ倒れる。現在はコメントで source of truth を
+名指ししているだけで、**機械的な検出は無い**。CLAUDE.md 6.「規範の遵守を実装者の
+自己申告に依存させない」に照らすと不十分。
+
+## 取りうる手 (いずれも未検証の案であって結論ではない)
+
+1. `crates/backlog` に薄い `src/lib.rs` を足して定数を `pub` にし、condukt が依存する。
+   最も直接的だが、backlog を lib+bin にする影響 (plugin の version lockstep、
+   ビルド時間) を測っていない。
+2. `harness-core` に TTL を移す。両者が既に harness-core に依存しているので link は
+   自明。ただし「セッション登録の TTL」が harness-core のドメインか?という問いが残る。
+3. `scripts/` に定数照合ゲートを足す (gate-crates-sync と同じ形で、2 ファイルの
+   リテラルを機械照合して差異で block する)。link を増やさずにドリフトだけ止める。
+
+3 が最も安く、1/2 と排他でもない。
+
+## 参照
+
+- 7039ad47 (この重複を生んだ修正)
+- 修正コミット: ブランチ fix/reconcile-session-witness, condukt 0.7.148
+"""
+created_at = 1788774009
+updated_at = 1788774009
 weight = 0.0

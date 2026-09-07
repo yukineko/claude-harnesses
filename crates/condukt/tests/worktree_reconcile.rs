@@ -23,10 +23,14 @@
 //! For a gate, "cannot determine" blocks the user. For a GC, the restrictive
 //! side is **do not delete** — deletion is the only irreversible operation
 //! here. So every assertion below that involves an unreadable/unattributable
-//! input asserts `removable == false`, and the two anti-vacuity controls
-//! (`dead_clean_worktree_is_removable`, `progressing_task_worktree_is_live`)
-//! exist so that an implementation which answered "undetermined" to everything
-//! could not pass this file.
+//! input asserts `removable == false`, and the anti-vacuity controls
+//! (`dead_clean_worktree_is_removable`, `progressing_task_worktree_is_live`,
+//! `only_the_heartbeat_age_separates_live_from_dead`) exist so that an
+//! implementation which answered "undetermined" to everything could not pass
+//! this file. The last of the three is also the control that keeps the death
+//! rule's session-registration term from being ignored outright: it flips one
+//! field between two otherwise identical worktrees and requires the verdicts
+//! to differ.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -172,6 +176,39 @@ impl Fixture {
         self.home.join(".claude").join("projects").join(encoded)
     }
 
+    /// `~/.backlog/drivers/<bucket>/<name>.driver` — one backlog driver
+    /// registration, the witness that a session is alive in `project`.
+    ///
+    /// `bucket` and `name` are ARBITRARY here on purpose. The reader under test
+    /// scans every `*.driver` record and matches on the record's own `project`
+    /// field, so it never re-derives backlog's slug encoding. A test that
+    /// re-derived the slug would pin an encoding that neither side owns — which
+    /// is precisely how the transcript witness went silently vacuous (the
+    /// encoding keys on the session's cwd, and under CLAUDE.md section 8 the
+    /// cwd is the main tree, never the worktree).
+    ///
+    /// `heartbeat_at` is the whole experiment: the same record fresh vs. stale
+    /// is the only difference between `live` and `dead` in the tests below.
+    fn write_driver(&self, bucket: &str, name: &str, project: &Path, heartbeat_at: i64) {
+        let dir = self.home.join(".backlog").join("drivers").join(bucket);
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = project
+            .canonicalize()
+            .unwrap_or_else(|_| project.to_path_buf());
+        let record = serde_json::json!({
+            "session_id": format!("sess-{name}"),
+            "pid": 1,
+            "project": project.to_string_lossy(),
+            "registered_at": heartbeat_at,
+            "heartbeat_at": heartbeat_at,
+        });
+        std::fs::write(
+            dir.join(format!("{name}.driver")),
+            serde_json::to_vec_pretty(&record).unwrap(),
+        )
+        .unwrap();
+    }
+
     fn reconcile_json(&self, extra: &[&str]) -> serde_json::Value {
         self.reconcile_json_in(&self.repo, extra)
     }
@@ -238,6 +275,14 @@ impl Drop for Fixture {
 
 /// The report entry whose path ends with `name` (paths are canonicalized by
 /// the tool, so compare on the suffix).
+/// Wall-clock seconds, the same clock `reconcile` reads for heartbeat ages.
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock is after the epoch")
+        .as_secs() as i64
+}
+
 fn entry<'a>(report: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
     let entries = report["entries"]
         .as_array()
@@ -409,6 +454,13 @@ fn dirty_worktree_is_preserved_before_it_becomes_removable() {
     // longer read as death. Asserting `dead` here keeps the dirty gate under
     // test for the reason it exists — it must hold even against a worktree
     // whose death is positively established, not merely undetermined.
+    //
+    // The stale registration is the observation that establishes it (backlog
+    // `7039ad47`, 2026-09-07): death now needs a registration that has aged
+    // out, not merely the absence of one. Supplying it keeps this test aimed
+    // at the DIRTY gate instead of letting it pass on `undetermined`, which
+    // blocks deletion for an unrelated reason and would prove nothing here.
+    f.write_driver("bucket", "long-gone", &wt, 0);
     let _ = f.reconcile_json_w0(&[]);
     let report = f.reconcile_json_w0(&[]);
     let e = entry(&report, "wt-dirty");
@@ -472,6 +524,10 @@ fn stale_preserved_ref_does_not_authorize_deletion() {
     let f = Fixture::new("stale-preserved");
     let wt = f.add_worktree("wt-stale-pres", "feat/stale-pres");
     std::fs::write(wt.join("first.txt"), "first\n").unwrap();
+    // Establish death positively (backlog `7039ad47`): this test is about the
+    // preserved-ref gate, so the worktree has to actually reach `dead` for the
+    // first `removable` assertion to mean anything.
+    f.write_driver("bucket", "long-gone", &wt, 0);
 
     let report = f.reconcile_json_settled(&["--preserve"]);
     assert!(removable(&report, "wt-stale-pres"));
@@ -498,12 +554,21 @@ fn stale_preserved_ref_does_not_authorize_deletion() {
 /// every other test in this file.
 ///
 /// This is the control that keeps the DEATH rule from degenerating into "never
-/// delete anything". All three conjuncts are supplied for real, none injected:
+/// delete anything". All four conjuncts are supplied for real, none injected:
 /// the worktree's own signals are frozen (nothing touches it between the two
 /// probes), the window has elapsed (collapsed to 0 via
-/// `HARNESS_PROGRESS_WINDOW_SECS`, which still requires two samples), and the
+/// `HARNESS_PROGRESS_WINDOW_SECS`, which still requires two samples), the
 /// transcript store is readable and contains no directory for this path —
-/// looked up and found absent, not left unlooked-up.
+/// looked up and found absent, not left unlooked-up — and a session
+/// registration naming this worktree exists whose heartbeat is older than the
+/// TTL.
+///
+/// The registration is what changed on 2026-09-07 (backlog `7039ad47`). It is
+/// supplied here rather than left absent because absence is no longer death:
+/// this fixture must *establish* death, and a stale heartbeat is the
+/// establishing observation. Dropping the `write_driver` call below turns this
+/// test's expectation from `dead` to `undetermined` — that is the assertion
+/// `no_session_registration_is_undetermined_not_dead` makes.
 #[test]
 fn dead_clean_worktree_is_removable() {
     let f = Fixture::new("dead-clean");
@@ -516,6 +581,7 @@ fn dead_clean_worktree_is_removable() {
         !f.transcript_dir(&wt).exists(),
         "no session has ever worked in this worktree"
     );
+    f.write_driver("bucket", "long-gone", &wt, 0);
 
     let report = f.reconcile_json_settled(&[]);
     let e = entry(&report, "wt-clean");
@@ -525,6 +591,167 @@ fn dead_clean_worktree_is_removable() {
         removable(&report, "wt-clean"),
         "a dead, clean, attributable worktree must be removable; entry: {e}"
     );
+}
+
+// -- 3d. The DEATH rule's third term: a SESSION REGISTRATION, not a cwd slug --
+//
+// Measured 2026-09-07 against this repository (backlog `7039ad47`), condukt
+// 0.7.146, three `worktree reconcile` runs spanning the 90s window:
+//
+//     registered   session-05717fa8   occupancy=dead  dirty=false  removable=true
+//     registered   session-7b53203c   occupancy=dead  dirty=false  removable=true
+//     ...
+//     13 of 16 entries are removable
+//
+// `session-05717fa8` was the worktree the measuring session was committing to
+// at that moment. The two entries that were NOT removable were saved by
+// `dirty`, a different term entirely; the liveness rule called every one of
+// them dead.
+//
+// The cause is the third term going vacuous by a route its own docstring
+// forbids. That term reads `~/.claude/projects/<slug of the worktree path>`,
+// and the slug keys on the SESSION'S CWD. Under CLAUDE.md section 8 the cwd is
+// the main tree and each Bash call `cd`s into the worktree, so that directory
+// is never created: measured, `ls ~/.claude/projects | wc -l` was 7 and none of
+// the 7 corresponded to a worktree path. The term therefore held for every
+// session worktree, and the conjunction collapsed to "frozen for 90 seconds" —
+// which is what an agent that is reading and thinking looks like.
+//
+// The replacement witness is the backlog driver registry
+// (`~/.backlog/drivers/*/*.driver`), chosen by the user on 2026-09-07 after the
+// `/flow` consent gate escalated. It is cwd-independent: the record carries the
+// worktree path in its own `project` field, and its `heartbeat_at` is refreshed
+// by the live session. The transcript stays a *liveness* signal in the
+// fingerprint (it can only make a worktree look more alive) but is no longer
+// the term that authorizes death.
+
+/// The production defect, reproduced: a clean worktree whose signals are frozen
+/// across the window, with a session registration whose heartbeat is inside the
+/// TTL, must not be dead — and must not be removable.
+///
+/// Frozen git signals and no transcript directory are exactly what the
+/// measuring session's own worktree looked like. The only thing that
+/// distinguishes it from an abandoned directory is the registration, so the
+/// registration has to be load-bearing.
+#[test]
+fn live_session_registration_keeps_a_frozen_clean_worktree() {
+    let f = Fixture::new("driver-live");
+    let wt = f.add_worktree("wt-working", "feat/working");
+    assert!(
+        !f.transcript_dir(&wt).exists(),
+        "the session's cwd is the main tree, so no transcript is bound to the worktree path \
+         — this is the shape that made the old third term vacuous"
+    );
+    f.write_driver("bucket", "at-work", &wt, now());
+
+    let report = f.reconcile_json_settled(&[]);
+    let e = entry(&report, "wt-working");
+    assert_eq!(
+        e["occupancy"]["value"], "live",
+        "a session registration heartbeating inside the TTL is somebody working here; entry: {e}"
+    );
+    assert!(
+        !removable(&report, "wt-working"),
+        "the worktree the running session is working in must never be removable; entry: {e}"
+    );
+}
+
+/// The witness is load-bearing in BOTH directions, on one flipped field.
+///
+/// Two worktrees, identical in every other respect — same repo, same freeze,
+/// same absent transcript, same probe pair — differing only in `heartbeat_at`.
+/// If the verdicts do not differ, the registry is not being read at all, and an
+/// implementation that ignored it entirely would still pass the two tests
+/// above.
+#[test]
+fn only_the_heartbeat_age_separates_live_from_dead() {
+    let f = Fixture::new("driver-pair");
+    let fresh = f.add_worktree("wt-fresh", "feat/fresh");
+    let stale = f.add_worktree("wt-stale-hb", "feat/stale-hb");
+    f.write_driver("bucket", "fresh", &fresh, now());
+    f.write_driver("bucket", "stale", &stale, now() - 4 * 3600);
+
+    let report = f.reconcile_json_settled(&[]);
+    let fresh_e = entry(&report, "wt-fresh");
+    let stale_e = entry(&report, "wt-stale-hb");
+    assert_eq!(fresh_e["occupancy"]["value"], "live", "entry: {fresh_e}");
+    assert_eq!(
+        stale_e["occupancy"]["value"], "dead",
+        "a registration whose heartbeat has aged out is the observation that establishes \
+         death; entry: {stale_e}"
+    );
+    assert!(!removable(&report, "wt-fresh"), "entry: {fresh_e}");
+    assert!(removable(&report, "wt-stale-hb"), "entry: {stale_e}");
+}
+
+/// Absence of a registration is NOT death.
+///
+/// This is the constraint the whole fix turns on. Measured 2026-09-07:
+/// `~/.backlog/drivers` held exactly one record on a machine with 15 session
+/// worktrees, because a session doing plain section-8 worktree work registers
+/// no driver. Reading "no record" as death would make the third term hold
+/// vacuously again — the same defect wearing a different witness — so it
+/// resolves to undetermined, and the accepted cost is that the existing
+/// unregistered worktrees stay unreclaimable by this rule.
+#[test]
+fn no_session_registration_is_undetermined_not_dead() {
+    let f = Fixture::new("driver-absent");
+    let wt = f.add_worktree("wt-unregistered", "feat/unregistered");
+    assert!(
+        !f.transcript_dir(&wt).exists(),
+        "no transcript either: only the registration term is under test here"
+    );
+
+    let report = f.reconcile_json_settled(&[]);
+    let e = entry(&report, "wt-unregistered");
+    assert_eq!(
+        e["occupancy"]["value"], "undetermined",
+        "the absence of a registration is not an observation of the directory; entry: {e}"
+    );
+    // Pin WHICH undetermined. Several reasons reach this value and a test
+    // satisfied by any of them says nothing about this term.
+    let reason = e["occupancy"]["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("no session registration names"),
+        "the cause must be the missing registration; reason: {reason}"
+    );
+    assert!(
+        !removable(&report, "wt-unregistered"),
+        "undetermined occupancy must not authorize deletion; entry: {e}"
+    );
+}
+
+/// An unreadable registry is not an empty registry.
+///
+/// Same shape as `unclaimed_worktree_is_undetermined_when_the_transcript_store_is_unreadable`,
+/// applied to the term that replaced it: if the store cannot be read, "no
+/// session is registered here" has not been looked up, and mapping the IO
+/// failure to a known absence would collapse the conjunction. The registry root
+/// is replaced by a FILE so `read_dir` fails for a reason that is not
+/// `NotFound`.
+#[test]
+fn unreadable_session_registry_is_undetermined_not_dead() {
+    let f = Fixture::new("driver-blind");
+    let wt = f.add_worktree("wt-blind-reg", "feat/blind-reg");
+    // A stale registration would otherwise establish death — proving the
+    // unreadability, not the absence, is what stops it.
+    f.write_driver("bucket", "long-gone", &wt, 0);
+    let drivers = f.home.join(".backlog").join("drivers");
+    std::fs::remove_dir_all(&drivers).unwrap();
+    std::fs::write(&drivers, "not a directory\n").unwrap();
+
+    let report = f.reconcile_json_settled(&[]);
+    let e = entry(&report, "wt-blind-reg");
+    assert_eq!(
+        e["occupancy"]["value"], "undetermined",
+        "an unreadable registry is not an absence of sessions; entry: {e}"
+    );
+    let reason = e["occupancy"]["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("registration store") && reason.contains("unreadable"),
+        "the cause must be the unreadable registry; reason: {reason}"
+    );
+    assert!(!removable(&report, "wt-blind-reg"), "entry: {e}");
 }
 
 // -- 3c. The DEATH rule: an absent claim is not proof of death --------------

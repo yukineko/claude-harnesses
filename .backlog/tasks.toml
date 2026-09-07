@@ -9862,8 +9862,9 @@ title = "セッション異常終了への対応: (a) 中断作業を次セッ�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "done"
 notes = """
+
 部分完了 (2026-08-12, condukt 0.7.129, merge 6fc4fdee)。(b) GC 側だけが着地した: condukt worktree reconcile が git worktree list と全 run-state namespace と作業ツリーの三者照合を行い live/dead/undetermined を返す。is_removable はワイルドカード無しの網羅 match で、あらゆる Undetermined と Role::Primary は keep に解決する。dirty な worktree は refs/preserved へ退避されるまで削除に到達しない。統合前に kill rate を独立再測定した: Role::Primary の arm 削除は E0004 コンパイルエラー、Undetermined 3 arm と preserved arm と primary_witnesses の退行はすべて KILLED、対照 (is_removable 常に false) は 2 件を殺した。(a) resume 側は未着手である。--json が resume の surface として存在するが消費者が 1 つも無い (0cf3775c で追跡)。したがって本 item は done ではない。残っているのは (a) のみ。
 
 --- 追記 (2026-08-14, 測定点 f7456175): (a) のみ landed、(b) は未着手 ---
@@ -9883,9 +9884,45 @@ resume_verdict の各アームを Resumable へ widen する = 実在する fail
 death criterion ruling 待ちで、それが決まるまで実装できない。
 **したがって本 item は done にしない** — (a) だけで close すると (b) が
 終わったように見える。
-"""
+
+
+--- CLOSED 2026-09-07 (測定点 b5135ffd, linux-x86_64) ---
+
+(a)(b) とも着地済みであることを観測で確認したので close する。
+
+【前提ブロッカーは解消済み】
+本 notes の「fe84d350 / 5aaecbf6 の death criterion ruling 待ち」は陳腐化していた。
+両 item とも status = "done"。裁定も存在する:
+  Dead <= 停滞 AND progress window の経過 AND transcript 証拠なし (3点の連言)
+
+【(a) resume】
+condukt worktree resume-candidates が存在し、GC と同一の reconciliation を消費する
+(--help 逐語: "by consuming the SAME reconciliation the GC consumes")。
+
+【(b) fail-closed GC】
+condukt worktree cleanup [--remove] [--preserve] が存在。deletion は
+wt_reconcile::is_removable 経由のみ (--help 逐語: "Deletion is reachable ONLY
+through wt_reconcile::is_removable")。
+3点連言は crates/condukt/src/wt_reconcile.rs:1171-1175 に実装され、コメントが
+逐語で "All three terms hold. This is the only path to `Dead`." と書いている。
+
+【実挙動の観測 (--remove は他セッションの worktree を消すので打っていない)】
+condukt worktree reconcile の出力では、7 worktree すべてが
+occupancy=undetermined / removable=false に解決し、理由が逐語で:
+  "no running task claims this worktree, but its own signals do not establish
+   death either (first progress observation (no prior snapshot)); the absence
+   of a claim is not an observation of the directory"
+= 「claim が無いこと」を「死んでいること」に写さない。本 item が要求した
+fail-closed そのもの。
+
+【空虚でないことの確認 (フォールト注入)】
+3点連言を「停滞なら transcript を問わず Dead」へ広げる (= fe84d350 が直した
+fail-open の再導入) と、unclaimed_worktree_whose_transcript_stopped_growing_is_not_dead
+が KILLED する。逐語: "a frozen transcript cannot tell a finished session from a
+mid-turn one" left "dead" / right "undetermined"、注入時は removable:true。
+注入は revert 済み、cargo test -p condukt --test worktree_reconcile = 20 passed。"""
 created_at = 1786403442
-updated_at = 1787273410
+updated_at = 1788755838
 weight = 0.0
 issue_number = 237
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/237"
@@ -11903,8 +11940,9 @@ title = "fe84d350 の RED テスト (commit 375587a2 / branch t2-occupancy-undet
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
-notes = """
+status = "done"
+notes = '''
+
 実測 2026-08-17、測定点 f1131a36 (local == origin/main、ahead/behind = 0/0)、WSL2 linux-x86_64、worktree session-52834a1f。
 
 【何が起きているか】
@@ -11991,9 +12029,51 @@ control (dead_clean_worktree_is_removable) とその削除理由も記録され�
 **未検証**: 375587a2 が他マシン (mac 側の /Users/yuki/src/harness) の odb に残っている
 可能性は調べていない。残っていれば書き直しではなく回収できる。確認方法は mac 側で
 同じ `git cat-file -t 375587a2` を打つこと。
-"""
+
+
+--- CLOSED 2026-09-07 (測定点 b5135ffd, linux-x86_64) ---
+
+【消失は確定。回収は不可能】
+git fetch でリモートの全ブランチ・タグを取得した後も回収できない:
+  git cat-file -t 375587a2                                  -> Not a valid object name
+  git rev-parse --disambiguate=375587                       -> 0 件
+  git branch -a --list '*20260814-005232-58819*'            -> 0 件
+  git for-each-ref refs/preserved                           -> 0 件
+決定的な観測: git log --all -S'unclaimed_worktree_occupancy_is_undetermined_not_dead'
+-- '*.rs' が 0 ヒット。**テストコードとしてはどの ref にも存在したことがない**
+(ヒットするのは tasks.toml でテスト名に言及した backlog コミットのみ)。
+したがって上記【判定不能な点】は (b) 記録違いの側に寄る証拠が増えたが、
+(a) 実在の消失を完全に棄却できたわけではない (未 commit のまま失われた可能性は残る)。
+
+【しかし目的は達成されている — 別名のテストが同じ性質を pin している】
+失われた 3 本が pin しようとした性質は、現存する green テストがカバーする:
+  crates/condukt/tests/worktree_reconcile.rs:550 unclaimed_worktree_is_undetermined_on_a_first_probe_not_dead
+  crates/condukt/tests/worktree_reconcile.rs:582 unclaimed_worktree_with_a_growing_transcript_is_live_not_dead
+  crates/condukt/tests/worktree_reconcile.rs:662 unclaimed_worktree_whose_transcript_stopped_growing_is_not_dead
+本 notes が「削除されていない」と訂正した対照 dead_clean_worktree_is_removable も
+現存し green (508 行目。notes が書いた 427 行から行番号のみ drift)。
+5aaecbf6 が「通らなくなる」と懸念した dirty_worktree_is_preserved_before_it_becomes_removable
+と stale_preserved_ref_does_not_authorize_deletion も green。
+
+【空虚でないことをフォールト注入で確認した】
+判断で ok にしないため、3点連言を広げる mutation を注入したところ
+unclaimed_worktree_whose_transcript_stopped_growing_is_not_dead が KILLED した
+(詳細は e99f61e4 の CLOSED 追記)。
+
+【残る差 — close にあたって隠さず記録する】
+現行 3 本は「かつて RED を観測したテスト」ではない。確認できたのは
+*mutation で殺せる* ことであって *F->P の順序* ではない。CLAUDE.md 第2節(b) を
+厳密に取るなら、この item が要求した F->P オラクルの証跡は復元されていない。
+それを承知のうえでユーザー裁定により close する (2026-09-07)。
+
+【記録の腐敗について — 本 item の主題】
+charter と各 notes が「375587a2 の RED を 2026-08-14 に読み直して裁定との整合を
+確認済み」と書いていたが、その commit は存在しない。**存在しないコミットを読んだ
+ことになっていた**。これは CLAUDE.md 第4節が最も重く禁じる「確かめていないことを
+確かめたかのように報告する」の在庫版である。close するが、この誤りは訂正せず
+そのまま残す — 次に同種の記述を見た者が疑えるようにするため。'''
 created_at = 1786943936
-updated_at = 1786950547
+updated_at = 1788755838
 weight = 0.0
 
 [[task]]

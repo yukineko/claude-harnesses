@@ -46,8 +46,9 @@
 
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 
@@ -153,6 +154,37 @@ pub struct MapEntry {
     /// Client-side call sites (files) that call this entry's api/url.
     #[serde(default)]
     pub client_refs: Vec<String>,
+    /// Symbol names DECLARED in this entry's `impl_files`, from the
+    /// deterministic symbol index. Populated by `specguard map enrich`; empty
+    /// until then, and empty for entries whose impl files declare nothing.
+    ///
+    /// `#[serde(default)]`, like every field here, so a map written before this
+    /// existed still parses — the field simply reads as not-yet-enriched.
+    #[serde(default)]
+    pub symbols: Vec<String>,
+    /// Files that CALL into [`MapEntry::symbols`] from outside this entry's own
+    /// `impl_files`, from the persisted call graph. This is the edge that spec
+    /// drift travels along: change one of these symbols and every file listed
+    /// here is a place the change is observable.
+    ///
+    /// Lexical, so it inherits the call graph's limits — no module or type
+    /// resolution, and two same-named symbols in different modules collapse
+    /// into one. Treat it as "look here", never as a proof of reachability.
+    #[serde(default)]
+    pub called_by: Vec<String>,
+    /// Symbols from [`MapEntry::symbols`] deliberately LEFT OUT of the
+    /// `called_by` derivation because too many files declare that same name
+    /// ([`AMBIGUOUS_SYMBOL_DECLS`]).
+    ///
+    /// A lexical graph cannot tell forty `new`s apart, so an edge to one of
+    /// them says only "somebody called something called `new`". Attributing all
+    /// of those to this entry produced `called_by` lists of 170 files — a
+    /// number large enough to look like insight and useless enough to be worse
+    /// than nothing. They are recorded here rather than silently dropped: an
+    /// empty `called_by` next to a populated list HERE means "not traced",
+    /// which is a different fact from "nothing calls this".
+    #[serde(default)]
+    pub ambiguous_symbols: Vec<String>,
     /// For `Endpoint` entries: the method/route this entry maps to. A sub-table,
     /// declared LAST so TOML emits it after all scalar/array fields.
     #[serde(default)]
@@ -172,6 +204,9 @@ impl MapEntry {
             impl_files: Vec::new(),
             test_files: Vec::new(),
             client_refs: Vec::new(),
+            symbols: Vec::new(),
+            called_by: Vec::new(),
+            ambiguous_symbols: Vec::new(),
             api: None,
         }
     }
@@ -215,7 +250,125 @@ impl MapEntry {
 /// `drift-map`, `crates/specguard`, `/health`). No filesystem access.
 ///
 /// This is the single source of truth for entry targeting, shared by
-/// `specguard audit --filter` and `specguard map list --filter`.
+/// `specguard audit --filter` and `specguard map list --filter`./// How many distinct files may declare a symbol name before a lexical call
+/// edge to that name stops carrying attribution.
+///
+/// Not tuned against anything: it is the smallest number that still admits the
+/// ordinary case of a name declared in a file and its test. Raising it trades
+/// precision for reach.
+pub const AMBIGUOUS_SYMBOL_DECLS: usize = 3;
+
+/// What [`SpecMap::enrich`] wrote.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EnrichStats {
+    /// Entries whose `symbols` or `called_by` changed.
+    pub entries_changed: usize,
+    /// Total symbol names attributed to entries.
+    pub symbols: usize,
+    /// Total (entry, calling file) pairs recorded.
+    pub call_edges: usize,
+    /// Total symbol names skipped as too ambiguous to attribute.
+    pub ambiguous: usize,
+}
+
+impl SpecMap {
+    /// Fill every entry's [`MapEntry::symbols`] and [`MapEntry::called_by`]
+    /// from the repo's deterministic indexes.
+    ///
+    /// This is the join the map was missing. Before it, an entry knew which
+    /// FILES realize a feature; it had no idea what those files declare or who
+    /// depends on them, so "what else does changing this touch?" meant grepping
+    /// the tree again. Both directions now come from indexes built once.
+    ///
+    /// `called_by` deliberately excludes an entry's own `impl_files`: internal
+    /// calls are not drift signal, and including them would bury the handful of
+    /// external callers that are.
+    ///
+    /// Fail-closed (CLAUDE.md 3): if the indexes cannot answer, the map is left
+    /// **untouched** and the result is `Undetermined`. Writing empty vectors
+    /// here would be the worst available outcome — a map that has been asked
+    /// and a map that answered "nothing calls this" are indistinguishable once
+    /// serialized, and the second one reads as permission to change anything.
+    pub fn enrich(&mut self, repo_root: &Path) -> Determination<EnrichStats> {
+        let symbols = match harness_core::index_store::all_symbols(repo_root) {
+            Determination::Known(v) => v,
+            Determination::Undetermined(u) => {
+                return Determination::undetermined(u.reason().as_str().to_string())
+            }
+        };
+        let edges = match harness_core::index_store::all_edges(repo_root) {
+            Determination::Known(v) => v,
+            Determination::Undetermined(u) => {
+                return Determination::undetermined(u.reason().as_str().to_string())
+            }
+        };
+
+        // file -> symbol names declared there, and name -> how many files
+        // declare it (the ambiguity measure).
+        let mut by_file: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        let mut decl_files: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for sym in &symbols {
+            by_file
+                .entry(sym.file.as_str())
+                .or_default()
+                .push(sym.name.as_str());
+            decl_files
+                .entry(sym.name.as_str())
+                .or_default()
+                .insert(sym.file.as_str());
+        }
+        // callee name -> files calling it.
+        let mut callers_of: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for e in &edges {
+            callers_of
+                .entry(e.callee.as_str())
+                .or_default()
+                .insert(e.file.as_str());
+        }
+
+        let mut stats = EnrichStats::default();
+        for entry in self.entries.values_mut() {
+            let own: BTreeSet<&str> = entry.impl_files.iter().map(String::as_str).collect();
+            let mut names: BTreeSet<String> = BTreeSet::new();
+            for f in &entry.impl_files {
+                for n in by_file.get(f.as_str()).into_iter().flatten() {
+                    names.insert((*n).to_string());
+                }
+            }
+            let mut callers: BTreeSet<String> = BTreeSet::new();
+            let mut ambiguous: BTreeSet<String> = BTreeSet::new();
+            for n in &names {
+                let declared_in = decl_files.get(n.as_str()).map_or(0, BTreeSet::len);
+                if declared_in > AMBIGUOUS_SYMBOL_DECLS {
+                    ambiguous.insert(n.clone());
+                    continue;
+                }
+                for f in callers_of.get(n.as_str()).into_iter().flatten() {
+                    if !own.contains(f) {
+                        callers.insert((*f).to_string());
+                    }
+                }
+            }
+            let new_symbols: Vec<String> = names.into_iter().collect();
+            let new_callers: Vec<String> = callers.into_iter().collect();
+            let new_ambiguous: Vec<String> = ambiguous.into_iter().collect();
+            if entry.symbols != new_symbols
+                || entry.called_by != new_callers
+                || entry.ambiguous_symbols != new_ambiguous
+            {
+                stats.entries_changed += 1;
+            }
+            stats.symbols += new_symbols.len();
+            stats.call_edges += new_callers.len();
+            stats.ambiguous += new_ambiguous.len();
+            entry.symbols = new_symbols;
+            entry.called_by = new_callers;
+            entry.ambiguous_symbols = new_ambiguous;
+        }
+        Determination::known(stats)
+    }
+}
+
 pub fn entry_matches(entry: &MapEntry, query: &str) -> bool {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
@@ -799,6 +952,9 @@ mod tests {
                 impl_files: vec!["src/server/users.rs".to_string()],
                 test_files: vec!["tests/users_test.rs".to_string()],
                 client_refs: vec!["web/api/users.ts".to_string()],
+                symbols: vec![],
+                called_by: vec![],
+                ambiguous_symbols: vec![],
                 api: Some(ApiRef {
                     method: "GET".to_string(),
                     route: "/api/users/:id".to_string(),
@@ -899,6 +1055,9 @@ impl_files = [\"src/x.rs\"]
                 impl_files: vec!["src/login.rs".to_string()],
                 test_files: vec!["tests/login_test.rs".to_string()],
                 client_refs: vec![],
+                symbols: vec![],
+                called_by: vec![],
+                ambiguous_symbols: vec![],
                 api: None,
             },
         );
@@ -956,6 +1115,9 @@ impl_files = [\"src/x.rs\"]
                 impl_files: vec!["src/a.rs".to_string(), "src/b.rs".to_string()],
                 test_files: vec![],
                 client_refs: vec![],
+                symbols: vec![],
+                called_by: vec![],
+                ambiguous_symbols: vec![],
                 api: None,
             },
         );
@@ -1123,6 +1285,180 @@ impl_files = [\"src/x.rs\"]
         assert_eq!(new.status, Status::Changed);
     }
 
+    // -- enrichment from the deterministic indexes --------------------------
+
+    /// Unwrap a `Determination` in a test, surfacing the reason when it is
+    /// `Undetermined`. `expect` rather than `panic!` because this crate does
+    /// not allow `clippy::panic`, not even under `cfg(test)`.
+    fn known<T>(what: &str, d: Determination<T>) -> T {
+        let mut reason = String::new();
+        let value = match d {
+            Determination::Known(v) => Some(v),
+            Determination::Undetermined(u) => {
+                reason = u.as_str().to_string();
+                None
+            }
+        };
+        let Some(v) = value else {
+            unreachable!("{what}: expected an answer, got: {reason}")
+        };
+        v
+    }
+
+    /// A committed repo whose `alpha.rs` declares `alpha_only` (unique) and
+    /// `load` (shared with `noise.rs`, so ambiguous), with `caller.rs` calling
+    /// both from outside.
+    fn enrich_repo() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(
+            tmp.path().join("src/alpha.rs"),
+            "pub fn alpha_only() {}\npub fn load() {}\n",
+        )
+        .unwrap();
+        for n in ["n1", "n2", "n3"] {
+            std::fs::write(tmp.path().join(format!("src/{n}.rs")), "pub fn load() {}\n").unwrap();
+        }
+        std::fs::write(
+            tmp.path().join("src/caller.rs"),
+            "pub fn go() {\n    alpha_only();\n    load();\n}\n",
+        )
+        .unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["add", "-A"],
+            vec![
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-qm",
+                "x",
+            ],
+        ] {
+            assert!(Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(&args)
+                .output()
+                .unwrap()
+                .status
+                .success());
+        }
+        tmp
+    }
+
+    fn map_with_alpha() -> SpecMap {
+        let mut map = SpecMap::default();
+        let mut e = MapEntry::skeleton("alpha", Status::Tracked, None);
+        e.impl_files = vec!["src/alpha.rs".to_string()];
+        map.entries.insert("alpha".to_string(), e);
+        map
+    }
+
+    #[test]
+    fn enrich_records_declared_symbols_and_external_callers() {
+        let tmp = enrich_repo();
+        let mut map = map_with_alpha();
+        let stats = known("enrich", map.enrich(tmp.path()));
+        let e = &map.entries["alpha"];
+        assert!(
+            e.symbols.contains(&"alpha_only".to_string()),
+            "{:?}",
+            e.symbols
+        );
+        assert_eq!(
+            e.called_by,
+            vec!["src/caller.rs".to_string()],
+            "external caller not recorded"
+        );
+        assert_eq!(stats.entries_changed, 1);
+    }
+
+    #[test]
+    fn enrich_names_the_symbols_it_would_not_trace_rather_than_dropping_them() {
+        // `load` is declared in four files, so a lexical edge to it attributes
+        // nothing. CLAUDE.md 3: the gap is recorded, not silently absorbed --
+        // an empty `called_by` must not be able to mean two different things.
+        let tmp = enrich_repo();
+        let mut map = map_with_alpha();
+        let _ = map.enrich(tmp.path());
+        let e = &map.entries["alpha"];
+        assert!(
+            e.ambiguous_symbols.contains(&"load".to_string()),
+            "ambiguous symbol not disclosed: {:?}",
+            e.ambiguous_symbols
+        );
+        assert!(
+            e.symbols.contains(&"load".to_string()),
+            "it is still declared here, so it stays in `symbols`"
+        );
+    }
+
+    #[test]
+    fn enrich_excludes_an_entrys_own_files_from_its_callers() {
+        let tmp = enrich_repo();
+        let mut map = map_with_alpha();
+        map.entries.get_mut("alpha").unwrap().impl_files =
+            vec!["src/alpha.rs".to_string(), "src/caller.rs".to_string()];
+        let _ = map.enrich(tmp.path());
+        assert!(
+            map.entries["alpha"].called_by.is_empty(),
+            "internal calls are not drift signal: {:?}",
+            map.entries["alpha"].called_by
+        );
+    }
+
+    #[test]
+    fn enrich_leaves_the_map_untouched_when_the_index_cannot_answer() {
+        // The fail-closed contract: a map that was asked and a map that could
+        // not be asked must not serialize to the same thing.
+        let tmp = tempfile::tempdir().unwrap();
+        let not_a_repo = tmp.path().join("no-git-here");
+        std::fs::create_dir_all(&not_a_repo).unwrap();
+        let mut map = map_with_alpha();
+        map.entries.get_mut("alpha").unwrap().called_by = vec!["previously/known.rs".to_string()];
+        let before = map.clone();
+        assert!(matches!(
+            map.enrich(&not_a_repo),
+            Determination::Undetermined(_)
+        ));
+        assert_eq!(map, before, "an unanswerable enrich must not write");
+    }
+
+    #[test]
+    fn enrich_is_idempotent() {
+        let tmp = enrich_repo();
+        let mut map = map_with_alpha();
+        let _ = map.enrich(tmp.path());
+        let after_first = map.clone();
+        let second = known("second enrich", map.enrich(tmp.path()));
+        assert_eq!(map, after_first);
+        assert_eq!(second.entries_changed, 0);
+    }
+
+    /// A map written before these fields existed must still parse, with the new
+    /// fields reading as not-yet-enriched.
+    #[test]
+    fn a_map_without_the_new_fields_still_loads() {
+        let toml = r#"
+last_synced = "abc"
+
+[entries."legacy"]
+key = "legacy"
+kind = "feature"
+status = "tracked"
+impl_files = ["src/legacy.rs"]
+"#;
+        let map: SpecMap = toml::from_str(toml).expect("old map must still parse");
+        let e = &map.entries["legacy"];
+        assert!(e.symbols.is_empty());
+        assert!(e.called_by.is_empty());
+        assert!(e.ambiguous_symbols.is_empty());
+        assert_eq!(e.impl_files, vec!["src/legacy.rs".to_string()]);
+    }
+
     // -- targeted filter (entry_matches) ------------------------------------
 
     fn filter_entry(
@@ -1140,6 +1476,9 @@ impl_files = [\"src/x.rs\"]
             impl_files: impl_files.iter().map(|s| s.to_string()).collect(),
             test_files: test_files.iter().map(|s| s.to_string()).collect(),
             client_refs: vec![],
+            symbols: vec![],
+            called_by: vec![],
+            ambiguous_symbols: vec![],
             api: None,
         }
     }

@@ -344,6 +344,9 @@ mod tests {
             impl_files: impl_files.iter().map(|s| s.to_string()).collect(),
             test_files: test_files.iter().map(|s| s.to_string()).collect(),
             client_refs: vec![],
+            symbols: vec![],
+            called_by: vec![],
+            ambiguous_symbols: vec![],
             api: None,
         }
     }

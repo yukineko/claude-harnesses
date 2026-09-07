@@ -15182,6 +15182,7 @@ notes = ""
 created_at = 1788760198
 updated_at = 1788760198
 weight = 0.0
+
 [[task]]
 id = "9fa6785b"
 title = "harness_core::append::append_line が書き込み失敗を黙殺する — audit log では「ゲートが発火しなかった」と読まれる fail-open"
@@ -15283,4 +15284,16 @@ backlog 不在時に skip するのは fail-open なので採らない。
 changed set に入ったため。"""
 created_at = 1788770875
 updated_at = 1788770875
+weight = 0.0
+
+[[task]]
+id = "189136ae"
+title = "registry が巻き戻ると Claude Code が新版 dir に .orphaned_at を残し、以後の rollout は plain 再実行では直らない (--force 必須) — a8ef3afa の下流症状。実測 2026-09-07: blastguard/specguard/overwatch/condukt/flow の 5 dir に .orphaned_at が残り check-plugin-rollout.py が drift 継続報告"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = ""
+created_at = 1788771328
+updated_at = 1788771328
 weight = 0.0

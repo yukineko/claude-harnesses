@@ -15849,3 +15849,27 @@ notes = """
 created_at = 1788774009
 updated_at = 1788774009
 weight = 0.0
+
+[[task]]
+id = "e4bd99eb"
+title = 'guard-maintree-bash.py 誤検知: シェル変数経由の worktree パス (W=<worktree>; cd "$W" && git merge ...) を解決できず main ツリー変更として拒否する (a2591172/06baf54d とは別シェイプ: 変数間接参照)'
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = ""
+created_at = 1788771963
+updated_at = 1788771963
+weight = 0.0
+
+[[task]]
+id = "97031994"
+title = "§8 の stash->merge 復旧経路が blastguard と衝突し stash が消せず溜まる — git restore/git stash drop が拒否されるため stop-verify-worktree.py の提示手順を完走できない (実測 2026-09-07 時点で stash 3 件が滞留、うち 2 件は別セッション由来)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = ""
+created_at = 1788771963
+updated_at = 1788771963
+weight = 0.0

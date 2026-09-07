@@ -14856,8 +14856,9 @@ tags = [
     "spec-loop",
     "p1",
 ]
-status = "pending"
+status = "done"
 notes = """
+
 実測 2026-09-07、測定点 e018fe91、linux-x86_64。
 
 【観測】
@@ -14880,9 +14881,68 @@ acceptance 4 (divert 後 ratify が通れば backlog に現れる) は、specfor
 見分け方: docs/DESIGN-spec-loop.md の配布方針の記述、および R5 が specforge の
 4サブコマンド退役を求めていることとの整合を読む。
 
-【注意】specguard は GATE crate なので、配備するなら rollout に --canary が必要。"""
+【注意】specguard は GATE crate なので、配備するなら rollout に --canary が必要。
+
+--- CLOSED 2026-09-07 (実測、測定点 e084a81c、linux-x86_64) ---
+
+【判定不能だった (a)/(b) は (a) に確定した】
+specs/spec-loop.toml:153 の R5 が逐語で「specforge の実装器 (implement / evidence /
+agree / merge) を退役させ… **gather / draft / prompt / ratify は source 側なので残す**」
+と書いている。退役対象は実装器サブコマンドであって specforge 本体ではない。
+docs/DESIGN-spec-loop.md には配布方針の記述が無い (ビルド計測が 76 行目にあるだけ) ので、
+(b) を支える根拠は文書側にも無かった。したがって配備漏れ。
+
+【やったこと】
+1. crates/specguard/bin/specforge を追加した。sibling の specguard と違い
+   **fail-closed** にした: specforge は R4 で /flow が spec gap を divert する先＝
+   判定経路上にあるので、走らなかったことを「spec gap は無い」と読ませてはならない。
+   バイナリ不在時は exit 1 + stderr に理由 (CLAUDE.md 第3節)。
+2. specguard を 0.2.53 -> 0.2.54 に lockstep bump (Cargo.toml / plugin.json /
+   marketplace.json)。
+3. **より重い bug を道中で発見して直した**: scripts/rebuild-plugins.sh の seed ループが
+   bin/ の非プラットフォーム接尾辞エントリを glob 順に 1 つ拾って break していた。
+   version bump 後の新規 version dir にはプラットフォームバイナリが 1 本も無く、
+   既存 *-$SUF を glob する main ループは何も拾わないため、seed ループがその dir を
+   埋める唯一の経路である。つまり launcher が 2 本ある plugin では 2 本目が
+   「存在しないバイナリを exec する」状態で配布される — red ではなく **DARK**
+   (インストール済み・版整合・何も実行しない・hook が起動しないので finding も出ない)。
+   glob 順では specforge が先に来るので、この bug で落ちる側は **GATE hook である
+   specguard 本体**だった。launcher を足しただけなら specguard を dark にしていた。
+
+【F->P オラクル (判断で ok にしない)】
+scripts/tests/rebuild-seeds-every-launcher.sh を修正より先に書き、RED を観測した。
+逐語: "FAIL: no host binary would be seeded for launcher(s): specguard — those
+launchers deploy DARK (they exec a binary that is never placed)"。
+修正後 GREEN。空虚さ対照として、seed された launcher 集合が fixture と厳密一致すること
+も要求する (何も seed しない実装でも通ってしまうのを防ぐ)。
+
+【live での観測 — 実装が効いていることの事実】
+scripts/rollout-plugins.sh --plugin specguard --canary (health-gate PROCEED) の出力が逐語で:
+  cache  seeded specforge-linux-x86_64 (fresh version dir specguard/0.2.54)
+  cache  seeded specguard-linux-x86_64 (fresh version dir specguard/0.2.54)
+= 2 本とも seed された (修正前は specforge のみ)。
+cache の launcher を直接起動して両方が動くことを確認:
+  specforge --help -> exit 0 (gather/draft/prompt/ratify/queue/ack/impl-prompt を列挙)
+  specguard  --help -> exit 0
+フォールト注入 (バイナリを外した複製で起動) で fail-closed も対照付きで観測:
+  specforge -> exit 1 「The spec loop did NOT run … this is UNKNOWN, not 'no spec gap'」
+  specguard -> exit 0 (既知の fail-open。841fb5c8 として起票済み)
+check-plugin-rollout.py: 40 plugins drift 無し / GATE 5 本 enabled / exit 0。
+
+【道中で起票した follow-up (乗り換えず本題に戻った)】
+- 841fb5c8 (p1): specguard launcher がバイナリ不在で exit 0 する fail-open。
+  コメントの「a hook NEVER breaks the user's turn」は CLAUDE.md 第1節が名指しする赤信号。
+  hook 実行系が非 0 終了をどう扱うかは未観測なので、正しい修正形は判定不能として残した。
+- e4a1d386 (p2): scripts/tests/check-shell-syntax.sh の 6 assertion 中 4 件が
+  mktemp -d -t のテンプレート不備で一度も実行されていない (main でも同一に失敗する既存不良)。
+
+【この item が塞いだもの】
+09148819 (R4 の実装) の acceptance 1 と 4 は「specforge が配備されていない」ことで
+物理的に達成不能だった。その物理的ブロックは解消した。ただし acceptance 3 が要求する
+R3 (verdict=undetermined では divert しない) は依然未実装なので、09148819 自体は
+まだ着地しない — この item の範囲外として残す。"""
 created_at = 1788754165
-updated_at = 1788754165
+updated_at = 1788757374
 weight = 0.0
 
 [[task]]

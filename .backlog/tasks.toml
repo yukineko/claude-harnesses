@@ -15129,3 +15129,15 @@ notes = ""
 created_at = 1788758349
 updated_at = 1788758349
 weight = 0.0
+
+[[task]]
+id = "c33e3af4"
+title = "diffrisk-report --json: journal_present=false のとき changed_symbols_total / caller_sites_total だけ null でなく 0 を返す (invocations 等は null)。未検査を「0件観測」と読める同型の conflation が残っている"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = ""
+created_at = 1788760198
+updated_at = 1788760198
+weight = 0.0

@@ -5363,9 +5363,17 @@ tags = [
     "p1",
 ]
 status = "pending"
-notes = "根拠: condukt state abandon は run-state のポインタしか消さない (crates/condukt/src/main.rs:3835-3840 で status/worktree/branch/updated_at をリセットするだけ) ので worktree ディレクトリと branch は残る。worktree.rs:346-348 が自ら The Abandon/stuck-worker recovery path only resets run-state pointers and never deletes the git branch と明記している。worktree cleanup --remove も git worktree list に登録済みのものは orphan 扱いしないため回収できない (worktree.rs:1688-1692)。abandon --all-stuck は既知の --run が必要で、project の全 open run を走査して死んだものを回収する sweeper が存在しない。/ 第8節で worktree 作業が義務になったため、これは選択的な掃除ではなく前提条件になった。放置すると 0213f7a9 が直そうとしている branch ref 衝突の燃料そのものになる。/ liveness 信号は claim::run_liveness が既に提供している。/ 完了条件: 死んだセッションの worktree と branch が機械的に回収されることを観測する。生きているセッションのものを回収しないことも観測する。"
+notes = """
+根拠: condukt state abandon は run-state のポインタしか消さない (crates/condukt/src/main.rs:3835-3840 で status/worktree/branch/updated_at をリセットするだけ) ので worktree ディレクトリと branch は残る。worktree.rs:346-348 が自ら The Abandon/stuck-worker recovery path only resets run-state pointers and never deletes the git branch と明記している。worktree cleanup --remove も git worktree list に登録済みのものは orphan 扱いしないため回収できない (worktree.rs:1688-1692)。abandon --all-stuck は既知の --run が必要で、project の全 open run を走査して死んだものを回収する sweeper が存在しない。/ 第8節で worktree 作業が義務になったため、これは選択的な掃除ではなく前提条件になった。放置すると 0213f7a9 が直そうとしている branch ref 衝突の燃料そのものになる。/ liveness 信号は claim::run_liveness が既に提供している。/ 完了条件: 死んだセッションの worktree と branch が機械的に回収されることを観測する。生きているセッションのものを回収しないことも観測する。
+
+---
+2026-09-07: **7039ad47 にブロックされる。** reconcile の削除判定が live な
+session worktree を dead/removable と判定することが実測されたため
+(13 of 16 entries are removable、うち 1 本は測定した当のセッションが作業中の
+worktree)、この GC を現状の判定の上に書くと 13 本を消す。ユーザー裁定
+(2026-09-07) により、先に 7039ad47 で判定基準を直す。"""
 created_at = 1784746580
-updated_at = 1784746580
+updated_at = 1788772729
 weight = 0.0
 issue_number = 316
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/316"
@@ -15506,4 +15514,150 @@ begin/end の対応漏れが検出されない。
 観測した。"""
 created_at = 1788771923
 updated_at = 1788771923
+weight = 0.0
+
+[[task]]
+id = "7039ad47"
+title = "condukt worktree reconcile が LIVE な session worktree を dead/removable と判定する — DEATH 規則の transcript 項が §8 の 実使用形では常に空振りする"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 (2026-09-07, condukt 0.7.146, 本 repo)。2d3cbda2 (dead session の
+worktree/branch GC) の右サイズを測る過程で観測した。**GC を書く前にこれを閉じないと、
+書いた GC が生きている作業を消す。**
+
+## 観測
+
+`condukt worktree reconcile` を 90 秒窓をまたいで 3 回走らせた結果:
+
+    primary      fix/issue-15-jsonl-append-race  occupancy=live  removable=false
+    registered   session-05717fa8   occupancy=dead  dirty=false  removable=true   <-- 本セッションの worktree
+    registered   session-7b53203c   occupancy=dead  dirty=false  removable=true
+    registered   feat/spec-map-search-callgraph  occupancy=dead  dirty=false  removable=true
+    ... (session-* 計 12 本が同じ)
+    registered   fix/callgraph-observable  occupancy=dead  dirty=true   removable=false
+    registered   session-de693779          occupancy=dead  dirty=true   removable=false
+    13 of 16 entries are removable
+
+**session-05717fa8 は本セッションが今まさに commit している worktree である**
+(直前の commit c3167e85 / 181a099e はこの worktree で作られた)。それが
+occupancy=dead removable=true と判定された。session-7b53203c も
+feat/spec-map-search-callgraph も、本日 main へ merge された作業の worktree である。
+
+removable=false になった 2 本を救っているのは liveness ではなく **dirty (未コミット変更)**
+という別の項であり、liveness 規則は 3 本とも死んでいると答えている。
+
+## 機序 — 3 項連言の第3項が構造的に空振りする
+
+crates/condukt/src/wt_reconcile.rs:1094 の DEATH 規則は 3 項連言:
+  1. 停滞 (worktree の HEAD / 作業ツリー活動が凍結)
+  2. 窓経過 (>=2 サンプル、既定 90 秒。harness_core::progress::DEFAULT_WINDOW_SECS)
+  3. transcript 証拠なし (Transcripts::NoneEverRanHere)
+
+第3項は `~/.claude/projects/<worktree パスの slug>` が **存在しない** ことで成立する
+(wt_reconcile.rs:1028、`project_transcript_dir_name` は cwd のパスを slug 化する)。
+docstring は「a worktree that any session has ever worked in stays unreclaimable」と
+書いており、これがコストとして意図的に受け入れられたと述べている。
+
+ところが CLAUDE.md 第8節の実使用形では **セッションの cwd は main ツリーであり、
+worktree へは Bash 呼び出しごとに cd している**。したがって transcript は main ツリーの
+slug に紐づき、worktree パスの slug は **一度も作られない**。実測:
+
+    $ ls ~/.claude/projects/ | wc -l
+    7
+    (7 件のうち .claude-harnesses-worktrees/session-* に対応する slug は 0 件)
+
+つまり第3項は session worktree に対して **常に真** であり、連言は事実上
+「凍結 90 秒」の 2 項に縮退する。docstring 自身が
+「If it could, the third term would hold vacuously and the conjunction would
+silently degenerate to two terms」と書いて禁じている当の形が、別経路
+(cwd が worktree でない) で成立している。
+
+そして「90 秒間 worktree にファイルを書かない」は、エージェントが読む・考える・
+別ツリーを見る間に**日常的に**起きる (本件の観測がまさにそれ: 私はこの worktree に
+commit した後、120 秒間 読み取りだけをしていた)。
+
+## なぜ重いか
+
+- 消えるのは directory だけではない。branch も一緒に落とせば **未 merge の commit** が
+  死ぬ (dirty=false は「未コミット変更が無い」であって「作業が無い」ではない)。
+- 削除は **このシステムで唯一不可逆な操作** である。wt_reconcile.rs:2166 の docstring 自身が
+  「for a GC, the restrictive side is *do not delete*」と書いている。
+- 2d3cbda2 は「registered だが dead な worktree を回収する sweeper」を求めている。
+  現状 `cleanup --remove` は unregistered な dir しか見ないので実害が出ていないだけで、
+  2d3cbda2 を素直に実装すると **13 本を消す**。
+
+## 判定不能として残す点 (両方の読みと、見分ける方法)
+
+(a) 実在の欠陥 — 第3項が実使用形で空振りしており、規則は 2 項に縮退している。
+(b) 意図された設計 — 「condukt が claim していない worktree は condukt の管理外なので
+    回収してよい」という立場もありうる (実際 primary は別扱いで守られている)。
+見分ける方法: 第3項を導入した 2026-08-21 の裁定 (charter の DoD12 / backlog 5aaecbf6)
+が、cwd が worktree であるケースだけを想定していたのか、§8 の cd 運用も想定していたのかを
+読む。5aaecbf6 の notes と fe84d350 の notes に裁定文がある。
+
+## 修正案 (いずれも未検証の案であって結論ではない)
+
+- 第3項を cwd 依存でない証拠に替える: transcript の slug ではなく、その worktree を
+  作った session id の生存 (overwatch / backlog driver registry は session 単位で
+  heartbeat を持つ) を引く。session-<id> という命名はまさにその id を持っている。
+- worktree 自身に lease ファイルを置き、heartbeat で更新する (condukt state heartbeat と
+  同じ TTL 方式)。lease が読めない/新しい なら keep。
+- 窓を秒ではなく「未 merge commit を持つか」と組み合わせる: branch が default branch に
+  完全に含まれていない worktree は、凍結していても removable にしない。
+
+## 併せて起票の対象
+
+2d3cbda2 は本項目に **ブロックされる**。GC の実装は削除の判定基準が健全になってから。
+
+---
+裁定 (ユーザー, 2026-09-07): **先に本項目 (判定基準) を直す。witness は
+session heartbeat レジストリを使う。**
+
+/flow の合意ゲートを通した記録: `condukt policy answer --risk medium
+--reversible high --confidence low` -> `{"answered":false,"policy":"escalate"}`
+rc=2。escalate なので AskUserQuestion で人間に返し、上の 2 点が選ばれた。
+
+したがって:
+  * 2d3cbda2 (GC の実装) は本項目の**後**。順序は charter の next_action が
+    既に書いている通り (「削除の判定基準が無いまま GC を書くのは、不可逆な側へ
+    倒す実装になる」)。
+  * DEATH 規則の第3項を、cwd 依存の transcript slug から **session heartbeat
+    レジストリ** へ置き換える。worktree 名 `session-<id>` が持つ <id> を、
+    backlog driver registry / overwatch の heartbeat と突き合わせる。
+
+## 実装へ渡す制約 (これを守らないと同じ穴が形を変えて再発する)
+
+1. **「レジストリに記録が無い」を death の証拠にしてはならない。** 実測
+   (2026-09-07): `~/.backlog/drivers/` の記録は **1 件だけ**で、それは /flow を
+   回している本セッションのものである。§8 の worktree 作業をしているだけの
+   セッションは driver 登録をしないので記録を残さない。記録の不在を death に
+   写すと、第3項はまた空虚に真になり連言が 2 項へ縮退する — 本項目が直している
+   当の欠陥そのもの。**不在は Undetermined**。
+2. したがって第3項が Known になるのは次の 2 通りだけ:
+   - 記録があり heartbeat が新しい -> **Live** (削除しない)
+   - 記録があり heartbeat が TTL 超過 -> death 側の項として成立
+   記録が無い / レジストリが読めない -> **Undetermined** (keep)
+3. この設計だと当面ほとんど何も回収できない。それは**正しい縮退**であり、
+   回収可能にするための一手は別項目にする: §8 の worktree 作成時点
+   (`condukt worktree create` / SessionStart の worktree 用意) に登録を書き、
+   **それ以降に作られた worktree については記録の不在が観測になる**ようにする。
+   既存の 15 本は Undetermined のまま残ってよい。
+4. レジストリの記録は `pid` を持つ (実測: driver ファイルに session_id / pid /
+   project / registered_at / heartbeat_at)。pid の生存は Linux で直接観測できる
+   ので、heartbeat TTL より強い witness として併用を検討してよい。ただし pid は
+   再利用されうるので、pid 単独を Live の証拠にしないこと。
+5. **アンチ空虚の対照が必須** (5aaecbf6 が削除した `dead_clean_worktree_is_removable`
+   の後継): 注入した窓 (`HARNESS_PROGRESS_WINDOW_SECS`) のもとで、停滞 ∧ 窓経過 ∧
+   「レジストリを読んで記録があり heartbeat が TTL 超過」の clean worktree が
+   Dead + removable に到達することを固定する。これが無いと「常に Undetermined を
+   返す定数実装」がテストを通ってしまう。
+6. **RED を先に観測すること。** 本項目の実測 (session-05717fa8 が
+   occupancy=dead removable=true) を再現する behavioural test を先に書き、
+   それが RED であることを観測してから GREEN にする。テストは CLAUDE.md 2.(a) に
+   従い利害のない agent に書かせる。"""
+created_at = 1788772560
+updated_at = 1788772729
 weight = 0.0

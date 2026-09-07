@@ -1718,40 +1718,303 @@ mod worktree_remove_tests {
         assert!(is_dirty(&repo).expect("is_dirty should not error"));
     }
 
-    /// remove() force-removes a DIRTY worktree so orphans do not accumulate.
-    /// A plain `git worktree remove` refuses when the worktree has uncommitted
-    /// or untracked files; without a force-retry this returns Err and the dir is
-    /// never cleaned up (the unattended/parallel failure mode).
+    // ── remove(): uncommitted work is PRESERVED, never discarded ───────────
+    //
+    // `git worktree remove` refuses PRECISELY when the worktree holds
+    // uncommitted or untracked work. A blanket `--force` retry overrides that
+    // refusal and destroys the work, so the refusal must instead be answered by
+    // CAPTURING the work first (`wt_reconcile::preserve`, which commits the
+    // full content to `refs/preserved/<name>` and verifies the ref reads back)
+    // and deleting only once the capture is verified. When the capture is
+    // impossible, "cannot preserve" is not "safe to delete" (CLAUDE.md 3):
+    // `remove` must refuse and leave the directory in place.
+    //
+    // The predecessor of this block, `worktree_remove_force_removes_dirty_
+    // worktree`, asserted the opposite — it pinned the blanket force-retry as
+    // the spec. Its scenario (a dirty worktree handed to `remove`) survives
+    // below as the untracked-work case.
+
+    /// Raw, UNTRIMMED git invocation. The module's `git`/`git_try` helpers trim
+    /// stdout, which would silently drop a preserved file's trailing newline and
+    /// turn a byte-for-byte content assertion into an approximate one.
+    fn git_raw(dir: &Path, args: &[&str]) -> (bool, Vec<u8>, String) {
+        let out = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .expect("git must be runnable");
+        (
+            out.status.success(),
+            out.stdout,
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    }
+
+    /// Register a worktree for `branch` at `path`.
+    fn add_worktree(repo: &Path, path: &Path, branch: &str) {
+        git(
+            repo,
+            &["worktree", "add", path.to_str().unwrap(), "-b", branch],
+        )
+        .unwrap();
+    }
+
+    /// Both spellings of a directory's preserved-ref name: the path as handed to
+    /// `remove`, and its canonical form. `wt_reconcile::reconcile` preserves
+    /// under the CANONICAL path, and on macOS a `TempDir` path is a symlink into
+    /// `/private`, so the two hash differently. Either spelling names the same
+    /// directory; the assertions below demand the CONTENT, not a spelling.
+    /// Must be called BEFORE the directory is removed (canonicalize needs it).
+    fn preserved_ref_candidates(path: &Path) -> Vec<String> {
+        let mut v = vec![crate::wt_reconcile::preserved_ref_name(path)];
+        if let Ok(canon) = path.canonicalize() {
+            let c = crate::wt_reconcile::preserved_ref_name(&canon);
+            if !v.contains(&c) {
+                v.push(c);
+            }
+        }
+        v
+    }
+
+    /// The single ref under `refs/preserved/`, or why there is not exactly one.
+    fn sole_preserved_ref(repo: &Path) -> std::result::Result<String, String> {
+        let (ok, stdout, stderr) = git_raw(
+            repo,
+            &["for-each-ref", "--format=%(refname)", "refs/preserved/"],
+        );
+        if !ok {
+            return Err(format!("git for-each-ref failed: {stderr}"));
+        }
+        let names: Vec<String> = String::from_utf8_lossy(&stdout)
+            .lines()
+            .map(str::to_string)
+            .filter(|l| !l.is_empty())
+            .collect();
+        match names.len() {
+            1 => Ok(names[0].clone()),
+            0 => Err("no ref exists under refs/preserved/ — nothing was preserved".to_string()),
+            n => Err(format!("{n} refs exist under refs/preserved/: {names:?}")),
+        }
+    }
+
+    /// The preserve-then-delete contract, asserted on the OBSERVED bytes: the
+    /// directory is gone, a preserved ref for it resolves in `repo`, and the
+    /// uncommitted content reads back from that ref VERBATIM. A ref whose tree
+    /// lacks the file is not a preservation, so ref existence alone is not
+    /// accepted.
+    fn assert_preserved_then_deleted(
+        repo: &Path,
+        wt_path: &Path,
+        candidates: &[String],
+        rel: &str,
+        expected: &[u8],
+    ) {
+        assert!(
+            !wt_path.exists(),
+            "the worktree dir must be gone after a successful remove(); got orphan at {}",
+            wt_path.display()
+        );
+        let name = sole_preserved_ref(repo).unwrap_or_else(|why| {
+            panic!(
+                "remove() must PRESERVE the uncommitted work in {} under refs/preserved/ \
+                 before deleting it, but {why}",
+                wt_path.display()
+            )
+        });
+        assert!(
+            candidates.contains(&name),
+            "the preserved ref {name} does not name {} (expected one of {candidates:?})",
+            wt_path.display()
+        );
+        let (resolved, _, rev_err) = git_raw(repo, &["rev-parse", "--verify", "--quiet", &name]);
+        assert!(
+            resolved,
+            "the preserved ref {name} does not resolve in {}: {rev_err}",
+            repo.display()
+        );
+        let (shown, bytes, show_err) = git_raw(repo, &["show", &format!("{name}:{rel}")]);
+        assert!(
+            shown,
+            "the uncommitted file {rel} is absent from the preserved tree {name} — \
+             a ref without the content is not a preservation: {show_err}"
+        );
+        assert_eq!(
+            bytes.as_slice(),
+            expected,
+            "the preserved content of {rel} is not the bytes that were in the worktree \
+             (preserved {:?}, worktree held {:?})",
+            String::from_utf8_lossy(&bytes),
+            String::from_utf8_lossy(expected)
+        );
+    }
+
+    /// C1 — ANTI-VACUITY CONTROL. A CLEAN worktree holds nothing to lose, so
+    /// `remove` must still delete it. This must PASS both before and after the
+    /// preserve-then-delete change; a failure here means the test harness (not
+    /// `remove`) is broken and every other case below proves nothing.
     #[test]
-    fn worktree_remove_force_removes_dirty_worktree() {
+    fn worktree_remove_still_removes_a_clean_worktree() {
+        let (tmp, repo) = init_repo();
+
+        let wt_base = tmp.path().join("worktrees");
+        fs::create_dir_all(&wt_base).unwrap();
+        let wt_path = wt_base.join("clean-wt");
+        add_worktree(&repo, &wt_path, "feat/clean");
+        assert!(
+            !is_dirty(&wt_path).unwrap(),
+            "the anti-vacuity control must start CLEAN"
+        );
+
+        let result =
+            remove(&repo, &wt_path, None).expect("a clean worktree must still be removable");
+        assert_eq!(result, None, "no branch requested -> None");
+        assert!(
+            !wt_path.exists(),
+            "a clean worktree must be gone after remove(); got orphan at {}",
+            wt_path.display()
+        );
+    }
+
+    /// C2(a) — UNTRACKED work. The rewrite of the old
+    /// `worktree_remove_force_removes_dirty_worktree`: the same scenario (a
+    /// dirty worktree handed to `remove`), with the assertions inverted from
+    /// "force-removed" to "preserved, THEN deleted".
+    #[test]
+    fn worktree_remove_preserves_uncommitted_work_before_deleting() {
         let (tmp, repo) = init_repo();
 
         let wt_base = tmp.path().join("worktrees");
         fs::create_dir_all(&wt_base).unwrap();
         let wt_path = wt_base.join("dirty-wt");
-        git(
-            &repo,
-            &[
-                "worktree",
-                "add",
-                wt_path.to_str().unwrap(),
-                "-b",
-                "feat/dirty",
-            ],
-        )
-        .unwrap();
+        add_worktree(&repo, &wt_path, "feat/dirty");
 
         // Make the worktree DIRTY: an untracked file inside the worktree dir.
-        fs::write(wt_path.join("uncommitted.txt"), "dirty\n").unwrap();
+        const UNTRACKED: &[u8] = b"work that exists only in the worktree\nsecond line\n";
+        fs::write(wt_path.join("uncommitted.txt"), UNTRACKED).unwrap();
         assert!(is_dirty(&wt_path).unwrap(), "worktree should be dirty");
+        let candidates = preserved_ref_candidates(&wt_path);
 
-        // remove() must succeed on a dirty worktree (force) and leave no orphan.
-        let result = remove(&repo, &wt_path, None).expect("dirty worktree should be force-removed");
+        let result = remove(&repo, &wt_path, None)
+            .expect("remove() must succeed once the uncommitted work is preserved");
         assert_eq!(result, None, "no branch requested -> None");
+        assert_preserved_then_deleted(&repo, &wt_path, &candidates, "uncommitted.txt", UNTRACKED);
+    }
+
+    /// C2(b) — TRACKED modification. `git worktree remove` refuses for this too,
+    /// and the blanket force-retry discards it just as silently as an untracked
+    /// file. The preserved tree must carry the MODIFIED bytes, not HEAD's.
+    #[test]
+    fn worktree_remove_preserves_tracked_modification_before_deleting() {
+        let (tmp, repo) = init_repo();
+
+        let wt_base = tmp.path().join("worktrees");
+        fs::create_dir_all(&wt_base).unwrap();
+        let wt_path = wt_base.join("modified-wt");
+        add_worktree(&repo, &wt_path, "feat/modified");
+
+        // `base.txt` is committed by init_repo() as "base\n"; edit it in place.
+        const MODIFIED: &[u8] = b"base\nan uncommitted edit to a TRACKED file\n";
+        fs::write(wt_path.join("base.txt"), MODIFIED).unwrap();
         assert!(
-            !wt_path.exists(),
-            "dirty worktree dir must be gone after remove(); got orphan at {}",
-            wt_path.display()
+            is_dirty(&wt_path).unwrap(),
+            "a tracked modification must read as dirty"
+        );
+        let candidates = preserved_ref_candidates(&wt_path);
+
+        let result = remove(&repo, &wt_path, None)
+            .expect("remove() must succeed once the tracked modification is preserved");
+        assert_eq!(result, None, "no branch requested -> None");
+        assert_preserved_then_deleted(&repo, &wt_path, &candidates, "base.txt", MODIFIED);
+    }
+
+    /// Restores owner write permission on drop, so a mode-based fault injection
+    /// cannot leak into TempDir teardown even when an assertion panics.
+    struct WritableAgain {
+        path: PathBuf,
+    }
+
+    impl Drop for WritableAgain {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("chmod")
+                .args(["-R", "u+rwX"])
+                .arg(&self.path)
+                .status();
+        }
+    }
+
+    /// C3 — REFUSE WHEN CAPTURE IS IMPOSSIBLE. "The work cannot be captured" is
+    /// judgement-impossible territory, and CLAUDE.md 3 sends that to the
+    /// restrictive side: `remove` must return Err and leave the directory (with
+    /// its work) on disk, rather than deleting what it could not save.
+    ///
+    /// Fault injection: `chmod -R a-w` on the repo's `.git/refs`. Observed
+    /// (2026-09-07, git 2.50.1): `git update-ref refs/preserved/<n> <sha>` then
+    /// exits 128 with "unable to create directory for .git/refs/preserved/<n>",
+    /// which is exactly the step `wt_reconcile::preserve` reports as
+    /// `preserved: false`. The OBJECT store stays writable, so `write-tree` and
+    /// `commit-tree` still succeed: the failure is precisely "the capture cannot
+    /// be recorded", not a generally broken repo.
+    #[test]
+    fn worktree_remove_refuses_when_uncommitted_work_cannot_be_preserved() {
+        let (tmp, repo) = init_repo();
+
+        let wt_base = tmp.path().join("worktrees");
+        fs::create_dir_all(&wt_base).unwrap();
+
+        // The CONTROL, registered before the injection and removed under it: a
+        // CLEAN worktree must still remove with the very same ref store wedged.
+        // That is what makes the refusal below attributable to the unpreservable
+        // WORK rather than to the read-only refs by themselves.
+        let clean = wt_base.join("clean-under-fault");
+        add_worktree(&repo, &clean, "feat/clean-fault");
+
+        let dirty = wt_base.join("dirty-under-fault");
+        add_worktree(&repo, &dirty, "feat/dirty-fault");
+        fs::write(dirty.join("unpreservable.txt"), b"cannot be captured\n").unwrap();
+        assert!(
+            is_dirty(&dirty).unwrap(),
+            "the subject worktree must be dirty"
+        );
+
+        let refs_dir = repo.join(".git").join("refs");
+        let _restore = WritableAgain {
+            path: refs_dir.clone(),
+        };
+        let injected = std::process::Command::new("chmod")
+            .args(["-R", "a-w"])
+            .arg(&refs_dir)
+            .status()
+            .expect("chmod must be runnable");
+        assert!(
+            injected.success(),
+            "fault injection (chmod -R a-w on {}) must succeed, else this test proves nothing",
+            refs_dir.display()
+        );
+
+        let outcome = remove(&repo, &dirty, None);
+        assert!(
+            outcome.is_err(),
+            "remove() must REFUSE when the uncommitted work in {} cannot be preserved; \
+             it returned {:?}",
+            dirty.display(),
+            outcome.as_ref().ok()
+        );
+        assert!(
+            dirty.exists(),
+            "a refused remove() must leave the worktree — and the work it could not \
+             capture — in place at {}",
+            dirty.display()
+        );
+
+        // Control: same wedged ref store, nothing to lose -> still removes.
+        remove(&repo, &clean, None).expect(
+            "a CLEAN worktree must still remove under the SAME fault — otherwise the \
+             refusal above is caused by the read-only refs, not by unpreservable work",
+        );
+        assert!(
+            !clean.exists(),
+            "the clean control worktree must be gone at {}",
+            clean.display()
         );
     }
 

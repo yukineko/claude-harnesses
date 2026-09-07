@@ -11777,7 +11777,7 @@ title = "blastguard chown は対象を一切分類しない fail-open: chown yuk
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = """
 実測（deployed blastguard 0.2.50、provenance commit 161a27de、161a27de..HEAD の blastguard/harness-core 差分は空＝HEAD のソース）:
   chown -R yuki /tmp/mine              -- DENY （無害なのに止まる）
@@ -11796,7 +11796,7 @@ CLAUDE.md の序列では誤った deny より fail-open のほうが重いの�
 未検証（予測として明示）: 所有者変更のみでフックを無効化できるかは実行 uid 依存で未測定。fail-open の存在自体は確定。
 親 826c29bf"""
 created_at = 1788791575
-updated_at = 1788791575
+updated_at = 1788804746
 weight = 0.0
 issue_number = 417
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/417"
@@ -11845,7 +11845,7 @@ title = "guard-maintree-bash.py は判定不能を allow に落とす — 双子
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = """
 実測（各 guard の decide() に合成 PreToolUse payload を投入、rc=2 block / rc=0 allow）:
   正常な main ツリー対象        edit: rc=2   bash: rc=2
@@ -11865,7 +11865,7 @@ docstring :38-42 はこの選択を公然と述べているが、CLAUDE.md 第3�
 修正: 3箇所を edit 側の極性へ揃える。RED 先行 + anti-vacuity 対照（正常系が依然 allow されること）。
 親 826c29bf"""
 created_at = 1788791612
-updated_at = 1788791612
+updated_at = 1788804747
 weight = 0.0
 issue_number = 419
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/419"
@@ -12030,7 +12030,7 @@ title = "stop-verify-worktree.py は docstring で fail-closed を主張しな�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = """
 scripts/stop-verify-worktree.py:78-79:
   if git_dir is None or common is None:
@@ -12041,7 +12041,7 @@ status, the stop is blocked」と主張しているが、この分岐では偽�
 :85-87 の status 呼び出しの側だけ。判定経路における docstring と実挙動の食い違い＝CLAUDE.md 第4節。
 修正: git 失敗を「repo でない」と区別し、判定不能は block へ。docstring は同じコミットで実挙動に合わせる。親 826c29bf"""
 created_at = 1788791798
-updated_at = 1788791798
+updated_at = 1788804748
 weight = 0.0
 issue_number = 424
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/424"
@@ -12083,7 +12083,7 @@ title = "autoflow の compass-stale block は、コード自身が直前に否�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = """
 crates/autoflow/src/main.rs:353 逐語:
   compass: {why} ... 自動でバックログを流す前に /compass で再オリエンテーションしてください（鮮明化後に /flow か /backlog を再開）。
@@ -12113,7 +12113,7 @@ condukt::find_pending が空、かつ backlog::find_open が Known(非空) の�
 依然 decision==block と非空 reason を assert すること、加えて理由に「再開」と
 無条件のドレイン進行中主張が含まれないことを assert する新テスト。親 826c29bf"""
 created_at = 1788791850
-updated_at = 1788791850
+updated_at = 1788804749
 weight = 0.0
 issue_number = 426
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/426"

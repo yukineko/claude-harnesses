@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use wait_timeout::ChildExt;
 
+use harness_core::verdict::Determination;
+
 use crate::config::Config;
 use crate::lock;
 
@@ -2161,6 +2163,25 @@ mod worktree_remove_tests {
 
 /// Remove the worktree at `path` and delete its `branch` (best-effort on branch).
 ///
+/// A plain `git worktree remove` is tried first. Git refuses that call
+/// PRECISELY when the worktree still holds uncommitted or untracked work, so
+/// the refusal is git's own safety valve over unsaved work — never something to
+/// override. This function answers it by CAPTURING the work instead:
+/// [`crate::wt_reconcile::preserve`] commits the worktree's full content
+/// (tracked modifications and untracked files alike, git-ignored excluded) to
+/// `refs/preserved/<name>` and verifies the ref reads back with the tree it
+/// wrote. Only that verified capture (`preserved == true`) authorizes the
+/// `--force` retry.
+///
+/// When the capture fails, "cannot preserve" is NOT "safe to delete"
+/// (CLAUDE.md §3). The only force permitted without a capture is the case where
+/// the worktree is PROVABLY clean — `wt_reconcile::dirtiness() == Known(false)`,
+/// meaning git declined for some unrelated reason (lock contention, an admin-dir
+/// problem) and there is nothing to lose. `Known(true)` and `Undetermined` both
+/// REFUSE: `remove` returns `Err` carrying the preservation's own reason
+/// verbatim and leaves the directory — and the work it could not save — on
+/// disk. For a garbage collector the restrictive side is DO NOT DELETE.
+///
 /// If the branch cannot be deleted because it is not fully merged, a warning is
 /// printed to stderr and the function still returns `Ok(())`. The caller is
 /// responsible for acting on the warning (e.g. the CLI prints it again with
@@ -2170,13 +2191,38 @@ mod worktree_remove_tests {
 /// any other error), `None` when no branch was requested or deletion succeeded.
 pub fn remove(repo: &Path, path: &Path, branch: Option<&str>) -> Result<Option<String>> {
     let path_str = path.to_string_lossy().to_string();
-    // Try a clean remove first. `git worktree remove` REFUSES when the worktree
-    // has uncommitted or untracked files (and for a few other reasons); in
-    // unattended/parallel runs that would leave orphan dirs accumulating on disk.
-    // On failure, retry with --force. Force-remove only discards uncommitted
-    // worktree state — committed work lives on the branch and is handled by the
-    // best-effort branch-deletion step below, so this is safe for cleanup.
+    // Try a clean remove first: when git accepts it, nothing was ever at risk.
     if git(repo, &["worktree", "remove", &path_str]).is_err() {
+        // Git refused. Preserve under the CANONICAL path — the spelling
+        // `wt_reconcile::reconcile` already uses — so both routes address one
+        // ref for one directory rather than two refs that read as two
+        // worktrees. (A path that cannot be canonicalized is used as given; the
+        // capture is verified either way before anything is deleted.)
+        let target = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let preserved = crate::wt_reconcile::preserve(&target, repo, crate::state::now_secs());
+        if !preserved.preserved {
+            let why = preserved
+                .reason
+                .unwrap_or_else(|| "the preservation reported no reason".to_string());
+            match crate::wt_reconcile::dirtiness(&target) {
+                // Provably clean: git's refusal cannot have been about unsaved
+                // work, so forcing discards nothing.
+                Determination::Known(false) => {}
+                Determination::Known(true) => bail!(
+                    "refusing to remove worktree {}: it holds uncommitted work that could \
+                     not be preserved ({why}). The directory is left in place — recover the \
+                     work (or discard it deliberately) and remove it again.",
+                    path.display()
+                ),
+                // Cannot even tell whether there is anything to lose.
+                Determination::Undetermined(undecided) => bail!(
+                    "refusing to remove worktree {}: git declined to remove it, its content \
+                     could not be preserved ({why}), and whether it holds uncommitted work \
+                     could not be determined ({undecided}). The directory is left in place.",
+                    path.display()
+                ),
+            }
+        }
         git(repo, &["worktree", "remove", "--force", &path_str])
             .with_context(|| format!("could not force-remove worktree {}", path.display()))?;
     }

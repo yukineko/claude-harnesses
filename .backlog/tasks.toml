@@ -12611,3 +12611,44 @@ updated_at = 1788792905
 weight = 0.0
 issue_number = 439
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/439"
+
+[[task]]
+id = "b5358f58"
+title = "guard-maintree-bash.py の cp は読み出し元も書き込み対象として扱う — main から worktree へ持ち込む §8 の指示どおりの手順が block される"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-08、測定点 df570513、CLAUDE_PROJECT_DIR=/Users/yuki/src/harness を設定して scripts/guard-maintree-bash.py へ合成 payload を直接投入。
+
+  cp <main の file> <worktree>/        -- rc=2 BLOCK   ← 誤検出。main を読むだけで書き込み先は worktree
+  cp <worktree の file> <main>/        -- rc=2 BLOCK   ← 正しい
+  cp /tmp/a.py <worktree>/             -- rc=0 allow   ← 正しい
+  cat <main の file>                   -- rc=0 allow   ← 正しい（読みは通る）
+  mkdir -p <main>/newdir               -- rc=2 BLOCK   ← 正しい
+
+つまり読みが禁止なのではなく、cp のオペランド解析が**全オペランドを書き込み対象として扱っている**。
+scripts/guard-maintree-bash.py:217-242 の _candidate_targets は argv[0] が TARGET_ALL のとき
+オペランドを targets へ積むが、cp と mv と ln と install については**最後の1つだけが宛先**であり、
+それ以外は読み出し元である。
+
+なぜ重大か: **main から worktree へファイルを持ち込むのは CLAUDE.md 第8節が指示している当の手順**。
+ゲートが、自分が引用している規約が要求する行為を塞いでいる。doctrine の
+「指示を参照せず形状だけで発火するゲートは mission を果たしていない」の直接の該当例であり、
+しかも本セッションで実際に作業を止めた（injectguard 修正の独立検証のために
+main のスクリプトを空ツリーへ複製しようとして block された）。
+
+修正: cp / mv / ln / install については最後のオペランドのみを書き込み対象とする
+（-t / --target-directory 指定時はその引数が宛先で残りは全部ソース）。
+RED 先行 + anti-vacuity 対照: cp が main へ書き込む向きは依然 block されること。
+
+副次観測（別件として記録）: main 配下でも .scratch 配下は rc=0 で通る。
+gitignore 済みで index を汚さないので妥当に見えるが、その判定根拠が
+コード上どこにあるかは未追跡＝UNVERIFIED。
+親 826c29bf"""
+created_at = 1788793588
+updated_at = 1788793588
+weight = 0.0
+issue_number = 440
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/440"

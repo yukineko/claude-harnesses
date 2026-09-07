@@ -11,6 +11,7 @@ use crate::config::{Area, Config, Invariant};
 use crate::prompt::Shard;
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
+use harness_core::verdict::Determination;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -375,13 +376,6 @@ pub const CODE_INDEX_K: usize = 8;
 /// shard that signalled insufficient context (t4 Part B).
 pub const CODE_INDEX_K_WIDENED: usize = 20;
 
-/// The `fugu-router` executable name — overridable via `SPECGUARD_FUGU_BIN` so
-/// tests can point the deterministic code-index shell-out at a stub (or a bogus
-/// path, to exercise the fail-soft "absent" path) without a real install.
-fn fugu_bin() -> String {
-    std::env::var("SPECGUARD_FUGU_BIN").unwrap_or_else(|_| "fugu-router".to_string())
-}
-
 /// The last path segment with any extension stripped — a cheap query term for
 /// the code index (e.g. `logging/signature.py` -> `signature`).
 fn stem(path: &str) -> String {
@@ -392,7 +386,8 @@ fn stem(path: &str) -> String {
 /// A deterministic code-index query for an area shard: the area name plus the
 /// stems of its canon and (a bounded prefix of) its changed files. Non-area
 /// shards get no query (the relevant-file map is an area-shard concept). Passed
-/// to `fugu-router code-index search` as a single `--query` argument (no shell).
+/// straight to [`harness_core::index_store`] as a search string — it is never a
+/// shell word or a process argument, so there is nothing here to quote.
 pub fn shard_query(cfg: &Config, scope: &Scope, shard: Shard) -> String {
     match shard {
         Shard::Area(i) => {
@@ -411,64 +406,51 @@ pub fn shard_query(cfg: &Config, scope: &Scope, shard: Shard) -> String {
     }
 }
 
-/// Shell out to the repo's deterministic code index (`fugu-router`) to enrich a
-/// shard's relevant-file map with the `.rs` symbol files most relevant to
-/// `query`. Runs `code-index build --if-stale` (idempotent, cheap when the `.rs`
-/// set is unchanged) then `code-index search --query <q> --k <k>`, parsing the
-/// JSON array of `{name,kind,file,line,signature,score}`.
+/// Ask the repo's deterministic code index which `.rs` files are most relevant
+/// to `query`, **in this process**.
 ///
-/// The JSON is treated as UNTRUSTED DATA: only the `file` field is read, only
-/// `.rs` paths are kept, and nothing in it is ever executed or interpreted as an
-/// instruction. FAIL-SOFT by construction: a missing binary, a non-zero exit,
-/// non-UTF8/……invalid JSON, or an empty array all yield an empty vector, so the
-/// caller falls back to today's behavior (no enrichment).
-pub fn code_index_files(bin: &str, repo_root: &Path, query: &str, k: usize) -> Vec<String> {
+/// This used to spawn `fugu-router` twice per shard — `code-index build
+/// --if-stale`, then `code-index search` — and parse the JSON back. specguard
+/// already links `harness-core`, which is where that index lives, so the two
+/// process spawns and the serialize/parse round trip bought nothing.
+///
+/// It also asks a question the old path could not. `fugu-router code-index
+/// search` only ever saw **declaration lines**, so a query naming something the
+/// area *uses* rather than *declares* returned nothing. Symbol hits still come
+/// first (a declaration is the strongest signal about where a thing lives);
+/// full-text hits over file bodies fill the rest, which is how call sites now
+/// reach the map at all.
+///
+/// Returns [`Determination::Undetermined`] when the index could not answer — a
+/// repo `git` cannot enumerate, an index that will not load, one that is stale
+/// and could not be rebuilt. Deliberately not an empty vector: see
+/// [`relevant_file_map`] for what the caller is then allowed to do with that.
+pub fn code_index_files(repo_root: &Path, query: &str, k: usize) -> Determination<Vec<String>> {
     if query.trim().is_empty() || k == 0 {
-        return Vec::new();
+        return Determination::known(Vec::new());
     }
-    // Best-effort index refresh; ignore its outcome (search fail-softs on an
-    // absent/empty index anyway).
-    let _ = Command::new(bin)
-        .args(["code-index", "build", "--if-stale", "--root"])
-        .arg(repo_root)
-        .output();
-
-    let out = Command::new(bin)
-        .args(["code-index", "search", "--query"])
-        .arg(query)
-        .arg("--k")
-        .arg(k.to_string())
-        .arg("--root")
-        .arg(repo_root)
-        .output();
-    let Ok(out) = out else {
-        return Vec::new(); // binary absent / spawn failed -> fail-soft
+    let symbols = match harness_core::index_store::search_symbols(repo_root, query, k) {
+        Determination::Known(hits) => hits,
+        Determination::Undetermined(u) => {
+            return Determination::undetermined(u.reason().as_str().to_string())
+        }
     };
-    if !out.status.success() {
-        return Vec::new();
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    parse_code_index_files(&stdout)
-}
-
-/// Pure JSON-array parse (split out for testing): extract the `.rs` `file` paths
-/// from a `fugu-router code-index search` payload, deduped in first-seen order.
-/// Any parse failure yields an empty vector (fail-soft — untrusted data).
-fn parse_code_index_files(stdout: &str) -> Vec<String> {
-    #[derive(serde::Deserialize)]
-    struct Hit {
-        #[serde(default)]
-        file: String,
-    }
-    let Ok(hits) = serde_json::from_str::<Vec<Hit>>(stdout.trim()) else {
-        return Vec::new();
+    let text = match harness_core::index_store::search_text(repo_root, query, k) {
+        Determination::Known(out) => out,
+        Determination::Undetermined(u) => {
+            return Determination::undetermined(u.reason().as_str().to_string())
+        }
     };
     let mut seen = std::collections::HashSet::new();
-    hits.into_iter()
-        .map(|h| h.file)
+    let files = symbols
+        .into_iter()
+        .map(|h| h.symbol.file)
+        .chain(text.hits.into_iter().map(|h| h.file))
         .filter(|f| f.ends_with(".rs") && !f.trim().is_empty())
         .filter(|f| seen.insert(f.clone()))
-        .collect()
+        .take(k)
+        .collect();
+    Determination::known(files)
 }
 
 /// Merge a shard's base input files with code-index extras into a BOUNDED,
@@ -499,9 +481,17 @@ fn merge_relevant_map(base: Vec<String>, extra: Vec<String>, max: usize) -> Vec<
 
 /// The bounded relevant-file map for an area shard (t4 Part A): the shard's own
 /// input files ([`shard_input_files`]) enriched with the most-relevant `.rs`
-/// symbol files from the deterministic code index, capped at [`RELEVANT_MAP_MAX`].
-/// With `fugu-router` absent/erroring/returning `[]`, the enrichment is empty and
-/// the map degrades to the base set — never errors, no network.
+/// files from the deterministic code index, capped at [`RELEVANT_MAP_MAX`].
+///
+/// When the index cannot answer, the map is the base set alone. That degrade is
+/// legitimate here and it is worth being precise about why, because CLAUDE.md 3
+/// forbids exactly this shape in most places: the map is **additive and
+/// advisory**. It is a reading-order hint for an auditor who can still read the
+/// whole tree, the base set is never dropped, and no verdict is computed from
+/// this list — nothing downstream reads a short map as "clean". If that ever
+/// changes, and some check starts concluding something from this list's
+/// contents, this function must return the [`Determination`] instead of
+/// swallowing it, because a shrunken map would then mean "less was found".
 pub fn relevant_file_map(
     cfg: &Config,
     scope: &Scope,
@@ -511,7 +501,10 @@ pub fn relevant_file_map(
     k: usize,
 ) -> Vec<String> {
     let base = shard_input_files(cfg, scope, shard);
-    let extra = code_index_files(&fugu_bin(), repo_root, query, k);
+    let extra = match code_index_files(repo_root, query, k) {
+        Determination::Known(files) => files,
+        Determination::Undetermined(_) => Vec::new(),
+    };
     merge_relevant_map(base, extra, RELEVANT_MAP_MAX)
 }
 
@@ -866,61 +859,140 @@ mod tests {
 
     // -- relevant-file map (t4 Part A) --------------------------------------
 
-    #[test]
-    fn parse_code_index_files_keeps_only_rs_deduped() {
-        let json = r#"[
-            {"name":"a","kind":"fn","file":"src/a.rs","line":1,"signature":"fn a()","score":0.9},
-            {"name":"b","kind":"fn","file":"src/b.rs","line":2,"signature":"fn b()","score":0.8},
-            {"name":"a2","kind":"fn","file":"src/a.rs","line":9,"signature":"fn a2()","score":0.5},
-            {"name":"doc","kind":"md","file":"docs/spec.md","line":1,"signature":"","score":0.4}
-        ]"#;
-        let files = parse_code_index_files(json);
-        // .md dropped, .rs kept in first-seen order, duplicate a.rs collapsed.
-        assert_eq!(files, vec!["src/a.rs".to_string(), "src/b.rs".to_string()]);
+    /// Unwrap a `Determination` in a test, surfacing the reason when it is
+    /// `Undetermined`. `expect` rather than `panic!` because this crate does
+    /// not allow `clippy::panic`, not even under `cfg(test)`.
+    fn known<T>(what: &str, d: Determination<T>) -> T {
+        let mut reason = String::new();
+        let value = match d {
+            Determination::Known(v) => Some(v),
+            Determination::Undetermined(u) => {
+                reason = u.as_str().to_string();
+                None
+            }
+        };
+        let Some(v) = value else {
+            unreachable!("{what}: expected an answer, got: {reason}")
+        };
+        v
     }
 
-    #[test]
-    fn parse_code_index_files_bad_json_or_empty_is_empty() {
-        assert!(parse_code_index_files("not json at all").is_empty());
-        assert!(parse_code_index_files("[]").is_empty());
-        assert!(parse_code_index_files("").is_empty());
-    }
-
-    /// A stub `fugu-router` (a shell script that prints a fixed JSON array) is
-    /// driven through `code_index_files`: only the `.rs` files come back.
-    #[test]
-    fn code_index_files_reads_stub_binary() {
+    /// A throwaway git repo standing in for the audited tree. `git ls-files`
+    /// only reports tracked paths, so the sources must actually be committed.
+    fn indexed_repo() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
-        let stub = tmp.path().join("fugu-stub.sh");
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/x.rs"), "pub fn signature_check() {}\n").unwrap();
         std::fs::write(
-            &stub,
-            "#!/bin/sh\nprintf '%s' '[{\"file\":\"src/x.rs\",\"kind\":\"fn\"},{\"file\":\"docs/y.md\"}]'\n",
+            tmp.path().join("src/caller.rs"),
+            "pub fn run() {\n    signature_check();\n}\n",
         )
         .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(tmp.path().join("docs/y.md"), "not rust").ok();
+        for args in [
+            vec!["init", "-q"],
+            vec!["add", "-A"],
+            vec![
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-qm",
+                "x",
+            ],
+        ] {
+            assert!(std::process::Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(&args)
+                .output()
+                .unwrap()
+                .status
+                .success());
         }
-        let files = code_index_files(stub.to_str().unwrap(), tmp.path(), "some query", 8);
-        assert_eq!(files, vec!["src/x.rs".to_string()]);
+        tmp
     }
 
-    /// Fail-soft: an ABSENT fugu-router binary yields an empty enrichment (no
-    /// panic, no error) — this is the graceful fallback to today's behavior.
+    /// The in-process replacement for the old `fugu-router` shell-out: `.rs`
+    /// files only, deduped, no subprocess.
     #[test]
-    fn code_index_files_absent_binary_falls_back_to_empty() {
+    fn code_index_files_queries_the_index_in_process() {
+        let tmp = indexed_repo();
+        let files = known(
+            "code_index_files",
+            code_index_files(tmp.path(), "signature_check", 8),
+        );
+        assert!(files.contains(&"src/x.rs".to_string()), "got {:?}", files);
+        assert!(files.iter().all(|f| f.ends_with(".rs")), "got {:?}", files);
+        let mut deduped = files.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(deduped.len(), files.len(), "duplicate paths: {:?}", files);
+    }
+
+    /// What the subprocess path could never do: reach a file because of a line
+    /// in its BODY. `src/caller.rs` declares nothing named `signature_check` —
+    /// it only calls it — so the symbol index alone would miss it entirely.
+    #[test]
+    fn code_index_files_reaches_call_sites_not_just_declarations() {
+        let tmp = indexed_repo();
+        let files = known(
+            "code_index_files",
+            code_index_files(tmp.path(), "signature_check", 8),
+        );
+        assert!(
+            files.contains(&"src/caller.rs".to_string()),
+            "call site missing from the map: {:?}",
+            files
+        );
+    }
+
+    /// CLAUDE.md 3: an index that cannot answer says so. It must not hand back
+    /// an empty list, which reads as "the index looked and found nothing".
+    #[test]
+    fn code_index_files_is_undetermined_when_the_index_cannot_answer() {
         let tmp = tempfile::tempdir().unwrap();
-        let files = code_index_files("specguard-no-such-fugu-binary-xyz", tmp.path(), "query", 8);
-        assert!(files.is_empty(), "absent binary must fail-soft to empty");
+        let not_a_repo = tmp.path().join("no-git-here");
+        std::fs::create_dir_all(&not_a_repo).unwrap();
+        assert!(
+            matches!(
+                code_index_files(&not_a_repo, "anything", 8),
+                Determination::Undetermined(_)
+            ),
+            "a repo git cannot enumerate must not answer as an empty result"
+        );
+    }
+
+    /// The documented degrade: `relevant_file_map` keeps the base set when the
+    /// index is Undetermined, because the map is additive and advisory. This
+    /// pins that the BASE never disappears with it.
+    #[test]
+    fn relevant_file_map_keeps_its_base_when_the_index_cannot_answer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let not_a_repo = tmp.path().join("no-git-here");
+        std::fs::create_dir_all(&not_a_repo).unwrap();
+        let (cfg, scope) = map_fixture();
+        let map = relevant_file_map(&cfg, &scope, Shard::Area(0), &not_a_repo, "logging sig", 8);
+        let base = shard_input_files(&cfg, &scope, Shard::Area(0));
+        for f in &base {
+            assert!(map.contains(f), "base file {} dropped from the map", f);
+        }
     }
 
     #[test]
     fn code_index_files_empty_query_short_circuits() {
+        // An empty query is a real, answerable question with an empty answer:
+        // nothing was asked, so nothing is relevant. That is Known, not
+        // Undetermined -- and the index is never touched to establish it.
         let tmp = tempfile::tempdir().unwrap();
-        // Even a working stub is never consulted for an empty query.
-        assert!(code_index_files("fugu-router", tmp.path(), "   ", 8).is_empty());
-        assert!(code_index_files("fugu-router", tmp.path(), "q", 0).is_empty());
+        for (q, k) in [("   ", 8usize), ("q", 0usize)] {
+            let f = known(
+                "an empty query needs no index",
+                code_index_files(tmp.path(), q, k),
+            );
+            assert!(f.is_empty());
+        }
     }
 
     #[test]
@@ -969,45 +1041,60 @@ mod tests {
         assert!(shard_query(&cfg, &scope, Shard::Invariants).is_empty());
     }
 
+    /// The area cfg + scope both map tests drive.
+    fn map_fixture() -> (Config, Scope) {
+        (
+            sample_cfg_with_canon(),
+            Scope {
+                baseline: "abc".into(),
+                fell_back: false,
+                changed_files: vec![],
+                in_scope: vec![AreaHit {
+                    area_index: 0,
+                    matched_files: vec!["logging/sig.py".into()],
+                    changed_canon: vec![],
+                }],
+                skipped_areas: vec![],
+                decision_files: vec![],
+            },
+        )
+    }
+
     /// End-to-end Part A: `relevant_file_map` is BOUNDED and PRESENT, containing
-    /// the shard's base input files plus stub code-index `.rs` extras.
+    /// the shard's base input files plus real code-index `.rs` extras — now
+    /// drawn from an actual index rather than a stub binary's canned JSON.
     #[test]
     fn relevant_file_map_is_bounded_and_contains_base_plus_extras() {
         let tmp = tempfile::tempdir().unwrap();
-        let stub = tmp.path().join("fugu-stub.sh");
-        // Stub returns many .rs symbol files (more than the base) + a .md (dropped).
-        let mut arr = String::from("[");
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        // More candidate .rs files than the map can hold, so the bound bites.
         for i in 0..30 {
-            if i > 0 {
-                arr.push(',');
-            }
-            arr.push_str(&format!("{{\"file\":\"src/gen_{i:02}.rs\"}}"));
+            std::fs::write(
+                tmp.path().join(format!("src/gen_{i:02}.rs")),
+                format!("pub fn logging_sig_{i:02}() {{}}\n"),
+            )
+            .unwrap();
         }
-        arr.push_str(",{\"file\":\"docs/x.md\"}]");
-        std::fs::write(&stub, format!("#!/bin/sh\nprintf '%s' '{arr}'\n")).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        std::fs::write(tmp.path().join("docs/x.md"), "logging sig prose").unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["add", "-A"],
+            vec![
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-qm",
+                "x",
+            ],
+        ] {
+            test_git(tmp.path(), &args);
         }
 
-        let cfg = sample_cfg_with_canon();
-        let scope = Scope {
-            baseline: "abc".into(),
-            fell_back: false,
-            changed_files: vec![],
-            in_scope: vec![AreaHit {
-                area_index: 0,
-                matched_files: vec!["logging/sig.py".into()],
-                changed_canon: vec![],
-            }],
-            skipped_areas: vec![],
-            decision_files: vec![],
-        };
-
-        std::env::set_var("SPECGUARD_FUGU_BIN", stub.to_str().unwrap());
+        let (cfg, scope) = map_fixture();
         let map = relevant_file_map(&cfg, &scope, Shard::Area(0), tmp.path(), "logging sig", 8);
-        std::env::remove_var("SPECGUARD_FUGU_BIN");
 
         assert!(!map.is_empty(), "map must be present");
         assert!(map.len() <= RELEVANT_MAP_MAX, "map must be bounded");
@@ -1015,8 +1102,12 @@ mod tests {
         assert!(map.contains(&"docs/logging.md".to_string()));
         assert!(map.contains(&"logging/sig.py".to_string()));
         // Enriched with code-index .rs extras.
-        assert!(map.iter().any(|f| f.starts_with("src/gen_")));
-        // The .md from the index was dropped by the .rs filter.
+        assert!(
+            map.iter().any(|f| f.starts_with("src/gen_")),
+            "no enrichment: {map:?}"
+        );
+        // `docs/x.md` matches the query textually but is not `.rs`, so the
+        // filter drops it — the index only ever offers Rust files here.
         assert!(!map.contains(&"docs/x.md".to_string()));
     }
 

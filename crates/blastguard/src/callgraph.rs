@@ -1,169 +1,19 @@
-//! Deterministic caller-enumeration core — a purely-lexical, no-dependency
-//! "who references this symbol" scanner in the same family as
-//! [`harness_core::code_index`]: string-token scanning only (no parser, no
-//! regex, no external API), pure and deterministic, and never panics on any
-//! input (fail-soft floor for pathological/garbled source).
+//! Deterministic caller-enumeration — **a thin re-export** of
+//! [`harness_core::callgraph`].
 //!
-//! Given a unified diff (to learn which symbol *declarations* changed) and a
-//! set of source files, it answers "which sites reference each changed
-//! symbol" — the raw blast-radius signal blastguard reasons over. It reuses
-//! [`harness_core::code_index::extract_symbols`] to know which lines are
-//! declarations, so a symbol's own declaration site is never mis-counted as a
-//! caller of itself.
+//! The implementation used to live here. It moved to `harness-core` when the
+//! call graph gained a persisted, whole-tree form
+//! ([`harness_core::callgraph::build_graph`]), because keeping a second copy of
+//! the same lexical scanner in a gate crate is the "independent reinvention"
+//! failure this repository's audits repeatedly find — and duplicating it *while*
+//! fixing that class would have been self-defeating.
+//!
+//! Nothing about blastguard's contract changes: `blastguard::callgraph::{CallSite,
+//! changed_symbol_names, enumerate_callers}` resolve exactly as before, and the
+//! tests below are unchanged, so they now prove the moved implementation still
+//! satisfies blastguard's expectations rather than merely re-testing a copy.
 
-use std::collections::{BTreeMap, BTreeSet};
-
-use harness_core::code_index::extract_symbols;
-
-/// A site where a changed symbol is referenced (called / path-qualified use).
-///
-/// serde-serializable so downstream (e.g. a blast-radius record) can persist
-/// it; `Ord`-friendly derives keep enumeration output deterministically
-/// sortable.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CallSite {
-    /// Source path the reference was found in (the `path` from the scanned
-    /// `(path, contents)` pair).
-    pub file: String,
-    /// 1-indexed line number the reference occurs on.
-    pub line: usize,
-    /// Name of the nearest enclosing declaration (the "caller"); empty when the
-    /// reference is above any recognised declaration in the file.
-    pub caller: String,
-}
-
-/// Return `true` if `c` can be part of a Rust identifier (alphanumeric or `_`).
-fn is_ident_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-/// Extract the names of declarations introduced/removed on `+`/`-` lines of a
-/// unified diff. Reuses the same declaration-recognition idiom as
-/// [`extract_symbols`] (each stripped `+`/`-` line body is fed through it).
-/// Deterministic, de-duplicated, and sorted. Never panics.
-pub fn changed_symbol_names(diff_text: &str) -> Vec<String> {
-    let mut names: BTreeSet<String> = BTreeSet::new();
-    for line in diff_text.lines() {
-        // Skip file headers (`+++ b/x`, `--- a/x`) — they start with `+`/`-`
-        // but are diff metadata, not added/removed source content.
-        if line.starts_with("+++") || line.starts_with("---") {
-            continue;
-        }
-        let body = if let Some(rest) = line.strip_prefix('+') {
-            rest
-        } else if let Some(rest) = line.strip_prefix('-') {
-            rest
-        } else {
-            continue;
-        };
-        // Feed the stripped line body through the shared declaration scanner so
-        // recognition matches `code_index` exactly (fn/struct/enum/trait/impl/
-        // mod/const/static/type/macro).
-        for sym in extract_symbols(body, "<diff>") {
-            if !sym.name.is_empty() {
-                names.insert(sym.name);
-            }
-        }
-    }
-    names.into_iter().collect()
-}
-
-/// For each changed symbol name, scan every `(path, contents)` source for
-/// reference/call sites and return a [`BTreeMap`] keyed by symbol name →
-/// sorted `Vec<CallSite>`. A symbol's own declaration site is excluded (a
-/// declaration is not a caller of itself). Pure, no I/O, never panics, fully
-/// deterministic.
-pub fn enumerate_callers(
-    changed_symbols: &[String],
-    sources: &[(String, String)],
-) -> BTreeMap<String, Vec<CallSite>> {
-    let mut out: BTreeMap<String, Vec<CallSite>> = BTreeMap::new();
-
-    for name in changed_symbols {
-        // An empty symbol name would "match" every position — guard it out so
-        // it never floods the result (and never panics on slicing).
-        if name.is_empty() {
-            out.entry(name.clone()).or_default();
-            continue;
-        }
-
-        let mut sites: Vec<CallSite> = Vec::new();
-
-        for (path, contents) in sources {
-            // Lines that *declare* this symbol are excluded — a declaration is
-            // not a caller of itself. Also precompute all declarations so each
-            // reference can be attributed to its nearest enclosing one.
-            let symbols = extract_symbols(contents, path);
-            let decl_lines: BTreeSet<usize> = symbols
-                .iter()
-                .filter(|s| &s.name == name)
-                .map(|s| s.line)
-                .collect();
-
-            for (idx, raw_line) in contents.lines().enumerate() {
-                let line_no = idx + 1;
-                if decl_lines.contains(&line_no) {
-                    continue;
-                }
-                if !line_references(raw_line, name) {
-                    continue;
-                }
-                let caller = symbols
-                    .iter()
-                    .filter(|s| s.line <= line_no)
-                    .max_by_key(|s| s.line)
-                    .map(|s| s.name.clone())
-                    .unwrap_or_default();
-                sites.push(CallSite {
-                    file: path.clone(),
-                    line: line_no,
-                    caller,
-                });
-            }
-        }
-
-        // Deterministic order (file, line, caller) and de-duplicate identical
-        // sites (e.g. two matches on one line collapse to one record).
-        sites.sort_by(|a, b| {
-            a.file
-                .cmp(&b.file)
-                .then_with(|| a.line.cmp(&b.line))
-                .then_with(|| a.caller.cmp(&b.caller))
-        });
-        sites.dedup();
-
-        out.insert(name.clone(), sites);
-    }
-
-    out
-}
-
-/// Return `true` if `name` appears as a whole-word reference on `line` in a
-/// call/path position: `name(` (call), `name::` or `::name` (path-qualified).
-/// Whole-word means bounded by non-identifier chars, so `helper` does not
-/// match inside `helperx` or `xhelper`. Never panics on non-ASCII / unbalanced
-/// input (all slicing is on `match_indices` char boundaries).
-fn line_references(line: &str, name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-    for (idx, _) in line.match_indices(name) {
-        let before = &line[..idx];
-        let after = &line[idx + name.len()..];
-
-        // Whole-word boundary check.
-        let prev_ok = before.chars().next_back().map(is_ident_char) != Some(true);
-        let next_ok = after.chars().next().map(is_ident_char) != Some(true);
-        if !prev_ok || !next_ok {
-            continue;
-        }
-
-        if after.starts_with('(') || after.starts_with("::") || before.ends_with("::") {
-            return true;
-        }
-    }
-    false
-}
+pub use harness_core::callgraph::{changed_symbol_names, enumerate_callers, CallSite};
 
 #[cfg(test)]
 mod tests {

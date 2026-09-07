@@ -62,6 +62,13 @@ const EXIT_TESTAUDIT_UNDETERMINED: u8 = 8;
 /// it would discard the ids and with them the only evidence those findings were
 /// ever closed. Pass `--force` to clear anyway, accepting the lost record.
 const EXIT_DISPOSITION_UNRECORDED: u8 = 9;
+/// A `specguard map` query could NOT be answered: the deterministic indexes
+/// were unreadable, stale beyond repair, or built over a tree `git` could not
+/// enumerate. Distinct from a query that ran and matched nothing, which is
+/// [`EXIT_OK`] with zero hits. The two must never share an exit code — an
+/// operator reading "no results" from a search that never happened concludes
+/// their code is not there.
+const EXIT_INDEX_UNDETERMINED: u8 = 10;
 
 #[derive(Parser)]
 #[command(
@@ -254,6 +261,39 @@ enum MapAction {
         /// Exact entry key or glob selecting the entries to mark tracked.
         selector: String,
     },
+    /// Search the repo through the deterministic indexes and report which map
+    /// entries the hits belong to.
+    ///
+    /// This is the join `list --filter` cannot do. `--filter` matches an
+    /// entry's own recorded strings (key, spec-doc, paths, route) — it can only
+    /// find an entry you can already name. `search` asks the code: it looks up
+    /// the query in the symbol index AND the full-text index, then reports the
+    /// entries owning the files that came back. Asking "where is retry backoff
+    /// handled" finds it; `--filter` never could.
+    Search {
+        /// What to look for. Matched against declared symbol names and against
+        /// every indexed line of every tracked `.rs` file.
+        query: String,
+        /// Maximum hits to draw from each index.
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        /// Emit JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show what calls a symbol (or what it calls), from the persisted call
+    /// graph. Lexical, so it points at places to look rather than proving
+    /// reachability — see `MapEntry::called_by`.
+    Callers {
+        /// Symbol name to trace.
+        symbol: String,
+        /// Trace the other direction: what `symbol` calls.
+        #[arg(long)]
+        callees: bool,
+    },
+    /// Fill every entry's `symbols` and `called_by` from the deterministic
+    /// indexes, then save. Idempotent; safe to re-run after `sync`.
+    Enrich,
     /// Remove entries whose key matches the configured `[map].exclude` globs —
     /// the non-spec-bearing paths (lockfiles, manifests, generated artifacts,
     /// docs). Idempotent. `build`/`sync` also apply exclusion, so this mainly
@@ -1561,6 +1601,102 @@ fn decide(l: &Loaded, title: &str, force: bool) -> Result<u8> {
 /// run` audit `.last-ref` (a separate baseline tracker that may not exist at
 /// all for map-only usage, which previously made `sync` silently fall back to
 /// `fallback_ref` and rescan a much wider window than "since last sync").
+/// One index hit, resolved back to the map entries that own its file.
+#[derive(serde::Serialize)]
+struct SearchHit {
+    file: String,
+    line: u32,
+    /// `symbol` for a declaration hit, `text` for a body-line hit.
+    via: &'static str,
+    /// Map entry keys listing this file under impl/test files. Empty means the
+    /// file is genuinely unmapped — worth knowing, and reported as such.
+    entries: Vec<String>,
+}
+
+/// `specguard map search`: query the indexes, then attribute the hits to map
+/// entries.
+///
+/// Fail-closed: an index that cannot answer exits non-zero with the reason.
+/// Printing "0 hits" for a search that never ran would tell the operator their
+/// code does not exist.
+fn run_map_search(l: &Loaded, map_path: &Path, query: &str, k: usize, json: bool) -> Result<u8> {
+    let symbols = match harness_core::index_store::search_symbols(&l.repo_root, query, k) {
+        Determination::Known(v) => v,
+        Determination::Undetermined(u) => {
+            eprintln!("specguard map search: {}", u.as_str());
+            return Ok(EXIT_INDEX_UNDETERMINED);
+        }
+    };
+    let text = match harness_core::index_store::search_text(&l.repo_root, query, k) {
+        Determination::Known(v) => v,
+        Determination::Undetermined(u) => {
+            eprintln!("specguard map search: {}", u.as_str());
+            return Ok(EXIT_INDEX_UNDETERMINED);
+        }
+    };
+
+    // The map may legitimately not exist yet; searching still works, the hits
+    // just carry no entry attribution.
+    let map = specmap::SpecMap::load(map_path).unwrap_or_default();
+    let owners = |file: &str| -> Vec<String> {
+        map.entries
+            .iter()
+            .filter(|(_, e)| {
+                e.impl_files.iter().any(|f| f == file) || e.test_files.iter().any(|f| f == file)
+            })
+            .map(|(k, _)| k.clone())
+            .collect()
+    };
+
+    let mut hits: Vec<SearchHit> = Vec::new();
+    for s in &symbols {
+        hits.push(SearchHit {
+            file: s.symbol.file.clone(),
+            line: s.symbol.line as u32,
+            via: "symbol",
+            entries: owners(&s.symbol.file),
+        });
+    }
+    for h in &text.hits {
+        if hits.iter().any(|x| x.file == h.file && x.line == h.line) {
+            continue;
+        }
+        hits.push(SearchHit {
+            file: h.file.clone(),
+            line: h.line,
+            via: "text",
+            entries: owners(&h.file),
+        });
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&hits)?);
+        return Ok(EXIT_OK);
+    }
+
+    println!("specguard map search: {:?} -> {} hit(s)", query, hits.len());
+    if text.truncated {
+        // CLAUDE.md 3: a capped posting list means the answer is incomplete,
+        // and saying so is the difference between a ranking and a claim.
+        println!("  (a posting list hit its cap — these are the top hits, not all of them)");
+    }
+    if !text.missing_tokens.is_empty() {
+        println!(
+            "  (not in the index at all: {})",
+            text.missing_tokens.join(", ")
+        );
+    }
+    for h in &hits {
+        let entries = if h.entries.is_empty() {
+            "(unmapped)".to_string()
+        } else {
+            h.entries.join(", ")
+        };
+        println!("  [{}] {}:{}  -> {}", h.via, h.file, h.line, entries);
+    }
+    Ok(EXIT_OK)
+}
+
 fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
     let map_path = l.repo_root.join(&l.cfg.map.path);
     let spec_dir = &l.cfg.map.spec_doc_dir;
@@ -1583,6 +1719,58 @@ fn run_map(cli: &Cli, l: &Loaded, action: &MapAction) -> Result<u8> {
             }
             Ok(EXIT_OK)
         }
+        MapAction::Enrich => {
+            let mut map = specmap::SpecMap::load(&map_path)?;
+            match map.enrich(&l.repo_root) {
+                Determination::Known(stats) => {
+                    map.save(&map_path)?;
+                    println!(
+                        "specguard map: enriched {} -> {} entr{} changed, {} symbols, \
+                         {} call edges, {} symbol(s) too ambiguous to trace",
+                        map_path.display(),
+                        stats.entries_changed,
+                        if stats.entries_changed == 1 {
+                            "y"
+                        } else {
+                            "ies"
+                        },
+                        stats.symbols,
+                        stats.call_edges,
+                        stats.ambiguous,
+                    );
+                    Ok(EXIT_OK)
+                }
+                // The map is NOT saved here. A half-answer written over a good
+                // map is worse than no run at all.
+                Determination::Undetermined(u) => {
+                    eprintln!("specguard map: cannot enrich: {}", u.as_str());
+                    Ok(EXIT_INDEX_UNDETERMINED)
+                }
+            }
+        }
+        MapAction::Callers { symbol, callees } => {
+            let found = if *callees {
+                harness_core::index_store::callees(&l.repo_root, symbol)
+            } else {
+                harness_core::index_store::callers(&l.repo_root, symbol)
+            };
+            match found {
+                Determination::Known(edges) => {
+                    let direction = if *callees { "calls" } else { "called by" };
+                    println!("{symbol} {direction} ({} site(s)):", edges.len());
+                    for e in &edges {
+                        let other = if *callees { &e.callee } else { &e.caller };
+                        println!("  {}:{}  {}", e.file, e.line, other);
+                    }
+                    Ok(EXIT_OK)
+                }
+                Determination::Undetermined(u) => {
+                    eprintln!("specguard map: cannot trace {symbol}: {}", u.as_str());
+                    Ok(EXIT_INDEX_UNDETERMINED)
+                }
+            }
+        }
+        MapAction::Search { query, k, json } => run_map_search(l, &map_path, query, *k, *json),
         MapAction::Build | MapAction::Sync => {
             let override_ref = cli
                 .baseline
@@ -2897,6 +3085,9 @@ mod tests {
                 impl_files: vec![impl_file.to_string()],
                 test_files: vec![],
                 client_refs: vec![],
+                symbols: vec![],
+                called_by: vec![],
+                ambiguous_symbols: vec![],
                 api: None,
             }
         }

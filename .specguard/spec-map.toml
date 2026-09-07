@@ -1,4 +1,4 @@
-last_synced = "e46cf146854347b149308a9982a4df7c1c654538"
+last_synced = "09fa291d7487baec73ebaee75953a4e4a7beb6db"
 
 [entries.".gitattributes"]
 key = ".gitattributes"
@@ -83,7 +83,7 @@ key = "crates/autoflow/src/main.rs"
 kind = "feature"
 spec_doc = "docs/specs/autoflow.md"
 status = "changed"
-last_ref = "a7f1d2417ad46056af1697fbb0a27308c64f13f5"
+last_ref = "09fa291d7487baec73ebaee75953a4e4a7beb6db"
 impl_files = ["crates/autoflow/src/main.rs"]
 test_files = []
 client_refs = []
@@ -527,7 +527,7 @@ key = "crates/blastguard/src/detect.rs"
 kind = "feature"
 spec_doc = "docs/specs/blastguard.md"
 status = "changed"
-last_ref = "7dc4c830d5eb1dd051cf075eb630016c09fc7fb6"
+last_ref = "09fa291d7487baec73ebaee75953a4e4a7beb6db"
 impl_files = ["crates/blastguard/src/detect.rs"]
 test_files = []
 client_refs = []
@@ -788,7 +788,7 @@ client_refs = []
 key = "crates/blastguard/tests/verdict_path_probes.rs"
 kind = "feature"
 status = "changed"
-last_ref = "a7f1d2417ad46056af1697fbb0a27308c64f13f5"
+last_ref = "09fa291d7487baec73ebaee75953a4e4a7beb6db"
 impl_files = []
 test_files = ["crates/blastguard/tests/verdict_path_probes.rs"]
 client_refs = []

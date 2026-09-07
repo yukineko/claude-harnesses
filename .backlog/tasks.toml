@@ -1775,12 +1775,12 @@ tags = [
     "scout",
     "p1",
 ]
-status = "pending"
+status = "done"
 notes = """
 現状 k-NN の pass-rate 類似度のみでルーティングしコスト階層を無視。cost-per-pass を学習し min(cost×(1-pass_rate)) で選択すれば品質維持のままコスト削減。低工数・高ROI。/ 証拠(peer): https://lmsys.org/blog/2024-07-01-routellm/ ; repo: crates/fugu-router/src/policy.rs はコスト次元なし / 完了条件: model×task のコストを記録しコスト調整スコア関数でルーティング、record で書き戻し
 Already satisfied — scout evidence stale. Cost-aware routing (RouteLLM/FrugalGPT) is fully implemented in crates/fugu-router/src/policy.rs: ModelStat.total_cost_usd + aggregate() sum cost; decide() picks cheapest tier by lowest cost-per-pass (L242-263); decide_bandit() does cost-efficiency posterior sampling efficiency=sample/(cpp/min_cpp) (L349-409); Record CLI has --cost persisted as cost_usd (main.rs L67/L363); stats reports avg_cost_usd. 21 policy tests green incl. cost_per_pass_prefers_cheaper_tier_*, bandit_cost_adj_favours_cheaper_tier_*, cost_per_pass_skips_tier_with_no_cost_data_gracefully. Nothing to build."""
 created_at = 1782856095
-updated_at = 1787734763
+updated_at = 1788756660
 weight = 0.0
 
 [[task]]
@@ -1793,12 +1793,14 @@ tags = [
     "scout",
     "p1",
 ]
-status = "pending"
+status = "failed"
 notes = """
 context 圧力は検知するが古い tool 出力/過去 thinking を能動的に除去しない(context-rot 緩和の最高ROIレバー)。事実は note store に退避しつつ clear。repo の中核テーゼと整合。/ 証拠(peer): context-engineering の tool-result clearing パターン; repo: ctxrot に clear 機構なし / 完了条件: 圧力%検知→古い tool 出力 clear(事実は保持)→thinking clear を hook で発火
-Architecturally inapplicable to a hook (same class as prompt-caching batch). A Claude Code hook has NO output channel to clear/null resident tool_result or thinking blocks: the only emit surface is decision:block/deny and additionalContext (which ADDS text, never removes). preguard.rs:16 documents 'PreToolUse cannot inject additionalContext'. The only actor that removes content is compaction, which a hook cannot trigger at a custom pressure threshold (see memory compaction-not-hook-triggerable) nor apply selectively block-by-block. Anthropic 'clear tool uses' context-editing is an API-request param the CLIENT sets, unavailable to a subscription-mode plugin hook. Achievable levers already exist: preguard PREVENTS large reads entering context (PreToolUse deny+reason); rescue preserves facts pre-compact; distill is the proactive auto-distill answer. The 'clear resident blocks via hook' framing is not buildable."""
+Architecturally inapplicable to a hook (same class as prompt-caching batch). A Claude Code hook has NO output channel to clear/null resident tool_result or thinking blocks: the only emit surface is decision:block/deny and additionalContext (which ADDS text, never removes). preguard.rs:16 documents 'PreToolUse cannot inject additionalContext'. The only actor that removes content is compaction, which a hook cannot trigger at a custom pressure threshold (see memory compaction-not-hook-triggerable) nor apply selectively block-by-block. Anthropic 'clear tool uses' context-editing is an API-request param the CLIENT sets, unavailable to a subscription-mode plugin hook. Achievable levers already exist: preguard PREVENTS large reads entering context (PreToolUse deny+reason); rescue preserves facts pre-compact; distill is the proactive auto-distill answer. The 'clear resident blocks via hook' framing is not buildable.
+実測で architecturally-inapplicable を確認 (測定日 2026-09-07, 測定点 e018fe91): hook の出力面は additive か blocking のみ (main.rs:375 permissionDecision:deny / main.rs:408 additionalContext / decision:block) で、常駐 tool_result・thinking ブロックを除去する経路は無い。main.rs:371 に "PreToolUse can not inject additionalContext" と明記。ctxrot に clear 機構は存在しない (grep で loadset.rs:102 clear_preferred_note のみ、無関係)。done_criteria の「古い tool 出力 clear」は hook 層では実装不能。"""
 created_at = 1782856095
-updated_at = 1787734763
+updated_at = 1788756660
+defer_until = 1788929460
 weight = 0.0
 
 [[task]]
@@ -1849,12 +1851,14 @@ tags = [
     "scout",
     "p1",
 ]
-status = "pending"
+status = "failed"
 notes = """
 828 の println!/eprintln! があり tracing:: は 0。span/レベルフィルタ(RUST_LOG)が無く hook 障害の観測性が低い。/ 証拠: grep println!|eprintln! 828 hits, tracing:: 0 hits, workspace.dependencies に tracing 無し / 完了条件: tracing を workspace.deps に追加、hot path の出力を tracing マクロ化、RUST_LOG でレベル制御可能
-Harmful as specified — scout miscounted grep hits without the architecture. In this codebase stdout is a STRUCTURED WIRE PROTOCOL, not incidental logging: hook binaries emit their JSON decision/additionalContext to stdout via println! (ctxrot/main.rs:280,310,331), and CLI commands emit JSON to stdout that the flow/scout/condukt skills capture via $(...) (compass/main.rs:606,689,750; backlog/main.rs:226,320 println! json!({additionalContext})). Converting these println! to tracing::info! (stderr, RUST_LOG-gated, OFF by default) would make every hook emit nothing to stdout and every CLI-JSON contract return empty — breaking the whole PDO loop (backlog next / compass gap / condukt would all get empty strings). 'tracing:: = 0 hits' is correct-by-design. Only a small fraction (internal fail-soft eprintln! diagnostics) is a safe tracing target, and even that needs a stderr-pinned subscriber and is NOT what the done-condition ('hot path の出力を tracing マクロ化') asks. Introducing a global subscriber across ~30 binaries also risks never-break-a-turn for marginal gain. Not buildable as specified."""
+Harmful as specified — scout miscounted grep hits without the architecture. In this codebase stdout is a STRUCTURED WIRE PROTOCOL, not incidental logging: hook binaries emit their JSON decision/additionalContext to stdout via println! (ctxrot/main.rs:280,310,331), and CLI commands emit JSON to stdout that the flow/scout/condukt skills capture via $(...) (compass/main.rs:606,689,750; backlog/main.rs:226,320 println! json!({additionalContext})). Converting these println! to tracing::info! (stderr, RUST_LOG-gated, OFF by default) would make every hook emit nothing to stdout and every CLI-JSON contract return empty — breaking the whole PDO loop (backlog next / compass gap / condukt would all get empty strings). 'tracing:: = 0 hits' is correct-by-design. Only a small fraction (internal fail-soft eprintln! diagnostics) is a safe tracing target, and even that needs a stderr-pinned subscriber and is NOT what the done-condition ('hot path の出力を tracing マクロ化') asks. Introducing a global subscriber across ~30 binaries also risks never-break-a-turn for marginal gain. Not buildable as specified.
+実測で not-buildable を確認 (測定日 2026-09-07, 測定点 e018fe91): tracing:: は crates/*/src/ に 0 ヒットだが、これは design どおり。stdout は構造化ワイヤプロトコルであり ctxrot/main.rs に println! 71 箇所・compass/main.rs に 29 箇所が JSON decision/additionalContext を吐いている。done_criteria の「hot path の出力を tracing マクロ化」を満たすと hook の stdout が空になり PDO ループ (backlog next / compass gap / condukt) が全滅する。仕様のまま実装不可。"""
 created_at = 1782856113
-updated_at = 1787734763
+updated_at = 1788756660
+defer_until = 1788929460
 weight = 0.0
 
 [[task]]
@@ -3940,7 +3944,7 @@ tags = [
     "failopen",
     "p1",
 ]
-status = "pending"
+status = "claimed"
 notes = """
 PARTIAL as of 2026-07-29, merged at b5ed6fdc on main. DONE: scripts/check-clippy-lints.py (per-crate clippy gate over the opt-in deny lints) plus scripts/tests/precommit-clippy-gate.sh, 18 cases, all green from merged main. Independently verified by an adversarial agent on a different model: anti-vacuity, the Undetermined-vs-empty-selection tri-state, working-tree diff UNION untracked (never the index), exit-status-as-verdict, and pre-existing-failure parity all confirmed by mutation. Three prose claims it disproved were corrected in b6b11a5d, and one real false negative it demonstrated is filed as 3832ba25.
 
@@ -3949,7 +3953,7 @@ REMAINING and BLOCKED: the scanner is not wired into .githooks/pre-commit, so it
 Note for whoever does the wiring: scripts/test_precommit_hook.py EXPECTED_SCANNERS is an exact-match list and needs the new scanner added in the same commit. It was stale by four and RED on clean main; refreshed in fd217e59, so it is green now and will go red again the moment a scanner is added without updating it.
 BLOCKED on user action, not on the work. The gate and its 20-case suite are built, verified and merged (de2e9829). The only remaining step is 3 lines: one run line in .githooks/pre-commit plus two EXPECTED_SCANNERS/LABELS entries. That edit is refused by the permission deny list in ~/.claude/settings.json lines 36-37 (Edit/Write on **/.githooks/**), which must not be worked around via Bash. The wiring is already proven correct against copies via the PRECOMMIT_HOOK_UNDER_TEST seam: 16/16 green on the wired hook vs 9 targeted failures on the unwired one. Deferred so the driver stops proposing an item that cannot advance; restore with: backlog edit 7ecf3797 --status pending, the moment the deny is lifted."""
 created_at = 1784603235
-updated_at = 1787734763
+updated_at = 1788756564
 weight = 0.0
 
 [[task]]
@@ -14938,4 +14942,16 @@ status = "pending"
 notes = ""
 created_at = 1788756375
 updated_at = 1788756375
+weight = 0.0
+
+[[task]]
+id = "f6c5164e"
+title = "backlog fail に恒久クローズが無い — 実装不能と確定した item も 2 日後に自動復帰し driver が再ピックし続ける (status は pending|done|failed のみ)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = ""
+created_at = 1788756697
+updated_at = 1788756697
 weight = 0.0

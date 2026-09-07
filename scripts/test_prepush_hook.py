@@ -83,6 +83,16 @@ sys.stdout.write("STUB check-plugin-rollout: pretending exit {code}\\n")
 sys.exit({code})
 """
 
+# The hook's second blocking check shells out to `cargo check`. The throwaway
+# repo is not a cargo workspace, and running the real compiler here would test
+# cargo rather than the hook's wiring, so cargo is stubbed like every other
+# external the harness controls. Its exit code is the test's to choose, which is
+# what lets both polarities be pinned (0 => push allowed, non-zero => blocked).
+_CARGO_STUB = """#!/bin/sh
+echo "STUB cargo: pretending exit {code} for: $*" >&2
+exit {code}
+"""
+
 
 def _which(name):
     path = shutil.which(name)
@@ -101,6 +111,8 @@ class HookHarness:
         with_python=True,
         rollout_exit=None,
         rollout_missing=True,
+        cargo_exit=0,
+        cargo_missing=False,
     ):
         """gate_bypass_exit: exit code the gate-bypass.py stub returns.
         gate_bypass_missing: if True, never create scripts/gate-bypass.py at all.
@@ -110,6 +122,9 @@ class HookHarness:
         rollout_missing: if True (default), never create
             scripts/check-plugin-rollout.py — that advisory block must then be
             skipped entirely.
+        cargo_exit: exit code the stub `cargo` on the hook's PATH returns.
+        cargo_missing: if True, put no `cargo` on the hook's PATH at all, so the
+            hook's fail-closed "cargo not found" branch is exercised.
         """
         self.root = Path(tempfile.mkdtemp(prefix="prepush-hook-test-")).resolve()
 
@@ -166,6 +181,11 @@ class HookHarness:
         for tool in tools:
             os.symlink(tool, self.bindir / Path(tool).name)
 
+        if not cargo_missing:
+            cargo = self.bindir / "cargo"
+            cargo.write_text(_CARGO_STUB.format(code=cargo_exit))
+            cargo.chmod(0o755)
+
         self.env = {
             "PATH": str(self.bindir),
             "HOME": str(self.root),
@@ -173,11 +193,11 @@ class HookHarness:
             "GIT_CONFIG_NOSYSTEM": "1",
         }
 
-    def run(self):
+    def run(self, cwd=None):
         stdin = "refs/heads/main %s refs/heads/main %s\n" % (self.local_sha, _ZERO_SHA)
         return subprocess.run(
             [_which("sh"), str(self.hook), "origin", "https://example.invalid/repo.git"],
-            cwd=str(self.root),
+            cwd=str(cwd if cwd is not None else self.root),
             env=self.env,
             input=stdin,
             capture_output=True,
@@ -287,6 +307,49 @@ class RolloutAdvisoryNeverBlocks(HookTestCase):
         proc = h.run()
         self.assertAllowed(proc, "scripts/check-plugin-rollout.py absent")
         self.assertNotIn("rollout", proc.stderr.lower())
+
+
+class NotAGitWorkTreeBlocks(HookTestCase):
+    """CLAUDE.md 3 (判定不能は制限側へ). The hook's very first act is
+
+        REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+
+    Until this test landed, that `|| exit 0` waved the push through whenever the
+    repo root could not be resolved — skipping the ungated-commit ledger check
+    AND the compiler check on precisely the input the hook could not understand.
+    Same for the `cd "$REPO" || exit 0` on the next line. "Could not determine"
+    is not "clean", and the twin gate `.githooks/pre-commit` already resolves the
+    identical probe to `exit 1`.
+    """
+
+    def test_outside_any_work_tree_blocks(self):
+        h = self.harness(gate_bypass_exit=0)
+        outside = Path(tempfile.mkdtemp(prefix="prepush-not-a-repo-")).resolve()
+        self.addCleanup(shutil.rmtree, str(outside), True)
+        proc = h.run(cwd=outside)
+        self.assertBlocked(proc, "cwd is not inside any git work tree")
+        self.assertIn("work tree", proc.stderr.lower())
+
+
+class CargoTypecheckGate(HookTestCase):
+    """The hook's second blocking check: the pushed tip must type-check.
+
+    Both polarities are pinned here because the four "advisory" tests above are
+    ALLOW assertions — they were silently red from the day the cargo block
+    landed until the harness gained a cargo stub, which meant the whole suite's
+    anti-vacuity half was dead and only the "blocks" rows were being exercised.
+    """
+
+    def test_cargo_failure_blocks(self):
+        h = self.harness(gate_bypass_exit=0, cargo_exit=1)
+        proc = h.run()
+        self.assertBlocked(proc, "cargo check exited non-zero")
+
+    def test_cargo_missing_blocks(self):
+        h = self.harness(gate_bypass_exit=0, cargo_missing=True)
+        proc = h.run()
+        self.assertBlocked(proc, "no cargo on PATH — cannot type-check")
+        self.assertIn("cargo not found", proc.stderr.lower())
 
 
 if __name__ == "__main__":

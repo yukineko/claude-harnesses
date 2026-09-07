@@ -349,9 +349,7 @@ fn stop_run(input: HookInput) {
                                     &cwd,
                                     &session_id,
                                     "compass-stale",
-                                    &format!(
-                                        "compass: {why}\n\n自動でバックログを流す前に /compass で再オリエンテーションしてください（鮮明化後に /flow か /backlog を再開）。"
-                                    ),
+                                    &compass_stale_reason(&why, open.len()),
                                 );
                                 return;
                             }
@@ -428,6 +426,31 @@ fn is_autonomous() -> bool {
         .status()
         .map(|st| st.success())
         .unwrap_or(false)
+}
+
+/// The reason string for the `compass-stale` stand-down.
+///
+/// Extracted so what the gate SAYS is observable on its own. The predicate that
+/// decides when it fires lives in the Stop state machine and is not touched here.
+///
+/// The previous wording was `自動でバックログを流す前に /compass で再オリエンテー
+/// ションしてください`. It is delivered on the Stop channel — the model reads it
+/// as "your turn may not end" — while what it describes is a precondition of
+/// AUTOFLOW's own plan to drain the queue. Nothing in this path established that
+/// draining the backlog was the instruction in front of the session, so the gate
+/// was explaining its own intention in the grammar of a verdict on someone
+/// else's work. A gate audits an action against the instruction; where it has no
+/// instruction to audit against, it must say what it is standing down from
+/// instead of implying a judgment it did not make.
+fn compass_stale_reason(why: &str, remaining: usize) -> String {
+    format!(
+        "compass: {why}\n\n\
+         autoflow はこの session でのバックログの自動継続を取りやめました。\n\
+         これはあなたの指示についての判定ではありません — 止めたのは autoflow 自身の\n\
+         継続だけで、キューの残り {remaining} 件は消費も変更もされていません。\n\n\
+         charter を鮮明にしてから続ける:  /compass  →  /flow または /backlog\n\
+         このまま手で進める:              /backlog next（autoflow は関与しません）"
+    )
 }
 
 fn block(cwd: &std::path::Path, session: &str, check_kind: &str, reason: &str) {
@@ -633,6 +656,72 @@ fn prompt_submit_command() -> ! {
             println!("{msg}");
         }
     })
+}
+
+#[cfg(test)]
+mod compass_stale_message {
+    use super::compass_stale_reason;
+
+    /// A gate must state what it OBSERVED and what it is REFUSING, and must not
+    /// state a precondition it did not check.
+    ///
+    /// The old wording was `自動でバックログを流す前に /compass で再オリエンテー
+    /// ションしてください`. It arrives on the Stop channel — i.e. as "your turn
+    /// may not end" — while describing autoflow's own intention to drain the
+    /// queue. Nothing established that draining the backlog was what the user
+    /// asked for, so the gate was explaining a plan of its own as though it were
+    /// a verdict on the instruction in front of it.
+    ///
+    /// The predicate is unchanged and deliberately so: WHEN it fires is correct.
+    /// Only what it says about itself is fixed here.
+    #[test]
+    fn reason_does_not_assert_a_precondition_it_did_not_check() {
+        let msg = compass_stale_reason("charter が古い", 7);
+        assert!(
+            !msg.contains("自動でバックログを流す前に"),
+            "the reason still frames the stop as a precondition of draining the \
+             backlog, which autoflow never established was the task: {msg}"
+        );
+    }
+
+    #[test]
+    fn reason_says_what_it_is_not_judging() {
+        let msg = compass_stale_reason("charter が古い", 7);
+        assert!(
+            msg.contains("指示についての判定ではありません"),
+            "a gate that stops a turn must say what it is NOT claiming, or it \
+             reads as a verdict on the user's instruction: {msg}"
+        );
+    }
+
+    #[test]
+    fn reason_reports_the_observation_and_the_standing_down() {
+        let msg = compass_stale_reason("charter が古い", 7);
+        assert!(
+            msg.contains("charter が古い"),
+            "must quote what compass said: {msg}"
+        );
+        assert!(
+            msg.contains('7'),
+            "must report the queue it is declining to drive, so the operator can \
+             see nothing was consumed: {msg}"
+        );
+        assert!(
+            msg.contains("自動継続を取りやめ"),
+            "must name what it actually did — stand its OWN continuation down: {msg}"
+        );
+    }
+
+    /// ANTI-VACUITY. Every assertion above is satisfiable by an empty string or
+    /// by prose that names no way forward; this pins that the message still
+    /// routes the reader somewhere.
+    #[test]
+    fn reason_still_names_the_way_forward() {
+        let msg = compass_stale_reason("charter が古い", 7);
+        for needle in ["/compass", "/flow", "/backlog"] {
+            assert!(msg.contains(needle), "missing route {needle}: {msg}");
+        }
+    }
 }
 
 #[cfg(test)]

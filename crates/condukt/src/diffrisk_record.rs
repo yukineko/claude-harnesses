@@ -23,14 +23,26 @@
 //! event to the overwatch registry so fleet-level correlated-error detection can
 //! see it.
 //!
-//! ## Fail-soft contract (never break a turn)
+//! ## Non-blocking, but NOT silent
 //!
-//! This is OBSERVATIONAL, not a new blocking gate. Every step degrades to a
-//! no-op on any error: a missing/absent worktree, a `git diff` failure, an
-//! empty diff, a non-High verdict, or an overwatch write failure all simply
-//! return without recording and WITHOUT changing condukt's exit code. It does
-//! not touch the schedule-time gated-task separation logic in
-//! [`crate::schedule`].
+//! This is OBSERVATIONAL: it records, it does not block, and it never changes
+//! condukt's exit code or touches the schedule-time gated-task separation logic
+//! in [`crate::schedule`].
+//!
+//! It is emphatically NOT fail-soft in the sense of "degrade to nothing". Until
+//! 2026-09-07 every non-recording exit — no worktree, `git diff` failure, empty
+//! diff, non-High verdict, overwatch write failure — returned the same bare
+//! `false`, so an empty violation registry could not distinguish "the call graph
+//! ran and found nothing" from "the call graph never ran". That is exactly the
+//! shape CLAUDE.md 1/3 name as fail-open: silence read as a clean result.
+//!
+//! Every invocation now appends exactly one [`crate::gatelog::DiffRiskRecord`]
+//! to `diffrisk-outcomes.jsonl` carrying which of the six
+//! [`DiffRiskOutcome`]s it reached, whether anything was actually `inspected`,
+//! and — only where the call graph really ran — the changed-symbol and
+//! caller-site counts (`None`, never `0`, on the blind-spot paths). Answering
+//! "is the call graph doing anything?" is a `load_diffrisk_outcomes` away
+//! instead of being undecidable.
 //!
 //! ## Translated sensitive paths (WorkItem-D)
 //!
@@ -41,6 +53,7 @@
 //! that changes, say, a hook or a SKILL is treated as review-worthy here.
 
 use crate::config::Config;
+use crate::gatelog::DiffRiskOutcome;
 use crate::state::TaskState;
 use blastguard::classify::Risk;
 use blastguard::diffrisk::{classify_diff, classify_diff_with_callers, SensitiveConfig};
@@ -205,9 +218,14 @@ fn worktree_rust_sources(worktree: &Path) -> Vec<(String, String)> {
 /// `run_id` is used as the overwatch `task_key`-scope; `task.id` identifies the
 /// specific task. `paths` is the task's declared touched-files footprint (its
 /// decomposition `touched_files`), threaded in by the caller so this module
-/// stays free of decomposition-join logic and is unit-testable. Returns `true`
-/// iff a violation was recorded (for tests / observability); the caller ignores
-/// the value.
+/// stays free of decomposition-join logic and is unit-testable.
+///
+/// Returns the [`DiffRiskOutcome`] this invocation reached, and appends exactly
+/// ONE record to the `diffrisk-outcomes.jsonl` journal on EVERY path — including
+/// the two blind-spot exits (no worktree / no diff), where the call graph never
+/// ran at all. Without that, an empty violation registry cannot distinguish
+/// "inspected and clean" from "never inspected", which is the fail-open shape
+/// CLAUDE.md 1/3 names. Callers must not collapse the outcome back to a bool.
 pub(crate) fn record_post_execution_diff_risk(
     cfg: &Config,
     cwd: &Path,
@@ -216,15 +234,35 @@ pub(crate) fn record_post_execution_diff_risk(
     paths: &[String],
     now: i64,
     session_id: &str,
-) -> bool {
-    // No worktree recorded → nothing to inspect (fail-soft no-op).
+) -> DiffRiskOutcome {
+    // Journal helper: every exit below goes through this, so the log has one
+    // record per invocation and a zero-finding registry stays interpretable.
+    let journal =
+        |outcome: DiffRiskOutcome, changed_symbols: Option<usize>, caller_sites: Option<usize>| {
+            crate::gatelog::append_diffrisk_outcome(
+                &crate::state::project_state_dir(cfg, cwd),
+                &crate::gatelog::DiffRiskRecord {
+                    outcome: outcome.as_str().to_string(),
+                    inspected: outcome.inspected(),
+                    run_id: run_id.to_string(),
+                    task_id: task.id.clone(),
+                    changed_symbols,
+                    caller_sites,
+                    recorded_at: now,
+                },
+            );
+            outcome
+        };
+
+    // No worktree recorded → nothing was inspected. This is a BLIND SPOT, not a
+    // clean result: it must not be reported the same way as a classified diff.
     let worktree = match task.worktree.as_deref() {
         Some(w) => Path::new(w),
-        None => return false,
+        None => return journal(DiffRiskOutcome::NoWorktree, None, None),
     };
     let diff = match worktree_diff(worktree, &cfg.default_branch) {
         Some(d) => d,
-        None => return false,
+        None => return journal(DiffRiskOutcome::NoDiff, None, None),
     };
 
     // The classifier's path signal wants the touched paths (matching how the
@@ -245,6 +283,14 @@ pub(crate) fn record_post_execution_diff_risk(
     let changed = blastguard::callgraph::changed_symbol_names(&diff);
     let callers = blastguard::callgraph::enumerate_callers(&changed, &corpus);
     let full = classify_diff_with_callers(paths, &diff, &callers, &sensitive);
+    // Counts for the journal. From here on the call graph HAS run, so these are
+    // real observations (`Some`), not the `None` of a blind-spot exit above.
+    let changed_count = changed.len();
+    let caller_site_count: usize = changed
+        .iter()
+        .filter_map(|name| callers.get(name))
+        .map(|sites| sites.len())
+        .sum();
 
     // FAIL-CLOSED on an undetermined classification. `classify_diff*` return a
     // `Determination` because the sensitive-path signal can fail to compile (a
@@ -268,7 +314,7 @@ pub(crate) fn record_post_execution_diff_risk(
                  classified (task '{}', run '{}')",
                 task.id, run_id
             );
-            return record_violation(
+            let appended = record_violation(
                 cwd,
                 run_id,
                 task,
@@ -277,6 +323,17 @@ pub(crate) fn record_post_execution_diff_risk(
                 DIFFRISK_UNDETERMINED_RULE_ID,
                 detail,
             );
+            // A failed append is itself non-clean: it is journaled as
+            // `RecordFailed`, never as a quiet success.
+            return journal(
+                if appended {
+                    DiffRiskOutcome::Undetermined
+                } else {
+                    DiffRiskOutcome::RecordFailed
+                },
+                Some(changed_count),
+                Some(caller_site_count),
+            );
         }
     };
 
@@ -284,7 +341,11 @@ pub(crate) fn record_post_execution_diff_risk(
     // persisted, mirroring the conservative "record only the clearly
     // review-worthy corner" posture.
     if !matches!(full.risk, Risk::High) {
-        return false;
+        return journal(
+            DiffRiskOutcome::ClassifiedNotHigh,
+            Some(changed_count),
+            Some(caller_site_count),
+        );
     }
 
     // Preserve exact backward-compat on rule_id + detail. If the BASE was
@@ -319,7 +380,16 @@ pub(crate) fn record_post_execution_diff_risk(
         )
     };
 
-    record_violation(cwd, run_id, task, now, session_id, rule_id, detail)
+    let appended = record_violation(cwd, run_id, task, now, session_id, rule_id, detail);
+    journal(
+        if appended {
+            DiffRiskOutcome::Recorded
+        } else {
+            DiffRiskOutcome::RecordFailed
+        },
+        Some(changed_count),
+        Some(caller_site_count),
+    )
 }
 
 /// Build + append ONE blastguard violation for this task, fail-soft.
@@ -420,38 +490,105 @@ mod tests {
         assert!(worktree_rust_sources(missing).is_empty());
     }
 
+    /// Every invocation must leave a trace saying WHY it ended the way it did.
+    /// Without one, "we inspected the diff and it was fine" and "we never
+    /// inspected anything" are the same observation from outside — the exact
+    /// fail-open CLAUDE.md 1/3 forbid, and the reason the call graph looked
+    /// dark: 0 recorded violations is consistent with both "clean fleet" and
+    /// "hook never ran", and nothing on disk could tell them apart.
+    #[test]
+    fn every_invocation_is_journaled_even_when_nothing_is_recorded() {
+        let cfg = Config::load();
+        let cwd = tempfile::tempdir().expect("tempdir");
+        let wt = tempfile::tempdir().expect("tempdir");
+        let ledger = crate::gatelog::diffrisk_outcomes_path(&crate::state::project_state_dir(
+            &cfg,
+            cwd.path(),
+        ));
+
+        // (a) never inspected: no worktree was ever recorded for the task.
+        let no_wt = TaskState {
+            id: "t1".to_string(),
+            ..Default::default()
+        };
+        let a = record_post_execution_diff_risk(&cfg, cwd.path(), "run-x", &no_wt, &[], 0, "sess");
+        assert!(!a.inspected());
+
+        // (b) also never inspected, but for a DIFFERENT reason: the worktree is
+        // on disk yet yields no diff. Collapsing (a) and (b) into one `false`
+        // is what makes the blind spot invisible.
+        let with_wt = TaskState {
+            id: "t2".to_string(),
+            worktree: Some(wt.path().to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let b =
+            record_post_execution_diff_risk(&cfg, cwd.path(), "run-x", &with_wt, &[], 0, "sess");
+        assert!(!b.inspected());
+        assert_ne!(a, b, "the two blind spots must not collapse to one value");
+
+        assert!(
+            ledger.exists(),
+            "every diff-risk invocation must be journaled to {} so that \
+             'inspected and clean' is distinguishable from 'never inspected'",
+            ledger.display()
+        );
+        let outcomes = crate::gatelog::load_diffrisk_outcomes(&crate::state::project_state_dir(
+            &cfg,
+            cwd.path(),
+        ));
+        assert_eq!(outcomes.len(), 2, "one record per invocation");
+        assert_ne!(
+            outcomes[0].outcome, outcomes[1].outcome,
+            "'no worktree recorded' and 'worktree present but no diff' are \
+             different blind spots and must not collapse to one value"
+        );
+    }
+
+    /// Both missing-input paths stay non-blocking and panic-free — and each
+    /// names WHICH blind spot it hit. This test previously asserted only
+    /// `!record(...)` for both cases, which fixed the conflation as spec: the
+    /// return value could not say whether the call graph had run. The
+    /// no-panic / no-record guarantee is unchanged; the assertion is stronger.
     #[test]
     fn record_is_fail_soft_when_worktree_missing() {
         let cfg = Config::load();
-        // (a) No worktree recorded at all → immediate `false`, no panic.
+        let cwd = tempfile::tempdir().expect("tempdir");
+        // (a) No worktree recorded at all → nothing was inspected, no panic.
         let task = TaskState {
             id: "t1".to_string(),
             ..Default::default()
         };
-        assert!(!record_post_execution_diff_risk(
-            &cfg,
-            Path::new("/tmp"),
-            "run-x",
-            &task,
-            &[],
-            0,
-            "sess",
-        ));
-        // (b) A worktree path that does not exist on disk → also `false`, no
-        // panic (worktree_diff degrades to None before any classification).
+        let out = record_post_execution_diff_risk(&cfg, cwd.path(), "run-x", &task, &[], 0, "sess");
+        assert_eq!(out, DiffRiskOutcome::NoWorktree);
+        assert!(!out.inspected(), "no worktree means nothing was inspected");
+
+        // (b) A worktree path that does not exist on disk → also not inspected,
+        // no panic (worktree_diff degrades to None before any classification),
+        // but a DISTINCT outcome from (a).
         let task = TaskState {
-            id: "t1".to_string(),
+            id: "t2".to_string(),
             worktree: Some("/definitely/not/a/real/worktree/xyzzy".to_string()),
             ..Default::default()
         };
-        assert!(!record_post_execution_diff_risk(
+        let out2 =
+            record_post_execution_diff_risk(&cfg, cwd.path(), "run-x", &task, &[], 0, "sess");
+        assert_eq!(out2, DiffRiskOutcome::NoDiff);
+        assert!(!out2.inspected());
+        assert_ne!(out, out2, "the two blind spots must stay distinguishable");
+
+        // Neither path may claim a call-graph measurement it never made: the
+        // counts are absent, NOT zero. `Some(0)` would read as "the call graph
+        // ran and found no callers", which is a different fact entirely.
+        let recs = crate::gatelog::load_diffrisk_outcomes(&crate::state::project_state_dir(
             &cfg,
-            Path::new("/tmp"),
-            "run-x",
-            &task,
-            &[],
-            0,
-            "sess",
+            cwd.path(),
         ));
+        assert_eq!(recs.len(), 2);
+        for r in &recs {
+            assert!(!r.inspected);
+            assert_eq!(r.changed_symbols, None, "blind spot must not report 0");
+            assert_eq!(r.caller_sites, None, "blind spot must not report 0");
+        }
     }
 }

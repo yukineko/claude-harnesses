@@ -11705,3 +11705,68 @@ updated_at = 1788790479
 weight = 0.0
 issue_number = 415
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/415"
+
+[[task]]
+id = "d5b2e73d"
+title = "blastguard の inline-eval deny は形状課税かつ fail-open ミラー: 無害な python3 -c を deny し、破壊的な python3 heredoc を allow する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測（deployed binary blastguard 0.2.50、2026-09-07、PreToolUse hook payload を直接投入）:
+
+  bash -c "rm -rf /tmp/probe"                        -> deny   （shell payload は再解析されている）
+  bash -c "echo hi"                                  -> allow  （良性の shell payload は通る）
+  python3 - <<EOF / import shutil / shutil.rmtree(/) -> ALLOW  （破壊的な interpreter payload が通る）
+  python3 -c pass                                    -> deny   （無害な payload が止まる）
+  rm -rf /tmp/probe                                  -> deny   （対照 = anti-vacuity control）
+  python3 <<< print(1)                               -> allow
+  echo print | python3                               -> allow
+  python3 /tmp/x.py                                  -> allow
+  perl -e print / node -e process.exit()             -> deny
+
+該当規則 crates/blastguard/src/detect.rs:3776-3783:
+
+  cmd if is_code_interpreter(cmd) && rest.iter().any(|t| is_inline_eval_flag(t)) => {
+      Decision::deny(
+          "a code interpreter invoked with an inline-eval flag can run an arbitrary destructive command",
+      )
+  }
+
+## 何が問題か
+1. 形状 deny であって内容の audit ではない。shell の -c は payload を再解析しているのに、
+   非 shell interpreter は payload を一切見ずに deny する（同じ入力に対する非対称）。
+2. 同一の任意コード実行能力を持つ 4 つの綴りが allow のまま残っている
+   （heredoc / here-string / pipe / スクリプトファイル）。つまり deny は安全性ではなく構文課税であり、
+   構文の言い換えを教育する。実際に本セッションで、redirect を拒否された直後に python 経由で
+   同一の書き込みを通すという回避が発生した。
+3. deny は答えられない。人間に返す判断点が無い。
+
+## 正しい修正（doctrine + CLAUDE.md 3 に整合）
+blastguard は python/perl/node のソースを解析する能力を持たない。つまりこれは
+「危険と判定した」ではなく「判定不能」である。判定不能の正しい第三の答えは
+Decision::Ask（model.rs いわく it is NOT a verdict about the command, it is a refusal）。
+
+  a. inline-eval arm を deny から ask へ移す。理由文に「blastguard は <lang> のソースを解析できないので
+     推測を拒否する」と書き、payload を逐語で提示する。
+  b. 同じ arm に stdin 系ミラーを合流させる: - オペランド / heredoc / here-string /
+     /dev/stdin / interpreter へのパイプ。これが hack route の閉鎖にあたる。
+  c. スクリプトファイル実行（python3 x.py）は対象外にする。ファイルは tree 上の永続成果物であり
+     Write/Edit 側の hook が既に見ている。ここまで ask にすると自律が死ぬ（何でも Ask にしない）。
+
+## これは緩和ではない
+差引: 良性 1 綴りが deny から ask（答えられるようになる）、fail-open だった 4 綴りが allow から ask
+（塞がる）。ネットで厳しくなる。Ask は非 cli entrypoint では deny へ hardening されるので安全側も維持。
+
+## RED 先行テストで固定すること
+- 5 綴り（-c / heredoc / here-string / pipe / /dev/stdin）がすべて ask を返す
+- anti-vacuity control: rm -rf は依然 deny、bash -c "echo hi" は依然 allow、
+  python3 script.py は依然 allow、bash -c "rm -rf ..." は依然 deny
+
+親: 826c29bf（gate doctrine）"""
+created_at = 1788791138
+updated_at = 1788791138
+weight = 0.0
+issue_number = 416
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/416"

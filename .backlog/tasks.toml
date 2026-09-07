@@ -12392,3 +12392,222 @@ updated_at = 1788792036
 weight = 0.0
 issue_number = 433
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/433"
+
+[[task]]
+id = "206042f9"
+title = "check-prompt-injection.py は走査集合が空だと clean で exit 0 — pre-commit が最初に走らせる blocking ゲートで、兄弟には既に正解のガードが入っている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+status = "pending"
+notes = """
+フォールト注入で観測（2026-09-07、測定点 00bf96df）。
+
+scripts/check-prompt-injection.py:368-384 の main は anti-vacuity ガードを持たない:
+  files = argv 由来 または iter_target_files()
+  total = 0
+  for path in files: ...
+  print("injectguard: prompt assets clean (no planted injection detected).")
+  return 0
+
+iter_target_files()（:188-198）は候補を tracked 集合で濾すが、_tracked_files() は set を返すため
+**git ls-files が成功して空を返した場合**（index 破損・空、fresh checkout）に走査集合が黙って空になる。
+
+観測（実 repo に対し _tracked_files を空集合へ強制）:
+  injectguard の対象数: 0
+  injectguard: prompt assets clean (no planted injection detected).
+  injectguard の EXIT = 0
+  同じ注入での check-fail-open.py の EXIT = 1   ← 兄弟は正しく落ちる
+REPO を空ディレクトリへ向けた場合も 対象 [] で EXIT = 0。
+
+重大度が高い理由: これは .githooks/pre-commit が **最初に** 走らせる blocking ゲート
+（run check-prompt-injection.py injectguard）。空を合格に写している。
+しかも scripts/check-fail-open.py:23-26 は injectguard を自分のモデルだと名指ししたうえで、
+:587-594 に injectguard が持っていない当のガードを実装している。
+check-launcher-exec-bit.py:170-181 / check-doc-claims.py:291-299 / check-shell-syntax.py:172-176 も同様。
+injectguard だけが例外。
+
+修正: check-fail-open.py:587-594 と同じ空集合ガードを入れる（空は clean ではなく exit 非0）。
+RED 先行（_tracked_files を空にして落ちることを観測）+ anti-vacuity 対照（正常系は依然 exit 0）。
+親 826c29bf"""
+created_at = 1788792835
+updated_at = 1788792835
+weight = 0.0
+issue_number = 434
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/434"
+
+[[task]]
+id = "73c2c089"
+title = "check-plugin-rollout.py はレジストリ/設定が不在なら exit 0（env 変数で選べる）。しかも pre-push が GATE クレート無効化まで advisory へ降格する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+フォールト注入で観測。scripts/check-plugin-rollout.py:1234-1237 と :1247-1250 は
+どちらも None を返して SKIP と印字し、:1402-1408 の verdict で falsy として RC_OK になる。
+
+  レジストリと設定の両方を存在しないパスへ  -- exit 0
+  設定 JSON が壊れている                    -- exit 1
+  設定が空オブジェクト                      -- exit 2
+  レジストリが壊れている                    -- exit 1
+  レジストリが空オブジェクト                -- exit 1
+
+**パース不能は fail-closed なのに、不在は素通り**する。しかもどちらのパスも環境変数
+（:350-355 の REGISTRY_PATH と SETTINGS_PATH）で選べるので、設定パスを存在しない場所へ向けるだけで
+「GATE プラグインが有効か」の次元が緑になる。
+
+**より大きい問題は消費側**: 唯一の消費者 .githooks/pre-push:186-275 が **全クラスを降格**している。
+rc=1、rc=2（**GATE クレートが無効**）、rc=3（検証不能）、rc=4（parked 宣言が使えない）のいずれも
+逐語「This is advisory only -- the push is not blocked.」で終わる。
+rc=1 の降格には理由が書かれているが rc=2/3/4 には無く、rc=2 はスクリプト自身の Fix 行が
+名指ししている「ゲートは入っているが inert」のクラスそのもの。
+
+修正: (a) 不在をパース不能と同じ fail-closed へ、(b) pre-push の rc=2 降格を撤回する
+（GATE クレートが無効なまま push できるのは advisory の範囲を超える）。親 826c29bf"""
+created_at = 1788792836
+updated_at = 1788792836
+weight = 0.0
+issue_number = 435
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/435"
+
+[[task]]
+id = "5eb1f127"
+title = "fail-closed に書かれたゲートが6本、どの hook からも呼ばれていない — red ではなく dark"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+観測 2026-09-07。grep で clippy を .githooks/ 全体に当てると **ヒット無し**。
+
+scripts/check-clippy-lints.py:20-25 の docstring は逐語で自分の存在理由を述べている:
+  「.githooks/pre-commit and .githooks/pre-push invoke cargo nowhere. So a commit could
+   introduce a denied .unwrap() into an opted-in gate crate and nothing at commit time would notice.」
+その穴は今も開いたまま。唯一の呼び出し元は scripts/tests/precommit-clippy-gate.sh（テスト）。
+
+同じ配線状態のもの: check-unwind.sh / check-versions.sh / check-bench-regression.py /
+check-fail-open-mutation.py / validate-manifests.py — いずれも .githooks/ のどのファイルからも参照されない。
+
+**ゲートが走らないのは red ではなく dark** であり、launcher-exec-bit の件（100644 で配布された
+launcher が暗転して finding も出さない）と同じクラス。しかも check-clippy-lints.py は
+scripts/ の中で最良の fail-closed 実装（Undetermined を空リストではなく独立した型にし、
+verdict は returncode のみ、独立した exit 2 の状態が6つ）なので、書かれているのに使われていない。
+
+修正: 6本それぞれについて、(a) pre-commit / pre-push へ配線する、(b) 意図的に未配線なら
+scripts/parked-plugins.json 相当の宣言（理由・parked_at・再検討起点）を置く、のどちらかへ決着させる。
+宣言の無い未配線を「たぶん意図的」と解釈しない（CLAUDE.md の明文）。親 826c29bf"""
+created_at = 1788792879
+updated_at = 1788792879
+weight = 0.0
+issue_number = 436
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/436"
+
+[[task]]
+id = "793aa283"
+title = "check-fail-open-mutation.py は taintguard のシナリオを1つも持たない — コメントは6と書きながらタプルは7クレート"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+scripts/check-fail-open-mutation.py:65-73 は7クレートを宣言するが、
+grep で crate= のシナリオ定義を数えると **6件**（blastguard / propguard / specguard / stuckguard /
+mutategate / overwatch）。taintguard のシナリオが存在しない。
+:61-63 は逐語「The canonical 6 GATE crates」、:47 は「one more hardcoded copy of the canonical
+6-crate list」と述べているが、対象のタプルは7要素。
+
+帰結: 既定実行は「scenarios run: 6/6」と印字して exit 0 しうるが、**最も新しい GATE クレートは
+一度もミューテーションされていない**。:415-417 の空ガードは --crate 名指し時にしか発火せず、
+既定経路にはクレート単位のカバレッジ assert が無い。
+
+修正: taintguard のシナリオを追加し、コメントの 6 を実数に合わせる（同じコミットで）。
+加えて既定経路に「宣言されたクレート全部にシナリオがあるか」の assert を置き、
+欠けていれば exit 非0 にする（欠落を沈黙で表現しない）。親 826c29bf"""
+created_at = 1788792880
+updated_at = 1788792880
+weight = 0.0
+issue_number = 437
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/437"
+
+[[task]]
+id = "f6919056"
+title = "test-changed-crates.sh / check-versions.sh / check-bench-regression.py / mutation-gate.sh の判定不能 to exit 0 と、床なし閾値"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+観測とコード読みの混在。各件どちらかを明示する。
+
+1. scripts/test-changed-crates.sh:99-113 — 読み取り不能または name を awk で抽出できない
+   Cargo.toml は診断なしで捨てられ、それが唯一の触ったクレートなら
+   「touched crate dirs have no Cargo.toml (skill-only?) -- nothing to test」で exit 0。
+   同ファイルの git 側（:56-77）は rc を捕らえて exit 1 に硬化済みなので、manifest 側だけ未処置。
+   （読み取り推論。フォールト注入は未実施）
+
+2. scripts/check-versions.sh:12-16, 32-36 — crates/ が無い場合、展開されない glob が
+   リテラル文字列として d に入り全反復が continue、fail は 0 のまま
+   「version parity check OK」を印字。偽ルートで観測、EXIT=0。
+   :9 の cd にも || exit が無く、set -uo pipefail（-e 無し）は失敗した cd で中断しない。（観測）
+
+3. scripts/check-bench-regression.py — 判定不能 to exit 0 が5経路（いずれも観測）:
+   dashboard 不在（:131-136）／baseline ファイル不在（:149-151、実在する 0.9 から 0.1 への
+   退行があっても no regression）／baseline が範囲外（:116-118）／最新レコードに数値の
+   resolution_rate が無い（:140-145）／閾値 1.0（:154、0.8 の低下が OK）。
+   **U5**: resolution_rate_regressed は差が閾値を超えるかを見るだけで clamp が無く、
+   rate は 0..1 に有界なので **閾値 1.0 以上でゲートが恒久的に無効**。
+   緩和材料: 未配線（参照は docs/gate-taxonomy.md:44 のみで、しかも存在しない GHA workflow を指す）。
+
+4. scripts/mutation-gate.sh:69 — MIN_KILL_RATE は環境変数から検証も床も無しで
+   mutategate --min-kill-rate へ渡る。0 を与えると無条件合格。PILOT も未検証。
+   （読み取り推論。mutategate 側が clamp するかは scripts/ の外で未確認）
+   なお :58 が .github/workflows/mutation.yml を引用しているが、GHA はリポジトリ全体で禁止。
+
+5. scripts/check-unwind.sh:4-6 — docstring が run_hook と run_guarded の両方について
+   exit-0-on-error 保証を述べているが、crates/harness-core/src/gate/run.rs は run_guarded について
+   逐語で fail closed（block して crash を露出）と述べており d6db4670 以前の契約を記述している。
+   挙動自体は正しい（両入力不在で exit 1 を観測）が、散文が次の読者を誤らせる。CLAUDE.md 第4節。
+親 826c29bf"""
+created_at = 1788792882
+updated_at = 1788792882
+weight = 0.0
+issue_number = 438
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/438"
+
+[[task]]
+id = "c43c6415"
+title = "check-plugin-rollout.py の per-dimension チェッカ5本（約1100行）と rollout/rebuild スクリプト本体が未監査 — UNVERIFIED であって clean ではない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+監査エージェントが明示的に未到達と申告した範囲。空集合を clean に写さないため記録する。
+
+未到達（コード読みすら未実施）:
+- scripts/check-plugin-rollout.py の check_rollout / check_enabled / check_stale_version_dirs /
+  check_settings_pins / check_bin_launchers（約1100行）。main() のみ追跡され、
+  :322 / :338-342 / :875 / :944 の except OSError と :416 の except (JSONDecodeError, OSError,
+  UnicodeDecodeError) は**未追跡** — finding へ解決するのか黙って skip するのか不明。
+- scripts/rollout-plugins.sh の canary ブロック外（約52KB）、scripts/rebuild-plugins.sh、
+  scripts/plugin_cache.py、scripts/prune-plugin-cache.py の本体。
+- scripts/check-clippy-lints.py:200-510（select_crates / _opts_in / _external_sources）。
+  exit 2 の状態が6つで**全部かどうか**は未確認。
+
+grep 止まりで未追跡:
+- continuous-audit.sh:153 の exit 0（逐語 fail-soft: never hard-fail the caller）と
+  e2e-autonomy.sh:77-86 の SKIP 2経路。**advisory 設計に見えるが、下流の消費者が exit 0 を
+  verdict として読んでいないかは未確認**。fail-soft は主張であって検証されていない。
+- cap-target-dir.sh（exit 0 が7経路）／build-plugin-bin.sh／sync-plugin-versions.sh／
+  generate-sbom.sh／mutation-pilots.sh。cap-target-dir.sh は test-changed-crates.sh が
+  ゲート実行中に呼んでおり、消費者の列挙が未了。
+- census-verdict-terminals.py:112-114 の空集合 exit 2 は読み取りでは正しいが**観測されていない**
+  （プローブが実クレートを走査してしまった）。
+- mutategate（Rust 側）が --min-kill-rate を clamp するかは scripts/ の外で未確認。
+親 826c29bf"""
+created_at = 1788792905
+updated_at = 1788792905
+weight = 0.0
+issue_number = 439
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/439"

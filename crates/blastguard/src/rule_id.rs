@@ -209,8 +209,25 @@ pub fn rule_id(reason: &str) -> &'static str {
     // and "inline-eval flag" phrasing, so a single substring match on
     // "interpreter" + "inline-eval flag" covers both without over-matching
     // any other reason in this file.
-    if reason.contains("code interpreter") && reason.contains("inline-eval flag") {
+    // 0.2.52 rewording: the arms above stopped shape-matching and now name the
+    // finding, so the old phrase "code interpreter … inline-eval flag" no
+    // longer occurs anywhere in the crate. Matching on it kept the mapping
+    // GREEN while classifying every real reason as "unknown" — the exact
+    // recurrence-detection blindness CA-blastguard-010 was filed to end. The
+    // destructive finding is checked FIRST so a denial classifies by WHAT WAS
+    // FOUND, and the shape ids below are what an Ask (nothing found) gets.
+    if reason.contains("which deletes files or directories outright") {
+        return "interpreter-destructive-call";
+    }
+    if reason.contains("inline-eval flag") {
         return "code-interpreter-inline-eval";
+    }
+    if reason.contains("takes its program from stdin")
+        || reason.contains("reads its program from stdin")
+        || reason.contains("is fed a here-document")
+        || reason.contains("is fed a substituted source")
+    {
+        return "code-interpreter-stdin-program";
     }
 
     // Bash: tee.
@@ -441,6 +458,27 @@ mod tests {
                 "Bash",
                 json!({ "command": "cd .githooks; BIN=/bin/rm; $BIN pre-commit" }),
             ),
+            // The code-interpreter AUDIT (`analyze_code_interpreter`, which
+            // replaced the single shape-Deny) and its stdin-mirror arm
+            // (`analyze_interpreter_stdin_exec`) introduced new deny/ask
+            // wordings. This test's standing obligation — stated in the Round 3
+            // comment above, and the reason the D4 budget case is here — is that
+            // every new wording is exercised HERE, or it classifies as "unknown"
+            // in the violation store while this test stays green. They were not
+            // added when the audit landed; that omission is the only reason this
+            // test was green with three unclassified paths live.
+            //
+            // The interpreter-level finding. `shutil.rmtree` has no shell
+            // spelling, so it cannot borrow another rule's id the way the
+            // `os.system('rm -rf /')` wording borrows "rm-recursive".
+            (
+                "Bash",
+                json!({ "command": "python3 -c \"import shutil; shutil.rmtree('/')\"" }),
+            ),
+            // The refusal-to-guess ask on an unreadable inline program.
+            ("Bash", json!({ "command": "python3 -c \"print(1)\"" })),
+            // The stdin-mirror ask.
+            ("Bash", json!({ "command": "cat evil.py | python3 -" })),
         ];
 
         for (tool, input) in cases {
@@ -520,6 +558,31 @@ mod tests {
         assert_ne!(rule_id(&wrapped), "unknown");
         assert_ne!(rule_id(&bare), "unknown");
         assert_eq!(rule_id(&wrapped), rule_id(&bare));
-        assert_eq!(rule_id(&wrapped), "code-interpreter-inline-eval");
+        // The trailing literal used to be "code-interpreter-inline-eval": the
+        // id of a reason that described the SHAPE of the invocation ("a code
+        // interpreter invoked with an inline-eval flag can run an arbitrary
+        // destructive command") with nothing having read the program. The
+        // program is audited now, so the reason states the finding — the
+        // `rm -rf /` this command actually runs — and classifies as that
+        // finding. The invariant this test exists for (both paths, one id) is
+        // asserted above and is unaffected.
+        assert_eq!(rule_id(&wrapped), "rm-recursive");
+
+        // Pin the AUDIT, not only the id. The two paths must also agree when
+        // the program is NOT demonstrably destructive, and must agree on `Ask`
+        // there — the refusal to guess — rather than on the blanket Deny this
+        // rule used to issue on shape alone. Without this, a regression back to
+        // shape-matching would leave every assertion above green.
+        for cmd in [
+            "python3 -c \"print(1)\"",
+            "find . -exec python3 -c \"print(1)\" \\;",
+        ] {
+            let d = detect::detect("Bash", Some(&json!({ "command": cmd })));
+            assert!(
+                matches!(d, Decision::Ask(_)),
+                "a benign inline program must be Ask (a refusal to guess), not \
+                 a verdict, for {cmd:?} — got {d:?}"
+            );
+        }
     }
 }

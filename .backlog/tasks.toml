@@ -14244,10 +14244,51 @@ title = "condukt: autonomy_invariant の ASK_ALLOWLIST が flow SKILL.md で 10 
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = []
-status = "pending"
-notes = "測定: git show 056c51dc:crates/flow/skills/flow/SKILL.md | grep -c AskUserQuestion -> 10 / 同 5289312f -> 11 / HEAD(6ab4d01f) -> 11。ASK_ALLOWLIST は 056c51dc 以降 ('flow/skills/flow/SKILL.md', 10) のまま (crates/condukt/tests/autonomy_invariant.rs:551)。よって cargo test -p condukt --test autonomy_invariant askuserquestion_sites_match_frozen_allowlist は 5289312f 以降 main で red。11 本目は SKILL.md:53 の「開いている仕事があれば AskUserQuestion で /flow を確認せよ というディレクティブを (全廃した)」という散文の言及であり、実際の質問サイトではない。count_asks が行単位の substring 一致なので拾っている。要対応: (a) 53 行目を言及でなく書き換える か (b) allowlist を 11 に更新して「これは廃止済みディレクティブへの言及であり質問サイトではない」根拠を注記する、のいずれか。two-stop invariant への再監査が必要なので独断で変えない。発見: 2026-08-28、parallelguard 実装中の pre-commit sweep で観測。私の変更 (flow SKILL.md の 483a0d6e revert) は AskUserQuestion 行を 1 行も足し引きしていない (git diff HEAD -- crates/flow/skills/flow/SKILL.md で確認済み)。"
+status = "done"
+notes = """
+測定: git show 056c51dc:crates/flow/skills/flow/SKILL.md | grep -c AskUserQuestion -> 10 / 同 5289312f -> 11 / HEAD(6ab4d01f) -> 11。ASK_ALLOWLIST は 056c51dc 以降 ('flow/skills/flow/SKILL.md', 10) のまま (crates/condukt/tests/autonomy_invariant.rs:551)。よって cargo test -p condukt --test autonomy_invariant askuserquestion_sites_match_frozen_allowlist は 5289312f 以降 main で red。11 本目は SKILL.md:53 の「開いている仕事があれば AskUserQuestion で /flow を確認せよ というディレクティブを (全廃した)」という散文の言及であり、実際の質問サイトではない。count_asks が行単位の substring 一致なので拾っている。要対応: (a) 53 行目を言及でなく書き換える か (b) allowlist を 11 に更新して「これは廃止済みディレクティブへの言及であり質問サイトではない」根拠を注記する、のいずれか。two-stop invariant への再監査が必要なので独断で変えない。発見: 2026-08-28、parallelguard 実装中の pre-commit sweep で観測。私の変更 (flow SKILL.md の 483a0d6e revert) は AskUserQuestion 行を 1 行も足し引きしていない (git diff HEAD -- crates/flow/skills/flow/SKILL.md で確認済み)。
+
+--- CLOSED 2026-09-07 (実測、測定点 bd171fef、linux-x86_64) ---
+
+【再監査を実施した — この notes が「独断で変えない」と留保した部分の決着】
+選択肢 (a) SKILL.md:53 の書き換え / (b) allowlist を 11 に更新 は、**ユーザー裁定で (b)** に決めた
+(2026-09-07、AskUserQuestion。判断要求なので condukt policy answer は escalate を返し、
+--approval は付けなかった)。
+
+【監査の事実 — 11 件目の正体】
+count は 5289312f で 10 -> 11 になった。測定:
+    for c in d215649a eb127a5b 056c51dc 5289312f 0521d013 HEAD; do
+      git show "$c:crates/flow/skills/flow/SKILL.md" | grep -c AskUserQuestion
+    done
+-> 10 / 10 / 10 / 11 / 11 / 11
+その commit が本ファイルに対して足した行は **1 行だけ**:
+    git show 5289312f -- crates/flow/skills/flow/SKILL.md | grep '^[+-]' | grep -i askuserquestion
+    +「開いている仕事があれば AskUserQuestion で `/flow` を確認せよ」というディレクティブを
+この行は **同じ commit が廃止したディレクティブを引用している散文**であり、直後の文が
+「2026-08-20 にユーザーの指示で廃止した」と書いている。つまり test が強制する再監査の答えは
+(a) permission approval でも (b) worker-blocked stop でも (c) genuine judgment request でもなく、
+**(d) 歴史的引用**。two-stop invariant は一切動いていない。
+
+【なぜカウンタ側を賢くしなかったか】
+引用と実サイトを見分ける grep は散文をモデル化することになり、**間違えるたびに permissive 側へ倒れる**
+— narrative に書かれた本物の新しい stop が red を出さなくなり、freeze が黙って腐る。
+カウンタは「全件数える」ままにして dumb かつ total に保ち、代償として今回のような
+「prompt ではなかった」という人間の監査を時々受け入れる。その監査結果は
+crates/condukt/tests/autonomy_invariant.rs の ASK_ALLOWLIST 直上に逐語で記録したので、
+次の読者が同じ調査をやり直さなくてよい。
+
+【検証】
+cargo test -p condukt --test autonomy_invariant -> 16 passed / 0 failed (修正前は
+askuserquestion_sites_match_frozen_allowlist が FAILED: left 11 / right 10)。
+cargo test -p condukt 全体 green、fmt --all --check exit 0、clippy -p condukt --all-targets exit 0。
+condukt 0.7.143 -> 0.7.144 を 3 ファイル lockstep で bump。
+
+【発見経路】
+09148819 (R4-flow-spec-gap-source) の着手時。R4 は crates/flow/skills/flow/SKILL.md を
+編集する要件なので、この red を抱えたままでは自分の変更の影響を既存 drift と区別できない
+= 物理的な前提ブロッカーだった。"""
 created_at = 1787883029
-updated_at = 1787883029
+updated_at = 1788758036
 weight = 0.0
 issue_number = 410
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/410"

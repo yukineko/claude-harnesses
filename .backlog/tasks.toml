@@ -11669,3 +11669,49 @@ updated_at = 1788789802
 weight = 0.0
 issue_number = 413
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/413"
+
+[[task]]
+id = "4be23458"
+title = "condukt worktree::discard also force-discards uncommitted work — the twin of the remove() fail-open (DoD12d)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+測定点 47d02894 / 測定日 2026-09-07。crates/condukt/src/worktree.rs:1951 の pub fn discard は remove と同一の blanket パターンを持つ: plain worktree remove が失敗したら無条件で --force へ retry する。git はまさに未コミット作業があるときに拒否するので、この retry は git 自身の安全弁を外している。
+
+production の到達経路は2本あり、どちらも未コミット内容を保全していない:
+(1) crates/condukt/src/state.rs:1007 discard_experiment。直前の capture は branch_sha (rev-parse branch) と diff_stat (diff --stat default_branch branch) の2つだけで、どちらも COMMIT 済みの状態からしか導かれない。docstring も callers MUST capture the branch SHA / diff before calling this と書くが、これは commit の話であって worktree の未コミット内容には一切触れていない。
+(2) crates/condukt/src/shadow_run.rs:73 finish。discard の前に何も capture していない。
+
+discard は repo-primary lock 取得失敗には既に fail-closed で refuse する (worktree.rs:1865 のテスト)。硬化されているのは lock 軸だけで、未コミット作業の軸は素通り。
+
+本タスク (DoD12d) の remedy は charter の指定どおり remove() と worktree_remove_force_removes_dirty_worktree に限定したので、discard は意図的に手を付けていない。discard は experiment worktree の廃棄経路であり throwing away が意図なので、保全すべきか否かは人間の判断が要る。ただし現状は「意図的に捨てる」と「捨てたことに気づかない」が区別不能である。
+
+参考: mirror-gap の再発クラス。fix が片側のミラーにだけ着地するのを避けること。"""
+created_at = 1788790462
+updated_at = 1788790462
+weight = 0.0
+issue_number = 414
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/414"
+
+[[task]]
+id = "f19ab09f"
+title = "check-plugin-rollout.py は build provenance の commit を見ていない (未検証の仮説)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+測定日 2026-09-07、測定点 161a27de の直前。scripts/check-plugin-rollout.py は 41 plugin について source version 一致と file-for-file 一致を確認し exit 0 を返していたが、その時点で 39 本のバイナリは 24def906 など古い commit のビルドだった。--canary 実行後に全部が 161a27de へ揃った。
+
+つまりこのゲートは version parity と file identity は見るが、.deployed-from.json の harness_core_version 以外の commit provenance は見ていない可能性がある。ゲートの green を「やることが無い」と読み替えると古いバイナリが配布されたまま気づけない。
+
+これは未検証の予測であり事実ではない。harness-core の bump-on-change ゲートが実質的にカバーしている可能性が高いが確かめていない。
+
+検証方法: harness-core を version 据え置きで変更し、このゲートが検出するかを実際に観測する。検出しないなら provenance commit の比較を足す。"""
+created_at = 1788790479
+updated_at = 1788790479
+weight = 0.0
+issue_number = 415
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/415"

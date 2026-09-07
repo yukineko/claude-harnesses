@@ -11611,3 +11611,26 @@ updated_at = 1788789695
 weight = 0.0
 issue_number = 412
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/412"
+
+[[task]]
+id = "582c2ac2"
+title = "flow の「常に起票せよ」と §8 stop-verify が構造的に衝突する（backlog add が main の tracked file を汚す）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-07、測定点 10ca11d3。flow SKILL のハードルール「気づいたことは常に起票する」に従って backlog add を実行すると、repo store .backlog/tasks.toml は tracked なので main の作業ツリーが dirty になる。すると scripts/stop-verify-worktree.py が「this turn is ending on the MAIN working tree with uncommitted changes」で Stop をブロックする。つまり **ハーネスが必須と定めた行動が、同じハーネスの別ゲートに必ず引っかかる**。
+
+【この衝突が誘発する回避行動】main の dirty を解消するために、worktree へファイルをコピーして commit し、main 側で git checkout HEAD -- でローカル変更を捨ててから ff-merge する、という 4 手の round-trip が毎回必要になる。今回それを実行した（10ca11d3）。この手順自体は正しいが、起票 1 件ごとに要求されるコストとしては明らかに過大で、「起票を省く」方向の圧力になる。flow SKILL 自身が「落とした 1 件のコストは誰にも見えないまま残る。非対称であり、常に起票側が安い」と書いているので、この摩擦はその設計意図に逆行している。
+
+【両方の読み】(a) 実在の設計衝突: backlog の repo store が tracked であることと §8 の main-clean 要求が両立していない。(b) 意図的な仕様: 起票も他の変更と同じく worktree 経由で行うべきで、round-trip は許容コストとみなされている。
+
+【見分ける方法】backlog crate の SessionStart hook / flow SKILL / §8 のいずれかに、起票時の store 書き込み経路について明示的な記述があるかを確認する。無ければ (a)。
+
+【候補となる解】(i) backlog add に、cwd の worktree ではなく指定 worktree の store へ書く経路を用意する（今回 --project を明示して worktree の cwd から起票したのがこの形）。(ii) stop-verify-worktree.py が .backlog/tasks.toml の単独変更を例外にする（ただしこれは §8 の carve-out を増やすので慎重に）。(iii) repo store を untracked にして同期は別手段にする（5ba13c3e のストア方針と衝突するので要調整）。"""
+created_at = 1788789802
+updated_at = 1788789802
+weight = 0.0
+issue_number = 413
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/413"

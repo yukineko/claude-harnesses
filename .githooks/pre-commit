@@ -74,6 +74,20 @@
 #                                                 plugin's hooks never run, so the
 #                                                 gate goes DARK, not red
 #                                                 (backlog 8cb3bc22)
+#   clippy-lints       check-clippy-lints.py      an unwrap_used/expect_used/
+#                                                 panic deny-lint violation in a
+#                                                 crate that inherits `[lints]
+#                                                 workspace = true`. Scoped to
+#                                                 the crates the working tree
+#                                                 actually changed, so an
+#                                                 untouched crate cannot block
+#                                                 you. Built and verified in
+#                                                 de2e9829 but left unwired for
+#                                                 weeks -- the gate existed and
+#                                                 blocked nothing, DARK rather
+#                                                 than red, the same shape as
+#                                                 launcher-exec-bit above
+#                                                 (backlog 7ecf3797)
 #
 # Plus one Rust gate (not python3):
 #   main-tree-guard    condukt guard main-tree    a commit from the SHARED primary
@@ -168,6 +182,7 @@ run check-raw-io-ratchet.py   raw-io-ratchet
 run check-worktree-isolation.py worktree-isolation
 run check-gate-crates-sync.py gate-crates-sync
 run check-launcher-exec-bit.py launcher-exec-bit
+run check-clippy-lints.py     clippy-lints
 
 # main-tree-guard — CLAUDE.md §8, the one gate here that is Rust rather than
 # python3, because its decision is a tri-state over injectable inputs and is

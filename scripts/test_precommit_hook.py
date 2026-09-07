@@ -62,6 +62,7 @@ EXPECTED_SCANNERS = [
     "check-worktree-isolation.py",
     "check-gate-crates-sync.py",
     "check-launcher-exec-bit.py",
+    "check-clippy-lints.py",
 ]
 
 # Label the hook prints for each scanner, used to check the message names the
@@ -78,6 +79,7 @@ LABELS = {
     "check-worktree-isolation.py": "worktree-isolation",
     "check-gate-crates-sync.py": "gate-crates-sync",
     "check-launcher-exec-bit.py": "launcher-exec-bit",
+    "check-clippy-lints.py": "clippy-lints",
 }
 
 _STUB = """#!/usr/bin/env python3

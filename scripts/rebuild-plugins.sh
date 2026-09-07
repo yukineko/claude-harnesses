@@ -356,30 +356,37 @@ for i in "${!plugin_names[@]}"; do
   [ -n "$ver" ] || continue
   bindir="$CACHE/$pname/$ver/bin"
   [ -d "$bindir" ] || continue          # current version not rolled out to cache yet
-  # bin name = the launcher (the bin/ entry with no -<os>-<arch> platform suffix)
-  binname=""
+  # launcher = a bin/ entry with no -<os>-<arch> platform suffix. A plugin may
+  # ship SEVERAL: specguard ships `specguard` (the hook) and `specforge` (the
+  # source-side spec loop, specs/spec-loop.toml R4/R5). Each needs its OWN host
+  # binary, so every launcher is seeded — this loop used to take the first one
+  # in glob order and `break`, which silently left the rest exec'ing a binary
+  # that was never placed. That is not a degraded deploy but a DARK one:
+  # installed, version-consistent, running nothing, and emitting no finding to
+  # notice it by (CLAUDE.md §3 — "could not run" must never look like
+  # "ran and found nothing"). With two launchers the `break` also picked
+  # `specforge` over `specguard`, i.e. it darkened the GATE hook itself.
+  # Pinned by scripts/tests/rebuild-seeds-every-launcher.sh.
   for f in "$bindir"/*; do
-    b=$(basename "$f")
-    case "$b" in
+    binname=$(basename "$f")
+    case "$binname" in
       *-darwin-arm64|*-darwin-x86_64|*-linux-x86_64|*-linux-arm64|*-windows-x86_64.exe|*-windows-arm64.exe)
         continue ;;
     esac
-    binname="$b"; break
+    hostbin="$bindir/$binname-$SUF$EXT"
+    [ -e "$hostbin" ] && continue       # host bin already present (main loop handled it)
+    src="$REL/$binname$EXT"
+    [ -x "$src" ] || continue           # only seed a launcher we actually built this run
+    checked=$((checked+1))
+    if [ $dry = 1 ]; then
+      echo "cache  would seed $binname-$SUF$EXT (fresh version dir $pname/$ver)"
+    else
+      cp -f "$src" "$hostbin"; chmod +x "$hostbin"
+      write_provenance "$CACHE/$pname/$ver" "$pname"
+      echo "cache  seeded $binname-$SUF$EXT (fresh version dir $pname/$ver)"
+    fi
+    updated_cache=$((updated_cache+1))
   done
-  [ -n "$binname" ] || continue
-  hostbin="$bindir/$binname-$SUF$EXT"
-  [ -e "$hostbin" ] && continue         # host bin already present (main loop handled it)
-  src="$REL/$binname$EXT"
-  [ -x "$src" ] || continue             # only seed a plugin we actually built this run
-  checked=$((checked+1))
-  if [ $dry = 1 ]; then
-    echo "cache  would seed $binname-$SUF$EXT (fresh version dir $pname/$ver)"
-  else
-    cp -f "$src" "$hostbin"; chmod +x "$hostbin"
-    write_provenance "$CACHE/$pname/$ver" "$pname"
-    echo "cache  seeded $binname-$SUF$EXT (fresh version dir $pname/$ver)"
-  fi
-  updated_cache=$((updated_cache+1))
 done
 shopt -u nullglob
 

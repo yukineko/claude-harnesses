@@ -7569,8 +7569,8 @@ tags = [
     "spec-loop",
     "p1",
 ]
-status = "pending"
-notes = """
+status = "done"
+notes = '''
 DECIDED 2026-07-31 by the user. /flow gains a return path: when a picked task turns out to lack a spec, flow does not push it through condukt blindly - it routes back to specforge, which drafts and ratifies, which queues requirements (item 2dd5180f), and flow runs again.
 
 TRIGGERS - the user selected three, and explicitly did NOT select worker-blocked:
@@ -7589,9 +7589,60 @@ Depends on 2dd5180f. Partially depends on the specguard brief item for trigger 3
 ---
 SPEC 2026-07-31: this item is now requirement R4-flow-spec-gap-source of specs/spec-loop.toml (merge 20ca83f4). The requirement's acceptance list is the authoritative done_criteria; prose in this note is background. Design rationale: docs/DESIGN-spec-loop.md.
 
-RETRACTED 2026-07-31 - the termination rule in the paragraph above. This note originally proposed: a task diverted to specforge once is marked, and a second spec-gap detection on the same task escalates to a human instead of diverting again. That is a count, and a count is a proxy: it does not measure the thing we need to know, which is whether the spec is executable yet. Replaced by requirement R0 of specs/spec-loop.toml - the cycle exits on the ratify contract floor (Spec::contract_violations() empty, crates/specguard/src/forge/ir.rs:162). A spec that clears the floor produces condukt-runnable requirements and the loop leaves through execution; one that cannot is refused by ratify and goes to a human. Measured both directions 2026-07-31 at 0ad0d055: the real spec ratifies exit 0, an acceptance-empty control is refused exit 2 naming the three G violations. Do NOT add a divert counter. The residual divergence risk (a task that keeps producing floor-passing specs that do not resolve it) is left OPEN on purpose - see DESIGN section 3.2: measure divert count and done rate of divert-derived requirements after R4 ships, then decide."""
+RETRACTED 2026-07-31 - the termination rule in the paragraph above. This note originally proposed: a task diverted to specforge once is marked, and a second spec-gap detection on the same task escalates to a human instead of diverting again. That is a count, and a count is a proxy: it does not measure the thing we need to know, which is whether the spec is executable yet. Replaced by requirement R0 of specs/spec-loop.toml - the cycle exits on the ratify contract floor (Spec::contract_violations() empty, crates/specguard/src/forge/ir.rs:162). A spec that clears the floor produces condukt-runnable requirements and the loop leaves through execution; one that cannot is refused by ratify and goes to a human. Measured both directions 2026-07-31 at 0ad0d055: the real spec ratifies exit 0, an acceptance-empty control is refused exit 2 naming the three G violations. Do NOT add a divert counter. The residual divergence risk (a task that keeps producing floor-passing specs that do not resolve it) is left OPEN on purpose - see DESIGN section 3.2: measure divert count and done rate of divert-derived requirements after R4 ships, then decide.
+
+---
+CLOSED 2026-09-07 — flow 0.2.11 (SKILL.md 3-1.5) + condukt 0.7.146/0.7.147 +
+specguard 0.2.56 + repo root の specforge.toml。acceptance 4 件すべてを実測で
+決着させた:
+
+1. open_questions が出た task で実装フェーズへ進まない — SKILL.md 3-2 が課題文に
+   「Decomposition (Phase 1〜2) まで進んだ時点で open_questions 相当か
+   confidence:low があれば Phase 5 へ進まず報告して停止せよ」を明記して渡す形に
+   なった。止めるのは実装フェーズであって分解ではない (分解を止めると trigger 自体が
+   取れない)。
+
+2. divert の可否が `condukt policy answer` を通り `condukt policy answers` に
+   記録が残る — **これは実装が必要だった。** 従来 condukt は auto だけを journal して
+   おり、この ゲートの既定 verdict は escalate なので、acceptance が要求する記録は
+   **原理的に存在しなかった**。0.7.146 で escalate/block も追記するようにし
+   (`chosen` を Option<String> にして「答えていない」を null で表現)、0.7.147 で
+   `policy answers` の CLI ヘルプを実装に合わせた。実測:
+
+     $ condukt policy answer --journal-dir "$J" --risk medium --reversible high \
+         --confidence low --question "…" --option "…" --option "…" --recommend 0
+     {"answered":false,"policy":"escalate"}    rc=2
+     $ condukt policy answers --journal-dir "$J"
+     {"…","recommend_index":0,"chosen":null,"policy":"escalate",…}    rc=0
+
+   invalid だけは journal しない (verdict が解決していない・exit 1 で stderr に出る)。
+   残る穴: append の失敗は `harness_core::append::append_line` が握り潰すので
+   下流には「ゲートが発火していない」と読める → backlog 9fa6785b に分離して起票済み
+   (harness-core は 36 plugin にリンクされるためこの commit では触らない)。
+
+3. verdict=undetermined では divert しない — R3 の acceptance 4 と同じ分岐。上記
+   d7330aef を参照。
+
+4. ratify 後に spec 由来の項目が backlog に現れ次周回で拾われる — 使い捨て git repo で
+   draft→ratify→backlog を通しで実行した。`ratify` が
+   `backlog: 3 件を起票 / 0 件は起票済み (計 3 requirement)` を出力し、直後の
+   `backlog list --status pending` に `[r4demo:R1]`〜`[r4demo:R3]` が p1/pending で
+   並んだ。実 repo の .backlog/tasks.toml は無変更、`r4demo` の grep は 0 ヒット。
+
+   この過程で SKILL.md の散文が **実際には動かない起動形**だったことが判明し訂正した:
+   `specforge draft "<課題文>"` は `error: unexpected argument` で落ち (課題文は
+   --req <file> か stdin)、`ratify` は --reason が必須。散文が実装と食い違ったまま
+   出荷されていたら、divert を踏んだ瞬間に clap エラーで止まっていた。
+
+   併せて repo root に specforge.toml を作成した。specforge は設定が無いと exit 2 で
+   拒否する (fail-closed) ため、この repo では divert 先が未配線だった。canon の
+   glob は実測で決めている: `specforge gather --topic "spec-gap divert"` が 24
+   fragment を返し、うち 4 件は specs/*.toml の glob 経由でしか到達しない。
+
+divert 回数カウンタは足していない (notes 上部の RETRACTED どおり。停止は R0 の
+ratify contract floor で決まる)。'''
 created_at = 1785499715
-updated_at = 1787734763
+updated_at = 1788771728
 weight = 0.55
 issue_number = 113
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/113"
@@ -7607,7 +7658,7 @@ tags = [
     "spec-loop",
     "p2",
 ]
-status = "pending"
+status = "done"
 notes = """
 Enabler for trigger 3 of item 09148819.
 
@@ -7620,9 +7671,40 @@ Done when: specguard brief --json emits a verdict field with three states, an un
 Depends on nothing. Blocks trigger 3 of 09148819.
 
 ---
-SPEC 2026-07-31: this item is now requirement R3-brief-emits-tri-state-verdict of specs/spec-loop.toml (merge 20ca83f4). The requirement's acceptance list is the authoritative done_criteria; prose in this note is background. Design rationale: docs/DESIGN-spec-loop.md."""
+SPEC 2026-07-31: this item is now requirement R3-brief-emits-tri-state-verdict of specs/spec-loop.toml (merge 20ca83f4). The requirement's acceptance list is the authoritative done_criteria; prose in this note is background. Design rationale: docs/DESIGN-spec-loop.md.
+
+---
+CLOSED 2026-09-07 — specguard 0.2.56 (`specguard brief --json`). 実測、使い捨て
+git repo (/tmp/tmp.z2oPxJH9K4) に spec_doc 付きエントリ 1 件の spec-map を置いて
+4 状態を観測した。exit code は bare で読んでいる (`| head` を挟むと head の
+status になる):
+
+  covered        {"entries":["crates/demo/src/widget.rs"],"verdict":"covered"}    rc=0
+  not-covered    {"matched_without_spec":[],"verdict":"not-covered"}              rc=0
+  undetermined   map が chmod 000 (Permission denied)                             rc=10
+  undetermined   map が存在しない                                                  rc=10
+  undetermined   map の entries が 0 件                                            rc=10
+  undetermined   map の TOML parse error (status = "ok" は unknown variant)        rc=10
+
+acceptance ごとの決着:
+1. 3状態の verdict フィールド — 上の 4 通りで covered / not-covered /
+   undetermined をすべて観測した。
+2. store を読めない状態が undetermined になり not-covered にならない — 権限・
+   不在・空・パース不能の 4 経路すべてで undetermined。not-covered へ落ちる経路は
+   観測されなかった。
+3. 散文と同じ scope 解決から導かれる — `crates/specguard/src/main.rs:1207` で
+   `coverage::resolve` を **1 回だけ** 呼び、同じ値を `emit_brief_json` と
+   `prompt::render_brief(..., &cov)` の両方へ渡している。第2実装は存在しない。
+4. undetermined は divert を起こさず人間へ surface する — flow SKILL.md 3-1.5 の
+   trigger 3 分岐が「rc=0 かつ covered/not-covered 以外はすべて undetermined として
+   扱い divert しない」と規定し、その理由 (divert は書き込み側なので判定不能で
+   起こしてはならない) を併記している。
+
+exit code にも三値を載せている点は acceptance 外の追加である
+(0=判定できた / 10=undetermined)。shell の `if` が undetermined を成功と読むのを
+防ぐため。"""
 created_at = 1785499728
-updated_at = 1785500631
+updated_at = 1788771728
 weight = 0.4
 issue_number = 114
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/114"
@@ -15296,4 +15378,132 @@ status = "pending"
 notes = ""
 created_at = 1788771328
 updated_at = 1788771328
+weight = 0.0
+
+[[task]]
+id = "fbf93b81"
+title = "rollout 中の copy 窓で hook が bundled binary を見失う — SessionStart の overwatch status が unknown に落ちた実測がある"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = '''
+実測 (2026-09-07, 本 session の SessionStart:compact hook):
+
+    overwatch status did NOT run: no bundled binary for linux-x86_64.
+      sessions:    unknown
+      backlog:     unknown
+      hypotheses:  unknown
+      condukt runs: unknown
+
+同じ hook 呼び出しを直後に手で再現すると **通る**:
+
+    $ CLAUDE_PLUGIN_ROOT=~/.claude/plugins/cache/yukineko/overwatch/0.2.32 \
+        "$CLAUDE_PLUGIN_ROOT/bin/overwatch" status
+    == Sessions ==
+    (none)
+    ...                                             rc=0
+
+registry は健全 (installed_plugins.json の 42 entry すべて installPath が実在。
+overwatch -> .../overwatch/0.2.32、bin/ に overwatch と overwatch-linux-x86_64 が
+あり 100755)。したがって「registry が消えた版を指す」既知の dark 化
+(backlog e3366b5c) とは **別の機序**である。
+
+読み: launcher は `[ -x "$binary" ]` で分岐する
+(crates/overwatch/bin/overwatch:53)。rollout が binary を上書きコピーしている
+最中はこの述語が偽になりうる — 書き込み途中のファイルは一時的に非実行/不完全に
+なる。overwatch-linux-x86_64 の mtime は Sep 7 17:54 で、この session の
+rollout の時刻と一致する。
+
+判定不能なまま残る点 (どちらの読みかを決める観測がまだ無い):
+ (a) rollout の copy 窓に hook がぶつかった。→ 修正は copy を atomic に
+     (同一 FS の一時名へ書いて rename)。rename は POSIX で atomic なので
+     窓そのものが消える。
+ (b) それとは別に、hook が起動した時点の CLAUDE_PLUGIN_ROOT が古い版 dir を
+     指していた。→ 修正は e3366b5c 側 (registry を prune が読む) に寄る。
+見分け方: rollout-plugins.sh / sync-plugin-assets.sh が cp を使っているか
+`install`/rename を使っているかを読む。cp なら (a) が実在の窓である。
+
+影響の重さ: この launcher は **正しく** unknown を明示して exit 0 する
+(CLAUDE.md 第1節どおり、空表示ではなく unknown と言う) ので、今回は dark では
+なく可視の degrade だった。だが同じ窓に当たる他の hook が同じ配慮を持っている
+保証は無い — GATE crate の launcher がこの窓に当たれば exit 1 で暗転しうる。
+窓を塞ぐのは launcher 側ではなく rollout 側の仕事である。
+
+関連: e3366b5c (並行 rollout が互いの配備を prune し GATE を dark にする)。
+両方とも「共有 plugin cache は repo の外にあり worktree 分離では守れない」という
+同じ根に触れているが、機序が違うので別項目にしてある。
+
+---
+判定 (2026-09-07、同じターンで実測): 読み (a) が実在する。**cp はインプレース
+上書きであり、rename ではない。**
+
+    scripts/rebuild-plugins.sh:384   cp -f "$src" "$hostbin"; chmod +x "$hostbin"
+    scripts/rebuild-plugins.sh:291   cp -f "$src" "$binfile";  chmod +x "$binfile"
+    scripts/rebuild-plugins.sh:328   cp -f "$src" "$repofile"; chmod +x "$repofile"
+    scripts/rollout-plugins.sh:401   cp -a "$src/." "$dst/"
+
+`cp -f` は既存ファイルを **truncate してから書き直す** ので、その間に exec した
+hook は不完全な (あるいは 0 バイトの) ファイルを見る。`[ -x ]` は mode しか見ない
+ため真のまま通り、exec が失敗する経路もある。さらに cp がファイルを新規作成した
+場合は mode が umask 由来 (644) になり、続く `chmod +x` までの間だけ `[ -x ]` が
+**偽** になる — 今回観測した「no bundled binary for linux-x86_64」はこの形と一致
+する。
+
+したがって修正は launcher 側ではなく rollout 側:
+同一 FS 上の一時名へ書き、chmod してから `mv`(rename) で置き換える。rename は
+POSIX で atomic なので、hook から見えるのは常に「旧版の完全なファイル」か
+「新版の完全なファイル」のどちらかになり、窓が消える。
+
+読み (b) は棄却していない — 別機序として e3366b5c に残っている。今回のログは
+(a) だけで説明がつくが、(b) が起きないことを示す観測はまだ無い。'''
+created_at = 1788771846
+updated_at = 1788771879
+weight = 0.0
+
+[[task]]
+id = "3b056c02"
+title = "overwatch end が存在しない key に exit 0 + 空出力を返し、解放できた場合と区別できない"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 (2026-09-07, overwatch 0.2.32, cache の bin を直接実行):
+
+    $ overwatch end --key "definitely-not-a-real-key-12345" --status done
+    out=[]
+    rc=0
+
+`overwatch status` は同じ瞬間に `== Sessions ==  (none)` を返しており、この key の
+lease は **存在しない**。それでも end は「解放した」ときと**同一の出力・同一の
+終了ステータス**を返す。呼び出し側 (flow SKILL.md Step 4、および /flow を回す
+LLM) は fail-soft で扱えと書かれているので、この 0 を見て「解放できた」と記録する。
+
+なぜこれが fail-open か: これは ledger write である。同じ plugin の launcher
+(crates/overwatch/bin/overwatch:38) は自分の missing-binary 経路について
+まさにこの形を名指しで禁じている —
+
+    * begin / end / heartbeat / record-* -> ledger writes; reporting success
+      for a write that never happened is what leaves a stale lease behind.
+
+launcher は binary が無い場合を exit 1 で塞いでいるが、**binary 自身**が key の
+不在に対して同じ穴を開けている。守られているのは 1 段上だけである。
+
+観測される害: begin した key を typo などで取り違えて end すると、実 lease は
+解放されないまま「解放済み」と報告される。overwatch status には残り続け、TTL で
+reap されるまで他セッションからは「そのスコープは担当者あり」に見える。
+逆に一度も begin していない key を end しても何も言わないので、
+begin/end の対応漏れが検出されない。
+
+あるべき形 (CLAUDE.md 第3節): 三値にする。
+  - 実在する lease を解放した -> exit 0、解放した旨を出力
+  - key が存在しない        -> 非0 (「解放していない」は「解放した」ではない)
+  - 台帳が読めない          -> 非0、判定不能として理由を出力
+少なくとも「存在しなかった」と「解放した」を出力で区別できること。
+
+帰属メモ: 本セッションの変更ではない。/flow Step 4 の anchor 解放を実行する過程で
+観測した。"""
+created_at = 1788771923
+updated_at = 1788771923
 weight = 0.0

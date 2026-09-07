@@ -248,6 +248,127 @@ pub fn load_gate_exec_records(dir: &Path, run_id: &str) -> Vec<GateExecRecord> {
         .collect()
 }
 
+// ── Post-execution diff-risk outcome journal ────────────────────────────────
+//
+// `crate::diffrisk_record::record_post_execution_diff_risk` appends one record
+// per invocation here. Same fail-soft append-only JSONL pattern as the three
+// journals above.
+//
+// WHY THIS EXISTS (and why a bool was not enough). That hook is the only live
+// consumer of the call graph, and it reported its result as `bool`. Four
+// materially different endings all mapped to `false`:
+//
+//   * the task had no worktree, so nothing was ever inspected;
+//   * the worktree yielded no diff, so nothing was ever inspected;
+//   * the diff WAS classified and came back below High — a real clean result;
+//   * the classification said High but the overwatch append then failed.
+//
+// From outside, an empty violation registry is therefore consistent with both
+// "the fleet is clean" and "this hook never actually ran on anything", and
+// nothing on disk could separate them. That is precisely the shape CLAUDE.md
+// 1 and 3 forbid: silence must not be readable as "checked, fine". This
+// journal makes the *reason* durable, so a zero count becomes an answerable
+// question instead of an ambiguous one.
+
+/// Why one post-execution diff-risk invocation ended the way it did. Ordered
+/// from "never looked" to "looked and acted", so a reader can tell a blind spot
+/// (`NoWorktree`/`NoDiff`) apart from a real observation (`ClassifiedNotHigh`)
+/// apart from a finding (`Recorded`) apart from a broken measurement
+/// (`Undetermined`/`RecordFailed`).
+#[must_use = "an outcome that is dropped re-creates the fail-open this type exists to close: `ClassifiedNotHigh` is the ONLY value meaning \"inspected and clean\""]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiffRiskOutcome {
+    /// Gate 1: the task carried no worktree path. NOT inspected — this is a
+    /// blind spot, not a clean bill of health.
+    NoWorktree,
+    /// Gate 2: a worktree existed but produced no usable diff (absent on disk,
+    /// git failure, or an empty diff). NOT inspected — also a blind spot.
+    NoDiff,
+    /// The diff was actually classified and came back below High. This is the
+    /// only value that means "we looked and it was fine".
+    ClassifiedNotHigh,
+    /// The diff classified High and a violation was appended to overwatch.
+    Recorded,
+    /// The classifier could not determine a risk (e.g. the sensitive-glob list
+    /// failed to compile). Recorded under its own violation signature.
+    Undetermined,
+    /// A High verdict was reached but the overwatch append failed, so the
+    /// finding exists and is NOT in the registry. Deliberately distinct from
+    /// `Recorded`: a lost finding must never read as a filed one.
+    RecordFailed,
+}
+
+impl DiffRiskOutcome {
+    /// Stable slug for display/aggregation.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DiffRiskOutcome::NoWorktree => "no-worktree",
+            DiffRiskOutcome::NoDiff => "no-diff",
+            DiffRiskOutcome::ClassifiedNotHigh => "classified-not-high",
+            DiffRiskOutcome::Recorded => "recorded",
+            DiffRiskOutcome::Undetermined => "undetermined",
+            DiffRiskOutcome::RecordFailed => "record-failed",
+        }
+    }
+
+    /// Whether the diff was actually put through the classifier. `false` marks
+    /// the blind spots — the population a zero-finding count says nothing about.
+    pub fn inspected(self) -> bool {
+        !matches!(self, DiffRiskOutcome::NoWorktree | DiffRiskOutcome::NoDiff)
+    }
+}
+
+/// One recorded post-execution diff-risk invocation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DiffRiskRecord {
+    /// The outcome slug (`DiffRiskOutcome::as_str`).
+    pub outcome: String,
+    /// Whether the diff reached the classifier at all.
+    pub inspected: bool,
+    /// The run the task belongs to.
+    pub run_id: String,
+    /// The task inspected.
+    pub task_id: String,
+    /// How many changed symbols the call graph extracted from the diff, when it
+    /// ran. `None` on the blind-spot paths — deliberately not `0`, which would
+    /// claim "the call graph ran and found nothing".
+    pub changed_symbols: Option<usize>,
+    /// How many caller sites the call graph enumerated, when it ran. `None` on
+    /// the blind-spot paths, for the same reason.
+    pub caller_sites: Option<usize>,
+    /// Unix seconds when the outcome was recorded.
+    pub recorded_at: i64,
+}
+
+/// Path of the post-execution diff-risk outcome log (JSONL) inside `dir`.
+pub fn diffrisk_outcomes_path(dir: &Path) -> PathBuf {
+    dir.join("diffrisk-outcomes.jsonl")
+}
+
+/// Append one diff-risk outcome. Fail-soft: any IO/serialize error is swallowed
+/// so a journaling failure never changes the hook's (already fail-soft)
+/// behaviour. Mirrors [`append_decision`].
+pub fn append_diffrisk_outcome(dir: &Path, entry: &DiffRiskRecord) {
+    let Ok(line) = serde_json::to_string(entry) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(dir);
+    harness_core::append::append_line(&diffrisk_outcomes_path(dir), &line);
+}
+
+/// Load the diff-risk outcome log in file order. Missing file → empty vec;
+/// corrupt lines are skipped — never panics. Mirrors [`load_decisions`].
+pub fn load_diffrisk_outcomes(dir: &Path) -> Vec<DiffRiskRecord> {
+    let Ok(text) = std::fs::read_to_string(diffrisk_outcomes_path(dir)) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<DiffRiskRecord>(l).ok())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

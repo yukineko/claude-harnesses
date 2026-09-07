@@ -15105,3 +15105,27 @@ notes = ""
 created_at = 1788757792
 updated_at = 1788757792
 weight = 0.0
+
+[[task]]
+id = "6764a51d"
+title = "condukt review-order が dead CLI — call graph を使う唯一の明示コマンドなのに hook/skill/script/commands のどこからも呼ばれていない (参照は tests/review_order_cli.rs のみ)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = ""
+created_at = 1788758349
+updated_at = 1788758349
+weight = 0.0
+
+[[task]]
+id = "e9d1b093"
+title = "diffrisk 後段 call-graph 経路が「実行されて黙っている」か「一度も実行されていない」か区別不能 — violations 187 件中 diffrisk-public-api / diffrisk-callgraph が 0 件。実行カウンタが要る (沈黙=正常 と 沈黙=未実行 の混同は §1 の fail-open 形)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = ""
+created_at = 1788758349
+updated_at = 1788758349
+weight = 0.0

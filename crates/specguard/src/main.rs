@@ -14,6 +14,7 @@
 mod agent;
 mod auditmap;
 mod config;
+mod coverage;
 mod decision;
 mod init;
 mod parse;
@@ -62,6 +63,15 @@ const EXIT_TESTAUDIT_UNDETERMINED: u8 = 8;
 /// it would discard the ids and with them the only evidence those findings were
 /// ever closed. Pass `--force` to clear anyway, accepting the lost record.
 const EXIT_DISPOSITION_UNRECORDED: u8 = 9;
+
+/// `specguard brief --json` ran, but could not observe whether canon covers the
+/// task (no spec map, unreadable/corrupt map, an empty store, or task text with
+/// no usable query token). The `verdict` field says `undetermined`; this code
+/// says the same thing to a caller that reads only the exit status. It is
+/// distinct from `EXIT_OK` because `not-covered` sends /flow to draft a spec and
+/// `covered` lets it proceed — both are answers, and "no answer" must be
+/// neither (specs/spec-loop.toml R3, CLAUDE.md §3).
+const EXIT_BRIEF_UNDETERMINED: u8 = 10;
 
 #[derive(Parser)]
 #[command(
@@ -154,6 +164,23 @@ enum Command {
         /// to dispatch it to a read-only subagent.
         #[arg(long)]
         prompt: bool,
+        /// Emit the deterministic canon-coverage verdict as JSON and skip the
+        /// agent entirely. The `verdict` field is three-valued — `covered`,
+        /// `not-covered`, `undetermined` — because `not-covered` makes /flow
+        /// divert a task to `specforge`, so "could not read the spec map" must
+        /// not arrive there disguised as "no spec exists"
+        /// (specs/spec-loop.toml R3). Exits 0 for a resolved verdict and
+        /// EXIT_BRIEF_UNDETERMINED for `undetermined`, so a caller that reads
+        /// only the exit status still cannot mistake it for a clean answer.
+        ///
+        /// Conflicts with `--prompt`: the two ask for different outputs, so
+        /// passing both is a usage error rather than one quietly winning. It
+        /// used to be the latter (`--json` returned before the `--prompt`
+        /// branch was reached), which meant a caller that wanted the rendered
+        /// briefing got JSON and got exit 0 for it — a wrong answer that looks
+        /// like a right one.
+        #[arg(long, conflicts_with = "prompt")]
+        json: bool,
     },
     /// Scaffold a decision record (ADR) pinned to the current canon commit.
     Decide {
@@ -335,8 +362,8 @@ fn run(cli: &Cli) -> Result<u8> {
     }
 
     // `brief` is a read-only pre-task briefing; no scope/git resolution needed.
-    if let Some(Command::Brief { task, prompt }) = &cli.command {
-        return brief(&l, task, *prompt);
+    if let Some(Command::Brief { task, prompt, json }) = &cli.command {
+        return brief(&l, task, *prompt, *json);
     }
 
     // `map` maintains the independent file→spec mapping store; it resolves the
@@ -1168,11 +1195,20 @@ fn read_ingest(
 /// configured area + the invariants and either prints it (`--prompt`, for the
 /// plugin to dispatch to a subagent) or runs the configured agent once and prints
 /// its brief. Produces no report/sentinel — it is advisory, drift-prevention.
-fn brief(l: &Loaded, task: &str, prompt_only: bool) -> Result<u8> {
+fn brief(l: &Loaded, task: &str, prompt_only: bool, json: bool) -> Result<u8> {
     if task.trim().is_empty() {
         anyhow::bail!("brief には着手するタスクの説明が必要です (例: specguard brief \"...\")");
     }
-    let rendered = prompt::render_brief(prompt::BRIEF_TEMPLATE, &l.cfg, task, &l.date);
+    // Resolved ONCE. The JSON verdict below and the `{{COVERAGE}}` block inside
+    // the rendered prompt are two renderings of this single value — that is what
+    // makes them incapable of disagreeing, which specs/spec-loop.toml R3
+    // acceptance 3 requires ("並走する第2実装ではない").
+    let map_path = l.repo_root.join(&l.cfg.map.path);
+    let cov = coverage::resolve(&map_path, task);
+    if json {
+        return Ok(emit_brief_json(&cov));
+    }
+    let rendered = prompt::render_brief(prompt::BRIEF_TEMPLATE, &l.cfg, task, &l.date, &cov);
     if prompt_only {
         print!("{rendered}");
         return Ok(EXIT_OK);
@@ -1193,6 +1229,38 @@ fn brief(l: &Loaded, task: &str, prompt_only: bool) -> Result<u8> {
     }
     print!("{}", o.out.stdout);
     Ok(EXIT_OK)
+}
+
+/// Emit the canon-coverage determination as one JSON object on stdout and
+/// return the exit code for it.
+///
+/// The exit code carries the same three-way distinction as the `verdict` field
+/// on purpose. A caller that branches only on the status — a shell `if`, a
+/// pre-commit wrapper — would otherwise read `undetermined` as success, which is
+/// the substitution of "could not check" for "checked and fine" that CLAUDE.md
+/// §3 forbids. `covered` and `not-covered` are both *answers*, so both exit 0;
+/// only the absence of an answer is non-zero.
+fn emit_brief_json(cov: &harness_core::verdict::Determination<coverage::Coverage>) -> u8 {
+    use harness_core::verdict::Determination;
+    let mut obj = serde_json::json!({ "verdict": coverage::verdict_token(cov) });
+    match cov {
+        Determination::Known(coverage::Coverage::Covered { entries }) => {
+            obj["entries"] = serde_json::json!(entries);
+        }
+        Determination::Known(coverage::Coverage::NotCovered {
+            matched_without_spec,
+        }) => {
+            obj["matched_without_spec"] = serde_json::json!(matched_without_spec);
+        }
+        Determination::Undetermined(why) => {
+            obj["reason"] = serde_json::json!(why.reason().as_str());
+        }
+    }
+    println!("{obj}");
+    match cov {
+        Determination::Undetermined(_) => EXIT_BRIEF_UNDETERMINED,
+        _ => EXIT_OK,
+    }
 }
 
 /// SessionStart hook entry point: if a sentinel is pending, print an active

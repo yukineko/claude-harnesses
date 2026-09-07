@@ -15122,3 +15122,22 @@ main (e018fe91) でも同一に 4 件失敗するので、既存不良であっ�
 created_at = 1788756933
 updated_at = 1788756933
 weight = 0.0
+
+[[task]]
+id = "9fa6785b"
+title = "harness_core::append::append_line が書き込み失敗を黙殺する — audit log では「ゲートが発火しなかった」と読まれる fail-open"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+観測 (2026-09-07, worktree session-05717fa8, R4 実装中): crates/harness-core/src/append.rs:36 の append_line は OpenOptions::open に失敗すると early return し、呼び出し側へ何も返さない (返り値は ())。
+
+なぜ問題か: condukt gatelog::append_decision がこの上に乗っており、gate-decisions.jsonl は「そのゲートが発火したか」の唯一の証跡である。追記が失敗すると記録が残らず、`condukt policy answers` は空を返す。下流はそれを「ゲートは発火しなかった」と読む — CLAUDE.md 第1節が名指しする「沈黙は許容される degrade ではない」そのもの。分岐レベルの同種の穴 (escalate/block を journal しない) は R4 の実装で塞いだが、IO レベルの穴は残っている。
+
+なぜ今直さなかったか: append_line は harness-core にあり 36 plugin にリンクされる。R4 の scope 外で、bump と並行セッションへの影響が大きい。CLAUDE.md 第5節に従い黙って迂回せず起票する。
+
+直し方の候補: append_line を Result か Determination 返しにし、gatelog 側は追記失敗を stderr へ出す (exit code は verdict のまま変えない — 判定と記録は別レイヤ)。呼び出し側 6 sink 全部の移行が要る。"""
+created_at = 1788759579
+updated_at = 1788759594
+weight = 0.0

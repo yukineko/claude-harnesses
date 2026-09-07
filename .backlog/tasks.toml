@@ -14761,3 +14761,65 @@ updated_at = 1787905350
 weight = 0.0
 issue_number = 411
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/411"
+
+[[task]]
+id = "0db309dc"
+title = "specforge バイナリが一度も配備されていない (crates/specguard/bin/ に launcher が無く rollout が拾わない) — spec-loop R0-R5 が未出荷の実行器を前提にしている"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "deploy-verify",
+    "spec-loop",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-07、測定点 e018fe91、linux-x86_64。
+
+【観測】
+1. crates/specguard/Cargo.toml:16-18 に [[bin]] name = specforge / path = src/forge/main.rs が宣言されている。
+2. target/release/specforge は正常にビルドされる (2767072 バイト、2026-09-07 12:27)。
+3. 配備先 ~/.claude/plugins/cache/yukineko/specguard/0.2.53/bin/ には specguard と specguard-linux-x86_64 の2つのみ。specforge は不在。
+4. 根本原因: crates/specguard/bin/ の launcher が specguard 1本のみ。rollout/rebuild は launcher 名を基準に配備するため2本目の [[bin]] を拾わない。
+5. plugin.json / hooks/ / skills/ のいずれも specforge を参照していない (grep 0 ヒット)。
+6. 多bin crate は specguard のみ。影響はこの1件に限定される。
+
+【なぜ重要か】
+specs/spec-loop.toml の R0-R5 は specforge を実行器として前提にする。とくに
+R4-flow-spec-gap-source の acceptance 1 (flow が specforge draft を起動する) と
+acceptance 4 (divert 後 ratify が通れば backlog に現れる) は、specforge が PATH に
+無いため現状では物理的に達成不能。backlog 09148819 の着手がここでブロックされた。
+
+【判定不能な点 (両方の読みを残す)】
+(a) 配備漏れ — launcher を追加して配備すべきだった。
+(b) 意図的 — dev 専用で、出荷は R5 (実装器の退役) 後に別形態を予定している。
+見分け方: docs/DESIGN-spec-loop.md の配布方針の記述、および R5 が specforge の
+4サブコマンド退役を求めていることとの整合を読む。
+
+【注意】specguard は GATE crate なので、配備するなら rollout に --canary が必要。"""
+created_at = 1788754165
+updated_at = 1788754165
+weight = 0.0
+
+[[task]]
+id = "d53e6b35"
+title = "jq が未インストールで flow/condukt の SKILL 手順が実行不能 (compass gap | jq, condukt policy answer | jq -r .chosen)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "flow",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-07、測定点 e018fe91。which jq -> command not found。
+crates/flow/skills/flow/SKILL.md は Step 0.5 の policy-answer routing で
+CHOSEN=$(printf %s "$OUT" | jq -r .chosen) を、Step 3-1c で
+compass gap | jq -r .opportunities[0].weight を手順として指定しているが、
+jq が無い環境では両方とも実行できない。SKILL の手順が環境前提を満たしていない。
+本セッションでは python3 で代替した。
+対処案: (a) jq を依存として明記/導入 (b) SKILL を jq 非依存に書き換え
+(c) 各バイナリが jq 不要の出力面 (--field 等) を持つ。"""
+created_at = 1788754165
+updated_at = 1788754165
+weight = 0.0

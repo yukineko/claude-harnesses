@@ -14903,3 +14903,69 @@ jq が無い環境では両方とも実行できない。SKILL の手順が環�
 created_at = 1788754165
 updated_at = 1788754165
 weight = 0.0
+
+[[task]]
+id = "841fb5c8"
+title = "specguard launcher の fail-open: バイナリ不在で exit 0 する (GATE crate)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+crates/specguard/bin/specguard は per-platform バイナリが無いとき stderr に 1 行出して **exit 0** する。コメントは逐語で「it exits 0 silently so a hook NEVER breaks the user's turn」。
+
+CLAUDE.md 第1節は「ターンを壊すな」を verdict 経路の docstring・コメントに書いた時点で赤信号とみなすと明記している。specguard は GATE crate (scripts/rollout-plugins.sh の GATE_CRATES に登録) なので、この launcher は判定を持つ側にある。バイナリ不在時に exit 0 すると、hook 呼び出し側から見て「検査して問題なし」と「そもそも検査していない」が区別不能になる (第3節)。
+
+これは 2026-09-07 に全 39 plugin が dark だった事象の増幅器でもある: バイナリが無いこと自体が exit 0 で覆い隠されるので red にならず dark になる。
+
+【判定不能な点 — 埋めずに残す】
+exit 1 に変えたときに Claude Code の hook 実行系がどう振る舞うかを、このセッションでは観測していない。PreToolUse hook の非 0 終了が deny 扱いになるのか、単にエラー表示になるのかで、正しい修正の形 (非 0 で止める / 明示的な deny JSON を返す) が変わる。実装前にそこを観測すること。
+
+【対象】
+crates/specguard/bin/specguard の末尾。同型の launcher が他 38 plugin にもあるので、specguard を直したら横展開の要否を判断すること (判定を持たない observability hook は carve-out 側にあたる可能性がある — CLAUDE.md 第1節の分類に従い、免責を主張する plugin は下流消費者を列挙する)。
+
+【関連】
+0db309dc (specforge 配布ギャップ) の作業中に発見。specforge 側の新 launcher は fail-closed で書いた (commit 0eb9996e)。"""
+created_at = 1788756914
+updated_at = 1788756914
+weight = 0.0
+
+[[task]]
+id = "e4a1d386"
+title = "check-shell-syntax.sh の 6 assertion 中 4 件が mktemp 失敗で空虚化している"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+scripts/tests/check-shell-syntax.sh は 22 行目と 79 行目で
+
+    mktemp -d -t shellsyntax
+    mktemp -d -t shellsyntax-nogit
+
+を呼ぶが、GNU coreutils の mktemp は -t のテンプレートに最低 3 個の X を要求するため
+
+    mktemp: too few X's in template 'shellsyntax'
+
+で失敗する (BSD mktemp では通る書き方)。set -uo pipefail のみで -e が無いので、テストは失敗に気づかず空の $d で処理を続け、/s.sh や /hook への書き込みが Permission denied、続く git add が pathspec エラーになる。
+
+【実測 2026-09-07、測定点 0eb9996e、linux-x86_64】
+    bash scripts/tests/check-shell-syntax.sh  -> 4 case(s) failed / exit 1
+逐語で失敗するのは:
+  FAIL — expected exit 1 for the broken script, got 0
+  FAIL — expected exit 1 for the extensionless broken script, got 0
+  FAIL — expected exit 2 for an empty script set, got 0
+  FAIL — expected exit 2 outside a git repo, got 0
+main (e018fe91) でも同一に 4 件失敗するので、既存不良であって回帰ではない。
+
+【なぜ p2 でなく無視できないか】
+通っている 2 件のうち意味があるのは「このリポジトリの tracked shell script が全部 parse する」だけで、check-shell-syntax.py 側が *壊れた script を検出できるか* を確かめる assertion は 4 件とも一度も実行されていない。CLAUDE.md 第2節の「何も検証していないテストは常に通る」の実例で、しかもこのテストは常に **exit 1** を返すため、日常的に red が既定になっている = 誰も読まなくなる形の腐敗。
+
+【修正】
+テンプレートを shellsyntax.XXXXXX / shellsyntax-nogit.XXXXXX にする。併せて mktemp の失敗を検出して即 fail するようにし (現状は空文字で続行 = 第3節の判定不能を素通りさせる形)、修正後に 6/6 green を確認すること。
+
+【発見経路】
+0db309dc の作業中、rebuild-plugins.sh を変更したので隣接テストの回帰確認として実行して発覚。"""
+created_at = 1788756933
+updated_at = 1788756933
+weight = 0.0

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -26,7 +27,10 @@ def _run(script: str, cwd: str, payload=None, env_extra=None) -> int:
     if env_extra:
         env.update(env_extra)
     p = subprocess.run(
-        ["python3", os.path.join(SCRIPTS, script)],
+        # sys.executable, not "python3": some tests hand the script a PATH that
+        # deliberately does not contain git, and resolving the interpreter
+        # through that same PATH would break the harness instead of the subject.
+        [sys.executable, os.path.join(SCRIPTS, script)],
         cwd=cwd,
         input=(json.dumps(payload) if payload is not None else None),
         capture_output=True,
@@ -136,12 +140,23 @@ class WorktreeIsolationGuards(unittest.TestCase):
                 _run("guard-maintree-bash.py", self.main,
                      self._bash(cmd), self.env), 0, cmd)
 
-    def test_bash_variable_path_allowed(self):
-        # A shell variable cannot be expanded here; refusing it would block
-        # legitimate worktree flows. Left to the commit chokepoint.
+    def test_bash_unknown_variable_path_denied(self):
+        # REPLACES test_bash_variable_path_allowed, which asserted the OPPOSITE
+        # ("a shell variable cannot be expanded here; refusing it would block
+        # legitimate worktree flows. Left to the commit chokepoint."). That test
+        # wrote a fail-open down as the specification — the shape CLAUDE.md 2
+        # names explicitly with `assert!(checks_verdict(&[]))`: it pinned
+        # "could not determine" to "allow", so the gate could never be fixed
+        # without the suite calling the fix a regression.
+        #
+        # `$WT` has no literal prefix at all, so the write could land anywhere,
+        # main included. It is refused, and the message says what to do instead
+        # (use a literal path). The legitimate-worktree case it worried about is
+        # covered by test_bash_glob_outside_main_allows and
+        # test_bash_sed_worktree_allows, which use resolvable paths.
         self.assertEqual(
             _run("guard-maintree-bash.py", self.main,
-                 self._bash("sed -i s/a/b/ $WT/tracked.rs"), self.env), 0)
+                 self._bash("sed -i s/a/b/ $WT/tracked.rs"), self.env), 2)
 
     def test_bash_move_to_worktree_flow_allowed(self):
         # The exact flow the DENY message recommends must not be self-blocked.
@@ -217,6 +232,95 @@ class WorktreeIsolationGuards(unittest.TestCase):
             _run("guard-maintree-bash.py", self.main,
                  self._bash(f"rm {gd}/config"), self.env), 2)
 
+    # ---- undetermined must resolve to the restricted side (CLAUDE.md 3) --
+    # Three sites in guard-maintree-bash.py used to answer "I could not tell"
+    # with ALLOW, while its twin guard-maintree-edit.py answers the identical
+    # question with DENY: (1) the main root could not be established, (2) the
+    # command would not tokenize, (3) the target path held a shell construct
+    # this process cannot expand. Each pair below is a deny plus the control
+    # proving the deny is not blanket.
+
+    def test_bash_untokenizable_denies(self):
+        # Unbalanced quote: shlex cannot tell what this touches, so neither can
+        # the guard. "Could not determine" is not "does not touch main".
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash(f"rm -rf {self.main}/'tracked.rs"), self.env), 2)
+
+    def test_bash_heredoc_body_does_not_break_tokenizing(self):
+        # ANTI-VACUITY for the row above. A here-document BODY is data, not
+        # shell syntax, and an apostrophe in it must not make the whole command
+        # undecidable — otherwise the deny above would fire on ordinary writes.
+        cmd = "cat > %s/note.txt <<'EOF'\nit's fine\nEOF" % self.wt
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main, self._bash(cmd), self.env), 0)
+
+    def test_bash_heredoc_into_main_still_denies(self):
+        # ANTI-VACUITY: stripping heredoc bodies must not blind the guard to the
+        # redirection target that precedes them.
+        cmd = "cat > %s/note.txt <<'EOF'\nit's fine\nEOF" % self.main
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main, self._bash(cmd), self.env), 2)
+
+    def test_bash_glob_into_main_denies(self):
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash(f"rm -rf {self.main}/*.rs"), self.env), 2)
+
+    def test_bash_glob_covering_main_denies(self):
+        # A glob rooted at an ANCESTOR of the main tree can still expand into
+        # it, so "the literal prefix is not under main" is not enough on its own.
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash(f"rm -rf {self.tmp}/*"), self.env), 2)
+
+    def test_bash_glob_outside_main_allows(self):
+        # ANTI-VACUITY: a glob whose literal prefix cannot reach main is fine.
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash(f"rm -rf {self.wt}/*.rs"), self.env), 0)
+
+    def test_bash_unexpandable_var_denies(self):
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash("rm -rf $SOMEWHERE/tracked.rs"), self.env), 2)
+
+    def test_bash_tilde_into_main_denies(self):
+        # `~` IS expandable deterministically, so it must be expanded and then
+        # judged — not waved through as "contains an unresolvable character".
+        env = dict(self.env)
+        env["HOME"] = self.main
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash("rm -rf ~/tracked.rs"), env), 2)
+
+    def test_bash_tilde_outside_main_allows(self):
+        # ANTI-VACUITY for the row above.
+        env = dict(self.env)
+        env["HOME"] = self.tmp
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash("rm -rf ~/scratch.rs"), env), 0)
+
+    def test_bash_git_unusable_denies(self):
+        empty = os.path.join(self.tmp, "emptybin-bash")
+        os.makedirs(empty, exist_ok=True)
+        env = dict(self.env)
+        env["PATH"] = empty
+        self.assertEqual(
+            _run("guard-maintree-bash.py", self.main,
+                 self._bash(f"rm -rf {self.main}/tracked.rs"), env), 2)
+
+    def test_bash_project_not_a_repo_allows(self):
+        # ANTI-VACUITY for the row above: git REPORTING "no repository here" is
+        # a determinate answer — there is no main tree to protect, so allow.
+        outside = os.path.join(self.tmp, "bash-not-a-repo")
+        os.makedirs(outside, exist_ok=True)
+        self.assertEqual(
+            _run("guard-maintree-bash.py", outside,
+                 self._bash(f"rm -rf {outside}/x"),
+                 {"CLAUDE_PROJECT_DIR": outside}), 0)
+
     def test_bash_rm_main_hooks_still_denied(self):
         gd = subprocess.run(
             ["git", "rev-parse", "--absolute-git-dir"],
@@ -248,6 +352,54 @@ class LifecycleHooks(WorktreeIsolationGuards):
         self.assertEqual(
             _run("stop-verify-worktree.py", self.main,
                  {"cwd": self.main, "stop_hook_active": True}), 0)
+
+    # ---- stop gate: "git could not answer" is NOT "no repo here" --------
+    # CLAUDE.md 3: 判定不能 (IO 失敗 / subprocess の異常終了) は clean ではない.
+    # The gate identifies the main tree by comparing --absolute-git-dir with
+    # --git-common-dir. If EITHER probe fails for any reason other than "this is
+    # not a git repository", the gate cannot tell a worktree from a dirty main
+    # tree — and must resolve to the restricted side, not wave the stop through.
+
+    def _shim_git(self, body: str, name: str) -> dict:
+        """Return env_extra whose PATH holds ONLY a stub `git` running `body`."""
+        bindir = os.path.join(self.tmp, "shimbin-" + name)
+        os.makedirs(bindir, exist_ok=True)
+        shim = os.path.join(bindir, "git")
+        with open(shim, "w") as fh:
+            fh.write("#!/bin/sh\n" + body + "\n")
+        os.chmod(shim, 0o755)
+        return {"PATH": bindir}
+
+    def test_stop_git_erroring_blocks(self):
+        # Real, observed shape: a repo git refuses to operate on. Not "no repo".
+        env = self._shim_git(
+            "echo 'fatal: detected dubious ownership in repository' >&2\nexit 128",
+            "dubious",
+        )
+        self.assertEqual(
+            _run("stop-verify-worktree.py", self.main, {"cwd": self.main}, env), 2)
+
+    def test_stop_git_failing_silently_blocks(self):
+        env = self._shim_git("exit 1", "silent")
+        self.assertEqual(
+            _run("stop-verify-worktree.py", self.main, {"cwd": self.main}, env), 2)
+
+    def test_stop_git_unrunnable_blocks(self):
+        empty = os.path.join(self.tmp, "emptybin")
+        os.makedirs(empty, exist_ok=True)
+        self.assertEqual(
+            _run("stop-verify-worktree.py", self.main, {"cwd": self.main},
+                 {"PATH": empty}), 2)
+
+    def test_stop_outside_any_repo_allows(self):
+        # ANTI-VACUITY CONTROL for the three above: the fix must keep ALLOWING
+        # the genuinely-not-a-repo case. Resolving every git non-zero to block
+        # would trap every stop taken outside a checkout, and would make the
+        # three tests above pass for the wrong reason.
+        outside = os.path.join(self.tmp, "not-a-repo")
+        os.makedirs(outside, exist_ok=True)
+        self.assertEqual(
+            _run("stop-verify-worktree.py", outside, {"cwd": outside}), 0)
 
     def test_sessionstart_in_worktree_noops(self):
         self.assertEqual(

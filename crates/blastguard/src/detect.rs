@@ -286,6 +286,40 @@ it controls which hooks, gates or policies run, so blastguard refuses"
     }
 }
 
+/// Verdict for a non-recursive `chown`/`chgrp` whose target is, holds, or globs
+/// into a protected gate/config path.
+///
+/// **`Ask`, not `Deny`, and that is the whole point of the rule.** Whether
+/// re-owning a gate file actually disarms it is not derivable from the command
+/// line: it depends on who the new owner is, on which account the loader runs
+/// as, and on which loader it is (git refuses a repository whose ownership it
+/// finds "dubious"; a `.claude/hooks/*` script is executed off its permission
+/// bits, not its owner). A `Deny` would assert a disarm that has not been shown
+/// — but `Allow` is not the neutral answer either, it is the OPPOSITE unbacked
+/// claim, and it is the one this arm used to make.
+/// [`crate::model::Decision::Ask`] is the answer that is true: per its own doc,
+/// it "is NOT a verdict about the command, it is a refusal to guess about one".
+///
+/// This closes a MIRROR GAP with the `chmod` arm next door, which has classified
+/// its targets since round 3 while this verb kept measuring blast radius (`-R`)
+/// only — so `chown nobody .githooks/pre-commit` was a plain `Allow`.
+fn protected_reown_ask(action: &str, path: &str) -> Option<Decision> {
+    let reaches = exclude::is_protected_path(path)
+        || exclude::holds_protected_paths(path)
+        || (has_glob_meta(path)
+            && glob_literal_prefix(path)
+                .map(|p| exclude::touches_protected(&p))
+                .unwrap_or(false));
+    if !reaches {
+        return None;
+    }
+    Some(Decision::ask(format!(
+        "{action} re-owns a protected gate/config path ({path}) — whether that disarms the \
+gate depends on the new owner and on which account its loader runs as, neither of which is \
+on the command line, so blastguard refuses to guess and asks"
+    )))
+}
+
 /// Verdict for a RECURSIVE copy whose landing directory is, or holds, protected
 /// paths.
 ///
@@ -3742,11 +3776,24 @@ fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize) -> Decision {
                 }
             }
         }
-        "chown" => {
+        verb @ ("chown" | "chgrp") => {
             if has_short(rest, 'R') || rest.contains(&"--recursive") {
                 Decision::deny("recursive chown re-owns a whole tree")
             } else {
-                Decision::Allow
+                // Round 5, the chmod MIRROR. This rule measured BLAST RADIUS
+                // (`-R`) and never asked what the target was, so every
+                // non-recursive form was `Allow` — including
+                // `chown nobody .githooks/pre-commit`, one verb away from the
+                // chmod arm that has classified its targets since round 3.
+                // `chgrp` was not matched at all.
+                //
+                // The verdict is `Ask` rather than `Deny`; see
+                // `protected_reown_ask` for why that is the honest one.
+                let (_owner, targets) = chown_owner_and_targets(rest);
+                targets
+                    .into_iter()
+                    .find_map(|t| protected_reown_ask(verb, t))
+                    .unwrap_or(Decision::Allow)
             }
         }
         // CA-blastguard-009: `tee FILE` (no -a/--append) truncates/overwrites
@@ -3861,7 +3908,35 @@ fn is_chmod_option(tok: &str) -> bool {
 /// Returns `None` for the mode when none could be located; callers must treat
 /// that as "unparseable", not as "harmless" (see the `chmod` arm).
 fn chmod_mode_and_targets<'a>(rest: &[&'a str]) -> (Option<&'a str>, Vec<&'a str>) {
-    let mut mode: Option<&'a str> = None;
+    spec_and_targets(rest, is_chmod_option)
+}
+
+/// Split `chown`/`chgrp` arguments into the OWNER spec and the file operands.
+fn chown_owner_and_targets<'a>(rest: &[&'a str]) -> (Option<&'a str>, Vec<&'a str>) {
+    spec_and_targets(rest, is_chown_option)
+}
+
+/// Split `rest` into the leading spec operand (a chmod MODE, a chown OWNER) and
+/// the file operands, skipping option flags and redirect punctuation.
+///
+/// `--reference=FILE` takes the spec from another file, so the command has NO
+/// spec operand and the first non-option token is already a TARGET. Consuming it
+/// as the spec anyway made the target invisible to every protected-path check
+/// downstream — measured 2026-09-07 on the deployed rules:
+/// `chmod --reference=/tmp/x .githooks/pre-commit` was `Allow`, while the same
+/// command spelled `chmod 000 .githooks/pre-commit` was a Deny. One off-by-one,
+/// both verbs, the entire disarm class walked through it.
+fn spec_and_targets<'a>(
+    rest: &[&'a str],
+    is_option: fn(&str) -> bool,
+) -> (Option<&'a str>, Vec<&'a str>) {
+    let mut spec: Option<&'a str> = None;
+    // `--reference=` already supplied the spec, so no operand is one.
+    let mut spec_taken = rest.iter().any(|t| t.starts_with("--reference="));
+    // Tracked separately from `spec_taken`: with `--reference=` the spec is
+    // taken before the scan starts, and option flags must still be skipped
+    // rather than collected as file operands.
+    let mut seen_positional = false;
     let mut targets: Vec<&'a str> = Vec::new();
     let mut end_of_options = false;
     let mut i = 0;
@@ -3877,21 +3952,29 @@ fn chmod_mode_and_targets<'a>(rest: &[&'a str]) -> (Option<&'a str>, Vec<&'a str
             // `positional_operands`, so "what counts as an operand" stays one
             // definition).
             i += 2;
-        } else if is_redirect_token(t) || (!end_of_options && mode.is_none() && is_chmod_option(t))
-        {
-            // Redirect punctuation the shell consumes, or one of chmod's own
-            // option flags: neither is a mode and neither is a file operand.
+        } else if is_redirect_token(t) || (!end_of_options && !seen_positional && is_option(t)) {
+            // Redirect punctuation the shell consumes, or one of the command's
+            // own option flags: neither is a spec and neither is a file operand.
             i += 1;
         } else {
-            if mode.is_none() {
-                mode = Some(t);
-            } else {
+            seen_positional = true;
+            if spec_taken {
                 targets.push(t);
+            } else {
+                spec = Some(t);
+                spec_taken = true;
             }
             i += 1;
         }
     }
-    (mode, targets)
+    (spec, targets)
+}
+
+/// `chown`/`chgrp` accept every flag [`is_chmod_option`] lists, plus `--from=`
+/// (chown only). Kept as a superset rather than a separate table so a flag added
+/// to one verb cannot silently become a positional operand on the other.
+fn is_chown_option(tok: &str) -> bool {
+    tok.starts_with("--from=") || is_chmod_option(tok)
 }
 
 /// True when `mode` takes executability AWAY from the file's owner.

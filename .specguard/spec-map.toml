@@ -1,4 +1,4 @@
-last_synced = "f745617592a7101dd60737f0ae187d937a29e757"
+last_synced = "e46cf146854347b149308a9982a4df7c1c654538"
 
 [entries.".gitattributes"]
 key = ".gitattributes"
@@ -1424,7 +1424,7 @@ key = "crates/condukt/src/worktree.rs"
 kind = "feature"
 spec_doc = "docs/specs/condukt.md"
 status = "changed"
-last_ref = "b896ae0c9e2494f6d2d0f3db59bd3165a7a4f271"
+last_ref = "e46cf146854347b149308a9982a4df7c1c654538"
 impl_files = ["crates/condukt/src/worktree.rs"]
 test_files = []
 client_refs = []

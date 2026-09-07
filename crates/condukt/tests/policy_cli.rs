@@ -136,8 +136,55 @@ fn auto_verdict_honours_the_recommend_index() {
     );
 }
 
+/// Every row of the decision journal under `dir`, parsed. A missing file is a
+/// failure: a resolved verdict must be on the record (see
+/// [`assert_journaled_as_non_answer`] for why silence is not acceptable here).
+fn journal_rows(dir: &std::path::Path) -> Vec<serde_json::Value> {
+    let path = dir.join("gate-decisions.jsonl");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "a resolved verdict must be journaled at {}: {e}",
+            path.display()
+        )
+    });
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("each journal line is one JSON object"))
+        .collect()
+}
+
+/// The verdict was RECORDED but nothing was ANSWERED.
+///
+/// These tests used to assert "the journal file does not exist". That proxy
+/// stood for "no self-answer was recorded", and it broke on 2026-09-07 when
+/// condukt started journaling every resolved verdict — while the property it
+/// stood for held. Asserting the property directly is strictly stronger: the
+/// old check could not distinguish an unwritten journal from one containing a
+/// forged `auto` row, and it also could not catch the opposite failure (a real
+/// decision that left no trace at all).
+fn assert_journaled_as_non_answer(dir: &std::path::Path, expected_policy: &str) {
+    let rows = journal_rows(dir);
+    assert_eq!(rows.len(), 1, "exactly one decision was made: {rows:?}");
+    assert_eq!(
+        rows[0]["policy"],
+        serde_json::json!(expected_policy),
+        "the row must record the verdict that actually happened: {rows:?}"
+    );
+    assert!(
+        rows[0]["chosen"].is_null(),
+        "a {expected_policy} answered nothing, so `chosen` must be null: {rows:?}"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|r| r["policy"] == serde_json::json!("auto")),
+        "no row may claim `auto` — that is what downstream counts as \
+         \"passed a gate without a human\": {rows:?}"
+    );
+}
+
 #[test]
-fn escalate_verdict_falls_through_without_journaling() {
+fn escalate_verdict_falls_through_and_is_journaled_as_a_non_answer() {
     let dir = tempfile::tempdir().unwrap();
     let (stdout, code) = answer_in(dir.path(), "medium", "medium", "medium", "0");
     assert_eq!(code, 2, "escalate must exit 2; stdout={stdout:?}");
@@ -146,11 +193,10 @@ fn escalate_verdict_falls_through_without_journaling() {
         "escalate must not self-answer; got {stdout:?}"
     );
     assert!(stdout.contains("escalate"), "got {stdout:?}");
-    // Nothing was self-answered, so nothing is journaled.
-    assert!(
-        !dir.path().join("gate-decisions.jsonl").exists(),
-        "escalate must not write the decision log"
-    );
+    // Nothing was self-answered — but the DECISION is still recorded, because
+    // "the gate never fired" and "the gate fired and a human was asked" must
+    // not be the same silence in `condukt policy answers`.
+    assert_journaled_as_non_answer(dir.path(), "escalate");
 }
 
 #[test]
@@ -160,7 +206,7 @@ fn block_verdict_is_a_hard_stop_exit_3() {
     assert_eq!(code, 3, "block must exit 3; stdout={stdout:?}");
     assert!(stdout.contains("\"answered\":false"), "got {stdout:?}");
     assert!(stdout.contains("block"), "got {stdout:?}");
-    assert!(!dir.path().join("gate-decisions.jsonl").exists());
+    assert_journaled_as_non_answer(dir.path(), "block");
 }
 
 #[test]
@@ -169,9 +215,10 @@ fn answers_reader_replays_the_audit_trail() {
     // Self-answer two questions...
     let _ = answer_in(dir.path(), "low", "high", "high", "0");
     let _ = answer_in(dir.path(), "low", "high", "high", "1");
-    // ...an escalate must NOT be logged...
+    // ...and one escalate, which IS logged (as a decision, not an answer)...
     let _ = answer_in(dir.path(), "medium", "medium", "medium", "0");
-    // ...then the reader replays exactly the two self-answers as JSONL.
+    // ...then the reader replays all three rows as JSONL, in file order, with
+    // the two self-answers distinguishable from the escalate by `chosen`.
     let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
         .args([
             "policy",
@@ -186,11 +233,48 @@ fn answers_reader_replays_the_audit_trail() {
     let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
     assert_eq!(
         lines.len(),
-        2,
-        "only the two auto-answers are logged: {stdout:?}"
+        3,
+        "two self-answers plus the escalate decision are logged: {stdout:?}"
     );
-    assert!(lines[0].contains("\"chosen\":\"adopt\""), "{}", lines[0]);
-    assert!(lines[1].contains("\"chosen\":\"revise\""), "{}", lines[1]);
+    let rows: Vec<serde_json::Value> = lines
+        .iter()
+        .map(|l| serde_json::from_str(l).expect("each replayed line is one JSON object"))
+        .collect();
+    // The two self-answers carry the option they picked...
+    assert_eq!(rows[0]["policy"], serde_json::json!("auto"), "{}", lines[0]);
+    assert_eq!(
+        rows[0]["chosen"],
+        serde_json::json!("adopt"),
+        "{}",
+        lines[0]
+    );
+    assert_eq!(rows[1]["policy"], serde_json::json!("auto"), "{}", lines[1]);
+    assert_eq!(
+        rows[1]["chosen"],
+        serde_json::json!("revise"),
+        "{}",
+        lines[1]
+    );
+    // ...and the escalate carries none: it is a recorded DECISION to ask a
+    // human, and must never be readable as an auto-approval.
+    assert_eq!(
+        rows[2]["policy"],
+        serde_json::json!("escalate"),
+        "{}",
+        lines[2]
+    );
+    assert!(
+        rows[2]["chosen"].is_null(),
+        "an escalate answered nothing: {}",
+        lines[2]
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|r| r["policy"] == serde_json::json!("auto"))
+            .count(),
+        2,
+        "exactly two rows may read as auto-approved: {stdout:?}"
+    );
 }
 
 #[test]

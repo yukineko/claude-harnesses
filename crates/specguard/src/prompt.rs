@@ -8,8 +8,10 @@
 //! the live canon files, which keeps the prompt from drifting against them.
 
 use crate::config::Config;
+use crate::coverage::{self, Coverage};
 use crate::parse::MARKER;
 use crate::scope::{AreaHit, Scope};
+use harness_core::verdict::Determination;
 
 /// The embedded default template. Override via `[prompt].template`.
 pub const DEFAULT_TEMPLATE: &str = include_str!("../templates/audit-prompt.md");
@@ -456,13 +458,25 @@ fn area_block_one(cfg: &Config, hit: &AreaHit) -> String {
 /// Render the pre-task spec briefing. Unlike an audit shard there is no git
 /// scope: a brief lists EVERY configured area (with its canon pointers) plus all
 /// invariants, and the agent routes from the task text to the relevant ones.
-pub fn render_brief(template: &str, cfg: &Config, task: &str, date: &str) -> String {
+/// `coverage` is the ALREADY-RESOLVED canon-coverage determination, passed in
+/// rather than computed here so the prose and `brief --json`'s `verdict` field
+/// are two renderings of one value (specs/spec-loop.toml R3 acceptance 3). A
+/// second resolution inside this function would be exactly the parallel
+/// implementation that requirement forbids.
+pub fn render_brief(
+    template: &str,
+    cfg: &Config,
+    task: &str,
+    date: &str,
+    coverage: &Determination<Coverage>,
+) -> String {
     template
         .replace("{{PROJECT_NAME}}", &cfg.project.name)
         .replace("{{DATE}}", date)
         .replace("{{TASK}}", task.trim())
         .replace("{{AREAS}}", &brief_areas_block(cfg))
         .replace("{{INVARIANTS}}", &invariants_block(cfg))
+        .replace("{{COVERAGE}}", &coverage::block(coverage))
 }
 
 /// Every configured area as a markdown block: name, impl globs, and canon
@@ -926,5 +940,96 @@ mod tests {
             !out.contains("diff-scoped only"),
             "untouched always=false excluded: {out}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // specs/spec-loop.toml R3 acceptance 3 — "verdict は散文と同じ scope 解決から
+    // 導かれる（並走する第2実装ではない）". These pin that `render_brief` RENDERS a
+    // determination handed to it and never resolves one of its own.
+    // -----------------------------------------------------------------------
+
+    /// The prose comes from the caller's already-resolved value.
+    ///
+    /// Both the entry key and the undetermined reason used here are sentinels
+    /// that exist in NO spec map: a `render_brief` that resolved coverage itself
+    /// (from `cfg.map.path`, or from anywhere else) could not possibly emit
+    /// them. So this fails if the rendering is ever fed by a second resolver —
+    /// and it fails to COMPILE if the parameter is dropped, which is the same
+    /// signal one step earlier.
+    #[test]
+    fn render_brief_renders_the_passed_determination_not_a_recomputed_one() {
+        let cfg = sample_cfg();
+
+        let covered = Determination::Known(Coverage::Covered {
+            entries: vec!["SENTINEL-ENTRY-NOT-IN-ANY-STORE".to_string()],
+        });
+        let out = render_brief(BRIEF_TEMPLATE, &cfg, "add a thing", "2026-01-01", &covered);
+        assert!(
+            out.contains("SENTINEL-ENTRY-NOT-IN-ANY-STORE"),
+            "the rendered brief must carry the caller's determination verbatim; \
+             a locally recomputed one could never produce this key: {out}"
+        );
+        assert!(out.contains("**covered**"), "states the verdict: {out}");
+        assert!(!out.contains("{{"), "no leftover placeholders: {out}");
+
+        let undet: Determination<Coverage> =
+            Determination::undetermined("SENTINEL-REASON-NOT-DERIVABLE-FROM-ANY-STORE");
+        let out = render_brief(BRIEF_TEMPLATE, &cfg, "add a thing", "2026-01-01", &undet);
+        assert!(
+            out.contains("SENTINEL-REASON-NOT-DERIVABLE-FROM-ANY-STORE"),
+            "the undetermined reason must travel into the prose: {out}"
+        );
+        assert!(
+            out.contains("**undetermined**"),
+            "states undetermined: {out}"
+        );
+        assert!(
+            !out.contains("**not-covered**"),
+            "undetermined must not be rendered as 'no canon exists': {out}"
+        );
+    }
+
+    /// Stronger than "they agree": the brief embeds `coverage::block(&d)`
+    /// CHARACTER FOR CHARACTER, so the prose is literally the same rendering
+    /// function the `--json` verdict token comes from. A second, independently
+    /// worded coverage section — even one that happened to reach the same
+    /// conclusion — breaks this.
+    #[test]
+    fn render_brief_embeds_the_shared_coverage_block_verbatim() {
+        let cfg = sample_cfg();
+        let cases: Vec<Determination<Coverage>> = vec![
+            Determination::Known(Coverage::Covered {
+                entries: vec!["ent-A".to_string(), "ent-B".to_string()],
+            }),
+            Determination::Known(Coverage::NotCovered {
+                matched_without_spec: vec!["ent-C".to_string()],
+            }),
+            Determination::Known(Coverage::NotCovered {
+                matched_without_spec: vec![],
+            }),
+            Determination::undetermined("store unreadable"),
+        ];
+        for d in &cases {
+            let out = render_brief(BRIEF_TEMPLATE, &cfg, "add a thing", "2026-01-01", d);
+            let block = coverage::block(d);
+            assert!(
+                out.contains(&block),
+                "brief must embed coverage::block() verbatim.\n--- expected block ---\n{block}\n--- rendered ---\n{out}"
+            );
+            // ...and exactly one verdict is stated in the whole document.
+            let stated: Vec<&str> = [
+                coverage::COVERED,
+                coverage::NOT_COVERED,
+                coverage::UNDETERMINED,
+            ]
+            .into_iter()
+            .filter(|t| out.contains(&format!("**{t}**")))
+            .collect();
+            assert_eq!(
+                stated,
+                vec![coverage::verdict_token(d)],
+                "the brief must state exactly the caller's verdict, once: {stated:?}"
+            );
+        }
     }
 }

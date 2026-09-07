@@ -15,7 +15,15 @@ SOURCE（課題の供給）              EXECUTOR（解決手段の実行）
   backlog    … 確定済みキュー        ├─▶  condukt（fugu-router がモデル選択）─▶ verify
   hypothesis … 計測待ちの PDO 仮説   │
   prompt     … ユーザー直の課題文   ─┘
+                                     │
+  specforge  … spec-gap の戻り経路   ◀┘  正典が無い課題は実装フェーズへ通さず
+       └──▶ ratify ──▶ backlog ──▶ (次の周回で flow が拾う)
 ```
+
+> **4番目の source は「戻り経路」**（`specs/spec-loop.toml` R4）。他の3つが課題を*供給*するのに対し、
+> これは executor へ渡す前に **source へ差し戻す辺**である。正典（spec）が無いと分かった課題を
+> condukt へ盲目投入せず `specforge` へ戻し、draft → ratify が通れば要件が backlog に積まれ、
+> 次の周回で拾われる。詳細は Step 3-1.5。
 
 > `hypothesis` は PDO discovery の出力（検証したい仮説）を実行へ繋ぐ source。**2 相**で扱う:
 > ① **open** な仮説 → **RAT ゲート**（Step 3-1 の 4）を先に通す: 未テストの高リスク×弱証拠 assumption
@@ -151,6 +159,7 @@ pre-commit・pre-push フック。`--approval` はそれらに一切触れない
 | **condukt Phase 3 の合意**（「この schedule で進む?」） | 権限認可 | schedule 由来 | high | schedule 由来 | **付ける** | auto | 提示した schedule のまま進む |
 | **pivot-check**（Step 4・`pivot`） | **判断要求** | medium | high | low | 付けない | **escalate** | —（genuine な戦略判断なので人に聞く。既定案＝継続/persevere） |
 | **worker が blocked**（condukt Phase 5） | **判断要求** | medium | medium | low | 付けない | **escalate** | —（実装が詰まった＝人間の判断が要る） |
+| **spec-gap divert**（3-1.5・open_questions / confidence:low / brief verdict=not-covered） | **判断要求** | medium | high | low | 付けない | **escalate** | —（「正典が無いまま実装させるか」は設計判断。3値は R4 の acceptance が固定） |
 | **merge conflict の pick-a-side** | **判断要求** | — | — | — | `--conflict` | **escalate** | —（自動 pick は last-writer-wins） |
 | **測れない決定**（CLAUDE.md §2） | **判断要求** | — | — | — | `--untestable` | **escalate** | —（測れないという事実こそ人間が知るべき情報） |
 | **循環ブレーカー trip**（早期脱出・`condukt circuit check`） | 決定論 stop | — | — | — | — | **人にも policy にも聞かない clean stop** | —（ループを止め Step 4 へ） |
@@ -165,6 +174,8 @@ pre-commit・pre-push フック。`--approval` はそれらに一切触れない
 
 **安全不変条件（自律でも残す停止）**: 自律モードで残る human stop は **(a) worker が blocked**、
 **(b) pivot**（genuine な戦略判断）、**(c) merge conflict の pick-a-side と §2 の測れない決定**、
+**(d) spec-gap divert**（3-1.5。「正典が無いまま実装させるか」は設計判断であり、
+risk medium / reversible high / confidence low ＝ pivot と同じプロファイルで escalate する）、
 および **policy answer が block を返したゲート**。**deploy/push の GATED 承認は 2026-08-07 の常設許諾により
 auto へ移した**（block が返れば止まる。実際の防護は blastguard 等の deterministic gate が担う）。
 その他の routine な human gate も policy-answer の auto で自答され Yes/No は消える（**全件が
@@ -357,6 +368,102 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
    （3-1 の claim-skip ゲートと 3-2 の condukt 起動の間の隙間を塞ぐ最終ガード）。
    `condukt` が無い/失敗した場合は fail-soft（従来どおり実行を続行）。
 
+#### 3-1.5. spec-gap ゲート — 正典が無い課題を condukt へ盲目投入しない（4番目の source）
+
+**`/flow` の4番目の source は「戻り経路」である。** 課題に正典（spec）が無いと分かったら、
+そのまま condukt の実装フェーズへ進めず **`specforge` へ戻す**。specforge が draft し ratify すると、
+その要件が backlog に積まれ、次の周回で `/flow` がそれを拾う。source が1本増えるのではなく、
+**executor へ渡す前に source へ差し戻す辺が1本増える**。
+
+**trigger は3つ**（どれか1つで発火。`specs/spec-loop.toml` の R4-flow-spec-gap-source が正典）:
+
+| trigger | 取得点 | 取得方法 |
+|---|---|---|
+| 1. condukt interpreter が `open_questions` を出した | condukt Phase 1 の直後 | 3-2 の起動条件（下記） |
+| 2. task が `confidence: low` を持つ | condukt Phase 1 の Decomposition | 3-2 の起動条件（下記） |
+| 3. specguard brief が `verdict=not-covered` を返した | flow のプリフライト（condukt 起動前） | 下記 |
+
+##### trigger 3 — プリフライト（決定論。condukt を起こす前に測る）
+
+```bash
+BRIEF=$(specguard brief --json "<課題文の要約>" 2>/dev/null); rc=$?
+```
+
+`specguard brief --json` は **三値**（`covered` / `not-covered` / `undetermined`）を返し、
+**exit code にも同じ三値を載せる**（0=判定できた / 10=`undetermined`）。分岐は次のとおり:
+
+- **rc=0 かつ `verdict` が `covered`** → 正典がある。divert せず 3-2 へ進む。
+- **rc=0 かつ `verdict` が `not-covered`** → **divert 候補**。下の合意ゲートへ。
+- **それ以外すべて**（rc=10 / `specguard` 不在 / 出力が読めない / `verdict` フィールドが無い）
+  → **`undetermined` として扱い、divert しない**。`not-covered` へ丸めてはならない。
+  代わりに「正典の有無を観測できなかった」ことを**残課題として人間に surface** し、
+  その課題自体は通常どおり 3-2 へ進める。
+
+> **なぜ undetermined を not-covered へ落としてはいけないか。** `not-covered` は specforge に
+> **新しい spec を書かせる**。判定不能をそこへ流すと「読めなかった」が「仕様が無い」に化け、
+> 既に正典がある領域に二重の spec を起こす。これは CLAUDE.md 第3節が禁じる置換そのもので、
+> `crates/blastguard/src/model.rs` が二値型の欠陥として名指ししている形である。
+> **fail-safe の向きに注意**: ここでの安全側は「divert しない」であって「divert する」ではない。
+> divert は書き込み側の動作なので、判定不能で起こしてはならない。
+
+##### 合意ゲート（`condukt policy answer` 経由。素の `AskUserQuestion` は使わない）
+
+trigger 1/2/3 のいずれかが立ったら、**divert するか否か**を Step 0.5 の policy-answer routing に通す。
+これは**判断要求**なので **`--approval` を付けない**（付けると権限認可に化けて自答され、
+「仕様が無いまま実装させるか」という設計判断が消える）:
+
+```bash
+condukt policy answer \
+  --risk medium --reversible high --confidence low \
+  --question "この課題は正典が無い (<発火した trigger>)。specforge へ戻すか、このまま condukt で実装するか?" \
+  --option "specforge へ divert して spec を起こす" --option "このまま condukt で実装する" --recommend 0
+```
+
+risk/reversible/confidence の3値は R4 の acceptance が指定した固定値であり、ここで変えない。
+既定 verdict は **escalate**（`medium − high − low` は auto の閾値に届かない）。exit code の扱いは
+Step 0.5 の表に従う（escalate と各フォールバックは人間へ、block は停止）。**この経路を通さず
+素の `AskUserQuestion` を直接出すことは禁止** — 通さないと自答も escalate も
+`gate-decisions.jsonl` に残らず、`condukt policy answers` で後から監査できなくなる。
+ゲートを消すのではなく、記録を伴って通すことがここの要件である。
+
+##### divert したときにやること
+
+**この起動形は実測で通したものである**（2026-09-07、specguard 0.2.54、使い捨て git repo で
+draft→ratify→backlog を通しで実行）。`specforge draft` に課題文を**位置引数で渡すことはできない**
+（`error: unexpected argument`）。`--req <file>` か **stdin** で渡し、`--id` は必須。
+`ratify` も `--reason` が必須である（無いと clap が required-argument エラーで落ちる）:
+
+```bash
+# 課題文はファイル経由か stdin。--id は必須（spec は <spec_dir>/<id>.toml になる）。
+printf '%s\n' "<課題文>" > "$req"
+specforge draft --id <spec id> --title "<課題タイトル>" --req "$req"   # 正規化 + rigor ゲート
+
+# 人間の合意儀式。--reason は必須。通れば要件ごとに backlog item を自動 queue する。
+specforge ratify --id <spec id> --reason "<なぜこの spec を受け入れるか>"
+```
+
+`specforge` は `specforge.toml` が無いと **exit 2 で拒否する**（存在しない project を推測で
+でっち上げない fail-closed。repo root の `specforge.toml` がその設定）。差し戻し先が未設定の repo で
+この経路を踏んだら、それは「spec が無い」ではなく「**spec loop が配線されていない**」であり、
+divert を強行せず人間へ返すこと。
+
+- `ratify` が通れば、その spec 由来の項目が backlog に現れ、**flow は次の周回でそれを拾う**
+  （3-1 の 3 が通常どおり `next --claim` する）。これは散文ではなく**実測**である
+  （2026-09-07、使い捨て git repo。`ratify` が
+  `backlog: 3 件を起票 / 0 件は起票済み (計 3 requirement)` を出力し、直後の
+  `backlog list --status pending` に `[r4demo:R1]`〜`[r4demo:R3]` の3件が `p1 / pending` で並んだ。
+  実 repo の `.backlog/tasks.toml` は無変更で、`r4demo` の grep は 0 ヒット）。
+- 元の課題は `backlog fail <id> --reason ...` **ではなく pending に戻す**
+  （`backlog edit <id> --status pending`）。spec 由来の要件が先に処理され、元の課題は
+  正典を得た状態で再度回ってくる。**`fail` にしてはいけない** — spec が無かったことは
+  その課題の失敗ではないし、`fail` はキューから落ちるので次の周回で拾われなくなる。
+- `ratify` が**通らなければ**（contract floor 違反で非0終了）、それは仕様が実行可能でないということ。
+  specforge が非0で理由を出すので、**その理由を添えて人間へ返す**（R0 の停止基準）。
+- **divert 回数を数えて止めるカウンタを足してはならない。** ループの停止は R0 の
+  ratify contract floor（`Spec::contract_violations()` が空）で決まる。回数はプロキシであり、
+  「その spec が実行可能になったか」という本当に知りたいことを測っていない
+  （backlog 09148819 の notes が 2026-07-31 にこの案を明示的に RETRACT している）。
+
 #### 3-2. condukt で実行（fugu-router がモデル選択）
 
 課題文を `/condukt` に渡す。condukt が分解 JSON を出したら、`fugu-router` が各タスクの `suggested_model` を実績から上書きする（併用時）:
@@ -366,6 +473,14 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
 ```
 
 - `/condukt` は **`Task` ツールで非同期起動**（オーケストレーション継続のため）。
+- **spec-gap trigger 1/2 は Phase 1 の出力から取る（3-1.5 の続き）**: 課題文に
+  「**Decomposition（Phase 1〜2）まで進んだ時点で、いずれかのタスクに `open_questions` 相当が
+  出たか、`confidence` が `low` のものがあれば、Phase 5（実装）へ進まずその事実を報告して停止せよ**」
+  を明記して渡す。停止して戻ってきたら **3-1.5 の合意ゲート**へ入り、divert が選ばれたら
+  specforge へ、選ばれなければ同じ Decomposition のまま `/condukt` を実装フェーズから再開させる。
+  **止めるのは実装フェーズであって分解ではない** — R4 の acceptance が「condukt 実装フェーズへ
+  進まず」と書いているのは、trigger 1/2 の観測点が Phase 1 の出力そのものだからである
+  （分解を止めると trigger が取れない）。
 - compass 由来の一手なら、`north_star / current_gap / measuring_stick` を文脈として課題文に添える。
 - **backlog バッチは 1 回の `/condukt` 呼び出し**（1 セッション内で複数 condukt run を並走させない＝
   worktree / merge 競合を増やさない。別セッションの `/flow` と並走するのは前提どおり問題ない）。並列化は condukt 内部（Phase 5 の worktree 並列 + schedule.rs のバッチ）が担う。
@@ -580,10 +695,10 @@ compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"thresh
 - **YES/NO の権限認可には `--approval` を付け、判断を求める Ask には付けない（Step 0.5 の表）**。
   権限認可（排他ロック競合＝stand down、resume＝優先 pick 先頭、**deploy/push の GATED 承認**、
   condukt Phase 3 の合意）は 2026-08-07 の常設許諾により auto で消える。
-  判断要求（**pivot** / **worker blocked** / merge conflict の pick-a-side / §2 の測れない決定）は
-  escalate のまま残す。**迷ったら `--approval` を付けない** — 付け忘れは冗長な質問で済むが、
-  付け間違いは人間の判断を消す。
+  判断要求（**pivot** / **worker blocked** / merge conflict の pick-a-side / §2 の測れない決定 /
+  **spec-gap divert**）は escalate のまま残す。**迷ったら `--approval` を付けない** —
+  付け忘れは冗長な質問で済むが、付け間違いは人間の判断を消す。
   自律で残る停止は **(a) worker blocked** **(b) pivot** **(c) conflict/untestable の判断要求**
-  **(d) budgetguard 早期脱出**、および policy が **block** を返したゲート。
+  **(d) spec-gap divert（3-1.5）** **(e) budgetguard 早期脱出**、および policy が **block** を返したゲート。
   exit 1（既定・非自律）は**従来どおり全 Ask を維持**（後方互換。`--approval` もそこでは不活性）。
   存在しない版（exit 127）は非自律とみなす。

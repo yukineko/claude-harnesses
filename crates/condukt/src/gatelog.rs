@@ -5,34 +5,67 @@
 //! concrete question so a caller (the condukt/scout/flow skills) can stop
 //! relying on the model obeying prose to "skip the AskUserQuestion when
 //! autonomous". When the verdict is [`Decision::Auto`] the question is
-//! self-answered with its pre-marked recommended option — no human prompt — and
-//! the choice is recorded to an append-only decision log for audit. On
+//! self-answered with its pre-marked recommended option — no human prompt. On
 //! `Escalate`/`Block` nothing is answered and the caller falls through to a
 //! real `AskUserQuestion` (escalate) or refuses (block).
 //!
+//! **Every resolved verdict is journaled**, not only the self-answered ones:
+//! `auto`, `escalate` and `block` each append one [`GateDecision`]. Journaling
+//! only `auto` made an escalated gate indistinguishable from a gate that never
+//! fired at all — see [`GateDecision`] for why that silence was a fail-open.
+//! [`AnswerOutcome::Invalid`] is the one outcome not journaled: no verdict was
+//! resolved, the input was rejected, and it says so on stderr with exit 1.
+//!
 //! The verdict→answer mapping is a pure function ([`answer_outcome`]) so the
 //! auto/escalate/exit-code contract is unit-testable without spawning a
-//! process, and the log I/O mirrors [`crate::checkpoint`]'s fail-soft
-//! append-only journal (a logging failure never breaks a turn).
+//! process. The log I/O mirrors [`crate::checkpoint`]'s append-only journal and
+//! inherits its fail-soft write: a failed append is swallowed and leaves no
+//! trace, which means a *write* failure still reads downstream as "no gate
+//! fired". That residual hole is filed as a backlog item rather than fixed here
+//! — closing it means changing `harness_core::append::append_line`, which is
+//! linked into every plugin.
 
 use crate::policy::Decision;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// One self-answered gate decision — the append-only audit record written when
-/// (and only when) a question is auto-answered.
+/// One gate decision — the append-only audit record written on **every**
+/// resolved verdict, not only the self-answered ones.
+///
+/// This used to journal `auto` alone, on the reasoning that "escalate/block are
+/// never journaled because nothing was answered". That reasoning confused
+/// *answering* with *deciding*. An escalate IS a decision: the policy examined
+/// the gate and ruled that a human must rule on it. Recording only the
+/// self-answers left `condukt policy answers` unable to distinguish "this gate
+/// never fired" from "this gate fired and went to a human" — the two collapse
+/// into the same silence, which is precisely the reading CLAUDE.md 第1節 names
+/// as a fail-open (沈黙は許容される degrade ではない). It also made
+/// `specs/spec-loop.toml` R4's second acceptance criterion — "divert の可否は
+/// `condukt policy answer` を通り、`condukt policy answers` に記録が残る" —
+/// unsatisfiable for its own default verdict, which is `escalate`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GateDecision {
     /// The question that was asked.
     pub question: String,
     /// The options that were offered.
     pub options: Vec<String>,
-    /// 0-based index of the recommended (and, on auto, chosen) option.
+    /// 0-based index of the recommended option, exactly as the caller supplied
+    /// it. On `auto` it is also the chosen one and is guaranteed in range —
+    /// an out-of-range index there is [`AnswerOutcome::Invalid`], which is
+    /// rejected rather than journaled. On `escalate`/`block` nothing is chosen,
+    /// so the index is advisory and is recorded unvalidated: it says what the
+    /// caller recommended, not what was picked.
     pub recommend_index: usize,
-    /// The option that was chosen (== `options[recommend_index]`).
-    pub chosen: String,
-    /// The policy verdict that authorised the self-answer (always "auto" here —
-    /// escalate/block are never journaled because nothing was answered).
+    /// The option that was chosen (== `options[recommend_index]`), or `None`
+    /// when the policy answered nothing (`escalate`/`block`).
+    ///
+    /// `Option<String>` rather than an empty string on purpose: `""` is a
+    /// legal option text, so an empty `chosen` would be indistinguishable from
+    /// "chose the empty option". Records written before this field became
+    /// optional carry a bare string and still deserialize, as `Some`.
+    pub chosen: Option<String>,
+    /// The policy verdict that produced this record: `"auto"` (self-answered
+    /// with `chosen`), `"escalate"` (handed to a human), or `"block"` (refused).
     pub policy: String,
     /// Unix seconds when the decision was recorded.
     pub created_at: i64,
@@ -424,7 +457,7 @@ mod tests {
             question: q.to_string(),
             options: opts(),
             recommend_index: 0,
-            chosen: "adopt".to_string(),
+            chosen: Some("adopt".to_string()),
             policy: "auto".to_string(),
             created_at: at,
         };
@@ -494,7 +527,7 @@ mod tests {
             question: "ok?".to_string(),
             options: opts(),
             recommend_index: 0,
-            chosen: "adopt".to_string(),
+            chosen: Some("adopt".to_string()),
             policy: "auto".to_string(),
             created_at: 1,
         };
@@ -532,7 +565,7 @@ mod tests {
                             question: format!("q{}_{}", t, i),
                             options: vec!["a".to_string(), "b".to_string()],
                             recommend_index: 0,
-                            chosen: "a".to_string(),
+                            chosen: Some("a".to_string()),
                             policy: "auto".to_string(),
                             created_at: (t * 1000 + i) as i64,
                         };

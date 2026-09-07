@@ -3044,22 +3044,41 @@ fn run_policy(action: PolicyAction) -> ! {
                 risk, reversible, confidence, conflict, untestable, approval,
             );
             let outcome = gatelog::answer_outcome(decision, &options, recommend);
+
+            // Journal EVERY resolved verdict, not just the self-answered ones.
+            // An escalate is a decision (the policy ruled that a human must
+            // rule), and recording only `auto` made "this gate never fired"
+            // and "this gate fired and went to a human" the same silence in
+            // `condukt policy answers`. `Invalid` is deliberately not journaled:
+            // no verdict was resolved there, the input was rejected, and it says
+            // so loudly on stderr with exit 1 rather than passing as a decision.
+            let policy_label = match &outcome {
+                gatelog::AnswerOutcome::Answered { .. } => Some("auto"),
+                gatelog::AnswerOutcome::Escalate => Some("escalate"),
+                gatelog::AnswerOutcome::Block => Some("block"),
+                gatelog::AnswerOutcome::Invalid => None,
+            };
+            if let Some(label) = policy_label {
+                let dir = journal_dir.unwrap_or_else(|| config::Config::load().state_dir);
+                let entry = gatelog::GateDecision {
+                    question,
+                    options: options.clone(),
+                    recommend_index: recommend,
+                    chosen: match &outcome {
+                        gatelog::AnswerOutcome::Answered { chosen, .. } => Some(chosen.clone()),
+                        _ => None,
+                    },
+                    policy: label.to_string(),
+                    created_at: state::now_secs(),
+                };
+                gatelog::append_decision(&dir, &entry);
+            }
+
             match &outcome {
                 gatelog::AnswerOutcome::Answered {
                     chosen,
                     recommend_index,
                 } => {
-                    // Self-answer: record the choice for audit, then emit it.
-                    let dir = journal_dir.unwrap_or_else(|| config::Config::load().state_dir);
-                    let entry = gatelog::GateDecision {
-                        question,
-                        options: options.clone(),
-                        recommend_index: *recommend_index,
-                        chosen: chosen.clone(),
-                        policy: "auto".to_string(),
-                        created_at: state::now_secs(),
-                    };
-                    gatelog::append_decision(&dir, &entry);
                     // Serialize `chosen` so quotes/backslashes in an option can't
                     // break the JSON line.
                     let chosen_json =

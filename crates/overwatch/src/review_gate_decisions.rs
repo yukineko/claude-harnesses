@@ -41,13 +41,25 @@
 //!
 //! condukt's on-disk shape (`crates/condukt/src/gatelog.rs`) is one JSON
 //! object per line (JSONL), each a `GateDecision { question, options,
-//! recommend_index, chosen, policy, created_at }`. Only `policy == "auto"`
-//! rows are ever journaled (escalate/block are never recorded because
-//! nothing was self-answered) — so every row on disk today IS an
-//! auto-approved decision. [`AutoApprovedDecision`] is a MINIMAL mirror
-//! carrying the same fields; every field is `#[serde(default)]` so a
-//! partial/older/foreign record (or a future condukt version that adds or
-//! drops a field) still parses instead of failing the whole read.
+//! recommend_index, chosen, policy, created_at }`.
+//!
+//! **condukt journals every resolved verdict**, so a row's `policy` is
+//! `"auto"`, `"escalate"` or `"block"` and NOT every row is auto-approved.
+//! (It journaled `auto` alone until 2026-09-07; recording only self-answers
+//! made an escalated gate indistinguishable from a gate that never fired.)
+//! This module's denominator is the auto-approved population specifically, so
+//! [`parse_auto_approved`] keeps `policy == "auto"` rows only — that filter
+//! was already written defensively for exactly this change and needed no
+//! adjustment when it landed. An `escalate`/`block` row carries
+//! `"chosen": null`, which is why [`AutoApprovedDecision::chosen`] is an
+//! `Option<String>`: with a bare `String` such a row fails to deserialize and
+//! is silently dropped by the line filter, which happens to give the right
+//! count here but hides the row for the wrong reason.
+//!
+//! [`AutoApprovedDecision`] is a MINIMAL mirror carrying the same fields;
+//! every field is `#[serde(default)]` so a partial/older/foreign record (or a
+//! future condukt version that adds or drops a field) still parses instead of
+//! failing the whole read.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -65,11 +77,16 @@ pub struct AutoApprovedDecision {
     /// 0-based index of the recommended (and, on auto, chosen) option.
     #[serde(default)]
     pub recommend_index: usize,
-    /// The option that was chosen (== `options[recommend_index]`).
+    /// The option that was chosen (== `options[recommend_index]`), or `None`
+    /// on a row where the policy answered nothing. Rows reaching this struct
+    /// after [`parse_auto_approved`] are always `Some` (the filter keeps only
+    /// `policy == "auto"`); the `Option` exists so an `escalate`/`block` row's
+    /// `"chosen": null` DESERIALIZES and is then filtered out deliberately,
+    /// rather than failing to parse and vanishing via the line filter.
     #[serde(default)]
-    pub chosen: String,
-    /// The policy verdict that authorised the self-answer (always "auto" in
-    /// today's condukt — escalate/block are never journaled).
+    pub chosen: Option<String>,
+    /// The policy verdict this row records: `"auto"`, `"escalate"` or
+    /// `"block"`. Only `"auto"` survives [`parse_auto_approved`].
     #[serde(default)]
     pub policy: String,
     /// Unix seconds when the decision was recorded.
@@ -81,9 +98,12 @@ pub struct AutoApprovedDecision {
 /// line) and return only rows with `policy == "auto"`. PURE and total: a
 /// corrupt/garbage line is skipped rather than failing the whole parse
 /// (mirrors `gatelog::load_decisions`' line-filter tolerance), and empty
-/// input yields an empty vec. The `policy == "auto"` filter is defensive —
-/// today every journaled row is auto — so "auto-approved population" stays
-/// explicit and robust to a future condukt that journals other verdicts.
+/// input yields an empty vec. The `policy == "auto"` filter is load-bearing,
+/// not decorative: condukt journals `escalate` and `block` rows too, and those
+/// went TO a human, so counting them in the auto-approved denominator would
+/// overstate how much passed without one. It was written defensively before
+/// condukt journaled anything but `auto`, which is why it needed no change
+/// when condukt started (2026-09-07).
 pub fn parse_auto_approved(txt: &str) -> Vec<AutoApprovedDecision> {
     txt.lines()
         .filter_map(|l| serde_json::from_str::<AutoApprovedDecision>(l).ok())
@@ -177,7 +197,7 @@ mod tests {
             question: question.to_string(),
             options: vec![chosen.to_string()],
             recommend_index: 0,
-            chosen: chosen.to_string(),
+            chosen: Some(chosen.to_string()),
             policy: policy.to_string(),
             created_at,
         }

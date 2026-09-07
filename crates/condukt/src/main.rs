@@ -1290,10 +1290,22 @@ enum PolicyAction {
         #[arg(long)]
         approval: bool,
     },
-    /// Print the auto-answer audit trail (JSONL): every question the policy
-    /// self-answered without prompting a human. The review surface for
-    /// hands-off autonomy — gates are skipped, but each self-answer is logged
-    /// and inspectable here. Prints nothing (exit 0) if the log is absent.
+    /// Print the gate-decision audit trail (JSONL): every question whose
+    /// verdict the policy resolved — `auto` (self-answered, `chosen` set),
+    /// `escalate` and `block` (no answer, `chosen` null). The review surface for
+    /// hands-off autonomy: an `auto` row says a gate was skipped with a recorded
+    /// answer, an `escalate`/`block` row says a gate fired and where it went.
+    ///
+    /// This used to print `auto` alone, described as "every question the policy
+    /// self-answered". That was a fail-open review surface: the gates that
+    /// actually stopped something left no trace, so an empty log read as "no
+    /// gate fired" when it in fact meant "nothing was auto-answered".
+    /// specs/spec-loop.toml R4 requires the divert gate's record to be
+    /// inspectable here, and that gate's default verdict is `escalate`.
+    ///
+    /// Invalid input is not journaled: no verdict was resolved, and it already
+    /// fails loudly on stderr with exit 1. Prints nothing (exit 0) if the log is
+    /// absent.
     Answers {
         /// Directory holding the decision log (default: the state dir).
         #[arg(long)]

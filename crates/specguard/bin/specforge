@@ -1,0 +1,36 @@
+#!/bin/sh
+# specforge plugin launcher — selects the per-platform binary bundled in this dir.
+#
+# specforge is the SOURCE-side half of the spec loop (gather / draft / prompt /
+# ratify). specs/spec-loop.toml R4 has /flow divert a spec-gap task here instead
+# of pushing it blindly into condukt, so this launcher is on a verdict path: a
+# caller that cannot run it has NOT established "no spec gap".
+#
+# It therefore fails CLOSED — a missing build exits non-zero with the reason on
+# stderr, so the absence of a spec draft can never be read as "the spec was
+# checked and nothing was needed" (CLAUDE.md 3). This deliberately differs from
+# the sibling `specguard` launcher, whose exit 0 on a missing binary is tracked
+# as a fail-open in its own backlog item.
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+ext=""
+[ "$os" = windows ] && ext=".exe"
+
+binary="$root/specforge-$os-$arch$ext"
+if [ ! -x "$binary" ]; then
+  echo "specforge: no bundled binary for $os-$arch ($binary). The spec loop did NOT run, so no spec was drafted or ratified — this is UNKNOWN, not 'no spec gap'. Build it with scripts/build-plugin-bin.sh specguard '' specforge on that platform." >&2
+  exit 1
+fi
+exec "$binary" "$@"

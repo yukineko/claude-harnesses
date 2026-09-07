@@ -14903,3 +14903,39 @@ jq が無い環境では両方とも実行できない。SKILL の手順が環�
 created_at = 1788754165
 updated_at = 1788754165
 weight = 0.0
+
+[[task]]
+id = "69fd9a91"
+title = 'Continuous-Audit round 4: CONFIRMED 19件に #[ignore = "CA-...: ..."] 回帰テストを追加し RED 観測後に audit-round record する（~15 crate の3ファイル lockstep bump + rollout、GATE 6本は --canary）'
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1788756374
+updated_at = 1788756374
+weight = 0.0
+
+[[task]]
+id = "4f3a653b"
+title = "CA-config-parse-001: toml::from_str の no-else fail-open が14 crate 横断 — 個別修正か Determination<FileConfig> 共通ローダかを決める"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1788756375
+updated_at = 1788756375
+weight = 0.0
+
+[[task]]
+id = "b56398ca"
+title = "CA-mutategate-006 / CA-stuckguard-006 / CA-parallelguard-002 の UNVERIFIED 3件を再検証し到達可能性を判定する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1788756375
+updated_at = 1788756375
+weight = 0.0

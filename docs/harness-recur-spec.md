@@ -94,14 +94,54 @@ crates/harness-recur/
 └── tests/
 ```
 
-状態は `${CLAUDE_PLUGIN_DATA}/harness-recur.db`（SQLite 単一ファイル）。
-プラグイン更新で消えてはいけないため `CLAUDE_PLUGIN_ROOT` ではなく `CLAUDE_PLUGIN_DATA` を使う。
+状態は `${CLAUDE_PLUGIN_DATA}/harness-recur/`。
+プラグイン更新で消えてはいけないため `CLAUDE_PLUGIN_ROOT` ではなく `CLAUDE_PLUGIN_DATA` を使う
+（公式ドキュメントで確認済み・2026-09-08、§12-5。`CLAUDE_PLUGIN_DATA` は Claude Code が
+プラグイン hook に自動設定し、`CLAUDE_PLUGIN_ROOT` と違ってプラグイン更新を生き延びる）。
+
+> **【要判断・未決】ストア形式を SQLite にするか。**
+> このワークスペースに `rusqlite` / `sqlite` の依存は **0 件**（実測 §12-1）。既存 39 crate の
+> 永続化はすべて追記 JSONL か JSON / TOML ファイルで、追記の原子性は
+> `harness_core::append::append_line` に集約されている（issue #15 の修正で 6 sink を統一済み）。
+> SQLite を入れると (a) ワークスペース初の C 依存、(b) 既存の append 不変条件の外側に
+> もう一系統の並行性モデル、が同時に増える。一方 §5.8 の「1,000 件で 20ms」と §5.3 の
+> 索引照合は SQLite の方が素直に書ける。**着手前に決めること。** 決めずに書き始めると後で移せない。
+> 以降に出てくる `CREATE TABLE` は**データモデルの記述**であって、SQLite の採用を確定した
+> ものではない。
+
+### 3.1 再実装してはいけない既存部品（実測 §12-2）
+
+このリポジトリは "independent reinvention"（同じ形の部品の再発明）を繰り返し検出してきた
+（統合の前例は `harness_core::callgraph` 冒頭）。harness-recur が必要とする部品のうち、
+**以下は既に存在する**。新規に書かず、これらを呼ぶこと。
+
+| 用途 | 既存部品 | 備考 |
+|---|---|---|
+| glob 照合 | `globset`（8 crate が採用）または `ctxrot::glob::matches` | **後者は壊れたパターンに `false` を返す** ＝ そのトリガは永久に発火しない fail-open。トリガに転用するなら判定不能を `Undetermined` にすること |
+| diff からの識別子抽出 | `harness_core::callgraph::changed_symbol_names(diff_text)` | §5.3-2 の入力そのもの |
+| call graph 深さ1 | `harness_core::callgraph::{load_graph, callers_of, callees_of}` | `load_graph` は `Determination` を返す（判定不能を表現済み） |
+| シンボル索引 | `harness_core::code_index::{extract_symbols, load_index}` | §8「索引外シンボル」の判定に使う |
+| 注入予算 | `harness_core::inject::CharBudget` ＋ `harness_core::inject_metrics::record` | §5.7 参照。**char 単位**であり token 単位ではない |
+| 注入済みフラグ | `context_governor::ledger::was_injected` | §5.5 の「ctxrot / context-governor が生存判定を持っている場合はそちらと接続」の接続先 |
+| 再発シグネチャ | `overwatch::violation::{normalize_signature, detect_recurrence}` | §5.6 の昇格条件（3 回以上の発火・誤発火ゼロ）の計数に転用できる |
+| transcript の streaming 読み | `harness_core::transcript` | usage トークンと直近 N ターンだけ。**M3 が要る「path 付き・順序付き・turn_index 付き」のイテレータは存在しない**（§6.3）ので、ここは harness-core への追加になる |
+| 劣化の単調性の検査 | `harness_core::degrade::{is_monotone, explain_break}` | 「入力を劣化させても判定が permissive 側へ動かない」という性質を proptest で探索する部品（**stderr 通知のヘルパではない**）。§8 の「DB 破損時」の挙動はこの性質のテストで固定すること。stderr への通知そのものは共有ヘルパが無く、各プラグインが直接書いている |
 
 ---
 
 ## 4. M1：session ↔ commit 紐付け（最優先・即日）
 
 **これが無いと M3 の逆引きが時刻近傍推定に劣化する。今日入れないと今日以降のデータも失われ続ける。**
+
+> **この主張は実測で裏づけられた。ただし想定より深刻である（§12-3）。**
+> 2026-09-08 時点で `difflog` は **137 セッション**分の記録を持つ（最古 2026-07-01）が、
+> `~/.claude/projects/**/*.jsonl` に現存する transcript は全 7 プロジェクト合計 **51 本**、
+> しかも**すべて 2026-09-07〜09-08 の 2 日分**である。過去セッションの transcript は既に無い。
+>
+> **帰結: 「§4.1 で `transcript_path` を保存し、§6.3 で後日そこから特徴を抽出する」という
+> 設計は成立しない。** 保存したパスは数日で dangling pointer になる。M1 は「パスを記録する」
+> ではなく「**セッションが終わる時点で §6.3 の特徴を抽出して永続化する**」でなければならない。
+> §4.1・§6.3・§6.7 はこの前提で書き直してある。
 
 ### 4.1 記録するもの
 
@@ -121,6 +161,33 @@ CREATE TABLE session_link (
 CREATE INDEX idx_link_commit ON session_link(commit_sha);
 CREATE INDEX idx_link_ts ON session_link(ts);
 ```
+
+`transcript_path` は**残す。ただしそれだけでは足りない**（上のとおり実体が数日で消える）。
+`SessionEnd` の時点で §6.3 の特徴を抽出し、同時に永続化する。
+
+```sql
+CREATE TABLE session_feature (
+  session_id   TEXT NOT NULL,
+  turn_index   INTEGER NOT NULL,
+  ts           TEXT NOT NULL,
+  tool_name    TEXT,            -- 'Read' | 'Grep' | 'Edit' | ...
+  target       TEXT,            -- file_path（Grep は pattern / path）
+  token_pos    INTEGER,         -- セッション先頭からの累積トークン位置
+  via_subagent INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (session_id, turn_index, tool_name, target)
+);
+CREATE INDEX idx_feature_target ON session_feature(target);
+```
+
+これで `read_before`（§6.3）は transcript ではなく `session_feature` への問い合わせになり、
+**transcript が消えた後も答えが出る**。`SessionEnd` は 1.5 秒予算（§4.2）なので、抽出は
+streaming の 1 パスで済ませ、重い集計は `probe report` 側に置く。
+
+**既存ストアへの最小の追加**: `difflog` は既に
+`SessionState { session_id, start_sha, project, started_at }` を
+`~/.difflog/logs/sessions/<session_id>.json` に保存している（`crates/difflog/src/state.rs`）。
+ここに `transcript_path` を **1 フィールド**足すだけで、harness-recur が無い期間のセッションも
+後追いで紐付けられる（ただし前段のとおり、実体が残っている 2 日分に限られる）。
 
 ### 4.2 hook 配線
 
@@ -164,6 +231,11 @@ CREATE INDEX idx_link_ts ON session_link(ts);
 - `if` はツールイベントでのみ評価される。`Bash(git commit *)` はサブコマンド単位で照合される
 - コミット SHA は hook 内で `git rev-parse HEAD` を実行して取得する（`tool_output` の解析に依存しない）
 - 可能なら commit trailer にも `Claude-Session-Id: <session_id>` を入れる（git 単体で追える冗長化）
+- **この hook JSON の形（`args` / `if` / `async`、および SessionEnd の 1.5 秒予算）は
+  2026-09-08 に公式ドキュメントで確認済み**（§12-5）。ただし**この repo の 30 個の
+  `hooks/hooks.json` はどれも `args` / `if` / `async` を使っていない**（すべて単一の `command`
+  文字列 ＋ `timeout`）。harness-recur が最初の利用者になるので、`/hooks` での登録確認（§11-3）を
+  省略しないこと。特に `if` が効かなければ commit フックは**すべての Bash 呼び出しで発火する**
 
 ### 4.3 受け入れ基準
 
@@ -212,6 +284,11 @@ CREATE TABLE fire_log (
 - `statement` は1〜3行。これを超えるものは主張として成立していないので分割する
 - `severity` の初期値は必ず `warn`。`block` への昇格は §5.6 の条件を満たしたときのみ
 - `diff_regex` トリガは、書けるものだけ書く。書けないものは `path` / `symbol` のみで運用する
+- **【要判断】語の衝突**: このリポジトリで `claim` は既に「**backlog の並行セッション排他**」を
+  指す（`backlog claim ledger` / `condukt state is-claimed` / 同名の pending backlog 複数件）。
+  同じ語を「再発防止の主張」に再利用すると、ログとコードの両方で読み手が取り違える。
+  `precept` / `rule` / `recur` などへの改名を推奨する。**仕様の語彙は著者の決定**なので
+  ここでは変更していない
 
 ### 5.2 登録フロー
 
@@ -327,7 +404,16 @@ harness-recur add \
 
 ### 5.7 注入予算
 
-- 1ターンあたり上限 **1,500 トークン**（`budgetguard` の管理下に置く）
+- 1ターンあたり上限 **1,500 トークン相当**。ただし実装は既存機構に合わせて **char 単位**で数える
+  — `harness_core::inject::CharBudget` ＋ `harness_core::inject_metrics::record(plugin, session,
+  prompt, chars)`。これを使うと playbook / runbook / ctxrot / fugu-router / context-governor が
+  同じターンに注入した分と**合算**で予算判定できる（各プラグインが個別に上限を持つと、合計は
+  誰にも見えない）
+- **`budgetguard` の管理下には置けない**（実測 §12-4）。budgetguard が見ているのはセッション /
+  日次の **USD コスト**であって注入トークンではない。注入予算の台帳は `inject_metrics` 側で、
+  そちらは現状 **detect + warn のみで強制していない**（`inject_metrics.rs`:
+  「the shipped enforcement is detection + warn only」）。harness-recur が強制する最初の
+  消費者になるなら、その旨を明示すること
 - 優先順位：`block` > `warn` > `info`、同順位内は登録が新しい順
 - 予算で落とした件数は必ず明示する（「他 N 件を予算により省略」）。黙って落とさない
 - 予算超過は `fire_log` に `suppressed_budget` として記録する
@@ -377,13 +463,16 @@ harness-recur add \
 | `read_distance_tokens` | int | Read から編集までのトークン距離 |
 | `turn_index` | int | セッション内のターン番号 |
 | `token_position` | int | セッション内のトークン位置 |
-| `compacted_before` | bool | 失敗ターン以前に compaction があったか |
-| `via_subagent` | bool | `agent_id` の有無で判定 |
+| `compacted_before` | bool | 失敗ターン以前に compaction があったか。**transcript を解析するより `PreCompact` フックの既存記録を引く方が確実** — ctxrot が `<state_dir>/metrics.jsonl` に `rescue` イベントを書いている（行スキーマは `harness_core::metrics`） |
+| `via_subagent` | bool | `agent_id` の有無で判定。**ただし `harness_core::hook::HookInput` に `agent_id` / `agent_type` フィールドが無い**ので、hook 側で使うなら先に HookInput を拡張する。transcript 側から取るなら `harness_core::usage` の `isSidechain` 判定 |
 | `distractor_count` | int | 直前 N ターンで参照した他ファイル数 |
 | `instructions_loaded` | list | ロードされていた CLAUDE.md / rules のハッシュ |
 
 `agent_id` / `agent_type` は subagent 内で発火した hook の入力に含まれる。
 `InstructionsLoaded` イベントを記録しておくと `instructions_loaded` が正確に取れる。
+**どちらも公式に実在することを 2026-09-08 に確認済み**（§12-5）。ただしこの repo の 30 個の
+`hooks.json` はどちらも使っておらず、`HookInput` にも該当フィールドが無いので、harness-recur が
+最初の利用者になる。
 
 ### 6.4 出力
 
@@ -415,7 +504,13 @@ harness-recur probe report --since 2026-08-01
 
 ### 6.7 受け入れ基準
 
-- 直近4週間について §6.4 の4項目が出る
+- ~~直近4週間について §6.4 の4項目が出る~~ → **遡及は不能**（実測 §12-3）。M1 が landed する
+  前のセッションについては transcript が既に失われており、`read_before` は原理的に出せない。
+  受け入れ基準を**前向き**に置き換える:
+  - M1 landed 後に蓄積した `session_feature` に対して §6.4 の 4 項目が出る
+  - 母数が足りないときは、数字ではなく **`Undetermined` と件数**を出す（空集合や 0% を
+    「差が無い」と読ませない — CLAUDE.md 3.）
+  - 失敗クラスごとに最低 10 件が貯まるまで M4 に進まない
 - 手で確認した10件と、自動判定した `read_before` が一致する
 
 ---
@@ -461,7 +556,7 @@ claim.source    : 元文書へのパス（必要時に読ませる）
 |---|---|
 | `PreToolUse` レイテンシ | 20ms 以内（1,000 claim 時） |
 | `Stop` レイテンシ | 3秒以内 |
-| DB 破損時 | fail-open。注入せず、劣化を stderr で通知 |
+| DB 破損時 | 注入経路は fail-open（注入せず継続）。ただし**沈黙は不可** — `harness_core::degrade` で劣化を明示する（CLAUDE.md 1.: 沈黙は「余裕あり」と読まれる fail-open）。`block` を持つ主張が 1 件でもある状態で DB が読めないなら、その主張は判定不能なので次行に従い fail-closed |
 | `block` 判定不能時 | fail-closed（差し止め） |
 | 索引外シンボル | 「存在しない」ではなく**「索引外」**として扱う。マクロ由来の偽陰性が誤ったブロックに化けるのを防ぐ |
 | hook 失敗 | セッションを止めない。ポリシー強制以外は全て非ブロッキング |
@@ -509,3 +604,90 @@ M1 と M2 は M3 の結果を待たずに着手してよい。M4 は M3 の数�
 ### 参照
 
 - Claude Code hooks reference: https://code.claude.com/docs/en/hooks
+
+---
+
+## 12. 実測ログ — この仕様書を repo の実態と突き合わせた結果
+
+**測定の作法**: このリポジトリの CLAUDE.md の要求により、数字には**測定コマンド・測定点（rev）・
+測定日**を必ず併記する。測定点の無い数字は、次の著者が転記した瞬間に腐る。**継承せず、毎回
+測り直すこと。**
+
+測定点: `d51bd558` ／ 測定日: **2026-09-08** ／ 対象: `~/src/claude-harnesses`（39 crate）
+
+### 12-1. ワークスペースに SQLite 依存は無い
+
+```
+grep -rn 'rusqlite\|sqlite' --include=Cargo.toml . | grep -v target | wc -l
+```
+
+→ **0**。既存 39 crate の永続化は追記 JSONL / JSON / TOML のみ。§3 の【要判断】の根拠。
+
+### 12-2. 3 機構の重複調査（M1 / M2 / M3）
+
+| 機構 | 既に存在するもの | 存在しないもの |
+|---|---|---|
+| **M1** | `difflog::SessionState { session_id, start_sha, project, started_at }`（`crates/difflog/src/state.rs`）。`overwatch::ActualChangeset { task_key, session_id, base_ref, head_sha, files }`（`crates/overwatch/src/changeset.rs`） | `transcript_path` を保存する永続ストア **0 件**。SHA→session の逆引き索引 **0 件**。commit ごとの追記 **0 件**。`ActualChangeset` は `task_key` キー・TTL prune・condukt run 限定なので恒久ストアに転用不可 |
+| **M2** | 注入系 3 crate（playbook / runbook / context-governor）はすべて **UserPromptSubmit のプロンプト語彙マッチ**。playbook の `triggers` は path glob ではなくプロンプト語（`crates/playbook/src/retrieve.rs`）。PreToolUse で glob を見る 4 crate はすべて deny 専用の組み込み定数 | **「path / symbol トリガで PreToolUse・PostToolUse に条件付き注入」は 39 crate のどこにも無い。** `severity` の昇格 / 降格 **0 件**、`fire_log` 相当 **0 件**。`harness_core::lessons::Lesson` は 6 フィールド（`id / kind / task_summary / lesson_text / source_run / ts`）で trigger も severity も持たず、検索は lexical Jaccard（§5.3 の「完全一致とグロブのみ」と方式が逆）、かつ `~/.lessons/` は**プロジェクト非依存**という設計意図があり path glob と噛み合わない |
+| **M3** | transcript パーサが **7 箇所に散在**。`harness_core::transcript`（usage トークン / 直近 N ターン）、`harness_core::usage`（model 別集計・`isSidechain`）、`trajectoryeval::extract_tools`、`blastguard::retro`、`autoflow`、`beacon`、`compass` | **`read_before` を出せる実装はゼロ。** `trajectoryeval` は順序を保つが `file_path` を捨て、`blastguard::retro` は path を持つが `BTreeMap` なので順序を失う。「path 付きで順序が残る」実装は存在しない。`turn_index` / `token_position` を返す関数も無い。`InstructionsLoaded` の文字列はリポジトリ全体で 0 件 |
+
+**結論**: M1 / M2 / M3 の中核はどれも既存に無いため、**新規 crate `harness-recur` が妥当**。
+ただし部品は §3.1 のとおり既存を呼ぶこと。併せて既存側に小さな追加を 2 つ:
+(a) `difflog::SessionState` に `transcript_path`、(b) `harness_core::transcript` に
+「path 付き・順序付き・turn_index 付きのツールイベント streaming イテレータ」。
+(b) は `trajectoryeval` と `blastguard::retro` の重複も同時に解消する。
+
+### 12-3. transcript は 2 日で消えている（この仕様書で最も重い実測）
+
+```
+ls ~/.difflog/logs/sessions | wc -l                                  # -> 137（最古 2026-07-01）
+find ~/.claude/projects -name '*.jsonl' | wc -l                      # -> 51
+find ~/.claude/projects -name '*.jsonl' -printf '%TY-%Tm-%Td\n' | sort | uniq -c
+                                                                     # -> 43 件が 2026-09-07 / 8 件が 2026-09-08。それ以外は無い
+grep -rl 'transcript_path' ~/.difflog ~/.gauge ~/.claude/sessions    # -> 0 件
+```
+
+→ difflog は 137 セッションを知っているのに、transcript は **51 本しか残っておらず全て直近 2 日分**。
+`transcript_path` を保存している永続ストアも **0 件**。§4（設計変更）と §6.7（受け入れ基準の
+前向き化）の根拠。
+
+### 12-4. 注入予算の実体
+
+- `harness_core::inject::CharBudget` — **char 単位**の running cap（`new` / `would_overflow` /
+  `add` / `used` / `remaining`）。最初の 1 件は常に通す。
+- `harness_core::inject_metrics::record(plugin, session, prompt, chars)` — 横断台帳。
+  記録しているのは playbook / runbook / ctxrot / fugu-router / context-governor。
+  `over_budget(turns, budget_chars)` / `remaining_for_turn` はあるが、コード内に
+  「Provided for a future active-enforcement phase; the shipped enforcement is detection + warn only」
+  と明記されている。
+- `budgetguard` が扱うのは `session_cost`（**USD**）。**注入トークンの予算機構ではない。**
+
+### 12-5. hook スキーマの確認（公式ドキュメント照会、2026-09-08）
+
+| 仕様が使うもの | 実在 | 備考 |
+|---|---|---|
+| `"args": [...]`（exec form） | **する** | この repo の 30 個の hooks.json では 0 件使用 |
+| `"if": "Bash(git commit *)"` | **する** | permission rule 構文。0 件使用 |
+| `"async": true` | **する** | `asyncRewake` で exit 2 時に復帰。timeout 非強制。0 件使用 |
+| SessionEnd の 1.5 秒予算 | **する** | 既定 1.5 秒。per-hook timeout を長くすれば最大 60 秒まで引き上げ（difflog は 30 秒を指定している） |
+| `PostCompact` | **する** | matcher は `manual` / `auto`。この repo の hooks.json では 0 件使用（実際の再注入経路は `SessionStart` の `source == "compact"`。`crates/ctxrot/src/hooks/restore.rs`） |
+| `CLAUDE_PLUGIN_DATA` | **する** | プラグイン更新を生き延びる永続データ置き場として公式推奨。この repo では 0 件使用 |
+| `agent_id` / `agent_type` | **する** | subagent 内で発火した hook の入力にのみ含まれる。`harness_core::hook::HookInput` には未定義 |
+| `InstructionsLoaded` | **する** | CLAUDE.md / `.claude/rules/*.md` のロード時に発火。matcher は `session_start` / `nested_traversal` / `path_glob_match` / `include` / `compact` |
+
+→ **§4.2 と §5.4 の hook 配線は正しい。** この repo の既存 30 個が古い部分集合しか
+使っていないだけである。
+
+### 12-6. 未確認のまま残したもの（判断で埋めていない）
+
+CLAUDE.md 2.「判断は予測にすぎない」に従い、確かめられなかったものは確かめられなかったと書く。
+
+- **`additionalContext` の 10,000 文字上限**（§5.4）: 公式ドキュメントに数値の記載を見つけられ
+  なかった。「超えると別ファイルに退避されプレビューだけになる」も未確認。当該 2 行は
+  **未検証の主張**として残してある。実装前に実測すること。
+- **`PreToolUse` の command hook がタイムアウト時にブロックしないか**（§5.4）: exit code の
+  一般規則（exit 2 のみが単独で block する）は確認できたが、タイムアウト時の扱いは記載が無い。
+  「ゲートとして当てにしない設計にする」という**結論は保守的な側なので維持**するが、
+  その根拠は未確認である。
+- **§1.1 の F1〜F4 の頻度**: 仕様自身が「実測ではなく体感」と書いているとおり未実測。
+  M3 がこれを実測に置き換える。

@@ -12939,9 +12939,33 @@ project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p2"]
 status = "pending"
-notes = "観測 2026-09-08: backlog の repo ストアは <project>/.backlog/tasks.toml、つまり main の作業ツリーにある。worktree で作業していても backlog add / done は main のツリーを dirty にするため、毎回 worktree へ手で移送して main を checkout で戻す必要があった(このセッションで3回)。Stop hook の stop-verify-worktree.py もこれを検知して停止を拒否する。起票という最も頻度の高い操作が構造的に 8 と衝突している。案: ストアを worktree 相対で解決する / ホーム側ストアへ戻す / backlog 側に worktree-aware な書き込み先解決を持たせる。"
+notes = """
+観測 2026-09-08: backlog の repo ストアは <project>/.backlog/tasks.toml、つまり main の作業ツリーにある。worktree で作業していても backlog add / done は main のツリーを dirty にするため、毎回 worktree へ手で移送して main を checkout で戻す必要があった(このセッションで3回)。Stop hook の stop-verify-worktree.py もこれを検知して停止を拒否する。起票という最も頻度の高い操作が構造的に 8 と衝突している。案: ストアを worktree 相対で解決する / ホーム側ストアへ戻す / backlog 側に worktree-aware な書き込み先解決を持たせる。
+
+--- 訂正 (実測 2026-09-09、測定点 8366ed89) ---
+
+**この起票の前提は誤っていた。** ストアは main のツリーに固定されてはいない。
+
+crates/backlog/src/claim_ledger.rs:9 が逐語で「worktree owns `<worktree>/.backlog/tasks.toml`.
+That is deliberate」と書いており、crates/backlog/src/divergence.rs:5 も「resolves per repo
+(config::locate -> `<root>/.backlog/tasks.toml`)」と書いている。つまり store は cwd の git root
+から解決され、worktree で実行すれば worktree のストアに書かれる。
+
+実測: cwd を worktree にして `backlog add --project /Users/yuki/src/harness ...` を実行したところ、
+`git -C <worktree> status` に `M .backlog/tasks.toml` が現れ、`git -C /Users/yuki/src/harness status`
+は空のままだった (task 0cd69e11)。main のツリーは一切汚れていない。
+
+**本当の原因は backlog ではなく実行環境だった**: Bash ツールは呼び出しごとに cwd を
+/Users/yuki/src/harness へリセットするので、`cd <worktree>` を同じコマンド内に書かずに
+`backlog add` を実行すると main のストアへ書かれる。このセッションで繰り返した「main へ書いて
+から worktree へ手で移植する」作業は、その取り違えの産物であって backlog の設計上の欠陥ではない。
+
+したがってこの項目は「§8 と衝突する設計」ではない。残る本物の課題があるとすれば、
+**worktree ごとに別のストアが育ち、merge のたびに tasks.toml の衝突を人手で union する必要がある**
+という側面のほうで、それは 867dde4b (安全な merge 手段が無い) が追跡している。
+"""
 created_at = 1788872561
-updated_at = 1788872561
+updated_at = 1788898850
 weight = 0.0
 issue_number = 446
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/446"
@@ -16100,3 +16124,28 @@ updated_at = 1788898361
 weight = 0.0
 issue_number = 453
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/453"
+
+[[task]]
+id = "0cd69e11"
+title = "ユーザー裁定で repo から撤去した taintguard が、この機体ではいまも enabled かつ deployed のまま生きている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+status = "pending"
+notes = """
+実測 2026-09-09、測定点 8366ed89。
+
+0521d013 (ユーザー裁定) は taintguard crate を『判定が厳しすぎて実害が出たため』リポジトリから撤去した。しかしこの機体では撤去が稼働側に届いていない:
+
+- ~/.claude/settings.json の enabledPlugins に taintguard@yukineko: true が残っている (40 エントリ中)。
+- /Users/yuki/.claude/plugins/cache/yukineko/taintguard/0.2.0 が今もキャッシュに存在する。
+- check-plugin-rollout.py も 'taintguard: cached but no current version known from crates/ — cannot tell which of its dirs is live, so none are pruned' と報告する。source から消えたことでプルーナが判断不能になり、消さない側に倒れている。
+
+帰結: 撤去の理由になった実害 (turn が external-read で tainted になり以後の Write/Edit と allowlist 外 Bash が deny される) が、この機体では今も起こりうる。source から crate を消すことは稼働ハーネスの無効化にならない — プラグイン節の『rollout しない限り稼働ハーネスには一切反映されない』の裏返しで、撤去にも同じことが言える。
+
+必要な作業: (1) enabledPlugins から taintguard を外す (settings.json は自己 deny なのでユーザー操作か /plugin が要る)、(2) キャッシュの 0.2.0 ディレクトリを削除、(3) prune が『source に無い』を『判断不能なので残す』に写している点を、撤去済みプラグインを表現できる形にするか parked-plugins.json 相当の明示宣言で扱うかを決める。"""
+created_at = 1788898809
+updated_at = 1788898809
+weight = 0.0
+issue_number = 454
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/454"

@@ -16088,3 +16088,49 @@ notes = ""
 created_at = 1788843710
 updated_at = 1788843710
 weight = 0.0
+
+[[task]]
+id = "d796a630"
+title = "guard-maintree-bash と stop-verify-worktree が未追跡ファイルで相互デッドロックする"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "gate",
+    "deadlock",
+    "p1",
+]
+status = "pending"
+notes = """
+実測 2026-09-08 13:37 JST、main の作業ツリー (fix/issue-15-jsonl-append-race @ 10c22160)。
+
+現象: main のツリーに他セッション由来の未追跡ファイル docs/harness-recur-spec.md が 1 件あるだけで、
+セッションが自力でターンを終えられなくなる。3 つのゲートが循環する:
+
+1. scripts/stop-verify-worktree.py — main のツリーが dirty ならターン終了を block (exit 2)。
+2. git merge — 未追跡ファイルを上書きする merge を拒否:
+   'The following untracked working tree files would be overwritten by merge: docs/harness-recur-spec.md'
+   (内容がコミット済み blob とバイト同一でも拒否する)。
+3. scripts/guard-maintree-bash.py — 未追跡ファイルの rm を block。
+   'Refused: rm docs/harness-recur-spec.md mutates this project MAIN working tree.'
+
+つまり §8 が唯一許す出口 (merge) が git 側の制約で塞がっており、その制約を外す唯一の手段 (rm) を
+guard が塞いでいる。逃げ道は cd <worktree> による re-anchor か stop_hook_active の bounded allow
+だけで、前者は guard の意図的な回避に当たる。
+
+重要: guard が正しい可能性がある。当該ファイルは mtime 2026-09-08 13:28 (9 分前) で、
+別セッションが編集中の可能性がある。未追跡ファイルの削除は他セッションの作業破壊になりうるので、
+'block してよいが出口が無い' のが欠陥。
+
+検討すべき出口案 (どれも未検証):
+- stop-verify-worktree.py が「自セッションが作っていない未追跡ファイルのみ」を dirty から除外する。
+  ただし帰属を機械判定する手段が要る (現状 mtime しかない = 判定不能)。
+- guard-maintree-bash.py が「コミット済み blob とバイト同一の未追跡ファイルの削除」だけを許す。
+  内容が git 内に保存されている = 破壊ではない、が根拠にできる。
+- merge を git checkout-index 経由にして untracked-overwrite 制約を回避する。
+
+現状の退避: 内容は session-44ea617f ブランチの 22302ff6 に commit 済み (pre-commit 全ゲート rc=0)、
+main のツリーのファイルとバイト同一であることを git cat-file | cmp で確認済み。ファイル自体は
+main のツリーに残したまま (削除していない)。"""
+created_at = 1788842261
+updated_at = 1788842261
+weight = 0.0

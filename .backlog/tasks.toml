@@ -16082,9 +16082,46 @@ docstring の「Erring long is the restrictive direction」は実装と一致す
    スクリプト。crate 間の結合を増やさず、機械判定 (第6節) を満たす。最も安い。
 2. backlog に lib target を生やして定数を直接 link する。
 3. 述語の複製をやめ、`backlog driver status --project <path>` の判定を消費する
-   (writer の verdict を読む)。subprocess 依存が増える。'''
+   (writer の verdict を読む)。subprocess 依存が増える。
+
+---
+修正コミット済み・**まだ強制されていない** (2026-09-08)。
+
+`scripts/check-cross-crate-constants.py` (commit 4eadfde5) がテーブル駆動で
+正典 `backlog::lock::LOCK_STALE_TTL_SECS` と写し
+`condukt::wt_reconcile::DRIVER_STALE_TTL_SECS` の等値を機械照合する。
+判定不能 (ファイル欠落 / 0 ヒット=rename / 複数ヒット=曖昧) はすべて block。
+
+## 実装者による観測 (ゲート自身への注入)
+
+    1. baseline (両者 1800)          want 0  got 0
+    2. backlog を 3600 へ (危険側)    want 1  got 1
+    3. condukt を 900 へ (制限側)     want 1  got 1
+    4. condukt 側を rename (判定不能)  want 1  got 1
+    5. revert 後                    want 0  got 0     tree clean
+
+## 独立 agent (別モデル) が書いた回帰テスト
+
+`scripts/test_check_cross_crate_constants.py`、17 tests。第2節(a) に従い
+**実装者は書いていない**。実装者が報告を額面で受けず、ゲート本体へ 4 通り変異を
+当てて suite が殺すことを独立に再現した:
+
+    M1. 読めない=共通 sentinel で合意扱い   -> FAILED (failures=3, errors=2)
+    M2. 複数ヒットで先頭を推測              -> FAILED (failures=3)
+    M3. 正典 regex の anchor を外す        -> FAILED (failures=4)
+    M4. 値の比較を無効化                   -> FAILED (failures=2)
+    変異なし / revert 後                  -> OK      gate clean
+
+## だから閉じない
+
+666b6704 の実測により、`core.hooksPath` が main ツリーの絶対パスを指しているため
+**git が実際に走らせるのは main の `.githooks/pre-commit`** であり、そこにこの
+ゲートの `run` 行は無い。したがって本ゲートは **main に merge されるまで 1 度も
+実行されない**。ここで done にすると、存在しない保護を「有る」と記録することになる
+(第4節)。**merge 後に main の pre-commit 出力へ `check-cross-crate-constants:` の
+行が出ることを観測してから閉じる。**'''
 created_at = 1788774009
-updated_at = 1788842478
+updated_at = 1788843619
 weight = 0.0
 
 [[task]]

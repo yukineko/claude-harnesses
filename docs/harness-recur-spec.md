@@ -125,9 +125,9 @@ crates/harness-recur/
 | diff からの識別子抽出 | `harness_core::callgraph::changed_symbol_names(diff_text)` | §5.3-2 の入力そのもの |
 | call graph 深さ1 | `harness_core::callgraph::{load_graph, callers_of, callees_of}` | `load_graph` は `Determination` を返す（判定不能を表現済み） |
 | シンボル索引 | `harness_core::code_index::{extract_symbols, load_index}` | §8「索引外シンボル」の判定に使う |
-| 注入予算 | `harness_core::inject::CharBudget` ＋ `harness_core::inject_metrics::record` | §5.7 参照。**char 単位**であり token 単位ではない |
-| 注入済みフラグ | `context_governor::ledger::was_injected` | §5.5 の「ctxrot / context-governor が生存判定を持っている場合はそちらと接続」の接続先 |
-| 再発シグネチャ | `overwatch::violation::{normalize_signature, detect_recurrence}` | §5.6 の昇格条件（3 回以上の発火・誤発火ゼロ）の計数に転用できる |
+| 注入予算 | `harness_core::inject::CharBudget` ＋ `harness_core::inject_metrics::record` | §5.7 参照。**char 単位**であり token 単位ではない。**転用には 2 つの制約がある（実測 2026-09-08）**: (1) `record` の doc は「for a real (`chars > 0`) **UserPromptSubmit** injection」と限定しており、harness-recur が注入する **PostToolUse** はこの台帳の想定外 — 混ぜると台帳の意味がずれる。(2) `record` は「all IO/serialization errors are **swallowed** so an observability log can never break the turn it records」で、**書き込み失敗が黙って捨てられる**。observability として書かれた免責であり、harness-recur が予算を**強制**する最初の消費者になった時点でこの免責は失効する（欠測は予算の過少計上＝過剰注入へ倒れる）。強制に使うなら書き込み失敗を判定不能として扱う経路が別に要る |
+| 注入済みフラグ | `context_governor::ledger::was_injected` | §5.5 の「ctxrot / context-governor が生存判定を持っている場合はそちらと接続」の接続先。**そのままは繋がらない（実測 2026-09-08、`crates/context-governor/src/ledger.rs:266`）**: シグネチャは `pub fn was_injected(cwd: &str, item_id: u64) -> bool` で **u64 キー**、一方 precept の id は `TEXT PRIMARY KEY -- slug`。slug→u64 の写像規則（と衝突時の扱い）が要る。また doc は「A missing/corrupt file or absent match yields `false`, so the caller treats "unknown" as "not yet injected" and proceeds」で、**判定不能は「まだ注入していない」＝再注入**へ倒れる。これは警告を握り潰す向きではない（沈黙ではなく重複）が、§5.7 の予算を食う向きなので、予算判定と組むときは重複注入を予算超過として数えること。加えて**他プラグインの ledger へ書いてよいか**は未決（§13-D6） |
+| 再発シグネチャ | `overwatch::violation::{normalize_signature, detect_recurrence}` | §5.6 の昇格条件（3 回以上の発火・誤発火ゼロ）の計数の**参考**になる。ただし**そのままは呼べない（実測 2026-09-08）**: `detect_recurrence(events: &[ViolationEvent], now, policy)` は overwatch の `ViolationEvent` 型に固定されており、`fire_log` の行から転用するには型変換か閾値ロジックの複製が要る。さらに昇格判定は「occurrences >= threshold **AND** 複数 task か複数 session にまたがる」という 2 条件で、§5.6 の「3 回以上の発火」とは条件が一致しない |
 | transcript の streaming 読み | `harness_core::transcript` | usage トークンと直近 N ターンだけ。**M3 が要る「path 付き・順序付き・turn_index 付き」のイテレータは存在しない**（§6.3）ので、ここは harness-core への追加になる |
 | 劣化の単調性の検査 | `harness_core::degrade::{is_monotone, explain_break}` | 「入力を劣化させても判定が permissive 側へ動かない」という性質を proptest で探索する部品（**stderr 通知のヘルパではない**）。§8 の「DB 破損時」の挙動はこの性質のテストで固定すること。stderr への通知そのものは共有ヘルパが無く、各プラグインが直接書いている |
 
@@ -560,7 +560,7 @@ precept.source    : 元文書へのパス（必要時に読ませる）
 |---|---|
 | `PreToolUse` レイテンシ | 20ms 以内（1,000 precept 時） |
 | `Stop` レイテンシ | 3秒以内 |
-| DB 破損時 | 注入経路は fail-open（注入せず継続）。ただし**沈黙は不可** — `harness_core::degrade` で劣化を明示する（CLAUDE.md 1.: 沈黙は「余裕あり」と読まれる fail-open）。`block` を持つ主張が 1 件でもある状態で DB が読めないなら、その主張は判定不能なので次行に従い fail-closed |
+| DB 破損時 | 注入経路は fail-open（注入せず継続）。ただし**沈黙は不可** — 劣化を明示すること（CLAUDE.md 1.: 沈黙は「余裕あり」と読まれる fail-open）。**`block` 経路の手続きは未決（§13-C2）**: 旧版はここに「`block` を持つ主張が 1 件でもある状態で DB が読めないなら fail-closed」と書いていたが、**DB が読めない状態ではその条件自体が評価できない**（条件の評価が、評価不能を宣言した当のストアへの読み取りを要求している）。判定手続きを決めるまで、この行は pass/fail に落ちない |
 | `block` 判定不能時 | fail-closed（差し止め） |
 | 索引外シンボル | 「存在しない」ではなく**「索引外」**として扱う。マクロ由来の偽陰性が誤ったブロックに化けるのを防ぐ |
 | hook 失敗 | セッションを止めない。ポリシー強制以外は全て非ブロッキング |
@@ -695,3 +695,60 @@ CLAUDE.md 2.「判断は予測にすぎない」に従い、確かめられな�
   その根拠は未確認である。
 - **§1.1 の F1〜F4 の頻度**: 仕様自身が「実測ではなく体感」と書いているとおり未実測。
   M3 がこれを実測に置き換える。
+
+---
+
+## 13. 検証済みの欠陥と、残った要裁定
+
+**この節の位置づけ**: `specforge draft`（2026-09-08、`.specforge-pending`）が rigor ゲートで
+**fail** を出し、「厳格な acceptance を書けない」理由を 13 点挙げた。うち 2 点（ストア形式・語彙）は
+`93cadd7a` で決定済み。残り 11 点を**逐語と実測で検証**した結果が下表である。
+
+**検証の作法**（CLAUDE.md 6.）: 批判もまた検査対象であり、「指摘されたから直す」という
+非対称は禁じられている。したがって各項目は棄却を試みたうえで判定した。棄却できたものは
+**0 件**だったが、それは棄却を試みなかったからではない — 棄却の試みは各行に残す。
+
+### 13-1. 判定表
+
+| # | 主張 | 判定 | 逐語・実測 | 棄却の試み |
+|---|---|---|---|---|
+| C1 | 「PreToolUse をゲートとして当てにしない」と「block 違反を PreToolUse で拒否」が衝突 | **CONFIRMED**（ただし前提は UNVERIFIED） | §5.4「`PreToolUse` の command hook はタイムアウトしても**ブロックしない**。ゲートとして当てにしない設計にする」 vs §5.8「`block` の主張に違反する `Edit` が `PreToolUse` で拒否される」＋ §8「`block` 判定不能時 ｜ fail-closed（差し止め）」 | 「§5.4 は timeout 時の話、§5.8 は通常経路の話で両立する」と読めるか試みた。両立しない — **timeout こそが判定不能の事例**であり、§8 が要求する fail-closed は PreToolUse を強制点にする限り timeout 経路で達成できない。ただし「timeout でブロックしない」自体は §12-6 で未確認なので、**欠陥の深刻度は未測定** |
+| C2 | §8「DB 破損時」の条件が自己参照 | **CONFIRMED** | 旧 §8 行「`block` を持つ主張が 1 件でもある状態で DB が読めないなら…」— この条件の評価は、評価不能を宣言した当のストアの読み取りを要求する | 「block 主張の存在を DB 以外から知る経路が仕様のどこかにあるか」を探した。無い。**本セッションで導入した私自身の欠陥**であり、§8 の当該行は撤去済み |
+| C3 | §3 の成果物構成が CLAUDE.md のプラグイン定義を満たさない | **CONFIRMED** | 実測: `ls crates/difflog` は `.claude-plugin/ Cargo.toml README.ja.md bin/ hooks/ skills/ src/ tests/` を返し、`crates/difflog/.claude-plugin/plugin.json` が実在する。§3 の tree は `Cargo.toml` / `hooks/` / `src/` / `tests/` のみで、`plugin.json`・`bin/` launcher・`marketplace.json` エントリ・rollout が無い | 「hook は `${CLAUDE_PLUGIN_ROOT}/bin/harness-recur` を指すが launcher 無しで動くか」を試みた。動かない。CLAUDE.md「100644 のまま配布された launcher は `Permission denied` で暗転し、hook が起動しない = finding も出ないので **red ではなく dark** になる」 |
+| C4 | token から char への換算値が無い | **CONFIRMED** | §5.7「1ターンあたり上限 **1,500 トークン相当**。ただし実装は既存機構に合わせて **char 単位**で数える」— 換算値も、合算側の上限 char 値も文書内に無い | 「他プラグインの既定値を流用できるか」を試みた。playbook の `max_chars` は config 値であって仕様の合意値ではない。**本セッションで導入した私自身の欠陥** |
+| D1 | `N` が 2 箇所で未定義かつ別物 | **CONFIRMED** | §6.1「同一ファイルへの **N 時間**以内の再編集」／§6.3「直前 **N ターン**で参照した他ファイル数」 | 「どちらかが他方から導出できるか」を試みた。時間とターンは単位が違い導出不能 |
+| D2 | F1〜F4 への自動分類規則が無い | **CONFIRMED** | §6.4-4「失敗クラス（F1〜F4）の件数分布」／§6.7「失敗クラスごとに最低 10 件が貯まるまで M4 に進まない」。一方 §6.1 は失敗**候補**の抽出規則（revert / fix メッセージ / 再編集 / red から green / Obsidian）のみで、**どれが F1 でどれが F4 かを決める規則が無い** | 「§1.1 の定義文から機械分類できるか」を試みた。F1「記載済みの制約を参照しないまま作業する」と F4「存在しない API・古いシグネチャを使う（誤認）」は diff だけでは区別できない（F1 は制約文書の所在、F4 は API の実在を要する） |
+| D3 | 誤発火の記録経路が無い | **CONFIRMED** | §5.1 の `fire_log` は `event TEXT NOT NULL` のコメントで `inject` / `block` / `suppressed_budget` の 3 値しか列挙しておらず **misfire が無い**。一方 §5.6「`fire_log` に3回以上の発火があり、うち**誤発火の報告がゼロ**」／§5.8「`harness-recur stats` で発火回数・**誤発火率**・予算超過率が出る」 | 「`demote` CLI が誤発火の記録を兼ねるか」を試みた。§5.6 は `harness-recur demote` を降格**操作**として定義するだけで、記録列も誤発火率の**分母の定義**も無い。したがって §5.8 の受け入れ基準は現スキーマでは観測不能 |
+| D4 | 20ms の測定点が未定義 | **CONFIRMED**（数値の衝突自体は UNVERIFIED） | §5.8「1,000件登録した状態で**解決処理**が 20ms 以内」／§8「`PreToolUse` **レイテンシ** ｜ 20ms 以内（1,000 precept 時）」 | 「同一基準を二度書いただけか」を試みた。同一とは読めない — 「解決処理」は関数内部、「PreToolUse レイテンシ」は通常プロセス起動を含む。§5.3-2 は `harness_core::callgraph::load_graph`（ファイル IO）を含むので差は無視できない。ただし**実測していないので両方 20ms に収まる可能性は排除できない** — 曖昧さは CONFIRMED、数値の衝突は UNVERIFIED |
+| D5 | SessionEnd の部分抽出が `read_before=false`＝「無視」に化ける | **CONFIRMED** | §4.2「`SessionEnd` フックは全体で 1.5 秒の予算しかない」＋ hook 定義の `timeout` は 1。§6.3 の `read_before` は **bool** で「抽出できなかった」を表現できない。§4.3 の受け入れ基準は `link` の 3 項目のみで、**本セッションで追加した `session_feature` 抽出をまったくカバーしていない** | 「§4.3 の『hook が失敗してもセッションは継続する（全て非ブロッキング）』が部分抽出を包含するか」を試みた。包含しない — それは*セッションの継続*についての基準で、*抽出結果の完全性*については何も言っていない。**本セッションで導入した私自身の欠陥** |
+| D6 | `was_injected` のキー不整合 | **CONFIRMED**（ただし「fail-open」という説明は不正確だった） | 実測 `crates/context-governor/src/ledger.rs:266`: `pub fn was_injected(cwd: &str, item_id: u64) -> bool`。precept の id は `TEXT PRIMARY KEY -- slug`。doc「A missing/corrupt file or absent match yields `false`, so the caller treats "unknown" as "not yet injected" and proceeds」 | 「u64 は slug のハッシュでよいか」を試みた。写像は書けるが**衝突時の扱いが未決**で、他プラグインの ledger へ書いてよいかも未決。なお判定不能は「まだ注入していない」＝**再注入**へ倒れるので、警告を握り潰す沈黙ではなく重複である。損なわれるのは §5.7 の予算であって安全性ではない |
+
+### 13-2. 検証中に新たに見つかった欠陥（specforge の指摘には無い。すべて §3.1 表＝本セッションの追加分）
+
+`check-doc-claims` ゲートは**シンボルの実在と逐語引用を検証するが、意味は検証しない**。
+`harness_core::degrade` の誤り（`93cadd7a` で修正済み）が通過したのと同じ理由で、以下 3 件も通過していた。
+
+| # | 欠陥 | 逐語（実測 2026-09-08） |
+|---|---|---|
+| N1 | `inject_metrics::record` は **UserPromptSubmit 専用**と doc に明記されている。harness-recur が注入するのは PostToolUse なので、混ぜると台帳の意味がずれる | `crates/harness-core/src/inject_metrics.rs`「Append one `InjectEntry` for a real (`chars` が 0 より大) **UserPromptSubmit** injection to the central ledger」 |
+| N2 | 同 `record` は **IO エラーを全て握り潰す**。observability としての免責であり、harness-recur が予算を**強制**する最初の消費者になった時点で失効する（欠測＝予算の過少計上＝過剰注入） | 同「BEST-EFFORT: all IO/serialization errors are **swallowed** so an observability log can never break the turn it records」／`remaining_for_turn` の doc「Provided for a future active-enforcement phase; the shipped enforcement is **detection + warn only**」 |
+| N3 | `detect_recurrence` は overwatch の `ViolationEvent` 型に固定されており fire_log の行からは直接呼べない。かつ昇格条件が §5.6 と一致しない | `crates/overwatch/src/violation.rs:266` の `pub fn detect_recurrence(` は 第1引数に overwatch 独自の ViolationEvent スライスを取る。同関数の doc は昇格を 「occurrences が policy.threshold 以上」かつ「複数の task または複数の session に またがる」の **2 条件の連言**と定めており、§5.6 の「3 回以上の発火」という **単一条件**とは一致しない（単一 task / 単一 session が同じゲートを叩き続けるのは local retry loop であって systemic ではない、という設計意図による） |
+
+上の 3 件と C2 / C4 / D5 は §3.1・§8 に反映済み（自分の誤りなので裁定を待たずに直した）。
+
+### 13-3. 残った要裁定（6 件・人間の決定が要る）
+
+これらは**機械が代わりに決めてよい種類の決定ではない**ので、埋めずに残す。
+
+| # | 決めること | 決めないと書けない acceptance |
+|---|---|---|
+| C1 | `PreToolUse` を `block` の強制点として使うか、使わないか（使わないなら block をどこで強制するか） | §5.8 の block 基準、§8 の fail-closed 行 |
+| C2 | DB が読めない状態で「block 主張の存在」をどう知るか（例: block precept の id 一覧だけを別の追記専用ファイルに冗長化し、そちらも読めなければ deny） | §8 の DB 破損時の行 |
+| C3 | `.claude-plugin/plugin.json` / `bin/` launcher / `marketplace.json` エントリを作るか、`scripts/parked-plugins.json` に理由付きで parked 宣言するか | §3 の成果物構成、ゲート 4 本を通す条件 |
+| C4 | 1,500 トークン相当の **char 実数**と、`inject_metrics` 合算側の上限 char 実数 | §5.7 |
+| D2 | F1〜F4 の**分類規則**（分類不能は 0 件に潰さず `Undetermined`） | §6.4-4、§6.7 |
+| D3 | 誤発火の**記録経路**（`fire_log` の event に `misfire` を足すか）と誤発火率の**分母の定義** | §5.6、§5.8 |
+
+D1（`N` 2 種）と D4（測定点）は裁定というより実測で決まる値なので、M1 着手時に測って埋める。
+D5 は C2 と同じ形（「間に合わなかった」を `false` に潰す）なので、C2 の決定に合わせて
+`read_before` を bool から三値（`harness_core::verdict::Determination`）へ変える前提で書き直す。

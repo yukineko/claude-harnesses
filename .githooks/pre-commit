@@ -67,6 +67,18 @@
 #                                                 not have), during which
 #                                                 taintguard went missing from 3
 #                                                 of them; backlog fb6b1796
+#   crossx-constants   check-cross-crate-constants.py a constant hand-copied
+#                                                 from one crate into another
+#                                                 (because the owning crate has
+#                                                 no lib target to link) drifting
+#                                                 from its canonical declaration,
+#                                                 or being renamed so the copies
+#                                                 can no longer be compared at
+#                                                 all. Today: the driver-registry
+#                                                 stale TTL, where condukt
+#                                                 holding the SHORTER value makes
+#                                                 it call a live session's
+#                                                 worktree dead; backlog 6e30b6fc
 #   launcher-exec-bit  check-launcher-exec-bit.py a crates/<c>/bin/<name> plugin
 #                                                 launcher recorded 100644 in the
 #                                                 GIT INDEX. Deployed that way it
@@ -181,6 +193,7 @@ run check-hardcoded-secret.py secret-guard
 run check-raw-io-ratchet.py   raw-io-ratchet
 run check-worktree-isolation.py worktree-isolation
 run check-gate-crates-sync.py gate-crates-sync
+run check-cross-crate-constants.py crossx-constants
 run check-launcher-exec-bit.py launcher-exec-bit
 run check-clippy-lints.py     clippy-lints
 
@@ -275,6 +288,13 @@ Remediation hints:
                     canonical; bring the reported source to match it (or, if you
                     just ADDED a new hardcoded copy, register it in that
                     checker's SOURCES list in this same commit).
+  crossx-constants  a hand-copied constant disagrees with its canonical
+                    declaration in another crate, or a rename made the two
+                    incomparable. Make the copy equal the canonical value; if
+                    the coupling genuinely changed, update the PINS entry in
+                    scripts/check-cross-crate-constants.py in the SAME commit.
+                    A rename blocks on purpose — zero matches must not read as
+                    "no drift found".
   launcher-exec-bit a crates/<crate>/bin/<name> launcher is not 100755 in the
                     git INDEX. `git update-index --chmod=+x <path>`; a plain
                     `chmod +x` does nothing here, since this repo sets

@@ -16574,11 +16574,41 @@ fail-closed でロールバックした判断自体は CLAUDE.md 3. のとおり
    観測した証跡がコミットに残る。テストは実装者以外が書く (CLAUDE.md 2.(a))。
 4. `scripts/check-plugin-rollout.py` が exit=0 のまま。
 
-## 未決 (この起票では決めない)
+## 裁定 (2026-09-08、ユーザー裁定。未決ではない)
 
-(b) の「halt が dark を残す」を、stage ごとに rebuild を走らせて閉じるかどうか。
-それは既知の bootstrap-skew (backlog 2a953ab5、rollout-plugins.sh:873-897 の
-コメントが設計として明文化) の前提を変えるため、別途裁定が要る。"""
+(b)「halt が rollout 前より暗い状態を残す」は**修正しない**。stage ごとに rebuild を
+走らせる案は既知の bootstrap-skew (backlog 2a953ab5) の前提を変えるため、そちらの設計を
+維持する方を採る。(a) の修正で halt 時にバイナリが消えること自体が無くなったので、
+halt が残す状態は「rollout 前と同じ」であって「より暗い」ではなくなった。
+
+## 追加で決まったこと (同日)
+
+保護は無条件ではない。`bin/<stem>-<suffix>` を守るのは **crate が launcher
+`bin/<stem>` を今も出荷している間だけ**で、rename / 削除されたバイナリの置き土産は
+`--delete` に任せて消す。守り続けると保護そのものが増える一方の ratchet になるため。
+
+## 未決 — checker との非対称 (2026-09-08、独立検証者の指摘。要裁定)
+
+保護を絞った結果、同じファイル種別について 2 つのスクリプトが違う規則を持つ:
+
+- `scripts/rollout-plugins.sh` の `copy_plugin_dir` は、crate に launcher の無い
+  `bin/<stem>-<suffix>` を orphan として削除する。
+- `scripts/check-plugin-rollout.py` の `_is_rebuild_artifact` は、crate に対応が無い
+  `bin/<name>-<suffix>` を「配布ツリーに正当に存在しうる rebuild 成果物」として今も許容する。
+
+したがって `copy_plugin_dir` 以外の経路で入り込んだ orphan は、check を素通りする。
+rollout が毎回消すので蓄積はしないが、**検出はされない**。checker を広げるのは
+ゲートの verdict を変える行為なので、別コミット・別裁定とする。
+
+## 追記 — 判定不能が削除側に倒れる点への対処 (同日)
+
+`[ -f "$src/bin/$stem" ]` は「crate が launcher を commit している」という不変条件に
+依存する。この不変条件が live な plugin について破れると、生きている成果物が orphan と
+読まれて削除され、d22b2d6b が直したのと同じ dark に戻る。不変条件自体は
+`check-plugin-rollout.py` の `_bin_launcher_problem` と `check-launcher-exec-bit.py` が
+機械検査しているが、copy の時点では検査していない。そこで **保護しなかった成果物は
+必ず stderr に 1 行出す**ようにした (沈黙は許容される degrade ではない — CLAUDE.md 1.)。
+rename 時には出て当然の行であり、rename していない plugin で出たら不変条件が破れた合図。"""
 created_at = 1788846130
-updated_at = 1788846130
+updated_at = 1788848070
 weight = 0.0

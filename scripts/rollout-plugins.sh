@@ -391,7 +391,14 @@ PY
 # DEPLOY_EXCLUDED_TOP and the two are compared by a test — a dir dropped from the
 # copy but still expected by the check reports permanent, unfixable drift.
 #
-# PROTECTED: bin/<name>-<platform-suffix>. Those are produced by
+# PROTECTED: bin/<stem>-<platform-suffix>, and ONLY while the crate still ships
+# the matching launcher bin/<stem> — the artifact of a renamed or deleted binary
+# is not protected, because nothing will rebuild it and a protection that only
+# ever accumulates is its own kind of drift. Every artifact this loop declines
+# to protect is announced on stderr; see the note on the loop itself for why
+# silence there would be the permissive side of a "cannot tell".
+#
+# Those artifacts are produced by
 # rebuild-plugins.sh AFTER this copy and never exist in the crate, so a plain
 # `--delete` mirror (and the fallback's wipe) DELETES them and leaves the plugin
 # deployed with its launcher alone. That is not a red state, it is a dark one:
@@ -401,6 +408,13 @@ PY
 # three, and because the health gate invokes the overwatch launcher in the very
 # dir it had just re-copied, the gate itself could no longer evaluate and halted
 # the run fail-closed BEFORE the rebuild step that would have restored them.
+#
+# NOTE: check-plugin-rollout.py's `_is_rebuild_artifact` still ACCEPTS any
+# bin/<name>-<suffix> in a deployed dir with no crate counterpart, so the two
+# scripts now encode different rules for the same file class — the rollout
+# deletes an orphan, the check tolerates one that arrived by some other route.
+# Recorded in backlog 51e6ebc7 rather than reconciled here, because widening the
+# check is a change to a gate's verdict and belongs in its own commit.
 #
 # The suffix list below is hand-copied from check-plugin-rollout.py's
 # PLATFORM_SUFFIXES — the canonical table, whose `_is_rebuild_artifact` already
@@ -419,32 +433,66 @@ copy_plugin_dir() {
     darwin-arm64 darwin-x86_64 linux-x86_64 linux-arm64
     windows-x86_64 windows-arm64 windows-x86_64.exe windows-arm64.exe
   )
-  local s
-  local -a protect=()
-  for s in "${plat_suffixes[@]}"; do
-    protect+=("--filter=P /bin/*-$s")
+  # Protect one rule per deployed file rather than one wildcard per suffix, and
+  # only for a binary the crate still ships: the launcher `bin/<stem>` is
+  # committed, so `bin/<stem>-<suffix>` is the artifact of something that still
+  # exists. An artifact whose stem has no launcher any more is the leftover of a
+  # renamed or deleted binary — nothing will ever rebuild it, and keeping it
+  # would make the protection an unbounded ratchet that only ever accumulates.
+  # Those are left to `--delete` on purpose.
+  #
+  # Two things this rule does NOT guarantee, stated so the prose does not
+  # overclaim:
+  #  * `--filter=P /bin/$base` is an rsync PATTERN, not a literal path. A stem
+  #    containing `*`, `?` or `[` would not be matched literally, and an
+  #    unmatched rule protects nothing. Every one of the 39 tracked launchers
+  #    under crates/*/bin/ matches ^[a-z0-9-]+$ (measured 2026-09-08 at
+  #    610b47e4), so this is theoretical today.
+  #  * the decision rests on "the crate commits bin/<stem>". That invariant is
+  #    machine-checked elsewhere (check-plugin-rollout.py's
+  #    `_bin_launcher_problem`, and check-launcher-exec-bit.py for its mode) but
+  #    NOT here, and if it were ever false for a live plugin this loop would
+  #    read its live artifact as an orphan and hand it to --delete. That is the
+  #    permissive side of a "cannot tell", so it must not happen quietly: every
+  #    unprotected artifact is announced below. The line is expected and benign
+  #    for a genuine rename; seeing it for a plugin you did not rename is the
+  #    signal that the invariant broke.
+  local s f base stem
+  local -a protect=() keep_names=()
+  for f in "$dst"/bin/*; do
+    [ -e "$f" ] || continue
+    base="${f##*/}"
+    for s in "${plat_suffixes[@]}"; do
+      case "$base" in
+        *-"$s")
+          stem="${base%-$s}"
+          if [ -f "$src/bin/$stem" ]; then
+            protect+=("--filter=P /bin/$base")
+            keep_names+=("$base")
+          else
+            echo "rollout: dropping deployed bin/$base — $src/bin/$stem is not a" \
+                 "committed launcher, so nothing rebuilds it (renamed/removed" \
+                 "binary, or a broken launcher invariant)" >&2
+          fi
+          break
+          ;;
+      esac
+    done
   done
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete "${protect[@]}" --exclude '/target/' --exclude '/.git/' \
+    rsync -a --delete ${protect[@]+"${protect[@]}"} --exclude '/target/' --exclude '/.git/' \
           --exclude '/.in_use/' --exclude '/.claude/' "$src/" "$dst/"
   else
-    # The fallback wipes the destination outright, so the protected artifacts
-    # have to be carried across by hand. Copy (not move) them aside first: if
-    # the run dies between here and the restore, the deployed dir is still the
-    # one that was there before, never a half-emptied one.
-    local keep="" f base
-    for f in "$dst"/bin/*; do
-      [ -e "$f" ] || continue
-      base="${f##*/}"
-      for s in "${plat_suffixes[@]}"; do
-        case "$base" in
-          *-"$s")
-            [ -n "$keep" ] || keep="$(mktemp -d)"
-            cp -a "$f" "$keep/$base"
-            break
-            ;;
-        esac
-      done
+    # The fallback wipes the destination outright, so the SAME set the rsync
+    # branch protects has to be carried across by hand — keep_names, not another
+    # scan, so the two branches cannot disagree about what survives. Copy (not
+    # move) them aside first: if the run dies between here and the restore, the
+    # deployed dir is still the one that was there before, never a half-emptied
+    # one.
+    local keep="" base
+    for base in ${keep_names[@]+"${keep_names[@]}"}; do
+      [ -n "$keep" ] || keep="$(mktemp -d)"
+      cp -a "$dst/bin/$base" "$keep/$base"
     done
     find "$dst" -mindepth 1 -maxdepth 1 ! -name '.in_use' -exec rm -rf {} +
     cp -a "$src/." "$dst/"

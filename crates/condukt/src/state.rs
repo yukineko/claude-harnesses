@@ -1471,8 +1471,10 @@ pub enum EditGateDecision {
     /// The edit is in-scope, a real (non-fallback) `cargo check` verdict was
     /// obtained, and it reports the crate is broken: reject the edit.
     Reject,
-    /// Allow the edit. Covers not-required, fallback (gate could not be
-    /// trusted or does not apply), a clean build, and any malformed verdict.
+    /// Allow the edit. Covers exactly three READABLE verdicts: not-required,
+    /// fallback (the gate could not be trusted or does not apply), and a clean
+    /// build. A malformed verdict is NOT covered — it is 判定不能 and resolves
+    /// to [`EditGateDecision::Reject`].
     Allow,
 }
 
@@ -1480,32 +1482,49 @@ pub enum EditGateDecision {
 /// JSON produced by `editgate::check_edit` and decides whether a Rust-file edit
 /// should be rejected.
 ///
-/// Rejects ONLY when `required == true && fallback == false && broken == true`
-/// — i.e. the edit is in-scope for the gate, a real (non-fallback) `cargo
-/// check` verdict was obtained, and that verdict says the crate no longer
-/// compiles. Every other case (not required, fallback, or a clean build)
-/// allows the edit.
+/// Allows ONLY on a verdict it could actually read. All three of `required`,
+/// `fallback` and `broken` must be present AND be booleans; only then is the
+/// `required && !fallback && broken` conjunction evaluated, rejecting when the
+/// edit is in-scope for the gate, a real (non-fallback) `cargo check` verdict
+/// was obtained, and that verdict says the crate no longer compiles. The three
+/// readable cases that allow the edit are: not required, fallback, clean build.
 ///
-/// **Every missing/non-bool field resolves to the restricted side**: `fallback`
-/// defaults to `false` ("this verdict is the gate's to decide"), `broken` to
-/// `true`. `required` still defaults to `false`, because a missing `required`
-/// genuinely means the gate was never claimed to be in scope — so a wholly
-/// malformed verdict still Allows, on that ground alone rather than by
-/// defaulting three fields permissively.
+/// **A missing or non-bool field is a producer malfunction, not a signal**, so
+/// it resolves to the restricted side (`Reject`) — including `required`. The
+/// ground is measured, not assumed: `editgate::check_edit` writes `required`,
+/// `broken` and `fallback` on every one of its four return paths
+/// (`crates/condukt/src/editgate.rs:134,147,208,221` — non-Rust file, no live
+/// worktree, a real `cargo check` result, and an unspawnable `cargo`). There is
+/// no path on which it emits a verdict lacking any of them. A verdict that is
+/// missing one therefore did not come from a working producer, and says nothing
+/// about whether the edit compiles.
+///
+/// This function used to default `required` to `false`, on the reading that a
+/// missing `required` "means the gate was never claimed to be in scope". Given
+/// the four emission sites above, that reading was wrong: it turned every
+/// unparseable verdict — `{}`, `null`, `{"required": 1}`, anything a garbled
+/// producer emitted — into "out of scope, allow", because the conjunction
+/// short-circuited on the very first term. That is 判定不能 written as `clean`,
+/// which CLAUDE.md 第3節 forbids: 判定不能 must resolve to `block`. An edit
+/// whose compile status could not be determined is not an edit that compiles.
 #[allow(dead_code)]
 pub fn enforce_edit_gate(verdict: &serde_json::Value) -> EditGateDecision {
-    let required = verdict
-        .get("required")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let fallback = verdict
-        .get("fallback")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let broken = verdict
-        .get("broken")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+    // `None` means "the key is absent, or present but not a bool" — i.e. it
+    // could not be read. `None` is deliberately NOT collapsed into `false` via
+    // `unwrap_or`: "the producer said false" and "the producer said nothing
+    // readable" are different answers and must not share an encoding.
+    fn read_bool(verdict: &serde_json::Value, key: &str) -> Option<bool> {
+        verdict.get(key).and_then(serde_json::Value::as_bool)
+    }
+
+    let (Some(required), Some(fallback), Some(broken)) = (
+        read_bool(verdict, "required"),
+        read_bool(verdict, "fallback"),
+        read_bool(verdict, "broken"),
+    ) else {
+        // At least one field was unreadable: 判定不能 → restricted side.
+        return EditGateDecision::Reject;
+    };
 
     if required && !fallback && broken {
         EditGateDecision::Reject

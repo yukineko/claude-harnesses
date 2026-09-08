@@ -12945,6 +12945,7 @@ updated_at = 1788872561
 weight = 0.0
 issue_number = 446
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/446"
+
 [[task]]
 id = "91fa24df"
 title = "~/.cargo/bin の 2026-07-23 版 backlog/hypothesis/fugu-router が plugin cache 版を PATH で shadow し、backlog の store divergence ガードが無効化されている"
@@ -15965,3 +15966,137 @@ updated_at = 1787905350
 weight = 0.0
 issue_number = 411
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/411"
+
+[[task]]
+id = "413d88b6"
+title = "condukt の autonomy 不変条件テスト askuserquestion_sites_match_frozen_allowlist が origin/main で赤い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+status = "pending"
+notes = """
+測定 2026-09-09。cargo test -p condukt --test autonomy_invariant で 15 passed / 1 failed。使い捨て worktree の e018fe91 (origin/main の tip) でも同一に再現するので、merge 29e9257b が持ち込んだものではない。
+
+このテストは policy-answer shim の凍結オラクルであり、自律モードで人間への停止が消えていないことを機械検査する唯一の砦である。それが赤いまま main に居るということは、autonomy gate の契約が現在は誰にも検査されていないということ。p0 にしたのはそのため。CLAUDE.md 第1節『赤は検出であって邪魔ではない』の対象そのもの。
+
+まず allowlist と実際の AskUserQuestion サイトのどちらがずれたのかを観測すること (テストを allowlist 側に合わせて緩めるのは第4節が禁じる隠蔽になりうる)。"""
+created_at = 1788898312
+updated_at = 1788898312
+weight = 0.0
+issue_number = 447
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/447"
+
+[[task]]
+id = "ed3afdd9"
+title = "harness-core の fleet::gate_crates_is_the_known_six が赤い — GATE_CRATES 実体は parallelguard を含む7件、テストの期待は6件"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+測定 2026-09-09、測定点 e018fe91 と merge 後の双方で同一に再現。cargo test -p harness-core --lib で 276 passed / 1 failed。
+
+crates/harness-core/src/fleet.rs:56 の assert が left(実体)=blastguard,propguard,specguard,stuckguard,mutategate,overwatch,parallelguard の7件、right(期待)=同6件(parallelguard 無し)。remote が taintguard を撤去し parallelguard を足した際に、fleet.rs の一覧は更新されたがテストの期待値が据え置かれた形。
+
+注意: pre-commit の gate-crates-sync は 11 sources 間で一致と報告して緑になる。つまり sync ゲートとこのテストが別々の真実を見ており、片方が緑でももう片方が赤い。どちらが正典かを決めてから直すこと。"""
+created_at = 1788898314
+updated_at = 1788898314
+weight = 0.0
+issue_number = 448
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/448"
+
+[[task]]
+id = "dab43072"
+title = "backlog::project_scope の pinned-store テスト2件が origin/main で赤い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+測定 2026-09-09。cargo test -p backlog --test project_scope で 6 passed / 2 failed: a_pinned_store_dir_still_scopes_by_project (crates/backlog/tests/project_scope.rs:325) と a_pinned_store_dir_still_works_outside_any_repo (:366)。どちらも panic メッセージは out=no tasks で err は空。
+
+e018fe91 の使い捨て worktree でも同一に再現するので merge 29e9257b 由来ではない。pinned store dir を指定したときに task が 1 件も返らないという形なので、『読めなかった』が『空』へ写っていないかを先に確認すること (CLAUDE.md 第3節)。空集合を返す経路なら、それはテストの失敗ではなく fail-open の発見になる。"""
+created_at = 1788898316
+updated_at = 1788898316
+weight = 0.0
+issue_number = 449
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/449"
+
+[[task]]
+id = "85f37839"
+title = "blastguard::overwatch_violation は workspace 一括実行でのみ落ち、単体では緑 — テスト間干渉の疑い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+測定 2026-09-09。cargo test --workspace --no-fail-fast では失敗ターゲットに挙がるが、cargo test -p blastguard --test overwatch_violation 単体では 4 passed / 0 failed。merge 後のツリーでも e018fe91 でも同じ挙動。
+
+donegate の integration.rs で以前見つけた flaky と同型の疑い (固定パスの一時ディレクトリを複数テストが共有し、各々が冒頭で消す)。失敗メッセージが環境問題に見えるため flaky なゲートテストが生き延びやすい形。単体で緑だから良しとせず、共有 fixture の有無を実際に読むこと。"""
+created_at = 1788898357
+updated_at = 1788898357
+weight = 0.0
+issue_number = 450
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/450"
+
+[[task]]
+id = "867dde4b"
+title = ".backlog/tasks.toml の merge に安全な結合手段が無く、素朴な union が task ブロックを切断してキュー全体をパース不能にした"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-09、merge 29e9257b で発生し cbc48b0a で修復。
+
+何が起きたか: このファイルは append-only の台帳なので衝突は union が正解なのだが、衝突ハンクの境界が [[task]] ブロックの内側に落ちると、ours の途中 + theirs の途中が連結されて id を2つ持つ1ブロックになる。TOML 全体がパース不能になり、以後の backlog add が Error: failed to parse で全滅する。恒久キューが黙って行き先を失う形。
+
+さらに罠が2段ある: (1) 修復スクリプト自身も、notes 本文が他 task を引用していて行頭が丁度 [[task]] になっている散文を構造と誤認し、741 ブロックを書いて 742 パースされた。三重引用符のパリティを追跡して直した。(2) 素朴 union は切断だけでなく欠落も起こしうるので、修復は継ぎ目を繕うのではなく両親から id 単位で再構成した (ours=627 / theirs=707 / 共有=592 で union=742)。
+
+提案: backlog 側に id 単位 union を行う merge サブコマンドを持たせ、.gitattributes の merge driver として登録する。手で union するたびに同じ切断が起きる。関連 2fa47b68 (ストアが main のツリーに在ることそのもの)。"""
+created_at = 1788898358
+updated_at = 1788898358
+weight = 0.0
+issue_number = 451
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/451"
+
+[[task]]
+id = "32706d14"
+title = "blastguard の redirect 誤検知が Rust ジェネリクスと Python 比較演算子にも及ぶ (23a39f9c の続き)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 2026-09-09、3件を追加観測。いずれも単一引用符の heredoc または引用済み -c 引数の内側であり、実際のリダイレクトは1つも存在しない。
+
+観測した block 理由 (逐語):
+1. '> .scratch/resolve_charter.py' truncates and overwrites an existing file — 新規ファイル作成の cat リダイレクト。これは形としては正確 (真陽性)。
+2. '> ,' truncates and overwrites an existing file — Rust の型 &Ctx<'_>, が単一引用符 heredoc の python ソース中にあっただけ。
+3. '> 1]' truncates and overwrites an existing file — python3 -c の引用済み引数中の比較 c != 1 相当の記述。
+
+2 と 3 は 23a39f9c と同じクラス (引用境界を見ずに素の文字列走査で redirect トークンを拾う) が、shell 以外の言語の構文にまで及ぶことを示す。回避のために構文を綴り直すのはユーザー裁定で禁じられている hack route なので、その都度 declare して別ツールに退避しており、作業コストとして積み上がっている。"""
+created_at = 1788898360
+updated_at = 1788898360
+weight = 0.0
+issue_number = 452
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/452"
+
+[[task]]
+id = "ecfcc46a"
+title = "blastguard: interpreter_code_verdict に通した ctx が正しい base を運ぶことを、利害のない agent が検査していない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+実測 2026-09-09、merge 29e9257b で実施した semantic merge conflict の解消。
+
+git がテキスト上は衝突なくマージしたが、こちら側が analyze_shell_payload に ctx: 参照 Ctx を足していた一方、remote 側が足した interpreter_code_verdict はその引数を知らない時代の呼び出しだった。3関数 (interpreter_code_verdict / analyze_code_interpreter / analyze_interpreter_stdin_exec) に ctx を通して解消した。祖先の呼び出し元は既に ctx を持っていたので既存のものを下ろしただけで、合成した既定 context は作っていない。
+
+ただし CLAUDE.md 第2節(a) の要求を満たしていない: この配線を書いたのは実装者自身であり、利害のない agent が『inline-eval ペイロードの相対オペランドが正しい base に置かれること』を RED 先行で検査したわけではない。既存テストは全て緑だが、緑であることはこの経路を検査した証拠にならない。誤った base に置かれるとゲートは黙って緩む側に倒れるので、対照付きの behavioural test が要る。"""
+created_at = 1788898361
+updated_at = 1788898361
+weight = 0.0
+issue_number = 453
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/453"

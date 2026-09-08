@@ -16052,3 +16052,39 @@ context を汚さないよう tail だけを別 agent に読ませること)。
 created_at = 1788841984
 updated_at = 1788841984
 weight = 0.0
+
+[[task]]
+id = "5c09e2d6"
+title = "specforge draft の normalize agent が exit 1 で落ちる (Cannot read properties of undefined reading includes)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1788843710
+updated_at = 1788843710
+weight = 0.0
+
+[[task]]
+id = "ab736bac"
+title = "harness-recur M1 を実装する — SessionEnd で M3 の特徴を抽出し session_feature へ永続化する (transcript は 2 日で消えるため path 保存では不可)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1788843710
+updated_at = 1788843710
+weight = 0.0
+
+[[task]]
+id = "388737f1"
+title = "difflog::SessionState に transcript_path を足し、harness_core::transcript に path/順序/turn_index 付きツールイベントイテレータを追加する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = []
+status = "pending"
+notes = ""
+created_at = 1788843710
+updated_at = 1788843710
+weight = 0.0

@@ -176,7 +176,15 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // questions used to share one answer: "I am refusing to run the checks this
     // project declared" rendered as `checks: 0`, i.e. as "allow every stop".
     if declaration.is_refusal() {
-        refuse(&cfg, &declaration, &root, &session, interactive, __start);
+        refuse(
+            &cfg,
+            &declaration,
+            &root,
+            &session,
+            interactive,
+            __start,
+            input.stop_hook_active,
+        );
     }
 
     if cfg.checks.is_empty() {
@@ -195,7 +203,9 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
 
     // one-shot escape hatch
-    if let Some(reason) = harness_core::gate::run::consume_skip(&root, ".donegate-skip") {
+    if let Some(reason) =
+        harness_core::gate::run::consume_skip(&root, ".donegate-skip", input.stop_hook_active)
+    {
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "skip", &[], 0);
         eprintln!("donegate: .donegate-skip consumed — allowing stop ({reason})");
@@ -434,9 +444,16 @@ fn refuse(
     session: &str,
     interactive: bool,
     start: std::time::Instant,
+    // Threaded in rather than defaulted: `consume_skip` needs to know whether
+    // this stop is a re-entry after some gate blocked, and a wrong constant
+    // here would either burn the operator's one-shot token on a stop that never
+    // happened (false) or keep honouring it forever (true).
+    stop_hook_active: bool,
 ) -> ! {
     // The one-shot escape hatch still applies to a refusal.
-    if let Some(reason) = harness_core::gate::run::consume_skip(root, ".donegate-skip") {
+    if let Some(reason) =
+        harness_core::gate::run::consume_skip(root, ".donegate-skip", stop_hook_active)
+    {
         state::reset(&cfg.state_dir, session);
         log_event(cfg, session, "skip", &[], 0);
         eprintln!("donegate: .donegate-skip consumed — allowing stop ({reason})");

@@ -82,10 +82,7 @@ use harness_core::gate::run::consume_skip;
 /// keeps testing the old one and the contract tests stay red — loudly, never
 /// vacuously.
 fn consume_skip_for_stop(root: &Path, marker: &str, stop_hook_active: bool) -> Option<String> {
-    // vvv REPLACE vvv — the flag is discarded because the API cannot take it yet.
-    let _ = stop_hook_active;
-    consume_skip(root, marker)
-    // ^^^ REPLACE ^^^
+    consume_skip(root, marker, stop_hook_active)
 }
 
 /// A fresh, isolated project root.

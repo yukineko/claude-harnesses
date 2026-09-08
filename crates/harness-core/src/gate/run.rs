@@ -144,21 +144,112 @@ fn panic_exit(name: &str, action: PanicAction) -> ! {
     }
 }
 
-/// Consume a one-shot skip marker `<root>/<marker>`: if present, return its
-/// trimmed one-line reason (or `"(no reason given)"` when empty) and delete the
-/// file so it only applies once. Returns `None` when the marker is absent.
-pub fn consume_skip(root: &Path, marker: &str) -> Option<String> {
+/// Read a marker's one-line reason: the trimmed contents, or
+/// `"(no reason given)"` when it is empty but readable.
+///
+/// `None` means **判定不能** — the path exists but its contents could not be
+/// read (it is a directory, a device, unreadable, …). That is deliberately NOT
+/// mapped to a default reason: a token we cannot read is not a token we may act
+/// on (CLAUDE.md 第3節). It used to become `"(no reason given)"`, i.e. an IO
+/// failure was honoured as a valid escape — and since `remove_file` fails on
+/// the same path, it was re-honoured on *every* later stop: a permanent bypass
+/// created by accident.
+fn skip_reason(p: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(p).ok()?;
+    let trimmed = text.trim();
+    Some(if trimmed.is_empty() {
+        "(no reason given)".to_string()
+    } else {
+        trimmed.to_string()
+    })
+}
+
+/// Where an already-honoured marker is parked until the stop it authorised
+/// actually completes: `<marker>.honoured`, beside the marker itself.
+fn honoured_name(marker: &str) -> String {
+    format!("{marker}.honoured")
+}
+
+/// Consume a one-shot skip marker `<root>/<marker>` for the stop being
+/// adjudicated right now: return its trimmed one-line reason (or
+/// `"(no reason given)"` when the file is empty) while the escape is still
+/// owed, and `None` once it has been spent — or when it cannot be honoured.
+///
+/// # The token is spent by a completed stop, not by this gate's own verdict
+///
+/// A Stop is adjudicated by four independent processes (donegate, reviewgate,
+/// tdd, propguard), each holding only its own verdict. This function used to
+/// `remove_file` the marker the instant *its* gate decided to allow. So when
+/// donegate honoured `.donegate-skip` and allowed while reviewgate blocked the
+/// same stop, **no stop happened** and the operator's one-shot escape had been
+/// spent on nothing: they had to re-place the marker on every re-entry, for
+/// every gate, until the four-way conjunction went green at once — the standing
+/// pressure toward a *permanent* bypass that CLAUDE.md 第5節 forbids.
+///
+/// `stop_hook_active` is the seam that fixes it. Claude Code sets it on the
+/// stop that follows a block ([`crate::hook::HookInput`]), so it distinguishes
+/// "this stop is a re-entry after somebody blocked" from "this stop starts a
+/// fresh chain". The lifecycle is therefore:
+///
+/// 1. **Marker present** — honour it and `rename` it to `<marker>.honoured`.
+///    The escape is now *owed*: it has authorised a stop that has not completed.
+/// 2. **Only `<marker>.honoured` present, `stop_hook_active == true`** — some
+///    gate blocked the stop this token authorised, so the stop never happened.
+///    Keep honouring it; the escape is still owed.
+/// 3. **Only `<marker>.honoured` present, `stop_hook_active == false`** — the
+///    chain ended, so a stop this token authorised did complete. Delete the
+///    record and return `None`. This is what keeps the escape one-shot rather
+///    than permanent (pinned by
+///    `tests/gate_skip_token_survives_block.rs::token_is_consumed_exactly_once_on_the_ordinary_path`).
+///
+/// A `rename` (rather than a second bookkeeping file) is used so that a marker
+/// the operator *re-places* is never mistaken for an outstanding honour: the
+/// two states have different filenames and step 1 always wins.
+///
+/// # Failure modes, all resolved to the restrictive side
+///
+/// * Marker unreadable → `None` (not honoured); see [`skip_reason`].
+/// * `rename` fails → the honour cannot be recorded, so it cannot be bounded.
+///   Fall back to the old behaviour and `remove_file` the marker, honouring it
+///   exactly once. If that fails too, the token can be neither bounded nor
+///   cleared, so it is **not** honoured at all (`None`).
+/// * `<marker>.honoured` unreadable on a re-entry → `None` (the gate checks).
+///
+/// # Residual, stated rather than hidden
+///
+/// `if !p.exists()` maps EACCES to "no marker" exactly as it does ENOENT, so an
+/// unreadable-by-permission marker still reads as absent (restrictive here, but
+/// it is a判定不能 rendered as a verdict). Pinning it needs an injectable
+/// metadata probe — filed as backlog `dc85e1c8`, not fixed here.
+pub fn consume_skip(root: &Path, marker: &str, stop_hook_active: bool) -> Option<String> {
     let p = root.join(marker);
-    if !p.exists() {
+    let honoured = root.join(honoured_name(marker));
+
+    // (1) A token nobody has honoured yet — or one the operator has just
+    // re-placed, which supersedes any stale record.
+    if p.exists() {
+        let reason = skip_reason(&p)?;
+        if std::fs::rename(&p, &honoured).is_err() && std::fs::remove_file(&p).is_err() {
+            // Neither bounded nor cleared: honouring it now would create a
+            // standing bypass, so do not honour it.
+            return None;
+        }
+        return Some(reason);
+    }
+
+    if !honoured.exists() {
         return None;
     }
-    let reason = std::fs::read_to_string(&p)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "(no reason given)".to_string());
-    let _ = std::fs::remove_file(&p);
-    Some(reason)
+
+    // (2) The stop this token authorised was blocked by some other gate, so it
+    // never happened: the escape is still owed.
+    if stop_hook_active {
+        return skip_reason(&honoured);
+    }
+
+    // (3) A stop this token authorised completed. Spend it.
+    let _ = std::fs::remove_file(&honoured);
+    None
 }
 
 /// Append `entry` as one JSON line to `<state_dir>/log.jsonl`, creating the
@@ -248,7 +339,7 @@ mod tests {
     #[test]
     fn skip_marker_absent_is_none() {
         let root = skip_root("absent");
-        assert!(consume_skip(&root, ".x-skip").is_none());
+        assert!(consume_skip(&root, ".x-skip", false).is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -256,9 +347,12 @@ mod tests {
     fn skip_marker_with_reason_is_consumed_once() {
         let root = skip_root("reason");
         std::fs::write(root.join(".x-skip"), "  because\n").unwrap();
-        assert_eq!(consume_skip(&root, ".x-skip").as_deref(), Some("because"));
+        assert_eq!(
+            consume_skip(&root, ".x-skip", false).as_deref(),
+            Some("because")
+        );
         // consumed: a second call sees nothing.
-        assert!(consume_skip(&root, ".x-skip").is_none());
+        assert!(consume_skip(&root, ".x-skip", false).is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -267,7 +361,7 @@ mod tests {
         let root = skip_root("empty");
         std::fs::write(root.join(".x-skip"), "   \n").unwrap();
         assert_eq!(
-            consume_skip(&root, ".x-skip").as_deref(),
+            consume_skip(&root, ".x-skip", false).as_deref(),
             Some("(no reason given)")
         );
         let _ = std::fs::remove_dir_all(&root);

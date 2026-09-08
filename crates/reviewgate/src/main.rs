@@ -154,7 +154,9 @@ fn review_run(hook: Option<HookInput>) -> ! {
     let session = input.session_key();
 
     // one-shot escape hatch
-    if let Some(reason) = harness_core::gate::run::consume_skip(&root, ".reviewgate-skip") {
+    if let Some(reason) =
+        harness_core::gate::run::consume_skip(&root, ".reviewgate-skip", input.stop_hook_active)
+    {
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "skip", &[], 0);
         eprintln!("reviewgate: .reviewgate-skip consumed — allowing stop ({reason})");

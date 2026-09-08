@@ -203,7 +203,9 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 
     let session = input.session_key();
 
-    if let Some(reason) = harness_core::gate::run::consume_skip(&root, ".tdd-skip") {
+    if let Some(reason) =
+        harness_core::gate::run::consume_skip(&root, ".tdd-skip", input.stop_hook_active)
+    {
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "skip", 0);
         eprintln!("tdd: .tdd-skip consumed — allowing stop ({reason})");

@@ -15832,9 +15832,82 @@ fixture が必要なテストであり、追加しないと Undetermined に落�
     cargo test -p condukt --no-fail-fast  -> 0 (FAILED 行なし)
 
 version は 0.7.147 -> 0.7.148 を 3 ファイル lockstep で bump 済み。
-**rollout は未実施** (稼働ハーネスの cache には反映されていない)。"""
+**rollout は未実施** (稼働ハーネスの cache には反映されていない)。
+
+---
+独立検証 (2026-09-08)。実装した agent が自分のテストを書いたため CLAUDE.md 2.(a) が
+不成立だった件の後始末。**読んで納得したのではなく、変異を当てて走らせた結果**である。
+
+## A. アンチ空虚の対照は本物か -> CONFIRMED (構成で確認)
+
+`crates/condukt/src/wt_reconcile.rs` の `registrations_for` を、レジストリを一切
+読まず常に死を許す実装へ変異させた:
+
+    fn registrations_for(path: &Path, now: i64) -> Determination<Registrations> {
+        let _ = (path, now);
+        // MUTATION M1: ignore the registry entirely, always permit death.
+        Determination::Known(Registrations::AllStaleHere)
+    }
+
+`cargo test -p condukt --no-fail-fast --test worktree_reconcile --test worktree_resume`:
+
+    only_the_heartbeat_age_separates_live_from_dead ........ FAILED
+    live_session_registration_keeps_a_frozen_clean_worktree  FAILED
+    no_session_registration_is_undetermined_not_dead ....... FAILED
+    unreadable_session_registry_is_undetermined_not_dead ... FAILED
+    test result: FAILED. 20 passed; 4 failed
+
+変異を revert 後: `24 passed; 0 failed` / `8 passed; 0 failed`、rc=0、ツリーはクリーン。
+レジストリを読まない実装はこのファイルを通れない。「常に Undetermined」も
+「常に死を許す」も殺される。
+
+## B. 既存テストのフィクスチャ改変は緩和か -> CONFIRMED (緩和ではない)
+
+`git show 613acbdd -- 'crates/condukt/tests/*'` の削除行は **7 行すべて doc コメント**で、
+assert の削除・変更は 0 件 (266 insertions / 7 deletions)。
+`dead_clean_worktree_is_removable` は今も `dead` + `removable` を assert したままで、
+フィクスチャが第4項を積極的に立証する `write_driver` を得ただけ。docstring が逐語で
+「Dropping the `write_driver` call below turns this test's expectation from `dead` to
+`undetermined` — that is the assertion `no_session_registration_is_undetermined_not_dead`
+makes」と、反対側を別テストで固定してあることを開示している。
+
+## D. 散文と実装の一致 (CLAUDE.md 第4節) -> CONFIRMED
+
+DEATH 規則の docstring は `conjunction of **four** terms` に書き換わり、第4項
+「登録が期限切れ」が列挙されている。
+
+## 実機での確認 (rolled-out 0.7.148、worktree の target/ ではない)
+
+    登録なし: session-05717fa8  occupancy=undetermined  removable=false
+              keep: ... no session registration names <path>, and a session doing
+                    ordinary worktree work registers none — so this is not an
+                    observation that nobody is working here
+    登録あり: session-05717fa8  occupancy=live          removable=false
+              keep: a running task is progressing here
+    どちらも 0 of 18 entries are removable
+
+修正前 (0.7.146) は同じ worktree が dead/removable=true、13 of 16 removable だった。
+
+## まだ検証していない (この検証で埋まっていない穴)
+
+- **E**: TTL が `backlog::lock::LOCK_STALE_TTL_SECS` からの手書きコピーである件
+  (backlog 6e30b6fc)。ドリフトがどちら向きに倒れるかは未測定。
+- **F**: IO 失敗・parse 失敗・空集合・panic が `removable = true` に到達する経路の全数走査。
+
+## 検証者の独立性についての留保
+
+CLAUDE.md 2.(a) が求めるのは利害のない agent である。この検証を行ったのは実装も
+テストも書いていない別の agent だが、**その実装を発注した当人**であり、モデル多様性も
+無い。A/B/D は変異と diff という機械的事実で押さえたので判断に依存しないが、
+E/F は依然として誰も見ていない。
+
+---
+CLOSED 2026-09-08。condukt 0.7.148 (commit 613acbdd) で修正、独立検証で
+A/B/D を CONFIRMED (上記)。実機で両方向を再現済み。
+E (TTL の手書きコピー / backlog 6e30b6fc) と F (IO/panic 経路の全数走査) は
+未検証として残る — 別項目で追う。"""
 created_at = 1788772560
-updated_at = 1788774057
+updated_at = 1788841984
 weight = 0.0
 
 [[task]]
@@ -15914,4 +15987,68 @@ status = "pending"
 notes = ""
 created_at = 1788771963
 updated_at = 1788771963
+weight = 0.0
+
+[[task]]
+id = "c66335c4"
+title = "condukt-verifier subagent が 18 時間ハングし、production コードに 当てた変異を revert せず放置した"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 (2026-09-07 18:54 起動 -> 2026-09-08 13:28 に手動停止)。
+
+backlog 7039ad47 の独立検証のために `condukt:condukt-verifier` を起動したところ、
+**18 時間 running のまま何も返さなかった**。TaskStop で停止したときの result は
+逐語で「I'll start by exploring the worktree and the commit under verification.」
+の 1 行だけだった。
+
+ところが実際には作業が進んでおり、停止時点で worktree に **未コミットの変異が
+残っていた**:
+
+    $ git status --short
+     M crates/condukt/src/wt_reconcile.rs
+
+    fn registrations_for(path: &Path, now: i64) -> Determination<Registrations> {
+    -    match driver_registry_root() { ... }
+    +    let _ = (path, now);
+    +    // MUTATION M1 (verifier): ignore the registry entirely, always permit death.
+    +    Determination::Known(Registrations::AllStaleHere)
+    }
+
+つまり「変異を当てる」までは進み、「テストを走らせる」か「revert する」の
+どこかで止まった。指示には revert を明記していた。
+
+## なぜこれが重いか
+
+1. **production コードが変異したまま放置された。** 今回は親セッションが
+   `git status` を見て気づいたが、気づかずに commit していれば、レジストリを
+   一切読まない = live な worktree を削除可能と答える実装が landed していた。
+   変異の内容が「ゲートを無効化する」ものである以上、これは最悪の取り残し方である。
+2. **停止しても報告されない。** 18 時間 running は明らかに異常だが、親セッションは
+   完了通知を待つ以外の可観測性を持たない (transcript を読むと context が溢れる)。
+   ハングと「まだ作業中」が区別できない。
+3. サブエージェントの result が実際の作業量を反映していない (1 行しか返っていないのに
+   ファイルは変異していた)。
+
+## 判定不能として残す点
+
+(a) verifier agent 側の欠陥 (無限ループ・応答待ち)。
+(b) ハーネス側の欠陥 (長時間 running の subagent に対する検出・報告が無い)。
+見分ける方法: transcript
+`~/.claude/projects/-home-hiroyuki-nakayama-src-claude-harnesses/05717fa8-.../subagents/agent-a299a2445f0c7a9fc.jsonl`
+の末尾を読み、最後のツール呼び出しが何で止まっているかを見る (親セッションの
+context を汚さないよう tail だけを別 agent に読ませること)。
+
+## 対策案 (未検証)
+
+- 変異を production ツリーに直接当てさせない。使い捨ての worktree か copy で行い、
+  親のツリーは触らせない。
+- subagent に wall-clock の上限を持たせ、超過を「判定不能」として報告する
+  (沈黙のまま running を続けるのは CLAUDE.md 第1節の「沈黙は許容される degrade ではない」)。
+- 検証タスクの完了条件に「ツリーがクリーンであること」を機械的に含める。
+"""
+created_at = 1788841984
+updated_at = 1788841984
 weight = 0.0

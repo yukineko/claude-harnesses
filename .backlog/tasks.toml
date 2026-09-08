@@ -16174,3 +16174,96 @@ context を汚さないよう tail だけを別 agent に読ませること)。
 created_at = 1788841984
 updated_at = 1788841984
 weight = 0.0
+
+[[task]]
+id = "666b6704"
+title = "core.hooksPath が main ツリーの絶対パスなので、worktree で新設した pre-commit ゲートは merge されるまで DARK になる"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-08。`scripts/check-cross-crate-constants.py` を worktree で
+新設・配線して commit したところ、**そのゲートは commit 時に一度も実行されなかった**
+のに commit は通った。red ではなく dark である。
+
+## 実測
+
+    $ git config --local --get core.hooksPath
+    /home/hiroyuki_nakayama/src/claude-harnesses/.githooks      <- main ツリーの絶対パス
+
+    $ grep -c 'cross-crate' .githooks/pre-commit                 <- worktree 側
+    3
+    $ grep -c 'cross-crate' /home/hiroyuki_nakayama/src/claude-harnesses/.githooks/pre-commit
+    0
+
+    commit 出力の該当箇所 (gate-crates-sync の次が launcher-exec-bit で、
+    間にあるはずの crossx-constants の行が無い):
+        OK: GATE_CRATES consistent across 11 sources: ...
+        launcher-exec-bit: all 39 plugin launcher(s) recorded 100755 ...
+
+    一方、hook を直接走らせると出る:
+    $ sh .githooks/pre-commit | grep cross-crate
+        check-cross-crate-constants: 1 hand-copied constant(s) agree with ...
+
+`core.hooksPath` は `git config --local` = **リポジトリ単位**なので、
+linked worktree 全部で共有される。相対パス `.githooks` なら各 worktree で解決される
+のに対し、絶対パスなので**常に main ツリーの hook 本体**が走る。
+CLAUDE.md の「ビルド/テスト/ゲート」節が案内しているのは相対形
+(`git config core.hooksPath .githooks`) であり、実際の設定はそこからずれている。
+
+## split-brain (これが本題)
+
+hook 本体は main から、hook が呼ぶスクリプトは **worktree** から来る:
+
+    .githooks/pre-commit:131  REPO="$(git rev-parse --show-toplevel)"   <- worktree
+    run() { path="$REPO/scripts/$scanner"; ... }
+
+つまり **「どのゲートを呼ぶか」の一覧は main 由来、「各ゲートが何をするか」の実装は
+worktree 由来**という食い違いが常態化している。帰結:
+
+- worktree で**ゲートを新設**しても、main の一覧に無いので**呼ばれない**。dark。
+- worktree で**既存ゲートの実装を変更**すると、それは**そのまま効く**
+  (main の一覧が呼ぶ先が worktree のファイルなので)。
+- worktree で**スキャナを削除**すると `run` の `! -f` で block される。つまり
+  削除だけは検出され、追加だけが黙って無視される — **非対称で、permissive 側に倒れている**。
+
+現在 main と worktree の pre-commit は 23 行分ずれている (`diff | wc -l`)。
+
+## なぜ p1 か
+
+第8節はゲートを含む**すべての編集を worktree で行うことを絶対義務**にしている。
+その義務に従って書いた新規ゲートが、義務に従ったせいで無効になる。
+「ゲートを追加した」と報告した時点でそれは真だが、**流れは何も止められていない**
+— 第7節が GitHub required check で観測したのと同型の「報告が真であることと、
+ゲートが効いていることが分離する」構造が、ローカルにも存在していた。
+
+さらに悪いことに、これは **red ではなく dark** である (第「禁忌ルール」節の
+launcher-exec-bit と同じクラス)。所見が出ないので、何も間違って見えない。
+
+## 直し方の候補 (未検証・要判断)
+
+1. `git config --local core.hooksPath .githooks` (相対へ戻す)。各 worktree が
+   自分の hook 本体を使うようになり、split-brain が消える。**ただし**「worktree で
+   ゲートを緩めて自分だけ素通りする」経路が開くので、第4節の観点で要検討。
+   現状でも実装側は worktree 由来なので、その経路は**既に開いている**
+   (一覧だけが main 固定という中途半端な状態)。
+2. hook 本体側で「main の一覧」と「worktree の scripts/ の実在ファイル集合」を
+   突き合わせ、**一覧に無いスキャナが worktree に存在したら block** する。
+   追加の非対称を塞ぐが、意図的な作業中ファイルでも止まる。
+3. 現状維持を宣言し、「worktree で新設したゲートは merge されるまで dark」である
+   ことを CLAUDE.md に明記する。**その場合でも本項目の実測は残す**
+   — 知らずに「ゲートを足した」と報告するのが最悪だから。
+
+**この選択は auto で自答しない** (第2節: ゲートの有効範囲を変える判断であり、
+1 は緩和方向を含む)。人間の裁定が要る。
+
+## 当面の帰結 (記録)
+
+`scripts/check-cross-crate-constants.py` (commit 4eadfde5) は
+**main に merge されるまで実行されない**。commit 時に観測した「OK」は
+`sh .githooks/pre-commit` を手で走らせた結果であって、git が走らせた結果ではない。
+"""
+created_at = 1788843085
+updated_at = 1788843085
+weight = 0.0

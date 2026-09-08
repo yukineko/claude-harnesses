@@ -16612,3 +16612,118 @@ rename 時には出て当然の行であり、rename していない plugin で�
 created_at = 1788846130
 updated_at = 1788848070
 weight = 0.0
+
+[[task]]
+id = "65bfb279"
+title = "scripts/ の 23 test suite を走らせるゲートが無く、赤が 11〜33 日間誰にも伝わっていなかった"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+## 観測 (2026-09-08、測定点 cc2f4219 / b962d5d9)
+
+`scripts/` に 23 個の unittest suite (790 tests) があるが、**どのゲートもこれを
+走らせていない**。`.githooks/pre-commit` / `pre-push` / `commit-msg` のいずれにも
+`python3 -m unittest` の呼び出しは無い (実測: `grep -rn 'unittest' .githooks/`
+は 0 ヒット、`test_*.py` への言及は 3 件あるがどれもコメント)。
+
+その結果、本セッションで 2 回続けて「テストが赤いまま誰にも伝わっていない」状態を
+掘り当てた:
+
+1. `test_check_plugin_rollout` が 45 failures で **11 日間** 暗転 (051f7850 で修正)。
+   原因は `b4b13b6f` が parallelguard を GATE_CRATES に足した際、同 suite の
+   FIXTURE_PLUGINS に足さなかったこと。二分探索で `b4b13b6f^` = OK、
+   `b4b13b6f` = FAILED(44) を実測済み。
+2. 残り 5 suite 49 failures (b962d5d9 で修正)。うち 47 は同じ「実体の一覧に
+   fixture の一覧が追随していない」クラス。最古のものは `f98de400` (2026-08-06)
+   起因なので **33 日間**赤かった。
+
+これは「fail は検出であり価値である」(CLAUDE.md 1.) の前提が崩れている状態で、
+赤が出ても誰も見ないなら検出になっていない。しかも 1. の binding テスト
+(`test_hook_source_invokes_exactly_the_expected_scanner_list`) は**正しく赤かった**
+— 書かれていたのに走らせていなかっただけ。
+
+## 決めること
+
+これらをゲートに配線するか、するならどこか。素朴に pre-commit へ全部足すと
+実測で `test_gate_bypass` 単体が 28.7s、全 23 suite で 60s 弱かかる (測定日
+2026-09-08)。候補:
+
+- pre-commit で「触った scripts/*.py に対応する suite だけ」走らせる (速いが、
+  今回の 2 件はどちらも *触っていない* ファイルの fixture が腐る形なので**この
+  設計では検出できない**)。
+- pre-push で全 suite (pre-push には既に `cargo check --workspace` があり、
+  実測 20s cold / ~0s warm を許容済みなので前例はある)。
+- CLAUDE.md 7. により CI は選択肢に入らない (外部サービスにゲートを預けない)。
+
+## 注意
+
+配線する場合、判定不能 (python3 が無い・suite が import 不能) は block へ倒す
+こと。「テストが走らなかった」を「テストが通った」に写すと、この起票の原因その
+ものを機械化することになる。"""
+created_at = 1788849812
+updated_at = 1788849812
+weight = 0.0
+
+[[task]]
+id = "9b64f427"
+title = "plugin_cache.scan の残り 4 件: 判定不能が clean/削除に写る経路 (検証 agent 指摘、未修正)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+## 出所
+
+12f77905 で (A/B)(C) を修正した後、独立した検証 agent が**修正後のコード**に対して
+掃き出した残り。いずれも「stale にも problems にも入らない」= 判定不能が clean に
+写る形 (CLAUDE.md 3.)。再現スクリプトは scratchpad の probe_residual.py /
+probe_dangling_root.py。**未修正のまま**起票する。
+
+## 1. cache root 自体が壊れたリンクだと丸ごと clean、exit 0
+
+`os.listdir()` が `FileNotFoundError` を投げ、`scan()` の
+`except FileNotFoundError: return [], []` に落ちる。これは「キャッシュが無い」
+という確定した観測のための経路であり、12f77905 でその旨を明記した — が、**root が
+dangling symlink の場合も同じ穴に落ちる**。実測: `lexists(root)=True`
+`isdir(root)=False` で `exit=0`、stdout `0 stale dir(s) removed`、stderr 空。
+このモジュールが対処している事故 (condukt/0.4.2) と**同じ形が root 段にある**。
+再現: `os.symlink(tmp+"/nowhere", cache); prune-plugin-cache.py --cache <cache>`。
+EACCES 版は正しく problems に落ちるので、穴は ENOENT の弁別だけ。
+
+→ 対処案: `os.path.lexists(cache_root)` が真なのに listdir が ENOENT なら、それは
+「キャッシュが無い」ではなく「root が壊れている」なので problems へ。
+
+## 2. 認識できない `.in_use` マーカー名が黙って無視され、dir が removable になる
+
+`_PID_RE` が非数値名を skip する。docstring は `.tmp.<hex>` の残骸だけを skip する
+と書いているのに、実際は**任意の非数値名**を落とす。実測: `pid-12345` という
+マーカー 1 個だけを置くと `stale=1 problems=0 removable=[True]` — 「この holder
+記録は読めない」が「誰も持っていない」に写っている。docstring と実挙動の食い違い
+でもあるので CLAUDE.md 4. にも触れる。
+
+## 3. `source_versions()` が読めない crate を黙って落とす
+
+`crates/alpha` を chmod 000 → `versions={} problems=[]`。plugin.json が dangling
+symlink → 同じく `versions={} problems=[]`。どちらも `if not os.path.isfile(pj):
+continue` を通る。`check-plugin-rollout.py:1041` はこの map を直接消費するので、
+「読めなかった crate」が「plugin ではない crate」と区別できない。scan 側の
+「cached but no current version known」で*間接的に*だけ声が出るが、それはその
+plugin がたまたま cache dir を持っている場合に限られる。
+
+## 4. version dir でない**ディレクトリ**が rmtree に渡る
+
+`<cache>/alpha/node_modules/` → `stale=['node_modules'] removable=[True]`。
+silent drop ではない (stale には入る) が、素性の分からない状態に対して
+不可逆な操作を取っている。plain file 側は「報告して残す」規則を守っているのに、
+型が 1 つ違うだけで逆になる。
+
+## 共通の注意
+
+3. と 4. は「削除する側」ではなく「判定できない側」に倒すのが規範どおり。ただし
+4. を problems 側へ倒すと、既存の運用で node_modules 等が紛れ込んでいた場合に
+prune が恒常的に exit 1 になる可能性があるので、実際の cache を測ってから決める。"""
+created_at = 1788849813
+updated_at = 1788849813
+weight = 0.0

@@ -93,8 +93,13 @@ trapped. Fail-closed but bounded:
   post-block re-entry (`stop_hook_active`) is allowed through, bounding the
   block to one occurrence so the session is never trapped.
 
-Escape hatches: create `.propguard-skip` (one-shot, with a one-line reason) or
-set `PROPGUARD_DISABLE=1`.
+Escape hatches: `propguard skip --reason "<why>"` — one-shot, reason required,
+scoped to the session that issued it, and recorded in the gate log at both issue
+and consumption. Or `PROPGUARD_DISABLE=1`, effective only in the environment
+Claude Code itself was started with, since the hook inherits the app's
+environment rather than a tool call's. The old shared `.propguard-skip` file in
+the project root was removed: a one-shot marker in a shared tree is consumed by
+whichever session stops next (CLAUDE.md section 5).
 
 ## Install
 

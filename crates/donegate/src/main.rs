@@ -74,6 +74,19 @@ enum Command {
     Status,
     /// Trust the current project so its ./donegate.toml commands are honored.
     Trust,
+    /// Record a ONE-SHOT skip of the next stop check for THIS session.
+    ///
+    /// Replaces the old `.donegate-skip` file in the project root, which sat in
+    /// the shared tree and was consumed by whichever session stopped next —
+    /// waving that session's legitimate gate through (CLAUDE.md §5 forbids
+    /// exactly that under parallel sessions). This one is attributed to the
+    /// issuing session, requires a reason, and its consumption is logged.
+    Skip {
+        /// Why this stop is being skipped. Required — an unexplained bypass is
+        /// invisible to review even when it is recorded.
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 fn read_stdin() -> String {
@@ -91,7 +104,16 @@ fn main() {
         Command::Init { force } => exit_on_err(init(force)),
         Command::Status => status(),
         Command::Trust => exit_on_err(trust_cmd()),
+        Command::Skip { reason } => exit_on_err(skip_cmd(&reason)),
     }
+}
+
+/// Record a one-shot, session-scoped skip. See `Command::Skip`.
+fn skip_cmd(reason: &str) -> anyhow::Result<()> {
+    let root = std::env::current_dir()?;
+    let (cfg, _) = Config::resolve(&root);
+    harness_core::gate::run::skip_command("donegate", &cfg.state_dir, reason)
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Add the current project root to the shared workspace-trust list so its
@@ -195,10 +217,10 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
 
     // one-shot escape hatch
-    if let Some(reason) = harness_core::gate::run::consume_skip(&root, ".donegate-skip") {
+    if let Some(reason) = harness_core::gate::run::consume_session_skip(&cfg.state_dir, &session) {
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "skip", &[], 0);
-        eprintln!("donegate: .donegate-skip consumed — allowing stop ({reason})");
+        eprintln!("donegate: session-scoped skip consumed — allowing stop ({reason})");
         harness_core::hook_latency::record(
             "donegate",
             &session,
@@ -407,9 +429,10 @@ fn refusal_reason(d: &config::Declaration, attempt: u32, max: u32) -> String {
         ),
     };
     format!(
-        "{head}\n\nOther ways out: DONEGATE_DISABLE=1 (turn donegate off), HARNESS_TRUST_ALL=1 \
-         (trust every project), or a `.donegate-skip` file in the project root with a one-line \
-         reason (consumed once)."
+        "{head}\n\nOther ways out: `donegate skip --reason \"...\"` (one stop, THIS session \
+         only, recorded), HARNESS_TRUST_ALL=1 (trust every project), or DONEGATE_DISABLE=1 in \
+         the environment Claude Code itself was started with — exporting it from a tool call \
+         does not reach this hook, which inherits the app's environment."
     )
 }
 
@@ -436,10 +459,10 @@ fn refuse(
     start: std::time::Instant,
 ) -> ! {
     // The one-shot escape hatch still applies to a refusal.
-    if let Some(reason) = harness_core::gate::run::consume_skip(root, ".donegate-skip") {
+    if let Some(reason) = harness_core::gate::run::consume_session_skip(&cfg.state_dir, session) {
         state::reset(&cfg.state_dir, session);
         log_event(cfg, session, "skip", &[], 0);
-        eprintln!("donegate: .donegate-skip consumed — allowing stop ({reason})");
+        eprintln!("donegate: session-scoped skip consumed — allowing stop ({reason})");
         harness_core::hook_latency::record("donegate", session, start.elapsed().as_millis() as u64);
         std::process::exit(0);
     }

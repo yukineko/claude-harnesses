@@ -215,9 +215,11 @@ pub fn block_reason(v: &GateReport, attempt: u32, max: u32) -> String {
         }
     }
     out.push_str(
-        "\nWhen they pass, donegate will let you stop. To finish anyway, create a file \
-         `.donegate-skip` in the project root with a one-line reason (consumed once). \
-         To disable entirely: set DONEGATE_DISABLE=1.",
+        "\nWhen they pass, donegate will let you stop. To finish anyway, run \
+         `donegate skip --reason \"...\"` — one stop, THIS session only, and the skip is \
+         recorded. To disable entirely: DONEGATE_DISABLE=1 in the environment Claude Code \
+         itself was started with (exporting it from a tool call does not reach this hook, \
+         which inherits the app's environment).",
     );
     out
 }

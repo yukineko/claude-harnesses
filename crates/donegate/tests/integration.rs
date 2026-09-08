@@ -7,10 +7,29 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-/// A fresh isolated HOME + working dir so the gate never touches the real
-/// `~/.donegate` and finds no project `donegate.toml` (→ no checks → allow stop).
+/// A fresh isolated HOME + working dir for ONE child process, so the gate never
+/// touches the real `~/.donegate` and finds no project `donegate.toml`
+/// (→ no checks → allow stop).
+///
+/// The counter is load-bearing. Keyed on `tag` + pid alone, every `run_gate`
+/// call in this binary resolved to the SAME directory, and each call begins by
+/// deleting it — so two tests running in parallel (the default) raced: thread B
+/// removed the directory while thread A was spawning a child whose `cwd` was
+/// that directory, and the spawn failed `NotFound`. Measured at `5a9e1a18`,
+/// before the session-scoped-skip work: 1 failure in 6 runs of this file, moving
+/// between `gate_with_empty_stdin_still_exits_zero` and
+/// `gate_with_malformed_stdin_still_exits_zero` depending on the interleaving.
+///
+/// The error text ("binary spawns: … NotFound") reads like a missing executable
+/// and invites being dismissed as an environment problem, which is exactly how a
+/// flaky gate test survives. It was neither: it was this shared path.
+///
+/// No test relied on state surviving between calls — the old body wiped the
+/// directory on entry — so a per-call directory changes nothing but the race.
 fn isolated_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("donegate-it-{tag}-{}", std::process::id()));
+    static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("donegate-it-{tag}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir

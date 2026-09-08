@@ -201,8 +201,9 @@ pub fn block_reason(v: &Report, attempt: u32, max: u32) -> String {
             "🔴 tdd: couldn't determine what changed — a `git` command failed (attempt \
              {attempt}/{max}). Not allowing the stop blindly on an undetermined changeset \
              (that would let untested code through). Fix the git error (see `tdd status`), \
-             or create `.tdd-skip` in the project root with a one-line reason to skip once, \
-             or set TDD_DISABLE=1 to disable entirely."
+             or run `tdd skip --reason \"...\"` to skip once (THIS session only, recorded), \
+             or set TDD_DISABLE=1 in the environment Claude Code itself was started with \
+             (exporting it from a tool call does not reach this hook)."
         ),
         // Neither reachable in practice (a non-blocking report never reaches
         // `block_reason`), but resolved to the same loud message rather than an
@@ -233,8 +234,10 @@ fn generic_block_reason(
          `it(...)`, or a file under tests/), then finish. Prefer test-first: run \
          `tdd red --task <id>` to capture the failing test before you implement, and \
          `tdd green --task <id>` once it passes.\n\n\
-         Genuinely no test needed (pure refactor/rename/docs)? Create `.tdd-skip` in the \
-         project root with a one-line reason (consumed once). Disable entirely: TDD_DISABLE=1.",
+         Genuinely no test needed (pure refactor/rename/docs)? Run \
+         `tdd skip --reason \"...\"` — one stop, THIS session only, and recorded. Disable \
+         entirely: TDD_DISABLE=1 in the environment Claude Code itself was started with \
+         (exporting it from a tool call does not reach this hook).",
     )
 }
 
@@ -437,7 +440,7 @@ mod tests {
             "must name the git failure: {reason}"
         );
         assert!(
-            reason.contains(".tdd-skip"),
+            reason.contains("tdd skip --reason"),
             "must name the one-shot skip: {reason}"
         );
         assert!(

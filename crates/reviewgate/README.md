@@ -39,9 +39,9 @@ not silently allow — that would turn a broken reviewer into a bypass:
 - A diff too large to review whole (truncated to `max_diff_bytes`) has an
   unreviewed tail → **block** (bounded by `max_attempts`), then give up loudly.
 
-In both cases the block reason names every escape hatch (`.reviewgate-skip`,
-`REVIEWGATE_DISABLE=1`, raising `max_diff_bytes`), so a broken reviewer or an
-oversized diff can never permanently trap the turn.
+In both cases the block reason names every escape hatch (`reviewgate skip
+--reason "<why>"`, `REVIEWGATE_DISABLE=1`, raising `max_diff_bytes`), so a broken
+reviewer or an oversized diff can never permanently trap the turn.
 
 ## Install
 
@@ -83,9 +83,15 @@ globs, `rubric`, and (subprocess) `reviewer_cmd` / `reviewer_timeout_secs`.
 
 ## Escape hatches
 
-- One-shot: create `.reviewgate-skip` in the project root (a one-line reason);
-  consumed once, the next stop is allowed.
-- Off entirely: `REVIEWGATE_DISABLE=1`, or `enabled = false` in config.
+- One-shot: `reviewgate skip --reason "<why>"`. A reason is required; the skip
+  applies only to the session that issued it, is consumed once, and is recorded
+  in the gate log at both issue and consumption. (The old shared
+  `.reviewgate-skip` file in the project root was removed — a one-shot marker in
+  a shared tree is consumed by whichever session stops next, which waves that
+  other session's legitimate gate through: CLAUDE.md section 5.)
+- Off entirely: `enabled = false` in config, or `REVIEWGATE_DISABLE=1` — the env
+  var only in the environment Claude Code itself was started with, because the
+  hook inherits the app's environment, not a tool call's.
 
 ## Logs
 

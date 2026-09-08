@@ -37,8 +37,13 @@ On each stop `tdd gate`:
    a test and continues; otherwise the stop proceeds.
 
 A per-session attempt counter gives up after `max_attempts` so a stuck agent is
-never trapped. Escape hatch: a one-line `.tdd-skip` file in the project root
-(consumed once) for genuine refactors/renames/docs. Kill switch: `TDD_DISABLE=1`.
+never trapped. Escape hatch, for genuine refactors/renames/docs: `tdd skip
+--reason "<why>"` — reason required, scoped to the issuing session, consumed
+once, and recorded in the gate log at both issue and consumption. (The old shared
+`.tdd-skip` file in the project root was removed: a one-shot marker in a shared
+tree is consumed by whichever session stops next — CLAUDE.md section 5.) Kill
+switch: `TDD_DISABLE=1`, effective only in the environment Claude Code itself was
+started with, since the hook inherits the app's environment.
 
 ## Test-first proof (`/tdd` skill)
 

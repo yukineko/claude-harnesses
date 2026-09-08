@@ -31,8 +31,9 @@ RED だったか・RED→GREEN になったか）は `tdd` バイナリと Stop 
   採用する。未信頼なら一度だけ警告（`warn_untrusted`）を出し home config→built-in default へフォールバック。
   `tdd trust` で明示信頼、`HARNESS_TRUST_ALL=1` で全信頼。
 - **キルスイッチと逃げ道** — `TDD_DISABLE=1`（`Config::disabled_env`）で全停止、config `enabled=false`
-  でも停止許可。純リファクタ/リネーム/docs 向けに project root の 1 行 `.tdd-skip` ファイル
-  （`consume_skip` で1回だけ消費）がある。
+  でも停止許可。純リファクタ/リネーム/docs 向けに `tdd skip --reason "<理由>"`（理由必須・発行セッション
+  限定・`consume_session_skip` で1回だけ消費・発行と消費を gate log に記録）がある。共有 project root の
+  `.tdd-skip` は撤去済み（CLAUDE.md §5）。
 - **stuck agent を罠にしない** — セッション単位の attempt counter（`state::bump`／共有
   `harness_core::gate::state`）が `max_attempts`（既定3）連続ブロックで諦めて停止を許す。
   `reset_after_secs`（既定600）のアイドルでカウンタはリセット。
@@ -45,7 +46,8 @@ RED だったか・RED→GREEN になったか）は `tdd` バイナリと Stop 
 サブコマンドは `clap` の `Command` enum（`main`）で定義。
 
 - **`gate`（Stop hook 本体）** — stdin の hook payload を `HookInput::parse` → `cwd_or_current` で root
-  解決。disabled/`.tdd-skip` を先に処理し、`gate::evaluate`（`git::changed_files`＋`git::added_lines` →
+  解決。disabled/session 限定 skip（`consume_session_skip`）を先に処理し、
+  `gate::evaluate`（`git::changed_files`＋`git::added_lines` →
   `classify`）で verdict を得る。`Verdict::blocks` が真（git スコープ有り・追加実装行 ≥
   `min_added_impl_lines.max(1)`・テスト証跡無し）なら attempt を bump し、`max_attempts` 超過で許可、
   それ以外は `decision:block` を出す。テスト証跡は「追加された test-marker 行（`#[test]`/`def test_`/

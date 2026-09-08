@@ -75,6 +75,18 @@ enum Command {
     /// Trust the current project so its ./reviewgate.toml (incl. reviewer_cmd) is
     /// honored. Until trusted, a repo-shipped reviewgate.toml is ignored.
     Trust,
+    /// Record a ONE-SHOT skip of the next stop review for THIS session.
+    ///
+    /// Replaces the old `.reviewgate-skip` file in the project root, which sat
+    /// in the shared tree and was consumed by whichever session stopped next —
+    /// waving that session's legitimate gate through (CLAUDE.md §5 forbids
+    /// exactly that under parallel sessions). This one is attributed to the
+    /// issuing session, requires a reason, and its consumption is logged.
+    Skip {
+        /// Why this review is being skipped. Required.
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 fn main() {
@@ -86,7 +98,16 @@ fn main() {
         Command::Init { force } => exit_on_err(init(force)),
         Command::Status => status(),
         Command::Trust => exit_on_err(trust()),
+        Command::Skip { reason } => exit_on_err(skip_cmd(&reason)),
     }
+}
+
+/// Record a one-shot, session-scoped skip. See `Command::Skip`.
+fn skip_cmd(reason: &str) -> anyhow::Result<()> {
+    let root = std::env::current_dir()?;
+    let cfg = Config::load(&root);
+    harness_core::gate::run::skip_command("reviewgate", &cfg.state_dir, reason)
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Trust the current project root so its `./reviewgate.toml` is honored.
@@ -154,10 +175,10 @@ fn review_run(hook: Option<HookInput>) -> ! {
     let session = input.session_key();
 
     // one-shot escape hatch
-    if let Some(reason) = harness_core::gate::run::consume_skip(&root, ".reviewgate-skip") {
+    if let Some(reason) = harness_core::gate::run::consume_session_skip(&cfg.state_dir, &session) {
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "skip", &[], 0);
-        eprintln!("reviewgate: .reviewgate-skip consumed — allowing stop ({reason})");
+        eprintln!("reviewgate: session-scoped skip consumed — allowing stop ({reason})");
         harness_core::hook_latency::record(
             "reviewgate",
             &session,

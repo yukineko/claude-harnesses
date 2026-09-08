@@ -111,6 +111,18 @@ enum Command {
     Trust,
     /// Show the resolved config + what the gate would do for the cwd.
     Status,
+    /// Record a ONE-SHOT skip of the next stop check for THIS session.
+    ///
+    /// Replaces the old `.tdd-skip` file in the project root, which sat in the
+    /// shared tree and was consumed by whichever session stopped next — waving
+    /// that session's legitimate gate through (CLAUDE.md §5 forbids exactly
+    /// that under parallel sessions). This one is attributed to the issuing
+    /// session, requires a reason, and its consumption is logged.
+    Skip {
+        /// Why this check is being skipped. Required.
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 fn read_stdin() -> String {
@@ -151,6 +163,7 @@ fn main() {
         Command::Uninstall { dry_run } => exit_on_err(install::uninstall(dry_run)),
         Command::Trust => exit_on_err(trust_project()),
         Command::Status => status(),
+        Command::Skip { reason } => exit_on_err(skip_cmd(&reason)),
     }
 }
 
@@ -159,6 +172,14 @@ fn exit_on_err(r: anyhow::Result<()>) {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
+}
+
+/// Record a one-shot, session-scoped skip. See `Command::Skip`.
+fn skip_cmd(reason: &str) -> anyhow::Result<()> {
+    let root = std::env::current_dir()?;
+    let cfg = Config::load(&root);
+    harness_core::gate::run::skip_command("tdd", &cfg.state_dir, reason)
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// The Stop hook. Always exits 0 toward Claude (the `decision` field, not the
@@ -203,10 +224,10 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 
     let session = input.session_key();
 
-    if let Some(reason) = harness_core::gate::run::consume_skip(&root, ".tdd-skip") {
+    if let Some(reason) = harness_core::gate::run::consume_session_skip(&cfg.state_dir, &session) {
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "skip", 0);
-        eprintln!("tdd: .tdd-skip consumed — allowing stop ({reason})");
+        eprintln!("tdd: session-scoped skip consumed — allowing stop ({reason})");
         std::process::exit(0);
     }
 

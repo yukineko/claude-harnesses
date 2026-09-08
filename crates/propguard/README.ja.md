@@ -76,7 +76,7 @@ diff が *変化* すれば 1 ラウンド消費、`max_attempts`（既定 2）�
   **ブロック**（クラッシュを表面化）、`stop_hook_active` が立つ 2 回連続 panic のときだけ
   bounded に許可（同じ panic で永久にブロックし続けないための上限）
 
-エスケープ：`.propguard-skip`（1 回限り・理由 1 行）を作成、または `PROPGUARD_DISABLE=1`。
+エスケープ：`propguard skip --reason "<理由>"`（1 回限り・理由必須・**発行したセッション限定**・発行と消費の両方をゲートログに記録）、または `PROPGUARD_DISABLE=1`（後者は **Claude Code 自身を起動した環境**でのみ有効。フックはアプリの環境を継承するため、ツール呼び出しからの export は届かない）。共有された project root の `.propguard-skip` ファイルは撤去した — 共有ツリーの 1 回限りマーカーは次に停止したセッションが消費してしまう（CLAUDE.md §5）。
 
 ## インストール
 

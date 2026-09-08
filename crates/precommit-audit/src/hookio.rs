@@ -41,19 +41,40 @@ pub fn read_stdin() -> HookInput {
     }
 }
 
-/// One-shot escape hatch: `<audit_dir>/.audit-skip`. If present, consume it
-/// (delete), clear the block marker, and return the reason string.
-pub fn consume_skip(root: &Path, audit_dir: &str) -> Option<String> {
-    let skip = root.join(audit_dir).join(".audit-skip");
-    if !skip.exists() {
-        return None;
-    }
-    let reason = std::fs::read_to_string(&skip)
+/// Where this crate's session-scoped skip markers live.
+///
+/// Deliberately under the user's home, NOT under the repo: the thing this
+/// replaced was `<root>/<audit_dir>/.audit-skip`, a one-shot file inside the
+/// shared working tree. Any concurrent session — or any later `git commit` by
+/// anyone — consumed whichever skip happened to be lying there, so the bypass
+/// one session asked for silently spent itself on somebody else's commit.
+/// CLAUDE.md §5 names that mechanism as forbidden under parallel sessions, and
+/// the four Stop gates moved off it in the same change as this.
+pub fn skip_state_dir() -> PathBuf {
+    harness_core::config::base_dir("precommit-audit").join("state")
+}
+
+/// The session this invocation belongs to, if any.
+///
+/// `None` for a plain pre-commit-framework or terminal `git commit` — there is
+/// no session to scope a skip to, so none can be issued and none can be
+/// consumed. That is the intended narrowing, not a gap: an unattributable
+/// bypass is exactly what was removed.
+pub fn session_id() -> Option<String> {
+    std::env::var("CLAUDE_CODE_SESSION_ID")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "(no reason given)".to_string());
-    let _ = std::fs::remove_file(&skip);
+}
+
+/// One-shot, session-scoped escape hatch. Consumes the calling session's skip
+/// (if it issued one), clears the block marker, and returns the reason.
+///
+/// Returns `None` when there is no session id at all, so a non-Claude
+/// invocation can never pick up a skip it did not ask for.
+pub fn consume_session_skip(root: &Path, audit_dir: &str) -> Option<String> {
+    let session = session_id()?;
+    let reason = harness_core::gate::run::consume_session_skip(&skip_state_dir(), &session)?;
     let _ = std::fs::remove_file(block_marker(root, audit_dir));
     Some(reason)
 }

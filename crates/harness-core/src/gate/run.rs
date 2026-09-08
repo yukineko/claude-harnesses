@@ -1,5 +1,5 @@
 //! Stop-hook entry helpers shared by the gates: the never-break-a-turn panic
-//! guard and the one-shot skip-marker consumer.
+//! guard and the session-scoped one-shot skip.
 
 use std::path::Path;
 
@@ -59,7 +59,7 @@ enum PanicAction {
 ///
 /// **Caller contract (load-bearing since this fails closed):** because a panic
 /// now *blocks* the stop, `body` MUST evaluate its panic-free operator escapes —
-/// the `disabled` toggles and the `consume_skip(&root, ".<gate>-skip")` marker —
+/// the `disabled` toggles and the `consume_session_skip(state_dir, session)` skip —
 /// *before* any panic-prone verification (config is fail-soft; the checkers /
 /// git / subprocess work is not). Otherwise a deterministically-crashing gate
 /// would be unescapable: the operator's skip marker or `enabled = false` would be
@@ -144,20 +144,170 @@ fn panic_exit(name: &str, action: PanicAction) -> ! {
     }
 }
 
-/// Consume a one-shot skip marker `<root>/<marker>`: if present, return its
-/// trimmed one-line reason (or `"(no reason given)"` when empty) and delete the
-/// file so it only applies once. Returns `None` when the marker is absent.
-pub fn consume_skip(root: &Path, marker: &str) -> Option<String> {
-    let p = root.join(marker);
-    if !p.exists() {
+/// Why a session-scoped skip could not be issued.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SkipIssueError {
+    /// No session to attribute the skip to. The caller could not read
+    /// `CLAUDE_CODE_SESSION_ID`, so the skip would have to be filed under a
+    /// placeholder — which is the unattributable shared marker this API exists
+    /// to remove. Refused rather than guessed.
+    NoSession,
+    /// The session id is not a usable single path component (empty, or carrying
+    /// a separator or `..`). Accepting it would let the marker be written
+    /// outside the state dir, or under a name another session also computes.
+    UnusableSessionId,
+    /// A skip must say WHY. An unexplained bypass is invisible to review even
+    /// when it is recorded.
+    EmptyReason,
+    /// The marker could not be written.
+    Io(String),
+}
+
+impl std::fmt::Display for SkipIssueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SkipIssueError::NoSession => write!(
+                f,
+                "no session id (CLAUDE_CODE_SESSION_ID is unset) — a skip must be attributable to \
+the session that asked for it"
+            ),
+            SkipIssueError::UnusableSessionId => write!(
+                f,
+                "session id is not a usable path component (empty, or contains a separator or `..`)"
+            ),
+            SkipIssueError::EmptyReason => {
+                write!(
+                    f,
+                    "a skip requires a reason; refusing to record an unexplained bypass"
+                )
+            }
+            SkipIssueError::Io(e) => write!(f, "could not record the skip: {e}"),
+        }
+    }
+}
+
+/// True when `session_id` is a single, safe path component that identifies ONE
+/// session.
+///
+/// `"_local"` is rejected on purpose. It is what `HookInput::session_key`
+/// substitutes when the payload carries no session id, so it is the SAME key
+/// for every such run — keying a skip on it would rebuild the shared marker
+/// this API exists to delete, under a new name. "Which session is this?" being
+/// unanswerable resolves to "no skip" (CLAUDE.md §3), not to a skip everyone
+/// shares.
+fn usable_session_id(session_id: &str) -> bool {
+    !session_id.is_empty()
+        && session_id != "."
+        && session_id != ".."
+        && session_id != "_local"
+        && !session_id.contains('/')
+        && !session_id.contains('\\')
+        && !session_id.contains('\0')
+}
+
+/// Where the one-shot skip for `session_id` lives: `<state_dir>/skips/<id>.skip`.
+fn session_skip_path(state_dir: &Path, session_id: &str) -> std::path::PathBuf {
+    state_dir.join("skips").join(format!("{session_id}.skip"))
+}
+
+/// Issue a one-shot, reason-required skip **for `session_id` only**.
+///
+/// This replaces the project-root marker files (`.donegate-skip` and friends)
+/// that `consume_skip` used to read. Those sat in the SHARED project root, so
+/// whichever session's Stop hook fired next consumed them — waving that
+/// session's legitimate gate through on an exception someone else asked for.
+/// CLAUDE.md §5 names that mechanism as forbidden under parallel sessions, and
+/// it was the only in-session hatch that existed: the documented env-var
+/// alternatives never reach a Stop hook (the hook is a child of the Claude Code
+/// app and inherits ITS environment, not the Bash tool's), and
+/// `~/.claude/settings.json` is permission-denied for editing. An escape route
+/// that only exists in a forbidden form is what turns gate work into a game of
+/// getting past the gate.
+///
+/// The replacement is STRICTER, not looser: an unattributable, unexplained,
+/// unrecorded shared file becomes an attributed, reason-carrying, recorded and
+/// session-limited one. Every refusal here resolves the undeterminable case to
+/// "no skip", per CLAUDE.md §3.
+pub fn issue_session_skip(
+    state_dir: &Path,
+    session_id: &str,
+    reason: &str,
+) -> Result<std::path::PathBuf, SkipIssueError> {
+    if session_id.is_empty() {
+        return Err(SkipIssueError::NoSession);
+    }
+    if !usable_session_id(session_id) {
+        return Err(SkipIssueError::UnusableSessionId);
+    }
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(SkipIssueError::EmptyReason);
+    }
+    let path = session_skip_path(state_dir, session_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| SkipIssueError::Io(e.to_string()))?;
+    }
+    std::fs::write(&path, format!("{reason}\n")).map_err(|e| SkipIssueError::Io(e.to_string()))?;
+    append_jsonl(
+        state_dir,
+        &serde_json::json!({
+            "event": "skip_issued",
+            "session_id": session_id,
+            "reason": reason,
+        }),
+    );
+    Ok(path)
+}
+
+/// The `<gate> skip --reason "…"` CLI action, shared by every gate so the four
+/// cannot drift apart — one capability, one implementation. (Two rules for one
+/// capability is how this repo's mirrors keep diverging.)
+///
+/// The session is read from `CLAUDE_CODE_SESSION_ID`, which is measured to be
+/// the same value a Stop hook receives as `session_id` (observed 2026-09-08:
+/// the env var and `~/.donegate/state/log.jsonl`'s `session_id` agreed). If it
+/// is unset there is no session to attribute the skip to, and the request is
+/// refused rather than filed under a shared placeholder.
+pub fn skip_command(gate: &str, state_dir: &Path, reason: &str) -> Result<(), SkipIssueError> {
+    let session = std::env::var("CLAUDE_CODE_SESSION_ID").unwrap_or_default();
+    issue_session_skip(state_dir, &session, reason)?;
+    eprintln!(
+        "{gate}: one-shot skip recorded for session {session}\n  reason: {}\n  \
+It applies to THIS session's next stop only; no other session can consume it, \
+and the consumption is written to the gate's log.",
+        reason.trim()
+    );
+    Ok(())
+}
+
+/// Consume the one-shot skip belonging to `session_id`, if there is one.
+///
+/// Returns the reason it carried and deletes the marker, so it applies once.
+/// A skip issued by a DIFFERENT session is not visible here and is left
+/// untouched — that is the whole point, and it is what the shared marker could
+/// not do. Consumption is written to `log.jsonl` by this function rather than
+/// by each caller, so a gate cannot consume a bypass without leaving a record.
+pub fn consume_session_skip(state_dir: &Path, session_id: &str) -> Option<String> {
+    if !usable_session_id(session_id) {
         return None;
     }
-    let reason = std::fs::read_to_string(&p)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "(no reason given)".to_string());
-    let _ = std::fs::remove_file(&p);
+    let path = session_skip_path(state_dir, session_id);
+    let reason = std::fs::read_to_string(&path).ok()?.trim().to_string();
+    // An empty marker cannot have been written by `issue_session_skip`, which
+    // refuses an empty reason. Treat it as no skip AND remove it, so a
+    // hand-made blank file is not a silent, permanent hatch.
+    let _ = std::fs::remove_file(&path);
+    if reason.is_empty() {
+        return None;
+    }
+    append_jsonl(
+        state_dir,
+        &serde_json::json!({
+            "event": "skip_consumed",
+            "session_id": session_id,
+            "reason": reason,
+        }),
+    );
     Some(reason)
 }
 
@@ -237,40 +387,6 @@ mod tests {
         let r: Result<(), PanicAction> = guard(true, true, || panic!("boom"));
         std::panic::set_hook(prev);
         assert_eq!(r, Err(PanicAction::InteractiveError));
-    }
-
-    fn skip_root(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("hc-gate-skip-{}-{tag}", std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
-        d
-    }
-
-    #[test]
-    fn skip_marker_absent_is_none() {
-        let root = skip_root("absent");
-        assert!(consume_skip(&root, ".x-skip").is_none());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn skip_marker_with_reason_is_consumed_once() {
-        let root = skip_root("reason");
-        std::fs::write(root.join(".x-skip"), "  because\n").unwrap();
-        assert_eq!(consume_skip(&root, ".x-skip").as_deref(), Some("because"));
-        // consumed: a second call sees nothing.
-        assert!(consume_skip(&root, ".x-skip").is_none());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn skip_marker_empty_gives_default_reason() {
-        let root = skip_root("empty");
-        std::fs::write(root.join(".x-skip"), "   \n").unwrap();
-        assert_eq!(
-            consume_skip(&root, ".x-skip").as_deref(),
-            Some("(no reason given)")
-        );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

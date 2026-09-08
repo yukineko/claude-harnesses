@@ -11712,7 +11712,7 @@ title = "blastguard の inline-eval deny は形状課税かつ fail-open ミラ�
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "done"
 notes = """
 実測（deployed binary blastguard 0.2.50、2026-09-07、PreToolUse hook payload を直接投入）:
 
@@ -11766,7 +11766,7 @@ Decision::Ask（model.rs いわく it is NOT a verdict about the command, it is 
 
 親: 826c29bf（gate doctrine）"""
 created_at = 1788791138
-updated_at = 1788791138
+updated_at = 1788820644
 weight = 0.0
 issue_number = 416
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/416"
@@ -11953,7 +11953,7 @@ settings.json は permission 上 Edit/Write が deny（settings.json:30-33）。
 証明テスト: セッションA で発行した skip が セッションB のゲート実行で消費されないこと。
 親 826c29bf"""
 created_at = 1788791665
-updated_at = 1788791665
+updated_at = 1788820794
 weight = 0.0
 issue_number = 421
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/421"
@@ -12652,3 +12652,95 @@ updated_at = 1788793588
 weight = 0.0
 issue_number = 440
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/440"
+
+[[task]]
+id = "ad524af9"
+title = "guard-maintree-bash.py: 2 リダイレクトを含むだけで main 外への書き込みも block される (undetermined tokenization)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-08、測定点 d47f0a4b、CLAUDE_PROJECT_DIR=/Users/yuki/src/harness。
+
+単一変数の対照実験 (stderr 抑制の有無だけが差分):
+  cp /Users/yuki/.claude/settings.json WT/.scratch/bak            : rc=0 (allow)
+  cp /Users/yuki/.claude/settings.json WT/.scratch/bak + stderr抑制 : rc=2 (block)
+
+どちらの operand も main の作業ツリー外なので main は一切変更されない。
+REDIR 集合が 3種のみで fd 番号付きリダイレクトを含まないため、
+stderr 抑制トークンが解決不能になり fail-closed で block していると推定される
+(未検証の予測)。
+
+fail-closed 自体は CLAUDE.md 第3節どおり正しい。問題は解決可能なトークンを
+解決不能に落としている点で、結果として通常の stderr 抑制を含むコマンドが
+軒並み block される。本セッションで実際に1回踏んだ。
+
+done_criteria: 上記2コマンドの rc が両方 0 になること。かつ
+  worktree のファイルを main 配下へ cp + stderr抑制 は rc=2 のまま
+  (anti-vacuity 対照)。
+テストは利害関係のない Agent が書き、先に RED を観測すること(第2節)。"""
+created_at = 1788820645
+updated_at = 1788820645
+weight = 0.0
+issue_number = 441
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/441"
+
+[[task]]
+id = "0f9ec760"
+title = "precommit-audit の .audit-skip は共有ツリー上の一度きりファイル — b173f2b9 と同一欠陥の5本目のミラー、今回の修正が降りていない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+測定 2026-09-08、測定点 5a9e1a18。
+
+b173f2b9 の修正で donegate / reviewgate / propguard / tdd の4本は
+harness_core::gate::run::consume_session_skip (セッション限定・理由必須・記録付き) へ移した。
+precommit-audit だけは harness-core の関数を使わず **独自コピー** を持っており、移行から漏れた:
+
+  crates/precommit-audit/src/hookio.rs:46  consume_skip(root, audit_dir)
+    -> root.join(audit_dir).join(".audit-skip")   # 共有ツリー、セッション帰属なし
+  crates/precommit-audit/src/main.rs:256   呼び出し元
+
+同じ性質の欠陥が2つ:
+ (1) 共有ツリー上の一度きりファイルなので、セッションA が作った skip を
+     セッションB の pre-commit が消費する。CLAUDE.md 第5節が名指しで禁じる形。
+ (2) 空ファイルを "(no reason given)" として **受理する** (hookio.rs:55)。
+     理由なしバイパスはレビューから不可視。新 API は空理由を拒否する。
+
+memory gate-crate-audit-mirror-gaps が言う「fix が片方のミラーにしか降りない」典型。
+harness-core への依存は既にある (Cargo.toml:14) ので移行自体は可能。
+
+付随して直す必要があるもの:
+  crates/precommit-audit/README.md:123 / README.ja.md:94
+  docs/specs/precommit-audit.md:44,58
+  crates/precommit-audit/tests/integration.rs:396,400
+
+done_criteria: セッションA が発行した skip を セッションB の precommit-audit が
+消費しないこと。空理由が拒否されること。README と spec が新方式を記述していること。
+テストは利害関係のない Agent が書き、先に RED を観測すること (第2節)。
+親 b173f2b9 / 826c29bf"""
+created_at = 1788821470
+updated_at = 1788821470
+weight = 0.0
+issue_number = 442
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/442"
+
+[[task]]
+id = "23a39f9c"
+title = "blastguard: Python 文字列リテラル中の 2 が shell の redirect として force-gate される (false positive)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "injection",
+    "p2",
+]
+status = "pending"
+notes = "観測 2026-09-08: heredoc で python3 に渡したプログラム中の echo ... >&2 (Python の str リテラル内) が blastguard に 'truncates and overwrites an existing file' として deny された。実際の shell 構文としての redirect は存在しない。既知の一族 (classify-deploy-needle-forcegate / condukt-schedule-arrow-forcegate) と同じ、prose/payload を shell 構文として読む force-gate。payload をコマンド構文として走査する前に quoted heredoc 本体を除外できるか要検討。"
+created_at = 1788821885
+updated_at = 1788821885
+weight = 0.0
+issue_number = 443
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/443"

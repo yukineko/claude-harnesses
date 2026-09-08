@@ -468,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "anyhow",
  "chrono",
@@ -672,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -913,7 +913,7 @@ dependencies = [
 
 [[package]]
 name = "precommit-audit"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "globset",
  "harness-core",
@@ -937,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1089,7 +1089,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1363,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "anyhow",
  "chrono",

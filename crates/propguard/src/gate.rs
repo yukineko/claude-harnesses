@@ -597,7 +597,7 @@ fn decide_truncated(
 /// `max_attempts` consecutive stops (giving a transient git error — lock
 /// contention, a slow mount, a timed-out `git` — a chance to clear), then give
 /// up *loudly* with a distinct tag so a persistently broken git can never trap
-/// the turn. Escape hatches (`.propguard-skip`, `PROPGUARD_DISABLE=1`) stay
+/// the turn. Escape hatches (`propguard skip --reason ...`) stay
 /// available throughout and are named in the reason (never-break-a-turn). No
 /// hash is recorded (there is no diff to certify) and — like the checker-
 /// unavailable / truncation blocks — NO per-property violations are attributed
@@ -695,7 +695,7 @@ fn diff_failed_reason(why: &str, files: &[String], attempt: u32, max: u32) -> St
          前に進むには次のいずれか:\n\
          - 読めない内容を解消する (典型例: 追跡対象ファイルの内容が UTF-8 として不正、`git` のエラー、\
          タイムアウト)。`propguard status` で対象 repo を確認。\n\
-         - このチェックを1回だけスキップ: project root に `.propguard-skip` を作成 (理由を1行)。\n\
+         - このチェックを1回だけスキップ: `propguard skip --reason ...` を実行 (理由を1行)。\n\
          - propguard を完全に無効化: 環境変数 PROPGUARD_DISABLE=1。",
         attempt = attempt,
         max = max,
@@ -715,7 +715,7 @@ fn scan_failed_reason(attempt: u32, max: u32) -> String {
          (永久にはブロックしません)。\n\n\
          前に進むには次のいずれか:\n\
          - git のエラーを解消する (`propguard status` で対象 repo を確認)。\n\
-         - このチェックを1回だけスキップ: project root に `.propguard-skip` を作成 (理由を1行)。\n\
+         - このチェックを1回だけスキップ: `propguard skip --reason ...` を実行 (理由を1行)。\n\
          - propguard を完全に無効化: 環境変数 PROPGUARD_DISABLE=1。",
         attempt = attempt,
         max = max,
@@ -783,7 +783,7 @@ fn block_reason(
          少なくとも {threshold} 個が成り立つことを確認し、結果を簡潔に報告すること \
          (誤検知だと判断したものは理由を述べて構いません)。\n\n\
          元の done_criteria:\n  {criteria}\n\n\
-         このチェックを1回だけスキップ: project root に `.propguard-skip` を作成 (理由を1行)。\
+         このチェックを1回だけスキップ: `propguard skip --reason ...` を実行 (理由を1行)。\
          完全に無効化: 環境変数 PROPGUARD_DISABLE=1。",
         attempt = attempt,
         satisfied = satisfied,
@@ -805,7 +805,7 @@ fn checker_unavailable_reason(err: &str, attempt: u32, max: u32) -> String {
          警告を出して通過を許可します (永久にはブロックしません)。\n\n\
          前に進むには次のいずれか:\n\
          - checker_cmd を修正する (`propguard status` で解決済みコマンドを確認)。\n\
-         - このチェックを1回だけスキップ: project root に `.propguard-skip` を作成 (理由を1行)。\n\
+         - このチェックを1回だけスキップ: `propguard skip --reason ...` を実行 (理由を1行)。\n\
          - propguard を完全に無効化: 環境変数 PROPGUARD_DISABLE=1。",
         attempt = attempt,
         max = max,
@@ -823,7 +823,7 @@ fn truncated_reason(cfg: &Config, files: &[String], attempt: u32, max: u32) -> S
          前に進むには次のいずれか:\n\
          - 変更を小さく分割し、それぞれが max_diff_bytes に収まるようにする。\n\
          - max_diff_bytes を引き上げる (現在 {max_bytes} B)。\n\
-         - このチェックを1回だけスキップ: `.propguard-skip` を作成。完全に無効化: PROPGUARD_DISABLE=1。",
+         - このチェックを1回だけスキップ: `propguard skip --reason ...` を実行。完全に無効化: PROPGUARD_DISABLE=1。",
         attempt = attempt,
         max = max,
         max_bytes = cfg.max_diff_bytes,
@@ -1706,7 +1706,7 @@ mod tests {
                     "reason must name the disable escape hatch: {reason}"
                 );
                 assert!(
-                    reason.contains(".propguard-skip"),
+                    reason.contains("propguard skip --reason"),
                     "reason must name the one-shot skip escape hatch: {reason}"
                 );
             }
@@ -1770,7 +1770,8 @@ mod tests {
                     "the reason must carry the underlying cause, not just 'blocked': {reason}"
                 );
                 assert!(
-                    reason.contains("PROPGUARD_DISABLE") && reason.contains(".propguard-skip"),
+                    reason.contains("PROPGUARD_DISABLE")
+                        && reason.contains("propguard skip --reason"),
                     "the block must stay escapable: {reason}"
                 );
             }
@@ -2152,7 +2153,8 @@ PROP output-schema: PASS";
                      {properties:?}"
                 );
                 assert!(
-                    reason.contains("PROPGUARD_DISABLE") && reason.contains(".propguard-skip"),
+                    reason.contains("PROPGUARD_DISABLE")
+                        && reason.contains("propguard skip --reason"),
                     "the block must stay escapable and say why: {reason}"
                 );
             }

@@ -32,6 +32,15 @@ struct Args {
     /// so its `.precommit-audit.toml` (which can resolve repo-local linters) is
     /// honored. Until then a repo-shipped config is ignored.
     trust: bool,
+    /// `precommit-audit skip --reason "<why>"`: arm a one-shot bypass for THIS
+    /// session's next audit. Replaces the old `<audit_dir>/.audit-skip` file,
+    /// which sat in the shared working tree and was therefore spent by whichever
+    /// invocation ran next (CLAUDE.md §5).
+    skip: bool,
+    /// The reason for `skip`. Required — a bypass with no stated reason is
+    /// indistinguishable from an accident in the log, so `skip` refuses without
+    /// one rather than inventing "(no reason given)" the way the old marker did.
+    reason: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -40,11 +49,15 @@ fn parse_args() -> Args {
         mode: None,
         root: None,
         trust: false,
+        skip: false,
+        reason: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "trust" => a.trust = true,
+            "skip" => a.skip = true,
+            "--reason" => a.reason = it.next(),
             "--config" => a.config = it.next().map(PathBuf::from),
             "--mode" => a.mode = it.next(),
             "--root" => a.root = it.next().map(PathBuf::from),
@@ -69,8 +82,8 @@ fn print_help() {
     println!(
         "precommit-audit {ver}\n\
 Config-driven pre-commit static audit (cross-platform).\n\n\
-USAGE:\n  precommit-audit [--mode stop|precommit] [--config <file>] [--root <dir>]\n  precommit-audit trust   (trust <root> so its .precommit-audit.toml is honored)\n\n\
-OPTIONS:\n  --mode <m>     stop (default) or precommit\n  --config <f>   config file (default: <root>/.precommit-audit.toml)\n  --root <d>     repo root (default: $CLAUDE_PROJECT_DIR, else git toplevel)\n  -V, --version  print version\n  -h, --help     this help\n\n\
+USAGE:\n  precommit-audit [--mode stop|precommit] [--config <file>] [--root <dir>]\n  precommit-audit trust   (trust <root> so its .precommit-audit.toml is honored)\n  precommit-audit skip --reason \"<why>\"   (one-shot bypass, THIS session only)\n\n\
+OPTIONS:\n  --mode <m>     stop (default) or precommit\n  --config <f>   config file (default: <root>/.precommit-audit.toml)\n  --root <d>     repo root (default: $CLAUDE_PROJECT_DIR, else git toplevel)\n  --reason <r>   with `skip`: why the bypass is warranted (required)\n  -V, --version  print version\n  -h, --help     this help\n\n\
 EXIT: 0 clean | 1 blocked (precommit) | 2 blocked (stop)",
         ver = env!("CARGO_PKG_VERSION")
     );
@@ -180,6 +193,44 @@ fn run() {
         panic!("forced panic (fault injection) exercising the panic->block barrier");
     }
 
+    // `precommit-audit skip --reason "<why>"`: arm a one-shot bypass for THIS
+    // session's next audit. Handled before any stdin read so it works as a plain
+    // manual command, and before the audit itself so it is reachable even when
+    // the audit is what is misbehaving.
+    if args.skip {
+        let session = match hookio::session_id() {
+            Some(s) => s,
+            None => {
+                eprintln!(
+                    "precommit-audit: cannot issue a skip — no CLAUDE_CODE_SESSION_ID in the \
+                     environment, so there is no session to scope it to."
+                );
+                eprintln!(
+                    "  A skip that names no session is the shared-marker bug this replaced: \
+                     whichever invocation runs next would spend it (CLAUDE.md §5)."
+                );
+                exit(64);
+            }
+        };
+        let reason = args.reason.unwrap_or_default();
+        match harness_core::gate::run::issue_session_skip(
+            &hookio::skip_state_dir(),
+            &session,
+            &reason,
+        ) {
+            Ok(path) => {
+                println!("precommit-audit: skip armed at {}", path.display());
+                println!("  reason: {reason}");
+                println!("  It applies to THIS session's next audit only, and is recorded.");
+                exit(0);
+            }
+            Err(e) => {
+                eprintln!("precommit-audit: {e}");
+                exit(64);
+            }
+        }
+    }
+
     // `precommit-audit trust`: register this root in the shared trust list, then
     // exit. Honors the same `harness_core::trust` store as donegate/reviewgate/tdd.
     // Handled before any stdin read so it works as a plain manual command.
@@ -252,9 +303,13 @@ fn run() {
         }
     };
 
-    // One-shot skip escape hatch.
-    if let Some(reason) = hookio::consume_skip(&root, &cfg.audit_dir) {
-        eprintln!("pre-commit audit SKIPPED (one-shot) -- reason: {reason}");
+    // One-shot skip escape hatch, scoped to the session that issued it via
+    // `precommit-audit skip --reason "..."`. A skip issued by another session is
+    // invisible here; a plain terminal `git commit` has no session and so can
+    // consume nothing. Both the issue and this consumption are recorded by
+    // `harness_core::gate::run`, so a bypass cannot happen unrecorded.
+    if let Some(reason) = hookio::consume_session_skip(&root, &cfg.audit_dir) {
+        eprintln!("pre-commit audit SKIPPED (one-shot, this session) -- reason: {reason}");
         exit(0);
     }
 

@@ -388,17 +388,52 @@ message = "canonical env only"
     );
 }
 
+/// The shared in-tree marker used to be the bypass. It is not one any more.
+///
+/// `<audit_dir>/.audit-skip` lived inside the working tree, carried no
+/// attribution, and was consumed by whichever invocation ran next — so a bypass
+/// one session armed was routinely spent on a DIFFERENT session's commit, or on
+/// a human's terminal `git commit`. CLAUDE.md §5 forbids exactly that shape. The
+/// replacement is `precommit-audit skip --reason "<why>"`, which is scoped to
+/// the issuing session, requires a reason, and is recorded at both ends.
+///
+/// This asserts the removal, not the replacement: a file dropped in the shared
+/// tree must no longer buy anyone a pass. The positive path (a session's own
+/// skip does allow its own next audit) is covered separately.
 #[test]
-fn skip_marker_bypasses_once() {
+fn a_shared_in_tree_marker_no_longer_bypasses_the_audit() {
     let dir = init_repo();
     write(&dir, ".precommit-audit.toml", NO_LINTERS);
     write(&dir, "app.py", "def add(a, b):\n    return a + b\n"); // would block
     write(&dir, ".claude/.audit-skip", "emergency");
     let (code, err) = run(&dir);
-    assert_eq!(code, 0, "skip marker bypasses; stderr: {err}");
+    assert_ne!(
+        code, 0,
+        "a file in the SHARED working tree must not wave this audit through — that marker \
+         names no session, so it applies to whichever invocation runs next (CLAUDE.md §5). \
+         stderr: {err}"
+    );
     assert!(
-        !dir.join(".claude/.audit-skip").exists(),
-        "skip marker is consumed"
+        dir.join(".claude/.audit-skip").exists(),
+        "the audit must not even consume the stale marker: deleting it would silently spend \
+         a file the operator may still believe is armed"
+    );
+}
+
+/// ANTI-VACUITY CONTROL for the test above. It asserts a BLOCK, which a gate
+/// that blocked unconditionally would satisfy for free. This is the same repo
+/// and config with the offending file removed, and it must come out clean — so
+/// the block above is attributable to the audit finding something, not to the
+/// audit being broken.
+#[test]
+fn the_same_repo_without_the_offending_file_is_clean() {
+    let dir = init_repo();
+    write(&dir, ".precommit-audit.toml", NO_LINTERS);
+    write(&dir, ".claude/.audit-skip", "emergency");
+    let (code, err) = run(&dir);
+    assert_eq!(
+        code, 0,
+        "nothing to find, so nothing to block; stderr: {err}"
     );
 }
 

@@ -28,7 +28,7 @@ reviewgate はレビュー対象の diff をハッシュ化する。最後にレ
 - レビュアーの subprocess が crash / timeout / 解析不能な出力 → **ブロック**（`max_attempts` で有界）後に警告して通過。
 - diff が大きすぎて丸ごとレビューできず切り詰められた（`max_diff_bytes` で truncate）場合、未レビューの末尾が残る → **ブロック**（`max_attempts` で有界）後に警告して通過。
 
-どちらの場合もブロック理由にすべての抜け道（`.reviewgate-skip`、`REVIEWGATE_DISABLE=1`、`max_diff_bytes` の引き上げ）が明示されるため、壊れたレビュアーや大きすぎる diff が turn を永久に塞ぐことはない。
+どちらの場合もブロック理由にすべての抜け道（`reviewgate skip --reason "<理由>"`、`REVIEWGATE_DISABLE=1`、`max_diff_bytes` の引き上げ）が明示されるため、壊れたレビュアーや大きすぎる diff が turn を永久に塞ぐことはない。
 
 ## どうして必要か
 
@@ -78,8 +78,8 @@ reviewgate install       # Stop フックを ~/.claude/settings.json に配線�
 
 ### 抜け道
 
-- 一度だけ：プロジェクトルートに `.reviewgate-skip` を作る（1 行の理由を書く）。一度消費され、次の stop は許可される。
-- 完全に無効化：`REVIEWGATE_DISABLE=1`、または設定で `enabled = false`。
+- 一度だけ：`reviewgate skip --reason "<理由>"`。理由は必須で、**発行したセッションにだけ**適用され、一度消費されて次の stop を許可し、発行と消費の両方がゲートログに記録される。（旧来の project root の `.reviewgate-skip` ファイルは撤去した。共有ツリーの 1 回限りマーカーは次に停止したセッションが消費し、その別セッションの正当なゲートを素通りさせるため — CLAUDE.md §5。）
+- 完全に無効化：設定で `enabled = false`、または `REVIEWGATE_DISABLE=1`（env は **Claude Code 自身を起動した環境**でのみ有効。フックはアプリの環境を継承するため、ツール呼び出しからの export は届かない）。
 
 ### ログ
 

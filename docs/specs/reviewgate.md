@@ -23,7 +23,7 @@
   レビュアーや切り詰めた末尾が gate のバイパスにならないため）。ただし `max_attempts` 連続で解消しなければ
   警告を出して通過を許可し、それぞれ専用 tag（`reviewer-error-giveup` / `truncated-giveup`）で許可するので、
   ログ上クリーンと混同されず、ターンが永久に閉じ込められることもない。ブロック理由には常にすべての抜け道
-  （`.reviewgate-skip`・`REVIEWGATE_DISABLE=1`・`max_diff_bytes` 引き上げ）を明示する。
+  （`reviewgate skip --reason "<理由>"`・`REVIEWGATE_DISABLE=1`・`max_diff_bytes` 引き上げ）を明示する。
 - **truncation はハッシュを記録しない** — `decide_truncated` の `Block` は `last_hash` を空にする。diff ハッシュは
   欠落した末尾を覆えないため、後段の "already-reviewed" 短絡が未レビュー末尾を認証してしまうのを防ぐ。同様に
   reviewer error のブロックもハッシュを記録せず、次の停止でレビュアー回復を再チェックし続ける。
@@ -47,7 +47,8 @@
 
 - **`review`** — `Stop` フック本体。stdin からフック JSON を読む（`HookInput::parse`）。stdin 無しの手実行は
   interactive（人間向けドライチェック）扱い。順に (1) `REVIEWGATE_DISABLE` env / `enabled=false` で即 exit 0、
-  (2) `.reviewgate-skip`（1 行理由）を `consume_skip` で一度消費し許可、(3) `state::load` で prior session state を
+  (2) `reviewgate skip --reason` が発行した session 限定 skip を `consume_session_skip` で一度消費し許可
+  （共有 project root の `.reviewgate-skip` は撤去済み — CLAUDE.md §5）、(3) `state::load` で prior session state を
   読み `review::evaluate` で判定、(4) `Decision::Allow`/`Block` を state 保存・`log_event`（JSONL 追記）とともに
   適用。Allow で `attempts==0 && last_hash 空` なら state をリセット。
 - **`install [--dry-run]` / `uninstall [--dry-run]`** — `~/.claude/settings.json` に `Stop` フック
@@ -72,8 +73,9 @@
 
 ### module 責務
 
-- **`main`** — CLI dispatch と `review_run` の停止判定→state 保存→`log_event`（JSONL）フロー。never-break-a-turn
-  panic ガード（`run_guarded`）・env/config disable・`.reviewgate-skip` 消費・`Decision` 適用を担う。
+- **`main`** — CLI dispatch と `review_run` の停止判定→state 保存→`log_event`（JSONL）フロー。fail-closed な
+  panic barrier（`run_guarded` は panic を block へ写す。連続 2 回目だけ `stop_hook_active` で bounded に allow）・
+  env/config disable・session 限定 skip の消費（`consume_session_skip`）・`Decision` 適用を担う。
 - **`config`** — `Config`（`Mode`/`max_attempts`/`reset_after_secs`/`min_changed_files`/`max_diff_bytes`/
   `include`/`exclude`/`rubric`/`reviewer_cmd`/`reviewer_timeout_secs`/`state_dir`）を TOML（`FileConfig`, 全
   optional）から3層 precedence でロード。**trust 境界**（`is_trusted` で project の `reviewer_cmd` を gate）と

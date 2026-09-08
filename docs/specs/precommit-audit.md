@@ -41,7 +41,7 @@ Claude Code の **Stop hook** として `bin/precommit-audit --mode stop`（time
 - **再帰ガード** — stdin JSON の `stop_hook_active` が真（同一 stop サイクル内の再発火）なら即 exit 0。
 - **理由必須の抑制** — 行単位 `# audit-ignore: <理由>`（JS/TS は `//`。理由=後続の非空白文字が必須で
   マーカーだけでは無効、`git::has_audit_ignore`）、ファイル単位は先頭 20 行以内の `audit-ignore-file: <理由>`
-  （`checks::head_suppressed`）、一回限りは `<audit_dir>/.audit-skip`（読み取り時に消費）。
+  （`checks::head_suppressed`）、一回限りは `precommit-audit skip --reason "<理由>"`（理由必須・発行セッション限定・記録付き）。共有ツリーの `<audit_dir>/.audit-skip` は撤去済み（CLAUDE.md §5）。
 - **自己監査回避** — config ファイル自身（rule パターンを含む）は working set から除外し、導入コミットで
   self-trigger しないようにする（`run` 内の `strip_prefix` + `classify::norm` 比較）。
 - **severity と exit の分離** — `Severity::Block` のみ exit code に影響し、`Severity::Warn`（例: file_length）は
@@ -55,7 +55,8 @@ CLI: `precommit-audit [--mode stop|precommit] [--config <file>] [--root <dir>]` 
 未知引数は exit 64。
 
 - **`run`（通常フロー）** — trust ハンドリング → stdin 読み（再帰ガード）→ root/mode/config 解決 →
-  `.audit-skip` 消費 → working set 解決（config 自己除外）→ 空なら exit 0 → `Classifier` と `Ctx` 構築 →
+  session 限定 skip の消費（`hookio::consume_session_skip`）→ working set 解決（config 自己除外）→
+  空なら exit 0 → `Classifier` と `Ctx` 構築 →
   `run_static_checks` → `checks.linters` 真なら `linters::run` → `stop` モードなら `review::check` →
   `emit_and_exit`。
 - **`emit_and_exit` / `plan_emission`** — issues を block/warn に partition。`plan_emission` は純関数として
@@ -112,5 +113,6 @@ CLI: `precommit-audit [--mode stop|precommit] [--config <file>] [--root <dir>]` 
   （untracked は `--no-index /dev/null`）/`added_lines`（`+` 行から `audit-ignore` 除去）/`grep_files`/
   `toplevel`/`has_audit_ignore`。UTF-8 lossy デコードで CP932 mojibake を回避。
 - **`hookio`** — hook 配管。`read_stdin`/`HookInput`（`stop_hook_active`/`event`。非 Claude 呼出しでは既定値）、
-  `consume_skip`、block marker の set/clear、`write_audit_log`（JSONL best-effort）。
+  `consume_session_skip`（`skip_state_dir` 配下・`session_id` で帰属）、block marker の set/clear、
+  `write_audit_log`（JSONL best-effort）。
 - **`model`** — 共有結果型 `Issue`（category/message/severity）と `Issue::block`/`warn`。

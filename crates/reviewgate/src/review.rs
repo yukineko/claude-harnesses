@@ -19,7 +19,7 @@
 //! it and the hash below can't cover it — so a truncated diff must NOT be
 //! silently allowed (that would let the tail bypass the gate). We block it up to
 //! `max_attempts` with a loud, escapable reason (split the change, raise
-//! `max_diff_bytes`, `.reviewgate-skip`, or `REVIEWGATE_DISABLE=1`), then give up
+//! `max_diff_bytes`, `reviewgate skip --reason ...`), then give up
 //! loudly with a distinct tag so the turn is never permanently trapped.
 
 use std::collections::hash_map::DefaultHasher;
@@ -193,7 +193,7 @@ fn decide_subprocess(
         // with a loud, actionable reason for up to `max_attempts` consecutive
         // stops (giving transient failures — load, timeout — a chance to
         // recover), then give up *loudly* so a permanently broken reviewer can
-        // never trap the turn. Escape hatches (`.reviewgate-skip`,
+        // never trap the turn. Escape hatches (`reviewgate skip --reason ...`,
         // REVIEWGATE_DISABLE=1) remain available throughout and are named in the
         // reason, satisfying the never-break-a-turn invariant. `Undetermined`
         // (the reviewer could not run to a conclusion) resolves here exactly
@@ -272,7 +272,7 @@ fn allow(tag: &'static str, st: &crate::state::SessionState) -> Decision {
 /// up to `max_attempts` consecutive stops (giving the agent a chance to split the
 /// change so the diff fits), then give up *loudly* with a distinct tag so a
 /// permanently-too-large diff never traps the turn and is never mistaken for a
-/// clean review. Escape hatches (raise `max_diff_bytes`, `.reviewgate-skip`,
+/// clean review. Escape hatches (raise `max_diff_bytes`, `reviewgate skip --reason ...`,
 /// `REVIEWGATE_DISABLE=1`) stay available throughout and are named in the reason,
 /// satisfying the never-break-a-turn invariant. Split out from `evaluate` so it
 /// is unit-testable without spawning git.
@@ -310,7 +310,7 @@ fn decide_truncated(cfg: &Config, files: Vec<String>, prior_attempts: u32) -> De
 /// the stop with a loud, escapable reason for up to `max_attempts` consecutive
 /// stops (giving a transient git error — lock contention, a slow mount — a
 /// chance to clear), then give up *loudly* with a distinct tag so a persistently
-/// broken git can never trap the turn. Escape hatches (`.reviewgate-skip`,
+/// broken git can never trap the turn. Escape hatches (`reviewgate skip --reason ...`,
 /// `REVIEWGATE_DISABLE=1`) stay available throughout and are named in the
 /// reason, satisfying the never-break-a-turn invariant. No hash is recorded
 /// (there is no diff to certify). Split out so it is unit-testable without git.
@@ -352,7 +352,7 @@ fn scan_failed_reason(attempt: u32, max: u32) -> String {
          ブロックしています。{max}回連続で解消しなければ警告を出して通過を許可します（永久にはブロックしません）。\n\n\
          前に進むには次のいずれか:\n\
          - git のエラーを解消する（`reviewgate status` で対象 repo を確認）。\n\
-         - このレビューを1回だけスキップ: project root に `.reviewgate-skip` を作成（理由を1行）。\n\
+         - このレビューを1回だけスキップ: `reviewgate skip --reason ...` を実行（理由を1行）。\n\
          - reviewgate を完全に無効化: 環境変数 REVIEWGATE_DISABLE=1。",
         attempt = attempt,
         max = max,
@@ -381,7 +381,7 @@ fn inject_reason(cfg: &Config, files: &[String], attempt: u32) -> String {
          実在する問題が見つかれば修正してから完了してください。\
          レビューの結果と対応を簡潔に報告すること。\
          修正不要・対応済みなら、そのまま完了して構いません（同じ差分での次の停止は許可されます）。\n\n\
-         このレビューを1回だけスキップ: project root に `.reviewgate-skip` を作成（理由を1行）。\
+         このレビューを1回だけスキップ: `reviewgate skip --reason ...` を実行（理由を1行）。\
          完全に無効化: 環境変数 REVIEWGATE_DISABLE=1。",
         attempt = attempt,
         max = cfg.max_attempts,
@@ -399,7 +399,7 @@ fn subprocess_reason(files: &[String], findings: &str, attempt: u32, max: u32) -
          --- 指摘 ---\n{findings}\n\
          ------------\n\n\
          妥当な指摘を修正してから完了してください。誤検知だと判断した指摘は、理由を述べてスキップして構いません。\n\n\
-         このレビューを1回だけスキップ: `.reviewgate-skip` を作成。完全に無効化: REVIEWGATE_DISABLE=1。",
+         このレビューを1回だけスキップ: `reviewgate skip --reason ...` を実行。完全に無効化: REVIEWGATE_DISABLE=1。",
         attempt = attempt,
         max = max,
         n = files.len(),
@@ -421,7 +421,7 @@ fn reviewer_unavailable_reason(err: &str, attempt: u32, max: u32) -> String {
          {max}回連続で失敗した場合は警告を出して通過を許可します（永久にはブロックしません）。\n\n\
          前に進むには次のいずれか:\n\
          - reviewer_cmd を修正する（`reviewgate status` で解決済みコマンドを確認）。\n\
-         - このレビューを1回だけスキップ: project root に `.reviewgate-skip` を作成（理由を1行）。\n\
+         - このレビューを1回だけスキップ: `reviewgate skip --reason ...` を実行（理由を1行）。\n\
          - reviewgate を完全に無効化: 環境変数 REVIEWGATE_DISABLE=1。",
         attempt = attempt,
         max = max,
@@ -443,7 +443,7 @@ fn truncated_reason(cfg: &Config, files: &[String], attempt: u32, max: u32) -> S
          前に進むには次のいずれか:\n\
          - 変更を小さなコミット / 差分に分割し、それぞれが max_diff_bytes に収まるようにする。\n\
          - max_diff_bytes を引き上げる（reviewgate.toml の max_diff_bytes、現在 {max_bytes} B）。\n\
-         - このレビューを1回だけスキップ: project root に `.reviewgate-skip` を作成（理由を1行）。\n\
+         - このレビューを1回だけスキップ: `reviewgate skip --reason ...` を実行（理由を1行）。\n\
          - reviewgate を完全に無効化: 環境変数 REVIEWGATE_DISABLE=1。",
         attempt = attempt,
         max = max,
@@ -708,7 +708,7 @@ mod tests {
                     "reason must name the raise-the-limit override: {reason}"
                 );
                 assert!(
-                    reason.contains(".reviewgate-skip"),
+                    reason.contains("reviewgate skip --reason"),
                     "reason must name the one-shot skip escape hatch: {reason}"
                 );
                 assert!(
@@ -764,7 +764,7 @@ mod tests {
                     "must not record a hash for an undetermined change set"
                 );
                 assert!(
-                    reason.contains(".reviewgate-skip"),
+                    reason.contains("reviewgate skip --reason"),
                     "reason must name the one-shot skip escape hatch: {reason}"
                 );
                 assert!(

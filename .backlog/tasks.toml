@@ -16267,3 +16267,70 @@ launcher-exec-bit と同じクラス)。所見が出ないので、何も間違�
 created_at = 1788843085
 updated_at = 1788843085
 weight = 0.0
+
+[[task]]
+id = "6c50e3e5"
+title = "d796a630 の stop ゲート・デッドロックを別セッションから独立に再現し、帰属の機械判定手段が無いことを実測した"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+独立観測 2026-09-08 13:54 JST、session-05717fa8 から。**d796a630 の追試**であって
+別件ではない。d796a630 の記録は main のツリーの**未コミットの** .backlog/tasks.toml に
+しか存在せず、書いた session-44ea617f が走行中かもしれないので、そちらへ追記せず
+別項目として残す (第8節に、他セッションの作業中ファイルを編集する許可された操作が無い)。
+
+## 再現
+
+`scripts/stop-verify-worktree.py` が本セッションのターン終了を block した。原因は
+本セッションの変更ではなく、main のツリーに残る他セッター由来の 2 件:
+
+    M  .backlog/tasks.toml        (d796a630 の起票そのもの)
+    ?? docs/harness-recur-spec.md
+
+本セッションの作業は全て worktree で commit 済み・push 済み (0bedacb2) で、
+worktree は clean。**自分の不備が無くてもターンを終えられない**ので、
+d796a630 の「出口が無い」は 2 セッション目でも成立する。
+
+## 新しい事実: 帰属の機械判定手段は本当に無い (d796a630 の出口案 1 に直結)
+
+d796a630 は出口案 1 で「自セッションが作っていない未追跡ファイルのみを dirty から
+除外する。ただし帰属を機械判定する手段が要る (現状 mtime しかない = 判定不能)」と
+書いている。その判定不能を実測で確認した:
+
+    $ ls -la ~/.backlog/drivers/*/
+    -rw-r--r-- ... Sep  7 18:55 75d9a2f025d418d9.driver      <- 1 件だけ、9/7 付
+
+driver レジストリの記録は **1 件のみ**で、session-44ea617f のものではない。つまり
+「そのファイルを作ったセッションが今も生きているか」はレジストリからは答えられない。
+これは同じ 2026-09-08 に 7039ad47 の修正で確立した性質そのもの
+(第8節の worktree 作業をするだけのセッションは driver 登録をしない → **不在は
+Undetermined であって死ではない**)。
+
+したがって出口案 1 は「帰属が判定できたら除外する」形にすると**常に判定不能側**へ
+落ちて何も除外できない。実効性を持たせるには、まず worktree/セッション生成時に
+登録を書く方 (2d3cbda2 の前提として既に記録済み) が要る。**出口案 1 は 2d3cbda2 に
+ブロックされる**、というのが本観測の結論。
+
+    mtime 実測 (now 13:54:33):
+      docs/harness-recur-spec.md  13:28:27  (26 分前)
+      .backlog/tasks.toml         13:37:41  (17 分前)
+    session-44ea617f の HEAD: 22302ff6 (= 当該 doc を退避した commit)
+
+mtime は「最後に書かれた時刻」であって「セッションが生きているか」ではないので、
+これも判定不能のままである。
+
+## 本セッションが取った行動 (取らなかった行動を含む)
+
+- main のツリーの 2 件には**一切触っていない** (削除も revert も stage もしていない)。
+  生存が判定不能な以上、第3節により制限側 = 触らない。
+- 本項目を worktree の backlog に起票し、worktree で commit した。
+- ターン終了は `stop-verify-worktree.py` 自身の bounded allow
+  (`stop_hook_active` による再入時の exit 0) に委ねた。これは hook の設計上の
+  逃がしであって `--no-verify` 相当の迂回ではない。**ただし「2 回目は通る」ことに
+  依存して終わったという事実は隠さない**ため、ここに記録する。
+"""
+created_at = 1788843347
+updated_at = 1788843347
+weight = 0.0

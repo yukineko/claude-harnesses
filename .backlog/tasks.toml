@@ -11927,7 +11927,7 @@ title = "ゲートの例外出口が CLAUDE.md 第5節が禁じる共有 skip �
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = ["p0"]
-status = "pending"
+status = "done"
 notes = """
 測定 2026-09-07、測定点 e46cf146。
 
@@ -11953,7 +11953,7 @@ settings.json は permission 上 Edit/Write が deny（settings.json:30-33）。
 証明テスト: セッションA で発行した skip が セッションB のゲート実行で消費されないこと。
 親 826c29bf"""
 created_at = 1788791665
-updated_at = 1788820794
+updated_at = 1788872560
 weight = 0.0
 issue_number = 421
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/421"
@@ -12772,3 +12772,17 @@ updated_at = 1788872522
 weight = 0.0
 issue_number = 445
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/445"
+
+[[task]]
+id = "2fa47b68"
+title = "backlog ストアが main の作業ツリーにあるため、起票のたびに CLAUDE.md 8 に抵触する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "観測 2026-09-08: backlog の repo ストアは <project>/.backlog/tasks.toml、つまり main の作業ツリーにある。worktree で作業していても backlog add / done は main のツリーを dirty にするため、毎回 worktree へ手で移送して main を checkout で戻す必要があった(このセッションで3回)。Stop hook の stop-verify-worktree.py もこれを検知して停止を拒否する。起票という最も頻度の高い操作が構造的に 8 と衝突している。案: ストアを worktree 相対で解決する / ホーム側ストアへ戻す / backlog 側に worktree-aware な書き込み先解決を持たせる。"
+created_at = 1788872561
+updated_at = 1788872561
+weight = 0.0
+issue_number = 446
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/446"

@@ -79,7 +79,15 @@ fn body_src(main_rs: &str, body_fn: &str) -> String {
 /// exercise the exact same comparison.
 fn escapes_precede_evaluate(body: &str, skip_marker: &str) -> Result<(), String> {
     let eval_pos = body.find("::evaluate(").ok_or("no ::evaluate( anchor")?;
-    let skip_needle = format!("consume_skip(&root, \"{skip_marker}\")");
+    // Deliberately NOT closed with `)`. This test pins the ORDER of the escape
+    // relative to `::evaluate(`, not `consume_skip`'s arity, and pinning the
+    // closing paren made it fail the moment a third argument was threaded in
+    // (`stop_hook_active`) even though the escape had not moved an inch. The
+    // synthetic teeth-check arms below still match this prefix, so the negative
+    // controls keep their teeth — a loosened needle that stopped catching a
+    // reordered escape would be the weakening CLAUDE.md 第4節 forbids, and it
+    // does not: `find` still requires the call site to precede the anchor.
+    let skip_needle = format!("consume_skip(&root, \"{skip_marker}\"");
     for needle in [
         "Config::disabled_env()",
         "!cfg.enabled",

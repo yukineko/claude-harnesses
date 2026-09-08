@@ -16503,3 +16503,82 @@ main のツリーに残したまま (削除していない)。"""
 created_at = 1788842261
 updated_at = 1788842261
 weight = 0.0
+
+[[task]]
+id = "51e6ebc7"
+title = "rollout-plugins.sh の --force 再コピーが配布済みプラットフォームバイナリを消し、canary halt でゲート crate が暗転する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実観測 2026-09-08、測定点 cebce0e6。`scripts/rollout-plugins.sh --plugin blastguard
+--plugin overwatch --plugin specguard --canary --force` の実行中に発生。
+
+## 何が起きたか
+
+stage 2 (overwatch) の health-gate が下記で fail-closed halt した:
+
+    overwatch: no bundled binary for linux-x86_64
+      (/home/…/.claude/plugins/cache/yukineko/overwatch/0.2.32/bin/overwatch-linux-x86_64)
+    health-gate: CANNOT EVALUATE (rc=1) — canary health unverifiable; failing CLOSED,
+      rolling back stage 2 and halting without advancing.
+
+halt 後に配布ツリーを実測すると、先行して copy 済みの blastguard / specguard も
+プラットフォームバイナリを失っていた (launcher しか無い):
+
+    blastguard/0.2.55/bin/  -> blastguard
+    overwatch/0.2.32/bin/   -> overwatch
+    specguard/0.2.56/bin/   -> specforge specguard
+
+## 因果 (実測で確定)
+
+1. `bin/<name>-linux-x86_64` は rebuild-plugins.sh が後段で生成する成果物であって
+   crate には存在しない (`git ls-files crates/overwatch/bin/` は
+   `crates/overwatch/bin/overwatch` の 1 件のみ)。
+2. `copy_plugin_dir` (rollout-plugins.sh:393) は `rsync -a --delete` で crate を
+   鏡像コピーするため、`--force` 再コピーでこの成果物を**削除する**。
+   rsync 非搭載時の fallback (`find "$dst" -mindepth 1 -maxdepth 1 ! -name '.in_use'
+   -exec rm -rf {} +`) も同じく bin/ ごと消す。
+3. canary の health-gate は `resolve_overwatch_bin` が返す overwatch を実行するが、
+   これは cache 内の launcher に解決される。overwatch 自身の stage で 2. が起き、
+   直前に自分の実行体を消してから gate を呼ぶことになる。
+4. rebuild 段 (rollout-plugins.sh:602) は**全 stage 完了後**にしか走らないので、
+   halt すると copy 済み stage は成果物が無いまま残る。
+
+## なぜ red ではなく dark か
+
+launcher しか無いプラグインの hook は「違反なし」ではなく**起動しない**。
+CLAUDE.md の launcher-exec-bit ゲートが 100644 launcher について
+「Permission denied で暗転し、hook が起動しない = finding も出ないので red ではなく
+dark になる」と書いているのと同じ失敗様式で、ゲート crate 3 本が同時に暗転した。
+
+fail-closed でロールバックした判断自体は CLAUDE.md 3. のとおり正しい。欠陥は
+(a) 鏡像コピーが gate 自身の実行体を消す順序と、
+(b) halt が「rollout 前より暗い」状態を残すこと の 2 点。
+
+## 復旧手順 (今回実施済み・恒久対策ではない)
+
+    scripts/rebuild-plugins.sh --no-clean --only=blastguard,overwatch,specguard
+
+で 4 バイナリを seed し直し、`check-plugin-rollout.py` は exit=0 に戻した。
+
+## done_criteria
+
+1. `copy_plugin_dir` が配布済みのプラットフォームバイナリ
+   (`bin/<name>-<platform-suffix>`、`check-plugin-rollout.py` の PLATFORM_SUFFIXES が
+   正典) を `--delete` 鏡像から保護する。rsync 経路と cp -a fallback の両方。
+2. 保護対象の算出に失敗したら CLAUDE.md 3. に従い copy を実行せず異常終了する
+   (空集合を「保護対象なし」と読まない)。
+3. 上の欠陥を再現する自動テストが存在し、修正前に RED、修正後に GREEN であることを
+   観測した証跡がコミットに残る。テストは実装者以外が書く (CLAUDE.md 2.(a))。
+4. `scripts/check-plugin-rollout.py` が exit=0 のまま。
+
+## 未決 (この起票では決めない)
+
+(b) の「halt が dark を残す」を、stage ごとに rebuild を走らせて閉じるかどうか。
+それは既知の bootstrap-skew (backlog 2a953ab5、rollout-plugins.sh:873-897 の
+コメントが設計として明文化) の前提を変えるため、別途裁定が要る。"""
+created_at = 1788846130
+updated_at = 1788846130
+weight = 0.0

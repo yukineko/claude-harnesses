@@ -3763,9 +3763,26 @@ tags = [
 status = "done"
 notes = """
 verdict JSON のフィールド欠落・型不一致で fallback=true / required=false に既定され必ず Allow に落ちる。判定の入力が壊れている＝undetermined が「編集して良い」に潰れることを docstring 自身が認めている / 証拠: crates/condukt/src/state.rs:995-996 '/// defaults to true, required/broken to false) so a malformed verdict fails open to Allow and never rejects.' 実装 :1004-1007 '.get("fallback").and_then(|v| v.as_bool()).unwrap_or(true)' / 完了条件: 必須フィールド欠落時に Allow ではなく Undetermined/Reject を返し、そのケースのテストが追加される
-敵対的検証で REFUTED: 到達不能。唯一の production caller は main.rs:1497 で、editgate::check_edit の全 return arm (editgate.rs:129/142/201/209) が3キーを実 bool で出す。シリアライズ境界が無く malformed verdict は発生しない。実在する fail-open は同経路の cargo spawn 失敗 = ac643e72 に包含"""
+敵対的検証で REFUTED: 到達不能。唯一の production caller は main.rs:1497 で、editgate::check_edit の全 return arm (editgate.rs:129/142/201/209) が3キーを実 bool で出す。シリアライズ境界が無く malformed verdict は発生しない。実在する fail-open は同経路の cargo spawn 失敗 = ac643e72 に包含
+
+--- 2026-09-08: 実装として是正した（status は done のまま。REFUTED の読み方を訂正する） ---
+
+commit f315890d（branch fix/issue-15-jsonl-append-race）で `enforce_edit_gate` の 3 フィールドを
+`Option<bool>` として読み、1 つでも読めなければ `EditGateDecision::Reject` へ解決するようにした
+（`crates/condukt/src/state.rs`、condukt 0.7.150）。読めた場合の意味論は不変。
+
+上の「敵対的検証で REFUTED: 到達不能」は**棄却の根拠としては今も正しい**（発行元は
+crates/condukt/src/editgate.rs:134,147,208,221 の 4 箇所だけで、いずれも 3 キーを実 bool で出す。
+2026-09-08 に再確認、行番号も現行ツリーで一致）。訂正すべきはその**読み方**であって、
+「到達不能」は「fail-open ではない」の証明にはならない — 証明されたのは「今日の 4 発行元は
+壊れていない」であり、`unwrap_or(false)` は発行元が壊れた瞬間・別経路が混ざった瞬間に
+判定不能を Allow へ写す。CLAUDE.md 第3節は経路の有無ではなく**判定不能の解決先**を要求している。
+
+F→P オラクル: RED (88b4e39f) の実装に対して 5 FAILED / 7 ok、修正後 12/12 green。
+つまり「到達不能」の主張下でも、関数の契約としての fail-open は実測で再現した。
+"""
 created_at = 1784603234
-updated_at = 1784994186
+updated_at = 1788859924
 defer_until = 1784778341
 weight = 0.0
 
@@ -4340,9 +4357,41 @@ tags = [
     "p1",
 ]
 status = "pending"
-notes = "合成ハザード。gate は別プロセスで相互不可視 (docs/stop-gate-latency.md:34-40 が order-independence を要求)。harness-core/src/gate/run.rs:47-57 の consume_skip は marker を削除して allow を返すため、あるゲートが一度きりの skip 札を消費した後に別のゲートが block すると、その stop は起きないのに札だけ失われる。attempt カウンタも同様に、どのゲートが実際に block したかに関わらず進む (donegate/src/main.rs:194 の bump)。order-independence は保たれるが budget independence が保たれていない。fail-closed 化でブロック頻度が上がるほど顕在化する / 完了条件: skip 札の消費と attempt の bump が『実際に stop が成立したか』に条件づけられる、もしくはゲート横断で共有される。複数ゲートが同一 stop に対して独立に予算を消費しないことをテストで pin"
+notes = """
+合成ハザード。gate は別プロセスで相互不可視 (docs/stop-gate-latency.md:34-40 が order-independence を要求)。harness-core/src/gate/run.rs:47-57 の consume_skip は marker を削除して allow を返すため、あるゲートが一度きりの skip 札を消費した後に別のゲートが block すると、その stop は起きないのに札だけ失われる。attempt カウンタも同様に、どのゲートが実際に block したかに関わらず進む (donegate/src/main.rs:194 の bump)。order-independence は保たれるが budget independence が保たれていない。fail-closed 化でブロック頻度が上がるほど顕在化する / 完了条件: skip 札の消費と attempt の bump が『実際に stop が成立したか』に条件づけられる、もしくはゲート横断で共有される。複数ゲートが同一 stop に対して独立に予算を消費しないことをテストで pin
+
+--- 2026-09-08: 半分だけ landed。チケットは pending のまま残す ---
+
+【landed】skip 札の側は完了（commit 38ad9dd6、branch fix/issue-15-jsonl-append-race）。
+`harness_core::gate::run::consume_skip` に第3引数 `stop_hook_active` を足し、札の
+ライフサイクルを三状態にした: honour したら `<marker>.honoured` へ rename して記録を残し、
+再入（stop_hook_active=true）の間は「まだ owed」として honour し続け、再入でない stop が
+来た時点で記録を削除する。別ゲートが block した stop で札が焼かれる経路は塞がった。
+ついでに読めない札（EISDIR 等）を `(no reason given)` として honour する fail-open も
+`None`（制限側）へ解決した。donegate / reviewgate / propguard / tdd の 4 呼び出し側は
+すでに `HookInput` を持っているので `input.stop_hook_active` を渡すだけで済んだ。
+F→P オラクル: RED (e7cc798a) に対して 3 FAILED / 1 ok → GREEN で 4/4。
+アンチ空虚の対照（token_is_consumed_exactly_once_on_the_ordinary_path）は両状態で green。
+
+【未着手】attempt 予算の側は**1 行も触っていない**。`state::bump` は
+crates/donegate/src/main.rs:237（blocking failures 経路）と :464（refuse 経路）で
+今も無条件に呼ばれる（実測 2026-09-08、測定点 = 上記 commit の親、測定コマンド
+`grep -n 'state::bump' crates/donegate/src/main.rs`）。
+
+【未着手のまま残す理由 — 判断で埋めないため】この完了条件は 2 つの排他的な設計を並記している:
+(A)「bump が『実際に stop が成立したか』に条件づけられる」/ (B)「ゲート横断で共有される」。
+(A) を字義どおり実装すると、donegate 自身が block した stop も「成立していない」ので
+カウンタが決して進まず、max_attempts の give-up が発火しなくなる ＝ 意図的に置かれている
+bounded fail-open（crates/donegate/src/main.rs の refuse() docstring が「it is the residual
+risk of this design」と明記）が無期限ブロックに変わる。(B) は 4 ゲートがプロセス跨ぎで
+1 つの予算ストアを共有する新機構であり、置き場所・TTL・リセット規則をどう決めるかが
+そのまま「どのゲートがいつ諦めるか」を決める設計判断になる。
+
+どちらを採るかは観測では決まらず、予測で埋めれば CLAUDE.md 第2節が禁じる「判断で ok を出す」
+になる。したがって**人間の裁定待ちとして pending に残す**。裁定が出れば実装は小さい。
+"""
 created_at = 1784606616
-updated_at = 1784606616
+updated_at = 1788859901
 weight = 0.0
 issue_number = 291
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/291"

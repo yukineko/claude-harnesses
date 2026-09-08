@@ -15905,9 +15905,78 @@ E/F は依然として誰も見ていない。
 CLOSED 2026-09-08。condukt 0.7.148 (commit 613acbdd) で修正、独立検証で
 A/B/D を CONFIRMED (上記)。実機で両方向を再現済み。
 E (TTL の手書きコピー / backlog 6e30b6fc) と F (IO/panic 経路の全数走査) は
-未検証として残る — 別項目で追う。"""
+未検証として残る — 別項目で追う。
+
+---
+検証 F (2026-09-08): **IO 失敗・parse 失敗・空集合・panic が `removable = true` に
+到達する経路の全数走査**。結果は **経路なし**。ただし blast radius の記述に
+訂正が 1 件出た (下)。
+
+## 1. 決定関数そのもの
+
+`is_removable` (wt_reconcile.rs:279) は total・pure・網羅 match で、`_ =>` アームが無い。
+`Undetermined` はどの入力位置でも `false`。`true` に到達するのは
+`Known(ThisRepo)` かつ `Known(Dead)` かつ (`Known(dirty=false)` または
+`Known(dirty=true)` かつ `preserved`) の場合だけ。
+`decision_table()` (:2243) が **3 role x 3 attribution x 3 occupancy x 3 dirty x 2
+preserved = 162 行の完全直積**を出力し、
+`no_undetermined_input_is_ever_removable` (:2367) が
+「Undetermined を含む行は 1 つも removable でない」と
+**`removable_seen > 0`** (アンチ空虚) を同時に固定している。
+
+## 2. `Occupancy::Dead` へ至る経路
+
+`unclaimed_occupancy` の match で Dead に落ちるアームは :1428-1433 の **1 本だけ**で、
+`Known(Stalled)` かつ `Known(NoneEverRanHere)` かつ `Known(AllStaleHere)` の
+三重 Known を要求する。他の全アームは Undetermined。
+
+## 3. IO 失敗
+
+`registrations_in` の `read_dir` (root / bucket / record 列挙)・`read_to_string`・
+`serde_json::from_str`・project/heartbeat_at フィールド欠落は**すべて Undetermined**。
+`driver_registry_root` は `$HOME` 未設定を Undetermined。
+`dirtiness` は git root でない path を Undetermined。
+
+## 4. subprocess の終了ステータス (CLAUDE.md 第3節)
+
+`worktree::git` -> `git_output_to_result` は **timeout と非0終了の両方で `bail!`** し、
+stdout を返さない。したがって `dirtiness` の
+`Ok(s) => Known(!s.trim().is_empty())` に空文字が渡るのは
+**git が実際に 0 で終了した場合だけ**。「落ちたチェッカを合格と読む」経路は無い。
+
+## 5. 空集合
+
+`registrations_in` で一致する記録が 0 件のとき `found_stale == false` となり
+`Undetermined` を返す (「誰も居ない」ではない)。空集合 fail-open は無い。
+
+## 6. panic
+
+`condukt worktree cleanup` は `run_user` 経由であり、`run_hook`
+(main.rs:1707 の `catch_unwind` -> 常時 exit 0) は**通らない**。GC の経路に panic
+barrier は無く、panic はプロセスを非0で落とす — 削除は判定の**後**なので何も消えない。
+**ここに panic barrier が無いことが正しい設計**であり、後から「turn を壊すな」で
+包まないこと (第1節)。この経路唯一の `.expect` は
+`git_output_to_result` の `status is Some when not timed_out` で、不変条件が明示されている。
+
+## 訂正: blast radius は「削除」ではなく「resume」の側が重い
+
+本項目の記録は removable=true を**削除の危険**として書いていたが、走査の結果
+**`Occupancy::Dead` の消費者は 2 つ**あることが分かった:
+
+- `is_removable` -> 削除。ただし `worktree cleanup --remove` は
+  `role == Unregistered` の entry しか候補にしない (main.rs:3307)。
+  0.7.146 で dead 判定された `session-05717fa8` は **Registered** なので
+  cleanup では消えなかった。
+- `resume_verdict` (:344) -> **別セッションへの worktree の提供**。`Dead` は
+  role に応じて offer 側へ落ちる。こちらに role の絞り込みは無い。
+
+つまり 0.7.146 の欠陥の実害は「live な worktree が削除される」より
+**「作業中の worktree が別セッションに resume として手渡され、2 セッションが
+1 つの index を共有する」** — CLAUDE.md 第8節が「git が救えない唯一の競合」と
+名指ししている状態 — の側が大きい。修正済みなので新たな行動は不要だが、
+記録としてこちらを正としておく。"""
 created_at = 1788772560
-updated_at = 1788841984
+updated_at = 1788842478
 weight = 0.0
 
 [[task]]
@@ -15917,7 +15986,7 @@ project = "/home/hiroyuki_nakayama/src/claude-harnesses"
 project_unresolved = false
 tags = ["p2"]
 status = "pending"
-notes = """
+notes = '''
 7039ad47 の修正 (condukt 0.7.148) で発生した既知の重複。判断ではなく実測で
 記録する。
 
@@ -15960,9 +16029,99 @@ notes = """
 
 - 7039ad47 (この重複を生んだ修正)
 - 修正コミット: ブランチ fix/reconcile-session-witness, condukt 0.7.148
-"""
+
+---
+検証 E (2026-09-08)。ドリフトの向きと、機械ゲートの有無を実測した。
+
+## 現状: 値は一致、境界も一致
+
+    crates/condukt/src/wt_reconcile.rs:1106  const DRIVER_STALE_TTL_SECS: i64 = 1800;
+    crates/backlog/src/lock.rs:73            pub(crate) const LOCK_STALE_TTL_SECS: i64 = 1800;
+
+境界条件は**厳密に補集合**であってオフバイワンは無い:
+condukt は `now - heartbeat <= TTL` を live (wt_reconcile.rs:1257)、backlog は
+`now - heartbeat > TTL` を stale (lock.rs:76 / driver.rs:126) とする。
+
+## 機械ゲートは存在しない (これが本体)
+
+`grep -rn 'LOCK_STALE_TTL_SECS\|DRIVER_STALE_TTL_SECS\|1800' crates/condukt/src
+crates/condukt/tests crates/backlog/src scripts/` の全ヒットを読んだ結果、
+**2 定数を等値で固定するテスト・assert・pre-commit スクリプトは 1 つも無い**。
+両者を結び付けているのは wt_reconcile.rs:1097 の docstring 一文だけである。
+CLAUDE.md 第6節「規範の遵守を実装者の自己申告に依存させない」に照らすと、これは
+**別 crate の docstring を将来の編集者が読むことに全依存**した状態であり、
+検出は不可能。
+
+## ドリフトの向き (docstring の主張は正しい)
+
+- **condukt が短い側へドリフト** (= backlog の TTL が上がる): backlog がまだ live と
+  みなす記録を condukt が `AllStaleHere` と読む -> `Occupancy::Dead` ->
+  **生きている driver の worktree を removable / resumable と答える**。permissive・不可逆。
+- **condukt が長い側へドリフト**: 回収可能なディレクトリを保持するだけ。restrictive。
+
+docstring の「Erring long is the restrictive direction」は実装と一致する (第4節 OK)。
+
+## 罠: 危険な向きは「安全に見える編集」から生まれる
+
+危険側 (condukt が相対的に短い) を作るのは **backlog の TTL を上げる**編集であり、
+これは「reap を急がない」という**安全に見える方向**である。`crates/backlog/src/lock.rs`
+を編集する人間に、condukt 側の定数が連動すべきという信号は一切届かない。
+
+## 併せて検証した否定的結果 (再導出を防ぐため記録する)
+
+**backlog の reaper は第4項を空虚にしない。** `reap_stale_in` の呼び出しは
+`crates/backlog/src/driver.rs:159` の 1 箇所だけで、`register_at`
+(= `heartbeat_at`) の中から、**登録者自身の project バケットに限定して**呼ばれる。
+死んだセッションの記録が消えるのは同一 project path で誰かが再登録したときだけで、
+その再登録は自分の記録を **reap より先に** 書く (`write_atomic` -> `reap_stale_in`) ので
+どのみち `LiveHere` になる。よって `AllStaleHere` は production で到達可能である。
+
+## 修正案 (未実装・優先順)
+
+1. **pre-commit ゲート**: 両ファイルの定数を grep して不一致を block する
+   スクリプト。crate 間の結合を増やさず、機械判定 (第6節) を満たす。最も安い。
+2. backlog に lib target を生やして定数を直接 link する。
+3. 述語の複製をやめ、`backlog driver status --project <path>` の判定を消費する
+   (writer の verdict を読む)。subprocess 依存が増える。
+
+---
+修正コミット済み・**まだ強制されていない** (2026-09-08)。
+
+`scripts/check-cross-crate-constants.py` (commit 4eadfde5) がテーブル駆動で
+正典 `backlog::lock::LOCK_STALE_TTL_SECS` と写し
+`condukt::wt_reconcile::DRIVER_STALE_TTL_SECS` の等値を機械照合する。
+判定不能 (ファイル欠落 / 0 ヒット=rename / 複数ヒット=曖昧) はすべて block。
+
+## 実装者による観測 (ゲート自身への注入)
+
+    1. baseline (両者 1800)          want 0  got 0
+    2. backlog を 3600 へ (危険側)    want 1  got 1
+    3. condukt を 900 へ (制限側)     want 1  got 1
+    4. condukt 側を rename (判定不能)  want 1  got 1
+    5. revert 後                    want 0  got 0     tree clean
+
+## 独立 agent (別モデル) が書いた回帰テスト
+
+`scripts/test_check_cross_crate_constants.py`、17 tests。第2節(a) に従い
+**実装者は書いていない**。実装者が報告を額面で受けず、ゲート本体へ 4 通り変異を
+当てて suite が殺すことを独立に再現した:
+
+    M1. 読めない=共通 sentinel で合意扱い   -> FAILED (failures=3, errors=2)
+    M2. 複数ヒットで先頭を推測              -> FAILED (failures=3)
+    M3. 正典 regex の anchor を外す        -> FAILED (failures=4)
+    M4. 値の比較を無効化                   -> FAILED (failures=2)
+    変異なし / revert 後                  -> OK      gate clean
+
+## だから閉じない
+
+666b6704 の実測により、`core.hooksPath` が main ツリーの絶対パスを指しているため
+**git が実際に走らせるのは main の `.githooks/pre-commit`** であり、そこにこの
+ゲートの `run` 行は無い。したがって本ゲートは **main に merge されるまで 1 度も
+実行されない**。ここで done にすると、存在しない保護を「有る」と記録することになる
+(第4節)。**merge 後に main の pre-commit 出力へ `check-cross-crate-constants:` の
+行が出ることを観測してから閉じる。**'''
 created_at = 1788774009
-updated_at = 1788774009
+updated_at = 1788843619
 weight = 0.0
 
 [[task]]
@@ -16051,6 +16210,216 @@ context を汚さないよう tail だけを別 agent に読ませること)。
 """
 created_at = 1788841984
 updated_at = 1788841984
+weight = 0.0
+
+[[task]]
+id = "666b6704"
+title = "core.hooksPath が main ツリーの絶対パスなので、worktree で新設した pre-commit ゲートは merge されるまで DARK になる"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-08。`scripts/check-cross-crate-constants.py` を worktree で
+新設・配線して commit したところ、**そのゲートは commit 時に一度も実行されなかった**
+のに commit は通った。red ではなく dark である。
+
+## 実測
+
+    $ git config --local --get core.hooksPath
+    /home/hiroyuki_nakayama/src/claude-harnesses/.githooks      <- main ツリーの絶対パス
+
+    $ grep -c 'cross-crate' .githooks/pre-commit                 <- worktree 側
+    3
+    $ grep -c 'cross-crate' /home/hiroyuki_nakayama/src/claude-harnesses/.githooks/pre-commit
+    0
+
+    commit 出力の該当箇所 (gate-crates-sync の次が launcher-exec-bit で、
+    間にあるはずの crossx-constants の行が無い):
+        OK: GATE_CRATES consistent across 11 sources: ...
+        launcher-exec-bit: all 39 plugin launcher(s) recorded 100755 ...
+
+    一方、hook を直接走らせると出る:
+    $ sh .githooks/pre-commit | grep cross-crate
+        check-cross-crate-constants: 1 hand-copied constant(s) agree with ...
+
+`core.hooksPath` は `git config --local` = **リポジトリ単位**なので、
+linked worktree 全部で共有される。相対パス `.githooks` なら各 worktree で解決される
+のに対し、絶対パスなので**常に main ツリーの hook 本体**が走る。
+CLAUDE.md の「ビルド/テスト/ゲート」節が案内しているのは相対形
+(`git config core.hooksPath .githooks`) であり、実際の設定はそこからずれている。
+
+## split-brain (これが本題)
+
+hook 本体は main から、hook が呼ぶスクリプトは **worktree** から来る:
+
+    .githooks/pre-commit:131  REPO="$(git rev-parse --show-toplevel)"   <- worktree
+    run() { path="$REPO/scripts/$scanner"; ... }
+
+つまり **「どのゲートを呼ぶか」の一覧は main 由来、「各ゲートが何をするか」の実装は
+worktree 由来**という食い違いが常態化している。帰結:
+
+- worktree で**ゲートを新設**しても、main の一覧に無いので**呼ばれない**。dark。
+- worktree で**既存ゲートの実装を変更**すると、それは**そのまま効く**
+  (main の一覧が呼ぶ先が worktree のファイルなので)。
+- worktree で**スキャナを削除**すると `run` の `! -f` で block される。つまり
+  削除だけは検出され、追加だけが黙って無視される — **非対称で、permissive 側に倒れている**。
+
+現在 main と worktree の pre-commit は 23 行分ずれている (`diff | wc -l`)。
+
+## なぜ p1 か
+
+第8節はゲートを含む**すべての編集を worktree で行うことを絶対義務**にしている。
+その義務に従って書いた新規ゲートが、義務に従ったせいで無効になる。
+「ゲートを追加した」と報告した時点でそれは真だが、**流れは何も止められていない**
+— 第7節が GitHub required check で観測したのと同型の「報告が真であることと、
+ゲートが効いていることが分離する」構造が、ローカルにも存在していた。
+
+さらに悪いことに、これは **red ではなく dark** である (第「禁忌ルール」節の
+launcher-exec-bit と同じクラス)。所見が出ないので、何も間違って見えない。
+
+## 直し方の候補 (未検証・要判断)
+
+1. `git config --local core.hooksPath .githooks` (相対へ戻す)。各 worktree が
+   自分の hook 本体を使うようになり、split-brain が消える。**ただし**「worktree で
+   ゲートを緩めて自分だけ素通りする」経路が開くので、第4節の観点で要検討。
+   現状でも実装側は worktree 由来なので、その経路は**既に開いている**
+   (一覧だけが main 固定という中途半端な状態)。
+2. hook 本体側で「main の一覧」と「worktree の scripts/ の実在ファイル集合」を
+   突き合わせ、**一覧に無いスキャナが worktree に存在したら block** する。
+   追加の非対称を塞ぐが、意図的な作業中ファイルでも止まる。
+3. 現状維持を宣言し、「worktree で新設したゲートは merge されるまで dark」である
+   ことを CLAUDE.md に明記する。**その場合でも本項目の実測は残す**
+   — 知らずに「ゲートを足した」と報告するのが最悪だから。
+
+**この選択は auto で自答しない** (第2節: ゲートの有効範囲を変える判断であり、
+1 は緩和方向を含む)。人間の裁定が要る。
+
+## 当面の帰結 (記録)
+
+`scripts/check-cross-crate-constants.py` (commit 4eadfde5) は
+**main に merge されるまで実行されない**。commit 時に観測した「OK」は
+`sh .githooks/pre-commit` を手で走らせた結果であって、git が走らせた結果ではない。
+"""
+created_at = 1788843085
+updated_at = 1788843085
+weight = 0.0
+
+[[task]]
+id = "6c50e3e5"
+title = "d796a630 の stop ゲート・デッドロックを別セッションから独立に再現し、帰属の機械判定手段が無いことを実測した"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+独立観測 2026-09-08 13:54 JST、session-05717fa8 から。**d796a630 の追試**であって
+別件ではない。d796a630 の記録は main のツリーの**未コミットの** .backlog/tasks.toml に
+しか存在せず、書いた session-44ea617f が走行中かもしれないので、そちらへ追記せず
+別項目として残す (第8節に、他セッションの作業中ファイルを編集する許可された操作が無い)。
+
+## 再現
+
+`scripts/stop-verify-worktree.py` が本セッションのターン終了を block した。原因は
+本セッションの変更ではなく、main のツリーに残る他セッター由来の 2 件:
+
+    M  .backlog/tasks.toml        (d796a630 の起票そのもの)
+    ?? docs/harness-recur-spec.md
+
+本セッションの作業は全て worktree で commit 済み・push 済み (0bedacb2) で、
+worktree は clean。**自分の不備が無くてもターンを終えられない**ので、
+d796a630 の「出口が無い」は 2 セッション目でも成立する。
+
+## 新しい事実: 帰属の機械判定手段は本当に無い (d796a630 の出口案 1 に直結)
+
+d796a630 は出口案 1 で「自セッションが作っていない未追跡ファイルのみを dirty から
+除外する。ただし帰属を機械判定する手段が要る (現状 mtime しかない = 判定不能)」と
+書いている。その判定不能を実測で確認した:
+
+    $ ls -la ~/.backlog/drivers/*/
+    -rw-r--r-- ... Sep  7 18:55 75d9a2f025d418d9.driver      <- 1 件だけ、9/7 付
+
+driver レジストリの記録は **1 件のみ**で、session-44ea617f のものではない。つまり
+「そのファイルを作ったセッションが今も生きているか」はレジストリからは答えられない。
+これは同じ 2026-09-08 に 7039ad47 の修正で確立した性質そのもの
+(第8節の worktree 作業をするだけのセッションは driver 登録をしない → **不在は
+Undetermined であって死ではない**)。
+
+したがって出口案 1 は「帰属が判定できたら除外する」形にすると**常に判定不能側**へ
+落ちて何も除外できない。実効性を持たせるには、まず worktree/セッション生成時に
+登録を書く方 (2d3cbda2 の前提として既に記録済み) が要る。**出口案 1 は 2d3cbda2 に
+ブロックされる**、というのが本観測の結論。
+
+    mtime 実測 (now 13:54:33):
+      docs/harness-recur-spec.md  13:28:27  (26 分前)
+      .backlog/tasks.toml         13:37:41  (17 分前)
+    session-44ea617f の HEAD: 22302ff6 (= 当該 doc を退避した commit)
+
+mtime は「最後に書かれた時刻」であって「セッションが生きているか」ではないので、
+これも判定不能のままである。
+
+## 本セッションが取った行動 (取らなかった行動を含む)
+
+- main のツリーの 2 件には**一切触っていない** (削除も revert も stage もしていない)。
+  生存が判定不能な以上、第3節により制限側 = 触らない。
+- 本項目を worktree の backlog に起票し、worktree で commit した。
+- ターン終了は `stop-verify-worktree.py` 自身の bounded allow
+  (`stop_hook_active` による再入時の exit 0) に委ねた。これは hook の設計上の
+  逃がしであって `--no-verify` 相当の迂回ではない。**ただし「2 回目は通る」ことに
+  依存して終わったという事実は隠さない**ため、ここに記録する。
+
+---
+訂正と解決 2026-09-08 14:01。
+
+## 訂正: bounded allow は発火しなかった
+
+上の記述は「ターン終了を `stop_hook_active` による再入時 exit 0 に委ねた」と書いたが、
+**これは誤り**。2 回目の停止でも hook は exit 2 で block した。hook 側に
+`if payload.get("stop_hook_active"): return 0` は実在する
+(`scripts/stop-verify-worktree.py`) が、payload にそのフラグが来ていない。
+「2 回目は通る」は実装を読む前の**予測**であり、観測ではなかった。
+
+## 実際の出口: セッション自体を worktree へ再アンカーする
+
+hook の判定はこうなっている:
+
+    git_dir = rev-parse --absolute-git-dir
+    common  = rev-parse --git-common-dir
+    if realpath(git_dir) != realpath(common): return 0   # in a worktree -- the sanctioned place
+
+つまり **worktree にいるセッションは無条件に allow** される。dirty 判定は
+「main のチェックアウトに座っている場合」にしか到達しない。したがって
+`EnterWorktree` (path 指定) でセッションの cwd を自分の worktree へ移すと解ける:
+
+    cwd:        /home/.../.claude-harnesses-worktrees/session-05717fa8
+    git-dir:    /home/.../claude-harnesses/.git/worktrees/session-05717fa8
+    common-dir: /home/.../claude-harnesses/.git          <- 異なる = worktree
+    worktree status: clean
+
+main のツリーの他セッション由来 2 件には**依然として触っていない**。
+
+## d796a630 の分析への訂正
+
+d796a630 は逃げ道を「`cd <worktree>` による re-anchor か bounded allow だけで、
+前者は guard の意図的な回避に当たる」と書いている。**前者は回避ではない**:
+hook 自身が worktree セッションを設計として allow しており、第8節は worktree に
+いることを義務づけている。つまり re-anchor は**ゲートを迂回する行為ではなく、
+ゲートが要求している状態そのものに移る行為**である。
+
+真の欠陥は「出口が無い」ことではなく、**セッションが main のツリーに
+アンカーされたまま走れてしまうこと**の方にある。SessionStart hook は
+`cd <worktree>` を案内するが、Bash の cwd はツール呼び出しごとに main へ戻るため
+アンカーは main のままで、§8 準拠は毎コマンドの `cd` という自己申告に依存していた
+(第6節が禁じる形)。`EnterWorktree` はそれを恒久化する。
+
+## 残る本当の問題 (これは解けていない)
+
+他セッションの未追跡ファイルが main のツリーに残っている状態で、**main で merge を
+実行する必要が生じたとき**は依然として詰む (git が untracked-overwrite を拒否し、
+guard が rm を拒否する)。第8節が main に唯一許す操作が merge である以上、
+d796a630 の本体はここに残る。本項目が解決したのは「ターンを終えられない」方だけ。"""
+created_at = 1788843347
+updated_at = 1788843777
 weight = 0.0
 
 [[task]]

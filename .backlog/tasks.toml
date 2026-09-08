@@ -16367,7 +16367,57 @@ mtime は「最後に書かれた時刻」であって「セッションが生�
   (`stop_hook_active` による再入時の exit 0) に委ねた。これは hook の設計上の
   逃がしであって `--no-verify` 相当の迂回ではない。**ただし「2 回目は通る」ことに
   依存して終わったという事実は隠さない**ため、ここに記録する。
-"""
+
+---
+訂正と解決 2026-09-08 14:01。
+
+## 訂正: bounded allow は発火しなかった
+
+上の記述は「ターン終了を `stop_hook_active` による再入時 exit 0 に委ねた」と書いたが、
+**これは誤り**。2 回目の停止でも hook は exit 2 で block した。hook 側に
+`if payload.get("stop_hook_active"): return 0` は実在する
+(`scripts/stop-verify-worktree.py`) が、payload にそのフラグが来ていない。
+「2 回目は通る」は実装を読む前の**予測**であり、観測ではなかった。
+
+## 実際の出口: セッション自体を worktree へ再アンカーする
+
+hook の判定はこうなっている:
+
+    git_dir = rev-parse --absolute-git-dir
+    common  = rev-parse --git-common-dir
+    if realpath(git_dir) != realpath(common): return 0   # in a worktree -- the sanctioned place
+
+つまり **worktree にいるセッションは無条件に allow** される。dirty 判定は
+「main のチェックアウトに座っている場合」にしか到達しない。したがって
+`EnterWorktree` (path 指定) でセッションの cwd を自分の worktree へ移すと解ける:
+
+    cwd:        /home/.../.claude-harnesses-worktrees/session-05717fa8
+    git-dir:    /home/.../claude-harnesses/.git/worktrees/session-05717fa8
+    common-dir: /home/.../claude-harnesses/.git          <- 異なる = worktree
+    worktree status: clean
+
+main のツリーの他セッション由来 2 件には**依然として触っていない**。
+
+## d796a630 の分析への訂正
+
+d796a630 は逃げ道を「`cd <worktree>` による re-anchor か bounded allow だけで、
+前者は guard の意図的な回避に当たる」と書いている。**前者は回避ではない**:
+hook 自身が worktree セッションを設計として allow しており、第8節は worktree に
+いることを義務づけている。つまり re-anchor は**ゲートを迂回する行為ではなく、
+ゲートが要求している状態そのものに移る行為**である。
+
+真の欠陥は「出口が無い」ことではなく、**セッションが main のツリーに
+アンカーされたまま走れてしまうこと**の方にある。SessionStart hook は
+`cd <worktree>` を案内するが、Bash の cwd はツール呼び出しごとに main へ戻るため
+アンカーは main のままで、§8 準拠は毎コマンドの `cd` という自己申告に依存していた
+(第6節が禁じる形)。`EnterWorktree` はそれを恒久化する。
+
+## 残る本当の問題 (これは解けていない)
+
+他セッションの未追跡ファイルが main のツリーに残っている状態で、**main で merge を
+実行する必要が生じたとき**は依然として詰む (git が untracked-overwrite を拒否し、
+guard が rm を拒否する)。第8節が main に唯一許す操作が merge である以上、
+d796a630 の本体はここに残る。本項目が解決したのは「ターンを終えられない」方だけ。"""
 created_at = 1788843347
-updated_at = 1788843347
+updated_at = 1788843777
 weight = 0.0

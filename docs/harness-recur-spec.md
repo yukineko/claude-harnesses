@@ -99,15 +99,19 @@ crates/harness-recur/
 （公式ドキュメントで確認済み・2026-09-08、§12-5。`CLAUDE_PLUGIN_DATA` は Claude Code が
 プラグイン hook に自動設定し、`CLAUDE_PLUGIN_ROOT` と違ってプラグイン更新を生き延びる）。
 
-> **【要判断・未決】ストア形式を SQLite にするか。**
-> このワークスペースに `rusqlite` / `sqlite` の依存は **0 件**（実測 §12-1）。既存 39 crate の
-> 永続化はすべて追記 JSONL か JSON / TOML ファイルで、追記の原子性は
+> **【決定・2026-09-08】ストア形式は SQLite。仕様どおり採用する。**
+> 判断材料として測ったこと（§12-1）: このワークスペースに `rusqlite` / `sqlite` の依存は
+> **0 件**で、既存 39 crate の永続化はすべて追記 JSONL か JSON / TOML ファイル、追記の原子性は
 > `harness_core::append::append_line` に集約されている（issue #15 の修正で 6 sink を統一済み）。
-> SQLite を入れると (a) ワークスペース初の C 依存、(b) 既存の append 不変条件の外側に
-> もう一系統の並行性モデル、が同時に増える。一方 §5.8 の「1,000 件で 20ms」と §5.3 の
-> 索引照合は SQLite の方が素直に書ける。**着手前に決めること。** 決めずに書き始めると後で移せない。
-> 以降に出てくる `CREATE TABLE` は**データモデルの記述**であって、SQLite の採用を確定した
-> ものではない。
+> したがって SQLite の採用は **(a) ワークスペース初の C 依存**、**(b) 既存の append 不変条件の
+> 外側にもう一系統の並行性モデル**、を持ち込む。それでも採る理由は、§5.8 の「1,000 件で 20ms」と
+> §5.3 の索引照合が SQLite の方が素直に書けることである。
+>
+> **採用に伴い、以下は実装時の義務とする**（上の (a)(b) を放置しないため）:
+> - 依存は `rusqlite` の `bundled` feature（ビルド環境の libsqlite3 に依存しない）
+> - **並行書き込みの挙動をテストで固定する** — 複数セッションが同時に `add` / `resolve` を
+>   叩く状況を再現し、`SQLITE_BUSY` を握り潰さないこと（`unwrap_or` の既定値は必ず制限側）
+> - DB が読めない・壊れている場合の挙動は §8 に従う（沈黙は不可）
 
 ### 3.1 再実装してはいけない既存部品（実測 §12-2）
 
@@ -250,7 +254,7 @@ streaming の 1 パスで済ませ、重い集計は `probe report` 側に置く
 ### 5.1 データモデル
 
 ```sql
-CREATE TABLE claim (
+CREATE TABLE precept (
   id             TEXT PRIMARY KEY,      -- slug
   statement      TEXT NOT NULL,         -- 1〜3行。条件 → 禁止/必須 の形
   fix_hint       TEXT,                  -- 正しい書き方（任意、1〜2行）
@@ -262,17 +266,17 @@ CREATE TABLE claim (
   disabled       INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE claim_trigger (
-  claim_id  TEXT NOT NULL REFERENCES claim(id),
+CREATE TABLE precept_trigger (
+  precept_id  TEXT NOT NULL REFERENCES precept(id),
   kind      TEXT NOT NULL,   -- 'path' | 'symbol' | 'command' | 'diff_regex'
   pattern   TEXT NOT NULL
 );
-CREATE INDEX idx_trigger_kind ON claim_trigger(kind, pattern);
+CREATE INDEX idx_trigger_kind ON precept_trigger(kind, pattern);
 
 CREATE TABLE fire_log (
   ts          TEXT NOT NULL,
   session_id  TEXT NOT NULL,
-  claim_id    TEXT NOT NULL,
+  precept_id    TEXT NOT NULL,
   event       TEXT NOT NULL,   -- 'inject' | 'block' | 'suppressed_budget'
   tool_name   TEXT,
   target      TEXT
@@ -284,11 +288,11 @@ CREATE TABLE fire_log (
 - `statement` は1〜3行。これを超えるものは主張として成立していないので分割する
 - `severity` の初期値は必ず `warn`。`block` への昇格は §5.6 の条件を満たしたときのみ
 - `diff_regex` トリガは、書けるものだけ書く。書けないものは `path` / `symbol` のみで運用する
-- **【要判断】語の衝突**: このリポジトリで `claim` は既に「**backlog の並行セッション排他**」を
-  指す（`backlog claim ledger` / `condukt state is-claimed` / 同名の pending backlog 複数件）。
-  同じ語を「再発防止の主張」に再利用すると、ログとコードの両方で読み手が取り違える。
-  `precept` / `rule` / `recur` などへの改名を推奨する。**仕様の語彙は著者の決定**なので
-  ここでは変更していない
+- **語の衝突は改名で解決した（2026-09-08 決定）**: このリポジトリで `claim` は既に
+  「**backlog の並行セッション排他**」を指す（`backlog claim ledger` / `condukt state is-claimed` /
+  同名の pending backlog 複数件）。同じ語を「再発防止の主張」に再利用すると、ログとコードの
+  両方で読み手が取り違える。よって本仕様の主張は **`precept`** と呼ぶ
+  （テーブル `precept` / `precept_trigger`、CLI 引数 `<precept_id>`）。`fire_log` は据え置き
 
 ### 5.2 登録フロー
 
@@ -314,7 +318,7 @@ harness-recur add \
 3. command トリガ : command 文字列を照合
 4. diff_regex     : diff 本文に正規表現照合
 5. disabled を除外
-6. 同一セッションで既に注入済みの claim を除外（§5.5 の例外あり）
+6. 同一セッションで既に注入済みの precept を除外（§5.5 の例外あり）
 7. 予算内に収める
 ```
 
@@ -397,9 +401,9 @@ harness-recur add \
 
 - 登録から 2 週間以上経過
 - `fire_log` に3回以上の発火があり、うち誤発火の報告がゼロ
-- `harness-recur promote <claim_id>` を人が明示的に実行
+- `harness-recur promote <precept_id>` を人が明示的に実行
 
-降格：誤発火が1件でも報告されたら即座に `warn` へ戻す（`harness-recur demote <claim_id>`）。
+降格：誤発火が1件でも報告されたら即座に `warn` へ戻す（`harness-recur demote <precept_id>`）。
 **機構全体は止めない。** 粒度を主張単位に落とすことが、誤発火で仕組みごと無効化されるのを防ぐ唯一の方法。
 
 ### 5.7 注入予算
@@ -529,20 +533,20 @@ harness-recur probe report --since 2026-08-01
 |---|---|
 | 散文 → 条件付き命令 | `<条件> のとき <禁止/必須>`。この形に落ちないものは主張ではない |
 | 抽象 → 具体 | 実際の識別子・パスを含める。「適切に扱う」は削除 |
-| 常時 → 条件付き | claim テーブルへ移し、トリガで発火させる |
+| 常時 → 条件付き | precept テーブルへ移し、トリガで発火させる |
 
 **圧縮しないこと。** 条件節と例外を落とすと発火しない一般論になる。
 
 ### 7.3 階層化
 
 ```
-claim.statement : 1〜3行の命令（これだけ注入）
-claim.source    : 元文書へのパス（必要時に読ませる）
+precept.statement : 1〜3行の命令（これだけ注入）
+precept.source    : 元文書へのパス（必要時に読ませる）
 ```
 
 ### 7.4 陳腐化の扱い
 
-`claim.verified_sha` より後に、その主張のトリガパスが変更されていれば「陳腐化の疑い」として提示する。
+`precept.verified_sha` より後に、その主張のトリガパスが変更されていれば「陳腐化の疑い」として提示する。
 
 - **ブロックしない。警告の強度を下げる**
 - git だけで判定でき、自動更新できる
@@ -554,7 +558,7 @@ claim.source    : 元文書へのパス（必要時に読ませる）
 
 | 項目 | 要件 |
 |---|---|
-| `PreToolUse` レイテンシ | 20ms 以内（1,000 claim 時） |
+| `PreToolUse` レイテンシ | 20ms 以内（1,000 precept 時） |
 | `Stop` レイテンシ | 3秒以内 |
 | DB 破損時 | 注入経路は fail-open（注入せず継続）。ただし**沈黙は不可** — `harness_core::degrade` で劣化を明示する（CLAUDE.md 1.: 沈黙は「余裕あり」と読まれる fail-open）。`block` を持つ主張が 1 件でもある状態で DB が読めないなら、その主張は判定不能なので次行に従い fail-closed |
 | `block` 判定不能時 | fail-closed（差し止め） |
@@ -569,10 +573,10 @@ claim.source    : 元文書へのパス（必要時に読ませる）
 
 | 却下したもの | 理由 |
 |---|---|
-| **全文検索エンジン / Meilisearch** | 再発防止に retrieval 問題は存在しない。必要になるのは claim が 1,000 件を超え、かつトリガで絞れない主張が有意に残った場合のみ。現時点で該当しない |
+| **全文検索エンジン / Meilisearch** | 再発防止に retrieval 問題は存在しない。必要になるのは precept が 1,000 件を超え、かつトリガで絞れない主張が有意に残った場合のみ。現時点で該当しない |
 | **RAG / 埋め込み検索** | 同上。加えて、誤認は確信を伴うため事前注入経路では届かない |
-| **文書へのアンカー一括付与（全文書移行）** | 効果が出るまで6週間かかる。失敗駆動の登録なら初日から効く。将来 claim が 1,000 件を超えたときのコスト最適化として再検討 |
-| **全 claim を一括で文脈に入れる照合** | distractor による希釈。必ずシャード分割する |
+| **文書へのアンカー一括付与（全文書移行）** | 効果が出るまで6週間かかる。失敗駆動の登録なら初日から効く。将来 precept が 1,000 件を超えたときのコスト最適化として再検討 |
+| **全 precept を一括で文脈に入れる照合** | distractor による希釈。必ずシャード分割する |
 | **文書の蒸留・圧縮** | 条件節と例外が最初に落ち、発火しない一般論が残る |
 | **`severity: block` の一括適用** | 誤発火1件で機構全体が無効化される。主張単位で昇格させる |
 | **文書由来の指摘でのコード修正強制** | 文書が誤っているため、誤った文書に合わせてコードを直させる |

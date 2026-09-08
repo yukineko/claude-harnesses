@@ -4,7 +4,7 @@
 //!
 //! # The defect this closes
 //!
-//! The store follows the checkout by design — `config::store_dir_for` walks up
+//! The store follows the checkout by design — `config::locate` walks up
 //! to the nearest `.git` (a FILE in a linked worktree counts), so every
 //! worktree owns `<worktree>/.backlog/tasks.toml`. That is deliberate and is
 //! NOT changed here: CLAUDE.md §8 forbids a worktree writing the main tree's

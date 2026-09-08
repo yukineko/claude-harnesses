@@ -107,9 +107,9 @@ GATE_CRATES = (
     "propguard",
     "specguard",
     "stuckguard",
-    "taintguard",
     "mutategate",
     "overwatch",
+    "parallelguard",
 )
 
 # Receiver-aware: `(?<!\.)` excludes `some_reader.read_to_string(&mut buf)` (the

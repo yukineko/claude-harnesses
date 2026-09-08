@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use harness_core::config::{base_dir, expand_tilde};
 use serde::Deserialize;
@@ -9,7 +9,7 @@ pub struct Config {
     pub inject_limit: usize,
     /// True when `config.toml` named `store_dir` explicitly. An operator who
     /// pinned a location keeps it: per-project resolution is a DEFAULT, not an
-    /// override, so `tasks_path_for` must not silently relocate their store.
+    /// override, so `locate` must not silently relocate their store.
     pub store_dir_pinned: bool,
 }
 
@@ -60,40 +60,35 @@ impl Config {
     ///   - the CLI (`main.rs`) always passes `None`. It deliberately does not
     ///     forward `--project`: a worktree running `add --project <main tree>`
     ///     would otherwise resolve the store to the main tree and write that
-    ///     tree's tracked `tasks.toml`, which CLAUDE.md §8 forbids. Selecting
-    ///     WHICH tasks you see is `project` identity's job (`store::list`'s
-    ///     filter), and is a separate axis from WHERE the file lives.
+    ///     tree's tracked `tasks.toml`, which CLAUDE.md §8 forbids.
     ///   - the SessionStart hook passes `Some(root)` derived from the hook's
     ///     own cwd, which is the same cwd anchoring, spelled explicitly.
     ///
     /// Resolution order, and what each step means:
     ///   1. `store_dir` pinned in `config.toml` — an operator who named a
     ///      location keeps it. Per-repo resolution is the DEFAULT, not an
-    ///      override.
+    ///      override. A pinned store is explicitly allowed to hold SEVERAL
+    ///      projects, which is why readers keep scoping it by project label.
     ///   2. the repo root containing `start` (or the cwd when `start` is
-    ///      `None`) — `<root>/.backlog`.
-    ///   3. no repo root found — the legacy `~/.backlog`.
-    ///
-    /// Step 3 is deliberately not an error. A path with no repo root cannot be
-    /// resolved into a project store, and inventing one would scatter tasks
-    /// into whatever directory the caller happened to stand in; the legacy
-    /// path at least leaves them where every existing reader already looks.
-    pub fn tasks_path_for(&self, start: Option<&str>) -> PathBuf {
-        self.store_dir_for(start).join("tasks.toml")
-    }
-
-    /// See `tasks_path_for` for what `start` means and why it is not a
-    /// "which project's queue" selector.
-    pub fn store_dir_for(&self, start: Option<&str>) -> PathBuf {
+    ///      `None`) — `<root>/.backlog`. This is a project store: everything
+    ///      in it belongs to that repo, so the file itself is the scope.
+    ///   3. no repo root found — [`StoreLocation::NoProject`], which carries
+    ///      NO path. See its doc comment for why this stopped being a fallback
+    ///      to `~/.backlog`.
+    pub fn locate(&self, start: Option<&str>) -> StoreLocation {
         if self.store_dir_pinned {
-            return self.store_dir.clone();
+            return StoreLocation::Pinned(self.store_dir.clone());
         }
         let start = start
             .map(PathBuf::from)
-            .or_else(|| std::env::current_dir().ok());
-        match start.as_deref().and_then(repo_root) {
-            Some(root) => root.join(".backlog"),
-            None => self.store_dir.clone(),
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        match repo_root(&start) {
+            Some(root) => StoreLocation::Repo {
+                dir: root.join(".backlog"),
+                root,
+            },
+            None => StoreLocation::NoProject { start },
         }
     }
 
@@ -101,6 +96,79 @@ impl Config {
         std::env::var("BACKLOG_DISABLE")
             .map(|v| v == "1")
             .unwrap_or(false)
+    }
+}
+
+/// Where this process's queue lives — three answers, not one path.
+///
+/// The last two variants used to be a single `PathBuf`: a cwd with no repo root
+/// above it silently resolved to the cross-project `~/.backlog`, and every
+/// caller then treated that exactly like a project store. Two consequences were
+/// measured before this type existed:
+///
+///   * a process running in a tempdir wrote its fixtures into the operator's
+///     real queue — specforge's spec-ratify tasks were found in
+///     `~/.backlog/tasks.toml` under `project="/tmp/.tmpsYSvwG"` and
+///     `project="/tmp/.tmpWIjVKj"` (backlog 7d8ab7fe; the same class on the
+///     other machine is a4966045, 6 entries);
+///   * a read from such a cwd answered with ANOTHER project's queue, which is
+///     the collapse CLAUDE.md §3 forbids one level below 5ba13c3e: "I have no
+///     store for you" rendered as an ordinary answer.
+///
+/// "There is no project store here" is not a location. Substituting a shared
+/// one is not a degrade, it is a different question being answered, so
+/// [`StoreLocation::NoProject`] deliberately carries no path and
+/// [`StoreLocation::tasks_path`] refuses.
+pub enum StoreLocation {
+    /// `config.toml` named `store_dir`. Used verbatim, and explicitly allowed
+    /// to hold several projects — the pre-per-repo shape, kept as the opt-in
+    /// escape hatch the `NoProject` diagnostic points at.
+    Pinned(PathBuf),
+    /// `<root>/.backlog` for the repo containing the starting path. `root` is
+    /// the SCOPE: a tracked, repo-local file holds that repo's tasks and
+    /// nothing else, whichever checkout wrote them.
+    Repo { root: PathBuf, dir: PathBuf },
+    /// No pinned `store_dir` and no repo root above `start`. Carries no path
+    /// on purpose.
+    NoProject { start: PathBuf },
+}
+
+impl StoreLocation {
+    /// The repo this store belongs to, when the store IS a project store.
+    ///
+    /// `None` for [`StoreLocation::Pinned`] — a pinned store may hold several
+    /// projects, so there the project label is the scope and callers must keep
+    /// filtering by it — and for [`StoreLocation::NoProject`], which has no
+    /// store at all. Callers therefore cannot use "no root" to mean "no
+    /// scoping needed": the two `None` cases are distinguished by matching on
+    /// the variant, and `tasks_path` refuses the second outright.
+    pub fn project_root(&self) -> Option<&Path> {
+        match self {
+            StoreLocation::Repo { root, .. } => Some(root),
+            StoreLocation::Pinned(_) | StoreLocation::NoProject { .. } => None,
+        }
+    }
+
+    /// The `tasks.toml` to read/write, or the reason there is none.
+    ///
+    /// Returns `Err` for [`StoreLocation::NoProject`] rather than a path, which
+    /// is the whole point of the type: callers used to receive `~/.backlog`
+    /// here and could not tell it apart from their own project's store.
+    pub fn tasks_path(&self) -> Result<PathBuf, String> {
+        match self {
+            StoreLocation::Pinned(dir) => Ok(dir.join("tasks.toml")),
+            StoreLocation::Repo { dir, .. } => Ok(dir.join("tasks.toml")),
+            StoreLocation::NoProject { start } => Err(format!(
+                "no git repo above {}, so there is no project store to read or write. \
+                 backlog resolves its queue per repo (<repo root>/.backlog/tasks.toml) and \
+                 refuses to fall back to the cross-project ~/.backlog: that makes another \
+                 project's queue look like this one's, and it is how tempdir runs wrote \
+                 their fixtures into the real queue (backlog 7d8ab7fe). Run from inside the \
+                 repo whose queue you mean, or pin `store_dir` in ~/.backlog/config.toml to \
+                 opt into a shared store.",
+                start.display()
+            )),
+        }
     }
 }
 
@@ -155,10 +223,14 @@ mod store_resolution_tests {
         std::fs::create_dir_all(&nested).unwrap();
 
         let c = cfg(false, PathBuf::from("/legacy"));
+        let loc = c.locate(Some(nested.to_str().unwrap()));
         assert_eq!(
-            c.tasks_path_for(Some(nested.to_str().unwrap())),
+            loc.tasks_path().unwrap(),
             root.join(".backlog").join("tasks.toml"),
         );
+        // The repo is also reported as the SCOPE, which is what lets readers
+        // stop filtering the file by project label.
+        assert_eq!(loc.project_root(), Some(root.as_path()));
     }
 
     /// `.git` is a FILE in a git worktree. Treating only directories as roots
@@ -172,10 +244,12 @@ mod store_resolution_tests {
         std::fs::write(wt.join(".git"), "gitdir: /elsewhere\n").unwrap();
 
         let c = cfg(false, PathBuf::from("/legacy"));
+        let loc = c.locate(Some(wt.to_str().unwrap()));
         assert_eq!(
-            c.store_dir_for(Some(wt.to_str().unwrap())),
-            wt.join(".backlog"),
+            loc.tasks_path().unwrap(),
+            wt.join(".backlog").join("tasks.toml")
         );
+        assert_eq!(loc.project_root(), Some(wt.as_path()));
     }
 
     /// An operator who pinned `store_dir` keeps it. Per-project resolution is
@@ -188,29 +262,64 @@ mod store_resolution_tests {
         std::fs::create_dir_all(root.join(".git")).unwrap();
 
         let c = cfg(true, PathBuf::from("/pinned"));
+        let loc = c.locate(Some(root.to_str().unwrap()));
         assert_eq!(
-            c.store_dir_for(Some(root.to_str().unwrap())),
-            PathBuf::from("/pinned"),
+            loc.tasks_path().unwrap(),
+            PathBuf::from("/pinned").join("tasks.toml"),
         );
+        // A pinned store reports NO project root: it may hold several
+        // projects, so its readers must keep scoping by project label.
+        assert_eq!(loc.project_root(), None);
     }
 
-    /// A path with no `.git` anywhere above it cannot name a project store.
-    /// Falling back to the legacy location keeps the tasks somewhere every
-    /// existing reader already looks, instead of scattering them into whatever
-    /// directory the caller happened to stand in.
+    /// A path with no `.git` anywhere above it cannot name a project store,
+    /// and there is no answer to substitute. This inverts the previous
+    /// contract, which fell back to the cross-project legacy file: that
+    /// fallback is how a tempdir run's fixtures reached the operator's real
+    /// queue (backlog 7d8ab7fe) and how a read from such a cwd was answered
+    /// with another project's work.
     #[test]
-    fn a_path_outside_any_repo_falls_back_to_the_legacy_store() {
+    fn a_path_outside_any_repo_is_not_a_store() {
         let tmp = tempfile::tempdir().unwrap();
         let orphan = tmp.path().join("no-repo-here");
         std::fs::create_dir_all(&orphan).unwrap();
 
-        let legacy = PathBuf::from("/legacy");
-        let c = cfg(false, legacy.clone());
-        // tempdir() lives under the system temp root; only assert the fallback
-        // when that root genuinely has no .git above it, so the test cannot
-        // pass for the wrong reason on a machine whose temp dir sits in a repo.
-        if repo_root(&orphan).is_none() {
-            assert_eq!(c.store_dir_for(Some(orphan.to_str().unwrap())), legacy);
-        }
+        let c = cfg(false, PathBuf::from("/legacy"));
+        // tempdir() lives under the system temp root; a machine whose temp dir
+        // sits inside a repo cannot observe this at all, so fail loudly there
+        // instead of reporting green on a case that never ran.
+        assert!(
+            repo_root(&orphan).is_none(),
+            "{} is inside a git repo, so this case cannot be observed here",
+            orphan.display()
+        );
+        let loc = c.locate(Some(orphan.to_str().unwrap()));
+        assert_eq!(loc.project_root(), None);
+        let err = loc
+            .tasks_path()
+            .expect_err("a path outside any repo must not resolve to a store");
+        // The diagnostic has to name the escape hatch, or the refusal is a
+        // dead end for the operator who genuinely wants a shared store.
+        assert!(err.contains("store_dir"), "err={err}");
+        assert!(err.contains(&orphan.display().to_string()), "err={err}");
+    }
+
+    /// The refusal must not leak into the PINNED case: an operator who named a
+    /// store keeps it even from a cwd outside any repo. This is the control
+    /// that stops the change above from being a blanket removal.
+    #[test]
+    fn a_pinned_store_dir_still_resolves_outside_any_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let orphan = tmp.path().join("no-repo-here");
+        std::fs::create_dir_all(&orphan).unwrap();
+        assert!(repo_root(&orphan).is_none(), "temp dir is inside a repo");
+
+        let c = cfg(true, PathBuf::from("/pinned"));
+        assert_eq!(
+            c.locate(Some(orphan.to_str().unwrap()))
+                .tasks_path()
+                .unwrap(),
+            PathBuf::from("/pinned").join("tasks.toml"),
+        );
     }
 }

@@ -100,9 +100,9 @@ GATE_CRATES = (
     "propguard",
     "specguard",
     "stuckguard",
-    "taintguard",
     "mutategate",
     "overwatch",
+    "parallelguard",
 )
 
 # How many code lines above a `.flatten()` we look for the `read_dir(` that makes

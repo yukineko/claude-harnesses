@@ -83,13 +83,6 @@ pub struct SessionState {
     /// Consecutive no-progress observations for the condukt pending set.
     #[serde(default)]
     pub condukt_no_progress_streak: u32,
-    /// Open-queue size observed at the previous backlog Stop (`None` until the
-    /// first observation). Drives progress detection for the backlog branch.
-    #[serde(default)]
-    pub backlog_prev_open: Option<u32>,
-    /// Consecutive no-progress observations for the backlog open queue.
-    #[serde(default)]
-    pub backlog_no_progress_streak: u32,
     /// Whether the Tier 2 delegation-record advisory has already fired this
     /// session (dedup — fires at most once). `#[serde(default)]` keeps older
     /// on-disk state files (without this field) deserializable.
@@ -303,14 +296,18 @@ mod stop_contract_tests {
         // This is the literal shape SessionState used to serialize as, before
         // the condukt_prompts/backlog_prompts -> progress-field replacement.
         // It intentionally does NOT contain condukt_prev_pending /
-        // condukt_no_progress_streak / backlog_prev_open /
-        // backlog_no_progress_streak, and DOES contain the old, now-removed
-        // condukt_prompts/backlog_prompts fields (which serde must ignore as
-        // unknown extra fields rather than erroring).
+        // condukt_no_progress_streak, and DOES contain three fields this struct
+        // no longer has — condukt_prompts/backlog_prompts (the pre-migration
+        // counters) and backlog_prev_open/backlog_no_progress_streak (retired
+        // 2026-08-20 with the queue arm itself). serde must ignore all of them as
+        // unknown extras rather than erroring, which is what lets a field be
+        // removed without stranding every state file already on disk.
         let old_json = r#"{
             "phase": "continuing",
             "condukt_prompts": 3,
             "backlog_prompts": 1,
+            "backlog_prev_open": 4,
+            "backlog_no_progress_streak": 2,
             "delegation_audit_warned": false
         }"#;
 
@@ -324,7 +321,5 @@ mod stop_contract_tests {
         // old on-disk shape.
         assert_eq!(s.condukt_prev_pending, None);
         assert_eq!(s.condukt_no_progress_streak, 0);
-        assert_eq!(s.backlog_prev_open, None);
-        assert_eq!(s.backlog_no_progress_streak, 0);
     }
 }

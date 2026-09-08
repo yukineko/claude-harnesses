@@ -1,5 +1,23 @@
 # t1-rationale-recovery — VERDICT: (A) RECOVERED
 
+> **HISTORICAL RECORD — SUBJECT RETIRED (2026-08-24).** The `taintguard` crate this
+> document is about was removed from the repository entirely by user ruling on
+> 2026-08-24 (the gate's judgments were assessed as too strict to be worth their
+> cost). Commit `d24f02d5` therefore has nothing left to be merged into, and the
+> adopt-or-discard decision this record was recovered to inform is moot.
+>
+> This file is kept, not deleted, for one reason: the rationale below was recovered
+> verbatim from primary sources that no longer exist anywhere else (it previously
+> survived only in a `.scratch/` directory that a worktree reclaim would have
+> destroyed — backlog `b71984b9`). It is the record of *how* an adversarial panel
+> reasoned, which outlives the crate it reasoned about.
+>
+> **Every `crates/taintguard/...` path quoted below is a dead path.** Those citations
+> are preserved byte-for-byte because they are quotations of what the panel actually
+> wrote at a time when the paths existed; rewriting them would corrupt the verbatim
+> record this document's whole value rests on. Do not read them as live references,
+> and do not "fix" them.
+
 The adversarial panel's block rationale for commit `d24f02d5` was **recovered verbatim from
 primary sources**, at four independent layers of fidelity (raw skeptic ballot → normalised
 ballot file → adjudicator output → driver's block directive to the worker). Nothing below is

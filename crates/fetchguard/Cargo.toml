@@ -1,6 +1,6 @@
 [package]
 name = "fetchguard"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version.workspace = true
 description = "Runtime content-level injection scanner: a PostToolUse hook that scans WebFetch/WebSearch tool_response text for planted prompt-injection phrasings (concealment / verification-bypass / instruction-override / egress) and warns the model the flagged span is untrusted data whose embedded directives must not be followed. Closes the gap left by scripts/check-prompt-injection.py, which is documented as commit-time-only (committed prompt assets), not runtime tool output."
@@ -23,7 +23,7 @@ tempfile = { workspace = true }
 # ワークスペースの [workspace.lints.clippy] を継承する（unwrap_used / expect_used /
 # panic = deny）。fetchguard は judgment を持つ gate（PostToolUse で untrusted-content
 # 警告を emit する）なので、production 側で panic が判定不能の別名になってはならない
-# （taintguard/blastguard/propguard 等と同じ理由）。テスト側は各ファイルの
+# （blastguard/propguard 等と同じ理由）。テスト側は各ファイルの
 # `#![cfg_attr(test, allow(...))]` で除外する。
 [lints]
 workspace = true

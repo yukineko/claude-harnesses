@@ -25,6 +25,13 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
   および **git 内部**（`.git/**`）を上書きする Write は deny。Edit / MultiEdit /
   NotebookEdit は部分編集なので常に allow。
 
+**この一覧は「形」であって「判定」ではない。** 上記のうち削除・切り詰め系
+（`rm` / `find -delete` / `truncate` / `shred` / `>` / `git clean -f` /
+`chmod -R` / `chown -R`）は、**対象がプロジェクト配下か `/tmp` 配下だと証明できた
+場合にかぎり** `deny` ではなく `ask` になる（下の
+[場所（blast radius）で判定する](#場所blast-radiusで判定する--0251) 節）。
+証明できないもの・外に出るもの・保護パスは従来どおり `deny` である。
+
 通常作業の邪魔をしないよう、明確に無害な形は通す — 非再帰の `rm file.txt`、追記
 （`>>`）、fd リダイレクト（`2>&1`, `>&2`）、`/dev/null` 等への切り詰めリダイレクト
 はいずれも allow である。
@@ -51,6 +58,152 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
 `.githooks/**` など、どのゲート・フックが動くか自体を決めるファイルはこの除外の
 **対象外**であり、常に deny になる（守護者自身を無効化する経路を塞ぐため、
 この一群は設定ファイル除外より優先される）。
+
+## 場所（blast radius）で判定する — 0.2.51
+
+**0.2.50 までのルールは「形」だけを見ており、「どこ」を見ていなかった。** 実測
+（0.2.50 のフック本体に実際の PreToolUse ペイロードを流した結果）:
+
+```text
+rm -rf target   -> deny: recursive rm (-r) can delete an entire directory tree
+rm -rf /tmp/foo -> deny: recursive rm (-r) can delete an entire directory tree
+rm -rf /usr/lib -> deny: recursive rm (-r) can delete an entire directory tree
+rm -rf /        -> deny: recursive rm (-r) can delete an entire directory tree
+```
+
+被害範囲が桁違いの4つが同じ判定・同じ理由文になる。これは厳しいゲートではなく
+**情報を持たないゲート**であり、`rm -rf target` を通せない操作者は削除をやめるのでは
+なく、**より解析の薄い経路**（python の `shutil.rmtree`、生成したシェルスクリプト、
+`--dangerously-skip-permissions`）へ回る。つまり誤検知は無料ではなく、ゲート自身の
+視界から作業を追い出していた。
+
+そこで **安全ルート（safe root）の allowlist** を導入した（危険パスの denylist では
+ない — 未列挙が allow へ倒れる denylist は CLAUDE.md 3 に反する）。判定は
+`src/scope.rs` の三値（`Inside` / `IsRoot` / `Outside` ＋ `Undetermined`）で、
+**`Inside` だけが判定を緩められる**。
+
+- **安全ルート**: セッションの `cwd`（＝作業中の worktree）、`CLAUDE_PROJECT_DIR`、
+  `/tmp`・`/var/tmp`（＋環境変数 `TMPDIR`）。`/`・`/usr`・`/mnt/c/Users`・`$HOME`
+  などは安全ルートになれない（`NEVER_A_ROOT` と 2 コンポーネント下限）。
+- **緩和される判定**: 対象が**すべて**安全ルートの*厳密な*配下に解決できたときだけ、
+  `deny` → **`ask`** に変わる（`allow` にはならない）。対象コマンドは 再帰/ワイルド
+  カード `rm`、`find -delete` / `-exec rm`、`truncate` / `shred`、切り詰め `>`
+  リダイレクト、`git clean -f`、`chmod -R` / `chown -R`。
+- **緩和されないもの**（すべて実測でテストに固定済み — `tests/scoped_destructive.rs`）:
+  安全ルートの外（`/usr/lib`, `/`, `/mnt/c/Users`, `$HOME`）／リテラルなパスでない
+  もの（`$VAR`, `~`, `` `pwd` ``, `*`, `{}`）／解決できない `cd`（`cd $VAR && rm -rf
+  target`）／`cd` で外に出る相対パス（`cd /usr && rm -rf lib`）／**安全ルートそれ自身**
+  （`rm -rf .` は `.git` ごと消えるので deny のまま）／**保護パス**（`.git`,
+  `.claude/settings.json`, `.githooks/**` は場所で免罪されない）／**symlink で外へ
+  出るもの**（実パスを解決してから判定する）／`find . -delete` のように絞り込み述語を
+  持たない全走査。
+- **`ask` は人間がいる場合のみ**。headless / condukt worker / cron では
+  `Decision::hardened` が `deny` へ戻す。**ただし 0.2.53 でこの一文は条件付きになった** —
+  承認の記憶（下記）は `hardened` より**手前**で走るので、対話セッションで人間が
+  この効果そのものを承認していれば headless 実行でも `allow` になりうる。それが
+  この機能の目的（答えられない ask で溺れているのは自律セッションの側）であり、
+  その承認は「このパラメータ・この実パス・この内容」に対する人間の判断の記録であって、
+  そのどれかが動いた瞬間に失効する。**記憶が空のとき（初回）の脅威モデルは 0.2.50 と同一**。
+- ライブラリ利用（`detect::detect`）は**位置モデルなし**のまま。実パス解決は
+  フック本体が注入する resolver（`scope::RealPathResolver`）だけが行うので、
+  `detect` は従来どおり純粋関数であり、condukt / specguard / daily の
+  `sh -c` 経路の判定は一切変わらない。
+
+## 一度承認した効果は二度聞かない（承認の記憶）— 0.2.53
+
+`ask` は正しいが**繰り返す**。5 分前に人間が承認したコマンドを、次の実行でも、その次でも
+聞き直す。これは体裁の問題ではない: 2026-08-24 に姉妹クレート `taintguard` が
+**ユーザー裁定で撤去された**のがまさにこの失敗形で、日常作業について聞くゲートは
+操作者に「質問を読まない」ことを教える。0.2.53 は**質問を消さずに繰り返しだけを消す**。
+
+### 記憶するのは「スクリプト」ではなく「効果」
+
+承認の鍵（fingerprint）は次の 3 つを含む。どれが変わっても**別の鍵**になる。
+
+| 鍵の成分 | 変わると何が起きるか | なぜ必要か |
+|---|---|---|
+| 空白正規化したコマンド本文 | `chmod -R 755 sub` の承認は `chmod -R 777 sub` に**効かない** | 効果はパラメータに宿る |
+| 各トークンの**解決済み実パス** | 承認後に symlink を張り替えると鍵が**移動する**（継承しない） | `exclude.rs` は意図的に canonicalize しないので、記憶と組み合わせると「一度承認してから張り替える」が成立してしまう |
+| 各対象の**内容ハッシュ** | 承認済みの対象が書き換わったら**再判定**される | 「過去に実行されても変更があったときは再度判断すべきである」 |
+
+さらに**着地点で囲われている**: fingerprint が計算できるのは、全トークンが安全な root の
+**厳密な内側**（`scope::Placement::Inside`。`scope` が「唯一 verdict を緩めてよい」と
+明記している variant）に解決したときだけ。**project 外に及ぶ効果は「条件付きで承認済み」
+ではなく、そもそもこのストアに表現できない。**
+
+### 方向は `Ask` → `Allow` の一方向だけ
+
+降格は `Decision::Ask` の**唯一の arm** の中にあり、`Deny` は構造的に届かない
+（「今は降格していない」ではなく「この関数の変更 arm から到達できない」）。blast radius を
+上げることも、承認を自分で作り出すこともない。
+
+### 記録は PostToolUse で行う — 人間の「はい」を観測できる唯一の場所
+
+PreToolUse フックは**人間が何と答えたかを知れない**。だから 2 段構えにする:
+
+1. **PreToolUse**: 承認が無ければ `ask` を返し、そのとき人間が見ている世界の状態を
+   fingerprint にして `pending/` に置く。
+2. **PostToolUse** (`blastguard record-approval`): pending を `approved/` へ昇格する。
+   **ツールが実際に走ったこと自体が「はい」の証拠**である — `deny` は PostToolUse に
+   到達せず、拒否された `ask` は走らないので、`approved/` に入るのは実行されたものだけ。
+
+pending は**決して承認ではない**。もし pending を承認扱いにしたら、blastguard は
+「聞いただけ」の全コマンド（人間が拒否したものを含む）を承認することになる。
+昇格は pending を**消費する** — 1 回の ask に対して 1 回の承認。
+
+fingerprint そのものを PostToolUse で計算し直せない理由も同じところにある: その時点では
+コマンドが既に対象を変えてしまっている（`rm -rf x` の後で `x` は存在しない）ので、
+再計算した鍵は**将来の PreToolUse が二度と観測しない状態**を指す。だから鍵の探索は
+コマンド同一性（`command_key`）だけで行い、昇格するのは PreToolUse が計算した
+fingerprint — **人間が実際に見た状態** — である。
+
+### 判定不能はすべて「承認なし」＝ ask のまま（CLAUDE.md §3）
+
+`Lookup` は三値（`Approved` / `NotRecorded` / `Undetermined`）で、bool ではない。
+以下はすべて `Approved` にならない:
+
+- **展開・置換・引用**（`$VAR` / `` `cmd` `` / `'` / `"` / `\`）— 実行時にしか値が
+  存在しないので、同じ**本文**は同じ**効果**ではない。引用は空白トークナイザが
+  忠実に分割できないので、**不完全なトークナイズは ask へ縮退する**（`detect` の
+  パーサを二重に持たない）。
+- 安全な root の内側に解決しないトークン（`Outside` も `IsRoot` も不可）。
+- 存在するが内容を読めない・64 MiB を超える対象。
+- ストアの IO 失敗、パースできないエントリ、**自分が置かれている fingerprint 名を
+  名乗らないエントリ**（切り詰め・手編集がファイル名だけで承認を得るのを防ぐ）。
+- 空のストア → `NotRecorded` = 初回 = ask。
+
+**読めなかったものを根拠に `Approved` を返す経路は 1 本も無い。**
+
+### アンチ空虚の対照実験（`tests/approval_memory.rs`）
+
+「聞かなくなった」だけを測ると、**何も聞いていなくても通る**。だから両方向を測る。
+実装前に RED を観測してから GREEN にした（4 件が「記憶が効く」側の assertion で
+ちょうど落ちた）:
+
+| # | 対照 | 期待 |
+|---|---|---|
+| 0 | 記憶なしの baseline | **ask する**（これが無いと以下の「聞かない」が空虚になる） |
+| i | 同一コマンド・同一パラメータ・対象不変の 2 回目 | 聞かない |
+| ii | パラメータを変える（`755`→`777`、オペランド追加） | **また聞く** |
+| iii | 対象の内容を書き換える | **また聞く** |
+| iv | project 外に及ぶ効果 | **何回走らせても聞く**。しかも `approved/` に**エントリが作られない** |
+| v-a | 同じ手順を**別のストア**に向ける | **また聞く**（= (i) が本当にストアを読んでいる証拠） |
+| v-b | PostToolUse を**省く** | **また聞く**（= pending は承認ではない） |
+| — | `Deny` は何回走らせても `Deny` | 降格されない |
+| — | 展開を含むコマンドは記録されない | `approved/` は空のまま |
+
+`TempDir` を使っていないのは意図的である: **`/tmp` は blastguard の安全 root** なので、
+その下に作った project には「外側」が存在せず、対照 (iv) が書けない。`CARGO_TARGET_TMPDIR`
+（`target/` の下）は root ではないので内外の区別が生き残る。
+
+### 置き場所
+
+`~/.blastguard/approvals/{pending,approved}/`。`BLASTGUARD_APPROVALS_DIR` で上書きできる。
+この環境変数は利便のためではなく、**対照 (v-a) を書くために必要**である。
+エントリは 1 承認 1 ファイル（index ファイルにしないのは、並行セッションが同じストアを
+共有する前提だと lock が必要になり、その lock の失敗が全 read を `Undetermined` に
+落とすため）。書き込みは temp + rename なので、読み手が半端なエントリを見ることはない。
+
 
 ## どうして必要か
 

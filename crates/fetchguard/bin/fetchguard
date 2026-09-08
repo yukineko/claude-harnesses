@@ -1,6 +1,6 @@
 #!/bin/sh
 # fetchguard plugin launcher — selects the per-platform binary bundled in this
-# dir, mirroring crates/taintguard/bin/taintguard's already-corrected pattern.
+# dir, mirroring crates/ctxrot/bin/ctxrot's already-corrected pattern.
 #
 # Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/fetchguard scan`; this dispatcher
 # execs the matching `fetchguard-<os>-<arch>` build.
@@ -9,7 +9,7 @@
 # that is byte-for-byte what a clean scan looks like, so silence would read
 # downstream as "fetchguard examined this WebFetch/WebSearch result and found
 # nothing to flag" (CLAUDE.md §1/§3). `scan` is PostToolUse with no
-# `permissionDecision` channel (unlike taintguard's PreToolUse `gate`), so the
+# `permissionDecision` channel (unlike a PreToolUse `gate` hook), so the
 # fail-closed signal here is `additionalContext`, not a decision field: we
 # still emit it, telling the model the untrusted-content check did NOT run
 # for this call, so the fetched/searched result must be treated as unchecked

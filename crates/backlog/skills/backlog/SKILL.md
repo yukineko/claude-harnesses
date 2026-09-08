@@ -41,6 +41,13 @@ backlog lock release --project <path>
 > 締め出すときだけ**使う。
 > driver 登録も排他ロックも **project ごとにスコープ**される。`--project` は `status` 以外必須
 > （`status` 省略時は全 project 横断スキャン＝`daily` の起動判定用）。
+>
+> **キュー側の `--project` は意味が違う。** store は repo ごと（`<repo root>/.backlog/tasks.toml`）
+> なので、`list` / `next` の `--project` は絞り込みではなく「どの store のことを言っているか」の
+> assertion であり、別 repo を指すとエラーになる（絞り込まれた一覧は返らない）。この repo の
+> タスクは全部スコープ内なので、通常は **付けなくてよい**。repo root が上に無い cwd では
+> `add`/`list`/`next` は拒否する（`~/.backlog` へフォールバックしない）ので、キュー操作は
+> 必ず repo の中から実行する。
 
 ## 使い分け
 

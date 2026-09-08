@@ -1,7 +1,7 @@
 {
   "name": "hypothesis",
-  "version": "0.1.12",
-  "description": "v0.1.8: the store's load->mutate->save cycle is now protected by an exclusive file lock (`StoreLock`, ported from backlog::lock/condukt::lock::RunLock/overwatch::lock::LeaseLock) so two concurrent processes mutating the store (e.g. `validate`/`reject`/`confidence`) can no longer lose one update to a last-writer-wins race; a multi-process regression test proves the fix (and that it fails without the lock). PDO hypothesis lifecycle management — create, validate, and track discovery hypotheses aligned with compass goals.",
+  "version": "0.1.13",
+  "description": "v0.1.13: `skills/hypothesis/SKILL.md` に YAML frontmatter を追加した。Claude Code は frontmatter の `name`/`description` から skill を登録するので、散文で始まるファイルは黙って読み飛ばされる — この skill は「壊れていた」のではなく最初から **存在しなかった** (`/hypothesis:hypothesis` が not found)。plugin 側からは不可視な失敗で、ファイルは在り、`git status` は clean、rollout は成功を報告する (CLAUDE.md 第3節: 「登録されなかった」と「登録するものが無い」が同じ出力に潰れる)。実測 2026-08-26 (測定点 58c779af) では全 39 crate の SKILL.md のうち 1 行目が `---` でないのはこの 1 件だけだった。新規テスト `tests/skills_frontmatter.rs` が frontmatter の存在・`name`/`description` の有無・`name` とディレクトリ名の一致を pin する (追加前に RED を観測済み。skills が 0 件のときに空虚に pass しないよう anti-vacuity assert 付き)。挙動の変更は無い。 v0.1.8: the store's load->mutate->save cycle is now protected by an exclusive file lock (`StoreLock`, ported from backlog::lock/condukt::lock::RunLock/overwatch::lock::LeaseLock) so two concurrent processes mutating the store (e.g. `validate`/`reject`/`confidence`) can no longer lose one update to a last-writer-wins race; a multi-process regression test proves the fix (and that it fails without the lock). PDO hypothesis lifecycle management — create, validate, and track discovery hypotheses aligned with compass goals.",
   "author": {
     "name": "yukineko"
   },

@@ -30,7 +30,7 @@ panic = "deny"
 ```
 
 **workspace lints を opt-in している crate は 8 個**（`[lints]` セクションに `workspace = true` を持つもの）:
-blastguard / fetchguard / mutategate / overwatch / propguard / specguard / stuckguard / taintguard。
+blastguard / fetchguard / mutategate / overwatch / propguard / specguard / stuckguard。
 
 `Cargo.toml:71-82` のコメントは「15 個の手貼り `#![deny(clippy::panic)]` のうち 10 個を集約し
 5 個を残した」と書く。**この記述は測定点で正確に成立している**（検証済み）。残る 5 個:

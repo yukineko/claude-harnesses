@@ -454,7 +454,8 @@ def select_crates(repo: str) -> Undetermined | Selection:
         manifest_path = os.path.join(repo, "crates", crate_dir, "Cargo.toml")
         if not os.path.exists(manifest_path):
             # No manifest at all is a determinable answer, not a failure: this is
-            # the skill-only plugin shape (crates/scout, crates/daily-report),
+            # the skill-only plugin shape (crates/scout, crates/daily-report,
+            # crates/flow since 0.2.7),
             # which is not a cargo crate and cannot opt in to anything.
             continue
         manifest = _read_manifest(manifest_path)

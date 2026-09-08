@@ -13,7 +13,7 @@
 /flow
 ```
 
-- SessionStart で開いている仕事（compass の next move・open backlog・未完了 condukt run）があると、`flow propose` フックが `/flow` を **propose-then-confirm** で提案する。承認すると起動。
+- **`/flow` は自分で打ったときだけ走る。** 開いている仕事があっても、こちらから提案は出ない（2026-08-20 に SessionStart の `flow propose` 提案と autoflow の backlog 促し 2 経路を廃止した。キューを流すかは操作者の判断であり、`/flow` と打つことがその判断である）。
 - 課題文を直接渡すと source 選択を飛ばして condukt に直行し、1 件だけ実行して終了する:
 
 ```
@@ -379,7 +379,6 @@ hypothesis reject <id> --run <RID>   # 仮説を棄却
 | `condukt restore` | 未完了 run・orphan worktree の有無 |
 | `compass` | 北極星ゴールのリマインド |
 | `daily session-start` | `cargo deny` セキュリティ監査の所見 (1 日 1 回・所見があれば) |
-| `flow propose` | 開いている仕事があれば `/flow` を提案 (propose-then-confirm) |
 | `specguard pending` | 未処理 drift sentinel (あれば) |
 | `taskprog` | progress.md の現状 |
 

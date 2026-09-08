@@ -6,24 +6,23 @@
 //!
 //! The launcher used to answer that with a bare `exit 0` for every subcommand,
 //! its comment saying so verbatim ("it exits 0 silently so a hook NEVER breaks
-//! the user's turn"). autoflow is wired into four hook events, and two of them
-//! read silence as a real answer:
+//! the user's turn"). autoflow is wired into three hook events, and one of them
+//! reads silence as a real answer:
 //!
-//! * `stop` — Stop: `stop_command` emits `{"decision":"block"}` (main.rs:435),
-//!   so no output = the turn ends as if the progress/loop state machine had run
-//!   and had nothing to block.
-//! * `session-start` — SessionStart: `session_start_command` ALREADY
-//!   distinguishes the three answers (main.rs:531-563) — `Known(empty)` stays
-//!   silent, but `Determination::Undetermined` prints an `additionalContext`
-//!   saying the queue could not be checked and that this "does not mean there
-//!   is no open work". A missing binary is exactly that Undetermined case, so
-//!   the launcher must speak the same sentence rather than fall back into the
-//!   silent `Known(empty)` shape.
+//! * `stop` — Stop: `stop_command` emits `{"decision":"block"}`, so no output =
+//!   the turn ends as if the progress/loop state machine had run and had nothing
+//!   to block.
 //!
 //! The other two (`pre-compact`, `prompt-submit`) are a marker write and its
 //! own consumer: both live in this one binary, so when it is missing there is
 //! no reader left to mistake the missing marker for "nothing to resume". They
 //! keep exit 0 but must still say on stderr that they did not run.
+//!
+//! `session-start` was a fourth event until 2026-08-20, classified with `stop`
+//! because it proposed `/flow` from the backlog queue and silence would have read
+//! as an empty queue. The subcommand, the hook and the launcher arm are all
+//! retired; the test below pins that the retired arg gets the catch-all's `exit
+//! 1` rather than a successful-looking reply.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -111,33 +110,23 @@ fn stop_reentry_is_allowed_through_so_the_session_is_never_trapped() {
 
 // ------------------------------------------------------- SessionStart notice
 
-/// The binary's own `Undetermined` arm says the queue could not be checked and
-/// that this "does not mean there is no open work". A missing binary is the
-/// same condition, so the launcher must say it too — staying silent puts it
-/// back into the `Known(empty)` shape, which reads as "no pending work".
+/// RETIREMENT PIN (2026-08-20). `session-start` is no longer a subcommand, no
+/// longer wired to a hook, and no longer an arm of the launcher. The launcher's
+/// standing rule for an arg it does not recognise is `exit 1` — "an unrecognised
+/// invocation must not look like a clean empty result" — and that is exactly what
+/// a retired hook name must get. On the previous revision this same call printed
+/// an `additionalContext` and exited 0; asserting non-zero here is the inversion,
+/// so a re-added arm goes red.
 #[test]
-fn session_start_missing_binary_reports_undetermined_rather_than_staying_silent() {
+fn a_retired_session_start_arg_is_not_answered_as_if_it_ran() {
     let r = run(&["session-start"], r#"{"cwd":"/tmp"}"#);
-    assert_eq!(r.code, 0, "SessionStart cannot block: {r:?}");
-    assert!(
-        !r.stdout.trim().is_empty(),
-        "silence here reads as an empty queue — the very thing that could not \
-         be established: {r:?}",
-    );
-    let v: serde_json::Value = serde_json::from_str(r.stdout.trim())
-        .unwrap_or_else(|e| panic!("stdout must be hook JSON ({e}): {}", r.stdout));
-    let ctx = v["additionalContext"]
-        .as_str()
-        .or_else(|| v["hookSpecificOutput"]["additionalContext"].as_str())
-        .unwrap_or_default();
-    assert!(
-        ctx.contains("autoflow"),
-        "the injected context must name the cause: {v}",
+    assert_ne!(
+        r.code, 0,
+        "a subcommand that no longer exists must not exit 0: {r:?}"
     );
     assert!(
-        ctx.to_uppercase().contains("NOT")
-            && (ctx.contains("open work") || ctx.contains("empty queue")),
-        "it must explicitly deny the 'no open work' reading: {ctx}",
+        r.stdout.trim().is_empty(),
+        "and it must not fabricate hook output either: {r:?}"
     );
 }
 

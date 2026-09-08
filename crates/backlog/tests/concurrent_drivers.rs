@@ -18,6 +18,22 @@ fn temp_home(tag: &str) -> PathBuf {
             .as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
+    // A real repo, because the store resolves per repo and a cwd with no repo
+    // root above it now has NO store at all (`config::StoreLocation::NoProject`
+    // — the cross-project `~/.backlog` fallback was removed). This fixture used
+    // to lean on that fallback: with `HOME` swapped it was harmless, but it
+    // also meant the test drove a shape no real driver has. `git init` puts it
+    // back on the real path, and the subject of the test (two processes, one
+    // queue, disjoint tasks) is untouched either way.
+    let st = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("git must be available to run this test — a skip here would report green on a case that never ran");
+    assert!(st.success(), "git init failed in {}", dir.display());
     dir
 }
 
@@ -25,7 +41,7 @@ fn spawn(args: &[&str], home: &Path) -> Child {
     // Pin the child's cwd to the same isolated `home` dir every call site
     // already builds. The task store's LOCATION is resolved from the child
     // process's OWN cwd (not from `--project`, not from `HOME`) — see
-    // `crates/backlog/src/config.rs::store_dir_for`. Left unset, every
+    // `crates/backlog/src/config.rs::locate`. Left unset, every
     // spawned process here would silently inherit this test binary's own
     // cwd (the real harness repo checkout it was built and run from) and
     // land `add`/`next --claim` writes in that repo's TRACKED
@@ -67,6 +83,10 @@ fn json(stdout: &str) -> serde_json::Value {
 #[test]
 fn two_concurrent_driver_processes_get_disjoint_tasks() {
     let home = temp_home("disjoint");
+    // The store is this repo's, so the project IS this repo. A `--project`
+    // naming anything else is now refused rather than silently filtered (see
+    // `main::assert_store_scopes_to`), which is what the old `"/p"` label was.
+    let project = home.to_str().unwrap().to_string();
     for i in 0..4 {
         let title = format!("Task {i}");
         let (code, _, err) = run(
@@ -75,7 +95,7 @@ fn two_concurrent_driver_processes_get_disjoint_tasks() {
                 "--title",
                 &title,
                 "--project",
-                "/p",
+                &project,
                 "--priority",
                 "p1",
             ],
@@ -85,8 +105,8 @@ fn two_concurrent_driver_processes_get_disjoint_tasks() {
     }
 
     // Launch both claimers as close together as possible.
-    let a = spawn(&["next", "--claim", "--project", "/p"], &home);
-    let b = spawn(&["next", "--claim", "--project", "/p"], &home);
+    let a = spawn(&["next", "--claim", "--project", &project], &home);
+    let b = spawn(&["next", "--claim", "--project", &project], &home);
     let a = a.wait_with_output().unwrap();
     let b = b.wait_with_output().unwrap();
 
@@ -128,8 +148,8 @@ fn two_concurrent_driver_processes_get_disjoint_tasks() {
     );
 
     // And a third driver still gets one of the two remaining tasks.
-    let (code, out, _) = run(&["next", "--claim", "--project", "/p"], &home);
-    assert_eq!(code, 0);
+    let (code, out, err) = run(&["next", "--claim", "--project", &project], &home);
+    assert_eq!(code, 0, "third driver was refused: {err}");
     let c_id = json(&out)["id"].as_str().unwrap().to_string();
     assert!(c_id != a_id && c_id != b_id, "third driver got a duplicate");
 }

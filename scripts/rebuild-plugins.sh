@@ -301,7 +301,26 @@ for binfile in "$CACHE"/*/*/bin/*-"$SUF$EXT"; do
   [ $dry = 1 ] || write_provenance "$version_dir" "$plugin_name"
   # 2) committed repo copy — what /plugin install ships (opt-in via --stage-repo)
   if [ $stage_repo = 1 ]; then
-    repofile=$(ls "$REPO"/crates/*/bin/"$base" 2>/dev/null | head -n1 || true)
+    # Resolve WITHOUT `ls`. This loop runs under `shopt -s nullglob`, so a glob
+    # that matches nothing DISAPPEARS — and the previous
+    #
+    #     repofile=$(ls "$REPO"/crates/*/bin/"$base" 2>/dev/null | head -n1 || true)
+    #
+    # then left `ls` with zero arguments, which makes it list $PWD (the repo
+    # root) and SUCCEED. `head -n1` returned the first entry in C-locale order,
+    # `CLAUDE.md`, and the `cp -f "$src" "$repofile"` below overwrote the repo's
+    # CLAUDE.md with a plugin ELF — 38 times in one run on 2026-08-21, because
+    # only 2 of 39 plugins actually carry a staged crates/<name>/bin/<base>.
+    # `2>/dev/null` hid nothing (ls succeeded) and `|| true` was inert.
+    # "No staged copy exists" is a resolution FAILURE and must stay empty so the
+    # `[ -n "$repofile" ]` guard skips the copy; it must never be rewritten into
+    # a plausible-looking destination (CLAUDE.md §3). Pinned by
+    # scripts/tests/rebuild-stage-repo-destination.sh.
+    repofile=""
+    for cand in "$REPO"/crates/*/bin/"$base"; do
+      repofile="$cand"
+      break
+    done
     if [ -n "$repofile" ] && ! cmp -s "$src" "$repofile"; then
       if [ $dry = 1 ]; then
         echo "repo   would update ${repofile#$REPO/}"

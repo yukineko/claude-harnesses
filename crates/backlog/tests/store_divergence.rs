@@ -370,38 +370,45 @@ fn session_start_injects_nothing_when_there_is_no_legacy_store() {
     );
 }
 
-/// A cwd with no repo root above it resolves to the legacy store ITSELF. The
-/// store cannot diverge from itself, so comparing the two would warn about
-/// exactly the tasks it just listed.
+/// An operator can PIN `store_dir` at the legacy store, and then the resolved
+/// store IS the legacy store. A store cannot diverge from itself, so comparing
+/// the two would warn about exactly the tasks it just listed.
+///
+/// Re-pinned 2026-08-20: this used to reach the same short-circuit through a
+/// cwd with no repo root above it, which resolved to `~/.backlog` by fallback.
+/// That fallback is gone — such a cwd now refuses outright
+/// (`tests/project_scope.rs::list_outside_any_repo_refuses_instead_of_reading_the_shared_store`)
+/// — and the pin is both the remaining way to reach this case and the escape
+/// hatch the refusal names. It is also strictly better as a fixture: a pinned
+/// store wins regardless of cwd, so the old silent `return` on a machine whose
+/// temp root happens to sit inside a repo (a case reporting green without ever
+/// running) is gone with it.
 #[test]
 fn the_legacy_store_is_not_compared_against_itself() {
     let home = temp_home("self");
-    let orphan = temp_dir("self-orphan");
+    let cwd = temp_dir("self-cwd");
     write_store(
         &home.join(".backlog"),
-        &task_block("legacy07", "in the legacy store", &orphan, "pending"),
+        &task_block("legacy07", "in the legacy store", &cwd, "pending"),
     );
+    // `harness_core::config::base_dir("backlog")` is `$HOME/.backlog`, which is
+    // what `divergence::legacy_path()` resolves to — so pinning here makes the
+    // resolved store and the legacy store the same file, which is the whole
+    // point of the case.
+    std::fs::write(
+        home.join(".backlog").join("config.toml"),
+        format!(
+            "store_dir = {:?}\n",
+            home.join(".backlog").to_string_lossy()
+        ),
+    )
+    .unwrap();
 
-    // Only meaningful when the temp root genuinely has no `.git` above it;
-    // otherwise the store resolves elsewhere and this proves nothing.
-    let mut probe = orphan.clone();
-    let mut inside_repo = false;
-    loop {
-        if probe.join(".git").exists() {
-            inside_repo = true;
-            break;
-        }
-        if !probe.pop() {
-            break;
-        }
-    }
-    if inside_repo {
-        return;
-    }
-
-    let (code, stdout, stderr) = run_in(&["list", "--all", "--json"], &home, &orphan);
+    let (code, stdout, stderr) = run_in(&["list", "--all", "--json"], &home, &cwd);
 
     assert_eq!(code, 0, "stderr={stderr:?}");
+    // Anti-vacuity: the pin really took effect and this really is the legacy
+    // file being read, not an empty store somewhere else.
     assert!(stdout.contains("legacy07"), "stdout={stdout:?}");
     assert!(
         !stderr.to_lowercase().contains("legacy store"),

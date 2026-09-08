@@ -18,7 +18,7 @@ The `backlog` binary owns the queue and its exclusive run-lock:
 | Subcommand | What it does |
 |---|---|
 | `add` | Append a task (`--title`, `--project`, `--tag`, `--priority p0/p1/p2`, `--notes`, `--weight`, `--force`) |
-| `list` | List tasks, filterable by `--tag` / `--project` / `--status` (vocabulary is `pending`/`done`/`failed` — not `open`, that's `hypothesis`'s vocabulary) |
+| `list` | List the store's tasks, filterable by `--tag` / `--status` (vocabulary is `pending`/`done`/`failed` — not `open`, that's `hypothesis`'s vocabulary). For a repo store `--project` is an assertion, not a filter — see **Scope** |
 | `next` | Print the next highest-priority pending task as JSON |
 | `done <id>` | Mark a task done |
 | `fail <id>` | Mark a task failed (`--reason`); defers re-run by 2 days |
@@ -92,6 +92,46 @@ Either rejection can be bypassed intentionally with `backlog add --force`.
 Each element of `backlog list --json` carries a `hashkey` field (computed from
 title + project, not stored) so upstream drivers like `/flow` can gate on
 `condukt state is-claimed` for free.
+
+## Scope: one queue per repo, and the file IS the scope
+
+The store resolves per repo — `<repo root>/.backlog/tasks.toml`, a tracked file
+that merges like any other — so it holds that repo's tasks and nothing else.
+Two consequences, both deliberate:
+
+- **Reads apply no project filter.** Every task in the file is in scope,
+  whichever checkout wrote it. Filtering rows by the writing checkout's absolute
+  path split one repo's queue into one queue per machine. In this repo's own
+  store, counting pending-or-failed tasks by label:
+
+  | measurement point | macOS label | WSL label | `C:/…` label |
+  |---|---|---|---|
+  | `bb046648` (2026-08-20) | 258 | 66 | 5 |
+  | `89feaddb` (2026-08-20) | 265 | 70 | 5 |
+
+  A `list` from the WSL checkout matched only the WSL label and silently dropped
+  every other row — all of them tasks of the very repo whose file it was
+  reading. Re-measure with:
+
+  ```sh
+  python3 -c "import collections,tomllib; d=tomllib.load(open('.backlog/tasks.toml','rb')); \
+    print(collections.Counter(t['project'] for t in d['task'] if t['status'] in ('pending','failed')).most_common())"
+  ```
+
+  `--project` therefore becomes an **assertion** about which store you meant —
+  naming this repo changes nothing, naming a different one is an error, not a
+  filtered listing. `--all` is accepted and is the default here.
+- **A cwd with no repo above it has no store.** `add`/`list`/`next` refuse with
+  the reason instead of falling back to the cross-project `~/.backlog`. That
+  fallback is how a process running in a tempdir wrote its fixtures into the
+  real queue, and how a read from such a cwd was answered with another
+  project's work. To opt into a shared store anyway, pin `store_dir` in
+  `~/.backlog/config.toml`; a pinned store may hold several projects, so there
+  `--project` stays an ordinary filter.
+
+The `project` field is still recorded — it says which checkout filed the task,
+and `list` marks it `[project unresolved: …]` when that label was a guess — but
+it no longer decides what you can see.
 
 ## Cross-checkout claim exclusion (`next --claim`)
 

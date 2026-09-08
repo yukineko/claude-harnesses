@@ -8,7 +8,7 @@ publish = false
 
 # This crate is a thin lib (empty src/lib.rs); the real content is the
 # cross-crate E2E integration tests under `tests/`, which spawn the REAL built
-# workspace binaries (flow, backlog, fugu-router, condukt) to pin the
+# workspace binaries (backlog, fugu-router, condukt) to pin the
 # flow-pipeline "integration contract". It is auto-included by the root
 # `members = ["crates/*"]` glob.
 

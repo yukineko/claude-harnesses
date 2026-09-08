@@ -21,6 +21,7 @@ import io
 import json
 import os
 import platform
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -97,13 +98,17 @@ def _changed_stub(changed_crates=()):
     return _fn
 
 
-def _mirror_crate(crate_dir, install, *, skip=(), modify=(), extra=()):
+def _mirror_crate(crate_dir, install, *, skip=(), modify=(), extra=(), crlf=(),
+                  binary=()):
     """Copy the crate tree into the install dir the way a rollout rsync would.
 
-    `skip` / `modify` / `extra` deliberately break the mirror so a case can pin
-    what the checker does about each kind of divergence.
+    `skip` / `modify` / `extra` / `crlf` deliberately break the mirror so a case
+    can pin what the checker does about each kind of divergence. `crlf` rewrites
+    the DEPLOYED copy with CRLF endings — what a rollout run from a CRLF checkout
+    produces — and `binary` marks a file whose source side carries a NUL byte, so
+    a case can pin that binaries are not given the text relaxation.
     """
-    skip, modify = set(skip), set(modify)
+    skip, modify, crlf, binary = set(skip), set(modify), set(crlf), set(binary)
     for dirpath, _dirnames, filenames in os.walk(crate_dir):
         rel_dir = os.path.relpath(dirpath, crate_dir)
         rel_dir = "" if rel_dir == "." else rel_dir
@@ -116,6 +121,10 @@ def _mirror_crate(crate_dir, install, *, skip=(), modify=(), extra=()):
             data = Path(dirpath, f).read_bytes()
             if rel in modify:
                 data = data + b"\n# deployed copy has drifted\n"
+            if rel in binary:
+                data = data.replace(b"\n", b"\x00\n", 1)
+            if rel in crlf:
+                data = data.replace(b"\n", b"\r\n")
             dst.write_bytes(data)
     for rel in extra:
         dst = install / rel
@@ -133,6 +142,7 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                   install_paths=True,
                   skill_only=(), no_host_binary=(), force_host_binary=(),
                   asset_missing=None, asset_modified=None, asset_extra=None,
+                  asset_crlf=None, asset_binary=None, source_extra=None,
                   cached_versions=None, settings_extra=None, no_bin_launcher=()):
     """Build a fixture repo + registry + settings under `tmp`.
 
@@ -164,10 +174,21 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
     no_bin_launcher    — crates that declare a binary but ship no source-side
                          crates/<crate>/bin/<crate> launcher script (the real
                          taintguard-before-this-task gap).
+    source_extra       — crate -> rel paths written into the SOURCE crate and
+                         deliberately NOT mirrored into the deployed tree. This
+                         is the shape an rsync `--exclude` produces, and the
+                         real case is crates/<c>/.claude/progress.md: a
+                         gitignored runtime artifact seeded by taskprog's Stop
+                         hook (`.gitignore`: "crate-local runtime progress
+                         artifacts (taskprog etc.) — never track"), which is not
+                         plugin payload and must not be deployed.
     """
     asset_missing = dict(asset_missing or {})
     asset_modified = dict(asset_modified or {})
     asset_extra = dict(asset_extra or {})
+    asset_crlf = dict(asset_crlf or {})
+    asset_binary = dict(asset_binary or {})
+    source_extra = dict(source_extra or {})
     versions = dict(versions or FIXTURE_PLUGINS)
     crates = tmp / "crates"
     for crate in versions:
@@ -197,6 +218,11 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
             _write_json(pj, {"name": crate})
             continue
         _write_json(pj, {"name": crate, "version": ver})
+    for crate, rels in source_extra.items():
+        for rel in rels:
+            f = crates / crate / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("crate-local runtime artifact\n", encoding="utf-8")
     # A non-plugin crate must be skipped entirely by both dimensions.
     (crates / "harness-core").mkdir(parents=True, exist_ok=True)
 
@@ -232,9 +258,12 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                 # it had an empty deployed tree and the asset assertions would
                 # fire everywhere instead of only where a case broke the mirror.
                 _mirror_crate(crates / c, install,
-                              skip=asset_missing.get(c, ()),
+                              skip=tuple(asset_missing.get(c, ()))
+                              + tuple(source_extra.get(c, ())),
                               modify=asset_modified.get(c, ()),
-                              extra=asset_extra.get(c, ()))
+                              extra=asset_extra.get(c, ()),
+                              crlf=asset_crlf.get(c, ()),
+                              binary=asset_binary.get(c, ()))
                 manifest = provenance.get(c, _DEFAULT_PROVENANCE)
                 if provenance_text is not None and c in provenance:
                     (install / ".deployed-from.json").write_text(
@@ -807,6 +836,104 @@ class BinaryProvenance(_FixtureCase):
         self.assertIn("overwatch", out + err)
 
 
+class CrateLocalRuntimeArtifacts(_FixtureCase):
+    """A gitignored artifact inside a crate is not plugin payload.
+
+    Measured 2026-08-20: taskprog's Stop hook seeded
+    `crates/ctxrot/.claude/progress.md` in the main working tree (a content-free
+    skeleton naming another session), and this checker reported
+
+        ctxrot: deployed tree is not a mirror of crates/ctxrot — 1 source
+        file(s) not deployed: .claude/progress.md
+
+    with the fix line `rollout-plugins.sh --plugin ctxrot --force`. Following
+    that hint would have COPIED one session's scratch state into the shared
+    plugin cache — the checker was steering its reader toward the wrong action,
+    because it treated "whatever is lying in the crate dir" as the payload.
+
+    `.gitignore` already answers what the payload is: `crates/*/.claude/` is
+    declared "crate-local runtime progress artifacts (taskprog etc.) — never
+    track", and `git ls-files 'crates/*/.claude/*'` returns 0 files. So the
+    exclusion belongs on BOTH sides — the rsync must not deploy it, and this
+    comparison must not expect it — exactly as target/, .git/ and .in_use/ are
+    already handled.
+
+    The anti-vacuity control for this class is
+    `DeployedFileMirror.test_source_file_never_deployed_is_drift`: a TRACKED
+    payload file (`.claude-plugin/plugin.json`) absent from the deployed tree
+    must stay drift. Without it, widening the exclusion could quietly disable the
+    whole dimension.
+
+    The cases below run against `condukt`, not `ctxrot`: the fixture fleet is
+    FIXTURE_PLUGINS, and a crate outside it gets no install path, so nothing
+    compares it. Both cases were written against `ctxrot` first and PASSED before
+    any fix — the signature of a test that checks nothing. Recorded here because
+    the same trap catches the next author: a green run on an unfixed checker is
+    evidence about the test, not about the code.
+    """
+
+    def test_gitignored_crate_local_artifact_is_not_drift(self):
+        """Source has .claude/progress.md, deployed does not: not drift."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, source_extra={"condukt": [".claude/progress.md"]}
+            )
+        self.assertEqual(
+            rc, 0,
+            "a gitignored crate-local runtime artifact must not be reported as "
+            f"rollout drift.\nout={out}\nerr={err}",
+        )
+        self.assertNotIn(".claude/progress.md", out + err)
+
+    def test_leftover_deployed_artifact_is_not_reported_as_extra(self):
+        """The other side of the same exclusion.
+
+        A version dir rolled out before the exclusion existed can still carry a
+        copied `.claude/progress.md`. With the dir excluded from both walks it is
+        out of scope, not an unaccounted extra — the same treatment `.in_use/`
+        already gets.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, asset_extra={"condukt": [".claude/progress.md"]}
+            )
+        self.assertEqual(
+            rc, 0,
+            "a leftover deployed copy of an excluded runtime artifact must not "
+            f"be reported as an extra file.\nout={out}\nerr={err}",
+        )
+        self.assertNotIn(".claude/progress.md", out + err)
+
+    def test_excluded_dirs_match_the_rollout_script(self):
+        """DEPLOY_EXCLUDED_TOP must equal rollout-plugins.sh's rsync excludes.
+
+        The checker's docstring claims the two lists mirror each other, and that
+        claim is what makes the exclusion safe: a dir excluded from the copy but
+        not from the comparison reports permanent drift, and a dir excluded from
+        the comparison but not from the copy hides a real deployment. Prose
+        cannot hold that; this test can. Regression guard, not a RED-first
+        assertion — it was green before this change and must stay green.
+        """
+        # Join `\`-continuations first: the excludes span two physical lines,
+        # and reading one of them would compare half a command.
+        script = (_HERE / "rollout-plugins.sh").read_text(encoding="utf-8")
+        script = re.sub(r"\\\n\s*", " ", script)
+        lines = [ln for ln in script.splitlines()
+                 if "rsync -a --delete" in ln and "--exclude" in ln]
+        self.assertEqual(
+            len(lines), 1,
+            "expected exactly one rsync copy command to compare against; "
+            f"found {len(lines)}",
+        )
+        shell_excludes = set(re.findall(r"--exclude '/([^/']+)/'", lines[0]))
+        self.assertEqual(
+            shell_excludes, set(cpr.DEPLOY_EXCLUDED_TOP),
+            "the rsync excludes in rollout-plugins.sh and the checker's "
+            f"DEPLOY_EXCLUDED_TOP disagree: shell={sorted(shell_excludes)} "
+            f"checker={sorted(cpr.DEPLOY_EXCLUDED_TOP)}",
+        )
+
+
 class SkillOnlyPlugins(_FixtureCase):
     """Which plugins the provenance dimension applies to at all.
 
@@ -897,7 +1024,7 @@ class DeployedFileMirror(_FixtureCase):
 
     Checking only the compiled artifact was too narrow a reading of "is this
     rolled out". A plugin's payload is its skills, agents, hooks, commands and
-    manifests; for the two skill-only plugins that payload is ALL there is, and
+    manifests; for the three skill-only plugins that payload is ALL there is, and
     the provenance dimension says nothing about any of it. A stale skill file is
     a stale rollout.
     """
@@ -954,6 +1081,106 @@ class DeployedFileMirror(_FixtureCase):
         self.assertEqual(
             rc, 0,
             f"rebuild artifacts must not be drift.\nout={out}\nerr={err}",
+        )
+
+
+class LineEndingRepresentation(_FixtureCase):
+    """CRLF-vs-LF is a checkout artifact, not a payload difference.
+
+    Measured 2026-08-20 at b7302987: the main clone's working tree holds
+    `crates/*/Cargo.toml` with CRLF, a linked worktree of the SAME commit holds
+    LF, and `git ls-files --eol` reports `i/lf w/lf attr/text=auto` — git treats
+    the two checkouts as identical. The deployed cache was rsynced from the main
+    tree, so running this checker from a worktree reported 20 plugins as drifted
+    on `.claude-plugin/plugin.json` and `Cargo.toml`, all of them
+    representation-only.
+
+    Since CLAUDE.md 8 requires all work to happen in a worktree, "the checker is
+    unusable from a worktree" is not a corner case — it is where it runs.
+
+    Two things must hold at once, and they pull in opposite directions:
+      * it must not be DRIFT (nothing is wrong with the payload), and
+      * it must not be SILENT (the bytes differ; silence reads as verified).
+    So the class is reported as a visible NOTE and the exit code stays 0.
+
+    The cases below rewrite `src/main.rs`, which the fixture actually writes.
+    Written first against `Cargo.toml` — a path the fixture creates on NEITHER
+    side — where three of the four cases failed for the wrong reason and one
+    passed vacuously. Same trap as `CrateLocalRuntimeArtifacts`: a fixture that
+    names a file nobody has tests nothing.
+
+    The anti-vacuity controls are `test_content_drift_plus_crlf_is_still_drift`
+    (a real edit hiding behind a CRLF rewrite must still be caught) and the
+    existing `DeployedFileMirror.test_deployed_file_differing_from_source_is_drift`.
+    """
+
+    def test_crlf_only_difference_is_not_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, asset_crlf={"condukt": ["src/main.rs"]}
+            )
+        self.assertEqual(
+            rc, 0,
+            "a deployed file differing only in line endings must not be "
+            f"rollout drift.\nout={out}\nerr={err}",
+        )
+        self.assertNotIn("differ from source", out + err)
+
+    def test_crlf_only_difference_is_still_reported(self):
+        """Not drift, but not silence either."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, asset_crlf={"condukt": ["src/main.rs"]}
+            )
+        both = out + err
+        self.assertEqual(rc, 0, both)
+        self.assertIn("condukt", both)
+        self.assertIn("src/main.rs", both)
+        self.assertIn("line ending", both.lower())
+
+    def test_green_line_does_not_claim_byte_identity(self):
+        """The OK line is what a reader uses to skip the NOTE above it.
+
+        "file-for-file identical to their crate" is a byte-level claim. With a
+        line-ending finding outstanding it is false as written, so the sentence
+        has to carry its own exception.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp, asset_crlf={"condukt": ["src/main.rs"]}
+            )
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("no rollout drift", out)
+        self.assertNotIn("file-for-file identical to their crate (", out)
+        self.assertIn("apart from the line-ending", out)
+
+    def test_content_drift_plus_crlf_is_still_drift(self):
+        """A real edit must not hide behind a line-ending rewrite."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                asset_modified={"condukt": ["src/main.rs"]},
+                asset_crlf={"condukt": ["src/main.rs"]},
+            )
+        self.assertNotEqual(
+            rc, 0,
+            "a content change is still drift when the deployed copy was also "
+            f"rewritten with CRLF.\nout={out}\nerr={err}",
+        )
+        self.assertIn("differ from source", out + err)
+
+    def test_binary_file_gets_no_text_relaxation(self):
+        """Normalising \r\n inside a binary could mask a real difference."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out, err = self.run_main(
+                tmp,
+                asset_binary={"condukt": ["src/main.rs"]},
+                asset_crlf={"condukt": ["src/main.rs"]},
+            )
+        self.assertNotEqual(
+            rc, 0,
+            "a file carrying a NUL byte must be compared byte-for-byte.\n"
+            f"out={out}\nerr={err}",
         )
 
 

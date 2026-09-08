@@ -53,10 +53,14 @@
 #   nothing.
 #
 # GATE CRATES require a canary (Problem-2.3)
-#   The prompt-injection / spec / mutation DEFENSE gates (per docs/GLOSSARY.md:
-#   blastguard, propguard, specguard, stuckguard; also the non-plugin
-#   mutategate) guard the fleet, so rolling one out WITHOUT a canary is an
-#   ERROR. Pass --canary to stage it, or --no-canary to explicitly override.
+#   The fleet-defense gates guard every other session, so rolling one out
+#   WITHOUT a canary is an ERROR. The set is NOT re-enumerated here: read
+#   GATE_CRATES= below, which is the canonical copy this script actually
+#   branches on and which check-gate-crates-sync.py machine-checks against
+#   the other 10 places it is hardcoded. (This comment used to list four
+#   names by hand and had already gone stale -- it omitted `overwatch`, a
+#   GATE crate since 2026-08-04, while GATE_CRATES= carried it. A pointer
+#   cannot drift; a hand-copied list does.) Pass --canary to stage it, or --no-canary to explicitly override.
 #   A rollout with no --plugin filter targets EVERY plugin (which includes gate
 #   crates), so it too requires --canary / --no-canary. Non-gate crates are
 #   unaffected — canary stays optional for them.
@@ -89,7 +93,8 @@
 #     never one whose hold status could not be determined. Never touches other
 #     plugins' registry entries, never touches the registry's top-level
 #     "version" field.
-#   - Excludes target/, .git/, and .in_use/ (a runtime lock dir the Claude
+#   - Excludes target/, .git/, .claude/ (crate-local taskprog progress
+#     artifacts — gitignored, never payload), and .in_use/ (a runtime lock dir the Claude
 #     Code plugin loader creates *inside* a live cache version dir — not part
 #     of repo source, must survive a --force recopy of an in-use version).
 #   - Registry write is atomic (temp file + os.replace) and backed up first
@@ -110,7 +115,7 @@ usage() { sed -n '2,80p' "$0"; }
 # --- GATE CRATES (Problem-2.3) ----------------------------------------------
 # The prompt-injection / spec / mutation DEFENSE gates, per docs/GLOSSARY.md
 # (the canonical source: crates classified/described as "gate" — blastguard,
-# propguard, specguard, stuckguard, taintguard — plus the mutation-testing
+# propguard, specguard, stuckguard — plus the mutation-testing
 # kill-rate gate `mutategate`, which is a non-plugin here but listed for
 # completeness). These
 # guard the fleet itself, so they MUST NOT roll out without a canary: when the
@@ -126,7 +131,7 @@ usage() { sed -n '2,80p' "$0"; }
 # rollback/health-gate safety net for the OTHER gate crates with no forcing
 # function to catch it (backlog 50f94a60) — so it gets the same canary
 # requirement as the crates it protects.
-GATE_CRATES="blastguard propguard specguard stuckguard taintguard mutategate overwatch"
+GATE_CRATES="blastguard propguard specguard stuckguard mutategate overwatch parallelguard"
 
 is_gate_crate() {
   local want="$1" g
@@ -381,16 +386,20 @@ PY
 }
 
 # --- copy a repo plugin dir into a cache version dir -------------------------
-# Excludes target/, .git/, .in_use/ (see header). rsync preferred; cp -a fallback.
+# Excludes target/, .git/, .in_use/, .claude/ (see header). rsync preferred;
+# cp -a fallback. The exclude set is mirrored by check-plugin-rollout.py's
+# DEPLOY_EXCLUDED_TOP and the two are compared by a test — a dir dropped from the
+# copy but still expected by the check reports permanent, unfixable drift.
 copy_plugin_dir() {
   local src="$1" dst="$2"
   mkdir -p "$dst"
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete --exclude '/target/' --exclude '/.git/' --exclude '/.in_use/' "$src/" "$dst/"
+    rsync -a --delete --exclude '/target/' --exclude '/.git/' \
+          --exclude '/.in_use/' --exclude '/.claude/' "$src/" "$dst/"
   else
     find "$dst" -mindepth 1 -maxdepth 1 ! -name '.in_use' -exec rm -rf {} +
     cp -a "$src/." "$dst/"
-    rm -rf "${dst:?}/target" "${dst:?}/.git"
+    rm -rf "${dst:?}/target" "${dst:?}/.git" "${dst:?}/.claude"
   fi
 }
 
@@ -1067,7 +1076,7 @@ while IFS=$'\t' read -r name version src target needs_copy needs_registry mismat
   if [ "$needs_copy" = "1" ]; then
     changed=1
     if [ "$dry" = 1 ]; then
-      echo "[dry-run] would copy $srcdir/ -> $target/ (rsync -a --delete, exclude target/ .git/ .in_use/)"
+      echo "[dry-run] would copy $srcdir/ -> $target/ (rsync -a --delete, exclude target/ .git/ .in_use/ .claude/)"
     else
       copy_plugin_dir "$srcdir" "$target"
       echo "copied $name -> $target"

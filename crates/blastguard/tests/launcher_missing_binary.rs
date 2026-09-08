@@ -1,7 +1,7 @@
 //! `bin/blastguard` (the POSIX launcher) — what happens when NO per-platform
 //! binary is bundled for the host.
 //!
-//! blastguard has no gate/mark/clear split (unlike taintguard/ctxrot): it is a
+//! blastguard has no gate/mark/clear split (unlike ctxrot): it is a
 //! single PreToolUse entrypoint that always either stays silent (Allow) or
 //! prints one line of hook JSON (Deny/Ask). A missing binary is therefore
 //! ALWAYS a missing verdict, and the old launcher printed nothing and exited

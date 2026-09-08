@@ -75,6 +75,7 @@ fugu-router import --episodes /path/episodes.jsonl [--playbooks /path/playbooks.
                                                              # merge another machine's stores (content-hash dedup)
 fugu-router import --dedup                                   # dedup local stores in place
 fugu-router sync [--pull-only | --push-only]                 # sync the record store with sync_repo (git)
+                                                             # also runs automatically as the SessionEnd hook
 fugu-router init                                             # write fugu-router.toml
 fugu-router prompt                                           # UserPromptSubmit hook (injects a summary)
 ```
@@ -222,8 +223,14 @@ breaks. See `crates/condukt/skills/condukt/SKILL.md`.
 ## Install
 
 ### Plugin
-Bundles the binary + the UserPromptSubmit hook. The hook injects a one-block
-routing-memory summary when your prompt looks like coding work.
+Bundles the binary + two hooks, both declared in `hooks/hooks.json` and
+resolved through `${CLAUDE_PLUGIN_ROOT}`:
+
+- `UserPromptSubmit` → `fugu-router prompt`, which injects a one-block
+  routing-memory summary when your prompt looks like coding work.
+- `SessionEnd` → `fugu-router sync`, which pulls the record store from
+  `sync_repo` and commits+pushes local appends back (no-op when `sync_repo`
+  is unset).
 
 ### Manual
 ```
@@ -233,6 +240,15 @@ fugu-router init                       # optional config
 fugu-router install --dry-run          # preview settings.json change
 fugu-router install                    # merge the UserPromptSubmit hook
 ```
+
+⚠ `install` writes the **absolute path of the current binary** into
+`~/.claude/settings.json`. That entry does not travel with the plugin and is
+not refreshed by `scripts/rollout-plugins.sh`, so it silently rots the moment
+the binary is moved, renamed, or removed — a hook whose command does not
+resolve exits 127, and a `SessionEnd`/`SessionStart` hook's exit code and
+stderr reach neither the agent nor the user, so it breaks dark rather than
+red. This is not hypothetical: it is exactly how the sync hook was dead
+between 2026-07-23 and 2026-08-26. Prefer the plugin install.
 Remove with `fugu-router uninstall`. Set `FUGU_ROUTER_DISABLED=1` to no-op.
 
 ## Configuration
@@ -254,9 +270,41 @@ past task must be to count).
 Two ways to share the stores across machines:
 
 **`sync` (managed git remote).** Set `sync_repo` to a git repo URL; the stores
-then default to `<sync_dir>/{episodes,playbooks}.jsonl`. `fugu-router sync` pulls
-from the remote first, then commits & pushes local changes (`--pull-only` /
-`--push-only` to do one side only).
+then default to `<sync_dir>/{episodes,playbooks}.jsonl`. `fugu-router sync`
+runs, in this order:
+
+1. **clone** if the sync dir is not a checkout yet (and stops there — nothing
+   local to push);
+2. **commit** whatever `record` appended. This has to come first: the store
+   files live *inside* the sync dir, so they are always uncommitted
+   working-tree modifications, and `git pull` refuses to run over those
+   (`Your local changes to the following files would be overwritten by
+   merge`). Committing is local-only, so it happens under `--pull-only` too;
+3. **pull** with `--no-rebase` — fast-forwarding when it can, merging when the
+   histories diverged. Divergence is the steady state here, not an edge case:
+   the moment a second machine pushes, an `--ff-only` pull can never succeed
+   again;
+4. **push**, skipped only when the branch can be *established* to be level
+   with its upstream. If that cannot be determined, it pushes anyway.
+
+`--pull-only` / `--push-only` stop after step 3 / skip step 3.
+
+The sync dir gets a `.gitattributes` declaring `episodes.jsonl` and
+`playbooks.jsonl` as `merge=union`, written by `sync` if absent. Two machines
+appending to the same JSONL put their additions adjacent at end-of-file, which
+the default merge driver calls a conflict; `union` keeps **both** sides' lines.
+Duplicates are recoverable (`import --dedup`, content-hash) — a dropped
+episode is not.
+
+If `sync` cannot finish, it writes `~/.fugu-router/sync-error.json` and the
+`UserPromptSubmit` hook surfaces the failure on every prompt until a later sync
+succeeds. This exists because `sync`'s only automatic caller is the
+`SessionEnd` hook, whose exit code and stderr reach neither the agent nor the
+user — a non-zero exit there is not a signal anyone receives.
+
+Note that `sync_repo` is only read when the sync dir has to be **cloned**.
+Once the checkout exists, pull and push follow its own `origin`; changing
+`sync_repo` afterwards has no effect (use `git remote set-url`).
 
 **Manual (`import`).** Point `store_file` and `playbook_file` at files inside a
 git repo you manage yourself. On the receiving machine, after pulling, run

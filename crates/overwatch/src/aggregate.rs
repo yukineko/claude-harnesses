@@ -327,14 +327,54 @@ enum SourceOutput {
 }
 
 /// Shell one status source. Never folds a failure into an empty observation.
+///
+/// The program is resolved through [`harness_core::plugin_bin`] rather than
+/// spawned by bare name. `status` runs from the SessionStart and Stop hooks, and
+/// a hook process does NOT inherit the plugin `bin/` directories on `$PATH` —
+/// Claude Code adds those inside the Bash tool's shell only. Bare-name spawns
+/// here worked solely because stale standalone copies happened to sit in
+/// `~/.cargo/bin`; when those were (correctly) deleted on 2026-08-20 all four
+/// sources of this banner went to `(unknown: … os error 2)` at once. Measured
+/// 2026-08-21, measurement point cd2576bd:
+///
+/// ```text
+/// $ env PATH=/usr/local/bin:/usr/bin:/bin overwatch status
+/// == Backlog ==
+/// (unknown: `backlog` could not be run (No such file or directory (os error 2)); …)
+/// ```
+///
+/// which reproduced the shipped SessionStart banner byte for byte. Two of the
+/// four sources (`condukt`, `compass`) never had a `~/.cargo/bin` copy at all, so
+/// they had been unobservable from the hook for as long as this code has spawned
+/// by bare name — before 0.2.26's tri-state they rendered as `(none)`.
 fn shell_source(cmd: &str, args: &[&str]) -> SourceOutput {
+    use harness_core::verdict::Determination;
     use std::process::Command;
 
-    let output = match Command::new(cmd).args(args).output() {
+    let program = match harness_core::plugin_bin::resolve(cmd) {
+        Determination::Known(Some(p)) => p,
+        Determination::Known(None) => {
+            return SourceOutput::Undetermined(format!(
+                "`{cmd}` is not installed here (no plugin-cache copy, and not on \
+                 $PATH); this is NOT a report that {cmd} is empty"
+            ));
+        }
+        Determination::Undetermined(why) => {
+            return SourceOutput::Undetermined(format!(
+                "`{cmd}` could not be located ({}); this is NOT a report that \
+                 {cmd} is empty",
+                why.as_str()
+            ));
+        }
+    };
+
+    let output = match Command::new(&program).args(args).output() {
         Ok(o) => o,
         Err(e) => {
             return SourceOutput::Undetermined(format!(
-                "`{cmd}` could not be run ({e}); this is NOT a report that {cmd} is empty"
+                "`{cmd}` could not be run ({e}) at {}; this is NOT a report that \
+                 {cmd} is empty",
+                program.display()
             ));
         }
     };

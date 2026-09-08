@@ -109,6 +109,7 @@ fugu-router fingerprint [--dir crates]      # SKILL.md コーパスのバージ�
 fugu-router import --episodes /path/episodes.jsonl [--playbooks ...] [--dry-run]  # 別マシンの stores をマージ
 fugu-router import --dedup                  # ローカル stores の重複除去（content-hash, first-seen 優先）
 fugu-router sync [--pull-only | --push-only]  # record ストアを sync_repo（git）と同期
+                                            # SessionEnd フックとしても自動実行される
 fugu-router init                            # fugu-router.toml を書き出す
 ```
 
@@ -121,7 +122,10 @@ fugu-router init                            # fugu-router.toml を書き出す
 
 ### インストールと配線
 
-プラグイン版はバイナリと UserPromptSubmit フックを同梱する。フックは、プロンプトがコーディング作業に見えるときルーティングメモリの要約を 1 ブロック注入する。API キー不要で**サブスクリプションで完結**する。
+プラグイン版はバイナリと 2 本のフックを同梱する。どちらも `hooks/hooks.json` に宣言され、`${CLAUDE_PLUGIN_ROOT}` 経由で解決される。API キー不要で**サブスクリプションで完結**する。
+
+- `UserPromptSubmit` → `fugu-router prompt`。プロンプトがコーディング作業に見えるときルーティングメモリの要約を 1 ブロック注入する。
+- `SessionEnd` → `fugu-router sync`。record ストアを `sync_repo` から pull し、ローカルの追記を commit & push する（`sync_repo` 未設定なら no-op）。
 
 手動導入する場合は次のとおり。
 
@@ -132,6 +136,8 @@ fugu-router init                  # 設定（任意）
 fugu-router install --dry-run     # settings.json の変更をプレビュー
 fugu-router install               # UserPromptSubmit フックをマージ
 ```
+
+⚠ `install` は**その時点のバイナリの絶対パス**を `~/.claude/settings.json` に焼き込む。このエントリはプラグインと一緒に移動せず `scripts/rollout-plugins.sh` でも更新されないため、バイナリを移動・リネーム・削除した瞬間に黙って腐る。解決できないコマンドを持つフックは exit 127 で死ぬが、`SessionEnd`/`SessionStart` フックの exit code も stderr もエージェントにもユーザーにも届かないので、**red ではなく dark に壊れる**。これは仮定の話ではなく、sync フックが 2026-07-23 から 2026-08-26 まで実際にこうして死んでいた。プラグイン版の導入を推奨する。
 
 削除は `fugu-router uninstall`。`FUGU_ROUTER_DISABLED=1` で無効化（no-op）できる。
 
@@ -146,7 +152,13 @@ fugu-router install               # UserPromptSubmit フックをマージ
 | `sync_repo` | *(未設定)* | `fugu-router sync` 用のリモート git リポジトリ URL。設定すると `store_file`/`playbook_file` は既定で `<sync_dir>/{episodes,playbooks}.jsonl` になる |
 | `sync_dir` | `~/.fugu-router/record-repo` | `sync_repo` のローカル clone 先 |
 
-マシン間で stores を共有する方法は 2 通り。**`sync`（管理された git リモート）:** `sync_repo` に git リポジトリ URL を設定すると、`store_file`/`playbook_file` は `<sync_dir>/{episodes,playbooks}.jsonl`（`sync_dir` 既定 `~/.fugu-router/record-repo`）を指す。`fugu-router sync` はまずリモートから pull し、続いてローカルの変更を commit & push する（`--pull-only` / `--push-only` で片側のみ）。**手動（`import`）:** `store_file` と `playbook_file` を自分で管理する git リポジトリ内のパスに向け、`git pull` 後に `import` するだけでマシン間同期が完結する（content-hash で重複排除されるので同じ実績を二度引いても安全）。
+マシン間で stores を共有する方法は 2 通り。**`sync`（管理された git リモート）:** `sync_repo` に git リポジトリ URL を設定すると、`store_file`/`playbook_file` は `<sync_dir>/{episodes,playbooks}.jsonl`（`sync_dir` 既定 `~/.fugu-router/record-repo`）を指す。`fugu-router sync` は **clone（未 checkout のときだけ）→ commit → pull（`--no-rebase`）→ push** の順で動く（`--pull-only` / `--push-only` で片側のみ）。commit が pull より先に来るのは必須で、store ファイルは sync ディレクトリの*中*にあるため常に未コミットの working-tree 変更であり、その状態の `git pull` は `Your local changes to the following files would be overwritten by merge` で拒否される。commit はローカル操作なので `--pull-only` でも実行される。pull が `--ff-only` ではなく `--no-rebase` なのは、2 台目のマシンが push した瞬間から履歴は必ず分岐し、`--ff-only` は二度と成功しなくなるため（分岐は例外ではなく定常状態）。push は upstream と同位置だと*確定できた*ときだけ省略し、確定できない場合は push する。
+
+sync ディレクトリには `episodes.jsonl` / `playbooks.jsonl` を `merge=union` とする `.gitattributes` が（無ければ）書き込まれる。2 台が同じ JSONL に追記すると末尾で隣接した追加になり既定の merge driver は conflict と判定するが、`union` は**両側の行を残す**。重複は `import --dedup`（content-hash）で回復できるが、落とした episode は回復できない。
+
+`sync` が完走できなかった場合は `~/.fugu-router/sync-error.json` に記録され、成功するまで `UserPromptSubmit` フックが毎プロンプトで通知する。`sync` の自動呼び出し元は `SessionEnd` フックだけで、その exit code も stderr も誰にも届かない（＝非0終了は誰も受け取らない信号）ため。
+
+なお `sync_repo` は sync ディレクトリを **clone するときにしか読まれない**。checkout が存在した後の pull/push はその repo 自身の `origin` に従うので、後から `sync_repo` を変えても効果は無い（`git remote set-url` を使う）。**手動（`import`）:** `store_file` と `playbook_file` を自分で管理する git リポジトリ内のパスに向け、`git pull` 後に `import` するだけでマシン間同期が完結する（content-hash で重複排除されるので同じ実績を二度引いても安全）。
 
 ### コールドスタート
 

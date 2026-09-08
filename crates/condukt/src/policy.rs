@@ -197,7 +197,7 @@ pub fn decide_untestable(risk: Level, reversibility: Level, confidence: Level) -
 /// - **`Block` is preserved, never relaxed.** A high-risk irreversible action
 ///   still hard-stops (`decide`'s hard stop), because the standing grant covers
 ///   "stop asking me for permission", not "do the catastrophic thing". The
-///   deterministic gates that actually enforce safety — blastguard, taintguard,
+///   deterministic gates that actually enforce safety — blastguard,
 ///   donegate, the pre-commit/pre-push hooks — sit at a different layer entirely
 ///   and are untouched by this function; they remain the real stop.
 /// - **It is opt-in per callsite.** A gate only loses its prompt if the caller

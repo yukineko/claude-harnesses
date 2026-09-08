@@ -84,7 +84,7 @@ not evidence that anything in that directory is current:
       target/, .git/ and .in_use/, so a complete rollout leaves a full mirror
       plus the artifacts rebuild adds. Checking only (b) was too narrow a
       reading of "is this rolled out": a plugin's payload is its skills, agents,
-      hooks, commands and manifests, and for the two skill-only plugins that
+      hooks, commands and manifests, and for the three skill-only plugins that
       payload is ALL there is, so (b) said nothing about them at all.
   (d) NO SUPERSEDED DIRS — the cache keeps no removable version dir other than
       the current one. Measured before this existed: 265 superseded dirs, 1.29
@@ -113,8 +113,10 @@ indistinguishable from "verified current".
 
 (b) applies only to plugins that HAVE a binary, and that is decided from the
 SOURCE (does crates/<name> declare a bin target?), never from whether one is
-present in the deployed tree. Two plugins — daily-report and scout — are skills
-and hooks only, with no Rust crate at all; they have no compiled artifact whose
+present in the deployed tree. Three plugins — daily-report, scout and flow
+(skills-only since 0.2.7, when its one hook was retired and the crate went with
+it) — are skills and hooks only, with no Rust crate at all; they have no compiled
+artifact whose
 provenance could drift, and no rollout could ever write a manifest for them, so
 demanding one reported permanent unfixable drift. That exemption is the sole
 branch of (b) that passes with no manifest and it is deliberately narrow: a
@@ -171,7 +173,26 @@ PROVENANCE_FILE = ".deployed-from.json"
 # Top-level dirs rollout-plugins.sh's rsync excludes, so they are never expected
 # in a deployed tree and must be excluded from both sides of the comparison.
 # `.in_use/` is a runtime marker dir written by live sessions, not payload.
-DEPLOY_EXCLUDED_TOP = ("target", ".git", ".in_use")
+# `.claude/` is the same kind of thing: `.gitignore` declares `crates/*/.claude/`
+# "crate-local runtime progress artifacts (taskprog etc.) — never track", and
+# `git ls-files 'crates/*/.claude/*'` returns 0 files, so nothing in it is
+# payload. It was NOT excluded until 2026-08-20, and the consequence was
+# concrete: taskprog seeded crates/ctxrot/.claude/progress.md (a content-free
+# skeleton naming another session) and this check reported "1 source file(s) not
+# deployed", pointing its reader at `--force` — i.e. at copying one session's
+# scratch state into the shared plugin cache. This list is kept identical to the
+# script's rsync excludes by
+# test_check_plugin_rollout.CrateLocalRuntimeArtifacts.
+DEPLOY_EXCLUDED_TOP = ("target", ".git", ".in_use", ".claude")
+
+# Deployed text files whose bytes differ from the crate's ONLY by line endings.
+# Not drift (the payload is identical; git itself calls the two checkouts equal)
+# and not clean either (the bytes really do differ), so the class is reported
+# separately and does not touch the exit code. Populated by `_asset_problem`,
+# drained by `main`. Module-level because `_asset_problem` returns one string
+# and its callers append that to the blocking list — a second return value would
+# have to be threaded through every caller and test for a non-blocking note.
+EOL_ONLY = []
 
 # The <os>-<arch> suffixes a plugin binary can carry. Binaries are generated,
 # never committed for every platform, so bin/<name>-<suffix> is allowed to exist
@@ -301,8 +322,8 @@ def _crate_ships_binary(crate):
     decide whether a binary was expected would let that failure certify itself.
 
     A plugin may legitimately ship no binary at all (skills/ and hooks/ only,
-    with no Rust crate under crates/<name> — daily-report and scout are the two
-    such plugins today). Those have no compiled artifact whose provenance could
+    with no Rust crate under crates/<name> — daily-report, scout and flow are the
+    three such plugins today). Those have no compiled artifact whose provenance could
     drift, and are the sole case allowed to pass with no manifest.
     """
     crate_dir = os.path.join(CRATES, crate)
@@ -369,9 +390,9 @@ GATE_CRATES = (
     "propguard",
     "specguard",
     "stuckguard",
-    "taintguard",
     "mutategate",
     "overwatch",
+    "parallelguard",
 )
 
 # GATE crates that legitimately ship NO .claude-plugin/plugin.json and so can
@@ -441,11 +462,13 @@ def load_parked(plugins, path=None):
     ---------------------------------------
     This checker used to be binary: a plugin was either live or a failure. There
     is a third real state — deliberately NOT rolled out, because arming it right
-    now would do harm. taintguard is the case that forced this: it is committed
-    at 0.1.8, its launcher is intentionally left un-rolled-out while a known
-    false positive is measured, and so the rollout dimension reported red on
+    now would do harm. taintguard was the case that forced this: it sat
+    committed at 0.1.8 with its launcher deliberately un-rolled-out while a
+    known false positive was measured, so the rollout dimension reported red on
     every single run with no way for it to ever go green short of arming the
-    gate.
+    gate. (That crate was removed from the repository on 2026-08-24 by user
+    ruling. The third state it forced into existence is not tied to it — the
+    next park will be some other plugin.)
 
     A permanent red is not a harmless nuisance, it is an ACTIVE hazard, and this
     is measured, not theoretical: on 2026-08-04 the red was read as a
@@ -856,8 +879,9 @@ def _walk_files(root):
     deployed side reads as "files are missing". Both are wrong answers dressed
     as data, so the walk raises and this returns undetermined instead.
 
-    The three dirs rollout-plugins.sh excludes are excluded here too, at the top
-    level only, exactly as its rsync does: `--exclude '/target/'` is anchored.
+    The dirs rollout-plugins.sh excludes are excluded here too, at the top level
+    only, exactly as its rsync does: `--exclude '/target/'` is anchored. The two
+    lists are not merely intended to agree — a test compares them.
     """
     out = {}
 
@@ -900,12 +924,14 @@ def _asset_problem(crate, entry):
     Checking only the binary was too narrow a reading of "is this rolled out".
     rollout-plugins.sh deploys a plugin with
 
-        rsync -a --delete --exclude '/target/' --exclude '/.git/' --exclude '/.in_use/'
+        rsync -a --delete --exclude '/target/' --exclude '/.git/' \
+              --exclude '/.in_use/' --exclude '/.claude/'
 
     so a complete rollout leaves the install dir a full mirror of crates/<name>,
     plus the two artifacts rebuild-plugins.sh adds afterwards. A plugin's real
     payload is its skills, agents, hooks, commands and manifests; for the two
-    skill-only plugins that payload is ALL there is, and the binary dimension
+    skill-only plugins that payload is ALL there is (flow became the third in
+    0.2.7), and the binary dimension
     says nothing about any of it. A stale skill file is a stale rollout.
 
     The allowed delta was not assumed — it was measured across all 39 plugins on
@@ -935,14 +961,34 @@ def _asset_problem(crate, entry):
     missing = sorted(set(src) - set(dst))
     extra = sorted(r for r in set(dst) - set(src) if not _is_rebuild_artifact(r))
     differing = []
+    eol_only = []
     unreadable = []
     for rel in sorted(set(src) & set(dst)):
         try:
             with open(src[rel], "rb") as a, open(dst[rel], "rb") as b:
-                if a.read() != b.read():
-                    differing.append(rel)
+                sa, sb = a.read(), b.read()
         except OSError as exc:
             unreadable.append(f"{rel} ({exc})")
+            continue
+        if sa == sb:
+            continue
+        # A CRLF-vs-LF difference is a property of the CHECKOUT, not of the
+        # payload: `git ls-files --eol` reports i/lf w/lf attr/text=auto for
+        # these files, and two checkouts of one commit can legitimately differ
+        # here (measured 2026-08-20 at b7302987: the main clone holds CRLF, a
+        # linked worktree of the same commit holds LF, and the cache was rsynced
+        # from the main clone — so running this from a worktree reported 20
+        # plugins as drifted, all representation-only). Byte-exactness is kept
+        # for anything with a NUL byte: normalising inside a binary could make a
+        # real difference disappear.
+        if b"\x00" not in sa and b"\x00" not in sb and (
+            sa.replace(b"\r\n", b"\n") == sb.replace(b"\r\n", b"\n")
+        ):
+            eol_only.append(rel)
+            continue
+        differing.append(rel)
+    if eol_only:
+        EOL_ONLY.append((crate, eol_only))
 
     def _sample(items):
         head = ", ".join(items[:3])
@@ -1170,7 +1216,13 @@ def check_enabled(plugins):
     return gate_failures, warnings, (checked, gates_seen)
 
 
+def cpr_eol_only():
+    """The line-ending-only findings collected during this run."""
+    return EOL_ONLY
+
+
 def main():
+    EOL_ONLY.clear()
     plugins, unverifiable = scan_plugins()
     # Unconditional, before either dimension can decide to skip itself.
     for crate in unaccounted_gate_plugins(plugins):
@@ -1266,6 +1318,30 @@ def main():
             file=sys.stderr,
         )
 
+    # Line-ending-only differences: reported, never blocking. Printed BEFORE the
+    # green rollout line below so a reader cannot take "no rollout drift" as
+    # "deployed bytes == source bytes" without seeing this.
+    if cpr_eol_only():
+        total = sum(len(rels) for _c, rels in cpr_eol_only())
+        print(
+            f"NOTE ({total} deployed file(s) across {len(cpr_eol_only())} plugin(s) "
+            "differ from the crate ONLY in line endings — not drift, not "
+            "byte-identical either):",
+            file=sys.stderr,
+        )
+        for crate, rels in cpr_eol_only():
+            shown = ", ".join(rels[:3]) + (f", +{len(rels) - 3} more" if len(rels) > 3 else "")
+            print(f"  - {crate}: {shown}", file=sys.stderr)
+        print(
+            "Cause: two checkouts of the same commit can differ here (git calls "
+            "them identical: `git ls-files --eol` reports i/lf w/lf "
+            "attr/text=auto), and the cache was rsynced from whichever tree ran "
+            "the rollout. No rollout is needed. To make the bytes match too, "
+            "check the trees out with the same line endings and re-run "
+            "scripts/rollout-plugins.sh --plugin <name> --force.",
+            file=sys.stderr,
+        )
+
     # Warnings never affect the exit code — disabling a non-gate plugin is a
     # legitimate user choice, so this informs without blocking.
     if warnings:
@@ -1304,9 +1380,19 @@ def main():
             else "; no superseded version dir left in the cache"
         )
         shown, parked_note = _minus_parked(rollout_checked, set(all_names))
+        # The claim is byte-level, so it must name its own exception when the
+        # line-ending class fired — otherwise this sentence is what a reader uses
+        # to skip the NOTE printed above it.
+        identical = (
+            "and file-for-file identical to their crate apart from the "
+            f"line-ending difference(s) noted above in {len(cpr_eol_only())} "
+            "plugin(s)"
+            if cpr_eol_only()
+            else "and file-for-file identical to their crate"
+        )
         print(
             f"OK: {shown} plugins deployed at their source version "
-            f"and file-for-file identical to their crate (no rollout drift){held}"
+            f"{identical} (no rollout drift){held}"
             f"{parked_note}"
         )
     if (

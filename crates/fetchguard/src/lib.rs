@@ -16,7 +16,7 @@
 //! source at runtime. Nothing screens THAT content before it lands in the
 //! model's context. This crate is that missing screen.
 //!
-//! `taintguard` (the sibling crate) already exists for the ORTHOGONAL
+//! A sibling crate (`taintguard`, REMOVED 2026-08-24) used to own the ORTHOGONAL
 //! provenance question — WHERE did this content come from (marks a session
 //! tainted after any `WebFetch`/`WebSearch`/external `Read`, then downgrades
 //! write-class tools for the rest of the turn). fetchguard adds the CONTENT
@@ -31,7 +31,7 @@
 //!
 //! External-file `Read` is DEFERRED here (see `gate::WEB_TOOLS`'s doc
 //! comment): classifying whether a path is "external" is a path-trust
-//! judgment `taintguard::classify` already owns, and duplicating it here
+//! judgment the removed `taintguard::classify` owned, and duplicating it here
 //! would be a second, driftable copy of the same decision.
 //!
 //! # Modules

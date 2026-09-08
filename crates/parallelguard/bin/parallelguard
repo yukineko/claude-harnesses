@@ -1,0 +1,59 @@
+#!/bin/sh
+# parallelguard plugin launcher — selects the per-platform binary bundled here.
+# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/parallelguard <acquire|release|reset>`
+# (hooks/hooks.json); this execs the matching `parallelguard-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST the answer depends on which entry point was
+# asked for, because the two carry different verdict weight:
+#
+#   acquire  PreToolUse, verdict-bearing. An Allow IS a silent exit 0 with no
+#            stdout (see `emit` in src/main.rs), so exiting silently here would
+#            be byte-for-byte indistinguishable from "parallelguard counted what
+#            is in flight and found room" — while in fact nothing was counted at
+#            all. Cannot-determine resolves to deny (CLAUDE.md 1/3), same as
+#            blastguard's launcher.
+#
+#   release  PostToolUse. Not verdict-bearing: there is no permission channel on
+#   reset    PostToolUse, and nothing to allow or block. A release that does not
+#            run leaks a slot, which tightens the cap rather than loosening it,
+#            and the next turn boundary clears it. Exit 0 quietly.
+#
+#   status   Operator command read by humans and scripts. Printing nothing reads
+#            as "nothing in flight", so it must not exit 0 with an empty body.
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+ext=""
+[ "$os" = windows ] && ext=".exe"
+
+binary="$root/parallelguard-$os-$arch$ext"
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
+fi
+
+echo "parallelguard: no bundled binary for $os-$arch ($binary)." >&2
+
+case "${1:-}" in
+  acquire)
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' \
+      "parallelguard did not run: no bundled binary for $os-$arch. How many calls are already in flight was NOT counted, so this call is UNCOUNTED, not cleared. It did NOT run. Build the binary with scripts/build-plugin-bin.sh on this platform, or remove the parallelguard plugin — do not work around this by sending more parallel calls."
+    exit 0
+    ;;
+  release|reset)
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac

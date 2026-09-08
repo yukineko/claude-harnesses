@@ -120,23 +120,24 @@ escalate/block を返したゲート。
 
 いずれの早期脱出でもロック解放は必ず行う。
 
-### SessionStart hook
+### SessionStart hook は廃止した（2026-08-20）
 
-flow バイナリは決定論的・非ブロッキングで、エラー時も exit 0 する（driver hook がターンを壊してはならない）。
+**flow は hook を持たない。`/flow` は明示的に起動したときだけ走る。**
 
-| Hook | Event | 役割 |
-|---|---|---|
-| `flow propose` | `SessionStart`（startup/resume/clear） | このセッションに開いている仕事（compass の次の一手・open な backlog・未完の condukt run）があれば、`/flow` を1つの `AskUserQuestion` で能動的に提案する **propose-then-confirm** ディレクティブを注入する。タスク数の再計算はせず（compass `nudge` / backlog `session-start` / condukt `restore` が各自の状態を注入する）、それらを束ねるディレクティブを足すだけ。 |
+0.2.6 までは `flow propose` という SessionStart hook があり、backlog に pending が
+あれば「他の作業を始める前に、AskUserQuestion 1 回で `/flow` を開始するかユーザーに
+確認してください」というディレクティブを毎セッション注入していた。**ユーザーの指示で
+これを廃止した**（同時に autoflow 側の 2 経路 — SessionStart の
+「バックログに N 件…/flow で開始しますか？」と、Stop hook で毎ターン
+「/backlog を実行してください」と block していたアーム — も撤去）。
 
-つまり flow は、開いている仕事があるセッションでは自動で `/flow` を提案し、承認後に起動する。手動でも `/flow` で起動できる。
+理由は促しの情報量である。同じ要求が 2 プラグインから重複して出ており、しかも
+毎ターン繰り返されていた。繰り返しは検出ではない。キューを消化するかどうかは
+操作者の判断であり、`/flow` を打つという行為がその判断そのものである。
 
-### サブコマンド
-
-バイナリは意図的に薄い。公開サブコマンドは1つだけ。
-
-| サブコマンド | 用途 |
-|---|---|
-| `flow propose` | SessionStart hook：propose-then-confirm ディレクティブを注入する |
+この結果、flow は **skill のみのプラグイン**になった（`scout` / `daily-report` と
+同じ形）。バイナリ・ランチャ・hook はいずれも無く、Cargo クレートでもない。
+`/flow` skill の中身（source→executor ループ）は一切変わっていない。
 
 ### 導入
 
@@ -147,41 +148,31 @@ Claude Code プラグインとして入れるのが推奨。hook・`/flow` skill
 /plugin install flow@yukineko
 ```
 
-hook は `${CLAUDE_PLUGIN_ROOT}/bin/flow propose` を呼ぶ。`bin/flow` はプラットフォーム別バイナリ（`bin/flow-<os>-<arch>`）を選ぶ POSIX ランチャで、一致するバイナリが無いホストでは exit 0 で黙って抜ける。
-
 > flow は source/executor（`compass` / `backlog` / `condukt`、任意で `fugu-router`）がインストールされていることを前提とする。単体で動くものではなく、それらを束ねる driver である。
-
-### ソースからビルド
-
-```sh
-scripts/build-plugin-bin.sh flow                       # ホストプラットフォーム
-scripts/build-plugin-bin.sh flow x86_64-apple-darwin   # Intel Mac 向けにクロスビルド
-git add bin/ && git update-index --chmod=+x bin/flow bin/flow-*
-```
 
 ## プラットフォーム対応
 
-| ホスト | ファイル | 状態 |
-|---|---|---|
-| Linux x86_64 | `bin/flow-linux-x86_64` | 同梱 |
-| macOS Apple Silicon | `bin/flow-darwin-arm64` | 同梱 |
-| macOS Intel | `bin/flow-darwin-x86_64` | macOS runner の CI でビルド |
+ビルドするものが無いので、プラットフォーム依存も無い。
 
 ## プラグイン構成
 
 ```
-.claude-plugin/plugin.json     # プラグインマニフェスト（version 0.1.6）
-hooks/hooks.json               # SessionStart=propose → ${CLAUDE_PLUGIN_ROOT}/bin/flow
+.claude-plugin/plugin.json     # プラグインマニフェスト
 skills/flow/SKILL.md           # /flow skill（source→executor ループを駆動）
-bin/flow                       # POSIX ランチャ → flow-<os>-<arch>
-bin/flow-<os>-<arch>           # プリビルドバイナリ
-src/main.rs … Cargo.toml       # Rust クレート
 ```
+
+0.2.6 までは `hooks/hooks.json`・`bin/flow`（POSIX ランチャ）・`bin/flow-<os>-<arch>`・
+`src/main.rs`・`Cargo.toml` も同梱していた。すべて `flow propose` のためのもので、
+それが廃止されたので一緒に消えた。
 
 ## 開発
 
+Rust クレートではないので `cargo` は関わらない。`/flow` skill の
+queue-driving 契約は `crates/integration-tests/tests/flow_skill_queue_contract.rs`
+がテキストとして pin している（`crates/flow/tests/` から移設）。
+
 ```sh
-cargo build -p flow
+cargo test -p integration-tests --test flow_skill_queue_contract
 ```
 
 ## ライセンス

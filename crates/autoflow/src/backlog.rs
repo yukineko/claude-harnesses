@@ -3,115 +3,16 @@ use std::path::{Path, PathBuf};
 use harness_core::config::home;
 use harness_core::projkey::repo_root;
 use harness_core::verdict::Determination;
-use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
-pub struct BacklogItem {
-    pub id: String,
-    /// The task's human title. Backlog serializes this as `title`; we keep the
-    /// field name `text` for the consumer but map it from the real JSON key.
-    /// (`#[serde(default)]` so a future omission degrades to "" rather than a
-    /// parse failure that would drop the whole item.)
-    #[serde(rename = "title", default)]
-    pub text: String,
-    #[serde(default)]
-    pub status: String,
-}
-
-/// Find outstanding (pending) backlog items for the repo containing `cwd`.
-///
-/// Three answers, not two. `Known(vec![])` means "asked the queue, it is empty"
-/// — the only answer that entitles the caller to conclude there is no work left
-/// (it latches `Phase::Done` for the rest of the session). Every way of *failing
-/// to ask* — the `backlog` invocation not spawning, exiting non-zero, printing
-/// output we cannot parse, or answering in a status vocabulary we do not
-/// recognise — is `Undetermined`, because an empty vec returned for those would
-/// be indistinguishable from an observed-empty queue at the call site.
-///
-/// The one deliberate exception is `backlog` not being installed, which stays
-/// `Known(vec![])`: with no binary there is no queue to have work in. That is an
-/// observation, not a failure to observe (the same carve-out
-/// `lock::backlog_driver_active` documents).
-pub fn find_open(cwd: &Path) -> Determination<Vec<BacklogItem>> {
-    let binary = match find_backlog_binary() {
-        Determination::Known(Some(b)) => b,
-        // No backlog installed ⇒ no queue ⇒ genuinely nothing pending.
-        Determination::Known(None) => return Determination::Known(vec![]),
-        // We could not even tell whether backlog exists, so we certainly cannot
-        // tell whether its queue is empty.
-        Determination::Undetermined(why) => return Determination::Undetermined(why),
-    };
-
-    let project = repo_project_path(cwd);
-
-    // The `backlog` binary's subcommand is `list` (NOT `backlog list` — that was
-    // the historical bug: autoflow shelled to `session-insights backlog …`, a
-    // subcommand session-insights never had, so this always failed and autoflow
-    // saw an empty queue). `--status pending` filters server-side to ready work;
-    // `--json` yields a machine-readable array.
-    let output = std::process::Command::new(&binary)
-        .args([
-            "list",
-            "--project",
-            &project,
-            "--status",
-            "pending",
-            "--json",
-        ])
-        .output();
-
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        Ok(o) => {
-            // Non-zero exit: the queue was never reported. The diagnostic goes to
-            // stderr AND the verdict says "undetermined" — reporting an empty vec
-            // here is what let autoflow conclude "no work" on a tooling error.
-            let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
-            eprintln!("autoflow: backlog list exited {}: {}", o.status, stderr);
-            return Determination::undetermined(format!(
-                "`backlog list` exited {}: {stderr}",
-                o.status
-            ));
-        }
-        Err(e) => {
-            eprintln!("autoflow: could not run backlog list: {e}");
-            return Determination::undetermined(format!("could not run `backlog list`: {e}"));
-        }
-    };
-
-    let items: Vec<BacklogItem> = match serde_json::from_slice(&output.stdout) {
-        Ok(items) => items,
-        // Unparseable stdout is not an observation of an idle queue (the same
-        // rule `lock::driver_active_from_status` applies to its own stdout).
-        Err(e) => {
-            return Determination::undetermined(format!(
-                "could not parse `backlog list --json` output: {e}"
-            ))
-        }
-    };
-
-    // Server already filtered to status=pending; re-assert client-side as a
-    // belt-and-braces guard (a failed task is deferred ~2 days, so surfacing it
-    // here would re-drive it immediately and churn).
-    let listed = items.len();
-    let pending: Vec<BacklogItem> = items
-        .into_iter()
-        .filter(|i| i.status == "pending")
-        .collect();
-
-    // The server was ASKED for `--status pending`, so it answering with items
-    // that none of them match means the two sides disagree about the status
-    // vocabulary (audit §4.2). The client filter then empties a non-empty
-    // answer, which is a failure to interpret the reply — not an observation
-    // that the queue is empty.
-    if pending.is_empty() && listed > 0 {
-        return Determination::undetermined(format!(
-            "`backlog list --status pending` returned {listed} item(s), none with status \"pending\" \
-             — the status vocabulary does not match, so the queue could not be read"
-        ));
-    }
-    Determination::Known(pending)
-}
+// RETIRED 2026-08-20 (user instruction): `BacklogItem` and `find_open` were
+// here. They read `backlog list --status pending --json` for the two nudges that
+// asked the operator to work the queue — the Stop hook's "/backlog を実行して
+// ください" arm and the SessionStart "/flow で開始しますか？" proposal. With both
+// gone nothing consumes the queue in this crate, and a reader with no consumer is
+// an invitation to re-wire it, so it goes with them. Its three-valued contract
+// (`Known(vec![])` only for an ASKED-and-empty queue, `Undetermined` for every
+// way of failing to ask) is preserved where it is still load-bearing:
+// `condukt::find_pending` and `find_backlog_binary` below.
 
 /// Locate the `backlog` binary: PATH first, then the plugin cache.
 ///
@@ -229,18 +130,12 @@ mod tests {
         assert_eq!(repo_project_path(p), "/tmp/some/non-git-dir");
     }
 
-    // The producer/consumer contract: `backlog list --json` emits an array of
-    // tasks whose human title is keyed `title` (NOT `text`) plus extra fields we
-    // don't model. BacklogItem must map `title` → `text` and ignore the rest, or
-    // autoflow surfaces empty/blank work. This is the exact shape printed by the
-    // backlog binary (see the crate's integration test).
-    #[test]
-    fn backlog_item_parses_real_list_json_shape() {
-        let json = r#"[{"id":"834167c8","title":"Smoke task","project":"/smoke/proj","tags":["p1"],"status":"pending","notes":"","created_at":1782711396,"updated_at":1782711396,"defer_until":null,"weight":0.0}]"#;
-        let items: Vec<BacklogItem> = serde_json::from_str(json).expect("must parse backlog json");
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].id, "834167c8");
-        assert_eq!(items[0].text, "Smoke task", "title must map to text");
-        assert_eq!(items[0].status, "pending");
-    }
+    // RETIRED 2026-08-20 with `BacklogItem` itself: this pinned the
+    // producer/consumer contract (`backlog list --json` keys the human title
+    // `title`, which the consumer had to map onto `text`). autoflow no longer
+    // consumes that JSON at all, so the contract it pinned has no consumer here.
+    // Deleted because the behaviour is gone, NOT because it went red — the
+    // distinction CLAUDE.md 4 turns on. The same shape is still pinned where it
+    // is still consumed: backlog's own integration test, and `flow`'s reader
+    // before it was retired.
 }

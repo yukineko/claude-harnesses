@@ -6,12 +6,18 @@
 
 `integration-tests` は **テスト専用クレート**である。出荷するバイナリもプラグインも持たない
 （`Cargo.toml` は `publish = false`、`src/lib.rs` は doc-comment のみの content-free lib）。
-ワークスペースの root `members = ["crates/*"]` グロブに自動包含される。実体は `tests/e2e.rs` の
-クロスクレート E2E 統合テスト群で、**実際にビルド済みのワークスペースバイナリ**（`flow` /
-`backlog` / `fugu-router` / `condukt`）を `std::process::Command` で spawn し、in-process リンクや
+ワークスペースの root `members = ["crates/*"]` グロブに自動包含される。主体は `tests/e2e.rs` の
+クロスクレート E2E 統合テスト群で、**実際にビルド済みのワークスペースバイナリ**（`backlog` /
+`fugu-router` / `condukt`）を `std::process::Command` で spawn し、in-process リンクや
 mock を一切使わずに flow パイプラインの「integration contract（結合契約）」を pin する。個々の
 クレートの単体テストが単一バイナリの内部を守るのに対し、本クレートは **バイナリ間の I/O 形状の
 合意**（どのフィールドを渡すか・どのバケットに何を置くか・exit code の意味）を守る。
+
+もう 1 ファイル `tests/flow_skill_queue_contract.rs` は毛色が違う: バイナリを起動せず
+`crates/flow/skills/flow/SKILL.md` をテキストとして読み、`/flow` ループが排他 project ロックを
+取らないこと・ピックが読むだけでなく予約することを pin する。flow が skills-only plugin になって
+Cargo パッケージを失った 0.2.7 で、`crates/flow/tests/` から**削除せずここへ移設した**もの
+（テストを package ごと消すのは、契約ごと消すことになる）。
 
 ## 不変条件
 
@@ -19,12 +25,10 @@ mock を一切使わずに flow パイプラインの「integration contract（�
   `../../target`）配下の `release/<name>` → `debug/<name>` の順で最初に存在するものを返し、未ビルドなら
   `None`。各テストは `None` を **skip（`eprintln!` して return）** として扱い、決して failure にしない。
   よってバイナリ未コンパイルのマシンでも suite は green を保つ。実際に契約を行使させるには先に
-  `cargo build -p flow -p backlog -p fugu-router -p condukt` が要る。
+  `cargo build -p backlog -p fugu-router -p condukt` が要る（`flow` はもうバイナリを持たない）。
 - **完全隔離（開発者環境非汚染）** — 各テストは project dir に `tempfile::TempDir` を使い、`$HOME`
   配下に状態を書くバイナリ（`backlog` の `~/.backlog`、`condukt` の `~/.condukt`）には fresh な
   `$HOME` を割り当てる。開発者の実 state を触らない。ネットワークも使わない。
-- **`flow` は turn を壊さない** — `flow propose` は pending が 0 でも backlog 欠落/エラーでも常に
-  exit 0（`contract_a_*` が `status.success()` を要求）。
 - **routing はタスク集合を保存する** — `fugu-router route` は全 task id を保存し、各 task に
   haiku/sonnet/opus のいずれかの `suggested_model` を割り当て、`--report` に valid JSON を書く。
 - **class ごとの配置規約** — `condukt schedule` は `gated` task を必ず `gated` バケットへ隔離し、
@@ -37,15 +41,13 @@ mock を一切使わずに flow パイプラインの「integration contract（�
 
 ## 振る舞い
 
-3 つの契約グループに分かれる。全テストは `#[test]` で、bins 未ビルド時は冒頭で skip する。
+`tests/e2e.rs` は契約グループに分かれる（A は廃止、B と C が現行）。全テストは `#[test]` で、
+bins 未ビルド時は冒頭で skip する。
 
-- **Contract A — directive injection（`flow propose` → `backlog`）**: `flow propose` が PATH 上の
-  `backlog` へ `backlog list --project <cwd> --status pending --json` をシェルアウトする hop を pin。
-  - `contract_a_empty_project_is_silent` — 空プロジェクト（backlog 空）では stdout を **無出力**にし、
-    exit 0 であること。
-  - `contract_a_pending_item_is_announced` — `backlog add --title ZZTASK --priority p1` で1件 seed
-    （seed と propose で `$HOME` を共有）し、propose の出力に件数 `1 件` と title `ZZTASK` が含まれること。
-    `$TMPDIR` の symlink 差異を避けるため `--project` は canonicalize したパスを使う。
+- **Contract A — 廃止（2026-08-20）**: `flow propose` → `backlog` の shell-out hop を pin していた
+  （空プロジェクトで無出力・pending 1 件で件数と title を出力）。**hop そのものが無くなった**ので契約も
+  撤去した — 呼び出す側の SessionStart hook とバイナリが flow 0.2.7 で削除されている。書き換えでは
+  なく削除なのは、pin する対象が残っていないため。
 - **Contract B — routing + schedule + state（各 hop を単独で pin）**:
   - `contract_b_route_preserves_ids_and_models` — `route --file <d.json> --report <r.json>`。routed
     stdout が valid JSON で全3 id が生存、各 `suggested_model` が haiku/sonnet/opus、`--report` が
@@ -69,9 +71,11 @@ mock を一切使わずに flow パイプラインの「integration contract（�
 - `Cargo.toml` — `publish = false`、依存は無し、dev-dependencies に `serde_json` / `tempfile`
   （いずれも workspace 継承）。real bins は依存として宣言せず、実行時に `bin()` で探索する。
 - `src/lib.rs` — 意図的に空（doc-comment のみ）。ライブラリコードは持たない。
-- `tests/e2e.rs` — 全契約の実体。ヘルパ `bin`（バイナリ解決）/ `bin_dir`（`flow` の親 dir、child の
-  PATH 前置用）/ `path_with`（PATH 合成）/ `decomposition_json`（固定 3-task fixture）/ `scheduled_ids`
-  （schedule 全バケットの id 和集合）。テスト: `contract_a_empty_project_is_silent`,
-  `contract_a_pending_item_is_announced`, `contract_b_route_preserves_ids_and_models`,
+- `tests/e2e.rs` — Contract B/C の実体。ヘルパ `bin`（バイナリ解決）/ `decomposition_json`
+  （固定 3-task fixture）/ `scheduled_ids`（schedule 全バケットの id 和集合）。`bin_dir` と `path_with`
+  は Contract A（子プロセスの PATH に `flow` の隣を前置する必要があった唯一のテスト）と一緒に削除した
+  — B/C は絶対パスでバイナリを起動する。テスト: `contract_b_route_preserves_ids_and_models`,
   `contract_b_schedule_routes_classes`, `contract_b_state_roundtrip_gate_passes_when_all_verified`,
   `contract_c_connected_chain_route_schedule_state_gate`。
+- `tests/flow_skill_queue_contract.rs` — `crates/flow/skills/flow/SKILL.md` をテキストとして読む
+  skill 契約（`crates/flow/tests/` から移設）。バイナリを一切起動しないので skip 経路も持たない。

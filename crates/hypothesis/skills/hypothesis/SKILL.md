@@ -1,3 +1,10 @@
+---
+name: hypothesis
+description: PDO（プロダクト発見）の仮説ライフサイクルを管理する。仮説の追加・検証待ち・検証・棄却・一覧表示と、RAT（最も危険な前提のデリスク）・confidence 設定・compass ゴールへの紐づけを扱う。
+argument-hint: "[サブコマンド: add / validate / reject / await-measurement / assume / rat / tested / confidence / list]"
+allowed-tools: Bash(hypothesis:*), Read
+---
+
 # hypothesis スキル
 
 PDO（プロダクト発見）の仮説ライフサイクルを管理します。仮説の追加・検証・棄却・一覧表示を行い、compass のゴールと連動させることで、発見活動を構造化します。

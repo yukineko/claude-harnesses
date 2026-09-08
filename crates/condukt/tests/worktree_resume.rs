@@ -101,6 +101,12 @@ impl Fixture {
         // to "no runs ⇒ everything is dead" — and therefore never, here, to
         // "everything is free to resume").
         std::fs::create_dir_all(&state_dir).unwrap();
+        // Claude Code's per-project transcript root, for the same reason: an
+        // ABSENT store is "whether a session works here was never looked up",
+        // which the death rule resolves to undetermined — and therefore never
+        // to "free to resume". Present-but-empty is the observation that no
+        // session has ever run in these worktrees.
+        std::fs::create_dir_all(home.join(".claude").join("projects")).unwrap();
 
         run_git(&repo, &["init", "-q", "-b", "main"]);
         run_git(&repo, &["config", "user.email", "t@t.t"]);
@@ -152,9 +158,24 @@ impl Fixture {
             .current_dir(&self.repo)
             .env("HOME", &self.home)
             .env("CONDUKT_WORKTREE_BASE", &self.wt_base)
+            // Collapse the multi-sample window to zero so these tests need no
+            // wall-clock wait. It does NOT turn one observation into a freeze:
+            // the engine still requires two samples with an unchanged
+            // fingerprint, which is what `settle` below supplies.
+            .env("HARNESS_PROGRESS_WINDOW_SECS", "0")
             .env_remove("CONDUKT_DISABLE")
             .output()
             .expect("condukt runs")
+    }
+
+    /// Advance the progress state machine by one probe, discarding the result.
+    ///
+    /// Death is established, not inferred from the absence of a claim, and a
+    /// single observation can never establish a freeze — so any test whose
+    /// fixture precondition is "nobody is working here" must anchor a first
+    /// sample before reading the verdict.
+    fn settle(&self) {
+        let _ = self.reconcile_json();
     }
 
     fn json_of(&self, args: &[&str]) -> serde_json::Value {
@@ -453,9 +474,13 @@ fn interrupted_failed_task_worktree_is_resumable() {
     let rid = f.init_run(r#"[{"id":"t1","title":"x","touched_files":["a.rs"],"deps":[],"class":"serial","done_criteria":"d"}]"#);
     f.set_task(&rid, "t1", "failed", &wt, "feat/interrupted");
 
-    // Fixture precondition, read from the report the new path consumes: with no
-    // RUNNING task claiming it and a fully readable scan, this worktree is
-    // POSITIVELY unoccupied. `dead` is what makes `resumable` reachable at all.
+    // Fixture precondition, read from the report the new path consumes: this
+    // worktree is POSITIVELY unoccupied — no RUNNING task claims it (from a
+    // fully readable scan) AND its own signals were observed frozen across the
+    // window with no session transcript growing against its path. `dead` is
+    // what makes `resumable` reachable at all, and it now takes two probes to
+    // establish, because the absence of a claim alone never established it.
+    f.settle();
     let recon = f.reconcile_json();
     let e = recon["entries"]
         .as_array()
@@ -763,6 +788,9 @@ fn resume_command_hands_off_to_state_resume_context() {
     let rid = f.init_run(r#"[{"id":"t1","title":"x","touched_files":["a.rs"],"deps":[],"class":"serial","done_criteria":"d"}]"#);
     f.set_task(&rid, "t1", "failed", &wt, "feat/handoff");
 
+    // Establish death before reading the offer: an unclaimed worktree is
+    // undetermined on a first probe, and undetermined is not an offer.
+    f.settle();
     let resume = f.resume_json();
     let c = candidate(&resume, "wt-handoff");
     let cmd = c["resume_command"]

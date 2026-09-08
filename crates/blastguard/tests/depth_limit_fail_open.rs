@@ -434,7 +434,22 @@ fn a_deny_from_a_later_rule_in_the_same_segment_survives_the_depth_cap() {
 /// loosened. Breadth-without-depth is what still isolates the budget bound.
 fn budget_hog() -> String {
     let unit = "find . -exec find . -exec find . -exec echo {} + + +";
-    vec![unit; 100].join(" ; ")
+    // The repeat count is calibrated, not arbitrary, and it moved once already
+    // when `analyze_find` started stripping the `+`/`\;` terminator off an
+    // -exec tail before re-analysing it (that token used to be re-analysed as
+    // an operand, so each unit cost more nodes). Measured with the built hook
+    // binary on this exact unit string:
+    //
+    //     100  -> ALLOW (silent)   <- analysis now COMPLETES; benign `echo`
+    //     200  -> ask: "…too complex to analyse within the safety budget"
+    //     400  -> ask: (same)
+    //     1600 -> ask: (same)
+    //
+    // 300 keeps this off the boundary. If a future change makes the analyser
+    // cheaper again, this test fails LOUDLY (the verdict becomes Allow) rather
+    // than silently testing nothing — which is the property the count exists to
+    // preserve. Re-measure and re-tune; do not weaken the assertions below.
+    vec![unit; 300].join(" ; ")
 }
 
 /// The sibling condition. Both mean "analysis did not finish", but they are

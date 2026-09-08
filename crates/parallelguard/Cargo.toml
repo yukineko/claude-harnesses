@@ -1,0 +1,25 @@
+[package]
+rust-version.workspace = true
+name = "parallelguard"
+version = "0.1.0"
+edition = "2021"
+description = "Per-session concurrency cap for Claude Code: a PreToolUse hook that counts in-flight Bash calls and subagents and denies the one that would exceed the cap."
+license = "MIT"
+
+[[bin]]
+name = "parallelguard"
+path = "src/main.rs"
+
+[dependencies]
+harness-core = { path = "../harness-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+# ワークスペースの [workspace.lints.clippy] を継承する（unwrap_used / expect_used /
+# panic = deny）。判定を持つ crate では panic は判定不能そのもの — この crate では
+# 「判定不能なら deny」に倒すので、production 側で panic できないことが前提になる。
+[lints]
+workspace = true

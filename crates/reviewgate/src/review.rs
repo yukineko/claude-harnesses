@@ -195,7 +195,7 @@ fn decide_subprocess(
         // recover), then give up *loudly* so a permanently broken reviewer can
         // never trap the turn. Escape hatches (`reviewgate skip --reason ...`,
         // REVIEWGATE_DISABLE=1) remain available throughout and are named in the
-        // reason, satisfying the never-break-a-turn invariant. `Undetermined`
+        // reason, satisfying the escapable-block invariant. `Undetermined`
         // (the reviewer could not run to a conclusion) resolves here exactly
         // like the old `Error` arm did — never to Allow/Clean.
         Verdict::Undetermined(r) => {
@@ -274,7 +274,7 @@ fn allow(tag: &'static str, st: &crate::state::SessionState) -> Decision {
 /// permanently-too-large diff never traps the turn and is never mistaken for a
 /// clean review. Escape hatches (raise `max_diff_bytes`, `reviewgate skip --reason ...`,
 /// `REVIEWGATE_DISABLE=1`) stay available throughout and are named in the reason,
-/// satisfying the never-break-a-turn invariant. Split out from `evaluate` so it
+/// satisfying the escapable-block invariant. Split out from `evaluate` so it
 /// is unit-testable without spawning git.
 fn decide_truncated(cfg: &Config, files: Vec<String>, prior_attempts: u32) -> Decision {
     let attempts = prior_attempts + 1;
@@ -312,7 +312,7 @@ fn decide_truncated(cfg: &Config, files: Vec<String>, prior_attempts: u32) -> De
 /// chance to clear), then give up *loudly* with a distinct tag so a persistently
 /// broken git can never trap the turn. Escape hatches (`reviewgate skip --reason ...`,
 /// `REVIEWGATE_DISABLE=1`) stay available throughout and are named in the
-/// reason, satisfying the never-break-a-turn invariant. No hash is recorded
+/// reason, satisfying the escapable-block invariant. No hash is recorded
 /// (there is no diff to certify). Split out so it is unit-testable without git.
 fn decide_scan_failed(cfg: &Config, prior_attempts: u32) -> Decision {
     let attempts = prior_attempts + 1;
@@ -372,11 +372,27 @@ fn file_list(files: &[String]) -> String {
     s
 }
 
-/// inject mode: ask the running agent to review its own diff.
+/// inject mode: ask the running agent to review the working tree's uncommitted
+/// diff.
+///
+/// The list is **not** attributed. [`crate::git::changed_files`] unions
+/// `git diff --name-only`, `git diff --cached --name-only` and
+/// `git ls-files --others --exclude-standard` over the whole checkout — no
+/// `git blame`, no author, no session id — so a file the human edited, or one
+/// another session left behind (CLAUDE.md §8 says one must always be assumed to
+/// exist), lands in this list identically. Calling it 「自分の変更」 asserted an
+/// authorship reviewgate never checked, so the message names the scope it really
+/// observed and says authorship is unverified.
 fn inject_reason(cfg: &Config, files: &[String], attempt: u32) -> String {
     format!(
-        "🔍 reviewgate: 完了前に、自分の変更をコードレビューしてください (round {attempt}/{max}).\n\n\
-         レビュー対象 ({n} files):\n{list}\n\
+        "🔍 reviewgate: 完了前に、この作業ツリーの未コミット変更をコードレビューしてください \
+         (round {attempt}/{max}).\n\n\
+         レビュー対象 — この作業ツリーの未コミット変更 ({n} files):\n{list}\n\
+         この一覧は未コミット変更（unstaged / staged の差分と追跡外ファイル）の和集合であり、\
+         reviewgate は各ファイルの作成者を検証していません。あなたが触っていないファイル\
+         （人間の編集や、併走する別セッションの変更）が混じっている可能性があります。\
+         あなたが書いたものではないと判断したファイルは、その旨を述べてレビュー対象から外して\
+         構いません。\n\n\
          `git diff` で差分を確認し、次の観点でレビューしてください:\n{rubric}\n\n\
          実在する問題が見つかれば修正してから完了してください。\
          レビューの結果と対応を簡潔に報告すること。\
@@ -392,10 +408,16 @@ fn inject_reason(cfg: &Config, files: &[String], attempt: u32) -> String {
 }
 
 /// subprocess mode: inject the independent reviewer's findings.
+///
+/// Same unattributed list as [`inject_reason`], from the same
+/// [`crate::git::changed_files`] call, so it gets the same honest label. The
+/// findings themselves ARE a measurement (a reviewer really ran and really
+/// emitted them) and are reported as such.
 fn subprocess_reason(files: &[String], findings: &str, attempt: u32, max: u32) -> String {
     format!(
         "🔍 reviewgate: 独立レビュアーが変更に問題を指摘しました (round {attempt}/{max}).\n\n\
-         レビュー対象 ({n} files):\n{list}\n\
+         レビュー対象 — この作業ツリーの未コミット変更 ({n} files。作成者は検証していません): \
+         \n{list}\n\
          --- 指摘 ---\n{findings}\n\
          ------------\n\n\
          妥当な指摘を修正してから完了してください。誤検知だと判断した指摘は、理由を述べてスキップして構いません。\n\n\
@@ -607,7 +629,7 @@ mod tests {
             }
             Decision::Block { tag, reason, .. } => {
                 assert_eq!(tag, "reviewer-unavailable");
-                // The never-break-a-turn invariant: the reason must always hand
+                // The escapable-block invariant: the reason must always hand
                 // the human an escape path so a broken reviewer can't trap them.
                 assert!(
                     reason.contains("REVIEWGATE_DISABLE"),
@@ -681,7 +703,7 @@ mod tests {
     /// A diff truncated to fit max_diff_bytes has an unreviewed tail. It must
     /// BLOCK the stop, never allow it — otherwise the dropped tail bypasses the
     /// gate (the hole this fix closes). The reason must always hand the human a
-    /// way forward (never-break-a-turn), and no hash may be recorded (the hash
+    /// way forward (the escapable-block invariant), and no hash may be recorded (the hash
     /// can't cover the tail, so "already-reviewed" must not later certify it).
     #[test]
     fn truncated_diff_blocks_it_does_not_allow() {
@@ -742,7 +764,7 @@ mod tests {
     /// A git command that errored inside a real repo leaves the change set
     /// UNDETERMINED. It must BLOCK the stop, never allow it — otherwise a
     /// collapsed-empty scan bypasses the gate (the fail-open this fix closes).
-    /// The reason must always hand the human a way forward (never-break-a-turn),
+    /// The reason must always hand the human a way forward (the escapable-block invariant),
     /// and no hash may be recorded (there is no diff to certify).
     #[test]
     fn failed_git_scan_blocks_it_does_not_allow() {
@@ -790,6 +812,363 @@ mod tests {
             Decision::Block { .. } => {
                 panic!("must give up after max_attempts so a broken git never permanently traps the turn")
             }
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CLAUDE.md §4 — 「自分の変更をコードレビューしてください」 asserts authorship
+    // that reviewgate never checked.
+    //
+    // The file list comes from `crate::git::changed_files`, which unions
+    // `git diff --name-only`, `git diff --cached --name-only` and
+    // `git ls-files --others --exclude-standard` over the WHOLE checkout
+    // (git.rs lines 46–52). No `git blame`, no author, no session attribution.
+    // A file edited by the human user — or by another session sharing the
+    // checkout, which CLAUDE.md §8 says must always be assumed to exist — is
+    // presented to the agent as 「自分の変更」. There is a live instance in this
+    // very worktree: `.githooks/pre-push` was edited by the human, not the
+    // agent, and would be listed here verbatim.
+    //
+    // The verdict predicate is NOT changing: inject mode still blocks and still
+    // asks for a review. The controls below pin that.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Ways an implementer may describe the scope actually observed.
+    const RG_WORKING_TREE_TOKENS: &[&str] = &[
+        "作業ツリー",
+        "ワーキングツリー",
+        "作業ディレクトリ",
+        "チェックアウト",
+        "working tree",
+    ];
+
+    /// Ways an implementer may name authorship / who made the change.
+    const RG_AUTHORSHIP_TOKENS: &[&str] =
+        &["作成者", "変更者", "誰が", "作者", "authorship", "author"];
+
+    /// Ways an implementer may say that authorship was not verified.
+    const RG_UNVERIFIED_TOKENS: &[&str] = &[
+        "検証していません",
+        "検証されていません",
+        "確認していません",
+        "確認されていません",
+        "判別していません",
+        "区別していません",
+        "不明",
+        "not verified",
+        "unverified",
+    ];
+
+    fn inject_files() -> Vec<String> {
+        vec![
+            "src/x.rs".to_string(),
+            // A real file in this worktree that the HUMAN edited, not the
+            // agent. It is exactly what `changed_files` would hand this
+            // function, and exactly what must not be called 「自分の変更」.
+            ".githooks/pre-push".to_string(),
+        ]
+    }
+
+    /// (a) The dishonest claim.
+    #[test]
+    fn inject_reason_does_not_claim_the_listed_files_are_the_agents_own_changes() {
+        let cfg = Config::default();
+        let reason = inject_reason(&cfg, &inject_files(), 1);
+        assert!(
+            !reason.contains("自分の変更"),
+            "reviewgate never checked authorship — the list is every uncommitted change \
+             in the checkout, including the human's and other sessions'. It may not be \
+             called 「自分の変更」.\n--- reason ---\n{reason}"
+        );
+        assert!(
+            !reason.to_lowercase().contains("your own changes"),
+            "same claim in English.\n--- reason ---\n{reason}"
+        );
+    }
+
+    /// (a, positive half) It must describe the list as the working tree's
+    /// uncommitted changes, and say authorship was not verified.
+    #[test]
+    fn inject_reason_describes_the_files_as_unattributed_uncommitted_changes() {
+        let cfg = Config::default();
+        let reason = inject_reason(&cfg, &inject_files(), 1);
+        assert!(
+            reason.contains("未コミット") || reason.contains("コミットされていない"),
+            "the list must be described as the UNCOMMITTED changes (未コミット).\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            RG_WORKING_TREE_TOKENS.iter().any(|t| reason.contains(t)),
+            "the list must be scoped to this working tree / checkout \
+             (one of {RG_WORKING_TREE_TOKENS:?}).\n--- reason ---\n{reason}"
+        );
+        assert!(
+            RG_AUTHORSHIP_TOKENS.iter().any(|t| reason.contains(t)),
+            "the message must name authorship (one of {RG_AUTHORSHIP_TOKENS:?}).\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            RG_UNVERIFIED_TOKENS.iter().any(|t| reason.contains(t)),
+            "the message must state that authorship was NOT verified \
+             (one of {RG_UNVERIFIED_TOKENS:?}).\n--- reason ---\n{reason}"
+        );
+    }
+
+    /// (b) ANTI-VACUITY #1. Whatever the wording becomes, the reason must still
+    /// list every file, still carry the rubric verbatim, still ask for a
+    /// review, and still name the escape hatches.
+    #[test]
+    fn inject_reason_still_lists_the_files_carries_the_rubric_and_asks_for_a_review() {
+        let cfg = Config::default();
+        let files = inject_files();
+        let reason = inject_reason(&cfg, &files, 1);
+        for f in &files {
+            assert!(
+                reason.contains(f.as_str()),
+                "the reason must still list {f:?}\n--- reason ---\n{reason}"
+            );
+        }
+        assert!(
+            reason.contains(cfg.rubric.trim()),
+            "the reason must still carry the configured rubric verbatim.\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            reason.contains("レビュー"),
+            "the reason must still ask for a review.\n--- reason ---\n{reason}"
+        );
+        for tok in ["reviewgate skip", "REVIEWGATE_DISABLE", "git diff"] {
+            assert!(
+                reason.contains(tok),
+                "the reason must still contain {tok:?}\n--- reason ---\n{reason}"
+            );
+        }
+    }
+
+    /// (b) ANTI-VACUITY #2. The verdict predicate is unchanged: inject mode on
+    /// a new diff still BLOCKS, and the reason it blocks with is the one the
+    /// tests above constrain.
+    #[test]
+    fn inject_mode_still_blocks_and_the_block_carries_that_reason() {
+        let cfg = Config::default();
+        let files = inject_files();
+        let reason = inject_reason(&cfg, &files, 1);
+        assert!(
+            !reason.trim().is_empty(),
+            "an empty reason would satisfy every negative assertion above while telling \
+             the agent nothing — it is not an acceptable fix"
+        );
+        assert!(
+            reason.len() > 200,
+            "the injected review request must remain a real instruction, not a stub \
+             ({} bytes)\n--- reason ---\n{reason}",
+            reason.len()
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // TWIN PATH — `subprocess_reason` renders the SAME unattributed list.
+    //
+    // `evaluate` builds `files` exactly ONCE (from `crate::git::changed_files`:
+    // the union of `git diff --name-only`, `git diff --cached --name-only` and
+    // `git ls-files --others --exclude-standard` over the whole checkout — no
+    // `git blame`, no author, no session id) and hands that same vector to
+    // whichever mode is configured. So authorship is exactly as unchecked in
+    // subprocess mode as it was in inject mode, and the inject pins above are
+    // worth little if the twin path still asserts it.
+    //
+    // What is NOT unverified here: the findings. In subprocess mode an
+    // independent reviewer really ran and really emitted them — that is a
+    // measurement. Softening it into "unverified" would be its own dishonesty
+    // (and would blunt the gate). The tests below pin BOTH halves: the caveat
+    // attaches to the file list, and never to the reviewer's findings.
+    // ══════════════════════════════════════════════════════════════════════
+
+    fn subprocess_files() -> Vec<String> {
+        vec![
+            "src/x.rs".to_string(),
+            // Same live example as `inject_files`: edited by the HUMAN in this
+            // worktree, yet indistinguishable to `changed_files`.
+            ".githooks/pre-push".to_string(),
+        ]
+    }
+
+    /// Findings as an independent reviewer would really emit them. Deliberately
+    /// free of the token vocabularies above and of the block delimiters, so the
+    /// region assertions below measure the template, not the fixture.
+    const RG_SUBPROCESS_FINDINGS: &str =
+        "- high: 判定不能を `unwrap_or(false)` で握り潰している\n- med: docstring が実挙動と食い違う";
+
+    /// Split a subprocess reason into (everything before the findings block,
+    /// the findings block itself). Panics if the delimiters are gone — losing
+    /// them is itself a regression worth failing on.
+    fn split_findings_block(reason: &str) -> (&str, &str) {
+        let (head, rest) = match reason.split_once("--- 指摘 ---") {
+            Some(p) => p,
+            None => panic!(
+                "the message must still open the reviewer's findings block \
+                 with 「--- 指摘 ---」\n--- reason ---\n{reason}"
+            ),
+        };
+        let (block, _tail) = match rest.split_once("------------") {
+            Some(p) => p,
+            None => panic!(
+                "the message must still close the reviewer's findings block\n\
+                 --- reason ---\n{reason}"
+            ),
+        };
+        (head, block)
+    }
+
+    /// (a) The dishonest claim — the twin path must not make it either.
+    #[test]
+    fn subprocess_reason_does_not_claim_the_listed_files_are_the_agents_own_changes() {
+        let reason = subprocess_reason(&subprocess_files(), RG_SUBPROCESS_FINDINGS, 1, 2);
+        assert!(
+            !reason.contains("自分の変更"),
+            "reviewgate never checked authorship — the list handed to subprocess mode is \
+             the same union of every uncommitted change in the checkout, including the \
+             human's and other sessions'. It may not be called 「自分の変更」.\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            !reason.to_lowercase().contains("your own changes"),
+            "same claim in English.\n--- reason ---\n{reason}"
+        );
+    }
+
+    /// (a, positive half) The list must be described as this working tree's
+    /// uncommitted changes, with authorship explicitly marked unverified. A
+    /// bare 「レビュー対象 (n files)」 does not say it: the agent reads an
+    /// unqualified list under a review order as "these are the changes you are
+    /// answerable for".
+    #[test]
+    fn subprocess_reason_describes_the_files_as_unattributed_uncommitted_changes() {
+        let reason = subprocess_reason(&subprocess_files(), RG_SUBPROCESS_FINDINGS, 1, 2);
+        let (head, _findings) = split_findings_block(&reason);
+        assert!(
+            head.contains("未コミット") || head.contains("コミットされていない"),
+            "the list must be described as the UNCOMMITTED changes (未コミット).\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            RG_WORKING_TREE_TOKENS.iter().any(|t| head.contains(t)),
+            "the list must be scoped to this working tree / checkout \
+             (one of {RG_WORKING_TREE_TOKENS:?}).\n--- reason ---\n{reason}"
+        );
+        assert!(
+            RG_AUTHORSHIP_TOKENS.iter().any(|t| head.contains(t)),
+            "the message must name authorship (one of {RG_AUTHORSHIP_TOKENS:?}).\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            RG_UNVERIFIED_TOKENS.iter().any(|t| head.contains(t)),
+            "the message must state that authorship was NOT verified \
+             (one of {RG_UNVERIFIED_TOKENS:?}).\n--- reason ---\n{reason}"
+        );
+    }
+
+    /// The distinction this mode must keep straight: only AUTHORSHIP of the
+    /// file list is unverified. The findings are a real measurement — an
+    /// independent reviewer actually ran and actually emitted them — so the
+    /// caveat must sit on the list and must NOT bleed onto the findings or the
+    /// headline that reports them. Hedging a measurement is the mirror image of
+    /// asserting an unmeasured one, and it would give the agent a licence to
+    /// dismiss real findings.
+    #[test]
+    fn subprocess_reason_qualifies_the_file_list_but_not_the_reviewers_findings() {
+        let reason = subprocess_reason(&subprocess_files(), RG_SUBPROCESS_FINDINGS, 1, 2);
+        let (head, findings) = split_findings_block(&reason);
+        assert!(
+            RG_UNVERIFIED_TOKENS.iter().any(|t| head.contains(t)),
+            "the unverified-authorship caveat must appear with the file list, before the \
+             findings block (one of {RG_UNVERIFIED_TOKENS:?}).\n--- reason ---\n{reason}"
+        );
+        for t in RG_UNVERIFIED_TOKENS {
+            assert!(
+                !findings.contains(t),
+                "the reviewer's findings are a MEASUREMENT (a reviewer really ran and \
+                 really emitted them) and must not be qualified as unverified; found \
+                 {t:?} inside the findings block.\n--- findings block ---\n{findings}"
+            );
+        }
+        let headline = reason.lines().next().unwrap_or("");
+        for t in RG_UNVERIFIED_TOKENS.iter().chain(RG_AUTHORSHIP_TOKENS) {
+            assert!(
+                !headline.contains(t),
+                "the headline reports the measurement (the reviewer's verdict) and must \
+                 not be hedged with the file-list caveat; found {t:?}.\n\
+                 --- headline ---\n{headline}"
+            );
+        }
+        assert!(
+            headline.contains("独立レビュアー") && headline.contains("指摘"),
+            "the headline must still report that an independent reviewer ran and reported \
+             issues — that part is observed, not inferred.\n--- headline ---\n{headline}"
+        );
+    }
+
+    /// ANTI-VACUITY #1. Whatever the wording becomes, every listed file, the
+    /// file count, and the reviewer's findings must still be rendered — a label
+    /// fix that drops the payload satisfies every negative assertion above
+    /// while telling the agent nothing.
+    #[test]
+    fn subprocess_reason_still_lists_every_file_and_renders_the_findings_verbatim() {
+        let files = subprocess_files();
+        let reason = subprocess_reason(&files, RG_SUBPROCESS_FINDINGS, 1, 2);
+        let (head, findings) = split_findings_block(&reason);
+        for f in &files {
+            assert!(
+                head.contains(f.as_str()),
+                "the reason must still list {f:?} with the reviewed scope\n\
+                 --- reason ---\n{reason}"
+            );
+        }
+        assert!(
+            head.contains(&format!("{} files", files.len())),
+            "the reason must still report how many files are in scope\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            findings.contains(RG_SUBPROCESS_FINDINGS.trim()),
+            "the reviewer's findings must still be rendered verbatim inside the block\n\
+             --- findings block ---\n{findings}"
+        );
+    }
+
+    /// ANTI-VACUITY #2. The message must remain a real instruction: it still
+    /// orders the fixes, still reports the attempt counter, and still names the
+    /// escape hatches, so the block can never trap the turn.
+    #[test]
+    fn subprocess_reason_remains_a_real_instruction_with_escape_hatches() {
+        let reason = subprocess_reason(&subprocess_files(), RG_SUBPROCESS_FINDINGS, 3, 5);
+        assert!(
+            !reason.trim().is_empty(),
+            "an empty reason would satisfy every negative assertion above while telling \
+             the agent nothing — it is not an acceptable fix"
+        );
+        assert!(
+            reason.len() > 200,
+            "the injected findings report must remain a real instruction, not a stub \
+             ({} bytes)\n--- reason ---\n{reason}",
+            reason.len()
+        );
+        assert!(
+            reason.contains("修正"),
+            "the reason must still tell the agent to fix the valid findings.\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            reason.contains("round 3/5"),
+            "the reason must still report the bounded attempt counter.\n\
+             --- reason ---\n{reason}"
+        );
+        for tok in ["reviewgate skip --reason", "REVIEWGATE_DISABLE"] {
+            assert!(
+                reason.contains(tok),
+                "the reason must still name the {tok:?} escape hatch\n\
+                 --- reason ---\n{reason}"
+            );
         }
     }
 }

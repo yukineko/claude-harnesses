@@ -63,7 +63,7 @@
 判定ロジック（`review::evaluate`）:
 
 - **`inject` モード（既定）** — 新しい diff 状態ごとに一度だけ停止をブロックし、レビュー用ルーブリック
-  （`inject_reason`, `cfg.rubric`）を注入する。実行中エージェントが自分の変更をレビューし完了前に直す。追加
+  （`inject_reason`, `cfg.rubric`）を注入する。実行中エージェントが作業ツリーの未コミット変更をレビューし完了前に直す。一覧は `changed_files` の和集合で作成者を検証しないため、人間や別セッションの変更も含まれうる旨がメッセージ本文に明示される。追加
   プロセス無し・コスト無料。
 - **`subprocess` モード** — `run_reviewer` が `reviewer_cmd`（既定 `claude -p`）にレビュープロンプトを stdin で
   渡し stdout の findings を読む。`classify` は空 or 先頭 `LGTM` を `Clean`、それ以外を `Issues` と分類。crash/

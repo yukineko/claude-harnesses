@@ -16149,3 +16149,58 @@ updated_at = 1788898809
 weight = 0.0
 issue_number = 454
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/454"
+
+[[task]]
+id = "cfd0cc76"
+title = "propguard inject mode assumes the unattributed diff is the agents own code"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = """
+reviewgate の 「自分の変更」 と同じクラスの主張が propguard の inject 経路にも残っている。
+
+crates/propguard/README.ja.md の inject 行: 「動いているエージェントが自分のコードを各プロパティで自己検証し」。
+propguard の対象ファイルも crates/propguard/src/git.rs 由来の未コミット変更の和集合であり、blame も author も
+見ていない。人間の編集や併走セッションの変更が 「自分のコード」 として提示されうる。
+
+reviewgate 側 (inject_reason / subprocess_reason) は 2026-09-09 に修正済み・テストで pin 済み。
+propguard 側は未修正・未 pin。mirror-gap の典型 ([[gate-crate-audit-mirror-gaps]] のパターン: 修正が
+片方のミラーにだけ着地する)。
+
+やること: block_reason の 「対象ファイル」 ラベルを reviewgate と同じ水準にする (作成者未検証である旨を
+明示)。テストは利害関係のない agent に書かせること (CLAUDE.md 2(a))。"""
+created_at = 1788900659
+updated_at = 1788900659
+weight = 0.0
+issue_number = 455
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/455"
+
+[[task]]
+id = "809cf00f"
+title = "harness_core transcript recent_turns maps every failure to an empty Vec"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+crates/harness-core/src/transcript.rs:141 の recent_turns は、失敗 (transcript path 不明 / open 失敗 /
+JSON パース不能) をすべて Vec::new() に写す。空 Vec は下流で 「直近の指示は無かった」 と読める。
+CLAUDE.md 3 の 「エラー時に空の集合を返さない」 に真っ向から反する。
+
+現時点の消費者は observability のみ (context-governor, ctxrot の 2 箇所) なので、今この関数を
+Determination<Vec<Turn>> へ硬化させても判定経路を一切壊さない。硬化は 「今なら安い」 状態。
+
+重要なのは、この fail-open が 9ec045a1 (ゲートをユーザーの指示に接続する) の step 2 の前提に
+なっていること: ゲートが指示を読むようになった瞬間、この空 Vec は 「指示が無いので何も監査しない
+= 素通り」 になる。指示読み取りを載せる前に硬化しておくべき順序依存がある。
+
+やること: 戻り値を Determination<Vec<Turn>> にし、既存の observability 呼び出し 3 箇所は
+Undetermined を forwarding する (再記録しない — [[undet-private-payload-blocks-bypass]])。
+forwarding arm ごとに固有の behavioural test が要る ([[forwarding-arms-have-zero-kill-rate]]:
+=> {} はコンパイルが通り、Determination に対する assert は RED を観測できない)。"""
+created_at = 1788900677
+updated_at = 1788900677
+weight = 0.0
+issue_number = 456
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/456"

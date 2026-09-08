@@ -132,7 +132,10 @@ fn exit_on_err(r: anyhow::Result<()>) {
 /// The Stop hook. Always exits 0 toward Claude (the `decision` field, not the
 /// exit code, is what blocks a stop). Returns exit 1 only in manual CLI mode.
 ///
-/// The never-break-a-turn panic guard lives in `harness_core::gate::run`: a
+/// The panic barrier lives in `harness_core::gate::run`. It is deliberately
+/// NOT a "never break the turn" guard — CLAUDE.md §1 names that phrase in a
+/// verdict-path docstring as a red flag, because it is what justified mapping
+/// panics to `allow`. This barrier is fail-closed and merely bounded: a
 /// panic in `review_run` fails CLOSED in hook mode (emits a `decision:block`,
 /// bounded to one block via `stop_hook_active`) and is surfaced (exit 1) in
 /// manual CLI mode. Real `process::exit` calls inside `review_run` terminate

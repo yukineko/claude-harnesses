@@ -9,7 +9,10 @@
 //! derives 3–5 semantic *properties* from it (idempotence, error-path-returns-Err,
 //! output-schema stability, bounds/monotonicity, no-partial-write, determinism —
 //! a keyword taxonomy inspired by PGS, arXiv:2506.18315), checks the generated
-//! code against them, and BLOCKS when fewer than a configured `threshold` hold.
+//! code against them, and BLOCKS until at least a configured `threshold` of them
+//! is verified. In `subprocess` mode that is a measured count of PASSes; in
+//! `inject` mode nothing has been judged yet, and the block reason says so
+//! rather than reporting the unverified state as a count of failures.
 //!
 //! Two modes, like reviewgate:
 //!   * `inject` — block once per new diff and inject the property checklist so the
@@ -18,7 +21,10 @@
 //!     `PROP <id>: PASS|FAIL` verdict per property; propguard counts the PASSes.
 //!
 //! Failure modes are split deliberately (mirroring the sibling gates):
-//!   * a *harness* error (bad config, no git, our own bug) → exit 0, allow.
+//!   * a *harness* error that is an observed ABSENCE of scope (no git repo,
+//!     unreadable config falling back to defaults) → exit 0, allow. An error
+//!     that leaves the answer UNDETERMINED does not allow — see the checker
+//!     and panic clauses below (CLAUDE.md §3).
 //!   * no done_criteria / nothing checkable → allow (never invent a finding).
 //!   * fewer than `threshold` properties satisfied → block (bounded, escapable).
 //!   * a *checker* that itself fails → block (bounded) then give up loudly, so a

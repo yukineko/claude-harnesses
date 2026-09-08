@@ -197,9 +197,18 @@ fn render_outcome(o: &Outcome) -> String {
 /// The reason string injected back into the model when the stop is blocked.
 pub fn block_reason(v: &GateReport, attempt: u32, max: u32) -> String {
     let failing = v.blocking();
+    // Report the observation, not an inference about work donegate cannot see.
+    // Everything it knows is in `GateReport`: which configured checks ran and
+    // what they exited with. It never reads the instruction, the done_criteria
+    // or the conversation — and in this repo the workspace-wide checks routinely
+    // fail on ANOTHER session's changes (CLAUDE.md §8's measured attribution
+    // bug), so "not done yet" was not even reliably true.
     let mut out = format!(
-        "🚦 donegate: not done yet — {} required check(s) failed (attempt {attempt}/{max}). \
-         Fix them, then finish.\n",
+        "🚦 donegate: {} required check(s) failed (attempt {attempt}/{max}). Fix them, then \
+         finish.\n\
+         donegate ran only its configured checks and read their exit codes; it did not inspect \
+         the user's task or instruction. A block here means a required check exited non-zero — \
+         it is not a claim about whether the task itself is finished.\n",
         failing.len()
     );
     for o in &failing {
@@ -613,5 +622,163 @@ mod tests {
         let lower = report.to_lowercase();
         assert!(!lower.contains("no git repo"), "got:\n{report}");
         assert!(!lower.contains("undetermined"), "got:\n{report}");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CLAUDE.md §4 — "not done yet" is a claim about the USER'S TASK, and
+    // donegate never inspected the user's task.
+    //
+    // Everything donegate observes is in `GateReport`: which configured checks
+    // ran and what their exit codes were. It does not read the instruction, the
+    // done_criteria, or the conversation. "N required check(s) failed" is an
+    // observation; "not done yet" is an inference about work donegate cannot
+    // see — and in this repo the workspace-wide checks routinely fail on ANOTHER
+    // session's changes (CLAUDE.md §8's measured attribution bug), so the
+    // inference is not even reliably true.
+    //
+    // The verdict predicate is NOT changing. The controls below pin that the
+    // failing checks are still rendered and that a zero-failure report still
+    // does not claim a failure.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Ways an implementer may say donegate did not look at the user's task.
+    const DONEGATE_NOT_INSPECTED_TOKENS: &[&str] = &[
+        "did not inspect",
+        "does not inspect",
+        "did not examine",
+        "did not look at",
+        "has not inspected",
+        "makes no claim",
+        "no claim about",
+        "says nothing about",
+        "cannot tell whether",
+        "判定していません",
+        "検査していません",
+        "見ていません",
+    ];
+
+    fn outcome(name: &str, passed: bool) -> Outcome {
+        Outcome {
+            name: name.to_string(),
+            cmd: format!("cargo {name} --check"),
+            passed,
+            exit_code: Some(if passed { 0 } else { 1 }),
+            timed_out: false,
+            spawn_error: None,
+            duration_secs: 1.5,
+            output_tail: if passed {
+                String::new()
+            } else {
+                "Diff in src/main.rs at line 10".to_string()
+            },
+            optional: false,
+        }
+    }
+
+    fn report_with(ran: Vec<Outcome>) -> GateReport {
+        GateReport {
+            ran,
+            skipped: Vec::new(),
+            scope: files_scope(),
+        }
+    }
+
+    /// (a) The dishonest claim.
+    #[test]
+    fn block_reason_does_not_claim_the_users_task_is_not_done() {
+        let reason = block_reason(&report_with(vec![outcome("fmt", false)]), 1, 3);
+        let lower = reason.to_lowercase();
+        assert!(
+            !lower.contains("not done yet"),
+            "donegate observed only the exit codes of its configured checks; it never \
+             inspected the user's task, so it may not assert the task is not done.\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            !lower.contains("まだ完了していません"),
+            "same claim in Japanese.\n--- reason ---\n{reason}"
+        );
+    }
+
+    /// (a, positive half) It must state what it actually observed and that the
+    /// user's task / instruction was not inspected.
+    #[test]
+    fn block_reason_states_it_did_not_inspect_the_users_task() {
+        let reason = block_reason(&report_with(vec![outcome("fmt", false)]), 1, 3);
+        let lower = reason.to_lowercase();
+        assert!(
+            lower.contains("required check") && lower.contains("failed"),
+            "the block reason must still report the observation it DID make: N required \
+             check(s) failed.\n--- reason ---\n{reason}"
+        );
+        assert!(
+            lower.contains("task") || lower.contains("instruction") || reason.contains("タスク"),
+            "the block reason must name the thing it did NOT inspect (the user's task / \
+             instruction).\n--- reason ---\n{reason}"
+        );
+        assert!(
+            DONEGATE_NOT_INSPECTED_TOKENS
+                .iter()
+                .any(|t| lower.contains(&t.to_lowercase())),
+            "the block reason must state that donegate did not inspect the user's task \
+             (one of {DONEGATE_NOT_INSPECTED_TOKENS:?}).\n--- reason ---\n{reason}"
+        );
+    }
+
+    /// (b) ANTI-VACUITY #1. The failing check names, commands, statuses and
+    /// captured output must survive the rewording.
+    #[test]
+    fn block_reason_still_renders_the_failing_check_names_and_output() {
+        let reason = block_reason(
+            &report_with(vec![outcome("fmt", false), outcome("clippy", true)]),
+            2,
+            3,
+        );
+        for tok in [
+            "fmt",
+            "cargo fmt --check",
+            "exit 1",
+            "Diff in src/main.rs at line 10",
+            "donegate skip",
+            "DONEGATE_DISABLE",
+            "2/3",
+        ] {
+            assert!(
+                reason.contains(tok),
+                "the block reason must still contain {tok:?}\n--- reason ---\n{reason}"
+            );
+        }
+        assert!(
+            reason.contains('1'),
+            "the reason must still report the REAL failing count (1 here)\n\
+             --- reason ---\n{reason}"
+        );
+    }
+
+    /// (b) ANTI-VACUITY #2. A report with zero failing checks must not produce
+    /// a message claiming a check failed. Pinned by contrast so an implementer
+    /// cannot hardcode a count or a check name.
+    #[test]
+    fn a_report_with_no_failing_checks_does_not_claim_a_failing_check() {
+        let all_green = report_with(vec![outcome("fmt", true), outcome("clippy", true)]);
+        assert!(
+            !all_green.verdict().blocks(),
+            "the verdict predicate must not change: zero failing required checks allows"
+        );
+        let green_msg = block_reason(&all_green, 1, 3);
+        assert!(
+            !green_msg.contains("fmt ("),
+            "no check failed, so no check may be rendered as failing.\n--- reason ---\n{green_msg}"
+        );
+        let red_msg = block_reason(&report_with(vec![outcome("fmt", false)]), 1, 3);
+        assert_ne!(
+            green_msg, red_msg,
+            "the message must be derived from the real outcomes, not a fixed string"
+        );
+        assert!(
+            green_msg.contains('0'),
+            "a zero-failure report must report zero, not an invented count.\n\
+             --- reason ---\n{green_msg}"
+        );
     }
 }

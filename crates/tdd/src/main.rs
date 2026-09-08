@@ -1,14 +1,24 @@
 //! tdd — a test-first gate for Claude Code.
 //!
-//! `gate` is the **Stop** hook: it blocks the stop when implementation code was
-//! added with no accompanying test (you must write tests), and feeds the reason
-//! back so the agent writes one and continues. `red` / `green` / `verify` make
-//! test-first a *verifiable* artifact for the `/tdd` skill.
+//! `gate` is the **Stop** hook: it blocks the stop when implementation lines
+//! were added and no test is visible in the *uncommitted* changes, and feeds the
+//! reason back so the agent writes one and continues. It reads only the working
+//! tree — the unstaged and staged diffs plus untracked files, all relative to
+//! HEAD (`git.rs`) — and never already-committed tests, so the block reports
+//! "no test in the uncommitted changes", not "this change has no test".
+//! `red` / `green` / `verify` make test-first a *verifiable* artifact for the
+//! `/tdd` skill.
 //!
-//! Failure modes are split deliberately:
-//!   * a *harness* error (our own bug, unreadable git) → exit 0, allow the stop.
-//!     tdd must never trap a turn because it broke.
-//!   * a *missing test* → block on purpose, with an actionable reason.
+//! Failure modes are split deliberately, and all three resolve to the
+//! restricted side (CLAUDE.md §3 — "cannot determine" is not "fine"):
+//!   * *no test in the uncommitted diff* → block on purpose, with an
+//!     actionable reason.
+//!   * an *undetermined changeset* (a `git` command errored inside a real repo)
+//!     → also blocks. A collapsed scan must never read as "nothing changed".
+//!   * a *panic inside the gate* → `harness_core::gate::run::run_guarded` fails
+//!     CLOSED: it blocks and surfaces the crash. Only a second consecutive
+//!     panic falls through to allow, bounded by `stop_hook_active`, so a
+//!     genuinely broken tdd still cannot trap the turn forever.
 
 mod config;
 mod gate;
@@ -33,7 +43,7 @@ use model::HookInput;
 #[command(
     name = "tdd",
     version,
-    about = "Test-first gate for Claude Code: block stops when code lands without a test; make RED→GREEN verifiable."
+    about = "Test-first gate for Claude Code: block stops when code lands with no test in the uncommitted changes; make RED→GREEN verifiable."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -42,7 +52,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Stop hook: block the stop when implementation changed without a test.
+    /// Stop hook: block the stop when implementation changed and no test is
+    /// visible in the uncommitted changes (already-committed tests are not read).
     Gate,
     /// Run the tests and require them to FAIL; record the RED proof (test-first).
     Red {
@@ -185,7 +196,10 @@ fn skip_cmd(reason: &str) -> anyhow::Result<()> {
 /// The Stop hook. Always exits 0 toward Claude (the `decision` field, not the
 /// exit code, blocks a stop). Returns exit 1 only in manual CLI mode.
 ///
-/// The never-break-a-turn panic guard lives in `harness_core::gate::run`: a
+/// The panic barrier lives in `harness_core::gate::run`. It is deliberately
+/// NOT a "never break the turn" guard — CLAUDE.md §1 names that phrase in a
+/// verdict-path docstring as a red flag, because it is what justified mapping
+/// panics to `allow`. This barrier is fail-closed and merely bounded: a
 /// panic in `gate_run` fails CLOSED in hook mode (emits a `decision:block`,
 /// bounded to one block via `stop_hook_active`) and is surfaced (exit 1) in
 /// manual CLI mode. Real `process::exit` calls inside `gate_run` terminate

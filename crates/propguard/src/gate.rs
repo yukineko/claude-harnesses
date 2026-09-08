@@ -598,7 +598,7 @@ fn decide_truncated(
 /// contention, a slow mount, a timed-out `git` — a chance to clear), then give
 /// up *loudly* with a distinct tag so a persistently broken git can never trap
 /// the turn. Escape hatches (`propguard skip --reason ...`) stay
-/// available throughout and are named in the reason (never-break-a-turn). No
+/// available throughout and are named in the reason (the escapable-block invariant). No
 /// hash is recorded (there is no diff to certify) and — like the checker-
 /// unavailable / truncation blocks — NO per-property violations are attributed
 /// (nothing was checked), so the fleet-correlation store isn't polluted.
@@ -753,6 +753,32 @@ fn property_list(props: &[Property]) -> String {
 /// properties are (known to be) satisfied. In inject mode `findings` is None and
 /// `satisfied` is 0 (the diff is unverified); in subprocess mode `findings`
 /// carries the checker's per-property verdicts.
+///
+/// **The two modes say different things because they KNOW different things.**
+/// In subprocess mode a checker really ran and really counted, so
+/// `satisfied=N < threshold=M` is a measurement. In inject mode nothing counted
+/// anything — the 0 is this hook's way of spelling "unverified" so that it lands
+/// below any threshold ≥ 1 (see the `Mode::Inject` arm above, which says so
+/// verbatim: "The hook can't itself judge whether each property holds"). Printing
+/// that 0 as `satisfied=0 < threshold=M` reported a NON-judgement in the notation
+/// of a measurement, and told the reader the properties had been checked and found
+/// wanting when they had not been checked at all. CLAUDE.md §3 forbids collapsing
+/// "could not determine" into a verdict about the thing, and §4 forbids prose that
+/// describes behaviour the code does not have; this was both, in the one string the
+/// agent actually reads.
+///
+/// The blocking predicate is unchanged: [`below_threshold`] still decides, and
+/// inject mode still blocks. Only the account of WHY differs.
+///
+/// **The discriminator is the EVIDENCE, not `cfg.mode`.** A first attempt keyed
+/// this on the configured mode and immediately broke `below_threshold_blocks`,
+/// which hands in a real checker count (`satisfied: 1`) under a default config:
+/// the configuration says which path was *intended*, while `findings` says
+/// whether anything actually counted. Keying on intent would have described a
+/// genuine measurement as unverified whenever the two disagreed — the same
+/// confusion of "what we meant to do" with "what we observed" that this whole
+/// change exists to remove. So the measured phrasing is used exactly when a
+/// checker produced per-property verdicts.
 #[allow(clippy::too_many_arguments)]
 fn block_reason(
     _cfg: &Config,
@@ -773,9 +799,32 @@ fn block_reason(
         }
         _ => String::new(),
     };
+    // Was anything actually measured? `findings` is the record of a checker
+    // having emitted per-property verdicts, and it is the honest discriminator
+    // because it is the ONLY thing the two construction sites of `Verified`
+    // disagree on in production: inject builds `{ satisfied: 0, findings: None }`
+    // (gate.rs `Mode::Inject` arm), while `parse_checker_output` returns
+    // `findings: Some(stdout)` and returns `Undetermined` — never `Known` — when
+    // no property was named at all. So a non-empty `findings` is present exactly
+    // when a count exists.
+    let headline = if findings_block.is_empty() {
+        // Nothing judged these properties. Say that, and do not spell the
+        // sentinel 0 in the notation of a count.
+        format!(
+            "🧪 propguard: この差分の semantic property は未検証です (round {attempt}).\n\
+             propguard 自身は各プロパティの成否を判定していません。検証済みのプロパティが\
+             まだ 1 つも無いため停止しているのであって、「成り立たなかった」という測定結果では\
+             ありません。停止解除の条件は threshold={threshold} 個以上を検証して報告することです。"
+        )
+    } else {
+        // A checker ran and produced per-property verdicts. This IS a measurement.
+        format!(
+            "🧪 propguard: 生成コードが満たすべき semantic property が閾値に達していません \
+             (round {attempt}). satisfied={satisfied} < threshold={threshold} (チェッカーによる実測)."
+        )
+    };
     format!(
-        "🧪 propguard: 生成コードが満たすべき semantic property が閾値に達していません \
-         (round {attempt}). satisfied={satisfied} < threshold={threshold}.\n\n\
+        "{headline}\n\n\
          done_criteria から導出した検査対象プロパティ:\n{props}\n\
          対象ファイル ({n} files):\n{list}\n\
          {findings}\
@@ -785,8 +834,6 @@ fn block_reason(
          元の done_criteria:\n  {criteria}\n\n\
          このチェックを1回だけスキップ: `propguard skip --reason ...` を実行 (理由を1行)。\
          完全に無効化: 環境変数 PROPGUARD_DISABLE=1。",
-        attempt = attempt,
-        satisfied = satisfied,
         threshold = threshold,
         props = property_list(props),
         n = files.len(),
@@ -2471,5 +2518,175 @@ PROP output-schema: PASS";
             }
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CLAUDE.md §4 — the block reason must not assert what propguard never
+    // checked.
+    //
+    // In `Mode::Inject` this file's OWN comment says the judgement never
+    // happened: "The hook can't itself judge whether each property holds, so a
+    // new diff is unverified: satisfied = 0". Yet `block_reason` renders
+    // `satisfied=0 < threshold=3` under the headline "semantic property が閾値に
+    // 達していません" — a NON-judgement presented to the reader as a measured
+    // count, plus a headline asserting the properties are not met. The reader
+    // (a human or the agent) cannot tell "we counted 0 satisfied" apart from
+    // "we counted nothing".
+    //
+    // In `Mode::Subprocess` the identical phrasing is HONEST: the checker
+    // really did emit a per-property verdict and propguard really did count the
+    // PASSes. So the fix is mode-dependent, and the subprocess test below is
+    // the anti-vacuity control: deleting or emptying the message fails it.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Ways an implementer may phrase "propguard itself did not judge these
+    /// properties". At least one must appear in an inject-mode block reason.
+    const PROPGUARD_NOT_JUDGED_TOKENS: &[&str] = &[
+        "判定していません",
+        "判定していない",
+        "検証していません",
+        "検証していない",
+        "判定できません",
+        "did not verify",
+        "did not judge",
+        "has not verified",
+    ];
+
+    fn inject_cfg() -> Config {
+        Config {
+            mode: Mode::Inject,
+            ..Config::default()
+        }
+    }
+
+    fn subprocess_cfg() -> Config {
+        Config {
+            mode: Mode::Subprocess,
+            ..Config::default()
+        }
+    }
+
+    /// Drive the real public entry point the Stop hook uses and hand back the
+    /// block reason it produced. Going through `decide_from_count` (rather than
+    /// the private `block_reason`) means these tests also pin that the gate
+    /// still BLOCKS — the verdict predicate is explicitly NOT changing.
+    fn block_reason_via_gate(cfg: &Config, satisfied: usize, findings: Option<&str>) -> String {
+        let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
+        let d = decide_from_count(
+            cfg,
+            Determination::Known(Verified {
+                satisfied,
+                findings: findings.map(str::to_string),
+            }),
+            &props,
+            3,
+            vec!["src/x.rs".to_string()],
+            "h".to_string(),
+            0,
+            "handle errors and stay deterministic",
+        );
+        match d {
+            Decision::Block { reason, tag, .. } => {
+                assert_eq!(
+                    tag, "below-threshold",
+                    "the verdict predicate must not change: below-threshold still blocks"
+                );
+                reason
+            }
+            Decision::Allow { tag, .. } => {
+                panic!("below threshold must still BLOCK (verdict unchanged); got allow tag={tag}")
+            }
+        }
+    }
+
+    /// (a) The dishonest claim. In inject mode nothing was counted, so the
+    /// message must not render `satisfied` as a measured count, and must not
+    /// state as a fact that the properties are not met.
+    #[test]
+    fn inject_mode_block_reason_does_not_report_a_non_judgement_as_a_measured_count() {
+        let reason = block_reason_via_gate(&inject_cfg(), 0, None);
+        assert!(
+            !reason.contains("satisfied=0 <"),
+            "inject mode never counted anything, but the block reason presents the \
+             non-judgement as a measured comparison `satisfied=0 < …`.\n--- reason ---\n{reason}"
+        );
+        assert!(
+            !reason.contains("satisfied=0"),
+            "inject mode never counted anything, so `satisfied=0` is a number propguard \
+             did not measure.\n--- reason ---\n{reason}"
+        );
+        assert!(
+            !reason.contains("閾値に達していません"),
+            "inject mode did not evaluate a single property, so it may not assert as a \
+             fact that the properties fall short of the threshold.\n--- reason ---\n{reason}"
+        );
+    }
+
+    /// (a, positive half) The message must say the 0 means "not yet verified",
+    /// i.e. that propguard itself did not judge the properties.
+    #[test]
+    fn inject_mode_block_reason_states_that_propguard_itself_did_not_judge() {
+        let reason = block_reason_via_gate(&inject_cfg(), 0, None);
+        assert!(
+            reason.contains("未検証"),
+            "the inject-mode block reason must say the properties are UNVERIFIED \
+             (未検証), not that they failed.\n--- reason ---\n{reason}"
+        );
+        assert!(
+            PROPGUARD_NOT_JUDGED_TOKENS
+                .iter()
+                .any(|t| reason.contains(t)),
+            "the inject-mode block reason must state that propguard ITSELF did not judge \
+             the properties (one of {PROPGUARD_NOT_JUDGED_TOKENS:?}).\n--- reason ---\n{reason}"
+        );
+    }
+
+    /// (b) ANTI-VACUITY #1. In subprocess mode a checker really did produce a
+    /// per-property verdict and propguard really did count the PASSes, so the
+    /// measured phrasing must SURVIVE. An implementer who deletes the count
+    /// everywhere fails here.
+    #[test]
+    fn subprocess_mode_block_reason_keeps_the_count_a_checker_actually_produced() {
+        let reason = block_reason_via_gate(
+            &subprocess_cfg(),
+            1,
+            Some("PROP error-path: FAIL — panics on the error path"),
+        );
+        assert!(
+            reason.contains("satisfied=1"),
+            "subprocess mode DID count; the measured count must remain.\n--- reason ---\n{reason}"
+        );
+        assert!(
+            reason.contains("threshold=3"),
+            "subprocess mode DID compare against the threshold; it must remain.\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            reason.contains("PROP error-path: FAIL"),
+            "the checker's per-property findings must still be rendered.\n\
+             --- reason ---\n{reason}"
+        );
+    }
+
+    /// (b) ANTI-VACUITY #2. Whatever the inject-mode wording becomes, it must
+    /// still carry the facts propguard genuinely established: the derived
+    /// properties, the target files, and the escape hatches.
+    #[test]
+    fn inject_mode_block_reason_still_lists_the_derived_properties_and_target_files() {
+        let reason = block_reason_via_gate(&inject_cfg(), 0, None);
+        for tok in [
+            "error-path",
+            "output-schema",
+            "determinism",
+            "src/x.rs",
+            "propguard skip",
+            "PROPGUARD_DISABLE",
+        ] {
+            assert!(
+                reason.contains(tok),
+                "the inject-mode block reason must still contain {tok:?}\n\
+                 --- reason ---\n{reason}"
+            );
+        }
     }
 }

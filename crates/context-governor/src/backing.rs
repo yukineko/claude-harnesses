@@ -6,9 +6,18 @@
 //! `state_dir`; `snapshot_transcript` captures a bounded transcript excerpt into a
 //! single fixed slot; `put`/`recall` round-trip individual items losslessly.
 //!
-//! NEVER-BREAK-A-TURN: every path that runs for a real hook degrades rather than
-//! panicking — no `unwrap`/`expect`/`panic`. Reads fail soft to `None`; writes are
-//! best-effort via [`harness_core::store::save_json`] (atomic, fail-soft).
+//! Degradation policy: every path that runs for a real hook degrades rather than
+//! panicking — no `unwrap`/`expect`/`panic`. Item reads fail soft to `None` and
+//! writes are best-effort via [`harness_core::store::save_json`] (atomic,
+//! fail-soft), because a missing externalized item is genuinely absent context,
+//! not a wrong answer about it.
+//!
+//! That does NOT extend to an undetermined answer. `snapshot_transcript` no
+//! longer reads "the transcript could not be read" as "the transcript was
+//! empty": the first is reported on stderr, the second stays silent. Degrading
+//! is only honest where the missing value is observed to be missing — CLAUDE.md
+//! §3, and §1's carve-out for code that holds no verdict does not license
+//! erasing the difference between the two.
 
 use std::path::{Path, PathBuf};
 
@@ -18,6 +27,7 @@ use crate::handlers::BackingStore;
 use crate::types::{ContextItem, ItemBody, ItemId, Lane, StoreKey};
 use harness_core::store::{context_state_dir, save_json};
 use harness_core::transcript::recent_turns;
+use harness_core::verdict::Determination;
 
 /// Fixed handle for the singleton transcript snapshot slot. `snapshot_transcript`
 /// always writes ONE slot (`state_dir/snapshot.json`) and returns this key, so the
@@ -72,7 +82,22 @@ impl TranscriptBackingStore {
 impl BackingStore for TranscriptBackingStore {
     fn snapshot_transcript(&mut self, transcript_path: &str) -> StoreKey {
         // Bounded read — never load the whole transcript (recent_turns streams).
-        let turns = recent_turns(transcript_path, 40, 24_000);
+        //
+        // Forwarded, not collapsed: an unreadable transcript is not an empty
+        // one. Both leave `recall(SNAPSHOT_KEY)` at None, but only the second is
+        // a legitimate "nothing to snapshot", so the first says so on stderr
+        // rather than letting the caller read the missing snapshot as a
+        // deliberate one.
+        let turns = match recent_turns(transcript_path, 40, 24_000) {
+            Determination::Known(t) => t,
+            Determination::Undetermined(why) => {
+                eprintln!(
+                    "context-governor: transcript を読めなかったため snapshot を保存しません\
+                     （内容が空だったのではありません）: {transcript_path} — {why}"
+                );
+                return SNAPSHOT_KEY;
+            }
+        };
         if turns.is_empty() {
             // Missing/empty transcript: no excerpt to store. Return the fixed key
             // without panicking; recall(SNAPSHOT_KEY) stays None until a real

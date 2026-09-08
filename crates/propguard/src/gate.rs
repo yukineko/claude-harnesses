@@ -826,9 +826,13 @@ fn block_reason(
     format!(
         "{headline}\n\n\
          done_criteria から導出した検査対象プロパティ:\n{props}\n\
-         対象ファイル ({n} files):\n{list}\n\
+         対象ファイル — この作業ツリーの未コミット変更 ({n} files):\n{list}\
+         この一覧は未コミット変更 (unstaged / staged の差分と追跡外ファイル) の和集合であり、\
+         propguard は各ファイルの作成者を検証していません。\n\
+         あなたが書いたものではないファイル (人間の編集や、併走する別セッションの変更) が\
+         混じっている可能性があります。\n\n\
          {findings}\
-         各プロパティについて自分の生成コードを検証し、成り立たないものを修正してから完了してください。\
+         各プロパティについて上記の変更を検証し、成り立たないものを修正してから完了してください。\
          少なくとも {threshold} 個が成り立つことを確認し、結果を簡潔に報告すること \
          (誤検知だと判断したものは理由を述べて構いません)。\n\n\
          元の done_criteria:\n  {criteria}\n\n\
@@ -2686,6 +2690,494 @@ PROP output-schema: PASS";
                 reason.contains(tok),
                 "the inject-mode block reason must still contain {tok:?}\n\
                  --- reason ---\n{reason}"
+            );
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CLAUDE.md §4 — 「対象ファイル ({n} files)」 + 「各プロパティについて自分の
+    // 生成コードを検証し」 asserts an authorship propguard never checked.
+    //
+    // `evaluate` builds `files` from `crate::git::changed_files` →
+    // `checkable_files`. `changed_files` (git.rs `scan_changed`) is the UNION of
+    // `git diff --name-only`, `git diff --cached --name-only` and
+    // `git ls-files --others --exclude-standard` run over the WHOLE checkout —
+    // no `git blame`, no author, no session id. `checkable_files` only removes
+    // entries by glob; it never adds attribution. So a file the human user
+    // edited, or one a concurrent session left behind (CLAUDE.md §8: another
+    // session must ALWAYS be assumed to exist), lands in that vector
+    // identically, is rendered under the bare label 「対象ファイル (n files)」,
+    // and is then handed to the agent as 「自分の生成コード」.
+    //
+    // There is a live instance in this very worktree: `.githooks/pre-push` was
+    // edited by the human, not the agent, and `changed_files` would list it
+    // verbatim.
+    //
+    // The verdict predicate is NOT changing: below-threshold still blocks with
+    // tag `below-threshold`, and everything propguard genuinely established
+    // (the derived property ids, every target file, the threshold, the escape
+    // hatches, the original done_criteria) must survive. The controls below pin
+    // that. Nor is the subprocess-mode MEASUREMENT softened: a checker really
+    // ran and really emitted per-property verdicts, so only the AUTHORSHIP of
+    // the file list is unverified.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Ways an implementer may describe the scope actually observed.
+    const PG_WORKING_TREE_TOKENS: &[&str] = &[
+        "作業ツリー",
+        "ワーキングツリー",
+        "作業ディレクトリ",
+        "チェックアウト",
+        "working tree",
+    ];
+
+    /// Ways an implementer may name authorship / who made the change.
+    const PG_AUTHORSHIP_TOKENS: &[&str] =
+        &["作成者", "変更者", "誰が", "作者", "authorship", "author"];
+
+    /// Ways an implementer may say that authorship was not verified.
+    const PG_UNVERIFIED_TOKENS: &[&str] = &[
+        "検証していません",
+        "検証されていません",
+        "確認していません",
+        "確認されていません",
+        "判別していません",
+        "区別していません",
+        "不明",
+        "not verified",
+        "unverified",
+    ];
+
+    /// Possessive claims about the listed files that propguard never
+    /// established. `changed_files` reads no author, so none of these can be
+    /// said about that vector.
+    const PG_OWNERSHIP_CLAIM_TOKENS: &[&str] = &[
+        "自分の生成コード",
+        "自分のコード",
+        "自分が生成したコード",
+        "自分が書いたコード",
+        "自分の変更",
+        "あなたのコード",
+        "あなたの変更",
+    ];
+
+    /// The same claim in English, matched against a lowercased message.
+    const PG_OWNERSHIP_CLAIM_TOKENS_EN: &[&str] = &[
+        "your own code",
+        "your own changes",
+        "your code",
+        "the code you generated",
+    ];
+
+    /// True when ONE sentence (a line, or a 「。」-terminated clause) of `text`
+    /// carries a token from BOTH lists.
+    ///
+    /// Co-location is the point. propguard's inject-mode headline ALREADY says
+    /// the *properties* are 未検証 and that propguard 「判定していません」, so a
+    /// bare "some unverified token appears somewhere" assertion would be
+    /// satisfied by a sentence about the properties and would pin nothing at
+    /// all about the FILE LIST's authorship. The caveat has to be attached to
+    /// the thing it qualifies.
+    fn pg_has_colocated(text: &str, a: &[&str], b: &[&str]) -> bool {
+        text.split(['\n', '。'])
+            .any(|seg| a.iter().any(|t| seg.contains(t)) && b.iter().any(|t| seg.contains(t)))
+    }
+
+    /// The fixture list, exactly as `changed_files` would hand it over.
+    fn pg_unattributed_files() -> Vec<String> {
+        vec![
+            "src/x.rs".to_string(),
+            // A real file in THIS worktree that the HUMAN edited, not the
+            // agent. Indistinguishable to `changed_files`, and exactly what
+            // must not be presented to the agent as its own generated code.
+            ".githooks/pre-push".to_string(),
+        ]
+    }
+
+    /// Per-property verdicts as an independent checker would really emit them.
+    /// Deliberately free of every token vocabulary above and of the findings
+    /// block delimiters, so the region assertions below measure the template
+    /// rather than the fixture.
+    const PG_SUBPROCESS_FINDINGS: &str = "PROP error-path: FAIL — エラー経路で panic する\n\
+         PROP output-schema: PASS\n\
+         PROP determinism: FAIL — 実行ごとに順序が変わる";
+
+    /// Split a subprocess-mode reason into (everything before the checker's
+    /// findings block, the findings block itself). Panics if the delimiters are
+    /// gone — losing them is itself a regression worth failing on.
+    fn pg_split_findings_block(reason: &str) -> (&str, &str) {
+        let (head, rest) = match reason.split_once("--- チェッカーの判定 ---") {
+            Some(p) => p,
+            None => panic!(
+                "the message must still open the checker's findings block with \
+                 「--- チェッカーの判定 ---」\n--- reason ---\n{reason}"
+            ),
+        };
+        let (block, _tail) = match rest.split_once("------------------------") {
+            Some(p) => p,
+            None => panic!(
+                "the message must still close the checker's findings block\n\
+                 --- reason ---\n{reason}"
+            ),
+        };
+        (head, block)
+    }
+
+    /// [`block_reason_via_gate`] with the file list supplied by the caller, so a
+    /// fixture can carry a file that is plausibly NOT the agent's. Same real
+    /// entry point (`decide_from_count`), same pin that the gate still BLOCKS.
+    fn block_reason_via_gate_with_files(
+        cfg: &Config,
+        satisfied: usize,
+        findings: Option<&str>,
+        files: Vec<String>,
+    ) -> String {
+        let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
+        let d = decide_from_count(
+            cfg,
+            Determination::Known(Verified {
+                satisfied,
+                findings: findings.map(str::to_string),
+            }),
+            &props,
+            3,
+            files,
+            "h".to_string(),
+            0,
+            "handle errors and stay deterministic",
+        );
+        match d {
+            Decision::Block { reason, tag, .. } => {
+                assert_eq!(
+                    tag, "below-threshold",
+                    "the verdict predicate must not change: below-threshold still blocks"
+                );
+                reason
+            }
+            Decision::Allow { tag, .. } => {
+                panic!("below threshold must still BLOCK (verdict unchanged); got allow tag={tag}")
+            }
+        }
+    }
+
+    /// (a) The dishonest claim — inject mode.
+    #[test]
+    fn inject_mode_block_reason_does_not_claim_the_listed_files_are_the_agents_own_code() {
+        let reason =
+            block_reason_via_gate_with_files(&inject_cfg(), 0, None, pg_unattributed_files());
+        for t in PG_OWNERSHIP_CLAIM_TOKENS {
+            assert!(
+                !reason.contains(t),
+                "propguard never checked authorship — the list is the union of every \
+                 uncommitted change in the checkout (`git diff` / `--cached` / `ls-files \
+                 --others`), including the human's and other sessions'. It may not be \
+                 called {t:?}.\n--- reason ---\n{reason}"
+            );
+        }
+        let lower = reason.to_lowercase();
+        for t in PG_OWNERSHIP_CLAIM_TOKENS_EN {
+            assert!(
+                !lower.contains(t),
+                "same claim in English ({t:?}).\n--- reason ---\n{reason}"
+            );
+        }
+    }
+
+    /// (a, positive half) The list must be described as this working tree's
+    /// uncommitted changes, with authorship explicitly marked unverified — and
+    /// the caveat must sit WITH the authorship word, so the pre-existing
+    /// 「プロパティは未検証」 sentence cannot satisfy it by accident.
+    #[test]
+    fn inject_mode_block_reason_describes_the_files_as_unattributed_uncommitted_changes() {
+        let reason =
+            block_reason_via_gate_with_files(&inject_cfg(), 0, None, pg_unattributed_files());
+        assert!(
+            reason.contains("未コミット") || reason.contains("コミットされていない"),
+            "the list must be described as the UNCOMMITTED changes (未コミット).\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            PG_WORKING_TREE_TOKENS.iter().any(|t| reason.contains(t)),
+            "the list must be scoped to this working tree / checkout \
+             (one of {PG_WORKING_TREE_TOKENS:?}).\n--- reason ---\n{reason}"
+        );
+        assert!(
+            PG_AUTHORSHIP_TOKENS.iter().any(|t| reason.contains(t)),
+            "the message must name authorship (one of {PG_AUTHORSHIP_TOKENS:?}).\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            pg_has_colocated(&reason, PG_AUTHORSHIP_TOKENS, PG_UNVERIFIED_TOKENS),
+            "the message must state, in one sentence, that the AUTHORSHIP of the listed \
+             files was not verified (a token from {PG_AUTHORSHIP_TOKENS:?} together with \
+             one from {PG_UNVERIFIED_TOKENS:?}). The existing 「プロパティは未検証」 \
+             sentence does not say it — it qualifies the properties, not the file \
+             list.\n--- reason ---\n{reason}"
+        );
+    }
+
+    /// (a) The twin path. `evaluate` builds `files` ONCE and hands the same
+    /// vector to whichever mode is configured, so authorship is exactly as
+    /// unchecked in subprocess mode — and `block_reason` renders the same
+    /// instruction line in both.
+    #[test]
+    fn subprocess_mode_block_reason_does_not_claim_the_listed_files_are_the_agents_own_code() {
+        let reason = block_reason_via_gate_with_files(
+            &subprocess_cfg(),
+            1,
+            Some(PG_SUBPROCESS_FINDINGS),
+            pg_unattributed_files(),
+        );
+        for t in PG_OWNERSHIP_CLAIM_TOKENS {
+            assert!(
+                !reason.contains(t),
+                "the list handed to subprocess mode is the SAME unattributed union; it may \
+                 not be called {t:?} either.\n--- reason ---\n{reason}"
+            );
+        }
+        let lower = reason.to_lowercase();
+        for t in PG_OWNERSHIP_CLAIM_TOKENS_EN {
+            assert!(
+                !lower.contains(t),
+                "same claim in English ({t:?}).\n--- reason ---\n{reason}"
+            );
+        }
+    }
+
+    /// (a, positive half) Same caveat, on the head region — the part that
+    /// carries the file list, before the checker's verdicts.
+    #[test]
+    fn subprocess_mode_block_reason_describes_the_files_as_unattributed_uncommitted_changes() {
+        let reason = block_reason_via_gate_with_files(
+            &subprocess_cfg(),
+            1,
+            Some(PG_SUBPROCESS_FINDINGS),
+            pg_unattributed_files(),
+        );
+        let (head, _findings) = pg_split_findings_block(&reason);
+        assert!(
+            head.contains("未コミット") || head.contains("コミットされていない"),
+            "the list must be described as the UNCOMMITTED changes (未コミット).\n\
+             --- reason ---\n{reason}"
+        );
+        assert!(
+            PG_WORKING_TREE_TOKENS.iter().any(|t| head.contains(t)),
+            "the list must be scoped to this working tree / checkout \
+             (one of {PG_WORKING_TREE_TOKENS:?}).\n--- reason ---\n{reason}"
+        );
+        assert!(
+            pg_has_colocated(head, PG_AUTHORSHIP_TOKENS, PG_UNVERIFIED_TOKENS),
+            "the message must state, in one sentence and with the file list, that the \
+             AUTHORSHIP of the listed files was not verified (a token from \
+             {PG_AUTHORSHIP_TOKENS:?} together with one from \
+             {PG_UNVERIFIED_TOKENS:?}).\n--- reason ---\n{reason}"
+        );
+    }
+
+    /// The distinction that must stay straight: only the AUTHORSHIP of the file
+    /// list is unverified. In subprocess mode a checker really ran and really
+    /// emitted per-property verdicts, and propguard really counted the PASSes —
+    /// that is a MEASUREMENT. Hedging it would be the mirror image of asserting
+    /// an unmeasured claim, and would hand the agent a licence to dismiss real
+    /// FAILs. So the caveat sits on the list and must not bleed onto the
+    /// checker's verdicts or onto the headline that reports the count.
+    #[test]
+    fn subprocess_mode_block_reason_qualifies_the_file_list_but_not_the_checkers_verdicts() {
+        let reason = block_reason_via_gate_with_files(
+            &subprocess_cfg(),
+            1,
+            Some(PG_SUBPROCESS_FINDINGS),
+            pg_unattributed_files(),
+        );
+        let (head, findings) = pg_split_findings_block(&reason);
+        assert!(
+            pg_has_colocated(head, PG_AUTHORSHIP_TOKENS, PG_UNVERIFIED_TOKENS),
+            "the unverified-authorship caveat must appear with the file list, BEFORE the \
+             checker's findings block.\n--- reason ---\n{reason}"
+        );
+        for t in PG_UNVERIFIED_TOKENS {
+            assert!(
+                !findings.contains(t),
+                "the checker's per-property verdicts are a MEASUREMENT (a checker really \
+                 ran and really emitted them) and must not be qualified as unverified; \
+                 found {t:?} inside the findings block.\n--- findings block ---\n{findings}"
+            );
+        }
+        let headline = reason.lines().next().unwrap_or("");
+        for t in PG_UNVERIFIED_TOKENS.iter().chain(PG_AUTHORSHIP_TOKENS) {
+            assert!(
+                !headline.contains(t),
+                "the headline reports the measurement (the counted PASSes) and must not be \
+                 hedged with the file-list caveat; found {t:?}.\n--- headline ---\n{headline}"
+            );
+        }
+        for tok in ["satisfied=1", "threshold=3", "実測"] {
+            assert!(
+                headline.contains(tok),
+                "the headline must still report the count a checker actually produced \
+                 ({tok:?} missing) — that half is observed, not inferred.\n\
+                 --- headline ---\n{headline}"
+            );
+        }
+    }
+
+    /// ANTI-VACUITY. Whatever the wording becomes, the message must still carry
+    /// everything propguard genuinely DID establish: every derived property id,
+    /// every target file (and how many), the threshold, the original
+    /// done_criteria, both escape hatches, and the order to verify and fix. An
+    /// implementer who deletes or empties the message to satisfy the negative
+    /// assertions above fails here, in BOTH modes.
+    #[test]
+    fn block_reason_still_carries_every_fact_propguard_established_in_both_modes() {
+        for (label, cfg, satisfied, findings) in [
+            ("inject", inject_cfg(), 0usize, None),
+            (
+                "subprocess",
+                subprocess_cfg(),
+                1usize,
+                Some(PG_SUBPROCESS_FINDINGS),
+            ),
+        ] {
+            let files = pg_unattributed_files();
+            let reason = block_reason_via_gate_with_files(&cfg, satisfied, findings, files.clone());
+            for f in &files {
+                assert!(
+                    reason.contains(f.as_str()),
+                    "[{label}] the reason must still list {f:?}\n--- reason ---\n{reason}"
+                );
+            }
+            assert!(
+                ["2 files", "2 件", "2 個", "2ファイル"]
+                    .iter()
+                    .any(|t| reason.contains(t)),
+                "[{label}] the reason must still report how many files are in scope\n\
+                 --- reason ---\n{reason}"
+            );
+            for id in ["error-path", "output-schema", "determinism"] {
+                assert!(
+                    reason.contains(id),
+                    "[{label}] the reason must still name the derived property {id:?}\n\
+                     --- reason ---\n{reason}"
+                );
+            }
+            assert!(
+                ["threshold=3", "threshold 3", "3 個", "閾値 3", "閾値は 3"]
+                    .iter()
+                    .any(|t| reason.contains(t)),
+                "[{label}] the reason must still state the threshold\n\
+                 --- reason ---\n{reason}"
+            );
+            assert!(
+                reason.contains("handle errors and stay deterministic"),
+                "[{label}] the reason must still echo the original done_criteria\n\
+                 --- reason ---\n{reason}"
+            );
+            for tok in ["propguard skip", "PROPGUARD_DISABLE"] {
+                assert!(
+                    reason.contains(tok),
+                    "[{label}] the reason must still name the {tok:?} escape hatch\n\
+                     --- reason ---\n{reason}"
+                );
+            }
+            assert!(
+                reason.contains("検証") && reason.contains("修正"),
+                "[{label}] the reason must still order the agent to verify the properties \
+                 and fix what does not hold\n--- reason ---\n{reason}"
+            );
+            assert!(
+                reason.len() > 200,
+                "[{label}] the block reason must remain a real instruction, not a stub \
+                 ({} bytes)\n--- reason ---\n{reason}",
+                reason.len()
+            );
+        }
+    }
+
+    /// ANTI-VACUITY, verdict half. Relabelling the file list must not touch the
+    /// decision: below-threshold still BLOCKS, with the same tag, and still
+    /// carries the full unattributed file vector onward to the log.
+    #[test]
+    fn the_authorship_label_fix_must_not_change_the_verdict() {
+        for (label, cfg, satisfied, findings) in [
+            ("inject", inject_cfg(), 0usize, None),
+            (
+                "subprocess",
+                subprocess_cfg(),
+                1usize,
+                Some(PG_SUBPROCESS_FINDINGS),
+            ),
+        ] {
+            let props = props_by_ids(&["error-path", "output-schema", "determinism"]);
+            let d = decide_from_count(
+                &cfg,
+                Determination::Known(Verified {
+                    satisfied,
+                    findings: findings.map(str::to_string),
+                }),
+                &props,
+                3,
+                pg_unattributed_files(),
+                "h".to_string(),
+                0,
+                "handle errors and stay deterministic",
+            );
+            match d {
+                Decision::Block { tag, files, .. } => {
+                    assert_eq!(tag, "below-threshold", "[{label}] verdict tag changed");
+                    assert_eq!(
+                        files,
+                        pg_unattributed_files(),
+                        "[{label}] the reported file set changed"
+                    );
+                }
+                Decision::Allow { tag, .. } => {
+                    panic!("[{label}] below threshold must still BLOCK; got allow tag={tag}")
+                }
+            }
+        }
+    }
+
+    /// The SAME claim, in the shipped documentation. `README.ja.md` describes
+    /// inject mode as 「動いているエージェントが**自分のコード**を各プロパティで
+    /// 自己検証し」 — the same authorship propguard never checked, in the file a
+    /// human reads to decide whether to trust the gate. CLAUDE.md §4: prose that
+    /// describes behaviour the code does not have is a trap for the next
+    /// reviewer, and it must be corrected in the same change as the code.
+    ///
+    /// This is a defect in a doc file rather than in a string literal, so it is
+    /// pinned here mechanically; nothing else in the crate would catch it.
+    #[test]
+    fn the_readme_does_not_describe_inject_mode_as_the_agent_verifying_its_own_code() {
+        const README: &str = include_str!("../README.ja.md");
+        for t in PG_OWNERSHIP_CLAIM_TOKENS {
+            assert!(
+                !README.contains(t),
+                "README.ja.md calls the checked files {t:?}, but the checked set is \
+                 `git::changed_files` — the union of every uncommitted change in the \
+                 checkout, with no `git blame`, no author and no session id. The prose \
+                 asserts an authorship the code never established."
+            );
+        }
+        let lower = README.to_lowercase();
+        for t in PG_OWNERSHIP_CLAIM_TOKENS_EN {
+            assert!(
+                !lower.contains(t),
+                "same claim in English ({t:?}) in README.ja.md."
+            );
+        }
+        // ANTI-VACUITY: deleting the sentence (or the whole document) must not
+        // be a way to pass. The README must still document what inject mode
+        // does, what the single decision point is, and how to escape it.
+        for tok in [
+            "inject",
+            "プロパティ",
+            "gate::below_threshold",
+            "propguard skip",
+            "PROPGUARD_DISABLE",
+        ] {
+            assert!(
+                README.contains(tok),
+                "README.ja.md must still document {tok:?}"
             );
         }
     }

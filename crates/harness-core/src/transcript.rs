@@ -11,6 +11,8 @@ use std::io::{BufRead, BufReader};
 
 use serde_json::Value;
 
+use crate::verdict::Determination;
+
 /// Live window occupancy at the turn that wrote this usage block.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Usage {
@@ -138,10 +140,35 @@ pub fn truncate_chars(s: &str, max: usize) -> String {
 
 /// The most recent `max_turns` user/assistant turns, each capped at `max_chars`.
 /// Bounded memory via a ring buffer.
-pub fn recent_turns(path: &str, max_turns: usize, max_chars: usize) -> Vec<Turn> {
+///
+/// Returns a [`Determination`] rather than a bare `Vec` because "this transcript
+/// held no user/assistant turns" and "this transcript could not be read" are
+/// different facts that an empty `Vec` cannot tell apart — and every caller
+/// treats an empty result as "nothing to do" (CLAUDE.md §3: never return an
+/// empty collection on error). Concretely: ctxrot's rescue hook exists to save
+/// the conversation before compaction, and with the old signature an unreadable
+/// transcript wrote no rescue note and told nobody, which is byte-for-byte
+/// indistinguishable from "there was nothing worth saving".
+///
+/// **Where the line sits, deliberately.** `Undetermined` means *the bytes could
+/// not be obtained*: the file would not open, or a read/decode error occurred
+/// mid-stream. A line whose bytes WERE obtained but which is not a turn record
+/// stays a skip — including a line that is not valid JSON, exactly like a line
+/// with no `message` field or a non-turn role. That is not a softening: a live
+/// transcript is appended to concurrently, so its final line is routinely a
+/// torn, half-written JSON record, and calling that "undetermined" would make
+/// every rescue during a live session report a failure it did not have.
+///
+/// The case left unresolved is a *partially* readable transcript (real turns
+/// plus an unreadable region). Today the read error wins and the whole answer is
+/// undetermined — the restricted side — rather than returning the turns that
+/// were recovered. See backlog `809cf00f`.
+pub fn recent_turns(path: &str, max_turns: usize, max_chars: usize) -> Determination<Vec<Turn>> {
     let file = match File::open(path) {
         Ok(f) => f,
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            return Determination::undetermined(format!("cannot open transcript {path}: {e}"));
+        }
     };
     let reader = BufReader::new(file);
     let mut ring: VecDeque<Turn> = VecDeque::with_capacity(max_turns + 1);
@@ -149,11 +176,18 @@ pub fn recent_turns(path: &str, max_turns: usize, max_chars: usize) -> Vec<Turn>
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
-            Err(_) => continue,
+            // The bytes could not be read or decoded. That is not "this line
+            // held no turn": we do not know what it held, nor what follows it.
+            Err(e) => {
+                return Determination::undetermined(format!("cannot read transcript {path}: {e}"));
+            }
         };
         if line.trim().is_empty() {
             continue;
         }
+        // Read successfully, but not a turn record. Same category as a line with
+        // no `message` field or a non-turn role — see the fn docstring for why a
+        // torn final line must not become an undetermined answer.
         let o = match serde_json::from_str::<Value>(&line) {
             Ok(o) => o,
             Err(_) => continue,
@@ -185,7 +219,7 @@ pub fn recent_turns(path: &str, max_turns: usize, max_chars: usize) -> Vec<Turn>
             ring.pop_front();
         }
     }
-    ring.into_iter().collect()
+    Determination::known(ring.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -202,7 +236,9 @@ mod tests {
 
     #[test]
     fn reads_turns() {
-        let turns = recent_turns(FIXTURE, 60, 1200);
+        let Determination::Known(turns) = recent_turns(FIXTURE, 60, 1200) else {
+            panic!("the checked-in fixture must be readable");
+        };
         assert!(turns.len() >= 2);
         assert_eq!(turns[0].role, "user");
     }

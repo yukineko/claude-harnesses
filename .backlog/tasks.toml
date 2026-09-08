@@ -16204,3 +16204,41 @@ updated_at = 1788900677
 weight = 0.0
 issue_number = 456
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/456"
+
+[[task]]
+id = "c4321fc2"
+title = "harness-core fleet gate_crates_is_the_known_six が parallelguard 追加以降ずっと RED"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = """
+実測 2026-09-09、測定点 b61d68b4。cargo test -p harness-core が 276 passed / 1 failed。
+
+crates/harness-core/src/fleet.rs:56:
+  left:  [blastguard, propguard, specguard, stuckguard, mutategate, overwatch, parallelguard]
+  right: [blastguard, propguard, specguard, stuckguard, mutategate, overwatch]
+
+GATE_CRATES 定数は parallelguard を得た (b4b13b6f で新規プラグイン追加、79b385b2 で merge) が、
+凍結テストは 6 件のままで、テスト名自体も gate_crates_is_the_known_six と 6 を名乗っている。
+fleet.rs は今回の変更で一切触っていない (git diff HEAD -- fleet.rs は空)。
+
+**どちらが正しいかは既に機械的に決着している**: CLAUDE.md は
+scripts/rollout-plugins.sh の GATE_CRATES= を正典と定めており、
+scripts/check-gate-crates-sync.py は 11 sources が parallelguard 込みの 7 件で
+一致していると報告する (b61d68b4 の pre-commit 出力で観測)。
+つまり **定数が正しく、テストが陳腐化している**。
+
+なぜ気づかれなかったか: pre-commit / pre-push は fmt/clippy/各種ゲートと
+cargo check --workspace は回すが cargo test は回さない。CI は §7 により不使用。
+したがってこの RED を見る経路が実質存在しない。これは 1 件のテストの問題ではなく
+**ワークスペースのテストが誰にも実行されない状態**という導線の欠落である。
+
+やること: (1) 期待値を 7 件へ更新しテスト名も改める。(2) より重要なのは、
+workspace のテストが定期的に実行され RED が見える導線を作ること
+(pre-push へ足すのは遅くなるので別手段を検討)。"""
+created_at = 1788902156
+updated_at = 1788902156
+weight = 0.0
+issue_number = 457
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/457"

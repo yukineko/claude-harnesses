@@ -16,7 +16,7 @@
 //! always exits 0 (never breaks a turn).
 
 use clap::{Parser, Subcommand};
-use harness_core::append::append_line;
+use harness_core::append::append_line_reporting;
 use harness_core::daily::DailyGuard;
 use harness_core::hook::{read_stdin, run_hook, HookInput};
 use serde::{Deserialize, Serialize};
@@ -452,7 +452,7 @@ fn append_report(entry: &ReportEntry) {
     let Ok(line) = serde_json::to_string(entry) else {
         return;
     };
-    append_line(&path, &line);
+    append_line_reporting(&path, &line, "daily log");
 }
 
 /// Parse the JSONL report file into entries, skipping any malformed lines.

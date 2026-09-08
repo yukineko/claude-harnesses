@@ -293,10 +293,7 @@ fn policy_answer_untestable_clamps_auto_to_escalate_never_self_answers() {
         out, r#"{"answered":false,"policy":"escalate"}"#,
         "must print the escalate JSON shape, never self-answer"
     );
-    assert!(
-        !tmp.path().join("gate-decisions.jsonl").exists(),
-        "an escalated untestable decision must not be journaled as a self-answer"
-    );
+    assert_journaled_but_not_self_answered(tmp.path(), "escalate");
 }
 
 // ---------------------------------------------------------------------------
@@ -418,10 +415,7 @@ fn policy_answer_approval_is_inert_when_not_autonomous() {
         out, r#"{"answered":false,"policy":"escalate"}"#,
         "must print the escalate JSON (an exact match also rules out a clap error)"
     );
-    assert!(
-        !tmp.path().join("gate-decisions.jsonl").exists(),
-        "an escalated approval must not be journaled as a self-answer"
-    );
+    assert_journaled_but_not_self_answered(tmp.path(), "escalate");
 }
 
 #[test]
@@ -434,10 +428,7 @@ fn policy_answer_approval_never_relaxes_the_irreversible_block() {
         run_policy_answer_approval(tmp.path(), "high", "low", "high", true, &["--approval"]);
     assert_eq!(code, 3, "a block must survive --approval; got {out:?}");
     assert_eq!(out, r#"{"answered":false,"policy":"block"}"#);
-    assert!(
-        !tmp.path().join("gate-decisions.jsonl").exists(),
-        "a blocked approval must not be journaled as a self-answer"
-    );
+    assert_journaled_but_not_self_answered(tmp.path(), "block");
 }
 
 #[test]
@@ -732,5 +723,49 @@ fn invariant_prose_anchors_are_present() {
     assert!(
         condukt.contains("--dry-run"),
         "condukt SKILL must keep the --dry-run stop (invariant under autonomy)"
+    );
+}
+
+/// Assert this consultation is journaled **without** being recorded as a
+/// self-answer: exactly one row, carrying `expected_policy`, naming no chosen
+/// option.
+///
+/// This replaces an older `assert!(!gate-decisions.jsonl.exists())`. That check
+/// and this one protect the same named invariant — the message on the old
+/// assertion was "must not be journaled *as a self-answer*" — but file-absence
+/// was a proxy that happened to hold only because escalate/block were not
+/// recorded at all. Now that every consultation is journaled, the proxy would
+/// fail while the invariant holds, so it is asserted directly. This form is
+/// strictly stronger on the invariant's own axis: absence proved nothing about
+/// what a row would have said, whereas this rejects a row claiming `auto` or
+/// naming a choice.
+fn assert_journaled_but_not_self_answered(dir: &std::path::Path, expected_policy: &str) {
+    let path = dir.join("gate-decisions.jsonl");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "the consultation must be journaled at {}: {e} — an unrecorded escalate is \
+             indistinguishable from a gate that never fired",
+            path.display()
+        )
+    });
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            serde_json::from_str(l)
+                .unwrap_or_else(|e| panic!("journal line is not JSON: {e} — {l:?}"))
+        })
+        .collect();
+    assert_eq!(rows.len(), 1, "exactly one consultation expected: {rows:?}");
+    let row = &rows[0];
+    assert_eq!(
+        row["policy"],
+        serde_json::json!(expected_policy),
+        "wrong verdict recorded: {row}"
+    );
+    assert_eq!(
+        row["chosen"],
+        serde_json::json!(""),
+        "nothing was self-answered, so no option may be recorded as chosen: {row}"
     );
 }

@@ -137,7 +137,7 @@ fn auto_verdict_honours_the_recommend_index() {
 }
 
 #[test]
-fn escalate_verdict_falls_through_without_journaling() {
+fn escalate_verdict_falls_through_but_is_still_journaled() {
     let dir = tempfile::tempdir().unwrap();
     let (stdout, code) = answer_in(dir.path(), "medium", "medium", "medium", "0");
     assert_eq!(code, 2, "escalate must exit 2; stdout={stdout:?}");
@@ -146,11 +146,9 @@ fn escalate_verdict_falls_through_without_journaling() {
         "escalate must not self-answer; got {stdout:?}"
     );
     assert!(stdout.contains("escalate"), "got {stdout:?}");
-    // Nothing was self-answered, so nothing is journaled.
-    assert!(
-        !dir.path().join("gate-decisions.jsonl").exists(),
-        "escalate must not write the decision log"
-    );
+    // Nothing was self-answered, but the consultation IS recorded: the audit
+    // trail must distinguish "escalated to a human" from "never consulted".
+    assert_journaled_but_not_self_answered(dir.path(), "escalate");
 }
 
 #[test]
@@ -160,7 +158,7 @@ fn block_verdict_is_a_hard_stop_exit_3() {
     assert_eq!(code, 3, "block must exit 3; stdout={stdout:?}");
     assert!(stdout.contains("\"answered\":false"), "got {stdout:?}");
     assert!(stdout.contains("block"), "got {stdout:?}");
-    assert!(!dir.path().join("gate-decisions.jsonl").exists());
+    assert_journaled_but_not_self_answered(dir.path(), "block");
 }
 
 #[test]
@@ -169,9 +167,9 @@ fn answers_reader_replays_the_audit_trail() {
     // Self-answer two questions...
     let _ = answer_in(dir.path(), "low", "high", "high", "0");
     let _ = answer_in(dir.path(), "low", "high", "high", "1");
-    // ...an escalate must NOT be logged...
+    // ...and an escalate, which is logged too (as a consultation)...
     let _ = answer_in(dir.path(), "medium", "medium", "medium", "0");
-    // ...then the reader replays exactly the two self-answers as JSONL.
+    // ...then the reader replays all three as JSONL.
     let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
         .args([
             "policy",
@@ -186,11 +184,14 @@ fn answers_reader_replays_the_audit_trail() {
     let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
     assert_eq!(
         lines.len(),
-        2,
-        "only the two auto-answers are logged: {stdout:?}"
+        3,
+        "all three consultations are logged, not just the self-answers: {stdout:?}"
     );
     assert!(lines[0].contains("\"chosen\":\"adopt\""), "{}", lines[0]);
     assert!(lines[1].contains("\"chosen\":\"revise\""), "{}", lines[1]);
+    // The escalate is recorded as a consultation with no choice taken.
+    assert!(lines[2].contains("\"policy\":\"escalate\""), "{}", lines[2]);
+    assert!(lines[2].contains("\"chosen\":\"\""), "{}", lines[2]);
 }
 
 #[test]
@@ -223,5 +224,51 @@ fn recommend_index_out_of_range_exits_1() {
         !stdout.contains("\"answered\":true"),
         "must not self-answer with a bogus index; got {stdout:?}"
     );
+    // Still journals NOTHING: a malformed invocation is a rejected input,
+    // not a decision, so it must not inflate the audit trail.
     assert!(!dir.path().join("gate-decisions.jsonl").exists());
+}
+
+/// Assert this consultation is journaled **without** being recorded as a
+/// self-answer: exactly one row, carrying `expected_policy`, naming no chosen
+/// option.
+///
+/// This replaces an older `assert!(!gate-decisions.jsonl.exists())`. That check
+/// and this one protect the same named invariant — the message on the old
+/// assertion was "must not be journaled *as a self-answer*" — but file-absence
+/// was a proxy that happened to hold only because escalate/block were not
+/// recorded at all. Now that every consultation is journaled, the proxy would
+/// fail while the invariant holds, so it is asserted directly. This form is
+/// strictly stronger on the invariant's own axis: absence proved nothing about
+/// what a row would have said, whereas this rejects a row claiming `auto` or
+/// naming a choice.
+fn assert_journaled_but_not_self_answered(dir: &std::path::Path, expected_policy: &str) {
+    let path = dir.join("gate-decisions.jsonl");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "the consultation must be journaled at {}: {e} — an unrecorded escalate is \
+             indistinguishable from a gate that never fired",
+            path.display()
+        )
+    });
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            serde_json::from_str(l)
+                .unwrap_or_else(|e| panic!("journal line is not JSON: {e} — {l:?}"))
+        })
+        .collect();
+    assert_eq!(rows.len(), 1, "exactly one consultation expected: {rows:?}");
+    let row = &rows[0];
+    assert_eq!(
+        row["policy"],
+        serde_json::json!(expected_policy),
+        "wrong verdict recorded: {row}"
+    );
+    assert_eq!(
+        row["chosen"],
+        serde_json::json!(""),
+        "nothing was self-answered, so no option may be recorded as chosen: {row}"
+    );
 }

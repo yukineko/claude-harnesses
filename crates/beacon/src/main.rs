@@ -170,7 +170,7 @@ fn log_event(cfg: &Config, note: &Note, sent: &[&str]) {
         // Use harness_core::append::append_line to write as a single atomic
         // write() syscall, preventing concurrent O_APPEND interleaving under
         // parallel beacon notifications. See crates/harness-core/src/append.rs.
-        harness_core::append::append_line(&path, &line);
+        harness_core::append::append_line_reporting(&path, &line, "beacon events");
     }
 }
 

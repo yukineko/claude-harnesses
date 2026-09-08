@@ -5,34 +5,55 @@
 //! concrete question so a caller (the condukt/scout/flow skills) can stop
 //! relying on the model obeying prose to "skip the AskUserQuestion when
 //! autonomous". When the verdict is [`Decision::Auto`] the question is
-//! self-answered with its pre-marked recommended option — no human prompt — and
-//! the choice is recorded to an append-only decision log for audit. On
+//! self-answered with its pre-marked recommended option — no human prompt. On
 //! `Escalate`/`Block` nothing is answered and the caller falls through to a
 //! real `AskUserQuestion` (escalate) or refuses (block).
 //!
+//! **All three verdicts are journaled**, not just the self-answered one. The log
+//! records that the gate was *consulted* and what it decided; `policy` says
+//! which verdict came back and, on escalate/block, `chosen` is empty because
+//! nothing was picked. Recording only the self-answers (the original contract)
+//! made "the gate escalated to a human" and "the gate was never consulted"
+//! byte-for-byte identical in the audit trail — the log is the review surface
+//! that stands in for the prompts autonomy removed, so an absent row read as
+//! "no gate fired". A malformed invocation (an out-of-range `--recommend`, an
+//! unparseable level) is still **not** journaled: it is a rejected input, not a
+//! decision.
+//!
 //! The verdict→answer mapping is a pure function ([`answer_outcome`]) so the
 //! auto/escalate/exit-code contract is unit-testable without spawning a
-//! process, and the log I/O mirrors [`crate::checkpoint`]'s fail-soft
-//! append-only journal (a logging failure never breaks a turn).
+//! process. The log I/O mirrors [`crate::checkpoint`]'s append-only journal:
+//! best-effort, in that a logging failure never changes a verdict or an exit
+//! code, but **never silent** — a lost record is reported on stderr.
 
 use crate::policy::Decision;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// One self-answered gate decision — the append-only audit record written when
-/// (and only when) a question is auto-answered.
+/// One gate consultation — the append-only audit record written every time a
+/// question is resolved against a policy verdict, whether or not it was
+/// self-answered.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GateDecision {
     /// The question that was asked.
     pub question: String,
     /// The options that were offered.
     pub options: Vec<String>,
-    /// 0-based index of the recommended (and, on auto, chosen) option.
+    /// 0-based index of the recommended option. It records what was *offered* as
+    /// the recommendation, so it stays meaningful on escalate/block, where the
+    /// recommendation existed but was not taken.
     pub recommend_index: usize,
-    /// The option that was chosen (== `options[recommend_index]`).
+    /// The option that was chosen. On `auto` this is `options[recommend_index]`;
+    /// on escalate/block it is the **empty string**, because nothing was picked.
+    ///
+    /// Empty rather than absent on purpose: the field has no `serde(default)`,
+    /// and [`load_decisions`] drops lines that fail to deserialize, so omitting
+    /// the key would make every escalate row vanish silently from
+    /// `condukt policy answers` — a hole in the very trail this records.
+    #[serde(default)]
     pub chosen: String,
-    /// The policy verdict that authorised the self-answer (always "auto" here —
-    /// escalate/block are never journaled because nothing was answered).
+    /// The policy verdict this consultation returned: `"auto"` (self-answered
+    /// with `chosen`), `"escalate"` (handed to a human) or `"block"` (refused).
     pub policy: String,
     /// Unix seconds when the decision was recorded.
     pub created_at: i64,
@@ -97,28 +118,79 @@ pub fn decisions_path(dir: &Path) -> PathBuf {
     dir.join("gate-decisions.jsonl")
 }
 
-/// Append one decision to the log. Fail-soft: any IO/serialize error is
-/// swallowed so an audit-log failure never breaks a turn (a single-line append
-/// is atomic on POSIX for our line sizes). Mirrors
-/// [`crate::checkpoint::append_journal`].
+/// Append one gate consultation to the log — auto, escalate or block alike.
+///
+/// Best-effort but **never silent**: an IO or serialize failure does not change
+/// the command's exit code (the verdict has already been decided and is still
+/// delivered on stdout), but it is reported on stderr. A dropped record would
+/// otherwise make "the gate escalated" indistinguishable from "the gate was
+/// never consulted", which is the same erasure this log exists to prevent.
+/// Mirrors [`crate::checkpoint::append_journal`].
 pub fn append_decision(dir: &Path, entry: &GateDecision) {
-    let Ok(line) = serde_json::to_string(entry) else {
-        return;
+    let line = match serde_json::to_string(entry) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!(
+                "warning: gate-decisions: could not serialize the {} record ({e}) — \
+                 this consultation is LOST from the audit trail",
+                entry.policy
+            );
+            return;
+        }
     };
-    let _ = std::fs::create_dir_all(dir);
-    harness_core::append::append_line(&decisions_path(dir), &line);
+    harness_core::append::append_line_reporting(&decisions_path(dir), &line, "gate-decisions");
 }
 
-/// Load the decision log in file order. A missing file yields an empty vec and
-/// corrupt lines are skipped — never panics. Mirrors
+/// Read a JSONL journal, reporting anything that could not be turned into a
+/// record instead of dropping it.
+///
+/// A **missing** file is genuinely "nothing recorded yet" and stays quiet. Any
+/// other read error, and every unparseable line, is announced on stderr: the
+/// caller still gets the records it could recover (these are review surfaces,
+/// and a partial history beats none), but the reader is told the list it is
+/// looking at is short. Silently returning the survivors would let a truncated
+/// log read as a complete one.
+///
+/// Note the remaining gap, tracked as backlog `d343ecbc`: the return type is
+/// still a bare `Vec`, so "read failed" and "log is empty" are the same value to
+/// a caller that ignores stderr. The principled fix is
+/// `harness_core::verdict::Determination`; this only stops the loss being silent.
+fn load_journal<T: serde::de::DeserializeOwned>(path: &Path, sink: &str) -> Vec<T> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            eprintln!(
+                "warning: {sink}: could not read {} ({e}) — reporting an EMPTY history, \
+                 which is not the same as an empty log",
+                path.display()
+            );
+            return Vec::new();
+        }
+    };
+    let mut out = Vec::new();
+    let mut skipped = 0usize;
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        match serde_json::from_str::<T>(line) {
+            Ok(v) => out.push(v),
+            Err(_) => skipped += 1,
+        }
+    }
+    if skipped != 0 {
+        eprintln!(
+            "warning: {sink}: skipped {skipped} unreadable line(s) in {} — \
+             the history shown is incomplete",
+            path.display()
+        );
+    }
+    out
+}
+
+/// Load the decision log in file order. Missing file → empty vec; unreadable
+/// lines are skipped **and reported on stderr** — never panics. Mirrors
 /// [`crate::checkpoint::load_journal`].
 pub fn load_decisions(dir: &Path) -> Vec<GateDecision> {
-    let Ok(text) = std::fs::read_to_string(decisions_path(dir)) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter_map(|l| serde_json::from_str::<GateDecision>(l).ok())
-        .collect()
+    load_journal(&decisions_path(dir), "gate-decisions")
 }
 
 // ── Circuit-breaker verdict journal ─────────────────────────────────────────
@@ -160,30 +232,35 @@ pub fn circuit_log_path(dir: &Path, run_id: &str) -> PathBuf {
     ))
 }
 
-/// Append one circuit verdict to the run's log. Fail-soft: any IO/serialize
-/// error is swallowed so a journaling failure never changes the gate's exit
-/// code. Mirrors [`append_decision`].
+/// Append one circuit verdict to the run's log. Best-effort but **never
+/// silent**: a journaling failure never changes the gate's exit code, but it is
+/// reported on stderr rather than dropped. Mirrors [`append_decision`].
 pub fn append_circuit(dir: &Path, run_id: &str, entry: &CircuitRecord) {
-    let Ok(line) = serde_json::to_string(entry) else {
-        return;
+    let line = match serde_json::to_string(entry) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!(
+                "warning: circuit log: could not serialize the {} record ({e}) — \
+                 this verdict is LOST from the run history",
+                entry.verdict
+            );
+            return;
+        }
     };
-    let _ = std::fs::create_dir_all(dir);
-    harness_core::append::append_line(&circuit_log_path(dir, run_id), &line);
+    harness_core::append::append_line_reporting(
+        &circuit_log_path(dir, run_id),
+        &line,
+        "circuit log",
+    );
 }
 
 /// Load a run's circuit-verdict log in file order. Missing file → empty vec;
-/// corrupt lines are skipped — never panics. Mirrors [`load_decisions`]. The
+/// unreadable lines are skipped **and reported on stderr** — never panics. Mirrors [`load_decisions`]. The
 /// read side of the append-only journal: exercised by tests and ready for a
 /// future `circuit stats` aggregator; `append_circuit` is the live write path.
 #[allow(dead_code)]
 pub fn load_circuit_records(dir: &Path, run_id: &str) -> Vec<CircuitRecord> {
-    let Ok(text) = std::fs::read_to_string(circuit_log_path(dir, run_id)) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str::<CircuitRecord>(l).ok())
-        .collect()
+    load_journal(&circuit_log_path(dir, run_id), "circuit log")
 }
 
 // ── Gate-exec verdict journal ───────────────────────────────────────────────
@@ -222,30 +299,34 @@ pub fn gate_exec_log_path(dir: &Path, run_id: &str) -> PathBuf {
     ))
 }
 
-/// Append one gate-exec verdict to the run's log. Fail-soft: any IO/serialize
-/// error is swallowed so a journaling failure never changes the gate's exit
-/// code. Mirrors [`append_circuit`].
+/// Append one gate-exec verdict to the run's log. Best-effort but **never
+/// silent**: a journaling failure never changes the gate's exit code, but it is
+/// reported on stderr rather than dropped. Mirrors [`append_circuit`].
 pub fn append_gate_exec(dir: &Path, run_id: &str, entry: &GateExecRecord) {
-    let Ok(line) = serde_json::to_string(entry) else {
-        return;
+    let line = match serde_json::to_string(entry) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!(
+                "warning: gate-exec log: could not serialize a record ({e}) — \
+                 this verdict is LOST from the run history"
+            );
+            return;
+        }
     };
-    let _ = std::fs::create_dir_all(dir);
-    harness_core::append::append_line(&gate_exec_log_path(dir, run_id), &line);
+    harness_core::append::append_line_reporting(
+        &gate_exec_log_path(dir, run_id),
+        &line,
+        "gate-exec log",
+    );
 }
 
 /// Load a run's gate-exec-verdict log in file order. Missing file → empty vec;
-/// corrupt lines are skipped — never panics. Mirrors [`load_circuit_records`].
+/// unreadable lines are skipped **and reported on stderr** — never panics. Mirrors [`load_circuit_records`].
 /// The read side of the append-only journal: exercised by tests and ready for a
 /// future `gate stats` aggregator; `append_gate_exec` is the live write path.
 #[allow(dead_code)]
 pub fn load_gate_exec_records(dir: &Path, run_id: &str) -> Vec<GateExecRecord> {
-    let Ok(text) = std::fs::read_to_string(gate_exec_log_path(dir, run_id)) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str::<GateExecRecord>(l).ok())
-        .collect()
+    load_journal(&gate_exec_log_path(dir, run_id), "gate-exec log")
 }
 
 #[cfg(test)]

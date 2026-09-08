@@ -87,7 +87,7 @@ fn record_at(path: &Path, event: &RetrievalEvent) {
         return;
     };
     // Single atomic append (body + '\n' in one write) — see issue #15.
-    crate::append::append_line(path, &json);
+    crate::append::append_line_reporting(path, &json, "retrieval log");
 }
 
 /// Load all retrieval events. Missing file → empty Vec, blank/corrupt lines

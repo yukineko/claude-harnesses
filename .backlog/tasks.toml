@@ -12744,3 +12744,31 @@ updated_at = 1788821885
 weight = 0.0
 issue_number = 443
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/443"
+
+[[task]]
+id = "d31bc15b"
+title = "session-scoped skip: session_key() と CLAUDE_CODE_SESSION_ID の一致が未検証の load-bearing 前提"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "bcab0a85 で入れた session 限定 skip は、CLI 側が CLAUDE_CODE_SESSION_ID を、hook 側が Stop payload の session_id を読む。両者が一致することは 2026-09-07 に ~/.donegate/state/log.jsonl で一度観測したが、テストは両方に同じ値を pin しているため、この等式が将来ずれても 36 テストは全部 green のまま逃げ道だけが本番で死ぬ。検証者(利害関係のない Agent)が自分の suite の唯一の観測不能な前提として明示した。等式そのものを観測するテスト、または CLI 側が payload と同じ源から取る設計に寄せることを検討する。"
+created_at = 1788872520
+updated_at = 1788872520
+weight = 0.0
+issue_number = 444
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/444"
+
+[[task]]
+id = "926bc95a"
+title = "session-scoped skip: 消費不能な _local マーカーがディスクに堆積する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+status = "pending"
+notes = "usable_session_id が _local を拒否するため、_local バケットに置かれた skip マーカーは誰にも消費されず、削除もされない(消費経路が拒否で早期 return するため)。無害だが単調増加する。仕様が沈黙しているので検証者は assert せず観測のみ報告した(2026-09-08)。拒否時にも掃除するか、状態ディレクトリの GC を持つか決める。"
+created_at = 1788872522
+updated_at = 1788872522
+weight = 0.0
+issue_number = 445
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/445"

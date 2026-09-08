@@ -390,16 +390,70 @@ PY
 # cp -a fallback. The exclude set is mirrored by check-plugin-rollout.py's
 # DEPLOY_EXCLUDED_TOP and the two are compared by a test — a dir dropped from the
 # copy but still expected by the check reports permanent, unfixable drift.
+#
+# PROTECTED: bin/<name>-<platform-suffix>. Those are produced by
+# rebuild-plugins.sh AFTER this copy and never exist in the crate, so a plain
+# `--delete` mirror (and the fallback's wipe) DELETES them and leaves the plugin
+# deployed with its launcher alone. That is not a red state, it is a dark one:
+# the launcher exits non-zero without a binary, so the plugin's hooks never run
+# and emit no finding at all. Measured 2026-09-08 (backlog 51e6ebc7): a
+# `--force --canary` rollout of blastguard/overwatch/specguard blanked all
+# three, and because the health gate invokes the overwatch launcher in the very
+# dir it had just re-copied, the gate itself could no longer evaluate and halted
+# the run fail-closed BEFORE the rebuild step that would have restored them.
+#
+# The suffix list below is hand-copied from check-plugin-rollout.py's
+# PLATFORM_SUFFIXES — the canonical table, whose `_is_rebuild_artifact` already
+# accepts exactly these as legitimately present in a deployed dir with no crate
+# counterpart. It is restated rather than read at runtime because this function
+# is extracted and sourced in isolation by
+# scripts/test_rollout_copy_preserves_artifacts.py, so it must not depend on any
+# outer variable or helper. The two copies are pinned to each other by
+# test_check_plugin_rollout.CrateLocalRuntimeArtifacts, the same way the exclude
+# set above is — the drift this creates is machine-checked, not left to prose
+# (CLAUDE.md 6.).
 copy_plugin_dir() {
   local src="$1" dst="$2"
   mkdir -p "$dst"
+  local -a plat_suffixes=(
+    darwin-arm64 darwin-x86_64 linux-x86_64 linux-arm64
+    windows-x86_64 windows-arm64 windows-x86_64.exe windows-arm64.exe
+  )
+  local s
+  local -a protect=()
+  for s in "${plat_suffixes[@]}"; do
+    protect+=("--filter=P /bin/*-$s")
+  done
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete --exclude '/target/' --exclude '/.git/' \
+    rsync -a --delete "${protect[@]}" --exclude '/target/' --exclude '/.git/' \
           --exclude '/.in_use/' --exclude '/.claude/' "$src/" "$dst/"
   else
+    # The fallback wipes the destination outright, so the protected artifacts
+    # have to be carried across by hand. Copy (not move) them aside first: if
+    # the run dies between here and the restore, the deployed dir is still the
+    # one that was there before, never a half-emptied one.
+    local keep="" f base
+    for f in "$dst"/bin/*; do
+      [ -e "$f" ] || continue
+      base="${f##*/}"
+      for s in "${plat_suffixes[@]}"; do
+        case "$base" in
+          *-"$s")
+            [ -n "$keep" ] || keep="$(mktemp -d)"
+            cp -a "$f" "$keep/$base"
+            break
+            ;;
+        esac
+      done
+    done
     find "$dst" -mindepth 1 -maxdepth 1 ! -name '.in_use' -exec rm -rf {} +
     cp -a "$src/." "$dst/"
     rm -rf "${dst:?}/target" "${dst:?}/.git" "${dst:?}/.claude"
+    if [ -n "$keep" ]; then
+      mkdir -p "$dst/bin"
+      cp -a "$keep"/. "$dst/bin/"
+      rm -rf "$keep"
+    fi
   fi
 }
 
@@ -1076,7 +1130,7 @@ while IFS=$'\t' read -r name version src target needs_copy needs_registry mismat
   if [ "$needs_copy" = "1" ]; then
     changed=1
     if [ "$dry" = 1 ]; then
-      echo "[dry-run] would copy $srcdir/ -> $target/ (rsync -a --delete, exclude target/ .git/ .in_use/ .claude/)"
+      echo "[dry-run] would copy $srcdir/ -> $target/ (rsync -a --delete, exclude target/ .git/ .in_use/ .claude/, protect bin/*-<platform>)"
     else
       copy_plugin_dir "$srcdir" "$target"
       echo "copied $name -> $target"

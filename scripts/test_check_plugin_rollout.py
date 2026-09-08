@@ -933,6 +933,45 @@ class CrateLocalRuntimeArtifacts(_FixtureCase):
             f"checker={sorted(cpr.DEPLOY_EXCLUDED_TOP)}",
         )
 
+    def test_protected_suffixes_match_the_rollout_script(self):
+        """copy_plugin_dir's protect list must equal PLATFORM_SUFFIXES.
+
+        The same coupling as the excludes above, in the other direction and with
+        a worse failure mode. `bin/<name>-<suffix>` exists in a deployed dir and
+        never in the crate, so a `--delete` mirror removes it unless the copy
+        protects it by name; `_is_rebuild_artifact` is the table that decides
+        which names those are. A suffix added here but not to the shell array
+        means the next re-copy of a plugin built for that platform silently
+        deletes its binary and leaves the plugin deployed with its launcher
+        alone — hooks that never start, so no finding is emitted at all
+        (measured 2026-09-08, backlog 51e6ebc7).
+
+        rollout-plugins.sh cannot import this table: copy_plugin_dir is sliced
+        out and sourced in isolation by
+        scripts/test_rollout_copy_preserves_artifacts.py, so it must be free of
+        outer references. Hence a hand copy, and hence this pin.
+
+        Regression guard, not a RED-first assertion — it is green as written and
+        must stay green.
+        """
+        script = (_HERE / "rollout-plugins.sh").read_text(encoding="utf-8")
+        arrays = re.findall(
+            r"^  local -a plat_suffixes=\(\n(.*?)^  \)", script, re.M | re.S
+        )
+        self.assertEqual(
+            len(arrays), 1,
+            "expected exactly one `local -a plat_suffixes=(...)` array in "
+            f"rollout-plugins.sh to compare against; found {len(arrays)}. A "
+            "renamed or restructured array must not read as 'no drift found'.",
+        )
+        shell_suffixes = arrays[0].split()
+        self.assertEqual(
+            sorted(shell_suffixes), sorted(cpr.PLATFORM_SUFFIXES),
+            "copy_plugin_dir's protected suffixes and the checker's "
+            f"PLATFORM_SUFFIXES disagree: shell={sorted(shell_suffixes)} "
+            f"checker={sorted(cpr.PLATFORM_SUFFIXES)}",
+        )
+
 
 class SkillOnlyPlugins(_FixtureCase):
     """Which plugins the provenance dimension applies to at all.

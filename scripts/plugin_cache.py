@@ -29,6 +29,7 @@ the same side for both:
 Same fact, opposite safe directions — which is why the tri-state is preserved
 here instead of being collapsed to a bool by whichever caller got there first.
 """
+import errno
 import os
 import re
 
@@ -178,30 +179,86 @@ def source_versions(crates_dir):
 
 
 class StaleDir:
-    """A cached version dir that is not the plugin's current version."""
+    """A cached version dir that is not the plugin's current version.
 
-    __slots__ = ("plugin", "version", "path", "holders")
+    `kind` is "dir" for an ordinary version dir and "dangling-link" for a
+    symlink whose target no longer exists. The pruner needs the distinction
+    because the two are removed by different calls (rmtree vs unlink), and the
+    log needs it because "pruned condukt/0.4.2" reads as though a version had
+    been reclaimed when in fact only a broken pointer was.
+    """
 
-    def __init__(self, plugin, version, path, holders):
+    __slots__ = ("plugin", "version", "path", "holders", "kind")
+
+    def __init__(self, plugin, version, path, holders, kind="dir"):
         self.plugin = plugin
         self.version = version
         self.path = path
         self.holders = holders
+        self.kind = kind
 
     @property
     def removable(self):
         return not self.holders.held
 
     def describe(self):
+        # What it IS and why it was KEPT are two separate facts, so the kind is
+        # a prefix rather than an early return: a dangling link kept because
+        # settings.json would not parse used to print only "(dangling symlink
+        # -> x)" and never say why the pruner left it alone.
+        base = f"{self.plugin}/{self.version}"
+        if self.kind == "dangling-link":
+            try:
+                target = os.readlink(self.path)
+            except OSError:
+                target = "?"
+            base = f"{base} (dangling symlink -> {target})"
         if self.holders.undetermined:
-            return f"{self.plugin}/{self.version} (undetermined: {self.holders.undetermined})"
+            return f"{base} (undetermined: {self.holders.undetermined})"
         if self.holders.pinned:
             refs = ", ".join(sorted(self.holders.pinned))
-            return f"{self.plugin}/{self.version} (pinned by settings.json: {refs})"
+            return f"{base} (pinned by settings.json: {refs})"
         if self.holders.live_pids:
             pids = ",".join(str(p) for p in self.holders.live_pids)
-            return f"{self.plugin}/{self.version} (in use by pid {pids})"
-        return f"{self.plugin}/{self.version}"
+            return f"{base} (in use by pid {pids})"
+        return base
+
+
+def _link_resolution(path):
+    """Classify a cache entry that is not a directory.
+
+    Returns (state, reason) where state is one of:
+
+      "dangling"     — a symlink whose target provably does not exist. Safe to
+                       unlink: it addresses nothing and holds no bytes.
+      "undetermined" — it IS a symlink, but whether it resolves could not be
+                       decided (permissions on a path component, an IO error).
+                       `reason` says which errno. Never removable.
+      "other"        — not a symlink at all (a plain file, a socket, …), or a
+                       symlink that resolves to a non-directory. Reported and
+                       left alone.
+
+    The three-way split exists because `os.path.exists()` collapses the first
+    two: it returns False both for ENOENT and for EACCES, and the pruner acts
+    on that bool by deleting. See the call site for the measurement.
+    """
+    if not os.path.islink(path):
+        return "other", None
+    try:
+        os.stat(path)  # follows the link; raises with the reason it could not
+    except FileNotFoundError as exc:
+        return "dangling", str(exc)
+    except NotADirectoryError as exc:
+        # A path component of the target is a file: the target cannot exist.
+        return "dangling", str(exc)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            # A cycle resolves to nothing by construction, and rmtree/readlink
+            # on it can never reach a payload. Removable for the same reason
+            # ENOENT is: there is nothing on the other end to lose.
+            return "dangling", str(exc)
+        return "undetermined", f"{errno.errorcode.get(exc.errno, exc.errno)}: {exc}"
+    return "other", None
 
 
 def scan(cache_root, current_versions, settings_pins=None, settings_undetermined=None):
@@ -226,6 +283,15 @@ def scan(cache_root, current_versions, settings_pins=None, settings_undetermined
     try:
         plugin_names = sorted(os.listdir(cache_root))
     except FileNotFoundError:
+        # Deliberate, and the one empty-set return in this module that is NOT
+        # the fail-open CLAUDE.md 3. forbids: ENOENT is a DETERMINATE
+        # observation ("there is no cache"), not a failure to observe. Nothing
+        # is cached, so there is nothing stale and nothing uninspected. Every
+        # other errno — EACCES, ENOTDIR, EIO — falls to the clause below and
+        # becomes a problem, because those mean "could not look", and the gate
+        # (check-plugin-rollout.py) turns each problem into a red. Splitting on
+        # errno here is the same discrimination _link_resolution makes for the
+        # entries inside; do not collapse it back to a bare `except OSError`.
         return [], []
     except OSError as exc:
         return [], [f"cannot list plugin cache {cache_root}: {exc}"]
@@ -233,6 +299,17 @@ def scan(cache_root, current_versions, settings_pins=None, settings_undetermined
     for pname in plugin_names:
         pdir = os.path.join(cache_root, pname)
         if not os.path.isdir(pdir):
+            # The same skip the version loop below used to have, one level up,
+            # and it drops exactly the shape of the incident this module is
+            # about: a broken pointer at <cache>/<plugin> reads as "0 stale,
+            # 0 problems" just as one at <cache>/<plugin>/<version> did.
+            # Nothing here can be pruned — there is no version to reason about,
+            # so no StaleDir can describe it — but it must not be silent.
+            problems.append(
+                f"{pname}: {pdir} is in the plugin cache but is not a plugin "
+                "dir — left in place, since deletion is the irreversible "
+                "action here"
+            )
             continue
         cur = current_versions.get(pname)
         if cur is None:
@@ -248,7 +325,82 @@ def scan(cache_root, current_versions, settings_pins=None, settings_undetermined
             continue
         for v in vers:
             vdir = os.path.join(pdir, v)
-            if v == cur or not os.path.isdir(vdir):
+            # The non-dir check comes BEFORE the `v == cur` skip on purpose. A
+            # broken pointer sitting on the CURRENT version is the worst case of
+            # all — the live plugin is not on disk — and skipping it as "current,
+            # nothing to do" would report `0 stale, 0 problems` about exactly
+            # that. It is still never removable: the current version is never
+            # deleted by this pruner, so it is raised as a problem instead.
+            if not os.path.isdir(vdir):
+                # Not a version dir. This branch used to `continue` silently,
+                # which made any non-dir entry in the cache read as "nothing
+                # stale here" — the fail-open CLAUDE.md 3. forbids. Measured
+                # 2026-09-08 at 610b47e4: condukt/0.4.2 had been a symlink to a
+                # long-pruned 0.6.0 since 2026-07-02, and every prune run
+                # reported "0 stale dir(s)" with it sitting there.
+                #
+                # DANGLING means islink AND does not resolve. `islink` alone is
+                # NOT enough: it is true for a link that points at a FILE too,
+                # and `isdir` is false for that link, so testing `islink` by
+                # itself lands a perfectly resolvable pointer in this branch and
+                # deletes it. Measured 2026-09-08: `link -> real.txt` reports
+                # islink=True, isdir=False, exists=True, and the first version of
+                # this branch called it "dangling symlink -> real.txt" and
+                # removed it — deleting the only reference to a file that still
+                # existed, on a guess, while the pruner's own docstring promised
+                # the opposite. `exists()` follows the link, so it is the half
+                # that actually asks whether the pointer resolves.
+                #
+                # A truly dangling link addresses nothing and holds no bytes, so
+                # nothing can be lost by unlinking it: stale, not a problem —
+                # unless settings.json itself could not be read, in which case
+                # the same "could not check for a pin" rule that keeps every
+                # real dir keeps this too.
+                #
+                # Anything else (a plain file, a link to a file) is unaccounted
+                # state: report it and leave it, because deletion is the
+                # irreversible action and "I do not know what this is" must not
+                # resolve to a delete.
+                #
+                # `exists()` is NOT the right question either, because it
+                # answers False for two different facts: "the target is gone"
+                # (ENOENT) and "I was not allowed to look" (EACCES). Measured
+                # 2026-09-08: with the parent chmod 000, a link at a live
+                # directory resolved as `exists=False`, was described as
+                # "dangling symlink -> <target>", and was UNLINKED with exit 0
+                # — the pointer to live data deleted because the check could
+                # not read it. Ask errno instead: only ENOENT (and ELOOP, a
+                # cycle that resolves to nothing by construction) is dangling;
+                # every other failure is undetermined and is reported, not
+                # removed.
+                link_state, link_reason = _link_resolution(vdir)
+                if link_state == "dangling":
+                    if v == cur:
+                        problems.append(
+                            f"{pname}: the CURRENT version dir {vdir} is a "
+                            "dangling symlink — the plugin is not on disk at "
+                            "all. Left in place (the current version is never "
+                            f"pruned); re-run the rollout for {pname}"
+                        )
+                        continue
+                    h = Holders(undetermined=settings_undetermined) \
+                        if settings_undetermined else Holders()
+                    stale.append(StaleDir(pname, v, vdir, h, kind="dangling-link"))
+                elif link_state == "undetermined":
+                    problems.append(
+                        f"{pname}: cannot tell what {vdir} is — {link_reason}. "
+                        "Left in place: an uninspectable entry is not a "
+                        "dangling pointer, and deleting on that guess is how "
+                        "live data is lost"
+                    )
+                else:
+                    problems.append(
+                        f"{pname}: {vdir} is in the plugin cache but is not a "
+                        "version dir — left in place, since deletion is the "
+                        "irreversible action here"
+                    )
+                continue
+            if v == cur:
                 continue
             h = holders_of(vdir)
             if settings_undetermined:

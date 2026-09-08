@@ -323,7 +323,7 @@ pub fn append_jsonl(state_dir: &Path, entry: &serde_json::Value) {
     }
     if let Ok(line) = serde_json::to_string(entry) {
         // Single atomic append (body + '\n' in one write) — see issue #15.
-        crate::append::append_line(&path, &line);
+        crate::append::append_line_reporting(&path, &line, "gate run log");
     }
 }
 

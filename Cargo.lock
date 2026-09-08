@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "beacon"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.144"
+version = "0.7.145"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -395,7 +395,7 @@ dependencies = [
 
 [[package]]
 name = "daily"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "blastguard",
  "chrono",
@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "chrono",
@@ -914,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "precommit-audit"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "globset",
  "harness-core",

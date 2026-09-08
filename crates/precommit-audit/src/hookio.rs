@@ -123,7 +123,7 @@ pub fn write_audit_log(
     });
     let path = root.join(audit_dir).join("audit-log.jsonl");
     if let Ok(line) = serde_json::to_string(&entry) {
-        harness_core::append::append_line(&path, &line);
+        harness_core::append::append_line_reporting(&path, &line, "precommit audit");
     }
 }
 

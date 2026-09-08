@@ -183,7 +183,7 @@ fn append_at(path: &Path, rec: &DiscoveryRecord) {
         return;
     };
     // Single atomic append (body + '\n' in one write) — see issue #15.
-    crate::append::append_line(path, &json);
+    crate::append::append_line_reporting(path, &json, "discovery store");
 }
 
 /// Load all discovery records from the store, returning only those that parsed

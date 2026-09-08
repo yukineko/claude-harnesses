@@ -16242,3 +16242,101 @@ updated_at = 1788902156
 weight = 0.0
 issue_number = 457
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/457"
+
+[[task]]
+id = "0902aa00"
+title = "policy answer が escalate/block を journal していない — 監査面が自答だけを見る"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "crates/condukt/src/main.rs:2989 の append_decision は AnswerOutcome::Answered 分岐でのみ呼ばれる。Escalate と Block は println! するだけで gate-decisions.jsonl に一切残らない。実測 (2026-09-09, /Users/yuki/.condukt/state/gate-decisions.jsonl): 32 行すべて policy=auto、escalate/block は 0 行。結果として condukt policy answers は「機械が自分で答えた分」だけを見せ、「人間に上げた分」「拒否した分」は監査面から消えている。policy.rs:211 の 'Every auto-granted approval is journaled' は文字どおり正しいが、読者は監査ログを全ゲート判定の記録と読む。最低限 policy=escalate / policy=block の行も追記すること。"
+created_at = 1788902608
+updated_at = 1788902608
+weight = 0.0
+issue_number = 458
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/458"
+
+[[task]]
+id = "8491cfa4"
+title = "escalate した Ask の人間の回答が記録されない — 学習の教師信号が構造的に存在しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "policy answer は exit 2 で escalate を返すだけで、その後 skill が AskUserQuestion で得た人間の実際の選択はどこにも書き戻されない。したがって「過去に人間がどう答えたか」のコーパスは 0 件であり、実績から Ask を自動化する土台が存在しない。さらに重要なのは、仮に人間の回答を記録しても、それは approval (承認したという事実) であって outcome (その選択が正しかったという観測) ではない点。CLAUDE.md 2. は予測を根拠に ok を出すことを禁じているので、学習させるなら回答ではなく事後の観測結果 (compass outcome / hypothesis validate の verdict) に紐づける必要がある。設計方針の検討タスクであり、実装前に何を教師信号にするかを決めること。"
+created_at = 1788902624
+updated_at = 1788902624
+weight = 0.0
+issue_number = 459
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/459"
+
+[[task]]
+id = "397a5c8c"
+title = "append_decision の fail-soft swallow が監査面の欠落を沈黙させる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "crates/condukt/src/gatelog.rs:100 付近: 'any IO/serialize error is swallowed so an audit-log failure never breaks a turn'。gate-decisions.jsonl は撤去したゲートの review surface (flow SKILL.md が明記) なので、書き込みが黙って落ちると「自答が少なかった」と読める。CLAUDE.md 1. の「沈黙は許容される degrade ではない」に該当し、docstring に 'never break the turn' の語がある時点で 1. の赤信号。判定そのものは止めなくてよいが、追記失敗は stderr に出すこと (3b1eb24 の statusline unknown 表示と同型の是正)。"
+created_at = 1788902625
+updated_at = 1788902625
+weight = 0.0
+issue_number = 460
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/460"
+
+[[task]]
+id = "7037df97"
+title = "blastguard: 単一引用符つき heredoc 本体はシェルが一切解釈しないのに redirect 検出器が走る (fa1fce21 の精密化)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "2026-09-09 の 1 セッションで 4 回再発。逐語: (1) '> .scratch/commit-msg-gates.txt' truncates and overwrites an existing file / (2) '> f,' (Ok(f) => f, が heredoc 内) / (3) '> 1]' (if v>=2 が <<'PY' 内) / (4) '> ' (=> が python -c の引用符内)。いずれも respell せず別ツールへ迂回し逐語申告した。ルールとして精密に言える: <<'DELIM' のように delimiter が quote されている heredoc の本体は、シェルが展開も解釈も一切行わない純粋なバイト列である。したがって本体を shell 構文として走査すること自体が誤り。fa1fce21 は「散文データがコードとして判定される」と広く書かれているが、この quoted-heredoc の一点は inert であることが仕様で保証されており、決定論的に除外できる。関連: aaff04c5 (=> の force-gate), 079b643f (2>&1) の同族。over-block は 5./6. の意味で hack route への圧力になる (別ツールへの迂回が常態化すると、迂回そのものが無感覚になる)。"
+created_at = 1788902903
+updated_at = 1788902903
+weight = 0.0
+issue_number = 461
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/461"
+
+[[task]]
+id = "89774631"
+title = "installed_plugins.json の gitCommitSha と .deployed-from.json の commit が食い違う (二重 provenance)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "実測 2026-09-09: installed_plugins.json の condukt@yukineko は gitCommitSha=fdd14a5d / lastUpdated=2026-09-08、一方 cache/…/0.7.144/.deployed-from.json は commit=b006618d。実際に配布されているバイナリは後者 (rollout-plugins.sh が書く) だが、registry 側は plugin update の経路でしか更新されないため古い sha を保持し続ける。二つの provenance 記録が異なる commit を主張しており、どちらを読むかで結論が変わる。memory の deploy-provenance-not-hash は .deployed-from.json が正であると定めているが、その根拠がコード/ドキュメントに明示されていない。付随: cache に 0.7.138 / 0.7.140 の stale version dir が残存 (今回は 3 つとも同一 commit の再ビルドが入っていたので実害なし)。"
+created_at = 1788902905
+updated_at = 1788902905
+weight = 0.0
+issue_number = 462
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/462"
+
+[[task]]
+id = "d343ecbc"
+title = "load_decisions が壊れた行を黙って捨てる — 監査ビューが理由なく短くなる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = "crates/condukt/src/gatelog.rs:115 付近: text.lines().filter_map(|l| serde_json::from_str::<GateDecision>(l).ok())。パースできない行は握り潰され、condukt policy answers は残った行だけを表示する。読み手は「これが全記録だ」と読むので、欠落は『自答が少なかった』に見える。CLAUDE.md 1. の『沈黙は許容される degrade ではない』(3b1eb24 statusline と同型)。ファイルが読めない場合の Vec::new() も 3. の『エラー時に空の集合を返さない』に該当し、ログ不在と読み取り失敗が区別不能。最低でも skip 件数と read エラーを stderr に出すこと。397a5c8c (append 側の沈黙) と対になる読み出し側のミラー。"
+created_at = 1788902941
+updated_at = 1788902941
+weight = 0.0
+issue_number = 463
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/463"
+
+[[task]]
+id = "6a963a6a"
+title = "autonomy_invariant の askuserquestion_sites_match_frozen_allowlist が RED — flow SKILL.md に未監査の 11 個目の human prompt がある"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-09-09、HEAD で RED (私の変更とは無関係: git status で crates/flow 配下も *SKILL.md も一切 modified でないことを確認済み)。逐語: 'AskUserQuestion count changed in flow/skills/flow/SKILL.md (allowlist 10, found 11). Re-audit the new/removed prompt against the two-stop invariant, then update ASK_ALLOWLIST.' left: 11 / right: 10。つまり誰かが flow の SKILL.md に 11 個目の AskUserQuestion サイトを足したが、two-stop invariant に照らした再監査と ASK_ALLOWLIST の更新をしていない。凍結テストは正しく仕事をしているのに、誰もその赤を見ていない。c4321fc2 (fleet::tests::gate_crates_is_the_known_six の RED) と同じ根本原因: pre-commit も pre-push も cargo test を回さず、CI は 7. により不使用なので、workspace の RED を見る経路が存在しない。修正には新しい prompt が権限認可か判断要求かの判定が要るため判断タスク。"
+created_at = 1788906753
+updated_at = 1788906753
+weight = 0.0
+issue_number = 464
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/464"

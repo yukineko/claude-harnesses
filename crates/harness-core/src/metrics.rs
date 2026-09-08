@@ -40,7 +40,7 @@ pub fn emit(sink: &Path, session: &str, event: &str, extra: Value) {
     // One record = one atomic write (body + '\n' in a single buffer). A prior
     // `writeln!` split the newline into a second syscall, letting concurrent
     // `O_APPEND` writers concatenate two JSON objects onto one line (issue #15).
-    crate::append::append_line(sink, &line);
+    crate::append::append_line_reporting(sink, &line, "metrics");
 }
 
 #[cfg(test)]

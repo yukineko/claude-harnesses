@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Self-contained test for the canary health-gate's FINAL-STAGE COVERAGE GAP
-# (audited in docs/audit-canary-health-gate-coverage.md).
+# (audited 2026-07-29 in docs/audit-canary-health-gate-coverage.md, deleted
+# 2026-09-08 once every one of its claims had become a pre-fix snapshot of
+# code that no longer exists; read it at commit 095e1d61 if the history is
+# wanted, and 6302d166 for the fix this test guards).
 #
 # The health-gate block in scripts/rollout-plugins.sh used to sit entirely
 # inside `if [ "$s" -lt "$((nstages - 1))" ]`, i.e. it only ran BETWEEN stages.

@@ -78,6 +78,10 @@ SCANNERS = [
     "check-hardcoded-secret.py",
     "check-raw-io-ratchet.py",
     "check-worktree-isolation.py",
+    "check-gate-crates-sync.py",
+    "check-cross-crate-constants.py",
+    "check-launcher-exec-bit.py",
+    "check-clippy-lints.py",
     # check-test-weakening.py runs last: it fires from .githooks/commit-msg,
     # which git invokes only after pre-commit (and every scanner above) has
     # already succeeded — see commit-msg's own header for why it moved there.
@@ -122,7 +126,8 @@ class GateHarness:
     """A throwaway repo wired up exactly like a clone that ran
     `git config core.hooksPath .githooks`."""
 
-    def __init__(self, exits=None, with_gate_bypass=True):
+    def __init__(self, exits=None, with_gate_bypass=True, cargo_exit=0,
+                 cargo_missing=False):
         # .resolve() so paths match what git reports on macOS (/var ->
         # /private/var); otherwise the sentinel comparison would be testing
         # string normalisation rather than the hook.
@@ -148,6 +153,25 @@ class GateHarness:
             GIT_COMMITTER_NAME="t",
             GIT_COMMITTER_EMAIL="t@example.invalid",
         )
+
+        # The pre-push hook type-checks the pushed commits and BLOCKS when that
+        # fails (f98de400, 2026-08-06). This harness sets HOME to a throwaway
+        # dir, so the real `cargo` on PATH is the rustup shim with no ~/.rustup
+        # to read a default toolchain from — it exits non-zero on every run, and
+        # every test past that point failed for a reason having nothing to do
+        # with what it asserts. Stub it, the same way the scanners are stubbed,
+        # and prepend the stub dir so it wins over the real shim.
+        #
+        # `cargo_missing` keeps the hook's fail-closed "no cargo, so block"
+        # branch reachable: an unconditional stub would delete that coverage,
+        # which is the shape of weakening CLAUDE.md 4. forbids.
+        stub_bin = self.root / ".stub-bin"
+        stub_bin.mkdir()
+        if not cargo_missing:
+            cargo = stub_bin / "cargo"
+            cargo.write_text("#!/bin/sh\nexit %d\n" % cargo_exit)
+            cargo.chmod(0o755)
+        self.env["PATH"] = str(stub_bin) + os.pathsep + self.env["PATH"]
 
         self._run([_which("git"), "init", "-q", "-b", "main", str(self.root)], cwd=None)
 

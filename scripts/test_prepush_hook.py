@@ -101,6 +101,8 @@ class HookHarness:
         with_python=True,
         rollout_exit=None,
         rollout_missing=True,
+        cargo_exit=0,
+        cargo_missing=False,
     ):
         """gate_bypass_exit: exit code the gate-bypass.py stub returns.
         gate_bypass_missing: if True, never create scripts/gate-bypass.py at all.
@@ -110,6 +112,15 @@ class HookHarness:
         rollout_missing: if True (default), never create
             scripts/check-plugin-rollout.py — that advisory block must then be
             skipped entirely.
+        cargo_exit: exit code the `cargo` stub returns. The hook type-checks the
+            pushed commits (f98de400, 2026-08-06) and BLOCKS when that fails, so
+            every test about some later stage has to get past it. Stubbed rather
+            than run for real because this harness deliberately isolates HOME
+            and PATH: the rustup shim then has no ~/.rustup to read a default
+            toolchain from, and the throwaway repo has no Cargo.toml to check.
+        cargo_missing: if True, keep `cargo` off the hook's PATH entirely, so
+            the fail-closed "no toolchain, so block" branch can still be
+            exercised — the reason this is a knob and not an unconditional stub.
         """
         self.root = Path(tempfile.mkdtemp(prefix="prepush-hook-test-")).resolve()
 
@@ -165,6 +176,11 @@ class HookHarness:
             tools.append(_which("python3"))
         for tool in tools:
             os.symlink(tool, self.bindir / Path(tool).name)
+
+        if not cargo_missing:
+            cargo = self.bindir / "cargo"
+            cargo.write_text("#!/bin/sh\nexit %d\n" % cargo_exit)
+            cargo.chmod(0o755)
 
         self.env = {
             "PATH": str(self.bindir),

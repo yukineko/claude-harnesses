@@ -61,6 +61,7 @@ EXPECTED_SCANNERS = [
     "check-raw-io-ratchet.py",
     "check-worktree-isolation.py",
     "check-gate-crates-sync.py",
+    "check-cross-crate-constants.py",
     "check-launcher-exec-bit.py",
     "check-clippy-lints.py",
 ]
@@ -78,6 +79,7 @@ LABELS = {
     "check-raw-io-ratchet.py": "raw-io-ratchet",
     "check-worktree-isolation.py": "worktree-isolation",
     "check-gate-crates-sync.py": "gate-crates-sync",
+    "check-cross-crate-constants.py": "crossx-constants",
     "check-launcher-exec-bit.py": "launcher-exec-bit",
     "check-clippy-lints.py": "clippy-lints",
 }

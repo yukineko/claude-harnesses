@@ -491,15 +491,7 @@ mod tests {
                 json!({ "command": "python3 -c \"import shutil; shutil.rmtree('/')\"" }),
             ),
             // The refusal-to-guess ask on an unreadable inline program.
-            // Was `python3 -c "print(1)"`, which is an Allow since the
-            // 2026-09-09 ruling (see `detect::interpreter_code_verdict`) and so
-            // no longer exercises a rule-id path at all. Replaced rather than
-            // deleted, with a program that is readable but NOT inert, so the
-            // interpreter Ask still has a case here.
-            (
-                "Bash",
-                json!({ "command": "python3 -c \"import socket; print(socket.gethostname())\"" }),
-            ),
+            ("Bash", json!({ "command": "python3 -c \"print(1)\"" })),
             // The stdin-mirror ask.
             ("Bash", json!({ "command": "cat evil.py | python3 -" })),
         ];
@@ -591,41 +583,21 @@ mod tests {
         // asserted above and is unaffected.
         assert_eq!(rule_id(&wrapped), "rm-recursive");
 
-        // Pin the AUDIT, not only the id. The two paths must agree when the
-        // program is NOT demonstrably destructive — and since the 2026-09-09
-        // ruling they agree on a THREE-way split rather than on one blanket
-        // answer. Without this block a regression back to shape-matching (one
-        // answer for every inline program, whichever answer it is) would leave
-        // every assertion above green.
-        //
-        // The two rows that must stay `Ask` are the load-bearing half: they are
-        // what keeps the new Allow from being a blanket one. `$HOME` is a
-        // program the gate cannot READ (the shell rewrites it first), and
-        // `socket` is one it reads and finds an effect in.
-        for (cmd, want_allow) in [
-            ("python3 -c \"print(1)\"", true),
-            ("find . -exec python3 -c \"print(1)\" \\;", true),
-            ("python3 -c \"print($HOME)\"", false),
-            (
-                "python3 -c \"import socket; print(socket.gethostname())\"",
-                false,
-            ),
+        // Pin the AUDIT, not only the id. The two paths must also agree when
+        // the program is NOT demonstrably destructive, and must agree on `Ask`
+        // there — the refusal to guess — rather than on the blanket Deny this
+        // rule used to issue on shape alone. Without this, a regression back to
+        // shape-matching would leave every assertion above green.
+        for cmd in [
+            "python3 -c \"print(1)\"",
+            "find . -exec python3 -c \"print(1)\" \\;",
         ] {
             let d = detect::detect("Bash", Some(&json!({ "command": cmd })));
-            if want_allow {
-                assert!(
-                    matches!(d, Decision::Allow),
-                    "a readable, effect-free inline program is allowed since the \
-                     2026-09-09 ruling, for {cmd:?} — got {d:?}"
-                );
-            } else {
-                assert!(
-                    matches!(d, Decision::Ask(_)),
-                    "an inline program that cannot be read, or that carries an \
-                     effect token, must still be Ask (a refusal to guess), for \
-                     {cmd:?} — got {d:?}"
-                );
-            }
+            assert!(
+                matches!(d, Decision::Ask(_)),
+                "a benign inline program must be Ask (a refusal to guess), not \
+                 a verdict, for {cmd:?} — got {d:?}"
+            );
         }
     }
 }

@@ -18709,3 +18709,66 @@ restrictive / 意図的 permissive / silent-skip のままでよいが、3値化
 created_at = 1788924360
 updated_at = 1788924360
 weight = 0.0
+
+[[task]]
+id = "a04eaec1"
+title = "condukt autonomy_invariant が base(54786409) で赤: flow/skills/flow/SKILL.md の AskUserQuestion が allowlist 10 に対し実測 11"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "tests",
+    "p2",
+]
+status = "done"
+notes = """
+救出起票 2026-09-09（測定点 5c050b51、session e9ebfcb6）。**元は worktree
+`.claude-harnesses-worktrees/callgraph-obs` の未コミット `.backlog/tasks.toml` にだけ存在した
+id b9ccc885**。その worktree を削除する前に、記録を失わないようここへ再起票する。
+
+【元の起票文（逐語）】
+「condukt autonomy_invariant が base(54786409) で既に赤: flow/skills/flow/SKILL.md の
+AskUserQuestion が allowlist 10 に対し実測 11 (tests/autonomy_invariant.rs:637)。
+増えた prompt を two-stop invariant に照らして再監査した上で ASK_ALLOWLIST を更新する。
+**数字合わせだけの更新は監査の省略なので不可 (CLAUDE.md 第4節)**」
+（created_at 1788759876 / status pending / notes 空）
+
+【現時点の実測 — 解決済み】
+- `cargo test -p condukt --test autonomy_invariant` は
+  `askuserquestion_sites_match_frozen_allowlist ... ok` を含む **16 passed; 0 failed**（exit 0）。
+- `ASK_ALLOWLIST`（`crates/condukt/tests/autonomy_invariant.rs:577`）の flow エントリは現在 **13**。
+- 履歴: `7c6c8c7a`「fix(condukt): ASK_ALLOWLIST の flow エントリを**再監査して** 11 にし、
+  main の red を解消する (0.7.144)」がこの起票の要求そのものを実施している（数字合わせではなく
+  再監査だとコミットメッセージが明言）。その後 `a81444b7`（spec-loop R3/R4 の配線）で 13 へ。
+
+したがって done。**ただし残る限界を隠さず書く**: 「再監査した」はコミットメッセージの主張であって、
+本セッションが監査の中身を追検証したわけではない。11→13 の増分（a81444b7 由来）についても
+two-stop invariant に照らした分類を独立に確認してはいない。テストが green であることは
+「allowlist と実測が一致している」ことの観測であって、「増えた prompt の分類が正しい」ことの
+観測ではない。そこを疑う必要が出たら再起票すること。"""
+created_at = 1788926693
+updated_at = 1788926693
+weight = 0.0
+
+[[task]]
+id = "46963705"
+title = "harness-core fleet::tests::gate_crates_is_the_known_six が red — GATE_CRATES は b4b13b6f で parallelguard を得て 7 件になったがテストは 6 件を assert したまま"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "tests",
+    "p1",
+]
+status = "done"
+notes = """
+救出起票 2026-09-09（測定点 5c050b51、session e9ebfcb6）。**元は worktree
+`.claude-harnesses-worktrees/session-de693779` の未コミット `.backlog/tasks.toml` にだけ存在した
+id ba3499d9**（status は既に done）。worktree 削除で失われないようここへ再起票する。
+
+【元の notes（逐語）】
+「df54d12a (merge f2f9d419) で是正済み。テストは gate_crates_is_the_known_seven へ改名され
+parallelguard を含む 7 件を assert する (crates/harness-core/src/fleet.rs:55)。
+実測 2026-09-07、測定点 f2f9d419: `cargo test -p harness-core --lib fleet::` は
+gate_crates_is_the_known_seven ... ok / 1 passed; 0 failed (exit 0)。」"""
+created_at = 1788926693
+updated_at = 1788926693
+weight = 0.0

@@ -16012,7 +16012,7 @@ title = "scripts/ のチェッカ・ユニットテスト (test_check_*.py 13 �
 project = "/mnt/c/Users/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = ["p1"]
-status = "pending"
+status = "cancelled"
 notes = """
 fb6b1796 と同型の「ゲートが存在することと呼ばれることは別」。今回はゲート本体では
 なく**ゲートのテスト**の側。
@@ -16064,9 +16064,18 @@ test_prepush_hook.py の 5 件の直接原因 (stderr の逐語):
 つまり配線したときに最初に出る赤は「テストハーネスが cargo を渡していない」であり、
 本項目の完了条件 (2)「配線後にまず赤を観測する」は既に満たせる状態にある。
 配線と同時にこの 2 本を green にする必要があるか (それともまず配線して赤を可視化するか) は
-人間裁定。"""
+人間裁定。
+
+--- 退避 2026-09-10 ---
+
+本票は 65bfb279 と同一のギャップ (scripts/ のテストをどのゲートも走らせない) の
+二重起票である。65bfb279 の方が測定が新しく広い (2026-09-08、23 suite / 790 tests) ため
+そちらを残し、本票の notes 全文は 65bfb279 へ逐語で転記済み。証拠は失われていない。
+
+status を cancelled にする。done ではない — この作業は完了していない。
+残作業は 65bfb279 が保持する。"""
 created_at = 1787536536
-updated_at = 1787537819
+updated_at = 1788983841
 weight = 0.0
 issue_number = 398
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/398"
@@ -16664,9 +16673,39 @@ cargo check --workspace は回すが cargo test は回さない。CI は §7 に
 
 やること: (1) 期待値を 7 件へ更新しテスト名も改める。(2) より重要なのは、
 workspace のテストが定期的に実行され RED が見える導線を作ること
-(pre-push へ足すのは遅くなるので別手段を検討)。"""
+(pre-push へ足すのは遅くなるので別手段を検討)。
+
+--- 進捗 2026-09-10、測定点 c7c4ea49 ---
+
+項目 (1) は完了している。項目 (2) は未着手なので、このチケットは done にしない。
+
+(1) 期待値を 7 件へ更新しテスト名も改める → 完了。
+    修正コミット df54d12a (2026-09-07 17:50)、HEAD の祖先であることを
+    git merge-base --is-ancestor で確認済み。
+    再測定: cargo test -p harness-core fleet
+      test fleet::tests::gate_crates_is_the_known_seven ... ok
+      test result: ok. 1 passed; 0 failed; 321 filtered out
+    同じ赤を指していた ed3afdd9 は同じ実測で done にした。
+
+(2) workspace のテストが実行され RED が見える導線を作る → 未着手。残件はこれだけ。
+
+この (2) は 65bfb279 / 35968776 とは別のギャップである。混同しないこと:
+  - 65bfb279 / 35968776 = scripts/ の Python unittest suite (23 suite 790 tests) を
+    走らせるゲートが無い。
+  - 本チケット (2)      = cargo test --workspace を走らせるゲートが無い。
+    pre-commit / pre-push は fmt / clippy / 各種チェッカと cargo check --workspace は
+    回すが cargo test は回さない。
+
+(2) が実在することの追加証拠 (2026-09-10 に観測):
+本日 pending から『赤い』と主張する票を洗い出して再測定したところ、
+413d88b6 (condukt autonomy_invariant) と ed3afdd9 / c4321fc2 (harness-core fleet) は
+いずれも起票後に修正が着地しており、その事実が誰にも観測されないまま
+pending に残っていた。413d88b6 の RED は e018fe91 で完全に再現し、
+修正 7c6c8c7a は 2026-09-07 に着地している。つまり赤も緑も見えていない。
+これは 1 件の配線漏れではなく、CLAUDE.md 第1節『fail は検出であり価値である』の
+前提そのものが成立していない状態である。"""
 created_at = 1788902156
-updated_at = 1788902156
+updated_at = 1788983765
 weight = 0.0
 issue_number = 457
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/457"
@@ -18515,9 +18554,82 @@ notes = """
 
 配線する場合、判定不能 (python3 が無い・suite が import 不能) は block へ倒す
 こと。「テストが走らなかった」を「テストが通った」に写すと、この起票の原因その
-ものを機械化することになる。"""
+ものを機械化することになる。
+
+--- 統合 2026-09-10: 35968776 を本票へ集約した ---
+
+35968776 (起票 2026-08-24、session-24b59ce3) は同じギャップ
+『scripts/ のテストをどのゲートも走らせない』を別の測定日で起票したものだった。
+本票の方が測定が新しく広い (23 suite / 790 tests) ため本票を残し、
+35968776 固有の証拠をここへ逐語で移す。以下は 35968776 の notes 全文である。
+
+  fb6b1796 と同型の「ゲートが存在することと呼ばれることは別」。今回はゲート本体では
+  なく**ゲートのテスト**の側。
+  
+  実測 (2026-08-24、session-24b59ce3):
+   - `grep -rn 'test_check' .githooks/` → **ヒット 0** (rc=1)。
+   - `ls scripts/test_check_*.py | wc -l` → **13**。test_precommit_hook.py /
+     test_prepush_hook.py / test_gate_bypass.py 等を含めると約 20 本。
+   - `grep -rln 'test_check_' scripts/*.sh` → **0**。走らせるランナースクリプトも無い。
+   - `.github/workflows/` は **存在しない** (docs/gate-taxonomy.md:62 が唯一の実行元として
+     名指ししている場所)。つまり CI 側にも実行者は無い。CLAUDE.md 第7節により
+     GitHub Actions は使用禁止なので、**そこへ配線するのは解ではない** — local に置くこと。
+  
+  **これが実害を出した証拠 (今回発見)**: scripts/test_check_launcher_exec_bit.py:245 の
+  `test_the_scope_finds_every_plugin_that_ships_a_binary` は launcher 数を 39 と assert して
+  いたが、HEAD の実数は 38 だった (`git ls-tree -r HEAD | grep -cE '^crates/[^/]+/bin/[^/]+'`)。
+  docstring は「41 plugins minus the two」と書きながら 3 つ列挙しており (41-3=38 で 39 でもない)、
+  `flow` が 3 本目の skills-only plugin になった時に再導出されなかった。**taintguard 撤去前から
+  既に赤**で、誰も走らせていないので誰も気付いていなかった。今回 37 (40 plugins − 3 skills-only)
+  へ訂正し、docstring にこの経緯を明記した。
+  
+  完了条件: (1) これらのテストを local ゲート (.githooks/pre-commit か pre-push) から走らせる。
+  (2) 配線後に**まず赤を観測する** — 上記のような陳腐化した定数が他にもある可能性が高く、
+  「配線したら緑だった」は配線が空虚である可能性を含む (CLAUDE.md 2.(b))。
+  (3) 実行時間を測って hook に載せられるか確認する。載らないなら pre-push 側へ。
+  
+  追記 (2026-08-24、同セッション): 実際に 21 本すべてを手で走らせた結果を残す。
+  「誰も走らせていない」より「走らせたらこうなる」の方が起票として強いため。
+  
+  19/21 green。RED 2 本:
+   - scripts/test_gate_bypass.py    : Ran 120 tests, FAILED (failures=40)
+   - scripts/test_prepush_hook.py   : Ran 8 tests, FAILED (failures=5)
+  
+  **この 2 本は taintguard 撤去のせいではない** — 判断ではなく実測で切り分けた。
+  `git worktree add --detach /tmp/head-baseline-24b59ce3 HEAD` で HEAD (3c78e915、
+  撤去の変更を一切含まないツリー) を作って同じ 2 本を走らせ、**failures=40 / failures=5 と
+  同一の値**を得た。したがって既存の赤であり、今回の変更で増えても減ってもいない
+  (検証後 worktree は削除済み)。
+  
+  test_prepush_hook.py の 5 件の直接原因 (stderr の逐語):
+    「pre-push: cargo not found, so the pushed commits could not be type-checked
+     — blocking rather than assuming they compile.」
+  テストが組むサンドボックス env に cargo が無いため pre-push が fail-closed で block し、
+  `assertAllowed` が落ちる。**ゲートの挙動は仕様どおり正しい**（判定不能を block へ倒している）。
+  落ちているのはテスト側の env 構築であり、`PATH=$HOME/.cargo/bin:$PATH` を外から与えても
+  テストが env を作り直すため変わらない。残る 3 件は check-plugin-rollout の advisory 分類
+  (exit 1/2/3 が block してはいけない) が同じ cargo-not-found で block に飲まれている形。
+  
+  つまり配線したときに最初に出る赤は「テストハーネスが cargo を渡していない」であり、
+  本項目の完了条件 (2)「配線後にまず赤を観測する」は既に満たせる状態にある。
+  配線と同時にこの 2 本を green にする必要があるか (それともまず配線して赤を可視化するか) は
+  人間裁定。
+
+--- 統合ここまで ---
+
+追加の実測 2026-09-10、測定点 c7c4ea49:
+  grep -rn 'cargo test|unittest' .githooks/  → ヒット 0
+  .githooks/ に存在するフック: commit-msg post-commit post-merge pre-commit
+                                pre-merge-commit pre-push
+  pre-push が回す唯一の workspace 規模のコマンドは
+  .githooks/pre-push:375 の cargo check --workspace --all-targets --quiet
+2026-08-24 と 2026-09-08 の観測から 17 日経っても配線は無いままである。
+
+なお本票は Python suite の話であり、cargo test --workspace が走らない件は
+別ギャップとして c4321fc2 の (2) が保持している。両方を同時に直すのが自然だが、
+別物として扱うこと。"""
 created_at = 1788849812
-updated_at = 1788849812
+updated_at = 1788983823
 weight = 0.0
 
 [[task]]

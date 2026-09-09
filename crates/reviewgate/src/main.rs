@@ -169,7 +169,7 @@ fn review_run(hook: Option<HookInput>) -> ! {
     }
 
     let prior = state::load(&cfg.state_dir, &session);
-    let decision = review::evaluate(&cfg, &root, &prior);
+    let decision = review::evaluate(&cfg, &root, &prior, &input.transcript_path);
 
     match decision {
         Decision::Allow {

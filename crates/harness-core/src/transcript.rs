@@ -5,11 +5,13 @@
 //!   * `estimate_tokens` keeps only the last seen `usage` value.
 //!   * `recent_turns` keeps a bounded ring buffer of the most recent turns.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 use serde_json::Value;
+
+use crate::verdict::Determination;
 
 /// Live window occupancy at the turn that wrote this usage block.
 #[derive(Debug, Default, Clone, Copy)]
@@ -186,6 +188,136 @@ pub fn recent_turns(path: &str, max_turns: usize, max_chars: usize) -> Vec<Turn>
         }
     }
     ring.into_iter().collect()
+}
+
+/// The tool names whose invocation means "this session wrote to a file".
+///
+/// `Read` / `Grep` / `Bash` are deliberately absent: reading a peer session's
+/// file is *exactly* what happens when two sessions share a working tree, so an
+/// implementation that merely looked for a `file_path` argument would attribute
+/// the peer's file to us and re-open the bug this exists to close.
+const EDIT_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
+
+/// Pull the written path out of one `tool_use` block, if it is an edit.
+///
+/// `NotebookEdit` carries its path under `notebook_path` rather than
+/// `file_path` — the same split [`crate::hook::HookInput::target`] already makes
+/// for the PostToolUse payload.
+fn edited_path(block: &Value) -> Option<&str> {
+    if block.get("type").and_then(Value::as_str) != Some("tool_use") {
+        return None;
+    }
+    let name = block.get("name").and_then(Value::as_str)?;
+    if !EDIT_TOOLS.contains(&name) {
+        return None;
+    }
+    let input = block.get("input")?;
+    let p = input
+        .get("file_path")
+        .or_else(|| input.get("notebook_path"))
+        .and_then(Value::as_str)?;
+    if p.is_empty() {
+        return None;
+    }
+    Some(p)
+}
+
+/// The set of files THIS session edited, read from its own transcript.
+///
+/// `path` is the hook payload's [`crate::hook::HookInput::transcript_path`].
+///
+/// # Why this exists
+///
+/// A git working tree carries no session identity. `git diff --name-only` in a
+/// shared checkout returns every concurrent session's uncommitted edits, so a
+/// gate that scans the tree presents a peer's work as yours (backlog
+/// `1e44bfd9`, observed 2026-07-21 session c6a1fdbf and 2026-07-23 session
+/// 143f3d21). The transcript is the one artefact that *does* carry session
+/// identity, so intersecting the two is what makes attribution possible at all.
+///
+/// # Three-valued, and the difference is load-bearing
+///
+/// * `Known(set)` — the transcript was read. An EMPTY set here is a real
+///   observation: this session edited nothing.
+/// * `Undetermined(why)` — the transcript could not be read (empty path,
+///   missing file, an IO error part-way through). We did not observe "nothing
+///   was edited", we observed nothing at all.
+///
+/// Collapsing the second into `Known(∅)` is the fail-open this signature
+/// forbids: a consumer narrows its scope to this set, so `Known(∅)` means
+/// "nothing is mine" — one transcript hiccup would silently disable the
+/// consuming gate entirely (CLAUDE.md 第3節).
+///
+/// # Decisions a reader should not have to reverse-engineer
+///
+/// * **Paths come back verbatim**, absolute, exactly as the transcript recorded
+///   them. This function has no repo root to resolve against, and guessing one
+///   (`current_dir`) mis-resolves under a `git worktree` — which is the very
+///   situation 第8節 pushes every session into. Normalisation belongs to the
+///   caller, which knows its root.
+/// * **An unparseable LINE is skipped and the answer stays `Known`**, because
+///   the file itself was readable. A transcript is appended to live, so a torn
+///   final line is routine; giving up on the whole file would make this dead
+///   code while looking safe. An **IO error** while reading is different — that
+///   is `Undetermined`, since we can no longer say we saw the whole transcript.
+/// * **Sidechain (subagent) edits COUNT as this session's.** Real transcripts
+///   mark subagent turns `isSidechain: true`; this function does not filter on
+///   it. A subagent edits because this session dispatched it, so the edit is
+///   this session's responsibility — and the tie-break is the direction of the
+///   error: including them widens the caller's scope (more gets reviewed),
+///   excluding them narrows it, and 第3節 resolves an undecided case to the
+///   restrictive side. If this ever needs to change, it needs its own test.
+///
+/// Streams the file forward one line at a time, per this module's standing
+/// policy (see the module docstring); only the accumulated path set is held.
+pub fn files_edited_by_session(path: &str) -> Determination<BTreeSet<String>> {
+    if path.trim().is_empty() {
+        return Determination::undetermined(
+            "transcript_path is empty: the hook payload carried no transcript to read, so this \
+             session's edit footprint was not observed",
+        );
+    }
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "cannot open transcript {path}: {e} — the edit footprint was not observed"
+            ))
+        }
+    };
+
+    let mut out = BTreeSet::new();
+    for line in BufReader::new(file).lines() {
+        // An IO error mid-stream means the rest of the transcript was never
+        // seen. Skipping it here would hand back a SILENTLY PARTIAL set, which
+        // reads downstream as "this session did not edit those files" — the
+        // same collapse the signature exists to prevent.
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "transcript {path} became unreadable part-way through: {e} — the edit \
+                     footprint is partial, not empty"
+                ))
+            }
+        };
+        // A line that is not JSON is skipped; see the docstring for why this is
+        // NOT the same call as the IO failure above.
+        let o = match serde_json::from_str::<Value>(&line) {
+            Ok(o) => o,
+            Err(_) => continue,
+        };
+        let content = match o.get("message").and_then(|m| m.get("content")) {
+            Some(Value::Array(c)) => c,
+            _ => continue,
+        };
+        for block in content {
+            if let Some(p) = edited_path(block) {
+                out.insert(p.to_string());
+            }
+        }
+    }
+    Determination::Known(out)
 }
 
 #[cfg(test)]

@@ -63,27 +63,13 @@ use std::path::{Path, PathBuf};
 
 use harness_core::verdict::Determination;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// IMPLEMENTER: repoint this shim.
-//
-// `harness_core::transcript::files_edited_by_session` does not exist yet, so
-// every test below routes through this ONE function to keep the tree buildable
-// (an unbuildable tree hands the implementer no signal at all, just a compile
-// error). The body is a DELIBERATELY WRONG placeholder: it ignores `path` and
-// always answers `Known(∅)` — i.e. it is exactly the fail-open shape this
-// feature exists to prevent, so the tests that matter go red against it.
-//
-// When you implement the real function, replace the body with:
-//
-//     harness_core::transcript::files_edited_by_session(path)
-//
-// and delete this comment block. Change NOTHING else in this file: the tests
-// are the contract, and editing them to match an implementation is the
-// hazard CLAUDE.md 第2節 (a) exists to prevent.
-// ─────────────────────────────────────────────────────────────────────────────
+// The seam every test below goes through. It was a deliberately-wrong stub
+// (ignore `path`, always answer `Known(∅)`) while the API did not exist; it now
+// forwards to the real function. Nothing else in this file was touched — the
+// tests are the contract, and the RED they produced against the stub is
+// recorded verbatim in the commit message of b7b4266b.
 fn files_edited_by_session(path: &str) -> Determination<BTreeSet<String>> {
-    let _ = path;
-    Determination::Known(BTreeSet::new())
+    harness_core::transcript::files_edited_by_session(path)
 }
 
 // ── fixture helpers ─────────────────────────────────────────────────────────

@@ -92,8 +92,98 @@ fn now() -> i64 {
     chrono::Local::now().timestamp()
 }
 
-/// Core decision. `st` is the loaded prior session state.
-pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> Decision {
+/// Who wrote the files a working-tree scan just returned.
+///
+/// A working tree carries no session identity, so `git diff --name-only` in a
+/// shared checkout answers for EVERY concurrent session (backlog `1e44bfd9`,
+/// observed 2026-07-21 session c6a1fdbf and 2026-07-23 session 143f3d21). The
+/// session's own transcript is the artefact that does carry identity, so this
+/// is the intersection of the two — and, because that intersection can fail,
+/// it is three-valued in the shape 第3節 requires.
+enum Attribution {
+    /// The transcript was read. `mine` is what this session edited; `excluded`
+    /// is what it did not, kept so the exclusion can be NAMED rather than
+    /// silently applied.
+    Narrowed {
+        mine: Vec<String>,
+        excluded: Vec<String>,
+    },
+    /// The transcript could not be read. **Do not narrow.** Narrowing here
+    /// would rewrite "I cannot tell whose these are" into "none of these are
+    /// mine" — 判定不能 resolved to the permissive side, which would silently
+    /// switch the whole gate off on any transcript hiccup.
+    Undetermined { why: String },
+}
+
+/// Resolve `p` as far as the filesystem allows, so an absolute path recorded by
+/// the transcript and a repo-relative path from `git` compare equal.
+///
+/// `canonicalize` also resolves the symlinked temp dirs some hosts use, which
+/// is why it is applied to BOTH sides rather than just joining the root. A
+/// deleted file cannot be canonicalised; falling back to the unresolved path is
+/// correct there — worst case the two spellings differ and the file stays in
+/// the review set, which is the restrictive direction.
+fn resolve(p: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// Split `changed` into "this session wrote it" and "someone else did".
+fn attribute(root: &Path, transcript_path: &str, changed: &[String]) -> Attribution {
+    let edited = match harness_core::transcript::files_edited_by_session(transcript_path) {
+        harness_core::verdict::Determination::Known(v) => v,
+        harness_core::verdict::Determination::Undetermined(why) => {
+            return Attribution::Undetermined {
+                why: why.as_str().to_string(),
+            }
+        }
+    };
+    let edited: std::collections::BTreeSet<std::path::PathBuf> =
+        edited.iter().map(|p| resolve(Path::new(p))).collect();
+
+    let mut mine = Vec::new();
+    let mut excluded = Vec::new();
+    for c in changed {
+        if edited.contains(&resolve(&root.join(c))) {
+            mine.push(c.clone());
+        } else {
+            excluded.push(c.clone());
+        }
+    }
+    Attribution::Narrowed { mine, excluded }
+}
+
+/// The line that makes attribution visible. `None` when there is nothing to
+/// disclose (the transcript was read and claimed every changed file).
+///
+/// This is never optional-in-practice noise: an exclusion nobody is told about
+/// is the same defect as an inclusion nobody is told about — 「黙って全件を自分の
+/// 変更として提示しない」 cuts both ways.
+fn attribution_note(a: &Attribution) -> Option<String> {
+    match a {
+        Attribution::Narrowed { excluded, .. } if excluded.is_empty() => None,
+        Attribution::Narrowed { mine, excluded } => Some(format!(
+            "⚖ 帰属: 変更 {total} 件のうち {n} 件は本セッションの transcript に編集記録が無いため\
+             レビュー対象から除外しました（作業ツリーを共有している別セッションの変更の可能性）: {list}",
+            total = mine.len() + excluded.len(),
+            n = excluded.len(),
+            list = excluded.join(", "),
+        )),
+        Attribution::Undetermined { why } => Some(format!(
+            "⚖ 帰属: 判定不能 — {why}。変更を本セッションのものへ絞り込まずに全件をレビュー対象に\
+             しています（判定不能を「自分の変更ではない」へ倒さないため）。",
+        )),
+    }
+}
+
+/// Core decision. `st` is the loaded prior session state. `transcript_path` is
+/// the Stop payload's transcript (`HookInput::transcript_path`) — the only
+/// input that can tell this session's edits from a peer's.
+pub fn evaluate(
+    cfg: &Config,
+    root: &Path,
+    st: &crate::state::SessionState,
+    transcript_path: &str,
+) -> Decision {
     let changed = match crate::git::changed_files(root) {
         // No git scope: nothing to review, allow (unchanged behavior).
         crate::git::ChangeScan::NotRepo => return allow("no-git", st),
@@ -111,6 +201,23 @@ pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> D
         }
         crate::git::ChangeScan::Files(v) => v,
     };
+
+    // Whose changes are these? The scan above answered for the whole working
+    // tree; only the transcript can narrow that to this session.
+    let attribution = attribute(root, transcript_path, &changed);
+    let note = attribution_note(&attribution);
+    let changed = match &attribution {
+        Attribution::Narrowed { mine, .. } => mine.clone(),
+        // 判定不能: review everything, exactly as before this feature existed.
+        Attribution::Undetermined { .. } => changed,
+    };
+    // Printed unconditionally, not only on the block paths: an exclusion that
+    // only surfaces when the gate happens to block is an exclusion that is
+    // invisible precisely when it silenced the gate.
+    if let Some(n) = &note {
+        eprintln!("reviewgate: {n}");
+    }
+
     let files = reviewable_files(cfg, &changed);
     if files.len() < cfg.min_changed_files {
         return allow("no-reviewable-changes", st);
@@ -139,7 +246,7 @@ pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> D
     // slip through unreviewed. Checked before the hash short-circuit precisely
     // because that short-circuit would otherwise wave a truncated diff through.
     if truncated {
-        return decide_truncated(cfg, files, prior_attempts);
+        return with_note(decide_truncated(cfg, files, prior_attempts), note);
     }
 
     let hash = hash_diff(&diff);
@@ -149,7 +256,7 @@ pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> D
         return allow("already-reviewed", st);
     }
 
-    match cfg.mode {
+    let decision = match cfg.mode {
         Mode::Inject => {
             let attempts = prior_attempts + 1;
             if attempts > cfg.max_attempts {
@@ -172,6 +279,34 @@ pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> D
             let result = run_reviewer(cfg, &diff);
             decide_subprocess(cfg, result, files, hash, prior_attempts)
         }
+    };
+    with_note(decision, note)
+}
+
+/// Carry the attribution note into the text the agent actually reads.
+///
+/// Only a `Block` has a channel for it; an `Allow` prints nothing toward Claude
+/// by design, which is why `evaluate` also writes the note to stderr before it
+/// gets here.
+fn with_note(d: Decision, note: Option<String>) -> Decision {
+    match (d, note) {
+        (
+            Decision::Block {
+                reason,
+                tag,
+                files,
+                attempts,
+                last_hash,
+            },
+            Some(n),
+        ) => Decision::Block {
+            reason: format!("{reason}\n\n{n}"),
+            tag,
+            files,
+            attempts,
+            last_hash,
+        },
+        (d, _) => d,
     }
 }
 

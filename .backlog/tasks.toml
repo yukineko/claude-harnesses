@@ -18818,3 +18818,39 @@ notes = ""
 created_at = 1788930715
 updated_at = 1788930715
 weight = 0.0
+
+[[task]]
+id = "1b82a049"
+title = "blastguard: chmod -x <plugin cache binary> が ALLOW — ゲート無効化が dark に失敗する"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p1"]
+status = "pending"
+notes = "実測 2026-09-09 (blastguard 0.2.59)。chmod -x /home/hiroyuki_nakayama/.claude/plugins/cache/yukineko/blastguard/0.2.58/bin/blastguard が ALLOW。実行ビットを落とされた hook は Permission denied で起動せず、finding を一切出さない。つまり red ではなく dark に落ちる — 沈黙が「問題なし」と読まれる典型的な fail-open (CLAUDE.md 3)。plugin cache のパスが exclude.rs の PROTECTED_GLOBS に無いのが原因。可逆性の軸とは独立 (chmod は完全に可逆だが、無効化されたゲートは以後のすべての verdict を無意味にする)。"
+created_at = 1788947185
+updated_at = 1788947185
+weight = 0.0
+
+[[task]]
+id = "1440e7a0"
+title = "blastguard: $VAR 先頭のコマンド語が実トラフィック非 allow の最大クラス (69/151)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p2"]
+status = "pending"
+notes = '実測 2026-09-09、2045 コマンド再生。0.2.59 の非 allow 151 件のうち 69 件が「the command word $X is an expansion whose value only exists at run time」。頻出は $OW record-finding / "$SG" brief / $BL add / $CK/compass/... といった、cache パスを変数に束ねた自分自身の運用コマンド。arm 自体は正しく機能している ($RM -rf /some/path を捕まえるテストが 11 本ある) ので単純な allow 化は不可。必要なのは CommandWordOrigin がどこまで解決できているかの独立した計測 — 直前の代入が同一コマンドライン上にあるケース (CK=...; $CK/x/bin/x) は決定論的に解決できるはず。'
+created_at = 1788947185
+updated_at = 1788947185
+weight = 0.0
+
+[[task]]
+id = "7c56feb1"
+title = "blastguard: interpreter プログラム内で gate ファイルを読むだけでも Ask になる"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = ["p3"]
+status = "pending"
+notes = """実測 2026-09-09。python3 -c "print(open('.githooks/pre-commit').read())" が Ask。読むだけではゲートを無効化できないので、オペレータ裁定 2026-09-09 の「よみかきに一々許可をもとめるのは…無駄」に該当する。原因は interpreter_code_verdict の literal ループが対象 (パス) だけを見ており、read と write を区別できないこと。write 側は INTERPRETER_WRITE_CALLS で判別できているので、gate-disabling 軸にも同じ verb ゲートを掛けられる可能性がある — ただし gate-disabling は可逆性とは別軸で、緩めるなら独立した実測が要る。"""
+created_at = 1788947185
+updated_at = 1788947185
+weight = 0.0
